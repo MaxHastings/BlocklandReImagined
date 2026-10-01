@@ -247,6 +247,9 @@ pub enum Notice {
     /// Outline a box for this player while its tool is in their hand (an
     /// Add-On's selection); `None` takes it away.
     SelectionBox(Option<Box<crate::blueprint::Outline>>),
+    /// `messageClient(%client, 'MsgPlantError_…')`: the plant-error icon
+    /// (and sound, where the player turned it on), as a refused plant shows.
+    PlantError(crate::simulation::PlantFailure),
     /// `setControlCameraFov`: an Add-On sets this player's field of view,
     /// or hands it back to their own setting with `None`.
     Fov(Option<f32>),

@@ -269,10 +269,11 @@ its `aim_reach` and `cooldown_ticks`.
 
 A rule hears its import's projectiles with `"on_projectile_hit": true` in
 `behaviour.json`, the native form of `<projectile>::onCollision`; the
-shooter is the caller, so a hit may `paint_fill` for them. The ported
+shooter is the caller, so a hit may `paint_fill` or `paint_vehicle` for
+them. The ported
 Fill Can (`ports/tool_fill_can`) is the worked example: its image keeps
 firing its own projectile, `paint_picker` keeps it out when a can is
-picked, and its rules fill what the shot hit.
+picked, and its rules fill or paint what the shot hit.
 
 ## The image `shot` field
 

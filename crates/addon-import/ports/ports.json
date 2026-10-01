@@ -24,7 +24,7 @@
       "addon": "Tool_Fill_Can",
       "title": "Fill can",
       "port": "tool_fill_can",
-      "status": "partial",
+      "status": "verified",
       "sha256": [
         "d40fc7127fe87da3b5027baf37a928fd1f575970d9e55eab1ebf89f5ed198ef8"
       ],
@@ -39,7 +39,8 @@
           "same_colour": "%target\\.getcolorid\\s*\\(\\s*\\)\\s*==\\s*%oldcolor",
           "box_search": "initcontainerboxsearch\\s*\\(\\s*%obj\\.getposition\\s*\\(\\s*\\)\\s*,\\s*%box\\s*,\\s*\\$typemasks::fxbrickobjecttype\\s*\\)",
           "stops_at_limit": "if\\s*\\(\\s*%fillcount\\s*>=\\s*%limit\\s*\\)\\s*\\{[^}]*break\\s*;",
-          "undo_step": "undostack\\.push\\s*\\(\\s*%list\\s+tab\\s+\\\"fillpaint\\\"\\s*\\)"
+          "undo_step": "undostack\\.push\\s*\\(\\s*%list\\s+tab\\s+\\\"fillpaint\\\"\\s*\\)",
+          "limit_error": "messageclient\\s*\\(\\s*%client\\s*,\\s*'msgplanterror_limit'\\s*\\)"
         },
         "paintFXfill": {
           "paints_colour_fx": "%obj\\.setcolorfx\\s*\\(\\s*%newfx\\s*\\)",
@@ -54,6 +55,16 @@
           "same_colour": "%target\\.getcolorid\\s*\\(\\s*\\)\\s*==\\s*%oldcolor",
           "box_search": "initcontainerboxsearch\\s*\\(\\s*%obj\\.getposition\\s*\\(\\s*\\)\\s*,\\s*%box\\s*,\\s*\\$typemasks::fxbrickobjecttype\\s*\\)",
           "stops_at_limit": "if\\s*\\(\\s*%fillcount\\s*>=\\s*%limit\\s*\\)\\s*\\{[^}]*break\\s*;"
+        },
+        "fillcanprojectile::oncollision": {
+          "vehicle_trust": "gettrustlevel\\s*\\(\\s*%client\\s*,\\s*%col\\.spawnbrick\\s*\\)\\s*>=\\s*2",
+          "refusal_seconds": "%name\\s*@\\s*\\\"\\s*does not trust you enough to do that\\.\\\"\\s*,\\s*([0-9]*\\.?[0-9]+)",
+          "player_ms": "%col\\.settempcolor\\s*\\(\\s*%color\\s*,\\s*(\\d+)\\s*\\)",
+          "face_ms": "faceresetsched\\s*=\\s*schedule\\s*\\(\\s*(\\d+)\\s*,",
+          "visor_alpha": "getwords\\s*\\(\\s*%col\\.client\\.accentcolor\\s*,\\s*0\\s*,\\s*2\\s*\\)\\s*spc\\s*\\\"([0-9]*\\.?[0-9]+)\\\"",
+          "riders_ms": "getmountedobject\\s*\\(\\s*%x\\s*\\)\\.settempcolor\\s*\\(\\s*%col\\.color\\s*,\\s*(\\d+)\\s*\\)",
+          "random_colour": "getrandom\\s*\\(\\s*0\\s*,\\s*100\\s*\\)\\s*/\\s*100",
+          "recolors_brick": "%col\\.spawnbrick\\.setcolor\\s*\\(\\s*%client\\.currentcolor\\s*\\)"
         },
         "resetface": {
           "own_face": "setfacename\\s*\\(\\s*%obj\\.client\\.facename\\s*\\)"
@@ -84,7 +95,8 @@
       "tests": [
         "tool_fill_can/checks.json",
         "crates/addon-import/tests/ports.rs fill_can_port_rules_fill_what_v20_filled",
-        "crates/sim/tests/fill_can.rs with_reach_a_fill_finds_what_v20s_box_search_found_and_can_stop_at_its_limit"
+        "crates/sim/tests/fill_can.rs with_reach_a_fill_finds_what_v20s_box_search_found_and_can_stop_at_its_limit",
+        "crates/sim/tests/fill_can.rs a_vehicle_is_painted_through_its_recolouring_brick_or_alone_and_undone"
       ]
     }
   ]

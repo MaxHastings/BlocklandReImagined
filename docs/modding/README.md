@@ -166,7 +166,7 @@ HUD panels can only show keys the viewer receives. `persist` (default
 | `raycast(from, dir, range[, ignore])`, `can_damage(by, target)` | | `set_fov(p, fov)`, `set_image_ammo(p, ammo)`, `mount_image(p, image)`, `unmount_image(p)`, `set_scale(p, scale)`, `set_look_limits(p, up, down)`: `player` |
 | `brick_box(brick)`, `voxel(brick)`, `can_place_voxel(x, y, z)` | | `place_voxel(x, y, z, material)`: `world.edit`; `set_avatar_colors(p, colors)`, `temp_look(p, look, seconds)`: `player` |
 | | | `copy_build(p, brick, limit, above_only, tool)`, `copy_box(p, min, max, limit, tool)`, `mirror_copy(p, axis)`: `build` |
-| | | `cut_copy(p)`, `paint_copy(p, color)`, `paint_fill(p, brick, paint, options)`: `world.edit` |
+| | | `cut_copy(p)`, `paint_copy(p, color)`, `paint_fill(p, brick, paint, options)`, `paint_vehicle(p, vehicle, paint, options)`: `world.edit` |
 | | | `push`, `tumble`, `hold`, `hold_distance`, `let_go`, `spawn_vehicle`, `remove_vehicle`, `mount_object(mount, rider, node, can_dismount)`, `unmount_object(rider)`: `physics` |
 | | | `heal(p, amount)`, `fire(...)`: `damage` |
 | | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds)` (`()` for everyone): `chat` |
@@ -422,9 +422,21 @@ trust, brick by brick; the minigame's paint rule), as one Ctrl+Z.
 grown by that much, as v20's `containerBoxSearch` did; without it bricks
 join through shared faces), `stop_at_limit` (paint the first `limit` and
 stop, as v20's Fill Can did, instead of refusing), `limit_message: [text,
-seconds]` (shown when it stops there) and `refusal_seconds` (how long "does
+seconds]` (shown when it stops there), `limit_error: true` (the plant-limit
+error icon, and its sound where the player turned it on, when it stops
+there: v20's `MsgPlantError_Limit`) and `refusal_seconds` (how long "does
 not trust you enough" shows). Only the player whose command or shot asked
 may be filled for. Undo puts back only bricks still as the fill left them.
+
+**Vehicles.** `paint_vehicle(p, vehicle, paint, options)` paints a vehicle
+(`"vehicle:3"` or its id) as `p` (full trust from its spawn brick's build,
+or its owner's for one no brick spawned; the minigame's paint rule), as one
+Ctrl+Z. `paint` is `#{ color: n }`, a palette colour, which a vehicle its
+spawn brick recolours takes through the brick (the brick is painted too,
+as `fxDTSBrick::colorVehicle` reads it), or `#{ rgb: [r, g, b] }` on the
+vehicle alone until it respawns. `options`: `riders_seconds` (its riders
+take the colour that long, as `setTempColor`) and `refusal_seconds`. Only
+the player whose command or shot asked may paint.
 
 **For a moment.** `temp_look(p, #{ color: [r, g, b, a] }, seconds)` or
 `#{ paint: n }` colours every part and hides the decal (`SetTempColor`);

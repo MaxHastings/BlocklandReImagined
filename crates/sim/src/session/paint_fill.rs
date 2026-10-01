@@ -1,9 +1,11 @@
 //! Flood-fill painting for Add-Ons (`paint_fill`): recolour, or give a
 //! colour or shape effect to, the bricks of one colour joined to the brick
 //! a player hit, as their spray cans would paint each one, in one step of
-//! their undo. Imported Fill Can Add-Ons are ported onto it.
+//! their undo. Vehicles are painted too (`paint_vehicle`). Imported Fill
+//! Can Add-Ons are ported onto them.
 use super::*;
-use bri_package_runtime::ops::{FillPaint, MAX_FILL_BRICKS};
+use bri_package_runtime::ops::{FillPaint, MAX_FILL_BRICKS, VehiclePaint};
+use bri_vehicles::VehicleId;
 use bri_world::authority::trust as level;
 
 /// What a fill did.
@@ -118,5 +120,73 @@ impl Session {
             refused,
             stopped: rules.stop_at_limit && region.len() == limit,
         })
+    }
+
+    /// Paint `vehicle` as `owner`: the minigame's paint rule, and full
+    /// trust from the build of the brick that spawned it (or from its
+    /// owner, for a vehicle no brick spawned). A palette colour on a
+    /// vehicle its spawn brick recolours paints the brick too, as
+    /// `fxDTSBrick::colorVehicle` takes the brick's colour; anything else
+    /// colours the vehicle alone until it respawns. Returns the colour it
+    /// took; one it already had leaves no undo step.
+    pub fn paint_vehicle(
+        &mut self,
+        owner: OwnerId,
+        vehicle: u64,
+        paint: VehiclePaint,
+    ) -> Result<[f32; 4]> {
+        let peer = self.peers.get(&owner).context("Unknown connection")?;
+        combat::ensure_may_build(
+            &peer.combat,
+            &self.minigames,
+            bri_minigames::BuildAction::Paint,
+        )?;
+        let id = VehicleId(vehicle);
+        let (vehicle_owner, _) = self
+            .vehicles
+            .world
+            .as_ref()
+            .and_then(|w| w.owner_of(id))
+            .context("That vehicle is gone")?;
+        let state = self.simulation.state();
+        let spawn = self
+            .vehicle_spawn_brick(id)
+            .and_then(|b| Some((b, state.bricks.get(&b)?)));
+        let group = spawn.map_or(vehicle_owner.0, |(_, b)| b.owner);
+        if !peer.actor.trusted(group, level::FULL) {
+            let name = self.brick_group_name(group);
+            anyhow::bail!("{name} does not trust you enough to do that.");
+        }
+        let (color, brick) = match paint {
+            VehiclePaint::Color(c) => {
+                let &[r, g, b, _] = state
+                    .palette
+                    .get(usize::from(c))
+                    .context("That colour is not in this server's palette")?;
+                let recolors = spawn.filter(|(_, b)| b.vehicle.as_ref().is_some_and(|v| v.recolor));
+                ([r, g, b, 1.0], recolors.map(|(id, b)| (id, b.color, c)))
+            }
+            VehiclePaint::Rgb([r, g, b]) => ([r, g, b, 1.0], None),
+        };
+        let before = self.vehicles.colors.get(&id).copied().flatten();
+        let repaint = brick.filter(|(_, from, to)| from != to);
+        if before == Some(color) && repaint.is_none() {
+            return Ok(color);
+        }
+        if let Some((brick, _, to)) = repaint {
+            self.simulation.mutate(brick, |b| b.color = to)?;
+            self.dirty.insert(brick);
+        }
+        self.vehicles.colors.insert(id, Some(color));
+        self.push_undo(
+            owner,
+            undo::UndoEntry::Vehicle {
+                vehicle: id,
+                color,
+                before,
+                brick: repaint,
+            },
+        );
+        Ok(color)
     }
 }

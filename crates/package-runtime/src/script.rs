@@ -10,7 +10,7 @@
 //! operation budget per call; bounded strings, arrays, maps, call depth and
 //! operation count. A failing or over-budget call changes nothing.
 use crate::manifest::location;
-use crate::ops::{FillPaint, ObjectRef, Op, SoundAt, TempLook};
+use crate::ops::{FillPaint, ObjectRef, Op, SoundAt, TempLook, VehiclePaint};
 use crate::state::{Namespace, PlayerKey, check_value};
 use bri_package::diag::Diagnostic;
 use rhai::{AST, Array, Dynamic, Engine, EvalAltResult, Map};
@@ -1200,7 +1200,8 @@ fn register_api(engine: &mut Engine) {
     // paint_fill(player, brick, paint, options): paint is #{ color: n },
     // #{ color_effect: n } or #{ shape_effect: n }; options holds limit
     // (required) and may hold reach: [sideways, vertical], stop_at_limit
-    // limit_message: [text, seconds] and refusal_seconds.
+    // limit_message: [text, seconds], limit_error (the plant-limit error
+    // when the limit stops it) and refusal_seconds.
     engine.register_fn(
         "paint_fill",
         |player: Dynamic, brick: Dynamic, paint: Map, options: Map| {
@@ -1229,7 +1230,7 @@ fn register_api(engine: &mut Engine) {
             let paint = chosen.ok_or("paint_fill needs #{ color: n } or an effect")?;
             let (mut limit, mut reach, mut stop_at_limit, mut limit_message) =
                 (None, None, false, None);
-            let mut refusal_seconds = None;
+            let (mut refusal_seconds, mut limit_error) = (None, false);
             for (key, value) in options {
                 match key.as_str() {
                     "limit" => {
@@ -1258,10 +1259,13 @@ fn register_api(engine: &mut Engine) {
                         };
                         limit_message = Some((text.to_string(), float(seconds)?));
                     }
+                    "limit_error" => {
+                        limit_error = value.as_bool().map_err(|_| "limit_error is true or false")?
+                    }
                     "refusal_seconds" => refusal_seconds = Some(float(&value)?),
                     other => {
                         return fail(format!(
-                            "paint_fill has no option `{other}` (limit, reach, stop_at_limit, limit_message, refusal_seconds)"
+                            "paint_fill has no option `{other}` (limit, reach, stop_at_limit, limit_message, limit_error, refusal_seconds)"
                         ));
                     }
                 }
@@ -1274,6 +1278,59 @@ fn register_api(engine: &mut Engine) {
                 reach,
                 stop_at_limit,
                 limit_message,
+                refusal_seconds,
+                limit_error,
+            })
+        },
+    );
+    // paint_vehicle(player, vehicle, paint, options): paint is #{ color: n }
+    // (a palette colour) or #{ rgb: [r, g, b] }; options may hold
+    // riders_seconds and refusal_seconds.
+    engine.register_fn(
+        "paint_vehicle",
+        |player: Dynamic, vehicle: Dynamic, paint: Map, options: Map| {
+            let vehicle = match object_ref(&vehicle) {
+                Ok(ObjectRef::Vehicle(v)) => v,
+                Ok(other) => return fail(format!("{other} is not a vehicle")),
+                Err(_) => id(&vehicle)?,
+            };
+            let mut chosen = None;
+            for (key, value) in paint {
+                let p = match key.as_str() {
+                    "color" => VehiclePaint::Color(
+                        value
+                            .as_int()
+                            .ok()
+                            .and_then(|i| u8::try_from(i).ok())
+                            .ok_or("color is a palette index, 0 to 255")?,
+                    ),
+                    "rgb" => VehiclePaint::Rgb(color(value, "rgb")?),
+                    other => {
+                        return fail(format!("paint_vehicle paints color or rgb, not `{other}`"));
+                    }
+                };
+                if chosen.replace(p).is_some() {
+                    return fail("paint_vehicle paints one of color or rgb");
+                }
+            }
+            let paint = chosen.ok_or("paint_vehicle needs #{ color: n } or #{ rgb: [r, g, b] }")?;
+            let (mut riders_seconds, mut refusal_seconds) = (None, None);
+            for (key, value) in options {
+                match key.as_str() {
+                    "riders_seconds" => riders_seconds = Some(float(&value)?),
+                    "refusal_seconds" => refusal_seconds = Some(float(&value)?),
+                    other => {
+                        return fail(format!(
+                            "paint_vehicle has no option `{other}` (riders_seconds, refusal_seconds)"
+                        ));
+                    }
+                }
+            }
+            push(Op::PaintVehicle {
+                player: id(&player)?,
+                vehicle,
+                paint,
+                riders_seconds,
                 refusal_seconds,
             })
         },

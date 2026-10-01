@@ -68,11 +68,17 @@ fn fill(me, brick) {
             "Reached Fill Can Brick Limit (" + limit() + ")",
             {{limit_seconds}}
         ],
-        refusal_seconds: 3
+        limit_error: true,
+        refusal_seconds: {{refusal_seconds}}
     });
 }
 
-// `fillcanProjectile::onCollision` on bricks and players.
+// `getRandom(0, 100) / 100`, one of a few drawn for this hit.
+fn hundredth(hit, n) {
+    (hash3(seed(), tick(), hit.id, n) * 101.0).to_int().min(100) / 100.0
+}
+
+// `fillcanProjectile::onCollision` on bricks, players and vehicles.
 fn on_projectile_hit(hit) {
     if hit.projectile != projectile() || hit.by == () {
         return;
@@ -89,12 +95,31 @@ fn on_projectile_hit(hit) {
         fill(me, hit.id);
     } else if hit.kind == "player" {
         if me.fx_can == () {
-            temp_look(hit.id, #{ paint: me.paint }, 2.5);
+            temp_look(hit.id, #{ paint: me.paint }, {{player_ms}} / 1000.0);
         } else {
             let faces = faces();
             let pick = (hash3(seed(), tick(), hit.id, me.id) * 20.0).to_int();
             let face = faces[pick % faces.len()];
-            temp_look(hit.id, #{ face: face, alpha: #{ accent: 0.7 } }, 2.5);
+            temp_look(
+                hit.id,
+                #{ face: face, alpha: #{ accent: {{visor_alpha}} } },
+                {{face_ms}} / 1000.0
+            );
+        }
+    } else if hit.kind == "vehicle" {
+        // A colour can paints the vehicle (through its spawn brick when
+        // the brick recolours it) and its riders for a moment; an FX can
+        // gives it a random colour.
+        if me.fx_can == () {
+            paint_vehicle(me.id, hit.ref, #{ color: me.paint }, #{
+                riders_seconds: {{riders_ms}} / 1000.0,
+                refusal_seconds: {{refusal_seconds}}
+            });
+        } else {
+            let rgb = [hundredth(hit, 0), hundredth(hit, 1), hundredth(hit, 2)];
+            paint_vehicle(me.id, hit.ref, #{ rgb: rgb }, #{
+                refusal_seconds: {{refusal_seconds}}
+            });
         }
     }
 }

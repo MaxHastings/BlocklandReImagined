@@ -59,7 +59,7 @@ function paintfill(%client, %obj, %newcolor)
       %obj = %list.obj[%x];
       %obj.setColor(%newcolor);
       %fillcount++;
-      if(%fillcount >= %limit) { centerPrint(%client, "Reached Fill Can Brick Limit (" @ $Pref::Server::FillCan_MaxBricks @ ")", 4, 1); break; }
+      if(%fillcount >= %limit) { messageClient(%client, 'MsgPlantError_Limit'); centerPrint(%client, "Reached Fill Can Brick Limit (" @ $Pref::Server::FillCan_MaxBricks @ ")", 4, 1); break; }
       %data = %obj.getDataBlock();
       %box = (%sizex * 0.5 + 0.6) SPC (%sizey * 0.5 + 0.6) SPC (%sizez * 0.2 + 0.3);
       InitContainerBoxSearch(%obj.getPosition(), %box, $TypeMasks::FxBrickObjectType);
@@ -100,7 +100,40 @@ function shapeFXfill(%client, %obj, %newfx)
 
 function fillcanProjectile::onCollision(%this, %obj, %col, %fade, %pos, %normal)
 {
-   paintfill(%obj.client, %col, %obj.client.currentColor);
+   %client = %obj.client;
+   if(%col.getClassName() $= "fxDTSBrick")
+   {
+      paintfill(%client, %col, %client.currentColor);
+   }
+   else if(%col.getClassName() $= "Player")
+   {
+      if(%client.currentFXcan)
+      {
+         %col.faceResetSched = schedule(1400, 0, resetface, %col);
+         %col.setNodeColor("visor", getWords(%col.client.accentColor, 0, 2) SPC "0.6");
+      }
+      else
+      {
+         %color = getColorIDTable(%client.currentColor);
+         %col.setTempColor(%color, 1200);
+      }
+   }
+   else if(getTrustLevel(%client, %col.spawnBrick) >= 2)
+   {
+      if(%client.currentFXcan)
+         %col.color = (getRandom(0, 100) / 100) SPC (getRandom(0, 100) / 100) SPC (getRandom(0, 100) / 100) SPC "1";
+      else
+      {
+         %col.spawnBrick.setColor(%client.currentColor);
+         for(%x = 0; %x < %col.getMountedObjectCount(); %x++)
+            %col.getMountedObject(%x).setTempColor(%col.color, 1300);
+      }
+   }
+   else
+   {
+      %name = %col.spawnBrick.getGroup().name;
+      centerPrint(%client, %name @ " does not trust you enough to do that.", 2, 1);
+   }
 }
 
 function resetface(%obj)

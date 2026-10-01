@@ -96,6 +96,16 @@ pub enum FillPaint {
     ShapeEffect(u8),
 }
 
+/// What a `paint_vehicle` paints.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum VehiclePaint {
+    /// A palette colour (the colour spray cans). A vehicle its spawn brick
+    /// recolours takes it through the brick, which is painted too.
+    Color(u8),
+    /// Any colour, red, green and blue from 0 to 1, on the vehicle alone.
+    Rgb([f32; 3]),
+}
+
 /// How `temp_look` changes a player for a while.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct TempLook {
@@ -275,6 +285,20 @@ pub enum Op {
         stop_at_limit: bool,
         /// Centre-printed, for these seconds, when the limit stops a fill.
         limit_message: Option<(String, f32)>,
+        /// How long a refusal ("does not trust you enough") shows, seconds.
+        refusal_seconds: Option<f32>,
+        /// When the limit stops a fill, the player's plant-limit error
+        /// (`MsgPlantError_Limit`) shows too.
+        limit_error: bool,
+    },
+    /// Paint a vehicle as `player` (their full trust from its spawn
+    /// brick's build, the minigame's paint rule), as one step Ctrl+Z takes
+    /// back. Its riders take the colour for `riders_seconds`.
+    PaintVehicle {
+        player: u64,
+        vehicle: u64,
+        paint: VehiclePaint,
+        riders_seconds: Option<f32>,
         /// How long a refusal ("does not trust you enough") shows, seconds.
         refusal_seconds: Option<f32>,
     },
@@ -547,7 +571,8 @@ impl Op {
             | Self::SetBlockState { .. }
             | Self::CutCopy { .. }
             | Self::PaintCopy { .. }
-            | Self::PaintFill { .. } => "world.edit",
+            | Self::PaintFill { .. }
+            | Self::PaintVehicle { .. } => "world.edit",
             Self::TempLook { .. } => "player",
             Self::Explode { .. }
             | Self::Damage { .. }
@@ -637,6 +662,19 @@ impl Op {
                     && limit_message.as_ref().is_none_or(|(text, seconds)| {
                         text.chars().count() <= MAX_PRINT_CHARS && (0.0..=30.0).contains(seconds)
                     })
+            }
+            Self::PaintVehicle {
+                paint,
+                riders_seconds,
+                refusal_seconds,
+                ..
+            } => {
+                refusal_seconds.is_none_or(|s| (0.0..=30.0).contains(&s))
+                    && riders_seconds.is_none_or(|s| (0.0..=MAX_TEMP_LOOK_SECONDS).contains(&s))
+                    && match paint {
+                        VehiclePaint::Color(_) => true,
+                        VehiclePaint::Rgb(c) => c.iter().all(|v| (0.0..=1.0).contains(v)),
+                    }
             }
             Self::TempLook { look, seconds, .. } => {
                 (0.0..=MAX_TEMP_LOOK_SECONDS).contains(seconds)
@@ -923,6 +961,7 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::CutCopy { .. } => "cut_copy",
         Op::PaintCopy { .. } => "paint_copy",
         Op::PaintFill { .. } => "paint_fill",
+        Op::PaintVehicle { .. } => "paint_vehicle",
         Op::TempLook { .. } => "temp_look",
         Op::ShowBox { area: Some(_), .. } => "show_box",
         Op::ShowBox { area: None, .. } => "hide_box",

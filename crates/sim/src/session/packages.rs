@@ -1528,6 +1528,7 @@ impl Session {
                 stop_at_limit,
                 limit_message,
                 refusal_seconds,
+                limit_error,
             } => {
                 ensure!(
                     caller == Some(player),
@@ -1540,8 +1541,46 @@ impl Session {
                 };
                 match self.paint_fill(player, brick, paint, rules) {
                     Ok(fill) => {
+                        if fill.stopped && limit_error {
+                            self.notify(
+                                player,
+                                Notice::PlantError(crate::simulation::PlantFailure::Limit),
+                            );
+                        }
                         if let (true, Some((text, seconds))) = (fill.stopped, limit_message) {
                             self.notify(player, Notice::Center { text, seconds });
+                        }
+                    }
+                    Err(error) => self.notify(
+                        player,
+                        Notice::Center {
+                            text: format!("{error:#}"),
+                            seconds: refusal_seconds.unwrap_or(1.0),
+                        },
+                    ),
+                }
+                Ok(())
+            }
+            Op::PaintVehicle {
+                player,
+                vehicle,
+                paint,
+                riders_seconds,
+                refusal_seconds,
+            } => {
+                ensure!(
+                    caller == Some(player),
+                    "Vehicles are painted only for the player whose command or shot asked"
+                );
+                match self.paint_vehicle(player, vehicle, paint) {
+                    Ok(color) => {
+                        let seconds = riders_seconds.unwrap_or(0.0);
+                        for rider in self.vehicle_riders(vehicle).filter(|_| seconds > 0.0) {
+                            let look = bri_package_runtime::ops::TempLook {
+                                color: Some(color),
+                                ..Default::default()
+                            };
+                            self.temp_look(rider, look, seconds);
                         }
                     }
                     Err(error) => self.notify(

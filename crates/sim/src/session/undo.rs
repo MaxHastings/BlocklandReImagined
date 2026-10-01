@@ -35,12 +35,24 @@ pub(super) enum UndoEntry {
     ShapeEffect(BrickId, u8),
     /// `PRINT`, from `serverCmdSetPrint`.
     Print(BrickId, Option<ContentRef>),
+    /// `COLORGENERIC`, from `paint_vehicle`: the colour a vehicle took and
+    /// the one it had, with its spawn brick's palette colour, from and to,
+    /// when that was painted too. Undo puts back only what is still as the
+    /// paint left it.
+    Vehicle {
+        vehicle: bri_vehicles::VehicleId,
+        color: [f32; 4],
+        before: Option<[f32; 4]>,
+        brick: Option<(BrickId, u8, u8)>,
+    },
 }
 impl UndoEntry {
     fn brick(&self) -> BrickId {
         match *self {
             Self::Group(ref ids) => ids[0],
-            Self::Cut(_) | Self::Colors(_) | Self::Fill(..) => unreachable!("undone as a whole"),
+            Self::Cut(_) | Self::Colors(_) | Self::Fill(..) | Self::Vehicle { .. } => {
+                unreachable!("undone as a whole")
+            }
             Self::Plant(id)
             | Self::Color(id, _)
             | Self::ColorEffect(id, _)
@@ -64,6 +76,11 @@ impl UndoEntry {
             Self::Cut(bricks) => bricks.iter_mut().for_each(|(id, _)| follow(id)),
             Self::Colors(colors) | Self::Fill(_, colors) => {
                 colors.iter_mut().for_each(|(id, _)| follow(id))
+            }
+            Self::Vehicle { brick, .. } => {
+                if let Some((id, ..)) = brick {
+                    follow(id)
+                }
             }
         }
     }
@@ -101,6 +118,12 @@ impl Session {
             UndoEntry::Cut(bricks) => return self.undo_cut(owner, bricks),
             UndoEntry::Colors(colors) => return self.undo_colors(owner, colors),
             UndoEntry::Fill(paint, bricks) => return self.undo_fill(owner, paint, bricks),
+            UndoEntry::Vehicle {
+                vehicle,
+                color,
+                before,
+                brick,
+            } => return self.undo_vehicle_paint(owner, vehicle, color, before, brick),
             _ => {}
         }
         let id = entry.brick();
@@ -119,7 +142,8 @@ impl Session {
             UndoEntry::Group(_)
             | UndoEntry::Cut(_)
             | UndoEntry::Colors(_)
-            | UndoEntry::Fill(..) => {
+            | UndoEntry::Fill(..)
+            | UndoEntry::Vehicle { .. } => {
                 unreachable!("undone above")
             }
             UndoEntry::Plant(_) => {
@@ -292,6 +316,36 @@ impl Session {
             first = Some(id);
         }
         Ok(Reply::Undone(first))
+    }
+
+    /// Undo a `paint_vehicle`: the vehicle's colour, if it still has the
+    /// one it was painted, and its spawn brick's, if that was painted too
+    /// and has not changed since.
+    fn undo_vehicle_paint(
+        &mut self,
+        owner: OwnerId,
+        vehicle: bri_vehicles::VehicleId,
+        color: [f32; 4],
+        before: Option<[f32; 4]>,
+        brick: Option<(BrickId, u8, u8)>,
+    ) -> Result<Reply> {
+        let tick = self.simulation.state().tick;
+        self.play_thread_three(tick, owner, "undo");
+        if let Some(c) = self.vehicles.colors.get_mut(&vehicle)
+            && *c == Some(color)
+        {
+            *c = before;
+        }
+        let Some((id, old, painted)) = brick else {
+            return Ok(Reply::Undone(None));
+        };
+        let bricks = &self.simulation.state().bricks;
+        if bricks.get(&id).is_none_or(|b| b.color != painted) {
+            return Ok(Reply::Undone(None));
+        }
+        self.simulation.mutate(id, |b| b.color = old)?;
+        self.dirty.insert(id);
+        Ok(Reply::Undone(Some(id)))
     }
 
     fn undo_colors(&mut self, owner: OwnerId, colors: Vec<(BrickId, u8)>) -> Result<Reply> {

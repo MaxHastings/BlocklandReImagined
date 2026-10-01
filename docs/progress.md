@@ -8930,6 +8930,43 @@ administrator's limit of 3 with its message), `bri-sim --test fill_can`
 (6 seam tests including v20 reach and effect undo) and `bri-sim --lib
 temp_look`. `check-port` on the real import runs on Max's PC.
 
+### The Fill Can paints vehicles (v0.1.11)
+
+Max wants every gap against the originals closed before v0.1.11, so the
+port now covers `fillcanProjectile::onCollision` too and is `verified`:
+- Vehicle colours are RGBA on the wire (`VehicleInfo::color`, protocol 71)
+  instead of a palette index, so a vehicle can wear any colour. The host
+  resolves a recolouring spawn brick's colour (opaque, as before) and the
+  skis' paint when it spawns them.
+- `paint_vehicle(p, vehicle, #{ color | rgb }, #{ riders_seconds,
+  refusal_seconds })`: full trust from the spawn brick's build (the
+  vehicle's owner when no brick spawned it) and the minigame's paint rule.
+  A palette colour on a vehicle its brick recolours paints the brick too,
+  as v20's Fill Can did before `colorVehicle`; anything else colours the
+  vehicle alone until it respawns. Riders take the colour for
+  `riders_seconds` (`setTempColor`, 2500 ms in the script).
+- The FX can gives a random colour, each channel `getRandom(0, 100) / 100`.
+- `UndoEntry::Vehicle` (`COLORGENERIC`): one Ctrl+Z puts back the vehicle's
+  colour and its brick's, each only if still as the paint left it.
+- The limit now also shows the plant-limit error (`MsgPlantError_Limit`)
+  through `paint_fill`'s `limit_error` and the new `Notice::PlantError`,
+  the same icon (and sound, off by default) a refused plant shows.
+
+Pivots from v20, on purpose: v20's vehicle undo pushed the new colour (or
+the brick's new colour), so undo did nothing; ours restores the old one.
+v20 let a minigame that forbids painting still paint vehicles; ours
+refuses as it does for bricks. The player and face times, visor alpha,
+riders' time and refusal time are read from the script by the port's
+patterns (all checked against the real server.cs).
+
+Tests: `bri-sim --test fill_can
+a_vehicle_is_painted_through_its_recolouring_brick_or_alone_and_undone`
+(the committed stunt plane on two spawn bricks: refusal, brick-through
+paint, RGB paint, three undos), and the hosted port test now sprays the
+plane (refused for an untrusted painter for the script's seconds, painted
+through its brick by an administrator, a random colour with an FX can) and
+checks the limit's plant error.
+
 ## A vehicle rolls on through a player it hits (v0.1.11)
 
 Max: "the steel ball when it hits a player should keep going not stop".

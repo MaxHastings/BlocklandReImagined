@@ -9,7 +9,10 @@ use bri_content::{
     collision::{CollisionBody, Part},
 };
 use bri_package::packages::{PackageEntry, PackageSet, Side};
-use bri_package_runtime::{Catalog, ops::FillPaint};
+use bri_package_runtime::{
+    Catalog,
+    ops::{FillPaint, VehiclePaint},
+};
 use bri_sim::{
     definitions::{Definition, Definitions},
     session::{
@@ -135,13 +138,19 @@ struct Game {
 }
 impl Game {
     fn new() -> Self {
+        Self::with(|_| {})
+    }
+    /// A game whose world starts as `build` leaves it.
+    fn with(build: impl FnOnce(&mut World)) -> Self {
+        let mut world = World::new(
+            "Fill".into(),
+            "fill".into(),
+            vec![[1.0; 4], [0.2, 0.4, 1.0, 1.0], [0.9, 0.1, 0.1, 1.0]],
+        );
+        build(&mut world);
         let mut s = Session::new(
             Simulation::new(
-                World::new(
-                    "Fill".into(),
-                    "fill".into(),
-                    vec![[1.0; 4], [0.2, 0.4, 1.0, 1.0], [0.9, 0.1, 0.1, 1.0]],
-                ),
+                world,
                 definitions(),
                 vec![
                     ColliderBuilder::cuboid(100.0, 0.5, 100.0)
@@ -496,4 +505,94 @@ fn the_fill_can_shows_and_paints_the_colour_last_picked() {
             .any(|i| i.image == IMAGE && i.paint == Some(WHITE)),
         "{held:?}"
     );
+}
+
+/// The committed stunt plane, as the vehicle a spawn brick makes.
+const PLANE: &str = "vehicle_stunt_plane:vehicle/stuntplanevehicle";
+
+/// `paint_vehicle`: a vehicle its spawn brick recolours is painted through
+/// the brick, any other on its own; one undo step puts it back, and the
+/// spawn brick's build must trust the painter fully.
+#[test]
+fn a_vehicle_is_painted_through_its_recolouring_brick_or_alone_and_undone() {
+    // Two plane spawns, red, of a build no one here owns: one recolours
+    // its plane.
+    let spawn = |x: f32, recolor: bool| {
+        let mut brick = Brick::new(
+            bri_world::ContentRef::Resolved("plate".into()),
+            [x, 0.1, -30.25],
+            4242,
+        );
+        brick.color = RED;
+        brick.vehicle = Some(bri_world::VehicleSpawn {
+            vehicle: bri_world::ContentRef::Resolved(PLANE.into()),
+            recolor,
+        });
+        brick
+    };
+    let mut g = Game::with(|w| {
+        w.bricks.insert(1, spawn(-20.5, true));
+        w.bricks.insert(2, spawn(20.5, false));
+        w.next_brick_id = 3;
+    });
+    let pack = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../packages/imported/vehicle_stunt_plane/assets/vehicles.json");
+    g.s.set_vehicle_pack(bri_vehicles::Pack::load(pack).unwrap(), Vec::new())
+        .unwrap();
+    let admin = player(&mut g, "Admin", true);
+    let guest = player(&mut g, "Guest", false);
+    g.steps(121);
+    let infos = g.s.vehicle_infos();
+    assert_eq!(infos.len(), 2, "{infos:?}");
+    let palette = g.s.simulation().state().palette.clone();
+    let opaque = |c: u8| {
+        let [r, g, b, _] = palette[usize::from(c)];
+        [r, g, b, 1.0]
+    };
+    let color_of = |g: &Game, id: u64| {
+        g.s.vehicle_infos()
+            .into_iter()
+            .find(|v| v.id == id)
+            .unwrap()
+            .color
+    };
+    let recolored = infos.iter().find(|v| v.color.is_some()).unwrap().id;
+    let plain = infos.iter().find(|v| v.color.is_none()).unwrap().id;
+    assert_eq!(color_of(&g, recolored), Some(opaque(RED)));
+
+    // A guest the build does not trust paints nothing.
+    let refused = g.s.paint_vehicle(guest, plain, VehiclePaint::Color(BLUE));
+    assert_eq!(
+        refused.unwrap_err().to_string(),
+        "BL_ID: 4242 does not trust you enough to do that."
+    );
+    assert_eq!(color_of(&g, plain), None);
+
+    // The recoloured plane is painted through its brick.
+    let blue =
+        g.s.paint_vehicle(admin, recolored, VehiclePaint::Color(BLUE))
+            .unwrap();
+    assert_eq!(blue, opaque(BLUE));
+    assert_eq!(color_of(&g, recolored), Some(opaque(BLUE)));
+    assert_eq!(g.colors()[&1], BLUE);
+    // The other alone, in any colour; its brick stays red.
+    let rgb = [0.25, 0.5, 0.75];
+    g.s.paint_vehicle(admin, plain, VehiclePaint::Rgb(rgb))
+        .unwrap();
+    assert_eq!(color_of(&g, plain), Some([0.25, 0.5, 0.75, 1.0]));
+    assert_eq!(g.colors()[&2], RED);
+    // An FX can's colour on the recoloured plane leaves its brick alone.
+    g.s.paint_vehicle(admin, recolored, VehiclePaint::Rgb(rgb))
+        .unwrap();
+    assert_eq!(color_of(&g, recolored), Some([0.25, 0.5, 0.75, 1.0]));
+    assert_eq!(g.colors()[&1], BLUE);
+
+    // Each Ctrl+Z takes one paint back, latest first.
+    g.undo(admin);
+    assert_eq!(color_of(&g, recolored), Some(opaque(BLUE)));
+    g.undo(admin);
+    assert_eq!(color_of(&g, plain), None);
+    assert_eq!(g.undo(admin), Some(1));
+    assert_eq!(color_of(&g, recolored), Some(opaque(RED)));
+    assert_eq!(g.colors()[&1], RED);
 }

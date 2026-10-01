@@ -696,13 +696,30 @@ fn fill_can_port_rules_fill_what_v20_filled() {
     }
     const RED: u8 = 2;
     const BLUE: u8 = 1;
+    // A spawn brick, of a build no one here owns, whose committed stunt
+    // plane takes its colour.
+    let mut world = bri_world::World::new(
+        "Fill".into(),
+        "fill".into(),
+        vec![[1.0; 4], [0.2, 0.4, 1.0, 1.0], [0.9, 0.1, 0.1, 1.0]],
+    );
+    let mut pad = bri_world::Brick::new(
+        bri_world::ContentRef::Resolved("plate".into()),
+        [-1.0, 0.1, 10.25],
+        4242,
+    );
+    pad.color = RED;
+    pad.vehicle = Some(bri_world::VehicleSpawn {
+        vehicle: bri_world::ContentRef::Resolved(
+            "vehicle_stunt_plane:vehicle/stuntplanevehicle".into(),
+        ),
+        recolor: true,
+    });
+    world.bricks.insert(1, pad);
+    world.next_brick_id = 2;
     let mut s = Session::new(
         bri_sim::simulation::Simulation::new(
-            bri_world::World::new(
-                "Fill".into(),
-                "fill".into(),
-                vec![[1.0; 4], [0.2, 0.4, 1.0, 1.0], [0.9, 0.1, 0.1, 1.0]],
-            ),
+            world,
             plate(),
             vec![
                 ColliderBuilder::cuboid(100.0, 0.5, 100.0).translation(Vector::new(0.0, -0.5, 0.0)),
@@ -713,6 +730,10 @@ fn fill_can_port_rules_fill_what_v20_filled() {
     let spawn = Vec3::new(0.5, 0.05, 4.0);
     s.set_spawn_points(vec![spawn]).unwrap();
     s.set_weapon_pack(pack).unwrap();
+    let plane = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../packages/imported/vehicle_stunt_plane/assets/vehicles.json");
+    s.set_vehicle_pack(bri_vehicles::Pack::load(plane).unwrap(), Vec::new())
+        .unwrap();
     s.install_packages(catalog, None).unwrap();
     // One sequence for every message, so each player's only rises.
     let seq = std::cell::Cell::new(0u64);
@@ -754,8 +775,8 @@ fn fill_can_port_rules_fill_what_v20_filled() {
             .map(|id| (world.bricks[id].color, world.bricks[id].color_effect))
             .collect()
     };
-    // Spray once at the nearest plate of the row at `x`.
-    let spray = |s: &mut Session, owner: OwnerId, x: f32| {
+    // Spray once at `target`.
+    let spray_at = |s: &mut Session, owner: OwnerId, target: Vec3| {
         let feet = s
             .snapshot()
             .players
@@ -763,7 +784,7 @@ fn fill_can_port_rules_fill_what_v20_filled() {
             .find(|p| p.owner == owner)
             .unwrap()
             .feet;
-        let d = (Vec3::new(x, 0.2, 0.25) - (Vec3::from(feet) + Vec3::Y * 2.156)).normalize();
+        let d = (target - (Vec3::from(feet) + Vec3::Y * 2.156)).normalize();
         let input = bri_sim::player::MoveInput {
             yaw: d.x.atan2(-d.z),
             pitch: d.y.asin(),
@@ -778,6 +799,9 @@ fn fill_can_port_rules_fill_what_v20_filled() {
             s.step().unwrap();
         }
     };
+    // Spray once at the nearest plate of the row at `x`.
+    let spray =
+        |s: &mut Session, owner: OwnerId, x: f32| spray_at(s, owner, Vec3::new(x, 0.2, 0.25));
     let held = |s: &Session, owner: OwnerId| {
         s.weapon_view().images[&owner]
             .iter()
@@ -828,21 +852,61 @@ fn fill_can_port_rules_fill_what_v20_filled() {
         .filter(|(c, _)| *c == BLUE)
         .count();
     assert_eq!(painted, 3);
-    let told: Vec<(String, f32)> = s
+    let told: Vec<Notice> = s
         .take_private_notices()
         .into_iter()
         .filter(|(o, _)| *o == admin)
-        .filter_map(|(_, n)| match n {
-            Notice::Center { text, seconds } => Some((text, seconds)),
-            _ => None,
-        })
+        .map(|(_, n)| n)
+        .filter(|n| matches!(n, Notice::Center { .. } | Notice::PlantError(_)))
         .collect();
     assert_eq!(
         told,
-        [(
-            "\u{E003}Reached Fill Can Brick Limit (500)".to_string(),
-            4.0
-        )]
+        [
+            Notice::PlantError(bri_sim::simulation::PlantFailure::Limit),
+            Notice::Center {
+                text: "\u{E003}Reached Fill Can Brick Limit (500)".to_string(),
+                seconds: 4.0
+            }
+        ]
     );
+
+    // A spray at the plane paints it, through the brick that recolours
+    // it; the painter, not trusted by its build, is refused for this
+    // copy's time.
+    let plane = || {
+        let v = s.vehicle_poses();
+        assert_eq!(v.len(), 1, "the plane is on its spawn");
+        Vec3::from(v[0].position)
+    };
+    let at = plane() + Vec3::Y * 0.8;
+    let paint = |s: &Session| s.vehicle_infos()[0].color;
+    let red = paint(&s);
+    cmd(&mut s, painter, Command::UseSprayCan { color: BLUE }).unwrap();
+    s.take_private_notices();
+    spray_at(&mut s, painter, at);
+    assert_eq!(paint(&s), red);
+    let refused: Vec<Notice> = s
+        .take_private_notices()
+        .into_iter()
+        .filter(|(o, n)| *o == painter && matches!(n, Notice::Center { .. }))
+        .map(|(_, n)| n)
+        .collect();
+    assert_eq!(
+        refused,
+        [Notice::Center {
+            text: "BL_ID: 4242 does not trust you enough to do that.".into(),
+            seconds: 2.0
+        }]
+    );
+    spray_at(&mut s, admin, at);
+    let [r, g, b, _] = s.simulation().state().palette[usize::from(BLUE)];
+    assert_eq!(paint(&s), Some([r, g, b, 1.0]));
+    assert_eq!(s.snapshot().world.bricks[&1].color, BLUE);
+    // With an FX can it takes a colour of its own; its brick stays blue.
+    cmd(&mut s, admin, Command::UseFxCan { fx: 1 }).unwrap();
+    steps(&mut s, 30);
+    spray_at(&mut s, admin, at);
+    assert_ne!(paint(&s), Some([r, g, b, 1.0]));
+    assert_eq!(s.snapshot().world.bricks[&1].color, BLUE);
     std::fs::remove_dir_all(dir).unwrap();
 }
