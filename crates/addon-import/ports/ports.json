@@ -1203,6 +1203,9 @@
         "b443eab7e97dfc51c1532c88411e5c93ed9a13b4a7fa0c60b7707b405fefa118"
       ],
       "covers": {
+        "ND_Item::onAdd": {
+          "item_idle": "%obj\\.playthread\\s*\\(\\s*0\\s*,\\s*\"?(\\w+)\"?\\s*\\)"
+        },
         "serverCmdNewDuplicator": {
           "equips": "mountimage\\s*\\(\\s*%image\\s*,\\s*0\\s*\\)",
           "admin_message": "admin only"

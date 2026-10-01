@@ -105,22 +105,28 @@ impl Converter {
         bytes: &[u8],
         name: &str,
     ) -> Result<(Vec<bri_world::Brick>, Vec<[f32; 4]>)> {
-        let (world, skipped) = bri_bls::bls::read_duplication(bytes, &self.catalog, name)?;
+        let (mut world, skipped) = bri_bls::bls::read_duplication(bytes, &self.catalog, name)?;
         if skipped.lines() > 0 {
             bri_console::warn(format!("{name}: skipped brick lines: {skipped}"));
         }
+        // Its bricks' lights, emitters, items and events, as a save's.
+        self.bind(&mut world)?;
         Ok((world.bricks.into_iter().map(|(_, b)| b).collect(), world.palette))
+    }
+    fn bind(&self, world: &mut World) -> Result<()> {
+        if let Some(b) = &self.bindings {
+            bri_bls::effect_bindings::bind(world, &b.effects)?;
+            bri_bls::events::bind(world, &b.events, &b.aliases)?;
+            b.weapons.resolve_world_items(world)?;
+        }
+        Ok(())
     }
     pub fn convert(&self, bytes: &[u8], name: &str, map_id: &str) -> Result<World> {
         let (mut world, skipped) = bri_bls::bls::read_counting(bytes, &self.catalog, name, map_id)?;
         if skipped.lines() > 0 {
             bri_console::warn(format!("{name}: skipped brick lines: {skipped}"));
         }
-        if let Some(b) = &self.bindings {
-            bri_bls::effect_bindings::bind(&mut world, &b.effects)?;
-            bri_bls::events::bind(&mut world, &b.events, &b.aliases)?;
-            b.weapons.resolve_world_items(&mut world)?;
-        }
+        self.bind(&mut world)?;
         world.validate()?;
         Ok(world)
     }

@@ -106,7 +106,9 @@ caller's build (`Simulation::select_stack`), or a box of it, as the
 Add-On's `CopyRule` allows, into a blueprint, `crate::blueprint`, that the
 player places with `Command::PlaceBlueprint` under the plant rules, all or
 none or brick by brick as the rule asks, with one undo entry; `on_copy`
-and `on_place` tell the Add-On how it went; highlights recolour the
+and `on_place` tell the Add-On how it went, and `on_copy_ghost` where the
+copy stands as its player places it (`Command::CopyPose`, the box from
+`Blueprint::ghost_box`); highlights recolour the
 bricks for a while, as v20 did (`session::highlight`); mirroring is part of the placement, with twins found by
 `crate::mirror`; `save_copy` and `load_copy` keep blueprints by name in
 the host's `session::CopyStore`, which answers off the tick thread (the

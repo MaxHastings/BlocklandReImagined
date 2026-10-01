@@ -150,6 +150,9 @@ pub struct PlayerView {
     /// the Add-On that took it and its bricks.
     #[serde(default)]
     pub copy: Option<(String, u64)>,
+    /// They hold bricks with a ghost brick out, where it would plant.
+    #[serde(default)]
+    pub ghost: bool,
 }
 /// Live questions a script may ask the engine during a call. They read the
 /// world as it is when the call runs: a call's own operations apply after it
@@ -211,6 +214,11 @@ pub trait World {
     /// Whether a rule acting for `caller` may remove brick `brick`, or
     /// plant into its build (`miniGameCanDamage` with the trust rules).
     fn can_edit(&self, _caller: Option<u64>, _brick: u64) -> bool {
+        false
+    }
+    /// Whether a copy by `player` under `rule` would take brick `brick`
+    /// (the trust a copy checks, [`crate::ops::CopyRule`]).
+    fn may_copy(&self, _player: u64, _brick: u64, _rule: crate::ops::CopyRule) -> bool {
         false
     }
     /// Whether a brick of `kind` turned `turns` quarter turns would fit
@@ -590,6 +598,7 @@ fn player_map(p: &PlayerView) -> Dynamic {
         ("alive", p.alive.into()),
         ("admin", p.admin.into()),
         ("copy_working", p.copy_working.into()),
+        ("ghost", p.ghost.into()),
         (
             "copy",
             p.copy.as_ref().map_or(Dynamic::UNIT, |(package, bricks)| {
@@ -1643,6 +1652,17 @@ fn register_api(engine: &mut Engine) {
                 .ok_or("mirror_copy's axis is \"x\", \"z\", \"view\" or \"y\"")?,
         })
     });
+    // mirror_ghost(player, axis, asymmetric): the player's ghost brick
+    // mirrored where it stands; `asymmetric` is what they are told when it
+    // has no exact mirror image.
+    engine.register_fn("mirror_ghost", |player: Dynamic, axis: &str, asymmetric: &str| {
+        push(Op::MirrorGhost {
+            player: id(&player)?,
+            axis: crate::ops::MirrorAxis::parse(axis)
+                .ok_or("mirror_ghost's axis is \"x\", \"z\", \"view\" or \"y\"")?,
+            asymmetric: asymmetric.into(),
+        })
+    });
     engine.register_fn(
         "move_copy",
         |player: Dynamic, point: Array, normal: Array| {
@@ -2193,6 +2213,7 @@ fn copy_rule(options: &Map) -> Result<CopyOptions, Box<EvalAltResult>> {
             "public_bricks" => rule.public = flag()?,
             "admin" => rule.admin = flag()?,
             "partial" => rule.partial = flag()?,
+            "stack" => rule.stack = flag()?,
             "limited" => limited = Some(flag()?),
             "hidden" => hold.hidden = flag()?,
             "add" => hold.add = flag()?,
@@ -2320,6 +2341,14 @@ fn register_queries(engine: &mut Engine) {
     engine.register_fn("can_edit", |brick: Dynamic| {
         let brick = id(&brick)?;
         with_world(|world, i| Ok(world.can_edit(i.caller, brick)))
+    });
+    // may_copy(player, brick, options): whether a copy by the player with
+    // these copy options (`copy_build`'s) would take the brick: the New
+    // Duplicator's `ndTrustCheckSelect` for a box corner.
+    engine.register_fn("may_copy", |player: Dynamic, brick: Dynamic, options: Map| {
+        let (player, brick) = (id(&player)?, id(&brick)?);
+        let (rule, _, _) = copy_rule(&options)?;
+        with_world(|world, _| Ok(world.may_copy(player, brick, rule)))
     });
     engine.register_fn(
         "can_plant",
@@ -2581,6 +2610,12 @@ fn register_presentation(engine: &mut Engine) {
         push(Op::SetImageAmmo {
             player: id(&player)?,
             ammo,
+        })
+    });
+    engine.register_fn("set_image_loaded", |player: Dynamic, loaded: bool| {
+        push(Op::SetImageLoaded {
+            player: id(&player)?,
+            loaded,
         })
     });
     engine.register_fn("unmount_image", |player: Dynamic| {
@@ -3374,6 +3409,9 @@ impl Runtime {
             }
             if behaviour.on_place {
                 need("on_place".into(), 2, "on_place");
+            }
+            if behaviour.on_copy_ghost {
+                need("on_copy_ghost".into(), 2, "on_copy_ghost");
             }
             if behaviour.on_activate {
                 need("on_activate".into(), 1, "on_activate");

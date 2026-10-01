@@ -287,11 +287,13 @@ fn draw_selection_box(p) {
 }
 
 // `ND_HighlightBox`, seen by everyone: gold edges round a selection, as
-// wide as the selection is big.
+// wide as the selection is big; blue round the ghost in plant mode
+// (`spawnGhostBricks`, `getGhostWorldBox`), following it as it moves.
 fn draw_highlight_box(p) {
     let mode = get_player(p, "mode");
-    let area = get_player(p, "selection_box");
-    if !(mode == "stack" || mode == "box") || get_player(p, "selected") == 0 || area.len() != 6 {
+    let area = if mode == "plant" { get_player(p, "ghost_box") } else { get_player(p, "selection_box") };
+    let held = mode == "plant" || ((mode == "stack" || mode == "box") && get_player(p, "selected") > 0);
+    if !held || area.len() != 6 {
         hide_shapes(p, "highlight");
         return;
     }
@@ -299,13 +301,22 @@ fn draw_highlight_box(p) {
     let p2 = [area[3], area[4], area[5]];
     let len = [p2[0] - p1[0], p2[1] - p1[1], p2[2] - p1[2]];
     let width = (7.0 / 1280.0) * longest(len) + 1.0;
+    // `ND_HighlightBox::applyColors`.
+    let color = if mode == "plant" { [0.2, 0.2, 1.0, 0.99] } else { [1.0, 0.84, 0.0, 0.99] };
     let shapes = [];
     for axis in 0..3 {
         for k in 0..4 {
-            shapes.push(edge(p1, p2, axis, k, width, width * 0.05, [1.0, 0.84, 0.0, 0.99]));
+            shapes.push(edge(p1, p2, axis, k, width, width * 0.05, color));
         }
     }
     show_shapes(p, "highlight", shapes);
+}
+
+// The ghost moved, turned, mirrored or flipped, or went away: the box
+// round it (`ND_Selection::updateHighlightBox`).
+fn on_copy_ghost(p, info) {
+    set_player(p, "ghost_box", if info.box == () { [] } else { info.box.min + info.box.max });
+    draw_highlight_box(p);
 }
 
 fn draw_boxes(p) {
@@ -598,11 +609,21 @@ fn box_from_selection(p) {
     }
 }
 
+// A job started or ended: the progress modes' `spin`, which `ndSetMode`
+// gave the image (`setImageLoaded(0, !%newMode.spin)`), so the duplicator
+// spins while it works.
+fn set_working(p, action) {
+    if get_player(p, "working") != action {
+        set_player(p, "working", action);
+        set_image_loaded(p, action == "");
+    }
+}
+
 // `ndKillMode`: the duplicator put away. A job under way stops with it
 // (each progress mode's `onKillMode`), and what it did stays done.
 fn kill_mode(p) {
     if busy(p) {
-        set_player(p, "working", "");
+        set_working(p, "");
         cancel_copy(p);
     }
     if get_player(p, "mode") == "fillcolor" {
@@ -722,6 +743,9 @@ fn copy_rule(p, me) {
         trust: trust(),
         public_bricks: select_public(),
         admin: admin_bypass(),
+        // `ndTrustCheckSelect`: trust in the owner of the brick's stack
+        // counts too.
+        stack: true,
         partial: true,
         limited: get_player(p, "limited"),
         // Held as a selection until a brick key takes it up.
@@ -793,7 +817,12 @@ fn cmd_fire(p) {
         menu_sound(p, "uploadStartSound");
         return;
     }
-    // Box mode: a box around the clicked brick.
+    // Box mode: a box around the clicked brick, one the player may select
+    // (`ndTrustCheckMessage`).
+    if !may_copy(p, hit.brick, copy_rule(p, me)) {
+        no_trust(p);
+        return;
+    }
     if get_player(p, "box_selected") {
         oops(p, "Selection canceled! You can now edit the box again.", 5);
         set_player(p, "box_selected", false);
@@ -1077,13 +1106,23 @@ fn holds_selection(p) {
     get_player(p, "mode") == "plant" || get_player(p, "selected") > 0
 }
 
-// `GameConnection::ndMirror`: only a ghost in plant mode mirrors.
+// `GameConnection::ndMirror`: the selection in plant mode, else the
+// player's ghost brick (`FxDtsBrick::ndMirrorGhost`).
 fn mirror(p, axis) {
-    if get_player(p, "mode") != "plant" {
-        tell(p, `\c6The mirror command can only be used in plant mode or with a ghost brick.`);
+    if get_player(p, "mode") == "plant" {
+        mirror_copy(p, axis);
         return;
     }
-    mirror_copy(p, axis);
+    if player(p).ghost {
+        let asymmetric = if axis == "y" {
+            `\c6Sorry, your ghost brick is not vertically symmetric and cannot be mirrored.`
+        } else {
+            `\c6Sorry, your ghost brick is asymmetric and cannot be mirrored.`
+        };
+        mirror_ghost(p, axis, asymmetric);
+        return;
+    }
+    tell(p, `\c6The mirror command can only be used in plant mode or with a ghost brick.`);
 }
 // `/MirrorX`: left and right as the player sees it.
 fn cmd_mirrorx(p) {
@@ -1599,7 +1638,7 @@ fn on_copy(p, info) {
             return;
         }
         let was = get_player(p, "working");
-        set_player(p, "working", info.action);
+        set_working(p, info.action);
         set_player(p, "progress", [info.bricks, info.total, info.placed, info.refused, info.queued, info.searched]);
         if was != info.action {
             if info.action == "plant" && info.total > process_per_tick() * 10 {
@@ -1613,7 +1652,7 @@ fn on_copy(p, info) {
         bottom(p);
         return;
     }
-    set_player(p, "working", "");
+    set_working(p, "");
     if info.error == "canceled" {
         canceled(p, info);
         return;
@@ -1858,7 +1897,7 @@ fn tally(failed, key) {
 // `ND_Selection::finishPlant`, after which the selection is planted from;
 // and `conditionalPlant`'s refusals before it.
 fn on_place(p, info) {
-    set_player(p, "working", "");
+    set_working(p, "");
     if info.float_refused {
         // `NDM_PlantCopy::onPlantBrick`'s check, made at each plant.
         tell(p, `\c6Force Plant has been disabled because it is admin only. Ask an admin for help.`);
@@ -1888,8 +1927,12 @@ fn on_place(p, info) {
         tell(p, `\c6You need build trust with \c3${get_player(p, "plant_as")}\c6 to plant bricks in their group.`);
         return;
     }
-    // Kept for `/MirErrors`.
+    // Kept for `/MirErrors`, and said once the plant is done
+    // (`ND_Selection::finishPlant`).
     set_player(p, "mirror_errors", [info.mirror_errors.side, info.mirror_errors.upside_down]);
+    if info.mirror_errors.side.len() + info.mirror_errors.upside_down.len() > 0 {
+        tell(p, `\c6Some bricks were probably mirrored incorrectly. Say \c3/mirErrors\c6 to find out more.`);
+    }
     let failed = info.failed;
     if tally(failed, "too_far") == info.bricks && info.bricks > 0 {
         oops(p, "You can't plant so far away!", 5);

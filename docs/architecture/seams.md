@@ -45,3 +45,7 @@ Owners are named by thread title.
 | Message box | `message_box(p, title, text)` (v20 `MessageBoxOK`), capability `chat` | Capture the Flag (Slayer) | in flight |
 | Saved mini-games | a build keeps its saver's mini-game (settings, Add-On settings, teams, `per_minigame` state keys); loading sets it up again and sends `on_minigame` `loaded` | Capture the Flag (Slayer) | in flight |
 | Copy jobs | big copy work a slice each tick (`CopyWork`, `cancel_copy`, `copy_working`), copy ghost subset, `IdMap` | Duplicators | in flight |
+| Stack ownership | `Simulation::stack_owner` (v20's `stackBL_ID`, not saved), `CopyRule::stack`, `may_copy` | Duplicators | in flight |
+| Copy pose | `Command::CopyPose` (client reports where its copy ghost stands), `Blueprint::ghost_box`, `on_copy_ghost(p, #{box})` hook | Duplicators | in flight |
+| Copy extras | `Blueprint.extras` (names, lights, emitters, items, sounds, vehicles, events), turned with the copy and planted through the wrench checks (`give_copy_extras`) | Duplicators | in flight |
+| Image loaded and spin | `State.loaded`/`not_loaded`/`spin` (v20 `stateTransitionOnLoaded`/`NotLoaded`, `stateSpinThread`), `set_image_loaded`, client spin clock in `world_items` | Duplicators | in flight |

@@ -1043,6 +1043,7 @@ impl Session {
                 .player(p.combat.player)
                 .map_or(0, |m| m.score),
             copy_working: self.copy_working(owner),
+            ghost: self.ghost_brick(owner).is_some(),
             copy: self.copies.get(&owner).map(|c| {
                 let bricks = self.blueprints.get(&owner).map_or(0, |b| b.len());
                 (c.package.clone(), bricks as u64)
@@ -1754,6 +1755,20 @@ impl Session {
                 }
                 Ok(())
             }
+            Op::MirrorGhost {
+                player,
+                axis,
+                asymmetric,
+            } => {
+                ensure!(
+                    caller == Some(player),
+                    "A ghost brick is mirrored only for the player whose command asked"
+                );
+                if let Err(error) = self.mirror_ghost(player, axis, &asymmetric) {
+                    self.center_print(player, format!("{error:#}"));
+                }
+                Ok(())
+            }
             Op::MoveCopy {
                 player,
                 point,
@@ -2273,6 +2288,11 @@ impl Session {
             Op::SetImageAmmo { player, ammo } => {
                 ensure!(self.peers.contains_key(&player), "No such player");
                 self.weapons.set_ammo(bri_weapons::ActorId(player), ammo)
+            }
+            Op::SetImageLoaded { player, loaded } => {
+                ensure!(self.peers.contains_key(&player), "No such player");
+                self.weapons
+                    .set_loaded(bri_weapons::ActorId(player), loaded)
             }
             Op::MountImage { player, image } => {
                 let peer = self.peers.get(&player).context("No such player")?;

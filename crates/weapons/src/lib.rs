@@ -139,6 +139,18 @@ pub struct State {
     pub up: Option<usize>,
     pub ammo: Option<usize>,
     pub no_ammo: Option<usize>,
+    /// Where the state goes while the image in hand is loaded or not
+    /// (`stateTransitionOnLoaded`, `stateTransitionOnNotLoaded`), which a
+    /// rule sets with `set_image_loaded` (v20's `setImageLoaded`). Checked
+    /// before ammo, as `ShapeBase::updateImageState` does.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub loaded: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub not_loaded: Option<usize>,
+    /// What the image's `spin` sequence does in this state
+    /// (`stateSpinThread`).
+    #[serde(skip_serializing_if = "Spin::is_keep")]
+    pub spin: Spin,
     pub script: String,
     pub sequence: String,
     /// The holder's arm animation (thread 2) played on entering the state,
@@ -151,6 +163,44 @@ pub struct State {
     pub emitter_node: String,
     pub emitter_seconds: f32,
     pub eject_shell: bool,
+}
+/// An image's spin thread (`stateSpinThread`): its `spin` sequence played
+/// under the state's own, at a speed the state sets. Presentation only;
+/// each game works it out from the state the image is in.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Spin {
+    /// Leave it as the last state did (v20's `Ignore`).
+    #[default]
+    Keep,
+    /// Stop where it is.
+    Stop,
+    /// Speed up from still to full over the state's timeout.
+    SpinUp,
+    /// Slow from full to still over the state's timeout.
+    SpinDown,
+    FullSpeed,
+}
+impl Spin {
+    fn is_keep(&self) -> bool {
+        *self == Self::Keep
+    }
+    /// The spin's speed, 0 to 1, `elapsed` of `timeout` seconds into a
+    /// state, from the speed it had on entering; `None` keeps it.
+    pub fn speed(self, elapsed: f64, timeout: f64, entered: f64) -> f64 {
+        let through = if timeout > 0. {
+            (elapsed / timeout).clamp(0., 1.)
+        } else {
+            1.
+        };
+        match self {
+            Self::Keep => entered,
+            Self::Stop => 0.,
+            Self::SpinUp => through,
+            Self::SpinDown => 1. - through,
+            Self::FullSpeed => 1.,
+        }
+    }
 }
 impl State {
     /// What a field left out of `weapons.json` means: v20's
@@ -1243,6 +1293,8 @@ impl Pack {
                     state.up,
                     state.ammo,
                     state.no_ammo,
+                    state.loaded,
+                    state.not_loaded,
                 ]
                 .into_iter()
                 .flatten()
@@ -1345,5 +1397,24 @@ impl Pack {
             );
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod spin_tests {
+    use super::Spin;
+
+    #[test]
+    fn a_spin_speeds_up_and_slows_over_its_state_and_keeps_otherwise() {
+        assert_eq!(Spin::SpinUp.speed(0., 0.25, 0.), 0.);
+        assert_eq!(Spin::SpinUp.speed(0.125, 0.25, 0.), 0.5);
+        assert_eq!(Spin::SpinUp.speed(1., 0.25, 0.), 1.);
+        assert_eq!(Spin::SpinDown.speed(0.125, 0.25, 1.), 0.5);
+        assert_eq!(Spin::SpinDown.speed(1., 0.25, 1.), 0.);
+        assert_eq!(Spin::FullSpeed.speed(0., 0., 0.), 1.);
+        assert_eq!(Spin::Stop.speed(0., 0., 1.), 0.);
+        assert_eq!(Spin::Keep.speed(3., 0., 0.75), 0.75);
+        // With no timeout the change is at once.
+        assert_eq!(Spin::SpinUp.speed(0., 0., 0.), 1.);
     }
 }

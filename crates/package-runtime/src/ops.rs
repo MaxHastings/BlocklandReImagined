@@ -428,6 +428,15 @@ pub enum Op {
         player: u64,
         axis: MirrorAxis,
     },
+    /// Mirror `player`'s ghost brick (the brick in their hand, where it
+    /// would plant) across `axis` where it stands: it becomes its mirror
+    /// image, itself turned or its twin. A brick with no exact image in
+    /// that mirror stays as it is and the player is told `asymmetric`.
+    MirrorGhost {
+        player: u64,
+        axis: MirrorAxis,
+        asymmetric: String,
+    },
     /// Move the copy `player` holds against the surface at `point` whose
     /// outward `normal` is given, as a ghost brick is put where it is
     /// aimed: its box's middle sits half its size out along the normal,
@@ -903,6 +912,13 @@ pub enum Op {
         player: u64,
         ammo: bool,
     },
+    /// Whether the image in a player's hand is loaded (`setImageLoaded`),
+    /// which its states' `loaded` and `not_loaded` transitions read: a tool
+    /// that spins while it works.
+    SetImageLoaded {
+        player: u64,
+        loaded: bool,
+    },
     /// Put another image in a player's hand, keeping their tool slot
     /// (`mountImage`): a scope, a second fire mode. `None` puts back the
     /// selected tool's own image.
@@ -1266,6 +1282,12 @@ pub struct CopyRule {
     /// Planting the copy plants each brick that fits and skips the rest,
     /// as v20's Duplorcator did, rather than all or nothing.
     pub partial: bool,
+    /// The same trust in the owner of a brick's stack (who owns the bricks
+    /// it was built on, v20's `stackBL_ID`) also lets a player copy it, and,
+    /// with full trust, cut, paint or wrench it through the copy (the New
+    /// Duplicator's trust checks).
+    #[serde(default)]
+    pub stack: bool,
 }
 impl Default for CopyRule {
     fn default() -> Self {
@@ -1274,6 +1296,7 @@ impl Default for CopyRule {
             public: true,
             admin: true,
             partial: false,
+            stack: false,
         }
     }
 }
@@ -1438,6 +1461,7 @@ impl Op {
             | Self::SaveCopy { .. }
             | Self::LoadCopy { .. }
             | Self::MirrorCopy { .. }
+            | Self::MirrorGhost { .. }
             | Self::MoveCopy { .. }
             | Self::DropCopy { .. }
             | Self::ShowCopy { .. }
@@ -1486,6 +1510,7 @@ impl Op {
             | Self::WearImage { .. }
             | Self::SetFov { .. }
             | Self::SetImageAmmo { .. }
+            | Self::SetImageLoaded { .. }
             | Self::MountImage { .. }
             | Self::UnmountImage { .. }
             | Self::SetScale { .. }
@@ -1528,6 +1553,7 @@ impl Op {
             | Self::Respawn { .. }
             | Self::Control { .. }
             | Self::SetImageAmmo { .. }
+            | Self::SetImageLoaded { .. }
             | Self::MirrorCopy { .. }
             | Self::DropCopy { .. }
             | Self::ShowCopy { .. }
@@ -1545,6 +1571,7 @@ impl Op {
             | Self::RemoveBot { .. }
             | Self::RestBot { .. }
             | Self::UnmountObject { .. } => true,
+            Self::MirrorGhost { asymmetric, .. } => chat(asymmetric),
             Self::BotTool { slot, .. } => slot.is_none_or(|s| usize::from(s) < MAX_TOOL_SLOTS),
             Self::AddBot { kind, name, .. } => {
                 !kind.is_empty()
@@ -2047,6 +2074,7 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::SetMapLights { .. } => "set_map_lights",
         Op::SetEnvironment { .. } => "set_environment",
         Op::SetImageAmmo { .. } => "set_image_ammo",
+        Op::SetImageLoaded { .. } => "set_image_loaded",
         Op::MountImage { .. } => "mount_image",
         Op::SetTeams { .. } => "set_teams",
         Op::SetTeam { .. } => "set_team",
@@ -2103,6 +2131,7 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::CopyBuild { .. } => "copy_build",
         Op::CopyBox { .. } => "copy_box",
         Op::MirrorCopy { .. } => "mirror_copy",
+        Op::MirrorGhost { .. } => "mirror_ghost",
         Op::MoveCopy { .. } => "move_copy",
         Op::DropCopy { .. } => "drop_copy",
         Op::ShowCopy { .. } => "show_copy",
