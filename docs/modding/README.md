@@ -193,7 +193,8 @@ held), `tools` (each tool slot's item id, `""` for an empty slot, as
 `%obj.tool[%i]`) and `magazine`: for a gun with a magazine in hand, a map
 with `item`, `rounds`, `size`, `ammo` (its ammo type), `reserve` (rounds
 of that ammo left to load, `()` when it never runs out) and `reloading`;
-`()` otherwise.
+`()` otherwise; and `reserves`, a map of every ammo type they hold a
+reserve of to its rounds.
 
 **Rays and damage.** `raycast([x, y, z], [dx, dy, dz], range)` returns the
 first thing a ray meets, now, as the script runs: a map with `kind`
@@ -319,7 +320,7 @@ front of the brick it hit: `aim().object`, `aim().object_distance` and
 | Operation | Does |
 |---|---|
 | `push(ref, vx, vy, vz)`, `push(ref, vx, vy, vz, by)` | Adds to its velocity (units a second, at most 200). |
-| `tumble(player, vx, vy, vz, by)` | Knocks a player off their feet into a tumble, flying at that velocity. |
+| `tumble(player, vx, vy, vz, by)`, `tumble(player, vx, vy, vz, by, seconds)` | Knocks a player off their feet into a tumble, flying at that velocity; for `seconds` (0.1 to 60) when given, else until it settles. |
 | `hold(player, ref, distance)`, `hold(player, ref, distance, #{at, force, turn})` | Keeps `ref` floating `distance` (0.5 to 64) ahead of the player's eye, where they look, every tick until let go, carried at the velocity the aim point moves so it keeps up as they turn and walk. `at` (`[x, y, z]`, default its middle) is the spot on it that is held there, as a physics gun grabs where it points. `force` (default 36000, at most 10,000,000) is how hard it may pull: things up to `force / 450` in mass answer at once, heavier ones swing in slower and very heavy ones can only be dragged. With `turn`, it keeps the angle it had to the player as they turn. A living player held goes limp until let go and landed; a corpse (a player who died) can be held too. One hold per player; taking something another player holds ends their hold. |
 | `hold_distance(player, distance)` | Moves what they hold nearer or farther (0.5 to 64): a reel. |
 | `let_go(player)`, `held(player)` | Ends the hold; what they hold, or `()`. |
@@ -528,7 +529,13 @@ The fields you are most likely to change:
 | projectile | `damage`, `impulse`, `vertical` | hurt, and how hard it shoves |
 | projectile | `ballistic`, `elasticity` | bounces, and how much |
 | image state | `ticks` | how long a state (`Fire` is the reload time) lasts |
-| image | `shot` | several projectiles per shot, their spread and the recoil ([porting.md](porting.md#the-image-shot-field)) |
+| image | `shot` | several projectiles per shot, their spread and the recoil ([porting.md](porting.md#the-image-shot-field)); `scale` sizes the projectiles against their holder (0.1 to 10) |
+| image | `volleys` | up to 4 more sets each shot fires after its own: `[{ "projectile": "...", "projectiles": 1, "spread": 0.0005 }]`, a shotgun's slug after its pellets |
+| image | `last_shot` | `{ "shot": {...}, "volleys": [...] }`: what the magazine's last `last_rounds` rounds fire instead (a two-barrel gun's single barrel) |
+| image | `state_shots` | `{ "onfire2": {...} }`: a shot fired on entering a state with that script, as onFire's is, so a gun can spread wider as it keeps firing |
+| image state | `arm`, `gesture` | the holder's animation on entering it: `arm` on thread 2 (`shiftright`), `gesture` on thread 3, the other hand |
+| projectile | `children` | smaller projectiles it throws out as it flies, bounces or explodes: one set or a list of up to 4, each its own `projectile`, `count`, `speed` |
+| projectile | `fixed_damage` | its direct damage stays as authored at any scale |
 | item | `ui_name` | the name players see |
 | image | `zoom` | `{ "fov": 20, "on_jet": true, "crosshair": false, "first_person": true }`: aim with the zoom key (and the right mouse button with `on_jet`), hide the crosshair, force first person while aiming |
 | image | `eye_offset`, `eye_rotation` | where the weapon sits in first person: exactly there, relative to the camera, as Torque places it, so a scope whose sight is on the eye line stays centred at any zoom |

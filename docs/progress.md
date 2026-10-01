@@ -8621,6 +8621,29 @@ Tests: `crates/addon-import/tests/adventure_port.rs` on a CC0 stand-in
 pass through the image's states, boxes and headshots in a hosted game.
 `cargo test -p bri-addon-import`, the touched bri-sim and bri-weapons
 suites, clippy on the touched crates.
+## 2026-10-01 Adventure ports: no gaps against the originals (branch `claude/adventure-pack-n3spj2`)
+
+Max: v0.1.11 waits until both ModernWarbattles and the Glass 1019 pack are
+fully ported. Both ports now read every gun from the copy's own scripts
+and fields (`docs/audits/adventure-pack.md` lists each piece). New
+generic seams, each with tests:
+- Weapons: image `state_shots` (a fire state's own shot), shot `scale`,
+  projectile `fixed_damage`, image `last_shot` and magazine
+  `last_rounds`, image `volleys`, projectile `children` as a list, state
+  `gesture` (thread 3); picking up a second of a gun keeps the holder's
+  magazine; `WeaponsWorld::set_drop_rounds`.
+- Hooks: `on_vehicle_damage` (with `World::max_damage`, the turret pool as
+  `TURRET_MAX_DAMAGE`); `on_damage` may answer `#{ amount, type }`;
+  `on_pickup` gets `info.rounds` and may answer `#{ rounds }`;
+  `tumble(..., seconds)`; `player(p).reserves`; `info.projectile`.
+- Port readers: `shots` (spread blocks, picks, last shots, state shots,
+  state sounds, arm moves, kicks), `hitscans`, rules `from` and `values`.
+Open: the crit effects belong to `Emote_Critical`, a separate Add-On the
+pack runs; it needs Max's copy before it can be imported and bundled.
+Tests: `cargo test -p bri-addon-import`, `-p bri-weapons --test
+addon_seams`, clippy on the touched crates; the bri-sim, bri-vehicles and
+bri-weapons suites that need `content/` were not runnable in the cloud.
+
 ## 2026-10-01 Vehicle destruction looks (v20 audit)
 
 Max: destroyed vehicles "would turn black right away when on fire" in v20,
