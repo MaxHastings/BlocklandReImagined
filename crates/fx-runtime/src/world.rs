@@ -1,6 +1,7 @@
 use crate::EffectsPack;
 use anyhow::{Context, Result, ensure};
 use glam::{Mat4, Quat, Vec3, Vec4};
+use bri_content::passage::Passages;
 use std::{collections::BTreeMap, sync::Arc};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -273,8 +274,19 @@ pub struct EffectsWorld {
     emitter_particles: Vec<Vec<usize>>,
     emitter_alpha: Vec<Option<bool>>,
     flare_texture: Vec<Option<u32>>,
+    /// The world's portals: a particle that flies in through one goes on
+    /// out of its partner (see [`Self::set_passages`]).
+    passages: Passages,
 }
 impl EffectsWorld {
+    /// The world's portals ([`bri_content::passage`]), as the player's game
+    /// sees them: every particle that flies in through one comes out of
+    /// its partner, turned with it, as bodies and shots do. Drawn only.
+    pub fn set_passages(&mut self, passages: &Passages) {
+        if &self.passages != passages {
+            self.passages = passages.clone();
+        }
+    }
     pub fn new(pack: Arc<EffectsPack>, limits: EffectsLimits, seed: u64) -> Result<Self> {
         ensure!(
             limits.sources > 0
@@ -347,6 +359,7 @@ impl EffectsWorld {
             emitter_particles,
             emitter_alpha,
             flare_texture,
+            passages: Passages::default(),
         })
     }
     pub fn pack(&self) -> &Arc<EffectsPack> {
@@ -453,6 +466,18 @@ impl EffectsWorld {
             .get_mut(&handle)
             .context("Stale effect handle")?
             .transform = transform;
+        Ok(())
+    }
+    /// Move a source somewhere it did not travel to (through a portal):
+    /// it emits from there on, with no streak back to where it was.
+    pub fn jump_source(&mut self, handle: EffectHandle, transform: SourceTransform) -> Result<()> {
+        transform.validate()?;
+        let source = self
+            .sources
+            .get_mut(&handle)
+            .context("Stale effect handle")?;
+        source.transform = transform;
+        source.previous = transform;
         Ok(())
     }
     pub fn update_options(&mut self, handle: EffectHandle, options: SourceOptions) -> Result<()> {
@@ -596,7 +621,7 @@ impl EffectsWorld {
             }
         }
         for p in &mut self.particles {
-            Self::integrate(&self.pack, p, dt, wind);
+            Self::integrate(&self.pack, &self.passages, p, dt, wind);
         }
         self.particles
             .retain(|p| p.age < p.lifetime && p.position.is_finite());
@@ -725,7 +750,7 @@ impl EffectsWorld {
                 .or(s.options.paint.filter(|_| e.use_emitter_colors)),
             visible: s.options.visible,
         };
-        Self::integrate(&self.pack, &mut particle, pre_age, wind);
+        Self::integrate(&self.pack, &self.passages, &mut particle, pre_age, wind);
         if particle.age >= particle.lifetime {
             return;
         }
@@ -737,11 +762,12 @@ impl EffectsWorld {
         self.diagnostics.emitted += 1;
         self.diagnostics.peak_particles = self.diagnostics.peak_particles.max(self.particles.len());
     }
-    fn integrate(pack: &EffectsPack, p: &mut Particle, dt: f32, wind: Vec3) {
+    fn integrate(pack: &EffectsPack, passages: &Passages, p: &mut Particle, dt: f32, wind: Vec3) {
         p.age += dt;
         if p.age >= p.lifetime {
             return;
         }
+        let before = p.position;
         let def = &pack.library.particles[p.definition];
         let acceleration =
             p.acceleration - (wind + p.wind) * def.wind - Vec3::Y * (9.81 * def.gravity);
@@ -754,6 +780,16 @@ impl EffectsWorld {
         } else {
             p.position += p.velocity * dt + acceleration * (0.5 * dt * dt);
             p.velocity += acceleration * dt;
+        }
+        if passages.list.is_empty() {
+            return;
+        }
+        if let (end, Some(carry)) = passages.travel(before, p.position) {
+            let (_, turn, _) = carry.to_scale_rotation_translation();
+            p.position = end;
+            p.velocity = turn * p.velocity;
+            p.acceleration = turn * p.acceleration;
+            p.direction = turn * p.direction;
         }
     }
     /// This frame's particles, farthest from the camera first, and lights.
@@ -1236,6 +1272,62 @@ mod tests {
             let threaded = world.snapshot_in_view(&camera).particles;
             assert_eq!(threaded.len(), expected.len());
             assert_eq!(format!("{threaded:?}"), format!("{expected:?}"));
+        }
+
+        #[test]
+        fn particles_fly_on_out_of_a_portals_partner() {
+            use bri_content::passage::{Passage, Passages};
+            // Sprayed up in a cone; a 2x2 opening one unit up leads twenty
+            // units along x, turned a quarter about z.
+            let pack = fixture(|l| {
+                l.emitters[0].speed = 10.;
+                l.emitters[0].theta_degrees = [0., 70.];
+            });
+            let carry = glam::Affine3A::from_translation(Vec3::new(20., 1., 0.))
+                * glam::Affine3A::from_rotation_z(std::f32::consts::FRAC_PI_2)
+                * glam::Affine3A::from_translation(Vec3::new(0., -1., 0.));
+            let passages = Passages {
+                list: vec![Passage {
+                    brick: 1,
+                    centre: Vec3::Y,
+                    normal: Vec3::NEG_Y,
+                    u: Vec3::Z,
+                    v: Vec3::X,
+                    half: glam::Vec2::new(1., 1.),
+                    carry,
+                }],
+                closed: vec![],
+            };
+            let spray = |portals: bool| {
+                let mut world =
+                    EffectsWorld::new(pack.clone(), EffectsLimits::default(), 7).unwrap();
+                if portals {
+                    world.set_passages(&passages);
+                }
+                world
+                    .burst("emitter", SourceTransform::default(), SourceOptions::default(), 60)
+                    .unwrap();
+                for _ in 0..6 {
+                    world.advance(0.05, Vec3::ZERO).unwrap();
+                }
+                world.particles
+            };
+            let (free, through) = (spray(false), spray(true));
+            assert_eq!(free.len(), through.len());
+            let mut carried = 0;
+            for (f, t) in free.iter().zip(&through) {
+                // Straight from the emitter: through the opening or past it.
+                let (position, velocity) = match passages.first(Vec3::ZERO, f.position) {
+                    Some(_) => {
+                        carried += 1;
+                        (carry.transform_point3(f.position), carry.transform_vector3(f.velocity))
+                    }
+                    None => (f.position, f.velocity),
+                };
+                assert!(t.position.distance(position) < 1e-3, "{} not {position}", t.position);
+                assert!(t.velocity.distance(velocity) < 1e-3, "{} not {velocity}", t.velocity);
+            }
+            assert!(carried > 0 && carried < free.len(), "{carried} of {}", free.len());
         }
     }
     #[test]

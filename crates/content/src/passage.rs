@@ -63,6 +63,12 @@ impl Passage {
 /// other a hair apart could otherwise hand a point back and forth).
 pub const MAX_CARRIES: usize = 4;
 
+/// How far past a partner's plane a carried move starts again. A carried
+/// point lands on that plane only to within rounding, and a doorway's two
+/// openings share one plane back to back, so without this hair the rest of
+/// the move could go in through the other one and be carried straight back.
+pub const PAST: f32 = 1e-4;
+
 /// Every opening in a world.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Passages {
@@ -97,9 +103,11 @@ impl Passages {
             b = carry.transform_point3(b);
             total = Some(carry * total.unwrap_or(Affine3A::IDENTITY));
             // Past the plane by a hair, so it is not met again.
-            if (b - a).length_squared() < 1e-12 {
+            let rest = b - a;
+            if rest.length_squared() < 1e-12 {
                 break;
             }
+            a += rest.normalize() * PAST.min(rest.length());
         }
         (b, total)
     }

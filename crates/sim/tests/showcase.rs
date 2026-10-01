@@ -900,6 +900,7 @@ fn bowl(in_minigame: bool, speed: f32, at_owner: bool) -> (bool, f32, bool) {
     let mut g = Game::new();
     let a = g.join("Alpha", Vec3::new(0.0, 0.05, 0.0));
     let b = g.join("Bravo", Vec3::new(0.0, 0.05, -12.0));
+
     g.steps(30);
     if in_minigame {
         g.minigame(a, &[b]);
@@ -1271,4 +1272,251 @@ fn a_thrown_player_tumbles_only_when_they_hit_something_hard() {
     // The same throw into a wall.
     let (mut g, b) = hold_and_let_go(0.08, true);
     assert!(tumbled(&mut g, b, 120), "hit the wall hard");
+}
+
+/// A `definition` of Alpha's rolled at `speed` into Bravo, in a minigame or
+/// not: its speed along the roll just before and just after the hit (the
+/// biggest one-tick drop), and a second and a half after it was rolled.
+fn run_into_player(definition: &str, in_minigame: bool, speed: f32) -> (f32, f32, f32) {
+    let mut g = Game::new();
+    let a = g.join("Alpha", Vec3::new(0.0, 0.05, 0.0));
+    let b = g.join("Bravo", Vec3::new(0.0, 0.05, -12.0));
+    g.steps(30);
+    if in_minigame {
+        g.minigame(a, &[b]);
+    }
+    let at = g.feet(b);
+    let id =
+        g.s.spawn_vehicle_at(
+            a,
+            definition,
+            at + Vec3::new(9.0, 1.3, 0.0),
+            0.0,
+            Vec3::new(-speed, 0.0, 0.0),
+        )
+        .unwrap();
+    let mut speeds = vec![speed];
+    for _ in 0..180 {
+        g.steps(1);
+        speeds.push(-g.vehicle(id).unwrap().1.x);
+    }
+    let hit = (1..speeds.len())
+        .max_by(|i, j| (speeds[i - 1] - speeds[*i]).total_cmp(&(speeds[j - 1] - speeds[*j])))
+        .unwrap();
+    (speeds[hit - 1], speeds[hit], speeds[180])
+}
+
+/// Max, v0.1.10: a Steel Ball that hit a player stopped dead. The solver
+/// took a walking player for an immovable wall; now the two share the hit
+/// by weight, so a 900 kg ball barely slows for a 90 kg player and rolls
+/// on, and a 300 kg crate slows more but never bounces back off one.
+#[test]
+fn a_vehicle_rolls_on_through_a_player_it_hits() {
+    // Outside minigames it only bumps; in one (Max: "IN A MINIGAME") a
+    // roll bumps, a harder hit bowls them over and a hurl kills.
+    for (in_minigame, speed) in [(false, 24.0), (true, 13.0), (true, 16.0), (true, 24.0)] {
+        let (before, after, later) = run_into_player(BALL, in_minigame, speed);
+        assert!(
+            after > before * 0.75,
+            "the ball barely slows (minigame {in_minigame}, {speed} u/s): {before} -> {after}"
+        );
+        assert!(
+            later > 3.0,
+            "and rolls on (minigame {in_minigame}, {speed} u/s): {later}"
+        );
+    }
+    let (before, after, _) = run_into_player(CRATE, false, 24.0);
+    assert!(
+        after > before * 0.5 && after < before * 0.85,
+        "the crate slows more, but never bounces back: {before} -> {after}"
+    );
+}
+
+/// A content-free launcher (`kind`: "rocket" or "tankshell") whose shell
+/// explodes with v20's blast push: `impulse` away from the blast within
+/// `radius`, plus `vertical` up, both fading with distance squared.
+fn add_launcher(
+    pack: &mut bri_weapons::Pack,
+    kind: &str,
+    impulse: f32,
+    vertical: f32,
+    radius: f32,
+) {
+    let item_id = format!("test:item/{kind}");
+    let image_id = format!("test:image/{kind}");
+    let projectile_id = format!("test:projectile/{kind}");
+    let state = |name: &str, ticks, script: &str| bri_weapons::State {
+        name: name.into(),
+        ticks,
+        wait: true,
+        allow_change: true,
+        script: script.into(),
+        ..Default::default()
+    };
+    let states = vec![
+        bri_weapons::State {
+            timeout: Some(1),
+            ..state("Activate", 0, "")
+        },
+        bri_weapons::State {
+            down: Some(2),
+            ..state("Ready", 0, "")
+        },
+        bri_weapons::State {
+            timeout: Some(3),
+            ..state("Fire", 60, "onFire")
+        },
+        bri_weapons::State {
+            timeout: Some(1),
+            ..state("Reload", 0, "")
+        },
+    ];
+    let image = bri_weapons::Image {
+        id: image_id.clone(),
+        name: "rocketLauncherImage".into(),
+        model: String::new(),
+        projectile: Some(projectile_id.clone()),
+        mount_point: 0,
+        offset: [0.; 3],
+        eye_offset: [0.; 3],
+        source_rotation_degrees: [0.; 3],
+        correct_muzzle: false,
+        melee: false,
+        color: [1.; 4],
+        color_shift: false,
+        arm_ready: true,
+        casing: String::new(),
+        min_shot_ticks: 0,
+        command: Default::default(),
+        commands: Default::default(),
+        shot: None,
+        eye_rotation: [0.0; 3],
+        zoom: None,
+        crosshair: true,
+        follow_arm: false,
+        paint_tint: false,
+        states,
+    };
+    let item = bri_weapons::Item {
+        id: item_id.clone(),
+        name: "rocketLauncherItem".into(),
+        ui_name: "Rocket L.".into(),
+        image: image_id.clone(),
+        model: String::new(),
+        icon: String::new(),
+        can_drop: true,
+        sport: false,
+    };
+    let projectile = bri_weapons::ProjectileDef {
+        id: projectile_id.clone(),
+        name: "rocketLauncherProjectile".into(),
+        model: String::new(),
+        speed: 40.,
+        inherit: 0.,
+        gravity: 0.,
+        lifetime_ticks: 480,
+        fade_ticks: 0,
+        arm_ticks: 0,
+        ballistic: false,
+        elasticity: 0.,
+        friction: 0.,
+        damage: 0.,
+        damage_type: String::new(),
+        radius_damage_type: String::new(),
+        impulse: 0.,
+        vertical: 0.,
+        explode_player: true,
+        explode_death: true,
+        collide_players: true,
+        explosion: bri_weapons::Explosion {
+            effect: String::new(),
+            damage: 0.,
+            radius: 0.,
+            impulse,
+            impulse_radius: radius,
+            impulse_vertical: vertical,
+            burn_seconds: 0.,
+        },
+        brick: bri_weapons::BrickImpact {
+            radius: 0.,
+            direct: true,
+            force: 20.,
+            max_volume: 1000.,
+            max_floating_volume: 1000.,
+        },
+        bounce_effect: String::new(),
+        stick_effect: String::new(),
+        blood_effect: String::new(),
+        bounce_angle: 0.,
+        min_stick_speed: 0.,
+        trail: String::new(),
+        sound: String::new(),
+        light_radius: 0.,
+        light_color: [0.; 3],
+        sport_image: None,
+        rest_speed: 0.,
+    };
+    pack.items.insert(item_id, item);
+    pack.images.insert(image_id, image);
+    pack.projectiles.insert(projectile_id, projectile);
+}
+
+/// Alpha's blast from a `kind` launcher pushing `impulse` out within
+/// `radius` on the ground beside a resting Steel Ball, in a minigame or
+/// not: how far it rolled away in two seconds.
+fn blast_beside_ball(kind: &str, impulse: f32, radius: f32, in_minigame: bool) -> f32 {
+    let mut g = Game::new();
+    let mut pack = weapons();
+    add_launcher(&mut pack, kind, impulse, 0.0, radius);
+    pack.validate().unwrap();
+    g.s.set_weapon_pack(pack).unwrap();
+    let a = g.join("Alpha", Vec3::new(0.0, 0.05, 0.0));
+    g.steps(30);
+    let ball =
+        g.s.spawn_vehicle_at(a, BALL, Vec3::new(0.0, 1.3, -10.0), 0.0, Vec3::ZERO)
+            .unwrap();
+    g.steps(120);
+    if in_minigame {
+        g.minigame(a, &[]);
+    }
+    let (start, _) = g.vehicle(ball).unwrap();
+    g.s.give_tool(a, &format!("test:item/{kind}"), true)
+        .unwrap();
+    g.steps(60);
+    // The ground 2.5 to the ball's left, from the eye.
+    let d = start + Vec3::new(2.5, -1.25, 0.0) - Vec3::new(0.0, 2.2, 0.0);
+    g.look(
+        a,
+        d.x.atan2(-d.z),
+        d.y.atan2(Vec3::new(d.x, 0.0, d.z).length()),
+    );
+    g.steps(5);
+    g.cmd(a, Command::WeaponTrigger { down: true }).unwrap();
+    g.steps(2);
+    g.cmd(a, Command::WeaponTrigger { down: false }).unwrap();
+    g.steps(240);
+    let (end, _) = g.vehicle(ball).unwrap();
+    start.x - end.x
+}
+
+/// Max, v0.1.10: "explosions from rockets or tank shells don't move steel
+/// ball". By v20's rule a blast moves a vehicle by its impulse over its
+/// mass, which barely stirs 900 kg of steel; the ball's `blast_scale`
+/// knocks it about as a third of that weight would be.
+#[test]
+fn rockets_and_tank_shells_knock_the_steel_ball_away() {
+    // The stock explosions' pushes: the rocket's 4000 within 6, the tank
+    // shell's 5000 within 15.
+    for in_minigame in [false, true] {
+        let rocket = blast_beside_ball("rocket", 4000.0, 6.0, in_minigame);
+        assert!(
+            rocket > 6.0,
+            "a rocket rolls it away (minigame {in_minigame}): {rocket}"
+        );
+        let shell = blast_beside_ball("tankshell", 5000.0, 15.0, in_minigame);
+        assert!(
+            shell > 6.0,
+            "so does a tank shell (minigame {in_minigame}): {shell}"
+        );
+    }
 }
