@@ -8267,3 +8267,32 @@ the_tank_turret_keeps_its_aim_through_seat_changes_for_gunner_and_watcher`
 host's and guest's replicated and drawn aim stay put; content, run on the
 gate). `bri-sim --test vehicles a_new_tank_gunner_takes_the_turret_where_it_was_left`
 updated for the hold.
+
+## 2026-10-01: turret seat changes, take two
+
+7ec124a failed on the gate with real content: its host-side hold (a new
+gunner's turret stays put until their moves look within 0.25 rad of the
+barrel, up to a second) also held a gunner whose very first look was
+elsewhere (`tank_gunner_aims_where_they_look_relative_to_the_hull`), and in
+the app test a guest's turret ended on the hull's heading. That needs a
+gunner client that never looked along the barrel: the client turned the
+look only on the exact frame the seat changed, and a frame whose seat view
+is not yet known (a vehicle's listing changing with its occupants) spent
+that one chance. Now:
+
+- The host is back to 66cce0d's rule (shipped in v0.1.10): moves still
+  carrying the look the gunner boarded with leave the turret; any other look
+  aims it.
+- The client marks a new seat as "takes the turret" and does it on the
+  first frame its gunner view is known (`App::takes_turret`), after the
+  old seat's view is cleared.
+- Content-free coverage: `bri_chaos::fixture::synthetic_tank` (the chaos
+  wheeled vehicle with the Tank's seats and an attached turret) and
+  `bri-chaos --test turret_seats`: gun, driver, passenger and gun again with
+  0, 1 and 6 ticks of the previous seat's moves in flight, the turret checked
+  every tick, and a new gunner looking away aims it at once. Fails with the
+  turret reset on seat changes.
+- The app test (`vehicle_first_person
+  the_tank_turret_keeps_its_aim_through_seat_changes_for_gunner_and_watcher`)
+  uses only `App` API that 1b2747e has and names the phase, seat, look and
+  hull heading when it fails.

@@ -570,6 +570,10 @@ pub struct App {
     mount_heading: Option<f32>,
     /// The vehicle seat the local player sat in last frame.
     seated_on: Option<(u64, u8)>,
+    /// Sat down in a gunner's seat and not yet looking along its turret:
+    /// done on the first frame the seat's view is known, which a seat
+    /// change's own frame may not be.
+    takes_turret: bool,
     /// This frame's seat rotation for every mounted player.
     rider_rotations: BTreeMap<bri_world::OwnerId, glam::Quat>,
     /// This frame's first-person eye while the local player rides a vehicle
@@ -1450,11 +1454,6 @@ impl App {
             .get(&owner)?
             .world_node(&self.avatar_assets, name)
     }
-    /// A vehicle's turret aim (hull-relative yaw, pitch) as this client
-    /// draws it this frame.
-    pub fn drawn_turret_aim(&self, vehicle: u64) -> Option<[f32; 2]> {
-        self.vehicles.frame(vehicle).map(|f| f.turret_aim)
-    }
     /// The camera the last rendered frame was drawn from: eye, yaw, pitch.
     pub fn rendered_camera(&self) -> Option<(Vec3, f32, f32)> {
         self.rendered_camera
@@ -1777,6 +1776,7 @@ impl App {
             vehicles: Default::default(),
             mount_heading: None,
             seated_on: None,
+            takes_turret: false,
             rider_rotations: BTreeMap::new(),
             rider_eye: None,
             observer_eye: None,
@@ -6166,6 +6166,7 @@ impl PlatformApp for App {
                 // transform), even from one passenger seat to another.
                 if new_seat {
                     self.seated_on = mounted;
+                    self.takes_turret = mounted.is_some();
                     self.controls.set_ride(None);
                     // Tell the host the steering prefs again with every seat,
                     // should its copy have been lost (a reconnect).
@@ -6280,7 +6281,9 @@ impl PlatformApp for App {
                                 .then(|| view.vehicle_poses.get(&vehicle))
                                 .flatten()
                         });
-                        if new_seat && let Some(pose) = turret {
+                        if std::mem::take(&mut self.takes_turret)
+                            && let Some(pose) = turret
+                        {
                             let (yaw, pitch) = crate::vehicles::turret_look(pose);
                             self.controls.take_turret(yaw, pitch);
                         } else if let Some(previous) = self.mount_heading {

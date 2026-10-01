@@ -652,7 +652,7 @@ fn seat_to(
         request(apps[rider], UiAction::Game(GameAction::NextSeat))?;
         until(apps, "the next seat", 30, |a| {
             if let Some(aim) = aim {
-                turret_stays(a, aim)?;
+                turret_stays(a, rider, aim, "changing seats")?;
             }
             Ok(seat(a[rider]).is_some_and(|(_, s)| s != index))
         })?;
@@ -663,24 +663,25 @@ fn seat_to(
     );
     Ok(())
 }
-/// Every app's replicated and drawn turret aim is still `aim`.
-fn turret_stays(apps: &mut [&mut App], aim: [f32; 2]) -> Result<()> {
+/// Every app's replicated turret aim is still `aim`; a failure says where
+/// `apps[rider]` sat and looked.
+fn turret_stays(apps: &mut [&mut App], rider: usize, aim: [f32; 2], phase: &str) -> Result<()> {
     let wrap = |a: f32| {
         (a + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
     };
+    let look = (apps[rider].controls.yaw, apps[rider].controls.pitch);
+    let sat = seat(apps[rider]);
     for (i, app) in apps.iter().enumerate() {
         let view = app.network_view().context("view")?;
-        let (id, pose) = view.vehicle_poses.iter().next().context("no tank")?;
-        for (what, got) in [
-            ("replicated", Some(pose.turret_aim)),
-            ("drawn", app.drawn_turret_aim(*id)),
-        ] {
-            let Some(got) = got else { continue };
-            ensure!(
-                wrap(got[0] - aim[0]).abs() < 0.05 && (got[1] - aim[1]).abs() < 0.05,
-                "app {i}: {what} turret aim {got:?}, left at {aim:?}"
-            );
-        }
+        let pose = view.vehicle_poses.values().next().context("no tank")?;
+        let got = pose.turret_aim;
+        let forward = Quat::from_array(pose.rotation) * Vec3::NEG_Z;
+        ensure!(
+            wrap(got[0] - aim[0]).abs() < 0.05 && (got[1] - aim[1]).abs() < 0.05,
+            "{phase}: app {i} sees the turret at {got:?}, left at {aim:?} \
+             (hull heading {}, rider in seat {sat:?} looking {look:?})",
+            forward.x.atan2(-forward.z)
+        );
     }
     Ok(())
 }
@@ -688,10 +689,11 @@ fn turret_stays(apps: &mut [&mut App], aim: [f32; 2]) -> Result<()> {
 /// Max's report on v0.1.10: a guest aims the Tank's turret, moves to the
 /// driver's seat and back to the gun. Through all of it the turret stays
 /// where it was aimed, for the guest and for the host watching, and the
-/// guest takes the gun back looking along the barrel. Before the fix, the
-/// view leaving the mouse-steered driver's seat put the guest's look back
-/// on the hull's heading after it had been turned onto the barrel, and the
-/// turret swung round to it.
+/// guest takes the gun back looking along the barrel. On 1b2747e the view
+/// leaving the mouse-steered driver's seat put the guest's look back on the
+/// hull's heading after it had been turned onto the barrel, and the turret
+/// swung round to it. Uses only `App` API that 1b2747e has, so it can be
+/// run there to see it fail.
 #[test]
 #[ignore = "requires converted native v20 content, loopback QUIC and offscreen GPU; no window"]
 fn the_tank_turret_keeps_its_aim_through_seat_changes_for_gunner_and_watcher() -> Result<()> {
@@ -767,34 +769,38 @@ fn the_tank_turret_keeps_its_aim_through_seat_changes_for_gunner_and_watcher() -
         )?;
         run_for(&mut [&mut host, &mut guest], 1.0 / 60.0)?;
     }
-    run_for(&mut [&mut host, &mut guest], 1.5)?;
-    let aim = {
-        let view = host.network_view().context("view")?;
-        view.vehicle_poses
-            .values()
-            .next()
-            .context("no tank")?
-            .turret_aim
-    };
+    // Both copies settle on the host's aim.
+    let mut aim = [0.0; 2];
+    until(&mut [&mut host, &mut guest], "the aim to settle", 10, |a| {
+        let aims: Vec<_> = a
+            .iter()
+            .filter_map(|app| {
+                let pose = app.network_view()?.vehicle_poses.values().next()?;
+                Some(pose.turret_aim)
+            })
+            .collect();
+        aim = aims[0];
+        Ok(aims.len() == 2 && aims.iter().all(|x| (x[0] - aim[0]).abs() < 1e-3))
+    })?;
     ensure!(aim[0].abs() > 1.0, "the turret never turned: {aim:?}");
-    turret_stays(&mut [&mut host, &mut guest], aim)?;
-    // To the driver's seat and back to the gun, both ways round.
+    // To the driver's seat and back to the gun, through the passenger's.
     seat_to(&mut [&mut host, &mut guest], 1, &tank, driver, Some(aim))?;
     for _ in 0..90 {
         run_for(&mut [&mut host, &mut guest], 1.0 / 60.0)?;
-        turret_stays(&mut [&mut host, &mut guest], aim)?;
+        turret_stays(&mut [&mut host, &mut guest], 1, aim, "driving")?;
     }
     seat_to(&mut [&mut host, &mut guest], 1, &tank, gunner, Some(aim))?;
     for _ in 0..90 {
         run_for(&mut [&mut host, &mut guest], 1.0 / 60.0)?;
-        turret_stays(&mut [&mut host, &mut guest], aim)?;
+        turret_stays(&mut [&mut host, &mut guest], 1, aim, "back on the gun")?;
     }
     // The guest holds the gun looking along the barrel.
     let view = guest.network_view().context("view")?;
     let pose = view.vehicle_poses.values().next().context("no tank")?;
     let forward = Quat::from_array(pose.rotation) * Vec3::NEG_Z;
     let along = forward.x.atan2(-forward.z) - aim[0];
-    let off = (guest.controls.yaw - along + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
+    let off = (guest.controls.yaw - along + std::f32::consts::PI)
+        .rem_euclid(std::f32::consts::TAU)
         - std::f32::consts::PI;
     ensure!(off.abs() < 0.1, "the gunner looks {off} off the barrel");
     for app in [&mut guest, &mut host] {

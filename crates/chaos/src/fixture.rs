@@ -351,6 +351,60 @@ pub fn synthetic_vehicles() -> Result<(bri_vehicles::Pack, Vec<String>)> {
     Ok((pack, ids))
 }
 
+/// A content-free Tank: the wheeled chaos vehicle with v20's Tank seats (a
+/// mouse-steered driver, a passenger and a gunner) and an attached turret
+/// on a mount the gunner aims, so turret and seat tests run without v20.
+pub fn synthetic_tank() -> Result<bri_vehicles::Definition> {
+    let (pack, _) = synthetic_vehicles()?;
+    let find = |id: &str| {
+        pack.definitions
+            .iter()
+            .find(|d| d.id == id)
+            .cloned()
+            .context("a chaos vehicle")
+    };
+    let mut tank = find("v20.vehicle.chaoswheeled")?;
+    let gun = find("v20.vehicle.chaosturret")?;
+    tank.id = "v20.vehicle.chaostank".into();
+    tank.datablock = "ChaosTankVehicle".into();
+    tank.name = "Chaos Tank".into();
+    tank.strafe_steering = false;
+    tank.seats[0].controls = true;
+    tank.seats[1].controls = false;
+    tank.seats[2].controls = false;
+    tank.seats[2].weapon = true;
+    tank.weapon = gun.weapon;
+    tank.attachment_model = Some("chaos/turret.dts".into());
+    tank.attachment_mount = Some(bri_vehicles::Transform {
+        position: [0.0, 1.2, 0.0],
+        ..Default::default()
+    });
+    // A turret box on the mount, and where the gunner sits once it is shot
+    // off.
+    tank.attachment_collision_hulls = vec![
+        (0..8)
+            .map(|i| {
+                [
+                    if i & 1 == 0 { -0.6 } else { 0.6 },
+                    if i & 2 == 0 { 0.0 } else { 0.6 },
+                    if i & 4 == 0 { -0.8 } else { 0.8 },
+                ]
+            })
+            .collect(),
+    ];
+    tank.attachment_fallback_seat = Some(tank.seats[2].transform.clone());
+    Ok(tank)
+}
+/// The synthetic vehicles with the [`synthetic_tank`] among them.
+pub fn synthetic_vehicles_with_tank() -> Result<(bri_vehicles::Pack, Vec<String>)> {
+    let (mut pack, mut ids) = synthetic_vehicles()?;
+    let tank = synthetic_tank()?;
+    ids.push(tank.id.clone());
+    pack.definitions.push(tank);
+    pack.validate()?;
+    Ok((pack, ids))
+}
+
 /// The synthetic map, with `bricks` already built on it: a 200 x 200
 /// floor, two walls and a pillar to get stuck in.
 pub fn synthetic_simulation(bricks: &[bri_world::Brick]) -> Result<Simulation> {

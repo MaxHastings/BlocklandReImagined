@@ -474,32 +474,15 @@ fn a_new_tank_gunner_takes_the_turret_where_it_was_left() -> anyhow::Result<()> 
     p.feed(&mut s, facing, 10)?;
     let kept = s.vehicle_poses()[0].turret_aim;
     assert!((kept[0] - aimed[0]).abs() < 1e-4, "{kept:?} vs {aimed:?}");
-    // Back on the gun: moves still carrying the driver's look, or any other
-    // look away from the barrel, leave it where it is.
+    // Back on the gun: inputs still carrying the boarding look leave it.
     s.switch_seat(owner, 1)?;
     s.switch_seat(owner, 1)?;
     assert_eq!(s.mounted(owner).map(|m| m.1), Some(2), "gunner seat");
     p.feed(&mut s, facing, 10)?;
-    let swung = MoveInput {
-        yaw: hull - 1.5,
-        ..Default::default()
-    };
-    p.feed(&mut s, swung, 10)?;
     let kept = s.vehicle_poses()[0].turret_aim;
     assert!((kept[0] - aimed[0]).abs() < 1e-4, "{kept:?} vs {aimed:?}");
-    // The client then looks along the barrel, and the gunner turns it.
+    // Once the gunner looks along it, it follows their look again.
     let hull = pose_heading(s.vehicle_poses()[0].rotation);
-    p.feed(
-        &mut s,
-        MoveInput {
-            yaw: hull - aimed[0],
-            pitch: aimed[1],
-            ..Default::default()
-        },
-        2,
-    )?;
-    let kept = s.vehicle_poses()[0].turret_aim;
-    assert!((kept[0] - aimed[0]).abs() < 1e-3, "{kept:?} vs {aimed:?}");
     p.feed(
         &mut s,
         MoveInput {

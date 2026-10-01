@@ -48,9 +48,6 @@ pub(super) struct Vehicles {
     /// client knows it is seated and sends the turn instead, that yaw is not
     /// a turn.
     mount_yaw: BTreeMap<OwnerId, f32>,
-    /// Riders who just sat down, until the tick their client has had time
-    /// to look along a turret they took over (see the gunner's controls).
-    gunner_takeover: BTreeMap<OwnerId, u64>,
     /// Skis spawned by the ski item wait to be boarded (`schedule(250, mountObject)`).
     pending_skis: Vec<(OwnerId, VehicleId, u64)>,
     /// Players riding a tumble vehicle, watched through the corpse camera.
@@ -59,12 +56,6 @@ pub(super) struct Vehicles {
     touching: BTreeSet<(OwnerId, VehicleId)>,
     pub(super) scanned: bool,
 }
-/// How close (radians) a new gunner's look must come to the turret's before
-/// it follows them: past a hull turning during the hand-over, well short of
-/// any look they had before.
-const GUNNER_TAKEOVER_ANGLE: f32 = 0.25;
-/// The longest a new gunner's turret waits for their look (one second).
-const GUNNER_TAKEOVER_TICKS: u64 = bri_world::TICKS_PER_SECOND;
 /// Queue length past which a seated player's backlog drains fast (a stall).
 const SEATED_FLOOD: usize = 30;
 /// Ticks a seated player's queue is watched before a lasting excess drains.
@@ -936,21 +927,13 @@ impl Session {
             SeatRole::Actor => actor_controls(&input, fire, horse),
             SeatRole::Gunner => {
                 // A new gunner takes the turret where it points: their client
-                // turns its look onto the barrel, and until moves carrying
-                // that look arrive (the ones in flight still hold the look
-                // of the seat they left, or of the ground), the host holds
-                // the turret still rather than swing it for everyone.
+                // turns its look onto the barrel, and until moves carrying a
+                // new look arrive (those in flight still carry the look they
+                // boarded with), the host leaves the turret where it is.
                 let hull = heading(v.transform.rotation);
-                let along = wrap(hull - v.turret_aim[0]);
-                let tick = self.simulation.state().tick;
-                let holding = self
-                    .vehicles
-                    .gunner_takeover
-                    .get(&owner)
-                    .is_some_and(|until| tick < *until)
-                    && wrap(input.yaw - along).abs() > GUNNER_TAKEOVER_ANGLE;
+                let holding = self.vehicles.mount_yaw.get(&owner) == Some(&input.yaw);
                 if !holding {
-                    self.vehicles.gunner_takeover.remove(&owner);
+                    self.vehicles.mount_yaw.remove(&owner);
                 }
                 let [aim_yaw, aim_pitch] = if holding {
                     v.turret_aim
@@ -1465,9 +1448,6 @@ impl Session {
                         // `Armor::onMount` resets the transform: facing the seat.
                         self.vehicles.passenger_turn.remove(&owner);
                         self.vehicles.mount_yaw.insert(owner, peer.input.yaw);
-                        self.vehicles
-                            .gunner_takeover
-                            .insert(owner, tick + GUNNER_TAKEOVER_TICKS);
                         self.vehicles
                             .last_look
                             .insert(owner, (peer.input.yaw, peer.input.pitch));
