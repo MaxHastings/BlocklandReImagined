@@ -29,6 +29,11 @@
             "seat": "{rules}:seat",
             "mount": "{rules}:mount",
             "unmount": "{rules}:unmount"
+          },
+          "scripts": {
+            "onprefire": {
+              "arm": "shiftTo"
+            }
           }
         },
         "{namespace}:image/nd_image_box": {
@@ -43,6 +48,11 @@
             "seat": "{rules}:seat",
             "mount": "{rules}:mount",
             "unmount": "{rules}:unmount"
+          },
+          "scripts": {
+            "onprefire": {
+              "arm": "shiftTo"
+            }
           }
         },
         "{namespace}:image/nd_image_blue": {
@@ -57,6 +67,11 @@
             "seat": "{rules}:seat",
             "mount": "{rules}:mount",
             "unmount": "{rules}:unmount"
+          },
+          "scripts": {
+            "onprefire": {
+              "arm": "shiftTo"
+            }
           }
         }
       }
@@ -301,6 +316,9 @@
     "file:scripts/client/guis/fillwrench.gui": "the engine's fill wrench dialog (Notice::WrenchCopy): every wrench setting with a Copy box to choose which go on the selection",
     "file:version.json": "not run: Support_Updater's update data; the version itself is the rules' version() that /DupVersion names",
     "new:ScriptGroup": "not needed: each player's duplicator state is the rules' player state and the engine's held copy",
-    "new:ScriptObject": "not run: the updater's download options (TCPClientDefaults); the port does not download anything"
+    "new:ScriptObject": "not run: the updater's download options (TCPClientDefaults); the port does not download anything",
+    "ND_Image::onPreFire": "the port's image scripts: PreFire raises the holder's arm (shiftTo) as the original's onPreFire did",
+    "ND_Image_Box::onPreFire": "the port's image scripts: PreFire raises the holder's arm (shiftTo) as the original's onPreFire did",
+    "ND_Image_Blue::onPreFire": "the port's image scripts: PreFire raises the holder's arm (shiftTo) as the original's onPreFire did"
   }
 }
