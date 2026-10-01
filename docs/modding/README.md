@@ -498,7 +498,9 @@ them all.
 Big copy work goes on over several ticks, a slice each tick, so a copy
 of up to 1,000,000 bricks (the most any `limit` may be) never holds the
 server up. Selecting, planting, cutting, painting, wrenching, loading and
-undoing a copy all work this way; one that fits in the tick's slice
+undoing a copy all work this way, and so do `super_cut` and `fill_box`
+(each `on_copy` report has `placed` and `refused`; a fill stops at the
+server's brick limit with `limit_reached`); one that fits in the tick's slice
 finishes at once as before. While a player's job runs,
 `player(p).copy_working` is true, their other copy work and undo are
 refused as busy, and `on_copy` hears `working: true` with the `action`,

@@ -636,6 +636,8 @@ impl super::copy_jobs::CopyWork for LoadWork {
             action: "load",
             done: self.next,
             total: self.total,
+            placed: 0,
+            refused: 0,
         }
     }
     fn step(&mut self, s: &mut Session, _: OwnerId, budget: &mut u32) -> Result<bool> {

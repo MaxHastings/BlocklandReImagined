@@ -223,16 +223,22 @@ impl CopyWork for SelectWork {
                 action: "select",
                 done: scan.selection.bricks.len(),
                 total: 0,
+                placed: 0,
+                refused: 0,
             },
             Finding::Box { scan, .. } => Progress {
                 action: "select",
                 done: scan.selection.bricks.len(),
                 total: 0,
+                placed: 0,
+                refused: 0,
             },
             Finding::Found => Progress {
                 action: "select",
                 done: self.next,
                 total: self.ids.len(),
+                placed: 0,
+                refused: 0,
             },
         }
     }

@@ -311,6 +311,8 @@ impl CopyWork for PlantWork {
             action: "plant",
             done: done.min(total),
             total,
+            placed: 0,
+            refused: 0,
         }
     }
 

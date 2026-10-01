@@ -57,7 +57,7 @@ mod copy_jobs;
 pub use copy_jobs::DEFAULT_COPY_WORK;
 mod copy_store;
 pub use blueprints::Copied;
-pub use copy_edits::{BoxEdit, MAX_BOX_EDIT, WrenchFill};
+pub use copy_edits::{BoxEdit, WrenchFill};
 pub use copy_store::{CopyStore, LoadedCopy, MemoryCopies, Saved, StoreDone, name_matches};
 mod movables;
 mod packages;

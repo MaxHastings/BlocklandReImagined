@@ -205,6 +205,14 @@ fn progress_text(p) {
         "paint" => [`Painting... (\c3${percent}%\c6)`, "[Cancel Brick]: Cancel painting"],
         "wrench" => [`Applying... (\c3${percent}%\c6)`, "[Cancel Brick]: Cancel"],
         "load" => [`Loading Bricks... (\c3${percent}%\c6)`, "[Cancel Brick]: Cancel loading"],
+        // `NDM_SuperCutProgress`'s.
+        "supercut" => {
+            let deleted = done - progress[3];
+            let planted = progress[2];
+            [`Supercut in progress... (\c3${percent}%\c6, \c3${deleted}\c6 deleted, \c3${planted}\c6 planted)`, "[Cancel Brick]: Cancel supercut"]
+        }
+        // The original filled at once, with no progress line: ours.
+        "fill" => [`Filling in bricks... (\c3${percent}%\c6)`, "[Cancel Brick]: Cancel fill"],
         _ => [`Working... (\c3${percent}%\c6)`, "[Cancel Brick]: Cancel"],
     };
     format_message(lines[0], [[lines[1], ""]])
@@ -1366,12 +1374,13 @@ fn on_copy(p, info) {
             return;
         }
         set_player(p, "working", info.action);
-        set_player(p, "progress", [info.bricks, info.total]);
+        set_player(p, "progress", [info.bricks, info.total, info.placed, info.refused]);
         bottom(p);
         return;
     }
     set_player(p, "working", "");
     if info.error == "canceled" {
+        set_player(p, "fill_after_cut", false);
         oops(p, info.message, 4);
         bottom(p);
         return;

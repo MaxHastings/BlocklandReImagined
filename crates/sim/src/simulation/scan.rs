@@ -25,6 +25,10 @@ pub mod work {
     pub const PLANT: u32 = 22;
     /// One brick an undo breaks, with what it holds up looked at.
     pub const BREAK: u32 = 24;
+    /// More for one joined to bricks outside the copy: it breaks on its
+    /// own, after a look at what it would leave hanging, and the solid
+    /// bricks round it are rebuilt (measured in a world of 500,000).
+    pub const CHAIN: u32 = 90;
 }
 
 /// Take `cost` from `budget`, or say there is not enough left.

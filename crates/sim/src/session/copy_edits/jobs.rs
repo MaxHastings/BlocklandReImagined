@@ -100,6 +100,8 @@ impl CopyWork for CutWork {
             action: "cut",
             done: (self.check.next + self.next) / 2,
             total: self.ids.len(),
+            placed: 0,
+            refused: 0,
         }
     }
     fn step(&mut self, s: &mut Session, _: OwnerId, budget: &mut u32) -> Result<bool> {
@@ -221,6 +223,8 @@ impl CopyWork for PaintWork {
             action: "paint",
             done,
             total,
+            placed: 0,
+            refused: 0,
         }
     }
     fn step(&mut self, s: &mut Session, _: OwnerId, budget: &mut u32) -> Result<bool> {
@@ -335,6 +339,8 @@ impl CopyWork for WrenchWork {
             action: "wrench",
             done: self.next,
             total: self.ids.len(),
+            placed: 0,
+            refused: 0,
         }
     }
     fn step(&mut self, s: &mut Session, _: OwnerId, budget: &mut u32) -> Result<bool> {

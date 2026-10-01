@@ -91,6 +91,9 @@ pub struct Simulation {
     chunks: crate::chunks::Chunks,
     /// Removed bricks' colliders (see `parking`).
     parked: crate::parking::Parking,
+    /// Removals leave collisions to [`Self::settle`] while true
+    /// ([`Self::hold_settle`]).
+    holding: bool,
     /// Map colliders in `NativeMap::colliders` order.
     map_handles: Vec<ColliderHandle>,
     terrain: Option<crate::map::TerrainStream>,
@@ -256,6 +259,7 @@ impl Simulation {
             handles,
             chunks,
             parked: Default::default(),
+            holding: false,
             map_handles,
             terrain: None,
             refreshes: 0,
@@ -747,6 +751,15 @@ impl Simulation {
     pub fn settle(&mut self) {
         self.detect_collisions();
     }
+    /// While `hold`, removing bricks leaves collisions to one
+    /// [`Self::settle`] for the lot (a slice of a copy job breaking bricks
+    /// one by one); letting go settles.
+    pub fn hold_settle(&mut self, hold: bool) {
+        let held = std::mem::replace(&mut self.holding, hold);
+        if held && !hold {
+            self.settle();
+        }
+    }
     fn plant_one(&mut self, actor: &Actor, brick: Brick, free: bool) -> Result<BrickId> {
         if self.state().bricks.len() >= bri_world::MAX_BRICKS {
             return Err(PlantFailure::Limit.into());
@@ -986,7 +999,9 @@ impl Simulation {
             }
         }
         self.parked.remove(&mut self.physics, &handles);
-        self.detect_collisions();
+        if !self.holding {
+            self.detect_collisions();
+        }
         Ok(())
     }
     /// A brick that starts or stops colliding moves between its chunk and a

@@ -74,8 +74,22 @@ fn definition(w: u32, d: u32, h: u32, top: [[f32; 3]; 4]) -> Definition {
     }
 }
 
-/// A 2x1 plate, and a 2x1 wedge with its mirror twin: its top slopes
-/// three ways, so no turn of it is its own reflection.
+/// A plain `w` by `d` plate, as v20's `BRICK` geometry is: what a
+/// supercut puts back over what stuck out of its box.
+fn plain(w: u32, d: u32) -> Definition {
+    let (x, z) = (w as f32 * 0.25, d as f32 * 0.25);
+    let mut plain = definition(w, d, 1, [[-x, 0.1, -z], [x, 0.1, -z], [x, 0.1, z], [-x, 0.1, z]]);
+    plain.mesh.quads[0].surface = Surface::Top;
+    plain.mesh.collision_boxes = vec![bri_content::brick::CollisionBox {
+        center: [0.0; 3],
+        size: [w as f32 * 0.5, 0.2, d as f32 * 0.5],
+    }];
+    plain
+}
+
+/// A 2x1 plate, a 2x1 wedge with its mirror twin (its top slopes three
+/// ways, so no turn of it is its own reflection), and plain 2x1 and 4x1
+/// plates.
 fn definitions() -> Definitions {
     let plate = definition(
         2,
@@ -108,6 +122,8 @@ fn definitions() -> Definitions {
             ("plate".to_string(), plate),
             ("wedge-left".to_string(), left),
             ("wedge-right".to_string(), right),
+            ("plain-2x1".to_string(), plain(2, 1)),
+            ("plain-4x1".to_string(), plain(4, 1)),
         ]
         .into(),
     }
@@ -842,6 +858,53 @@ fn a_big_cut_goes_over_ticks_and_its_undo_puts_every_brick_back() {
     assert!(g.bricks().is_empty());
     g.undo(host);
     finish_work(&mut g, host);
+    let mut back: Vec<Brick> = g.bricks().into_values().collect();
+    back.sort_by(|x, y| x.position.partial_cmp(&y.position).unwrap());
+    let mut expected = before;
+    expected.sort_by(|x, y| x.position.partial_cmp(&y.position).unwrap());
+    assert_eq!(back, expected);
+}
+
+#[test]
+fn a_supercut_puts_plain_bricks_over_what_stuck_out_and_its_undo_goes_over_ticks() {
+    let mut g = Game::new();
+    let host = host(&mut g);
+    let guest =
+        g.s.join("Guest".into(), Vec3::new(2.0, 0.05, 3.0), false)
+            .unwrap();
+    field(&mut g, host, 2, 4);
+    // Half of it reaches into the box.
+    g.plant_as(host, "plain-4x1", [0.0, 0.1, 0.25], 0);
+    let before: Vec<Brick> = g.bricks().into_values().collect();
+    let cut = g
+        .s
+        .super_cut(host, [0.0, 0.0, -6.0], [2.0, 0.2, 0.5], Some("advanced-duplicator"))
+        .unwrap();
+    assert_eq!((cut.bricks, cut.placed, cut.refused), (9, 1, 0));
+    let world = g.bricks();
+    let piece = world.values().next().expect("the half outside the box");
+    assert_eq!(world.len(), 1);
+    assert_eq!(piece.definition, ContentRef::Resolved("plain-2x1".into()));
+    assert_eq!(piece.position, [-0.5, 0.1, 0.25]);
+    // About a brick a tick from here on.
+    g.s.set_copy_work(32);
+    // The guest's plate where the long one's other half stood: the undo
+    // takes the plain brick out, finds the way blocked and puts it back.
+    let blocker = g.plant(guest, [0.5, 0.1, 0.25]);
+    g.undo(host);
+    finish_work(&mut g, host);
+    let prints = prints(&g.notices(host));
+    assert!(prints.iter().any(|p| p.contains("Something is in the way")), "{prints:?}");
+    let world = g.bricks();
+    assert_eq!(world.len(), 2);
+    assert!(world.values().any(|b| b.position == [-0.5, 0.1, 0.25]));
+    // With the way clear, the next undo puts every cut brick back as it
+    // was, a slice each tick, and the plain brick goes.
+    g.undo(guest);
+    assert!(!g.bricks().contains_key(&blocker));
+    g.undo(host);
+    assert!(g.s.copy_working(host));
+    assert!(finish_work(&mut g, host) > 3);
     let mut back: Vec<Brick> = g.bricks().into_values().collect();
     back.sort_by(|x, y| x.position.partial_cmp(&y.position).unwrap());
     let mut expected = before;

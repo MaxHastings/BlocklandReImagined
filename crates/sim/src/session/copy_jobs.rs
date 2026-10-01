@@ -46,6 +46,10 @@ pub(super) struct Progress {
     /// Bricks done, of `total`.
     pub done: usize,
     pub total: usize,
+    /// Bricks put in besides (a supercut's plain bricks).
+    pub placed: usize,
+    /// Bricks of `done` left as they were (no trust, or in the way).
+    pub refused: usize,
 }
 
 /// One kind of copy job.
@@ -257,6 +261,8 @@ impl Session {
         outcome.working = true;
         outcome.bricks = progress.done;
         outcome.total = progress.total;
+        outcome.placed = progress.placed;
+        outcome.refused = progress.refused;
         self.report_copy(package, owner, outcome);
     }
 }

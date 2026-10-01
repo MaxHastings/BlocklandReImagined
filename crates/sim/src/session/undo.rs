@@ -374,6 +374,25 @@ impl Session {
         })
     }
 
+    /// Undo a supercut: the plain bricks it put in go, and the bricks it
+    /// cut come back as they were; while something stands in their way
+    /// nothing changes and the step stays to try again.
+    fn undo_replaced(
+        &mut self,
+        owner: OwnerId,
+        removed: Vec<(BrickId, Brick)>,
+        placed: Vec<BrickId>,
+        by: Option<String>,
+    ) -> Result<Reply> {
+        let tick = self.simulation.state().tick;
+        self.play_thread_three(tick, owner, "undo");
+        let work = jobs::UndoCut::replaced(removed, placed, by.clone());
+        Ok(match self.begin_copy_job(owner, by, work)? {
+            Some(work) => work.complete(self, owner),
+            None => Reply::Undone(None),
+        })
+    }
+
     /// Undo painting or a fill wrench: each brick still standing that the
     /// undoer may change gets its old paint or settings back.
     fn undo_edits(&mut self, owner: OwnerId, edits: jobs::Edits, by: Option<String>) -> Result<Reply> {
@@ -432,15 +451,5 @@ impl Session {
                 break;
             }
         }
-    }
-
-    /// Follow bricks that came back under new ids, all at once.
-    pub(super) fn follow_renamed(&mut self, owner: OwnerId, pairs: Vec<(BrickId, BrickId)>) {
-        let mut renamed = Renamed::default();
-        for (old, new) in pairs {
-            renamed.insert(old, new);
-        }
-        let mut follow = Follow::new(self, owner, renamed);
-        self.follow_all(owner, &mut follow);
     }
 }

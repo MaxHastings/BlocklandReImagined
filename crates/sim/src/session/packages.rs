@@ -1744,8 +1744,7 @@ impl Session {
                     caller == Some(player),
                     "Bricks are cut only for the player whose command asked"
                 );
-                let result = self.super_cut(player, min, max, Some(package));
-                self.report_box_edit(package, player, "supercut", result);
+                self.start_super_cut(player, package, (min, max));
                 Ok(())
             }
             Op::FillBox {
@@ -1758,8 +1757,7 @@ impl Session {
                     caller == Some(player),
                     "Bricks are filled only for the player whose command asked"
                 );
-                let result = self.fill_box(player, (min, max), color, Some(package));
-                self.report_box_edit(package, player, "fill", result);
+                self.start_fill(player, package, (min, max), color);
                 Ok(())
             }
             Op::TakePaint { player, take } => {

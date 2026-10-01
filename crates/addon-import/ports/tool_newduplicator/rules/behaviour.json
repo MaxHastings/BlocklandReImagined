@@ -283,7 +283,7 @@
         "persist": false
       },
       "progress": {
-        "default": [0, 0],
+        "default": [0, 0, 0, 0],
         "persist": false
       },
       "box": {

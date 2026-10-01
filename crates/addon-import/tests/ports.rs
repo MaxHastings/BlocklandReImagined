@@ -2440,3 +2440,105 @@ fn new_duplicator_port_shows_progress_and_cancels_a_big_plant() {
     assert_eq!(s.snapshot().world.bricks.len(), before);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// The New Duplicator's port: /SuperCut and /FillBricks go a slice a tick
+/// behind the original's progress line, [Cancel Brick] stops a supercut
+/// part way, and an undo of either goes over ticks too.
+#[test]
+fn new_duplicator_port_supercuts_and_fills_over_ticks() {
+    use bri_sim::session::{Command, ToolAction};
+
+    let (dir, mut s, host, seq, _) = new_duplicator_game("new-duplicator-box-jobs");
+    // A tower on the stack, so the box holds more than a tick's work.
+    for k in 0..8 {
+        for _ in 0..10 {
+            s.step().unwrap();
+        }
+        let position = [1.0, 0.5 + 0.2 * k as f32, 0.25];
+        let plant = Command::Plant {
+            definition: "plate".into(),
+            position,
+            quarter_turns: 0,
+            color: 1,
+        };
+        send(&mut s, host, &seq, plant).unwrap();
+    }
+    swing(&mut s, host, &seq);
+    send(&mut s, host, &seq, Command::ToggleLight).unwrap();
+    for _ in 0..3 {
+        s.step().unwrap();
+    }
+    told(&mut s);
+    let before = s.snapshot().world.bricks.len();
+    let finish = |s: &mut bri_sim::session::Session| {
+        let mut ticks = 0;
+        while s.copy_working(host) {
+            s.step().unwrap();
+            ticks += 1;
+            assert!(ticks < 1000, "the job never finished");
+        }
+        // Its report comes at the start of the next tick.
+        s.step().unwrap();
+        ticks
+    };
+    // About a brick a tick.
+    s.set_copy_work(32);
+    for _ in 0..3 {
+        s.step().unwrap();
+    }
+    send(&mut s, host, &seq, typed("sc", &[])).unwrap();
+    s.step().unwrap();
+    answer(&mut s, host, &seq, "ndconfirmsupercut");
+    assert!(s.copy_working(host), "{:?} {}", told(&mut s), s.snapshot().world.bricks.len());
+    assert!(finish(&mut s) > 0);
+    let prints = told(&mut s);
+    assert!(
+        prints.iter().any(|t| t.contains("Supercut in progress... (")
+            && t.contains("[Cancel Brick]: Cancel supercut")),
+        "{prints:?}"
+    );
+    assert!(prints.iter().any(|t| t.contains(r"Deleted \c310\c6 Bricks!")), "{prints:?}");
+    assert_eq!(s.snapshot().world.bricks.len(), before - 10);
+    // Its undo (asked twice, over the stand-in's 2) puts them all back,
+    // over ticks.
+    let undo = |s: &mut bri_sim::session::Session| {
+        send(s, host, &seq, Command::Tool(ToolAction::UndoBrick)).unwrap();
+        send(s, host, &seq, Command::Tool(ToolAction::UndoBrick)).unwrap();
+        assert!(s.copy_working(host));
+    };
+    undo(&mut s);
+    finish(&mut s);
+    assert_eq!(s.snapshot().world.bricks.len(), before);
+
+    // Cancelled at once: what was cut stays cut, as one undo step.
+    send(&mut s, host, &seq, typed("sc", &[])).unwrap();
+    s.step().unwrap();
+    answer(&mut s, host, &seq, "ndconfirmsupercut");
+    assert!(s.copy_working(host));
+    send(&mut s, host, &seq, Command::CancelBrick).unwrap();
+    s.step().unwrap();
+    assert!(!s.copy_working(host));
+    assert!(told(&mut s).iter().any(|t| t.contains("Supercut canceled!")));
+    let left = s.snapshot().world.bricks.len();
+    assert!(left < before && left > before - 10, "{left} of {before}");
+    undo(&mut s);
+    finish(&mut s);
+    assert_eq!(s.snapshot().world.bricks.len(), before);
+
+    // /FillBricks: the supercut, then the fill, each over ticks.
+    send(&mut s, host, &seq, typed("fb", &[])).unwrap();
+    s.step().unwrap();
+    answer(&mut s, host, &seq, "ndconfirmfillbricks");
+    // The fill starts as the supercut's report comes.
+    finish(&mut s);
+    assert!(s.copy_working(host));
+    finish(&mut s);
+    let prints = told(&mut s);
+    assert!(prints.iter().any(|t| t.contains("Filling in bricks... (")), "{prints:?}");
+    // Ten plates fill the box the ten were cut from.
+    assert!(prints.iter().any(|t| t.contains(r"Filled in \c310\c6 bricks")), "{prints:?}");
+    assert_eq!(s.snapshot().world.bricks.len(), before);
+    let diagnostics = s.package_diagnostics();
+    assert!(diagnostics.is_empty(), "{diagnostics:#?}");
+    std::fs::remove_dir_all(dir).unwrap();
+}

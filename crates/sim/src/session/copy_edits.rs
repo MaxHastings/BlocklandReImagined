@@ -10,15 +10,13 @@
 //! the hammer's), as the New Duplicator asked; the rest are counted.
 use super::*;
 use crate::grid::Bounds;
-use crate::simulation::Support;
 use bri_package_runtime::ops::CopyPaint;
 use bri_world::authority::trust as level;
 use bri_world::{Emitter, Light};
+mod box_jobs;
 mod jobs;
+use box_jobs::{FillWork, SuperCutWork};
 pub(super) use jobs::{CutWork, PaintWork, WrenchWork};
-
-/// Most bricks one supercut removes, or one fill plants.
-pub const MAX_BOX_EDIT: usize = 10_000;
 
 /// A brick's paint: what a spray or FX can changes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -281,59 +279,68 @@ fn plain_bricks(definitions: &crate::definitions::Definitions) -> Vec<Plain> {
 /// fits goes in the low corner, long side along the area's long side, then
 /// the room beside it, behind it and above it fill the same way. Each is
 /// `template` there. Room no plain brick fits stays empty.
-fn fill_cells(plain: &[Plain], area: Bounds, template: &Brick, limit: usize) -> Vec<Brick> {
+#[cfg(test)]
+fn fill_cells(plain: &[Plain], area: Bounds, template: &Brick) -> Vec<Brick> {
     let mut out = Vec::new();
     let mut rooms = vec![area];
     while let Some(room) = rooms.pop() {
-        // Past the limit the fill is refused anyway: a big box would
-        // take millions.
-        if out.len() > limit {
-            break;
+        if let Some((piece, _, more)) = fill_room(plain, room, template) {
+            out.push(piece);
+            rooms.extend(more);
         }
-        if room.size.iter().any(|&s| s <= 0) {
-            continue;
-        }
-        let [rx, ry, rz] = room.size;
-        // Long side along the room's long side, as the original turned
-        // both to their sorted sizes.
-        let turned = rx > rz;
-        let Some((brick, size)) = plain.iter().rev().find_map(|p| {
-            let [w, h, d] = p.size;
-            let (short, long) = (w.min(d), w.max(d));
-            let size = if turned { [long, h, short] } else { [short, h, long] };
-            let quarter = (w > d) != turned && w != d;
-            (size[0] <= rx && size[1] <= ry && size[2] <= rz).then_some((
-                (p.id.clone(), u8::from(quarter)),
-                size,
-            ))
-        }) else {
-            continue;
-        };
-        let mut piece = template.clone();
-        piece.definition = ContentRef::Resolved(brick.0);
-        piece.quarter_turns = brick.1;
-        piece.position = std::array::from_fn(|a| {
-            (room.min[a] as f32 + size[a] as f32 * 0.5) * crate::grid::CELL[a]
-        });
-        out.push(piece);
-        let [x, y, z] = room.min;
-        let [sx, sy, sz] = size;
-        // Beside it along x, behind it along z, above it.
-        rooms.push(Bounds {
-            min: [x, y, z],
-            size: [sx, ry - sy, sz],
-        });
-        rooms.last_mut().unwrap().min[1] += sy;
-        rooms.push(Bounds {
-            min: [x, y, z + sz],
-            size: [sx, ry, rz - sz],
-        });
-        rooms.push(Bounds {
-            min: [x + sx, y, z],
-            size: [rx - sx, ry, rz],
-        });
     }
     out
+}
+
+/// One step of [`fill_cells`]: the brick going in the low corner of
+/// `room` with its size, and the rooms left beside it, behind it and above
+/// it (to fill in the reverse order); `None` when no plain brick fits.
+fn fill_room(
+    plain: &[Plain],
+    room: Bounds,
+    template: &Brick,
+) -> Option<(Brick, [i32; 3], [Bounds; 3])> {
+    if room.size.iter().any(|&s| s <= 0) {
+        return None;
+    }
+    let [rx, ry, rz] = room.size;
+    // Long side along the room's long side, as the original turned
+    // both to their sorted sizes.
+    let turned = rx > rz;
+    let (brick, size) = plain.iter().rev().find_map(|p| {
+        let [w, h, d] = p.size;
+        let (short, long) = (w.min(d), w.max(d));
+        let size = if turned { [long, h, short] } else { [short, h, long] };
+        let quarter = (w > d) != turned && w != d;
+        (size[0] <= rx && size[1] <= ry && size[2] <= rz).then_some((
+            (p.id.clone(), u8::from(quarter)),
+            size,
+        ))
+    })?;
+    let mut piece = template.clone();
+    piece.definition = ContentRef::Resolved(brick.0);
+    piece.quarter_turns = brick.1;
+    piece.position = std::array::from_fn(|a| {
+        (room.min[a] as f32 + size[a] as f32 * 0.5) * crate::grid::CELL[a]
+    });
+    let [x, y, z] = room.min;
+    let [sx, sy, sz] = size;
+    // Above it, behind it along z, beside it along x.
+    let rooms = [
+        Bounds {
+            min: [x, y + sy, z],
+            size: [sx, ry - sy, sz],
+        },
+        Bounds {
+            min: [x, y, z + sz],
+            size: [sx, ry, rz - sz],
+        },
+        Bounds {
+            min: [x + sx, y, z],
+            size: [rx - sx, ry, rz],
+        },
+    ];
+    Some((piece, size, rooms))
 }
 
 /// The parts of `brick` (grid cells) lying outside `area`, as the
@@ -438,15 +445,6 @@ impl Session {
         self.report_copy(package, player, outcome);
     }
 
-    /// Those of `ids` `actor` has full trust on, and how many are not.
-    fn trusted_only(&self, actor: &Actor, ids: Vec<BrickId>) -> (Vec<BrickId>, usize) {
-        let world = self.simulation.state();
-        let (ids, refused): (Vec<BrickId>, Vec<BrickId>) = ids
-            .into_iter()
-            .partition(|id| actor.trusted(world.bricks[id].owner, level::FULL));
-        (ids, refused.len())
-    }
-
     /// Open `owner`'s wrench on every brick their copy was taken from; what
     /// they tick comes back to [`Self::wrench_copy`].
     pub fn open_copy_wrench(&mut self, owner: OwnerId) -> Result<()> {
@@ -479,17 +477,6 @@ impl Session {
             .map(|work| work.complete(self, owner, true)))
     }
 
-    /// Remove `ids`, as a cut does, and give them back as they were.
-    pub(super) fn cut_out(&mut self, ids: &[BrickId]) -> Result<Vec<(BrickId, Brick)>> {
-        let world = self.simulation.state();
-        let removed: Vec<(BrickId, Brick)> = ids
-            .iter()
-            .map(|id| (*id, self.unlit(*id, &world.bricks[id])))
-            .collect();
-        self.cut_out_unread(ids)?;
-        Ok(removed)
-    }
-
     /// Remove `ids`, as a cut does, once read.
     pub(super) fn cut_out_unread(&mut self, ids: &[BrickId]) -> Result<()> {
         for &id in ids {
@@ -509,33 +496,12 @@ impl Session {
         Ok(())
     }
 
-    /// Plant `bricks`, each as its own owner's, whether or not anything
-    /// holds it up; those that do not fit are left out. The ids planted.
-    fn plant_as_owners(&mut self, bricks: Vec<Brick>) -> (Vec<BrickId>, usize) {
-        let mut by_owner: BTreeMap<OwnerId, Vec<Brick>> = BTreeMap::new();
-        for brick in bricks {
-            by_owner.entry(brick.owner).or_default().push(brick);
-        }
-        let (mut ids, mut failed) = (Vec::new(), 0);
-        for (owner, bricks) in by_owner {
-            let actor = Actor {
-                owner,
-                administrator: true,
-                ..Default::default()
-            };
-            let (planted, refused) = self.simulation.plant_each(&actor, bricks, Support::Free);
-            ids.extend(planted);
-            failed += refused.len();
-        }
-        self.dirty.extend(ids.iter().copied());
-        (ids, failed)
-    }
-
     /// v20's New Duplicator's supercut: every brick reaching into the box
     /// from `min` to `max` (world units, grown to the grid) that `owner`
     /// may hammer goes, and plain bricks in its colours, as its owner's,
     /// fill what stuck out of the box. Water bricks stay. One undo step,
-    /// `package`'s.
+    /// `package`'s. All at once: an Add-On's supercut is a job
+    /// ([`Self::start_super_cut`]).
     pub fn super_cut(
         &mut self,
         owner: OwnerId,
@@ -543,76 +509,30 @@ impl Session {
         max: [f32; 3],
         package: Option<&str>,
     ) -> Result<BoxEdit> {
-        let area = blueprints::grid_box(min, max)?;
-        let peer = self.peers.get(&owner).context("Unknown connection")?;
-        combat::ensure_may_build(
-            &peer.combat,
-            &self.minigames,
-            bri_minigames::BuildAction::Build,
-        )?;
-        let actor = peer.actor.clone();
-        let found = self
-            .simulation
-            .select_box(area, false, usize::MAX, |_| true)
-            .bricks;
-        let world = self.simulation.state();
-        let found: Vec<BrickId> = found
-            .into_iter()
-            .filter(|id| {
-                self.simulation
-                    .definitions
-                    .get(&world.bricks[id])
-                    .is_ok_and(|d| d.special != crate::definitions::Special::Water)
-            })
-            .collect();
-        let (ids, refused) = self.trusted_only(&actor, found);
-        ensure!(
-            ids.len() <= MAX_BOX_EDIT,
-            "That box holds {} bricks; supercut at most {MAX_BOX_EDIT} at once.",
-            ids.len()
-        );
-        if ids.is_empty() {
-            return Ok(BoxEdit {
-                refused,
-                ..Default::default()
-            });
+        self.ensure_copy_idle(owner)?;
+        let mut work = SuperCutWork::new(self, owner, (min, max), package)?;
+        let done = self.run_copy_work(owner, &mut work);
+        let edit = work.complete(self, owner);
+        done.map(|()| edit)
+    }
+
+    /// [`Self::super_cut`] as a copy job, `package` told how it went.
+    pub(super) fn start_super_cut(&mut self, owner: OwnerId, package: &str, (min, max): ([f32; 3], [f32; 3])) {
+        let started = self
+            .ensure_copy_idle(owner)
+            .and_then(|()| SuperCutWork::new(self, owner, (min, max), Some(package)));
+        match started {
+            Ok(work) => self.start_copy_job(owner, Some(package.into()), Box::new(work)),
+            Err(error) => self.report_box_edit(package, owner, "supercut", Err(error)),
         }
-        let plain = plain_bricks(&self.simulation.definitions);
-        let mut pieces = Vec::new();
-        for &id in &ids {
-            let brick = self.unlit(id, &world.bricks[&id]);
-            let bounds = self.simulation.index_bounds(id);
-            let mut template = Brick::new(ContentRef::Resolved(String::new()), [0.0; 3], brick.owner);
-            Look::of(&brick).put(&mut template);
-            template.raycast = brick.raycast;
-            template.colliding = brick.colliding;
-            template.visible = brick.visible;
-            for part in outside(bounds, area) {
-                pieces.extend(fill_cells(&plain, part, &template, MAX_BOX_EDIT));
-            }
-        }
-        let removed = self.cut_out(&ids)?;
-        let (placed, _) = self.plant_as_owners(pieces);
-        let middle = Vec3::from(std::array::from_fn(|a| {
-            (area.min[a] as f32 + area.size[a] as f32 * 0.5) * crate::grid::CELL[a]
-        }));
-        let tick = self.simulation.state().tick;
-        self.cues
-            .emit(tick, crate::presentation::CueKind::Plant, middle.to_array());
-        let edit = BoxEdit {
-            bricks: removed.len(),
-            placed: placed.len(),
-            refused,
-        };
-        let by = package.map(str::to_string);
-        self.push_copy_undo(owner, undo::UndoEntry::Replaced { removed, placed }, by);
-        Ok(edit)
     }
 
     /// Fill the box from `min` to `max` with plain bricks of palette colour
     /// `color` as `owner`'s own, biggest first, as v20's New Duplicator's
-    /// `/fillBricks` did; a brick that would not go in is left out. One
-    /// undo step, `package`'s.
+    /// `/fillBricks` did; a brick that would not go in is left out, and
+    /// the fill stops at the server's brick limit. One undo step,
+    /// `package`'s. All at once: an Add-On's fill is a job
+    /// ([`Self::start_fill`]).
     pub fn fill_box(
         &mut self,
         owner: OwnerId,
@@ -620,52 +540,28 @@ impl Session {
         color: u8,
         package: Option<&str>,
     ) -> Result<BoxEdit> {
-        let area = blueprints::grid_box(min, max)?;
-        let peer = self.peers.get(&owner).context("Unknown connection")?;
-        combat::ensure_may_build(
-            &peer.combat,
-            &self.minigames,
-            bri_minigames::BuildAction::Build,
-        )?;
-        ensure!(
-            usize::from(color) < self.simulation.state().palette.len(),
-            "That colour is not in this server's palette"
-        );
-        let actor = peer.actor.clone();
-        let plain = plain_bricks(&self.simulation.definitions);
-        let mut template = Brick::new(ContentRef::Resolved(String::new()), [0.0; 3], owner);
-        template.color = color;
-        let pieces = fill_cells(&plain, area, &template, MAX_BOX_EDIT);
-        ensure!(
-            pieces.len() <= MAX_BOX_EDIT,
-            "That box takes more than {MAX_BOX_EDIT} bricks to fill; fill a smaller box."
-        );
-        let limit = self.admin.settings.brick_limit as usize;
-        ensure!(
-            self.simulation.state().bricks.len() + pieces.len() <= limit,
-            "That would pass the server's brick limit."
-        );
-        let total = pieces.len();
-        let (ids, _) = self.simulation.plant_each(&actor, pieces, Support::Free);
-        self.dirty.extend(ids.iter().copied());
-        if !ids.is_empty() {
-            let tick = self.simulation.state().tick;
-            let middle: [f32; 3] = std::array::from_fn(|a| {
-                (area.min[a] as f32 + area.size[a] as f32 * 0.5) * crate::grid::CELL[a]
-            });
-            self.cues
-                .emit(tick, crate::presentation::CueKind::Plant, middle);
-            let entry = undo::UndoEntry::Group {
-                ids: ids.clone(),
-                group: owner,
-            };
-            self.push_copy_undo(owner, entry, package.map(str::to_string));
+        self.ensure_copy_idle(owner)?;
+        let mut work = FillWork::new(self, owner, (min, max), color, package)?;
+        let done = self.run_copy_work(owner, &mut work);
+        let edit = work.complete(self, owner);
+        done.map(|()| edit)
+    }
+
+    /// [`Self::fill_box`] as a copy job, `package` told how it went.
+    pub(super) fn start_fill(
+        &mut self,
+        owner: OwnerId,
+        package: &str,
+        (min, max): ([f32; 3], [f32; 3]),
+        color: u8,
+    ) {
+        let started = self
+            .ensure_copy_idle(owner)
+            .and_then(|()| FillWork::new(self, owner, (min, max), color, Some(package)));
+        match started {
+            Ok(work) => self.start_copy_job(owner, Some(package.into()), Box::new(work)),
+            Err(error) => self.report_box_edit(package, owner, "fill", Err(error)),
         }
-        Ok(BoxEdit {
-            bricks: ids.len(),
-            placed: 0,
-            refused: total - ids.len(),
-        })
     }
 
     /// Tell `package` (or else `player`) how a supercut or fill went.
@@ -693,55 +589,6 @@ impl Session {
         };
         self.report_copy(package, player, outcome);
     }
-
-    /// Undo a supercut: the bricks it put back go, and the bricks it cut
-    /// come back as they were; while something stands in their way nothing
-    /// changes and the step stays to try again.
-    pub(super) fn undo_replaced(
-        &mut self,
-        owner: OwnerId,
-        removed: Vec<(BrickId, Brick)>,
-        placed: Vec<BrickId>,
-        by: Option<String>,
-    ) -> Result<Reply> {
-        let tick = self.simulation.state().tick;
-        self.play_thread_three(tick, owner, "undo");
-        let standing: Vec<BrickId> = placed
-            .iter()
-            .copied()
-            .filter(|id| self.simulation.state().bricks.contains_key(id))
-            .collect();
-        let pieces = self.cut_out(&standing)?;
-        let restored = removed.iter().map(|(_, b)| b.clone()).collect();
-        match self.simulation.restore_group(restored) {
-            Ok(ids) => {
-                self.dirty.extend(ids.iter().copied());
-                let renamed = removed
-                    .iter()
-                    .map(|(old, _)| *old)
-                    .zip(ids.iter().copied())
-                    .collect();
-                self.follow_renamed(owner, renamed);
-                Ok(Reply::Undone(ids.first().copied()))
-            }
-            Err(error) => {
-                // Put the new bricks back as they were and keep the step.
-                let back = self
-                    .simulation
-                    .restore_group(pieces.iter().map(|(_, b)| b.clone()).collect())
-                    .unwrap_or_default();
-                self.dirty.extend(back.iter().copied());
-                let text = match error.downcast_ref::<crate::simulation::PlantFailure>() {
-                    Some(_) => "Something is in the way of the bricks you cut.".to_string(),
-                    None => format!("{error:#}"),
-                };
-                self.center_print(owner, text);
-                let entry = undo::UndoEntry::Replaced { removed, placed: back };
-                self.push_copy_undo(owner, entry, by);
-                Ok(Reply::Undone(None))
-            }
-        }
-    }
 }
 
 #[cfg(test)]
@@ -767,7 +614,7 @@ mod tests {
             size: [5, 4, 4],
         };
         let template = Brick::new(ContentRef::Resolved(String::new()), [0.0; 3], 7);
-        let bricks = fill_cells(&table, area, &template, usize::MAX);
+        let bricks = fill_cells(&table, area, &template);
         // Two 2x4s, then 1x1s and 1x1 plates for the rest.
         let count = |id: &str| {
             bricks

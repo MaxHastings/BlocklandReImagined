@@ -384,7 +384,7 @@ pub enum Op {
     /// Remove every brick reaching into the box from `min` to `max` that
     /// `player` may hammer, and put plain bricks back over the parts that
     /// stuck out of it (v20's New Duplicator's supercut), as one step
-    /// Ctrl+Z takes back (`on_copy`, `action` `"supercut"`).
+    /// Ctrl+Z takes back (`on_copy`, `action` `"supercut"`). A copy job.
     SuperCut {
         player: u64,
         min: [f32; 3],
@@ -392,7 +392,8 @@ pub enum Op {
     },
     /// Fill the empty room in the box from `min` to `max` with the fewest
     /// plain bricks of palette colour `color`, as `player`'s own, as one
-    /// step Ctrl+Z takes back (`on_copy`, `action` `"fill"`).
+    /// step Ctrl+Z takes back (`on_copy`, `action` `"fill"`). A copy job,
+    /// stopping at the server's brick limit.
     FillBox {
         player: u64,
         min: [f32; 3],

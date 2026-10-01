@@ -247,8 +247,19 @@ default copy work), no tick of a job went over 7 ms: planting 500,000
 into a world of 500,000 took 2,202 ticks with the slowest at 3.3 ms;
 undoing it, 1,251 ticks, 5.2 ms; cutting 1,000,000, 1,199 ticks, 4.4 ms;
 putting them back, 4,906 ticks, 6.7 ms. A planted copy still counts
-against the server's brick limit. Two things stay at their original size
-and run at once: a `/SuperCut` and a `/FillBricks` box (10,000 bricks).
+against the server's brick limit.
+
+`/SuperCut` and `/FillBricks` are copy jobs too, with the original's
+limits: only the box size (1024 units for admins, 64 for players) bounds
+them, and the engine stops a box holding more than 1,000,000 bricks. A
+supercut shows the original's "Supercut in progress... (N%, N deleted, N
+planted)"; the original filled at once with no progress line, so the
+port's "Filling in bricks... (N%)" is ours. A fill stops at the server's
+brick limit and says how far it got. On 500,000 2x1 plates: a supercut
+took 650 ticks, slowest 4.8 ms, and its undo 2,403 ticks, 5.5 ms; a fill
+of 250,000 bricks took 1,654 ticks at 3.2 ms on average (its first two
+ticks cost up to 25 ms as the physics first meets the box, every later
+one under 6 ms), and its undo 2,870 ticks, 6.1 ms.
 
 ## Host rules
 
