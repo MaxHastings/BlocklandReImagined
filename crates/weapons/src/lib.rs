@@ -519,6 +519,10 @@ pub struct Image {
     /// did.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub scripts: BTreeMap<String, Script>,
+    /// Held in a guarding state, the image stops hurt that comes at its
+    /// holder from in front ([`Guard`]): a riot shield.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guard: Option<Guard>,
 }
 impl Image {
     /// Every projectile the image can launch: its own, its shots' moving
@@ -615,6 +619,127 @@ impl Cook {
                 && self.print.len() <= 255
                 && self.first_print.len() <= 255,
             "Invalid cook"
+        );
+        Ok(())
+    }
+}
+/// [`Image::guard`]: held in one of `states`, the image takes the hurt
+/// that comes at its holder from in front, as Kai's riot shield's `Shield`
+/// package did in `ProjectileData::damage` (a projectile's direct hit) and
+/// `ShapeBase::damage` (everything else that hurts with a place it struck:
+/// that hit again, blasts, rays, swings). Falls and crashes it leaves be.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Guard {
+    /// The states it guards in, by name (`Ready`): 1 to 16.
+    pub states: Vec<String>,
+    /// How steep a look turns the guard over or under the holder
+    /// ([`GuardFront`]); none guards only what comes at them from the way
+    /// they look.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub front: Option<GuardFront>,
+    /// The share of a stopped projectile's direct hit that still hurts,
+    /// 0 to 1, before `damage` takes its share again.
+    pub projectile_damage: f32,
+    /// The share of other hurt from in front that still hurts, 0 to 1:
+    /// blasts, rays and swings, and a stopped projectile's hit. Hurt of
+    /// more than 5000 at once, or struck at the holder's own feet, is never
+    /// stopped.
+    pub damage: f32,
+    /// The share of a stopped projectile's push, and of its blast's, that
+    /// still pushes, 0 to 1. Its blast does not hurt the holder.
+    pub push: f32,
+    /// A stopped projectile flies back the way the holder looks, as fast
+    /// as it came, from in front of them and as theirs: once in half a
+    /// second, so two guards do not trade one shot back and forth.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reflect: bool,
+    /// A kill by a projectile it sent back reads with this special kill
+    /// laid over the killing type's message ([`DamageType::special`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reflect_kill: Option<String>,
+    /// A projectile (by id, or datablock name in any loaded pack) that goes
+    /// off at the holder each time the guard stops something
+    /// (`spawnExplosion`): the clang of the hit.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub hit_explosion: String,
+    /// Sounds played where a stopped projectile struck, one drawn each time:
+    /// up to [`Guard::MAX_SOUNDS`], and one listed twice comes twice as
+    /// often.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sounds: Vec<String>,
+    /// The projectiles it stops before it breaks, 1 to 100000, counted for
+    /// each holder until they die; none never breaks. Broken, it leaves
+    /// the holder's hand and tools.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub durability: Option<u32>,
+    /// Goes off at the holder as the guard breaks (its pieces flying), as
+    /// `hit_explosion` does.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub break_explosion: String,
+}
+/// [`Guard::front`]: looking more than `up` up (the look's upward part,
+/// 0 to 1), the guard covers what strikes above `above` units below the
+/// middle of the holder's body; looking more than `down` down, what
+/// strikes more than `below` units below it; both times the holder's
+/// scale.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GuardFront {
+    pub up: f32,
+    pub above: f32,
+    pub down: f32,
+    pub below: f32,
+}
+impl Guard {
+    /// The most sounds a guard draws from.
+    pub const MAX_SOUNDS: usize = 8;
+    /// Whether the image guards in the state named `state`.
+    pub fn guards_in(&self, state: &str) -> bool {
+        self.states.iter().any(|s| s.eq_ignore_ascii_case(state))
+    }
+    /// Whether hurt travelling along `travel` that strikes at `at` comes
+    /// from in front of a holder looking along `look` (a unit vector, Y
+    /// up) whose body's middle is `middle`, at `scale`.
+    pub fn covers(
+        &self,
+        look: glam::Vec3,
+        middle: glam::Vec3,
+        scale: f32,
+        at: glam::Vec3,
+        travel: glam::Vec3,
+    ) -> bool {
+        match self.front {
+            Some(f) if look.y > f.up => at.y > middle.y - f.above * scale,
+            Some(f) if look.y < -f.down => at.y < middle.y - f.below * scale,
+            _ => travel.normalize_or_zero().dot(look) < 0.0,
+        }
+    }
+    fn validate(&self) -> Result<()> {
+        let name = |s: &String| !s.is_empty() && s.len() <= 128 && !s.chars().any(char::is_control);
+        let share = |v: f32| (0.0..=1.0).contains(&v);
+        ensure!(
+            (1..=16).contains(&self.states.len())
+                && self.states.iter().all(|s| name(s) && s.len() <= 64)
+                && self.front.is_none_or(|f| {
+                    share(f.up)
+                        && share(f.down)
+                        && [f.above, f.below]
+                            .iter()
+                            .all(|v| v.is_finite() && (-100.0..=100.0).contains(v))
+                })
+                && share(self.projectile_damage)
+                && share(self.damage)
+                && share(self.push)
+                && self.reflect_kill.as_ref().is_none_or(name)
+                && [&self.hit_explosion, &self.break_explosion]
+                    .iter()
+                    .all(|e| e.is_empty() || name(e))
+                && self.sounds.len() <= Self::MAX_SOUNDS
+                && self.sounds.iter().all(name)
+                && self.durability.is_none_or(|d| (1..=100_000).contains(&d)),
+            "Invalid guard: 1 to 16 states, shares 0 to 1, steep looks 0 to 1 and heights \
+             -100 to 100, up to 8 sounds, durability 1 to 100000, names up to 128 bytes"
         );
         Ok(())
     }
@@ -1763,6 +1888,13 @@ pub struct DamageType {
     /// `$Damage::VehicleDamageScale`: vehicles take this share of the damage.
     pub vehicle_scale: f32,
     pub direct: bool,
+    /// A special kill (`addSpecialDamageMsg`, Space Guy's
+    /// Support_SpecialKills): never the type a kill is dealt with, but laid
+    /// over that type's message when a rule says the kill was special
+    /// ([`Guard::reflect_kill`]). Its `%3` is the killing type's text
+    /// between the names (its death icon).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub special: bool,
 }
 impl DamageType {
     /// Lower-case ids of the icons both templates show.
@@ -1807,23 +1939,64 @@ impl DamageType {
             Some(k) => (&self.murder_message, k),
             None => (&self.suicide_message, ""),
         };
-        let mut out = String::new();
-        let mut chars = template.chars().peekable();
-        while let Some(c) = chars.next() {
-            match (c, chars.peek()) {
-                ('%', Some('1')) => {
-                    chars.next();
-                    out.push_str(victim);
-                }
-                ('%', Some('2')) => {
-                    chars.next();
-                    out.push_str(killer);
-                }
-                _ => out.push(c),
-            }
-        }
-        out
+        fill_names(template, victim, killer, "")
     }
+    /// A [`DamageType::special`] kill's message over `base`, the type that
+    /// killed, as Support_SpecialKills' `GameConnection::onDeath` builds
+    /// it: this type's message with `%3` standing for the text `base`'s
+    /// own message has between the names, the rest of `base`'s left out.
+    pub fn special_message(
+        &self,
+        base: Option<&DamageType>,
+        victim: &str,
+        killer: Option<&str>,
+    ) -> String {
+        let between = base.map_or("", |b| match killer {
+            // Between `%2` and `%1`.
+            Some(_) => b
+                .murder_message
+                .find("%2")
+                .and_then(|from| {
+                    let rest = &b.murder_message[from + 2..];
+                    rest.find("%1").map(|to| &rest[..to])
+                })
+                .unwrap_or(""),
+            // Before `%1`.
+            None => b
+                .suicide_message
+                .find("%1")
+                .map_or("", |to| &b.suicide_message[..to]),
+        });
+        let (template, killer) = match killer {
+            Some(k) => (&self.murder_message, k),
+            None => (&self.suicide_message, ""),
+        };
+        fill_names(template, victim, killer, between)
+    }
+}
+/// `%1` the victim, `%2` the killer and `%3` `between`, in one pass so a
+/// name containing `%1` stays literal.
+fn fill_names(template: &str, victim: &str, killer: &str, between: &str) -> String {
+    let mut out = String::new();
+    let mut chars = template.chars().peekable();
+    while let Some(c) = chars.next() {
+        match (c, chars.peek()) {
+            ('%', Some('1')) => {
+                chars.next();
+                out.push_str(victim);
+            }
+            ('%', Some('2')) => {
+                chars.next();
+                out.push_str(killer);
+            }
+            ('%', Some('3')) => {
+                chars.next();
+                out.push_str(between);
+            }
+            _ => out.push(c),
+        }
+    }
+    out
 }
 /// `ExplosionData` fields presented beside its native effects composite.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2237,6 +2410,9 @@ impl Pack {
                 "Invalid state shots of image {id}: at most 8, by lowercase state script other \
                  than onfire, each a shot as its own"
             );
+            if let Some(guard) = &image.guard {
+                guard.validate().with_context(|| format!("image {id}"))?;
+            }
             if let Some(cook) = &image.cook {
                 cook.validate()
                     .with_context(|| format!("image {id}: fuse_ticks 1 to 36000, burst_height -10 to 10, print_ticks 1 to 1200, print_seconds 0 to 10, a lowercase script"))?;

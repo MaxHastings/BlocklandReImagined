@@ -370,6 +370,10 @@ pub enum Event {
         /// `ProjectileData::damage` knew its own datablock.
         #[serde(default)]
         projectile: String,
+        /// A special kill this hurt makes ([`crate::DamageType::special`]):
+        /// a shot a guard sent back ([`crate::Guard::reflect_kill`]).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        special: Option<String>,
     },
     Impulse {
         source: ActorId,
@@ -630,6 +634,11 @@ pub struct Actor {
     /// flames or an Add-On's effect on the body ([`WeaponsWorld::emote`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     emote: Option<Equipped>,
+    /// Projectiles the guard in hand ([`crate::Guard::durability`]) stops
+    /// before it breaks, counted from its first stop: Kai's `shieldHP`,
+    /// which lasts until the holder dies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    guard_left: Option<u32>,
 }
 /// Torque's image slot 3, which `Player::emote` and `Player::burn` mount
 /// into: a new emote replaces the one there. Its image runs its states on
@@ -763,6 +772,12 @@ pub struct WeaponsWorld {
     /// Projectiles that go off at this age, before their lifetime: a cooked
     /// grenade's fuse, a cluster's bomblets ([`crate::Children::fuse_ticks`]).
     fuses: BTreeMap<u64, u32>,
+    /// Projectiles a guard sent back ([`crate::Guard::reflect`]): the tick
+    /// it did, and the special kill they make.
+    reflected: BTreeMap<u64, (u64, Option<String>)>,
+    /// This tick's projectiles a guard stopped: who stopped each, and the
+    /// share of push left. Their blasts spare that holder.
+    stopped: Vec<(u64, ActorId, f32)>,
 }
 impl WeaponsWorld {
     pub fn new(pack: Pack) -> Result<Self> {
@@ -787,6 +802,8 @@ impl WeaponsWorld {
             events: vec![],
             explosions: vec![],
             fuses: BTreeMap::new(),
+            reflected: BTreeMap::new(),
+            stopped: vec![],
         })
     }
     pub fn image_state(&self, id: ActorId, hand: u8) -> Option<(&Image, &State)> {
@@ -860,6 +877,7 @@ impl WeaponsWorld {
                 cook: None,
                 cues: Vec::new(),
                 emote: None,
+                guard_left: None,
             },
         );
         Ok(())
@@ -1646,8 +1664,10 @@ impl WeaponsWorld {
     /// `schedule` did).
     pub fn respawned(&mut self, id: ActorId) -> Result<()> {
         let a = self.actors.get_mut(&id).context("Unknown actor")?;
-        // The new body wears nothing in its emote slot.
+        // The new body wears nothing in its emote slot, and a guard it
+        // takes up starts whole.
         a.emote = None;
+        a.guard_left = None;
         a.cues.retain(|c| !c.cue.sound.is_empty());
         for c in &mut a.cues {
             c.cue.thread = None;
@@ -2275,6 +2295,12 @@ impl WeaponsWorld {
             let live = &self.projectiles;
             self.fuses.retain(|id, _| live.contains_key(id));
         }
+        if !self.reflected.is_empty() {
+            let live = &self.projectiles;
+            self.reflected.retain(|id, _| live.contains_key(id));
+        }
+        self.stopped.clear();
+        self.guard_hurt();
         // v20 `Item::updatePos`: the item's box falls under gravity 20 and
         // rests on its lowest face, bouncing with elasticity 0.2, friction 0.6.
         for d in self.drops.values_mut() {
@@ -3262,6 +3288,7 @@ impl WeaponsWorld {
                 },
             }
             let allowed = q.can_affect(p.source, hit.target);
+            let mut stopped = false;
             if let Some(image) = &d.sport_image {
                 if let TargetId::Brick(brick) = hit.target
                     && allowed
@@ -3283,6 +3310,7 @@ impl WeaponsWorld {
                             position: hit.position,
                             direction: p.velocity.normalize_or_zero(),
                             projectile: p.definition.clone(),
+                            special: self.special_of(p.id),
                         });
                     } else if q.can_catch(p.source, target)
                         && let Some(image) = self.mount_ball(target, image)
@@ -3307,7 +3335,7 @@ impl WeaponsWorld {
                     }
                 }
             } else if allowed {
-                self.direct_hit(p, &d, hit.target, hit.position);
+                stopped = self.direct_hit(p, &d, hit.target, hit.position, false);
             }
             for (set, c) in d.children.iter().enumerate().filter(|(_, c)| c.on_hit) {
                 self.children(p, c, set);
@@ -3317,6 +3345,11 @@ impl WeaponsWorld {
                 || !d.ballistic
             {
                 self.explode(p, &d, q, Some(normal));
+                return false;
+            }
+            // Kai's shield deleted a projectile it stopped (`%obj.schedule(10,
+            // delete)`): one that would bounce or stick is gone unexploded.
+            if stopped {
                 return false;
             }
             if d.min_stick_speed > 0.0 && p.velocity.length() >= d.min_stick_speed {
@@ -3443,9 +3476,32 @@ impl WeaponsWorld {
         }
     }
     /// What a projectile does to what it hits, when the rules allow it:
-    /// damage, a shove, a brick knocked loose. A hitscan shot does the same
-    /// where its ray lands.
-    fn direct_hit(&mut self, p: &Projectile, d: &ProjectileDef, target: TargetId, position: Vec3) {
+    /// damage, a shove, a brick knocked loose. A hitscan shot (`ray`) does
+    /// the same where its ray lands. Returns whether a guard stopped it.
+    fn direct_hit(
+        &mut self,
+        p: &Projectile,
+        d: &ProjectileDef,
+        target: TargetId,
+        position: Vec3,
+        ray: bool,
+    ) -> bool {
+        // `ProjectileData::damage` under Kai's `Shield` package: a flying
+        // projectile (not a ray, which hurts through `ShapeBase::damage`)
+        // that strikes a guard from in front.
+        let stop = match target {
+            TargetId::Actor(holder) if !ray => guard_held(&self.actors, &self.pack, holder)
+                .and_then(|(guard, _, a)| {
+                    let (look, middle) = (a.frame.direction.normalize_or_zero(), body(a));
+                    guard
+                        .covers(look, middle, a.frame.scale, position, p.velocity)
+                        .then(|| (holder, guard.clone()))
+                }),
+            _ => None,
+        };
+        let (hurt, push) = stop
+            .as_ref()
+            .map_or((1.0, 1.0), |(_, g)| (g.projectile_damage, g.push));
         if d.name.eq_ignore_ascii_case("horseRayProjectile") {
             if let TargetId::Actor(actor) = target {
                 self.events.push(Event::HorseTransform {
@@ -3457,6 +3513,7 @@ impl WeaponsWorld {
                 });
             }
         } else if d.damage > 0.0
+            && hurt > 0.0
             && matches!(
                 target,
                 TargetId::Actor(_) | TargetId::Vehicle(_) | TargetId::Entity(_)
@@ -3465,11 +3522,14 @@ impl WeaponsWorld {
             self.events.push(Event::Damage {
                 source: p.source,
                 target,
-                amount: d.damage.clamp(0.0, 100.0) * if d.fixed_damage { 1.0 } else { p.scale },
+                amount: d.damage.clamp(0.0, 100.0)
+                    * if d.fixed_damage { 1.0 } else { p.scale }
+                    * hurt,
                 kind: d.damage_type.clone(),
                 position,
                 direction: p.velocity.normalize_or_zero(),
                 projectile: p.definition.clone(),
+                special: self.special_of(p.id),
             });
         }
         if matches!(
@@ -3481,7 +3541,8 @@ impl WeaponsWorld {
                 source: p.source,
                 target,
                 impulse: (p.velocity.normalize_or_zero() * d.impulse + Vec3::Y * d.vertical)
-                    * p.scale,
+                    * p.scale
+                    * push,
                 position,
             });
         }
@@ -3495,6 +3556,170 @@ impl WeaponsWorld {
                 position,
                 parameters: d.brick.clone(),
             });
+        }
+        match stop {
+            Some((holder, guard)) => {
+                self.stop(p, d, holder, position, &guard);
+                true
+            }
+            None => false,
+        }
+    }
+    /// A guard stopped `p` where it struck, `at`: the clang at the holder,
+    /// one of its sounds, a stop off what it has left (breaking it at the
+    /// last), its blast told to spare the holder, and the shot sent back.
+    fn stop(
+        &mut self,
+        p: &Projectile,
+        d: &ProjectileDef,
+        holder: ActorId,
+        at: Vec3,
+        guard: &crate::Guard,
+    ) {
+        let Some(a) = self.actors.get(&holder) else {
+            return;
+        };
+        let (look, middle, scale, velocity) = (
+            a.frame.direction.normalize_or_zero(),
+            body(a),
+            a.frame.scale,
+            a.frame.velocity,
+        );
+        self.burst(&guard.hit_explosion, holder, middle, scale);
+        if let Some(durability) = guard.durability {
+            let a = self.actors.get_mut(&holder).expect("checked");
+            let left = a.guard_left.unwrap_or(durability).saturating_sub(1);
+            a.guard_left = Some(left);
+            if left == 0 {
+                a.guard_left = None;
+                self.break_guard(holder, guard, middle, scale);
+            }
+        }
+        self.stopped.push((p.id, holder, guard.push));
+        if !guard.sounds.is_empty() {
+            let n = guard.sounds.len();
+            let pick = (unit_random(self.tick, p.id, GUARD_SOUND_DRAW) * n as f32) as usize;
+            self.events.push(Event::Sound {
+                source: TargetId::Actor(holder),
+                profile: guard.sounds[pick.min(n - 1)].clone(),
+                position: at,
+            });
+        }
+        let lately = self
+            .reflected
+            .get(&p.id)
+            .is_some_and(|(tick, _)| self.tick.saturating_sub(*tick) < REFLECT_TICKS);
+        if guard.reflect && !lately && look != Vec3::ZERO {
+            // From in front of the holder, the way they look, as fast as it
+            // came, with their own motion as the projectile inherits it.
+            let from = middle + look * (velocity.length() / 5.0 + 1.0);
+            let speed = p.velocity.length();
+            match self.spawn(
+                &p.definition,
+                holder,
+                from,
+                look * speed + velocity * d.inherit,
+                p.scale,
+            ) {
+                Ok(id) => {
+                    self.reflected
+                        .insert(id, (self.tick, guard.reflect_kill.clone()));
+                }
+                Err(error) => self.events.push(Event::Diagnostic {
+                    actor: Some(holder),
+                    message: format!("A guard could not send a shot back: {error}"),
+                }),
+            }
+        }
+    }
+    /// The guard in `holder`'s hand breaks: the first of their tools whose
+    /// image it is leaves them, and if that is the one in hand, or none
+    /// is, their hand empties and `break_explosion` goes off, as Kai's
+    /// shield did when its `shieldHP` ran out.
+    fn break_guard(&mut self, holder: ActorId, guard: &crate::Guard, middle: Vec3, scale: f32) {
+        let Some(a) = self.actors.get(&holder) else {
+            return;
+        };
+        let Some(held) = a.images[0].as_ref().map(|e| e.image.clone()) else {
+            return;
+        };
+        let slot = a.inventory.iter().position(|item| {
+            item.as_ref()
+                .and_then(|i| self.pack.items.get(i))
+                .is_some_and(|i| i.image == held)
+        });
+        let in_hand = slot.is_none_or(|s| a.selected == Some(s));
+        if let Some(slot) = slot {
+            let a = self.actors.get_mut(&holder).expect("checked");
+            if let Some(item) = a.inventory[slot].take() {
+                a.rounds.remove(&slot_key(&item, slot));
+            }
+        }
+        if in_hand {
+            let emptied = if slot.is_some() {
+                self.equip(holder, None)
+            } else {
+                self.swap_image(holder, None)
+            };
+            if let Err(error) = emptied {
+                self.events.push(Event::Diagnostic {
+                    actor: Some(holder),
+                    message: format!("A broken guard stayed in hand: {error}"),
+                });
+            }
+            self.burst(&guard.break_explosion, holder, middle, scale);
+        }
+    }
+    /// `ShapeBase::spawnExplosion`: the projectile `name` (an id, or a
+    /// datablock name in any loaded pack) goes off at `at`.
+    fn burst(&mut self, name: &str, source: ActorId, at: Vec3, scale: f32) {
+        let Some(definition) = self.projectile_named(name) else {
+            return;
+        };
+        if let Err(error) = self.spawn_explosion(&definition, source, at, scale) {
+            self.events.push(Event::Diagnostic {
+                actor: Some(source),
+                message: error.to_string(),
+            });
+        }
+    }
+    /// The special kill a projectile makes: one a guard sent back.
+    fn special_of(&self, projectile: u64) -> Option<String> {
+        self.reflected
+            .get(&projectile)
+            .and_then(|(_, kill)| kill.clone())
+    }
+    /// `ShapeBase::damage` under Kai's `Shield` package: hurt that strikes
+    /// a held guard from in front keeps only the guard's share, with its
+    /// clang at the holder. Hurt above 5000 (an instant kill) or struck at
+    /// the holder's feet is not stopped.
+    fn guard_hurt(&mut self) {
+        let mut clangs = vec![];
+        for e in &mut self.events {
+            let Event::Damage {
+                target: TargetId::Actor(holder),
+                amount,
+                position,
+                ..
+            } = e
+            else {
+                continue;
+            };
+            let Some((guard, _, a)) = guard_held(&self.actors, &self.pack, *holder) else {
+                continue;
+            };
+            if *amount > 5000.0 || position.distance(a.frame.position) < 0.1 {
+                continue;
+            }
+            let middle = body(a);
+            let look = a.frame.direction.normalize_or_zero();
+            if guard.covers(look, middle, a.frame.scale, *position, middle - *position) {
+                *amount *= guard.damage;
+                clangs.push((guard.hit_explosion.clone(), *holder, middle, a.frame.scale));
+            }
+        }
+        for (explosion, holder, middle, scale) in clangs {
+            self.burst(&explosion, holder, middle, scale);
         }
     }
     /// One ray of a [`crate::Hitscan`] shot: the projectile `definition`
@@ -3589,7 +3814,7 @@ impl WeaponsWorld {
             return;
         }
         if q.can_affect(id, hit.target) {
-            self.direct_hit(&p, &d, hit.target, hit.position);
+            self.direct_hit(&p, &d, hit.target, hit.position, true);
         }
         match self
             .projectile_named(&ray.hitscan.explosion)
@@ -3753,6 +3978,7 @@ impl WeaponsWorld {
                     position: p.position,
                     direction: (target.center - p.position).normalize_or_zero(),
                     projectile: p.definition.clone(),
+                    special: self.special_of(p.id),
                 });
             }
             if aura.burn_seconds > 0.0 {
@@ -3809,8 +4035,15 @@ impl WeaponsWorld {
                 continue;
             }
             let distance = target.center.distance(p.position);
+            // A guard that stopped this projectile spares its holder the
+            // blast and keeps its share of the push (`damageCancel`).
+            let spared = self
+                .stopped
+                .iter()
+                .find(|(id, holder, _)| *id == p.id && target.target == TargetId::Actor(*holder))
+                .map(|(.., push)| *push);
             let damage_factor = falloff(distance, d.explosion.radius * p.scale);
-            if damage_factor > 0.0 && d.explosion.damage > 0.0 {
+            if damage_factor > 0.0 && d.explosion.damage > 0.0 && spared.is_none() {
                 self.events.push(Event::Damage {
                     source: p.source,
                     target: target.target,
@@ -3819,6 +4052,7 @@ impl WeaponsWorld {
                     position: p.position,
                     direction: (target.center - p.position).normalize_or_zero(),
                     projectile: p.definition.clone(),
+                    special: self.special_of(p.id),
                 });
                 if d.explosion.burn_seconds > 0.0 {
                     self.events.push(Event::Burn {
@@ -3856,7 +4090,8 @@ impl WeaponsWorld {
                     impulse: (push.normalize_or_zero() * d.explosion.impulse
                         + Vec3::Y * d.explosion.impulse_vertical)
                         * p.scale
-                        * impulse_factor,
+                        * impulse_factor
+                        * spared.unwrap_or(1.0),
                     position: p.position,
                 });
             }
@@ -3939,6 +4174,30 @@ pub fn redirected_velocity(impact: &ProjectileContact, response: ContactResponse
 /// [`unit_random`]'s `n` for a hitscan shot's landing sounds, apart from
 /// its rays' spreads (`3 * ray + axis`).
 const HIT_SOUND_DRAW: u64 = u64::MAX;
+/// [`unit_random`]'s draw of a stopped projectile's guard sound.
+const GUARD_SOUND_DRAW: u64 = u64::MAX - 1;
+/// How long a projectile a guard sent back cannot be sent back again: Kai's
+/// 500 ms.
+const REFLECT_TICKS: u64 = 60;
+/// The guard `actor` holds up: their right hand's image's, while that image
+/// is in one of its guarding states, with the image's id and the holder.
+fn guard_held<'a>(
+    actors: &'a BTreeMap<ActorId, Actor>,
+    pack: &'a Pack,
+    actor: ActorId,
+) -> Option<(&'a crate::Guard, &'a str, &'a Actor)> {
+    let a = actors.get(&actor)?;
+    let held = a.images[0].as_ref()?;
+    let image = pack.images.get(&held.image)?;
+    let guard = image.guard.as_ref()?;
+    guard
+        .guards_in(&image.states.get(held.state)?.name)
+        .then_some((guard, held.image.as_str(), a))
+}
+/// The middle of a holder's body (Torque's hack position).
+fn body(a: &Actor) -> Vec3 {
+    a.frame.middle.unwrap_or(a.frame.eye)
+}
 fn unit_random(tick: u64, actor: u64, n: u64) -> f32 {
     let mut z = tick
         .wrapping_mul(0x9E37_79B9_7F4A_7C15)

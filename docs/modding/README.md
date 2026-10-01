@@ -709,6 +709,7 @@ The fields you are most likely to change:
 | projectile | `aura` | hurts what is within `radius` every `every_ticks` as it flies: `damage`, `players_only` to pass vehicles by, `effect` played on each one hurt at its scale, `target_sound` heard by that player alone, `max_pulses` to stop after so many (it flies on), `max_targets` to hurt only the first so many each pulse |
 | image | `shot.lob` | `{ "speed": 18.25, "range": 300, "otherwise": 100, "distance_divisor": 3.75, "jitter_steps": [3, 3], "jitter_divisor": [6, 6] }`: lobbed to come down about where the holder looks, as Tier+Tactical's mortar: `speed` along the aim, plus upward the distance from their feet to where the look lands (`otherwise` past `range` times their scale) over `distance_divisor`, plus a little along the world's x and -z |
 | image | `cook` | a grenade whose fuse burns from a state in the hand (below) |
+| image | `guard` | a shield raised in some states (below) |
 | projectile | `fixed_damage` | its direct damage stays as authored at any scale |
 | item | `ui_name` | the name players see |
 | image | `zoom` | `{ "fov": 20, "on_jet": true, "crosshair": false, "first_person": true }`: aim with the zoom key (and the right mouse button with `on_jet`), hide the crosshair, force first person while aiming. More under "Scopes" below |
@@ -865,6 +866,27 @@ away first puts the fuse out. The
 [Commando rifle](../../packages/samples/sample-commando-rifle/assets/weapons.json)
 is a plain scoped rifle: raise it, fire, let go, fire again.
 
+**Shields.** An image's `guard` protects its holder while their right
+hand's image is in one of its `states`:
+
+```json
+"guard": { "states": ["Ready"], "front": { "up": 0.7, "above": 3, "down": 0.8, "below": 4 },
+           "projectile_damage": 0.1, "damage": 0.25, "push": 0.5,
+           "reflect": true, "reflect_kill": "Reflected", "hit_explosion": "ns:explosion/clang",
+           "sounds": ["ns:sound/bing"], "durability": 20, "break_explosion": "ns:projectile/pieces" }
+```
+
+It covers what strikes the side the holder faces. With `front`, looking up
+past `up` it covers hits landing higher than `above` (times their scale)
+below the middle of their body, and looking down past `down` those lower
+than `below`. A projectile it stops does `projectile_damage` of its damage
+and `push` of its push, plays `hit_explosion` and one of up to 8 `sounds`
+at the holder, and with `reflect` flies back the way they look as theirs
+(a kill by it reads as the damage type `reflect_kill` when the pack has
+one). A ray it stops does `projectile_damage` and is not sent back; any
+other harm it covers does `damage`. After `durability` stops the shield
+breaks: `break_explosion` goes off and the item leaves their tools.
+
 Shots hit players, vehicles, bricks and Add-On creatures. A creature's
 own rule decides what the hit does (`on_entity_damage`).
 
@@ -993,7 +1015,10 @@ refuses a second rifle. Typing `/mode` in chat is refused because the
 commands are `tool_only`; the image still runs them.
 
 Keys of `damage_types` and `explosions` are their `name` in lowercase, and
-a projectile names its damage type as `$DamageType::<name>`. Everyone in a
+a projectile names its damage type as `$DamageType::<name>`. A damage type
+with `"special": true` is a special kill (Support_SpecialKills): its
+message's `%3` is replaced by the killing weapon's icon, so `"%2 [sent
+back]%3%1"` shows both. Everyone in a
 game needs the same weapons, so give the Add-On to the people you play
 with.
 

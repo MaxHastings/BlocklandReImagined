@@ -16,3 +16,6 @@ take the worn image off; script op `Emote` (with `skip_spam`),
 `Print::hide_bar`, and `PlayerView::emote`.
 Melee Extended: hitscan `sounds` (pairs drawn per shot) and `damage`;
 state shots may hitscan.
+Melee Extended II: `Image::guard` (a raised shield's cover, damage and push
+scales, reflection, clang, sounds, durability and break burst) and
+`DamageType::special` (Support_SpecialKills icons). Content schema only.

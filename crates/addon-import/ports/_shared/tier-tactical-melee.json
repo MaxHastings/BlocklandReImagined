@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "notes": "Kai's Tier+Tactical melee swings, shared by Melee Extended and Melee Extended II: each swing draws one of its image's pair of hit sounds as its onFire did, a set TT_raycastDirectDamage before Parent::onFire is that swing's damage, and the other arm's moves play on the states that ran them. TT_isMeleeRaycastCrit, which every melee image's TT_isRaycastCritical calls, crits only on a zombie.",
+  "handles": {
+    "TT_isMeleeRaycastCrit": "never crits: it crits only on a zombie (iszombie), and no player in this game is one"
+  },
+  "scripts": [
+    {
+      "method": "*",
+      "into": "shot",
+      "pattern": "if\\s*\\(\\s*getRandom\\(\\s*0\\s*,\\s*1\\s*\\)\\s*\\)\\s*\\{\\s*%this\\.TT_raycastExplosionBrickSound\\s*=\\s*(?P<a>\\w+)\\s*;\\s*\\}\\s*else\\s*\\{\\s*%this\\.TT_raycastExplosionBrickSound\\s*=\\s*(?P<b>\\w+)\\s*;\\s*\\}",
+      "set": {
+        "hitscan": {
+          "sounds": [
+            {
+              "other": "{a|sound}"
+            },
+            {
+              "other": "{b|sound}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "method": "*",
+      "into": "shot",
+      "pattern": "if\\s*\\(\\s*getRandom\\(\\s*0\\s*,\\s*1\\s*\\)\\s*\\)\\s*\\{\\s*%this\\.TT_raycastExplosionBrickSound\\s*=\\s*(?P<a>\\w+)\\s*;\\s*%this\\.TT_raycastExplosionPlayerSound\\s*=\\s*(?P<pa>\\w+)\\s*;\\s*\\}\\s*else\\s*\\{\\s*%this\\.TT_raycastExplosionBrickSound\\s*=\\s*(?P<b>\\w+)\\s*;\\s*%this\\.TT_raycastExplosionPlayerSound\\s*=\\s*(?P<pb>\\w+)\\s*;\\s*\\}",
+      "set": {
+        "hitscan": {
+          "sounds": [
+            {
+              "other": "{a|sound}",
+              "player": "{pa|sound}"
+            },
+            {
+              "other": "{b|sound}",
+              "player": "{pb|sound}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "method": "*",
+      "into": "shot",
+      "pattern": "%this\\.TT_raycastDirectDamage\\s*=\\s*(?P<d>-?[\\d.]+)\\s*;[\\s\\S]*Parent::onFire\\(",
+      "required_by": "%this\\.TT_raycastDirectDamage\\s*=",
+      "set": {
+        "hitscan": {
+          "damage": "{d}"
+        }
+      }
+    },
+    {
+      "method": "*",
+      "into": "state",
+      "keep": true,
+      "pattern": "%obj\\.playThread\\(\\s*3\\s*,\\s*(?P<g>\\w+)\\s*\\)",
+      "set": {
+        "gesture": "{g}"
+      }
+    },
+    {
+      "method": "*",
+      "into": "state",
+      "keep": true,
+      "pattern": "if\\s*\\(\\s*%obj\\.getDamagePercent\\(\\s*\\)\\s*>=\\s*1(?:\\.0)?\\s*\\)\\s*\\{\\s*%slot\\s*=\\s*0\\s*;\\s*\\}\\s*else\\s*\\{\\s*%slot\\s*=\\s*3\\s*;\\s*\\}\\s*%obj\\.playThread\\(\\s*%slot\\s*,\\s*(?P<g>\\w+)\\s*\\)",
+      "required_by": "%obj\\.playThread\\(\\s*%slot\\s*,",
+      "set": {
+        "gesture": "{g}"
+      }
+    }
+  ]
+}

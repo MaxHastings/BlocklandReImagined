@@ -1790,3 +1790,107 @@ fn melee_extended_swings_draw_their_hit_sounds_and_the_knife_stabs() {
     swing(&mut g, 90);
     assert!(!g.s.vitals()[&b].alive, "the slash's 100");
 }
+
+const NSME2: &str = "weapon_melee_extended_ii";
+
+/// Melee Extended II on its stand-in, beside Melee Extended's: the riot
+/// shield, raised, keeps a share of a bash from in front (its own share,
+/// then the share of all hurt from in front) and sends the bash back as
+/// its holder's, whose kill reads as sent back; the saw cuts while held
+/// and plants its arm as it is drawn; the easter eggs are hidden.
+#[test]
+fn melee_extended_ii_shield_stops_shots_from_in_front_and_sends_them_back() {
+    let (dir, out, report) = imported_on(
+        "Weapon_Melee_Extended_II",
+        NSME2,
+        &["Weapon_Melee_Extended"],
+        "shield",
+    );
+    let port = &report.ports[0];
+    assert!(port.applied, "{:?}", port.reason);
+    assert_eq!(
+        report.summary.needs_behaviour_ported,
+        report.summary.needs_behaviour
+    );
+    assert!(report.unsupported.is_empty(), "{:?}", report.unsupported);
+    let pack = pack(&out);
+    let image = |name: &str| pack.images[&format!("{NSME2}:image/{name}")].clone();
+    let shield = image("shieldriotttimage");
+    let guard = shield.guard.clone().unwrap();
+    assert_eq!(
+        (guard.projectile_damage, guard.damage, guard.push),
+        (0.1, 0.25, 0.5)
+    );
+    assert_eq!(
+        guard.front,
+        Some(GuardFront {
+            up: 0.7,
+            above: 3.0,
+            down: 0.8,
+            below: 4.0
+        })
+    );
+    assert_eq!(guard.states, ["Ready"]);
+    assert!(shield.both_arms);
+    let saw = image("l4bchainsawimage");
+    assert_eq!(saw.states[0].cues[0].thread, Some(0));
+    assert_eq!(saw.states[0].cues[0].sequence, "plant");
+    assert!(saw.shot.unwrap().hitscan.is_some());
+    for hidden in ["l4bbigstickitem", "l4bpipewrenchitem", "l4bgaffitem"] {
+        assert!(pack.items[&format!("{NSME2}:weapon/{hidden}")].hidden);
+    }
+    assert!(!pack.items[&format!("{NSME2}:weapon/l4baxeitem")].hidden);
+    assert!(pack.damage_types["reflected"].special);
+
+    // In a minigame, B two units ahead of A, facing A, both holding the
+    // shield up.
+    let melee = import_beside(&dir.0, "Weapon_Melee_Extended", NSME, &[]);
+    assert!(melee.ports[0].applied, "{:?}", melee.ports[0].reason);
+    let mut g = Game::with_add_ons(&dir.0, &out, NSME2, &[NSME]);
+    let a = g.join("A", Vec3::new(0.0, 0.05, 0.0));
+    let b = g.join("B", Vec3::new(0.0, 0.05, -2.0));
+    g.steps(2);
+    let mut loadout: [Option<String>; 5] = Default::default();
+    loadout[0] = Some(format!("{NSME2}:weapon/riotttshielditem"));
+    g.s.set_spawn_points(vec![g.feet(a)]).unwrap();
+    g.cmd(
+        a,
+        Command::MiniGame(MiniGameRequest::Create {
+            color: 0,
+            settings: Settings {
+                loadout,
+                ..Settings::default()
+            },
+        }),
+    );
+    let game = g.s.minigame_views()[0].id;
+    g.s.set_spawn_points(vec![g.feet(b)]).unwrap();
+    g.cmd(b, Command::MiniGame(MiniGameRequest::Join { game }));
+    g.steps(330);
+    g.looks.get_mut(&b).unwrap().yaw = std::f32::consts::PI;
+    g.equip(a, "riotttshielditem");
+    g.equip(b, "riotttshielditem");
+    g.steps(30);
+    g.s.take_private_notices();
+    // A bashes: B keeps 60 x 0.1 x 0.25 of it, and the bash flies back
+    // into A, whose shield is still down from the swing.
+    g.shoot_at(a, b, 1.2);
+    assert!((g.health(b) - 98.5).abs() < 0.01, "{}", g.health(b));
+    assert_eq!(g.health(a), 40.0);
+    // Again, and A falls to the bash B sent back.
+    g.shoot_at(a, b, 1.2);
+    assert!((g.health(b) - 97.0).abs() < 0.01, "{}", g.health(b));
+    assert!(!g.s.vitals()[&a].alive);
+    let said: Vec<String> =
+        g.s.take_private_notices()
+            .into_iter()
+            .filter_map(|(_, n)| match n {
+                Notice::Chat(text) => Some(text),
+                _ => None,
+            })
+            .collect();
+    assert!(
+        said.iter().any(|t| t == "B [sent back] [bash] A"),
+        "{said:?}"
+    );
+}

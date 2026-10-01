@@ -165,6 +165,8 @@ The same modder's second write-up (September 2026), judged the same way:
 | Custom casing and debris models | Kept | An image's `casing` `DebrisData` flies as its fields and the image's `shellExit*` fields say and draws its own model; explosion debris draws the Add-On's model too. The base game's `gunShellDebris` still throws the stock brass. At most 256 casing kinds and 512 loose models drawn at once. |
 | Capping `stateEmitterTime` at 300 s | Left out | v20 does not cap it and the effects runtime already limits live particles. |
 | A sound that is not 3D | Heard by its holder only | A sound with no position has no place for other players to hear it from, so it stays with the player who fired. |
+| A shield's `ShapeBase::damage` and `ProjectileData::onCollision` overrides (Tier+Tactical riot shield) | Kept as an image's `guard` | The engine scales covered harm, stops and reflects shots, counts durability and breaks the shield, so no script hooks every hit. |
+| `addSpecialDamageMsg` (Support_SpecialKills) | Kept as a damage type's `special` | The kill names the special type with the killing weapon's icon in `%3`. |
 
 ## Image state scripts as data
 

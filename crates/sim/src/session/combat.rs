@@ -323,6 +323,9 @@ pub(super) enum DamageKind {
         direction: Option<Vec3>,
         /// The projectile that did it, when one did.
         projectile: Option<String>,
+        /// The special kill it makes ([`bri_weapons::DamageType::special`]):
+        /// a shot a guard sent back.
+        special: Option<String>,
     },
     Fall,
     Impact,
@@ -342,6 +345,7 @@ impl DamageKind {
             direct,
             direction: None,
             projectile: None,
+            special: None,
         }
     }
     /// The projectile that did it, as `on_damage` hooks read it.
@@ -354,6 +358,12 @@ impl DamageKind {
     pub(super) fn direction(&self) -> Option<Vec3> {
         match self {
             Self::Weapon { direction, .. } => *direction,
+            _ => None,
+        }
+    }
+    pub(super) fn special(&self) -> Option<&str> {
+        match self {
+            Self::Weapon { special, .. } => special.as_deref(),
             _ => None,
         }
     }
@@ -788,6 +798,7 @@ impl Session {
                     .is_some_and(|t| t.direct),
                 direction: kind.direction(),
                 projectile: kind.projectile().map(str::to_owned),
+                special: kind.special().map(str::to_owned),
                 name,
             },
             None => kind,
@@ -861,11 +872,20 @@ impl Session {
             .map_err(|e| anyhow::anyhow!("Death rejected: {e}"))?;
         // Radius deaths within 0.1 s of a direct hit report the direct type.
         let kind = match (&kind, &peer.combat.last_direct) {
-            (DamageKind::Weapon { direct: false, .. }, Some((name, at)))
-                if tick.saturating_sub(*at) < 12 =>
-            {
-                DamageKind::weapon(name.clone(), true)
-            }
+            (
+                DamageKind::Weapon {
+                    direct: false,
+                    special,
+                    ..
+                },
+                Some((name, at)),
+            ) if tick.saturating_sub(*at) < 12 => DamageKind::Weapon {
+                name: name.clone(),
+                direct: true,
+                direction: None,
+                projectile: None,
+                special: special.clone(),
+            },
             _ => kind,
         };
         // Packages see every death and who caused it; their own policy
@@ -929,9 +949,18 @@ impl Session {
             .filter(|k| *k != victim)
             // A killer who has left since the shot counts as no killer.
             .and_then(|k| self.peers.get(&k).map(|p| p.name.clone()));
-        let text = match self.weapons.pack.damage_type(kind.type_name()) {
-            Some(t) => t.message(&victim_name, killer_name.as_deref()),
-            None => killer_name.map_or_else(
+        let pack = &self.weapons.pack;
+        let base = pack.damage_type(kind.type_name());
+        // A special kill (Support_SpecialKills) lays its message over the
+        // killing type's.
+        let special = kind
+            .special()
+            .and_then(|name| pack.damage_types.get(&name.to_ascii_lowercase()))
+            .filter(|t| t.special);
+        let text = match (special, base) {
+            (Some(s), base) => s.special_message(base, &victim_name, killer_name.as_deref()),
+            (None, Some(t)) => t.message(&victim_name, killer_name.as_deref()),
+            (None, None) => killer_name.map_or_else(
                 || victim_name.clone(),
                 |k| format!("{k} killed {victim_name}"),
             ),

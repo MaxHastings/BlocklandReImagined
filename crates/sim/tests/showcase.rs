@@ -1442,6 +1442,7 @@ fn add_launcher(
         last_shot: None,
         state_shots: Default::default(),
         cook: None,
+        guard: None,
         paint_picker: false,
         scripts: Default::default(),
         hide_nodes: Vec::new(),

@@ -761,6 +761,8 @@ const KNOWN_TOP_LEVEL: &[&str] = &[
     "forcerequiredaddon",
     "loadrequiredaddon",
     "adddamagetype",
+    // Support_SpecialKills' messages, read as special kills.
+    "addspecialdamagemsg",
     "activatepackage",
     "error",
     "echo",
@@ -1486,10 +1488,14 @@ fn weapons(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
         .filter_map(|s| cx.src.get(&s.path))
         .map(|f| String::from_utf8_lossy(&f.bytes).into_owned())
         .collect();
-    for t in texts
-        .iter()
-        .flat_map(|t| bri_weapons_import::damage_types(t).unwrap_or_default())
-    {
+    // Special kills (Support_SpecialKills' `addSpecialDamageMsg`) are laid
+    // over them when a rule calls a kill special.
+    for t in texts.iter().flat_map(|t| {
+        bri_weapons_import::damage_types(t)
+            .unwrap_or_default()
+            .into_iter()
+            .chain(bri_weapons_import::special_kills(t).unwrap_or_default())
+    }) {
         let missing: Vec<_> = t
             .icons()
             .filter(|i| {

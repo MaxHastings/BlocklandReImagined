@@ -450,6 +450,7 @@ fn damage_type(name: &str, verb: &str) -> (String, DamageType) {
             murder_message: format!("%2 {verb} %1"),
             vehicle_scale: 0.5,
             direct: true,
+            special: false,
         },
     )
 }

@@ -177,6 +177,35 @@ pub fn damage_types(text: &str) -> Result<Vec<DamageType>> {
                 murder_message: text(4, 5),
                 vehicle_scale: c[6].trim().parse().unwrap_or(1.0),
                 direct: matches!(c[7].trim(), "1" | "true"),
+                special: false,
+            }
+        })
+        .collect())
+}
+/// `addSpecialDamageMsg(name, murderMessage, suicideMessage)` (Space Guy's
+/// Support_SpecialKills): kill messages laid over the killing type's when a
+/// script calls the kill special ([`DamageType::special`]).
+pub fn special_kills(text: &str) -> Result<Vec<DamageType>> {
+    ensure!(text.len() <= 8 * 1024 * 1024, "Script too large");
+    let call = Regex::new(
+        r#"(?i)addSpecialDamageMsg\s*\(\s*"(\w+)"\s*,\s*(?:'([^']*)'|"([^"]*)")\s*,\s*(?:'([^']*)'|"([^"]*)")\s*\)"#,
+    )?;
+    let text = bri_convert::tscript::without_comments(text);
+    Ok(call
+        .captures_iter(&text)
+        .map(|c| {
+            let text = |a: usize, b: usize| {
+                c.get(a)
+                    .or_else(|| c.get(b))
+                    .map_or(String::new(), |m| m.as_str().to_owned())
+            };
+            DamageType {
+                name: c[1].to_owned(),
+                murder_message: text(2, 3),
+                suicide_message: text(4, 5),
+                vehicle_scale: 1.0,
+                direct: false,
+                special: true,
             }
         })
         .collect())
@@ -474,6 +503,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 last_shot: None,
                 state_shots: Default::default(),
                 cook: None,
+                guard: None,
                 paint_picker: false,
                 // v20's own scripts run by image name (`runtime::callback`).
                 scripts: Default::default(),
@@ -832,6 +862,27 @@ mod tests {
             "2"
         );
         assert_eq!(ticks(0.14), 17);
+    }
+    #[test]
+    fn special_kills_lay_their_icon_before_the_killing_types() {
+        let special = special_kills(
+            "addSpecialDamageMsg(\"Reflected\",\"%2 <bitmap:Add-Ons/x/ci_reflect>%3%1\",\"<bitmap:Add-Ons/x/ci_reflect> %3%1\");",
+        )
+        .unwrap();
+        assert_eq!(special.len(), 1);
+        assert!(special[0].special);
+        let gun = &damage_types(
+            "AddDamageType(\"Gun\", '<bitmap:base/ci/gun> %1', '%2 <bitmap:base/ci/gun> %1', 1, 1);",
+        )
+        .unwrap()[0];
+        assert_eq!(
+            special[0].special_message(Some(gun), "Bo", Some("Al")),
+            "Al <bitmap:Add-Ons/x/ci_reflect> <bitmap:base/ci/gun> Bo"
+        );
+        assert_eq!(
+            special[0].special_message(Some(gun), "Bo", None),
+            "<bitmap:Add-Ons/x/ci_reflect> <bitmap:base/ci/gun> Bo"
+        );
     }
     #[test]
     fn damage_types_keep_literal_messages_in_order() {

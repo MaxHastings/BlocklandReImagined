@@ -502,8 +502,9 @@ pub struct ScriptRule {
     /// is the image's `shot`, another state script's its entry in
     /// `state_shots`), `magazine`, `check` (the magazine's check for the
     /// state script: a gun's own `TT_onLoadCheck` or burst check) or
-    /// `state`; for a projectile: `projectile`; for an item: `item`. Any
-    /// may go into `table`.
+    /// `state` (the states running the method; `onMount`'s is the first,
+    /// which the image enters as it mounts); for a projectile:
+    /// `projectile`; for an item: `item`. Any may go into `table`.
     pub into: String,
     /// With `into: "table"`: the table's name, which the host rules use as
     /// `{{name}}`, a Rhai map from each image's or projectile's id to `set`.
@@ -730,11 +731,22 @@ pub fn scripts(
                         if entry.get("states").is_none() {
                             entry["states"] = Value::Array(states.clone());
                         }
-                        for state in entry["states"].as_array_mut().into_iter().flatten() {
-                            if !state["script"]
-                                .as_str()
-                                .is_some_and(|s| s.eq_ignore_ascii_case(&method))
-                            {
+                        for (at, state) in entry["states"]
+                            .as_array_mut()
+                            .into_iter()
+                            .flatten()
+                            .enumerate()
+                        {
+                            // `onMount` runs as the image mounts, which is
+                            // as it enters its first state.
+                            let runs = if method == "onmount" {
+                                at == 0
+                            } else {
+                                state["script"]
+                                    .as_str()
+                                    .is_some_and(|s| s.eq_ignore_ascii_case(&method))
+                            };
+                            if !runs {
                                 continue;
                             }
                             let mut set = set.clone();
