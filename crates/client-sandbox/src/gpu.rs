@@ -731,12 +731,22 @@ impl LayerRenderer {
             time: [self.time[0], self.time[1], 0.0, 0.0],
             limits: [self.limit, 0, 0, 0],
         };
-        queue.write_buffer(&self.view_frames[view - 1].0, 0, bytemuck::bytes_of(&uniform));
+        queue.write_buffer(
+            &self.view_frames[view - 1].0,
+            0,
+            bytemuck::bytes_of(&uniform),
+        );
     }
 
     /// [`Self::draw`]'s world-space draws from a view [`Self::prepare_view`]
     /// prepared.
-    pub fn draw_view(&self, pass: &mut wgpu::RenderPass<'_>, frame: &Frame, layer: &Layer, view: usize) {
+    pub fn draw_view(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        frame: &Frame,
+        layer: &Layer,
+        view: usize,
+    ) {
         let Some((_, group)) = view.checked_sub(1).and_then(|v| self.view_frames.get(v)) else {
             return;
         };
@@ -790,13 +800,23 @@ pub fn timing_features(adapter: &wgpu::Adapter) -> wgpu::Features {
 /// A headless device for tests, previews and calibration, with timestamps
 /// where the adapter has them.
 pub fn headless_device() -> Result<(String, wgpu::Device, wgpu::Queue)> {
+    open_device(true)
+}
+
+/// A headless device, with timestamps where the adapter has them when
+/// `timed`, or never when not.
+fn open_device(timed: bool) -> Result<(String, wgpu::Device, wgpu::Queue)> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter =
         pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
             .context("no GPU adapter")?;
     let name = adapter.get_info().name;
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        required_features: timing_features(&adapter),
+        required_features: if timed {
+            timing_features(&adapter)
+        } else {
+            wgpu::Features::empty()
+        },
         ..Default::default()
     }))?;
     Ok((name, device, queue))
@@ -984,6 +1004,30 @@ pub fn render_offscreen_scene(
     })
 }
 
+/// [`render_offscreen`] on a GPU taken to run `speed`, instead of measuring
+/// it, and without timing the layer: every frame's loop cap is then
+/// [`loop_limit`] of that speed at the frame budget
+/// ([`Budgets::gpu_ms_per_frame`](crate::Budgets)), whatever else the
+/// machine is doing. For checking the cap on a real GPU; the game measures.
+pub fn render_offscreen_at_speed(
+    addon: &mut AddOn,
+    width: u32,
+    height: u32,
+    times: &[f32],
+    speed: GpuSpeed,
+) -> Result<(String, Vec<Image>)> {
+    render_views(
+        addon,
+        width,
+        height,
+        times,
+        Some(speed),
+        Vec3::new(2.4, 1.8, 3.2),
+        Vec3::ZERO,
+        |_| Default::default(),
+    )
+}
+
 /// [`render_offscreen_scene`] with the player's view at each frame too
 /// (its size is the image's), for Add-Ons that draw by what the player
 /// sees: aiming, first person, ammo.
@@ -996,12 +1040,28 @@ pub fn render_offscreen_views(
     target: Vec3,
     input: impl Fn(f32) -> (Arc<crate::world::World>, crate::host::View),
 ) -> Result<(String, Vec<Image>)> {
+    render_views(addon, width, height, times, None, eye, target, input)
+}
+
+/// Render offscreen at a `given` GPU speed with no timing, or (None) on a
+/// calibrated, timed device as the game does.
+#[allow(clippy::too_many_arguments)]
+fn render_views(
+    addon: &mut AddOn,
+    width: u32,
+    height: u32,
+    times: &[f32],
+    given: Option<GpuSpeed>,
+    eye: Vec3,
+    target: Vec3,
+    input: impl Fn(f32) -> (Arc<crate::world::World>, crate::host::View),
+) -> Result<(String, Vec<Image>)> {
     ensure!(
         width > 0 && height > 0 && width <= 4096 && height <= 4096 && width.is_multiple_of(64),
         "width must be a multiple of 64"
     );
-    let (name, device, queue) = headless_device()?;
-    let speed = calibrate(&device, &queue);
+    let (name, device, queue) = open_device(given.is_none())?;
+    let speed = given.or_else(|| calibrate(&device, &queue));
     let color_format = wgpu::TextureFormat::Rgba8UnormSrgb;
     let depth_format = wgpu::TextureFormat::Depth32Float;
     let size = wgpu::Extent3d {
@@ -1038,12 +1098,8 @@ pub fn render_offscreen_views(
         2048,
     );
     let camera = Camera {
-        view_proj: reversed_perspective(
-            0.9,
-            width as f32 / height as f32,
-            0.1,
-            100.0,
-        ) * glam::camera::rh::view::look_at_mat4(eye, target, Vec3::Y),
+        view_proj: reversed_perspective(0.9, width as f32 / height as f32, 0.1, 100.0)
+            * glam::camera::rh::view::look_at_mat4(eye, target, Vec3::Y),
         position: eye,
         size: [width, height],
         normal_fov: 90.0,
