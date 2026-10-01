@@ -9111,7 +9111,7 @@ than the light the bulb gave.
   out (the Gate's probe showed one on the wall by the window). Now a texel
   takes its whole remainder when a neighbour on the same surface plainly
   holds one of those lights (its rays see it, or a quarter of it is left
-  there). Bake format 7.
+  there). Bake format 8.
 - `lighting_probe`: `BRI_BREAK=1` breaks every bulb and tube by the
   client's rule. Within 4 units of a light shape it prints each triangle's
   lightmap, Dynamic leftover, light shares and facing. `BRI_DUMP_LEFT=1`
