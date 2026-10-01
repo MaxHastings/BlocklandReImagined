@@ -6,14 +6,17 @@ with the authors the credits name and the sha256 of each copy pinned for
 bundling. Their files never enter this public repository. This tool finds
 Maxwell's own copies, imports each with Import Add-On (bri-import-addon, which
 applies the port crates/addon-import/ports/ports.json lists for it), credits
-its authors and packs the result into one private zip. Every release
+its authors and packs the result into one private zip. The Windows release
 workflow downloads that zip from a draft release, the way it gets the
-generated v20 content (tools/ci_content.py, docs/release-builds.md).
+generated v20 content (tools/ci_content.py, docs/release-builds.md); the
+Mac and Linux ones take the originals back out of that Windows release,
+as they take its base game, so every platform ships the same ones.
 
     python tools/addon_bundle.py find    [--search DIR]...  where each original is, its sha256 and port
     python tools/addon_bundle.py build   [--search DIR]... [--v20 DIR] [--importer EXE] [--content-root DIR] [--missing-ok]
     python tools/addon_bundle.py upload  [build options]    build, then replace the draft release's zip
     python tools/addon_bundle.py fetch                      (CI) download and unpack it into dist/addon-bundle
+    python tools/addon_bundle.py from-release RELEASE_DIR   (CI) take it back out of an unpacked Windows release
     python tools/addon_bundle.py install [--content DIR]    put the bundle into a checkout's content/addons
     python tools/addon_bundle.py sources [--bundle DIR]     (packagers) every default Add-On's folder, as JSON
     python tools/addon_bundle.py verify-release CONTENT_DIR --credits FILE   (packagers) check a release
@@ -49,6 +52,7 @@ import zipfile
 REPO = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / 'tools'))
 import ci_content  # noqa: E402
+import content_packs  # noqa: E402
 
 LIST_SCHEMA = 2
 BUNDLE_SCHEMA = 1
@@ -190,8 +194,10 @@ def installed_content(args):
     """The game content the originals are imported against, as a player's
     Import passes it (--installed): a release's base datablocks."""
     content = args.content_root.resolve()
-    if not (content / 'packages.json').is_file():
-        fail(f'No generated game content at {content}: run python tools/bootstrap.py first or pass --content-root.')
+    missing = content_packs.missing_base_packs(content, args.repo)
+    if missing:
+        fail(f"No generated game content at {content} (it lacks {', '.join(missing)}): "
+             'run python tools/bootstrap.py first or pass --content-root.')
     return content
 
 
@@ -515,10 +521,56 @@ def fetch(args):
     print(f"Unpacked {len(bundled)} originals (built at commit {info.get('built_at_commit') or 'unknown'}).")
 
 
+def from_release(args):
+    """The bundle a published release carries, taken back out of it: each
+    shipping original from its content/addons/<id> and its CREDITS.md. The
+    Mac and Linux release builds take it from the Windows zip they already
+    take the base game's packs from, so every platform ships the same
+    credited originals."""
+    root = args.content.resolve()
+    content = root / 'content'
+    if not content.is_dir():
+        fail(f'{root} is not an unpacked release: it has no content folder.')
+    out = args.bundle.resolve()
+    work = out.with_name(out.name + '.taking')
+    shutil.rmtree(work, ignore_errors=True)
+    (work / 'addons').mkdir(parents=True)
+    ports = ports_by_addon(args.repo)
+    entries = []
+    for addon in read_list(args.repo):
+        if 'original' not in addon or not ships(addon):
+            continue
+        original = addon['original']
+        source = content / 'addons' / addon['id']
+        bad = problems(source, addon)
+        if bad:
+            fail(f"The release at {root} lacks a whole {original['addon']}: {'; '.join(bad)}")
+        shutil.copytree(source, work / 'addons' / addon['id'])
+        manifest = json.loads((source / 'package.json').read_text(encoding='utf-8'))
+        port = ports.get(original['addon'].lower())
+        entries.append({'id': addon['id'], 'addon': original['addon'], 'title': original['title'],
+                        'authors': original['authors'], 'version': original['version'],
+                        'sha256': pinned_sha(manifest), 'port': port['port'] if port else None,
+                        'enabled': addon.get('enabled', True)})
+    if entries:
+        credits = root / CREDITS
+        if not credits.is_file():
+            fail(f'The release at {root} carries originals but no {CREDITS}.')
+        shutil.copyfile(credits, work / CREDITS)
+    (work / 'bundle.json').write_text(json.dumps({
+        'schema_version': BUNDLE_SCHEMA, 'taken_from_release': root.name, 'addons': entries}, indent=2) + '\n',
+        encoding='utf-8')
+    shutil.rmtree(out, ignore_errors=True)
+    work.rename(out)
+    print(f'Took {len(entries)} originals and their credits from {root} into {out}.')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('command', choices=['find', 'build', 'upload', 'fetch', 'install', 'sources', 'verify-release'])
-    parser.add_argument('content', nargs='?', type=pathlib.Path, help='verify-release: the release content folder')
+    parser.add_argument('command', choices=['find', 'build', 'upload', 'fetch', 'from-release', 'install', 'sources',
+                                            'verify-release'])
+    parser.add_argument('content', nargs='?', type=pathlib.Path,
+                        help='verify-release: the release content folder; from-release: the unpacked release')
     parser.add_argument('--search', type=pathlib.Path, action='append', default=[], help='a folder of Add-Ons')
     parser.add_argument('--v20', type=pathlib.Path)
     parser.add_argument('--core', type=pathlib.Path, action='append')
@@ -550,6 +602,10 @@ def main():
                           'Refresh it with python tools/addon_bundle.py upload (docs/release-builds.md).')
     elif args.command == 'fetch':
         fetch(args)
+    elif args.command == 'from-release':
+        if args.content is None:
+            fail('from-release needs the unpacked release folder.')
+        from_release(args)
     elif args.command == 'install':
         args.content = args.content_root
         install(args)

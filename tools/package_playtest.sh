@@ -56,6 +56,7 @@ env = os.environ
 repo = pathlib.Path(env['BRI_REPO'])
 sys.path.insert(0, str(repo / 'tools'))
 import addon_bundle  # noqa: E402
+import content_packs  # noqa: E402
 bundle = pathlib.Path(env['BRI_ADDON_BUNDLE']).resolve()
 without_originals = env['BRI_WITHOUT_ORIGINALS'] == '1'
 FIELDS = ['map_bundle', 'brick_catalog', 'geometry', 'effects', 'worlds', 'ui_pack', 'brick_materials', 'avatar',
@@ -90,9 +91,8 @@ def read_list(path):
 
 
 def effective_packages():
-    """content/packages.json when present, otherwise the base game's list."""
-    override = repo / 'content/packages.json'
-    path = override if override.is_file() else repo / 'crates/package/base-packages.json'
+    """The packs content/ loads (content_packs.package_list)."""
+    path, _, _ = content_packs.package_list(repo / 'content', repo)
     listing = read_list(path)
     roles = set()
     for package in listing['packages']:

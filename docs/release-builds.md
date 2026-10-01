@@ -118,11 +118,14 @@ into its `package.json` (the Add-Ons screen shows them); and packs
 would lack it (`--allow-unpinned` releases without it).
 
 The draft release is `addon-bundle`, like `ci-content`: visible only to people
-who can push and to the workflows. The Windows, Mac and Linux release
-workflows each run `python tools/addon_bundle.py fetch` and the packagers
-copy the originals into `content/addons/<id>` and `CREDITS.md` beside the
-docs. Upload before starting the Windows release and not again until the
-Mac and Linux zips are attached, so all three carry the same bundle.
+who can push and to the workflows. The Windows release workflow runs
+`python tools/addon_bundle.py fetch`, and its packager copies the originals
+into `content/addons/<id>` and `CREDITS.md` beside the docs. The Mac and
+Linux workflows already take the base game from that release's Windows zip
+(checked against its `MANIFEST.json`); they take the originals and
+`CREDITS.md` from it too (`python tools/addon_bundle.py from-release`), so
+every platform ships the same credited originals whenever the draft was
+last uploaded.
 
 - **Pin an original:** run `find`, check the copy it names is the one to
   credit, and add its sha256 to the entry's `sha256`.

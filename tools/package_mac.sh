@@ -109,14 +109,13 @@ import json, pathlib, sys
 repo, stress_lab = pathlib.Path(sys.argv[1]), sys.argv[2] == '1'
 sys.path.insert(0, str(repo / 'tools'))
 import addon_bundle
+import content_packs
 fields = ['map_bundle', 'brick_catalog', 'geometry', 'effects', 'worlds', 'ui_pack',
           'brick_materials', 'avatar', 'effects_runtime', 'audio', 'weather', 'foliage',
           'weapons', 'item_presentation', 'weapon_debris', 'vehicles', 'events', 'tutorial']
 def fail(message):
     sys.exit(f'package_mac: {message}')
-override = repo / 'content/packages.json'
-source = override if override.is_file() else repo / 'crates/package/base-packages.json'
-listing = json.loads(source.read_text())
+source, listing, _ = content_packs.package_list(repo / 'content', repo)
 if listing.get('schema_version') != 1:
     fail(f'unsupported package list schema in {source}')
 # Only the base packs: the Add-Ons a checkout's game installed into its own

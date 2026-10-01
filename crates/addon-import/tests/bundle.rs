@@ -62,6 +62,12 @@ impl Checkout {
             root.join("crates/addon-import/ports/ports.json"),
         )
         .unwrap();
+        std::fs::create_dir_all(root.join("crates/package")).unwrap();
+        std::fs::copy(
+            repo().join("crates/package/base-packages.json"),
+            root.join("crates/package/base-packages.json"),
+        )
+        .unwrap();
         std::fs::create_dir_all(root.join("v20/base")).unwrap();
         std::fs::create_dir_all(root.join("v20/Add-Ons")).unwrap();
         std::fs::write(root.join("core.cs"), "").unwrap();
@@ -264,6 +270,53 @@ fn a_pinned_original_is_imported_with_its_port_credited_and_installed() {
         "{}",
         text(&missing)
     );
+
+    // The Mac and Linux builds take the same originals and credits back out
+    // of the Windows release: an unpacked one holding them gives a bundle
+    // the packagers accept, credits and all.
+    let release = checkout.root.join("release/BlocklandReImagined-test-windows");
+    copy_dir(&content.join("addons"), &release.join("content/addons"));
+    std::fs::copy(&credits_path, release.join("CREDITS.md")).unwrap();
+    let taken = checkout.root.join("taken");
+    let out = checkout.run(&[
+        "from-release",
+        release.to_str().unwrap(),
+        "--bundle",
+        taken.to_str().unwrap(),
+    ]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(
+        std::fs::read_to_string(taken.join("CREDITS.md")).unwrap(),
+        credits
+    );
+    assert_eq!(
+        read(&taken.join("addons/weapon_shotgun/package.json")),
+        read(&package.join("package.json"))
+    );
+    let sources = checkout.run(&["sources", "--bundle", taken.to_str().unwrap()]);
+    assert!(sources.status.success(), "{}", text(&sources));
+    // A release without its credits is refused.
+    std::fs::remove_file(release.join("CREDITS.md")).unwrap();
+    let refused = checkout.run(&[
+        "from-release",
+        release.to_str().unwrap(),
+        "--bundle",
+        taken.to_str().unwrap(),
+    ]);
+    assert!(!refused.status.success());
+    assert!(text(&refused).contains("no CREDITS.md"), "{}", text(&refused));
+}
+
+fn copy_dir(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_type().unwrap().is_dir() {
+            copy_dir(&entry.path(), &to.join(entry.file_name()));
+        } else {
+            std::fs::copy(entry.path(), to.join(entry.file_name())).unwrap();
+        }
+    }
 }
 
 #[test]

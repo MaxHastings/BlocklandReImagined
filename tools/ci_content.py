@@ -29,6 +29,9 @@ import urllib.error
 import urllib.request
 import zipfile
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import content_packs  # noqa: E402
+
 REPO = pathlib.Path(__file__).resolve().parent.parent
 TAG = 'ci-content'
 ASSET = 'ci-content.zip'
@@ -44,12 +47,10 @@ def fail(message):
 
 
 def package_dirs(content):
-    """The pack folders the game loads: content/packages.json when present,
-    otherwise the base game's list (the packager reads the same two)."""
-    override = content / 'packages.json'
-    listing = override if override.is_file() else REPO / 'crates/package/base-packages.json'
-    packages = json.loads(listing.read_text(encoding='utf-8'))['packages']
-    return [p['dir'] for p in packages], override.is_file()
+    """The pack folders the game loads (content_packs.package_list), and
+    whether content has its own list."""
+    _, listing, own = content_packs.package_list(content)
+    return [p['dir'] for p in listing['packages']], own
 
 
 def pack(content, out):
