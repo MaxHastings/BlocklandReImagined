@@ -445,7 +445,7 @@ mod tests {
     }
 
     /// Our own default Add-Ons, as `install` copies them, in load order.
-    const OURS: [&str; 15] = [
+    const OURS: [&str; 12] = [
         "brick_mirror",
         "ragdoll",
         "brick_portal",
@@ -456,9 +456,6 @@ mod tests {
         "steel-ball",
         "steel-ball-fx",
         "blockhead_bot",
-        "trench-kit",
-        "trench",
-        "trench-hud",
         "fill-can-tool",
         "fill-can",
     ];

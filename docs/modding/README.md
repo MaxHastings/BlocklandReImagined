@@ -22,7 +22,7 @@ asked to trust when your Add-On runs code on their PC (section 8).
 | Effects drawn on every player's screen | [`gravity-gun-fx`](../../packages/showcase/gravity-gun-fx) | WebAssembly and WGSL shaders reading what the game shows (section 6) |
 | New bricks | a v20-style brick Add-On you import (section 7) | a brick catalog the importer writes |
 | A game mode in Start Game | [`stresslab-mode`](../../packages/stresslab/stresslab-mode) | a `mode` file naming Add-Ons and a map |
-| A team game on a world players dig into, with its own mini-game | [`trench-warfare`](../../packages/trench-warfare) | four Add-Ons: rules with a generated world, a tool, a HUD and a mode whose `minigame` block runs the game (section 6) |
+| A game mode on a world players dig into, with its own mini-game | [`crates/sim/tests/mode_and_voxels.rs`](../../crates/sim/tests/mode_and_voxels.rs) | rules with a generated world, a tool and a mode whose `minigame` block runs the game (section 6) |
 | Worlds, creatures, bodies, blocks | [`packages/stresslab`](../../packages/stresslab) | see section 6 |
 | A whole new game on top: bodies, scoped guns, creatures that shoot back, scoring | [`sample-commando`](../../packages/samples/sample-commando) and its four siblings | five Add-Ons: a weapon, a look with client code, rules, a HUD and a mode ([total-conversion.md](../audits/total-conversion.md)) |
 
@@ -119,12 +119,12 @@ refused. The engine calls:
 | `on_loadout(player)` | a player's items were set afresh (spawn, respawn, joining or leaving a minigame), when `"on_loadout": true`: the place to hand out your Add-On's items |
 | `on_spawn(player)` | a player comes to life (joining, respawning), after `on_loadout`, when `"on_spawn": true` |
 | `on_leave(player)` | a player leaves, while their state can still be read, when `"on_leave": true` |
-| `on_damage(victim, attacker, amount, info)` | before a player is hurt, when `"on_damage": true`: return the amount to take (0 prevents it) or `()` to leave it. `info` is `#{ kind, type, direct }`, `kind` being `weapon`, `fall`, `package` and so on |
+| `on_damage(victim, attacker, amount, info)` | before a player is hurt, when `"on_damage": true`: return the amount to take (0 prevents it) or `()` to leave it. `info` is `#{ kind, type, direct }`, `kind` being `weapon`, `fall`, `package` and so on, `type` the damage type's name without `$DamageType::`. A shot or blast also gives `region` (`"head"`, `"torso"` or `"legs"`, where it struck) and its point `x`, `y`, `z` |
 | `on_entity_damage(entity, attacker, amount, info)` | before one of your creatures is hurt by a shot, a blast or `explode`, when `"on_entity_damage": true`: answered like `on_damage` |
 | `on_entity_death(entity, killer, info)` | one of your creatures ran out of health, just before it is removed, when `"on_entity_death": true` |
 | `on_pickup(player, item, info)` | a living player touches an item of your Add-On (or one it depends on) lying in the world, before they pick it up, whether or not they have room, when `"on_pickup": true`: return `false` to leave it, `"take"` to use it up without giving it (a spawn brick's item then starts its respawn), or `()` for the usual pickup. `info` is `#{ drop, spawner, data }`: the dropped item's id or the spawn brick's, and what `on_drop` kept with it. Called as it happens, so keep it quick |
 | `on_drop(player, item, slot)` | a player drops a tool of your Add-On (or one it depends on), when `"on_drop": true`. What it returns (a number, a map such as `#{ rounds: 7 }`) is kept with the dropped item and handed to `on_pickup` as `info.data` |
-| `on_projectile_hit(hit)` | a projectile of your weapons (or a dependency's) struck something, delivered at the start of the next tick, when `"on_projectile_hit": true`. `hit` is `#{ projectile, by, kind, id, ref, x, y, z, nx, ny, nz, vx, vy, vz }`: `kind` is `player`, `vehicle`, `entity`, `brick` or `map`, `by` the shooter or `()` |
+| `on_projectile_hit(hit)` | a projectile of your weapons (or a dependency's) struck something, delivered at the start of the next tick, when `"on_projectile_hit": true`. `hit` is `#{ projectile, by, kind, id, ref, x, y, z, nx, ny, nz, vx, vy, vz }`: `kind` is `player`, `vehicle`, `entity`, `brick` or `map`, `by` the shooter or `()`; a player hit also has `region` |
 | `cmd_<name>(player, args...)` | a player sends a command listed in `commands` |
 
 `player` is the player's id: pass it straight to `tell`, `get_player` and
@@ -194,7 +194,8 @@ first thing a ray meets, now, as the script runs: a map with `kind`
 (`"player"`, `"vehicle"`, `"entity"`, `"brick"` or `"map"`), `id` (`()` for
 the map), `ref` (an object like `"player:3"`, for players, vehicles and
 entities), `x`, `y`, `z`, the surface normal `nx`, `ny`, `nz`, and
-`distance`; or `()` when it meets nothing. Rays reach up to 2000 units and
+`distance`, and for a player `region` (`"head"`, `"torso"` or `"legs"`);
+or `()` when it meets nothing. Rays reach up to 2000 units and
 a call casts at most 64. A fourth argument names a player whose body the
 ray passes through, usually the shooter: `raycast(eye, look, 200.0, p.id)`.
 Rays see the world as it was when the call began: a brick the same call
@@ -206,6 +207,14 @@ a player's shot should obey them. Give `damage` a type from your weapons
 pack (`"CommandoRifle"` or `"$DamageType::CommandoRifle"`) to use its kill
 message, vehicle scale and whether it is a direct hit, as a projectile of that
 type would; without one the damage is your Add-On's own.
+
+**Where a hit lands.** `hit_region(player, x, y, z)` names the part of a
+living player's body at a point: the top 15% of their box is the `"head"`,
+the next 30% the `"torso"`, the rest the `"legs"` (Torque's
+`getDamageLocation` with the player defaults v20 never changed); `()` for
+anyone else. The engine measures the same for `raycast`, `on_damage` and
+`on_projectile_hit`, so a headshot rule reads `info.region == "head"`
+instead of working it out.
 
 **Held images.** `mount_image(p, image)` puts another image of your
 weapons (or a dependency's) in the player's hand and keeps their tool
@@ -363,9 +372,9 @@ material)` puts a cube of one of the world's materials back (`world.edit`,
 out of the same share of 2,048 edits a second as `remove_brick`), and
 `can_place_voxel(x, y, z)` says whether it would fit now: inside the
 world, its chunk generated, and no brick, player or vehicle in the way.
-Dug and placed cubes are saved with the world. Trench Warfare's pick
-([`packages/trench-warfare/trench`](../../packages/trench-warfare/trench/trench.rhai))
-digs dirt into a player's bag and piles it back up this way.
+Dug and placed cubes are saved with the world. The spade in
+[`crates/sim/tests/mode_and_voxels.rs`](../../crates/sim/tests/mode_and_voxels.rs)
+digs dirt out and piles it back up this way.
 
 **Uniforms.** `set_avatar_colors(p, #{ torso: [0.8, 0.1, 0.1], rarm: [...] })`
 paints parts of a player's own look with the rule's colours (`player`),
@@ -435,6 +444,10 @@ Add-On that depends on the rule, as `sample-points-hud` depends on
   rule's command (`package` is the rule's id) with no arguments. The game
   refuses letters it already uses.
 - Colors are RGBA from 0 to 1.
+- `holding` (optional, up to 32) shows the panel only while the viewer
+  holds one of these: an Add-On id (any of its images) or an image id.
+  An ammo panel listing `["my-guns"]` appears with one of that Add-On's
+  guns out and nowhere else.
 
 ## 5. Weapons
 
@@ -450,17 +463,19 @@ PNG (up to 512 pixels a side), named without `.png` relative to
 `assets/icons/gravity_gun.png`. With neither, the item shows its first
 letter.
 
-An item or image `model` may also be your own model: a native model file
-(`*.shape.json`, the format of `bri_content::shape`: x right, y up, -z
-forward) relative to `assets/`, like the Trench Pick's
-`"model": "models/trench_pick.shape.json"`. Each material names a PNG
+An item, image or projectile `model` may also be your own model: a native
+model file (`*.shape.json`, the format of `bri_content::shape`: x right, y
+up, -z forward) relative to `assets/`, such as
+`"model": "models/pick.shape.json"`. Nodes `muzzlePoint` and
+`ejectPoint` say where a gun fires and throws its casings. Each material names a PNG
 beside the model (`pick_wood` draws `pick_wood.png`, up to 1,024 pixels a
 side), as a vehicle model's do. A node called `mountPoint` is where the hand
 holds it. A `detail9999` detail is what the holder sees in first person
 and the lower details what everyone else sees, so an image state's
 `sequence` (the pick's `"fire"`) can swing the first-person copy alone.
-Its box is its bounds for dropping. `tools/make_trench_assets.py` writes the
-pick's; `bri-addon-check` names a model or texture it cannot find.
+Its box is its bounds for dropping; `bri-addon-check` names a model or
+texture it cannot find. `bri-client`'s `own_model_tool` test fixture writes a
+small example.
 
 An icon can instead be drawn from the item's own model on each player's
 machine, so it matches the stock icons without shipping a picture of
@@ -511,14 +526,18 @@ is a plain scoped rifle: raise it, fire, let go, fire again.
 Shots hit players, vehicles, bricks and Add-On creatures. A creature's
 own rule decides what the hit does (`on_entity_damage`).
 
+An image with a projectile and an `onfire` command (in `commands.states`)
+does both: the round flies and the command runs, as a v20 gun's `onFire`
+that called `Parent::onFire` did. That is how a rule counts a magazine.
+
 A tool rather than a gun: give its image `"command": "your-rule:command"`
 and no projectile. Its `onFire` state then runs that command of your rule
 Add-On for the holder, with `aim()` resolved where they look (declare
 `aim_reach` on the command). The Duplicator's `duplicator-tool` does this.
 A state's `"arm"` swings the holder's arm as the image enters it
 (`"armattack"` to strike, `"root"` to rest); v20 chose the swing from the
-image's name in script, so give your own tools this instead. Trench
-Warfare's pick swings on `PreFire` and rests on `StopFire`.
+image's name in script, so give your own tools this instead, for example
+a swing on `PreFire` and a rest on `StopFire`.
 
 More moments can run commands through the image's `commands`:
 
@@ -660,7 +679,7 @@ visuals depending on the rules. `bri-addon-check` tells you which it is.
 | `world` | host | a generated chunk world: materials, a `generate(cx, cz)` function | `packages/stresslab/stresslab-world` |
 | `entity` | host | a scripted creature: model, `think` function, speed, health | `packages/stresslab/stresslab-creeper` |
 | `archetype` | host | a playable body: movement, collision `box` or `ball`, steering, health, riding, model, camera distance | `crates/sim/tests/unlike_modes.rs` |
-| `mode` | host | a Start Game game mode: name, the Add-Ons it runs, a map, and its own mini-game | `packages/stresslab/stresslab-mode`, `packages/trench-warfare/trench-mode` |
+| `mode` | host | a Start Game game mode: name, the Add-Ons it runs, a map, and its own mini-game | `packages/stresslab/stresslab-mode`, `crates/sim/tests/mode_and_voxels.rs` |
 | `model` | each player | a box model for an entity | `packages/stresslab/stresslab-creeper-model` |
 | `hud` | each player | a HUD panel (section 4) | `packages/samples/sample-points-hud` |
 | `weapons` | everyone | weapons (section 5) | `packages/samples/sample-bubble-blaster` |
@@ -678,8 +697,8 @@ world's own bricks, so its brick damage reaches them.
 
 ```json
 "minigame": {
-  "title": "Trench Warfare",
-  "loadout": ["trench-kit:weapon/pick", "v20.weapon.gunitem"],
+  "title": "Dig Off",
+  "loadout": ["dig-kit:weapon/spade", "v20.weapon.gunitem"],
   "player_type": "v20.player.playernojet",
   "respawn_seconds": 5,
   "brick_respawn_seconds": 30,
@@ -701,7 +720,7 @@ world's own bricks, so its brick damage reaches them.
 
 Teams are not a mini-game setting (v20 had none): a rule keeps each
 player's team in a state key, refuses friendly fire in `on_damage` and
-dresses teams with `set_avatar_colors`, as Trench Warfare does.
+dresses teams with `set_avatar_colors`.
 
 An archetype's `model` may be a package model, a v20 shape, or `"none"`
 for no drawn body (client code can then draw its own). Package models draw
@@ -881,8 +900,15 @@ is imported as `proprietary`; for your own work, set `license` in the new
 `package.json`. From a checkout the same importer runs as:
 
 ```sh
-cargo run -p bri-addon-import --bin bri-import-addon -- Weapon_Example.zip out/weapon_example
+cargo run -p bri-addon-import --bin bri-import-addon -- Weapon_Example.zip out/weapon_example --installed content
 ```
+
+`--installed` names the game's content folder. An Add-On builds on the base
+game: a dirt brick declared `brick1x1DirtData : brick1x1Data` inherits the
+stock 1x1's icon and fields, an image names `weaponSwitchSound`. The
+importer reads those base datablocks' names and fields from the installed
+game's brick catalog, weapons, sounds and effects (Import in the Add-Ons
+screen always passes it); without it they are unknown and the report says so.
 
 Many v20 Add-Ons keep part of what they do in scripts: a shotgun's spread,
 a slash command. The report lists each such function under **Needs
@@ -940,7 +966,18 @@ server.cs         datablock fxDTSBrickData(brickMirror1x4x5Data : brick4x1x5wind
                       reflectionFaces = "north south";
                       reflectionDepth = 0.5;
                   };
+                  datablock fxDTSBrickData(brickMirror1x14x10Data : brickMirror1x4x5Data)
+                  {
+                      uiName = "1x14x10 Mirror";
+                      stretchSize = "14 1 30";
+                  };
 ```
+
+`stretchSize = "width depth height"` (studs, studs, plates) makes another
+size of the shape, as a nine-slice picture stretches: the frame, sill and
+stud edges keep their size and the middle grows. Its mirror, collision,
+portal openings and pairing all follow the new size, so a 1x14x10 Mirror
+is the same window brick, big.
 
 The mirror spans the whole side and the window's frame, drawn in front of
 it, hides its edges; the window's see-through glass is not drawn.
@@ -984,6 +1021,11 @@ server.cs         datablock fxDTSBrickData(brickPortal1x4x5Data : brick4x1x5wind
                       linkPass = 1;
                       linkFrame = "0.05 0.05 0.2";
                   };
+                  datablock fxDTSBrickData(brickPortal1x14x10Data : brickPortal1x4x5Data)
+                  {
+                      uiName = "1x14x10 Portal";
+                      stretchSize = "14 1 30";
+                  };
 ```
 
 Two bricks of one kind, placed by one player, with the same brick **Name**
@@ -1007,6 +1049,22 @@ decides who goes through.
 | `linkIdle` | Colour a linked side shows when its view is not drawn live | `"0.35 0.42 0.55"` |
 | `linkPass` | Whether things pass through; the brick's collision becomes a frame around each opening | 0 |
 | `linkFrame` | Width of that frame, in world units: one number for every edge, or `"sides top bottom"` (the bottom is a sill bodies step over) | 0 |
+
+The Add-On also has a 1x14x10 (6.9 by 5.75 inside: a tank or a jeep
+drives through with room to spare) and a 1x20x12 (the Stunt Plane, wings
+and all). Each size of portal is its own kind, so a 1x4x5 never pairs
+with a 1x14x10 of the same name. A big one costs no more to draw than a small one
+the same size on screen: each view is drawn only over the part of the
+screen its opening covers.
+
+**Another size of a brick (`stretchSize`).** Any brick can be its
+`brickFile`'s shape at another size, `"width depth height"` in studs,
+studs and plates. Half a stud of every edge keeps its size and moves out
+with the edge while the middle stretches, as a nine-slice picture does:
+a window's frame stays as thin round a bigger pane, studs on top stay one
+stud each (there are more of them), and the brick's attachment grid and
+collision boxes grow to match. A shape with no collision boxes of its
+own (and no `linkPass` frame) needs the Add-On to give it collision.
 
 Views share the mirrors' **Options > Graphics > Mirrors** budget, and a
 portal seen through a portal repeats what it last showed, like facing

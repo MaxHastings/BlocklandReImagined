@@ -38,6 +38,8 @@ pub struct Work {
     pub source: PathBuf,
     pub reference: Option<PathBuf>,
     pub core: Vec<PathBuf>,
+    #[serde(default)]
+    pub installed: Option<PathBuf>,
 }
 
 /// `port/checks.json`: what v20 does, stated from the v20 script.
@@ -117,6 +119,7 @@ pub fn scaffold(
     dir: &Path,
     reference: Option<PathBuf>,
     core: Vec<PathBuf>,
+    installed: Option<PathBuf>,
 ) -> Result<Scaffold> {
     ensure!(
         !dir.exists(),
@@ -127,6 +130,7 @@ pub fn scaffold(
         .canonicalize()
         .with_context(|| format!("{} not found", input.display()))?;
     let reference = reference.map(|r| r.canonicalize()).transpose()?;
+    let installed = installed.map(|r| r.canonicalize()).transpose()?;
     let core = core
         .iter()
         .map(|c| c.canonicalize())
@@ -139,6 +143,7 @@ pub fn scaffold(
             out: imported.clone(),
             reference: reference.clone(),
             core: core.clone(),
+            installed: installed.clone(),
             version: "1.0.0".into(),
         },
         &Ports::empty(),
@@ -339,6 +344,7 @@ pub fn scaffold(
             source: input,
             reference,
             core,
+            installed,
         })?,
     )?;
     let listed = Ports::builtin()
@@ -501,6 +507,7 @@ pub fn check(dir: &Path) -> Result<CheckOutcome> {
             out: out.clone(),
             reference: work.reference,
             core: work.core,
+            installed: work.installed,
             version: "1.0.0".into(),
         },
         &ports,

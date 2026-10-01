@@ -380,6 +380,7 @@ proptest! {
             out: out.clone(),
             reference: None,
             core: vec![],
+            installed: None,
             version: "1.0.0".into(),
         });
         if imported.is_ok()
@@ -411,6 +412,7 @@ fn the_undamaged_blaster_imports_and_fires() {
         out: out.clone(),
         reference: None,
         core: vec![],
+        installed: None,
         version: "1.0.0".into(),
     })
     .unwrap();

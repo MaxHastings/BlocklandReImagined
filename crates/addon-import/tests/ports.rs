@@ -27,6 +27,7 @@ fn options(input: PathBuf, out: PathBuf) -> Options {
         out,
         reference: None,
         core: vec![],
+        installed: None,
         version: "1.0.0".into(),
     }
 }
@@ -322,7 +323,7 @@ fn ported_shotgun_recoils_the_shooter_in_a_hosted_game() {
 fn port_command_drafts_a_spread_weapon_and_check_port_verifies_it() {
     let dir = fresh("scaffold");
     let work = dir.join("work");
-    let s = porting::scaffold(&fixture("ports/Weapon_Shotgun"), &work, None, vec![]).unwrap();
+    let s = porting::scaffold(&fixture("ports/Weapon_Shotgun"), &work, None, vec![], None).unwrap();
     assert_eq!(s.drafted, ["shotgunImage::onFire"]);
     assert!(s.to_port.is_empty());
     assert_eq!(s.listed.as_deref(), Some("weapon_shotgun (verified)"));
@@ -386,7 +387,7 @@ fn port_command_drafts_a_spread_weapon_and_check_port_verifies_it() {
 fn hand_ports_start_from_stubs_and_check_as_partial() {
     let dir = fresh("hand");
     let work = dir.join("work");
-    let s = porting::scaffold(&fixture("Weapon_Synthetic_Blaster"), &work, None, vec![]).unwrap();
+    let s = porting::scaffold(&fixture("Weapon_Synthetic_Blaster"), &work, None, vec![], None).unwrap();
     assert!(s.drafted.is_empty());
     assert!(s.to_port.iter().any(|f| f == "blasterImage::onFire"));
     let stubs = std::fs::read_to_string(work.join("stubs.rhai")).unwrap();

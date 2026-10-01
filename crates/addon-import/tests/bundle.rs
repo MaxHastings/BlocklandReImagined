@@ -42,7 +42,8 @@ fn read(path: &Path) -> Value {
 }
 
 /// A stand-in checkout: the default list given, the real ports list, a
-/// v20 folder with nothing in it and an empty core script.
+/// v20 folder with nothing in it, an empty core script and generated game
+/// content with no packs (what the imports are run against).
 struct Checkout {
     root: PathBuf,
 }
@@ -64,6 +65,12 @@ impl Checkout {
         std::fs::create_dir_all(root.join("v20/base")).unwrap();
         std::fs::create_dir_all(root.join("v20/Add-Ons")).unwrap();
         std::fs::write(root.join("core.cs"), "").unwrap();
+        std::fs::create_dir_all(root.join("game")).unwrap();
+        std::fs::write(
+            root.join("game/packages.json"),
+            r#"{ "schema_version": 1, "packages": [] }"#,
+        )
+        .unwrap();
         Self { root }
     }
     fn run(&self, args: &[&str]) -> Output {
@@ -87,6 +94,8 @@ impl Checkout {
                 env!("CARGO_BIN_EXE_bri-import-addon"),
                 "--out",
                 &format!("{root}/bundle"),
+                "--content-root",
+                &format!("{root}/game"),
             ]);
         }
         command.output().unwrap()
@@ -116,6 +125,7 @@ fn shotgun_sha() -> String {
         out: out.clone(),
         reference: None,
         core: vec![],
+        installed: None,
         version: "1.0.0".into(),
     })
     .unwrap();
@@ -293,4 +303,15 @@ fn find_names_each_copy_its_hash_and_whether_its_port_applies() {
         log.contains("port weapon_shotgun (verified): applied"),
         "{log}"
     );
+}
+
+#[test]
+fn originals_are_imported_against_the_generated_game_content() {
+    let checkout = Checkout::new("no-content", json!([shotgun(&[&shotgun_sha()], json!({}))]));
+    std::fs::remove_dir_all(checkout.root.join("game")).unwrap();
+    let built = checkout.run(&["build"]);
+    let log = text(&built);
+    assert!(!built.status.success(), "{log}");
+    assert!(log.contains("No generated game content at"), "{log}");
+    assert!(!checkout.root.join("bundle/addons").exists());
 }

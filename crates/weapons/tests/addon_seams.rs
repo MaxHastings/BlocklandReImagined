@@ -1,5 +1,6 @@
 //! Seams Add-On weapons lean on: magazines (`set_ammo` per mounted image),
-//! taking a tool back, pickup-only items and the cancel key's command.
+//! taking a tool back, pickup-only items, the cancel key's command and a
+//! state's arm animation.
 //! The pack is written here; it is our own.
 use bri_weapons::*;
 use glam::Vec3;
@@ -209,4 +210,100 @@ fn an_images_casing_reads_its_debris_and_shell_fields() {
     assert_eq!(rifle.exit_direction, [1.0, 1.0, 0.0]);
     assert_eq!((rifle.velocity, rifle.exit_variance), (1.0, 20.0));
     assert!(!casings.contains_key("kit:image/plain"));
+}
+
+#[test]
+fn a_states_arm_plays_on_the_holders_arm_thread() {
+    let json = format!(
+        r#"{{ "schema_version": {SCHEMA}, "id": "kit",
+            "items": {{ "kit:weapon/pick": {{ "ui_name": "Pick", "image": "kit:image/pick" }} }},
+            "images": {{ "kit:image/pick": {{ "states": [
+                {{ "name": "Activate", "ticks": 2, "timeout": 1 }},
+                {{ "name": "Ready", "down": 2 }},
+                {{ "name": "Swing", "ticks": 3, "timeout": 3, "arm": "armattack" }},
+                {{ "name": "Done", "ticks": 3, "timeout": 1, "arm": "root" }}
+            ] }} }} }}"#
+    );
+    let mut w = WeaponsWorld::new(Pack::from_json(json.as_bytes()).unwrap()).unwrap();
+    w.add_actor(A, 5).unwrap();
+    let pick = w.give(A, "kit:weapon/pick").unwrap();
+    w.equip(A, Some(pick)).unwrap();
+    step(&mut w, 10);
+    w.trigger(A, true).unwrap();
+    let arms: Vec<String> = (0..12)
+        .flat_map(|_| w.step(&mut Open))
+        .filter_map(|e| match e {
+            Event::Animation {
+                actor: A,
+                thread: 2,
+                sequence,
+                image_hand: None,
+            } => Some(sequence),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(arms[..2], ["armattack", "root"], "{arms:?}");
+}
+
+/// A gun whose `onFire` runs a rule command (a magazine counting rounds)
+/// still fires its projectile, once per shot, as v20's
+/// `Parent::onFire` did; a tool with no projectile only runs the command.
+#[test]
+fn an_on_fire_command_counts_the_shot_and_the_round_still_flies() {
+    let json = format!(
+        r#"{{
+            "schema_version": {SCHEMA},
+            "id": "kit",
+            "items": {{
+                "kit:weapon/rifle": {{ "ui_name": "Rifle", "image": "kit:image/rifle" }},
+                "kit:weapon/tool": {{ "ui_name": "Tool", "image": "kit:image/tool" }}
+            }},
+            "images": {{
+                "kit:image/rifle": {{
+                    "projectile": "kit:projectile/round",
+                    "commands": {{ "states": {{ "onfire": "kit:fired" }} }},
+                    "states": [
+                        {{ "name": "Activate", "ticks": 2, "timeout": 1 }},
+                        {{ "name": "Ready", "down": 2 }},
+                        {{ "name": "Fire", "ticks": 10, "script": "onFire", "timeout": 3 }},
+                        {{ "name": "Hold", "up": 1 }}
+                    ]
+                }},
+                "kit:image/tool": {{
+                    "commands": {{ "states": {{ "onfire": "kit:use" }} }},
+                    "states": [
+                        {{ "name": "Activate", "ticks": 2, "timeout": 1 }},
+                        {{ "name": "Ready", "down": 2 }},
+                        {{ "name": "Fire", "ticks": 10, "script": "onFire", "timeout": 3 }},
+                        {{ "name": "Hold", "up": 1 }}
+                    ]
+                }}
+            }},
+            "projectiles": {{
+                "kit:projectile/round": {{ "speed": 100.0, "lifetime_ticks": 240, "fade_ticks": 240 }}
+            }}
+        }}"#
+    );
+    let mut w = WeaponsWorld::new(Pack::from_json(json.as_bytes()).unwrap()).unwrap();
+    w.add_actor(A, 5).unwrap();
+    for (item, command, rounds) in [("kit:weapon/rifle", "kit:fired", 1), ("kit:weapon/tool", "kit:use", 0)] {
+        let slot = w.give(A, item).unwrap();
+        w.equip(A, Some(slot)).unwrap();
+        step(&mut w, 10);
+        let before = w.projectiles().count();
+        w.trigger(A, true).unwrap();
+        let mut commands = 0;
+        for _ in 0..8 {
+            commands += w
+                .step(&mut Open)
+                .iter()
+                .filter(|e| matches!(e, Event::ToolFire { command: Some(c), .. } if c == command))
+                .count();
+        }
+        w.trigger(A, false).unwrap();
+        step(&mut w, 20);
+        assert_eq!(commands, 1, "{item}: the command runs once a shot");
+        assert_eq!(w.projectiles().count() - before, rounds, "{item}: rounds in flight");
+        w.take_item(A, item).unwrap();
+    }
 }

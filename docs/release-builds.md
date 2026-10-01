@@ -108,7 +108,9 @@ python tools/addon_bundle.py upload    # build the bundle, then put it on the ad
 `build` (which `upload` runs) searches Steam's
 `S:\SteamLibrary\steamapps\common\Blockland\Add-Ons`, the v20 install's
 `Add-Ons`, Maxwell's archive and any `--search` folder; imports the pinned
-copy of each original with `bri-import-addon` against the v20 install;
+copy of each original with `bri-import-addon` against the v20 install
+and, as a player's Import does, the game's generated content
+(`--installed`; `--content-root`, default `content/`);
 refuses one whose listed port does not apply; writes the credited authors
 into its `package.json` (the Add-Ons screen shows them); and packs
 `addons/<id>/`, `bundle.json` and `CREDITS.md` into `dist/addon-bundle.zip`.

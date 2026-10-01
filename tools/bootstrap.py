@@ -132,7 +132,8 @@ def install_originals(v20, content):
     machine without them still gets a working game, without those Add-Ons."""
     tool = REPO / 'tools' / 'addon_bundle.py'
     bundle = REPO / 'dist' / 'addon-bundle'
-    built = subprocess.run([sys.executable, str(tool), 'build', '--v20', str(v20), '--missing-ok', '--out', str(bundle)])
+    built = subprocess.run([sys.executable, str(tool), 'build', '--v20', str(v20), '--missing-ok', '--out', str(bundle),
+                            '--content-root', str(content)])
     if built.returncode != 0:
         print('Warning: the bundled original Add-Ons could not be built; the game runs without them.')
         return

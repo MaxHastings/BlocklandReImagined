@@ -11,7 +11,7 @@ workflow downloads that zip from a draft release, the way it gets the
 generated v20 content (tools/ci_content.py, docs/release-builds.md).
 
     python tools/addon_bundle.py find    [--search DIR]...  where each original is, its sha256 and port
-    python tools/addon_bundle.py build   [--search DIR]... [--v20 DIR] [--importer EXE] [--missing-ok]
+    python tools/addon_bundle.py build   [--search DIR]... [--v20 DIR] [--importer EXE] [--content-root DIR] [--missing-ok]
     python tools/addon_bundle.py upload  [build options]    build, then replace the draft release's zip
     python tools/addon_bundle.py fetch                      (CI) download and unpack it into dist/addon-bundle
     python tools/addon_bundle.py install [--content DIR]    put the bundle into a checkout's content/addons
@@ -21,6 +21,11 @@ generated v20 content (tools/ci_content.py, docs/release-builds.md).
 Searched, in order: every --search folder, $BRI_ADDON_SEARCH (folders split
 like PATH), Blockland on Steam's Add-Ons, the v20 install's Add-Ons and
 Maxwell's archive; each folder and the folders directly inside it.
+
+Each copy is imported the way the Add-Ons screen's Import does it for a
+player: against the game's installed content (--content-root, default the
+checkout's content/, which tools/bootstrap.py generates), so base datablocks
+an original inherits from or names resolve as they will in a release.
 
 An original with no pinned copy yet is left out of the bundle and of every
 release, and `upload` refuses to run until each is pinned (or
@@ -181,10 +186,19 @@ def importer_path(arg):
     return importer.resolve()
 
 
-def import_copy(importer, source, out, version, v20, core):
+def installed_content(args):
+    """The game content the originals are imported against, as a player's
+    Import passes it (--installed): a release's base datablocks."""
+    content = args.content_root.resolve()
+    if not (content / 'packages.json').is_file():
+        fail(f'No generated game content at {content}: run python tools/bootstrap.py first or pass --content-root.')
+    return content
+
+
+def import_copy(importer, source, out, version, v20, core, installed):
     """Import one copy into out; its import report. Run beside the copy and
     name it bare, so the report records its name rather than a path on this PC."""
-    command = [str(importer), source.name, str(out), '--version', version]
+    command = [str(importer), source.name, str(out), '--version', version, '--installed', str(installed)]
     if v20:
         command += ['--reference', str(v20.resolve())]
     for script in core:
@@ -210,6 +224,7 @@ def find(args):
     importer = importer_path(args.importer)
     ports = ports_by_addon(args.repo)
     core = [c for c in (args.core or CORE) if c.is_file()]
+    installed = installed_content(args)
     with tempfile.TemporaryDirectory(prefix='bri-addon-find-') as work:
         for n, addon in enumerate(originals(read_list(args.repo))):
             original = addon['original']
@@ -221,7 +236,7 @@ def find(args):
                 close = [name for name in available if original['addon'].lower().split('_')[-1] in name]
                 print('  no copy found' + (f"; similar names: {', '.join(sorted(close)[:8])}" if close else ''))
             for m, copy in enumerate(copies):
-                report = import_copy(importer, copy, pathlib.Path(work) / f'{n}-{m}', original['version'], v20, core)
+                report = import_copy(importer, copy, pathlib.Path(work) / f'{n}-{m}', original['version'], v20, core, installed)
                 source = report['source']
                 pinned = 'pinned' if source['sha256'] in original['sha256'] else 'NOT pinned'
                 print(f"  {copy}\n    sha256 {source['sha256']} ({pinned})")
@@ -264,6 +279,7 @@ def build(args):
     missing = [c for c in core if not c.is_file()]
     if missing:
         fail(f'Missing core scripts {", ".join(map(str, missing))}; run python tools/bootstrap.py first or pass --core.')
+    installed = installed_content(args)
     roots = search_roots(args.search, v20)
     available = classic_addons(roots)
     importer = importer_path(args.importer)
@@ -290,7 +306,7 @@ def build(args):
         tried = []
         for n, copy in enumerate(copies):
             fresh = work / f".{addon['id']}-{n}"
-            report = import_copy(importer, copy, fresh, original['version'], v20, core)
+            report = import_copy(importer, copy, fresh, original['version'], v20, core, installed)
             sha = report['source']['sha256']
             if sha in original['sha256']:
                 chosen = (copy, fresh, report)
@@ -511,7 +527,7 @@ def main():
     parser.add_argument('--bundle', type=pathlib.Path, default=BUNDLE)
     parser.add_argument('--repo', type=pathlib.Path, default=REPO, help='the checkout whose packages/default-addons.json to use')
     parser.add_argument('--content-root', dest='content_root', type=pathlib.Path, default=REPO / 'content',
-                        help='install: the content folder')
+                        help='the game content: find and build import against it, install fills it')
     parser.add_argument('--credits', type=pathlib.Path, help='verify-release: the release credits file')
     parser.add_argument('--without-originals', action='store_true',
                         help='sources, verify-release: a build without the bundle (packaging tests)')
