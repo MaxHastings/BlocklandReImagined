@@ -588,7 +588,8 @@
         "version": "1.0.0",
         "sha256": [
           "a1ad64d8de4742a69bb9f78752ea54c50f0a63e6d6e8765e62e217ab4aac8f09"
-        ]
+        ],
+        "withdrawn": "no pinned copy on the release PC; returns in v0.1.12"
       }
     }
   ]
