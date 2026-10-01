@@ -276,6 +276,132 @@ pub fn follow_manifest_sides(root: &Path, set: &mut PackageSet) {
     }
 }
 
+/// Keep each listed Add-On's companions (an import's host rules) in step
+/// with it, whatever wrote the list: on right after it while it is on, off
+/// while it is not. A list written before an Add-On's companions were
+/// installed (a release that lacked them, an Import before its port had
+/// rules) gains them on the next load; one listing a companion whose Add-On
+/// is off loses it. A companion is found beside its Add-On, in the same
+/// folder, by its manifest's id; one not installed (the player deleted it)
+/// is left out, as [`Library::plan`] leaves it. Returns the ids turned on.
+pub fn follow_companions(root: &Path, set: &mut PackageSet) -> Vec<String> {
+    let mut beside = Beside::new(root);
+    let mut turned_on = Vec::new();
+    // Companions the listed Add-On at `i` names.
+    let named = |set: &PackageSet, i: usize| -> Vec<String> {
+        let entry = &set.packages[i];
+        if entry.role.is_some() {
+            return vec![];
+        }
+        read_info(&root.join(&entry.dir).join(MANIFEST_FILE))
+            .filter(|info| info.id == entry.id)
+            .map(|info| info.companions)
+            .unwrap_or_default()
+    };
+    let mut owned: BTreeSet<String> = BTreeSet::new();
+    let mut i = 0;
+    while i < set.packages.len() {
+        let mut at = i + 1;
+        for companion in named(set, i) {
+            owned.insert(companion.clone());
+            if let Some(j) = set.packages.iter().position(|p| p.id == companion) {
+                // Listed already: it loads after the Add-On it depends on.
+                if j < i {
+                    let entry = set.packages.remove(j);
+                    i -= 1;
+                    at -= 1;
+                    set.packages.insert(at, entry);
+                    at += 1;
+                } else {
+                    at = at.max(j + 1);
+                }
+                continue;
+            }
+            let Some(entry) = beside.entry(&set.packages[i].dir, &companion) else {
+                continue;
+            };
+            set.packages.insert(at, entry);
+            turned_on.push(companion);
+            at += 1;
+        }
+        i += 1;
+    }
+    // A companion listed on while the Add-On naming it is installed but not
+    // on goes off with it.
+    let orphans: BTreeSet<String> = set
+        .packages
+        .iter()
+        .filter(|p| p.role.is_none() && !owned.contains(&p.id))
+        .filter(|p| beside.owner(&p.dir, &p.id).is_some())
+        .map(|p| p.id.clone())
+        .collect();
+    set.packages.retain(|p| !orphans.contains(&p.id));
+    turned_on
+}
+
+/// The installed Add-Ons of each folder holding a listed one, each folder
+/// read once: where [`follow_companions`] finds companions and the Add-Ons
+/// naming them.
+struct Beside<'a> {
+    root: &'a Path,
+    folders: BTreeMap<PathBuf, Vec<(String, PackageInfo)>>,
+}
+
+impl<'a> Beside<'a> {
+    fn new(root: &'a Path) -> Self {
+        Self {
+            root,
+            folders: BTreeMap::new(),
+        }
+    }
+
+    /// The Add-Ons installed in the folder holding `dir`, by folder name.
+    fn folder(&mut self, dir: &str) -> &[(String, PackageInfo)] {
+        let folder = Path::new(dir)
+            .parent()
+            .unwrap_or(Path::new(""))
+            .to_path_buf();
+        let root = self.root;
+        self.folders.entry(folder).or_insert_with_key(|folder| {
+            std::fs::read_dir(root.join(folder))
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter_map(|e| {
+                    let name = e.file_name().into_string().ok()?;
+                    Some((name, read_info(&e.path().join(MANIFEST_FILE))?))
+                })
+                .collect()
+        })
+    }
+
+    /// The installed Add-On `id` beside `dir`, as a list entry.
+    fn entry(&mut self, dir: &str, id: &str) -> Option<PackageEntry> {
+        let (name, info) = self.folder(dir).iter().find(|(_, info)| info.id == id)?;
+        let folder = Path::new(dir).parent().unwrap_or(Path::new(""));
+        let dir = if folder.as_os_str().is_empty() {
+            name.clone()
+        } else {
+            format!("{}/{name}", folder.to_string_lossy().replace('\\', "/"))
+        };
+        Some(PackageEntry {
+            id: info.id.clone(),
+            version: info.version.clone(),
+            side: info.side()?,
+            dir,
+            role: None,
+        })
+    }
+
+    /// The installed Add-On beside `dir` that names `id` its companion.
+    fn owner(&mut self, dir: &str, id: &str) -> Option<String> {
+        self.folder(dir)
+            .iter()
+            .find(|(_, info)| info.companions.iter().any(|c| c == id))
+            .map(|(_, info)| info.id.clone())
+    }
+}
+
 /// Where players drop old Blockland add-on zips and folders, as in v20.
 pub const DROP_DIR: &str = "Add-Ons";
 /// Where importing one writes its package.
@@ -320,6 +446,12 @@ impl Library {
         let disabled = if disabled_path.exists() {
             let mut disabled = PackageSet::load(&disabled_path)?;
             follow_manifest_sides(root, &mut disabled);
+            // A companion its Add-On's list turned on is on, not off.
+            let mut beside = Beside::new(root);
+            disabled.packages.retain(|p| {
+                !enabled.packages.iter().any(|e| e.id == p.id)
+                    || beside.owner(&p.dir, &p.id).is_none()
+            });
             disabled
         } else {
             PackageSet {
@@ -1015,11 +1147,17 @@ pub fn add_on_label(dir: &Path, fallback: &str) -> String {
     } else {
         dir
     };
-    let manifest = std::fs::File::open(folder.join(MANIFEST_FILE)).ok().and_then(|file| {
-        let mut bytes = Vec::new();
-        std::io::Read::read_to_end(&mut std::io::Read::take(file, MAX_MANIFEST_BYTES), &mut bytes).ok()?;
-        serde_json::from_slice::<serde_json::Value>(&bytes).ok()
-    });
+    let manifest = std::fs::File::open(folder.join(MANIFEST_FILE))
+        .ok()
+        .and_then(|file| {
+            let mut bytes = Vec::new();
+            std::io::Read::read_to_end(
+                &mut std::io::Read::take(file, MAX_MANIFEST_BYTES),
+                &mut bytes,
+            )
+            .ok()?;
+            serde_json::from_slice::<serde_json::Value>(&bytes).ok()
+        });
     let field = |key: &str| {
         manifest
             .as_ref()
@@ -1028,9 +1166,12 @@ pub fn add_on_label(dir: &Path, fallback: &str) -> String {
             .filter(|s| !s.is_empty() && !s.chars().any(char::is_control))
             .map(str::to_owned)
     };
-    field("name")
-        .or_else(|| field("id"))
-        .unwrap_or_else(|| fallback.strip_suffix("/assets").unwrap_or(fallback).to_owned())
+    field("name").or_else(|| field("id")).unwrap_or_else(|| {
+        fallback
+            .strip_suffix("/assets")
+            .unwrap_or(fallback)
+            .to_owned()
+    })
 }
 
 #[cfg(test)]
@@ -1075,6 +1216,119 @@ mod tests {
     }
     fn ids(set: &PackageSet) -> Vec<&str> {
         set.packages.iter().map(|p| p.id.as_str()).collect()
+    }
+
+    /// Four imports with host rules beside them (made-up Add-Ons), as a
+    /// release's Import or bundle leaves them: `addons/<x>` naming its
+    /// companion, `addons/<x>-rules` depending on it.
+    fn imports_with_rules(root: &Path, names: &[&str]) {
+        for name in names {
+            manifest(
+                root,
+                &format!("addons/{name}"),
+                name,
+                json!({}),
+                &["weapons"],
+            );
+            let path = root.join("addons").join(name).join(MANIFEST_FILE);
+            let mut m: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            m["companions"] = json!([format!("{name}-rules")]);
+            std::fs::write(&path, m.to_string()).unwrap();
+            manifest(
+                root,
+                &format!("addons/{name}-rules"),
+                &format!("{name}-rules"),
+                json!({ *name: "=1.0.0" }),
+                &["behaviour"],
+            );
+        }
+    }
+
+    /// A list written without the host rules (a release that lacked them,
+    /// Add-Ons turned on before their rules were installed) loads every on
+    /// Add-On's rules right after it, whichever position it holds; one off
+    /// keeps its rules off; a list turning rules on without their Add-On
+    /// loses them; and turning one off in the game takes its rules with it.
+    #[test]
+    fn every_on_add_on_loads_its_companions_whatever_wrote_the_list() {
+        let r = root("companions");
+        imports_with_rules(
+            &r.0,
+            &["tool_alpha", "tool_beta", "tool_gamma", "tool_delta"],
+        );
+        let entry = |id: &str, side: &str| json!({ "id": id, "version": "1.0.0", "side": side, "dir": format!("addons/{id}") });
+        // On: alpha, beta and gamma (gamma's rules listed before it, delta's
+        // rules listed on without it); off: delta, and beta's rules.
+        list(
+            &r.0,
+            json!([
+                entry("tool_alpha", "shared"),
+                entry("tool_gamma-rules", "server"),
+                entry("tool_beta", "shared"),
+                entry("tool_gamma", "shared"),
+                entry("tool_delta-rules", "server"),
+            ]),
+        );
+        std::fs::write(
+            r.0.join(DISABLED_FILE),
+            json!({ "schema_version": 1, "packages": [
+                entry("tool_delta", "shared"), entry("tool_beta-rules", "server")
+            ] })
+            .to_string(),
+        )
+        .unwrap();
+        let set = PackageSet::load_root(&r.0).unwrap();
+        assert_eq!(
+            ids(&set),
+            [
+                "tool_alpha",
+                "tool_alpha-rules",
+                "tool_beta",
+                "tool_beta-rules",
+                "tool_gamma",
+                "tool_gamma-rules",
+            ]
+        );
+        assert!(set.validate().is_empty());
+        let rules = set
+            .packages
+            .iter()
+            .find(|p| p.id == "tool_beta-rules")
+            .unwrap();
+        assert_eq!(rules.dir, "addons/tool_beta-rules");
+        assert_eq!(rules.side, Side::Server);
+
+        // The Add-Ons screen agrees, with nothing listed twice, and turning
+        // beta off turns its rules off with it.
+        let mut library = Library::scan(&r.0).unwrap();
+        assert!(library.problems.is_empty(), "{:?}", library.problems);
+        for id in ["tool_alpha-rules", "tool_beta-rules", "tool_gamma-rules"] {
+            assert!(library.get(id).unwrap().enabled, "{id}");
+        }
+        for id in ["tool_delta", "tool_delta-rules"] {
+            assert!(!library.get(id).unwrap().enabled, "{id}");
+        }
+        let plan = library.plan("tool_beta", false);
+        assert_eq!(plan.also, ["tool_beta-rules"]);
+        library.apply(&plan).unwrap();
+        let set = PackageSet::load_root(&r.0).unwrap();
+        assert_eq!(
+            ids(&set),
+            [
+                "tool_alpha",
+                "tool_alpha-rules",
+                "tool_gamma",
+                "tool_gamma-rules"
+            ]
+        );
+        // And on again, with them.
+        let mut library = Library::scan(&r.0).unwrap();
+        let plan = library.plan("tool_delta", true);
+        assert_eq!(plan.also, ["tool_delta-rules"]);
+        library.apply(&plan).unwrap();
+        let set = PackageSet::load_root(&r.0).unwrap();
+        assert_eq!(&ids(&set)[4..], ["tool_delta", "tool_delta-rules"]);
     }
 
     /// A base package, three mods in a chain (hud → economy → world) and one
