@@ -85,10 +85,14 @@ impl Registry {
     pub(in crate::session) fn build(catalog: &bri_package_runtime::package::Catalog) -> Result<Self> {
         let mut out = Self::default();
         for (id, behaviour) in catalog.behaviours() {
-            let name = catalog
+            // A companion (an import's host rules) goes by the Add-On that
+            // names it, as players know it.
+            let owner = catalog
                 .packages
-                .get(id)
-                .map_or_else(|| id.clone(), |p| p.manifest.name.clone());
+                .values()
+                .find(|p| p.manifest.companions.iter().any(|c| c == id))
+                .or_else(|| catalog.packages.get(id));
+            let name = owner.map_or_else(|| id.clone(), |p| p.manifest.name.clone());
             for def in &behaviour.settings {
                 out.by_key.insert(format!("{id}:{}", def.key), out.list.len());
                 out.list.push(AddOnSetting {

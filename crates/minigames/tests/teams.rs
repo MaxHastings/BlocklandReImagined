@@ -317,3 +317,33 @@ fn a_held_respawn_waits_for_a_reset() {
     assert!(out.iter().any(|e| matches!(e, Effect::Spawn { player, .. } if *player == b)));
     assert!(!w.player(b).unwrap().respawn_held, "a reset lifts the hold");
 }
+
+#[test]
+fn a_round_ends_once_until_a_reset() {
+    let (mut w, game, [a, b, _], [red, _]) = red_blue();
+    let out = w.end_round(game, vec![red], vec![a]).unwrap();
+    assert_eq!(
+        out,
+        vec![Effect::RoundEnded {
+            game,
+            teams: vec![red],
+            players: vec![a]
+        }]
+    );
+    assert!(w.game(game).unwrap().round_over);
+    assert_eq!(w.end_round(game, vec![], vec![b]), Err(Error::RoundOver));
+    for _ in 0..600 {
+        w.step().unwrap();
+    }
+    w.execute(Command::Reset {
+        game,
+        authority: EventAuthority::System,
+    })
+    .unwrap();
+    assert!(!w.game(game).unwrap().round_over);
+    // Winners belong to the game.
+    assert_eq!(w.end_round(game, vec![TeamId(99)], vec![]), Err(Error::StaleTeam));
+    let outsider = connect(&mut w, 9);
+    assert_eq!(w.end_round(game, vec![], vec![outsider]), Err(Error::NotMember));
+    assert!(w.end_round(game, vec![], vec![]).is_ok(), "nobody won");
+}

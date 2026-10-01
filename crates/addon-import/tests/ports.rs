@@ -612,6 +612,32 @@ fn slayer_ports_apply_with_their_rules() {
     }
     let slayer = std::fs::read_to_string(root.join("addons/gamemode_slayer-rules/slayer.rhai")).unwrap();
     assert!(slayer.contains("\"gamemode_slayer:brick/brickslyrspawnpointdata\""));
+    // Settings at this copy's defaults, its game modes in the mode list.
+    let read = |path: &str| -> serde_json::Value {
+        serde_json::from_slice(&std::fs::read(root.join(path)).unwrap()).unwrap()
+    };
+    let setting = |b: &serde_json::Value, key: &str| -> serde_json::Value {
+        b["settings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["key"] == key)
+            .unwrap_or_else(|| panic!("no setting {key}"))
+            .clone()
+    };
+    let behaviour = read("addons/gamemode_slayer-rules/behaviour.json");
+    assert_eq!(setting(&behaviour, "time_between_rounds")["default"], 6);
+    assert_eq!(setting(&behaviour, "auto_sort")["default"], true);
+    assert_eq!(setting(&behaviour, "team_lives")["default"], -1);
+    let mode = setting(&behaviour, "mode");
+    assert_eq!(mode["default"], "Slayer_Deathmatch");
+    assert_eq!(
+        mode["items"],
+        serde_json::json!([
+            { "value": "Slayer_Deathmatch", "name": "Free for All" },
+            { "value": "Slayer_TeamDeathmatch", "name": "Teams" }
+        ])
+    );
 
     // This copy's numbers, read from its scripts.
     let ctf = root.join("addons/gamemode_slayer_ctf");
@@ -619,16 +645,26 @@ fn slayer_ports_apply_with_their_rules() {
     for line in [
         "fn flag_slot() { 2 }",
         "fn pickup_guard_ticks() { (250 * 120 + 999) / 1000 }",
-        "flagreturnstowin: 3,",
-        "points_flag: 25,",
-        "flagdroppedrespawntime: 7,",
         "let ahead = 1.5;",
         "let fling = 4;",
+        "setting(game, \"gamemode_slayer-rules:mode\") == ctf_mode()",
     ] {
         assert!(rules.contains(line), "ctf.rhai lacks `{line}`");
     }
-    let behaviour = std::fs::read_to_string(root.join("addons/gamemode_slayer_ctf-rules/behaviour.json")).unwrap();
-    assert!(behaviour.contains("\"period_ms\": 100"), "{behaviour}");
+    let behaviour = read("addons/gamemode_slayer_ctf-rules/behaviour.json");
+    assert_eq!(behaviour["zones"][0]["period_ms"], 100);
+    assert_eq!(setting(&behaviour, "flag_returns_to_win")["default"], 3);
+    assert_eq!(setting(&behaviour, "points_flag")["default"], 25);
+    assert_eq!(setting(&behaviour, "dropped_flag_respawn")["default"], 7);
+    assert_eq!(setting(&behaviour, "manual_flag_drop")["default"], true);
+    // Capture the Flag joins Slayer's modes, so its rules need Slayer's.
+    assert_eq!(
+        behaviour["setting_items"],
+        serde_json::json!([{ "setting": "gamemode_slayer-rules:mode",
+                             "items": [{ "value": "Slayer_CTF", "name": "Flag Game" }] }])
+    );
+    let manifest = read("addons/gamemode_slayer_ctf-rules/package.json");
+    assert_eq!(manifest["dependencies"]["gamemode_slayer-rules"], "*");
 
     // The flag item and image the original makes at run time, one of each,
     // taking the colour of their brick or carrier.

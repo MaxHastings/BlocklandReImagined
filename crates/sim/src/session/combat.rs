@@ -1312,6 +1312,7 @@ impl Session {
                 | mg::Effect::Reset { .. }
                 | mg::Effect::TeamsConfigured { .. }
                 | mg::Effect::AddOnSettings { .. }
+                | mg::Effect::RoundEnded { .. }
                 | mg::Effect::TeamChanged { .. } => {}
                 // `updatePlayerBalls`: members with empty hands get the ball.
                 mg::Effect::StartBall { player, image, .. } => {

@@ -187,6 +187,22 @@ pub enum Op {
     Broadcast {
         text: String,
     },
+    /// A chat line to every member of a mini-game (`MiniGameSO::messageAll`).
+    /// One line of the package's chat share, however many members;
+    /// `except` leaves one member out (`messageAllExcept`).
+    TellMinigame {
+        game: u64,
+        text: String,
+        except: Option<u64>,
+    },
+    /// A center or bottom print to every member of a mini-game
+    /// (`centerPrintAll`, `bottomPrintAll`): one print of the share.
+    PrintMinigame {
+        game: u64,
+        text: String,
+        seconds: f32,
+        bottom: bool,
+    },
     /// Copy the build at `brick` for `player` to place with `tool`: the
     /// brick and every brick joined to it that the player may build on,
     /// with `above_only` none below the brick. More than `limit` bricks is
@@ -452,6 +468,14 @@ pub enum Op {
     ResetMinigame {
         game: u64,
     },
+    /// End a mini-game's round (Slayer's `endRound`), won by these teams
+    /// and players, or by nobody. Every rule hears `on_minigame` with
+    /// `kind == "round_end"`; the round stays over until a reset.
+    EndRound {
+        game: u64,
+        teams: Vec<u64>,
+        players: Vec<u64>,
+    },
     /// Change an Add-On setting of a mini-game, or of one of its teams
     /// (`Slayer_MiniGameSO::setPref`): `key` is the package's own or
     /// `namespace:key`; `None` puts it back to its default.
@@ -531,6 +555,8 @@ pub struct TeamOp {
 pub const MAX_DROP_SECONDS: u32 = 600;
 /// Largest data a dropped item carries, bytes of JSON.
 pub const MAX_DROP_DATA_BYTES: usize = 1024;
+/// Most players one `end_round` names as winners.
+pub const MAX_ROUND_WINNERS: usize = 256;
 /// Most teams one mini-game may have, and the longest team name.
 pub const MAX_TEAMS: usize = 64;
 pub const MAX_TEAM_NAME: usize = 50;
@@ -604,7 +630,11 @@ impl Op {
             | Self::RemoveEntity { .. }
             | Self::Steer { .. }
             | Self::Label { .. } => "entity",
-            Self::Tell { .. } | Self::Broadcast { .. } | Self::Print { .. } => "chat",
+            Self::Tell { .. }
+            | Self::Broadcast { .. }
+            | Self::Print { .. }
+            | Self::TellMinigame { .. }
+            | Self::PrintMinigame { .. } => "chat",
             Self::Sound { .. }
             | Self::Beam { .. }
             | Self::PlayThread { .. }
@@ -616,6 +646,7 @@ impl Op {
             | Self::SetScore { .. }
             | Self::ResetMinigame { .. }
             | Self::HoldRespawn { .. }
+            | Self::EndRound { .. }
             | Self::SetSetting { .. } => "minigame",
             Self::SetBrickItem { .. } => "world.edit",
             Self::SetEnvironment { .. } => "environment",
@@ -798,7 +829,9 @@ impl Op {
             }
             Self::Steer { direction, .. } => finite(direction),
             Self::Label { label, .. } => label.len() <= 32 && !label.chars().any(char::is_control),
-            Self::Tell { text, .. } | Self::Broadcast { text } => chat(text),
+            Self::Tell { text, .. }
+            | Self::Broadcast { text }
+            | Self::TellMinigame { text, .. } => chat(text),
             Self::CopyBuild { limit, tool, .. } => (1..=10_000).contains(limit) && item(tool),
             Self::CopyBox {
                 min,
@@ -856,6 +889,9 @@ impl Op {
                     })
             }
             Self::SetTeam { .. } | Self::ResetMinigame { .. } => true,
+            Self::EndRound { teams, players, .. } => {
+                teams.len() <= MAX_TEAMS && players.len() <= MAX_ROUND_WINNERS
+            }
             Self::SetSetting { key, value, .. } => {
                 bri_package::setting::is_setting_ref(key)
                     && !matches!(value, Some(SettingValue::Text(t)) if t.len() > bri_package::setting::MAX_TEXT)
@@ -874,7 +910,7 @@ impl Op {
                     && glam_length(velocity) <= MAX_FIRE_SPEED
             }
             Self::Heal { amount, .. } => amount.is_finite() && (0.0..=100_000.0).contains(amount),
-            Self::Print { text, seconds, .. } => {
+            Self::Print { text, seconds, .. } | Self::PrintMinigame { text, seconds, .. } => {
                 text.chars().count() <= MAX_PRINT_CHARS
                     && !text.chars().any(|c| c.is_control() && c != '\n')
                     && seconds.is_finite()
@@ -962,6 +998,7 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::SetScore { add: false, .. } => "set_score",
         Op::SetScore { add: true, .. } => "add_score",
         Op::ResetMinigame { .. } => "reset_minigame",
+        Op::EndRound { .. } => "end_round",
         Op::SetSetting { team: None, .. } => "set_setting",
         Op::SetSetting { team: Some(_), .. } => "set_team_setting",
         Op::SetBrickItem { .. } => "set_brick_item",
@@ -983,6 +1020,9 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::Control { .. } => "control",
         Op::SetBlockState { .. } => "set_block_state",
         Op::Broadcast { .. } => "broadcast",
+        Op::TellMinigame { .. } => "tell_minigame",
+        Op::PrintMinigame { bottom: false, .. } => "center_print_minigame",
+        Op::PrintMinigame { bottom: true, .. } => "bottom_print_minigame",
         Op::CopyBuild { .. } => "copy_build",
         Op::CopyBox { .. } => "copy_box",
         Op::MirrorCopy { .. } => "mirror_copy",

@@ -52,14 +52,211 @@
       "cooldown_ticks": 12
     }
   ],
+  "settings": [
+    {
+      "key": "mode",
+      "title": "Game Mode",
+      "category": "Minigame",
+      "type": "list",
+      "default": "{{dm_class}}",
+      "items": [
+        {
+          "value": "{{dm_class}}",
+          "name": "{{dm_name}}"
+        },
+        {
+          "value": "{{tdm_class}}",
+          "name": "{{tdm_name}}"
+        }
+      ]
+    },
+    {
+      "key": "time_between_rounds",
+      "title": "Time Between Rounds",
+      "category": "Minigame",
+      "type": "int",
+      "default": {{pref_time_between_rounds}},
+      "min": 5,
+      "max": 300
+    },
+    {
+      "key": "pre_round_seconds",
+      "title": "Pre-Round Countdown",
+      "category": "Minigame",
+      "type": "int",
+      "default": {{pref_pre_round}},
+      "min": 0,
+      "max": 10
+    },
+    {
+      "key": "allow_move_while_resetting",
+      "title": "Allow Movement During Reset",
+      "category": "Minigame",
+      "type": "bool",
+      "default": {{pref_allow_move|bool}}
+    },
+    {
+      "key": "custom_rule",
+      "title": "Custom Rule",
+      "category": "Minigame",
+      "type": "text",
+      "default": "",
+      "max_length": 150
+    },
+    {
+      "key": "lives",
+      "title": "Lives",
+      "category": "Victory Method",
+      "type": "int",
+      "default": {{pref_lives}},
+      "min": 0,
+      "max": 99
+    },
+    {
+      "key": "points",
+      "title": "Points",
+      "category": "Victory Method",
+      "type": "int",
+      "default": {{pref_points}},
+      "min": 0,
+      "max": 2000
+    },
+    {
+      "key": "time",
+      "title": "Time",
+      "category": "Victory Method",
+      "type": "int",
+      "default": {{pref_time}},
+      "min": 0,
+      "max": 999999
+    },
+    {
+      "key": "auto_sort",
+      "title": "Auto Sort",
+      "category": "Teams",
+      "type": "bool",
+      "default": {{pref_auto_sort|bool}}
+    },
+    {
+      "key": "balance_new_teams",
+      "title": "Balance New Teams",
+      "category": "Teams",
+      "type": "bool",
+      "default": {{pref_balance_new|bool}},
+      "editor": "admin"
+    },
+    {
+      "key": "notify_member_changes",
+      "title": "Display Join/Leave Messages",
+      "category": "Teams",
+      "type": "bool",
+      "default": {{pref_notify|bool}}
+    },
+    {
+      "key": "friendly_fire",
+      "title": "Friendly Fire",
+      "category": "Teams",
+      "type": "bool",
+      "default": {{pref_friendly_fire|bool}}
+    },
+    {
+      "key": "lock_teams",
+      "title": "Lock Teams",
+      "category": "Teams",
+      "type": "bool",
+      "default": {{pref_lock|bool}}
+    },
+    {
+      "key": "ally_same_colors",
+      "title": "Ally Same Colors",
+      "category": "Teams",
+      "type": "bool",
+      "default": {{pref_ally|bool}}
+    },
+    {
+      "key": "team_lives",
+      "title": "Lives",
+      "category": "Team",
+      "type": "int",
+      "default": {{team_lives}},
+      "scope": "team",
+      "min": -1,
+      "max": 999
+    },
+    {
+      "key": "team_sort",
+      "title": "Auto Sort",
+      "category": "Team",
+      "type": "bool",
+      "default": {{team_sort|bool}},
+      "scope": "team"
+    },
+    {
+      "key": "team_sort_weight",
+      "title": "Auto Sort Weight",
+      "category": "Team",
+      "type": "int",
+      "default": {{team_sort_weight}},
+      "scope": "team",
+      "min": 0,
+      "max": 99
+    },
+    {
+      "key": "team_max_players",
+      "title": "Max Players",
+      "category": "Team",
+      "type": "int",
+      "default": {{team_max_players}},
+      "scope": "team",
+      "min": -1,
+      "max": 99
+    },
+    {
+      "key": "team_lock",
+      "title": "Lock Team",
+      "category": "Team",
+      "type": "bool",
+      "default": {{team_lock|bool}},
+      "scope": "team"
+    },
+    {
+      "key": "team_win_on_time_up",
+      "title": "Win on Time Up",
+      "category": "Team",
+      "type": "bool",
+      "default": {{team_win_on_time_up|bool}},
+      "scope": "team"
+    }
+  ],
   "state": {
     "global": {
       "games": {
         "default": {},
         "persist": false
+      },
+      "wins": {
+        "default": {},
+        "persist": false
+      }
+    },
+    "player": {
+      "lives": {
+        "default": 0,
+        "persist": false
+      },
+      "out": {
+        "default": false,
+        "persist": false
+      },
+      "wins": {
+        "default": 0,
+        "persist": false
       }
     }
   },
   "on_minigame": true,
-  "on_pick_spawn": true
+  "on_pick_spawn": true,
+  "on_death": true,
+  "on_spawn": true,
+  "tick_interval": 12
 }

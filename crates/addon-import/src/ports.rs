@@ -82,6 +82,12 @@ pub struct Rules {
     /// What the rules may do (`player`, `world.edit`, `chat`, ...), as in any
     /// Add-On's `package.json`.
     pub capabilities: Vec<String>,
+    /// Other Add-Ons' host rules these rules build on, by the name rules
+    /// files use for them: `{"slayer_rules": "Gamemode_Slayer"}` makes the
+    /// rules depend on Gamemode_Slayer's rules and `{{slayer_rules}}` their
+    /// id, as the importer names them (Slayer CTF reads Slayer's settings).
+    #[serde(default)]
+    pub needs: BTreeMap<String, String>,
 }
 
 /// The companion host-rules Add-On's id for the import `namespace`.
@@ -444,6 +450,16 @@ fn try_apply(
             "a pattern is named `{name}`, which every port already has"
         );
     }
+    if let Some(rules) = &port.rules {
+        for (name, addon) in &rules.needs {
+            ensure!(
+                values
+                    .insert(name.clone(), rules_id(&crate::namespace_for(addon)?))
+                    .is_none(),
+                "the rules need `{name}`, which is already a value"
+            );
+        }
+    }
     let mut patches = port.patch.clone();
     if port.rules.is_some() {
         // The import names its rules, so they are turned on and off with it.
@@ -538,6 +554,14 @@ fn rules_package(
         }));
         files.push((file, text.into_bytes()));
     }
+    let mut dependencies = serde_json::Map::new();
+    dependencies.insert(
+        import.namespace.to_owned(),
+        format!("={}", import.version).into(),
+    );
+    for addon in rules.needs.values() {
+        dependencies.insert(rules_id(&crate::namespace_for(addon)?), "*".into());
+    }
     let manifest = serde_json::json!({
         "schema_version": 1,
         "id": id,
@@ -554,7 +578,7 @@ fn rules_package(
             "source": format!("Port {} of Blockland Add-On {}", e.port, e.addon),
             "notes": port_notes(ports, e),
         },
-        "dependencies": { import.namespace: format!("={}", import.version) },
+        "dependencies": dependencies,
         "capabilities": rules.capabilities,
         "provides": provides,
     });
@@ -613,20 +637,33 @@ fn check_rules(id: &str, manifest: &[u8], files: &[Written]) -> Result<()> {
     Ok(())
 }
 
-/// `{{name}}` in a rules file becomes that value's text. A `{{word}}` that
-/// names no value is an error, so a misspelt name is caught.
+/// `{{name}}` in a rules file becomes that value's text, and
+/// `{{name|bool}}` `true` or `false` for a TorqueScript truth value (`1`,
+/// `0`, `true`, `false`), as a JSON setting's default needs. A `{{word}}`
+/// that names no value is an error, so a misspelt name is caught, as is a
+/// `|bool` value that is not a truth value.
 fn fill_text(text: &str, values: &BTreeMap<String, String>) -> Result<String> {
-    let re = regex::Regex::new(r"\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}")?;
-    let mut missing = None;
-    let filled = re.replace_all(text, |c: &regex::Captures| match values.get(&c[1]) {
-        Some(v) => v.clone(),
-        None => {
-            missing.get_or_insert_with(|| c[1].to_owned());
-            String::new()
+    let re = regex::Regex::new(r"\{\{([A-Za-z_][A-Za-z0-9_]*)(\|bool)?\}\}")?;
+    let mut problem = None;
+    let filled = re.replace_all(text, |c: &regex::Captures| {
+        let Some(v) = values.get(&c[1]) else {
+            problem.get_or_insert_with(|| format!("uses `{}`, which no pattern captures", &c[0]));
+            return String::new();
+        };
+        if c.get(2).is_none() {
+            return v.clone();
+        }
+        match v.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" => "true".to_owned(),
+            "0" | "false" => "false".to_owned(),
+            _ => {
+                problem.get_or_insert_with(|| format!("`{}` is `{v}`, not 1, 0, true or false", &c[0]));
+                String::new()
+            }
         }
     });
-    if let Some(name) = missing {
-        bail!("uses `{{{{{name}}}}}`, which no pattern captures");
+    if let Some(problem) = problem {
+        bail!("{problem}");
     }
     Ok(filled.into_owned())
 }

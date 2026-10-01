@@ -1,5 +1,12 @@
 // Stand-in game mode (CC0): each function the port covers, in the shape its
 // patterns read, with this stand-in's own numbers. Not the original's code.
+new ScriptGroup(Slayer_GameModeTemplateSG)
+{
+	className = "Slayer_CTF";
+	uiName = "Flag Game";
+	useTeams = true;
+};
+
 datablock fxDTSBrickData(brickStandInPadData)
 {
 	brickFile = "./pad.blb";

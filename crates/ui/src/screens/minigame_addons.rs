@@ -8,6 +8,12 @@ use crate::api::*;
 use crate::view::EventKind;
 use std::collections::BTreeMap;
 
+/// Settings by key (`None`: back to the default), and the team list.
+type Changes = (
+    Vec<(String, Option<MiniGameSettingValue>)>,
+    Option<Vec<MiniGameTeamEdit>>,
+);
+
 const W: i32 = 460;
 const H: i32 = 440;
 const ROW: i32 = 26;
@@ -421,10 +427,7 @@ impl AddOnSettings {
 
     /// What Apply sends: settings that differ from the host's, and the
     /// whole team list when anything about the teams changed.
-    fn changes(
-        &self,
-        core: &Core,
-    ) -> (Vec<(String, Option<MiniGameSettingValue>)>, Option<Vec<MiniGameTeamEdit>>) {
+    fn changes(&self, core: &Core) -> Changes {
         let to_send = |key: &str, value: &MiniGameSettingValue| {
             let default = Self::setting(core, key).map(|s| &s.default);
             if default == Some(value) {

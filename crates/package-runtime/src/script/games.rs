@@ -19,6 +19,8 @@ pub struct MinigameView {
     pub teams: Vec<TeamView>,
     pub friendly_fire: bool,
     pub ally_same_color: bool,
+    /// A rule ended the round (`end_round`); the next reset starts another.
+    pub round_over: bool,
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TeamView {
@@ -91,6 +93,7 @@ fn minigame_map(g: &MinigameView) -> Dynamic {
         ),
         ("friendly_fire", g.friendly_fire.into()),
         ("ally_same_color", g.ally_same_color.into()),
+        ("round_over", g.round_over.into()),
     ])
 }
 pub(super) fn brick_map(b: &BrickView) -> Dynamic {
@@ -359,6 +362,31 @@ pub(super) fn register(engine: &mut Engine) {
             write_setting(&game, Some(&team), key, value)
         },
     );
+    engine.register_fn("end_round", |game: Dynamic, winners: Map| {
+        let ids = |key: &str| -> Result<Vec<u64>, Box<EvalAltResult>> {
+            match winners.get(key) {
+                None => Ok(Vec::new()),
+                Some(v) if v.is_unit() => Ok(Vec::new()),
+                Some(v) => v
+                    .clone()
+                    .into_array()
+                    .map_err(|_| format!("end_round's `{key}` is a list of ids"))?
+                    .iter()
+                    .map(id)
+                    .collect(),
+            }
+        };
+        for key in winners.keys() {
+            if !["teams", "players"].contains(&key.as_str()) {
+                return Err(format!("end_round's winners are teams and players, not `{key}`").into());
+            }
+        }
+        push(Op::EndRound {
+            game: id(&game)?,
+            teams: ids("teams")?,
+            players: ids("players")?,
+        })
+    });
     engine.register_fn("reset_minigame", |game: Dynamic| {
         push(Op::ResetMinigame { game: id(&game)? })
     });

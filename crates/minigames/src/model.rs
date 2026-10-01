@@ -245,6 +245,10 @@ pub struct MiniGame {
     /// definition; a setting not here has its default.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub addon_settings: BTreeMap<String, SettingValue>,
+    /// A rule ended this round (Slayer's `endRound`): play waits for the
+    /// next reset, which clears it.
+    #[serde(default)]
+    pub round_over: bool,
 }
 impl MiniGame {
     /// A game mode's mini-game, owned by the server ([`SERVER`]).
@@ -372,6 +376,8 @@ pub enum Error {
     RespawnNotReady,
     /// The player's game holds their respawn (out of lives, round over).
     RespawnHeld,
+    /// The round already ended; it waits for a reset.
+    RoundOver,
     /// The server runs a game mode's mini-game: players stay in it and
     /// cannot start, join or leave another.
     ServerGame,
@@ -440,6 +446,13 @@ pub enum Effect {
     AddOnSettings {
         game: GameId,
         keys: Vec<String>,
+    },
+    /// A rule ended the round, won by these teams and players (none: a
+    /// round nobody won).
+    RoundEnded {
+        game: GameId,
+        teams: Vec<TeamId>,
+        players: Vec<PlayerId>,
     },
     Cleanup {
         player: PlayerId,

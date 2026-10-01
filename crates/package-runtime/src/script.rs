@@ -1314,6 +1314,40 @@ fn register_api(engine: &mut Engine) {
             },
         );
     }
+    // Every member of a mini-game, counted once.
+    engine.register_fn("tell_minigame", |game: Dynamic, text: &str| {
+        push(Op::TellMinigame {
+            game: id(&game)?,
+            text: text.into(),
+            except: None,
+        })
+    });
+    engine.register_fn(
+        "tell_minigame",
+        |game: Dynamic, text: &str, except: Dynamic| {
+            push(Op::TellMinigame {
+                game: id(&game)?,
+                text: text.into(),
+                except: Some(id(&except)?),
+            })
+        },
+    );
+    for (name, bottom) in [
+        ("center_print_minigame", false),
+        ("bottom_print_minigame", true),
+    ] {
+        engine.register_fn(
+            name,
+            move |game: Dynamic, text: &str, seconds: Dynamic| {
+                push(Op::PrintMinigame {
+                    game: id(&game)?,
+                    text: text.into(),
+                    seconds: float(&seconds)?,
+                    bottom,
+                })
+            },
+        );
+    }
     engine.register_fn("play_sound", |player: Dynamic, profile: &str| {
         push(Op::Sound {
             profile: profile.into(),

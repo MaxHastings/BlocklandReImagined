@@ -31,7 +31,8 @@
       "covers": {
         "Slayer_TeamHandlerSG::pickTeam": {
           "share": "numMembers\\[\"GameConnection\"\\]\\s*/\\s*%t\\.sortWeight",
-          "tie": "getRandom\\(\\s*0\\s*,\\s*getFieldCount\\(\\s*%teams\\s*\\)\\s*-\\s*1\\s*\\)"
+          "tie": "getRandom\\(\\s*0\\s*,\\s*getFieldCount\\(\\s*%teams\\s*\\)\\s*-\\s*1\\s*\\)",
+          "skips": "!\\s*%t\\.sort\\s*\\|\\|\\s*%t\\.sortWeight\\s*<=\\s*0\\s*\\|\\|\\s*\\(\\s*%t\\.numMembers\\[\"GameConnection\"\\]\\s*>=\\s*%t\\.maxPlayers\\s*&&\\s*%t\\.maxPlayers\\s*>=\\s*0\\s*\\)"
         },
         "Slayer_TeamHandlerSG::autoSort": {
           "picks": "%this\\.pickTeam\\(\\s*%client\\s*\\)"
@@ -49,7 +50,9 @@
         },
         "slayerTeamCmdJoin": {
           "locked": "teams_lock\\s*&&\\s*isObject\\(\\s*%clTeam\\s*\\)",
-          "find": "getTeamFromName\\(\\s*%name\\s*\\)"
+          "find": "getTeamFromName\\(\\s*%name\\s*\\)",
+          "team_lock": "%clTeam\\.lock\\s*\\|\\|\\s*%team\\.lock",
+          "full": "%team\\.maxPlayers\\s*==\\s*0"
         },
         "slayerTeamCmdLeave": {
           "locked": "\\(\\s*%mini\\.teams_lock\\s*\\|\\|\\s*%mini\\.teams_autoSort\\s*\\)\\s*&&\\s*!\\s*%mini\\.canEdit\\(\\s*%client\\s*\\)"
@@ -72,6 +75,76 @@
         },
         "serverCmdTeams": {
           "dispatch": "\"slayerTeamCmd\"\\s*@\\s*%cmd"
+        },
+        "server/defaults/preferences.cs": {
+          "pref_time_between_rounds": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.timeBetweenRounds\"",
+          "pref_pre_round": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.preRoundSeconds\"",
+          "pref_allow_move": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.allowMoveWhileResetting\"",
+          "pref_lives": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.lives\"",
+          "pref_points": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.points\"",
+          "pref_time": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.time\"",
+          "pref_auto_sort": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.teams_autoSort\"",
+          "pref_balance_new": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.teams_balanceOnNew\"",
+          "pref_notify": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.teams_notifyMemberChanges\"",
+          "pref_friendly_fire": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.teams_friendlyFire\"",
+          "pref_lock": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.teams_lock\"",
+          "pref_ally": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.teams_allySameColors\""
+        },
+        "server/defaults/team-preferences.cs": {
+          "team_lives": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"lives\"",
+          "team_sort": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"sort\"",
+          "team_sort_weight": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"sortWeight\"",
+          "team_max_players": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"maxPlayers\"",
+          "team_lock": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"lock\"",
+          "team_win_on_time_up": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"winOnTimeUp\""
+        },
+        "server/defaults/game-modes.cs": {
+          "dm_class": "Slayer_DefaultGameModeTemplateSG\\)\\s*\\{[^}]*?className\\s*=\\s*\"(\\w+)\"",
+          "dm_name": "Slayer_DefaultGameModeTemplateSG\\)\\s*\\{[^}]*?uiName\\s*=\\s*\"([^\"]+)\"",
+          "dm_no_teams": "Slayer_DefaultGameModeTemplateSG\\)\\s*\\{[^}]*?useTeams\\s*=\\s*false",
+          "tdm_class": "new\\s+ScriptGroup\\(\\s*Slayer_GameModeTemplateSG\\s*\\)\\s*\\{[^}]*?className\\s*=\\s*\"(\\w+)\"",
+          "tdm_name": "new\\s+ScriptGroup\\(\\s*Slayer_GameModeTemplateSG\\s*\\)\\s*\\{[^}]*?uiName\\s*=\\s*\"([^\"]+)\""
+        },
+        "Slayer_MiniGameSO::victoryCheck_Lives": {
+          "team_dead": "!\\s*%t\\.isTeamDead\\(\\)",
+          "allies": "teams_allySameColors\\s*&&\\s*%t\\.color\\s*==\\s*%winnerColor",
+          "last_one": "%count\\s*==\\s*1\\s*\\)\\s*return\\s*%winner"
+        },
+        "Slayer_MiniGameSO::victoryCheck_Points": {
+          "team": "%t\\.getScore\\(\\)\\s*>=\\s*%this\\.points",
+          "player": "%cl\\.score\\s*>=\\s*%this\\.points"
+        },
+        "Slayer_MiniGameSO::victoryCheck_Time": {
+          "minutes": "%this\\.time\\s*\\*\\s*60000",
+          "win_on_time_up": "%t\\.winOnTimeUp",
+          "ties": "%sc\\s*==\\s*%least\\s*&&\\s*%least\\s*>\\s*0",
+          "announce": "remaining\\."
+        },
+        "Slayer_MiniGameSO::preRoundCountdownTick": {
+          "remain": "%this\\.preRoundSeconds\\s*-\\s*%ticks",
+          "go": "GO!"
+        },
+        "Slayer_MiniGameSO::endRound": {
+          "dead": "setDead\\(\\s*true\\s*\\)",
+          "camera": "allowMoveWhileResetting[\\s\\S]*setMode\\(\\s*corpse\\s*,\\s*%winner\\.player\\s*\\)",
+          "reset_time": "%this\\.timeBetweenRounds\\s*\\*\\s*1000",
+          "nobody": "Nobody won this round",
+          "countdown": "Resetting in"
+        },
+        "Slayer_MiniGameSO::Reset": {
+          "lives": "setLives\\(\\s*\\(\\s*isObject\\(\\s*%t\\s*\\)\\s*&&\\s*%t\\.lives\\s*>=\\s*0\\s*\\)\\s*\\?\\s*%t\\.lives\\s*:\\s*%this\\.lives\\s*\\)"
+        },
+        "Slayer_MiniGameSO::removeMember": {
+          "lives": "victoryCheck_Lives\\(\\)"
+        },
+        "server/core/GameConnection.cs": {
+          "lose_life": "addLives\\(\\s*-1\\s*\\)\\s*;\\s*if\\s*\\(\\s*%this\\.getLives\\(\\)\\s*<=\\s*0\\s*\\)\\s*%this\\.setDead\\(\\s*1\\s*\\)",
+          "lives_left": "You have \\\\c3",
+          "points": "setScore[\\s\\S]*victoryCheck_Points\\(\\)"
+        },
+        "serverCmdSlayer": {
+          "rules": "The last %2 standing wins",
+          "custom": "%mini\\.customRule"
         }
       },
       "tests": [
@@ -189,6 +262,10 @@
         "serverCmdDropFlag": {
           "pref": "CTF_manualFlagDrop",
           "drop": "\\.dropFlag\\(\\)"
+        },
+        "game-mode.cs": {
+          "ctf_class": "Slayer_GameModeTemplateSG\\)\\s*\\{[^}]*?className\\s*=\\s*\"(\\w+)\"",
+          "ctf_name": "Slayer_GameModeTemplateSG\\)\\s*\\{[^}]*?uiName\\s*=\\s*\"([^\"]+)\""
         }
       },
       "tests": [

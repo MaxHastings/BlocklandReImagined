@@ -28,6 +28,9 @@ pub(in crate::session) struct GameEvent {
     team: Option<u64>,
     /// The `namespace:key`s of a `settings` event.
     keys: Vec<String>,
+    /// A `round_end` event's winning teams and players.
+    teams: Vec<u64>,
+    players: Vec<OwnerId>,
 }
 
 /// Add-On state a session keeps for these hooks.
@@ -58,6 +61,8 @@ impl Session {
             player: None,
             team: None,
             keys: Vec::new(),
+            teams: Vec::new(),
+            players: Vec::new(),
         };
         let mut out = Vec::new();
         match effect {
@@ -66,6 +71,15 @@ impl Session {
             mg::Effect::Ended { game } => out.push(event("ended", *game)),
             mg::Effect::Reset { game, .. } => out.push(event("reset", *game)),
             mg::Effect::TeamsConfigured { game } => out.push(event("teams", *game)),
+            mg::Effect::RoundEnded {
+                game,
+                teams,
+                players,
+            } => out.push(GameEvent {
+                teams: teams.iter().map(|t| u64::from(t.0)).collect(),
+                players: players.iter().filter_map(|p| self.owner_of(*p)).collect(),
+                ..event("round_end", *game)
+            }),
             mg::Effect::AddOnSettings { game, keys } => out.push(GameEvent {
                 keys: keys.clone(),
                 ..event("settings", *game)
@@ -125,6 +139,13 @@ impl Session {
             map.insert("game".into(), Dynamic::from_int(e.game as i64));
             map.insert("player".into(), id(e.player));
             map.insert("team".into(), id(e.team));
+            if e.kind == "round_end" {
+                let ids = |v: &[u64]| {
+                    Dynamic::from_array(v.iter().map(|i| Dynamic::from_int(*i as i64)).collect())
+                };
+                map.insert("teams".into(), ids(&e.teams));
+                map.insert("players".into(), ids(&e.players));
+            }
             if e.kind == "settings" {
                 map.insert(
                     "keys".into(),
@@ -326,6 +347,16 @@ impl Session {
         }
     }
 
+    /// The connected members of mini-game `game`, for prints and chat to
+    /// all of them.
+    pub(in crate::session) fn minigame_members(&self, game: u64) -> Result<Vec<OwnerId>> {
+        let g = self
+            .minigames
+            .game(mg::GameId(game))
+            .map_err(|_| anyhow::anyhow!("No mini-game {game}"))?;
+        Ok(g.members.iter().filter_map(|p| self.owner_of(*p)).collect())
+    }
+
     /// Every mini-game as scripts see it.
     pub(in crate::session) fn script_minigames(&self) -> Vec<MinigameView> {
         self.minigames
@@ -348,6 +379,7 @@ impl Session {
                     .collect(),
                 friendly_fire: g.teams.friendly_fire,
                 ally_same_color: g.teams.ally_same_color,
+                round_over: g.round_over,
             })
             .collect()
     }
@@ -491,6 +523,25 @@ impl Session {
                     authority: mg::EventAuthority::System,
                 })
                 .map_err(|e| anyhow::anyhow!("Reset rejected: {e}"))?,
+            Op::EndRound {
+                game,
+                teams,
+                players,
+            } => {
+                let teams = teams
+                    .into_iter()
+                    .map(|t| u32::try_from(t).map(mg::TeamId))
+                    .collect::<Result<Vec<_>, _>>()
+                    .ok()
+                    .context("No such team")?;
+                let players = players
+                    .into_iter()
+                    .map(|p| player_of(self, p))
+                    .collect::<Result<Vec<_>>>()?;
+                self.minigames
+                    .end_round(mg::GameId(game), teams, players)
+                    .map_err(|e| anyhow::anyhow!("Round end rejected: {e}"))?
+            }
             Op::HoldRespawn { player, held } => {
                 let target = player_of(self, player)?;
                 self.minigames

@@ -272,7 +272,29 @@ rules under `ports[].rules`.
 `{{version}}`, or anything a `covers` pattern captured. A `{{word}}` that
 names nothing is an error. The importer's ids are
 `<ns>:<kind>/<datablock name in lower case>`, so a rule gives out the
-imported item as `"{{namespace}}:weapon/fillcanitem"`.
+imported item as `"{{namespace}}:weapon/fillcanitem"`. `{{name|bool}}`
+writes a captured TorqueScript truth value (`1`, `0`, `true`, `false`) as
+`true` or `false`, for a setting's `default` in `behaviour.json`:
+
+```json
+{ "key": "auto_sort", "title": "Auto Sort", "type": "bool", "default": {{pref_auto_sort|bool}} }
+```
+
+**Rules that build on another Add-On's rules.** An Add-On written for
+another (a Slayer game mode) reads that one's settings or adds to its lists.
+`"needs": { "slayer_rules": "Gamemode_Slayer" }` in `rules` makes the rules
+depend on that Add-On's rules and gives their id as `{{slayer_rules}}`, as
+the importer names them from the Add-On's folder name: Slayer CTF reads
+`setting(game, "{{slayer_rules}}:mode")` and adds Capture the Flag to the
+mode list with `setting_items`.
+
+**Preferences become settings.** A preference the original's GUI edited
+(Slayer's `Slayer_PrefSO`, `$Pref::` values an Add-On menu changed) is a
+`settings` entry in the rules' `behaviour.json`, its default captured from
+the original by a `covers` pattern, so the host edits it in the Mini-Game
+window's Add-On Settings and the rule reads it with `setting(game, key)`.
+Preferences that duplicate the vanilla mini-game dialog (damage, building,
+points per kill, respawn times, starting equipment) stay in that dialog.
 
 **Reaching the rules.** In the patch, `{namespace}`, `{rules}` and
 `{version}` work like captured values, in keys too. Point the image's

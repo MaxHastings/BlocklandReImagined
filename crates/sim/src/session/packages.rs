@@ -1461,6 +1461,36 @@ impl Session {
                 self.system_chat(text);
                 Ok(())
             }
+            Op::TellMinigame { game, text, except } => {
+                let members = self.minigame_members(game)?;
+                self.take_chat_line(package, caller)?;
+                for owner in members.into_iter().filter(|o| Some(*o) != except) {
+                    self.notify(owner, Notice::Chat(text.clone()));
+                }
+                Ok(())
+            }
+            Op::PrintMinigame {
+                game,
+                text,
+                seconds,
+                bottom,
+            } => {
+                let members = self.minigame_members(game)?;
+                self.take_cue(package)?;
+                let notice = if bottom {
+                    Notice::Bottom {
+                        text,
+                        seconds,
+                        hide_bar: false,
+                    }
+                } else {
+                    Notice::Center { text, seconds }
+                };
+                for owner in members {
+                    self.notify(owner, notice.clone());
+                }
+                Ok(())
+            }
             Op::CopyBuild {
                 player,
                 brick,
@@ -1770,7 +1800,8 @@ impl Session {
             | Op::SetTeam { .. }
             | Op::SetScore { .. }
             | Op::ResetMinigame { .. }
-            | Op::HoldRespawn { .. }) => self.apply_minigame_op(op),
+            | Op::HoldRespawn { .. }
+            | Op::EndRound { .. }) => self.apply_minigame_op(op),
             Op::SetSetting {
                 game,
                 team,

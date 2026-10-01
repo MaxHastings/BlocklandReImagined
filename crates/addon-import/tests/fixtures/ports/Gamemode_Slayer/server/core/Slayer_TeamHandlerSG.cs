@@ -2,6 +2,8 @@
 // patterns read. Not the original's code.
 function Slayer_TeamHandlerSG::pickTeam(%this, %client, %skipCurrentTeam)
 {
+	if(!%t.sort || %t.sortWeight <= 0 || (%t.numMembers["GameConnection"] >= %t.maxPlayers && %t.maxPlayers >= 0))
+		continue;
 	%ratio = %t.numMembers["GameConnection"] / %t.sortWeight;
 	%r = getRandom(0, getFieldCount(%teams) - 1);
 	return getField(%teams, %r);
@@ -32,6 +34,10 @@ function slayerTeamCmdJoin(%client, %mini, %clTeam, %a)
 	if(%mini.teams_lock && isObject(%clTeam))
 		return;
 	%team = %mini.Teams.getTeamFromName(%name);
+	if(%clTeam.lock || %team.lock)
+		return;
+	if(%team.maxPlayers == 0)
+		return;
 }
 
 function slayerTeamCmdLeave(%client, %mini, %clTeam, %a)

@@ -1,8 +1,9 @@
 // Slayer Capture the Flag (Greek2me's Gamemode_Slayer_CTF), rewritten for
-// Blockland ReImagined. It plays in any mini-game with teams (Slayer's, set
-// up with /teams) whose builder placed Flag Spawn bricks: a flag stands on
-// each, in the brick's paint colour, and belongs to the team of that colour
-// (a colour no team has is a neutral flag).
+// Blockland ReImagined. It adds Capture the Flag to Slayer's game modes and
+// plays in a mini-game set to it whose builder placed Flag Spawn bricks: a
+// flag stands on each, in the brick's paint colour, and belongs to the team
+// of that colour (a colour no team has is a neutral flag). Its settings are
+// with Slayer's in the Mini-Game window's Add-On Settings.
 //
 // Take an enemy flag to your own flag, or to a Flag Return Point of your
 // colour, to score. The carried flag rides on your back; dying, leaving the
@@ -23,41 +24,38 @@ fn flag_slot() { {{image_slot}} }
 // {{pickup_guard_ms}} ms (120 ticks a second).
 fn pickup_guard_ticks() { ({{pickup_guard_ms}} * 120 + 999) / 1000 }
 
-// Slayer CTF's preferences (`preferences.cs`), at their defaults, per game.
-fn default_prefs() {
+// Capture the Flag is the game's Slayer mode.
+fn ctf_mode() { "{{ctf_class}}" }
+fn playing(game) { setting(game, "{{slayer_rules}}:mode") == ctf_mode() }
+fn number(on) { if on { 1 } else { 0 } }
+
+// Slayer CTF's preferences (`preferences.cs`), from the game's settings.
+fn prefs_of(game) {
     #{
-        flagreturnstowin: {{pref_returns_to_win}},
-        flagreturnonlyatreturnbrick: {{pref_return_only_at_return}},
-        returnwithoutown: {{pref_return_without_own}},
-        neutralflags: {{pref_neutral_flags}},
-        points_flag: {{pref_points_flag}},
-        points_flagrecovery: {{pref_points_recovery}},
-        flagrecovery: {{pref_flag_recovery}},
-        flagdroppedrespawntime: {{pref_dropped_respawn}},
-        flagreturnedrespawntime: {{pref_returned_respawn}},
-        manualflagdrop: {{pref_manual_drop}},
-        requireenemyplayers: {{pref_require_enemies}}
+        flagreturnstowin: setting(game, "flag_returns_to_win"),
+        flagreturnonlyatreturnbrick: setting(game, "flag_return_location"),
+        returnwithoutown: number(setting(game, "return_without_own")),
+        neutralflags: setting(game, "neutral_flags"),
+        points_flag: setting(game, "points_flag"),
+        points_flagrecovery: setting(game, "points_flag_recovery"),
+        flagrecovery: setting(game, "flag_recovery"),
+        flagdroppedrespawntime: setting(game, "dropped_flag_respawn"),
+        flagreturnedrespawntime: setting(game, "returned_flag_respawn"),
+        manualflagdrop: number(setting(game, "manual_flag_drop")),
+        requireenemyplayers: number(setting(game, "require_enemy_players"))
     }
 }
 
-// Per game: preferences, captures by team id, and when a won round resets.
+// Per game: the preferences and the captures by team id this round.
 fn game_state(game) {
     let games = get("games");
     let key = `${game}`;
-    if key in games {
-        let s = games[key];
-        for k in default_prefs().keys() {
-            if !(k in s.prefs) {
-                s.prefs[k] = default_prefs()[k];
-            }
-        }
-        return s;
-    }
-    #{ prefs: default_prefs(), returns: #{}, reset_at: () }
+    let returns = if key in games { games[key].returns } else { #{} };
+    #{ prefs: prefs_of(game), returns: returns }
 }
 fn set_game_state(game, s) {
     let games = get("games");
-    games[`${game}`] = s;
+    games[`${game}`] = #{ returns: s.returns };
     set("games", games);
 }
 
@@ -106,20 +104,18 @@ fn flag_name(g, b) {
     if n == "" { `${c3()}Neutral` } else { `${c3()}${n}` }
 }
 
-fn tell_game(g, text) {
-    for m in g.members {
-        tell(m, text);
-    }
-}
+// `MiniGameSO::messageAll`.
+fn tell_game(g, text) { tell_minigame(g.id, text); }
 
-// A team game this player plays in, with their team, or ().
+// A Capture the Flag game this player plays in, with their team, or ().
+// Nothing happens to flags between rounds.
 fn side(p) {
     let me = player(p);
     if me == () || me.minigame == () || me.team == () {
         return ();
     }
     let g = minigame(me.minigame);
-    if g == () {
+    if g == () || g.round_over || !playing(g.id) {
         return ();
     }
     let team = team_by_id(g, me.team);
@@ -156,7 +152,13 @@ fn on_tick() {
             continue;
         }
         let g = minigame(b.game);
-        if g == () || g.teams.is_empty() {
+        if g == () || g.teams.is_empty() || !playing(g.id) {
+            // Another mode: no flags.
+            if f != () {
+                remove_dropped(b.id);
+                set_brick_item(b.id, ());
+                flags.remove(key);
+            }
             continue;
         }
         if f == () {
@@ -180,17 +182,6 @@ fn on_tick() {
         }
     }
     set("flags", flags);
-    // Rounds won (`endRound`) reset when their time is up.
-    let games = get("games");
-    for key in games.keys() {
-        let s = games[key];
-        if s.reset_at != () && tick() >= s.reset_at {
-            s.reset_at = ();
-            games[key] = s;
-            reset_minigame(parse_int(key));
-        }
-    }
-    set("games", games);
 }
 
 fn on_minigame(event) {
@@ -217,8 +208,24 @@ fn on_minigame(event) {
         }
         let s = game_state(event.game);
         s.returns = #{};
-        s.reset_at = ();
         set_game_state(event.game, s);
+        // `Slayer_CTF::onClientDisplayRules`, after Slayer's rules.
+        let g = minigame(event.game);
+        if event.kind == "reset" && g != () && playing(g.id) {
+            let line = rules_line(g.id);
+            if line != () {
+                tell_game(g, line);
+            }
+        }
+    } else if event.kind == "settings" && event.keys.contains("{{slayer_rules}}:mode") && !playing(event.game) {
+        // Another mode: carried flags are gone too (the flags on their
+        // stands go at the next check).
+        for p in players() {
+            if p.minigame == event.game && get_player(p.id, "carrying") != () {
+                mount_image(p.id, (), flag_slot());
+                set_player(p.id, "carrying", ());
+            }
+        }
     } else if event.kind == "left" || event.kind == "team" {
         // `onClientLeaveGame` / `onClientLeaveTeam`.
         drop_flag(event.player);
@@ -504,68 +511,38 @@ fn capture(s, home, flags, prefs) {
     mount_image(p, (), flag_slot());
     set_player(p, "carrying", ());
     state.returns[key] = done + 1;
-    if win > 0 && done + 1 >= win && state.reset_at == () {
-        // `Slayer_MiniGameSO::endRound(%team)`, with Slayer's default 20
-        // seconds between rounds.
-        tell_game(g, `${c3()}${s.team.name} ${magenta()}won this round. Resetting in 20 seconds.`);
-        state.reset_at = tick() + 20 * 120;
-    }
     set_game_state(g.id, state);
+    if win > 0 && done + 1 >= win {
+        // `Slayer_MiniGameSO::endRound(%team)`: Slayer announces it and
+        // resets after its time between rounds.
+        end_round(g.id, #{ teams: [s.team.id] });
+    }
 }
 
-// `/ctf`: the preferences; the game's owner or an admin changes one with
-// `/ctf <preference> <value>` (Slayer's GUI did this).
-fn cmd_ctf(p, line) {
+// `Slayer_CTF::onClientDisplayRules`: how many captures win, or ().
+fn rules_line(game) {
+    let win = setting(game, "flag_returns_to_win");
+    if win > 0 {
+        `${c5()} + ${c3()}${win} ${c5()}flag ${if win == 1 { "capture" } else { "captures" }} - The first team to capture ${c3()}${win} ${c5()}${if win == 1 { "flag" } else { "flags" }} wins.`
+    } else {
+        ()
+    }
+}
+
+// `/ctf`: the rules of this game's Capture the Flag. Its settings are in
+// the Mini-Game window's Add-On Settings.
+fn cmd_ctf(p) {
     let me = player(p);
-    if me == () || me.minigame == () {
-        tell(p, `${c5()}You are not in a mini-game.`);
+    if me == () || me.minigame == () || !playing(me.minigame) {
+        tell(p, `${c5()}Your mini-game is not playing Capture the Flag.`);
         return;
     }
-    let g = minigame(me.minigame);
-    let state = game_state(g.id);
-    let parts = [];
-    for w in line.split(" ") {
-        if w != "" {
-            parts.push(w);
-        }
+    let line = rules_line(me.minigame);
+    if line != () {
+        tell(p, line);
     }
-    if parts.is_empty() {
-        let win = state.prefs.flagreturnstowin;
-        if win > 0 {
-            tell(p, `${c5()} + ${c3()}${win} ${c5()}flag ${if win == 1 { "capture" } else { "captures" }} - The first team to capture ${c3()}${win} ${c5()}${if win == 1 { "flag" } else { "flags" }} wins.`);
-        }
-        for k in state.prefs.keys() {
-            tell(p, `${c5()}${k}: ${c3()}${state.prefs[k]}`);
-        }
-        return;
+    let prefs = prefs_of(me.minigame);
+    for k in prefs.keys() {
+        tell(p, `${c5()}${k}: ${c3()}${prefs[k]}`);
     }
-    if !(me.admin || g.owner == p) {
-        tell(p, `${c5()}Only the mini-game's owner or an admin can change Capture the Flag.`);
-        return;
-    }
-    let key = parts[0].to_lower();
-    if !(key in default_prefs()) || parts.len() < 2 {
-        tell(p, `${c5()}Usage: /ctf <preference> <value>. Type /ctf to see them.`);
-        return;
-    }
-    let word = parts[1];
-    let negative = word.starts_with("-");
-    let digits = if negative { word.sub_string(1) } else { word };
-    if digits == "" || digits.len() > 5 {
-        tell(p, `${c5()}The value is a whole number.`);
-        return;
-    }
-    for c in digits.chars() {
-        if c < '0' || c > '9' {
-            tell(p, `${c5()}The value is a whole number.`);
-            return;
-        }
-    }
-    let value = parse_int(digits);
-    if negative {
-        value = -value;
-    }
-    state.prefs[key] = value;
-    set_game_state(g.id, state);
-    tell_game(g, `${c3()}${me.name} ${c5()}set ${c3()}${key} ${c5()}to ${c3()}${value}${c5()}.`);
 }

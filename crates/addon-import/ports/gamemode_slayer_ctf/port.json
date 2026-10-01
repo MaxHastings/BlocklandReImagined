@@ -1,8 +1,9 @@
 {
   "schema_version": 1,
-  "notes": "Capture the Flag on Slayer's teams, rewritten as host rules: flags stand on Flag Spawn bricks in their team's colour; take an enemy flag to your own flag or a Flag Return Point to score; dropped flags go home after a while; /dropFlag drops a carried flag. The flag rides on the carrier's back in their team colour. Preferences start at Slayer CTF's defaults; the mini-game's owner or an admin changes them with /ctf <preference> <value>. Not ported yet: the Drop Tool key dropping the flag, the countdown over a dropped flag, the flag's light, brick events (onFlagPickedUp and the rest), locked flags, the score list columns and bots.",
+  "notes": "Capture the Flag as a Slayer game mode, rewritten as host rules: flags stand on Flag Spawn bricks in their team's colour; take an enemy flag to your own flag or a Flag Return Point to score; enough captures win the round; dropped flags go home after a while; /dropFlag drops a carried flag. The flag rides on the carrier's back in their team colour. Its settings are with Slayer's in the Mini-Game window's Add-On Settings, shown when the game mode is Capture the Flag. Not ported yet: the Drop Tool key dropping the flag, the countdown over a dropped flag, the flag's light, brick events (onFlagPickedUp and the rest), locked flags, the score list columns and bots.",
   "rules": {
-    "capabilities": ["chat", "player", "minigame", "world.edit"]
+    "capabilities": ["chat", "player", "minigame", "world.edit"],
+    "needs": { "slayer_rules": "Gamemode_Slayer" }
   },
   "patch": {
     "assets/weapons.json": {

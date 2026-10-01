@@ -264,12 +264,12 @@ impl SettingDef {
         } else if matches!(self.default, SettingValue::Bool(_)) {
             return Err(format!("setting `{what}`: a list's default is a number or text"));
         }
-        if let Some(when) = &self.shown_when {
-            if !is_setting_ref(&when.setting) || when.is.is_empty() || when.is.len() > MAX_ITEMS {
-                return Err(format!(
-                    "setting `{what}`: shown_when names a setting and 1 to {MAX_ITEMS} values"
-                ));
-            }
+        if let Some(when) = &self.shown_when
+            && (!is_setting_ref(&when.setting) || when.is.is_empty() || when.is.len() > MAX_ITEMS)
+        {
+            return Err(format!(
+                "setting `{what}`: shown_when names a setting and 1 to {MAX_ITEMS} values"
+            ));
         }
         Ok(())
     }

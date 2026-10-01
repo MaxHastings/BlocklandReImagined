@@ -167,13 +167,13 @@ HUD panels can only show keys the viewer receives. `persist` (default
 | `noise(seed, x, z)`, `hash3(seed, x, y, z)` | `entity_get(e, key)`, `entity_set(e, key, v)` | `spawn_entity`, `remove_entity`, `steer`, `label`: `entity` |
 | `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)` | | `teleport`, `respawn`, `set_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`, `take_item(p, item)`, `drop_item(item, x, y, z[, vx, vy, vz])`, `drop_item(item, #{ ... })`, `remove_drop(id)`: `player` |
 | `raycast(from, dir, range[, ignore])`, `can_damage(by, target)` | | `set_fov(p, fov)`, `set_image_ammo(p, ammo)`, `mount_image(p, image)`, `mount_image(p, image, slot[, paint])`, `unmount_image(p)`, `set_scale(p, scale)`, `set_look_limits(p, up, down)`: `player` |
-| `minigames()`, `minigame(id)`, `setting(game, key)`, `team_setting(game, team, key)`, `bricks(kind)`, `brick(id)`, `drops()` | | `set_teams(game, teams, options)`, `set_team(p, team)`, `set_score(p, n)`, `add_score(p, n)`, `reset_minigame(game)`, `set_setting(game, key, v)`, `set_team_setting(game, team, key, v)`, `hold_respawn(p, held)`: `minigame`; `watch(p, target)`: `player`; `set_brick_item(brick, item)`: `world.edit` |
+| `minigames()`, `minigame(id)`, `setting(game, key)`, `team_setting(game, team, key)`, `bricks(kind)`, `brick(id)`, `drops()` | | `set_teams(game, teams, options)`, `set_team(p, team)`, `set_score(p, n)`, `add_score(p, n)`, `reset_minigame(game)`, `set_setting(game, key, v)`, `set_team_setting(game, team, key, v)`, `hold_respawn(p, held)`, `end_round(game, winners)`: `minigame`; `watch(p, target)`: `player`; `set_brick_item(brick, item)`: `world.edit` |
 | `brick_box(brick)`, `voxel(brick)`, `can_place_voxel(x, y, z)` | | `place_voxel(x, y, z, material)`: `world.edit`; `set_avatar_colors(p, colors)`: `player` |
 | | | `copy_build(p, brick, limit, above_only, tool)`, `copy_box(p, min, max, limit, tool)`, `mirror_copy(p, axis)`: `build` |
 | | | `cut_copy(p)`, `paint_copy(p, color)`, `paint_fill(p, brick, color, limit)`: `world.edit` |
 | | | `push`, `tumble`, `hold`, `hold_distance`, `let_go`, `spawn_vehicle`, `remove_vehicle`, `mount_object(mount, rider, node, can_dismount)`, `unmount_object(rider)`: `physics` |
 | | | `heal(p, amount)`, `fire(...)`: `damage` |
-| | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds)` (`()` for everyone): `chat` |
+| | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds)` (`()` for everyone), `tell_minigame(game, text[, except])`, `center_print_minigame(game, text, seconds)`, `bottom_print_minigame(game, text, seconds)` (a mini-game's members, counted once): `chat` |
 | | | `play_sound(p, sound)` at a player's ears, `sound_at(sound, x, y, z)`, `beam(from, to[, options])`, `play_thread(p, thread, sequence)`, `show_box(p, min, max, tool)`, `hide_box(p)`: `effects` |
 | | | `set_map_lights([x, y, z], radius, options)`: `lighting` |
 | `environment()` | | `set_environment(#{ ... })`, `reset_environment()`: `environment` |
@@ -251,7 +251,7 @@ every worn image off.
 
 **Mini-games and teams.** `minigames()` lists the mini-games and
 `minigame(id)` reads one: `#{ id, title, owner, members, round, teams,
-friendly_fire, ally_same_color }`, each team `#{ id, name, color }`.
+friendly_fire, ally_same_color, round_over }`, each team `#{ id, name, color }`.
 `set_teams(game, teams, #{ friendly_fire, ally_same_color })` sets a game's
 teams: a team map with an `id` keeps that team and its members, one
 without is new, and a team left out is removed. `set_team(p, team)` puts a
@@ -298,7 +298,13 @@ default when unset); `set_setting(game, key, value)` and
 default back (`minigame` capability). `on_minigame` gets `kind ==
 "settings"` with the changed `keys` when anyone changes them.
 
-**Rounds.** `hold_respawn(p, true)` keeps a dead mini-game member from
+**Rounds.** `end_round(game, #{ teams: [...], players: [...] })` ends a
+mini-game's round, won by those teams and players (or by nobody, with
+neither): the game's `round_over` is `true` until its next reset, and every
+rule hears `on_minigame` with `kind == "round_end"` and the winners'
+`teams` and `players`. Slayer announces the winner and resets after its
+time between rounds; a mode built on it (Capture the Flag) only calls
+`end_round` (`minigame` capability). `hold_respawn(p, true)` keeps a dead mini-game member from
 respawning (out of lives, the round over; v20 Slayer's `setDead`): their
 client shows no respawn prompt, and a reset of the game or
 `hold_respawn(p, false)` lets them go (`minigame` capability).

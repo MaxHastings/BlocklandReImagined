@@ -3,7 +3,38 @@
   "script": "ctf.rhai",
   "commands": [
     { "name": "dropflag", "while_dead": false, "cooldown_ticks": 12 },
-    { "name": "ctf", "args": ["string"], "while_dead": true, "cooldown_ticks": 12 }
+    { "name": "ctf", "while_dead": true, "cooldown_ticks": 12 }
+  ],
+  "settings": [
+    { "key": "flag_returns_to_win", "title": "Flag Captures to Win", "category": "Capture the Flag", "type": "int", "default": {{pref_returns_to_win}}, "min": 0, "max": 100,
+      "shown_when": { "setting": "{{slayer_rules}}:mode", "is": ["{{ctf_class}}"] } },
+    { "key": "flag_return_location", "title": "Flag Return Location", "category": "Capture the Flag", "type": "list", "default": {{pref_return_only_at_return}},
+      "items": [ { "value": 0, "name": "Flag Spawn or Flag Return Point" }, { "value": 1, "name": "Flag Return Point Only" } ],
+      "shown_when": { "setting": "{{slayer_rules}}:mode", "is": ["{{ctf_class}}"] } },
+    { "key": "return_without_own", "title": "Return Flag Without Own", "category": "Capture the Flag", "type": "bool", "default": {{pref_return_without_own|bool}},
+      "shown_when": { "setting": "{{slayer_rules}}:mode", "is": ["{{ctf_class}}"] } },
+    { "key": "neutral_flags", "title": "Neutral Flags", "category": "Capture the Flag", "type": "list", "default": {{pref_neutral_flags}},
+      "items": [ { "value": 0, "name": "Disabled" }, { "value": 1, "name": "Enabled" }, { "value": 2, "name": "Enabled, Neutral Flags Only" } ],
+      "shown_when": { "setting": "{{slayer_rules}}:mode", "is": ["{{ctf_class}}"] } },
+    { "key": "points_flag", "title": "Points for a Flag Return", "category": "Capture the Flag", "type": "int", "default": {{pref_points_flag}}, "min": -999, "max": 999,
+      "shown_when": { "setting": "{{slayer_rules}}:mode", "is": ["{{ctf_class}}"] } },
+    { "key": "points_flag_recovery", "title": "Points for a Flag Recovery", "category": "Capture the Flag", "type": "int", "default": {{pref_points_recovery}}, "min": -999, "max": 999,
+      "shown_when": { "setting": "{{slayer_rules}}:mode", "is": ["{{ctf_class}}"] } },
+    { "key": "flag_recovery", "title": "Flag Recovery Mode", "category": "Capture the Flag", "type": "list", "default": {{pref_flag_recovery}},
+      "items": [ { "value": 0, "name": "Disabled" }, { "value": 1, "name": "Instant Recovery" }, { "value": 2, "name": "Manual Recovery" } ],
+      "shown_when": { "setting": "{{slayer_rules}}:mode", "is": ["{{ctf_class}}"] } },
+    { "key": "dropped_flag_respawn", "title": "Dropped Flag Respawn Time", "category": "Capture the Flag", "type": "int", "default": {{pref_dropped_respawn}}, "min": 0, "max": 1800,
+      "shown_when": { "setting": "{{slayer_rules}}:mode", "is": ["{{ctf_class}}"] } },
+    { "key": "returned_flag_respawn", "title": "Returned Flag Respawn Time", "category": "Capture the Flag", "type": "int", "default": {{pref_returned_respawn}}, "min": 0, "max": 1800,
+      "shown_when": { "setting": "{{slayer_rules}}:mode", "is": ["{{ctf_class}}"] } },
+    { "key": "manual_flag_drop", "title": "Enable Manual Flag Dropping", "category": "Capture the Flag", "type": "bool", "default": {{pref_manual_drop|bool}},
+      "shown_when": { "setting": "{{slayer_rules}}:mode", "is": ["{{ctf_class}}"] } },
+    { "key": "require_enemy_players", "title": "Capture Requires Enemy Players", "category": "Capture the Flag", "type": "bool", "default": {{pref_require_enemies|bool}},
+      "shown_when": { "setting": "{{slayer_rules}}:mode", "is": ["{{ctf_class}}"] } }
+  ],
+  "setting_items": [
+    { "setting": "{{slayer_rules}}:mode",
+      "items": [ { "value": "{{ctf_class}}", "name": "{{ctf_name}}" } ] }
   ],
   "state": {
     "global": {

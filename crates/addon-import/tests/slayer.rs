@@ -15,12 +15,16 @@ use bri_package::packages::{PackageEntry, PackageSet, Side};
 use bri_package_runtime::Catalog;
 use bri_sim::{
     definitions::{Definition, Definitions, Special},
-    session::{Command, MiniGameRequest, Notice, PackageArg, PackageCommand, Reply, Session},
+    session::{
+        Command, ControlObject, MiniGameRequest, Notice, PackageArg, PackageCommand, Reply,
+        Session, SettingEdit, TeamEdit,
+    },
     simulation::Simulation,
 };
 use bri_world::{BrickId, OwnerId, World};
 use glam::Vec3;
 use rapier3d::prelude::*;
+use bri_minigames::SettingValue as Value;
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
@@ -32,6 +36,13 @@ const TEAM_SPAWN: &str = "gamemode_slayer:brick/brickslyrspawnpointdata";
 const FLAG_ITEM: &str = "gamemode_slayer_ctf:weapon/slyrctf_flagitem";
 const FLAG_IMAGE: &str = "gamemode_slayer_ctf:image/slyrctf_flagimage";
 const SLAYER: &str = "gamemode_slayer-rules";
+const CTF: &str = "gamemode_slayer_ctf-rules";
+/// The stand-ins' game modes (`server/defaults/game-modes.cs`,
+/// `game-mode.cs`).
+const TEAM_MODE: &str = "Slayer_TeamDeathmatch";
+const CTF_MODE: &str = "Slayer_CTF";
+/// The stand-in's time between rounds, seconds.
+const BETWEEN_ROUNDS: usize = 6;
 const RED: u8 = 0;
 const BLUE: u8 = 1;
 /// The stand-in's own numbers (`tests/fixtures/ports/Gamemode_Slayer_CTF`).
@@ -322,6 +333,31 @@ impl Game {
             .find(|i| i.image == FLAG_IMAGE && i.hand == FLAG_SLOT)
             .map(|i| i.paint)
     }
+    /// Changes Add-On settings of the game, as its owner in the Mini-Game
+    /// window: `("ns-rules:key", value)`.
+    fn set(&mut self, owner: OwnerId, settings: &[(&str, Value)]) {
+        let game = self.s.minigame_views()[0].id;
+        self.cmd(
+            owner,
+            Command::MiniGame(MiniGameRequest::AddOnSettings {
+                game,
+                settings: settings
+                    .iter()
+                    .map(|(key, value)| SettingEdit {
+                        key: (*key).into(),
+                        value: Some(value.clone()),
+                    })
+                    .collect(),
+                teams: None,
+            }),
+        )
+        .unwrap();
+        self.steps(1);
+    }
+    fn round_over(&self) -> bool {
+        // Everyone's camera is off their body while a round is over.
+        self.s.vitals().values().all(|v| v.respawn_held)
+    }
     fn heard(&mut self, text: &str) -> bool {
         self.s
             .take_private_notices()
@@ -413,6 +449,7 @@ fn an_enemy_flag_rides_on_the_carriers_back_and_scores_at_home() {
     let mut g = Game::new("capture");
     let (red, blue) = two_teams(&mut g);
     let owner = g.s.minigame_views()[0].owner;
+    g.set(owner, &[(&key(SLAYER, "mode"), Value::Text(CTF_MODE.into()))]);
     let red_flag = g.plant(owner, FLAG, -8.5, 0.0, RED);
     let blue_flag = g.plant(owner, FLAG, 8.5, 0.0, BLUE);
     g.steps(31);
@@ -455,6 +492,7 @@ fn a_dropped_flag_falls_in_its_colour_and_its_team_recovers_it() {
     let mut g = Game::new("drop");
     let (red, blue) = two_teams(&mut g);
     let owner = g.s.minigame_views()[0].owner;
+    g.set(owner, &[(&key(SLAYER, "mode"), Value::Text(CTF_MODE.into()))]);
     let red_flag = g.plant(owner, FLAG, -8.5, 0.0, RED);
     g.plant(owner, FLAG, 8.5, 0.0, BLUE);
     g.steps(31);
@@ -496,5 +534,221 @@ fn a_dropped_flag_falls_in_its_colour_and_its_team_recovers_it() {
     assert_eq!(g.flag_on(red_flag), Some(Some(RED)));
     assert_eq!(g.score(red), RECOVERY_POINTS);
     assert!(g.heard("recovered the"));
+    g.quiet();
+}
+
+fn key(rules: &str, key: &str) -> String {
+    format!("{rules}:{key}")
+}
+
+/// Two teams playing Capture the Flag, with a flag each: (red, blue, red
+/// flag, blue flag).
+fn capture_the_flag(g: &mut Game, settings: &[(&str, Value)]) -> (OwnerId, OwnerId, BrickId, BrickId) {
+    let (red, blue) = two_teams(g);
+    let owner = g.s.minigame_views()[0].owner;
+    let mode = key(SLAYER, "mode");
+    let mut all = vec![(mode.as_str(), Value::Text(CTF_MODE.into()))];
+    all.extend(settings.iter().cloned());
+    g.set(owner, &all);
+    let red_flag = g.plant(owner, FLAG, -8.5, 0.0, RED);
+    let blue_flag = g.plant(owner, FLAG, 8.5, 0.0, BLUE);
+    g.steps(31);
+    (red, blue, red_flag, blue_flag)
+}
+fn capture(g: &mut Game, blue: OwnerId) {
+    g.goto(blue, Vec3::new(-8.5, 0.25, 0.25));
+    g.settle();
+    assert!(g.carried(blue).is_some(), "carrying the red flag");
+    g.goto(blue, Vec3::new(8.5, 0.25, 0.25));
+    g.steps(30);
+}
+
+#[test]
+fn enough_captures_win_the_round_and_slayer_resets_it() {
+    let mut g = Game::new("ctf-win");
+    let to_win = key(CTF, "flag_returns_to_win");
+    let (red, blue, red_flag, _) = capture_the_flag(&mut g, &[(&to_win, Value::Int(1))]);
+    g.s.take_private_notices();
+    capture(&mut g, blue);
+    g.steps(13);
+    // Slayer's end of round: the winner announced, everyone out and their
+    // camera on their own body, the reset counted down.
+    assert!(g.heard("won this round with a score of 25 points"));
+    assert!(g.round_over());
+    for p in [red, blue] {
+        assert_eq!(g.s.control(p), Some(ControlObject::Corpse));
+        assert!(g.cmd(p, Command::WeaponTrigger { down: true }).is_err());
+    }
+    // No more captures until the reset.
+    assert_eq!(g.flag_on(red_flag), Some(Some(RED)));
+    g.steps(BETWEEN_ROUNDS * 120);
+    assert!(!g.round_over());
+    for p in [red, blue] {
+        assert_eq!(g.s.control(p), Some(ControlObject::Player));
+        assert_eq!(g.score(p), 0);
+    }
+    g.quiet();
+}
+
+#[test]
+fn the_points_to_win_end_a_round_too() {
+    let mut g = Game::new("ctf-points");
+    let to_win = key(CTF, "flag_returns_to_win");
+    let points = key(SLAYER, "points");
+    let (_, blue, _, _) =
+        capture_the_flag(&mut g, &[(&to_win, Value::Int(0)), (&points, Value::Int(20))]);
+    g.s.take_private_notices();
+    capture(&mut g, blue);
+    g.steps(13);
+    assert!(g.heard("won this round with a score of 25 points"));
+    assert!(g.round_over());
+    g.quiet();
+}
+
+#[test]
+fn a_team_out_of_lives_loses_and_the_next_round_counts_down() {
+    let mut g = Game::new("lives");
+    let (red, blue) = two_teams(&mut g);
+    let owner = g.s.minigame_views()[0].owner;
+    g.set(
+        owner,
+        &[
+            (&key(SLAYER, "lives"), Value::Int(1)),
+            (&key(SLAYER, "pre_round_seconds"), Value::Int(2)),
+        ],
+    );
+    g.s.take_private_notices();
+    g.cmd(red, Command::Suicide).unwrap();
+    g.steps(13);
+    // Red's last life: out, no respawn, and Blue is the last team standing.
+    assert!(g.s.vitals()[&red].respawn_held);
+    g.steps(600);
+    assert!(g.cmd(red, Command::Respawn).is_err());
+    assert!(g.heard("won this round"));
+    assert_eq!(g.s.control(blue), Some(ControlObject::Corpse));
+
+    // The reset brings everyone back, standing still through the countdown.
+    g.steps(BETWEEN_ROUNDS * 120 - 600);
+    assert!(g.s.vitals()[&red].alive);
+    assert!(!g.round_over());
+    assert_eq!(g.s.control(red), Some(ControlObject::Corpse));
+    assert!(g.heard("1 life - The last team standing wins."));
+    g.steps(2 * 120 + 13);
+    for p in [red, blue] {
+        assert_eq!(g.s.control(p), Some(ControlObject::Player));
+    }
+    g.quiet();
+}
+
+#[test]
+fn a_time_limit_counts_down_and_ends_the_round() {
+    let mut g = Game::new("time");
+    let a =
+        g.s.join("Alpha".into(), Vec3::new(-2.0, 0.05, 20.0), false)
+            .unwrap();
+    g.cmd(
+        a,
+        Command::MiniGame(MiniGameRequest::Create {
+            color: 0,
+            settings: bri_minigames::Settings {
+                loadout: Default::default(),
+                ..Default::default()
+            },
+        }),
+    )
+    .unwrap();
+    g.set(a, &[(&key(SLAYER, "time"), Value::Int(1))]);
+    g.s.take_private_notices();
+    g.steps(30 * 120 + 13);
+    assert!(g.heard("30 seconds remaining."));
+    g.steps(30 * 120);
+    // Nobody scored: nobody won.
+    assert!(g.heard("Nobody won this round."));
+    assert!(g.round_over());
+    g.quiet();
+}
+
+#[test]
+fn the_mini_game_window_sets_up_teams_and_their_settings() {
+    let mut g = Game::new("window");
+    let a =
+        g.s.join("Alpha".into(), Vec3::new(-2.0, 0.05, 20.0), false)
+            .unwrap();
+    let b =
+        g.s.join("Bravo".into(), Vec3::new(2.0, 0.05, 20.0), false)
+            .unwrap();
+    g.cmd(
+        a,
+        Command::MiniGame(MiniGameRequest::Create {
+            color: 0,
+            settings: bri_minigames::Settings {
+                loadout: Default::default(),
+                ..Default::default()
+            },
+        }),
+    )
+    .unwrap();
+    let game = g.s.minigame_views()[0].id;
+    g.cmd(b, Command::MiniGame(MiniGameRequest::Join { game }))
+        .unwrap();
+    g.steps(2);
+    // The menu lists Slayer's settings under the Add-On players know.
+    let menu = g.s.addon_settings();
+    let mode = menu.iter().find(|s| s.key() == key(SLAYER, "mode")).unwrap();
+    assert_eq!(mode.package_name, "Stand-in Slayer");
+    assert_eq!(mode.items.len(), 3, "Capture the Flag joins the modes");
+    let lives = key(SLAYER, "team_lives");
+    let team = |name: &str, color: u8, settings: Vec<SettingEdit>| TeamEdit {
+        id: None,
+        name: name.into(),
+        color,
+        settings,
+    };
+    // The mode and both teams in one Apply; a player who is not the owner
+    // cannot.
+    let request = MiniGameRequest::AddOnSettings {
+        game,
+        settings: vec![SettingEdit {
+            key: key(SLAYER, "mode"),
+            value: Some(Value::Text(TEAM_MODE.into())),
+        }],
+        teams: Some(vec![
+            team(
+                "Red",
+                RED,
+                vec![SettingEdit {
+                    key: lives.clone(),
+                    value: Some(Value::Int(3)),
+                }],
+            ),
+            team("Blue", BLUE, vec![]),
+        ]),
+    };
+    assert!(g.cmd(b, Command::MiniGame(request.clone())).is_err());
+    g.cmd(a, Command::MiniGame(request)).unwrap();
+    g.steps(13);
+    let view = g.s.minigame_views()[0].clone();
+    assert_eq!(view.teams.len(), 2);
+    assert_eq!(view.teams[0].addon_settings.get(&lives), Some(&Value::Int(3)));
+    // Slayer sorted both players, one a side.
+    let (ca, cb) = (g.colour(a), g.colour(b));
+    assert!(ca.is_some() && cb.is_some() && ca != cb, "{ca:?} {cb:?}");
+    // A bad value is refused whole.
+    let bad = MiniGameRequest::AddOnSettings {
+        game,
+        settings: vec![SettingEdit {
+            key: key(SLAYER, "lives"),
+            value: Some(Value::Int(1000)),
+        }],
+        teams: None,
+    };
+    assert!(g.cmd(a, Command::MiniGame(bad)).is_err());
+    // `/teams friendlyfire on` is the same setting the window shows.
+    g.teams(a, "friendlyfire on");
+    let view = g.s.minigame_views()[0].clone();
+    assert_eq!(
+        view.addon_settings.get(&key(SLAYER, "friendly_fire")),
+        Some(&Value::Bool(true))
+    );
     g.quiet();
 }

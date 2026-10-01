@@ -369,6 +369,7 @@ impl MinigamesWorld {
                         ball_update_at: None,
                         teams: Teams::default(),
                         addon_settings: BTreeMap::new(),
+                        round_over: false,
                     },
                 );
                 out.push(Effect::Created { game: id });
@@ -519,6 +520,7 @@ impl MinigamesWorld {
                 let g = self.games.get_mut(&game).expect("validated game");
                 g.last_reset = Some(self.tick);
                 g.round += 1;
+                g.round_over = false;
                 out.push(Effect::ResetBricks {
                     owners,
                     respawn_vehicles: true,
@@ -630,6 +632,7 @@ impl MinigamesWorld {
                 ball_update_at: None,
                 teams: Teams::default(),
                 addon_settings: BTreeMap::new(),
+                round_over: false,
             },
         );
         Ok(id)
@@ -760,6 +763,35 @@ impl MinigamesWorld {
         }
         p.respawn_held = held;
         Ok(())
+    }
+    /// A rule ends `game`'s round, won by `teams` and `players` (Slayer's
+    /// `endRound`). Winners must belong to the game; the round stays over
+    /// until the game resets.
+    pub fn end_round(
+        &mut self,
+        game: GameId,
+        teams: Vec<TeamId>,
+        players: Vec<PlayerId>,
+    ) -> Result<Vec<Effect>, Error> {
+        let g = self.game(game)?;
+        if g.round_over {
+            return Err(Error::RoundOver);
+        }
+        if teams.len() > MAX_TEAMS || players.len() > g.members.len() {
+            return Err(Error::Capacity);
+        }
+        if teams.iter().any(|t| g.teams.get(*t).is_none()) {
+            return Err(Error::StaleTeam);
+        }
+        if players.iter().any(|p| !g.members.contains(p)) {
+            return Err(Error::NotMember);
+        }
+        self.games.get_mut(&game).expect("validated game").round_over = true;
+        Ok(vec![Effect::RoundEnded {
+            game,
+            teams,
+            players,
+        }])
     }
     /// `instantRespawn` event output: respawn now, alive or dead, skipping the
     /// respawn delay. The host validates event permission first.
