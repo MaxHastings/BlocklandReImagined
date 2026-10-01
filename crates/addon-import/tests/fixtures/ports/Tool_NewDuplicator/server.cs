@@ -89,7 +89,7 @@ function ndApplyDefaultPrefValues()
    $Pref::Server::ND::TrustLimit         = 2;
    $Pref::Server::ND::AdminTrustBypass1  = true;
    $Pref::Server::ND::SelectPublicBricks = true;
-   $Pref::Server::ND::MaxBricksAdmin     = 2000000;
+   $Pref::Server::ND::MaxBricksAdmin     = 1000000;
    $Pref::Server::ND::MaxBricksPlayer    = 3;
    $Pref::Server::ND::MaxBoxSizeAdmin    = 2000;
    $Pref::Server::ND::MaxBoxSizePlayer   = 8;
@@ -101,6 +101,7 @@ function ndApplyDefaultPrefValues()
    $Pref::Server::ND::WrenchAdminOnly     = false;
    $Pref::Server::ND::FloatAdminOnly      = false;
    $Pref::Server::ND::FillBricksAdminOnly = false;
+   $Pref::Server::ND::PlayMenuSounds      = true;
 }
 
 function serverCmdNewDuplicator(%client)

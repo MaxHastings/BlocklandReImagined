@@ -2201,9 +2201,16 @@ fn copy_rule(options: &Map) -> Result<CopyOptions, Box<EvalAltResult>> {
         match key.as_str() {
             "trust" => {
                 rule.trust = match value.clone().into_string().as_deref() {
+                    Ok("none") => crate::ops::CopyTrust::None,
                     Ok("build") => crate::ops::CopyTrust::Build,
                     Ok("full") => crate::ops::CopyTrust::Full,
-                    _ => return Err("copy option `trust` is \"build\" or \"full\"".into()),
+                    Ok("self") => crate::ops::CopyTrust::Own,
+                    _ => {
+                        return Err(
+                            "copy option `trust` is \"none\", \"build\", \"full\" or \"self\""
+                                .into(),
+                        );
+                    }
                 }
             }
             "public_bricks" => rule.public = flag()?,

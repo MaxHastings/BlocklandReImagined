@@ -3942,3 +3942,47 @@ fn new_duplicator_port_mirrors_a_ghost_brick() {
     assert!(diagnostics.is_empty(), "{diagnostics:#?}");
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// The New Duplicator's preferences (`ndRegisterPrefs`) are the server's
+/// settings: listed in the host's Add-On Settings under their v20 globals,
+/// defaulting to what the stand-in's `ndApplyDefaultPrefValues` sets, and
+/// the rules follow a change (here, "Enable Menu Sounds").
+#[test]
+fn new_duplicator_port_follows_the_hosts_server_settings() {
+    use bri_package::setting::{SettingScope, SettingValue as V};
+    use bri_sim::session::Command;
+
+    let (dir, mut s, host, seq, _) = new_duplicator_game("new-duplicator-prefs");
+    let listed: Vec<_> = s
+        .addon_settings()
+        .into_iter()
+        .filter(|a| a.package.starts_with("tool_newduplicator"))
+        .collect();
+    assert_eq!(listed.len(), 19);
+    assert!(listed.iter().all(|a| a.def.scope == SettingScope::Server
+        && a.def.global.as_deref().is_some_and(|g| g.starts_with("$Pref::Server::ND::"))));
+    let default = |key: &str| {
+        let found = listed.iter().find(|a| a.def.key == key).unwrap();
+        (found.key(), found.def.default.clone())
+    };
+    assert_eq!(default("max_bricks_player").1, V::Int(3));
+    assert_eq!(default("trust_limit").1, V::Int(2));
+    assert_eq!(default("plant_timeout_ms").1, V::Int(2000));
+    let (sounds_key, sounds_on) = default("play_menu_sounds");
+    assert_eq!(sounds_on, V::Bool(true));
+
+    // [Light] in stack mode goes to box mode with a click, and back.
+    swing(&mut s, host, &seq);
+    heard(&mut s, host);
+    let light = |s: &mut bri_sim::session::Session| {
+        send(s, host, &seq, Command::ToggleLight).unwrap();
+        s.step().unwrap();
+        heard(s, host).1
+    };
+    assert_eq!(light(&mut s), ["lightOnSound"]);
+    let mut settings = s.server_settings().clone();
+    settings.addon_settings.insert(sounds_key, V::Bool(false));
+    s.set_server_settings(settings).unwrap();
+    assert_eq!(light(&mut s), Vec::<String>::new(), "the host turned menu sounds off");
+    std::fs::remove_dir_all(dir).unwrap();
+}

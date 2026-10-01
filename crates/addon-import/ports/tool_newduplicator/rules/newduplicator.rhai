@@ -26,50 +26,60 @@
 //   name, /AllDups lists them, /DupVersion and /DupClients show versions,
 //   and /ClearDups (admins) puts every duplicator away.
 
-// Its preferences, as `ndApplyDefaultPrefValues` set them.
+// Its preferences (`ndRegisterPrefs`): the server's New Duplicator
+// settings, which the host changes in the Admin menu's Add-On Settings,
+// read by their v20 globals. Their defaults are `ndApplyDefaultPrefValues`'.
+fn nd_pref(name) {
+    pref("$Pref::Server::ND::" + name)
+}
 fn admin_only() {
-    {{admin_only}}
+    nd_pref("AdminOnly")
 }
 fn save_admin_only() {
-    {{save_admin_only}}
+    nd_pref("SaveAdminOnly")
 }
 fn load_admin_only() {
-    {{load_admin_only}}
+    nd_pref("LoadAdminOnly")
 }
-// "Trust Limit": 2 is full trust, 1 build trust.
+// "Trust Limit": the trust a selection needs in a brick's owner.
 fn trust() {
-    if {{trust_limit}} >= 2 { "full" } else { "build" }
+    switch nd_pref("TrustLimit") {
+        0 => "none",
+        1 => "build",
+        3 => "self",
+        _ => "full",
+    }
 }
 // "Admin Trust Bypass" when selecting.
 fn admin_bypass() {
-    {{admin_bypass}}
+    nd_pref("AdminTrustBypass1")
 }
 fn select_public() {
-    {{select_public}}
+    nd_pref("SelectPublicBricks")
 }
 // "Max Bricks", up to the most one copy holds (the original's own admin
 // limit). A big selection, plant, cut, paint, wrench, load or undo goes a
 // slice each tick, as the original's did, with its progress below.
 fn max_bricks(admin) {
-    let n = if admin { {{max_bricks_admin}} } else { {{max_bricks_player}} };
+    let n = nd_pref(if admin { "MaxBricksAdmin" } else { "MaxBricksPlayer" });
     if n > 1000000 { 1000000 } else { n }
 }
 // "Max Box Size", units on a side, as large as the original's own limit.
 fn max_box(admin) {
-    let n = if admin { {{max_box_admin}} } else { {{max_box_player}} };
+    let n = nd_pref(if admin { "MaxBoxSizeAdmin" } else { "MaxBoxSizePlayer" });
     if n > 1024 { 1024.0 } else { n.to_float() }
 }
 // "Select Timeout", non-admins only.
 fn select_wait() {
-    {{select_timeout_ms}} * second() / 1000
+    nd_pref("SelectTimeoutMS") * second() / 1000
 }
 // "Planting Timeout", non-admins only, in seconds.
 fn plant_wait_seconds(admin) {
-    if admin { 0.0 } else { {{plant_timeout_ms}} / 1000.0 }
+    if admin { 0.0 } else { nd_pref("PlantTimeoutMS") / 1000.0 }
 }
 // "Admin Trust Bypass" when planting as another.
 fn admin_plant_bypass() {
-    {{admin_plant_bypass}}
+    nd_pref("AdminTrustBypass2")
 }
 // `$ND::Version`.
 fn version() {
@@ -77,7 +87,7 @@ fn version() {
 }
 // "Enable Menu Sounds".
 fn menu_sounds() {
-    true
+    nd_pref("PlayMenuSounds")
 }
 // "Process Per Tick": a plant of more than ten ticks' worth sounds.
 fn process_per_tick() {
@@ -89,19 +99,19 @@ fn name_length() {
 }
 // Admin-only features.
 fn paint_admin_only() {
-    {{paint_admin_only}}
+    nd_pref("PaintAdminOnly")
 }
 fn paint_fx_admin_only() {
-    {{paint_fx_admin_only}}
+    nd_pref("PaintFxAdminOnly")
 }
 fn wrench_admin_only() {
-    {{wrench_admin_only}}
+    nd_pref("WrenchAdminOnly")
 }
 fn float_admin_only() {
-    {{float_admin_only}}
+    nd_pref("FloatAdminOnly")
 }
 fn fill_bricks_admin_only() {
-    {{fill_bricks_admin_only}}
+    nd_pref("FillBricksAdminOnly")
 }
 
 // Simulation ticks per second.

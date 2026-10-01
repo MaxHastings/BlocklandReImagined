@@ -1265,10 +1265,14 @@ pub struct StackReach {
 /// v20's trust levels a copy may ask for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CopyTrust {
+    /// None: anyone's bricks.
+    None,
     /// Build on their bricks.
     Build,
     /// Also paint and hammer them (v20's duplicators asked this).
     Full,
+    /// Only their own (v20's "Self" trust, which no one gives another).
+    Own,
 }
 /// The Add-On's rules for the bricks a copy takes and how it plants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -245,6 +245,27 @@
       "name": "cleardups"
     }
   ],
+  "settings": [
+    { "key": "admin_only", "title": "Admin Only", "category": "Limits", "scope": "server", "type": "bool", "default": {{admin_only|bool}}, "global": "$Pref::Server::ND::AdminOnly" },
+    { "key": "paint_admin_only", "title": "Fill Paint Admin Only", "category": "Limits", "scope": "server", "type": "bool", "default": {{paint_admin_only|bool}}, "global": "$Pref::Server::ND::PaintAdminOnly" },
+    { "key": "paint_fx_admin_only", "title": "Fill Paint FX Admin Only", "category": "Limits", "scope": "server", "type": "bool", "default": {{paint_fx_admin_only|bool}}, "global": "$Pref::Server::ND::PaintFxAdminOnly" },
+    { "key": "wrench_admin_only", "title": "Fill Wrench Admin Only", "category": "Limits", "scope": "server", "type": "bool", "default": {{wrench_admin_only|bool}}, "global": "$Pref::Server::ND::WrenchAdminOnly" },
+    { "key": "float_admin_only", "title": "Floating Bricks Admin Only", "category": "Limits", "scope": "server", "type": "bool", "default": {{float_admin_only|bool}}, "global": "$Pref::Server::ND::FloatAdminOnly" },
+    { "key": "save_admin_only", "title": "Save Admin Only", "category": "Limits", "scope": "server", "type": "bool", "default": {{save_admin_only|bool}}, "global": "$Pref::Server::ND::SaveAdminOnly" },
+    { "key": "load_admin_only", "title": "Load Admin Only", "category": "Limits", "scope": "server", "type": "bool", "default": {{load_admin_only|bool}}, "global": "$Pref::Server::ND::LoadAdminOnly" },
+    { "key": "fill_bricks_admin_only", "title": "Fill Bricks Admin Only", "category": "Limits", "scope": "server", "type": "bool", "default": {{fill_bricks_admin_only|bool}}, "global": "$Pref::Server::ND::FillBricksAdminOnly" },
+    { "key": "trust_limit", "title": "Trust Limit", "category": "Settings", "scope": "server", "type": "list", "default": {{trust_limit}}, "items": [ { "value": 0, "name": "None" }, { "value": 1, "name": "Build" }, { "value": 2, "name": "Full" }, { "value": 3, "name": "Self" } ], "global": "$Pref::Server::ND::TrustLimit" },
+    { "key": "admin_trust_bypass_select", "title": "Admin Trust Bypass (Select)", "category": "Settings", "scope": "server", "type": "bool", "default": {{admin_bypass|bool}}, "global": "$Pref::Server::ND::AdminTrustBypass1" },
+    { "key": "admin_trust_bypass_edit", "title": "Admin Trust Bypass (Edit)", "category": "Settings", "scope": "server", "type": "bool", "default": {{admin_plant_bypass|bool}}, "global": "$Pref::Server::ND::AdminTrustBypass2" },
+    { "key": "select_public_bricks", "title": "Select Public Bricks", "category": "Settings", "scope": "server", "type": "bool", "default": {{select_public|bool}}, "global": "$Pref::Server::ND::SelectPublicBricks" },
+    { "key": "max_bricks_admin", "title": "Max Bricks (Admin)", "category": "Settings", "scope": "server", "type": "int", "default": {{max_bricks_admin}}, "min": 1, "max": 1000000, "global": "$Pref::Server::ND::MaxBricksAdmin" },
+    { "key": "max_bricks_player", "title": "Max Bricks (Player)", "category": "Settings", "scope": "server", "type": "int", "default": {{max_bricks_player}}, "min": 1, "max": 1000000, "global": "$Pref::Server::ND::MaxBricksPlayer" },
+    { "key": "max_box_admin", "title": "Max Box Size (Admin)", "category": "Settings", "scope": "server", "type": "int", "default": {{max_box_admin}}, "min": 1, "max": 50000, "global": "$Pref::Server::ND::MaxBoxSizeAdmin" },
+    { "key": "max_box_player", "title": "Max Box Size (Player)", "category": "Settings", "scope": "server", "type": "int", "default": {{max_box_player}}, "min": 1, "max": 50000, "global": "$Pref::Server::ND::MaxBoxSizePlayer" },
+    { "key": "select_timeout_ms", "title": "Selecting Timeout (Player, ms)", "category": "Settings", "scope": "server", "type": "int", "default": {{select_timeout_ms}}, "min": 0, "max": 5000, "global": "$Pref::Server::ND::SelectTimeoutMS" },
+    { "key": "plant_timeout_ms", "title": "Planting Timeout (Player, ms)", "category": "Settings", "scope": "server", "type": "int", "default": {{plant_timeout_ms}}, "min": 0, "max": 5000, "global": "$Pref::Server::ND::PlantTimeoutMS" },
+    { "key": "play_menu_sounds", "title": "Enable Menu Sounds", "category": "Advanced", "scope": "server", "type": "bool", "default": {{play_menu_sounds|bool}}, "global": "$Pref::Server::ND::PlayMenuSounds" }
+  ],
   "undo_confirm_over": {{undo_confirm}},
   "on_copy": true,
   "on_place": true,
