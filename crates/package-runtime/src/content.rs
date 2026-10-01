@@ -205,6 +205,16 @@ pub struct Behaviour {
     /// tick.
     #[serde(default)]
     pub on_projectile_hit: bool,
+    /// `on_activate(player)` as a living player clicks with nothing to
+    /// fire (`serverCmdActivateStuff`, which v20 Add-Ons packaged as
+    /// `Player::activateStuff`), before the engine's own activation: the
+    /// arm's swing, flipping a vehicle, a brick's `onActivate`. Return
+    /// `true` to take the click, so the engine does nothing more; anything
+    /// else lets it carry on. Every package that declares it is asked, in
+    /// load order, until one takes the click. Called as it happens, so it
+    /// must be quick.
+    #[serde(default)]
+    pub on_activate: bool,
     /// `on_tick()` every `tick_interval` ticks, when set.
     #[serde(default)]
     pub tick_interval: Option<u32>,
@@ -674,6 +684,11 @@ impl EntityKind {
 /// archetype id; v20's standard player by default) and overrides only what
 /// it names. `movement` takes any motor constant by name (`gravity`,
 /// `forward`, `body`: `box` or `ball`, ...); the engine checks the result.
+///
+/// With `adjusts` it is no new archetype: it changes the named fields of one
+/// of v20's own (`v20.player.playernojet`) for everyone while the Add-On is
+/// on, as a v20 Add-On's `PlayerNoJet.maxStepHeight = 1.2;` did. Players of
+/// other types are untouched.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ArchetypeDef {
@@ -683,6 +698,9 @@ pub struct ArchetypeDef {
     pub name: String,
     #[serde(default)]
     pub base: Option<String>,
+    /// A v20 player type (`v20.player.<datablock>`) this changes in place.
+    #[serde(default)]
+    pub adjusts: Option<String>,
     #[serde(default)]
     pub movement: serde_json::Map<String, serde_json::Value>,
     #[serde(default)]
@@ -735,6 +753,16 @@ impl ArchetypeDef {
             self.model.as_ref().is_none_or(|m| text(m, 160)),
             "model must be a model id"
         );
+        if let Some(stock) = &self.adjusts {
+            ensure!(
+                stock.starts_with("v20.player.") && text(stock, 160),
+                "adjusts names one of v20's player types (v20.player.<datablock>)"
+            );
+            ensure!(
+                self.base.is_none() && self.name.is_empty(),
+                "an adjustment has no base or name of its own"
+            );
+        }
         Ok(())
     }
 }

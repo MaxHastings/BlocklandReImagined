@@ -216,6 +216,7 @@ group session.
 - **Never `git stash`**, never run `cargo fmt` workspace-wide, never kill
   processes by image name.
 - Commit work in progress before pausing a thread.
-- Record decisions, evidence and commands in [progress.md](progress.md).
+- Record decisions, evidence and commands as a new file in
+  [progress/](progress/README.md), one file per entry.
 - Cloud containers have about 30 GB of disk: build only the crates you need,
   with `CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0`.

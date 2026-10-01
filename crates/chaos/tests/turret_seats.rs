@@ -1,6 +1,6 @@
 //! The Tank's turret through seat changes on the host, with no v20 content:
-//! the content-free chaos Tank, and moves shaped as a real client sends
-//! them in each seat (a mouse driver's raw mouse turn, a passenger's turn on
+//! the made-up tank of `bri_vehicles::testing`, and moves shaped as a real
+//! client sends them in each seat (a mouse driver's raw mouse turn, a passenger's turn on
 //! the seat, a gunner's look). Max, v0.1.10: "when i switch seat to the tank
 //! turrent it resets its position rather than keeping whatever rotation it
 //! had".
@@ -14,7 +14,7 @@ use glam::{Quat, Vec3};
 use std::collections::VecDeque;
 use std::f32::consts::{PI, TAU};
 
-const TANK: &str = "v20.vehicle.chaostank";
+use bri_vehicles::testing::TANK;
 
 fn wrap(a: f32) -> f32 {
     (a + PI).rem_euclid(TAU) - PI
@@ -59,7 +59,7 @@ fn boarded() -> (Session, Rider) {
         recolor: false,
     });
     let mut s = Session::new(fixture::synthetic_simulation(&[brick]).unwrap());
-    let (pack, _) = fixture::synthetic_vehicles_with_tank().unwrap();
+    let (pack, _) = fixture::synthetic_vehicles().unwrap();
     s.set_vehicle_pack(pack, Vec::new()).unwrap();
     s.set_spawn_points(vec![Vec3::new(0.0, 0.05, 0.0)]).unwrap();
     let owner = s

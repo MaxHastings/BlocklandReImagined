@@ -32,7 +32,6 @@ const TELEPORT_BURST: &str = "v20/emitter/playerteleportemittera";
 const TELEPORT_BURST_SECONDS: f32 = 0.15;
 /// `$BackSlot`, where PlayerTeleportImage mounts.
 const BACK_SLOT: u32 = 2;
-const VEHICLE_BURN_EMITTER: &str = "v20/emitter/vehicleburnemitter";
 /// `vehicleSplash` (SplashData): its two finite emitters.
 const VEHICLE_SPLASH: [&str; 2] = [
     "v20/emitter/vehiclesplashemitter",
@@ -368,7 +367,8 @@ pub struct ActorEffects {
     jets: BTreeMap<(u64, u8), EffectHandle>,
     /// Jet ground dust by (player, foot).
     jet_dust: BTreeMap<(u64, u8), EffectHandle>,
-    burning: BTreeMap<u64, EffectHandle>,
+    /// Wreck fire by (vehicle, emitter id).
+    burning: BTreeMap<(u64, String), EffectHandle>,
     lights: BTreeMap<u64, EffectHandle>,
     froth: BTreeMap<u64, Froth>,
     /// Tire emitters by (vehicle, wheel).
@@ -383,6 +383,9 @@ pub struct ActorEffects {
     orbs: BTreeMap<u64, EffectHandle>,
     /// Other admins' free-camera eyes, set by `set_orbs` for the next advance.
     orb_eyes: Vec<(u64, Vec3)>,
+    /// The first-person player whose jets stay out of their own eye but
+    /// show in mirrors and portals (`set_own_eye`).
+    own_eye: Option<u64>,
     cursor: u64,
     pub diagnostics: Diagnostics,
 }
@@ -415,6 +418,7 @@ impl ActorEffects {
             waters: std::sync::Arc::from(Vec::new()),
             orbs: BTreeMap::new(),
             orb_eyes: Vec::new(),
+            own_eye: None,
             cursor: 0,
             diagnostics: Diagnostics::default(),
         })
@@ -711,6 +715,13 @@ impl ActorEffects {
         Ok(())
     }
 
+    /// The player looking out of their own eyes in first person: their jets
+    /// and jet dust are left out of that view
+    /// ([`EffectsWorld::snapshot_in_view`]) and drawn in every other.
+    pub fn set_own_eye(&mut self, actor: Option<u64>) {
+        self.own_eye = actor;
+    }
+
     /// Runs [`jet_dust`] sources; a foot without one drains its dust.
     pub fn update_jet_dust(&mut self, dust: &[JetDust]) -> Result<()> {
         let world = &mut self.world;
@@ -729,6 +740,7 @@ impl ActorEffects {
             };
             let options = SourceOptions {
                 time_scale: d.rate.clamp(0.001, 1.0),
+                hidden_from_own_eye: self.own_eye == Some(d.actor),
                 ..Default::default()
             };
             match self.jet_dust.get(&(d.actor, d.foot)) {
@@ -819,10 +831,6 @@ impl ActorEffects {
     }
 
     fn vehicle_effect(&mut self, vehicle: u64, effect: &str, active: bool) {
-        // Burning follows the replicated destroyed state (late joiners see it).
-        if effect.eq_ignore_ascii_case("VehicleBurnEmitter") {
-            return;
-        }
         if effect.eq_ignore_ascii_case("vehicleSplash") {
             for emitter in VEHICLE_SPLASH {
                 self.one_shot(Anchor::Vehicle { vehicle }, emitter);
@@ -1010,14 +1018,14 @@ impl ActorEffects {
     }
     /// Step image states, keep sources on their anchors and simulate particles.
     /// `jets`: jetting players' two foot transforms and velocity. `burning`:
-    /// destroyed vehicles. `lights`: players whose light is on. A source whose
+    /// destroyed vehicles' bodies with each of their wreck emitters. `lights`: players whose light is on. A source whose
     /// anchor is gone drains.
     pub fn advance(
         &mut self,
         dt: f32,
         pose: impl Fn(Anchor) -> Option<Mat4>,
         jets: &[(u64, [Mat4; 2], Vec3)],
-        burning: &[(u64, Mat4)],
+        burning: &[(u64, String, Mat4)],
         lights: &[PlayerLight],
     ) -> Result<()> {
         anyhow::ensure!(
@@ -1105,19 +1113,31 @@ impl ActorEffects {
                 })
             })
             .collect();
-        sync_sources(world, &mut self.jets, &wanted, JET_EMITTER)?;
+        let own = self.own_eye;
+        let options = |&(actor, _): &(u64, u8)| SourceOptions {
+            hidden_from_own_eye: own == Some(actor),
+            ..Default::default()
+        };
+        sync_sources(world, &mut self.jets, &wanted, JET_EMITTER, options)?;
         // `damageEmitter` fire on a destroyed vehicle until it is removed.
-        let wanted: BTreeMap<u64, SourceTransform> = burning
+        let wanted: BTreeMap<(u64, String), SourceTransform> = burning
             .iter()
-            .map(|(vehicle, m)| {
+            .map(|(vehicle, emitter, m)| {
                 let t = SourceTransform {
                     rotation: Quat::IDENTITY,
                     ..source(*m)
                 };
-                (*vehicle, t)
+                ((*vehicle, emitter.clone()), t)
             })
             .collect();
-        sync_sources(world, &mut self.burning, &wanted, VEHICLE_BURN_EMITTER)?;
+        let plain = |_: &_| SourceOptions::default();
+        sync_sources_by(
+            world,
+            &mut self.burning,
+            &wanted,
+            |(_, emitter)| emitter.as_str(),
+            plain,
+        )?;
         // `serverCmdLight` deletes the fxLight outright: no drain.
         self.lights.retain(|actor, handle| {
             let keep = lights.iter().any(|l| l.actor == *actor) && world.is_active(*handle);
@@ -1168,7 +1188,8 @@ impl ActorEffects {
                 (*owner, t)
             })
             .collect();
-        sync_sources(world, &mut self.orbs, &wanted, CAMERA_EMITTER)?;
+        let plain = |_: &_| SourceOptions::default();
+        sync_sources(world, &mut self.orbs, &wanted, CAMERA_EMITTER, plain)?;
         world.advance(dt, Vec3::ZERO)?;
         Ok(())
     }
@@ -1275,16 +1296,32 @@ fn teleport_image() -> bri_weapons::Image {
         zoom: None,
         crosshair: true,
         follow_arm: false,
+        hide_nodes: Vec::new(),
+        both_arms: false,
         paint_tint: false,
+        scripts: Default::default(),
     }
 }
 
-/// Keep one continuous emitter per key; removed keys drain.
-fn sync_sources<K: Ord + Copy>(
+/// Keep one continuous emitter per key, with `options(key)`; removed keys
+/// drain.
+fn sync_sources<'e, K: Ord + Clone>(
     world: &mut EffectsWorld,
     live: &mut BTreeMap<K, EffectHandle>,
-    wanted: &BTreeMap<K, SourceTransform>,
-    emitter: &str,
+    wanted: &'e BTreeMap<K, SourceTransform>,
+    emitter: &'e str,
+    options: impl Fn(&K) -> SourceOptions,
+) -> Result<()> {
+    sync_sources_by(world, live, wanted, |_| emitter, options)
+}
+
+/// [`sync_sources`] where each source names its own emitter.
+fn sync_sources_by<'e, K: Ord + Clone>(
+    world: &mut EffectsWorld,
+    live: &mut BTreeMap<K, EffectHandle>,
+    wanted: &'e BTreeMap<K, SourceTransform>,
+    emitter: impl Fn(&'e K) -> &'e str,
+    options: impl Fn(&K) -> SourceOptions,
 ) -> Result<()> {
     live.retain(|key, handle| {
         let keep = wanted.contains_key(key) && world.is_active(*handle);
@@ -1296,10 +1333,9 @@ fn sync_sources<K: Ord + Copy>(
     for (key, transform) in wanted {
         if let Some(handle) = live.get(key) {
             world.update_source(*handle, *transform)?;
-        } else if let Ok(handle) =
-            world.start_emitter(emitter, *transform, SourceOptions::default())
-        {
-            live.insert(*key, handle);
+            world.update_options(*handle, options(key))?;
+        } else if let Ok(handle) = world.start_emitter(emitter(key), *transform, options(key)) {
+            live.insert(key.clone(), handle);
         }
     }
     Ok(())

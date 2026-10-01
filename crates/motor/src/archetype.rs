@@ -161,6 +161,23 @@ impl Archetypes {
         self.0.push(archetype);
         Ok(ArchetypeId((self.0.len() - 1) as u16))
     }
+    /// Change an archetype in place, keeping its id and index: players of
+    /// it, and saves naming it, carry on with the new constants.
+    pub fn replace(&mut self, id: ArchetypeId, archetype: Archetype) -> Result<()> {
+        archetype.validate()?;
+        let slot = self
+            .0
+            .get_mut(usize::from(id.0))
+            .ok_or_else(|| anyhow::anyhow!("No archetype {}", id.0))?;
+        ensure!(
+            slot.id == archetype.id,
+            "Archetype {} cannot become {}",
+            slot.id,
+            archetype.id
+        );
+        *slot = archetype;
+        Ok(())
+    }
     pub fn get(&self, id: ArchetypeId) -> Option<&Archetype> {
         self.0.get(usize::from(id.0))
     }
@@ -181,6 +198,22 @@ impl Archetypes {
     /// Where a player of this state's archetype and scale sees from.
     pub fn eye(&self, state: &crate::player::PlayerState) -> glam::Vec3 {
         state.eye(&self.tuning(state.archetype, state.scale))
+    }
+    /// Give every archetype drawn with `model` that declares no mount
+    /// points that model's (its `mount<N>` nodes): a body need not be
+    /// rideable for a rule to seat someone on it (`mountObject`).
+    pub fn fill_mount_points(&mut self, model: &str, points: &[MountPoint]) -> Result<()> {
+        ensure!(
+            points.len() <= MAX_MOUNT_POINTS,
+            "At most {MAX_MOUNT_POINTS} mount points"
+        );
+        for archetype in &mut self.0 {
+            if archetype.look.model == model && archetype.mount_points.is_empty() {
+                archetype.mount_points = points.to_vec();
+                archetype.validate()?;
+            }
+        }
+        Ok(())
     }
     pub fn iter(&self) -> impl Iterator<Item = (ArchetypeId, &Archetype)> {
         self.0

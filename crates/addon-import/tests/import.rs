@@ -66,9 +66,7 @@ fn synthetic_addon_imports_with_report() {
     let report = import(&Options {
         input: fixture,
         out: out.clone(),
-        reference: None,
-        core: vec![],
-        version: "1.0.0".into(),
+        ..Default::default()
     })
     .unwrap();
     let r = json(&report);
@@ -225,9 +223,7 @@ fn refuses_to_overwrite_or_write_inside_the_source() {
     let options = |out: PathBuf| Options {
         input: fixture.clone(),
         out,
-        reference: None,
-        core: vec![],
-        version: "1.0.0".into(),
+        ..Default::default()
     };
     assert!(import(&options(fixture.join("nested-output"))).is_err());
     let existing = fresh("existing");
@@ -238,6 +234,59 @@ fn refuses_to_overwrite_or_write_inside_the_source() {
 
 const ARCHIVE: &str = "C:/Users/Maxwell/Documents/_Blockland_Maxwell_1588_Archive/Addons";
 const REFERENCE: &str = "E:/Downloads/B4v21Launcher/versions/Blockland v20";
+
+/// Maxwell's Steam copy of Blockland, whose Add-Ons folder holds the
+/// community Butterfly Knife and HE Grenade.
+const STEAM_ADDONS: &str = "S:/SteamLibrary/steamapps/common/Blockland/Add-Ons";
+
+/// The listed knife and grenade ports apply to the copies a player has, read
+/// their names from those scripts and pass their checks.
+#[test]
+fn real_steam_knife_and_grenade_ports() {
+    let addons = std::env::var("BRI_STEAM_ADDONS").unwrap_or(STEAM_ADDONS.into());
+    let reference = std::env::var("BRI_V20_REFERENCE").unwrap_or(REFERENCE.into());
+    if !Path::new(&addons).is_dir() || !Path::new(&reference).is_dir() {
+        eprintln!("skipped: Steam Add-Ons or v20 reference install not on this machine");
+        return;
+    }
+    let ports = [
+        ("Weapon_ButterflyKnife", "jab", "butterflyknifeprojectile"),
+        ("Weapon_HEGrenade", "bounce_sound", "hegrenadeBounceSound"),
+    ];
+    for (name, value, expected) in ports {
+        let out = fresh(name);
+        let report = import(&Options {
+            input: Path::new(&addons).join(format!("{name}.zip")),
+            out: out.clone(),
+            reference: Some(reference.clone().into()),
+            core: vec![],
+            version: "1.0.0".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let port = &report.ports[0];
+        eprintln!(
+            "{name} sha256 {} port {:?} values {:?}",
+            report.source.sha256, port.reason, port.values
+        );
+        assert!(port.applied, "{:?}", port.reason);
+        assert!(port.values[value].eq_ignore_ascii_case(expected));
+        let checks: bri_addon_import::porting::Checks = serde_json::from_slice(
+            &std::fs::read(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("ports")
+                    .join(&port.port)
+                    .join("checks.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        for (line, ok) in bri_addon_import::porting::run_checks(&out, &checks).unwrap() {
+            assert!(ok, "{line}");
+        }
+        std::fs::remove_dir_all(out.parent().unwrap()).unwrap();
+    }
+}
 
 #[test]
 fn real_community_samples() {
@@ -253,8 +302,7 @@ fn real_community_samples() {
             input: Path::new(&archive).join(format!("{name}.zip")),
             out: out.clone(),
             reference: Some(reference.clone().into()),
-            core: vec![],
-            version: "1.0.0".into(),
+            ..Default::default()
         })
         .unwrap();
         (report, out)
@@ -580,9 +628,7 @@ fn imported_weapon_packs_merge_into_one_runtime_pack() {
         import(&Options {
             input,
             out,
-            reference: None,
-            core: vec![],
-            version: "1.0.0".into(),
+            ..Default::default()
         })
         .unwrap();
     }
@@ -766,9 +812,7 @@ datablock ShapeBaseImageData(kitScopeImage) { shapeFile = "./gun.dts"; stateName
     let report = import(&Options {
         input: source.clone(),
         out: out.clone(),
-        reference: None,
-        core: vec![],
-        version: "1.0.0".into(),
+        ..Default::default()
     })
     .unwrap();
     let pack =
@@ -848,4 +892,118 @@ datablock ShapeBaseImageData(kitScopeImage) { shapeFile = "./gun.dts"; stateName
     assert_eq!(pack.items[&id("weapon", "kitgunitem")].ui_name, "Kit Gun");
     std::fs::remove_dir_all(out.parent().unwrap()).unwrap();
     std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
+}
+
+/// Kaje's Sniper Rifle and Conan's Sniper Rifle Updated, from the copies on
+/// Maxwell's PC (read only): the listed ports apply and each fires one round
+/// a click, straight. `BRI_SNIPER_RIFLES` names other folders to look in.
+#[test]
+fn real_sniper_rifles() {
+    let folders = std::env::var("BRI_SNIPER_RIFLES").unwrap_or(
+        "S:/SteamLibrary/steamapps/common/Blockland/Add-Ons;\
+         C:/Users/Maxwell/Desktop/Games/.research/sniper/glass-343"
+            .into(),
+    );
+    let ports = [
+        (
+            "Weapon_Sniper_Rifle",
+            "weapon_sniper_rifle",
+            &include_bytes!("../ports/weapon_sniper_rifle/checks.json")[..],
+        ),
+        (
+            "Weapon_Sniper_Rifle_Updated",
+            "weapon_sniper_rifle_updated",
+            &include_bytes!("../ports/weapon_sniper_rifle_updated/checks.json")[..],
+        ),
+    ];
+    let mut found = 0;
+    for (addon, port, checks) in ports {
+        let copy = folders.split(';').flat_map(|f| {
+            let f = Path::new(f);
+            [f.join(format!("{addon}.zip")), f.join(addon)]
+        });
+        let Some(input) = copy.into_iter().find(|p| p.exists()) else {
+            eprintln!("skipped {addon}: no copy on this machine");
+            continue;
+        };
+        found += 1;
+        let out = fresh(addon);
+        let reference = Path::new(REFERENCE).is_dir().then(|| REFERENCE.into());
+        let report = import(&Options {
+            input,
+            out: out.clone(),
+            reference,
+            core: vec![],
+            installed: None,
+            version: "1.0.0".into(),
+        })
+        .unwrap();
+        let applied = &report.ports[0];
+        eprintln!(
+            "{addon} sha256 {} port {:?} values {:?}",
+            report.source.sha256, applied.reason, applied.values
+        );
+        assert_eq!(applied.port, port);
+        assert!(applied.applied, "{:?}", applied.reason);
+        // Its hash is listed (ports.json `sha256`), so it is a known copy.
+        assert_eq!(applied.copy, "listed");
+        assert_eq!(
+            report.summary.needs_behaviour,
+            report.summary.needs_behaviour_ported
+        );
+        let checks: bri_addon_import::porting::Checks = serde_json::from_slice(checks).unwrap();
+        for (line, ok) in bri_addon_import::porting::run_checks(&out, &checks).unwrap() {
+            eprintln!("{line}");
+            assert!(ok, "{line}");
+        }
+        std::fs::remove_dir_all(out.parent().unwrap()).unwrap();
+    }
+    eprintln!("{found} of 2 sniper rifles found");
+}
+
+/// An Add-On that requires another community Add-On by name (Tier 2 needs
+/// Tier 1) depends on the package importing that one makes; one requiring
+/// a vanilla Add-On depends on the base game's package.
+#[test]
+fn a_required_community_add_on_becomes_a_dependency_on_its_import() {
+    let root = fresh("requires").parent().unwrap().to_path_buf();
+    let install = root.join("Blockland");
+    let core = install.join("Add-Ons/Weapon_Core_Kit");
+    std::fs::create_dir_all(&core).unwrap();
+    std::fs::write(
+        core.join("server.cs"),
+        "datablock ProjectileData(coreRound) { muzzleVelocity = 90; };\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(install.join("base")).unwrap();
+    let addon = root.join("Weapon_Core_Extra");
+    std::fs::create_dir_all(&addon).unwrap();
+    std::fs::write(
+        addon.join("server.cs"),
+        "ForceRequiredAddOn(\"Weapon_Core_Kit\");\nForceRequiredAddOn(\"Weapon_Gun\");\n",
+    )
+    .unwrap();
+    let report = import(&Options {
+        input: addon,
+        out: root.join("package"),
+        reference: Some(install),
+        ..Default::default()
+    })
+    .unwrap();
+    let deps: Vec<_> = report
+        .dependencies
+        .iter()
+        .map(|d| (d.addon.as_str(), d.status.as_str(), d.package.as_deref()))
+        .collect();
+    assert_eq!(
+        deps,
+        [
+            ("Weapon_Core_Kit", "reference", Some("weapon_core_kit")),
+            ("Weapon_Gun", "missing", None),
+        ]
+    );
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(root.join("package/package.json")).unwrap()).unwrap();
+    assert_eq!(manifest["dependencies"], serde_json::json!({ "weapon_core_kit": "*" }));
+    std::fs::remove_dir_all(&root).unwrap();
 }

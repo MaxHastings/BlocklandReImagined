@@ -125,7 +125,10 @@ fn fixture() -> Rc<Pack> {
             icon.visible = false;
             let mut crosshair = node("GuiCrossHairHud", "Crosshair", 224, "");
             crosshair.extent = [32, 32];
-            vec![icon, crosshair]
+            let mut lag = node("GuiBitmapCtrl", "LagIcon", 0, "");
+            lag.extent = [32, 32];
+            lag.visible = false;
+            vec![icon, crosshair, lag]
         }),
         ("LoadingGui", vec![]),
         ("defaultControlsGui", vec![]),
@@ -643,6 +646,23 @@ fn crosshair_shows_only_in_first_person_and_hides_with_names() {
     // F5 toggles player names and the crosshair together.
     down(&mut u, Key::F(5));
     up(&mut u, Key::F(5));
+    u.update(16);
+    assert!(!shown(&u));
+}
+#[test]
+fn lag_icon_shows_only_while_the_host_is_quiet() {
+    let mut u = ui();
+    play(&mut u);
+    let shown = |u: &Ui| {
+        let v = u.screen(ScreenId::Play).unwrap().view();
+        v.node(v.id("LagIcon").unwrap()).state.visible
+    };
+    u.update(16);
+    assert!(!shown(&u));
+    u.apply(UiUpdate::Lagging(true));
+    u.update(16);
+    assert!(shown(&u));
+    u.apply(UiUpdate::Lagging(false));
     u.update(16);
     assert!(!shown(&u));
 }

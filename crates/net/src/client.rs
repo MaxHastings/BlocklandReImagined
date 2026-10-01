@@ -141,6 +141,10 @@ impl LinkProbe {
             updates: self.updates.load(std::sync::atomic::Ordering::Relaxed),
         }
     }
+    /// Datagrams received from the host so far, acknowledgements included.
+    pub fn received(&self) -> u64 {
+        self.connection.stats().udp_rx.datagrams
+    }
 }
 impl Client {
     /// The certificate is a trusted host pin. Never disable TLS verification.

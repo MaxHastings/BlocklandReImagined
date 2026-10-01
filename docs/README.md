@@ -43,7 +43,10 @@ Read [AGENTS.md](../AGENTS.md) first, then:
 - [architecture/platform-principles.md](architecture/platform-principles.md):
   engine owns mechanisms, Add-Ons own policy; read before changing
   identity, saves, the wire protocol or Add-Ons.
-- [progress.md](progress.md): dated decisions, evidence and commands.
+- [architecture/seams.md](architecture/seams.md): which thread owns each
+  engine seam being built; check it before starting one.
+- [progress.md](progress.md): dated decisions, evidence and commands up to
+  2026-10-01; newer entries are one file each in [progress/](progress/README.md).
 - [content-regeneration.md](content-regeneration.md): what
   `tools/bootstrap.py` does, step by step.
 - [playtest-package-layout.md](playtest-package-layout.md): building and

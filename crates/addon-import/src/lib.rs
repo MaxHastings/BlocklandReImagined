@@ -42,7 +42,27 @@ pub struct Options {
     /// Recovered core scripts (`allGameScripts.cs`, `DamageTypes.cs`) for
     /// base datablocks and damage types.
     pub core: Vec<PathBuf>,
+    /// The installed game's content root: base datablocks an Add-On
+    /// inherits from or names (a brick's parent, a sound) are read from its
+    /// brick catalog, weapons, sounds and effects.
+    pub installed: Option<PathBuf>,
     pub version: String,
+}
+
+impl Default for Options {
+    /// Version 1.0.0, no reference install, core scripts or installed
+    /// game: set `input` and `out` and what else the import needs, with
+    /// `..Default::default()` for the rest.
+    fn default() -> Self {
+        Self {
+            input: PathBuf::new(),
+            out: PathBuf::new(),
+            reference: None,
+            core: vec![],
+            installed: None,
+            version: "1.0.0".into(),
+        }
+    }
 }
 
 /// The package id (and content namespace) for an Add-On folder name.
@@ -264,6 +284,13 @@ fn check_output(opts: &Options) -> Result<()> {
         "Output {} already exists; choose a fresh directory",
         opts.out.display()
     );
+    // A port's host rules go beside it (`ports::rules_dir`).
+    let rules = ports::rules_dir(&opts.out);
+    ensure!(
+        !rules.exists(),
+        "{} already exists; choose a fresh directory",
+        rules.display()
+    );
     let parent = opts
         .out
         .parent()
@@ -290,10 +317,13 @@ pub fn import(opts: &Options) -> Result<Report> {
 pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
     check_output(opts)?;
     let src = source::read(&opts.input)?;
-    let reference = match &opts.reference {
+    let mut reference = match &opts.reference {
         Some(root) => Reference::load(root, &opts.core)?,
-        None => Reference::default(),
+        None => Reference::core_only(&opts.core)?,
     };
+    if let Some(content) = &opts.installed {
+        reference.add_installed(content)?;
+    }
     let ns = namespace_for(&src.name)?;
     std::fs::create_dir_all(&opts.out)?;
     let mut cx = Ctx {
@@ -325,10 +355,9 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
     behaviours(&mut cx, &scripts);
     dependencies(&mut cx, &scripts);
     let mut bodies = ports::Bodies::new();
+    // Torque keeps the last definition of a function (names ignore case).
     for f in scripts.iter().flat_map(|s| &s.functions) {
-        bodies
-            .entry(f.qualified().to_ascii_lowercase())
-            .or_insert_with(|| f.body.clone());
+        bodies.insert(f.qualified().to_ascii_lowercase(), f.body.clone());
     }
     finish(cx, opts, ports, &bodies)
 }
@@ -799,10 +828,10 @@ fn references(cx: &mut Ctx) {
                     at,
                     format!(
                         "file {resolved} is not in this Add-On{}",
-                        if cx.reference.root.is_some() {
-                            " or the reference install"
-                        } else {
-                            "; no reference install given"
+                        match (cx.reference.root.is_some(), cx.reference.installed) {
+                            (true, _) => " or the reference install",
+                            (false, true) => " or the installed game",
+                            (false, false) => "; no reference install or installed game given",
                         }
                     ),
                     case_only.then(|| "matches a member by case only".into()),
@@ -845,11 +874,12 @@ fn references(cx: &mut Ctx) {
                     at.clone(),
                     format!(
                         "`{name}` is not declared by this Add-On{}; Torque leaves the field empty",
-                        match (cx.reference.root.is_some(), cx.reference.has_core) {
-                            (false, _) => "; no reference install given",
+                        match (cx.reference.root.is_some(), cx.reference.knows_base()) {
+                            (false, false) => "; no reference install or installed game given",
+                            (false, true) => " or the base game",
                             (true, false) =>
-                                " or the reference install (base datablocks need --core)",
-                            (true, true) => ", the reference install or the core scripts",
+                                " or the reference install (base datablocks need --installed or --core)",
+                            (true, true) => ", the reference install or the base game",
                         }
                     ),
                     None,
@@ -1768,6 +1798,7 @@ fn vehicles(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
                 }
                 d.threads = known;
                 vehicle_trails(cx, name, &mut d, &setup.images, &node_frames);
+                vehicle_damage_emitters(cx, name, &mut d);
                 if !d.threads.is_empty() {
                     d.adaptations.push(format!(
                         "Animation threads read from {name}::onAdd and the functions it calls: {}",
@@ -2003,6 +2034,28 @@ fn vehicle_trail(
         min_speed: m.min_speed,
         max_speed: m.max_speed,
     })
+}
+
+/// A wreck burns with its `damageEmitter`s (`Definition::wreck_emitters`):
+/// the Add-On's own are converted into the vehicle's `effects`; a base game
+/// one is drawn from the base pack.
+fn vehicle_damage_emitters(cx: &mut Ctx, vehicle: &str, d: &mut bri_vehicles::Definition) {
+    for i in 0..3 {
+        let Some(name) = d.authored.get(&format!("damageemitter[{i}]")) else {
+            continue;
+        };
+        let name = name.trim().to_ascii_lowercase();
+        if name.is_empty() || !cx.is_owned(&name) {
+            continue;
+        }
+        if let Err(e) = vehicle_emitter(cx, d, &name) {
+            cx.unsupported(
+                format!("vehicle {vehicle} damage emitter {name}"),
+                None,
+                format!("{e:#}"),
+            );
+        }
+    }
 }
 
 /// Converts one of the Add-On's emitters and its particles into the
@@ -2412,6 +2465,16 @@ fn behaviours(cx: &mut Ctx, scripts: &[Script]) {
     }
 }
 
+/// The package an Add-On this one requires by name
+/// (`ForceRequiredAddOn`) becomes: the base game's for a vanilla one, else
+/// the package importing it makes (its namespace), which the player
+/// imports from their own copy too (Tier 2 needs Tier 1).
+fn dependency_package(addon: &str) -> Option<String> {
+    reference::base_package(addon)
+        .map(str::to_owned)
+        .or_else(|| namespace_for(addon).ok())
+}
+
 fn dependencies(cx: &mut Ctx, scripts: &[Script]) {
     let mut deps: BTreeMap<String, Dependency> = BTreeMap::new();
     for s in scripts {
@@ -2438,10 +2501,7 @@ fn dependencies(cx: &mut Ctx, scripts: &[Script]) {
                         "missing"
                     }
                     .into(),
-                    package: found
-                        .as_deref()
-                        .and_then(reference::base_package)
-                        .map(str::to_owned),
+                    package: found.as_deref().and_then(dependency_package),
                     uses: vec![],
                 });
         }
@@ -2545,7 +2605,14 @@ fn finish(
         packages_json_entry: json!({ "id": cx.ns, "version": opts.version, "side": "shared", "dir": dir }),
         files: vec![],
     };
-    if let Some(port) = ports::apply(ports, &cx.src.name, &cx.src.sha256, bodies, &cx.out) {
+    let import = ports::Import {
+        addon: &cx.src.name,
+        sha256: &cx.src.sha256,
+        namespace: &cx.ns,
+        version: &opts.version,
+        name: manifest["name"].as_str().unwrap_or(&cx.ns),
+    };
+    if let Some(port) = ports::apply(ports, &import, bodies, &cx.out) {
         for b in &mut cx.report.needs_behaviour {
             if port
                 .covers
