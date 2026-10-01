@@ -1,4 +1,4 @@
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
 pub const BRICK_SCHEMA: u32 = 1;
@@ -572,6 +572,37 @@ impl Brick {
             self.footprint_studs[1] as f32 * STUD,
         ) * 0.5
     }
+    /// Where [`Self::stretched`] to `[width, depth, height]` moves a point
+    /// of this shape's frame: the one map its faces, collision (boxes and
+    /// collision recipes alike, [`crate::collision::CollisionBody::stretched`])
+    /// and openings all follow.
+    pub fn stretching(
+        &self,
+        [width, depth, height]: [u32; 3],
+    ) -> Result<impl Fn(glam::Vec3) -> glam::Vec3 + use<>> {
+        let from = self.half_size();
+        let to = glam::Vec3::new(
+            width as f32 * STUD,
+            height as f32 * PLATE,
+            depth as f32 * STUD,
+        ) * 0.5;
+        let keep = (from * 0.5).min(glam::Vec3::splat(STRETCH_KEEP));
+        ensure!(
+            (to - keep).min_element() > 0.0,
+            "too small to stretch {} to",
+            self.id
+        );
+        Ok(move |p: glam::Vec3| {
+            glam::Vec3::from_array(std::array::from_fn(|a| {
+                let (h, n, k) = (from[a], to[a], keep[a]);
+                if p[a].abs() >= h - k {
+                    p[a] + p[a].signum() * (n - h)
+                } else {
+                    p[a] * (n - k) / (h - k)
+                }
+            }))
+        })
+    }
     /// This shape at another size (`[width, depth]` studs and `height`
     /// plates), named `id`, as a nine-slice picture stretches: what lies
     /// within [`STRETCH_KEEP`] of an edge moves out with that edge
@@ -585,26 +616,14 @@ impl Brick {
             height_plates: height,
             ..self.clone()
         };
+        let point = self
+            .stretching([width, depth, height])
+            .with_context(|| format!("Brick {id}"))?;
         let (from, to) = (self.half_size(), out.half_size());
         let keep = (from * 0.5).min(glam::Vec3::splat(STRETCH_KEEP));
-        ensure!(
-            (to - keep).min_element() > 0.0,
-            "Brick {id}: too small to stretch {} to",
-            self.id
-        );
-        let point = |p: glam::Vec3| {
-            glam::Vec3::from_array(std::array::from_fn(|a| {
-                let (h, n, k) = (from[a], to[a], keep[a]);
-                if p[a].abs() >= h - k {
-                    p[a] + p[a].signum() * (n - h)
-                } else {
-                    p[a] * (n - k) / (h - k)
-                }
-            }))
-        };
         for quad in &mut out.quads {
             let old = quad.vertices.map(|v| glam::Vec3::from(v.position));
-            let moved = old.map(point);
+            let moved = old.map(&point);
             if matches!(
                 quad.surface,
                 Surface::Top | Surface::BottomEdge | Surface::BottomLoop

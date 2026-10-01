@@ -820,7 +820,18 @@ server.cs         datablock fxDTSBrickData(brickMirror1x4x5Data : brick4x1x5wind
                       reflectionFaces = "north south";
                       reflectionDepth = 0.5;
                   };
+                  datablock fxDTSBrickData(brickMirror1x14x10Data : brickMirror1x4x5Data)
+                  {
+                      uiName = "1x14x10 Mirror";
+                      stretchSize = "14 1 30";
+                  };
 ```
+
+`stretchSize = "width depth height"` (studs, studs, plates) makes another
+size of the shape, as a nine-slice picture stretches: the frame, sill and
+stud edges keep their size and the middle grows. Its mirror, collision,
+portal openings and pairing all follow the new size, so a 1x14x10 Mirror
+is the same window brick, big.
 
 The mirror spans the whole side and the window's frame, drawn in front of
 it, hides its edges; the window's see-through glass is not drawn.

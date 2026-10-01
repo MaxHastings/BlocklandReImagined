@@ -225,37 +225,23 @@ impl Definitions {
                     }
                 }
             };
-            // Another size of the shape: its own mesh identity, and its
-            // collision from the stretched shape's boxes unless the package
-            // bakes its own or bodies pass through its openings.
+            // Another size of the shape: its own mesh identity, and the
+            // shape's collision stretched the way its faces are, unless the
+            // package bakes its own or bodies pass through its openings.
             let (mut mesh, collision, shape) = match entry.stretch {
                 None => (mesh, collision, shape),
                 Some(size) => {
                     let [w, d, h] = size;
                     let id = format!("{}#{w}x{d}x{h}", entry.mesh_id);
-                    let mesh = mesh
-                        .stretched(&id, size)
-                        .with_context(|| format!("Brick {}", entry.id))?;
+                    let context = || format!("Brick {}", entry.id);
+                    let map = mesh.stretching(size).with_context(context)?;
+                    let mesh = mesh.stretched(&id, size).with_context(context)?;
                     let passes = entry.link.as_ref().is_some_and(|l| l.pass);
                     if own_collision || passes {
                         (mesh, collision, shape)
                     } else {
-                        ensure!(
-                            !mesh.collision_boxes.is_empty(),
-                            "Brick {}: a stretched shape needs its own collision",
-                            entry.id
-                        );
-                        let collision = CollisionBody {
-                            id: entry.id.clone(),
-                            parts: mesh
-                                .collision_boxes
-                                .iter()
-                                .map(|b| bri_content::collision::Part::Box {
-                                    center: b.center,
-                                    size: b.size,
-                                })
-                                .collect(),
-                        };
+                        let collision = collision.stretched(&entry.id, map);
+                        collision.validate().with_context(context)?;
                         let shape = bri_physics::content::collider(&collision)?
                             .build()
                             .shared_shape()
@@ -399,7 +385,7 @@ mod tests {
         write(
             "native-collisions.json",
             json!({ "schema_version": 1, "bodies": bodies.iter().map(|id| json!({
-                "id": id, "parts": [{ "type": "box", "center": [0.0, 0.3, 0.0], "size": [2.0, 0.6, 0.5] }]
+                "id": id, "parts": [{ "type": "box", "center": [0.0, 0.0, 0.0], "size": [2.0, 0.6, 0.5] }]
             })).collect::<Vec<_>>() }),
         );
     }
@@ -506,19 +492,23 @@ mod tests {
         assert_eq!(loaded.entries["v20/brick/window"].mesh.footprint_studs, [4, 1]);
         let aabb = big.shape.compute_local_aabb();
         assert!((aabb.maxs.x - 2.0).abs() < 1e-5 && (aabb.maxs.y - 0.6).abs() < 1e-5);
-        // A stretched shape with no boxes of its own and nothing passing
-        // has no collision to stretch.
+        // Without openings bodies pass, the shape's collision stretches
+        // with it: the whole 4 by 1.2 by 0.5 brick.
         catalog(
             &addon,
             &[plain],
             &[("portal:brick/plain", json!({}))],
             &[],
         );
-        let error = format!(
-            "{:#}",
-            Definitions::load_with(&base, &base, &extras).err().unwrap()
+        let loaded = Definitions::load_with(&base, &base, &extras).unwrap();
+        let plain = &loaded.entries["portal:brick/plain"];
+        assert_eq!(plain.collision.id, "portal:brick/plain");
+        let aabb = plain.shape.compute_local_aabb();
+        assert!(
+            glam::Vec3::new(aabb.maxs.x, aabb.maxs.y, aabb.maxs.z)
+                .abs_diff_eq(glam::Vec3::new(2.0, 0.6, 0.25), 1e-5),
+            "{aabb:?}"
         );
-        assert!(error.contains("needs its own collision"), "{error}");
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

@@ -8414,3 +8414,14 @@ the size). Room: a tank about 1.1 (2.2 studs) each side and 1.35 above
 box and a tank-sized box (4.7 by 4.4 by 6.6) through off centre (tank
 ±0.8, others ±1.5), turned with speed and spin kept; the 1x4x5 stops all
 three. The 1x20x12 stays for the Stunt Plane.
+
+Big Mirror (Max 10-01: "thinking we do the same for mirror"). The Mirror
+Add-On adds a **1x14x10 Mirror**, the big portal's size, through the same
+`stretchSize` path. A stretched shape with no openings bodies pass now
+takes the base shape's own collision recipe stretched by the same map as
+its faces (`Brick::stretching`, `CollisionBody::stretched`), not only the
+mesh's BLB collision boxes, so any stretched brick is solid like its
+1x4x5 (before, one whose shape had no boxes refused to load). Evidence:
+`bri-sim definitions::tests::an_add_on_brick_reuses...` (a stretched
+plain window collides as the whole 4 by 1.2 by 0.5 brick);
+`bri-content` stretch test.
