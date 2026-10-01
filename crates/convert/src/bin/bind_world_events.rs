@@ -48,6 +48,11 @@ fn main() -> Result<()> {
             }
             continue;
         }
+        // A save's picture travels with its world, for Load Bricks.
+        if name.ends_with(".jpg") {
+            std::fs::copy(&path, output.join(&name))?;
+            continue;
+        }
         if !name.ends_with(".world.json") {
             continue;
         }

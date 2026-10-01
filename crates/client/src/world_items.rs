@@ -3,7 +3,8 @@
 use crate::items::{Appearance, ItemAssets, ItemMesh};
 use anyhow::{Context, Result, ensure};
 use bri_render::scene::{
-    GpuInstances, GpuScene, MeshBatch, SceneRenderer, SceneTransform, SceneVertex,
+    ClipPlane, GpuInstances, GpuScene, KEEP_ALL, MeshBatch, SceneRenderer, SceneTransform,
+    SceneVertex,
 };
 use bri_sim::{
     presentation::{Cue, CueKind},
@@ -56,6 +57,9 @@ pub struct MountPose {
     /// the same motion. Mounts no action moves are absent.
     pub actions: BTreeMap<u32, Mat4>,
     pub velocity: Vec3,
+    /// The holder part way through a portal: what they hold draws on both
+    /// sides, cut where their body is.
+    pub straddle: Option<crate::portal_view::Straddle>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ItemIdentity {
@@ -134,6 +138,7 @@ struct Slot {
     pose: PoseKey,
     geometry: Geometry,
     transforms: Vec<SceneTransform>,
+    clips: Vec<ClipPlane>,
     identities: Vec<ItemIdentity>,
     gpu: Option<GpuScene>,
     instances: Option<GpuInstances>,
@@ -179,11 +184,14 @@ struct MountedPose {
     velocity: Vec3,
     pose: PoseKey,
 }
+#[derive(Clone)]
 struct Candidate {
     identity: ItemIdentity,
     model: ModelKey,
     pose: PoseKey,
     transform: SceneTransform,
+    /// The side of a portal it keeps ([`KEEP_ALL`] away from one).
+    clip: ClipPlane,
     priority: bool,
     /// The image whose skin it wears, and whether that skin is lit up
     /// (`ItemSkin::energy_states`).
@@ -421,6 +429,7 @@ impl WorldItems {
                     ),
                     tint: [1., 1., 1., if ghost { RESPAWN_GHOST_ALPHA } else { 1. }],
                 },
+                clip: KEEP_ALL,
                 priority: false,
                 // A ghost is the item's colour alone (`Item::fadeOut`).
                 skin: skin.filter(|_| !ghost).map(|image| (image, false)),
@@ -448,6 +457,7 @@ impl WorldItems {
                     ),
                     tint: [1., 1., 1., alpha],
                 },
+                clip: KEEP_ALL,
                 priority: false,
                 // The skin is solid: it leaves once the drop starts to fade.
                 skin: skin.filter(|_| alpha >= 1.).map(|image| (image, false)),
@@ -462,6 +472,7 @@ impl WorldItems {
                     transform: *transform,
                     tint: *tint,
                 },
+                clip: KEEP_ALL,
                 priority: false,
                 skin: None,
             });
@@ -539,6 +550,7 @@ impl WorldItems {
                     ),
                     tint: [1., 1., 1., alpha],
                 },
+                clip: KEEP_ALL,
                 priority: false,
                 skin: None,
             });
@@ -652,6 +664,7 @@ impl WorldItems {
                             transform,
                             tint: [1.; 4],
                         },
+                        clip: KEEP_ALL,
                         priority: true,
                         skin: skin.clone(),
                     });
@@ -669,7 +682,7 @@ impl WorldItems {
                 }
                 _ => pose_key,
             };
-            candidates.push(Candidate {
+            let held = Candidate {
                 identity: ItemIdentity::Mounted(owner, hand),
                 model: ModelKey {
                     first_person: local_first,
@@ -680,9 +693,29 @@ impl WorldItems {
                     transform,
                     tint: [1.; 4],
                 },
+                clip: KEEP_ALL,
                 priority: frame.local_owner == Some(owner),
                 skin,
-            });
+            };
+            // Part way through a portal, the part already through shows
+            // at the partner, like the body holding it.
+            match (&pose.straddle, local_first) {
+                (Some(straddle), false) => {
+                    candidates.push(Candidate {
+                        transform: SceneTransform {
+                            transform: straddle.carried(transform),
+                            tint: [1.; 4],
+                        },
+                        clip: straddle.far,
+                        ..held.clone()
+                    });
+                    candidates.push(Candidate {
+                        clip: straddle.near,
+                        ..held
+                    });
+                }
+                _ => candidates.push(held),
+            }
         }
         candidates.sort_by(|a, b| {
             b.priority
@@ -1043,6 +1076,7 @@ impl WorldItems {
                         },
                         geometry: Geometry::default(),
                         transforms: Vec::new(),
+                        clips: Vec::new(),
                         identities: Vec::new(),
                         gpu: None,
                         instances: None,
@@ -1051,6 +1085,7 @@ impl WorldItems {
                         vertices_dirty: true,
                     });
                 slot.transforms.clear();
+                slot.clips.clear();
                 slot.identities.clear();
                 if slot.pose != pose {
                     // Pose into the slot's own buffers (the mesh keeps the
@@ -1081,6 +1116,7 @@ impl WorldItems {
                 for instance in instances {
                     slot.identities.push(instance.identity);
                     slot.transforms.push(instance.transform);
+                    slot.clips.push(instance.clip);
                     self.diagnostics.visible_instances += 1;
                 }
                 model.slots.push(slot);
@@ -1144,12 +1180,11 @@ impl WorldItems {
                         .min(self.limits.instances);
                     slot.instances = Some(GpuInstances::new(device, slot.instance_capacity)?);
                 }
-                if slot
-                    .instances
-                    .as_mut()
-                    .unwrap()
-                    .update(queue, &slot.transforms)?
-                {
+                if slot.instances.as_mut().unwrap().update_clipped(
+                    queue,
+                    &slot.transforms,
+                    &slot.clips,
+                )? {
                     self.diagnostics.instance_updates += 1;
                 }
             }

@@ -17,9 +17,17 @@ pub struct Entry {
     pub map_id: String,
     pub path: PathBuf,
     pub root: PathBuf,
-    /// The file the player saved or brought over, whose picture sits beside
-    /// it ([`crate::save_picture::path_for`]); none for converted originals.
+    /// The file the player saved or brought over; none for converted
+    /// originals.
     pub source: Option<PathBuf>,
+}
+impl Entry {
+    /// Where the save's picture would be: beside the file the player saved
+    /// or brought over, or beside a converted original in the worlds pack
+    /// (`import_saves` brings each stock save's picture along).
+    pub fn picture(&self) -> Option<PathBuf> {
+        crate::save_picture::path_for(self.source.as_ref().unwrap_or(&self.path))
+    }
 }
 #[derive(Clone)]
 pub struct Store {
@@ -647,6 +655,31 @@ mod tests {
         assert_eq!(modified_date(951868800), "2000-03-01 00:00Z");
         assert_eq!(modified_date(1709251199), "2024-02-29 23:59Z");
         assert!(modified_date(1709251199) < modified_date(1709251200));
+    }
+    #[test]
+    fn converted_originals_show_the_picture_beside_them_in_the_worlds_pack() {
+        let entry = |path: &str, source: Option<&str>| Entry {
+            info: SaveFileInfo {
+                name: "Castle.world.json".into(),
+                map: "Map".into(),
+                modified: String::new(),
+                description: String::new(),
+                brick_count: None,
+                damaged: false,
+            },
+            map_id: "map".into(),
+            path: path.into(),
+            root: "worlds".into(),
+            source: source.map(PathBuf::from),
+        };
+        assert_eq!(
+            entry("worlds/0abc.world.json", None).picture(),
+            Some(PathBuf::from("worlds/0abc.jpg"))
+        );
+        assert_eq!(
+            entry("cache/0abc.world.json", Some("saves/Slate/Castle.BLS")).picture(),
+            Some(PathBuf::from("saves/Slate/Castle.jpg"))
+        );
     }
     #[test]
     fn local_saves_preserve_templates_refuse_clobber_and_archive_overwrites() -> Result<()> {

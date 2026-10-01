@@ -59,7 +59,39 @@ synthetic_and_content!(
     a_stuck_arrow_keeps_pointing_the_way_it_flew,
     an_effect_streams_from_a_held_image_without_a_muzzle_point,
     a_lying_item_loops_its_idle_sequence_on_the_world_clock,
+    a_held_item_part_way_through_a_portal_draws_on_both_sides,
 );
+
+fn a_held_item_part_way_through_a_portal_draws_on_both_sides(f: &ItemFixture) -> Result<()> {
+    let (assets, weapons) = packs(f)?;
+    let mut adapter = WorldItems::new(assets, weapons, WorldItemLimits::default())?;
+    let view = WeaponView {
+        images: BTreeMap::from([(7, vec![mounted(&f.right_image, "Ready")])]),
+        ..Default::default()
+    };
+    let carry = glam::Affine3A::from_translation(Vec3::X * 10.);
+    let straddle = bri_client::portal_view::Straddle {
+        carry,
+        near: [0., 0., 1., 0.],
+        far: [0., 0., -1., 0.],
+    };
+    adapter.sync(&view, frame(), |_| {
+        Some(MountPose {
+            eye: Mat4::IDENTITY,
+            mounts: BTreeMap::from([(0, Mat4::IDENTITY)]),
+            actions: BTreeMap::new(),
+            velocity: Vec3::ZERO,
+            straddle: Some(straddle),
+        })
+    })?;
+    // The hand is cut at the opening, and the part through draws at the
+    // partner, as the body holding it does.
+    let held = adapter.mounted_transform(7, 0).context("held")?;
+    let mut drawn: Vec<_> = adapter.instances().map(|(_, t)| t.transform).collect();
+    drawn.sort_by(|a, b| a.w_axis.x.total_cmp(&b.w_axis.x));
+    assert_eq!(drawn, [held, Mat4::from(carry) * held]);
+    Ok(())
+}
 
 fn model_instances_share_cpu_model_and_missing_mounts_never_guess(f: &ItemFixture) -> Result<()> {
     let (assets, weapons) = packs(f)?;
@@ -90,6 +122,7 @@ fn model_instances_share_cpu_model_and_missing_mounts_never_guess(f: &ItemFixtur
             mounts: BTreeMap::from([(0, Mat4::IDENTITY)]),
             actions: BTreeMap::new(),
             velocity: Vec3::ZERO,
+            straddle: None,
         })
     })?;
     assert_eq!(
@@ -124,6 +157,7 @@ fn model_instances_share_cpu_model_and_missing_mounts_never_guess(f: &ItemFixtur
         mounts: BTreeMap::new(),
         actions: BTreeMap::new(),
         velocity: Vec3::ZERO,
+        straddle: None,
     };
     adapter.sync(
         &mounted,
@@ -274,6 +308,7 @@ fn bounded_cache_reclaims_absent_models_and_prioritizes_held_items(f: &ItemFixtu
             mounts: BTreeMap::from([(0, Mat4::IDENTITY)]),
             actions: BTreeMap::new(),
             velocity: Vec3::ZERO,
+            straddle: None,
         })
     })?;
     assert_eq!(
@@ -310,6 +345,7 @@ fn mirrors_show_the_local_players_held_item_as_everyone_else_sees_it(
             mounts: BTreeMap::from([(0, Mat4::from_translation(Vec3::new(0.4, 1.2, 0.2)))]),
             actions: BTreeMap::new(),
             velocity: Vec3::ZERO,
+            straddle: None,
         })
     };
     let placed = |adapter: &WorldItems| -> BTreeMap<ItemIdentity, Mat4> {
@@ -510,6 +546,7 @@ fn a_held_swing_plays_again_on_every_fire_entry(f: &ItemFixture) -> Result<()> {
             mounts: BTreeMap::from([(0, Mat4::IDENTITY)]),
             actions: BTreeMap::new(),
             velocity: Vec3::ZERO,
+            straddle: None,
         })
     };
     let head = |adapter: &WorldItems| {
@@ -566,6 +603,7 @@ fn a_thrown_image_hides_without_crashing_the_renderer(f: &ItemFixture) -> Result
             mounts: BTreeMap::from([(0, Mat4::IDENTITY)]),
             actions: BTreeMap::new(),
             velocity: Vec3::ZERO,
+            straddle: None,
         })
     };
     let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
@@ -709,6 +747,7 @@ fn an_effect_streams_from_a_held_image_without_a_muzzle_point(f: &ItemFixture) -
                 mounts: BTreeMap::from([(0, hand)]),
                 actions: BTreeMap::new(),
                 velocity: Vec3::ZERO,
+                straddle: None,
             })
         })?;
         let held = adapter

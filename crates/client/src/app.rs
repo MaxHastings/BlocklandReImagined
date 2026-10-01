@@ -596,7 +596,7 @@ pub struct App {
     preview_request: Option<(bri_content::avatar::Appearance, [f32; 3], f32)>,
     preview_dirty: bool,
     /// Each listed save's own file, whose picture Load Bricks previews.
-    save_sources: HashMap<crate::save_picture::Key, PathBuf>,
+    save_pictures: HashMap<crate::save_picture::Key, PathBuf>,
     save_previews: crate::save_picture::Previews,
     /// Whether today's Add-On splash has been looked for (once a run).
     splash_checked: bool,
@@ -2024,7 +2024,7 @@ impl App {
             avatar_preview: None,
             preview_request: None,
             preview_dirty: false,
-            save_sources: HashMap::new(),
+            save_pictures: HashMap::new(),
             save_previews: Default::default(),
             splash_checked: false,
             save_picture: None,
@@ -4361,12 +4361,9 @@ impl App {
         Ok(())
     }
     fn show_save_files(&mut self, entries: Vec<crate::saves::Entry>) {
-        self.save_sources = entries
+        self.save_pictures = entries
             .iter()
-            .filter_map(|e| {
-                let source = e.source.clone()?;
-                Some(((e.info.map.clone(), e.info.name.clone()), source))
-            })
+            .filter_map(|e| Some(((e.info.map.clone(), e.info.name.clone()), e.picture()?)))
             .collect();
         let maps = entries
             .iter()
@@ -7885,6 +7882,7 @@ impl PlatformApp for App {
                             })
                             .collect(),
                         velocity: Vec3::from_array(player.velocity),
+                        straddle: body_straddle(&self.vehicles, view, &passages, owner, avatar),
                     })
                 },
             );
@@ -8872,11 +8870,7 @@ impl PlatformApp for App {
                 }
                 UiAction::PreviewSave { map, name } => {
                     let key = (map, name);
-                    match self
-                        .save_sources
-                        .get(&key)
-                        .and_then(|source| crate::save_picture::path_for(source))
-                    {
+                    match self.save_pictures.get(&key).cloned() {
                         Some(path) => self.save_previews.start(key, path, &self.runtime),
                         None => {
                             self.save_previews.cancel();
@@ -9986,20 +9980,11 @@ impl PlatformApp for App {
         let anywhere = casts || reflecting || probing;
         let mut bodies_drawn = BTreeSet::new();
         let passages = self.motion.passages();
-        // Riders are cut where their vehicle is.
-        let ridden: BTreeMap<_, u64> = view
-            .vehicles
-            .iter()
-            .flat_map(|(id, info)| info.occupants.iter().flatten().map(move |o| (*o, *id)))
-            .collect();
         for (owner, avatar) in &mut self.avatars {
             if (*owner != view.owner || third_person || anywhere) && !hidden.contains(owner) {
                 let (center, radius) = avatar.bounding_sphere();
                 // A body part way through an opening draws on both sides.
-                avatar.straddle = match ridden.get(owner) {
-                    Some(vehicle) => self.vehicles.straddle(*vehicle).copied(),
-                    None => crate::portal_view::Straddle::find(&passages, avatar.middle(), radius),
-                };
+                avatar.straddle = body_straddle(&self.vehicles, view, &passages, *owner, avatar);
                 let seen = |c: Vec3| in_view.sees_sphere(c, radius);
                 if !anywhere
                     && !seen(center)
@@ -10594,6 +10579,29 @@ fn update_small_json<T: serde::de::DeserializeOwned + serde::Serialize + Default
 }
 /// Automatic rejoins after a dropped connection before giving up.
 const MAX_RECONNECTS: u8 = 3;
+/// The opening `owner`'s body is part way through, if any, so it and what
+/// it holds draw on both sides. Riders are cut where their vehicle is.
+fn body_straddle(
+    vehicles: &crate::vehicles::ClientVehicles,
+    view: &network::View,
+    passages: &bri_content::passage::Passages,
+    owner: u64,
+    avatar: &crate::avatar::AvatarMesh,
+) -> Option<crate::portal_view::Straddle> {
+    match view
+        .vehicles
+        .iter()
+        .find(|(_, info)| info.occupants.iter().flatten().any(|o| *o == owner))
+    {
+        Some((vehicle, _)) => vehicles.straddle(*vehicle).copied(),
+        None => crate::portal_view::Straddle::find(
+            passages,
+            avatar.middle(),
+            avatar.bounding_sphere().1,
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
