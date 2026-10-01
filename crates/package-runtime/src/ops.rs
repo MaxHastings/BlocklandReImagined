@@ -471,10 +471,15 @@ pub enum Op {
         player: u64,
         float: bool,
     },
-    /// Let every plant of the copy `player` holds float, or not.
+    /// Let every plant of the copy `player` holds float, or not; with
+    /// `admin_only`, only while they are an administrator (a plant that
+    /// finds them not one does not float, and `on_place` says so with
+    /// `float_refused`).
     FloatCopy {
         player: u64,
         float: bool,
+        #[serde(default)]
+        admin_only: bool,
     },
     /// After each plant of a copy, `player`'s next copy plant waits this
     /// long; one sooner is refused and `on_place` hears `error` `wait`,
@@ -509,9 +514,13 @@ pub enum Op {
         admin: bool,
     },
     /// Remove the bricks `player`'s copy was taken from, as their hammer
-    /// would (their full trust), as one step Ctrl+Z puts back as it was.
+    /// would (their full trust), as one step Ctrl+Z puts back as it was:
+    /// all or none, or with `each` every brick they may cut, the rest
+    /// counted (`on_copy`, `action` `"cut"`, `refused`).
     CutCopy {
         player: u64,
+        #[serde(default)]
+        each: bool,
     },
     /// Paint the bricks `player`'s copy was taken from with `paint`, as
     /// their spray or FX can would, as one step Ctrl+Z takes back. With

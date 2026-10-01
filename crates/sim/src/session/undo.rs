@@ -255,6 +255,7 @@ impl Session {
             limit_reached: false,
             refused: 0,
             error: None,
+            ..Default::default()
         };
         let package = package.clone();
         self.report_copy(&package, owner, outcome);

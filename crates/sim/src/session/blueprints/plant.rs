@@ -73,6 +73,9 @@ pub(in crate::session) struct PlantWork {
     phase: Phase,
     ids: Vec<BrickId>,
     refused: Refusals,
+    /// Floating was asked for administrators only, and the player is not
+    /// one: this plant did not float ([`Session::float_copy`]).
+    pub float_refused: bool,
 }
 
 impl PlantWork {
@@ -112,6 +115,7 @@ impl PlantWork {
             support,
             phase,
             refused: Refusals::default(),
+            float_refused: false,
         }
     }
 
@@ -273,7 +277,7 @@ impl PlantWork {
             s.report_place(
                 package,
                 owner,
-                (self.ids.len(), self.copy.len(), canceled),
+                (self.ids.len(), self.copy.len(), canceled, self.float_refused),
                 &self.refused,
                 &self.inexact,
             );
@@ -310,12 +314,22 @@ impl CopyWork for PlantWork {
             Phase::Place { next, .. } => (total + next) / 2,
             _ => self.ids.len() + self.refused.count,
         };
+        // A later pass looks again for bricks that now have something
+        // under them.
+        let searched = match &self.phase {
+            Phase::Each { waiting, next, .. } if waiting.len() < total => {
+                Some((next * 100).checked_div(waiting.len()).unwrap_or(100))
+            }
+            _ => None,
+        };
         Progress {
             action: "plant",
             done: done.min(total),
             total,
-            placed: 0,
-            refused: 0,
+            placed: self.ids.len(),
+            refused: self.refused.count,
+            searched,
+            ..Default::default()
         }
     }
 

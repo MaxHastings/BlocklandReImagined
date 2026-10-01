@@ -160,6 +160,7 @@ impl CopyWork for SuperCutWork {
             total: self.found.len(),
             placed: self.placed.len(),
             refused: self.refused,
+            ..Default::default()
         }
     }
     fn step(&mut self, s: &mut Session, _: OwnerId, budget: &mut u32) -> Result<bool> {
@@ -296,6 +297,7 @@ impl CopyWork for FillWork {
             total: self.volume as usize,
             placed: 0,
             refused: self.refused,
+            ..Default::default()
         }
     }
     fn step(&mut self, s: &mut Session, _: OwnerId, budget: &mut u32) -> Result<bool> {

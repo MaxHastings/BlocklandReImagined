@@ -1686,6 +1686,27 @@ fn register_api(engine: &mut Engine) {
         push(Op::FloatCopy {
             player: id(&player)?,
             float,
+            admin_only: false,
+        })
+    });
+    // float_copy(player, float, #{ admin_only: true }): floating only
+    // while the player is an administrator, checked at each plant.
+    engine.register_fn("float_copy", |player: Dynamic, float: bool, options: Map| {
+        let mut admin_only = false;
+        for (key, value) in &options {
+            match key.as_str() {
+                "admin_only" => {
+                    admin_only = value
+                        .as_bool()
+                        .map_err(|_| "float option `admin_only` is true or false")?
+                }
+                other => return Err(format!("unknown float option `{other}`").into()),
+            }
+        }
+        push(Op::FloatCopy {
+            player: id(&player)?,
+            float,
+            admin_only,
         })
     });
     engine.register_fn("wrench_copy", |player: Dynamic| {
@@ -1756,6 +1777,26 @@ fn register_api(engine: &mut Engine) {
     engine.register_fn("cut_copy", |player: Dynamic| {
         push(Op::CutCopy {
             player: id(&player)?,
+            each: false,
+        })
+    });
+    // cut_copy(player, #{ each: true }): each brick the player may cut,
+    // the rest counted for `on_copy`.
+    engine.register_fn("cut_copy", |player: Dynamic, options: Map| {
+        let mut each = false;
+        for (key, value) in &options {
+            match key.as_str() {
+                "each" => {
+                    each = value
+                        .as_bool()
+                        .map_err(|_| "cut option `each` is true or false")?
+                }
+                other => return Err(format!("unknown cut option `{other}`").into()),
+            }
+        }
+        push(Op::CutCopy {
+            player: id(&player)?,
+            each,
         })
     });
     engine.register_fn("paint_copy", |player: Dynamic, color: i64| {

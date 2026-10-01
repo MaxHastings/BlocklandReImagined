@@ -118,6 +118,7 @@ impl CopyWork for UndoGroup {
             total,
             placed: 0,
             refused: 0,
+            ..Default::default()
         }
     }
     fn step(&mut self, s: &mut Session, owner: OwnerId, budget: &mut u32) -> Result<bool> {
@@ -285,6 +286,7 @@ impl CopyWork for UndoCut {
             total: self.bricks.len(),
             placed: 0,
             refused: 0,
+            ..Default::default()
         }
     }
     fn step(&mut self, s: &mut Session, owner: OwnerId, budget: &mut u32) -> Result<bool> {
@@ -438,6 +440,7 @@ impl CopyWork for UndoEdits {
             total: self.len(),
             placed: 0,
             refused: 0,
+            ..Default::default()
         }
     }
     fn step(&mut self, s: &mut Session, _: OwnerId, budget: &mut u32) -> Result<bool> {

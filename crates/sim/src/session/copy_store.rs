@@ -158,6 +158,7 @@ pub(super) struct SavedCopies {
 
 /// How a copy, save or load went, for the Add-On's `on_copy` or else the
 /// player.
+#[derive(Default)]
 pub(super) struct CopyOutcome {
     /// `select`, `save`, `list`, `load`, `cut`, `paint`, `wrench`,
     /// `supercut`, `fill` or `plant_as`.
@@ -180,6 +181,10 @@ pub(super) struct CopyOutcome {
     pub error: Option<(&'static str, String)>,
     /// The work goes on over the next ticks: `bricks` of `total` done.
     pub working: bool,
+    /// While working: bricks found still to look around, and how far a
+    /// search has got in percent ([`super::copy_jobs::Progress`]).
+    pub queued: usize,
+    pub searched: Option<usize>,
 }
 impl CopyOutcome {
     /// `action` refused: with no copy held (`held` false), for that.
@@ -208,6 +213,7 @@ impl CopyOutcome {
             refused: 0,
             error,
             working: false,
+            ..Default::default()
         }
     }
 }
@@ -235,6 +241,7 @@ impl CopyOutcome {
             refused: selection.refused,
             error,
             working: false,
+            ..Default::default()
         }
     }
 }
@@ -267,6 +274,7 @@ impl Session {
             limit_reached: false,
             refused: 0,
             error: Some((code, message.to_string())),
+            ..Default::default()
         };
         let Some(store) = self.saved_copies.store.clone() else {
             let outcome = failed("unavailable", "This server does not keep copies.");
@@ -311,6 +319,7 @@ impl Session {
                 limit_reached: false,
                 refused: 0,
                 error: Some(("empty", "Copy a build first.".into())),
+                ..Default::default()
             };
             self.report_copy(package, owner, outcome);
             return;
@@ -404,6 +413,7 @@ impl Session {
                         )),
                         Err(e) => Some(("failed", format!("Could not save the copy: {e:#}"))),
                     },
+                    ..Default::default()
                 },
                 (Want::List, StoreDone::Listed(result)) => {
                     let (names, error) = match result {
@@ -424,6 +434,7 @@ impl Session {
                         limit_reached: false,
                         refused: 0,
                         error,
+                        ..Default::default()
                     }
                 }
                 (
@@ -648,6 +659,7 @@ impl super::copy_jobs::CopyWork for LoadWork {
             total: self.total,
             placed: 0,
             refused: 0,
+            ..Default::default()
         }
     }
     fn step(&mut self, s: &mut Session, _: OwnerId, budget: &mut u32) -> Result<bool> {

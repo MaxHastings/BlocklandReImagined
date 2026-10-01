@@ -1658,8 +1658,12 @@ impl Session {
             }
             Op::PlantWait { player, seconds } => self.plant_wait(player, seconds),
             Op::CancelCopy { player } => {
+                // An administrator may stop anyone's (`/ClearDups`).
+                let admin = caller
+                    .and_then(|c| self.peers.get(&c))
+                    .is_some_and(|p| p.actor.administrator);
                 ensure!(
-                    caller == Some(player),
+                    caller == Some(player) || admin,
                     "Copy work is cancelled only for the player whose command asked"
                 );
                 self.cancel_copy(player);
@@ -1753,13 +1757,13 @@ impl Session {
                 self.drop_copy(player);
                 Ok(())
             }
-            Op::CutCopy { player } => {
+            Op::CutCopy { player, each } => {
                 // Bricks go with the trust of the player who asked.
                 ensure!(
                     caller == Some(player),
                     "A copy's bricks are cut only for the player whose command asked"
                 );
-                self.start_cut(player, package);
+                self.start_cut(player, package, each);
                 Ok(())
             }
             Op::PaintCopy {
@@ -1820,12 +1824,16 @@ impl Session {
                 let _ = self.plant_copy(player, float);
                 Ok(())
             }
-            Op::FloatCopy { player, float } => {
+            Op::FloatCopy {
+                player,
+                float,
+                admin_only,
+            } => {
                 ensure!(
                     caller == Some(player),
                     "A copy floats only for the player whose command asked"
                 );
-                let _ = self.float_copy(player, float);
+                let _ = self.float_copy(player, float, admin_only);
                 Ok(())
             }
             Op::WrenchCopy { player } => {

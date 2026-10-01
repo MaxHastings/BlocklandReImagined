@@ -227,6 +227,11 @@ impl SelectWork {
         let mut held = HeldCopy::new(self.sources, &self.package, self.rule.partial);
         held.shown = !self.hold.hidden;
         held.area = self.area;
+        // Added to: what glowed until let go still does.
+        held.lit = self.hold.add
+            && s.copies
+                .get(&owner)
+                .is_some_and(|c| c.lit && c.package == self.package);
         let sources = held.sources.clone();
         s.hold_blueprint(owner, Arc::new(blueprint), held);
         Ok((self.selection, sources))
@@ -239,23 +244,20 @@ impl CopyWork for SelectWork {
             Finding::Stack(scan) => Progress {
                 action: "select",
                 done: scan.selection.bricks.len(),
-                total: 0,
-                placed: 0,
-                refused: 0,
+                queued: scan.queued(),
+                ..Default::default()
             },
             Finding::Box { scan, .. } => Progress {
                 action: "select",
-                done: scan.selection.bricks.len(),
-                total: 0,
-                placed: 0,
-                refused: 0,
+                done: scan.found(),
+                searched: Some(scan.searched()),
+                ..Default::default()
             },
             Finding::Found => Progress {
                 action: "select",
                 done: self.next,
                 total: self.ids.len(),
-                placed: 0,
-                refused: 0,
+                ..Default::default()
             },
         }
     }

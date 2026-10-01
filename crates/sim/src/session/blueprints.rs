@@ -30,8 +30,10 @@ pub(super) struct HeldCopy {
     pub partial: bool,
     /// The player has it to place; else it is a selection only.
     pub shown: bool,
-    /// Every plant of it may float ([`Session::float_copy`]).
+    /// Every plant of it may float ([`Session::float_copy`]), with
+    /// `float_admin` only while the player is an administrator.
     pub float: bool,
+    pub float_admin: bool,
     /// The next plant may float, until this tick ([`Session::plant_copy`]).
     pub float_once: Option<u64>,
     /// The fill wrench is open on its bricks ([`Session::open_copy_wrench`]).
@@ -39,6 +41,9 @@ pub(super) struct HeldCopy {
     /// The brick group its plants go into instead of the player's own
     /// ([`Session::plant_as`]).
     pub plant_as: Option<PlantAs>,
+    /// Its bricks glow until it is let go or taken up to place
+    /// ([`Session::highlight_copy`] with no end).
+    pub lit: bool,
 }
 
 /// Another player's brick group a copy is planted into.
@@ -100,9 +105,11 @@ impl HeldCopy {
             partial,
             shown: true,
             float: false,
+            float_admin: false,
             float_once: None,
             wrench_open: false,
             plant_as: None,
+            lit: false,
         }
     }
 }
@@ -320,7 +327,11 @@ impl Session {
             self.notify(owner, Notice::Blueprint(None));
         }
         self.blueprints.insert(owner, blueprint);
-        self.copies.insert(owner, held);
+        if let Some(old) = self.copies.insert(owner, held)
+            && !self.copies[&owner].lit
+        {
+            self.end_glow(old);
+        }
     }
 
     /// Give `owner` the copy they hold as a selection to place, where it
@@ -329,6 +340,7 @@ impl Session {
         let held = self.copies.get_mut(&owner).context("Copy a build first")?;
         if !held.shown {
             held.shown = true;
+            held.lit = false;
             // Taken up to place, the selection stops glowing.
             let sources = held.sources.clone();
             self.unlight_bricks(sources)?;
@@ -389,25 +401,33 @@ impl Session {
         Ok(())
     }
 
-    /// Let every plant of the copy `owner` holds float, or not.
-    pub fn float_copy(&mut self, owner: OwnerId, float: bool) -> Result<()> {
-        self.copies
-            .get_mut(&owner)
-            .context("Copy a build first")?
-            .float = float;
+    /// Let every plant of the copy `owner` holds float, or not; with
+    /// `admin_only`, only while they are an administrator.
+    pub fn float_copy(&mut self, owner: OwnerId, float: bool, admin_only: bool) -> Result<()> {
+        let held = self.copies.get_mut(&owner).context("Copy a build first")?;
+        held.float = float;
+        held.float_admin = admin_only;
         Ok(())
     }
 
     /// Light the bricks `owner`'s copy was taken from in the palette
-    /// colour nearest `rgba` (or their own), glowing, for `seconds`.
+    /// colour nearest `rgba` (or their own), glowing, for `seconds`; with
+    /// a negative time until the copy is let go or taken up to place, and
+    /// with none, put their own colours back now.
     pub fn highlight_copy(
         &mut self,
         owner: OwnerId,
         rgba: Option<[f32; 4]>,
         seconds: f32,
     ) -> Result<()> {
-        let ids = self.copies.get(&owner).context("Copy a build first")?.sources.clone();
+        let held = self.copies.get_mut(&owner).context("Copy a build first")?;
+        let ids = held.sources.clone();
+        held.lit = seconds < 0.0;
+        if seconds == 0.0 {
+            return self.unlight_bricks(ids);
+        }
         let color = rgba.map(|rgba| self.closest_paint(rgba));
+        let seconds = if seconds < 0.0 { f32::INFINITY } else { seconds };
         self.light_bricks(ids, color, super::highlight::GLOW, seconds)
     }
 
@@ -554,17 +574,18 @@ impl Session {
     /// once: an Add-On's cut is a job ([`Self::start_cut`]).
     pub fn cut_copy(&mut self, owner: OwnerId) -> Result<usize> {
         self.ensure_copy_idle(owner)?;
-        let mut work = copy_edits::CutWork::new(self, owner)?;
+        let mut work = copy_edits::CutWork::new(self, owner, false)?;
         self.run_copy_work(owner, &mut work)?;
         Ok(work.complete(self, owner))
     }
 
-    /// An Add-On's cut ([`Op::CutCopy`]) as a copy job.
-    pub(super) fn start_cut(&mut self, owner: OwnerId, package: &str) {
+    /// An Add-On's cut ([`Op::CutCopy`]) as a copy job: with `each`, the
+    /// bricks the player may cut, the rest counted.
+    pub(super) fn start_cut(&mut self, owner: OwnerId, package: &str, each: bool) {
         let held = self.blueprints.contains_key(&owner);
         let started = self
             .ensure_copy_idle(owner)
-            .and_then(|()| copy_edits::CutWork::new(self, owner));
+            .and_then(|()| copy_edits::CutWork::new(self, owner, each));
         match started {
             Ok(work) => self.start_copy_job(owner, Some(package.into()), Box::new(work)),
             Err(error) => {
@@ -689,14 +710,21 @@ impl Session {
             actor.owner = into.group;
         }
         let blueprint = blueprint.clone();
-        let (partial, float) = match self.copies.get_mut(&owner) {
+        let administrator = peer.actor.administrator;
+        let (partial, float, float_refused) = match self.copies.get_mut(&owner) {
             Some(c) => {
                 let once = c.float_once.take().is_some_and(|until| tick <= until);
-                (c.partial, c.float || once)
+                // Floating for administrators only, and they are not one
+                // (now): this plant does not, nor do the next.
+                let refused = c.float && c.float_admin && !administrator;
+                if refused {
+                    c.float = false;
+                }
+                (c.partial, (c.float || once) && !refused, refused)
             }
-            None => (false, false),
+            None => (false, false, false),
         };
-        let work = plant::PlantWork::new(
+        let mut work = plant::PlantWork::new(
             blueprint,
             placement,
             inexact,
@@ -705,6 +733,7 @@ impl Session {
             anchor,
             (partial, float),
         );
+        work.float_refused = float_refused;
         // What fits in this tick's copy work plants now; a bigger copy
         // plants over the next ticks.
         match self.begin_copy_job(owner, package, work)? {
@@ -724,7 +753,7 @@ impl Session {
         let error = anyhow::Error::new(refusal);
         let refused = Refusals::all(error);
         if let Some(package) = package
-            && self.report_place(&package, owner, (0, 0, false), &refused, &Default::default())
+            && self.report_place(&package, owner, (0, 0, false, false), &refused, &Default::default())
         {
             return Ok(Reply::Accepted);
         }
@@ -806,7 +835,17 @@ impl Session {
 
     pub(super) fn forget_blueprint(&mut self, owner: OwnerId) {
         self.blueprints.remove(&owner);
-        self.copies.remove(&owner);
+        if let Some(held) = self.copies.remove(&owner) {
+            self.end_glow(held);
+        }
+    }
+
+    /// A copy let go: its bricks lit until then get their colours back.
+    fn end_glow(&mut self, held: HeldCopy) {
+        if held.lit {
+            // Bricks gone meanwhile are passed over.
+            let _ = self.unlight_bricks(held.sources);
+        }
     }
 }
 

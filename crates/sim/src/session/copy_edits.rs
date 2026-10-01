@@ -416,6 +416,30 @@ impl Session {
         }
     }
 
+    /// Tell `package` a paint was canceled, with what it painted before
+    /// (kept, one undo step); painting all or none, the player hears it.
+    pub(super) fn report_paint_canceled(
+        &mut self,
+        package: &str,
+        player: OwnerId,
+        each: bool,
+        result: Result<(usize, usize)>,
+    ) {
+        if !each {
+            return self.report_paint(package, player, each, result);
+        }
+        let (bricks, refused) = result.unwrap_or_default();
+        let mut outcome = copy_store::CopyOutcome::about(
+            "paint",
+            None,
+            Some(("canceled", "Painting canceled!".to_string())),
+        );
+        outcome.bricks = bricks;
+        outcome.total = bricks + refused;
+        outcome.refused = refused;
+        self.report_copy(package, player, outcome);
+    }
+
     /// Tell `package` (or else `player`) how a paint went: painting all
     /// or none, the player hears it whatever the Add-On.
     pub(super) fn report_paint(
@@ -478,7 +502,7 @@ impl Session {
         let package = self.copies.get(&owner).map(|c| c.package.clone());
         Ok(self
             .begin_copy_job(owner, package, work)?
-            .map(|work| work.complete(self, owner, true)))
+            .map(|work| work.complete(self, owner, true, false)))
     }
 
     /// Remove `ids`, as a cut does, once read.
@@ -588,6 +612,7 @@ impl Session {
                 limit_reached: false,
                 refused: edit.refused,
                 error: None,
+                ..Default::default()
             },
             Err(error) => copy_store::CopyOutcome::failed(action, true, error),
         };

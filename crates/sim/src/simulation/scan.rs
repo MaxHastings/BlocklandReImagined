@@ -91,6 +91,10 @@ impl StackScan {
     pub fn is_done(&self) -> bool {
         self.done
     }
+    /// Bricks taken and not yet looked around.
+    pub fn queued(&self) -> usize {
+        self.selection.bricks.len() - self.next
+    }
     /// Look around the bricks taken as far as `budget` allows ([`work`]);
     /// true once the stack is complete or at its limit.
     pub fn step(
@@ -173,6 +177,8 @@ pub struct BoxScan {
     /// and how many of the first have joined.
     joining: std::collections::VecDeque<Vec<BrickId>>,
     joined: usize,
+    /// Bricks taken so far, joined or not.
+    found: usize,
     pub selection: Selection,
     done: bool,
 }
@@ -218,12 +224,21 @@ impl BoxScan {
             rows: BTreeMap::new(),
             joining: Default::default(),
             joined: 0,
+            found: 0,
             selection,
             done: false,
         }
     }
     pub fn is_done(&self) -> bool {
         self.done
+    }
+    /// Bricks taken so far.
+    pub fn found(&self) -> usize {
+        self.found
+    }
+    /// How far through the box's buckets, in percent.
+    pub fn searched(&self) -> usize {
+        (self.next * 100).checked_div(self.keys.len()).unwrap_or(100)
     }
     /// Look through the box's buckets as far as `budget` allows
     /// ([`work`]); true once the box is done or the limit passed.
@@ -282,6 +297,7 @@ impl BoxScan {
                     self.selection.refused += 1;
                     continue;
                 }
+                self.found += 1;
                 let runs = self.rows.entry(b.min[1]).or_default();
                 match runs.last_mut() {
                     Some(run) if run.len() < RUN => run.push(id),
