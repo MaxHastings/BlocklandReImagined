@@ -498,10 +498,12 @@ impl WorldItems {
                 self.missing(format!("Missing mounted image {image_id}"));
                 continue;
             };
-            if image.model.is_empty() {
+            // Its look is the item's look (`ItemAssets::image_appearance`).
+            let Some(look) = self.assets.image_appearance(image_id) else {
                 self.diagnostics.model_less += 1;
                 continue;
-            }
+            };
+            (image.model, image.tint) = (look.model, look.tint);
             if let Some(color) = paint.and_then(|p| self.palette.get(usize::from(p))) {
                 // The derived `color<N>SprayCanImage`: palette colour shift,
                 // alpha at least 10/255, clear can for translucent colours.
@@ -641,30 +643,23 @@ impl WorldItems {
         Ok(())
     }
 
-    /// `faded` items (`schedulePop`, `Item::fadeOut`) take the ItemData colour
-    /// (or white) and leave their alpha to the instance.
+    /// An item in the world looks as it does in the hand
+    /// (`ItemAssets::item_appearance`). `faded` items (`schedulePop`,
+    /// `Item::fadeOut`) leave their alpha to the instance.
     fn item_key(&mut self, id: &str, faded: bool) -> Option<ModelKey> {
-        let Some(item) = self.assets.presentation.items.get(id) else {
+        if !self.assets.presentation.items.contains_key(id) {
             self.missing(format!("Missing item presentation {id}"));
             return None;
-        };
-        if item.model.is_empty() {
+        }
+        let Some(look) = self.assets.item_appearance(id) else {
             self.diagnostics.model_less += 1;
             return None;
-        }
-        // Core onAdd applies image color when enabled; schedulePop and fadeOut
-        // set the ItemData color/white separately with their own node alpha.
-        let mut tint = item.tint;
-        if !faded
-            && let Some(image) = self.weapons.images.get(&item.image)
-            && image.color_shift
-        {
-            tint = image.color;
-        }
+        };
+        let mut tint = look.tint;
         if faded {
             tint[3] = 1.;
         }
-        Some(ModelKey::new(&item.model, tint))
+        Some(ModelKey::new(&look.model, tint))
     }
     fn projectile_pose(&self, model: &str, age: f64) -> Result<PoseKey> {
         let shape = self.assets.shape(model)?;

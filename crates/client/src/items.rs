@@ -113,6 +113,14 @@ pub struct IconDraws {
     /// Being drawn on a thread of their own.
     pub drawing: usize,
 }
+/// What an item looks like, wherever it is drawn: in a hand, dropped, on
+/// a spawn brick or as its icon. One item, one look (Max, v0.1.10: "my
+/// gravity gun looks different on the item spawn than in my hand").
+#[derive(Clone, Debug, PartialEq)]
+pub struct Appearance {
+    pub model: String,
+    pub tint: [f32; 4],
+}
 /// Resource bindings persist while the host updates only posed geometry.
 pub struct ItemMesh {
     pub data: SceneData,
@@ -434,6 +442,20 @@ impl ItemAssets {
             first_person: false,
             model: model.into(),
             tint,
+        })
+    }
+    /// The look of image `image` (a held item).
+    pub fn image_appearance(&self, image: &str) -> Option<Appearance> {
+        let image = self.presentation.images.get(image)?;
+        (!image.model.is_empty()).then(|| Appearance { model: image.model.clone(), tint: image.tint })
+    }
+    /// The look of item `item` lying in the world: the look of the image
+    /// it is held as, so it is the same thing in the hand and on the
+    /// ground. An item with no image to hold draws its own model.
+    pub fn item_appearance(&self, item: &str) -> Option<Appearance> {
+        let presented = self.presentation.items.get(item)?;
+        self.image_appearance(&presented.image).or_else(|| {
+            (!presented.model.is_empty()).then(|| Appearance { model: presented.model.clone(), tint: presented.tint })
         })
     }
     /// Both directories are native generated content. No source field is interpreted.
@@ -1251,7 +1273,9 @@ fn present_gaps(
                 eye_offset: image.eye_offset,
                 source_rotation_degrees: image.source_rotation_degrees,
                 eye_rotation_degrees: image.eye_rotation,
-                tint: image.color,
+                // As the stock importer does: the colour shows only when
+                // the image shifts it (`doColorShift`).
+                tint: if image.color_shift { image.color } else { [1.0; 4] },
                 evidence: evidence(),
                 follow_arm: image.follow_arm,
             },
@@ -1304,7 +1328,11 @@ fn present_gaps(
             ItemPresentation {
                 model,
                 image: item.image.clone(),
-                tint: [1.0; 4],
+                tint: pack
+                    .images
+                    .get(&item.image)
+                    .filter(|image| image.color_shift)
+                    .map_or([1.0; 4], |image| image.color),
                 icon,
                 evidence: evidence(),
             },
