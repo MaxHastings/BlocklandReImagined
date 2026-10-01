@@ -1167,7 +1167,7 @@ fn present_gaps(
     }
     // The model key `name` presents, or none (logged once per model).
     let mut missing = std::collections::BTreeSet::new();
-    let mut model = |manifest: &mut Presentation, added: &mut Added, faults: &mut Vec<String>, name: &str| -> String {
+    let mut model = |manifest: &Presentation, faults: &mut Vec<String>, name: &str| -> String {
         let model = name.replace('\\', "/").to_ascii_lowercase();
         if let Some(key) = own.get(&model) {
             return key.clone().unwrap_or_default();
@@ -1185,12 +1185,11 @@ fn present_gaps(
         String::new()
     };
     let mut images = BTreeMap::new();
-    let unpresented: Vec<_> = pack.images.iter().filter(|(id, _)| !manifest.images.contains_key(*id)).collect();
-    for (id, image) in unpresented {
+    for (id, image) in pack.images.iter().filter(|(id, _)| !manifest.images.contains_key(*id)) {
         images.insert(
             id.clone(),
             ImagePresentation {
-                model: model(manifest, added, faults, &image.model),
+                model: model(manifest, faults, &image.model),
                 mount_point: image.mount_point,
                 offset: image.offset,
                 eye_offset: image.eye_offset,
@@ -1209,7 +1208,7 @@ fn present_gaps(
         if manifest.projectiles.contains_key(id) {
             continue;
         }
-        let model = model(manifest, added, faults, &projectile.model);
+        let model = model(manifest, faults, &projectile.model);
         added.projectiles.insert(id.clone());
         manifest.projectiles.insert(
             id.clone(),
@@ -1223,7 +1222,7 @@ fn present_gaps(
         if manifest.items.contains_key(id) {
             continue;
         }
-        let model = model(manifest, added, faults, &item.model);
+        let model = model(manifest, faults, &item.model);
         if let Some(stock) = manifest.models.get(&model) {
             item_physics.items.insert(id.clone(), stock.bounds());
         }
