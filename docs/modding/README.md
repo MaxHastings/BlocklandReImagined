@@ -17,7 +17,6 @@ asked to trust when your Add-On runs code on their PC (section 8).
 | A HUD panel for a rule | [`sample-points-hud`](../../packages/samples/sample-points-hud) | a JSON panel each player draws |
 | A weapon | [`sample-bubble-blaster`](../../packages/samples/sample-bubble-blaster) | an `assets/weapons.json` file |
 | A tool that acts where it is clicked | [`duplicator`](../../packages/duplicator) | a weapon whose image runs a rule's command (section 5) |
-| A gun with its own model, a scope and a bolt | [`sniper-rifle`](../../packages/showcase/sniper-rifle) | a weapons pack with its own `presentation.json` model, scope picture and sounds |
 | A tool that grabs, holds and throws players and vehicles | [`gravity-gun`](../../packages/showcase/gravity-gun) | a rule using the `physics` operations (section 3), its tool, and client effects |
 | A new vehicle or loose physics object | [`steel-ball-kit`](../../packages/showcase/steel-ball-kit) | an `assets/vehicles.json` you write (section 6) |
 | A bot for the Vehicle Spawn brick | [`blockhead_bot`](../../packages/blockhead_bot) | an `assets/bots.json` you write (section 6) |
@@ -503,12 +502,12 @@ The fields you are most likely to change:
 | image | `zoom` | `{ "fov": 20, "on_jet": true, "crosshair": false, "first_person": true }`: aim with the zoom key (and the right mouse button with `on_jet`), hide the crosshair, force first person while aiming. More under "Scopes" below |
 | image | `fire_animation` | the arm animation a shot plays (`"shiftAway"` kicks it back, `""` plays none); left out, the engine picks as v20 did (a spear throws, a gun kicks) |
 | image | `eye_offset`, `eye_rotation` | where the weapon sits in first person: exactly there, relative to the camera, as Torque places it, so a scope whose sight is on the eye line stays centred at any zoom |
+| image | `hide_nodes` | the holder's body nodes hidden while the image is held, shown again when it goes: `["lhand", "rhand", "lhook", "rhook"]` for a model that draws its own hands (v20's `hideNode` in `onMount`). Up to 16 |
+| image | `both_arms` | `true` holds it up with both arms (`armReadyBoth`), not the mount hand's arm alone |
 | image | `follow_arm` | `true` also moves a first-person `eye_offset` image with the arm's actions (shift, plant, swing), as the base game's brick, hammer and spray cans do; off by default |
 | pack | `sounds` | `{ "your-id:shot": { "file": "sounds/shot.wav", "volume": 0.8 } }`: your own `.wav`/`.ogg` files, named by a state's `sound` and by rules; `local` for sounds only the holder hears, `looping` for a state-long hum |
 
-**Scopes.** `zoom` takes more for a proper scope, as the
-[Sniper Rifle](../../packages/showcase/sniper-rifle/assets/weapons.json)
-uses:
+**Scopes.** `zoom` takes more for a proper scope:
 
 ```json
 "zoom": { "fov": 22, "on_jet": true, "jets": false, "crosshair": false,
@@ -533,14 +532,13 @@ new and it costs no bandwidth.
 base game's item presentation uses: `models` and `textures` keyed by your
 own ids, each with its file and sha256) and `assets/item-physics.json`
 (each item's box). An item's or image's `model` in `weapons.json` then
-names one of those keys, such as `sniper-rifle:model/rifle`, and a
+names one of those keys, such as `your-add-on:model/rifle`, and a
 particle's `texture` may name a texture key. Leave `items`, `images` and
 `projectiles` empty in it: the game presents them from `weapons.json`.
 Models are the native `shape.json` format (nodes, meshes, materials,
 animations); name a `mountPoint` node where the hand holds it and a
 `muzzlePoint` where shots leave, and an image state's `sequence` plays one
-of its animations (the rifle's `Bolt`). `tools/make_sniper_rifle_assets.py`
-writes all of these for the rifle and is a starting point for your own.
+of its animations (a rifle's `Bolt`).
 
 The engine has no idea of clips, magazines or reloads: a rule builds them
 from a player state key, `set_image_ammo` and image commands (section 3,

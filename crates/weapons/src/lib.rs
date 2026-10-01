@@ -401,6 +401,17 @@ pub struct Image {
     /// picks as v20's own weapons do (a gun kicks, a spear throws).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fire_animation: Option<String>,
+    /// The holder's body nodes hidden while this image is held, as a v20
+    /// Add-On's `onMount` did with `%obj.hideNode("lhand")` and its
+    /// `onUnMount` undid: a model that draws its own hands hides the
+    /// Blockhead's (`lhand`, `rhand`, `lhook`, `rhook`). Up to 16 names.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hide_nodes: Vec<String>,
+    /// Held up with both arms (`armReadyBoth`), as `onMount`'s
+    /// `%obj.playThread(2, armReadyBoth)` did, not with the mount hand's
+    /// arm alone.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub both_arms: bool,
     /// Held, the image takes its holder's spray colour (the palette colour
     /// they last picked) as a colour spray can does: a tool that paints
     /// with that colour shows it.
@@ -1044,6 +1055,14 @@ impl Pack {
                     a.len() <= 32 && a.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
                 }),
                 "Invalid image fire_animation {id}: a player animation's name"
+            );
+            ensure!(
+                image.hide_nodes.len() <= 16
+                    && image.hide_nodes.iter().all(|n| {
+                        (1..=32).contains(&n.len())
+                            && n.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                    }),
+                "Invalid image hide_nodes {id}: up to 16 body node names"
             );
             if let Some(zoom) = &image.zoom {
                 zoom.validate()

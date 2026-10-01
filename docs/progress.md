@@ -8248,60 +8248,54 @@ Render: `/mnt/project-files/steel-ball/steel-ball-v2.png`. Max's in-game
 check is a Steel Ball near bricks at Mirrors Medium, in Unified+Shine and
 in Dynamic.
 
-## 2026-10-01 Sniper Rifle Add-On, after Kaje's (branch `claude/sniper-rifle-u9z1bd`, for v0.1.11)
+## 2026-10-01 Sniper Rifle: Kaje's original through Import Add-On (branch `claude/sniper-rifle-u9z1bd`, for v0.1.11)
 
-Max asked for Kaje's Sniper Rifle (Blockland Glass 343). It is bundled as
-`packages/showcase/sniper-rifle`, installed and off, built from our own code
-and assets only. Kaje is credited for the design and Conan for his update.
+Max asked for Kaje's Sniper Rifle (Blockland Glass 343, which is Conan's
+"Sniper Rifle Updated"). A first pass bundled our own look-alike rifle
+(`packages/showcase/sniper-rifle`: generated model, bolt animation, sounds,
+scope picture and icon). Max then chose originals only for classic
+Add-Ons, so that pack and its generator are gone. The player imports their
+own copy (Start Game > Add-Ons > Import) and the listed ports add what the
+scripts did. Nothing original is in the repo.
 
-How the originals play, read from Max's v21 Add-Ons folder on his PC
-(copied read-only to `.research/sniper`, never committed):
-- Kaje's fires one round at 2000 units a second with no drop, for 150
-  damage. It then smokes for 2 s, and the trigger must be let go before
-  the next shot. It has no scope, sway, ammo or headshots.
-- Conan's update fires 10x slower, cycles in about 1.8 s with a bolt, and
-  has its own sounds. It also has no scope.
+The originals, read from Max's PC (copied read-only to `.research/sniper`):
+- Kaje's `Weapon_Sniper_Rifle` (the old RTB release, in Max's Steam
+  Add-Ons): one round at 2000 units a second with no drop, 150 damage, a
+  blue ring trail, 2 s of muzzle smoke, then the trigger must be let go.
+  Its only script is `SniperRifleImage::onFire`: `playThread(2, shiftAway)`
+  while alive, then `Parent::onFire`. No scope, sway, ammo or headshots.
+- Conan's `Weapon_Sniper_Rifle_Updated` (Glass 343): a new animated model
+  with its own hands, its own sounds, 200 units a second, a bolt `Reload`
+  sequence (about 1.8 s a shot). `onFire` plays `plant`; `onMount` hides
+  the holder's `lhand`, `rhand`, `lhook`, `rhook` and plays
+  `armReadyBoth`; `onUnMount` restores the body.
 
-Ours keeps Kaje's ballistics with a 1.5 s cycle. The bolt is worked by hand
-(an animation, a sound and a thrown case). Right click looks down a scope at
-22 degrees, and the wheel steps to 10. The aim sways a little, less when
-crouched, and the player does not jet while aiming.
+Ports (`crates/addon-import/ports`, both `verified`):
+- `weapon_sniper_rifle`: `fire_animation` from the copy's `playThread`.
+- `weapon_sniper_rifle_updated`: `fire_animation` (`plant`), `hide_nodes`
+  and `both_arms`, covering all three image callbacks.
 
-New engine seams. They are general, have limits, and are documented in
-modding section 5 under "Scopes" and "Your own model":
-- `Zoom.levels`, `sensitivity`, `overlay`, `sway` and `jets`, all
-  validated, with `Zoom::validate`.
-- `Image.fire_animation` names the arm animation a shot plays. The v20 name
-  rule stays the default.
-- The scope picture is an Add-On PNG of up to 2048 px and 4 MB. ItemUi
-  registers it as an External texture. The play screen draws it fitted to
-  the screen height with black bars, under the HUD, and hides the held
-  model while it shows.
-- Sway is applied only to the holder's own view, so it is deterministic per
-  frame step and has no wire cost. There is no protocol change.
+Engine seams (general, validated, documented in modding section 5):
+- `Image.fire_animation`: the arm animation a shot plays.
+- `Image.hide_nodes` (up to 16) and `Image.both_arms`: a held image hides
+  body nodes and raises both arms; the avatar derives both from the held
+  images, so they undo themselves when the image goes.
+- `Zoom.levels`, `sensitivity`, `overlay`, `sway` and `jets` stay as seams
+  for any weapon. Kaje's rifle has no scope, so the original aims with the
+  game's zoom key as in v20. The aim's wheel steps now have their own
+  `UiUpdate::AimWheel`, since main's tool wheel follows the trigger.
 
-Assets: `tools/make_sniper_rifle_assets.py` (standard library only,
-deterministic) writes the model with its Bolt animation, textures, scope
-picture, icon (also drawn from the model, posed like the stock rocket
-launcher), sounds, weapons.json, presentation.json and item-physics.json.
+Tests (content-free): `bri-addon-import --test ports`
+(`sniper_rifle_port_kicks_the_arm`,
+`sniper_rifle_updated_port_draws_its_own_hands`, on CC0 stand-ins in
+`tests/fixtures/ports`), `bri-weapons --test image_seams`,
+`bri-client --test scope_overlay`, `bri-ui --test scope_overlay`. On the PC,
+`bri-addon-import --test import real_sniper_rifles` imports the real copies
+(read only) and runs the ports' checks; the avatar's hidden hands are in the
+content test `reposed_vertices_match_a_full_shape_rebuild`.
 
-Tests (all content-free and deterministic):
-- `bri-weapons --test sniper_rifle`: the pack, one round a pull then the
-  bolt, the cycle time, the field limits, the sway path, and the
-  `fire_animation` override.
-- `bri-client --test sniper_rifle`: the model, the bolt pose, the muzzle,
-  the icon and the scope picture all load with no stand-ins.
-- `bri-client` controls: wheel steps, look speed, no jet, the picture waits
-  for the eye, sway and settling, and no sway while seated.
-- `bri-ui --test scope_overlay`.
-
-Clippy on the changed crates is clean apart from the newer toolchain's
-lints in untouched code.
-
-Left for later:
-- Headshots, which belong to the Adventure Pack lane's hit regions.
-- A kill icon. Kills show the "sniped" message.
-- Max's feel check: the scope, the sway, the bolt's rhythm and the icon.
+Left for later: headshots (Adventure Pack's hit regions; neither original
+has them), and Max's feel check of the imported rifle.
 ## 2026-09-30 Trench Warfare game mode (branch `claude/trench-warfare-eq4lxb`)
 
 Max asked for the classic Trench Warfare mode (Glass Add-On 829). That

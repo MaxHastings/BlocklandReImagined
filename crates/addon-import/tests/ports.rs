@@ -469,3 +469,116 @@ fn port_and_check_port_run_from_the_executable() {
     assert!(text.contains("\"status\": \"verified\""), "{text}");
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// Kaje's Sniper Rifle: `onFire` kicks the arm with `shiftAway` (read from
+/// the copy's script) and fires one round as any weapon does. The import
+/// ships nothing of the original; the stand-in carries its shape.
+#[test]
+fn sniper_rifle_port_kicks_the_arm() {
+    let dir = fresh("sniper");
+    let out = dir.join("package");
+    let report = import(&options(fixture("ports/Weapon_Sniper_Rifle"), out.clone())).unwrap();
+    let port = &report.ports[0];
+    assert!(port.applied, "{:?}", port.reason);
+    assert_eq!(
+        (port.port.as_str(), port.status.as_str()),
+        ("weapon_sniper_rifle", "verified")
+    );
+    assert!(port.values["fire_animation"].eq_ignore_ascii_case("shiftaway"));
+    assert_eq!(report.summary.needs_behaviour_ported, 1);
+    bri_addon_import::ports::check_pins(&out).unwrap();
+    let pack = Pack::from_json(&std::fs::read(out.join("assets/weapons.json")).unwrap()).unwrap();
+    let image = &pack.images["weapon_sniper_rifle:image/sniperrifleimage"];
+    assert!(
+        image
+            .fire_animation
+            .as_deref()
+            .is_some_and(|a| a.eq_ignore_ascii_case("shiftaway"))
+    );
+    assert!(image.hide_nodes.is_empty() && !image.both_arms);
+
+    // One round straight down the aim, and the arm kicks with it.
+    let mut world = WeaponsWorld::new(pack).unwrap();
+    world.add_actor(ActorId(1), 5).unwrap();
+    let slot = world
+        .give(ActorId(1), "weapon_sniper_rifle:weapon/sniperrifleitem")
+        .unwrap();
+    world.equip(ActorId(1), Some(slot)).unwrap();
+    let (mut rounds, mut kicks) = (vec![], vec![]);
+    for tick in 0..240 {
+        if tick == 60 || tick == 61 {
+            world.trigger(ActorId(1), tick == 60).unwrap();
+        }
+        for e in world.step(&mut Empty) {
+            match e {
+                Event::Spawned { velocity, .. } => rounds.push(velocity),
+                Event::Animation { sequence, .. } => kicks.push(sequence),
+                _ => {}
+            }
+        }
+    }
+    assert_eq!(rounds.len(), 1);
+    assert!(rounds[0].angle_between(Vec3::NEG_Z) < 1e-4);
+    assert!(
+        kicks.iter().any(|k| k.eq_ignore_ascii_case("shiftaway")),
+        "{kicks:?}"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Conan's Sniper Rifle Updated draws its own hands: held, it hides the
+/// Blockhead's hands and hooks and raises both arms, and its shot plays
+/// `plant`. All three of its image callbacks are covered.
+#[test]
+fn sniper_rifle_updated_port_draws_its_own_hands() {
+    let dir = fresh("sniper-updated");
+    let out = dir.join("package");
+    let report = import(&options(
+        fixture("ports/Weapon_Sniper_Rifle_Updated"),
+        out.clone(),
+    ))
+    .unwrap();
+    let port = &report.ports[0];
+    assert!(port.applied, "{:?}", port.reason);
+    assert_eq!(port.port, "weapon_sniper_rifle_updated");
+    assert_eq!(report.summary.needs_behaviour, 3);
+    assert_eq!(report.summary.needs_behaviour_ported, 3);
+    bri_addon_import::ports::check_pins(&out).unwrap();
+    let pack = Pack::from_json(&std::fs::read(out.join("assets/weapons.json")).unwrap()).unwrap();
+    let image = &pack.images["weapon_sniper_rifle_updated:image/sniperrifleanimatedimage"];
+    assert_eq!(
+        image
+            .fire_animation
+            .as_deref()
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("plant")
+    );
+    assert_eq!(image.hide_nodes, ["lhand", "rhand", "lhook", "rhook"]);
+    assert!(image.both_arms);
+
+    // A copy that hides other nodes is a different script: no port.
+    let copy = dir.join("Weapon_Sniper_Rifle_Updated");
+    std::fs::create_dir_all(&copy).unwrap();
+    for f in [
+        "server.cs",
+        "Weapon_Sniper Rifle.cs",
+        "description.txt",
+        "LICENSE.txt",
+    ] {
+        let text = std::fs::read_to_string(fixture("ports/Weapon_Sniper_Rifle_Updated").join(f))
+            .unwrap()
+            .replace("hideNode(\"rhook\")", "hideNode(\"rarm\")");
+        std::fs::write(copy.join(f), text).unwrap();
+    }
+    let other = import(&options(copy, dir.join("other"))).unwrap();
+    assert!(!other.ports[0].applied);
+    assert!(
+        other.ports[0]
+            .reason
+            .as_deref()
+            .unwrap()
+            .contains("`rhook`")
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}

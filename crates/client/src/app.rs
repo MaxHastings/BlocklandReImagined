@@ -6844,19 +6844,27 @@ impl PlatformApp for App {
                     self.avatar_action_images.remove(owner);
                 }
                 let mut ready_hands = Vec::new();
+                let mut hidden_nodes = Vec::new();
                 if let Some(images) = view.weapons.images.get(owner) {
                     for mounted in images {
+                        let image = self.content.weapons.pack.images.get(&mounted.image);
+                        if let Some(image) = image {
+                            hidden_nodes.extend(image.hide_nodes.iter().cloned());
+                        }
                         if let Some((right, left)) =
                             bri_weapons::scripted_arm_pose(&mounted.image, &mounted.state)
                         {
                             ready_hands.extend([(0, right), (1, left)]);
-                        } else if let Some(image) =
-                            self.content.weapons.pack.images.get(&mounted.image)
-                        {
-                            ready_hands.push((mounted.hand, image.arm_ready));
+                        } else if let Some(image) = image {
+                            if image.both_arms {
+                                ready_hands.extend([(0, true), (1, true)]);
+                            } else {
+                                ready_hands.push((mounted.hand, image.arm_ready));
+                            }
                         }
                     }
                 }
+                self.avatars.get_mut(owner).unwrap().set_hidden_nodes(hidden_nodes);
                 // `Player::startSkiing` shows the LSki/RSki nodes in the
                 // skier's paint colour, carried by the ski vehicle.
                 let skis = view

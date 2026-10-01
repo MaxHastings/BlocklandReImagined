@@ -1,0 +1,5 @@
+Title: Stand-in Sniper Rifle
+Author: Blockland ReImagined tests
+Written for tests. It has the community Sniper Rifle's folder name, its
+script file name and the shape of its onFire, so the listed port applies to
+it. It is not the original Add-On and holds none of its files.

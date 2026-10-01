@@ -625,6 +625,8 @@ mod tests {
                     crosshair: true,
                     follow_arm: false,
                     fire_animation: None,
+                    hide_nodes: Vec::new(),
+                    both_arms: false,
                     paint_tint: false,
                 },
             );

@@ -1,7 +1,7 @@
-//! The Sniper Rifle Add-On (`packages/showcase/sniper-rifle`), our take on
-//! Kaje's: one heavy straight round a pull, an arm kick, muzzle smoke, then
-//! the bolt worked (throwing the case) before the trigger is let go for the
-//! next. Also the limits of the aiming fields it uses (`Zoom`).
+//! Image fields Add-Ons and ports set (`Image`, `Zoom`): the aiming
+//! fields' limits and the scope's sway, the arm animation a shot plays,
+//! and the body nodes a held image hides. Content-free: the base is the
+//! sample Bubble Blaster.
 use bri_weapons::*;
 use glam::Vec3;
 use std::path::Path;
@@ -22,125 +22,18 @@ impl Query for Open {
     }
 }
 
-const RIFLE: &str = "sniper-rifle:weapon/sniperrifle";
-const IMAGE: &str = "sniper-rifle:image/sniperrifle";
-const ROUND: &str = "sniper-rifle:projectile/round";
+const ITEM: &str = "sample-bubble-blaster:weapon/bubble_blaster";
+const IMAGE: &str = "sample-bubble-blaster:image/bubble_blaster";
 const A: ActorId = ActorId(1);
 
 fn pack() -> Pack {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../packages/showcase/sniper-rifle/assets/weapons.json");
+        .join("../../packages/samples/sample-bubble-blaster/assets/weapons.json");
     Pack::from_json(&std::fs::read(path).unwrap()).unwrap()
-}
-
-fn armed() -> WeaponsWorld {
-    let mut w = WeaponsWorld::new(pack()).unwrap();
-    w.add_actor(A, 5).unwrap();
-    let slot = w.give(A, RIFLE).unwrap();
-    w.equip(A, Some(slot)).unwrap();
-    step(&mut w, 40);
-    w
 }
 
 fn step(w: &mut WeaponsWorld, ticks: usize) -> Vec<Event> {
     (0..ticks).flat_map(|_| w.step(&mut Open)).collect()
-}
-
-fn state(w: &WeaponsWorld) -> String {
-    w.image_state(A, 0).unwrap().1.name.clone()
-}
-
-#[test]
-fn it_is_kajes_rifle_with_a_scope() {
-    let pack = pack();
-    let round = &pack.projectiles[ROUND];
-    // Kaje's round: 2000 units a second, dead straight, 150 damage (a
-    // Blockhead has 100) and a hard knock.
-    assert_eq!(
-        (round.speed, round.gravity, round.damage),
-        (2000.0, 0.0, 150.0)
-    );
-    assert_eq!((round.impulse, round.vertical), (1200.0, 1400.0));
-    assert_eq!(round.trail, "sniper-rifle:emitter/trail");
-    let image = &pack.images[IMAGE];
-    assert_eq!(image.fire_animation.as_deref(), Some("shiftAway"));
-    let zoom = image.zoom.as_ref().unwrap();
-    assert!(zoom.on_jet && !zoom.jets && !zoom.crosshair && zoom.first_person);
-    assert_eq!((zoom.fov, zoom.levels.as_slice()), (22.0, &[10.0][..]));
-    assert_eq!(zoom.overlay.as_deref(), Some("scope/scope"));
-    assert!(zoom.sway.is_some());
-    assert_eq!(
-        (zoom.level_fov(0), zoom.level_fov(1), zoom.level_fov(7)),
-        (22.0, 10.0, 10.0)
-    );
-}
-
-#[test]
-fn one_round_a_pull_then_the_bolt() {
-    let mut w = armed();
-    assert_eq!(state(&w), "Ready");
-    w.trigger(A, true).unwrap();
-    let fired = step(&mut w, 2);
-    let rounds: Vec<_> = fired
-        .iter()
-        .filter_map(|e| match e {
-            Event::Spawned {
-                definition,
-                velocity,
-                ..
-            } => Some((definition.clone(), velocity.length())),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(rounds.len(), 1, "{fired:?}");
-    assert_eq!(rounds[0].0, ROUND);
-    assert!((rounds[0].1 - 2000.0).abs() < 1.0, "{}", rounds[0].1);
-    // The shot kicks the arm, as Kaje's onFire played shiftAway.
-    assert!(fired.iter().any(|e| matches!(e,
-        Event::Animation { thread: 2, sequence, .. } if sequence == "shiftAway")));
-    // Holding the trigger: smoke, the bolt (its animation and the case
-    // thrown out), then nothing more until it is let go.
-    let held = step(&mut w, 240);
-    assert!(!held.iter().any(|e| matches!(e, Event::Spawned { .. })));
-    let states: Vec<_> = held
-        .iter()
-        .filter_map(|e| match e {
-            Event::ImageState { state, .. } => Some(state.as_str()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(states, ["Smoke", "Bolt", "Reload"]);
-    assert!(
-        held.iter().any(|e| matches!(e, Event::Shell { .. })),
-        "the bolt throws the case"
-    );
-    assert_eq!(state(&w), "Reload");
-    w.trigger(A, false).unwrap();
-    step(&mut w, 2);
-    assert_eq!(state(&w), "Ready");
-    w.trigger(A, true).unwrap();
-    assert!(
-        step(&mut w, 2)
-            .iter()
-            .any(|e| matches!(e, Event::Spawned { .. }))
-    );
-}
-
-#[test]
-fn a_shot_takes_about_a_second_and_a_half() {
-    // Conan's update fired "slightly faster" than Kaje's 2.14 s: fire,
-    // smoke and bolt take 1.5 s before the rifle is ready again.
-    let mut w = armed();
-    w.trigger(A, true).unwrap();
-    step(&mut w, 1);
-    w.trigger(A, false).unwrap();
-    let mut ticks = 0;
-    while state(&w) != "Ready" {
-        step(&mut w, 1);
-        ticks += 1;
-        assert!(ticks < 1000);
-    }
-    assert!((170..=190).contains(&ticks), "{ticks} ticks");
 }
 
 fn zoom(json: &str) -> Result<(), String> {
@@ -177,18 +70,39 @@ fn aiming_fields_have_limits() {
     assert!(zoom(r#"{"fov": 22, "sway": {"degrees": 1, "seconds": 4, "moving": 0.5}}"#).is_err());
     // A pack whose image breaks them is refused, naming the image.
     let mut bad = pack();
-    bad.images
-        .get_mut(IMAGE)
-        .unwrap()
-        .zoom
-        .as_mut()
-        .unwrap()
-        .levels = vec![40.0];
+    bad.images.get_mut(IMAGE).unwrap().zoom =
+        Some(serde_json::from_str(r#"{"fov": 22, "levels": [40]}"#).unwrap());
     let error = bad.validate().unwrap_err().to_string();
     assert!(error.contains(IMAGE) && error.contains("levels"), "{error}");
     let mut bad = pack();
     bad.images.get_mut(IMAGE).unwrap().fire_animation = Some("shift away".into());
     assert!(bad.validate().is_err());
+}
+
+/// A held image hides up to 16 body nodes by name (`hide_nodes`).
+#[test]
+fn hidden_nodes_have_limits() {
+    let with = |nodes: Vec<String>| {
+        let mut pack = pack();
+        let image = pack.images.get_mut(IMAGE).unwrap();
+        image.hide_nodes = nodes;
+        image.both_arms = true;
+        pack.validate()
+    };
+    assert!(with(vec!["lhand".into(), "rhook".into()]).is_ok());
+    assert!(with(vec!["l hand".into()]).is_err());
+    assert!(with(vec![String::new()]).is_err());
+    assert!(with(vec!["n".repeat(33)]).is_err());
+    assert!(with((0..17).map(|i| format!("node{i}")).collect()).is_err());
+    // Both read back from a pack's JSON, and are left out when unset.
+    let image: Image =
+        serde_json::from_str(r#"{"hide_nodes": ["lhand"], "both_arms": true}"#).unwrap();
+    assert_eq!(
+        (image.hide_nodes.as_slice(), image.both_arms),
+        (&["lhand".to_string()][..], true)
+    );
+    let plain = serde_json::to_value(Image::default()).unwrap();
+    assert!(plain.get("hide_nodes").is_none() && plain.get("both_arms").is_none());
 }
 
 #[test]
@@ -223,7 +137,7 @@ fn fire_animation_overrides_the_engines_pick() {
         pack.images.get_mut(IMAGE).unwrap().fire_animation = animation.map(str::to_string);
         let mut w = WeaponsWorld::new(pack).unwrap();
         w.add_actor(A, 5).unwrap();
-        let slot = w.give(A, RIFLE).unwrap();
+        let slot = w.give(A, ITEM).unwrap();
         w.equip(A, Some(slot)).unwrap();
         step(&mut w, 40);
         w.trigger(A, true).unwrap();
@@ -241,6 +155,6 @@ fn fire_animation_overrides_the_engines_pick() {
     };
     assert_eq!(fired(Some("spearThrow")), ["spearThrow"]);
     assert!(fired(Some("")).is_empty());
-    // "SniperRifleImage" has no "gun" in its name, so v20's pick is none.
+    // "bubbleBlasterImage" is no gun, spear or broom, so v20's pick is none.
     assert!(fired(None).is_empty());
 }

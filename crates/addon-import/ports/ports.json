@@ -19,6 +19,48 @@
         "crates/addon-import/tests/ports.rs shotgun_port_fires_the_spread",
         "crates/addon-import/tests/import.rs real_community_samples"
       ]
+    },
+    {
+      "addon": "Weapon_Sniper_Rifle",
+      "title": "Sniper Rifle",
+      "port": "weapon_sniper_rifle",
+      "status": "verified",
+      "sha256": [],
+      "covers": {
+        "SniperRifleImage::onFire": {
+          "fire_animation": "playthread\\s*\\(\\s*2\\s*,\\s*\"?([a-z_][a-z0-9_]*)\"?\\s*\\)"
+        }
+      },
+      "tests": [
+        "weapon_sniper_rifle/checks.json",
+        "crates/addon-import/tests/ports.rs sniper_rifle_port_kicks_the_arm"
+      ]
+    },
+    {
+      "addon": "Weapon_Sniper_Rifle_Updated",
+      "title": "Sniper Rifle Updated",
+      "port": "weapon_sniper_rifle_updated",
+      "status": "verified",
+      "sha256": [],
+      "covers": {
+        "SniperRifleAnimatedImage::onFire": {
+          "fire_animation": "playthread\\s*\\(\\s*2\\s*,\\s*\"?([a-z_][a-z0-9_]*)\"?\\s*\\)"
+        },
+        "SniperRifleAnimatedImage::onMount": {
+          "lhand": "hidenode\\s*\\(\\s*\"?lhand\"?\\s*\\)",
+          "rhand": "hidenode\\s*\\(\\s*\"?rhand\"?\\s*\\)",
+          "lhook": "hidenode\\s*\\(\\s*\"?lhook\"?\\s*\\)",
+          "rhook": "hidenode\\s*\\(\\s*\"?rhook\"?\\s*\\)",
+          "both_arms": "playthread\\s*\\(\\s*2\\s*,\\s*\"?armreadyboth\"?\\s*\\)"
+        },
+        "SniperRifleAnimatedImage::onUnMount": {
+          "restores": "applybodyparts\\s*\\(\\s*\\)"
+        }
+      },
+      "tests": [
+        "weapon_sniper_rifle_updated/checks.json",
+        "crates/addon-import/tests/ports.rs sniper_rifle_updated_port_draws_its_own_hands"
+      ]
     }
   ]
 }
