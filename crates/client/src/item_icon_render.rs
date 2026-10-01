@@ -610,14 +610,21 @@ fn veined(local: Vec3, n: Vec3, light: Vec3, shell: Vec3, vein: Vec3, pixel: f32
 /// Render the icon `spec` asks for: `mesh` posed like `reference` (the
 /// stock item's model and its icon).
 pub fn render_like(spec: &Spec, mesh: &Mesh, reference: (&Mesh, &SceneImage), label: &str) -> Result<SceneImage> {
+    let pose = fit_pose(reference.0, reference.1)
+        .with_context(|| format!("{}'s model does not match its icon", spec.pose_like))?
+        .0;
+    render_posed(spec, mesh, &pose, reference.1, label)
+}
+
+/// [`render_like`] from the stock item's pose, already fitted to its
+/// `icon` (a pose is fitted once for every icon posed like that item).
+pub fn render_posed(spec: &Spec, mesh: &Mesh, pose: &Pose, icon: &SceneImage, label: &str) -> Result<SceneImage> {
     ensure!(!mesh.indices.is_empty(), "the item has no model to draw");
-    let (fitted, _) = fit_pose(reference.0, reference.1)
-        .with_context(|| format!("{}'s model does not match its icon", spec.pose_like))?;
     // The stock icon's angle; the framing is this model's own, filling the
     // box the stock drawing fills.
-    let target = filled_box(reference.1).context("the stock icon is empty")?;
+    let target = filled_box(icon).context("the stock icon is empty")?;
     let puff = spec.look.skin.as_ref().map_or(0.0, |s| s.puff);
-    let pose = frame(mesh, fitted.rotation, puff, target, fitted.size).context("the model has no size")?;
+    let pose = frame(mesh, pose.rotation, puff, target, pose.size).context("the model has no size")?;
     Ok(render(mesh, &pose, &spec.look, label))
 }
 

@@ -8248,6 +8248,40 @@ Render: `/mnt/project-files/steel-ball/steel-ball-v2.png`. Max's in-game
 check is a Steel Ball near bricks at Mirrors Medium, in Unified+Shine and
 in Dynamic.
 
+## 2026-10-01 Adventure Pack seams: hit regions, HUD per gun, onFire with a round (branch `claude/adventure-pack-n3spj2`)
+
+Max asked for Bushido's Adventure Pack as a bundled Add-On and as a test of
+the engine's seams. A first cut built our own remake (models, sounds,
+rules). Max then chose "originals only" for every classic Add-On: the game
+loads the original files from the player's own Blockland Add-Ons folder
+and ships none of them. The remake (`packages/adventure`,
+`tools/make_adventure_pack.py`) was removed before landing. The Tier
+Tactical thread owns the classic Add-On loader and a shared `magazine`
+seam (rounds, reserves, reload, pickups, ammo display). The engine seams
+the pack needs stay; `docs/audits/adventure-pack.md` maps them.
+
+New engine seams (general, documented in `docs/modding/README.md`):
+- Hit regions: `bri_sim::player::hit_region` uses Torque's
+  `getDamageLocation` bands (head above 85% of the box, torso above 55%).
+  `on_damage` info gains `region`, `x`, `y`, `z` for shots and blasts.
+  `raycast` and `on_projectile_hit` give `region` for players, and
+  `hit_region(p, x, y, z)` is a script function. `info.type` is now the
+  damage type's name without `$DamageType::`.
+- HUD `holding`: a panel shows only while the viewer holds an image of the
+  listed Add-Ons or images.
+- An image with a projectile and an `onfire` command runs the command and
+  fires, as `Parent::onFire` did.
+- Model-drawn icons fit each stock item's pose once, however many icons
+  take it. `bri-addon-check` also checks projectiles' own models
+  (Trench Warfare's loader).
+
+Tests: `crates/sim/tests/hit_regions.rs` (a round in the chest and the
+head through `on_damage`), region tests in `script_api.rs` and
+`player.rs`, `content.rs` HUD `holding`, `addon_seams.rs` onFire. bri-weapons,
+bri-package-runtime, bri-package, the bri-client lib and the touched bri-sim
+suites pass. Suites needing generated `content/` could not run in the
+cloud. No protocol change.
+
 ## 2026-09-30 Trench Warfare game mode (branch `claude/trench-warfare-eq4lxb`)
 
 Max asked for the classic Trench Warfare mode (Glass Add-On 829). That
