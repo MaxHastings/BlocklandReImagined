@@ -1,0 +1,211 @@
+//! Where a host keeps the copies duplicators save by name: `Duplications`
+//! in its saves folder, one file per copy. Loading also finds v20
+//! duplication files, read but never changed: in that folder (where a
+//! player can drop their old ones), and in old Blockland installs, both
+//! Plornt's Duplorcator's `saves/Duplications` and Zeblote's New
+//! Duplicator's `config/NewDuplicator/Saves`. Each request runs on a thread
+//! of its own, so the game never waits on the disk.
+use crate::old_saves::OldSaves;
+use anyhow::{Context, Result, ensure};
+use bri_sim::blueprint::SavedCopy;
+use bri_sim::session::{CopyStore, LoadedCopy, StoreDone};
+use std::{
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+};
+
+/// The folder in a saves folder that copies are kept in.
+pub const FOLDER: &str = "Duplications";
+/// A saved copy's file ending.
+const NATIVE: &str = "copy.json";
+/// Largest copy file read.
+const MAX_BYTES: u64 = 64 * 1024 * 1024;
+
+pub struct CopyFiles {
+    /// Copies saved here, and v20 files a player put beside them.
+    own: PathBuf,
+    old_saves: Arc<OldSaves>,
+    done: Arc<Mutex<Vec<(u64, StoreDone)>>>,
+}
+
+impl CopyFiles {
+    pub fn new(old_saves: Arc<OldSaves>) -> Self {
+        Self {
+            own: old_saves.saves_folder().join(FOLDER),
+            old_saves,
+            done: Default::default(),
+        }
+    }
+
+    /// Folders v20 duplication files are looked for in, first found wins.
+    fn classic_folders(&self) -> Vec<PathBuf> {
+        let mut folders = vec![self.own.clone()];
+        for saves in self.old_saves.old_installs() {
+            folders.push(saves.join(FOLDER));
+            if let Some(install) = saves.parent() {
+                folders.push(install.join("config/NewDuplicator/Saves"));
+            }
+        }
+        folders
+    }
+
+    fn finish(&self, request: u64, done: StoreDone) {
+        self.done
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((request, done));
+    }
+}
+
+/// The file in `folder` named `name` + `.ending`, matched without regard
+/// to case as Windows does.
+fn find(folder: &Path, name: &str, ending: &str) -> Option<PathBuf> {
+    let wanted = format!("{name}.{ending}");
+    let exact = folder.join(&wanted);
+    if exact.is_file() {
+        return Some(exact);
+    }
+    std::fs::read_dir(folder)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .find(|p| {
+            p.is_file()
+                && p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.eq_ignore_ascii_case(&wanted))
+        })
+}
+
+fn read(path: &Path) -> Result<Vec<u8>> {
+    let length = std::fs::metadata(path)?.len();
+    ensure!(length <= MAX_BYTES, "{} is too big", path.display());
+    Ok(std::fs::read(path)?)
+}
+
+fn save(folder: &Path, name: &str, copy: &SavedCopy) -> Result<()> {
+    std::fs::create_dir_all(folder)?;
+    // The same name in other case is the same copy.
+    let path = find(folder, name, NATIVE).unwrap_or_else(|| folder.join(format!("{name}.{NATIVE}")));
+    let partial = path.with_extension("json.partial");
+    std::fs::write(&partial, serde_json::to_vec(copy)?)?;
+    std::fs::rename(&partial, &path)?;
+    Ok(())
+}
+
+fn load(files: &CopyFiles, name: &str) -> Result<Option<LoadedCopy>> {
+    if let Some(path) = find(&files.own, name, NATIVE) {
+        let saved: SavedCopy = serde_json::from_slice(&read(&path)?)
+            .with_context(|| path.display().to_string())?;
+        saved.validate()?;
+        return Ok(Some(LoadedCopy::Saved(saved)));
+    }
+    let Some(path) = files
+        .classic_folders()
+        .iter()
+        .find_map(|folder| find(folder, name, "bls"))
+    else {
+        return Ok(None);
+    };
+    let converter = files
+        .old_saves
+        .converter()
+        .context("Old duplication files can be read once the game has finished loading")?;
+    let (bricks, palette) = converter.read_duplication(&read(&path)?, name)?;
+    Ok(Some(LoadedCopy::Loose { bricks, palette }))
+}
+
+impl CopyStore for CopyFiles {
+    fn save(&self, request: u64, name: &str, copy: SavedCopy) {
+        let (folder, name, done) = (self.own.clone(), name.to_string(), self.done.clone());
+        std::thread::spawn(move || {
+            let result = save(&folder, &name, &copy);
+            if let Err(error) = &result {
+                eprintln!("Saving copy {name}: {error:#}");
+            }
+            done.lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push((request, StoreDone::Saved(result)));
+        });
+    }
+
+    fn load(&self, request: u64, name: &str) {
+        let files = Self {
+            own: self.own.clone(),
+            old_saves: self.old_saves.clone(),
+            done: self.done.clone(),
+        };
+        let name = name.to_string();
+        std::thread::spawn(move || {
+            let result = load(&files, &name);
+            files.finish(request, StoreDone::Loaded(result));
+        });
+    }
+
+    fn poll(&self) -> Vec<(u64, StoreDone)> {
+        std::mem::take(&mut *self.done.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bri_sim::blueprint::Blueprint;
+    use bri_world::{Brick, ContentRef};
+
+    fn wait(files: &CopyFiles) -> StoreDone {
+        for _ in 0..500 {
+            if let Some((_, done)) = files.poll().pop() {
+                return done;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("the store never answered");
+    }
+
+    #[test]
+    fn a_copy_saved_loads_back_by_any_case_and_a_missing_one_is_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = OldSaves::new(dir.path().join("saves"), dir.path().join("cache"), vec![]);
+        let files = CopyFiles::new(old);
+        let mut brick = Brick::new(ContentRef::Resolved("plate".into()), [0.5, 0.1, 0.25], 0);
+        brick.color = 2;
+        let copy = SavedCopy {
+            schema_version: SavedCopy::SCHEMA_VERSION,
+            saved_by: "Host".into(),
+            palette: vec![[1.0; 4]; 3],
+            copy: Blueprint {
+                tool: "dup:weapon/wand".into(),
+                origin: [0.0; 3],
+                size: [2, 1, 1],
+                bricks: vec![brick],
+            },
+        };
+        files.save(1, "My House", copy.clone());
+        assert!(matches!(wait(&files), StoreDone::Saved(Ok(()))));
+        assert!(
+            dir.path()
+                .join("saves/Duplications/My House.copy.json")
+                .is_file()
+        );
+        files.load(2, "my house");
+        match wait(&files) {
+            StoreDone::Loaded(Ok(Some(LoadedCopy::Saved(found)))) => assert_eq!(found, copy),
+            _ => panic!("the copy did not load back"),
+        }
+        files.load(3, "nothing");
+        assert!(matches!(wait(&files), StoreDone::Loaded(Ok(None))));
+    }
+
+    #[test]
+    fn a_v20_duplication_file_waits_for_the_converter() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("saves").join(FOLDER);
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("Old.bls"), "Duplorcation save file\t0\n").unwrap();
+        let old = OldSaves::new(dir.path().join("saves"), dir.path().join("cache"), vec![]);
+        let files = CopyFiles::new(old);
+        files.load(1, "old");
+        assert!(matches!(wait(&files), StoreDone::Loaded(Err(_))));
+    }
+}

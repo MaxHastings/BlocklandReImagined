@@ -50,10 +50,23 @@
         },
         "servercmdUndoBrick": {
           "one_undo": "\"duplication\""
+        },
+        "FXDtsBrick::saveDuplication": {
+          "saves": "\"saves/duplications/\"\\s*@\\s*filebase\\s*\\(\\s*%name\\s*\\)",
+          "save_message": "duplication successfully saved as"
+        },
+        "servercmdSaveDup": {
+          "saves_held": "\\.saveduplication\\s*\\(\\s*%name\\s*\\)"
+        },
+        "servercmdLoadDup": {
+          "loads": "findfirstfile\\s*\\(\\s*\"saves/duplications/\"\\s*@\\s*filebase\\s*\\(\\s*%name\\s*\\)",
+          "over_limit": "this duplication exceeds the max bricks",
+          "load_message": "loaded duplication"
         }
       },
       "tests": [
-        "crates/addon-import/tests/ports.rs duplorcator_port_copies_lights_and_plants_brick_by_brick"
+        "crates/addon-import/tests/ports.rs duplorcator_port_copies_lights_and_plants_brick_by_brick",
+        "crates/addon-import/tests/ports.rs duplorcator_port_saves_and_loads_duplications"
       ]
     }
   ]

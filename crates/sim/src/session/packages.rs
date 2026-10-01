@@ -1482,6 +1482,32 @@ impl Session {
                 self.report_copy(package, player, copied);
                 Ok(())
             }
+            Op::SaveCopy { player, name } => {
+                ensure!(
+                    caller == Some(player),
+                    "A copy is saved only for the player whose command asked"
+                );
+                self.save_copy(player, name, package);
+                Ok(())
+            }
+            Op::LoadCopy {
+                player,
+                name,
+                limit,
+                tool,
+                partial,
+            } => {
+                ensure!(
+                    caller == Some(player),
+                    "A copy is loaded only for the player whose command asked"
+                );
+                ensure!(
+                    self.weapons.contains_item(&tool),
+                    "The copy's tool {tool} is not an item on this server"
+                );
+                self.load_copy(player, name, limit as usize, tool, partial, package);
+                Ok(())
+            }
             Op::HighlightCopy {
                 player,
                 color,
@@ -2631,6 +2657,7 @@ impl Session {
         self.deliver_loadouts();
         self.deliver_spawns();
         self.deliver_hits();
+        self.step_saved_copies();
         self.deliver_copy_reports();
         let changed = self.dirty.read(super::dirty::Reader::Packages);
         let Some(host) = self.packages.as_ref() else {

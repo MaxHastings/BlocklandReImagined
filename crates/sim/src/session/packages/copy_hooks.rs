@@ -3,7 +3,7 @@
 //! declares the hook says what it likes to the player; for one that does
 //! not, the engine says it plainly.
 use super::*;
-use crate::session::blueprints::Copied;
+use crate::session::copy_store::CopyOutcome;
 use bri_package_runtime::rhai::Map;
 
 /// Reports waiting for the start of the next tick, oldest first.
@@ -74,15 +74,26 @@ impl Session {
         });
     }
 
-    /// Tell `package` (or else `player`) what its copy took.
-    pub(super) fn report_copy(&mut self, package: &str, player: OwnerId, copied: Copied) {
-        let selection = &copied.selection;
+    /// Tell `package` (or else `player`) what its copy, save or load did.
+    pub(in crate::session) fn report_copy(
+        &mut self,
+        package: &str,
+        player: OwnerId,
+        outcome: impl Into<CopyOutcome>,
+    ) {
+        let outcome = outcome.into();
         if self.declares(package, |b| b.on_copy) {
             let mut info = Map::new();
-            info.insert("bricks".into(), (selection.bricks.len() as i64).into());
-            info.insert("limit_reached".into(), selection.limit_reached.into());
-            info.insert("refused".into(), (selection.refused as i64).into());
-            let (error, message) = match &copied.error {
+            info.insert("action".into(), outcome.action.into());
+            info.insert(
+                "name".into(),
+                outcome.name.clone().map_or(Dynamic::UNIT, Dynamic::from),
+            );
+            info.insert("bricks".into(), (outcome.bricks as i64).into());
+            info.insert("total".into(), (outcome.total as i64).into());
+            info.insert("limit_reached".into(), outcome.limit_reached.into());
+            info.insert("refused".into(), (outcome.refused as i64).into());
+            let (error, message) = match &outcome.error {
                 Some((code, message)) => (Dynamic::from(code.to_string()), message.clone()),
                 None => (Dynamic::UNIT, String::new()),
             };
@@ -91,16 +102,22 @@ impl Session {
             self.queue_report(package, "on_copy", player, info);
             return;
         }
-        match copied.error {
-            Some((_, message)) => self.center_print(player, message),
-            None => {
-                self.bottom_count(player, "Copied", selection.bricks.len());
-                if selection.limit_reached {
+        if let Some((_, message)) = outcome.error {
+            self.center_print(player, message);
+            return;
+        }
+        let name = outcome.name.unwrap_or_default();
+        match outcome.action {
+            "save" => self.center_print(player, format!("Saved the copy as '{name}'.")),
+            _ => {
+                let verb = if outcome.action == "load" { "Loaded" } else { "Copied" };
+                self.bottom_count(player, verb, outcome.bricks);
+                if outcome.limit_reached {
                     self.center_print(
                         player,
                         format!(
-                            "That build was too big: only {} bricks were copied.",
-                            selection.bricks.len()
+                            "That build was too big: only {} of its {} bricks were taken.",
+                            outcome.bricks, outcome.total
                         ),
                     );
                 }

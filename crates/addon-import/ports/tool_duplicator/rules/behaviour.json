@@ -5,13 +5,16 @@
     { "name": "fire", "aim_reach": {{reach}}, "tool_only": true },
     { "name": "duplorcator" },
     { "name": "dup" },
-    { "name": "duplicator" }
+    { "name": "duplicator" },
+    { "name": "savedup", "args": ["string"] },
+    { "name": "loaddup", "args": ["string"] }
   ],
   "on_copy": true,
   "on_place": true,
   "state": {
     "player": {
-      "last_select": { "default": -1000000, "persist": false }
+      "last_select": { "default": -1000000, "persist": false },
+      "last_load": { "default": -1000000, "persist": false }
     }
   }
 }

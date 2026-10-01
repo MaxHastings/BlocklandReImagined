@@ -51,7 +51,9 @@ mod items;
 mod weapons;
 pub use weapons::{MountedImage, WeaponView};
 mod blueprints;
+mod copy_store;
 pub use blueprints::Copied;
+pub use copy_store::{CopyStore, LoadedCopy, MemoryCopies, StoreDone};
 mod movables;
 mod packages;
 mod paint_fill;
@@ -701,6 +703,8 @@ pub struct Session {
     blueprints: BTreeMap<OwnerId, crate::blueprint::Blueprint>,
     /// What each held copy was taken from, by which Add-On.
     copies: BTreeMap<OwnerId, blueprints::HeldCopy>,
+    /// Copies being saved or loaded by name, and where they are kept.
+    saved_copies: copy_store::SavedCopies,
     /// Bricks' mirror images, found as mirrored copies are placed.
     mirrors: crate::mirror::Mirrors,
     /// v20 `%client.lastPrint[%ar]`: each player's last applied print per
@@ -802,6 +806,7 @@ impl Session {
             undo: BTreeMap::new(),
             blueprints: BTreeMap::new(),
             copies: BTreeMap::new(),
+            saved_copies: Default::default(),
             mirrors: Default::default(),
             last_prints: BTreeMap::new(),
             avatar_catalog: None,
@@ -1252,6 +1257,7 @@ impl Session {
         self.abandoned_at
             .insert(owner, self.simulation.state().tick);
         self.forget_blueprint(owner);
+        self.forget_copy_requests(owner);
         self.forget_mover(owner);
         self.departed.insert(
             owner,

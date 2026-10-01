@@ -17,6 +17,7 @@ pub mod client_code;
 pub mod console;
 pub mod content;
 pub mod controls;
+pub mod copies;
 pub mod cosmetic;
 pub use bri_sim::crouch;
 pub mod effects;

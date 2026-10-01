@@ -365,6 +365,8 @@ struct HostSetup {
     event_catalog: bri_events::Catalog,
     event_sounds: Vec<String>,
     maps: Vec<bri_sim::session::MapListing>,
+    /// Where duplicators' saved copies are kept.
+    copies: Arc<crate::copies::CopyFiles>,
 }
 /// The Blockhead's model id (`m.dts`).
 const BLOCKHEAD_MODEL: &str = "v20.shape.m";
@@ -382,6 +384,7 @@ impl HostSetup {
         session.set_spawn_points(loaded.spawn_points)?;
         session.set_breakables(loaded.breakables)?;
         session.set_map_list(self.maps.clone())?;
+        session.set_copy_store(self.copies.clone());
         if let Some(tutorial) = loaded.tutorial {
             session.set_tutorial(tutorial)?;
         }
@@ -2979,6 +2982,7 @@ impl App {
         let (scene_tx, scene) = mpsc::sync_channel(1);
         let (router_tx, router) = mpsc::channel();
         let state_dir = self.state_dir.clone();
+        let copies = Arc::new(crate::copies::CopyFiles::new(self.old_saves.clone()));
         let load_limit = self.load_limit.clone();
         // v20's `$Pref::Server::Port`, 28000 unless the player changed it.
         let port = u16::try_from(self.ui.core.prefs.i64_or("$Pref::Server::Port", 28000))
@@ -3147,6 +3151,7 @@ impl App {
                 event_catalog,
                 event_sounds,
                 maps: map_list,
+                copies,
             };
             let mut spawn_points = loaded.spawn_points.clone();
             let mut session = setup.session(loaded)?;

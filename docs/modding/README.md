@@ -165,7 +165,7 @@ HUD panels can only show keys the viewer receives. `persist` (default
 | `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)` | | `teleport`, `respawn`, `set_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`, `take_item(p, item)`, `drop_item(item, x, y, z[, vx, vy, vz])`: `player` |
 | `raycast(from, dir, range[, ignore])`, `can_damage(by, target)` | | `set_fov(p, fov)`, `set_image_ammo(p, ammo)`, `mount_image(p, image)`, `unmount_image(p)`, `set_scale(p, scale)`, `set_look_limits(p, up, down)`: `player` |
 | `brick_box(brick)`, `voxel(brick)`, `can_place_voxel(x, y, z)` | | `place_voxel(x, y, z, material)`: `world.edit`; `set_avatar_colors(p, colors)`: `player` |
-| | | `copy_build(p, brick, limit, way, tool[, options])`, `copy_box(p, min, max, limit, tool[, options])`, `mirror_copy(p, axis)`, `highlight_copy(p, rgba, seconds)`: `build` |
+| | | `copy_build(p, brick, limit, way, tool[, options])`, `copy_box(p, min, max, limit, tool[, options])`, `mirror_copy(p, axis)`, `highlight_copy(p, rgba, seconds)`, `save_copy(p, name)`, `load_copy(p, name, limit, tool[, options])`: `build` |
 | | | `cut_copy(p)`, `paint_copy(p, color)`, `paint_fill(p, brick, color, limit)`: `world.edit` |
 | | | `push`, `tumble`, `hold`, `hold_distance`, `let_go`, `spawn_vehicle`, `remove_vehicle`, `mount_object(mount, rider, node, can_dismount)`, `unmount_object(rider)`: `physics` |
 | | | `heal(p, amount)`, `fire(...)`: `damage` |
@@ -389,10 +389,24 @@ below its bottom). `highlight_copy(p, [r, g, b, a], seconds)` then lights
 the copied bricks in the palette colour nearest that one, glowing, for
 everyone to see, and gives them their own colours back after; a copy
 takes a lit brick as it is underneath. An Add-On with `on_copy` in its
-behaviour hears `on_copy(player, #{ bricks, limit_reached, refused,
-error, message })` instead of the player getting the engine's message,
-and with `on_place`, `on_place(player, #{ planted, bricks, error,
-message })` after the player plants its copy.
+behaviour hears `on_copy(player, #{ action, name, bricks, total,
+limit_reached, refused, error, message })` instead of the player getting
+the engine's message (`action` is `"select"`, `"save"` or `"load"`), and
+with `on_place`, `on_place(player, #{ planted, bricks, error, message })`
+after the player plants its copy.
+
+Copies can be kept by name on the host. `save_copy(p, name)` keeps the copy
+the player holds; `load_copy(p, name, limit, tool[, #{ partial }])` gives
+them the copy saved under that name, its first `limit` bricks, in this
+world's nearest colours. Saved copies are the host's, whichever duplicator
+saved them, and loading also finds v20 duplication files (Plornt's
+Duplorcator and Zeblote's New Duplicator wrote them) in the host's saves
+and old Blockland installs, moved onto the grid. The host reads and writes
+them while the game runs on, so the answer comes to `on_copy` a tick or
+more later; `error` is then also `missing` (no copy by that name),
+`unavailable` (this host keeps none), `busy` (the player's last one is
+still going) or `failed`. `copy_name(text)` turns what a player typed into
+a name a copy may have (the file name only, without `.bls`), or `()`.
 
 `copy_box(p, [x, y, z], [x, y, z], limit, tool)` copies instead every
 brick lying wholly inside a box (world units, grown out to whole studs

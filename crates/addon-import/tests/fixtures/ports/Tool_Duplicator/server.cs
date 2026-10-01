@@ -93,6 +93,30 @@ function FxDtsBrick::getStack(%brick, %player)
    return %stack;
 }
 
+function FxDtsBrick::saveDuplication(%this, %name)
+{
+   %file = new FileObject();
+   %file.openForWrite("saves/Duplications/" @ fileBase(%name) @ ".bls");
+   %file.close();
+   %file.delete();
+   commandToClient(%this.client, 'centerPrint', "Duplication successfully saved as " @ %name, 3);
+}
+
+function serverCmdSaveDup(%client, %name)
+{
+   %client.player.tempBrick.saveDuplication(%name);
+}
+
+function serverCmdLoadDup(%client, %name)
+{
+   %path = findFirstFile("saves/Duplications/" @ fileBase(%name) @ ".bls");
+   if(%path $= "")
+      return;
+   if(%client.tooMany)
+      commandToClient(%client, 'messageBoxYesNo', "Load", "This duplication exceeds the max bricks you may copy. Load it anyway?", 'LoadAnyway');
+   commandToClient(%client, 'centerPrint', "Loaded duplication " @ fileBase(%path), 3);
+}
+
 package Duplorcator
 {
    function serverCmdPlantBrick(%client)

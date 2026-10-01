@@ -218,6 +218,25 @@ pub enum Op {
         color: [f32; 4],
         seconds: f32,
     },
+    /// Keep the copy `player` holds on the host under `name` (see
+    /// [`copy_name`]), replacing one saved under that name before. The
+    /// package's `on_copy` hears how it went (`action` `"save"`).
+    SaveCopy {
+        player: u64,
+        name: String,
+    },
+    /// Give `player` the copy saved under `name` to place with `tool`, at
+    /// most `limit` bricks of it (the first ones saved), replacing any copy
+    /// they hold. Saved copies are the host's: copies saved with any
+    /// duplicator, and v20 duplication files in the host's saves. The
+    /// package's `on_copy` hears how it went (`action` `"load"`).
+    LoadCopy {
+        player: u64,
+        name: String,
+        limit: u32,
+        tool: String,
+        partial: bool,
+    },
     /// Mirror the copy `player` holds across `axis`. It shows and plants
     /// mirrored; mirroring it again the same way puts it back.
     MirrorCopy {
@@ -449,6 +468,25 @@ pub enum Op {
         limits: Option<[f32; 2]>,
     },
 }
+/// The name a copy is saved under, from what a player typed: the file
+/// name only (v20's `fileBase`, so a path or a `.bls` ending is dropped),
+/// 1 to 64 letters, digits, spaces and `_ - ( ) .`, not starting with a
+/// dot. `None` when nothing usable is left.
+pub fn copy_name(typed: &str) -> Option<String> {
+    let base = typed.rsplit(['/', '\\']).next().unwrap_or("").trim();
+    let base = base
+        .strip_suffix(".bls")
+        .or_else(|| base.strip_suffix(".BLS"))
+        .unwrap_or(base)
+        .trim();
+    let ok = (1..=64).contains(&base.chars().count())
+        && !base.starts_with('.')
+        && base
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || " _-().".contains(c));
+    ok.then(|| base.to_string())
+}
+
 /// Which way a stack copy ([`Op::CopyBuild`]) goes from the clicked
 /// brick: `up` takes what is built on it, else what it is built on;
 /// `limited` keeps the stack on that side of the clicked brick.
@@ -563,6 +601,8 @@ impl Op {
             | Self::ShowBox { .. } => "effects",
             Self::CopyBuild { .. }
             | Self::CopyBox { .. }
+            | Self::SaveCopy { .. }
+            | Self::LoadCopy { .. }
             | Self::MirrorCopy { .. }
             | Self::HighlightCopy { .. } => "build",
             Self::SetMapLights { .. } => "lighting",
@@ -743,6 +783,14 @@ impl Op {
                 tool,
                 ..
             } => (1..=10_000).contains(limit) && item(tool) && span(min, max),
+            Self::SaveCopy { name, .. } => copy_name(name).as_deref() == Some(name.as_str()),
+            Self::LoadCopy {
+                name, limit, tool, ..
+            } => {
+                copy_name(name).as_deref() == Some(name.as_str())
+                    && (1..=10_000).contains(limit)
+                    && item(tool)
+            }
             Self::HighlightCopy { color, seconds, .. } => {
                 color.iter().all(|c| (0.0..=1.0).contains(c)) && (0.0..=60.0).contains(seconds)
             }
@@ -897,6 +945,8 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::PaintCopy { .. } => "paint_copy",
         Op::PaintFill { .. } => "paint_fill",
         Op::HighlightCopy { .. } => "highlight_copy",
+        Op::SaveCopy { .. } => "save_copy",
+        Op::LoadCopy { .. } => "load_copy",
         Op::ShowBox { area: Some(_), .. } => "show_box",
         Op::ShowBox { area: None, .. } => "hide_box",
         Op::GiveItem { .. } => "give_item",

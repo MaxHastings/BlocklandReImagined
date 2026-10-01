@@ -587,18 +587,14 @@ fn port_and_check_port_run_from_the_executable() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-/// The Duplorcator's port, on the stand-in Duplicator in a hosted game:
-/// `/dup` gives the wand, a swing at the bottom of a build selects the
-/// stack up from it with full trust, lights it, and shows the copy; the
-/// plant key plants each brick of the copy that fits, and one Ctrl+Z takes
-/// them all back.
-#[test]
-fn duplorcator_port_copies_lights_and_plants_brick_by_brick() {
+/// The stand-in Duplicator imported with its port, hosted on a flat floor
+/// with 2x1 plates, and the host joined.
+fn duplorcator_game(name: &str) -> (PathBuf, bri_sim::session::Session, u64) {
     use bri_package::packages::{PackageEntry, PackageSet, Side};
-    use bri_sim::session::{Command, Notice, PackageCommand, Reply, Session};
+    use bri_sim::session::Session;
     use rapier3d::prelude::*;
 
-    let dir = fresh("duplorcator");
+    let dir = fresh(name);
     let root = dir.join("content");
     let out = root.join("addons/tool_duplicator");
     let report = import(&options(fixture("ports/Tool_Duplicator"), out.clone())).unwrap();
@@ -690,6 +686,19 @@ fn duplorcator_port_copies_lights_and_plants_brick_by_brick() {
     s.install_packages(std::sync::Arc::new(catalog), None).unwrap();
 
     let host = s.join("Host".into(), Vec3::new(0.0, 0.05, 2.0), true).unwrap();
+    (dir, s, host)
+}
+
+/// The Duplorcator's port, on the stand-in Duplicator in a hosted game:
+/// `/dup` gives the wand, a swing at the bottom of a build selects the
+/// stack up from it with full trust, lights it, and shows the copy; the
+/// plant key plants each brick of the copy that fits, and one Ctrl+Z takes
+/// them all back.
+#[test]
+fn duplorcator_port_copies_lights_and_plants_brick_by_brick() {
+    use bri_sim::session::{Command, Notice, PackageCommand, Reply, Session};
+
+    let (dir, mut s, host) = duplorcator_game("duplorcator");
     let mut seq = 0u64;
     let mut cmd = |s: &mut Session, command: Command| {
         seq += 1;
@@ -807,5 +816,144 @@ fn duplorcator_port_copies_lights_and_plants_brick_by_brick() {
     // One undo takes the planted copy back.
     cmd(&mut s, Command::Tool(bri_sim::session::ToolAction::UndoBrick)).unwrap();
     assert_eq!(s.snapshot().world.bricks.len(), before);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// The Duplorcator's `/saveDup` and `/loadDup` on the port: a selection
+/// saved by name loads back, a name nobody saved says so, and a v20
+/// duplication file (bricks in a frame of their own, in its own colours)
+/// loads onto the grid in this world's nearest colours, wand in hand.
+#[test]
+fn duplorcator_port_saves_and_loads_duplications() {
+    use bri_sim::session::{
+        Command, MemoryCopies, Notice, PackageArg, PackageCommand, Reply, Session,
+    };
+    use std::sync::Arc;
+
+    let (dir, mut s, host) = duplorcator_game("duplorcator-saves");
+    let store = Arc::new(MemoryCopies::default());
+    s.set_copy_store(store.clone());
+    let seq = std::cell::Cell::new(0u64);
+    let cmd = |s: &mut Session, command: Command| {
+        seq.set(seq.get() + 1);
+        s.command(host, seq.get(), command)
+    };
+    let typed = |s: &mut Session, command: &str, name: Option<&str>| {
+        let reply = cmd(
+            s,
+            Command::Package(PackageCommand {
+                package: String::new(),
+                command: command.into(),
+                args: name
+                    .map(|n| vec![PackageArg::String(n.into())])
+                    .unwrap_or_default(),
+            }),
+        );
+        assert!(reply.is_ok(), "/{command}: {reply:?}");
+        // The store answers, and the Add-On hears it, over the next ticks.
+        for _ in 0..3 {
+            s.step().unwrap();
+        }
+        s.take_private_notices()
+            .into_iter()
+            .filter_map(|(_, n)| match n {
+                Notice::Center { text, .. } | Notice::Bottom { text, .. } => Some(text),
+                _ => None,
+            })
+            .collect::<Vec<String>>()
+    };
+    for position in [[0.5, 0.1, 0.25], [1.0, 0.3, 0.25]] {
+        let reply = cmd(
+            &mut s,
+            Command::Plant {
+                definition: "plate".into(),
+                position,
+                quarter_turns: 0,
+                color: 1,
+            },
+        );
+        assert!(matches!(reply, Ok(Reply::Planted(_))), "{reply:?}");
+    }
+    typed(&mut s, "dup", None);
+    for tick in 0..40u64 {
+        s.movement(
+            host,
+            tick + 1,
+            bri_sim::player::MoveInput {
+                yaw: 0.142,
+                pitch: -0.85,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        if tick == 30 || tick == 31 {
+            cmd(&mut s, Command::WeaponTrigger { down: tick == 30 }).unwrap();
+        }
+        s.step().unwrap();
+    }
+    assert_eq!(s.blueprint(host).map(|b| b.bricks.len()), Some(2));
+
+    let prints = typed(&mut s, "savedup", Some("My Tower"));
+    assert!(
+        prints.iter().any(|t| t.contains("successfully saved as") && t.contains("My Tower")),
+        "{prints:?}"
+    );
+    let saved = store.saved("my tower").expect("the copy was kept");
+    assert_eq!(saved.copy.bricks.len(), 2);
+    assert_eq!(saved.saved_by, "Host");
+
+    // A name nobody saved; then, a second on, the saved one.
+    let prints = typed(&mut s, "loaddup", Some("Nothing"));
+    assert!(
+        prints.iter().any(|t| t.contains("Nothing") && t.contains("does not exist")),
+        "{prints:?}"
+    );
+    for _ in 0..130 {
+        s.step().unwrap();
+    }
+    s.take_private_notices();
+    let prints = typed(&mut s, "loaddup", Some("my tower"));
+    assert!(
+        prints.iter().any(|t| t.contains("Loaded duplication") && t.contains("2<color:99AAAA>/\\c42")),
+        "{prints:?}"
+    );
+    assert_eq!(s.blueprint(host).unwrap().bricks, saved.copy.bricks);
+
+    // A v20 file: its first brick at its own origin, off this grid, in a
+    // palette whose entry 5 is the cyan this world has as 2.
+    let mut palette = vec![[0.5, 0.5, 0.5, 1.0]; 64];
+    palette[5] = [0.0, 1.0, 1.0, 1.0];
+    let loose = |position: [f32; 3]| {
+        let mut b = bri_world::Brick::new(
+            bri_world::ContentRef::Resolved("plate".into()),
+            position,
+            0,
+        );
+        b.color = 5;
+        b
+    };
+    store.put_loose(
+        "Old Bridge",
+        vec![loose([0.0, 0.0, 0.0]), loose([0.5, 0.2, 0.0])],
+        palette,
+    );
+    for _ in 0..130 {
+        s.step().unwrap();
+    }
+    s.take_private_notices();
+    let prints = typed(&mut s, "loaddup", Some("old bridge.bls"));
+    assert!(
+        prints.iter().any(|t| t.contains("2 bricks selected")),
+        "{prints:?}"
+    );
+    let copy = s.blueprint(host).unwrap().clone();
+    assert!(copy.bricks.iter().all(|b| b.color == 2));
+    assert_eq!(copy.size, [3, 2, 1]);
+    assert!(
+        s.tool_inventories()[&host]
+            .slots
+            .iter()
+            .any(|t| t.as_deref() == Some("tool_duplicator:weapon/duplorcatoritem"))
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }

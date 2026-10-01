@@ -186,10 +186,15 @@ impl Session {
             .map(|id| self.unlit(*id, &world.bricks[id]))
             .collect();
         let blueprint = Blueprint::capture(tool, &bricks, &self.simulation.definitions)?;
+        self.hold_blueprint(owner, blueprint, held);
+        Ok(())
+    }
+
+    /// Give `owner` `blueprint` to place, replacing any copy they hold.
+    pub(super) fn hold_blueprint(&mut self, owner: OwnerId, blueprint: Blueprint, held: HeldCopy) {
         self.notify(owner, Notice::Blueprint(Some(Box::new(blueprint.clone()))));
         self.blueprints.insert(owner, blueprint);
         self.copies.insert(owner, held);
-        Ok(())
     }
 
     /// Light the bricks `owner`'s copy was taken from in the palette

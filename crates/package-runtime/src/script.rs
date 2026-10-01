@@ -1204,6 +1204,53 @@ fn register_api(engine: &mut Engine) {
         },
     );
     engine.register_fn("copy_box", copy_box);
+    engine.register_fn("copy_name", |typed: &str| -> Dynamic {
+        crate::ops::copy_name(typed).map_or(Dynamic::UNIT, Dynamic::from)
+    });
+    fn saved_name(name: &str) -> Result<String, Box<EvalAltResult>> {
+        crate::ops::copy_name(name)
+            .filter(|n| n == name)
+            .ok_or_else(|| format!("`{name}` is not a copy name (see copy_name)").into())
+    }
+    engine.register_fn("save_copy", |player: Dynamic, name: &str| {
+        push(Op::SaveCopy {
+            player: id(&player)?,
+            name: saved_name(name)?,
+        })
+    });
+    fn load_copy(
+        player: Dynamic,
+        name: &str,
+        limit: i64,
+        tool: &str,
+        options: Map,
+    ) -> Result<(), Box<EvalAltResult>> {
+        let mut partial = false;
+        for (key, value) in &options {
+            match key.as_str() {
+                "partial" => {
+                    partial = value
+                        .as_bool()
+                        .map_err(|_| "copy option `partial` is true or false")?
+                }
+                other => return Err(format!("unknown load option `{other}`").into()),
+            }
+        }
+        push(Op::LoadCopy {
+            player: id(&player)?,
+            name: saved_name(name)?,
+            limit: u32::try_from(limit).map_err(|_| "limit must be 1 to 10000")?,
+            tool: tool.into(),
+            partial,
+        })
+    }
+    engine.register_fn(
+        "load_copy",
+        |player: Dynamic, name: &str, limit: i64, tool: &str| {
+            load_copy(player, name, limit, tool, Map::new())
+        },
+    );
+    engine.register_fn("load_copy", load_copy);
     engine.register_fn(
         "highlight_copy",
         |player: Dynamic, color: Array, seconds: Dynamic| {

@@ -8963,3 +8963,22 @@ go when the bundle lane swaps in the originals.
 - Next: the New Duplicator port (box select, mirror, cut, fill colour,
   larger limits), which also needs a command precedence when both
   duplicators are on.
+
+Follow-up the same day: `/saveDup` and `/loadDup`, through a generic seam.
+`save_copy` and `load_copy` keep blueprints by name in the host's
+`session::CopyStore`, answered off the tick thread and reported to
+`on_copy` (`action` `save` or `load`). The client keeps them as
+`saves/Duplications/<name>.copy.json` (`SavedCopy`, schema 1, with the
+palette they were saved in), and loading also finds v20 duplication files
+in that folder and in old installs' `saves/Duplications` and
+`config/NewDuplicator/Saves` (`bri_bls::bls::read_duplication` accepts
+both duplicators' headers; `Blueprint::from_loose` moves their bricks onto
+the grid by the first brick). Colours are matched to the nearest in this
+world's palette. Over the limit, what fits loads, as answering yes to the
+Duplorcator's question did; asking first waits for a yes/no prompt seam,
+which the New Duplicator's undo confirmation needs too. Uploading from a
+player's own computer (`/clientLoad`) is not ported.
+
+- Tests: `bri-addon-import --test ports
+  duplorcator_port_saves_and_loads_duplications`, `bri-client --lib
+  copies`, `bri-bls duplication_files_of_both_v20_duplicators_read_but_are_not_saves`.

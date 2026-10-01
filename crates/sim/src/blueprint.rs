@@ -8,7 +8,7 @@
 //! bottom of the copy, so a quarter turn about it keeps every brick on the
 //! grid, and a copy placed at a grid point stays on the grid.
 use crate::{definitions::Definitions, grid::Bounds, mirror::MirrorImage};
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use bri_world::{Brick, ContentRef};
 use glam::Vec3;
 use serde::{Deserialize, Serialize};
@@ -237,6 +237,77 @@ pub fn shift(
     delta *= 0.5;
     delta.y = up as f32 * 0.2 * if super_shift { size[1] as f32 } else { 1.0 };
     snap_anchor((Vec3::from(anchor) + delta).to_array())
+}
+
+/// A copy kept by name on the host (a duplicator's `/saveDup`), to be
+/// held again later, on this world or another.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SavedCopy {
+    pub schema_version: u32,
+    /// Who saved it, as their name showed then.
+    pub saved_by: String,
+    /// The colours the bricks' palette indices meant where it was saved.
+    pub palette: Vec<[f32; 4]>,
+    pub copy: Blueprint,
+}
+impl SavedCopy {
+    pub const SCHEMA_VERSION: u32 = 1;
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.schema_version == Self::SCHEMA_VERSION,
+            "Unsupported saved copy schema {}",
+            self.schema_version
+        );
+        ensure!(
+            self.palette.len() <= 256 && self.saved_by.len() <= 256,
+            "Invalid saved copy"
+        );
+        self.copy.validate()
+    }
+}
+
+impl Blueprint {
+    /// Copy `bricks` that stand in some frame of their own rather than on
+    /// this world's grid, as v20 duplication files hold them (relative to
+    /// their first brick, or where they stood on the saving server). The
+    /// whole build moves by the least that puts its first brick on the
+    /// grid; a brick still off the grid after that, or of a kind this
+    /// server lacks, is left out. Returns the copy and how many were.
+    pub fn from_loose(
+        tool: &str,
+        bricks: &[Brick],
+        definitions: &Definitions,
+    ) -> Result<(Self, usize)> {
+        let known: Vec<&Brick> = bricks
+            .iter()
+            .filter(|b| definitions.get(b).is_ok())
+            .collect();
+        let first = known.first().context("No brick of the copy is on this server")?;
+        let mesh = &definitions.get(first)?.mesh;
+        let [w, d] = mesh.footprint_studs.map(|v| v as f32);
+        let h = mesh.height_plates as f32;
+        let size = if first.quarter_turns.is_multiple_of(2) {
+            [w, h, d]
+        } else {
+            [d, h, w]
+        };
+        let shift: [f32; 3] = std::array::from_fn(|axis| {
+            let cell = crate::grid::CELL[axis];
+            let lower = first.position[axis] - size[axis] * cell * 0.5;
+            (lower / cell).round() * cell - lower
+        });
+        let mut fitted = Vec::with_capacity(known.len());
+        for brick in known {
+            let mut brick = brick.clone();
+            brick.position = (Vec3::from(brick.position) + Vec3::from(shift)).to_array();
+            if Bounds::new(&brick, &definitions.get(&brick)?.mesh).is_ok() {
+                fitted.push(brick);
+            }
+        }
+        let left_out = bricks.len() - fitted.len();
+        Ok((Self::capture(tool, &fitted, definitions)?, left_out))
+    }
 }
 
 #[cfg(test)]
