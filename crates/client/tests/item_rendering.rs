@@ -1,86 +1,95 @@
-//! Original native models on a host-style offscreen device; no window/input.
+//! Native item models on a host-style offscreen device; no window/input.
+//! Each body runs on a synthetic presentation pack
+//! (`support::item_fixture`) and again, ignored, on the generated v20 packs.
+#[macro_use]
+mod support;
+
 use anyhow::{Result, ensure};
 use bri_client::items::ItemAssets;
 use bri_render::scene::*;
 use bri_ui::gpu::Headless;
 use glam::{Mat4, Vec3};
-use std::path::{Path, PathBuf};
-fn root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
-fn assets() -> Result<ItemAssets> {
-    ItemAssets::load(
-        &root().join("content/item-presentation-pack-010"),
-        &root().join("content/weapons-pack-009"),
-    )
+use std::path::Path;
+use support::{files::scratch, gpu, item_fixture::ItemFixture};
+
+fn assets(f: &ItemFixture) -> Result<ItemAssets> {
+    ItemAssets::load(&f.presentation, &f.weapons)
 }
 
+synthetic_and_content!(
+    ItemFixture: models_tints_mounts_icons_and_persistent_pose,
+    corrupt_or_oversized_native_resources_reject,
+    all_items_projectiles_and_pose_offscreen,
+    translucent_spray_cans_show_a_clear_colored_body,
+);
+
 #[test]
-fn native_models_tints_mounts_icons_and_persistent_pose() -> Result<()> {
-    let assets = assets()?;
+#[ignore = "requires generated v20 content"]
+fn original_catalog_and_hammer_eye_offset() -> Result<()> {
+    let f = ItemFixture::content()?;
+    let assets = assets(&f)?;
     assert_eq!(assets.presentation.items.len(), 21);
-    for id in [
-        "hammeritem",
-        "wrenchitem",
-        "printgun",
-        "wanditem",
-        "gunitem",
-        "akimbogunitem",
-    ] {
-        let id = format!("v20.weapon.{id}");
-        let scene = assets.item_scene(&id, Mat4::IDENTITY)?;
-        assert!(!scene.vertices.is_empty(), "Empty item {id}");
-        assert!(assets.icon(&id)?.is_some());
-        assert!(scene.vertices.iter().all(|v| v.fx == [0.; 4]));
-    }
-    assert_eq!(
-        assets.presentation.items["v20.weapon.bluekeyitem"].tint,
-        [0., 0., 1., 1.]
-    );
-    assert_eq!(
-        assets.presentation.items["v20.weapon.pushbroomitem"].tint,
-        [102. / 255., 50. / 255., 0., 1.]
-    );
-    let first = assets.mount_transform("v20.image.hammerimage", true, Mat4::IDENTITY, |_| None)?;
+    let first = assets.mount_transform(&f.eye_offset_image, true, Mat4::IDENTITY, |_| None)?;
     assert!(
         first
             .w_axis
             .truncate()
             .abs_diff_eq(Vec3::new(0.7, -0.15, -1.2), 0.00001)
     );
-    let third = assets.mount_transform("v20.image.hammerimage", false, Mat4::IDENTITY, |n| {
+    Ok(())
+}
+
+fn models_tints_mounts_icons_and_persistent_pose(f: &ItemFixture) -> Result<()> {
+    let assets = assets(f)?;
+    for id in &f.modelled {
+        let scene = assets.item_scene(id, Mat4::IDENTITY)?;
+        assert!(!scene.vertices.is_empty(), "Empty item {id}");
+        assert!(assets.icon(id)?.is_some());
+        assert!(scene.vertices.iter().all(|v| v.fx == [0.; 4]));
+    }
+    for (id, tint) in &f.tints {
+        assert_eq!(assets.presentation.items[id].tint, *tint, "{id}");
+    }
+    // First person holds an eye-offset image at its eye offset.
+    let first = assets.mount_transform(&f.eye_offset_image, true, Mat4::IDENTITY, |_| None)?;
+    let eye_offset = assets.presentation.images[&f.eye_offset_image].eye_offset;
+    assert_ne!(eye_offset, [0.; 3]);
+    assert!(
+        first
+            .w_axis
+            .truncate()
+            .abs_diff_eq(Vec3::from(eye_offset), 0.00001)
+    );
+    let third = assets.mount_transform(&f.eye_offset_image, false, Mat4::IDENTITY, |n| {
         (n == 0).then_some(Mat4::from_translation(Vec3::X * 3.))
     })?;
     assert_ne!(first, third);
-    // Original Ski eyeRotation=eulerToMatrix("90 -90 0"). MatrixCreateFromEuler
-    // goes through QuatF(EulerF), giving Rz*Rx*Ry: the ski's length (source
-    // +Y, native -Z) stands up in first person instead of lying sideways.
-    let ski = assets.mount_transform("v20.image.skiweaponimage", true, Mat4::IDENTITY, |_| None)?;
+    // An eulerToMatrix eye rotation turns as v20's MatrixCreateFromEuler
+    // does (Rz*Rx*Ry in source space), not as a plain Euler rotation.
+    let (euler, local, expected) = &f.euler_image;
+    let turned = assets.mount_transform(euler, true, Mat4::IDENTITY, |_| None)?;
     assert!(
-        ski.transform_vector3(-Vec3::Z)
-            .abs_diff_eq(Vec3::Y, 0.00001)
+        turned
+            .transform_vector3(*local)
+            .abs_diff_eq(*expected, 0.00001),
+        "{euler}: {local} went to {}",
+        turned.transform_vector3(*local)
     );
-    let left =
-        assets.mount_transform("v20.image.lefthandedgunimage", true, Mat4::IDENTITY, |n| {
-            (n == 1).then_some(Mat4::from_translation(-Vec3::X))
-        })?;
-    let right = assets.mount_transform("v20.image.gunimage", true, Mat4::IDENTITY, |n| {
+    let left = assets.mount_transform(&f.left_image, true, Mat4::IDENTITY, |n| {
+        (n == 1).then_some(Mat4::from_translation(-Vec3::X))
+    })?;
+    let right = assets.mount_transform(&f.right_image, true, Mat4::IDENTITY, |n| {
         (n == 0).then_some(Mat4::from_translation(Vec3::X))
     })?;
     assert!(left.determinant() > 0. && right.determinant() > 0.);
     assert!((right.w_axis.x - left.w_axis.x - 2.).abs() < 0.0001);
     assert!(
         assets
-            .mount_transform(
-                "v20.image.lefthandedgunimage",
-                false,
-                Mat4::IDENTITY,
-                |_| None
-            )
+            .mount_transform(&f.left_image, false, Mat4::IDENTITY, |_| None)
             .is_err()
     );
-    let model = &assets.presentation.items["v20.weapon.gunitem"].model;
-    let tint = assets.presentation.items["v20.weapon.gunitem"].tint;
+    let model = &assets.presentation.items[&f.gun_item].model;
+    let tint = assets.presentation.items[&f.gun_item].tint;
     let mut mesh = assets.mesh(model, tint)?;
     let before = mesh.data.vertices[0].position;
     let resources = (mesh.data.images.len(), mesh.data.materials.len());
@@ -128,7 +137,7 @@ fn native_models_tints_mounts_icons_and_persistent_pose() -> Result<()> {
 }
 
 fn copy_dir(from: &Path, to: &Path) -> Result<()> {
-    std::fs::create_dir(to)?;
+    std::fs::create_dir_all(to)?;
     for entry in std::fs::read_dir(from)? {
         let entry = entry?;
         let dest = to.join(entry.file_name());
@@ -140,22 +149,16 @@ fn copy_dir(from: &Path, to: &Path) -> Result<()> {
     }
     Ok(())
 }
-#[test]
-fn corrupt_or_oversized_native_resources_reject() -> Result<()> {
-    let output = root().join("artifacts/native-items");
-    std::fs::create_dir_all(&output)?;
-    let fixture = output.join(format!(
-        "loader-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)?
-            .as_nanos()
-    ));
-    copy_dir(&root().join("content/item-presentation-pack-010"), &fixture)?;
+fn corrupt_or_oversized_native_resources_reject(f: &ItemFixture) -> Result<()> {
+    let scratch = scratch("item-loader-")?;
+    let fixture = scratch.path().join("presentation");
+    copy_dir(&f.presentation, &fixture)?;
     let manifest = fixture.join("presentation.json");
     let original = std::fs::read(&manifest)?;
     let value: serde_json::Value = serde_json::from_slice(&original)?;
-    let weapons = root().join("content/weapons-pack-009");
+    let weapons = &f.weapons;
+    ItemAssets::load(&fixture, weapons)?;
+    assert_ne!(value["items"][&f.gun_item]["model"], f.other_model.as_str());
     for mode in 0..6 {
         let mut bad = value.clone();
         match mode {
@@ -193,12 +196,12 @@ fn corrupt_or_oversized_native_resources_reject() -> Result<()> {
                     .unwrap()["sha256"] = "0".repeat(64).into();
             }
             _ => {
-                bad["items"]["v20.weapon.gunitem"]["model"] = "base/data/shapes/wand.dts".into();
+                bad["items"][&f.gun_item]["model"] = f.other_model.as_str().into();
             }
         }
         std::fs::write(&manifest, serde_json::to_vec(&bad)?)?;
         assert!(
-            ItemAssets::load(&fixture, &weapons).is_err(),
+            ItemAssets::load(&fixture, weapons).is_err(),
             "Accepted corruption mode{mode}"
         );
     }
@@ -212,8 +215,7 @@ fn corrupt_or_oversized_native_resources_reject() -> Result<()> {
         .as_str()
         .unwrap();
     std::fs::write(fixture.join(texture), [0u8; 16])?;
-    assert!(ItemAssets::load(&fixture, &weapons).is_err());
-    std::fs::remove_dir_all(&fixture)?;
+    assert!(ItemAssets::load(&fixture, weapons).is_err());
     Ok(())
 }
 
@@ -326,7 +328,7 @@ fn additive_unlit_and_ordinary_alpha_pixels() -> Result<()> {
             "Unlit item material accepted brick-only FX marker"
         );
     }
-    let gpu = Headless::new()?;
+    let gpu = gpu::turn()?;
     let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
     let mut camera = Camera {
         ambient: [0.; 4],
@@ -443,12 +445,11 @@ fn camera(scene: &SceneData) -> Camera {
         1000.,
     )
 }
-#[test]
-fn all_stock_items_projectiles_and_pose_offscreen() -> Result<()> {
-    let assets = assets()?;
-    let gpu = Headless::new()?;
+fn all_items_projectiles_and_pose_offscreen(f: &ItemFixture) -> Result<()> {
+    let assets = assets(f)?;
+    let gpu = gpu::turn()?;
     let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
-    let out = root().join("artifacts/native-items");
+    let out = f.out.join("native-items");
     std::fs::create_dir_all(&out)?;
     let mut records = vec![];
     for (group, ids) in [
@@ -475,7 +476,7 @@ fn all_stock_items_projectiles_and_pose_offscreen() -> Result<()> {
                 .filter(|p| p[..3] != [0, 0, 0])
                 .count();
             if group == "items" {
-                ensure!(visible > 50, "Empty original item render: {id}");
+                ensure!(visible > 50, "Empty item render: {id}");
             }
             let tile = image::RgbaImage::from_raw(256, 256, pixels).unwrap();
             image::imageops::replace(
@@ -488,8 +489,8 @@ fn all_stock_items_projectiles_and_pose_offscreen() -> Result<()> {
         }
         gallery.save(out.join(format!("{group}.png")))?;
     }
-    let model = &assets.presentation.items["v20.weapon.gunitem"].model;
-    let mut instance = assets.mesh(model, assets.presentation.items["v20.weapon.gunitem"].tint)?;
+    let model = &assets.presentation.items[&f.gun_item].model;
+    let mut instance = assets.mesh(model, assets.presentation.items[&f.gun_item].tint)?;
     let mut uploaded = renderer.upload(&gpu.device, &gpu.queue, &instance.data)?;
     let view = camera(&instance.data);
     let before = frame(&gpu, &mut renderer, &[&uploaded], &view)?;
@@ -511,7 +512,7 @@ fn all_stock_items_projectiles_and_pose_offscreen() -> Result<()> {
     std::fs::write(
         out.join("report.json"),
         serde_json::to_vec_pretty(
-            &serde_json::json!({"schema_version":1,"adapter":gpu.adapter_info.name,"pack":"item-presentation-pack-010","single_upload_pose_update":true,"records":records,"not_original_parity_acceptance":true}),
+            &serde_json::json!({"schema_version":1,"adapter":gpu.adapter_info.name,"pack":assets.presentation.id,"single_upload_pose_update":true,"records":records,"not_original_parity_acceptance":true}),
         )?,
     )?;
     Ok(())
@@ -519,15 +520,14 @@ fn all_stock_items_projectiles_and_pose_offscreen() -> Result<()> {
 
 /// v20 `setSprayCanColor`: a translucent palette colour (and the Jello FX can)
 /// holds `transspraycan.dts`, whose `blank` body shows the colour at its alpha.
-#[test]
-fn translucent_spray_cans_show_a_clear_colored_body() -> Result<()> {
-    let assets = assets()?;
-    let gpu = Headless::new()?;
+fn translucent_spray_cans_show_a_clear_colored_body(f: &ItemFixture) -> Result<()> {
+    let assets = assets(f)?;
+    let gpu = gpu::turn()?;
     let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
-    let out = root().join("artifacts/spray-paint");
+    let out = f.out.join("spray-paint");
     std::fs::create_dir_all(&out)?;
-    let solid = "base/data/shapes/spraycan.dts";
-    let clear = "base/data/shapes/transspraycan.dts";
+    let solid = f.solid_can.as_str();
+    let clear = f.clear_can.as_str();
     let background = wgpu::Color {
         r: 0.35,
         g: 0.55,
