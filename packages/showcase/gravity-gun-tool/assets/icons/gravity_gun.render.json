@@ -1,12 +1,5 @@
 {
   "schema_version": 1,
   "pose_like": "v20.weapon.printgun",
-  "look": {
-    "base": [0.35, 1.0, 0.8],
-    "skin": {
-      "shell": [0.035, 0.025, 0.05],
-      "veins": [0.3, 0.95, 1.0],
-      "puff": 0.012
-    }
-  }
+  "look": { "skin": {} }
 }

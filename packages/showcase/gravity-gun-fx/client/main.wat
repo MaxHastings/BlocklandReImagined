@@ -1,8 +1,7 @@
-;; Gravity Gun effects, drawn on every player's screen for everyone's gun:
+;; Gravity Gun effects, drawn on every player's screen for everyone's gun
+;; (the gun's alien skin is its look, which the game draws: the Gravity
+;; Gun Tool's looks.json):
 ;;
-;; - the gun itself: the Printer it is built from, reskinned as an alien
-;;   weapon (alien.wgsl): a dark oily shell with glowing veins that pulse
-;;   at rest and flare while the beam is on;
 ;; - holding: a beam (beam.wgsl, a soft glow and a hot core) from the
 ;;   gun's muzzle, leaving it the way the player aims and bending round
 ;;   into the spot it grabbed, so it whips when the held thing lags; a
@@ -24,7 +23,7 @@
 ;;
 ;; Everything comes from what the game already knows (`world.read`):
 ;; where players and vehicles are drawn, where each player's gun is drawn
-;; and its muzzle (`held`), the gun's own model (`image_mesh`), and each
+;; and its muzzle (`held`), and each
 ;; player's `beam` from the Gravity Gun Add-On's public state: [held kind,
 ;; held id, beam on, beam length]; kinds 1 vehicle, 2 player, 3 Add-On
 ;; creature. The server sends
@@ -68,8 +67,6 @@
   (import "bri" "players" (func $players (param i32 i32) (result i32)))
   (import "bri" "vehicles" (func $vehicles (param i32 i32) (result i32)))
   (import "bri" "entities" (func $entities (param i32 i32) (result i32)))
-  (import "bri" "image_kind" (func $image_kind (param i32 i32) (result i32)))
-  (import "bri" "image_mesh" (func $image_mesh (param i32) (result i32)))
   (import "bri" "held" (func $held (param i32 i32 i32) (result i32)))
   (import "bri" "state_num" (func $state_num (param i32 i32 i32 i32 i32 i32) (result f32)))
   (import "bri" "sound_at" (func $sound_at (param i32 i32 f32 f32 f32 f32) (result i32)))
@@ -85,11 +82,6 @@
   (global $m_beam (mut i32) (i32.const 0))
   (global $m_field (mut i32) (i32.const 0))
   (global $m_spark (mut i32) (i32.const 0))
-  (global $m_skin (mut i32) (i32.const 0))
-  ;; The gun's image, as `players` records name it, and its model once
-  ;; someone holds it (-1 before).
-  (global $gun (mut i32) (i32.const 0))
-  (global $gun_mesh (mut i32) (i32.const -1))
   (global $players_n (mut i32) (i32.const 0))
   (global $vehicles_n (mut i32) (i32.const 0))
   (global $entities_n (mut i32) (i32.const 0))
@@ -116,8 +108,6 @@
   (data (i32.const 192) "client/sounds/grab.wav")
   (data (i32.const 224) "client/sounds/drop.wav")
   (data (i32.const 288) "client/sounds/reach.wav")
-  (data (i32.const 352) "client/alien.wgsl")
-  (data (i32.const 384) "gravity-gun-tool:image/gravitygun")
 
   ;; ---- Meshes ----
 
@@ -249,9 +239,6 @@
     (global.set $m_beam (call $material (i32.const 0) (i32.const 16)))
     (global.set $m_field (call $material (i32.const 32) (i32.const 17)))
     (global.set $m_spark (call $material (i32.const 64) (i32.const 17)))
-    ;; The skin is solid: it covers the game's own Printer.
-    (global.set $m_skin (call $material_create (call $shader (i32.const 352) (i32.const 17))))
-    (global.set $gun (call $image_kind (i32.const 384) (i32.const 33)))
     (f32.store (i32.const 1024) (f32.const 1))
     (f32.store (i32.const 1044) (f32.const 1))
     (f32.store (i32.const 1064) (f32.const 1))
@@ -476,26 +463,6 @@
           (then (local.set $on (f32.const 0))))
         ;; Where their gun is drawn, and its muzzle.
         (local.set $drawn (call $held (local.get $player) (i32.const 0) (i32.const 1280)))
-
-        ;; The gun itself, for anyone holding it: the alien skin, over the
-        ;; game's own Printer, its veins flaring while the beam is on.
-        (if (i32.and (local.get $drawn)
-              (f32.eq (f32.load offset=60 (local.get $at)) (f32.convert_i32_s (global.get $gun))))
-          (then
-            (if (i32.lt_s (global.get $gun_mesh) (i32.const 0))
-              (then (global.set $gun_mesh (call $image_mesh (global.get $gun)))))
-            (if (i32.ge_s (global.get $gun_mesh) (i32.const 0))
-              (then
-                (call $param (i32.const 0) (f32.const 0.3) (f32.const 0.95) (f32.const 1)
-                  (f32.min (f32.const 1) (f32.max (f32.const 0) (local.get $on))))
-                (call $param (i32.const 1) (f32.load (i32.const 1152)) (f32.load (i32.const 1156))
-                  (f32.load (i32.const 1160)) (local.get $id))
-                (call $param (i32.const 2) (f32.load (i32.const 1164)) (f32.load (i32.const 1168))
-                  (f32.load (i32.const 1172)) (f32.const 0))
-                (call $param (i32.const 3) (f32.load (i32.const 1176)) (f32.load (i32.const 1180))
-                  (f32.load (i32.const 1184)) (f32.const 0))
-                (call $draw_with (global.get $gun_mesh) (global.get $m_skin)
-                  (i32.const 1280) (i32.const 1088))))))
 
         ;; No gun state: not a gravity gun player (or not yet known).
         (br_if $each_player (f32.ne (local.get $held) (local.get $held)))
