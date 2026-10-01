@@ -23,6 +23,13 @@ pub enum ControlObject {
     /// `Corpse` camera after death: orbits the player's own body until
     /// respawn, so the corpse takes no more input.
     Corpse,
+    /// An Add-On's orbit camera around another player (`orbit_camera`;
+    /// v20's `%client.camera.setOrbitMode(%target, ...)` then
+    /// `setControlObject(%client.camera)`), `distance` units out. The body
+    /// takes no moves, the camera does not hand control back on a click
+    /// (the click still reaches Add-Ons as an empty-hand trigger), and
+    /// only the Add-On or the target leaving ends it.
+    Orbit { target: OwnerId, distance: u8 },
     /// A package entity (a kart, a drone, a second body) that a package
     /// handed this player (`control(player, entity)`). The player's moves
     /// drive that entity's body with its archetype's movement; the avatar
@@ -140,11 +147,49 @@ impl Session {
         Ok(())
     }
     /// Spies watching a departing player return to their own bodies.
+    /// An Add-On's `orbit_camera`: `owner` watches `target` from
+    /// `distance` units out, or (`None`) has their body back. Only a player
+    /// on their body or in another Add-On orbit is given one: an admin
+    /// camera or a driven entity keeps control.
+    pub(super) fn orbit_camera(
+        &mut self,
+        owner: OwnerId,
+        orbit: Option<(OwnerId, u8)>,
+    ) -> Result<()> {
+        let peer = self.peers.get(&owner).context("No such player")?;
+        let Some((target, distance)) = orbit else {
+            if matches!(peer.control, ControlObject::Orbit { .. }) {
+                self.return_to_body(owner)?;
+            }
+            return Ok(());
+        };
+        ensure!(
+            peer.combat.alive,
+            "Only living players are given an orbit camera"
+        );
+        ensure!(
+            matches!(
+                peer.control,
+                ControlObject::Player | ControlObject::Orbit { .. }
+            ),
+            "That player's camera is in other hands"
+        );
+        ensure!(target != owner, "A player cannot orbit themselves");
+        ensure!(self.peers.contains_key(&target), "No such player to orbit");
+        self.peers.get_mut(&owner).expect("checked").control =
+            ControlObject::Orbit { target, distance };
+        Ok(())
+    }
+    /// Whoever watched `target` (an admin spy, an Add-On orbit) has their
+    /// body back.
     pub(super) fn release_spies(&mut self, target: OwnerId) {
         let spies: Vec<_> = self
             .peers
             .iter()
-            .filter(|(_, p)| p.control == ControlObject::Spy(target))
+            .filter(|(_, p)| {
+                p.control == ControlObject::Spy(target)
+                    || matches!(p.control, ControlObject::Orbit { target: t, .. } if t == target)
+            })
             .map(|(owner, _)| *owner)
             .collect();
         for spy in spies {

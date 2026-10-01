@@ -26,6 +26,7 @@ fn down_look() { parse_float("{{down_look}}") }
 fn ground() { parse_float("{{ground}}") }
 fn held_sequence() { "{{held_sequence}}" }
 fn holder_sequence() { "{{holder_sequence}}" }
+fn orbit_distance() { parse_float("{{orbit}}") }
 
 // v20 plays these on threads 0 and 1; here the body's action thread (2)
 // carries them, layered by their own priority.
@@ -68,6 +69,8 @@ fn remove_from_grasp(held) {
         play_thread(held, anim_thread(), "root");
         set_scale(held, get_player(held, "old_scale"));
         set_look_limits(held, ());
+        // %this.client.setControlObject(%this)
+        orbit_camera(held, ());
     }
     set_player(held, "holder", -1);
     set_player(held, "timeout_at", tick());
@@ -165,6 +168,9 @@ fn attempt_grab(who) {
     set_scale(t.id, me.scale * held_scale());
     play_thread(t.id, anim_thread(), held_sequence());
     set_look_limits(t.id, look_up(), look_down());
+    // The "Grabbed" camera: orbiting the holder; its click struggles
+    // (Observer::onTrigger), which reaches on_activate below.
+    orbit_camera(t.id, who, orbit_distance());
     play_thread(who, anim_thread(), holder_sequence());
     set_player(t.id, "holder", who);
     set_player(t.id, "grabbed_at", tick());
@@ -237,7 +243,8 @@ fn on_trigger(who, trigger, down) {
     ()
 }
 
-// Player::activateStuff.
+// Player::activateStuff, and Observer::onTrigger in "Grabbed" mode: the
+// held player's click struggles.
 fn on_activate(who) {
     if being_held(who) {
         if escape_from_grasp(who) {

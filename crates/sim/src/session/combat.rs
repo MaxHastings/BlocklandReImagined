@@ -250,6 +250,9 @@ pub enum Notice {
     /// `setControlCameraFov`: an Add-On sets this player's field of view,
     /// or hands it back to their own setting with `None`.
     Fov(Option<f32>),
+    /// The host emptied this player's hand (an Add-On's `unmount_image`):
+    /// bricks, spray can and tools are put away on the client too.
+    PutAway,
 }
 
 /// Minigame requests. The actor is always the authenticated connection.

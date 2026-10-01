@@ -638,6 +638,7 @@ fn player_throwing_port_becomes_host_rules_with_this_copys_numbers() {
         "fn ground() { parse_float(\"0.3\") }",
         "fn held_sequence() { \"death1\" }",
         "fn holder_sequence() { \"armReadyBoth\" }",
+        "fn orbit_distance() { parse_float(\"6\") }",
     ] {
         assert!(rules.contains(line), "{line} missing from\n{rules}");
     }
@@ -653,15 +654,17 @@ fn player_throwing_port_becomes_host_rules_with_this_copys_numbers() {
 
 /// Hosted, on flat ground: in a minigame, an empty-hand click lifts the
 /// player in front onto the hand (shrunk, limp, looking within the copy's
-/// limits); neither may switch tools while held; the held player struggles
-/// free only after 3 s; after the 5 s grab timeout the next grab, a held
-/// fire button and its release throw them at 2.5 times the full charge.
+/// limits, bricks put away, their camera circling the holder); neither may
+/// switch tools or take bricks in hand while held; the held player struggles free only after 3 s
+/// and has their body's view back; after the 5 s grab timeout the next
+/// grab, a held fire button and its release throw them at 2.5 times the
+/// full charge.
 #[test]
 fn ported_player_throwing_grabs_throws_and_lets_go_in_a_hosted_game() {
     use bri_content::shape::{Node, Shape};
     use bri_sim::{
         player::MoveInput,
-        session::{Command, MiniGameRequest, Session, shape_mount_points},
+        session::{Command, ControlObject, MiniGameRequest, Notice, Session, shape_mount_points},
     };
     use rapier3d::prelude::*;
     use std::collections::BTreeMap;
@@ -777,6 +780,19 @@ fn ported_player_throwing_grabs_throws_and_lets_go_in_a_hosted_game() {
     aim(&mut s, &mut inputs);
     steps(&mut s, &inputs, 2);
 
+    // The held player has bricks in hand.
+    cmd(
+        &mut s,
+        held,
+        Command::BrickHand(bri_sim::session::BrickHand {
+            stocked: true,
+            equipped: true,
+            ghost: false,
+        }),
+    )
+    .unwrap();
+    s.take_private_notices();
+
     // Lifted onto the right hand.
     cmd(&mut s, holder, Command::Activate).unwrap();
     steps(&mut s, &inputs, 1);
@@ -785,9 +801,40 @@ fn ported_player_throwing_grabs_throws_and_lets_go_in_a_hosted_game() {
     assert_eq!((ride.mount, ride.seat), (holder, 0));
     assert!((state(&s, held).scale - 0.75).abs() < 1e-4);
     assert_eq!(vitals[&held].look_limits, Some([0.4, 0.6]));
+    // Their camera circles the holder, 6 units out, and stays there.
+    assert_eq!(
+        vitals[&held].control,
+        ControlObject::Orbit {
+            target: holder,
+            distance: 6
+        }
+    );
+    assert!(cmd(&mut s, held, Command::ControlPlayer).is_err());
+    // Their bricks are put away (`unmountImage(0)`).
+    assert!(
+        s.take_private_notices()
+            .iter()
+            .any(|(o, n)| *o == held && matches!(n, Notice::PutAway))
+    );
     // Neither switches tools (`PlayerThrowing_CanUseTools`).
     assert!(cmd(&mut s, held, Command::EquipTool { slot: None }).is_err());
     assert!(cmd(&mut s, holder, Command::EquipTool { slot: None }).is_err());
+    // Nor take bricks in hand (`serverCmdUseInventory`): put back.
+    cmd(
+        &mut s,
+        held,
+        Command::BrickHand(bri_sim::session::BrickHand {
+            stocked: true,
+            equipped: true,
+            ghost: false,
+        }),
+    )
+    .unwrap();
+    assert!(
+        s.take_private_notices()
+            .iter()
+            .any(|(o, n)| *o == held && matches!(n, Notice::PutAway))
+    );
 
     // Struggling: not before 3 s, then free, restored.
     steps(&mut s, &inputs, 120);
@@ -800,6 +847,7 @@ fn ported_player_throwing_grabs_throws_and_lets_go_in_a_hosted_game() {
     let vitals = s.vitals();
     assert_eq!(vitals[&held].ride, None, "escaped");
     assert_eq!(vitals[&held].look_limits, None);
+    assert_eq!(vitals[&held].control, ControlObject::Player);
     assert!((state(&s, held).scale - 1.0).abs() < 1e-4);
     assert!(cmd(&mut s, holder, Command::EquipTool { slot: None }).is_ok());
 

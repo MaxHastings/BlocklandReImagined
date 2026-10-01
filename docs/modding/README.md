@@ -137,8 +137,8 @@ parameters, so a typo shows up in `bri-addon-check`, not mid-game.
 **Policies** are decisions the engine owns and asks you about. List them in
 `"policies"` and define `allow_<policy>(player)`: `true` allows, `false` or
 a reason string refuses. `respawn` is a dead player asking to come back,
-`build` any command that builds, and `equip` taking a tool, the spray can or
-the FX can into the hand or putting it away (v20 Add-Ons packaged
+`build` any command that builds, and `equip` taking a tool, the spray can,
+the FX can or bricks into the hand or putting a tool away (v20 Add-Ons packaged
 `serverCmdUseTool` and friends for this). Every Add-On that lists a policy
 must allow it.
 
@@ -172,7 +172,7 @@ HUD panels can only show keys the viewer receives. `persist` (default
 | `aim()`, `me()`, `entities()` | `add_player(p, key, amount)` | `damage(target, amount[, by[, type]])`, `explode(...)`: `damage` |
 | `noise(seed, x, z)`, `hash3(seed, x, y, z)` | `entity_get(e, key)`, `entity_set(e, key, v)` | `spawn_entity`, `remove_entity`, `steer`, `label`: `entity` |
 | `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)` | | `teleport`, `respawn`, `set_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`, `take_item(p, item)`, `drop_item(item, x, y, z[, vx, vy, vz])`: `player` |
-| `raycast(from, dir, range[, ignore])`, `can_damage(by, target)` | | `set_fov(p, fov)`, `set_image_ammo(p, ammo)`, `mount_image(p, image)`, `unmount_image(p)`, `set_scale(p, scale)`, `set_look_limits(p, up, down)`: `player` |
+| `raycast(from, dir, range[, ignore])`, `can_damage(by, target)` | | `set_fov(p, fov)`, `set_image_ammo(p, ammo)`, `mount_image(p, image)`, `unmount_image(p)`, `set_scale(p, scale)`, `set_look_limits(p, up, down)`, `orbit_camera(p, target, distance)`: `player` |
 | `brick_box(brick)`, `voxel(brick)`, `can_place_voxel(x, y, z)` | | `place_voxel(x, y, z, material)`: `world.edit`; `set_avatar_colors(p, colors)`: `player` |
 | | | `copy_build(p, brick, limit, above_only, tool)`, `copy_box(p, min, max, limit, tool)`, `mirror_copy(p, axis)`: `build` |
 | | | `cut_copy(p)`, `paint_copy(p, color)`, `paint_fill(p, brick, color, limit)`: `world.edit` |
@@ -244,13 +244,24 @@ held image it is out of ammo, so its states' `no_ammo` transitions run;
 counts down. `set_fov(p, fov)` sets the player's field of view (5 to 120
 degrees), and `set_fov(p, ())` hands it back to their own setting; aiming
 and the zoom key still work on top of it. `unmount_image(p)` empties the
-player's hand (`unMountImage(0)`).
+player's hand (`unMountImage(0)`): a tool, a spray can or bricks, which the
+player's client puts away too.
 
 **Bodies.** `set_scale(p, scale)` resizes a player's body, from 0.2 to 5
 (`setScale`); a respawn puts it back to 1. `set_look_limits(p, up, down)`
 bounds how far their arms and head follow their look, each from 0 (looking
 straight up) to 1 (straight down), as v20's `setLookLimits`: `(0.5, 0.5)`
 holds them level. `set_look_limits(p, ())` lifts it; a respawn does too.
+
+**Cameras.** `orbit_camera(p, target, distance)` hands player `p` a camera
+circling player `target`, 1 to 20 units out, which their mouse turns
+(v20's `%client.camera.setOrbitMode(%target, ...)` then
+`setControlObject(%client.camera)`). Their body takes no moves meanwhile.
+Their clicks do not end it: they still reach Add-Ons as the empty-hand
+trigger (`on_trigger`, then `on_activate`), so a held player clicks to
+struggle. `orbit_camera(p, ())` gives the body back; so does the target
+leaving, and death and respawn as always. A player flying an admin camera
+or driving an entity keeps it.
 
 **Riding players.** `mount_object(mount, rider, node, can_dismount)` seats
 player `rider` on player `mount` at mount point `node` (`mountObject`).

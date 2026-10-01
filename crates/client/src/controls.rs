@@ -172,13 +172,19 @@ pub struct Observer {
     pub mode: ObserverMode,
     pub yaw: f32,
     pub pitch: f32,
+    /// How far out an orbit sits: 8 for the spy and corpse cameras
+    /// (`Observer::setMode("Corpse")`'s `setOrbitMode(..., 0, 8, 8)`), an
+    /// Add-On's own for its orbit.
+    pub distance: f32,
 }
+/// The spy and corpse cameras' orbit distance.
+pub const CORPSE_ORBIT_DISTANCE: f32 = 8.0;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ObserverMode {
     /// `Observer` fly mode, flown locally from `dropCameraAtPlayer`.
     Free(glam::Vec3),
     /// `Corpse` orbit mode around a spied player, or around one's own body
-    /// after death.
+    /// after death, or an Add-On's orbit around another player.
     Orbit(OwnerId),
     /// Orbit a package entity the player drives (`ControlObject::Entity`):
     /// the moves go to the entity, steered by this camera's yaw.
@@ -553,11 +559,17 @@ impl Controls {
                 },
             },
             ControlObject::Spy(target) => ObserverMode::Orbit(target),
+            ControlObject::Orbit { target, .. } => ObserverMode::Orbit(target),
             ControlObject::Corpse => ObserverMode::Orbit(owner),
             ControlObject::Entity(entity) => ObserverMode::Drive(entity),
         };
+        let distance = match control {
+            ControlObject::Orbit { distance, .. } => f32::from(distance),
+            _ => CORPSE_ORBIT_DISTANCE,
+        };
         if let Some(observer) = &mut self.observer {
             observer.mode = mode;
+            observer.distance = distance;
         } else {
             let (yaw, pitch) = self.view_angles();
             self.free_yaw = 0.0;
@@ -565,6 +577,7 @@ impl Controls {
                 mode,
                 yaw,
                 pitch: pitch.clamp(-OBSERVER_PITCH, OBSERVER_PITCH),
+                distance,
             });
         }
     }
@@ -610,6 +623,7 @@ impl Controls {
             mode: ObserverMode::Free(mut position),
             yaw,
             pitch,
+            ..
         }) = self.observer
         else {
             return;
@@ -663,6 +677,7 @@ impl Controls {
                 mode: ObserverMode::Drive(_),
                 yaw,
                 pitch,
+                ..
             }) => (yaw, pitch),
             Some(_) => {
                 return MoveInput {
@@ -1119,6 +1134,28 @@ mod tests {
         assert!((c.camera_angles().0 - 0.3).abs() < 1e-6);
         assert_eq!(c.movement().forward, 0.0);
         assert_eq!(c.movement().yaw, 0.0);
+    }
+    /// An Add-On's orbit circles its target at the Add-On's distance; the
+    /// spy and corpse cameras keep v20's 8.
+    #[test]
+    fn an_add_on_orbit_sits_at_its_own_distance() {
+        let mut c = Controls::default();
+        c.follow(
+            ControlObject::Orbit {
+                target: 7,
+                distance: 5,
+            },
+            1,
+            None,
+        );
+        let observer = c.observer().unwrap();
+        assert_eq!(observer.mode, ObserverMode::Orbit(7));
+        assert_eq!(observer.distance, 5.0);
+        assert_eq!(c.movement().forward, 0.0);
+        c.follow(ControlObject::Spy(7), 1, None);
+        assert_eq!(c.observer().unwrap().distance, CORPSE_ORBIT_DISTANCE);
+        c.follow(ControlObject::Player, 1, None);
+        assert_eq!(c.observer(), None);
     }
     #[test]
     fn spy_orbit_follows_its_target() {

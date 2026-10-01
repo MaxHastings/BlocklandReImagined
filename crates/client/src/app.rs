@@ -4462,6 +4462,14 @@ impl App {
                             }
                             continue;
                         }
+                        bri_sim::session::Notice::PutAway => {
+                            if let Some(building) = self.building.as_mut() {
+                                for update in building.put_away() {
+                                    self.ui.apply_session(a.id, update);
+                                }
+                            }
+                            continue;
+                        }
                         bri_sim::session::Notice::MirrorCopy { across_z } => {
                             if let Some(building) = self.building.as_mut() {
                                 building.mirror_copy(across_z);
@@ -5311,9 +5319,11 @@ fn camera_eye(
     passages: &bri_content::passage::Passages,
 ) -> Result<(Vec3, Option<glam::Affine3A>)> {
     use crate::controls::ObserverMode;
+    let distance = controls.observer().map(|o| o.distance);
     match controls.observer().map(|o| o.mode) {
         Some(ObserverMode::Free(position)) => Ok((position, None)),
-        // `setOrbitMode(target, ..., 0, 8, 8)` from `Observer::setMode("Corpse")`.
+        // `setOrbitMode(target, ..., 0, 8, 8)` from `Observer::setMode("Corpse")`,
+        // or an Add-On's own distance.
         Some(ObserverMode::Orbit(_) | ObserverMode::Drive(_)) => building
             .camera_position(
                 controls
@@ -5321,7 +5331,7 @@ fn camera_eye(
                     .map(|focus| focus + drawn_offset.unwrap_or(Vec3::ZERO))
                     .unwrap_or(own_eye),
                 forward,
-                8.0,
+                distance.unwrap_or(crate::controls::CORPSE_ORBIT_DISTANCE),
             )
             .map(|eye| (eye, None)),
         None => match chase {
@@ -7398,13 +7408,29 @@ impl PlatformApp for App {
             // Clicking out of the spy orbit returns to the body
             // (`Observer::onTrigger` in `Corpse` mode); the free camera
             // uses it only to fly faster. The dead click to respawn above.
+            // In an Add-On's orbit the click is the player's empty-hand
+            // trigger, for the Add-On (`Observer::onTrigger` in its mode).
             if let Some(observer) = self.controls.observer()
                 && let UiAction::Game(GameAction::Held {
                     control: HeldControl::Fire,
                     down,
                 }) = action
             {
-                if down && matches!(observer.mode, crate::controls::ObserverMode::Orbit(_)) {
+                let addon_orbit = self.network_view().is_some_and(|v| {
+                    v.vitals.get(&v.owner).is_some_and(|v| {
+                        matches!(v.control, bri_sim::session::ControlObject::Orbit { .. })
+                    })
+                });
+                if addon_orbit {
+                    let command = if down {
+                        Command::Activate
+                    } else {
+                        Command::ActivateRelease
+                    };
+                    if let Err(error) = self.command(id, command, action.clone()) {
+                        self.answer(id, Err(error));
+                    }
+                } else if down && matches!(observer.mode, crate::controls::ObserverMode::Orbit(_)) {
                     if let Err(error) = self.command(id, Command::ControlPlayer, action.clone()) {
                         self.answer(id, Err(error));
                     }

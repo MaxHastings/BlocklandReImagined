@@ -8248,7 +8248,7 @@ Render: `/mnt/project-files/steel-ball/steel-ball-v2.png`. Max's in-game
 check is a Steel Ball near bricks at Mirrors Medium, in Unified+Shine and
 in Dynamic.
 
-## 2026-10-01 Player Throwing port (branch `claude/project-thread-n5mlwe`, protocol 71, for v0.1.11)
+## 2026-10-01 Player Throwing port (branch `claude/project-thread-n5mlwe`, protocols 71 and 72, for v0.1.11)
 
 Max picked Electrk's Player Throwing ("Electrk's is fine") as the classic
 throw Add-On, run from the player's own copy ("originals only"). Port
@@ -8275,23 +8275,44 @@ New engine seams it needed (general, documented in `docs/modding`):
   as a grab does), and checks its caller: the rider, their mount, or a
   player who may move them.
 
-Not yet as in v20 (why the port is partial): the held player keeps their
-own view instead of the orbit camera around the holder
-(`Observer::onTrigger` "Grabbed"), and a brick already in hand is not put
-away (`serverCmdUseInventory`, `serverCmdInstantUseBrick`; brick choice is
-client-side here).
+Follow-up (protocol 72), closing the two gaps the first cut left, with
+general seams:
+- `orbit_camera(p, target, distance)` / `orbit_camera(p, ())` (`player`):
+  `ControlObject::Orbit { target, distance }`, replicated in vitals. The
+  client orbits the target at that distance (the spy and corpse cameras
+  keep 8). A click in it is sent as `Activate` / `ActivateRelease`, so it
+  reaches `on_trigger` and `on_activate` (v20's `Observer::onTrigger` in
+  the Add-On's mode); `ControlPlayer` is refused. The target leaving ends
+  it; admin cameras and driven entities are not taken over. The held
+  player now watches the holder from the copy's `setOrbitMode` distance
+  and clicks to struggle, as in v20.
+- `unmount_image` empties the whole hand: bricks in hand too, on the host
+  (no brick image, no ghost for others) and on the client
+  (`Notice::PutAway`). Taking bricks in hand now asks the `equip` policy
+  too (the client's `BrickHand` report; refused, the host sends `PutAway`),
+  and the `EquipTool { slot: None }` the client sends with it is vetoed. The port now also covers
+  `Observer::onTrigger`, `serverCmdUseInventory` and
+  `serverCmdInstantUseBrick`.
+
+Still not as in v20 (the port stays partial): the held body's quarter turn
+on the hand (`setTransform` rotation), and the orbit's zoom range (only its
+starting distance is used).
 
 Tests (content-free; the stand-in Add-On in
 `crates/addon-import/tests/fixtures/ports/Script_PlayerThrowing` is ours,
 CC0, with its own numbers):
 - `cargo test -p bri-addon-import --test ports throwing`: the port fills
   this copy's numbers into compiling rules; hosted: grab onto the right
-  hand at 0.75 scale with look limits, no tool switching for either, no
+  hand at 0.75 scale with look limits, bricks put away, the camera
+  orbiting the holder 6 units out, no tool switching for either, no
   escape before 3 s then free and restored, the 5 s grab timeout, a charged
   throw at 2.5 x 11 where the holder looks.
 - `cargo test -p bri-sim --test carry_rules`: `on_trigger` hears press and
   release, the `equip` veto, `unmount_object` off a vehicle (the test's own
   horse).
+- `cargo test -p bri-sim --test script_api`: `orbit_camera` limits, the
+  target leaving, an admin camera kept; `unmount_image` puts bricks away.
+- `bri-client` `an_add_on_orbit_sits_at_its_own_distance`.
 
 ## 2026-10-01 Adventure Pack seams: hit regions, HUD per gun, onFire with a round (branch `claude/adventure-pack-n3spj2`)
 

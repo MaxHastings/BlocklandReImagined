@@ -40,7 +40,8 @@
           "dismounts": "%col\\.isMounted\\s*\\(\\s*\\)\\s*\\)\\s*\\{?\\s*%col\\.dismount\\s*\\(",
           "puts_away": "%col\\.unmountImage\\s*\\(\\s*0\\s*\\)",
           "grab_timeout": "getSimTime\\s*\\(\\s*\\)\\s*-\\s*%this\\.grabTimeout",
-          "grabs_players": "containerRaycast\\s*\\([^;]*PlayerObjectType"
+          "grabs_players": "containerRaycast\\s*\\([^;]*PlayerObjectType",
+          "orbit": "setOrbitMode\\s*\\(\\s*%this\\s*,\\s*[^,]+,\\s*[0-9.]+\\s*,\\s*[0-9.]+\\s*,\\s*([0-9]*\\.?[0-9]+)"
         },
         "Player::throwPlayer": {
           "min_amount": "mClamp\\s*\\(\\s*%amount\\s*,\\s*(\\d+)\\s*,",
@@ -103,6 +104,16 @@
           "vetoed": "PlayerThrowing_CanUseTools\\s*\\("
         },
         "serverCmdUseFxCan": {
+          "vetoed": "PlayerThrowing_CanUseTools\\s*\\("
+        },
+        "Observer::onTrigger": {
+          "grabbed": "%obj\\.mode\\s*!\\$=\\s*\"Grabbed\"",
+          "struggles": "%trigger\\s*==\\s*0\\s*&&\\s*%state[^)]*\\)\\s*\\{?\\s*%player\\.escapeFromGrasp\\s*\\("
+        },
+        "serverCmdUseInventory": {
+          "vetoed": "PlayerThrowing_CanUseTools\\s*\\("
+        },
+        "serverCmdInstantUseBrick": {
           "vetoed": "PlayerThrowing_CanUseTools\\s*\\("
         }
       },

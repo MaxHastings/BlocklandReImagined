@@ -438,6 +438,13 @@ pub enum Op {
         player: u64,
         limits: Option<[f32; 2]>,
     },
+    /// Give a player an orbit camera around another (`target`, `distance`
+    /// whole units out; v20's `setOrbitMode` and
+    /// `setControlObject(camera)`), or (`None`) their body back.
+    OrbitCamera {
+        player: u64,
+        orbit: Option<(u64, u8)>,
+    },
 }
 /// The mirror [`Op::MirrorCopy`] stands in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -471,6 +478,9 @@ pub enum SoundAt {
 pub const MAX_MOUNT_POINTS: usize = 8;
 /// Body scales `set_scale` allows.
 pub const SCALE_RANGE: std::ops::RangeInclusive<f32> = 0.2..=5.0;
+/// How far out an Add-On's orbit camera may sit ([`Op::OrbitCamera`]), in
+/// whole units.
+pub const ORBIT_DISTANCE: std::ops::RangeInclusive<u8> = 1..=20;
 /// The avatar's colour slots, as `setNodeColor` names them.
 pub const AVATAR_SLOTS: [&str; 13] = [
     "head",
@@ -528,6 +538,7 @@ impl Op {
             | Self::UnmountImage { .. }
             | Self::SetScale { .. }
             | Self::SetLookLimits { .. }
+            | Self::OrbitCamera { .. }
             | Self::SetAvatarColors { .. } => "player",
             Self::MountObject { .. } | Self::UnmountObject { .. } => "physics",
             Self::Push { .. }
@@ -566,6 +577,9 @@ impl Op {
                 mount, rider, node, ..
             } => mount != rider && usize::from(*node) < MAX_MOUNT_POINTS,
             Self::SetScale { scale, .. } => scale.is_finite() && SCALE_RANGE.contains(scale),
+            Self::OrbitCamera { player, orbit } => orbit.is_none_or(|(target, distance)| {
+                target != *player && ORBIT_DISTANCE.contains(&distance)
+            }),
             Self::SetLookLimits { limits, .. } => limits
                 .is_none_or(|[down, up]| (0.0..=1.0).contains(&down) && (0.0..=1.0).contains(&up)),
             Self::PaintFill { limit, .. } => (1..=MAX_FILL_BRICKS as u32).contains(limit),
@@ -824,6 +838,7 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::UnmountObject { .. } => "unmount_object",
         Op::SetScale { .. } => "set_scale",
         Op::SetLookLimits { .. } => "set_look_limits",
+        Op::OrbitCamera { .. } => "orbit_camera",
         Op::SpawnEntity { .. } => "spawn_entity",
         Op::RemoveEntity { .. } => "remove_entity",
         Op::Steer { .. } => "steer",

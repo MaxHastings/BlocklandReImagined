@@ -1576,6 +1576,30 @@ fn register_presentation(engine: &mut Engine) {
             limits: None,
         })
     });
+    engine.register_fn(
+        "orbit_camera",
+        |player: Dynamic, target: Dynamic, distance: Dynamic| {
+            let distance = float(&distance)?;
+            let range = crate::ops::ORBIT_DISTANCE;
+            if !(f32::from(*range.start())..=f32::from(*range.end())).contains(&distance) {
+                return fail(format!(
+                    "an orbit camera sits {} to {} units out",
+                    range.start(),
+                    range.end()
+                ));
+            }
+            push(Op::OrbitCamera {
+                player: id(&player)?,
+                orbit: Some((id(&target)?, distance.round() as u8)),
+            })
+        },
+    );
+    engine.register_fn("orbit_camera", |player: Dynamic, _: ()| {
+        push(Op::OrbitCamera {
+            player: id(&player)?,
+            orbit: None,
+        })
+    });
     engine.register_fn("mount_image", |player: Dynamic, image: Dynamic| {
         push(Op::MountImage {
             player: id(&player)?,

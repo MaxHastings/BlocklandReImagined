@@ -64,7 +64,9 @@ use std::collections::{BTreeMap, BTreeSet};
 /// body's arms and head follow its look.
 /// 71: `Command::ActivateRelease`: letting go of an empty-hand click, for
 /// Add-Ons' `on_trigger`.
-pub const VERSION: u32 = 71;
+/// 72: `ControlObject::Orbit` (an Add-On's `orbit_camera`) and
+/// `Notice::PutAway` (`unmount_image` puts bricks in hand away).
+pub const VERSION: u32 = 72;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).

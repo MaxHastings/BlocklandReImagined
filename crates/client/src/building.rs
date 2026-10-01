@@ -651,6 +651,19 @@ impl Building {
         self.held_brick = held;
     }
 
+    /// The host emptied the hand (an Add-On's `unmountImage`): put away
+    /// whatever is in it, bricks and cans included, as `UnUseTool` does,
+    /// without asking the host again.
+    pub fn put_away(&mut self) -> Vec<UiUpdate> {
+        self.equipment = Equipment::None;
+        self.active_tool = None;
+        self.selected_slot = None;
+        vec![
+            UiUpdate::SetActiveTool(None),
+            UiUpdate::SetActiveBrick(None),
+        ]
+    }
+
     /// A map change builds a new controller; the player keeps the bricks
     /// they bought (those the new catalog still offers) and their paint,
     /// which the next world sync clamps to the new palette.

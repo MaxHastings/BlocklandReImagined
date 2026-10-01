@@ -1726,10 +1726,7 @@ impl Session {
                     None => self.weapons.swap_image(actor, None),
                 }
             }
-            Op::UnmountImage { player } => {
-                ensure!(self.peers.contains_key(&player), "No such player");
-                self.equip_tool(player, None)
-            }
+            Op::UnmountImage { player } => self.put_away_hand(player),
             Op::MountObject {
                 mount,
                 rider,
@@ -1770,6 +1767,7 @@ impl Session {
                 peer.look_limits = limits;
                 Ok(())
             }
+            Op::OrbitCamera { player, orbit } => self.orbit_camera(player, orbit),
             Op::Sound { profile, at } => {
                 self.take_cue(package)?;
                 match at {

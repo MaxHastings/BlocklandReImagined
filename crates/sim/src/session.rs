@@ -1808,6 +1808,11 @@ impl Session {
                 Ok(Reply::Accepted)
             }
             Command::ControlPlayer => {
+                // An Add-On's orbit camera is the Add-On's to end.
+                ensure!(
+                    !matches!(peer.control, ControlObject::Orbit { .. }),
+                    "An Add-On holds your camera"
+                );
                 self.return_to_body(owner)?;
                 Ok(Reply::Accepted)
             }
@@ -1847,7 +1852,17 @@ impl Session {
                 self.treasure_status(owner)?;
                 Ok(Reply::Accepted)
             }
-            Command::BrickHand(hand) => {
+            Command::BrickHand(mut hand) => {
+                // Taking bricks in hand is equipping (an Add-On's packaged
+                // `serverCmdUseInventory`): refused, the client puts them
+                // back.
+                if hand.equipped
+                    && !self.brick_equipped(owner)
+                    && self.package_policy("equip", owner).is_err()
+                {
+                    hand.equipped = false;
+                    self.notify(owner, Notice::PutAway);
+                }
                 self.set_brick_hand(owner, hand)?;
                 Ok(Reply::Accepted)
             }

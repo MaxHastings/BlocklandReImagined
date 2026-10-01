@@ -46,7 +46,8 @@ operation that needs a capability.
 | `new Projectile() { ... }` | `fire(projectile, x, y, z, vx, vy, vz, by)` | `damage` |
 | `new Explosion()`, `radiusDamage` | `explode(x, y, z, radius, damage, brick_radius)` | `damage` |
 | `%obj.mountImage(%img, 0)` | `mount_image(p, image)`, `mount_image(p, ())` | `player` |
-| `%obj.unMountImage(0)` | `unmount_image(p)` | `player` |
+| `%obj.unMountImage(0)` | `unmount_image(p)`: tools, cans and bricks in hand | `player` |
+| `%client.camera.setOrbitMode(%target, ...)`, `setControlObject(%client.camera)`, back with `setControlObject(%player)` | `orbit_camera(p, target, distance)`, `orbit_camera(p, ())` | `player` |
 | `%obj.setScale("s s s")` | `set_scale(p, s)` | `player`; 0.2 to 5, one number |
 | `%obj.setLookLimits(%up, %down)` | `set_look_limits(p, up, down)`, `set_look_limits(p, ())` | `player` |
 | `%obj.mountObject(%rider, %node)`, `%rider.canDismount = 0` | `mount_object(mount, rider, node, can_dismount)` | `physics`; node is a `mount<N>` of the body model |
@@ -88,6 +89,8 @@ operation that needs a capability.
 | `ItemData::onDrop`, dynamic fields on the dropped `Item` | `on_drop(p, item, slot)`: the value it returns rides the drop to whoever picks it up |
 | `ProjectileData::onCollision` | `on_projectile_hit(hit)` |
 | `Player::activateStuff` packaged (an empty-hand click) | `on_activate(p)`: answer `true` to take the click |
+| `Observer::onTrigger` packaged for an Add-On's camera mode | The player's click in an `orbit_camera` reaches `on_trigger` and `on_activate` |
+| `serverCmdUseInventory`, `serverCmdInstantUseBrick` packaged to refuse bricks | The `equip` policy: taking bricks in hand puts the tool slot away, which it refuses |
 | `Armor::onTrigger` packaged (fire with an empty hand, pressed and let go) | `on_trigger(p, trigger, down)`: answer `true` to take a press |
 | `serverCmdUseTool`, `serverCmdUnUseTool`, `serverCmdUseSprayCan`, `serverCmdUseFXCan` packaged to refuse | The `equip` policy, `allow_equip(p)` |
 

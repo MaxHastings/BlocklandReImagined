@@ -1,7 +1,7 @@
 // Stand-in for the Script_PlayerThrowing port tests (CC0): a small
 // pick-up-and-throw script with the function names and shapes the port
 // reads, and its own numbers (held at 0.75 scale, reach 3, throws 1 to 30,
-// a 10-notch charge, a 2.5 front check).
+// a 10-notch charge, a 2.5 front check, watched from 6 units out).
 $Pref::Server::PlayerThrowing::GrabTimeout = 5;
 $Pref::Server::PlayerThrowing::EscapeTimeout = 3;
 $Pref::Server::PlayerThrowing::ChargeRate = 100;
@@ -55,6 +55,8 @@ function Player::attemptGrab(%this)
    %col.setScale(vectorScale(%this.getScale(), 0.75));
    %col.playThread(1, death1);
    %col.setLookLimits(0.6, 0.4);
+   %col.client.camera.setOrbitMode(%this, 0, 4, 9, 6, 0);
+   %col.client.setControlObject(%col.client.camera);
    %this.playThread(0, armReadyBoth);
    %col.holderPlayer = %this;
    %this.holdingPlayer = %col;
@@ -139,6 +141,15 @@ package Script_PlayerThrowing
       return Parent::activateStuff(%this);
    }
 
+   function Observer::onTrigger(%this, %obj, %trigger, %state)
+   {
+      %player = %obj.getControllingClient().player;
+      if(%obj.mode !$= "Grabbed")
+         return Parent::onTrigger(%this, %obj, %trigger, %state);
+      if(%trigger == 0 && %state)
+         %player.escapeFromGrasp();
+   }
+
    function Armor::onRemove(%this, %obj)
    {
       %obj.clearAllHolding();
@@ -149,6 +160,18 @@ package Script_PlayerThrowing
    {
       %this.player.clearAllHolding();
       Parent::onDeath(%this, %killerPlayer, %killerClient, %damageType, %damageLoc);
+   }
+
+   function serverCmdUseInventory(%client, %slot)
+   {
+      if(PlayerThrowing_CanUseTools(%client))
+         Parent::serverCmdUseInventory(%client, %slot);
+   }
+
+   function serverCmdInstantUseBrick(%client, %data)
+   {
+      if(PlayerThrowing_CanUseTools(%client))
+         Parent::serverCmdInstantUseBrick(%client, %data);
    }
 
    function serverCmdUseTool(%client, %slot)
