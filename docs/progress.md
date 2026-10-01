@@ -8526,8 +8526,8 @@ each other inside one frame. Three refactors, one commit each:
   added once and every host must supply it. Each map's Add-On state is kept
   under its own key on a map change and when the host stops
   (`MapHost::outgoing`). `Family::spawnable` is the one rule for the spawn
-  brick list (the server used to offer the Tank's turret; the client hid
-  it). Test: `bri-net host_setup` drives an admin Change Map over loopback
+  brick list. The client used to hide the standalone Tank Turret that v20
+  and the server list; every host now lists it. Test: `bri-net host_setup` drives an admin Change Map over loopback
   and fails without the fix.
 - **Gun-seat fire.** The hold records the seat it was pressed in, and every
   release ends it. Before, a release in a seat without a gun left the gun
