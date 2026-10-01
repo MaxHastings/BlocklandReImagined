@@ -76,13 +76,18 @@ fn definitions() -> Definitions {
 /// A synthetic session: one plate definition, a flat ground, a two-colour
 /// palette, the testing event catalog and a spawn point.
 fn plain() -> Session {
+    plain_with(World::new(
+        "Hardening".into(),
+        "hardening".into(),
+        vec![[1.0; 4], [0.0; 4]],
+    ))
+}
+
+/// `plain` around a world that already has bricks.
+fn plain_with(world: World) -> Session {
     let mut s = Session::new(
         Simulation::new(
-            World::new(
-                "Hardening".into(),
-                "hardening".into(),
-                vec![[1.0; 4], [0.0; 4]],
-            ),
+            world,
             definitions(),
             vec![
                 ColliderBuilder::cuboid(100.0, 0.5, 100.0).translation(Vector::new(0.0, -0.5, 0.0)),
@@ -2274,4 +2279,38 @@ fn the_etard_filter_holds_back_chat_and_says_why() {
     g.s.command(a, 2, Command::Chat("r u here".into()))
         .unwrap();
     assert!(g.s.take_private_notices().is_empty());
+}
+
+/// A loaded world's event programs are installed by `prepare_events`, the
+/// whole-world scan a host runs before serving, so the first tick (which
+/// also answers joins) installs nothing. Counted, not timed: on the old code
+/// the first tick installed every brick and `prepare_events` did not exist.
+#[test]
+fn prepared_events_leave_the_first_tick_nothing_to_install() {
+    let mut world = World::new(
+        "Hardening".into(),
+        "hardening".into(),
+        vec![[1.0; 4], [0.0; 4]],
+    );
+    for id in 1..=8 {
+        let mut brick = Brick::new(
+            bri_world::ContentRef::Resolved("plate".into()),
+            [2.0 * id as f32 + 0.5, 0.1, 10.25],
+            0,
+        );
+        brick.events = vec![color_row(1)];
+        world.bricks.insert(id, brick);
+    }
+    world.next_brick_id = 9;
+    let mut prepared = plain_with(world.clone());
+    assert_eq!(prepared.prepare_events(), 8, "every brick is scanned once");
+    assert_eq!(prepared.prepare_events(), 0, "and not again");
+    prepared.step().unwrap();
+    assert_eq!(prepared.last_event_work().installed, 0);
+    // Unprepared, the first tick owes the scan; later ticks do not.
+    let mut lazy = plain_with(world);
+    lazy.step().unwrap();
+    assert_eq!(lazy.last_event_work().installed, 8);
+    lazy.step().unwrap();
+    assert_eq!(lazy.last_event_work().installed, 0);
 }
