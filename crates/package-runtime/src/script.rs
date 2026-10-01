@@ -10,7 +10,7 @@
 //! operation budget per call; bounded strings, arrays, maps, call depth and
 //! operation count. A failing or over-budget call changes nothing.
 use crate::manifest::location;
-use crate::ops::{FillPaint, ObjectRef, Op, SoundAt, TempLook, VehiclePaint};
+use crate::ops::{FillPaint, ObjectRef, Op, SoundAt, TempLook, VehiclePaint, WorldShape};
 use crate::state::{Namespace, PlayerKey, check_value};
 use bri_package::diag::Diagnostic;
 use rhai::{AST, Array, Dynamic, Engine, EvalAltResult, Map};
@@ -146,6 +146,10 @@ pub struct PlayerView {
     /// plant, cut, paint, wrench, undo or load; `cancel_copy` stops it).
     #[serde(default)]
     pub copy_working: bool,
+    /// The copy they hold from a duplicator (`copy_build`, `load_copy`):
+    /// the Add-On that took it and its bricks.
+    #[serde(default)]
+    pub copy: Option<(String, u64)>,
 }
 /// Live questions a script may ask the engine during a call. They read the
 /// world as it is when the call runs: a call's own operations apply after it
@@ -586,6 +590,15 @@ fn player_map(p: &PlayerView) -> Dynamic {
         ("alive", p.alive.into()),
         ("admin", p.admin.into()),
         ("copy_working", p.copy_working.into()),
+        (
+            "copy",
+            p.copy.as_ref().map_or(Dynamic::UNIT, |(package, bricks)| {
+                map([
+                    ("addon", package.clone().into()),
+                    ("bricks", Dynamic::from_int(*bricks as i64)),
+                ])
+            }),
+        ),
         float_entry("ex", p.eye[0]),
         float_entry("ey", p.eye[1]),
         float_entry("ez", p.eye[2]),
@@ -937,6 +950,62 @@ fn vector(value: &Array) -> Fallible<[f32; 3]> {
         [x, y, z] => Ok([float(x)?, float(y)?, float(z)?]),
         _ => fail("a point or direction is [x, y, z]"),
     }
+}
+/// The player a set of shapes goes with, or `()` for none.
+fn shape_owner(value: &Dynamic) -> Fallible<Option<u64>> {
+    if value.is_unit() { Ok(None) } else { id(value).map(Some) }
+}
+/// A shape map: `#{min, max, color, inside, sides, label}`, colours RGBA
+/// from 0 to 1 (all but `min` and `max` optional; `sides` is the outside
+/// colours across x, y and z).
+fn world_shape(value: Dynamic) -> Fallible<WorldShape> {
+    let Some(map) = value.try_cast::<Map>() else {
+        return fail("a shape is #{min, max, color, inside, sides, label}");
+    };
+    for key in map.keys() {
+        if !["min", "max", "color", "inside", "sides", "label"].contains(&key.as_str()) {
+            return fail(format!(
+                "a shape has no `{key}` (min, max, color, inside, sides, label)"
+            ));
+        }
+    }
+    let point = |key: &str| -> Fallible<[f32; 3]> {
+        match map.get(key).and_then(|v| v.clone().try_cast::<Array>()) {
+            Some(v) => vector(&v),
+            None => fail(format!("a shape's {key} is [x, y, z]")),
+        }
+    };
+    let byte = |v: Dynamic, what: &str| -> Fallible<[u8; 4]> {
+        let c = color::<4>(v, what)?;
+        Ok(c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8))
+    };
+    let rgba = |key: &str| -> Fallible<[u8; 4]> {
+        match map.get(key).filter(|v| !v.is_unit()) {
+            None => Ok([0; 4]),
+            Some(v) => byte(v.clone(), &format!("a shape's {key}")),
+        }
+    };
+    let sides = match map.get("sides").filter(|v| !v.is_unit()) {
+        None => None,
+        Some(v) => {
+            let what = "a shape's sides are three colours, across x, y and z";
+            let list = v.clone().into_typed_array::<Dynamic>().map_err(|_| what)?;
+            let list = list.into_iter().map(|c| byte(c, what)).collect::<Fallible<Vec<_>>>()?;
+            Some(<[[u8; 4]; 3]>::try_from(list).map_err(|_| what)?)
+        }
+    };
+    let label = match map.get("label").filter(|v| !v.is_unit()) {
+        None => String::new(),
+        Some(v) => v.clone().into_string().map_err(|_| "a shape's label is text")?,
+    };
+    Ok(WorldShape {
+        min: point("min")?,
+        max: point("max")?,
+        color: rgba("color")?,
+        inside: rgba("inside")?,
+        sides,
+        label,
+    })
 }
 /// A player by id, or an object like `"vehicle:3"`.
 fn target(value: &Dynamic) -> Fallible<ObjectRef> {
@@ -1629,6 +1698,27 @@ fn register_api(engine: &mut Engine) {
         push(Op::FloatCopy {
             player: id(&player)?,
             float,
+            admin_only: false,
+        })
+    });
+    // float_copy(player, float, #{ admin_only: true }): floating only
+    // while the player is an administrator, checked at each plant.
+    engine.register_fn("float_copy", |player: Dynamic, float: bool, options: Map| {
+        let mut admin_only = false;
+        for (key, value) in &options {
+            match key.as_str() {
+                "admin_only" => {
+                    admin_only = value
+                        .as_bool()
+                        .map_err(|_| "float option `admin_only` is true or false")?
+                }
+                other => return Err(format!("unknown float option `{other}`").into()),
+            }
+        }
+        push(Op::FloatCopy {
+            player: id(&player)?,
+            float,
+            admin_only,
         })
     });
     engine.register_fn("wrench_copy", |player: Dynamic| {
@@ -1699,6 +1789,26 @@ fn register_api(engine: &mut Engine) {
     engine.register_fn("cut_copy", |player: Dynamic| {
         push(Op::CutCopy {
             player: id(&player)?,
+            each: false,
+        })
+    });
+    // cut_copy(player, #{ each: true }): each brick the player may cut,
+    // the rest counted for `on_copy`.
+    engine.register_fn("cut_copy", |player: Dynamic, options: Map| {
+        let mut each = false;
+        for (key, value) in &options {
+            match key.as_str() {
+                "each" => {
+                    each = value
+                        .as_bool()
+                        .map_err(|_| "cut option `each` is true or false")?
+                }
+                other => return Err(format!("unknown cut option `{other}`").into()),
+            }
+        }
+        push(Op::CutCopy {
+            player: id(&player)?,
+            each,
         })
     });
     engine.register_fn("paint_copy", |player: Dynamic, color: i64| {
@@ -1852,6 +1962,23 @@ fn register_api(engine: &mut Engine) {
             tool: String::new(),
         })
     });
+    engine.register_fn(
+        "show_shapes",
+        |owner: Dynamic, key: &str, shapes: Array| {
+            push(Op::ShowShapes {
+                owner: shape_owner(&owner)?,
+                key: key.into(),
+                shapes: shapes.into_iter().map(world_shape).collect::<Fallible<_>>()?,
+            })
+        },
+    );
+    engine.register_fn("hide_shapes", |owner: Dynamic, key: &str| {
+        push(Op::ShowShapes {
+            owner: shape_owner(&owner)?,
+            key: key.into(),
+            shapes: Vec::new(),
+        })
+    });
     engine.register_fn("give_item", |player: Dynamic, item: &str, equip: bool| {
         push(Op::GiveItem {
             player: id(&player)?,
@@ -2001,6 +2128,12 @@ fn register_api(engine: &mut Engine) {
             })
         },
     );
+    engine.register_fn("plant_error", |player: Dynamic, error: &str| {
+        push(Op::PlantError {
+            player: id(&player)?,
+            error: error.to_ascii_lowercase(),
+        })
+    });
     engine.register_fn("play_sound", |player: Dynamic, profile: &str| {
         push(Op::Sound {
             profile: profile.into(),

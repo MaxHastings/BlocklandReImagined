@@ -38,6 +38,7 @@ mod inventory;
 mod map_change;
 mod environment;
 mod map_lights;
+mod world_shapes;
 mod special;
 mod trust;
 mod tutorial;
@@ -183,6 +184,7 @@ pub const EMOTES: [&str; 7] = ["alarm", "bsd", "confusion", "hate", "hug", "love
 /// (`%player.getEyePoint()`).
 const V20_EYE_NODE: f32 = 2.156;
 pub use map_lights::{MAX_MAP_LIGHT_RULES, MapLightRule};
+pub use world_shapes::{MAX_SHAPE_SETS, check_world_shapes};
 pub use tools::{FX_CAN_IMAGES, InspectMode, SPRAY_CAN_IMAGE, ToolAction, ToolCatalog};
 pub use trust::{MAX_TRUST_LIST, PlayerTrust, TrustEntry, TrustLevel};
 pub use undo::UNDO_QUEUE_SIZE;
@@ -896,6 +898,8 @@ pub struct Session {
     breakables: breakables::Breakables,
     /// Add-On map light rules (`set_map_lights`), replicated to clients.
     map_lights: Vec<map_lights::MapLightRule>,
+    /// Add-On world shapes (`show_shapes`), replicated to clients.
+    world_shapes: world_shapes::WorldShapes,
     /// The live environment over the map's own (Admin Menu Environment,
     /// Add-Ons' `set_environment`), replicated to clients.
     environment: bri_content::atmosphere::Settings,
@@ -923,6 +927,7 @@ impl Session {
             body_mounts: BTreeMap::new(),
             breakables: Default::default(),
             map_lights: Vec::new(),
+            world_shapes: Default::default(),
             environment: Default::default(),
             movables: Default::default(),
             specials: Default::default(),
@@ -1435,6 +1440,7 @@ impl Session {
         self.forget_copy_job(owner);
         self.forget_blueprint(owner);
         self.plant_waits.remove(&owner);
+        self.forget_world_shapes(owner);
         self.forget_copy_requests(owner);
         self.forget_mover(owner);
         self.departed.insert(

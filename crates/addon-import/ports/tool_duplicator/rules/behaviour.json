@@ -8,7 +8,12 @@
     { "name": "duplicator" },
     { "name": "savedup", "args": ["string"] },
     { "name": "loaddup", "args": ["string"] },
-    { "name": "duplorcatorloadanyways" }
+    { "name": "duplorcatorloadanyways" },
+    { "name": "mount", "tool_only": true },
+    { "name": "unmount", "tool_only": true, "while_dead": true },
+    { "name": "cancel", "tool_only": true },
+    { "name": "clientload", "args": ["string"] },
+    { "name": "reloaddup" }
   ],
   "on_copy": true,
   "on_place": true,

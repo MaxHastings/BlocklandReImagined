@@ -11,6 +11,7 @@ use std::path::PathBuf;
 /// On a 200k-brick world it cut world build 17%, wire decode 20%, JSON
 /// load 16% and collider inserts 18% against the system allocator (Linux;
 /// Windows' heap usually gains more).
+/// `bri_net::allocator::tune` keeps its purges off the tick.
 #[global_allocator]
 static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
@@ -56,6 +57,7 @@ fn default_content_directory() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("content"))
 }
 fn main() -> Result<()> {
+    bri_net::allocator::tune();
     bri_client::perf::startup::begin();
     let result = game();
     // A startup error's message must reach the log and terminal before exit.

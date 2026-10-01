@@ -75,9 +75,13 @@ fn admin_plant_bypass() {
 fn version() {
     "{{nd_version}}"
 }
-// How long a selection glows.
-fn glow_seconds() {
-    5.0
+// "Enable Menu Sounds".
+fn menu_sounds() {
+    true
+}
+// "Process Per Tick": a plant of more than ten ticks' worth sounds.
+fn process_per_tick() {
+    300
 }
 // Longest save name.
 fn name_length() {
@@ -186,21 +190,161 @@ fn box_max(b) {
     [upper(b[0], b[3]), upper(b[1], b[4]), upper(b[2], b[5])]
 }
 
+// One of a box's twelve edges (`ND_SelectionBoxBorder`, 0.05 across at
+// scale 1): along `axis`, through corner `p1` or `p2` on each other axis
+// as `ND_SelectionBox::setSize` numbers them (0 through `p1`, 2 through
+// `p2`), `width` its scale and `grow` added to its length.
+fn edge(p1, p2, axis, k, width, grow, color) {
+    let u = (axis + 1) % 3;
+    let v = (axis + 2) % 3;
+    let at = [0.0, 0.0, 0.0];
+    at[u] = if k == 1 || k == 2 { p2[u] } else { p1[u] };
+    at[v] = if k == 2 || k == 3 { p2[v] } else { p1[v] };
+    let half = width * 0.025;
+    let min = [at[0] - half, at[1] - half, at[2] - half];
+    let max = [at[0] + half, at[1] + half, at[2] + half];
+    min[axis] = lower(p1[axis], p2[axis]) - grow * 0.5;
+    max[axis] = upper(p1[axis], p2[axis]) + grow * 0.5;
+    #{ min: min, max: max, color: color }
+}
+// A cube `size` across at `at`, its faces across x, y and z shaded.
+fn cube(at, size, sides) {
+    let h = size * 0.5;
+    #{ min: [at[0] - h, at[1] - h, at[2] - h], max: [at[0] + h, at[1] + h, at[2] + h], sides: sides }
+}
+fn longest(len) {
+    upper(upper(len[0], len[1]), len[2])
+}
+
+// `ND_SelectionBox`, seen by everyone: see-through faces, gold edges (the
+// selected corner's in blue), shaded corner cubes and "Name's Selection
+// Box" over it; once it has selected, grey edges alone
+// (`setDisabledMode`). Edges and corners grow with the box.
+fn draw_selection_box(p) {
+    let b = get_player(p, "box");
+    if b.len() != 6 {
+        hide_shapes(p, "box");
+        return;
+    }
+    let p1 = [b[0], b[1], b[2]];
+    let p2 = [b[3], b[4], b[5]];
+    let lo = box_min(b);
+    let hi = box_max(b);
+    let len = [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]];
+    let shapes = [];
+    if get_player(p, "box_selected") {
+        let width = (21.0 / 5120.0) * longest(len) + 1.0;
+        let grey = [0.1, 0.1, 0.1, 0.4];
+        for axis in 0..3 {
+            // Upright edges a little longer, the rest shorter, so their
+            // ends do not fight.
+            let grow = if axis == 1 { width * 0.05 } else { -width * 0.05 };
+            for k in 0..4 {
+                shapes.push(edge(p1, p2, axis, k, width, grow, grey));
+            }
+        }
+        show_shapes(p, "box", shapes);
+        return;
+    }
+    let gold = [1.0, 0.84, 0.0, 0.99];
+    let blue = [0.0, 0.0, 1.0, 0.99];
+    // The second corner selected (`selectedCorner`), else the first.
+    let second = get_player(p, "corner");
+    if len[0] > 0.02 && len[1] > 0.02 && len[2] > 0.02 {
+        shapes.push(#{ min: [lo[0] + 0.01, lo[1] + 0.01, lo[2] + 0.01], max: [hi[0] - 0.01, hi[1] - 0.01, hi[2] - 0.01], color: [0.0, 0.0, 0.0, 0.0], inside: [0.0, 0.0, 0.0, 0.6] });
+    }
+    // `hasVolume`: a flat box has no outer faces.
+    if len[0] >= 0.05 && len[1] >= 0.05 && len[2] >= 0.05 {
+        shapes.push(#{ min: [lo[0] - 0.01, lo[1] - 0.01, lo[2] - 0.01], max: [hi[0] + 0.01, hi[1] + 0.01, hi[2] + 0.01], color: [0.0, 0.0, 0.0, 0.35] });
+    }
+    let width = (7.0 / 1024.0) * longest(len) + 1.0;
+    // The edges through the corners a little thicker, the selected one's
+    // more, against the highlight box over the same place.
+    let width1 = if second { width } else { width + 0.02 };
+    let width2 = if second { width + 0.02 } else { width };
+    for axis in 0..3 {
+        for k in 0..4 {
+            let shape = if k == 0 {
+                edge(p1, p2, axis, k, width1, -width * 0.05, if second { gold } else { blue })
+            } else if k == 2 {
+                edge(p1, p2, axis, k, width2, -width * 0.05, if second { blue } else { gold })
+            } else {
+                edge(p1, p2, axis, k, width, width * 0.05, gold)
+            };
+            shapes.push(shape);
+        }
+    }
+    // Shaded across Torque's x, y and z: here x, up and z.
+    let plain = [gold, [1.0, 0.94, 0.1, 0.99], [0.8, 0.74, 0.0, 0.99]];
+    let picked = [blue, [0.0, 0.1, 0.9, 0.99], [0.0, 0.2, 1.0, 0.99]];
+    shapes.push(cube(p1, 0.35 * width1, if second { plain } else { picked }));
+    shapes.push(cube(p2, 0.35 * width2, if second { picked } else { plain }));
+    let name = player(p).name;
+    let label = if name.ends_with("s") || name.ends_with("S") { name + "' Selection Box" } else { name + "'s Selection Box" };
+    let top = [(lo[0] + hi[0]) * 0.5, hi[1], (lo[2] + hi[2]) * 0.5];
+    shapes.push(#{ min: top, max: top, color: [1.0, 0.84, 0.0, 0.0], label: label });
+    show_shapes(p, "box", shapes);
+}
+
+// `ND_HighlightBox`, seen by everyone: gold edges round a selection, as
+// wide as the selection is big.
+fn draw_highlight_box(p) {
+    let mode = get_player(p, "mode");
+    let area = get_player(p, "selection_box");
+    if !(mode == "stack" || mode == "box") || get_player(p, "selected") == 0 || area.len() != 6 {
+        hide_shapes(p, "highlight");
+        return;
+    }
+    let p1 = [area[0], area[1], area[2]];
+    let p2 = [area[3], area[4], area[5]];
+    let len = [p2[0] - p1[0], p2[1] - p1[1], p2[2] - p1[2]];
+    let width = (7.0 / 1280.0) * longest(len) + 1.0;
+    let shapes = [];
+    for axis in 0..3 {
+        for k in 0..4 {
+            shapes.push(edge(p1, p2, axis, k, width, width * 0.05, [1.0, 0.84, 0.0, 0.99]));
+        }
+    }
+    show_shapes(p, "highlight", shapes);
+}
+
+fn draw_boxes(p) {
+    draw_selection_box(p);
+    draw_highlight_box(p);
+}
+
 // The progress modes' `getBottomPrint`: a big job goes a slice a tick.
 fn progress_text(p) {
     let progress = get_player(p, "progress");
     let done = progress[0];
     let total = progress[1];
     let percent = if total > 0 { done * 100 / total } else { 0 };
+    let queued = progress[4];
+    let searched = progress[5];
     let lines = switch get_player(p, "working") {
         "select" => {
-            if total == 0 {
-                [`Selecting... (\c3${done}\c6 Bricks)`, "[Cancel Brick]: Cancel selection"]
-            } else {
+            if total > 0 {
                 [`Processing... (\c3${percent}%\c6)`, "[Cancel Brick]: Cancel selection"]
+            } else if searched >= 0 {
+                // `NDM_BoxSelectProgress`'s.
+                [`Searching... (\c3${searched}%\c6, \c3${done}\c6 Bricks)`, "[Cancel Brick]: Cancel selection"]
+            } else {
+                // `NDM_StackSelectProgress`'s.
+                [`Selecting... (\c3${done}\c6 Bricks, \c3${queued}\c6 in Queue)`, "[Cancel Brick]: Cancel selection"]
             }
         }
-        "plant" => [`Planting... (\c3${percent}%\c6)`, "[Cancel Brick]: Cancel planting"],
+        // `NDM_PlantCopyProgress`'s: a later pass looks for bricks that
+        // now have something under them.
+        "plant" => {
+            let planted = progress[2];
+            if searched >= 0 {
+                [`Finding Next Brick... (\c3${searched}%\c6, \c3${planted}\c6 planted)`, "[Cancel Brick]: Cancel planting"]
+            } else {
+                let failed = progress[3];
+                let percent = if total > 0 { planted * 100 / total } else { 0 };
+                [`Planting... (\c3${percent}%\c6, \c3${failed}\c6 failed)`, "[Cancel Brick]: Cancel planting"]
+            }
+        }
         "cut" => [`Cutting... (\c3${percent}%\c6)`, "[Cancel Brick]: Cancel cut"],
         "paint" => [`Painting... (\c3${percent}%\c6)`, "[Cancel Brick]: Cancel painting"],
         "wrench" => [`Applying... (\c3${percent}%\c6)`, "[Cancel Brick]: Cancel"],
@@ -281,7 +425,14 @@ fn bottom(p) {
             let color = if fill[0] {
                 `\c3Fx - ` + ["None", "Pearl", "Chrome", "Glow", "Blink", "Swirl", "Rainbow", "Stable", "Undulo"][fill[1]]
             } else {
-                `\c3Colour ${fill[1] + 1}`
+                // `ndGetPaintColorCode`: a swatch of the colour, and how
+                // see-through it is.
+                let swatch = "<font:impact:20>" + paint_code(fill[1]) + `|||||<font:Verdana:16>\c3`;
+                let alpha = (palette()[fill[1]][3] * 100.0).floor().to_int();
+                if alpha != 100 {
+                    swatch += ` ${alpha}%`;
+                }
+                swatch
             };
             format_message(title, [
                 ["Select paint can to chose color", "[Plant Brick]: Paint bricks"],
@@ -325,6 +476,32 @@ fn oops(p, text, seconds) {
     center_print(p, `<font:Verdana:20>\c6` + text, seconds);
 }
 
+// A sound of the duplicator's menus (`PlayMenuSounds`): `MsgUploadStart`
+// and the rest, the light switches.
+fn menu_sound(p, sound) {
+    if menu_sounds() {
+        play_sound(p, sound);
+    }
+}
+
+// `ndTrustCheckMessage`'s refusal.
+fn no_trust(p) {
+    play_sound(p, "errorSound");
+    oops(p, "You don't have enough trust to do that!", 5);
+}
+
+// `ndGetPaintColorCode`: palette colour `index` as a colour tag.
+fn paint_code(index) {
+    let c = palette()[index];
+    let hex = "0123456789abcdef";
+    let tag = "<color:";
+    for k in 0..3 {
+        let v = (c[k] * 255.0).round().to_int();
+        tag += hex.sub_string(v / 16, 1) + hex.sub_string(v % 16, 1);
+    }
+    tag + ">"
+}
+
 // Put the image for `mode` in hand; the mount and unmount it causes are
 // not the duplicator coming out or going away (`ndIgnoreNextMount`).
 fn show_image(p, mode) {
@@ -345,11 +522,15 @@ fn set_mode(p, mode) {
     set_player(p, "mode", mode);
     if old == "box" && (mode == "stack" || mode == "plant") {
         set_player(p, "box", []);
-        hide_box(p);
+        draw_boxes(p);
     }
     if old == "fillcolor" {
         // The paint box goes, the duplicator's tools come back.
         scroll_mode(p, "tools");
+    }
+    if mode == "fillcolor" {
+        // Leaving a selection mode for paint, the glow ends.
+        highlight_copy(p, (), 0.0);
     }
     if old == "plant" && (mode == "stack" || mode == "box") {
         // Leaving plant mode lets the selection go.
@@ -359,7 +540,7 @@ fn set_mode(p, mode) {
     if (old == "stack" || old == "box") && mode == "plant" {
         // Taken up as a ghost where it was selected.
         show_copy(p);
-        float_copy(p, get_player(p, "force_plant"));
+        float_copy(p, get_player(p, "force_plant"), #{ admin_only: float_admin_only() });
         set_player(p, "plant_as", "");
     }
     if mode == "plant" {
@@ -380,6 +561,7 @@ fn set_mode(p, mode) {
     }
     show_image(p, mode);
     take_paints(p);
+    draw_boxes(p);
     bottom(p);
 }
 
@@ -409,15 +591,20 @@ fn box_from_selection(p) {
     if high[0] - low[0] <= limit && high[1] - low[1] <= limit && high[2] - low[2] <= limit {
         set_player(p, "box", aligned(me, low, high));
         set_player(p, "corner", true);
-        show_box(p, low, high, tool());
+        draw_boxes(p);
     } else {
         let studs = (limit * 2.0).floor().to_int();
         center_print(p, `<font:Verdana:20>\c6Oops!` + "\n<font:Verdana:17>" + `\c6Your selection box is limited to \c3${studs} \c6studs.`, 5);
     }
 }
 
-// `ndKillMode`: the duplicator put away.
+// `ndKillMode`: the duplicator put away. A job under way stops with it
+// (each progress mode's `onKillMode`), and what it did stays done.
 fn kill_mode(p) {
+    if busy(p) {
+        set_player(p, "working", "");
+        cancel_copy(p);
+    }
     if get_player(p, "mode") == "fillcolor" {
         scroll_mode(p, "tools");
     }
@@ -425,7 +612,7 @@ fn kill_mode(p) {
     set_player(p, "selected", 0);
     set_player(p, "box", []);
     set_player(p, "box_selected", false);
-    hide_box(p);
+    draw_boxes(p);
     drop_copy(p);
     take_paints(p);
     bottom_print(p, "", 0);
@@ -603,6 +790,7 @@ fn cmd_fire(p) {
         }
         let way = if get_player(p, "direction") { "up" } else { "down" };
         copy_build(p, hit.brick, max_bricks(me.admin), way, tool(), copy_rule(p, me));
+        menu_sound(p, "uploadStartSound");
         return;
     }
     // Box mode: a box around the clicked brick.
@@ -633,7 +821,7 @@ fn cmd_fire(p) {
     set_player(p, "box", aligned(me, b.min, b.max));
     set_player(p, "corner", true);
     let corners = get_player(p, "box");
-    show_box(p, box_min(corners), box_max(corners), tool());
+    draw_boxes(p);
     bottom(p);
 }
 
@@ -666,11 +854,11 @@ fn turned_step(me, x, y) {
 fn cmd_light(p) {
     switch get_player(p, "mode") {
         "stack" => {
-            play_sound(p, "lightOnSound");
+            menu_sound(p, "lightOnSound");
             set_mode(p, "box");
         }
         "box" => {
-            play_sound(p, "lightOffSound");
+            menu_sound(p, "lightOffSound");
             set_mode(p, "stack");
         }
     }
@@ -694,7 +882,7 @@ fn cmd_seat(p, step) {
         pivot_copy(p, if on { "whole" } else { "start" });
     }
     bottom(p);
-    play_sound(p, if on { "lightOnSound" } else { "lightOffSound" });
+    menu_sound(p, if on { "lightOnSound" } else { "lightOffSound" });
 }
 
 // A selection held in stack or box mode, taken up by a brick key.
@@ -737,7 +925,7 @@ fn cmd_shift(p, x, y, z, super_shift) {
         }
         play_sound(p, "brickMoveSound");
         set_player(p, "box", moved);
-        show_box(p, box_min(moved), box_max(moved), tool());
+        draw_boxes(p);
         return;
     }
     let limit = max_box(me.admin);
@@ -763,7 +951,7 @@ fn cmd_shift(p, x, y, z, super_shift) {
     }
     play_sound(p, if moved == b { "errorSound" } else { "brickMoveSound" });
     set_player(p, "box", moved);
-    show_box(p, box_min(moved), box_max(moved), tool());
+    draw_boxes(p);
     if reached {
         let studs = (limit * 2.0).floor().to_int();
         center_print(p, `<font:Verdana:20>\c6Oops!` + "\n<font:Verdana:17>" + `\c6Your selection box is limited to \c3${studs} \c6studs.`, 5);
@@ -790,12 +978,13 @@ fn cmd_rotate(p, dir) {
         let turned = rotate_box(b, dir);
         play_sound(p, "brickRotateSound");
         set_player(p, "box", turned);
-        show_box(p, box_min(turned), box_max(turned), tool());
+        draw_boxes(p);
         bottom(p);
         return;
     }
     set_player(p, "corner", !get_player(p, "corner"));
     play_sound(p, "brickRotateSound");
+    draw_selection_box(p);
 }
 
 // `ND_SelectionBox::rotate`: the box turned a quarter about its middle,
@@ -840,6 +1029,7 @@ fn cmd_plant(p) {
         return;
     }
     copy_box(p, box_min(b), box_max(b), max_bricks(me.admin), tool(), copy_rule(p, me));
+    menu_sound(p, "uploadStartSound");
 }
 
 // [Cancel Brick].
@@ -854,6 +1044,7 @@ fn cmd_cancel(p) {
             set_player(p, "selected", 0);
             drop_copy(p);
             take_paints(p);
+            draw_boxes(p);
             bottom(p);
         }
         "fillcolor" => {
@@ -868,11 +1059,12 @@ fn cmd_cancel(p) {
                 set_player(p, "box_selected", false);
             } else {
                 set_player(p, "box", []);
-                hide_box(p);
+                draw_boxes(p);
             }
             set_player(p, "selected", 0);
             drop_copy(p);
             take_paints(p);
+            draw_boxes(p);
             bottom(p);
         }
         "plant" => {
@@ -1019,6 +1211,7 @@ fn cmd_ndconfirmsupercut(p) {
 fn super_cut_box(p) {
     let b = get_player(p, "box");
     super_cut(p, box_min(b), box_max(b));
+    menu_sound(p, "uploadStartSound");
 }
 
 // `/FillBricks` (`/FB`): a supercut, then the box filled with plain bricks
@@ -1088,7 +1281,7 @@ fn cmd_toggleforceplant(p) {
     let on = !get_player(p, "force_plant");
     set_player(p, "force_plant", on);
     if get_player(p, "mode") == "plant" {
-        float_copy(p, on);
+        float_copy(p, on, #{ admin_only: float_admin_only() });
     }
     if on {
         tell(p, `\c6Force Plant has been enabled. Use \c3/toggleForcePlant\c6 to disable it.`);
@@ -1107,32 +1300,62 @@ fn cmd_ndcut(p) {
     if mode == "" {
         return;
     }
-    if mode == "box" && get_player(p, "box").len() == 6 && !get_player(p, "box_selected") {
-        cmd_plant(p);
+    if busy(p) || !(mode == "stack" || mode == "box") {
+        not_here(p, "Cut");
         return;
     }
-    if !(mode == "stack" || mode == "box") || get_player(p, "selected") == 0 {
-        if mode == "plant" {
-            tell(p, `\c6Cut can not be used in your current duplicator mode.`);
+    if mode == "box" {
+        // `NDM_BoxSelect::onCut`: a box not yet selected selects first.
+        if get_player(p, "box").len() != 6 {
+            return;
         }
+        if !get_player(p, "box_selected") {
+            cmd_plant(p);
+            return;
+        }
+    }
+    if get_player(p, "selected") == 0 {
         return;
     }
-    cut_copy(p);
+    // `ND_Selection::startCutting`: each brick the player may change goes,
+    // the rest are counted.
+    cut_copy(p, #{ each: true });
+    menu_sound(p, "uploadStartSound");
+}
+
+// `NewDuplicatorMode::onCopy`, `onPaste` and `onCut`: a mode without them.
+fn not_here(p, what) {
+    tell(p, `\c6${what} can not be used in your current duplicator mode.`);
+}
+// A progress mode: copy work of theirs is running.
+fn busy(p) {
+    get_player(p, "working") != "" || player(p).copy_working
 }
 
 // Ctrl+C (`/NdCopy`): in a selection mode, as [Plant Brick] there.
 fn cmd_ndcopy(p) {
     let mode = get_player(p, "mode");
-    if mode == "stack" || mode == "box" {
-        cmd_plant(p);
+    if mode == "" {
+        return;
     }
+    if busy(p) || !(mode == "stack" || mode == "box") {
+        not_here(p, "Copy");
+        return;
+    }
+    cmd_plant(p);
 }
 
 // Ctrl+V (`/NdPaste`): in plant mode, plant the ghost.
 fn cmd_ndpaste(p) {
-    if get_player(p, "mode") == "plant" {
-        plant_copy(p);
+    let mode = get_player(p, "mode");
+    if mode == "" {
+        return;
     }
+    if busy(p) || mode != "plant" {
+        not_here(p, "Paste");
+        return;
+    }
+    plant_copy(p);
 }
 
 // Ctrl, held and let go (`/NdMultiSelect`).
@@ -1191,6 +1414,7 @@ fn cmd_savedup(p, typed) {
     let again = get_player(p, "save_overwrite") == name;
     set_player(p, "save_overwrite", name);
     save_copy(p, name, #{ overwrite: again });
+    menu_sound(p, "uploadStartSound");
 }
 fn cmd_sd(p, typed) {
     cmd_savedup(p, typed);
@@ -1218,6 +1442,7 @@ fn cmd_loaddup(p, typed) {
     }
     tell(p, `\c6Loading selection from "\c3${name}\c6"...`);
     load_copy(p, name, max_bricks(player(p).admin), tool(), #{ partial: true });
+    menu_sound(p, "uploadStartSound");
 }
 fn cmd_ld(p, typed) {
     cmd_loaddup(p, typed);
@@ -1373,16 +1598,24 @@ fn on_copy(p, info) {
             center_print(p, `<font:Verdana:20>\c6Undo in progress...` + line(`\c3${percent}%\c6 finished.`), 10);
             return;
         }
+        let was = get_player(p, "working");
         set_player(p, "working", info.action);
-        set_player(p, "progress", [info.bricks, info.total, info.placed, info.refused]);
+        set_player(p, "progress", [info.bricks, info.total, info.placed, info.refused, info.queued, info.searched]);
+        if was != info.action {
+            if info.action == "plant" && info.total > process_per_tick() * 10 {
+                // `ND_Selection::startPlant`: a big plant sounds.
+                menu_sound(p, "uploadStartSound");
+            } else if info.action == "wrench" {
+                // Leaving a selection mode for the wrench, the glow ends.
+                highlight_copy(p, (), 0.0);
+            }
+        }
         bottom(p);
         return;
     }
     set_player(p, "working", "");
     if info.error == "canceled" {
-        set_player(p, "fill_after_cut", false);
-        oops(p, info.message, 4);
-        bottom(p);
+        canceled(p, info);
         return;
     }
     if info.action == "select" || info.action == "load" {
@@ -1411,6 +1644,7 @@ fn on_copy(p, info) {
                 tell(p, `\c6Fill Wrench can only be used with a selection.`);
                 return;
             }
+            highlight_copy(p, (), 0.0);
             let msg = `<font:Verdana:20>\c6Applied changes to \c3${info.bricks}\c6 Brick${s(info.bricks)}!`;
             if info.refused > 0 {
                 msg += line(`\c3${info.refused}\c6 missing trust.`);
@@ -1425,6 +1659,7 @@ fn on_copy(p, info) {
                 oops(p, info.message, 5);
                 return;
             }
+            menu_sound(p, "uploadEndSound");
             let msg = `<font:Verdana:20>\c6Deleted \c3${info.bricks}\c6 Brick${s(info.bricks)}!`;
             if info.placed > 0 {
                 msg += line(`\c6Placed \c3${info.placed}\c6 new one${s(info.placed)}.`);
@@ -1531,10 +1766,15 @@ fn on_copy(p, info) {
         }
         "cut" => {
             if info.error != () {
-                oops(p, "You don't have enough trust to do that!", 5);
+                no_trust(p);
                 return;
             }
-            center_print(p, `<font:Verdana:20>\c6Cut \c3${info.bricks}\c6 Brick${s(info.bricks)}!`, 8);
+            // `ND_Selection::finishCutting`.
+            let msg = `<font:Verdana:20>\c6Cut \c3${info.bricks}\c6 Brick${s(info.bricks)}!`;
+            if info.refused > 0 {
+                msg += line(`\c3${info.refused}\c6 missing trust.`);
+            }
+            center_print(p, msg, 8);
             set_mode(p, "plant");
             return;
         }
@@ -1542,13 +1782,14 @@ fn on_copy(p, info) {
     // A stack or box selected.
     let mode = get_player(p, "mode");
     if info.error == "trust" || info.error == "public" {
-        oops(p, "You don't have enough trust to do that!", 5);
+        no_trust(p);
         return;
     }
     if info.error != () && info.error != "empty" {
         oops(p, info.message, 5);
         return;
     }
+    menu_sound(p, "uploadEndSound");
     let msg = `<font:Verdana:20>\c6Selected \c3${info.bricks}\c6 Brick${s(info.bricks)}!`;
     if info.limit_reached {
         msg += " (Limit Reached)";
@@ -1565,10 +1806,47 @@ fn on_copy(p, info) {
     set_player(p, "selection_box", if info.box == () { [] } else { info.box.min + info.box.max });
     take_paints(p);
     if info.bricks > 0 {
-        highlight_copy(p, (), glow_seconds());
+        // Glowing until let go or taken up (`ND_Selection::deHighlight`).
+        highlight_copy(p, (), -1.0);
         if mode == "box" {
             set_player(p, "box_selected", true);
         }
+    }
+    draw_boxes(p);
+    bottom(p);
+}
+
+// A job canceled ([Cancel Brick], or put away): each progress mode's
+// `onCancelBrick`.
+fn canceled(p, info) {
+    set_player(p, "fill_after_cut", false);
+    // Put away (`ndKillMode`): nothing more is said.
+    if get_player(p, "mode") == "" {
+        return;
+    }
+    switch info.action {
+        // `NDM_StackSelectProgress` and `NDM_BoxSelectProgress`: the
+        // selection goes, the box stays to adjust.
+        "select" => {
+            oops(p, "Selection canceled!", 4);
+            set_player(p, "selected", 0);
+            set_player(p, "box_selected", false);
+            drop_copy(p);
+            take_paints(p);
+            draw_boxes(p);
+        }
+        // `NDM_CutProgress` and `NDM_LoadProgress`: back to selecting,
+        // the selection gone.
+        "cut" | "load" => {
+            set_player(p, "selected", 0);
+            drop_copy(p);
+            set_mode(p, get_player(p, "last_select"));
+        }
+        // `NDM_SuperCutProgress`.
+        "supercut" => oops(p, "Supercut canceled!", 4),
+        // Painting and the fill wrench stop where they got to.
+        "paint" | "wrench" => {}
+        _ => oops(p, info.message, 4),
     }
     bottom(p);
 }
@@ -1581,10 +1859,21 @@ fn tally(failed, key) {
 // and `conditionalPlant`'s refusals before it.
 fn on_place(p, info) {
     set_player(p, "working", "");
+    if info.float_refused {
+        // `NDM_PlantCopy::onPlantBrick`'s check, made at each plant.
+        tell(p, `\c6Force Plant has been disabled because it is admin only. Ask an admin for help.`);
+        set_player(p, "force_plant", false);
+    }
     if info.canceled {
-        oops(p, "Planting canceled!", 4);
-        set_mode(p, "plant");
+        if get_player(p, "mode") != "" {
+            oops(p, "Planting canceled!", 4);
+            set_mode(p, "plant");
+        }
         return;
+    }
+    if info.planted > 0 && info.bricks > process_per_tick() * 10 {
+        // `ND_Selection::finishPlant`: a big plant sounds.
+        menu_sound(p, "processCompleteSound");
     }
     if info.error == "wait" {
         let left = info.wait.ceiling().to_int();

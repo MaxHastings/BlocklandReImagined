@@ -135,6 +135,8 @@ impl SuperCutWork {
             }
             self.removed.push((id, brick));
             slice.push(id);
+            s.simulation.mark_rebuild(id);
+            s.simulation.charge_rebuilds(budget);
         }
         if !slice.is_empty() {
             s.cut_out_unread(&slice)?;
@@ -145,6 +147,7 @@ impl SuperCutWork {
                 self.placed.push(id);
                 s.dirty.insert(id);
             }
+            s.simulation.charge_rebuilds(budget);
         }
         Ok(self.next == self.found.len())
     }
@@ -157,6 +160,7 @@ impl CopyWork for SuperCutWork {
             total: self.found.len(),
             placed: self.placed.len(),
             refused: self.refused,
+            ..Default::default()
         }
     }
     fn step(&mut self, s: &mut Session, _: OwnerId, budget: &mut u32) -> Result<bool> {
@@ -280,6 +284,7 @@ impl FillWork {
                 }
                 Err(_) => self.refused += 1,
             }
+            s.simulation.charge_rebuilds(budget);
         }
         true
     }
@@ -292,6 +297,7 @@ impl CopyWork for FillWork {
             total: self.volume as usize,
             placed: 0,
             refused: self.refused,
+            ..Default::default()
         }
     }
     fn step(&mut self, s: &mut Session, _: OwnerId, budget: &mut u32) -> Result<bool> {

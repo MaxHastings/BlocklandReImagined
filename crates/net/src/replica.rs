@@ -46,6 +46,8 @@ pub struct Replica {
     pub package_state: bri_sim::session::PackageStateView,
     /// Per-tick drop of falling projectiles, by definition.
     projectile_falls: BTreeMap<String, f32>,
+    /// Add-On world shapes by key; an unchanged set keeps its pointer.
+    pub world_shapes: BTreeMap<String, std::sync::Arc<Vec<bri_package_runtime::ops::WorldShape>>>,
 }
 /// `current` without players who left, with `changed` entries replaced.
 fn merged<V: Clone>(
@@ -72,6 +74,15 @@ fn validate_map_lights(rules: &[bri_sim::session::MapLightRule]) -> Result<()> {
     ensure!(rules.len() <= bri_sim::session::MAX_MAP_LIGHT_RULES, "Too many map light rules");
     for rule in rules {
         rule.validate()?;
+    }
+    Ok(())
+}
+fn validate_world_shapes(
+    sets: &BTreeMap<String, Vec<bri_package_runtime::ops::WorldShape>>,
+) -> Result<()> {
+    ensure!(sets.len() <= bri_sim::session::MAX_SHAPE_SETS, "Too many world shape sets");
+    for (key, shapes) in sets {
+        bri_sim::session::check_world_shapes(key, shapes)?;
     }
     Ok(())
 }
@@ -217,6 +228,7 @@ impl Replica {
         validate_broken_shapes(&checkpoint.broken_shapes)?;
         validate_targets(&checkpoint.targets)?;
         validate_map_lights(&checkpoint.map_lights)?;
+        validate_world_shapes(&checkpoint.world_shapes)?;
         checkpoint.environment.validate()?;
         validate_entities(&checkpoint.entities)?;
         checkpoint.package_state.validate()?;
@@ -263,6 +275,11 @@ impl Replica {
             entities: checkpoint.entities.into_iter().map(|e| (e.id, e)).collect(),
             package_state: checkpoint.package_state,
             projectile_falls: checkpoint.projectile_falls,
+            world_shapes: checkpoint
+                .world_shapes
+                .into_iter()
+                .map(|(k, s)| (k, std::sync::Arc::new(s)))
+                .collect(),
         };
         for pose in checkpoint.poses {
             out.pose(pose)?;
@@ -352,6 +369,7 @@ impl Replica {
         if let Some(rules) = &delta.map_lights {
             validate_map_lights(rules)?;
         }
+        validate_world_shapes(&delta.world_shapes)?;
         if let Some(environment) = &delta.environment {
             environment.validate()?;
         }
@@ -423,6 +441,19 @@ impl Replica {
         }
         if let Some(rules) = delta.map_lights {
             self.map_lights = rules;
+        }
+        if !delta.world_shapes.is_empty() {
+            for (key, shapes) in delta.world_shapes {
+                if shapes.is_empty() {
+                    self.world_shapes.remove(&key);
+                } else {
+                    self.world_shapes.insert(key, std::sync::Arc::new(shapes));
+                }
+            }
+            ensure!(
+                self.world_shapes.len() <= bri_sim::session::MAX_SHAPE_SETS,
+                "Too many world shape sets"
+            );
         }
         if let Some(environment) = delta.environment {
             self.environment = environment;

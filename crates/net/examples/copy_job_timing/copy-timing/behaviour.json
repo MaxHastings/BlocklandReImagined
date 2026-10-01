@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "script": "copy-timing.rhai",
+  "commands": [
+    {
+      "name": "sel"
+    },
+    {
+      "name": "cut"
+    },
+    {
+      "name": "supercut"
+    }
+  ]
+}
