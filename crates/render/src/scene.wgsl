@@ -571,16 +571,19 @@ fn dynamic_lightmap(left:vec4<f32>,uv:vec2<f32>,position:vec3<f32>,normal:vec3<f
     let ambient=camera.ambient.rgb-baked_ambient();
     return clamp(left.rgb+ambient+light+camera.sun_color.rgb*facing*sun,vec3<f32>(0.0),vec3<f32>(1.0));
 }
+// A stored share of 1 (map_lighting::SHARE_ONE levels of 255), so a
+// lamp's bright spot can hold more than its fitted light.
+const SHARE_SCALE:f32=255.0/128.0;
 // The shares of its lights a lightmap texel holds, four channels to a
 // material slot 1..=6 (map_lighting::DynamicSheet).
 fn channel_shares(uv:vec2<f32>,count:u32)->array<vec4<f32>,6> {
     var seen=array<vec4<f32>,6>();
-    if count>0u {seen[0]=textureSampleLevel(layer1,clamped_exact,uv,0.0);}
-    if count>4u {seen[1]=textureSampleLevel(layer2,clamped_exact,uv,0.0);}
-    if count>8u {seen[2]=textureSampleLevel(layer3,clamped_exact,uv,0.0);}
-    if count>12u {seen[3]=textureSampleLevel(layer4,clamped_exact,uv,0.0);}
-    if count>16u {seen[4]=textureSampleLevel(layer5,clamped_exact,uv,0.0);}
-    if count>20u {seen[5]=textureSampleLevel(layer6,clamped_exact,uv,0.0);}
+    if count>0u {seen[0]=textureSampleLevel(layer1,clamped_exact,uv,0.0)*SHARE_SCALE;}
+    if count>4u {seen[1]=textureSampleLevel(layer2,clamped_exact,uv,0.0)*SHARE_SCALE;}
+    if count>8u {seen[2]=textureSampleLevel(layer3,clamped_exact,uv,0.0)*SHARE_SCALE;}
+    if count>12u {seen[3]=textureSampleLevel(layer4,clamped_exact,uv,0.0)*SHARE_SCALE;}
+    if count>16u {seen[4]=textureSampleLevel(layer5,clamped_exact,uv,0.0)*SHARE_SCALE;}
+    if count>20u {seen[5]=textureSampleLevel(layer6,clamped_exact,uv,0.0)*SHARE_SCALE;}
     return seen;
 }
 // A map light as the map compiler lit a surface at `position` facing it:

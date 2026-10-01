@@ -862,14 +862,14 @@ fn dynamic_floor(
     sun: Vec3,
     left: impl Fn(u32) -> [u8; 4],
     lights: &[u8],
-    seen: impl Fn(usize, u32) -> u8,
+    seen: impl Fn(usize, u32) -> f32,
 ) -> SceneData {
     use bri_render::map_lighting::DynamicSheet;
     let mut data = floor(sun, 0.0);
     let texels = |f: &dyn Fn(u32) -> [u8; 4]| -> Vec<u8> { (0..16 * 16).flat_map(|i| f(i % 16)).collect() };
     let visibility = (0..lights.len().div_ceil(4))
         .map(|k| {
-            texels(&|x| std::array::from_fn(|c| if 4 * k + c < lights.len() { seen(4 * k + c, x) } else { 0 }))
+            texels(&|x| std::array::from_fn(|c| if 4 * k + c < lights.len() { bri_render::map_lighting::share_byte(seen(4 * k + c, x)) } else { 0 }))
         })
         .collect();
     let sheet = DynamicSheet {
@@ -902,7 +902,7 @@ fn dynamic_lighting_lights_map_surfaces_live_from_every_light() -> Result<()> {
     let sun = Vec3::new(0.0, -1.0, 0.3);
     // 0.05 left over everywhere, no baked sun; the light reaches the
     // texels in front of the wall (x = 4, texel column 11) and not behind.
-    let floor_data = dynamic_floor(sun, |_| [13, 13, 13, 0], &[0], |_, x| if x <= 10 { 255 } else { 0 });
+    let floor_data = dynamic_floor(sun, |_| [13, 13, 13, 0], &[0], |_, x| if x <= 10 { 1.0 } else { 0.0 });
     let mut wall = cuboid(Vec3::new(4.0, 0.0, -10.0), Vec3::new(4.2, 6.0, 10.0));
     wall.images = vec![SceneImage::white()];
     wall.materials[0] = Material::surface("wall", 0, 0);
@@ -1007,7 +1007,7 @@ fn dynamic_lighting_takes_the_map_floors_sun_from_its_baked_share() -> Result<()
     }
     renderer.set_map_lighting(&device, &queue, Some(&lighting), true)?;
     let sun = Vec3::new(0.0, -1.0, 0.0);
-    let floor_data = dynamic_floor(sun, |x| [51, 51, 51, if x < 8 { 255 } else { 0 }], &[], |_, _| 0);
+    let floor_data = dynamic_floor(sun, |x| [51, 51, 51, if x < 8 { 255 } else { 0 }], &[], |_, _| 0.0);
     let floor = renderer.upload(&device, &queue, &floor_data)?;
     let slab = renderer.upload(&device, &queue, &cuboid(Vec3::new(-8.0, 4.0, -6.0), Vec3::new(-4.0, 4.3, -2.0)))?;
     let mut camera = Camera::perspective([0., 22., 0.1], [0., 0., 0.], 1.0, 1.4, 0.05, 400.0);
@@ -1048,7 +1048,7 @@ fn a_switched_off_light_leaves_the_same_light_in_every_live_mode() -> Result<()>
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let (width, height) = (128u32, 128u32);
     let sun = Vec3::new(0.0, -1.0, 0.3);
-    let floor_data = dynamic_floor(sun, |_| [13, 13, 13, 0], &[0], |_, _| 255);
+    let floor_data = dynamic_floor(sun, |_| [13, 13, 13, 0], &[0], |_, _| 1.0);
     let mut lighting = lamp_lighting(Vec3::new(0.0, 12.0, 0.0));
     lighting.lights = vec![MapLight {
         position: [0.0, 12.0, 0.0],

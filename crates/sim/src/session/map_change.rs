@@ -161,6 +161,8 @@ impl Session {
         let map = self.simulation.state().name.clone();
         self.system_chat(format!("\u{E003}{name} \u{E000}changed the map to {map}"));
         self.refresh_trust();
+        // A map load is a start: settings read only then take the host's.
+        self.start_settings();
         Ok(())
     }
 }

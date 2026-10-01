@@ -407,6 +407,9 @@ pub enum Command {
     BrickHand(BrickHand),
     /// The client's unplanted ghost brick moved, or went away.
     GhostBrick(Option<GhostBrick>),
+    /// The copy the client places moved, turned, mirrored or flipped, or
+    /// went away: where it stands, for its Add-On to show the others.
+    CopyPose(Option<CopyPose>),
     /// `serverCmdWand` (`/wand`): hold the player wand.
     Wand,
     /// `serverCmdStartTalking` / `serverCmdStopTalking`: the chat box is
@@ -490,6 +493,7 @@ impl Command {
             | Command::ControlPlayer
             | Command::BrickHand(_)
             | Command::GhostBrick(_)
+            | Command::CopyPose(_)
             // v20's emote commands quietly do nothing without a body.
             | Command::Emote(_)
             | Command::Talking(_)
@@ -524,6 +528,29 @@ impl GhostBrick {
                     .all(|v| v.is_finite() && v.abs() <= 1_000_000.0)
                 && self.quarter_turns < 4,
             "Invalid ghost brick"
+        );
+        Ok(())
+    }
+}
+/// Where a player's copy stands as they place it (only they see its
+/// bricks): its pivot, its turn, and whether it is mirrored or upside
+/// down, as `Command::PlaceBlueprint` would plant it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CopyPose {
+    pub anchor: [f32; 3],
+    pub quarter_turns: u8,
+    pub mirrored: bool,
+    pub flipped: bool,
+}
+impl CopyPose {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.anchor
+                .iter()
+                .all(|v| v.is_finite() && v.abs() <= 1_000_000.0)
+                && self.quarter_turns < 4,
+            "Invalid copy pose"
         );
         Ok(())
     }
@@ -824,6 +851,8 @@ pub struct Session {
     item_spawners: crate::item_spawners::ItemSpawners,
     spawn_loadout: ToolInventory,
     weapons: bri_weapons::WeaponsWorld,
+    /// Server settings the game reads only as it starts, as they were then.
+    started_settings: BTreeMap<String, bri_package::setting::SettingValue>,
     weapon_triggers: BTreeMap<OwnerId, weapons::Triggers>,
     weapon_gaps: BTreeMap<String, u64>,
     /// `$Pref::Server::FootballRecord`, in feet, for this server run.
@@ -954,6 +983,7 @@ impl Session {
             last_membership: BTreeMap::new(),
             item_spawners: Default::default(),
             spawn_loadout: ToolInventory::default(),
+            started_settings: BTreeMap::new(),
             weapon_triggers: BTreeMap::new(),
             weapon_gaps: BTreeMap::new(),
             football_record: 0,
@@ -1118,6 +1148,7 @@ impl Session {
     pub fn set_server_settings(&mut self, settings: bri_admin::ServerSettings) -> Result<()> {
         settings.validate()?;
         self.admin.settings = settings;
+        self.start_settings();
         Ok(())
     }
     /// The host's current Server Settings.
@@ -1781,7 +1812,7 @@ impl Session {
                 peer.saves = 0;
                 peer.ghost_reports = 0;
             }
-            if matches!(command, Command::GhostBrick(_)) {
+            if matches!(command, Command::GhostBrick(_) | Command::CopyPose(_)) {
                 peer.ghost_reports = peer.ghost_reports.saturating_add(1);
                 ensure!(peer.ghost_reports <= 30, "Ghost brick report rate exceeded");
             } else {
@@ -2131,6 +2162,10 @@ impl Session {
             }
             Command::GhostBrick(ghost) => {
                 self.set_ghost_brick(owner, ghost)?;
+                Ok(Reply::Accepted)
+            }
+            Command::CopyPose(pose) => {
+                self.set_copy_pose(owner, pose)?;
                 Ok(Reply::Accepted)
             }
             Command::BuildGesture(gesture) => {

@@ -167,6 +167,7 @@ impl AdminScreen {
                 ("NativeEnvironment", "Environment >>", 210),
                 ("NativeHostOptions", "Host Options", 246),
                 ("NativeAdminCredentials", "Passwords", 282),
+                ("NativeAddOnSettings", "Add-On Settings", 318),
             ] {
                 let b = button(
                     "BlockButtonProfile",
@@ -521,6 +522,19 @@ impl AdminScreen {
             if let Some(n) = self.view.id("NativeHostOptions") {
                 self.view
                     .set_visible(n, m.snapshot.as_ref().is_some_and(|s| s.local_host));
+                self.view.set_active(
+                    n,
+                    !busy
+                        && m.available(AdminFeature::HostOptions)
+                        && m.snapshot.as_ref().is_some_and(|s| s.options.is_some()),
+                );
+            }
+            if let Some(n) = self.view.id("NativeAddOnSettings") {
+                // The running Add-Ons' server-wide settings, which only the
+                // host changes, as Host Options.
+                let any = core.minigames.addon_settings.iter().any(|s| s.server);
+                self.view
+                    .set_visible(n, any && m.snapshot.as_ref().is_some_and(|s| s.local_host));
                 self.view.set_active(
                     n,
                     !busy
@@ -1189,9 +1203,24 @@ impl Screen for AdminScreen {
             }
             "nativeenvironment" => core.push(ScreenId::AdminEnvironment),
             "nativehostoptions" => core.push(ScreenId::AdminOptions),
+            "nativeaddonsettings" => {
+                core.minigame_addons = None;
+                core.server_addon_settings = true;
+                core.push(ScreenId::MiniGameAddOns);
+            }
             "nativeadmincredentials" => core.push(ScreenId::AdminCredentials),
             "canvas.popdialog(serverconfiggui);" => match self.collect_options() {
-                Ok(options) => {
+                Ok(mut options) => {
+                    // Add-On settings change in their own window: keep the
+                    // host's latest.
+                    if let Some(current) = core
+                        .admin
+                        .snapshot
+                        .as_ref()
+                        .and_then(|s| s.options.as_ref())
+                    {
+                        options.addon_settings = current.addon_settings.clone();
+                    }
                     // Only the local host changes these; they are its saved
                     // `$Pref::Server::*`, as in v20.
                     options_to_prefs(&options, &mut core.prefs);

@@ -687,12 +687,15 @@ impl super::copy_jobs::CopyWork for LoadWork {
                         continue;
                     }
                     let mut brick = placement.brick(copy, b);
-                    brick.color = self.colors[usize::from(brick.color)];
+                    if let Some(extras) = copy.extras_of(i) {
+                        extras.put_on(&mut brick);
+                    }
+                    brick.recolor(|c| self.colors[usize::from(c)]);
                     self.builder.push(&brick, definitions)?;
                 }
                 Source::Loose { bricks, shift } => {
                     let mut brick = bricks[i].clone();
-                    brick.color = self.colors[usize::from(brick.color)];
+                    brick.recolor(|c| self.colors[usize::from(c)]);
                     if self.builder.push_moved(&brick, *shift, definitions).is_err() {
                         self.left_out += 1;
                     }

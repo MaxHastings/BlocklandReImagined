@@ -1,6 +1,7 @@
 //! Native administration foundation. The host supplies authenticated connections;
 //! request bytes never select the acting connection, role, or host authority.
 pub mod view;
+use bri_package::setting::{self, SettingValue};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -344,7 +345,14 @@ pub struct ServerSettings {
     pub wrench_events_admin_only: bool,
     pub per_player: Quotas,
     pub lan: Quotas,
+    /// Running Add-Ons' server-wide settings changed from their defaults,
+    /// by `namespace:key` (RTB's `$Pref::Server::*` preferences). Values of
+    /// Add-Ons not running now are kept for when they run again.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub addon_settings: BTreeMap<String, SettingValue>,
 }
+/// Most server-wide Add-On setting values the host keeps.
+pub const MAX_ADDON_SETTINGS: usize = 512;
 impl Default for ServerSettings {
     fn default() -> Self {
         Self {
@@ -380,6 +388,7 @@ impl Default for ServerSettings {
                 players: 64,
                 vehicles: 20,
             },
+            addon_settings: BTreeMap::new(),
         }
     }
 }
@@ -398,6 +407,18 @@ impl ServerSettings {
             || self.public_domain_timeout_minutes < -1
             || !self.too_far_distance.is_finite()
             || !(0.0..=1_000_000.).contains(&self.too_far_distance)
+        {
+            return Err(Error::InvalidValue);
+        }
+        // Each value's own definition is checked by the running Add-Ons.
+        if self.addon_settings.len() > MAX_ADDON_SETTINGS
+            || self.addon_settings.iter().any(|(key, value)| {
+                !key.contains(':')
+                    || !setting::is_setting_ref(key)
+                    || value.as_text().is_some_and(|t| {
+                        t.chars().count() > setting::MAX_TEXT || t.chars().any(char::is_control)
+                    })
+            })
         {
             return Err(Error::InvalidValue);
         }

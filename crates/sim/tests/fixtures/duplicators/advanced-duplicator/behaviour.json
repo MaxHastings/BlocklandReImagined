@@ -12,6 +12,8 @@
     { "name": "cut", "cooldown_ticks": 60 },
     { "name": "cuteach", "cooldown_ticks": 60 },
     { "name": "floatadmin" },
+    { "name": "mirghostx" },
+    { "name": "mirghosty" },
     { "name": "fillcolor", "cooldown_ticks": 60 },
     { "name": "duphelp", "cooldown_ticks": 120 }
   ],

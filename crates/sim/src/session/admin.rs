@@ -655,6 +655,7 @@ impl AdminRuntime {
                     // chat length and TooFarDistance. The rest are kept and
                     // shown as set.
                     settings.validate()?;
+                    session.check_server_addon_settings(&settings.addon_settings)?;
                     self.settings = settings;
                     changed = true;
                 }
