@@ -25,10 +25,7 @@ fn options(input: PathBuf, out: PathBuf) -> Options {
     Options {
         input,
         out,
-        reference: None,
-        core: vec![],
-        installed: None,
-        version: "1.0.0".into(),
+        ..Default::default()
     }
 }
 

@@ -74,10 +74,8 @@ fn a_brick_inherits_a_stock_brick_from_the_installed_game() {
         import(&Options {
             input: addon(),
             out: temp(name).join("out"),
-            reference: None,
-            core: vec![],
             installed,
-            version: "1.0.0".into(),
+            ..Default::default()
         })
         .unwrap()
     };
@@ -94,10 +92,8 @@ fn a_brick_inherits_a_stock_brick_from_the_installed_game() {
     let report = import(&Options {
         input: addon(),
         out: out.clone(),
-        reference: None,
-        core: vec![],
         installed: Some(installed),
-        version: "1.0.0".into(),
+        ..Default::default()
     })
     .unwrap();
     let r = serde_json::to_value(&report).unwrap();
