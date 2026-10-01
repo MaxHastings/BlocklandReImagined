@@ -262,6 +262,29 @@ impl MapLight {
         Vec3::from(self.color) * falloff(distance, self.inner, self.outer) * facing
     }
 }
+/// A recovered light belongs to the light shapes (bulbs, tubes) nearest it,
+/// up to this far from their centres. The fit places a fixture's lights
+/// where their falloff fits the lightmaps best, not on the bulb: measured on
+/// v20's maps, the Bedroom bulb's main light sits 19.9 units from it and the
+/// Kitchen tubes' lights 8.8 to 15.9. Window and sun light, fitted farther
+/// from any fixture, stays unowned.
+pub const FIXTURE_REACH: f32 = 24.0;
+/// Shapes up to this many times the nearest one's distance share a light:
+/// the Kitchen's paired tubes fit as one light between them.
+pub const FIXTURE_SHARE: f32 = 1.5;
+/// Per light, the light shapes (`shapes`: an id and centre each) it belongs
+/// to: switched off when all of them break, dimmed by the share broken.
+pub fn fixture_owners<T: Copy>(lights: &[MapLight], shapes: &[(T, Vec3)]) -> Vec<Vec<(T, Vec3)>> {
+    lights
+        .iter()
+        .map(|light| {
+            let at = Vec3::from(light.position);
+            let nearest = shapes.iter().map(|(_, c)| c.distance(at)).fold(f32::INFINITY, f32::min);
+            let limit = FIXTURE_REACH.min(nearest * FIXTURE_SHARE);
+            shapes.iter().copied().filter(|(_, c)| c.distance(at) <= limit).collect()
+        })
+        .collect()
+}
 fn falloff(distance: f32, inner: f32, outer: f32) -> f32 {
     ((outer - distance) / (outer - inner).max(1e-3)).clamp(0.0, 1.0)
 }

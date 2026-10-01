@@ -21,7 +21,10 @@
 //! `BRI_DYNAMIC=1` renders the Dynamic mode alone (`{view}-dynamic.png`,
 //! with its GPU times), for comparison with a run without it.
 //! `BRI_OFF=i,j,...` switches those recovered lights off, as a broken bulb
-//! or tube does (each "Light shape" line lists its lights).
+//! or tube does (each "Light shape" line lists its lights); `BRI_BREAK=1`
+//! breaks every bulb and tube by the client's rule. Each recovered light is
+//! listed with its owning light shapes, and each light shape with the map
+//! surfaces within 40 units of it.
 //! `BRI_MAP=<map-substring>` draws the build on another map sharing its
 //! interior (a Kitchen save on KitchenDark). `BRI_BRICK_LIGHTS=1` adds the
 //! build's brick lights (the nearest 256 to each view, as the client).
@@ -421,6 +424,12 @@ fn main() -> Result<()> {
         lit
     });
     let unified_ms = ms(t.elapsed());
+    let light_shapes: Vec<(u32, Vec3)> = loaded
+        .breakables
+        .iter()
+        .filter(|b| ["lightBulbA", "fluorescentLight"].iter().any(|n| b.datablock.eq_ignore_ascii_case(n)))
+        .map(|b| (b.node, b.center))
+        .collect();
     if let Some(u) = &unified {
         println!("Map lighting: {} lights, report {:?}", u.lights.len(), u.report);
         // The lightmap leak cleanup, as the client applies it (BRI_LEAKS=0
@@ -461,6 +470,51 @@ fn main() -> Result<()> {
                 .map(|(i, d)| format!("light {i} at {d:.1}"))
                 .collect();
             println!("Light shape {} node {} at {:?}: {}", b.datablock, b.node, b.center, near.join(", "));
+        }
+        // Every recovered light and the light shapes it belongs to (the
+        // client's rule), then the map surfaces within 40 units of each
+        // light shape: what stays lit, or glows, when it breaks.
+        for (i, (l, owners)) in u.lights.iter().zip(bri_render::map_lighting::fixture_owners(&u.lights, &light_shapes)).enumerate() {
+            println!(
+                "Light {i}: at {:?} colour {:?} inner {} reach {} channel {:?}, owned by nodes {:?}",
+                l.position,
+                l.color,
+                l.inner,
+                l.outer,
+                l.channel,
+                owners.iter().map(|(n, _)| *n).collect::<Vec<_>>()
+            );
+        }
+        for &(node, centre) in &light_shapes {
+            for (index, batch) in scene.batches.iter().enumerate() {
+                let range = batch.indices.start as usize..batch.indices.end as usize;
+                let near: Vec<f32> = scene.indices[range]
+                    .chunks_exact(3)
+                    .map(|t| t.iter().map(|&v| centre.distance(Vec3::from(scene.vertices[v as usize].position))).fold(f32::INFINITY, f32::min))
+                    .filter(|&d| d <= 40.0)
+                    .collect();
+                if near.is_empty() {
+                    continue;
+                }
+                let m = &scene.materials[batch.material];
+                let lightmap = &scene.images[m.images[8]];
+                let n = (lightmap.rgba.len() / 4).max(1) as f32;
+                let mean: Vec<u32> = (0..3)
+                    .map(|c| (lightmap.rgba.chunks_exact(4).map(|t| f32::from(t[c])).sum::<f32>() / n) as u32)
+                    .collect();
+                println!(
+                    "  near node {node}: batch {index} '{}' {:?} {:?} lightmap image {} ({}x{}, mean {mean:?}){}: {} triangles, nearest {:.1}",
+                    m.name,
+                    m.kind,
+                    m.alpha,
+                    m.images[8],
+                    lightmap.width,
+                    lightmap.height,
+                    if bri_render::scene::decomposed_lightmap(m.parameters) { " decomposed" } else { "" },
+                    near.len(),
+                    near.iter().copied().fold(f32::INFINITY, f32::min)
+                );
+            }
         }
         // BRI_LIGHT_AT=x,y,z[;x,y,z...]: what each recovered light gives a
         // point (native Y-up) as the shader reads it: its falloff there and
@@ -683,10 +737,17 @@ fn main() -> Result<()> {
                 // BRI_OFF=i,j,...: those recovered lights switched off, as a
                 // broken bulb or tube does (the "Light shape" lines name
                 // each shape's lights).
-                if let Ok(text) = std::env::var("BRI_OFF") {
-                    let off: Vec<usize> = text.split(',').filter_map(|x| x.trim().parse().ok()).collect();
-                    let tints: Vec<Vec3> =
-                        (0..u.lights.len()).map(|i| if off.contains(&i) { Vec3::ZERO } else { Vec3::ONE }).collect();
+                // BRI_BREAK=1: every bulb and tube broken, by the client's
+                // rule (their lights off).
+                let off: Vec<usize> = std::env::var("BRI_OFF")
+                    .map(|text| text.split(',').filter_map(|x| x.trim().parse().ok()).collect())
+                    .unwrap_or_default();
+                let broken = std::env::var("BRI_BREAK").is_ok_and(|v| v == "1");
+                if broken || !off.is_empty() {
+                    let owners = bri_render::map_lighting::fixture_owners(&u.lights, &light_shapes);
+                    let tints: Vec<Vec3> = (0..u.lights.len())
+                        .map(|i| if off.contains(&i) || (broken && !owners[i].is_empty()) { Vec3::ZERO } else { Vec3::ONE })
+                        .collect();
                     renderer.set_map_light_tints(&queue, &tints);
                 }
             }

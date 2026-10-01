@@ -5705,16 +5705,6 @@ struct LightVolumeState {
 /// Breakable map shapes that are lights (v20 `Glass` datablocks): the
 /// Bedroom lamp's bulb and the Kitchen's fluorescent tubes.
 const LIGHT_SHAPES: &[&str] = &["lightBulbA", "fluorescentLight"];
-/// A recovered light belongs to the light shapes nearest it, up to this far
-/// from their centres. The fit places a fixture's lights where their falloff
-/// fits the lightmaps best, not on the bulb: measured on v20's maps, the
-/// Bedroom bulb's main light sits 19.9 units from it and the Kitchen tubes'
-/// lights 8.8 to 15.9. Window and sun light, fitted farther from any
-/// fixture, stays unowned.
-const LIGHT_SHAPE_REACH: f32 = 24.0;
-/// Shapes up to this many times the nearest one's distance share a light:
-/// the Kitchen's paired tubes fit as one light between them.
-const LIGHT_SHAPE_SHARE: f32 = 1.5;
 /// Each recovered light's run-time tint: what the Add-On rules give it (1
 /// as the map was lit), scaled by the share of its owning light shapes still
 /// whole, so it goes dark when all of them break and half when one of two
@@ -5727,21 +5717,11 @@ fn map_light_tints(
 ) -> Vec<Vec3> {
     lights
         .iter()
-        .map(|light| {
-            let at = Vec3::from(light.position);
-            let tint = bri_sim::session::MapLightRule::tint_at(rules, at);
-            let nearest = light_shapes
-                .iter()
-                .map(|(_, centre)| centre.distance(at))
-                .fold(f32::INFINITY, f32::min);
-            let limit = LIGHT_SHAPE_REACH.min(nearest * LIGHT_SHAPE_SHARE);
-            let (owners, whole) = light_shapes
-                .iter()
-                .filter(|(_, centre)| centre.distance(at) <= limit)
-                .fold((0u32, 0u32), |(owners, whole), (node, _)| {
-                    (owners + 1, whole + u32::from(!broken.contains(node)))
-                });
-            if owners == 0 { tint } else { tint * (whole as f32 / owners as f32) }
+        .zip(bri_render::map_lighting::fixture_owners(lights, light_shapes))
+        .map(|(light, owners)| {
+            let tint = bri_sim::session::MapLightRule::tint_at(rules, Vec3::from(light.position));
+            let whole = owners.iter().filter(|&&(node, _)| !broken.contains(&node)).count();
+            if owners.is_empty() { tint } else { tint * (whole as f32 / owners.len() as f32) }
         })
         .collect()
 }
