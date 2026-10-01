@@ -123,3 +123,105 @@ pub fn catalog() -> Catalog {
         scope: serde_json::Value::Null,
     }
 }
+
+/// [`catalog`] plus the brick outputs that spawn, push, reset and cancel
+/// (`spawnExplosion`, `spawnItem`, `radiusImpulse`, `setRayCasting`,
+/// `setEmitter`, `cancelEvents`, `incrementPrintCount`, the mini-game's
+/// `Reset`) and the bot input `onBotTouch` with its Bot and
+/// Driver targets. Kept apart so the fuzzers' catalog stays as it is.
+/// Parameter ranges are made up.
+pub fn catalog_extended() -> Catalog {
+    let mut c = catalog();
+    let template = c.inputs[0].clone();
+    c.inputs.push(InputDef {
+        id: "in/onBotTouch".into(),
+        name: "onBotTouch".into(),
+        targets: [
+            ("Self", "fxDTSBrick"),
+            ("Bot", "Player"),
+            ("Driver", "Player"),
+            ("Client", "GameConnection"),
+            ("MiniGame", "MiniGame"),
+        ]
+        .iter()
+        .map(|(a, b)| (a.to_string(), b.to_string()))
+        .collect(),
+        ..template
+    });
+    let template = c.outputs[0].clone();
+    let output = |class: &str, name: &str, params| OutputDef {
+        id: format!("out/{class}/{name}"),
+        class_name: class.into(),
+        name: name.into(),
+        params,
+        ..template.clone()
+    };
+    c.outputs.extend([
+        output("fxDTSBrick", "setRayCasting", vec![Param::Bool]),
+        output(
+            "fxDTSBrick",
+            "spawnExplosion",
+            vec![
+                Param::Datablock {
+                    class_name: "ProjectileData".into(),
+                },
+                Param::Float {
+                    min: 0.25,
+                    max: 4.0,
+                    step: 0.25,
+                    default: 1.0,
+                },
+            ],
+        ),
+        output(
+            "fxDTSBrick",
+            "spawnItem",
+            vec![
+                Param::Vector { max_length: 200.0 },
+                Param::Datablock {
+                    class_name: "ItemData".into(),
+                },
+            ],
+        ),
+        output(
+            "fxDTSBrick",
+            "radiusImpulse",
+            vec![
+                Param::Int {
+                    min: 1,
+                    max: 40,
+                    default: 6,
+                },
+                Param::Int {
+                    min: -8000,
+                    max: 8000,
+                    default: 30,
+                },
+                Param::Int {
+                    min: -8000,
+                    max: 8000,
+                    default: 15,
+                },
+            ],
+        ),
+        output(
+            "fxDTSBrick",
+            "setEmitter",
+            vec![Param::Datablock {
+                class_name: "ParticleEmitterData".into(),
+            }],
+        ),
+        output("fxDTSBrick", "cancelEvents", vec![]),
+        output(
+            "fxDTSBrick",
+            "incrementPrintCount",
+            vec![Param::Int {
+                min: 1,
+                max: 9,
+                default: 1,
+            }],
+        ),
+        output("MiniGame", "Reset", vec![]),
+    ]);
+    c
+}

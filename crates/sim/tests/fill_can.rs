@@ -111,18 +111,14 @@ fn add_ons() -> Arc<Catalog> {
     )
 }
 
-/// The Fill Can's weapons, and a stand-in for the stock colour spray can
-/// (base game content) so picking a colour works.
+/// The Fill Can's weapons over the made-up pack, whose colour spray can
+/// (base game content) lets picking a colour work.
 fn tool_pack() -> bri_weapons::Pack {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/fill-can/fill-can-tool/assets/weapons.json");
-    let mut pack = bri_weapons::Pack::from_json(&std::fs::read(path).unwrap()).unwrap();
-    let mut can = pack.images[IMAGE].clone();
-    can.id = "v20.image.bluespraycanimage".into();
-    can.name = "BlueSprayCanImage".into();
-    can.command = None;
-    can.paint_tint = false;
-    pack.images.insert(can.id.clone(), can);
+    let fill = bri_weapons::Pack::from_json(&std::fs::read(path).unwrap()).unwrap();
+    let (pack, notes) = bri_weapons::testing::pack().merge(vec![("fill-can-tool".into(), fill)]);
+    assert!(notes.is_empty(), "{notes:?}");
     pack
 }
 

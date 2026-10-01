@@ -1,14 +1,9 @@
 //! Wrench event rules checked against v20's scripts. Each test names the
 //! v20 line (`.research/bl-decompiled/v20/server/scripts/allGameScripts.cs`)
 //! it follows; docs/audits/v20-behaviour.md lists them all.
-use bri_content::{
-    brick::Brick as Mesh,
-    collision::{CollisionBody, Part},
-};
-use bri_events::{Catalog, InputDef, OutputDef, Param};
 use bri_minigames::Settings;
 use bri_sim::{
-    definitions::{Definition, Definitions},
+    definitions::{Definitions, Special},
     player::MoveInput,
     presentation::CueKind,
     session::{Command, MiniGameRequest, Session},
@@ -17,144 +12,16 @@ use bri_sim::{
 use bri_world::{EventRow, EventTarget, EventValue, OwnerId, World, authority::Edit};
 use glam::Vec3;
 use rapier3d::prelude::*;
+mod common;
+use common::{Fixture, Item};
 
-/// The vanilla inputs and the outputs these tests use, in v20's shape.
-fn catalog() -> Catalog {
-    let input = |name: &str| InputDef {
-        id: format!("in/{name}"),
-        class_name: "fxDTSBrick".into(),
-        name: name.into(),
-        targets: [
-            ("Self", "fxDTSBrick"),
-            ("Player", "Player"),
-            ("Client", "GameConnection"),
-            ("MiniGame", "MiniGame"),
-        ]
-        .iter()
-        .map(|(a, b)| (a.to_string(), b.to_string()))
-        .collect(),
-        source: "v20".into(),
-        source_line: 17122,
-    };
-    let output = |class: &str, name: &str, params| OutputDef {
-        id: format!("out/{class}/{name}"),
-        class_name: class.into(),
-        name: name.into(),
-        params,
-        append_client: true,
-        source: "v20".into(),
-        source_line: 17368,
-    };
-    Catalog {
-        schema_version: 1,
-        inputs: vec![
-            input("onActivate"),
-            input("onPlayerTouch"),
-            InputDef {
-                targets: [
-                    ("Self", "fxDTSBrick"),
-                    ("Bot", "Player"),
-                    ("Driver", "Player"),
-                    ("Client", "GameConnection"),
-                    ("MiniGame", "MiniGame"),
-                ]
-                .iter()
-                .map(|(a, b)| (a.to_string(), b.to_string()))
-                .collect(),
-                ..input("onBotTouch")
-            },
-        ],
-        outputs: vec![
-            output("fxDTSBrick", "setColor", vec![Param::PaintColor { default: 0 }]),
-            output("fxDTSBrick", "setRendering", vec![Param::Bool]),
-            output("fxDTSBrick", "setRayCasting", vec![Param::Bool]),
-            output(
-                "fxDTSBrick",
-                "spawnExplosion",
-                vec![
-                    Param::Datablock {
-                        class_name: "ProjectileData".into(),
-                    },
-                    Param::Float {
-                        min: 0.2,
-                        max: 2.0,
-                        step: 0.1,
-                        default: 1.0,
-                    },
-                ],
-            ),
-            output(
-                "fxDTSBrick",
-                "radiusImpulse",
-                vec![
-                    Param::Int { min: 1, max: 100, default: 5 },
-                    Param::Int { min: -50000, max: 50000, default: 50 },
-                    Param::Int { min: -50000, max: 50000, default: 10 },
-                ],
-            ),
-            output(
-                "fxDTSBrick",
-                "fakeKillBrick",
-                vec![
-                    Param::Vector { max_length: 200.0 },
-                    Param::Int { min: 0, max: 300, default: 5 },
-                ],
-            ),
-            output(
-                "fxDTSBrick",
-                "spawnItem",
-                vec![
-                    Param::Vector { max_length: 200.0 },
-                    Param::Datablock {
-                        class_name: "ItemData".into(),
-                    },
-                ],
-            ),
-            output("Player", "Kill", vec![]),
-            output("MiniGame", "Reset", vec![]),
-        ],
-        sources: vec![],
-        scope: serde_json::Value::Null,
-    }
-}
-
+/// A session on a flat floor with one made-up brick, `plate`, and the
+/// made-up event catalog with the outputs these rules use.
 fn session(lan: bool) -> Session {
-    let mesh = Mesh {
-        schema_version: 1,
-        id: "plate".into(),
-        footprint_studs: [2, 2],
-        height_plates: 3,
-        attachment_rows: vec!["bb".into(); 6],
-        collision_boxes: vec![],
-        needs_external_collision: false,
-        coverage: None,
-        quads: vec![],
-    };
-    let collision = CollisionBody {
-        id: "plate".into(),
-        parts: vec![Part::Box {
-            center: [0.0; 3],
-            size: [1.0, 0.6, 1.0],
-        }],
-    };
-    let shape = bri_physics::content::collider(&collision)
-        .unwrap()
-        .build()
-        .shared_shape()
-        .clone();
     let definitions = Definitions {
         entries: [(
             "plate".into(),
-            Definition {
-                mesh,
-                collision,
-                shape,
-                indestructible: false,
-                special: Default::default(),
-                reflection: None,
-                link: None,
-                glass: [0.0; 4],
-            },
+            bri_sim::testing::definition("plate", [2, 2], 3, Special::None, false),
         )]
         .into(),
     };
@@ -169,7 +36,8 @@ fn session(lan: bool) -> Session {
         .unwrap(),
     );
     s.set_lan_host(lan);
-    s.set_event_catalog(catalog(), Vec::new()).unwrap();
+    s.set_event_catalog(bri_events::testing::catalog_extended(), Vec::new())
+        .unwrap();
     s.set_spawn_points(vec![Vec3::new(0.0, 0.05, 0.0)]).unwrap();
     s
 }
@@ -286,24 +154,16 @@ fn a_lan_minigame_owner_resets_their_game_from_anyones_brick() {
     }
 }
 
+on_both! {
 /// allGameScripts.cs:17660 `fxDTSBrick::spawnExplosion` (and spawnItem
 /// 17514, spawnProjectile 17600) do nothing from a brick that is neither
 /// drawn nor hit by rays.
-#[test]
-fn a_hidden_brick_spawns_no_explosion() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../content/weapons-pack-009/weapons.json");
-    let Ok(bytes) = std::fs::read(&path) else {
-        eprintln!("\n**** skipped: a_hidden_brick_spawns_no_explosion needs content/weapons-pack-009 ****\n");
-        return;
-    };
-    let pack = bri_weapons::Pack::from_json(&bytes).unwrap();
-    let rocket = pack
-        .projectiles
-        .keys()
-        .find(|id| id.contains("rocket"))
-        .expect("a rocket projectile")
-        .clone();
+fn a_hidden_brick_spawns_no_explosion(f: &Fixture) {
+    let pack = f.weapons.clone();
+    let rocket = pack.images[&pack.items[f.item(Item::Rocket)].image]
+        .projectile
+        .clone()
+        .expect("a rocket projectile");
     for hidden in [false, true] {
         let mut s = session(true);
         s.set_weapon_pack(pack.clone()).unwrap();
@@ -337,6 +197,7 @@ fn a_hidden_brick_spawns_no_explosion() {
             });
         assert_eq!(exploded, !hidden, "hidden {hidden}");
     }
+}
 }
 
 /// allGameScripts.cs:17868 `fxDTSBrick::radiusImpulse`: outside minigames an
@@ -559,25 +420,14 @@ fn bot_touch_rows_run_as_the_spawn_brick_owner() {
     }
 }
 
+on_both! {
 /// allGameScripts.cs:17868 `fxDTSBrick::radiusImpulse` searches items too
 /// (`$TypeMasks::ItemObjectType`): on a LAN server a dropped item in reach
 /// is thrown up; on an internet server, outside minigames, it is not (an
 /// item has no client).
-#[test]
-fn a_radius_impulse_throws_items_on_lan_servers() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../content/weapons-pack-009/weapons.json");
-    let Ok(bytes) = std::fs::read(&path) else {
-        eprintln!("\n**** skipped: a_radius_impulse_throws_items_on_lan_servers needs content/weapons-pack-009 ****\n");
-        return;
-    };
-    let pack = bri_weapons::Pack::from_json(&bytes).unwrap();
-    let item = pack
-        .items
-        .keys()
-        .find(|id| id.contains("hammer"))
-        .expect("a hammer item")
-        .clone();
+fn a_radius_impulse_throws_items_on_lan_servers(f: &Fixture) {
+    let pack = f.weapons.clone();
+    let item = bri_weapons::testing::HAMMER.to_string();
     for lan in [true, false] {
         let mut s = session(lan);
         s.set_weapon_pack(pack.clone()).unwrap();
@@ -620,6 +470,7 @@ fn a_radius_impulse_throws_items_on_lan_servers() {
         steps(&mut s, &[builder], 20);
         assert_eq!(height(&s) > resting + 0.5, lan, "lan {lan}: item at {} from {resting}", height(&s));
     }
+}
 }
 
 /// mainServer.cs:1102-1116 `serverCmdMessageSent`: the same line (any case)

@@ -24,9 +24,14 @@ pub const PRINTER_IMAGE: &str = "v20.image.printgunimage";
 pub const WAND_IMAGE: &str = "v20.image.wandimage";
 /// `serverCmdMagicWand`'s image; no inventory item holds it.
 pub const ADMIN_WAND_IMAGE: &str = "v20.image.adminwandimage";
-/// The ghost brick's images, which the tutorial checks are in hand.
+/// The ghost brick's images, which the tutorial checks are in hand. A
+/// click swings them ([`BRICK_FIRE_SEQUENCE`], trailing
+/// [`BRICK_TRAIL_EMITTER`]) and throws [`BRICK_DEPLOY_PROJECTILE`].
 pub const BRICK_IMAGE: &str = "v20.image.brickimage";
 pub const HORSE_BRICK_IMAGE: &str = "v20.image.horsebrickimage";
+/// The brick images' Fire state: its image sequence and its emitter.
+pub const BRICK_FIRE_SEQUENCE: &str = "testBrickThrow";
+pub const BRICK_TRAIL_EMITTER: &str = "testBrickTrailEmitter";
 
 // --- Guns. ---
 /// Semi-automatic: one shot per click, ejecting a casing. Its Ready state
@@ -288,6 +293,10 @@ impl S {
         self.0.sound = sound.into();
         self
     }
+    fn sequence(mut self, sequence: &str) -> Self {
+        self.0.sequence = sequence.into();
+        self
+    }
     fn eject_shell(mut self) -> Self {
         self.0.eject_shell = true;
         self
@@ -508,12 +517,25 @@ pub fn pack() -> Pack {
         (BRICK_IMAGE, "brickImage"),
         (HORSE_BRICK_IMAGE, "horseBrickImage"),
     ] {
-        add_image(image(
-            id,
-            name,
-            None,
-            vec![S::new("Activate", 4).timeout(1).0, S::new("Ready", 0).0],
-        ));
+        add_image(Image {
+            color_shift: true,
+            ..image(
+                id,
+                name,
+                Some(BRICK_DEPLOY_PROJECTILE),
+                vec![
+                    S::new("Activate", 4).timeout(1).0,
+                    S::new("Ready", 0).down(2).0,
+                    S::new("Fire", 6)
+                        .script("onFire")
+                        .sequence(BRICK_FIRE_SEQUENCE)
+                        .emitter(BRICK_TRAIL_EMITTER, 0.1)
+                        .timeout(3)
+                        .0,
+                    S::new("WaitForRelease", 0).up(1).0,
+                ],
+            )
+        });
     }
 
     // Guns.
