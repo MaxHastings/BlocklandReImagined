@@ -514,6 +514,11 @@ pub enum GameAction {
     ToolWheel {
         notches: i32,
     },
+    /// The wheel in an Add-On's orbit camera that zooms: whole notches,
+    /// positive rolled forward (closer).
+    CameraZoom {
+        notches: i32,
+    },
     /// A key a package HUD declared: send that package's command.
     Package {
         package: String,
@@ -1276,6 +1281,9 @@ pub enum UiUpdate {
     /// and nothing else sees it. The UI tracks the trigger itself, so a
     /// press and a roll in the same frame already reach the tool.
     ToolWheel(bool),
+    /// An Add-On's orbit camera zooms: the wheel goes to it
+    /// ([`GameAction::CameraZoom`]) instead of the inventory.
+    CameraWheel(bool),
     /// Aimed through a scope with steps (`Zoom::levels`): the mouse wheel
     /// zooms instead of scrolling the inventory, with no trigger held.
     AimWheel(bool),

@@ -246,6 +246,20 @@ impl Session {
         }
     }
 
+    /// `unmountImage(0)`: empty the hand, whatever is in it. A tool or can
+    /// is put away; bricks in hand are too, here and on the client
+    /// ([`super::Notice::PutAway`]), which owns the brick choice.
+    pub(super) fn put_away_hand(&mut self, owner: OwnerId) -> Result<()> {
+        let peer = self.peers.get_mut(&owner).context("No such player")?;
+        peer.tutorial.hand.equipped = false;
+        self.equip_tool(owner, None)?;
+        if self.holds_brick(owner) {
+            self.weapons.equip(ActorId(owner), None)?;
+        }
+        self.notify(owner, super::Notice::PutAway);
+        Ok(())
+    }
+
     /// Record a client's ghost brick, for the others to see. Only a living
     /// player with bricks in hand has one; a brick the server does not know
     /// is refused.

@@ -262,6 +262,9 @@ pub enum Command {
         ownership: bool,
     },
     Activate,
+    /// Letting go of fire after an `Activate`: the empty-hand trigger's
+    /// release, for Add-Ons' `on_trigger` (v20's `Armor::onTrigger`).
+    ActivateRelease,
     Chat(String),
     /// `serverCmdSuicide`.
     Suicide,
@@ -378,6 +381,7 @@ impl Command {
             | Command::Tool(_)
             | Command::DropTool { .. }
             | Command::WeaponTrigger { .. }
+            | Command::ActivateRelease
             | Command::Avatar(_)
             | Command::SaveBuild { .. }
             | Command::LoadBuild { .. }
@@ -1686,9 +1690,26 @@ impl Session {
                     self.vehicles.set_fire(owner, false);
                 }
                 ensure!(!down || peer.combat.alive, "Dead players cannot fire");
+                // With nothing in hand (a tool switch an Add-On refused, or
+                // one not yet mounted) the trigger is the empty-hand one.
+                if peer.combat.alive
+                    && self
+                        .weapons
+                        .image_state(bri_weapons::ActorId(owner), 0)
+                        .is_none()
+                    && self.package_trigger(owner, 0, down)
+                {
+                    return Ok(Reply::Accepted);
+                }
                 self.weapon_trigger(owner, down, direction, aim.is_some())?;
                 if down {
                     self.note_shot(owner);
+                }
+                Ok(Reply::Accepted)
+            }
+            Command::ActivateRelease => {
+                if peer.combat.alive {
+                    self.package_trigger(owner, 0, false);
                 }
                 Ok(Reply::Accepted)
             }
@@ -1810,6 +1831,11 @@ impl Session {
                 Ok(Reply::Accepted)
             }
             Command::ControlPlayer => {
+                // An Add-On's orbit camera is the Add-On's to end.
+                ensure!(
+                    !matches!(peer.control, ControlObject::Orbit { .. }),
+                    "An Add-On holds your camera"
+                );
                 self.return_to_body(owner)?;
                 Ok(Reply::Accepted)
             }
@@ -1849,7 +1875,17 @@ impl Session {
                 self.treasure_status(owner)?;
                 Ok(Reply::Accepted)
             }
-            Command::BrickHand(hand) => {
+            Command::BrickHand(mut hand) => {
+                // Taking bricks in hand is equipping (an Add-On's packaged
+                // `serverCmdUseInventory`): refused, the client puts them
+                // back.
+                if hand.equipped
+                    && !self.brick_equipped(owner)
+                    && self.package_policy("equip", owner).is_err()
+                {
+                    hand.equipped = false;
+                    self.notify(owner, Notice::PutAway);
+                }
                 self.set_brick_hand(owner, hand)?;
                 Ok(Reply::Accepted)
             }
@@ -1869,6 +1905,7 @@ impl Session {
             }
             Command::EquipTool { slot } => {
                 ensure!(peer.combat.alive, "Dead players cannot use tools");
+                self.package_policy("equip", owner)?;
                 self.equip_tool(owner, slot)?;
                 Ok(Reply::Accepted)
             }
@@ -2001,6 +2038,7 @@ impl Session {
                 Ok(Reply::Planted(id))
             }
             Command::UseSprayCan { color } => {
+                self.package_policy("equip", owner)?;
                 self.use_spray_can(owner, tools::SPRAY_CAN_IMAGE, Some(color))?;
                 if let Some(peer) = self.peers.get_mut(&owner) {
                     peer.random_color = None;
@@ -2011,14 +2049,16 @@ impl Session {
                 let image = tools::FX_CAN_IMAGES
                     .get(usize::from(fx))
                     .context("Unknown FX can")?;
+                self.package_policy("equip", owner)?;
                 self.use_spray_can(owner, image, None)?;
                 Ok(Reply::Accepted)
             }
             Command::Activate => {
                 ensure!(peer.combat.alive, "Dead players cannot activate bricks");
-                // An Add-On's `on_activate` (v20's packaged
-                // `Player::activateStuff`) may take the click first.
-                if self.package_activate(owner) {
+                // An Add-On may take the empty-hand click first: its
+                // `on_trigger` (v20's packaged `Armor::onTrigger`), then its
+                // `on_activate` (`Player::activateStuff`).
+                if self.package_trigger(owner, 0, true) || self.package_activate(owner) {
                     return Ok(Reply::Activated(None));
                 }
                 let peer = self.peers.get_mut(&owner).context("Unknown connection")?;

@@ -380,6 +380,9 @@ pub struct Core {
     /// image's `wheel` command): the wheel goes to it, not the inventory.
     /// Whether the trigger is held is `held_controls`, this UI's own.
     pub wheel_tool: bool,
+    /// An Add-On's orbit camera zooms on the wheel, in place of the
+    /// inventory.
+    pub wheel_camera: bool,
     /// Aimed through a scope with steps: the wheel zooms, trigger or not.
     pub aim_wheel: bool,
     /// The scope picture drawn over the screen while aiming, if any.
@@ -506,6 +509,7 @@ impl Core {
         self.super_shift = false;
         self.zoom_on = false;
         self.wheel_tool = false;
+        self.wheel_camera = false;
         self.aim_wheel = false;
         self.scope_overlay = None;
         self.cursor_forced = false;
@@ -1314,6 +1318,7 @@ impl Ui {
             super_shift_time: 0,
             zoom_on: false,
             wheel_tool: false,
+            wheel_camera: false,
             aim_wheel: false,
             scope_overlay: None,
             cursor_forced: false,
@@ -1778,6 +1783,7 @@ impl Ui {
             UiUpdate::FirstPerson(on) => c.first_person = on,
             UiUpdate::HideCrosshair(on) => c.hide_crosshair = on,
             UiUpdate::ToolWheel(on) => c.wheel_tool = on,
+            UiUpdate::CameraWheel(on) => c.wheel_camera = on,
             UiUpdate::AimWheel(on) => c.aim_wheel = on,
             UiUpdate::ScopeOverlay(overlay) => {
                 c.scope_overlay = overlay.filter(|(_, aspect)| aspect.is_finite() && *aspect > 0.0)
@@ -2139,6 +2145,13 @@ impl Ui {
                     let most = NUM_WHEEL_STEPS as i32;
                     let notches = (steps as i32).clamp(-most, most);
                     self.core.game(GameAction::ToolWheel { notches });
+                    self.flush();
+                    return;
+                }
+                if self.content.id() == ScreenId::Play && dialogs == 0 && self.core.wheel_camera {
+                    let most = NUM_WHEEL_STEPS as i32;
+                    let notches = (steps as i32).clamp(-most, most);
+                    self.core.game(GameAction::CameraZoom { notches });
                     self.flush();
                     return;
                 }

@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "script": "throwing.rhai",
+  "state": {
+    "player": {
+      "holding": { "default": -1, "persist": false },
+      "holder": { "default": -1, "persist": false },
+      "grabbed_at": { "default": -1, "persist": false },
+      "timeout_at": { "default": -1000000, "persist": false },
+      "old_scale": { "default": 1.0, "persist": false },
+      "charge_at": { "default": -1, "persist": false }
+    }
+  },
+  "on_trigger": true,
+  "on_activate": true,
+  "on_death": true,
+  "on_leave": true,
+  "policies": ["equip"],
+  "tick_interval": 12
+}

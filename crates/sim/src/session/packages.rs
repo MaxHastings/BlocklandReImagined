@@ -1827,15 +1827,13 @@ impl Session {
                     None => self.weapons.swap_image(actor, None),
                 }
             }
-            Op::UnmountImage { player } => {
-                ensure!(self.peers.contains_key(&player), "No such player");
-                self.equip_tool(player, None)
-            }
+            Op::UnmountImage { player } => self.put_away_hand(player),
             Op::MountObject {
                 mount,
                 rider,
                 node,
                 can_dismount,
+                turn,
             } => {
                 ensure!(
                     caller.is_none_or(|c| c == mount),
@@ -1846,9 +1844,22 @@ impl Session {
                     self.may_move(mount, ObjectRef::Player(rider)),
                     "Player {mount} may not move {rider} under the minigame and trust rules"
                 );
-                self.mount_player(mount, rider, node, can_dismount)
+                self.mount_player(mount, rider, node, can_dismount)?;
+                self.turn_rider(rider, turn);
+                Ok(())
             }
-            Op::UnmountObject { rider } => self.unmount_player(rider),
+            Op::UnmountObject { rider } => {
+                // A command's player lets themselves off, or someone they
+                // carry or may move.
+                ensure!(
+                    caller.is_none_or(|c| c == rider
+                        || self.riding_seat(rider).is_some_and(|(mount, _)| mount == c)
+                        || self.may_move(c, ObjectRef::Player(rider))),
+                    "Player {} may not take {rider} off their mount",
+                    caller.unwrap_or_default()
+                );
+                self.unmount_object(rider)
+            }
             Op::SetScale { player, scale } => {
                 ensure!(self.peers.contains_key(&player), "No such player");
                 self.set_player_scale(player, scale)?;
@@ -1860,6 +1871,7 @@ impl Session {
                 peer.look_limits = limits;
                 Ok(())
             }
+            Op::OrbitCamera { player, orbit } => self.orbit_camera(player, orbit),
             Op::Sound { profile, at } => {
                 self.take_cue(package)?;
                 match at {
@@ -3109,20 +3121,53 @@ impl Session {
     /// `on_activate(player)` of every package that declares it, in load
     /// order, until one takes the click (returns `true`).
     pub(super) fn package_activate(&mut self, owner: OwnerId) -> bool {
+        self.package_take(
+            owner,
+            |b| b.on_activate,
+            "on_activate",
+            vec![Dynamic::from_int(owner as i64)],
+        )
+    }
+    /// `on_trigger(player, trigger, down)` of every package that declares
+    /// it, in load order, until one takes the press (returns `true`).
+    pub(super) fn package_trigger(&mut self, owner: OwnerId, trigger: u8, down: bool) -> bool {
+        self.package_take(
+            owner,
+            |b| b.on_trigger,
+            "on_trigger",
+            vec![
+                Dynamic::from_int(owner as i64),
+                Dynamic::from_int(i64::from(trigger)),
+                Dynamic::from_bool(down),
+            ],
+        )
+    }
+    /// Ask a player's input hook of each declaring package, in load order,
+    /// until one answers `true`. Bots have no input to take.
+    fn package_take(
+        &mut self,
+        owner: OwnerId,
+        declared: fn(&bri_package_runtime::content::Behaviour) -> bool,
+        function: &str,
+        args: Vec<Dynamic>,
+    ) -> bool {
         let Some(host) = self.packages.as_ref() else {
             return false;
         };
+        if self.bots.is_bot(owner) {
+            return false;
+        }
         let hooks: Vec<String> = host
             .catalog
             .behaviours()
-            .filter(|(_, b)| b.on_activate)
+            .filter(|(_, b)| declared(b))
             .map(|(id, _)| id.clone())
             .collect();
         for package in hooks {
             let reply = self.run_package(
                 &package,
-                "on_activate",
-                vec![Dynamic::from_int(owner as i64)],
+                function,
+                args.clone(),
                 Budget::Command,
                 Some(owner),
                 None,

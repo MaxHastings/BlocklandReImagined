@@ -106,6 +106,9 @@ pub struct Building {
     pending_equipment: BTreeMap<u64, (Option<usize>, Equipment)>,
     active_tool: Option<usize>,
     weapon_fire_down: bool,
+    /// Fire pressed with empty hands (`Activate`) and not yet let go: its
+    /// release goes to the host too (`ActivateRelease`).
+    activate_down: bool,
     /// The server shows an image in this player's right hand (for example
     /// a ball picked up without a tool slot), so fire goes to its trigger.
     held_image: bool,
@@ -169,6 +172,7 @@ impl Building {
             pending_equipment: BTreeMap::new(),
             active_tool: None,
             weapon_fire_down: false,
+            activate_down: false,
             held_image: false,
             held_brick: false,
             fire_request: 0,
@@ -645,6 +649,19 @@ impl Building {
     }
     pub fn set_held_brick(&mut self, held: bool) {
         self.held_brick = held;
+    }
+
+    /// The host emptied the hand (an Add-On's `unmountImage`): put away
+    /// whatever is in it, bricks and cans included, as `UnUseTool` does,
+    /// without asking the host again.
+    pub fn put_away(&mut self) -> Vec<UiUpdate> {
+        self.equipment = Equipment::None;
+        self.active_tool = None;
+        self.selected_slot = None;
+        vec![
+            UiUpdate::SetActiveTool(None),
+            UiUpdate::SetActiveBrick(None),
+        ]
     }
 
     /// A map change builds a new controller; the player keeps the bricks
@@ -1261,6 +1278,10 @@ impl Building {
                 control: HeldControl::Fire,
                 down,
             }) => {
+                if !*down && self.activate_down {
+                    self.activate_down = false;
+                    out.commands.push(Command::ActivateRelease);
+                }
                 if !*down && self.weapon_fire_down {
                     self.weapon_fire_down = false;
                     out.commands.push(Command::WeaponTrigger { down: false });
@@ -1477,6 +1498,9 @@ impl Building {
             // Everything else is an image the server's state machine swings.
             _ => Command::Activate,
         };
+        if matches!(command, Command::Activate) {
+            self.activate_down = true;
+        }
         out.commands.push(command);
         Ok(())
     }
@@ -2404,6 +2428,22 @@ mod tests {
             &b.ui_action(&fire(), &player()).unwrap().unwrap().commands[..],
             [Command::Activate]
         ));
+        // Its release reaches the host too, once (`Armor::onTrigger`).
+        let release = UiAction::Game(GameAction::Held {
+            control: HeldControl::Fire,
+            down: false,
+        });
+        assert!(matches!(
+            &b.ui_action(&release, &player()).unwrap().unwrap().commands[..],
+            [Command::ActivateRelease]
+        ));
+        assert!(
+            b.ui_action(&release, &player())
+                .unwrap()
+                .unwrap()
+                .commands
+                .is_empty()
+        );
     }
 
     fn weapon_controller() -> Building {

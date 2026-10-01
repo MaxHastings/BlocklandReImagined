@@ -8502,6 +8502,100 @@ HookShot's temple-relic look won over the gunmetal winch; the
 `grappling-hook*` Add-Ons, their sounds and icon are gone. Engine seams
 unchanged. Tests: `bri-sim --test hookshot` 7 (adds hold-to-hang and let
 go, winch keys and wheel, carried by a player and /hookobjects).
+
+## 2026-10-01 Player Throwing port (branch `claude/project-thread-n5mlwe`, protocols 71 and 72, for v0.1.11; the Gate renumbers)
+
+Max picked Electrk's Player Throwing ("Electrk's is fine") as the classic
+throw Add-On, run from the player's own copy ("originals only"). Port
+`crates/addon-import/ports/script_playerthrowing`, listed in `ports.json` as
+verified (partial until the follow-ups below), checked against the copy the Gate imported (sha256 `aef5a450...`).
+The original is read only to write the port; none of it is in the repo.
+It ships bundled in the download (the bundle lane imports Max's copy at
+release).
+
+The port is a host-rules companion (`script_playerthrowing-rules`, from the
+Fill Can companion work, merged here): `rules/throwing.rhai`, one function
+per v20 function. Its numbers are read from the imported copy by the
+`covers` patterns (mount node, held scale, reach, look limits, throw clamp,
+charge notches, front check, set-down rule, both animations); the server
+preferences keep their defaults (minigames only, grab every 5 s, escape
+after 3 s, 100 ms notches, 2.5 times the charge).
+
+New engine seams it needed (general, documented in `docs/modding`):
+- `on_trigger(player, trigger, down)` (`Armor::onTrigger`): an empty-hand
+  fire press and its release. The client sends `ActivateRelease` when the
+  button that sent `Activate` comes up; a fire press with no image mounted
+  reaches it too. The press is asked before `on_activate`.
+- The `equip` policy (`allow_equip`): the host asks before `EquipTool`,
+  `UseSprayCan` and `UseFxCan` (the Add-On's `serverCmdUseTool` package).
+- `unmount_object` also takes a player out of a vehicle seat (`dismount()`,
+  as a grab does), and checks its caller: the rider, their mount, or a
+  player who may move them.
+
+Follow-up (protocol 72), closing the two gaps the first cut left, with
+general seams:
+- `orbit_camera(p, target, distance)` / `orbit_camera(p, ())` (`player`):
+  `ControlObject::Orbit { target, distance }`, replicated in vitals. The
+  client orbits the target at that distance (the spy and corpse cameras
+  keep 8). A click in it is sent as `Activate` / `ActivateRelease`, so it
+  reaches `on_trigger` and `on_activate` (v20's `Observer::onTrigger` in
+  the Add-On's mode); `ControlPlayer` is refused. The target leaving ends
+  it; admin cameras and driven entities are not taken over. The held
+  player now watches the holder from the copy's `setOrbitMode` distance
+  and clicks to struggle, as in v20.
+- `unmount_image` empties the whole hand: bricks in hand too, on the host
+  (no brick image, no ghost for others) and on the client
+  (`Notice::PutAway`). Taking bricks in hand now asks the `equip` policy
+  too (the client's `BrickHand` report; refused, the host sends `PutAway`),
+  and the `EquipTool { slot: None }` the client sends with it is vetoed. The port now also covers
+  `Observer::onTrigger`, `serverCmdUseInventory` and
+  `serverCmdInstantUseBrick`.
+
+Second follow-up (Max: every gap against the original closed), which marks
+the port verified:
+- `mount_object(mount, rider, node, can_dismount, turn)`: the rider's body
+  turn on the mount point (`mRot.z`, as `setTransform` on a mounted player
+  sets it), until their own turn moves it. A rider whose moves a camera has
+  (an orbit, a spy) now keeps their turn instead of taking the body's
+  world yaw as a seat turn every tick, which spun them.
+  - The port computes the turn the way Torque does for this Add-On's
+    `setTransform(pos @ " 0 0 0.85 90")`: the angle is radians and the
+    axis is not normalised. QuatF(AngAxisF), its matrix's forward column
+    (2wz, 1 - 2z^2), and Player::setTransform's `-atan2(-x, y)` give +93.5
+    degrees, about a quarter turn right. Checked against Torque3D 1.1's MIT
+    source (mathTypes.cpp TypeTransformF, sceneObject.cpp setTransform,
+    mAngAxis.cpp, mQuat.cpp, mMath_C.cpp m_quatF_set_matF_C, player.cpp
+    Player::setTransform/setPosition); an earlier version recalled from
+    memory had the sign backwards. The reasoning is in the rule's
+    `held_turn`.
+- `orbit_camera(p, target, min, max, distance)`:
+  `ControlObject::Orbit { target, min, max, distance }`. The client's wheel
+  (`UiUpdate::CameraWheel`, `GameAction::CameraZoom`) zooms it a unit a
+  notch within the range, kept until the host hands over another camera.
+  The port reads `setOrbitMode`'s 5, 10 and 5.
+
+The server preferences keep their defaults until hosts get Add-On
+settings (the Tier lane's seam); every behaviour the script has is ported.
+
+Tests (content-free; the stand-in Add-On in
+`crates/addon-import/tests/fixtures/ports/Script_PlayerThrowing` is ours,
+CC0, with its own numbers):
+- `cargo test -p bri-addon-import --test ports throwing`: the port fills
+  this copy's numbers into compiling rules; hosted: grab onto the right
+  hand at 0.75 scale with look limits, bricks put away, the camera
+  orbiting the holder 6 units out, no tool switching for either, no
+  escape before 3 s then free and restored, the 5 s grab timeout, a charged
+  throw at 2.5 x 11 where the holder looks.
+- `cargo test -p bri-sim --test carry_rules`: `on_trigger` hears press and
+  release, the `equip` veto, `unmount_object` off a vehicle (the test's own
+  horse).
+- `cargo test -p bri-sim --test script_api`: `orbit_camera` limits, the
+  target leaving, an admin camera kept; `unmount_image` puts bricks away.
+- `bri-client` `an_add_on_orbit_sits_at_its_own_distance`: the distance,
+  the wheel's range, the zoom kept every frame.
+- The hosted port test also checks the quarter turn on the hand (the
+  stand-in's `" 0 0 1 1.5708"`) held while the held player's mouse turns.
+
 ## 2026-10-01 Portals: going through shows the same picture (branch `claude/portal-bricks-5be9t8`)
 
 Max, v0.1.10: walking through a portal felt "98% perfect" but jarred at

@@ -385,6 +385,8 @@ pub struct App {
     /// The held tool's `wheel` command: while its trigger is held, it takes
     /// the mouse wheel (`UiUpdate::ToolWheel`).
     tool_wheel: Option<String>,
+    /// The UI sends the wheel to an Add-On's zooming orbit camera.
+    camera_wheel: bool,
     /// The aim takes the mouse wheel (`Controls::aim_takes_wheel`).
     aim_wheel: bool,
     /// The scope overlay shown (`ItemUi::scope_overlay`).
@@ -1680,6 +1682,7 @@ impl App {
             steering_sent: None,
             crosshair_hidden: false,
             tool_wheel: None,
+            camera_wheel: false,
             aim_wheel: false,
             scope_overlay: None,
             cpu_terrain: Vec::new(),
@@ -2672,6 +2675,11 @@ impl App {
             .and_then(|i| i.commands.wheel.clone())
             .filter(|_| self.controls.observer().is_none() && !self.local_weapon_seat());
         claim_wheel(&mut self.ui, &mut self.tool_wheel, wheel);
+        let zooms = self.controls.orbit_zooms();
+        if zooms != self.camera_wheel {
+            self.camera_wheel = zooms;
+            self.ui.apply(UiUpdate::CameraWheel(zooms));
+        }
         // Aiming a scope with steps, the wheel zooms instead (`Zoom::levels`).
         let aim_wheel = self.controls.aim_takes_wheel();
         if aim_wheel != self.aim_wheel {
@@ -4420,6 +4428,14 @@ impl App {
                             }
                             continue;
                         }
+                        bri_sim::session::Notice::PutAway => {
+                            if let Some(building) = self.building.as_mut() {
+                                for update in building.put_away() {
+                                    self.ui.apply_session(a.id, update);
+                                }
+                            }
+                            continue;
+                        }
                         bri_sim::session::Notice::MirrorCopy { across_z } => {
                             if let Some(building) = self.building.as_mut() {
                                 building.mirror_copy(across_z);
@@ -5273,17 +5289,19 @@ fn camera_eye(
     passages: &bri_content::passage::Passages,
 ) -> Result<(Vec3, Option<glam::Affine3A>)> {
     use crate::controls::ObserverMode;
+    let distance = controls.observer().map(|o| o.distance);
     match controls.observer().map(|o| o.mode) {
         Some(ObserverMode::Free(position)) => Ok((position, None)),
-        // `setOrbitMode(target, ..., 0, 8, 8)` from `Observer::setMode("Corpse")`.
-        // Its boom goes back through a portal behind the focus, as a chase
-        // camera's does.
+        // `setOrbitMode(target, ..., 0, 8, 8)` from `Observer::setMode("Corpse")`,
+        // or an Add-On's own distance. Its boom goes back through a portal
+        // behind the focus, as a chase camera's does.
         Some(ObserverMode::Orbit(_) | ObserverMode::Drive(_)) => {
             let focus = controls
                 .orbit_focus(presented, building.archetypes(), entities)
                 .map(|focus| focus + drawn_offset.unwrap_or(Vec3::ZERO))
                 .unwrap_or(own_eye);
-            building.camera_boom(focus, focus, forward, 8.0, passages)
+            let distance = distance.unwrap_or(crate::controls::CORPSE_ORBIT_DISTANCE);
+            building.camera_boom(focus, focus, forward, distance, passages)
         }
         None => match chase {
             // A chase camera's boom from `own_eye`, its pivot, which rides
@@ -7406,13 +7424,29 @@ impl PlatformApp for App {
             // Clicking out of the spy orbit returns to the body
             // (`Observer::onTrigger` in `Corpse` mode); the free camera
             // uses it only to fly faster. The dead click to respawn above.
+            // In an Add-On's orbit the click is the player's empty-hand
+            // trigger, for the Add-On (`Observer::onTrigger` in its mode).
             if let Some(observer) = self.controls.observer()
                 && let UiAction::Game(GameAction::Held {
                     control: HeldControl::Fire,
                     down,
                 }) = action
             {
-                if down && matches!(observer.mode, crate::controls::ObserverMode::Orbit(_)) {
+                let addon_orbit = self.network_view().is_some_and(|v| {
+                    v.vitals.get(&v.owner).is_some_and(|v| {
+                        matches!(v.control, bri_sim::session::ControlObject::Orbit { .. })
+                    })
+                });
+                if addon_orbit {
+                    let command = if down {
+                        Command::Activate
+                    } else {
+                        Command::ActivateRelease
+                    };
+                    if let Err(error) = self.command(id, command, action.clone()) {
+                        self.answer(id, Err(error));
+                    }
+                } else if down && matches!(observer.mode, crate::controls::ObserverMode::Orbit(_)) {
                     if let Err(error) = self.command(id, Command::ControlPlayer, action.clone()) {
                         self.answer(id, Err(error));
                     }
@@ -7793,6 +7827,10 @@ impl PlatformApp for App {
                         continue;
                     }
                     result
+                }
+                UiAction::Game(GameAction::CameraZoom { notches }) => {
+                    self.controls.zoom_orbit(notches);
+                    continue;
                 }
                 UiAction::Game(GameAction::ToolWheel { notches }) => {
                     if self.controls.aim_wheel(notches) {

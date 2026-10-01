@@ -127,11 +127,20 @@ refused. The engine calls:
 | `on_drop(player, item, slot)` | a player drops a tool of your Add-On (or one it depends on), when `"on_drop": true`. What it returns (a number, a map such as `#{ rounds: 7 }`) is kept with the dropped item and handed to `on_pickup` as `info.data` |
 | `on_projectile_hit(hit)` | a projectile of your weapons (or a dependency's) struck something, delivered at the start of the next tick, when `"on_projectile_hit": true`. `hit` is `#{ projectile, by, kind, id, ref, x, y, z, nx, ny, nz, vx, vy, vz }`: `kind` is `player`, `vehicle`, `entity`, `brick` or `map`, `by` the shooter or `()`; a player hit also has `region` |
 | `on_activate(player)` | a living player clicks with nothing in their hand (v20's `Player::activateStuff`), when `"on_activate": true`: return `true` to take the click, or anything else to pass it on. Add-Ons are asked in load order, and a click nobody takes does the usual thing (opens doors, presses buttons, flips vehicles) |
+| `on_trigger(player, trigger, down)` | a living player with nothing in their hand presses (`down` true) or lets go of a trigger (v20's `Armor::onTrigger`), when `"on_trigger": true`. Trigger `0` is fire: the empty-hand click, whose press comes before `on_activate`. Return `true` to take it, anything else to pass it on: Add-Ons are asked in load order, presses and releases alike, and a press nobody takes goes on to `on_activate` and the usual click. A charged throw starts on the press and lets fly on the release |
 | `cmd_<name>(player, args...)` | a player sends a command listed in `commands` |
 
 `player` is the player's id: pass it straight to `tell`, `get_player` and
 the rest. Loading checks that each hook exists with the right number of
 parameters, so a typo shows up in `bri-addon-check`, not mid-game.
+
+**Policies** are decisions the engine owns and asks you about. List them in
+`"policies"` and define `allow_<policy>(player)`: `true` allows, `false` or
+a reason string refuses. `respawn` is a dead player asking to come back,
+`build` any command that builds, and `equip` taking a tool, the spray can,
+the FX can or bricks into the hand or putting a tool away (v20 Add-Ons packaged
+`serverCmdUseTool` and friends for this). Every Add-On that lists a policy
+must allow it.
 
 **Commands** are the only thing a player can ask of your script. Each has a
 `name`, and optionally `args` (a list of `"int"`, `"float"`, `"string"` or
@@ -163,12 +172,12 @@ HUD panels can only show keys the viewer receives. `persist` (default
 | `aim()`, `me()`, `entities()` | `add_player(p, key, amount)` | `damage(target, amount[, by[, type]])`, `explode(...)`: `damage` |
 | `noise(seed, x, z)`, `hash3(seed, x, y, z)` | `entity_get(e, key)`, `entity_set(e, key, v)` | `spawn_entity`, `remove_entity`, `steer`, `label`: `entity` |
 | `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)`, `tethered(p)` | | `teleport`, `respawn`, `set_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`, `take_item(p, item)`, `drop_item(item, x, y, z[, vx, vy, vz])`: `player` |
-| `raycast(from, dir, range[, ignore])`, `can_damage(by, target)` | | `set_fov(p, fov)`, `set_image_ammo(p, ammo)`, `mount_image(p, image)`, `unmount_image(p)`, `set_scale(p, scale)`, `set_look_limits(p, up, down)`: `player` |
+| `raycast(from, dir, range[, ignore])`, `can_damage(by, target)` | | `set_fov(p, fov)`, `set_image_ammo(p, ammo)`, `mount_image(p, image)`, `unmount_image(p)`, `set_scale(p, scale)`, `set_look_limits(p, up, down)`, `orbit_camera(p, target[, nearest, farthest], distance)`: `player` |
 | `brick_box(brick)`, `voxel(brick)`, `can_place_voxel(x, y, z)` | | `place_voxel(x, y, z, material)`: `world.edit`; `set_avatar_colors(p, colors)`, `temp_look(p, look, seconds)`: `player` |
 | `brick(id)`, `bricks_in(min, max)`, `can_plant(kind, [x, y, z], turns)`, `can_edit(brick)` | | `plant_brick(kind, [x, y, z], turns, color, owner)`: `world.edit` |
 | | | `copy_build(p, brick, limit, above_only, tool)`, `copy_box(p, min, max, limit, tool)`, `mirror_copy(p, axis)`: `build` |
 | | | `cut_copy(p)`, `paint_copy(p, color)`, `paint_fill(p, brick, paint, options)`, `paint_vehicle(p, vehicle, paint, options)`: `world.edit` |
-| | | `push`, `tumble`, `hold`, `reach`, `hold_distance`, `let_go`, `tether`, `tether_length`, `untether`, `spawn_vehicle`, `remove_vehicle`, `mount_object(mount, rider, node, can_dismount)`, `unmount_object(rider)`: `physics` |
+| | | `push`, `tumble`, `hold`, `reach`, `hold_distance`, `let_go`, `tether`, `tether_length`, `untether`, `spawn_vehicle`, `remove_vehicle`, `mount_object(mount, rider, node, can_dismount[, turn])`, `unmount_object(rider)`: `physics` |
 | | | `heal(p, amount)`, `fire(...)`: `damage` |
 | | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds)` (`()` for everyone): `chat` |
 | | | `play_sound(p, sound)` at a player's ears, `sound_at(sound, x, y, z)`, `beam(from, to[, options])`, `play_thread(p, thread, sequence)`, `show_box(p, min, max, tool)`, `hide_box(p)`: `effects` |
@@ -238,7 +247,8 @@ held image it is out of ammo, so its states' `no_ammo` transitions run;
 counts down. `set_fov(p, fov)` sets the player's field of view (5 to 120
 degrees), and `set_fov(p, ())` hands it back to their own setting; aiming
 and the zoom key still work on top of it. `unmount_image(p)` empties the
-player's hand (`unMountImage(0)`).
+player's hand (`unMountImage(0)`): a tool, a spray can or bricks, which the
+player's client puts away too.
 
 **Bodies.** `set_scale(p, scale)` resizes a player's body, from 0.2 to 5
 (`setScale`); a respawn puts it back to 1. `set_look_limits(p, up, down)`
@@ -246,8 +256,26 @@ bounds how far their arms and head follow their look, each from 0 (looking
 straight up) to 1 (straight down), as v20's `setLookLimits`: `(0.5, 0.5)`
 holds them level. `set_look_limits(p, ())` lifts it; a respawn does too.
 
+**Cameras.** `orbit_camera(p, target, distance)` hands player `p` a camera
+circling player `target`, 1 to 20 units out, which their mouse turns
+(v20's `%client.camera.setOrbitMode(%target, ...)` then
+`setControlObject(%client.camera)`).
+`orbit_camera(p, target, nearest, farthest, distance)` lets their mouse
+wheel zoom it a unit a notch between `nearest` and `farthest`
+(`setOrbitMode(%target, %transform, %min, %max, %cur)`); it starts at
+`distance`. Their body takes no moves meanwhile.
+Their clicks do not end it: they still reach Add-Ons as the empty-hand
+trigger (`on_trigger`, then `on_activate`), so a held player clicks to
+struggle. `orbit_camera(p, ())` gives the body back; so does the target
+leaving, and death and respawn as always. A player flying an admin camera
+or driving an entity keeps it.
+
 **Riding players.** `mount_object(mount, rider, node, can_dismount)` seats
 player `rider` on player `mount` at mount point `node` (`mountObject`).
+`mount_object(mount, rider, node, can_dismount, turn)` also turns the
+rider's body `turn` degrees (clockwise seen from above) on the mount point,
+as a `setTransform` right after `mountObject` does in v20; their own turn
+moves it from there, unless a camera has their moves.
 Mount points are the body model's `mount0` to `mount7` nodes; on the
 Blockhead `1` is the left hand. The rider rides along, turns with their own
 mouse and drops what the gravity gun or a hold had of them; with
@@ -257,7 +285,9 @@ the mount carrying no rider on that point. A command's player may seat
 someone only on themselves, and only someone they may move (the same rules
 as `hold` and `push`). `unmount_object(rider)` lets them off in place,
 moving as the mount was, so a throw is `unmount_object(t)` then
-`push("player:" + t, ...)`. Landing on a Blockhead still does not seat you:
+`push("player:" + t, ...)`. It also takes a player out of a vehicle seat
+(`dismount()`), as a grab does in v20. A rule's command or hook may unmount
+the rider themselves, their own rider, or a player it may move. Landing on a Blockhead still does not seat you:
 only rideable bodies, such as the horse, take riders by touch.
 
 **Effects** (`effects`) change nothing in the game and are sent once, like
