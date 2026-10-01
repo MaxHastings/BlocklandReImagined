@@ -14,6 +14,66 @@ pub fn weapon_pack() -> bri_weapons::Pack {
         .unwrap()
 }
 
+/// The content a test body runs on: made up, or the generated native packs.
+/// Tests written with [`on_both!`] run on the made-up content everywhere
+/// and again on the real content in the push gate.
+pub struct Fixture {
+    pub weapons: bri_weapons::Pack,
+    /// The generated native event catalog, on the real content.
+    native_events: Option<bri_events::Catalog>,
+}
+impl Fixture {
+    pub fn synthetic() -> Self {
+        Self {
+            weapons: bri_weapons::testing::pack(),
+            native_events: None,
+        }
+    }
+    pub fn content() -> Self {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
+        Self {
+            weapons: weapon_pack(),
+            native_events: Some(
+                bri_events::Catalog::load(root.join("events-pack-002/catalog.json"))
+                    .expect("Run the documented importer first"),
+            ),
+        }
+    }
+    /// The event catalog for tests about particular native events: the
+    /// generated one on the real content, else the small made-up one.
+    pub fn events(&self) -> bri_events::Catalog {
+        self.native_events
+            .clone()
+            .unwrap_or_else(bri_events::testing::catalog)
+    }
+}
+
+/// One test body, run twice: on the made-up [`Fixture::synthetic`] content,
+/// and on the generated native content as an ignored test the push gate
+/// runs (`--include-ignored`). The tests are `<name>::synthetic` and
+/// `<name>::content`.
+#[macro_export]
+macro_rules! on_both {
+    ($(#[$meta:meta])* fn $name:ident($f:ident: &Fixture) $(-> $ret:ty)? $body:block) => {
+        $(#[$meta])*
+        mod $name {
+            #[allow(unused_imports)]
+            use super::*;
+            #[allow(unused_variables)]
+            fn body($f: &Fixture) $(-> $ret)? $body
+            #[test]
+            fn synthetic() $(-> $ret)? {
+                body(&Fixture::synthetic())
+            }
+            #[test]
+            #[ignore = "requires generated v20 content"]
+            fn content() $(-> $ret)? {
+                body(&Fixture::content())
+            }
+        }
+    };
+}
+
 /// A movement sequence newer than any the tests sent before.
 pub fn move_sequence(s: &Session) -> u64 {
     1_000_000 + s.simulation().state().tick

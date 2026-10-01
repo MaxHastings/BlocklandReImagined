@@ -343,7 +343,8 @@ fn charged_throw(activate: u32, charge: u32, fire: u32) -> Vec<State> {
     ]
 }
 
-/// A swing: PreFire plays the holder's swing, Fire acts.
+/// A swing: PreFire plays the holder's swing, Fire acts. Held, it swings
+/// again and again.
 fn swing(activate: u32, prefire: u32, fire: u32, recover: u32) -> Vec<State> {
     vec![
         S::new("Activate", activate).timeout(1).0,
@@ -354,6 +355,29 @@ fn swing(activate: u32, prefire: u32, fire: u32, recover: u32) -> Vec<State> {
             .script("onStopFire")
             .timeout(1)
             .0,
+    ]
+}
+
+/// A click: one swing per press, then it waits for the button to come up
+/// (a tool that opens a dialog).
+fn click(activate: u32, prefire: u32, fire: u32) -> Vec<State> {
+    vec![
+        S::new("Activate", activate).timeout(1).0,
+        S::new("Ready", 0).down(2).0,
+        S::new("PreFire", prefire).script("onPreFire").timeout(3).0,
+        S::new("Fire", fire).script("onFire").timeout(4).0,
+        S::new("WaitForRelease", 0).up(1).0,
+    ]
+}
+
+/// A point-and-click with no wind-up: it acts the moment it is pressed,
+/// then waits for the button to come up.
+fn instant_click(fire: u32) -> Vec<State> {
+    vec![
+        S::new("Activate", 0).timeout(1).0,
+        S::new("Ready", 0).down(2).0,
+        S::new("Fire", fire).script("onFire").timeout(3).0,
+        S::new("WaitForRelease", 0).up(1).0,
     ]
 }
 
@@ -463,20 +487,22 @@ pub fn pack() -> Pack {
     };
 
     // Core tools and the host's own images.
-    for (item_id, image_id, name, ui) in [
-        (HAMMER, HAMMER_IMAGE, "hammerImage", "Hammer"),
-        (WRENCH, WRENCH_IMAGE, "wrenchImage", "Wrench"),
-        (PRINTER, PRINTER_IMAGE, "printGunImage", "Printer"),
-        (WAND, WAND_IMAGE, "wandImage", "Wand"),
+    // The hammer and wands swing while held; the wrench and printer open a
+    // dialog, so they act once per click; the printer has no wind-up.
+    for (item_id, image_id, name, ui, states) in [
+        (HAMMER, HAMMER_IMAGE, "hammerImage", "Hammer", swing(1, 2, 6, 10)),
+        (WRENCH, WRENCH_IMAGE, "wrenchImage", "Wrench", click(1, 2, 6)),
+        (PRINTER, PRINTER_IMAGE, "printGunImage", "Printer", instant_click(6)),
+        (WAND, WAND_IMAGE, "wandImage", "Wand", swing(1, 2, 6, 10)),
     ] {
         add_item(item(item_id, &format!("{ui}Item"), ui, image_id));
-        add_image(image(image_id, name, None, swing(6, 4, 6, 10)));
+        add_image(image(image_id, name, None, states));
     }
     add_image(image(
         ADMIN_WAND_IMAGE,
         "adminWandImage",
         None,
-        swing(6, 4, 6, 10),
+        swing(1, 2, 6, 10),
     ));
     for (id, name) in [
         (BRICK_IMAGE, "brickImage"),
