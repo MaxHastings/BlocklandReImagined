@@ -586,3 +586,226 @@ fn port_and_check_port_run_from_the_executable() {
     assert!(text.contains("\"status\": \"verified\""), "{text}");
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// The Duplorcator's port, on the stand-in Duplicator in a hosted game:
+/// `/dup` gives the wand, a swing at the bottom of a build selects the
+/// stack up from it with full trust, lights it, and shows the copy; the
+/// plant key plants each brick of the copy that fits, and one Ctrl+Z takes
+/// them all back.
+#[test]
+fn duplorcator_port_copies_lights_and_plants_brick_by_brick() {
+    use bri_package::packages::{PackageEntry, PackageSet, Side};
+    use bri_sim::session::{Command, Notice, PackageCommand, Reply, Session};
+    use rapier3d::prelude::*;
+
+    let dir = fresh("duplorcator");
+    let root = dir.join("content");
+    let out = root.join("addons/tool_duplicator");
+    let report = import(&options(fixture("ports/Tool_Duplicator"), out.clone())).unwrap();
+    let applied = &report.ports[0];
+    assert!(applied.applied, "{:?}", applied.reason);
+    // Read from the stand-in's own script, not the original's.
+    assert_eq!(applied.values["reach"], "8");
+    assert_eq!(applied.values["highlight_ms"], "2000");
+    let rules = applied.rules.as_ref().expect("the port has host rules");
+    assert_eq!(rules.id, "tool_duplicator-rules");
+    let pack = Pack::from_json(&std::fs::read(out.join("assets/weapons.json")).unwrap()).unwrap();
+    assert_eq!(
+        pack.images["tool_duplicator:image/duplorcatorimage"]
+            .command
+            .as_deref(),
+        Some("tool_duplicator-rules:fire")
+    );
+
+    // A flat floor and a 2x1 plate.
+    let mesh = bri_content::brick::Brick {
+        schema_version: 1,
+        id: "plate".into(),
+        footprint_studs: [2, 1],
+        height_plates: 1,
+        attachment_rows: vec!["bb".into()],
+        collision_boxes: vec![],
+        needs_external_collision: false,
+        coverage: None,
+        quads: vec![],
+    };
+    let collision = bri_content::collision::CollisionBody {
+        id: "plate".into(),
+        parts: vec![bri_content::collision::Part::Box {
+            center: [0.0; 3],
+            size: [1.0, 0.2, 0.5],
+        }],
+    };
+    let shape = bri_physics::content::collider(&collision)
+        .unwrap()
+        .build()
+        .shared_shape()
+        .clone();
+    let definitions = bri_sim::definitions::Definitions {
+        entries: [(
+            "plate".into(),
+            bri_sim::definitions::Definition {
+                mesh,
+                collision,
+                shape,
+                indestructible: false,
+                special: Default::default(),
+                reflection: None,
+                link: None,
+                glass: [0.0; 4],
+            },
+        )]
+        .into(),
+    };
+    // White, blue, and the cyan the highlight looks for.
+    let palette = vec![[1.0; 4], [0.2, 0.4, 1.0, 1.0], [0.0, 0.9, 0.9, 1.0]];
+    let mut s = Session::new(
+        bri_sim::simulation::Simulation::new(
+            bri_world::World::new("Dup".into(), "dup".into(), palette),
+            definitions,
+            vec![
+                ColliderBuilder::cuboid(100.0, 0.5, 100.0).translation(Vector::new(0.0, -0.5, 0.0)),
+            ],
+        )
+        .unwrap(),
+    );
+    s.set_spawn_points(vec![Vec3::new(0.0, 0.05, 0.0)]).unwrap();
+    s.set_weapon_pack(pack).unwrap();
+    let entry = |id: &str, side| PackageEntry {
+        id: id.into(),
+        version: "1.0.0".into(),
+        side,
+        dir: format!("addons/{id}"),
+        role: None,
+    };
+    let set = PackageSet {
+        schema_version: 1,
+        packages: vec![
+            entry("tool_duplicator", Side::Shared),
+            entry("tool_duplicator-rules", Side::Server),
+        ],
+    };
+    let catalog = bri_package_runtime::Catalog::load(&root, &set, true)
+        .unwrap_or_else(|e| panic!("{e:#?}"));
+    s.install_packages(std::sync::Arc::new(catalog), None).unwrap();
+
+    let host = s.join("Host".into(), Vec3::new(0.0, 0.05, 2.0), true).unwrap();
+    let mut seq = 0u64;
+    let mut cmd = |s: &mut Session, command: Command| {
+        seq += 1;
+        s.command(host, seq, command)
+    };
+    let plant = |s: &mut Session, position: [f32; 3], cmd: &mut dyn FnMut(&mut Session, Command) -> anyhow::Result<Reply>| {
+        match cmd(
+            s,
+            Command::Plant {
+                definition: "plate".into(),
+                position,
+                quarter_turns: 0,
+                color: 1,
+            },
+        ) {
+            Ok(Reply::Planted(id)) => id,
+            other => panic!("plant at {position:?}: {other:?}"),
+        }
+    };
+    // A plate with one half-on top, and a plate beside them, not joined.
+    let base = plant(&mut s, [0.5, 0.1, 0.25], &mut cmd);
+    plant(&mut s, [1.0, 0.3, 0.25], &mut cmd);
+    plant(&mut s, [2.5, 0.1, 0.25], &mut cmd);
+    let before = s.snapshot().world.bricks.len();
+
+    // /dup puts the wand in hand.
+    cmd(
+        &mut s,
+        Command::Package(PackageCommand {
+            package: String::new(),
+            command: "dup".into(),
+            args: vec![],
+        }),
+    )
+    .unwrap();
+    s.step().unwrap();
+    assert!(
+        s.tool_inventories()[&host]
+            .slots
+            .iter()
+            .any(|t| t.as_deref() == Some("tool_duplicator:weapon/duplorcatoritem"))
+    );
+    // Look down at the base plate's uncovered half and swing.
+    for tick in 0..60u64 {
+        s.movement(
+            host,
+            tick + 1,
+            bri_sim::player::MoveInput {
+                yaw: 0.142,
+                pitch: -0.85,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        if tick == 30 || tick == 31 {
+            cmd(&mut s, Command::WeaponTrigger { down: tick == 30 }).unwrap();
+        }
+        s.step().unwrap();
+    }
+    let private = s.take_private_notices();
+    let copy = s
+        .blueprint(host)
+        .unwrap_or_else(|| panic!("the swing copied the tower: {private:?}"))
+        .clone();
+    assert_eq!(copy.bricks.len(), 2);
+    assert_eq!(copy.tool, "tool_duplicator:weapon/duplorcatoritem");
+    // The copy keeps the bricks' own colour; the bricks glow cyan for now.
+    assert!(copy.bricks.iter().all(|b| b.color == 1));
+    let world = s.snapshot().world;
+    assert_eq!((world.bricks[&base].color, world.bricks[&base].color_effect), (2, 3));
+    let prints: Vec<String> = private
+        .into_iter()
+        .filter_map(|(_, n)| match n {
+            Notice::Bottom { text, .. } => Some(text),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        prints.iter().any(|t| t.contains("Duplication") && t.contains("2 bricks selected")),
+        "{prints:?}"
+    );
+    // Two seconds later they have their own colour back.
+    for _ in 0..250 {
+        s.step().unwrap();
+    }
+    let world = s.snapshot().world;
+    assert_eq!((world.bricks[&base].color, world.bricks[&base].color_effect), (1, 0));
+
+    // Planted over the lone plate: the bottom plate would overlap it and is
+    // skipped, the top one sits on it and plants, and the player hears how
+    // many.
+    let reply = cmd(
+        &mut s,
+        Command::PlaceBlueprint {
+            position: [2.5, 0.0, 0.0],
+            quarter_turns: 0,
+            mirrored: false,
+        },
+    );
+    assert!(matches!(reply, Ok(Reply::Planted(_))), "{reply:?}");
+    assert_eq!(s.snapshot().world.bricks.len(), before + 1);
+    s.step().unwrap();
+    let prints: Vec<String> = s
+        .take_private_notices()
+        .into_iter()
+        .filter_map(|(_, n)| match n {
+            Notice::Center { text, .. } => Some(text),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        prints.iter().any(|t| t.contains("1") && t.contains("/") && t.contains("duplicated successfully")),
+        "{prints:?}"
+    );
+    // One undo takes the planted copy back.
+    cmd(&mut s, Command::Tool(bri_sim::session::ToolAction::UndoBrick)).unwrap();
+    assert_eq!(s.snapshot().world.bricks.len(), before);
+    std::fs::remove_dir_all(dir).unwrap();
+}

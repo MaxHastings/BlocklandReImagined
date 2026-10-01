@@ -1342,7 +1342,7 @@ fn register_api(engine: &mut Engine) {
     register_presentation(engine);
 }
 
-/// A copy's options map: `trust` ("build" or "full"), `public`, `admin`,
+/// A copy's options map: `trust` ("build" or "full"), `public_bricks`, `admin`,
 /// `partial` (bools, see [`crate::ops::CopyRule`]) and, for a stack,
 /// `limited`. Unnamed options keep their defaults.
 fn copy_rule(options: &Map) -> Result<(crate::ops::CopyRule, bool), Box<EvalAltResult>> {
@@ -1362,7 +1362,7 @@ fn copy_rule(options: &Map) -> Result<(crate::ops::CopyRule, bool), Box<EvalAltR
                     _ => return Err("copy option `trust` is \"build\" or \"full\"".into()),
                 }
             }
-            "public" => rule.public = flag()?,
+            "public_bricks" => rule.public = flag()?,
             "admin" => rule.admin = flag()?,
             "partial" => rule.partial = flag()?,
             "limited" => limited = flag()?,

@@ -97,7 +97,7 @@ fn cmd_fire(player) {
     let limit = if me.admin { admin_limit() } else { player_limit() };
     // getTrustLevel against the Add-On's "Trust Required", Full: public
     // bricks are refused, and administrators get no say.
-    copy_build(player, hit.brick, limit, "up", tool(), #{ trust: "full", public: false, admin: false, partial: true });
+    copy_build(player, hit.brick, limit, "up", tool(), #{ trust: "full", public_bricks: false, admin: false, partial: true });
     highlight_copy(player, highlight(), highlight_seconds());
 }
 

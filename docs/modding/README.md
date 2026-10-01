@@ -380,7 +380,7 @@ plants all of it or none, and one Ctrl+Z takes it back.
 
 A last `options` map changes what a copy may take and how it plants:
 `trust` (`"build"`, the default, or `"full"`: the trust the player needs
-in a brick's owner), `public` (public bricks may be copied; default
+in a brick's owner), `public_bricks` (public bricks may be copied; default
 true), `admin` (administrators may copy any brick; default true),
 `partial` (planting plants each brick that fits and skips the rest, as
 v20's Duplorcator did; default false) and, for a stack, `limited` (keep
