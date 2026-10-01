@@ -252,6 +252,34 @@ fn release_after_core_switch_is_idempotent_but_cannot_start_a_weapon() {
 }
 
 on_both! {
+fn an_empty_handed_click_held_fires_the_tool_taken_out(f: &Fixture) {
+    let mut s = session();
+    s.set_weapon_pack(f.weapons.clone()).unwrap();
+    let owner = s.join("Player".into(), Vec3::Y, false).unwrap();
+    let slot = s.give_item(owner, "v20.weapon.gunitem").unwrap();
+    // v20: the click with nothing in hand is the held move trigger, so
+    // the gun drawn before letting go fires as soon as it is ready.
+    s.command(owner, 1, Command::Activate).unwrap();
+    s.step().unwrap();
+    s.command(owner, 2, Command::EquipTool { slot: Some(slot) })
+        .unwrap();
+    for _ in 0..60 {
+        s.step().unwrap();
+    }
+    assert_eq!(s.weapon_view().projectiles.len(), 1);
+    // Letting go ends the hold: drawing it again does not fire.
+    s.command(owner, 3, Command::ActivateRelease).unwrap();
+    s.command(owner, 4, Command::EquipTool { slot: None }).unwrap();
+    s.command(owner, 5, Command::EquipTool { slot: Some(slot) })
+        .unwrap();
+    for _ in 0..60 {
+        s.step().unwrap();
+    }
+    assert_eq!(s.weapon_view().projectiles.len(), 1);
+}
+}
+
+on_both! {
 fn full_trigger_queue_always_accepts_release_and_cancels_pending_fire_observably(f: &Fixture) {
     let mut s = session();
     s.set_weapon_pack(f.weapons.clone()).unwrap();

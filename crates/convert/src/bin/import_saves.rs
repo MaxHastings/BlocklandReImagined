@@ -60,6 +60,12 @@ fn main() -> Result<()> {
                     .transpose()?;
                 let file = format!("{sha}.world.json");
                 persistence::save_new(&output.join(&file), &world)?;
+                // `saveBricks` took `<name>.jpg` beside the save; Load Bricks
+                // shows it, so it travels with the converted world.
+                let picture = picture_beside(entry.path())?;
+                if let Some(picture) = &picture {
+                    std::fs::copy(picture, output.join(format!("{sha}.jpg")))?;
+                }
                 let loaded = persistence::load(&output.join(&file))?;
                 ensure!(loaded == world, "Native roundtrip changed world state");
                 let mut diagnostics = BTreeMap::<String, usize>::new();
@@ -75,7 +81,7 @@ fn main() -> Result<()> {
                     .count();
                 let events: usize = world.bricks.values().map(|b| b.events.len()).sum();
                 total += world.bricks.len();
-                reports.push(serde_json::json!({"source":relative,"sha256":sha,"file":file,"bricks":world.bricks.len(),"missing_brick_definitions":missing,"adapted_events":events,"effect_bindings":effect_bindings,"diagnostics":diagnostics,"native_roundtrip":"passed"}));
+                reports.push(serde_json::json!({"source":relative,"sha256":sha,"file":file,"picture":picture.is_some(),"bricks":world.bricks.len(),"missing_brick_definitions":missing,"adapted_events":events,"effect_bindings":effect_bindings,"diagnostics":diagnostics,"native_roundtrip":"passed"}));
             }
             Err(e) => {
                 errors += 1;
@@ -97,4 +103,24 @@ fn main() -> Result<()> {
     );
     ensure!(errors == 0, "Some saves failed; see report.json");
     Ok(())
+}
+/// The `.jpg` with the save's name beside it, in any case.
+fn picture_beside(save: &std::path::Path) -> Result<Option<PathBuf>> {
+    let stem = save
+        .file_stem()
+        .context("Save has no name")?
+        .to_string_lossy();
+    let wanted = format!("{stem}.jpg");
+    for entry in std::fs::read_dir(save.parent().context("Save has no folder")?)? {
+        let entry = entry?;
+        if entry.file_type()?.is_file()
+            && entry
+                .file_name()
+                .to_string_lossy()
+                .eq_ignore_ascii_case(&wanted)
+        {
+            return Ok(Some(entry.path()));
+        }
+    }
+    Ok(None)
 }

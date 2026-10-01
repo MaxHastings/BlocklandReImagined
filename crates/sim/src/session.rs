@@ -2013,7 +2013,9 @@ impl Session {
                 Ok(Reply::Accepted)
             }
             Command::ActivateRelease => {
-                if peer.combat.alive {
+                let alive = peer.combat.alive;
+                self.weapon_trigger(owner, false, direction, aim.is_some())?;
+                if alive {
                     self.package_trigger(owner, 0, false);
                 }
                 Ok(Reply::Accepted)
@@ -2414,6 +2416,9 @@ impl Session {
             }
             Command::Activate => {
                 ensure!(peer.combat.alive, "Dead players cannot activate bricks");
+                // The empty-hand click is also the held move trigger, so a
+                // tool taken out before letting go fires at once (v20).
+                self.weapon_trigger(owner, true, direction, aim.is_some())?;
                 // An Add-On may take the empty-hand click first: its
                 // `on_trigger` (v20's packaged `Armor::onTrigger`), then its
                 // `on_activate` (`Player::activateStuff`).
