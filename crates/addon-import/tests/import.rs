@@ -867,8 +867,7 @@ fn a_required_community_add_on_becomes_a_dependency_on_its_import() {
         input: addon,
         out: root.join("package"),
         reference: Some(install),
-        core: vec![],
-        version: "1.0.0".into(),
+        ..Default::default()
     })
     .unwrap();
     let deps: Vec<_> = report
