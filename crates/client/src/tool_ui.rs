@@ -122,18 +122,7 @@ impl ToolUi {
             ),
         ]
         .into();
-        let variants = catalog
-            .bricks
-            .iter()
-            .map(|b| {
-                let variant = match b.special_kind.as_deref() {
-                    Some("Sound") => WrenchVariant::Sound,
-                    Some("VehicleSpawn") => WrenchVariant::VehicleSpawn,
-                    _ => WrenchVariant::Normal,
-                };
-                (b.id.clone(), variant)
-            })
-            .collect();
+        let variants = wrench_variants(catalog);
         Ok(Self {
             catalog: tool_catalog,
             prints,
@@ -932,6 +921,24 @@ fn event_rows(
     Ok((rows, retained))
 }
 
+/// The wrench window each brick opens, by its special kind: every brick in
+/// `catalog`, so `catalog` must hold the Add-Ons' bricks as well as the base
+/// game's (`bri_sim::definitions::catalog_with`).
+fn wrench_variants(catalog: &Catalog) -> BTreeMap<String, WrenchVariant> {
+    catalog
+        .bricks
+        .iter()
+        .map(|b| {
+            let variant = match b.special_kind.as_deref() {
+                Some("Sound") => WrenchVariant::Sound,
+                Some("VehicleSpawn") => WrenchVariant::VehicleSpawn,
+                _ => WrenchVariant::Normal,
+            };
+            (b.id.clone(), variant)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1610,6 +1617,60 @@ mod tests {
         };
         assert_eq!(brick, 7);
         assert_eq!(events, b.events);
+    }
+    /// Max, b5d99c948: wrenching a Portal brick said "Inspected brick
+    /// definition is unavailable", so its Name, which pairs portals, could
+    /// not be set. The wrench knew only the base game's bricks.
+    #[test]
+    fn the_wrench_opens_on_an_add_on_brick_and_renames_a_portal() {
+        let base = std::env::temp_dir().join(format!("bri-wrench-base-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(
+            base.join("stock-catalog.json"),
+            serde_json::to_vec(&serde_json::json!({"schema_version": 1, "bricks": [{
+                "id": "plate", "display_name": "Plate", "category": "Bricks",
+                "subcategory": "Plates", "mesh_id": "plate", "collision_source": null,
+                "icon_source": "", "print_aspect_ratio": null, "orientation_fix": 0,
+                "can_cover": false, "indestructible": false, "special_kind": null,
+                "other_properties": {}
+            }]}))
+            .unwrap(),
+        )
+        .unwrap();
+        let portal_package = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../packages/brick_portal/assets/brick-catalog");
+        let catalog = bri_sim::definitions::catalog_with(
+            &base,
+            &[("brick_portal".into(), portal_package)],
+        );
+        std::fs::remove_dir_all(&base).unwrap();
+        let mut ui = fixture();
+        ui.variants = wrench_variants(&catalog.unwrap());
+        let portal = "brick_portal:brick/brickportal1x14x10data";
+        let mut b = Brick::new(ContentRef::Resolved(portal.into()), [0.5, 0.1, -2.25], 1);
+        b.name = Some("blue".into());
+        let updates = open(&mut ui, &b, InspectMode::Wrench);
+        let UiUpdate::OpenWrench { variant, data, .. } = &updates[0] else {
+            panic!("the wrench window opens")
+        };
+        assert_eq!(*variant, WrenchVariant::Normal);
+        assert_eq!(data.name, "blue");
+        // Naming it after another portal pairs the two.
+        let renamed = WrenchData {
+            name: "orange".into(),
+            ..data.clone()
+        };
+        let Some(Command::Tool(ToolAction::SetWrench { brick, .. })) = ui
+            .action_command(&UiAction::SendWrench {
+                brick: 7,
+                variant: WrenchVariant::Normal,
+                data: renamed,
+            })
+            .unwrap()
+        else {
+            panic!("the new name goes to the host")
+        };
+        assert_eq!(brick, 7);
     }
     #[test]
     fn tool_context_identity_wrench_rejection_and_print_compatibility() {

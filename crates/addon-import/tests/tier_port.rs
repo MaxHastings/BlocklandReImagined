@@ -422,7 +422,7 @@ impl Game {
         let (merged, notes) = pack(out).merge(parts);
         // Only a name two Add-Ons both declare, each keeping its own.
         assert!(
-            notes.iter().all(|n| n.contains(" is kept as ")),
+            notes.iter().all(|n| n.effect.contains(" is kept as ")),
             "{notes:?}"
         );
         s.set_weapon_pack(merged).unwrap();

@@ -1198,7 +1198,7 @@
       "addon": "Tool_NewDuplicator",
       "title": "New Duplicator",
       "port": "tool_newduplicator",
-      "status": "partial",
+      "status": "verified",
       "sha256": [
         "b443eab7e97dfc51c1532c88411e5c93ed9a13b4a7fa0c60b7707b405fefa118"
       ],
@@ -1234,7 +1234,8 @@
           "float_admin_only": "\\$pref::server::nd::floatadminonly\\s*=\\s*(true|false)\\s*;",
           "fill_bricks_admin_only": "\\$pref::server::nd::fillbricksadminonly\\s*=\\s*(true|false)\\s*;",
           "plant_timeout_ms": "\\$pref::server::nd::planttimeoutms\\s*=\\s*(\\d+)\\s*;",
-          "admin_plant_bypass": "\\$pref::server::nd::admintrustbypass2\\s*=\\s*(true|false)\\s*;"
+          "admin_plant_bypass": "\\$pref::server::nd::admintrustbypass2\\s*=\\s*(true|false)\\s*;",
+          "play_menu_sounds": "\\$pref::server::nd::playmenusounds\\s*=\\s*(true|false)\\s*;"
         },
         "Player::ndFired": {
           "reach": "%len\\[2\\]\\s*=\\s*(\\d+)\\s*;",

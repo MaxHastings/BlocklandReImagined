@@ -1,7 +1,8 @@
 //! One weapons pack built from every package that provides weapons: the
 //! base game's pack first, then each other package in `packages.json` order.
 //! Systems keep taking a single `Pack`; only loading changes.
-use crate::{Pack, Resource, SoundDef};
+use crate::{Pack, Resource, SoundDef, add_on_of};
+use bri_package::health::{Kind, Problem, package_folder};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -26,7 +27,7 @@ pub fn resource_root(root: &Path, resource: &Resource) -> PathBuf {
 
 impl Pack {
     /// [`Pack::merge_with`] for packages that depend on none of each other.
-    pub fn merge(self, parts: Vec<(String, Pack)>) -> (Pack, Vec<String>) {
+    pub fn merge(self, parts: Vec<(String, Pack)>) -> (Pack, Vec<Problem>) {
         self.merge_with(parts, &BTreeMap::new())
     }
 
@@ -34,8 +35,9 @@ impl Pack {
     /// package, to this (the base) pack. Ids are namespaced, so a duplicate
     /// means two packages claim the same content: the first keeps it.
     /// References that no merged package satisfies drop only the item that
-    /// needs them. Every skip is returned as a diagnostic; the result still
-    /// needs `validate`.
+    /// needs them. Every skip is returned as an Add-On problem, named by
+    /// the package folder (`dir` less `/assets`) or the namespace of the
+    /// id that lost something; the result still needs `validate`.
     ///
     /// Damage types and explosions are still named as Torque named them
     /// (`$DamageType::gunHeadshot`), so two Add-Ons can declare one name
@@ -46,7 +48,7 @@ impl Pack {
         mut self,
         parts: Vec<(String, Pack)>,
         depends_on: &BTreeMap<String, BTreeSet<String>>,
-    ) -> (Pack, Vec<String>) {
+    ) -> (Pack, Vec<Problem>) {
         let mut notes = Vec::new();
         // Which package declared each damage type and explosion name.
         let mut owners: BTreeMap<(&'static str, String), String> = BTreeMap::new();
@@ -68,15 +70,17 @@ impl Pack {
             fn add<T>(
                 into: &mut std::collections::BTreeMap<String, T>,
                 from: std::collections::BTreeMap<String, T>,
-                what: &str,
+                kind: Kind,
                 dir: &str,
-                notes: &mut Vec<String>,
+                notes: &mut Vec<Problem>,
             ) {
                 for (key, value) in from {
                     match into.entry(key) {
-                        std::collections::btree_map::Entry::Occupied(e) => notes.push(format!(
-                            "{dir}: {what} {} is already declared; kept the earlier one",
-                            e.key()
+                        std::collections::btree_map::Entry::Occupied(e) => notes.push(Problem::new(
+                            package_folder(dir),
+                            kind,
+                            e.key().clone(),
+                            "is already declared by an earlier Add-On, which keeps it; this one's is ignored",
                         )),
                         std::collections::btree_map::Entry::Vacant(e) => {
                             e.insert(value);
@@ -84,12 +88,12 @@ impl Pack {
                     }
                 }
             }
-            add(&mut self.items, part.items, "item", &dir, &mut notes);
-            add(&mut self.images, part.images, "image", &dir, &mut notes);
+            add(&mut self.items, part.items, Kind::Item, &dir, &mut notes);
+            add(&mut self.images, part.images, Kind::Image, &dir, &mut notes);
             add(
                 &mut self.projectiles,
                 part.projectiles,
-                "projectile",
+                Kind::Projectile,
                 &dir,
                 &mut notes,
             );
@@ -97,14 +101,14 @@ impl Pack {
             add(
                 &mut self.damage_types,
                 part.damage_types,
-                "damage type",
+                Kind::DamageType,
                 &dir,
                 &mut notes,
             );
             add(
                 &mut self.explosions,
                 part.explosions,
-                "explosion",
+                Kind::Explosion,
                 &dir,
                 &mut notes,
             );
@@ -119,7 +123,7 @@ impl Pack {
                 })
                 .collect();
             // Keyed by bare profile name, like damage types.
-            add(&mut self.sounds, sounds, "sound", &dir, &mut notes);
+            add(&mut self.sounds, sounds, Kind::Sound, &dir, &mut notes);
             self.external_projectiles.extend(part.external_projectiles);
             merge_effects(&mut self.effects, part.effects, &dir, &mut notes);
             self.definitions.extend(part.definitions);
@@ -143,9 +147,15 @@ impl Pack {
                 .projectile_refs()
                 .find(|p| !projectiles.contains_key(*p));
             if let Some(p) = missing {
-                notes.push(format!(
-                    "image {id} dropped: projectile {p} is not provided"
-                ));
+                notes.push(
+                    Problem::new(
+                        add_on_of(id).unwrap_or(id),
+                        Kind::Projectile,
+                        p.to_string(),
+                        "no Add-On provides it, so the weapon is left out",
+                    )
+                    .used_by(format!("image {id}")),
+                );
             }
             missing.is_none()
         });
@@ -153,10 +163,15 @@ impl Pack {
             if let Some(image) = &p.sport_image
                 && !self.images.contains_key(image)
             {
-                notes.push(format!(
-                    "projectile {} loses sport image {image}: not provided",
-                    p.id
-                ));
+                notes.push(
+                    Problem::new(
+                        add_on_of(&p.id).unwrap_or(&p.id),
+                        Kind::Image,
+                        image.clone(),
+                        "no Add-On provides it, so the ball is not held after a catch",
+                    )
+                    .used_by(format!("projectile {}", p.id)),
+                );
                 p.sport_image = None;
             }
         }
@@ -164,10 +179,15 @@ impl Pack {
         self.items.retain(|id, item| {
             let keep = item.image.is_empty() || images.contains_key(&item.image);
             if !keep {
-                notes.push(format!(
-                    "item {id} dropped: image {} is not provided",
-                    item.image
-                ));
+                notes.push(
+                    Problem::new(
+                        add_on_of(id).unwrap_or(id),
+                        Kind::Image,
+                        item.image.clone(),
+                        "no Add-On provides it, so the item is left out",
+                    )
+                    .used_by(format!("item {id}")),
+                );
             }
             keep
         });
@@ -220,7 +240,7 @@ fn scope_names(
     owners: &mut BTreeMap<(&'static str, String), String>,
     depends_on: &BTreeMap<String, BTreeSet<String>>,
     dir: &str,
-    notes: &mut Vec<String>,
+    notes: &mut Vec<Problem>,
 ) {
     let package = part.id.clone();
     let mut renamed: BTreeMap<String, String> = BTreeMap::new();
@@ -230,8 +250,11 @@ fn scope_names(
         match (into.damage_types.get(&key), owner) {
             (Some(earlier), Some(owner)) if *earlier != t => {
                 if depends(depends_on, &package, &owner) {
-                    notes.push(format!(
-                        "{dir}: damage type {key} replaces {owner}'s, as {package} depends on it"
+                    notes.push(Problem::new(
+                        package_folder(dir),
+                        Kind::DamageType,
+                        key.clone(),
+                        format!("replaces {owner}'s, as {package} depends on it"),
                     ));
                     into.damage_types.insert(key.clone(), t);
                     owners.insert(("damage type", key), package.clone());
@@ -239,8 +262,11 @@ fn scope_names(
                     let scoped = format!("{package}:{}", t.name);
                     t.name.clone_from(&scoped);
                     let scoped_key = scoped.to_ascii_lowercase();
-                    notes.push(format!(
-                        "{dir}: damage type {key} is also {owner}'s; {package}'s is kept as {scoped}"
+                    notes.push(Problem::new(
+                        package_folder(dir),
+                        Kind::DamageType,
+                        key.clone(),
+                        format!("is also {owner}'s; {package}'s is kept as {scoped}"),
                     ));
                     renamed.insert(key, scoped.clone());
                     owners.insert(("damage type", scoped_key.clone()), package.clone());
@@ -260,17 +286,22 @@ fn scope_names(
         match (into.explosions.get(&key), owner) {
             (Some(earlier), Some(owner)) if *earlier != e => {
                 if depends(depends_on, &package, &owner) {
-                    notes.push(format!(
-                        "{dir}: explosion {key} replaces {owner}'s, as {package} depends on it"
+                    notes.push(Problem::new(
+                        package_folder(dir),
+                        Kind::Explosion,
+                        key.clone(),
+                        format!("replaces {owner}'s, as {package} depends on it"),
                     ));
                     into.explosions.insert(key.clone(), e);
                     owners.insert(("explosion", key), package.clone());
                 } else {
                     e.name = format!("{package}:{}", e.name);
                     let scoped_key = e.name.to_ascii_lowercase();
-                    notes.push(format!(
-                        "{dir}: explosion {key} is also {owner}'s; {package}'s is kept as {}",
-                        e.name
+                    notes.push(Problem::new(
+                        package_folder(dir),
+                        Kind::Explosion,
+                        key.clone(),
+                        format!("is also {owner}'s; {package}'s is kept as {}", e.name),
                     ));
                     owners.insert(("explosion", scoped_key.clone()), package.clone());
                     part.explosions.insert(scoped_key, e);
@@ -319,18 +350,23 @@ fn merge_effects(
     into: &mut crate::PackEffects,
     part: crate::PackEffects,
     dir: &str,
-    notes: &mut Vec<String>,
+    notes: &mut Vec<Problem>,
 ) {
     fn add<T>(
         into: &mut Vec<T>,
         part: Vec<T>,
         id: impl Fn(&T) -> &str,
         dir: &str,
-        notes: &mut Vec<String>,
+        notes: &mut Vec<Problem>,
     ) {
         for item in part {
             if into.iter().any(|x| id(x).eq_ignore_ascii_case(id(&item))) {
-                notes.push(format!("{dir}: effect {} is already defined", id(&item)));
+                notes.push(Problem::new(
+                    package_folder(dir),
+                    Kind::Effect,
+                    id(&item),
+                    "is already defined by an earlier Add-On, which keeps it; this one's is ignored",
+                ));
             } else {
                 into.push(item);
             }
@@ -402,7 +438,7 @@ mod tests {
         assert!(
             notes
                 .iter()
-                .any(|n| n.contains("kai's is kept as kai:Headshot")),
+                .any(|n| n.to_string().contains("kai's is kept as kai:Headshot")),
             "{notes:?}"
         );
 
@@ -418,7 +454,7 @@ mod tests {
             "%2 shot %1 (kai)"
         );
         assert!(
-            notes.iter().any(|n| n.contains("replaces mwb's")),
+            notes.iter().any(|n| n.to_string().contains("replaces mwb's")),
             "{notes:?}"
         );
 

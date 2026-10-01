@@ -109,7 +109,9 @@ pub fn load_packages(
     let (vehicle_pack, vehicle_notes) =
         bri_vehicles::Pack::load(vehicles_dir.join("vehicles.json"))?.merge(vehicle_parts);
     vehicle_pack.validate()?;
-    let catalog = serde_json::from_slice(&std::fs::read(catalog_dir.join("stock-catalog.json"))?)?;
+    let brick_extras = content_identity::brick_catalog_providers(content_root, packages)?;
+    // Add-On bricks are named, printed and wrenched like base ones.
+    let catalog = bri_sim::definitions::catalog_with(&catalog_dir, &brick_extras)?;
     let materials =
         serde_json::from_slice(&std::fs::read(materials_dir.join("brick-materials.json"))?)?;
     let effects = serde_json::from_slice(&std::fs::read(effects_dir.join("effects.json"))?)?;
@@ -125,11 +127,7 @@ pub fn load_packages(
     let anchors = map.spawn_anchors()?;
     let mut simulation = Simulation::new(
         world,
-        Definitions::load_with(
-            &catalog_dir,
-            &geometry_dir,
-            &content_identity::brick_catalog_providers(content_root, packages)?,
-        )?,
+        Definitions::load_with(&catalog_dir, &geometry_dir, &brick_extras)?,
         map.colliders,
     )?;
     simulation.attach_terrain(map.terrain, anchors)?;

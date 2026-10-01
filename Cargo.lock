@@ -376,6 +376,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tokio",
  "zip 6.0.0",
 ]
 
@@ -876,6 +877,7 @@ dependencies = [
  "anyhow",
  "bri-content",
  "bri-motor",
+ "bri-package",
  "bri-physics",
  "glam 0.33.10",
  "rapier3d",
@@ -904,6 +906,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bri-content",
+ "bri-package",
  "bri-physics",
  "glam 0.33.10",
  "rapier3d",

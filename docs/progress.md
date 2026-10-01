@@ -10674,3 +10674,18 @@ than 4 units from the eye are drawn where the host has them.
 Tests: `bri-client --lib shot_origins` (a shot leaves the muzzle, is
 halfway across halfway to the wall, and is on the host's path at and after
 it; late, bounced and far-muzzle shots are untouched).
+
+Wrench on Add-On bricks (Max, b5d99c948: wrenching a Portal said
+"Inspected brick definition is unavailable", so its Name, which pairs
+portals, could not be set). The client's wrench and the host's tool
+allowlist read only the base game's brick catalog, so every Add-On brick
+was unknown to them, whatever its rules. Both now read the full catalog,
+base then each Add-On's (`bri_sim::definitions::catalog_with` /
+`extend_catalog`, the set `Definitions::load_with` loads), on the local
+client and the dedicated host: Add-On bricks open the wrench, and Add-On
+sound, vehicle-spawn and printable bricks get their wrench and printer
+choices. The Add-On `-rules` companions are unrelated (the Portal is our
+own Add-On with none). Tests: `bri-client tool_ui::
+the_wrench_opens_on_an_add_on_brick_and_renames_a_portal` (fails with the
+base catalog alone, with Max's message) and `bri-sim definitions::
+the_full_catalog_holds_add_on_bricks_once`.

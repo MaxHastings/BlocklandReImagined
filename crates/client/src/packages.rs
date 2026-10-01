@@ -3,6 +3,7 @@
 //! data from client-side packages; the client never runs package code.
 use anyhow::{Context, Result};
 use bri_net::protocol::PublicWorld;
+use bri_package::diag::Diagnostic;
 use bri_package_runtime::{Catalog, content};
 use bri_render::scene::{GpuInstances, GpuScene, SceneRenderer, SceneTransform};
 use bri_sim::session::{EntityInfo, PackageStateView};
@@ -13,26 +14,32 @@ use std::{collections::BTreeMap, path::Path, sync::Arc};
 
 /// The client-side packages listed in the content root's `packages.json`.
 /// Problems are reported, not fatal: the base game still runs.
-pub fn load(root: &Path) -> (Option<Arc<Catalog>>, Vec<String>) {
+pub fn load(root: &Path) -> (Option<Arc<Catalog>>, Vec<Diagnostic>) {
     load_side(root, false)
 }
 /// Every package a host would run, server-side ones included.
-pub fn load_server(root: &Path) -> (Option<Arc<Catalog>>, Vec<String>) {
+pub fn load_server(root: &Path) -> (Option<Arc<Catalog>>, Vec<Diagnostic>) {
     load_side(root, true)
 }
-fn load_side(root: &Path, server: bool) -> (Option<Arc<Catalog>>, Vec<String>) {
+fn load_side(root: &Path, server: bool) -> (Option<Arc<Catalog>>, Vec<Diagnostic>) {
     let set = match bri_package::packages::PackageSet::load_root(root) {
         Ok(set) => set,
-        Err(error) => return (None, vec![format!("{error:#}")]),
+        Err(error) => {
+            return (None, vec![Diagnostic::error("set.read", format!("{error:#}"))]);
+        }
     };
     load_set(root, &set, server)
 }
-/// Mod packages of `set` whose directories are under `root`.
-pub fn load_set(root: &Path, set: &bri_package::packages::PackageSet, server: bool) -> (Option<Arc<Catalog>>, Vec<String>) {
+/// Mod packages of `set` whose directories are under `root`, and the
+/// problems of each Add-On left out (`crate::add_on_health::rules_problem`).
+pub fn load_set(
+    root: &Path,
+    set: &bri_package::packages::PackageSet,
+    server: bool,
+) -> (Option<Arc<Catalog>>, Vec<Diagnostic>) {
     // One broken Add-On is left out (and reported) rather than turning off
     // every other Add-On's HUD, rules and modes.
     let (catalog, problems) = Catalog::load_skipping(root, set, server);
-    let problems = problems.iter().map(ToString::to_string).collect();
     if catalog.packages.is_empty() {
         (None, problems)
     } else {

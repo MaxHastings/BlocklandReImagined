@@ -14,12 +14,19 @@
 use anyhow::Result;
 use std::collections::BTreeMap;
 
-/// Log that the Add-On `label` (`bri_package::library::add_on_label`) has
-/// presentation at `file` that could not be used and is shown with a
-/// stand-in; returns the logged line.
+/// Report that the Add-On `label` (`bri_package::library::add_on_label`)
+/// has presentation at `file` that could not be used and is shown with a
+/// stand-in, as an Add-On health problem ([`crate::add_on_health::report`]);
+/// returns its line.
 pub fn add_on_fault(label: &str, file: &str, problem: impl std::fmt::Display) -> String {
-    let line = format!("Add-On {label}: {file}: {problem}; shown with a stand-in");
-    bri_console::warn(&line);
+    let problem = bri_package::health::Problem::new(
+        label,
+        bri_package::health::Kind::Presentation,
+        file,
+        format!("{problem}; shown with a stand-in"),
+    );
+    let line = problem.to_string();
+    crate::add_on_health::report(problem);
     line
 }
 

@@ -333,6 +333,12 @@ impl ClientAudio {
             }
         }
     }
+    /// Whether `profile` names a sound this client can play: an Add-On
+    /// pack's own that loaded, else the bank's ([`Self::start`]).
+    pub fn has_sound(&self, profile: &str) -> bool {
+        self.pack_sounds.contains_key(&profile.to_ascii_lowercase())
+            || self.runtime.bank().resolve(profile).is_ok()
+    }
     pub fn is_looping(&self, profile: &str) -> bool {
         match self.pack_sounds.get(&profile.to_ascii_lowercase()) {
             Some((asset, _)) => asset.playback.looping,

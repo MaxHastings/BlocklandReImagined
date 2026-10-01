@@ -35,3 +35,4 @@ bri-sim = { path = "../sim" }
 bri-world = { path = "../world" }
 bri-physics = { path = "../physics" }
 rapier3d = { version = "=0.36.0", features = ["enhanced-determinism"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }

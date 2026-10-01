@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 pub mod debris;
 mod merge;
+mod references;
+pub use references::{Reference, add_on_of};
 pub mod rotation;
 pub mod settings;
 pub mod testing;
@@ -2475,21 +2477,9 @@ impl Pack {
     /// The type named by a `$DamageType::<name>` reference; unknown names
     /// fall back to `Default` as an unset Torque global indexes type 0.
     pub fn damage_type(&self, reference: &str) -> Option<&DamageType> {
-        self.named_damage_type(reference)
+        self.damage_types
+            .get(&references::damage_type_key(reference))
             .or_else(|| self.damage_types.get("default"))
-    }
-    /// Whether the pack has the damage type `reference` names itself,
-    /// not only the `default` [`Pack::damage_type`] falls back to.
-    pub fn has_damage_type(&self, reference: &str) -> bool {
-        self.named_damage_type(reference).is_some()
-    }
-    fn named_damage_type(&self, reference: &str) -> Option<&DamageType> {
-        let name = reference.trim();
-        let name = match name.get(..13) {
-            Some(prefix) if prefix.eq_ignore_ascii_case("$damagetype::") => &name[13..],
-            _ => name,
-        };
-        self.damage_types.get(&name.to_ascii_lowercase())
     }
     pub fn validate(&self) -> Result<()> {
         ensure!(self.schema_version == SCHEMA, "Unknown weapon schema");
