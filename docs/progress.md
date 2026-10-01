@@ -9645,3 +9645,35 @@ folders; classic files come in through drop folders in our own folders.
 - Tests: `bri-client --lib old_saves` (temp folders; an install beside the
   saves folder is never read, and an earlier index's install entries and
   copies are dropped).
+
+## 2026-10-01 Grapple Rope import closes with no gaps
+
+The Gate imported Max's real `Tool_GrappleRope` (sha 456a082b…, `--installed`
+only) at 39540f83: verdict `converted_with_gaps`, with every behaviour ported
+(4/4). What was left, and what closes each item, all generic in the importer:
+
+- `BowItem.uiName = ""` (unsupported): it sits in
+  `if (%error == $Error::AddOn_Disabled)` after `ForceRequiredAddOn("Weapon_Bow")`.
+  v20 force-loads a required Add-On the player had off and the script hides
+  its item; here enabling a package enables its dependencies (base packs are
+  always on), so the branch never runs. Such writes are now a noted ambiguity
+  with that resolution, not a gap.
+- `ChainTrailParticle.textureName = "base/data/particles/dot"` (ambiguous): the
+  installed reference now knows the effects pack's textures by key, as the
+  client draws them.
+- `GrappleRopeProjectile` and `GrappleRopeImage` stayed `converted_with_gaps`
+  because their notes ignored the port. An applied port now settles them:
+  covered functions and the state scripts that call them read "ported by", and
+  a state script the Add-On leaves to the stock `WeaponImage`
+  (`WeaponsWorld::NATIVE_STATE_SCRIPTS`, beside the code that runs them) reads
+  "runs the engine's own".
+- `$Pref::Server::GrappleRopeAnywhere = 1` (ambiguous): for a copy listed by
+  hash, a load-time global that a covered function reads is noted as ported
+  with that value (the rules hook anything, as with it on).
+- `license.txt`/`licence.txt`/`readme.txt` are read as metadata, like
+  `description.txt`.
+
+Tests: `grapples.rs` now asserts every datablock `converted` and the verdict
+`converted`; `the_anywhere_setting_is_covered_for_a_checked_copy`;
+`installed.rs` `hiding_a_force_loaded_add_on_is_not_a_gap` and the dot texture.
+The stand-in's particle now draws the base dot, as the original does.

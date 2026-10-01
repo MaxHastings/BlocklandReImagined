@@ -45,6 +45,16 @@ fn imported(root: &Path, addon: &str, namespace: &str) -> (bri_weapons::Pack, Ar
         "every function is ported: {:?}",
         report.needs_behaviour
     );
+    // Ported, nothing is left a gap: each image state script runs the port
+    // or the engine's own.
+    for d in &report.datablocks {
+        assert_eq!(d.status, "converted", "{} {:?}", d.name, d.notes);
+    }
+    assert_eq!(
+        report.summary.verdict, "converted",
+        "{:?}",
+        report.unsupported
+    );
     let library = Library::scan(root).unwrap();
     let rules = format!("{namespace}-rules");
     let set = PackageSet {
@@ -469,4 +479,54 @@ fn a_rope_is_as_long_as_the_hook_reaches() {
         g.s.package_diagnostics()
     );
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// The copy turns `$Pref::Server::GrappleRopeAnywhere` on at load and the
+/// hook's collision reads it. For a copy the port was checked against, the
+/// report says the port covers it (the rules hook anything, as with it
+/// on); for any other copy it stays a note to check.
+#[test]
+fn the_anywhere_setting_is_covered_for_a_checked_copy() {
+    let input = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ports/Tool_GrappleRope");
+    let run = |ports: &bri_addon_import::ports::Ports, name: &str| {
+        bri_addon_import::import_with(
+            &Options {
+                input: input.clone(),
+                out: fresh(name).join("out"),
+                ..Default::default()
+            },
+            ports,
+        )
+        .unwrap()
+    };
+    let anywhere = |r: &bri_addon_import::report::Report| {
+        r.ambiguous
+            .iter()
+            .find(|a| {
+                a.what
+                    .starts_with("global $Pref::Server::GrappleRopeAnywhere")
+            })
+            .expect("noted")
+            .resolution
+            .clone()
+    };
+    let mut ports = bri_addon_import::ports::Ports::builtin();
+    let unlisted = run(&ports, "anywhere-unlisted");
+    assert_eq!(unlisted.ports[0].copy, "unlisted");
+    assert_eq!(anywhere(&unlisted), None);
+    let entry = ports
+        .list
+        .ports
+        .iter_mut()
+        .find(|e| e.addon == "Tool_GrappleRope")
+        .unwrap();
+    entry.sha256.push(unlisted.source.sha256.clone());
+    let listed = run(&ports, "anywhere-listed");
+    assert_eq!(listed.ports[0].copy, "listed");
+    let resolution = anywhere(&listed).expect("covered");
+    assert!(
+        resolution.contains("GrappleRopeProjectile::onCollision")
+            && resolution.contains("tool_grapplerope"),
+        "{resolution}"
+    );
 }

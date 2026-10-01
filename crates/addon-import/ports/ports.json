@@ -49,6 +49,7 @@
         "tool_grapplerope/checks.json",
         "crates/addon-import/tests/grapples.rs the_grapple_rope_hangs_its_holder_where_the_hook_strikes",
         "crates/addon-import/tests/grapples.rs a_rope_is_as_long_as_the_hook_reaches",
+        "crates/addon-import/tests/grapples.rs the_anywhere_setting_is_covered_for_a_checked_copy",
         "crates/client/tests/weapon_effects.rs held_ropes_lay_their_trail_along_the_rope"
       ]
     },

@@ -387,6 +387,12 @@ impl Reference {
             let library: serde_json::Value = serde_json::from_slice(
                 &std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?,
             )?;
+            // The base game's particle textures, by the key particles name
+            // them (`base/data/particles/dot`).
+            if let Some(textures) = library["textures"].as_object() {
+                self.files
+                    .extend(textures.keys().map(|k| k.to_ascii_lowercase()));
+            }
             for (key, class) in [
                 ("particles", "ParticleData"),
                 ("emitters", "ParticleEmitterData"),

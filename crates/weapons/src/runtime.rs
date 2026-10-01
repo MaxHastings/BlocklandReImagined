@@ -1493,6 +1493,17 @@ impl WeaponsWorld {
             image_hand: None,
         });
     }
+    /// The image state scripts [`Self::callback`] runs itself, as v20's
+    /// stock `WeaponImage` functions did, for an image whose Add-On does not
+    /// define its own.
+    pub const NATIVE_STATE_SCRIPTS: &[&str] = &[
+        "oncharge",
+        "onabortcharge",
+        "onstopfire",
+        "onprefire",
+        "onfireakimbo",
+        "onfire",
+    ];
     fn callback(
         &mut self,
         id: ActorId,

@@ -77,6 +77,17 @@ names the port. If they do not match (a different version of the Add-On), it
 changes nothing, and the report names the port and says which part did not
 match.
 
+An applied port also settles its datablocks: a function it covers, or an image
+state script that calls one, becomes "ported by" that port, and a state script
+the Add-On leaves to the stock `WeaponImage` (`onFire`, `onCharge` and the
+others `WeaponsWorld::NATIVE_STATE_SCRIPTS` lists) "runs the engine's own".
+A datablock with nothing else outstanding is `converted`. For a copy listed by
+its hash, a script global it sets at load that a covered function reads (the
+Grapple Rope's `$Pref::Server::GrappleRopeAnywhere`) is noted as ported with
+that value. A field write that runs only when a required Add-On was turned off
+(`if (%error == $Error::AddOn_Disabled)`, hiding its item) is a note, not a
+gap: turning a package on turns what it needs on with it.
+
 ### A list entry
 
 ```json

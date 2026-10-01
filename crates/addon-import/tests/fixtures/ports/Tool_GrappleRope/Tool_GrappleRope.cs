@@ -4,7 +4,7 @@
 datablock ParticleData(ChainTrailParticle)
 {
    lifetimeMS = 40;
-   textureName = "./dot";
+   textureName = "base/data/particles/dot";
    colors[0] = "0.3 0.3 0.3 1";
    sizes[0] = 0.1;
    times[0] = 0.0;
@@ -86,6 +86,8 @@ datablock ShapeBaseImageData(GrappleRopeImage)
 
 function GrappleRopeProjectile::onCollision(%this, %obj, %col, %fade, %pos, %normal)
 {
+   if(!%col.GrappleRopeTarget && !$Pref::Server::GrappleRopeAnywhere)
+      return;
    %pl = %obj.client.player;
    %ppos = %pl.getPosition();
    %block = ContainerRayCast(vectorAdd(%ppos, "0 0 1.5"), %pos, $TypeMasks::StaticObjectType);
@@ -127,3 +129,5 @@ function GrappleRope(%obj, %pos)
       %vel = vectorSub(%vel, vectorScale(vectorNormalize(%out), vectorDot(%vel, vectorNormalize(%out))));
    %obj.setVelocity(%vel);
 }
+
+$Pref::Server::GrappleRopeAnywhere = 1;
