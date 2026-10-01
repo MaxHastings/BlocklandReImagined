@@ -1360,6 +1360,8 @@ impl Session {
             // `serverCmdLight` mounts its fxLight on the player object, which
             // stays with the corpse: a new body starts dark.
             peer.combat.light = false;
+            // Schedules on the old `Player` object went with it.
+            peer.thread_timers.clear();
             // The new body wears the client's own colours (`ApplyBodyColors`).
             peer.temp_color = None;
             peer.inputs.clear();

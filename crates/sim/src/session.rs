@@ -634,9 +634,11 @@ struct Peer {
     /// `lastActivateTime` and `activateLevel` for the activate swing.
     last_activate: Option<u64>,
     activate_level: u32,
-    /// Ticks of pending `schedule(strlen(%text) * 50, playThread, 3, root)`
-    /// calls from chat, one per message.
-    talk_stops: VecDeque<u64>,
+    /// Pending `%player.schedule(ms, "playThread", thread, sequence)` calls
+    /// (chat's `root` after 50 ms a character, packages' `play_thread` with
+    /// `after`), in the order they fire. They go with the body, as a
+    /// schedule on the old `Player` object did.
+    thread_timers: Vec<ThreadTimer>,
     /// v20's splash arming and `inLiquid` exit-sound state.
     water: crate::water::SplashState,
 }
@@ -644,6 +646,15 @@ struct Peer {
 const ACTIVATE_REPEAT_TICKS: u64 = 38;
 /// Chat talks for 50 ms per character: 6 ticks at 120 ticks per second.
 const TALK_TICKS_PER_CHAR: u64 = 6;
+/// Most `playThread` schedules one player's body holds at once.
+const MAX_THREAD_TIMERS: usize = 64;
+/// One scheduled `playThread` on a player's body.
+#[derive(Clone, Debug)]
+struct ThreadTimer {
+    due: u64,
+    thread: u8,
+    sequence: String,
+}
 pub struct Session {
     events: events::Events,
     specials: special::Specials,
@@ -1152,7 +1163,7 @@ impl Session {
                 inspection: None,
                 last_activate: None,
                 activate_level: 0,
-                talk_stops: VecDeque::new(),
+                thread_timers: Vec::new(),
                 water: Default::default(),
                 avatar: self.avatar_catalog.as_ref().map(|c| c.defaults.clone()),
             },
@@ -1366,7 +1377,7 @@ impl Session {
                 inspection: None,
                 last_activate: None,
                 activate_level: 0,
-                talk_stops: VecDeque::new(),
+                thread_timers: Vec::new(),
                 water: Default::default(),
                 avatar,
             },
@@ -1451,10 +1462,10 @@ impl Session {
             .remove(&owner)
             .unwrap_or_else(|| "You were removed from the server.".into())
     }
-    /// `owner` is resolved from the established connection, not deserialized here.
-    /// `%player.playThread(3, ...)`: a builder or chat animation every
-    /// client sees, carried as an avatar animation cue.
-    fn play_thread_three(&mut self, tick: u64, owner: OwnerId, sequence: &str) {
+    /// `%player.playThread(thread, sequence)`: an animation on one of the
+    /// body's four script threads every client sees, carried as an avatar
+    /// animation cue (thread 3 the builder and chat gestures).
+    fn play_thread(&mut self, tick: u64, owner: OwnerId, thread: u8, sequence: &str) {
         let Some(peer) = self.peers.get(&owner) else {
             return;
         };
@@ -1463,41 +1474,53 @@ impl Session {
             tick,
             crate::presentation::CueKind::WeaponAnimation {
                 actor: owner,
-                thread: 3,
+                thread,
                 sequence: sequence.into(),
                 image_hand: None,
             },
             position,
         );
     }
-    /// `serverCmdMessageSent` and `serverCmdTeamMessageSent`: talk, then
-    /// return thread 3 to root after 50 ms per character of the message.
-    fn start_talking(&mut self, tick: u64, owner: OwnerId, text_len: usize) {
-        self.play_thread_three(tick, owner, "talk");
-        if let Some(peer) = self.peers.get_mut(&owner) {
-            let chars = u64::try_from(text_len).unwrap_or(u64::MAX);
-            peer.talk_stops
-                .push_back(tick.saturating_add(chars.saturating_mul(TALK_TICKS_PER_CHAR)));
+    /// `%player.schedule(ms, "playThread", thread, sequence)`: plays at
+    /// `due`, after any schedule already due by then.
+    fn schedule_thread(&mut self, owner: OwnerId, due: u64, thread: u8, sequence: &str) -> Result<()> {
+        let peer = self.peers.get_mut(&owner).context("No such player")?;
+        ensure!(
+            peer.thread_timers.len() < MAX_THREAD_TIMERS,
+            "Dropped: {MAX_THREAD_TIMERS} animations already wait on this player"
+        );
+        let at = peer.thread_timers.partition_point(|timer| timer.due <= due);
+        peer.thread_timers.insert(
+            at,
+            ThreadTimer {
+                due,
+                thread,
+                sequence: sequence.into(),
+            },
+        );
+        Ok(())
+    }
+    /// Plays every scheduled `playThread` due by `tick`.
+    fn fire_thread_timers(&mut self, tick: u64) {
+        let mut due = Vec::new();
+        for (&owner, peer) in &mut self.peers {
+            let ready = peer.thread_timers.partition_point(|timer| timer.due <= tick);
+            due.extend(peer.thread_timers.drain(..ready).map(|timer| (owner, timer)));
+        }
+        for (owner, timer) in due {
+            self.play_thread(tick, owner, timer.thread, &timer.sequence);
         }
     }
-    /// Fires due chat `root` schedules. Each message stops thread 3 on its own
-    /// timer, whatever plays on it by then, as the original schedules do.
-    fn stop_talking(&mut self, tick: u64) {
-        let due: Vec<_> = self
-            .peers
-            .iter_mut()
-            .flat_map(|(owner, peer)| {
-                let mut stops = 0;
-                while peer.talk_stops.front().is_some_and(|stop| *stop <= tick) {
-                    peer.talk_stops.pop_front();
-                    stops += 1;
-                }
-                std::iter::repeat_n(*owner, stops)
-            })
-            .collect();
-        for owner in due {
-            self.play_thread_three(tick, owner, "root");
-        }
+    /// `serverCmdMessageSent` and `serverCmdTeamMessageSent`: talk, then
+    /// return thread 3 to root after 50 ms per character of the message,
+    /// on its own timer whatever plays on it by then.
+    fn start_talking(&mut self, tick: u64, owner: OwnerId, text_len: usize) {
+        self.play_thread(tick, owner, 3, "talk");
+        let chars = u64::try_from(text_len).unwrap_or(u64::MAX);
+        let due = tick.saturating_add(chars.saturating_mul(TALK_TICKS_PER_CHAR));
+        // A body already holding the most schedules keeps talking until one
+        // of the earlier messages stops it.
+        let _ = self.schedule_thread(owner, due, 3, "root");
     }
     pub fn command(&mut self, owner: OwnerId, sequence: u64, command: Command) -> Result<Reply> {
         self.command_with_aim(owner, sequence, command, None)
@@ -1834,7 +1857,7 @@ impl Session {
             }
             Command::BuildGesture(gesture) => {
                 ensure!(peer.combat.alive, "Dead players cannot build");
-                self.play_thread_three(tick, owner, gesture.sequence());
+                self.play_thread(tick, owner, 3, gesture.sequence());
                 Ok(Reply::Accepted)
             }
             Command::SwitchSeat(step) => {
@@ -1972,7 +1995,7 @@ impl Session {
                 self.push_undo(owner, undo::UndoEntry::Plant(id));
                 self.cues
                     .emit(tick, crate::presentation::CueKind::Plant, position);
-                self.play_thread_three(tick, owner, "plant");
+                self.play_thread(tick, owner, 3, "plant");
                 Ok(Reply::Planted(id))
             }
             Command::UseSprayCan { color } => {
@@ -2008,7 +2031,7 @@ impl Session {
                     "activate"
                 };
                 let eye = peer.player.eye();
-                self.play_thread_three(tick, owner, swing);
+                self.play_thread(tick, owner, 3, swing);
                 if self.teleport_lockout(owner, admin_players::TELEPORT_PICKUP_LOCK_MS, true) {
                     return Ok(Reply::Activated(None));
                 }
@@ -2126,7 +2149,7 @@ impl Session {
         if self.admin.settings.public_domain_timeout_minutes > 0 && tick.is_multiple_of(60 * 120) {
             self.refresh_trust();
         }
-        self.stop_talking(tick);
+        self.fire_thread_timers(tick);
         // Each system contains its own failure: the rest of the tick still
         // runs and every failure is reported together at the end.
         let mut failures = Vec::new();

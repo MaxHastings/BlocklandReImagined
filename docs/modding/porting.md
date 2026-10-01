@@ -212,8 +212,8 @@ page as well.
 | Add-On | Port | Status | What it covers |
 |---|---|---|---|
 | `Weapon_Shotgun` (Sawn-off Shotgun) | `weapon_shotgun` | verified | `shotgunImage::onFire`: the pellets, their spread and the recoil, read from the copy's own script |
-| `Weapon_ModernWarbattles` (Bushido's Adventurer's Weapons) | `weapon_modernwarbattles` | partial | the hl2 ammo system (magazines, reserves, reloads, ammo boxes, spare guns), every gun's shot from its own `onFire` (the Heavy Machine Gun's three fire states), the light key falling through to the light, the hitscan guns, their crits and shoves while `Emote_Critical` is on (its burst and sounds), the melee swings (players and vehicles, kill messages, hit sounds), headshots, and the frag grenade's cooking, countdown and shrapnel. Not yet: a head hit's flinch |
-| `Weapon_AdventurePack` (the Glass 1019 release) | `weapon_adventurepack` | partial | the same ammo system with its own reserves, its shots (the Paired Shotgun's single barrel), hitscan guns, headshots and the taser's tumble, sharing the rules above |
+| `Weapon_ModernWarbattles` (Bushido's Adventurer's Weapons) | `weapon_modernwarbattles` | verified | the hl2 ammo system (magazines, reserves, reloads, ammo boxes, spare guns), every gun's shot from its own `onFire` (the Heavy Machine Gun's three fire states), the light key falling through to the light, the hitscan guns, their crits and shoves while `Emote_Critical` is on (its burst and sounds), the melee swings (players and vehicles, kill messages, hit sounds), headshots, the frag grenade's cooking, countdown and shrapnel, and a head hit's flinch |
+| `Weapon_AdventurePack` (the Glass 1019 release) | `weapon_adventurepack` | verified | the same ammo system with its own reserves, its shots (the Paired Shotgun's single barrel), hitscan guns, headshots and the taser's tumble, sharing the rules above |
 
 ## Host rules
 

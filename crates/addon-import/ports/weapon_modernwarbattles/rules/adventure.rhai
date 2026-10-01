@@ -29,6 +29,9 @@ fn crit_types() { {{crit_types}} }
 // none: they crit, and shove what they hit, only while it is on, as the
 // original checked isObject(CritProjectile).
 fn critical() { {{critical}} }
+// The hitbox test's flinch on a head hit: #{ first, then, after_ms }, the
+// sequence threads 0 and 2 play, and what they play `after_ms` later.
+fn flinch() { {{flinch}} }
 // Taser projectile => #{ spread, offset, up, ms }: the random sideways
 // push (getRandom(spread) - offset on each axis), the push up, and how
 // long the tumble lasts.
@@ -89,6 +92,16 @@ fn on_damage(victim, attacker, amount, info) {
     }
     let multiplier = table[info.projectile].headshotmultiplier;
     let head = info.region == "head" || player(victim).crouched;
+    if head {
+        // getHitbox flinches whoever it finds hit in the head, whatever the
+        // multiplier.
+        let f = flinch();
+        let after = f.after_ms.to_float() / 1000.0;
+        for slot in [0, 2] {
+            play_thread(victim, slot, f.first);
+            play_thread(victim, slot, f.then, after);
+        }
+    }
     if head && multiplier != 1 {
         return amount * multiplier;
     }

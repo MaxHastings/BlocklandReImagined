@@ -58,6 +58,7 @@ operation that needs a capability.
 | `%player.spawnExplosion(%projectile, %scale)` | `spawn_explosion(p, projectile, scale)` | `damage` |
 | `isObject(SomeDatablock)` of another Add-On | `optional_dependencies` and `enabled(add_on)` | |
 | `%obj.playThread(%slot, %seq)` | `play_thread(p, thread, sequence)` | `effects` |
+| `%obj.schedule(%ms, "playThread", %slot, %seq)` | `play_thread(p, thread, sequence, ms / 1000.0)` | `effects` |
 | A stretched `StaticShape` tracer | `beam(from, to, #{ color, width, seconds, muzzle })` | `effects` |
 | Mission lights baked into the map (v20 scripts could not change them) | `set_map_lights([x, y, z], radius, #{ on, color, brightness })` | `lighting` |
 | The mission `Sun`'s `azimuth`, `elevation`, `color`, `ambient` and the `Sky`'s `fogColor`, `fogDistance`, `visibleDistance` (fixed in v20; changed live here) | `set_environment(#{ sun_azimuth, direct_light, fog_color, visible_distance, day_length, ... })`, `environment()` | `environment` |
@@ -114,7 +115,7 @@ request was kept only as a general building block; how each was judged:
 | Player facts `mounted`, `scale`, `cx`/`cy`/`cz`, `slot`, `image`, `image_state` | Kept | Plain reads with no cost to anything else. The body centre accounts for crouching and scale. |
 | `mount_image`, `set_image_ammo` | Kept | They are v20's image seams, still the way to build scopes and ammo a magazine does not cover. Magazines themselves became image data (October 2026): Tier+Tactical and the Adventure Pack each built the same rounds, reserve, reload and display in script, so it is one shared piece now. |
 | `set_fov` | Kept | Scopes, cameras in cutscenes, sprint effects. |
-| `play_thread` | Kept, threads 2 and 3 | Those are the threads the body animates. |
+| `play_thread` | Kept, all four threads, with an optional delay | Threads 0 and 1 joined 2 and 3 (October 2026) for the Adventure Pack's head-hit flinch; the delay is the one `schedule` Add-Ons used on animations, and chat's talk stop runs on the same timers. |
 | Light key on images | Kept | The same kind of key hook as `jet`. |
 | `beam` drawing one Add-On's tracer model | Changed: a coloured beam | A colour, width and fade covers tracers, lasers and bolts with no model to ship or convert. A model-drawn beam can come later if someone needs one. The beam starts at the shooter's muzzle as each player draws it, and costs one cue. |
 | A `sound` capability and a new `effects` capability | Merged into `effects` | Sounds, beams and animations are all presentation; players read one line. |

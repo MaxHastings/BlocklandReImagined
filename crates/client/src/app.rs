@@ -36,6 +36,34 @@ use std::{
 };
 
 type Meshes = BTreeMap<String, bri_content::brick::Brick>;
+/// One player's script-thread animations by thread number (`playThread`).
+type AvatarThreads = [Option<crate::avatar::ActionAnimation>; 4];
+
+/// Threads 0, 1 and 3 are not tied to a mounted image (an image's own
+/// thread 0 names its hand): each holds until the next animation on it
+/// replaces it, or `root` stops it. False for any other animation.
+fn play_free_thread(
+    threads: &mut BTreeMap<u64, AvatarThreads>,
+    actor: u64,
+    thread: u8,
+    sequence: &str,
+    image_hand: Option<u8>,
+    started_at: f64,
+) -> bool {
+    if !matches!(thread, 0 | 1 | 3) || image_hand.is_some() {
+        return false;
+    }
+    let playing = threads.entry(actor).or_default();
+    playing[usize::from(thread)] =
+        (!sequence.eq_ignore_ascii_case("root")).then(|| crate::avatar::ActionAnimation {
+            sequence: sequence.into(),
+            started_at,
+        });
+    if playing.iter().all(Option::is_none) {
+        threads.remove(&actor);
+    }
+    true
+}
 /// World camera far plane; also the farthest terrain tiles are ever drawn.
 const FAR_PLANE: f32 = 4000.0;
 /// PlayerStandardArmor's `cameraMaxDist`, `cameraVerticalOffset` and
@@ -559,8 +587,10 @@ pub struct App {
     /// horse players.
     mount_meshes: BTreeMap<u64, crate::avatar::AvatarMesh>,
     avatar_actions: BTreeMap<u64, crate::avatar::ActionAnimation>,
-    /// Thread-3 builder and chat animations by player.
-    avatar_gestures: BTreeMap<u64, crate::avatar::ActionAnimation>,
+    /// The script threads not tied to a mounted image, by player and thread
+    /// number: 0 and 1 a package's body animations, 3 the builder and chat
+    /// gestures. Thread 2 is `avatar_actions`.
+    avatar_threads: BTreeMap<u64, AvatarThreads>,
     avatar_action_images: BTreeMap<u64, String>,
     animation_time: f64,
     avatar_preview: Option<crate::gpu_build::Building<crate::avatar::Preview>>,
@@ -1289,7 +1319,7 @@ impl App {
     }
     fn update_avatar_animation_inputs(
         avatar_actions: &mut BTreeMap<u64, crate::avatar::ActionAnimation>,
-        avatar_gestures: &mut BTreeMap<u64, crate::avatar::ActionAnimation>,
+        avatar_threads: &mut BTreeMap<u64, AvatarThreads>,
         avatar_action_images: &mut BTreeMap<u64, String>,
         weapon_animation_cues: &mut VecDeque<(bri_sim::presentation::Cue, f32, f64)>,
         weapon_animation_drops: &mut u64,
@@ -1297,7 +1327,7 @@ impl App {
         elapsed: f32,
     ) {
         avatar_actions.retain(|owner, _| view.poses.contains_key(owner));
-        avatar_gestures.retain(|owner, _| view.poses.contains_key(owner));
+        avatar_threads.retain(|owner, _| view.poses.contains_key(owner));
         avatar_action_images.retain(|owner, _| view.poses.contains_key(owner));
         let identity = |owner: &u64| -> Option<String> {
             let mut parts = Vec::new();
@@ -1339,20 +1369,7 @@ impl App {
             else {
                 continue;
             };
-            // Thread 3 is not tied to a mounted image: it is replaced by the
-            // next builder or chat animation, or stopped by `root`.
-            if *thread == 3 {
-                if sequence.eq_ignore_ascii_case("root") {
-                    avatar_gestures.remove(actor);
-                } else {
-                    avatar_gestures.insert(
-                        *actor,
-                        crate::avatar::ActionAnimation {
-                            sequence: sequence.clone(),
-                            started_at,
-                        },
-                    );
-                }
+            if play_free_thread(avatar_threads, *actor, *thread, sequence, *image_hand, started_at) {
                 continue;
             }
             if *thread != 2 || sequence.eq_ignore_ascii_case("root") {
@@ -1834,7 +1851,7 @@ impl App {
             avatars: BTreeMap::new(),
             mount_meshes: BTreeMap::new(),
             avatar_actions: BTreeMap::new(),
-            avatar_gestures: BTreeMap::new(),
+            avatar_threads: BTreeMap::new(),
             avatar_action_images: BTreeMap::new(),
             animation_time: 0.0,
             avatar_preview: None,
@@ -1986,7 +2003,7 @@ impl App {
         self.avatars.clear();
         self.mount_meshes.clear();
         self.avatar_actions.clear();
-        self.avatar_gestures.clear();
+        self.avatar_threads.clear();
         self.avatar_action_images.clear();
         self.controls = Controls::default();
         self.cpu_scene = None;
@@ -6858,7 +6875,7 @@ impl PlatformApp for App {
             // Visible geometry and attached items consume these same original nodes.
             Self::update_avatar_animation_inputs(
                 &mut self.avatar_actions,
-                &mut self.avatar_gestures,
+                &mut self.avatar_threads,
                 &mut self.avatar_action_images,
                 &mut self.weapon_animation_cues,
                 &mut self.weapon_animation_drops,
@@ -6917,7 +6934,7 @@ impl PlatformApp for App {
                     .is_some_and(|body| mesh.set_body(body))
                 {
                     self.avatar_actions.remove(owner);
-                    self.avatar_gestures.remove(owner);
+                    self.avatar_threads.remove(owner);
                     self.avatar_action_images.remove(owner);
                 }
                 let mut ready_hands = Vec::new();
@@ -6975,6 +6992,12 @@ impl PlatformApp for App {
                             Some(d.look_limits)
                         });
                 let held = crate::avatar::HeldToolPose::from_mounted_images(ready_hands);
+                let threads = self
+                    .avatar_threads
+                    .get(owner)
+                    .filter(|_| !dead)
+                    .cloned()
+                    .unwrap_or_default();
                 let input = crate::avatar::AvatarAnimationInput {
                     look_limits,
                     mount_rotation: self.rider_rotations.get(owner).copied(),
@@ -6985,7 +7008,8 @@ impl PlatformApp for App {
                         self.combat.hug_pose(*owner, held)
                     },
                     action: self.avatar_actions.get(owner).cloned().filter(|_| !dead),
-                    gesture: self.avatar_gestures.get(owner).cloned().filter(|_| !dead),
+                    gesture: threads[3].clone(),
+                    body: [threads[0].clone(), threads[1].clone()],
                     dead,
                     sitting: !dead
                         && (view.vitals.get(owner).is_some_and(|v| v.sitting)
@@ -9751,6 +9775,36 @@ fn update_small_json<T: serde::de::DeserializeOwned + serde::Serialize + Default
 const MAX_RECONNECTS: u8 = 3;
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn body_threads_hold_until_replaced_or_root() {
+        let mut threads = std::collections::BTreeMap::new();
+        // An image's own thread 0 and the image-bound thread 2 are not body
+        // threads.
+        assert!(!super::play_free_thread(&mut threads, 7, 0, "fire", Some(0), 1.0));
+        assert!(!super::play_free_thread(&mut threads, 7, 2, "plant", None, 1.0));
+        assert!(threads.is_empty());
+        assert!(super::play_free_thread(&mut threads, 7, 0, "jump", None, 1.0));
+        assert!(super::play_free_thread(&mut threads, 7, 3, "talk", None, 1.5));
+        assert!(super::play_free_thread(&mut threads, 7, 0, "plant", None, 2.0));
+        let sequences = |threads: &std::collections::BTreeMap<u64, super::AvatarThreads>| {
+            threads[&7]
+                .iter()
+                .map(|t| t.as_ref().map(|t| (t.sequence.clone(), t.started_at)))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            sequences(&threads),
+            vec![
+                Some(("plant".into(), 2.0)),
+                None,
+                None,
+                Some(("talk".into(), 1.5)),
+            ]
+        );
+        assert!(super::play_free_thread(&mut threads, 7, 0, "Root", None, 3.0));
+        assert!(super::play_free_thread(&mut threads, 7, 3, "root", None, 3.0));
+        assert!(threads.is_empty());
+    }
     /// A first-person image sits in the view's frame, so it stays put on
     /// screen however a seat pitches, rolls or loops: the frame's axes are
     /// the rendered camera's.

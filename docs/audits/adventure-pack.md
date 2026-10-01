@@ -51,7 +51,7 @@ its own values.
 | Grenade cooking and countdown | `onPinDrop` `burnSched`, `sendCenterNade`, `burnedIt`, thrown fuse `4000 - chargeTime` | image `cook`, projectile fuses | **new** |
 | Bomblet fuses | `projectile::onAdd` `400 - getRandom(...)` | children `fuse_ticks` | **new** |
 | Light key reloads | hl2 `serverCmdLight` | magazine `light_states` | **new** |
-| Head-hit flinch | hitbox `playThread(0/2, jump)`, `plant` after 50 ms | needs a client body thread 0 and a timer | **not yet** |
+| Head-hit flinch | hitbox `playThread(0/2, jump)`, `schedule(50, playThread, 0/2, plant)` | `play_thread` on threads 0 to 3 with `after` | **new** (threads 0 and 1, delay) |
 | Hitmarker | `commandToClient('hitmarker')` | nothing in either pack draws it | none in the original |
 
 ## Approximations

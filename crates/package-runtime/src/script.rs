@@ -1524,16 +1524,21 @@ fn register_presentation(engine: &mut Engine) {
     }
     engine.register_fn("beam", |from: Array, to: Array| beam(from, to, Map::new()));
     engine.register_fn("beam", beam);
+    // `%player.playThread(thread, sequence)`, or its `schedule(ms, ...)`
+    // `after` seconds later.
+    fn play_thread(player: Dynamic, thread: i64, sequence: &str, after: f64) -> Fallible<()> {
+        push(Op::PlayThread {
+            player: id(&player)?,
+            thread: u8::try_from(thread).map_err(|_| "thread is 0 to 3")?,
+            sequence: sequence.into(),
+            after: after as f32,
+        })
+    }
     engine.register_fn(
         "play_thread",
-        |player: Dynamic, thread: i64, sequence: &str| {
-            push(Op::PlayThread {
-                player: id(&player)?,
-                thread: u8::try_from(thread).map_err(|_| "thread is 2 or 3")?,
-                sequence: sequence.into(),
-            })
-        },
+        |player: Dynamic, thread: i64, sequence: &str| play_thread(player, thread, sequence, 0.0),
     );
+    engine.register_fn("play_thread", play_thread);
     // Every map light within `radius` of `at`: `on` (true), `color`
     // ([1.0, 1.0, 1.0], times the recovered colour) and `brightness` (1.0);
     // an empty map puts them back as the map was lit.

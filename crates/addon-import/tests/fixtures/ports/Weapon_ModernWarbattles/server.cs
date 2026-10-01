@@ -561,3 +561,16 @@ package standinAmmoSystem
    }
 };
 activatePackage(standinAmmoSystem);
+
+// The hitbox test: a head hit (or any hit on a crouched target) flinches the
+// body for a moment.
+function getHitbox(%obj, %col, %pos)
+{
+   if(!%col.isCrouched() && getWord(%pos, 2) < getWord(%col.getEyePoint(), 2) - 0.5)
+      return "";
+   %col.playThread(0, jump);
+   %col.playThread(2, jump);
+   %col.schedule(50, "playThread", "0", "plant");
+   %col.schedule(50, "playThread", "2", "plant");
+   return "headSkin";
+}

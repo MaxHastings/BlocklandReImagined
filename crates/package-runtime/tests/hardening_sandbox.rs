@@ -515,6 +515,13 @@ fn every_operation_needs_its_declared_capability() {
             player: 1,
             thread: 3,
             sequence: "activate2".into(),
+            after: 0.0,
+        },
+        Op::PlayThread {
+            player: 1,
+            thread: 0,
+            sequence: "plant".into(),
+            after: 0.05,
         },
         Op::SetFov {
             player: 1,
@@ -707,13 +714,27 @@ fn extreme_operation_parameters_are_refused() {
         },
         Op::PlayThread {
             player: 1,
-            thread: 0,
+            thread: 4,
             sequence: "activate".into(),
+            after: 0.0,
         },
         Op::PlayThread {
             player: 1,
             thread: 3,
             sequence: "no spaces".into(),
+            after: 0.0,
+        },
+        Op::PlayThread {
+            player: 1,
+            thread: 3,
+            sequence: "activate".into(),
+            after: 61.0,
+        },
+        Op::PlayThread {
+            player: 1,
+            thread: 3,
+            sequence: "activate".into(),
+            after: f32::NAN,
         },
         Op::SetFov {
             player: 1,
@@ -1125,7 +1146,7 @@ fn script_calls_build_their_operations_and_world_questions_need_a_world() {
     assert_eq!(ops[6], Op::SetFov { player: 1, fov: None });
     assert_eq!(
         ops[7],
-        Op::PlayThread { player: 1, thread: 3, sequence: "root".into() }
+        Op::PlayThread { player: 1, thread: 3, sequence: "root".into(), after: 0.0 }
     );
     for (script, message) in [
         ("fn f() { raycast([0.0, 0.0, 0.0], [0.0, 1.0, 0.0], 5.0) }", "cannot be asked"),

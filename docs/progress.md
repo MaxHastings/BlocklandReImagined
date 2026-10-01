@@ -8900,3 +8900,24 @@ projectile and second sound were defined nowhere and never ran.
 Tests: `adventure_port.rs` `crits_play_with_the_critical_hit_emote`,
 `a_grenade_cooks_in_the_hand`, light-key checks in the ammo test, and the
 hitscan test now expects no crit or shove without Emote_Critical.
+
+## 2026-10-01 Body threads and scheduled animations: the Adventure head-hit flinch (branch `claude/adventure-pack-n3spj2`)
+
+`play_thread(p, thread, sequence[, after])` now covers all four of
+`playThread`'s script threads (0 and 1 were refused before) and takes an
+optional delay in seconds, Torque's `%player.schedule(ms, "playThread",
+...)`: whole milliseconds, fired on the first 120 Hz tick at or past them,
+at most 64 waiting per player, dropped with the body on respawn. Chat's
+talk stop (`schedule(strlen * 50, playThread, 3, root)`) now runs on the
+same per-player timers instead of its own queue. The client keeps threads
+0, 1 and 3 per player (`play_free_thread`) and layers 0 and 1 under the
+arm and gesture threads. Both Adventure ports pin the original
+`getHitbox` flinch (threads 0 and 2 jump, plant 50 ms later) and play it
+on a head or crouched hit by a headshot projectile, so both ports are now
+`verified` with no behaviour missing.
+
+Tests: `adventure_port.rs` headshot and Glass sniper tests check the cue
+sequence and its 6-tick gap (a body hit flinches nothing);
+`app::tests::body_threads_hold_until_replaced_or_root`;
+`hardening_sandbox` accepts thread 0 with a delay and refuses thread 4,
+a 61 s delay and a NaN one.

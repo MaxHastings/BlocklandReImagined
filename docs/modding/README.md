@@ -171,7 +171,7 @@ HUD panels can only show keys the viewer receives. `persist` (default
 | | | `push`, `tumble`, `hold`, `hold_distance`, `let_go`, `spawn_vehicle`, `remove_vehicle`: `physics` |
 | | | `heal(p, amount)`, `fire(...)`, `spawn_explosion(p, projectile, scale)`: `damage` |
 | | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds)` (`()` for everyone): `chat` |
-| | | `play_sound(p, sound)` at a player's ears, `sound_at(sound, x, y, z)`, `beam(from, to[, options])`, `play_thread(p, thread, sequence)`, `show_box(p, min, max, tool)`, `hide_box(p)`: `effects` |
+| | | `play_sound(p, sound)` at a player's ears, `sound_at(sound, x, y, z)`, `beam(from, to[, options])`, `play_thread(p, thread, sequence[, after])`, `show_box(p, min, max, tool)`, `hide_box(p)`: `effects` |
 | | | `set_map_lights([x, y, z], radius, options)`: `lighting` |
 | `environment()` | | `set_environment(#{ ... })`, `reset_environment()`: `environment` |
 
@@ -259,8 +259,14 @@ laser, a bolt. Options go in a map, `beam(from, to, #{ color: [1.0, 0.8,
 or `[r, g, b, a]` from 0 to 1, `width` up to 16 units, `seconds` up to 10,
 and `muzzle` starts it at that player's gun muzzle as each player draws it.
 The beam thins and fades out over its life. `play_thread(p, thread,
-sequence)` plays one of the body's animations: thread 3 a gesture any time
-(`"activate2"`, `"root"` to stop), thread 2 the arms with what they hold.
+sequence)` plays an animation on one of the body's four threads, as
+`playThread` did: 0 and 1 the body (a hit's flinch, `"jump"`), 2 the arms
+with what they hold, 3 a gesture (`"activate2"`). Each holds until the next
+animation on its thread, and `"root"` stops it. `play_thread(p, thread,
+sequence, after)` plays it `after` seconds later (up to 60), on the first
+tick at or past that time, as `%player.schedule(ms, "playThread", ...)`
+did; a new body (a respawn) drops what was still waiting, and one player
+holds at most 64 waiting.
 Prints, sounds, beams and animations share one allowance of 64 a second
 per Add-On.
 

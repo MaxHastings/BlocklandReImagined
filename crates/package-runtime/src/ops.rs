@@ -39,6 +39,9 @@ pub const MAX_FILL_BRICKS: usize = 10_000;
 /// Widest `beam`, units, and longest it lasts, seconds.
 pub const MAX_BEAM_WIDTH: f32 = 16.0;
 pub const MAX_BEAM_SECONDS: f32 = 10.0;
+/// Longest a `play_thread` may wait before it plays, seconds
+/// (`%player.schedule(ms, "playThread", ...)`).
+pub const MAX_THREAD_DELAY: f32 = 60.0;
 /// Widest sphere `set_map_lights` covers, units, and brightest it makes a
 /// light (times its recovered colour).
 pub const MAX_LIGHT_RADIUS: f32 = 2000.0;
@@ -385,12 +388,15 @@ pub enum Op {
         seconds: f32,
         muzzle: Option<u64>,
     },
-    /// Play an animation on a player's body (`playThread`): thread 2 the
-    /// arms with what they hold, thread 3 a gesture; `root` stops it.
+    /// Play an animation on one of a player's four script threads
+    /// (`playThread`): 0 and 1 the body, 2 the arms with what they hold, 3 a
+    /// gesture; `root` stops it. `after` seconds later when above 0, as
+    /// `%player.schedule(ms, "playThread", ...)` did.
     PlayThread {
         player: u64,
         thread: u8,
         sequence: String,
+        after: f32,
     },
     /// Every map light within `radius` of `position` shines at `tint` times
     /// its recovered colour (0 switches it off, 1 is as the map was lit),
@@ -661,9 +667,14 @@ impl Op {
                     && *seconds <= MAX_BEAM_SECONDS
             }
             Self::PlayThread {
-                thread, sequence, ..
+                thread,
+                sequence,
+                after,
+                ..
             } => {
-                (2..=3).contains(thread)
+                *thread <= 3
+                    && after.is_finite()
+                    && (0.0..=MAX_THREAD_DELAY).contains(after)
                     && !sequence.is_empty()
                     && sequence.len() <= 64
                     && sequence

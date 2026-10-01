@@ -96,7 +96,7 @@ fn ammo_system_guns_get_magazines_that_reload_like_their_states() {
     assert!(port.applied, "{:?}", port.reason);
     assert_eq!(
         (port.port.as_str(), port.status.as_str(), port.copy.as_str()),
-        ("weapon_modernwarbattles", "partial", "unlisted")
+        ("weapon_modernwarbattles", "verified", "unlisted")
     );
     bri_addon_import::ports::check_pins(&out).unwrap();
     let pack = pack(&out);
@@ -503,6 +503,34 @@ impl Game {
     }
 }
 
+/// The body animations played on `owner` since the last look, as
+/// `(ticks after the first, thread, sequence)`.
+fn flinches(g: &mut Game, owner: OwnerId) -> Vec<(u64, u8, String)> {
+    let cues: Vec<_> = g
+        .s
+        .take_cues()
+        .into_iter()
+        .filter_map(|c| match c.kind {
+            bri_sim::presentation::CueKind::WeaponAnimation {
+                actor,
+                thread,
+                sequence,
+                image_hand: None,
+            } if actor == owner => Some((c.tick, thread, sequence)),
+            _ => None,
+        })
+        .collect();
+    let first = cues.first().map_or(0, |c| c.0);
+    cues.into_iter()
+        .map(|(tick, thread, sequence)| (tick - first, thread, sequence))
+        .collect()
+}
+fn flinch() -> Vec<(u64, u8, String)> {
+    [(0, 0, "jump"), (0, 2, "jump"), (6, 0, "plant"), (6, 2, "plant")]
+        .map(|(t, thread, s)| (t, thread, s.to_string()))
+        .into()
+}
+
 #[test]
 fn ammo_boxes_and_headshots_play_in_a_hosted_game() {
     let (dir, out, report) = imported("hosted");
@@ -560,15 +588,21 @@ fn ammo_boxes_and_headshots_play_in_a_hosted_game() {
 
     // The pistol's 10 damage; ×1.5 on the head, and on a crouched target
     // (after v20's own ×2.1 for a direct hit on a crouched player).
+    // A head hit flinches the body as the hitbox test did: threads 0 and 2
+    // jump, then plant 50 ms (6 ticks) later; a body hit does not.
     g.equip(a, PISTOL);
+    g.s.take_cues();
     g.shoot_at(a, b, 1.7);
     assert!((g.health(b) - 90.0).abs() < 0.5, "{}", g.health(b));
+    assert_eq!(flinches(&mut g, b), vec![]);
     g.shoot_at(a, b, 2.45);
     assert!((g.health(b) - 75.0).abs() < 0.5, "{}", g.health(b));
+    assert_eq!(flinches(&mut g, b), flinch());
     g.looks.get_mut(&b).unwrap().crouch = true;
     g.steps(30);
     g.shoot_at(a, b, 0.9);
     assert!((g.health(b) - (75.0 - 31.5)).abs() < 0.5, "{}", g.health(b));
+    assert_eq!(flinches(&mut g, b), flinch());
     assert_eq!(g.mag(a), json!("9|12|pistol|64"));
 
     // The light key reloads a magazine that is not full from the ready
@@ -949,12 +983,16 @@ fn glass_release_taser_tumbles_and_sniper_headshots() {
     g.steps(30);
     assert_eq!(g.mag(a), json!("10|10|pistol|96"));
 
-    // The sniper's 40, doubled on the head.
+    // The sniper's 40, doubled on the head, which flinches the body even
+    // as the shot kills.
     g.equip(a, &sniper);
+    g.s.take_cues();
     g.shoot_at(a, b, 1.2);
     assert!((g.health(b) - 60.0).abs() < 0.5, "{}", g.health(b));
+    assert_eq!(flinches(&mut g, b), vec![]);
     g.shoot_at(a, b, 2.45);
     assert_eq!(g.health(b), 0.0);
+    assert_eq!(flinches(&mut g, b), flinch());
     g.steps(300);
     g.cmd(b, Command::Respawn);
     g.steps(330);

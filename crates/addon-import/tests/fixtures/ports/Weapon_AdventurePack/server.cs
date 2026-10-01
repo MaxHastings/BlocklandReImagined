@@ -291,3 +291,16 @@ function taserProjectile::damage(%this, %obj, %col, %fade, %pos, %normal)
    %col.addVelocity(getRandom(6) - 3 SPC getRandom(6) - 3 SPC 5);
    tumble(%col, 4000);
 }
+
+// The hitbox test: a head hit (or any hit on a crouched target) flinches the
+// body for a moment.
+function getHitbox(%obj, %col, %pos)
+{
+   if(!%col.isCrouched() && getWord(%pos, 2) < getWord(%col.getEyePoint(), 2) - 0.5)
+      return "";
+   %col.playThread(0, jump);
+   %col.playThread(2, jump);
+   %col.schedule(50, "playThread", "0", "plant");
+   %col.schedule(50, "playThread", "2", "plant");
+   return "headSkin";
+}

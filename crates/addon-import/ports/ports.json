@@ -24,7 +24,7 @@
       "addon": "Weapon_ModernWarbattles",
       "title": "Adventurer's Weapons (Bushido)",
       "port": "weapon_modernwarbattles",
-      "status": "partial",
+      "status": "verified",
       "sha256": [
         "4d938fe308610289aabdfe0d74a8ac01048e2ece458545640c5737c14d7792ed"
       ],
@@ -103,6 +103,13 @@
           "sniperrifle_shove": "getforwardvector\\s*\\(\\s*\\)\\s*,\\s*([0-9]*\\.?[0-9]+)\\s*\\)\\s*,\\s*\"[^\"]*\"\\s*\\)\\s*\\)",
           "sniperrifle_up": "getforwardvector\\s*\\(\\s*\\)\\s*,\\s*[0-9.]+\\s*\\)\\s*,\\s*\"\\s*0\\s+0\\s+([0-9]*\\.?[0-9]+)\\s*\"",
           "sniperrifle_test": "getworldboxcenter\\s*\\(\\s*\\)\\s*,\\s*2\\s*\\)\\s*-\\s*3\\.3\\s*\\*"
+        },
+        "getHitbox": {
+          "flinch_first": "playthread\\s*\\(\\s*0\\s*,\\s*\"?([a-z0-9_]+)\"?\\s*\\)",
+          "flinch_arms": "playthread\\s*\\(\\s*2\\s*,\\s*\"?jump\"?\\s*\\)",
+          "flinch_ms": "schedule\\s*\\(\\s*([0-9]+)\\s*,\\s*\"playthread\"\\s*,\\s*\"0\"\\s*,\\s*\"[a-z0-9_]+\"\\s*\\)",
+          "flinch_then": "schedule\\s*\\(\\s*[0-9]+\\s*,\\s*\"playthread\"\\s*,\\s*\"0\"\\s*,\\s*\"([a-z0-9_]+)\"\\s*\\)",
+          "flinch_arms_then": "schedule\\s*\\(\\s*50\\s*,\\s*\"playthread\"\\s*,\\s*\"2\"\\s*,\\s*\"plant\"\\s*\\)"
         }
       },
       "tests": [
@@ -119,7 +126,7 @@
       "addon": "Weapon_AdventurePack",
       "title": "Adventurer's Weapons (Bushido, Glass 1019)",
       "port": "weapon_adventurepack",
-      "status": "partial",
+      "status": "verified",
       "sha256": [
         "9ce429bfc491cff5e3075798f88c2109717a3ea67d91f8461d8cda672a894e49"
       ],
@@ -149,6 +156,13 @@
         "pairedShotgunImage::onFire": {
           "paired_last": "toolmag\\[%obj\\.currtool\\]\\s*<=\\s*2\\s*\\)",
           "paired_take": "toolmag\\[%obj\\.currtool\\]\\s*-=\\s*2\\s*;"
+        },
+        "getHitbox": {
+          "flinch_first": "playthread\\s*\\(\\s*0\\s*,\\s*\"?([a-z0-9_]+)\"?\\s*\\)",
+          "flinch_arms": "playthread\\s*\\(\\s*2\\s*,\\s*\"?jump\"?\\s*\\)",
+          "flinch_ms": "schedule\\s*\\(\\s*([0-9]+)\\s*,\\s*\"playthread\"\\s*,\\s*\"0\"\\s*,\\s*\"[a-z0-9_]+\"\\s*\\)",
+          "flinch_then": "schedule\\s*\\(\\s*[0-9]+\\s*,\\s*\"playthread\"\\s*,\\s*\"0\"\\s*,\\s*\"([a-z0-9_]+)\"\\s*\\)",
+          "flinch_arms_then": "schedule\\s*\\(\\s*50\\s*,\\s*\"playthread\"\\s*,\\s*\"2\"\\s*,\\s*\"plant\"\\s*\\)"
         }
       },
       "tests": [

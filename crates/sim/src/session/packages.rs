@@ -1699,26 +1699,20 @@ impl Session {
                 player,
                 thread,
                 sequence,
+                after,
             } => {
-                let feet = self
-                    .peers
-                    .get(&player)
-                    .context("No such player")?
-                    .player
-                    .state()
-                    .feet;
+                ensure!(self.peers.contains_key(&player), "No such player");
                 self.take_cue(package)?;
-                self.cues.emit(
-                    tick,
-                    crate::presentation::CueKind::WeaponAnimation {
-                        actor: player,
-                        thread,
-                        sequence,
-                        image_hand: None,
-                    },
-                    feet,
-                );
-                Ok(())
+                if after > 0.0 {
+                    // A schedule is in whole milliseconds and fires on the
+                    // first tick at or past its time.
+                    let ms = (f64::from(after) * 1000.0).round() as u64;
+                    let ticks = (ms * bri_world::TICKS_PER_SECOND).div_ceil(1000);
+                    self.schedule_thread(player, tick + ticks, thread, &sequence)
+                } else {
+                    self.play_thread(tick, player, thread, &sequence);
+                    Ok(())
+                }
             }
             Op::SetMapLights {
                 position,

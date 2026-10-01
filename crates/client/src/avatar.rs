@@ -716,6 +716,10 @@ pub struct AvatarAnimationInput {
     /// A seated rider's full mount rotation, in place of the upright yaw,
     /// so they sit flush with a tilted seat.
     pub mount_rotation: Option<Quat>,
+    /// Script threads 0 and 1 (`playThread(0 or 1, ...)`): body animations
+    /// a package plays, such as a hit's flinch. Each holds until replaced
+    /// or stopped by `root`.
+    pub body: [Option<ActionAnimation>; 2],
     /// Current thread-2 action from the authoritative animation cue stream.
     /// Clear this on the corresponding vanilla stop/root cue or image switch.
     pub action: Option<ActionAnimation>,
@@ -1100,8 +1104,10 @@ impl AvatarMesh {
         let assets = assets.for_mesh(self);
         ensure!(
             time.is_finite()
-                && [&animation_input.action, &animation_input.gesture]
-                    .into_iter()
+                && animation_input
+                    .body
+                    .iter()
+                    .chain([&animation_input.action, &animation_input.gesture])
                     .flatten()
                     .all(|action| action.started_at.is_finite() && !action.sequence.is_empty())
                 && player
@@ -1243,7 +1249,12 @@ impl AvatarMesh {
             weight: 1.0,
         });
         let unacted = layers.len();
-        let threads = [(2, &animation_input.action), (3, &animation_input.gesture)];
+        let threads = [
+            (0, &animation_input.body[0]),
+            (1, &animation_input.body[1]),
+            (2, &animation_input.action),
+            (3, &animation_input.gesture),
+        ];
         for (thread, action) in threads {
             let Some(action) = action else {
                 continue;

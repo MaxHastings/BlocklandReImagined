@@ -302,7 +302,7 @@ impl Session {
         let tick = self.simulation.state().tick;
         self.cues
             .emit(tick, crate::presentation::CueKind::Plant, anchor);
-        self.play_thread_three(tick, owner, "plant");
+        self.play_thread(tick, owner, 3, "plant");
         Ok(Reply::Planted(ids[0]))
     }
 
