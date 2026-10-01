@@ -1,4 +1,5 @@
-//! The Advanced Duplicator (`packages/advanced-duplicator`) and the engine
+//! A stand-in Advanced Duplicator (`tests/fixtures/duplicators`, our own
+//! rule and tool, never shipped) and the engine
 //! seams under it: copying a box (`copy_box`), mirroring a copy as it is
 //! placed (`mirror_copy`, `PlaceBlueprint::mirrored`), cutting a copy's
 //! originals away with one undo that puts them back (`cut_copy`), painting
@@ -111,22 +112,22 @@ fn definitions() -> Definitions {
 
 /// Both Duplicators, as a server with both turned on runs them.
 fn add_ons() -> Arc<Catalog> {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages");
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/duplicators");
     let packages = [
-        ("duplicator", "duplicator/duplicator", Side::Server),
+        ("duplicator", "duplicator", Side::Server),
         (
             "duplicator-tool",
-            "duplicator/duplicator-tool",
+            "duplicator-tool",
             Side::Shared,
         ),
         (
             "advanced-duplicator-tool",
-            "advanced-duplicator/advanced-duplicator-tool",
+            "advanced-duplicator-tool",
             Side::Shared,
         ),
         (
             "advanced-duplicator",
-            "advanced-duplicator/advanced-duplicator",
+            "advanced-duplicator",
             Side::Server,
         ),
     ]
@@ -157,9 +158,9 @@ fn tool_pack() -> bri_weapons::Pack {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(path);
         bri_weapons::Pack::from_json(&std::fs::read(path).unwrap()).unwrap()
     };
-    let mut pack = read("../../packages/duplicator/duplicator-tool/assets/weapons.json");
+    let mut pack = read("tests/fixtures/duplicators/duplicator-tool/assets/weapons.json");
     let advanced =
-        read("../../packages/advanced-duplicator/advanced-duplicator-tool/assets/weapons.json");
+        read("tests/fixtures/duplicators/advanced-duplicator-tool/assets/weapons.json");
     pack.items.extend(advanced.items);
     pack.images.extend(advanced.images);
     pack

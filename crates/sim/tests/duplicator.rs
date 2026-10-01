@@ -1,4 +1,5 @@
-//! The Duplicator (`packages/duplicator`) and the engine seams under it:
+//! A stand-in Duplicator (`tests/fixtures/duplicators`, our own rule and
+//! tool, never shipped) and the engine seams under it:
 //! copying a build (`copy_build`), placing it all or none
 //! (`PlaceBlueprint`), one undo for a placed copy, and an Add-On tool whose
 //! swing runs an Add-On command.
@@ -66,7 +67,7 @@ fn definitions() -> Definitions {
 }
 
 fn add_ons() -> Arc<Catalog> {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/duplicator");
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/duplicators");
     let packages = [
         ("duplicator", Side::Server),
         ("duplicator-tool", Side::Shared),
@@ -95,7 +96,7 @@ fn add_ons() -> Arc<Catalog> {
 
 fn tool_pack() -> bri_weapons::Pack {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../packages/duplicator/duplicator-tool/assets/weapons.json");
+        .join("tests/fixtures/duplicators/duplicator-tool/assets/weapons.json");
     bri_weapons::Pack::from_json(&std::fs::read(path).unwrap()).unwrap()
 }
 
