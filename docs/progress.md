@@ -8966,3 +8966,33 @@ v0.1.10".
   and tank shell exploding on the ground 2.5 units beside the ball, in and
   out of minigames, roll it more than 6 units in two seconds; 3.75 without
   the scale).
+
+## 2026-10-01 Trench Digging port (Lilboarder's original, host rules)
+
+The original `Gamemode_TrenchDigging` now imports with a port
+(`crates/addon-import/ports/gamemode_trenchdigging`): its four images run
+the companion host rules' `dig` and `place` instead of `onFire`, the shovel
+and dirt swing the arm from data (`armattack`, `root` 200 ms later), and
+`rules/trench.rhai` rewrites `TrenchDigging.cs` function by function:
+splitting a dirt brick down to the piece nearest the hit, the 100-dirt
+pocket and its colours, putting 2x cubes and 1x1 flats back and regrouping
+eight cubes (four flats) into the next size up to 64x (8x8), `/dumpdirt`,
+`/speeddig`, `/speedplace`, `/infinitedigging` and the bottom-print count.
+Hosts build their field from the dirt bricks like any bricks and hand out
+the shovel and dirt in a normal minigame loadout.
+- New generic seams (`world.edit`): `brick(id)`, `bricks_in(min, max)`,
+  `can_plant`, `can_edit(brick)`, `plant_brick(kind, pos, turns, color,
+  owner)` (snapped to the grid, skipped where it does not fit), and
+  `aim()` reports the face normal. A rule may change a build its caller
+  has full trust on or, in a minigame, a build the minigame plays with;
+  `remove_brick` follows the same rule.
+- Deliberate differences, in the port's notes: digging follows minigame
+  and trust rules (the original let anyone dig any dirt), regrouping joins
+  one build's dirt only, a flat placed on a flat sits on it.
+- Not covered yet (status `partial`): `server.cs` sets PlayerNoJet's
+  `maxStepHeight` to 1.2 so No Jet players step up a 2x cube. It needs an
+  engine seam for an Add-On to adjust a stock player type while it is on.
+- Tests: `bri-addon-import --test ports trench_digging_port_writes_its_rules`
+  (CC0 stand-in with the folder name) and `bri-sim --test trench_digging`
+  (dig and put back to the original 8x cube; flats; minigame loadout and
+  permission; dump and infinite digging).

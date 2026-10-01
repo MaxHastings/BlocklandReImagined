@@ -1,0 +1,123 @@
+{
+  "schema_version": 1,
+  "notes": "TrenchDigging.cs rewritten as host rules (rules/trench.rhai): the shovel splits a dirt brick down to the piece nearest the hit and takes it, the dirt item puts 2x cubes and 1x1 flats back and merges eight cubes (four flats) into the next size, /dumpdirt, /speeddig, /speedplace and /infinitedigging. The images run those rules instead of their onFire, play onPreFire's arm swing from data (armattack, then root 200 ms later), and the dirt shot is fired by the rules while there is dirt, as Parent::onFire was. Differences: digging and placing follow the minigame and trust rules (the original let anyone dig any dirt); regrouping only joins dirt of one build; a flat placed on top of a flat sits on it (the original moved 0.5 up for a 0.6 tall flat); the 100 dirt limit is the original's own default without RTB's preference. Not covered: server.cs sets PlayerNoJet's maxStepHeight to 1.2, so No Jet players step up 2x cubes.",
+  "rules": {
+    "capabilities": [
+      "world.edit",
+      "chat",
+      "player",
+      "physics",
+      "damage"
+    ]
+  },
+  "patch": {
+    "assets/weapons.json": {
+      "images": {
+        "{namespace}:image/trenchshovelimage": {
+          "command": "{rules}:dig",
+          "states": [
+            {
+              "name": "Activate",
+              "ticks": 60,
+              "timeout": 1,
+              "sound": "weaponSwitchSound"
+            },
+            {
+              "name": "Ready",
+              "down": 2
+            },
+            {
+              "name": "PreFire",
+              "ticks": 12,
+              "allow_change": false,
+              "timeout": 3,
+              "script": "onPreFire",
+              "arm": "armattack"
+            },
+            {
+              "name": "Fire",
+              "ticks": 12,
+              "allow_change": false,
+              "timeout": 6,
+              "script": "onFire"
+            },
+            {
+              "name": "CheckFire",
+              "down": 2,
+              "up": 5
+            },
+            {
+              "name": "StopFire",
+              "ticks": 24,
+              "allow_change": false,
+              "timeout": 1
+            },
+            {
+              "name": "FireArmRest",
+              "ticks": 24,
+              "allow_change": false,
+              "timeout": 4,
+              "arm": "root"
+            }
+          ]
+        },
+        "{namespace}:image/trenchdirtimage": {
+          "command": "{rules}:place",
+          "projectile": null,
+          "states": [
+            {
+              "name": "Activate",
+              "ticks": 60,
+              "timeout": 1,
+              "sound": "weaponSwitchSound"
+            },
+            {
+              "name": "Ready",
+              "down": 2
+            },
+            {
+              "name": "PreFire",
+              "ticks": 12,
+              "allow_change": false,
+              "timeout": 3,
+              "script": "onPreFire",
+              "arm": "armattack"
+            },
+            {
+              "name": "Fire",
+              "ticks": 12,
+              "allow_change": false,
+              "timeout": 6,
+              "script": "onFire"
+            },
+            {
+              "name": "CheckFire",
+              "down": 2,
+              "up": 5
+            },
+            {
+              "name": "StopFire",
+              "ticks": 24,
+              "allow_change": false,
+              "timeout": 1
+            },
+            {
+              "name": "FireArmRest",
+              "ticks": 24,
+              "allow_change": false,
+              "timeout": 4,
+              "arm": "root"
+            }
+          ]
+        },
+        "{namespace}:image/adminshovelimage": {
+          "command": "{rules}:dig"
+        },
+        "{namespace}:image/admindirtimage": {
+          "command": "{rules}:place",
+          "projectile": null
+        }
+      }
+    }
+  }
+}

@@ -1244,7 +1244,8 @@ impl Session {
         Ok(returned)
     }
     /// Apply an authorized operation. `caller` is the player whose command
-    /// asked for it: brick changes then need that player's trust, so a
+    /// asked for it: brick changes then need that player's trust, or a
+    /// build their minigame plays with ([`Self::rule_may_edit`]), so a
     /// package cannot be used to reach another player's build (stress
     /// campaign W9). Without a caller (hooks, think, generation) a package
     /// acts only on world-owned bricks, such as its generated world.
@@ -1257,6 +1258,13 @@ impl Session {
                 position,
                 color,
             } => self.package_place_brick(package, &shape, position, color),
+            Op::PlantBrick {
+                kind,
+                position,
+                turns,
+                color,
+                owner,
+            } => self.package_plant_brick(package, &kind, position, turns, color, owner, caller),
             Op::PlaceVoxel { position, material } => {
                 self.package_place_voxel(package, position, &material)
             }
@@ -1908,6 +1916,114 @@ impl Session {
         host.shares.edits.spend(&origin, tick, 1);
         Ok(())
     }
+    /// A brick of `kind` centred as near `position` as the stud and plate
+    /// grid allows, or `None` for a kind the world has no definition of.
+    pub(super) fn planted_brick(
+        &self,
+        kind: &str,
+        position: [f32; 3],
+        turns: u8,
+        color: u8,
+        owner: OwnerId,
+    ) -> Option<Brick> {
+        let mut brick = Brick::new(ContentRef::Resolved(kind.into()), position, owner);
+        brick.quarter_turns = turns % 4;
+        brick.color = color;
+        let mesh = &self.simulation.definitions.get(&brick).ok()?.mesh;
+        let [w, d] = mesh.footprint_studs.map(|v| v as f32);
+        let size = if turns.is_multiple_of(2) {
+            [w, mesh.height_plates as f32, d]
+        } else {
+            [d, mesh.height_plates as f32, w]
+        };
+        for axis in 0..3 {
+            let cell = crate::grid::CELL[axis];
+            let half = size[axis] * cell * 0.5;
+            brick.position[axis] = ((position[axis] - half) / cell).round() * cell + half;
+        }
+        Some(brick)
+    }
+    /// Whether a rule acting for `caller` may change bricks of build
+    /// `owner`: the caller's own full trust, or, inside a minigame, a build
+    /// that minigame plays with (its owner's bricks, or everyone's with Use
+    /// All Players' Bricks), as its weapons may break them. Without a
+    /// caller, only the world's own bricks.
+    pub(super) fn rule_may_edit(&self, caller: Option<OwnerId>, owner: OwnerId) -> bool {
+        if owner == 0 {
+            return true;
+        }
+        let Some(caller) = caller else {
+            return false;
+        };
+        if self
+            .peers
+            .get(&caller)
+            .is_some_and(|p| p.actor.trusted(owner, bri_world::authority::trust::FULL))
+        {
+            return true;
+        }
+        let Some(game) = self.game_of(caller) else {
+            return false;
+        };
+        let Ok(g) = self.minigames.game(game) else {
+            return false;
+        };
+        g.settings.use_all_players_bricks
+            || self.brick_group_owner_for(owner, Some(game)) == g.owner.account.0
+    }
+    /// Plant a brick into build `owner`. A brick that does
+    /// not fit is skipped without a report, as v20's `plant()` errors were
+    /// checked by the script that asked.
+    #[allow(clippy::too_many_arguments)]
+    fn package_plant_brick(
+        &mut self,
+        package: &str,
+        kind: &str,
+        position: [f32; 3],
+        turns: u8,
+        color: u8,
+        owner: OwnerId,
+        caller: Option<OwnerId>,
+    ) -> Result<()> {
+        let state = self.simulation.state();
+        ensure!(
+            usize::from(color) < state.palette.len(),
+            "Colour {color} is not in the world's palette"
+        );
+        ensure!(
+            self.rule_may_edit(caller, owner),
+            "Build {owner} is not one the caller has trust on"
+        );
+        let brick = self
+            .planted_brick(kind, position, turns, color, owner)
+            .with_context(|| format!("No brick `{kind}` is loaded"))?;
+        let tick = self.simulation.state().tick;
+        let origin = package.to_string();
+        let host = self.packages.as_mut().context("No packages are enabled")?;
+        ensure!(
+            host.shares.edits.available(&origin, tick) >= 1,
+            "`{package}` used its share of world edits for now"
+        );
+        if !self.simulation.fits(&brick) {
+            return Ok(());
+        }
+        let state = self.simulation.state();
+        let palette = state.palette.clone();
+        let plan =
+            bri_world::build::LoadPlan::batch(state, &palette, vec![brick], self.next_owner)?;
+        let ids = self.simulation.load_build(
+            &Actor {
+                owner: 0,
+                administrator: true,
+                ..Default::default()
+            },
+            plan,
+        )?;
+        self.dirty.extend(ids);
+        let host = self.packages.as_mut().expect("checked");
+        host.shares.edits.spend(&origin, tick, 1);
+        Ok(())
+    }
     /// Put a voxel into the generated world: a world-owned brick of the
     /// material, recorded as a world edit and saved with the world.
     fn package_place_voxel(
@@ -1977,10 +2093,7 @@ impl Session {
             .bricks
             .get(&brick)
             .context("No such brick")?;
-        let trusted = b.owner == 0
-            || caller
-                .and_then(|c| self.peers.get(&c))
-                .is_some_and(|p| p.actor.trusted(b.owner, bri_world::authority::trust::FULL));
+        let trusted = self.rule_may_edit(caller, b.owner);
         ensure!(
             trusted,
             "Brick {brick} belongs to a build the caller has no trust on"
@@ -2552,6 +2665,7 @@ impl Session {
                         }),
                         brick: hit.brick,
                         position: hit.position.to_array(),
+                        normal: hit.normal.to_array(),
                         distance: hit.distance,
                         object,
                     }),
@@ -2560,6 +2674,7 @@ impl Session {
                         tag: None,
                         look: None,
                         position: o.position,
+                        normal: [0.0; 3],
                         distance: o.distance,
                         object: Some(o),
                     }),

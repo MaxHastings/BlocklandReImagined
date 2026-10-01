@@ -19,6 +19,88 @@
         "crates/addon-import/tests/ports.rs shotgun_port_fires_the_spread",
         "crates/addon-import/tests/import.rs real_community_samples"
       ]
+    },
+    {
+      "addon": "Gamemode_TrenchDigging",
+      "title": "Trench Digging",
+      "port": "gamemode_trenchdigging",
+      "status": "partial",
+      "sha256": [
+        "0b5d9bc710a2f67720617a7c656841c0226617ec59eae19cf986046c3d82bc3c"
+      ],
+      "covers": {
+        "TrenchShovelImage::onPreFire": {
+          "arm": "playthread\\s*\\(\\s*2\\s*,\\s*armattack\\s*\\)"
+        },
+        "TrenchDirtImage::onPreFire": {
+          "dirt_arm": "playthread\\s*\\(\\s*2\\s*,\\s*armattack\\s*\\)"
+        },
+        "TrenchShovelImage::onFire": {
+          "dig": "TakeChunk\\s*\\(\\s*%obj\\.client\\s*,\\s*1\\s*\\)"
+        },
+        "AdminShovelImage::onFire": {
+          "admin_dig": "TakeChunk\\s*\\(\\s*%obj\\.client\\s*,\\s*1\\s*\\)"
+        },
+        "TrenchDirtImage::onFire": {
+          "place": "Parent::onFire[\\s\\S]*ShootChunk\\s*\\(\\s*%obj\\.client\\s*\\)"
+        },
+        "AdminDirtImage::onFire": {
+          "admin_place": "Parent::onFire[\\s\\S]*ShootChunk\\s*\\(\\s*%obj\\.client\\s*\\)"
+        },
+        "TakeChunk": {
+          "reach": "vectorScale\\s*\\(\\s*%eyeVector\\s*,\\s*(\\d+)\\s*\\)",
+          "take": "%obj\\.refill\\s*\\(\\s*%client\\s*,\\s*%take\\s*,\\s*%rayPos\\s*\\)",
+          "hop": "addVelocity\\s*\\(\\s*\"0 0 2\"\\s*\\)"
+        },
+        "ShootChunk": {
+          "shoot": "datablock\\s*=\\s*brick2xCubeDirtData[\\s\\S]*datablock\\s*=\\s*brick1x1DirtData"
+        },
+        "fxDtsBrick::Refill": {
+          "split": "fillPos[\\s\\S]*continueRefill"
+        },
+        "fillPos": {
+          "pieces": "brick32xCubeDirtData[\\s\\S]*brick1x1DirtData"
+        },
+        "continueRefill": {
+          "next": "\\.Refill\\s*\\("
+        },
+        "onTrenchDig": {
+          "room": "trenchDirt\\s*>=\\s*\\$TrenchDig::DirtCount"
+        },
+        "findSmallBrick": {
+          "nearest": "vectorDist\\s*\\(\\s*%Pos\\s*,\\s*%smallPos\\s*\\)"
+        },
+        "fxDtsBrick::checkBricks": {
+          "cubes": "%puzzleComplete\\s*>=\\s*7",
+          "flats": "%puzzleComplete\\s*>=\\s*3"
+        },
+        "finishRegrouping": {
+          "top": "brick64xCubeDirtData"
+        },
+        "serverCmdDumpDirt": {
+          "cube_dump": "brick4xCubeDirtData",
+          "flat_dump": "brick4x4DirtData"
+        },
+        "serverCmdSpeedDig": {
+          "speed_dig": "mountImage\\s*\\(\\s*AdminShovelImage"
+        },
+        "serverCmdSpeedPlace": {
+          "speed_place": "mountImage\\s*\\(\\s*AdminDirtImage"
+        },
+        "serverCmdInfiniteDigging": {
+          "infinite": "isInfiniteMiner"
+        },
+        "GameConnection::updateDirt": {
+          "print": "bottomPrint"
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/ports.rs trench_digging_port_writes_its_rules",
+        "crates/sim/tests/trench_digging.rs the_shovel_splits_dirt_down_to_the_piece_it_hit_and_the_dirt_puts_it_back",
+        "crates/sim/tests/trench_digging.rs flats_split_into_quarters_and_four_1x1s_become_a_2x2",
+        "crates/sim/tests/trench_digging.rs dirt_is_dug_under_the_minigame_and_trust_rules",
+        "crates/sim/tests/trench_digging.rs dumped_dirt_piles_up_as_4x_cubes_and_admins_get_endless_dirt"
+      ]
     }
   ]
 }

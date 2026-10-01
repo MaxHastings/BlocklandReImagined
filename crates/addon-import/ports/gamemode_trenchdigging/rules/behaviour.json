@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "script": "trench.rhai",
+  "commands": [
+    { "name": "dig", "aim_reach": {{reach}}, "tool_only": true },
+    { "name": "place", "aim_reach": {{reach}}, "tool_only": true },
+    { "name": "dumpdirt", "aim_reach": {{reach}} },
+    { "name": "speeddig", "admin": true },
+    { "name": "speedplace", "admin": true },
+    { "name": "infinitedigging", "admin": true }
+  ],
+  "state": {
+    "player": {
+      "dirt": { "default": 0, "visible": "owner", "persist": false },
+      "bricks": { "default": [], "persist": false },
+      "infinite": { "default": false, "persist": false },
+      "old": { "default": 0, "persist": false },
+      "reprint": { "default": 0, "persist": false }
+    }
+  },
+  "tick_interval": 4
+}

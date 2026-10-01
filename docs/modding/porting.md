@@ -212,6 +212,7 @@ page as well.
 | Add-On | Port | Status | What it covers |
 |---|---|---|---|
 | `Weapon_Shotgun` (Sawn-off Shotgun) | `weapon_shotgun` | verified | `shotgunImage::onFire`: the pellets, their spread and the recoil, read from the copy's own script |
+| `Gamemode_TrenchDigging` (Trench Digging, Lilboarder) | `gamemode_trenchdigging` | partial | Every function of `TrenchDigging.cs` and the four images' `onPreFire`/`onFire`, as host rules (`rules/trench.rhai`): dig, put back, regroup, `/dumpdirt`, `/speeddig`, `/speedplace`, `/infinitedigging`. Not covered: `server.cs` raising No Jet's `maxStepHeight` to 1.2 |
 
 ## Host rules
 

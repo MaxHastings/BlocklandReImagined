@@ -165,6 +165,7 @@ HUD panels can only show keys the viewer receives. `persist` (default
 | `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)` | | `teleport`, `respawn`, `set_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`, `take_item(p, item)`, `drop_item(item, x, y, z[, vx, vy, vz])`: `player` |
 | `raycast(from, dir, range[, ignore])`, `can_damage(by, target)` | | `set_fov(p, fov)`, `set_image_ammo(p, ammo)`, `mount_image(p, image)`, `unmount_image(p)`, `set_scale(p, scale)`, `set_look_limits(p, up, down)`: `player` |
 | `brick_box(brick)`, `voxel(brick)`, `can_place_voxel(x, y, z)` | | `place_voxel(x, y, z, material)`: `world.edit`; `set_avatar_colors(p, colors)`: `player` |
+| `brick(id)`, `bricks_in(min, max)`, `can_plant(kind, [x, y, z], turns)`, `can_edit(brick)` | | `plant_brick(kind, [x, y, z], turns, color, owner)`: `world.edit` |
 | | | `copy_build(p, brick, limit, above_only, tool)`, `copy_box(p, min, max, limit, tool)`, `mirror_copy(p, axis)`: `build` |
 | | | `cut_copy(p)`, `paint_copy(p, color)`, `paint_fill(p, brick, color, limit)`: `world.edit` |
 | | | `push`, `tumble`, `hold`, `hold_distance`, `let_go`, `spawn_vehicle`, `remove_vehicle`, `mount_object(mount, rider, node, can_dismount)`, `unmount_object(rider)`: `physics` |
@@ -319,6 +320,25 @@ argument to make it their shot, hurting whom their shots may; without one
 it is your Add-On's own, which hurts any living player (as `damage` could)
 and credits nobody. Start it clear of the shooter's body. 240 a second per
 Add-On. The Commando's sentry does this from its think.
+
+**Bricks by kind** (`world.edit`). `brick(id)` reads a placed brick:
+`#{ id, kind, x, y, z, turns, color, owner, min, max }`, `kind` being its
+brick catalog id (`v20/brick/brick2x4data`, or an imported Add-On's
+`<ns>:brick/<datablock>`), `x, y, z` its centre, `turns` its clockwise
+quarter turns, `color` its palette index and `owner` the build it is in (0
+for the world's own). `bricks_in(min, max)` lists up to 1024 bricks
+overlapping a box (`InitContainerBoxSearch`). `plant_brick(kind, [x, y, z],
+turns, color, owner)` plants a brick of any loaded kind into build `owner`,
+centred as near the point as the stud and plate grid allows, as v20 rules
+did with `new fxDTSBrick(...).plant()`; where it does not fit (a brick, a
+player or the map in the way) nothing is planted, so ask `can_plant` first
+when it matters. A rule may plant into, or `remove_brick` from, a build its
+caller has full trust on, or, inside a minigame, a build that minigame plays
+with (its owner's bricks, or everyone's with Use All Players' Bricks); hooks
+with no caller touch only the world's own bricks. `can_edit(brick)` asks
+that before a rule changes anything. `aim()` also has `nx, ny,
+nz`, the face the aim met. The Trench Digging port's rules
+(`crates/addon-import/ports/gamemode_trenchdigging/rules`) are built on these.
 
 **Moving things** (`physics`). Players, vehicles (every loose physics body:
 jeeps, balls, the tumble of a knocked-down player) and package entities
