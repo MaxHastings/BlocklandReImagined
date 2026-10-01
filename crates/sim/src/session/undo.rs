@@ -198,7 +198,7 @@ impl UndoStack {
             && let Some(step) = self.steps.pop_front()
             && step.entry.bricks() > 1
         {
-            copy_jobs::drop_later(step);
+            crate::drop_later::drop_later(step);
         }
         self.serial += 1;
         self.steps.push_back(Step {

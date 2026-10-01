@@ -3,6 +3,7 @@ pub mod archetype;
 pub mod blueprint;
 pub mod bot_kind;
 pub mod definitions;
+pub mod drop_later;
 pub mod ghost;
 pub mod grid;
 pub mod id_map;

@@ -1,12 +1,65 @@
 {
   "schema_version": 1,
-  "notes": "The Duplorcator's selecting, ghost, planting and undo as host rules on the native copy seams: clicking a brick within reach selects the stack up from it (full trust, no public bricks, 5000 bricks for admins and 500 for others, a selection wait of 1 s for admins and 3 s for others, as its Return to Blockland preferences defaulted), lights it cyan for a moment, and shows the whole copy as a ghost; planting plants each brick that fits and Ctrl+Z takes it back. /saveDup and /loadDup keep and load copies by name on the host (and load v20 duplication files there); a duplication over the limit asks whether to load what fits, as its message box did. Not ported: uploading a duplication from the player's own computer (/clientLoad, /reloadDup), loading whole saves as duplications (its \"Can Load Saves\" preference, off by default), the plant wait for copies over 50 bricks, the brick-limit plant error icon, and the bottom print on taking the wand out and putting it away.",
-  "rules": { "capabilities": ["build", "player", "chat", "damage"] },
+  "notes": "The Duplorcator's selecting, ghost, planting and undo as host rules on the native copy seams: clicking a brick within reach selects the stack up from it (full trust, no public bricks, 5000 bricks for admins and 500 for others, a selection wait of 1 s for admins and 3 s for others, as its Return to Blockland preferences defaulted), lights it cyan for a moment, and shows the whole copy as a ghost; planting plants each brick that fits and Ctrl+Z takes it back. /saveDup and /loadDup keep and load copies by name on the host (and load v20 duplication files there); a duplication over the limit asks whether to load what fits, as its message box did. Drawing the wand with nothing selected says Normal Mode, and the cancel key lets a selection go. A copy of over 50 bricks (its \"Max Flood Bypass\") plants a second after the last plant for admins and three seconds for others (its planting timeouts), with the flood error; a selection cut short by the limit shows the limit error. Its \"Client Loading/Saving\" and \"Can Load Saves\" preferences are off, as Return to Blockland defaulted them and as the Add-On left them without it, so the host takes no duplication uploaded from a player's computer: /clientLoad says so and /reloadDup has no cached duplication. Here the copy belongs to the wand: taking out a brick puts the wand and its ghost away and the wand brings the copy back, and the ghost shows up to 10,000 bricks spread across the copy (the original ghosted its first 500).",
+  "rules": {
+    "capabilities": [
+      "build",
+      "player",
+      "chat",
+      "damage",
+      "effects"
+    ]
+  },
   "patch": {
     "assets/weapons.json": {
       "images": {
-        "{namespace}:image/duplorcatorimage": { "command": "{rules}:fire" }
+        "{namespace}:image/duplorcatorimage": {
+          "command": "{rules}:fire",
+          "commands": {
+            "cancel": "{rules}:cancel",
+            "mount": "{rules}:mount",
+            "unmount": "{rules}:unmount"
+          }
+        }
       }
     }
+  },
+  "handles": {
+    "loadDup": "not run: its Client Loading/Saving preference is off (Return to Blockland's default, and unset without it), so the host takes no upload; /clientLoad says the server takes none (the rules' clientload command)",
+    "duplorcatorYesLoad": "not run: its Client Loading/Saving preference is off (Return to Blockland's default, and unset without it), so the host takes no upload",
+    "clientcmdDuplorcatorClientLoad": "not run: its Client Loading/Saving preference is off (Return to Blockland's default, and unset without it), so the host takes no upload",
+    "clientcmdduplorcatorUploadEnded": "not run: its Client Loading/Saving preference is off (Return to Blockland's default, and unset without it), so the host takes no upload",
+    "NMH_Type::send": "the rules' clientload command: /clientLoad says the server takes no duplications, as its Client Loading/Saving preference is off (Return to Blockland's default, and unset without it), so the host takes no upload",
+    "servercmdDuplorcatorClientLoadCheck": "not run: its Client Loading/Saving preference is off (Return to Blockland's default, and unset without it), so the host takes no upload",
+    "servercmdDuplorcatorClientLoadLine": "not run: its Client Loading/Saving preference is off (Return to Blockland's default, and unset without it), so the host takes no upload, and this took a line only while uploading",
+    "servercmdDuplorcatorStartUpload": "not run: its Client Loading/Saving preference is off (Return to Blockland's default, and unset without it), so the host takes no upload, where this returned without starting one",
+    "servercmdDuplorcatorCancelUpload": "not run: with no upload going on this returned at once",
+    "servercmdDuplorcatorEndUpload": "not run: with no upload going on this returned at once",
+    "servercmdreloadDup": "the rules' reloaddup command: no upload was taken, so there is no cached duplication to load",
+    "getClosestPaintColor": "highlight_copy: the engine lights the selection in the palette colour nearest cyan",
+    "rotationFromAngleID": "the engine's copy keeps each brick's quarter turn and turns it with the copy",
+    "vectorRot": "the engine's copy turns about the copy's pivot in quarter turns",
+    "FXDTSBrick::toSaveStr": "copy_build: the engine records each brick's kind, place, turn, colour, print and effects",
+    "createFromStr": "the engine's copy plant: each brick that fits plants, with its kind, place, turn, colour, print and effects",
+    "getValueFromBrickStr": "the engine's copy records each brick's fields directly",
+    "FxDTSBrick::restoreOrignalColors": "highlight_copy: the bricks take their own colours back after the highlight's seconds",
+    "fxDtsBrick::getTooFarDist": "the engine's copy plant refuses a copy beyond the server's too-far distance (MsgPlantError_TooFar)",
+    "FxDtsBrick::spawnDuplication": "the engine's copy ghost, sent to the player at once: every brick up to 10,000, spread across bigger copies (the original ghosted its first 500, one a tick)",
+    "FxDtsBrick::moveDuplication": "the engine's copy ghost moves and turns with the player's brick keys",
+    "FxDtsBrick::setTransform": "the engine's copy ghost moves and turns with the player's brick keys",
+    "servercmdDuplorcatorLoadAnyways": "the rules' duplorcatorloadanyways command: yes to the over-the-limit question loads what fits",
+    "DuplorcatorImage::onStopFire": "the engine's own onStopFire puts the arm back (root on thread 2)",
+    "servercmdDuplicator": "the rules' duplicator command gives the Duplorcator",
+    "DuplorcatorImage::onMount": "the image's mount command: with nothing selected, Normal Mode",
+    "DuplorcatorImage::onUnMount": "the image's unmount command: with nothing selected, Normal Mode for half a second",
+    "FxDtsBrick::onRemove": "the image's cancel command: the cancel key lets the selection go and says Normal Mode",
+    "FxDtsBrick::setDatablock": "the copy belongs to the wand here: taking out a brick puts the wand and its ghost away, and the wand brings the copy back (the original let the selection go)",
+    "call:isFile": "Return to Blockland (not part of v20) is not installed, so its preferences keep the defaults the rules hold",
+    "call:RTB_registerPref": "the rules hold each preference at its Return to Blockland default",
+    "call:getClosestPaintColor": "highlight_copy: the engine lights the selection in the palette colour nearest cyan",
+    "call:isPackage": "the rules replace the Add-On's package; nothing to switch off first",
+    "call:deactivatePackage": "the rules replace the Add-On's package; nothing to switch off first",
+    "file:client.cs": "every function in it is accounted for: the client upload is not taken (client loading off) and /clientLoad is the rules' clientload command",
+    "set:MessageBoxYesNoDlg.yesCallBack": "not run: its Client Loading/Saving preference is off (Return to Blockland's default, and unset without it), so the host takes no upload"
   }
 }

@@ -455,6 +455,9 @@ pub struct App {
     /// last uploaded.
     selection_lines: Option<bri_render::lines::LineRenderer>,
     selection_uploaded: Option<Option<([f32; 3], [f32; 3])>>,
+    /// Add-On world shapes (`show_shapes`), and the sets last uploaded.
+    world_shapes: Option<bri_render::world_shapes::ShapeRenderer>,
+    shapes_uploaded: Option<BTreeMap<String, std::sync::Arc<Vec<bri_package_runtime::ops::WorldShape>>>>,
     hidden_uploaded: Option<bool>,
     /// `BrickFades::outlined` when the outlines were built: bricks fading
     /// in or out gain or lose theirs as they pass v20's alpha 0.1.
@@ -1735,6 +1738,8 @@ impl App {
             environment_sent: None,
             selection_lines: None,
             selection_uploaded: None,
+            world_shapes: None,
+            shapes_uploaded: None,
             hidden_uploaded: None,
             hidden_fading: Vec::new(),
             weapon_light_deferred: 0,
@@ -1929,6 +1934,10 @@ impl App {
             lines.clear();
         }
         self.selection_uploaded = None;
+        if let Some(shapes) = &mut self.world_shapes {
+            shapes.clear();
+        }
+        self.shapes_uploaded = None;
         self.weapon_light_deferred = 0;
         self.weapon_effect_session = None;
         self.world_items.reset();
@@ -5375,6 +5384,34 @@ fn name_tags(
             color,
         });
     }
+    // Add-On world shapes' labels, over each shape's top centre in its
+    // colour.
+    for shape in view.world_shapes.values().flat_map(|s| s.iter()) {
+        if shape.label.is_empty() {
+            continue;
+        }
+        let (min, max) = (Vec3::from(shape.min), Vec3::from(shape.max));
+        let target = Vec3::new((min.x + max.x) / 2.0, max.y, (min.z + max.z) / 2.0);
+        let Some(opacity) = name_opacity(target.distance(camera), fog_distance, visible_distance)
+        else {
+            continue;
+        };
+        let clip = view_projection * target.extend(1.0);
+        if clip.w <= 0.0 {
+            continue;
+        }
+        let ndc = clip.truncate() / clip.w;
+        if ndc.x.abs() > 1.0 || ndc.y.abs() > 1.0 {
+            continue;
+        }
+        tags.push(bri_ui::api::NameTag {
+            x: (ndc.x + 1.0) * 0.5 * size.0 / scale,
+            y: (1.0 - ndc.y) * 0.5 * size.1 / scale,
+            text: shape.label.clone(),
+            opacity,
+            color: [shape.color[0], shape.color[1], shape.color[2]],
+        });
+    }
     tags
 }
 /// How far Add-On code moved the orbit camera's target from where the game
@@ -8474,6 +8511,13 @@ impl PlatformApp for App {
             samples,
         ));
         self.selection_uploaded = None;
+        self.world_shapes = Some(bri_render::world_shapes::ShapeRenderer::new(
+            device,
+            format,
+            bri_render::scene::DEPTH_FORMAT,
+            samples,
+        ));
+        self.shapes_uploaded = None;
         self.hidden_uploaded = None;
         let limits = bri_fx_runtime::EffectsLimits::default();
         self.effects_renderer = Some(bri_fx_runtime::gpu::EffectsRenderer::new(
@@ -8504,6 +8548,10 @@ impl PlatformApp for App {
             lines.clear();
         }
         self.selection_uploaded = None;
+        if let Some(shapes) = &mut self.world_shapes {
+            shapes.clear();
+        }
+        self.shapes_uploaded = None;
         self.depth = None;
         Ok(())
     }
@@ -8545,6 +8593,7 @@ impl PlatformApp for App {
         self.effects_renderer = None;
         self.hidden_lines = None;
         self.selection_lines = None;
+        self.world_shapes = None;
         self.gpu_scene = None;
         self.gpu_terrain.clear();
         self.gpu_palette = None;
@@ -8564,6 +8613,10 @@ impl PlatformApp for App {
             lines.clear();
         }
         self.selection_uploaded = None;
+        if let Some(shapes) = &mut self.world_shapes {
+            shapes.clear();
+        }
+        self.shapes_uploaded = None;
         self.depth = None;
     }
     fn render_scene(&mut self, frame: &mut RenderContext<'_>) -> Result<bool> {
@@ -8920,6 +8973,28 @@ impl PlatformApp for App {
                 _ => None,
             };
             self.remote_ghosts.insert(*owner, (ghost.clone(), gpu));
+        }
+        let shapes_changed = self.shapes_uploaded.as_ref().is_none_or(|sent| {
+            sent.len() != view.world_shapes.len()
+                || sent
+                    .iter()
+                    .zip(&view.world_shapes)
+                    .any(|((a, x), (b, y))| a != b || !std::sync::Arc::ptr_eq(x, y))
+        });
+        if shapes_changed && let Some(renderer) = &mut self.world_shapes {
+            let mut vertices = vec![];
+            for shape in view.world_shapes.values().flat_map(|s| s.iter()) {
+                let rgba = |c: [u8; 4]| c.map(|v| f32::from(v) / 255.0);
+                bri_render::world_shapes::box_faces(
+                    Vec3::from(shape.min),
+                    Vec3::from(shape.max),
+                    shape.outside().map(rgba),
+                    rgba(shape.inside),
+                    &mut vertices,
+                );
+            }
+            renderer.set_faces(frame.device, &vertices)?;
+            self.shapes_uploaded = Some(view.world_shapes.clone());
         }
         if let Some(building) = &self.building
             && let (Some(meshes), Some(materials)) = (&self.meshes, &self.materials)
@@ -9456,6 +9531,9 @@ impl PlatformApp for App {
         if let Some(lines) = &self.selection_lines {
             lines.prepare(frame.queue, effects_camera.view_projection);
         }
+        if let Some(shapes) = &self.world_shapes {
+            shapes.prepare(frame.queue, effects_camera.view_projection, effects_camera.position);
+        }
         weather_renderer.prepare(
             frame.queue,
             effects_camera.view_projection,
@@ -9726,6 +9804,9 @@ impl PlatformApp for App {
         }
         if let Some(lines) = &self.selection_lines {
             lines.render(&mut pass);
+        }
+        if let Some(shapes) = &self.world_shapes {
+            shapes.render(&mut pass);
         }
         if let Some(vignette) = &self.vignette {
             vignette.render(&mut pass);

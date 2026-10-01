@@ -16,7 +16,7 @@ pub mod work {
     /// One brick read or repainted (a capture, a trust check, paint).
     pub const EDIT: u32 = 2;
     /// One brick removed.
-    pub const REMOVE: u32 = 10;
+    pub const REMOVE: u32 = 16;
     /// One brick a stack selection looks around.
     pub const SEARCH: u32 = 16;
     /// One brick put back as it was.
@@ -28,7 +28,10 @@ pub mod work {
     /// More for one joined to bricks outside the copy: it breaks on its
     /// own, after a look at what it would leave hanging, and the solid
     /// bricks round it are rebuilt (measured in a world of 500,000).
-    pub const CHAIN: u32 = 90;
+    pub const CHAIN: u32 = 40;
+    /// One brick of a chunk built again because a brick beside it changed
+    /// ([`super::Simulation::charge_rebuilds`]).
+    pub const REBUILD: u32 = 3;
 }
 
 /// Take `cost` from `budget`, or say there is not enough left.

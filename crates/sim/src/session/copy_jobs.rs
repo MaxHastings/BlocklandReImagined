@@ -276,24 +276,3 @@ impl Session {
         self.copy_jobs.left = left;
     }
 }
-
-/// Free `value` off the tick: a big copy's bricks (each with its name,
-/// events and lights) take a while to free, as long as they took to
-/// gather. A thread of their own frees them in the background.
-pub(super) fn drop_later<T: Send + 'static>(value: T) {
-    use std::sync::{OnceLock, mpsc};
-    type Trash = Box<dyn Send>;
-    static BIN: OnceLock<Option<mpsc::Sender<Trash>>> = OnceLock::new();
-    let bin = BIN.get_or_init(|| {
-        let (send, receive) = mpsc::channel::<Trash>();
-        std::thread::Builder::new()
-            .name("copy-drop".into())
-            .spawn(move || receive.into_iter().for_each(drop))
-            .ok()
-            .map(|_| send)
-    });
-    // No thread to hand it to: free it here.
-    if let Some(bin) = bin {
-        let _ = bin.send(Box::new(value));
-    }
-}

@@ -171,6 +171,7 @@ impl PlantWork {
                                 break;
                             }
                         }
+                        s.simulation.charge_rebuilds(budget);
                     }
                     if matches!(self.phase, Phase::Place { .. }) {
                         return Ok(true);
@@ -190,6 +191,7 @@ impl PlantWork {
                             s.simulation.remove(&engine, id)?;
                             s.dirty.insert(id);
                         }
+                        s.simulation.charge_rebuilds(budget);
                     }
                     let error = error.take().expect("taken once");
                     self.refused = Refusals::all(error);
@@ -222,6 +224,7 @@ impl PlantWork {
                                 }
                             }
                         }
+                        s.simulation.charge_rebuilds(budget);
                     }
                     if floating.is_empty() {
                         return Ok(true);
@@ -251,6 +254,7 @@ impl PlantWork {
                             }
                             Err(error) => self.refused.add(error),
                         }
+                        s.simulation.charge_rebuilds(budget);
                     }
                     *waiting = std::mem::take(floating);
                     *next = 0;
@@ -284,9 +288,8 @@ impl PlantWork {
         if let Some(peer) = s.peers.get_mut(&owner) {
             peer.plants = peer.plants.max(rate);
         }
-        if let Some(wait) = s.plant_waits.get_mut(&owner) {
-            wait.next = tick + wait.ticks;
-        }
+        // Whatever wait is set later runs from here.
+        s.plant_waits.entry(owner).or_default().last = Some(tick);
         let entry = undo::UndoEntry::Group {
             ids: self.ids,
             group: self.actor.owner,

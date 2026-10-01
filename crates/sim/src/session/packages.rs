@@ -978,6 +978,10 @@ impl Session {
             bot_owner: self.bot_brick_owner(owner),
             riding: self.riding_seat(owner),
             copy_working: self.copy_working(owner),
+            copy: self.copies.get(&owner).map(|c| {
+                let bricks = self.blueprints.get(&owner).map_or(0, |b| b.len());
+                (c.package.clone(), bricks as u64)
+            }),
         }
     }
     fn package_snapshot(&self) -> Snapshot {
@@ -1869,6 +1873,9 @@ impl Session {
                 Ok(())
             }
             Op::ShowBox { player, area, tool } => self.show_box(player, area, &tool),
+            Op::ShowShapes { owner, key, shapes } => {
+                self.show_shapes(package, owner, &key, shapes)
+            }
             Op::GiveItem {
                 player,
                 item,
@@ -1964,6 +1971,23 @@ impl Session {
                         command,
                     },
                 );
+                Ok(())
+            }
+            Op::PlantError { player, error } => {
+                use crate::simulation::PlantFailure as F;
+                self.take_cue(package)?;
+                ensure!(self.peers.contains_key(&player), "No such player");
+                let failure = match error.as_str() {
+                    "overlap" => F::Overlap,
+                    "float" => F::Float,
+                    "stuck" => F::Stuck,
+                    "buried" => F::Buried,
+                    "too_far" => F::TooFar,
+                    // Planting too soon, as the engine's own plant rate
+                    // refuses it.
+                    _ => F::Limit,
+                };
+                self.notify(player, Notice::PlantError(failure));
                 Ok(())
             }
             Op::Print {

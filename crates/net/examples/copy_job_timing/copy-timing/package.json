@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "id": "copy-timing",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Copy timing",
+  "description": "Drives the engine's copy jobs for the copy_job_timing probe: /sel copies the build, /cut cuts it, /supercut cuts its box.",
+  "authors": [
+    "Blockland ReImagined"
+  ],
+  "license": "CC0-1.0",
+  "provenance": {
+    "source": "original"
+  },
+  "capabilities": [
+    "build",
+    "player",
+    "world.edit",
+    "chat"
+  ],
+  "dependencies": {
+    "advanced-duplicator-tool": "^1.0.0"
+  },
+  "provides": [
+    {
+      "kind": "behaviour",
+      "id": "copy-timing:behaviour/main",
+      "file": "behaviour.json"
+    },
+    {
+      "kind": "script",
+      "id": "copy-timing:script/main",
+      "file": "copy-timing.rhai"
+    }
+  ]
+}

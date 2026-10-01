@@ -751,6 +751,22 @@ impl Simulation {
     pub fn settle(&mut self) {
         self.detect_collisions();
     }
+    /// Mark the solid bricks' collision round `id` for rebuilding, ahead of
+    /// removing it with others in one go (a slice of a copy job).
+    pub fn mark_rebuild(&mut self, id: BrickId) {
+        if let Some(brick) = self.authority.state().bricks.get(&id) {
+            self.chunks.mark(id, brick.position);
+        }
+    }
+    /// Take from `budget` what rebuilding the solid bricks' collision that
+    /// changes since the last charge costs: a brick changed in a big build
+    /// rebuilds its whole chunk ([`crate::chunks`]) at the next settle, and
+    /// that, not the brick, is most of what a copy job's first touch of a
+    /// build costs.
+    pub fn charge_rebuilds(&mut self, budget: &mut u32) {
+        let bricks = u32::try_from(self.chunks.take_rebuilt()).unwrap_or(u32::MAX);
+        *budget = budget.saturating_sub(bricks.saturating_mul(work::REBUILD));
+    }
     /// While `hold`, removing bricks leaves collisions to one
     /// [`Self::settle`] for the lot (a slice of a copy job breaking bricks
     /// one by one); letting go settles.

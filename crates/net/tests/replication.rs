@@ -43,6 +43,7 @@ fn checkpoint() -> Checkpoint {
         entities: vec![],
         package_state: Default::default(),
         projectile_falls: Default::default(),
+        world_shapes: Default::default(),
     }
 }
 fn pose(tick: u64, x: f32, yaw: f32) -> Pose {
@@ -85,6 +86,7 @@ fn malformed_inventory_delta_cannot_partially_mutate_replica() {
         map_lights: None,
         environment: None,
         entities: None,
+        world_shapes: Default::default(),
         weapons: None,
         tools,
         base: 0,
@@ -149,6 +151,7 @@ fn malformed_weapon_state_or_presentation_rejects_before_mutation() {
         map_lights: None,
         environment: None,
         entities: None,
+        world_shapes: Default::default(),
         weapons: Some(weapons),
         tools: Default::default(),
         base: 0,
@@ -202,6 +205,7 @@ fn reliable_cues_do_not_replay_before_join_or_duplicate_and_reject_unreported_lo
         map_lights: None,
         environment: None,
         entities: None,
+        world_shapes: Default::default(),
         weapons: None,
         tools: Default::default(),
         base: 0,
@@ -249,6 +253,7 @@ fn gaps_and_invalid_changes_are_rejected_before_mutation() {
         map_lights: None,
         environment: None,
         entities: None,
+        world_shapes: Default::default(),
         weapons: None,
         tools: Default::default(),
         cues: vec![],
@@ -287,6 +292,7 @@ fn gaps_and_invalid_changes_are_rejected_before_mutation() {
         map_lights: None,
         environment: None,
         entities: None,
+        world_shapes: Default::default(),
             weapons: None,
             tools: Default::default(),
             cues: vec![],
@@ -323,6 +329,7 @@ fn invalid_avatar_delta_cannot_partially_change_world_or_peers() {
         map_lights: None,
         environment: None,
         entities: None,
+        world_shapes: Default::default(),
         weapons: None,
         tools: Default::default(),
         cues: vec![],
@@ -371,6 +378,7 @@ fn palette_extension_and_new_bricks_commit_together_or_reject_together() {
         map_lights: None,
         environment: None,
         entities: None,
+        world_shapes: Default::default(),
         weapons: None,
         tools: Default::default(),
         cues: vec![],
@@ -469,6 +477,7 @@ fn invalid_weapon_pose_cue_cannot_partially_commit_world() {
         map_lights: None,
         environment: None,
         entities: None,
+        world_shapes: Default::default(),
         weapons: None,
         tools: Default::default(),
         cues: vec![cue],
@@ -657,6 +666,7 @@ fn smashed_map_shapes_replicate_and_stay_bounded() {
         map_lights: None,
         environment: None,
         entities: None,
+        world_shapes: Default::default(),
         weapons: None,
         tools: Default::default(),
         base: 0,
@@ -701,6 +711,7 @@ fn tutorial_targets_replicate_whole_and_invalid_ones_are_refused() {
         map_lights: None,
         environment: None,
         entities: None,
+        world_shapes: Default::default(),
         weapons: None,
         tools: Default::default(),
         base: 0,
@@ -748,6 +759,7 @@ fn map_light_rules_replicate_whole_and_are_checked() {
         map_lights: Some(vec![MapLightRule { radius: -1.0, ..rule }]),
         environment: None,
         entities: None,
+        world_shapes: Default::default(),
         weapons: None,
         tools: Default::default(),
         base: 0,
@@ -768,6 +780,79 @@ fn map_light_rules_replicate_whole_and_are_checked() {
     delta.map_lights = Some(vec![rule, changed]);
     replica.update(delta).unwrap();
     assert_eq!(replica.map_lights, [rule, changed]);
+}
+
+#[test]
+fn world_shapes_replicate_by_set_and_are_checked() {
+    use bri_package_runtime::ops::WorldShape;
+    use std::sync::Arc;
+    let shape = |x: f32| WorldShape {
+        min: [x, 0.0, 0.0],
+        max: [x + 1.0, 2.0, 3.0],
+        color: [0, 0, 0, 89],
+        inside: [0, 0, 0, 153],
+        sides: None,
+        label: "Blockhead's Selection Box".into(),
+    };
+    let mut start = checkpoint();
+    start.world_shapes = BTreeMap::from([("nd/1/box".to_string(), vec![shape(0.0)])]);
+    let mut replica = Replica::new(start.clone()).unwrap();
+    assert_eq!(*replica.world_shapes["nd/1/box"], [shape(0.0)]);
+    let mut bad = start;
+    bad.world_shapes.insert("nd/2/box".into(), vec![WorldShape { max: [f32::NAN; 3], ..shape(0.0) }]);
+    assert!(Replica::new(bad).is_err());
+    // The host sends only the sets that changed, and an empty one for a
+    // set taken away.
+    let kept = Arc::new(vec![shape(5.0)]);
+    let mut sent = BTreeMap::from([
+        ("nd/1/box".to_string(), Arc::new(vec![shape(0.0)])),
+        ("nd/3/box".to_string(), kept.clone()),
+    ]);
+    let changed = changed_world_shapes(
+        &mut sent,
+        BTreeMap::from([
+            ("nd/2/box".to_string(), Arc::new(vec![shape(1.0)])),
+            ("nd/3/box".to_string(), kept),
+        ]),
+    );
+    assert_eq!(
+        changed,
+        BTreeMap::from([
+            ("nd/1/box".to_string(), vec![]),
+            ("nd/2/box".to_string(), vec![shape(1.0)]),
+        ])
+    );
+    let mut delta = Delta {
+        vitals: Default::default(),
+        minigames: None,
+        vehicles: None,
+        time_scale: None,
+        broken_shapes: None,
+        targets: None,
+        map_lights: None,
+        environment: None,
+        entities: None,
+        world_shapes: BTreeMap::from([("nd/2/box".to_string(), vec![WorldShape { label: "x".repeat(49), ..shape(1.0) }])]),
+        weapons: None,
+        tools: Default::default(),
+        base: 0,
+        cursor: 1,
+        tick: 11,
+        bricks: BTreeMap::new(),
+        names: None,
+        avatars: Default::default(),
+        palette: None,
+        chat: vec![],
+        cues: vec![],
+        dropped_cues: 0,
+    };
+    assert!(!delta.is_empty());
+    assert!(replica.update(delta.clone()).is_err(), "label too long");
+    delta.world_shapes = changed;
+    replica.update(delta).unwrap();
+    assert_eq!(replica.world_shapes.keys().collect::<Vec<_>>(), ["nd/2/box"]);
+    assert_eq!(*replica.world_shapes["nd/2/box"], [shape(1.0)]);
+    assert!(!replica.world_shapes.contains_key("nd/1/box"));
 }
 
 #[test]
@@ -800,6 +885,7 @@ fn environment_replicates_whole_and_is_checked() {
         map_lights: None,
         environment: Some(Settings { ambient_light: Some([3.0, 0.0, 0.0]), ..Default::default() }),
         entities: None,
+        world_shapes: Default::default(),
         weapons: None,
         tools: Default::default(),
         base: 0,

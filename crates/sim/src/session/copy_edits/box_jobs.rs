@@ -135,6 +135,8 @@ impl SuperCutWork {
             }
             self.removed.push((id, brick));
             slice.push(id);
+            s.simulation.mark_rebuild(id);
+            s.simulation.charge_rebuilds(budget);
         }
         if !slice.is_empty() {
             s.cut_out_unread(&slice)?;
@@ -145,6 +147,7 @@ impl SuperCutWork {
                 self.placed.push(id);
                 s.dirty.insert(id);
             }
+            s.simulation.charge_rebuilds(budget);
         }
         Ok(self.next == self.found.len())
     }
@@ -280,6 +283,7 @@ impl FillWork {
                 }
                 Err(_) => self.refused += 1,
             }
+            s.simulation.charge_rebuilds(budget);
         }
         true
     }

@@ -4,6 +4,63 @@ use bri_package::diag::Diagnostic;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+/// The plant errors [`Op::PlantError`] shows: v20's `MsgPlantError_`
+/// names, lower-case, as `on_place` reports them (`too_far`).
+pub const PLANT_ERRORS: [&str; 7] = [
+    "overlap", "float", "stuck", "buried", "too_far", "limit", "flood",
+];
+/// Most boxes one `show_shapes` set holds.
+pub const MAX_SHAPES: usize = 64;
+/// Longest label a shape carries, characters.
+pub const MAX_SHAPE_LABEL: usize = 48;
+/// Longest key naming a set of shapes, bytes.
+pub const MAX_SHAPE_KEY: usize = 64;
+
+/// A box [`Op::ShowShapes`] draws in the world for every player, unlit:
+/// its faces in `color` seen from outside and `inside` seen from within
+/// (alpha 0 draws no face), and `label` over its top centre like a
+/// player's name, in `color` at full strength. Torque Add-Ons draw these with scaled `StaticShape`s
+/// (the New Duplicator's selection box).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorldShape {
+    pub min: [f32; 3],
+    pub max: [f32; 3],
+    /// Straight RGBA, 0-255.
+    pub color: [u8; 4],
+    #[serde(default)]
+    pub inside: [u8; 4],
+    /// Outside colours of the faces across x, y and z, instead of `color`
+    /// (`setNodeColor("out+X", …)`: a shaded cube).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sides: Option<[[u8; 4]; 3]>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub label: String,
+}
+impl WorldShape {
+    /// The outside colour of the faces across each axis.
+    pub fn outside(&self) -> [[u8; 4]; 3] {
+        self.sides.unwrap_or([self.color; 3])
+    }
+}
+impl WorldShape {
+    /// Shape limits: a finite box no side longer than [`MAX_BOX_SPAN`]
+    /// (and its frame), a short one-line label.
+    pub fn check(&self) -> bool {
+        let finite = |v: &[f32; 3]| v.iter().all(|x| x.is_finite() && x.abs() <= 1_000_000.0);
+        finite(&self.min)
+            && finite(&self.max)
+            && (0..3).all(|a| {
+                self.max[a] >= self.min[a] && self.max[a] - self.min[a] <= MAX_BOX_SPAN + 16.0
+            })
+            && self.label.chars().count() <= MAX_SHAPE_LABEL
+            && !self.label.chars().any(char::is_control)
+    }
+}
+/// A set of shapes' key: short, printable, no spaces.
+pub fn shape_key(key: &str) -> bool {
+    !key.is_empty() && key.len() <= MAX_SHAPE_KEY && key.bytes().all(|b| b.is_ascii_graphic())
+}
+
 /// Variables an entity may be given when it is spawned.
 pub const MAX_SPAWN_VARS: usize = 16;
 /// Fastest a script may set anything moving, units per second.
@@ -521,6 +578,14 @@ pub enum Op {
         area: Option<([f32; 3], [f32; 3])>,
         tool: String,
     },
+    /// Draw the set of boxes named `key` for every player (joiners too),
+    /// replacing the set drawn under that key; none takes it away. A set
+    /// with an `owner` goes when that player leaves.
+    ShowShapes {
+        owner: Option<u64>,
+        key: String,
+        shapes: Vec<WorldShape>,
+    },
     /// Put an item in a player's tool list (unless they carry it) and,
     /// with `equip`, in their hand.
     GiveItem {
@@ -674,6 +739,14 @@ pub enum Op {
         text: String,
         seconds: f32,
         bottom: bool,
+    },
+    /// One player's plant-error icon and sound, as v20's
+    /// `messageClient(%client, 'MsgPlantError_…')`: one of
+    /// [`PLANT_ERRORS`]. `flood` (planting too soon) shows what the
+    /// engine's own plant rate shows when a player plants too fast.
+    PlantError {
+        player: u64,
+        error: String,
     },
     /// Ask one player a yes or no question (v20's `MessageBoxYesNo` from
     /// the server): yes sends the package's own `command`, which takes no
@@ -974,13 +1047,16 @@ impl Op {
             | Self::RemoveEntity { .. }
             | Self::Steer { .. }
             | Self::Label { .. } => "entity",
-            Self::Tell { .. } | Self::Broadcast { .. } | Self::Print { .. } | Self::Ask { .. } => {
-                "chat"
-            }
+            Self::Tell { .. }
+            | Self::Broadcast { .. }
+            | Self::Print { .. }
+            | Self::PlantError { .. }
+            | Self::Ask { .. } => "chat",
             Self::Sound { .. }
             | Self::Beam { .. }
             | Self::PlayThread { .. }
-            | Self::ShowBox { .. } => "effects",
+            | Self::ShowBox { .. }
+            | Self::ShowShapes { .. } => "effects",
             Self::CopyBuild { .. }
             | Self::CopyBox { .. }
             | Self::SaveCopy { .. }
@@ -1387,6 +1463,10 @@ impl Op {
                     && seconds.is_finite()
                     && (0.0..=600.0).contains(seconds)
             }
+            Self::PlantError { error, .. } => PLANT_ERRORS.contains(&error.as_str()),
+            Self::ShowShapes { key, shapes, .. } => {
+                shape_key(key) && shapes.len() <= MAX_SHAPES && shapes.iter().all(WorldShape::check)
+            }
             Self::Sound { profile, at } => {
                 !profile.is_empty()
                     && profile.len() <= 128
@@ -1531,6 +1611,9 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::Heal { .. } => "heal",
         Op::Print { bottom: false, .. } => "center_print",
         Op::Print { bottom: true, .. } => "bottom_print",
+        Op::PlantError { .. } => "plant_error",
+        Op::ShowShapes { shapes, .. } if shapes.is_empty() => "hide_shapes",
+        Op::ShowShapes { .. } => "show_shapes",
         Op::Ask { .. } => "ask",
         Op::Sound {
             at: SoundAt::Position(_),

@@ -150,6 +150,11 @@ impl CopyBuilder {
     pub fn is_empty(&self) -> bool {
         self.bricks.is_empty()
     }
+    /// Room for `more` bricks, so a copy job taking a known number never
+    /// copies the whole copy over in one tick as it grows.
+    pub fn reserve(&mut self, more: usize) {
+        self.bricks.reserve(more);
+    }
     /// Take `brick` as it stands: only its shape and look come along
     /// (owner, name, events, lights, emitters, items, sounds and vehicles
     /// stay with the original). Refused when it is off the grid or of a

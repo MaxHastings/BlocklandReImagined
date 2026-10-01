@@ -2571,6 +2571,22 @@ fn state_script(note: &str) -> Option<(&str, &str)> {
 
 /// Rewrites each gap note `settle` resolves into what resolves it, and
 /// marks the datablock converted once no gap note is left.
+/// The [`ports::Port::handles`] key naming an unsupported finding: a
+/// top-level call (`call:`), a file (`file:`), an object made at load
+/// (`new:`) or one changed at load (`set:`), lower-case.
+fn handles_key(what: &str) -> Option<String> {
+    let key = if let Some(call) = what.strip_prefix("top-level call ") {
+        format!("call:{call}")
+    } else if let Some(file) = what.strip_prefix("file ") {
+        format!("file:{file}")
+    } else if let Some(class) = what.strip_prefix("new ").and_then(|w| w.strip_suffix(" at load")) {
+        format!("new:{class}")
+    } else {
+        format!("set:{}", what.split_once(" = ")?.0.trim())
+    };
+    Some(key.to_ascii_lowercase())
+}
+
 fn settle_notes(e: &mut report::DatablockEntry, settle: impl Fn(&str) -> Option<String>) {
     for note in &mut e.notes {
         if let Some(settled) = settle(note) {
@@ -2738,16 +2754,51 @@ fn finish(
     };
     if let Some(port) = ports::apply(ports, &import, bodies, &cx.out) {
         for b in &mut cx.report.needs_behaviour {
-            if port
-                .covers
-                .iter()
-                .any(|c| c.eq_ignore_ascii_case(&b.function))
+            let how: Vec<String> = port
+                .handled
+                .get(&b.function.to_ascii_lowercase())
+                .map(|h| h.iter().cloned().collect())
+                .unwrap_or_default();
+            if !how.is_empty()
+                || port
+                    .covers
+                    .iter()
+                    .any(|c| c.eq_ignore_ascii_case(&b.function))
             {
                 b.port = Some(report::PortRef {
                     port: port.port.clone(),
                     status: port.status.clone(),
                     applied: port.applied,
+                    how,
                 });
+            }
+        }
+        // What the port carries out is not unsupported: top-level calls,
+        // files and objects made or changed at load, by their `handles` key.
+        let how_of = |key: &str| {
+            port.handled.get(key).map(|h| {
+                format!(
+                    "port {}: {}",
+                    port.port,
+                    h.iter().cloned().collect::<Vec<_>>().join("; ")
+                )
+            })
+        };
+        let (ported, unsupported): (Vec<_>, Vec<_>) = std::mem::take(&mut cx.report.unsupported)
+            .into_iter()
+            .map(|mut f| {
+                f.resolution = handles_key(&f.what).and_then(|k| how_of(&k));
+                f
+            })
+            .partition(|f| f.resolution.is_some());
+        cx.report.unsupported = unsupported;
+        cx.report.ported = ported;
+        for e in &mut cx.report.datablocks {
+            if e.status == "unsupported"
+                && let Some(how) = how_of(&format!("datablock:{}", e.name.to_ascii_lowercase()))
+            {
+                e.status = "ported".into();
+                e.notes.push(how);
             }
         }
         // A global the copy sets at load and a ported function reads: the
@@ -2777,7 +2828,10 @@ fn finish(
             }
         }
         if port.applied {
-            let covered = |f: &str| port.covers.iter().any(|c| c.eq_ignore_ascii_case(f));
+            let covered = |f: &str| {
+                port.covers.iter().any(|c| c.eq_ignore_ascii_case(f))
+                    || port.handled.contains_key(&f.to_ascii_lowercase())
+            };
             for e in &mut cx.report.datablocks {
                 let name = e.name.clone();
                 settle_notes(e, |note| {

@@ -109,13 +109,12 @@ impl CopyWork for CutWork {
             return Ok(false);
         }
         let mut slice = Vec::new();
-        let world = s.simulation.state();
         while let Some(&id) = self.ids.get(self.next) {
             if !spend(budget, work::REMOVE) {
                 break;
             }
             self.next += 1;
-            let Some(brick) = world.bricks.get(&id) else {
+            let Some(brick) = s.simulation.state().bricks.get(&id) else {
                 continue;
             };
             if !self.actor.trusted(brick.owner, level::FULL) {
@@ -124,6 +123,8 @@ impl CopyWork for CutWork {
             self.sum += Vec3::from(brick.position);
             self.removed.push((id, s.unlit(id, brick)));
             slice.push(id);
+            s.simulation.mark_rebuild(id);
+            s.simulation.charge_rebuilds(budget);
         }
         if !slice.is_empty() {
             s.cut_out_unread(&slice)?;
@@ -393,9 +394,14 @@ impl CopyWork for WrenchWork {
             if next.item_spawn.item.is_some() && next.item_spawn != brick.item_spawn {
                 stocked.push(id);
             }
+            let collision = next.colliding != brick.colliding;
             self.before.push((id, brick.clone()));
             changed.push((id, next));
             self.count += 1;
+            if collision {
+                s.simulation.mark_rebuild(id);
+                s.simulation.charge_rebuilds(budget);
+            }
         }
         if !changed.is_empty() {
             s.dirty.extend(changed.iter().map(|(id, _)| *id));

@@ -79,11 +79,17 @@ impl std::fmt::Display for CopyRefusal {
 impl std::error::Error for CopyRefusal {}
 
 /// The pause after each copy plant ([`Session::plant_wait`]), in ticks,
-/// and the first tick the next may come.
+/// and the tick of the last plant, which the pause runs from.
 #[derive(Debug, Clone, Copy, Default)]
 pub(super) struct PlantWait {
     pub ticks: u64,
-    pub next: u64,
+    pub last: Option<u64>,
+}
+impl PlantWait {
+    /// The first tick the next copy plant may come.
+    fn next(&self) -> u64 {
+        self.last.map_or(0, |last| last + self.ticks)
+    }
 }
 impl HeldCopy {
     pub fn new(sources: Vec<BrickId>, package: &str, partial: bool) -> Self {
@@ -449,6 +455,8 @@ impl Session {
     }
 
     /// Make `owner` wait `seconds` after each copy plant before the next.
+    /// The wait runs from their last plant, so a changed one counts from
+    /// there too (v20 Add-Ons compared the time since it with theirs).
     pub fn plant_wait(&mut self, owner: OwnerId, seconds: f32) -> Result<()> {
         ensure!(
             seconds.is_finite() && (0.0..=60.0).contains(&seconds),
@@ -456,10 +464,7 @@ impl Session {
         );
         ensure!(self.peers.contains_key(&owner), "No such player");
         let ticks = (seconds * bri_world::TICKS_PER_SECOND as f32).round() as u64;
-        let wait = self.plant_waits.entry(owner).or_default();
-        // A shorter wait shortens the one running now.
-        wait.next = wait.next.saturating_sub(wait.ticks.saturating_sub(ticks));
-        wait.ticks = ticks;
+        self.plant_waits.entry(owner).or_default().ticks = ticks;
         Ok(())
     }
 
@@ -623,8 +628,8 @@ impl Session {
         // The player's pause since their last copy plant.
         let wait = self.plant_waits.get(&owner).copied().unwrap_or_default();
         let now = self.simulation.state().tick;
-        if now < wait.next && self.blueprints.contains_key(&owner) {
-            let left = (wait.next - now) as f32 / bri_world::TICKS_PER_SECOND as f32;
+        if now < wait.next() && self.blueprints.contains_key(&owner) {
+            let left = (wait.next() - now) as f32 / bri_world::TICKS_PER_SECOND as f32;
             let package = self.copies.get(&owner).map(|c| c.package.clone());
             return self.refuse_place(package, owner, CopyRefusal::Wait(left));
         }

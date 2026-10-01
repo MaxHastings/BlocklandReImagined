@@ -185,6 +185,10 @@ impl SelectWork {
             }
             None => selection.bricks,
         };
+        // Grown once here, not doubled (and copied) a tick at a time.
+        let taking = self.ids.len().min(self.limit);
+        self.builder.reserve(taking);
+        self.sources.reserve(taking);
         Ok(())
     }
 

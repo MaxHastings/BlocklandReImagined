@@ -17,6 +17,11 @@ pub struct Report {
     pub ids: Vec<IdEntry>,
     pub dependencies: Vec<Dependency>,
     pub unsupported: Vec<Finding>,
+    /// What the importer could not convert but the applied port carries
+    /// out, each with how (`resolution`): a top-level call, a file, an
+    /// object made or changed at load ([`crate::ports::Port::handles`]).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub ported: Vec<Finding>,
     pub ambiguous: Vec<Finding>,
     pub needs_behaviour: Vec<crate::behaviour::NeedsBehaviour>,
     /// The listed native port for this Add-On (`crates/addon-import/ports`),
@@ -35,6 +40,11 @@ pub struct PortRef {
     /// False when this copy's script does not match the port; the report's
     /// `ports` entry says why.
     pub applied: bool,
+    /// How the game carries it out now: what the port read of it, or its
+    /// declaration ([`crate::ports::Port::handles`]). Empty when the port
+    /// only checks it (`covers`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub how: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -86,6 +96,9 @@ pub struct Summary {
     pub needs_behaviour: usize,
     /// Of those, the ones a listed port covers and the import applied.
     pub needs_behaviour_ported: usize,
+    /// What the importer could not convert that the port carries out
+    /// ([`Report::ported`]).
+    pub ported: usize,
     /// `converted`, `converted_with_gaps` or `recognised_only`.
     pub verdict: String,
 }
@@ -188,7 +201,8 @@ impl Report {
             datablocks: self.datablocks.len(),
             datablocks_converted: status("converted")
                 + status("converted_with_gaps")
-                + status("consumed"),
+                + status("consumed")
+                + status("ported"),
             datablocks_recognised_only: status("recognised_only"),
             datablocks_unsupported: status("unsupported"),
             ids_assigned: self.ids.len(),
@@ -206,6 +220,7 @@ impl Report {
                 .iter()
                 .filter(|b| b.port.as_ref().is_some_and(|p| p.applied))
                 .count(),
+            ported: self.ported.len(),
             verdict: String::new(),
         };
         let verdict = if s.datablocks_converted == 0 {
@@ -262,6 +277,7 @@ impl Report {
             ("Ids assigned", s.ids_assigned),
             ("Dependencies (missing)", s.dependencies),
             ("Unsupported", s.unsupported),
+            ("Carried out by the port", s.ported),
             ("Ambiguous", s.ambiguous),
             ("Needs behaviour", s.needs_behaviour),
             ("Needs behaviour, ported", s.needs_behaviour_ported),
@@ -299,7 +315,15 @@ impl Report {
         }
         for b in &self.needs_behaviour {
             let port = match &b.port {
-                Some(p) if p.applied => format!(" **Ported** by `{}` ({}).", p.port, p.status),
+                Some(p) if p.applied && p.how.is_empty() => {
+                    format!(" **Ported** by `{}` ({}).", p.port, p.status)
+                }
+                Some(p) if p.applied => format!(
+                    " **Ported** by `{}` ({}): {}.",
+                    p.port,
+                    p.status,
+                    p.how.join("; ")
+                ),
                 Some(p) => format!(
                     " A port exists (`{}`, {}) but this copy does not match it; see Ports.",
                     p.port, p.status
@@ -347,6 +371,7 @@ impl Report {
         }
         for (title, list) in [
             ("Unsupported", &self.unsupported),
+            ("Carried out by the port", &self.ported),
             ("Ambiguous", &self.ambiguous),
         ] {
             if list.is_empty() {
@@ -361,7 +386,10 @@ impl Report {
                     f.source
                         .as_ref()
                         .map_or(String::new(), |l| format!(" ({l})")),
-                    f.detail
+                    f.resolution
+                        .as_deref()
+                        .filter(|_| std::ptr::eq(list, &self.ported))
+                        .unwrap_or(&f.detail)
                 );
             }
             if list.len() > 25 {

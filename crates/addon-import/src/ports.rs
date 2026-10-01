@@ -8,7 +8,7 @@
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 mod builtin {
@@ -74,6 +74,30 @@ pub struct Port {
     /// `binds`). `{{name}}` in them is filled in, as in the rules.
     #[serde(default)]
     pub provides: BTreeMap<String, String>,
+    /// What the port carries out that no reader reads from the copy: a
+    /// function (`WeaponImage::TT_canFire`) or a top-level call
+    /// (`call:TT_registerAmmoType`) to how the game does it now (an engine
+    /// seam, the port's rules). The import report counts it as ported when
+    /// the copy has it. Say only what the game really does. Other findings
+    /// the importer could not convert are named as the report spells them,
+    /// by kind: `file:client.cs`, `new:ScriptGroup` (an object made at
+    /// load), `set:MessageBoxYesNoDlg.yesCallBack` (an object changed at
+    /// load) and `datablock:ND_SelectionBoxOuter`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub handles: BTreeMap<String, String>,
+}
+
+/// What a port accounts for, by lower-case function (`pistolimage::onfire`)
+/// or top-level call (`call:tt_registerammotype`): how each is carried out,
+/// from its readers and its [`Port::handles`].
+pub type Handled = BTreeMap<String, BTreeSet<String>>;
+
+/// Records that `how` carries out `what` ([`Handled`]).
+pub(crate) fn handle(handled: &mut Handled, what: &str, how: &str) {
+    handled
+        .entry(what.to_ascii_lowercase())
+        .or_default()
+        .insert(how.to_owned());
 }
 
 /// The companion host-rules Add-On a port adds ([`Port::rules`]). Its id is
@@ -343,6 +367,9 @@ pub struct Applied {
     /// Why it was not applied.
     pub reason: Option<String>,
     pub notes: String,
+    /// What it carries out of the copy's scripts, and how.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub handled: Handled,
 }
 
 /// A companion host-rules Add-On written beside an import.
@@ -392,12 +419,14 @@ pub fn apply(ports: &Ports, import: &Import, bodies: &Bodies, out: &Path) -> Opt
         rules: None,
         reason: None,
         notes: String::new(),
+        handled: Handled::new(),
     };
     match try_apply(ports, e, import, bodies, out, &mut applied) {
         Ok(()) => applied.applied = true,
         Err(err) => {
             applied.reason = Some(format!("{err:#}"));
             applied.values.clear();
+            applied.handled.clear();
         }
     }
     Some(applied)
@@ -428,6 +457,9 @@ fn try_apply(
     }
     let port = ports.port(e)?;
     applied.notes = port.notes.clone();
+    for (what, how) in &port.handles {
+        handle(&mut applied.handled, what, how);
+    }
     // What every port may use besides the values its patterns read.
     let mut values = applied.values.clone();
     for (name, value) in [

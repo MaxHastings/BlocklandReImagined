@@ -2014,6 +2014,124 @@ fn duplorcator_port_saves_and_loads_duplications() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// The rest of the Duplorcator on the port: drawing the wand with nothing
+/// selected says Normal Mode; a copy of over 50 bricks (its "Max Flood
+/// Bypass") waits the admin's planting timeout, a second, after a plant,
+/// with the flood error and how long; the cancel key lets the selection
+/// go; and with client loading off there is no cached duplication.
+#[test]
+fn duplorcator_port_waits_after_big_plants_and_cancels() {
+    use bri_sim::session::{
+        Command, MemoryCopies, Notice, PackageArg, PackageCommand, Reply, Session,
+    };
+    use bri_sim::simulation::PlantFailure;
+    use std::sync::Arc;
+
+    let (dir, mut s, host) = duplorcator_game("duplorcator-waits");
+    let store = Arc::new(MemoryCopies::default());
+    s.set_copy_store(store.clone());
+    let seq = std::cell::Cell::new(0u64);
+    let cmd = |s: &mut Session, command: Command| {
+        seq.set(seq.get() + 1);
+        s.command(host, seq.get(), command)
+    };
+    let notices = |s: &mut Session| -> Vec<Notice> {
+        for _ in 0..3 {
+            s.step().unwrap();
+        }
+        s.take_private_notices().into_iter().map(|(_, n)| n).collect()
+    };
+    let typed = |s: &mut Session, command: &str, arg: Option<&str>| {
+        let reply = cmd(
+            s,
+            Command::Package(PackageCommand {
+                package: String::new(),
+                command: command.into(),
+                args: arg
+                    .map(|n| vec![PackageArg::String(n.into())])
+                    .unwrap_or_default(),
+            }),
+        );
+        assert!(reply.is_ok(), "/{command}: {reply:?}");
+    };
+    let text = |n: &Notice| match n {
+        Notice::Center { text, .. } | Notice::Bottom { text, .. } => Some(text.clone()),
+        _ => None,
+    };
+
+    typed(&mut s, "dup", None);
+    let drawn = notices(&mut s);
+    assert!(
+        drawn.iter().filter_map(text).any(|t| t.contains("Normal") && t.contains("No bricks selected")),
+        "{drawn:?}"
+    );
+
+    // A tower of 60 plates loaded as a duplication.
+    let tower: Vec<_> = (0..60)
+        .map(|i| {
+            bri_world::Brick::new(
+                bri_world::ContentRef::Resolved("plate".into()),
+                [0.0, 0.2 * i as f32, 0.0],
+                0,
+            )
+        })
+        .collect();
+    store.put_loose("Tower", tower, vec![[1.0; 4]; 64]);
+    typed(&mut s, "loaddup", Some("tower"));
+    notices(&mut s);
+    assert_eq!(s.blueprint(host).map(|b| b.bricks.len()), Some(60));
+
+    let place = |s: &mut Session, x: f32| {
+        cmd(
+            s,
+            Command::PlaceBlueprint {
+                position: [x, 0.0, 0.0],
+                quarter_turns: 0,
+                mirrored: false,
+                flipped: false,
+            },
+        )
+    };
+    let reply = place(&mut s, 3.0);
+    assert!(matches!(reply, Ok(Reply::Planted(_))), "{reply:?}");
+    notices(&mut s);
+    let bricks = s.snapshot().world.bricks.len();
+    let _ = place(&mut s, 6.0);
+    let refused = notices(&mut s);
+    assert_eq!(s.snapshot().world.bricks.len(), bricks, "too soon");
+    assert!(
+        refused.iter().any(|n| matches!(n, Notice::PlantError(PlantFailure::Limit))),
+        "the flood error: {refused:?}"
+    );
+    assert!(
+        refused.iter().filter_map(text).any(|t| t.contains("You must wait") && t.contains("1") && t.contains("before planting again")),
+        "{refused:?}"
+    );
+    for _ in 0..120 {
+        s.step().unwrap();
+    }
+    let reply = place(&mut s, 6.0);
+    assert!(matches!(reply, Ok(Reply::Planted(_))), "a second on: {reply:?}");
+    assert_eq!(s.snapshot().world.bricks.len(), bricks + 60);
+
+    // The cancel key lets the selection go.
+    cmd(&mut s, Command::CancelBrick).unwrap();
+    let canceled = notices(&mut s);
+    assert!(s.blueprint(host).is_none(), "the selection is gone");
+    assert!(
+        canceled.iter().filter_map(text).any(|t| t.contains("Normal") && t.contains("No bricks selected")),
+        "{canceled:?}"
+    );
+
+    typed(&mut s, "reloaddup", None);
+    let reloaded = notices(&mut s);
+    assert!(
+        reloaded.iter().filter_map(text).any(|t| t == "You have no cached duplication"),
+        "{reloaded:?}"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// What the host told the player since last asked: centre and bottom
 /// prints and chat lines.
 fn told(s: &mut bri_sim::session::Session) -> Vec<String> {
@@ -2058,6 +2176,26 @@ fn nd_key(command: &str, args: Vec<bri_sim::session::PackageArg>) -> bri_sim::se
         command: command.into(),
         args,
     })
+}
+
+/// The New Duplicator's shapes `key` that every player sees for `owner`.
+fn nd_shapes(
+    s: &bri_sim::session::Session,
+    owner: u64,
+    key: &str,
+) -> Vec<bri_package_runtime::ops::WorldShape> {
+    let end = format!("/{owner}/{key}");
+    s.world_shapes()
+        .into_iter()
+        .find(|(k, _)| k.ends_with(&end))
+        .map_or_else(Vec::new, |(_, set)| set.to_vec())
+}
+/// The corners of `owner`'s selection box, from its outer faces (0.01
+/// outside it).
+fn nd_box(s: &bri_sim::session::Session, owner: u64) -> Option<([f32; 3], [f32; 3])> {
+    let outer = nd_shapes(s, owner, "box").into_iter().find(|x| x.color == [0, 0, 0, 89])?;
+    let snap = |v: f32| (v * 1e4).round() / 1e4;
+    Some((outer.min.map(|v| snap(v + 0.01)), outer.max.map(|v| snap(v - 0.01))))
 }
 
 /// The stand-in New Duplicator hosted, with a plate, a half-on plate on it
@@ -2197,6 +2335,10 @@ fn new_duplicator_port_selects_stacks_and_boxes_and_plants() {
     let copy = s.blueprint(host).unwrap().clone();
     assert_eq!(copy.bricks.len(), 2);
     assert_eq!(copy.tool, "tool_newduplicator:weapon/nd_item");
+    // Everyone sees gold edges round the selection.
+    let highlight = nd_shapes(&s, host, "highlight");
+    assert_eq!(highlight.len(), 12, "{highlight:#?}");
+    assert!(highlight.iter().all(|x| x.color == [255, 214, 0, 252]));
     let world = s.snapshot().world;
     assert_eq!(
         (world.bricks[&base].color, world.bricks[&base].color_effect),
@@ -2281,12 +2423,20 @@ fn new_duplicator_port_selects_stacks_and_boxes_and_plants() {
     }
     assert!(told(&mut s).iter().any(|t| t.contains(r"Type: \c3Box")));
     swing(&mut s, host, &seq);
-    let outline = s.take_private_notices().into_iter().find_map(|(_, n)| match n {
-        Notice::SelectionBox(Some(o)) => Some(*o),
-        _ => None,
-    });
-    let outline = outline.expect("the click put a box round the brick");
-    assert_eq!((outline.min, outline.max), ([0.0, 0.0, 0.0], [1.0, 0.2, 0.5]));
+    let outline = nd_box(&s, host).expect("the click put a box round the brick");
+    assert_eq!(outline, ([0.0, 0.0, 0.0], [1.0, 0.2, 0.5]));
+    // Everyone sees it: see-through faces, twelve edges, two corner
+    // cubes and its name.
+    let shapes = nd_shapes(&s, host, "box");
+    assert_eq!(shapes.len(), 17, "{shapes:#?}");
+    let name = s.names()[&host].clone();
+    assert!(
+        shapes
+            .iter()
+            .any(|x| x.label.starts_with(&name) && x.label.ends_with(" Selection Box") && x.color[..3] == [255, 214, 0]),
+        "{shapes:#?}"
+    );
+    assert!(shapes.iter().any(|x| x.inside == [0, 0, 0, 153]));
     // The brick keys move its top corner: a brick (3 plates) up, then a
     // super shift of the stand-in's 10 plates down, which the 8-unit box
     // allows.
@@ -2306,12 +2456,8 @@ fn new_duplicator_port_selects_stacks_and_boxes_and_plants() {
     )
     .unwrap();
     s.step().unwrap();
-    let grown = s.take_private_notices().into_iter().find_map(|(_, n)| match n {
-        Notice::SelectionBox(Some(o)) => Some(*o),
-        _ => None,
-    });
-    let grown = grown.expect("the box grew");
-    assert!((grown.max[1] - 0.8).abs() < 1e-4, "{grown:?}");
+    let grown = nd_box(&s, host).expect("the box grew");
+    assert!((grown.1[1] - 0.8).abs() < 1e-4, "{grown:?}");
     // Plant selects what lies wholly in the box: the bottom plate, not the
     // one half over its edge.
     send(&mut s, host, &seq, nd_key("plant", vec![])).unwrap();
@@ -2345,11 +2491,8 @@ fn new_duplicator_port_selects_stacks_and_boxes_and_plants() {
     s.step().unwrap();
     send(&mut s, host, &seq, Command::CancelBrick).unwrap();
     s.step().unwrap();
-    assert!(
-        s.take_private_notices()
-            .into_iter()
-            .any(|(_, n)| matches!(n, Notice::SelectionBox(None)))
-    );
+    assert!(nd_box(&s, host).is_none());
+    assert!(nd_shapes(&s, host, "highlight").is_empty());
     let diagnostics = s.package_diagnostics();
     assert!(diagnostics.is_empty(), "{diagnostics:#?}");
     std::fs::remove_dir_all(dir).unwrap();
@@ -2640,12 +2783,8 @@ fn new_duplicator_port_paints_wrenches_supercuts_fills_and_force_plants() {
     for _ in 0..3 {
         s.step().unwrap();
     }
-    let boxed = s.take_private_notices().into_iter().find_map(|(_, n)| match n {
-        Notice::SelectionBox(Some(o)) => Some(*o),
-        _ => None,
-    });
-    let boxed = boxed.expect("a box round the selection");
-    assert_eq!((boxed.min, boxed.max), ([0.0, 0.0, 0.0], [1.5, 0.4, 0.5]));
+    let boxed = nd_box(&s, host).expect("a box round the selection");
+    assert_eq!(boxed, ([0.0, 0.0, 0.0], [1.5, 0.4, 0.5]));
     assert!(s.blueprint(host).is_none(), "the selection became the box");
     // /SuperCut, asked first, cuts everything reaching into the box.
     let before = s.snapshot().world.bricks.len();
@@ -2690,12 +2829,8 @@ fn new_duplicator_port_paints_wrenches_supercuts_fills_and_force_plants() {
     )
     .unwrap();
     s.step().unwrap();
-    let moved = s.take_private_notices().into_iter().find_map(|(_, n)| match n {
-        Notice::SelectionBox(Some(o)) => Some(*o),
-        _ => None,
-    });
-    let moved = moved.expect("the box moved");
-    assert!((moved.min[1] - 0.2).abs() < 1e-4 && (moved.max[1] - 0.6).abs() < 1e-4, "{moved:?}");
+    let moved = nd_box(&s, host).expect("the box moved");
+    assert!((moved.0[1] - 0.2).abs() < 1e-4 && (moved.1[1] - 0.6).abs() < 1e-4, "{moved:?}");
     let diagnostics = s.package_diagnostics();
     assert!(diagnostics.is_empty(), "{diagnostics:#?}");
     std::fs::remove_dir_all(dir).unwrap();
