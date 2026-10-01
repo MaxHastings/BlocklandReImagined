@@ -83,7 +83,17 @@ impl SoundAsset {
         if clip.frames() == 0 || clip.duration_seconds() > 30.0 {
             return Err("a sound must last between a moment and 30 seconds".into());
         }
-        Ok(Self {
+        Ok(Self::world(
+            id,
+            ClipData::Pcm(Arc::new(clip)),
+            reference_distance,
+            max_distance,
+        ))
+    }
+    /// A world sound `id` playing `data` (a decoded clip, or one of the
+    /// bank's), heard as [`SoundAsset::decoded`] describes.
+    pub fn world(id: &str, data: ClipData, reference_distance: f32, max_distance: f32) -> Self {
+        Self {
             id: Arc::from(id),
             name: Arc::from(id),
             playback: crate::schema::Playback {
@@ -97,8 +107,8 @@ impl SoundAsset {
                 channel: 2,
                 bus: crate::schema::Bus::Effects,
             },
-            data: ClipData::Pcm(Arc::new(clip)),
-        })
+            data,
+        }
     }
 }
 
@@ -132,6 +142,8 @@ pub struct SoundBank {
     unavailable: HashMap<String, String>,
     /// lower-case datablock name / id -> canonical id
     aliases: HashMap<String, String>,
+    /// Loaded clips by lower-case v20 path (`base/data/sound/x.wav`).
+    sources: HashMap<String, ClipData>,
     resident_bytes: u64,
     streamed_clips: usize,
 }
@@ -272,11 +284,25 @@ impl SoundBank {
                 }
             }
         }
+        let sources = manifest
+            .clips
+            .iter()
+            .filter_map(|c| Some((c, loaded.get(&c.id)?)))
+            .flat_map(|(c, data)| {
+                c.sources.iter().map(move |s| {
+                    (
+                        s.virtual_path.replace('\\', "/").to_ascii_lowercase(),
+                        data.clone(),
+                    )
+                })
+            })
+            .collect();
         Ok(Self {
             manifest,
             ready,
             unavailable,
             aliases,
+            sources,
             resident_bytes: resident,
             streamed_clips: streamed,
         })
@@ -303,6 +329,13 @@ impl SoundBank {
         }
     }
 
+    /// The loaded clip of the game's file at `virtual_path`
+    /// (`base/data/sound/vehicleExplosion.wav`), case-insensitively: what
+    /// an Add-On's `AudioProfile` naming that file plays.
+    pub fn clip_at(&self, virtual_path: &str) -> Option<&ClipData> {
+        self.sources
+            .get(&virtual_path.replace('\\', "/").to_ascii_lowercase())
+    }
     pub fn manifest(&self) -> &PackManifest {
         &self.manifest
     }

@@ -123,12 +123,18 @@ impl WeaponContent {
             parts.push((dir.clone(), abs, part));
         }
         // Native resource files and the sound files packs ship, each
-        // relative to its own pack's folder.
+        // relative to its own pack's folder. A sound playing the game's own
+        // file ships none; the audio pack's identity covers that file.
         let native = |pack: &bri_weapons::Pack| -> Vec<String> {
             pack.resources
                 .iter()
                 .filter_map(|r| r.native_file.clone())
-                .chain(pack.sounds.values().map(|s| s.file.clone()))
+                .chain(
+                    pack.sounds
+                        .values()
+                        .filter(|s| !s.stock)
+                        .map(|s| s.file.clone()),
+                )
                 .collect()
         };
         let resources = native(&pack)
@@ -904,13 +910,30 @@ mod tests {
     fn test_weapons_pack_identity_and_every_choice() {
         let root = tempfile::tempdir().unwrap().keep().join("weapons");
         std::fs::create_dir(&root).unwrap();
-        let pack = bri_weapons::testing::pack();
-        // Every native file the pack names, with made-up bytes.
+        let mut pack = bri_weapons::testing::pack();
+        // A sound playing the game's own file, which the pack does not ship.
+        pack.sounds.insert(
+            "addon:sound/boom".into(),
+            bri_weapons::SoundDef {
+                file: "base/data/sound/vehicleexplosion.wav".into(),
+                volume: 1.0,
+                looping: false,
+                local: false,
+                package: None,
+                stock: true,
+            },
+        );
+        // Every native file the pack ships, with made-up bytes.
         for name in pack
             .resources
             .iter()
             .filter_map(|r| r.native_file.clone())
-            .chain(pack.sounds.values().map(|s| s.file.clone()))
+            .chain(
+                pack.sounds
+                    .values()
+                    .filter(|s| !s.stock)
+                    .map(|s| s.file.clone()),
+            )
         {
             let path = root.join(&name);
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();

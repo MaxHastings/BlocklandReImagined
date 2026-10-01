@@ -80,7 +80,9 @@ impl Pack {
                 .sounds
                 .into_iter()
                 .map(|(key, mut sound)| {
-                    sound.package.get_or_insert_with(|| dir.clone());
+                    if !sound.stock {
+                        sound.package.get_or_insert_with(|| dir.clone());
+                    }
                     (key, sound)
                 })
                 .collect();

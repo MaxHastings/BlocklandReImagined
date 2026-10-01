@@ -513,6 +513,9 @@ pub mod audio {
     }
 
     const CLIP: &str = "test/clip/tone";
+    /// The v20 path the pack's one clip was read from, as an Add-On's
+    /// `AudioProfile` would name it.
+    pub const TONE_PATH: &str = "base/data/sound/testTone.wav";
 
     /// Write the pack into `dir`.
     pub fn write_pack(dir: &Path) -> Result<PackManifest> {
@@ -538,7 +541,12 @@ pub mod audio {
             peak: 0.4,
             rms: 0.28,
             stream: false,
-            sources: Vec::new(),
+            sources: vec![ClipSource {
+                virtual_path: TONE_PATH.into(),
+                container: "loose".into(),
+                archive_sha256: None,
+                package: "base".into(),
+            }],
         };
         let mut music = sound(MUSIC_SOUND, "musicData_Fixture_Tune", None, 2, Bus::Music);
         music.playback.looping = true;
