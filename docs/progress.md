@@ -8401,3 +8401,16 @@ Evidence: `bri-render --test clip_planes` (a cut square draws only its
 side; two complementary cuts match the whole within 2; a moved copy keeps
 its own cut); `bri-client portal_view::a_body_part_way_through...`.
 Held items and the first-person arms still draw on one side only.
+
+Portals, the big size settled (Max 10-01: a tank and a jeep "with some
+extra space so its not too tight", "well thought out"). The 1x8x10 (3.9
+inside) is too narrow for the Tank with its turret (about 4.7 wide, 4.4
+tall), so the big portal is now **1x14x10**: 7 wide, 6 tall, 6.9 by 5.75
+inside, the same stretched window (`stretchSize = "14 1 30"`; frame at
+its normal thickness; opening, collision, render and pairing all follow
+the size). Room: a tank about 1.1 (2.2 studs) each side and 1.35 above
+(2.7 studs); a jeep (2.8 by 2.2) about 2 each side. Evidence:
+`bri-sim --test portals vehicles::*` drives a Steel Ball, a jeep-sized
+box and a tank-sized box (4.7 by 4.4 by 6.6) through off centre (tank
+±0.8, others ±1.5), turned with speed and spin kept; the 1x4x5 stops all
+three. The 1x20x12 stays for the Stunt Plane.

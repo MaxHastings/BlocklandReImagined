@@ -27,8 +27,8 @@
       }
     },
     {
-      "id": "brick_portal:brick/brickportal1x8x10data",
-      "display_name": "1x8x10 Portal",
+      "id": "brick_portal:brick/brickportal1x14x10data",
+      "display_name": "1x14x10 Portal",
       "category": "Special",
       "subcategory": "Portals",
       "mesh_id": "v20/base/data/bricks/special/4x1x5window.blb",
@@ -50,7 +50,7 @@
         "frame": { "sides": 0.05, "top": 0.05, "bottom": 0.2 },
         "name": "Portal"
       },
-      "stretch": [8, 1, 30]
+      "stretch": [14, 1, 30]
     },
     {
       "id": "brick_portal:brick/brickportal1x20x12data",

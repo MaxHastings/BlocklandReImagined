@@ -19,7 +19,7 @@ const HUGE: &str = "huge_portal";
 const WALL: &str = "wall";
 
 /// A 1x4x5 doorway (2 wide, 3 tall, half a unit deep) opening north and
-/// south through its middle, the same stretched to 1x8x10 (4 wide, 6 tall)
+/// south through its middle, the same stretched to 1x14x10 (7 wide, 6 tall)
 /// and 1x20x12 (10 wide, 7.2 tall) as the Portal Add-On's bigger ones are,
 /// and a 1x4x5 solid wall.
 fn definitions() -> Definitions {
@@ -87,7 +87,7 @@ fn definitions() -> Definitions {
         )
     };
     let (portal_collision, portal_shape) = frame(PORTAL, &door);
-    let big = door.stretched("door#8x1x30", [8, 1, 30]).unwrap();
+    let big = door.stretched("door#14x1x30", [14, 1, 30]).unwrap();
     let (big_collision, big_shape) = frame(BIG, &big);
     let huge = door.stretched("door#20x1x36", [20, 1, 36]).unwrap();
     let (huge_collision, huge_shape) = frame(HUGE, &huge);
@@ -551,8 +551,8 @@ mod shots {
     }
 }
 
-/// Bodies bigger than a player: a Steel Ball and a jeep-sized box go
-/// through the big portal whole, turned with their speed and spin, and the
+/// Bodies bigger than a player: a Steel Ball and jeep- and tank-sized
+/// boxes go through the big portal whole, turned with their speed and spin, and the
 /// small one's frame stops them.
 mod vehicles {
     use super::*;
@@ -563,9 +563,11 @@ mod vehicles {
     const BALL: &str = "steel-ball-kit:vehicle/steelball";
     const PLANE: &str = "vehicle_stunt_plane:vehicle/stuntplanevehicle";
     const JEEP: &str = "steel-ball-kit:vehicle/jeepbox";
+    const TANK: &str = "steel-ball-kit:vehicle/tankbox";
 
-    /// The Steel Ball as its Add-On ships it, and a jeep-sized box (2.8
-    /// wide, 2.2 tall, 5.6 long) built from it.
+    /// The Steel Ball as its Add-On ships it, and boxes built from it the
+    /// size of a jeep (2.8 wide, 2.2 tall, 5.6 long) and of a tank with
+    /// its turret (4.7 wide, 4.4 tall, 6.6 long).
     fn pack() -> Pack {
         let path = concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -573,22 +575,23 @@ mod vehicles {
         );
         let mut pack: serde_json::Value =
             serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-        let mut jeep = pack["definitions"][0].clone();
-        let half = [1.4f32, 1.1, 2.8];
-        let corners: Vec<[f32; 3]> = (0..8)
-            .map(|i| std::array::from_fn(|a| if i >> a & 1 == 1 { half[a] } else { -half[a] }))
-            .collect();
-        jeep["id"] = JEEP.into();
-        // A plain body of its hulls (a ball is a sphere round its bounds).
-        jeep["family"] = "Tumble".into();
-        jeep["datablock"] = "JeepBoxVehicle".into();
-        jeep["collision_hulls"] = serde_json::json!([corners]);
-        jeep["bounds_min"] = serde_json::json!(half.map(|h| -h));
-        jeep["bounds_max"] = serde_json::json!(half);
-        jeep["mass"] = 300.0.into();
-        jeep["friction"] = 0.0.into();
-        jeep["smash"] = serde_json::Value::Null;
-        pack["definitions"].as_array_mut().unwrap().push(jeep);
+        for (id, half) in [(JEEP, [1.4f32, 1.1, 2.8]), (TANK, [2.35, 2.2, 3.3])] {
+            let mut body = pack["definitions"][0].clone();
+            let corners: Vec<[f32; 3]> = (0..8)
+                .map(|i| std::array::from_fn(|a| if i >> a & 1 == 1 { half[a] } else { -half[a] }))
+                .collect();
+            body["id"] = id.into();
+            // A plain body of its hulls (a ball is a sphere round its bounds).
+            body["family"] = "Tumble".into();
+            body["datablock"] = "BoxVehicle".into();
+            body["collision_hulls"] = serde_json::json!([corners]);
+            body["bounds_min"] = serde_json::json!(half.map(|h| -h));
+            body["bounds_max"] = serde_json::json!(half);
+            body["mass"] = 300.0.into();
+            body["friction"] = 0.0.into();
+            body["smash"] = serde_json::Value::Null;
+            pack["definitions"].as_array_mut().unwrap().push(body);
+        }
         let pack: Pack = serde_json::from_value(pack).unwrap();
         pack.validate().unwrap();
         pack
@@ -728,13 +731,14 @@ mod vehicles {
     }
 
     #[test]
-    fn a_steel_ball_and_a_jeep_go_through_the_big_portal_whole() {
-        // The ball rolls over the sill; the box (no wheels) is sent in
-        // fast enough to clear it before it settles. Off centre as far as
-        // each still fits (the opening is 3.9 wide).
+    fn a_steel_ball_a_jeep_and_a_tank_go_through_the_big_portal_whole() {
+        // The ball rolls over the sill; the boxes (no wheels) are sent in
+        // fast enough to clear it before they settle. Off centre with room
+        // to spare: the opening is 6.9 wide and 5.75 tall inside.
         let cases = [
-            (BALL, 1.26f32, 15.0f32, [-0.6f32, 0.0, 0.6]),
-            (JEEP, 1.7, 30.0, [-0.3, 0.0, 0.3]),
+            (BALL, 1.26f32, 15.0f32, [-1.5f32, 0.0, 1.5]),
+            (JEEP, 1.7, 30.0, [-1.5, 0.0, 1.5]),
+            (TANK, 2.8, 30.0, [-0.8, 0.0, 0.8]),
         ];
         for (definition, rest, speed, offsets) in cases {
             for across in offsets {
@@ -755,7 +759,8 @@ mod vehicles {
 
     #[test]
     fn the_small_portal_stops_what_does_not_fit() {
-        for (definition, rest, speed) in [(BALL, 1.26f32, 15.0f32), (JEEP, 1.7, 30.0)] {
+        let cases = [(BALL, 1.26f32, 15.0f32), (JEEP, 1.7, 30.0), (TANK, 2.8, 30.0)];
+        for (definition, rest, speed) in cases {
             let at = Vec3::new(-20.0, rest, -4.25 + 3.5);
             let run = run(pack(), definition, at, Vec3::new(0.0, 0.0, -speed), 120);
             assert!(run.carried.is_none(), "{definition} went through");

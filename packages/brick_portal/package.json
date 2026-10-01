@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "api": 1,
   "name": "Portal",
-  "description": "Portals built on the game's window brick, 1x4x5, a 1x8x10 twice as tall and wide that a Steel Ball or a jeep fits through, and a 1x20x12 that a tank or the Stunt Plane, wings and all, fits through: through it you see out of its partner, and you walk in one and out of the other. Two portals of one owner with the same brick Name (wrench) are a pair; two placed in a row are named to match. More of one name form a ring, like Teledoors; each size pairs only with its own size. Unpaired, it is shut glass. Options > Graphics > Mirrors sets how many show their view live.",
+  "description": "Portals built on the game's window brick, 1x4x5, a 1x14x10 that a tank or a jeep drives through with room to spare, and a 1x20x12 that the Stunt Plane, wings and all, flies through: through it you see out of its partner, and you walk in one and out of the other. Two portals of one owner with the same brick Name (wrench) are a pair; two placed in a row are named to match. More of one name form a ring, like Teledoors; each size pairs only with its own size. Unpaired, it is shut glass. Options > Graphics > Mirrors sets how many show their view live.",
   "authors": ["Blockland ReImagined"],
   "license": "CC0-1.0",
   "provenance": { "source": "original" },
