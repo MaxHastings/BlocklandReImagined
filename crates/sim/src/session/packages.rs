@@ -2289,6 +2289,11 @@ impl Session {
                 ensure!(self.peers.contains_key(&player), "No such player");
                 self.weapons.set_ammo(bri_weapons::ActorId(player), ammo)
             }
+            Op::SetImageLoaded { player, loaded } => {
+                ensure!(self.peers.contains_key(&player), "No such player");
+                self.weapons
+                    .set_loaded(bri_weapons::ActorId(player), loaded)
+            }
             Op::MountImage { player, image } => {
                 let peer = self.peers.get(&player).context("No such player")?;
                 ensure!(peer.combat.alive, "Only living players hold things");

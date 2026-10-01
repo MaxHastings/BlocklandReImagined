@@ -912,6 +912,13 @@ pub enum Op {
         player: u64,
         ammo: bool,
     },
+    /// Whether the image in a player's hand is loaded (`setImageLoaded`),
+    /// which its states' `loaded` and `not_loaded` transitions read: a tool
+    /// that spins while it works.
+    SetImageLoaded {
+        player: u64,
+        loaded: bool,
+    },
     /// Put another image in a player's hand, keeping their tool slot
     /// (`mountImage`): a scope, a second fire mode. `None` puts back the
     /// selected tool's own image.
@@ -1503,6 +1510,7 @@ impl Op {
             | Self::WearImage { .. }
             | Self::SetFov { .. }
             | Self::SetImageAmmo { .. }
+            | Self::SetImageLoaded { .. }
             | Self::MountImage { .. }
             | Self::UnmountImage { .. }
             | Self::SetScale { .. }
@@ -1545,6 +1553,7 @@ impl Op {
             | Self::Respawn { .. }
             | Self::Control { .. }
             | Self::SetImageAmmo { .. }
+            | Self::SetImageLoaded { .. }
             | Self::MirrorCopy { .. }
             | Self::DropCopy { .. }
             | Self::ShowCopy { .. }
@@ -2065,6 +2074,7 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::SetMapLights { .. } => "set_map_lights",
         Op::SetEnvironment { .. } => "set_environment",
         Op::SetImageAmmo { .. } => "set_image_ammo",
+        Op::SetImageLoaded { .. } => "set_image_loaded",
         Op::MountImage { .. } => "mount_image",
         Op::SetTeams { .. } => "set_teams",
         Op::SetTeam { .. } => "set_team",

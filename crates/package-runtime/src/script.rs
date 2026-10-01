@@ -2602,6 +2602,12 @@ fn register_presentation(engine: &mut Engine) {
             ammo,
         })
     });
+    engine.register_fn("set_image_loaded", |player: Dynamic, loaded: bool| {
+        push(Op::SetImageLoaded {
+            player: id(&player)?,
+            loaded,
+        })
+    });
     engine.register_fn("unmount_image", |player: Dynamic| {
         push(Op::UnmountImage {
             player: id(&player)?,

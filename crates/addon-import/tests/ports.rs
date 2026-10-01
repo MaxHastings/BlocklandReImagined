@@ -2529,6 +2529,11 @@ fn new_duplicator_game(
     for image in ["nd_image", "nd_image_box", "nd_image_blue"] {
         let image = &pack.images[&format!("tool_newduplicator:image/{image}")];
         assert_eq!(image.command.as_deref(), Some("tool_newduplicator-rules:fire"));
+        // Unloaded while a job runs, it spins (`stateSpinThread`).
+        let ready = &image.states[1];
+        let spin = ready.not_loaded.map(|i| &image.states[i]).unwrap();
+        assert_eq!((ready.spin, spin.spin), (bri_weapons::Spin::Stop, bri_weapons::Spin::FullSpeed));
+        assert_eq!(spin.loaded, Some(1));
         assert_eq!(
             image.commands.unmount.as_deref(),
             Some("tool_newduplicator-rules:unmount")
@@ -3618,7 +3623,21 @@ fn new_duplicator_port_supercuts_and_fills_over_ticks() {
     s.step().unwrap();
     answer(&mut s, host, &seq, "ndconfirmsupercut");
     assert!(s.copy_working(host), "{:?} {}", told(&mut s), s.snapshot().world.bricks.len());
+    // While it works the duplicator spins (`setImageLoaded(0, false)`).
+    let held = |s: &bri_sim::session::Session| s.weapon_view().images[&host][0].state.clone();
+    let mut spun = false;
+    for _ in 0..4 {
+        s.step().unwrap();
+        spun |= held(&s) == "Spin";
+    }
+    assert!(spun && s.copy_working(host), "{}", held(&s));
     assert!(finish(&mut s) > 0);
+    let mut ticks = 0;
+    while held(&s) != "Ready" {
+        s.step().unwrap();
+        ticks += 1;
+        assert!(ticks < 10, "it stops spinning when the job ends: {}", held(&s));
+    }
     let prints = told(&mut s);
     assert!(
         prints.iter().any(|t| t.contains("Supercut in progress... (")

@@ -326,6 +326,7 @@
     "ND_Image_Box::onPreFire": "the port's image scripts: PreFire raises the holder's arm (shiftTo) as the original's onPreFire did",
     "ND_Image_Blue::onPreFire": "the port's image scripts: PreFire raises the holder's arm (shiftTo) as the original's onPreFire did",
     "GameConnection::ndKillMode": "kill_mode: putting the duplicator away cancels a running job (cancel_copy), and its canceled report says nothing once the mode is gone",
+    "GameConnection::ndSetMode": "the rules' set_mode, which puts the mode's image in hand (show_image); a progress mode's spin is set_working's set_image_loaded(p, false) while a job runs, so the image's NotLoaded states spin it (stateSpinThread) until the job ends",
     "NDM_BoxSelectProgress::getBottomPrint": "progress_text: Searching... with how far through the box's buckets (on_copy searched) and the bricks found",
     "NDM_BoxSelectProgress::onKillMode": "kill_mode: putting the duplicator away cancels a running job (cancel_copy), and its canceled report says nothing once the mode is gone",
     "NDM_CutProgress::onCancelBrick": "canceled: a cut cancelled part way goes back to the last selection mode with the selection dropped; what went stays as one undo",

@@ -609,11 +609,21 @@ fn box_from_selection(p) {
     }
 }
 
+// A job started or ended: the progress modes' `spin`, which `ndSetMode`
+// gave the image (`setImageLoaded(0, !%newMode.spin)`), so the duplicator
+// spins while it works.
+fn set_working(p, action) {
+    if get_player(p, "working") != action {
+        set_player(p, "working", action);
+        set_image_loaded(p, action == "");
+    }
+}
+
 // `ndKillMode`: the duplicator put away. A job under way stops with it
 // (each progress mode's `onKillMode`), and what it did stays done.
 fn kill_mode(p) {
     if busy(p) {
-        set_player(p, "working", "");
+        set_working(p, "");
         cancel_copy(p);
     }
     if get_player(p, "mode") == "fillcolor" {
@@ -1628,7 +1638,7 @@ fn on_copy(p, info) {
             return;
         }
         let was = get_player(p, "working");
-        set_player(p, "working", info.action);
+        set_working(p, info.action);
         set_player(p, "progress", [info.bricks, info.total, info.placed, info.refused, info.queued, info.searched]);
         if was != info.action {
             if info.action == "plant" && info.total > process_per_tick() * 10 {
@@ -1642,7 +1652,7 @@ fn on_copy(p, info) {
         bottom(p);
         return;
     }
-    set_player(p, "working", "");
+    set_working(p, "");
     if info.error == "canceled" {
         canceled(p, info);
         return;
@@ -1887,7 +1897,7 @@ fn tally(failed, key) {
 // `ND_Selection::finishPlant`, after which the selection is planted from;
 // and `conditionalPlant`'s refusals before it.
 fn on_place(p, info) {
-    set_player(p, "working", "");
+    set_working(p, "");
     if info.float_refused {
         // `NDM_PlantCopy::onPlantBrick`'s check, made at each plant.
         tell(p, `\c6Force Plant has been disabled because it is admin only. Ask an admin for help.`);

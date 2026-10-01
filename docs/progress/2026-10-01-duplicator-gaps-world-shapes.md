@@ -235,3 +235,26 @@ client's copy report serial test, and the content test
 `a_dropped_duplication_keeps_its_bricks_names_and_events`. New
 Duplicator: 362 of 363 (left: `GameConnection::ndSetMode`, the item
 spinning while a job runs; prefs wait for the settings seam).
+
+## The duplicator spins while it works
+
+`GameConnection::ndSetMode` gave each progress mode a `spin`, applied as
+`setImageLoaded(0, !spin)`; the image's states (`stateTransitionOnLoaded`,
+`stateTransitionOnNotLoaded`, `stateSpinThread`) then spin it up, keep
+it turning and slow it down. Image states now carry `loaded`,
+`not_loaded` and `spin` (the importer reads the three v20 fields), the
+weapon runtime checks the loaded transitions before ammo as
+`ShapeBase::updateImageState` does, and an image put in hand starts
+loaded. Rules unload the held image with `set_image_loaded(p, loaded)`.
+The spin is presentation: each game turns the image's `spin` sequence
+from the state the image is in (a speed per state, kept between
+states), so it costs no bandwidth. The port's `set_working` unloads the
+image while a job runs and loads it when the job ends.
+
+Tests: `a_spin_speeds_up_and_slows_over_its_state_and_keeps_otherwise`
+(bri-weapons), the New Duplicator supercut test (the held image is in
+its spinning state during the job and back to its idle state after;
+fails without the rules' `set_image_loaded`), and the port's image
+state checks. The real copy's `ND_Image` imports with spin up, full
+speed and spin down states and no diagnostics. New Duplicator: 363 of
+363; its prefs (`ndRegisterPrefs`) wait for the settings seam.
