@@ -2412,6 +2412,16 @@ fn behaviours(cx: &mut Ctx, scripts: &[Script]) {
     }
 }
 
+/// The package an Add-On this one requires by name
+/// (`ForceRequiredAddOn`) becomes: the base game's for a vanilla one, else
+/// the package importing it makes (its namespace), which the player
+/// imports from their own copy too (Tier 2 needs Tier 1).
+fn dependency_package(addon: &str) -> Option<String> {
+    reference::base_package(addon)
+        .map(str::to_owned)
+        .or_else(|| namespace_for(addon).ok())
+}
+
 fn dependencies(cx: &mut Ctx, scripts: &[Script]) {
     let mut deps: BTreeMap<String, Dependency> = BTreeMap::new();
     for s in scripts {
@@ -2438,10 +2448,7 @@ fn dependencies(cx: &mut Ctx, scripts: &[Script]) {
                         "missing"
                     }
                     .into(),
-                    package: found
-                        .as_deref()
-                        .and_then(reference::base_package)
-                        .map(str::to_owned),
+                    package: found.as_deref().and_then(dependency_package),
                     uses: vec![],
                 });
         }
