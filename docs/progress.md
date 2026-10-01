@@ -9873,3 +9873,124 @@ Tests: `grapples.rs` now asserts every datablock `converted` and the verdict
 `converted`; `the_anywhere_setting_is_covered_for_a_checked_copy`;
 `installed.rs` `hiding_a_force_loaded_add_on_is_not_a_gap` and the dot texture.
 The stand-in's particle now draws the base dot, as the original does.
+## 2026-10-01 A broken bulb switches its light the same in every live mode (for v0.1.11)
+Max broke the Bedroom lamp's bulb and none of the lighting modes looked
+right: the shade kept glowing and, in Unified, the room went much darker
+than the light the bulb gave.
+- v20's own data: breaking a `Glass` shape hides it and plays its
+  explosion, and nothing touches the mission's lighting. Classic keeps
+  that rule (the light stays). Unified, Shine and Dynamic put the lamp's
+  light out, as Max asked on 09-30.
+- Unified and Shine now take the same per-texel light shares as Dynamic
+  (`decomposed_lightmap`, when the material carries the bake's
+  `DynamicSheet` shares), so a switched-off light leaves exactly the light
+  it baked in all three. The client and `lighting_probe` equip the shares
+  in Unified modes on a map with bulbs, tubes or Add-On light rules, and
+  in Dynamic always. Every map light is uploaded (object lights first) with
+  a slot table from map light index to uniform slot.
+- Which lights a bulb owns is one rule, `map_lighting::fixture_owners`
+  (24 units, shared within 1.5x of the nearest shape), used by the client
+  and the probe.
+- Shadow edges give their light back. The bake's rays go to the fitted
+  light, which sits a little off where the map compiler had it, and the
+  compiler filtered each texel's whole area, so the two shadows' edges
+  differ by a texel or two. Texels there hold a small part of a light the
+  rays call hidden, below the tenth-to-a-quarter cutoff that keeps fit
+  error in the leftover, so a dashed line of the light stayed after it went
+  out. Now a texel takes its whole remainder when a neighbour on the same
+  surface plainly holds one of those lights (its rays see it, or a quarter
+  of it is left there).
+- The dashed line on the wall by the window had a different cause, found in
+  the Gate's leftover dumps (format 8). The compiler's lightmap there is a
+  smooth gradient with no shadow, yet the leftover had 1-texel diagonal
+  lines at the ambient between areas 6 to 17 levels above it. Thin
+  geometry the compiler never shadowed hides a faint far light from a
+  dashed line of texels by rays. There, that light joined the hidden lights
+  (including ones behind the wall, in reach by falloff) and took the fit's
+  error, which its neighbours keep. After the break the line stood out.
+  Now a light seen by rays on both sides of a texel (on any of four axes,
+  same surface) counts as seen there too: a 1-texel ray shadow is thinner
+  than the compiler's filtered lightmap can hold.
+- The Gate's window crop (format 9) put the remaining dashed line on the
+  right edge of the dresser's shadow on the wall, and the leftover dumps
+  showed it as a thin strip the lamp lit through the gap between the
+  dresser and the window frame (sheet 193), whose light stayed in the
+  leftover. The fitted light's rays find that gap shut. The hidden pass
+  divided the remainder by the light of every hidden light in reach,
+  including strong ones behind walls, so the strip's share fell under the
+  cutoff. Each hidden light is now judged on its own (the remainder as a
+  share of its light). The remainder goes as surely as the surest of
+  them, shared by light given times weight. With one hidden light this is
+  the old rule.
+- That still left the line; the Gate's `BRI_PIXELS` run found it. It is on
+  the wall at x = -59.86 (`bedroom.dif/224/86`), on the edge of light 0's
+  patch along the window frame's shadow. The edge texels hold part of
+  light 0, which the rays call hidden there, and every hidden light in
+  reach (0, 2, 3, 5, 6, 8, 9) qualified, so each took the same share. After
+  the break 2, 5, 6 and 8 kept theirs: [109,109,84] and [120,120,95]
+  against [102,102,77] around them. Neither the live sun nor the lamp
+  shadow maps play a part (`BRI_SUN=0` and `BRI_LAMPS=0` leave it). Now,
+  where a neighbour on the same surface sees one of a texel's hidden lights
+  by rays, the texel is on that light's patch edge and its remainder goes
+  to those lights alone, with no cutoff. With no such neighbour, the same
+  goes for the light the neighbours most likely hold: the brightest hidden
+  light a quarter or more of which is left over there. This covers a patch
+  edge the rays miss by more than a texel. Before, a neighbour "held" any
+  light its remainder covered a quarter of, which every faint far light
+  passes. Bake format 12.
+- Format 12 cleared the window line, but it left a near-black blotch
+  across the middle of the lamp shade's outside after the break. The Gate's
+  probe log (batch 148, `bedroom.dif/233/110`) shows why. The outside
+  faces away from the bulb's lights 0 and 9, so no ray sees them anywhere
+  on it, yet the "light the neighbours most likely hold" fallback still
+  applied: each texel's remainder went to light 0 alone, light 9 alone, or
+  both. Where it went to both, both took a full share and the leftover
+  fell to about [13,13,13]; elsewhere it stayed near [130,130,130]. Now
+  the fallback only counts a neighbour's held light where the rays see
+  that light within two texels of that neighbour, which is a real patch
+  edge (one texel was too few for the slab-shadow edge test).
+  The shade's outside goes back to sharing its remainder over every hidden
+  light, evenly. The window's edge texels sit beside texels that see light
+  0, so they keep the format 12 rule. New test: `a_shade_lit_by_two_lights_inside_goes_evenly_dark_with_them`
+  (two lights inside a shade, one near each end, plus a faint room light;
+  with the lamp out the outside keeps just the room light within 3
+  levels). It fails on format 12. Bake format 13.
+- `lighting_probe`: `BRI_BREAK=1` breaks every bulb and tube by the
+  client's rule. Within 4 units of a light shape it prints each triangle's
+  lightmap, Dynamic leftover, light shares and facing. `BRI_DUMP_LEFT=1`
+  saves each sheet's decomposed light beside its leftover.
+  `BRI_PIXELS=view:x,y;x,y` takes pixels of a view's 1920x1080 render and
+  prints the surface under each, then for its lightmap texel and the eight
+  around it how the bake split the light (`Bake::explain`: each light's
+  level, facing, rays, weight and share, the leftover) and what is drawn
+  with the bulbs whole and broken, and the live sun's facing and reach.
+- The shade stops glowing. The fit put the bulb's light 9 inside the
+  shade, so the shade's outside faces away from it, and a light a texel
+  faced away from never took a share. The shade's baked glow stayed in the
+  leftover after the break. The hidden lights now include those a texel
+  faces away from, taken by their falloff as the renderer gives a share
+  (`light_given` has no facing term), under the same cutoff and edge
+  rule. The Gate's probe at format 7 showed that the lamp's stem and
+  socket within 4 units hold only the compiler's ambient
+  ([102,102,77]), which rightly stays. The shade sits 6 or more units
+  out, so the probe now prints triangles within 8 units.
+
+Tests: `bri-render --test unified_lighting a_switched_off_light_leaves_the_same_light_in_every_live_mode`
+(modes 1-3 identical, fails without the Unified per-texel branch);
+`--test map_lighting a_switched_off_light_leaves_no_line_along_its_shadows_edges`
+(a turned slab's filtered shadow; an edge texel keeps 9 levels without the
+neighbour rule, at most 3 with it);
+`bri-render --lib the_edge_of_a_lights_patch_goes_dark_with_it` (a patch
+the compiler lit a texel past the rays' shadow, with a faint far light and
+a light behind the wall; an edge texel draws 33 levels with the patch's
+light off on format 11, at most 2 now);
+`bri-render --lib a_strip_lit_through_a_gap_goes_dark_with_its_light`
+(a dim light's strip behind a plate its rays hit, two strong lights behind
+the wall; the strip keeps 20 levels on format 10, at most 2 now);
+`bri-render --lib a_thin_ray_shadow_leaves_no_line_in_the_leftover`
+(a rod the lightmap never saw, a faint far light and a light behind the
+wall; a line texel stands 7 levels out without the rule, at most 2 with
+it); `bri-render --lib a_shade_facing_away_from_its_light_goes_dark_with_it`
+(the light given, so the fit cannot explain the shade with lights placed
+outside it; 153 levels kept without the change, at most 2 with it);
+`bri-client --lib a_broken_bulb_switches_off_its_lights_and_rules_tint_the_rest`.
