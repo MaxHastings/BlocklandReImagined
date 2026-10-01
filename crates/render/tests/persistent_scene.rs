@@ -398,6 +398,61 @@ fn sky_orientation_translation_depth_and_distance_fog() -> Result<()> {
     Ok(())
 }
 
+/// Thick or thin, the fog that hides far geometry covers the sky toward the
+/// horizon by the same rule (`Fog::sky_amount`), so the horizon is one fog
+/// colour instead of fogged silhouettes cut out against a clear sky.
+#[test]
+fn sky_fades_into_the_world_fog_at_the_horizon() -> Result<()> {
+    let gpu = Gpu::turn()?;
+    let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
+    let (mut data, mut env) = sky_fixture();
+    env.fog.start = 100.0;
+    env.fog.end = 1000.0;
+    bri_render::environment_scene::append(&mut data, &env, &[1, 2, 3, 4, 5, 6], &[])?;
+    let sky = renderer.upload(&gpu.device, &gpu.queue, &data)?;
+    let center = (32 * 64 + 32) * 4;
+    // A ray rising so that it reaches the fog ceiling halfway into the fog.
+    let up = bri_content::environment::SKY_FOG_CEILING / 550.0;
+    let rising = Vec3::new(0.0, up, (1.0 - up * up).sqrt());
+    // The centre pixel's own ray sits half a pixel right of and below the
+    // view direction.
+    let half_pixel = 30_f32.to_radians().tan() / 64.0;
+    let right = rising.cross(Vec3::Y).normalize();
+    let ray = (rising + (right - right.cross(rising)) * half_pixel).normalize();
+    let haze = (255.0 * env.fog.sky_amount(ray.y)).round() as u8;
+    for (direction, expected) in [
+        (Vec3::Z, [255, 255, 255]),
+        (rising, [255, haze, haze]),
+        (Vec3::Y, [255, 0, 255]),
+    ] {
+        let mut camera = Camera::perspective(
+            [0.0; 3],
+            direction.to_array(),
+            1.0,
+            60_f32.to_radians(),
+            0.05,
+            10.0,
+        );
+        camera.apply_environment(&data);
+        let frame = gpu.frame(&mut renderer, &[&sky], &camera, (64, 64))?;
+        for (got, want) in frame[center..center + 3].iter().zip(expected) {
+            assert!(
+                got.abs_diff(want) <= 3,
+                "Sky toward {direction} is {:?}, expected {expected:?}",
+                &frame[center..center + 3]
+            );
+        }
+    }
+    assert_eq!(env.fog.sky_amount(0.0), 1.0);
+    assert!((env.fog.sky_amount(up) - 0.75).abs() < 1e-4);
+    assert_eq!(env.fog.sky_amount(1.0), 0.0);
+    // Thick fog reaches far up the sky.
+    env.fog.start = 5.0;
+    env.fog.end = 90.0;
+    assert!(env.fog.sky_amount(0.5) > 0.99);
+    Ok(())
+}
+
 #[test]
 fn cloud_wind_updates_without_geometry_upload_and_calm_stays_still() -> Result<()> {
     use bri_content::environment::{Cloud, Image};
@@ -405,6 +460,9 @@ fn cloud_wind_updates_without_geometry_upload_and_calm_stays_still() -> Result<(
     let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
     for velocity in [[0.125, 0.0], [0.0, 0.0]] {
         let (mut data, mut env) = sky_fixture();
+        // Fog far enough out to leave the sky overhead clear.
+        env.fog.start = 100.0;
+        env.fog.end = 1000.0;
         data.images.push(SceneImage {
             label: "cloud-pattern".into(),
             width: 2,

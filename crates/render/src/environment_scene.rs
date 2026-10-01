@@ -215,33 +215,5 @@ pub fn append(
             }
         }
     }
-    if env.horizon_band {
-        let index = material(out, "sky/horizon-fog".into(), 0, false, true);
-        out.materials[index].parameters = Some(FOG_BACKDROP);
-        for i in 0..16 {
-            let a = i as f32 * std::f32::consts::TAU / 16.0;
-            let b = (i + 1) as f32 * std::f32::consts::TAU / 16.0;
-            let bottom = |angle: f32, y: f32| [angle.sin() * half, y, angle.cos() * half];
-            let c = env.fog.color;
-            quad(
-                out,
-                index,
-                [
-                    bottom(a, 0.0),
-                    bottom(b, 0.0),
-                    bottom(b, 60.0),
-                    bottom(a, 60.0),
-                ],
-                [[0.0; 2]; 4],
-                [
-                    [c[0], c[1], c[2], 1.0],
-                    [c[0], c[1], c[2], 1.0],
-                    [c[0], c[1], c[2], 0.0],
-                    [c[0], c[1], c[2], 0.0],
-                ],
-                [0.0; 2],
-            );
-        }
-    }
     Ok(())
 }

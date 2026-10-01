@@ -18,6 +18,11 @@ pub struct Cloud {
     /// Original cloud UV motion converted to cycles per second.
     pub velocity: [f32; 2],
 }
+/// How high above the eye the sky's fog reaches, units: a ray into the sky
+/// is fogged as if the sky stood where it climbs this high. At the horizon
+/// that is past the fog's end, so the sky meets far geometry in the fog
+/// colour; thick fog reaches far up the sky and thin fog is a horizon haze.
+pub const SKY_FOG_CEILING: f32 = 60.0;
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Fog {
@@ -49,6 +54,10 @@ impl Fog {
         }
         let t = ((distance - self.start) / (self.end - self.start).max(0.001)).clamp(0.0, 1.0);
         1.0 - (1.0 - t) * (1.0 - t)
+    }
+    /// The fog over the sky along a ray whose direction rises `up` (its y).
+    pub fn sky_amount(&self, up: f32) -> f32 {
+        self.amount(SKY_FOG_CEILING / up.max(SKY_FOG_CEILING / 1_000_000.0))
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]

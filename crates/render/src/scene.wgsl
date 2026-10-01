@@ -870,9 +870,7 @@ fn sun_flare(along:vec3<f32>)->vec3<f32> {
     return camera.flare.rgb*camera.flare.a*(disc+0.55*glow);
 }
 fn fog_amount(position:vec3<f32>)->f32 {
-    let distance=length(position-camera.eye.xyz);
-    let t=clamp((distance-camera.atmosphere.x)/max(camera.atmosphere.y-camera.atmosphere.x,0.001),0.0,1.0);
-    return (1.0-(1.0-t)*(1.0-t))*camera.atmosphere.w;
+    return fog_at(length(position-camera.eye.xyz),camera.atmosphere);
 }
 fn fogged(display:vec3<f32>,position:vec3<f32>)->vec3<f32> {
     return output_color(mix(display,camera.fog_color.rgb,fog_amount(position)));
@@ -981,18 +979,22 @@ fn slot_size(slot:u32)->vec2<f32> {
     if material[0].x==10.0 {return metal_surface(v);}
     if (material[0].x==4.0 || material[0].x==5.0) {
         // material[1].x: 0 a sky face or cloud (tinted by the sky colour),
-        // 1 the fog backdrop and horizon band (the live fog colour).
+        // 1 the fog backdrop (the live fog colour). Faces and clouds take the
+        // world's fog toward the horizon, so far geometry meets the sky there.
         let along=normalize(v.world_position-camera.eye.xyz);
         if material[1].x==1.0 {
             let fog=min(camera.fog_color.rgb+sun_flare(along),vec3<f32>(1.0));
             return vec4<f32>(output_color(fog),v.color.a);
         }
+        let fog=sky_fog_at(along.y,camera.atmosphere);
         var sky=textureSample(layer0,clamped,v.uv);
         if material[0].x==5.0 {
             sky=textureSample(layer0,tiled,v.uv);
-            return vec4<f32>(output_color(display_color(sky.rgb)*v.color.rgb*camera.sky.rgb),sky.a*v.color.a);
+            let cloud=mix(display_color(sky.rgb)*v.color.rgb*camera.sky.rgb,camera.fog_color.rgb,fog);
+            return vec4<f32>(output_color(cloud),sky.a*v.color.a);
         }
-        let rgb=min(display_color(sky.rgb)*v.color.rgb*camera.sky.rgb+sun_flare(along),vec3<f32>(1.0));
+        let tinted=mix(display_color(sky.rgb)*v.color.rgb*camera.sky.rgb,camera.fog_color.rgb,fog);
+        let rgb=min(tinted+sun_flare(along),vec3<f32>(1.0));
         return vec4<f32>(output_color(rgb),sky.a*v.color.a);
     }
     if material[0].x==1.0 {
