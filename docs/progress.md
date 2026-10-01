@@ -8425,3 +8425,14 @@ mesh's BLB collision boxes, so any stretched brick is solid like its
 `bri-sim definitions::tests::an_add_on_brick_reuses...` (a stretched
 plain window collides as the whole 4 by 1.2 by 0.5 brick);
 `bri-content` stretch test.
+
+Sizes checked against the converted pack's measurements (Gate, 10-01):
+Jeep hull 3.21 wide, 2.63 tall (model 4.44 tall); Tank hull 4.70 wide,
+2.71 tall, about 4.4 tall with its turret. Max wondered about 1x12x8
+(5.9 by 4.55 inside): it leaves the turret and the jeep model about 0.1
+of headroom, so the big portal stays 1x14x10 (6.9 by 5.75: tank 1.1 each
+side and 1.35 above, jeep 1.85 each side and 1.3 above its model). The
+test boxes now use these hull sizes. Sizes: 1x4x5 (players), 1x14x10
+(Steel Ball, jeep, tank), 1x20x12 (Stunt Plane); mirrors 1x4x5 and
+1x14x10. Still to confirm on the PC: where the turret's mount node puts
+it.

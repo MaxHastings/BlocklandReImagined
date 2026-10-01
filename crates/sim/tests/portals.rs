@@ -566,8 +566,9 @@ mod vehicles {
     const TANK: &str = "steel-ball-kit:vehicle/tankbox";
 
     /// The Steel Ball as its Add-On ships it, and boxes built from it the
-    /// size of a jeep (2.8 wide, 2.2 tall, 5.6 long) and of a tank with
-    /// its turret (4.7 wide, 4.4 tall, 6.6 long).
+    /// size of the stock Jeep's hull (3.21 wide, 2.63 tall, 5.36 long) and
+    /// of the stock Tank's hull with its turret on (4.7 wide, 4.4 tall,
+    /// 6.44 long), as the converted vehicle pack measures them.
     fn pack() -> Pack {
         let path = concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -575,7 +576,7 @@ mod vehicles {
         );
         let mut pack: serde_json::Value =
             serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-        for (id, half) in [(JEEP, [1.4f32, 1.1, 2.8]), (TANK, [2.35, 2.2, 3.3])] {
+        for (id, half) in [(JEEP, [1.605f32, 1.315, 2.68]), (TANK, [2.35, 2.2, 3.22])] {
             let mut body = pack["definitions"][0].clone();
             let corners: Vec<[f32; 3]> = (0..8)
                 .map(|i| std::array::from_fn(|a| if i >> a & 1 == 1 { half[a] } else { -half[a] }))
@@ -737,7 +738,7 @@ mod vehicles {
         // to spare: the opening is 6.9 wide and 5.75 tall inside.
         let cases = [
             (BALL, 1.26f32, 15.0f32, [-1.5f32, 0.0, 1.5]),
-            (JEEP, 1.7, 30.0, [-1.5, 0.0, 1.5]),
+            (JEEP, 1.7, 30.0, [-1.4, 0.0, 1.4]),
             (TANK, 2.8, 30.0, [-0.8, 0.0, 0.8]),
         ];
         for (definition, rest, speed, offsets) in cases {
