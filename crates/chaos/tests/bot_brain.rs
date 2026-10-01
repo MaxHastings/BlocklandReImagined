@@ -395,3 +395,145 @@ fn a_bot_over_the_server_limit_tells_its_builder() {
         "{told:?}"
     );
 }
+
+/// A closed room of 6-unit-high opaque columns round x 26..34, z 26..34
+/// with a bot's spawn brick inside, a portal inside it facing the bot and
+/// its partner out in the open to the north. Returns the bricks and where
+/// to stand so the bot sees you through the portal, `beyond` units past it.
+fn portal_room(owner: OwnerId, beyond: f32) -> (Vec<Brick>, Vec3) {
+    let mut bricks = vec![bot_brick([30.0, 0.1, 31.0], owner)];
+    let mut column = |x: f32, z: f32| {
+        for y in [1.5, 4.5] {
+            bricks.push(Brick::new(
+                ContentRef::Resolved(fixture::TALL.into()),
+                [x + 0.25, y, z + 0.25],
+                owner,
+            ));
+        }
+    };
+    for i in 0..16 {
+        let at = 26.0 + i as f32 * 0.5;
+        column(at, 26.0);
+        column(at + 0.5, 34.0);
+        column(26.0, at + 0.5);
+        column(34.0, at);
+    }
+    let portal = |position: [f32; 3]| {
+        let mut b = Brick::new(ContentRef::Resolved(PORTAL.into()), position, owner);
+        b.name = Some("Portal_a".into());
+        b
+    };
+    bricks.push(portal([30.0, 1.5, 28.25]));
+    bricks.push(portal([30.0, 1.5, 10.25]));
+    // Where `beyond` past the inner portal, straight out from the bot, comes
+    // out by its partner.
+    let sim = fixture::synthetic_simulation(&bricks).unwrap();
+    let passages = sim.passages();
+    let inner = passages
+        .list
+        .iter()
+        .find(|p| p.centre.z > 20.0 && p.normal.z > 0.5)
+        .expect("the inner portal opens toward the bot");
+    let seen = Vec3::new(30.25, 0.05, inner.centre.z - beyond);
+    (bricks, inner.carry.transform_point3(seen))
+}
+
+const PORTAL: &str = bri_sim::testing::PORTAL;
+
+fn in_room(p: Vec3) -> bool {
+    (26.0..34.5).contains(&p.x) && (26.0..34.5).contains(&p.z)
+}
+
+#[test]
+fn a_bot_sees_its_enemy_through_a_portal_and_walks_through_after_them() {
+    let mut s = session();
+    let (bricks, stand) = portal_room(1, 6.0);
+    assert!(!in_room(stand), "the builder stands outside: {stand}");
+    // The mini-game puts its members at a spawn point: this one.
+    s.set_spawn_points(vec![stand]).unwrap();
+    let human = s.join("Builder".into(), stand, true).unwrap();
+    let mut sequence = 0;
+    steps(&mut s, &[human], 10, &mut sequence);
+    let bricks = bricks
+        .into_iter()
+        .map(|mut b| {
+            b.owner = human;
+            b
+        })
+        .collect();
+    load(&mut s, human, bricks);
+    minigame(&mut s, human, TOOLS_ONLY);
+    steps(&mut s, &[human], 60, &mut sequence);
+    let bot = bots(&s)[0];
+    assert!(in_room(feet(&s, bot)), "the bot starts in its room");
+    let mut out_after = None;
+    for tick in 0..120 * 20 {
+        steps(&mut s, &[human], 1, &mut sequence);
+        let now = feet(&s, bot);
+        if out_after.is_none() && !in_room(now) {
+            out_after = Some(tick);
+        }
+        if (now - feet(&s, human)).length() < 3.0 {
+            eprintln!("out after {out_after:?}, reached the builder after {tick} ticks");
+            break;
+        }
+    }
+    // Seen through the portal at once, it heads straight there.
+    assert!(
+        out_after.is_some_and(|t| t < 120 * 3),
+        "the bot left its closed room through the portal: {out_after:?}"
+    );
+    assert!(
+        (feet(&s, bot) - feet(&s, human)).length() < 3.0,
+        "reached the builder through the portal: bot {} builder {}",
+        feet(&s, bot),
+        feet(&s, human)
+    );
+}
+
+#[test]
+fn an_armed_bot_shoots_through_a_portal_from_where_it_stands() {
+    let mut s = session();
+    let (bricks, stand) = portal_room(1, 7.0);
+    // The mini-game puts its members at a spawn point: this one.
+    s.set_spawn_points(vec![stand]).unwrap();
+    let human = s.join("Builder".into(), stand, true).unwrap();
+    let mut sequence = 0;
+    steps(&mut s, &[human], 10, &mut sequence);
+    let bricks = bricks
+        .into_iter()
+        .map(|mut b| {
+            b.owner = human;
+            b
+        })
+        .collect();
+    load(&mut s, human, bricks);
+    minigame(
+        &mut s,
+        human,
+        [
+            Some(bri_weapons::testing::GUN_ITEM.into()),
+            None,
+            None,
+            None,
+            None,
+        ],
+    );
+    steps(&mut s, &[human], 60, &mut sequence);
+    let bot = bots(&s)[0];
+    let mut hit = None;
+    for tick in 0..120 * 15 {
+        steps(&mut s, &[human], 1, &mut sequence);
+        if s.vitals()[&human].health < 100.0 {
+            hit = Some(tick);
+            break;
+        }
+    }
+    let hit = hit.expect("the bot hit the builder");
+    eprintln!("first hit after {hit} ticks");
+    assert!(
+        in_room(feet(&s, bot)),
+        "it shot through the portal, not after walking out: {}",
+        feet(&s, bot)
+    );
+}

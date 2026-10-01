@@ -1724,6 +1724,11 @@ the same side (a wall portal). Pairing follows from the bricks themselves,
 so nothing extra is sent; each player's game draws the views, and the host
 decides who goes through.
 
+Bots know portals too, with nothing for a bot kind to set: a bot sees and
+shoots through an opening at whoever stands beyond its partner, its paths
+lead through openings where walking through is the way, and it follows an
+enemy it watched go in.
+
 | Field | Meaning | Default |
 |---|---|---|
 | `linkFaces` | The open sides: `north south east west top bottom` | required |

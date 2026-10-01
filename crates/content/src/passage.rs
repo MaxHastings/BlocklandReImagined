@@ -145,6 +145,31 @@ impl Passages {
         }
         legs
     }
+    /// The straight ways from `a` to `b` no longer than `reach`: across,
+    /// and in through each one opening that carries a sight from `a` on to
+    /// `b`. Each is a sight ([`Self::sight`]) aimed at its `aim` that ends
+    /// at `b`, as a shot fired at it would; what stands in its way is the
+    /// caller's to find, leg by leg. What a bot sees and aims by.
+    pub fn ways(&self, a: Vec3, b: Vec3, reach: f32) -> impl Iterator<Item = Way> + '_ {
+        let across = std::iter::once((b, None));
+        // `b` as seen from in front of an opening: where it would be if the
+        // partner's side stood right behind it.
+        let through = self
+            .list
+            .iter()
+            .map(move |p| (p.carry.inverse().transform_point3(b), Some(p.carry)));
+        across.chain(through).filter_map(move |(aim, carry)| {
+            let length = a.distance(aim);
+            if !(1e-3..=reach).contains(&length) {
+                return None;
+            }
+            let legs = self.sight(a, (aim - a) / length, length);
+            // Through that one opening, or none, and out at `b`.
+            let openings = usize::from(carry.is_some());
+            (legs.len() == openings + 1 && legs.last()?.at(length).distance(b) < 1e-3)
+                .then_some(Way { aim, carry, length })
+        })
+    }
     /// How a replicated body seen at `a` and then at `b` got there: the
     /// carry of the opening it went through in between, when that is a
     /// shorter way than straight across (poses are sent a tick or more
@@ -195,6 +220,28 @@ impl Leg {
     pub fn off(&self, p: Vec3) -> f32 {
         let along = (p - self.from).dot(self.direction).clamp(0.0, self.length);
         p.distance(self.from + self.direction * along)
+    }
+}
+
+/// One straight way between two points ([`Passages::ways`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Way {
+    /// The point to look or shoot at: the far end itself, or it as seen
+    /// through the opening.
+    pub aim: Vec3,
+    /// The opening's carry, for a way through one.
+    pub carry: Option<Affine3A>,
+    /// How far it goes.
+    pub length: f32,
+}
+impl Way {
+    /// A point near the far end as seen along this way (`carry` undone).
+    pub fn seen(&self, p: Vec3) -> Vec3 {
+        self.carry.map_or(p, |c| c.inverse().transform_point3(p))
+    }
+    /// A direction at the far end as seen along this way.
+    pub fn seen_vector(&self, v: Vec3) -> Vec3 {
+        self.carry.map_or(v, |c| c.inverse().transform_vector3(v))
     }
 }
 
@@ -285,5 +332,32 @@ mod tests {
         };
         let (_, total) = passages.travel(Vec3::new(0.0, 1.0, 0.1), Vec3::new(0.0, 1.0, -0.5));
         assert!(total.is_some());
+    }
+
+    #[test]
+    fn a_point_beyond_the_partner_is_seen_through_the_opening() {
+        // In through the door at z = 0 (from +z), out ten units east facing
+        // +z again.
+        let carry = Affine3A::from_translation(Vec3::new(10.0, 0.0, 0.0));
+        let passages = Passages {
+            list: vec![door(carry)],
+            closed: vec![],
+        };
+        let (a, b) = (Vec3::new(0.0, 1.0, 4.0), Vec3::new(10.0, 1.0, -3.0));
+        let ways: Vec<Way> = passages.ways(a, b, 50.0).collect();
+        assert_eq!(ways.len(), 2, "across and through: {ways:?}");
+        let through = ways.iter().find(|w| w.carry.is_some()).unwrap();
+        assert!(through.aim.abs_diff_eq(Vec3::new(0.0, 1.0, -3.0), 1e-5));
+        assert!((through.length - 7.0).abs() < 1e-4);
+        // A shot at the aim arrives at `b`.
+        assert!(passages.travel(a, through.aim).0.abs_diff_eq(b, 1e-4));
+        // Straight across through the opening's own plane is no way: what
+        // goes in comes out elsewhere.
+        let behind = Vec3::new(0.0, 1.0, -3.0);
+        assert!(passages.ways(a, behind, 50.0).all(|w| w.carry.is_some()));
+        // Too far either way, or the opening missed: none.
+        assert_eq!(passages.ways(a, b, 6.0).count(), 0);
+        let wide = Vec3::new(14.0, 1.0, -3.0);
+        assert!(passages.ways(a, wide, 50.0).all(|w| w.carry.is_none()));
     }
 }

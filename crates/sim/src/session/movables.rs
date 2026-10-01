@@ -112,7 +112,7 @@ struct Hold {
     /// holder's look, lands through them, so a thing held through a portal
     /// stays on its side, and one carried through stays held.
     through: Affine3A,
-    /// The last crossing (`Movables::crossed`) already in place when the
+    /// The last crossing (`Session::crossings`) already in place when the
     /// hold began.
     since: u64,
 }
@@ -151,9 +151,8 @@ pub(super) struct Movables {
     /// A smashing vehicle's energy left after what it broke this tick, so
     /// several contacts in one tick share one hit's energy.
     smash_energy: BTreeMap<u64, (u64, f32)>,
-    /// Openings players, vehicles and entities went through since the
-    /// holds last looked: a running count, what crossed and the carry.
-    crossings: Vec<(u64, ObjectRef, Affine3A)>,
+    /// The last trip through a portal (`Session::crossings`) the holds
+    /// took account of.
     crossed: u64,
 }
 
@@ -660,18 +659,12 @@ impl Session {
             .min_by(|a, b| a.off(point).total_cmp(&b.off(point)))
             .map_or(Affine3A::IDENTITY, |leg| leg.carry)
     }
-    /// `object` went through an opening: holds of it, and holds by it,
-    /// follow it through.
-    pub(super) fn crossed(&mut self, object: ObjectRef, carry: Affine3A) {
-        self.movables.crossed += 1;
-        self.movables
-            .crossings
-            .push((self.movables.crossed, object, carry));
-    }
     /// Turn every hold's `through` with the openings its holder and its
-    /// object went through since it last looked.
+    /// object went through since it last looked: holds of something, and
+    /// holds by someone, follow them through.
     fn follow_crossings(&mut self) {
-        let crossings = std::mem::take(&mut self.movables.crossings);
+        let seen = std::mem::replace(&mut self.movables.crossed, self.crossings.count());
+        let crossings: Vec<_> = self.crossings.since(seen).copied().collect();
         if crossings.is_empty() {
             return;
         }
@@ -683,8 +676,14 @@ impl Session {
             .map(|(p, h)| (*p, self.held_vehicle(h.target)))
             .collect();
         for (player, hold) in self.movables.holds.iter_mut() {
-            for (n, object, carry) in &crossings {
-                if *n <= hold.since {
+            for crossings::Crossing {
+                number,
+                object,
+                carry,
+                ..
+            } in &crossings
+            {
+                if *number <= hold.since {
                     continue;
                 }
                 if *object == ObjectRef::Player(*player) {
@@ -1107,7 +1106,7 @@ impl Session {
                 stuck: 0,
                 alive: self.target_alive(target),
                 through,
-                since: self.movables.crossed,
+                since: self.crossings.count(),
             },
         );
         self.credit(target, player);
