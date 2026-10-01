@@ -1572,7 +1572,6 @@ impl App {
         let old_saves = crate::old_saves::OldSaves::new(
             state_dir.join("saves"),
             state_dir.join("converted-saves"),
-            crate::old_saves::OldSaves::find_old_installs(),
         );
         let package_catalog = {
             let (catalog, problems) = crate::packages::load(&content.paths.root);
@@ -6081,6 +6080,18 @@ fn combine_effect_frames(
     world.lights.truncate(bri_render::scene::MAX_POINT_LIGHTS);
     (world, deferred)
 }
+/// Show a drop folder (saves, Add-Ons) in the file browser, making it first
+/// so a player can always find where files go. A folder that cannot be made
+/// is this request's failure, never the whole game's.
+fn show_drop_folder(folder: &Path) -> Result<()> {
+    std::fs::create_dir_all(folder)
+        .with_context(|| format!("Could not create {}", folder.display()))?;
+    if !bri_crash::open(&folder.to_string_lossy()) {
+        bri_console::warn(format!("Could not open {}", folder.display()));
+    }
+    Ok(())
+}
+
 impl PlatformApp for App {
     fn ui(&self) -> &Ui {
         &self.ui
@@ -7553,18 +7564,7 @@ impl PlatformApp for App {
                     })
                 }
                 UiAction::SetVolume { channel, value } => self.audio.set_volume(&channel, value),
-                UiAction::OpenSavesFolder => {
-                    // A folder that cannot be made is this request's
-                    // failure, never the whole game's.
-                    let folder = self.old_saves.saves_folder();
-                    std::fs::create_dir_all(folder)
-                        .with_context(|| format!("Could not create {}", folder.display()))
-                        .map(|()| {
-                            if !bri_crash::open(&folder.to_string_lossy()) {
-                                bri_console::warn(format!("Could not open {}", folder.display()));
-                            }
-                        })
-                }
+                UiAction::OpenSavesFolder => show_drop_folder(self.old_saves.saves_folder()),
                 UiAction::OpenUrl(url) => {
                     // Only web pages, after the player confirmed them.
                     if bri_ui::ui::web_url(&url).as_deref() == Some(url.as_str())

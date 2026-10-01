@@ -8972,3 +8972,23 @@ v0.1.10".
   and tank shell exploding on the ground 2.5 units beside the ball, in and
   out of minigames, roll it more than 6 units in two seconds; 3.75 without
   the scale).
+
+## Saves come only from the saves folder (v0.1.11)
+
+Max (03:23Z): the game must never search players' Blockland, v20 or Steam
+folders; classic files come in through drop folders in our own folders.
+- `.bls` saves were already a drop folder (`<state>/saves`, the folder the
+  game's own saves use): dropped files convert in the background, once,
+  and join Load Bricks under their map (loose files under Other). The
+  converter also listed the saves of old installs under Program Files and
+  `C:\Blockland` (`OldSaves::find_old_installs`); that search is gone, with
+  the `old_install` flag and its ordering.
+- Saves an earlier version converted from an old install leave the list on
+  the next scan, and their native copies leave the cache. Saves converted
+  from the saves folder keep their copies and do not convert again.
+- Load Bricks' Saves Folder button opens the folder (made first if needed)
+  through `show_drop_folder` in app.rs, the one helper for drop folders
+  (the Add-Ons Folder button can share it).
+- Tests: `bri-client --lib old_saves` (temp folders; an install beside the
+  saves folder is never read, and an earlier index's install entries and
+  copies are dropped).
