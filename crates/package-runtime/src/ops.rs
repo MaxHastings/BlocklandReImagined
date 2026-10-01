@@ -503,6 +503,21 @@ pub enum Op {
         player: u64,
         limits: Option<[f32; 2]>,
     },
+    /// Keep a mini-game member from respawning until their mini-game resets
+    /// or a rule lets them (Slayer's `setDead`: out of lives, between
+    /// rounds). The client hides its respawn prompt while held.
+    HoldRespawn {
+        player: u64,
+        held: bool,
+    },
+    /// Point a player's camera somewhere else while their body stays put
+    /// (`setControlObject(camera)`): `Some(player)` orbits that player's
+    /// body (the player themselves: their own body or corpse), `None`
+    /// hands control back. A watching player's body takes no actions.
+    Watch {
+        player: u64,
+        target: Option<u64>,
+    },
 }
 /// One team as [`Op::SetTeams`] asks for it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -600,6 +615,7 @@ impl Op {
             | Self::SetTeam { .. }
             | Self::SetScore { .. }
             | Self::ResetMinigame { .. }
+            | Self::HoldRespawn { .. }
             | Self::SetSetting { .. } => "minigame",
             Self::SetBrickItem { .. } => "world.edit",
             Self::SetEnvironment { .. } => "environment",
@@ -618,6 +634,7 @@ impl Op {
             | Self::UnmountImage { .. }
             | Self::SetScale { .. }
             | Self::SetLookLimits { .. }
+            | Self::Watch { .. }
             | Self::SetAvatarColors { .. } => "player",
             Self::MountObject { .. } | Self::UnmountObject { .. } => "physics",
             Self::Push { .. }
@@ -651,6 +668,8 @@ impl Op {
             | Self::CutCopy { .. }
             | Self::PaintCopy { .. }
             | Self::UnmountImage { .. }
+            | Self::HoldRespawn { .. }
+            | Self::Watch { .. }
             | Self::UnmountObject { .. } => true,
             Self::MountObject {
                 mount, rider, node, ..
@@ -951,6 +970,8 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::UnmountObject { .. } => "unmount_object",
         Op::SetScale { .. } => "set_scale",
         Op::SetLookLimits { .. } => "set_look_limits",
+        Op::HoldRespawn { .. } => "hold_respawn",
+        Op::Watch { .. } => "watch",
         Op::SpawnEntity { .. } => "spawn_entity",
         Op::RemoveEntity { .. } => "remove_entity",
         Op::Steer { .. } => "steer",

@@ -1582,6 +1582,11 @@ impl Session {
         };
         let needs = command.preconditions();
         ensure!(alive || !needs.alive, "Dead players cannot do that");
+        let watching = self.watching(owner);
+        ensure!(
+            !watching || !needs.alive,
+            "You cannot do that while watching"
+        );
         if let Some(action) = needs.build {
             ensure!(
                 !matches!(
@@ -1644,6 +1649,11 @@ impl Session {
             peer.saves += 1;
             self.save_requests += 1;
         }
+        // A watching body does not fire; letting go of a trigger still counts.
+        ensure!(
+            !(watching && matches!(command, Command::WeaponTrigger { down: true })),
+            "You cannot fire while watching"
+        );
         match command {
             Command::Admin(_) => unreachable!("handled by the authenticated admin branch above"),
             Command::DropTool { slot } => {

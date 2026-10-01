@@ -1665,6 +1665,7 @@ mod tests {
             health: if alive { 100.0 } else { 0.0 },
             alive,
             respawn_tick: 0,
+            respawn_held: false,
             spawn_tick,
             died_tick,
             score: 0,

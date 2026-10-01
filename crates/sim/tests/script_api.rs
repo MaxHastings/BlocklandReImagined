@@ -72,6 +72,8 @@ fn cmd_env_read(p) {
 fn cmd_env_unset(p) { set_environment(#{ sun_azimuth: (), day_cycle: false }); }
 fn cmd_env_bad(p) { set_environment(#{ sun_elevation: 120.0 }); }
 fn cmd_env_reset(p) { reset_environment(); }
+fn cmd_hold(p, held) { hold_respawn(p, held); }
+fn cmd_watch(p, target) { if target < 0 { watch(p, ()); } else { watch(p, target); } }
 "#;
 
 fn behaviour() -> Value {
@@ -99,6 +101,8 @@ fn behaviour() -> Value {
             command("env_unset", &[]),
             command("env_bad", &[]),
             command("env_reset", &[]),
+            json!({ "name": "hold", "args": ["bool"], "while_dead": true }),
+            json!({ "name": "watch", "args": ["int"], "while_dead": true }),
         ],
         "state": { "global": {
             "hit": { "default": "", "visible": "everyone" },
@@ -162,7 +166,7 @@ fn catalog() -> Arc<Catalog> {
     let manifest = json!({
         "schema_version": 1, "id": "probe", "version": "1.0.0", "api": 1,
         "name": "probe", "license": "CC0-1.0",
-        "capabilities": ["damage", "effects", "player", "lighting", "environment"],
+        "capabilities": ["damage", "effects", "player", "lighting", "environment", "minigame"],
         "provides": [
             { "kind": "behaviour", "id": "probe:behaviour/main", "file": "behaviour.json" },
             { "kind": "script", "id": "probe:script/main", "file": "main.rhai" }
@@ -504,4 +508,65 @@ fn scripts_change_the_environment_for_everyone() {
     assert_eq!(g.s.environment(), before);
     g.run(a, "env_reset", vec![]);
     assert!(g.s.environment().is_empty());
+}
+
+#[test]
+fn a_rule_holds_a_respawn_until_reset_and_points_a_camera_elsewhere() {
+    use bri_minigames::Settings;
+    use bri_sim::session::{ControlObject, MiniGameRequest};
+    let mut g = Game::new();
+    let a = g.join(Vec3::new(-3.0, 0.05, 0.0));
+    let b = g.join(Vec3::new(3.0, 0.05, 0.0));
+    // The probe weapons pack replaces the stock items.
+    let settings = Settings {
+        loadout: Default::default(),
+        ..Settings::default()
+    };
+    g.send(a, Command::MiniGame(MiniGameRequest::Create { color: 0, settings }))
+        .unwrap();
+    let game = g.s.minigame_views()[0].id;
+    g.send(b, Command::MiniGame(MiniGameRequest::Join { game }))
+        .unwrap();
+
+    // Out of lives: held, so clicking does nothing and the client is told.
+    g.send(b, Command::Suicide).unwrap();
+    g.run(b, "hold", vec![PackageArg::Bool(true)]);
+    g.steps(600);
+    assert!(g.s.vitals()[&b].respawn_held);
+    let refused = g.send(b, Command::Respawn).unwrap_err();
+    assert!(format!("{refused:#}").contains("RespawnHeld"), "{refused:#}");
+    // Let go: the click works again.
+    g.run(b, "hold", vec![PackageArg::Bool(false)]);
+    assert!(!g.s.vitals()[&b].respawn_held);
+    g.send(b, Command::Respawn).unwrap();
+    assert!(g.s.vitals()[&b].alive);
+
+    // A reset frees a held player.
+    g.send(b, Command::Suicide).unwrap();
+    g.run(b, "hold", vec![PackageArg::Bool(true)]);
+    g.send(a, Command::MiniGame(MiniGameRequest::Reset)).unwrap();
+    assert!(g.s.vitals()[&b].alive && !g.s.vitals()[&b].respawn_held);
+
+    // Watching another player: their camera orbits them, the body neither
+    // fires nor uses tools until the rule hands control back.
+    g.run(a, "watch", vec![PackageArg::Int(b as i64)]);
+    assert_eq!(g.s.control(a), Some(ControlObject::Spy(b)));
+    let refused = g
+        .send(a, Command::WeaponTrigger { down: true })
+        .unwrap_err();
+    assert!(format!("{refused:#}").contains("watching"), "{refused:#}");
+    assert!(g.send(a, Command::EquipTool { slot: Some(0) }).is_err());
+    g.send(a, Command::WeaponTrigger { down: false }).unwrap();
+    // Watching yourself orbits your own body.
+    g.run(a, "watch", vec![PackageArg::Int(a as i64)]);
+    assert_eq!(g.s.control(a), Some(ControlObject::Corpse));
+    g.run(a, "watch", vec![PackageArg::Int(-1)]);
+    assert_eq!(g.s.control(a), Some(ControlObject::Player));
+    // A respawn hands control back too.
+    g.run(b, "watch", vec![PackageArg::Int(a as i64)]);
+    g.send(b, Command::Suicide).unwrap();
+    g.steps(600);
+    g.send(a, Command::MiniGame(MiniGameRequest::Reset)).unwrap();
+    assert_eq!(g.s.control(b), Some(ControlObject::Player));
+    assert!(g.diagnostics().is_empty(), "{:?}", g.diagnostics());
 }

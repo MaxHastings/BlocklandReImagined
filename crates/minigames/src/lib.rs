@@ -101,6 +101,7 @@ impl MinigamesWorld {
                 ignored_owners: BTreeSet::new(),
                 last_join: None,
                 team: None,
+                respawn_held: false,
             },
         );
         Ok(id)
@@ -212,10 +213,9 @@ impl MinigamesWorld {
         let equipment = self.players[&player]
             .game
             .map(|id| self.games[&id].settings.equipment(&self.catalog));
-        self.players
-            .get_mut(&player)
-            .expect("validated player")
-            .life = LifeState::Alive { life };
+        let p = self.players.get_mut(&player).expect("validated player");
+        p.life = LifeState::Alive { life };
+        p.respawn_held = false;
         out.push(Effect::Spawn {
             player,
             life,
@@ -550,6 +550,9 @@ impl MinigamesWorld {
                 let LifeState::Dead { ready_at, .. } = p.life else {
                     return Err(Error::StaleLife);
                 };
+                if p.respawn_held {
+                    return Err(Error::RespawnHeld);
+                }
                 if self.tick < ready_at && !(p.game.is_none() && p.admin) {
                     return Err(Error::RespawnNotReady);
                 }
@@ -745,6 +748,18 @@ impl MinigamesWorld {
             self.add_score(player, delta, &mut out);
         }
         Ok(out)
+    }
+    /// Keep a member from respawning by clicking until the hold is lifted,
+    /// they are respawned (`respawn`, a reset) or they leave the game: an
+    /// Add-On's lives running out, or its round ending (Slayer's
+    /// `setDead`). Holding a living player holds their next death.
+    pub fn hold_respawn(&mut self, player: PlayerId, held: bool) -> Result<(), Error> {
+        let p = self.players.get_mut(&player).ok_or(Error::StalePlayer)?;
+        if p.game.is_none() {
+            return Err(Error::NotMember);
+        }
+        p.respawn_held = held;
+        Ok(())
     }
     /// `instantRespawn` event output: respawn now, alive or dead, skipping the
     /// respawn delay. The host validates event permission first.

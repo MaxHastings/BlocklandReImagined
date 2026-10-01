@@ -139,6 +139,37 @@ impl Session {
         };
         Ok(())
     }
+    /// A rule's `watch`: orbit `target`'s body (`Spy`), the player's own
+    /// body or corpse (`Corpse`), or, with `None`, hand control back from
+    /// either. Admin and entity controls are left alone: a rule does not
+    /// take an admin's free camera or another rule's vehicle.
+    pub(super) fn watch(&mut self, owner: OwnerId, target: Option<OwnerId>) -> Result<()> {
+        let peer = self.peers.get(&owner).context("No such player")?;
+        let watching = matches!(peer.control, ControlObject::Spy(_) | ControlObject::Corpse);
+        let Some(target) = target else {
+            if watching {
+                self.return_to_body(owner)?;
+            }
+            return Ok(());
+        };
+        ensure!(
+            watching || peer.control == ControlObject::Player,
+            "That player is controlling something else"
+        );
+        let control = if target == owner {
+            ControlObject::Corpse
+        } else {
+            ControlObject::Spy(target)
+        };
+        self.set_control(owner, control)
+    }
+    /// Whether the body has handed its moves to a watch camera while it can
+    /// still act: a body in that state takes no actions.
+    pub(super) fn watching(&self, owner: OwnerId) -> bool {
+        self.peers.get(&owner).is_some_and(|p| {
+            p.combat.alive && matches!(p.control, ControlObject::Spy(_) | ControlObject::Corpse)
+        })
+    }
     /// Spies watching a departing player return to their own bodies.
     pub(super) fn release_spies(&mut self, target: OwnerId) {
         let spies: Vec<_> = self

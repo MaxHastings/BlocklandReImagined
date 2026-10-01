@@ -167,7 +167,7 @@ HUD panels can only show keys the viewer receives. `persist` (default
 | `noise(seed, x, z)`, `hash3(seed, x, y, z)` | `entity_get(e, key)`, `entity_set(e, key, v)` | `spawn_entity`, `remove_entity`, `steer`, `label`: `entity` |
 | `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)` | | `teleport`, `respawn`, `set_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`, `take_item(p, item)`, `drop_item(item, x, y, z[, vx, vy, vz])`, `drop_item(item, #{ ... })`, `remove_drop(id)`: `player` |
 | `raycast(from, dir, range[, ignore])`, `can_damage(by, target)` | | `set_fov(p, fov)`, `set_image_ammo(p, ammo)`, `mount_image(p, image)`, `mount_image(p, image, slot[, paint])`, `unmount_image(p)`, `set_scale(p, scale)`, `set_look_limits(p, up, down)`: `player` |
-| `minigames()`, `minigame(id)`, `bricks(kind)`, `brick(id)`, `drops()` | | `set_teams(game, teams, options)`, `set_team(p, team)`, `set_score(p, n)`, `add_score(p, n)`, `reset_minigame(game)`: `minigame`; `set_brick_item(brick, item)`: `world.edit` |
+| `minigames()`, `minigame(id)`, `setting(game, key)`, `team_setting(game, team, key)`, `bricks(kind)`, `brick(id)`, `drops()` | | `set_teams(game, teams, options)`, `set_team(p, team)`, `set_score(p, n)`, `add_score(p, n)`, `reset_minigame(game)`, `set_setting(game, key, v)`, `set_team_setting(game, team, key, v)`, `hold_respawn(p, held)`: `minigame`; `watch(p, target)`: `player`; `set_brick_item(brick, item)`: `world.edit` |
 | `brick_box(brick)`, `voxel(brick)`, `can_place_voxel(x, y, z)` | | `place_voxel(x, y, z, material)`: `world.edit`; `set_avatar_colors(p, colors)`: `player` |
 | | | `copy_build(p, brick, limit, above_only, tool)`, `copy_box(p, min, max, limit, tool)`, `mirror_copy(p, axis)`: `build` |
 | | | `cut_copy(p)`, `paint_copy(p, color)`, `paint_fill(p, brick, color, limit)`: `world.edit` |
@@ -261,6 +261,52 @@ teammates from hurting each other while `friendly_fire` is off, sends team
 chat to the team, and tells `on_minigame` about every change. These need
 the `minigame` capability. A rule set like Slayer's sorts players with
 `on_minigame` and spawns them on their team's bricks with `on_pick_spawn`.
+
+**Add-On settings.** A rule declares the settings a mini-game's owner picks
+in its behaviour's `settings`, and the host shows them in the Mini-Game
+window's Add-On Settings, grouped by Add-On and `category`:
+
+```json
+"settings": [
+  { "key": "mode", "title": "Game Mode", "category": "Minigame", "type": "list",
+    "default": "dm", "items": [ { "value": "dm", "name": "Deathmatch" } ] },
+  { "key": "lives", "title": "Lives", "category": "Victory Method",
+    "type": "int", "default": 0, "min": 0, "max": 99 },
+  { "key": "team_lives", "title": "Lives", "scope": "team",
+    "type": "int", "default": -1, "min": -1, "max": 999 },
+  { "key": "rule", "title": "Custom Rule", "type": "text", "default": "",
+    "max_length": 150, "editor": "admin",
+    "shown_when": { "setting": "mode", "is": ["dm"] } }
+]
+```
+
+`type` is `bool`, `int` (with `min` and `max`), `list` (a pick from
+`items`) or `text` (up to `max_length`, at most 256). `scope: "team"` gives
+every team of the game its own value, edited beside the team's name and
+colour in the same window, which also adds and removes teams.
+`editor: "admin"` lets only an admin change it. `shown_when` hides a
+setting unless another (`key`, or `ns:key` of an Add-On this one depends on)
+holds one of the listed values. A dependent Add-On adds its own items to a
+list setting with `setting_items` (`[{ "setting": "slayer:mode", "items":
+[...] }]`), as Slayer's game modes do. The host checks every change against
+the declaration and keeps only values that differ from the default, on the
+mini-game and its teams.
+
+`setting(game, key)` and `team_setting(game, team, key)` read a value (the
+default when unset); `set_setting(game, key, value)` and
+`set_team_setting(game, team, key, value)` change it, `()` putting the
+default back (`minigame` capability). `on_minigame` gets `kind ==
+"settings"` with the changed `keys` when anyone changes them.
+
+**Rounds.** `hold_respawn(p, true)` keeps a dead mini-game member from
+respawning (out of lives, the round over; v20 Slayer's `setDead`): their
+client shows no respawn prompt, and a reset of the game or
+`hold_respawn(p, false)` lets them go (`minigame` capability).
+`watch(p, other)` turns `p`'s camera to orbit `other`'s body, `watch(p, p)`
+their own body or corpse, and `watch(p, ())` hands control back, as a
+respawn also does (`player` capability). A watching body does not fire,
+use tools or click. An admin's free camera and a rule's `control` are left
+alone.
 
 **Bricks.** `bricks(kind)` lists the bricks of one kind
 (`"pkg:brick/flagstand"`, `"v20/brick/brickspawnpointdata"`), and

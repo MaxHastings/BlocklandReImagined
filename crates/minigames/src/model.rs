@@ -222,6 +222,9 @@ pub struct PlayerState {
     /// The team of their mini-game they play for, if it has teams.
     #[serde(default)]
     pub team: Option<TeamId>,
+    /// Clicking does not respawn them ([`MinigamesWorld::hold_respawn`]).
+    #[serde(default)]
+    pub respawn_held: bool,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MiniGame {
@@ -367,6 +370,8 @@ pub enum Error {
     InvalidSnapshot,
     InvalidClock,
     RespawnNotReady,
+    /// The player's game holds their respawn (out of lives, round over).
+    RespawnHeld,
     /// The server runs a game mode's mini-game: players stay in it and
     /// cannot start, join or leave another.
     ServerGame,

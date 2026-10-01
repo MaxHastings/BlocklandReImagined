@@ -1769,7 +1769,8 @@ impl Session {
             op @ (Op::SetTeams { .. }
             | Op::SetTeam { .. }
             | Op::SetScore { .. }
-            | Op::ResetMinigame { .. }) => self.apply_minigame_op(op),
+            | Op::ResetMinigame { .. }
+            | Op::HoldRespawn { .. }) => self.apply_minigame_op(op),
             Op::SetSetting {
                 game,
                 team,
@@ -1819,6 +1820,7 @@ impl Session {
                 peer.look_limits = limits;
                 Ok(())
             }
+            Op::Watch { player, target } => self.watch(player, target),
             Op::Sound { profile, at } => {
                 self.take_cue(package)?;
                 match at {

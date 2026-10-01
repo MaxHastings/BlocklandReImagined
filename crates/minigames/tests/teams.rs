@@ -291,3 +291,29 @@ fn addon_settings_live_on_games_and_teams_and_only_owners_or_admins_edit() {
         .unwrap();
     assert!(w.game(game).unwrap().addon_settings.is_empty());
 }
+
+#[test]
+fn a_held_respawn_waits_for_a_reset() {
+    let (mut w, game, [a, b, _], _) = red_blue();
+    let life = match w.player(b).unwrap().life {
+        LifeState::Alive { life } => life,
+        _ => panic!("alive"),
+    };
+    w.died(b, life, Some(a)).unwrap();
+    w.hold_respawn(b, true).unwrap();
+    for _ in 0..1000 {
+        w.step().unwrap();
+    }
+    assert_eq!(
+        w.execute(Command::Respawn { actor: b }),
+        Err(Error::RespawnHeld)
+    );
+    let out = w
+        .execute(Command::Reset {
+            game,
+            authority: EventAuthority::System,
+        })
+        .unwrap();
+    assert!(out.iter().any(|e| matches!(e, Effect::Spawn { player, .. } if *player == b)));
+    assert!(!w.player(b).unwrap().respawn_held, "a reset lifts the hold");
+}

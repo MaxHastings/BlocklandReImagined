@@ -139,6 +139,10 @@ pub struct Vitals {
     pub alive: bool,
     /// Earliest tick at which "click to respawn" is accepted while dead.
     pub respawn_tick: u64,
+    /// A rule holds this player's respawn (out of lives, between rounds):
+    /// no respawn prompt until it lets go or the mini-game resets.
+    #[serde(default)]
+    pub respawn_held: bool,
     /// The tick this body spawned. Every spawn is a new v20 `Player` object,
     /// so a new value means a new body whose animation starts over.
     pub spawn_tick: u64,
@@ -559,6 +563,7 @@ impl Session {
                         health: peer.combat.health,
                         alive: peer.combat.alive,
                         respawn_tick: peer.combat.respawn_tick,
+                        respawn_held: state.is_some_and(|s| s.respawn_held),
                         spawn_tick: peer.combat.spawn_tick,
                         died_tick: (peer.combat.died_tick > 0 || !peer.combat.alive)
                             .then_some(peer.combat.died_tick),

@@ -491,6 +491,13 @@ impl Session {
                     authority: mg::EventAuthority::System,
                 })
                 .map_err(|e| anyhow::anyhow!("Reset rejected: {e}"))?,
+            Op::HoldRespawn { player, held } => {
+                let target = player_of(self, player)?;
+                self.minigames
+                    .hold_respawn(target, held)
+                    .map_err(|e| anyhow::anyhow!("Respawn hold rejected: {e}"))?;
+                Vec::new()
+            }
             _ => unreachable!("not a mini-game operation"),
         };
         self.apply_minigame_effects(effects)

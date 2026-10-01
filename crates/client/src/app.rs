@@ -2782,9 +2782,16 @@ impl App {
                 if c.alive == Some(true) {
                     updates.push(UiUpdate::DamageFlash(0.75));
                 }
-                // handleYourDeath / respawnCountDownTick.
-                let remaining = local.respawn_tick.saturating_sub(view.tick).div_ceil(120);
-                if c.countdown != Some(remaining) {
+                // handleYourDeath / respawnCountDownTick. A rule holding the
+                // respawn (out of lives) prints its own message instead.
+                let remaining = if local.respawn_held {
+                    u64::MAX
+                } else {
+                    local.respawn_tick.saturating_sub(view.tick).div_ceil(120)
+                };
+                if remaining == u64::MAX {
+                    c.countdown = Some(remaining);
+                } else if c.countdown != Some(remaining) {
                     c.countdown = Some(remaining);
                     updates.push(UiUpdate::CenterPrint {
                         text: match remaining {
@@ -7391,7 +7398,7 @@ impl PlatformApp for App {
                     let ready = self.network_view().is_some_and(|view| {
                         view.vitals
                             .get(&view.owner)
-                            .is_some_and(|v| view.tick >= v.respawn_tick)
+                            .is_some_and(|v| !v.respawn_held && view.tick >= v.respawn_tick)
                     });
                     if ready {
                         if let Err(error) = self.command(id, Command::Respawn, action.clone()) {

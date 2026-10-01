@@ -1617,6 +1617,24 @@ fn register_presentation(engine: &mut Engine) {
             })
         },
     );
+    engine.register_fn("hold_respawn", |player: Dynamic, held: bool| {
+        push(Op::HoldRespawn {
+            player: id(&player)?,
+            held,
+        })
+    });
+    engine.register_fn("watch", |player: Dynamic, target: Dynamic| {
+        push(Op::Watch {
+            player: id(&player)?,
+            target: Some(id(&target)?),
+        })
+    });
+    engine.register_fn("watch", |player: Dynamic, _: ()| {
+        push(Op::Watch {
+            player: id(&player)?,
+            target: None,
+        })
+    });
     engine.register_fn("set_look_limits", |player: Dynamic, _: ()| {
         push(Op::SetLookLimits {
             player: id(&player)?,
