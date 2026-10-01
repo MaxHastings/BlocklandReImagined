@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "include": [
+    "tier-tactical-core",
+    "tier-tactical"
+  ],
+  "notes": "Kai's Short Rifle on Tier 1's ammo system: a hitscan round read from Support_RaycastingWeapons' fields that ricochets as the gun's own fireRaycast does: up to raycastRicochets turns off what it meets, 30 more damage for each hit before, half its damage on its own shooter. While Emote_Critical is on, a player struck after a turn takes a crit (the shared rules' ricochet_shots), and every hit shoves the victim ahead and up. Its line shape's look is not read (the shape is a model, not text): the streak is drawn 0.3 wide for 0.1 s in the game's warm tracer colour.",
+  "hitscans": {
+    "when": "raycastWeaponRange",
+    "range": "raycastWeaponRange",
+    "from_muzzle": "raycastFromMuzzle",
+    "damage": "raycastDirectDamage",
+    "damage_limit": 100.0,
+    "damage_type": "raycastDirectDamageType",
+    "hit_projectile": "raycastExplosionProjectile",
+    "impulse": "raycastImpactImpulse",
+    "vertical": "raycastVerticalImpulse",
+    "eye_within": 4.5,
+    "player_sound": "raycastExplosionPlayerSound",
+    "other_sound": "raycastExplosionBrickSound",
+    "tracer": {
+      "field": "raycastWeaponRange",
+      "look": {
+        "color": [
+          1.0,
+          0.95,
+          0.75,
+          0.7
+        ],
+        "width": 0.3,
+        "seconds": 0.1
+      }
+    }
+  },
+  "magazines": {
+    "every": {
+      "reload_state": "onReload"
+    }
+  },
+  "scripts": [
+    {
+      "method": "fireRaycast",
+      "into": "image",
+      "pattern": "while\\(\\s*%hits\\s*<=\\s*%this\\.(?P<times>raycastRicochets)\\s*\\)",
+      "set": {
+        "shot": {
+          "hitscan": {
+            "ricochet": {
+              "times": "{times|field}"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "onRaycastDamage",
+      "into": "image",
+      "pattern": "if\\(\\s*%obj\\s*==\\s*%col\\s*\\)\\s*%directDamage\\s*\\*=\\s*(?P<shooter>[\\d.]+)\\s*;\\s*else\\s*%directDamage\\s*\\+=\\s*%hits\\s*\\*\\s*(?P<added>[\\d.]+)\\s*;",
+      "set": {
+        "shot": {
+          "hitscan": {
+            "ricochet": {
+              "damage": "{added}",
+              "shooter": "{shooter}"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "handles": {
+    "ShortRifleImage::onHitObject": "engine hitscan landing at every turn: damage where the minigame allows, the explosion projectile blown up where it lands, the player or brick hit sound",
+    "ShortRifleImage::isRaycastCritical": "the shared rules' ricochet_shots: a player struck after the ray has turned crits, from below and not by its shooter or else to the head",
+    "ShortRifle::doRaycast": "engine hitscan: each leg cast over the range left in one go (its 100-unit steps only kept each containerRayCast short)",
+    "ShortRifle::checkForObstruction": "engine hitscan eye_within 4.5: a muzzle shot casts from the eye when something stands that close before it",
+    "eulerToAxis": "only turned drawTracer's line shape; the engine draws the streak",
+    "ShortRifle::drawTracer": "engine hitscan tracer and ricochet streaks: a line along each leg for 0.1 s",
+    "datablock:ShortRifleRaycastTracer": "the engine hitscan's streak (drawTracer's line shape)"
+  },
+  "rules": {
+    "capabilities": [
+      "player",
+      "damage",
+      "effects",
+      "physics"
+    ]
+  }
+}

@@ -1541,6 +1541,32 @@ pub struct Hitscan {
     /// state of its own).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub damage: Option<f32>,
+    /// The ray glances off what it meets and goes on (ShortRifleKai's
+    /// `raycastRicochets`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ricochet: Option<Ricochet>,
+}
+/// [`Hitscan::ricochet`]: after each landing the ray turns off the surface
+/// it met, mirrored about its face, and goes on with the range it has left
+/// from there, landing again as it did the first time (contact, damage,
+/// push, explosion, sound, a streak from where it turned). Once it has
+/// turned, the shooter can be hit too.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Ricochet {
+    /// The most times it turns, 1 to 8.
+    pub times: u32,
+    /// Direct damage added for each landing before this one, -100 to 100;
+    /// a landing deals -100 to 100 in all.
+    #[serde(default)]
+    pub damage: f32,
+    /// The share of the shot's own damage it deals to the shooter, 0 to 1,
+    /// with nothing added.
+    #[serde(default = "default_ricochet_self")]
+    pub shooter: f32,
+}
+fn default_ricochet_self() -> f32 {
+    1.0
 }
 impl Hitscan {
     /// Within its limits; `what` names it in the error.
@@ -1578,9 +1604,15 @@ impl Hitscan {
                         && t.width <= 1.0
                         && t.seconds > 0.0
                         && t.seconds <= 2.0
+                })
+                && self.ricochet.is_none_or(|r| {
+                    (1..=8).contains(&r.times)
+                        && (-100.0..=100.0).contains(&r.damage)
+                        && (0.0..=1.0).contains(&r.shooter)
                 }),
             "Invalid hitscan of {what}: range 1 to 2000, eye_within 0.1 to 50, damage -100 \
-             to 100, tracer colour 0 to 1, width to 1, seconds to 2"
+             to 100, tracer colour 0 to 1, width to 1, seconds to 2, ricochet 1 to 8 times, \
+             damage -100 to 100, shooter 0 to 1"
         );
         Ok(())
     }

@@ -343,6 +343,14 @@ pub enum Event {
         image: String,
         to: Vec3,
     },
+    /// A ricocheting hitscan ray went on from `from` to `to`
+    /// ([`crate::Ricochet`]): drawn in the image's tracer style.
+    Ricochet {
+        actor: ActorId,
+        image: String,
+        from: Vec3,
+        to: Vec3,
+    },
     Spawned {
         projectile: u64,
         definition: String,
@@ -375,6 +383,10 @@ pub enum Event {
         /// a shot a guard sent back ([`crate::Guard::reflect_kill`]).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         special: Option<String>,
+        /// The landings of a ricocheting ray before this one
+        /// ([`crate::Ricochet`]); 0 for anything else.
+        #[serde(default)]
+        bounces: u32,
     },
     Impulse {
         source: ActorId,
@@ -3437,6 +3449,7 @@ impl WeaponsWorld {
                             direction: p.velocity.normalize_or_zero(),
                             projectile: p.definition.clone(),
                             special: self.special_of(p.id),
+                            bounces: 0,
                         });
                     } else if q.can_catch(p.source, target)
                         && let Some(image) = self.mount_ball(target, image)
@@ -3657,6 +3670,7 @@ impl WeaponsWorld {
                 direction: p.velocity.normalize_or_zero(),
                 projectile: p.definition.clone(),
                 special: self.special_of(p.id),
+                bounces: p.bounces,
             });
         }
         if matches!(
@@ -3852,56 +3866,128 @@ impl WeaponsWorld {
     /// One ray of a [`crate::Hitscan`] shot: the projectile `definition`
     /// lands where the ray first meets something, as if it had flown there,
     /// with the hitscan's landing sound; every player draws the tracer to
-    /// that point, and its `flown` projectile flies there.
+    /// that point, and its `flown` projectile flies there. A ricocheting
+    /// ray ([`crate::Ricochet`]) then turns off what it met and lands again.
     fn hitscan(&mut self, id: ActorId, a: &Actor, ray: Ray, q: &mut impl Query) {
         let definition = ray.definition;
         let mut d = self.pack.projectiles[definition].clone();
         if let Some(damage) = ray.hitscan.damage {
             d.damage = damage;
         }
-        let from = ray.from;
-        let direction = ray.direction.normalize_or(Vec3::NEG_Z);
-        let reach = ray.range * a.frame.scale;
-        let hit = q.sweep(
-            from,
-            from + direction * reach,
-            Filter {
-                projectile_age_ticks: None,
-                source: id,
-                players: d.collide_players,
-                world_only: false,
-            },
-        );
-        let to = hit
-            .as_ref()
-            .map_or(from + direction * reach, |h| h.position);
-        self.events.push(Event::Tracer {
-            actor: id,
-            hand: ray.hand,
-            image: ray.image.into(),
-            to,
-        });
-        if let Some(flown) = self.projectile_named(&ray.hitscan.flown)
-            && let Some(speed) = self.pack.projectiles.get(&flown).map(|f| f.speed)
-        {
-            // Flown from the muzzle to the end, to be seen.
-            let along = (to - ray.muzzle).normalize_or(direction);
-            if let Err(error) = self.spawn(
-                &flown,
-                id,
-                ray.muzzle,
-                along * speed * a.frame.scale,
-                a.frame.scale,
-            ) {
-                self.events.push(Event::Diagnostic {
-                    actor: Some(id),
-                    message: error.to_string(),
+        let base = d.damage;
+        let ricochet = ray.hitscan.ricochet;
+        let turns = ricochet.map_or(0, |r| r.times);
+        let mut from = ray.from;
+        let mut direction = ray.direction.normalize_or(Vec3::NEG_Z);
+        let mut reach = ray.range * a.frame.scale;
+        // One draw a shot: its every ray and landing plays the same pair.
+        let draw = unit_random(self.tick, id.0, HIT_SOUND_DRAW);
+        for landing in 0..=turns {
+            let hit = q.sweep(
+                from,
+                from + direction * reach,
+                Filter {
+                    // Once it has turned it is a shot coming back, which
+                    // can meet its shooter (`%ignore` is then only what it
+                    // last hit, which it leaves from just off the face).
+                    projectile_age_ticks: (landing > 0).then_some(u32::MAX),
+                    source: id,
+                    players: d.collide_players,
+                    world_only: false,
+                },
+            );
+            let to = hit
+                .as_ref()
+                .map_or(from + direction * reach, |h| h.position);
+            if landing == 0 {
+                self.events.push(Event::Tracer {
+                    actor: id,
+                    hand: ray.hand,
+                    image: ray.image.into(),
+                    to,
+                });
+                if let Some(flown) = self.projectile_named(&ray.hitscan.flown)
+                    && let Some(speed) = self.pack.projectiles.get(&flown).map(|f| f.speed)
+                {
+                    // Flown from the muzzle to the end, to be seen.
+                    let along = (to - ray.muzzle).normalize_or(direction);
+                    if let Err(error) = self.spawn(
+                        &flown,
+                        id,
+                        ray.muzzle,
+                        along * speed * a.frame.scale,
+                        a.frame.scale,
+                    ) {
+                        self.events.push(Event::Diagnostic {
+                            actor: Some(id),
+                            message: error.to_string(),
+                        });
+                    }
+                }
+            } else {
+                self.events.push(Event::Ricochet {
+                    actor: id,
+                    image: ray.image.into(),
+                    from,
+                    to,
                 });
             }
+            let Some(hit) = hit.filter(|h| h.position.is_finite() && h.normal.is_finite()) else {
+                return;
+            };
+            // ShortRifleKai's `onRaycastDamage`: more for each landing
+            // before, its own share on the shooter.
+            if let Some(r) = ricochet {
+                d.damage = if hit.target == TargetId::Actor(id) {
+                    base * r.shooter
+                } else {
+                    (base + landing as f32 * r.damage).clamp(-100.0, 100.0)
+                };
+            }
+            let normal = hit.normal.normalize_or(-direction);
+            if !self.hitscan_land(
+                id,
+                a,
+                definition,
+                &d,
+                ray.hitscan,
+                landing,
+                from,
+                direction,
+                &hit,
+                normal,
+                draw,
+                q,
+            ) {
+                return;
+            }
+            reach -= hit.position.distance(from);
+            if reach <= 0.0 {
+                return;
+            }
+            // Mirrored about the face it met, from just off it.
+            direction = (direction - normal * 2.0 * direction.dot(normal)).normalize_or(normal);
+            from = hit.position + normal * 0.01;
         }
-        let Some(hit) = hit.filter(|h| h.position.is_finite() && h.normal.is_finite()) else {
-            return;
-        };
+    }
+    /// A hitscan ray's `landing` (0 the first) at `hit`: its contact,
+    /// damage, explosion and sound. False when the contact deleted it.
+    #[allow(clippy::too_many_arguments)]
+    fn hitscan_land(
+        &mut self,
+        id: ActorId,
+        a: &Actor,
+        definition: &str,
+        d: &ProjectileDef,
+        hitscan: &crate::Hitscan,
+        landing: u32,
+        from: Vec3,
+        direction: Vec3,
+        hit: &Hit,
+        normal: Vec3,
+        draw: f32,
+        q: &mut impl Query,
+    ) -> bool {
         let projectile = self.next_id;
         self.next_id += 1;
         let p = Projectile {
@@ -3913,16 +3999,15 @@ impl WeaponsWorld {
             velocity: direction * d.speed.max(1.0),
             scale: a.frame.scale,
             age: d.arm_ticks,
-            bounced: false,
+            bounced: landing > 0,
             stuck: false,
             origin: from,
             was_thrown: false,
             paint: None,
             heading: None,
-            bounces: 0,
+            bounces: landing,
             spawned: self.tick,
         };
-        let normal = hit.normal.normalize_or(-direction);
         let contact = ProjectileContact {
             projectile,
             definition: definition.into(),
@@ -3938,13 +4023,13 @@ impl WeaponsWorld {
             impact: contact.clone(),
         });
         if matches!(q.on_contact(&contact), ContactResponse::Delete) {
-            return;
+            return false;
         }
         if q.can_affect(id, hit.target) {
-            self.direct_hit(&p, &d, hit.target, hit.position, true);
+            self.direct_hit(&p, d, hit.target, hit.position, true);
         }
         match self
-            .projectile_named(&ray.hitscan.explosion)
+            .projectile_named(&hitscan.explosion)
             .and_then(|e| Some((self.pack.projectiles.get(&e)?.clone(), e)))
         {
             // `%p.explode()` where the ray landed, facing out of the surface.
@@ -3956,13 +4041,9 @@ impl WeaponsWorld {
                 };
                 self.explode(&at, &blast, q, Some(normal));
             }
-            None => self.explode(&p, &d, q, Some(normal)),
+            None => self.explode(&p, d, q, Some(normal)),
         }
-        // One draw a shot: its every ray plays the same pair.
-        let sound = ray.hitscan.sound(
-            matches!(hit.target, TargetId::Actor(_)),
-            unit_random(self.tick, id.0, HIT_SOUND_DRAW),
-        );
+        let sound = hitscan.sound(matches!(hit.target, TargetId::Actor(_)), draw);
         if !sound.is_empty() {
             self.events.push(Event::Sound {
                 source: TargetId::Actor(id),
@@ -3970,6 +4051,7 @@ impl WeaponsWorld {
                 position: hit.position,
             });
         }
+        true
     }
     /// A projectile by id, or by its datablock name in any loaded pack.
     fn projectile_named(&self, name: &str) -> Option<String> {
@@ -4106,6 +4188,7 @@ impl WeaponsWorld {
                     direction: (target.center - p.position).normalize_or_zero(),
                     projectile: p.definition.clone(),
                     special: self.special_of(p.id),
+                    bounces: 0,
                 });
             }
             if aura.burn_seconds > 0.0 {
@@ -4180,6 +4263,7 @@ impl WeaponsWorld {
                     direction: (target.center - p.position).normalize_or_zero(),
                     projectile: p.definition.clone(),
                     special: self.special_of(p.id),
+                    bounces: 0,
                 });
                 if d.explosion.burn_seconds > 0.0 {
                     self.events.push(Event::Burn {

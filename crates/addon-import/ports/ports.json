@@ -3069,6 +3069,32 @@
       "tests": [
         "crates/addon-import/tests/tier_port.rs the_impact_rifle_spreads_by_whether_its_holder_stands_still"
       ]
+    },
+    {
+      "addon": "Weapon_ShortRifleKai",
+      "title": "Kai's Short Rifle (Tier+Tactical)",
+      "port": "weapon_shortriflekai",
+      "status": "partial",
+      "sha256": [
+        "a1ad64d8de4742a69bb9f78752ea54c50f0a63e6d6e8765e62e217ab4aac8f09"
+      ],
+      "covers": {
+        "ShortRifleImage::fireRaycast": {
+          "ricochets": "while\\(\\s*%hits\\s*<=\\s*%this\\.raycastRicochets\\s*\\)",
+          "mirrors": "VectorSub\\(\\s*%aimVec\\s*,\\s*VectorScale\\(\\s*%normal\\s*,\\s*VectorDot\\(\\s*%aimVec\\s*,\\s*%normal\\s*\\)\\s*\\*\\s*2\\s*\\)\\s*\\)"
+        },
+        "ShortRifleImage::onRaycastDamage": {
+          "added": "%directDamage\\s*\\+=\\s*%hits\\s*\\*",
+          "shove": "%col\\.setVelocity\\("
+        },
+        "shortRifleImage::onFire": {
+          "spends": "TT_decrementAmmo\\s*\\(",
+          "casts": "%this\\.fireRaycast\\(\\s*%obj\\s*,\\s*%slot\\s*\\)"
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/tier_port.rs the_short_rifle_ricochets_and_crits_only_after_a_turn"
+      ]
     }
   ]
 }

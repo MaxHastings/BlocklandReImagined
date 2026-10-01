@@ -28,6 +28,12 @@ fn alt_images() { {{alt_images}} }
 fn crit_images() { {{crit_images}} }
 // Image id => #{ tt_raycastcritdirectdamagetype }: a crit's kill message.
 fn crit_types() { {{crit_types}} }
+// Image id => #{ head, below, ahead, up, type, after_turn } for Kai's
+// ricocheting rifles (ShortRifleKai's onRaycastDamage and
+// isRaycastCritical): a crit's multiplier to the head and from below, the
+// shove along the shooter's facing and up on every hit, the crit's kill
+// message, and that only a ray that has turned crits.
+fn ricochet_shots() { {{ricochet_shots}} }
 // The crit Add-On (Emote_Critical), or () for none: Support_TT_Raycasting
 // crits only while it is on, as it checked isObject(CritProjectile).
 fn critical() { {{critical}} }
@@ -97,6 +103,10 @@ fn on_damage(victim, attacker, amount, info) {
     if info.kind != "weapon" || !info.contains("projectile") {
         return ();
     }
+    let ricochet = ricochet_hit(victim, attacker, amount, info);
+    if ricochet != () {
+        return ricochet;
+    }
     let crit = raycast_crit(victim, attacker, amount, info);
     if crit != () {
         return crit;
@@ -125,6 +135,93 @@ fn head(me, y) {
     let scale = if me.scale > 0.0 { me.scale } else { 1.0 };
     let centre = if me.crouched { 2.0 } else { 5.3 };
     y - me.y > (centre - 3.3) * scale
+}
+
+// A ricocheting rifle's hit (ShortRifleKai's onRaycastDamage): every hit
+// shoves the victim along the shooter's facing and up. While
+// Emote_Critical is on, one the ray made after turning crits
+// (isRaycastCritical): struck on the underside of the body, from below and
+// not by its own shooter, `below` times the damage, else to the head
+// `head` times, under the crit's kill message, with the crit's burst and
+// sounds as raycast_crit plays them. `()` for any other shot.
+fn ricochet_hit(victim, attacker, amount, info) {
+    let ray = info.projectile;
+    if !ray.ends_with("ray") {
+        return ();
+    }
+    let image = ray.sub_string(0, ray.len() - 3);
+    image.replace(":projectile/", ":image/");
+    let shots = ricochet_shots();
+    if !shots.contains(image) {
+        return ();
+    }
+    let shot = shots[image];
+    let me = player(victim);
+    if me == () {
+        return ();
+    }
+    let shooter = if attacker == () { () } else { player(attacker) };
+    ricochet_shove("player:" + victim, shot, shooter, attacker);
+    let critical = critical();
+    if critical == () || !enabled(critical) || !shot.contains("after_turn")
+        || !info.contains("bounces") || info.bounces < 1 || !info.contains("y") {
+        return ();
+    }
+    let scale = if me.scale > 0.0 { me.scale } else { 1.0 };
+    // Torque's player box: its underside is a face looking straight down,
+    // met only by a ray climbing into it at the feet.
+    let below = info.contains("dy") && info.dy > 0.0 && info.y - me.y < 0.1 * scale;
+    let times = if below && attacker != victim {
+        shot.below
+    } else if head(me, info.y) {
+        shot.head
+    } else {
+        return ();
+    };
+    spawn_explosion(victim, `${critical}:projectile/critprojectile`, scale);
+    play_sound(victim, `${critical}:sound/critrecievesound`);
+    if shooter != () && get_player(attacker, "crit_shot") != tick() {
+        set_player(attacker, "crit_shot", tick());
+        sound_at(`${critical}:sound/critfiresound`, shooter.cx, shooter.cy, shooter.cz);
+        play_sound(attacker, `${critical}:sound/crithitsound`);
+    }
+    let kind = shot.type;
+    if type_of(kind) == "string" {
+        kind.replace("$DamageType::", "");
+        if kind == "" {
+            kind = ();
+        }
+    }
+    #{ amount: amount * times, type: kind }
+}
+
+// onRaycastDamage's `%col.setVelocity(...)`: `ahead` along the shooter's
+// level facing and `up` straight up, added to what `target` had.
+fn ricochet_shove(target, shot, shooter, attacker) {
+    if shooter == () {
+        return;
+    }
+    let flat = (shooter.lx * shooter.lx + shooter.lz * shooter.lz).sqrt();
+    let fx = if flat > 0.0 { shooter.lx / flat } else { 0.0 };
+    let fz = if flat > 0.0 { shooter.lz / flat } else { 0.0 };
+    push(target, fx * shot.ahead, shot.up, fz * shot.ahead, attacker);
+}
+
+// A ricocheting rifle's hit on a vehicle shoves it as one on a player
+// does; a vehicle never crits.
+fn on_vehicle_damage(vehicle, attacker, amount, info) {
+    if info.kind != "weapon" || !info.contains("projectile") || !info.projectile.ends_with("ray") {
+        return ();
+    }
+    let ray = info.projectile;
+    let image = ray.sub_string(0, ray.len() - 3);
+    image.replace(":projectile/", ":image/");
+    let shots = ricochet_shots();
+    if shots.contains(image) {
+        let shooter = if attacker == () { () } else { player(attacker) };
+        ricochet_shove("vehicle:" + vehicle, shots[image], shooter, attacker);
+    }
+    ()
 }
 
 // TT_onRaycastDamage on a crit: three times the damage under the gun's

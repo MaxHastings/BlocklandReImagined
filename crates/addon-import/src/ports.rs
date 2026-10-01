@@ -99,9 +99,10 @@ pub struct Port {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub include: Vec<String>,
     /// What the port carries out that no reader reads from the copy: a
-    /// function (`WeaponImage::TT_canFire`) or a top-level call
-    /// (`call:TT_registerAmmoType`) to how the game does it now (an engine
-    /// seam, the port's rules). The import report counts it as ported when
+    /// function (`WeaponImage::TT_canFire`), a top-level call
+    /// (`call:TT_registerAmmoType`) or a datablock the game has no class
+    /// for (`datablock:ShortRifleRaycastTracer`) to how the game does it
+    /// now (an engine seam, the port's rules). The import report counts it as ported when
     /// the copy has it. Say only what the game really does.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub handles: BTreeMap<String, String>,

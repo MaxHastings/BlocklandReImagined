@@ -4153,6 +4153,10 @@ impl Session {
                 info.insert(key.into(), Dynamic::from_float(f64::from(value)));
             }
         }
+        // How many times a ricocheting shot had turned before it struck.
+        if let combat::DamageKind::Weapon { bounces, .. } = kind {
+            info.insert("bounces".into(), Dynamic::from_int(i64::from(*bounces)));
+        }
         // Which way a shot was travelling, for shields that block by facing.
         if let Some(direction) = kind.direction() {
             for (key, value) in ["dx", "dy", "dz"].into_iter().zip(direction.to_array()) {

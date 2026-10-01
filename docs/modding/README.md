@@ -119,7 +119,7 @@ refused. The engine calls:
 | `on_loadout(player)` | a player's items were set afresh (spawn, respawn, joining or leaving a minigame), when `"on_loadout": true`: the place to hand out your Add-On's items |
 | `on_spawn(player)` | a player comes to life (joining, respawning), after `on_loadout`, when `"on_spawn": true` |
 | `on_leave(player)` | a player leaves, while their state can still be read, when `"on_leave": true` |
-| `on_damage(victim, attacker, amount, info)` | before a player is hurt, when `"on_damage": true`: return the amount to take (0 prevents it), `()` to leave it, or `#{ amount, type }` to change either and the damage type (a weapons pack's `$DamageType::<name>`, whose kill message a death shows: a crit's own). `info` is `#{ kind, type, direct }`, `kind` being `weapon`, `fall`, `package` and so on, `type` the damage type's name without `$DamageType::`. A shot or blast also gives `region` (`"head"`, `"torso"` or `"legs"`, where it struck) and its point `x`, `y`, `z`, and a weapon's hit `dx, dy, dz` (the unit direction it travelled, outward from the centre for a blast), so a shield can block hits from the front. A projectile's hit also gives `projectile`, its definition id (`"ns:projectile/name"`), so rules can tell shots apart when guns share a damage type |
+| `on_damage(victim, attacker, amount, info)` | before a player is hurt, when `"on_damage": true`: return the amount to take (0 prevents it), `()` to leave it, or `#{ amount, type }` to change either and the damage type (a weapons pack's `$DamageType::<name>`, whose kill message a death shows: a crit's own). `info` is `#{ kind, type, direct }`, `kind` being `weapon`, `fall`, `package` and so on, `type` the damage type's name without `$DamageType::`. A shot or blast also gives `region` (`"head"`, `"torso"` or `"legs"`, where it struck) and its point `x`, `y`, `z`, and a weapon's hit `dx, dy, dz` (the unit direction it travelled, outward from the centre for a blast), so a shield can block hits from the front. A projectile's hit also gives `projectile`, its definition id (`"ns:projectile/name"`), so rules can tell shots apart when guns share a damage type, and `bounces`, the turns a ricocheting ray made before it (0 for a straight hit) |
 | `on_entity_damage(entity, attacker, amount, info)` | before one of your creatures is hurt by a shot, a blast or `explode`, when `"on_entity_damage": true`: answered like `on_damage` |
 | `on_vehicle_damage(vehicle, attacker, amount, info)` | before a vehicle is hurt by a shot, a blast, a smashing vehicle or a package's `damage`, when `"on_vehicle_damage": true`: answered like `on_damage`. `info` is `#{ kind, type, part, max_health, x, y, z }` plus `projectile` for a shot; `kind` is `weapon`, `package` or `smash`, `part` is `chassis` or an attached `turret`, and `max_health` is what that part takes to be destroyed |
 | `on_entity_death(entity, killer, info)` | one of your creatures ran out of health, just before it is removed, when `"on_entity_death": true` |
@@ -755,7 +755,7 @@ front of the brick it hit: `aim().object`, `aim().object_distance` and
 
 | Operation | Does |
 |---|---|
-| `push(ref, vx, vy, vz)`, `push(ref, vx, vy, vz, by)` | Adds to its velocity (units a second, at most 200). |
+| `push(ref, vx, vy, vz)`, `push(ref, vx, vy, vz, by)` | Adds to its velocity (units a second, at most 200). A living player may always be pushed by themselves (a shot turned back on its shooter). |
 | `tumble(player, vx, vy, vz, by)`, `tumble(player, vx, vy, vz, by, seconds)` | Knocks a player off their feet into a tumble, flying at that velocity; for `seconds` (0.1 to 60) when given, else until it settles. |
 | `hold(player, ref, distance)`, `hold(player, ref, distance, #{at, force, turn})` | Keeps `ref` floating `distance` (0.5 to 64) ahead of the player's eye, where they look, every tick until let go, carried at the velocity the aim point moves so it keeps up as they turn and walk. `at` (`[x, y, z]`, default its middle) is the spot on it that is held there, as a physics gun grabs where it points. `force` (default 36000, at most 10,000,000) is how hard it may pull: things up to `force / 450` in mass answer at once, heavier ones swing in slower and very heavy ones can only be dragged. With `turn`, it keeps the angle it had to the player as they turn. A living player held goes limp until let go and landed; a corpse (a player who died) can be held too. One hold per player; taking something another player holds ends their hold. |
 | `hold_distance(player, distance)` | Moves what they hold nearer or farther (0.5 to 64): a reel. |
@@ -1284,7 +1284,14 @@ point the eye looks at rather than along the muzzle. `sounds` (up to 8
 pairs of `player` and `other`) has each shot draw one pair, as melee
 scripts picked one of two hit sounds per swing; a side a pair leaves out
 keeps `player_sound` or `other_sound`. `damage` (-100 to 100) is what
-each ray deals in place of its projectile's.
+each ray deals in place of its projectile's. `ricochet` (`times` 1 to 8,
+`damage`, `shooter`) turns the ray off whatever it meets, mirrored about
+the face it hit, up to `times` more landings over the range it has left:
+each landing deals `damage` (-100 to 100) more for every one before it,
+and once turned it can come back into its shooter, who takes `shooter`
+(0 to 1, default 1) of its damage. Every turn is drawn as a streak in the
+tracer's look, and `on_damage`'s `info.bounces` says how many turns came
+before the hit.
 `moving_spread` and `moving_projectile` replace the spread and the
 projectile while the shooter moves faster than `moving_speed`; `rested`
 (`after_ticks`, `spread`, and optionally `still` and `projectile`) is
@@ -1493,7 +1500,13 @@ Keys of `damage_types` and `explosions` are their `name` in lowercase, and
 a projectile names its damage type as `$DamageType::<name>`. A damage type
 with `"special": true` is a special kill (Support_SpecialKills): its
 message's `%3` is replaced by the killing weapon's icon, so `"%2 [sent
-back]%3%1"` shows both. Everyone in a
+back]%3%1"` shows both. Two Add-Ons may declare the same name: each
+keeps its own. The pack loaded later has its declaration kept as
+`<its id>:<Name>`, and its own projectiles, images and rules that name the
+bare `<Name>` (`damage`, an `on_damage` answer) get that one. The earlier
+one is replaced for everyone only when the later Add-On depends on its
+package, as v20's re-declaration did; the same declaration twice is one.
+Everyone in a
 game needs the same weapons, so give the Add-On to the people you play
 with.
 

@@ -549,6 +549,28 @@
       "set": {
         "both_arms": true
       }
+    },
+    {
+      "method": "onRaycastDamage",
+      "into": "table",
+      "table": "ricochet_shots",
+      "pattern": "(?s)if\\(\\s*%crit\\s*>\\s*1\\s*\\)\\s*\\{\\s*%directDamage\\s*=\\s*%directDamage\\s*\\*\\s*(?P<below>[\\d.]+)\\s*;[^}]*\\}\\s*else\\s*\\{\\s*%directDamage\\s*=\\s*%directDamage\\s*\\*\\s*(?P<head>[\\d.]+)\\s*;\\s*\\}.*?%col\\.setVelocity\\(\\s*vectorAdd\\(\\s*%col\\.getVelocity\\(\\s*\\)\\s*,\\s*vectorAdd\\(\\s*vectorScale\\(\\s*%obj\\.getForwardVector\\(\\s*\\)\\s*,\\s*(?P<ahead>[\\d.]+)\\s*\\)\\s*,\\s*\"0 0 (?P<up>[\\d.]+)\"\\s*\\)\\s*\\)\\s*\\)",
+      "set": {
+        "below": "{below}",
+        "head": "{head}",
+        "ahead": "{ahead}",
+        "up": "{up}",
+        "type": "{=raycastCritDirectDamageType|field}"
+      }
+    },
+    {
+      "method": "isRaycastCritical",
+      "into": "table",
+      "table": "ricochet_shots",
+      "pattern": "(?s)&&\\s*%hits\\s*>\\s*0\\s*\\).*?%hitBottom\\s*=\\s*VectorDot\\(\\s*%normal\\s*,\\s*\"0 0 -1\"\\s*\\)\\s*>\\s*0\\s*;\\s*if\\(\\s*%hitBottom\\s*&&\\s*%obj\\s*!=\\s*%col\\s*\\)\\s*return\\s*2\\s*;\\s*else\\s+if\\(\\s*%hitHead\\s*\\)\\s*return\\s*1\\s*;",
+      "set": {
+        "after_turn": true
+      }
     }
   ],
   "rules": {

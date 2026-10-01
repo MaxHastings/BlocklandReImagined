@@ -418,6 +418,8 @@ pub(super) enum DamageKind {
         /// The special kill it makes ([`bri_weapons::DamageType::special`]):
         /// a shot a guard sent back.
         special: Option<String>,
+        /// The landings of a ricocheting shot before this one.
+        bounces: u32,
     },
     Fall,
     Impact,
@@ -438,6 +440,7 @@ impl DamageKind {
             direction: None,
             projectile: None,
             special: None,
+            bounces: 0,
         }
     }
     /// The projectile that did it, as `on_damage` hooks read it.
@@ -451,6 +454,12 @@ impl DamageKind {
         match self {
             Self::Weapon { direction, .. } => *direction,
             _ => None,
+        }
+    }
+    pub(super) fn bounces(&self) -> u32 {
+        match self {
+            Self::Weapon { bounces, .. } => *bounces,
+            _ => 0,
         }
     }
     pub(super) fn special(&self) -> Option<&str> {
@@ -910,6 +919,7 @@ impl Session {
                 direction: kind.direction(),
                 projectile: kind.projectile().map(str::to_owned),
                 special: kind.special().map(str::to_owned),
+                bounces: kind.bounces(),
                 name,
             },
             None => kind,
@@ -996,6 +1006,7 @@ impl Session {
                 direction: None,
                 projectile: None,
                 special: special.clone(),
+                bounces: 0,
             },
             _ => kind,
         };

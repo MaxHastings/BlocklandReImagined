@@ -420,7 +420,11 @@ impl Game {
             .map(|id| (format!("addons/{id}"), pack(&root.join("addons").join(id))))
             .collect();
         let (merged, notes) = pack(out).merge(parts);
-        assert!(notes.is_empty(), "{notes:?}");
+        // Only a name two Add-Ons both declare, each keeping its own.
+        assert!(
+            notes.iter().all(|n| n.contains(" is kept as ")),
+            "{notes:?}"
+        );
         s.set_weapon_pack(merged).unwrap();
         let physics: Value =
             serde_json::from_slice(&std::fs::read(out.join("assets/item-physics.json")).unwrap())
@@ -532,8 +536,13 @@ impl Game {
             .map(|(p, _)| Vec3::from(p.feet))
             .unwrap()
     }
+    /// Draws `item`, of the Add-On under test unless it is a whole id.
     fn equip(&mut self, owner: OwnerId, item: &str) {
-        let item = format!("{}:weapon/{item}", self.ns);
+        let item = if item.contains(':') {
+            item.to_owned()
+        } else {
+            format!("{}:weapon/{item}", self.ns)
+        };
         let slot = self.s.tool_inventories()[&owner]
             .slots
             .iter()
@@ -2217,4 +2226,160 @@ fn the_impact_rifle_spreads_by_whether_its_holder_stands_still() {
         (0.0007, Some(0.0003), 0.5)
     );
     assert_eq!(image.magazine.as_ref().unwrap().size, 3);
+}
+
+const NSSR: &str = "weapon_shortriflekai";
+
+/// Kai's Short Rifle on Tier 1, with the Critical Hit Emote and the
+/// Adventurer's Weapons' stand-in on beside it. Its round turns off what it
+/// meets as many times as the gun's field says, 15 more for each landing
+/// before (the stand-in's numbers, read from its onRaycastDamage), and
+/// shoves whoever it hits. A hit straight on is no crit; one off the
+/// floor into the head is, under the gun's own crit kill message, though
+/// the Adventurer's Weapons' stand-in declares a crit type of the same name
+/// with its own message, which its own crit kills still show.
+#[test]
+fn the_short_rifle_ricochets_and_crits_only_after_a_turn() {
+    let (dir, out, report) = imported_on(
+        "Weapon_ShortRifleKai",
+        NSSR,
+        &["Weapon_Package_Tier1"],
+        "ricochets",
+    );
+    let port = &report.ports[0];
+    assert!(port.applied, "{:?}", port.reason);
+    assert!(report.unsupported.is_empty(), "{:?}", report.unsupported);
+    assert!(report.needs_behaviour.iter().all(|b| b.port.is_some()));
+    let image = pack(&out).images[&format!("{NSSR}:image/shortrifleimage")].clone();
+    let hitscan = image.shot.unwrap().hitscan.unwrap();
+    assert_eq!(
+        hitscan.ricochet,
+        Some(Ricochet {
+            times: 2,
+            damage: 15.0,
+            shooter: 0.25
+        })
+    );
+    assert!(hitscan.flown.is_empty(), "the line is the engine's streak");
+    let rules = std::fs::read_to_string(
+        out.with_file_name(format!("{NSSR}-rules"))
+            .join("tier.rhai"),
+    )
+    .unwrap();
+    let shots = rules
+        .lines()
+        .find(|l| l.starts_with("fn ricochet_shots()"))
+        .unwrap();
+    assert!(
+        shots.contains(r#""weapon_shortriflekai:image/shortrifleimage": #{"after_turn": true, "ahead": 8, "below": 4, "head": 2, "type": "$DamageType::StandinCrit", "up": 3}"#),
+        "{shots}"
+    );
+
+    import_beside(&dir.0, "Weapon_Package_Tier1", NS, &[]);
+    import_beside(&dir.0, "Emote_Critical", "emote_critical", &[]);
+    const MWB: &str = "weapon_modernwarbattles";
+    import_beside(&dir.0, "Weapon_ModernWarbattles", MWB, &[]);
+    let mut g = Game::with_add_ons(
+        &dir.0,
+        &out,
+        NSSR,
+        &[NS, "emote_critical", MWB, "weapon_modernwarbattles-rules"],
+    );
+    let a = g.join("A", Vec3::new(0.0, 0.05, 0.0));
+    let b = g.join("B", Vec3::new(0.0, 0.05, -6.0));
+    g.steps(2);
+    g.s.set_spawn_points(vec![g.feet(a)]).unwrap();
+    let rifle = format!("{NSSR}:weapon/shortrifleitem");
+    let revolver = format!("{MWB}:weapon/revolveritem");
+    let mut loadout: [Option<String>; 5] = Default::default();
+    loadout[0] = Some(rifle.clone());
+    loadout[1] = Some(revolver.clone());
+    g.cmd(
+        a,
+        Command::MiniGame(MiniGameRequest::Create {
+            color: 0,
+            settings: Settings {
+                loadout,
+                ..Settings::default()
+            },
+        }),
+    );
+    let game = g.s.minigame_views()[0].id;
+    g.s.set_spawn_points(vec![g.feet(b)]).unwrap();
+    g.cmd(b, Command::MiniGame(MiniGameRequest::Join { game }));
+    g.steps(330);
+    g.equip(a, "shortrifleitem");
+
+    // Straight on: its damage and a shove away, no crit.
+    let before = g.feet(b);
+    g.s.take_cues();
+    g.shoot_at(a, b, 1.2);
+    assert!(
+        (g.health(b) - 84.0).abs() < 0.5,
+        "{} {:?}",
+        g.health(b),
+        g.s.package_diagnostics()
+    );
+    assert!(g.feet(b).z < before.z - 0.05, "{before} {}", g.feet(b));
+    let crit = |cues: &[bri_sim::presentation::Cue]| {
+        cues.iter().any(|c| {
+            matches!(&c.kind,
+            bri_sim::presentation::CueKind::WeaponEffect { definition, .. }
+                if definition.eq_ignore_ascii_case("critexplosion"))
+        })
+    };
+    assert!(!crit(&g.s.take_cues()));
+    g.steps(120);
+
+    // Off the floor halfway and up into the head: (16 + 15) * 2.
+    let health = g.health(b);
+    g.s.take_private_notices();
+    bank_shot(&mut g, a, b);
+    let cues = g.s.take_cues();
+    assert!(crit(&cues), "{cues:?}");
+    assert!(
+        cues.iter()
+            .any(|c| matches!(c.kind, bri_sim::presentation::CueKind::Beam { .. })),
+        "the turn's streak: {cues:?}"
+    );
+    assert!(
+        (health - g.health(b) - 62.0).abs() < 0.5,
+        "{health} {}",
+        g.health(b)
+    );
+    let said = |g: &mut Game, what: &str| {
+        g.s.take_private_notices()
+            .iter()
+            .any(|(_, n)| matches!(n, Notice::Chat(t) if t.contains(what)))
+    };
+    // Another kills B under the gun's own crit kill message.
+    g.steps(60);
+    bank_shot(&mut g, a, b);
+    assert_eq!(g.health(b), 0.0);
+    assert!(said(&mut g, "A banked one off into B"));
+
+    // The Adventurer's revolver crits with its own StandinCrit message.
+    g.steps(300);
+    g.cmd(b, Command::Respawn);
+    g.steps(330);
+    assert_eq!(g.health(b), 100.0);
+    g.equip(a, &revolver);
+    for _ in 0..3 {
+        g.shoot_at(a, b, 1.2);
+    }
+    assert_eq!(g.health(b), 0.0);
+    assert!(said(&mut g, "A hit B hard"));
+}
+
+/// A fires at the floor a little short of halfway to B, so the round turns
+/// up into the top of B's body, the head.
+fn bank_shot(g: &mut Game, a: OwnerId, b: OwnerId) {
+    let eye = g.feet(a).y + 2.156;
+    let run = (g.feet(a).z - g.feet(b).z) * 0.42;
+    g.looks.get_mut(&a).unwrap().pitch = -(eye / run).atan();
+    g.steps(4);
+    g.cmd(a, Command::WeaponTrigger { down: true });
+    g.steps(2);
+    g.cmd(a, Command::WeaponTrigger { down: false });
+    g.steps(60);
 }

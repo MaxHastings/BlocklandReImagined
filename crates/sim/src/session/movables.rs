@@ -615,7 +615,15 @@ impl Session {
                 by,
             } => {
                 let by = by.filter(|b| self.peers.contains_key(b));
-                allowed(self, target, by)?;
+                // Anyone living may shove themselves, as v20's setVelocity
+                // on a shot's own shooter did (a round turned back on them).
+                let own = caller.or(by).is_some_and(|mover| {
+                    target == ObjectRef::Player(mover)
+                        && self.peers.get(&mover).is_some_and(|p| p.combat.alive)
+                });
+                if !own {
+                    allowed(self, target, by)?;
+                }
                 let velocity = Vec3::from(velocity);
                 self.push_object(target, velocity)?;
                 if let Some(by) = by.or(caller) {

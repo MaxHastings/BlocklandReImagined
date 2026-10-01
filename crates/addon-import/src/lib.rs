@@ -3708,6 +3708,27 @@ fn finish(mut cx: Ctx, opts: &Options, ports: &ports::Ports, code: &ports::Code)
                         .push(format!("port {}: its callbacks are host rules now", port.port));
                 }
             }
+            // One the port carries out as an engine feature
+            // (`datablock:<name>` in its handles): a raycasting gun's line
+            // shape, drawn as the engine's tracer.
+            for d in cx
+                .report
+                .datablocks
+                .iter_mut()
+                .filter(|d| matches!(d.status.as_str(), "recognised_only" | "unsupported"))
+            {
+                if let Some(how) = port
+                    .handled
+                    .get(&format!("datablock:{}", d.name.to_ascii_lowercase()))
+                {
+                    d.status = "consumed".into();
+                    d.notes.push(format!(
+                        "port {}: {}",
+                        port.port,
+                        how.iter().cloned().collect::<Vec<_>>().join("; ")
+                    ));
+                }
+            }
             // One the Add-On makes at run time, which the port declares.
             for d in cx.report.datablocks.iter_mut().filter(|d| {
                 port.replaces.iter().any(|r| r.eq_ignore_ascii_case(&d.name))

@@ -588,6 +588,31 @@ impl Session {
                     },
                     to.to_array(),
                 ),
+                // A ricochet's further streak, in the image's tracer style,
+                // as a beam: it starts where the ray turned, not a muzzle.
+                WeaponEvent::Ricochet {
+                    image, from, to, ..
+                } => {
+                    if let Some(tracer) = self
+                        .weapons
+                        .pack
+                        .images
+                        .get(&image)
+                        .and_then(|i| i.shot.as_ref()?.hitscan.as_ref()?.tracer)
+                    {
+                        self.cues.emit(
+                            tick,
+                            crate::presentation::CueKind::Beam {
+                                to: to.to_array(),
+                                color: tracer.color,
+                                width: tracer.width,
+                                seconds: tracer.seconds,
+                                muzzle: None,
+                            },
+                            from.to_array(),
+                        );
+                    }
+                }
                 WeaponEvent::Shell { actor, image, hand } => {
                     let position = self
                         .weapons
@@ -624,6 +649,7 @@ impl Session {
                     direction,
                     projectile,
                     special,
+                    bounces,
                 } => {
                     let direct = self
                         .weapons
@@ -639,6 +665,7 @@ impl Session {
                             direction: Some(direction),
                             projectile: (!projectile.is_empty()).then_some(projectile),
                             special,
+                            bounces,
                         },
                         shooter(source),
                         Some(position),

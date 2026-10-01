@@ -13,12 +13,15 @@ const B: ActorId = ActorId(2);
 /// centre hit them; anything else that crosses the floor lands on it.
 struct Range {
     player: Vec3,
+    /// Who stands at `player`: B, or the shooter A for a shot coming back.
+    who: ActorId,
     near: Vec<Nearby>,
 }
 impl Default for Range {
     fn default() -> Self {
         Self {
             player: Vec3::new(0.0, 0.0, -10.0),
+            who: B,
             near: Vec::new(),
         }
     }
@@ -30,11 +33,13 @@ impl Query for Range {
         if length <= 0.0 {
             return None;
         }
-        if filter.players && filter.source != B {
+        // A shot is never cast into its own shooter until it has turned.
+        let mine = filter.source == self.who && filter.projectile_age_ticks.is_none();
+        if filter.players && !mine {
             let along = (self.player - start).dot(d) / (length * length);
             if (0.0..=1.0).contains(&along) && (start + d * along).distance(self.player) < 1.0 {
                 return Some(Hit {
-                    target: TargetId::Actor(B),
+                    target: TargetId::Actor(self.who),
                     position: start + d * along,
                     normal: -d / length,
                     fraction: along,
@@ -530,6 +535,7 @@ fn a_firebomb_bursts_into_embers_that_burn_whoever_stands_near() {
             center: Vec3::ZERO,
             distance: 1.0,
         }],
+        ..Range::default()
     };
     w.spawn(
         "kit:projectile/firebomb",
@@ -797,4 +803,115 @@ fn a_converging_muzzle_shot_lands_where_the_eye_looks() {
     q.player = Vec3::new(50.0, 0.0, 0.0);
     let lines = tracers(&click(&mut w, &mut q));
     assert!(lines[0].1.distance(Vec3::new(0.0, 0.0, -200.0)) < 0.5, "{lines:?}");
+}
+
+/// The pistol's round turning off what it meets up to `times` times, with
+/// `damage` more for each landing before and `shooter` of its damage on
+/// its own shooter, aimed along `direction`.
+fn ricocheting(direction: Vec3) -> (WeaponsWorld, Range) {
+    let json = PISTOLS
+        .replace(r#""spread": 0.01, "moving_spread": 0.05,"#, "")
+        .replace(
+            r#""hitscan": { "range": 200, "tracer""#,
+            r#""hitscan": { "range": 200,
+                "ricochet": { "times": 2, "damage": 30, "shooter": 0.5 }, "tracer""#,
+        );
+    let mut w = world(&json);
+    let slot = w.give(A, "kit:weapon/pistol").unwrap();
+    w.equip(A, Some(slot)).unwrap();
+    w.set_frame(
+        A,
+        Frame {
+            direction,
+            ..Frame::default()
+        },
+    )
+    .unwrap();
+    let mut q = Range::default();
+    step(&mut w, &mut q, 8, &mut Vec::new());
+    (w, q)
+}
+
+fn damage(events: &[Event]) -> Vec<(TargetId, f32, u32)> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            Event::Damage {
+                target,
+                amount,
+                bounces,
+                ..
+            } => Some((*target, *amount, *bounces)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// ShortRifleKai's ray, as a pack field: aimed at the floor halfway to B,
+/// it mirrors off the floor into B with 30 more damage for the landing
+/// before, draws the turn as its own streak, and tells the hit it came
+/// after one turn.
+#[test]
+fn a_ricocheting_ray_turns_off_the_floor_and_hits_harder_after() {
+    let (mut w, mut q) = ricocheting(Vec3::new(0.0, -1.0, -5.0).normalize());
+    let events = click(&mut w, &mut q);
+    assert_eq!(damage(&events), [(TargetId::Actor(B), 42.0, 1)]);
+    let lines = tracers(&events);
+    assert!(
+        lines[0].1.distance(Vec3::new(0.0, -1.0, -5.0)) < 0.01,
+        "{lines:?}"
+    );
+    let turns: Vec<(Vec3, Vec3)> = events
+        .iter()
+        .filter_map(|e| match e {
+            Event::Ricochet { from, to, .. } => Some((*from, *to)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(turns.len(), 2, "into B, then off B: {turns:?}");
+    assert!(
+        turns[0].0.distance(Vec3::new(0.0, -1.0, -5.0)) < 0.02,
+        "{turns:?}"
+    );
+    assert!(
+        turns[0].1.distance(Vec3::new(0.0, 0.0, -10.0)) < 0.05,
+        "{turns:?}"
+    );
+    // Without a ricochet the same shot stops on the floor.
+    let mut w = world(&PISTOLS.replace(r#""spread": 0.01, "moving_spread": 0.05,"#, ""));
+    let slot = w.give(A, "kit:weapon/pistol").unwrap();
+    w.equip(A, Some(slot)).unwrap();
+    w.set_frame(
+        A,
+        Frame {
+            direction: Vec3::new(0.0, -1.0, -5.0).normalize(),
+            ..Frame::default()
+        },
+    )
+    .unwrap();
+    step(&mut w, &mut q, 8, &mut Vec::new());
+    assert!(damage(&click(&mut w, &mut q)).is_empty());
+}
+
+/// Fired straight down, the turned ray comes back up into its shooter,
+/// who takes the shooter's share of its damage.
+#[test]
+fn a_ricochet_back_into_its_shooter_does_the_shooters_share() {
+    let (mut w, mut q) = ricocheting(Vec3::NEG_Y);
+    q.who = A;
+    q.player = Vec3::ZERO;
+    let events = click(&mut w, &mut q);
+    assert_eq!(damage(&events), [(TargetId::Actor(A), 6.0, 1)]);
+}
+
+#[test]
+fn a_ricochet_out_of_range_is_refused() {
+    let json = PISTOLS.replace(
+        r#""hitscan": { "range": 200, "tracer""#,
+        r#""hitscan": { "range": 200, "ricochet": { "times": 0 }, "tracer""#,
+    );
+    let error = Pack::from_json(json.as_bytes())
+        .expect_err("a ricochet that never turns is refused")
+        .to_string();
+    assert!(error.contains("ricochet"), "{error}");
 }

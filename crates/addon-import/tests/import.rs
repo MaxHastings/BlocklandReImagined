@@ -716,13 +716,17 @@ fn imported_weapon_packs_merge_into_one_runtime_pack() {
             .items
             .contains_key("weapon_second_blaster:weapon/blasteritem")
     );
-    // Explosions and damage types are still keyed by bare Torque name.
+    // Explosions and damage types are keyed by bare Torque name. The same
+    // explosion twice is one; the second copy's damage type, which names
+    // its own icon, is kept beside the first's under its package's name.
     assert!(
-        notes
-            .iter()
-            .any(|n| n.contains("explosion blasterexplosion is already declared")),
+        notes.iter().any(|n| n.contains(
+            "damage type syntheticblaster is also weapon_synthetic_blaster's; \
+             weapon_second_blaster's is kept as weapon_second_blaster:SyntheticBlaster"
+        )),
         "{notes:?}"
     );
+    assert!(!notes.iter().any(|n| n.contains("explosion")), "{notes:?}");
     assert!(
         merged
             .resources
