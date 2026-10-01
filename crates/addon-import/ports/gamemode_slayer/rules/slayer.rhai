@@ -498,6 +498,10 @@ fn begin_round(g) {
         r.told = ();
     }
     set_round(g.id, r);
+    if countdown <= 0 {
+        // `startRound`'s `onMinigameRoundStart`.
+        fire_game_input(g.id, "onMinigameRoundStart");
+    }
 }
 
 // `preRoundCountdownTick`, each second, then `startRound`.
@@ -520,6 +524,8 @@ fn count_down(g, r) {
         r.flyers = [];
         play_all(g, "{{namespace}}:sound/slayer_begin_sound");
         center_print_minigame(g.id, `<font:Arial Bold:100>${magenta()}GO!`, 2.0);
+        // `startRound`'s `onMinigameRoundStart`.
+        fire_game_input(g.id, "onMinigameRoundStart");
     } else if r.counted != left {
         r.counted = left;
         // A voice for each of the last ten seconds, as the original's
@@ -639,6 +645,8 @@ fn round_ended(g, teams, winners) {
     r.reset_at = tick() + seconds * 120;
     r.shown = ();
     set_round(g.id, r);
+    // `endRound`'s `onMinigameRoundEnd`.
+    fire_game_input(g.id, "onMinigameRoundEnd");
 }
 
 // Capture points (`Slayer_CPTriggerData`, `FxDtsBrick::setCPControl`):
@@ -913,6 +921,13 @@ fn on_death(victim, killer) {
     if killer != () && killer != victim {
         set_player(killer, "kills", get_player(killer, "kills") + 1);
     }
+    // `onMinigameDeath` on every brick of the game: the client who died,
+    // and the killer as `Player(Killer)` and `Client(Killer)`.
+    if killer != () && player(killer) != () {
+        fire_game_input(me.minigame, "onMinigameDeath", victim, killer);
+    } else {
+        fire_game_input(me.minigame, "onMinigameDeath", victim);
+    }
     if !running(me.minigame) {
         return;
     }
@@ -1075,8 +1090,15 @@ fn on_minigame(event) {
         if uses_teams(g.id) && !g.teams.is_empty() && setting(g.id, "auto_sort") {
             auto_sort(g, [event.player]);
         }
+        fire_game_input(g.id, "onMinigameJoin", event.player);
     } else if event.kind == "left" {
-        // `Slayer_MiniGameSO::removeMember`: maybe the last one standing.
+        // `Slayer_MiniGameSO::removeMember`: `onMinigameLeave`, then maybe
+        // the last one standing.
+        if player(event.player) != () {
+            fire_game_input(g.id, "onMinigameLeave", event.player);
+        } else {
+            fire_game_input(g.id, "onMinigameLeave");
+        }
         set_player(event.player, "out", false);
         spectate_end(event.player);
         check_lives(g);
@@ -1122,6 +1144,71 @@ fn on_minigame(event) {
                 tell_minigame(g.id, `${c3()}${me.name} ${c5()}has joined ${c3()}${team.name}${reason}`, event.player);
             }
         }
+    }
+}
+
+// `FxDtsBrick::onPlayerTouch` and `onActivate`: a player on a team sets
+// off `onPlayerTouch(TeamN)` or `onActivate(TeamN)` too, N their team's
+// place in the game's list, for the first six teams.
+fn on_brick_input(input, brick, p) {
+    let me = player(p);
+    if me == () || me.minigame == () || me.team == () {
+        return ();
+    }
+    let g = minigame(me.minigame);
+    if g == () {
+        return ();
+    }
+    let i = 0;
+    for t in g.teams {
+        i += 1;
+        if t.id == me.team {
+            return if i <= 6 { `${input}(Team${i})` } else { () };
+        }
+    }
+    ()
+}
+
+// `$Slayer::Server::Events::RestrictedEvent__`: who may add each output,
+// by `canEdit`'s level (-1 anyone who can edit the game, 0 to 2 an admin,
+// 3 the game's owner).
+fn restricted() {
+    #{
+        "minigame:bottomprintall": {{restrict_mg_bottom_print_all}},
+        "minigame:centerprintall": {{restrict_mg_center_print_all}},
+        "minigame:chatmsgall": {{restrict_mg_chat_msg_all}},
+        "minigame:inctimeremaining": {{restrict_mg_inc_time_remaining}},
+        "minigame:reset": {{restrict_mg_reset}},
+        "minigame:respawnall": {{restrict_mg_respawn_all}},
+        "minigame:settimeremaining": {{restrict_mg_set_time_remaining}},
+        "minigame:win": {{restrict_mg_win}},
+        "minigame:startflythrough": {{fly_restricted}},
+        "slayer_teamso:bottomprintall": {{restrict_team_bottom_print_all}},
+        "slayer_teamso:centerprintall": {{restrict_team_center_print_all}},
+        "slayer_teamso:chatmsgall": {{restrict_team_chat_msg_all}},
+        "slayer_teamso:respawnall": {{restrict_team_respawn_all}},
+        "slayer_teamso:incscore": {{restrict_team_inc_score}},
+    }
+}
+// `serverCmdAddEvent`: with Restrict Output Events on, a player in the
+// game adds a restricted output only if `canEdit` at its level allows.
+fn on_event_row(p, brick, row) {
+    let me = player(p);
+    if me == () || me.minigame == () || !setting(me.minigame, "restrict_output_events") {
+        return true;
+    }
+    let g = minigame(me.minigame);
+    let key = `${row.class}:${row.output}`.to_lower();
+    let levels = restricted();
+    if g == () || !(key in levels) {
+        return true;
+    }
+    let level = levels[key];
+    let allowed = if level >= 0 && level <= 2 { me.admin } else { can_edit(p, g) };
+    if allowed {
+        true
+    } else {
+        `You do not have permission to use the [${row.class}, ${row.output}] event.`
     }
 }
 

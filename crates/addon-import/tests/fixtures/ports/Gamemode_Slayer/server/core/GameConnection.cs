@@ -14,6 +14,8 @@ package Slayer_GameConnection
 				%this.setDead(1);
 		}
 		%this.centerPrint("\c5You have \c30 \c5lives left.", 3);
+		$InputTarget_["Client(Killer)"] = %killer;
+		processMultiSourceInputEvent("onMinigameDeath", %this, %mini);
 	}
 
 	function GameConnection::setScore(%this, %flag)

@@ -25,6 +25,7 @@ use bri_world::MAX_BRICKS;
 use std::sync::Arc;
 
 mod brick_events;
+pub(in crate::session) use brick_events::Follower;
 mod game_hooks;
 mod item_hooks;
 mod settings;
@@ -1958,6 +1959,12 @@ impl Session {
                 input,
                 player,
             } => self.package_fire_brick_input(package, brick, &input, player),
+            Op::FireGameInput {
+                game,
+                input,
+                player,
+                killer,
+            } => self.package_fire_game_input(package, game, &input, player, killer),
             Op::UnmountImage { player } => {
                 ensure!(self.peers.contains_key(&player), "No such player");
                 self.equip_tool(player, None)

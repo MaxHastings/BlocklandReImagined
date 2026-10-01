@@ -87,10 +87,56 @@ function fxDTSBrick::checkTeamCount(%this, %string, %operator, %check, %eventnum
 	}
 }
 
+$Slayer::Server::Events::RestrictedEvent__["Minigame", "BottomPrintAll"] = 2;
+$Slayer::Server::Events::RestrictedEvent__["Minigame", "CenterPrintAll"] = 2;
+$Slayer::Server::Events::RestrictedEvent__["Minigame", "ChatMsgAll"] = -1;
+$Slayer::Server::Events::RestrictedEvent__["Minigame", "incTimeRemaining"] = -1;
+$Slayer::Server::Events::RestrictedEvent__["Minigame", "Reset"] = -1;
+$Slayer::Server::Events::RestrictedEvent__["Minigame", "RespawnAll"] = -1;
+$Slayer::Server::Events::RestrictedEvent__["Minigame", "setTimeRemaining"] = -1;
+$Slayer::Server::Events::RestrictedEvent__["Minigame", "Win"] = -1;
+$Slayer::Server::Events::RestrictedEvent__["Slayer_TeamSO", "BottomPrintAll"] = -1;
+$Slayer::Server::Events::RestrictedEvent__["Slayer_TeamSO", "CenterPrintAll"] = -1;
+$Slayer::Server::Events::RestrictedEvent__["Slayer_TeamSO", "ChatMsgAll"] = -1;
+$Slayer::Server::Events::RestrictedEvent__["Slayer_TeamSO", "RespawnAll"] = -1;
+$Slayer::Server::Events::RestrictedEvent__["Slayer_TeamSO", "IncScore"] = -1;
+
 package Slayer_FxDtsBrick
 {
+	function serverCmdAddEvent(%client, %enabled, %inputEventIdx, %delay, %targetIdx, %namedTargetNameIdx, %outputEventIdx, %par1, %par2, %par3, %par4)
+	{
+		if(isSlayerMinigame(%mini) && %mini.restrictOutputEvents)
+		{
+			if(!%mini.canEdit(%client, $Slayer::Server::Events::RestrictedEvent__[%target, %outputEvent]))
+				return;
+		}
+	}
+
+	function FxDtsBrick::onPlayerTouch(%this, %player)
+	{
+		%team = %client.getTeam();
+		%this.processInputEvent("onPlayerTouch(Team" @ %team.getGroup().indexOf(%team) + 1 @ ")", %client);
+	}
+
+	function FxDtsBrick::onActivate(%this, %player, %client)
+	{
+		%team = %client.getTeam();
+		%this.processInputEvent("onActivate(Team" @ %team.getGroup().indexOf(%team) + 1 @ ")", %client);
+	}
+
 	function Slayer::createBrickEvents(%this)
 	{
+		for(%i=1; %i <= $Pref::Slayer::Server::Teams::maxEvents; %i ++)
+		{
+			registerInputEvent(FxDtsBrick, "onPlayerTouch(Team" @ %i @ ")", "Self FxDtsBrick\tPlayer Player\tClient GameConnection\tMiniGame MiniGame");
+			registerInputEvent(FxDtsBrick, "onActivate(Team" @ %i @ ")", "Self FxDtsBrick\tPlayer Player\tClient GameConnection\tMiniGame MiniGame");
+		}
+		registerMultiSourceInputEvent(FxDtsBrick, "onMinigameDeath",
+			"Self FxDtsBrick\tClient GameConnection\tPlayer(Killer) Player\tClient(Killer) GameConnection\tMiniGame MiniGame");
+		registerMultiSourceInputEvent(FxDtsBrick, "onMinigameJoin", "Self FxDtsBrick\tPlayer Player\tClient GameConnection\tMiniGame MiniGame");
+		registerMultiSourceInputEvent(FxDtsBrick, "onMinigameLeave", "Self FxDtsBrick\tPlayer Player\tClient GameConnection\tMiniGame MiniGame");
+		registerMultiSourceInputEvent(FxDtsBrick, "onMinigameRoundStart", "Self FxDtsBrick\tMiniGame MiniGame");
+		registerMultiSourceInputEvent(FxDtsBrick, "onMinigameRoundEnd", "Self FxDtsBrick\tMiniGame MiniGame");
 		registerInputEvent("fxDTSBrick", "onTeamCheckTrue", "Self fxDTSBrick" TAB "Player Player" TAB "Client GameConnection" TAB "MiniGame MiniGame" TAB "OwnerPlayer Player" TAB "OwnerClient GameConnection", 1);
 		registerOutputEvent(FxDtsBrick, "setTeamControl", "paintColor 2", 1);
 		registerOutputEvent(FxDtsBrick, "setTeamControlLocked", "list Mine 0 Colour 1 Every 2" TAB "paintColor 1" TAB "bool", 1);

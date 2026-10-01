@@ -1654,6 +1654,12 @@ impl Session {
             );
             self.validate_event_rows(rows)?;
         }
+        if let Command::Tool(ToolAction::SetEvents { brick, events: rows }) = &mut command {
+            let refused = self.review_event_rows(owner, *brick, rows);
+            for reason in refused {
+                self.notify(owner, Notice::Chat(reason));
+            }
+        }
         if !self.is_administrator(owner)
             && let Command::Tool(ToolAction::SetEvents { events: rows, .. }) = &mut command
         {

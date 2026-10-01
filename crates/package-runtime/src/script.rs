@@ -2520,8 +2520,15 @@ impl Runtime {
             if !behaviour.brick_outputs.is_empty() {
                 need("on_brick_output".into(), 4, "brick_outputs");
             }
+            let follows = behaviour.brick_inputs.iter().any(|i| i.follows.is_some());
+            if follows {
+                need("on_brick_input".into(), 3, "brick_inputs that follow an input");
+            }
             if behaviour.on_activate {
                 need("on_activate".into(), 1, "on_activate");
+            }
+            if behaviour.on_event_row {
+                need("on_event_row".into(), 3, "on_event_row");
             }
             for policy in &behaviour.policies {
                 need(format!("allow_{policy}"), 1, &format!("policy `{policy}`"));
@@ -2535,14 +2542,16 @@ impl Runtime {
             for e in package.entities.values() {
                 need(e.think.clone(), 1, &format!("entity `{}`", e.name));
             }
-            let adds_events =
-                !behaviour.brick_outputs.is_empty() || !behaviour.brick_targets.is_empty();
+            let adds_events = follows
+                || !behaviour.brick_outputs.is_empty()
+                || !behaviour.brick_targets.is_empty();
             if adds_events && !package.manifest.capabilities.iter().any(|c| c == "brick_events")
             {
                 problems.push(
                     Diagnostic::error(
                         "behaviour.brick_outputs",
-                        "brick_outputs and brick_targets need the `brick_events` capability",
+                        "brick_outputs, brick_targets and inputs that follow another need the \
+                         `brick_events` capability",
                     )
                     .at(location(id, &behaviour.script))
                     .hint("add \"brick_events\" to the manifest's capabilities"),

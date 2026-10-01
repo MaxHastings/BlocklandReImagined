@@ -54,6 +54,10 @@ pub enum Slot {
     /// The brick owner's player and client (Slayer's `onTeamCheckTrue`).
     OwnerPlayer,
     OwnerClient,
+    /// Whoever killed the player an input is about (Slayer's
+    /// `onMinigameDeath`): `Player(Killer)` and `Client(Killer)`.
+    KillerPlayer,
+    KillerClient,
 }
 impl Slot {
     pub fn parse(s: &str) -> Option<Self> {
@@ -68,6 +72,8 @@ impl Slot {
             "ball" => Some(Self::Ball),
             "ownerplayer" => Some(Self::OwnerPlayer),
             "ownerclient" => Some(Self::OwnerClient),
+            "player(killer)" => Some(Self::KillerPlayer),
+            "client(killer)" => Some(Self::KillerClient),
             _ => None,
         }
     }

@@ -43,7 +43,11 @@
         "server/core/Slayer_MiniGameSO.cs": {
           "team_spawn": "slyrType\\s*;[\\s\\S]*?%type\\s*!\\$=\\s*\"TeamSpawn\"[\\s\\S]*?%color\\s*!=\\s*%team\\.color",
           "plain_spawn": "getName\\(\\)\\s*!\\$=\\s*\"brickSpawnPointData\"",
-          "open_first": "if\\s*\\(\\s*!\\s*%sp\\.isBlocked\\(\\)\\s*\\)"
+          "open_first": "if\\s*\\(\\s*!\\s*%sp\\.isBlocked\\(\\)\\s*\\)",
+          "fires_join": "processMultiSourceInputEvent\\(\\s*\"onMinigameJoin\"\\s*,\\s*%client\\s*,\\s*%this\\s*\\)",
+          "fires_leave": "processMultiSourceInputEvent\\(\\s*\"onMinigameLeave\"\\s*,\\s*%client\\s*,\\s*%this\\s*\\)",
+          "fires_round_start": "processMultiSourceInputEvent\\(\\s*\"onMinigameRoundStart\"\\s*,\\s*0\\s*,\\s*%this\\s*\\)",
+          "fires_round_end": "processMultiSourceInputEvent\\(\\s*\"onMinigameRoundEnd\"\\s*,\\s*0\\s*,\\s*%this\\s*\\)"
         },
         "server/core/resources/sounds/Sounds.cs": {
           "countdown": "MaxCountDown\\s*=\\s*10\\s*;",
@@ -99,7 +103,8 @@
           "pref_cp_transition": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.CPTransitionColors\"",
           "pref_points_cp": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.points_CP\"",
           "team_events": "(?s)defaultValue\\s*=\\s*6\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"\\$Pref::Slayer::Server::Teams::maxEvents\"",
-          "pref_clear_stats": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.clearStats\""
+          "pref_clear_stats": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.clearStats\"",
+          "pref_restrict_events": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.restrictOutputEvents\""
         },
         "server/defaults/team-preferences.cs": {
           "team_lives": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"lives\"",
@@ -186,7 +191,8 @@
           "auto_clear": "containerRayCast\\(\\s*%startTransform\\s*,\\s*%endTransform\\s*,\\s*%mask\\s*,\\s*%obj\\.player\\s*\\)",
           "auto_fov": "setControlCameraFOV\\(\\s*(\\d+)\\s*\\)",
           "auto_retry": "scheduleNoQuota\\(\\s*(\\d+)\\s*,\\s*\"spectateAutoCam\"\\s*\\)",
-          "tally": "%this\\.addDeaths\\(\\s*1\\s*\\)\\s*;[^;]*if\\s*\\(\\s*%killer\\s*!=\\s*%this\\s*&&\\s*isFunction\\(\\s*%killerClass\\s*,\\s*addKills\\s*\\)\\s*\\)\\s*%killer\\.addKills\\(\\s*1\\s*\\)"
+          "tally": "%this\\.addDeaths\\(\\s*1\\s*\\)\\s*;[^;]*if\\s*\\(\\s*%killer\\s*!=\\s*%this\\s*&&\\s*isFunction\\(\\s*%killerClass\\s*,\\s*addKills\\s*\\)\\s*\\)\\s*%killer\\.addKills\\(\\s*1\\s*\\)",
+          "fires_death": "\\$InputTarget_\\[\\s*\"Client\\(Killer\\)\"\\s*\\]\\s*=\\s*%killer\\s*;[\\s\\S]*?processMultiSourceInputEvent\\(\\s*\"onMinigameDeath\"\\s*,\\s*%this\\s*,\\s*%mini\\s*\\)"
         },
         "Slayer_PathCamData::onNode": {
           "fly_end": "%node\\s*==\\s*%cam\\.numNodes\\s*-\\s*1",
@@ -207,7 +213,7 @@
           "fly_jump_kink": "if\\s*\\(\\s*%type\\s*\\$=\\s*\"\"\\s*\\)\\s*%type\\s*=\\s*\"Kink\"",
           "fly_create_skips": "addNode\\([^;]*\\)\\s*;\\s*%this\\.flyCam\\.setPosition\\(\\s*1\\.0\\s*\\)\\s*;\\s*%this\\.flyCam\\.popFront\\(\\)",
           "out_fly_through": "registerOutputEvent\\(\\s*\"?(?i:Minigame)\"?\\s*,\\s*\"StartFlyThrough\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
-          "fly_restricted": "RestrictedEvent__\\[\\s*\"Minigame\"\\s*,\\s*\"startFlyThrough\"\\s*\\]\\s*=\\s*3\\s*;"
+          "fly_restricted": "RestrictedEvent__\\[\\s*\"Minigame\"\\s*,\\s*\"startFlyThrough\"\\s*\\]\\s*=\\s*(-?\\d+)\\s*;"
         },
         "server/core/resources/datablocks.cs": {
           "team_spawn_brick": "datablock\\s+FxDtsBrickData\\s*\\(\\s*brickSlyrSpawnPointData\\s*:\\s*brickSpawnPointData\\s*\\)",
@@ -269,7 +275,32 @@
           "out_team_center_print": "registerOutputEvent\\(\\s*\"?(?i:Slayer_TeamSO)\"?\\s*,\\s*\"CenterPrintAll\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
           "out_team_chat": "registerOutputEvent\\(\\s*\"?(?i:Slayer_TeamSO)\"?\\s*,\\s*\"ChatMsgAll\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
           "out_team_respawn": "registerOutputEvent\\(\\s*\"?(?i:Slayer_TeamSO)\"?\\s*,\\s*\"RespawnAll\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
-          "out_team_inc_score": "registerOutputEvent\\(\\s*\"?(?i:Slayer_TeamSO)\"?\\s*,\\s*\"IncScore\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)"
+          "out_team_inc_score": "registerOutputEvent\\(\\s*\"?(?i:Slayer_TeamSO)\"?\\s*,\\s*\"IncScore\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
+          "touch_team_inputs": "registerInputEvent\\(\\s*FxDtsBrick\\s*,\\s*\"onPlayerTouch\\(Team\"\\s*@\\s*%i\\s*@\\s*\"\\)\"\\s*,\\s*\"Self FxDtsBrick\\\\tPlayer Player\\\\tClient GameConnection\\\\tMiniGame MiniGame\"\\s*\\)",
+          "activate_team_inputs": "registerInputEvent\\(\\s*FxDtsBrick\\s*,\\s*\"onActivate\\(Team\"\\s*@\\s*%i\\s*@\\s*\"\\)\"\\s*,\\s*\"Self FxDtsBrick\\\\tPlayer Player\\\\tClient GameConnection\\\\tMiniGame MiniGame\"\\s*\\)",
+          "team_inputs_up_to": "%i\\s*<=\\s*\\$Pref::Slayer::Server::Teams::maxEvents\\s*;",
+          "touch_team_fires": "processInputEvent\\(\\s*\"onPlayerTouch\\(Team\"\\s*@\\s*%team\\.getGroup\\(\\)\\.indexOf\\(%team\\)\\s*\\+\\s*1\\s*@\\s*\"\\)\"\\s*,\\s*%client\\s*\\)",
+          "activate_team_fires": "processInputEvent\\(\\s*\"onActivate\\(Team\"\\s*@\\s*%team\\.getGroup\\(\\)\\.indexOf\\(%team\\)\\s*\\+\\s*1\\s*@\\s*\"\\)\"\\s*,\\s*%client\\s*\\)",
+          "minigame_death_input": "registerMultiSourceInputEvent\\(\\s*FxDtsBrick\\s*,\\s*\"onMinigameDeath\"\\s*,\\s*\"Self FxDtsBrick\\\\tClient GameConnection\\\\tPlayer\\(Killer\\) Player\\\\tClient\\(Killer\\) GameConnection\\\\tMiniGame MiniGame\"\\s*\\)",
+          "minigame_join_input": "registerMultiSourceInputEvent\\(\\s*FxDtsBrick\\s*,\\s*\"onMinigameJoin\"\\s*,\\s*\"Self FxDtsBrick\\\\tPlayer Player\\\\tClient GameConnection\\\\tMiniGame MiniGame\"\\s*\\)",
+          "minigame_leave_input": "registerMultiSourceInputEvent\\(\\s*FxDtsBrick\\s*,\\s*\"onMinigameLeave\"\\s*,\\s*\"Self FxDtsBrick\\\\tPlayer Player\\\\tClient GameConnection\\\\tMiniGame MiniGame\"\\s*\\)",
+          "minigame_roundstart_input": "registerMultiSourceInputEvent\\(\\s*FxDtsBrick\\s*,\\s*\"onMinigameRoundStart\"\\s*,\\s*\"Self FxDtsBrick\\\\tMiniGame MiniGame\"\\s*\\)",
+          "minigame_roundend_input": "registerMultiSourceInputEvent\\(\\s*FxDtsBrick\\s*,\\s*\"onMinigameRoundEnd\"\\s*,\\s*\"Self FxDtsBrick\\\\tMiniGame MiniGame\"\\s*\\)",
+          "restrict_on": "isSlayerMinigame\\(\\s*%mini\\s*\\)\\s*&&\\s*%mini\\.restrictOutputEvents",
+          "restrict_check": "!\\s*%mini\\.canEdit\\(\\s*%client\\s*,\\s*\\$Slayer::Server::Events::RestrictedEvent__\\[\\s*%target\\s*,\\s*%outputEvent\\s*\\]\\s*\\)",
+          "restrict_mg_bottom_print_all": "RestrictedEvent__\\[\\s*\"Minigame\"\\s*,\\s*\"BottomPrintAll\"\\s*\\]\\s*=\\s*(-?\\d+)\\s*;",
+          "restrict_mg_center_print_all": "RestrictedEvent__\\[\\s*\"Minigame\"\\s*,\\s*\"CenterPrintAll\"\\s*\\]\\s*=\\s*(-?\\d+)\\s*;",
+          "restrict_mg_chat_msg_all": "RestrictedEvent__\\[\\s*\"Minigame\"\\s*,\\s*\"ChatMsgAll\"\\s*\\]\\s*=\\s*(-?\\d+)\\s*;",
+          "restrict_mg_inc_time_remaining": "RestrictedEvent__\\[\\s*\"Minigame\"\\s*,\\s*\"incTimeRemaining\"\\s*\\]\\s*=\\s*(-?\\d+)\\s*;",
+          "restrict_mg_reset": "RestrictedEvent__\\[\\s*\"Minigame\"\\s*,\\s*\"Reset\"\\s*\\]\\s*=\\s*(-?\\d+)\\s*;",
+          "restrict_mg_respawn_all": "RestrictedEvent__\\[\\s*\"Minigame\"\\s*,\\s*\"RespawnAll\"\\s*\\]\\s*=\\s*(-?\\d+)\\s*;",
+          "restrict_mg_set_time_remaining": "RestrictedEvent__\\[\\s*\"Minigame\"\\s*,\\s*\"setTimeRemaining\"\\s*\\]\\s*=\\s*(-?\\d+)\\s*;",
+          "restrict_mg_win": "RestrictedEvent__\\[\\s*\"Minigame\"\\s*,\\s*\"Win\"\\s*\\]\\s*=\\s*(-?\\d+)\\s*;",
+          "restrict_team_bottom_print_all": "RestrictedEvent__\\[\\s*\"Slayer_TeamSO\"\\s*,\\s*\"BottomPrintAll\"\\s*\\]\\s*=\\s*(-?\\d+)\\s*;",
+          "restrict_team_center_print_all": "RestrictedEvent__\\[\\s*\"Slayer_TeamSO\"\\s*,\\s*\"CenterPrintAll\"\\s*\\]\\s*=\\s*(-?\\d+)\\s*;",
+          "restrict_team_chat_msg_all": "RestrictedEvent__\\[\\s*\"Slayer_TeamSO\"\\s*,\\s*\"ChatMsgAll\"\\s*\\]\\s*=\\s*(-?\\d+)\\s*;",
+          "restrict_team_respawn_all": "RestrictedEvent__\\[\\s*\"Slayer_TeamSO\"\\s*,\\s*\"RespawnAll\"\\s*\\]\\s*=\\s*(-?\\d+)\\s*;",
+          "restrict_team_inc_score": "RestrictedEvent__\\[\\s*\"Slayer_TeamSO\"\\s*,\\s*\"IncScore\"\\s*\\]\\s*=\\s*(-?\\d+)\\s*;"
         },
         "FxDtsBrick::setTeamControl": {
           "spawn_control": "case\\s+\"TeamSpawn\"\\s+or\\s+\"TeamVehicle\"\\s*:\\s*%this\\.controlColor\\s*=\\s*%color\\s*;",

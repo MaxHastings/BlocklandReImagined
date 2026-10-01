@@ -718,6 +718,26 @@ fn slayer_ports_apply_with_their_rules() {
         serde_json::json!([{ "type": "int", "min": 0, "max": 50, "default": 2 }])
     );
     assert_eq!(output("StartFlyThrough")["params"], serde_json::json!([]));
+    // The team inputs follow the engine's, the mini-game inputs run on every
+    // brick of the game, and Restrict Output Events at this copy's levels.
+    let inputs = behaviour["brick_inputs"].as_array().unwrap();
+    assert_eq!(inputs.len(), 10 + 12 + 5);
+    let input = |name: &str| inputs.iter().find(|i| i["name"] == name).unwrap_or_else(|| panic!("no {name}"));
+    assert_eq!(input("onActivate(Team6)")["follows"], "onActivate");
+    assert_eq!(input("onPlayerTouch(Team1)")["follows"], "onPlayerTouch");
+    assert_eq!(
+        input("onMinigameDeath")["targets"],
+        serde_json::json!(["Client", "Player(Killer)", "Client(Killer)", "MiniGame"])
+    );
+    assert_eq!(behaviour["on_event_row"], true);
+    assert_eq!(setting(&behaviour, "restrict_output_events")["default"], false);
+    for line in [
+        "\"minigame:bottomprintall\": 2,",
+        "\"minigame:win\": -1,",
+        "\"minigame:startflythrough\": 3,",
+    ] {
+        assert!(slayer.contains(line), "slayer.rhai lacks `{line}`");
+    }
     assert_eq!(setting(&behaviour, "clear_stats")["default"], false);
     for line in ["Locked for now.", "\"Extended by\"", "\"Time now\""] {
         assert!(slayer.contains(line), "slayer.rhai lacks `{line}`");

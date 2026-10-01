@@ -132,6 +132,8 @@ refused. The engine calls:
 | `on_minigame(event)` | something happened to a mini-game, delivered at the start of the next tick, when `"on_minigame": true`. `event` is `#{ kind, game, player, team }`: `kind` is `created`, `configured`, `reset`, `ended`, `joined`, `left`, `team` (`player`'s team changed to `team`, or `()`) or `teams` (the game's team list changed) |
 | `on_pick_spawn(player)` | a player is about to spawn or respawn, when `"on_pick_spawn": true`: return a brick id to appear on that brick, `[x, y, z]` to appear there, or `()` to leave it to the engine (spawn bricks, then the map). The first Add-On to answer decides. Called as it happens, so keep it quick |
 | `on_brick_output(output, target, params, info)` | a builder's wrench row ran one of the outputs in `brick_outputs` (see **Brick events**) |
+| `on_brick_input(input, brick, player)` | a player set off an engine input that some of your `brick_inputs` follow, on a brick with rows on one of them: return the name of one to run it too, or `()` (see **Brick events**) |
+| `on_event_row(player, brick, row)` | a player sends a row of wrench events for a brick, before it is saved, when `"on_event_row": true`: return `false` or a reason to leave it out (see **Brick events**) |
 | `on_zone(player, brick, event)` | a living player enters (`"enter"`), stays in (`"tick"`, with `"ticks": true`) or leaves (`"leave"`) the space over a brick of a kind listed in `zones` (a Torque trigger made with `createTrigger`) |
 | `cmd_<name>(player, args...)` | a player sends a command listed in `commands` |
 
@@ -170,7 +172,7 @@ HUD panels can only show keys the viewer receives. `persist` (default
 | `noise(seed, x, z)`, `hash3(seed, x, y, z)` | `entity_get(e, key)`, `entity_set(e, key, v)` | `spawn_entity`, `remove_entity`, `steer`, `label`: `entity` |
 | `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)` | | `teleport`, `respawn`, `set_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`, `take_item(p, item)`, `drop_item(item, x, y, z[, vx, vy, vz])`, `drop_item(item, #{ ... })`, `remove_drop(id)`: `player` |
 | `raycast(from, dir, range[, ignore])`, `can_damage(by, target)` | | `set_fov(p, fov)`, `set_image_ammo(p, ammo)`, `mount_image(p, image)`, `mount_image(p, image, slot[, paint])`, `unmount_image(p)`, `set_scale(p, scale)`, `set_look_limits(p, up, down)`: `player` |
-| `minigames()`, `minigame(id)`, `setting(game, key)`, `team_setting(game, team, key)`, `bricks(kind)`, `brick(id)`, `palette()`, `drops()` | | `set_teams(game, teams, options)`, `set_team(p, team)`, `set_score(p, n)`, `add_score(p, n)`, `reset_minigame(game)`, `set_setting(game, key, v)`, `set_team_setting(game, team, key, v)`, `hold_respawn(p, held)`, `end_round(game, winners)`: `minigame`; `watch(p, target)`, `follow_path(p, knots)`, `free_camera(p)`, `orbit_point(p, at, distance)`: `player`; `set_brick_item(brick, item)`, `set_brick_color(brick, c)`: `world.edit`; `fire_brick_input(brick, input, p)`: `brick_events` |
+| `minigames()`, `minigame(id)`, `setting(game, key)`, `team_setting(game, team, key)`, `bricks(kind)`, `brick(id)`, `palette()`, `drops()` | | `set_teams(game, teams, options)`, `set_team(p, team)`, `set_score(p, n)`, `add_score(p, n)`, `reset_minigame(game)`, `set_setting(game, key, v)`, `set_team_setting(game, team, key, v)`, `hold_respawn(p, held)`, `end_round(game, winners)`: `minigame`; `watch(p, target)`, `follow_path(p, knots)`, `free_camera(p)`, `orbit_point(p, at, distance)`: `player`; `set_brick_item(brick, item)`, `set_brick_color(brick, c)`: `world.edit`; `fire_brick_input(brick, input, p)`, `fire_game_input(game, input, p, killer)`: `brick_events` |
 | `brick_box(brick)`, `voxel(brick)`, `can_place_voxel(x, y, z)` | | `place_voxel(x, y, z, material)`: `world.edit`; `set_avatar_colors(p, colors)`, `temp_look(p, look, seconds)`: `player` |
 | `brick(id)`, `bricks_in(min, max)`, `can_plant(kind, [x, y, z], turns)`, `can_edit(brick)` | | `plant_brick(kind, [x, y, z], turns, color, owner)`: `world.edit` |
 | | | `copy_build(p, brick, limit, above_only, tool)`, `copy_box(p, min, max, limit, tool)`, `mirror_copy(p, axis)`: `build` |
@@ -361,15 +363,39 @@ own:
 ```
 
 Every input targets its brick (`Self`); `targets` adds any of `Player`,
-`Client`, `MiniGame`, and `OwnerPlayer` and `OwnerClient` (the brick
-owner's, while they are on). `fire_brick_input(brick, "onFlagPickedUp", p)`
+`Client`, `MiniGame`, `OwnerPlayer` and `OwnerClient` (the brick
+owner's, while they are on), and `Player(Killer)` and `Client(Killer)`. `fire_brick_input(brick, "onFlagPickedUp", p)`
 (`processInputEvent`; capability `brick_events`) runs the rows on `brick`
 wired to it, with `p` filling those targets (or leave `p` out). The rows
 run as the brick owner's, under the same budgets and trust as any other.
 A package fires only its own inputs, and a name the engine or another
-Add-On already uses is refused when the Add-Ons start. Up to 16 per
+Add-On already uses is refused when the Add-Ons start. Up to 32 per
 package. Fired from inside `on_brick_output`, an input's rows run once
 the tick's event rows are done.
+
+`fire_game_input(game, "onMinigameDeath", p, killer)`
+(`processMultiSourceInputEvent`) runs an input on every brick of the
+mini-game `game` with rows on it, `MiniGame` being that game, `p` filling
+`Player` and `Client` and `killer` filling `Player(Killer)` and
+`Client(Killer)` (both may be left out).
+
+An input may follow one of the engine's (an `onPlayerTouch` or
+`onActivate` override, as Slayer's `onActivate(Team2)`):
+
+```json
+"brick_inputs": [ { "name": "onActivate(Team1)", "targets": ["Player", "Client"], "follows": "onActivate" } ]
+```
+
+When a player sets `onActivate` off on a brick with rows on any input
+that follows it, the rules' `on_brick_input("onActivate", brick, p)` may
+answer with one of them, which runs too, set off by the same player.
+
+With `"on_event_row": true`, `on_event_row(p, brick, row)` reviews each
+row a player sends from the wrench (`serverCmdAddEvent`), `row` being
+`#{ index, input, target, class, output, package }` (`class` the
+target's, as `MiniGame`). Return `false` (they hear "You may not use the
+… event.") or a reason to tell them, and the row is left out; anything
+else keeps it.
 
 Rules may add outputs too (`registerOutputEvent`; capability
 `brick_events`), up to 32, each acting on a `fxDTSBrick`, `Player`,

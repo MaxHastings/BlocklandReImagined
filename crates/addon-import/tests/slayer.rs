@@ -1072,13 +1072,29 @@ fn team_event(input: &str, target: &str, output: &str, params: Vec<EventValue>) 
     }
 }
 
-/// Wrench events on: the host's own catalog is empty here, so the
-/// Add-Ons' inputs and outputs are all there is.
+/// Wrench events on: the host's own catalog has only the two inputs
+/// Slayer's team inputs follow and one mini-game output Slayer restricts,
+/// so the Add-Ons' inputs and outputs are nearly all there is.
 fn with_events(g: &mut Game) {
-    let empty = serde_json::json!({
-        "schema_version": 1, "inputs": [], "outputs": [], "sources": [], "scope": null
+    let input = |name: &str| {
+        serde_json::json!({
+            "id": format!("in/{name}"), "class_name": "fxDTSBrick", "name": name,
+            "targets": [["Self", "fxDTSBrick"], ["Player", "Player"],
+                        ["Client", "GameConnection"], ["MiniGame", "MiniGame"]],
+            "source": "test", "source_line": 1
+        })
+    };
+    let catalog = serde_json::json!({
+        "schema_version": 1, "inputs": [input("onActivate"), input("onPlayerTouch")],
+        "outputs": [{
+            "id": "out/MiniGame/BottomPrintAll", "class_name": "MiniGame", "name": "BottomPrintAll",
+            "params": [{ "type": "string", "max_length": 200, "width": 156 },
+                       { "type": "int", "min": 1, "max": 10, "default": 3 }, { "type": "bool" }],
+            "append_client": false, "source": "test", "source_line": 1
+        }],
+        "sources": [], "scope": null
     });
-    g.s.set_event_catalog(serde_json::from_value(empty).unwrap(), Vec::new())
+    g.s.set_event_catalog(serde_json::from_value(catalog).unwrap(), Vec::new())
         .unwrap();
 }
 /// A number in Slayer's state of `p` that everyone sees.
@@ -1270,5 +1286,95 @@ fn team_events_message_respawn_and_score_a_whole_team() {
     g.steps(2);
     assert!(g.heard("Blue"), "Blue won");
     assert!(g.round_over());
+    g.quiet();
+}
+
+#[test]
+fn team_and_mini_game_inputs_run_and_restricted_outputs_need_rights() {
+    let mut g = Game::new("team-inputs");
+    with_events(&mut g);
+    let (red, blue) = two_teams(&mut g);
+    let owner = g.s.minigame_views()[0].owner;
+    let catalog = g.s.event_catalog().unwrap();
+    let death = &catalog.input("onMinigameDeath").unwrap().targets;
+    assert!(death.contains(&("Client(Killer)".into(), "GameConnection".into())), "{death:?}");
+
+    // `onActivate(Team1)` for Red, the game's first team, and
+    // `onActivate(Team2)` for Blue.
+    let board = g.plant(owner, TEAM_SPAWN, 10.0, 0.0, 2);
+    let rounds = g.plant(owner, TEAM_SPAWN, 12.0, 4.0, 2);
+    let rows = vec![
+        event("onActivate(Team1)", "Client", "addKills", vec![EventValue::Int(1)]),
+        event("onActivate(Team2)", "Client", "addKills", vec![EventValue::Int(2)]),
+        event("onMinigameDeath", "Client", "addKills", vec![EventValue::Int(3)]),
+    ];
+    g.s.edit_brick(owner, board, Edit::Events(rows)).unwrap();
+    for p in [red, blue] {
+        g.s.fire_brick_input(board, "onActivate", Some(p));
+    }
+    g.steps(2);
+    assert_eq!((stat(&g, red, "kills"), stat(&g, blue, "kills")), (1, 2));
+
+    // `onMinigameDeath` on every brick of the game, for whoever died.
+    g.cmd(blue, Command::Suicide).unwrap();
+    g.steps(2);
+    assert_eq!(stat(&g, blue, "kills"), 2 + 3);
+
+    // `onMinigameRoundEnd` and `onMinigameRoundStart`, on the mini-game.
+    let rows = vec![
+        event("onMinigameRoundEnd", "MiniGame", "incTimeRemaining", vec![EventValue::Int(1), EventValue::Bool(true)]),
+        event("onMinigameRoundStart", "MiniGame", "setTimeRemaining", vec![EventValue::Int(3), EventValue::Bool(true)]),
+        event("onPoke", "MiniGame", "Win", vec![EventValue::Int(4), EventValue::Text("The Builders".into())]),
+    ];
+    g.s.edit_brick(owner, rounds, Edit::Events(rows)).unwrap();
+    g.s.take_private_notices();
+    poke(&mut g, red, rounds);
+    g.steps(2);
+    assert!(g.round_over());
+    assert!(g.heard("Extended by 1 minute."));
+    g.steps(BETWEEN_ROUNDS * 120 + 13);
+    assert!(!g.round_over());
+    assert!(g.heard("Time now 3 minutes."));
+
+    // Restrict Output Events: rows only those who may edit the game add,
+    // and the stand-in's `BottomPrintAll` (level 2) only an admin.
+    let win = || event("onPoke", "MiniGame", "Win", vec![EventValue::Int(4), EventValue::Text("Me".into())]);
+    let time = || event("onPoke", "MiniGame", "incTimeRemaining", vec![EventValue::Int(1), EventValue::Bool(true)]);
+    let print = || {
+        event("onPoke", "MiniGame", "BottomPrintAll", vec![EventValue::Text("Hi".into()), EventValue::Int(3), EventValue::Bool(false)])
+    };
+    let other = if owner == red { blue } else { red };
+    let mut rows = vec![win(), time()];
+    assert!(g.s.review_event_rows(other, rounds, &mut rows).is_empty(), "off by default here");
+    assert_eq!(rows.len(), 2);
+    g.set(owner, &[(&key(SLAYER, "restrict_output_events"), Value::Bool(true))]);
+    let refused = g.s.review_event_rows(other, rounds, &mut rows);
+    assert!(rows.is_empty(), "{rows:?}");
+    assert_eq!(
+        refused,
+        [
+            "You do not have permission to use the [MiniGame, Win] event.",
+            "You do not have permission to use the [MiniGame, incTimeRemaining] event."
+        ]
+    );
+    let mut rows = vec![win(), time(), print()];
+    let refused = g.s.review_event_rows(owner, rounds, &mut rows);
+    assert_eq!(rows, [win(), time()]);
+    assert_eq!(refused, ["You do not have permission to use the [MiniGame, BottomPrintAll] event."]);
+
+    // `onMinigameLeave` and `onMinigameJoin`, for whoever leaves or joins.
+    let rows = vec![
+        event("onMinigameLeave", "Client", "addDeaths", vec![EventValue::Int(4)]),
+        event("onMinigameJoin", "Client", "addDeaths", vec![EventValue::Int(5)]),
+    ];
+    g.s.edit_brick(owner, board, Edit::Events(rows)).unwrap();
+    let deaths = stat(&g, other, "deaths");
+    g.cmd(other, Command::MiniGame(MiniGameRequest::Leave)).unwrap();
+    g.steps(2);
+    assert_eq!(stat(&g, other, "deaths"), deaths + 4);
+    let game = g.s.minigame_views()[0].id;
+    g.cmd(other, Command::MiniGame(MiniGameRequest::Join { game })).unwrap();
+    g.steps(2);
+    assert_eq!(stat(&g, other, "deaths"), deaths + 4 + 5);
     g.quiet();
 }

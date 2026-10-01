@@ -312,7 +312,7 @@ impl Catalog {
     pub fn validate(&self) -> Result<()> {
         ensure!(
             self.schema_version == 1
-                && self.inputs.len() <= 64
+                && self.inputs.len() <= 128
                 && self.outputs.len() <= 128
                 && self.targets.len() <= 32
                 && self.sources.len() <= 128,

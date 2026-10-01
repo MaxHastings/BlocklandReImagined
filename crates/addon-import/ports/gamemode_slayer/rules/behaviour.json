@@ -11,7 +11,24 @@
     { "name": "onCPCapture(Team5)", "targets": ["Player", "Client", "MiniGame"] },
     { "name": "onCPCapture(Team6)", "targets": ["Player", "Client", "MiniGame"] },
     { "name": "onTeamCheckTrue", "targets": ["Player", "Client", "MiniGame", "OwnerPlayer", "OwnerClient"] },
-    { "name": "onTeamCheckFalse", "targets": ["Player", "Client", "MiniGame", "OwnerPlayer", "OwnerClient"] }
+    { "name": "onTeamCheckFalse", "targets": ["Player", "Client", "MiniGame", "OwnerPlayer", "OwnerClient"] },
+    { "name": "onPlayerTouch(Team1)", "targets": ["Player", "Client", "MiniGame"], "follows": "onPlayerTouch" },
+    { "name": "onPlayerTouch(Team2)", "targets": ["Player", "Client", "MiniGame"], "follows": "onPlayerTouch" },
+    { "name": "onPlayerTouch(Team3)", "targets": ["Player", "Client", "MiniGame"], "follows": "onPlayerTouch" },
+    { "name": "onPlayerTouch(Team4)", "targets": ["Player", "Client", "MiniGame"], "follows": "onPlayerTouch" },
+    { "name": "onPlayerTouch(Team5)", "targets": ["Player", "Client", "MiniGame"], "follows": "onPlayerTouch" },
+    { "name": "onPlayerTouch(Team6)", "targets": ["Player", "Client", "MiniGame"], "follows": "onPlayerTouch" },
+    { "name": "onActivate(Team1)", "targets": ["Player", "Client", "MiniGame"], "follows": "onActivate" },
+    { "name": "onActivate(Team2)", "targets": ["Player", "Client", "MiniGame"], "follows": "onActivate" },
+    { "name": "onActivate(Team3)", "targets": ["Player", "Client", "MiniGame"], "follows": "onActivate" },
+    { "name": "onActivate(Team4)", "targets": ["Player", "Client", "MiniGame"], "follows": "onActivate" },
+    { "name": "onActivate(Team5)", "targets": ["Player", "Client", "MiniGame"], "follows": "onActivate" },
+    { "name": "onActivate(Team6)", "targets": ["Player", "Client", "MiniGame"], "follows": "onActivate" },
+    { "name": "onMinigameDeath", "targets": ["Client", "Player(Killer)", "Client(Killer)", "MiniGame"] },
+    { "name": "onMinigameJoin", "targets": ["Player", "Client", "MiniGame"] },
+    { "name": "onMinigameLeave", "targets": ["Player", "Client", "MiniGame"] },
+    { "name": "onMinigameRoundStart", "targets": ["MiniGame"] },
+    { "name": "onMinigameRoundEnd", "targets": ["MiniGame"] }
   ],
   "brick_outputs": [
     { "name": "setTeamControl", "class": "fxDTSBrick", "params": {{out_team_control|event_params}} },
@@ -170,6 +187,13 @@
       "category": "Minigame",
       "type": "bool",
       "default": {{pref_clear_stats|bool}}
+    },
+    {
+      "key": "restrict_output_events",
+      "title": "Restrict Output Events",
+      "category": "Events",
+      "type": "bool",
+      "default": {{pref_restrict_events|bool}}
     },
     {
       "key": "custom_rule",
@@ -441,6 +465,7 @@
   "on_spawn": true,
   "on_path_node": true,
   "on_observer": true,
+  "on_event_row": true,
   "zones": [
     {
       "bricks": [

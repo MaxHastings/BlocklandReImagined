@@ -257,6 +257,8 @@ pub struct EventWorld {
     bricks: BTreeMap<Id, BrickProgram>,
     compiled: BTreeMap<Id, Vec<Option<CompiledRow>>>,
     names: BTreeMap<(u64, String), BTreeSet<Id>>,
+    /// The bricks with rows on each input, enabled or not, by input id.
+    listeners: BTreeMap<String, BTreeSet<Id>>,
     queues: BTreeMap<u64, BTreeMap<(u64, u32, u64), Job>>,
     pending: usize,
     held: BTreeMap<u64, Job>,
@@ -292,6 +294,7 @@ impl EventWorld {
             bricks: BTreeMap::new(),
             compiled: BTreeMap::new(),
             names: BTreeMap::new(),
+            listeners: BTreeMap::new(),
             queues: BTreeMap::new(),
             pending: 0,
             held: BTreeMap::new(),
@@ -423,9 +426,38 @@ impl EventWorld {
                 .or_default()
                 .insert(brick.id);
         }
+        self.unlisten(brick.id);
+        for c in compiled.iter().flatten() {
+            self.listeners
+                .entry(c.input.clone())
+                .or_default()
+                .insert(brick.id);
+        }
         self.compiled.insert(brick.id, compiled);
         self.bricks.insert(brick.id, brick);
         Ok(())
+    }
+    /// Take brick `id` out of the listener index.
+    fn unlisten(&mut self, id: Id) {
+        let Some(rows) = self.compiled.get(&id) else {
+            return;
+        };
+        for c in rows.iter().flatten() {
+            if let Some(ids) = self.listeners.get_mut(&c.input) {
+                ids.remove(&id);
+                if ids.is_empty() {
+                    self.listeners.remove(&c.input);
+                }
+            }
+        }
+    }
+    /// The bricks with rows on `input`, enabled or not.
+    pub fn listeners(&self, input: &str) -> Vec<Id> {
+        self.catalog
+            .input(input)
+            .and_then(|i| self.listeners.get(&i.id))
+            .map(|ids| ids.iter().copied().collect())
+            .unwrap_or_default()
     }
     fn unindex(&mut self, b: &BrickProgram) {
         if let Some(n) = &b.name {
@@ -439,6 +471,7 @@ impl EventWorld {
         }
     }
     pub fn remove_brick(&mut self, id: Id) {
+        self.unlisten(id);
         self.compiled.remove(&id);
         if let Some(b) = self.bricks.remove(&id) {
             self.unindex(&b);

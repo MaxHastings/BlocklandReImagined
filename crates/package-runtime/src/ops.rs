@@ -621,6 +621,17 @@ pub enum Op {
         input: String,
         player: Option<u64>,
     },
+    /// Fire one of this package's inputs on every brick of mini-game `game`
+    /// wired to it (Slayer's `processMultiSourceInputEvent`:
+    /// `onMinigameDeath`, `onMinigameRoundStart`). `player` fills the
+    /// Player and Client targets, `killer` the `Player(Killer)` and
+    /// `Client(Killer)` ones, and the game the MiniGame target.
+    FireGameInput {
+        game: u64,
+        input: String,
+        player: Option<u64>,
+        killer: Option<u64>,
+    },
     /// Empty a player's hand (`unMountImage(0)`): the tool they held is put
     /// away, still in its slot.
     UnmountImage {
@@ -830,7 +841,7 @@ impl Op {
             | Self::SetSetting { .. }
             | Self::SetZonePeriod { .. } => "minigame",
             Self::SetBrickItem { .. } | Self::SetBrickColor { .. } => "world.edit",
-            Self::FireBrickInput { .. } => "brick_events",
+            Self::FireBrickInput { .. } | Self::FireGameInput { .. } => "brick_events",
             Self::SetEnvironment { .. } => "environment",
             Self::Teleport { .. }
             | Self::Respawn { .. }
@@ -1173,7 +1184,9 @@ impl Op {
             Self::SetZonePeriod { zone, period_ms } => {
                 (*zone as usize) < crate::content::MAX_ZONES && (10..=10_000).contains(period_ms)
             }
-            Self::FireBrickInput { input, .. } => input.len() <= 64,
+            Self::FireBrickInput { input, .. } | Self::FireGameInput { input, .. } => {
+                input.len() <= 64
+            }
             Self::Fire {
                 projectile,
                 position,
@@ -1282,6 +1295,7 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::SetBrickColor { .. } => "set_brick_color",
         Op::SetZonePeriod { .. } => "set_zone_period",
         Op::FireBrickInput { .. } => "fire_brick_input",
+        Op::FireGameInput { .. } => "fire_game_input",
         Op::UnmountImage { .. } => "unmount_image",
         Op::MountObject { .. } => "mount_object",
         Op::UnmountObject { .. } => "unmount_object",

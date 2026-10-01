@@ -251,6 +251,13 @@ pub struct Behaviour {
     /// must be quick.
     #[serde(default)]
     pub on_activate: bool,
+    /// `on_event_row(player, brick, row)` for each row of events a player
+    /// sends from the wrench, before they are kept: return `false` or a
+    /// reason to leave that row out (Slayer's Restrict Output Events, as
+    /// its `serverCmdAddEvent`), anything else to keep it. `row` is
+    /// `#{ index, input, target, class, output, package }`.
+    #[serde(default)]
+    pub on_event_row: bool,
     /// `on_tick()` every `tick_interval` ticks, when set.
     #[serde(default)]
     pub tick_interval: Option<u32>,
@@ -288,16 +295,20 @@ pub struct Behaviour {
     pub brick_targets: Vec<BrickTargetDef>,
 }
 /// Most wrench event inputs one behaviour declares.
-pub const MAX_BRICK_INPUTS: usize = 16;
+pub const MAX_BRICK_INPUTS: usize = 32;
 /// Targets an Add-On's input may offer besides `Self`, the brick, with the
 /// class each one is (`registerInputEvent`'s target list). `OwnerPlayer`
-/// and `OwnerClient` are the brick owner's, while they are on the server.
-pub const BRICK_INPUT_TARGETS: [(&str, &str); 5] = [
+/// and `OwnerClient` are the brick owner's, while they are on the server;
+/// `Player(Killer)` and `Client(Killer)` whoever killed the player an input
+/// is about (`fire_game_input`'s `killer`).
+pub const BRICK_INPUT_TARGETS: [(&str, &str); 7] = [
     ("Player", "Player"),
     ("Client", "GameConnection"),
     ("MiniGame", "MiniGame"),
     ("OwnerPlayer", "Player"),
     ("OwnerClient", "GameConnection"),
+    ("Player(Killer)", "Player"),
+    ("Client(Killer)", "GameConnection"),
 ];
 /// A wrench event input: its name as builders pick it, and the targets its
 /// rows may aim at besides the brick itself.
@@ -307,6 +318,13 @@ pub struct BrickInputDef {
     pub name: String,
     #[serde(default)]
     pub targets: Vec<String>,
+    /// One of the engine's inputs this one may follow
+    /// (`onPlayerTouch`, `onActivate`): when a player sets that input off on
+    /// a brick with rows on this one, the rules' `on_brick_input` decides
+    /// whether this one runs too (Slayer's `onPlayerTouch(Team1)`). Needs
+    /// the `brick_events` capability.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub follows: Option<String>,
 }
 impl BrickInputDef {
     pub fn validate(&self) -> Result<()> {
@@ -320,6 +338,15 @@ impl BrickInputDef {
             "brick input `{}`: a name like onFlagPickedUp, 3 to 64 letters, digits, _ or ()",
             self.name
         );
+        if let Some(follows) = &self.follows {
+            ensure!(
+                (3..=64).contains(&follows.len())
+                    && follows.starts_with("on")
+                    && follows.chars().all(|c| c.is_ascii_alphanumeric()),
+                "brick input `{}`: follows `{follows}`, which is not an input name like onPlayerTouch",
+                self.name
+            );
+        }
         for (i, t) in self.targets.iter().enumerate() {
             ensure!(
                 BRICK_INPUT_TARGETS.iter().any(|(slot, _)| slot == t),
@@ -1633,5 +1660,21 @@ mod tests {
         };
         assert!(output.validate(&["Slayer_TeamSO"]).is_ok());
         assert!(output.validate(&[]).is_err(), "only a class of its own targets");
+    }
+
+    #[test]
+    fn a_brick_input_follows_an_input_by_name_and_may_aim_at_the_killer() {
+        let input = |follows: Option<&str>, targets: &[&str]| {
+            BrickInputDef {
+                name: "onPlayerTouch(Team1)".into(),
+                targets: targets.iter().map(|t| t.to_string()).collect(),
+                follows: follows.map(Into::into),
+            }
+            .validate()
+        };
+        assert!(input(Some("onPlayerTouch"), &["Player", "Client"]).is_ok());
+        assert!(input(None, &["Client", "Player(Killer)", "Client(Killer)"]).is_ok());
+        assert!(input(Some("PlayerTouch"), &[]).is_err(), "not an input name");
+        assert!(input(Some("onTouch(Team1)"), &[]).is_err(), "one of the engine's, plain");
     }
 }

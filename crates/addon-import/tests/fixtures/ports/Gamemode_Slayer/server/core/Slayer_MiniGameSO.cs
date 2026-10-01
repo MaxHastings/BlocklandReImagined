@@ -63,6 +63,8 @@ function Slayer_MiniGameSO::startRound(%this)
 		%db = %this.playerDatablock;
 		%cl.player.changeDatablock(%db);
 	}
+	$InputTarget_["MiniGame"] = %this;
+	processMultiSourceInputEvent("onMinigameRoundStart", 0, %this);
 }
 
 function Slayer_MiniGameSO::endRound(%this, %winner, %resetTime)
@@ -79,6 +81,8 @@ function Slayer_MiniGameSO::endRound(%this, %winner, %resetTime)
 	%resetTime = %this.timeBetweenRounds * 1000;
 	%msg = '\c5Nobody won this round. Resetting in %4 seconds.';
 	%this.bottomPrintAll("Resetting in" SPC %timeLeft, 2, 1);
+	$InputTarget_["MiniGame"] = %this;
+	processMultiSourceInputEvent("onMinigameRoundEnd", 0, %this);
 }
 
 function Slayer_MiniGameSO::incTimeRemaining(%this, %flag, %display)
@@ -122,8 +126,16 @@ function Slayer_MiniGameSO::resetCapturePoints(%this, %client)
 
 package Slayer_MiniGameSO
 {
+	function Slayer_MiniGameSO::addMember(%this, %client)
+	{
+		$InputTarget_["Client"] = %client;
+		processMultiSourceInputEvent("onMinigameJoin", %client, %this);
+	}
+
 	function Slayer_MiniGameSO::removeMember(%this, %client)
 	{
+		$InputTarget_["Client"] = %client;
+		processMultiSourceInputEvent("onMinigameLeave", %client, %this);
 		%winner = %this.victoryCheck_Lives();
 	}
 

@@ -6,10 +6,20 @@
 //! `fire_brick_input`, and the rows run as the brick owner's, under the
 //! same budgets and trust; a row that runs one of its outputs calls its
 //! `on_brick_output`.
-use super::super::events::{entity, id};
+use super::super::events::{InputExtra, entity, id};
 use super::*;
 use bri_events as ev;
 use bri_package_runtime::content::BRICK_INPUT_TARGETS;
+
+/// An Add-On input that follows one of the engine's (`follows`): Slayer's
+/// `onPlayerTouch(Team1)` after `onPlayerTouch`.
+#[derive(Clone, Debug)]
+pub(in crate::session) struct Follower {
+    /// The engine's input, as the host catalog names it.
+    native: String,
+    package: String,
+    input: String,
+}
 
 impl Session {
     /// What the running Add-Ons add to the event catalog. Sent to players
@@ -79,7 +89,7 @@ impl Session {
         if let Some(p) = player {
             ensure!(self.peers.contains_key(&p), "No such player");
         }
-        self.fire_package_input(brick, &declared, player);
+        self.fire_package_input(brick, &declared, player, Default::default());
         Ok(())
     }
 
@@ -103,6 +113,239 @@ impl Session {
             }
         }
         out
+    }
+
+    /// `fire_game_input`: run the rows wired to `input`, one of `package`'s
+    /// own inputs, on every brick of mini-game `game` (the bricks whose
+    /// owner's group plays in it), in brick order.
+    pub(in crate::session) fn package_fire_game_input(
+        &mut self,
+        package: &str,
+        game: u64,
+        input: &str,
+        player: Option<OwnerId>,
+        killer: Option<OwnerId>,
+    ) -> Result<()> {
+        let host = self.packages.as_ref().context("No packages are enabled")?;
+        let declared = host
+            .catalog
+            .behaviours()
+            .find(|(id, _)| *id == package)
+            .and_then(|(_, b)| {
+                b.brick_inputs
+                    .iter()
+                    .find(|i| i.name.eq_ignore_ascii_case(input))
+            })
+            .map(|i| i.name.clone())
+            .with_context(|| format!("`{input}` is not one of `{package}`'s brick_inputs"))?;
+        let game = bri_minigames::GameId(game);
+        self.minigames.game(game).context("No such mini-game")?;
+        for p in player.iter().chain(&killer) {
+            ensure!(self.peers.contains_key(p), "No such player");
+        }
+        // Programs edited this tick may listen to it now.
+        self.sync_event_programs(&BTreeSet::new());
+        let Some(world) = self.events.world.as_ref() else {
+            return Ok(());
+        };
+        let mut bricks: BTreeSet<BrickId> = world
+            .listeners(&declared)
+            .into_iter()
+            .map(|id| id.index)
+            .collect();
+        bricks.extend(self.dirty.iter());
+        let state = self.simulation.state();
+        let bricks: Vec<BrickId> = bricks
+            .into_iter()
+            .filter(|b| {
+                state.bricks.get(b).is_some_and(|b| {
+                    self.game_of(self.brick_group_owner_for(b.owner, Some(game))) == Some(game)
+                })
+            })
+            .collect();
+        let extra = InputExtra {
+            game: Some(game),
+            killer,
+        };
+        for brick in bricks {
+            self.fire_package_input(brick, &declared, player, extra);
+        }
+        Ok(())
+    }
+
+    /// The rows of events `owner` sent for `brick` that every Add-On with
+    /// `on_event_row` keeps; the others are taken out, and their reasons
+    /// returned to tell the player. A wrench send runs this before it
+    /// applies the rows (v20's `serverCmdAddEvent`).
+    pub fn review_event_rows(
+        &mut self,
+        owner: OwnerId,
+        brick: BrickId,
+        rows: &mut Vec<ev::Row>,
+    ) -> Vec<String> {
+        let Some(host) = self.packages.as_ref() else {
+            return Vec::new();
+        };
+        let hooks: Vec<String> = host
+            .catalog
+            .behaviours()
+            .filter(|(_, b)| b.on_event_row)
+            .map(|(id, _)| id.clone())
+            .collect();
+        if hooks.is_empty() || rows.is_empty() {
+            return Vec::new();
+        }
+        let Some(catalog) = self.event_catalog().cloned() else {
+            return Vec::new();
+        };
+        let mut refused = Vec::new();
+        let mut keep = Vec::with_capacity(rows.len());
+        for (index, row) in rows.iter().enumerate() {
+            let Some(view) = row_view(&catalog, index, row) else {
+                keep.push(true);
+                continue;
+            };
+            let mut kept = true;
+            for package in &hooks {
+                let answer = self.run_package(
+                    package,
+                    "on_event_row",
+                    vec![
+                        Dynamic::from_int(owner as i64),
+                        Dynamic::from_int(brick as i64),
+                        Dynamic::from_map(view.clone()),
+                    ],
+                    Budget::Command,
+                    Some(owner),
+                    None,
+                    None,
+                );
+                self.charge_work(package);
+                match answer {
+                    Ok(a) if a.as_bool() == Ok(false) => {
+                        refused.push(format!("You may not use the {} event.", row.output));
+                        kept = false;
+                    }
+                    Ok(a) if a.is_string() => {
+                        // A chat line's worth, as a player's own.
+                        let reason = a.into_string().unwrap_or_default();
+                        refused.push(reason.chars().take(REASON_CHARS).collect());
+                        kept = false;
+                    }
+                    _ => {}
+                }
+                if !kept {
+                    break;
+                }
+            }
+            keep.push(kept);
+        }
+        let mut keep = keep.into_iter();
+        rows.retain(|_| keep.next().unwrap_or(true));
+        refused
+    }
+
+    /// The running Add-Ons' inputs that follow one of `base`'s inputs.
+    pub(in crate::session) fn package_followers(&self, base: &ev::Catalog) -> Vec<Follower> {
+        let Some(host) = self.packages.as_ref() else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for (package, behaviour) in host.catalog.behaviours() {
+            for input in &behaviour.brick_inputs {
+                let Some(follows) = &input.follows else {
+                    continue;
+                };
+                // A host whose catalog has no such input never sets it
+                // off, so nothing follows it.
+                let Some(native) = base.input(follows) else {
+                    continue;
+                };
+                out.push(Follower {
+                    native: native.name.clone(),
+                    package: package.clone(),
+                    input: input.name.clone(),
+                });
+            }
+        }
+        out
+    }
+
+    /// `owner` set `input` off on `brick`: each Add-On with inputs that
+    /// follow it, wired on this brick, is asked with
+    /// `on_brick_input(input, brick, player)` and may answer with one of
+    /// them to run as well, set off by the same player (Slayer's
+    /// `onPlayerTouch(Team2)` for a Team 2 member).
+    pub(in crate::session) fn follow_input(&mut self, brick: BrickId, input: &str, owner: OwnerId) {
+        if !self
+            .events
+            .follows
+            .iter()
+            .any(|f| f.native.eq_ignore_ascii_case(input))
+        {
+            return;
+        }
+        let Some(world) = self.events.world.as_ref() else {
+            return;
+        };
+        let mut asked: Vec<&str> = Vec::new();
+        for f in &self.events.follows {
+            if f.native.eq_ignore_ascii_case(input)
+                && !asked.contains(&f.package.as_str())
+                && world
+                    .activation_count(id(brick), &f.input)
+                    .is_ok_and(|n| n > 0)
+            {
+                asked.push(&f.package);
+            }
+        }
+        let asked: Vec<String> = asked.into_iter().map(str::to_owned).collect();
+        for package in asked {
+            let answer = self.run_package(
+                &package,
+                "on_brick_input",
+                vec![
+                    input.to_owned().into(),
+                    Dynamic::from_int(brick as i64),
+                    Dynamic::from_int(owner as i64),
+                ],
+                Budget::Think,
+                Some(owner),
+                None,
+                None,
+            );
+            self.charge_work(&package);
+            let Ok(answer) = answer else {
+                continue;
+            };
+            if answer.is_unit() {
+                continue;
+            }
+            let name = answer.into_string().unwrap_or_default();
+            let follower = self.events.follows.iter().find(|f| {
+                f.package == package
+                    && f.native.eq_ignore_ascii_case(input)
+                    && f.input.eq_ignore_ascii_case(&name)
+            });
+            match follower.map(|f| f.input.clone()) {
+                Some(follower) => {
+                    self.fire_package_input(brick, &follower, Some(owner), Default::default())
+                }
+                None => {
+                    let d = Diagnostic::error(
+                        "brick_events.follows",
+                        format!(
+                            "on_brick_input answered `{name}`, not one of its inputs that \
+                             follow `{input}`"
+                        ),
+                    )
+                    .at(package.clone());
+                    if let Some(host) = self.packages.as_mut() {
+                        note(host, d);
+                    }
+                }
+            }
+        }
     }
 
     /// The running Add-Ons' outputs, as the event catalog lists them.
@@ -303,4 +546,49 @@ impl Session {
         self.owner_targets(source, &slots, &mut trigger.targets);
         ev::Apply::Chain(trigger)
     }
+}
+
+/// The most of an `on_event_row` reason a player is told.
+const REASON_CHARS: usize = 200;
+
+/// A row as `on_event_row` reads it: `#{ index, input, target, class,
+/// output, package }`, `class` being the target's class as the input lists
+/// it and `package` the Add-On whose output it is, or `()`. Preserved rows
+/// have none.
+fn row_view(
+    catalog: &ev::Catalog,
+    index: usize,
+    row: &ev::Row,
+) -> Option<bri_package_runtime::rhai::Map> {
+    if row.preserved.is_some() {
+        return None;
+    }
+    let input = catalog.input(&row.input)?;
+    let (target, class) = match &row.target {
+        ev::Target::Named(name) => (name.clone(), "fxDTSBrick".to_owned()),
+        ev::Target::Slot(slot) => input
+            .targets
+            .iter()
+            .find(|(s, _)| ev::Slot::parse(s) == Some(*slot))?
+            .clone(),
+        ev::Target::Derived(name) => input
+            .targets
+            .iter()
+            .find(|(s, _)| s.eq_ignore_ascii_case(name))?
+            .clone(),
+    };
+    let (_, output) = catalog
+        .row_output(&row.input, &row.target, &row.output)
+        .ok()?;
+    let mut view = bri_package_runtime::rhai::Map::new();
+    view.insert("index".into(), Dynamic::from_int(index as i64));
+    view.insert("input".into(), input.name.clone().into());
+    view.insert("target".into(), target.into());
+    view.insert("class".into(), class.into());
+    view.insert("output".into(), output.name.clone().into());
+    view.insert(
+        "package".into(),
+        output.package.clone().map_or(Dynamic::UNIT, Into::into),
+    );
+    Some(view)
 }

@@ -119,3 +119,9 @@ new ScriptObject(Slayer_PrefSO : Slayer_DefaultPrefSO)
 	permissionLevel = $Slayer::PermissionLevel["Any"];
 	variable = "%mini.clearStats";
 };
+new ScriptObject(Slayer_PrefSO : Slayer_DefaultPrefSO)
+{
+	defaultValue = 0;
+	permissionLevel = $Slayer::PermissionLevel["Host"];
+	variable = "%mini.restrictOutputEvents";
+};

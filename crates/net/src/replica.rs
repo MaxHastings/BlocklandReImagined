@@ -196,7 +196,7 @@ impl Replica {
         validate_addon_settings(&checkpoint.addon_settings)?;
         // The wrench checks each input fully when it adds them.
         ensure!(
-            checkpoint.brick_events.inputs.len() <= 64
+            checkpoint.brick_events.inputs.len() <= 128
                 && checkpoint.brick_events.targets.len() <= 32
                 && checkpoint.brick_events.outputs.len() <= 128,
             "Too many Add-On events"

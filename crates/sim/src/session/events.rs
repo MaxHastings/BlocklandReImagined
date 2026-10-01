@@ -64,7 +64,18 @@ pub(super) struct Events {
     /// `onFlagDropped`): they run once the phase is done
     /// (`fire_package_input`).
     advancing: bool,
-    deferred: Vec<(BrickId, String, Option<OwnerId>)>,
+    deferred: Vec<(BrickId, String, Option<OwnerId>, InputExtra)>,
+    /// Add-On inputs that follow one of the engine's (`follows`), asked
+    /// about when a player sets that one off.
+    pub(super) follows: Vec<super::packages::Follower>,
+}
+/// Targets only some inputs have, for `fire_input_with`.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct InputExtra {
+    /// The mini-game the input is about (`onMinigameRoundStart`).
+    pub(super) game: Option<mg::GameId>,
+    /// Whoever killed the player it is about (`onMinigameDeath`).
+    pub(super) killer: Option<OwnerId>,
 }
 /// Most inputs rules may fire from inside one event phase.
 const MAX_DEFERRED_INPUTS: usize = 256;
@@ -175,12 +186,14 @@ impl Session {
             datablocks,
         };
         let merged = catalog.extended(&self.package_brick_events())?;
+        let follows = self.package_followers(&catalog);
         let world = EventWorld::new(merged, bindings.clone(), event_limits())?;
         self.events = Events {
             world: Some(world),
             base: Some(catalog),
             bindings,
             sounds: std::mem::take(&mut self.events.sounds),
+            follows,
             ..Default::default()
         };
         Ok(())
@@ -354,7 +367,7 @@ impl Session {
         }
     }
     /// Keep engine programs in step with changed bricks.
-    fn sync_event_programs(&mut self, changed: &BTreeSet<BrickId>) {
+    pub(in crate::session) fn sync_event_programs(&mut self, changed: &BTreeSet<BrickId>) {
         if self.events.world.is_none() {
             return;
         }
@@ -372,6 +385,17 @@ impl Session {
     /// Fire an input on a brick. `player` supplies the Player/Bot, Client
     /// and MiniGame targets the input exposes.
     pub(super) fn fire_input(&mut self, brick: BrickId, input: &str, player: Option<OwnerId>) {
+        self.fire_input_with(brick, input, player, InputExtra::default());
+    }
+    /// `fire_input` with the targets only some inputs have: the mini-game
+    /// it is about, when no player gives one, and a killer.
+    pub(super) fn fire_input_with(
+        &mut self,
+        brick: BrickId,
+        input: &str,
+        player: Option<OwnerId>,
+        extra: InputExtra,
+    ) {
         // Bricks edited since the last event phase run their new program.
         self.follow_palette();
         if self.dirty.contains(&brick) || !self.events.scanned {
@@ -440,12 +464,33 @@ impl Session {
             self.player_targets(brick, &slots, owner, &mut trigger);
         }
         self.owner_targets(brick, &slots, &mut trigger.targets);
+        if let Some(game) = extra.game.filter(|_| slots.contains(&Slot::MiniGame)) {
+            trigger
+                .targets
+                .entry(Slot::MiniGame)
+                .or_insert(entity(Class::MiniGame, game.0));
+        }
+        if let Some(killer) = extra.killer.filter(|k| self.peers.contains_key(k)) {
+            if slots.contains(&Slot::KillerPlayer) && self.is_alive(killer) {
+                trigger
+                    .targets
+                    .insert(Slot::KillerPlayer, entity(Class::Player, killer));
+            }
+            if slots.contains(&Slot::KillerClient) && !self.is_bot(killer) {
+                trigger
+                    .targets
+                    .insert(Slot::KillerClient, entity(Class::Client, killer));
+            }
+        }
         let world = self.events.world.as_mut().unwrap();
         if let Err(error) = world.trigger(trigger) {
             note(
                 &mut self.events.diagnostics,
                 format!("Brick {brick} {input}: {error:#}"),
             );
+        }
+        if let Some(owner) = player.filter(|o| !self.is_bot(*o)) {
+            self.follow_input(brick, input, owner);
         }
     }
     /// The targets an input set off by `owner` offers: their player and
@@ -593,8 +638,8 @@ impl Session {
             }
         });
         self.events.world = Some(world);
-        for (brick, input, player) in std::mem::take(&mut self.events.deferred) {
-            self.fire_input(brick, &input, player);
+        for (brick, input, player, extra) in std::mem::take(&mut self.events.deferred) {
+            self.fire_input_with(brick, &input, player, extra);
         }
         result
     }
@@ -625,11 +670,14 @@ impl Session {
         brick: BrickId,
         input: &str,
         player: Option<OwnerId>,
+        extra: InputExtra,
     ) {
         if !self.events.advancing {
-            self.fire_input(brick, input, player);
+            self.fire_input_with(brick, input, player, extra);
         } else if self.events.deferred.len() < MAX_DEFERRED_INPUTS {
-            self.events.deferred.push((brick, input.to_owned(), player));
+            self.events
+                .deferred
+                .push((brick, input.to_owned(), player, extra));
         } else {
             note(
                 &mut self.events.diagnostics,

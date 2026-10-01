@@ -427,6 +427,31 @@ pub(super) fn register(engine: &mut Engine) {
     engine.register_fn("fire_brick_input", move |brick: Dynamic, input: &str| {
         fire(brick, input, Dynamic::UNIT)
     });
+    let optional = |p: Dynamic| -> Fallible<Option<u64>> {
+        if p.is_unit() {
+            Ok(None)
+        } else {
+            Ok(Some(id(&p)?))
+        }
+    };
+    let fire_game = move |game: Dynamic, input: &str, player: Dynamic, killer: Dynamic| {
+        push(Op::FireGameInput {
+            game: id(&game)?,
+            input: input.to_owned(),
+            player: optional(player)?,
+            killer: optional(killer)?,
+        })
+    };
+    engine.register_fn("fire_game_input", fire_game);
+    engine.register_fn(
+        "fire_game_input",
+        move |game: Dynamic, input: &str, player: Dynamic| {
+            fire_game(game, input, player, Dynamic::UNIT)
+        },
+    );
+    engine.register_fn("fire_game_input", move |game: Dynamic, input: &str| {
+        fire_game(game, input, Dynamic::UNIT, Dynamic::UNIT)
+    });
     engine.register_fn("drop_item", drop_with);
     engine.register_fn("remove_drop", |drop: Dynamic| {
         push(Op::RemoveDrop { drop: id(&drop)? })

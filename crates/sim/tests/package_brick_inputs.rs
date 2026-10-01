@@ -11,7 +11,7 @@ use bri_package_runtime::Catalog;
 use bri_sim::{
     definitions::{Definition, Definitions},
     player::MoveInput,
-    session::{Command, PackageArg, PackageCommand, Reply, Session},
+    session::{Command, MiniGameRequest, PackageArg, PackageCommand, Reply, Session},
     simulation::Simulation,
 };
 use bri_world::{EventRow, EventTarget, EventValue, OwnerId, World, authority::Edit};
@@ -23,6 +23,10 @@ use std::{path::PathBuf, sync::Arc};
 const SCRIPT: &str = r#"
 fn cmd_ping(p, brick) { fire_brick_input(brick, "onPing", p); }
 fn cmd_steal(p, brick) { fire_brick_input(brick, "onActivate", p); }
+fn cmd_round(p, game) { fire_game_input(game, "onRound"); }
+fn cmd_died(p, killer) { fire_game_input(player(p).minigame, "onDied", p, killer); }
+// Whoever sets off `onActivate` sets off `onActivate(Left)` too.
+fn on_brick_input(input, brick, p) { `${input}(Left)` }
 "#;
 
 struct Root(PathBuf);
@@ -54,7 +58,9 @@ fn add_ons(name: &str, inputs: serde_json::Value) -> (Root, Arc<Catalog>) {
         "brick_inputs": inputs,
         "commands": [
             { "name": "ping", "args": ["int"] },
-            { "name": "steal", "args": ["int"] }
+            { "name": "steal", "args": ["int"] },
+            { "name": "round", "args": ["int"] },
+            { "name": "died", "args": ["int"] }
         ]
     });
     std::fs::write(dir.join("package.json"), manifest.to_string()).unwrap();
@@ -236,4 +242,134 @@ fn an_input_the_engine_already_has_is_refused() {
     assert!(format!("{error:#}").contains("already taken"), "{error:#}");
     // The host keeps its own catalog.
     assert!(s.event_catalog().unwrap().input("onActivate").is_some());
+}
+
+fn plant(s: &mut Session, owner: OwnerId, seq: u64, x: f32) -> u64 {
+    let Reply::Planted(brick) = s
+        .command(
+            owner,
+            seq,
+            Command::Plant {
+                definition: "plate".into(),
+                position: [x, 0.3, -3.0],
+                quarter_turns: 0,
+                color: 0,
+            },
+        )
+        .unwrap()
+    else {
+        panic!("expected a plant")
+    };
+    brick
+}
+
+fn paint(input: &str, target: bri_events::Slot) -> EventRow {
+    EventRow {
+        preserved: None,
+        enabled: true,
+        input: input.into(),
+        delay_ms: 0,
+        target: EventTarget::Slot(target),
+        output: "setColor".into(),
+        params: vec![EventValue::Color(1)],
+    }
+}
+
+/// An input that follows one of the engine's (`follows`, Slayer's
+/// `onActivate(Team2)`): a brick with rows on it asks the rules, and the
+/// input they answer runs too, set off by the same player.
+#[test]
+fn an_input_that_follows_the_engines_runs_when_the_rules_answer_it() {
+    let (_root, add_ons) = add_ons(
+        "follows",
+        json!([
+            { "name": "onActivate(Left)", "targets": ["Player", "Client"], "follows": "onActivate" },
+            { "name": "onActivate(Right)", "targets": ["Player", "Client"], "follows": "onActivate" }
+        ]),
+    );
+    let mut s = session();
+    s.set_event_catalog(bri_events::testing::catalog(), Vec::new())
+        .unwrap();
+    s.install_packages(add_ons, None).unwrap();
+    let builder = s.join("Builder".into(), Vec3::new(5.0, 0.05, 0.0), false).unwrap();
+    steps(&mut s, &[builder], 10);
+    let left = plant(&mut s, builder, 1, 5.0);
+    let right = plant(&mut s, builder, 2, 7.0);
+    s.edit_brick(builder, left, Edit::Events(vec![paint("onActivate(Left)", bri_events::Slot::SelfBrick)]))
+        .unwrap();
+    s.edit_brick(builder, right, Edit::Events(vec![paint("onActivate(Right)", bri_events::Slot::SelfBrick)]))
+        .unwrap();
+    for brick in [left, right] {
+        s.fire_brick_input(brick, "onActivate", Some(builder));
+    }
+    steps(&mut s, &[builder], 2);
+    let colors = |s: &Session| [left, right].map(|b| s.simulation().state().bricks[&b].color);
+    assert_eq!(colors(&s), [1, 0], "only the answered input ran");
+    assert!(s.package_diagnostics().is_empty(), "{:?}", s.package_diagnostics());
+}
+
+/// An input fired on every brick of a mini-game (v20 Slayer's
+/// `processMultiSourceInputEvent`): bricks outside the game stay still, and
+/// the killer is the row's `Player(Killer)`.
+#[test]
+fn a_game_input_runs_on_the_games_bricks_with_the_killer() {
+    use bri_events::Slot;
+    let (_root, add_ons) = add_ons(
+        "game",
+        json!([
+            { "name": "onRound", "targets": ["MiniGame"] },
+            { "name": "onDied", "targets": ["Client", "Player(Killer)", "Client(Killer)", "MiniGame"] }
+        ]),
+    );
+    let mut s = session();
+    s.set_event_catalog(bri_events::testing::catalog(), Vec::new())
+        .unwrap();
+    s.install_packages(add_ons, None).unwrap();
+    let host = s.join("Host".into(), Vec3::new(5.0, 0.05, 0.0), false).unwrap();
+    let rival = s.join("Rival".into(), Vec3::new(-5.0, 0.05, 0.0), false).unwrap();
+    let stranger = s.join("Stranger".into(), Vec3::new(0.0, 0.05, 5.0), false).unwrap();
+    steps(&mut s, &[host, rival, stranger], 10);
+    s.command(
+        host,
+        1,
+        Command::MiniGame(MiniGameRequest::Create {
+            color: 0,
+            settings: bri_minigames::Settings {
+                loadout: Default::default(),
+                ..Default::default()
+            },
+        }),
+    )
+    .unwrap();
+    let game = s.minigame_views()[0].id;
+    s.command(rival, 1, Command::MiniGame(MiniGameRequest::Join { game }))
+        .unwrap();
+    let all = [host, rival, stranger];
+    steps(&mut s, &all, 2);
+    let inside = plant(&mut s, host, 2, 5.0);
+    let outside = plant(&mut s, stranger, 1, -5.0);
+    for (owner, brick) in [(host, inside), (stranger, outside)] {
+        let rows = vec![
+            paint("onRound", Slot::SelfBrick),
+            EventRow {
+                output: "kill".into(),
+                params: vec![],
+                ..paint("onDied", Slot::KillerPlayer)
+            },
+        ];
+        s.edit_brick(owner, brick, Edit::Events(rows)).unwrap();
+    }
+    run(&mut s, host, 3, "round", game).unwrap();
+    steps(&mut s, &all, 2);
+    let colors = |s: &Session| [inside, outside].map(|b| s.simulation().state().bricks[&b].color);
+    assert_eq!(colors(&s), [1, 0], "only the game's brick");
+
+    // Past the spawn protection joining the game gave them.
+    steps(&mut s, &all, 320);
+    run(&mut s, host, 4, "died", rival).unwrap();
+    steps(&mut s, &all, 2);
+    let vitals = s.vitals();
+    assert!(!vitals[&rival].alive, "the row aimed at the killer ran");
+    assert!(vitals[&host].alive);
+    assert!(s.package_diagnostics().is_empty(), "{:?}", s.package_diagnostics());
 }
