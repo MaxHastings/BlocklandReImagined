@@ -72,43 +72,35 @@ function GameConnection::spectateAutoCam(%this)
 function Slayer_SpectatePathCamData::onNode(%this, %camera, %node)
 {
 	if(%node == 2)
-		%camera.client.spectateAutoCam();
+	%camera.client.spectateAutoCam();
 }
 
 function GameConnection::joinTeam(%this, %flag, %reason, %noRespawn)
 {
-	%team = %mini.Teams.getTeamFromName(%flag);
 	if(isObject(%team))
-		%team.addMember(%this, %reason, %noRespawn, %noRespawn);
+	%team.addMember(%this, %reason, %noRespawn, %noRespawn);
 }
 
 function GameConnection::applyUniform(%this)
 {
-	switch(%team.uniform)
-	{
-		case 2:
-			hideAllNodes(%player);
-			%player.unHideNode(copHat);
-			if(!strLen(%player.skinColor))
-			{
-				%index = getRandom($Slayer::Server::Bots::SkinColorCount);
-				%player.skinColor = $Slayer::Server::Bots::SkinColor[%index];
-				if(!strLen(%player.skinColor))
-					%player.skinColor = "0.9 0.8 0.6 1";
-			}
-		case 3:
-			if(%val $= "TEAMCOLOR")
-				%val = %color;
-	}
+	case 2:
+	hideAllNodes(%player);
+	%player.unHideNode(copHat);
+	%index = getRandom($Slayer::Server::Bots::SkinColorCount);
+	if(!strLen(%player.skinColor))
+	%player.skinColor = "0.9 0.8 0.6 1";
+	case 3:
+	if(%val $= "TEAMCOLOR")
+	%val = %color;
 }
 
 function GameConnection::createPlayer(%this, %pos)
 {
 	%this.player.changeDatablock(%team.playerDatablock);
-	for(%i=0; %i < %team.playerDatablock.maxTools; %i++)
-		%this.forceEquip(%i, %team.startEquip[%i]);
+	%i++)
+	%this.forceEquip(%i, %team.startEquip[%i]);
 	if((%ps = %team.playerScale) != 1)
-		%this.player.setScale(%ps SPC %ps SPC %ps);
+	%this.player.setScale(%ps SPC %ps SPC %ps);
 	if(isObject(%team) && %team.respawnTime >= 0)
-		%this.setRespawnTime(%team.respawnTime);
+	%this.setRespawnTime(%team.respawnTime);
 }

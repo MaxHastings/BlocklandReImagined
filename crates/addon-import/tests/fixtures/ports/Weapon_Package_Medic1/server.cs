@@ -25,7 +25,7 @@ else
 
 if(ForceRequiredAddOn("Weapon_Gun") == $Error::AddOn_NotFound)
 {
-   error("ERROR: Weapon_Package_Medic1 - required add-on Weapon_Gun not found");
+   error("Weapon_Package_Medic1 needs Weapon_Gun, which is missing.");
 }
 else
 {
@@ -38,50 +38,31 @@ else
 // Who may mend whom.
 function TT_canHeal(%client, %targetObject)
 {
-   if(%client && (%targetObject.getType() & $TypeMasks::PlayerObjectType) && ($Pref::Server::TT::MedicHealBots || %targetObject.getClassName() $= "Player"))
-   {
-      if(isObject(%mini = getMinigameFromObject(%client)))
-      {
-         if(%mini == getMinigameFromObject(%targetObject))
-         {
-            if(!$Pref::Server::TT::MedicHealEnemy && %mini.isSlayerMinigame)
-            {
-               %team1 = %client.getTeam();
-               %team2 = %targetObject.client.getTeam();
-               if(!%team1 || %team1.isAlliedTeam(%team2))
-                  return 1;
-            }
-            else
-               return 1;
-         }
-      }
-      else if($Server::LAN && !isObject(getMinigameFromObject(%targetObject)))
-         return 1;
-      else if(isObject(%targetObject.spawnBrick) && %targetObject.getClassName() $= "AIPlayer")
-      {
-         if(%targetObject.spawnBrick.getGroup().bl_id == getBL_IDFromObject(%client))
-            return 1;
-      }
-   }
-   return 0;
+	if(%client && (%targetObject.getType() & $TypeMasks::PlayerObjectType) && ($Pref::Server::TT::MedicHealBots || %targetObject.getClassName() $= "Player"))
+	{
+	if(%mini == getMinigameFromObject(%targetObject))
+	{
+	if(!$Pref::Server::TT::MedicHealEnemy && %mini.isSlayerMinigame)
+	{
+	else if($Server::LAN && !isObject(getMinigameFromObject(%targetObject)))
+	return 1;
+	if(%targetObject.spawnBrick.getGroup().bl_id == getBL_IDFromObject(%client))
+	return 1;
+	}}}
 }
 
 // A mending hit: some health now, a little more over time.
 function TT_projectileHeal(%obj, %col, %healBurst)
 {
-   %healer = %obj.client;
-   if(TT_canHeal(%healer, %col))
-   {
-      if(%col.getDamageLevel() >= %healBurst)
-         %col.spawnExplosion(healCrossProjectile, %col.getScale());
-      %col.setDamageLevel(%col.getDamageLevel() - %healBurst);
-
-      %colName = %col.getPlayerName();
-      %healerName = %healer.getPlayerName();
-      if(%colName !$= "")
-         bottomPrint(%obj.client, "\c2" @ %colName @ " is patched up.", 2, 1);
-      if(%healerName !$= "")
-         bottomPrint(%col.client, "\c2" @ %healerName @ " patched you up.", 2, 1);
-      %col.emote(medigunHealImage);
-   }
+	if(TT_canHeal(%healer, %col))
+	{
+	if(%col.getDamageLevel() >= %healBurst)
+	%col.spawnExplosion(healCrossProjectile, %col.getScale());
+	%col.setDamageLevel(%col.getDamageLevel() - %healBurst);
+	if(%colName !$= "")
+	bottomPrint(%obj.client, "\c2" @ %colName @ " is patched up.", 2, 1);
+	if(%healerName !$= "")
+	bottomPrint(%col.client, "\c2" @ %healerName @ " patched you up.", 2, 1);
+	%col.emote(medigunHealImage);
+	}
 }

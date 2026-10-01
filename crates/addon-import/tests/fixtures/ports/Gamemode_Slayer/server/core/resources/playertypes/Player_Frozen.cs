@@ -28,8 +28,8 @@ package Stand_In_Frozen
 {
 	function serverCmdUseTool(%client, %slot)
 	{
-		if(%client.player.getDatablock().getID() != PlayerFrozenArmor.getID())
-			parent::serverCmdUseTool(%client, %slot);
-	}
+	if(%client.player.getDatablock().getID() != PlayerFrozenArmor.getID())
+	parent::serverCmdUseTool(%client, %slot);
+}
 };
 activatePackage(Stand_In_Frozen);

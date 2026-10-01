@@ -94,95 +94,70 @@ datablock ShapeBaseImageData(MicroSMGImage : standinSMGImage)
 
 function NavalSMGImage::onFire(%this,%obj,%slot)
 {
-   %projectile = %this.projectile;
-   %spread = 0.002;
-   %shellCount = 1;
-   %obj.playThread(2, plant);
-   %this.TT_decrementAmmo(%obj);
-   return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	%spread = 0.002;
+	%shellCount = 1;
+	%obj.playThread(2, plant);
+	%this.TT_decrementAmmo(%obj);
+	return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
 }
 
 function NavalSubmachinegunProjectile1::damage(%this,%obj,%col,%fade,%pos,%normal)
 {
-   if(%col.getType() & $TypeMasks::PlayerObjectType)
-   {
-      TT_dampenVelocity(%col, 2);
-   }
-   Parent::damage(%this,%obj,%col,%fade,%pos,%normal);
+	TT_dampenVelocity(%col, 2);
 }
 
 function ClassicSMGImage::onFire(%this,%obj,%slot)
 {
-   %projectile = %this.projectile;
-   %spread = 0.002;
-   %shellCount = 1;
-   %obj.playThread(2, plant);
-   %this.TT_decrementAmmo(%obj);
-   return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	%spread = 0.002;
+	%shellCount = 1;
+	%obj.playThread(2, plant);
+	%this.TT_decrementAmmo(%obj);
+	return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
 }
 
 function ClassicSubmachinegunProjectile1::damage(%this,%obj,%col,%fade,%pos,%normal)
 {
-   if(%col.getType() & $TypeMasks::PlayerObjectType)
-   {
-      TT_dampenVelocity(%col, 2);
-   }
-   Parent::damage(%this,%obj,%col,%fade,%pos,%normal);
+	TT_dampenVelocity(%col, 2);
 }
 
 function ModernSMGImage::onFire(%this,%obj,%slot)
 {
-   %projectile = %this.projectile;
-   %spread = 0.002;
-   %shellCount = 1;
-   %obj.playThread(2, plant);
-   %this.TT_decrementAmmo(%obj);
-   return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	%spread = 0.002;
+	%shellCount = 1;
+	%obj.playThread(2, plant);
+	%this.TT_decrementAmmo(%obj);
+	return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
 }
 
 function ModernSubmachinegunProjectile1::damage(%this,%obj,%col,%fade,%pos,%normal)
 {
-   if(%col.getType() & $TypeMasks::PlayerObjectType)
-   {
-      TT_dampenVelocity(%col, 2);
-   }
-   Parent::damage(%this,%obj,%col,%fade,%pos,%normal);
+	TT_dampenVelocity(%col, 2);
 }
 
 function SilencedSMGImage::onFire(%this,%obj,%slot)
 {
-   %projectile = %this.projectile;
-   %spread = 0.002;
-   %shellCount = 1;
-   %obj.playThread(2, plant);
-   %this.TT_decrementAmmo(%obj);
-   return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	%spread = 0.002;
+	%shellCount = 1;
+	%obj.playThread(2, plant);
+	%this.TT_decrementAmmo(%obj);
+	return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
 }
 
 function SilencedSubmachinegunProjectile1::damage(%this,%obj,%col,%fade,%pos,%normal)
 {
-   if(%col.getType() & $TypeMasks::PlayerObjectType)
-   {
-      TT_dampenVelocity(%col, 2);
-   }
-   Parent::damage(%this,%obj,%col,%fade,%pos,%normal);
+	TT_dampenVelocity(%col, 2);
 }
 
 function MicroSMGImage::onFire(%this,%obj,%slot)
 {
-   %projectile = %this.projectile;
-   %spread = 0.002;
-   %shellCount = 1;
-   %obj.playThread(2, plant);
-   %this.TT_decrementAmmo(%obj);
-   return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	%spread = 0.002;
+	%shellCount = 1;
+	%obj.playThread(2, plant);
+	%this.TT_decrementAmmo(%obj);
+	return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
 }
 
 function MicroSubmachinegunProjectile1::damage(%this,%obj,%col,%fade,%pos,%normal)
 {
-   if(%col.getType() & $TypeMasks::PlayerObjectType)
-   {
-      TT_dampenVelocity(%col, 2);
-   }
-   Parent::damage(%this,%obj,%col,%fade,%pos,%normal);
+	TT_dampenVelocity(%col, 2);
 }

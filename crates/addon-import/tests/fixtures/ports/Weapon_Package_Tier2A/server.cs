@@ -4,7 +4,7 @@
 
 if(%error == $Error::AddOn_NotFound)
 {
-   error("ERROR: Weapon_Package_Tier2A - required add-on Weapon_Package_Tier1 not found");
+   error("Weapon_Package_Tier2A needs Weapon_Package_Tier1, which is missing.");
 }
 else
 {

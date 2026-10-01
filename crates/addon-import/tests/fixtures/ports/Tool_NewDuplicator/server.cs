@@ -202,7 +202,7 @@ function NDM_BoxSelect::onShiftBrick(%this, %client, %x, %y, %z)
 
 function NDM_BoxSelect::onSuperShiftBrick(%this, %client, %x, %y, %z)
 {
-   %this.onShiftBrick(%client, %x * 4, %y * 4, %z * 10);
+	%this.onShiftBrick(%client, %x * 4, %y * 4, %z * 10);
 }
 
 function NDM_BoxSelect::onRotateBrick(%this, %client) { %client.ndSelectionBox.switchCorner(); }
@@ -308,9 +308,9 @@ function serverCmdDupClients(%client) { messageClient(%client, '', "New duplicat
 
 function serverCmdMirErrors(%client)
 {
-   messageClient(%client, '', "These bricks are asymmetric and probably mirrored incorrectly:");
-   messageClient(%client, '', "These bricks are not vertically symmetric and probably incorrect:");
-   messageClient(%client, '', "There were no mirror errors in your last plant attempt.");
+	messageClient(%client, '', "These bricks are asymmetric and probably mirrored incorrectly:");
+	messageClient(%client, '', "These bricks are not vertically symmetric and probably incorrect:");
+	messageClient(%client, '', "There were no mirror errors in your last plant attempt.");
 }
 
 function serverCmdClearDups(%client)
@@ -330,7 +330,7 @@ function serverCmdUndoBrick(%client)
 function ND_Selection::finishStackSelection(%this)
 {
    %msg = "Selected " @ %this.brickCount @ " (Limit Reached) " @ %this.trustFailCount @ " missing trust";
-   commandToClient(%this.client, 'centerPrint', %msg, 5);
+   commandToClient(%this.client, 'centerPrint', %msg, 4);
 }
 
 function ND_Selection::finishBoxSelection(%this)
@@ -340,13 +340,13 @@ function ND_Selection::finishBoxSelection(%this)
 
 function ND_Selection::finishPlant(%this)
 {
-   commandToClient(%this.client, 'centerPrint', "Planted, some blocked. Some floating.", 4);
+	commandToClient(%this.client, 'centerPrint', "Planted, some blocked. Some floating.", 4);
 }
 
 function ND_Selection::finishCutting(%this)
 {
    %msg = "<font:Verdana:20>\c6Cut \c3" @ %this.cutSuccessCount;
-   commandToClient(%this.client, 'centerPrint', %msg, 8);
+   commandToClient(%this.client, 'centerPrint', %msg, 6);
 }
 
 function serverCmdMirrorX(%client) { %client.ndMirror(0); }

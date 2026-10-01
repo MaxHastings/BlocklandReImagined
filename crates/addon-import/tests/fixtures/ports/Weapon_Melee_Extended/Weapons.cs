@@ -64,50 +64,50 @@ datablock ShapeBaseImageData(CombatKnifeImage)
 
 function CombatKnifeImage::onFire(%this, %obj, %slot)
 {
-   %obj.playThread(2, shiftTo);
-   if(%obj.getDamagePercent() >= 1.0)
-   {
-      %slot = 0;
-   }
-   else
-   {
-      %slot = 3;
-   }
-   %obj.playThread(%slot, spearThrow);
-   if(getRandom(0,1))
-   {
-      %this.TT_raycastExplosionBrickSound = standinClinkSound;
-   }
-   else
-   {
-      %this.TT_raycastExplosionBrickSound = standinSliceSound;
-   }
-   %this.TT_raycastDirectDamage = 120;
-   Parent::onFire(%this, %obj, %slot);
+	%obj.playThread(2, shiftTo);
+	if(%obj.getDamagePercent() >= 1.0)
+	{
+	%slot = 0;
+	}
+	else
+	{
+	%slot = 3;
+	}
+	%obj.playThread(%slot, spearThrow);
+	if(getRandom(0,1))
+	{
+	%this.TT_raycastExplosionBrickSound = standinClinkSound;
+	}
+	else
+	{
+	%this.TT_raycastExplosionBrickSound = standinSliceSound;
+	}
+	%this.TT_raycastDirectDamage = 120;
+	Parent::onFire(%this, %obj, %slot);
 }
 
 function CombatKnifeImage::onStabFire(%this, %obj, %slot)
 {
-   %obj.playThread(2, shiftTo);
-   if(%obj.getDamagePercent() >= 1.0)
-   {
-      %slot = 0;
-   }
-   else
-   {
-      %slot = 3;
-   }
-   %obj.playThread(%slot, shiftDown);
-   if(getRandom(0,1))
-   {
-      %this.TT_raycastExplosionBrickSound = standinClinkSound;
-   }
-   else
-   {
-      %this.TT_raycastExplosionBrickSound = standinSliceSound;
-   }
-   %this.TT_raycastDirectDamage = 40;
-   Parent::onFire(%this, %obj, %slot);
+	%obj.playThread(2, shiftTo);
+	if(%obj.getDamagePercent() >= 1.0)
+	{
+	%slot = 0;
+	}
+	else
+	{
+	%slot = 3;
+	}
+	%obj.playThread(%slot, shiftDown);
+	if(getRandom(0,1))
+	{
+	%this.TT_raycastExplosionBrickSound = standinClinkSound;
+	}
+	else
+	{
+	%this.TT_raycastExplosionBrickSound = standinSliceSound;
+	}
+	%this.TT_raycastDirectDamage = 40;
+	Parent::onFire(%this, %obj, %slot);
 }
 
 function CombatKnifeImage::onCharge(%this, %obj, %slot)
@@ -117,7 +117,7 @@ function CombatKnifeImage::onCharge(%this, %obj, %slot)
 
 function CombatKnifeImage::TT_isRaycastCritical(%this, %obj, %slot, %col, %pos, %normal, %hit)
 {
-   return TT_isMeleeRaycastCrit(%this, %obj, %slot, %col, %pos, %normal, %hit);
+	return TT_isMeleeRaycastCrit(%this, %obj, %slot, %col, %pos, %normal, %hit);
 }
 
 datablock ItemData(iceaxeItem)
@@ -188,33 +188,33 @@ datablock ShapeBaseImageData(iceaxeImage)
 
 function iceaxeImage::onFire(%this, %obj, %slot)
 {
-   if(%obj.getDamagePercent() >= 1.0)
-      return;
-   %obj.playThread(2, shiftTo);
-   if(getRandom(0,1))
-   {
-      %this.TT_raycastExplosionBrickSound = standinClinkSound;
-   }
-   else
-   {
-      %this.TT_raycastExplosionBrickSound = standinSliceSound;
-   }
-   Parent::onFire(%this, %obj, %slot);
+	if(%obj.getDamagePercent() >= 1.0)
+	return;
+	%obj.playThread(2, shiftTo);
+	if(getRandom(0,1))
+	{
+	%this.TT_raycastExplosionBrickSound = standinClinkSound;
+	}
+	else
+	{
+	%this.TT_raycastExplosionBrickSound = standinSliceSound;
+	}
+	Parent::onFire(%this, %obj, %slot);
 }
 
 function iceaxeImage::onActivate(%this, %obj, %slot)
 {
-   %obj.playthread(2, plant);
+	%obj.playthread(2, plant);
 }
 
 function iceaxeImage::onPreFire(%this, %obj, %slot)
 {
-   %obj.playthread(2, shiftAway);
+	%obj.playthread(2, shiftAway);
 }
 
 function iceaxeImage::TT_isRaycastCritical(%this, %obj, %slot, %col, %pos, %normal, %hit)
 {
-   return TT_isMeleeRaycastCrit(%this, %obj, %slot, %col, %pos, %normal, %hit);
+	return TT_isMeleeRaycastCrit(%this, %obj, %slot, %col, %pos, %normal, %hit);
 }
 
 
@@ -286,33 +286,33 @@ datablock ShapeBaseImageData(L4BBatonImage)
 
 function L4BBatonImage::onFire(%this, %obj, %slot)
 {
-   if(%obj.getDamagePercent() >= 1.0)
-      return;
-   %obj.playThread(2, shiftTo);
-   if(getRandom(0,1))
-   {
-      %this.TT_raycastExplosionBrickSound = standinClinkSound;
-   }
-   else
-   {
-      %this.TT_raycastExplosionBrickSound = standinSliceSound;
-   }
-   Parent::onFire(%this, %obj, %slot);
+	if(%obj.getDamagePercent() >= 1.0)
+	return;
+	%obj.playThread(2, shiftTo);
+	if(getRandom(0,1))
+	{
+	%this.TT_raycastExplosionBrickSound = standinClinkSound;
+	}
+	else
+	{
+	%this.TT_raycastExplosionBrickSound = standinSliceSound;
+	}
+	Parent::onFire(%this, %obj, %slot);
 }
 
 function L4BBatonImage::onActivate(%this, %obj, %slot)
 {
-   %obj.playthread(2, plant);
+	%obj.playthread(2, plant);
 }
 
 function L4BBatonImage::onPreFire(%this, %obj, %slot)
 {
-   %obj.playthread(2, shiftAway);
+	%obj.playthread(2, shiftAway);
 }
 
 function L4BBatonImage::TT_isRaycastCritical(%this, %obj, %slot, %col, %pos, %normal, %hit)
 {
-   return TT_isMeleeRaycastCrit(%this, %obj, %slot, %col, %pos, %normal, %hit);
+	return TT_isMeleeRaycastCrit(%this, %obj, %slot, %col, %pos, %normal, %hit);
 }
 
 
@@ -384,33 +384,33 @@ datablock ShapeBaseImageData(L4BCrowbarImage)
 
 function L4BCrowbarImage::onFire(%this, %obj, %slot)
 {
-   if(%obj.getDamagePercent() >= 1.0)
-      return;
-   %obj.playThread(2, shiftTo);
-   if(getRandom(0,1))
-   {
-      %this.TT_raycastExplosionBrickSound = standinClinkSound;
-   }
-   else
-   {
-      %this.TT_raycastExplosionBrickSound = standinSliceSound;
-   }
-   Parent::onFire(%this, %obj, %slot);
+	if(%obj.getDamagePercent() >= 1.0)
+	return;
+	%obj.playThread(2, shiftTo);
+	if(getRandom(0,1))
+	{
+	%this.TT_raycastExplosionBrickSound = standinClinkSound;
+	}
+	else
+	{
+	%this.TT_raycastExplosionBrickSound = standinSliceSound;
+	}
+	Parent::onFire(%this, %obj, %slot);
 }
 
 function L4BCrowbarImage::onActivate(%this, %obj, %slot)
 {
-   %obj.playthread(2, plant);
+	%obj.playthread(2, plant);
 }
 
 function L4BCrowbarImage::onPreFire(%this, %obj, %slot)
 {
-   %obj.playthread(2, shiftAway);
+	%obj.playthread(2, shiftAway);
 }
 
 function L4BCrowbarImage::TT_isRaycastCritical(%this, %obj, %slot, %col, %pos, %normal, %hit)
 {
-   return TT_isMeleeRaycastCrit(%this, %obj, %slot, %col, %pos, %normal, %hit);
+	return TT_isMeleeRaycastCrit(%this, %obj, %slot, %col, %pos, %normal, %hit);
 }
 
 
@@ -482,33 +482,33 @@ datablock ShapeBaseImageData(l4bPanImage)
 
 function l4bPanImage::onFire(%this, %obj, %slot)
 {
-   if(%obj.getDamagePercent() >= 1.0)
-      return;
-   %obj.playThread(2, shiftTo);
-   if(getRandom(0,1))
-   {
-      %this.TT_raycastExplosionBrickSound = standinClinkSound;
-   }
-   else
-   {
-      %this.TT_raycastExplosionBrickSound = standinSliceSound;
-   }
-   Parent::onFire(%this, %obj, %slot);
+	if(%obj.getDamagePercent() >= 1.0)
+	return;
+	%obj.playThread(2, shiftTo);
+	if(getRandom(0,1))
+	{
+	%this.TT_raycastExplosionBrickSound = standinClinkSound;
+	}
+	else
+	{
+	%this.TT_raycastExplosionBrickSound = standinSliceSound;
+	}
+	Parent::onFire(%this, %obj, %slot);
 }
 
 function l4bPanImage::onActivate(%this, %obj, %slot)
 {
-   %obj.playthread(2, plant);
+	%obj.playthread(2, plant);
 }
 
 function l4bPanImage::onPreFire(%this, %obj, %slot)
 {
-   %obj.playthread(2, shiftAway);
+	%obj.playthread(2, shiftAway);
 }
 
 function l4bPanImage::TT_isRaycastCritical(%this, %obj, %slot, %col, %pos, %normal, %hit)
 {
-   return TT_isMeleeRaycastCrit(%this, %obj, %slot, %col, %pos, %normal, %hit);
+	return TT_isMeleeRaycastCrit(%this, %obj, %slot, %col, %pos, %normal, %hit);
 }
 
 
@@ -580,35 +580,35 @@ datablock ShapeBaseImageData(l4bGuitarImage)
 
 function l4bGuitarImage::onFire(%this, %obj, %slot)
 {
-   if(%obj.getDamagePercent() >= 1.0)
-      return;
-   %obj.playThread(2, shiftTo);
-   if(getRandom(0,1))
-   {
-      %this.TT_raycastExplosionBrickSound = standinClinkSound;
-      %this.TT_raycastExplosionPlayerSound = standinSliceSound;
-   }
-   else
-   {
-      %this.TT_raycastExplosionBrickSound = standinSliceSound;
-      %this.TT_raycastExplosionPlayerSound = standinThudSound;
-   }
-   Parent::onFire(%this, %obj, %slot);
+	if(%obj.getDamagePercent() >= 1.0)
+	return;
+	%obj.playThread(2, shiftTo);
+	if(getRandom(0,1))
+	{
+	%this.TT_raycastExplosionBrickSound = standinClinkSound;
+	%this.TT_raycastExplosionPlayerSound = standinSliceSound;
+	}
+	else
+	{
+	%this.TT_raycastExplosionBrickSound = standinSliceSound;
+	%this.TT_raycastExplosionPlayerSound = standinThudSound;
+	}
+	Parent::onFire(%this, %obj, %slot);
 }
 
 function l4bGuitarImage::onActivate(%this, %obj, %slot)
 {
-   %obj.playthread(2, activate);
+	%obj.playthread(2, activate);
 }
 
 function l4bGuitarImage::onPreFire(%this, %obj, %slot)
 {
-   %obj.playthread(2, shiftAway);
+	%obj.playthread(2, shiftAway);
 }
 
 function l4bGuitarImage::TT_isRaycastCritical(%this, %obj, %slot, %col, %pos, %normal, %hit)
 {
-   return TT_isMeleeRaycastCrit(%this, %obj, %slot, %col, %pos, %normal, %hit);
+	return TT_isMeleeRaycastCrit(%this, %obj, %slot, %col, %pos, %normal, %hit);
 }
 
 
@@ -680,34 +680,34 @@ datablock ShapeBaseImageData(L4BKatanaImage)
 
 function L4BKatanaImage::onFire(%this, %obj, %slot)
 {
-   if(%obj.getDamagePercent() >= 1.0)
-      return;
-   %obj.playThread(2, shiftTo);
-   %obj.playThread(3, shiftLeft);
-   if(getRandom(0,1))
-   {
-      %this.TT_raycastExplosionBrickSound = standinClinkSound;
-   }
-   else
-   {
-      %this.TT_raycastExplosionBrickSound = standinSliceSound;
-   }
-   Parent::onFire(%this, %obj, %slot);
+	if(%obj.getDamagePercent() >= 1.0)
+	return;
+	%obj.playThread(2, shiftTo);
+	%obj.playThread(3, shiftLeft);
+	if(getRandom(0,1))
+	{
+	%this.TT_raycastExplosionBrickSound = standinClinkSound;
+	}
+	else
+	{
+	%this.TT_raycastExplosionBrickSound = standinSliceSound;
+	}
+	Parent::onFire(%this, %obj, %slot);
 }
 
 function L4BKatanaImage::onActivate(%this, %obj, %slot)
 {
-   %obj.playthread(2, plant);
+	%obj.playthread(2, plant);
 }
 
 function L4BKatanaImage::onPreFire(%this, %obj, %slot)
 {
-   %obj.playthread(2, shiftAway);
+	%obj.playthread(2, shiftAway);
 }
 
 function L4BKatanaImage::TT_isRaycastCritical(%this, %obj, %slot, %col, %pos, %normal, %hit)
 {
-   return TT_isMeleeRaycastCrit(%this, %obj, %slot, %col, %pos, %normal, %hit);
+	return TT_isMeleeRaycastCrit(%this, %obj, %slot, %col, %pos, %normal, %hit);
 }
 
 
@@ -780,39 +780,39 @@ datablock ShapeBaseImageData(l4bMacheteImage)
 
 function l4bMacheteImage::onFire(%this, %obj, %slot)
 {
-   if(%obj.getDamagePercent() >= 1.0)
-      return;
-   %obj.playThread(2, shiftTo);
-   %obj.playThread(3, shiftLeft);
-   if(getRandom(0,1))
-   {
-      %this.TT_raycastExplosionBrickSound = standinClinkSound;
-   }
-   else
-   {
-      %this.TT_raycastExplosionBrickSound = standinSliceSound;
-   }
-   Parent::onFire(%this, %obj, %slot);
+	if(%obj.getDamagePercent() >= 1.0)
+	return;
+	%obj.playThread(2, shiftTo);
+	%obj.playThread(3, shiftLeft);
+	if(getRandom(0,1))
+	{
+	%this.TT_raycastExplosionBrickSound = standinClinkSound;
+	}
+	else
+	{
+	%this.TT_raycastExplosionBrickSound = standinSliceSound;
+	}
+	Parent::onFire(%this, %obj, %slot);
 }
 
 function l4bMacheteImage::onFireB(%this, %obj, %slot)
 {
-   %obj.playthread(2, shiftAway);
+	%obj.playthread(2, shiftAway);
 }
 
 function l4bMacheteImage::onActivate(%this, %obj, %slot)
 {
-   %obj.playthread(2, shiftDown);
+	%obj.playthread(2, shiftDown);
 }
 
 function l4bMacheteImage::onPreFire(%this, %obj, %slot)
 {
-   %obj.playthread(2, shiftAway);
+	%obj.playthread(2, shiftAway);
 }
 
 function l4bMacheteImage::TT_isRaycastCritical(%this, %obj, %slot, %col, %pos, %normal, %hit)
 {
-   return TT_isMeleeRaycastCrit(%this, %obj, %slot, %col, %pos, %normal, %hit);
+	return TT_isMeleeRaycastCrit(%this, %obj, %slot, %col, %pos, %normal, %hit);
 }
 
 
@@ -884,35 +884,35 @@ datablock ShapeBaseImageData(L4BSpadeImage)
 
 function L4BSpadeImage::onFire(%this, %obj, %slot)
 {
-   if(%obj.getDamagePercent() >= 1.0)
-      return;
-   %obj.playThread(2, shiftTo);
-   if(getRandom(0,1))
-   {
-      %this.TT_raycastExplosionBrickSound = standinClinkSound;
-      %this.TT_raycastExplosionPlayerSound = standinSliceSound;
-   }
-   else
-   {
-      %this.TT_raycastExplosionBrickSound = standinSliceSound;
-      %this.TT_raycastExplosionPlayerSound = standinThudSound;
-   }
-   Parent::onFire(%this, %obj, %slot);
+	if(%obj.getDamagePercent() >= 1.0)
+	return;
+	%obj.playThread(2, shiftTo);
+	if(getRandom(0,1))
+	{
+	%this.TT_raycastExplosionBrickSound = standinClinkSound;
+	%this.TT_raycastExplosionPlayerSound = standinSliceSound;
+	}
+	else
+	{
+	%this.TT_raycastExplosionBrickSound = standinSliceSound;
+	%this.TT_raycastExplosionPlayerSound = standinThudSound;
+	}
+	Parent::onFire(%this, %obj, %slot);
 }
 
 function L4BSpadeImage::onActivate(%this, %obj, %slot)
 {
-   %obj.playthread(2, plant);
+	%obj.playthread(2, plant);
 }
 
 function L4BSpadeImage::onPreFire(%this, %obj, %slot)
 {
-   %obj.playthread(2, shiftAway);
+	%obj.playthread(2, shiftAway);
 }
 
 function L4BSpadeImage::TT_isRaycastCritical(%this, %obj, %slot, %col, %pos, %normal, %hit)
 {
-   return TT_isMeleeRaycastCrit(%this, %obj, %slot, %col, %pos, %normal, %hit);
+	return TT_isMeleeRaycastCrit(%this, %obj, %slot, %col, %pos, %normal, %hit);
 }
 
 
@@ -984,35 +984,35 @@ datablock ShapeBaseImageData(pipeImage)
 
 function pipeImage::onFire(%this, %obj, %slot)
 {
-   if(%obj.getDamagePercent() >= 1.0)
-      return;
-   %obj.playThread(2, shiftTo);
-   if(getRandom(0,1))
-   {
-      %this.TT_raycastExplosionBrickSound = standinClinkSound;
-      %this.TT_raycastExplosionPlayerSound = standinSliceSound;
-   }
-   else
-   {
-      %this.TT_raycastExplosionBrickSound = standinSliceSound;
-      %this.TT_raycastExplosionPlayerSound = standinThudSound;
-   }
-   Parent::onFire(%this, %obj, %slot);
+	if(%obj.getDamagePercent() >= 1.0)
+	return;
+	%obj.playThread(2, shiftTo);
+	if(getRandom(0,1))
+	{
+	%this.TT_raycastExplosionBrickSound = standinClinkSound;
+	%this.TT_raycastExplosionPlayerSound = standinSliceSound;
+	}
+	else
+	{
+	%this.TT_raycastExplosionBrickSound = standinSliceSound;
+	%this.TT_raycastExplosionPlayerSound = standinThudSound;
+	}
+	Parent::onFire(%this, %obj, %slot);
 }
 
 function pipeImage::onActivate(%this, %obj, %slot)
 {
-   %obj.playthread(2, shiftto);
+	%obj.playthread(2, shiftto);
 }
 
 function pipeImage::onPreFire(%this, %obj, %slot)
 {
-   %obj.playthread(2, shiftAway);
+	%obj.playthread(2, shiftAway);
 }
 
 function pipeImage::TT_isRaycastCritical(%this, %obj, %slot, %col, %pos, %normal, %hit)
 {
-   return TT_isMeleeRaycastCrit(%this, %obj, %slot, %col, %pos, %normal, %hit);
+	return TT_isMeleeRaycastCrit(%this, %obj, %slot, %col, %pos, %normal, %hit);
 }
 
 
@@ -1084,32 +1084,32 @@ datablock ShapeBaseImageData(sledgehammerImage)
 
 function sledgehammerImage::onFire(%this, %obj, %slot)
 {
-   if(%obj.getDamagePercent() >= 1.0)
-      return;
-   %obj.playThread(2, shiftTo);
-   if(getRandom(0,1))
-   {
-      %this.TT_raycastExplosionBrickSound = standinClinkSound;
-   }
-   else
-   {
-      %this.TT_raycastExplosionBrickSound = standinSliceSound;
-   }
-   Parent::onFire(%this, %obj, %slot);
+	if(%obj.getDamagePercent() >= 1.0)
+	return;
+	%obj.playThread(2, shiftTo);
+	if(getRandom(0,1))
+	{
+	%this.TT_raycastExplosionBrickSound = standinClinkSound;
+	}
+	else
+	{
+	%this.TT_raycastExplosionBrickSound = standinSliceSound;
+	}
+	Parent::onFire(%this, %obj, %slot);
 }
 
 function sledgehammerImage::onActivate(%this, %obj, %slot)
 {
-   %obj.playthread(2, plant);
+	%obj.playthread(2, plant);
 }
 
 function sledgehammerImage::onPreFire(%this, %obj, %slot)
 {
-   %obj.playthread(2, shiftAway);
+	%obj.playthread(2, shiftAway);
 }
 
 function sledgehammerImage::TT_isRaycastCritical(%this, %obj, %slot, %col, %pos, %normal, %hit)
 {
-   return TT_isMeleeRaycastCrit(%this, %obj, %slot, %col, %pos, %normal, %hit);
+	return TT_isMeleeRaycastCrit(%this, %obj, %slot, %col, %pos, %normal, %hit);
 }
 

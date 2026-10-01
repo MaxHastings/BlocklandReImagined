@@ -1,0 +1,6 @@
+Title: Stand-in Frog's Weaponry WWII Pack
+Author: Blockland ReImagined tests
+Written for tests. It has the community Weapon_Frogs_Weaponry_WWII folder
+name and the shape its port reads on the stand-in Frog's Weaponry, so the
+listed port applies to it. It is not the original Add-On and holds none of
+its files, and its gun, names and numbers are its own.

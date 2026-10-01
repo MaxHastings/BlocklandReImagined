@@ -2,42 +2,36 @@
 // patterns read. Not the original's code.
 function FxDtsBrick::createTrigger(%this, %data, %polyhedron)
 {
-	%boxDiff = vectorSub(%boxMax, %boxMin);
 	%boxDiff = vectorAdd(%boxDiff, "0 0 0.2");
-	return %trigger;
 }
 
 function FxDtsBrick::setCPControl(%this, %color, %reset, %client)
 {
 	if(!%reset)
-		%client.incScore(%mini.points_cp);
+	%client.incScore(%mini.points_cp);
 	%this.setColor(%color);
 	if(%reset)
-		%this.processInputEvent("onCPReset", %client);
-	else
-	{
-		%this.processInputEvent("onCPCapture", %client);
-		%this.processInputEvent("onCPCapture(Team" @ %i + 1 @ ")", %client);
-	}
+	%this.processInputEvent("onCPReset", %client);
+	%this.processInputEvent("onCPCapture", %client);
+	%this.processInputEvent("onCPCapture(Team" @ %i + 1 @ ")", %client);
 }
 
 function Slayer_CPTriggerData::onTickTrigger(%this, %trigger, %player)
 {
 	if(%brick.capture[%attCol] < %maxTicks)
 	{
-		if(%brick.isLocked[%attCol])
-			%client.bottomPrint("<just:center>\c5Locked for now.", 1);
-		%trigger.decreaseTimer[%attCol] = %this.scheduleNoQuota(%this.tickPeriodMS + 1000, decreaseCapture, %trigger, %attCol);
-		%brick.capture[%attCol] ++;
-		%client.bottomPrint("<just:center>" @ %a @ %d, 1, true);
-		if(%mini.CPTransitionColors)
-		{
-			%mix = Slayer_Support::getAverageColor(%rgb, %team.colorRGB);
-			%brick.setColor(Slayer_Support::getClosestPaintColor(%mix));
-		}
-	}
+	if(%brick.isLocked[%attCol])
+	%client.bottomPrint("<just:center>\c5Locked for now.", 1);
+	%trigger.decreaseTimer[%attCol] = %this.scheduleNoQuota(%this.tickPeriodMS + 1000, decreaseCapture, %trigger, %attCol);
+	%brick.capture[%attCol] ++;
+	%client.bottomPrint("<just:center>" @ %a @ %d, 1, true);
+	if(%mini.CPTransitionColors)
+	{
+	%mix = Slayer_Support::getAverageColor(%rgb, %team.colorRGB);
+	%brick.setColor(Slayer_Support::getClosestPaintColor(%mix));
 	else
-		%brick.setCPControl(%attCol, 0, %client);
+	%brick.setCPControl(%attCol, 0, %client);
+	}}
 }
 
 function Slayer_CPTriggerData::decreaseCapture(%this, %trigger, %color)
@@ -50,41 +44,32 @@ function Slayer_CPTriggerData::decreaseCapture(%this, %trigger, %color)
 
 function FxDtsBrick::setTeamControl(%this, %color, %client)
 {
-	switch$(%db.slyrType)
-	{
-		case "TeamSpawn" or "TeamVehicle":
-			%this.controlColor = %color;
-		case "CP":
-			%this.setCPControl(%color, 0, %client);
-	}
+	case "TeamSpawn" or "TeamVehicle":
+	%this.controlColor = %color;
+	case "CP":
+	%this.setCPControl(%color, 0, %client);
 }
 
 function FxDtsBrick::setTeamControlLocked(%this, %mode, %color, %flag, %client)
 {
-	if(%this.isLocked[%color] != %flag)
-	{
-		%this.isLocked[%color] = %flag;
-		if(%color != %brColor)
-			%this.capture[%color] = 0;
-	}
+	%this.isLocked[%color] = %flag;
+	if(%color != %brColor)
+	%this.capture[%color] = 0;
 }
 
 function fxDTSBrick::checkTeam(%this, %type, %string, %eventnums, %client)
 {
 	%pass = %team.isAlliedTeam(%checkTeam);
 	if(getWordCount(%eventnums) != 2)
-		%this.onTeamCheckTrue(%client);
+	%this.onTeamCheckTrue(%client);
 }
 
 function fxDTSBrick::checkTeamCount(%this, %string, %operator, %check, %eventnums, %client)
 {
-	switch(%operator)
-	{
-		case 0: %pass = %checkteam.numMembers >= %check;
-		case 1: %pass = %checkteam.numMembers <= %check;
-		case 2: %pass = %checkteam.numMembers == %check;
-		case 3: %pass = %checkteam.numMembers != %check;
-	}
+	case 0: %pass = %checkteam.numMembers >= %check;
+	case 1: %pass = %checkteam.numMembers <= %check;
+	case 2: %pass = %checkteam.numMembers == %check;
+	case 3: %pass = %checkteam.numMembers != %check;
 }
 
 $Slayer::Server::Events::RestrictedEvent__["Minigame", "BottomPrintAll"] = 2;

@@ -61,48 +61,40 @@ datablock ShapeBaseImageData(BullpupImage : standinSidearmImage)
 
 function BullpupImage::onFire(%this,%obj,%slot)
 {
-   %projectile = %this.projectile;
-   if(vectorLen(%obj.getVelocity()) < 0.1)
-   {
-      %spread = 0.0002;
-   }
-   else
-   {
-      %spread = 0.0008;
-   }
-   %shellCount = 1;
-   %obj.lastShotTime = getSimTime();
-   %this.TT_decrementAmmo(%obj);
-   return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	if(vectorLen(%obj.getVelocity()) < 0.1)
+	{
+	%spread = 0.0002;
+	}
+	else
+	{
+	%spread = 0.0008;
+	%shellCount = 1;
+	%this.TT_decrementAmmo(%obj);
+	return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	}
 }
 
 function BullpupImage::onBurstFire(%this,%obj,%slot)
 {
-   %projectile = %this.projectile;
-   if(vectorLen(%obj.getVelocity()) < 0.1)
-   {
-      %spread = 0.0002;
-   }
-   else
-   {
-      %spread = 0.0008;
-   }
-   %shellCount = 1;
-   %obj.lastShotTime = getSimTime();
-   return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	if(vectorLen(%obj.getVelocity()) < 0.1)
+	{
+	%spread = 0.0002;
+	}
+	else
+	{
+	%spread = 0.0008;
+	%shellCount = 1;
+	return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	}
 }
 
 function BullpupImage::onBurstCheck(%this, %obj, %slot)
 {
-   if(%this.TT_canFire(%obj))
-   {
-      %obj.setImageLoaded(%slot, 1);
-      %this.TT_decrementAmmo(%obj);
-   }
-   else
-   {
-      %obj.setImageLoaded(%slot, 0);
-   }
+	if(%this.TT_canFire(%obj))
+	{
+	%obj.setImageLoaded(%slot, 1);
+	%this.TT_decrementAmmo(%obj);
+	}
 }
 
 // The twin guns: the right one pays, the left one fires beside it free.
@@ -135,43 +127,38 @@ datablock ShapeBaseImageData(DualSMGLeftImage : standinLeftImage)
 
 function DualSMGsImage::onMount(%this,%obj,%slot)
 {
-   Parent::onMount(%this, %obj, %slot);
-   %obj.mountImage(DualSMGLeftImage, 1);
+	%obj.mountImage(DualSMGLeftImage, 1);
 }
 
 function DualSMGLeftImage::onMount(%this,%obj,%slot)
 {
-   Parent::onMount(%this, %obj, %slot);
-   %obj.playThread(1, armreadyboth);
+	%obj.playThread(1, armreadyboth);
 }
 
 function DualSMGsImage::onFireAkimbo(%this,%obj,%slot)
 {
-   %obj.setImageTrigger(1,1);
+	%obj.setImageTrigger(1,1);
 }
 
 function DualSMGsImage::onFire(%this,%obj,%slot)
 {
-   %projectile = %this.projectile;
-   %spread = 0.0015;
-   %shellCount = 1;
-   %this.TT_decrementAmmo(%obj);
-   return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	%spread = 0.0015;
+	%shellCount = 1;
+	%this.TT_decrementAmmo(%obj);
+	return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
 }
 
 function DualSMGLeftImage::onFire(%this, %obj, %slot)
 {
-   %projectile = %this.projectile;
-   %spread = 0.0015;
-   %shellCount = 1;
-   return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	%spread = 0.0015;
+	%shellCount = 1;
+	return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
 }
 
 function DualSMGsProjectile1::damage(%this,%obj,%col,%fade,%pos,%normal)
 {
-   if(%col.getType() & $TypeMasks::PlayerObjectType)
-      TT_dampenVelocity(%col, 1.1);
-   Parent::damage(%this,%obj,%col,%fade,%pos,%normal);
+	if(%col.getType() & $TypeMasks::PlayerObjectType)
+	TT_dampenVelocity(%col, 1.1);
 }
 
 // The machine pistol, less sure on the move.
@@ -191,18 +178,16 @@ datablock ShapeBaseImageData(MachStilImage : standinSidearmImage)
 
 function MachStilImage::onFire(%this,%obj,%slot)
 {
-   if(vectorLen(%obj.getVelocity()) > 0.1)
-   {
-      %this.TT_raycastSpreadAmt = 0.0024;
-      %this.TT_raycastWeaponRange = 45;
-   }
-   else
-   {
-      %this.TT_raycastSpreadAmt = 0.0013;
-      %this.TT_raycastWeaponRange = 100;
-   }
-   Parent::onFire(%this,%obj,%slot);
-   %this.TT_decrementAmmo(%obj);
+	if(vectorLen(%obj.getVelocity()) > 0.1)
+	{
+	%this.TT_raycastSpreadAmt = 0.0024;
+	%this.TT_raycastWeaponRange = 45;
+	}
+	else
+	{
+	%this.TT_raycastSpreadAmt = 0.0013;
+	%this.TT_raycastWeaponRange = 100;
+	}
 }
 
 // The scoped rifle: jet scopes in, slowed by Tier 2's laid body, and out
@@ -244,26 +229,13 @@ function SniperCarbineImage::onFire(%this,%obj,%slot)
 
 function SniperCarbineImage::onAltTrigger(%this, %obj, %objDB, %triggerSlot, %val)
 {
-   if(%val && %triggerSlot == 4)
-   {
-      %obj.TT_retainImageAmmo = 1;
-      %obj.mountImage(SniperCZoomedImage, 0);
-   }
+	%obj.mountImage(SniperCZoomedImage, 0);
 }
 
 function SniperCarbineImage::TT_onLoadCheck(%this,%obj,%slot)
 {
-   if(%obj.TT_forceToolReload || %this.TT_needsAmmo(%obj))
-      %obj.setImageLoaded(%slot, 0);
-   else
-      %obj.setImageLoaded(%slot, 1);
-
-   if(%this.TT_canStartReload(%obj))
-      %obj.setImageAmmo(%slot, 1);
-   else
-      %obj.setImageAmmo(%slot, 0);
-
-   %obj.TT_forceToolReload = "";
+	if(%obj.TT_forceToolReload || %this.TT_needsAmmo(%obj))
+	%obj.setImageLoaded(%slot, 0);
 }
 
 function SniperCZoomedImage::onFire(%this,%obj,%slot)
@@ -274,33 +246,26 @@ function SniperCZoomedImage::onFire(%this,%obj,%slot)
 
 function SniperCZoomedImage::onMount(%this,%obj,%slot)
 {
-   Parent::onMount(%this,%obj,%slot);
-   %obj.pushDatablock(LMGArmor.getID());
+	%obj.pushDatablock(LMGArmor.getID());
 }
 
 function SniperCZoomedImage::onUnMount(%this,%obj,%slot)
 {
-   Parent::onUnMount(%this,%obj,%slot);
-   %obj.popDatablock(LMGArmor.getID());
+	%obj.popDatablock(LMGArmor.getID());
 }
 
 function SniperCZoomedImage::onReloadStart(%this,%obj,%slot)
 {
-   %obj.TT_retainImageAmmo = 1;
-   %obj.TT_forceToolReload = 1;
-   %obj.mountImage(SniperCarbineImage, 0);
+	%obj.TT_forceToolReload = 1;
+	%obj.mountImage(SniperCarbineImage, 0);
 }
 
 function SniperCZoomedImage::onAltTrigger(%this, %obj, %objDB, %triggerSlot, %val)
 {
-   if(%val && %triggerSlot == 4)
-   {
-      %obj.TT_retainImageAmmo = 1;
-      %obj.mountImage(SniperCarbineImage, 0);
-   }
+	%obj.mountImage(SniperCarbineImage, 0);
 }
 
 function SniperCZoomedImage::TT_isRaycastCritical(%this, %obj, %slot, %col, %pos, %normal, %hit)
 {
-   return TT_isRaycastHeadshot(%this, %obj, %slot, %col, %pos, %normal, %hit);
+	return TT_isRaycastHeadshot(%this, %obj, %slot, %col, %pos, %normal, %hit);
 }

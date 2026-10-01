@@ -67,3 +67,6 @@ new ScriptObject(Slayer_PrefSO : Slayer_DefaultPrefSO)
 };
 
 registerOutputEvent(Player, "DropFlag", "");
+
+// Who may add the output: the stand-in leaves it to the game's editors.
+$Slayer::Server::Events::RestrictedEvent__["Player", "DropFlag"] = -1;

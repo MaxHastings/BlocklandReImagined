@@ -155,116 +155,113 @@ datablock ShapeBaseImageData(CompactTAssaultRifleImage : TAssaultRifleImage)
 
 function ModernTAssaultRifleImage::onFire(%this,%obj,%slot)
 {
-   if((getSimTime() - %obj.lastShotTime) > 400)
-   {
-      %projectile = ModernTAssaultRifleProjectile2;
-      %spread = 0.0002;
-   }
-   else
-   {
-      %projectile = %this.projectile;
-      %spread = 0.003;
-   }
-   %shellCount = 1;
-   %obj.lastShotTime = getSimTime();
-   %this.TT_decrementAmmo(%obj);
-   return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	if((getSimTime() - %obj.lastShotTime) > 400)
+	{
+	%projectile = ModernTAssaultRifleProjectile2;
+	%spread = 0.0002;
+	}
+	else
+	{
+	%projectile = %this.projectile;
+	%spread = 0.003;
+	}
+	%shellCount = 1;
+	%obj.lastShotTime = getSimTime();
+	%this.TT_decrementAmmo(%obj);
+	return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
 }
 
 function ClassicTAssaultRifleImage::onFire(%this,%obj,%slot)
 {
-   if((getSimTime() - %obj.lastShotTime) > 400)
-   {
-      %projectile = ModernTAssaultRifleProjectile2;
-      %spread = 0.0002;
-   }
-   else
-   {
-      %projectile = %this.projectile;
-      %spread = 0.003;
-   }
-   %shellCount = 1;
-   %obj.lastShotTime = getSimTime();
-   %this.TT_decrementAmmo(%obj);
-   return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	if((getSimTime() - %obj.lastShotTime) > 400)
+	{
+	%projectile = ModernTAssaultRifleProjectile2;
+	%spread = 0.0002;
+	}
+	else
+	{
+	%projectile = %this.projectile;
+	%spread = 0.003;
+	}
+	%shellCount = 1;
+	%obj.lastShotTime = getSimTime();
+	%this.TT_decrementAmmo(%obj);
+	return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
 }
 
 function ClassicBattleRifleImage::onFire(%this,%obj,%slot)
 {
-   TT_knockback(%obj, 0, 0, -2);
-   %projectile = %this.projectile;
-   %spread = 0.0005;
-   %shellCount = 1;
-   %this.TT_decrementAmmo(%obj);
-   return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	TT_knockback(%obj, 0, 0, -2);
+	%spread = 0.0005;
+	%shellCount = 1;
+	%this.TT_decrementAmmo(%obj);
+	return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
 }
 
 function BattlerifleProjectile1::damage(%this,%obj,%col,%fade,%pos,%normal)
 {
-	Parent::damage(%this,%obj,%col,%fade,%pos,%normal);
 	TT_dampenVelocity(%col, 2);
 }
 
 function BrowningTAssaultRifleImage::onFire(%this,%obj,%slot)
 {
-   if((getSimTime() - %obj.lastShotTime) > 400)
-   {
-      %projectile = ModernTAssaultRifleProjectile2;
-      %spread = 0.0002;
-   }
-   else
-   {
-      %projectile = %this.projectile;
-      %spread = 0.003;
-   }
-   %shellCount = 1;
-   %obj.lastShotTime = getSimTime();
-   %this.TT_decrementAmmo(%obj);
-   return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	if((getSimTime() - %obj.lastShotTime) > 400)
+	{
+	%projectile = ModernTAssaultRifleProjectile2;
+	%spread = 0.0002;
+	}
+	else
+	{
+	%projectile = %this.projectile;
+	%spread = 0.003;
+	}
+	%shellCount = 1;
+	%obj.lastShotTime = getSimTime();
+	%this.TT_decrementAmmo(%obj);
+	return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
 }
 
 function ScoutTAssaultRifleImage::onFire(%this,%obj,%slot)
 {
-   if((getSimTime() - %obj.lastShotTime) > 400)
-   {
-      %projectile = ModernTAssaultRifleProjectile2;
-      %spread = 0.0002;
-   }
-   else
-   {
-      %projectile = %this.projectile;
-      %spread = 0.003;
-   }
-   %shellCount = 1;
-   %obj.lastShotTime = getSimTime();
-   %this.TT_decrementAmmo(%obj);
-   return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	if((getSimTime() - %obj.lastShotTime) > 400)
+	{
+	%projectile = ModernTAssaultRifleProjectile2;
+	%spread = 0.0002;
+	}
+	else
+	{
+	%projectile = %this.projectile;
+	%spread = 0.003;
+	}
+	%shellCount = 1;
+	%obj.lastShotTime = getSimTime();
+	%this.TT_decrementAmmo(%obj);
+	return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
 }
 
 function SemiBattleRifleImage::onFire(%this,%obj,%slot)
 {
-   TT_knockback(%obj, 0, 0, -2);
-   %projectile = %this.projectile;
-   %spread = 0.0005;
-   %shellCount = 1;
-   %this.TT_decrementAmmo(%obj);
-   return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	TT_knockback(%obj, 0, 0, -2);
+	%spread = 0.0005;
+	%shellCount = 1;
+	%this.TT_decrementAmmo(%obj);
+	return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
 }
 
 function CompactTAssaultRifleImage::onFire(%this,%obj,%slot)
 {
-   if((getSimTime() - %obj.lastShotTime) > 400)
-   {
-      %projectile = ModernTAssaultRifleProjectile2;
-      %spread = 0.0002;
-   }
-   else
-   {
-      %projectile = %this.projectile;
-      %spread = 0.003;
-   }
-   %shellCount = 1;
-   %obj.lastShotTime = getSimTime();
-   %this.TT_decrementAmmo(%obj);
-   return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	if((getSimTime() - %obj.lastShotTime) > 400)
+	{
+	%projectile = ModernTAssaultRifleProjectile2;
+	%spread = 0.0002;
+	}
+	else
+	{
+	%projectile = %this.projectile;
+	%spread = 0.003;
+	}
+	%shellCount = 1;
+	%obj.lastShotTime = getSimTime();
+	%this.TT_decrementAmmo(%obj);
+	return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
 }

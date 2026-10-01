@@ -1,0 +1,17 @@
+{
+  "addon": "Weapon_Frogs_Weaponry",
+  "title": "Frog's Weaponry",
+  "port": "weapon_frogs_weaponry",
+  "status": "partial",
+  "sha256": [
+    "321e38a33457291b14cefd199b32c82044bdb4c6be61e27cc7237377603243fd"
+  ],
+  "covers": {
+    "server.cs": {
+      "needs_tier1": "ForceRequiredAddOn\\(\\s*\"Weapon_Package_Tier1\"\\s*\\)"
+    }
+  },
+  "tests": [
+    "crates/addon-import/tests/tier_port.rs frogs_spinner_slows_and_deploys_and_the_launcher_slows"
+  ]
+}

@@ -18,14 +18,12 @@ function ndRegisterKeybinds()
 
 function clientCmdNdEnableKeybinds(%bool)
 {
-   %map = new ActionMap(ND_KeyMap);
-   %map.bind("keyboard", "ctrl c", "ndInputCopy");
-   %map.bind("keyboard", "ctrl v", "ndInputPaste");
-   %map.bind("keyboard", "ctrl x", "ndInputCut");
-   %map.bind("keyboard", "lcontrol", "ndInputMultiSelect");
-   %map.bind("keyboard", "shift-ctrl x", "ndInputSuperCut");
-   %map.bind("keyboard", "shift-ctrl v", "ndInputFillBricks");
-   %map.push();
+	%map.bind("keyboard", "ctrl c", "ndInputCopy");
+	%map.bind("keyboard", "ctrl v", "ndInputPaste");
+	%map.bind("keyboard", "ctrl x", "ndInputCut");
+	%map.bind("keyboard", "lcontrol", "ndInputMultiSelect");
+	%map.bind("keyboard", "shift-ctrl x", "ndInputSuperCut");
+	%map.bind("keyboard", "shift-ctrl v", "ndInputFillBricks");
 }
 
 function ndInputMultiSelect(%bool) { commandToServer('ndMultiSelect', %bool); }

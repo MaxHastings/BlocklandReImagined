@@ -40,32 +40,32 @@ datablock ShapeBaseImageData(ClassicMPImage : MachstilImage)
 
 function ModernMPImage::onFire(%this,%obj,%slot)
 {
-   if(vectorLen(%obj.getVelocity()) > 0.1)
-   {
-      %this.TT_raycastSpreadAmt = 0.0024;
-      %this.TT_raycastWeaponRange = 45;
-   }
-   else
-   {
-      %this.TT_raycastSpreadAmt = 0.0013;
-      %this.TT_raycastWeaponRange = 100;
-   }
-   Parent::onFire(%this,%obj,%slot);
-   %this.TT_decrementAmmo(%obj);
+	if(vectorLen(%obj.getVelocity()) > 0.1)
+	{
+	%this.TT_raycastSpreadAmt = 0.0024;
+	%this.TT_raycastWeaponRange = 45;
+	}
+	else
+	{
+	%this.TT_raycastSpreadAmt = 0.0013;
+	%this.TT_raycastWeaponRange = 100;
+	Parent::onFire(%this,%obj,%slot);
+	%this.TT_decrementAmmo(%obj);
+	}
 }
 
 function ClassicMPImage::onFire(%this,%obj,%slot)
 {
-   if(vectorLen(%obj.getVelocity()) > 0.1)
-   {
-      %this.TT_raycastSpreadAmt = 0.0024;
-      %this.TT_raycastWeaponRange = 45;
-   }
-   else
-   {
-      %this.TT_raycastSpreadAmt = 0.0013;
-      %this.TT_raycastWeaponRange = 100;
-   }
-   Parent::onFire(%this,%obj,%slot);
-   %this.TT_decrementAmmo(%obj);
+	if(vectorLen(%obj.getVelocity()) > 0.1)
+	{
+	%this.TT_raycastSpreadAmt = 0.0024;
+	%this.TT_raycastWeaponRange = 45;
+	}
+	else
+	{
+	%this.TT_raycastSpreadAmt = 0.0013;
+	%this.TT_raycastWeaponRange = 100;
+	Parent::onFire(%this,%obj,%slot);
+	%this.TT_decrementAmmo(%obj);
+	}
 }

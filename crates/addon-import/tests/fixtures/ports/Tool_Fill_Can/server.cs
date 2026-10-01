@@ -187,6 +187,5 @@ activatePackage(FillCanStandIn);
 
 function round(%a)
 {
-   %a += 0.5;
-   return %a;
+	%a += 0.5;
 }

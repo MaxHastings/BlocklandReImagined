@@ -1,0 +1,191 @@
+{
+  "schema_version": 1,
+  "notes": "The Tier+Tactical ammo system (Support_TT_Ammo.cs): each gun's magazine, its reloads, and the ammo types every pack shares. Shared by the Tier+Tactical packs and by Event_AddAmmoTT, which gives those types.",
+  "magazines": {
+    "size": "TT_maxAmmo",
+    "ammo": "TT_ammoType",
+    "reload_ticks": 120,
+    "types": {
+      "9MM": {
+        "ammo": "tt-9mm",
+        "reserve": 140,
+        "max_reserve": 280,
+        "display": "9mm"
+      },
+      "556": {
+        "ammo": "tt-556",
+        "reserve": 90,
+        "max_reserve": 180,
+        "display": "5.56 Little Rifle"
+      },
+      "shotgun": {
+        "ammo": "tt-shotgun",
+        "reserve": 24,
+        "max_reserve": 48,
+        "display": "12-gauge shotgun"
+      },
+      "270": {
+        "ammo": "tt-270",
+        "reserve": 16,
+        "max_reserve": 32,
+        "display": ".270 Huge Rifle"
+      },
+      "880": {
+        "ammo": "tt-880",
+        "reserve": 18,
+        "max_reserve": 36,
+        "display": ".880 Magnum"
+      },
+      "bomb": {
+        "ammo": "tt-bomb",
+        "reserve": 3,
+        "max_reserve": 12,
+        "display": "Explosive Rounds"
+      },
+      "rocket": {
+        "ammo": "tt-rocket",
+        "reserve": 2,
+        "max_reserve": 12,
+        "display": "Rocket-Propelled Grenades"
+      },
+      "708": {
+        "ammo": "tt-708",
+        "reserve": 72,
+        "max_reserve": 144,
+        "display": "7.08 Heavy Rifle"
+      },
+      "bolt": {
+        "ammo": "tt-bolt",
+        "reserve": 12,
+        "max_reserve": 24,
+        "display": "Standard Steel Bolt"
+      },
+      "fragNades": {
+        "ammo": "tt-fragnades",
+        "reserve": 4,
+        "max_reserve": 4,
+        "display": "Conc' Grenades"
+      },
+      "stickNades": {
+        "ammo": "tt-sticknades",
+        "reserve": 3,
+        "max_reserve": 3,
+        "display": "Stick Grenades"
+      },
+      "molNades": {
+        "ammo": "tt-molnades",
+        "reserve": 2,
+        "max_reserve": 2,
+        "display": "Molotovs"
+      },
+      "21Gauge": {
+        "ammo": "tt-21gauge",
+        "reserve": 36,
+        "max_reserve": 72,
+        "display": "21 Gauge Shells"
+      },
+      "45Caliber": {
+        "ammo": "tt-45caliber",
+        "reserve": 48,
+        "max_reserve": 192,
+        "display": ".45 Caliber"
+      },
+      "ImpactGrenade": {
+        "ammo": "tt-impactgrenade",
+        "reserve": 4,
+        "max_reserve": 12,
+        "display": "Impact Grenades"
+      },
+      "SmokeGrenade": {
+        "ammo": "tt-smokegrenade",
+        "reserve": 4,
+        "max_reserve": 12,
+        "display": "Smoke Grenades"
+      },
+      "Slugs": {
+        "ammo": "tt-slugs",
+        "reserve": 18,
+        "max_reserve": 30,
+        "display": "Slug Shells"
+      },
+      "BlastRounds": {
+        "ammo": "tt-blastrounds",
+        "reserve": 16,
+        "max_reserve": 32,
+        "display": "Blast Rounds"
+      },
+      "Payload": {
+        "ammo": "tt-payload",
+        "reserve": 1,
+        "max_reserve": 1,
+        "display": "Payloads"
+      },
+      "StrikeRocket": {
+        "ammo": "tt-strikerocket",
+        "reserve": 6,
+        "max_reserve": 6,
+        "display": "Strike Rockets"
+      },
+      "50Cal": {
+        "ammo": "tt-50cal",
+        "reserve": 200,
+        "max_reserve": 200,
+        "display": ".50 Caliber"
+      }
+    },
+    "every": {
+      "reload_state": "onReloaded",
+      "light_states": [
+        "Ready",
+        "Empty",
+        "EmptyFire"
+      ],
+      "checks": {
+        "TT_onLoadCheck": {
+          "loaded": [
+            "shot"
+          ],
+          "ammo": [
+            "reserve"
+          ]
+        },
+        "TT_onFireCheck": {
+          "loaded": [
+            "shot"
+          ],
+          "ammo": [
+            "reserve"
+          ]
+        },
+        "TT_onReloadCheck": {
+          "loaded": [
+            "full",
+            "no_reserve"
+          ],
+          "ammo": [
+            "reserve"
+          ]
+        },
+        "TT_onDeathCheck": {
+          "ammo": true
+        }
+      },
+      "on_reload": {
+        "loaded": false,
+        "ammo": [
+          "empty"
+        ]
+      },
+      "display_ticks": 480,
+      "display_scripts": [
+        "TT_onEmptyFire"
+      ],
+      "on_loaded": {
+        "loaded": true
+      }
+    },
+    "counted": {
+      "field": "TT_grenade"
+    }
+  }
+}

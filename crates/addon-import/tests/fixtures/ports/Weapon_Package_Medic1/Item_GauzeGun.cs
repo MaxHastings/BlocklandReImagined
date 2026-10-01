@@ -115,35 +115,35 @@ datablock ShapeBaseImageData(medigunHealImage)
 
 function medigunHealImage::onMount(%this, %obj, %slot)
 {
-   %obj.healing = 0;
+	%obj.healing = 0;
 }
 
 function medigunHealImage::onHeal(%this, %obj, %slot)
 {
-   if(%obj.getDamagePercent() < 1.0)
-   {
-      %obj.setDamageLevel(%obj.getDamageLevel() - 3);
-      %obj.healing++;
-      if(%obj.healing >= 6)
-      {
-         %obj.unMountImage(%slot);
-      }
-   }
-   else
-   {
-      %obj.unMountImage(%slot);
-   }
+	if(%obj.getDamagePercent() < 1.0)
+	{
+	%obj.setDamageLevel(%obj.getDamageLevel() - 3);
+	%obj.healing++;
+	if(%obj.healing >= 6)
+	{
+	%obj.unMountImage(%slot);
+	}
+	}
+	else
+	{
+	%obj.unMountImage(%slot);
+	}
 }
 
 function medigunImage::onFire(%this, %obj, %slot)
 {
-   %obj.playThread(2, shiftAway);
-   serverPlay3D(medigunShot1Sound, %obj.getPosition());
-   return Parent::onFire(%this, %obj, %slot);
+	%obj.playThread(2, shiftAway);
+	serverPlay3D(medigunShot1Sound, %obj.getPosition());
+	return Parent::onFire(%this, %obj, %slot);
 }
 
 function medigunProjectile::onCollision(%this, %obj, %col, %pos, %fade)
 {
-   TT_projectileHeal(%obj, %col, 12);
-   Parent::onCollision(%this, %obj, %col, %pos, %fade);
+	TT_projectileHeal(%obj, %col, 12);
+	Parent::onCollision(%this, %obj, %col, %pos, %fade);
 }

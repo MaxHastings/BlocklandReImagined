@@ -73,99 +73,92 @@ datablock ShapeBaseImageData(RetroRifleImage : standinRifleImage)
 
 function BoltRifleImage::onFire(%this,%obj,%slot)
 {
-   %obj.playThread(2, plant);
-
-   if(vectorLen(%obj.getVelocity()) < 3 && (getSimTime() - %obj.lastShotTime) > 1000)
-   {
-      %projectile = %this.projectile;
-      %spread = 0.0001;
-   }
-   else
-   {
-      %projectile = BoltRifleWeakProjectile;
-      %spread = 0.001;
-   }
-   %shellCount = 1;
-
-   %this.TT_decrementAmmo(%obj);
-   return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	%obj.playThread(2, plant);
+	if(vectorLen(%obj.getVelocity()) < 3 && (getSimTime() - %obj.lastShotTime) > 1000)
+	{
+	%projectile = %this.projectile;
+	%spread = 0.0001;
+	}
+	else
+	{
+	%projectile = BoltRifleWeakProjectile;
+	%spread = 0.001;
+	%shellCount = 1;
+	%this.TT_decrementAmmo(%obj);
+	return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	}
 }
 
 function BoltRifleImage::onMount(%this,%obj,%slot)
 {
-	Parent::onMount(%this,%obj,%slot);
 	%obj.playThread(2, shiftLeft);
 }
 
 function BoltRifleProjectile::damage(%this,%obj,%col,%fade,%pos,%normal)
 {
-   %multiplier = 2.5; // on a headshot
-   TT_processHeadshotDamage(%this, %obj, %col, %pos, %this.directDamage, %multiplier, $DamageType::StandinRifleHeadshot);
+	%multiplier = 2.5;
+	TT_processHeadshotDamage(%this, %obj, %col, %pos, %this.directDamage, %multiplier, $DamageType::StandinRifleHeadshot);
 }
 
 function BoltRifleWeakProjectile::damage(%this,%obj,%col,%fade,%pos,%normal)
 {
-   TT_processHeadshotDamage(%this, %obj, %col, %pos, %this.directDamage, 2, $DamageType::StandinRifleHeadshot);
+	TT_processHeadshotDamage(%this, %obj, %col, %pos, %this.directDamage, 2, $DamageType::StandinRifleHeadshot);
 }
 
 function HuntingRifleImage::onFire(%this,%obj,%slot)
 {
-   %obj.playThread(2, plant);
-
-   if(vectorLen(%obj.getVelocity()) < 3 && (getSimTime() - %obj.lastShotTime) > 1000)
-   {
-      %projectile = %this.projectile;
-      %spread = 0.0001;
-   }
-   else
-   {
-      %projectile = BoltRifleWeakProjectile;
-      %spread = 0.001;
-   }
-   %shellCount = 1;
-
-   %this.TT_decrementAmmo(%obj);
-   return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	%obj.playThread(2, plant);
+	if(vectorLen(%obj.getVelocity()) < 3 && (getSimTime() - %obj.lastShotTime) > 1000)
+	{
+	%projectile = %this.projectile;
+	%spread = 0.0001;
+	}
+	else
+	{
+	%projectile = BoltRifleWeakProjectile;
+	%spread = 0.001;
+	%shellCount = 1;
+	%this.TT_decrementAmmo(%obj);
+	return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	}
 }
 
 function HuntingRifleProjectile::damage(%this,%obj,%col,%fade,%pos,%normal)
 {
-   %multiplier = 2.5; // on a headshot
-   TT_processHeadshotDamage(%this, %obj, %col, %pos, %this.directDamage, %multiplier, $DamageType::StandinRifleHeadshot);
+	%multiplier = 2.5;
+	TT_processHeadshotDamage(%this, %obj, %col, %pos, %this.directDamage, %multiplier, $DamageType::StandinRifleHeadshot);
 }
 
 function HuntingRifleWeakProjectile::damage(%this,%obj,%col,%fade,%pos,%normal)
 {
-   TT_processHeadshotDamage(%this, %obj, %col, %pos, %this.directDamage, 2, $DamageType::StandinRifleHeadshot);
+	TT_processHeadshotDamage(%this, %obj, %col, %pos, %this.directDamage, 2, $DamageType::StandinRifleHeadshot);
 }
 
 function RetroRifleImage::onFire(%this,%obj,%slot)
 {
-   %obj.playThread(2, plant);
-
-   if(vectorLen(%obj.getVelocity()) < 3 && (getSimTime() - %obj.lastShotTime) > 1000)
-   {
-      %projectile = %this.projectile;
-      %spread = 0.0001;
-   }
-   else
-   {
-      %projectile = BoltRifleWeakProjectile;
-      %spread = 0.001;
-   }
-   %shellCount = 1;
-
-   %this.TT_decrementAmmo(%obj);
-   return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	%obj.playThread(2, plant);
+	if(vectorLen(%obj.getVelocity()) < 3 && (getSimTime() - %obj.lastShotTime) > 1000)
+	{
+	%projectile = %this.projectile;
+	%spread = 0.0001;
+	}
+	else
+	{
+	%projectile = BoltRifleWeakProjectile;
+	%spread = 0.001;
+	%shellCount = 1;
+	%this.TT_decrementAmmo(%obj);
+	return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	}
 }
 
 function RetroRifleProjectile::damage(%this,%obj,%col,%fade,%pos,%normal)
 {
-   %multiplier = 2.5; // on a headshot
-   TT_processHeadshotDamage(%this, %obj, %col, %pos, %this.directDamage, %multiplier, $DamageType::StandinRifleHeadshot);
+	%multiplier = 2.5;
+	TT_processHeadshotDamage(%this, %obj, %col, %pos, %this.directDamage, %multiplier, $DamageType::StandinRifleHeadshot);
 }
 
 function RetroRifleWeakProjectile::damage(%this,%obj,%col,%fade,%pos,%normal)
 {
-   TT_processHeadshotDamage(%this, %obj, %col, %pos, %this.directDamage, 2, $DamageType::StandinRifleHeadshot);
+	TT_processHeadshotDamage(%this, %obj, %col, %pos, %this.directDamage, 2, $DamageType::StandinRifleHeadshot);
 }

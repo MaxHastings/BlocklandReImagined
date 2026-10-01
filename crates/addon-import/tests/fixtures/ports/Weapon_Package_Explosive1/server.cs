@@ -7,7 +7,7 @@ if(ForceRequiredAddon("Weapon_Package_Tier1") == $Error::AddOn_NotFound)
 }
 
 TT_defaultIfUnset("PlayerInfNades", 0);
-TT_defaultIfUnset("StartfragNades", 4);
+TT_defaultIfUnset("StartfragNades", 3);
 
 if(!isFile("add-ons/weapon_rocket_launcher/server.cs"))
 {
@@ -21,7 +21,7 @@ exec("./Weapon_FragGrenade.cs");
 exec("./Weapon_StickGrenade.cs");
 exec("./Weapon_PetrBomb.cs");
 
-TT_registerAmmoSet("tt_bag", "Grenade Bag", false);
+TT_registerAmmoSet("tt_bag", "Bag of Grenades", false);
 TT_registerAmmoType("fragNades", "Conc", "Concs", true, "tt", "nades", "tt_bag");
 TT_registerAmmoType("stickNades", "Stick", "Sticks", true, "tt", "nades", "tt_bag");
 TT_registerAmmoType("molNades", "Firebomb", "Firebombs", true, "tt", "nades", "tt_bag");

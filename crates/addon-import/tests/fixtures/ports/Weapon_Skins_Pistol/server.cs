@@ -56,88 +56,76 @@ datablock ShapeBaseImageData(RetroPistolImage : standinSidearmImage)
 
 function ClassicPistolImage::onFire(%this,%obj,%slot)
 {
-   if($Pref::Server::TT::Recoil)
-      %obj.spawnExplosion(standinKickProjectile,"1 1 1");
-
-   if(vectorLen(%obj.getVelocity()) > 0.1)
-   {
-      %this.TT_raycastSpreadAmt = 0.002;
-      %this.TT_raycastWeaponRange = 60;
-   }
-   else
-   {
-      %this.TT_raycastSpreadAmt = 0.0004;
-      %this.TT_raycastWeaponRange = 150;
-   }
-
-   %this.TT_decrementAmmo(%obj);
-   %this.TT_displayAmmo(%obj);
-   %obj.playThread(2, shiftAway);
-   return Parent::onFire(%this,%obj,%slot);
+	if($Pref::Server::TT::Recoil)
+	%obj.spawnExplosion(standinKickProjectile,"1 1 1");
+	if(vectorLen(%obj.getVelocity()) > 0.1)
+	{
+	%this.TT_raycastSpreadAmt = 0.002;
+	%this.TT_raycastWeaponRange = 60;
+	}
+	else
+	{
+	%this.TT_raycastSpreadAmt = 0.0004;
+	%this.TT_raycastWeaponRange = 150;
+	%this.TT_decrementAmmo(%obj);
+	%obj.playThread(2, shiftAway);
+	return Parent::onFire(%this,%obj,%slot);
+	}
 }
 
 function ModernPistolImage::onFire(%this,%obj,%slot)
 {
-   if($Pref::Server::TT::Recoil)
-      %obj.spawnExplosion(standinKickProjectile,"1 1 1");
-
-   if(vectorLen(%obj.getVelocity()) > 0.1)
-   {
-      %this.TT_raycastSpreadAmt = 0.002;
-      %this.TT_raycastWeaponRange = 60;
-   }
-   else
-   {
-      %this.TT_raycastSpreadAmt = 0.0004;
-      %this.TT_raycastWeaponRange = 150;
-   }
-
-   %this.TT_decrementAmmo(%obj);
-   %this.TT_displayAmmo(%obj);
-   %obj.playThread(2, shiftAway);
-   return Parent::onFire(%this,%obj,%slot);
+	if($Pref::Server::TT::Recoil)
+	%obj.spawnExplosion(standinKickProjectile,"1 1 1");
+	if(vectorLen(%obj.getVelocity()) > 0.1)
+	{
+	%this.TT_raycastSpreadAmt = 0.002;
+	%this.TT_raycastWeaponRange = 60;
+	}
+	else
+	{
+	%this.TT_raycastSpreadAmt = 0.0004;
+	%this.TT_raycastWeaponRange = 150;
+	%this.TT_decrementAmmo(%obj);
+	%obj.playThread(2, shiftAway);
+	return Parent::onFire(%this,%obj,%slot);
+	}
 }
 
 function SilencedPistolImage::onFire(%this,%obj,%slot)
 {
-   if($Pref::Server::TT::Recoil)
-      %obj.spawnExplosion(standinKickProjectile,"1 1 1");
-
-   if(vectorLen(%obj.getVelocity()) > 0.1)
-   {
-      %this.TT_raycastSpreadAmt = 0.002;
-      %this.TT_raycastWeaponRange = 60;
-   }
-   else
-   {
-      %this.TT_raycastSpreadAmt = 0.0004;
-      %this.TT_raycastWeaponRange = 150;
-   }
-
-   %this.TT_decrementAmmo(%obj);
-   %this.TT_displayAmmo(%obj);
-   %obj.playThread(2, shiftAway);
-   return Parent::onFire(%this,%obj,%slot);
+	if($Pref::Server::TT::Recoil)
+	%obj.spawnExplosion(standinKickProjectile,"1 1 1");
+	if(vectorLen(%obj.getVelocity()) > 0.1)
+	{
+	%this.TT_raycastSpreadAmt = 0.002;
+	%this.TT_raycastWeaponRange = 60;
+	}
+	else
+	{
+	%this.TT_raycastSpreadAmt = 0.0004;
+	%this.TT_raycastWeaponRange = 150;
+	%this.TT_decrementAmmo(%obj);
+	%obj.playThread(2, shiftAway);
+	return Parent::onFire(%this,%obj,%slot);
+	}
 }
 
 function RetroPistolImage::onFire(%this,%obj,%slot)
 {
-   if($Pref::Server::TT::Recoil)
-      %obj.spawnExplosion(standinKickProjectile,"1 1 1");
-
-   if(vectorLen(%obj.getVelocity()) > 0.1)
-   {
-      %this.TT_raycastSpreadAmt = 0.002;
-      %this.TT_raycastWeaponRange = 60;
-   }
-   else
-   {
-      %this.TT_raycastSpreadAmt = 0.0004;
-      %this.TT_raycastWeaponRange = 150;
-   }
-
-   %this.TT_decrementAmmo(%obj);
-   %this.TT_displayAmmo(%obj);
-   %obj.playThread(2, shiftAway);
-   return Parent::onFire(%this,%obj,%slot);
+	if($Pref::Server::TT::Recoil)
+	%obj.spawnExplosion(standinKickProjectile,"1 1 1");
+	if(vectorLen(%obj.getVelocity()) > 0.1)
+	{
+	%this.TT_raycastSpreadAmt = 0.002;
+	%this.TT_raycastWeaponRange = 60;
+	}
+	else
+	{
+	%this.TT_raycastSpreadAmt = 0.0004;
+	%this.TT_raycastWeaponRange = 150;
+	%this.TT_decrementAmmo(%obj);
+	%obj.playThread(2, shiftAway);
+	return Parent::onFire(%this,%obj,%slot);
+	}
 }

@@ -68,3 +68,31 @@ importer now reads a required Add-On it lacks from the folder beside the
 copy, as its hint already told players (`Reference::add_beside`; test
 `a_required_add_on_beside_the_copy_is_its_reference`). `bundled_in_game`,
 `bundle`, Tier and Adventure tests pass.
+
+## v0.1.12: Event_AddAmmoTT
+
+Ported as host rules (`crates/addon-import/ports/event_addammott`): the
+AddAmmoTT wrench output on players and bots gives one Tier+Tactical ammo
+type, or All of the registered ones, up to the type's most (its Max
+preference) unless Ignore Max is set; -1 is a full load. The ammo table
+moved from `_shared/tier-tactical.json` to `_shared/tier-tactical-ammo.json`
+so this port shares it without Tier's other rules, and the importer now
+lets a port with no datablocks read its tables (`magazine_order`,
+`magazine_list`). Not ported: Kai's ammo sets as list choices. Evidence:
+`tier_port.rs the_add_ammo_event_hands_out_tier_ammo`; `cargo test -p
+bri-addon-import` green; `tools/fixture_copies.py` finds no copied line.
+
+## v0.1.12: Frog's Weaponry and its WWII Pack
+
+Ported on the shared Tier files (`ports/weapon_frogs_weaponry`,
+`ports/weapon_frogs_weaponry_wwii`). Run locally on the real text copies
+with Tier 1 and Explosive 1 as reference, the importer now ports 110 of
+110 Frog's behaviours and 24 of 24 WWII ones (it was 0 of 110 with 54
+unsupported). New: the Vulcan's spin-up slow and deploy, and the Payload
+Launcher's slow, wired as image commands; its three FW preferences and
+its ammo preferences are host settings; a second fire mode can sit behind
+a preference (`alt_images` `when`); a recoil projectile no Add-On defines
+(the Break Shotgun's TTHugeRecoil, commented out in Tier 1) is no kick, as
+in v20. Evidence: `tier_port.rs frogs_spinner_slows_and_deploys_and_the_launcher_slows`
+and `frogs_wwii_guns_use_frogs_ammo`; `cargo test -p bri-addon-import`
+green. Not bundled yet: needs pinned copies (321e38a3, bfc86aa8).

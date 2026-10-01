@@ -9,24 +9,17 @@ $Slayer::Server::Bots::SkinColorCount = 4;
 // Stand-ins (CC0) for the bot shapes the port reads.
 function Slayer_AiController::assignObjectives(%this)
 {
-	// objectives are off in this stand-in too
+	
 }
 
 function Slayer_AiController::createPlayer(%this, %transform)
 {
-	%useFakeBrick = !isObject(%this.lastSpawnBrick);
-	%handler = %this.getTeam();
 	%hBotType = BlockheadHoleBot;
-	%player = new AiPlayer()
-	{
-		client = %this;
-		hReturnToSpawn = !%useFakeBrick;
-	};
-	for(%i = 0; %i < 5; %i ++)
-		%this.forceEquip(%i, %handler.startEquip[%i]);
+	hReturnToSpawn = !%useFakeBrick;
+	%i ++)
+	%this.forceEquip(%i, %handler.startEquip[%i]);
 	%this.applyUniform();
 	%player.setShapeNameColor(%handler.colorRGB);
-	return %player;
 }
 
 function Slayer_AiController::onSpawn(%this)
@@ -38,8 +31,7 @@ function Slayer_AiController::onDeath(%this, %obj, %killer, %type, %area)
 {
 	if(!%this.dead())
 	{
-		%spawnTime = %mini.botRespawnTime;
-		%this.respawnSchedule = %this.schedule(%spawnTime, "spawnPlayer");
+	%spawnTime = %mini.botRespawnTime;
 	}
 }
 

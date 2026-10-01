@@ -40,94 +40,86 @@ datablock ShapeBaseImageData(BlockyLMGImage : LightMachinegunImage)
 
 function ClassicLMGImage::onFire(%this,%obj,%slot)
 {
-   TT_knockback(%obj, 0, 0, -1);
-   %projectile = %this.projectile;
-   %spread = 0.002;
-   %shellCount = 1;
-   %this.TT_decrementAmmo(%obj);
-   return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	TT_knockback(%obj, 0, 0, -1);
+	%spread = 0.002;
+	%shellCount = 1;
+	%this.TT_decrementAmmo(%obj);
+	return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
 }
 
 function ClassicLMGImage::onFire2(%this,%obj,%slot)
 {
-   TT_knockback(%obj, 0, 0, -1);
-   %shellCount = 1;
-   %spread = 0.0005;
-   %projectile = %this.projectile;
-   return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	TT_knockback(%obj, 0, 0, -1);
+	%shellCount = 1;
+	%spread = 0.0005;
+	return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
 }
 
 function ClassicLMGImage::onClick(%this,%obj,%slot)
 {
-   %obj.pushDatablock(LMGArmor.getID());
+	%obj.pushDatablock(LMGArmor.getID());
 }
 
 function ClassicLMGImage::onHalt(%this,%obj,%slot)
 {
-   %obj.popDatablock(LMGArmor.getID());
+	%obj.popDatablock(LMGArmor.getID());
 }
 
 function ClassicLMGImage::onEmptyTransition(%this,%obj,%slot)
 {
-   %obj.popDatablock(LMGArmor.getID());
+	%obj.popDatablock(LMGArmor.getID());
 }
 
 function ClassicLMGImage::onUnMount(%this,%obj,%slot)
 {
-   %obj.popDatablock(LMGArmor.getID());
-   Parent::onUnMount(%this,%obj,%slot);
+	%obj.popDatablock(LMGArmor.getID());
 }
 
 function ClassicLMGProjectile1::damage(%this,%obj,%col,%fade,%pos,%normal)
 {
-   if(%col.getType() & $TypeMasks::PlayerObjectType)
-      TT_dampenVelocity(%col, 2);
-   Parent::damage(%this,%obj,%col,%fade,%pos,%normal);
+	if(%col.getType() & $TypeMasks::PlayerObjectType)
+	TT_dampenVelocity(%col, 2);
 }
 
 function BlockyLMGImage::onFire(%this,%obj,%slot)
 {
-   TT_knockback(%obj, 0, 0, -1);
-   %projectile = %this.projectile;
-   %spread = 0.002;
-   %shellCount = 1;
-   %this.TT_decrementAmmo(%obj);
-   return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	TT_knockback(%obj, 0, 0, -1);
+	%spread = 0.002;
+	%shellCount = 1;
+	%this.TT_decrementAmmo(%obj);
+	return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
 }
 
 function BlockyLMGImage::onFire2(%this,%obj,%slot)
 {
-   TT_knockback(%obj, 0, 0, -1);
-   %shellCount = 1;
-   %spread = 0.0005;
-   %projectile = %this.projectile;
-   return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	TT_knockback(%obj, 0, 0, -1);
+	%shellCount = 1;
+	%spread = 0.0005;
+	return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
 }
 
 function BlockyLMGImage::onClick(%this,%obj,%slot)
 {
-   %obj.pushDatablock(LMGArmor.getID());
+	%obj.pushDatablock(LMGArmor.getID());
 }
 
 function BlockyLMGImage::onHalt(%this,%obj,%slot)
 {
-   %obj.popDatablock(LMGArmor.getID());
+	%obj.popDatablock(LMGArmor.getID());
 }
 
 function BlockyLMGImage::onEmptyTransition(%this,%obj,%slot)
 {
-   %obj.popDatablock(LMGArmor.getID());
+	%obj.popDatablock(LMGArmor.getID());
 }
 
 function BlockyLMGImage::onUnMount(%this,%obj,%slot)
 {
-   %obj.popDatablock(LMGArmor.getID());
-   Parent::onUnMount(%this,%obj,%slot);
+	%obj.popDatablock(LMGArmor.getID());
 }
 
 function BlockyLMGProjectile1::damage(%this,%obj,%col,%fade,%pos,%normal)
 {
-   if(%col.getType() & $TypeMasks::PlayerObjectType)
-      TT_dampenVelocity(%col, 2);
-   Parent::damage(%this,%obj,%col,%fade,%pos,%normal);
+	if(%col.getType() & $TypeMasks::PlayerObjectType)
+	TT_dampenVelocity(%col, 2);
 }

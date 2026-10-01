@@ -502,7 +502,7 @@ function shrapGrenImage::onPinDrop(%this, %obj, %slot)
 
 function sendCenterNade(%client)
 {
-   if(isObject(%client.player) && %client.player.warntime !$= "0 seconds")
+   if(isObject(%client.player) && %client.player.warntime !$= "no wait")
    {
       commandtoclient(%client,'centerprint',"\c5"@%client.player.warnTime@"\c6 cooking time left.",0.15);
       %client.player.warntime = getWord(%client.player.warntime,0)-0.1@" seconds";

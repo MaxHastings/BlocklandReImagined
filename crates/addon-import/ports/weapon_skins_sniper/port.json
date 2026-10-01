@@ -2,7 +2,7 @@
   "schema_version": 1,
   "include": [
     "tier-tactical-core",
-    "tier-tactical"
+    "tier-tactical-ammo", "tier-tactical"
   ],
   "notes": "Tier+Tactical Military Sniper skins on Tier 2's Military Sniper and ammo system: hitscan head hits crit only while Emote_Critical is on, with their own models and kill messages."
 }

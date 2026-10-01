@@ -421,7 +421,15 @@ fn cmd_alt_fire(p) {
     }
     let table = alt_images();
     if table.contains(me.image) {
-        mount_image(p, table[me.image].image);
+        let row = table[me.image];
+        // A second mode behind a preference (Frog's Vulcan Is Deployable).
+        if row.contains("when") {
+            let v = pref(row.when);
+            if v != () && !v {
+                return;
+            }
+        }
+        mount_image(p, row.image);
     }
 }
 

@@ -73,99 +73,78 @@ datablock ShapeBaseImageData(ClassicShotgunImage : standinPumpImage)
 
 function SquaredShotgunImage::onFire(%this,%obj,%slot)
 {
-   if(%this.TT_canFire(%obj))
-   {
-      serverPlay3D(standinBoomSound,%obj.getPosition());
-      %obj.playThread(2, activate);
-
-      %this.TT_decrementAmmo(%obj);
-
-      if($Pref::Server::TT::Recoil)
-         %obj.spawnExplosion(standinKickProjectile,"1 1 1");
-
-      %projectile = %this.projectile;
-      %spread = 0.004;
-      %shellCount = 5;
-
-      %p = TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
-      TT_createProjectile(%this, %obj, %slot, SquaredshotgunBlastProjectile, 1);
-   }
-   else if(!$Pref::Server::TT::DeathStopFiring || %obj.getDamagePercent() < 1.0)
-   {
-      serverPlay3D(standinJamSound,%obj.getPosition());
-   }
-   %this.TT_displayAmmo(%obj);
-   return %p;
+	if(%this.TT_canFire(%obj))
+	{
+	serverPlay3D(standinBoomSound,%obj.getPosition());
+	%obj.playThread(2, activate);
+	%this.TT_decrementAmmo(%obj);
+	if($Pref::Server::TT::Recoil)
+	%obj.spawnExplosion(standinKickProjectile,"1 1 1");
+	%projectile = %this.projectile;
+	%spread = 0.004;
+	%shellCount = 5;
+	%p = TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	TT_createProjectile(%this, %obj, %slot, SquaredshotgunBlastProjectile, 1);
+	}
+	else if(!$Pref::Server::TT::DeathStopFiring || %obj.getDamagePercent() < 1.0)
+	{
+	serverPlay3D(standinJamSound,%obj.getPosition());
+	}
 }
 
 function SquaredShotgunImage::onReloaded(%this,%obj,%slot)
 {
-   %this.TT_incrementReload(%obj, %slot);
-   %this.TT_displayAmmo(%obj);
+	%this.TT_incrementReload(%obj, %slot);
 }
 
 function ScattergunImage::onFire(%this,%obj,%slot)
 {
-   if(%this.TT_canFire(%obj))
-   {
-      serverPlay3D(standinBoomSound,%obj.getPosition());
-      %obj.playThread(2, activate);
-
-      %this.TT_decrementAmmo(%obj);
-
-      if($Pref::Server::TT::Recoil)
-         %obj.spawnExplosion(standinKickProjectile,"1 1 1");
-
-      %projectile = %this.projectile;
-      %spread = 0.004;
-      %shellCount = 5;
-
-      %p = TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
-      TT_createProjectile(%this, %obj, %slot, SquaredshotgunBlastProjectile, 1);
-   }
-   else if(!$Pref::Server::TT::DeathStopFiring || %obj.getDamagePercent() < 1.0)
-   {
-      serverPlay3D(standinJamSound,%obj.getPosition());
-   }
-   %this.TT_displayAmmo(%obj);
-   return %p;
+	if(%this.TT_canFire(%obj))
+	{
+	serverPlay3D(standinBoomSound,%obj.getPosition());
+	%obj.playThread(2, activate);
+	%this.TT_decrementAmmo(%obj);
+	if($Pref::Server::TT::Recoil)
+	%obj.spawnExplosion(standinKickProjectile,"1 1 1");
+	%projectile = %this.projectile;
+	%spread = 0.004;
+	%shellCount = 5;
+	%p = TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	TT_createProjectile(%this, %obj, %slot, SquaredshotgunBlastProjectile, 1);
+	}
+	else if(!$Pref::Server::TT::DeathStopFiring || %obj.getDamagePercent() < 1.0)
+	{
+	serverPlay3D(standinJamSound,%obj.getPosition());
+	}
 }
 
 function ScattergunImage::onReloaded(%this,%obj,%slot)
 {
-   %this.TT_incrementReload(%obj, %slot);
-   %this.TT_displayAmmo(%obj);
+	%this.TT_incrementReload(%obj, %slot);
 }
 
 function classicShotgunImage::onFire(%this,%obj,%slot)
 {
-   if(%this.TT_canFire(%obj))
-   {
-      serverPlay3D(standinBoomSound,%obj.getPosition());
-      %obj.playThread(2, activate);
-
-      %this.TT_decrementAmmo(%obj);
-
-      if($Pref::Server::TT::Recoil)
-         %obj.spawnExplosion(standinKickProjectile,"1 1 1");
-
-      %projectile = %this.projectile;
-      %spread = 0.004;
-      %shellCount = 5;
-
-      %p = TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
-      TT_createProjectile(%this, %obj, %slot, SquaredshotgunBlastProjectile, 1);
-   }
-   else if(!$Pref::Server::TT::DeathStopFiring || %obj.getDamagePercent() < 1.0)
-   {
-      serverPlay3D(standinJamSound,%obj.getPosition());
-   }
-   %this.TT_displayAmmo(%obj);
-   return %p;
+	if(%this.TT_canFire(%obj))
+	{
+	serverPlay3D(standinBoomSound,%obj.getPosition());
+	%obj.playThread(2, activate);
+	%this.TT_decrementAmmo(%obj);
+	if($Pref::Server::TT::Recoil)
+	%obj.spawnExplosion(standinKickProjectile,"1 1 1");
+	%projectile = %this.projectile;
+	%spread = 0.004;
+	%shellCount = 5;
+	%p = TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	TT_createProjectile(%this, %obj, %slot, SquaredshotgunBlastProjectile, 1);
+	}
+	else if(!$Pref::Server::TT::DeathStopFiring || %obj.getDamagePercent() < 1.0)
+	{
+	serverPlay3D(standinJamSound,%obj.getPosition());
+	}
 }
 
 function ClassicShotgunImage::onReloaded(%this,%obj,%slot)
 {
-   %this.TT_incrementReload(%obj, %slot);
-   %this.TT_displayAmmo(%obj);
+	%this.TT_incrementReload(%obj, %slot);
 }

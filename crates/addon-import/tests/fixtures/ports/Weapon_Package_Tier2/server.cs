@@ -11,35 +11,13 @@ AddDamageType("MarksmanHeadshot", '%1 shot themselves', '%2 critted %1', 0.75, 1
 // A body laid over the player and lifted again, the shape kept.
 function Player::pushDatablock(%this,%data)
 {
-   %data = %data.getID();
-   if(%this.getState() $= "Dead")
-      return;
-   if(fileName(%this.dataBlock.shapeFile) !$= fileName(%data.shapeFile))
-      return;
-   if(%this.altDataID[%data] !$= "")
-      return;
-   if(%this.altDataNum < 1)
-   {
-      %this.altDataNum = 1;
-      %this.altData[0] = %this.dataBlock.getID();
-   }
-   %this.altData[%this.altDataNum] = %data;
-   %this.altDataID[%data] = %this.altDataNum;
-   %this.altDataNum++;
-   %health = %this.dataBlock.maxDamage - %this.getDamageLevel();
-   %this.setDatablock(%data);
-   %this.setHealth(%health);
+	if(fileName(%this.dataBlock.shapeFile) !$= fileName(%data.shapeFile))
+	return;
 }
 
 function Player::popDatablock(%this,%data)
 {
-   if(%this.getState() $= "Dead" || %this.altDataID[%data] $= "")
-      return;
-   %this.altDataID[%data] = "";
-   %this.altDataNum--;
-   %health = %this.dataBlock.maxDamage - %this.getDamageLevel();
-   %this.setDatablock(%this.altData[%this.altDataNum - 1]);
-   %this.setHealth(%health);
+	%this.setDatablock(%this.altData[%this.altDataNum - 1]);
 }
 
 // A jet press reaches the held image.
@@ -47,13 +25,9 @@ package StandinAltTrigger
 {
    function Armor::onTrigger(%db, %player, %triggerSlot, %val)
    {
-      for(%i = 0; %i < 4; %i++)
-      {
-         if(isObject(%image = %player.getMountedImage(%i)) && %image.altTriggerEnabled)
-            %image.onAltTrigger(%player, %db, %triggerSlot, %val);
-      }
-      Parent::onTrigger(%db, %player, %triggerSlot, %val);
-   }
+	if(isObject(%image = %player.getMountedImage(%i)) && %image.altTriggerEnabled)
+	%image.onAltTrigger(%player, %db, %triggerSlot, %val);
+}
 };
 activatePackage(StandinAltTrigger);
 
@@ -85,20 +59,20 @@ datablock ShapeBaseImageData(TAssaultRifleImage : standinSidearmImage)
 
 function TAssaultRifleImage::onFire(%this,%obj,%slot)
 {
-   if((getSimTime() - %obj.lastShotTime) > 400)
-   {
-      %projectile = TAssaultRifleProjectile2;
-      %spread = 0.0002;
-   }
-   else
-   {
-      %projectile = %this.projectile;
-      %spread = 0.003;
-   }
-   %shellCount = 1;
-   %obj.lastShotTime = getSimTime();
-   %this.TT_decrementAmmo(%obj);
-   return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	if((getSimTime() - %obj.lastShotTime) > 400)
+	{
+	%projectile = TAssaultRifleProjectile2;
+	%spread = 0.0002;
+	}
+	else
+	{
+	%projectile = %this.projectile;
+	%spread = 0.003;
+	}
+	%shellCount = 1;
+	%obj.lastShotTime = getSimTime();
+	%this.TT_decrementAmmo(%obj);
+	return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
 }
 
 // The battle rifle: a gunner pushed up or down, a round that slows.
@@ -125,19 +99,17 @@ datablock ShapeBaseImageData(BattleRifleImage : standinSidearmImage)
 
 function BattleRifleImage::onFire(%this,%obj,%slot)
 {
-   TT_knockback(%obj, 0, 0, -2);
-   %projectile = %this.projectile;
-   %spread = 0.0005;
-   %shellCount = 1;
-   %this.TT_decrementAmmo(%obj);
-   return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	TT_knockback(%obj, 0, 0, -2);
+	%spread = 0.0005;
+	%shellCount = 1;
+	%this.TT_decrementAmmo(%obj);
+	return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
 }
 
 function BattleRifleProjectile1::damage(%this,%obj,%col,%fade,%pos,%normal)
 {
-   if(%col.getType() & $TypeMasks::PlayerObjectType)
-      TT_dampenVelocity(%col, 3);
-   Parent::damage(%this,%obj,%col,%fade,%pos,%normal);
+	if(%col.getType() & $TypeMasks::PlayerObjectType)
+	TT_dampenVelocity(%col, 3);
 }
 
 // The machine gun: a second, free and tighter round each cycle, and a
@@ -204,49 +176,45 @@ datablock ShapeBaseImageData(LightMachinegunImage : standinSidearmImage)
 
 function LightMachinegunImage::onFire(%this,%obj,%slot)
 {
-   TT_knockback(%obj, 0, 0, -1);
-   %projectile = %this.projectile;
-   %spread = 0.002;
-   %shellCount = 1;
-   %this.TT_decrementAmmo(%obj);
-   return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	TT_knockback(%obj, 0, 0, -1);
+	%spread = 0.002;
+	%shellCount = 1;
+	%this.TT_decrementAmmo(%obj);
+	return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
 }
 
 function LightMachinegunImage::onFire2(%this,%obj,%slot)
 {
-   TT_knockback(%obj, 0, 0, -1);
-   %shellCount = 1;
-   %spread = 0.0005;
-   %projectile = %this.projectile;
-   return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	TT_knockback(%obj, 0, 0, -1);
+	%shellCount = 1;
+	%spread = 0.0005;
+	return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
 }
 
 function LightMachinegunImage::onClick(%this,%obj,%slot)
 {
-   %obj.pushDatablock(LMGArmor.getID());
+	%obj.pushDatablock(LMGArmor.getID());
 }
 
 function LightMachinegunImage::onHalt(%this,%obj,%slot)
 {
-   %obj.popDatablock(LMGArmor.getID());
+	%obj.popDatablock(LMGArmor.getID());
 }
 
 function LightMachinegunImage::onEmptyTransition(%this,%obj,%slot)
 {
-   %obj.popDatablock(LMGArmor.getID());
+	%obj.popDatablock(LMGArmor.getID());
 }
 
 function LightMachinegunImage::onUnMount(%this,%obj,%slot)
 {
-   %obj.popDatablock(LMGArmor.getID());
-   Parent::onUnMount(%this,%obj,%slot);
+	%obj.popDatablock(LMGArmor.getID());
 }
 
 function LightMachinegunProjectile1::damage(%this,%obj,%col,%fade,%pos,%normal)
 {
-   if(%col.getType() & $TypeMasks::PlayerObjectType)
-      TT_dampenVelocity(%col, 2);
-   Parent::damage(%this,%obj,%col,%fade,%pos,%normal);
+	if(%col.getType() & $TypeMasks::PlayerObjectType)
+	TT_dampenVelocity(%col, 2);
 }
 
 // The combat shotgun, whose jet press mounts its double blast.
@@ -270,20 +238,16 @@ datablock ShapeBaseImageData(CombatShotgunImage : standinPumpImage)
 
 function CombatShotgunImage::onFire(%this,%obj,%slot)
 {
-   %this.TT_decrementAmmo(%obj);
-   %projectile = %this.projectile;
-   %spread = 0.004;
-   %shellCount = 5;
-   return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	%this.TT_decrementAmmo(%obj);
+	%projectile = %this.projectile;
+	%spread = 0.004;
+	%shellCount = 5;
+	return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
 }
 
 function CombatShotgunImage::onAltTrigger(%this,%obj,%objDB,%triggerSlot,%val)
 {
-   if(%val && %triggerSlot == 4)
-   {
-      %obj.TT_retainImageAmmo = 1;
-      %obj.mountImage(combatShotgunAltfireImage, 0);
-   }
+	%obj.mountImage(combatShotgunAltfireImage, 0);
 }
 
 datablock ShapeBaseImageData(CombatShotgunAltfireImage)
@@ -314,24 +278,23 @@ datablock ShapeBaseImageData(CombatShotgunAltfireImage)
 
 function CombatShotgunAltfireImage::onFire(%this,%obj,%slot)
 {
-   if(%this.TT_canFire(%obj, 2))
-   {
-      %this.TT_decrementAmmo(%obj, 2);
-      %projectile = %this.projectile;
-      %spread = 0.004;
-      %shellcount = 10;
-      TT_createProjectile(%this, %obj, %slot, %projectile, %shellcount, %spread);
-      %projectile = CombatShotgunBlastProjectile;
-      %spread = 0.001;
-      %shellcount = 3;
-      TT_createProjectile(%this, %obj, %slot, %projectile, %shellcount, %spread);
-   }
+	if(%this.TT_canFire(%obj, 2))
+	{
+	%this.TT_decrementAmmo(%obj, 2);
+	%projectile = %this.projectile;
+	%spread = 0.004;
+	%shellcount = 10;
+	TT_createProjectile(%this, %obj, %slot, %projectile, %shellcount, %spread);
+	%projectile = CombatShotgunBlastProjectile;
+	%spread = 0.001;
+	%shellcount = 3;
+	TT_createProjectile(%this, %obj, %slot, %projectile, %shellcount, %spread);
+	}
 }
 
 function CombatShotgunAltfireImage::onDone(%this,%obj,%slot)
 {
-   %obj.TT_retainImageAmmo = 1;
-   %obj.mountImage(CombatShotgunImage, %slot);
+	%obj.mountImage(CombatShotgunImage, %slot);
 }
 
 // The magnum, with headshots, and its scoped twin, an easter egg.
@@ -357,16 +320,15 @@ datablock ShapeBaseImageData(MagnumImage : standinSidearmImage)
 
 function MagnumImage::onFire(%this,%obj,%slot)
 {
-   %projectile = %this.projectile;
-   %spread = 0.0001;
-   %shellCount = 1;
-   %this.TT_decrementAmmo(%obj);
-   return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	%spread = 0.0001;
+	%shellCount = 1;
+	%this.TT_decrementAmmo(%obj);
+	return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
 }
 
 function MagnumProjectile::damage(%this,%obj,%col,%fade,%pos,%normal)
 {
-   TT_processHeadshotDamage(%this, %obj, %col, %pos, %this.directDamage, 2, $DamageType::MagnumHeadshot);
+	TT_processHeadshotDamage(%this, %obj, %col, %pos, %this.directDamage, 2, $DamageType::MagnumHeadshot);
 }
 
 datablock ItemData(ScopedMagnumItem : MagnumItem)
@@ -408,5 +370,5 @@ function MilitarySniperImage::onFire(%this,%obj,%slot)
 
 function MilitarySniperImage::TT_isRaycastCritical(%this, %obj, %slot, %col, %pos, %normal, %hit)
 {
-   return TT_isRaycastHeadshot(%this, %obj, %slot, %col, %pos, %normal, %hit);
+	return TT_isRaycastHeadshot(%this, %obj, %slot, %col, %pos, %normal, %hit);
 }

@@ -2,7 +2,7 @@
   "schema_version": 1,
   "include": [
     "tier-tactical-core",
-    "tier-tactical"
+    "tier-tactical-ammo", "tier-tactical"
   ],
   "notes": "Tier+Tactical Submachine Gun skins on Tier 1's Submachine Gun and ammo system: their rounds slow whoever they hit, with their own models, sounds and numbers. Each skin's onReloadWait is named by none of its states, so v20 never ran it.",
   "handles": {

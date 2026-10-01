@@ -1000,9 +1000,9 @@ fn glass_release_guns_shoot_like_their_scripts() {
         (kick.amplitude, kick.frequency, kick.seconds),
         (0.9, 3.0, 0.4)
     );
-    // A shot after half a second's pause is twice as true.
+    // A shot after a 400 ms pause is twice as true.
     let rested = shot.rested.unwrap();
-    assert_eq!((rested.after_ticks, rested.spread), (60, 0.0001));
+    assert_eq!((rested.after_ticks, rested.spread), (48, 0.0001));
     // The reload's arm move, and the moves and sounds it timed by hand.
     let sound = "weapon_adventurepack:sound/standinfiresound";
     let reload = pistol.states.iter().find(|s| s.script == "onReload").unwrap();
@@ -1011,7 +1011,7 @@ fn glass_release_guns_shoot_like_their_scripts() {
         reload.cues,
         [
             bri_weapons::Cue {
-                after_ms: 450,
+                after_ms: 420,
                 thread: Some(2),
                 sequence: "plant".into(),
                 ..Default::default()
@@ -1041,7 +1041,7 @@ fn glass_release_guns_shoot_like_their_scripts() {
         load.cues,
         [
             bri_weapons::Cue {
-                after_ms: 250,
+                after_ms: 240,
                 thread: Some(2),
                 sequence: "plant".into(),
                 ..Default::default()

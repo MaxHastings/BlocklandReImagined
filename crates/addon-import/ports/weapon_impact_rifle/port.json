@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "include": ["tier-tactical-core", "tier-tactical"],
+  "include": ["tier-tactical-core", "tier-tactical-ammo", "tier-tactical"],
   "notes": "Kai's Impact Rifle on Tier 1's ammo system: a bolt-action round with its own blast, spreading a little when its holder stands still and none on the move, as Kai's check reads: standing still and more than half a second since the holder's last shot. Only Tier 2's Assault Rifle and Light MG note a last shot, so the pause holds unless one of those just fired.",
   "scripts": [
     {

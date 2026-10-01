@@ -1,0 +1,5 @@
+{
+  "schema_version": 1,
+  "include": ["tier-tactical-core", "tier-tactical-ammo", "tier-tactical"],
+  "notes": "Frog's Weaponry WWII Pack on Frog's Weaponry and Tier+Tactical's ammo system: its guns use Frog's ammo types on Tier 1's magazines, reloads and headshots."
+}

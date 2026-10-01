@@ -6,7 +6,7 @@ datablock ItemData(AkimboClassicPistolItem : ClassicPistolItem)
 {
 	uiName = "Stand-in AkimboClassicPistol";
 	image = AkimboClassicPistolImage;
-	TT_maxAmmo = classicpistolitem.TT_maxAmmo*2;
+	TT_maxAmmo = classicpistolitem.TT_maxAmmo * 2;
 };
 
 datablock ShapeBaseImageData(AkimboClassicPistolImage : standinPairImage)
@@ -26,7 +26,7 @@ datablock ItemData(AkimboModernPistolItem : ModernPistolItem)
 {
 	uiName = "Stand-in AkimboModernPistol";
 	image = AkimboModernPistolImage;
-	TT_maxAmmo = Modernpistolitem.TT_maxAmmo*2;
+	TT_maxAmmo = Modernpistolitem.TT_maxAmmo * 2;
 };
 
 datablock ShapeBaseImageData(AkimboModernPistolImage : standinPairImage)
@@ -46,7 +46,7 @@ datablock ItemData(AkimboSilencedPistolItem : SilencedPistolItem)
 {
 	uiName = "Stand-in AkimboSilencedPistol";
 	image = AkimboSilencedPistolImage;
-	TT_maxAmmo = Silencedpistolitem.TT_maxAmmo*2;
+	TT_maxAmmo = Silencedpistolitem.TT_maxAmmo * 2;
 };
 
 datablock ShapeBaseImageData(AkimboSilencedPistolImage : standinPairImage)
@@ -64,8 +64,7 @@ datablock ShapeBaseImageData(LeftHandedSilencedPistolImage : standinLeftImage)
 
 function AkimboClassicPistolImage::onMount(%this, %obj, %slot)
 {
-   Parent::onMount(%this, %obj, %slot);
-   %obj.mountImage(LeftHandedClassicPistolImage, 1);
+	%obj.mountImage(LeftHandedClassicPistolImage, 1);
 }
 
 function AkimboClassicPistolImage::onUnMount(%this,%obj,%slot)
@@ -81,29 +80,28 @@ function AkimboClassicPistolImage::onFire(%this,%obj,%slot)
 
 function AkimboClassicPistolImage::onFireAkimbo(%this,%obj,%slot)
 {
-   %obj.setImageTrigger(1,1);
+	%obj.setImageTrigger(1,1);
 }
 
 function LeftHandedClassicPistolImage::onFire(%this,%obj,%slot)
 {
-   if(vectorLen(%obj.getVelocity()) > 0.1)
-   {
-      %this.TT_raycastSpreadAmt = 0.003;
-      %this.TT_raycastWeaponRange = 50;
-   }
-   else
-   {
-      %this.TT_raycastSpreadAmt = 0.001;
-      %this.TT_raycastWeaponRange = 120;
-   }
-   %this.TT_decrementAmmo(%obj);
-   return Parent::onFire(%this,%obj,%slot);
+	if(vectorLen(%obj.getVelocity()) > 0.1)
+	{
+	%this.TT_raycastSpreadAmt = 0.003;
+	%this.TT_raycastWeaponRange = 50;
+	}
+	else
+	{
+	%this.TT_raycastSpreadAmt = 0.001;
+	%this.TT_raycastWeaponRange = 120;
+	%this.TT_decrementAmmo(%obj);
+	return Parent::onFire(%this,%obj,%slot);
+	}
 }
 
 function AkimboModernPistolImage::onMount(%this, %obj, %slot)
 {
-   Parent::onMount(%this, %obj, %slot);
-   %obj.mountImage(LeftHandedModernPistolImage, 1);
+	%obj.mountImage(LeftHandedModernPistolImage, 1);
 }
 
 function AkimboModernPistolImage::onUnMount(%this,%obj,%slot)
@@ -119,29 +117,28 @@ function AkimboModernPistolImage::onFire(%this,%obj,%slot)
 
 function AkimboModernPistolImage::onFireAkimbo(%this,%obj,%slot)
 {
-   %obj.setImageTrigger(1,1);
+	%obj.setImageTrigger(1,1);
 }
 
 function LeftHandedModernPistolImage::onFire(%this,%obj,%slot)
 {
-   if(vectorLen(%obj.getVelocity()) > 0.1)
-   {
-      %this.TT_raycastSpreadAmt = 0.003;
-      %this.TT_raycastWeaponRange = 50;
-   }
-   else
-   {
-      %this.TT_raycastSpreadAmt = 0.001;
-      %this.TT_raycastWeaponRange = 120;
-   }
-   %this.TT_decrementAmmo(%obj);
-   return Parent::onFire(%this,%obj,%slot);
+	if(vectorLen(%obj.getVelocity()) > 0.1)
+	{
+	%this.TT_raycastSpreadAmt = 0.003;
+	%this.TT_raycastWeaponRange = 50;
+	}
+	else
+	{
+	%this.TT_raycastSpreadAmt = 0.001;
+	%this.TT_raycastWeaponRange = 120;
+	%this.TT_decrementAmmo(%obj);
+	return Parent::onFire(%this,%obj,%slot);
+	}
 }
 
 function AkimboSilencedPistolImage::onMount(%this, %obj, %slot)
 {
-   Parent::onMount(%this, %obj, %slot);
-   %obj.mountImage(LeftHandedSilencedPistolImage, 1);
+	%obj.mountImage(LeftHandedSilencedPistolImage, 1);
 }
 
 function AkimboSilencedPistolImage::onUnMount(%this,%obj,%slot)
@@ -157,21 +154,21 @@ function AkimboSilencedPistolImage::onFire(%this,%obj,%slot)
 
 function AkimboSilencedPistolImage::onFireAkimbo(%this,%obj,%slot)
 {
-   %obj.setImageTrigger(1,1);
+	%obj.setImageTrigger(1,1);
 }
 
 function LeftHandedSilencedPistolImage::onFire(%this,%obj,%slot)
 {
-   if(vectorLen(%obj.getVelocity()) > 0.1)
-   {
-      %this.TT_raycastSpreadAmt = 0.003;
-      %this.TT_raycastWeaponRange = 50;
-   }
-   else
-   {
-      %this.TT_raycastSpreadAmt = 0.001;
-      %this.TT_raycastWeaponRange = 120;
-   }
-   %this.TT_decrementAmmo(%obj);
-   return Parent::onFire(%this,%obj,%slot);
+	if(vectorLen(%obj.getVelocity()) > 0.1)
+	{
+	%this.TT_raycastSpreadAmt = 0.003;
+	%this.TT_raycastWeaponRange = 50;
+	}
+	else
+	{
+	%this.TT_raycastSpreadAmt = 0.001;
+	%this.TT_raycastWeaponRange = 120;
+	%this.TT_decrementAmmo(%obj);
+	return Parent::onFire(%this,%obj,%slot);
+	}
 }

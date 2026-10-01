@@ -6,17 +6,21 @@
 mod common;
 
 use bri_addon_import::{Options, import};
+use bri_content::{
+    brick::Brick as Mesh,
+    collision::{CollisionBody, Part},
+};
 use bri_minigames::Settings;
 use bri_package::packages::{PackageEntry, PackageSet, Side};
 use bri_package_runtime::Catalog;
 use bri_sim::{
-    definitions::Definitions,
+    definitions::{Definition, Definitions, Special},
     player::MoveInput,
     session::{ActionAim, Command, MiniGameRequest, Notice, PackageArg, PackageCommand, Session},
     simulation::Simulation,
 };
 use bri_weapons::*;
-use bri_world::{OwnerId, World};
+use bri_world::{EventRow, EventTarget, EventValue, OwnerId, World, authority::Edit};
 use glam::Vec3;
 use rapier3d::prelude::*;
 use serde_json::{Value, json};
@@ -315,6 +319,12 @@ fn cmd_team(p, name) {
         }
     }
 }
+fn cmd_poke(p, brick) {
+    fire_brick_input(brick, "onPoke", p);
+}
+fn cmd_reserves(p) {
+    set("reserves", player(p).reserves);
+}
 fn cmd_mag(p) {
     let m = player(p).magazine;
     set("mag", if m == () { "none" } else {
@@ -331,7 +341,7 @@ fn catalog(root: &Path, ns: &str, extra: &[&str]) -> Arc<Catalog> {
     let manifest = json!({
         "schema_version": 1, "id": "probe", "version": "1.0.0", "api": 1,
         "name": "probe", "license": "CC0-1.0",
-        "capabilities": ["player", "world.edit", "damage", "minigame"],
+        "capabilities": ["player", "world.edit", "damage", "minigame", "brick_events"],
         "provides": [
             { "kind": "behaviour", "id": "probe:behaviour/main", "file": "behaviour.json" },
             { "kind": "script", "id": "probe:script/main", "file": "main.rhai" }
@@ -340,7 +350,10 @@ fn catalog(root: &Path, ns: &str, extra: &[&str]) -> Arc<Catalog> {
     let behaviour = json!({
         "schema_version": 1,
         "script": "main.rhai",
+        "brick_inputs": [{ "name": "onPoke", "targets": ["Player"] }],
         "commands": [
+            { "name": "poke", "args": ["int"] },
+            { "name": "reserves" },
             { "name": "drop", "args": ["string"] },
             { "name": "goto", "args": ["float", "float", "float"] },
             { "name": "mag" },
@@ -352,6 +365,7 @@ fn catalog(root: &Path, ns: &str, extra: &[&str]) -> Arc<Catalog> {
         ],
         "state": { "global": {
             "mag": { "default": "", "visible": "everyone" },
+            "reserves": { "default": {}, "visible": "everyone" },
             "who": { "default": "", "visible": "everyone" },
             "worn": { "default": "", "visible": "everyone" }
         } }
@@ -389,6 +403,47 @@ fn catalog(root: &Path, ns: &str, extra: &[&str]) -> Arc<Catalog> {
     Arc::new(Catalog::load(root, &set, true).unwrap_or_else(|e| panic!("{e:#?}")))
 }
 
+/// The one brick kind the range has: a 2x1 plate to hang wrench rows on.
+const PLATE: &str = "range:brick/plate";
+fn plate() -> Definitions {
+    let mesh = Mesh {
+        schema_version: 1,
+        id: PLATE.into(),
+        footprint_studs: [2, 1],
+        height_plates: 1,
+        attachment_rows: vec!["bb".into()],
+        collision_boxes: vec![],
+        needs_external_collision: false,
+        coverage: None,
+        quads: vec![],
+    };
+    let collision = CollisionBody {
+        id: PLATE.into(),
+        parts: vec![Part::Box {
+            center: [0.0; 3],
+            size: [1.0, 0.2, 0.5],
+        }],
+    };
+    let shape = bri_physics::content::collider(&collision)
+        .unwrap()
+        .build()
+        .shared_shape()
+        .clone();
+    let definition = Definition {
+        mesh,
+        collision,
+        shape,
+        indestructible: true,
+        special: Special::None,
+        reflection: None,
+        link: None,
+        glass: [0.0; 4],
+    };
+    Definitions {
+        entries: [(PLATE.to_owned(), definition)].into(),
+    }
+}
+
 struct Game {
     s: Session,
     ns: String,
@@ -409,14 +464,20 @@ impl Game {
         let mut s = Session::new(
             Simulation::new(
                 World::new("Range".into(), "range".into(), vec![[1.0; 4]]),
-                Definitions::default(),
+                plate(),
                 vec![ground],
             )
             .unwrap(),
         );
+        // Each other import's guns; an Add-On of only rules has none.
         let parts = extra
             .iter()
-            .filter(|id| !id.ends_with("-rules"))
+            .filter(|id| {
+                root.join("addons")
+                    .join(id)
+                    .join("assets/weapons.json")
+                    .exists()
+            })
             .map(|id| (format!("addons/{id}"), pack(&root.join("addons").join(id))))
             .collect();
         let (merged, notes) = pack(out).merge(parts);
@@ -2575,4 +2636,223 @@ fn a_required_add_on_beside_the_copy_is_its_reference() {
     );
     let beside = import_tier2("beside");
     assert!(beside.ports[0].applied, "{:?}", beside.ports[0].reason);
+}
+
+/// A wrench row on `onPoke` aimed at the player who pokes.
+fn add_ammo_row(choice: i64, amount: i64, ignore_max: bool) -> EventRow {
+    EventRow {
+        preserved: None,
+        enabled: true,
+        input: "onPoke".into(),
+        delay_ms: 0,
+        target: EventTarget::Slot(serde_json::from_value(json!("Player")).unwrap()),
+        output: "AddAmmoTT".into(),
+        params: vec![
+            EventValue::Int(choice),
+            EventValue::Int(amount),
+            EventValue::Bool(ignore_max),
+        ],
+    }
+}
+
+/// Event_AddAmmoTT beside Tier 1: its AddAmmoTT wrench output hands the
+/// player a row aims at rounds of the type its list names, only up to the
+/// type's most unless Ignore Max is set, a full load for -1, and with All
+/// every type Tier 1 registered.
+#[test]
+fn the_add_ammo_event_hands_out_tier_ammo() {
+    let (dir, _, report) = imported_on(
+        "Event_AddAmmoTT",
+        "event_addammott",
+        &["Weapon_Package_Tier1"],
+        "add-ammo",
+    );
+    assert!(report.ports[0].applied, "{:?}", report.ports[0].reason);
+    // The output's list: All, then each Tier+Tactical type by its name.
+    let rules: Value = serde_json::from_slice(
+        &std::fs::read(dir.0.join("addons/event_addammott-rules/behaviour.json")).unwrap(),
+    )
+    .unwrap();
+    let output = &rules["brick_outputs"][0];
+    assert_eq!(output["name"], "AddAmmoTT");
+    let items = output["params"][0]["items"].as_array().unwrap();
+    assert_eq!(items[0], json!(["All", 0]));
+    let nine = items.iter().find(|i| i[0] == "9mm").unwrap()[1]
+        .as_i64()
+        .unwrap();
+    assert_eq!(
+        output["params"][1],
+        json!({ "type": "int", "min": -1, "max": 9999, "default": -1 })
+    );
+
+    let tier1 = import_beside(&dir.0, "Weapon_Package_Tier1", NS, &[]);
+    assert!(tier1.ports[0].applied, "{:?}", tier1.ports[0].reason);
+    let mut g = Game::with_add_ons(
+        &dir.0,
+        &dir.0.join("addons").join(NS),
+        NS,
+        &["event_addammott", "event_addammott-rules"],
+    );
+    g.s.set_event_catalog(
+        serde_json::from_value(json!({
+            "schema_version": 1, "inputs": [], "outputs": [], "sources": [], "scope": null
+        }))
+        .unwrap(),
+        Vec::new(),
+    )
+    .unwrap();
+    let a = g.join_host("A", Vec3::new(0.0, 0.05, 0.0));
+    g.steps(130);
+    let n = g.seq.entry(a).or_default();
+    *n += 1;
+    let brick = match g.s.command(
+        a,
+        *n,
+        Command::Plant {
+            definition: PLATE.into(),
+            position: [4.0, 0.1, 4.25],
+            quarter_turns: 0,
+            color: 0,
+        },
+    ) {
+        Ok(bri_sim::session::Reply::Planted(id)) => id,
+        other => panic!("plant: {other:?}"),
+    };
+    let poke = |g: &mut Game, row: EventRow| -> Value {
+        g.s.edit_brick(a, brick, Edit::Events(vec![row])).unwrap();
+        g.probe(a, "poke", vec![PackageArg::Int(brick as i64)]);
+        g.steps(2);
+        g.ask(a, "reserves")
+    };
+    // A new life starts with 140 of 9mm, at most 280.
+    assert_eq!(g.ask(a, "reserves")["tt-9mm"], 140);
+    assert_eq!(poke(&mut g, add_ammo_row(nine, 30, false))["tt-9mm"], 170);
+    // -1 is a full load; nothing more past the most.
+    assert_eq!(poke(&mut g, add_ammo_row(nine, -1, false))["tt-9mm"], 280);
+    assert_eq!(poke(&mut g, add_ammo_row(nine, 5, false))["tt-9mm"], 280);
+    // Ignore Max goes past it, and a type past its most stays there.
+    assert_eq!(poke(&mut g, add_ammo_row(nine, 50, true))["tt-9mm"], 330);
+    let all = poke(&mut g, add_ammo_row(0, -1, false));
+    assert_eq!(all["tt-9mm"], 330);
+    assert_eq!(all["tt-shotgun"], 48);
+    // Only the types a running pack registered.
+    assert!(all.get("tt-50cal").is_none(), "{all}");
+}
+
+const NSF: &str = "weapon_frogs_weaponry";
+
+/// Frog's Weaponry on Tier 1: the spinning gun slows its gunner as it
+/// spins up and lets go as the trigger comes up; jet roots it deployed and
+/// jet again picks it back up, unless the host turns deploying off; the
+/// launcher slows whoever holds it, unless the host turns that off.
+#[test]
+fn frogs_spinner_slows_and_deploys_and_the_launcher_slows() {
+    let (dir, out, report) = imported_on(
+        "Weapon_Frogs_Weaponry",
+        NSF,
+        &["Weapon_Package_Tier1"],
+        "frogs",
+    );
+    let port = &report.ports[0];
+    assert!(port.applied, "{:?}", port.reason);
+    let tier1 = import_beside(&dir.0, "Weapon_Package_Tier1", NS, &[]);
+    assert!(tier1.ports[0].applied, "{:?}", tier1.ports[0].reason);
+    let mut g = Game::with_add_ons(&dir.0, &out, NSF, &[NS]);
+    let a = g.join_host("A", Vec3::new(0.0, 0.05, 0.0));
+    g.steps(2);
+    g.s.set_spawn_points(vec![g.feet(a)]).unwrap();
+    let mut loadout: [Option<String>; 5] = Default::default();
+    loadout[0] = Some(format!("{NSF}:weapon/vulcanitem"));
+    loadout[1] = Some(format!("{NSF}:weapon/payloadlauncheritem"));
+    g.cmd(
+        a,
+        Command::MiniGame(MiniGameRequest::Create {
+            color: 0,
+            settings: Settings {
+                loadout,
+                ..Settings::default()
+            },
+        }),
+    );
+    g.steps(330);
+    let standing = "v20.player.playerstandardarmor";
+    let slowed = format!("{NSF}:archetype/slowedarmor");
+    let deployed = format!("{NSF}:archetype/deployedarmor");
+    let spinner = format!("{NSF}:image/vulcanimage");
+    let rooted = format!("{NSF}:image/vulcandeployedimage");
+    g.equip(a, "vulcanitem");
+    assert_eq!(g.who(a), format!("{standing}|{spinner}"));
+    // The trigger spins it up and slows the gunner; letting go lifts it.
+    g.cmd(a, Command::WeaponTrigger { down: true });
+    g.steps(10);
+    assert_eq!(g.who(a), format!("{slowed}|{spinner}"));
+    g.cmd(a, Command::WeaponTrigger { down: false });
+    g.steps(60);
+    assert_eq!(g.who(a), format!("{standing}|{spinner}"));
+    let jet = |g: &mut Game| {
+        g.looks.get_mut(&a).unwrap().jet = true;
+        g.steps(4);
+        g.looks.get_mut(&a).unwrap().jet = false;
+        g.steps(30);
+    };
+    jet(&mut g);
+    assert_eq!(g.who(a), format!("{deployed}|{rooted}"));
+    jet(&mut g);
+    assert_eq!(g.who(a), format!("{standing}|{spinner}"));
+    // The launcher slows whoever holds it; putting it away lifts it.
+    g.equip(a, "payloadlauncheritem");
+    assert_eq!(
+        g.who(a),
+        format!("{slowed}|{NSF}:image/payloadlauncherimage")
+    );
+    g.equip(a, "vulcanitem");
+    assert_eq!(g.who(a), format!("{standing}|{spinner}"));
+
+    // With deploying and the launcher's slowing off, neither happens.
+    use bri_package::setting::SettingValue as V;
+    g.configure(
+        a,
+        &[
+            (
+                format!("{NSF}-rules:fw_vulcandeploy").as_str(),
+                V::Bool(false),
+            ),
+            (
+                format!("{NSF}-rules:fw_payloadslow").as_str(),
+                V::Bool(false),
+            ),
+        ],
+    )
+    .unwrap();
+    jet(&mut g);
+    assert_eq!(g.who(a), format!("{standing}|{spinner}"));
+    g.equip(a, "payloadlauncheritem");
+    assert_eq!(
+        g.who(a),
+        format!("{standing}|{NSF}:image/payloadlauncherimage")
+    );
+}
+
+/// Frog's WWII pack on Frog's Weaponry and Tier 1: its guns use Frog's
+/// ammo types on Tier 1's magazines.
+#[test]
+fn frogs_wwii_guns_use_frogs_ammo() {
+    let ns = "weapon_frogs_weaponry_wwii";
+    let (_dir, out, report) = imported_on(
+        "Weapon_Frogs_Weaponry_WWII",
+        ns,
+        &["Weapon_Package_Tier1", "Weapon_Frogs_Weaponry"],
+        "wwii",
+    );
+    let port = &report.ports[0];
+    assert!(port.applied, "{:?}", port.reason);
+    let pack = pack(&out);
+    let magazine = pack.images[&format!("{ns}:image/thompsonimage")]
+        .magazine
+        .clone()
+        .unwrap();
+    assert_eq!(
+        (magazine.size, magazine.ammo.as_str()),
+        (25, "tt-45caliber")
+    );
 }

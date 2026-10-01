@@ -124,34 +124,23 @@ datablock ShapeBaseImageData(GrenaderImage)
 
 function GrenaderImage::onFire(%this,%obj,%slot)
 {
-   %this.TT_decrementAmmo(%obj);
-   %this.TT_displayAmmo(%obj);
-   %obj.playThread(2, plant);
-   return Parent::onFire(%this,%obj,%slot);
+	%obj.playThread(2, plant);
+	return Parent::onFire(%this,%obj,%slot);
 }
 
 function GrenaderImage::onReloadStart(%this,%obj,%slot)
 {
-   if($Pref::Server::TT::DeathStopAnims && %obj.getDamagePercent() >= 1.0)
-      return;
-   %obj.playThread(2, shiftDown);
-   serverPlay3D(block_MoveBrick_Sound,%obj.getPosition());
-   %this.TT_displayAmmo(%obj);
+	%obj.playThread(2, shiftDown);
+	serverPlay3D(block_MoveBrick_Sound,%obj.getPosition());
 }
 
 function GrenaderImage::onReloadWait(%this,%obj,%slot)
 {
-   if($Pref::Server::TT::DeathStopAnims && %obj.getDamagePercent() >= 1.0)
-      return;
-   %obj.playThread(2, plant);
-   serverPlay3D(block_MoveBrick_Sound,%obj.getPosition());
-   %this.TT_displayAmmo(%obj);
+	%obj.playThread(2, plant);
+	serverPlay3D(block_MoveBrick_Sound,%obj.getPosition());
 }
 
 function GrenaderImage::onReloaded(%this,%obj,%slot)
 {
-   if($Pref::Server::TT::DeathStopAnims && %obj.getDamagePercent() >= 1.0)
-      return %obj.setImageLoaded(%slot, 1);
-   %this.TT_reload(%obj, %slot, block_MoveBrick_Sound);
-   %this.TT_displayAmmo(%obj);
+	%this.TT_reload(%obj, %slot, block_MoveBrick_Sound);
 }

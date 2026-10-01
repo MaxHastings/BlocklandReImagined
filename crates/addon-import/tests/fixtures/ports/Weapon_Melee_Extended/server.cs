@@ -15,5 +15,5 @@ exec("./Weapons.cs");
 
 function TT_isMeleeRaycastCrit(%this, %obj, %slot, %col, %pos, %normal, %hit)
 {
-   return isObject(%col) && %col.iszombie;
+	return isObject(%col) && %col.iszombie;
 }

@@ -1,36 +1,9 @@
 function ShortRifleImage::fireRaycast(%this, %obj, %slot)
 {
-   %targets = %this.raycastWeaponTargets;
-   if(ShortRifle::checkForObstruction(%obj, %targets))
-      %start = %obj.getEyePoint();
-   else
-      %start = %obj.getMuzzlePoint(0);
-   %aimVec = %obj.getMuzzleVector(0);
-
-   %range = %this.raycastWeaponRange;
-   %ignore = %obj;
-   %hits = 0;
-   while(%hits <= %this.raycastRicochets)
-   {
-      %rayResult = ShortRifle::doRaycast(%start, %aimVec, %range, %targets, %ignore);
-      %col = getWord(%rayResult, 0);
-      %end = posFromRaycast(%rayResult);
-      if(isObject(%col))
-      {
-         %normal = normalFromRaycast(%rayResult);
-         %crit = %this.isRaycastCritical(%obj, %slot, %col, %end, %normal, %hits);
-         %this.onHitObject(%obj, %slot, %col, %end, %normal, %aimVec, %crit, %hits);
-         %ignore = %col;
-         %hits++;
-         %rangeRem = getWord(%rayResult, 7);
-         %aimVec = VectorSub(%aimVec, VectorScale(%normal, VectorDot(%aimVec, %normal) * 2));
-      }
-      else
-         %hits = %this.raycastRicochets + 1;
-      ShortRifle::drawTracer(%start, %end).schedule(100, delete);
-      %start = %end;
-      %range = %rangeRem;
-   }
+	while(%hits <= %this.raycastRicochets)
+	{
+	%aimVec = VectorSub(%aimVec, VectorScale(%normal, VectorDot(%aimVec, %normal) * 2));
+	}
 }
 
 function ShortRifleImage::onHitObject(%this, %obj, %slot, %col, %pos, %normal, %shotVec, %crit, %hits)
@@ -70,16 +43,15 @@ function ShortRifleImage::onRaycastDamage(%this, %obj, %slot, %col, %pos, %norma
 
 function ShortRifleImage::isRaycastCritical(%this, %obj, %slot, %col, %pos, %normal, %hits)
 {
-   if(%col.getType() & $TypeMasks::PlayerObjectType && %hits > 0)
-   {
-      %hitHead = getWord(%pos, 2) > getWord(%col.getWorldBoxCenter(), 2) - 3.3 * getWord(%col.getScale(), 2);
-      %hitBottom = VectorDot(%normal, "0 0 -1") > 0;
-      if(%hitBottom && %obj != %col)
-         return 2;
-      else if(%hitHead)
-         return 1;
-   }
-   return 0;
+	if(%col.getType() & $TypeMasks::PlayerObjectType && %hits > 0)
+	{
+	%hitHead = getWord(%pos, 2) > getWord(%col.getWorldBoxCenter(), 2) - 3.3 * getWord(%col.getScale(), 2);
+	%hitBottom = VectorDot(%normal, "0 0 -1") > 0;
+	if(%hitBottom && %obj != %col)
+	return 2;
+	else if(%hitHead)
+	return 1;
+	}
 }
 
 function ShortRifle::doRaycast(%start, %aimVec, %range, %targets, %ignore)

@@ -20,7 +20,7 @@ if($RTB::Hooks::ServerControl)
 else
 {
    TT_defaultIfUnset("Start9MM", 35*4);
-   TT_defaultIfUnset("Max9MM", 280);
+   TT_defaultIfUnset("Max9MM", 300);
    TT_defaultIfUnset("PlayerAmmoDrop", 1);
    TT_defaultIfUnset("Recoil", 1);
    TT_defaultIfUnset("Ammo", 0);
@@ -30,9 +30,9 @@ else
 }
 
 // The ammo types this pack hands every player, as Kai's packs register them.
-TT_registerAmmoType("9MM", "9mm", "9mm", true, "tt", "weps", "tt_pile");
-TT_registerAmmoType("556", "5.56", "5.56 Little Rifle", true, "tt", "weps", "tt_pile");
-TT_registerAmmoType("shotgun", "Buckshot", "12-gauge shotgun", true, "tt", "weps", "tt_pile");
+TT_registerAmmoType("9MM", "9mm", "9mm rounds", true, "tt", "weps", "tt_pile");
+TT_registerAmmoType("556", "5.56", "5.56 rifle rounds", true, "tt", "weps", "tt_pile");
+TT_registerAmmoType("shotgun", "Buckshot", "Shotgun shells", true, "tt", "weps", "tt_pile");
 
 datablock AudioProfile(standinClickSound)
 {
@@ -240,43 +240,35 @@ datablock ShapeBaseImageData(standinSidearmImage)
 
 function standinSidearmImage::onFire(%this,%obj,%slot)
 {
-   if($Pref::Server::TT::Recoil)
-      %obj.spawnExplosion(standinKickProjectile,"1 1 1");
-
-   if(vectorLen(%obj.getVelocity()) > 0.1)
-   {
-      %this.TT_raycastSpreadAmt = 0.002;
-      %this.TT_raycastWeaponRange = 60;
-   }
-   else
-   {
-      %this.TT_raycastSpreadAmt = 0.0004;
-      %this.TT_raycastWeaponRange = 150;
-   }
-
-   %this.TT_decrementAmmo(%obj);
-   %this.TT_displayAmmo(%obj);
-   %obj.playThread(2, shiftAway);
-   return Parent::onFire(%this,%obj,%slot);
+	if($Pref::Server::TT::Recoil)
+	%obj.spawnExplosion(standinKickProjectile,"1 1 1");
+	if(vectorLen(%obj.getVelocity()) > 0.1)
+	{
+	%this.TT_raycastSpreadAmt = 0.002;
+	%this.TT_raycastWeaponRange = 60;
+	}
+	else
+	{
+	%this.TT_raycastSpreadAmt = 0.0004;
+	%this.TT_raycastWeaponRange = 150;
+	%obj.playThread(2, shiftAway);
+	}
 }
 
 function standinSidearmImage::onReloadWait(%this,%obj,%slot)
 {
-   %obj.playThread(2, shiftUp);
-   serverPlay3D(block_MoveBrick_Sound,%obj.getPosition());
+	%obj.playThread(2, shiftUp);
+	serverPlay3D(block_MoveBrick_Sound,%obj.getPosition());
 }
 
 function standinSidearmImage::onReloadStart(%this,%obj,%slot)
 {
-   %obj.playThread(2, shiftLeft);
+	%obj.playThread(2, shiftLeft);
 }
 
 function standinSidearmImage::onReloaded(%this,%obj,%slot)
 {
-   if($Pref::Server::TT::DeathStopAnims && %obj.getDamagePercent() >= 1.0)
-      return %obj.setImageLoaded(%slot, 1);
-   %this.TT_reload(%obj, %slot, standinClickSound, plant);
-   %this.TT_displayAmmo(%obj);
+	%this.TT_reload(%obj, %slot, standinClickSound, plant);
 }
 
 // The pump, a shell at a time, with its blast.
@@ -366,46 +358,39 @@ datablock ShapeBaseImageData(standinPumpImage)
 
 function standinPumpImage::onFire(%this,%obj,%slot)
 {
-   if(%this.TT_canFire(%obj))
-   {
-      serverPlay3D(standinBoomSound,%obj.getPosition());
-      %obj.playThread(2, activate);
-
-      %this.TT_decrementAmmo(%obj);
-
-      if($Pref::Server::TT::Recoil)
-         %obj.spawnExplosion(standinKickProjectile,"1 1 1");
-
-      %projectile = %this.projectile;
-      %spread = 0.004;
-      %shellCount = 5;
-
-      %p = TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
-      TT_createProjectile(%this, %obj, %slot, standinBlastProjectile, 1);
-   }
-   else if(!$Pref::Server::TT::DeathStopFiring || %obj.getDamagePercent() < 1.0)
-   {
-      serverPlay3D(standinJamSound,%obj.getPosition());
-   }
-   %this.TT_displayAmmo(%obj);
-   return %p;
+	if(%this.TT_canFire(%obj))
+	{
+	serverPlay3D(standinBoomSound,%obj.getPosition());
+	%obj.playThread(2, activate);
+	%this.TT_decrementAmmo(%obj);
+	if($Pref::Server::TT::Recoil)
+	%obj.spawnExplosion(standinKickProjectile,"1 1 1");
+	%projectile = %this.projectile;
+	%spread = 0.004;
+	%shellCount = 5;
+	%p = TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	TT_createProjectile(%this, %obj, %slot, standinBlastProjectile, 1);
+	}
+	else if(!$Pref::Server::TT::DeathStopFiring || %obj.getDamagePercent() < 1.0)
+	{
+	serverPlay3D(standinJamSound,%obj.getPosition());
+	}
 }
 
 function standinPumpImage::onEject(%this,%obj,%slot)
 {
-   %obj.playThread(2, plant);
+	%obj.playThread(2, plant);
 }
 
 function standinPumpImage::onReloadStart(%this,%obj,%slot)
 {
-   %obj.playThread(2, shiftto);
-   serverPlay3D(standinMoveSound,%obj.getPosition());
+	%obj.playThread(2, shiftto);
+	serverPlay3D(standinMoveSound,%obj.getPosition());
 }
 
 function standinPumpImage::onReloaded(%this,%obj,%slot)
 {
-   %this.TT_incrementReload(%obj, %slot);
-   %this.TT_displayAmmo(%obj);
+	%this.TT_incrementReload(%obj, %slot);
 }
 
 // The rifle: a steady round standing, a weaker one on the move.
@@ -428,38 +413,36 @@ datablock ShapeBaseImageData(standinRifleImage : standinSidearmImage)
 
 function standinRifleImage::onFire(%this,%obj,%slot)
 {
-   %obj.playThread(2, plant);
-
-   if(vectorLen(%obj.getVelocity()) < 3 && (getSimTime() - %obj.lastShotTime) > 1000)
-   {
-      %projectile = %this.projectile;
-      %spread = 0.0001;
-   }
-   else
-   {
-      %projectile = standinRifleWeakProjectile;
-      %spread = 0.001;
-   }
-   %shellCount = 1;
-
-   %this.TT_decrementAmmo(%obj);
-   return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	%obj.playThread(2, plant);
+	if(vectorLen(%obj.getVelocity()) < 3 && (getSimTime() - %obj.lastShotTime) > 1000)
+	{
+	%projectile = %this.projectile;
+	%spread = 0.0001;
+	}
+	else
+	{
+	%projectile = standinRifleWeakProjectile;
+	%spread = 0.001;
+	%shellCount = 1;
+	%this.TT_decrementAmmo(%obj);
+	return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	}
 }
 
 function standinRifleImage::onReloaded(%this,%obj,%slot)
 {
-   %this.TT_reload(%obj, %slot, standinClickSound, plant);
+	%this.TT_reload(%obj, %slot, standinClickSound, plant);
 }
 
 function standinRifleProjectile::damage(%this,%obj,%col,%fade,%pos,%normal)
 {
-   %multiplier = 2.5; // on a headshot
-   TT_processHeadshotDamage(%this, %obj, %col, %pos, %this.directDamage, %multiplier, $DamageType::StandinRifleHeadshot);
+	%multiplier = 2.5;
+	TT_processHeadshotDamage(%this, %obj, %col, %pos, %this.directDamage, %multiplier, $DamageType::StandinRifleHeadshot);
 }
 
 function standinRifleWeakProjectile::damage(%this,%obj,%col,%fade,%pos,%normal)
 {
-   TT_processHeadshotDamage(%this, %obj, %col, %pos, %this.directDamage, 2, $DamageType::StandinRifleHeadshot);
+	TT_processHeadshotDamage(%this, %obj, %col, %pos, %this.directDamage, 2, $DamageType::StandinRifleHeadshot);
 }
 
 // The submachine gun, whose bullets slow whoever they hit.
@@ -481,26 +464,21 @@ datablock ShapeBaseImageData(standinSMGImage : standinSidearmImage)
 
 function standinSMGImage::onFire(%this,%obj,%slot)
 {
-   %projectile = %this.projectile;
-   %spread = 0.002;
-   %shellCount = 1;
-   %obj.playThread(2, plant);
-   %this.TT_decrementAmmo(%obj);
-   return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	%spread = 0.002;
+	%shellCount = 1;
+	%obj.playThread(2, plant);
+	%this.TT_decrementAmmo(%obj);
+	return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
 }
 
 function standinSMGImage::onReloaded(%this,%obj,%slot)
 {
-   %this.TT_reload(%obj, %slot, standinClickSound, plant);
+	%this.TT_reload(%obj, %slot, standinClickSound, plant);
 }
 
 function standinSMGProjectile::damage(%this,%obj,%col,%fade,%pos,%normal)
 {
-   if(%col.getType() & $TypeMasks::PlayerObjectType)
-   {
-      TT_dampenVelocity(%col, 2);
-   }
-   Parent::damage(%this,%obj,%col,%fade,%pos,%normal);
+	TT_dampenVelocity(%col, 2);
 }
 
 // A pair of sidearms from one count.
@@ -566,8 +544,7 @@ datablock ShapeBaseImageData(standinLeftImage)
 
 function standinPairImage::onMount(%this, %obj, %slot)
 {
-   Parent::onMount(%this, %obj, %slot);
-   %obj.mountImage(standinLeftImage, 1);
+	%obj.mountImage(standinLeftImage, 1);
 }
 
 function standinPairImage::onFireAkimbo(%this,%obj,%slot)
@@ -577,18 +554,16 @@ function standinPairImage::onFireAkimbo(%this,%obj,%slot)
 
 function standinLeftImage::onFire(%this,%obj,%slot)
 {
-   if(vectorLen(%obj.getVelocity()) > 0.1)
-   {
-      %this.TT_raycastSpreadAmt = 0.003;
-      %this.TT_raycastWeaponRange = 50;
-   }
-   else
-   {
-      %this.TT_raycastSpreadAmt = 0.001;
-      %this.TT_raycastWeaponRange = 120;
-   }
-   %this.TT_decrementAmmo(%obj);
-   return Parent::onFire(%this,%obj,%slot);
+	if(vectorLen(%obj.getVelocity()) > 0.1)
+	{
+	%this.TT_raycastSpreadAmt = 0.003;
+	%this.TT_raycastWeaponRange = 50;
+	}
+	else
+	{
+	%this.TT_raycastSpreadAmt = 0.001;
+	%this.TT_raycastWeaponRange = 120;
+	}
 }
 
 // Ammo lying about, and the bag a dead player's ammo spills into.
@@ -605,9 +580,8 @@ datablock ItemData(standinNineItem)
 
 function standinNineItem::onAdd(%this, %obj)
 {
-   %obj.rotate = true;
-   %obj.setShapeName(getWord(%obj.TT_ammoPickup[0], 1));
-   Parent::onAdd(%this, %obj);
+	%obj.rotate = true;
+	%obj.setShapeName(getWord(%obj.TT_ammoPickup[0], 1));
 }
 
 datablock ItemData(standinPileItem : standinNineItem)
@@ -630,107 +604,89 @@ package StandinAmmo
 {
    function WeaponImage::TT_onLoadCheck(%this,%obj,%slot)
    {
-      %obj.setImageLoaded(%slot, !%this.TT_needsAmmo(%obj));
-      %obj.setImageAmmo(%slot, %this.TT_canStartReload(%obj));
-   }
+	%obj.setImageLoaded(%slot, !%this.TT_needsAmmo(%obj));
+	%obj.setImageAmmo(%slot, %this.TT_canStartReload(%obj));
+}
 
    function WeaponImage::TT_onReloadCheck(%this,%obj,%slot)
    {
-      %toolNum = TT_getActiveTool(%obj);
-      %can = %this.TT_canReload(%obj);
-      %obj.setImageLoaded(%slot, !%can || !(%obj.TT_toolAmmo[%toolNum] < %this.item.TT_maxAmmo));
-      %obj.setImageAmmo(%slot, %can);
-   }
+	%can = %this.TT_canReload(%obj);
+	%obj.setImageLoaded(%slot, !%can || !(%obj.TT_toolAmmo[%toolNum] < %this.item.TT_maxAmmo));
+}
 
    function WeaponImage::TT_onFireCheck(%this,%obj,%slot)
    {
-      %obj.setImageLoaded(%slot, %this.TT_canFire(%obj));
-      %obj.setImageAmmo(%slot, %this.TT_canReload(%obj));
-   }
+	%obj.setImageLoaded(%slot, %this.TT_canFire(%obj));
+	%obj.setImageAmmo(%slot, %this.TT_canReload(%obj));
+}
 
    function WeaponImage::TT_onUseLight(%this, %obj)
    {
-      %state = %obj.getImageState(0);
-      if(%state $= "Ready")
-         %obj.setImageLoaded(0, 0);
-      else if(%state $= "Empty" || %state $= "EmptyFire")
-         %obj.setImageAmmo(0, 1);
-   }
+	if(%state $= "Ready")
+	%obj.setImageLoaded(0, 0);
+	else if(%state $= "Empty" || %state $= "EmptyFire")
+	%obj.setImageAmmo(0, 1);
+}
 
    function WeaponImage::TT_reload(%this, %obj, %slot, %sound, %anim)
    {
-      %obj.playThread(2, %anim);
-      serverPlay3D(%sound, %obj.getPosition());
-      %type = %this.item.TT_ammoType;
-      %obj.quantity[%type] -= %this.item.TT_maxAmmo;
-      %obj.setImageLoaded(%slot, 1);
-   }
+	%obj.quantity[%type] -= %this.item.TT_maxAmmo;
+	%obj.setImageLoaded(%slot, 1);
+}
 
    function WeaponImage::TT_incrementReload(%this, %obj, %slot, %amount, %sound, %anim)
    {
-      if(%amount $= "")
-         %amount = 1;
-      %obj.quantity[%this.item.TT_ammoType] -= %amount;
-   }
+	if(%amount $= "")
+	%amount = 1;
+}
 
    function Armor::onAdd(%this,%obj)
    {
-      Parent::onAdd(%this,%obj);
-      %obj.quantity["9MM"] = $Pref::Server::TT::Start["9MM"];
-   }
+	%obj.quantity["9MM"] = $Pref::Server::TT::Start["9MM"];
+}
 
    function Armor::onCollision(%this, %obj, %col, %vec, %force)
    {
-      for(%i = 0; (%pickup = %col.TT_ammoPickup[%i]) !$= ""; %i++)
-         %took += TT_addAmmo(%obj, getWord(%pickup, 0), getWord(%pickup, 1));
-      if(%took)
-         serverPlay3D(AmmoGetSound, %obj.getPosition());
-   }
+	(%pickup = %col.TT_ammoPickup[%i]) !$= ""; %i++)
+	%took += TT_addAmmo(%obj, getWord(%pickup, 0), getWord(%pickup, 1));
+	if(%took)
+	serverPlay3D(AmmoGetSound, %obj.getPosition());
+}
 
    function Armor::onDisabled(%this, %obj, %state)
    {
-      %i = new Item() { datablock = ammoDroppedItem; };
-      if(%type.canDrop)
-         %i.TT_ammoPickup[%k] = %typeName SPC %ammoCount;
-      %i.setVelocity(vectorAdd(%obj.getVelocity(), getRandom(-8, 8) SPC getRandom(-8, 8) SPC 4));
-      Parent::onDisabled(%this, %obj, %state);
-   }
+	datablock = ammoDroppedItem;
+	if(%type.canDrop)
+	%i.TT_ammoPickup[%k] = %typeName SPC %ammoCount;
+	%i.setVelocity(vectorAdd(%obj.getVelocity(), getRandom(-8, 8) SPC getRandom(-8, 8) SPC 4));
+}
 };
 activatePackage(StandinAmmo);
 
 function TT_addAmmo(%obj, %type, %amount, %ignoreMax)
 {
-   %max = $Pref::Server::TT::Max[%type];
-   if(%amount == -1)
-      %amount = %max;
-   %amount = mClamp(%amount, 0, %max - %obj.quantity[%type]);
-   %obj.quantity[%type] += %amount;
-   return %amount;
+	if(%amount == -1)
+	%amount = %max;
+	%amount = mClamp(%amount, 0, %max - %obj.quantity[%type]);
 }
 
 function TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread)
 {
-   for(%shell = 0; %shell < %shellCount; %shell++)
-      %p = new Projectile() { dataBlock = %projectile; sourceObject = %obj; };
-   return %p;
+	%shell < %shellCount;
 }
 
 function TT_dampenVelocity(%obj, %divisor)
 {
-   %vel = %obj.getVelocity();
-   %obj.setVelocity(vectorScale(%vel, 1 / %divisor));
+	%obj.setVelocity(vectorScale(%vel, 1 / %divisor));
 }
 
 function TT_processHeadshotDamage(%this, %obj, %col, %pos, %dmg, %multiplier, %headshotDmgType)
 {
-   %obj.sourceObject.client.play2D(bulletHitSound);
-   %colscale = getWord(%col.getScale(), 2);
-   if(getword(%pos, 2) > getword(%col.getWorldBoxCenter(), 2) - 3.3*%colscale)
-   {
-      %dmg *= %multiplier;
-      %damageType = %headshotDmgType;
-   }
-   %col.damage(%obj, %pos, %dmg, %damageType);
+	%obj.sourceObject.client.play2D(bulletHitSound);
+	if(getword(%pos, 2) > getword(%col.getWorldBoxCenter(), 2) - 3.3*%colscale)
+	{
+	%dmg *= %multiplier;
+	}
 }
 
 // Every image's class answers no crit; an image with no test of its own

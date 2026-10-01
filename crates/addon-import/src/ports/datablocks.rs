@@ -277,7 +277,9 @@ pub(super) fn set(v: Option<&str>) -> bool {
 
 /// The `weapons.json` patch giving each ammo-system gun's image its
 /// magazine, and the rules' values `magazine_items` (item id to engine ammo
-/// name) and `magazine_types` (the item's type name to its numbers).
+/// name), `magazine_types` (the item's type name to its numbers),
+/// `magazine_order` (the type names in one order) and
+/// `magazine_list` (a wrench list parameter naming them in that order).
 pub fn magazines(
     m: &Magazines,
     weapons: &Value,
@@ -476,12 +478,30 @@ pub fn magazines(
             )
         })
         .collect();
+    // The types in one order, for a wrench row that picks one by number
+    // (Event_AddAmmoTT's list: 0 for all, then each type from 1).
+    let order: Vec<Value> = m.types.keys().map(|name| json!(name)).collect();
+    let list: Vec<Value> = std::iter::once(json!(["All", 0]))
+        .chain(m.types.iter().zip(1..).map(|((name, t), n)| {
+            let shown = if t.display.is_empty() {
+                name
+            } else {
+                &t.display
+            };
+            json!([shown, n])
+        }))
+        .collect();
     let values = BTreeMap::from([
         (
             "magazine_items".to_owned(),
             rhai(&Value::Object(items.into_iter().collect())),
         ),
         ("magazine_types".to_owned(), rhai(&Value::Object(types))),
+        ("magazine_order".to_owned(), rhai(&Value::Array(order))),
+        (
+            "magazine_list".to_owned(),
+            json!({ "type": "list", "items": list }).to_string(),
+        ),
     ]);
     Ok((json!({ "images": images }), values))
 }
@@ -954,6 +974,15 @@ fn fill(v: &Value, values: &BTreeMap<String, String>, cx: &Fill) -> Result<Value
                         .parse()
                         .with_context(|| format!("`{s}`: `{value}` is no number"))?;
                     json!(ms / 1000.0)
+                }
+                // A recoil projectile no Add-On defines (Frog's Break
+                // Shotgun names Tier 1's commented-out TTHugeRecoil) is
+                // a spawnExplosion that did nothing in v20: no kick.
+                "kick"
+                    if id_of(weapons, "ProjectileData", value).is_none()
+                        && !code.reference.contains_key(&value.to_ascii_lowercase()) =>
+                {
+                    Value::Null
                 }
                 "kick" => kick(weapons, value)
                     .or_else(|| dependency_kick(&code.reference, value))

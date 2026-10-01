@@ -61,33 +61,33 @@ datablock ShapeBaseImageData(SemiSniperRifleImage : MilitarySniperImage)
 
 function MagnifiedSniperRifleImage::onFire(%this,%obj,%slot)
 {
-   %this.TT_decrementAmmo(%obj);
-   return Parent::onFire(%this,%obj,%slot);
+	%this.TT_decrementAmmo(%obj);
+	return Parent::onFire(%this,%obj,%slot);
 }
 
 function MagnifiedSniperRifleImage::TT_isRaycastCritical(%this, %obj, %slot, %col, %pos, %normal, %hit)
 {
-   return TT_isRaycastHeadshot(%this, %obj, %slot, %col, %pos, %normal, %hit);
+	return TT_isRaycastHeadshot(%this, %obj, %slot, %col, %pos, %normal, %hit);
 }
 
 function ClassicSniperRifleImage::onFire(%this,%obj,%slot)
 {
-   %this.TT_decrementAmmo(%obj);
-   return Parent::onFire(%this,%obj,%slot);
+	%this.TT_decrementAmmo(%obj);
+	return Parent::onFire(%this,%obj,%slot);
 }
 
 function ClassicSniperRifleImage::TT_isRaycastCritical(%this, %obj, %slot, %col, %pos, %normal, %hit)
 {
-   return TT_isRaycastHeadshot(%this, %obj, %slot, %col, %pos, %normal, %hit);
+	return TT_isRaycastHeadshot(%this, %obj, %slot, %col, %pos, %normal, %hit);
 }
 
 function SemiSniperRifleImage::onFire(%this,%obj,%slot)
 {
-   %this.TT_decrementAmmo(%obj);
-   return Parent::onFire(%this,%obj,%slot);
+	%this.TT_decrementAmmo(%obj);
+	return Parent::onFire(%this,%obj,%slot);
 }
 
 function SemiSniperRifleImage::TT_isRaycastCritical(%this, %obj, %slot, %col, %pos, %normal, %hit)
 {
-   return TT_isRaycastHeadshot(%this, %obj, %slot, %col, %pos, %normal, %hit);
+	return TT_isRaycastHeadshot(%this, %obj, %slot, %col, %pos, %normal, %hit);
 }

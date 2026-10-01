@@ -156,67 +156,52 @@ datablock ShapeBaseImageData(FlakCannonImage)
 
 function FlakCannonProjectile::PrjLoop_onTick(%this, %obj)
 {
-   %emittedPrj = FlakCannonSparkProjectile;
-   %speed = 15;
-   %amount = 3;
-   PrjLoop_emitPrj(%obj, %emittedPrj, %speed, %amount);
+	%emittedPrj = FlakCannonSparkProjectile;
+	%speed = 15;
+	%amount = 3;
+	PrjLoop_emitPrj(%obj, %emittedPrj, %speed, %amount);
 }
 
 function FlakCannonProjectile::onCollision(%this,%obj,%col,%fade,%pos,%normal)
 {
-   for(%i=0;%i<getRandom(2,4);%i++)
-   {
-      %a=getRandom(0,360)/360*2*$pi;
-      %b=getRandom(0,360)/360*2*$pi;
-
-      %vec=mcos(%a) SPC msin(%a) SPC mcos(%b);
-
-      %p=new Projectile()
-      {
-         datablock=FlakCannonSparkProjectile;
-
-         initialVelocity=vectorScale(%vec,150);
-         initialPosition=%obj.getPosition();
-
-         client=%obj.client;
-         sourceObject=%obj.sourceobject;
-         sourceSlot=%obj.sourceslot;
-      };
-      MissionCleanup.add(%p);
-   }
-   Parent::onCollision(%this,%obj,%col,%fade,%pos,%normal);
+	for(%i=0;%i<getRandom(2,4);%i++)
+	{
+	%a=getRandom(0,360)/360*2*$pi;
+	%b=getRandom(0,360)/360*2*$pi;
+	%vec=mcos(%a) SPC msin(%a) SPC mcos(%b);
+	%p=new Projectile()
+	{
+	datablock=FlakCannonSparkProjectile;
+	initialVelocity=vectorScale(%vec,150);
+	initialPosition=%obj.getPosition();
+	client=%obj.client;
+	sourceObject=%obj.sourceobject;
+	sourceSlot=%obj.sourceslot;
+	};
+	MissionCleanup.add(%p);
+	}
+	Parent::onCollision(%this,%obj,%col,%fade,%pos,%normal);
 }
 
 function FlakCannonImage::onFire(%this, %obj, %slot)
 {
-   %this.TT_decrementAmmo(%obj);
-   %this.TT_displayAmmo(%obj);
-   %obj.playThread(2, plant);
-   return Parent::onFire(%this,%obj,%slot);
+	%obj.playThread(2, plant);
+	return Parent::onFire(%this,%obj,%slot);
 }
 
 function FlakCannonImage::onReloadStart(%this,%obj,%slot)
 {
-   if($Pref::Server::TT::DeathStopAnims && %obj.getDamagePercent() >= 1.0)
-      return;
-   %obj.playThread(2, shiftDown);
-   serverPlay3D(block_MoveBrick_Sound,%obj.getPosition());
-   %this.TT_displayAmmo(%obj);
+	%obj.playThread(2, shiftDown);
+	serverPlay3D(block_MoveBrick_Sound,%obj.getPosition());
 }
 
 function FlakCannonImage::onReloadWait(%this,%obj,%slot)
 {
-   if($Pref::Server::TT::DeathStopAnims && %obj.getDamagePercent() >= 1.0)
-      return;
-   %obj.playThread(2, plant);
-   serverPlay3D(block_MoveBrick_Sound,%obj.getPosition());
-   %this.TT_displayAmmo(%obj);
+	%obj.playThread(2, plant);
+	serverPlay3D(block_MoveBrick_Sound,%obj.getPosition());
 }
 
 function FlakCannonImage::onReloaded(%this,%obj,%slot)
 {
-   if($Pref::Server::TT::DeathStopAnims && %obj.getDamagePercent() >= 1.0)
-      return %obj.setImageLoaded(%slot, 1);
-   %this.TT_reload(%obj, %slot, block_MoveBrick_Sound);
-   %this.TT_displayAmmo(%obj);
+	%this.TT_reload(%obj, %slot, block_MoveBrick_Sound);
 }

@@ -47,8 +47,7 @@ function shortRifleImage::onReload(%this, %obj, %slot)
 
 function shortRifleImage::onFire(%this, %obj, %slot)
 {
-   %this.TT_decrementAmmo(%obj);
-   %this.TT_displayAmmo(%obj);
-   %obj.playThread(2, shiftAway);
-   %this.fireRaycast(%obj, %slot);
+	%this.TT_decrementAmmo(%obj);
+	%obj.playThread(2, shiftAway);
+	%this.fireRaycast(%obj, %slot);
 }

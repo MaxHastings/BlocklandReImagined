@@ -2,7 +2,7 @@
   "schema_version": 1,
   "include": [
     "tier-tactical-core",
-    "tier-tactical"
+    "tier-tactical-ammo", "tier-tactical"
   ],
   "notes": "Tier+Tactical Pump Shotgun skins on Tier 1's Pump Shotgun and ammo system: pellets and a close blast, loaded a shell at a time. The Classic Shotgun is Kai's easter egg, loaded only with the hidden \"???\" setting: it is imported hidden and offered while that setting is on.",
   "patch": {

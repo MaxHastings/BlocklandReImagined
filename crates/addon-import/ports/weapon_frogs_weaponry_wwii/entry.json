@@ -1,0 +1,17 @@
+{
+  "addon": "Weapon_Frogs_Weaponry_WWII",
+  "title": "Frog's Weaponry WWII Pack",
+  "port": "weapon_frogs_weaponry_wwii",
+  "status": "partial",
+  "sha256": [
+    "bfc86aa8bab7881d75c6b82cfd64bb05109a35dc5544c4bcc08d619e215d12dc"
+  ],
+  "covers": {
+    "server.cs": {
+      "needs_frogs": "ForceRequiredAddOn\\(\\s*\"Weapon_Frogs_Weaponry\"\\s*\\)"
+    }
+  },
+  "tests": [
+    "crates/addon-import/tests/tier_port.rs frogs_wwii_guns_use_frogs_ammo"
+  ]
+}

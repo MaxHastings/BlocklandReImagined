@@ -1,0 +1,7 @@
+Title: Stand-in Frog's Weaponry
+Author: Blockland ReImagined tests
+Written for tests. It has the community Weapon_Frogs_Weaponry folder name and
+the shape its port reads on the stand-in Tier 1 (a spinning gun that slows
+and deploys, a launcher that slows its holder, their preferences and ammo
+types), so the listed port applies to it. It is not the original Add-On and
+holds none of its files, and its guns, names and numbers are its own.

@@ -1,0 +1,6 @@
+Title: Stand-in Tier+Tactical AddAmmo Event
+Author: Blockland ReImagined tests
+Written for tests. It has the community Event_AddAmmoTT folder name and the
+shape its port reads (the AddAmmoTT output for players and bots, and
+Player::addAmmoTT handing out the ammo types), so the listed port applies to
+it. It is not the original Add-On and holds none of its files.

@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "script": "addammo.rhai",
+  "brick_outputs": [
+    {
+      "name": "AddAmmoTT",
+      "class": "Player",
+      "params": [
+        {{magazine_list}},
+        { "type": "int", "min": -1, "max": {{amount_max}}, "default": -1 },
+        { "type": "bool" }
+      ]
+    }
+  ]
+}

@@ -857,11 +857,15 @@ fn try_apply(
         }
     }
     let handled = &mut applied.handled;
+    // An Add-On with no datablocks of its own (Event_AddAmmoTT) still
+    // reads its port's tables, from an empty pack.
+    let has_weapons = out.join(WEAPONS).exists();
     if reads {
-        let mut weapons: Value = serde_json::from_slice(
-            &std::fs::read(out.join(WEAPONS)).context("the import wrote no weapons")?,
-        )
-        .context(WEAPONS)?;
+        let mut weapons: Value = if has_weapons {
+            serde_json::from_slice(&std::fs::read(out.join(WEAPONS))?).context(WEAPONS)?
+        } else {
+            serde_json::json!({ "items": {}, "images": {}, "projectiles": {} })
+        };
         // What the readers see: the import's pack with its dependencies'
         // projectiles beside its own. Only their patch is written back.
         if let Some(own) = weapons["projectiles"].as_object_mut() {
@@ -922,7 +926,7 @@ fn try_apply(
         .as_ref()
         .map(|r| &r.settings)
         .filter(|s| !s.is_empty());
-    if read_patch.is_some() || weapon_settings.is_some() {
+    if (read_patch.is_some() && has_weapons) || weapon_settings.is_some() {
         patches
             .entry(WEAPONS.to_owned())
             .or_insert_with(|| Value::Object(Default::default()));

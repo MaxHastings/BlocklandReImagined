@@ -63,11 +63,9 @@ fn imported(
     namespace: &str,
     via: Via,
 ) -> (bri_weapons::Pack, Arc<Catalog>) {
-    std::fs::write(
-        root.join("packages.json"),
-        r#"{ "schema_version": 1, "packages": [] }"#,
-    )
-    .unwrap();
+    // The made-up base game, whose packages (`v20-weapons`...) a real
+    // copy that borrows the stock weapons depends on.
+    bri_net::testing::write_root(root, &[]).unwrap();
     match via {
         Via::Import => {
             let report = import(&Options {
@@ -96,7 +94,6 @@ fn imported(
         }
         Via::Bundle => bundled(root, addon, namespace),
     }
-    base_packages(root, namespace);
     let mut library = Library::scan(root).unwrap();
     let plan = library.plan(namespace, true);
     library.apply(&plan).unwrap();
@@ -112,37 +109,6 @@ fn imported(
     )
     .unwrap();
     (pack, Arc::new(catalog))
-}
-
-/// The base game's packages the import of `namespace` depends on (a real
-/// copy that borrows the stock weapons needs `v20-weapons`), installed
-/// empty in `root` as a release's content holds them, so turning it on
-/// finds them.
-fn base_packages(root: &Path, namespace: &str) {
-    let manifest: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(root.join("addons").join(namespace).join("package.json")).unwrap(),
-    )
-    .unwrap();
-    let list = root.join("packages.json");
-    let mut set: serde_json::Value = serde_json::from_slice(&std::fs::read(&list).unwrap()).unwrap();
-    let deps = manifest["dependencies"].as_object().cloned().unwrap_or_default();
-    for id in deps.keys().filter(|d| d.starts_with("v20-")) {
-        let dir = format!("base/{id}");
-        std::fs::create_dir_all(root.join(&dir)).unwrap();
-        std::fs::write(
-            root.join(&dir).join("package.json"),
-            serde_json::json!({ "schema_version": 1, "id": id, "version": "1.0.0", "api": 1,
-                "name": id, "license": "CC0-1.0", "authors": ["Tester"],
-                "capabilities": [], "dependencies": {}, "provides": [] })
-            .to_string(),
-        )
-        .unwrap();
-        set["packages"].as_array_mut().unwrap().insert(
-            0,
-            serde_json::json!({ "id": id, "version": "1.0.0", "side": "shared", "dir": dir }),
-        );
-    }
-    std::fs::write(&list, set.to_string()).unwrap();
 }
 
 /// The release's path for an original: a stand-in checkout whose default

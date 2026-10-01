@@ -136,6 +136,50 @@ fn flag_name(g, b) {
     if n == "" { `${c3()}Neutral` } else { `${c3()}${n}` }
 }
 
+// `Slayer_Support::RgbToHex` of a paint colour.
+fn hex(color) {
+    let pal = palette();
+    if color >= pal.len() {
+        return "ffffff";
+    }
+    let out = "";
+    for i in 0..3 {
+        let n = (pal[color][i] * 255.0).round().to_int();
+        if n < 16 {
+            out += "0";
+        }
+        out += n.to_hex();
+    }
+    out
+}
+// Slayer's `slayerPrepareBrick` with `Slayer_CTF::onMiniGameBrickAdded`:
+// a Flag Spawn or Flag Return Point planted or repainted by hand tells its
+// builder the teams it is for in a Capture the Flag game, else that it is
+// set.
+fn on_brick(event, id, p, info) {
+    if p == () || event != "planted" && event != "painted" {
+        return;
+    }
+    let b = info.brick;
+    let text = `<just:center>${magenta()}${b.ui_name} set.`;
+    for g in minigames() {
+        if !playing(g.id) {
+            continue;
+        }
+        let teams = "";
+        for t in teams_of_color(g, b.color) {
+            if teams != "" {
+                teams += ",  ";
+            }
+            teams += `<sPush><color:${hex(t.color)}>${t.name}<sPop>`;
+        }
+        if teams != "" {
+            text = `<just:center>${c5()}${b.ui_name} set for ${teams}${c5()}.`;
+        }
+    }
+    bottom_print(p, text, 4);
+}
+
 // `MiniGameSO::messageAll`.
 fn tell_game(g, text) { tell_minigame(g.id, text); }
 
@@ -364,6 +408,50 @@ fn on_brick_output(output, target, params, info) {
         if me != () && me.minigame != () && playing(me.minigame) && me.team != () {
             drop_flag(target);
         }
+    }
+}
+
+// Slayer's `serverCmdAddEvent` for this copy's restricted DropFlag
+// output (`RestrictedEvent__["Player", "DropFlag"]`): with Restrict Output
+// Events on, a player in the game adds it only if Slayer's rights at its
+// level allow (Slayer's own outputs are its rules' to check).
+fn on_event_row(p, brick, row) {
+    if `${row.class}:${row.output}`.to_lower() != "player:dropflag" {
+        return true;
+    }
+    let me = player(p);
+    if me == () || me.minigame == () || !setting(me.minigame, "{{slayer_rules}}:restrict_output_events") {
+        return true;
+    }
+    let g = minigame(me.minigame);
+    let level = {{restrict_drop_flag}};
+    let allowed = if level >= 0 && level <= 2 { me.admin } else { can_edit(me, g) };
+    if allowed {
+        true
+    } else {
+        `You do not have permission to use the [${row.class}, ${row.output}] event.`
+    }
+}
+// Slayer's `canEdit`: the host, or whoever the game's Edit Rights allow
+// (0 the host, 1 super admins, 2 admins, 3 the creator or someone they
+// trust as themselves, 4 full trust, 5 build trust, 6 everyone).
+fn can_edit(me, g) {
+    if g == () {
+        return false;
+    }
+    if me.host {
+        return true;
+    }
+    let t = if g.owner == () { 0 } else if g.owner == me.id { 3 } else { trust(me.id, g.owner) };
+    switch setting(g.id, "{{slayer_rules}}:edit_rights") {
+        0 => me.host,
+        1 => me.super_admin,
+        2 => me.admin,
+        3 => t >= 3,
+        4 => t >= 2,
+        5 => t >= 1,
+        6 => true,
+        _ => false
     }
 }
 

@@ -2,10 +2,8 @@
 // and sounds, laid out as the original is so its port applies.
 function TT_defaultIfUnset(%pref, %default, %category)
 {
-   if(%category $= "")
-      %category = "TT";
-   if($Pref::Server["::" @ %category @ "::" @ %pref] $= "")
-      $Pref::Server["::" @ %category @ "::" @ %pref] = %default;
+	if($Pref::Server["::" @ %category @ "::" @ %pref] $= "")
+	$Pref::Server["::" @ %category @ "::" @ %pref] = %default;
 }
 
 if(ForceRequiredAddOn("Weapon_Melee_Extended") == $Error::AddOn_NotFound)

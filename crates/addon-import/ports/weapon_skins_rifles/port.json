@@ -2,7 +2,7 @@
   "schema_version": 1,
   "include": [
     "tier-tactical-core",
-    "tier-tactical"
+    "tier-tactical-ammo", "tier-tactical"
   ],
   "notes": "Tier+Tactical Sport Rifle skins on Tier 1's Sport Rifle and ammo system: a weaker round on the move, headshots with their own kill messages. The Bolt Rifle shifts its arm as it is drawn."
 }

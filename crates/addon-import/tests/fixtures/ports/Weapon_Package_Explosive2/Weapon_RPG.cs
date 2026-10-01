@@ -136,49 +136,37 @@ datablock ShapeBaseImageData(RPGImage)
 
 function RPGImage::onFire(%this, %obj, %slot)
 {
-   %obj.playThread(2, shiftAway);
-   %this.TT_decrementAmmo(%obj);
-   %this.TT_displayAmmo(%obj);
-
-   if($Pref::Server::TT::Recoil)
-      %obj.spawnExplosion(standinKickProjectile,"1 1 1");
-
-   %projectile = %this.projectile;
-   if(vectorLen(%obj.getVelocity()) > 0.1)
-   {
-      %spread = 0.0002;
-   }
-   else
-   {
-      %spread = 0;
-   }
-   %shellCount = 1;
-
-   return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	%obj.playThread(2, shiftAway);
+	%this.TT_decrementAmmo(%obj);
+	%this.TT_displayAmmo(%obj);
+	if($Pref::Server::TT::Recoil)
+	%obj.spawnExplosion(standinKickProjectile,"1 1 1");
+	%projectile = %this.projectile;
+	if(vectorLen(%obj.getVelocity()) > 0.1)
+	{
+	%spread = 0.0002;
+	}
+	else
+	{
+	%spread = 0;
+	}
+	%shellCount = 1;
+	return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
 }
 
 function RPGImage::onReloadStart(%this,%obj,%slot)
 {
-   if($Pref::Server::TT::DeathStopAnims && %obj.getDamagePercent() >= 1.0)
-      return;
-   %obj.playThread(2, shiftDown);
-   serverPlay3D(block_MoveBrick_Sound,%obj.getPosition());
-   %this.TT_displayAmmo(%obj);
+	%obj.playThread(2, shiftDown);
+	serverPlay3D(block_MoveBrick_Sound,%obj.getPosition());
 }
 
 function RPGImage::onReloadWait(%this,%obj,%slot)
 {
-   if($Pref::Server::TT::DeathStopAnims && %obj.getDamagePercent() >= 1.0)
-      return;
-   %obj.playThread(2, plant);
-   serverPlay3D(block_MoveBrick_Sound,%obj.getPosition());
-   %this.TT_displayAmmo(%obj);
+	%obj.playThread(2, plant);
+	serverPlay3D(block_MoveBrick_Sound,%obj.getPosition());
 }
 
 function RPGImage::onReloaded(%this,%obj,%slot)
 {
-   if($Pref::Server::TT::DeathStopAnims && %obj.getDamagePercent() >= 1.0)
-      return %obj.setImageLoaded(%slot, 1);
-   %this.TT_reload(%obj, %slot, block_MoveBrick_Sound);
-   %this.TT_displayAmmo(%obj);
+	%this.TT_reload(%obj, %slot, block_MoveBrick_Sound);
 }

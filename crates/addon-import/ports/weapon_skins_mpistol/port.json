@@ -2,7 +2,7 @@
   "schema_version": 1,
   "include": [
     "tier-tactical-core",
-    "tier-tactical"
+    "tier-tactical-ammo", "tier-tactical"
   ],
   "notes": "Tier+Tactical Machine Pistol skins on Tier 2A's Machine Pistol and ammo system, spreading more on the move, with their own models and numbers."
 }

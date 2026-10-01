@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "include": ["tier-tactical-core", "tier-tactical-ammo", "tier-tactical"],
+  "notes": "Frog's Weaponry on Tier+Tactical's ammo system: its guns, grenades, ammo boxes and piles use Tier 1's magazines, reloads, ammo items and headshots. The Vulcan slows its gunner while it spins (Vulcan Slows On Spin Up) and lifts it as it stops or leaves the hand; jet deploys it (Vulcan Is Deployable), rooting the gunner, and jet again picks it back up. The Payload Launcher slows whoever holds it (Payload Launcher Slows). Its three preferences are server settings the host changes in the Admin menu's Add-On Settings, on by default as Frog had them. The Break Shotgun's huge recoil names a projectile Tier 1 left commented out, so, as in v20, it shakes nothing.",
+  "handles": {
+    "FWPilestaticItem::onAdd": "the host rules' ammo_items table: the pile's TT_ammoPickup lines",
+    "FWHeavyPileStaticItem::onAdd": "the host rules' ammo_items table: the heavy cache's TT_ammoPickup lines",
+    "BreakShotgunImage::onReloadStart": "engine ammo display, up on each change",
+    "StrikeLauncherImage::onReloadWait": "engine ammo display, up on each change",
+    "VulcanDeployedImage::onSpinUp": "engine ammo display, up on each change",
+    "PayloadLauncherImage::onReadyCheck": "the magazine's checks: its onReadyCheck state checks the rounds and reserve as TT_onLoadCheck does",
+    "PayloadLauncherImage::onUnMount": "the image's unmount command, the host rules' lift",
+    "VulcanImage::onUnMount": "the image's unmount command, the host rules' lift",
+    "VulcanImage::onRestore": "the image's onRestore state command, the host rules' lift",
+    "VulcanDeployedImage::onUnMount": "the image's unmount command, the host rules' lift; the arms come down with the image"
+  },
+  "rules": {
+    "prefs": {
+      "$Pref::Server::FW::VulcanDeploy": "the host rules' alt_fire: jet deploys the Vulcan only while it is on",
+      "$Pref::Server::FW::VulcanSlow": "the host rules' lay: the Vulcan's spin-up slows its gunner only while it is on",
+      "$Pref::Server::FW::PayloadSlow": "the host rules' lay: the Payload Launcher slows its holder only while it is on"
+    }
+  },
+  "scripts": [
+    {
+      "method": "onMount",
+      "into": "table",
+      "table": "laid",
+      "pattern": "if\\s*\\(\\s*(?P<g>\\$Pref::Server::\\w+(?:::\\w+)*)\\s*\\)\\s*%obj\\.pushDatablock\\(",
+      "set": {
+        "when": "{g}"
+      }
+    },
+    {
+      "method": "onAltTrigger",
+      "into": "table",
+      "table": "alt_images",
+      "pattern": "&&\\s*(?P<g>\\$Pref::Server::\\w+(?:::\\w+)*)\\s*\\)",
+      "set": {
+        "when": "{g}"
+      }
+    }
+  ],
+  "magazines": {
+    "every": {
+      "checks": {
+        "onReadyCheck": { "loaded": ["shot"], "ammo": ["reserve"] }
+      }
+    }
+  },
+  "patch": {
+    "assets/weapons.json": {
+      "images": {
+        "{namespace}:image/vulcanimage": {
+          "commands": {
+            "states": { "onspinup": "{rules}:lay", "onrestore": "{rules}:lift" },
+            "unmount": "{rules}:lift",
+            "jet": "{rules}:alt_fire"
+          }
+        },
+        "{namespace}:image/vulcandeployedimage": {
+          "commands": {
+            "mount": "{rules}:lay",
+            "unmount": "{rules}:lift",
+            "jet": "{rules}:alt_fire"
+          }
+        },
+        "{namespace}:image/payloadlauncherimage": {
+          "commands": {
+            "mount": "{rules}:lay",
+            "unmount": "{rules}:lift"
+          }
+        }
+      }
+    }
+  }
+}

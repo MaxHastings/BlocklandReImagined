@@ -22,5 +22,5 @@ function MatchPistolImage::onFire(%this,%obj,%slot)
 
 function MatchPistolImage::TT_isRaycastCritical(%this, %obj, %slot, %col, %pos, %normal, %hit)
 {
-   return TT_isRaycastHeadshot(%this, %obj, %slot, %col, %pos, %normal, %hit);
+	return TT_isRaycastHeadshot(%this, %obj, %slot, %col, %pos, %normal, %hit);
 }

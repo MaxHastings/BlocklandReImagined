@@ -4,14 +4,12 @@ package TT_Raycasting
 {
    function WeaponImage::onFire(%this, %obj, %slot)
    {
-      if(!%this.TT_raycastEnabled)
-         return Parent::onFire(%this, %obj, %slot);
-      %start = %obj.getEyePoint();
-      %end = vectorAdd(%start, vectorScale(%obj.getEyeVector(), %this.TT_raycastWeaponRange));
-      %ray = containerRayCast(%start, %end, %this.TT_raycastWeaponTargets, %obj);
-      if(isObject(getWord(%ray, 0)))
-         %this.TT_onRaycastHit(%obj, %slot, getWord(%ray, 0), posFromRaycast(%ray), normalFromRaycast(%ray));
-   }
+	if(!%this.TT_raycastEnabled)
+	return Parent::onFire(%this, %obj, %slot);
+	%start = %obj.getEyePoint();
+	%end = vectorAdd(%start, vectorScale(%obj.getEyeVector(), %this.TT_raycastWeaponRange));
+	%ray = containerRayCast(%start, %end, %this.TT_raycastWeaponTargets, %obj);
+}
 
    function WeaponImage::TT_onRaycastHit(%this, %obj, %slot, %col, %pos, %normal)
    {
@@ -26,12 +24,12 @@ package TT_Raycasting
 
    function WeaponImage::TT_onRaycastDamage(%this, %obj, %slot, %col, %pos)
    {
-      %col.damage(%obj, %pos, mClampF(%this.TT_raycastDirectDamage, -100, 100), %this.TT_raycastDirectDamageType);
-   }
+	%col.damage(%obj, %pos, mClampF(%this.TT_raycastDirectDamage, -100, 100), %this.TT_raycastDirectDamageType);
+}
 
    function WeaponImage::TT_isRaycastCritical(%this, %obj, %slot, %col, %pos, %normal, %hit)
    {
-      return 0;
-   }
+	return 0;
+}
 };
 activatePackage(TT_Raycasting);

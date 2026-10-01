@@ -201,7 +201,7 @@ function standinPistolImage::onFire(%this, %obj, %slot)
    %projectile = %this.projectile;
    %spread = 0.0002;
    %shellcount = 1;
-   if (getSimTime() - %obj.lastFired > 500)
+   if (getSimTime() - %obj.lastFired > 400)
       %spread /= 2;
    %obj.lastFired = getSimTime();
    %obj.setVelocity(VectorAdd(%obj.getVelocity(), VectorScale(%aimVec, "-1")));
@@ -216,7 +216,7 @@ function standinPistolImage::onFire(%this, %obj, %slot)
 function standinPistolImage::onReload(%this, %obj, %slot)
 {
    %obj.playThread(2, shiftUp);
-   %obj.schedule(450, "playThread", "2", "plant");
+   %obj.schedule(420, "playThread", "2", "plant");
    schedule(650, 0, serverPlay3D, standinFireSound, %obj.getHackPosition());
    hl2AmmoOnReload(%this, %obj, %slot);
 }
@@ -228,7 +228,7 @@ function pairedShotgunImage::onReloadSingle(%this, %obj, %slot)
    serverPlay3d(standinFireSound, %obj.getHackPosition());
    hl2AmmoOnReloadSingle(%this, %obj, %slot);
    hl2AmmoOnReloadSingle(%this, %obj, %slot);
-   %obj.schedule(250, "playThread", "2", "plant");
+   %obj.schedule(240, "playThread", "2", "plant");
    schedule(250, 0, serverPlay3D, standinFireSound, %obj.getHackPosition());
 }
 

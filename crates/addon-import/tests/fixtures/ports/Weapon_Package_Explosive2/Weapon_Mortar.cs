@@ -126,79 +126,54 @@ datablock ShapeBaseImageData(MortarImage)
 
 function MortarImage::onFire(%this,%obj,%slot)
 {
-   %this.TT_decrementAmmo(%obj);
-   %this.TT_displayAmmo(%obj);
-   %obj.playThread(2, plant);
-
-   %dist = 80;
-   %range = 200*getWord(%obj.getScale(),2);
-   %start = %obj.getEyePoint();
-   %fvec = %obj.getForwardVector();
-   %fX = getWord(%fvec,0);
-   %fY = getWord(%fvec,1);
-   %evec = %obj.getEyeVector();
-   %eX = getWord(%evec,0);
-   %eY = getWord(%evec,1);
-   %eZ = getWord(%evec,2);
-   %eXY = mSqrt(%eX*%eX+%eY*%eY);
-   %aimVec = %fX*%eXY SPC %fY*%eXY SPC %eZ;
-   %end = vectorAdd(%start,vectorScale(%aimVec,%range));
-   %ray = containerRayCast(%start,%end,$TypeMasks::All,%obj);
-   %target = firstWord(%ray);
-   if(isObject(%target))
-   {
-      %pos = posFromRaycast(%ray);
-      %dist = vectorDist(%obj.getPosition(),%pos);
-   }
-   %initVelocity = vectorScale(%obj.getMuzzleVector(%slot),15);
-   %initVelocity = vectorAdd(%initVelocity,getRandom(0,2) / 4 SPC getRandom(0,2) / 4 SPC %dist / 4);
-   %p = new (%this.projectileType)()
-   {
-      dataBlock = %this.projectile;
-      initialVelocity = %initVelocity;
-      initialPosition = %obj.getMuzzlePoint(%slot);
-      sourceObject = %obj;
-      sourceSlot = %slot;
-      client = %obj.client;
-   };
-   MissionCleanup.add(%p);
-   return %p;
+	%obj.playThread(2, plant);
+	%dist = 80;
+	%range = 200*getWord(%obj.getScale(),2);
+	%start = %obj.getEyePoint();
+	%fvec = %obj.getForwardVector();
+	%fX = getWord(%fvec,0);
+	%fY = getWord(%fvec,1);
+	%evec = %obj.getEyeVector();
+	%eX = getWord(%evec,0);
+	%eY = getWord(%evec,1);
+	%eZ = getWord(%evec,2);
+	%eXY = mSqrt(%eX*%eX+%eY*%eY);
+	%aimVec = %fX*%eXY SPC %fY*%eXY SPC %eZ;
+	%end = vectorAdd(%start,vectorScale(%aimVec,%range));
+	%ray = containerRayCast(%start,%end,$TypeMasks::All,%obj);
+	%target = firstWord(%ray);
+	if(isObject(%target))
+	{
+	%pos = posFromRaycast(%ray);
+	%dist = vectorDist(%obj.getPosition(),%pos);
+	}
+	%initVelocity = vectorScale(%obj.getMuzzleVector(%slot),15);
+	%initVelocity = vectorAdd(%initVelocity,getRandom(0,2) / 4 SPC getRandom(0,2) / 4 SPC %dist / 4);
 }
 
 function MortarImage::onMount(%this, %obj, %slot)
 {
-   Parent::onMount(%this, %obj, %slot);
-   %obj.playThread(1, armReadyBoth);
+	%obj.playThread(1, armReadyBoth);
 }
 
 function MortarImage::onUnMount(%this, %obj, %slot)
 {
-   fixArmReady(%obj);
-   Parent::onUnMount(%this, %obj, %slot);
+	fixArmReady(%obj);
 }
 
 function MortarImage::onReloadStart(%this,%obj,%slot)
 {
-   if($Pref::Server::TT::DeathStopAnims && %obj.getDamagePercent() >= 1.0)
-      return;
-   %obj.playThread(2, shiftDown);
-   serverPlay3D(block_MoveBrick_Sound,%obj.getPosition());
-   %this.TT_displayAmmo(%obj);
+	%obj.playThread(2, shiftDown);
+	serverPlay3D(block_MoveBrick_Sound,%obj.getPosition());
 }
 
 function MortarImage::onReloadWait(%this,%obj,%slot)
 {
-   if($Pref::Server::TT::DeathStopAnims && %obj.getDamagePercent() >= 1.0)
-      return;
-   %obj.playThread(2, plant);
-   serverPlay3D(block_MoveBrick_Sound,%obj.getPosition());
-   %this.TT_displayAmmo(%obj);
+	%obj.playThread(2, plant);
+	serverPlay3D(block_MoveBrick_Sound,%obj.getPosition());
 }
 
 function MortarImage::onReloaded(%this,%obj,%slot)
 {
-   if($Pref::Server::TT::DeathStopAnims && %obj.getDamagePercent() >= 1.0)
-      return %obj.setImageLoaded(%slot, 1);
-   %this.TT_reload(%obj, %slot, block_MoveBrick_Sound);
-   %this.TT_displayAmmo(%obj);
+	%this.TT_reload(%obj, %slot, block_MoveBrick_Sound);
 }

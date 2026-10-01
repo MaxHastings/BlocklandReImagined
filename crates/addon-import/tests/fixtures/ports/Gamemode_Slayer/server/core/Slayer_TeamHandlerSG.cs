@@ -3,47 +3,44 @@
 function Slayer_TeamHandlerSG::pickTeam(%this, %client, %skipCurrentTeam)
 {
 	if(!%t.sort || %t.sortWeight <= 0 || (%t.numMembers["GameConnection"] >= %t.maxPlayers && %t.maxPlayers >= 0))
-		continue;
+	continue;
 	%ratio = %t.numMembers["GameConnection"] / %t.sortWeight;
 	%r = getRandom(0, getFieldCount(%teams) - 1);
-	return getField(%teams, %r);
 }
 
 function Slayer_TeamHandlerSG::autoSort(%this, %client, %doNotRespawn)
 {
 	%team = %this.pickTeam(%client);
-	%team.addMember(%client, "", %doNotRespawn);
 }
 
 function Slayer_TeamHandlerSG::canDamage(%this, %teamA, %teamB)
 {
 	if(!%this.minigame.teams_friendlyFire && %teamA.isAlliedTeam(%teamB))
-		return false;
-	return true;
+	return false;
 }
 
 function slayerTeamCmdBalance(%client, %mini, %clTeam, %a)
 {
 	if(!%mini.canEdit(%client))
-		return;
+	return;
 	%mini.Teams.balanceTeams(1);
 }
 
 function slayerTeamCmdJoin(%client, %mini, %clTeam, %a)
 {
 	if(%mini.teams_lock && isObject(%clTeam))
-		return;
+	return;
 	%team = %mini.Teams.getTeamFromName(%name);
 	if(%clTeam.lock || %team.lock)
-		return;
+	return;
 	if(%team.maxPlayers == 0)
-		return;
+	return;
 }
 
 function slayerTeamCmdLeave(%client, %mini, %clTeam, %a)
 {
 	if((%mini.teams_lock || %mini.teams_autoSort) && !%mini.canEdit(%client))
-		return;
+	return;
 }
 
 function slayerTeamCmdList(%client, %mini, %clTeam, %a)
@@ -65,11 +62,10 @@ function slayerTeamCmdListMembers(%client, %mini, %clTeam, %a)
 {
 	%cl = %team.member["GameConnection", %i];
 	if(%team.numMembers["AiController"] > 1)
-		messageClient(%client, '', %team.numMembers["AiController"] SPC "bots");
+	messageClient(%client, '', %team.numMembers["AiController"] SPC "bots");
 }
 
 function serverCmdTeams(%client, %cmd, %a)
 {
 	%func = "slayerTeamCmd" @ %cmd;
-	call(%func, %client, %mini, %clTeam, %a);
 }

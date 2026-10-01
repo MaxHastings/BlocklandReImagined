@@ -29,15 +29,15 @@ datablock ShapeBaseImageData(SingleShotgunImage : standinSidearmImage)
 
 function SingleShotgunImage::onFire(%this,%obj,%slot)
 {
-   TT_knockback(%obj, -3, -3, -3);
-   %this.TT_decrementAmmo(%obj);
-   if($Pref::Server::TT::Recoil)
-      %obj.spawnExplosion(standinKickProjectile,"1 1 1");
-   TT_createProjectile(%this, %obj, %slot, SingleShotgunBlastProjectile, 1);
-   %projectile = %this.projectile;
-   %spread = 0.002;
-   %shellCount = 6;
-   return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	TT_knockback(%obj, -3, -3, -3);
+	%this.TT_decrementAmmo(%obj);
+	if($Pref::Server::TT::Recoil)
+	%obj.spawnExplosion(standinKickProjectile,"1 1 1");
+	TT_createProjectile(%this, %obj, %slot, SingleShotgunBlastProjectile, 1);
+	%projectile = %this.projectile;
+	%spread = 0.002;
+	%shellCount = 6;
+	return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
 }
 
 // The pepperbox: three rays a shot.
@@ -58,8 +58,8 @@ datablock ShapeBaseImageData(PepperPistolImage : standinSidearmImage)
 
 function PepperpistolImage::onFire(%this,%obj,%slot)
 {
-   Parent::onFire(%this,%obj,%slot);
-   %this.TT_decrementAmmo(%obj);
+	Parent::onFire(%this,%obj,%slot);
+	%this.TT_decrementAmmo(%obj);
 }
 
 // The snubnose: twice its damage to the head.
@@ -86,7 +86,7 @@ datablock ShapeBaseImageData(SnubnoseImage : standinSidearmImage)
 
 function SnubnoseProjectile::damage(%this,%obj,%col,%fade,%pos,%normal)
 {
-   TT_processHeadshotDamage(%this, %obj, %col, %pos, %this.directDamage, 2, $DamageType::SnubnoseHeadshot);
+	TT_processHeadshotDamage(%this, %obj, %col, %pos, %this.directDamage, 2, $DamageType::SnubnoseHeadshot);
 }
 
 // The easter egg, loaded only with the hidden setting.
@@ -111,7 +111,6 @@ datablock ShapeBaseImageData(nailgunImage : standinSidearmImage)
 
 function nailgunProjectile1::damage(%this,%obj,%col,%fade,%pos,%normal)
 {
-   if(%col.getType() & $TypeMasks::PlayerObjectType)
-      TT_dampenVelocity(%col, 1.5);
-   Parent::damage(%this,%obj,%col,%fade,%pos,%normal);
+	if(%col.getType() & $TypeMasks::PlayerObjectType)
+	TT_dampenVelocity(%col, 1.5);
 }

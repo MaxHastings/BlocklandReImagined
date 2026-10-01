@@ -22,26 +22,23 @@ datablock ShapeBaseImageData(ImpactRifleImage : standinRifleImage)
 
 function ImpactRifleImage::onFire(%this,%obj,%slot)
 {
-   %obj.playThread(2, shiftAway);
-
-   %this.TT_decrementAmmo(%obj);
-   %this.TT_displayAmmo(%obj);
-
-   %projectile = %this.projectile;
-   if(vectorLen(%obj.getVelocity()) < 0.5 && (getSimTime() - %obj.lastShotTime) > 800)
-   {
-      %spread = 0.0007;
-   }
-   else
-   {
-      %spread = 0.0003;
-   }
-   %shellCount = 1;
-
-   return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	%obj.playThread(2, shiftAway);
+	%this.TT_decrementAmmo(%obj);
+	%this.TT_displayAmmo(%obj);
+	%projectile = %this.projectile;
+	if(vectorLen(%obj.getVelocity()) < 0.5 && (getSimTime() - %obj.lastShotTime) > 800)
+	{
+	%spread = 0.0007;
+	}
+	else
+	{
+	%spread = 0.0003;
+	}
+	%shellCount = 1;
+	return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
 }
 
 function ImpactRifleImage::onReloaded(%this,%obj,%slot)
 {
-   %this.TT_reload(%obj, %slot, standinClickSound, plant);
+	%this.TT_reload(%obj, %slot, standinClickSound, plant);
 }

@@ -17,32 +17,20 @@ function createSlayerCTFDatablocks()
 {
 	datablock fxDtsBrickData(brickSlyrCTFFlagData : brickStandInPadData)
 	{
-		uiName = "Stand-in Flag Spawn";
-		indestructable = 1;
-	};
+	uiName = "Stand-in Flag Spawn";
 	datablock fxDtsBrickData(brickSlyrCTFFlagReturnData : brickStandInPadData)
 	{
-		uiName = "Stand-in Return Point";
-		indestructable = 1;
-	};
-	datablock TriggerData(slyrCTF_flagReturnTriggerData)
-	{
-		tickPeriodMS = 100;
-	};
-	datablock ShapeBaseImageData(flagImage)
-	{
-		eyeOffset = "0 0 9";
-		lightColor = %color;
-	};
+	uiName = "Stand-in Return Point";
+	tickPeriodMS = 100;
+	eyeOffset = "0 0 9";
+	lightColor = %color;
+	}}
 }
 
 function Slayer_CTF::onMiniGameBrickAdded(%this, %brick, %type)
 {
-	switch$(%type)
-	{
-		case "CTF_Flag":
-			%brick.resetFlag();
-	}
+	case "CTF_Flag":
+	%brick.resetFlag();
 }
 
 function Slayer_CTF::preMinigameReset(%this, %client)
@@ -119,8 +107,8 @@ function Slayer_CTF::onFlagPickup(%this, %client, %team, %brick, %flag)
 	%client.player.mountImage(%image, $Slayer::Server::CTF::flagImageSlot);
 	if(!%flag.dropped)
 	{
-		%team.CTF_numFlagPickups ++;
-		%client.CTF_numFlagPickups ++;
+	%team.CTF_numFlagPickups ++;
+	%client.CTF_numFlagPickups ++;
 	}
 }
 
@@ -148,9 +136,8 @@ function FxDtsBrick::resetFlag(%this)
 
 function Player::dropFlag(%this)
 {
-	%respawn = %mini.CTF_flagDroppedRespawnTime;
 	if(%respawn <= 0)
-		%brick.resetFlag();
+	%brick.resetFlag();
 	%endPos = vectorAdd(%pos,vectorScale(%eyeVect,1.5));
 	%raycast = containerRayCast(%pos, %endPos, 0);
 	%item.setVelocity(vectorAdd(%item.getVelocity(),vectorScale(%eyeVect,4)));
@@ -159,58 +146,52 @@ function Player::dropFlag(%this)
 function slyrCTF_FlagItem::onAdd(%this,%obj)
 {
 	if($Slayer::Server::CTF::flagIdleAnimation[$Slayer::Server::CTF::flagModel] !$= "")
-		%obj.playThread(0,$Slayer::Server::CTF::flagIdleAnimation[$Slayer::Server::CTF::flagModel]);
+	%obj.playThread(0,$Slayer::Server::CTF::flagIdleAnimation[$Slayer::Server::CTF::flagModel]);
 }
 
 function slyrCTF_FlagItem::onPickUp(%this,%flag,%player,%a)
 {
 	if(getSimTime() - %flag.spawnTime < 250)
-		return;
+	return;
 	if(%color == %team.color)
 	{
-		if(%mini.CTF_flagRecovery == 1) {}
-		else if(%mini.CTF_flagRecovery == 2) {}
-	}
+	if(%mini.CTF_flagRecovery == 1) {}
+	else if(%mini.CTF_flagRecovery == 2) {
 	if(%brick.isLocked[%team.color] && %color != %team.color)
 	{
-		%client.bottomPrint("<just:center>\c5That flag is locked for now.",1);
-		return;
-	}
+	%client.bottomPrint("<just:center>\c5That flag is locked for now.",1);
 	if(%neutral && %mini.CTF_neutralFlags == 0) {}
-	else if(!%neutral && %mini.CTF_neutralFlags == 2) {}
-	if(%mini.CTF_requireEnemyPlayers) {}
+	else if(!%neutral && %mini.CTF_neutralFlags == 2) {
+	if(%mini.CTF_requireEnemyPlayers) {
+	}}}}}
 }
 
 function slyrCTF_flagReturnTriggerData::onEnterTrigger(%this,%trigger,%player)
 {
 	if(%color == %team.color || (%neutral && %slyrType $= "CTF_FlagReturn"))
 	{
-		if(%brick.isLocked[%team.color])
-		{
-			%client.bottomPrint("<just:center>\c5This" SPC %datablock.uiName SPC "is locked for now.",4);
-			return;
-		}
-		if(%mini.CTF_flagReturnOnlyAtReturnBrick && %slyrType !$= "CTF_FlagReturn")
-			return;
-		if(!%mini.CTF_returnWithoutOwn)
-		{
-			if(!%mini.gameMode.isFlagAtHome(%team.color))
-				return;
-		}
-	}
+	if(%brick.isLocked[%team.color])
+	{
+	%client.bottomPrint("<just:center>\c5This" SPC %datablock.uiName SPC "is locked for now.",4);
+	if(%mini.CTF_flagReturnOnlyAtReturnBrick && %slyrType !$= "CTF_FlagReturn")
+	return;
+	if(!%mini.CTF_returnWithoutOwn)
+	{
+	if(!%mini.gameMode.isFlagAtHome(%team.color))
+	return;
+	}}}
 }
 
 function serverCmdDropTool(%client, %slot)
 {
-	%minigame = getMinigameFromObject(%client);
 	if(%client.player.currTool == -1 && %client.player.isCarryingFlag() && %minigame.CTF_manualFlagDrop)
-		%client.player.dropFlag();
+	%client.player.dropFlag();
 }
 
 function serverCmdDropFlag(%client)
 {
 	if(!%client.minigame.CTF_manualFlagDrop)
-		return;
+	return;
 	%client.player.dropFlag();
 }
 
@@ -253,17 +234,17 @@ function Player::isCarryingFlag(%this)
 function Player::mountImage(%this,%image,%slot,%a,%b)
 {
 	if(%this.getMountedImage(%slot).className $= "SlyrCTF_FlagImage")
-		return;
+	return;
 }
 
 function Player::unMountImage(%this,%slot)
 {
 	if(!%this.allowFlagRemoval && %this.getMountedImage(%slot).className $= "SlyrCTF_FlagImage")
-		return;
+	return;
 }
 
 function serverCmdSetWrenchData(%client,%info)
 {
 	if(%brick.getDatablock().slyrType $= "CTF_Flag")
-		%brick.resetFlag();
+	%brick.resetFlag();
 }

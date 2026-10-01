@@ -40,92 +40,76 @@ datablock ShapeBaseImageData(TacticalBullpupImage : BullpupImage)
 
 function CompactBullpupImage::onFire(%this,%obj,%slot)
 {
-   %projectile = %this.projectile;
-   if(vectorLen(%obj.getVelocity()) < 0.1)
-   {
-      %spread = 0.0002;
-   }
-   else
-   {
-      %spread = 0.0008;
-   }
-   %shellCount = 1;
-   %obj.lastShotTime = getSimTime();
-   %this.TT_decrementAmmo(%obj);
-   return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	if(vectorLen(%obj.getVelocity()) < 0.1)
+	{
+	%spread = 0.0002;
+	}
+	else
+	{
+	%spread = 0.0008;
+	%shellCount = 1;
+	%this.TT_decrementAmmo(%obj);
+	return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	}
 }
 
 function CompactBullpupImage::onBurstFire(%this,%obj,%slot)
 {
-   %projectile = %this.projectile;
-   if(vectorLen(%obj.getVelocity()) < 0.1)
-   {
-      %spread = 0.0002;
-   }
-   else
-   {
-      %spread = 0.0008;
-   }
-   %shellCount = 1;
-   %obj.lastShotTime = getSimTime();
-   return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	if(vectorLen(%obj.getVelocity()) < 0.1)
+	{
+	%spread = 0.0002;
+	}
+	else
+	{
+	%spread = 0.0008;
+	%shellCount = 1;
+	return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	}
 }
 
 function CompactBullpupImage::onBurstCheck(%this, %obj, %slot)
 {
-   if(%this.TT_canFire(%obj))
-   {
-      %obj.setImageLoaded(%slot, 1);
-      %this.TT_decrementAmmo(%obj);
-   }
-   else
-   {
-      %obj.setImageLoaded(%slot, 0);
-   }
+	if(%this.TT_canFire(%obj))
+	{
+	%obj.setImageLoaded(%slot, 1);
+	%this.TT_decrementAmmo(%obj);
+	}
 }
 
 function TacticalBullpupImage::onFire(%this,%obj,%slot)
 {
-   %projectile = %this.projectile;
-   if(vectorLen(%obj.getVelocity()) < 0.1)
-   {
-      %spread = 0.0002;
-   }
-   else
-   {
-      %spread = 0.0008;
-   }
-   %shellCount = 1;
-   %obj.lastShotTime = getSimTime();
-   %this.TT_decrementAmmo(%obj);
-   return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	if(vectorLen(%obj.getVelocity()) < 0.1)
+	{
+	%spread = 0.0002;
+	}
+	else
+	{
+	%spread = 0.0008;
+	%shellCount = 1;
+	%this.TT_decrementAmmo(%obj);
+	return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	}
 }
 
 function TacticalBullpupImage::onBurstFire(%this,%obj,%slot)
 {
-   %projectile = %this.projectile;
-   if(vectorLen(%obj.getVelocity()) < 0.1)
-   {
-      %spread = 0.0002;
-   }
-   else
-   {
-      %spread = 0.0008;
-   }
-   %shellCount = 1;
-   %obj.lastShotTime = getSimTime();
-   return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	if(vectorLen(%obj.getVelocity()) < 0.1)
+	{
+	%spread = 0.0002;
+	}
+	else
+	{
+	%spread = 0.0008;
+	%shellCount = 1;
+	return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	}
 }
 
 function TacticalBullpupImage::onBurstCheck(%this, %obj, %slot)
 {
-   if(%this.TT_canFire(%obj))
-   {
-      %obj.setImageLoaded(%slot, 1);
-      %this.TT_decrementAmmo(%obj);
-   }
-   else
-   {
-      %obj.setImageLoaded(%slot, 0);
-   }
+	if(%this.TT_canFire(%obj))
+	{
+	%obj.setImageLoaded(%slot, 1);
+	%this.TT_decrementAmmo(%obj);
+	}
 }

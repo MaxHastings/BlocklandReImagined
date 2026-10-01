@@ -50,60 +50,53 @@ datablock ShapeBaseImageData(stimpackImage)
 
 function stimpackProjectile::onCollision(%this, %obj, %col, %pos, %fade)
 {
-   TT_projectileHeal(%obj, %col, 32);
-   Parent::onCollision(%this, %obj, %col, %pos, %fade);
+	TT_projectileHeal(%obj, %col, 32);
+	Parent::onCollision(%this, %obj, %col, %pos, %fade);
 }
 
 function stimRechargedNotice(%obj)
 {
-   if(%obj.getDamagePercent() >= 1.0)
-      return;
-   centerprint(%obj.client, "\c2Booster ready.", 3);
-   serverPlay3D(medigunReloadSound, %obj.getPosition());
+	if(%obj.getDamagePercent() >= 1.0)
+	return;
+	centerprint(%obj.client, "\c2Booster ready.", 3);
+	serverPlay3D(medigunReloadSound, %obj.getPosition());
 }
 
 function stimpackImage::onFire(%this, %obj, %slot)
 {
-   if((%obj.lastStimTime + %this.minShotTime) > getSimTime())
-   {
-      centerprint(%obj.client, "\c0Booster still charging.", 2);
-      return;
-   }
-   %obj.playThread(2, shiftUp);
-   %obj.lastStimTime = getSimTime();
-   serverPlay3D(stimpackHealSound, %obj.getPosition());
-   schedule(4000, %obj, stimRechargedNotice, %obj);
-   if(%obj.getDamageLevel() >= 25)
-   {
-      %obj.spawnExplosion(healCrossProjectile, %obj.getScale());
-      %obj.emote(medigunHealImage);
-   }
-   %obj.setDamageLevel(%obj.getDamageLevel() - 25);
+	if((%obj.lastStimTime + %this.minShotTime) > getSimTime())
+	{
+	centerprint(%obj.client, "\c0Booster still charging.", 2);
+	return;
+	}
+	%obj.playThread(2, shiftUp);
+	%obj.lastStimTime = getSimTime();
+	serverPlay3D(stimpackHealSound, %obj.getPosition());
+	schedule(4000, %obj, stimRechargedNotice, %obj);
+	if(%obj.getDamageLevel() >= 25)
+	{
+	%obj.spawnExplosion(healCrossProjectile, %obj.getScale());
+	%obj.emote(medigunHealImage);
+	}
+	%obj.setDamageLevel(%obj.getDamageLevel() - 25);
 }
 
 function stimpackImage::onAltTrigger(%this, %player, %playerDB, %triggerSlot, %val)
 {
-   if(%val && %triggerSlot == 4)
-   {
-      %player.playThread(2, shiftUp);
-      serverPlay3D(stimpackHealSound, %player.getPosition());
-
-      %projectile = StimpackProjectile;
-      %vector = %player.getMuzzleVector(0);
-      %objectVelocity = %player.getVelocity();
-      %vector1 = VectorScale(%vector, %projectile.muzzleVelocity);
-      %vector2 = VectorScale(%objectVelocity, %projectile.velInheritFactor);
-      %velocity = VectorAdd(%vector1, %vector2);
-      %p = new Projectile()
-      {
-         dataBlock = %projectile;
-         initialVelocity = %velocity;
-         initialPosition = %player.getMuzzlePoint(0);
-         sourceObject = %player;
-         sourceSlot = 0;
-         client = %player.client;
-      };
-      MissionCleanup.add(%p);
-      return %p;
-   }
+	if(%val && %triggerSlot == 4)
+	{
+	%player.playThread(2, shiftUp);
+	serverPlay3D(stimpackHealSound, %player.getPosition());
+	%projectile = StimpackProjectile;
+	%vector = %player.getMuzzleVector(0);
+	%objectVelocity = %player.getVelocity();
+	%vector1 = VectorScale(%vector, %projectile.muzzleVelocity);
+	%vector2 = VectorScale(%objectVelocity, %projectile.velInheritFactor);
+	%velocity = VectorAdd(%vector1, %vector2);
+	%p = new Projectile()
+	{
+	dataBlock = %projectile;
+	initialVelocity = %velocity;
+	initialPosition = %player.getMuzzlePoint(0);
+	}}
 }

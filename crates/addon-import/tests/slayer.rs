@@ -53,6 +53,7 @@ const CAPTURE_POINTS: i64 = 25;
 /// seven points a capture.
 const CP: &str = "gamemode_slayer:brick/brickslyrcpdata";
 const CP_TICK: usize = 12;
+const REGION: &str = "gamemode_slayer:brick/brickslyrregionboundarydata";
 const CP_POINTS: i64 = 7;
 const RECOVERY_POINTS: i64 = 5;
 
@@ -200,6 +201,7 @@ fn definitions() -> Definitions {
             plate(FLAG, Special::None),
             plate(TEAM_SPAWN, Special::SpawnPoint),
             plate(CP, Special::None),
+            plate(REGION, Special::None),
         ]
         .into(),
     }
@@ -605,9 +607,21 @@ fn an_enemy_flag_rides_on_the_carriers_back_and_scores_at_home() {
         "onFlagReturned".into(),
         "onFlagRecovered".into()
     ]));
+    g.s.take_private_notices();
     let red_flag = g.plant(owner, FLAG, -8.5, 0.0, RED);
     let blue_flag = g.plant(owner, FLAG, 8.5, 0.0, BLUE);
     g.steps(31);
+    // Their builder hears whose they are.
+    let prints: Vec<String> = g
+        .s
+        .take_private_notices()
+        .into_iter()
+        .filter_map(|(_, n)| match n {
+            Notice::Bottom { text, .. } => Some(readable(&text)),
+            _ => None,
+        })
+        .collect();
+    assert!(prints.iter().any(|t| t.ends_with("set for Red.")), "{prints:?}");
     // Each Flag Spawn holds its flag, in the brick's colour.
     assert_eq!(g.flag_on(red_flag), Some(Some(RED)));
     assert_eq!(g.flag_on(blue_flag), Some(Some(BLUE)));
@@ -1755,6 +1769,16 @@ fn team_and_mini_game_inputs_run_and_restricted_outputs_need_rights() {
     let refused = g.s.review_event_rows(owner, rounds, &mut rows);
     assert_eq!(rows, [win(), time()]);
     assert_eq!(refused, ["You do not have permission to use the [MiniGame, BottomPrintAll] event."]);
+    // Capture the Flag's DropFlag is the game's editors' (its
+    // `RestrictedEvent__["Player", "DropFlag"]`).
+    let drop = || event("onPoke", "Player", "DropFlag", vec![]);
+    let mut rows = vec![drop()];
+    let refused = g.s.review_event_rows(other, rounds, &mut rows);
+    assert!(rows.is_empty());
+    assert_eq!(refused, ["You do not have permission to use the [Player, DropFlag] event."]);
+    let mut rows = vec![drop()];
+    assert!(g.s.review_event_rows(owner, rounds, &mut rows).is_empty());
+    assert_eq!(rows.len(), 1);
 
     // `onMinigameLeave` and `onMinigameJoin`, for whoever leaves or joins.
     let rows = vec![
@@ -2373,5 +2397,99 @@ fn slayers_game_settings_reach_the_engine_and_late_joiners_wait() {
     assert!(!g.s.vitals()[&carol].alive);
     assert_eq!((g.score(red), g.score(blue)), scores);
     assert!(g.cmd(carol, Command::Respawn).is_err());
+    g.quiet();
+}
+
+#[test]
+fn slayer_bricks_say_whose_they_are_and_follow_paint_and_names() {
+    let mut g = Game::new("bricks");
+    let (red, _blue) = two_teams(&mut g);
+    let owner = g.s.minigame_views()[0].owner;
+    g.s.take_private_notices();
+    let respawn_at = |g: &mut Game, p: OwnerId| {
+        g.cmd(p, Command::Suicide).unwrap();
+        g.steps(125);
+        g.cmd(p, Command::Respawn).unwrap();
+        g.steps(2);
+        g.feet(p)
+    };
+
+    // Planting a team spawn tells its builder whose it is
+    // (`slayerPrepareBrick`).
+    let spawn = g.plant(owner, TEAM_SPAWN, -6.0, 0.0, RED);
+    g.steps(2);
+    let set_for = |g: &mut Game| -> Vec<String> {
+        g.s.take_private_notices()
+            .into_iter()
+            .filter_map(|(_, n)| match n {
+                Notice::Bottom { text, .. } if text.contains(" set") => Some(readable(&text)),
+                _ => None,
+            })
+            .collect()
+    };
+    let shown = set_for(&mut g);
+    assert!(
+        shown.iter().any(|t| t.ends_with("set for Red.")),
+        "{shown:?}"
+    );
+
+    // Repainting it says so again, for the new colour's teams.
+    g.s.edit_brick(owner, spawn, Edit::Color(BLUE)).unwrap();
+    g.steps(2);
+    let shown = set_for(&mut g);
+    assert!(
+        shown.iter().any(|t| t.ends_with("set for Blue.")),
+        "{shown:?}"
+    );
+
+    // `Team_<colour>` holds it for that colour whatever its paint; another
+    // name gives it back to its paint.
+    let near = |feet: Vec3| Vec3::new(feet.x + 6.0, 0.0, feet.z - 0.25).length() < 1.0;
+    g.s.edit_brick(owner, spawn, Edit::Name(Some("Team_0".into())))
+        .unwrap();
+    g.steps(2);
+    let feet = respawn_at(&mut g, red);
+    assert!(near(feet), "Red spawns on its named spawn: {feet}");
+    g.s.edit_brick(owner, spawn, Edit::Name(Some("Gate".into())))
+        .unwrap();
+    g.steps(2);
+    let feet = respawn_at(&mut g, red);
+    assert!(!near(feet), "the spawn is Blue's again: {feet}");
+
+    // The paint can on a capture point makes the new colour the one it is
+    // held by and goes back to, without a print (set once, as planted).
+    let cp = g.plant(owner, CP, 0.0, 8.0, 2);
+    g.steps(2);
+    set_for(&mut g);
+    g.s.edit_brick(owner, cp, Edit::Color(BLUE)).unwrap();
+    g.steps(2);
+    assert!(set_for(&mut g).is_empty());
+    g.cmd(owner, Command::MiniGame(MiniGameRequest::Reset))
+        .unwrap();
+    g.steps(2);
+    assert_eq!(g.s.simulation().state().bricks[&cp].color, BLUE);
+
+    // A Region Boundary brick: "set." (no teams), and two in the game's
+    // colour fence it in without complaint.
+    g.plant(owner, REGION, -10.0, -10.0, 0);
+    g.steps(2);
+    assert!(set_for(&mut g).iter().any(|t| t.ends_with(" set.")));
+    g.plant(owner, REGION, 10.0, 10.0, 0);
+    // Past the chat share the last reset's lines used.
+    g.steps(600);
+
+    // `/slayer reset` names who reset it; the game's own resets say it was.
+    g.run(
+        owner,
+        SLAYER,
+        "slayer",
+        vec![PackageArg::String("reset".into())],
+    );
+    g.steps(2);
+    let heard = lines(&mut g);
+    assert!(
+        heard.iter().any(|(_, l)| l.contains("reset the")),
+        "the resetter's line: {heard:?}"
+    );
     g.quiet();
 }

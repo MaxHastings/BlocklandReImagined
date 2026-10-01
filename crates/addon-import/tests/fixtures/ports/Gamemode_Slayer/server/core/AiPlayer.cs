@@ -2,19 +2,17 @@
 // code.
 function AiPlayer::useRandomTool(%this)
 {
-	for(%i = 0; %i < %indexEnd; %i ++)
-		if(isObject(%this.tool[%i]) && (getRandom(0, 1) || %i == %indexEnd - 1))
-			return %this.setWeapon(%this.tool[%i]);
-	return 0;
+	%i ++)
+	if(isObject(%this.tool[%i]) && (getRandom(0, 1) || %i == %indexEnd - 1))
+	return %this.setWeapon(%this.tool[%i]);
 }
 
 package Slayer_AiPlayer
 {
 	function checkHoleBotTeams(%obj, %target, %neutralAttack, %melee)
 	{
-		if(%teamA.isAlliedTeam(%teamB))
-			return 0;
-		return parent::checkHoleBotTeams(%obj, %target, %neutralAttack, %melee);
-	}
+	if(%teamA.isAlliedTeam(%teamB))
+	return 0;
+}
 };
 activatePackage(Slayer_AiPlayer);

@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "notes": "Kai's AddAmmoTT wrench output, rewritten as host rules: a row aimed at a player or bot hands them rounds of one Tier+Tactical ammo type, or of every type with All. An amount of -1 fills the type to its most; Ignore Max lets the rounds go past it. Not ported yet: the ammo sets (Kai's packs and the weapon and grenade groups) as list choices.",
+  "include": ["tier-tactical-ammo"],
+  "rules": {
+    "capabilities": ["player", "brick_events"]
+  },
+  "handles": {
+    "initAddAmmoTT": "the host rules' AddAmmoTT output (behaviour.json brick_outputs): the list is All and the Tier+Tactical ammo types, then the amount and Ignore Max; a bot is a Player target here, so one output serves both",
+    "call:initAddAmmoTT": "the host rules' AddAmmoTT output, declared once when the rules load",
+    "Player::addAmmoTT": "the host rules' on_brick_output: set_reserve up to the type's most (its Max preference), or past it with Ignore Max"
+  }
+}

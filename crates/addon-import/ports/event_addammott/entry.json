@@ -1,0 +1,27 @@
+{
+  "addon": "Event_AddAmmoTT",
+  "title": "Tier+Tactical AddAmmo Event",
+  "port": "event_addammott",
+  "status": "partial",
+  "sha256": [
+    "3dfd229feab03f8a979b26f79c3a22902df113127338640af5fedba0536b943b"
+  ],
+  "covers": {
+    "server.cs": {
+      "needs_tier1": "forceRequiredAddOn\\(\\s*\"Weapon_Package_Tier1\"\\s*\\)"
+    },
+    "initAddAmmoTT": {
+      "for_players": "registerOutputEvent\\(\\s*\"?Player\"?\\s*,\\s*\"AddAmmoTT\"",
+      "for_bots": "registerOutputEvent\\(\\s*\"?Bot\"?\\s*,\\s*\"AddAmmoTT\"",
+      "amount_max": "\"int\\s+-1\\s+(\\d+)\\s+-1\"",
+      "ignore_max": "\"int[^\"]*\"\\s*TAB\\s*\"bool\""
+    },
+    "Player::addAmmoTT": {
+      "all": "%listIdx\\s*==\\s*0",
+      "adds": "TT_addAmmo\\(\\s*%pl\\s*,[^;]*,\\s*%amount\\s*,\\s*%ignoreMax\\s*\\)"
+    }
+  },
+  "tests": [
+    "crates/addon-import/tests/tier_port.rs the_add_ammo_event_hands_out_tier_ammo"
+  ]
+}

@@ -371,7 +371,8 @@ asked otherwise. Slayer's spectating and fly-through camera are these.
 **Bricks.** `bricks(kind)` lists the bricks of one kind
 (`"pkg:brick/flagstand"`, `"v20/brick/brickspawnpointdata"`), and
 `brick(id)` reads one: `#{ id, kind, x, y, z, turns, min, max, color,
-owner, game, name, item }`, `game` being the mini-game whose bricks it is (its owner's, as
+owner, game, name, item, ui_name }`, `ui_name` its kind's name in the build
+menu (v20's `uiName`), `game` being the mini-game whose bricks it is (its owner's, as
 v20's `minigameCanUse`), or `()`. `set_brick_item(brick, item)` sets the
 item a brick holds out (`setItem`), or `()` for none: the world's bricks,
 a mini-game's, or ones the calling player may build on. An item whose image
@@ -655,8 +656,8 @@ and credits nobody. Start it clear of the shooter's body. 240 a second per
 Add-On. The Commando's sentry does this from its think.
 
 **Bricks by kind** (`world.edit`). `brick(id)` reads a placed brick:
-`#{ id, kind, x, y, z, turns, min, max, color, owner, game, name, item }`
-(the same map `bricks(kind)` lists), `kind` being its
+`#{ id, kind, x, y, z, turns, min, max, color, owner, game, name, item,
+ui_name }` (the same map `bricks(kind)` lists), `kind` being its
 brick catalog id (`v20/brick/brick2x4data`, or an imported Add-On's
 `<ns>:brick/<datablock>`), `x, y, z` its centre, `turns` its clockwise
 quarter turns, `color` its palette index and `owner` the build it is in (0

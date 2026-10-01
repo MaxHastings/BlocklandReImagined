@@ -20,30 +20,28 @@ function Slayer_MiniGameSO::victoryCheck_Lives(%this)
 {
 	if(!%t.isTeamDead())
 	{
-		if(%this.teams_allySameColors && %t.color == %winnerColor)
-			%winner = %t;
-	}
+	if(%this.teams_allySameColors && %t.color == %winnerColor)
+	%winner = %t;
 	if(%count == 1)
-		return %winner;
-	return -1;
+	return %winner;
+	}
 }
 
 function Slayer_MiniGameSO::victoryCheck_Points(%this)
 {
 	if(%t.getScore() >= %this.points)
-		%winner = %t;
+	%winner = %t;
 	if(%cl.score >= %this.points)
-		%winner = %cl;
-	return %winner;
+	%winner = %cl;
 }
 
 function Slayer_MiniGameSO::victoryCheck_Time(%this, %ticks)
 {
 	%time = %this.time * 60000;
 	if(%t.winOnTimeUp)
-		%winOnTimeUp = 1;
+	%winOnTimeUp = 1;
 	if(%sc == %least && %least > 0)
-		%count ++;
+	%count ++;
 	%this.messageAll('', '\c3%1 \c5remaining.', %remain);
 }
 
@@ -95,16 +93,15 @@ function Slayer_MiniGameSO::endRound(%this, %winner, %resetTime)
 
 function Slayer_MiniGameSO::sendScoreListAll(%this)
 {
-	%var2 = "Name";
 	%var3 = "Score";
 	%var4 = "Kills";
 	%var5 = "Deaths";
 	%var6 = "Rounds Won";
 	if(%this.eorrDisplayVictory)
-		%victoryStatus = 1;
+	%victoryStatus = 1;
 	%var1 = (%cl.roundWon ? "VICTORY" : "DEFEAT");
 	if(%this.gameMode.template.useTeams && %this.Teams.getCount() > 0 && %this.eorrDisplayTeamScores)
-		%this.commandToAllSlayerClients('Slayer_ctrDisplayAdd', "<b>Teams:</b><br>");
+	%this.commandToAllSlayerClients('Slayer_ctrDisplayAdd', "<b>Teams:</b><br>");
 	%teamList = %this.Teams.getTeamListSortedScore();
 	%var4 = %t.getKills();
 	%var5 = %t.getDeaths();
@@ -116,30 +113,25 @@ function Slayer_MiniGameSO::sendScoreListAll(%this)
 
 function Slayer_MiniGameSO::incTimeRemaining(%this, %flag, %display)
 {
-	%rmndr = %this.timeRemaining % 30000;
 	if(%rmndr >= 15000)
-		%remain = %this.timeRemaining + (30000 - %rmndr);
+	%remain = %this.timeRemaining + (15000 - %rmndr);
 	if(%display)
-		%this.messageAll('', "\c5Extended by\c3" SPC %flag SPC "\c5" @ %min @ ".");
+	%this.messageAll('', "\c5Extended by\c3" SPC %flag SPC "\c5" @ %min @ ".");
 }
 
 function Slayer_MiniGameSO::setTimeRemaining(%this, %flag, %display)
 {
 	if(%display)
-		%this.messageAll('', "\c5Time now\c3" SPC %flag SPC "\c5" @ %min @ ".");
+	%this.messageAll('', "\c5Time now\c3" SPC %flag SPC "\c5" @ %min @ ".");
 }
 
 function MiniGameSO::Win(%this, %mode, %flag, %client)
 {
-	switch(%mode)
-	{
-		case 0: %this.endRound(%client);
-		case 1: %this.endRound(%team);
-		case 2: %cl = findClientByName(%flag);
-		case 3: %team = %this.Teams.getTeamFromName(%flag);
-		case 4: %this.endRound("CUSTOM" TAB %flag);
-		case 5: %this.endRound();
-	}
+	case 0: %this.endRound(%client);
+	case 1: %this.endRound(%team);
+	case 2: %cl = findClientByName(%flag);
+	case 3: %team = %this.Teams.getTeamFromName(%flag);
+	case 4: %this.endRound("CUSTOM" TAB %flag);
 }
 
 function serverCmdSlayer(%client, %cmd)
@@ -176,47 +168,34 @@ package Slayer_MiniGameSO
 
 	function Slayer_MiniGameSO::Reset(%this, %client)
 	{
-		%ai.setDead(0);
-		%ai.setLives(%this.lives);
-		%cl.setLives((isObject(%t) && %t.lives >= 0) ? %t.lives : %this.lives);
-		if(%this.clearStats)
-		{
-			%cl.setKills(0);
-			%cl.setDeaths(0);
-		}
-	}
+	%ai.setDead(0);
+	%ai.setLives(%this.lives);
+	%cl.setLives((isObject(%t) && %t.lives >= 0) ? %t.lives : %this.lives);
+	%cl.setKills(0);
+	%cl.setDeaths(0);
+}
 	function Slayer_MiniGameSO::endGame(%this)
 	{
-		for(%i = %this.numMembers["AiController"] - 1; %i >= 0; %i --)
-			%this.member["AiController", %i].delete();
-	}
+	for(%i = %this.numMembers["AiController"] - 1; %i >= 0; %i --)
+	%this.member["AiController", %i].delete();
+}
 };
 activatePackage(Slayer_MiniGameSO);
 
 // Stand-ins (CC0) for the bot shapes the port reads.
 function Slayer_MiniGameSO::addBotToGame(%this)
 {
-	%bot = new ScriptObject()
-	{
-		class = Slayer_AiController;
-		hName = "Bot" SPC getRandomFirstName();
-	};
-	%this.addMember(%bot);
-	return %bot;
+	class = Slayer_AiController;
+	hName = "Bot" SPC getRandomFirstName();
 }
 
 function Slayer_MiniGameSO::canDamage(%this, %objA, %classA, %objB, %classB)
 {
 	if(%classA $= "AiPlayer")
-		return %this.botDamage;
-	return %this.weaponDamage;
+	return %this.botDamage;
 }
 
 function Slayer_MiniGameSO::updateRespawnTime(%this, %type, %flag, %old)
 {
-	%time = %flag * 1000;
-	switch$(%type)
-	{
-		case "bot": %this.botRespawnTime = %time;
-	}
+	case "bot": %this.botRespawnTime = %time;
 }

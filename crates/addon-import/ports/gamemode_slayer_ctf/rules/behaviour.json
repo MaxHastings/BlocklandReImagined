@@ -58,6 +58,11 @@
   "on_death": true,
   "on_pickup": true,
   "on_drop_key": true,
+  "on_event_row": true,
+  "on_brick": [
+    "{{namespace}}:brick/brickslyrctfflagdata",
+    "{{namespace}}:brick/brickslyrctfflagreturndata"
+  ],
   "zones": [
     {
       "bricks": [

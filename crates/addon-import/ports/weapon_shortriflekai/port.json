@@ -2,7 +2,7 @@
   "schema_version": 1,
   "include": [
     "tier-tactical-core",
-    "tier-tactical"
+    "tier-tactical-ammo", "tier-tactical"
   ],
   "notes": "Kai's Short Rifle on Tier 1's ammo system: a hitscan round read from Support_RaycastingWeapons' fields that ricochets as the gun's own fireRaycast does: up to raycastRicochets turns off what it meets, 30 more damage for each hit before, half its damage on its own shooter. While Emote_Critical is on, a player struck after a turn takes a crit (the shared rules' ricochet_shots), and every hit shoves the victim ahead and up. Its line shape's look is not read (the shape is a model, not text): the streak is drawn 0.3 wide for 0.1 s in the game's warm tracer colour.",
   "hitscans": {

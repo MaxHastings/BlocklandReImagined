@@ -76,25 +76,23 @@ datablock ShapeBaseImageData(RetroMagnumImage : MagnumImage)
 
 function semiMagnumImage::onFire(%this,%obj,%slot)
 {
-   %projectile = %this.projectile;
-   %spread = 0.0001;
-   %shellCount = 1;
-   %this.TT_decrementAmmo(%obj);
-   return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	%spread = 0.0001;
+	%shellCount = 1;
+	%this.TT_decrementAmmo(%obj);
+	return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
 }
 
 function semiMagnumProjectile::damage(%this,%obj,%col,%fade,%pos,%normal)
 {
-   TT_processHeadshotDamage(%this, %obj, %col, %pos, %this.directDamage, 2, $DamageType::MagnumHeadshot);
+	TT_processHeadshotDamage(%this, %obj, %col, %pos, %this.directDamage, 2, $DamageType::MagnumHeadshot);
 }
 
 function WesternMagnumImage::onFire(%this,%obj,%slot)
 {
-   %projectile = %this.projectile;
-   %spread = 0.0001;
-   %shellCount = 1;
-   %this.TT_decrementAmmo(%obj);
-   return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	%spread = 0.0001;
+	%shellCount = 1;
+	%this.TT_decrementAmmo(%obj);
+	return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
 }
 
 function WesternMagnumImage::onReloaded(%this,%obj,%slot)
@@ -104,16 +102,15 @@ function WesternMagnumImage::onReloaded(%this,%obj,%slot)
 
 function WesternMagnumProjectile::damage(%this,%obj,%col,%fade,%pos,%normal)
 {
-   TT_processHeadshotDamage(%this, %obj, %col, %pos, %this.directDamage, 2, $DamageType::MagnumHeadshot);
+	TT_processHeadshotDamage(%this, %obj, %col, %pos, %this.directDamage, 2, $DamageType::MagnumHeadshot);
 }
 
 function MavMagnumImage::onFire(%this,%obj,%slot)
 {
-   %projectile = %this.projectile;
-   %spread = 0.0001;
-   %shellCount = 1;
-   %this.TT_decrementAmmo(%obj);
-   return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	%spread = 0.0001;
+	%shellCount = 1;
+	%this.TT_decrementAmmo(%obj);
+	return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
 }
 
 function MavMagnumImage::onReloaded(%this,%obj,%slot)
@@ -123,19 +120,18 @@ function MavMagnumImage::onReloaded(%this,%obj,%slot)
 
 function MavMagnumProjectile::damage(%this,%obj,%col,%fade,%pos,%normal)
 {
-   TT_processHeadshotDamage(%this, %obj, %col, %pos, %this.directDamage, 2, $DamageType::MagnumHeadshot);
+	TT_processHeadshotDamage(%this, %obj, %col, %pos, %this.directDamage, 2, $DamageType::MagnumHeadshot);
 }
 
 function RetroMagnumImage::onFire(%this,%obj,%slot)
 {
-   %projectile = %this.projectile;
-   %spread = 0.0001;
-   %shellCount = 1;
-   %this.TT_decrementAmmo(%obj);
-   return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
+	%spread = 0.0001;
+	%shellCount = 1;
+	%this.TT_decrementAmmo(%obj);
+	return TT_createProjectile(%this, %obj, %slot, %projectile, %shellCount, %spread);
 }
 
 function RetroMagnumProjectile::damage(%this,%obj,%col,%fade,%pos,%normal)
 {
-   TT_processHeadshotDamage(%this, %obj, %col, %pos, %this.directDamage, 2, $DamageType::MagnumHeadshot);
+	TT_processHeadshotDamage(%this, %obj, %col, %pos, %this.directDamage, 2, $DamageType::MagnumHeadshot);
 }
