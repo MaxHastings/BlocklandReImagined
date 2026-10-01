@@ -2140,15 +2140,19 @@ mod trench_pick_tests {
             "addons/trench-kit/assets".to_string(),
             manifest.join("../../packages/trench-warfare/trench-kit/assets"),
         )];
-        let assets = ItemAssets::load_with(
+        let mut assets = ItemAssets::load_with(
             &root.join("item-presentation-pack-010"),
             &root.join("weapons-pack-009"),
             &extras,
         )?;
         assert!(assets.faults.is_empty(), "{:?}", assets.faults);
         let pick = "trench-kit:weapon/pick";
-        assert!(assets.presentation.items[pick].icon.as_deref().is_some_and(|k| k.ends_with(".render")));
-        let icon = assets.icon(pick)?.unwrap();
+        // Drawn from its model, off the load path (`ItemAssets::draw_icons`).
+        assert_eq!(assets.draw_icons(None), IconDraws { kept: 0, drawing: 1 });
+        assets.finish_icons();
+        let slot = assets.drawn_icon(pick).expect("an icon drawn from its model");
+        let icon = slot.get().expect("drawn");
+        assert!(std::ptr::eq(assets.icon(pick)?.unwrap(), icon), "the drawn icon is shown");
         let hammer = assets.icon("v20.weapon.hammeritem")?.unwrap();
         assert_eq!((icon.width, icon.height), (hammer.width, hammer.height), "framed like the Hammer's");
         assert_eq!(icon.rgba[3], 0, "a clear background");
