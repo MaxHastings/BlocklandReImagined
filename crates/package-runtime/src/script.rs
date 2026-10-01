@@ -910,7 +910,7 @@ fn environment_map(e: &bri_content::atmosphere::Settings, tick: u64) -> Dynamic 
     Dynamic::from_map(m)
 }
 /// `set_environment(#{ ... })`: each key sets one setting, `()` puts it
-/// back to the map's own (see docs/modding/README.md, "Environment").
+/// back to the map's own (see docs/modding/rules.md, "Environment").
 fn set_environment(options: Map) -> Fallible<()> {
     use bri_content::atmosphere::{DEFAULT_DAY_LENGTH, DayCycle, Settings, SunFlare, Vignette};
     let (current, tick) = with(|i| Ok((i.snapshot.environment.clone(), i.snapshot.tick)))?;

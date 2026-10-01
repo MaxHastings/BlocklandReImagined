@@ -2,7 +2,7 @@
 //!
 //! An Add-On item may ask for its icon to be rendered rather than shipped:
 //! `<icon>.render.json` beside the icon it names (see
-//! `docs/modding/README.md`). The icon is drawn from the item's model as
+//! `docs/modding/weapons.md`). The icon is drawn from the item's model as
 //! the game has it, posed and framed exactly like a stock item's icon
 //! (`pose_like`): the pose is found by fitting that item's model to the
 //! silhouette of its icon, so the new icon sits in the tool slots at the

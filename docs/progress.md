@@ -9657,7 +9657,8 @@ Every main CI run since about run 180 failed three content-free targets.
   prediction-vehicles.json`: a flying wheeled car, skis and a horse, one of
   each kind a client predicts, with authored numbers (no v20 data). All 5
   tests run and pass; the car still has to lead the delayed host poses and
-  the horse still has to run.
+  the horse still has to run. (Later replaced by the shared made-up
+  fixtures in `crates/chaos/src/fixture.rs`; the JSON file is gone.)
 - `bri-render/mirrors` (4 of 5 failing) and `bri-render/persistent_scene`
   (8 of 14) failed with "The requested Wait timed out". Cause, from run
   36791558978's timestamps: the runner has no GPU, and each test built its

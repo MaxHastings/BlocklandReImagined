@@ -199,10 +199,10 @@ add when you work in a checkout.
    |---|---|
    | An image's `onFire` using v20's spread code (`%shellcount`, `%spread`, a `setVelocity` recoil) | the image's `shot` data (below) |
    | A fire-rate check on `%obj.lastFireTime` and `minShotTime` | nothing: the image's `min_shot_ticks` already does it, from the datablock |
-   | Anything a field in [Making Add-Ons](README.md) section 5 or 6 expresses | a patch setting that field |
+   | Anything a field in [Weapons](weapons.md) or [Other content kinds](content-kinds.md) expresses | a patch setting that field |
    | An image's state script (`onCharge`, `onFire`, a custom `stateScript` such as `onFiretwo`) that plays an arm animation, calls `Parent::onFire`, spawns a second projectile or uses the item up | an entry in the image's `scripts` ([torque-equivalents.md](torque-equivalents.md#image-state-scripts-as-data)) |
    | Something the game already does the same way | nothing: cover the function with patterns and say so in `notes` |
-   | A `serverCmd` in an Add-On with no weapons, vehicles or bricks | a rule (section 3 of the guide): `behaviour.json` and a script under `files/`, and a `package.json` patch adding them to `provides` and their `capabilities` |
+   | A `serverCmd` in an Add-On with no weapons, vehicles or bricks | a rule ([Game rules](rules.md)): `behaviour.json` and a script under `files/`, and a `package.json` patch adding them to `provides` and their `capabilities` |
    | An image's `onFire` (or charge, release, jet, light, wheel or cancel) or a `serverCmd` that does host work in an Add-On with weapons, vehicles or bricks | host rules (below): `rules/` in the port, and a patch pointing the image at their commands |
    | Anything whose `runtime_hook` is null or that needs a missing capability | not portable yet: port the rest, mark the entry `partial`, and say what is missing in `notes` |
 
@@ -445,7 +445,7 @@ reads as absent.
 does where its scripts read it (Tier's Recoil around the recoil blast, its
 Ammo System in every ammo function) goes in `rules.settings` instead, by its
 global, with the fields it sets: the importer writes them into the import's
-pack as `bindings` ([Making Add-Ons](README.md) section 5, "Fields from
+pack as `bindings` ([Weapons](weapons.md), "Fields from
 server settings"), so the weapons follow the host's setting.
 
 ```json
@@ -491,7 +491,7 @@ nothing, and no capabilities (Melee Extended II).
 
 **Reaching the rules.** In the patch, `{namespace}`, `{rules}` and
 `{version}` work like captured values, in keys too. Point the image's
-moments at the rules' commands ([Making Add-Ons](README.md) section 5,
+moments at the rules' commands ([Weapons](weapons.md),
 `command` and `commands`):
 
 ```json

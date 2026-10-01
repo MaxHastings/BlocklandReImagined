@@ -1,7 +1,7 @@
 # TorqueScript equivalents
 
 Add-On rules are Rhai scripts that run on the host (see
-[README.md](README.md), section 3). They are not TorqueScript and there is
+[rules.md](rules.md)). They are not TorqueScript and there is
 no TorqueScript VM, by design. This page lists the v20 calls modders
 reach for and the call that does the same job here, so a port starts from
 something familiar. "Equivalent" means the same job, not the same
