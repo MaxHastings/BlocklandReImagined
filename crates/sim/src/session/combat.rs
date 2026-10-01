@@ -247,9 +247,15 @@ pub enum Notice {
     /// Outline a box for this player while its tool is in their hand (an
     /// Add-On's selection); `None` takes it away.
     SelectionBox(Option<Box<crate::blueprint::Outline>>),
+    /// `messageClient(%client, 'MsgPlantError_…')`: the plant-error icon
+    /// (and sound, where the player turned it on), as a refused plant shows.
+    PlantError(crate::simulation::PlantFailure),
     /// `setControlCameraFov`: an Add-On sets this player's field of view,
     /// or hands it back to their own setting with `None`.
     Fov(Option<f32>),
+    /// The host emptied this player's hand (an Add-On's `unmount_image`):
+    /// bricks, spray can and tools are put away on the client too.
+    PutAway,
 }
 
 /// Minigame requests. The actor is always the authenticated connection.
@@ -1322,6 +1328,7 @@ impl Session {
             peer.combat.light = false;
             // The new body wears the client's own colours (`ApplyBodyColors`).
             peer.temp_color = None;
+            peer.temp_look = None;
             peer.inputs.clear();
             // `spawnPlayer` hands control back to the new body.
             peer.control = super::ControlObject::Player;

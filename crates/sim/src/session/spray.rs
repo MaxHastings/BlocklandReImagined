@@ -44,6 +44,48 @@ impl TempColor {
     }
 }
 
+/// What Add-On rules put over a player for a while (`temp_look`): a colour
+/// over every slot, and a face with worn parts' opacity. Each lasts its
+/// own time, as v20's `SetTempColor` and a `setFaceName` reset schedule did.
+#[derive(Debug, Clone, Default)]
+pub(super) struct TempLook {
+    color: Option<([f32; 4], u64)>,
+    face: Option<(Option<String>, BTreeMap<String, f32>, u64)>,
+}
+impl TempLook {
+    pub(super) fn apply(&self, appearance: &mut bri_content::avatar::Appearance) {
+        if let Some((color, _)) = self.color {
+            for slot in ALL_SLOTS {
+                appearance.colors.insert(slot.into(), color);
+            }
+            appearance.decal = "AAA-None".into();
+        }
+        if let Some((face, alpha, _)) = &self.face {
+            if let Some(face) = face {
+                appearance.face = face.clone();
+            }
+            for (slot, a) in alpha {
+                let worn = appearance
+                    .parts
+                    .get(slot)
+                    .is_some_and(|p| !p.eq_ignore_ascii_case("none"));
+                if let (true, Some(c)) = (worn, appearance.colors.get_mut(slot)) {
+                    c[3] = *a;
+                }
+            }
+        }
+    }
+    fn expire(&mut self, tick: u64) -> bool {
+        if self.color.is_some_and(|(_, at)| at <= tick) {
+            self.color = None;
+        }
+        if self.face.as_ref().is_some_and(|(_, _, at)| *at <= tick) {
+            self.face = None;
+        }
+        self.color.is_none() && self.face.is_none()
+    }
+}
+
 /// `SetTempColor`'s height bands above the feet, as avatar colour slots.
 /// Packs, hats and accents only colour when worn. The chest band also
 /// removes the decal.
@@ -129,8 +171,40 @@ impl Session {
         }
     }
 
+    /// `temp_look`: a colour replaces the last colour, a face or opacity
+    /// the last face, each for `seconds`.
+    pub(super) fn temp_look(
+        &mut self,
+        owner: OwnerId,
+        look: bri_package_runtime::ops::TempLook,
+        seconds: f32,
+    ) {
+        let tick = self.simulation.state().tick;
+        let until = tick + (seconds.clamp(0.0, 60.0) * 120.0).ceil() as u64;
+        let palette = &self.simulation.state().palette;
+        let color = look.color.or_else(|| {
+            look.paint
+                .and_then(|p| palette.get(usize::from(p)).copied())
+        });
+        let Some(peer) = self.peers.get_mut(&owner) else {
+            return;
+        };
+        let temp = peer.temp_look.get_or_insert_with(Default::default);
+        if let Some(color) = color {
+            temp.color = Some((color, until));
+        }
+        if look.face.is_some() || !look.alpha.is_empty() {
+            temp.face = Some((look.face, look.alpha, until));
+        }
+    }
+
     pub(super) fn step_temp_colors(&mut self) {
         let tick = self.simulation.state().tick;
+        for peer in self.peers.values_mut() {
+            if peer.temp_look.as_mut().is_some_and(|l| l.expire(tick)) {
+                peer.temp_look = None;
+            }
+        }
         for (&owner, peer) in &mut self.peers {
             let Some(paint) = peer
                 .temp_color
@@ -174,6 +248,49 @@ mod tests {
         assert_eq!(band(1.9, &parts), (vec!["secondpack"], false));
         assert_eq!(band(2.2, &parts), (vec!["head"], false));
         assert_eq!(band(2.5, &parts), (vec!["hat"], false));
+    }
+
+    /// `temp_look`'s colour covers every slot and the decal; its face and
+    /// opacity reach only parts worn; each ends at its own time.
+    #[test]
+    fn a_temp_look_colours_faces_and_fades_worn_parts_for_its_time() {
+        let mut appearance = bri_content::avatar::Appearance {
+            parts: BTreeMap::from([
+                ("accent".to_string(), "visor".to_string()),
+                ("hat".to_string(), "none".to_string()),
+            ]),
+            colors: BTreeMap::from([
+                ("accent".to_string(), [0.2, 0.3, 0.4, 1.0]),
+                ("hat".to_string(), [1.0; 4]),
+            ]),
+            face: "smiley".into(),
+            decal: "Alyx".into(),
+        };
+        let mut look = TempLook {
+            color: None,
+            face: Some((
+                Some("memeCats".into()),
+                BTreeMap::from([("accent".into(), 0.7), ("hat".into(), 0.5)]),
+                100,
+            )),
+        };
+        let mut faced = appearance.clone();
+        look.apply(&mut faced);
+        assert_eq!(faced.face, "memeCats");
+        assert_eq!(faced.colors["accent"], [0.2, 0.3, 0.4, 0.7]);
+        assert_eq!(faced.colors["hat"], [1.0; 4], "no hat is worn");
+        assert_eq!(faced.decal, "Alyx");
+        look.color = Some(([0.9, 0.1, 0.1, 1.0], 50));
+        let mut painted = appearance.clone();
+        look.apply(&mut painted);
+        assert_eq!(painted.colors.len(), ALL_SLOTS.len());
+        assert_eq!(painted.colors["head"], [0.9, 0.1, 0.1, 1.0]);
+        assert_eq!(painted.decal, "AAA-None");
+        assert!(!look.expire(50), "the face lasts longer");
+        look.apply(&mut appearance);
+        assert_eq!(appearance.face, "memeCats");
+        assert_eq!(appearance.decal, "Alyx");
+        assert!(look.expire(100));
     }
 
     #[test]

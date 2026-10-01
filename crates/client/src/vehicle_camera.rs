@@ -390,6 +390,7 @@ mod tests {
                     scale: 1.0,
                     energy: 100.0,
                     tick: Default::default(),
+                    tether: None,
                 };
                 rider.yaw = {
                     let forward = turn * Vec3::NEG_Z;

@@ -439,10 +439,10 @@ fn probe(f: &ContentRoot, artifact: &Path) -> Result<Vec<String>> {
             }
         }
         let mut spawn = brick(&f.vehicle_spawn, snap(0.0, 10.0) + Vec3::Y * 0.1);
-        spawn.vehicle = Some(bri_world::VehicleSpawn {
+        spawn.vehicle = Some(Box::new(bri_world::VehicleSpawn {
             vehicle: bri_world::ContentRef::Resolved(JEEP.into()),
             recolor: false,
-        });
+        }));
         add(spawn);
         world.next_brick_id = next;
         let count = next - 1;

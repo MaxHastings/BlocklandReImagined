@@ -352,16 +352,16 @@ fn probe(
             add(red);
         }
         let mut fire = brick(&f.brick, snap(0.0, 5.0) + Vec3::Y * 0.3);
-        fire.emitter = Some(bri_world::Emitter {
+        fire.emitter = Some(Box::new(bri_world::Emitter {
             asset: Some(bri_world::ContentRef::Resolved(f.emitter.clone())),
             direction: 0,
-        });
+        }));
         add(fire);
         let mut spawn = brick(&f.vehicle_spawn, snap(-4.0, 5.0) + Vec3::Y * 0.1);
-        spawn.vehicle = Some(bri_world::VehicleSpawn {
+        spawn.vehicle = Some(Box::new(bri_world::VehicleSpawn {
             vehicle: bri_world::ContentRef::Resolved(bri_vehicles::testing::HORSE.into()),
             recolor: false,
-        });
+        }));
         add(spawn);
         world.next_brick_id = next;
         let count = next - 1;

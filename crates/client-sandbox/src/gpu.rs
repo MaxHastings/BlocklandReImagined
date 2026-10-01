@@ -12,8 +12,8 @@
 //! GPU has timestamps, each layer is timed: a frame over budget halves the
 //! cap, and one frame far over it stops the Add-On
 //! ([`AddOn::report_gpu_time`]).
-use crate::host::{AddOn, Blend, Frame, Layer, Space, Stopped, VERTEX_BYTES, Vertex};
-use crate::shader::{DEFAULT_LOOP_LIMIT, MAX_LOOP_LIMIT};
+use crate::host::{AddOn, Blend, Budgets, Frame, Layer, Space, Stopped, VERTEX_BYTES, Vertex};
+use crate::shader::{DEFAULT_LOOP_LIMIT, MAX_LOOP_LIMIT, Shader};
 use anyhow::{Context, Result, ensure};
 use glam::{Mat4, Vec3};
 use std::borrow::Cow;
@@ -246,6 +246,38 @@ impl GpuTimer {
     }
 }
 
+/// What a [`LayerRenderer`] draws: an Add-On's own layer, or one the game
+/// builds from Add-On shaders (the skins an Add-On gives its items, drawn
+/// on every copy of them). Either is held to the same budgets and stopped
+/// the same way.
+pub trait LayerSource {
+    fn shaders(&self) -> &[Shader];
+    fn layer(&self) -> &Layer;
+    fn budgets(&self) -> &Budgets;
+    /// Stop drawing it, for `reason`, which is returned.
+    fn stop(&mut self, reason: Stopped) -> Stopped;
+    /// One frame's measured GPU time: an error once it is far over budget.
+    fn report_gpu_time(&mut self, ms: f32) -> Result<(), Stopped>;
+}
+
+impl LayerSource for AddOn {
+    fn shaders(&self) -> &[Shader] {
+        AddOn::shaders(self)
+    }
+    fn layer(&self) -> &Layer {
+        AddOn::layer(self)
+    }
+    fn budgets(&self) -> &Budgets {
+        AddOn::budgets(self)
+    }
+    fn stop(&mut self, reason: Stopped) -> Stopped {
+        AddOn::stop(self, reason)
+    }
+    fn report_gpu_time(&mut self, ms: f32) -> Result<(), Stopped> {
+        AddOn::report_gpu_time(self, ms)
+    }
+}
+
 struct GpuMesh {
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
@@ -397,7 +429,7 @@ impl LayerRenderer {
     pub fn read_times(
         &mut self,
         device: &wgpu::Device,
-        addon: &mut AddOn,
+        addon: &mut dyn LayerSource,
     ) -> Result<Option<f32>, Stopped> {
         let times = match &mut self.timer {
             Some(timer) => timer.collect(device),
@@ -411,7 +443,7 @@ impl LayerRenderer {
 
     /// Take a measured GPU time for the layer: stop the Add-On when it is
     /// far over budget, otherwise adjust the loop cap.
-    pub fn measured(&mut self, addon: &mut AddOn, ms: f32) -> Result<(), Stopped> {
+    pub fn measured(&mut self, addon: &mut dyn LayerSource, ms: f32) -> Result<(), Stopped> {
         addon.report_gpu_time(ms)?;
         let target = addon.budgets().gpu_ms_per_frame;
         if ms > target {
@@ -428,7 +460,7 @@ impl LayerRenderer {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        addon: &mut AddOn,
+        addon: &mut dyn LayerSource,
         frame: &Frame,
         camera: Camera,
         time: [f32; 2],

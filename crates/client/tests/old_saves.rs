@@ -128,7 +128,7 @@ fn dropped_v20_saves_list_and_load_in_load_bricks() -> Result<()> {
         std::fs::write(&target, &bytes)?;
         dropped.push((target, bytes, save));
     }
-    let old = OldSaves::new(saves.clone(), state.path().join("converted-saves"), vec![]);
+    let old = OldSaves::new(saves.clone(), state.path().join("converted-saves"));
     old.set_converter(Converter::new(&content)?);
     old.start();
     while old.busy() {

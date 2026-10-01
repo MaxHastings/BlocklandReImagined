@@ -10,7 +10,7 @@
 //! operation budget per call; bounded strings, arrays, maps, call depth and
 //! operation count. A failing or over-budget call changes nothing.
 use crate::manifest::location;
-use crate::ops::{ObjectRef, Op, SoundAt};
+use crate::ops::{FillPaint, ObjectRef, Op, SoundAt, TempLook, VehiclePaint};
 use crate::state::{Namespace, PlayerKey, check_value};
 use bri_package::diag::Diagnostic;
 use rhai::{AST, Array, Dynamic, Engine, EvalAltResult, Map};
@@ -93,6 +93,14 @@ pub struct PlayerView {
     /// The palette index of the colour their spray can last picked.
     #[serde(default)]
     pub paint: u8,
+    /// The FX can they last picked (`serverCmdUseFXCan`'s index, from 0),
+    /// or `None` when it was a colour can.
+    #[serde(default)]
+    pub fx_can: Option<u8>,
+    /// Whether they may paint now: their minigame's painting rule
+    /// (`enablePainting`), or true outside minigames.
+    #[serde(default)]
+    pub may_paint: bool,
     /// Where the image in their hand fires from (`getMuzzlePoint(0)`), or
     /// the eye when they hold nothing.
     #[serde(default)]
@@ -135,6 +143,26 @@ pub trait World {
     /// Whether a voxel could be placed at voxel coordinates `position`
     /// now: inside the world, its chunk generated, and nothing in the way.
     fn can_place_voxel(&self, position: [i64; 3]) -> bool;
+    /// A placed brick: its kind, centre, turn, colour and owner.
+    fn brick(&self, _brick: u64) -> Option<BrickInfo> {
+        None
+    }
+    /// Bricks whose box overlaps the box from `min` to `max`, at most
+    /// `limit` of them (`InitContainerBoxSearch`).
+    fn bricks_in(&self, _min: [f32; 3], _max: [f32; 3], _limit: usize) -> Vec<u64> {
+        vec![]
+    }
+    /// Whether a rule acting for `caller` may remove brick `brick`, or
+    /// plant into its build (`miniGameCanDamage` with the trust rules).
+    fn can_edit(&self, _caller: Option<u64>, _brick: u64) -> bool {
+        false
+    }
+    /// Whether a brick of `kind` turned `turns` quarter turns would fit
+    /// centred at `position` now (snapped to the grid as `plant_brick`
+    /// does): nothing in the way, inside the world.
+    fn can_plant(&self, _kind: &str, _position: [f32; 3], _turns: u8) -> bool {
+        false
+    }
     /// Which part of player `player` a hit at `point` strikes
     /// (`getDamageLocation`): `"head"`, `"torso"` or `"legs"`, or `None`
     /// for no living player.
@@ -142,6 +170,24 @@ pub trait World {
         None
     }
 }
+/// A placed brick as a script reads it ([`World::brick`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct BrickInfo {
+    /// Its brick catalog id (`v20/brick/brick2x4data`,
+    /// `gamemode_trenchdigging:brick/brick4xcubedirtdata`).
+    pub kind: String,
+    pub position: [f32; 3],
+    /// Clockwise quarter turns seen from above.
+    pub turns: u8,
+    /// Palette index.
+    pub color: u8,
+    /// The build it belongs to (0 for the world's own bricks).
+    pub owner: u64,
+    pub min: [f32; 3],
+    pub max: [f32; 3],
+}
+/// Most bricks one `bricks_in` returns.
+pub const MAX_BRICKS_IN: usize = 1024;
 /// What a ray met.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum RayTarget {
@@ -185,6 +231,20 @@ pub struct HoldView {
     pub object: ObjectRef,
     pub distance: f32,
 }
+/// A player's rope (`tether`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TetherView {
+    pub player: u64,
+    pub anchor: [f32; 3],
+    /// Its length now, and the length it reels toward.
+    pub length: f32,
+    pub target: f32,
+    /// The brick it is tied to, if any.
+    pub brick: Option<u64>,
+    /// The player, vehicle or entity it is tied to, if any.
+    #[serde(default)]
+    pub object: Option<ObjectRef>,
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntityView {
     pub id: u64,
@@ -206,6 +266,9 @@ pub struct Aim {
     #[serde(default)]
     pub look: Option<(String, String)>,
     pub position: [f32; 3],
+    /// The face it met points this way (zero when it met only an object).
+    #[serde(default)]
+    pub normal: [f32; 3],
     pub distance: f32,
     /// The movable object the aim met before any brick.
     #[serde(default)]
@@ -238,6 +301,7 @@ pub struct Snapshot {
     /// and in [`object`](Self::object)'s answers.
     pub objects: Vec<ObjectView>,
     pub holds: Vec<HoldView>,
+    pub tethers: Vec<TetherView>,
 }
 impl Snapshot {
     /// A connected player or a bot.
@@ -342,6 +406,10 @@ thread_local! {
     static CURRENT: RefCell<Option<Invocation>> = const { RefCell::new(None) };
     /// Script operations the running call may use.
     static LIMIT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+/// A point as a script reads it, `[x, y, z]`.
+fn point3(p: [f32; 3]) -> Dynamic {
+    Dynamic::from_array(p.iter().map(|v| Dynamic::from_float(f64::from(*v))).collect())
 }
 /// The running call's world.
 fn with_world<T>(f: impl FnOnce(&dyn World, &mut Invocation) -> Fallible<T>) -> Fallible<T> {
@@ -466,6 +534,12 @@ fn player_map(p: &PlayerView) -> Dynamic {
         ("image", p.image.clone().into()),
         ("image_state", p.image_state.clone().into()),
         ("paint", Dynamic::from_int(i64::from(p.paint))),
+        (
+            "fx_can",
+            p.fx_can
+                .map_or(Dynamic::UNIT, |c| Dynamic::from_int(i64::from(c))),
+        ),
+        ("may_paint", p.may_paint.into()),
         float_entry("mx", p.muzzle[0]),
         float_entry("my", p.muzzle[1]),
         float_entry("mz", p.muzzle[2]),
@@ -859,6 +933,9 @@ fn register_api(engine: &mut Engine) {
                     x,
                     y,
                     z,
+                    float_entry("nx", a.normal[0]),
+                    float_entry("ny", a.normal[1]),
+                    float_entry("nz", a.normal[2]),
                     ("distance", Dynamic::from_float(a.distance as f64)),
                     (
                         "object",
@@ -986,6 +1063,24 @@ fn register_api(engine: &mut Engine) {
             push(Op::PlaceVoxel {
                 position: [x, y, z],
                 material: material.into(),
+            })
+        },
+    );
+    // A brick into build `owner` (a brick's owner): plant_brick(kind,
+    // [x, y, z], turns, color, owner).
+    engine.register_fn(
+        "plant_brick",
+        |kind: &str, position: Array, turns: i64, color: i64, owner: i64| {
+            let position = vector(&position)?;
+            let Ok(color) = u8::try_from(color) else {
+                return fail("plant_brick's colour is a palette index, 0 to 255");
+            };
+            push(Op::PlantBrick {
+                kind: kind.into(),
+                position,
+                turns: u8::try_from(turns.rem_euclid(4)).expect("0..4"),
+                color,
+                owner: u64::try_from(owner).or_else(|_| fail("an owner is 0 or more"))?,
             })
         },
     );
@@ -1183,14 +1278,141 @@ fn register_api(engine: &mut Engine) {
             color: u8::try_from(color).map_err(|_| "color is a palette index, 0 to 255")?,
         })
     });
+    // paint_fill(player, brick, paint, options): paint is #{ color: n },
+    // #{ color_effect: n } or #{ shape_effect: n }; options holds limit
+    // (required) and may hold reach: [sideways, vertical], stop_at_limit
+    // limit_message: [text, seconds], limit_error (the plant-limit error
+    // when the limit stops it) and refusal_seconds.
     engine.register_fn(
         "paint_fill",
-        |player: Dynamic, brick: Dynamic, color: i64, limit: i64| {
+        |player: Dynamic, brick: Dynamic, paint: Map, options: Map| {
+            let index = |v: &Dynamic, what: &str| {
+                v.as_int()
+                    .ok()
+                    .and_then(|i| u8::try_from(i).ok())
+                    .ok_or_else(|| format!("{what} is a number, 0 to 255"))
+            };
+            let mut chosen = None;
+            for (key, value) in &paint {
+                let p = match key.as_str() {
+                    "color" => FillPaint::Color(index(value, "color")?),
+                    "color_effect" => FillPaint::ColorEffect(index(value, "color_effect")?),
+                    "shape_effect" => FillPaint::ShapeEffect(index(value, "shape_effect")?),
+                    other => {
+                        return fail(format!(
+                            "paint_fill paints color, color_effect or shape_effect, not `{other}`"
+                        ));
+                    }
+                };
+                if chosen.replace(p).is_some() {
+                    return fail("paint_fill paints one of color, color_effect or shape_effect");
+                }
+            }
+            let paint = chosen.ok_or("paint_fill needs #{ color: n } or an effect")?;
+            let (mut limit, mut reach, mut stop_at_limit, mut limit_message) =
+                (None, None, false, None);
+            let (mut refusal_seconds, mut limit_error) = (None, false);
+            for (key, value) in options {
+                match key.as_str() {
+                    "limit" => {
+                        limit = Some(
+                            value
+                                .as_int()
+                                .ok()
+                                .and_then(|l| u32::try_from(l).ok())
+                                .ok_or("limit is a count of bricks")?,
+                        )
+                    }
+                    "reach" => {
+                        let r = value.try_cast::<Array>().ok_or("reach is [sideways, vertical]")?;
+                        let [side, up] = r.as_slice() else {
+                            return fail("reach is [sideways, vertical]");
+                        };
+                        reach = Some([float(side)?, float(up)?]);
+                    }
+                    "stop_at_limit" => {
+                        stop_at_limit = value.as_bool().map_err(|_| "stop_at_limit is true or false")?
+                    }
+                    "limit_message" => {
+                        let m = value.try_cast::<Array>().ok_or("limit_message is [text, seconds]")?;
+                        let [text, seconds] = m.as_slice() else {
+                            return fail("limit_message is [text, seconds]");
+                        };
+                        limit_message = Some((text.to_string(), float(seconds)?));
+                    }
+                    "limit_error" => {
+                        limit_error = value.as_bool().map_err(|_| "limit_error is true or false")?
+                    }
+                    "refusal_seconds" => refusal_seconds = Some(float(&value)?),
+                    other => {
+                        return fail(format!(
+                            "paint_fill has no option `{other}` (limit, reach, stop_at_limit, limit_message, limit_error, refusal_seconds)"
+                        ));
+                    }
+                }
+            }
             push(Op::PaintFill {
                 player: id(&player)?,
                 brick: id(&brick)?,
-                color: u8::try_from(color).map_err(|_| "color is a palette index, 0 to 255")?,
-                limit: u32::try_from(limit).map_err(|_| "limit must be 1 to 10000")?,
+                paint,
+                limit: limit.ok_or("paint_fill needs a limit")?,
+                reach,
+                stop_at_limit,
+                limit_message,
+                refusal_seconds,
+                limit_error,
+            })
+        },
+    );
+    // paint_vehicle(player, vehicle, paint, options): paint is #{ color: n }
+    // (a palette colour) or #{ rgb: [r, g, b] }; options may hold
+    // riders_seconds and refusal_seconds.
+    engine.register_fn(
+        "paint_vehicle",
+        |player: Dynamic, vehicle: Dynamic, paint: Map, options: Map| {
+            let vehicle = match object_ref(&vehicle) {
+                Ok(ObjectRef::Vehicle(v)) => v,
+                Ok(other) => return fail(format!("{other} is not a vehicle")),
+                Err(_) => id(&vehicle)?,
+            };
+            let mut chosen = None;
+            for (key, value) in paint {
+                let p = match key.as_str() {
+                    "color" => VehiclePaint::Color(
+                        value
+                            .as_int()
+                            .ok()
+                            .and_then(|i| u8::try_from(i).ok())
+                            .ok_or("color is a palette index, 0 to 255")?,
+                    ),
+                    "rgb" => VehiclePaint::Rgb(color(value, "rgb")?),
+                    other => {
+                        return fail(format!("paint_vehicle paints color or rgb, not `{other}`"));
+                    }
+                };
+                if chosen.replace(p).is_some() {
+                    return fail("paint_vehicle paints one of color or rgb");
+                }
+            }
+            let paint = chosen.ok_or("paint_vehicle needs #{ color: n } or #{ rgb: [r, g, b] }")?;
+            let (mut riders_seconds, mut refusal_seconds) = (None, None);
+            for (key, value) in options {
+                match key.as_str() {
+                    "riders_seconds" => riders_seconds = Some(float(&value)?),
+                    "refusal_seconds" => refusal_seconds = Some(float(&value)?),
+                    other => {
+                        return fail(format!(
+                            "paint_vehicle has no option `{other}` (riders_seconds, refusal_seconds)"
+                        ));
+                    }
+                }
+            }
+            push(Op::PaintVehicle {
+                player: id(&player)?,
+                vehicle,
+                paint,
+                riders_seconds,
+                refusal_seconds,
             })
         },
     );
@@ -1384,6 +1606,58 @@ fn register_queries(engine: &mut Engine) {
             })
         },
     );
+    // A placed brick, #{ id, kind, x, y, z, turns, color, owner, min, max },
+    // or () when there is no such brick.
+    engine.register_fn("brick", |brick: Dynamic| {
+        let brick = id(&brick)?;
+        with_world(|world, _| {
+            Ok(world.brick(brick).map_or(Dynamic::UNIT, |b| {
+                map([
+                    ("id", Dynamic::from_int(brick as i64)),
+                    ("kind", b.kind.into()),
+                    ("x", Dynamic::from_float(f64::from(b.position[0]))),
+                    ("y", Dynamic::from_float(f64::from(b.position[1]))),
+                    ("z", Dynamic::from_float(f64::from(b.position[2]))),
+                    ("turns", Dynamic::from_int(i64::from(b.turns))),
+                    ("color", Dynamic::from_int(i64::from(b.color))),
+                    ("owner", Dynamic::from_int(b.owner as i64)),
+                    ("min", point3(b.min)),
+                    ("max", point3(b.max)),
+                ])
+            }))
+        })
+    });
+    // The bricks overlapping a box, as ids: up to 1024.
+    engine.register_fn("bricks_in", |min: Array, max: Array| {
+        let min = vector(&min)?;
+        let max = vector(&max)?;
+        if (0..3).any(|a| max[a] < min[a] || max[a] - min[a] > crate::ops::MAX_BOX_SPAN) {
+            return fail("bricks_in needs a box no more than 256 units a side, min before max");
+        }
+        with_world(|world, _| {
+            Ok(Dynamic::from_array(
+                world
+                    .bricks_in(min, max, MAX_BRICKS_IN)
+                    .into_iter()
+                    .map(|b| Dynamic::from_int(b as i64))
+                    .collect(),
+            ))
+        })
+    });
+    // Whether this call's player may change a brick: their own trust, or
+    // inside a minigame a build it plays with.
+    engine.register_fn("can_edit", |brick: Dynamic| {
+        let brick = id(&brick)?;
+        with_world(|world, i| Ok(world.can_edit(i.caller, brick)))
+    });
+    engine.register_fn(
+        "can_plant",
+        |kind: &str, position: Array, turns: i64| {
+            let position = vector(&position)?;
+            let turns = u8::try_from(turns.rem_euclid(4)).expect("0..4");
+            with_world(|world, _| Ok(world.can_plant(kind, position, turns)))
+        },
+    );
     // The box a brick fills, #{ min: [x, y, z], max: [x, y, z] } in world
     // units, or () when there is no such brick.
     engine.register_fn("brick_box", |brick: Dynamic| {
@@ -1521,6 +1795,61 @@ fn register_presentation(engine: &mut Engine) {
             colors: out,
         })
     });
+    // temp_look(player, look, seconds): for a while every colour slot
+    // #{ color: [r, g, b, a] } or palette colour #{ paint: n } (and no
+    // decal), a face #{ face: "name" },
+    // worn parts at an opacity #{ alpha: #{ accent: 0.7 } }.
+    engine.register_fn(
+        "temp_look",
+        |player: Dynamic, look: Map, seconds: Dynamic| {
+            let mut out = TempLook::default();
+            for (key, value) in look {
+                match key.as_str() {
+                    "color" => {
+                        let c = value
+                            .try_cast::<Array>()
+                            .ok_or("color is [r, g, b] or [r, g, b, a]")?;
+                        out.color = Some(match c.as_slice() {
+                            [r, g, b] => [float(r)?, float(g)?, float(b)?, 1.0],
+                            [r, g, b, a] => [float(r)?, float(g)?, float(b)?, float(a)?],
+                            _ => return fail("color is [r, g, b] or [r, g, b, a]"),
+                        });
+                    }
+                    "paint" => {
+                        out.paint = Some(
+                            value
+                                .as_int()
+                                .ok()
+                                .and_then(|i| u8::try_from(i).ok())
+                                .ok_or("paint is a palette index, 0 to 255")?,
+                        )
+                    }
+                    "face" => out.face = Some(value.to_string()),
+                    "alpha" => {
+                        let slots = value
+                            .try_cast::<Map>()
+                            .ok_or("alpha is #{ slot: opacity }")?;
+                        for (slot, a) in slots {
+                            if !crate::ops::AVATAR_SLOTS.contains(&slot.as_str()) {
+                                return fail(format!("`{slot}` is not an avatar colour slot"));
+                            }
+                            out.alpha.insert(slot.to_string(), float(&a)?);
+                        }
+                    }
+                    other => {
+                        return fail(format!(
+                            "temp_look has no `{other}` (color, paint, face, alpha)"
+                        ));
+                    }
+                }
+            }
+            push(Op::TempLook {
+                player: id(&player)?,
+                look: out,
+                seconds: float(&seconds)?,
+            })
+        },
+    );
     engine.register_fn("set_environment", set_environment);
     engine.register_fn("reset_environment", || {
         push(Op::SetEnvironment {
@@ -1576,6 +1905,52 @@ fn register_presentation(engine: &mut Engine) {
             limits: None,
         })
     });
+    fn orbit_camera(
+        player: Dynamic,
+        target: Dynamic,
+        min: Dynamic,
+        max: Dynamic,
+        distance: Dynamic,
+    ) -> Fallible<()> {
+        let range = crate::ops::ORBIT_DISTANCE;
+        let units = |v: &Dynamic| -> Fallible<u8> {
+            let v = float(v)?;
+            if !(f32::from(*range.start())..=f32::from(*range.end())).contains(&v) {
+                return fail(format!(
+                    "an orbit camera sits {} to {} units out",
+                    range.start(),
+                    range.end()
+                ));
+            }
+            Ok(v.round() as u8)
+        };
+        let orbit = crate::ops::Orbit {
+            target: id(&target)?,
+            min: units(&min)?,
+            max: units(&max)?,
+            distance: units(&distance)?,
+        };
+        if !orbit.valid() {
+            return fail("an orbit camera starts between its nearest and farthest");
+        }
+        push(Op::OrbitCamera {
+            player: id(&player)?,
+            orbit: Some(orbit),
+        })
+    }
+    engine.register_fn(
+        "orbit_camera",
+        |player: Dynamic, target: Dynamic, distance: Dynamic| {
+            orbit_camera(player, target, distance.clone(), distance.clone(), distance)
+        },
+    );
+    engine.register_fn("orbit_camera", orbit_camera);
+    engine.register_fn("orbit_camera", |player: Dynamic, _: ()| {
+        push(Op::OrbitCamera {
+            player: id(&player)?,
+            orbit: None,
+        })
+    });
     engine.register_fn("mount_image", |player: Dynamic, image: Dynamic| {
         push(Op::MountImage {
             player: id(&player)?,
@@ -1624,6 +1999,58 @@ fn tumble_op(player: Dynamic, x: Dynamic, y: Dynamic, z: Dynamic, by: Dynamic) -
         player,
         velocity: [float(&x)?, float(&y)?, float(&z)?],
         by: credit(&by)?,
+    })
+}
+
+fn tether_op(player: Dynamic, anchor: Array, length: Dynamic, options: rhai::Map) -> Fallible<()> {
+    for key in options.keys() {
+        if !matches!(key.as_str(), "brick" | "object" | "reel" | "swing" | "keys" | "straight") {
+            return fail(format!(
+                "tether has no option `{key}` (brick, object, reel, swing, keys, straight)"
+            ));
+        }
+    }
+    let a = anchor.iter().map(float).collect::<Fallible<Vec<f32>>>()?;
+    let [x, y, z] = a[..] else {
+        return fail("tether's anchor is [x, y, z]");
+    };
+    let option = |key: &str| options.get(key).filter(|v| !v.is_unit());
+    let brick = match option("brick") {
+        None => None,
+        Some(b) => Some(id(b)?),
+    };
+    let object = option("object").map(object_ref).transpose()?;
+    let keys = match option("keys") {
+        None => None,
+        Some(k) => {
+            let Some(k) = k.clone().try_cast::<Array>() else {
+                return fail("tether's keys are [shortest, longest]");
+            };
+            let k = k.iter().map(float).collect::<Fallible<Vec<f32>>>()?;
+            let [short, long] = k[..] else {
+                return fail("tether's keys are [shortest, longest]");
+            };
+            Some([short, long])
+        }
+    };
+    push(Op::Tether {
+        player: id(&player)?,
+        anchor: [x, y, z],
+        length: if length.is_unit() {
+            None
+        } else {
+            Some(float(&length)?)
+        },
+        brick,
+        reel: option("reel").map(float).transpose()?,
+        swing: option("swing").map(float).transpose()?,
+        object,
+        keys,
+        straight: match option("straight").map(Dynamic::as_bool) {
+            None => false,
+            Some(Ok(straight)) => straight,
+            Some(Err(_)) => return fail("tether's straight is true or false"),
+        },
     })
 }
 
@@ -1755,25 +2182,145 @@ fn register_physics(engine: &mut Engine) {
             distance: float(&distance)?,
         })
     });
+    // `reach(player, distance, #{ near: d, force: f, turn: true })`: hold
+    // the first thing that comes where they look within `distance`
+    // (`Op::Reach`); every option may be left out.
+    engine.register_fn(
+        "reach",
+        |player: Dynamic, distance: Dynamic, options: rhai::Map| {
+            for key in options.keys() {
+                if !matches!(key.as_str(), "near" | "force" | "turn") {
+                    return fail(format!("reach has no option `{key}` (near, force, turn)"));
+                }
+            }
+            let near = options.get("near").map(float).transpose()?.unwrap_or(0.5);
+            let force = options.get("force").map(float).transpose()?;
+            let turn = match options.get("turn") {
+                None => false,
+                Some(value) => match value.as_bool() {
+                    Ok(b) => b,
+                    Err(_) => return fail("reach's `turn` is true or false"),
+                },
+            };
+            push(Op::Reach {
+                player: id(&player)?,
+                distance: float(&distance)?,
+                near,
+                force,
+                turn,
+            })
+        },
+    );
+    // How far off what `player` holds is carried, or () when nothing is held.
+    engine.register_fn("held_distance", |player: Dynamic| {
+        with(|i| {
+            let player = id(&player)?;
+            Ok(i.snapshot
+                .holds
+                .iter()
+                .find(|h| h.player == player)
+                .map_or(Dynamic::UNIT, |h| Dynamic::from_float(f64::from(h.distance))))
+        })
+    });
     engine.register_fn("let_go", |player: Dynamic| {
         push(Op::LetGo {
             player: id(&player)?,
         })
     });
+    engine.register_fn("tethered", |player: Dynamic| {
+        with(|i| {
+            let player = id(&player)?;
+            Ok(i.snapshot
+                .tethers
+                .iter()
+                .find(|t| t.player == player)
+                .map_or(Dynamic::UNIT, |t| {
+                    let mut map = rhai::Map::new();
+                    let [x, y, z] = t.anchor;
+                    map.insert("x".into(), Dynamic::from_float(x.into()));
+                    map.insert("y".into(), Dynamic::from_float(y.into()));
+                    map.insert("z".into(), Dynamic::from_float(z.into()));
+                    map.insert("length".into(), Dynamic::from_float(t.length.into()));
+                    map.insert("target".into(), Dynamic::from_float(t.target.into()));
+                    map.insert(
+                        "brick".into(),
+                        t.brick.map_or(Dynamic::UNIT, |b| Dynamic::from_int(b as i64)),
+                    );
+                    map.insert(
+                        "object".into(),
+                        t.object
+                            .map_or(Dynamic::UNIT, |o| Dynamic::from(o.to_string())),
+                    );
+                    Dynamic::from_map(map)
+                }))
+        })
+    });
+    engine.register_fn(
+        "tether",
+        |player: Dynamic, anchor: Array, length: Dynamic| {
+            tether_op(player, anchor, length, rhai::Map::new())
+        },
+    );
+    // `tether(player, [x, y, z], length, #{ brick: id, object: ref, reel: r,
+    // swing: s, keys: [shortest, longest], straight: true })`:
+    // every option may be left out; a length of `()` is as long as the
+    // rope spans now.
+    engine.register_fn("tether", tether_op);
+    engine.register_fn("tether_length", |player: Dynamic, length: Dynamic| {
+        push(Op::TetherLength {
+            player: id(&player)?,
+            length: float(&length)?,
+        })
+    });
+    engine.register_fn("untether", |player: Dynamic| {
+        push(Op::Untether {
+            player: id(&player)?,
+            keep: None,
+        })
+    });
+    // `untether(player, #{ keep: k })`: let go, keeping only `k` (0 to 1) of
+    // their speed relative to what the rope was tied to.
+    engine.register_fn("untether", |player: Dynamic, options: rhai::Map| {
+        let keep = match options.get("keep") {
+            Some(k) => {
+                let k = float(k)?;
+                if !(0.0..=1.0).contains(&k) {
+                    return Err("untether keep must be between 0 and 1".into());
+                }
+                Some(k)
+            }
+            None => None,
+        };
+        push(Op::Untether {
+            player: id(&player)?,
+            keep,
+        })
+    });
+    fn mount_object(
+        mount: Dynamic,
+        rider: Dynamic,
+        node: i64,
+        can_dismount: bool,
+        turn: Dynamic,
+    ) -> Fallible<()> {
+        push(Op::MountObject {
+            mount: id(&mount)?,
+            rider: id(&rider)?,
+            node: u8::try_from(node)
+                .ok()
+                .filter(|n| usize::from(*n) < crate::ops::MAX_MOUNT_POINTS)
+                .ok_or("a mount point is 0 to 7")?,
+            can_dismount,
+            turn: float(&turn)?.to_radians(),
+        })
+    }
     engine.register_fn(
         "mount_object",
         |mount: Dynamic, rider: Dynamic, node: i64, can_dismount: bool| {
-            push(Op::MountObject {
-                mount: id(&mount)?,
-                rider: id(&rider)?,
-                node: u8::try_from(node)
-                    .ok()
-                    .filter(|n| usize::from(*n) < crate::ops::MAX_MOUNT_POINTS)
-                    .ok_or("a mount point is 0 to 7")?,
-                can_dismount,
-            })
+            mount_object(mount, rider, node, can_dismount, Dynamic::from_float(0.0))
         },
     );
+    engine.register_fn("mount_object", mount_object);
     engine.register_fn("unmount_object", |rider: Dynamic| {
         push(Op::UnmountObject { rider: id(&rider)? })
     });
@@ -1960,6 +2507,9 @@ impl Runtime {
             }
             if behaviour.on_activate {
                 need("on_activate".into(), 1, "on_activate");
+            }
+            if behaviour.on_trigger {
+                need("on_trigger".into(), 3, "on_trigger");
             }
             for policy in &behaviour.policies {
                 need(format!("allow_{policy}"), 1, &format!("policy `{policy}`"));

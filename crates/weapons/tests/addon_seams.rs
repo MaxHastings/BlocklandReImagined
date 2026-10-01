@@ -1,5 +1,6 @@
 //! Seams Add-On weapons lean on: magazines (`set_ammo` per mounted image),
-//! taking a tool back, pickup-only items and the cancel key's command.
+//! taking a tool back, pickup-only items, the cancel key's command and a
+//! state's arm animation.
 //! The pack is written here; it is our own.
 use bri_weapons::*;
 use glam::Vec3;
@@ -209,6 +210,39 @@ fn an_images_casing_reads_its_debris_and_shell_fields() {
     assert_eq!(rifle.exit_direction, [1.0, 1.0, 0.0]);
     assert_eq!((rifle.velocity, rifle.exit_variance), (1.0, 20.0));
     assert!(!casings.contains_key("kit:image/plain"));
+}
+
+#[test]
+fn a_states_arm_plays_on_the_holders_arm_thread() {
+    let json = format!(
+        r#"{{ "schema_version": {SCHEMA}, "id": "kit",
+            "items": {{ "kit:weapon/pick": {{ "ui_name": "Pick", "image": "kit:image/pick" }} }},
+            "images": {{ "kit:image/pick": {{ "states": [
+                {{ "name": "Activate", "ticks": 2, "timeout": 1 }},
+                {{ "name": "Ready", "down": 2 }},
+                {{ "name": "Swing", "ticks": 3, "timeout": 3, "arm": "armattack" }},
+                {{ "name": "Done", "ticks": 3, "timeout": 1, "arm": "root" }}
+            ] }} }} }}"#
+    );
+    let mut w = WeaponsWorld::new(Pack::from_json(json.as_bytes()).unwrap()).unwrap();
+    w.add_actor(A, 5).unwrap();
+    let pick = w.give(A, "kit:weapon/pick").unwrap();
+    w.equip(A, Some(pick)).unwrap();
+    step(&mut w, 10);
+    w.trigger(A, true).unwrap();
+    let arms: Vec<String> = (0..12)
+        .flat_map(|_| w.step(&mut Open))
+        .filter_map(|e| match e {
+            Event::Animation {
+                actor: A,
+                thread: 2,
+                sequence,
+                image_hand: None,
+            } => Some(sequence),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(arms[..2], ["armattack", "root"], "{arms:?}");
 }
 
 /// A gun whose `onFire` runs a rule command (a magazine counting rounds)

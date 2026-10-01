@@ -110,6 +110,18 @@ pub struct LoadedMap {
     pub breakables: Vec<bri_sim::map::Breakable>,
 }
 
+impl LoadedMap {
+    /// What a host's session takes from the map.
+    pub fn into_session(self) -> bri_net::host_setup::MapSession {
+        bri_net::host_setup::MapSession {
+            simulation: self.simulation,
+            spawn_points: self.spawn_points,
+            breakables: self.breakables,
+            tutorial: self.tutorial,
+        }
+    }
+}
+
 pub struct ClientContent {
     pub paths: ContentPaths,
     pub ui_pack: Rc<Pack>,

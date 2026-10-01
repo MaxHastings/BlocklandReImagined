@@ -1,5 +1,7 @@
 # Progress and evidence
 
+New entries from 2026-10-01 are one file each in [progress/](progress/README.md).
+
 ## Current state
 2026-09-26: full vanilla playable-alpha goal active; not ready for Maxwell's
 interactive playtest. All 14 reference maps have native geometry/collision and
@@ -8130,6 +8132,51 @@ the Hammer and Wrench. It keeps the gun's in-play looks (dark shell, teal
 veins, green-lit edges, teal muzzle), with no outline or glow. It is still
 original art, not a render of any game model.
 
+Grapple Rope Add-On (2026-09-30, Max: "we should have grapple rope in our
+Blockland but make the rope part less ugly and also make the printer look
+cooler same kind of idea we did with gravity gun ... from a Jungle
+environment"). Three showcase Add-Ons, installed but off:
+`grapple-rope` (the host rule), `grapple-rope-tool` (the stock Printer by
+reference) and `grapple-rope-fx` (effects). After the v20 Grapple Rope by
+Demian, SolarFlare and Uristqwerty (original code by Qwertyuiopas), read for
+behaviour only; none of its files are used. Hold left click to throw the
+hook where you aim (64 reach, flies at 160 u/s); it bites bricks and the
+map, and you hang and swing from it; the wheel climbs and pays out
+2.5 units a notch; letting go drops off. Same in and out of minigames. A
+miss flies out and back. The rope breaks when its brick goes, on death,
+teleport, sitting, tumbling, or putting the launcher away.
+
+Engine piece: `PlayerState::tether`, a rope from a point to a player's
+raised hands, run by the motor each 32 ms tick after drag: reel toward the
+target (easing off over the last units, so a full-speed climb never flings
+anyone into a ceiling), movement keys pump the swing while taut and
+airborne, then the tick's move is projected onto the rope's sphere
+(position projection, pulled in at most 60 u/s faster). Projection rather
+than a velocity spring keeps a fast swing on a short rope from gaining
+energy: the first spring version reeled a swinging player into the test
+ceiling at 34 u/s, past `minImpactSpeed`, and killed them; now the climb
+peaks near 25 u/s and settles. Because it is player state, the owner's
+prediction runs the same rope, so this changes the wire (protocol 72 after batch 153, the
+Gate's number after Throwmod's 70). Script ops (`physics`): `tether`,
+`tether_length`, `untether`, and `tethered(p)` to read it; limits in
+docs/modding/README.md section 3.
+
+Effects, all original: a braided rope tube of three hemp strands with a
+vine-green strand, sagging in a parabola when slack, shivering when it
+snaps taut (with a Karplus-Strong twang); a brass three-pronged hook with
+cord lashing; the Printer reskinned as carved jungle hardwood with bamboo
+bands, a leafy vine, moss on up-facing surfaces and brass pins; a
+generated icon in the stock icon style; throw, bite, twang and zip sounds.
+Rope state goes to clients only on change (`rope` player state); nothing
+cosmetic travels per frame.
+
+Tests: `bri-sim --test tether` (7: pendulum keeps its energy, slack fall
+then catch, reel lifts and lowers, leash on the ground, pumping, breaking,
+restored swing replays exactly), `bri-sim --test grapple_rope` (4: bite,
+leash, climb, let go; miss; brick removed and launcher put away; everyone
+gets it outside minigames), `bri-client-sandbox --test showcase` (throw,
+bite, hang, twang, zip; muzzle and skin; offscreen render, checked on
+lavapipe).
 Gravity Gun icon from its model (same day, Max: "take the 3d model +
 shaders + snap pic -> make transparent background -> use as the icon just
 like the other tools"). The gun in play is the Printer's model (v20
@@ -8170,6 +8217,38 @@ and the drawing still 80 px across one way). The content test now checks
 the clear border and that the drawing spans the Printer's width or height,
 and writes `target/gravity-gun-icon-vs-printer.png` (dark and light slots;
 target/ is never committed).
+
+Gravity Gun icon kept on disk, drawn off the load path, seen side on
+(v0.1.11 follow-up). The Gate measured the whole Gravity Gun item load at
+286 ms in release (1.65 s in debug), with the icon drawn inside it. Now
+`ItemAssets::load_with` only prepares the request (`item_icon_render::Request`:
+the item's model, the stock model and icon, the spec).
+`ItemAssets::draw_icons(cache)` shows an icon kept under
+`<state>/item-icons/<sha256>.png` at once. Otherwise it draws the icon on a
+thread named "item icon" and keeps it, written through a partial file. The
+sha256 covers a drawing version (`DRAWING`), both meshes and their axes, the
+stock icon's pixels and the spec. Until then the HUD slot shows the PNG or
+letter, and `ItemUi::register_icons` swaps the drawn icon in and uploads
+again. A failed draw is logged to the console.
+
+Angle: Max, in game on v0.1.10, said the icon was "great just seems to be
+wrong perspective angle". The outline fit had searched every turn, and the
+Printer icon's outline also fitted a tumbled one (seen from above and
+behind, nose rolled down). The fit now tries only side profiles
+(`item_icon_render::Profile`): the item's own forward across the picture
+(either way) and its up up the picture, tipped up to 60 degrees in the
+picture and turned up to 46 degrees towards or away. The item is drawn with
+the same profile on its own axes (`Axes`: +Y forward and +Z up as item
+models are held, or mountPoint to muzzlePoint made level). Max liked the
+look, so the relighting tried for this was dropped. Tests:
+`a_drawn_icon_is_kept_for_the_same_request`, `item_ui::a_drawn_icon_replaces_its_stand_in`,
+`a_models_pose_is_recovered_from_its_icon` (the profile and axis directions
+recovered), and `an_item_drawn_like_a_stock_one_points_the_same_way` (a
+model built along other axes gets the stock item's screen directions, up up
+and nose across). The content test now also checks that the gun's forward
+and up point the same ways on screen as the Printer's, and prints the fitted
+profile. It times the load without the icon, the drawing, and the next load
+with the icon kept, and asserts the kept icon is reused.
 ## 2026-09-30 Steel Ball: real steel, minigame-only harm (for v0.1.10, branch `claude/project-thread-bya1ck`)
 
 Max asked for the Steel Ball back, looking like real reflective steel
@@ -8247,7 +8326,517 @@ More tests:
 Render: `/mnt/project-files/steel-ball/steel-ball-v2.png`. Max's in-game
 check is a Steel Ball near bricks at Mirrors Medium, in Unified+Shine and
 in Dynamic.
+## 2026-09-30: the Tank turret keeps its aim through seat changes
 
+Max's report on v0.1.10: switching seats into the Tank's turret reset its
+rotation. The client turned a new gunner's look onto the barrel, but earlier
+in the same frame than leaving the old seat's view: coming from the
+mouse-steered driver's seat, `Controls::set_vehicle_view(None)` then put the
+look back on the hull's heading, the gunner's moves carried that, and the
+host swung the turret to it for everyone. The look is now taken over last, in
+the gunner's own view branch (`Controls::take_turret`), and the local barrel
+is aimed after it. The host also holds a new gunner's turret still until
+their moves look along it (within 0.25 rad, at most one second), instead of
+only while the yaw equalled the boarding one, so moves in flight during the
+hand-over (a mouse still moving in the driver's seat) no longer swing it.
+
+Test: `bri-client --test vehicle_first_person
+the_tank_turret_keeps_its_aim_through_seat_changes_for_gunner_and_watcher`
+(guest aims, goes gunner to driver to passenger to gunner; every frame the
+host's and guest's replicated and drawn aim stay put; content, run on the
+gate). `bri-sim --test vehicles a_new_tank_gunner_takes_the_turret_where_it_was_left`
+updated for the hold.
+
+## 2026-10-01: turret seat changes, take two
+
+7ec124a failed on the gate with real content: its host-side hold (a new
+gunner's turret stays put until their moves look within 0.25 rad of the
+barrel, up to a second) also held a gunner whose very first look was
+elsewhere (`tank_gunner_aims_where_they_look_relative_to_the_hull`), and in
+the app test a guest's turret ended on the hull's heading. That needs a
+gunner client that never looked along the barrel: the client turned the
+look only on the exact frame the seat changed, and a frame whose seat view
+is not yet known (a vehicle's listing changing with its occupants) spent
+that one chance. Now:
+
+- The host is back to 66cce0d's rule (shipped in v0.1.10): moves still
+  carrying the look the gunner boarded with leave the turret; any other look
+  aims it.
+- The client marks a new seat as "takes the turret" and does it on the
+  first frame its gunner view is known (`App::takes_turret`), after the
+  old seat's view is cleared.
+- Content-free coverage: `bri_chaos::fixture::synthetic_tank` (the chaos
+  wheeled vehicle with the Tank's seats and an attached turret) and
+  `bri-chaos --test turret_seats`: gun, driver, passenger and gun again with
+  0, 1 and 6 ticks of the previous seat's moves in flight, the turret checked
+  every tick, and a new gunner looking away aims it at once. Fails with the
+  turret reset on seat changes.
+- The app test (`vehicle_first_person
+  the_tank_turret_keeps_its_aim_through_seat_changes_for_gunner_and_watcher`)
+  uses only `App` API that 1b2747e has and names the phase, seat, look and
+  hull heading when it fails.
+
+## 2026-10-01: turret seat changes, take three
+
+f552ba6 failed on the gate: passenger moves still in flight after a switch
+to the gun ((0, 0) with the mouse still) reset the turret to the hull's
+heading, and no look-matching rule on the host can tell them apart from a
+gunner really looking that way. Root cause: the host read every move by the
+seat it is in now, not the seat the move was made for. Now the client says
+so:
+
+- Every movement datagram carries `seat: Option<SeatSince>` (vehicle, seat,
+  and the first move sequence shaped for it). The client sets it once the
+  new seat's view is in place (a gunner on an attached turret: once it
+  looks along the barrel, which waits for the turret's pose), from the next
+  move on (`App::seat_report`, `SeatSince::follow`).
+- The host (`Session::seat_report`, `vehicle_input`) reads a move as this
+  seat's only when the report names the seat it is in and the move's
+  sequence is at or past `since`. Anything else (the old seat's moves in
+  flight) steers, turns and aims nothing; a held turret keeps its aim. A
+  report from an older datagram is ignored. Host-side riders that never
+  report keep the boarding-look rule.
+- Chaos net bots report their seats from the replica (`Replica::seat_of`).
+- `bri-chaos --test turret_seats` now sends each move with its report:
+  passes at 0, 1, 4 and 12 ticks of lag each way and fails at lag 1 when the
+  reports are left out; a late report from the old seat is ignored.
+- Not run in the cloud (no content): `bri-sim --test vehicles` (all
+  ignored there) and the app test; the gate runs them.
+- The gate pulled 29da56c: the app test failed under load with app 1 at
+  -2.0 and the turret "left" at -1.95. The test bug: "the aim to settle"
+  passed once host and guest agreed, which they briefly did after the host
+  had taken 39 of the guest's 40 look moves; the last one then turned it on
+  legitimately (still the gunner's). It now waits until the host's aim is
+  the guest's last look relative to the hull and both apps show it.
+- Wire change filed as `crates/net/protocol-changes/seat-tagged-moves.md`.
+  `turret_seats` now uses the made-up tank of `bri_vehicles::testing`
+  (`TANK`, via `fixture::synthetic_vehicles`); the chaos-only
+  `synthetic_tank` is gone with the chaos vehicles it was built from.
+
+Grappling Hook Add-On (2026-10-01, Max: "Grappling Hook took you straight
+to the point iirc while Grapling rope was more swinging behavior ... lets
+just add both to the game", "they both become TWo seperate Addons that
+just come with the release"). Three more showcase Add-Ons, installed but
+off: `grappling-hook`, `grappling-hook-tool`, `grappling-hook-fx`. After
+the Grappling Hook by Conan (Blockland Glass add-on 860), read for
+behaviour only; nothing of it is used. One click fires (80 reach, 200 u/s)
+and the winch pulls you straight to the brick, map, player or vehicle it
+bites; you hang there, may switch items, and the next click lets go; jump
+reels in, crouch lets out, the wheel too. `/hookobjects` (declared admin
+command) limits it to bricks and the map; default on, as Conan's prefs.
+
+Engine additions to the rope, all predicted by the owner's client:
+`drift` (a moving anchor: the host re-ties the rope to the object's spot
+each step, in its physics body's frame for vehicles, and the motor carries
+the anchor on between updates), `keys` (jump/crouch winch, braking to a
+stop when let go, `TETHER_HALT`), `straight` (reeling in draws the body
+along the rope at the winch's speed: without it the pull turned into a
+32 u/s swing into the test wall and killed the player), a winch that
+brakes at `TETHER_STOP` (40 u/s²) over both the rope's and the body's
+remaining way in (replacing the first ease), and a winch that stalls
+rather than out-running a body held back by something in its way. A
+script setting the length takes over from the keys (a key let go a tick
+later had cancelled a wheel reel).
+
+Effects: a riveted gunmetal winch gun with brass drum bands wound with
+cable and an amber gauge, a six-strand steel cable that buzzes as it takes
+the load, a forged four-claw grapnel with a red band whose claws spring
+open on biting; it follows players and vehicles from their drawn records
+(the spot is learned when the bite is first seen; a late joiner sees the
+stored bite point offset by however far the target moved since). Sounds:
+fire, clamp, winch, release.
+
+Tests: `bri-sim --test tether` (11, adding winch keys, moving anchor, hard
+pull braking, straight pull), `--test grappling_hook` (4: pulled to the
+wall and hangs, switching items keeps the rope, click lets go; keys and
+wheel; a hook in a player carries you and /hookobjects turns it off;
+loadout), `bri-client-sandbox --test showcase` (fire, bite, winch, buzz,
+release, miss; rides a turning vehicle and a running player; muzzle and
+skin; offscreen render on lavapipe).
+
+HookShot Add-On (2026-10-01, Max: "I want HookShot too"). Three more
+showcase Add-Ons, installed but off: `hookshot`, `hookshot-tool`,
+`hookshot-fx`. After the Hookshot by Loz (RTB add-on 2859), read for
+behaviour only from its forum description; nothing of it is used. Point
+and click: the spearhead flies (64 reach, 120 u/s), bites a brick, the
+map, a player or a vehicle, and the chain hauls you straight there at 80
+u/s (the rope's `straight` winch, braking at the end) and lets go when you
+arrive, so you land on the spot; stuck for 3 s, it gives up. A miss flies
+out and back at its speed. Clicking again or putting it away lets go
+mid-flight.
+
+Engine seam: `untether(player, #{keep})` (0 to 1): letting go keeps only
+that fraction of the player's speed relative to the rope's anchor. Without
+it, letting go mid-haul in front of a wall flew the player into it at 45
+u/s and killed them, and a rule cannot `push` its own caller. The HookShot
+keeps 0.35.
+
+Effects: the Printer recast as a temple relic (weathered bronze, verdigris
+mottling, carved glyph rings, gold filigree bands, a teal eye-stone that
+wakes while the chain is out); a chain of real interlocking oval bronze
+links, each turned a quarter from the last, drawn in runs of 32 links
+(14 rows each, the joints between links cut away), sliding back into the
+barrel as it hauls; a gold-bronze leaf spearhead on a filigreed socket
+with a teal stone, whose two barbs spring out on biting; it follows
+players and vehicles as the Grappling Hook's grapnel does. Sounds: shoot,
+chink, reel, retract. Icon in `tools/make_showcase_icons.py` (earlier
+icons byte-identical).
+
+Tests: `bri-sim --test hookshot` (4: flies to the spot and lands unhurt;
+second click and putting it away let go, slowed below 45%, and land;
+flies to another player, misses into open sky; loadout),
+`bri-client-sandbox --test showcase` (shoot, bite, haul, links running,
+whip back, miss out and back; rides a turning vehicle; muzzle and relic
+skin; offscreen render on lavapipe).
+
+Grappling Hook and HookShot merged (2026-10-01, Max asked whether all
+three grapples were different enough and picked merging): two grapple
+Add-Ons ship, the Grapple Rope (swing) and the HookShot. The HookShot now
+does both: tap the click to fly there and land (Loz's Hookshot); hold it a
+quarter second or more and you hang there until the next click, jump
+reeling in, crouch letting out, the wheel too, keeping the chain when you
+switch items (Conan's Grappling Hook). `/hookobjects` (admin) moved over.
+The tool's image now runs a command on letting go of the trigger, and the
+rule decides tap or hold from how long it was down (`grip` state). The
+HookShot's temple-relic look won over the gunmetal winch; the
+`grappling-hook*` Add-Ons, their sounds and icon are gone. Engine seams
+unchanged. Tests: `bri-sim --test hookshot` 7 (adds hold-to-hang and let
+go, winch keys and wheel, carried by a player and /hookobjects).
+
+## 2026-10-01 Player Throwing port (branch `claude/project-thread-n5mlwe`, protocols 71 and 72, for v0.1.11; the Gate renumbers)
+
+Max picked Electrk's Player Throwing ("Electrk's is fine") as the classic
+throw Add-On, run from the player's own copy ("originals only"). Port
+`crates/addon-import/ports/script_playerthrowing`, listed in `ports.json` as
+verified (partial until the follow-ups below), checked against the copy the Gate imported (sha256 `aef5a450...`).
+The original is read only to write the port; none of it is in the repo.
+It ships bundled in the download (the bundle lane imports Max's copy at
+release).
+
+The port is a host-rules companion (`script_playerthrowing-rules`, from the
+Fill Can companion work, merged here): `rules/throwing.rhai`, one function
+per v20 function. Its numbers are read from the imported copy by the
+`covers` patterns (mount node, held scale, reach, look limits, throw clamp,
+charge notches, front check, set-down rule, both animations); the server
+preferences keep their defaults (minigames only, grab every 5 s, escape
+after 3 s, 100 ms notches, 2.5 times the charge).
+
+New engine seams it needed (general, documented in `docs/modding`):
+- `on_trigger(player, trigger, down)` (`Armor::onTrigger`): an empty-hand
+  fire press and its release. The client sends `ActivateRelease` when the
+  button that sent `Activate` comes up; a fire press with no image mounted
+  reaches it too. The press is asked before `on_activate`.
+- The `equip` policy (`allow_equip`): the host asks before `EquipTool`,
+  `UseSprayCan` and `UseFxCan` (the Add-On's `serverCmdUseTool` package).
+- `unmount_object` also takes a player out of a vehicle seat (`dismount()`,
+  as a grab does), and checks its caller: the rider, their mount, or a
+  player who may move them.
+
+Follow-up (protocol 72), closing the two gaps the first cut left, with
+general seams:
+- `orbit_camera(p, target, distance)` / `orbit_camera(p, ())` (`player`):
+  `ControlObject::Orbit { target, distance }`, replicated in vitals. The
+  client orbits the target at that distance (the spy and corpse cameras
+  keep 8). A click in it is sent as `Activate` / `ActivateRelease`, so it
+  reaches `on_trigger` and `on_activate` (v20's `Observer::onTrigger` in
+  the Add-On's mode); `ControlPlayer` is refused. The target leaving ends
+  it; admin cameras and driven entities are not taken over. The held
+  player now watches the holder from the copy's `setOrbitMode` distance
+  and clicks to struggle, as in v20.
+- `unmount_image` empties the whole hand: bricks in hand too, on the host
+  (no brick image, no ghost for others) and on the client
+  (`Notice::PutAway`). Taking bricks in hand now asks the `equip` policy
+  too (the client's `BrickHand` report; refused, the host sends `PutAway`),
+  and the `EquipTool { slot: None }` the client sends with it is vetoed. The port now also covers
+  `Observer::onTrigger`, `serverCmdUseInventory` and
+  `serverCmdInstantUseBrick`.
+
+Second follow-up (Max: every gap against the original closed), which marks
+the port verified:
+- `mount_object(mount, rider, node, can_dismount, turn)`: the rider's body
+  turn on the mount point (`mRot.z`, as `setTransform` on a mounted player
+  sets it), until their own turn moves it. A rider whose moves a camera has
+  (an orbit, a spy) now keeps their turn instead of taking the body's
+  world yaw as a seat turn every tick, which spun them.
+  - The port computes the turn the way Torque does for this Add-On's
+    `setTransform(pos @ " 0 0 0.85 90")`: the angle is radians and the
+    axis is not normalised. QuatF(AngAxisF), its matrix's forward column
+    (2wz, 1 - 2z^2), and Player::setTransform's `-atan2(-x, y)` give +93.5
+    degrees, about a quarter turn right. Checked against Torque3D 1.1's MIT
+    source (mathTypes.cpp TypeTransformF, sceneObject.cpp setTransform,
+    mAngAxis.cpp, mQuat.cpp, mMath_C.cpp m_quatF_set_matF_C, player.cpp
+    Player::setTransform/setPosition); an earlier version recalled from
+    memory had the sign backwards. The reasoning is in the rule's
+    `held_turn`.
+- `orbit_camera(p, target, min, max, distance)`:
+  `ControlObject::Orbit { target, min, max, distance }`. The client's wheel
+  (`UiUpdate::CameraWheel`, `GameAction::CameraZoom`) zooms it a unit a
+  notch within the range, kept until the host hands over another camera.
+  The port reads `setOrbitMode`'s 5, 10 and 5.
+
+The server preferences keep their defaults until hosts get Add-On
+settings (the Tier lane's seam); every behaviour the script has is ported.
+
+Tests (content-free; the stand-in Add-On in
+`crates/addon-import/tests/fixtures/ports/Script_PlayerThrowing` is ours,
+CC0, with its own numbers):
+- `cargo test -p bri-addon-import --test ports throwing`: the port fills
+  this copy's numbers into compiling rules; hosted: grab onto the right
+  hand at 0.75 scale with look limits, bricks put away, the camera
+  orbiting the holder 6 units out, no tool switching for either, no
+  escape before 3 s then free and restored, the 5 s grab timeout, a charged
+  throw at 2.5 x 11 where the holder looks.
+- `cargo test -p bri-sim --test carry_rules`: `on_trigger` hears press and
+  release, the `equip` veto, `unmount_object` off a vehicle (the test's own
+  horse).
+- `cargo test -p bri-sim --test script_api`: `orbit_camera` limits, the
+  target leaving, an admin camera kept; `unmount_image` puts bricks away.
+- `bri-client` `an_add_on_orbit_sits_at_its_own_distance`: the distance,
+  the wheel's range, the zoom kept every frame.
+- The hosted port test also checks the quarter turn on the hand (the
+  stand-in's `" 0 0 1 1.5708"`) held while the held player's mouse turns.
+
+## 2026-10-01 Portals: going through shows the same picture (branch `claude/portal-bricks-5be9t8`)
+
+Max, v0.1.10: walking through a portal felt "98% perfect" but jarred at
+the moment of going through, as if the whole camera switched over.
+
+What Valve's Portal does: the frame before going through and the frame
+after are the same picture. Nothing is smoothed except the view's roll,
+which eases back upright after a floor or ceiling portal.
+
+Measured with a new frame-by-frame test that traces every pixel through
+the portals. On 1b2747e4 the whole picture (100% of pixels) jumped at the
+crossing, in first person and from the chase camera. The causes:
+- The prediction moves the body through on the tick its middle crosses,
+  but the body is drawn up to a Torque tick behind. For about 24 ms (4
+  frames at 165 fps) the camera stood on the far side behind the exit,
+  looking back through the partner's other side at the wrong room.
+- Only the yaw was carried. Through a floor portal the pitch stayed
+  (still looking down), and the body stays upright, so the eye and the
+  chase pivot flipped to the other side of the body's middle.
+
+The fix (`crates/client/src/motion.rs`, `portal_view.rs`, `controls.rs`):
+- Motion keeps a crossing the prediction made "unshown". The body, the
+  look and the camera stay on the near side until the drawn middle
+  crosses the opening, after at most 0.1 s. Inputs during that time are
+  turned for the far side.
+- `Controls::carry_look` carries the whole look: yaw, pitch and roll.
+  The roll, and a tilt of the eye and chase pivot about the body's middle,
+  ease out over 0.5 s (smoothstep).
+- The chase camera leans in the rolled frame (`portal_view::leaned`). Its
+  boom starts from the body's middle, so a tilted pivot is carried.
+
+Tests:
+- `bri-client motion::crossing_tests`: a doorway walk and a floor-to-floor
+  fall at 1000 fps, in first person and chase. No frame may move more
+  than 5% of the picture by more than 0.5 units and 0.05 rad. The chase
+  camera is checked within 0.1 s of the crossing: later on, its boom
+  slides off the edge of the opening, as it would round a wall.
+- `bri-render --test mirrors a_portal_the_eye_is_about_to_go_through...`:
+  on the GPU, the recessed window seen from 0.6 to 0.004 units in front
+  matches the direct render from the far side within 2% of pixels.
+- With the old crossing, or the old yaw-only look, the client test fails
+  with 100% of the picture jumping.
+
+Remaining: in third person the body itself still moves across in one
+frame when its middle crosses (half of it shows on each side). Drawing a
+clone on both sides needs per-instance clip planes in the renderer.
+
+### Shooting through portals, every time
+
+Max: "sometimes i can shoot through a portal but other times i can not".
+Three causes, all reproduced by new tests that fail on 1b2747e4:
+- The shot started at the muzzle, which is ahead of the eye. Standing
+  close, the muzzle was already past the opening, so the shot started
+  behind the portal and flew off through the back of the doorway.
+- A doorway's two sides share one plane back to back. A carried shot
+  landed on the partner's plane only to within rounding; about half the
+  time the rest of the tick went in through the partner's other side and
+  was carried straight back. 1460 of 3914 shots in the sweep went wrong.
+- Each player's screen flew projectiles on with no portals at all, and
+  the trail streaked across the map between the two portals.
+
+The fix:
+- `bri_content::passage::PAST`: a carried move goes on from a hair past
+  the partner's plane (`Passages::travel`, projectile flight, and the
+  client's ghost flight).
+- `bri_weapons` fire: the shot's start is followed from the body's
+  middle (new `Frame::middle`, set by the host) to the eye to the muzzle
+  through any opening in between, and its velocity is turned with it.
+- `ghosts::Hit::first`: the client's projectile flight goes through the
+  same openings as the host's. `WeaponEffects::set_passages` makes a
+  trail carried through a portal jump (`EffectsWorld::jump_source`)
+  instead of streaking.
+- Speed, spin (velocity turns with the carry) and owner credit (`source`)
+  are kept. Hitscan in this engine is only the build tools (hammer,
+  wrench, printer, wand), which act on bricks and do not go through.
+
+Tests:
+- `bri-sim --test portals shots::every_shot_into_the_opening...`: 3914
+  shots (speeds 3 to 900, five yaws, three pitches, five edge offsets,
+  three heights, from 0.0005 to 1.7 units out, bullets and falling
+  arrows) each match free flight carried by the portal.
+- `shots::each_weapon_fires_through_from_any_distance`: gun, rocket, bow
+  and sword fired from 3 units out to the eye leading the body through.
+- `bri-client ghosts::a_ghost_flies_through_an_opening_as_the_host_does`
+  and `--test weapon_effects a_trail_carried_through_a_portal...`.
+
+Particles too (Max: spray paint lands through a portal "but the particles
+themselves should also go through"): `EffectsWorld::set_passages` makes
+every particle that flies in through a portal come out of its partner,
+position, velocity, acceleration and facing turned, in all three effects
+worlds (bricks' emitters, players and vehicles, weapons: spray, smoke,
+sparks, explosions). Drawn only, nothing sent; a world with no portals
+skips it. Test: `bri-fx-runtime particles_fly_on_out_of_a_portals_partner`
+sprays a cone at an opening; each particle matches its free flight,
+carried when it went in.
+### A big portal, and cars through it
+
+Max: "two different portal sizes. the one we currently have and one that
+is twice as tall and wide" so a Steel Ball, a jeep or a tank fits.
+
+- The Portal Add-On adds a **1x8x10 Portal** (4 wide, 6 tall inside the
+  frame: 3.9 by 5.75). It is the same window shape, stretched when the
+  catalog loads (`stretch: [8, 1, 30]`); no new model is committed.
+- `Brick::stretched` (content) is general: any brick can be another size
+  of its shape (`stretchSize = "w d h"` in an Add-On's server.cs). Half
+  a stud of every edge moves out unchanged and the middle stretches, so
+  the frame stays as thin, studs stay one stud each, and the attachment
+  grid and collision boxes follow. The opening, the frame collider, the
+  views and the carries already follow the brick's size.
+- Pairing is by brick kind, so a small and a big portal of one name do
+  not pair. A view costs only the screen it covers (scissored passes), so
+  a big portal costs no more per pixel than a small one.
+- Vehicles already went through by their middle (velocity and spin
+  turned, riders on their seats); the small portal's frame stops any that
+  do not fit. `carry_through_openings` is now one public function the
+  host and the tests share. The driver's chase camera now goes back
+  through a portal behind the vehicle (`portal_view::ray`), as the
+  player's does, instead of looking at the wrong room.
+
+Tests: `bri-content brick::a_stretched_window_keeps_its_frame...`;
+`bri-sim definitions` (a stretched package brick, and one with no
+collision refused); `bri-sim --test portals vehicles::*` (the Steel Ball
+as its Add-On ships and a jeep-sized box go through the big portal at
+several offsets with speed and spin turned; the small one stops both);
+`bri-client portal_view::a_camera_ray_goes_on...`; convert `stretchSize`.
+Then Max: "i wanna drive a tank through one or a stunt plane". The Stunt
+Plane is 9.0 across the wings and 7.6 long (its Add-On's bounds), so the
+Add-On also has a **1x20x12 Portal**: 10 wide and 7.2 tall, 9.9 by 6.95
+inside. Only the plane's body collides (1.8 wide, as in v20), so it
+would squeeze through a smaller portal with its wings through the frame;
+the 1x20x12 fits it whole. `vehicles::the_stunt_plane_flies_through...`
+flies it at 40 and 80 through the biggest pair, speed, spin and turn
+kept. The stock Tank's size needs the converted vehicle pack, which this
+container lacks: the Gate measures it.
+
+Portals, third-person bodies (coordinator 10-01: "half the body shows on
+each side of the portal rather than jumping"). Scene instances carry a
+**clip plane** (`bri_render::scene::ClipPlane`, instance attribute 11,
+`GpuInstances::update_clipped`); the scene and shadow shaders cut below
+it. `KEEP_ALL` cuts nothing, and `fs_main` already discarded, so bricks
+keep their early depth test; only shadow casters that are actually cut
+use the new `fs_clipped` caster pipeline (the rest stay depth only).
+`portal_view::Straddle::find` takes the opening a body's middle (the
+point the simulation carries it by) is in front of and part way
+through; the body then draws twice: itself cut at the opening, and
+carried to the partner cut the other way. Players use their nominal
+middle, vehicles their centre of mass (`ClientVehicles::straddle`), and
+riders the cut of the vehicle they ride, so nothing jumps when the body
+is carried. A body seen only through its far half is still built.
+Evidence: `bri-render --test clip_planes` (a cut square draws only its
+side; two complementary cuts match the whole within 2; a moved copy keeps
+its own cut); `bri-client portal_view::a_body_part_way_through...`.
+Held items and the first-person arms still draw on one side only.
+
+Portals, the big size settled (Max 10-01: a tank and a jeep "with some
+extra space so its not too tight", "well thought out"). The 1x8x10 (3.9
+inside) is too narrow for the Tank with its turret (about 4.7 wide, 4.4
+tall), so the big portal is now **1x14x10**: 7 wide, 6 tall, 6.9 by 5.75
+inside, the same stretched window (`stretchSize = "14 1 30"`; frame at
+its normal thickness; opening, collision, render and pairing all follow
+the size). Room: a tank about 1.1 (2.2 studs) each side and 1.35 above
+(2.7 studs); a jeep (2.8 by 2.2) about 2 each side. Evidence:
+`bri-sim --test portals vehicles::*` drives a Steel Ball, a jeep-sized
+box and a tank-sized box (4.7 by 4.4 by 6.6) through off centre (tank
+±0.8, others ±1.5), turned with speed and spin kept; the 1x4x5 stops all
+three. The 1x20x12 stays for the Stunt Plane.
+
+Big Mirror (Max 10-01: "thinking we do the same for mirror"). The Mirror
+Add-On adds a **1x14x10 Mirror**, the big portal's size, through the same
+`stretchSize` path. A stretched shape with no openings bodies pass now
+takes the base shape's own collision recipe stretched by the same map as
+its faces (`Brick::stretching`, `CollisionBody::stretched`), not only the
+mesh's BLB collision boxes, so any stretched brick is solid like its
+1x4x5 (before, one whose shape had no boxes refused to load). Evidence:
+`bri-sim definitions::tests::an_add_on_brick_reuses...` (a stretched
+plain window collides as the whole 4 by 1.2 by 0.5 brick);
+`bri-content` stretch test.
+
+Sizes checked against the converted pack's measurements (Gate, 10-01):
+Jeep hull 3.21 wide, 2.63 tall (model 4.44 tall); Tank hull 4.70 wide,
+2.71 tall, about 4.4 tall with its turret. Max wondered about 1x12x8
+(5.9 by 4.55 inside): it leaves the turret and the jeep model about 0.1
+of headroom, so the big portal stays 1x14x10 (6.9 by 5.75: tank 1.1 each
+side and 1.35 above, jeep 1.85 each side and 1.3 above its model). The
+test boxes now use these hull sizes. Sizes: 1x4x5 (players), 1x14x10
+(Steel Ball, jeep, tank), 1x20x12 (Stunt Plane); mirrors 1x4x5 and
+1x14x10. Still to confirm on the PC: where the turret's mount node puts
+it.
+## 2026-10-01 Sniper Rifle: Kaje's original through Import Add-On (branch `claude/sniper-rifle-u9z1bd`, for v0.1.11)
+
+Max asked for Kaje's Sniper Rifle (Blockland Glass 343, which is Conan's
+"Sniper Rifle Updated"). A first pass bundled our own look-alike rifle
+(`packages/showcase/sniper-rifle`: generated model, bolt animation, sounds,
+scope picture and icon). Max then chose originals only for classic
+Add-Ons, so that pack and its generator are gone. The player imports their
+own copy (Start Game > Add-Ons > Import) and the listed ports add what the
+scripts did. Nothing original is in the repo.
+
+The originals, read from Max's PC (copied read-only to `.research/sniper`):
+- Kaje's `Weapon_Sniper_Rifle` (the old RTB release, in Max's Steam
+  Add-Ons): one round at 2000 units a second with no drop, 150 damage, a
+  blue ring trail, 2 s of muzzle smoke, then the trigger must be let go.
+  Its only script is `SniperRifleImage::onFire`: `playThread(2, shiftAway)`
+  while alive, then `Parent::onFire`. No scope, sway, ammo or headshots.
+- Conan's `Weapon_Sniper_Rifle_Updated` (Glass 343): a new animated model
+  with its own hands, its own sounds, 200 units a second, a bolt `Reload`
+  sequence (about 1.8 s a shot). `onFire` plays `plant`; `onMount` hides
+  the holder's `lhand`, `rhand`, `lhook`, `rhook` and plays
+  `armReadyBoth`; `onUnMount` restores the body.
+
+Ports (`crates/addon-import/ports`, both `verified`):
+- `weapon_sniper_rifle`: `scripts.onfire` (arm from the copy's `playThread`, then fire).
+- `weapon_sniper_rifle_updated`: `scripts.onfire` (`plant`), `hide_nodes`
+  and `both_arms`, covering all three image callbacks.
+
+Engine seams (general, validated, documented in modding section 5):
+- The first pass added `Image.fire_animation`; main's Knife lane then
+  landed `Image.scripts` (state scripts as data, with `arm`), which covers
+  it, so `fire_animation` was dropped and the ports use `scripts.onfire`.
+- `Image.hide_nodes` (up to 16) and `Image.both_arms`: a held image hides
+  body nodes and raises both arms; the avatar derives both from the held
+  images, so they undo themselves when the image goes.
+- `Zoom.levels`, `sensitivity`, `overlay`, `sway` and `jets` stay as seams
+  for any weapon. Kaje's rifle has no scope, so the original aims with the
+  game's zoom key as in v20. The aim's wheel steps now have their own
+  `UiUpdate::AimWheel`, since main's tool wheel follows the trigger.
+
+Tests (content-free): `bri-addon-import --test ports`
+(`sniper_rifle_port_kicks_the_arm`,
+`sniper_rifle_updated_port_draws_its_own_hands`, on CC0 stand-ins in
+`tests/fixtures/ports`), `bri-weapons --test image_seams`,
+`bri-client --test scope_overlay`, `bri-ui --test scope_overlay`. On the PC,
+`bri-addon-import --test import real_sniper_rifles` imports the real copies
+(read only) and runs the ports' checks; the avatar's hidden hands are in the
+content test `reposed_vertices_match_a_full_shape_rebuild`.
+
+Both ports were checked on Max's real copies by the Gate
+(`real_sniper_rifles`, 2 of 2 found) and their hashes are listed.
+
+Left for later: headshots (Adventure Pack's hit regions; neither original
+has them), and Max's feel check of the imported rifle.
 ## 2026-10-01 Adventure Pack seams: hit regions, HUD per gun, onFire with a round (branch `claude/adventure-pack-n3spj2`)
 
 Max asked for Bushido's Adventure Pack as a bundled Add-On and as a test of
@@ -8628,6 +9217,176 @@ Tests: `add_on_join::bot_kinds_come_from_the_blockhead_bot_add_on_the_host_runs`
 `add_on_join::a_host_with_the_blockhead_bot_on_spawns_bots_and_one_without_offers_none`
 (generated content: hosts with the Add-On on and off, loads a saved spawn
 brick, counts players). Not run here: the second needs generated content.
+
+## 2026-10-01: Code health pass: one host setup, gun-seat fire, drive state
+
+Max asked whether technical debt was piling up. The worst pattern was the
+same job written in several places that drift apart, and systems that undo
+each other inside one frame. Three refactors, one commit each:
+
+- **One host setup.** `bri_net::host_setup::HostSetup` builds every map's
+  session for Start Game, Change Map and the dedicated server, Add-On
+  scripts included. Before, Change Map in a game the client hosted dropped
+  every Add-On script (Duplicator, Advanced Duplicator, Gravity Gun, Steel
+  Ball, Ragdoll), and the dedicated server never ran Add-On scripts.
+  `SessionContent` has only required fields, so a new kind of content is
+  added once and every host must supply it. Each map's Add-On state is kept
+  under its own key on a map change and when the host stops
+  (`MapHost::outgoing`). `Family::spawnable` is the one rule for the spawn
+  brick list. The client used to hide the standalone Tank Turret that v20
+  and the server list; every host now lists it. Test: `bri-net host_setup` drives an admin Change Map over loopback
+  and fails without the fix.
+- **Gun-seat fire.** The hold records the seat it was pressed in, and every
+  release ends it. Before, a release in a seat without a gun left the gun
+  "held", so it ignored the next press. Test: `bri-chaos gun_seat_fire`
+  (content-free; fails on the old code).
+- **Drive state in `Motion`.** Which vehicle the client predicts now lives
+  with the prediction, so a map change resets both. Before, after a map
+  change while seated in a vehicle with the same id, prediction never
+  restarted.
+
+The `app.rs` split plan is in `docs/architecture/client-app-split.md`.
+Remaining findings for their owners: `follow(Player)` still clears held
+Fire on main (Gravity Gun lane's `ab3c814`), turret aim overwritten by the
+seat reset in the same tick (turret work), captions ignore the 80-unit
+earshot (fixed by the split's `NetFrame`). The save host and
+`brick_load_bench` still set up sessions by hand; they are probes.
+## 2026-10-01 Trench Warfare: originals only (branch `claude/trench-warfare-eq4lxb`)
+
+Max chose "originals only" for classic Add-Ons (cmsg_01GZRn7g8JiQ6aV1cQgSj22DVJoRScxbRAjHRC4md4Ab28):
+the game loads their models, textures, sounds and data from the player's
+own Blockland Add-Ons folder at runtime, and we never commit or ship them.
+- Removed `trench-kit` (our generated pickaxe, textures, sounds and icon)
+  and `tools/make_trench_assets.py`; all four Trench Add-Ons are off the
+  default list.
+- Kept the general seams: a mode's `minigame` block, `place_voxel` /
+  `voxel` / `can_place_voxel`, `set_avatar_colors`, an image state's `arm`,
+  Add-On items with their own `*.shape.json` model, and textured icon
+  renders. Their tests now use synthetic CC0 fixtures
+  (`items::add_on_icon_tests::own_model_tool`, `check.rs`, and a stand-in
+  tool in `crates/sim/tests/trench.rs`).
+- Next: the rules, HUD and mode become the port of the original Trench
+  Digging Add-On on the shared classic Add-On loader (owned by the Tier
+  lane), wired to the original's item, image and sound names once the
+  Gate lists Max's copy.
+
+
+## 2026-10-01 Trench Warfare removed: digging only, from the original
+
+Max picked "Digging only": we ship Lilboarder's original Trench Digging
+(`Gamemode_TrenchDigging`), imported and ported to behave as he made it,
+and drop our own Trench Warfare game mode (teams, generated field and
+sandbags, rounds, `/teams`, `/newround`, HUD panel).
+- Deleted `packages/trench-warfare` and `crates/sim/tests/trench.rs`.
+- The generic seams stay, each with a synthetic CC0 test:
+  `crates/sim/tests/mode_and_voxels.rs` (a mode's `minigame` block,
+  `voxel` / `place_voxel` / `can_place_voxel` saved with the world,
+  `set_avatar_colors`), `crates/weapons/tests/addon_seams.rs`
+  `a_states_arm_plays_on_the_holders_arm_thread`, and the own-model and
+  textured-icon tests in `bri-client` `items` and `package-runtime` check.
+- Next: the Trench Digging port (ports/ + host rules companion) once the
+  Gate's import report of Max's copy arrives.
+## 2026-10-01 Butterfly Knife and HE Grenade ports (branch `claude/butterfly-knife-q2j2lu`)
+
+Max asked for the Butterfly Knife and HE Grenade from his Steam Blockland,
+then chose "originals only": players import their own copies (Start Game >
+Add-Ons > Import) and the game ships only the behaviour. His knife is
+Stratofortress's `Weapon_ButterflyKnife` (RTB 1707), not the "TF2 Butterfly
+Knife" he linked (RTB 327); his grenade is `Weapon_HEGrenade` by TheGeek,
+Pload, Rotondo and Ephialtes. Both were read on his PC, read-only, into
+`.research/butterfly-knife` (never committed). The first version, with
+models and sounds of our own (553df19), was dropped before it shipped.
+
+Engine seam: an image's `scripts` describes, by lower-case state script
+name, what an `Image::on...` function did: `arm` (thread 2 animation),
+`fire` (`Parent::onFire`), `projectile` (a second `ProjectileData` the
+function spawned) and `use_up` (`%obj.tool[%slot] = 0` with
+`serverCmdUnUseTool`). It replaces the built-in name-matched handling for
+that script. Ports may also write `{name:lower}` for ids. The importer now
+keeps the last definition of a function, as Torque does; the knife defines
+`onFiretwo` twice and the later one spawns the jab.
+
+Ports (`crates/addon-import/ports/weapon_butterflyknife`,
+`weapon_hegrenade`), both `verified` against v20's scripts:
+- Knife: a click jabs with `butterflyknifeprojectile` (30 in the original)
+  and swings no arm, as in v20 (its `armattack` version of `onFiretwo` is
+  replaced by the later one). Held 0.7 s and let go it stabs with the
+  image's projectile (100) after `spearThrow`. `backstab = 180` is not a
+  projectile field and does nothing in v20 either.
+- Grenade: a click pulls the pin (it flies off as the casing); held 0.7 s
+  and let go it is thrown and used up, and another grenade in the tools
+  stays. It bounces with its own sound and goes off on its 2.5 s fuse.
+  Its `Armor::onCollision` package (pick up while holding one) needs
+  nothing: the game has no duplicate check.
+
+Tests: `crates/weapons/tests/state_attacks.rs` (the seam), stand-in
+Add-Ons of our own (CC0) in `crates/addon-import/tests/fixtures/ports` with
+`butterfly_knife_port_jabs_and_stabs` and
+`he_grenade_port_pulls_the_pin_then_throws_it_away`, each port's
+`checks.json` through `check-port`, and `real_steam_knife_and_grenade_ports`
+(skips unless Max's Steam Add-Ons and the v20 reference exist). The Gate
+ran it on the PC at 5576cf1: both ports applied to Max's copies (knife
+4d8d0cc5…, grenade 1cae396e…, now listed in `ports.json`).
+## 2026-10-01: One look per item, in the hand, in the world and as its icon
+
+Max, v0.1.10: "my gravity gun looks different on the item spawn than in my
+hand" and "when i drop the item or tool it can look different than the one
+in my hand". The cause: held images, dropped and spawn-brick items and the
+icon each picked their own model and colour, and the Gravity Gun's alien
+skin was drawn only by its effects Add-On over guns in hands. Now an item
+has one look (`items::Appearance`, `Presentation::item_appearance`): its
+image's model, its colour (shifted only with `color_shift`, as the stock
+importer does) and its skin. Held, dropped, spawn-brick, mirrored and icon
+copies all read it, for every item and tool, stock included.
+
+- Skins are part of the look: an Add-On's `looks.json` names a WGSL shader
+  per image (`items::ItemSkin`). The game draws it over every copy
+  (`item_skins`, on `bri_client_sandbox::gpu::LayerRenderer` through the new
+  `LayerSource`), with an Add-On's GPU budgets, in the player's view and in
+  mirrors and the environment probe. A server's skins draw only when the
+  player trusts its code (`ClientCode::trusts_server`), as WGSL in a
+  `client` section does. The alien shell moved from `gravity-gun-fx` into
+  `gravity-gun-tool/assets/skins/alien.wgsl`; the effects no longer draw it.
+- A respawning ghost or an expiring drop no longer turns white: it keeps
+  its look and fades by alpha.
+- A dropped paint-tinted tool (the Fill Can) lies in the colour it was held
+  in: `Drop::paint`, protocol 70.
+- The held tool's shadow is cast from the hand as others see it, not from
+  the first-person copy at the eye: in first person the third-person copy
+  is always posed (`WorldItemFrame::reflected_self`) and casts.
+- The icon's model and colours come from the look: `gravity_gun.render.json`
+  is now `{"skin": {}}`, its base the image's tint and its veins the skin's
+  colour. Its drawing is unchanged (the CPU port of the shader Max approved
+  in v0.1.10), so the icon looks as shipped.
+
+Add-On items checked: Duplicator, Advanced Duplicator, Bubble Blaster and
+the Gravity Gun shift their image colour; Trench Pick and Fill Can are
+white; all held and world models matched. The Gravity Gun alone had a skin.
+Adventure guns, Sniper and Knife/Grenade are not on main yet; they take the
+same path when they land.
+
+Tests: `items::add_on_icon_tests::an_item_looks_the_same_in_the_hand_and_in_the_world`,
+`a_look_is_checked`, `item_skins::tests::*` (views, energy, trust, a stopped
+layer), `runtime::a_dropped_paint_tinted_tool_keeps_the_colour_it_was_held_in`;
+`stock_items_that_looked_different_in_the_world` (ignored, needs content)
+lists stock items whose own model or colour differed from their image's.
+
+## 2026-10-01: The Gravity Gun catches what comes in range with the trigger held
+
+Max, v0.1.10: "if i have it activated (but distance to grab is too far) but
+then i move closer while still holding it active it doesn't pick it up
+until i let go of left click and click again". The grab ran once, on the
+press. A new engine seam, `reach` (`Op::Reach`), keeps reaching: while the
+player holds nothing, each tick the engine looks where they look (the
+server's own look state, so no extra traffic) up to the reach, before any
+brick, and holds the first thing they may move by the spot it met, as the
+grab would. The Gravity Gun reaches whenever its grab finds nothing; letting
+go (`let_go`) ends it. Its `on_tick` shows the catch in the beam
+(`held_distance` gives the reach). Holds run only on the host, so there is
+nothing to predict. Test:
+`showcase::holding_the_trigger_catches_what_comes_in_range_without_a_second_click`
+(a crate 75 units off, trigger held, walk toward it: caught between 50 and
+62 units off with no second click, and let go stays let go).
 ## 2026-10-01 Vehicle destruction looks (v20 audit)
 
 Max: destroyed vehicles "would turn black right away when on fire" in v20,
@@ -8648,13 +9407,45 @@ its turret too. Full step-by-step table in
   `only_vehicle_classes_char_and_player_mounts_keep_their_colour`.
 ## 2026-10-01 Portals: going through shows the same picture (branch `claude/portal-bricks-5be9t8`)
 
-Max, v0.1.10: walking through a portal felt "98% perfect" but jarred at
-the moment of going through, as if the whole camera switched over.
+View paths, step 1 (Code health's second pass, coordinator 10-01): portal
+windows and crossings now come from one set of openings. `MirrorIndex`
+kept its own `Links` and skipped bricks not drawn, so an invisible linked
+portal teleported but showed no window. It now takes its sides from the
+local world's `Links` (`Motion::collision`, what prediction and the host
+pass bodies through; `MirrorIndex::link`). A linked side shows its view
+even on a brick not drawn (a seamless hole); unlinked glass is the
+brick's look and shows only when drawn. Test: `bri-client
+mirrors::windows_follow_the_openings_bodies_pass_through`.
 
-What Valve's Portal does: the frame before going through and the frame
-after are the same picture. Nothing is smoothed except the view's roll,
-which eases back upright after a floor or ceiling portal.
+View paths, step 2: cameras with no body go through portals. The free
+camera flies through an opening as a body does, its look turned with it
+(`Controls::fly` takes the passages); an orbit or spectate camera's boom
+goes back through a portal behind its focus (`camera_boom`), its look
+turned by the boom's carry, as the player's chase camera does. Test:
+`bri-client controls::a_free_camera_flies_through_a_portal`.
 
+View paths, step 3: every other view (mirror and portal planes, the
+environment probe's faces) goes through one shared path,
+`crate::views`: one list of views, one per-view prepare of sprites,
+plants, weather and Add-On layers (replacing the separate mirror and
+probe copies in `render_scene`). What all views draw from shared buffers
+is chosen around every view's eye: terrain tiles
+(`GpuTerrain::update` takes all eyes, growing its instance lists when
+eyes far apart need more copies) and the effect lights (nearest any eye,
+`combine_effect_frames`). Only the player's own eye leaves out what a
+first-person player hides: their own jets and jet dust are flagged
+`SourceOptions::hidden_from_own_eye` (`ActorEffects::set_own_eye`) and
+other views snapshot with `snapshot_in_other_view`; a package-archetype
+own body is its own instance list (`PackageModels::own_draws`) drawn in
+mirrors, portals, the probe and shadows, not the player's view. Limits
+kept: shadow cascades and flare occlusion are still fitted to the
+player's eye (a portal view far from the player shows baked lighting
+without dynamic shadows there, and flares fade as the player sees them);
+per-view cascades would cost a shadow pass per view. Tests:
+`bri-fx-runtime own_jets_stay_out_of_the_own_eye_but_show_in_mirrors`,
+`bri-render terrain_scene::copies_cover_every_eye_once`, `bri-client
+views::every_eye_once_the_players_first` and the far-mirror case in
+`world_and_weapon_effects_share_depth_order_and_nearest_light_budget`.
 Measured with a new frame-by-frame test that traces every pixel through
 the portals. On 1b2747e4 the whole picture (100% of pixels) jumped at the
 crossing, in first person and from the chase camera. The causes:
@@ -8766,6 +9557,73 @@ Every main CI run since about run 180 failed three content-free targets.
   machine. No test is skipped or ignored and the 30 s waits are unchanged.
   Locally: mirrors 5 passed, persistent_scene 12 passed, 2 ignored (as
   before, for local packs).
+
+## 2026-10-01 Fill Can: originals only
+
+Max chose "originals only" for every classic Add-On. Our remade Fill Can is
+no longer bundled: its packages, generated icon and icon script are gone
+and it is off the default Add-On list. The engine seams stay (`paint_fill`,
+`Simulation::touching_region`, `grid::share_face`, image `paint_tint`) and
+are still tested through a small fill tool of the test's own in
+`crates/sim/tests/fixtures/fill-can`. Loading the player's own original
+Fill Can from their Blockland Add-Ons folder follows on the shared classic
+Add-On loader.
+
+## 2026-10-01 Grapple Rope and Hookshot: ports of the originals
+
+Max's final pick: the Grapple Rope (Uristqwerty, SolarFlare and Demian;
+code by Qwertyuiopas) and Loz's Hookshot, each exactly as the original
+works; no Grappling Hook. The game imports the player's own copies, so
+both are now ports (`crates/addon-import/ports/tool_grapplerope`,
+`weapon_loz_hookshot`) on the Fill Can lane's host-rules companion. Our
+stand-in rule packages, and their tests in `crates/sim/tests`, are gone.
+The engine rope seams stay (`tether`, winch, moving anchors,
+`untether(p, #{keep})`, prediction), tested in `crates/sim/tests/tether.rs`.
+
+Evidence: the Gate imported both originals on Maxwell's PC (with `--core`)
+and handed over their import reports and scripts, read here only and not
+committed. Every `covers` pattern was checked against the real scripts:
+Grapple Rope lift 1 and chain speed 160; Hookshot stop 5, near 15, slow 30,
+far 16, fast 50, every 100 ms. Both copies' hashes are listed.
+
+- Grapple Rope: the launcher fires its own hook projectile. Where it
+  strikes (anything, as `$Pref::Server::GrappleRopeAnywhere` is on), if no
+  brick or map stands between it and a point `lift` above the feet, the
+  holder hangs from that spot on a rope as long as the distance then, for
+  as long as they hold the click (`Fire`/`Hold`), and flies off with all
+  their speed on letting go (`onRelease`). The rope stays on the spot even
+  if what it struck goes, as in the original. The movement keys steer
+  only by the player's ordinary air control, as in v20 (`swing: 0`: the
+  original added no push of its own). The engine's longest rope went from
+  200 to 1000, so the hook's full reach (200 a second for 4 s, 800) holds.
+  One pivot, said plainly: the engine's rope replaces `GrappleRope`'s 10 ms
+  velocity correction (it looked one second ahead, so the original pulled
+  a little early). A hook that lands after
+  the click is let go holds nothing (the original kept it for the next
+  click, a bug).
+- New image field `rope` (engine seam): while the holder is roped, every
+  player's game draws the rope with a projectile's trail swept from the
+  muzzle to the rope's end each frame, as densely as that projectile
+  flying it would lay it. The original fired a chain projectile every
+  10 ms to draw it; this costs nothing on the wire. The port points it at
+  the copy's own `ChainProjectile` and speed.
+- Hookshot: where the spearhead strikes, every `every` ms the shooter's
+  speed is set straight at the spot, `fast` beyond `far`, `slow` within
+  `near` (1 in between, as the original's arithmetic gives), until within
+  `stop`, where it ends with the last speed kept. A struck player or
+  vehicle is followed (a vehicle's middle stands in for its origin plus the
+  original's 1 or 2 up). Seated, a hit on a player or vehicle pulls the
+  vehicle (this reads `riding`, the Throwmod lane's field, so it works once
+  that lands); a hit on anything else pulls nothing (the original's typo).
+  `/degrapple` stops the shooter's own pull. The spearhead's 100 direct
+  damage comes from the imported projectile.
+
+Tests: `crates/addon-import/tests/grapples.rs` (3, hosted with the
+companion rules), `crates/client/tests/weapon_effects.rs
+held_ropes_lay_their_trail_along_the_rope`, and the ports list test. The
+importer report for the Hookshot still shows its gun as a placeholder cube
+(materials `blank` and `black50` have no texture): an importer issue, not
+the port's.
 ### A big portal, and cars through it
 
 Max: "two different portal sizes. the one we currently have and one that
@@ -8860,6 +9718,21 @@ test boxes now use these hull sizes. Sizes: 1x4x5 (players), 1x14x10
 1x14x10. Still to confirm on the PC: where the turret's mount node puts
 it.
 
+## 2026-10-01 Import Add-On: models draw with the base game's stock textures
+
+Loz's Hookshot imported as a placeholder cube: its gun's materials `blank`
+and `black50` are not in the zip. They are v20's stock material textures
+in `base/data/shapes` (with `black`, `gray75`, `white` and the rest), which
+Add-On models use when they ship no copy. With the installed game given
+(`--installed`, as the Add-Ons screen's Import passes it), the importer now
+reads the installed item presentation's texture keys, and a material the
+Add-On lacks binds to `base/data/shapes/<name>` by that key. Players' games
+already load those textures with the base game, so nothing of v20 is copied
+into an import. Any Add-On gets this; nothing is Hookshot-specific.
+Inferred, not measured: that v20 drew these materials from
+`base/data/shapes` (the Hookshot ships its own `gray75.png` but not these
+two, and draws in v20). Test: `crates/addon-import/tests/installed.rs
+a_missing_material_draws_with_the_installed_games_texture`.
 ### 2026-10-01 LAG icon
 
 v20's lag icon now shows on joined servers. The authored `LagIcon`
@@ -8889,6 +9762,83 @@ are still tested through a small fill tool of the test's own in
 `crates/sim/tests/fixtures/fill-can`. Loading the player's own original
 Fill Can from their Blockland Add-Ons folder follows on the shared classic
 Add-On loader.
+
+### The original Fill Can, ported
+
+The Gate imported Max's own Tool_Fill_Can (sha256 d40fc712...) with the
+recovered base scripts, so its image inherits rainbowSprayCanImage's states
+and fires its own fillcanProjectile. Its port is
+`crates/addon-import/ports/tool_fill_can` (status partial), with a host-rules
+companion:
+- `on_projectile_hit` on a brick: `paint_fill` with v20's box search
+  (each brick's box grown by the script's 0.6/2 sideways and 0.3/2
+  vertical), the colour or FX can last picked, 500 bricks (the pref's
+  default) or the script's administrator limit, stopping there with the
+  script's "Reached Fill Can Brick Limit (500)" for its seconds. Refusals
+  show for 3 seconds as the script's do.
+- On a player: the paint colour for 2.5 s, or with an FX can a random face
+  of the script's twenty and a faded visor for 2.5 s (`temp_look`).
+- `/fillcan` mounts the image unless the minigame forbids painting
+  ("Painting is currently disabled."), and picking a can keeps it in hand
+  (`paint_picker`). Undo is one step that restores only bricks still as the
+  fill left them.
+- Not ported: painting vehicles (vehicle colours are palette indices on the
+  wire; the FX can's random colours and a spawn brick's recolour need an
+  RGBA vehicle colour). `fillcanProjectile::onCollision` stays out of
+  `covers`, so the port is partial. The plant-error sound on the limit
+  (`MsgPlantError_Limit`) is not played.
+
+Engine seams added: `paint_fill(p, brick, paint, options)` (colour, colour
+FX, shape FX; `reach`, `stop_at_limit`, `limit_message`,
+`refusal_seconds`; limit up to 128000), `Simulation::fill_region`,
+`UndoEntry::Fill`, `temp_look`, image `paint_picker`, `player(p).fx_can`
+and `may_paint`, and the shooter as the caller of `on_projectile_hit`.
+A colour fill of bricks already that colour now does nothing, as v20's,
+and a fill no longer prints a count.
+
+Tests: `bri-addon-import --test ports fill_can_port_rules_fill_what_v20_filled`
+(a stand-in Tool_Fill_Can of ours, CC0, imported with the listed port and
+sprayed in a hosted game: colour fill, undo, FX can kept in hand, an
+administrator's limit of 3 with its message), `bri-sim --test fill_can`
+(6 seam tests including v20 reach and effect undo) and `bri-sim --lib
+temp_look`. `check-port` on the real import runs on Max's PC.
+
+### The Fill Can paints vehicles (v0.1.11)
+
+Max wants every gap against the originals closed before v0.1.11, so the
+port now covers `fillcanProjectile::onCollision` too and is `verified`:
+- Vehicle colours are RGBA on the wire (`VehicleInfo::color`, protocol 71)
+  instead of a palette index, so a vehicle can wear any colour. The host
+  resolves a recolouring spawn brick's colour (opaque, as before) and the
+  skis' paint when it spawns them.
+- `paint_vehicle(p, vehicle, #{ color | rgb }, #{ riders_seconds,
+  refusal_seconds })`: full trust from the spawn brick's build (the
+  vehicle's owner when no brick spawned it) and the minigame's paint rule.
+  A palette colour on a vehicle its brick recolours paints the brick too,
+  as v20's Fill Can did before `colorVehicle`; anything else colours the
+  vehicle alone until it respawns. Riders take the colour for
+  `riders_seconds` (`setTempColor`, 2500 ms in the script).
+- The FX can gives a random colour, each channel `getRandom(0, 100) / 100`.
+- `UndoEntry::Vehicle` (`COLORGENERIC`): one Ctrl+Z puts back the vehicle's
+  colour and its brick's, each only if still as the paint left it.
+- The limit now also shows the plant-limit error (`MsgPlantError_Limit`)
+  through `paint_fill`'s `limit_error` and the new `Notice::PlantError`,
+  the same icon (and sound, off by default) a refused plant shows.
+
+Pivots from v20, on purpose: v20's vehicle undo pushed the new colour (or
+the brick's new colour), so undo did nothing; ours restores the old one.
+v20 let a minigame that forbids painting still paint vehicles; ours
+refuses as it does for bricks. The player and face times, visor alpha,
+riders' time and refusal time are read from the script by the port's
+patterns (all checked against the real server.cs).
+
+Tests: `bri-sim --test fill_can
+a_vehicle_is_painted_through_its_recolouring_brick_or_alone_and_undone`
+(the committed stunt plane on two spawn bricks: refusal, brick-through
+paint, RGB paint, three undos), and the hosted port test now sprays the
+plane (refused for an untrusted painter for the script's seconds, painted
+through its brick by an administrator, a random colour with an FX can) and
+checks the limit's plant error.
 
 ## A vehicle rolls on through a player it hits (v0.1.11)
 
@@ -8930,3 +9880,211 @@ v0.1.10".
   and tank shell exploding on the ground 2.5 units beside the ball, in and
   out of minigames, roll it more than 6 units in two seconds; 3.75 without
   the scale).
+
+## 2026-10-01 Trench Digging port (Lilboarder's original, host rules)
+
+The original `Gamemode_TrenchDigging` now imports with a port
+(`crates/addon-import/ports/gamemode_trenchdigging`): its four images run
+the companion host rules' `dig` and `place` instead of `onFire`, the shovel
+and dirt swing the arm from data (`armattack`, `root` 200 ms later), and
+`rules/trench.rhai` rewrites `TrenchDigging.cs` function by function:
+splitting a dirt brick down to the piece nearest the hit, the 100-dirt
+pocket and its colours, putting 2x cubes and 1x1 flats back and regrouping
+eight cubes (four flats) into the next size up to 64x (8x8), `/dumpdirt`,
+`/speeddig`, `/speedplace`, `/infinitedigging` and the bottom-print count.
+Hosts build their field from the dirt bricks like any bricks and hand out
+the shovel and dirt in a normal minigame loadout.
+- New generic seams (`world.edit`): `brick(id)`, `bricks_in(min, max)`,
+  `can_plant`, `can_edit(brick)`, `plant_brick(kind, pos, turns, color,
+  owner)` (snapped to the grid, skipped where it does not fit), and
+  `aim()` reports the face normal. A rule may change a build its caller
+  has full trust on or, in a minigame, a build the minigame plays with;
+  `remove_brick` follows the same rule.
+- Deliberate differences, in the port's notes: digging follows minigame
+  and trust rules (the original let anyone dig any dirt), regrouping joins
+  one build's dirt only, a flat placed on a flat sits on it.
+- `server.cs`'s `PlayerNoJet.maxStepHeight = 1.2` is the new generic seam
+  `ArchetypeDef::adjusts`: an Add-On archetype that changes named constants
+  of one of v20's player types while it is on (No Jet players step 1.2;
+  every other type, and No Jet with no such Add-On, stay v20). Port rules
+  may carry `rules/archetypes/<name>.json`. Test:
+  `bri-sim --test archetype_adjust`. The port is `verified`.
+- Found while testing: our motor already lets a player step a ledge exactly
+  1.0 high (feet rest 0.01 up, so the rise reads 0.99 < 1.0); the
+  adjustment shows on ledges between 1.0 and 1.2.
+- Tests: `bri-addon-import --test ports trench_digging_port_writes_its_rules`
+  (CC0 stand-in with the folder name) and `bri-sim --test trench_digging`
+  (dig and put back to the original 8x cube; flats; minigame loadout and
+  permission; dump and infinite digging; No Jet stepping onto 1.2).
+## Saves come only from the saves folder (v0.1.11)
+
+Max (03:23Z): the game must never search players' Blockland, v20 or Steam
+folders; classic files come in through drop folders in our own folders.
+- `.bls` saves were already a drop folder (`<state>/saves`, the folder the
+  game's own saves use): dropped files convert in the background, once,
+  and join Load Bricks under their map (loose files under Other). The
+  converter also listed the saves of old installs under Program Files and
+  `C:\Blockland` (`OldSaves::find_old_installs`); that search is gone, with
+  the `old_install` flag and its ordering.
+- Saves an earlier version converted from an old install leave the list on
+  the next scan, and their native copies leave the cache. Saves converted
+  from the saves folder keep their copies and do not convert again.
+- Load Bricks' Saves Folder button opens the folder (made first if needed)
+  through `show_drop_folder` in app.rs, the one helper for drop folders
+  (the Add-Ons Folder button can share it).
+- Tests: `bri-client --lib old_saves` (temp folders; an install beside the
+  saves folder is never read, and an earlier index's install entries and
+  copies are dropped).
+
+## 2026-10-01 Grapple Rope import closes with no gaps
+
+The Gate imported Max's real `Tool_GrappleRope` (sha 456a082b…, `--installed`
+only) at 39540f83: verdict `converted_with_gaps`, with every behaviour ported
+(4/4). What was left, and what closes each item, all generic in the importer:
+
+- `BowItem.uiName = ""` (unsupported): it sits in
+  `if (%error == $Error::AddOn_Disabled)` after `ForceRequiredAddOn("Weapon_Bow")`.
+  v20 force-loads a required Add-On the player had off and the script hides
+  its item; here enabling a package enables its dependencies (base packs are
+  always on), so the branch never runs. Such writes are now a noted ambiguity
+  with that resolution, not a gap.
+- `ChainTrailParticle.textureName = "base/data/particles/dot"` (ambiguous): the
+  installed reference now knows the effects pack's textures by key, as the
+  client draws them.
+- `GrappleRopeProjectile` and `GrappleRopeImage` stayed `converted_with_gaps`
+  because their notes ignored the port. An applied port now settles them:
+  covered functions and the state scripts that call them read "ported by", and
+  a state script the Add-On leaves to the stock `WeaponImage`
+  (`WeaponsWorld::NATIVE_STATE_SCRIPTS`, beside the code that runs them) reads
+  "runs the engine's own".
+- `$Pref::Server::GrappleRopeAnywhere = 1` (ambiguous): for a copy listed by
+  hash, a load-time global that a covered function reads is noted as ported
+  with that value (the rules hook anything, as with it on).
+- `license.txt`/`licence.txt`/`readme.txt` are read as metadata, like
+  `description.txt`.
+
+Tests: `grapples.rs` now asserts every datablock `converted` and the verdict
+`converted`; `the_anywhere_setting_is_covered_for_a_checked_copy`;
+`installed.rs` `hiding_a_force_loaded_add_on_is_not_a_gap` and the dot texture.
+The stand-in's particle now draws the base dot, as the original does.
+## 2026-10-01 A broken bulb switches its light the same in every live mode (for v0.1.11)
+Max broke the Bedroom lamp's bulb and none of the lighting modes looked
+right: the shade kept glowing and, in Unified, the room went much darker
+than the light the bulb gave.
+- v20's own data: breaking a `Glass` shape hides it and plays its
+  explosion, and nothing touches the mission's lighting. Classic keeps
+  that rule (the light stays). Unified, Shine and Dynamic put the lamp's
+  light out, as Max asked on 09-30.
+- Unified and Shine now take the same per-texel light shares as Dynamic
+  (`decomposed_lightmap`, when the material carries the bake's
+  `DynamicSheet` shares), so a switched-off light leaves exactly the light
+  it baked in all three. The client and `lighting_probe` equip the shares
+  in Unified modes on a map with bulbs, tubes or Add-On light rules, and
+  in Dynamic always. Every map light is uploaded (object lights first) with
+  a slot table from map light index to uniform slot.
+- Which lights a bulb owns is one rule, `map_lighting::fixture_owners`
+  (24 units, shared within 1.5x of the nearest shape), used by the client
+  and the probe.
+- Shadow edges give their light back. The bake's rays go to the fitted
+  light, which sits a little off where the map compiler had it, and the
+  compiler filtered each texel's whole area, so the two shadows' edges
+  differ by a texel or two. Texels there hold a small part of a light the
+  rays call hidden, below the tenth-to-a-quarter cutoff that keeps fit
+  error in the leftover, so a dashed line of the light stayed after it went
+  out. Now a texel takes its whole remainder when a neighbour on the same
+  surface plainly holds one of those lights (its rays see it, or a quarter
+  of it is left there).
+- The dashed line on the wall by the window had a different cause, found in
+  the Gate's leftover dumps (format 8). The compiler's lightmap there is a
+  smooth gradient with no shadow, yet the leftover had 1-texel diagonal
+  lines at the ambient between areas 6 to 17 levels above it. Thin
+  geometry the compiler never shadowed hides a faint far light from a
+  dashed line of texels by rays. There, that light joined the hidden lights
+  (including ones behind the wall, in reach by falloff) and took the fit's
+  error, which its neighbours keep. After the break the line stood out.
+  Now a light seen by rays on both sides of a texel (on any of four axes,
+  same surface) counts as seen there too: a 1-texel ray shadow is thinner
+  than the compiler's filtered lightmap can hold.
+- The Gate's window crop (format 9) put the remaining dashed line on the
+  right edge of the dresser's shadow on the wall, and the leftover dumps
+  showed it as a thin strip the lamp lit through the gap between the
+  dresser and the window frame (sheet 193), whose light stayed in the
+  leftover. The fitted light's rays find that gap shut. The hidden pass
+  divided the remainder by the light of every hidden light in reach,
+  including strong ones behind walls, so the strip's share fell under the
+  cutoff. Each hidden light is now judged on its own (the remainder as a
+  share of its light). The remainder goes as surely as the surest of
+  them, shared by light given times weight. With one hidden light this is
+  the old rule.
+- That still left the line; the Gate's `BRI_PIXELS` run found it. It is on
+  the wall at x = -59.86 (`bedroom.dif/224/86`), on the edge of light 0's
+  patch along the window frame's shadow. The edge texels hold part of
+  light 0, which the rays call hidden there, and every hidden light in
+  reach (0, 2, 3, 5, 6, 8, 9) qualified, so each took the same share. After
+  the break 2, 5, 6 and 8 kept theirs: [109,109,84] and [120,120,95]
+  against [102,102,77] around them. Neither the live sun nor the lamp
+  shadow maps play a part (`BRI_SUN=0` and `BRI_LAMPS=0` leave it). Now,
+  where a neighbour on the same surface sees one of a texel's hidden lights
+  by rays, the texel is on that light's patch edge and its remainder goes
+  to those lights alone, with no cutoff. With no such neighbour, the same
+  goes for the light the neighbours most likely hold: the brightest hidden
+  light a quarter or more of which is left over there. This covers a patch
+  edge the rays miss by more than a texel. Before, a neighbour "held" any
+  light its remainder covered a quarter of, which every faint far light
+  passes. Bake format 12.
+- Format 12 cleared the window line, but it left a near-black blotch
+  across the middle of the lamp shade's outside after the break. The Gate's
+  probe log (batch 148, `bedroom.dif/233/110`) shows why. The outside
+  faces away from the bulb's lights 0 and 9, so no ray sees them anywhere
+  on it, yet the "light the neighbours most likely hold" fallback still
+  applied: each texel's remainder went to light 0 alone, light 9 alone, or
+  both. Where it went to both, both took a full share and the leftover
+  fell to about [13,13,13]; elsewhere it stayed near [130,130,130]. Now
+  the fallback only counts a neighbour's held light where the rays see
+  that light within two texels of that neighbour, which is a real patch
+  edge (one texel was too few for the slab-shadow edge test).
+  The shade's outside goes back to sharing its remainder over every hidden
+  light, evenly. The window's edge texels sit beside texels that see light
+  0, so they keep the format 12 rule. New test: `a_shade_lit_by_two_lights_inside_goes_evenly_dark_with_them`
+  (two lights inside a shade, one near each end, plus a faint room light;
+  with the lamp out the outside keeps just the room light within 3
+  levels). It fails on format 12. Bake format 13.
+- `lighting_probe`: `BRI_BREAK=1` breaks every bulb and tube by the
+  client's rule. Within 4 units of a light shape it prints each triangle's
+  lightmap, Dynamic leftover, light shares and facing. `BRI_DUMP_LEFT=1`
+  saves each sheet's decomposed light beside its leftover.
+  `BRI_PIXELS=view:x,y;x,y` takes pixels of a view's 1920x1080 render and
+  prints the surface under each, then for its lightmap texel and the eight
+  around it how the bake split the light (`Bake::explain`: each light's
+  level, facing, rays, weight and share, the leftover) and what is drawn
+  with the bulbs whole and broken, and the live sun's facing and reach.
+- The shade stops glowing. The fit put the bulb's light 9 inside the
+  shade, so the shade's outside faces away from it, and a light a texel
+  faced away from never took a share. The shade's baked glow stayed in the
+  leftover after the break. The hidden lights now include those a texel
+  faces away from, taken by their falloff as the renderer gives a share
+  (`light_given` has no facing term), under the same cutoff and edge
+  rule. The Gate's probe at format 7 showed that the lamp's stem and
+  socket within 4 units hold only the compiler's ambient
+  ([102,102,77]), which rightly stays. The shade sits 6 or more units
+  out, so the probe now prints triangles within 8 units.
+
+Tests: `bri-render --test unified_lighting a_switched_off_light_leaves_the_same_light_in_every_live_mode`
+(modes 1-3 identical, fails without the Unified per-texel branch);
+`--test map_lighting a_switched_off_light_leaves_no_line_along_its_shadows_edges`
+(a turned slab's filtered shadow; an edge texel keeps 9 levels without the
+neighbour rule, at most 3 with it);
+`bri-render --lib the_edge_of_a_lights_patch_goes_dark_with_it` (a patch
+the compiler lit a texel past the rays' shadow, with a faint far light and
+a light behind the wall; an edge texel draws 33 levels with the patch's
+light off on format 11, at most 2 now);
+`bri-render --lib a_strip_lit_through_a_gap_goes_dark_with_its_light`
+(a dim light's strip behind a plate its rays hit, two strong lights behind
+the wall; the strip keeps 20 levels on format 10, at most 2 now);
+`bri-render --lib a_thin_ray_shadow_leaves_no_line_in_the_leftover`
+(a rod the lightmap never saw, a faint far light and a light behind the
+wall; a line texel stands 7 levels out without the rule, at most 2 with
+it); `bri-render --lib a_shade_facing_away_from_its_light_goes_dark_with_it`
+(the light given, so the fit cannot explain the shade with lights placed
+outside it; 153 levels kept without the change, at most 2 with it);
+`bri-client --lib a_broken_bulb_switches_off_its_lights_and_rules_tint_the_rest`.

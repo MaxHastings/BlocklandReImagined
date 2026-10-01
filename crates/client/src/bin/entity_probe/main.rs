@@ -391,15 +391,15 @@ impl Setup {
                         builder,
                     );
                     brick.color = (i % 16) as u8;
-                    brick.emitter = Some(Emitter {
+                    brick.emitter = Some(Box::new(Emitter {
                         asset: Some(ContentRef::Resolved(EMITTERS[i % EMITTERS.len()].into())),
                         direction: 0,
-                    });
+                    }));
                     if i % 8 == 0 && i / 8 < 64 {
-                        brick.light = Some(Light {
+                        brick.light = Some(Box::new(Light {
                             asset: ContentRef::Resolved(LIGHTS[(i / 8) % LIGHTS.len()].into()),
                             enabled: true,
-                        });
+                        }));
                     }
                     add(brick);
                 }
@@ -414,10 +414,10 @@ impl Setup {
                         [at.x, at.y + spawner * 0.5, at.z],
                         builder,
                     );
-                    brick.vehicle = Some(VehicleSpawn {
+                    brick.vehicle = Some(Box::new(VehicleSpawn {
                         vehicle: ContentRef::Resolved(VEHICLES[i % VEHICLES.len()].into()),
                         recolor: false,
-                    });
+                    }));
                     add(brick);
                 }
                 drivers = true;
@@ -763,7 +763,7 @@ async fn hold_trigger(
                     _ => shooter.input,
                 };
                 sequence += 1;
-                client.movement(sequence, &[input], None)?;
+                client.movement(sequence, &[input], None, None)?;
                 // Click like a player spamming fire: press every 300 ms,
                 // release 150 ms later; the weapon's own states pace it.
                 if let Some(at) = in_place.filter(|t| t.elapsed() > Duration::from_millis(500)) {

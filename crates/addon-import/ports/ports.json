@@ -19,6 +19,459 @@
         "crates/addon-import/tests/ports.rs shotgun_port_fires_the_spread",
         "crates/addon-import/tests/import.rs real_community_samples"
       ]
+    },
+    {
+      "addon": "Tool_GrappleRope",
+      "title": "Grapple Rope",
+      "port": "tool_grapplerope",
+      "status": "verified",
+      "sha256": [
+        "456a082bb30c498ed08d1771edbde8697e37a036077b5a20b68c446c1395fa19"
+      ],
+      "covers": {
+        "GrappleRopeProjectile::onCollision": {
+          "lift": "vectoradd\\s*\\(\\s*%ppos\\s*,\\s*\\\"0 0 ([0-9]*\\.?[0-9]+)\\\"",
+          "length": "ropelength\\s*=\\s*vectorlen\\s*\\(\\s*vectorsub"
+        },
+        "GrappleRopeImage::onHold": {
+          "rope": "grapplerope\\s*\\(",
+          "chain": "datablock\\s*=\\s*chainprojectile\\s*;",
+          "speed": "vectorscale\\s*\\(\\s*%norm\\s*,\\s*([0-9]*\\.?[0-9]+)\\s*\\)"
+        },
+        "GrappleRopeImage::onRelease": {
+          "release": "grappleropepos\\s*=\\s*\\\"\\\""
+        },
+        "GrappleRope": {
+          "swing": "setvelocity\\s*\\(\\s*%vel\\s*\\)"
+        }
+      },
+      "tests": [
+        "tool_grapplerope/checks.json",
+        "crates/addon-import/tests/grapples.rs the_grapple_rope_hangs_its_holder_where_the_hook_strikes",
+        "crates/addon-import/tests/grapples.rs a_rope_is_as_long_as_the_hook_reaches",
+        "crates/addon-import/tests/grapples.rs the_anywhere_setting_is_covered_for_a_checked_copy",
+        "crates/client/tests/weapon_effects.rs held_ropes_lay_their_trail_along_the_rope"
+      ]
+    },
+    {
+      "addon": "Weapon_Loz_Hookshot",
+      "title": "Hookshot",
+      "port": "weapon_loz_hookshot",
+      "status": "verified",
+      "sha256": [
+        "aa63bc56831c06a9b4b6692fdf64c53e8a3eedd589e922c9e240dd55b7b9f54e"
+      ],
+      "covers": {
+        "hookshotProjectile::onCollision": {
+          "follow": "pushplayertoobj2\\s*\\(\\s*%player\\s*,\\s*%col\\s*\\)"
+        },
+        "pushPlayerToObj": {
+          "stop": "if\\s*\\(\\s*%len\\s*<\\s*([0-9]*\\.?[0-9]+)\\s*\\)\\s*\\{?\\s*return",
+          "near": "if\\s*\\(\\s*%len\\s*<\\s*([0-9]*\\.?[0-9]+)\\s*\\)\\s*\\{?\\s*%vec\\s*=\\s*vectorscale",
+          "slow": "%len\\s*<\\s*[0-9]*\\.?[0-9]+\\s*\\)\\s*\\{?\\s*%vec\\s*=\\s*vectorscale\\s*\\(\\s*%vec\\s*,\\s*([0-9]*\\.?[0-9]+)",
+          "far": "%len\\s*>\\s*([0-9]*\\.?[0-9]+)\\s*\\)\\s*\\{?\\s*%vec\\s*=\\s*vectorscale",
+          "fast": "%len\\s*>\\s*[0-9]*\\.?[0-9]+\\s*\\)\\s*\\{?\\s*%vec\\s*=\\s*vectorscale\\s*\\(\\s*%vec\\s*,\\s*([0-9]*\\.?[0-9]+)",
+          "every": "schedule\\s*\\(\\s*(\\d+)\\s*,\\s*0\\s*,\\s*\\\"pushplayertoobj\\\""
+        },
+        "pushPlayerToObj2": {
+          "vehicles": "getclassname\\s*\\(\\s*\\)\\s*\\$=\\s*\\\"flyingvehicle\\\""
+        },
+        "ServerCmddegrapple": {
+          "cancel": "cancel\\s*\\(\\s*%client\\.player\\.pptotick\\s*\\)"
+        }
+      },
+      "tests": [
+        "weapon_loz_hookshot/checks.json",
+        "crates/addon-import/tests/grapples.rs the_hookshot_pulls_its_shooter_to_where_it_strikes",
+        "crates/addon-import/tests/grapples.rs the_hookshot_follows_a_player_it_strikes"
+      ]
+    },
+    {
+      "addon": "Script_PlayerThrowing",
+      "title": "Player Throwing",
+      "port": "script_playerthrowing",
+      "status": "verified",
+      "sha256": [
+        "aef5a4503044f5ec690c8cb3ef693ed885f97f90c7d79d7c453704be56caf0ba"
+      ],
+      "covers": {
+        "Player::attemptGrab": {
+          "node": "%this\\.mountObject\\s*\\(\\s*%col\\s*,\\s*(\\d+)\\s*\\)",
+          "held_scale": "vectorScale\\s*\\(\\s*%this\\.getScale\\s*\\(\\s*\\)\\s*,\\s*([0-9]*\\.?[0-9]+)\\s*\\)",
+          "reach": "vectorScale\\s*\\(\\s*%vector\\s*,\\s*([0-9]*\\.?[0-9]+)\\s*\\*\\s*%zScale\\s*\\)",
+          "look_up": "setLookLimits\\s*\\(\\s*([0-9]*\\.?[0-9]+)\\s*,",
+          "look_down": "setLookLimits\\s*\\(\\s*[0-9.]+\\s*,\\s*([0-9]*\\.?[0-9]+)\\s*\\)",
+          "held_sequence": "%col\\.playThread\\s*\\(\\s*\\d+\\s*,\\s*(\\w+)\\s*\\)",
+          "holder_sequence": "%this\\.playThread\\s*\\(\\s*\\d+\\s*,\\s*(\\w+)\\s*\\)",
+          "dismounts": "%col\\.isMounted\\s*\\(\\s*\\)\\s*\\)\\s*\\{?\\s*%col\\.dismount\\s*\\(",
+          "puts_away": "%col\\.unmountImage\\s*\\(\\s*0\\s*\\)",
+          "grab_timeout": "getSimTime\\s*\\(\\s*\\)\\s*-\\s*%this\\.grabTimeout",
+          "grabs_players": "containerRaycast\\s*\\([^;]*PlayerObjectType",
+          "orbit": "setOrbitMode\\s*\\(\\s*%this\\s*,\\s*[^,]+,\\s*[0-9.]+\\s*,\\s*[0-9.]+\\s*,\\s*([0-9]*\\.?[0-9]+)",
+          "orbit_min": "setOrbitMode\\s*\\(\\s*%this\\s*,\\s*[^,]+,\\s*([0-9]*\\.?[0-9]+)\\s*,",
+          "orbit_max": "setOrbitMode\\s*\\(\\s*%this\\s*,\\s*[^,]+,\\s*[0-9.]+\\s*,\\s*([0-9]*\\.?[0-9]+)\\s*,",
+          "turn_axis": "%col\\.setTransform\\s*\\(\\s*%col\\.getPosition\\s*\\(\\s*\\)\\s*@\\s*\"\\s*0\\s+0\\s+([0-9]*\\.?[0-9]+)\\s+-?[0-9.]+\\s*\"",
+          "turn_angle": "%col\\.setTransform\\s*\\(\\s*%col\\.getPosition\\s*\\(\\s*\\)\\s*@\\s*\"\\s*0\\s+0\\s+[0-9.]+\\s+(-?[0-9]*\\.?[0-9]+)\\s*\""
+        },
+        "Player::throwPlayer": {
+          "min_amount": "mClamp\\s*\\(\\s*%amount\\s*,\\s*(\\d+)\\s*,",
+          "max_amount": "mClamp\\s*\\(\\s*%amount\\s*,\\s*\\d+\\s*,\\s*(\\d+)\\s*\\)",
+          "flings": "addVelocity\\s*\\(\\s*vectorScale\\s*\\(\\s*%eye\\s*,\\s*%amount\\s*\\*\\s*\\$Pref::Server::PlayerThrowing::Multiplier\\s*\\)"
+        },
+        "Player::chargeThrow": {
+          "max_charge": "mClamp\\s*\\(\\s*%this\\.chargeThrowAmount\\s*,\\s*\\d+\\s*,\\s*(\\d+)\\s*\\)",
+          "charges": "%this\\.chargeThrowAmount\\s*=\\s*%amount\\s*\\+\\s*1\\s*;"
+        },
+        "Player::removeFromGrasp": {
+          "down_look": "getWord\\s*\\(\\s*%holder\\.getEyeVector\\s*\\(\\s*\\)\\s*,\\s*2\\s*\\)\\s*<=\\s*(-?[0-9]*\\.?[0-9]+)",
+          "ground": "getWord\\s*\\(\\s*%holder\\.getPosition\\s*\\(\\s*\\)\\s*,\\s*2\\s*\\)\\s*<\\s*([0-9]*\\.?[0-9]+)",
+          "front": "%holder\\.isFrontClear\\s*\\(",
+          "restores": "%this\\.setLookLimits\\s*\\(\\s*1\\s*,\\s*0\\s*\\)"
+        },
+        "Player::isFrontClear": {
+          "front_reach": "%multiplier\\s*=\\s*([0-9]*\\.?[0-9]+)\\s*;"
+        },
+        "Player::canGrab": {
+          "same_minigame": "%targetClient\\.miniGame\\s*!=\\s*%client\\.miniGame",
+          "may_hurt": "miniGameCanDamage\\s*\\(\\s*%this\\s*,\\s*%object\\s*\\)",
+          "not_held": "%object\\.isBeingHeld\\s*\\("
+        },
+        "Player::escapeFromGrasp": {
+          "escape_timeout": "\\$Pref::Server::PlayerThrowing::EscapeTimeout"
+        },
+        "Player::clearAllHolding": {
+          "lets_go": "removeFromGrasp\\s*\\("
+        },
+        "Player::isHoldingPlayer": {
+          "holding": "%this\\.holdingPlayer"
+        },
+        "Player::isBeingHeld": {
+          "held": "%this\\.holderPlayer"
+        },
+        "PlayerThrowing_CanUseTools": {
+          "vetoes": "isBeingHeld\\s*\\(\\s*\\)\\s*\\|\\|\\s*%player\\.isHoldingPlayer"
+        },
+        "Armor::onTrigger": {
+          "trigger": "%triggerNum\\s*==\\s*0\\s*&&\\s*%obj\\.isHoldingPlayer"
+        },
+        "Player::activateStuff": {
+          "escapes": "escapeFromGrasp\\s*\\(",
+          "grabs": "attemptGrab\\s*\\("
+        },
+        "Armor::onRemove": {
+          "clears": "clearAllHolding\\s*\\("
+        },
+        "GameConnection::onDeath": {
+          "clears": "clearAllHolding\\s*\\("
+        },
+        "serverCmdUseTool": {
+          "vetoed": "PlayerThrowing_CanUseTools\\s*\\("
+        },
+        "serverCmdUnuseTool": {
+          "vetoed": "PlayerThrowing_CanUseTools\\s*\\("
+        },
+        "serverCmdUseSprayCan": {
+          "vetoed": "PlayerThrowing_CanUseTools\\s*\\("
+        },
+        "serverCmdUseFxCan": {
+          "vetoed": "PlayerThrowing_CanUseTools\\s*\\("
+        },
+        "Observer::onTrigger": {
+          "grabbed": "%obj\\.mode\\s*!\\$=\\s*\"Grabbed\"",
+          "struggles": "%trigger\\s*==\\s*0\\s*&&\\s*%state[^)]*\\)\\s*\\{?\\s*%player\\.escapeFromGrasp\\s*\\("
+        },
+        "serverCmdUseInventory": {
+          "vetoed": "PlayerThrowing_CanUseTools\\s*\\("
+        },
+        "serverCmdInstantUseBrick": {
+          "vetoed": "PlayerThrowing_CanUseTools\\s*\\("
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/ports.rs player_throwing_port_becomes_host_rules_with_this_copys_numbers",
+        "crates/addon-import/tests/ports.rs ported_player_throwing_grabs_throws_and_lets_go_in_a_hosted_game"
+      ]
+    },
+    {
+      "addon": "Gamemode_TrenchDigging",
+      "title": "Trench Digging",
+      "port": "gamemode_trenchdigging",
+      "status": "verified",
+      "sha256": [
+        "0b5d9bc710a2f67720617a7c656841c0226617ec59eae19cf986046c3d82bc3c"
+      ],
+      "covers": {
+        "TrenchShovelImage::onPreFire": {
+          "arm": "playthread\\s*\\(\\s*2\\s*,\\s*armattack\\s*\\)"
+        },
+        "TrenchDirtImage::onPreFire": {
+          "dirt_arm": "playthread\\s*\\(\\s*2\\s*,\\s*armattack\\s*\\)"
+        },
+        "TrenchShovelImage::onFire": {
+          "dig": "TakeChunk\\s*\\(\\s*%obj\\.client\\s*,\\s*1\\s*\\)"
+        },
+        "AdminShovelImage::onFire": {
+          "admin_dig": "TakeChunk\\s*\\(\\s*%obj\\.client\\s*,\\s*1\\s*\\)"
+        },
+        "TrenchDirtImage::onFire": {
+          "place": "Parent::onFire[\\s\\S]*ShootChunk\\s*\\(\\s*%obj\\.client\\s*\\)"
+        },
+        "AdminDirtImage::onFire": {
+          "admin_place": "Parent::onFire[\\s\\S]*ShootChunk\\s*\\(\\s*%obj\\.client\\s*\\)"
+        },
+        "TakeChunk": {
+          "reach": "vectorScale\\s*\\(\\s*%eyeVector\\s*,\\s*(\\d+)\\s*\\)",
+          "take": "%obj\\.refill\\s*\\(\\s*%client\\s*,\\s*%take\\s*,\\s*%rayPos\\s*\\)",
+          "hop": "addVelocity\\s*\\(\\s*\"0 0 2\"\\s*\\)"
+        },
+        "ShootChunk": {
+          "shoot": "datablock\\s*=\\s*brick2xCubeDirtData[\\s\\S]*datablock\\s*=\\s*brick1x1DirtData"
+        },
+        "fxDtsBrick::Refill": {
+          "split": "fillPos[\\s\\S]*continueRefill"
+        },
+        "fillPos": {
+          "pieces": "brick32xCubeDirtData[\\s\\S]*brick1x1DirtData"
+        },
+        "continueRefill": {
+          "next": "\\.Refill\\s*\\("
+        },
+        "onTrenchDig": {
+          "room": "trenchDirt\\s*>=\\s*\\$TrenchDig::DirtCount"
+        },
+        "findSmallBrick": {
+          "nearest": "vectorDist\\s*\\(\\s*%Pos\\s*,\\s*%smallPos\\s*\\)"
+        },
+        "fxDtsBrick::checkBricks": {
+          "cubes": "%puzzleComplete\\s*>=\\s*7",
+          "flats": "%puzzleComplete\\s*>=\\s*3"
+        },
+        "finishRegrouping": {
+          "top": "brick64xCubeDirtData"
+        },
+        "serverCmdDumpDirt": {
+          "cube_dump": "brick4xCubeDirtData",
+          "flat_dump": "brick4x4DirtData"
+        },
+        "serverCmdSpeedDig": {
+          "speed_dig": "mountImage\\s*\\(\\s*AdminShovelImage"
+        },
+        "serverCmdSpeedPlace": {
+          "speed_place": "mountImage\\s*\\(\\s*AdminDirtImage"
+        },
+        "serverCmdInfiniteDigging": {
+          "infinite": "isInfiniteMiner"
+        },
+        "GameConnection::updateDirt": {
+          "print": "bottomPrint"
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/ports.rs trench_digging_port_writes_its_rules",
+        "crates/sim/tests/trench_digging.rs the_shovel_splits_dirt_down_to_the_piece_it_hit_and_the_dirt_puts_it_back",
+        "crates/sim/tests/trench_digging.rs flats_split_into_quarters_and_four_1x1s_become_a_2x2",
+        "crates/sim/tests/trench_digging.rs dirt_is_dug_under_the_minigame_and_trust_rules",
+        "crates/sim/tests/trench_digging.rs dumped_dirt_piles_up_as_4x_cubes_and_admins_get_endless_dirt",
+        "crates/sim/tests/trench_digging.rs no_jet_players_step_up_onto_a_2x_cube_while_it_is_on"
+      ]
+    },
+    {
+      "addon": "Weapon_ButterflyKnife",
+      "title": "Butterfly Knife",
+      "port": "weapon_butterflyknife",
+      "status": "verified",
+      "sha256": [
+        "4d8d0cc59be118094a2e6e39056b895e19447c05ed8d3a644fd7a56780a7afa4"
+      ],
+      "covers": {
+        "butterflyknifeImage::onCharge": {
+          "charge_arm": "playthread\\s*\\(\\s*2\\s*,\\s*\"?(\\w+)"
+        },
+        "butterflyknifeImage::onStopFire": {
+          "stop_arm": "playthread\\s*\\(\\s*2\\s*,\\s*\"?(\\w+)"
+        },
+        "butterflyknifeImage::onFire": {
+          "stab_arm": "playthread\\s*\\(\\s*2\\s*,\\s*\"?(\\w+)",
+          "parent": "parent::onfire\\s*\\("
+        },
+        "butterflyknifeImage::onFiretwo": {
+          "jab": "%projectile\\s*=\\s*(\\w+)\\s*;",
+          "one": "%shellcount\\s*=\\s*1\\s*;",
+          "spawns": "new\\s*\\(\\s*%this\\.projectiletype\\s*\\)"
+        }
+      },
+      "tests": [
+        "weapon_butterflyknife/checks.json",
+        "crates/addon-import/tests/ports.rs butterfly_knife_port_jabs_and_stabs",
+        "crates/weapons/tests/state_attacks.rs a_click_jabs_with_the_scripts_own_projectile",
+        "crates/addon-import/tests/import.rs real_steam_knife_and_grenade_ports"
+      ]
+    },
+    {
+      "addon": "Weapon_HEGrenade",
+      "title": "HE Grenade",
+      "port": "weapon_hegrenade",
+      "status": "verified",
+      "sha256": [
+        "1cae396e8616bf57e62dcfb4fda35490e93a772ee09979af45a3f7d4601dc351"
+      ],
+      "covers": {
+        "hegrenadeImage::onCharge": {
+          "charge_arm": "playthread\\s*\\(\\s*2\\s*,\\s*\"?(\\w+)"
+        },
+        "hegrenadeImage::onAbortCharge": {
+          "abort_arm": "playthread\\s*\\(\\s*2\\s*,\\s*\"?(\\w+)"
+        },
+        "hegrenadeImage::onFire": {
+          "throw_arm": "playthread\\s*\\(\\s*2\\s*,\\s*\"?(\\w+)",
+          "parent": "parent::onfire\\s*\\(",
+          "clears_tool": "%obj\\.tool\\[[^\\]]*\\]\\s*=\\s*0\\s*;",
+          "unuse": "servercmdunusetool\\s*\\("
+        },
+        "hegrenadeImage::onDone": {
+          "unmount": "unmountimage\\s*\\(\\s*%slot\\s*\\)"
+        },
+        "hegrenadeProjectile::onCollision": {
+          "bounce_sound": "serverplay3d\\s*\\(\\s*(\\w+)\\s*,"
+        },
+        "Armor::onCollision": {
+          "item": "hegrenadeitem",
+          "pickup": "%obj\\.pickup\\s*\\(\\s*%col\\s*\\)"
+        }
+      },
+      "tests": [
+        "weapon_hegrenade/checks.json",
+        "crates/addon-import/tests/ports.rs he_grenade_port_pulls_the_pin_then_throws_it_away",
+        "crates/weapons/tests/state_attacks.rs a_thrown_grenade_is_used_up_and_the_next_one_stays",
+        "crates/addon-import/tests/import.rs real_steam_knife_and_grenade_ports"
+      ]
+    },
+    {
+      "addon": "Weapon_Sniper_Rifle",
+      "title": "Sniper Rifle",
+      "port": "weapon_sniper_rifle",
+      "status": "verified",
+      "sha256": [
+        "ddf1f4dff31764c394bf812b5b67860a51547b78fc96e364fbce44df44b9b15a"
+      ],
+      "covers": {
+        "SniperRifleImage::onFire": {
+          "fire_arm": "playthread\\s*\\(\\s*2\\s*,\\s*\"?([a-z_][a-z0-9_]*)\"?\\s*\\)"
+        }
+      },
+      "tests": [
+        "weapon_sniper_rifle/checks.json",
+        "crates/addon-import/tests/ports.rs sniper_rifle_port_kicks_the_arm",
+        "crates/addon-import/tests/import.rs real_sniper_rifles"
+      ]
+    },
+    {
+      "addon": "Weapon_Sniper_Rifle_Updated",
+      "title": "Sniper Rifle Updated",
+      "port": "weapon_sniper_rifle_updated",
+      "status": "verified",
+      "sha256": [
+        "b9d6ee94a2f605bafba0e53aa79ee12b4d40cac61d81135c26896973693ed9e2"
+      ],
+      "covers": {
+        "SniperRifleAnimatedImage::onFire": {
+          "fire_arm": "playthread\\s*\\(\\s*2\\s*,\\s*\"?([a-z_][a-z0-9_]*)\"?\\s*\\)"
+        },
+        "SniperRifleAnimatedImage::onMount": {
+          "lhand": "hidenode\\s*\\(\\s*\"?lhand\"?\\s*\\)",
+          "rhand": "hidenode\\s*\\(\\s*\"?rhand\"?\\s*\\)",
+          "lhook": "hidenode\\s*\\(\\s*\"?lhook\"?\\s*\\)",
+          "rhook": "hidenode\\s*\\(\\s*\"?rhook\"?\\s*\\)",
+          "both_arms": "playthread\\s*\\(\\s*2\\s*,\\s*\"?armreadyboth\"?\\s*\\)"
+        },
+        "SniperRifleAnimatedImage::onUnMount": {
+          "restores": "applybodyparts\\s*\\(\\s*\\)"
+        }
+      },
+      "tests": [
+        "weapon_sniper_rifle_updated/checks.json",
+        "crates/addon-import/tests/ports.rs sniper_rifle_updated_port_draws_its_own_hands",
+        "crates/addon-import/tests/import.rs real_sniper_rifles"
+      ]
+    },
+    {
+      "addon": "Tool_Fill_Can",
+      "title": "Fill can",
+      "port": "tool_fill_can",
+      "status": "verified",
+      "sha256": [
+        "d40fc7127fe87da3b5027baf37a928fd1f575970d9e55eab1ebf89f5ed198ef8"
+      ],
+      "covers": {
+        "paintfill": {
+          "admin_limit": "%limit\\s*=\\s*(\\d+)\\s*;",
+          "reach_side": "%sizex\\s*\\*\\s*0\\.5\\s*\\+\\s*([0-9]*\\.?[0-9]+)\\s*\\)",
+          "reach_up": "%sizez\\s*\\*\\s*0\\.2\\s*\\+\\s*([0-9]*\\.?[0-9]+)\\s*\\)",
+          "limit_seconds": "reached fill can brick limit \\(\\\"\\s*@\\s*\\$pref::server::fillcan_maxbricks\\s*@\\s*\\\"\\)\\\"\\s*,\\s*([0-9]*\\.?[0-9]+)",
+          "paints_colour": "%obj\\.setcolor\\s*\\(\\s*%newcolor\\s*\\)",
+          "full_trust": "gettrustlevel\\s*\\(\\s*%client\\s*,\\s*%target\\s*\\)\\s*>=\\s*2",
+          "same_colour": "%target\\.getcolorid\\s*\\(\\s*\\)\\s*==\\s*%oldcolor",
+          "box_search": "initcontainerboxsearch\\s*\\(\\s*%obj\\.getposition\\s*\\(\\s*\\)\\s*,\\s*%box\\s*,\\s*\\$typemasks::fxbrickobjecttype\\s*\\)",
+          "stops_at_limit": "if\\s*\\(\\s*%fillcount\\s*>=\\s*%limit\\s*\\)\\s*\\{[^}]*break\\s*;",
+          "undo_step": "undostack\\.push\\s*\\(\\s*%list\\s+tab\\s+\\\"fillpaint\\\"\\s*\\)",
+          "limit_error": "messageclient\\s*\\(\\s*%client\\s*,\\s*'msgplanterror_limit'\\s*\\)"
+        },
+        "paintFXfill": {
+          "paints_colour_fx": "%obj\\.setcolorfx\\s*\\(\\s*%newfx\\s*\\)",
+          "full_trust": "gettrustlevel\\s*\\(\\s*%client\\s*,\\s*%target\\s*\\)\\s*>=\\s*2",
+          "same_colour": "%target\\.getcolorid\\s*\\(\\s*\\)\\s*==\\s*%oldcolor",
+          "box_search": "initcontainerboxsearch\\s*\\(\\s*%obj\\.getposition\\s*\\(\\s*\\)\\s*,\\s*%box\\s*,\\s*\\$typemasks::fxbrickobjecttype\\s*\\)",
+          "stops_at_limit": "if\\s*\\(\\s*%fillcount\\s*>=\\s*%limit\\s*\\)\\s*\\{[^}]*break\\s*;"
+        },
+        "shapeFXfill": {
+          "paints_shape_fx": "%obj\\.setshapefx\\s*\\(\\s*%newfx\\s*\\)",
+          "full_trust": "gettrustlevel\\s*\\(\\s*%client\\s*,\\s*%target\\s*\\)\\s*>=\\s*2",
+          "same_colour": "%target\\.getcolorid\\s*\\(\\s*\\)\\s*==\\s*%oldcolor",
+          "box_search": "initcontainerboxsearch\\s*\\(\\s*%obj\\.getposition\\s*\\(\\s*\\)\\s*,\\s*%box\\s*,\\s*\\$typemasks::fxbrickobjecttype\\s*\\)",
+          "stops_at_limit": "if\\s*\\(\\s*%fillcount\\s*>=\\s*%limit\\s*\\)\\s*\\{[^}]*break\\s*;"
+        },
+        "fillcanprojectile::oncollision": {
+          "vehicle_trust": "gettrustlevel\\s*\\(\\s*%client\\s*,\\s*%col\\.spawnbrick\\s*\\)\\s*>=\\s*2",
+          "refusal_seconds": "%name\\s*@\\s*\\\"\\s*does not trust you enough to do that\\.\\\"\\s*,\\s*([0-9]*\\.?[0-9]+)",
+          "player_ms": "%col\\.settempcolor\\s*\\(\\s*%color\\s*,\\s*(\\d+)\\s*\\)",
+          "face_ms": "faceresetsched\\s*=\\s*schedule\\s*\\(\\s*(\\d+)\\s*,",
+          "visor_alpha": "getwords\\s*\\(\\s*%col\\.client\\.accentcolor\\s*,\\s*0\\s*,\\s*2\\s*\\)\\s*spc\\s*\\\"([0-9]*\\.?[0-9]+)\\\"",
+          "riders_ms": "getmountedobject\\s*\\(\\s*%x\\s*\\)\\.settempcolor\\s*\\(\\s*%col\\.color\\s*,\\s*(\\d+)\\s*\\)",
+          "random_colour": "getrandom\\s*\\(\\s*0\\s*,\\s*100\\s*\\)\\s*/\\s*100",
+          "recolors_brick": "%col\\.spawnbrick\\.setcolor\\s*\\(\\s*%client\\.currentcolor\\s*\\)"
+        },
+        "resetface": {
+          "own_face": "setfacename\\s*\\(\\s*%obj\\.client\\.facename\\s*\\)"
+        },
+        "servercmdfillcan": {
+          "disabled_seconds": "\\\"\\\\c5painting is currently disabled\\.\\\"\\s*,\\s*([0-9]*\\.?[0-9]+)",
+          "mounts": "mountimage\\s*\\(\\s*fillcanimage\\s*,\\s*0\\s*\\)"
+        },
+        "servercmdundobrick": {
+          "undoes_fill": "getfield\\s*\\(\\s*%str\\s*,\\s*1\\s*\\)\\s*\\$=\\s*\\\"fillpaint\\\"",
+          "only_unchanged": "getcolorid\\s*\\(\\s*\\)\\s*==\\s*%list\\.newcolor"
+        },
+        "servercmdusefxcan": {
+          "remounts": "mountimage\\s*\\(\\s*fillcanimage\\s*,\\s*0\\s*\\)",
+          "remembers": "currentfxcan\\s*=\\s*%can\\s*\\+\\s*1"
+        },
+        "servercmdusespraycan": {
+          "remounts": "mountimage\\s*\\(\\s*fillcanimage\\s*,\\s*0\\s*\\)",
+          "forgets": "currentfxcan\\s*=\\s*0\\s*;"
+        },
+        "gameconnection::onclientleavegame": {
+          "frees_fills": "\\\"fillpaint\\\"\\s*\\)\\s*getword\\s*\\(\\s*%t\\s*,\\s*0\\s*\\)\\.delete"
+        },
+        "round": {
+          "rounds": "%a\\s*\\+=\\s*0\\.5"
+        }
+      },
+      "tests": [
+        "tool_fill_can/checks.json",
+        "crates/addon-import/tests/ports.rs fill_can_port_rules_fill_what_v20_filled",
+        "crates/sim/tests/fill_can.rs with_reach_a_fill_finds_what_v20s_box_search_found_and_can_stop_at_its_limit",
+        "crates/sim/tests/fill_can.rs a_vehicle_is_painted_through_its_recolouring_brick_or_alone_and_undone"
+      ]
     }
   ]
 }

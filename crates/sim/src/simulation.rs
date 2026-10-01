@@ -153,7 +153,7 @@ pub fn unloaded_summary(bricks: &[Brick]) -> Option<String> {
     for brick in bricks {
         let name = match &brick.definition {
             bri_world::ContentRef::Resolved(id) => id.clone(),
-            bri_world::ContentRef::Unresolved { namespace, name } => format!("{namespace}/{name}"),
+            bri_world::ContentRef::Unresolved(u) => format!("{}/{}", u.namespace, u.name),
         };
         *counts.entry(name).or_default() += 1;
     }
@@ -759,36 +759,52 @@ impl Simulation {
         });
         out.into_iter().collect()
     }
-    /// What a fill spreads over from `start`: it and every brick reached
-    /// through shared faces ([`Self::touching_bricks`]), passing only
-    /// through bricks `admit` accepts (`start` is not asked). Nearest
-    /// first, ties by id, so the same world always gives the same order.
-    /// `None` when more than `limit` bricks are reached: a fill is refused
-    /// rather than cut short.
-    pub fn touching_region(
+    /// What a fill spreads over from `start`: it and every brick joined
+    /// to it, passing only through bricks `admit` accepts (`start` is not
+    /// asked), at most `limit` of them in the order the fill reaches them
+    /// (breadth first, neighbours by id), so the same world always gives
+    /// the same fill. Bricks join through shared faces
+    /// ([`Self::touching_bricks`]), or with `reach` (sideways, vertical)
+    /// when one's box overlaps the other's grown by that much, as v20's
+    /// `containerBoxSearch` around each brick found them. The flag says
+    /// whether more bricks were waiting when `limit` was reached.
+    pub fn fill_region(
         &self,
         start: BrickId,
         limit: usize,
+        reach: Option<[f32; 2]>,
         mut admit: impl FnMut(BrickId, &Brick) -> bool,
-    ) -> Result<Option<Vec<BrickId>>> {
+    ) -> Result<(Vec<BrickId>, bool)> {
         let world = self.state();
         ensure!(world.bricks.contains_key(&start), "Unknown brick");
+        ensure!(limit > 0, "A fill paints at least one brick");
         let mut seen = BTreeSet::from([start]);
         let mut order = vec![start];
         let mut next = 0;
         while let Some(&id) = order.get(next) {
             next += 1;
-            for other in self.touching_bricks(id) {
+            let mut near = match reach {
+                None => self.touching_bricks(id),
+                Some([side, up]) => {
+                    let Some((min, max)) = self.brick_box(id) else {
+                        continue;
+                    };
+                    let grow = Vec3::new(side, up, side);
+                    self.bricks_in_box(min - grow, max + grow)
+                }
+            };
+            near.sort_unstable();
+            for other in near {
                 if !seen.insert(other) || !admit(other, &world.bricks[&other]) {
                     continue;
                 }
                 if order.len() >= limit {
-                    return Ok(None);
+                    return Ok((order, true));
                 }
                 order.push(other);
             }
         }
-        Ok(Some(order))
+        Ok((order, false))
     }
     pub fn edit(&mut self, actor: &Actor, id: BrickId, edit: Edit) -> Result<()> {
         self.authority.edit(actor, id, edit)?;

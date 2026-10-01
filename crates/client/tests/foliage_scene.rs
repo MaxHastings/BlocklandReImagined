@@ -111,7 +111,7 @@ fn original_grass_composes_over_actual_bedroom_terrain(f: &ContentRoot) -> Resul
         .map(|t| GpuTerrain::upload(&renderer, &gpu.device, &gpu.queue, t.into(), 4000.))
         .collect::<Result<Vec<_>>>()?;
     for t in &mut terrain {
-        t.update(&gpu.queue, eye, 4000.)?;
+        t.update(&gpu.device, &gpu.queue, &[eye], 4000.)?;
     }
     let terrain_draws: Vec<_> = terrain.iter().flat_map(GpuTerrain::draws).collect();
     let mut camera = Camera::perspective(

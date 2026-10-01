@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "checks": [
+    {
+      "fire": "weapon_butterflyknife:weapon/butterflyknifeitem",
+      "projectiles": 1,
+      "recoil": null,
+      "max_spread_degrees": 0.01,
+      "why": "A click lets go during Charge, so AbortChargefire runs onFiretwo: one butterflyknifeprojectile, %shellcount 1, %spread 0.00001 (at most 0.0031 degrees)"
+    }
+  ]
+}

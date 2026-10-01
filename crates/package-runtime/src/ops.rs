@@ -16,6 +16,14 @@ pub const MAX_FIRE_SPEED: f32 = 10_000.0;
 pub const PLAYER_MASS: f32 = 90.0;
 /// Farthest ahead of a player's eye a held object may float.
 pub const MAX_HOLD_DISTANCE: f32 = 64.0;
+/// Longest a tether's rope may be, and shortest, units (the player
+/// motor's own limits).
+pub const MAX_TETHER_LENGTH: f32 = 1000.0;
+pub const MIN_TETHER_LENGTH: f32 = 1.0;
+/// Fastest a tether reels, units a second.
+pub const MAX_TETHER_REEL: f32 = 80.0;
+/// Strongest push a tether's swing gives, units a second squared.
+pub const MAX_TETHER_SWING: f32 = 60.0;
 /// Strongest a hold may pull, in mass units times units per second
 /// squared: what it gives a thing of mass `m` is at most `force / m`.
 pub const MAX_HOLD_FORCE: f32 = 1.0e7;
@@ -29,8 +37,13 @@ pub const FOV_RANGE: std::ops::RangeInclusive<f32> = 5.0..=120.0;
 /// Longest side of a box `copy_box` copies or `show_box` outlines, units
 /// (512 studs).
 pub const MAX_BOX_SPAN: f32 = 256.0;
-/// Most bricks one `paint_fill` may paint.
-pub const MAX_FILL_BRICKS: usize = 10_000;
+/// Most bricks one `paint_fill` may paint: v20's Fill Can lets
+/// administrators fill 128000.
+pub const MAX_FILL_BRICKS: usize = 128_000;
+/// Widest gap `paint_fill`'s `reach` may jump, units.
+pub const MAX_FILL_REACH: f32 = 4.0;
+/// Longest a `temp_look` lasts, seconds.
+pub const MAX_TEMP_LOOK_SECONDS: f32 = 60.0;
 /// Widest `beam`, units, and longest it lasts, seconds.
 pub const MAX_BEAM_WIDTH: f32 = 16.0;
 pub const MAX_BEAM_SECONDS: f32 = 10.0;
@@ -78,6 +91,44 @@ impl std::fmt::Display for ObjectRef {
     }
 }
 
+/// What a `paint_fill` paints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FillPaint {
+    /// A palette colour (the colour spray cans).
+    Color(u8),
+    /// A colour effect, as the colour FX cans number them from 0 (none,
+    /// pearl, chrome, glow, blink, swirl, rainbow).
+    ColorEffect(u8),
+    /// A shape effect, as the shape FX cans number them from 0 (none,
+    /// jello).
+    ShapeEffect(u8),
+}
+
+/// What a `paint_vehicle` paints.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum VehiclePaint {
+    /// A palette colour (the colour spray cans). A vehicle its spawn brick
+    /// recolours takes it through the brick, which is painted too.
+    Color(u8),
+    /// Any colour, red, green and blue from 0 to 1, on the vehicle alone.
+    Rgb([f32; 3]),
+}
+
+/// How `temp_look` changes a player for a while.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct TempLook {
+    /// Every colour slot this colour, and no decal (`SetTempColor` with
+    /// no position).
+    pub color: Option<[f32; 4]>,
+    /// The same with a palette colour, by index (`getColorIDTable`).
+    pub paint: Option<u8>,
+    /// This face (a face decal's name, `setFaceName`).
+    pub face: Option<String>,
+    /// These slots keep their colour at this opacity, where the player
+    /// wears that part (`setNodeColor` on a visor).
+    pub alpha: BTreeMap<String, f32>,
+}
+
 /// Every capability a manifest may declare (with plain-language words in
 /// `bri_package::capability`).
 pub use bri_package::capability::CAPABILITIES;
@@ -93,6 +144,21 @@ pub enum Op {
         shape: String,
         position: [f32; 3],
         color: [f32; 4],
+    },
+    /// Plant a brick of kind `kind` (a brick catalog id) into build
+    /// `owner` (a brick's `owner`, 0 for the world's own), palette colour `color`, `turns`
+    /// clockwise quarter turns, centred at `position` (snapped to the stud
+    /// and plate grid). Where it does not fit (another brick, a player,
+    /// the map) nothing is planted and nothing is reported, as v20's
+    /// `fxDTSBrick::plant` returned an error the script checked. A brick
+    /// split, merged or piled by a rule (Trench Digging's dirt) stays its
+    /// builder's.
+    PlantBrick {
+        kind: String,
+        position: [f32; 3],
+        turns: u8,
+        color: u8,
+        owner: u64,
     },
     /// Put a voxel of the generated world's `material` (its id) at voxel
     /// coordinates `position`: dirt thrown back into a trench. It becomes
@@ -225,16 +291,46 @@ pub enum Op {
         player: u64,
         color: u8,
     },
-    /// Paint `brick` and every brick of its colour joined to it through
-    /// shared faces in palette colour `color`, as `player`'s spray can
-    /// would paint each one (their full trust; a fill flows around bricks
-    /// it may not paint), as one step Ctrl+Z takes back. More than `limit`
-    /// bricks is refused.
+    /// Paint `brick` and every brick of its colour joined to it as
+    /// `player`'s spray cans would paint each one (their full trust; a fill
+    /// flows around bricks it may not paint), as one step Ctrl+Z takes
+    /// back. Bricks join through shared faces, or with `reach` through any
+    /// overlap of a brick's box grown by `reach` (sideways, up and down),
+    /// as v20's `containerBoxSearch` fills found them.
     PaintFill {
         player: u64,
         brick: u64,
-        color: u8,
+        paint: FillPaint,
         limit: u32,
+        reach: Option<[f32; 2]>,
+        /// More than `limit` bricks: paint the first `limit` and stop, as
+        /// v20 did, instead of refusing the fill.
+        stop_at_limit: bool,
+        /// Centre-printed, for these seconds, when the limit stops a fill.
+        limit_message: Option<(String, f32)>,
+        /// How long a refusal ("does not trust you enough") shows, seconds.
+        refusal_seconds: Option<f32>,
+        /// When the limit stops a fill, the player's plant-limit error
+        /// (`MsgPlantError_Limit`) shows too.
+        limit_error: bool,
+    },
+    /// Paint a vehicle as `player` (their full trust from its spawn
+    /// brick's build, the minigame's paint rule), as one step Ctrl+Z takes
+    /// back. Its riders take the colour for `riders_seconds`.
+    PaintVehicle {
+        player: u64,
+        vehicle: u64,
+        paint: VehiclePaint,
+        riders_seconds: Option<f32>,
+        /// How long a refusal ("does not trust you enough") shows, seconds.
+        refusal_seconds: Option<f32>,
+    },
+    /// For `seconds`, a player looks different (`SetTempColor`,
+    /// `setFaceName`, `setNodeColor`), then as they were.
+    TempLook {
+        player: u64,
+        look: TempLook,
+        seconds: f32,
     },
     /// Outline a box for one player while `tool` is in their hand (a
     /// selection, a zone being marked); `None` takes it away.
@@ -300,9 +396,63 @@ pub enum Op {
         player: u64,
         distance: f32,
     },
-    /// Let go of what `player` holds.
+    /// Let go of what `player` holds, and stop reaching.
     LetGo {
         player: u64,
+    },
+    /// Tie `player` to `anchor` with a rope `length` long (`None`: exactly
+    /// as long as it spans now): they move freely within it and swing on
+    /// it (the player motor's `Tether`). `brick`
+    /// ties it to that brick, and the rope breaks when the brick goes;
+    /// `object` ties it to that spot on a player, vehicle or entity, which
+    /// carries the anchor along as it moves and turns, and the rope breaks
+    /// when it goes. `reel` is how fast `TetherLength` changes it and
+    /// `swing` how hard the movement keys push a hanging player (the
+    /// engine's defaults otherwise). `keys` (`[shortest, longest]`) lets
+    /// the player's jump and crouch keys reel it in and out between those.
+    /// With `straight`, reeling in draws the player straight along it.
+    /// A player has one rope; a new one replaces it.
+    Tether {
+        player: u64,
+        anchor: [f32; 3],
+        length: Option<f32>,
+        brick: Option<u64>,
+        reel: Option<f32>,
+        swing: Option<f32>,
+        #[serde(default)]
+        object: Option<ObjectRef>,
+        #[serde(default)]
+        keys: Option<[f32; 2]>,
+        #[serde(default)]
+        straight: bool,
+    },
+    /// Reel `player`'s rope toward `length`.
+    TetherLength {
+        player: u64,
+        length: f32,
+    },
+    /// Cut `player`'s rope. With `keep` (0 to 1), the player keeps only
+    /// that fraction of their speed relative to what the rope was tied to,
+    /// as a rope's grip slows them as it lets go.
+    Untether {
+        player: u64,
+        #[serde(default)]
+        keep: Option<f32>,
+    },
+    /// Keep reaching for something to hold: every tick, while `player`
+    /// holds nothing, the engine looks where they look, up to `distance`,
+    /// and holds the first thing it meets that they may move, by the spot
+    /// it met, as far off as it was (at least `near`), as [`Op::Hold`]
+    /// with `force` and `turn` would. Reaching ends once it holds
+    /// something, on `let_go`, or when the player dies. The script sees
+    /// the catch with `held` (a gun whose trigger stays down catches what
+    /// comes in range, with no second click).
+    Reach {
+        player: u64,
+        distance: f32,
+        near: f32,
+        force: Option<f32>,
+        turn: bool,
     },
     /// Spawn a vehicle definition (`namespace:vehicle/name`) of this package
     /// or one it depends on, turned `yaw` radians and moving at `velocity`.
@@ -412,12 +562,15 @@ pub enum Op {
     /// carried with it and drawn on that node as it animates. With
     /// `can_dismount` false the rider cannot get off by jumping
     /// (`canDismount = 0`). Riders a rule seats stay on through the mount
-    /// changing body while the new one has the node.
+    /// changing body while the new one has the node. `turn` (radians,
+    /// clockwise seen from above) turns the rider's body on the mount
+    /// point, as a `setTransform` on a mounted player sets its `mRot.z`.
     MountObject {
         mount: u64,
         rider: u64,
         node: u8,
         can_dismount: bool,
+        turn: f32,
     },
     /// Take `rider` off the player they ride, where they are, moving as
     /// the mount moved (`unMountObject`).
@@ -438,6 +591,31 @@ pub enum Op {
         player: u64,
         limits: Option<[f32; 2]>,
     },
+    /// Give a player an orbit camera around another (v20's `setOrbitMode`
+    /// and `setControlObject(camera)`), or (`None`) their body back.
+    OrbitCamera {
+        player: u64,
+        orbit: Option<Orbit>,
+    },
+}
+/// An orbit camera ([`Op::OrbitCamera`]): around player `target`, starting
+/// `distance` whole units out, which the player's wheel zooms between `min`
+/// and `max` (`setOrbitMode(%target, %transform, %min, %max, %cur)`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Orbit {
+    pub target: u64,
+    pub min: u8,
+    pub max: u8,
+    pub distance: u8,
+}
+impl Orbit {
+    /// Within [`ORBIT_DISTANCE`], `min <= distance <= max`.
+    pub fn valid(&self) -> bool {
+        ORBIT_DISTANCE.contains(&self.min)
+            && ORBIT_DISTANCE.contains(&self.max)
+            && self.min <= self.distance
+            && self.distance <= self.max
+    }
 }
 /// The mirror [`Op::MirrorCopy`] stands in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -471,6 +649,9 @@ pub enum SoundAt {
 pub const MAX_MOUNT_POINTS: usize = 8;
 /// Body scales `set_scale` allows.
 pub const SCALE_RANGE: std::ops::RangeInclusive<f32> = 0.2..=5.0;
+/// How far out an Add-On's orbit camera may sit ([`Op::OrbitCamera`]), in
+/// whole units.
+pub const ORBIT_DISTANCE: std::ops::RangeInclusive<u8> = 1..=20;
 /// The avatar's colour slots, as `setNodeColor` names them.
 pub const AVATAR_SLOTS: [&str; 13] = [
     "head",
@@ -494,11 +675,14 @@ impl Op {
         match self {
             Self::RemoveBrick { .. }
             | Self::PlaceBrick { .. }
+            | Self::PlantBrick { .. }
             | Self::PlaceVoxel { .. }
             | Self::SetBlockState { .. }
             | Self::CutCopy { .. }
             | Self::PaintCopy { .. }
-            | Self::PaintFill { .. } => "world.edit",
+            | Self::PaintFill { .. }
+            | Self::PaintVehicle { .. } => "world.edit",
+            Self::TempLook { .. } => "player",
             Self::Explode { .. }
             | Self::Damage { .. }
             | Self::Heal { .. }
@@ -528,6 +712,7 @@ impl Op {
             | Self::UnmountImage { .. }
             | Self::SetScale { .. }
             | Self::SetLookLimits { .. }
+            | Self::OrbitCamera { .. }
             | Self::SetAvatarColors { .. } => "player",
             Self::MountObject { .. } | Self::UnmountObject { .. } => "physics",
             Self::Push { .. }
@@ -535,6 +720,10 @@ impl Op {
             | Self::Hold { .. }
             | Self::HoldDistance { .. }
             | Self::LetGo { .. }
+            | Self::Tether { .. }
+            | Self::TetherLength { .. }
+            | Self::Untether { .. }
+            | Self::Reach { .. }
             | Self::SpawnVehicle { .. }
             | Self::RemoveVehicle { .. } => "physics",
         }
@@ -563,13 +752,78 @@ impl Op {
             | Self::UnmountImage { .. }
             | Self::UnmountObject { .. } => true,
             Self::MountObject {
-                mount, rider, node, ..
-            } => mount != rider && usize::from(*node) < MAX_MOUNT_POINTS,
+                mount,
+                rider,
+                node,
+                turn,
+                ..
+            } => mount != rider && usize::from(*node) < MAX_MOUNT_POINTS && turn.is_finite(),
             Self::SetScale { scale, .. } => scale.is_finite() && SCALE_RANGE.contains(scale),
+            Self::OrbitCamera { player, orbit } => {
+                orbit.is_none_or(|o| o.target != *player && o.valid())
+            }
             Self::SetLookLimits { limits, .. } => limits
                 .is_none_or(|[down, up]| (0.0..=1.0).contains(&down) && (0.0..=1.0).contains(&up)),
-            Self::PaintFill { limit, .. } => (1..=MAX_FILL_BRICKS as u32).contains(limit),
+            Self::PaintFill {
+                paint,
+                limit,
+                reach,
+                limit_message,
+                refusal_seconds,
+                ..
+            } => {
+                (1..=MAX_FILL_BRICKS as u32).contains(limit)
+                    && refusal_seconds.is_none_or(|s| (0.0..=30.0).contains(&s))
+                    && match paint {
+                        FillPaint::Color(_) => true,
+                        FillPaint::ColorEffect(fx) => *fx < 7,
+                        FillPaint::ShapeEffect(fx) => *fx < 3,
+                    }
+                    && reach.is_none_or(|r| r.iter().all(|v| (0.0..=MAX_FILL_REACH).contains(v)))
+                    && limit_message.as_ref().is_none_or(|(text, seconds)| {
+                        text.chars().count() <= MAX_PRINT_CHARS && (0.0..=30.0).contains(seconds)
+                    })
+            }
+            Self::PaintVehicle {
+                paint,
+                riders_seconds,
+                refusal_seconds,
+                ..
+            } => {
+                refusal_seconds.is_none_or(|s| (0.0..=30.0).contains(&s))
+                    && riders_seconds.is_none_or(|s| (0.0..=MAX_TEMP_LOOK_SECONDS).contains(&s))
+                    && match paint {
+                        VehiclePaint::Color(_) => true,
+                        VehiclePaint::Rgb(c) => c.iter().all(|v| (0.0..=1.0).contains(v)),
+                    }
+            }
+            Self::TempLook { look, seconds, .. } => {
+                (0.0..=MAX_TEMP_LOOK_SECONDS).contains(seconds)
+                    && look
+                        .color
+                        .is_none_or(|c| c.iter().all(|v| (0.0..=1.0).contains(v)))
+                    && look.face.as_ref().is_none_or(|f| {
+                        !f.is_empty() && f.len() <= 64 && f.chars().all(|c| c.is_ascii_graphic())
+                    })
+                    && look.alpha.len() <= AVATAR_SLOTS.len()
+                    && look.alpha.iter().all(|(slot, a)| {
+                        AVATAR_SLOTS.contains(&slot.as_str()) && (0.0..=1.0).contains(a)
+                    })
+            }
             Self::Teleport { position, .. } => finite(position),
+            Self::PlantBrick {
+                kind,
+                position,
+                turns,
+                ..
+            } => {
+                (bri_package::id::is_content_ref(kind, Some("brick"))
+                    || kind
+                        .strip_prefix("v20/brick/")
+                        .is_some_and(|n| !n.is_empty() && n.len() <= 128))
+                    && finite(position)
+                    && *turns < 4
+            }
             Self::PlaceVoxel { position, material } => {
                 position.iter().all(|c| c.abs() <= 1_000_000)
                     && bri_package::id::ContentId::parse(material).is_ok()
@@ -723,7 +977,42 @@ impl Op {
             Self::HoldDistance { distance, .. } => {
                 distance.is_finite() && (0.5..=MAX_HOLD_DISTANCE).contains(distance)
             }
-            Self::LetGo { .. } | Self::RemoveVehicle { .. } => true,
+            Self::Tether {
+                anchor,
+                length,
+                brick,
+                reel,
+                swing,
+                object,
+                keys,
+                ..
+            } => {
+                let span = MIN_TETHER_LENGTH..=MAX_TETHER_LENGTH;
+                finite(anchor)
+                    && length.is_none_or(|l| span.contains(&l))
+                    && reel.is_none_or(|r| (0.0..=MAX_TETHER_REEL).contains(&r))
+                    && swing.is_none_or(|s| (0.0..=MAX_TETHER_SWING).contains(&s))
+                    && !(brick.is_some() && object.is_some())
+                    && keys.is_none_or(|[short, long]| {
+                        span.contains(&short) && span.contains(&long) && short <= long
+                    })
+            }
+            Self::TetherLength { length, .. } => {
+                (MIN_TETHER_LENGTH..=MAX_TETHER_LENGTH).contains(length)
+            }
+            Self::Reach {
+                distance,
+                near,
+                force,
+                ..
+            } => {
+                distance.is_finite()
+                    && near.is_finite()
+                    && (0.5..=MAX_HOLD_DISTANCE).contains(near)
+                    && (*near..=MAX_HOLD_DISTANCE).contains(distance)
+                    && force.is_none_or(|f| f.is_finite() && f > 0.0 && f <= MAX_HOLD_FORCE)
+            }
+            Self::LetGo { .. } | Self::Untether { .. } | Self::RemoveVehicle { .. } => true,
             Self::Fire {
                 projectile,
                 position,
@@ -808,6 +1097,7 @@ pub fn op_name(op: &Op) -> &'static str {
     match op {
         Op::RemoveBrick { .. } => "remove_brick",
         Op::PlaceBrick { .. } => "place_brick",
+        Op::PlantBrick { .. } => "plant_brick",
         Op::PlaceVoxel { .. } => "place_voxel",
         Op::SetAvatarColors { .. } => "set_avatar_colors",
         Op::Explode { .. } => "explode",
@@ -824,6 +1114,7 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::UnmountObject { .. } => "unmount_object",
         Op::SetScale { .. } => "set_scale",
         Op::SetLookLimits { .. } => "set_look_limits",
+        Op::OrbitCamera { .. } => "orbit_camera",
         Op::SpawnEntity { .. } => "spawn_entity",
         Op::RemoveEntity { .. } => "remove_entity",
         Op::Steer { .. } => "steer",
@@ -841,6 +1132,8 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::CutCopy { .. } => "cut_copy",
         Op::PaintCopy { .. } => "paint_copy",
         Op::PaintFill { .. } => "paint_fill",
+        Op::PaintVehicle { .. } => "paint_vehicle",
+        Op::TempLook { .. } => "temp_look",
         Op::ShowBox { area: Some(_), .. } => "show_box",
         Op::ShowBox { area: None, .. } => "hide_box",
         Op::GiveItem { .. } => "give_item",
@@ -851,6 +1144,10 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::Hold { .. } => "hold",
         Op::HoldDistance { .. } => "hold_distance",
         Op::LetGo { .. } => "let_go",
+        Op::Tether { .. } => "tether",
+        Op::TetherLength { .. } => "tether_length",
+        Op::Untether { .. } => "untether",
+        Op::Reach { .. } => "reach",
         Op::SpawnVehicle { .. } => "spawn_vehicle",
         Op::RemoveVehicle { .. } => "remove_vehicle",
         Op::Fire { .. } => "fire",

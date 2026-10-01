@@ -1222,7 +1222,7 @@ fn real_native_maps_upload_once_camera_motion() -> Result<()> {
                 7000.
             };
             for t in &mut terrain {
-                t.update(&gpu.queue, eye + Vec3::X * shift, radius)?;
+                t.update(&gpu.device, &gpu.queue, &[eye + Vec3::X * shift], radius)?;
             }
             let draws: Vec<_> = terrain.iter().flat_map(GpuTerrain::draws).collect();
             terrain_instances = draws.iter().map(|(_, i)| i.len()).sum::<usize>();
@@ -1262,7 +1262,7 @@ fn real_native_maps_upload_once_camera_motion() -> Result<()> {
             );
             camera.apply_environment(&data);
             for t in &mut terrain {
-                t.update(&gpu.queue, far, camera.atmosphere[1].max(1.))?;
+                t.update(&gpu.device, &gpu.queue, &[far], camera.atmosphere[1].max(1.))?;
             }
             let draws: Vec<_> = terrain.iter().flat_map(GpuTerrain::draws).collect();
             assert!(draws.iter().any(|(_, i)| !i.is_empty()));

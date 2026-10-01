@@ -5,6 +5,8 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+mimalloc.workspace = true
+imbl = "7"
 bri-files.workspace = true
 bri-weapons = { path = "../weapons" }
 anyhow.workspace = true
@@ -20,6 +22,7 @@ bri-admin = { path = "../admin" }
 bri-identity = { path = "../identity" }
 bri-vehicles = { path = "../vehicles" }
 bri-events = { path = "../events" }
+bri-package-runtime = { path = "../package-runtime" }
 glam = "0.33"
 quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring"] }
@@ -37,7 +40,6 @@ igd-next = { version = "0.17", default-features = false }
 windows-sys = { version = "0.61", features = ["Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_NetworkManagement_Ndis", "Win32_Media"] }
 
 [dev-dependencies]
-bri-package-runtime = { path = "../package-runtime" }
 tempfile = "3"
 rapier3d = { version = "=0.36.0", features = ["enhanced-determinism"] }
 bri-physics = { path = "../physics" }

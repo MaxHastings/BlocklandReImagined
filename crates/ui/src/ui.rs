@@ -380,6 +380,13 @@ pub struct Core {
     /// image's `wheel` command): the wheel goes to it, not the inventory.
     /// Whether the trigger is held is `held_controls`, this UI's own.
     pub wheel_tool: bool,
+    /// An Add-On's orbit camera zooms on the wheel, in place of the
+    /// inventory.
+    pub wheel_camera: bool,
+    /// Aimed through a scope with steps: the wheel zooms, trigger or not.
+    pub aim_wheel: bool,
+    /// The scope picture drawn over the screen while aiming, if any.
+    pub scope_overlay: Option<(u64, f32)>,
     pub cursor_forced: bool,
     /// Open print selector aspect ratio and last print per aspect.
     pub print_aspect: Option<String>,
@@ -502,6 +509,9 @@ impl Core {
         self.super_shift = false;
         self.zoom_on = false;
         self.wheel_tool = false;
+        self.wheel_camera = false;
+        self.aim_wheel = false;
+        self.scope_overlay = None;
         self.cursor_forced = false;
         self.print_aspect = None;
         self.last_print.clear();
@@ -793,9 +803,10 @@ impl Core {
     }
 
     /// The held tool takes the wheel: its image has a `wheel` command and
-    /// its trigger is held down right now.
+    /// its trigger is held down right now, or it is aimed through a scope
+    /// with steps.
     fn tool_takes_wheel(&self) -> bool {
-        self.wheel_tool && self.held_controls.contains(&HeldControl::Fire)
+        self.aim_wheel || self.wheel_tool && self.held_controls.contains(&HeldControl::Fire)
     }
     fn held_control(&mut self, control: HeldControl, down: bool) {
         // One-button jump and the dedicated jet input can overlap. Releasing
@@ -1307,6 +1318,9 @@ impl Ui {
             super_shift_time: 0,
             zoom_on: false,
             wheel_tool: false,
+            wheel_camera: false,
+            aim_wheel: false,
+            scope_overlay: None,
             cursor_forced: false,
             print_aspect: None,
             last_print: BTreeMap::new(),
@@ -1686,6 +1700,11 @@ impl Ui {
                 };
                 c.selector.cart = c.selector.cart.map(remap);
                 c.selector.clicked_brick = remap(c.selector.clicked_brick);
+                c.pack
+                    .prefetch(b.iter().filter_map(|brick| match &brick.icon {
+                        IconRef::Pack(id) => Some(id.clone()),
+                        _ => None,
+                    }));
                 c.bricks = b;
             }
             UiUpdate::Colorset(d) => c.hud.set_colorset(d),
@@ -1769,6 +1788,11 @@ impl Ui {
             UiUpdate::FirstPerson(on) => c.first_person = on,
             UiUpdate::HideCrosshair(on) => c.hide_crosshair = on,
             UiUpdate::ToolWheel(on) => c.wheel_tool = on,
+            UiUpdate::CameraWheel(on) => c.wheel_camera = on,
+            UiUpdate::AimWheel(on) => c.aim_wheel = on,
+            UiUpdate::ScopeOverlay(overlay) => {
+                c.scope_overlay = overlay.filter(|(_, aspect)| aspect.is_finite() && *aspect > 0.0)
+            }
             UiUpdate::Whiteout(amount) => {
                 if amount.is_finite() {
                     c.whiteout = c.whiteout.max(amount.clamp(0.0, 1.0));
@@ -2126,6 +2150,13 @@ impl Ui {
                     let most = NUM_WHEEL_STEPS as i32;
                     let notches = (steps as i32).clamp(-most, most);
                     self.core.game(GameAction::ToolWheel { notches });
+                    self.flush();
+                    return;
+                }
+                if self.content.id() == ScreenId::Play && dialogs == 0 && self.core.wheel_camera {
+                    let most = NUM_WHEEL_STEPS as i32;
+                    let notches = (steps as i32).clamp(-most, most);
+                    self.core.game(GameAction::CameraZoom { notches });
                     self.flush();
                     return;
                 }

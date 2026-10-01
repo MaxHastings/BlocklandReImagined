@@ -164,7 +164,12 @@ fn image(name: &str, states: Vec<State>) -> (String, Image) {
             zoom: None,
             crosshair: true,
             follow_arm: false,
+            hide_nodes: Vec::new(),
+            both_arms: false,
             paint_tint: false,
+            rope: None,
+            paint_picker: false,
+            scripts: Default::default(),
         },
     )
 }

@@ -16,6 +16,15 @@ pub struct Pixels {
     pub rgba: Vec<u8>,
 }
 
+fn decode_image(file: &Path) -> Result<Pixels> {
+    let img = image::open(file)?.to_rgba8();
+    Ok(Pixels {
+        width: img.width(),
+        height: img.height(),
+        rgba: img.into_raw(),
+    })
+}
+
 /// Something the renderer can sample: an image or a font sheet.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum TexKey {
@@ -29,6 +38,9 @@ pub enum TexKey {
     /// these itself; the renderer looks them up in its external table.
     External(u64),
 }
+
+/// An image id and its pixels, or None when it failed to decode.
+type Prefetched = (String, Option<Pixels>);
 
 /// Torque's `GuiControlProfile` stores `fontColor`, `fontColorHL`,
 /// `fontColorNA` and `fontColorSEL` as references to `fontColors[0..3]`, so
@@ -63,6 +75,8 @@ pub struct Pack {
     pub data: UiPack,
     pub dir: PathBuf,
     cache: RefCell<HashMap<TexKey, Option<Rc<Pixels>>>>,
+    /// Images a worker thread is decoding ahead of first use (`prefetch`).
+    prefetched: RefCell<Option<std::sync::mpsc::Receiver<Prefetched>>>,
     glyph_source: RefCell<Box<dyn GlyphSource>>,
     /// Rasterised fallback glyphs by (baseline, character); `None` when no
     /// font has the character.
@@ -91,6 +105,7 @@ impl Pack {
             data,
             dir,
             cache: RefCell::new(HashMap::new()),
+            prefetched: RefCell::new(None),
             glyph_source: RefCell::new(Box::new(SystemFonts)),
             fallback: RefCell::new(HashMap::new()),
         }
@@ -167,6 +182,7 @@ impl Pack {
     /// Decode (and cache) a texture. Font sheets become white RGB with the
     /// coverage in alpha, so tinting colours the glyphs.
     pub fn pixels(&self, key: &TexKey) -> Option<Rc<Pixels>> {
+        self.take_prefetched();
         if let Some(p) = self.cache.borrow().get(key) {
             return p.clone();
         }
@@ -176,16 +192,64 @@ impl Pack {
         decoded
     }
 
+    /// Decode these images on a worker thread so their first draw (a brick
+    /// selector page is hundreds of icons) does not decode them all on the
+    /// frame. Anything drawn before its turn is decoded then as usual.
+    pub fn prefetch(&self, ids: impl IntoIterator<Item = String>) {
+        let files: Vec<_> = ids
+            .into_iter()
+            .filter(|id| !self.cache.borrow().contains_key(&TexKey::Image(id.clone())))
+            .filter_map(|id| {
+                let file = self.dir.join(&self.data.images.get(&id)?.file);
+                Some((id, file))
+            })
+            .collect();
+        if files.is_empty() {
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        let spawned = std::thread::Builder::new()
+            .name("ui-prefetch".into())
+            .spawn(move || {
+                for (id, file) in files {
+                    if tx.send((id, decode_image(&file).ok())).is_err() {
+                        return;
+                    }
+                }
+            });
+        if spawned.is_ok() {
+            *self.prefetched.borrow_mut() = Some(rx);
+        }
+    }
+
+    /// Move whatever the prefetch worker has decoded into the cache.
+    fn take_prefetched(&self) {
+        let mut prefetched = self.prefetched.borrow_mut();
+        let Some(rx) = prefetched.as_ref() else {
+            return;
+        };
+        let mut cache = self.cache.borrow_mut();
+        loop {
+            match rx.try_recv() {
+                Ok((id, pixels)) => {
+                    cache
+                        .entry(TexKey::Image(id))
+                        .or_insert_with(|| pixels.map(Rc::new));
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => return,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    *prefetched = None;
+                    return;
+                }
+            }
+        }
+    }
+
     fn decode(&self, key: &TexKey) -> Result<Pixels> {
         match key {
             TexKey::Image(id) => {
                 let e = self.data.images.get(id).context("unknown image")?;
-                let img = image::open(self.dir.join(&e.file))?.to_rgba8();
-                Ok(Pixels {
-                    width: img.width(),
-                    height: img.height(),
-                    rgba: img.into_raw(),
-                })
+                decode_image(&self.dir.join(&e.file))
             }
             TexKey::FontSheet(font, sheet) => {
                 let f = self.data.fonts.get(font).context("unknown font")?;
@@ -216,6 +280,45 @@ impl Pack {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::schema::ImageEntry;
+
+    #[test]
+    fn prefetched_icons_arrive_decoded_and_missing_ones_still_decode_on_use() {
+        let dir = std::env::temp_dir().join(format!("bri-ui-prefetch-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut data = UiPack::default();
+        for (id, shade) in [("a", 10u8), ("b", 200)] {
+            image::RgbaImage::from_pixel(2, 3, image::Rgba([shade, 0, 0, 255]))
+                .save(dir.join(format!("{id}.png")))
+                .unwrap();
+            data.images.insert(
+                id.into(),
+                ImageEntry {
+                    file: format!("{id}.png"),
+                    width: 2,
+                    height: 3,
+                    sha256: String::new(),
+                    source: String::new(),
+                },
+            );
+        }
+        let pack = Pack::from_parts(data, dir.clone());
+        pack.prefetch(["a".to_string(), "nowhere".to_string()]);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while pack.prefetched.borrow().is_some() && std::time::Instant::now() < deadline {
+            pack.take_prefetched();
+            std::thread::yield_now();
+        }
+        assert!(pack.cache.borrow().contains_key(&TexKey::Image("a".into())));
+        let a = pack.pixels(&TexKey::Image("a".into())).unwrap();
+        assert_eq!((a.width, a.height, a.rgba[0]), (2, 3, 10));
+        // Not prefetched: decoded on first use, as before.
+        let b = pack.pixels(&TexKey::Image("b".into())).unwrap();
+        assert_eq!(b.rgba[0], 200);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     use crate::schema::Style;
 
     #[test]

@@ -240,7 +240,7 @@ impl WeaponContent {
             brick.item_spawn.resolve_item(&self.aliases)?;
             unresolved += usize::from(matches!(
                 brick.item_spawn.item,
-                Some(bri_world::ContentRef::Unresolved { .. })
+                Some(bri_world::ContentRef::Unresolved(_))
             ));
         }
         Ok(unresolved)
@@ -624,7 +624,12 @@ mod tests {
                     zoom: None,
                     crosshair: true,
                     follow_arm: false,
+                    hide_nodes: Vec::new(),
+                    both_arms: false,
                     paint_tint: false,
+                    rope: None,
+                    paint_picker: false,
+                    scripts: Default::default(),
                 },
             );
             items.insert(
@@ -762,10 +767,7 @@ mod tests {
         for (id, name) in [(1, " Hammer "), (2, "unknown addon")] {
             let mut brick =
                 bri_world::Brick::new(bri_world::ContentRef::Resolved("brick".into()), [0.; 3], 0);
-            brick.item_spawn.item = Some(bri_world::ContentRef::Unresolved {
-                namespace: "item_ui".into(),
-                name: name.into(),
-            });
+            brick.item_spawn.item = Some(bri_world::ContentRef::unresolved("item_ui", name));
             brick.source_records.push(bri_world::SourceRecord {
                 line: 1,
                 text: "+-ITEM untouched".into(),
@@ -782,7 +784,7 @@ mod tests {
         assert_eq!(world.bricks[&1].source_records, original);
         assert!(matches!(
             world.bricks[&2].item_spawn.item,
-            Some(bri_world::ContentRef::Unresolved { .. })
+            Some(bri_world::ContentRef::Unresolved(_))
         ));
         assert_eq!(content.resolve_world_items(&mut world).unwrap(), 1);
     }

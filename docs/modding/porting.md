@@ -77,6 +77,17 @@ names the port. If they do not match (a different version of the Add-On), it
 changes nothing, and the report names the port and says which part did not
 match.
 
+An applied port also settles its datablocks: a function it covers, or an image
+state script that calls one, becomes "ported by" that port, and a state script
+the Add-On leaves to the stock `WeaponImage` (`onFire`, `onCharge` and the
+others `WeaponsWorld::NATIVE_STATE_SCRIPTS` lists) "runs the engine's own".
+A datablock with nothing else outstanding is `converted`. For a copy listed by
+its hash, a script global it sets at load that a covered function reads (the
+Grapple Rope's `$Pref::Server::GrappleRopeAnywhere`) is noted as ported with
+that value. A field write that runs only when a required Add-On was turned off
+(`if (%error == $Error::AddOn_Disabled)`, hiding its item) is a note, not a
+gap: turning a package on turns what it needs on with it.
+
 ### A list entry
 
 ```json
@@ -109,7 +120,9 @@ Patterns do two jobs. They prove the copy is the shape the port was written
 for, and they read the numbers from that copy's script, so a port never
 hard-codes one copy's values. In a patch, a string that is exactly
 `"{projectiles}"` becomes the captured value (a number when it reads as one).
-`{name}` inside a longer string becomes its text.
+`{name}` inside a longer string becomes its text, and `{name:lower}` its
+text in lower case, for ids: Torque ignores the case of names
+(`"weapon_example:projectile/{jab:lower}"`).
 
 ### A port
 
@@ -166,6 +179,8 @@ add when you work in a checkout.
    | An image's `onFire` using v20's spread code (`%shellcount`, `%spread`, a `setVelocity` recoil) | the image's `shot` data (below) |
    | A fire-rate check on `%obj.lastFireTime` and `minShotTime` | nothing: the image's `min_shot_ticks` already does it, from the datablock |
    | Anything a field in [Making Add-Ons](README.md) section 5 or 6 expresses | a patch setting that field |
+   | An image's state script (`onCharge`, `onFire`, a custom `stateScript` such as `onFiretwo`) that plays an arm animation, calls `Parent::onFire`, spawns a second projectile or uses the item up | an entry in the image's `scripts` ([torque-equivalents.md](torque-equivalents.md#image-state-scripts-as-data)) |
+   | Something the game already does the same way | nothing: cover the function with patterns and say so in `notes` |
    | A `serverCmd` in an Add-On with no weapons, vehicles or bricks | a rule (section 3 of the guide): `behaviour.json` and a script under `files/`, and a `package.json` patch adding them to `provides` and their `capabilities` |
    | An image's `onFire` (or charge, release, jet, light, wheel or cancel) or a `serverCmd` that does host work in an Add-On with weapons, vehicles or bricks | host rules (below): `rules/` in the port, and a patch pointing the image at their commands |
    | Anything whose `runtime_hook` is null or that needs a missing capability | not portable yet: port the rest, mark the entry `partial`, and say what is missing in `notes` |
@@ -212,6 +227,11 @@ page as well.
 | Add-On | Port | Status | What it covers |
 |---|---|---|---|
 | `Weapon_Shotgun` (Sawn-off Shotgun) | `weapon_shotgun` | verified | `shotgunImage::onFire`: the pellets, their spread and the recoil, read from the copy's own script |
+| `Tool_GrappleRope` (Grapple Rope) | `tool_grapplerope` | verified | host rules: where the hook strikes with a clear line of sight from `lift` above the feet, the holder hangs on a rope (`tether`) as long as the distance then while the click is held, and flies off with their speed on letting go; the image draws the rope with the chain projectile's trail (`rope`). The engine's rope stands in for `GrappleRope`'s 10 ms velocity correction; the movement keys steer only by the player's air control, as in v20 |
+| `Weapon_Loz_Hookshot` (Hookshot) | `weapon_loz_hookshot` | verified | host rules: where the spearhead strikes, the shooter's speed is set straight at the spot every `every` ms, `fast` beyond `far` and `slow` within `near`, until within `stop`; a struck player or vehicle is followed; a seated shooter pulls their vehicle only toward a player or vehicle; `/degrapple` stops it. All numbers read from the copy |
+| `Weapon_Sniper_Rifle` (Kaje's Sniper Rifle) | `weapon_sniper_rifle` | verified | `SniperRifleImage::onFire`: the arm's kick then the shot (`scripts.onfire`), the animation's name read from the copy's script |
+| `Weapon_Sniper_Rifle_Updated` (Conan's Sniper Rifle Updated) | `weapon_sniper_rifle_updated` | verified | `onFire`'s `plant` then the shot (`scripts.onfire`); `onMount` hiding the holder's hands and hooks and raising both arms, and `onUnMount` putting them back (`hide_nodes`, `both_arms`) |
+| `Gamemode_TrenchDigging` (Trench Digging, Lilboarder) | `gamemode_trenchdigging` | verified | Every function of `TrenchDigging.cs` and the four images' `onPreFire`/`onFire`, as host rules (`rules/trench.rhai`): dig, put back, regroup, `/dumpdirt`, `/speeddig`, `/speedplace`, `/infinitedigging`; `server.cs` raising No Jet's `maxStepHeight` to 1.2 is `rules/archetypes/playernojet.json` |
 
 ## Host rules
 
@@ -226,6 +246,7 @@ ports/<port>/
   rules/
     behaviour.json
     <name>.rhai
+    archetypes/<name>.json   (optional) player archetypes, or adjustments to v20's
 ```
 
 | | The import | Its rules |
@@ -233,7 +254,7 @@ ports/<port>/
 | Folder | `addons/<ns>` | `addons/<ns>-rules` |
 | Id | `<ns>`, from the Add-On's folder name (`Tool_FillCan` is `tool_fillcan`) | `<ns>-rules` |
 | Side | `shared` | `server`: players never download it |
-| `package.json` | the importer's, with `"companions": ["<ns>-rules"]` | written for it: your `capabilities`, `behaviour` and `script` provides, and `dependencies` on the import at its version |
+| `package.json` | the importer's, with `"companions": ["<ns>-rules"]` | written for it: your `capabilities`, `behaviour`, `script` and `archetype` provides, and `dependencies` on the import at its version |
 
 Turning the import on in the Add-Ons screen turns its rules on after it, and
 turning it off turns them off. The importer checks the rules as the game
@@ -266,6 +287,14 @@ command on entering any state whose script is that name; `jet`, `light`,
 `wheel` and `cancel` are the other keys while it is in hand. The rules'
 `behaviour.json` declares each command by the name after the colon, with
 its `aim_reach` and `cooldown_ticks`.
+
+A rule hears its import's projectiles with `"on_projectile_hit": true` in
+`behaviour.json`, the native form of `<projectile>::onCollision`; the
+shooter is the caller, so a hit may `paint_fill` or `paint_vehicle` for
+them. The ported
+Fill Can (`ports/tool_fill_can`) is the worked example: its image keeps
+firing its own projectile, `paint_picker` keeps it out when a can is
+picked, and its rules fill or paint what the shot hit.
 
 ## The image `shot` field
 

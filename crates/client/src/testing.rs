@@ -304,7 +304,7 @@ pub mod items {
         )
         .context("an icon pose")?;
         let look = Look {
-            base: [1.0; 3],
+            base: Some([1.0; 3]),
             textured: true,
             skin: None,
         };

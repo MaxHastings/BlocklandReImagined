@@ -21,7 +21,17 @@
 //! `BRI_DYNAMIC=1` renders the Dynamic mode alone (`{view}-dynamic.png`,
 //! with its GPU times), for comparison with a run without it.
 //! `BRI_OFF=i,j,...` switches those recovered lights off, as a broken bulb
-//! or tube does (each "Light shape" line lists its lights).
+//! or tube does (each "Light shape" line lists its lights); `BRI_BREAK=1`
+//! breaks every bulb and tube by the client's rule. Each recovered light is
+//! listed with its owning light shapes, and each light shape with the map
+//! surfaces within 40 units of it, and within 8 units of it each triangle's
+//! lightmap, Dynamic leftover and light shares, and the facing to its
+//! lights. `BRI_DUMP_LEFT=1` saves each Dynamic sheet as `left-{image}.png`:
+//! the decomposed light beside what is left with every light off.
+//! `BRI_PIXELS=view:x,y;x,y` (pixels of the 1920x1080 `{view}-*.png`)
+//! prints the map surface under each pixel and, for its lightmap texel and
+//! the eight around it, how the bake split the light (each light's level,
+//! facing, rays, weight and share) and what is drawn whole and broken.
 //! `BRI_MAP=<map-substring>` draws the build on another map sharing its
 //! interior (a Kitchen save on KitchenDark). `BRI_BRICK_LIGHTS=1` adds the
 //! build's brick lights (the nearest 256 to each view, as the client).
@@ -403,6 +413,10 @@ fn main() -> Result<()> {
     println!("Drawing on {map_id}");
     let map = load_map_bundle(&paths.map_bundle, &map_id)?;
     let mut scene = map.scene;
+    // BRI_PIXELS explains texels from the scene as the bake sees it, before
+    // the leak cleanup and the Dynamic lightmaps change its images.
+    let pixels = std::env::var("BRI_PIXELS").ok();
+    let pristine = pixels.as_ref().map(|_| scene.clone());
     let cache = out.join("cache");
     std::fs::create_dir_all(&cache)?;
     let t = Instant::now();
@@ -421,6 +435,12 @@ fn main() -> Result<()> {
         lit
     });
     let unified_ms = ms(t.elapsed());
+    let light_shapes: Vec<(u32, Vec3)> = loaded
+        .breakables
+        .iter()
+        .filter(|b| ["lightBulbA", "fluorescentLight"].iter().any(|n| b.datablock.eq_ignore_ascii_case(n)))
+        .map(|b| (b.node, b.center))
+        .collect();
     if let Some(u) = &unified {
         println!("Map lighting: {} lights, report {:?}", u.lights.len(), u.report);
         // The lightmap leak cleanup, as the client applies it (BRI_LEAKS=0
@@ -461,6 +481,122 @@ fn main() -> Result<()> {
                 .map(|(i, d)| format!("light {i} at {d:.1}"))
                 .collect();
             println!("Light shape {} node {} at {:?}: {}", b.datablock, b.node, b.center, near.join(", "));
+        }
+        // Every recovered light and the light shapes it belongs to (the
+        // client's rule), then the map surfaces within 40 units of each
+        // light shape: what stays lit, or glows, when it breaks.
+        for (i, (l, owners)) in u.lights.iter().zip(bri_render::map_lighting::fixture_owners(&u.lights, &light_shapes)).enumerate() {
+            println!(
+                "Light {i}: at {:?} colour {:?} inner {} reach {} channel {:?}, owned by nodes {:?}",
+                l.position,
+                l.color,
+                l.inner,
+                l.outer,
+                l.channel,
+                owners.iter().map(|(n, _)| *n).collect::<Vec<_>>()
+            );
+        }
+        let owned: Vec<(usize, Vec<u32>)> = bri_render::map_lighting::fixture_owners(&u.lights, &light_shapes)
+            .into_iter()
+            .map(|o| o.into_iter().map(|(n, _)| n).collect())
+            .enumerate()
+            .collect();
+        for &(node, centre) in &light_shapes {
+            for (index, batch) in scene.batches.iter().enumerate() {
+                let range = batch.indices.start as usize..batch.indices.end as usize;
+                let near: Vec<f32> = scene.indices[range]
+                    .chunks_exact(3)
+                    .map(|t| t.iter().map(|&v| centre.distance(Vec3::from(scene.vertices[v as usize].position))).fold(f32::INFINITY, f32::min))
+                    .filter(|&d| d <= 40.0)
+                    .collect();
+                if near.is_empty() {
+                    continue;
+                }
+                let m = &scene.materials[batch.material];
+                let lightmap = &scene.images[m.images[8]];
+                let n = (lightmap.rgba.len() / 4).max(1) as f32;
+                let mean: Vec<u32> = (0..3)
+                    .map(|c| (lightmap.rgba.chunks_exact(4).map(|t| f32::from(t[c])).sum::<f32>() / n) as u32)
+                    .collect();
+                println!(
+                    "  near node {node}: batch {index} '{}' {:?} {:?} lightmap image {} ({}x{}, mean {mean:?}){}: {} triangles, nearest {:.1}",
+                    m.name,
+                    m.kind,
+                    m.alpha,
+                    m.images[8],
+                    lightmap.width,
+                    lightmap.height,
+                    if bri_render::scene::decomposed_lightmap(m.parameters) { " decomposed" } else { "" },
+                    near.len(),
+                    near.iter().copied().fold(f32::INFINITY, f32::min)
+                );
+                // Within 8 units (a lamp and its shade): per triangle, its
+                // lightmap texel, the Dynamic leftover and light shares
+                // there, and which of the shape's lights it faces.
+                let Some(sheet) = u.dynamic.iter().find(|d| d.parts_image as usize == m.images[9]) else { continue };
+                let range = batch.indices.start as usize..batch.indices.end as usize;
+                for t in scene.indices[range].chunks_exact(3) {
+                    let v: Vec<&bri_render::scene::SceneVertex> = t.iter().map(|&i| &scene.vertices[i as usize]).collect();
+                    let at = v.iter().map(|v| Vec3::from(v.position)).sum::<Vec3>() / 3.0;
+                    if v.iter().all(|v| centre.distance(Vec3::from(v.position)) > 8.0) {
+                        continue;
+                    }
+                    let normal = v.iter().map(|v| Vec3::from(v.normal)).sum::<Vec3>().normalize_or_zero();
+                    let uv = v.iter().fold([0.0f32; 2], |a, v| [a[0] + v.lightmap_uv[0] / 3.0, a[1] + v.lightmap_uv[1] / 3.0]);
+                    let texel = |w: u32, h: u32| {
+                        let x = ((uv[0] * w as f32) as u32).min(w - 1);
+                        let y = ((uv[1] * h as f32) as u32).min(h - 1);
+                        (y * w + x) as usize
+                    };
+                    let i = texel(lightmap.width, lightmap.height);
+                    let j = texel(sheet.width, sheet.height);
+                    let shares: Vec<String> = sheet
+                        .lights
+                        .iter()
+                        .enumerate()
+                        .map(|(c, &k)| (k, sheet.visibility[c / 4][j * 4 + c % 4]))
+                        .filter(|&(_, s)| s > 0)
+                        .map(|(k, s)| format!("{k}:{s}"))
+                        .collect();
+                    let facing: Vec<String> = owned
+                        .iter()
+                        .filter(|(_, o)| o.contains(&node))
+                        .map(|&(k, _)| {
+                            let l = &u.lights[k];
+                            let delta = Vec3::from(l.position) - at;
+                            format!("{k}:{}{:.1}", if normal.dot(delta) > 0.0 { "faces " } else { "away " }, delta.length())
+                        })
+                        .collect();
+                    println!(
+                        "    tri at {:.1?} normal {:.2?}: lightmap {:?} left {:?} shares [{}] owned lights [{}]",
+                        at.to_array(),
+                        normal.to_array(),
+                        &lightmap.rgba[i * 4..i * 4 + 3],
+                        &sheet.left[j * 4..j * 4 + 4],
+                        shares.join(" "),
+                        facing.join(" ")
+                    );
+                }
+            }
+        }
+        // BRI_DUMP_LEFT=1: each Dynamic sheet as `left-{image}.png`, its
+        // decomposed light beside what stays with every light off.
+        if std::env::var("BRI_DUMP_LEFT").is_ok_and(|v| v == "1") {
+            for d in &u.dynamic {
+                let parts = &scene.images[d.parts_image as usize];
+                let (w, h) = (d.width, d.height);
+                let mut pixels = vec![255u8; (w * 2 * h * 4) as usize];
+                for y in 0..h {
+                    for x in 0..w {
+                        let i = ((y * w + x) * 4) as usize;
+                        let row = (y * w * 2) as usize;
+                        let (a, b) = ((row + x as usize) * 4, (row + (w + x) as usize) * 4);
+                        pixels[a..a + 3].copy_from_slice(parts.rgba.get(i..i + 3).unwrap_or(&[0; 3]));
+                        pixels[b..b + 3].copy_from_slice(&d.left[i..i + 3]);
+                    }
+                }
+                image::save_buffer(out.join(format!("left-{}.png", d.parts_image)), &pixels, w * 2, h, image::ColorType::Rgba8)?;
+            }
         }
         // BRI_LIGHT_AT=x,y,z[;x,y,z...]: what each recovered light gives a
         // point (native Y-up) as the shader reads it: its falloff there and
@@ -531,6 +667,120 @@ fn main() -> Result<()> {
         views.push(("overview".into(), centre + Vec3::new(extent * 0.5, extent * 0.35, extent * 0.5), centre));
     }
 
+    // BRI_PIXELS=view:x,y;x,y (pixels of the 1920x1080 `{view}-*.png`):
+    // the map surface under each pixel, and for its lightmap texel and the
+    // eight around it how the bake split the light (what the rays see, each
+    // light's share) and what is left with the bulbs and tubes broken.
+    if let (Some(spec), Some(pristine), Some(u)) = (&pixels, &pristine, &unified) {
+        let (view, list) = spec.split_once(':').context("BRI_PIXELS=view:x,y;x,y")?;
+        let (_, eye, look) = views.iter().find(|(n, _, _)| n == view).context("BRI_PIXELS names no view")?;
+        let (width, height) = (1920.0f32, 1080.0f32);
+        let forward = (*look - *eye).normalize();
+        let right = forward.cross(Vec3::Y).normalize();
+        let up = right.cross(forward);
+        let broken: Vec<bool> = bri_render::map_lighting::fixture_owners(&u.lights, &light_shapes)
+            .iter()
+            .map(|o| !o.is_empty())
+            .collect();
+        let bake = Bake::new(pristine).context("no lightmapped interior")?;
+        for pixel in list.split(';') {
+            let v: Vec<f32> = pixel.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+            ensure!(v.len() == 2, "BRI_PIXELS: x,y pairs");
+            // As the renderer's camera: 90 degrees across.
+            let x = (v[0] + 0.5) / width * 2.0 - 1.0;
+            let y = 1.0 - (v[1] + 0.5) / height * 2.0;
+            let ray = (forward + right * x + up * y * (height / width)).normalize();
+            let mut best: Option<(f32, usize, [u32; 3], [f32; 3])> = None;
+            for (b, batch) in pristine.batches.iter().enumerate() {
+                for t in pristine.indices[batch.indices.start as usize..batch.indices.end as usize].chunks_exact(3) {
+                    let p = [0, 1, 2].map(|k| Vec3::from(pristine.vertices[t[k] as usize].position));
+                    let (e1, e2) = (p[1] - p[0], p[2] - p[0]);
+                    let h = ray.cross(e2);
+                    let det = e1.dot(h);
+                    if det.abs() < 1e-9 {
+                        continue;
+                    }
+                    let f = 1.0 / det;
+                    let s = *eye - p[0];
+                    let bu = f * s.dot(h);
+                    let q = s.cross(e1);
+                    let bv = f * ray.dot(q);
+                    let d = f * e2.dot(q);
+                    if bu < 0.0 || bv < 0.0 || bu + bv > 1.0 || d <= 0.05 || best.is_some_and(|b| b.0 <= d) {
+                        continue;
+                    }
+                    best = Some((d, b, [t[0], t[1], t[2]], [1.0 - bu - bv, bu, bv]));
+                }
+            }
+            let Some((d, b, tri, w)) = best else {
+                println!("Pixel {pixel}: no surface");
+                continue;
+            };
+            let m = &pristine.materials[pristine.batches[b].material];
+            let at = *eye + ray * d;
+            let uv = tri.iter().zip(w).fold([0.0f32; 2], |a, (&i, w)| {
+                let t = pristine.vertices[i as usize].lightmap_uv;
+                [a[0] + t[0] * w, a[1] + t[1] * w]
+            });
+            println!("Pixel {pixel}: batch {b} '{}' at {:.2?}, lightmap uv {:.4?}", m.name, at.to_array(), uv);
+            // The live sun's part: the shader adds sun colour x facing x the
+            // texel's sun share, where its shadow map lets the sun through.
+            let normal = tri
+                .iter()
+                .zip(w)
+                .map(|(&i, w)| Vec3::from(pristine.vertices[i as usize].normal) * w)
+                .sum::<Vec3>()
+                .normalize_or_zero();
+            let sun = Vec3::from(pristine.sun_direction);
+            println!(
+                "  normal {:.2?}; sun: facing {:.2}, reaches past the interiors by a ray {}",
+                normal.to_array(),
+                normal.dot(-sun.normalize_or_zero()).max(0.0),
+                bake.sun_reaches(at, normal, sun)
+            );
+            if !bri_render::scene::decomposed_lightmap(m.parameters) {
+                println!("  not a decomposed lightmap");
+                continue;
+            }
+            let parts = &pristine.images[m.images[9]];
+            let (pw, ph) = (parts.width as i64, parts.height as i64);
+            let (cx, cy) = ((uv[0] * pw as f32) as i64, (uv[1] * ph as f32) as i64);
+            let texels: Vec<(u32, u32)> = (-1..=1)
+                .flat_map(|dy| (-1..=1).map(move |dx| (cx + dx, cy + dy)))
+                .filter(|&(x, y)| x >= 0 && y >= 0 && x < pw && y < ph)
+                .map(|(x, y)| (m.images[9] as u32, (y * pw + x) as u32))
+                .collect();
+            for line in bake.explain(&u.lights, &texels) {
+                println!("  {line}");
+            }
+            // What the Dynamic lightmaps draw there, bulbs whole and broken.
+            if let Some(sheet) = u.dynamic.iter().find(|d| d.parts_image as usize == m.images[9]) {
+                for &(_, i) in &texels {
+                    let i = i as usize;
+                    let left = Vec3::new(sheet.left[i * 4] as f32, sheet.left[i * 4 + 1] as f32, sheet.left[i * 4 + 2] as f32);
+                    let (mut whole, mut broke) = (left, left);
+                    for (c, &k) in sheet.lights.iter().enumerate() {
+                        let l = &u.lights[k as usize];
+                        let distance = Vec3::from(l.position).distance(at);
+                        let falloff = ((l.outer - distance) / (l.outer - l.inner).max(1e-3)).clamp(0.0, 1.0);
+                        let given = Vec3::from(l.color) * falloff * 255.0 * f32::from(sheet.visibility[c / 4][i * 4 + c % 4]) / 255.0;
+                        whole += given;
+                        if !broken[k as usize] {
+                            broke += given;
+                        }
+                    }
+                    println!(
+                        "  texel {}:{i} drawn: leftover {:.0?}, with the lights {:.0?}, with the bulbs broken {:.0?} (before the live sun and ambient)",
+                        m.images[9],
+                        left.to_array(),
+                        whole.min(Vec3::splat(255.0)).to_array(),
+                        broke.min(Vec3::splat(255.0)).to_array()
+                    );
+                }
+            }
+        }
+    }
+
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
@@ -593,7 +843,9 @@ fn main() -> Result<()> {
         light_cubes: dynamic,
         ..ShadowSettings::BEST
     };
-    if let Some(u) = unified.as_ref().filter(|_| dynamic) {
+    // As the client: the per-texel lightmaps in Dynamic, and in the Unified
+    // modes on a map with bulbs or tubes.
+    if let Some(u) = unified.as_ref().filter(|_| dynamic || !light_shapes.is_empty()) {
         let equipped = bri_render::map_lighting::DynamicSheet::equip(&u.dynamic, &mut scene);
         println!("Dynamic lightmaps: {} sheets, equipped {equipped}", u.dynamic.len());
     }
@@ -683,10 +935,17 @@ fn main() -> Result<()> {
                 // BRI_OFF=i,j,...: those recovered lights switched off, as a
                 // broken bulb or tube does (the "Light shape" lines name
                 // each shape's lights).
-                if let Ok(text) = std::env::var("BRI_OFF") {
-                    let off: Vec<usize> = text.split(',').filter_map(|x| x.trim().parse().ok()).collect();
-                    let tints: Vec<Vec3> =
-                        (0..u.lights.len()).map(|i| if off.contains(&i) { Vec3::ZERO } else { Vec3::ONE }).collect();
+                // BRI_BREAK=1: every bulb and tube broken, by the client's
+                // rule (their lights off).
+                let off: Vec<usize> = std::env::var("BRI_OFF")
+                    .map(|text| text.split(',').filter_map(|x| x.trim().parse().ok()).collect())
+                    .unwrap_or_default();
+                let broken = std::env::var("BRI_BREAK").is_ok_and(|v| v == "1");
+                if broken || !off.is_empty() {
+                    let owners = bri_render::map_lighting::fixture_owners(&u.lights, &light_shapes);
+                    let tints: Vec<Vec3> = (0..u.lights.len())
+                        .map(|i| if off.contains(&i) || (broken && !owners[i].is_empty()) { Vec3::ZERO } else { Vec3::ONE })
+                        .collect();
                     renderer.set_map_light_tints(&queue, &tints);
                 }
             }
@@ -698,7 +957,7 @@ fn main() -> Result<()> {
         let mut views_out = serde_json::Map::new();
         for (name, eye, look) in &views {
             for t in &mut terrain {
-                t.update(&queue, *eye, 4000.0)?;
+                t.update(&device, &queue, &[*eye], 4000.0)?;
             }
             let terrain_draws: Vec<_> =
                 terrain.iter().flat_map(GpuTerrain::draws).chain(models.iter().copied()).collect();

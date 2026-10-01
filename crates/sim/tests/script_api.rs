@@ -8,7 +8,7 @@ use bri_package_runtime::Catalog;
 use bri_sim::{
     definitions::Definitions,
     presentation::CueKind,
-    session::{Command, Notice, PackageArg, PackageCommand, Session},
+    session::{BrickHand, Command, ControlObject, Notice, PackageArg, PackageCommand, Session},
     simulation::Simulation,
 };
 use bri_world::{OwnerId, World};
@@ -72,6 +72,10 @@ fn cmd_env_read(p) {
 fn cmd_env_unset(p) { set_environment(#{ sun_azimuth: (), day_cycle: false }); }
 fn cmd_env_bad(p) { set_environment(#{ sun_elevation: 120.0 }); }
 fn cmd_env_reset(p) { reset_environment(); }
+fn cmd_orbit(p, target, distance) { orbit_camera(p, target, distance); }
+fn cmd_orbit_zoom(p, target, near, far, distance) { orbit_camera(p, target, near, far, distance); }
+fn cmd_orbit_back(p) { orbit_camera(p, ()); }
+fn cmd_put_away(p) { unmount_image(p); }
 "#;
 
 fn behaviour() -> Value {
@@ -99,6 +103,10 @@ fn behaviour() -> Value {
             command("env_unset", &[]),
             command("env_bad", &[]),
             command("env_reset", &[]),
+            command("orbit", &["int", "float"]),
+            command("orbit_zoom", &["int", "float", "float", "float"]),
+            command("orbit_back", &[]),
+            command("put_away", &[]),
         ],
         "state": { "global": {
             "hit": { "default": "", "visible": "everyone" },
@@ -504,4 +512,120 @@ fn scripts_change_the_environment_for_everyone() {
     assert_eq!(g.s.environment(), before);
     g.run(a, "env_reset", vec![]);
     assert!(g.s.environment().is_empty());
+}
+
+/// `orbit_camera`: an Add-On hands a player an orbit camera around another
+/// (`setOrbitMode`, `setControlObject(camera)`) at its own distance. The
+/// player cannot click their way out of it, the Add-On ends it, and so does
+/// the target leaving. An admin's camera is not taken over.
+#[test]
+fn an_add_on_orbits_a_players_camera_around_another() {
+    let mut g = Game::new();
+    let a = g.join(Vec3::new(0.0, 0.05, 0.0));
+    let b = g.join(Vec3::new(3.0, 0.05, 0.0));
+    let orbit = |target: OwnerId, distance: f64| {
+        vec![PackageArg::Int(target as i64), PackageArg::Float(distance)]
+    };
+    g.run(a, "orbit", orbit(b, 6.0));
+    assert_eq!(
+        g.s.vitals()[&a].control,
+        ControlObject::Orbit {
+            target: b,
+            min: 6,
+            max: 6,
+            distance: 6
+        }
+    );
+    // With a zoom range (`setOrbitMode(%b, 0, 5, 10, 5, 0)`).
+    let zoom = |near: f64, far: f64, distance: f64| {
+        vec![
+            PackageArg::Int(b as i64),
+            PackageArg::Float(near),
+            PackageArg::Float(far),
+            PackageArg::Float(distance),
+        ]
+    };
+    g.run(a, "orbit_zoom", zoom(5.0, 10.0, 5.0));
+    assert_eq!(
+        g.s.vitals()[&a].control,
+        ControlObject::Orbit {
+            target: b,
+            min: 5,
+            max: 10,
+            distance: 5
+        }
+    );
+    // Starting outside its range: refused, the orbit stays as it was.
+    assert!(
+        g.send(
+            a,
+            Command::Package(PackageCommand {
+                package: "probe".into(),
+                command: "orbit_zoom".into(),
+                args: zoom(5.0, 10.0, 12.0),
+            }),
+        )
+        .is_err()
+    );
+    assert!(matches!(
+        g.s.vitals()[&a].control,
+        ControlObject::Orbit { max: 10, .. }
+    ));
+    assert!(
+        g.send(a, Command::ControlPlayer).is_err(),
+        "the Add-On's to end"
+    );
+    g.run(a, "orbit_back", vec![]);
+    assert_eq!(g.s.vitals()[&a].control, ControlObject::Player);
+    // Out of range or around oneself: refused, nothing changes.
+    for (target, distance) in [(b, 40.0), (a, 6.0)] {
+        let _ = g.send(
+            a,
+            Command::Package(PackageCommand {
+                package: "probe".into(),
+                command: "orbit".into(),
+                args: orbit(target, distance),
+            }),
+        );
+    }
+    assert_eq!(g.s.vitals()[&a].control, ControlObject::Player);
+    // The target leaving gives the body back.
+    g.run(a, "orbit", orbit(b, 6.0));
+    g.s.disconnect(b).unwrap();
+    assert_eq!(g.s.vitals()[&a].control, ControlObject::Player);
+    // An admin's free camera stays theirs.
+    let c = g.join(Vec3::new(-3.0, 0.05, 0.0));
+    g.send(
+        a,
+        Command::Admin(bri_admin::Request::new(
+            bri_admin::Action::DropCameraAtPlayer,
+        )),
+    )
+    .unwrap();
+    assert_eq!(g.s.vitals()[&a].control, ControlObject::Camera);
+    g.run(a, "orbit", orbit(c, 6.0));
+    assert_eq!(g.s.vitals()[&a].control, ControlObject::Camera);
+}
+
+/// `unmount_image` empties the hand: bricks in hand are put away too, and
+/// the client is told, since it owns the brick choice.
+#[test]
+fn unmount_image_puts_away_bricks_in_hand() {
+    let mut g = Game::new();
+    let a = g.join(Vec3::new(0.0, 0.05, 0.0));
+    let hand = BrickHand {
+        stocked: true,
+        equipped: true,
+        ghost: false,
+    };
+    g.send(a, Command::BrickHand(hand)).unwrap();
+    g.s.take_private_notices();
+    g.run(a, "put_away", vec![]);
+    let notices = g.s.take_private_notices();
+    assert!(
+        notices
+            .iter()
+            .any(|(o, n)| *o == a && matches!(n, Notice::PutAway)),
+        "{notices:?}"
+    );
 }

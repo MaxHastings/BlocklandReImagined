@@ -319,14 +319,14 @@ mod tests {
         let mut brick =
             bri_world::Brick::new(ContentRef::Resolved("plate".into()), [0.5, 1.1, 0.25], 1);
         brick.visible = false;
-        brick.emitter = Some(bri_world::Emitter {
+        brick.emitter = Some(Box::new(bri_world::Emitter {
             asset: Some(ContentRef::Resolved(fx.emitter.clone())),
             direction: 0,
-        });
-        brick.light = Some(bri_world::Light {
+        }));
+        brick.light = Some(Box::new(bri_world::Light {
             asset: ContentRef::Resolved(fx.light.clone()),
             enabled: true,
-        });
+        }));
         let mut replica = PublicWorld {
             name: "test".into(),
             map_id: "native".into(),

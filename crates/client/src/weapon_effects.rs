@@ -49,6 +49,22 @@ struct Attached {
     /// Where the projectile was drawn last.
     position: Vec3,
 }
+/// A held image's rope being drawn: which end its sweep finished at.
+struct RopeSweep {
+    resource: String,
+    handle: EffectHandle,
+    at_anchor: bool,
+}
+
+/// A player holding an image while they hang on a rope: the rope runs from
+/// the image's muzzle (`from`) to its anchor (`to`).
+#[derive(Clone, Debug)]
+pub struct HeldRope {
+    pub owner: u64,
+    pub image: String,
+    pub from: Vec3,
+    pub to: Vec3,
+}
 struct Timed {
     cue: Cue,
     handle: EffectHandle,
@@ -67,6 +83,7 @@ pub struct WeaponEffects {
     weapons: Arc<bri_weapons::Pack>,
     bindings: BTreeMap<String, Binding>,
     trails: BTreeMap<(u64, bool), Attached>,
+    ropes: BTreeMap<u64, RopeSweep>,
     timed: Vec<Timed>,
     pending: VecDeque<HostRequest>,
     cursor: u64,
@@ -182,6 +199,7 @@ impl WeaponEffects {
             weapons,
             bindings,
             trails: BTreeMap::new(),
+            ropes: BTreeMap::new(),
             timed: Vec::new(),
             pending: VecDeque::new(),
             cursor: 0,
@@ -264,6 +282,7 @@ impl WeaponEffects {
     pub fn reset(&mut self, checkpoint_cursor: u64) {
         self.world.teardown();
         self.trails.clear();
+        self.ropes.clear();
         self.timed.clear();
         self.pending.clear();
         self.cursor = checkpoint_cursor;
@@ -378,6 +397,96 @@ impl WeaponEffects {
                     self.diagnostics.capacity_rejections =
                         self.diagnostics.capacity_rejections.saturating_add(1);
                 }
+            }
+        }
+        Ok(())
+    }
+
+    /// Draw the ropes of players whose held image has one (`Image::rope`)
+    /// for a frame `dt` seconds long. v20 Add-Ons drew a rope by firing a
+    /// projectile from the muzzle to the rope's end every few milliseconds,
+    /// its trail tracing the rope; here that trail's emitter sweeps the
+    /// whole rope each frame, from the end it reached last, with its
+    /// emission clock sped up so it lays as many particles along the rope
+    /// as the projectile flying it at the rope's `speed` would. Nothing is
+    /// sent for it.
+    pub fn sync_ropes(&mut self, ropes: &[HeldRope], dt: f32) -> Result<()> {
+        let mut desired = BTreeMap::new();
+        for r in ropes {
+            let Some(rope) = self
+                .weapons
+                .images
+                .get(&r.image)
+                .and_then(|i| i.rope.as_ref())
+            else {
+                continue;
+            };
+            if !(r.from.is_finite() && r.to.is_finite()) {
+                continue;
+            }
+            let trail = self
+                .weapons
+                .projectiles
+                .get(&rope.projectile)
+                .map(|p| p.trail.to_ascii_lowercase())
+                .unwrap_or_default();
+            let Some(binding) = self
+                .bindings
+                .get(&trail)
+                .filter(|b| matches!(b.kind, Kind::Emitter))
+            else {
+                self.missing(format!("Missing rope trail of {}", rope.projectile));
+                continue;
+            };
+            desired.insert(r.owner, (binding.id.clone(), r, rope.speed));
+        }
+        let world = &mut self.world;
+        self.ropes.retain(|owner, sweep| {
+            let keep = desired
+                .get(owner)
+                .is_some_and(|(id, _, _)| *id == sweep.resource)
+                && world.is_active(sweep.handle);
+            if !keep {
+                world.stop(sweep.handle, StopMode::Drain);
+            }
+            keep
+        });
+        for (owner, (resource, r, speed)) in desired {
+            let length = r.from.distance(r.to);
+            let options = SourceOptions {
+                time_scale: (length / (speed * dt.max(1e-3))).clamp(1e-3, 1000.),
+                ..SourceOptions::default()
+            };
+            let place = |position: Vec3| SourceTransform {
+                position,
+                rotation: Quat::IDENTITY,
+                velocity: Vec3::ZERO,
+            };
+            match self.ropes.get_mut(&owner) {
+                Some(sweep) => {
+                    sweep.at_anchor = !sweep.at_anchor;
+                    let end = if sweep.at_anchor { r.to } else { r.from };
+                    self.world
+                        .update_source(sweep.handle, place(end))?;
+                    self.world.update_options(sweep.handle, options)?;
+                }
+                None => match self.world.start_emitter(&resource, place(r.from), options) {
+                    Ok(handle) => {
+                        self.world.update_source(handle, place(r.to))?;
+                        self.ropes.insert(
+                            owner,
+                            RopeSweep {
+                                resource,
+                                handle,
+                                at_anchor: true,
+                            },
+                        );
+                    }
+                    Err(_) => {
+                        self.diagnostics.capacity_rejections =
+                            self.diagnostics.capacity_rejections.saturating_add(1);
+                    }
+                },
             }
         }
         Ok(())

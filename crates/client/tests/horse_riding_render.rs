@@ -269,10 +269,10 @@ fn riding_a_horse_holds_the_rider_still_on_its_animated_back(f: &ContentRoot) ->
         ],
         view.owner,
     );
-    brick.vehicle = Some(bri_world::VehicleSpawn {
+    brick.vehicle = Some(Box::new(bri_world::VehicleSpawn {
         vehicle: bri_world::ContentRef::Resolved(bri_vehicles::testing::HORSE.into()),
         recolor: false,
-    });
+    }));
     world.bricks.insert(1, brick);
     world.next_brick_id = 2;
     let build = bri_world::build::SavedBuild::new(world);

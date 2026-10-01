@@ -119,6 +119,7 @@ fn a_driven_vehicle_answers_its_own_mouse_at_once_and_agrees_with_the_host() {
         scale: 1.0,
         energy: 100.0,
         tick: Default::default(),
+        tether: None,
     };
     let mut client = Predictor::new(mirror, rider, Default::default()).unwrap();
     client
@@ -127,7 +128,6 @@ fn a_driven_vehicle_answers_its_own_mouse_at_once_and_agrees_with_the_host() {
             DriveSpawn {
                 spawn: spawn(),
                 seat: 0,
-                occupant: occupant(),
                 prefs: (false, false),
             },
             motion(&v, &w),
@@ -199,6 +199,7 @@ fn rider_at(feet: [f32; 3]) -> PlayerState {
         scale: 1.0,
         energy: 100.0,
         tick: Default::default(),
+        tether: None,
     }
 }
 fn predict(definition: &str, motion: Motion) -> anyhow::Result<Predictor> {
@@ -216,7 +217,6 @@ fn predict(definition: &str, motion: Motion) -> anyhow::Result<Predictor> {
                 ..spawn()
             },
             seat: 0,
-            occupant: occupant(),
             prefs: (false, false),
         },
         motion,
@@ -374,7 +374,6 @@ fn an_unknown_vehicle_is_refused_cleanly() {
                 ..spawn()
             },
             seat: 0,
-            occupant: occupant(),
             prefs: (false, false),
         },
         at([0., 1., 0.], Quat::IDENTITY),

@@ -1066,9 +1066,11 @@ impl EventHost<'_> {
             }
             BrickOp::Emitter(emitter) => self.edit(brick, |b| {
                 let direction = b.emitter.as_ref().map_or(0, |e| e.direction);
-                b.emitter = emitter.clone().map(|asset| bri_world::Emitter {
-                    asset: Some(bri_world::ContentRef::Resolved(asset)),
-                    direction,
+                b.emitter = emitter.clone().map(|asset| {
+                    Box::new(bri_world::Emitter {
+                        asset: Some(bri_world::ContentRef::Resolved(asset)),
+                        direction,
+                    })
                 });
             })?,
             BrickOp::EmitterDirection(direction) => {
@@ -1080,9 +1082,11 @@ impl EventHost<'_> {
                 })?
             }
             BrickOp::Light(light) => self.edit(brick, |b| {
-                b.light = light.clone().map(|asset| bri_world::Light {
-                    asset: bri_world::ContentRef::Resolved(asset),
-                    enabled: true,
+                b.light = light.clone().map(|asset| {
+                    Box::new(bri_world::Light {
+                        asset: bri_world::ContentRef::Resolved(asset),
+                        enabled: true,
+                    })
                 })
             })?,
             BrickOp::Item(item) => {
@@ -1107,9 +1111,11 @@ impl EventHost<'_> {
             })?,
             BrickOp::Vehicle(vehicle) => self.edit(brick, |b| {
                 let recolor = b.vehicle.as_ref().is_some_and(|v| v.recolor);
-                b.vehicle = vehicle.clone().map(|id| bri_world::VehicleSpawn {
-                    vehicle: bri_world::ContentRef::Resolved(id),
-                    recolor,
+                b.vehicle = vehicle.clone().map(|id| {
+                    Box::new(bri_world::VehicleSpawn {
+                        vehicle: bri_world::ContentRef::Resolved(id),
+                        recolor,
+                    })
                 })
             })?,
             BrickOp::RespawnVehicle => self.session.respawn_vehicle_brick(brick)?,
@@ -1578,11 +1584,11 @@ fn print_digit(print: Option<&bri_world::ContentRef>) -> u8 {
         Some(bri_world::ContentRef::Resolved(print)) => {
             print.strip_prefix(DIGIT_PRINTS).map(str::to_owned)
         }
-        Some(bri_world::ContentRef::Unresolved { namespace, name }) if namespace == "print" => {
-            let alias = bri_content::brick_materials::legacy_print_alias(name);
+        Some(bri_world::ContentRef::Unresolved(u)) if u.namespace == "print" => {
+            let alias = bri_content::brick_materials::legacy_print_alias(&u.name);
             alias
                 .as_deref()
-                .unwrap_or(name)
+                .unwrap_or(&u.name)
                 .strip_prefix("Letters/")
                 .map(str::to_owned)
         }
@@ -1602,10 +1608,7 @@ mod tests {
     #[test]
     fn counters_read_their_digit_from_any_print_name() {
         use bri_world::ContentRef;
-        let print = |name: &str| ContentRef::Unresolved {
-            namespace: "print".into(),
-            name: name.into(),
-        };
+        let print = |name: &str| ContentRef::unresolved("print", name);
         assert_eq!(print_digit(Some(&print("Letters/4"))), 4);
         assert_eq!(
             print_digit(Some(&print("base/data/prints/Letters/7.png"))),

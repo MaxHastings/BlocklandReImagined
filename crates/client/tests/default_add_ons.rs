@@ -260,10 +260,10 @@ fn load_plane_spawn(app: &mut App, state: &Path) -> Result<()> {
         ],
         view.owner,
     );
-    brick.vehicle = Some(bri_world::VehicleSpawn {
+    brick.vehicle = Some(Box::new(bri_world::VehicleSpawn {
         vehicle: bri_world::ContentRef::Resolved(PLANE.into()),
         recolor: false,
-    });
+    }));
     world.bricks.insert(1, brick);
     world.next_brick_id = 2;
     let folder = state
@@ -353,7 +353,7 @@ fn a_fresh_checkout_gives_the_duplicator_and_spawns_the_stunt_plane() -> Result<
     ensure!(out.status.success(), "bri-client --check failed:\n{text}");
     ensure!(
         text.contains(
-            "Installed the default Add-Ons duplicator, duplicator-tool, vehicle_stunt_plane, brick_mirror, ragdoll, brick_portal, gravity-gun-tool, gravity-gun, gravity-gun-fx, steel-ball-kit, steel-ball, steel-ball-fx, advanced-duplicator-tool, advanced-duplicator, blockhead_bot, trench-kit, trench, trench-hud, trench-mode."
+            "Installed the default Add-Ons duplicator, duplicator-tool, vehicle_stunt_plane, brick_mirror, ragdoll, brick_portal, gravity-gun-tool, gravity-gun, gravity-gun-fx, steel-ball-kit, steel-ball, steel-ball-fx, advanced-duplicator-tool, advanced-duplicator, blockhead_bot."
         ) && text.contains("Startup validation passed"),
         "{text}"
     );

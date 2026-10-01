@@ -34,7 +34,7 @@ fn main() -> Result<()> {
 
 fn run(args: &[PathBuf], state: &std::path::Path) -> Result<()> {
     let content = ClientContent::load(&args[0])?;
-    let old = OldSaves::new(args[1].clone(), state.join("converted-saves"), vec![]);
+    let old = OldSaves::new(args[1].clone(), state.join("converted-saves"));
     old.set_converter(Converter::new(&content)?);
     old.start();
     while old.busy() {

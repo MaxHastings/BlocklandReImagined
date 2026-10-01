@@ -120,10 +120,10 @@ fn main() -> Result<()> {
         } else {
             VEHICLES[i - BOTS]
         };
-        brick.vehicle = Some(VehicleSpawn {
+        brick.vehicle = Some(Box::new(VehicleSpawn {
             vehicle: ContentRef::Resolved(kind.into()),
             recolor: false,
-        });
+        }));
         spawners.bricks.insert(i as u64 + 1, brick);
     }
     spawners.next_brick_id = (BOTS + VEHICLES.len()) as u64 + 1;

@@ -260,7 +260,7 @@ async fn use_on(
         ..Default::default()
     };
     let sequence = screens[who].view().poses[&owner].acknowledged_input + 1;
-    screens[who].worker.movement(sequence, vec![look], None)?;
+    screens[who].worker.movement(sequence, vec![look], None, None)?;
     until(screens, "the aim", Duration::from_secs(5), |s| {
         s.view().owner != owner || s.view().poses[&owner].acknowledged_input >= sequence
     })
@@ -340,7 +340,6 @@ async fn kills_on_every_screen(f: &HostContent) -> Result<()> {
             client,
             host: Some(server),
             mods: Default::default(),
-            package_save: None,
         },
     )
     .await?;
@@ -352,7 +351,6 @@ async fn kills_on_every_screen(f: &HostContent) -> Result<()> {
             client,
             host: None,
             mods: Default::default(),
-            package_save: None,
         },
     )
     .await?;

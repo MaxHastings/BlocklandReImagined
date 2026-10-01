@@ -1,0 +1,1 @@
+CC0-1.0. Written for Blockland ReImagined's importer tests; no original game content.

@@ -42,7 +42,27 @@ pub struct Options {
     /// Recovered core scripts (`allGameScripts.cs`, `DamageTypes.cs`) for
     /// base datablocks and damage types.
     pub core: Vec<PathBuf>,
+    /// The installed game's content root: base datablocks an Add-On
+    /// inherits from or names (a brick's parent, a sound) are read from its
+    /// brick catalog, weapons, sounds and effects.
+    pub installed: Option<PathBuf>,
     pub version: String,
+}
+
+impl Default for Options {
+    /// Version 1.0.0, no reference install, core scripts or installed
+    /// game: set `input` and `out` and what else the import needs, with
+    /// `..Default::default()` for the rest.
+    fn default() -> Self {
+        Self {
+            input: PathBuf::new(),
+            out: PathBuf::new(),
+            reference: None,
+            core: vec![],
+            installed: None,
+            version: "1.0.0".into(),
+        }
+    }
 }
 
 /// The package id (and content namespace) for an Add-On folder name.
@@ -297,10 +317,13 @@ pub fn import(opts: &Options) -> Result<Report> {
 pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
     check_output(opts)?;
     let src = source::read(&opts.input)?;
-    let reference = match &opts.reference {
+    let mut reference = match &opts.reference {
         Some(root) => Reference::load(root, &opts.core)?,
-        None => Reference::default(),
+        None => Reference::core_only(&opts.core)?,
     };
+    if let Some(content) = &opts.installed {
+        reference.add_installed(content)?;
+    }
     let ns = namespace_for(&src.name)?;
     std::fs::create_dir_all(&opts.out)?;
     let mut cx = Ctx {
@@ -332,10 +355,9 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
     behaviours(&mut cx, &scripts);
     dependencies(&mut cx, &scripts);
     let mut bodies = ports::Bodies::new();
+    // Torque keeps the last definition of a function (names ignore case).
     for f in scripts.iter().flat_map(|s| &s.functions) {
-        bodies
-            .entry(f.qualified().to_ascii_lowercase())
-            .or_insert_with(|| f.body.clone());
+        bodies.insert(f.qualified().to_ascii_lowercase(), f.body.clone());
     }
     finish(cx, opts, ports, &bodies)
 }
@@ -487,7 +509,15 @@ fn inventory(cx: &mut Ctx, scripts: &[Script]) {
             }
         }
     }
-    let metadata = ["description.txt", "rtbinfo.txt", "namecheck.txt"];
+    // What an Add-On says about itself, for people: read, not imported.
+    let metadata = [
+        "description.txt",
+        "rtbinfo.txt",
+        "namecheck.txt",
+        "license.txt",
+        "licence.txt",
+        "readme.txt",
+    ];
     for f in cx.src.files.values() {
         let member = cx.src.member(f).to_ascii_lowercase();
         let kind = kind_of(&f.path);
@@ -623,9 +653,25 @@ fn top_level(cx: &mut Ctx, scripts: &[Script]) {
             .get(&s.path)
             .map(|f| String::from_utf8_lossy(&f.bytes).into_owned())
             .unwrap_or_default();
+        let only_if_off = only_when_a_required_add_on_is_off(&text);
         for (i, line) in text.lines().enumerate() {
             if let Some(c) = write.captures(line) {
                 let object = c[1].to_owned();
+                if let Some((_, addon)) = only_if_off.iter().find(|(lines, _)| lines.contains(&i)) {
+                    // v20 force-loads a required Add-On the player had
+                    // off, and scripts hide what it adds; here turning this
+                    // package on turns its dependencies on with it (the
+                    // base game's are always on), so this never runs.
+                    cx.ambiguous(
+                        format!("{}.{} = {}", object, &c[2], c[3].trim()),
+                        Some(Location::new(&s.path, i + 1)),
+                        format!("runs only when the required {addon} was turned off"),
+                        Some(format!(
+                            "never runs: turning this package on turns {addon} on with it"
+                        )),
+                    );
+                    continue;
+                }
                 let detail = if cx.is_owned(&object) {
                     "changes one of this Add-On's datablocks at load".to_string()
                 } else if let Some(o) = cx.reference.datablocks.get(&object.to_ascii_lowercase()) {
@@ -645,6 +691,61 @@ fn top_level(cx: &mut Ctx, scripts: &[Script]) {
             }
         }
     }
+}
+
+/// The lines (0-based) of each `if (%e == $Error::AddOn_Disabled)` body
+/// whose `%e` came from `ForceRequiredAddOn("X")`, with that `X`: what a
+/// script does only when v20 force-loaded an Add-On the player had off.
+fn only_when_a_required_add_on_is_off(text: &str) -> Vec<(std::ops::Range<usize>, String)> {
+    let required = regex::Regex::new(r#"(?i)%(\w+)\s*=\s*forcerequiredaddon\s*\(\s*"([^"]+)""#)
+        .expect("static regex");
+    let test = regex::Regex::new(
+        r"(?i)\bif\s*\(\s*(?:%(\w+)\s*==\s*\$error::addon_disabled|\$error::addon_disabled\s*==\s*%(\w+))\s*\)",
+    )
+    .expect("static regex");
+    let addons: BTreeMap<String, String> = required
+        .captures_iter(text)
+        .map(|c| (c[1].to_ascii_lowercase(), c[2].to_owned()))
+        .collect();
+    let line_of = |at: usize| text[..at].matches('\n').count();
+    let mut out = Vec::new();
+    for c in test.captures_iter(text) {
+        let var = c
+            .get(1)
+            .or(c.get(2))
+            .map(|m| m.as_str().to_ascii_lowercase());
+        let Some(addon) = var.and_then(|v| addons.get(&v)) else {
+            continue;
+        };
+        let rest = &text[c.get(0).map_or(0, |m| m.end())..];
+        let body_start = text.len() - rest.len();
+        let trimmed = rest.trim_start();
+        let open = body_start + (rest.len() - trimmed.len());
+        // A braced body runs to its matching brace; a bare one to its `;`.
+        let end = if trimmed.starts_with('{') {
+            let mut depth = 0usize;
+            trimmed
+                .char_indices()
+                .find_map(|(i, ch)| {
+                    match ch {
+                        '{' => depth += 1,
+                        '}' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                return Some(open + i);
+                            }
+                        }
+                        _ => {}
+                    }
+                    None
+                })
+                .unwrap_or(text.len())
+        } else {
+            trimmed.find(';').map_or(text.len(), |i| open + i)
+        };
+        out.push((line_of(open)..line_of(end) + 1, addon.clone()));
+    }
+    out
 }
 
 fn behaviour_pure(callee: &str) -> bool {
@@ -806,10 +907,10 @@ fn references(cx: &mut Ctx) {
                     at,
                     format!(
                         "file {resolved} is not in this Add-On{}",
-                        if cx.reference.root.is_some() {
-                            " or the reference install"
-                        } else {
-                            "; no reference install given"
+                        match (cx.reference.root.is_some(), cx.reference.installed) {
+                            (true, _) => " or the reference install",
+                            (false, true) => " or the installed game",
+                            (false, false) => "; no reference install or installed game given",
                         }
                     ),
                     case_only.then(|| "matches a member by case only".into()),
@@ -852,11 +953,12 @@ fn references(cx: &mut Ctx) {
                     at.clone(),
                     format!(
                         "`{name}` is not declared by this Add-On{}; Torque leaves the field empty",
-                        match (cx.reference.root.is_some(), cx.reference.has_core) {
-                            (false, _) => "; no reference install given",
+                        match (cx.reference.root.is_some(), cx.reference.knows_base()) {
+                            (false, false) => "; no reference install or installed game given",
+                            (false, true) => " or the base game",
                             (true, false) =>
-                                " or the reference install (base datablocks need --core)",
-                            (true, true) => ", the reference install or the core scripts",
+                                " or the reference install (base datablocks need --installed or --core)",
+                            (true, true) => ", the reference install or the base game",
                         }
                     ),
                     None,
@@ -1401,7 +1503,8 @@ fn presentation(cx: &mut Ctx, pack: &bri_weapons::Pack, weapons_sha256: &str) ->
         let folder = f.path.rsplit_once('/').map_or("", |(d, _)| d).to_owned();
         let mut bindings = vec![];
         for m in &shape.materials {
-            match texture(cx, &mut textures, &format!("{folder}/{}", m.name)) {
+            let own = texture(cx, &mut textures, &format!("{folder}/{}", m.name));
+            match own.or_else(|| cx.reference.base_texture(&m.name)) {
                 Some(t) => bindings.push(t),
                 None => {
                     cx.report.diagnostics.push(format!(
@@ -2440,6 +2543,45 @@ fn behaviours(cx: &mut Ctx, scripts: &[Script]) {
             }
         }
     }
+    // A state script the Add-On does not define runs the engine's own, as
+    // v20's stock `WeaponImage` functions did (`onFire` fires the image's
+    // projectile).
+    let native = bri_weapons::runtime::WeaponsWorld::NATIVE_STATE_SCRIPTS;
+    for e in &mut cx.report.datablocks {
+        let image = e.name.to_ascii_lowercase();
+        settle_notes(e, |note| {
+            let (_, script) = state_script(note)?;
+            let script = script.to_ascii_lowercase();
+            (native.contains(&script.as_str())
+                && !own_functions.contains(&format!("{image}::{script}")))
+            .then(|| note.replacen(" calls script ", " runs the engine's own ", 1))
+        });
+    }
+}
+
+/// `state Fire calls script onFire` → (`Fire`, `onFire`).
+fn state_script(note: &str) -> Option<(&str, &str)> {
+    note.strip_prefix("state ")?.split_once(" calls script ")
+}
+
+/// Rewrites each gap note `settle` resolves into what resolves it, and
+/// marks the datablock converted once no gap note is left.
+fn settle_notes(e: &mut report::DatablockEntry, settle: impl Fn(&str) -> Option<String>) {
+    for note in &mut e.notes {
+        if let Some(settled) = settle(note) {
+            *note = settled;
+        }
+    }
+    let mut seen = BTreeSet::new();
+    e.notes.retain(|n| seen.insert(n.clone()));
+    let gap = |n: &String| n.ends_with(" needs native behaviour") || state_script(n).is_some();
+    if e.status == "converted_with_gaps"
+        && e.notes.iter().all(|n| {
+            !gap(n) && (n.contains(" ported by ") || n.contains(" runs the engine's own "))
+        })
+    {
+        e.status = "converted".into();
+    }
 }
 
 /// The package an Add-On this one requires by name
@@ -2600,6 +2742,48 @@ fn finish(
                     port: port.port.clone(),
                     status: port.status.clone(),
                     applied: port.applied,
+                });
+            }
+        }
+        // A global the copy sets at load and a ported function reads: the
+        // port was written against this exact copy, value included.
+        if port.applied && port.copy == "listed" {
+            for a in &mut cx.report.ambiguous {
+                let Some(global) = a
+                    .what
+                    .strip_prefix("global ")
+                    .and_then(|g| g.split_once(" = "))
+                    .map(|(name, _)| name.to_ascii_lowercase())
+                else {
+                    continue;
+                };
+                if a.resolution.is_none()
+                    && let Some(f) = port.covers.iter().find(|f| {
+                        bodies
+                            .get(&f.to_ascii_lowercase())
+                            .is_some_and(|b| b.to_ascii_lowercase().contains(&global))
+                    })
+                {
+                    a.resolution = Some(format!(
+                        "read by {f}, which {} ports for this copy with the value set here",
+                        port.port
+                    ));
+                }
+            }
+        }
+        if port.applied {
+            let covered = |f: &str| port.covers.iter().any(|c| c.eq_ignore_ascii_case(f));
+            for e in &mut cx.report.datablocks {
+                let name = e.name.clone();
+                settle_notes(e, |note| {
+                    let function = match state_script(note) {
+                        Some((_, script)) => format!("{name}::{script}"),
+                        None => note
+                            .strip_prefix("script function ")?
+                            .strip_suffix(" needs native behaviour")?
+                            .to_owned(),
+                    };
+                    covered(&function).then(|| format!("{function} ported by {}", port.port))
                 });
             }
         }

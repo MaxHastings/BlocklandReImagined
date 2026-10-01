@@ -129,9 +129,7 @@ fn imported_weapon_package_is_hosted_beside(base: &Base) {
     import(&Options {
         input: fixture,
         out: scratch.0.join("blaster"),
-        reference: None,
-        core: vec![],
-        version: "1.0.0".into(),
+        ..Default::default()
     })
     .unwrap();
     let dir = format!(
@@ -210,8 +208,7 @@ fn community_shotgun_and_car_work_in_a_hosted_game() {
             input: Path::new(&archive).join(format!("{addon}.zip")),
             out: scratch.0.join(dir),
             reference: Some(reference.clone().into()),
-            core: vec![],
-            version: "1.0.0".into(),
+            ..Default::default()
         })
         .unwrap();
     }
@@ -233,10 +230,10 @@ fn community_shotgun_and_car_work_in_a_hosted_game() {
         ],
         0,
     );
-    brick.vehicle = Some(bri_world::VehicleSpawn {
+    brick.vehicle = Some(Box::new(bri_world::VehicleSpawn {
         vehicle: bri_world::ContentRef::Resolved(CAR.into()),
         recolor: true,
-    });
+    }));
     world.bricks.insert(1, brick);
     world.next_brick_id = 2;
     let mut session = bri_net::dedicated::load_packages(&root, &set, world)
