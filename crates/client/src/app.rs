@@ -9881,7 +9881,11 @@ impl PlatformApp for App {
         // The host's environment (Admin Menu, Add-Ons) over the map's own;
         // an untouched map skips it and draws exactly as authored.
         let live = (!view.environment.is_empty()).then(|| {
-            bri_content::atmosphere::resolve(&authored_environment(scene), &view.environment, view.tick)
+            bri_content::atmosphere::resolve(
+                &authored_environment(scene),
+                &view.environment,
+                self.motion.server_tick().unwrap_or(view.tick as f64),
+            )
         });
         if let Some(live) = &live {
             camera.apply_atmosphere(live);
