@@ -437,52 +437,10 @@ impl AvatarAssets {
             _ => self,
         }
     }
+    /// The appearance the player's avatar prefs make: what the avatar
+    /// screen previews, what the client sends and what the host keeps.
     pub fn from_prefs(&self, prefs: &AvatarPrefs) -> Result<Appearance> {
-        let mut appearance = self.package.defaults.clone();
-        // A part this pack does not have (removed, renamed, or not a name at
-        // all) keeps the pack default rather than failing the whole avatar.
-        let package = &self.package;
-        let known = |slot: &str, name: &str| {
-            let lists = if slot == "accent" {
-                package.accents_allowed.values().collect::<Vec<_>>()
-            } else {
-                package.parts.get(slot).into_iter().collect()
-            };
-            name == "none"
-                || lists
-                    .iter()
-                    .any(|l| l.iter().any(|n| n.eq_ignore_ascii_case(name)))
-        };
-        for slot in appearance.parts.keys().cloned().collect::<Vec<_>>() {
-            if let Some(value) = prefs.get(&slot) {
-                let name = value.trim().to_ascii_lowercase();
-                if known(&slot, &name) {
-                    appearance.parts.insert(slot, name);
-                }
-            }
-        }
-        for slot in appearance.colors.keys().cloned().collect::<Vec<_>>() {
-            if let Some(value) = prefs.get(&format!("{slot}Color")) {
-                let values: Vec<f32> = value
-                    .split_whitespace()
-                    .map(str::parse)
-                    .collect::<std::result::Result<_, _>>()?;
-                appearance.colors.insert(
-                    slot,
-                    values
-                        .try_into()
-                        .map_err(|_| anyhow::anyhow!("Invalid avatar color size"))?,
-                );
-            }
-        }
-        if let Some(value) = prefs.get("FaceName") {
-            appearance.face = value.into();
-        }
-        if let Some(value) = prefs.get("DecalName") {
-            appearance.decal = value.into();
-        }
-        self.package.resolve(&appearance)?;
-        Ok(appearance)
+        appearance_from_prefs(&self.package, prefs)
     }
     pub fn mesh(&self, appearance: Appearance) -> Result<AvatarMesh> {
         let outfit = self.package.resolve(&appearance)?;
@@ -1581,9 +1539,112 @@ impl Preview {
     }
 }
 
+/// The appearance `prefs` make from `package`. It ends with the host's own
+/// repair (`Package::repaired`), so the avatar screen never previews a look
+/// (an accent the hat cannot wear, a colour out of range) the host would
+/// change for everyone else.
+pub fn appearance_from_prefs(package: &Package, prefs: &AvatarPrefs) -> Result<Appearance> {
+    let mut appearance = package.defaults.clone();
+    // A part this pack does not have (removed, renamed, or not a name at
+    // all) keeps the pack default rather than failing the whole avatar.
+    let known = |slot: &str, name: &str| {
+        let lists = if slot == "accent" {
+            package.accents_allowed.values().collect::<Vec<_>>()
+        } else {
+            package.parts.get(slot).into_iter().collect()
+        };
+        name == "none"
+            || lists
+                .iter()
+                .any(|l| l.iter().any(|n| n.eq_ignore_ascii_case(name)))
+    };
+    for slot in appearance.parts.keys().cloned().collect::<Vec<_>>() {
+        if let Some(value) = prefs.get(&slot) {
+            let name = value.trim().to_ascii_lowercase();
+            if known(&slot, &name) {
+                appearance.parts.insert(slot, name);
+            }
+        }
+    }
+    for slot in appearance.colors.keys().cloned().collect::<Vec<_>>() {
+        if let Some(value) = prefs.get(&format!("{slot}Color")) {
+            let values: Vec<f32> = value
+                .split_whitespace()
+                .map(str::parse)
+                .collect::<std::result::Result<_, _>>()?;
+            appearance.colors.insert(
+                slot,
+                values
+                    .try_into()
+                    .map_err(|_| anyhow::anyhow!("Invalid avatar color size"))?,
+            );
+        }
+    }
+    if let Some(value) = prefs.get("FaceName") {
+        appearance.face = value.into();
+    }
+    if let Some(value) = prefs.get("DecalName") {
+        appearance.decal = value.into();
+    }
+    let (appearance, _) = package.repaired(&appearance);
+    package.resolve(&appearance)?;
+    Ok(appearance)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A pack with two hats, each with its own accent.
+    fn hats_pack() -> Package {
+        serde_json::from_value(serde_json::json!({
+            "schema_version": 1, "id": "test", "rig": "rig.json", "rig_sha256": "",
+            "parts": {"hat": ["none", "helmet", "cap"], "accent": ["none", "visor", "plume"],
+                "pack": ["none"], "secondpack": ["none"], "chest": ["chest"], "hip": ["pants"],
+                "rarm": ["rarm"], "larm": ["larm"], "rhand": ["rhand"], "lhand": ["lhand"],
+                "rleg": ["rshoe"], "lleg": ["lshoe"]},
+            "accents_allowed": {"helmet": ["visor"], "cap": ["plume"]},
+            "faces": ["smiley"], "decals": ["AAA-None"], "surfaces": {}, "textures": {
+                "smiley": {"file": "smiley.png", "sha256": "", "source": "", "width": 1, "height": 1},
+                "AAA-None": {"file": "none.png", "sha256": "", "source": "", "width": 1, "height": 1}},
+            "defaults": {"parts": {"hat": 0, "accent": 0, "pack": 0, "secondpack": 0,
+                "chest": 0, "hip": 0, "rarm": 0, "larm": 0, "rhand": 0, "lhand": 0,
+                "rleg": 0, "lleg": 0},
+                "colors": {"head": [1.0, 0.88, 0.61, 1.0],
+                "torso": [0.9, 0.9, 0.9, 1.0], "hat": [1.0, 1.0, 0.0, 1.0],
+                "accent": [0.0, 0.2, 0.64, 0.7], "pack": [0.0, 0.4, 0.8, 1.0],
+                "secondpack": [0.0, 1.0, 0.0, 1.0], "hip": [0.0, 0.0, 1.0, 1.0],
+                "rarm": [0.9, 0.0, 0.0, 1.0], "larm": [0.9, 0.0, 0.0, 1.0],
+                "rhand": [1.0, 0.88, 0.61, 1.0], "lhand": [1.0, 0.88, 0.61, 1.0],
+                "rleg": [0.0, 0.0, 1.0, 1.0], "lleg": [0.0, 0.0, 1.0, 1.0]},
+                "face": "smiley", "decal": "AAA-None"}
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn the_avatar_screen_shows_the_look_the_host_keeps() {
+        let package = hats_pack();
+        let mut prefs = AvatarPrefs::default();
+        // The cap's plume on the helmet, and a colour past full brightness.
+        prefs.set("hat", "helmet");
+        prefs.set("accent", "plume");
+        prefs.set("hatColor", "1.5 0 0 1");
+        let shown = appearance_from_prefs(&package, &prefs).unwrap();
+        let (kept, changed) = package.repaired(&shown);
+        assert_eq!(
+            shown, kept,
+            "the host would change the preview: {changed:?}"
+        );
+        assert_ne!(shown.parts.get("accent").map(String::as_str), Some("plume"));
+        assert_ne!(shown.colors.get("hat"), Some(&[1.5, 0.0, 0.0, 1.0]));
+        // A fitting accent and colour are kept as chosen.
+        prefs.set("accent", "visor");
+        prefs.set("hatColor", "0.5 0 0 1");
+        let shown = appearance_from_prefs(&package, &prefs).unwrap();
+        assert_eq!(shown.parts.get("accent").map(String::as_str), Some("visor"));
+        assert_eq!(shown.colors.get("hat"), Some(&[0.5, 0.0, 0.0, 1.0]));
+    }
 
     thread_local! {
         /// Off, placed nodes' accessories keep their animated pose (as
