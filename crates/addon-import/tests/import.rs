@@ -260,8 +260,8 @@ fn real_steam_knife_and_grenade_ports() {
             out: out.clone(),
             reference: Some(reference.clone().into()),
             core: vec![],
-            installed: None,
             version: "1.0.0".into(),
+            ..Default::default()
         })
         .unwrap();
         let port = &report.ports[0];
@@ -894,6 +894,73 @@ datablock ShapeBaseImageData(kitScopeImage) { shapeFile = "./gun.dts"; stateName
     std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
 }
 
+/// Kaje's Sniper Rifle and Conan's Sniper Rifle Updated, from the copies on
+/// Maxwell's PC (read only): the listed ports apply and each fires one round
+/// a click, straight. `BRI_SNIPER_RIFLES` names other folders to look in.
+#[test]
+fn real_sniper_rifles() {
+    let folders = std::env::var("BRI_SNIPER_RIFLES").unwrap_or(
+        "S:/SteamLibrary/steamapps/common/Blockland/Add-Ons;\
+         C:/Users/Maxwell/Desktop/Games/.research/sniper/glass-343"
+            .into(),
+    );
+    let ports = [
+        (
+            "Weapon_Sniper_Rifle",
+            "weapon_sniper_rifle",
+            &include_bytes!("../ports/weapon_sniper_rifle/checks.json")[..],
+        ),
+        (
+            "Weapon_Sniper_Rifle_Updated",
+            "weapon_sniper_rifle_updated",
+            &include_bytes!("../ports/weapon_sniper_rifle_updated/checks.json")[..],
+        ),
+    ];
+    let mut found = 0;
+    for (addon, port, checks) in ports {
+        let copy = folders.split(';').flat_map(|f| {
+            let f = Path::new(f);
+            [f.join(format!("{addon}.zip")), f.join(addon)]
+        });
+        let Some(input) = copy.into_iter().find(|p| p.exists()) else {
+            eprintln!("skipped {addon}: no copy on this machine");
+            continue;
+        };
+        found += 1;
+        let out = fresh(addon);
+        let reference = Path::new(REFERENCE).is_dir().then(|| REFERENCE.into());
+        let report = import(&Options {
+            input,
+            out: out.clone(),
+            reference,
+            core: vec![],
+            installed: None,
+            version: "1.0.0".into(),
+        })
+        .unwrap();
+        let applied = &report.ports[0];
+        eprintln!(
+            "{addon} sha256 {} port {:?} values {:?}",
+            report.source.sha256, applied.reason, applied.values
+        );
+        assert_eq!(applied.port, port);
+        assert!(applied.applied, "{:?}", applied.reason);
+        // Its hash is listed (ports.json `sha256`), so it is a known copy.
+        assert_eq!(applied.copy, "listed");
+        assert_eq!(
+            report.summary.needs_behaviour,
+            report.summary.needs_behaviour_ported
+        );
+        let checks: bri_addon_import::porting::Checks = serde_json::from_slice(checks).unwrap();
+        for (line, ok) in bri_addon_import::porting::run_checks(&out, &checks).unwrap() {
+            eprintln!("{line}");
+            assert!(ok, "{line}");
+        }
+        std::fs::remove_dir_all(out.parent().unwrap()).unwrap();
+    }
+    eprintln!("{found} of 2 sniper rifles found");
+}
+
 /// An Add-On that requires another community Add-On by name (Tier 2 needs
 /// Tier 1) depends on the package importing that one makes; one requiring
 /// a vanilla Add-On depends on the base game's package.
@@ -920,9 +987,7 @@ fn a_required_community_add_on_becomes_a_dependency_on_its_import() {
         input: addon,
         out: root.join("package"),
         reference: Some(install),
-        core: vec![],
-        installed: None,
-        version: "1.0.0".into(),
+        ..Default::default()
     })
     .unwrap();
     let deps: Vec<_> = report

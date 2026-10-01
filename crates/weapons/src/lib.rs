@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 pub mod debris;
 mod merge;
 pub mod rotation;
+pub mod testing;
 pub use merge::{resource_root, sound_root};
 pub mod runtime;
 pub use runtime::*;
@@ -174,22 +175,152 @@ fn zero3(v: &[f32; 3]) -> bool {
 }
 /// Aiming with an image: the view zooms to `fov` while the zoom key is
 /// held (and, with `on_jet`, while jet, the right mouse button, is held).
-/// Presentation only: each player's own game zooms its own view.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+/// Presentation only: each player's own game zooms its own view, draws
+/// its own scope and moves its own aim, so none of it costs bandwidth.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Zoom {
     /// Horizontal field of view while aiming, 5 to 85 degrees.
     pub fov: f32,
-    /// The right mouse button aims too (aim down sights). Give the holder
-    /// an archetype that cannot jet, or they jet as well.
+    /// The right mouse button aims too (aim down sights). The holder jets
+    /// as well unless `jets` is false or their body cannot jet.
     #[serde(default)]
     pub on_jet: bool,
+    /// With `on_jet`, whether pressing jet also jets. `false` makes the
+    /// right mouse button the scope's alone while the weapon is in hand;
+    /// the holder jets again when they put it away.
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub jets: bool,
     /// The game's crosshair shows while aiming (a scope draws its own).
     #[serde(default = "yes", skip_serializing_if = "is_true")]
     pub crosshair: bool,
     /// Aiming switches a third-person view to first person until released.
     #[serde(default)]
     pub first_person: bool,
+    /// Further magnifications the mouse wheel steps through while aiming,
+    /// each a narrower field of view than the one before (up to
+    /// [`Zoom::MAX_LEVELS`], 5 to 85 degrees): rolled forward zooms in,
+    /// back zooms out, and the wheel does not change tools meanwhile. The
+    /// step taken is kept while the weapon stays in hand.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub levels: Vec<f32>,
+    /// Mouse look speed while aiming, as a multiple of the player's own.
+    /// Look already slows as the view narrows (v20 scales it by the field
+    /// of view), so 1 keeps that feel; 0.1 to 4.
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub sensitivity: f32,
+    /// A scope's picture, drawn over the whole screen while aiming in
+    /// first person: a PNG named without `.png`, relative to the folder
+    /// `weapons.json` is in (as an item's `icon`), transparent where the
+    /// lens shows the world. It is fitted to the screen's height and
+    /// centred, the rest of the screen is black, and the weapon itself is
+    /// not drawn while it shows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overlay: Option<String>,
+    /// The aim drifting while aiming: a steady figure of eight, as a
+    /// marksman's breathing moves a scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sway: Option<Sway>,
+}
+impl Zoom {
+    pub const MAX_LEVELS: usize = 8;
+    /// The field of view at wheel step `level` (0 is `fov`), clamped to the
+    /// steps there are.
+    pub fn level_fov(&self, level: usize) -> f32 {
+        match level.min(self.levels.len()) {
+            0 => self.fov,
+            n => self.levels[n - 1],
+        }
+    }
+    pub fn validate(&self) -> std::result::Result<(), String> {
+        let fov = |f: f32| f.is_finite() && (5.0..=85.0).contains(&f);
+        if !fov(self.fov) {
+            return Err("fov 5 to 85 degrees".into());
+        }
+        if self.levels.len() > Self::MAX_LEVELS
+            || !self.levels.iter().all(|f| fov(*f))
+            || !std::iter::once(self.fov)
+                .chain(self.levels.iter().copied())
+                .zip(self.levels.iter().copied())
+                .all(|(wider, narrower)| narrower < wider)
+        {
+            return Err(format!(
+                "levels: up to {} fields of view, 5 to 85 degrees, each narrower than the last",
+                Self::MAX_LEVELS
+            ));
+        }
+        if !(self.sensitivity.is_finite() && (0.1..=4.0).contains(&self.sensitivity)) {
+            return Err("sensitivity 0.1 to 4".into());
+        }
+        if let Some(o) = &self.overlay
+            && (o.is_empty()
+                || o.len() > 128
+                || o.starts_with('/')
+                || o.contains(':')
+                || o.contains('\\')
+                || o.split('/').any(|part| part == ".." || part.is_empty()))
+        {
+            return Err("overlay: a PNG path inside the Add-On, without .png".into());
+        }
+        if let Some(s) = &self.sway {
+            s.validate()?;
+        }
+        Ok(())
+    }
+}
+/// How far and how fast an aim sways ([`Zoom::sway`]). The drift is a
+/// Lissajous figure of eight, `degrees` across and half as high, once
+/// round every `seconds`: the same path on every machine, eased in as
+/// the player aims and out as they stop.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Sway {
+    /// How far the aim drifts each side, 0 to 5 degrees.
+    pub degrees: f32,
+    /// Seconds for one round of the figure of eight, 0.5 to 30.
+    pub seconds: f32,
+    /// The drift while crouched, as a multiple of standing's: 0 steadies
+    /// the aim completely, 1 not at all.
+    #[serde(default = "Sway::crouched_default")]
+    pub crouched: f32,
+    /// The drift while walking or in the air, as a multiple of standing
+    /// still's, 1 to 4.
+    #[serde(default = "Sway::moving_default")]
+    pub moving: f32,
+}
+impl Sway {
+    fn crouched_default() -> f32 {
+        0.35
+    }
+    fn moving_default() -> f32 {
+        2.0
+    }
+    fn validate(&self) -> std::result::Result<(), String> {
+        let within = |v: f32, lo: f32, hi: f32| v.is_finite() && (lo..=hi).contains(&v);
+        if within(self.degrees, 0.0, 5.0)
+            && within(self.seconds, 0.5, 30.0)
+            && within(self.crouched, 0.0, 1.0)
+            && within(self.moving, 1.0, 4.0)
+        {
+            Ok(())
+        } else {
+            Err("sway: degrees 0 to 5, seconds 0.5 to 30, crouched 0 to 1, moving 1 to 4".into())
+        }
+    }
+    /// The drift `(yaw, pitch)` in radians at `phase` rounds into the
+    /// figure of eight, before any easing: `degrees` side to side, half as
+    /// far up and down at twice the rate.
+    pub fn offset(&self, phase: f64) -> (f32, f32) {
+        let a = (self.degrees as f64).to_radians();
+        let t = phase * std::f64::consts::TAU;
+        ((a * t.sin()) as f32, (0.5 * a * (2.0 * t).sin()) as f32)
+    }
+}
+fn one() -> f32 {
+    1.0
+}
+fn is_one(v: &f32) -> bool {
+    *v == 1.0
 }
 /// A sound an Add-On's weapons pack ships: state `sound` fields and rules
 /// name it by its key, like a v20 `AudioProfile`.
@@ -264,6 +395,17 @@ pub struct Image {
     /// plant, swing), as v20's own tools do.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub follow_arm: bool,
+    /// The holder's body nodes hidden while this image is held, as a v20
+    /// Add-On's `onMount` did with `%obj.hideNode("lhand")` and its
+    /// `onUnMount` undid: a model that draws its own hands hides the
+    /// Blockhead's (`lhand`, `rhand`, `lhook`, `rhook`). Up to 16 names.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hide_nodes: Vec<String>,
+    /// Held up with both arms (`armReadyBoth`), as `onMount`'s
+    /// `%obj.playThread(2, armReadyBoth)` did, not with the mount hand's
+    /// arm alone.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub both_arms: bool,
     /// Held, the image takes its holder's spray colour (the palette colour
     /// they last picked) as a colour spray can does: a tool that paints
     /// with that colour shows it.
@@ -964,11 +1106,17 @@ impl Pack {
                 "Invalid image eye_rotation {id}"
             );
             ensure!(
-                image
-                    .zoom
-                    .is_none_or(|z| z.fov.is_finite() && (5.0..=85.0).contains(&z.fov)),
-                "Invalid image zoom {id}: fov 5 to 85 degrees"
+                image.hide_nodes.len() <= 16
+                    && image.hide_nodes.iter().all(|n| {
+                        (1..=32).contains(&n.len())
+                            && n.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                    }),
+                "Invalid image hide_nodes {id}: up to 16 body node names"
             );
+            if let Some(zoom) = &image.zoom {
+                zoom.validate()
+                    .map_err(|e| anyhow::anyhow!("Invalid image zoom {id}: {e}"))?;
+            }
             for state in &image.states {
                 ensure!(
                     state.ticks <= 36000

@@ -57,6 +57,7 @@ pub mod tutorial_targets;
 pub mod updates;
 pub mod vehicle_camera;
 pub mod vehicles;
+pub mod views;
 pub mod weapon_debris;
 pub mod weapon_effects;
 pub mod weather;

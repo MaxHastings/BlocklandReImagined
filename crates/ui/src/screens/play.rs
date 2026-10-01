@@ -634,12 +634,45 @@ impl Screen for Play {
         self.on_update(core);
     }
     fn draw(&self, pack: &Pack, dl: &mut DrawList, core: &Core) {
+        let lens = scope_overlay(dl, core);
         self.view.draw(pack, dl);
-        if core.shape_names {
+        // Through a scope, names show only in its lens.
+        if core.shape_names && lens.is_none_or(|lens| dl.push_clip(lens)) {
             name_tags(pack, dl, core);
+            if lens.is_some() {
+                dl.pop_clip();
+            }
         }
         hud(core).draw(pack, dl);
         package_panels(pack, dl, core);
         captions(pack, dl, core);
     }
+}
+
+/// A scope's picture over the whole screen while aiming (`Zoom::overlay`),
+/// beneath the HUD: fitted to the screen's height and centred, with the
+/// screen either side of it black. Returns the picture's rectangle.
+fn scope_overlay(dl: &mut DrawList, core: &Core) -> Option<Rect> {
+    let (key, aspect) = core.scope_overlay?;
+    let (w, h) = core.logical;
+    if w <= 0 || h <= 0 {
+        return None;
+    }
+    let side = h as f32 * aspect;
+    let x = (w as f32 - side) / 2.0;
+    let lens = Rect::new(x.floor() as i32, 0, side.ceil() as i32, h);
+    let black = [0, 0, 0, 255];
+    dl.fill(Rect::new(0, 0, lens.x.max(0), h), black);
+    dl.fill(
+        Rect::new(lens.right(), 0, (w - lens.right()).max(0), h),
+        black,
+    );
+    dl.image(
+        crate::pack::TexKey::External(key),
+        [0.0, 0.0, 1.0, 1.0],
+        [x, 0.0, side, h as f32],
+        [255; 4],
+        crate::draw::Filter::Linear,
+    );
+    Some(lens)
 }

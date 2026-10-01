@@ -624,6 +624,8 @@ mod tests {
                     zoom: None,
                     crosshair: true,
                     follow_arm: false,
+                    hide_nodes: Vec::new(),
+                    both_arms: false,
                     paint_tint: false,
                     rope: None,
                     scripts: Default::default(),

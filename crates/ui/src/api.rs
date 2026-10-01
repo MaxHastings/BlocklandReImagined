@@ -1276,6 +1276,13 @@ pub enum UiUpdate {
     /// and nothing else sees it. The UI tracks the trigger itself, so a
     /// press and a roll in the same frame already reach the tool.
     ToolWheel(bool),
+    /// Aimed through a scope with steps (`Zoom::levels`): the mouse wheel
+    /// zooms instead of scrolling the inventory, with no trigger held.
+    AimWheel(bool),
+    /// A scope's picture over the whole screen while aiming
+    /// (`Zoom::overlay`): the host's texture key and its width over its
+    /// height; `None` takes it away.
+    ScopeOverlay(Option<(u64, f32)>),
     /// A net graph sample (`NetGraph::updateStats`); dropped while hidden.
     NetSample(crate::models::perf::NetSample),
     /// A presented frame's timing; dropped while the overlay is hidden.

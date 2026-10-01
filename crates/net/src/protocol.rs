@@ -60,14 +60,12 @@ use std::collections::{BTreeMap, BTreeSet};
 /// images that take it (`commands.cancel`).
 /// 69: `Checkpoint::environment` and `Delta::environment`: the live
 /// environment (Admin Menu Environment, `set_environment`).
-/// 70: `Vitals::look_limits`: a rule's `set_look_limits` bounds how far a
-/// body's arms and head follow its look.
-/// 71: `Drop::paint`: a dropped paint-tinted tool keeps the colour it was
-/// held in.
-/// 72: `PlayerState::tether`: a rope holding a player to a point (moving
-/// with what it is tied to, winched by keys, pulling straight), which the
-/// owner's prediction runs as the host does (`tether`).
-pub const VERSION: u32 = 72;
+/// Later changes are one file each in `crates/net/protocol-changes/` (see its
+/// README); each one adds one to the version.
+pub const VERSION: u32 = FROZEN_VERSION + PROTOCOL_CHANGES.len() as u32;
+/// The last hand-numbered version, before per-change files.
+const FROZEN_VERSION: u32 = 69;
+include!(concat!(env!("OUT_DIR"), "/protocol_changes.rs"));
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).

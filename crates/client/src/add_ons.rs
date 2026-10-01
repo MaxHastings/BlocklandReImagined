@@ -312,19 +312,21 @@ pub fn start_import(
     let dir = library.import_dir(name);
     let out = root.join(&dir);
     let input = legacy.path.clone();
+    // Base bricks, sounds and the rest an Add-On builds on come from the
+    // game's own converted content.
     let installed = root.to_path_buf();
     let importer = importer.to_path_buf();
     let name = name.to_string();
     let (send, receive) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let result = std::process::Command::new(&importer)
+        let mut command = std::process::Command::new(&importer);
+        command
             .arg(&input)
             .arg(&out)
-            // Base bricks, sounds and the rest an Add-On builds on come
-            // from the game's own content.
             .arg("--installed")
             .arg(&installed)
-            .arg("--json")
+            .arg("--json");
+        let result = command
             .stdin(std::process::Stdio::null())
             .output()
             .with_context(|| format!("Running {}", importer.display()))

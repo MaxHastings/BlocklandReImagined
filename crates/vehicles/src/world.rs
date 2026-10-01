@@ -2426,13 +2426,20 @@ fn exit_clear(queries: &QueryPipeline, start: Vec3, offset: Vec3, body: [f32; 2]
 mod scale_tests {
     use super::*;
     #[test]
-    #[ignore = "requires generated native vehicle content; CPU only"]
+    fn wheel_geometry_scales_with_collision_and_mass_stays_authored() {
+        wheel_geometry_scales(crate::testing::pack(), crate::testing::CAR);
+    }
+    #[test]
+    #[ignore = "requires generated v20 content"]
     fn native_wheel_geometry_scales_with_collision_and_mass_stays_authored() {
         let pack = Pack::load(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../content/vehicles-pack-012/vehicles.json"
         ))
         .unwrap();
+        wheel_geometry_scales(pack, "v20.vehicle.jeepvehicle");
+    }
+    fn wheel_geometry_scales(pack: Pack, definition: &str) {
         let mut vehicles = VehiclesWorld::new(pack).unwrap();
         let mut world = bri_physics::new_world();
         for (id, scale) in [(1, 1.), (2, 2.)] {
@@ -2442,7 +2449,7 @@ mod scale_tests {
                     Spawn {
                         id: VehicleId(id),
                         owner: OwnerId(1),
-                        definition: "v20.vehicle.jeepvehicle".into(),
+                        definition: definition.into(),
                         transform: Transform {
                             position: [id as f32 * 20., 30., 0.],
                             ..Default::default()
