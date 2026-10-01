@@ -398,9 +398,10 @@ fn shadowed_lightmap(lightmap:vec3<f32>,position:vec3<f32>,normal:vec3<f32>)->ve
     return lightmap*mix(shade,1.0,shadow_lit(c));
 }
 // Lighting model (camera.ambient.w): 0 Classic, the v20 look (baked maps,
-// sun-lit bricks, live shadows darken lightmaps by a fixed share); 1 Unified
-// (map_lighting.rs); 2 Unified with specular highlights; 3 Dynamic (2, with
+// sun-lit bricks, live shadows darken lightmaps by a fixed share); 2 Unified
+// (map_lighting.rs, with specular highlights on objects); 3 Dynamic (2, with
 // the map's surfaces lit live by every recovered light: `dynamic_lightmap`).
+// 1 was Unified without highlights and draws as 2.
 fn lighting_mode()->i32 {return i32(camera.ambient.w+0.5);}
 // The live environment differs from the map's baked sun or ambient.
 fn relit()->bool {return camera.baked_sun_direction.w>0.5;}
@@ -694,7 +695,7 @@ fn channel_visibility(v:ptr<function,MapVisibility>,channel_word:f32)->f32 {
     }
     return (*v).high[k-4u];
 }
-// Blinn-Phong highlights (Unified + Specular) on bricks, players, items and
+// Blinn-Phong highlights (Unified and Dynamic) on bricks, players, items and
 // vehicles, from the same lights, falloff and visibility as their diffuse
 // light. Map surfaces keep their original baked look: no highlights.
 const SPECULAR_POWER:f32=40.0;
@@ -717,7 +718,7 @@ struct LocalLight { diffuse:vec3<f32>, specular:vec3<f32> };
 // still read apart.
 const LAMBERT_FLOOR:f32=0.5;
 // `power` sharpens the highlights (SPECULAR_POWER for painted surfaces).
-fn map_light_sum(position:vec3<f32>,normal:vec3<f32>,visibility:MapVisibility,specular:bool,lambert:bool,power:f32)->LocalLight {
+fn map_light_sum(position:vec3<f32>,normal:vec3<f32>,visibility:MapVisibility,lambert:bool,power:f32)->LocalLight {
     var out=LocalLight(vec3<f32>(0.0),vec3<f32>(0.0));
     if visibility.state==0u {return out;}
     var vis=visibility;
@@ -738,7 +739,7 @@ fn map_light_sum(position:vec3<f32>,normal:vec3<f32>,visibility:MapVisibility,sp
         let inner=light.position_inner.w;
         let light_rgb=light.color_outer.rgb*light_tint(light)*clamp((outer-distance)/max(outer-inner,0.001),0.0,1.0)*seen;
         out.diffuse+=light_rgb*select(1.0,LAMBERT_FLOOR+(1.0-LAMBERT_FLOOR)*dot(n,delta)/max(distance,0.0001),lambert);
-        if specular {out.specular+=light_rgb*glint(n,delta/max(distance,0.0001),toward_eye,power);}
+        out.specular+=light_rgb*glint(n,delta/max(distance,0.0001),toward_eye,power);
     }
     return out;
 }
@@ -870,9 +871,7 @@ fn sun_flare(along:vec3<f32>)->vec3<f32> {
     return camera.flare.rgb*camera.flare.a*(disc+0.55*glow);
 }
 fn fog_amount(position:vec3<f32>)->f32 {
-    let distance=length(position-camera.eye.xyz);
-    let t=clamp((distance-camera.atmosphere.x)/max(camera.atmosphere.y-camera.atmosphere.x,0.001),0.0,1.0);
-    return (1.0-(1.0-t)*(1.0-t))*camera.atmosphere.w;
+    return fog_along(position-camera.eye.xyz,camera.atmosphere);
 }
 fn fogged(display:vec3<f32>,position:vec3<f32>)->vec3<f32> {
     return output_color(mix(display,camera.fog_color.rgb,fog_amount(position)));
@@ -981,18 +980,22 @@ fn slot_size(slot:u32)->vec2<f32> {
     if material[0].x==10.0 {return metal_surface(v);}
     if (material[0].x==4.0 || material[0].x==5.0) {
         // material[1].x: 0 a sky face or cloud (tinted by the sky colour),
-        // 1 the fog backdrop and horizon band (the live fog colour).
+        // 1 the fog backdrop (the live fog colour). Faces and clouds take the
+        // world's fog toward the horizon, so far geometry meets the sky there.
         let along=normalize(v.world_position-camera.eye.xyz);
         if material[1].x==1.0 {
             let fog=min(camera.fog_color.rgb+sun_flare(along),vec3<f32>(1.0));
             return vec4<f32>(output_color(fog),v.color.a);
         }
+        let fog=sky_fog_at(along.y,camera.atmosphere);
         var sky=textureSample(layer0,clamped,v.uv);
         if material[0].x==5.0 {
             sky=textureSample(layer0,tiled,v.uv);
-            return vec4<f32>(output_color(display_color(sky.rgb)*v.color.rgb*camera.sky.rgb),sky.a*v.color.a);
+            let cloud=mix(display_color(sky.rgb)*v.color.rgb*camera.sky.rgb,camera.fog_color.rgb,fog);
+            return vec4<f32>(output_color(cloud),sky.a*v.color.a);
         }
-        let rgb=min(display_color(sky.rgb)*v.color.rgb*camera.sky.rgb+sun_flare(along),vec3<f32>(1.0));
+        let tinted=mix(display_color(sky.rgb)*v.color.rgb*camera.sky.rgb,camera.fog_color.rgb,fog);
+        let rgb=min(tinted+sun_flare(along),vec3<f32>(1.0));
         return vec4<f32>(output_color(rgb),sky.a*v.color.a);
     }
     if material[0].x==1.0 {
@@ -1101,15 +1104,13 @@ fn slot_size(slot:u32)->vec2<f32> {
             var sun_share=0.0;
             if facing>0.0 {sun_share=object_sun(v.world_position,normal,vis);}
             sun=facing*sun_share;
-            let local=map_light_sum(v.world_position,normal,vis,lighting_mode()>=2,true,SPECULAR_POWER);
+            let local=map_light_sum(v.world_position,normal,vis,true,SPECULAR_POWER);
             illumination=ambient_at(sun_share)+camera.sun_color.rgb*sun+local.diffuse*strength
                 +baked_surroundings(v.world_position,v.normal)
                 +v.point_light*strength;
-            if lighting_mode()>=2 {
-                let toward_eye=normalize(camera.eye.xyz-v.world_position);
-                specular=(camera.sun_color.rgb*sun_share*select(0.0,highlight(normal,sun_toward,toward_eye),facing>0.0)
-                    +local.specular)*SPECULAR_STRENGTH;
-            }
+            let toward_eye=normalize(camera.eye.xyz-v.world_position);
+            specular=(camera.sun_color.rgb*sun_share*select(0.0,highlight(normal,sun_toward,toward_eye),facing>0.0)
+                +local.specular)*SPECULAR_STRENGTH;
         }
         if fx.x==3u {
             // Glow aims the normal at the sun, 1/min(1, sun rgb) long.
@@ -1243,7 +1244,7 @@ fn metal_surface(v:VertexOut)->vec4<f32> {
         radiance+=sun_rgb*ggx_light(n,toward_sun,e,alpha,f0)*sun_share;
         // The map's lights as Blinn-Phong lobes of matching width, normalised.
         let power=clamp(2.0/(alpha*alpha)-2.0,4.0,4096.0);
-        let local=map_light_sum(v.world_position,n,vis,true,false,power);
+        let local=map_light_sum(v.world_position,n,vis,false,power);
         radiance+=linear_color(min(local.specular,vec3<f32>(1.0)))*f0*(power+8.0)/(8.0*PI);
     }
     // Brick and player lights, with the falloff other objects take

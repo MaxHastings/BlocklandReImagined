@@ -24,10 +24,11 @@ pub struct Graphics {
     /// Mirrors an Add-On's bricks carry.
     pub reflections: ReflectionSettings,
     /// Native `$pref::Video::Lighting`: 0 Classic (v20's look: baked maps,
-    /// sun-lit bricks), 1 Unified (bricks and maps share the map's recovered
-    /// lights, sun and shadows; see `bri_render::map_lighting`), 2 Unified
-    /// with specular highlights (default), 3 Dynamic (2, with the map's own
+    /// sun-lit bricks), 2 Unified (default: bricks and maps share the map's
+    /// recovered lights, sun and shadows, with highlights; see
+    /// `bri_render::map_lighting`), 3 Dynamic (2, with the map's own
     /// surfaces lit live; its shadows keep a light cube per map light).
+    /// A saved 1 (Unified without highlights) reads as 2.
     pub lighting: u8,
 }
 pub fn reflection_settings(level: i64) -> ReflectionSettings {
@@ -58,7 +59,7 @@ impl Graphics {
             .unwrap_or((f32::from(default.anisotropy) - 1.0) / 15.0);
         let shadows = shadow_settings(prefs.i64_or("$pref::ShadowQuality", 0));
         // Dynamic reads each map light's reach from its shadow cube: with
-        // shadows off it draws as Unified with highlights.
+        // shadows off it draws as Unified.
         let lighting = match bri_ui::screens::options::lighting(&prefs) as u8 {
             3 if shadows.is_none() => 2,
             mode => mode,
@@ -110,6 +111,8 @@ mod tests {
         assert_eq!((dynamic.lighting, dynamic.shadows.map(|s| s.light_cubes)), (3, Some(true)));
         assert_eq!(graphics(&[]).shadows.map(|s| s.light_cubes), Some(false));
         assert_eq!(graphics(&[(LIGHTING, "3"), ("$pref::ShadowQuality", "4")]).lighting, 2);
+        // The old Unified without highlights is Unified.
+        assert_eq!(graphics(&[(LIGHTING, "1")]).lighting, 2);
         assert!(!graphics(&[]).brick_shadows);
         assert!(graphics(&[(BRICK_SHADOWS, "1")]).brick_shadows);
         assert_eq!(graphics(&[]).reflections, ReflectionSettings::MEDIUM);

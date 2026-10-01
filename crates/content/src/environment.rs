@@ -18,6 +18,16 @@ pub struct Cloud {
     /// Original cloud UV motion converted to cycles per second.
     pub velocity: [f32; 2],
 }
+/// Fog, the one atmosphere every pass shares (its shader twin is
+/// `bri-render`'s fog.wgsl). Exponential fog: level with the eye it
+/// thickens from `start` to `FOG_DEPTH` optical depth at `end`; above the
+/// eye it thins with height (`FOG_HEIGHT` units per e-fold), so the sky is
+/// fog-coloured at the horizon and clearer overhead, and thick fog covers
+/// more of it. Geometry ends as fogged as the sky behind it: over the last
+/// quarter of the range it fades to the sky's own fog, so nothing is cut
+/// out against the sky where the world ends.
+pub const FOG_DEPTH: f32 = 4.0;
+pub const FOG_HEIGHT: f32 = 60.0;
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Fog {
@@ -43,12 +53,45 @@ impl Fog {
         );
         Ok(())
     }
+    /// Fog over a point `distance` away, level with the eye.
     pub fn amount(&self, distance: f32) -> f32 {
-        if self.end == 0.0 || distance <= self.start {
+        self.amount_along([distance, 0.0, 0.0])
+    }
+    /// Fog over a point at `offset` from the eye (y up).
+    pub fn amount_along(&self, offset: [f32; 3]) -> f32 {
+        if self.end <= 0.0 {
             return 0.0;
         }
-        let t = ((distance - self.start) / (self.end - self.start).max(0.001)).clamp(0.0, 1.0);
-        1.0 - (1.0 - t) * (1.0 - t)
+        let distance = offset.iter().map(|v| v * v).sum::<f32>().sqrt();
+        let up = offset[1] / distance.max(0.0001);
+        let inside = (distance - self.start).max(0.0);
+        let rise = up.max(0.0) / FOG_HEIGHT;
+        let x = rise * inside;
+        let spread = if x < 0.0001 {
+            1.0 - 0.5 * x
+        } else {
+            (1.0 - (-x).exp()) / x
+        };
+        let depth = self.density() * (-rise * self.start).exp() * inside * spread;
+        let t = ((distance - self.start - 0.75 * (self.end - self.start))
+            / (0.25 * (self.end - self.start)).max(0.001))
+        .clamp(0.0, 1.0);
+        let edge = t * t * (3.0 - 2.0 * t);
+        (1.0 - (-depth).exp()).max(edge * self.sky_amount(up))
+    }
+    /// Fog over the sky along a ray whose direction rises `up` (its y).
+    pub fn sky_amount(&self, up: f32) -> f32 {
+        if self.end <= 0.0 {
+            return 0.0;
+        }
+        if up <= 0.0 {
+            return 1.0;
+        }
+        let rise = up / FOG_HEIGHT;
+        1.0 - (-self.density() * (-rise * self.start).exp() / rise).exp()
+    }
+    fn density(&self) -> f32 {
+        FOG_DEPTH / (self.end - self.start).max(0.001)
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -385,16 +385,81 @@ fn sky_orientation_translation_depth_and_distance_fog() -> Result<()> {
     );
     camera.apply_environment(&data);
     let fog = gpu.frame(&mut renderer, &[&foreground, &sky], &camera, (64, 64))?;
+    let haze = (255.0 * env.fog.amount(2.0)).round() as u8;
     for value in &fog[center..center + 3] {
         assert!(
-            value.abs_diff(191) <= 1,
-            "Expected 75% haze halfway through authored range, got {value}"
+            value.abs_diff(haze) <= 2,
+            "Expected {haze} haze halfway through authored range, got {value}"
         );
     }
     assert_eq!(env.fog.amount(0.5), 0.0);
     assert_eq!(env.fog.amount(1.0), 0.0);
-    assert_eq!(env.fog.amount(2.0), 0.75);
+    assert!((env.fog.amount(2.0) - (1.0 - (-2.0_f32).exp())).abs() < 1e-5);
+    assert_eq!(env.fog.amount(3.0), 1.0);
     assert_eq!(env.fog.amount(10.0), 1.0);
+    Ok(())
+}
+
+/// Thick or thin, the fog that hides far geometry covers the sky toward the
+/// horizon by the same rule (`Fog::sky_amount`), so the horizon is one fog
+/// colour instead of fogged silhouettes cut out against a clear sky.
+#[test]
+fn sky_fades_into_the_world_fog_at_the_horizon() -> Result<()> {
+    let gpu = Gpu::turn()?;
+    let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
+    let (mut data, mut env) = sky_fixture();
+    env.fog.start = 100.0;
+    env.fog.end = 1000.0;
+    bri_render::environment_scene::append(&mut data, &env, &[1, 2, 3, 4, 5, 6], &[])?;
+    let sky = renderer.upload(&gpu.device, &gpu.queue, &data)?;
+    let center = (32 * 64 + 32) * 4;
+    // Each centre pixel's own ray sits half a pixel off the view direction.
+    let half_pixel = 30_f32.to_radians().tan() / 64.0;
+    let rising = Vec3::new(0.0, 0.1, 1.0).normalize();
+    let right = rising.cross(Vec3::Y).normalize();
+    let ray = (rising + (right - right.cross(rising)) * half_pixel).normalize();
+    let fogged = |face: [u8; 3], up: f32| {
+        let a = env.fog.sky_amount(up);
+        face.map(|c| (f32::from(c) * (1.0 - a) + 255.0 * a).round() as u8)
+    };
+    for (direction, expected) in [
+        (Vec3::Z, [255, 255, 255]),
+        (rising, fogged([255, 0, 0], ray.y)),
+        (Vec3::Y, fogged([255, 0, 255], 1.0)),
+    ] {
+        let mut camera = Camera::perspective(
+            [0.0; 3],
+            direction.to_array(),
+            1.0,
+            60_f32.to_radians(),
+            0.05,
+            10.0,
+        );
+        camera.apply_environment(&data);
+        let frame = gpu.frame(&mut renderer, &[&sky], &camera, (64, 64))?;
+        for (got, want) in frame[center..center + 3].iter().zip(expected) {
+            assert!(
+                got.abs_diff(want) <= 3,
+                "Sky toward {direction} is {:?}, expected {expected:?}",
+                &frame[center..center + 3]
+            );
+        }
+    }
+    // A thin fog leaves a horizon haze and a nearly clear sky overhead.
+    let haze = env.fog.sky_amount(ray.y);
+    assert!(haze > 0.3 && haze < 0.95, "haze {haze}");
+    assert!(env.fog.sky_amount(1.0) < 0.1);
+    assert_eq!(env.fog.sky_amount(0.0), 1.0);
+    // Geometry ends as fogged as the sky behind it, high or level.
+    for up in [0.0_f32, 0.05, 0.2, 0.6] {
+        let d = env.fog.end;
+        let offset = [0.0, up * d, (1.0 - up * up).sqrt() * d];
+        assert!((env.fog.amount_along(offset) - env.fog.sky_amount(up)).abs() < 1e-3);
+    }
+    // Thick fog reaches far up the sky.
+    env.fog.start = 5.0;
+    env.fog.end = 90.0;
+    assert!(env.fog.sky_amount(0.5) > 0.99);
     Ok(())
 }
 
@@ -405,6 +470,9 @@ fn cloud_wind_updates_without_geometry_upload_and_calm_stays_still() -> Result<(
     let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
     for velocity in [[0.125, 0.0], [0.0, 0.0]] {
         let (mut data, mut env) = sky_fixture();
+        // Fog far enough out to leave the sky overhead clear.
+        env.fog.start = 100.0;
+        env.fog.end = 1000.0;
         data.images.push(SceneImage {
             label: "cloud-pattern".into(),
             width: 2,

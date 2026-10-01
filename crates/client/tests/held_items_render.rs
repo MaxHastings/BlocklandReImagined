@@ -12,11 +12,7 @@ use bri_ui::{
     api::*,
     gpu::{Headless, UiRenderer},
 };
-use std::{
-    path::Path,
-    thread,
-    time::{Duration, Instant},
-};
+use std::{path::Path, time::Duration};
 
 #[macro_use]
 mod support;
@@ -41,16 +37,9 @@ fn step(app: &mut App, dt: Duration) -> Result<()> {
 fn until(app: &mut App, what: &str, ready: impl Fn(&App) -> bool) -> Result<()> {
     wait::until_one(app, what, Duration::from_secs(45), step, ready)
 }
+/// Let `seconds` of game time pass ([`wait::run_one_for`]).
 fn run_for(app: &mut App, seconds: f32) -> Result<()> {
-    let start = Instant::now();
-    let mut previous = start;
-    while start.elapsed().as_secs_f32() < seconds {
-        thread::sleep(Duration::from_millis(10));
-        let now = Instant::now();
-        step(app, now.duration_since(previous))?;
-        previous = now;
-    }
-    Ok(())
+    wait::run_one_for(app, Duration::from_secs_f32(seconds), step)
 }
 fn capture(app: &mut App, gpu: &Headless, renderer: &mut UiRenderer) -> Result<Vec<u8>> {
     let format = wgpu::TextureFormat::Rgba8Unorm;
