@@ -198,12 +198,17 @@ fn catalog() -> Arc<Catalog> {
                             &format!(r#""{NS}": "=1.0.0""#),
                             &format!(
                                 r#"{{ "kind": "behaviour", "id": "{RULES}:behaviour/behaviour", "file": "behaviour.json" }},
-                                   {{ "kind": "script", "id": "{RULES}:script/trench", "file": "trench.rhai" }}"#
+                                   {{ "kind": "script", "id": "{RULES}:script/trench", "file": "trench.rhai" }},
+                                   {{ "kind": "archetype", "id": "{RULES}:archetype/playernojet", "file": "archetypes/playernojet.json" }}"#
                             ),
                         ),
                     ),
                     ("behaviour.json", rules("behaviour.json")),
                     ("trench.rhai", rules("trench.rhai")),
+                    (
+                        "archetypes/playernojet.json",
+                        rules("archetypes/playernojet.json"),
+                    ),
                 ],
             );
             // Reads a player's eye for the test's aim.
@@ -260,6 +265,10 @@ struct Game {
 }
 impl Game {
     fn new() -> Self {
+        Self::with_map(vec![])
+    }
+    /// Over flat ground and `extra` map shapes.
+    fn with_map(extra: Vec<ColliderBuilder>) -> Self {
         let world = World::new(
             "Trench".into(),
             "trench".into(),
@@ -269,10 +278,11 @@ impl Game {
             Simulation::new(
                 world,
                 definitions(),
-                vec![
-                    ColliderBuilder::cuboid(100.0, 0.5, 100.0)
-                        .translation(Vector::new(0.0, -0.5, 0.0)),
-                ],
+                [ColliderBuilder::cuboid(100.0, 0.5, 100.0)
+                    .translation(Vector::new(0.0, -0.5, 0.0))]
+                .into_iter()
+                .chain(extra)
+                .collect(),
             )
             .unwrap(),
         );
@@ -636,3 +646,41 @@ fn flats_split_into_quarters_and_four_1x1s_become_a_2x2() {
     );
     g.quiet();
 }
+
+#[test]
+fn no_jet_players_step_up_onto_a_2x_cube_while_it_is_on() {
+    // A plate-high slab under where the cubes go.
+    let mut g = Game::with_map(vec![
+        ColliderBuilder::cuboid(10.0, 0.1, 0.5).translation(Vector::new(0.0, 0.1, -1.5)),
+    ]);
+    // server.cs: PlayerNoJet.maxStepHeight = 1.2; everyone else keeps 1.0.
+    let table = g.s.archetypes();
+    let step = |id: &str| table.resolve(table.find(id).unwrap()).movement.step_height;
+    assert_eq!(step("v20.player.playernojet"), 1.2);
+    assert_eq!(step("v20.player.playerstandardarmor"), 1.0);
+    let host = g.join("Host", Vec3::new(-3.0, 0.05, 2.0), true);
+    let walker = g.join("Walker", Vec3::new(3.0, 0.05, 2.0), false);
+    g.steps(10);
+    // A row of 2x cubes on the slab: their tops are 1.2 up.
+    for x in -5..=5 {
+        g.plant(host, "brick2xcubedirtdata", [x as f32 + 0.5, 0.7, -1.5]);
+    }
+    g.s.set_spawn_points(vec![Vec3::new(-3.0, 0.05, 2.0)]).unwrap();
+    let settings = bri_minigames::Settings {
+        player_type: "v20.player.playernojet".into(),
+        loadout: [Some(SHOVEL.into()), Some(DIRT.into()), None, None, None],
+        ..Default::default()
+    };
+    g.cmd(host, Command::MiniGame(MiniGameRequest::Create { color: 1, settings }))
+        .unwrap();
+    g.steps(60);
+    for owner in [host, walker] {
+        g.looks.get_mut(&owner).unwrap().forward = 1.0;
+    }
+    g.steps(90);
+    // The No Jet host stands on the cubes; the standard walker is stopped.
+    assert!((g.feet(host).y - 1.2).abs() < 0.05, "{}", g.feet(host));
+    assert!(g.feet(walker).y < 0.1, "{}", g.feet(walker));
+    g.quiet();
+}
+

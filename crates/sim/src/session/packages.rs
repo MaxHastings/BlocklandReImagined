@@ -490,7 +490,7 @@ fn archetype(
     id: &str,
     def: &bri_package_runtime::content::ArchetypeDef,
 ) -> Result<crate::archetype::Archetype> {
-    let base = match &def.base {
+    let base = match def.adjusts.as_ref().or(def.base.as_ref()) {
         Some(base) => table
             .find(base)
             .with_context(|| format!("base {base} is not a known archetype"))?,
@@ -559,7 +559,22 @@ impl Session {
         );
         let runtime = Runtime::compile(&catalog).map_err(diagnostics_error)?;
         let mut archetypes = crate::archetype::Archetypes::default();
-        for (id, def) in catalog.archetypes() {
+        // Adjustments to v20's player types first, so archetypes built on
+        // one start from it as adjusted. Two Add-Ons setting one constant:
+        // the later id wins, as the later `exec` did in v20.
+        for (id, def) in catalog.archetypes().filter(|(_, d)| d.adjusts.is_some()) {
+            let stock = def.adjusts.as_deref().expect("filtered");
+            let index = archetypes
+                .find(stock)
+                .with_context(|| format!("Archetype {id}: {stock} is not a v20 player type"))?;
+            let mut adjusted =
+                archetype(&archetypes, id, def).with_context(|| format!("Archetype {id}"))?;
+            let original = archetypes.resolve(index);
+            adjusted.id = original.id.clone();
+            adjusted.name = original.name.clone();
+            archetypes.replace(index, adjusted)?;
+        }
+        for (id, def) in catalog.archetypes().filter(|(_, d)| d.adjusts.is_none()) {
             let archetype =
                 archetype(&archetypes, id, def).with_context(|| format!("Archetype {id}"))?;
             archetypes.add(archetype)?;

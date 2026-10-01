@@ -657,5 +657,21 @@ fn trench_digging_port_writes_its_rules() {
     let behaviour: serde_json::Value =
         serde_json::from_slice(&std::fs::read(rules_dir.join("behaviour.json")).unwrap()).unwrap();
     assert_eq!(behaviour["commands"][0]["aim_reach"], 10);
+    // server.cs's PlayerNoJet.maxStepHeight = 1.2, as an adjustment the
+    // rules provide.
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(rules_dir.join("package.json")).unwrap()).unwrap();
+    assert!(
+        manifest["provides"].as_array().unwrap().iter().any(|p| p["kind"] == "archetype"
+            && p["id"] == "gamemode_trenchdigging-rules:archetype/playernojet"
+            && p["file"] == "archetypes/playernojet.json"),
+        "{manifest}"
+    );
+    let adjust: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(rules_dir.join("archetypes/playernojet.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(adjust["adjusts"], "v20.player.playernojet");
+    assert_eq!(adjust["movement"]["step_height"], 1.2);
     std::fs::remove_dir_all(dir).unwrap();
 }

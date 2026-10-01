@@ -8989,10 +8989,16 @@ the shovel and dirt in a normal minigame loadout.
 - Deliberate differences, in the port's notes: digging follows minigame
   and trust rules (the original let anyone dig any dirt), regrouping joins
   one build's dirt only, a flat placed on a flat sits on it.
-- Not covered yet (status `partial`): `server.cs` sets PlayerNoJet's
-  `maxStepHeight` to 1.2 so No Jet players step up a 2x cube. It needs an
-  engine seam for an Add-On to adjust a stock player type while it is on.
+- `server.cs`'s `PlayerNoJet.maxStepHeight = 1.2` is the new generic seam
+  `ArchetypeDef::adjusts`: an Add-On archetype that changes named constants
+  of one of v20's player types while it is on (No Jet players step 1.2;
+  every other type, and No Jet with no such Add-On, stay v20). Port rules
+  may carry `rules/archetypes/<name>.json`. Test:
+  `bri-sim --test archetype_adjust`. The port is `verified`.
+- Found while testing: our motor already lets a player step a ledge exactly
+  1.0 high (feet rest 0.01 up, so the rise reads 0.99 < 1.0); the
+  adjustment shows on ledges between 1.0 and 1.2.
 - Tests: `bri-addon-import --test ports trench_digging_port_writes_its_rules`
   (CC0 stand-in with the folder name) and `bri-sim --test trench_digging`
   (dig and put back to the original 8x cube; flats; minigame loadout and
-  permission; dump and infinite digging).
+  permission; dump and infinite digging; No Jet stepping onto 1.2).

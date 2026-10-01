@@ -24,7 +24,7 @@
       "addon": "Gamemode_TrenchDigging",
       "title": "Trench Digging",
       "port": "gamemode_trenchdigging",
-      "status": "partial",
+      "status": "verified",
       "sha256": [
         "0b5d9bc710a2f67720617a7c656841c0226617ec59eae19cf986046c3d82bc3c"
       ],
@@ -99,7 +99,8 @@
         "crates/sim/tests/trench_digging.rs the_shovel_splits_dirt_down_to_the_piece_it_hit_and_the_dirt_puts_it_back",
         "crates/sim/tests/trench_digging.rs flats_split_into_quarters_and_four_1x1s_become_a_2x2",
         "crates/sim/tests/trench_digging.rs dirt_is_dug_under_the_minigame_and_trust_rules",
-        "crates/sim/tests/trench_digging.rs dumped_dirt_piles_up_as_4x_cubes_and_admins_get_endless_dirt"
+        "crates/sim/tests/trench_digging.rs dumped_dirt_piles_up_as_4x_cubes_and_admins_get_endless_dirt",
+        "crates/sim/tests/trench_digging.rs no_jet_players_step_up_onto_a_2x_cube_while_it_is_on"
       ]
     }
   ]

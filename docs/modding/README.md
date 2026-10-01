@@ -786,6 +786,14 @@ is a whole new body in a dozen lines: no jet, 150 health and faster feet.
 `jump_speed`, `air_control`, `step_height` and the rest); `set_archetype`
 switches a player between bodies at any time.
 
+An archetype with `"adjusts": "v20.player.<datablock>"` (and no `base` or
+`name`) is no new body: it changes the constants it names on one of v20's
+own player types while the Add-On is on, as a v20 Add-On's
+`PlayerNoJet.maxStepHeight = 1.2;` did. Players of that type move by them,
+clients predict with them, and every other type stays v20's. Two Add-Ons
+setting one constant: the later id wins. Test:
+`crates/sim/tests/archetype_adjust.rs`.
+
 **Bots you write.** v20 gives the player objects a Vehicle Spawn brick
 makes no brain; the engine's bots walk, find their way round and over
 builds, and fight inside their builder's minigame. A `bots` Add-On's

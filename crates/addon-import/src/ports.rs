@@ -240,8 +240,10 @@ impl Ports {
                 for (file, _) in &rules {
                     safe_relative(file)?;
                     ensure!(
-                        file == RULES_BEHAVIOUR || file.ends_with(".rhai"),
-                        "rules/{file}: rules are {RULES_BEHAVIOUR} and .rhai scripts"
+                        file == RULES_BEHAVIOUR
+                            || (file.ends_with(".rhai") && !file.contains('/'))
+                            || rules_archetype(file).is_some(),
+                        "rules/{file}: rules are {RULES_BEHAVIOUR}, .rhai scripts and archetypes/<name>.json"
                     );
                 }
             }
@@ -272,8 +274,16 @@ impl Ports {
     }
 }
 
-/// The rules' behaviour file; every other rules file is a script.
+/// The rules' behaviour file; the others are scripts and archetypes.
 const RULES_BEHAVIOUR: &str = "behaviour.json";
+
+/// The name of a rules archetype (`archetypes/<name>.json`): a player
+/// archetype, or an adjustment to a v20 player type as the Add-On's
+/// `PlayerNoJet.maxStepHeight = 1.2;` made.
+fn rules_archetype(file: &str) -> Option<&str> {
+    let name = file.strip_prefix("archetypes/")?.strip_suffix(".json")?;
+    (!name.is_empty() && !name.contains('/')).then_some(name)
+}
 
 fn pattern(p: &str) -> Result<regex::Regex> {
     let re = regex::RegexBuilder::new(p)
@@ -492,12 +502,13 @@ fn rules_package(
         let text = std::str::from_utf8(bytes)
             .with_context(|| format!("rules/{file} is not UTF-8 text"))?;
         let text = fill_text(text, values).with_context(|| format!("rules/{file}"))?;
-        let kind = if file == RULES_BEHAVIOUR {
-            "behaviour"
+        let (kind, stem) = if file == RULES_BEHAVIOUR {
+            ("behaviour", "behaviour")
+        } else if let Some(name) = rules_archetype(&file) {
+            ("archetype", name)
         } else {
-            "script"
+            ("script", file.trim_end_matches(".rhai"))
         };
-        let stem = file.trim_end_matches(".json").trim_end_matches(".rhai");
         provides.push(serde_json::json!({
             "kind": kind,
             "id": crate::content_id(&id, kind, stem),
@@ -573,6 +584,15 @@ fn check_rules(id: &str, manifest: &[u8], files: &[Written]) -> Result<()> {
         "rules/behaviour.json runs `{}`, which the rules do not have",
         behaviour.script
     );
+    for (file, bytes) in files {
+        if rules_archetype(file).is_some() {
+            let archetype: bri_package_runtime::content::ArchetypeDef =
+                serde_json::from_slice(bytes).with_context(|| format!("rules/{file}"))?;
+            archetype
+                .validate()
+                .with_context(|| format!("rules/{file}"))?;
+        }
+    }
     Ok(())
 }
 
