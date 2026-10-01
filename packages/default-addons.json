@@ -560,6 +560,21 @@
           "5e1edc470c296ad12e9d46b4c57285b0510c6bf7731270b745d8e25875b4fbf9"
         ]
       }
+    },
+    {
+      "id": "weapon_impact_rifle",
+      "enabled": false,
+      "original": {
+        "addon": "Weapon_Impact_Rifle",
+        "title": "Tier+Tactical Impact Rifle",
+        "authors": [
+          "Kai"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "65a1332168740664ce6389a5b057622192f19e8f5f3546c009911a8a3847e01b"
+        ]
+      }
     }
   ]
 }
