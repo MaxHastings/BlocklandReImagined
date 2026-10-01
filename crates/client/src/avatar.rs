@@ -1642,6 +1642,49 @@ mod tests {
         pub(super) static FOLLOW_ANCHORS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
     }
 
+    /// The avatar pack a test runs on: the made-up one
+    /// (`crate::testing::avatar`) or the generated v20 one.
+    pub(crate) struct Avatar {
+        pub assets: AvatarAssets,
+        pub content: bool,
+    }
+    fn repo() -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+    }
+    impl Avatar {
+        pub fn synthetic() -> Result<Self> {
+            Ok(Self {
+                assets: crate::testing::avatar::assets()?,
+                content: false,
+            })
+        }
+        /// `content/avatar-pack-002` (`BRI_CONTENT` names another content
+        /// folder).
+        pub fn content() -> Result<Self> {
+            let content = std::env::var_os("BRI_CONTENT")
+                .map_or_else(|| repo().join("content"), std::path::PathBuf::from);
+            Ok(Self {
+                assets: AvatarAssets::load(&content.join("avatar-pack-002"))?,
+                content: true,
+            })
+        }
+    }
+    crate::testing::synthetic_and_content!(
+        Avatar: reposed_vertices_match_a_full_shape_rebuild,
+        a_respawned_body_stands_in_root_without_getting_up_from_the_corpse,
+        item_mounts_use_the_same_sampled_avatar_pose_and_body_transform,
+        held_and_action_arm_layers_keep_locomotion_and_mounts_coherent,
+        absolute_actions_take_over_the_nodes_they_animate,
+        held_arm_pose_precedes_additive_look_and_pack_headup_layers,
+        rebuilt_outfit_continues_the_running_clip,
+        mount_action_is_only_the_playing_actions_motion,
+        seated_body_takes_the_mount_rotation,
+        free_look_turns_only_the_head_toward_the_camera,
+        original_outfits_materials_and_customization_rules,
+        ragdoll_on_the_real_blockhead,
+        ragdoll_keeps_accessories_on,
+    );
+
     fn player() -> PlayerState {
         PlayerState {
             owner: 1,
@@ -1839,12 +1882,9 @@ mod tests {
         );
     }
 
-    #[test]
-    #[ignore = "requires original native avatar package"]
-    fn reposed_vertices_match_a_full_shape_rebuild() -> Result<()> {
+    fn reposed_vertices_match_a_full_shape_rebuild(fx: &Avatar) -> Result<()> {
         use bri_render::shape_scene::ShapeInstance;
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-002");
-        let assets = AvatarAssets::load(&root)?;
+        let assets = &fx.assets;
         let mut mesh = assets.mesh(assets.package.defaults.clone())?;
         mesh.defer_mesh = true;
         let mut p = player();
@@ -1859,9 +1899,11 @@ mod tests {
             // Skis on and off, and a translucent paint, restructure the mesh.
             mesh.set_skis((25..30).contains(&frame).then_some([0.2, 0.4, 0.6, 1.0]));
             if frame == 32 {
-                mesh.outfit.nodes.insert("chest".into(), [1.0, 0.0, 0.0, 0.5]);
+                mesh.outfit
+                    .nodes
+                    .insert("chest".into(), [1.0, 0.0, 0.0, 0.5]);
             }
-            mesh.pose(&assets, &p, f64::from(frame) / 30.0)?;
+            mesh.pose(assets, &p, f64::from(frame) / 30.0)?;
             let pose = mesh.pending.take().context("A deferred pose")?;
             let mut reference = mesh.data.clone();
             reference.vertices.clear();
@@ -1880,7 +1922,7 @@ mod tests {
                 |name| mesh.outfit.nodes.get(&name.to_ascii_lowercase()).copied(),
             )?;
             mesh.restructured = false;
-            mesh.build_mesh(&assets, &pose)?;
+            mesh.build_mesh(assets, &pose)?;
             layouts += usize::from(mesh.restructured);
             assert_eq!(mesh.data.indices, reference.indices, "frame {frame}");
             assert_eq!(mesh.data.batches.len(), reference.batches.len());
@@ -1902,11 +1944,10 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    #[ignore = "requires original native avatar package"]
-    fn a_respawned_body_stands_in_root_without_getting_up_from_the_corpse() -> Result<()> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-002");
-        let assets = AvatarAssets::load(&root)?;
+    fn a_respawned_body_stands_in_root_without_getting_up_from_the_corpse(
+        fx: &Avatar,
+    ) -> Result<()> {
+        let assets = &fx.assets;
         let p = player();
         let dead = AvatarAnimationInput {
             dead: true,
@@ -1923,11 +1964,11 @@ mod tests {
                 .fold(0.0_f32, |most, d| most.max(d.abs()))
         };
         let mut fresh = assets.mesh(assets.package.defaults.clone())?;
-        fresh.pose_with_animation(&assets, &p, 10.0, &alive)?;
+        fresh.pose_with_animation(assets, &p, 10.0, &alive)?;
         let mut body = assets.mesh(assets.package.defaults.clone())?;
         assert!(!body.set_body(1));
         for frame in 0..60 {
-            body.pose_with_animation(&assets, &p, f64::from(frame) / 30.0, &dead)?;
+            body.pose_with_animation(assets, &p, f64::from(frame) / 30.0, &dead)?;
         }
         let lying = apart(&body, &fresh);
         assert!(lying > 0.01, "death1 moves the body ({lying})");
@@ -1935,48 +1976,42 @@ mod tests {
         assert!(!body.set_body(1));
         // A respawn is a new body: its first pose is a fresh body's.
         assert!(body.set_body(2));
-        body.pose_with_animation(&assets, &p, 2.1, &alive)?;
+        body.pose_with_animation(assets, &p, 2.1, &alive)?;
         assert_eq!(apart(&body, &fresh), 0.0);
         Ok(())
     }
 
-    #[test]
-    #[ignore = "requires original native avatar package"]
-    fn item_mounts_use_the_same_sampled_avatar_pose_and_body_transform() -> Result<()> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-002");
-        let assets = AvatarAssets::load(&root)?;
+    fn item_mounts_use_the_same_sampled_avatar_pose_and_body_transform(fx: &Avatar) -> Result<()> {
+        let assets = &fx.assets;
         let mut mesh = assets.mesh(assets.package.defaults.clone())?;
-        assert!(mesh.world_node(&assets, "mount0").is_none());
+        assert!(mesh.world_node(assets, "mount0").is_none());
         let mut p = player();
-        mesh.pose(&assets, &p, 0.)?;
+        mesh.pose(assets, &p, 0.)?;
         let before = mesh
-            .world_node(&assets, "mount0")
+            .world_node(assets, "mount0")
             .context("Original avatar mount0")?;
-        assert!(mesh.world_node(&assets, "inventedHand").is_none());
+        assert!(mesh.world_node(assets, "inventedHand").is_none());
         p.feet = [12., 3., -7.];
         p.yaw = 0.75;
-        mesh.pose(&assets, &p, 0.)?;
+        mesh.pose(assets, &p, 0.)?;
         let expected =
             Mat4::from_rotation_translation(Quat::from_rotation_y(-p.yaw), Vec3::from(p.feet))
                 * before;
         assert!(
-            mesh.world_node(&assets, "MOUNT0")
+            mesh.world_node(assets, "MOUNT0")
                 .unwrap()
                 .abs_diff_eq(expected, 0.00001)
         );
-        let hand0 = mesh.world_node(&assets, "mount0").unwrap();
+        let hand0 = mesh.world_node(assets, "mount0").unwrap();
         let hand1 = mesh
-            .world_node(&assets, "mount1")
+            .world_node(assets, "mount1")
             .context("Original avatar mount1")?;
         assert!(!hand0.abs_diff_eq(hand1, 0.00001));
         Ok(())
     }
 
-    #[test]
-    #[ignore = "requires original native avatar package"]
-    fn held_and_action_arm_layers_keep_locomotion_and_mounts_coherent() -> Result<()> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-002");
-        let assets = AvatarAssets::load(&root)?;
+    fn held_and_action_arm_layers_keep_locomotion_and_mounts_coherent(fx: &Avatar) -> Result<()> {
+        let assets = &fx.assets;
         let arm_ready = assets
             .rig
             .sequence("armreadyright")
@@ -2008,9 +2043,9 @@ mod tests {
         let mut equipped = assets.mesh(assets.package.defaults.clone())?;
         let mut p = player();
         p.velocity = [0.0, 0.0, -4.0];
-        baseline.pose(&assets, &p, 0.25)?;
+        baseline.pose(assets, &p, 0.25)?;
         equipped.pose_with_animation(
-            &assets,
+            assets,
             &p,
             0.25,
             &AvatarAnimationInput {
@@ -2024,27 +2059,27 @@ mod tests {
         )?;
         assert!(
             baseline
-                .world_node(&assets, "RightLeg")
+                .world_node(assets, "RightLeg")
                 .context("Baseline right leg")?
                 .abs_diff_eq(
                     equipped
-                        .world_node(&assets, "RightLeg")
+                        .world_node(assets, "RightLeg")
                         .context("Equipped right leg")?,
                     1e-5,
                 )
         );
         assert_ne!(
-            baseline.world_node(&assets, "RightArm"),
-            equipped.world_node(&assets, "RightArm")
+            baseline.world_node(assets, "RightArm"),
+            equipped.world_node(assets, "RightArm")
         );
         assert_eq!(
-            equipped.world_node(&assets, "mount0"),
-            equipped.world_node(&assets, "MOUNT0")
+            equipped.world_node(assets, "mount0"),
+            equipped.world_node(assets, "MOUNT0")
         );
         assert!(
             equipped
                 .pose_with_animation(
-                    &assets,
+                    assets,
                     &p,
                     0.5,
                     &AvatarAnimationInput {
@@ -2064,18 +2099,15 @@ mod tests {
     /// A rule's `playThread(2, armReadyBoth)` or `death1` (Throwmod's
     /// holder and held player) are absolute clips: they take over the
     /// nodes they animate instead of being refused as non-additive.
-    #[test]
-    #[ignore = "requires original native avatar package"]
-    fn absolute_actions_take_over_the_nodes_they_animate() -> Result<()> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-002");
-        let assets = AvatarAssets::load(&root)?;
+    fn absolute_actions_take_over_the_nodes_they_animate(fx: &Avatar) -> Result<()> {
+        let assets = &fx.assets;
         for name in ["armreadyboth", "death1"] {
             let clip = assets.rig.sequence(name).context(name)?;
             assert!(!clip.additive, "{name} is absolute");
         }
         let p = player();
         let mut baseline = assets.mesh(assets.package.defaults.clone())?;
-        baseline.pose(&assets, &p, 1.0)?;
+        baseline.pose(assets, &p, 1.0)?;
         let acting = |sequence: &str| AvatarAnimationInput {
             action: Some(ActionAnimation {
                 sequence: sequence.into(),
@@ -2084,29 +2116,26 @@ mod tests {
             ..Default::default()
         };
         let mut raised = assets.mesh(assets.package.defaults.clone())?;
-        raised.pose_with_animation(&assets, &p, 1.0, &acting("armreadyboth"))?;
+        raised.pose_with_animation(assets, &p, 1.0, &acting("armreadyboth"))?;
         for arm in ["LeftArm", "RightArm"] {
             assert_ne!(
-                baseline.world_node(&assets, arm),
-                raised.world_node(&assets, arm),
+                baseline.world_node(assets, arm),
+                raised.world_node(assets, arm),
                 "{arm} raised"
             );
         }
         let mut limp = assets.mesh(assets.package.defaults.clone())?;
-        limp.pose_with_animation(&assets, &p, 1.0, &acting("death1"))?;
+        limp.pose_with_animation(assets, &p, 1.0, &acting("death1"))?;
         assert_ne!(
-            baseline.world_node(&assets, "Head"),
-            limp.world_node(&assets, "Head"),
+            baseline.world_node(assets, "Head"),
+            limp.world_node(assets, "Head"),
             "the whole body goes limp"
         );
         Ok(())
     }
 
-    #[test]
-    #[ignore = "requires original native avatar package"]
-    fn held_arm_pose_precedes_additive_look_and_pack_headup_layers() -> Result<()> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-002");
-        let assets = AvatarAssets::load(&root)?;
+    fn held_arm_pose_precedes_additive_look_and_pack_headup_layers(fx: &Avatar) -> Result<()> {
+        let assets = &fx.assets;
         let mut appearance = assets.package.defaults.clone();
         appearance
             .parts
@@ -2116,9 +2145,9 @@ mod tests {
         let mut p = player();
         p.yaw = 0.4;
         p.pitch = 0.65;
-        baseline.pose(&assets, &p, 0.0)?;
+        baseline.pose(assets, &p, 0.0)?;
         held.pose_with_animation(
-            &assets,
+            assets,
             &p,
             0.0,
             &AvatarAnimationInput {
@@ -2128,19 +2157,19 @@ mod tests {
             },
         )?;
         assert_ne!(
-            baseline.world_node(&assets, "RightArm"),
-            held.world_node(&assets, "RightArm")
+            baseline.world_node(assets, "RightArm"),
+            held.world_node(assets, "RightArm")
         );
         assert_eq!(
-            baseline.world_node(&assets, "Head"),
-            held.world_node(&assets, "Head")
+            baseline.world_node(assets, "Head"),
+            held.world_node(assets, "Head")
         );
-        assert!(held.world_node(&assets, "Mount0").is_some());
+        assert!(held.world_node(assets, "Mount0").is_some());
         let raw_eye = held
-            .world_node(&assets, "Eye")
+            .world_node(assets, "Eye")
             .context("Original Eye node")?;
         let eye = held
-            .eye_transform(&assets, p.yaw, p.pitch)
+            .eye_transform(assets, p.yaw, p.pitch)
             .context("Engine-style eye frame")?;
         assert!(
             eye.w_axis
@@ -2160,35 +2189,29 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    #[ignore = "requires original native avatar package"]
-    fn rebuilt_outfit_continues_the_running_clip() -> Result<()> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-002");
-        let assets = AvatarAssets::load(&root)?;
+    fn rebuilt_outfit_continues_the_running_clip(fx: &Avatar) -> Result<()> {
+        let assets = &fx.assets;
         let mut kept = assets.mesh(assets.package.defaults.clone())?;
         let mut p = player();
         p.velocity = [0.0, 0.0, -7.0];
         for frame in 0..20 {
-            kept.pose(&assets, &p, f64::from(frame) / 60.0)?;
+            kept.pose(assets, &p, f64::from(frame) / 60.0)?;
         }
         let mut rebuilt = assets.mesh(assets.package.defaults.clone())?;
         rebuilt.continue_animation(&kept);
         let time = 20.0 / 60.0;
-        kept.pose(&assets, &p, time)?;
-        rebuilt.pose(&assets, &p, time)?;
-        let leg = |mesh: &AvatarMesh| mesh.world_node(&assets, "RightLeg").unwrap();
+        kept.pose(assets, &p, time)?;
+        rebuilt.pose(assets, &p, time)?;
+        let leg = |mesh: &AvatarMesh| mesh.world_node(assets, "RightLeg").unwrap();
         assert!(leg(&kept).abs_diff_eq(leg(&rebuilt), 1e-5));
         let mut fresh = assets.mesh(assets.package.defaults.clone())?;
-        fresh.pose(&assets, &p, time)?;
+        fresh.pose(assets, &p, time)?;
         assert!(!leg(&kept).abs_diff_eq(leg(&fresh), 1e-3));
         Ok(())
     }
 
-    #[test]
-    #[ignore = "requires the converted avatar pack"]
-    fn mount_action_is_only_the_playing_actions_motion() -> Result<()> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-002");
-        let assets = AvatarAssets::load(&root)?;
+    fn mount_action_is_only_the_playing_actions_motion(fx: &Avatar) -> Result<()> {
+        let assets = &fx.assets;
         let mut mesh = assets.mesh(assets.package.defaults.clone())?;
         let mut p = player();
         p.pitch = 0.4;
@@ -2201,30 +2224,27 @@ mod tests {
             }),
             ..Default::default()
         };
-        mesh.pose_with_animation(&assets, &p, 0.1, &input(None))?;
-        assert_eq!(mesh.mount_action(&assets, 0), None);
-        let rest = mesh.model_node(&assets, "Mount0").context("Mount0")?;
+        mesh.pose_with_animation(assets, &p, 0.1, &input(None))?;
+        assert_eq!(mesh.mount_action(assets, 0), None);
+        let rest = mesh.model_node(assets, "Mount0").context("Mount0")?;
         let mut shifted = assets.mesh(assets.package.defaults.clone())?;
-        shifted.pose_with_animation(&assets, &p, 0.1, &input(Some("shiftAway")))?;
+        shifted.pose_with_animation(assets, &p, 0.1, &input(Some("shiftAway")))?;
         let action = shifted
-            .mount_action(&assets, 0)
+            .mount_action(assets, 0)
             .context("shiftAway moves the right hand")?;
-        let moved = shifted.model_node(&assets, "Mount0").context("Mount0")?;
+        let moved = shifted.model_node(assets, "Mount0").context("Mount0")?;
         assert!(!moved.abs_diff_eq(rest, 1e-3));
         // The same walk, armReady and look, plus exactly the action.
         assert!((rest * action).abs_diff_eq(moved, 1e-4));
         Ok(())
     }
 
-    #[test]
-    #[ignore = "requires the converted avatar pack"]
-    fn seated_body_takes_the_mount_rotation() -> Result<()> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-002");
-        let assets = AvatarAssets::load(&root)?;
+    fn seated_body_takes_the_mount_rotation(fx: &Avatar) -> Result<()> {
+        let assets = &fx.assets;
         let mut mesh = assets.mesh(assets.package.defaults.clone())?;
         let tilt = Quat::from_rotation_y(0.6) * Quat::from_rotation_x(0.35);
         mesh.pose_with_animation(
-            &assets,
+            assets,
             &player(),
             0.0,
             &AvatarAnimationInput {
@@ -2248,43 +2268,29 @@ mod tests {
             (super::look_position(-1.2, None) - (0.5 + 1.2 / std::f32::consts::PI)).abs() < 1e-6
         );
     }
-    #[test]
-    #[ignore = "requires original native avatar package"]
-    fn free_look_turns_only_the_head_toward_the_camera() -> Result<()> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-002");
-        let assets = AvatarAssets::load(&root)?;
+    fn free_look_turns_only_the_head_toward_the_camera(fx: &Avatar) -> Result<()> {
+        let assets = &fx.assets;
         let mut mesh = assets.mesh(assets.package.defaults.clone())?;
         let mut p = player();
-        mesh.pose(&assets, &p, 0.0)?;
-        let head = mesh.world_node(&assets, "Head").context("Head node")?;
-        let torso = mesh.world_node(&assets, "Torso").context("Torso node")?;
+        mesh.pose(assets, &p, 0.0)?;
+        let head = mesh.world_node(assets, "Head").context("Head node")?;
+        let torso = mesh.world_node(assets, "Torso").context("Torso node")?;
         // Positive yaw turns right (+X from the -Z forward).
         p.head_yaw = 1.0;
-        mesh.pose(&assets, &p, 1.0)?;
-        let turned = mesh.world_node(&assets, "Head").context("Head node")?;
+        mesh.pose(assets, &p, 1.0)?;
+        let turned = mesh.world_node(assets, "Head").context("Head node")?;
         let (_, rest, _) = head.to_scale_rotation_translation();
         let (_, now, _) = turned.to_scale_rotation_translation();
         let look = (now * rest.inverse()) * -Vec3::Z;
         assert!(look.x > 0.5, "head turns toward the camera: {look}");
         assert!(look.y.abs() < 0.1, "free look turns, not tilts: {look}");
-        assert_eq!(mesh.world_node(&assets, "Torso"), Some(torso));
+        assert_eq!(mesh.world_node(assets, "Torso"), Some(torso));
         Ok(())
     }
 
-    #[test]
-    #[ignore = "requires original native avatar package"]
-    fn original_outfits_materials_and_customization_rules() -> Result<()> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-002");
-        let assets = AvatarAssets::load(&root)?;
+    fn original_outfits_materials_and_customization_rules(fx: &Avatar) -> Result<()> {
+        let assets = &fx.assets;
         let package = &assets.package;
-        assert_eq!(
-            (
-                package.faces.len(),
-                package.decals.len(),
-                package.textures.len()
-            ),
-            (27, 28, 63)
-        );
         let mut cases = 0;
         for (slot, options) in &package.parts {
             if slot == "accent" {
@@ -2294,7 +2300,7 @@ mod tests {
                 let mut appearance = package.defaults.clone();
                 appearance.parts.insert(slot.clone(), option.clone());
                 let mut mesh = assets.mesh(appearance)?;
-                mesh.pose(&assets, &player(), 0.0)?;
+                mesh.pose(assets, &player(), 0.0)?;
                 mesh.data.validate()?;
                 assert!(!mesh.data.vertices.is_empty());
                 cases += 1;
@@ -2307,7 +2313,7 @@ mod tests {
                 appearance.parts.insert("hat".into(), hat_name.clone());
                 appearance.parts.insert("accent".into(), accent.clone());
                 let mut mesh = assets.mesh(appearance)?;
-                mesh.pose(&assets, &player(), 0.0)?;
+                mesh.pose(assets, &player(), 0.0)?;
                 mesh.data.validate()?;
                 cases += 1;
             }
@@ -2325,7 +2331,11 @@ mod tests {
         hat.parts.insert("accent".into(), "visor".into());
         let outfit = package.resolve(&hat)?;
         assert!(outfit.nodes.contains_key("visor"));
-        assert_eq!(outfit.nodes["visor"][3], 0.7);
+        // The accent keeps its alpha (above the engine's floor).
+        assert_eq!(
+            outfit.nodes["visor"][3],
+            package.defaults.colors["accent"][3].max(0.2)
+        );
         hat.parts
             .insert("hat".into(), package.parts["hat"][2].clone());
         assert!(package.resolve(&hat).is_err());
@@ -2350,19 +2360,32 @@ mod tests {
             .colors
             .insert("head".into(), [f32::NAN, 0.0, 0.0, 1.0]);
         assert!(package.resolve(&selected).is_err());
-        let output = root
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join("artifacts/native-avatar/outfits.json");
-        std::fs::create_dir_all(output.parent().unwrap())?;
-        std::fs::write(
-            output,
-            serde_json::to_vec_pretty(
-                &serde_json::json!({"bound_cases":cases,"skirt_leg_rules":true,"hat_accent_rules":true,"hidden_choice_validated":true,"pack_head_pose":true,"original_textures_verified":63}),
-            )?,
-        )?;
+        if fx.content {
+            let output = repo().join("artifacts/native-avatar/outfits.json");
+            std::fs::create_dir_all(output.parent().unwrap())?;
+            std::fs::write(
+                output,
+                serde_json::to_vec_pretty(
+                    &serde_json::json!({"bound_cases":cases,"skirt_leg_rules":true,"hat_accent_rules":true,"hidden_choice_validated":true,"pack_head_pose":true,"original_textures_verified":package.textures.len()}),
+                )?,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// The real pack's catalog size.
+    #[test]
+    #[ignore = "requires generated v20 content"]
+    fn original_avatar_catalog_counts() -> Result<()> {
+        let package = &Avatar::content()?.assets.package;
+        assert_eq!(
+            (
+                package.faces.len(),
+                package.decals.len(),
+                package.textures.len()
+            ),
+            (27, 28, 63)
+        );
         Ok(())
     }
 
@@ -2373,29 +2396,23 @@ mod tests {
     /// a PC with content:
     /// `cargo test -p bri-client --lib ragdoll_on_the_real_blockhead -- --ignored --nocapture`
     /// (`BRI_CONTENT` names another content folder).
-    #[test]
-    #[ignore = "requires original native avatar package"]
-    fn ragdoll_on_the_real_blockhead() -> Result<()> {
+    fn ragdoll_on_the_real_blockhead(fx: &Avatar) -> Result<()> {
         use bri_client_sandbox::bodies::{PhysicsCommand, Shape};
         use bri_client_sandbox::{AddOnCode, Budgets, FrameInput, Sandbox, TrustLevel, World};
         const PARTS: [&str; 10] = [
             "chest", "femchest", "pants", "headskin", "rarm", "larm", "rhand", "lhand", "rshoe",
             "lshoe",
         ];
-        let content = std::env::var_os("BRI_CONTENT").map_or_else(
-            || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
-            std::path::PathBuf::from,
-        );
-        let assets = AvatarAssets::load(&content.join("avatar-pack-002"))?;
+        let assets = &fx.assets;
         let mut mesh = assets.mesh(assets.package.defaults.clone())?;
         mesh.defer_mesh = true;
         let mut p = player();
         p.feet = [3.0, 0.0, -2.0];
         p.yaw = 0.7;
-        mesh.pose(&assets, &p, 0.0)?;
-        let skeleton = mesh.skeleton(&assets);
+        mesh.pose(assets, &p, 0.0)?;
+        let skeleton = mesh.skeleton(assets);
         let pose = mesh.pending.take().context("a deferred pose")?;
-        mesh.build_mesh(&assets, &pose)?;
+        mesh.build_mesh(assets, &pose)?;
         let drawn: Vec<Vec3> = mesh
             .data
             .vertices
@@ -2565,10 +2582,10 @@ mod tests {
             .first()
             .context("the ragdoll posed the body")?
             .nodes;
-        mesh.pose(&assets, &p, 0.0)?;
-        mesh.override_nodes(&assets, nodes);
+        mesh.pose(assets, &p, 0.0)?;
+        mesh.override_nodes(assets, nodes);
         let pose = mesh.pending.take().context("a deferred pose")?;
-        mesh.build_mesh(&assets, &pose)?;
+        mesh.build_mesh(assets, &pose)?;
         let jump = mesh
             .data
             .vertices
@@ -2615,9 +2632,7 @@ mod tests {
     /// beside the body's parts used to stay where the death animation left
     /// it. Run on a PC with content:
     /// `cargo test -p bri-client --lib ragdoll_keeps_accessories_on -- --ignored --nocapture`
-    #[test]
-    #[ignore = "requires original native avatar package"]
-    fn ragdoll_keeps_accessories_on() -> Result<()> {
+    fn ragdoll_keeps_accessories_on(fx: &Avatar) -> Result<()> {
         use bri_client_sandbox::bodies::{PhysicsCommand, Shape};
         use bri_client_sandbox::{AddOnCode, Budgets, FrameInput, Sandbox, TrustLevel, World};
         /// How far a drawn vertex may move in the frame of the ragdoll box
@@ -2626,11 +2641,7 @@ mod tests {
         /// Distance from the boxes is no test: a pointy helmet's tip sits
         /// well past the head box standing up, and rightly stays there.
         const DRIFT: f32 = 0.01;
-        let content = std::env::var_os("BRI_CONTENT").map_or_else(
-            || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
-            std::path::PathBuf::from,
-        );
-        let assets = AvatarAssets::load(&content.join("avatar-pack-002"))?;
+        let assets = &fx.assets;
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages/showcase/ragdoll");
         let code = AddOnCode::load(&dir)
             .map_err(|e| anyhow::anyhow!("{e:?}"))?
@@ -2681,7 +2692,7 @@ mod tests {
             p.yaw = 0.7;
             // The corpse the game animates stands where it died; the
             // ragdoll lies down.
-            mesh.pose(&assets, &p, 0.0)?;
+            mesh.pose(assets, &p, 0.0)?;
             let world = Arc::new(World {
                 local: 1,
                 players: vec![bri_client_sandbox::world::Player {
@@ -2690,11 +2701,11 @@ mod tests {
                     feet: p.feet,
                     ..Default::default()
                 }],
-                skeletons: [(1, mesh.skeleton(&assets))].into(),
+                skeletons: [(1, mesh.skeleton(assets))].into(),
                 ..Default::default()
             });
             let standing_pose = mesh.pending.take().context("a deferred pose")?;
-            mesh.build_mesh(&assets, &standing_pose)?;
+            mesh.build_mesh(assets, &standing_pose)?;
             let standing: Vec<Vec3> = mesh
                 .data
                 .vertices
@@ -2766,10 +2777,10 @@ mod tests {
                 .iter()
                 .map(|(now, then)| now.0.distance(then.0))
                 .fold(0.0f32, f32::max);
-            mesh.pose(&assets, &p, 0.0)?;
-            mesh.override_nodes(&assets, &nodes);
+            mesh.pose(assets, &p, 0.0)?;
+            mesh.override_nodes(assets, &nodes);
             let pose = mesh.pending.take().context("a deferred pose")?;
-            mesh.build_mesh(&assets, &pose)?;
+            mesh.build_mesh(assets, &pose)?;
             ensure!(
                 mesh.data.vertices.len() == standing.len(),
                 "{outfit}: the mesh changed"

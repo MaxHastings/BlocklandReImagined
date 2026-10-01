@@ -5,6 +5,7 @@
 #![allow(dead_code)]
 
 use super::files::{png, repo_root, scratch, write, write_json};
+use bri_content::testing::{material, plain, rigid_shape};
 use anyhow::{Context, Result};
 use glam::Vec3;
 use serde_json::{Value, json};
@@ -38,6 +39,17 @@ pub struct ItemFixture {
     /// A spray can model, and the one whose body is translucent.
     pub solid_can: String,
     pub clear_can: String,
+    /// A static item drawn untinted whose model is not `gun_item`'s.
+    pub other_item: String,
+    /// An image whose `Fire` state plays a sequence moving what first
+    /// person sees: (image, a node the sequence moves, the sequence).
+    pub swing_image: (String, String, String),
+    /// An image whose `Fire` sequence hides every object for a moment.
+    pub throw_image: String,
+    /// A projectile with a model.
+    pub arrow: String,
+    /// An image whose model has no `muzzlePoint`.
+    pub no_muzzle_image: String,
     /// Where regenerated evidence (galleries, reports) goes.
     pub out: PathBuf,
     _scratch: Option<tempfile::TempDir>,
@@ -80,6 +92,11 @@ impl ItemFixture {
             other_model: "base/data/shapes/wand.dts".into(),
             solid_can: "base/data/shapes/spraycan.dts".into(),
             clear_can: "base/data/shapes/transspraycan.dts".into(),
+            other_item: id("bowitem"),
+            swing_image: (image("hammerimage"), "FPhammer9999".into(), "Fire".into()),
+            throw_image: image("spearimage"),
+            arrow: "v20.projectile.arrowprojectile".into(),
+            no_muzzle_image: image("brickimage"),
             out: root.join("artifacts"),
             _scratch: None,
         })
@@ -109,6 +126,11 @@ impl ItemFixture {
             other_model: model("key"),
             solid_can: model("spraycan"),
             clear_can: model("transspraycan"),
+            other_item: id("hammer"),
+            swing_image: (image("swing"), "head".into(), "swing".into()),
+            throw_image: image("throw"),
+            arrow: format!("{NS}:projectile/pellet"),
+            no_muzzle_image: image("hammer"),
             out: PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("item-rendering-synthetic"),
             _scratch: Some(dir),
         })
@@ -156,66 +178,26 @@ impl Model {
         }
         (min.to_array(), max.to_array())
     }
-    fn shape(&self) -> Value {
-        let meshes: Vec<Value> = self.parts.iter().map(box_mesh).collect();
-        json!({
-            "schema_version": 1, "id": self.name,
-            "nodes": self.nodes.iter().map(|(name, parent, t)| json!({
-                "name": name, "parent": parent, "translation": t, "rotation": [0.0, 0.0, 0.0, 1.0],
-            })).collect::<Vec<_>>(),
-            "objects": self.parts.iter().enumerate().map(|(i, p)| json!({
-                "name": format!("part{i}"), "node": p.node, "meshes": [i],
-                "visibility": 1.0, "frame": 0, "material_frame": 0,
-            })).collect::<Vec<_>>(),
-            "details": [{
-                "name": "detail1", "pixel_threshold": 1.0, "object_start": 0,
-                "object_count": self.parts.len(), "mesh_offset": 0, "collision": false,
-            }],
-            "meshes": meshes,
-            "materials": self.materials.iter().map(|(name, blend)| json!({
-                "name": name, "wrap_u": true, "wrap_v": true, "blend": blend, "unlit": false,
-                "environment": false, "mipmaps": false, "detail_map": null, "bump_map": null,
-                "reflectance_map": null, "detail_scale": 1.0, "reflectance": 0.0,
-            })).collect::<Vec<_>>(),
-            "animations": self.animations,
-        })
+    /// The model as a native shape (`bri_content::testing::rigid_shape`'s
+    /// boxes), with its animations.
+    fn shape(&self) -> Result<Value> {
+        let parts: Vec<_> = self
+            .parts
+            .iter()
+            .map(|p| (p.node, p.centre, p.half, plain(p.material)))
+            .collect();
+        let mut shape = rigid_shape(
+            self.name,
+            &self.nodes,
+            &parts,
+            self.materials
+                .iter()
+                .map(|(name, blend)| material(name, blend))
+                .collect(),
+        );
+        shape.animations = serde_json::from_value(self.animations.clone())?;
+        Ok(serde_json::to_value(shape)?)
     }
-}
-
-/// A box, counterclockwise seen from outside, one quad per side.
-fn box_mesh(part: &Part) -> Value {
-    let (c, h) = (Vec3::from(part.centre), Vec3::from(part.half));
-    let sides = [
-        (Vec3::Y, Vec3::X, Vec3::NEG_Z),
-        (Vec3::NEG_Y, Vec3::X, Vec3::Z),
-        (Vec3::NEG_Z, Vec3::NEG_X, Vec3::Y),
-        (Vec3::Z, Vec3::X, Vec3::Y),
-        (Vec3::X, Vec3::NEG_Z, Vec3::Y),
-        (Vec3::NEG_X, Vec3::Z, Vec3::Y),
-    ];
-    let (mut positions, mut normals, mut uv, mut triangles) = (vec![], vec![], vec![], vec![]);
-    for (n, u, v) in sides {
-        let centre = c + n * h;
-        let (du, dv) = (u * (u.abs() * h).length(), v * (v.abs() * h).length());
-        let first = positions.len() as u32;
-        for (p, t) in [
-            (centre - du - dv, [0.0, 1.0]),
-            (centre + du - dv, [1.0, 1.0]),
-            (centre + du + dv, [1.0, 0.0]),
-            (centre - du + dv, [0.0, 0.0]),
-        ] {
-            positions.push(p.to_array());
-            normals.push(n.to_array());
-            uv.push(t);
-        }
-        triangles.push([first, first + 1, first + 2]);
-        triangles.push([first, first + 2, first + 3]);
-    }
-    json!({
-        "frame_vertices": positions.len(), "positions": positions, "normals": normals, "uv": uv,
-        "primitives": [{ "material": part.material, "triangles": triangles }],
-        "skin": null, "billboard": false, "billboard_y": false,
-    })
 }
 
 fn models() -> Vec<Model> {
@@ -286,6 +268,50 @@ fn models() -> Vec<Model> {
             materials: vec![("bullet", "opaque")],
             animations: still(),
         },
+        // A swung tool: its `swing` sequence carries the head forward.
+        Model {
+            name: "swinger",
+            nodes: vec![
+                ("root", None, [0.; 3]),
+                ("mountPoint", Some(0), [0., -0.1, 0.]),
+                ("head", Some(0), [0., 0.2, 0.]),
+            ],
+            parts: vec![
+                part(0, [0., 0., 0.], [0.03, 0.2, 0.03], 0),
+                part(2, [0., 0., 0.], [0.06, 0.05, 0.12], 0),
+            ],
+            materials: vec![("swinger", "opaque")],
+            animations: json!([{
+                "name": "swing", "frames": 3, "duration": 0.2, "looping": false,
+                "additive": false, "priority": 0,
+                "nodes": [{
+                    "node": "head",
+                    "rotations": [], "scales": [], "scale_rotations": [],
+                    "translations": [[0., 0.2, 0.], [0., 0.2, -0.1], [0., 0.15, -0.2]],
+                }],
+                "objects": [], "ground_translations": [], "ground_rotations": [], "triggers": [],
+            }]),
+        },
+        // A thrown weapon: its `throw` sequence hides both objects, then
+        // shows them again.
+        Model {
+            name: "thrower",
+            nodes: vec![("root", None, [0.; 3])],
+            parts: vec![
+                part(0, [0., 0., 0.], [0.02, 0.02, 0.4], 0),
+                part(0, [0., 0., -0.45], [0.04, 0.04, 0.05], 0),
+            ],
+            materials: vec![("thrower", "opaque")],
+            animations: json!([{
+                "name": "throw", "frames": 3, "duration": 0.2, "looping": false,
+                "additive": false, "priority": 0, "nodes": [],
+                "objects": [
+                    { "object": 0, "visibility": [0., 0., 1.], "frames": [0, 0, 0], "material_frames": [0, 0, 0] },
+                    { "object": 1, "visibility": [0., 0., 1.], "frames": [0, 0, 0], "material_frames": [0, 0, 0] },
+                ],
+                "ground_translations": [], "ground_rotations": [], "triggers": [],
+            }]),
+        },
         // Two cans of one shape: a solid one, and one whose body is
         // translucent under a solid cap.
         Model {
@@ -355,7 +381,7 @@ fn write_synthetic(weapons_dir: &Path, items_dir: &Path) -> Result<()> {
         .context("sample has a projectile")?
         .clone();
     let projectile_id = format!("{NS}:projectile/pellet");
-    let images: [ImageSpec; 5] = [
+    let images: [ImageSpec; 7] = [
         (
             "hammer",
             "hammer",
@@ -399,7 +425,15 @@ fn write_synthetic(weapons_dir: &Path, items_dir: &Path) -> Result<()> {
         (
             "can", "spraycan", 0, [0.; 3], [0.; 3], [0.; 3], false, false,
         ),
+        (
+            "swing", "swinger", 0, [0.; 3], [0.; 3], [0.; 3], false, false,
+        ),
+        (
+            "throw", "thrower", 0, [0.; 3], [0.; 3], [0.; 3], false, false,
+        ),
     ];
+    // Images whose `Fire` state plays a sequence of their model.
+    let fire_sequences = [("swing", "swing"), ("throw", "throw")];
     let items: [ItemSpec; 4] = [
         ("hammer", "hammer", "hammer", [1.; 4], [120, 120, 130]),
         ("key", "key", "hammer", KEY_TINT, [40, 60, 200]),
@@ -434,6 +468,13 @@ fn write_synthetic(weapons_dir: &Path, items_dir: &Path) -> Result<()> {
         } else {
             Value::Null
         };
+        if let Some((_, sequence)) = fire_sequences.iter().find(|(n, _)| *n == name) {
+            for state in image["states"].as_array_mut().context("image states")? {
+                if state["name"] == "Fire" {
+                    state["sequence"] = json!(sequence);
+                }
+            }
+        }
         pack["images"][&id] = image;
         if euler {
             pack["definitions"].as_array_mut().unwrap().push(json!({
@@ -481,7 +522,7 @@ fn write_synthetic(weapons_dir: &Path, items_dir: &Path) -> Result<()> {
             keys.push(key);
         }
         let file = format!("models/{}.json", m.name);
-        let sha = write_json(&items_dir.join(&file), &m.shape())?;
+        let sha = write_json(&items_dir.join(&file), &m.shape()?)?;
         let (min, max) = m.bounds();
         bounds.insert(model(m.name), (min, max));
         model_entries.insert(

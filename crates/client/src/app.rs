@@ -10040,19 +10040,18 @@ mod tests {
         assert_eq!(list, ["A.example.com", "b.example.com"]);
         std::fs::remove_dir_all(&dir).unwrap();
     }
-    #[test]
-    #[ignore = "requires generated native content; no window, GPU or audio device"]
-    fn app_weapon_effect_path_consumes_cues_once_and_syncs_projectile_trails() -> anyhow::Result<()>
-    {
+    use crate::testing::content_root::ContentRoot;
+    crate::testing::synthetic_and_content!(
+        ContentRoot: app_weapon_effect_path_consumes_cues_once_and_syncs_projectile_trails,
+        native_weapon_catalog_startup_and_headless_host,
+    );
+
+    fn app_weapon_effect_path_consumes_cues_once_and_syncs_projectile_trails(
+        f: &ContentRoot,
+    ) -> anyhow::Result<()> {
         use super::*;
-        let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)?
-            .as_nanos();
-        let state = workspace
-            .join("target")
-            .join(format!("weapon-fx-app-{stamp}"));
-        let mut app = App::load(&workspace.join("content"), &state, (320, 240))?;
+        let state = f.state()?;
+        let mut app = App::load(&f.root, state.path(), (320, 240))?;
         let trail = app
             .content
             .weapons
@@ -10084,7 +10083,8 @@ mod tests {
             .library
             .emitters
             .iter()
-            .find(|emitter| emitter.lifetime > 0.)
+            // Finite, and sure to emit within the first 0.1 s step.
+            .find(|emitter| emitter.lifetime > 0. && emitter.period + emitter.period_variance <= 0.1)
             .context("Native effects pack has no finite emitter")?
             .id
             .clone();
@@ -10173,30 +10173,38 @@ mod tests {
         Ok(())
     }
 
+    /// The base game's items (ids outside any Add-On's namespace) the
+    /// root's base weapons package carries.
+    fn base_weapon_items(root: &std::path::Path) -> anyhow::Result<usize> {
+        let dir = bri_package::packages::PackageSet::load_root(root)?.role_dir(root, "weapons")?;
+        let pack = bri_weapons::Pack::from_json(&std::fs::read(dir.join("weapons.json"))?)?;
+        Ok(pack.items.keys().filter(|id| !id.contains(':')).count())
+    }
+
     #[test]
-    #[ignore = "requires generated native content and loopback QUIC; no window, GPU or audio device"]
-    fn native_weapon_catalog_startup_and_headless_host() -> anyhow::Result<()> {
+    #[ignore = "requires generated v20 content"]
+    fn the_stock_weapons_pack_has_v20s_21_items() -> anyhow::Result<()> {
+        assert_eq!(base_weapon_items(&ContentRoot::content()?.root)?, 21);
+        Ok(())
+    }
+
+    fn native_weapon_catalog_startup_and_headless_host(f: &ContentRoot) -> anyhow::Result<()> {
         use super::*;
         use std::time::Instant;
-        let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)?
-            .as_nanos();
-        let state = workspace
-            .join("target")
-            .join(format!("weapon-startup-{stamp}"));
-        let mut app = App::load(&workspace.join("content"), &state, (960, 720))?;
-        assert!(
-            app.content
-                .paths
-                .effects_runtime
-                .ends_with("effects-runtime-pack-005")
+        let state_dir = f.state()?;
+        let state = state_dir.path().to_path_buf();
+        let mut app = App::load(&f.root, &state, (960, 720))?;
+        assert_eq!(
+            app.content.paths.effects_runtime.canonicalize()?,
+            bri_package::packages::PackageSet::load_root(&f.root)?
+                .role_dir(&f.root, "effects_runtime")?
+                .canonicalize()?
         );
-        // v20's 21 items, plus any a loaded Add-On adds (the default
+        // The base pack's items, plus any a loaded Add-On adds (the default
         // Add-Ons, once a checkout's content has them installed).
         let items = &app.content.weapons.pack.items;
         let base = items.keys().filter(|id| !id.contains(':')).count();
-        assert_eq!(base, 21);
+        assert_eq!(base, base_weapon_items(&f.root)?);
         let all = items.len();
         assert_eq!(app.tool_ui.server_catalog().items.len(), all);
         assert_eq!(app.content.datablocks["ItemData"].len(), all);
@@ -10334,15 +10342,17 @@ mod tests {
                 .is_some_and(|v| v.tools[&v.owner].selected == Some(2))
                 && a.pending_requests() == 0
         })?;
-        assert_eq!(app.ui.core.hud.tool_name, "Printer");
+        // The HUD names a tool by its uiName as the pack writes it.
+        let ui_name = |app: &App, id: &str| app.content.weapons.pack.items[id].ui_name.clone();
+        assert_eq!(app.ui.core.hud.tool_name, ui_name(&app, bri_weapons::PRINTER));
         app.ui.core.request(UiAction::UseTool { slot: 1 });
         until(&mut app, |a| {
             a.network_view()
                 .is_some_and(|v| v.tools[&v.owner].selected == Some(1))
                 && a.pending_requests() == 0
         })?;
-        // v20 names it "wrench" (wrenchItem uiName), lower case.
-        assert_eq!(app.ui.core.hud.tool_name, "wrench");
+        // As written: v20 names it "wrench" (wrenchItem uiName), lower case.
+        assert_eq!(app.ui.core.hud.tool_name, ui_name(&app, bri_weapons::WRENCH));
         let owner = app.network_view().unwrap().owner;
         assert!(app.world_items.instances().any(|(identity, _)| {
             identity == crate::world_items::ItemIdentity::Mounted(owner, 0)
@@ -10655,19 +10665,73 @@ mod tests {
         assert_eq!(distance, 0.0);
         assert!(pivot.distance(feet + Vec3::Y * 1.95) < 1e-5, "{pivot}");
     }
-    /// Max, a21: riding a horse, the chase camera sat 2.3 over the horse's
-    /// feet. v20's rider looks through the horse's own player camera: the
-    /// middle of its 2.4 tall box plus `cameraVerticalOffset` 2.3, 8 back.
+    /// A vehicle pack on disk, and the roles its vehicles play.
+    struct Mounts {
+        assets: crate::vehicles::VehicleAssets,
+        /// Each vehicle, and whether the client predicts its first seat.
+        predicted: Vec<(String, bool)>,
+        car: String,
+        tank: String,
+        horse: String,
+        /// The player-type mount the tank carries as its turret.
+        tank_turret: String,
+    }
+    impl Mounts {
+        fn synthetic() -> anyhow::Result<Self> {
+            use bri_vehicles::testing as vt;
+            let scratch = crate::testing::ScratchDir::new("app-mounts")?;
+            crate::testing::vehicles::write_pack(scratch.path())?;
+            let assets = crate::vehicles::VehicleAssets::load(scratch.path())?;
+            Ok(Self {
+                assets,
+                // The ball has no seat; the tumble body's seat has no controls.
+                predicted: vt::ALL
+                    .map(|id| (id.to_string(), ![vt::BALL, vt::TUMBLE].contains(&id)))
+                    .into(),
+                car: vt::CAR.into(),
+                tank: vt::TANK.into(),
+                horse: vt::HORSE.into(),
+                tank_turret: crate::testing::vehicles::TANK_TURRET.into(),
+            })
+        }
+        fn content() -> anyhow::Result<Self> {
+            let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../content/vehicles-pack-012");
+            Ok(Self {
+                assets: crate::vehicles::VehicleAssets::load(&root)?,
+                predicted: [
+                    ("v20.vehicle.jeepvehicle", true),
+                    ("v20.vehicle.tankvehicle", true),
+                    ("v20.vehicle.flyingwheeledjeepvehicle", true),
+                    ("v20.vehicle.magiccarpetvehicle", true),
+                    ("v20.vehicle.skivehicle", true),
+                    ("v20.vehicle.horsearmor", true),
+                    ("v20.vehicle.rowboatarmor", true),
+                    ("v20.vehicle.cannonturret", true),
+                    ("v20.vehicle.tankturretplayer", true),
+                    ("v20.vehicle.deathvehicle", false),
+                ]
+                .map(|(id, p)| (id.to_string(), p))
+                .into(),
+                car: "v20.vehicle.jeepvehicle".into(),
+                tank: "v20.vehicle.tankvehicle".into(),
+                horse: "v20.vehicle.horsearmor".into(),
+                tank_turret: "v20.vehicle.tankturretplayer".into(),
+            })
+        }
+    }
+    crate::testing::synthetic_and_content!(
+        Mounts: the_client_predicts_the_live_vehicles_and_mounts_it_controls,
+        a_horse_rider_sees_the_horse_player_camera
+    );
     /// Which first seats the client predicts, and when it starts again: a
     /// live vehicle a player steers or a player-type mount they control; a
     /// respawn (new id), a new definition or scale restarts it; the tumble
     /// body (no controls) and a destroyed vehicle show the host's poses.
-    #[test]
-    #[ignore = "requires the converted native vehicle pack; CPU only"]
-    fn the_client_predicts_the_live_vehicles_and_mounts_it_controls() -> anyhow::Result<()> {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../content/vehicles-pack-012");
-        let assets = crate::vehicles::VehicleAssets::load(&root)?;
+    fn the_client_predicts_the_live_vehicles_and_mounts_it_controls(
+        fx: &Mounts,
+    ) -> anyhow::Result<()> {
+        let assets = &fx.assets;
         let info = |definition: &str| bri_sim::session::VehicleInfo {
             id: 7,
             definition: definition.into(),
@@ -10679,27 +10743,16 @@ mod tests {
         let target = |info: &bri_sim::session::VehicleInfo, strafe: bool| {
             super::drive_target(info, assets.definition(&info.definition).unwrap(), strafe)
         };
-        for (definition, predicted) in [
-            ("v20.vehicle.jeepvehicle", true),
-            ("v20.vehicle.tankvehicle", true),
-            ("v20.vehicle.flyingwheeledjeepvehicle", true),
-            ("v20.vehicle.magiccarpetvehicle", true),
-            ("v20.vehicle.skivehicle", true),
-            ("v20.vehicle.horsearmor", true),
-            ("v20.vehicle.rowboatarmor", true),
-            ("v20.vehicle.cannonturret", true),
-            ("v20.vehicle.tankturretplayer", true),
-            ("v20.vehicle.deathvehicle", false),
-        ] {
+        for (definition, predicted) in &fx.predicted {
             for strafe in [false, true] {
                 assert_eq!(
                     target(&info(definition), strafe).is_some(),
-                    predicted,
+                    *predicted,
                     "{definition}, strafe steering {strafe}"
                 );
             }
         }
-        let jeep = info("v20.vehicle.jeepvehicle");
+        let jeep = info(&fx.car);
         let base = target(&jeep, false).unwrap();
         let destroyed = bri_sim::session::VehicleInfo {
             destroyed: true,
@@ -10707,13 +10760,16 @@ mod tests {
         };
         assert_eq!(target(&destroyed, false), None, "a wreck is the host's");
         for changed in [
-            bri_sim::session::VehicleInfo { id: 8, ..jeep.clone() },
+            bri_sim::session::VehicleInfo {
+                id: 8,
+                ..jeep.clone()
+            },
             bri_sim::session::VehicleInfo {
                 scale: 2.0,
                 ..jeep.clone()
             },
             bri_sim::session::VehicleInfo {
-                definition: "v20.vehicle.tankvehicle".into(),
+                definition: fx.tank.clone(),
                 ..jeep.clone()
             },
         ] {
@@ -10721,14 +10777,23 @@ mod tests {
         }
         Ok(())
     }
-    #[test]
-    #[ignore = "requires the converted native vehicle pack; CPU only"]
-    fn a_horse_rider_sees_the_horse_player_camera() -> anyhow::Result<()> {
+    /// Max, a21: riding a horse, the chase camera sat 2.3 over the horse's
+    /// feet. v20's rider looks through the horse's own player camera: the
+    /// middle of its 2.4 tall box plus `cameraVerticalOffset` 2.3, 8 back.
+    fn a_horse_rider_sees_the_horse_player_camera(fx: &Mounts) -> anyhow::Result<()> {
         use glam::Vec3;
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../content/vehicles-pack-012");
-        let assets = crate::vehicles::VehicleAssets::load(&root)?;
-        let horse = assets.definition("v20.vehicle.horsearmor").unwrap();
+        let assets = &fx.assets;
+        // v20's camera pivot: the middle of the mount's box plus its
+        // `cameraVerticalOffset`, `cameraMaxDist` back, tilted `cameraTilt`.
+        let pivot_height = |d: &bri_vehicles::Definition| {
+            let (low, high) = d
+                .collision_hulls
+                .iter()
+                .flatten()
+                .fold((f32::MAX, f32::MIN), |(l, h), p| (l.min(p[1]), h.max(p[1])));
+            (high - low) * 0.5 + d.camera.offset
+        };
+        let horse = assets.definition(&fx.horse).unwrap();
         assert_eq!(
             horse.seat_role(0),
             bri_vehicles::schema::SeatRole::Actor,
@@ -10736,21 +10801,47 @@ mod tests {
         );
         let feet = Vec3::new(10.0, 4.0, -6.0);
         let (distance, pivot, tilt) = super::mount_camera(horse, feet, 1.0);
+        assert_eq!(distance, horse.camera.max_dist);
+        assert!(
+            pivot.distance(feet + Vec3::Y * pivot_height(horse)) < 1e-4,
+            "{pivot}"
+        );
+        assert!((tilt - horse.camera.tilt).abs() < 1e-6);
+        // The other player-type mounts use their own boxes and offsets.
+        let turret = assets.definition(&fx.tank_turret).unwrap();
+        let (_, pivot, _) = super::mount_camera(turret, feet, 1.0);
+        assert!(
+            pivot.distance(feet + Vec3::Y * pivot_height(turret)) < 1e-4,
+            "{pivot}"
+        );
+        // The Tank's gunner looks through that turret, not the Tank.
+        let tank = assets.definition(&fx.tank).unwrap();
+        assert_eq!(tank.seat_role(2), bri_vehicles::schema::SeatRole::Gunner);
+        let carried = assets.attachment_definition(tank).unwrap();
+        assert_eq!(carried.id, fx.tank_turret);
+        Ok(())
+    }
+    /// v20's own numbers: the horse's 2.4 tall box and 2.3 offset, 8 back,
+    /// tilted 0.261; the tank turret's 0.85 half height; its 8 distance.
+    #[test]
+    #[ignore = "requires generated v20 content"]
+    fn original_mount_cameras() -> anyhow::Result<()> {
+        use glam::Vec3;
+        let fx = Mounts::content()?;
+        let feet = Vec3::new(10.0, 4.0, -6.0);
+        let horse = fx.assets.definition(&fx.horse).unwrap();
+        let (distance, pivot, tilt) = super::mount_camera(horse, feet, 1.0);
         assert_eq!(distance, 8.0);
         assert!(pivot.distance(feet + Vec3::Y * 3.5) < 1e-4, "{pivot}");
         assert!((tilt - 0.261).abs() < 1e-6);
-        // The other player-type mounts use their own boxes and offsets.
-        let turret = assets.definition("v20.vehicle.tankturretplayer").unwrap();
+        let turret = fx.assets.definition(&fx.tank_turret).unwrap();
         let (_, pivot, _) = super::mount_camera(turret, feet, 1.0);
         assert!(
             pivot.distance(feet + Vec3::Y * (0.85 + 2.3)) < 1e-4,
             "{pivot}"
         );
-        // The Tank's gunner looks through that turret, not the Tank.
-        let tank = assets.definition("v20.vehicle.tankvehicle").unwrap();
-        assert_eq!(tank.seat_role(2), bri_vehicles::schema::SeatRole::Gunner);
-        let carried = assets.attachment_definition(tank).unwrap();
-        assert_eq!(carried.id, "v20.vehicle.tankturretplayer");
+        let tank = fx.assets.definition(&fx.tank).unwrap();
+        let carried = fx.assets.attachment_definition(tank).unwrap();
         assert_eq!(carried.camera.max_dist, 8.0);
         Ok(())
     }

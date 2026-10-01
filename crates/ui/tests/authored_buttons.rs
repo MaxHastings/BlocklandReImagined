@@ -1,6 +1,8 @@
 //! Every visible authored button on the menu screens a player reaches does
-//! something: none answers "Interface under construction". Runs against the
-//! converted v20 UI pack, and skips when that local content is absent.
+//! something: none answers "Interface under construction". Each test runs
+//! on the made-up screens of `bri_ui::testing::screens_pack` and again,
+//! ignored, on the converted v20 UI pack.
+use bri_ui::testing::{content_pack, screens_pack};
 use bri_ui::{
     api::Settings,
     binds::Platform,
@@ -9,7 +11,42 @@ use bri_ui::{
     ui::{StackCmd, Ui, UiConfig},
     view::{EventKind, View, ViewEvent},
 };
-use std::{path::Path, rc::Rc};
+use std::rc::Rc;
+
+/// Each body runs as `synthetic::<name>` on the made-up screens and as
+/// `content::<name>` (ignored) on the converted pack `content/<id>`.
+macro_rules! synthetic_and_content {
+    ($($body:ident, $pack:literal;)*) => {
+        mod synthetic {
+            $(#[test]
+            fn $body() {
+                super::$body(&bri_ui::testing::screens_pack());
+            })*
+        }
+        mod content {
+            $(#[test]
+            #[ignore = "requires generated v20 content"]
+            fn $body() {
+                super::$body(&bri_ui::testing::content_pack($pack));
+            })*
+        }
+    };
+}
+
+synthetic_and_content! {
+    menu_buttons_are_all_built, "ui-pack-004";
+    advanced_config_saves_the_next_hosts_settings, "ui-pack-004";
+    credits_and_f1_open_the_help_pages, "ui-pack-004";
+    server_list_rows_are_drawn_without_the_profile_outline, "ui-pack-004";
+    options_tabs_fit_short_and_wide_windows, "ui-pack-004";
+    windows_drag_by_their_title_bar_and_stay_on_screen, "ui-pack-004";
+    music_files_turns_tracks_off_for_the_next_hosted_game, "ui-pack-004";
+    press_up_to_repeat_chat_recalls_sent_lines, "ui-pack-003";
+    ml_text_switches_fonts_colours_and_margins_like_the_help_pages, "ui-pack-003";
+    resizable_windows_grow_from_their_edges, "ui-pack-003";
+    maximize_and_minimize_boxes_toggle_the_window, "ui-pack-003";
+    differing_save_colours_ask_to_match_or_add_them, "ui-pack-003";
+}
 
 const SCREENS: [ScreenId; 19] = [
     ScreenId::MainMenu,
@@ -62,13 +99,14 @@ fn ui(pack: &Rc<Pack>) -> Ui {
     )
 }
 
-/// Commands on `screen` whose click answers "Interface under construction".
-fn unbuilt(pack: &Rc<Pack>, screen: ScreenId) -> Vec<String> {
+/// How many commands `screen` shows, and those whose click answers
+/// "Interface under construction".
+fn unbuilt(pack: &Rc<Pack>, screen: ScreenId) -> (usize, Vec<String>) {
     let mut probe = ui(pack);
     probe.core.push(screen);
     probe.update(0);
     let Some(s) = probe.screen(screen) else {
-        return vec![];
+        return (0, vec![]);
     };
     let v = s.view();
     let targets: Vec<(usize, String)> = v
@@ -76,6 +114,7 @@ fn unbuilt(pack: &Rc<Pack>, screen: ScreenId) -> Vec<String> {
         .filter(|&n| visible(v, n) && v.node(n).state.active)
         .filter_map(|n| v.node(n).ctrl.command.clone().map(|c| (n, c)))
         .collect();
+    let probed = targets.len();
     let mut out = vec![];
     for (node, command) in targets {
         let mut u = ui(pack);
@@ -99,24 +138,45 @@ fn unbuilt(pack: &Rc<Pack>, screen: ScreenId) -> Vec<String> {
             out.push(command);
         }
     }
-    out
+    (probed, out)
 }
 
-#[test]
-fn menu_buttons_are_all_built() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-004");
-    if !dir.join("ui-pack.json").exists() {
-        eprintln!("skipped: ui-pack-004 is not converted on this machine");
-        return;
-    }
-    let pack = Rc::new(Pack::load(&dir).unwrap());
+fn menu_buttons_are_all_built(pack: &Rc<Pack>) {
     let mut all = vec![];
+    let mut probed = 0;
     for screen in SCREENS {
-        for command in unbuilt(&pack, screen) {
+        let (shown, commands) = unbuilt(pack, screen);
+        probed += shown;
+        for command in commands {
             all.push(format!("{screen:?}: {command}"));
         }
     }
+    assert!(probed > 0, "no screen showed a button to click");
     assert!(all.is_empty(), "unbuilt buttons:\n{}", all.join("\n"));
+}
+
+/// The probe above finds a button the screens do not handle.
+#[test]
+fn an_unhandled_menu_button_is_reported() {
+    let mut data = bri_ui::schema::UiPack::default();
+    bri_ui::testing::add_dialogs(&mut data);
+    bri_ui::testing::add_screens(&mut data);
+    let unknown = "MM_NoSuchMenu();";
+    data.layouts
+        .get_mut("MainMenuGui")
+        .unwrap()
+        .children
+        .push(bri_ui::testing::text_button(
+            bri_ui::geom::Rect::new(400, 20, 100, 30),
+            "Unknown",
+            unknown,
+        ));
+    let pack = bri_ui::testing::pack(data);
+    assert_eq!(
+        unbuilt(&pack, ScreenId::MainMenu).1,
+        vec![unknown.to_string()]
+    );
+    assert!(unbuilt(&screens_pack(), ScreenId::MainMenu).1.is_empty());
 }
 
 /// Diagnostic for audits: buttons whose click changes nothing visible and
@@ -125,11 +185,9 @@ fn menu_buttons_are_all_built() {
 #[test]
 #[ignore = "diagnostic listing, not a pass/fail check"]
 fn list_inert_buttons() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-004");
-    let Ok(pack) = Pack::load(&dir) else { return };
-    let pack = Rc::new(pack);
+    let pack = &content_pack("ui-pack-004");
     for screen in SCREENS {
-        let mut probe = ui(&pack);
+        let mut probe = ui(pack);
         probe.core.push(screen);
         probe.update(0);
         let Some(s) = probe.screen(screen) else {
@@ -142,7 +200,7 @@ fn list_inert_buttons() {
             .filter_map(|n| v.node(n).ctrl.command.clone().map(|c| (n, c)))
             .collect();
         for (node, command) in targets {
-            let mut u = ui(&pack);
+            let mut u = ui(pack);
             u.core.push(screen);
             u.update(0);
             u.core.cmds.clear();
@@ -171,11 +229,8 @@ fn list_inert_buttons() {
     }
 }
 
-#[test]
-fn advanced_config_saves_the_next_hosts_settings() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-004");
-    let Ok(pack) = Pack::load(&dir) else { return };
-    let mut u = ui(&Rc::new(pack));
+fn advanced_config_saves_the_next_hosts_settings(pack: &Rc<Pack>) {
+    let mut u = ui(pack);
     u.core.push(ScreenId::StartMission);
     u.update(0);
     let click = |u: &mut Ui, screen: ScreenId, command: &str| {
@@ -209,7 +264,9 @@ fn advanced_config_saves_the_next_hosts_settings() {
         .unwrap();
     let v = u.dialogs[i].view_mut();
     let n = v.id("AdminOption_maxchatlen").unwrap();
-    assert_eq!(v.edit_text(n), "120");
+    // The form shows the saved settings: none yet, so the defaults.
+    let default = bri_ui::models::admin::options_from_prefs(&Default::default());
+    assert_eq!(v.edit_text(n), default.max_chat_length.to_string());
     v.set_text(n, "64");
     click(
         &mut u,
@@ -220,19 +277,15 @@ fn advanced_config_saves_the_next_hosts_settings() {
     assert_eq!(u.core.prefs.get("$Pref::Server::MaxChatLen"), Some("64"));
 }
 
-#[test]
-fn credits_and_f1_open_the_help_pages() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-004");
-    let Ok(mut pack) = Pack::load(&dir) else {
-        return;
-    };
-    pack.data.data.help = ["0. Credits", "1. Controls"]
+fn credits_and_f1_open_the_help_pages(pack: &Rc<Pack>) {
+    let mut data = pack.data.clone();
+    data.data.help = ["0. Credits", "1. Controls"]
         .map(|name| bri_ui::schema::HelpPage {
             name: name.into(),
             text: format!("{name} text"),
         })
         .to_vec();
-    let mut u = ui(&Rc::new(pack));
+    let mut u = ui(&Rc::new(Pack::from_parts(data, pack.dir.clone())));
     u.core.push(ScreenId::MainMenu);
     u.update(0);
     let node = u
@@ -272,15 +325,9 @@ fn credits_and_f1_open_the_help_pages() {
     assert!(u.screen(ScreenId::Help).is_some());
 }
 
-#[test]
-fn server_list_rows_are_drawn_without_the_profile_outline() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-004");
-    let Ok(pack) = Pack::load(&dir) else {
-        return;
-    };
-    let pack = Rc::new(pack);
+fn server_list_rows_are_drawn_without_the_profile_outline(pack: &Rc<Pack>) {
     let glyphs = |servers: usize| {
-        let mut u = ui(&pack);
+        let mut u = ui(pack);
         u.core.servers = (0..servers)
             .map(|i| bri_ui::api::ServerInfo {
                 address: format!("10.0.0.{i}:28000"),
@@ -299,12 +346,13 @@ fn server_list_rows_are_drawn_without_the_profile_outline() {
         u.update(0);
         let v = u.screen(ScreenId::JoinServer).unwrap().view();
         let mut dl = bri_ui::draw::DrawList::new(bri_ui::geom::Rect::new(0, 0, 1024, 768));
-        v.draw(&pack, &mut dl);
+        v.draw(pack, &mut dl);
         dl.cmds.len()
     };
     // "Maxs Server" "9" "1" "/" "8" "0" "Bedroom": 23 glyphs. ServerListProfile's
     // doFontOutline would draw each five times.
     let row = glyphs(1) - glyphs(0);
+    assert!(row > 0, "the row is not drawn");
     assert!(row < 23 * 2, "{row} draws for one row");
 }
 
@@ -312,13 +360,7 @@ fn server_list_rows_are_drawn_without_the_profile_outline() {
 /// menus and left an empty band. Every tab, at every window shape, keeps
 /// each control inside its section, every section above Done, and the
 /// dialog on screen.
-#[test]
-fn options_tabs_fit_short_and_wide_windows() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-004");
-    let Ok(pack) = Pack::load(&dir) else {
-        return;
-    };
-    let pack = Rc::new(pack);
+fn options_tabs_fit_short_and_wide_windows(pack: &Rc<Pack>) {
     const CONTROLS: [&str; 7] = [
         "GuiCheckBoxCtrl",
         "GuiRadioCtrl",
@@ -385,6 +427,7 @@ fn options_tabs_fit_short_and_wide_windows() {
             assert_eq!((grown.w, grown.h), (r.w, r.h));
         }
         for pane in ["Graphics", "Audio", "Controls", "AdvGraphics"] {
+            let mut shown = 0;
             let i = u
                 .dialogs
                 .iter()
@@ -431,6 +474,9 @@ fn options_tabs_fit_short_and_wide_windows() {
                     Some(at)
                 })
                 .any(|a| a == pane_node);
+                if in_pane && node.ctrl.class != "GuiControl" {
+                    shown += 1;
+                }
                 if in_pane && r.bottom() > done_top {
                     problems.push(format!(
                         "{size:?} {pane}: {:?} runs under Done",
@@ -448,6 +494,7 @@ fn options_tabs_fit_short_and_wide_windows() {
                     ));
                 }
             }
+            assert!(shown > 0, "{size:?} {pane}: the pane shows nothing");
         }
     }
     assert!(problems.is_empty(), "{}", problems.join("\n"));
@@ -455,14 +502,9 @@ fn options_tabs_fit_short_and_wide_windows() {
 
 /// Max: in v20 the Escape menu (any window) could be dragged by its title
 /// bar. It moves with the mouse and stays on screen.
-#[test]
-fn windows_drag_by_their_title_bar_and_stay_on_screen() {
+fn windows_drag_by_their_title_bar_and_stay_on_screen(pack: &Rc<Pack>) {
     use bri_ui::input::{InputEvent, MouseButton};
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-004");
-    let Ok(pack) = Pack::load(&dir) else {
-        return;
-    };
-    let mut u = ui(&Rc::new(pack));
+    let mut u = ui(pack);
     u.core.push(ScreenId::EscapeMenu);
     u.update(0);
     let window = |u: &Ui| {
@@ -508,14 +550,9 @@ fn windows_drag_by_their_title_bar_and_stay_on_screen() {
     assert_eq!(window(&u), edge);
 }
 
-#[test]
-fn music_files_turns_tracks_off_for_the_next_hosted_game() {
+fn music_files_turns_tracks_off_for_the_next_hosted_game(pack: &Rc<Pack>) {
     use bri_ui::screens::music::music_enabled;
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-004");
-    let Ok(pack) = Pack::load(&dir) else {
-        return;
-    };
-    let mut u = ui(&Rc::new(pack));
+    let mut u = ui(pack);
     u.core.music_tracks = vec!["Bass 1".into(), "Rock".into()];
     u.core.push(ScreenId::StartMission);
     u.update(0);
@@ -554,15 +591,10 @@ fn music_files_turns_tracks_off_for_the_next_hosted_game() {
     assert_eq!(u.core.prefs.get("$Music__Rock"), Some("-1"));
 }
 
-#[test]
-fn press_up_to_repeat_chat_recalls_sent_lines() {
+fn press_up_to_repeat_chat_recalls_sent_lines(pack: &Rc<Pack>) {
     use bri_ui::api::ChatChannel;
     use bri_ui::input::{InputEvent, Key, Modifiers};
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-003");
-    let Ok(pack) = Pack::load(&dir) else {
-        return;
-    };
-    let mut u = ui(&Rc::new(pack));
+    let mut u = ui(pack);
     u.core.prefs.set("$pref::Chat::ChatRepeat", "1");
     u.core.chat.remember_sent("hi");
     u.core.chat.remember_sent("there");
@@ -591,16 +623,12 @@ fn press_up_to_repeat_chat_recalls_sent_lines() {
     assert_eq!(press(&mut u, Key::Down), "");
 }
 
-#[test]
-fn ml_text_switches_fonts_colours_and_margins_like_the_help_pages() {
+fn ml_text_switches_fonts_colours_and_margins_like_the_help_pages(pack: &Rc<Pack>) {
     use bri_ui::ml::{self, Item, MlDefaults};
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-003");
-    let Ok(pack) = Pack::load(&dir) else {
-        return;
-    };
-    let (Some(small), Some(bold)) = (pack.font("arial_14"), pack.font("arial bold_20")) else {
-        return;
-    };
+    let small = pack.font("arial_14").expect("the pack has Arial 14");
+    let bold = pack
+        .font("arial bold_20")
+        .expect("the pack has Arial Bold 20");
     let d = MlDefaults {
         font: "arial_14",
         color: [0, 0, 0, 255],
@@ -612,7 +640,7 @@ fn ml_text_switches_fonts_colours_and_margins_like_the_help_pages() {
         link_hl: ml::DEFAULT_LINK_HL,
     };
     let layout = ml::layout(
-        &pack,
+        pack,
         "<font:Arial Bold:20>Title\n<lmargin%:10><font:Arial:14>Press <color:0000FF>B<color:000000> now",
         300,
         &d,
@@ -630,21 +658,16 @@ fn ml_text_switches_fonts_colours_and_margins_like_the_help_pages() {
         Item::Text { text, color: [0, 0, 255, 255], .. } if text == "B"
     )));
     // A font the pack lacks keeps the current one.
-    let odd = ml::layout(&pack, "<font:Nope:99>x", 300, &d);
+    let odd = ml::layout(pack, "<font:Nope:99>x", 300, &d);
     assert!(matches!(&odd.lines[0].items[0], Item::Text { font, .. } if font == "arial_14"));
     let _ = small;
 }
 
 /// v20's resizable windows (Join Server here) grow from their right and
 /// bottom edges, and never shrink below their authored size.
-#[test]
-fn resizable_windows_grow_from_their_edges() {
+fn resizable_windows_grow_from_their_edges(pack: &Rc<Pack>) {
     use bri_ui::input::{InputEvent, MouseButton};
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-003");
-    let Ok(pack) = Pack::load(&dir) else {
-        return;
-    };
-    let mut u = ui(&Rc::new(pack));
+    let mut u = ui(pack);
     u.core.push(ScreenId::JoinServer);
     u.update(0);
     let window = |u: &Ui| {
@@ -670,14 +693,18 @@ fn resizable_windows_grow_from_their_edges() {
             y: ty,
         });
     };
+    let list_width = |u: &Ui| {
+        let v = u.screen(ScreenId::JoinServer).unwrap().view();
+        v.node(v.id("JS_serverList").unwrap()).rect.w
+    };
     let start = window(&u);
+    let start_list = list_width(&u);
     let corner = (start.right() - 2, start.bottom() - 2);
     drag(&mut u, corner, (corner.0 + 120, corner.1 + 80));
     let grown = window(&u);
     assert_eq!((grown.w, grown.h), (start.w + 120, start.h + 80));
     // The list inside follows its sizing flags.
-    let v = u.screen(ScreenId::JoinServer).unwrap().view();
-    assert!(v.node(v.id("JS_serverList").unwrap()).rect.w > 500);
+    assert!(list_width(&u) > start_list);
     let corner = (grown.right() - 2, grown.bottom() - 2);
     drag(&mut u, corner, (corner.0 - 900, corner.1 - 900));
     let back = window(&u);
@@ -686,14 +713,8 @@ fn resizable_windows_grow_from_their_edges() {
 
 /// v20's title bar boxes: Join Server maximizes to the screen and back;
 /// Help minimizes to its title bar and back.
-#[test]
-fn maximize_and_minimize_boxes_toggle_the_window() {
+fn maximize_and_minimize_boxes_toggle_the_window(pack: &Rc<Pack>) {
     use bri_ui::input::{InputEvent, MouseButton};
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-003");
-    let Ok(pack) = Pack::load(&dir) else {
-        return;
-    };
-    let pack = Rc::new(pack);
     let window = |u: &Ui, screen: ScreenId| {
         let v = u.screen(screen).unwrap().view();
         let n = v
@@ -718,7 +739,7 @@ fn maximize_and_minimize_boxes_toggle_the_window() {
     };
     // The box `slot` places from the right of the title bar.
     let boxed = |r: bri_ui::geom::Rect, slot: i32| (r.right() - 20 - slot * 18 + 8, r.y + 11);
-    let mut u = ui(&pack);
+    let mut u = ui(pack);
     u.core.push(ScreenId::JoinServer);
     u.update(0);
     let start = window(&u, ScreenId::JoinServer);
@@ -729,7 +750,7 @@ fn maximize_and_minimize_boxes_toggle_the_window() {
     click(&mut u, boxed(big, 1));
     assert_eq!(window(&u, ScreenId::JoinServer), start);
 
-    let mut u = ui(&pack);
+    let mut u = ui(pack);
     u.core.get_help(None);
     u.update(0);
     let start = window(&u, ScreenId::Help);
@@ -740,16 +761,10 @@ fn maximize_and_minimize_boxes_toggle_the_window() {
     assert_eq!(window(&u, ScreenId::Help), start);
 }
 
-#[test]
-fn differing_save_colours_ask_to_match_or_add_them() {
+fn differing_save_colours_ask_to_match_or_add_them(pack: &Rc<Pack>) {
     use bri_ui::api::{ColorLoad, UiAction, UiUpdate};
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-003");
-    let Ok(pack) = Pack::load(&dir) else {
-        return;
-    };
-    let pack = Rc::new(pack);
     for append in [true, false] {
-        let mut u = ui(&pack);
+        let mut u = ui(pack);
         u.apply(UiUpdate::ColorWarning { append });
         u.update(0);
         assert_eq!(u.top_id(), ScreenId::LoadBricksColor);
@@ -758,12 +773,13 @@ fn differing_save_colours_ask_to_match_or_add_them() {
         assert!(shown("ColorWarning_ClickMatch();"));
         assert!(!shown("ColorWarning_ClickReplace();"));
         assert_eq!(shown("ColorWarning_ClickAppend();"), append);
-        // Add More Colors takes Replace's place, right under Nearest Match.
+        // Add More Colors takes Replace's place, under Nearest Match.
         let y = |command: &str| view.node(view.by_command(command).unwrap()).rect.y;
         assert_eq!(
             y("ColorWarning_ClickAppend();"),
-            y("ColorWarning_ClickMatch();") + 40
+            y("ColorWarning_ClickReplace();")
         );
+        assert!(y("ColorWarning_ClickAppend();") > y("ColorWarning_ClickMatch();"));
         let node = view.by_command("ColorWarning_ClickMatch();").unwrap();
         let i = u
             .dialogs
@@ -786,4 +802,22 @@ fn differing_save_colours_ask_to_match_or_add_them() {
                 .any(|(_, a)| *a == UiAction::LoadBricksColors(ColorLoad::Match))
         );
     }
+}
+
+/// v20's colour warning puts Add More Colors, in Replace's place, 40
+/// pixels under Nearest Match.
+#[test]
+#[ignore = "requires generated v20 content"]
+fn original_color_warning_rows_are_40_apart() {
+    use bri_ui::api::UiUpdate;
+    let pack = content_pack("ui-pack-003");
+    let mut u = ui(&pack);
+    u.apply(UiUpdate::ColorWarning { append: true });
+    u.update(0);
+    let view = u.screen(ScreenId::LoadBricksColor).unwrap().view();
+    let y = |command: &str| view.node(view.by_command(command).unwrap()).rect.y;
+    assert_eq!(
+        y("ColorWarning_ClickAppend();"),
+        y("ColorWarning_ClickMatch();") + 40
+    );
 }

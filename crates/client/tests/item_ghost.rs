@@ -5,7 +5,10 @@
 //! respawn, then the wrench restocks it and the ordinary 8 s is waited out.
 //! v20: `ItemData::onPickup` -> `Item::Respawn` -> `fadeOut` / `fadeIn`.
 //! Never opens a window or sends OS input.
-//! Run: cargo test -p bri-client --test item_ghost --release -- --ignored --nocapture --test-threads=1
+//! Runs on the made-up content root; the ignored variants run on the
+//! generated v20 content (`-- --ignored`). Each test holds the shared
+//! offscreen device for its whole run, so the LAN host's port is never
+//! shared between tests.
 use anyhow::{Context, Result, bail, ensure};
 use bri_client::{
     app::App,
@@ -21,15 +24,23 @@ use bri_ui::{
 use glam::Vec3;
 use std::{
     f32::consts::{PI, TAU},
-    path::{Path, PathBuf},
+    path::PathBuf,
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
+
+#[macro_use]
+mod support;
+use support::content_root::ContentRoot;
+
+synthetic_and_content!(
+    ContentRoot: single_player_pickup_leaves_a_ghost_until_the_item_respawns,
+    lan_host_and_guest_both_see_each_others_pickup_ghosts,
+);
 
 const SIZE: (u32, u32) = (640, 480);
 const BEDROOM: &str = "v20/add-ons/map_bedroom/bedroom.mis";
-const BRICK: &str = "v20/brick/brick2x2data";
-const GUN: &str = "v20.weapon.gunitem";
+const GUN: &str = bri_weapons::testing::GUN_ITEM;
 /// The ordinary respawn the test waits out, judged in sim ticks.
 const RESPAWN_MS: u32 = 8000;
 /// v20's longest item respawn (`$Game::Item::MaxRespawnTime`): holds the
@@ -390,6 +401,7 @@ fn ghost_cycle(
     apps: &mut [&mut App],
     camera: &mut Camera,
     label: &str,
+    brick_id: &str,
 ) -> Result<serde_json::Value> {
     until(apps, "actor landing", Duration::from_secs(30), |a| {
         settled(a[0])
@@ -420,7 +432,7 @@ fn ghost_cycle(
     act(
         apps[0],
         UiAction::InstantUseBrick {
-            brick: BRICK.into(),
+            brick: brick_id.into(),
         },
     )?;
     hold(apps[0], HeldControl::Fire, true)?;
@@ -600,7 +612,16 @@ fn ghost_cycle(
             }
             taken.get().is_some()
         },
-    )?;
+    )
+    .with_context(|| {
+        let v = apps[0].network_view().unwrap();
+        format!(
+            "tools {:?}, feet {} item {item}, ghosted {}",
+            v.tools[&v.owner].slots,
+            feet(apps[0]),
+            ghosted(apps[0], brick)
+        )
+    })?;
     let taken = taken.get().unwrap();
     ensure!(
         taken >= second,
@@ -627,17 +648,14 @@ fn ghost_cycle(
     }))
 }
 
-fn workspace() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
-fn load(artifact: &Path, name: &str) -> Result<App> {
-    let stamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-    let state = artifact.join(format!("state-{name}-{}-{stamp}", std::process::id()));
-    std::fs::create_dir_all(&state)?;
-    let mut app = App::load(&workspace().join("content"), &state, SIZE)?;
+/// An app on `f`'s content with a fresh state folder, which it keeps
+/// until dropped.
+fn load(f: &ContentRoot, name: &str) -> Result<(App, bri_client::testing::ScratchDir)> {
+    let state = f.state()?;
+    let mut app = App::load(&f.root, state.path(), SIZE)?;
     app.ui.core.pop(ScreenId::DefaultControls);
     app.ui.core.settings.avatar.lan_name = name.into();
-    Ok(app)
+    Ok((app, state))
 }
 fn host(app: &mut App, mode: ServerMode) -> Result<()> {
     act(
@@ -658,13 +676,10 @@ fn host(app: &mut App, mode: ServerMode) -> Result<()> {
     })
 }
 
-#[test]
-#[ignore = "converted native v20 content, loopback QUIC and an offscreen GPU; no window"]
-fn single_player_pickup_leaves_a_ghost_until_the_item_respawns() -> Result<()> {
-    let artifact = workspace().join("artifacts/item-ghost");
-    std::fs::create_dir_all(&artifact)?;
-    let mut app = load(&artifact, "Solo")?;
-    let gpu = Headless::new().context("offscreen adapter")?;
+fn single_player_pickup_leaves_a_ghost_until_the_item_respawns(f: &ContentRoot) -> Result<()> {
+    let gpu = support::gpu::turn().context("offscreen adapter")?;
+    let artifact = f.out("item-ghost")?;
+    let (mut app, _state) = load(f, "Solo")?;
     let mut camera = Camera {
         gpu: &gpu,
         renderer: UiRenderer::new(&gpu.device, &gpu.queue),
@@ -672,7 +687,7 @@ fn single_player_pickup_leaves_a_ghost_until_the_item_respawns() -> Result<()> {
     };
     app.gpu_ready(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm)?;
     host(&mut app, ServerMode::SinglePlayer)?;
-    let report = ghost_cycle(&mut [&mut app], &mut camera, "single-player")?;
+    let report = ghost_cycle(&mut [&mut app], &mut camera, "single-player", &f.brick)?;
     std::fs::write(
         artifact.join("single-player.json"),
         serde_json::to_vec_pretty(&report)?,
@@ -682,22 +697,22 @@ fn single_player_pickup_leaves_a_ghost_until_the_item_respawns() -> Result<()> {
     Ok(())
 }
 
-#[test]
-#[ignore = "converted native v20 content, loopback UDP and an offscreen GPU; no window"]
-fn lan_host_and_guest_both_see_each_others_pickup_ghosts() -> Result<()> {
+fn lan_host_and_guest_both_see_each_others_pickup_ghosts(f: &ContentRoot) -> Result<()> {
+    // Held for the whole test: no other test hosts while this one's port
+    // is set.
+    let gpu = support::gpu::turn().context("offscreen adapter")?;
     let port = std::net::UdpSocket::bind("127.0.0.1:0")?
         .local_addr()?
         .port();
-    // SAFETY: set before any host or join starts; tests run one at a time.
+    // SAFETY: set before any host or join starts, while this test holds
+    // the device every other test here waits for.
     unsafe {
         std::env::set_var("BRI_TEST_HOST_PORT", port.to_string());
         std::env::set_var("BRI_TEST_DISCOVERY_PORT", "0");
     }
-    let artifact = workspace().join("artifacts/item-ghost");
-    std::fs::create_dir_all(&artifact)?;
-    let mut host_app = load(&artifact, "Hosty")?;
-    let mut guest = load(&artifact, "Guesty")?;
-    let gpu = Headless::new().context("offscreen adapter")?;
+    let artifact = f.out("item-ghost")?;
+    let (mut host_app, _host_state) = load(f, "Hosty")?;
+    let (mut guest, _guest_state) = load(f, "Guesty")?;
     let mut camera = Camera {
         gpu: &gpu,
         renderer: UiRenderer::new(&gpu.device, &gpu.queue),
@@ -721,8 +736,8 @@ fn lan_host_and_guest_both_see_each_others_pickup_ghosts() -> Result<()> {
     )?;
     // The joined guest's pickup, seen by the host; then the host's own,
     // seen by the guest.
-    let guest_report = ghost_cycle(&mut [&mut guest, &mut host_app], &mut camera, "lan-guest")?;
-    let host_report = ghost_cycle(&mut [&mut host_app, &mut guest], &mut camera, "lan-host")?;
+    let guest_report = ghost_cycle(&mut [&mut guest, &mut host_app], &mut camera, "lan-guest", &f.brick)?;
+    let host_report = ghost_cycle(&mut [&mut host_app, &mut guest], &mut camera, "lan-host", &f.brick)?;
     let report = serde_json::json!({"guest_pickup": guest_report, "host_pickup": host_report});
     std::fs::write(
         artifact.join("lan.json"),

@@ -533,8 +533,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "glam 0.33.10",
+ "image",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

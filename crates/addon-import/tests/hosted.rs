@@ -21,26 +21,59 @@ impl Drop for Scratch {
     }
 }
 
-fn with_packages(dirs: &[(&str, &str)]) -> PackageSet {
-    let mut set = PackageSet::base();
-    for (id, dir) in dirs {
-        set.packages.push(PackageEntry {
-            id: (*id).into(),
-            version: "1.0.0".into(),
-            side: Side::Shared,
-            dir: (*dir).into(),
-            role: None,
-        });
-    }
-    set
+/// The base game a test hosts Add-Ons beside: the generated v20 content,
+/// or `bri_net::testing`'s made-up server root (whose one room is [`MAP`]).
+struct Base {
+    root: PathBuf,
+    packages: PackageSet,
+    /// The vanilla gun and the projectile it fires.
+    gun: (String, String),
+    _scratch: Option<bri_content::testing::ScratchDir>,
 }
-
-fn host(set: &PackageSet) -> (Session, glam::Vec3) {
-    let root = content_root();
-    let schema = bri_world::World::new("Hosted add-ons".into(), MAP.into(), vec![[1.0; 4]]);
-    let host = bri_net::dedicated::load_packages(&root, set, schema).unwrap();
-    let spawn = host.spawn_points[0];
-    (host.session, spawn)
+impl Base {
+    fn content() -> Self {
+        Self {
+            root: content_root(),
+            packages: PackageSet::base(),
+            gun: (
+                "v20.weapon.gunitem".into(),
+                "v20.projectile.gunprojectile".into(),
+            ),
+            _scratch: None,
+        }
+    }
+    fn synthetic() -> Self {
+        let scratch = bri_content::testing::ScratchDir::new("addon-hosted").unwrap();
+        bri_net::testing::write_root(scratch.path(), &[MAP]).unwrap();
+        Self {
+            root: scratch.path().to_path_buf(),
+            packages: PackageSet::load_root(scratch.path()).unwrap(),
+            gun: (
+                bri_weapons::testing::GUN_ITEM.into(),
+                bri_weapons::testing::GUN_PROJECTILE.into(),
+            ),
+            _scratch: Some(scratch),
+        }
+    }
+    fn with_packages(&self, dirs: &[(&str, &str)]) -> PackageSet {
+        let mut set = self.packages.clone();
+        for (id, dir) in dirs {
+            set.packages.push(PackageEntry {
+                id: (*id).into(),
+                version: "1.0.0".into(),
+                side: Side::Shared,
+                dir: (*dir).into(),
+                role: None,
+            });
+        }
+        set
+    }
+    fn host(&self, set: &PackageSet) -> (Session, glam::Vec3) {
+        let schema = bri_world::World::new("Hosted add-ons".into(), MAP.into(), vec![[1.0; 4]]);
+        let host = bri_net::dedicated::load_packages(&self.root, set, schema).unwrap();
+        let spawn = host.spawn_points[0];
+        (host.session, spawn)
+    }
 }
 
 /// Gives `item` to a new player, equips it, clicks once and returns the
@@ -78,9 +111,18 @@ fn fire(session: &mut Session, spawn: glam::Vec3, item: &str) -> Vec<String> {
 }
 
 #[test]
-#[ignore = "requires generated v20 content"]
 fn imported_weapon_package_is_hosted_beside_vanilla() {
-    let root = content_root();
+    imported_weapon_package_is_hosted_beside(&Base::synthetic());
+}
+
+#[test]
+#[ignore = "requires generated v20 content"]
+fn imported_weapon_package_is_hosted_beside_v20() {
+    imported_weapon_package_is_hosted_beside(&Base::content());
+}
+
+fn imported_weapon_package_is_hosted_beside(base: &Base) {
+    let root = base.root.clone();
     let scratch = Scratch(root.join(format!("_addon-hosted-{}", std::process::id())));
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/Weapon_Synthetic_Blaster");
@@ -96,8 +138,8 @@ fn imported_weapon_package_is_hosted_beside_vanilla() {
         "{}/blaster",
         scratch.0.file_name().unwrap().to_string_lossy()
     );
-    let set = with_packages(&[("weapon_synthetic_blaster", &dir)]);
-    let (_, spawn) = host(&set);
+    let set = base.with_packages(&[("weapon_synthetic_blaster", &dir)]);
+    let (_, spawn) = base.host(&set);
     // The imported brick loads into a hosted world too.
     let mut world = bri_world::World::new("Hosted add-ons".into(), MAP.into(), vec![[1.0; 4]]);
     let pad = bri_world::Brick::new(
@@ -126,8 +168,8 @@ fn imported_weapon_package_is_hosted_beside_vanilla() {
     assert_eq!(session.simulation().state().bricks.len(), 1);
     // Vanilla still works, and the imported weapon fires its own projectile.
     assert_eq!(
-        fire(&mut session, spawn, "v20.weapon.gunitem"),
-        ["v20.projectile.gunprojectile"]
+        fire(&mut session, spawn, &base.gun.0),
+        std::slice::from_ref(&base.gun.1)
     );
     assert_eq!(
         fire(
@@ -173,12 +215,13 @@ fn community_shotgun_and_car_work_in_a_hosted_game() {
         })
         .unwrap();
     }
-    let set = with_packages(&[
+    let base = Base::content();
+    let set = base.with_packages(&[
         ("weapon_shotgun", &format!("{name}/shotgun")),
         ("vehicle_blocko_car", &format!("{name}/car")),
     ]);
     // Place the car's spawn brick a few steps in front of a spawn point.
-    let (_, spawn) = host(&set);
+    let (_, spawn) = base.host(&set);
     let mut world = bri_world::World::new("Hosted add-ons".into(), MAP.into(), vec![[1.0; 4]]);
     let mut brick = bri_world::Brick::new(
         bri_world::ContentRef::Resolved(VEHICLE_SPAWN.into()),

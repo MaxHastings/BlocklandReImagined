@@ -1,8 +1,7 @@
 //! Every value a player can enter on a screen that talks to the game reaches
 //! what that screen sends, and lands in the right field.
 //!
-//! Drives the real converted v20 screens (`content/ui-pack-004`) only through
-//! input a player makes: mouse clicks at a control's centre, typed
+//! Drives the screens only through input a player makes: mouse clicks at a control's centre, typed
 //! characters and keys. For each screen, every visible editable control is
 //! changed on its own: a unique value is typed into each text box, each
 //! checkbox is clicked, each other radio button is picked and each dropdown
@@ -18,8 +17,8 @@
 //! with the reason. A control on screen that no table names fails the test,
 //! so new controls must be accounted for.
 //!
-//! Content-backed: prints a loud "skipped" and passes when ui-pack-004 is not
-//! converted on this machine (GitHub CI).
+//! Each test runs on the made-up screens of `bri_ui::testing::screens_pack`
+//! and again, ignored, on the converted `content/ui-pack-004`.
 //! Run: cargo test -p bri-ui --test field_flow -- --nocapture
 //! `BRI_FIELD_FLOW_PRINT=1` prints the observed table for every control.
 use bri_ui::{
@@ -37,7 +36,6 @@ use bri_ui::{
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    path::Path,
     rc::Rc,
 };
 
@@ -49,16 +47,31 @@ const EDITABLE: [&str; 5] = [
     "GuiPopUpMenuCtrl",
 ];
 
-fn pack() -> Option<Rc<Pack>> {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-004");
-    if !dir.join("ui-pack.json").exists() {
-        eprintln!(
-            "\n**** skipped: field_flow needs content/ui-pack-004, which is not converted on this machine ****\n"
-        );
-        return None;
-    }
-    Some(Rc::new(Pack::load(&dir).expect("ui-pack-004 loads")))
+/// Each body runs as `synthetic::<name>` on the made-up screens and as
+/// `content::<name>` (ignored) on the converted `content/ui-pack-004`.
+macro_rules! synthetic_and_content {
+    ($($body:ident),* $(,)?) => {
+        mod synthetic {
+            $(#[test]
+            fn $body() {
+                super::$body(&bri_ui::testing::screens_pack());
+            })*
+        }
+        mod content {
+            $(#[test]
+            #[ignore = "requires generated v20 content"]
+            fn $body() {
+                super::$body(&bri_ui::testing::content_pack("ui-pack-004"));
+            })*
+        }
+    };
 }
+
+synthetic_and_content!(
+    every_entered_value_reaches_what_the_screen_sends,
+    copy_locks_keep_their_own_field,
+    an_events_row_built_by_clicks,
+);
 
 fn new_ui(pack: &Rc<Pack>) -> Ui {
     let mut u = Ui::new(
@@ -1675,22 +1688,18 @@ fn scenarios() -> Vec<Scenario> {
     ]
 }
 
-#[test]
-fn every_entered_value_reaches_what_the_screen_sends() {
-    let Some(pack) = pack() else { return };
+fn every_entered_value_reaches_what_the_screen_sends(pack: &Rc<Pack>) {
     let print = std::env::var_os("BRI_FIELD_FLOW_PRINT").is_some();
     let mut problems = vec![];
     for sc in scenarios() {
-        problems.extend(check(&pack, &sc, print));
+        problems.extend(check(pack, &sc, print));
     }
     assert!(problems.is_empty(), "\n{}", problems.join("\n"));
 }
 
 /// v20's wrench "Copy" boxes: a locked field keeps what was sent for the
 /// next brick wrenched, and each box locks its own field and no other.
-#[test]
-fn copy_locks_keep_their_own_field() {
-    let Some(pack) = pack() else { return };
+fn copy_locks_keep_their_own_field(pack: &Rc<Pack>) {
     let mut problems = vec![];
     for (variant, send) in [
         (WrenchVariant::Normal, "wrenchDlg.send();"),
@@ -1698,7 +1707,7 @@ fn copy_locks_keep_their_own_field() {
         (WrenchVariant::VehicleSpawn, "wrenchVehicleSpawnDlg.send();"),
     ] {
         let screen = ScreenId::Wrench(variant);
-        let mut probe = new_ui(&pack);
+        let mut probe = new_ui(pack);
         open_wrench(&mut probe, variant);
         let v = view(&probe, screen);
         let locks: Vec<String> = v
@@ -1708,31 +1717,28 @@ fn copy_locks_keep_their_own_field() {
             .collect();
         for lock in locks {
             let field = lock.replacen("Lock_", "_", 1);
-            // The field a lock guards; radio groups are named by position.
+            // The field a lock guards; radio groups are named by position,
+            // and the button already picked would change nothing.
             let target = v
                 .walk()
                 .filter_map(|n| v.node(n).ctrl.name.clone())
                 .find(|name| {
-                    name == &field
-                        || name.starts_with(&field) && name[field.len()..].parse::<u8>().is_ok()
-                })
-                .filter(|name| name != &field || v.id(name).is_some());
+                    (name == &field
+                        || name.starts_with(&field) && name[field.len()..].parse::<u8>().is_ok())
+                        && v.id(name).is_some_and(|n| {
+                            v.node(n).ctrl.class != "GuiRadioCtrl" || !v.bool_value(n)
+                        })
+                });
             let Some(target) = target else {
                 problems.push(format!("{lock}: no field named {field}*"));
                 continue;
-            };
-            // A radio group's first button may already be picked.
-            let target = if target.ends_with('0') && v.id(&target).is_some_and(|n| v.bool_value(n)) {
-                format!("{}1", &target[..target.len() - 1])
-            } else {
-                target
             };
             let sent = |u: &mut Ui| -> BTreeMap<String, Value> {
                 let mut out = BTreeMap::new();
                 leaves(&snapshot(u)["actions"]["SendWrench"]["data"], String::new(), &mut out);
                 out
             };
-            let mut u = new_ui(&pack);
+            let mut u = new_ui(pack);
             open_wrench(&mut u, variant);
             u.drain_actions();
             if let Err(e) = change(&mut u, screen, &target, None) {
@@ -1751,7 +1757,7 @@ fn copy_locks_keep_their_own_field() {
             }
             click(&mut u, screen, send);
             let second = sent(&mut u);
-            let mut plain = new_ui(&pack);
+            let mut plain = new_ui(pack);
             open_wrench(&mut plain, variant);
             plain.drain_actions();
             click(&mut plain, screen, send);
@@ -1797,10 +1803,8 @@ fn pick(u: &mut Ui, screen: ScreenId, popup: &str, entry: &str) -> Result<(), St
 
 /// A new events row built only by clicks sends what was picked, and the
 /// row it was built from stays as it was.
-#[test]
-fn an_events_row_built_by_clicks() {
-    let Some(pack) = pack() else { return };
-    let mut u = new_ui(&pack);
+fn an_events_row_built_by_clicks(pack: &Rc<Pack>) {
+    let mut u = new_ui(pack);
     open_events(&mut u);
     u.drain_actions();
     let screen = ScreenId::WrenchEvents;

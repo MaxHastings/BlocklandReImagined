@@ -6,27 +6,11 @@ use bri_ui::{
     geom::Rect,
     input::*,
     pack::Pack,
-    schema::{Control, UiPack},
+    schema::UiPack,
     screens::{ScreenId, ctrl},
     ui::{Ui, UiConfig},
 };
 use std::{path::PathBuf, rc::Rc};
-
-/// ConsoleDlg as authored in v20 (allClientGuis.gui:1).
-fn console_layout() -> Control {
-    let mut log = ctrl("GuiConsole", "GuiConsoleProfile", Rect::new(1, 1, 8, 2));
-    log.name = Some("testArrayCtrl".into());
-    let mut scroll = ctrl("GuiScrollCtrl", "GuiScrollProfile", Rect::new(0, 0, 640, 353));
-    scroll.children = vec![log];
-    let mut entry = ctrl("GuiConsoleEditCtrl", "GuiTextEditProfile", Rect::new(0, 352, 640, 18));
-    entry.name = Some("ConsoleEntry".into());
-    let mut window = ctrl("GuiWindowCtrl", "GuiWindowProfile", Rect::new(0, 0, 640, 370));
-    window.text = Some("Console".into());
-    window.children = vec![scroll, entry];
-    let mut dlg = ctrl("GuiControl", "GuiDefaultProfile", Rect::new(0, 0, 640, 480));
-    dlg.children = vec![window];
-    dlg
-}
 
 fn ui() -> Ui {
     let mut p = UiPack::default();
@@ -36,7 +20,8 @@ fn ui() -> Ui {
             ctrl("GuiControl", "GuiDefaultProfile", Rect::new(0, 0, 640, 480)),
         );
     }
-    p.layouts.insert("ConsoleDlg".into(), console_layout());
+    p.layouts
+        .insert("ConsoleDlg".into(), bri_ui::testing::console_layout());
     let mut u = Ui::new(
         Rc::new(Pack::from_parts(p, PathBuf::new())),
         UiConfig {
@@ -155,7 +140,9 @@ fn entry_echoes_runs_cvars_and_forwards_host_commands() {
         sent.iter()
             .any(|a| matches!(a, UiAction::SaveSettings(s) if s.prefs.get("$pref::Audio::masterVolume").map(String::as_str) == Some("0.25")))
     );
-    assert!(sent.contains(&UiAction::Console { line: "stats".into() }));
+    assert!(sent.contains(&UiAction::Console {
+        line: "stats".into()
+    }));
     assert_eq!(entry(&u), "");
     // Unknown names are errors, never evaluated.
     submit(&mut u, "schedule(1, 0, quit)");
@@ -170,7 +157,11 @@ fn history_completion_and_secrets() {
     submit(&mut u, "echo second");
     submit(&mut u, "connect 10.0.0.2 hunter2");
     assert!(log_has("==>connect 10.0.0.2 ***"));
-    assert!(!bri_console::log::lines().iter().any(|l| l.text.contains("hunter2")));
+    assert!(
+        !bri_console::log::lines()
+            .iter()
+            .any(|l| l.text.contains("hunter2"))
+    );
     assert!(actions(&mut u).contains(&UiAction::JoinServer {
         address: "10.0.0.2".into(),
         password: "hunter2".into()
@@ -216,7 +207,9 @@ fn slash_commands_and_admin_go_through_host_requests() {
             args: vec!["2".into()]
         }]
     );
-    assert!(log_has("Administration status not received yet; try again."));
+    assert!(log_has(
+        "Administration status not received yet; try again."
+    ));
 }
 
 #[test]

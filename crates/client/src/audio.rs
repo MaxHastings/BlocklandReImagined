@@ -496,15 +496,43 @@ impl ClientAudio {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    #[ignore = "uses delivered native audio pack; silent offline output only"]
-    fn original_audio_defaults_listener_before_culling_preferences_and_teardown() -> Result<()> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/audio-pack-002");
+    /// An audio pack folder and the interface sound it plays as a profile.
+    struct Pack {
+        root: std::path::PathBuf,
+        note: String,
+        _scratch: Option<crate::testing::ScratchDir>,
+    }
+    impl Pack {
+        fn synthetic() -> Result<Self> {
+            let scratch = crate::testing::ScratchDir::new("client-audio")?;
+            crate::testing::audio::write_pack(scratch.path())?;
+            Ok(Self {
+                root: scratch.path().to_path_buf(),
+                note: crate::testing::audio::NOTE.into(),
+                _scratch: Some(scratch),
+            })
+        }
+        fn content() -> Result<Self> {
+            Ok(Self {
+                root: Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/audio-pack-002"),
+                note: "Note3Sound".into(),
+                _scratch: None,
+            })
+        }
+    }
+    crate::testing::synthetic_and_content!(
+        Pack: original_audio_defaults_listener_before_culling_preferences_and_teardown
+    );
+    fn original_audio_defaults_listener_before_culling_preferences_and_teardown(
+        fx: &Pack,
+    ) -> Result<()> {
+        let root = &fx.root;
         let mut settings = Settings::default();
         settings
             .prefs
             .insert("$PREF::AUDIO::MasterVolume".into(), "0.8".into());
-        let mut audio = ClientAudio::load(&root, &mut settings, OutputKind::Offline)?;
+        let mut audio = ClientAudio::load(root, &mut settings, OutputKind::Offline)?;
+        let defaults = audio.runtime.bank().defaults().clone();
         assert_eq!(
             settings
                 .prefs
@@ -514,7 +542,20 @@ mod tests {
             1
         );
         assert_eq!(audio.prefs.f32_or("$pref::Audio::masterVolume", 0.), 0.8);
-        assert!(audio.prefs.bool_or("$pref::Audio::MenuSounds", false));
+        // Prefs the player has not set take the pack's defaults.
+        assert_eq!(
+            audio
+                .prefs
+                .bool_or("$pref::Audio::MenuSounds", !defaults.menu_sounds),
+            defaults.menu_sounds
+        );
+        assert_eq!(
+            audio.prefs.bool_or(
+                "$pref::Audio::PlayBrickPlantSound",
+                !defaults.play_brick_plant_sound
+            ),
+            defaults.play_brick_plant_sound
+        );
         let position = [1000., 1., 0.];
         audio.trigger("brick.plant", Placement::World(position));
         audio.tick(
@@ -542,7 +583,7 @@ mod tests {
             },
         );
         assert_eq!(audio.stats().started, 1);
-        audio.profile("Note3Sound", Placement::Listener);
+        audio.profile(&fx.note, Placement::Listener);
         audio.tick(0.2, Listener::default());
         assert_eq!(audio.stats().started, 2);
         audio.clear();

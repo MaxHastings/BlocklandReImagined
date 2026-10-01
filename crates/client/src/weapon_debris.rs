@@ -765,13 +765,35 @@ mod tests {
             position: [0.; 3],
         }
     }
-    fn assets() -> Result<WeaponDebrisAssets> {
-        let pack = bri_package::packages::PackageSet::base()
-            .role("weapon_debris")?
-            .dir
-            .clone();
-        WeaponDebrisAssets::load(&root().join("content").join(pack))
+    /// The debris pack a test runs on: the made-up one
+    /// (`crate::testing::weapon_debris`) or the generated v20 one.
+    struct Debris {
+        content: bool,
     }
+    impl Debris {
+        fn synthetic() -> Result<Self> {
+            Ok(Self { content: false })
+        }
+        fn content() -> Result<Self> {
+            Ok(Self { content: true })
+        }
+        fn assets(&self) -> Result<WeaponDebrisAssets> {
+            if !self.content {
+                return crate::testing::weapon_debris::assets();
+            }
+            let pack = bri_package::packages::PackageSet::base()
+                .role("weapon_debris")?
+                .dir
+                .clone();
+            WeaponDebrisAssets::load(&root().join("content").join(pack))
+        }
+    }
+    crate::testing::synthetic_and_content!(
+        Debris: native_shell_model_and_texture_bindings_load_without_substitutes,
+        cue_delivery_is_once_deferred_pose_can_resolve_and_disconnect_resets,
+        a_zero_normal_hit_drops_the_casing_instead_of_failing,
+        unresolved_pose_expires_and_native_bounces_are_bounded
+    );
     fn malformed_pack(root: &Path, shell_patch: serde_json::Value, model_file: &str) {
         std::fs::create_dir_all(root).unwrap();
         let mut shell = serde_json::json!({"model":"v20.weapon_debris.gun_shell","lifetime_seconds":2.0,
@@ -833,10 +855,8 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-    #[test]
-    #[ignore = "requires the ignored primary-source weapon-debris pack produced by the importer"]
-    fn native_shell_model_and_texture_bindings_load_without_substitutes() -> Result<()> {
-        let assets = assets()?;
+    fn native_shell_model_and_texture_bindings_load_without_substitutes(fx: &Debris) -> Result<()> {
+        let assets = fx.assets()?;
         assert_eq!(assets.pack_id, "v20.weapon-debris.001");
         assert!(!assets.shell_scene.vertices.is_empty());
         assert!(!assets.shell_scene.indices.is_empty());
@@ -865,10 +885,10 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    #[ignore = "requires the ignored primary-source weapon-debris pack produced by the importer"]
-    fn cue_delivery_is_once_deferred_pose_can_resolve_and_disconnect_resets() -> Result<()> {
-        let mut world = WeaponDebris::new(assets()?, WeaponDebrisLimits::default())?;
+    fn cue_delivery_is_once_deferred_pose_can_resolve_and_disconnect_resets(
+        fx: &Debris,
+    ) -> Result<()> {
+        let mut world = WeaponDebris::new(fx.assets()?, WeaponDebrisLimits::default())?;
         world.cues(&[cue(1)], |_, _, _| None, |_| Vec3::ZERO)?;
         assert_eq!(world.pending.len(), 1);
         assert_eq!(world.cue_cursor(), 1);
@@ -877,7 +897,7 @@ mod tests {
         world.advance(1. / 60., |_, _, _| Some(Mat4::IDENTITY), |_, _| None)?;
         assert_eq!(world.instances().count(), 1);
         let before = world.instances().next().unwrap();
-        let mut same = WeaponDebris::new(assets()?, WeaponDebrisLimits::default())?;
+        let mut same = WeaponDebris::new(fx.assets()?, WeaponDebrisLimits::default())?;
         same.cues(&[cue(1)], |_, _, _| Some(Mat4::IDENTITY), |_| Vec3::ZERO)?;
         same.advance(1. / 60., |_, _, _| Some(Mat4::IDENTITY), |_, _| None)?;
         let after = same.instances().next().unwrap();
@@ -891,13 +911,11 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    #[ignore = "requires the ignored primary-source weapon-debris pack produced by the importer"]
-    fn a_zero_normal_hit_drops_the_casing_instead_of_failing() -> Result<()> {
+    fn a_zero_normal_hit_drops_the_casing_instead_of_failing(fx: &Debris) -> Result<()> {
         // a16 multiplayer crash: a casing ejected inside a brick got a hit
         // whose zero normal normalized to NaN, and advance returned an error
         // that closed the game.
-        let mut world = WeaponDebris::new(assets()?, WeaponDebrisLimits::default())?;
+        let mut world = WeaponDebris::new(fx.assets()?, WeaponDebrisLimits::default())?;
         world.cues(&[cue(1)], |_, _, _| Some(Mat4::IDENTITY), |_| Vec3::ZERO)?;
         world.advance(
             1. / 60.,
@@ -914,10 +932,8 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    #[ignore = "requires the ignored primary-source weapon-debris pack produced by the importer"]
-    fn unresolved_pose_expires_and_native_bounces_are_bounded() -> Result<()> {
-        let mut world = WeaponDebris::new(assets()?, WeaponDebrisLimits::default())?;
+    fn unresolved_pose_expires_and_native_bounces_are_bounded(fx: &Debris) -> Result<()> {
+        let mut world = WeaponDebris::new(fx.assets()?, WeaponDebrisLimits::default())?;
         world.cues(&[cue(9)], |_, _, _| None, |_| Vec3::ZERO)?;
         world.advance(0.25, |_, _, _| None, |_, _| None)?;
         world.advance(0.25, |_, _, _| None, |_, _| None)?;
@@ -943,7 +959,8 @@ mod tests {
                 },
             )?;
         }
-        assert!(world.diagnostics.bounces <= 3);
+        let bounces = fx.assets()?.shell.bounces;
+        assert!(world.diagnostics.bounces <= u64::from(bounces));
         assert!(world.diagnostics.settled <= 1);
         assert!(world.instances().count() <= 1);
         Ok(())

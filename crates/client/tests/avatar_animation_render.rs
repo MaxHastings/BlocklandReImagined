@@ -1,30 +1,29 @@
 //! Offscreen captures of Blockhead animation: walking at 45 degrees, and the
-//! v20 builder animations.
-//! Run with: cargo test -p bri-client --test avatar_animation_render --release -- --ignored --nocapture
-//! Requires the converted avatar package (BRI_CONTENT overrides `content/`) and
-//! an offscreen GPU; never opens a window.
+//! v20 builder animations. Each body runs on the made-up avatar package
+//! (`bri_client::testing::avatar`) and again, ignored, on the converted one
+//! (BRI_CONTENT overrides `content/`). Offscreen only; never opens a window.
+#[macro_use]
+mod support;
+
 use anyhow::{Context, Result, ensure};
-use bri_client::avatar::{
-    ActionAnimation, AvatarAnimationInput, AvatarAssets, AvatarMesh, HeldToolPose,
-};
+use bri_client::avatar::{ActionAnimation, AvatarAnimationInput, AvatarMesh, HeldToolPose};
 use bri_render::scene::{Camera, SceneRenderer, create_depth};
 use bri_sim::player::PlayerState;
-use bri_ui::gpu::Headless;
 use glam::{Mat4, Quat, Vec3};
-use std::{path::PathBuf, time::Duration};
+use std::time::Duration;
+use support::{avatar_fixture::AvatarFixture, gpu};
+
+synthetic_and_content!(
+    AvatarFixture: diagonal_walk_keeps_a_continuous_leg_cycle,
+    builder_animations_render_on_the_avatar,
+    uploads_follow_posed_topology_changes,
+);
 
 const CELL: (u32, u32) = (200, 260);
 const COLUMNS: u32 = 10;
 const FRAMES: usize = 90;
 const SHOWN: usize = 30;
 const DT: f64 = 1.0 / 60.0;
-
-fn content() -> PathBuf {
-    std::env::var_os("BRI_CONTENT").map_or_else(
-        || PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../content"),
-        PathBuf::from,
-    )
-}
 
 /// Holding forward and right: the body yaw follows the mouse every frame
 /// while velocity runs toward the 45 degree move direction on 32 ms ticks.
@@ -87,14 +86,14 @@ fn player(
 
 /// One offscreen colour/depth target the size of a sheet cell.
 struct Offscreen {
-    gpu: Headless,
+    gpu: gpu::Turn,
     renderer: SceneRenderer,
     texture: wgpu::Texture,
     depth: wgpu::Texture,
 }
 impl Offscreen {
     fn new() -> Result<Self> {
-        let gpu = Headless::new().context("offscreen avatar renderer")?;
+        let gpu = gpu::turn().context("offscreen avatar renderer")?;
         let format = wgpu::TextureFormat::Rgba8UnormSrgb;
         let renderer = SceneRenderer::new(&gpu.device, format);
         let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
@@ -208,19 +207,11 @@ impl Offscreen {
     }
 }
 
-fn out_dir() -> Result<PathBuf> {
-    let out = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../artifacts/avatar-animation");
-    std::fs::create_dir_all(&out)?;
-    Ok(out)
-}
-
-#[test]
-#[ignore = "requires original native avatar package and an offscreen GPU"]
-fn diagonal_walk_keeps_a_continuous_leg_cycle() -> Result<()> {
+fn diagonal_walk_keeps_a_continuous_leg_cycle(f: &AvatarFixture) -> Result<()> {
     let prefix = std::env::var("BRI_CAPTURE_LABEL").unwrap_or_else(|_| "after".into());
-    let reference = capture(&format!("{prefix}-forward"), "forward")?;
+    let reference = capture(f, &format!("{prefix}-forward"), "forward")?;
     for case in ["turning", "wobble"] {
-        let steps = capture(&format!("{prefix}-{case}"), case)?;
+        let steps = capture(f, &format!("{prefix}-{case}"), case)?;
         let worst = steps
             .iter()
             .zip(&reference)
@@ -238,9 +229,9 @@ fn diagonal_walk_keeps_a_continuous_leg_cycle() -> Result<()> {
     Ok(())
 }
 
-fn capture(label: &str, case: &str) -> Result<Vec<f32>> {
-    let out = out_dir()?;
-    let assets = AvatarAssets::load(&content().join("avatar-pack-002"))?;
+fn capture(f: &AvatarFixture, label: &str, case: &str) -> Result<Vec<f32>> {
+    let out = f.out("avatar-animation")?;
+    let assets = &f.assets;
     let mut mesh = assets.mesh(assets.package.defaults.clone())?;
     let mut offscreen = Offscreen::new()?;
     let rows = (SHOWN as u32).div_ceil(COLUMNS);
@@ -251,7 +242,7 @@ fn capture(label: &str, case: &str) -> Result<Vec<f32>> {
     for frame in 0..FRAMES {
         let (p, tick) = player(frame, &mut tick_state, case);
         mesh.pose_with_animation(
-            &assets,
+            assets,
             &p,
             frame as f64 * DT,
             &AvatarAnimationInput {
@@ -262,8 +253,8 @@ fn capture(label: &str, case: &str) -> Result<Vec<f32>> {
         let model = Mat4::from_rotation_translation(Quat::from_rotation_y(-p.yaw), p.feet.into());
         let leg = model.inverse()
             * mesh
-                .world_node(&assets, "RightLeg")
-                .context("Original RightLeg node")?;
+                .world_node(assets, "RightLeg")
+                .context("RightLeg node")?;
         let direction = leg.y_axis.truncate().normalize();
         if let Some(previous) = previous {
             steps.push(previous.angle_between(direction).to_degrees());
@@ -300,11 +291,9 @@ fn capture(label: &str, case: &str) -> Result<Vec<f32>> {
 
 /// v20 `playThread(3, ...)` builder and chat animations over the raised
 /// brick arm.
-#[test]
-#[ignore = "requires original native avatar package and an offscreen GPU"]
-fn builder_animations_render_on_the_original_avatar() -> Result<()> {
+fn builder_animations_render_on_the_avatar(f: &AvatarFixture) -> Result<()> {
     const STEPS: u32 = 6;
-    let assets = AvatarAssets::load(&content().join("avatar-pack-002"))?;
+    let assets = &f.assets;
     let mut offscreen = Offscreen::new()?;
     let player = PlayerState {
         owner: 1,
@@ -339,14 +328,14 @@ fn builder_animations_render_on_the_original_avatar() -> Result<()> {
         let clip = assets
             .rig
             .sequence(&gesture.to_ascii_lowercase())
-            .with_context(|| format!("Original {gesture} clip"))?;
+            .with_context(|| format!("{gesture} clip"))?;
         let mut mesh = assets.mesh(assets.package.defaults.clone())?;
         let mut travel: f32 = 0.0;
         let mut rest = None;
         for step in 0..STEPS {
             let time = f64::from(step) / f64::from(STEPS - 1) * f64::from(clip.duration);
             mesh.pose_with_animation(
-                &assets,
+                assets,
                 &player,
                 time,
                 &AvatarAnimationInput {
@@ -363,7 +352,7 @@ fn builder_animations_render_on_the_original_avatar() -> Result<()> {
             // twist the brick hand and undo nods the head.
             let nodes: Vec<_> = ["RightHand", "LeftArm", "RightArm", "Head", "Hip"]
                 .iter()
-                .filter_map(|name| mesh.world_node(&assets, name))
+                .filter_map(|name| mesh.world_node(assets, name))
                 .collect();
             let rest: &Vec<Mat4> = rest.get_or_insert(nodes.clone());
             for (node, rest) in nodes.iter().zip(rest) {
@@ -382,7 +371,7 @@ fn builder_animations_render_on_the_original_avatar() -> Result<()> {
         report.push(serde_json::json!({ "gesture": gesture, "travel": travel }));
         ensure!(travel > 0.01, "{gesture} did not move the builder");
     }
-    let out = out_dir()?;
+    let out = f.out("avatar-animation")?;
     sheet.save(out.join("builder-sheet.png"))?;
     std::fs::write(
         out.join("builder-report.json"),
@@ -394,10 +383,8 @@ fn builder_animations_render_on_the_original_avatar() -> Result<()> {
 /// "Dynamic scene topology changed": a player's posed mesh changes shape
 /// between frames when parts appear or disappear (skis here; held items,
 /// flares and seats do the same). Each upload must follow the new layout.
-#[test]
-#[ignore = "requires original native avatar package and an offscreen GPU"]
-fn uploads_follow_posed_topology_changes() -> Result<()> {
-    let assets = AvatarAssets::load(&content().join("avatar-pack-002"))?;
+fn uploads_follow_posed_topology_changes(f: &AvatarFixture) -> Result<()> {
+    let assets = &f.assets;
     let mut mesh = assets.mesh(assets.package.defaults.clone())?;
     let offscreen = Offscreen::new()?;
     let mut tick_state = None;
@@ -405,7 +392,7 @@ fn uploads_follow_posed_topology_changes() -> Result<()> {
     for (frame, skis) in [false, false, true, true, false].into_iter().enumerate() {
         mesh.set_skis(skis.then_some([1.0, 0.0, 0.0, 1.0]));
         let (p, _) = player(frame, &mut tick_state, "forward");
-        mesh.pose(&assets, &p, frame as f64 * DT)?;
+        mesh.pose(assets, &p, frame as f64 * DT)?;
         let gpu = &offscreen.gpu;
         mesh.upload(&offscreen.renderer, &gpu.device, &gpu.queue)
             .with_context(|| format!("upload at frame {frame} (skis {skis})"))?;

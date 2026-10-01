@@ -1143,12 +1143,43 @@ mod tests {
             0.0
         );
     }
-    #[test]
-    #[ignore = "requires the converted native vehicle pack; CPU only"]
-    fn gunner_barrels_follow_the_pitch_to_the_muzzle() -> Result<()> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/vehicles-pack-012");
-        let assets = VehicleAssets::load(&root)?;
-        for id in ["v20.vehicle.tankvehicle", "v20.vehicle.cannonturret"] {
+    /// A vehicle pack on disk with gunners whose barrels a `look` clip
+    /// poses, and vehicles that have none.
+    struct Gunners {
+        root: std::path::PathBuf,
+        gunners: Vec<String>,
+        unarmed: Vec<String>,
+        _scratch: Option<crate::testing::ScratchDir>,
+    }
+    impl Gunners {
+        fn synthetic() -> Result<Self> {
+            use crate::testing::vehicles;
+            let scratch = crate::testing::ScratchDir::new("vehicle-gunners")?;
+            vehicles::write_pack(scratch.path())?;
+            Ok(Self {
+                root: scratch.path().to_path_buf(),
+                gunners: vehicles::GUNNERS.map(String::from).into(),
+                unarmed: vehicles::UNARMED.map(String::from).into(),
+                _scratch: Some(scratch),
+            })
+        }
+        fn content() -> Result<Self> {
+            Ok(Self {
+                root: Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/vehicles-pack-012"),
+                gunners: ["v20.vehicle.tankvehicle", "v20.vehicle.cannonturret"]
+                    .map(String::from)
+                    .into(),
+                unarmed: ["v20.vehicle.jeepvehicle", "v20.vehicle.horsearmor"]
+                    .map(String::from)
+                    .into(),
+                _scratch: None,
+            })
+        }
+    }
+    crate::testing::synthetic_and_content!(Gunners: gunner_barrels_follow_the_pitch_to_the_muzzle);
+    fn gunner_barrels_follow_the_pitch_to_the_muzzle(fx: &Gunners) -> Result<()> {
+        let assets = VehicleAssets::load(&fx.root)?;
+        for id in &fx.gunners {
             let d = assets.definition(id).unwrap().clone();
             let model = d.attachment_model.clone().unwrap_or(d.model.clone());
             let rig = &assets.looks[&model];
@@ -1190,7 +1221,7 @@ mod tests {
                 last = Some(barrel);
             }
         }
-        for id in ["v20.vehicle.jeepvehicle", "v20.vehicle.horsearmor"] {
+        for id in &fx.unarmed {
             if let Some(d) = assets.definition(id) {
                 assert!(!assets.looks.contains_key(&d.model), "{id}");
             }

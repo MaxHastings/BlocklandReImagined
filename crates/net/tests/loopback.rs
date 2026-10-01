@@ -1505,13 +1505,31 @@ async fn build_request_larger_than_old_frame_limit_crosses_real_quic() -> Result
     Ok(())
 }
 
+/// An avatar catalog's `avatar.json`: the made-up package of
+/// `bri_content::testing::avatar`, or the converted original.
+fn avatar_package(dir: &std::path::Path) -> Result<bri_content::avatar::Package> {
+    Ok(serde_json::from_slice(&std::fs::read(
+        dir.join("avatar.json"),
+    )?)?)
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn avatar_changes_replicate_late_join_reject_invalid_and_resume() -> Result<()> {
+    let dir = bri_content::testing::ScratchDir::new("net-avatar")?;
+    bri_content::testing::avatar::write(dir.path())?;
+    avatar_changes_replicate_late_join_reject_invalid_and_resume_with(avatar_package(dir.path())?)
+        .await
+}
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires generated v20 content"]
 async fn original_avatar_changes_replicate_late_join_reject_invalid_and_resume() -> Result<()> {
-    let root =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-002");
-    let package: bri_content::avatar::Package =
-        serde_json::from_slice(&std::fs::read(root.join("avatar.json"))?)?;
+    avatar_changes_replicate_late_join_reject_invalid_and_resume_with(avatar_package(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-002"),
+    )?)
+    .await
+}
+async fn avatar_changes_replicate_late_join_reject_invalid_and_resume_with(
+    package: bri_content::avatar::Package,
+) -> Result<()> {
     let mut session = session();
     session.set_avatar_catalog(package.clone())?;
     let server = server::start(session, options())?;

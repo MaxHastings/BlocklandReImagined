@@ -14,6 +14,9 @@ use crate::{
 };
 use std::{path::PathBuf, rc::Rc};
 
+mod screens;
+pub use screens::*;
+
 /// The body text font.
 pub const FONT: &str = "fixture sans_14";
 /// The window title and button font.
@@ -289,8 +292,8 @@ pub fn add_message_boxes(data: &mut UiPack) {
             "MessageBoxYesNoDlg",
             "MBYesNo",
             &[
-                ("Yes", "MessageBoxYesNoDlg.yesCallback();"),
-                ("No", "MessageBoxYesNoDlg.noCallback();"),
+                ("YES", "MessageBoxYesNoDlg.yesCallback();"),
+                ("NO", "MessageBoxYesNoDlg.noCallback();"),
             ][..],
         ),
     ] {
@@ -395,6 +398,14 @@ pub fn add_dialogs(data: &mut UiPack) {
                     ctrl(
                         "GuiCheckBoxCtrl",
                         "GuiCheckBoxProfile",
+                        Rect::new(14, 176, 160, 20),
+                    ),
+                    "SaveBricks_ExtendedInfo",
+                ),
+                named(
+                    ctrl(
+                        "GuiCheckBoxCtrl",
+                        "GuiCheckBoxProfile",
                         Rect::new(14, 200, 160, 20),
                     ),
                     "SaveBricks_Ownership",
@@ -407,15 +418,11 @@ pub fn add_dialogs(data: &mut UiPack) {
                     ),
                     "SaveBricks_FileList",
                 ),
-                text_button(
-                    Rect::new(380, 360, 100, 28),
-                    "Save",
-                    "saveBricksGui.clickSave();",
-                ),
+                text_button(Rect::new(380, 360, 100, 28), "Save", "SaveBricks_Save();"),
                 text_button(
                     Rect::new(270, 360, 100, 28),
                     "Cancel",
-                    "canvas.popDialog(saveBricksGui);",
+                    "canvas.popDialog(\"saveBricksGui\");",
                 ),
             ],
         ),
@@ -486,7 +493,7 @@ pub fn add_dialogs(data: &mut UiPack) {
                 text_button(
                     Rect::new(520, 420, 100, 28),
                     "Load",
-                    "LoadBricksGui.clickLoad();",
+                    "LoadBricks_ClickLoadButton();",
                 ),
             ],
         ),
@@ -510,6 +517,19 @@ pub fn add_dialogs(data: &mut UiPack) {
         ),
         "NPL_List",
     ));
+    for (i, (label, command)) in [
+        ("Build", "NewPlayerListGui.clickTrustInviteBuild();"),
+        ("Full", "NewPlayerListGui.clickTrustInviteFull();"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        players.push(text_button(
+            Rect::new(14 + i as i32 * 100, 270, 90, 28),
+            label,
+            command,
+        ));
+    }
     players.push(text_button(
         Rect::new(320, 270, 90, 28),
         "Close",

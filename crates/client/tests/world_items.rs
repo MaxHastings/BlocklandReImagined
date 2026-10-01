@@ -1,28 +1,21 @@
-//! CPU projection and bounded offscreen GPU lifecycle for the native item adapter.
+//! CPU projection and bounded offscreen GPU lifecycle for the native item
+//! adapter. Each body runs on the synthetic item packs
+//! (`support::item_fixture`) and again, ignored, on the generated v20 packs.
+#[macro_use]
+mod support;
+
 use anyhow::Result;
 use bri_client::{items::ItemAssets, world_items::*};
 use bri_render::scene::SceneRenderer;
 use bri_sim::{item_spawners::StaticItem, session::WeaponView};
 use bri_ui::gpu::Headless;
 use glam::{Mat4, Vec3};
-use std::{
-    collections::BTreeMap,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::{collections::BTreeMap, sync::Arc};
+use support::{gpu, item_fixture::ItemFixture};
 
-fn root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
-fn packs() -> Result<(Arc<ItemAssets>, Arc<bri_weapons::Pack>)> {
-    let root = root();
-    let assets = ItemAssets::load(
-        &root.join("content/item-presentation-pack-010"),
-        &root.join("content/weapons-pack-009"),
-    )?;
-    let weapons = bri_weapons::Pack::from_json(&std::fs::read(
-        root.join("content/weapons-pack-009/weapons.json"),
-    )?)?;
+fn packs(f: &ItemFixture) -> Result<(Arc<ItemAssets>, Arc<bri_weapons::Pack>)> {
+    let assets = ItemAssets::load(&f.presentation, &f.weapons)?;
+    let weapons = bri_weapons::Pack::from_json(&std::fs::read(f.weapons.join("weapons.json"))?)?;
     Ok((Arc::new(assets), Arc::new(weapons)))
 }
 fn frame() -> WorldItemFrame {
@@ -35,23 +28,45 @@ fn frame() -> WorldItemFrame {
         reflected_self: false,
     }
 }
-fn static_item(brick: u64, position: [f32; 3]) -> StaticItem {
+fn static_item(f: &ItemFixture, brick: u64, position: [f32; 3]) -> StaticItem {
     StaticItem {
         brick,
-        item: "v20.weapon.gunitem".into(),
+        item: f.gun_item.clone(),
         position,
         direction: 2,
         available_at: 0,
     }
 }
+fn mounted(image: &str, state: &str) -> bri_sim::session::MountedImage {
+    bri_sim::session::MountedImage {
+        paint: None,
+        image: image.into(),
+        state: state.into(),
+        hand: 0,
+    }
+}
 
-#[test]
-#[ignore = "requires converted item and weapon packs"]
-fn model_instances_share_cpu_model_and_missing_mounts_never_guess() -> Result<()> {
-    let (assets, weapons) = packs()?;
+synthetic_and_content!(
+    ItemFixture: model_instances_share_cpu_model_and_missing_mounts_never_guess,
+    shared_gpu_geometry_clears_and_recreates_without_cpu_loss,
+    a_picked_up_brick_item_stays_as_a_ghost_until_it_respawns,
+    bounded_cache_reclaims_absent_models_and_prioritizes_held_items,
+    mirrors_show_the_local_players_held_item_as_everyone_else_sees_it,
+    actual_item_instances_match_independently_baked_world_geometry,
+    a_held_swing_plays_again_on_every_fire_entry,
+    a_thrown_image_hides_without_crashing_the_renderer,
+    a_stuck_arrow_keeps_pointing_the_way_it_flew,
+    an_effect_streams_from_a_held_image_without_a_muzzle_point,
+);
+
+fn model_instances_share_cpu_model_and_missing_mounts_never_guess(f: &ItemFixture) -> Result<()> {
+    let (assets, weapons) = packs(f)?;
     let mut adapter = WorldItems::new(assets, weapons, WorldItemLimits::default())?;
     let view = WeaponView {
-        static_items: vec![static_item(1, [0., 0., 0.]), static_item(2, [2., 0., 0.])],
+        static_items: vec![
+            static_item(f, 1, [0., 0., 0.]),
+            static_item(f, 2, [2., 0., 0.]),
+        ],
         ..Default::default()
     };
     adapter.sync(&view, frame(), |_| None)?;
@@ -60,12 +75,7 @@ fn model_instances_share_cpu_model_and_missing_mounts_never_guess() -> Result<()
     assert_eq!(adapter.diagnostics.geometry_slots, 1);
     assert_eq!(adapter.diagnostics.model_builds, 1);
 
-    let mounted_image = bri_sim::session::MountedImage {
-        paint: None,
-image: "v20.image.gunimage".into(),
-        state: "Fire".into(),
-        hand: 0,
-    };
+    let mounted_image = mounted(&f.right_image, "Fire");
     let mounted = WeaponView {
         images: BTreeMap::from([(7, vec![mounted_image.clone()]), (8, vec![mounted_image])]),
         ..Default::default()
@@ -93,12 +103,12 @@ image: "v20.image.gunimage".into(),
     );
     assert!(
         adapter
-            .mounted_node(7, 0, "v20.image.gunimage", "mountPoint")
+            .mounted_node(7, 0, &f.right_image, "mountPoint")
             .is_ok()
     );
     assert!(
         adapter
-            .mounted_node(7, 0, "v20.image.gunimage", "absent-node")
+            .mounted_node(7, 0, &f.right_image, "absent-node")
             .is_err()
     );
     assert!(
@@ -138,15 +148,16 @@ image: "v20.image.gunimage".into(),
     Ok(())
 }
 
-#[test]
-#[ignore = "requires converted packs and an offscreen GPU adapter"]
-fn shared_gpu_geometry_clears_and_recreates_without_cpu_loss() -> Result<()> {
-    let (assets, weapons) = packs()?;
-    let gpu = Headless::new()?;
+fn shared_gpu_geometry_clears_and_recreates_without_cpu_loss(f: &ItemFixture) -> Result<()> {
+    let (assets, weapons) = packs(f)?;
+    let gpu = gpu::turn()?;
     let renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
     let mut adapter = WorldItems::new(assets, weapons, WorldItemLimits::default())?;
     let view = WeaponView {
-        static_items: vec![static_item(1, [0., 0., 0.]), static_item(2, [2., 0., 0.])],
+        static_items: vec![
+            static_item(f, 1, [0., 0., 0.]),
+            static_item(f, 2, [2., 0., 0.]),
+        ],
         ..Default::default()
     };
     adapter.sync(&view, frame(), |_| None)?;
@@ -189,13 +200,11 @@ fn drop_and_projectile_fades_are_bounded_and_finite() {
     assert!(projectile_opacity(119, 20, 120).is_finite());
 }
 
-#[test]
-#[ignore = "requires converted item and weapon packs"]
-fn a_picked_up_brick_item_stays_as_a_ghost_until_it_respawns() -> Result<()> {
-    let (assets, weapons) = packs()?;
+fn a_picked_up_brick_item_stays_as_a_ghost_until_it_respawns(f: &ItemFixture) -> Result<()> {
+    let (assets, weapons) = packs(f)?;
     let mut adapter = WorldItems::new(assets, weapons, WorldItemLimits::default())?;
-    let mut item = static_item(1, [0.; 3]);
-    item.item = "v20.weapon.bowitem".into();
+    let mut item = static_item(f, 1, [0.; 3]);
+    item.item = f.other_item.clone();
     item.available_at = 121;
     let view = WeaponView {
         static_items: vec![item],
@@ -224,10 +233,8 @@ fn a_picked_up_brick_item_stays_as_a_ghost_until_it_respawns() -> Result<()> {
     Ok(())
 }
 
-#[test]
-#[ignore = "requires converted item and weapon packs"]
-fn bounded_cache_reclaims_absent_models_and_prioritizes_held_items() -> Result<()> {
-    let (assets, weapons) = packs()?;
+fn bounded_cache_reclaims_absent_models_and_prioritizes_held_items(f: &ItemFixture) -> Result<()> {
+    let (assets, weapons) = packs(f)?;
     let mut adapter = WorldItems::new(
         assets,
         weapons,
@@ -238,30 +245,23 @@ fn bounded_cache_reclaims_absent_models_and_prioritizes_held_items() -> Result<(
         },
     )?;
     let mut view = WeaponView {
-        static_items: vec![static_item(1, [0.; 3])],
+        static_items: vec![static_item(f, 1, [0.; 3])],
         ..Default::default()
     };
     adapter.sync(&view, frame(), |_| None)?;
     assert_eq!(adapter.instances().count(), 1);
-    view.static_items[0].item = "v20.weapon.bowitem".into();
+    view.static_items[0].item = f.other_item.clone();
     adapter.sync(&view, frame(), |_| None)?;
     assert_eq!(
         adapter.instances().count(),
         1,
-        "old cached gun must not starve new bow"
+        "old cached model must not starve the new one"
     );
     assert_eq!(adapter.diagnostics.deferred, 0);
     assert_eq!(adapter.diagnostics.cached_models, 1);
     assert_eq!(adapter.diagnostics.geometry_slots, 1);
-    view.images.insert(
-        7,
-        vec![bri_sim::session::MountedImage {
-            paint: None,
-image: "v20.image.gunimage".into(),
-            state: "Ready".into(),
-            hand: 0,
-        }],
-    );
+    view.images
+        .insert(7, vec![mounted(&f.right_image, "Ready")]);
     let local_frame = WorldItemFrame {
         local_owner: Some(7),
         ..frame()
@@ -286,32 +286,20 @@ image: "v20.image.gunimage".into(),
         adapter.instances().map(|(id, _)| id).collect::<Vec<_>>(),
         vec![ItemIdentity::Static(1)]
     );
-    adapter.sync(
-        &WeaponView::default(),
-        local_frame,
-        |_| None,
-    )?;
+    adapter.sync(&WeaponView::default(), local_frame, |_| None)?;
     assert_eq!(adapter.diagnostics.cached_models, 0);
     assert_eq!(adapter.diagnostics.geometry_slots, 0);
     assert_eq!(adapter.diagnostics.geometry_vertices, 0);
     Ok(())
 }
 
-#[test]
-#[ignore = "requires converted item and weapon packs"]
-fn mirrors_show_the_local_players_held_item_as_everyone_else_sees_it() -> Result<()> {
-    let (assets, weapons) = packs()?;
+fn mirrors_show_the_local_players_held_item_as_everyone_else_sees_it(
+    f: &ItemFixture,
+) -> Result<()> {
+    let (assets, weapons) = packs(f)?;
     let mut adapter = WorldItems::new(assets, weapons, WorldItemLimits::default())?;
     let view = WeaponView {
-        images: BTreeMap::from([(
-            7,
-            vec![bri_sim::session::MountedImage {
-                paint: None,
-                image: "v20.image.gunimage".into(),
-                state: "Ready".into(),
-                hand: 0,
-            }],
-        )]),
+        images: BTreeMap::from([(7, vec![mounted(&f.right_image, "Ready")])]),
         ..Default::default()
     };
     let pose = |_| {
@@ -341,7 +329,10 @@ fn mirrors_show_the_local_players_held_item_as_everyone_else_sees_it() -> Result
     };
     adapter.sync(&view, first, pose)?;
     let held = placed(&adapter);
-    assert_eq!(held.keys().copied().collect::<Vec<_>>(), vec![ItemIdentity::Mounted(7, 0)]);
+    assert_eq!(
+        held.keys().copied().collect::<Vec<_>>(),
+        vec![ItemIdentity::Mounted(7, 0)]
+    );
     // With mirrors, a copy where everyone else sees it, for them only.
     adapter.sync(
         &view,
@@ -352,7 +343,10 @@ fn mirrors_show_the_local_players_held_item_as_everyone_else_sees_it() -> Result
         pose,
     )?;
     let both = placed(&adapter);
-    assert_eq!(both[&ItemIdentity::Mounted(7, 0)], held[&ItemIdentity::Mounted(7, 0)]);
+    assert_eq!(
+        both[&ItemIdentity::Mounted(7, 0)],
+        held[&ItemIdentity::Mounted(7, 0)]
+    );
     assert!(both[&ItemIdentity::Reflected(7, 0)].abs_diff_eq(others_see, 1e-5));
     Ok(())
 }
@@ -423,14 +417,15 @@ fn pixels(
     rx.recv_timeout(std::time::Duration::from_secs(30))??;
     Ok(buffer.slice(..).get_mapped_range()?.to_vec())
 }
-#[test]
-#[ignore = "requires converted packs and an offscreen GPU adapter"]
-fn actual_item_instances_match_independently_baked_world_geometry() -> Result<()> {
-    let (assets, weapons) = packs()?;
-    let gpu = Headless::new()?;
+fn actual_item_instances_match_independently_baked_world_geometry(f: &ItemFixture) -> Result<()> {
+    let (assets, weapons) = packs(f)?;
+    let gpu = gpu::turn()?;
     let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
-    let mut adapter = WorldItems::new(assets.clone(), weapons, Default::default())?;
-    let mut items = vec![static_item(1, [0., 0., 0.]), static_item(2, [2., 0., 0.])];
+    let mut adapter = WorldItems::new(assets.clone(), weapons.clone(), Default::default())?;
+    let mut items = vec![
+        static_item(f, 1, [0., 0., 0.]),
+        static_item(f, 2, [2., 0., 0.]),
+    ];
     items[1].direction = 4;
     adapter.sync(
         &WeaponView {
@@ -442,9 +437,15 @@ fn actual_item_instances_match_independently_baked_world_geometry() -> Result<()
     )?;
     adapter.upload(&renderer, &gpu.device, &gpu.queue)?;
     let binding = &assets.presentation.items[&items[0].item];
+    // A world item shows its image's colour when the image shifts colour
+    // (`ItemData::onAdd`), else its own tint.
+    let tint = match weapons.images.get(&binding.image) {
+        Some(image) if image.color_shift => image.color,
+        _ => binding.tint,
+    };
     let mut expected = Vec::new();
     for item in &items {
-        let mut mesh = assets.mesh(&binding.model, binding.tint)?;
+        let mut mesh = assets.mesh(&binding.model, tint)?;
         mesh.pose(
             &assets,
             Mat4::from_rotation_translation(item.rotation(), Vec3::from(item.position)),
@@ -493,24 +494,14 @@ fn actual_item_instances_match_independently_baked_world_geometry() -> Result<()
     Ok(())
 }
 
-#[test]
-#[ignore = "requires converted item and weapon packs"]
-fn a_held_hammer_swings_again_on_every_fire_entry() -> Result<()> {
+fn a_held_swing_plays_again_on_every_fire_entry(f: &ItemFixture) -> Result<()> {
     // hammerImage loops Fire, CheckFire (0 ticks), Fire while the trigger is
     // held, so the replicated state reads "Fire" throughout. Each entry's
     // Fire sequence cue must start the view model's swing over.
-    let (assets, weapons) = packs()?;
+    let (assets, weapons) = packs(f)?;
     let mut adapter = WorldItems::new(assets, weapons, WorldItemLimits::default())?;
     let view = WeaponView {
-        images: BTreeMap::from([(
-            7,
-            vec![bri_sim::session::MountedImage {
-                paint: None,
-                image: "v20.image.hammerimage".into(),
-                state: "Fire".into(),
-                hand: 0,
-            }],
-        )]),
+        images: BTreeMap::from([(7, vec![mounted(&f.swing_image.0, "Fire")])]),
         ..Default::default()
     };
     let pose = |_| {
@@ -523,7 +514,7 @@ fn a_held_hammer_swings_again_on_every_fire_entry() -> Result<()> {
     };
     let head = |adapter: &WorldItems| {
         adapter
-            .mounted_node(7, 0, "v20.image.hammerimage", "FPhammer9999")
+            .mounted_node(7, 0, &f.swing_image.0, &f.swing_image.1)
             .unwrap()
     };
     let same = |a: Mat4, b: Mat4| a.abs_diff_eq(b, 1e-4);
@@ -541,20 +532,18 @@ fn a_held_hammer_swings_again_on_every_fire_entry() -> Result<()> {
     assert!(!same(start, end), "the fire clip moves the head");
     adapter.sync(&view, at(1.6), pose)?;
     assert!(same(head(&adapter), end), "one entry swings once");
-    adapter.restart_image_sequence(7, 0, "Fire");
+    adapter.restart_image_sequence(7, 0, &f.swing_image.2);
     adapter.sync(&view, at(1.6), pose)?;
     assert!(same(head(&adapter), start), "a new entry swings again");
     Ok(())
 }
 
-#[test]
-#[ignore = "requires converted packs and an offscreen GPU adapter"]
-fn a_thrown_spear_hides_its_image_without_crashing_the_renderer() -> Result<()> {
+fn a_thrown_image_hides_without_crashing_the_renderer(f: &ItemFixture) -> Result<()> {
     // a16: "buffer slice can not be empty". spear.dts's `fire` sequence keys
     // both spear objects invisible while it is thrown, so the posed held
     // image has no geometry; its shadow draw bound the empty buffers.
-    let (assets, weapons) = packs()?;
-    let gpu = Headless::new()?;
+    let (assets, weapons) = packs(f)?;
+    let gpu = gpu::turn()?;
     let format = wgpu::TextureFormat::Rgba8UnormSrgb;
     let mut renderer = SceneRenderer::with_settings(
         &gpu.device,
@@ -568,15 +557,7 @@ fn a_thrown_spear_hides_its_image_without_crashing_the_renderer() -> Result<()> 
     renderer.update_camera(&gpu.queue, &camera);
     let mut adapter = WorldItems::new(assets, weapons, WorldItemLimits::default())?;
     let view = WeaponView {
-        images: BTreeMap::from([(
-            7,
-            vec![bri_sim::session::MountedImage {
-                paint: None,
-                image: "v20.image.spearimage".into(),
-                state: "Fire".into(),
-                hand: 0,
-            }],
-        )]),
+        images: BTreeMap::from([(7, vec![mounted(&f.throw_image, "Fire")])]),
         ..Default::default()
     };
     let pose = |_| {
@@ -602,17 +583,11 @@ fn a_thrown_spear_hides_its_image_without_crashing_the_renderer() -> Result<()> 
         view_formats: &[],
     });
     let color = target.create_view(&Default::default());
-    let depth = bri_render::scene::create_depth(&gpu.device, 64, 64).create_view(&Default::default());
+    let depth =
+        bri_render::scene::create_depth(&gpu.device, 64, 64).create_view(&Default::default());
     // Mid-throw (hidden) and after it (shown again).
     for seconds in [1.0, 1.05, 1.5] {
-        adapter.sync(
-            &view,
-            WorldItemFrame {
-                seconds,
-                ..frame()
-            },
-            pose,
-        )?;
+        adapter.sync(&view, WorldItemFrame { seconds, ..frame() }, pose)?;
         adapter.upload(&renderer, &gpu.device, &gpu.queue)?;
         let draws = adapter.draws();
         let mut encoder = gpu.device.create_command_encoder(&Default::default());
@@ -633,15 +608,13 @@ fn a_thrown_spear_hides_its_image_without_crashing_the_renderer() -> Result<()> 
     Ok(())
 }
 
-#[test]
-#[ignore = "requires converted item and weapon packs"]
-fn a_stuck_arrow_keeps_pointing_the_way_it_flew() -> Result<()> {
+fn a_stuck_arrow_keeps_pointing_the_way_it_flew(f: &ItemFixture) -> Result<()> {
     // Sticking zeroes the arrow's velocity; it must not flip to point up.
-    let (assets, weapons) = packs()?;
+    let (assets, weapons) = packs(f)?;
     let mut adapter = WorldItems::new(assets, weapons, WorldItemLimits::default())?;
     let arrow = |velocity: Vec3, age: u32| bri_weapons::Projectile {
         id: 5,
-        definition: "v20.projectile.arrowprojectile".into(),
+        definition: f.arrow.clone(),
         source: bri_weapons::ActorId(1),
         position: Vec3::new(0., 2., 0.),
         velocity,
@@ -679,7 +652,8 @@ fn a_stuck_arrow_keeps_pointing_the_way_it_flew() -> Result<()> {
         nose(&adapter)
     );
     // A player who joins after it stuck gets the replicated heading.
-    let mut joiner = WorldItems::new(packs()?.0, packs()?.1, WorldItemLimits::default())?;
+    let (assets, weapons) = packs(f)?;
+    let mut joiner = WorldItems::new(assets, weapons, WorldItemLimits::default())?;
     let stuck = bri_weapons::Projectile {
         heading: Some(flying.normalize()),
         ..arrow(Vec3::ZERO, 20)
@@ -692,23 +666,13 @@ fn a_stuck_arrow_keeps_pointing_the_way_it_flew() -> Result<()> {
 /// brickWeapon.dts has no muzzlePoint: `brickTrailEmitter` streams from the
 /// held brick's own transform (`ShapeBase::getMuzzleTransform`), first
 /// person included, instead of being dropped for want of a pose.
-#[test]
-#[ignore = "requires converted item and weapon packs"]
-fn the_brick_trail_streams_from_the_held_brick_without_a_muzzle_point() -> Result<()> {
+fn an_effect_streams_from_a_held_image_without_a_muzzle_point(f: &ItemFixture) -> Result<()> {
     use anyhow::Context;
     use bri_sim::presentation::{Cue, CueKind};
-    let (assets, weapons) = packs()?;
+    let (assets, weapons) = packs(f)?;
     let mut adapter = WorldItems::new(assets, weapons, WorldItemLimits::default())?;
     let view = WeaponView {
-        images: BTreeMap::from([(
-            7,
-            vec![bri_sim::session::MountedImage {
-                paint: None,
-                image: "v20.image.brickimage".into(),
-                state: "Fire".into(),
-                hand: 0,
-            }],
-        )]),
+        images: BTreeMap::from([(7, vec![mounted(&f.no_muzzle_image, "Fire")])]),
         ..Default::default()
     };
     let hand = Mat4::from_translation(Vec3::new(0.4, 1.2, -0.3));
@@ -721,7 +685,7 @@ fn the_brick_trail_streams_from_the_held_brick_without_a_muzzle_point() -> Resul
             definition: "brickTrailEmitter".into(),
             node: String::new(),
             seconds: 0.1,
-            image: Some("v20.image.brickimage".into()),
+            image: Some(f.no_muzzle_image.clone()),
             hand: Some(0),
             direction: Some([0.0, 0.0, -1.0]),
             scale: 1.0,
@@ -747,7 +711,7 @@ fn the_brick_trail_streams_from_the_held_brick_without_a_muzzle_point() -> Resul
             .mounted_transform(7, 0)
             .context("the brick is mounted")?;
         let muzzle = adapter
-            .mounted_node(7, 0, "v20.image.brickimage", "muzzlePoint")
+            .mounted_node(7, 0, &f.no_muzzle_image, "muzzlePoint")
             .unwrap_or(held);
         let pose = adapter
             .effect_pose(&cue)
