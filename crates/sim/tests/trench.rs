@@ -69,6 +69,26 @@ fn definitions() -> Definitions {
     }
 }
 
+/// The stand-in digging tool (CC0): an image that runs the rules' `dig`
+/// on a click and `place` on jet, with no model of its own.
+const KIT_PACKAGE: &str = r#"{ "schema_version": 1, "id": "trench-kit", "version": "1.0.0", "api": 1,
+  "name": "Test pick", "license": "CC0-1.0", "provenance": { "source": "original" },
+  "provides": [{ "kind": "weapons", "id": "trench-kit:weapons/main", "file": "assets/weapons.json" }] }"#;
+const KIT_WEAPONS: &str = r#"{ "schema_version": 3, "id": "trench-kit",
+  "items": { "trench-kit:weapon/pick": { "ui_name": "Test Pick", "image": "trench-kit:image/pick",
+    "model": "", "icon": "", "can_drop": false } },
+  "images": { "trench-kit:image/pick": { "name": "TestPickImage", "model": "", "melee": true,
+    "arm_ready": true, "command": "trench:dig", "commands": { "jet": "trench:place" },
+    "states": [
+      { "name": "Activate", "ticks": 18, "timeout": 1 },
+      { "name": "Ready", "down": 2 },
+      { "name": "PreFire", "ticks": 6, "timeout": 3, "arm": "armattack" },
+      { "name": "Fire", "ticks": 30, "timeout": 4, "script": "onFire", "allow_change": false },
+      { "name": "CheckFire", "down": 3, "up": 5 },
+      { "name": "StopFire", "ticks": 6, "timeout": 1, "arm": "root" } ] } },
+  "sounds": { "trench-kit:dig": { "file": "sounds/dig.wav" }, "trench-kit:place": { "file": "sounds/place.wav" },
+    "trench-kit:whistle": { "file": "sounds/whistle.wav" } } }"#;
+
 fn trench() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/trench-warfare")
 }
@@ -95,9 +115,15 @@ fn catalog() -> Arc<Catalog> {
 
 fn load_catalog() -> Arc<Catalog> {
     let root = std::env::temp_dir().join(format!("bri-trench-{}", std::process::id()));
-    for id in ["trench", "trench-kit", "trench-hud", "trench-mode"] {
+    for id in ["trench", "trench-hud", "trench-mode"] {
         copy_dir(&trench().join(id), &root.join(id));
     }
+    // A stand-in for the digging tool, written here: the real one is the
+    // player's own copy of the original Add-On, which is never committed.
+    let kit = root.join("trench-kit");
+    std::fs::create_dir_all(kit.join("assets")).unwrap();
+    std::fs::write(kit.join("package.json"), KIT_PACKAGE).unwrap();
+    std::fs::write(kit.join("assets/weapons.json"), KIT_WEAPONS).unwrap();
     let hand = root.join("test-hand");
     std::fs::create_dir_all(&hand).unwrap();
     std::fs::write(
@@ -177,7 +203,7 @@ fn weapons() -> bri_weapons::Pack {
     }
     let base = bri_weapons::Pack::from_json(&serde_json::to_vec(&base).unwrap()).unwrap();
     let kit = bri_weapons::Pack::from_json(
-        &std::fs::read(trench().join("trench-kit/assets/weapons.json")).unwrap(),
+        KIT_WEAPONS.as_bytes(),
     )
     .unwrap();
     let (pack, notes) = base.merge(vec![("trench-kit".into(), kit)]);

@@ -405,10 +405,6 @@ mod tests {
                 "advanced-duplicator-tool",
                 "advanced-duplicator",
                 "blockhead_bot",
-                "trench-kit",
-                "trench",
-                "trench-hud",
-                "trench-mode",
                 "fill-can-tool",
                 "fill-can"
             ]
@@ -512,10 +508,6 @@ mod tests {
                 "advanced-duplicator-tool",
                 "advanced-duplicator",
                 "blockhead_bot",
-                "trench-kit",
-                "trench",
-                "trench-hud",
-                "trench-mode",
                 "fill-can-tool",
                 "fill-can"
             ]

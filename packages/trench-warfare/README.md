@@ -4,14 +4,19 @@ A classic Blockland game mode: Red against Blue on a field of dirt. Dig in
 while the ceasefire holds, pile the dirt back up as cover, then fight
 across the trenches. The first team to 20 kills wins the round.
 
-It is four Add-Ons, split the way the platform splits sides, all shipped
-turned off (`packages/default-addons.json`). Turning on **Trench Warfare**
-(`trench-mode`) and picking it in Start Game's Game Mode list runs it.
+**Being reworked to load the originals.** Max chose to play classic
+Add-Ons from the player's own Blockland files (2026-10-01): the digging
+tool, its models, icons and sounds come from the player's copy of the
+original Add-On at runtime and are never committed or shipped. Our own
+look-alike pick (`trench-kit`) is gone, and none of these Add-Ons is on the
+default list. What stays here is our rewrite of the behaviour (the rules,
+the HUD and the mode), which becomes the port of the original once its
+names are known.
 
 | Add-On | Side | What it is |
 |---|---|---|
 | `trench` | host | the rules and the battlefield: a generated world of dirt, clay and rock (`field.json`, `trench.rhai`), teams and uniforms, the dirt bag, rounds and scores |
-| `trench-kit` | everyone | the Trench Pick (its own model: an ash handle, a leather grip and an iron head, with a first-person swing; its icon is drawn from it at the Hammer icon's angle) and the dig, place and whistle sounds |
+| `trench-kit` | everyone | the digging tool: the player's copy of the original Add-On (not in this repository; `crates/sim/tests/trench.rs` uses a stand-in) |
 | `trench-hud` | each player | the panel: the round's state, your team, your dirt and both teams' scores |
 | `trench-mode` | host | the game mode: the field as its map, and its own mini-game with the pick, Gun, Spear and Sword and the no-jet player |
 
@@ -35,9 +40,8 @@ turned off (`packages/default-addons.json`). Turning on **Trench Warfare**
 The design comes from Blockland's **Trench Digging** by lilboarder32 (a
 remake of an old v8 mod), **Trench Digging Plus** by Platypi
 ([Blockland Glass](https://blocklandglass.com/addons/addon/829)), and the
-Trench Wars servers that played them. This is our own implementation:
-none of their code, models, textures or sounds are used. The pick's model
-and textures, the sounds and the fallback icon come from
-`tools/make_trench_assets.py`.
+Trench Wars servers that played them. The rules here are our own
+implementation; none of their code is used, and their models, textures
+and sounds are only ever read from the player's own copy.
 
 Tests: `cargo test -p bri-sim --test trench`.

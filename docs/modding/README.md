@@ -454,15 +454,16 @@ letter.
 
 An item or image `model` may also be your own model: a native model file
 (`*.shape.json`, the format of `bri_content::shape`: x right, y up, -z
-forward) relative to `assets/`, like the Trench Pick's
-`"model": "models/trench_pick.shape.json"`. Each material names a PNG
+forward) relative to `assets/`, such as
+`"model": "models/pick.shape.json"`. Each material names a PNG
 beside the model (`pick_wood` draws `pick_wood.png`, up to 1,024 pixels a
 side), as a vehicle model's do. A node called `mountPoint` is where the hand
 holds it. A `detail9999` detail is what the holder sees in first person
 and the lower details what everyone else sees, so an image state's
 `sequence` (the pick's `"fire"`) can swing the first-person copy alone.
-Its box is its bounds for dropping. `tools/make_trench_assets.py` writes the
-pick's; `bri-addon-check` names a model or texture it cannot find.
+Its box is its bounds for dropping; `bri-addon-check` names a model or
+texture it cannot find. `bri-client`'s `own_model_tool` test fixture writes a
+small example.
 
 An icon can instead be drawn from the item's own model on each player's
 machine, so it matches the stock icons without shipping a picture of

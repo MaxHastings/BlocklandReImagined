@@ -8510,3 +8510,23 @@ Tests: `add_on_join::bot_kinds_come_from_the_blockhead_bot_add_on_the_host_runs`
 `add_on_join::a_host_with_the_blockhead_bot_on_spawns_bots_and_one_without_offers_none`
 (generated content: hosts with the Add-On on and off, loads a saved spawn
 brick, counts players). Not run here: the second needs generated content.
+
+## 2026-10-01 Trench Warfare: originals only (branch `claude/trench-warfare-eq4lxb`)
+
+Max chose "originals only" for classic Add-Ons (cmsg_01GZRn7g8JiQ6aV1cQgSj22DVJoRScxbRAjHRC4md4Ab28):
+the game loads their models, textures, sounds and data from the player's
+own Blockland Add-Ons folder at runtime, and we never commit or ship them.
+- Removed `trench-kit` (our generated pickaxe, textures, sounds and icon)
+  and `tools/make_trench_assets.py`; all four Trench Add-Ons are off the
+  default list.
+- Kept the general seams: a mode's `minigame` block, `place_voxel` /
+  `voxel` / `can_place_voxel`, `set_avatar_colors`, an image state's `arm`,
+  Add-On items with their own `*.shape.json` model, and textured icon
+  renders. Their tests now use synthetic CC0 fixtures
+  (`items::add_on_icon_tests::own_model_tool`, `check.rs`, and a stand-in
+  tool in `crates/sim/tests/trench.rs`).
+- Next: the rules, HUD and mode become the port of the original Trench
+  Digging Add-On on the shared classic Add-On loader (owned by the Tier
+  lane), wired to the original's item, image and sound names once the
+  Gate lists Max's copy.
+
