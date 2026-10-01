@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 mod datablocks;
-pub use datablocks::{AmmoType, Magazines, Table};
+pub use datablocks::{AmmoType, Hitscans, Magazines, ScriptRule, Table};
 
 mod builtin {
     include!(concat!(env!("OUT_DIR"), "/ports.rs"));
@@ -75,6 +75,14 @@ pub struct Port {
     /// gun's image (`docs/modding/porting.md`, "Magazines from item fields").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub magazines: Option<Magazines>,
+    /// Hitscans a raycasting system kept in image fields
+    /// (`docs/modding/porting.md`, "Hitscans from image fields").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hitscans: Option<Hitscans>,
+    /// What each image's own script methods did, read from their bodies
+    /// (`docs/modding/porting.md`, "Script rules").
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scripts: Vec<ScriptRule>,
 }
 
 /// The companion host-rules Add-On a port adds ([`Port::rules`]). Its id is
@@ -425,18 +433,35 @@ fn try_apply(
             "a pattern is named `{name}`, which every port already has"
         );
     }
-    // What the port reads from the imported datablocks.
-    let mut magazines = None;
-    if port.magazines.is_some() || port.rules.as_ref().is_some_and(|r| !r.tables.is_empty()) {
+    // What the port reads from the imported datablocks and scripts, in
+    // order (a later one's fields win), before the port's own patch.
+    let mut generated: Option<Value> = None;
+    if port.magazines.is_some()
+        || port.hitscans.is_some()
+        || !port.scripts.is_empty()
+        || port.rules.as_ref().is_some_and(|r| !r.tables.is_empty())
+    {
         let weapons: Value = serde_json::from_slice(
             &std::fs::read(out.join(WEAPONS)).context("the import wrote no weapons")?,
         )
         .context(WEAPONS)?;
         let mut read = BTreeMap::new();
+        let mut add = |patch: Value| {
+            match &mut generated {
+                Some(g) => merge(g, &patch),
+                None => generated = Some(patch),
+            };
+        };
         if let Some(m) = &port.magazines {
             let (patch, v) = datablocks::magazines(m, &weapons).context("magazines")?;
-            magazines = Some(patch);
+            add(patch);
             read.extend(v);
+        }
+        if let Some(h) = &port.hitscans {
+            add(datablocks::hitscans(h, &weapons).context("hitscans")?);
+        }
+        if !port.scripts.is_empty() {
+            add(datablocks::scripts(&port.scripts, &weapons, bodies).context("script rules")?);
         }
         if let Some(r) = &port.rules {
             read.extend(datablocks::tables(&r.tables, &weapons)?);
@@ -449,7 +474,7 @@ fn try_apply(
         }
     }
     let mut patches = port.patch.clone();
-    if magazines.is_some() {
+    if generated.is_some() {
         patches
             .entry(WEAPONS.to_owned())
             .or_insert_with(|| Value::Object(Default::default()));
@@ -472,12 +497,12 @@ fn try_apply(
             &std::fs::read(&path).with_context(|| format!("the import wrote no {file}"))?,
         )
         .with_context(|| file.clone())?;
-        merge(&mut doc, &fill(patch, &values)?);
         if file == WEAPONS
-            && let Some(m) = &magazines
+            && let Some(g) = &generated
         {
-            merge(&mut doc, m);
+            merge(&mut doc, g);
         }
+        merge(&mut doc, &fill(patch, &values)?);
         let bytes = serde_json::to_vec_pretty(&doc)?;
         if file == WEAPONS {
             bri_weapons::Pack::from_json(&bytes).context("the patched weapons.json")?;
