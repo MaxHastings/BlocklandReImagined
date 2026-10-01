@@ -613,6 +613,19 @@ impl Library {
         dir
     }
 
+    /// The installed Add-On that names `id` its companion (an import whose
+    /// host rules `id` is): `id` is part of it, on and off with it.
+    pub fn companion_of(&self, id: &str) -> Option<&str> {
+        self.entries
+            .iter()
+            .find(|e| {
+                e.info
+                    .as_ref()
+                    .is_some_and(|i| i.companions.iter().any(|c| c == id))
+            })
+            .map(|e| e.id())
+    }
+
     pub fn get(&self, id: &str) -> Option<&LibraryEntry> {
         self.entries.iter().find(|e| e.package.id == id)
     }
@@ -651,6 +664,22 @@ impl Library {
             ));
             return plan;
         };
+        // A companion (an import's host rules) is part of the Add-On naming
+        // it: it turns on and off with it, never by itself.
+        if let Some(owner) = self.companion_of(id) {
+            plan.refused.push(
+                Diagnostic::error(
+                    "library.companion",
+                    format!(
+                        "{} is part of {} and turns on and off with it",
+                        target.name(),
+                        self.get(owner).map_or(owner, |e| e.name())
+                    ),
+                )
+                .at(id.to_string()),
+            );
+            return plan;
+        }
         if target.enabled == enable {
             return plan;
         }

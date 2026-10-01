@@ -127,6 +127,8 @@ pub struct ClientContent {
     pub ui_pack: Rc<Pack>,
     pub maps: Vec<MapInfo>,
     pub bricks: Vec<BrickInfo>,
+    /// Every brick's catalog entry, the base game's then each Add-On's
+    /// (`bri_sim::definitions::catalog_with`).
     pub catalog: Catalog,
     /// Every brick the brick menu offers, stock then Add-On, with its
     /// orientation fix: the one list hosting, joining and Change Map use.
@@ -569,7 +571,7 @@ impl ClientContent {
                 "Required integrated map missing: {expected}"
             );
         }
-        let catalog = validate_catalog(&paths)?;
+        let mut catalog = validate_catalog(&paths)?;
         let mut bricks = Vec::new();
         let mut selectable: Vec<_> = catalog
             .bricks
@@ -607,6 +609,8 @@ impl ClientContent {
             )
             .with_context(|| format!("Loading bricks of {dir}"))?;
         }
+        // Add-On bricks are named, printed and wrenched like base ones.
+        bri_sim::definitions::extend_catalog(&mut catalog, &paths.brick_extras)?;
         let effects: Library = read_json(
             &file(&paths.effects, "effects.json", INDEX_LIMIT)?,
             INDEX_LIMIT,
