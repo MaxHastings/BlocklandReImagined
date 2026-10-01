@@ -2076,7 +2076,7 @@ fn duplorcator_port_copies_lights_and_plants_brick_by_brick() {
     let prints: Vec<String> = private
         .into_iter()
         .filter_map(|(_, n)| match n {
-            Notice::Bottom { text, .. } => Some(text),
+            Notice::Bottom { text, .. } => Some(written(&text)),
             _ => None,
         })
         .collect();
@@ -2110,7 +2110,7 @@ fn duplorcator_port_copies_lights_and_plants_brick_by_brick() {
         .take_private_notices()
         .into_iter()
         .filter_map(|(_, n)| match n {
-            Notice::Center { text, .. } => Some(text),
+            Notice::Center { text, .. } => Some(written(&text)),
             _ => None,
         })
         .collect();
@@ -2162,7 +2162,7 @@ fn duplorcator_port_saves_and_loads_duplications() {
         s.take_private_notices()
             .into_iter()
             .filter_map(|(_, n)| match n {
-                Notice::Center { text, .. } | Notice::Bottom { text, .. } => Some(text),
+                Notice::Center { text, .. } | Notice::Bottom { text, .. } => Some(written(&text)),
                 _ => None,
             })
             .collect::<Vec<String>>()
@@ -2308,7 +2308,7 @@ fn duplorcator_port_saves_and_loads_duplications() {
     };
     assert_eq!(s.blueprint(host).unwrap().bricks.len(), 5000);
     assert!(
-        prints.iter().any(|(_, n)| matches!(n, Notice::Center { text, .. } if text.contains("5000<color:99AAAA>/\\c45001"))),
+        prints.iter().any(|(_, n)| matches!(n, Notice::Center { text, .. } if written(text).contains("5000<color:99AAAA>/\\c45001"))),
         "{prints:?}"
     );
     std::fs::remove_dir_all(dir).unwrap();
@@ -2355,7 +2355,7 @@ fn duplorcator_port_waits_after_big_plants_and_cancels() {
         assert!(reply.is_ok(), "/{command}: {reply:?}");
     };
     let text = |n: &Notice| match n {
-        Notice::Center { text, .. } | Notice::Bottom { text, .. } => Some(text.clone()),
+        Notice::Center { text, .. } | Notice::Bottom { text, .. } => Some(written(text)),
         _ => None,
     };
 
@@ -2440,7 +2440,7 @@ fn told(s: &mut bri_sim::session::Session) -> Vec<String> {
         .into_iter()
         .filter_map(|(_, n)| match n {
             Notice::Center { text, .. } | Notice::Bottom { text, .. } | Notice::Chat(text) => {
-                Some(text)
+                Some(written(&text))
             }
             _ => None,
         })
@@ -3238,7 +3238,7 @@ fn new_duplicator_port_pivots_plants_as_waits_and_lists() {
         "{notices:?}"
     );
     assert!(
-        notices.iter().any(|(_, n)| matches!(n, Notice::Bottom { text, .. } if text.contains(r"Pivot: \c3Start Brick"))),
+        notices.iter().any(|(_, n)| matches!(n, Notice::Bottom { text, .. } if written(text).contains(r"Pivot: \c3Start Brick"))),
         "{notices:?}"
     );
 
@@ -3699,7 +3699,7 @@ fn heard(s: &mut bri_sim::session::Session, host: u64) -> (Vec<String>, Vec<Stri
             Notice::Center { text, .. } | Notice::Bottom { text, .. } | Notice::Chat(text)
                 if owner == host =>
             {
-                prints.push(text)
+                prints.push(written(&text))
             }
             Notice::Sound(profile) if owner == host => sounds.push(profile),
             _ => {}
@@ -3985,4 +3985,15 @@ fn new_duplicator_port_follows_the_hosts_server_settings() {
     s.set_server_settings(settings).unwrap();
     assert_eq!(light(&mut s), Vec::<String>::new(), "the host turned menu sounds off");
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A print as the original wrote it: the colour codes a rule's `\cN`
+/// literal became, back as `\cN`, so checks read like the original's lines.
+fn written(text: &str) -> String {
+    text.chars()
+        .map(|c| match c as u32 {
+            n @ 0xE000..=0xE009 => format!("\\c{}", n - 0xE000),
+            _ => c.to_string(),
+        })
+        .collect()
 }

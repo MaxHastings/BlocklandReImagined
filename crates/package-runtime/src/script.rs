@@ -3236,6 +3236,33 @@ pub fn check_syntax(source: &str) -> Result<(), String> {
     })
 }
 
+/// `\cN` colour escapes as the codes the game's text draws in colour
+/// (U+E000 + N; `r`, `p` and `o`, reset, push and pop, after the ten).
+pub fn torque_colors(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\\' && chars.peek() == Some(&'c') {
+            let mut ahead = chars.clone();
+            ahead.next();
+            let code = match ahead.next() {
+                Some(d @ '0'..='9') => Some(d as u32 - '0' as u32),
+                Some('r') => Some(10),
+                Some('p') => Some(11),
+                Some('o') => Some(12),
+                _ => None,
+            };
+            if let Some(code) = code.and_then(|n| char::from_u32(0xE000 + n)) {
+                out.push(code);
+                chars = ahead;
+                continue;
+            }
+        }
+        out.push(c);
+    }
+    out
+}
+
 fn sandbox() -> Engine {
     use rhai::packages::{
         BasicArrayPackage, BasicMapPackage, BasicMathPackage, BasicStringPackage, CorePackage,
@@ -3250,6 +3277,24 @@ fn sandbox() -> Engine {
     BasicStringPackage::new().register_into_engine(&mut engine);
     MoreStringPackage::new().register_into_engine(&mut engine);
     engine.disable_symbol("eval");
+    // TorqueScript's colour escapes: `\c0`..`\c9`, `\cr`, `\cp` and `\co`
+    // in a string literal are the codes chat and prints colour by, as
+    // v20's scripts wrote them. Only literals: text a player typed or
+    // named stays as it is. (Rhai marks the token hook volatile, not
+    // deprecated; the lockfile pins the version.)
+    #[allow(deprecated)]
+    engine.on_parse_token(|token, _, _| {
+        use rhai::Token;
+        match token {
+            Token::StringConstant(s) if s.contains("\\c") => {
+                Token::StringConstant(Box::new(torque_colors(&s).into()))
+            }
+            Token::InterpolatedString(s) if s.contains("\\c") => {
+                Token::InterpolatedString(Box::new(torque_colors(&s).into()))
+            }
+            token => token,
+        }
+    });
     engine.set_max_call_levels(32);
     engine.set_max_expr_depths(64, 32);
     engine.set_max_string_size(4096);
