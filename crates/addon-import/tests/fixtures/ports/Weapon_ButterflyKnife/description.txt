@@ -1,0 +1,6 @@
+Title: Stand-in Butterfly Knife
+Author: Blockland ReImagined tests
+Written for tests. It has the community Butterfly Knife's folder name and the
+shape of its image scripts (a charged stab and a quick jab with its own
+projectile), so the listed port applies to it. It is not the original Add-On
+and holds none of its files.

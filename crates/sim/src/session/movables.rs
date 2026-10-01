@@ -108,9 +108,19 @@ struct Hold {
     alive: bool,
 }
 
+/// A player reaching for something to hold (`Op::Reach`).
+#[derive(Debug, Clone, Copy)]
+struct Reach {
+    distance: f32,
+    near: f32,
+    force: Option<f32>,
+    turn: bool,
+}
+
 #[derive(Default)]
 pub(super) struct Movables {
     holds: BTreeMap<OwnerId, Hold>,
+    reaching: BTreeMap<OwnerId, Reach>,
     /// Who moved an object last, and until which tick it counts.
     credits: BTreeMap<ObjectRef, (OwnerId, u64)>,
     /// Vehicles packages spawned, by package.
@@ -452,6 +462,11 @@ impl Session {
                 if p == mover {
                     return false;
                 }
+                // A bot from the mover's own spawn brick is theirs to move,
+                // as v20's throw mod let its brick owner carry it.
+                if self.bots.is_bot(p) && self.bot_brick_owner(p) == Some(mover) {
+                    return victim.combat.alive || self.game_of(mover) == self.game_of(p);
+                }
                 // A corpse can no longer be hurt: it may be moved by
                 // players of its minigame, or outside minigames by those
                 // it trusted, as it could have been alive.
@@ -658,72 +673,30 @@ impl Session {
                     caller.is_none_or(|c| c == player),
                     "A player holds things only by their own command"
                 );
+                self.start_hold(player, target, distance, at, force, turn)
+            }
+            Op::Reach {
+                player,
+                distance,
+                near,
+                force,
+                turn,
+            } => {
+                ensure!(
+                    caller.is_none_or(|c| c == player),
+                    "A player reaches only by their own command"
+                );
                 let peer = self.peers.get(&player).context("No such player")?;
                 ensure!(peer.combat.alive, "Only living players hold things");
-                let (eye, look, yaw) = (
-                    peer.player.eye(),
-                    peer.player.state().forward(),
-                    peer.player.state().yaw,
-                );
-                ensure!(
-                    target != ObjectRef::Player(player),
-                    "A player cannot hold themselves"
-                );
-                ensure!(
-                    self.may_move(player, target),
-                    "Player {player} may not move {target} under the minigame and trust rules"
-                );
-                // A living player is held as their tumble: a body the
-                // server moves alone, which nobody's prediction fights.
-                if let ObjectRef::Player(p) = target
-                    && self.peers.get(&p).is_some_and(|v| v.combat.alive)
-                    && self.ridden(p).is_none()
-                {
-                    let velocity = self.object_velocity(target).unwrap_or_default();
-                    self.tumble_player(p, velocity)?;
-                }
-                // One holder at a time: taking it from someone else ends
-                // their hold.
-                self.movables.holds.retain(|_, h| h.target != target);
-                let (anchor, grip) = match self.held_body(target) {
-                    Some(body) => {
-                        let b = &self.simulation.physics.bodies[body];
-                        let pose = *b.position();
-                        let anchor = at.map_or(Vec3::ZERO, |at| {
-                            pose.rotation.inverse() * (Vec3::from(at) - b.center_of_mass())
-                        });
-                        let heading = Quat::from_rotation_y(-yaw);
-                        (
-                            anchor,
-                            turn.then(|| (heading.inverse() * pose.rotation).normalize()),
-                        )
-                    }
-                    None => (Vec3::ZERO, None),
-                };
-                let centre = self.object_centre(target).unwrap_or_default();
-                let closest = self
-                    .hold_point_of(target, anchor)
-                    .unwrap_or(centre)
-                    .distance(eye + look * distance);
-                self.movables.holds.insert(
+                self.movables.reaching.insert(
                     player,
-                    Hold {
-                        target,
+                    Reach {
                         distance,
-                        force: force.unwrap_or(HOLD_FORCE),
-                        anchor,
-                        grip,
-                        last_point: None,
-                        lead: Vec3::ZERO,
-                        last_yaw: None,
-                        turning: 0.0,
-                        caught: false,
-                        closest,
-                        stuck: 0,
-                        alive: self.target_alive(target),
+                        near,
+                        force,
+                        turn,
                     },
                 );
-                self.credit(target, player);
                 Ok(())
             }
             Op::HoldDistance { player, distance } => {
@@ -737,6 +710,7 @@ impl Session {
                 Ok(())
             }
             Op::LetGo { player } => {
+                self.movables.reaching.remove(&player);
                 if let Some(hold) = self.movables.holds.remove(&player) {
                     self.set_down(hold.target);
                 }
@@ -936,6 +910,126 @@ impl Session {
         }
     }
 
+    /// `player` holds `target` `distance` from their eye (`Op::Hold`).
+    fn start_hold(
+        &mut self,
+        player: OwnerId,
+        target: ObjectRef,
+        distance: f32,
+        at: Option<[f32; 3]>,
+        force: Option<f32>,
+        turn: bool,
+    ) -> Result<()> {
+        let peer = self.peers.get(&player).context("No such player")?;
+        ensure!(peer.combat.alive, "Only living players hold things");
+        let (eye, look, yaw) = (
+            peer.player.eye(),
+            peer.player.state().forward(),
+            peer.player.state().yaw,
+        );
+        ensure!(
+            target != ObjectRef::Player(player),
+            "A player cannot hold themselves"
+        );
+        ensure!(
+            self.may_move(player, target),
+            "Player {player} may not move {target} under the minigame and trust rules"
+        );
+        // A living player is held as their tumble: a body the
+        // server moves alone, which nobody's prediction fights.
+        if let ObjectRef::Player(p) = target
+            && self.peers.get(&p).is_some_and(|v| v.combat.alive)
+            && self.ridden(p).is_none()
+        {
+            let velocity = self.object_velocity(target).unwrap_or_default();
+            self.tumble_player(p, velocity)?;
+        }
+        // One holder at a time: taking it from someone else ends
+        // their hold.
+        self.movables.holds.retain(|_, h| h.target != target);
+        let (anchor, grip) = match self.held_body(target) {
+            Some(body) => {
+                let b = &self.simulation.physics.bodies[body];
+                let pose = *b.position();
+                let anchor = at.map_or(Vec3::ZERO, |at| {
+                    pose.rotation.inverse() * (Vec3::from(at) - b.center_of_mass())
+                });
+                let heading = Quat::from_rotation_y(-yaw);
+                (
+                    anchor,
+                    turn.then(|| (heading.inverse() * pose.rotation).normalize()),
+                )
+            }
+            None => (Vec3::ZERO, None),
+        };
+        let centre = self.object_centre(target).unwrap_or_default();
+        let closest = self
+            .hold_point_of(target, anchor)
+            .unwrap_or(centre)
+            .distance(eye + look * distance);
+        self.movables.holds.insert(
+            player,
+            Hold {
+                target,
+                distance,
+                force: force.unwrap_or(HOLD_FORCE),
+                anchor,
+                grip,
+                last_point: None,
+                lead: Vec3::ZERO,
+                last_yaw: None,
+                turning: 0.0,
+                caught: false,
+                closest,
+                stuck: 0,
+                alive: self.target_alive(target),
+            },
+        );
+        self.credit(target, player);
+        Ok(())
+    }
+
+    /// Players reaching for something (`Op::Reach`) hold the first thing
+    /// they may move that is where they look now, before any brick, as
+    /// their grab would have.
+    fn step_reaching(&mut self) {
+        let reaching: Vec<(OwnerId, Reach)> =
+            self.movables.reaching.iter().map(|(p, r)| (*p, *r)).collect();
+        for (player, reach) in reaching {
+            let Some((eye, look)) = self
+                .peers
+                .get(&player)
+                .filter(|p| p.combat.alive)
+                .map(|p| (p.player.eye(), p.player.state().forward()))
+            else {
+                self.movables.reaching.remove(&player);
+                continue;
+            };
+            if self.movables.holds.contains_key(&player) || self.seated(player) {
+                continue;
+            }
+            let wall = self
+                .simulation
+                .target(eye, look, reach.distance)
+                .ok()
+                .flatten()
+                .map_or(reach.distance, |h| h.distance);
+            let Some((target, at, met)) = self.aim_object(player, eye, look, wall) else {
+                continue;
+            };
+            if !self.may_move(player, target) {
+                continue;
+            }
+            let distance = met.clamp(reach.near, reach.distance);
+            if self
+                .start_hold(player, target, distance, Some(at.to_array()), reach.force, reach.turn)
+                .is_ok()
+            {
+                self.movables.reaching.remove(&player);
+            }
+        }
+    }
+
     /// Change an object's velocity by `delta`.
     fn push_object(&mut self, target: ObjectRef, delta: Vec3) -> Result<()> {
         ensure!(delta.is_finite(), "Invalid push");
@@ -1130,6 +1224,7 @@ impl Session {
     pub(super) fn step_holds(&mut self) {
         self.step_tethers();
         self.step_thrown();
+        self.step_reaching();
         let tick = self.simulation.state().tick;
         self.movables.credits.retain(|_, (_, until)| *until >= tick);
         let recheck = tick.is_multiple_of(HOLD_RECHECK);
@@ -1464,11 +1559,20 @@ impl Session {
         self.damage_vehicle(target, health * share, source, "Smash", point)
     }
 
+    /// A rider about to be seated (`mountObject`): no one holds them in a
+    /// physics grip any more, and they let go of what they held.
+    pub(super) fn release_holds_on(&mut self, rider: OwnerId) {
+        self.movables.holds.remove(&rider);
+        self.movables
+            .holds
+            .retain(|_, h| h.target != ObjectRef::Player(rider));
+    }
     /// A player left: they hold nothing, and nothing they threw counts as
     /// theirs any more.
     pub(super) fn forget_mover(&mut self, owner: OwnerId) {
         self.movables.holds.remove(&owner);
         self.movables.tethers.remove(&owner);
+        self.movables.reaching.remove(&owner);
         self.movables
             .holds
             .retain(|_, h| h.target != ObjectRef::Player(owner));

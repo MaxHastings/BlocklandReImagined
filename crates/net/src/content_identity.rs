@@ -626,6 +626,7 @@ mod tests {
                     follow_arm: false,
                     paint_tint: false,
                     rope: None,
+                    scripts: Default::default(),
                 },
             );
             items.insert(

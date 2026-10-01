@@ -14,6 +14,9 @@ operation that needs a capability.
 | TorqueScript | Here | Notes |
 |---|---|---|
 | `ClientGroup` loop, `%client.player` | `players()`, `player(id)` | A player map, below. |
+| `AIPlayer`s in `MissionCleanup`, `%bot.spawnBrick.getGroup().bl_id` | `bots()`, `player(id)`, `p.bot`, `p.bot_owner` | A bot reads like a player. |
+| `%obj.getObjectMount()`, `getMountNodeObject` | `p.riding`, `p.seat`, `p.mounted` | |
+| `%obj.getScale()` | `p.scale` | |
 | `%obj.getPosition()`, `getTransform()` | `p.x`, `p.y`, `p.z` | The feet. |
 | `%obj.getWorldBoxCenter()` | `p.cx`, `p.cy`, `p.cz` | The middle of the body, crouch and scale included. |
 | `%obj.getEyePoint()`, `getEyeVector()` | `p.ex`..`p.ez`, `p.lx`..`p.lz` | The look is a unit vector. |
@@ -43,6 +46,11 @@ operation that needs a capability.
 | `new Projectile() { ... }` | `fire(projectile, x, y, z, vx, vy, vz, by)` | `damage` |
 | `new Explosion()`, `radiusDamage` | `explode(x, y, z, radius, damage, brick_radius)` | `damage` |
 | `%obj.mountImage(%img, 0)` | `mount_image(p, image)`, `mount_image(p, ())` | `player` |
+| `%obj.unMountImage(0)` | `unmount_image(p)` | `player` |
+| `%obj.setScale("s s s")` | `set_scale(p, s)` | `player`; 0.2 to 5, one number |
+| `%obj.setLookLimits(%up, %down)` | `set_look_limits(p, up, down)`, `set_look_limits(p, ())` | `player` |
+| `%obj.mountObject(%rider, %node)`, `%rider.canDismount = 0` | `mount_object(mount, rider, node, can_dismount)` | `physics`; node is a `mount<N>` of the body model |
+| `%rider.unMountObject()`, `dismount()` | `unmount_object(rider)` | `physics`; keeps the mount's velocity |
 | `%obj.setImageAmmo(0, %x)` | `set_image_ammo(p, ammo)` | `player` |
 | `%client.setControlCameraFov(%fov)` | `set_fov(p, fov)`, `set_fov(p, ())` | `player` |
 | `%obj.setTransform`, `%client.spawnPlayer()` | `teleport(p, x, y, z)`, `respawn(p)` | `player` |
@@ -54,7 +62,7 @@ operation that needs a capability.
 | `centerPrint`, `bottomPrint` | `center_print(p, text, s)`, `bottom_print(p, text, s)` | `chat` |
 | `messageClient`, `messageAll` | `tell(p, text)`, `broadcast(text)` | `chat` |
 | `serverPlay3D(%profile, %pos)`, `%client.play2D` | `sound_at(profile, x, y, z)`, `play_sound(p, profile)` | `effects` |
-| `%obj.playThread(%slot, %seq)` | `play_thread(p, thread, sequence)` | `effects` |
+| `%obj.playThread(%slot, %seq)` | `play_thread(p, thread, sequence)` | `effects`; whole-body sequences (`death1`) override by priority, empty-hand arm poses (`armReadyBoth`) hold |
 | A stretched `StaticShape` tracer | `beam(from, to, #{ color, width, seconds, muzzle })` | `effects` |
 | Mission lights baked into the map (v20 scripts could not change them) | `set_map_lights([x, y, z], radius, #{ on, color, brightness })` | `lighting` |
 | The mission `Sun`'s `azimuth`, `elevation`, `color`, `ambient` and the `Sky`'s `fogColor`, `fogDistance`, `visibleDistance` (fixed in v20; changed live here) | `set_environment(#{ sun_azimuth, direct_light, fog_color, visible_distance, day_length, ... })`, `environment()` | `environment` |
@@ -80,6 +88,7 @@ operation that needs a capability.
 | `ItemData::onPickup` | `on_pickup(p, item, info)`: answer `false` to leave it, `"take"` to use it up |
 | `ItemData::onDrop`, dynamic fields on the dropped `Item` | `on_drop(p, item, slot)`: the value it returns rides the drop to whoever picks it up |
 | `ProjectileData::onCollision` | `on_projectile_hit(hit)` |
+| `Player::activateStuff` packaged (an empty-hand click) | `on_activate(p)`: answer `true` to take the click |
 
 ## Not here yet
 
@@ -143,3 +152,22 @@ The same modder's second write-up (September 2026), judged the same way:
 | Capping `stateEmitterTime` at 300 s | Left out | v20 does not cap it and the effects runtime already limits live particles. |
 | A sound that is not 3D | Heard by its holder only | A sound with no position has no place for other players to hear it from, so it stays with the player who fired. |
 
+## Image state scripts as data
+
+A v20 image's states name script functions (`stateScript[2] = "onCharge"`)
+and the Add-On's `Image::onCharge` did the work. Here an image's `scripts`
+lists, by lower-case script name, what each one does, so a melee or thrown
+weapon needs no rule. Entering a state whose script is listed does that
+instead of the game's built-in handling of the name. The
+[Butterfly Knife and HE Grenade ports](../../crates/addon-import/ports) are
+written this way.
+
+| TorqueScript in the function | `scripts` entry field | Notes |
+|---|---|---|
+| `%obj.playThread(2, spearReady)` (`spearThrow`, `armattack`, `root`) | `arm` | The holder's arm animation (thread 2), started first. Letters, digits and `_`, up to 64. |
+| `Parent::onFire(%this, %obj, %slot)` | `fire: true` | Launches the image's projectile as a plain `onFire` does: from the muzzle along the aim, with the image's `shot`, after the arm. |
+| A second `ProjectileData` spawned in the function (`%p = new Projectile() { dataBlock = jabProjectile; ... }`) | `projectile`, with `fire: true` | Launched instead of the image's. It must be in the pack (or a merged one); an image whose script projectile nobody provides is dropped like one missing its own. |
+| `%obj.tool[%slot] = 0; serverCmdUnUseTool(%client)` after a throw | `use_up: true` | The held item leaves the holder's tools and the hand empties once the function has run. |
+
+Up to 16 entries per image. A state with no listed script keeps the
+built-in handling (`onAbortCharge` and `onStopFire` lower the arm).

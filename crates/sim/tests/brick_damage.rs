@@ -638,6 +638,7 @@ fn synthetic_rocket_pack() -> bri_weapons::Pack {
         follow_arm: false,
         paint_tint: false,
         rope: None,
+        scripts: Default::default(),
         states,
     };
     let item = bri_weapons::Item {

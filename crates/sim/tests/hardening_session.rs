@@ -168,6 +168,7 @@ fn tool_pack() -> bri_weapons::Pack {
                 follow_arm: false,
                 paint_tint: false,
                 rope: None,
+                scripts: Default::default(),
             },
         );
         items.insert(

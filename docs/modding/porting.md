@@ -109,7 +109,9 @@ Patterns do two jobs. They prove the copy is the shape the port was written
 for, and they read the numbers from that copy's script, so a port never
 hard-codes one copy's values. In a patch, a string that is exactly
 `"{projectiles}"` becomes the captured value (a number when it reads as one).
-`{name}` inside a longer string becomes its text.
+`{name}` inside a longer string becomes its text, and `{name:lower}` its
+text in lower case, for ids: Torque ignores the case of names
+(`"weapon_example:projectile/{jab:lower}"`).
 
 ### A port
 
@@ -166,6 +168,8 @@ add when you work in a checkout.
    | An image's `onFire` using v20's spread code (`%shellcount`, `%spread`, a `setVelocity` recoil) | the image's `shot` data (below) |
    | A fire-rate check on `%obj.lastFireTime` and `minShotTime` | nothing: the image's `min_shot_ticks` already does it, from the datablock |
    | Anything a field in [Making Add-Ons](README.md) section 5 or 6 expresses | a patch setting that field |
+   | An image's state script (`onCharge`, `onFire`, a custom `stateScript` such as `onFiretwo`) that plays an arm animation, calls `Parent::onFire`, spawns a second projectile or uses the item up | an entry in the image's `scripts` ([torque-equivalents.md](torque-equivalents.md#image-state-scripts-as-data)) |
+   | Something the game already does the same way | nothing: cover the function with patterns and say so in `notes` |
    | A `serverCmd` in an Add-On with no weapons, vehicles or bricks | a rule (section 3 of the guide): `behaviour.json` and a script under `files/`, and a `package.json` patch adding them to `provides` and their `capabilities` |
    | An image's `onFire` (or charge, release, jet, light, wheel or cancel) or a `serverCmd` that does host work in an Add-On with weapons, vehicles or bricks | host rules (below): `rules/` in the port, and a patch pointing the image at their commands |
    | Anything whose `runtime_hook` is null or that needs a missing capability | not portable yet: port the rest, mark the entry `partial`, and say what is missing in `notes` |
