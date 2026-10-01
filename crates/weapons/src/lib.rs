@@ -297,11 +297,17 @@ pub struct Image {
 /// shells, which a pull of the trigger interrupts). Switching away cancels
 /// a reload.
 ///
-/// The magazine sets the image's flags for its states. An image whose
-/// states use `loaded`/`not_loaded` (Torque's `setImageLoaded`, as
-/// Tier+Tactical's guns do) is loaded while its magazine has a shot and no
+/// The magazine sets the image's flags for its states. With `checks`, the
+/// image's states run the magazine as a v20 script ammo system did
+/// (Tier+Tactical's): its state scripts set the flags (`TT_onLoadCheck`'s
+/// `setImageLoaded` and `setImageAmmo`), which keep their value until the
+/// next check; the rounds move only as the image enters its
+/// `reload_state`, so a reload is the image's own states, with no timer;
+/// and an empty gun neither fires nor reloads by itself, its checks send
+/// it to its reload states. Without `checks`, an image whose states use
+/// `loaded`/`not_loaded` is loaded while its magazine has a shot and no
 /// reload is under way, and has ammo while there is reserve to reload
-/// from. Any other image has ammo exactly when its magazine has a shot and
+/// from; any other image has ammo exactly when its magazine has a shot and
 /// no reload is under way, so `ammo`/`no_ammo` states follow.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -343,11 +349,78 @@ pub struct Magazine {
     /// `reload_ticks` are up if that comes first.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub reload_state: String,
+    /// The flags each state script sets on entering its state, by script
+    /// name (`TT_onLoadCheck`), up to 16.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub checks: BTreeMap<String, Check>,
+    /// With `checks`: the flags as a reload starts (the light key, or
+    /// reserve for an empty gun), and as its rounds arrive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_reload: Option<Check>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_loaded: Option<Check>,
+    /// With `checks`: the states, by name, in which the light key starts a
+    /// reload (Tier+Tactical's `Ready`, `Empty`, `EmptyFire`); any when
+    /// empty. Up to 8.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reload_from: Vec<String>,
+}
+/// [`Magazine::checks`]: the flags a script sets, each left as it was when
+/// absent.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Check {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loaded: Option<Cond>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ammo: Option<Cond>,
+}
+/// A flag's value in a [`Check`]: `true`, `false`, or true when any of the
+/// listed facts about the holder's magazine holds.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Cond {
+    Is(bool),
+    Any(Vec<Fact>),
+}
+/// What a [`Cond`] can ask of the magazine and its reserve.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Fact {
+    /// At least one shot's rounds in the magazine, and not.
+    Shot,
+    Empty,
+    /// The magazine is full, and not.
+    Full,
+    NotFull,
+    /// Some reserve of its ammo, and none.
+    Reserve,
+    NoReserve,
+}
+impl Cond {
+    /// The flag, from the magazine's rounds and whether there is reserve.
+    pub fn holds(&self, magazine: &Magazine, rounds: u32, reserve: bool) -> bool {
+        match self {
+            Cond::Is(v) => *v,
+            Cond::Any(facts) => facts.iter().any(|f| match f {
+                Fact::Shot => rounds >= magazine.per_shot,
+                Fact::Empty => rounds < magazine.per_shot,
+                Fact::Full => rounds >= magazine.size,
+                Fact::NotFull => rounds < magazine.size,
+                Fact::Reserve => reserve,
+                Fact::NoReserve => !reserve,
+            }),
+        }
+    }
 }
 fn max_reserve() -> u32 {
     100_000
 }
 impl Magazine {
+    /// Whether the image's states run it ([`Magazine::checks`]).
+    pub fn scripted(&self) -> bool {
+        !self.checks.is_empty()
+    }
     pub fn validate(&self) -> Result<()> {
         ensure!(
             (1..=1000).contains(&self.size)
@@ -378,6 +451,25 @@ impl Magazine {
         for sound in [&self.reload_sound, &self.empty_sound] {
             ensure!(sound.len() <= 128, "Invalid magazine sound");
         }
+        ensure!(
+            self.checks.len() <= 16
+                && (self.checks.is_empty() || !self.reload_state.is_empty())
+                && self.reload_from.len() <= 8
+                && self.reload_from.iter().all(|s| (1..=64).contains(&s.len()))
+                && self
+                    .checks
+                    .keys()
+                    .all(|k| (1..=64).contains(&k.len()))
+                && self
+                    .checks
+                    .values()
+                    .chain(&self.on_reload)
+                    .chain(&self.on_loaded)
+                    .flat_map(|c| [&c.loaded, &c.ammo])
+                    .flatten()
+                    .all(|c| !matches!(c, Cond::Any(f) if f.is_empty() || f.len() > 6)),
+            "Invalid magazine checks"
+        );
         Ok(())
     }
     /// What the ammo display calls it.

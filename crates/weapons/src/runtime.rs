@@ -1005,18 +1005,24 @@ impl WeaponsWorld {
             return true;
         };
         let rounds = a.rounds.get(&key).copied().unwrap_or(0);
+        if magazine.scripted() {
+            // The image's states decide when it fires and reloads; a shot
+            // ends a reload under way, as a pump's trigger stops its shells.
+            if rounds < magazine.per_shot {
+                self.empty_click(id, a, &magazine);
+                return false;
+            }
+            a.reload = None;
+            a.rounds.insert(key, rounds - magazine.per_shot);
+            self.events.push(Event::Ammo { actor: id });
+            return true;
+        }
         let reloading = a.reload.is_some();
         if reloading && magazine.one_by_one && rounds >= magazine.per_shot {
             // A pull of the trigger stops loading shells one by one.
             a.reload = None;
         } else if reloading || rounds < magazine.per_shot {
-            if !magazine.empty_sound.is_empty() {
-                self.events.push(Event::Sound {
-                    source: TargetId::Actor(id),
-                    profile: magazine.empty_sound.clone(),
-                    position: a.frame.position,
-                });
-            }
+            self.empty_click(id, a, &magazine);
             if !self.begin_reload(id, a, key.clone(), &magazine) {
                 self.magazine_flags(a, &held.image, &key, &magazine);
             }
@@ -1030,6 +1036,15 @@ impl WeaponsWorld {
             self.begin_reload(id, a, key, &magazine);
         }
         true
+    }
+    fn empty_click(&mut self, id: ActorId, a: &Actor, magazine: &crate::Magazine) {
+        if !magazine.empty_sound.is_empty() {
+            self.events.push(Event::Sound {
+                source: TargetId::Actor(id),
+                profile: magazine.empty_sound.clone(),
+                position: a.frame.position,
+            });
+        }
     }
     /// Start reloading the held gun's magazine, if it is not full, there is
     /// reserve to load and no reload is under way. Whether one started.
@@ -1057,12 +1072,35 @@ impl WeaponsWorld {
         if a.reload.is_some() || rounds >= magazine.size || !reserve.any() {
             return false;
         }
+        let scripted = magazine.scripted();
+        if scripted
+            && !magazine.reload_from.is_empty()
+            && !a.images[0]
+                .as_ref()
+                .and_then(|e| self.pack.images.get(&e.image)?.states.get(e.state))
+                .is_some_and(|s| {
+                    magazine
+                        .reload_from
+                        .iter()
+                        .any(|n| n.eq_ignore_ascii_case(&s.name))
+                })
+        {
+            return false;
+        }
         a.reload = Some(Reload {
             item: key.clone(),
-            done: self.tick + u64::from(magazine.reload_ticks),
+            // A scripted magazine's rounds wait for its reload state.
+            done: if scripted {
+                u64::MAX
+            } else {
+                self.tick + u64::from(magazine.reload_ticks)
+            },
         });
         if let Some(image) = a.images[0].as_ref().map(|e| e.image.clone()) {
             self.magazine_flags(a, &image, &key, magazine);
+        }
+        if let Some(check) = &magazine.on_reload {
+            Self::apply_check(a, &key, magazine, check);
         }
         if !magazine.reload_sequence.is_empty() {
             self.animation(id, &magazine.reload_sequence);
@@ -1100,7 +1138,7 @@ impl WeaponsWorld {
         let rounds = rounds + taken;
         a.rounds.insert(key.clone(), rounds);
         self.events.push(Event::Ammo { actor: id });
-        if magazine.one_by_one && rounds < magazine.size {
+        if magazine.one_by_one && rounds < magazine.size && !magazine.scripted() {
             let more = a.reserve.get(&magazine.ammo).is_some_and(|r| r.any());
             if more {
                 a.reload = Some(Reload {
@@ -1119,6 +1157,9 @@ impl WeaponsWorld {
         if let Some(image) = a.images[0].as_ref().map(|e| e.image.clone()) {
             self.magazine_flags(a, &image, &key, &magazine);
         }
+        if let Some(check) = &magazine.on_loaded {
+            Self::apply_check(a, &key, &magazine, check);
+        }
     }
     /// The right hand's flags from its magazine ([`crate::Magazine`]): for
     /// an image whose states use `loaded`, loaded while there is a shot and
@@ -1126,6 +1167,10 @@ impl WeaponsWorld {
     /// Tier+Tactical's `TT_onLoadCheck` set them); for any other, ammo
     /// while there is a shot and no reload.
     fn magazine_flags(&self, a: &mut Actor, image: &str, key: &str, magazine: &crate::Magazine) {
+        if !magazine.checks.is_empty() {
+            // Its state scripts set the flags (`apply_check`).
+            return;
+        }
         let shot = a.rounds.get(key).copied().unwrap_or(0) >= magazine.per_shot
             && a.reload.is_none();
         let uses_loaded = self.pack.images.get(image).is_some_and(|i| {
@@ -1138,6 +1183,17 @@ impl WeaponsWorld {
             a.ammo = a.reserve.get(&magazine.ammo).is_some_and(|r| r.any());
         } else {
             a.ammo = shot;
+        }
+    }
+    /// A [`crate::Check`] on the right hand's flags, from `key`'s magazine.
+    fn apply_check(a: &mut Actor, key: &str, magazine: &crate::Magazine, check: &crate::Check) {
+        let rounds = a.rounds.get(key).copied().unwrap_or(0);
+        let reserve = a.reserve.get(&magazine.ammo).is_some_and(|r| r.any());
+        if let Some(c) = &check.loaded {
+            a.loaded = c.holds(magazine, rounds, reserve);
+        }
+        if let Some(c) = &check.ammo {
+            a.ammo = c.holds(magazine, rounds, reserve);
         }
     }
     /// The light key: reload the held gun if it has a magazine that is
@@ -1828,15 +1884,38 @@ impl WeaponsWorld {
                     state: state.name.clone(),
                     hand: e.hand,
                 });
+                // A state script that checks the magazine sets the flags.
+                if e.hand == 0
+                    && let Some(magazine) = &image.magazine
+                    && let Some(key) = e.magazine.as_deref()
+                    && let Some((_, check)) = magazine
+                        .checks
+                        .iter()
+                        .find(|(s, _)| s.eq_ignore_ascii_case(&state.script))
+                {
+                    Self::apply_check(a, key, magazine, check);
+                }
                 // The magazine's own reload state: its rounds are due now.
                 if e.hand == 0
                     && let Some(magazine) = &image.magazine
                     && !magazine.reload_state.is_empty()
                     && state.script.eq_ignore_ascii_case(&magazine.reload_state)
-                    && let Some(reload) = a.reload.as_mut()
-                    && e.magazine.as_deref() == Some(reload.item.as_str())
+                    && let Some(key) = e.magazine.as_deref()
                 {
-                    reload.done = reload.done.min(self.tick);
+                    match a.reload.as_mut() {
+                        Some(reload) if reload.item == key => {
+                            reload.done = reload.done.min(self.tick);
+                        }
+                        // A scripted magazine reloads whenever its states
+                        // get here, as `onReloaded` ran `TT_reload`.
+                        None if magazine.scripted() => {
+                            a.reload = Some(Reload {
+                                item: key.to_string(),
+                                done: self.tick,
+                            });
+                        }
+                        _ => {}
+                    }
                 }
                 if !state.sequence.is_empty() {
                     self.events.push(Event::Animation {
