@@ -161,6 +161,23 @@ impl Archetypes {
         self.0.push(archetype);
         Ok(ArchetypeId((self.0.len() - 1) as u16))
     }
+    /// Change an archetype in place, keeping its id and index: players of
+    /// it, and saves naming it, carry on with the new constants.
+    pub fn replace(&mut self, id: ArchetypeId, archetype: Archetype) -> Result<()> {
+        archetype.validate()?;
+        let slot = self
+            .0
+            .get_mut(usize::from(id.0))
+            .ok_or_else(|| anyhow::anyhow!("No archetype {}", id.0))?;
+        ensure!(
+            slot.id == archetype.id,
+            "Archetype {} cannot become {}",
+            slot.id,
+            archetype.id
+        );
+        *slot = archetype;
+        Ok(())
+    }
     pub fn get(&self, id: ArchetypeId) -> Option<&Archetype> {
         self.0.get(usize::from(id.0))
     }

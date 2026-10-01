@@ -60,15 +60,12 @@ use std::collections::{BTreeMap, BTreeSet};
 /// images that take it (`commands.cancel`).
 /// 69: `Checkpoint::environment` and `Delta::environment`: the live
 /// environment (Admin Menu Environment, `set_environment`).
-/// 70: `Vitals::look_limits`: a rule's `set_look_limits` bounds how far a
-/// body's arms and head follow its look.
-/// 71: `Drop::paint`: a dropped paint-tinted tool keeps the colour it was
-/// held in.
-/// 72: `Command::ActivateRelease`: letting go of an empty-hand click, for
-/// Add-Ons' `on_trigger`.
-/// 73: `ControlObject::Orbit` (an Add-On's `orbit_camera`) and
-/// `Notice::PutAway` (`unmount_image` puts bricks in hand away).
-pub const VERSION: u32 = 73;
+/// Later changes are one file each in `crates/net/protocol-changes/` (see its
+/// README); each one adds one to the version.
+pub const VERSION: u32 = FROZEN_VERSION + PROTOCOL_CHANGES.len() as u32;
+/// The last hand-numbered version, before per-change files.
+const FROZEN_VERSION: u32 = 69;
+include!(concat!(env!("OUT_DIR"), "/protocol_changes.rs"));
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).

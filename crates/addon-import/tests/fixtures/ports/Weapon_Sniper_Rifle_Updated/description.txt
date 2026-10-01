@@ -1,0 +1,5 @@
+Title: Stand-in Sniper Rifle Updated
+Author: Blockland ReImagined tests
+Written for tests. It has the community Sniper Rifle Updated's folder name,
+its script file name and the shape of its image callbacks, so the listed port
+applies to it. It is not the original Add-On and holds none of its files.
