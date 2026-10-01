@@ -412,8 +412,8 @@ pub struct App {
     steering_sent: Option<(RequestId, (bool, bool))>,
     /// Whether the UI was last told to hide the crosshair.
     crosshair_hidden: bool,
-    /// The held tool's `wheel` command while its trigger is held, which
-    /// then takes the mouse wheel.
+    /// The held tool's `wheel` command: while its trigger is held, it takes
+    /// the mouse wheel (`UiUpdate::ToolWheel`).
     tool_wheel: Option<String>,
     cpu_terrain: Vec<Arc<bri_render::terrain_scene::TerrainScene>>,
     renderer: Option<crate::gpu_build::Building<SceneRenderer>>,
@@ -2621,13 +2621,13 @@ impl App {
             self.crosshair_hidden = hidden;
             self.ui.apply(UiUpdate::HideCrosshair(hidden));
         }
+        // The trigger goes to the tool only on foot or in a seat that is not
+        // a gunner's, and not from a camera. Whether it is held is the UI's
+        // to know: it gives the tool the wheel only while it is.
         let wheel = image
             .and_then(|i| i.commands.wheel.clone())
-            .filter(|_| self.controls.held(HeldControl::Fire));
-        if wheel.is_some() != self.tool_wheel.is_some() {
-            self.ui.apply(UiUpdate::ToolWheel(wheel.is_some()));
-        }
-        self.tool_wheel = wheel;
+            .filter(|_| self.controls.observer().is_none() && !self.local_weapon_seat());
+        claim_wheel(&mut self.ui, &mut self.tool_wheel, wheel);
     }
     /// Dead players watch their corpse from the orbit camera.
     fn third_person_view(&self) -> bool {
@@ -5503,6 +5503,15 @@ fn driven_vehicle(
 ) -> Option<u64> {
     let (vehicle, seat) = mounted.filter(|(_, seat)| *seat == 0)?;
     steers(vehicle, usize::from(seat)).then_some(vehicle)
+}
+
+/// Tell the UI whether the held tool can take the wheel (its image's
+/// `wheel` command, "package:command"), once each time that changes.
+fn claim_wheel(ui: &mut Ui, current: &mut Option<String>, wheel: Option<String>) {
+    if wheel.is_some() != current.is_some() {
+        ui.apply(UiUpdate::ToolWheel(wheel.is_some()));
+    }
+    *current = wheel;
 }
 
 /// Whether the trigger is down is the player's, whichever path then takes
@@ -9608,6 +9617,86 @@ mod tests {
         assert!(c.held(HeldControl::Fire), "other actions leave it");
         super::note_trigger(&mut c, &fire(false));
         assert!(!c.held(HeldControl::Fire));
+    }
+    /// Max, v0.1.10: "gravity gun scrolling still switches tool instead of
+    /// letting me reel in or out whatever i am currently grabbed on to".
+    /// Every frame `follow_control` told `controls` the player was in
+    /// control of their body, which dropped the held trigger, so the tool
+    /// never claimed the wheel. Here the real UI takes the mouse, and each
+    /// frame runs as the game's does: actions drained and the trigger
+    /// noted, control followed, the held tool's wheel claimed.
+    #[test]
+    fn rolling_the_wheel_with_the_trigger_held_reels_and_never_switches_tools() {
+        use bri_ui::{
+            api::{BindInput, GameAction, HeldControl, UiAction},
+            binds::Platform,
+            geom::Rect,
+            input::{InputEvent, MouseButton},
+            schema::UiPack,
+            screens::ctrl,
+            ui::UiConfig,
+        };
+        use super::{PathBuf, Ui, UiUpdate};
+        let mut pack = UiPack::default();
+        for name in ["PlayGui", "LoadingGui"] {
+            pack.layouts.insert(name.into(), ctrl("GuiControl", "GuiDefaultProfile", Rect::new(0, 0, 640, 480)));
+        }
+        let mut ui = Ui::new(
+            std::rc::Rc::new(bri_ui::pack::Pack::from_parts(pack, PathBuf::new())),
+            UiConfig { size: (1280, 960), scale: Some(2.0), platform: Platform::Windows },
+            bri_ui::api::Settings { binds: Some(vec![]), mouse_type: 2, ..Default::default() },
+        );
+        ui.core.binds.bind(BindInput::Wheel, "scrollInventory");
+        ui.core.binds.bind(BindInput::Mouse(MouseButton::Left), "mouseFire");
+        ui.apply(UiUpdate::Connection(bri_ui::api::ConnectionState::InGame {
+            server_name: "Test".into(),
+            max_players: 8,
+            local: true,
+            single_player: true,
+            admin: true,
+        }));
+        ui.drain_actions();
+        let mut controls = super::Controls::default();
+        let mut tool_wheel = None;
+        let mut frame = |ui: &mut Ui, controls: &mut super::Controls| -> Vec<UiAction> {
+            let actions: Vec<_> = ui.drain_actions().into_iter().map(|(_, a)| a).collect();
+            for action in &actions {
+                super::note_trigger(controls, action);
+                if let UiAction::Game(action) = action {
+                    controls.action(action);
+                }
+            }
+            controls.follow(bri_sim::session::ControlObject::Player, 1, None);
+            super::claim_wheel(ui, &mut tool_wheel, Some("gravity-gun:reel".into()));
+            actions
+        };
+        let reels = |actions: &[UiAction]| {
+            actions.iter().filter(|a| matches!(a, UiAction::Game(GameAction::ToolWheel { .. }))).count()
+        };
+        let (x, y) = (640.0, 480.0);
+        let button = MouseButton::Left;
+        // Grab: the trigger held over many frames stays held.
+        ui.handle_input(InputEvent::MouseDown { button, x, y });
+        for _ in 0..10 {
+            frame(&mut ui, &mut controls);
+        }
+        assert!(controls.held(HeldControl::Fire), "the trigger is still held");
+        // Rolled forward and back: each notch reels, nothing else moves.
+        for delta in [1.0, 1.0, -1.0] {
+            ui.handle_input(InputEvent::Wheel { delta });
+            let actions = frame(&mut ui, &mut controls);
+            assert_eq!(
+                actions,
+                vec![UiAction::Game(GameAction::ToolWheel { notches: delta as i32 })],
+                "only the tool sees the wheel"
+            );
+        }
+        // Let go: the wheel is the inventory's again.
+        ui.handle_input(InputEvent::MouseUp { button, x, y });
+        frame(&mut ui, &mut controls);
+        assert!(!controls.held(HeldControl::Fire));
+        ui.handle_input(InputEvent::Wheel { delta: 1.0 });
+        assert_eq!(reels(&frame(&mut ui, &mut controls)), 0);
     }
     #[test]
     fn only_a_steering_seat_drives_its_vehicle() {

@@ -8247,3 +8247,23 @@ More tests:
 Render: `/mnt/project-files/steel-ball/steel-ball-v2.png`. Max's in-game
 check is a Steel Ball near bricks at Mirrors Medium, in Unified+Shine and
 in Dynamic.
+
+Gravity Gun wheel reels in play (2026-10-01, Max on v0.1.10: "gravity gun
+scrolling still switches tool instead of letting me reel in or out"). Cause:
+`App::follow_control` runs every frame and calls `Controls::follow`. For
+`ControlObject::Player` that dropped the held trigger (meant only for coming
+back from a camera), so `controls.held(Fire)` was false a frame after every
+press. `update_held_weapon` therefore never gave the gun the wheel. The
+v0.1.9 fix (`note_trigger`) was right but was undone every frame, and its
+test checked only `note_trigger`. Fix: `follow(Player)` drops the trigger
+only when it is coming back from a camera. Who sees the wheel is now decided
+where the wheel is read. The app tells the UI only that the held tool has a
+`wheel` command (and is not fired from a camera or a gunner's seat). The UI
+gives that tool the wheel while its own `mouseFire` hold is down, so a press
+and a roll in the same frame reach the tool, and nothing else sees the wheel
+meanwhile. Tests: `app::tests::rolling_the_wheel_with_the_trigger_held_reels_and_never_switches_tools`
+(the real UI with `mouseFire`/`scrollInventory` binds, and each frame run as
+the game does: drain and note the trigger, follow control, claim the wheel;
+it fails on 1b2747e4 with the trigger dropped), and
+`runtime_input::wheel_goes_to_the_held_tool_while_it_takes_the_wheel` (no
+trigger, scrolls; trigger held, reels in whole notches; released, scrolls).
