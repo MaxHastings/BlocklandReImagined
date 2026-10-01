@@ -229,7 +229,9 @@ impl ContentParts {
                 })
                 .map(|d| (d.id.clone(), d.name.trim().to_string()))
                 .chain(
-                    bri_net::content_identity::bot_kinds_from(&content.paths.bot_extras)?
+                    content
+                        .paths
+                        .bot_kinds()?
                         .into_iter()
                         .map(|k| (k.id, k.name)),
                 )
@@ -357,6 +359,7 @@ struct HostSetup {
     item_bounds: BTreeMap<String, bri_weapons::ItemBounds>,
     avatar_catalog: bri_content::avatar::Package,
     vehicle_pack: bri_vehicles::Pack,
+    bot_kinds: Vec<bri_sim::bot_kind::BotKind>,
     event_catalog: bri_events::Catalog,
     event_sounds: Vec<String>,
     maps: Vec<bri_sim::session::MapListing>,
@@ -369,7 +372,7 @@ impl HostSetup {
         session.set_weapon_pack(self.weapon_pack.clone())?;
         session.set_item_bounds(self.item_bounds.clone())?;
         session.set_avatar_catalog(self.avatar_catalog.clone())?;
-        session.set_vehicle_pack(self.vehicle_pack.clone())?;
+        session.set_vehicle_pack(self.vehicle_pack.clone(), self.bot_kinds.clone())?;
         session.set_event_catalog(self.event_catalog.clone(), self.event_sounds.clone())?;
         session.set_spawn_points(loaded.spawn_points)?;
         session.set_breakables(loaded.breakables)?;
@@ -2946,7 +2949,15 @@ impl App {
                 None,
             );
             let permit = load_limit.acquire_owned().await?;
-            let (loaded, visual, identity, catalog, weapon_pack, item_bounds, vehicle_pack) =
+            let (
+                loaded,
+                visual,
+                identity,
+                catalog,
+                weapon_pack,
+                item_bounds,
+                (vehicle_pack, bot_kinds),
+            ) =
                 tokio::task::spawn_blocking(move || -> Result<_> {
                     let _permit = permit;
                     let weapons = paths.weapon_content()?;
@@ -2960,6 +2971,7 @@ impl App {
                     // Every package this host loaded, hashed: what joiners must match.
                     let identity = paths.environment()?;
                     let vehicle_pack = paths.vehicle_pack()?;
+                    let bot_kinds = paths.bot_kinds()?;
                     let meshes = Arc::new(
                         loaded
                             .simulation
@@ -3027,7 +3039,7 @@ impl App {
                         catalog,
                         weapons.pack,
                         item_physics.bounds,
-                        vehicle_pack,
+                        (vehicle_pack, bot_kinds),
                     ))
                 })
                 .await??;
@@ -3057,6 +3069,7 @@ impl App {
                 item_bounds,
                 avatar_catalog,
                 vehicle_pack,
+                bot_kinds,
                 event_catalog,
                 event_sounds,
                 maps: map_list,

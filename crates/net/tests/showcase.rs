@@ -33,6 +33,7 @@ fn session() -> bri_sim::session::Session {
         .set_vehicle_pack(
             bri_vehicles::Pack::load(showcase().join("steel-ball-kit/assets/vehicles.json"))
                 .unwrap(),
+            Vec::new(),
         )
         .unwrap();
     let packages = [
