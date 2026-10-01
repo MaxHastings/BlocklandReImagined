@@ -163,7 +163,9 @@ impl Session {
                 .camera
                 .map(|c| c.eye)
                 .or(Some(peer.player.state().feet)),
-            ControlObject::Spy(target) => Some(self.peers.get(&target)?.player.state().feet),
+            ControlObject::Spy(target) | ControlObject::Orbit { target, .. } => {
+                Some(self.peers.get(&target)?.player.state().feet)
+            }
             ControlObject::Entity(_) => None,
         }
     }
