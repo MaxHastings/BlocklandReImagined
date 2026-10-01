@@ -928,7 +928,15 @@ impl App {
             })
             .collect()
     }
+    /// Queue a cue heard where the local player stands now.
+    #[cfg(test)]
     fn queue_weapon_cue(&mut self, cue: bri_sim::presentation::Cue) {
+        let listener = listener(&self.motion, self.network_view());
+        self.queue_cue_heard_at(cue, listener);
+    }
+    /// Queue a cue for `listener` (the local player's feet, None when not in
+    /// a game): its caption shows only within earshot.
+    fn queue_cue_heard_at(&mut self, cue: bri_sim::presentation::Cue, listener: Option<Vec3>) {
         if matches!(
             cue.kind,
             bri_sim::presentation::CueKind::WeaponAnimation { .. }
@@ -950,7 +958,7 @@ impl App {
             self.combat.hugging.insert(*actor, None);
         }
         self.audio.cue(&cue);
-        if let Some(text) = caption(&cue, self.presented_local().map(|p| Vec3::from(p.feet))) {
+        if let Some(text) = caption(&cue, listener) {
             self.ui.apply(UiUpdate::Caption(text.into()));
         }
         // The engine explosion operation looks like v20's rocket blast.
@@ -1990,6 +1998,21 @@ impl App {
         self.ghost_uploaded = u64::MAX;
         self.remote_ghosts.clear();
         self.motion.reset();
+        // Nothing is ridden any more, and the camera forgets the game's
+        // eyes. The crosshair, wheel and overlay flags mirror what the UI
+        // was told; the next frame's `update_held_weapon` settles them.
+        self.mount_heading = None;
+        self.seated_on = None;
+        self.takes_turret = false;
+        self.seat_report = None;
+        self.rider_rotations.clear();
+        self.rider_eye = None;
+        self.tumble = None;
+        self.observer_eye = None;
+        self.rendered_camera = None;
+        self.rendered_roll = 0.0;
+        self.drawn_controls = None;
+        self.liquid_cache = None;
         self.ghosts.clear();
         self.vehicles.clear();
         self.music_world = None;
@@ -4300,8 +4323,12 @@ impl App {
             match event {
                 network::Event::Presentation { cues, dropped } => {
                     self.audio.server_dropped = dropped;
+                    // The attempt is out of `self` here, so ask it directly
+                    // where the local player hears from.
+                    let view = a.view.as_ref().filter(|_| a.entered);
+                    let heard_at = listener(&self.motion, view);
                     for cue in cues {
-                        self.queue_weapon_cue(cue);
+                        self.queue_cue_heard_at(cue, heard_at);
                     }
                 }
                 network::Event::Ready => a.ready = true,
@@ -5918,6 +5945,13 @@ fn building_action(action: &UiAction) -> bool {
 /// The caption for a sound a player would hear from `listener`, if it is
 /// one worth reading: blasts, gunfire, cries, splashes and breaking bricks
 /// within earshot. Footsteps, plants and menu sounds get none.
+/// Where the local player hears from: their presented feet in the game
+/// `view` shows, None outside a game.
+fn listener(motion: &crate::motion::Motion, view: Option<&network::View>) -> Option<Vec3> {
+    let owner = view?.owner;
+    motion.presented().get(&owner).map(|p| Vec3::from(p.feet))
+}
+
 fn caption(cue: &bri_sim::presentation::Cue, listener: Option<Vec3>) -> Option<&'static str> {
     use bri_sim::presentation::CueKind as K;
     const EARSHOT: f32 = 80.0;
@@ -11100,6 +11134,52 @@ mod tests {
         let carried = assets.attachment_definition(tank).unwrap();
         assert_eq!(carried.id, "v20.vehicle.tankturretplayer");
         assert_eq!(carried.camera.max_dist, 8.0);
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires generated native content; no window, GPU or audio device"]
+    fn leaving_a_game_forgets_its_seat_eyes_and_liquids() -> anyhow::Result<()> {
+        use super::*;
+        let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos();
+        let state = workspace.join("target").join(format!("leave-game-{stamp}"));
+        let mut app = App::load(&workspace.join("content"), &state, (320, 240))?;
+        // What a game in progress leaves behind: a seat, a rider's eye, a
+        // tumble, eyes the camera drew from and the map's liquids.
+        app.seated_on = Some((7, 1));
+        app.mount_heading = Some(1.0);
+        app.takes_turret = true;
+        app.rider_eye = Some(Vec3::ONE);
+        app.tumble = Some(9);
+        app.rider_rotations.insert(3, glam::Quat::from_rotation_y(1.0));
+        app.observer_eye = Some(Vec3::ONE);
+        app.rendered_camera = Some((Vec3::ONE, 1.0, 0.5));
+        app.rendered_roll = 0.3;
+        app.drawn_controls = Some(app.controls.clone());
+        app.liquid_cache = Some(LiquidCache {
+            generation: 1,
+            palette: Vec::new(),
+            liquids: Arc::from(Vec::new()),
+            waters: Arc::from(Vec::new()),
+        });
+        app.disconnect();
+        // The next game starts on foot, with nothing of the last one's view.
+        assert_eq!(app.seated_on, None);
+        assert_eq!(app.mount_heading, None);
+        assert!(!app.takes_turret);
+        assert_eq!(app.rider_eye, None);
+        assert_eq!(app.tumble, None);
+        assert!(app.rider_rotations.is_empty());
+        assert_eq!(app.seat_report, None);
+        assert_eq!(app.observer_eye, None);
+        assert_eq!(app.rendered_camera, None);
+        assert_eq!(app.rendered_roll, 0.0);
+        assert!(app.drawn_controls.is_none());
+        assert!(app.liquid_cache.is_none());
+        let _ = std::fs::remove_dir_all(&state);
         Ok(())
     }
 }
