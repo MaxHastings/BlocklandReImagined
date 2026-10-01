@@ -417,6 +417,14 @@ impl View {
         self.walk()
             .find(|&n| self.nodes[n].ctrl.command.as_deref() == Some(command))
     }
+    /// The yes (or no) button of a message box: the one whose command
+    /// calls the dialog's `yesCallback` (`noCallback`), however the layout
+    /// wires it ([`message_answer`]).
+    pub fn answer_button(&self, yes: bool) -> Option<NodeId> {
+        self.walk().find(|&n| {
+            self.nodes[n].ctrl.command.as_deref().and_then(message_answer) == Some(yes)
+        })
+    }
     /// Find a control by displayed/authored text within a class.
     pub fn by_text(&self, class: &str, text: &str) -> Option<NodeId> {
         self.walk()
@@ -2588,6 +2596,21 @@ fn relative_uniform(a: Rect, min: [i32; 2], old: (i32, i32), new: (i32, i32)) ->
         w,
         h,
     )
+}
+
+/// The answer a message box button's command gives: v20 wires its buttons
+/// `MessageCallback(MessageBoxYesNoDlg,MessageBoxYesNoDlg.yesCallback);`,
+/// so the dialog callback it names (`yesCallback`, `noCallback`) is the
+/// answer, whatever the button says. `None` for any other command.
+pub fn message_answer(command: &str) -> Option<bool> {
+    let command = command.to_ascii_lowercase();
+    if command.contains("nocallback") {
+        Some(false)
+    } else if command.contains("yescallback") {
+        Some(true)
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]

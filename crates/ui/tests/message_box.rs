@@ -35,14 +35,9 @@ fn a_long_yes_no_question_is_shown_in_full(pack: Rc<Pack>) {
         &v.text_of(text),
         v.node(text).rect.w,
     );
-    let line = pack
-        .data
-        .styles
-        .get(&v.node(text).ctrl.style)
-        .and_then(|s| s.font.as_deref())
-        .and_then(|f| pack.font(f))
-        .unwrap()
-        .line_height as i32;
+    // One line of the same text style, laid out the same way.
+    let line =
+        bri_ui::view::View::ml_height(&pack, &v.node(text).ctrl.style, "W", v.node(text).rect.w);
     assert!(need > line, "the question should need several lines");
     assert!(
         v.node(text).rect.h >= need,

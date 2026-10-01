@@ -983,7 +983,7 @@ impl Screen for AdminScreen {
         }
         let cmd = event_command(&self.view, ev).to_ascii_lowercase();
         if self.id == ScreenId::AdminConfirm {
-            if !cmd.contains("nocallback") {
+            if crate::view::message_answer(&cmd) != Some(false) {
                 accept_confirmation(core);
             } else {
                 core.admin.confirmation = None;

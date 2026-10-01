@@ -693,9 +693,12 @@ fn resizable_windows_grow_from_their_edges(pack: &Rc<Pack>) {
             y: ty,
         });
     };
+    // The scroll area showing the server list: a list sizes itself to its
+    // columns, and the area it scrolls in follows the window.
     let list_width = |u: &Ui| {
         let v = u.screen(ScreenId::JoinServer).unwrap().view();
-        v.node(v.id("JS_serverList").unwrap()).rect.w
+        let list = v.id("JS_serverList").unwrap();
+        v.node(v.node(list).parent.unwrap()).rect.w
     };
     let start = window(&u);
     let start_list = list_width(&u);
@@ -703,7 +706,7 @@ fn resizable_windows_grow_from_their_edges(pack: &Rc<Pack>) {
     drag(&mut u, corner, (corner.0 + 120, corner.1 + 80));
     let grown = window(&u);
     assert_eq!((grown.w, grown.h), (start.w + 120, start.h + 80));
-    // The list inside follows its sizing flags.
+    // The list's scroll area follows its sizing flags.
     assert!(list_width(&u) > start_list);
     let corner = (grown.right() - 2, grown.bottom() - 2);
     drag(&mut u, corner, (corner.0 - 900, corner.1 - 900));

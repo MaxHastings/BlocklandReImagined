@@ -286,14 +286,23 @@ pub fn add_message_boxes(data: &mut UiPack) {
         (
             "MessageBoxOKDlg",
             "MBOK",
-            &[("OK", "MessageBoxOKDlg.okCallback();")][..],
+            &[(
+                "OK",
+                "MessageCallback(MessageBoxOKDlg,MessageBoxOKDlg.callback);",
+            )][..],
         ),
         (
             "MessageBoxYesNoDlg",
             "MBYesNo",
             &[
-                ("Yes", "MessageBoxYesNoDlg.yesCallback();"),
-                ("No", "MessageBoxYesNoDlg.noCallback();"),
+                (
+                    "Yes",
+                    "MessageCallback(MessageBoxYesNoDlg,MessageBoxYesNoDlg.yesCallback);",
+                ),
+                (
+                    "No",
+                    "MessageCallback(MessageBoxYesNoDlg,MessageBoxYesNoDlg.noCallback);",
+                ),
             ][..],
         ),
     ] {

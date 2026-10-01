@@ -182,14 +182,23 @@ fn centre(u: &mut Ui, screen: ScreenId, node: usize) -> Result<(f32, f32), Strin
 }
 
 /// Click a control by name, command or visible text.
+/// A message box's yes and no buttons, found as the game finds them
+/// (`View::answer_button`), whatever the layout labels or wires them.
+const YES: &str = "<yes>";
+const NO: &str = "<no>";
+
 fn try_click(u: &mut Ui, screen: ScreenId, control: &str) -> Result<(), String> {
     let v = u
         .screen(screen)
         .ok_or_else(|| format!("{screen:?} is not open: {:?}", u.stack()))?
         .view();
-    let node = v
-        .id(control)
-        .or_else(|| v.by_command(control))
+    let node = match control {
+        YES => v.answer_button(true),
+        NO => v.answer_button(false),
+        _ => None,
+    }
+    .or_else(|| v.id(control))
+    .or_else(|| v.by_command(control))
         .or_else(|| {
             v.walk()
                 .find(|&n| v.is_shown(n) && v.text_of(n).trim() == control)
@@ -1499,7 +1508,7 @@ fn scenarios() -> Vec<Scenario> {
             open: |u| open_admin(u, ScreenId::Admin),
             screen: ScreenId::Admin,
             submit: Some("AdminGui_KickPlayer();"),
-            confirm: &[(ScreenId::AdminConfirm, "MessageBoxYesNoDlg.yesCallback();")],
+            confirm: &[(ScreenId::AdminConfirm, YES)],
             expect: &[],
             rows: Some(Rows {
                 list: "lstAdminPlayerList",
@@ -1520,7 +1529,7 @@ fn scenarios() -> Vec<Scenario> {
             },
             screen: ScreenId::AdminBan,
             submit: Some("addBanGui.ban();"),
-            confirm: &[(ScreenId::AdminConfirm, "MessageBoxYesNoDlg.yesCallback();")],
+            confirm: &[(ScreenId::AdminConfirm, YES)],
             expect: &[
             ("AddBan_Days", Sent(&["actions.Admin.Ban.minutes"])),
             ("AddBan_Hours", Sent(&["actions.Admin.Ban.minutes"])),
@@ -1555,7 +1564,7 @@ fn scenarios() -> Vec<Scenario> {
             },
             screen: ScreenId::AdminUnban,
             submit: Some("unBanGui.clickUnBan();"),
-            confirm: &[(ScreenId::AdminConfirm, "MessageBoxYesNoDlg.yesCallback();")],
+            confirm: &[(ScreenId::AdminConfirm, YES)],
             expect: &[],
             rows: Some(Rows {
                 list: "unBan_list",
@@ -1584,7 +1593,7 @@ fn scenarios() -> Vec<Scenario> {
             },
             screen: ScreenId::AdminMaps,
             submit: Some("changeMapButton.click();"),
-            confirm: &[(ScreenId::AdminConfirm, "MessageBoxYesNoDlg.yesCallback();")],
+            confirm: &[(ScreenId::AdminConfirm, YES)],
             expect: &[],
             rows: Some(Rows {
                 list: "changeMapList",

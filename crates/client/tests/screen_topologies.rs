@@ -53,7 +53,7 @@ fn decline_firewall(app: &mut App) -> Result<()> {
             .any(|n| v.text_of(n).contains("Windows Firewall would stop"))
     });
     if asking {
-        click(app, ScreenId::MessageBox, "MessageBoxYesNoDlg.noCallback();")?;
+        click(app, ScreenId::MessageBox, NO)?;
     }
     Ok(())
 }
@@ -133,8 +133,18 @@ fn view(app: &App, screen: ScreenId) -> Result<&View> {
 }
 
 /// A control by object name, preference, command (any case) or visible text.
+/// A message box's yes and no buttons, found as the game finds them
+/// (`View::answer_button`), whatever the layout labels or wires them.
+const YES: &str = "<yes>";
+const NO: &str = "<no>";
+
 fn find(v: &View, control: &str) -> Option<usize> {
-    v.id(control)
+    match control {
+        YES => v.answer_button(true),
+        NO => v.answer_button(false),
+        _ => None,
+    }
+    .or_else(|| v.id(control))
         .or_else(|| {
             v.walk()
                 .find(|&n| v.node(n).ctrl.variable.as_deref() == Some(control))
@@ -1068,7 +1078,7 @@ fn topology(
                 |a| a[0].pending_requests() == 0 && !a[0].ui.core.admin.groups.is_empty(),
             )?;
             click(host, ScreenId::AdminBricks, "BrickManGui.clickClearAll();")?;
-            click(host, ScreenId::AdminConfirm, "MessageBoxYesNoDlg.yesCallback();")?;
+            click(host, ScreenId::AdminConfirm, YES)?;
             until(
                 &mut [&mut *host, &mut *guest],
                 "every brick cleared",

@@ -156,10 +156,18 @@ on_both!(
 fn authored_fade_sway_light_and_invalid_inputs(f: &Fixture) {
     let field = build(f.shrub(), 4096);
     let d = field.definition();
-    // Closer than `closest` with no near fade is invisible; inside the
-    // range is opaque; the far fade is linear over `fade_far`.
-    assert!(d.closest > 0. && d.fade_near == 0. && d.fade_far > 0.);
+    // At the eye a plant is invisible and it fades in no later than
+    // `closest` (at once with no near fade, over `fade_near` otherwise);
+    // inside the range it is opaque; the far fade is linear over
+    // `fade_far`.
+    assert!(d.closest > 0. && d.fade_far > 0.);
     assert_eq!(fade(d, 0.), 0.);
+    let mut last = 0.;
+    for i in 0..=16 {
+        let f = fade(d, d.closest * i as f32 / 16.);
+        assert!(f >= last, "fading in: {f} after {last}");
+        last = f;
+    }
     assert_eq!(fade(d, d.closest), 1.);
     assert_eq!(fade(d, d.distance), 1.);
     assert!((fade(d, d.distance + d.fade_far * 0.5) - 0.5).abs() < 1e-5);
