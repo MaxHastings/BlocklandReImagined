@@ -9102,10 +9102,16 @@ than the light the bulb gave.
 - Which lights a bulb owns is one rule, `map_lighting::fixture_owners`
   (24 units, shared within 1.5x of the nearest shape), used by the client
   and the probe.
-- The bake gives a texel the lights its neighbours on the same surface see
-  by rays. A ray samples a texel's centre and the lightmap its whole area,
-  so a shadow edge's texels kept a dashed line of the light after it went
-  out (the Gate's probe showed one on the wall by the window). Bake format 7.
+- Shadow edges give their light back. The bake's rays go to the fitted
+  light, which sits a little off where the map compiler had it, and the
+  compiler filtered each texel's whole area, so the two shadows' edges
+  differ by a texel or two. Texels there hold a small part of a light the
+  rays call hidden, below the tenth-to-a-quarter cutoff that keeps fit
+  error in the leftover, so a dashed line of the light stayed after it went
+  out (the Gate's probe showed one on the wall by the window). Now a texel
+  takes its whole remainder when a neighbour on the same surface plainly
+  holds one of those lights (its rays see it, or a quarter of it is left
+  there). Bake format 7.
 - `lighting_probe`: `BRI_BREAK=1` breaks every bulb and tube by the
   client's rule. Within 4 units of a light shape it prints each triangle's
   lightmap, Dynamic leftover, light shares and facing. `BRI_DUMP_LEFT=1`
@@ -9116,5 +9122,7 @@ than the light the bulb gave.
 
 Tests: `bri-render --test unified_lighting a_switched_off_light_leaves_the_same_light_in_every_live_mode`
 (modes 1-3 identical, fails without the Unified per-texel branch);
-`--test map_lighting a_switched_off_light_leaves_no_line_along_its_shadows_edges`;
+`--test map_lighting a_switched_off_light_leaves_no_line_along_its_shadows_edges`
+(a turned slab's filtered shadow; an edge texel keeps 9 levels without the
+neighbour rule, at most 3 with it);
 `bri-client --lib a_broken_bulb_switches_off_its_lights_and_rules_tint_the_rest`.

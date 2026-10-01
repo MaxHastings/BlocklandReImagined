@@ -518,9 +518,13 @@ fn a_switched_off_light_leaves_no_line_along_its_shadows_edges() {
     };
     let mut scene = lit_room(truth);
     let light = Vec3::from(truth.position);
-    // The slab at y = 0, x and z from -2 to 2; the floor (material 2, y =
-    // -10) lit by the share of each texel's 4x4 samples that pass it.
+    // The slab at y = 0, 4 units square turned 0.3 radians about y, so its
+    // shadow's edges cut across the floor's texels at every angle; the floor
+    // (material 2, y = -10) lit by the share of each texel's 4x4 samples
+    // that pass it.
+    let turn = 0.3f32;
     let floor_image = scene.materials[2].images[8];
+    let mut coverage = vec![0u32; 64 * 64];
     for ty in 0..64u32 {
         for tx in 0..64u32 {
             let mut open = 0;
@@ -529,8 +533,10 @@ fn a_switched_off_light_leaves_no_line_along_its_shadows_edges() {
                 let x = ((ty as f32 + (s / 4) as f32 / 4.0 + 0.125) / 64.0 * 2.0 - 1.0) * 10.0;
                 let p = Vec3::new(x, -10.0, z);
                 let hit = p + (light - p) * (10.0 / (light.y + 10.0));
-                open += u32::from(hit.x.abs() > 2.0 || hit.z.abs() > 2.0);
+                let (x, z) = (hit.x * turn.cos() + hit.z * turn.sin(), hit.z * turn.cos() - hit.x * turn.sin());
+                open += u32::from(x.abs() > 2.0 || z.abs() > 2.0);
             }
+            coverage[(ty * 64 + tx) as usize] = open;
             let i = ((ty * 64 + tx) * 4) as usize;
             for c in &mut scene.images[floor_image].rgba[i..i + 3] {
                 *c = (f32::from(*c) * open as f32 / 16.0 + 0.5) as u8;
@@ -545,9 +551,9 @@ fn a_switched_off_light_leaves_no_line_along_its_shadows_edges() {
         scene.materials[m].images[9] = scene.images.len() - 1;
     }
     let first = scene.vertices.len() as u32;
-    for (x, z) in [(-2.0, -2.0), (2.0, -2.0), (2.0, 2.0), (-2.0, 2.0)] {
+    for (x, z) in [(-2.0f32, -2.0f32), (2.0, -2.0), (2.0, 2.0), (-2.0, 2.0)] {
         scene.vertices.push(SceneVertex {
-            position: [x, 0.0, z],
+            position: [x * turn.cos() - z * turn.sin(), 0.0, z * turn.cos() + x * turn.sin()],
             normal: [0.0, -1.0, 0.0],
             uv: [0.0; 2],
             lightmap_uv: [0.0; 2],
@@ -565,12 +571,17 @@ fn a_switched_off_light_leaves_no_line_along_its_shadows_edges() {
     scene.materials.push(Material::surface("slab", 0, 0));
     let lit = Bake::new(&scene).expect("lightmapped room").bake(1.0, 50_000, 1.0, 50_000);
     let floor = lit.dynamic.iter().find(|s| s.parts_image as usize == scene.materials[2].images[9]).expect("the floor's sheet");
-    let worst = floor
-        .left
-        .chunks_exact(4)
-        .enumerate()
-        .map(|(i, t)| (t[..3].iter().copied().max().unwrap_or(0), i))
-        .max()
-        .unwrap_or_default();
+    // Where the light all but missed a texel (a quarter of it or less),
+    // nothing of it stays; elsewhere the fit's error, a few levels.
+    let mut edge = (0, 0);
+    let mut worst = (0, 0);
+    for (i, t) in floor.left.chunks_exact(4).enumerate() {
+        let left = t[..3].iter().copied().max().unwrap_or(0);
+        if (1..=4).contains(&coverage[i]) {
+            edge = edge.max((left, i));
+        }
+        worst = worst.max((left, i));
+    }
+    assert!(edge.0 <= 3, "a shadow's edge keeps {} levels at texel {} with the light off", edge.0, edge.1);
     assert!(worst.0 <= 8, "the floor keeps {} levels at texel {} with the light off", worst.0, worst.1);
 }

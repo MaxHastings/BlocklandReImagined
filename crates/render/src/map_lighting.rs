@@ -855,70 +855,103 @@ impl Bake {
             let texel_of = |i: usize| {
                 parts.rgba.get(i * 4..i * 4 + 3).map(|t| Vec3::new(t[0] as f32, t[1] as f32, t[2] as f32) / 255.0)
             };
-            // A ray samples a texel's centre, the lightmap its whole area: a
-            // texel takes the lights its neighbours on the same surface see,
-            // so a shadow's edge, half lit, gives its light back with it
-            // instead of keeping a line of it.
-            let (w, h) = (parts.width as i64, parts.height as i64);
-            let mut grid: Vec<Option<(u32, Vec3, Vec3)>> = vec![None; (w * h).max(0) as usize];
-            for &(l, mask) in &by_sheet[sheet] {
-                if let Some(g) = grid.get_mut(l.index as usize) {
-                    *g = Some((mask, l.position, l.normal));
-                }
+            // Per texel: the lights its rays see take its authored light
+            // first, as far as it holds them; what is left over is a share
+            // (`raw`) of the lights in reach the rays say are hidden.
+            struct Split {
+                index: usize,
+                position: Vec3,
+                normal: Vec3,
+                texel: Vec3,
+                given: Vec3,
+                shares: Vec<f32>,
+                seen: u32,
+                hidden: u32,
+                hidden_light: Vec3,
+                raw: f32,
             }
-            let dilated = |l: &Lexel, mask: u32| {
-                let (x, y) = (l.index as i64 % w.max(1), l.index as i64 / w.max(1));
-                let mut out = mask;
-                for (dx, dy) in (-1..=1).flat_map(|dy| (-1..=1).map(move |dx| (dx, dy))) {
-                    let (nx, ny) = (x + dx, y + dy);
-                    if (dx, dy) == (0, 0) || nx < 0 || ny < 0 || nx >= w || ny >= h {
-                        continue;
-                    }
-                    if let Some((m, position, normal)) = grid[(ny * w + nx) as usize] {
-                        let apart = position - l.position;
-                        let same_surface = normal.dot(l.normal) > 0.95 && apart.dot(l.normal).abs() <= 0.1 * apart.length() + 1e-3;
-                        if same_surface {
-                            out |= m;
-                        }
-                    }
-                }
-                out
-            };
-            // Per texel: its index, its leftover light and each light's share.
-            let mut shared: Vec<(usize, Vec3, Vec<f32>)> = Vec::new();
-            let mut reach = 0u32;
+            let mut splits: Vec<Split> = Vec::new();
+            let mut split_at: Vec<Option<usize>> = vec![None; (parts.width * parts.height) as usize];
             for &(l, mask) in &by_sheet[sheet] {
-                let mask = dilated(l, mask);
                 let i = l.index as usize;
                 let Some(texel) = texel_of(i) else { continue };
                 // The authored light (a cleaned leak holds less), above the
                 // floor; the rest of the texel is the sun's ambient.
-                let mut held = (l.base.min(texel) - floor).max(Vec3::ZERO);
+                let held = (l.base.min(texel) - floor).max(Vec3::ZERO);
                 let shades: Vec<Vec3> = lights.iter().map(|light| light.shade(l.position, l.normal)).collect();
+                let in_reach = |k: usize| shades[k].max_element() > 0.0;
+                let seen = (0..lights.len()).filter(|&k| mask & (1 << k) != 0 && in_reach(k)).fold(0u32, |m, k| m | 1 << k);
+                let hidden = (0..lights.len()).filter(|&k| seen & (1 << k) == 0 && in_reach(k)).fold(0u32, |m, k| m | 1 << k);
+                let light_of = |set: u32| (0..lights.len()).filter(|&k| set & (1 << k) != 0).map(|k| shades[k]).sum::<Vec3>();
+                let seen_light = light_of(seen);
+                let s = share(held, seen_light);
                 let mut shares = vec![0.0f32; lights.len()];
-                let mut given = Vec3::ZERO;
-                for seen_by_rays in [true, false] {
-                    let pick = |k: usize| (mask & (1 << k) != 0) == seen_by_rays && shades[k].max_element() > 0.0;
-                    let total: Vec3 = (0..lights.len()).filter(|&k| pick(k)).map(|k| shades[k]).sum();
-                    let mut s = share(held, total);
-                    if !seen_by_rays {
-                        // Not a remainder far short of their light (under a
-                        // tenth fades out by a quarter): the fit's error or a
-                        // light it never traced, which stays in the leftover.
-                        let t = ((s - 0.1) / 0.15).clamp(0.0, 1.0);
-                        s *= t * t * (3.0 - 2.0 * t);
+                for k in (0..lights.len()).filter(|&k| seen & (1 << k) != 0) {
+                    shares[k] = s;
+                }
+                let given = seen_light * s;
+                let hidden_light = light_of(hidden);
+                if let Some(at) = split_at.get_mut(i) {
+                    *at = Some(splits.len());
+                }
+                splits.push(Split {
+                    index: i,
+                    position: l.position,
+                    normal: l.normal,
+                    texel,
+                    given,
+                    shares,
+                    seen,
+                    hidden,
+                    hidden_light,
+                    raw: share((held - given).max(Vec3::ZERO), hidden_light),
+                });
+            }
+            // A remainder far short of the hidden lights' light (under a
+            // tenth, fading out by a quarter) is the fit's error or a light
+            // it never traced, and stays in the leftover. Unless a neighbour
+            // on the same surface plainly holds one of those lights (its rays
+            // see it, or a quarter of it is left over there): then this is a
+            // shadow's edge, where the rays from the fitted light and the map
+            // compiler's filtered shadow disagree by a texel or two, and
+            // keeping it would leave a line of the light after it goes out.
+            let (w, h) = (parts.width as i64, parts.height as i64);
+            let edge_of_lit = |t: &Split| {
+                let (x, y) = (t.index as i64 % w.max(1), t.index as i64 / w.max(1));
+                (-1..=1).flat_map(|dy| (-1..=1).map(move |dx| (x + dx, y + dy))).any(|(nx, ny)| {
+                    if nx < 0 || ny < 0 || nx >= w || ny >= h || (nx, ny) == (x, y) {
+                        return false;
                     }
-                    if s <= 0.0 {
-                        continue;
-                    }
-                    for k in (0..lights.len()).filter(|&k| pick(k)) {
+                    let Some(n) = split_at[(ny * w + nx) as usize].map(|k| &splits[k]) else { return false };
+                    let apart = n.position - t.position;
+                    let same_surface =
+                        n.normal.dot(t.normal) > 0.95 && apart.dot(t.normal).abs() <= 0.1 * apart.length() + 1e-3;
+                    same_surface && (n.seen & t.hidden != 0 || (n.raw >= 0.25 && n.hidden & t.hidden != 0))
+                })
+            };
+            // Per texel: its index, its leftover light and each light's share.
+            let mut shared: Vec<(usize, Vec3, Vec<f32>)> = Vec::with_capacity(splits.len());
+            let mut reach = 0u32;
+            for t in &splits {
+                let mut shares = t.shares.clone();
+                let mut given = t.given;
+                let mut s = t.raw;
+                if s < 0.25 && !edge_of_lit(t) {
+                    let fade = ((s - 0.1) / 0.15).clamp(0.0, 1.0);
+                    s *= fade * fade * (3.0 - 2.0 * fade);
+                }
+                if s > 0.0 {
+                    for k in (0..lights.len()).filter(|&k| t.hidden & (1 << k) != 0) {
                         shares[k] = s;
+                    }
+                    given += t.hidden_light * s;
+                }
+                for (k, &share) in shares.iter().enumerate() {
+                    if share > 0.0 {
                         reach |= 1 << k;
                     }
-                    held = (held - total * s).max(Vec3::ZERO);
-                    given += total * s;
                 }
-                shared.push((i, (texel - given).max(Vec3::ZERO), shares));
+                shared.push((t.index, (t.texel - given).max(Vec3::ZERO), shares));
             }
             let channels: Vec<u8> = (0..lights.len() as u8).filter(|&k| reach & (1 << k) != 0).collect();
             let texels = (parts.width * parts.height) as usize;
