@@ -685,7 +685,7 @@
       "port": "weapon_package_explosive1",
       "status": "partial",
       "sha256": [
-        "1a850001c61ced5116964da08b0bea3fa0001c77c5968a48e3288337eb7b925a"
+        "855a8cbb4aa91351ad281a0e8bd297677b9ae3319100e661a51b0ada0b90b64e"
       ],
       "covers": {
         "Projectile::onAdd": {
@@ -881,7 +881,7 @@
       "port": "weapon_melee_extended",
       "status": "partial",
       "sha256": [
-        "d5602d27eac405c06980e6386643093d61b0f8c84ece37c7ef3a8e62a201b989"
+        "be6a64786cfe955c39df8e7746d222a397c62702f49ce043ea5d2bc8d6a62803"
       ],
       "covers": {
         "TT_isMeleeRaycastCrit": {

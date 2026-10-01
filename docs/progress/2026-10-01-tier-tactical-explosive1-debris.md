@@ -27,3 +27,7 @@ Checks:
 - `cargo test -p bri-addon-import --test import a_gun_add_on_brings_its_sounds_effects_debris_and_odd_items`
 - `cargo test -p bri-client --lib explosion_debris`
 - the wider weapons and addon-import runs, and clippy.
+
+Explosive 1 and Melee Extended were pinned to scripts-only folders too;
+they now pin the bundled zips (855a8cbb…b64e and be6a6478…2803). With
+that, all nine bundled Tier packs ported so far show `listed`.
