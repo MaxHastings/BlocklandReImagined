@@ -415,6 +415,47 @@ fn the_gun_grabs_a_vehicle_where_it_points_and_carries_it_without_lag() {
     );
 }
 
+/// Max, v0.1.10: with left click held at something out of reach, walking
+/// up to it never grabbed it; he had to let go and click again. A trigger
+/// held with nothing caught keeps reaching, and catches it once in range.
+#[test]
+fn holding_the_trigger_catches_what_comes_in_range_without_a_second_click() {
+    let mut g = Game::new();
+    let host = g.join("Host", Vec3::new(0.0, 0.05, 0.0));
+    g.s.give_tool(host, GUN, true).unwrap();
+    let crate_ =
+        g.s.spawn_vehicle_at(0, CRATE, Vec3::new(0.0, 1.0, -75.0), 0.0, Vec3::ZERO)
+            .unwrap();
+    g.steps(60);
+    trigger(&mut g, host, true);
+    g.steps(30);
+    assert_eq!(g.s.held_by(host), None, "out of reach");
+    assert_eq!(g.beam(host)[..3], [0.0, 0.0, 1.0], "the beam reaches for it");
+    // Walk up to it with the trigger still down: caught on the way.
+    g.looks.get_mut(&host).unwrap().forward = 1.0;
+    let mut caught = None;
+    for tick in 0..1200 {
+        g.steps(1);
+        if g.s.held_by(host).is_some() {
+            caught = Some(tick);
+            break;
+        }
+    }
+    g.looks.get_mut(&host).unwrap().forward = 0.0;
+    assert!(caught.is_some(), "never caught it");
+    assert_eq!(g.s.held_by(host), Some(ObjectRef::Vehicle(crate_)));
+    let (at, _) = g.vehicle(crate_).unwrap();
+    let gap = at.distance(g.feet(host));
+    assert!(gap > 50.0 && gap < 62.0, "caught as it came in range, {gap} off");
+    g.steps(12);
+    assert_eq!(g.beam(host)[..3], [1.0, crate_ as f64, 1.0], "and the beam shows it");
+    // Let go: nothing is reached for any more.
+    trigger(&mut g, host, false);
+    assert_eq!(g.s.held_by(host), None);
+    g.steps(30);
+    assert_eq!(g.s.held_by(host), None, "let go stays let go");
+}
+
 #[test]
 fn a_held_object_settles_without_wobbling_heavy_or_light() {
     for (definition, mass) in [(CRATE, 300.0), (BALL, 900.0)] {
@@ -1395,6 +1436,7 @@ fn add_launcher(
         crosshair: true,
         follow_arm: false,
         paint_tint: false,
+        scripts: Default::default(),
         states,
     };
     let item = bri_weapons::Item {

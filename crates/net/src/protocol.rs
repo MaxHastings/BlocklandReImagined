@@ -62,9 +62,11 @@ use std::collections::{BTreeMap, BTreeSet};
 /// environment (Admin Menu Environment, `set_environment`).
 /// 70: `Vitals::look_limits`: a rule's `set_look_limits` bounds how far a
 /// body's arms and head follow its look.
+/// 71: `Drop::paint`: a dropped paint-tinted tool keeps the colour it was
+/// held in.
 /// (next): `RemotePose` in centimetres with packed flags; other players'
 /// poses at a rate by distance.
-pub const VERSION: u32 = 70;
+pub const VERSION: u32 = 71;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).

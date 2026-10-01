@@ -3,7 +3,8 @@
 //
 // - Hold left click: the beam grabs what you point at, by the very spot
 //   it hit, and keeps that spot where you point, as far off as it was
-//   when you grabbed it. It swings round with you and keeps its angle to
+//   when you grabbed it. Nothing there, or too far: keep holding, and it
+//   catches whatever comes where you point within reach. It swings round with you and keeps its angle to
 //   you. Let go and it carries on as it was moving, so flick your view
 //   and let go to throw it.
 // - The mouse wheel, while grabbing, reels it out or in. Right click is
@@ -72,7 +73,8 @@ fn cmd_gravitygun(p) {
     tell(p, "Gravity Gun: hold left click to grab and drag, scroll to reel it in or out, let go to drop or fling.");
 }
 
-// Left click pressed: grab what the beam meets.
+// Left click pressed: grab what the beam meets, or keep reaching (the
+// engine catches what comes in range while the trigger stays down).
 fn cmd_grab(p) {
     let me = player(p);
     if me == () {
@@ -102,6 +104,9 @@ fn cmd_grab(p) {
             b[3] = reach;
         }
     }
+    if b[0] == 0 {
+        reach(p, farthest(), #{ near: nearest(), force: force(), turn: true });
+    }
     set_player(p, "beam", b);
 }
 
@@ -109,9 +114,7 @@ fn cmd_grab(p) {
 // of the view throws it. Nothing is added on letting go.
 fn cmd_release(p) {
     let b = beam_of(p);
-    if held(p) != () {
-        let_go(p);
-    }
+    let_go(p);
     b[0] = 0;
     b[1] = 0;
     b[2] = 0;
@@ -133,7 +136,8 @@ fn cmd_reel(p, notches) {
 }
 
 // Twenty times a second: a beam whose hold ended (it snagged, the rules
-// changed, the gun was put away) lets go.
+// changed, the gun was put away) lets go, and a beam that caught
+// something while reaching shows it.
 fn on_tick() {
     let tool = get("tool");
     for pl in players() {
@@ -141,11 +145,24 @@ fn on_tick() {
         let b = beam_of(p);
         let holding = held(p);
         let armed = pl.item == tool && pl.alive;
-        if holding != () && !armed {
+        if !armed && (holding != () || b[2] != 0) {
             let_go(p);
             holding = ();
         }
         let changed = false;
+        // Reaching with the trigger down: the engine caught something.
+        if b[0] == 0 && holding != () && b[2] != 0 {
+            let o = object(holding);
+            if o != () {
+                b[0] = kind_code(o.kind);
+                b[1] = o.id;
+                let d = held_distance(p);
+                if d != () {
+                    b[3] = d;
+                }
+                changed = true;
+            }
+        }
         if b[0] != 0 && holding == () {
             b[0] = 0;
             b[1] = 0;
