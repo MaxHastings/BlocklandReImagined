@@ -1266,6 +1266,12 @@ pub struct CopyRule {
     /// Planting the copy plants each brick that fits and skips the rest,
     /// as v20's Duplorcator did, rather than all or nothing.
     pub partial: bool,
+    /// The same trust in the owner of a brick's stack (who owns the bricks
+    /// it was built on, v20's `stackBL_ID`) also lets a player copy it, and,
+    /// with full trust, cut, paint or wrench it through the copy (the New
+    /// Duplicator's trust checks).
+    #[serde(default)]
+    pub stack: bool,
 }
 impl Default for CopyRule {
     fn default() -> Self {
@@ -1274,6 +1280,7 @@ impl Default for CopyRule {
             public: true,
             admin: true,
             partial: false,
+            stack: false,
         }
     }
 }

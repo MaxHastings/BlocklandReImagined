@@ -1056,3 +1056,67 @@ fn a_copy_floats_admin_only_for_administrators_alone() {
     assert!(matches!(floated, Ok(Reply::Planted(_))), "{floated:?}");
     assert_eq!(g.bricks().len(), before + 1);
 }
+
+/// A brick built on someone else's stands in their stack (v20's
+/// `stackBL_ID`); a copy rule with `stack` lets the stack's owner copy and
+/// cut what others built on it with only build trust between them.
+#[test]
+fn a_stack_owner_copies_and_cuts_what_others_built_on_their_stack() {
+    let mut g = Game::new();
+    let verified = |g: &mut Game, name: &str, x: f32, key: u8| {
+        g.s.join_verified(
+            name.into(),
+            Vec3::new(x, 0.05, 3.0),
+            false,
+            Some(bri_admin::Principal([key; 32])),
+        )
+        .unwrap()
+    };
+    let ann = verified(&mut g, "Ann", 0.0, 1);
+    let bob = verified(&mut g, "Bob", 2.0, 2);
+    g.cmd(ann, Command::TrustInvite { target: bob, level: 1 }).unwrap();
+    g.cmd(bob, Command::AcceptTrust { from: ann }).unwrap();
+    let a = g.plant(ann, [0.5, 0.1, 0.25]);
+    let b = g.plant(bob, [0.5, 0.3, 0.25]);
+    let c = g.plant(bob, [0.5, 0.5, 0.25]);
+    let own = g.plant(bob, [3.5, 0.1, 0.25]);
+    let sim = g.s.simulation();
+    assert_eq!(sim.stack_owner(a), Some(ann));
+    assert_eq!(sim.stack_owner(b), Some(ann), "built on Ann's plate");
+    assert_eq!(sim.stack_owner(c), Some(ann), "built on Bob's, in Ann's stack");
+    assert_eq!(sim.stack_owner(own), Some(bob));
+
+    let up = StackReach {
+        up: true,
+        limited: true,
+    };
+    let full = CopyRule {
+        trust: bri_package_runtime::ops::CopyTrust::Full,
+        admin: false,
+        ..CopyRule::default()
+    };
+    // Full trust needed: Bob's bricks stop the copy, as they are not
+    // Ann's to change...
+    let copied = g.s.copy_build(ann, a, 100, up, full, TOOL, "advanced-duplicator");
+    assert_eq!(copied.selection.bricks.len(), 1, "{:?}", copied.error);
+    // ...unless the rule counts the stack: they stand on hers.
+    let stacked = CopyRule { stack: true, ..full };
+    let copied = g.s.copy_build(ann, a, 100, up, stacked, TOOL, "advanced-duplicator");
+    assert_eq!(copied.selection.bricks.len(), 3, "{:?}", copied.error);
+    g.steps(61);
+    g.typed(ann, "cuteach");
+    finish_work(&mut g, ann);
+    let world = g.bricks();
+    assert!(![a, b, c].iter().any(|id| world.contains_key(id)), "all three cut");
+    assert!(world.contains_key(&own));
+    // Put back by the undo, they are still in Ann's stack.
+    g.undo(ann);
+    finish_work(&mut g, ann);
+    let world = g.bricks();
+    assert_eq!(world.len(), 4);
+    let sim = g.s.simulation();
+    assert!(world
+        .iter()
+        .filter(|(_, brick)| brick.owner == bob && brick.position[0] < 1.0)
+        .all(|(id, _)| sim.stack_owner(*id) == Some(ann)));
+}

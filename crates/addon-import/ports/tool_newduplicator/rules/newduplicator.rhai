@@ -722,6 +722,9 @@ fn copy_rule(p, me) {
         trust: trust(),
         public_bricks: select_public(),
         admin: admin_bypass(),
+        // `ndTrustCheckSelect`: trust in the owner of the brick's stack
+        // counts too.
+        stack: true,
         partial: true,
         limited: get_player(p, "limited"),
         // Held as a selection until a brick key takes it up.
@@ -793,7 +796,12 @@ fn cmd_fire(p) {
         menu_sound(p, "uploadStartSound");
         return;
     }
-    // Box mode: a box around the clicked brick.
+    // Box mode: a box around the clicked brick, one the player may select
+    // (`ndTrustCheckMessage`).
+    if !may_copy(p, hit.brick, copy_rule(p, me)) {
+        no_trust(p);
+        return;
+    }
     if get_player(p, "box_selected") {
         oops(p, "Selection canceled! You can now edit the box again.", 5);
         set_player(p, "box_selected", false);

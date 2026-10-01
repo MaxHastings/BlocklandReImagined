@@ -213,6 +213,11 @@ pub trait World {
     fn can_edit(&self, _caller: Option<u64>, _brick: u64) -> bool {
         false
     }
+    /// Whether a copy by `player` under `rule` would take brick `brick`
+    /// (the trust a copy checks, [`crate::ops::CopyRule`]).
+    fn may_copy(&self, _player: u64, _brick: u64, _rule: crate::ops::CopyRule) -> bool {
+        false
+    }
     /// Whether a brick of `kind` turned `turns` quarter turns would fit
     /// centred at `position` now (snapped to the grid as `plant_brick`
     /// does): nothing in the way, inside the world.
@@ -2183,6 +2188,7 @@ fn copy_rule(options: &Map) -> Result<CopyOptions, Box<EvalAltResult>> {
             "public_bricks" => rule.public = flag()?,
             "admin" => rule.admin = flag()?,
             "partial" => rule.partial = flag()?,
+            "stack" => rule.stack = flag()?,
             "limited" => limited = Some(flag()?),
             "hidden" => hold.hidden = flag()?,
             "add" => hold.add = flag()?,
@@ -2310,6 +2316,14 @@ fn register_queries(engine: &mut Engine) {
     engine.register_fn("can_edit", |brick: Dynamic| {
         let brick = id(&brick)?;
         with_world(|world, i| Ok(world.can_edit(i.caller, brick)))
+    });
+    // may_copy(player, brick, options): whether a copy by the player with
+    // these copy options (`copy_build`'s) would take the brick: the New
+    // Duplicator's `ndTrustCheckSelect` for a box corner.
+    engine.register_fn("may_copy", |player: Dynamic, brick: Dynamic, options: Map| {
+        let (player, brick) = (id(&player)?, id(&brick)?);
+        let (rule, _, _) = copy_rule(&options)?;
+        with_world(|world, _| Ok(world.may_copy(player, brick, rule)))
     });
     engine.register_fn(
         "can_plant",

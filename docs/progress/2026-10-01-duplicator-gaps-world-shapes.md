@@ -151,3 +151,26 @@ Left: stack-owner trust (`ndTrustCheck*` with `stackBL_ID`), the mirrored
 plain-brick ghost, the ghost shown to other players with its box, brick
 extras in copies, the save progress line, prefs through the settings
 seam, `ND_Item::onAdd`, `ndSetMode`'s image flag.
+
+## Stack ownership (New Duplicator trust rules)
+
+`ndTrustCheckSelect` and `ndTrustCheckModify` let a player select and
+change a brick when they own its stack (`stackBL_ID`: whoever owns the
+bricks it was built on) or have the trust in that stack's owner. The
+engine now keeps this as `Simulation::stack_owner`: a brick planted,
+copied in or restored takes the stack of the lowest-numbered brick under
+it, else of one on top, else is its owner's, as the original's own plant
+set `stackBL_ID`. Only bricks in someone else's stack are noted, and it is
+not saved (v20 did not save it either). A copy rule's `stack` option
+counts it when copying and when cutting, painting or wrenching through
+the copy; `may_copy(p, brick, options)` asks the same before a box corner
+is taken, which the port uses for `ndTrustCheckMessage`'s refusal.
+
+The 1M probe after the change (three runs, Linux container): worst ticks
+select 2.2 to 2.3 ms, cut 1.8 to 3.1, plant 3.0 to 4.4, undo plant 2.4 to
+3.3, undo cut 3.2 to 3.4, supercut 1.7 to 1.9, undo supercut 2.7 to 3.4;
+totals as before.
+
+Tests: `a_stack_owner_copies_and_cuts_what_others_built_on_their_stack`
+(bri-sim), `new_duplicator_port_refuses_a_box_corner_without_trust`
+(ports; fails without the rules' check). New Duplicator: 345 of 363.

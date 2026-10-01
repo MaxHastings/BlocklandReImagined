@@ -44,6 +44,9 @@ pub(super) struct HeldCopy {
     /// Its bricks glow until it is let go or taken up to place
     /// ([`Session::highlight_copy`] with no end).
     pub lit: bool,
+    /// Full trust in a brick's stack owner lets its player change it
+    /// (`CopyRule::stack`).
+    pub stack: bool,
 }
 
 /// Another player's brick group a copy is planted into.
@@ -110,6 +113,7 @@ impl HeldCopy {
             wrench_open: false,
             plant_as: None,
             lit: false,
+            stack: false,
         }
     }
 }
@@ -133,8 +137,14 @@ pub struct Copied {
     pub error: Option<(&'static str, String)>,
 }
 
-/// Whether `rule` lets `actor` copy `brick`.
-fn admits(actor: &Actor, rule: CopyRule, brick: &Brick) -> bool {
+/// Whether `rule` lets `actor` copy `brick` (`id`).
+pub(super) fn admits(
+    actor: &Actor,
+    rule: CopyRule,
+    sim: &crate::simulation::Simulation,
+    id: BrickId,
+    brick: &Brick,
+) -> bool {
     if brick.owner == 0 {
         return rule.public;
     }
@@ -146,6 +156,10 @@ fn admits(actor: &Actor, rule: CopyRule, brick: &Brick) -> bool {
         CopyTrust::Full => level::FULL,
     };
     actor.trust_level(brick.owner) >= needed
+        || (rule.stack
+            && sim
+                .stack_owner(id)
+                .is_some_and(|o| o != 0 && actor.trust_level(o) >= needed))
 }
 
 impl Session {

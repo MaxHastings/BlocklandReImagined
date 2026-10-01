@@ -80,7 +80,7 @@ impl SuperCutWork {
 
     fn work(&mut self, s: &mut Session, budget: &mut u32) -> Result<bool> {
         if !self.scan.is_done() {
-            if !self.scan.step(&s.simulation, budget, |_| true) {
+            if !self.scan.step(&s.simulation, budget, |_, _| true) {
                 return Ok(false);
             }
             ensure!(

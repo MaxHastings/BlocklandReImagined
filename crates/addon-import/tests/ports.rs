@@ -3777,3 +3777,54 @@ fn new_duplicator_port_cancels_each_job_its_own_way_and_glows_until_let_go() {
     assert!(diagnostics.is_empty(), "{diagnostics:#?}");
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// The New Duplicator's port: a box-mode click on a brick the player may
+/// not select is refused with the original's message and error sound
+/// (`ndTrustCheckMessage`), and makes no box.
+#[test]
+fn new_duplicator_port_refuses_a_box_corner_without_trust() {
+    use bri_sim::session::Command;
+
+    let (dir, mut s, _host, _seq, _) = new_duplicator_game("new-duplicator-box-trust");
+    // Standing on the host's lone plate, looking straight down at it.
+    let guest = s.join("Guest".into(), Vec3::new(2.5, 0.25, 0.25), false).unwrap();
+    let gseq = std::cell::Cell::new(0u64);
+    send(&mut s, guest, &gseq, typed("d", &[])).unwrap();
+    let down = |s: &mut bri_sim::session::Session, n: u64| {
+        s.movement(
+            guest,
+            s.snapshot().world.tick + n + 5000,
+            bri_sim::player::MoveInput {
+                pitch: -1.55,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        s.step().unwrap();
+    };
+    for n in 0..60 {
+        down(&mut s, n);
+    }
+    send(&mut s, guest, &gseq, Command::ToggleLight).unwrap();
+    for n in 0..60 {
+        down(&mut s, n);
+    }
+    heard(&mut s, guest);
+    for pressed in [true, false] {
+        send(&mut s, guest, &gseq, Command::WeaponTrigger { down: pressed }).unwrap();
+        down(&mut s, 0);
+    }
+    for n in 0..5 {
+        down(&mut s, n);
+    }
+    let (prints, sounds) = heard(&mut s, guest);
+    assert!(
+        prints.iter().any(|t| t.contains("You don't have enough trust to do that!")),
+        "{prints:?}"
+    );
+    assert!(sounds.iter().any(|x| x == "errorSound"), "{sounds:?}");
+    assert!(nd_box(&s, guest).is_none(), "no box");
+    let diagnostics = s.package_diagnostics();
+    assert!(diagnostics.is_empty(), "{diagnostics:#?}");
+    std::fs::remove_dir_all(dir).unwrap();
+}

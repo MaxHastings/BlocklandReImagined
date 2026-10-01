@@ -753,9 +753,14 @@ A last `options` map changes what a copy may take and how it plants:
 in a brick's owner), `public_bricks` (public bricks may be copied; default
 true), `admin` (administrators may copy any brick; default true),
 `partial` (planting plants each brick that fits and skips the rest, as
-v20's Duplorcator did; default false) and, for a stack, `limited` (keep
+v20's Duplorcator did; default false), `stack` (the same trust in the
+owner of a brick's stack also counts: whoever owns the bricks it was built
+on, v20's `stackBL_ID`, so the copy's player may also cut, paint or wrench
+through the copy what others built on their stack with their full trust;
+default false) and, for a stack, `limited` (keep
 the stack on its side of the clicked brick: going up, nothing reaching
-below its bottom). `highlight_copy(p, [r, g, b, a], seconds)` then lights
+below its bottom). `may_copy(p, brick, options)` says whether a copy with
+those options would take a brick, before the player picks it. `highlight_copy(p, [r, g, b, a], seconds)` then lights
 the copied bricks in the palette colour nearest that one (`()` for each
 brick's own), glowing, for everyone to see, and gives them their own
 colours back after (a negative `seconds` keeps them lit until the copy is

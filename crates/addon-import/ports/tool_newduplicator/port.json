@@ -342,6 +342,9 @@
     "ND_Selection::startCutting": "cut_copy with each: every brick the player may cut goes, the rest are counted (missing trust)",
     "ND_Selection::tickCutting": "cut_copy with each runs as a copy job, a slice each tick within the copy budget",
     "ndGetPaintColorCode": "paint_code: the palette colour as a <color:hex> tag",
-    "ndStartDeHighlight": "highlight_copy with a negative time lights the selection until it is let go, as the original's highlight set"
+    "ndStartDeHighlight": "highlight_copy with a negative time lights the selection until it is let go, as the original's highlight set",
+    "ndTrustCheckSelect": "copy_rule: the engine's copy trust with stack: owning the brick, owning its stack (stack_owner, v20's stackBL_ID), trust in either at the Trust Limit, admin bypass, public bricks",
+    "ndTrustCheckModify": "copy_rule stack: cutting, painting and wrenching through the copy need full trust in the brick's owner or its stack's owner, or admin",
+    "ndTrustCheckMessage": "no_trust: a box corner the player may not select (may_copy) and a refused stack selection get the error sound and the original's 'not enough trust' line"
   }
 }

@@ -45,3 +45,4 @@ Owners are named by thread title.
 | Message box | `message_box(p, title, text)` (v20 `MessageBoxOK`), capability `chat` | Capture the Flag (Slayer) | in flight |
 | Saved mini-games | a build keeps its saver's mini-game (settings, Add-On settings, teams, `per_minigame` state keys); loading sets it up again and sends `on_minigame` `loaded` | Capture the Flag (Slayer) | in flight |
 | Copy jobs | big copy work a slice each tick (`CopyWork`, `cancel_copy`, `copy_working`), copy ghost subset, `IdMap` | Duplicators | in flight |
+| Stack ownership | `Simulation::stack_owner` (v20's `stackBL_ID`, not saved), `CopyRule::stack`, `may_copy` | Duplicators | in flight |
