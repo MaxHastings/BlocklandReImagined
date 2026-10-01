@@ -905,3 +905,150 @@ fn ported_player_throwing_grabs_throws_and_lets_go_in_a_hosted_game() {
     );
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+fn ported(name: &str, addon: &str) -> (PathBuf, PathBuf, bri_addon_import::report::Report) {
+    let dir = fresh(name);
+    let out = dir.join("package");
+    let report = import(&options(fixture(&format!("ports/{addon}")), out.clone())).unwrap();
+    assert!(report.ports[0].applied, "{:?}", report.ports[0].reason);
+    assert!(report.needs_behaviour.iter().all(|n| n.port.is_some()));
+    bri_addon_import::ports::check_pins(&out).unwrap();
+    (dir, out, report)
+}
+
+fn holder(package: &Path, items: &[&str]) -> WeaponsWorld {
+    let pack =
+        Pack::from_json(&std::fs::read(package.join("assets/weapons.json")).unwrap()).unwrap();
+    let mut world = WeaponsWorld::new(pack).unwrap();
+    world.add_actor(ActorId(1), 5).unwrap();
+    for (slot, item) in items.iter().enumerate() {
+        world.give_at(ActorId(1), slot, item).unwrap();
+    }
+    world.equip(ActorId(1), Some(0)).unwrap();
+    world
+}
+
+fn run(world: &mut WeaponsWorld, ticks: usize) -> Vec<Event> {
+    (0..ticks).flat_map(|_| world.step(&mut Empty)).collect()
+}
+
+fn arm(events: &[Event]) -> Vec<String> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            Event::Animation {
+                thread: 2,
+                sequence,
+                ..
+            } => Some(sequence.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn launched(events: &[Event]) -> Vec<String> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            Event::Spawned { definition, .. } => Some(definition.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The stand-in's v20 states and scripts: a click lets go during Charge
+/// (0.5 s), so `onFiretwo` (its later definition) jabs with
+/// `butterflyknifeProjectile`; held past Charge, letting go runs `onFire`,
+/// `spearThrow` then `Parent::onFire` with the image's
+/// `butterflyknifekillProjectile`. `onCharge` raises the arm with
+/// `spearReady` and `onStopFire` lowers it with `root`.
+#[test]
+fn butterfly_knife_port_jabs_and_stabs() {
+    let (dir, out, report) = ported("butterfly-knife", "Weapon_ButterflyKnife");
+    assert_eq!(report.ports[0].values["jab"], "butterflyknifeProjectile");
+    let knife = "weapon_butterflyknife:weapon/butterflyknifeitem";
+    let mut w = holder(&out, &[knife]);
+    run(&mut w, 60);
+    w.trigger(ActorId(1), true).unwrap();
+    let mut events = run(&mut w, 6);
+    w.trigger(ActorId(1), false).unwrap();
+    events.extend(run(&mut w, 120));
+    assert_eq!(
+        launched(&events),
+        ["weapon_butterflyknife:projectile/butterflyknifeprojectile"]
+    );
+    assert_eq!(
+        arm(&events),
+        ["spearReady", "root"],
+        "the jab swings no arm in v20"
+    );
+
+    w.trigger(ActorId(1), true).unwrap();
+    let mut events = run(&mut w, 59);
+    assert!(launched(&events).is_empty(), "still charging");
+    events.extend(run(&mut w, 30));
+    w.trigger(ActorId(1), false).unwrap();
+    events.extend(run(&mut w, 60));
+    assert_eq!(
+        launched(&events),
+        ["weapon_butterflyknife:projectile/butterflyknifekillprojectile"]
+    );
+    assert_eq!(arm(&events), ["spearReady", "spearThrow"]);
+    let pack = &w.pack;
+    assert_eq!(
+        pack.projectiles["weapon_butterflyknife:projectile/butterflyknifeprojectile"].damage,
+        20.0
+    );
+    assert_eq!(
+        pack.projectiles["weapon_butterflyknife:projectile/butterflyknifekillprojectile"].damage,
+        80.0
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// The stand-in's v20 states and scripts: the first press goes to Pindrop,
+/// which ejects the pin (`stateEjectShell`) and fires nothing. The second,
+/// held through Charge (0.5 s, `onCharge`: `spearReady`) and let go, runs
+/// `onFire`: `spearThrow`, `Parent::onFire`, then the grenade leaves its
+/// tool slot and the hand (`serverCmdUnUseTool`). Another grenade stays.
+/// The thrown one plays `hegrenadeBounceSound` when it bounces.
+#[test]
+fn he_grenade_port_pulls_the_pin_then_throws_it_away() {
+    let (dir, out, report) = ported("he-grenade", "Weapon_HEGrenade");
+    assert_eq!(
+        report.ports[0].values["bounce_sound"],
+        "hegrenadeBounceSound"
+    );
+    let grenade = "weapon_hegrenade:weapon/hegrenadeitem";
+    let mut w = holder(&out, &[grenade, grenade]);
+    run(&mut w, 30);
+    w.trigger(ActorId(1), true).unwrap();
+    let mut events = run(&mut w, 2);
+    w.trigger(ActorId(1), false).unwrap();
+    events.extend(run(&mut w, 60));
+    assert!(
+        events.iter().any(|e| matches!(e, Event::Shell { .. })),
+        "the pin flies off"
+    );
+    assert!(launched(&events).is_empty(), "a click only pulls the pin");
+
+    w.trigger(ActorId(1), true).unwrap();
+    let mut events = run(&mut w, 70);
+    w.trigger(ActorId(1), false).unwrap();
+    events.extend(run(&mut w, 4));
+    assert_eq!(
+        launched(&events),
+        ["weapon_hegrenade:projectile/hegrenadeprojectile"]
+    );
+    assert_eq!(arm(&events), ["spearReady", "spearThrow"]);
+    let a = w.actor(ActorId(1)).unwrap();
+    assert_eq!(a.inventory[0], None, "the thrown grenade left the tools");
+    assert_eq!(a.inventory[1].as_deref(), Some(grenade));
+    assert!(w.image_state(ActorId(1), 0).is_none(), "the hand is empty");
+
+    let p = &w.pack.projectiles["weapon_hegrenade:projectile/hegrenadeprojectile"];
+    let bounce = &w.pack.explosions[&p.bounce_effect.to_ascii_lowercase()];
+    assert_eq!(bounce.sound, "weapon_hegrenade:sound/hegrenadebouncesound");
+    assert!(w.pack.sounds.contains_key(&bounce.sound));
+    std::fs::remove_dir_all(dir).unwrap();
+}

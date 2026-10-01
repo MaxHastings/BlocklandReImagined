@@ -498,6 +498,10 @@ pub struct Drop {
     pub source: ActorId,
     pub pickup_after: u64,
     pub expires: u64,
+    /// The palette colour a `paint_tint` item was held in when dropped
+    /// (its holder's spray colour), so it lies there as it was held.
+    #[serde(default)]
+    pub paint: Option<u8>,
 }
 fn unit_scale() -> f32 {
     1.
@@ -994,6 +998,13 @@ impl WeaponsWorld {
         let vel = a.frame.direction.normalize() * (20.0 * a.frame.scale);
         let scale = a.frame.scale;
         let rotation = Quat::from_rotation_y(-a.frame.body_yaw);
+        let paint = self
+            .pack
+            .items
+            .get(&item)
+            .and_then(|i| self.pack.images.get(&i.image))
+            .filter(|i| i.paint_tint)
+            .map(|_| a.spray);
         if a.selected == Some(slot) {
             self.equip(id, None)?;
         }
@@ -1013,6 +1024,7 @@ impl WeaponsWorld {
                 // Engine-family evidence:15 engine ticks at32ms. Round UP at120Hz.
                 pickup_after: self.tick + 58,
                 expires: self.tick + 1200,
+                paint,
             },
         );
         self.events.push(Event::Dropped {
@@ -1050,6 +1062,7 @@ impl WeaponsWorld {
                 source: ActorId(0),
                 pickup_after: self.tick,
                 expires: self.tick + 1200,
+                paint: None,
             },
         );
         self.events.push(Event::Dropped {
@@ -1422,7 +1435,18 @@ impl WeaponsWorld {
                         hand: e.hand,
                     });
                 }
-                if !self.callback(id, a, e, &image, &state.script, q) {
+                let use_up = image
+                    .scripts
+                    .get(&state.script.to_ascii_lowercase())
+                    .is_some_and(|s| s.use_up);
+                if !self.callback(id, a, e, &image, &state.script, q) || use_up {
+                    if use_up
+                        && let Some(slot) = a.selected
+                        && let Some(tool) = a.inventory.get_mut(slot)
+                    {
+                        *tool = None;
+                        self.unmount(id, a);
+                    }
                     if a.images[e.hand as usize].is_none() {
                         self.events.push(Event::Unmounted {
                             actor: id,
@@ -1497,6 +1521,17 @@ impl WeaponsWorld {
                 return true;
             }
         }
+        // A script the image describes as data replaces the built-in one.
+        let ported = image.scripts.get(&script.to_ascii_lowercase());
+        if let Some(s) = ported {
+            if !s.arm.is_empty() {
+                self.animation(id, &s.arm);
+            }
+            if !s.fire {
+                return true;
+            }
+        }
+        let script = if ported.is_some() { "onfire" } else { script };
         match script.to_ascii_lowercase().as_str() {
             "oncharge" => {
                 if name.contains("spear") || name.contains("football") {
@@ -1524,7 +1559,9 @@ impl WeaponsWorld {
                 }
             }
             "onfire" => {
-                if HOST_TOOL_IMAGES.contains(&name.as_str()) || image.command.is_some() {
+                if ported.is_none()
+                    && (HOST_TOOL_IMAGES.contains(&name.as_str()) || image.command.is_some())
+                {
                     self.events.push(Event::ToolFire {
                         actor: id,
                         image: image.id.clone(),
@@ -1533,7 +1570,7 @@ impl WeaponsWorld {
                     });
                     return true;
                 }
-                if name == "skiweaponimage" {
+                if ported.is_none() && name == "skiweaponimage" {
                     match a.frame.mount {
                         Mount::Other => self.events.push(Event::SkisUnavailable { actor: id }),
                         Mount::Skis => {
@@ -1564,7 +1601,7 @@ impl WeaponsWorld {
                     }
                     return true;
                 }
-                if name.contains("keyimage") {
+                if ported.is_none() && name.contains("keyimage") {
                     let end = a.frame.eye + a.frame.direction.normalize() * 10.0 * a.frame.scale;
                     if let Some(hit) = q.sweep(
                         a.frame.eye,
@@ -1589,14 +1626,18 @@ impl WeaponsWorld {
                     }
                     return true;
                 }
-                if name == "basketballimage" {
+                if ported.is_none() && name == "basketballimage" {
                     self.mount(id, a, &native_id("image", "basketballShootImage"), 0);
                     if let Some(new) = &mut a.images[0] {
                         new.trigger = e.trigger;
                     }
                     return false;
                 }
-                let Some(projectile) = &image.projectile else {
+                // A ported script's own projectile before the image's.
+                let Some(projectile) = ported
+                    .and_then(|s| s.projectile.as_ref())
+                    .or(image.projectile.as_ref())
+                else {
                     return true;
                 };
                 let p = self.pack.projectiles[projectile].clone();
@@ -1750,7 +1791,9 @@ impl WeaponsWorld {
                         p.paint = e.paint;
                     }
                 }
-                if name.contains("spear") || name.contains("football") {
+                if ported.is_some() {
+                    // The port played its own arm animation.
+                } else if name.contains("spear") || name.contains("football") {
                     self.animation(id, "spearThrow");
                 } else if name.contains("pushbroom") {
                     self.animation(id, "rotCW");
@@ -2026,6 +2069,7 @@ impl WeaponsWorld {
                             source: p.source,
                             pickup_after: self.tick,
                             expires: self.tick + 1200,
+                            paint: None,
                         },
                     );
                     self.events.push(Event::Dropped {
