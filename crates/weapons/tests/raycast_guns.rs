@@ -448,7 +448,7 @@ fn hit_sound_pairs_pick_by_the_draw_and_keep_what_they_leave_out() {
         KNIFE.replacen(r#""damage": 100"#, r#""damage": 105"#, 1),
         KNIFE.replacen(
             r#"{ "other": "k:sound/scrape" }"#,
-            &vec![r#"{ "other": "k:sound/scrape" }"#; 9].join(", "),
+            &[r#"{ "other": "k:sound/scrape" }"#; 9].join(", "),
             1,
         ),
     ] {

@@ -14,3 +14,5 @@ Explosive 2: children `on_hit`, `angles`, `redraw` and `max_times`, aura
 Medic 1: the emote cue carries an Add-On image id, or an empty name to
 take the worn image off; script op `Emote` (with `skip_spam`),
 `Print::hide_bar`, and `PlayerView::emote`.
+Melee Extended: hitscan `sounds` (pairs drawn per shot) and `damage`;
+state shots may hitscan.

@@ -817,13 +817,18 @@ hit, `flown` names a projectile flown from the muzzle to that point, and
 the muzzle (`from_eye` false) starts at the eye instead when something
 stands within `eye_within` units in front of it, so a muzzle poking
 through a wall does not shoot past it; with `converge` it heads for the
-point the eye looks at rather than along the muzzle.
+point the eye looks at rather than along the muzzle. `sounds` (up to 8
+pairs of `player` and `other`) has each shot draw one pair, as melee
+scripts picked one of two hit sounds per swing; a side a pair leaves out
+keeps `player_sound` or `other_sound`. `damage` (-100 to 100) is what
+each ray deals in place of its projectile's.
 `moving_spread` and `moving_projectile` replace the spread and the
 projectile while the shooter moves faster than `moving_speed`; `rested`
 (`after_ticks`, `spread`, and optionally `still` and `projectile`) is
 the truer first shot after a pause. An image's `state_shots` fire on
 entering a state whose script is not `onFire` (`"onfire2": { ... }`),
-each a shot of its own; a shot with `"free": true` takes no rounds. `recoil` pushes the shooter back along
+each a shot of its own, hitscan or not (a knife's weaker stab beside its
+slash); a shot with `"free": true` takes no rounds. `recoil` pushes the shooter back along
 the aim as they fire (units a second); `recoil_vertical` sets the push
 along the aim's vertical part apart, so a machine gun can push only up or
 down. `kick` shakes the holder's view

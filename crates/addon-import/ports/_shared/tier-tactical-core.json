@@ -4,8 +4,8 @@
   "handles": {
     "WeaponImage::onFire": "the port's hitscans: TT_raycast guns hit along rays (engine Shot::hitscan)",
     "WeaponImage::TT_onRaycastHit": "engine hitscan: damage where the minigame allows, the hit projectile's blast, the player or brick hit sound",
-    "WeaponImage::TT_onRaycastDamage": "engine hitscan damage, impulse and vertical push at the shooter's scale; crits in the host rules' raycast_crit",
-    "WeaponImage::TT_isRaycastCritical": "no crit by default; the guns that override it are the host rules' crit_images"
+    "WeaponImage::TT_onRaycastDamage": "engine hitscan damage, impulse and vertical push at the shooter's scale; a pack's crits in its host rules' raycast_crit",
+    "WeaponImage::TT_isRaycastCritical": "no crit by default; a pack's guns that override it are its host rules' crit_images"
   },
   "hitscans": {
     "when": "TT_raycastEnabled",

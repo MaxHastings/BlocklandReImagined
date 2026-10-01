@@ -354,11 +354,12 @@ fn catalog(root: &Path, ns: &str, extra: &[&str]) -> Arc<Catalog> {
         dir: format!("addons/{id}"),
         role: None,
     };
-    let mut packages = vec![
-        entry(ns, Side::Shared),
-        entry(&format!("{ns}-rules"), Side::Server),
-        entry("probe", Side::Server),
-    ];
+    let mut packages = vec![entry(ns, Side::Shared), entry("probe", Side::Server)];
+    // Its host rules, when its port has any.
+    let rules = format!("{ns}-rules");
+    if root.join("addons").join(&rules).is_dir() {
+        packages.push(entry(&rules, Side::Server));
+    }
     packages.extend(common::base_entries(&root.join("addons").join(ns)));
     // A companion's host rules only the host loads.
     packages.extend(extra.iter().map(|id| {
@@ -1670,4 +1671,122 @@ fn medic1_heals_over_time_and_the_syringe_recharges() {
         "the thrown booster's 32 at once, then the first pass of its heal over time"
     );
     assert_eq!(g.ask(b, "worn"), json!(heal_image));
+}
+
+const NSME: &str = "weapon_melee_extended";
+
+/// Melee Extended on its stand-in: each swing draws one of its pair of hit
+/// sounds, the states play the arm and other-arm moves their scripts did,
+/// and the knife stabs on a quick click (its stab's own damage) and
+/// slashes once charged (Kai's damage held to the raycast script's 100).
+#[test]
+fn melee_extended_swings_draw_their_hit_sounds_and_the_knife_stabs() {
+    let (dir, out, report) = imported_on("Weapon_Melee_Extended", NSME, &[], "melee");
+    let port = &report.ports[0];
+    assert!(port.applied, "{:?}", port.reason);
+    assert_eq!(
+        report.summary.needs_behaviour_ported,
+        report.summary.needs_behaviour,
+        "{:?}",
+        report
+            .needs_behaviour
+            .iter()
+            .filter(|b| b.port.as_ref().is_none_or(|p| !p.applied))
+            .map(|b| &b.function)
+            .collect::<Vec<_>>()
+    );
+    assert!(report.unsupported.is_empty(), "{:?}", report.unsupported);
+    assert_eq!(report.summary.dependencies_missing, 0);
+    let pack = pack(&out);
+    let image = |name: &str| pack.images[&format!("{NSME}:image/{name}")].clone();
+    let sound = |name: &str| Some(format!("{NSME}:sound/{name}"));
+    let knife = image("combatknifeimage");
+    let slash = knife.shot.as_ref().unwrap().hitscan.clone().unwrap();
+    let stab = knife.state_shots["onstabfire"].hitscan.clone().unwrap();
+    assert_eq!((slash.damage, stab.damage), (Some(100.0), Some(40.0)));
+    assert_eq!(
+        slash.sounds,
+        [
+            HitSounds {
+                player: None,
+                other: sound("standinclinksound")
+            },
+            HitSounds {
+                player: None,
+                other: sound("standinslicesound")
+            }
+        ]
+    );
+    assert_eq!(stab.sounds, slash.sounds);
+    let state = |image: &Image, name: &str| {
+        let s = image.states.iter().find(|s| s.name == name).unwrap();
+        (s.arm.clone(), s.gesture.clone())
+    };
+    assert_eq!(
+        state(&knife, "Slash"),
+        ("shiftTo".into(), "spearThrow".into())
+    );
+    assert_eq!(
+        state(&knife, "Stab"),
+        ("shiftTo".into(), "shiftDown".into())
+    );
+    assert_eq!(state(&knife, "Charge"), ("plant".into(), String::new()));
+    let katana = image("l4bkatanaimage");
+    assert_eq!(
+        state(&katana, "FireB"),
+        ("shiftTo".into(), "shiftLeft".into())
+    );
+    let machete = image("l4bmacheteimage");
+    assert_eq!(state(&machete, "FireA").0, "shiftAway");
+    assert_eq!(state(&machete, "Activate").0, "shiftDown");
+    let banjo = image("l4bguitarimage").shot.unwrap().hitscan.unwrap();
+    assert_eq!(
+        banjo.sounds[1],
+        HitSounds {
+            player: sound("standinthudsound"),
+            other: sound("standinslicesound")
+        }
+    );
+
+    // In a minigame, B two units ahead of A.
+    let mut g = Game::with_add_ons(&dir.0, &out, NSME, &[]);
+    let a = g.join("A", Vec3::new(0.0, 0.05, 0.0));
+    let b = g.join("B", Vec3::new(0.0, 0.05, -2.0));
+    g.steps(2);
+    let mut loadout: [Option<String>; 5] = Default::default();
+    loadout[0] = Some(format!("{NSME}:weapon/combatknifeitem"));
+    g.s.set_spawn_points(vec![g.feet(a)]).unwrap();
+    g.cmd(
+        a,
+        Command::MiniGame(MiniGameRequest::Create {
+            color: 0,
+            settings: Settings {
+                loadout,
+                ..Settings::default()
+            },
+        }),
+    );
+    let game = g.s.minigame_views()[0].id;
+    g.s.set_spawn_points(vec![g.feet(b)]).unwrap();
+    g.cmd(b, Command::MiniGame(MiniGameRequest::Join { game }));
+    g.steps(330);
+    g.equip(a, "combatknifeitem");
+    // Drawn, it readies a quarter of a second later.
+    g.steps(20);
+    let swing = |g: &mut Game, hold: usize| {
+        let eye = g.feet(a).y + 2.156;
+        let pitch = ((g.feet(b).y + 1.0 - eye) / (g.feet(a).z - g.feet(b).z)).atan();
+        g.looks.get_mut(&a).unwrap().pitch = pitch;
+        g.steps(4);
+        g.cmd(a, Command::WeaponTrigger { down: true });
+        g.steps(hold);
+        g.cmd(a, Command::WeaponTrigger { down: false });
+        g.steps(60);
+    };
+    // A quick click stabs.
+    swing(&mut g, 2);
+    assert_eq!(g.health(b), 60.0, "the stab's 40");
+    // Held past the charge it slashes for 100, which kills.
+    swing(&mut g, 90);
+    assert!(!g.s.vitals()[&b].alive, "the slash's 100");
 }

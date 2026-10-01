@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "include": ["tier-tactical-core"],
+  "notes": "Tier+Tactical Melee Extended (Kai): eleven melee weapons that hit along a short ray from the eye with their TT_raycast fields, each swing drawing one of its pair of hit sounds as its onFire did, its arm and other-arm moves played by the states that ran them. The Combat Knife stabs on a quick click and slashes once charged, the slash dealing 100 (Kai set 105, which the raycast script held to 100) and the stab 55. A hit never crits: TT_isMeleeRaycastCrit crits only on a zombie, and no player in this game is one. The Machete's horizontal swing (Weapon_L4BMachete_HorizontalSwing.cs) is never loaded by the Add-On.",
+  "handles": {
+    "TT_isMeleeRaycastCrit": "never crits: it crits only on a zombie (iszombie), and no player in this game is one",
+    "CombatKnifeImage::TT_isRaycastCritical": "TT_isMeleeRaycastCrit: never crits",
+    "iceaxeImage::TT_isRaycastCritical": "TT_isMeleeRaycastCrit: never crits",
+    "L4BBatonImage::TT_isRaycastCritical": "TT_isMeleeRaycastCrit: never crits",
+    "L4BCrowbarImage::TT_isRaycastCritical": "TT_isMeleeRaycastCrit: never crits",
+    "l4bPanImage::TT_isRaycastCritical": "TT_isMeleeRaycastCrit: never crits",
+    "l4bGuitarImage::TT_isRaycastCritical": "TT_isMeleeRaycastCrit: never crits",
+    "L4BKatanaImage::TT_isRaycastCritical": "TT_isMeleeRaycastCrit: never crits",
+    "l4bMacheteImage::TT_isRaycastCritical": "TT_isMeleeRaycastCrit: never crits",
+    "L4BSpadeImage::TT_isRaycastCritical": "TT_isMeleeRaycastCrit: never crits",
+    "pipeImage::TT_isRaycastCritical": "TT_isMeleeRaycastCrit: never crits",
+    "sledgehammerImage::TT_isRaycastCritical": "TT_isMeleeRaycastCrit: never crits"
+  },
+  "scripts": [
+    {
+      "method": "*",
+      "into": "shot",
+      "pattern": "if\\s*\\(\\s*getRandom\\(\\s*0\\s*,\\s*1\\s*\\)\\s*\\)\\s*\\{\\s*%this\\.TT_raycastExplosionBrickSound\\s*=\\s*(?P<a>\\w+)\\s*;\\s*\\}\\s*else\\s*\\{\\s*%this\\.TT_raycastExplosionBrickSound\\s*=\\s*(?P<b>\\w+)\\s*;\\s*\\}",
+      "set": { "hitscan": { "sounds": [ { "other": "{a|sound}" }, { "other": "{b|sound}" } ] } }
+    },
+    {
+      "method": "*",
+      "into": "shot",
+      "pattern": "if\\s*\\(\\s*getRandom\\(\\s*0\\s*,\\s*1\\s*\\)\\s*\\)\\s*\\{\\s*%this\\.TT_raycastExplosionBrickSound\\s*=\\s*(?P<a>\\w+)\\s*;\\s*%this\\.TT_raycastExplosionPlayerSound\\s*=\\s*(?P<pa>\\w+)\\s*;\\s*\\}\\s*else\\s*\\{\\s*%this\\.TT_raycastExplosionBrickSound\\s*=\\s*(?P<b>\\w+)\\s*;\\s*%this\\.TT_raycastExplosionPlayerSound\\s*=\\s*(?P<pb>\\w+)\\s*;\\s*\\}",
+      "set": { "hitscan": { "sounds": [ { "other": "{a|sound}", "player": "{pa|sound}" }, { "other": "{b|sound}", "player": "{pb|sound}" } ] } }
+    },
+    {
+      "method": "*",
+      "into": "shot",
+      "pattern": "%this\\.TT_raycastDirectDamage\\s*=\\s*(?P<d>-?[\\d.]+)\\s*;[\\s\\S]*Parent::onFire\\(",
+      "required_by": "%this\\.TT_raycastDirectDamage\\s*=",
+      "set": { "hitscan": { "damage": "{d}" } }
+    },
+    {
+      "method": "*",
+      "into": "state",
+      "keep": true,
+      "pattern": "%obj\\.playThread\\(\\s*3\\s*,\\s*(?P<g>\\w+)\\s*\\)",
+      "set": { "gesture": "{g}" }
+    },
+    {
+      "method": "*",
+      "into": "state",
+      "keep": true,
+      "pattern": "if\\s*\\(\\s*%obj\\.getDamagePercent\\(\\s*\\)\\s*>=\\s*1(?:\\.0)?\\s*\\)\\s*\\{\\s*%slot\\s*=\\s*0\\s*;\\s*\\}\\s*else\\s*\\{\\s*%slot\\s*=\\s*3\\s*;\\s*\\}\\s*%obj\\.playThread\\(\\s*%slot\\s*,\\s*(?P<g>\\w+)\\s*\\)",
+      "required_by": "%obj\\.playThread\\(\\s*%slot\\s*,",
+      "set": { "gesture": "{g}" }
+    }
+  ]
+}
