@@ -208,17 +208,6 @@ impl ContentParts {
         let explosion_shapes =
             crate::explosion_shapes::ExplosionShapes::load(&weapon_pack, &content.paths.weapons)?;
         let explosion_debris = crate::explosion_debris::ExplosionDebris::new(&weapon_pack);
-        // Vehicle trails bring their Add-On's own particles and emitters.
-        let (actor_pack, notes) =
-            crate::actor_effects::with_vehicle_effects(effects_pack.clone(), &content.vehicles)?;
-        for note in notes {
-            bri_console::warn(format!("Vehicle effects: {note}"));
-        }
-        let actor_effects = crate::actor_effects::ActorEffects::new(
-            actor_pack,
-            weapon_pack.clone(),
-            Default::default(),
-        )?;
         // Items first: an Add-On's particle textures are among theirs.
         let mut item_assets = crate::items::ItemAssets::load_with(
             &content.paths.item_presentation,
@@ -229,10 +218,22 @@ impl ContentParts {
         let item_assets = Arc::new(item_assets);
         let weapon_effects = crate::weapon_effects::WeaponEffects::with_textures(
             effects_pack,
-            weapon_pack,
+            weapon_pack.clone(),
             Default::default(),
             |key| item_assets.texture(key),
         )?;
+        // Bodies draw from the weapons' effects, an Add-On's own among them
+        // (an image it wears in the emote slot), and vehicle trails bring
+        // their Add-On's particles and emitters.
+        let (actor_pack, notes) = crate::actor_effects::with_vehicle_effects(
+            weapon_effects.world().pack().clone(),
+            &content.vehicles,
+        )?;
+        for note in notes {
+            bri_console::warn(format!("Vehicle effects: {note}"));
+        }
+        let actor_effects =
+            crate::actor_effects::ActorEffects::new(actor_pack, weapon_pack, Default::default())?;
         let material_path = content.paths.brick_materials.join("brick-materials.json");
         ensure!(
             std::fs::metadata(&material_path)?.len() <= 8 * 1024 * 1024,

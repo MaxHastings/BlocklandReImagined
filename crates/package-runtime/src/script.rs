@@ -125,6 +125,10 @@ pub struct PlayerView {
     /// mount points.
     #[serde(default)]
     pub riding: Option<(u64, u8)>,
+    /// The image worn in the emote slot (`getMountedImage(3)`), empty for
+    /// none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub emote: String,
 }
 /// A held gun's magazine and the reserve that fills it.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -192,6 +196,11 @@ pub trait World {
     /// Whether the Add-On `id` is enabled in this game, so a package can
     /// use an optional dependency's content only while it is there.
     fn enabled(&self, _id: &str) -> bool {
+        false
+    }
+    /// Whether this is a single-player or LAN game (v20 `$Server::LAN`),
+    /// whose rules some Add-Ons loosen.
+    fn lan(&self) -> bool {
         false
     }
 }
@@ -602,6 +611,7 @@ fn player_map(p: &PlayerView) -> Dynamic {
             p.riding
                 .map_or(Dynamic::UNIT, |(_, s)| Dynamic::from_int(i64::from(s))),
         ),
+        ("emote", p.emote.clone().into()),
     ])
 }
 fn object_map(o: &ObjectView) -> Dynamic {
@@ -1578,23 +1588,41 @@ fn register_api(engine: &mut Engine) {
         },
     );
     // `()` as the player prints to everyone.
-    for (name, bottom) in [("center_print", false), ("bottom_print", true)] {
-        engine.register_fn(
-            name,
-            move |player: Dynamic, text: &str, seconds: Dynamic| {
-                push(Op::Print {
-                    player: if player.is_unit() {
-                        None
-                    } else {
-                        Some(id(&player)?)
-                    },
-                    text: text.into(),
-                    seconds: float(&seconds)?,
-                    bottom,
-                })
+    fn print(
+        player: Dynamic,
+        text: &str,
+        seconds: Dynamic,
+        bottom: bool,
+        hide_bar: bool,
+    ) -> Fallible<()> {
+        push(Op::Print {
+            player: if player.is_unit() {
+                None
+            } else {
+                Some(id(&player)?)
             },
-        );
+            text: text.into(),
+            seconds: float(&seconds)?,
+            bottom,
+            hide_bar,
+        })
     }
+    engine.register_fn(
+        "center_print",
+        |player: Dynamic, text: &str, seconds: Dynamic| print(player, text, seconds, false, false),
+    );
+    engine.register_fn(
+        "bottom_print",
+        |player: Dynamic, text: &str, seconds: Dynamic| print(player, text, seconds, true, false),
+    );
+    // `bottomPrint(%client, %text, %time, %hideBar)`: the bar behind the
+    // text hidden.
+    engine.register_fn(
+        "bottom_print",
+        |player: Dynamic, text: &str, seconds: Dynamic, hide_bar: bool| {
+            print(player, text, seconds, true, hide_bar)
+        },
+    );
     engine.register_fn("play_sound", |player: Dynamic, profile: &str| {
         push(Op::Sound {
             profile: profile.into(),
@@ -1681,6 +1709,8 @@ fn register_queries(engine: &mut Engine) {
     engine.register_fn("enabled", |id: &str| {
         with_world(|world, _| Ok(world.enabled(id)))
     });
+    // Whether this is a single-player or LAN game (`$Server::LAN`).
+    engine.register_fn("lan", || with_world(|world, _| Ok(world.lan())));
     // The generated world's voxel a brick is, #{ x, y, z, material } in
     // voxel coordinates, or () for any other brick.
     engine.register_fn("voxel", |brick: Dynamic| {
@@ -2067,17 +2097,37 @@ fn register_presentation(engine: &mut Engine) {
     engine.register_fn("mount_image", |player: Dynamic, image: Dynamic| {
         push(Op::MountImage {
             player: id(&player)?,
-            image: if image.is_unit() {
-                None
-            } else {
-                Some(
-                    image
-                        .into_string()
-                        .map_err(|_| "an image is a string like \"pkg:image/scope\", or ()")?,
-                )
-            },
+            image: image_or_none(image)?,
         })
     });
+    // `%player.emote(%image, %skipSpam)`: the image on their body in the
+    // emote slot; `()` takes it off.
+    engine.register_fn("emote", |player: Dynamic, image: Dynamic| {
+        push(Op::Emote {
+            player: id(&player)?,
+            image: image_or_none(image)?,
+            skip_spam: false,
+        })
+    });
+    engine.register_fn(
+        "emote",
+        |player: Dynamic, image: Dynamic, skip_spam: bool| {
+            push(Op::Emote {
+                player: id(&player)?,
+                image: image_or_none(image)?,
+                skip_spam,
+            })
+        },
+    );
+}
+
+fn image_or_none(image: Dynamic) -> Fallible<Option<String>> {
+    if image.is_unit() {
+        return Ok(None);
+    }
+    Ok(Some(image.into_string().map_err(
+        |_| "an image is a string like \"pkg:image/scope\", or ()",
+    )?))
 }
 
 fn fire_op(

@@ -48,6 +48,9 @@ operation that needs a capability.
 | `%obj.mountImage(%img, 0)` | `mount_image(p, image)`, `mount_image(p, ())` | `player` |
 | `%obj.pushDatablock(%db)`, `%obj.popDatablock(%db)` (Support_AltDatablock) | `push_archetype(p, a)`, `pop_archetype(p, a)` | `player` |
 | `%obj.unMountImage(0)` | `unmount_image(p)` | `player` |
+| `%obj.emote(%image, %skipSpam)`, `%obj.unMountImage(3)` | `emote(p, image[, skip_spam])`, `emote(p, ())` | `player`; the image's state scripts run its `commands.states` for the wearer; spam-checked as v20 unless skipped |
+| `bottomPrint(%client, %text, %time, %hideBar)` | `bottom_print(p, text, seconds, hide_bar)` | `chat` |
+| `$Server::LAN` | `lan()` | |
 | `%obj.setScale("s s s")` | `set_scale(p, s)` | `player`; 0.2 to 5, one number |
 | `%obj.setLookLimits(%up, %down)` | `set_look_limits(p, up, down)`, `set_look_limits(p, ())` | `player` |
 | `%obj.mountObject(%rider, %node)`, `%rider.canDismount = 0` | `mount_object(mount, rider, node, can_dismount)` | `physics`; node is a `mount<N>` of the body model |

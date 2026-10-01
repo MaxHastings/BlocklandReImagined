@@ -992,6 +992,11 @@ impl Session {
                     (ammo.clone(), r)
                 })
                 .collect(),
+            emote: self
+                .weapons
+                .emote_state(bri_weapons::ActorId(owner))
+                .map(|(image, _)| image.to_owned())
+                .unwrap_or_default(),
         }
     }
     fn package_snapshot(&self) -> Snapshot {
@@ -1808,13 +1813,14 @@ impl Session {
                 text,
                 seconds,
                 bottom,
+                hide_bar,
             } => {
                 self.take_cue(package)?;
                 let notice = if bottom {
                     Notice::Bottom {
                         text,
                         seconds,
-                        hide_bar: false,
+                        hide_bar,
                     }
                 } else {
                     Notice::Center { text, seconds }
@@ -1971,6 +1977,50 @@ impl Session {
                     }
                     None => self.weapons.swap_image(actor, None),
                 }
+            }
+            Op::Emote {
+                player,
+                image,
+                skip_spam,
+            } => {
+                let peer = self.peers.get(&player).context("No such player")?;
+                ensure!(peer.combat.alive, "Only living players wear emotes");
+                let feet = peer.player.state().feet;
+                let tick = self.simulation.state().tick;
+                let Some(image) = image else {
+                    self.emote_cue(
+                        tick,
+                        crate::presentation::CueKind::Emote {
+                            actor: player,
+                            name: String::new(),
+                        },
+                        feet,
+                    );
+                    return Ok(());
+                };
+                let host = self.packages.as_ref().context("No packages are enabled")?;
+                ensure!(
+                    item_hooks::owns(&host.catalog, package, &image),
+                    "`{image}` is not an image of `{package}` or an Add-On it depends on"
+                );
+                ensure!(
+                    self.weapons.pack.images.contains_key(&image),
+                    "There is no image `{image}`"
+                );
+                let peer = self.peers.get_mut(&player).expect("checked");
+                if !skip_spam && !peer.combat.emote_allowed(tick) {
+                    // Dropped, as `Player::emote` returns; not an error.
+                    return Ok(());
+                }
+                self.emote_cue(
+                    tick,
+                    crate::presentation::CueKind::Emote {
+                        actor: player,
+                        name: image,
+                    },
+                    feet,
+                );
+                Ok(())
             }
             Op::UnmountImage { player } => {
                 ensure!(self.peers.contains_key(&player), "No such player");

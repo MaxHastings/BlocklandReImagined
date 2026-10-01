@@ -626,7 +626,16 @@ pub struct Actor {
     /// Image states' timed cues still to play ([`crate::State::cues`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     cues: Vec<PendingCue>,
+    /// The image in slot [`EMOTE_SLOT`] (`Player::emote`): an emote, pain,
+    /// flames or an Add-On's effect on the body ([`WeaponsWorld::emote`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    emote: Option<Equipped>,
 }
+/// Torque's image slot 3, which `Player::emote` and `Player::burn` mount
+/// into: a new emote replaces the one there. Its image runs its states on
+/// their timeouts, and a state script with a command runs it for the
+/// wearer, as `medigunHealImage::onHeal` healed whoever wore it.
+pub const EMOTE_SLOT: u8 = 3;
 /// A [`crate::Cue`] waiting for its tick, with where the holder was as its
 /// state began (v20 scheduled `serverPlay3D` with the position then).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -850,6 +859,7 @@ impl WeaponsWorld {
                 reload: None,
                 cook: None,
                 cues: Vec::new(),
+                emote: None,
             },
         );
         Ok(())
@@ -1636,12 +1646,118 @@ impl WeaponsWorld {
     /// `schedule` did).
     pub fn respawned(&mut self, id: ActorId) -> Result<()> {
         let a = self.actors.get_mut(&id).context("Unknown actor")?;
+        // The new body wears nothing in its emote slot.
+        a.emote = None;
         a.cues.retain(|c| !c.cue.sound.is_empty());
         for c in &mut a.cues {
             c.cue.thread = None;
             c.cue.sequence.clear();
         }
         Ok(())
+    }
+    /// `Player::emote(%image)`: mount `image` in [`EMOTE_SLOT`], replacing
+    /// the one there, whose `unmount` command runs; `None`, or an image this
+    /// pack lacks, empties the slot (`unMountImage(3)`). The image's `mount`
+    /// command runs as it goes on.
+    pub fn emote(&mut self, id: ActorId, image: Option<&str>) -> Result<()> {
+        ensure!(
+            self.events.len() < 8192,
+            "Command event budget; advance/drain before retry"
+        );
+        let a = self.actors.get_mut(&id).context("Unknown actor")?;
+        let old = a.emote.take();
+        if let Some(old) = old {
+            self.put_away(id, &old);
+        }
+        let Some(image) = image.filter(|i| self.pack.images.contains_key(*i)) else {
+            return Ok(());
+        };
+        let a = self.actors.get_mut(&id).expect("checked");
+        a.emote = Some(Equipped {
+            image: image.into(),
+            state: 0,
+            remaining: 0,
+            entered: false,
+            trigger: false,
+            hand: EMOTE_SLOT,
+            paint: None,
+            magazine: None,
+        });
+        if let Some(command) = self.pack.images[image].commands.mount.clone() {
+            self.events.push(Event::ToolFire {
+                actor: id,
+                image: image.into(),
+                hand: EMOTE_SLOT,
+                command: Some(command),
+            });
+        }
+        Ok(())
+    }
+    /// The image in a holder's [`EMOTE_SLOT`] and the name of its state.
+    pub fn emote_state(&self, id: ActorId) -> Option<(&str, &str)> {
+        let e = self.actors.get(&id)?.emote.as_ref()?;
+        let image = self.pack.images.get(&e.image)?;
+        Some((&image.id, &image.states.get(e.state)?.name))
+    }
+    /// The [`EMOTE_SLOT`] image's states, one tick: they follow their
+    /// timeouts, as slot 3 has no trigger and an image mounts loaded and
+    /// without ammo. A state script with a command runs it for the wearer.
+    /// The slot shows nothing itself: clients play the image from the cue
+    /// that mounted it. False when the image is gone.
+    fn advance_emote(&mut self, id: ActorId, e: &mut Equipped) -> bool {
+        let pack = self.pack.clone();
+        let Some(image) = pack.images.get(&e.image) else {
+            return false;
+        };
+        if image.states.is_empty() {
+            return true;
+        }
+        if e.entered && e.remaining > 0 {
+            e.remaining -= 1;
+        }
+        for _ in 0..16 {
+            let state = &image.states[e.state];
+            if !e.entered {
+                e.entered = true;
+                e.remaining = state.ticks;
+                if let Some(command) = image.commands.for_script(&state.script) {
+                    self.events.push(Event::ToolFire {
+                        actor: id,
+                        image: image.id.clone(),
+                        hand: EMOTE_SLOT,
+                        command: Some(command.clone()),
+                    });
+                }
+            }
+            if e.remaining > 0 && state.wait {
+                return true;
+            }
+            let next = state
+                .loaded
+                .or(state.no_ammo)
+                .or(state.up)
+                .or(if e.remaining == 0 {
+                    state.timeout
+                } else {
+                    None
+                });
+            match next {
+                // A zero-time state that leads to itself waits a tick.
+                Some(next) if next != e.state || state.ticks > 0 => {
+                    e.state = next;
+                    e.entered = false;
+                }
+                _ => return true,
+            }
+        }
+        self.events.push(Event::Diagnostic {
+            actor: Some(id),
+            message: format!(
+                "Image instantaneous transition budget exceeded: {}",
+                e.image
+            ),
+        });
+        false
     }
     pub fn reset_ammo(&mut self, id: ActorId) -> Result<()> {
         let a = self.actors.get_mut(&id).context("Unknown actor")?;
@@ -2138,6 +2254,11 @@ impl WeaponsWorld {
                     }
                     break;
                 }
+            }
+            if let Some(mut e) = a.emote.take()
+                && self.advance_emote(id, &mut e)
+            {
+                a.emote = Some(e);
             }
             self.actors.insert(id, a);
         }

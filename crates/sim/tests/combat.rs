@@ -212,6 +212,38 @@ fn minigame_owner_controls_and_invitations() {
     assert!(s.command(a, 6, Command::Emote("dance".into())).is_err());
 }
 
+/// `Player::emote`'s spam check: emotes under a second apart count, more
+/// than five counted are dropped, and only ten quiet seconds forgive
+/// them. Sitting is not an emote image and is never dropped.
+#[test]
+fn quick_emotes_past_five_are_dropped_until_ten_quiet_seconds() {
+    use bri_sim::presentation::CueKind;
+    let mut s = session();
+    let a = s
+        .join("Alpha".into(), Vec3::new(0.0, 0.05, 0.0), false)
+        .unwrap();
+    steps(&mut s, 5);
+    let mut seq = 0;
+    let mut emote = |s: &mut Session, times: usize| {
+        s.take_cues();
+        for _ in 0..times {
+            seq += 1;
+            s.command(a, seq, Command::Emote("love".into())).unwrap();
+        }
+        s.take_cues()
+            .iter()
+            .filter(|c| matches!(&c.kind, CueKind::Emote { actor, name } if *actor == a && name == "love"))
+            .count()
+    };
+    assert_eq!(emote(&mut s, 8), 6);
+    // Five seconds on the count still stands; the dropped ones did not
+    // move the last emote's time on.
+    steps(&mut s, 600);
+    assert_eq!(emote(&mut s, 1), 0);
+    steps(&mut s, 700);
+    assert_eq!(emote(&mut s, 1), 1);
+}
+
 #[test]
 fn minigame_loadout_may_repeat_an_item_like_v20() {
     let mut s = session();

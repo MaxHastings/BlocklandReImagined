@@ -152,6 +152,42 @@ impl Session {
             drops: self.weapons.drops().cloned().collect(),
         }
     }
+    /// A cue for an image in the emote slot (an emote, pain, flames, the
+    /// teleport sparkle or an Add-On's image), and the host wearing it there:
+    /// each replaces the last, as `Player::emote` and `Player::burn` mount
+    /// into one slot, so a hit or an emote ends a heal over time. Cues that
+    /// mount nothing (`/alarm`, `/sit`) leave the slot alone.
+    pub(super) fn emote_cue(
+        &mut self,
+        tick: u64,
+        kind: crate::presentation::CueKind,
+        at: [f32; 3],
+    ) {
+        use crate::presentation::{CueKind, emote_image, pain_image};
+        let native = |name: &str| Some(bri_weapons::native_id("image", name));
+        let worn = match &kind {
+            CueKind::Emote { actor, name } if name.contains(':') => {
+                Some((*actor, Some(name.clone())))
+            }
+            CueKind::Emote { actor, name } if name.is_empty() => Some((*actor, None)),
+            CueKind::Emote { actor, name } => emote_image(name).map(|i| (*actor, native(i))),
+            CueKind::Pain { actor, level, .. } => Some((*actor, native(pain_image(*level)))),
+            CueKind::Burn { actor, seconds } => Some((
+                *actor,
+                (*seconds > 0.0).then(|| bri_weapons::native_id("image", "PlayerBurnImage")),
+            )),
+            CueKind::Teleport {
+                actor,
+                player: true,
+                ..
+            } => Some((*actor, native("PlayerTeleportImage"))),
+            _ => None,
+        };
+        if let Some((actor, image)) = worn {
+            let _ = self.weapons.emote(ActorId(actor), image.as_deref());
+        }
+        self.cues.emit(tick, kind, at);
+    }
     /// How fast each falling projectile definition drops, so clients can
     /// coast projectiles between the host's corrections.
     pub fn projectile_falls(&self) -> BTreeMap<String, f32> {
@@ -454,6 +490,14 @@ impl Session {
                     }
                     self.notices.push_back(format!("Weapon runtime: {message}"));
                 }
+                // A state of the image in the emote slot: its command runs
+                // for the wearer, leaving the click aim to the hand's tool.
+                WeaponEvent::ToolFire {
+                    actor,
+                    command: Some(command),
+                    hand: bri_weapons::EMOTE_SLOT,
+                    ..
+                } => self.addon_tool_fire(actor.0, &command),
                 WeaponEvent::ToolFire {
                     actor,
                     command: Some(command),
@@ -672,7 +716,7 @@ impl Session {
                     {
                         let feet = peer.player.state().feet;
                         self.burn_player(target.0, seconds);
-                        self.cues.emit(
+                        self.emote_cue(
                             tick,
                             crate::presentation::CueKind::Burn {
                                 actor: target.0,

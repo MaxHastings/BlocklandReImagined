@@ -539,26 +539,24 @@ impl ActorEffects {
         }
         self.cursor = cue.id;
         match &cue.kind {
+            // `unMountImage(3)`: what the emote slot wore comes off.
+            CueKind::Emote { actor, name } if name.is_empty() => {
+                if let Some(old) = self.images.remove(&Slot::Player(*actor)) {
+                    self.release(old);
+                }
+            }
+            // An Add-On's image on the body, by its id.
+            CueKind::Emote { actor, name } if name.contains(':') => {
+                self.mount_player(*actor, name, None);
+            }
             // `serverCmdLove`, `serverCmdHate`, `serverCmdConfusion`.
             CueKind::Emote { actor, name } => {
-                let image = match name.as_str() {
-                    "love" => "LoveImage",
-                    "hate" => "HateImage",
-                    "confusion" => "WtfImage",
-                    _ => return,
-                };
-                self.mount_player(*actor, image, None);
+                if let Some(image) = bri_sim::presentation::emote_image(name) {
+                    self.mount_player(*actor, image, None);
+                }
             }
-            // `Armor::damage`: PainHigh at 40, PainMid at 25, else PainLow.
             CueKind::Pain { actor, level, .. } => {
-                let image = if *level >= 40.0 {
-                    "PainHighImage"
-                } else if *level >= 25.0 {
-                    "PainMidImage"
-                } else {
-                    "PainLowImage"
-                };
-                self.mount_player(*actor, image, None);
+                self.mount_player(*actor, bri_sim::presentation::pain_image(*level), None);
             }
             CueKind::Burn { actor, seconds } => {
                 self.mount_player(*actor, "PlayerBurnImage", Some(*seconds));
@@ -860,12 +858,14 @@ impl ActorEffects {
         Ok(())
     }
 
+    /// A base image by its datablock name, or an Add-On's by its id.
     fn image(&mut self, name: &str) -> Option<bri_weapons::Image> {
-        let image = self
-            .weapons
-            .images
-            .get(&bri_weapons::native_id("image", name))
-            .cloned();
+        let id = if name.contains(':') {
+            name.to_owned()
+        } else {
+            bri_weapons::native_id("image", name)
+        };
+        let image = self.weapons.images.get(&id).cloned();
         if image.is_none() {
             self.note(format!("Missing image {name}"));
         }
@@ -950,7 +950,12 @@ impl ActorEffects {
         if s.emitter.is_empty() || s.emitter_seconds <= 0.0 {
             return;
         }
-        let emitter = format!("v20/emitter/{}", s.emitter.to_ascii_lowercase());
+        // An Add-On image names its own emitters by id.
+        let emitter = if s.emitter.contains(':') {
+            s.emitter.clone()
+        } else {
+            format!("v20/emitter/{}", s.emitter.to_ascii_lowercase())
+        };
         let seconds = s.emitter_seconds;
         let expires = playback.clock + seconds;
         let world = &mut self.world;

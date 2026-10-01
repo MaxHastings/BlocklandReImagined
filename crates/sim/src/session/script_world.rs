@@ -79,6 +79,9 @@ impl World for ScriptWorld<'_> {
             .as_ref()
             .is_some_and(|host| host.catalog.enabled(id))
     }
+    fn lan(&self) -> bool {
+        self.session.lan_host
+    }
         fn hit_region(&self, player: u64, point: [f32; 3]) -> Option<&'static str> {
         self.session.region_of(player, Vec3::from(point))
     }

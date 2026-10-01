@@ -3,6 +3,8 @@
 //! (`tests/fixtures/ports/Weapon_Package_Tier1`, CC0): the same folder name
 //! and the shape of Kai's ammo system and gun scripts, with our own guns,
 //! names and numbers.
+mod common;
+
 use bri_addon_import::{Options, import};
 use bri_minigames::Settings;
 use bri_package::packages::{PackageEntry, PackageSet, Side};
@@ -297,6 +299,12 @@ fn cmd_who(p) {
     let me = player(p);
     set("who", `${me.archetype}|${me.image}`);
 }
+fn cmd_worn(p) {
+    set("worn", player(p).emote);
+}
+fn cmd_hurt(p, amount) {
+    damage(p, amount);
+}
 fn cmd_mag(p) {
     let m = player(p).magazine;
     set("mag", if m == () { "none" } else {
@@ -313,7 +321,7 @@ fn catalog(root: &Path, ns: &str, extra: &[&str]) -> Arc<Catalog> {
     let manifest = json!({
         "schema_version": 1, "id": "probe", "version": "1.0.0", "api": 1,
         "name": "probe", "license": "CC0-1.0",
-        "capabilities": ["player", "world.edit"],
+        "capabilities": ["player", "world.edit", "damage"],
         "provides": [
             { "kind": "behaviour", "id": "probe:behaviour/main", "file": "behaviour.json" },
             { "kind": "script", "id": "probe:script/main", "file": "main.rhai" }
@@ -326,11 +334,14 @@ fn catalog(root: &Path, ns: &str, extra: &[&str]) -> Arc<Catalog> {
             { "name": "drop", "args": ["string"] },
             { "name": "goto", "args": ["float", "float", "float"] },
             { "name": "mag" },
-            { "name": "who" }
+            { "name": "who" },
+            { "name": "worn" },
+            { "name": "hurt", "args": ["float"] }
         ],
         "state": { "global": {
             "mag": { "default": "", "visible": "everyone" },
-            "who": { "default": "", "visible": "everyone" }
+            "who": { "default": "", "visible": "everyone" },
+            "worn": { "default": "", "visible": "everyone" }
         } }
     });
     std::fs::write(dir.join("package.json"), manifest.to_string()).unwrap();
@@ -348,6 +359,7 @@ fn catalog(root: &Path, ns: &str, extra: &[&str]) -> Arc<Catalog> {
         entry(&format!("{ns}-rules"), Side::Server),
         entry("probe", Side::Server),
     ];
+    packages.extend(common::base_entries(&root.join("addons").join(ns)));
     // A companion's host rules only the host loads.
     packages.extend(extra.iter().map(|id| {
         let side = if id.ends_with("-rules") {
@@ -641,7 +653,7 @@ fn imported_on(
     let report = import(&Options {
         input: fixtures.join(addon),
         out: out.clone(),
-        reference: Some(dir.0.join("reference")),
+        reference: (!refs.is_empty()).then(|| dir.0.join("reference")),
         core: vec![],
         installed: None,
         version: "1.0.0".into(),
@@ -1467,4 +1479,195 @@ fn explosive2_flak_sheds_sparks_and_the_mortar_lobs() {
     );
     assert!(pack.items[&format!("{NSX}:weapon/mortaritem")].hidden);
     assert!(!pack.items[&format!("{NSX}:weapon/rpgitem")].hidden);
+}
+
+const NSM: &str = "weapon_package_medic1";
+
+/// The medical pack in a hosted minigame: the dart heals a hurt teammate's
+/// burst at once and leaves its heal image on them, which heals a little
+/// each pass and comes off after its count, while a hit ends it early; the
+/// booster heals its holder, then refuses until it recharges and says so
+/// when it does; jet throws it at someone close. Outside minigames, an
+/// internet host's medic heals nobody; a LAN host's heals anyone in none.
+#[test]
+fn medic1_heals_over_time_and_the_syringe_recharges() {
+    let (dir, out, report) = imported_on("Weapon_Package_Medic1", NSM, &[], "medic");
+    let port = &report.ports[0];
+    assert!(port.applied, "{:?}", port.reason);
+    assert_eq!(
+        report.summary.needs_behaviour_ported,
+        report.summary.needs_behaviour,
+        "{:?}",
+        report
+            .needs_behaviour
+            .iter()
+            .filter(|b| b.port.as_ref().is_none_or(|p| !p.applied))
+            .map(|b| &b.function)
+            .collect::<Vec<_>>()
+    );
+    assert!(report.unsupported.is_empty(), "{:?}", report.unsupported);
+    assert_eq!(report.summary.dependencies_missing, 0);
+    let pack = pack(&out);
+    let image = |name: &str| pack.images[&format!("{NSM}:image/{name}")].clone();
+    let rules = format!("{NSM}-rules");
+    assert_eq!(
+        image("medigunhealimage").commands.for_script("onHeal"),
+        Some(&format!("{rules}:heal_tick"))
+    );
+    let fire = image("medigunimage").states[2].clone();
+    assert_eq!(
+        (fire.arm.as_str(), fire.sound.as_str()),
+        ("shiftAway", &*format!("{NSM}:sound/medigunshot1sound"))
+    );
+    let mut g = Game::with_add_ons(&dir.0, &out, NSM, &[]);
+    let a = g.join("A", Vec3::new(0.0, 0.05, 0.0));
+    let b = g.join("B", Vec3::new(0.0, 0.05, -6.0));
+    g.steps(2);
+    let mut loadout: [Option<String>; 5] = Default::default();
+    loadout[0] = Some(format!("{NSM}:weapon/medigunitem"));
+    loadout[1] = Some(format!("{NSM}:weapon/stimpackitem"));
+    // Outside minigames on an internet host the dart heals nobody.
+    g.probe(
+        a,
+        "drop",
+        vec![PackageArg::String(loadout[0].clone().unwrap())],
+    );
+    g.steps(330);
+    g.probe(b, "hurt", vec![PackageArg::Float(50.0)]);
+    g.steps(2);
+    g.equip(a, "medigunitem");
+    g.shoot_at(a, b, 1.0);
+    g.steps(120);
+    assert_eq!(g.health(b), 50.0, "not on an internet host");
+    // On a LAN host it heals anyone in no minigame.
+    g.s.set_lan_host(true);
+    g.shoot_at(a, b, 1.0);
+    assert_eq!(
+        g.ask(b, "worn"),
+        json!(format!("{NSM}:image/medigunhealimage"))
+    );
+    g.steps(240);
+    assert_eq!(g.health(b), 80.0, "12 at once, then 3 six times");
+    assert_eq!(
+        g.ask(b, "worn"),
+        json!(""),
+        "the image comes off after its count"
+    );
+    g.s.set_lan_host(false);
+    // In a minigame, players in it.
+    g.s.set_spawn_points(vec![g.feet(a)]).unwrap();
+    g.cmd(
+        a,
+        Command::MiniGame(MiniGameRequest::Create {
+            color: 0,
+            settings: Settings {
+                loadout,
+                ..Settings::default()
+            },
+        }),
+    );
+    let game = g.s.minigame_views()[0].id;
+    g.s.set_spawn_points(vec![g.feet(b)]).unwrap();
+    g.cmd(b, Command::MiniGame(MiniGameRequest::Join { game }));
+    g.steps(330);
+    g.probe(b, "hurt", vec![PackageArg::Float(60.0)]);
+    g.steps(2);
+    g.equip(a, "medigunitem");
+    g.s.take_cues();
+    g.s.take_private_notices();
+    g.shoot_at(a, b, 1.0);
+    let cues = g.s.take_cues();
+    let heal_image = format!("{NSM}:image/medigunhealimage");
+    assert!(
+        cues.iter().any(|c| matches!(&c.kind,
+            bri_sim::presentation::CueKind::Emote { actor, name } if *actor == b && *name == heal_image)),
+        "every client sees the heal image on B"
+    );
+    let printed: Vec<_> =
+        g.s.take_private_notices()
+            .into_iter()
+            .filter_map(|(o, n)| match n {
+                Notice::Bottom {
+                    text,
+                    seconds,
+                    hide_bar,
+                } => Some((o, text, seconds, hide_bar)),
+                _ => None,
+            })
+            .collect();
+    assert!(
+        printed.contains(&(a, "\\c2B is patched up.".into(), 2.0, true)),
+        "{printed:?}"
+    );
+    assert!(
+        printed.contains(&(b, "\\c2A patched you up.".into(), 2.0, true)),
+        "{printed:?}"
+    );
+    let healed = g.health(b);
+    assert!((52.0..80.0).contains(&healed), "{healed}");
+    // A hit replaces the heal image, so the heal over time stops.
+    g.probe(b, "hurt", vec![PackageArg::Float(1.0)]);
+    g.steps(2);
+    assert_ne!(g.ask(b, "worn"), json!(heal_image));
+    let after = g.health(b);
+    g.steps(240);
+    assert_eq!(g.health(b), after, "a hit ends the heal over time");
+    // The booster: A, hurt by 40, heals 25 at once with the cross and the
+    // heal image, then 18 over time.
+    g.probe(a, "hurt", vec![PackageArg::Float(40.0)]);
+    g.steps(2);
+    g.equip(a, "stimpackitem");
+    g.s.take_private_notices();
+    let use_booster = |g: &mut Game| {
+        g.cmd(a, Command::WeaponTrigger { down: true });
+        g.steps(2);
+        g.cmd(a, Command::WeaponTrigger { down: false });
+        g.steps(70);
+    };
+    use_booster(&mut g);
+    assert_eq!(g.ask(a, "worn"), json!(heal_image));
+    g.steps(240);
+    assert_eq!(
+        g.health(a),
+        100.0,
+        "60, 25 at once, then 15 of the 18 over time"
+    );
+    // Again at once: it is still charging and says so.
+    use_booster(&mut g);
+    let centre = |g: &mut Game| -> Vec<String> {
+        g.s.take_private_notices()
+            .into_iter()
+            .filter_map(|(o, n)| match n {
+                Notice::Center { text, .. } if o == a => Some(text),
+                _ => None,
+            })
+            .collect()
+    };
+    assert!(centre(&mut g).contains(&"\\c0Booster still charging.".into()));
+    // Its notice comes 4 seconds after use, and then it heals again.
+    g.probe(a, "hurt", vec![PackageArg::Float(20.0)]);
+    g.steps(4 * 120);
+    assert!(centre(&mut g).contains(&"\\c2Booster ready.".into()));
+    use_booster(&mut g);
+    assert_eq!(g.health(a), 100.0, "80 and 25, up to the most");
+    assert_eq!(
+        g.ask(a, "worn"),
+        json!(""),
+        "hurt by less than 25: no heal image"
+    );
+    // Jet throws it: B, hurt, is healed 32 by it from close by.
+    let to_40 = g.health(b) - 40.0;
+    g.probe(b, "hurt", vec![PackageArg::Float(to_40.into())]);
+    g.steps(2);
+    let before = g.health(b);
+    g.looks.get_mut(&a).unwrap().jet = true;
+    g.steps(2);
+    g.looks.get_mut(&a).unwrap().jet = false;
+    g.steps(30);
+    assert_eq!(
+        g.health(b),
+        before + 32.0 + 3.0,
+        "the thrown booster's 32 at once, then the first pass of its heal over time"
+    );
+    assert_eq!(g.ask(b, "worn"), json!(heal_image));
 }

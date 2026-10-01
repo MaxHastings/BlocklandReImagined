@@ -1,0 +1,120 @@
+{
+  "schema_version": 1,
+  "notes": "Tier+Tactical Medical (Kai), with its default settings: medics heal only players, not bots, and in a minigame only players in theirs (Slayer's team check, which comes with Slayer, is not in yet); outside minigames only on a single-player or LAN game, to players in no minigame. The Gauze Gun's needle heals whoever it hits at once and leaves them its heal over time, which a hit, an emote or flames end early as they replace it on the body. The Syringe heals its holder, then needs to recharge, saying so when it is back; jet throws it at someone close for a bigger heal. The heal cross bursts only on someone hurt by at least the heal.",
+  "handles": {
+    "TT_defaultIfUnset": "every setting is fixed at the default it gives: the host rules use Kai's defaults",
+    "call:TT_defaultIfUnset": "every setting is fixed at the default it gives: the host rules use Kai's defaults",
+    "Armor::onTrigger": "engine image commands: jet with the Syringe in hand runs its onAltTrigger (the host rules' throws table)",
+    "TT_canHeal": "the host rules' can_heal: players only (MedicHealBots off), the healer's own minigame, or outside minigames on a single-player or LAN game (`lan()`) a player in none; with MedicHealBots off a bot is never healed, so its own-bot branch never runs",
+    "TT_projectileHeal": "the host rules' on_projectile_hit: the heals table's burst, the cross on anyone hurt by at least it, both bottom prints and the heal image on the body (engine `emote`)",
+    "medigunProjectile::onCollision": "the host rules' heals table (its TT_projectileHeal burst); the needle's own hit and push as any projectile's",
+    "stimpackProjectile::onCollision": "the host rules' heals table (its TT_projectileHeal burst)",
+    "medigunHealImage::onMount": "the host rules start the heal count from 0 as they put the image on",
+    "medigunHealImage::onHeal": "engine emote slot: the image's onHeal state runs the host rules' heal_tick, which heals the wearer while alive and takes the image off after its count (the over_time table)",
+    "medigunImage::onFire": "the image's Fire state: the arm's plant and the shot sound, then its needle as any gun's",
+    "stimpackImage::onFire": "the host rules' stim (the syringes table): the recharge wait and its centre print, the arm, sound, cross and heal image when hurt enough, the heal, and the recharge notice",
+    "stimRechargedNotice": "the host rules' on_tick: the notice's centre print and sound, to the same living body",
+    "stimpackImage::onAltTrigger": "the host rules' stim_throw (the throws table): the arm, sound and the thrown syringe from the muzzle"
+  },
+  "scripts": [
+    {
+      "method": "onFire",
+      "into": "state",
+      "keep": true,
+      "pattern": "^\\s*%obj\\.playThread\\(\\s*2\\s*,\\s*(?P<a>\\w+)\\s*\\)\\s*;\\s*serverPlay3D\\(\\s*(?P<s>\\w+)\\s*,\\s*%obj\\.getPosition\\(\\s*\\)\\s*\\)\\s*;\\s*return\\s+Parent::onFire\\(",
+      "set": {
+        "arm": "{a}",
+        "sound": "{s|sound}"
+      }
+    },
+    {
+      "on": "projectile",
+      "method": "onCollision",
+      "into": "table",
+      "table": "heals",
+      "pattern": "TT_projectileHeal\\(\\s*%obj\\s*,\\s*%col\\s*,\\s*(?P<n>[\\d.]+)\\s*\\)",
+      "required_by": "TT_projectileHeal",
+      "set": {
+        "burst": "{n}"
+      }
+    },
+    {
+      "method": "onHeal",
+      "into": "table",
+      "table": "over_time",
+      "pattern": "if\\s*\\(\\s*%obj\\.getDamagePercent\\(\\s*\\)\\s*<\\s*1(?:\\.0)?\\s*\\)\\s*\\{\\s*%obj\\.setDamageLevel\\(\\s*%obj\\.getDamageLevel\\(\\s*\\)\\s*-\\s*(?P<hp>[\\d.]+)\\s*\\)\\s*;[\\s\\S]*?%obj\\.healing\\+\\+\\s*;\\s*if\\s*\\(\\s*%obj\\.healing\\s*>=\\s*(?P<n>\\d+)\\s*\\)\\s*\\{\\s*%obj\\.unMountImage\\(\\s*%slot\\s*\\)\\s*;\\s*\\}\\s*\\}\\s*else\\s*\\{\\s*%obj\\.unMountImage\\(\\s*%slot\\s*\\)",
+      "required_by": "setDamageLevel",
+      "set": {
+        "hp": "{hp}",
+        "times": "{n}"
+      }
+    },
+    {
+      "method": "onFire",
+      "into": "table",
+      "table": "syringes",
+      "pattern": "if\\s*\\(\\s*\\(\\s*%obj\\.lastStimTime\\s*\\+\\s*%this\\.minShotTime\\s*\\)\\s*>\\s*getSimTime\\(\\s*\\)\\s*\\)\\s*\\{\\s*centerprint\\(\\s*%obj\\.client\\s*,\\s*\"(?P<wait>[^\"]*)\"\\s*,\\s*(?P<ws>[\\d.]+)\\s*\\)\\s*;\\s*return\\s*;\\s*\\}\\s*%obj\\.playThread\\(\\s*2\\s*,\\s*(?P<arm>\\w+)\\s*\\)\\s*;\\s*%obj\\.lastStimTime\\s*=\\s*getSimTime\\(\\s*\\)\\s*;\\s*serverPlay3D\\(\\s*(?P<snd>\\w+)\\s*,\\s*%obj\\.getPosition\\(\\s*\\)\\s*\\)\\s*;\\s*schedule\\(\\s*(?P<after>\\d+)\\s*,\\s*%obj\\s*,\\s*stimRechargedNotice\\s*,\\s*%obj\\s*\\)\\s*;\\s*if\\s*\\(\\s*%obj\\.getDamageLevel\\(\\s*\\)\\s*>=\\s*(?P<at>[\\d.]+)\\s*\\)\\s*\\{\\s*%obj\\.spawnExplosion\\(\\s*(?P<cross>\\w+)\\s*,\\s*%obj\\.getScale\\(\\s*\\)\\s*\\)\\s*;\\s*%obj\\.emote\\(\\s*(?P<emote>\\w+)\\s*\\)\\s*;\\s*\\}\\s*%obj\\.setDamageLevel\\(\\s*%obj\\.getDamageLevel\\(\\s*\\)\\s*-\\s*(?P<heal>[\\d.]+)\\s*\\)",
+      "required_by": "lastStimTime",
+      "set": {
+        "cooldown": "{=minShotTime|field|ticks}",
+        "wait": "{wait|text}",
+        "wait_seconds": "{ws}",
+        "arm": "{arm|text}",
+        "sound": "{snd|sound}",
+        "notice_ticks": "{after|ticks}",
+        "cross_at": "{at}",
+        "cross": "{cross|projectile}",
+        "image": "{emote|image}",
+        "heal": "{heal}"
+      }
+    },
+    {
+      "method": "onAltTrigger",
+      "into": "table",
+      "table": "throws",
+      "pattern": "if\\s*\\(\\s*%val\\s*&&\\s*%triggerSlot\\s*==\\s*4\\s*\\)\\s*\\{\\s*%player\\.playThread\\(\\s*2\\s*,\\s*(?P<arm>\\w+)\\s*\\)\\s*;\\s*serverPlay3D\\(\\s*(?P<snd>\\w+)\\s*,\\s*%player\\.getPosition\\(\\s*\\)\\s*\\)\\s*;\\s*%projectile\\s*=\\s*(?P<p>\\w+)\\s*;\\s*%vector\\s*=\\s*%player\\.getMuzzleVector\\(\\s*0\\s*\\)\\s*;\\s*%objectVelocity\\s*=\\s*%player\\.getVelocity\\(\\s*\\)\\s*;\\s*%vector1\\s*=\\s*VectorScale\\(\\s*%vector\\s*,\\s*%projectile\\.muzzleVelocity\\s*\\)\\s*;\\s*%vector2\\s*=\\s*VectorScale\\(\\s*%objectVelocity\\s*,\\s*%projectile\\.velInheritFactor\\s*\\)\\s*;[\\s\\S]*?initialPosition\\s*=\\s*%player\\.getMuzzlePoint\\(\\s*0\\s*\\)",
+      "required_by": "new\\s+Projectile",
+      "set": {
+        "projectile": "{p|projectile}",
+        "speed": "{p|speed}",
+        "inherit": "{p|inherit}",
+        "arm": "{arm|text}",
+        "sound": "{snd|sound}"
+      }
+    }
+  ],
+  "patch": {
+    "assets/weapons.json": {
+      "images": {
+        "{namespace}:image/medigunhealimage": {
+          "commands": { "states": { "onheal": "{rules}:heal_tick" } }
+        },
+        "{namespace}:image/stimpackimage": {
+          "commands": {
+            "states": { "onfire": "{rules}:stim" },
+            "jet": "{rules}:stim_throw"
+          }
+        }
+      }
+    }
+  },
+  "rules": {
+    "capabilities": ["player", "damage", "chat", "effects"],
+    "values": {
+      "heal": {
+        "cross": "{namespace}:projectile/{cross:lower}",
+        "image": "{namespace}:image/{heal_image:lower}",
+        "healed": ["{healed_pre}", "{healed_post}"],
+        "healing": ["{healing_pre}", "{healing_post}"],
+        "seconds": "{print_seconds}",
+        "hide_bar": "{print_hide_bar}"
+      },
+      "notice": {
+        "text": "{notice_text}",
+        "seconds": "{notice_seconds}",
+        "sound": "{namespace}:sound/{notice_sound:lower}"
+      },
+      "heal_bots": false
+    }
+  }
+}

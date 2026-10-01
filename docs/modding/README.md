@@ -164,7 +164,7 @@ HUD panels can only show keys the viewer receives. `persist` (default
 | `aim()`, `me()`, `entities()` | `add_player(p, key, amount)` | `damage(target, amount[, by[, type]])`, `explode(...)`: `damage` |
 | `noise(seed, x, z)`, `hash3(seed, x, y, z)` | `entity_get(e, key)`, `entity_set(e, key, v)` | `spawn_entity`, `remove_entity`, `steer`, `label`: `entity` |
 | `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)` | | `teleport`, `respawn`, `set_archetype`, `push_archetype`, `pop_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`, `take_item(p, item)`, `drop_item(item, x, y, z[, vx, vy, vz[, data]])`: `player` |
-| `raycast(from, dir, range[, ignore])`, `can_damage(by, target)`, `enabled(add_on)` | | `set_fov(p, fov)`, `set_speed_scale(p, scale)`, `set_image_ammo(p, ammo)`, `mount_image(p, image)`, `unmount_image(p)`, `set_scale(p, scale)`, `set_look_limits(p, up, down)`: `player` |
+| `raycast(from, dir, range[, ignore])`, `can_damage(by, target)`, `enabled(add_on)`, `lan()` | | `set_fov(p, fov)`, `set_speed_scale(p, scale)`, `set_image_ammo(p, ammo)`, `mount_image(p, image)`, `unmount_image(p)`, `emote(p, image[, skip_spam])`, `set_scale(p, scale)`, `set_look_limits(p, up, down)`: `player` |
 | | | `give_ammo(p, ammo, rounds)`, `set_reserve(p, ammo, rounds)`, `set_rounds(p, item, rounds)`, `reload(p)`: `player` |
 | `brick_box(brick)`, `voxel(brick)`, `can_place_voxel(x, y, z)` | | `place_voxel(x, y, z, material)`: `world.edit`; `set_avatar_colors(p, colors)`, `temp_look(p, look, seconds)`: `player` |
 | `brick(id)`, `bricks_in(min, max)`, `can_plant(kind, [x, y, z], turns)`, `can_edit(brick)` | | `plant_brick(kind, [x, y, z], turns, color, owner)`: `world.edit` |
@@ -172,7 +172,7 @@ HUD panels can only show keys the viewer receives. `persist` (default
 | | | `cut_copy(p)`, `paint_copy(p, color)`, `paint_fill(p, brick, paint, options)`, `paint_vehicle(p, vehicle, paint, options)`: `world.edit` |
 | | | `push`, `tumble`, `hold`, `reach`, `hold_distance`, `let_go`, `spawn_vehicle`, `remove_vehicle`, `mount_object(mount, rider, node, can_dismount)`, `unmount_object(rider)`: `physics` |
 | | | `heal(p, amount)`, `fire(...)`, `spawn_explosion(p, projectile, scale)`: `damage` |
-| | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds)` (`()` for everyone): `chat` |
+| | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds[, hide_bar])` (`()` for everyone): `chat` |
 | | | `play_sound(p, sound)` at a player's ears, `sound_at(sound, x, y, z)`, `beam(from, to[, options])`, `play_thread(p, thread, sequence[, after])`, `show_box(p, min, max, tool)`, `hide_box(p)`: `effects` |
 | | | `set_map_lights([x, y, z], radius, options)`: `lighting` |
 | `environment()` | | `set_environment(#{ ... })`, `reset_environment()`: `environment` |
@@ -212,7 +212,9 @@ when it never runs out; a type missing from it gets its starting reserve
 with the first gun of it they draw); `riding` and `seat` (the player this one rides
 and on which mount point, or `()`), `bot` (`true` for a bot) and
 `bot_owner` (for a bot from a bot brick, the brick owner's id, as
-`%bot.spawnBrick.getGroup().bl_id`; else `()`).
+`%bot.spawnBrick.getGroup().bl_id`; else `()`), and `emote` (the image
+worn in the emote slot, `""` for none). `lan()` says whether this is a
+single-player or LAN game (`$Server::LAN`).
 
 **Bots** are players without a connection. `players()` lists only people;
 `bots()` lists the bots, as the same maps, and `player(id)` reads either.
@@ -267,6 +269,20 @@ slowdown. `set_fov(p, fov)` sets the player's field of view (5 to 120
 degrees), and `set_fov(p, ())` hands it back to their own setting; aiming
 and the zoom key still work on top of it. `unmount_image(p)` empties the
 player's hand (`unMountImage(0)`).
+
+**The emote slot.** `emote(p, image)` puts an image of your weapons (or a
+dependency's) on a living player's body in the emote slot, as v20's
+`%obj.emote(%image)` mounted it in image slot 3: every client plays its
+states' emitters there, and it replaces whatever the slot wore, so an
+emote, pain from a hit, flames or a teleport replace it in turn.
+`emote(p, ())` takes it off. Its states follow their timeouts on the host,
+and a state whose script has a command in the image's `commands.states`
+runs that command for the wearer: a heal over time is an image whose
+`onHeal` state heals a little each pass and, after enough passes, calls
+`emote(p, ())`. Dying takes off an image that runs commands. Like v20's,
+emotes are spam-checked: one under a second after the last counts, ten
+quiet seconds forgive them, and past five counted an emote is dropped.
+`emote(p, image, true)` skips the check (`%skipSpam`, as pain does).
 
 **Bodies.** `set_scale(p, scale)` resizes a player's body, from 0.2 to 5
 (`setScale`); a respawn puts it back to 1. `set_look_limits(p, up, down)`

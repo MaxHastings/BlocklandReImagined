@@ -96,7 +96,10 @@ pub enum CueKind {
         scale: f32,
         player: bool,
     },
-    /// Emote image above the head (alarm, love, hate, confusion) or sit.
+    /// Emote image above the head (alarm, love, hate, confusion) or sit,
+    /// or an Add-On's image on the body (`name` its image id, mounted by
+    /// its rules' `emote`), each worn in the emote slot. An empty `name`
+    /// takes off what the slot wears (`unMountImage(3)`).
     Emote {
         actor: u64,
         name: String,
@@ -254,7 +257,10 @@ impl Cue {
                 "Invalid teleport cue"
             ),
             CueKind::Emote { actor, name } => ensure!(
-                *actor > 0 && crate::session::EMOTES.contains(&name.as_str()),
+                *actor > 0
+                    && (name.is_empty()
+                        || crate::session::EMOTES.contains(&name.as_str())
+                        || bri_package::id::is_content_ref(name, Some("image"))),
                 "Invalid emote cue"
             ),
             CueKind::BrickKill {
@@ -347,6 +353,29 @@ impl Cues {
         self.pending.drain(..).collect()
     }
 }
+/// The image a stock emote wears in the emote slot (`serverCmdLove`,
+/// `serverCmdHate`, `serverCmdConfusion`); the others mount none.
+pub fn emote_image(name: &str) -> Option<&'static str> {
+    match name {
+        "love" => Some("LoveImage"),
+        "hate" => Some("HateImage"),
+        "confusion" => Some("WtfImage"),
+        _ => None,
+    }
+}
+
+/// `Armor::damage`'s pain emote: PainHigh at 40, PainMid at 25, else
+/// PainLow.
+pub fn pain_image(level: f32) -> &'static str {
+    if level >= 40.0 {
+        "PainHighImage"
+    } else if level >= 25.0 {
+        "PainMidImage"
+    } else {
+        "PainLowImage"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

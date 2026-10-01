@@ -1773,6 +1773,9 @@ impl Session {
                 }
                 if name == "sit" {
                     peer.sitting = true;
+                } else if !peer.combat.emote_allowed(self.simulation.state().tick) {
+                    // The others are `Player::emote`, with its spam check.
+                    return Ok(Reply::Accepted);
                 }
                 let feet = peer.player.state().feet;
                 let eye = if peer.player.state().crouched {
@@ -1810,7 +1813,7 @@ impl Session {
                     ),
                     _ => {}
                 }
-                self.cues.emit(
+                self.emote_cue(
                     tick,
                     crate::presentation::CueKind::Emote { actor: owner, name },
                     feet,

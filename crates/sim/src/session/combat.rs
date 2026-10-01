@@ -100,6 +100,11 @@ const INVULNERABLE_TICKS: u64 = 300;
 const CORPSE_TICKS: u64 = 600;
 /// `Armor::damage` sums hits less than 300 ms apart into one pain level.
 const PAIN_TICKS: u64 = 36;
+/// `Player::emote`: emotes under 1000 ms apart count, 10000 ms forgive,
+/// and more than five counted are dropped.
+const VOICE_QUICK_TICKS: u64 = 120;
+const VOICE_FORGIVE_TICKS: u64 = 1200;
+const VOICE_MAX: u32 = 5;
 /// `speedDamageScale` (every stock player type sets 3.8).
 const SPEED_DAMAGE_SCALE: f32 = 3.8;
 /// `mass` of the standard player: impulses divide by it.
@@ -134,6 +139,31 @@ pub(super) struct Combat {
     /// A gun's slowdown on top ([`bri_weapons::Slow`]): the share kept and
     /// the tick it ends.
     pub gun_slow: Option<(f32, u64)>,
+    /// `Player::emote`'s spam check (`lastVoiceTime`, `voiceCount`): the
+    /// tick of the last emote let through and the quick ones counted.
+    pub voice: Option<u64>,
+    pub voice_count: u32,
+}
+
+impl Combat {
+    /// `Player::emote` without `%skipSpam`: an emote within a second of the
+    /// last counts, ten quiet seconds forgive them, and past five counted
+    /// the emote does nothing (and does not move the last time on).
+    pub fn emote_allowed(&mut self, tick: u64) -> bool {
+        let since = self
+            .voice
+            .map_or(u64::MAX, |last| tick.saturating_sub(last));
+        if since < VOICE_QUICK_TICKS {
+            self.voice_count += 1;
+        } else if since > VOICE_FORGIVE_TICKS {
+            self.voice_count = 0;
+        }
+        if self.voice_count > VOICE_MAX {
+            return false;
+        }
+        self.voice = Some(tick);
+        true
+    }
 }
 
 /// Replicated per-player status. Health drives the damage flash; the rest
@@ -520,6 +550,8 @@ impl Session {
             pain_tick: 0,
             speed_rule: 1.0,
             gun_slow: None,
+            voice: None,
+            voice_count: 0,
         })
     }
     pub(super) fn combat_disconnect(&mut self, player: mg::PlayerId) {
@@ -783,7 +815,7 @@ impl Session {
         let level = peer.combat.pain_level;
         self.bots.note_hurt(target, source, tick);
         let feet = peer.player.state().feet;
-        self.cues.emit(
+        self.emote_cue(
             tick,
             crate::presentation::CueKind::Pain {
                 actor: target,
@@ -858,6 +890,32 @@ impl Session {
         // `armor::onDisabled` drops a held ball before the body goes limp.
         let _ = self.weapons.drop_ball(ActorId(victim));
         let _ = self.weapons.equip(ActorId(victim), None);
+        // A corpse's emote slot runs nothing more. An image whose states
+        // run commands comes off, as `medigunHealImage::onHeal` unmounted
+        // itself from a dead wearer; an emote or pain plays out.
+        let scripted = self
+            .weapons
+            .emote_state(ActorId(victim))
+            .is_some_and(|(image, _)| {
+                self.weapons
+                    .pack
+                    .images
+                    .get(image)
+                    .is_some_and(|i| !i.commands.is_empty())
+            });
+        if scripted {
+            let feet = self.peers[&victim].player.state().feet;
+            self.emote_cue(
+                tick,
+                crate::presentation::CueKind::Emote {
+                    actor: victim,
+                    name: String::new(),
+                },
+                feet,
+            );
+        } else {
+            let _ = self.weapons.emote(ActorId(victim), None);
+        }
         let feet = self.peers[&victim].player.state().feet;
         self.cues.emit(
             tick,
@@ -1373,6 +1431,9 @@ impl Session {
             peer.look_limits = None;
             peer.combat.shot_once = false;
             peer.combat.last_direct = None;
+            // `lastVoiceTime` and `voiceCount` were on the old `Player`.
+            peer.combat.voice = None;
+            peer.combat.voice_count = 0;
             // A new life starts with full magazines and starting reserves.
             let _ = self.weapons.reset_ammo(ActorId(owner));
             let _ = self.weapons.respawned(ActorId(owner));

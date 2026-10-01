@@ -844,6 +844,14 @@ fn fill(v: &Value, values: &BTreeMap<String, String>, cx: &Fill) -> Result<Value
                     .with_context(|| format!("`{value}` is no projectile with a camera shake"))?,
                 "sound" => json!(sound_ref(weapons, code, value)),
                 "projectile" => json!(projectile_ref(weapons, value)),
+                // A projectile's launch speed (`muzzleVelocity`) and share of
+                // its shooter's velocity (`velInheritFactor`), for a script
+                // that launched it by hand (`new Projectile()`).
+                "speed" | "inherit" => {
+                    let id = id_of(weapons, "ProjectileData", value)
+                        .with_context(|| format!("`{value}` is no projectile of this import"))?;
+                    weapons["projectiles"][&id][filter].clone()
+                }
                 // The explosion effect of the projectile it names
                 // (`spawnExplosion(tierFirePlayerProjectile, ...)`).
                 "explosion" => {
@@ -869,7 +877,7 @@ fn fill(v: &Value, values: &BTreeMap<String, String>, cx: &Fill) -> Result<Value
                     .map_or(Value::Null, |id| json!(id)),
                 other => {
                     bail!(
-                        "`{s}`: no filter `{other}` (field, word<N>, text, neg, ticks, kick, sound, projectile, explosion, image or archetype)"
+                        "`{s}`: no filter `{other}` (field, word<N>, text, neg, ticks, kick, sound, projectile, speed, inherit, explosion, image or archetype)"
                     )
                 }
             }

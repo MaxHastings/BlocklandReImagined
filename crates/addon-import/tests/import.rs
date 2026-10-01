@@ -113,11 +113,16 @@ fn synthetic_addon_imports_with_report() {
     assert_eq!(status("blasterChargeSound").1, "recognised_only");
     assert_eq!(status("blasterExplosion").1, "converted_with_gaps");
 
-    // The dependency is named even without a reference install.
+    // The dependency is named even without a reference install: an
+    // Add-On v20 shipped is the game's own base package.
     let dep = &report.dependencies[0];
     assert_eq!(
-        (dep.addon.as_str(), dep.status.as_str()),
-        ("Weapon_Gun", "missing")
+        (
+            dep.addon.as_str(),
+            dep.status.as_str(),
+            dep.package.as_deref()
+        ),
+        ("Weapon_Gun", "base", Some("v20-weapons"))
     );
     assert_eq!(dep.source.as_ref().unwrap().line, 4);
 

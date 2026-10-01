@@ -3076,6 +3076,10 @@ fn dependencies(cx: &mut Ctx, scripts: &[Script]) {
                 .addons
                 .get(&addon.to_ascii_lowercase())
                 .cloned();
+            // An Add-On v20 shipped (`Weapon_Gun`) is the game's own: its
+            // content is a base package, there with or without a v20
+            // folder to read.
+            let base = reference::base_package(&addon);
             deps.entry(addon.to_ascii_lowercase())
                 .or_insert(Dependency {
                     addon: found.clone().unwrap_or(addon.clone()),
@@ -3083,11 +3087,16 @@ fn dependencies(cx: &mut Ctx, scripts: &[Script]) {
                     source: Some(Location::new(&s.path, c.line)),
                     status: if found.is_some() {
                         "reference"
+                    } else if base.is_some() {
+                        "base"
                     } else {
                         "missing"
                     }
                     .into(),
-                    package: found.as_deref().and_then(dependency_package),
+                    package: found
+                        .as_deref()
+                        .and_then(dependency_package)
+                        .or(base.map(str::to_owned)),
                     uses: vec![],
                 });
         }
@@ -3113,12 +3122,17 @@ fn dependencies(cx: &mut Ctx, scripts: &[Script]) {
         if *key == own {
             // Requiring itself does nothing: it is already loading.
             d.status = "self".into();
-        } else if d.status == "missing" && d.uses.is_empty() && cx.reference.root.is_some() {
+        } else if matches!(d.status.as_str(), "missing" | "base")
+            && d.uses.is_empty()
+            && cx.reference.root.is_some()
+        {
             // `forceRequiredAddOn` of a missing Add-On only printed an
             // error; with none of its content named (every name the
             // Add-On uses resolved against the install, or is reported as
-            // declared nowhere), v20 ran the same.
+            // declared nowhere), v20 ran the same. A base Add-On none of
+            // whose content is named needs no base package either.
             d.status = "unused".into();
+            d.package = None;
         }
     }
     cx.report.dependencies = deps.into_values().collect();

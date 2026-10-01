@@ -11,3 +11,6 @@ state `arm_once`, children `max_count` and `steps`, aura `players_only`,
 `effect`, `target_sound` and `max_pulses`.
 Explosive 2: children `on_hit`, `angles`, `redraw` and `max_times`, aura
 `max_targets`, and the image shot's `lob`.
+Medic 1: the emote cue carries an Add-On image id, or an empty name to
+take the worn image off; script op `Emote` (with `skip_spam`),
+`Print::hide_bar`, and `PlayerView::emote`.

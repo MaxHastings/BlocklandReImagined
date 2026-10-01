@@ -1382,7 +1382,7 @@ impl EventHost<'_> {
     fn burn(&mut self, owner: OwnerId, seconds: f32) {
         let tick = self.session.simulation.state().tick;
         let feet = self.session.peers[&owner].player.state().feet;
-        self.session.cues.emit(
+        self.session.emote_cue(
             tick,
             crate::presentation::CueKind::Burn {
                 actor: owner,

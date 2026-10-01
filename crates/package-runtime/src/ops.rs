@@ -489,6 +489,10 @@ pub enum Op {
         text: String,
         seconds: f32,
         bottom: bool,
+        /// A bottom print without the bar behind it (`bottomPrint`'s
+        /// `hideBar`).
+        #[serde(default)]
+        hide_bar: bool,
     },
     /// Play a sound profile (an Add-On weapons pack's `sounds`, or v20's):
     /// at `position` for everyone near, or at one player's ears.
@@ -581,6 +585,19 @@ pub enum Op {
     MountImage {
         player: u64,
         image: Option<String>,
+    },
+    /// Mount an image on a player's body in the emote slot
+    /// (`%player.emote(%image)`), replacing the emote, pain or flames there:
+    /// every client plays it, and its states run their commands for the
+    /// wearer (a heal over time). `None` empties the slot.
+    Emote {
+        player: u64,
+        image: Option<String>,
+        /// `%skipSpam`: without it an image counts toward the player's
+        /// emote spam check (more than five quick emotes are dropped), as
+        /// the stock emotes do.
+        #[serde(default)]
+        skip_spam: bool,
     },
     /// Empty a player's hand (`unMountImage(0)`): the tool they held is put
     /// away, still in its slot.
@@ -718,6 +735,7 @@ impl Op {
             | Self::Reload { .. }
             | Self::SetImageAmmo { .. }
             | Self::MountImage { .. }
+            | Self::Emote { .. }
             | Self::UnmountImage { .. }
             | Self::SetScale { .. }
             | Self::SetLookLimits { .. }
@@ -952,7 +970,7 @@ impl Op {
                         .iter()
                         .all(|k| bri_content::atmosphere::KEYS.contains(&k.as_str()))
             }
-            Self::MountImage { image, .. } => image
+            Self::MountImage { image, .. } | Self::Emote { image, .. } => image
                 .as_deref()
                 .is_none_or(|i| bri_package::id::is_content_ref(i, Some("image"))),
             Self::SpawnEntity {
@@ -1137,6 +1155,7 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::SetEnvironment { .. } => "set_environment",
         Op::SetImageAmmo { .. } => "set_image_ammo",
         Op::MountImage { .. } => "mount_image",
+        Op::Emote { .. } => "emote",
         Op::UnmountImage { .. } => "unmount_image",
         Op::MountObject { .. } => "mount_object",
         Op::UnmountObject { .. } => "unmount_object",
