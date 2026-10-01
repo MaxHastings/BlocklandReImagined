@@ -312,11 +312,8 @@ pub fn start_import(
     let dir = library.import_dir(name);
     let out = root.join(&dir);
     let input = legacy.path.clone();
-    // The install it sits in satisfies what it builds on (the base game's
-    // datablocks, another Add-On it extends), read in place. Without one
-    // (or for what it lacks), the base bricks, sounds and the rest come from
-    // the game's own converted content.
-    let reference = legacy.install.clone();
+    // Base bricks, sounds and the rest an Add-On builds on come from the
+    // game's own converted content.
     let installed = root.to_path_buf();
     let importer = importer.to_path_buf();
     let name = name.to_string();
@@ -329,9 +326,6 @@ pub fn start_import(
             .arg("--installed")
             .arg(&installed)
             .arg("--json");
-        if let Some(reference) = &reference {
-            command.arg("--reference").arg(reference);
-        }
         let result = command
             .stdin(std::process::Stdio::null())
             .output()
