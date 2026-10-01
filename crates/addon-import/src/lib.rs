@@ -42,7 +42,27 @@ pub struct Options {
     /// Recovered core scripts (`allGameScripts.cs`, `DamageTypes.cs`) for
     /// base datablocks and damage types.
     pub core: Vec<PathBuf>,
+    /// The installed game's content root: base datablocks an Add-On
+    /// inherits from or names (a brick's parent, a sound) are read from its
+    /// brick catalog, weapons, sounds and effects.
+    pub installed: Option<PathBuf>,
     pub version: String,
+}
+
+impl Default for Options {
+    /// Version 1.0.0, no reference install, core scripts or installed
+    /// game: set `input` and `out` and what else the import needs, with
+    /// `..Default::default()` for the rest.
+    fn default() -> Self {
+        Self {
+            input: PathBuf::new(),
+            out: PathBuf::new(),
+            reference: None,
+            core: vec![],
+            installed: None,
+            version: "1.0.0".into(),
+        }
+    }
 }
 
 /// The package id (and content namespace) for an Add-On folder name.
@@ -297,10 +317,13 @@ pub fn import(opts: &Options) -> Result<Report> {
 pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
     check_output(opts)?;
     let src = source::read(&opts.input)?;
-    let reference = match &opts.reference {
+    let mut reference = match &opts.reference {
         Some(root) => Reference::load(root, &opts.core)?,
-        None => Reference::default(),
+        None => Reference::core_only(&opts.core)?,
     };
+    if let Some(content) = &opts.installed {
+        reference.add_installed(content)?;
+    }
     let ns = namespace_for(&src.name)?;
     std::fs::create_dir_all(&opts.out)?;
     let mut cx = Ctx {
@@ -810,10 +833,10 @@ fn references(cx: &mut Ctx) {
                     at,
                     format!(
                         "file {resolved} is not in this Add-On{}",
-                        if cx.reference.root.is_some() {
-                            " or the reference install"
-                        } else {
-                            "; no reference install given"
+                        match (cx.reference.root.is_some(), cx.reference.installed) {
+                            (true, _) => " or the reference install",
+                            (false, true) => " or the installed game",
+                            (false, false) => "; no reference install or installed game given",
                         }
                     ),
                     case_only.then(|| "matches a member by case only".into()),
@@ -856,11 +879,12 @@ fn references(cx: &mut Ctx) {
                     at.clone(),
                     format!(
                         "`{name}` is not declared by this Add-On{}; Torque leaves the field empty",
-                        match (cx.reference.root.is_some(), cx.reference.has_core) {
-                            (false, _) => "; no reference install given",
+                        match (cx.reference.root.is_some(), cx.reference.knows_base()) {
+                            (false, false) => "; no reference install or installed game given",
+                            (false, true) => " or the base game",
                             (true, false) =>
-                                " or the reference install (base datablocks need --core)",
-                            (true, true) => ", the reference install or the core scripts",
+                                " or the reference install (base datablocks need --installed or --core)",
+                            (true, true) => ", the reference install or the base game",
                         }
                     ),
                     None,

@@ -95,6 +95,21 @@ pub enum Op {
         position: [f32; 3],
         color: [f32; 4],
     },
+    /// Plant a brick of kind `kind` (a brick catalog id) into build
+    /// `owner` (a brick's `owner`, 0 for the world's own), palette colour `color`, `turns`
+    /// clockwise quarter turns, centred at `position` (snapped to the stud
+    /// and plate grid). Where it does not fit (another brick, a player,
+    /// the map) nothing is planted and nothing is reported, as v20's
+    /// `fxDTSBrick::plant` returned an error the script checked. A brick
+    /// split, merged or piled by a rule (Trench Digging's dirt) stays its
+    /// builder's.
+    PlantBrick {
+        kind: String,
+        position: [f32; 3],
+        turns: u8,
+        color: u8,
+        owner: u64,
+    },
     /// Put a voxel of the generated world's `material` (its id) at voxel
     /// coordinates `position`: dirt thrown back into a trench. It becomes
     /// part of the world, saved with its edits, and is refused where
@@ -778,6 +793,7 @@ impl Op {
         match self {
             Self::RemoveBrick { .. }
             | Self::PlaceBrick { .. }
+            | Self::PlantBrick { .. }
             | Self::PlaceVoxel { .. }
             | Self::SetBlockState { .. }
             | Self::CutCopy { .. }
@@ -899,6 +915,19 @@ impl Op {
             Self::RotateCopy { direction, .. } => matches!(direction, -1 | 1),
             Self::SuperCut { min, max, .. } | Self::FillBox { min, max, .. } => span(min, max),
             Self::Teleport { position, .. } => finite(position),
+            Self::PlantBrick {
+                kind,
+                position,
+                turns,
+                ..
+            } => {
+                (bri_package::id::is_content_ref(kind, Some("brick"))
+                    || kind
+                        .strip_prefix("v20/brick/")
+                        .is_some_and(|n| !n.is_empty() && n.len() <= 128))
+                    && finite(position)
+                    && *turns < 4
+            }
             Self::PlaceVoxel { position, material } => {
                 position.iter().all(|c| c.abs() <= 1_000_000)
                     && bri_package::id::ContentId::parse(material).is_ok()
@@ -1187,6 +1216,7 @@ pub fn op_name(op: &Op) -> &'static str {
     match op {
         Op::RemoveBrick { .. } => "remove_brick",
         Op::PlaceBrick { .. } => "place_brick",
+        Op::PlantBrick { .. } => "plant_brick",
         Op::PlaceVoxel { .. } => "place_voxel",
         Op::SetAvatarColors { .. } => "set_avatar_colors",
         Op::Explode { .. } => "explode",

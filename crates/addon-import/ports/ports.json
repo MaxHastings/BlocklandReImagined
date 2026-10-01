@@ -21,6 +21,208 @@
       ]
     },
     {
+      "addon": "Gamemode_TrenchDigging",
+      "title": "Trench Digging",
+      "port": "gamemode_trenchdigging",
+      "status": "verified",
+      "sha256": [
+        "0b5d9bc710a2f67720617a7c656841c0226617ec59eae19cf986046c3d82bc3c"
+      ],
+      "covers": {
+        "TrenchShovelImage::onPreFire": {
+          "arm": "playthread\\s*\\(\\s*2\\s*,\\s*armattack\\s*\\)"
+        },
+        "TrenchDirtImage::onPreFire": {
+          "dirt_arm": "playthread\\s*\\(\\s*2\\s*,\\s*armattack\\s*\\)"
+        },
+        "TrenchShovelImage::onFire": {
+          "dig": "TakeChunk\\s*\\(\\s*%obj\\.client\\s*,\\s*1\\s*\\)"
+        },
+        "AdminShovelImage::onFire": {
+          "admin_dig": "TakeChunk\\s*\\(\\s*%obj\\.client\\s*,\\s*1\\s*\\)"
+        },
+        "TrenchDirtImage::onFire": {
+          "place": "Parent::onFire[\\s\\S]*ShootChunk\\s*\\(\\s*%obj\\.client\\s*\\)"
+        },
+        "AdminDirtImage::onFire": {
+          "admin_place": "Parent::onFire[\\s\\S]*ShootChunk\\s*\\(\\s*%obj\\.client\\s*\\)"
+        },
+        "TakeChunk": {
+          "reach": "vectorScale\\s*\\(\\s*%eyeVector\\s*,\\s*(\\d+)\\s*\\)",
+          "take": "%obj\\.refill\\s*\\(\\s*%client\\s*,\\s*%take\\s*,\\s*%rayPos\\s*\\)",
+          "hop": "addVelocity\\s*\\(\\s*\"0 0 2\"\\s*\\)"
+        },
+        "ShootChunk": {
+          "shoot": "datablock\\s*=\\s*brick2xCubeDirtData[\\s\\S]*datablock\\s*=\\s*brick1x1DirtData"
+        },
+        "fxDtsBrick::Refill": {
+          "split": "fillPos[\\s\\S]*continueRefill"
+        },
+        "fillPos": {
+          "pieces": "brick32xCubeDirtData[\\s\\S]*brick1x1DirtData"
+        },
+        "continueRefill": {
+          "next": "\\.Refill\\s*\\("
+        },
+        "onTrenchDig": {
+          "room": "trenchDirt\\s*>=\\s*\\$TrenchDig::DirtCount"
+        },
+        "findSmallBrick": {
+          "nearest": "vectorDist\\s*\\(\\s*%Pos\\s*,\\s*%smallPos\\s*\\)"
+        },
+        "fxDtsBrick::checkBricks": {
+          "cubes": "%puzzleComplete\\s*>=\\s*7",
+          "flats": "%puzzleComplete\\s*>=\\s*3"
+        },
+        "finishRegrouping": {
+          "top": "brick64xCubeDirtData"
+        },
+        "serverCmdDumpDirt": {
+          "cube_dump": "brick4xCubeDirtData",
+          "flat_dump": "brick4x4DirtData"
+        },
+        "serverCmdSpeedDig": {
+          "speed_dig": "mountImage\\s*\\(\\s*AdminShovelImage"
+        },
+        "serverCmdSpeedPlace": {
+          "speed_place": "mountImage\\s*\\(\\s*AdminDirtImage"
+        },
+        "serverCmdInfiniteDigging": {
+          "infinite": "isInfiniteMiner"
+        },
+        "GameConnection::updateDirt": {
+          "print": "bottomPrint"
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/ports.rs trench_digging_port_writes_its_rules",
+        "crates/sim/tests/trench_digging.rs the_shovel_splits_dirt_down_to_the_piece_it_hit_and_the_dirt_puts_it_back",
+        "crates/sim/tests/trench_digging.rs flats_split_into_quarters_and_four_1x1s_become_a_2x2",
+        "crates/sim/tests/trench_digging.rs dirt_is_dug_under_the_minigame_and_trust_rules",
+        "crates/sim/tests/trench_digging.rs dumped_dirt_piles_up_as_4x_cubes_and_admins_get_endless_dirt",
+        "crates/sim/tests/trench_digging.rs no_jet_players_step_up_onto_a_2x_cube_while_it_is_on"
+      ]
+    },
+    {
+      "addon": "Weapon_ButterflyKnife",
+      "title": "Butterfly Knife",
+      "port": "weapon_butterflyknife",
+      "status": "verified",
+      "sha256": [
+        "4d8d0cc59be118094a2e6e39056b895e19447c05ed8d3a644fd7a56780a7afa4"
+      ],
+      "covers": {
+        "butterflyknifeImage::onCharge": {
+          "charge_arm": "playthread\\s*\\(\\s*2\\s*,\\s*\"?(\\w+)"
+        },
+        "butterflyknifeImage::onStopFire": {
+          "stop_arm": "playthread\\s*\\(\\s*2\\s*,\\s*\"?(\\w+)"
+        },
+        "butterflyknifeImage::onFire": {
+          "stab_arm": "playthread\\s*\\(\\s*2\\s*,\\s*\"?(\\w+)",
+          "parent": "parent::onfire\\s*\\("
+        },
+        "butterflyknifeImage::onFiretwo": {
+          "jab": "%projectile\\s*=\\s*(\\w+)\\s*;",
+          "one": "%shellcount\\s*=\\s*1\\s*;",
+          "spawns": "new\\s*\\(\\s*%this\\.projectiletype\\s*\\)"
+        }
+      },
+      "tests": [
+        "weapon_butterflyknife/checks.json",
+        "crates/addon-import/tests/ports.rs butterfly_knife_port_jabs_and_stabs",
+        "crates/weapons/tests/state_attacks.rs a_click_jabs_with_the_scripts_own_projectile",
+        "crates/addon-import/tests/import.rs real_steam_knife_and_grenade_ports"
+      ]
+    },
+    {
+      "addon": "Weapon_HEGrenade",
+      "title": "HE Grenade",
+      "port": "weapon_hegrenade",
+      "status": "verified",
+      "sha256": [
+        "1cae396e8616bf57e62dcfb4fda35490e93a772ee09979af45a3f7d4601dc351"
+      ],
+      "covers": {
+        "hegrenadeImage::onCharge": {
+          "charge_arm": "playthread\\s*\\(\\s*2\\s*,\\s*\"?(\\w+)"
+        },
+        "hegrenadeImage::onAbortCharge": {
+          "abort_arm": "playthread\\s*\\(\\s*2\\s*,\\s*\"?(\\w+)"
+        },
+        "hegrenadeImage::onFire": {
+          "throw_arm": "playthread\\s*\\(\\s*2\\s*,\\s*\"?(\\w+)",
+          "parent": "parent::onfire\\s*\\(",
+          "clears_tool": "%obj\\.tool\\[[^\\]]*\\]\\s*=\\s*0\\s*;",
+          "unuse": "servercmdunusetool\\s*\\("
+        },
+        "hegrenadeImage::onDone": {
+          "unmount": "unmountimage\\s*\\(\\s*%slot\\s*\\)"
+        },
+        "hegrenadeProjectile::onCollision": {
+          "bounce_sound": "serverplay3d\\s*\\(\\s*(\\w+)\\s*,"
+        },
+        "Armor::onCollision": {
+          "item": "hegrenadeitem",
+          "pickup": "%obj\\.pickup\\s*\\(\\s*%col\\s*\\)"
+        }
+      },
+      "tests": [
+        "weapon_hegrenade/checks.json",
+        "crates/addon-import/tests/ports.rs he_grenade_port_pulls_the_pin_then_throws_it_away",
+        "crates/weapons/tests/state_attacks.rs a_thrown_grenade_is_used_up_and_the_next_one_stays",
+        "crates/addon-import/tests/import.rs real_steam_knife_and_grenade_ports"
+      ]
+    },
+    {
+      "addon": "Weapon_Sniper_Rifle",
+      "title": "Sniper Rifle",
+      "port": "weapon_sniper_rifle",
+      "status": "verified",
+      "sha256": [
+        "ddf1f4dff31764c394bf812b5b67860a51547b78fc96e364fbce44df44b9b15a"
+      ],
+      "covers": {
+        "SniperRifleImage::onFire": {
+          "fire_arm": "playthread\\s*\\(\\s*2\\s*,\\s*\"?([a-z_][a-z0-9_]*)\"?\\s*\\)"
+        }
+      },
+      "tests": [
+        "weapon_sniper_rifle/checks.json",
+        "crates/addon-import/tests/ports.rs sniper_rifle_port_kicks_the_arm",
+        "crates/addon-import/tests/import.rs real_sniper_rifles"
+      ]
+    },
+    {
+      "addon": "Weapon_Sniper_Rifle_Updated",
+      "title": "Sniper Rifle Updated",
+      "port": "weapon_sniper_rifle_updated",
+      "status": "verified",
+      "sha256": [
+        "b9d6ee94a2f605bafba0e53aa79ee12b4d40cac61d81135c26896973693ed9e2"
+      ],
+      "covers": {
+        "SniperRifleAnimatedImage::onFire": {
+          "fire_arm": "playthread\\s*\\(\\s*2\\s*,\\s*\"?([a-z_][a-z0-9_]*)\"?\\s*\\)"
+        },
+        "SniperRifleAnimatedImage::onMount": {
+          "lhand": "hidenode\\s*\\(\\s*\"?lhand\"?\\s*\\)",
+          "rhand": "hidenode\\s*\\(\\s*\"?rhand\"?\\s*\\)",
+          "lhook": "hidenode\\s*\\(\\s*\"?lhook\"?\\s*\\)",
+          "rhook": "hidenode\\s*\\(\\s*\"?rhook\"?\\s*\\)",
+          "both_arms": "playthread\\s*\\(\\s*2\\s*,\\s*\"?armreadyboth\"?\\s*\\)"
+        },
+        "SniperRifleAnimatedImage::onUnMount": {
+          "restores": "applybodyparts\\s*\\(\\s*\\)"
+        }
+      },
+      "tests": [
+        "weapon_sniper_rifle_updated/checks.json",
+        "crates/addon-import/tests/ports.rs sniper_rifle_updated_port_draws_its_own_hands",
+        "crates/addon-import/tests/import.rs real_sniper_rifles"
+      ]
+    },
+    {
       "addon": "Tool_Duplicator",
       "title": "Duplicator (Duplorcator)",
       "port": "tool_duplicator",
@@ -440,77 +642,6 @@
         "crates/addon-import/tests/ports.rs new_duplicator_port_paints_wrenches_supercuts_fills_and_force_plants",
         "crates/addon-import/tests/ports.rs new_duplicator_port_pivots_plants_as_waits_and_lists",
         "crates/addon-import/tests/ports.rs new_duplicator_port_keys_and_admin_commands"
-      ]
-    },
-    {
-      "addon": "Weapon_ButterflyKnife",
-      "title": "Butterfly Knife",
-      "port": "weapon_butterflyknife",
-      "status": "verified",
-      "sha256": [
-        "4d8d0cc59be118094a2e6e39056b895e19447c05ed8d3a644fd7a56780a7afa4"
-      ],
-      "covers": {
-        "butterflyknifeImage::onCharge": {
-          "charge_arm": "playthread\\s*\\(\\s*2\\s*,\\s*\"?(\\w+)"
-        },
-        "butterflyknifeImage::onStopFire": {
-          "stop_arm": "playthread\\s*\\(\\s*2\\s*,\\s*\"?(\\w+)"
-        },
-        "butterflyknifeImage::onFire": {
-          "stab_arm": "playthread\\s*\\(\\s*2\\s*,\\s*\"?(\\w+)",
-          "parent": "parent::onfire\\s*\\("
-        },
-        "butterflyknifeImage::onFiretwo": {
-          "jab": "%projectile\\s*=\\s*(\\w+)\\s*;",
-          "one": "%shellcount\\s*=\\s*1\\s*;",
-          "spawns": "new\\s*\\(\\s*%this\\.projectiletype\\s*\\)"
-        }
-      },
-      "tests": [
-        "weapon_butterflyknife/checks.json",
-        "crates/addon-import/tests/ports.rs butterfly_knife_port_jabs_and_stabs",
-        "crates/weapons/tests/state_attacks.rs a_click_jabs_with_the_scripts_own_projectile",
-        "crates/addon-import/tests/import.rs real_steam_knife_and_grenade_ports"
-      ]
-    },
-    {
-      "addon": "Weapon_HEGrenade",
-      "title": "HE Grenade",
-      "port": "weapon_hegrenade",
-      "status": "verified",
-      "sha256": [
-        "1cae396e8616bf57e62dcfb4fda35490e93a772ee09979af45a3f7d4601dc351"
-      ],
-      "covers": {
-        "hegrenadeImage::onCharge": {
-          "charge_arm": "playthread\\s*\\(\\s*2\\s*,\\s*\"?(\\w+)"
-        },
-        "hegrenadeImage::onAbortCharge": {
-          "abort_arm": "playthread\\s*\\(\\s*2\\s*,\\s*\"?(\\w+)"
-        },
-        "hegrenadeImage::onFire": {
-          "throw_arm": "playthread\\s*\\(\\s*2\\s*,\\s*\"?(\\w+)",
-          "parent": "parent::onfire\\s*\\(",
-          "clears_tool": "%obj\\.tool\\[[^\\]]*\\]\\s*=\\s*0\\s*;",
-          "unuse": "servercmdunusetool\\s*\\("
-        },
-        "hegrenadeImage::onDone": {
-          "unmount": "unmountimage\\s*\\(\\s*%slot\\s*\\)"
-        },
-        "hegrenadeProjectile::onCollision": {
-          "bounce_sound": "serverplay3d\\s*\\(\\s*(\\w+)\\s*,"
-        },
-        "Armor::onCollision": {
-          "item": "hegrenadeitem",
-          "pickup": "%obj\\.pickup\\s*\\(\\s*%col\\s*\\)"
-        }
-      },
-      "tests": [
-        "weapon_hegrenade/checks.json",
-        "crates/addon-import/tests/ports.rs he_grenade_port_pulls_the_pin_then_throws_it_away",
-        "crates/weapons/tests/state_attacks.rs a_thrown_grenade_is_used_up_and_the_next_one_stays",
-        "crates/addon-import/tests/import.rs real_steam_knife_and_grenade_ports"
       ]
     }
   ]

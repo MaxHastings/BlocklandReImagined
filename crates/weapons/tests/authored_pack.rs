@@ -72,8 +72,8 @@ fn an_authored_pack_fills_in_what_it_leaves_out() {
     assert_eq!(pack.items[RIFLE].id, RIFLE);
     assert!(pack.items[RIFLE].can_drop);
     assert!(image.states.iter().all(|s| s.allow_change && s.wait));
-    assert_eq!(image.zoom.unwrap().fov, 20.0);
-    assert!(!image.zoom.unwrap().crosshair);
+    assert_eq!(image.zoom.as_ref().unwrap().fov, 20.0);
+    assert!(!image.zoom.as_ref().unwrap().crosshair);
     assert!(image.crosshair);
     let round = &pack.projectiles["sample-commando-rifle:projectile/round"];
     assert_eq!(round.gravity, 1.0);

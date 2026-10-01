@@ -309,35 +309,41 @@ pub struct PackageModels {
     gpu: Option<GpuScene>,
     instances: Option<GpuInstances>,
     count: usize,
+    /// The first-person player's own package body, which only other views
+    /// (mirrors, portals, the probe) and shadows draw.
+    own: Option<GpuInstances>,
+    own_count: usize,
 }
 impl PackageModels {
     pub fn clear(&mut self) {
         self.instances = None;
         self.count = 0;
+        self.own = None;
+        self.own_count = 0;
     }
     #[allow(clippy::too_many_arguments)]
     pub fn upload(
         &mut self,
         catalog: Option<&Catalog>,
         placements: Vec<Placement<'_>>,
+        own: Option<Placement<'_>>,
         renderer: &SceneRenderer,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         meshes: &BTreeMap<String, bri_content::brick::Brick>,
         materials: &crate::materials::BrickMaterials,
     ) -> Result<()> {
-        let Some(catalog) = catalog else {
+        let (Some(catalog), Some(mesh)) = (catalog, meshes.get(MODEL_CUBE)) else {
             self.count = 0;
-            return Ok(());
-        };
-        let Some(mesh) = meshes.get(MODEL_CUBE) else {
-            self.count = 0;
+            self.own_count = 0;
             return Ok(());
         };
         let cube = mesh.footprint_studs[0] as f32 * 0.5;
         let mut transforms = place_boxes(catalog, placements, cube);
         transforms.truncate(MAX_BOXES);
-        if self.gpu.is_none() && !transforms.is_empty() {
+        let mut own = place_boxes(catalog, own, cube);
+        own.truncate(MAX_BOXES);
+        if self.gpu.is_none() && !(transforms.is_empty() && own.is_empty()) {
             let world = PublicWorld {
                 name: "Package models".into(),
                 map_id: "package-models".into(),
@@ -354,11 +360,26 @@ impl PackageModels {
             instances.update(queue, &transforms)?;
         }
         self.count = transforms.len();
+        if self.own.is_none() && !own.is_empty() {
+            self.own = Some(GpuInstances::new(device, MAX_BOXES)?);
+        }
+        if let Some(instances) = &mut self.own {
+            instances.update(queue, &own)?;
+        }
+        self.own_count = own.len();
         Ok(())
     }
+    /// Every placed model but the first-person player's own body.
     pub fn draws(&self) -> Vec<(&GpuScene, &GpuInstances)> {
         match (&self.gpu, &self.instances) {
             (Some(gpu), Some(instances)) if self.count > 0 => vec![(gpu, instances)],
+            _ => Vec::new(),
+        }
+    }
+    /// The first-person player's own body: for every view but their eye's.
+    pub fn own_draws(&self) -> Vec<(&GpuScene, &GpuInstances)> {
+        match (&self.gpu, &self.own) {
+            (Some(gpu), Some(own)) if self.own_count > 0 => vec![(gpu, own)],
             _ => Vec::new(),
         }
     }

@@ -218,6 +218,9 @@ page as well.
 | `Weapon_Shotgun` (Sawn-off Shotgun) | `weapon_shotgun` | verified | `shotgunImage::onFire`: the pellets, their spread and the recoil, read from the copy's own script |
 | `Tool_Duplicator` (Plornt's Duplorcator) | `tool_duplicator` | partial | `/dup`, `/duplorcator`, `/duplicator`; `DuplorcatorImage::onFire` (reach, full trust, no public bricks, selection wait); `getStack` (up from the clicked brick, every way from the rest; the cyan highlight and how long it lasts); planting brick by brick with its count, one undo; `/saveDup` and `/loadDup` (v20 duplication files load too). Not ported: uploading a duplication from the player's computer |
 | `Tool_NewDuplicator` (Zeblote's New Duplicator) | `tool_newduplicator` | verified | its preference defaults and `$ND::Version`; `/newduplicator` and `/duplicator` down to `/d`; stack and box selection (direction, limited, box corners, its 64 and 1024-unit box limits, select wait); the mode images and their mount handling; plant mode with its planted, blocked, floating and missing-trust counts, the pivot ([Prev Seat]), `/PlantAs`, the plant wait and the big-undo question; clicking to move a selection; `/MirrorX`, `/MirrorY`, `/MirrorZ` (up and down), `/MirErrors`, `/Cut`, `/SaveDup` (with its overwrite warning), `/LoadDup`, `/AllDups`, `/DupVersion`, `/DupClients`, `/ClearDups`, `/DupHelp`; its keys (Ctrl C, V and X, Ctrl held to multiselect, Shift-Ctrl X and V, and every Send entry, under New Duplicator in Controls); force plant and `/ForcePlant`, fill colour (spray and FX cans on a selection), `/FillWrench`, `/SuperCut` and `/FillBricks` with their confirm questions, the selection box from a selection; `ndFormatMessage`. A selection holds at most 10,000 bricks, admins' too (below) |
+| `Weapon_Sniper_Rifle` (Kaje's Sniper Rifle) | `weapon_sniper_rifle` | verified | `SniperRifleImage::onFire`: the arm's kick then the shot (`scripts.onfire`), the animation's name read from the copy's script |
+| `Weapon_Sniper_Rifle_Updated` (Conan's Sniper Rifle Updated) | `weapon_sniper_rifle_updated` | verified | `onFire`'s `plant` then the shot (`scripts.onfire`); `onMount` hiding the holder's hands and hooks and raising both arms, and `onUnMount` putting them back (`hide_nodes`, `both_arms`) |
+| `Gamemode_TrenchDigging` (Trench Digging, Lilboarder) | `gamemode_trenchdigging` | verified | Every function of `TrenchDigging.cs` and the four images' `onPreFire`/`onFire`, as host rules (`rules/trench.rhai`): dig, put back, regroup, `/dumpdirt`, `/speeddig`, `/speedplace`, `/infinitedigging`; `server.cs` raising No Jet's `maxStepHeight` to 1.2 is `rules/archetypes/playernojet.json` |
 
 ### Why a selection stops at 10,000 bricks
 
@@ -253,6 +256,7 @@ ports/<port>/
   rules/
     behaviour.json
     <name>.rhai
+    archetypes/<name>.json   (optional) player archetypes, or adjustments to v20's
 ```
 
 | | The import | Its rules |
@@ -260,7 +264,7 @@ ports/<port>/
 | Folder | `addons/<ns>` | `addons/<ns>-rules` |
 | Id | `<ns>`, from the Add-On's folder name (`Tool_FillCan` is `tool_fillcan`) | `<ns>-rules` |
 | Side | `shared` | `server`: players never download it |
-| `package.json` | the importer's, with `"companions": ["<ns>-rules"]` | written for it: your `capabilities`, `behaviour` and `script` provides, and `dependencies` on the import at its version |
+| `package.json` | the importer's, with `"companions": ["<ns>-rules"]` | written for it: your `capabilities`, `behaviour`, `script` and `archetype` provides, and `dependencies` on the import at its version |
 
 Turning the import on in the Add-Ons screen turns its rules on after it, and
 turning it off turns them off. The importer checks the rules as the game
