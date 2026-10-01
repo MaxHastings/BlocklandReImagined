@@ -554,6 +554,7 @@ impl AvatarAssets {
             pending: None,
             defer_mesh: false,
             instanced: false,
+            straddle: None,
             instance: None,
             drawn_pose: None,
             vertices_dirty: true,
@@ -628,6 +629,9 @@ pub struct AvatarMesh {
     pub instanced: bool,
     /// The drawn body's transform, for `instanced` meshes.
     pub instance: Option<GpuInstances>,
+    /// The opening an `instanced` body is part way through: it draws cut
+    /// there, with the part through drawn at the partner.
+    pub straddle: Option<crate::portal_view::Straddle>,
     /// The pose last written into `data`, to skip rewriting an equal one.
     drawn_pose: Option<bri_content::animation::Pose>,
     /// `data` holds vertices not yet sent to the GPU.
@@ -914,6 +918,12 @@ impl AvatarMesh {
         Some(middle(&self.posed_nodes) - middle(&self.animated_nodes))
     }
     /// A sphere round the drawn body (centre, radius), for culling.
+    /// Where openings carry the body: the middle of a standing body of its
+    /// scale, as replicated bodies are carried.
+    pub fn middle(&self) -> Vec3 {
+        let scale = self.model_transform.x_axis.truncate().length();
+        self.model_transform.w_axis.truncate() + Vec3::Y * bri_sim::player::nominal_middle(scale)
+    }
     pub fn bounding_sphere(&self) -> (Vec3, f32) {
         let scale = self.model_transform.x_axis.truncate().length();
         let feet = self.model_transform.w_axis.truncate();
@@ -1462,15 +1472,22 @@ impl AvatarMesh {
         if self.instanced {
             let instance = match &mut self.instance {
                 Some(instance) => instance,
-                None => self.instance.insert(GpuInstances::new(device, 1)?),
+                None => self.instance.insert(GpuInstances::new(device, 2)?),
             };
-            instance.update(
-                queue,
-                &[bri_render::scene::SceneTransform {
-                    transform: self.model_transform,
-                    tint: [1.0; 4],
-                }],
-            )?;
+            let body = bri_render::scene::SceneTransform {
+                transform: self.model_transform,
+                tint: [1.0; 4],
+            };
+            match &self.straddle {
+                Some(s) => {
+                    let through = bri_render::scene::SceneTransform {
+                        transform: s.carried(self.model_transform),
+                        ..body
+                    };
+                    instance.update_clipped(queue, &[body, through], &[s.near, s.far])?
+                }
+                None => instance.update(queue, &[body])?,
+            };
         }
         Ok(())
     }

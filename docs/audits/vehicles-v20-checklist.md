@@ -161,6 +161,9 @@ player.cpp:1972 and :2523, and `Armor::onMount`. All of these are confirmed
 | Damage scaling, passenger protection | `VehicleDamageScale`, `protectPassengers*` | Matches | Confirmed: `vehicles.md` 18, 19 |
 | Explosions | Initial and final, `impulseVertical` | Matches | Confirmed: `vehicles.md` 20 |
 | Burn emitter on a wreck | `damageEmitter` | Matches | Confirmed: datablocks |
+| Wreck paint | `WheeledVehicleData::Damage` / `FlyingVehicleData::Damage` (core scripts 18821, 18910) `setNodeColor("ALL", "0 0 0 1")` at `maxDamage`; Tank's turret too | Fixed: black until the final explosion, every Wheeled/Flying/Ball vehicle, Add-Ons included | Confirmed: scripts; `vehicle-destruction.md` |
+| Wreck tires | Same functions swap in `emptyTire`/`emptySpring` | Fixed: no tires drawn on a wreck | Confirmed: scripts; `vehicle-destruction.md` |
+| Fire at 99% damage | `damageLevelTolerance` 0.99: the last 1% of health already burns | Differs (accepted): burns from destruction only, since health is not replicated | Confirmed: datablocks |
 | Ski wreck and tumble | `onWreck` | Matches | Inferred trigger (`vehicles.md` 13) |
 | Run over, click to flip | `minRunOverSpeed`, `Vehicle::onActivate` | Matches | Confirmed: `vehicles.md` 15, 16 |
 | Vehicle limits | 10 physics, 150 player | Matches | Confirmed: `server/defaults.cs` |

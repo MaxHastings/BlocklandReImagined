@@ -799,8 +799,10 @@ impl ItemAssets {
             shapes,
             textures,
         };
+        // Each stock item's pose is fitted once, however many icons take it.
+        let mut poses = BTreeMap::new();
         for (item, dir, file, spec) in std::mem::take(&mut added.icon_renders) {
-            if let Err(error) = assets.render_icon(&item, &dir, &spec) {
+            if let Err(error) = assets.render_icon(&item, &dir, &spec, &mut poses) {
                 assets.faults.push(crate::cosmetic::add_on_fault(
                     &dir,
                     &file,
@@ -812,8 +814,14 @@ impl ItemAssets {
     }
     /// Draw `item`'s icon from its model, posed like `spec.pose_like`'s
     /// icon (`crate::item_icon_render`), and show it in place of any other.
-    fn render_icon(&mut self, item: &str, dir: &str, spec: &crate::item_icon_render::Spec) -> Result<()> {
-        use crate::item_icon_render::{Mesh, render_like};
+    fn render_icon(
+        &mut self,
+        item: &str,
+        dir: &str,
+        spec: &crate::item_icon_render::Spec,
+        poses: &mut BTreeMap<String, Option<crate::item_icon_render::Pose>>,
+    ) -> Result<()> {
+        use crate::item_icon_render::{Mesh, fit_pose, render_posed};
         let mesh = |assets: &Self, model: &str| -> Result<Mesh> {
             ensure!(!model.is_empty(), "no model");
             Ok(Mesh::from_scene(&assets.model_scene(model, [1.; 4], Mat4::IDENTITY, None, 0.)?))
@@ -830,9 +838,18 @@ impl ItemAssets {
             .as_ref()
             .and_then(|i| self.textures.get(i))
             .with_context(|| format!("{} has no icon", spec.pose_like))?;
-        let reference = mesh(self, &stock.model).with_context(|| format!("{} has no model", spec.pose_like))?;
+        let pose = match poses.get(&spec.pose_like) {
+            Some(pose) => *pose,
+            None => {
+                let reference = mesh(self, &stock.model).with_context(|| format!("{} has no model", spec.pose_like))?;
+                let pose = fit_pose(&reference, icon).map(|(pose, _)| pose);
+                poses.insert(spec.pose_like.clone(), pose);
+                pose
+            }
+        }
+        .with_context(|| format!("{}'s model does not match its icon", spec.pose_like))?;
         let key = format!("{dir}/{item}.render").to_ascii_lowercase();
-        let image = render_like(spec, &model, (&reference, icon), &key)?;
+        let image = render_posed(spec, &model, &pose, icon, &key)?;
         self.textures.insert(key.clone(), image);
         self.presentation.items.get_mut(item).unwrap().icon = Some(key);
         Ok(())

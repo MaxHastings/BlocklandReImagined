@@ -284,6 +284,22 @@ fn link(fields: &mut Fields) -> Result<Option<Link>> {
         name: name.context("linkFaces needs linkName")?,
     }))
 }
+/// `stretchSize` (not in v20): the brick at another size than its
+/// `brickFile`, "width depth height" in studs, studs and plates.
+fn stretch(fields: &mut Fields) -> Result<Option<[u32; 3]>> {
+    take(fields, "stretchsize")?
+        .map(|value| {
+            let values: Vec<u32> = value
+                .split_whitespace()
+                .map(|v| v.parse().ok().filter(|v| *v > 0))
+                .collect::<Option<_>>()
+                .context("Invalid stretchSize")?;
+            <[u32; 3]>::try_from(values)
+                .ok()
+                .context("stretchSize needs three whole numbers (width depth height)")
+        })
+        .transpose()
+}
 /// `linkFrame`: one width for every edge, or "sides top bottom".
 fn frame_widths(value: &str) -> Result<Frame> {
     let values: Vec<f32> = value
@@ -412,6 +428,7 @@ pub fn read_with_parents(source: &str, virtual_directory: &str, parents: &str) -
         let special_kind = take(&mut fields, "specialbricktype")?;
         let reflection = reflection(&mut fields)?;
         let link = link(&mut fields)?;
+        let stretch = stretch(&mut fields)?;
         let other_properties = fields
             .into_iter()
             .map(|(k, v)| {
@@ -444,6 +461,7 @@ pub fn read_with_parents(source: &str, virtual_directory: &str, parents: &str) -
             other_properties,
             reflection,
             link,
+            stretch,
         });
     }
     ensure!(!bricks.is_empty(), "No static brick declarations found");
@@ -496,7 +514,7 @@ mod tests {
         let portal = read_at(
             r#"datablock fxDTSBrickData(Portal) {brickFile="./p.blb";uiName="Portal";
             linkFaces="north south";linkName="Portal";linkDepth=0.5;linkPass=1;
-            linkFrame="0.05 0.05 0.2";};"#,
+            linkFrame="0.05 0.05 0.2";stretchSize="8 1 30";};"#,
             "Add-Ons/Brick_Portal",
         )
         .unwrap();
@@ -514,8 +532,11 @@ mod tests {
                 }
             )
         );
+        assert_eq!(portal.bricks[0].stretch, Some([8, 1, 30]));
         assert!(portal.bricks[0].other_properties.is_empty());
         for bad in [
+            r#"stretchSize="8 1";"#,
+            r#"stretchSize="8 0 30";"#,
             r#"linkFaces="north";"#,
             r#"linkName="Portal";"#,
             r#"linkFaces="north";linkName="P";linkPass=maybe;"#,

@@ -30,6 +30,41 @@ pub enum Part {
 }
 
 impl CollisionBody {
+    /// This collision moved point by point through `map` (a stretched
+    /// shape's, [`crate::brick::Brick::stretching`]): boxes by their
+    /// corners, convex pieces by their points.
+    pub fn stretched(&self, id: &str, map: impl Fn(glam::Vec3) -> glam::Vec3) -> Self {
+        let parts = self
+            .parts
+            .iter()
+            .map(|part| match part {
+                Part::Box { center, size } => {
+                    let (c, h) = (glam::Vec3::from(*center), glam::Vec3::from(*size) * 0.5);
+                    let (lo, hi) = (map(c - h), map(c + h));
+                    Part::Box {
+                        center: ((lo + hi) * 0.5).to_array(),
+                        size: (hi - lo).to_array(),
+                    }
+                }
+                Part::Convex {
+                    label,
+                    vertices,
+                    triangles,
+                } => Part::Convex {
+                    label: label.clone(),
+                    vertices: vertices
+                        .iter()
+                        .map(|v| map(glam::Vec3::from(*v)).to_array())
+                        .collect(),
+                    triangles: triangles.clone(),
+                },
+            })
+            .collect();
+        Self {
+            id: id.into(),
+            parts,
+        }
+    }
     pub fn validate(&self) -> Result<()> {
         ensure!(
             !self.id.is_empty() && !self.parts.is_empty(),
