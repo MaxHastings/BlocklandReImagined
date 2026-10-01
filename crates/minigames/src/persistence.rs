@@ -123,8 +123,8 @@ impl MinigamesWorld {
                 || g.id.0 >= s.next_game
                 || g.color >= 10
                 || !colors.insert(g.color)
-                || g.members.is_empty()
-                || !g.members.contains(&g.owner)
+                || (!g.is_server() && (g.members.is_empty() || !g.members.contains(&g.owner)))
+                || (g.is_server() && world.games.values().any(MiniGame::is_server))
                 || g.round == 0
                 || g.members
                     .iter()

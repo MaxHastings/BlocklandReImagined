@@ -325,7 +325,7 @@ impl Setup {
         session.set_tool_catalog(catalog)?;
         session.set_weapon_pack(weapons.pack.clone())?;
         session.set_item_bounds(item_physics.bounds)?;
-        session.set_vehicle_pack(paths.vehicle_pack()?)?;
+        session.set_vehicle_pack(paths.vehicle_pack()?, paths.bot_kinds()?)?;
         let mut loadout = ToolInventory::default();
         loadout.slots[0] = Some(GUN.into());
         loadout.slots[1] = Some(ROCKETS.into());

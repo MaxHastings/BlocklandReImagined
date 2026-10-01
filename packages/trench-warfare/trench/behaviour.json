@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "script": "trench.rhai",
+  "commands": [
+    { "name": "dig", "cooldown_ticks": 24 },
+    { "name": "place", "cooldown_ticks": 24 },
+    { "name": "givedirt", "args": ["int", "string"], "cooldown_ticks": 60 },
+    { "name": "teams", "cooldown_ticks": 120, "while_dead": true },
+    { "name": "newround", "admin": true, "cooldown_ticks": 120, "while_dead": true }
+  ],
+  "state": {
+    "player": {
+      "team": { "default": "", "visible": "everyone", "persist": false },
+      "dirt": { "default": 0, "visible": "owner", "persist": false },
+      "aim": { "default": "", "persist": false }
+    },
+    "global": {
+      "phase": { "default": "dig", "visible": "everyone", "persist": false },
+      "left": { "default": 45, "persist": false },
+      "status": { "default": "Dig in!", "visible": "everyone", "persist": false },
+      "round": { "default": 1, "visible": "everyone", "persist": false },
+      "red": { "default": 0, "visible": "everyone", "persist": false },
+      "blue": { "default": 0, "visible": "everyone", "persist": false },
+      "red_rounds": { "default": 0, "visible": "everyone", "persist": false },
+      "blue_rounds": { "default": 0, "visible": "everyone", "persist": false }
+    }
+  },
+  "on_join": true,
+  "on_spawn": true,
+  "on_death": true,
+  "on_damage": true,
+  "tick_interval": 6
+}

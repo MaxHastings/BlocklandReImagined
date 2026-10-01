@@ -25,6 +25,8 @@ pub enum AdminFeature {
     /// Make players Admin or Super Admin, or take it away (the host and
     /// Super Admins).
     Ranks,
+    /// The Environment window: sun, sky, fog and the day/night cycle.
+    Environment,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdminPlayer {
@@ -349,6 +351,10 @@ pub enum AdminAction {
     ForgetRank {
         key: String,
     },
+    /// Replace the environment settings (the Environment window's Apply).
+    SetEnvironment {
+        settings: Box<bri_content::atmosphere::Settings>,
+    },
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum AdminUpdate {
@@ -457,6 +463,12 @@ impl AdminModel {
             AdminAction::SetRole { target, .. } => (AdminFeature::Ranks, Some(*target)),
             AdminAction::RequestRanks | AdminAction::ForgetRank { .. } => {
                 (AdminFeature::Ranks, None)
+            }
+            AdminAction::SetEnvironment { settings } => {
+                if settings.validate().is_err() {
+                    return false;
+                }
+                (AdminFeature::Environment, None)
             }
         };
         if !self.available(f) {

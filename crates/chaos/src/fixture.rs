@@ -442,8 +442,8 @@ pub fn synthetic() -> Result<Fixture> {
     loadout.slots[4] = Some("chaos:weapon/gun".into());
     session.set_spawn_loadout(loadout)?;
     let (vehicles, mut kinds) = synthetic_vehicles()?;
-    session.set_vehicle_pack(vehicles)?;
-    session.set_bot_kinds(
+    session.set_vehicle_pack(
+        vehicles,
         bri_sim::bot_kind::BotPack::from_json(include_bytes!(
             "../../../packages/blockhead_bot/assets/bots.json"
         ))?
