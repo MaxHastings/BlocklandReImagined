@@ -9,6 +9,7 @@ pub mod host_setup;
 pub mod discovery;
 pub mod impair;
 pub mod lag;
+pub mod map_content;
 pub mod packages;
 pub mod invite;
 pub mod natpmp;

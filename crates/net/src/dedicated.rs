@@ -2,16 +2,12 @@
 //! `bri-server` and headless tests so both host the same game.
 use crate::{
     content_identity,
-    host_setup::{HostSetup, HostedAddOns, MapSession, SessionContent},
+    host_setup::{HostSetup, HostedAddOns, SessionContent},
+    map_content::MapContent,
 };
 use anyhow::{Context, Result};
 use bri_package::{environment::Environment, packages::PackageSet};
-use bri_sim::{
-    definitions::Definitions,
-    map::NativeMap,
-    session::{Session, ToolCatalog},
-    simulation::Simulation,
-};
+use bri_sim::session::{Session, ToolCatalog};
 use glam::Vec3;
 use std::path::Path;
 
@@ -74,13 +70,11 @@ pub fn load(content_root: &Path, world: bri_world::World) -> Result<Dedicated> {
 pub fn load_packages(
     content_root: &Path,
     packages: &PackageSet,
-    mut world: bri_world::World,
+    world: bri_world::World,
 ) -> Result<Dedicated> {
     packages.validate().into_result()?;
     let role = |role: &str| packages.role_dir(content_root, role);
     let catalog_dir = role("brick_catalog")?;
-    let geometry_dir = role("geometry")?;
-    let map_bundle_dir = role("map_bundle")?;
     let materials_dir = role("brick_materials")?;
     let effects_dir = role("effects")?;
     let avatar_dir = role("avatar")?;
@@ -122,21 +116,10 @@ pub fn load_packages(
         weapons.light_choices.iter().map(|(id, _)| id.clone()),
     )?;
     let tool_summary = serde_json::json!({"items":tools.items.len(),"prints":tools.prints.len(),"printable_definitions":tools.brick_print_aspects.len(),"lights":tools.lights.len(),"emitters":tools.emitters.len(),"default_print":tools.default_print});
-    let unresolved_items = weapons.resolve_world_items(&mut world)?;
-    let map = NativeMap::load(&map_bundle_dir, &world.map_id)?;
-    let anchors = map.spawn_anchors()?;
-    let mut simulation = Simulation::new(
-        world,
-        Definitions::load_with(&catalog_dir, &geometry_dir, &brick_extras)?,
-        map.colliders,
-    )?;
-    simulation.attach_terrain(map.terrain, anchors)?;
-    simulation.waters = map.waters;
-    if let Some(skipped) = bri_sim::simulation::unloaded_summary(&simulation.state().unloaded) {
-        eprintln!("{skipped}");
-    }
-    let spawn_points =
-        bri_sim::spawn::candidates(&simulation.physics, &map.scene, &Default::default())?;
+    let maps = MapContent::from_root(content_root, packages, weapons.clone())?;
+    // Change Map paints new worlds with the colors this one starts with.
+    let palette = world.palette.clone();
+    let map = maps.load(world)?;
     let merge_notes = weapons
         .pack
         .diagnostics
@@ -188,7 +171,7 @@ pub fn load_packages(
             event_catalog: bri_events::Catalog::load(events_dir.join("catalog.json"))?,
             event_sounds: audio_event_sounds(&audio_dir)?,
         },
-        maps: Vec::new(),
+        maps: maps.maps()?,
         settings: None,
         passwords: None,
         add_ons: (!server.packages.is_empty()).then(|| HostedAddOns {
@@ -196,20 +179,14 @@ pub fn load_packages(
             mode: None,
             saves: None,
         }),
-        load_map: None,
+        load_map: Some(maps.loader(palette)),
         copies: None,
         game_version: None,
     };
-    let hosted = setup.hosted(&simulation.state().map_id)?;
-    let (session, spawn_points) = setup.session(
-        &hosted,
-        MapSession {
-            simulation,
-            spawn_points,
-            breakables: map.breakables,
-            tutorial: None,
-        },
-    )?;
+    let hosted = setup.hosted(&map.simulation.state().map_id)?;
+    let unresolved_items = map.unresolved_items;
+    let pending_objects = map.pending_objects.clone();
+    let (session, spawn_points) = setup.session(&hosted, map.into_session())?;
     Ok(Dedicated {
         session,
         setup: std::sync::Arc::new(setup),
@@ -217,7 +194,7 @@ pub fn load_packages(
         spawn_points,
         tool_summary,
         unresolved_items,
-        pending_objects: map.pending_objects,
+        pending_objects,
         merge_notes,
     })
 }
@@ -292,87 +269,41 @@ impl ServerConfig {
     }
 }
 
-/// A new empty world on the base map `name`: its full map id or the map's
-/// short name (`slate`, `bedroom`, `slatedesert`), with the game's default
-/// paint palette, like choosing a map in Start Game.
+/// A new empty world on the base map `name` (`slate`, or a full map id),
+/// with the game's default paint palette, like choosing a map in Start Game.
 pub fn blank_world(content_root: &Path, name: &str) -> Result<bri_world::World> {
     let packages = PackageSet::load_root(content_root)?;
-    blank_world_in(
+    crate::map_content::blank_world(
         &packages.role_dir(content_root, "map_bundle")?,
-        &packages.role_dir(content_root, "ui_pack")?,
+        crate::map_content::ui_palette(&packages.role_dir(content_root, "ui_pack")?)?,
         name,
     )
-}
-
-fn blank_world_in(map_bundle: &Path, ui_pack: &Path, name: &str) -> Result<bri_world::World> {
-    let bundle: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(map_bundle.join("bundle.json"))?)?;
-    let ids: Vec<&str> = bundle["maps"]
-        .as_array()
-        .context("Missing native map index")?
-        .iter()
-        .filter_map(|m| m["id"].as_str())
-        .collect();
-    let short = |id: &str| {
-        let file = id.rsplit('/').next().unwrap_or(id);
-        file.strip_suffix(".mis")
-            .unwrap_or(file)
-            .to_ascii_lowercase()
-    };
-    let wanted = name.to_ascii_lowercase().replace(['_', ' '], "");
-    let map_id = ids
-        .iter()
-        .find(|id| id.eq_ignore_ascii_case(name) || short(id) == wanted)
-        .with_context(|| {
-            let mut names: Vec<_> = ids.iter().map(|id| short(id)).collect();
-            names.sort();
-            format!("Unknown map `{name}`. Maps: {}", names.join(", "))
-        })?;
-    let ui: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(ui_pack.join("ui-pack.json"))?)?;
-    let palette: Vec<[f32; 4]> = ui["data"]["brick_colorset"]
-        .as_array()
-        .context("Missing default paint palette")?
-        .iter()
-        .map(|division| serde_json::from_value::<Vec<[f32; 4]>>(division["colors"].clone()))
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .flatten()
-        .collect();
-    let world = bri_world::World::new(short(map_id), map_id.to_string(), palette);
-    world.validate()?;
-    Ok(world)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// The Admin menu's Change Map works on a dedicated server as it does
+    /// in a game the client hosts: it lists the maps and loads one.
     #[test]
-    fn a_map_name_starts_an_empty_world_with_the_default_palette() -> Result<()> {
-        let dir = tempfile::tempdir()?;
-        let (maps, ui) = (dir.path().join("maps"), dir.path().join("ui"));
-        std::fs::create_dir_all(&maps)?;
-        std::fs::create_dir_all(&ui)?;
-        std::fs::write(
-            maps.join("bundle.json"),
-            r#"{"maps":[{"id":"v20/add-ons/map_slate/slate.mis"},{"id":"v20/add-ons/map_slate_desert/slatedesert.mis"}]}"#,
+    fn a_dedicated_server_changes_maps() -> Result<()> {
+        use bri_sim::map::LOADABLE_MAPS;
+        let scratch = bri_content::testing::ScratchDir::new("dedicated-change-map")?;
+        let (slate, bedroom) = (LOADABLE_MAPS[3], LOADABLE_MAPS[0]);
+        crate::testing::write_root(scratch.path(), &[slate, bedroom])?;
+        let set = PackageSet::load_root(scratch.path())?;
+        let world = crate::map_content::blank_world(
+            &set.role_dir(scratch.path(), "map_bundle")?,
+            vec![[1.0; 4]],
+            "slate",
         )?;
-        std::fs::write(
-            ui.join("ui-pack.json"),
-            r#"{"data":{"brick_colorset":[{"name":"A","colors":[[1,0,0,1],[0,1,0,1]]},{"name":"B","colors":[[0,0,1,1]]}]}}"#,
-        )?;
-        let world = blank_world_in(&maps, &ui, "Slate")?;
-        assert_eq!(world.map_id, "v20/add-ons/map_slate/slate.mis");
-        assert!(world.bricks.is_empty());
-        assert_eq!(world.palette.len(), 3);
-        let desert = blank_world_in(&maps, &ui, "slate_desert")?;
-        assert_eq!(
-            desert.map_id,
-            "v20/add-ons/map_slate_desert/slatedesert.mis"
-        );
-        let unknown = blank_world_in(&maps, &ui, "moon").unwrap_err().to_string();
-        assert!(unknown.contains("slate, slatedesert"), "{unknown}");
+        let host = load_packages(scratch.path(), &set, world)?;
+        let listed: Vec<_> = host.setup.maps.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(listed, [slate, bedroom]);
+        let next = crate::server::MapHost::load(&*host.setup, bedroom)?;
+        assert_eq!(next.simulation().state().map_id, bedroom);
+        assert_eq!(next.simulation().state().palette, vec![[1.0; 4]]);
         Ok(())
     }
 
