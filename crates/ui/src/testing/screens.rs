@@ -169,7 +169,9 @@ fn window_of(layout: &mut Control) -> &mut Control {
 /// Config and Music Files), Join Server, Connect to IP, the escape menu,
 /// Options, Default Controls, About, Help, the colour warning, chat
 /// input, Avatar, Choose Name, the brick selector, the console, the
-/// mini-game list and editor, the wrench dialogs and the admin dialogs;
+/// mini-game list and editor, the wrench dialogs, the admin dialogs (with
+/// the brick manager), the trust invitation and the play screen's print
+/// dialogs;
 /// the help pages' fonts, the chat profiles and [`event_tables`]. Layouts
 /// `data` already has are replaced.
 pub fn add_screens(data: &mut UiPack) {
@@ -221,6 +223,9 @@ pub fn add_screens(data: &mut UiPack) {
         ("adminGui", admin()),
         ("addBanGui", add_ban()),
         ("unBanGui", unban()),
+        ("PlayGui", play()),
+        ("BrickManGui", brick_manager()),
+        ("TrustInviteGui", trust_invite()),
         ("changeMapGui", change_map()),
         ("wrenchEventsDlg", wrench_events()),
     ] {
@@ -237,23 +242,35 @@ fn main_menu() -> Control {
         crate::screens::text("GuiTextProfile", Rect::new(440, 455, 190, 18), ""),
         "MM_Version",
     )];
-    for (i, (text, command)) in [
-        ("Start Game", "canvas.pushDialog(startMissionGui);"),
-        ("Join Game", "canvas.pushDialog(JoinServerGui);"),
-        ("Avatar", "canvas.pushDialog(AvatarGui);"),
-        ("Options", "canvas.pushDialog(optionsDlg);"),
-        ("Tutorial", "MM_Tutorial();"),
-        ("Credits", "getHelp(\"1. Credits\");"),
-        ("About", "canvas.pushDialog(aboutDlg);"),
-        ("Quit", "quit();"),
+    // Each button carries the stock control name (its hover note keys on it).
+    for (i, (name, text, command)) in [
+        (
+            "MM_StartButton",
+            "Start Game",
+            "canvas.pushDialog(startMissionGui);",
+        ),
+        (
+            "MM_JoinButton",
+            "Join Game",
+            "canvas.pushDialog(JoinServerGui);",
+        ),
+        ("MM_PlayerButton", "Avatar", "canvas.pushDialog(AvatarGui);"),
+        (
+            "MM_OptionsButton",
+            "Options",
+            "canvas.pushDialog(optionsDlg);",
+        ),
+        ("MM_TutorialButton", "Tutorial", "MM_Tutorial();"),
+        ("MM_CreditsButton", "Credits", "getHelp(\"1. Credits\");"),
+        ("MM_AboutButton", "About", "canvas.pushDialog(aboutDlg);"),
+        ("MM_QuitButton", "Quit", "quit();"),
     ]
     .into_iter()
     .enumerate()
     {
-        children.push(text_button(
-            Rect::new(20, 120 + i as i32 * 36, 140, 30),
-            text,
-            command,
+        children.push(named(
+            text_button(Rect::new(20, 120 + i as i32 * 36, 140, 30), text, command),
+            name,
         ));
     }
     screen(children)
@@ -583,7 +600,7 @@ fn default_controls() -> Control {
     children.push(text_button(
         Rect::new(200, 130, 90, 28),
         "OK",
-        "defaultControlsGui.apply();",
+        "DefaultControlsGui.apply();",
     ));
     dialog(
         "DefaultControls_Window",
@@ -1286,6 +1303,95 @@ fn add_ban() -> Control {
             ),
             text_button(Rect::new(235, 128, 90, 28), "Ban", "addBanGui.ban();"),
         ],
+    )
+}
+
+/// The play screen: only the center and bottom print dialogs (hidden until
+/// a print arrives), each holding its ML text.
+fn play() -> Control {
+    let print = |dialog: &str, text: &str, r: Rect| {
+        let mut d = named(ctrl("GuiControl", "GuiDefaultProfile", r), dialog);
+        d.visible = false;
+        d.children.push(ml(text, Rect::new(10, 10, r.w - 20, 20)));
+        d
+    };
+    screen(vec![
+        print(
+            "centerPrintDlg",
+            "CenterPrintText",
+            Rect::new(80, 150, 480, 100),
+        ),
+        print(
+            "bottomPrintDlg",
+            "BottomPrintText",
+            Rect::new(80, 400, 480, 60),
+        ),
+    ])
+}
+
+/// Admin's brick manager: the owners list and its Clear, Highlight and
+/// Clear All buttons.
+fn brick_manager() -> Control {
+    let mut children = vec![scrolled_list(
+        "BrickMan_list",
+        Rect::new(10, 30, 560, 290),
+        "GuiTextListProfile",
+    )];
+    for (i, (text, command)) in [
+        ("Clear", "BrickManGui.clickClear();"),
+        ("Highlight", "BrickManGui.clickHilight();"),
+        ("Clear All", "BrickManGui.clickClearAll();"),
+        ("Close", "canvas.popDialog(BrickManGui);"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        children.push(text_button(
+            Rect::new(10 + i as i32 * 110, 330, 100, 28),
+            text,
+            command,
+        ));
+    }
+    dialog(
+        "BrickMan_Window",
+        "Bricks",
+        Rect::new(30, 40, 580, 370),
+        children,
+    )
+}
+
+/// A trust invitation: who asks, and Accept, Reject and Ignore.
+fn trust_invite() -> Control {
+    let mut children = vec![];
+    for (i, name) in ["TI_Name", "TI_BL_ID"].into_iter().enumerate() {
+        children.push(named(
+            crate::screens::text(
+                "GuiTextProfile",
+                Rect::new(10, 30 + i as i32 * 24, 320, 18),
+                "",
+            ),
+            name,
+        ));
+    }
+    for (i, (text, command)) in [
+        ("Accept", "TrustInviteGui.clickAccept();"),
+        ("Reject", "TrustInviteGui.clickReject();"),
+        ("Ignore", "TrustInviteGui.clickIgnore();"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        children.push(text_button(
+            Rect::new(10 + i as i32 * 110, 90, 100, 28),
+            text,
+            command,
+        ));
+    }
+    dialog(
+        "TI_Window",
+        "Trust Invitation",
+        Rect::new(150, 150, 340, 130),
+        children,
     )
 }
 

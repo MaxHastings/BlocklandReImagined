@@ -1,5 +1,7 @@
-//! Explicit local-content integration probe. Never creates a window or OS input.
-//! Run: cargo test -p bri-client --test app_flow --release -- --ignored --nocapture
+//! Explicit local-content integration probes. The weather probe runs on the
+//! made-up content root too; the ignored variants run on the generated v20
+//! content (`--release -- --ignored --nocapture`, BRI_CONTENT or
+//! content/). Never creates a window or OS input.
 use anyhow::{Context, Result, bail, ensure};
 use bri_client::{
     app::App,
@@ -16,6 +18,12 @@ use std::{
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+
+#[macro_use]
+mod support;
+use support::content_root::{ContentRoot, RAIN};
+
+synthetic_and_content!(ContentRoot: native_weather_map_settings_render_and_disconnect);
 
 const SIZE: (u32, u32) = (960, 720);
 const BEDROOM: &str = "v20/add-ons/map_bedroom/bedroom.mis";
@@ -190,29 +198,34 @@ fn capture(
     Ok(pixels)
 }
 
-#[test]
-#[ignore = "native Storm/Slopes maps, loopback host and offscreen GPU; no window or audio device"]
-fn native_weather_map_settings_render_and_disconnect() -> Result<()> {
-    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let artifact = workspace.join("artifacts/native-client-weather");
-    let stamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-    let state = artifact.join(format!("state-{stamp}"));
-    std::fs::create_dir_all(&state)?;
-    let mut app = App::load(&workspace.join("content"), &state, SIZE)?;
+/// Rain on its map, the drops counted and drawn, turned off and on in the
+/// settings and cleared on disconnect, and none on a map without weather:
+/// v20's Storm and Slopes (with their authored drop counts) and Bedroom, or
+/// the made-up root's rainy map ([`RAIN`]) and its first room.
+fn native_weather_map_settings_render_and_disconnect(f: &ContentRoot) -> Result<()> {
+    let artifact = f.out("native-client-weather")?;
+    let state_dir = f.state()?;
+    let state = state_dir.path();
+    let mut app = App::load(&f.root, state, SIZE)?;
     app.ui.core.pop(ScreenId::DefaultControls);
-    let gpu = Headless::new()?;
+    let gpu = support::gpu::turn()?;
     let mut ui_renderer = UiRenderer::new(&gpu.device, &gpu.queue);
     app.gpu_ready(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm)?;
     let mut reports = vec![];
-    for (name, map, drops) in [
-        (
-            "storm",
-            "v20/add-ons/map_slate_storm_revised/slatestormrevised.mis",
-            5000,
-        ),
-        ("slopes", "v20/add-ons/map_slopes/slopes.mis", 500),
-        ("bedroom", BEDROOM, 0),
-    ] {
+    let maps = if f.content {
+        vec![
+            (
+                "storm",
+                "v20/add-ons/map_slate_storm_revised/slatestormrevised.mis",
+                5000,
+            ),
+            ("slopes", "v20/add-ons/map_slopes/slopes.mis", 500),
+            ("bedroom", BEDROOM, 0),
+        ]
+    } else {
+        vec![("rain", RAIN.0, RAIN.1 as usize), ("dry", f.map.0.as_str(), 0)]
+    };
+    for (name, map, drops) in maps {
         action(
             &mut app,
             UiAction::HostGame {

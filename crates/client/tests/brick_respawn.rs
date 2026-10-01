@@ -2,8 +2,10 @@
 //! back after 30 s on every screen: the host's own and a joiner's. Each
 //! screen is the app's own client pipeline (the network worker, its world
 //! log, the brick query/collision mirror and the render chunks), fed over
-//! real loopback QUIC. No window, GPU or OS input. See
-//! docs/audits/brick-damage.md.
+//! real loopback QUIC. Runs on `bri_sim::testing`'s bricks and
+//! `bri_weapons::testing`'s rocket; the ignored variant on the generated v20
+//! catalog and weapons pack. About 35 s of real time (the 30 s return). No
+//! window, GPU or OS input. See docs/audits/brick-damage.md.
 use anyhow::{Context, Result, bail, ensure};
 use bri_client::{
     building::Building,
@@ -12,7 +14,6 @@ use bri_client::{
 };
 use bri_net::{client::Client, protocol::PublicWorld, server};
 use bri_sim::{
-    definitions::Definitions,
     player::{MoveInput, PlayerState, PlayerTuning},
     presentation::CueKind,
     session::{Command, Reply, Session, ToolInventory},
@@ -23,40 +24,34 @@ use glam::Vec3;
 use rapier3d::prelude::*;
 use std::{
     collections::BTreeMap,
-    path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, Instant},
 };
 
-const BRICK: &str = "v20/brick/brick2x2data";
-const ROCKET: &str = "v20.weapon.rocketlauncheritem";
+#[macro_use]
+mod support;
+use support::host_content::HostContent;
 
-fn content() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content")
-}
-fn definitions() -> Result<Definitions> {
-    Definitions::load(
-        &content().join("stock-catalog-004"),
-        &content().join("maps-pass-008"),
-    )
-}
+synthetic_and_content!(
+    HostContent: rocketed_free_build_bricks_vanish_and_come_back_on_host_and_joiner_screens
+);
+
 fn ground() -> Vec<ColliderBuilder> {
     vec![ColliderBuilder::cuboid(200.0, 0.5, 200.0).translation(Vector::new(0.0, -0.5, 0.0))]
 }
 
 /// The app's Start Game host: single player and LAN (`$Server::LAN`), and
 /// a spawn loadout that carries the rocket launcher.
-fn host() -> Result<server::ServerHandle> {
+fn host(f: &HostContent) -> Result<server::ServerHandle> {
     let mut session = Session::new(Simulation::new(
         World::new("Free build".into(), "fixture".into(), vec![[1.0; 4]; 2]),
-        definitions()?,
+        f.definitions()?,
         ground(),
     )?);
     session.set_lan_host(true);
-    let pack = std::fs::read(content().join("weapons-pack-009/weapons.json"))?;
-    session.set_weapon_pack(bri_weapons::Pack::from_json(&pack)?)?;
+    session.set_weapon_pack(f.weapons()?)?;
     let mut loadout = ToolInventory::default();
-    loadout.slots[3] = Some(ROCKET.into());
+    loadout.slots[3] = Some(f.rocket.clone());
     session.set_spawn_loadout(loadout)?;
     server::start(
         session,
@@ -86,7 +81,7 @@ struct Screen {
 }
 
 impl Screen {
-    async fn open(name: &'static str, connected: Connected) -> Result<Self> {
+    async fn open(f: &HostContent, name: &'static str, connected: Connected) -> Result<Self> {
         let mut worker = Worker::start(
             &tokio::runtime::Handle::current(),
             async move { Ok(connected) },
@@ -96,7 +91,8 @@ impl Screen {
             Some(Event::Failed(e)) => bail!("{name}: {e}"),
             _ => bail!("{name}: no ready event"),
         }
-        let meshes = definitions()?
+        let meshes = f
+            .definitions()?
             .entries
             .into_iter()
             .map(|(id, d)| (id, d.mesh))
@@ -104,7 +100,7 @@ impl Screen {
         Ok(Self {
             name,
             worker,
-            building: Building::new(definitions()?, ground())?,
+            building: Building::new(f.definitions()?, ground())?,
             chunks: ChunkedWorld::default(),
             meshes,
             palette: BrickPalette::development(),
@@ -219,9 +215,14 @@ async fn reply(screens: &mut [&mut Screen; 2], who: usize, request: u64) -> Resu
     }
 }
 
-async fn plant(screens: &mut [&mut Screen; 2], who: usize, at: Vec3) -> Result<BrickId> {
+async fn plant(
+    f: &HostContent,
+    screens: &mut [&mut Screen; 2],
+    who: usize,
+    at: Vec3,
+) -> Result<BrickId> {
     let request = screens[who].request(Command::Plant {
-        definition: BRICK.into(),
+        definition: f.brick.clone(),
         position: at.to_array(),
         quarter_turns: 0,
         color: 1,
@@ -274,15 +275,23 @@ async fn fire(screens: &mut [&mut Screen; 2], who: usize, target: Vec3) -> Resul
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires the converted stock catalog and native weapons pack; ~35 s of real time"]
-async fn rocketed_free_build_bricks_vanish_and_come_back_on_host_and_joiner_screens() -> Result<()>
-{
-    let server = host()?;
+fn rocketed_free_build_bricks_vanish_and_come_back_on_host_and_joiner_screens(
+    f: &HostContent,
+) -> Result<()> {
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()?
+        .block_on(knocked_out_and_back(f))
+}
+
+async fn knocked_out_and_back(f: &HostContent) -> Result<()> {
+    let server = host(f)?;
     let (address, certificate) = (server.address, server.certificate.clone());
     // The host plays through its own loopback client, as Start Game does.
     let client = Client::connect(address, &certificate, "Host".into(), Vec::new(), None).await?;
     let mut host = Screen::open(
+        f,
         "host",
         Connected {
             client,
@@ -294,6 +303,7 @@ async fn rocketed_free_build_bricks_vanish_and_come_back_on_host_and_joiner_scre
     .await?;
     let client = Client::connect(address, &certificate, "Joiner".into(), Vec::new(), None).await?;
     let mut joiner = Screen::open(
+        f,
         "joiner",
         Connected {
             client,
@@ -309,8 +319,8 @@ async fn rocketed_free_build_bricks_vanish_and_come_back_on_host_and_joiner_scre
     // that one rocket reaches only its own. No minigame exists.
     let spots = [Vec3::new(-40.0, 0.3, -10.0), Vec3::new(-30.0, 0.3, -10.0)];
     let bricks = [
-        plant(screens, 0, spots[0]).await?,
-        plant(screens, 1, spots[1]).await?,
+        plant(f, screens, 0, spots[0]).await?,
+        plant(f, screens, 1, spots[1]).await?,
     ];
     let everywhere = |s: &Screen, drawn: bool, solid: bool| {
         bricks
@@ -351,7 +361,7 @@ async fn rocketed_free_build_bricks_vanish_and_come_back_on_host_and_joiner_scre
             // Knocked out, not deleted: the replica still holds it.
             let b = view.world.bricks.get(&id).context("brick deleted")?;
             ensure!(!b.visible && !b.colliding && !b.raycast);
-            ensure!(b.definition == ContentRef::Resolved(BRICK.into()));
+            ensure!(b.definition == ContentRef::Resolved(f.brick.clone()));
         }
     }
 

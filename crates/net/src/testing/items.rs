@@ -195,10 +195,17 @@ fn shapes(pack: &bri_weapons::Pack) -> BTreeMap<String, Shape> {
             ),
             // A blaster: a long grip down from the hand and a barrel
             // out front, its box taller than a brick, so a player who
-            // walks into it beside a brick touches it.
+            // walks into it beside a brick touches it. Shots leave the
+            // barrel's mouth (`muzzlePoint`) and casings its top
+            // (`ejectPoint`).
             GUN_MODEL => rigid_shape(
                 &key,
-                &[("root", None, [0.0; 3]), ("mountPoint", Some(0), [0.0; 3])],
+                &[
+                    ("root", None, [0.0; 3]),
+                    ("mountPoint", Some(0), [0.0; 3]),
+                    ("muzzlePoint", Some(0), [0.0, 0.08, -0.36]),
+                    ("ejectPoint", Some(0), [0.0, 0.15, -0.08]),
+                ],
                 &[
                     (0, [0.0, -0.3, 0.04], [0.04, 0.35, 0.05], plain(0)),
                     (0, [0.0, 0.08, -0.12], [0.05, 0.07, 0.24], plain(0)),
@@ -231,7 +238,9 @@ fn shapes(pack: &bri_weapons::Pack) -> BTreeMap<String, Shape> {
                 )
             }
             _ => {
-                // A stick a little different for each key.
+                // A stick a little different for each key, its tip the
+                // `muzzlePoint` (where a gun on it fires from and, having
+                // no `ejectPoint`, throws its casings).
                 let n = key
                     .bytes()
                     .fold(0u32, |h, b| h.wrapping_mul(31).wrapping_add(u32::from(b)));
@@ -241,6 +250,7 @@ fn shapes(pack: &bri_weapons::Pack) -> BTreeMap<String, Shape> {
                     &[
                         ("root", None, [0.0; 3]),
                         ("mountPoint", Some(0), [0.0, -0.05, 0.0]),
+                        ("muzzlePoint", Some(0), [0.0, long * 1.5, -0.02]),
                     ],
                     &[(0, [0.0, long * 0.5, -0.02], [0.03, long, 0.04], plain(0))],
                     vec![material("surface", "opaque")],

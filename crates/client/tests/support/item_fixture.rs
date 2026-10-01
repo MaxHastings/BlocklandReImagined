@@ -5,8 +5,8 @@
 #![allow(dead_code)]
 
 use super::files::{png, repo_root, scratch, write, write_json};
-use bri_content::testing::{material, plain, rigid_shape};
 use anyhow::{Context, Result};
+use bri_content::testing::{material, plain, rigid_shape};
 use glam::Vec3;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};

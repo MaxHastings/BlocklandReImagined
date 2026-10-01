@@ -40,6 +40,31 @@ pub const MENU_BRICKS: [(&str, &str, [u8; 2], u16); 4] = [
     ("fixture/brick/2x2f", "2x2F Fixture", [2, 2], 1),
 ];
 
+/// A [`PACKAGE_SHAPES`] entry: (id, mesh id, studs, plates, glass sides).
+pub type PackageShape = (&'static str, &'static str, [u8; 2], u16, &'static [Face]);
+
+/// Base shapes the repo's own packages build bricks on (by mesh id), each
+/// offered as a made-up box: (id, mesh id, studs, plates, the sides that
+/// are glass). The window's long sides are glass, as the mirror and portal
+/// packages expect of it (their panes take the glass's place); so are its
+/// top and bottom, so a wall of windows seen through its glass shows glass
+/// at the joins, not its painted frame.
+pub const PACKAGE_SHAPES: [PackageShape; 1] = [(
+    "fixture/brick/window",
+    "v20/base/data/bricks/special/4x1x5window.blb",
+    [4, 1],
+    15,
+    &[Face::North, Face::South, Face::Top, Face::Bottom],
+)];
+
+/// Bricks the repo's own packages name by catalog id, each a made-up box:
+/// (id, studs, plates). The Stress Lab world draws its voxels with this
+/// cube, sized to its 2-unit `voxel_size` (`packages/stresslab`).
+pub const PACKAGE_BRICKS: [(&str, [u8; 2], u16); 1] = [("v20/brick/brick4xcubedata", [4, 4], 10)];
+
+/// The tint of a [`PACKAGE_SHAPES`] glass side (straight RGBA).
+pub const GLASS: [f32; 4] = [0.6, 0.8, 0.9, 0.4];
+
 /// The music loop the audio pack offers music bricks.
 pub const MUSIC: &str = "Fixture_Tune";
 
@@ -143,20 +168,40 @@ fn write_bricks(catalog_dir: &Path, geometry_dir: &Path) -> Result<Vec<(String, 
             false,
         ));
     }
+    for (id, studs, plates) in PACKAGE_BRICKS {
+        definitions.push(bri_sim::testing::definition(
+            id,
+            studs,
+            plates,
+            Special::None,
+            false,
+        ));
+    }
+    let mut glass: BTreeMap<String, &[Face]> = BTreeMap::new();
+    for (id, mesh, studs, plates, panes) in PACKAGE_SHAPES {
+        let mut d = bri_sim::testing::definition(id, studs, plates, Special::None, false);
+        d.mesh.id = mesh.into();
+        definitions.push(d);
+        glass.insert(id.into(), panes);
+    }
     let names: BTreeMap<&str, &str> = MENU_BRICKS.iter().map(|(id, n, ..)| (*id, *n)).collect();
-    let look =
-        |face: Face| -> (Surface, Option<[[f32; 4]; 4]>) { (bricks::default_surface(face), None) };
     let (mut entries, mut bindings, mut bodies, mut icons) = (vec![], vec![], vec![], vec![]);
     for d in definitions {
+        let id = d.collision.id.clone();
         let mut mesh = d.mesh.clone();
+        let panes = glass.get(&id).copied().unwrap_or_default();
+        let look = |face: Face| -> (Surface, Option<[[f32; 4]; 4]>) {
+            let tint = panes.contains(&face).then_some([GLASS; 4]);
+            (bricks::default_surface(face), tint)
+        };
         mesh.quads = bricks::block(&mesh.id, mesh.footprint_studs, mesh.height_plates, look).quads;
         let name = mesh.id.rsplit('/').next().unwrap_or(&mesh.id).to_string();
         let file = format!("{}.brick.json", name.replace(['/', ':', '#'], "-"));
         write_file(geometry_dir, &file, &serde_json::to_vec(&mesh)?)?;
-        bindings.push(json!({ "id": mesh.id, "native_mesh": file }));
+        bindings.push(json!({ "id": id, "native_mesh": file }));
         bodies.push(d.collision.clone());
         let display = names
-            .get(mesh.id.as_str())
+            .get(id.as_str())
             .map(|n| n.to_string())
             .unwrap_or_else(|| format!("Fixture {name}"));
         let icon = format!("fixture/bricks/{name}");
@@ -165,14 +210,14 @@ fn write_bricks(catalog_dir: &Path, geometry_dir: &Path) -> Result<Vec<(String, 
             other.insert("iswaterbrick".into(), json!("1"));
         }
         entries.push(json!({
-            "id": mesh.id, "display_name": display, "category": "Bricks",
+            "id": id, "display_name": display, "category": "Bricks",
             "subcategory": if mesh.height_plates == 1 { "Plates" } else { "Basic" },
             "mesh_id": mesh.id, "collision_source": null, "icon_source": icon,
             "print_aspect_ratio": null, "orientation_fix": 0, "can_cover": false,
             "indestructible": d.indestructible, "special_kind": null,
             "other_properties": other,
         }));
-        icons.push((mesh.id.clone(), icon));
+        icons.push((id, icon));
     }
     let json = |dir: &Path, file: &str, value: serde_json::Value| -> Result<()> {
         write_file(dir, file, &serde_json::to_vec_pretty(&value)?)?;

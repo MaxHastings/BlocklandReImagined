@@ -1,16 +1,22 @@
 //! Clear All Bricks from the Admin menu on a big build, in single player:
 //! the menu must hear back from the host and the bricks must go. Max saw it
 //! stay on "Waiting for host" and freeze.
-//! Run with: cargo test -p bri-client --test clear_bricks_flow --release -- --ignored --nocapture
-//! Requires converted v20 content and loopback QUIC; never opens a window.
+//! Runs on the made-up content root; the ignored variant runs on the
+//! generated v20 content (`--release -- --ignored`, BRI_CONTENT or
+//! content/). Loopback QUIC; never opens a window.
 use anyhow::{Context, Result, ensure};
 use bri_client::{app::App, platform::PlatformApp};
 use bri_ui::{api::*, models::admin::AdminAction, screens::ScreenId};
 use std::{
-    path::Path,
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
+
+#[macro_use]
+mod support;
+use support::content_root::ContentRoot;
+
+synthetic_and_content!(ContentRoot: clear_all_bricks_from_the_admin_menu_finishes_on_a_big_build);
 
 const SIZE: (u32, u32) = (640, 480);
 const KITCHEN: &str = "v20/add-ons/map_kitchen/kitchen.mis";
@@ -57,18 +63,10 @@ fn bricks(app: &App) -> usize {
     app.network_view().map_or(0, |v| v.world.bricks.len())
 }
 
-#[test]
-#[ignore = "requires converted native v20 content and loopback QUIC; no window/audio device"]
-fn clear_all_bricks_from_the_admin_menu_finishes_on_a_big_build() -> Result<()> {
-    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let artifact = workspace.join("artifacts/clear-bricks");
-    let state = artifact.join(format!(
-        "state-{}-{}",
-        std::process::id(),
-        SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
-    ));
-    std::fs::create_dir_all(&state)?;
-    let mut app = App::load(&workspace.join("content"), &state, SIZE)?;
+fn clear_all_bricks_from_the_admin_menu_finishes_on_a_big_build(f: &ContentRoot) -> Result<()> {
+    let scratch = f.state()?;
+    let state = scratch.path();
+    let mut app = App::load(&f.root, state, SIZE)?;
     app.ui.core.pop(ScreenId::DefaultControls);
     app.ui.core.request(UiAction::HostGame {
         map: KITCHEN.into(),
@@ -80,7 +78,7 @@ fn clear_all_bricks_from_the_admin_menu_finishes_on_a_big_build() -> Result<()> 
         admin_password: String::new(),
         super_admin_password: String::new(),
     });
-    until(&mut app, "Kitchen host", Duration::from_secs(120), |a| {
+    until(&mut app, "the host", Duration::from_secs(120), |a| {
         matches!(a.ui.core.conn, ConnectionState::InGame { .. })
             && a.network_view()
                 .is_some_and(|v| v.poses.contains_key(&v.owner))
@@ -104,7 +102,7 @@ fn clear_all_bricks_from_the_admin_menu_finishes_on_a_big_build() -> Result<()> 
         for x in 0..100 {
             for z in 0..100 {
                 let brick = bri_world::Brick::new(
-                    bri_world::ContentRef::Resolved("v20/brick/brick2x2data".into()),
+                    bri_world::ContentRef::Resolved(f.brick.clone()),
                     [
                         base[0] + x as f32,
                         base[1] + layer as f32 * 0.6,
@@ -125,8 +123,11 @@ fn clear_all_bricks_from_the_admin_menu_finishes_on_a_big_build() -> Result<()> 
         .join(format!("map-{:x}", sha2::Sha256::digest(map_id.as_bytes())));
     std::fs::create_dir_all(&folder)?;
     std::fs::write(folder.join("big.world.json"), serde_json::to_vec(&build)?)?;
+    // Load Bricks finds a save by the map's name as the save list shows it.
+    let content = bri_client::content::ClientContent::load(&f.root)?;
+    let map = bri_client::saves::Store::new(state, &content, None).map_name(&map_id);
     app.ui.core.request(UiAction::LoadBricks {
-        map: "Kitchen".into(),
+        map,
         name: "big.world.json".into(),
         ownership: true,
     });

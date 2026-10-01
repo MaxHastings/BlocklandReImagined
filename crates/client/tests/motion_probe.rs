@@ -1,15 +1,20 @@
 //! Headless probe: the predicted local player must settle exactly where the
-//! authoritative server has it, on a real converted map.
+//! authoritative server has it, on a hosted map: the made-up root's lit
+//! room, or (ignored) the generated v20 content's Bedroom.
 use anyhow::{Result, ensure};
 use bri_client::{app::App, platform::PlatformApp};
 use bri_ui::api::*;
 use std::{
-    path::Path,
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 
-const BEDROOM: &str = "v20/add-ons/map_bedroom/bedroom.mis";
+#[macro_use]
+mod support;
+use support::content_root::ContentRoot;
+
+synthetic_and_content!(ContentRoot: predicted_local_player_settles_on_the_authoritative_pose);
+
 /// Samples in a row the server must hold the player's feet unchanged.
 const STILL_SAMPLES: usize = 120;
 /// Only a hang takes this long.
@@ -22,18 +27,12 @@ fn step(app: &mut App, dt: Duration) -> Result<()> {
     Ok(())
 }
 
-#[test]
-#[ignore = "requires converted native v20 content and loopback QUIC; no window"]
-fn predicted_local_player_settles_on_the_authoritative_pose() -> Result<()> {
-    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let state = std::env::temp_dir().join(format!(
-        "bri-motion-probe-{}",
-        SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
-    ));
-    let mut app = App::load(&workspace.join("content"), &state, (640, 480))?;
+fn predicted_local_player_settles_on_the_authoritative_pose(f: &ContentRoot) -> Result<()> {
+    let state = f.state()?;
+    let mut app = App::load(&f.root, state.path(), (640, 480))?;
     app.ui.core.pop(bri_ui::screens::ScreenId::DefaultControls);
     app.ui.core.request(UiAction::HostGame {
-        map: BEDROOM.into(),
+        map: f.map.0.clone(),
         mode: ServerMode::SinglePlayer,
         game_mode: None,
         max_players: 1,
@@ -85,6 +84,5 @@ fn predicted_local_player_settles_on_the_authoritative_pose() -> Result<()> {
     let last = samples.last().expect("sampled the player");
     let gap = glam::Vec3::from(last.1).distance(glam::Vec3::from(last.2));
     ensure!(gap < 0.01, "predicted player drifted {gap} from the server");
-    let _ = std::fs::remove_dir_all(&state);
     Ok(())
 }

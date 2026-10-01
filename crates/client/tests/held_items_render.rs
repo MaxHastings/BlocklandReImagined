@@ -1,6 +1,8 @@
 //! Bounded normal-App render probe for held balls and the Akimbo Guns.
-//! Run with: cargo test -p bri-client --test held_items_render --release -- --ignored --nocapture
-//! Requires converted v20 content, loopback QUIC and an offscreen GPU; never opens a window.
+//! Runs on the made-up content root (the weapon fixture's ball and akimbo
+//! guns); the ignored variant runs on the generated v20 content
+//! (`--release -- --ignored`, BRI_CONTENT or content/). Loopback QUIC and
+//! an offscreen GPU; never opens a window.
 use anyhow::{Context, Result, ensure};
 use bri_client::{
     app::App,
@@ -13,11 +15,16 @@ use bri_ui::{
 use std::{
     path::Path,
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 
+#[macro_use]
+mod support;
+use support::content_root::ContentRoot;
+
+synthetic_and_content!(ContentRoot: start_ball_is_held_and_thrown_and_akimbo_raises_both_arms);
+
 const SIZE: (u32, u32) = (640, 480);
-const BEDROOM: &str = "v20/add-ons/map_bedroom/bedroom.mis";
 
 fn pump(app: &mut App) -> Result<()> {
     ensure!(
@@ -146,22 +153,13 @@ fn held(app: &App, hand: u8) -> Option<String> {
         .map(|i| i.image.clone())
 }
 
-#[test]
-#[ignore = "requires converted native v20 content, loopback QUIC and offscreen GPU; no window/audio device"]
-fn start_ball_is_held_and_thrown_and_akimbo_raises_both_arms() -> Result<()> {
-    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let artifact = workspace.join("artifacts/held-items");
-    std::fs::create_dir_all(&artifact)?;
-    let state = artifact.join(format!(
-        "state-{}-{}",
-        std::process::id(),
-        SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
-    ));
-    std::fs::create_dir_all(&state)?;
-    let mut app = App::load(&workspace.join("content"), &state, SIZE)?;
+fn start_ball_is_held_and_thrown_and_akimbo_raises_both_arms(f: &ContentRoot) -> Result<()> {
+    let artifact = f.out("held-items")?;
+    let state = f.state()?;
+    let mut app = App::load(&f.root, state.path(), SIZE)?;
     app.ui.core.pop(bri_ui::screens::ScreenId::DefaultControls);
     app.ui.core.request(UiAction::HostGame {
-        map: BEDROOM.into(),
+        map: f.map.0.clone(),
         mode: ServerMode::SinglePlayer,
         game_mode: None,
         max_players: 1,
@@ -171,19 +169,21 @@ fn start_ball_is_held_and_thrown_and_akimbo_raises_both_arms() -> Result<()> {
         super_admin_password: String::new(),
     });
     pump(&mut app)?;
-    until(&mut app, "Bedroom host/player", |a| {
+    until(&mut app, "host/player", |a| {
         matches!(a.ui.core.conn, ConnectionState::InGame { .. })
             && a.network_view()
                 .is_some_and(|v| v.poses.contains_key(&v.owner))
     })?;
+    let (ball, akimbo) = if f.content {
+        ("v20.weapon.basketballitem", "v20.weapon.akimbogunitem")
+    } else {
+        (
+            bri_weapons::testing::BASKETBALL_ITEM,
+            bri_weapons::testing::AKIMBO_ITEM,
+        )
+    };
     let rules = MiniGameRules {
-        loadout: [
-            Some("v20.weapon.basketballitem".into()),
-            Some("v20.weapon.akimbogunitem".into()),
-            None,
-            None,
-            None,
-        ],
+        loadout: [Some(ball.into()), Some(akimbo.into()), None, None, None],
         ..MiniGameRules::default()
     };
     app.ui
@@ -198,10 +198,16 @@ fn start_ball_is_held_and_thrown_and_akimbo_raises_both_arms() -> Result<()> {
             .is_some_and(|(p, _)| p.grounded && glam::Vec3::from(p.velocity).length() < 0.001)
     })?;
     run_for(&mut app, 0.5)?;
-    let gpu = Headless::new().context("offscreen held-item renderer")?;
+    if !f.content {
+        // lavapipe crashes in the Unified lighting path here: see
+        // `support::gpu::pin_classic_lighting` (an open renderer follow-up;
+        // the content variant keeps Unified lighting).
+        support::gpu::pin_classic_lighting(&mut app)?;
+    }
+    let gpu = support::gpu::turn().context("offscreen held-item renderer")?;
     let mut renderer = UiRenderer::new(&gpu.device, &gpu.queue);
     app.gpu_ready(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm)?;
-    let mut report = serde_json::json!({"adapter": gpu.adapter_info.name, "map": BEDROOM});
+    let mut report = serde_json::json!({"adapter": gpu.adapter_info.name, "map": f.map.0});
     save(
         &artifact.join("ball-first-person.png"),
         &capture(&mut app, &gpu, &mut renderer)?,

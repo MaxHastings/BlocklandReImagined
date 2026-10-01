@@ -11,7 +11,6 @@ use super::{ScratchDir, png, sha256, write_file};
 use crate::content::LOADABLE_MAPS;
 use anyhow::Result;
 use bri_net::testing as server;
-use serde_json::json;
 use std::path::{Path, PathBuf};
 
 pub use bri_net::testing::MENU_BRICKS;
@@ -46,6 +45,17 @@ pub struct ContentRoot {
     pub content: bool,
     /// A 2x2 brick the brick menu offers.
     pub brick: String,
+    /// A flat brick to stand a vehicle spawn on.
+    pub vehicle_spawn: String,
+    /// A brick emitter that runs until stopped.
+    pub emitter: String,
+    /// The first loadable map (v20's Bedroom), by id and by the name the
+    /// Start Game list and the save folders show.
+    pub map: (String, String),
+    /// A map whose sun reaches its floor, by id and name: v20's Bedroom on
+    /// the generated content; the made-up root's second room, open to the
+    /// sky (its first has a ceiling).
+    pub open_map: (String, String),
     _scratch: Option<ScratchDir>,
 }
 
@@ -59,6 +69,10 @@ impl ContentRoot {
             ),
             content: true,
             brick: "v20/brick/brick2x2data".into(),
+            vehicle_spawn: "v20/brick/brickvehiclespawndata".into(),
+            emitter: "v20/emitter/playerjetemitter".into(),
+            map: (LOADABLE_MAPS[0].into(), "Bedroom".into()),
+            open_map: (LOADABLE_MAPS[0].into(), "Bedroom".into()),
             _scratch: None,
         })
     }
@@ -67,10 +81,15 @@ impl ContentRoot {
     pub fn synthetic() -> Result<Self> {
         let dir = ScratchDir::new("content-root")?;
         write_root(dir.path())?;
+        let rooms = bri_content::testing::map_bundle::rooms_for(&LOADABLE_MAPS[..2]);
         Ok(Self {
             root: dir.path().to_path_buf(),
             content: false,
             brick: MENU_BRICKS[2].0.into(),
+            vehicle_spawn: MENU_BRICKS[3].0.into(),
+            emitter: CONTINUOUS_EMITTER.into(),
+            map: (LOADABLE_MAPS[0].into(), rooms[0].name.clone()),
+            open_map: (LOADABLE_MAPS[1].into(), rooms[1].name.clone()),
             _scratch: Some(dir),
         })
     }
@@ -96,6 +115,48 @@ impl ContentRoot {
         std::fs::create_dir_all(&out)?;
         Ok(out)
     }
+
+    /// This root's packages, hard-linked where the filesystem allows, into
+    /// `dir/content` with the repo's default Add-Ons installed beside them,
+    /// so the shared root stays as it is. Returns the new root.
+    pub fn with_defaults(&self, dir: &Path) -> Result<PathBuf> {
+        let content = dir.join("content");
+        for package in bri_package::packages::PackageSet::load_root(&self.root)?.packages {
+            let from = self.root.join(&package.dir);
+            anyhow::ensure!(
+                from.is_dir(),
+                "{} lacks {}",
+                self.root.display(),
+                package.dir
+            );
+            link_dir(&from, &content.join(&package.dir))?;
+        }
+        let list = self.root.join(bri_package::packages::PACKAGES_FILE);
+        if list.is_file() {
+            std::fs::copy(&list, content.join(bri_package::packages::PACKAGES_FILE))?;
+        }
+        bri_package::defaults::install(
+            &content,
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages"),
+        )?;
+        Ok(content)
+    }
+}
+
+/// Copy a folder, hard-linking its files where the filesystem allows.
+fn link_dir(from: &Path, to: &Path) -> Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            link_dir(&entry.path(), &target)?;
+        } else if std::fs::hard_link(entry.path(), &target).is_err() {
+            std::fs::copy(entry.path(), &target)
+                .map_err(|e| anyhow::anyhow!("Copying {}: {e}", entry.path().display()))?;
+        }
+    }
+    Ok(())
 }
 
 /// Write the whole made-up root into `root`: the server's packages (one
@@ -133,6 +194,9 @@ fn write_effects(dir: &Path) -> Result<()> {
     write_file(dir, "effects.json", &serde_json::to_vec(&library)?)?;
     Ok(())
 }
+
+/// `bri_fx_runtime::testing::library`'s emitter, which runs until stopped.
+pub const CONTINUOUS_EMITTER: &str = "emitter";
 
 /// A finite emitter that emits at once and often ([`effects_library`]).
 pub const FLASH_EMITTER: &str = "flash";
@@ -174,66 +238,52 @@ fn write_effects_runtime(dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// No precipitation anywhere.
+/// The one map it rains on in the made-up root, and how many drops fall
+/// there (`bri_weather::testing::placement`'s). No other map has weather.
+pub const RAIN: (&str, u32) = (
+    "v20/add-ons/map_slate_storm_revised/slatestormrevised.mis",
+    96,
+);
+
+/// The weather pack: translucent rain with splashes on [`RAIN`]'s map,
+/// its textures written as PNG files.
 fn write_weather(dir: &Path) -> Result<()> {
-    write_file(
-        dir,
-        "weather.json",
-        &serde_json::to_vec(&json!({
-            "schema_version": 1, "legacy_tick_seconds": 0.032, "definitions": [],
-            "placements": [], "textures": {}, "sources": [], "assumptions": [],
-        }))?,
-    )?;
+    use bri_weather::testing as weather;
+    anyhow::ensure!(
+        LOADABLE_MAPS.contains(&RAIN.0),
+        "it rains on a loadable map"
+    );
+    let textures = [
+        weather::texture("fixture/rain", 8, 16, 60),
+        weather::texture("fixture/splash", 8, 8, 140),
+    ];
+    let mut manifest = weather::manifest(
+        vec![weather::rain(
+            "fixture/rain",
+            "fixture/rain",
+            Some("fixture/splash"),
+        )],
+        vec![weather::placement(RAIN.0, "fixture/rain", RAIN.1)],
+        &textures,
+    );
+    for t in &textures {
+        let record = manifest
+            .textures
+            .get_mut(&t.id)
+            .expect("the manifest records every texture");
+        let bytes = png(t.width, t.height, |x, y| {
+            let i = ((y * t.width + x) * 4) as usize;
+            [t.rgba[i], t.rgba[i + 1], t.rgba[i + 2], t.rgba[i + 3]]
+        })?;
+        record.sha256 = write_file(dir, &record.file, &bytes)?;
+    }
+    manifest.validate()?;
+    write_file(dir, "weather.json", &serde_json::to_vec(&manifest)?)?;
     Ok(())
 }
 
-/// v20-shaped screen layouts with the control names the screens look up:
-/// the Start Game window (`startMissionGui`) with its map list.
-fn add_screens(data: &mut bri_ui::schema::UiPack) {
-    use bri_ui::geom::Rect;
-    use bri_ui::{
-        screens::ctrl,
-        testing::{dialog, label, named, text_button},
-    };
-    data.layouts.insert(
-        "startMissionGui".into(),
-        dialog(
-            "SM_Window",
-            "Start Game",
-            Rect::new(20, 10, 600, 460),
-            vec![
-                named(
-                    ctrl(
-                        "GuiTextListCtrl",
-                        "GuiTextListProfile",
-                        Rect::new(10, 30, 260, 400),
-                    ),
-                    "SM_missionList",
-                ),
-                named(
-                    ctrl("GuiTextCtrl", "GuiTextProfile", Rect::new(290, 30, 290, 18)),
-                    "SM_MapName",
-                ),
-                label(Rect::new(290, 60, 120, 18), "Players:"),
-                named(
-                    ctrl(
-                        "GuiPopUpMenuCtrl",
-                        "GuiPopUpMenuProfile",
-                        Rect::new(420, 60, 80, 20),
-                    ),
-                    "SM_PlayerCountMenu",
-                ),
-                text_button(
-                    Rect::new(480, 420, 100, 28),
-                    "Start",
-                    "startMissionGui.startMission();",
-                ),
-            ],
-        ),
-    );
-}
-
-/// The UI pack: `bri_ui::testing`'s fonts, profiles and dialogs, an icon
+/// The UI pack: `bri_ui::testing`'s fonts, profiles, dialogs, message
+/// boxes and screen layouts (menus, Start Game, wrench, admin, trust), an icon
 /// for every brick in the menu, a two-division paint palette, an avatar
 /// colour set, a key binding for every action the tests press, and an
 /// entry for every map, each image and font sheet written as a file.
@@ -246,7 +296,7 @@ fn write_ui(dir: &Path, icons: &[String]) -> Result<()> {
     };
     bri_ui::testing::add_dialogs(&mut data);
     bri_ui::testing::add_assets(&mut data);
-    add_screens(&mut data);
+    bri_ui::testing::add_screens(&mut data);
     for icon in icons {
         bri_ui::testing::add_image(&mut data, icon, 32, 32);
     }
@@ -331,7 +381,10 @@ fn write_ui(dir: &Path, icons: &[String]) -> Result<()> {
         binds.push(key(&((i + 1) % 10).to_string(), command));
     }
     data.data.default_binds = binds;
-    data.data.global_binds = vec![key("tilde", "toggleConsole")];
+    data.data.global_binds = vec![
+        key("tilde", "toggleConsole"),
+        key("escape", "escapeMenu.toggle();"),
+    ];
     data.data.remap = data
         .data
         .default_binds

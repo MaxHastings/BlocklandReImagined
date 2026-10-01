@@ -249,9 +249,12 @@ fn horse_shape(name: &str) -> Shape {
 }
 
 /// The clips the engine plays on the horse, by the alias it names each
-/// by: a sway of the body for the walks, a nod of the head for the rest.
-/// The look clip is not named `look`, so the horse, which has no gun,
-/// gets no gunner's look rig from it.
+/// by: a sway of the body for the walks, a tilt of it for crouch and for
+/// leaving the ground (jump, fall).
+/// The look and headside clips are stand-ins named for neither alias, so
+/// the engine poses nothing with them and layers them like the player's
+/// own overlays (and the horse, which has no gun, gets no gunner's look
+/// rig).
 fn horse_clips() -> Vec<(&'static str, Animation)> {
     let clip = |name: &str, node: &str, angles: &[f32], looping: bool| Animation {
         name: name.into(),
@@ -281,10 +284,12 @@ fn horse_clips() -> Vec<(&'static str, Animation)> {
         ("back", clip("back", "body", &[0.0, -0.06, 0.0, 0.06], true)),
         ("side", clip("side", "body", &[0.0, 0.05, 0.0], true)),
         ("crouch", clip("crouch", "body", &[0.15], false)),
+        ("jump", clip("jump", "body", &[0.0, -0.2], false)),
+        ("fall", clip("fall", "body", &[0.1], false)),
         ("look", clip("horse_look", "head", &[-0.4, 0.0, 0.4], false)),
         (
             "headside",
-            clip("headside", "head", &[0.0, 0.2, 0.0], false),
+            clip("horse_headside", "head", &[0.0, 0.2, 0.0], false),
         ),
     ]
 }

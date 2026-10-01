@@ -367,6 +367,15 @@ fn swing(activate: u32, prefire: u32, fire: u32, recover: u32) -> Vec<State> {
     ]
 }
 
+/// The hammer's and wands' [`swing`]. PreFire starts the arm's `armattack`
+/// and CheckFire's `onStopFire` returns the arm to `root`, so Fire is long
+/// enough (with PreFire, 32 ticks) for an avatar's swing to reach its peak
+/// before it is stopped, however a client's frames fall: a shorter one cut
+/// the swing at a different point each time.
+fn tool_swing() -> Vec<State> {
+    swing(1, 2, 30, 10)
+}
+
 /// A click: one swing per press, then it waits for the button to come up
 /// (a tool that opens a dialog).
 fn click(activate: u32, prefire: u32, fire: u32) -> Vec<State> {
@@ -499,10 +508,22 @@ pub fn pack() -> Pack {
     // The hammer and wands swing while held; the wrench and printer open a
     // dialog, so they act once per click; the printer has no wind-up.
     for (item_id, image_id, name, ui, states) in [
-        (HAMMER, HAMMER_IMAGE, "hammerImage", "Hammer", swing(1, 2, 6, 10)),
-        (WRENCH, WRENCH_IMAGE, "wrenchImage", "Wrench", click(1, 2, 6)),
-        (PRINTER, PRINTER_IMAGE, "printGunImage", "Printer", instant_click(6)),
-        (WAND, WAND_IMAGE, "wandImage", "Wand", swing(1, 2, 6, 10)),
+        (HAMMER, HAMMER_IMAGE, "hammerImage", "Hammer", tool_swing()),
+        (
+            WRENCH,
+            WRENCH_IMAGE,
+            "wrenchImage",
+            "Wrench",
+            click(1, 2, 6),
+        ),
+        (
+            PRINTER,
+            PRINTER_IMAGE,
+            "printGunImage",
+            "Printer",
+            instant_click(6),
+        ),
+        (WAND, WAND_IMAGE, "wandImage", "Wand", tool_swing()),
     ] {
         add_item(item(item_id, &format!("{ui}Item"), ui, image_id));
         add_image(image(image_id, name, None, states));
@@ -511,7 +532,7 @@ pub fn pack() -> Pack {
         ADMIN_WAND_IMAGE,
         "adminWandImage",
         None,
-        swing(1, 2, 6, 10),
+        tool_swing(),
     ));
     for (id, name) in [
         (BRICK_IMAGE, "brickImage"),
@@ -570,21 +591,23 @@ pub fn pack() -> Pack {
     // Released: the right gun pulses the left one's trigger.
     right[4] = S::new("WaitForRelease", 0).up(6).0;
     right.push(S::new("FireAkimbo", 8).script("onFireAkimbo").timeout(1).0);
-    add_image(image(
-        AKIMBO_IMAGE,
-        "akimboGunImage",
-        Some(GUN_PROJECTILE),
-        right,
-    ));
+    // Both guns throw the gun's casing, as each fires.
+    add_image(Image {
+        casing: GUN_CASING.into(),
+        ..image(AKIMBO_IMAGE, "akimboGunImage", Some(GUN_PROJECTILE), right)
+    });
     let mut left = semi_automatic(10, 8, 12);
     // The left gun sees only one-tick pulses: back to Ready after Smoke.
     left[3] = S::new("Smoke", 12).timeout(1).0;
-    add_image(image(
-        LEFT_GUN_IMAGE,
-        "leftHandedGunImage",
-        Some(GUN_PROJECTILE),
-        left,
-    ));
+    add_image(Image {
+        casing: GUN_CASING.into(),
+        ..image(
+            LEFT_GUN_IMAGE,
+            "leftHandedGunImage",
+            Some(GUN_PROJECTILE),
+            left,
+        )
+    });
     add_item(item(
         SHOTGUN_ITEM,
         "shotgunItem",

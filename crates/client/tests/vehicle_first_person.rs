@@ -8,9 +8,11 @@
 //! The expected eye is built here from the vehicle pack and the avatar rig,
 //! not from the app. The Tank's seats hold `root`, so the old fixed 1.6 over
 //! the seat sat the eye about half a unit too low, inside the hull.
-//! Run: cargo test -p bri-client --test vehicle_first_person -- --ignored --nocapture
-//! Requires converted v20 content, loopback QUIC and an offscreen GPU; never
-//! opens a window or moves the mouse.
+//! Runs on the made-up content root (its Tank the fixture tank: a driver,
+//! a passenger and a turret gunner); the ignored variants run on the
+//! generated v20 content (`-- --ignored`, BRI_CONTENT or content/).
+//! Loopback QUIC (a free port) and an offscreen GPU; never opens a window
+//! or moves the mouse.
 use anyhow::{Context, Result, ensure};
 use bri_client::{
     app::App,
@@ -29,13 +31,44 @@ use std::{
     collections::BTreeSet,
     path::Path,
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
+
+#[macro_use]
+mod support;
+use support::content_root::ContentRoot;
+
+synthetic_and_content!(
+    ContentRoot: every_tank_seat_sees_from_the_riders_eye_for_host_and_guest,
+    invert_mouse_in_vehicles_turns_the_nose_both_ways_through_the_app
+);
 
 const SIZE: (u32, u32) = (320, 240);
 const SLATE: &str = "v20/add-ons/map_slate/slate.mis";
-const TANK: &str = "v20.vehicle.tankvehicle";
-const VEHICLE_SPAWN: &str = "v20/brick/brickvehiclespawndata";
+/// The vehicles a root offers for these tests: (Tank, Flying Wheeled Jeep).
+fn vehicles(f: &ContentRoot) -> (&'static str, &'static str) {
+    if f.content {
+        (
+            "v20.vehicle.tankvehicle",
+            "v20.vehicle.flyingwheeledjeepvehicle",
+        )
+    } else {
+        (
+            bri_vehicles::testing::TANK,
+            bri_vehicles::testing::FLYING_CAR,
+        )
+    }
+}
+/// `vehicle`'s definition in `f`'s vehicle pack.
+fn definition(f: &ContentRoot, vehicle: &str) -> Result<Definition> {
+    let dir =
+        bri_package::packages::PackageSet::load_root(&f.root)?.role_dir(&f.root, "vehicles")?;
+    Pack::load(dir.join("vehicles.json"))?
+        .definitions
+        .into_iter()
+        .find(|d| d.id == vehicle)
+        .with_context(|| format!("{vehicle} is not in the vehicle pack"))
+}
 
 fn request(app: &mut App, action: UiAction) -> Result<()> {
     app.ui.core.request(action);
@@ -104,12 +137,8 @@ fn seat(app: &App) -> Option<(u64, usize)> {
     let (vehicle, seat) = view.vitals.get(&view.owner)?.mounted?;
     Some((vehicle, usize::from(seat)))
 }
-/// Load a Tank spawn brick eight units ahead of the host's player.
-fn load_tank(app: &mut App, state: &Path) -> Result<()> {
-    load_vehicle(app, state, TANK)
-}
 /// Load a spawn brick for `vehicle` eight units ahead of the host's player.
-fn load_vehicle(app: &mut App, state: &Path, vehicle: &str) -> Result<()> {
+fn load_vehicle(f: &ContentRoot, app: &mut App, state: &Path, vehicle: &str) -> Result<()> {
     let view = app.network_view().context("not in a game")?;
     let player = &view.poses.get(&view.owner).context("no player")?.player;
     let feet = Vec3::from(player.feet);
@@ -118,7 +147,7 @@ fn load_vehicle(app: &mut App, state: &Path, vehicle: &str) -> Result<()> {
     let mut world =
         bri_world::World::new("Tank".into(), map_id.clone(), view.world.palette.clone());
     let mut brick = bri_world::Brick::new(
-        bri_world::ContentRef::Resolved(VEHICLE_SPAWN.into()),
+        bri_world::ContentRef::Resolved(f.vehicle_spawn.clone()),
         [
             ((feet.x + ahead.x) * 2.0).round() / 2.0,
             (feet.y / 0.2).round() * 0.2 + 0.1,
@@ -392,22 +421,17 @@ fn check_passenger_own_camera(
     Ok(())
 }
 
-#[test]
-#[ignore = "requires converted native v20 content, loopback QUIC and offscreen GPU; no window"]
-fn every_tank_seat_sees_from_the_riders_eye_for_host_and_guest() -> Result<()> {
-    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let content = workspace.join("content");
-    let tank = Pack::load(content.join("vehicles-pack-012/vehicles.json"))?
-        .definitions
-        .into_iter()
-        .find(|d| d.id == TANK)
-        .context("the Tank")?;
-    let assets = AvatarAssets::load(&content.join("avatar-pack-002"))?;
-    let state = std::env::temp_dir().join(format!(
-        "bri-vehicle-first-person-{}-{}",
-        std::process::id(),
-        SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
-    ));
+fn every_tank_seat_sees_from_the_riders_eye_for_host_and_guest(f: &ContentRoot) -> Result<()> {
+    let content = f.root.clone();
+    let (tank_id, _) = vehicles(f);
+    let tank = definition(f, tank_id)?;
+    let assets = AvatarAssets::load(
+        &bri_package::packages::PackageSet::load_root(&content)?.role_dir(&content, "avatar")?,
+    )?;
+    let scratch = f.state()?;
+    let state = scratch.path().to_path_buf();
+    // The GPU turn first: tests holding it never share a port.
+    let gpu = support::gpu::turn().context("offscreen renderer")?;
     let port = free_port()?;
     let mut host = app(&content, &state, "Host")?;
     let mut guest = app(&content, &state, "Guest")?;
@@ -440,7 +464,7 @@ fn every_tank_seat_sees_from_the_riders_eye_for_host_and_guest() -> Result<()> {
         Ok(in_game(a[1]))
     })?;
     run_for(&mut [&mut host, &mut guest], 2.0)?;
-    load_tank(&mut host, &state.join("Host"))?;
+    load_vehicle(f, &mut host, &state.join("Host"), tank_id)?;
     until(&mut [&mut host, &mut guest], "the Tank", 60, |a| {
         Ok(a.iter().all(|a| {
             a.network_view()
@@ -449,9 +473,14 @@ fn every_tank_seat_sees_from_the_riders_eye_for_host_and_guest() -> Result<()> {
     })?;
     run_for(&mut [&mut host, &mut guest], 1.0)?;
 
-    let gpu = Headless::new().context("offscreen renderer")?;
     let mut renderer = UiRenderer::new(&gpu.device, &gpu.queue);
     for app in [&mut host, &mut guest] {
+        if !f.content {
+            // lavapipe crashes in the Unified lighting path here: see
+            // `support::gpu::pin_classic_lighting` (an open renderer follow-up;
+            // the content variant keeps Unified lighting).
+            support::gpu::pin_classic_lighting(app)?;
+        }
         app.gpu_ready(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm)?;
         if app.controls.third_person_view() {
             request(
@@ -511,11 +540,9 @@ fn every_tank_seat_sees_from_the_riders_eye_for_host_and_guest() -> Result<()> {
         request(app, UiAction::Disconnect)?;
         app.gpu_stopped();
     }
-    let _ = std::fs::remove_dir_all(&state);
     Ok(())
 }
 
-const FLYING_JEEP: &str = "v20.vehicle.flyingwheeledjeepvehicle";
 /// The driven vehicle's nose pitch (radians, up positive) in the host's
 /// newest pose, and its speed.
 fn nose(app: &App) -> Option<(f32, f32)> {
@@ -531,29 +558,44 @@ fn nose(app: &App) -> Option<(f32, f32)> {
 /// far the host's pose and this client's predicted view pitched. `invert`
 /// is Options' Invert Mouse In Vehicles; `None` leaves the default.
 fn mouse_up_pitch(
+    f: &ContentRoot,
     invert: Option<bool>,
     gpu: &Headless,
     renderer: &mut UiRenderer,
 ) -> Result<(f32, f32)> {
-    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let content = workspace.join("content");
-    let state = std::env::temp_dir().join(format!(
-        "bri-vehicle-mouse-{}-{}",
-        std::process::id(),
-        SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
-    ));
+    let content = f.root.clone();
+    let scratch = f.state()?;
+    let state = scratch.path().to_path_buf();
+    let (_, flying_jeep) = vehicles(f);
+    // Fast enough that the lift nearly carries the jeep: v20's take-off
+    // speed, or just under the made-up car's top flying speed.
+    let take_off = if f.content {
+        39.0
+    } else {
+        definition(f, flying_jeep)?
+            .wheeled_flight
+            .context("the flying car flies")?
+            .max_forward_vel
+            - 2.0
+    };
     let port = free_port()?;
     let mut host = app(&content, &state, "Host")?;
+    if !f.content {
+        // lavapipe crashes in the Unified lighting path here: see
+        // `support::gpu::pin_classic_lighting` (an open renderer follow-up;
+        // the content variant keeps Unified lighting).
+        support::gpu::pin_classic_lighting(&mut host)?;
+    }
     host.gpu_ready(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm)?;
     host.ui
         .core
         .prefs
         .set("$Pref::Server::Port", port.to_string());
     if let Some(invert) = invert {
-        host.ui
-            .core
-            .prefs
-            .set("$Pref::Input::VehicleMouseInvert", if invert { "1" } else { "0" });
+        host.ui.core.prefs.set(
+            "$Pref::Input::VehicleMouseInvert",
+            if invert { "1" } else { "0" },
+        );
     }
     request(
         &mut host,
@@ -570,13 +612,18 @@ fn mouse_up_pitch(
     )?;
     until(&mut [&mut host], "host in game", 180, |a| Ok(in_game(a[0])))?;
     run_for(&mut [&mut host], 1.0)?;
-    load_vehicle(&mut host, &state.join("Host"), FLYING_JEEP)?;
+    load_vehicle(f, &mut host, &state.join("Host"), flying_jeep)?;
     until(&mut [&mut host], "the jeep", 60, |a| {
-        Ok(a[0].network_view().is_some_and(|v| !v.vehicle_poses.is_empty()))
+        Ok(a[0]
+            .network_view()
+            .is_some_and(|v| !v.vehicle_poses.is_empty()))
     })?;
     run_for(&mut [&mut host], 1.0)?;
     board(&mut [&mut host], 0)?;
-    ensure!(seat(&host).is_some_and(|(_, s)| s == 0), "not in the driver's seat");
+    ensure!(
+        seat(&host).is_some_and(|(_, s)| s == 0),
+        "not in the driver's seat"
+    );
     if host.controls.third_person_view() {
         request(
             &mut host,
@@ -585,7 +632,7 @@ fn mouse_up_pitch(
     }
     held(&mut host, HeldControl::Forward, true)?;
     until(&mut [&mut host], "take-off speed", 60, |a| {
-        Ok(nose(a[0]).is_some_and(|(_, speed)| speed > 39.0))
+        Ok(nose(a[0]).is_some_and(|(_, speed)| speed > take_off))
     })?;
     run_for(&mut [&mut host], 3.0)?;
     let (before, _) = nose(&host).context("nose")?;
@@ -611,24 +658,29 @@ fn mouse_up_pitch(
     let view_after = host.rendered_camera().context("camera")?.2;
     request(&mut host, UiAction::Disconnect)?;
     host.gpu_stopped();
-    let _ = std::fs::remove_dir_all(&state);
     Ok((after - before, view_after - view_before))
 }
 
 /// Stock v20's Invert Mouse In Vehicles is on: mouse up dips the nose, in
 /// the host's pose and in the view this client predicts. Turned off in
 /// Options, mouse up raises it.
-#[test]
-#[ignore = "requires converted native v20 content, loopback QUIC and offscreen GPU; no window"]
-fn invert_mouse_in_vehicles_turns_the_nose_both_ways_through_the_app() -> Result<()> {
-    let gpu = Headless::new().context("offscreen renderer")?;
+fn invert_mouse_in_vehicles_turns_the_nose_both_ways_through_the_app(
+    f: &ContentRoot,
+) -> Result<()> {
+    let gpu = support::gpu::turn().context("offscreen renderer")?;
     let mut renderer = UiRenderer::new(&gpu.device, &gpu.queue);
     for (invert, down) in [(None, true), (Some(false), false), (Some(true), true)] {
-        let (host, view) = mouse_up_pitch(invert, &gpu, &mut renderer)?;
+        let (host, view) = mouse_up_pitch(f, invert, &gpu, &mut renderer)?;
         println!("invert {invert:?}: host nose {host:+.3}, predicted view {view:+.3}");
         let sign = if down { -1.0 } else { 1.0 };
-        ensure!(host * sign > 0.01, "invert {invert:?}: host nose moved {host}");
-        ensure!(view * sign > 0.01, "invert {invert:?}: predicted view moved {view}");
+        ensure!(
+            host * sign > 0.01,
+            "invert {invert:?}: host nose moved {host}"
+        );
+        ensure!(
+            view * sign > 0.01,
+            "invert {invert:?}: predicted view moved {view}"
+        );
     }
     Ok(())
 }

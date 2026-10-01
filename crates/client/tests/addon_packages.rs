@@ -1,10 +1,22 @@
 //! A client loads imported Add-On packages listed in packages.json beside the
 //! base game: weapons, item presentation and HUD icons, vehicles and their
-//! models. No window or GPU is used.
+//! models. Runs on the made-up content root; the ignored variant on the
+//! generated v20 content (BRI_CONTENT or content/), which also imports
+//! community Add-Ons when their archive and the v20 reference are present.
+//! No window or GPU is used.
 use bri_addon_import::{Options, import};
 use bri_client::content::ClientContent;
 use bri_package::packages::{PackageEntry, PackageSet, Side};
 use std::path::{Path, PathBuf};
+
+#[macro_use]
+mod support;
+use support::content_root::ContentRoot;
+
+synthetic_and_content!(
+    ContentRoot: client_loads_imported_packages_beside_the_base_game,
+    a_broken_add_on_is_left_out_instead_of_stopping_the_game
+);
 
 const ARCHIVE: &str = "C:/Users/Maxwell/Documents/_Blockland_Maxwell_1588_Archive/Addons";
 const REFERENCE: &str = "E:/Downloads/B4v21Launcher/versions/Blockland v20";
@@ -16,12 +28,15 @@ impl Drop for Scratch {
     }
 }
 
-#[test]
-#[ignore = "requires generated content (content/, see docs/content-regeneration.md)"]
-fn client_loads_imported_packages_beside_the_base_game() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
+fn client_loads_imported_packages_beside_the_base_game(f: &ContentRoot) -> anyhow::Result<()> {
+    let root = &f.root;
     let scratch = Scratch(root.join(format!("_addon-client-{}", std::process::id())));
-    let name = scratch.0.file_name().unwrap().to_string_lossy().into_owned();
+    let name = scratch
+        .0
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
     let mut imports = vec![(
         "weapon_synthetic_blaster",
         Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -30,15 +45,23 @@ fn client_loads_imported_packages_beside_the_base_game() {
     )];
     let archive = std::env::var("BRI_ADDON_ARCHIVE").unwrap_or(ARCHIVE.into());
     let reference = std::env::var("BRI_V20_REFERENCE").unwrap_or(REFERENCE.into());
-    let real = Path::new(&archive).is_dir() && Path::new(&reference).is_dir();
+    // Only the generated content's run reads outside the repo.
+    let real = f.content && Path::new(&archive).is_dir() && Path::new(&reference).is_dir();
     if real {
-        for (id, addon) in [("weapon_shotgun", "Weapon_Shotgun"), ("vehicle_blocko_car", "Vehicle_Blocko_Car")] {
-            imports.push((id, Path::new(&archive).join(format!("{addon}.zip")), Some(PathBuf::from(&reference))));
+        for (id, addon) in [
+            ("weapon_shotgun", "Weapon_Shotgun"),
+            ("vehicle_blocko_car", "Vehicle_Blocko_Car"),
+        ] {
+            imports.push((
+                id,
+                Path::new(&archive).join(format!("{addon}.zip")),
+                Some(PathBuf::from(&reference)),
+            ));
         }
-    } else {
+    } else if f.content {
         eprintln!("community archive or v20 reference absent: synthetic package only");
     }
-    let mut set = PackageSet::base();
+    let mut set = PackageSet::load_root(root)?;
     for (id, input, reference) in imports {
         import(&Options {
             input,
@@ -56,10 +79,16 @@ fn client_loads_imported_packages_beside_the_base_game() {
             role: None,
         });
     }
-    let content = ClientContent::load_packages(&root, &set).unwrap();
+    let content = ClientContent::load_packages(root, &set).unwrap();
     let paths = &content.paths;
-    let ids: Vec<&str> = content.weapons.item_choices.iter().map(|(id, _)| id.as_str()).collect();
-    assert!(ids.contains(&"v20.weapon.gunitem"));
+    let ids: Vec<&str> = content
+        .weapons
+        .item_choices
+        .iter()
+        .map(|(id, _)| id.as_str())
+        .collect();
+    // The base game's gun (the made-up pack names its gun the same).
+    assert!(ids.contains(&bri_weapons::testing::GUN_ITEM));
     assert!(ids.contains(&"weapon_synthetic_blaster:weapon/blasteritem"));
     // Item presentation, pickup bounds and HUD icons cover imported items.
     let items = bri_client::items::ItemAssets::load_with(
@@ -68,12 +97,22 @@ fn client_loads_imported_packages_beside_the_base_game() {
         &paths.weapon_extras,
     )
     .unwrap();
-    bri_client::item_ui::ItemUi::new(&items, &content.weapons.item_choices, &content.ui_pack).unwrap();
-    items
-        .item_scene("weapon_synthetic_blaster:weapon/blasteritem", glam::Mat4::IDENTITY)
+    bri_client::item_ui::ItemUi::new(&items, &content.weapons.item_choices, &content.ui_pack)
         .unwrap();
-    assert!(content.item_physics.bounds.contains_key("weapon_synthetic_blaster:weapon/blasteritem"));
-    bri_client::explosion_shapes::ExplosionShapes::load(&content.weapons.pack, &paths.weapons).unwrap();
+    items
+        .item_scene(
+            "weapon_synthetic_blaster:weapon/blasteritem",
+            glam::Mat4::IDENTITY,
+        )
+        .unwrap();
+    assert!(
+        content
+            .item_physics
+            .bounds
+            .contains_key("weapon_synthetic_blaster:weapon/blasteritem")
+    );
+    bri_client::explosion_shapes::ExplosionShapes::load(&content.weapons.pack, &paths.weapons)
+        .unwrap();
     // The imported brick is in the brick menu under the category it declares,
     // with its own icon.
     let pad = content
@@ -81,7 +120,14 @@ fn client_loads_imported_packages_beside_the_base_game() {
         .iter()
         .find(|b| b.id == "weapon_synthetic_blaster:brick/brickblasterpaddata")
         .expect("imported brick in the brick menu");
-    assert_eq!((pad.category.as_str(), pad.subcategory.as_str(), pad.ui_name.as_str()), ("Special", "Synthetic", "Blaster Pad"));
+    assert_eq!(
+        (
+            pad.category.as_str(),
+            pad.subcategory.as_str(),
+            pad.ui_name.as_str()
+        ),
+        ("Special", "Synthetic", "Blaster Pad")
+    );
     let bri_ui::api::IconRef::Pack(icon) = &pad.icon else {
         panic!("imported brick has no icon: {:?}", pad.icon);
     };
@@ -97,18 +143,25 @@ fn client_loads_imported_packages_beside_the_base_game() {
             .item_scene("weapon_shotgun:weapon/shotgunitem", glam::Mat4::IDENTITY)
             .unwrap();
         assert!(!shotgun.vertices.is_empty(), "the shotgun model draws");
-        assert!(content.vehicles.definitions.iter().any(|d| d.id == "vehicle_blocko_car:vehicle/blockocarvehicle"));
-        bri_client::vehicles::VehicleAssets::load_with(&paths.vehicles, &paths.vehicle_extras).unwrap();
+        assert!(
+            content
+                .vehicles
+                .definitions
+                .iter()
+                .any(|d| d.id == "vehicle_blocko_car:vehicle/blockocarvehicle")
+        );
+        bri_client::vehicles::VehicleAssets::load_with(&paths.vehicles, &paths.vehicle_extras)
+            .unwrap();
     }
+    Ok(())
 }
 
 /// One enabled Add-On that cannot load (here its folder is gone) is left out
 /// with its reason; the game still starts with the base game and the rest.
-#[test]
-#[ignore = "requires generated content (content/, see docs/content-regeneration.md)"]
-fn a_broken_add_on_is_left_out_instead_of_stopping_the_game() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
-    let mut set = PackageSet::base();
+fn a_broken_add_on_is_left_out_instead_of_stopping_the_game(f: &ContentRoot) -> anyhow::Result<()> {
+    let root = &f.root;
+    let base = PackageSet::load_root(root)?;
+    let mut set = base.clone();
     set.packages.push(PackageEntry {
         id: "weapon_gone".into(),
         version: "1.0.0".into(),
@@ -116,9 +169,10 @@ fn a_broken_add_on_is_left_out_instead_of_stopping_the_game() {
         dir: format!("_addon-gone-{}", std::process::id()),
         role: None,
     });
-    assert!(ClientContent::load_packages(&root, &set).is_err());
-    let (content, left_out) = ClientContent::load_leaving_out_broken(&root, &set).unwrap();
-    assert_eq!(content.paths.packages, PackageSet::base());
+    assert!(ClientContent::load_packages(root, &set).is_err());
+    let (content, left_out) = ClientContent::load_leaving_out_broken(root, &set).unwrap();
+    assert_eq!(content.paths.packages, base);
     assert_eq!(left_out.len(), 1);
     assert!(left_out[0].starts_with("weapon_gone: "), "{left_out:?}");
+    Ok(())
 }
