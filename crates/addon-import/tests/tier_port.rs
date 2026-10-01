@@ -1172,3 +1172,160 @@ fn tier2a_bursts_scopes_and_the_free_left_gun() {
     g.steps(60);
     assert_eq!(g.mag(a), json!("3|5|tt-556|89"), "it fired");
 }
+
+const NSE: &str = "weapon_package_explosive1";
+
+/// Explosive 1 on Tier 1: each grenade is counted from its holder's
+/// grenades, a throw taking one; with none left the grenade leaves the
+/// hand and comes back as a grenade bag brings more. The conc goes off on
+/// its second knock with a knock at each; the firebomb bursts into two or
+/// three embers thrown as its script threw them, which sear the players
+/// near them with flames and a sizzle only they hear; its raised arm is
+/// raised once while it waits to be thrown. The check for the base game's
+/// rocket launcher is no gap.
+#[test]
+fn explosive1_grenades_count_down_and_the_molotov_burns() {
+    let (dir, out, report) = imported_on(
+        "Weapon_Package_Explosive1",
+        NSE,
+        &["Weapon_Package_Tier1"],
+        "nades",
+    );
+    let port = &report.ports[0];
+    assert!(port.applied, "{:?}", port.reason);
+    assert_eq!(
+        report.summary.needs_behaviour_ported,
+        report.summary.needs_behaviour,
+        "{:?}",
+        report
+            .needs_behaviour
+            .iter()
+            .filter(|b| b.port.as_ref().is_none_or(|p| !p.applied))
+            .map(|b| &b.function)
+            .collect::<Vec<_>>()
+    );
+    let gaps: Vec<_> = report.unsupported.iter().map(|u| &u.what).collect();
+    assert!(!gaps.iter().any(|w| w.contains("isFile")), "{gaps:?}");
+    let pack = pack(&out);
+    let image = |name: &str| pack.images[&format!("{NSE}:image/{name}")].clone();
+    let projectile = |name: &str| pack.projectiles[&format!("{NSE}:projectile/{name}")].clone();
+    for (name, ammo, reserve) in [
+        ("tierfraggrenadeimage", "tt-fragnades", 4),
+        ("tierstickgrenadeimage", "tt-sticknades", 3),
+        ("tmolotovimage", "tt-molnades", 2),
+    ] {
+        let mag = image(name).magazine.unwrap();
+        assert!(mag.from_reserve, "{name}");
+        assert_eq!((mag.ammo.as_str(), mag.reserve), (ammo, reserve));
+    }
+    let conc = projectile("tierfraggrenadeprojectile");
+    assert_eq!(conc.max_bounces, 2);
+    assert_eq!(
+        pack.explosions[&conc.bounce_effect.to_ascii_lowercase()].sound,
+        format!("{NSE}:sound/standinknocksound")
+    );
+    let embers = &projectile("tmolotovprojectile").children[0];
+    assert_eq!((embers.count, embers.max_count), (2, 3));
+    assert_eq!(
+        embers.steps,
+        Some(Steps {
+            low: [-2, 0, -1],
+            high: [2, 2, 3],
+            offset: [-0.25; 3],
+            step: [2.0, 2.0, -2.0],
+        }),
+        "x as the script's x, up as its z, back as its y turned round"
+    );
+    let aura = projectile("tierfireroastprojectile").aura.unwrap();
+    assert_eq!(
+        (aura.radius, aura.damage, aura.every_ticks, aura.max_pulses),
+        (3.0, 5.0, 30, 4)
+    );
+    assert!(aura.players_only);
+    assert_eq!(aura.effect, "standinSearExplosion");
+    assert_eq!(aura.target_sound, format!("{NSE}:sound/standinsizzlesound"));
+    let armed = image("tmolotovimage");
+    let armed = armed.states.iter().find(|s| s.name == "Armed").unwrap();
+    assert!(armed.arm_once && armed.arm == "spearReady");
+
+    // In a game: A and B six apart, each with the three grenades.
+    let tier1 = import_beside(&dir.0, "Weapon_Package_Tier1", NS, &[]);
+    assert!(tier1.ports[0].applied);
+    let mut g = Game::with_add_ons(&dir.0, &out, NSE, &[NS]);
+    let a = g.join("A", Vec3::new(0.0, 0.05, 0.0));
+    let b = g.join("B", Vec3::new(0.0, 0.05, -6.0));
+    g.steps(2);
+    g.s.set_spawn_points(vec![g.feet(a)]).unwrap();
+    let mut loadout: [Option<String>; 5] = Default::default();
+    for (i, item) in [
+        "tierfraggrenadeitem",
+        "tierstickgrenadeitem",
+        "tmolotovitem",
+    ]
+    .iter()
+    .enumerate()
+    {
+        loadout[i] = Some(format!("{NSE}:weapon/{item}"));
+    }
+    g.cmd(
+        a,
+        Command::MiniGame(MiniGameRequest::Create {
+            color: 0,
+            settings: Settings {
+                loadout,
+                ..Settings::default()
+            },
+        }),
+    );
+    let game = g.s.minigame_views()[0].id;
+    g.s.set_spawn_points(vec![g.feet(b)]).unwrap();
+    g.cmd(b, Command::MiniGame(MiniGameRequest::Join { game }));
+    g.steps(330);
+
+    // Four concs, thrown away from B.
+    g.looks.get_mut(&a).unwrap().yaw = std::f32::consts::PI;
+    g.equip(a, "tierfraggrenadeitem");
+    assert_eq!(g.mag(a), json!("4|1|tt-fragnades|4"));
+    let throw = |g: &mut Game| {
+        g.cmd(a, Command::WeaponTrigger { down: true });
+        g.steps(2);
+        g.cmd(a, Command::WeaponTrigger { down: false });
+        g.steps(150);
+    };
+    for left in [3, 2, 1] {
+        throw(&mut g);
+        assert_eq!(g.mag(a), json!(format!("{left}|1|tt-fragnades|{left}")));
+    }
+    throw(&mut g);
+    assert_eq!(g.who(a), "v20.player.playerstandardarmor|", "none left");
+    assert_eq!(g.mag(a), json!("0|1|tt-fragnades|0"));
+    // A bag: one more conc, back in hand (the firebombs are full).
+    g.drop(a, "grenadebagitem");
+    assert_eq!(
+        g.who(a),
+        format!("v20.player.playerstandardarmor|{NSE}:image/tierfraggrenadeimage")
+    );
+    assert_eq!(g.mag(a), json!("1|1|tt-fragnades|1"));
+
+    // A firebomb at B's feet: its embers sear B, who alone hears it.
+    g.looks.get_mut(&a).unwrap().yaw = 0.0;
+    g.equip(a, "tmolotovitem");
+    let eye = g.feet(a).y + 2.156;
+    g.looks.get_mut(&a).unwrap().pitch = ((g.feet(b).y - eye) / 6.0).atan();
+    g.s.take_private_notices();
+    g.cmd(a, Command::WeaponTrigger { down: true });
+    g.steps(2);
+    g.cmd(a, Command::WeaponTrigger { down: false });
+    g.steps(270);
+    assert!(g.health(b) < 100.0, "{}", g.health(b));
+    let notices = g.s.take_private_notices();
+    let sizzle = format!("{NSE}:sound/standinsizzlesound");
+    let heard = |who: OwnerId| {
+        notices
+            .iter()
+            .any(|(o, n)| *o == who && matches!(n, Notice::Sound(p) if *p == sizzle))
+    };
+    assert!(heard(b), "{notices:?}");
+    assert!(!heard(a));
+    assert_eq!(g.mag(a), json!("1|1|tt-molnades|1"));
+}

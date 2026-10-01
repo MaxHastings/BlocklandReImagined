@@ -687,8 +687,9 @@ The fields you are most likely to change:
 | image | `volleys` | up to 4 more sets each shot fires after its own: `[{ "projectile": "...", "projectiles": 1, "spread": 0.0005 }]`, a shotgun's slug after its pellets |
 | image | `last_shot` | `{ "shot": {...}, "volleys": [...] }`: what the magazine's last `last_rounds` rounds fire instead (a two-barrel gun's single barrel) |
 | image | `state_shots` | `{ "onfire2": {...} }`: a shot fired on entering a state with that script, as onFire's is, so a gun can spread wider as it keeps firing |
-| image state | `arm`, `gesture` | the holder's animation on entering it: `arm` on thread 2 (`shiftright`), `gesture` on thread 3, the other hand |
-| projectile | `children` | smaller projectiles it throws out as it flies, bounces or explodes: one set or a list of up to 4, each its own `projectile`, `count`, `speed`; `fuse_ticks: [0, 48]` sets each child off after a random time in that range, as cluster bomblets |
+| image state | `arm`, `gesture` | the holder's animation on entering it: `arm` on thread 2 (`shiftright`), `gesture` on thread 3, the other hand; `"arm_once": true` does not play `arm` again as the state times out into itself (an arm raised while a throw waits) |
+| projectile | `children` | smaller projectiles it throws out as it flies, bounces or explodes: one set or a list of up to 4, each its own `projectile`, `count`, `speed`; `fuse_ticks: [0, 48]` sets each child off after a random time in that range, as cluster bomblets; `max_count` throws a random number from `count` to it; `steps` (`low`, `high`, `offset`, `step`, each `[x, up, back]`) sets each axis of a child's velocity to a whole number from `low` to `high`, plus `offset`, times `step`, as a script that threw embers with `getRandom` |
+| projectile | `aura` | hurts what is within `radius` every `every_ticks` as it flies: `damage`, `players_only` to pass vehicles by, `effect` played on each one hurt at its scale, `target_sound` heard by that player alone, `max_pulses` to stop after so many (it flies on) |
 | image | `cook` | a grenade whose fuse burns from a state in the hand (below) |
 | projectile | `fixed_damage` | its direct damage stays as authored at any scale |
 | item | `ui_name` | the name players see |
@@ -760,6 +761,13 @@ sent to them alone and only when it changes; with `display_ticks` (up to
 `display_scripts` names show it again (a dry pull), as does the light key
 when there is nothing to load. A size is 1 to 1000 rounds;
 an ammo name is 1 to 32 letters, digits, `.`, `_` or `-`.
+
+A magazine with `"from_reserve": true` (size 1) has no rounds of its own:
+each throw takes `per_shot` straight from the reserve and nothing
+reloads, as Tier+Tactical's counted grenades. With none left the image
+leaves the hand while its tool stays selected; more ammo of its kind
+(a grenade bag) puts it back. The display shows the reserve alone, and
+the light key works the light.
 
 A magazine can instead follow the image's own states, as Tier+Tactical's
 guns did with their check scripts: `checks` names the flags each state

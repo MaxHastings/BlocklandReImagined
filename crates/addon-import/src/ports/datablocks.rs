@@ -42,6 +42,22 @@ pub struct Magazines {
     /// a script ammo system's `reload_state` and `checks`).
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub every: serde_json::Map<String, Value>,
+    /// Items counted straight from the reserve, with no magazine of their
+    /// own (Tier+Tactical's grenades).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub counted: Option<Counted>,
+}
+
+/// [`Magazines::counted`]: every item with `field` set and an ammo type
+/// gets a magazine counted from its reserve (`from_reserve`), each throw
+/// taking one, with the type's reserve and display and `every`'s fields.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Counted {
+    /// The item field that marks one (`TT_grenade`).
+    pub field: String,
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub every: serde_json::Map<String, Value>,
 }
 
 /// One ammo type of [`Magazines`].
@@ -169,8 +185,15 @@ pub fn magazines(
     let mut items = BTreeMap::new();
     for (id, item) in weapons["items"].as_object().into_iter().flatten() {
         let name = item["name"].as_str().unwrap_or_default();
-        let (Some(size), Some(kind)) = (blocks.field(name, &m.size), blocks.field(name, &m.ammo))
-        else {
+        let counted = m
+            .counted
+            .as_ref()
+            .filter(|c| set(blocks.field(name, &c.field)));
+        let size = match counted {
+            Some(_) => Some("1"),
+            None => blocks.field(name, &m.size),
+        };
+        let (Some(size), Some(kind)) = (size, blocks.field(name, &m.ammo)) else {
             continue;
         };
         let size: u32 = size
@@ -193,7 +216,11 @@ pub fn magazines(
             image.is_object(),
             "{name}: its image {image_id} did not import"
         );
-        let single = m.one_by_one.as_deref().and_then(|s| round_ticks(image, s));
+        let single = m
+            .one_by_one
+            .as_deref()
+            .filter(|_| counted.is_none())
+            .and_then(|s| round_ticks(image, s));
         let mut magazine = json!({
             "size": size,
             "ammo": ty.ammo,
@@ -205,7 +232,13 @@ pub fn magazines(
         if single.is_some() {
             magazine["one_by_one"] = json!(true);
         }
-        super::merge(&mut magazine, &Value::Object(m.every.clone()));
+        if let Some(counted) = counted {
+            magazine["reload_ticks"] = json!(m.reload_ticks);
+            magazine["from_reserve"] = json!(true);
+            super::merge(&mut magazine, &Value::Object(counted.every.clone()));
+        } else {
+            super::merge(&mut magazine, &Value::Object(m.every.clone()));
+        }
         if let Some((_, extra)) = m.items.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)) {
             super::merge(&mut magazine, extra);
         }
@@ -216,6 +249,33 @@ pub fn magazines(
         }
         images.insert(image_id.to_owned(), json!({ "magazine": magazine }));
         items.insert(id.clone(), Value::String(ty.ammo.clone()));
+        // A counted item's state scripts that ask whether any are left, or
+        // take one, are what its magazine does.
+        if counted.is_some() {
+            let owner = image["name"].as_str().unwrap_or_default();
+            for script in image["states"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|s| s["script"].as_str())
+            {
+                let what = format!(
+                    "{}::{}",
+                    owner.to_ascii_lowercase(),
+                    script.to_ascii_lowercase()
+                );
+                let body = code.bodies.get(&what).map(|b| b.to_ascii_lowercase());
+                if body
+                    .is_some_and(|b| b.contains("tt_needsammo") || b.contains("tt_decrementammo"))
+                {
+                    super::handle(
+                        handled,
+                        &what,
+                        "counted from the reserve (engine from_reserve): a throw takes one, and with none left it leaves the hand until more arrive",
+                    );
+                }
+            }
+        }
     }
     // An image another script mounts in the gun's place (a second fire
     // mode) loads from the gun's magazine: the system keeps its rounds on
@@ -393,12 +453,16 @@ fn groups(
 /// the group's value (a number when it reads as one), `{group|kick}` the
 /// view kick of the projectile it names (its explosion's camera shake),
 /// `{group|sound}` the sound it names, `{group|projectile}` the projectile
-/// and `{group|image}` the image of this import, `{group|neg}` the number
-/// negated; before any of those, `field` reads the datablock's field the
-/// group names (`%obj.TT_ammoPickup[0]`'s value) and `word<N>` takes its
-/// Nth word, from 0 (`getWord`): `{f|field|word1}`; `text` keeps a value
-/// that reads as a number a string. `{group}` inside a
-/// longer string becomes its text.
+/// and `{group|image}` the image of this import, `{group|explosion}` the
+/// explosion effect of the projectile it names, `{group|neg}` the number
+/// negated, `{group|ticks}` milliseconds as ticks; before any of those,
+/// `field` reads the datablock's field the group names
+/// (`%obj.TT_ammoPickup[0]`'s value) and `word<N>` takes its Nth word,
+/// from 0 (`getWord`): `{f|field|word1}`; `text` keeps a value that reads
+/// as a number a string. `{=text}` starts from `text` itself in place of a
+/// group: `{=PrjLoop_tickTime|field|ticks}` reads that field of the
+/// datablock whose method matched. `{group}` inside a longer string
+/// becomes its text.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ScriptRule {
@@ -676,10 +740,14 @@ fn fill(v: &Value, values: &BTreeMap<String, String>, cx: &Fill) -> Result<Value
             let inner = &s[1..s.len() - 1];
             let mut filters = inner.split('|');
             let group = filters.next().unwrap_or_default();
-            let mut value = values
-                .get(group)
-                .with_context(|| format!("`{s}`: the pattern has no group `{group}`"))?
-                .clone();
+            // `{=PrjLoop_tickTime|field}`: the text itself, not a group's.
+            let mut value = match group.strip_prefix('=') {
+                Some(text) => text.to_owned(),
+                None => values
+                    .get(group)
+                    .with_context(|| format!("`{s}`: the pattern has no group `{group}`"))?
+                    .clone(),
+            };
             let mut filter = "";
             for f in filters {
                 ensure!(filter.is_empty(), "`{s}`: `{filter}` comes last");
@@ -732,6 +800,17 @@ fn fill(v: &Value, values: &BTreeMap<String, String>, cx: &Fill) -> Result<Value
                     .with_context(|| format!("`{value}` is no projectile with a camera shake"))?,
                 "sound" => json!(sound_ref(weapons, value)),
                 "projectile" => json!(projectile_ref(weapons, value)),
+                // The explosion effect of the projectile it names
+                // (`spawnExplosion(tierFirePlayerProjectile, ...)`).
+                "explosion" => {
+                    let id = id_of(weapons, "ProjectileData", value)
+                        .with_context(|| format!("`{value}` is no projectile of this import"))?;
+                    let effect = weapons["projectiles"][&id]["explosion"]["effect"]
+                        .as_str()
+                        .filter(|e| !e.is_empty())
+                        .with_context(|| format!("`{value}` has no explosion"))?;
+                    json!(effect)
+                }
                 "image" => json!(
                     id_of(weapons, "ShapeBaseImageData", value)
                         .with_context(|| format!("`{value}` is no image of this import"))?
@@ -746,7 +825,7 @@ fn fill(v: &Value, values: &BTreeMap<String, String>, cx: &Fill) -> Result<Value
                     .map_or(Value::Null, |id| json!(id)),
                 other => {
                     bail!(
-                        "`{s}`: no filter `{other}` (field, word<N>, text, neg, ticks, kick, sound, projectile, image or archetype)"
+                        "`{s}`: no filter `{other}` (field, word<N>, text, neg, ticks, kick, sound, projectile, explosion, image or archetype)"
                     )
                 }
             }

@@ -434,6 +434,11 @@ impl Session {
                     was_thrown,
                 } => self.football_catch(source.0, catcher.0, distance_feet, was_thrown),
                 WeaponEvent::DropRemoved { drop } => self.forget_drop(drop),
+                WeaponEvent::Heard { actor, profile } => {
+                    if self.peers.contains_key(&actor.0) {
+                        self.notify(actor.0, Notice::Sound(profile));
+                    }
+                }
                 WeaponEvent::Print {
                     actor,
                     text,
@@ -838,6 +843,17 @@ pub(crate) fn ammo_text(view: &bri_weapons::runtime::AmmoView) -> String {
         ""
     };
     let name = plain_name(&view.name);
+    // A grenade counted from the reserve shows only how many are left,
+    // `--` when they never run out (`TT_displayAmmo` for a `TT_grenade`).
+    if view.counted {
+        let count = match view.reserve {
+            bri_weapons::runtime::Reserve::Rounds(n) => n.to_string(),
+            bri_weapons::runtime::Reserve::Endless => "--".to_string(),
+        };
+        return format!(
+            "<just:right><font:impact:24><color:fff000>{name} <font:impact:34><color:ffffff> {count} "
+        );
+    }
     format!(
         "<just:right><font:impact:24><color:fff000>{name} <font:impact:34><color:ffffff>{} \
          <font:impact:24>/ {reserve}{state} ",

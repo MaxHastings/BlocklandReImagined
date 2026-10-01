@@ -467,6 +467,12 @@ pub enum Event {
     DropRemoved {
         drop: u64,
     },
+    /// A sound `actor` alone hears, at their ears (`play2D`): a burning
+    /// player's sizzle.
+    Heard {
+        actor: ActorId,
+        profile: String,
+    },
     /// Text in the middle of the holder's screen for `seconds`: a cooked
     /// grenade's countdown.
     Print {
@@ -669,6 +675,9 @@ pub struct AmmoView {
     pub reloading: bool,
     /// How long the display stays up ([`crate::Magazine::display_ticks`]).
     pub display_ticks: u32,
+    /// Counted from the reserve ([`crate::Magazine::from_reserve`]):
+    /// `rounds` is the reserve, and there is no magazine to show.
+    pub counted: bool,
 }
 /// The key the rounds of the gun `item` in tool `slot` are kept under.
 fn slot_key(item: &str, slot: usize) -> String {
@@ -677,6 +686,19 @@ fn slot_key(item: &str, slot: usize) -> String {
 /// The item (or image) a magazine key belongs to.
 fn key_item(key: &str) -> &str {
     key.rsplit_once('#').map_or(key, |(item, _)| item)
+}
+/// The rounds `key`'s magazine holds: one counted from its reserve
+/// ([`crate::Magazine::from_reserve`]) holds what the reserve does.
+fn rounds_in(a: &Actor, key: &str, magazine: &crate::Magazine) -> u32 {
+    if magazine.from_reserve {
+        match a.reserve.get(&magazine.ammo) {
+            Some(Reserve::Endless) => u32::MAX,
+            Some(Reserve::Rounds(n)) => *n,
+            None => 0,
+        }
+    } else {
+        a.rounds.get(key).copied().unwrap_or(0)
+    }
 }
 impl Actor {
     /// Whether the fire button is held, whatever is (or is not) in hand.
@@ -1044,6 +1066,21 @@ impl WeaponsWorld {
     fn magazine_of(&self, a: &Actor) -> Option<(String, crate::Magazine)> {
         self.magazine_in(a.images[0].as_ref()?)
     }
+    /// With nothing in the right hand, the selected tool's magazine if it
+    /// is counted from the reserve: a grenade put away when the last was
+    /// thrown, which comes back as reserve arrives.
+    fn stowed(&self, a: &Actor) -> Option<(String, crate::Magazine)> {
+        if a.images[0].is_some() {
+            return None;
+        }
+        let slot = a.selected?;
+        let item = a.inventory.get(slot)?.as_ref()?;
+        let image = &self.pack.items.get(item)?.image;
+        let magazine = self.pack.images.get(image)?.magazine.clone()?;
+        magazine
+            .from_reserve
+            .then(|| (slot_key(item, slot), magazine))
+    }
     /// The magazine of `held`, which a running state has out of the hand.
     fn magazine_in(&self, held: &Equipped) -> Option<(String, crate::Magazine)> {
         let magazine = self.pack.images.get(&held.image)?.magazine.clone()?;
@@ -1064,7 +1101,9 @@ impl WeaponsWorld {
         if a.reload.as_ref().is_some_and(|r| r.item != key) {
             a.reload = None;
         }
-        a.rounds.entry(key.clone()).or_insert(magazine.size);
+        if !magazine.from_reserve {
+            a.rounds.entry(key.clone()).or_insert(magazine.size);
+        }
         a.reserve
             .entry(magazine.ammo.clone())
             .or_insert(Reserve::Rounds(magazine.reserve.min(magazine.max_reserve)));
@@ -1095,7 +1134,9 @@ impl WeaponsWorld {
         if a.reload.as_ref().is_some_and(|r| r.item != key) {
             a.reload = None;
         }
-        a.rounds.entry(key.clone()).or_insert(magazine.size);
+        if !magazine.from_reserve {
+            a.rounds.entry(key.clone()).or_insert(magazine.size);
+        }
         self.magazine_flags(a, &image, &key, &magazine);
         self.events.push(Event::Ammo { actor: id });
     }
@@ -1106,7 +1147,20 @@ impl WeaponsWorld {
         let Some((key, magazine)) = self.magazine_in(held) else {
             return Some(false);
         };
-        let rounds = a.rounds.get(&key).copied().unwrap_or(0);
+        let rounds = rounds_in(a, &key, &magazine);
+        if magazine.from_reserve {
+            // A grenade counted from the reserve: the throw takes it there.
+            if !magazine.fires(rounds) {
+                self.empty_click(id, a, &magazine);
+                return None;
+            }
+            if let Some(reserve) = a.reserve.get_mut(&magazine.ammo) {
+                reserve.take(magazine.per_shot);
+            }
+            self.magazine_flags(a, &held.image, &key, &magazine);
+            self.events.push(Event::Ammo { actor: id });
+            return Some(false);
+        }
         if magazine.scripted() {
             // The image's states decide when it fires and reloads; a shot
             // ends a reload under way, as a pump's trigger stops its shells.
@@ -1174,7 +1228,8 @@ impl WeaponsWorld {
             .get(&magazine.ammo)
             .copied()
             .unwrap_or(Reserve::Rounds(0));
-        if a.reload.is_some() || rounds >= magazine.size || !reserve.any() {
+        if a.reload.is_some() || magazine.from_reserve || rounds >= magazine.size || !reserve.any()
+        {
             return false;
         }
         let scripted = magazine.scripted();
@@ -1276,7 +1331,7 @@ impl WeaponsWorld {
             // Its state scripts set the flags (`apply_check`).
             return;
         }
-        let shot = magazine.fires(a.rounds.get(key).copied().unwrap_or(0)) && a.reload.is_none();
+        let shot = magazine.fires(rounds_in(a, key, magazine)) && a.reload.is_none();
         let uses_loaded = self.pack.images.get(image).is_some_and(|i| {
             i.states
                 .iter()
@@ -1384,6 +1439,10 @@ impl WeaponsWorld {
         else {
             return Ok(false);
         };
+        // A grenade has nothing to reload: the key works the light.
+        if magazine.from_reserve {
+            return Ok(false);
+        }
         if magazine.light_states.is_empty() {
             self.reload(id)?;
             return Ok(true);
@@ -1407,12 +1466,14 @@ impl WeaponsWorld {
         }
         Ok(reloads)
     }
-    /// The held gun's magazine and reserve, when it has one.
+    /// The held gun's magazine and reserve, when it has one, or the
+    /// selected grenade's that left the hand for want of reserve.
     pub fn ammo(&self, id: ActorId) -> Option<AmmoView> {
         let a = self.actors.get(&id)?;
-        let (item, magazine) = self.magazine_of(a)?;
+        let (item, magazine) = self.magazine_of(a).or_else(|| self.stowed(a))?;
         Some(AmmoView {
-            rounds: a.rounds.get(&item).copied().unwrap_or(0),
+            rounds: rounds_in(a, &item, &magazine).min(100_000),
+            counted: magazine.from_reserve,
             item: key_item(&item).to_string(),
             size: magazine.size,
             name: magazine.name().to_string(),
@@ -1455,6 +1516,14 @@ impl WeaponsWorld {
         };
         a.reserve.insert(ammo.to_string(), reserve);
         let mut a = self.actors.remove(&id).expect("checked");
+        // A grenade put away for want of reserve comes back into the hand.
+        if let Some((key, magazine)) = self.stowed(&a)
+            && magazine.ammo == ammo
+            && magazine.fires(rounds_in(&a, &key, &magazine))
+            && let Some(image) = self.pack.items.get(key_item(&key)).map(|i| i.image.clone())
+        {
+            self.swap_images(id, &mut a, NextImage { image, paint: None });
+        }
         // An empty gun waiting on reserve reloads as soon as it has some.
         if let Some((key, magazine)) = self.magazine_of(&a) {
             if a.rounds.get(&key).copied().unwrap_or(0) < magazine.per_shot {
@@ -1512,6 +1581,7 @@ impl WeaponsWorld {
             .items
             .get(item)
             .and_then(|i| self.pack.images.get(&i.image)?.magazine.as_ref())
+            .filter(|m| !m.from_reserve)
             .map(|m| m.size)
             .context("That item has no magazine")?;
         let item = slot_key(item, slot);
@@ -1536,6 +1606,7 @@ impl WeaponsWorld {
             .items
             .get(&d.item)
             .and_then(|i| self.pack.images.get(&i.image)?.magazine.as_ref())
+            .filter(|m| !m.from_reserve)
             .map(|m| m.size)
             .context("That item has no magazine")?;
         d.rounds = Some(rounds.min(size));
@@ -2150,6 +2221,8 @@ impl WeaponsWorld {
         if e.entered && e.remaining > 0 {
             e.remaining -= 1;
         }
+        // The state the image just left, for `arm_once`.
+        let mut left = None;
         for _ in 0..16 {
             let state = &image.states[e.state];
             // A zero-timeout state that times out into itself (the wands'
@@ -2228,7 +2301,7 @@ impl WeaponsWorld {
                         image_hand: Some(e.hand),
                     });
                 }
-                if !state.arm.is_empty() {
+                if !state.arm.is_empty() && !(state.arm_once && left == Some(e.state)) {
                     self.animation(id, &state.arm);
                 }
                 if !state.gesture.is_empty() {
@@ -2286,6 +2359,21 @@ impl WeaponsWorld {
                     }
                     return Advance::Drop;
                 }
+                // A grenade counted from the reserve, with none left, leaves
+                // the hand; its tool stays selected for the reserve to come.
+                if e.hand == 0
+                    && let Some(magazine) = &image.magazine
+                    && magazine.from_reserve
+                    && !magazine.fires(rounds_in(a, "", magazine))
+                {
+                    let selected = a.selected;
+                    self.put_away(id, e);
+                    self.unmount(id, a);
+                    a.selected = selected;
+                    self.events.push(Event::Unmounted { actor: id, hand: 0 });
+                    self.events.push(Event::Ammo { actor: id });
+                    return Advance::Drop;
+                }
             }
             if e.remaining > 0 && state.wait && !self_loop {
                 return Advance::Keep;
@@ -2312,6 +2400,7 @@ impl WeaponsWorld {
                 e.entered = false;
                 return Advance::Keep;
             }
+            left = Some(e.state);
             e.state = next;
             e.entered = false;
         }
@@ -2815,6 +2904,8 @@ impl WeaponsWorld {
         if let Some(aura) = &d.aura
             && flown > 0
             && flown.is_multiple_of(u64::from(aura.every_ticks))
+            && (aura.max_pulses == 0
+                || flown / u64::from(aura.every_ticks) <= u64::from(aura.max_pulses))
         {
             self.aura(p, &d, aura, q);
         }
@@ -3278,12 +3369,28 @@ impl WeaponsWorld {
     /// parent, so every player computes the same ones.
     /// Each `set` of a projectile's children draws its own directions.
     fn children(&mut self, p: &Projectile, c: &crate::Children, set: usize) {
-        for n in (0..u64::from(c.count)).map(|n| n + set as u64 * 16) {
+        let count = if c.max_count > c.count {
+            let r = unit_random(self.tick, p.id, 2000 + set as u64);
+            (c.count + ((c.max_count - c.count + 1) as f32 * r) as u32).min(c.max_count)
+        } else {
+            c.count
+        };
+        for n in (0..u64::from(count)).map(|n| n + set as u64 * 16) {
             let z = unit_random(self.tick, p.id, n * 2) * 2.0 - 1.0;
             let phi = unit_random(self.tick, p.id, n * 2 + 1) * std::f32::consts::TAU;
             let r = (1.0 - z * z).max(0.0).sqrt();
-            let direction = Vec3::new(r * phi.cos(), z, r * phi.sin());
-            let velocity = (direction * c.speed + p.velocity * c.inherit) * p.scale;
+            let mut direction = Vec3::new(r * phi.cos(), z, r * phi.sin());
+            let mut own = direction * c.speed;
+            if let Some(steps) = &c.steps {
+                own = Vec3::from_array(std::array::from_fn(|axis| {
+                    let (low, high) = (steps.low[axis], steps.high[axis]);
+                    let r = unit_random(self.tick, p.id, 3000 + n * 3 + axis as u64);
+                    let whole = (low + ((high - low + 1) as f32 * r) as i32).min(high);
+                    (whole as f32 + steps.offset[axis]) * steps.step[axis]
+                }));
+                direction = own.normalize_or_zero();
+            }
+            let velocity = (own + p.velocity * c.inherit) * p.scale;
             let at = p.position + direction * 0.05 * p.scale;
             match self.spawn(&c.projectile, p.source, at, velocity, p.scale) {
                 Ok(child) => {
@@ -3316,8 +3423,36 @@ impl WeaponsWorld {
             .into_iter()
             .take(MAX_QUERY_TARGETS)
         {
-            if !target.center.is_finite() || !q.can_affect_radius(p.source, target.target) {
+            if !target.center.is_finite()
+                || aura.players_only && matches!(target.target, TargetId::Vehicle(_))
+                || !q.can_affect_radius(p.source, target.target)
+            {
                 continue;
+            }
+            if !aura.effect.is_empty() {
+                let scale = match target.target {
+                    TargetId::Actor(t) => self.actors.get(&t).map_or(1.0, |a| a.frame.scale),
+                    _ => 1.0,
+                };
+                self.events.push(Event::Effect {
+                    source: target.target,
+                    definition: aura.effect.clone(),
+                    position: target.center,
+                    node: String::new(),
+                    seconds: 0.0,
+                    image: None,
+                    hand: None,
+                    direction: None,
+                    scale,
+                });
+            }
+            if !aura.target_sound.is_empty()
+                && let TargetId::Actor(actor) = target.target
+            {
+                self.events.push(Event::Heard {
+                    actor,
+                    profile: aura.target_sound.clone(),
+                });
             }
             if aura.damage > 0.0 {
                 self.events.push(Event::Damage {

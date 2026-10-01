@@ -153,6 +153,12 @@ pub struct State {
     /// `armattack` for a swing, `root` to stop.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub arm: String,
+    /// `arm` plays as the state is entered from another, not again each
+    /// time it times out into itself: a script that guarded its
+    /// `playThread` with a flag it then cleared (the molotov's
+    /// `getImageAmmo` in `onArmed`).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub arm_once: bool,
     /// The holder's thread-3 animation played on entering the state, as
     /// v20 scripts' `playThread(3, shiftLeft)`: the other arm's move, a
     /// gesture over whatever thread 2 plays; `root` stops it.
@@ -685,6 +691,16 @@ pub struct Magazine {
     /// `TT_onEmptyFire`. At most 8.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub display_scripts: Vec<String>,
+    /// No magazine of its own: each shot takes `per_shot` straight from
+    /// the reserve and nothing reloads, as Tier+Tactical counted a
+    /// `TT_grenade` in `%obj.quantity[type]`. Out of reserve, the image
+    /// leaves the hand as it enters its next state (the grenades'
+    /// `TT_needsAmmo` then `unMountImage`) while its tool stays selected,
+    /// and comes back into the hand as reserve arrives (`TT_onGiveAmmo`'s
+    /// `mountImage`). The ammo display shows the reserve alone. Not with
+    /// `checks`, `one_by_one`, `last_rounds` or `light_states`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub from_reserve: bool,
 }
 /// [`Magazine::checks`]: the flags a script sets, each left as it was when
 /// absent.
@@ -824,6 +840,14 @@ impl Magazine {
                     .iter()
                     .all(|s| (1..=64).contains(&s.len())),
             "Invalid magazine display"
+        );
+        ensure!(
+            !self.from_reserve
+                || (self.checks.is_empty()
+                    && !self.one_by_one
+                    && self.last_rounds == 0
+                    && self.light_states.is_empty()),
+            "A magazine counted from its reserve has no checks, reloads or last rounds"
         );
         Ok(())
     }
@@ -1372,6 +1396,30 @@ pub struct Children {
     /// bomblets bursting one after another); 0 to 36000.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fuse_ticks: Option<[u32; 2]>,
+    /// Up to this many each time, from `count`, chosen at random as a
+    /// script's `getRandom(3, 4)` was; 0 is always `count`. At most 16.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub max_count: u32,
+    /// Each child's velocity chosen along each axis apart, in place of a
+    /// random direction at `speed`, as scripts built it from one
+    /// `getRandom` per axis ([`Steps`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub steps: Option<Steps>,
+}
+/// [`Children::steps`]: along each axis (x right, y up, z back), a whole
+/// number from that axis's `low` to `high` at random, plus its `offset`,
+/// times its `step` units a second: `(getRandom(-3, 3) - 0.5) * 3.14`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Steps {
+    /// -100 to 100, each `low` at most its `high`.
+    pub low: [i32; 3],
+    pub high: [i32; 3],
+    /// -100 to 100 each.
+    #[serde(default)]
+    pub offset: [f32; 3],
+    /// -100 to 100 each.
+    pub step: [f32; 3],
 }
 fn one_u32() -> u32 {
     1
@@ -1410,6 +1458,24 @@ pub struct Aura {
     /// Sets those it hurts burning this long, up to 30 seconds.
     #[serde(default)]
     pub burn_seconds: f32,
+    /// Only players (and bots and Add-On creatures, which stand in for
+    /// them), not vehicles: a script's `$TypeMasks::PlayerObjectType`
+    /// search.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub players_only: bool,
+    /// An explosion effect of the pack on each one it hurts, at their
+    /// scale (`%target.spawnExplosion(...)`): flames on a burning player.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub effect: String,
+    /// A sound each player it hurts hears alone, at their ears (`play2D`).
+    /// Up to 128 bytes.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub target_sound: String,
+    /// At most this many pulses, then none for the rest of its life (a
+    /// script loop's `PrjLoop_maxTicks`); 0 for as long as it lives. Up
+    /// to 100000.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub max_pulses: u32,
 }
 /// v20's `ProjectileData` defaults, for fields an Add-On leaves out.
 impl Default for ProjectileDef {
@@ -2123,10 +2189,21 @@ impl Pack {
                         && (0.0..=1.0).contains(&c.inherit)
                         && (c.every_ticks == 0 || c.every_ticks >= 4)
                         && (c.every_ticks > 0 || c.on_bounce || c.on_explode)
-                        && c.fuse_ticks.is_none_or(|[a, b]| a <= b && b <= 36_000),
+                        && c.fuse_ticks.is_none_or(|[a, b]| a <= b && b <= 36_000)
+                        && (c.max_count == 0 || (c.count..=16).contains(&c.max_count))
+                        && c.steps.as_ref().is_none_or(|s| {
+                            (0..3).all(|i| {
+                                s.low[i] <= s.high[i]
+                                    && (-100..=100).contains(&s.low[i])
+                                    && (-100..=100).contains(&s.high[i])
+                                    && (-100.0..=100.0).contains(&s.offset[i])
+                                    && (-100.0..=100.0).contains(&s.step[i])
+                            })
+                        }),
                     "Invalid children of projectile {id}: count 1 to 16, speed 0 to 500, \
                      inherit 0 to 1, every_ticks 0 or at least 4, some moment to throw them, \
-                     fuse_ticks rising and at most 36000"
+                     fuse_ticks rising and at most 36000, max_count from count to 16, \
+                     steps from -100 to 100, each rising"
                 );
             }
             if let Some(a) = &p.aura {
@@ -2134,9 +2211,12 @@ impl Pack {
                     (0.0..=16.0).contains(&a.radius)
                         && (0.0..=100.0).contains(&a.damage)
                         && (4..=1200).contains(&a.every_ticks)
-                        && (0.0..=30.0).contains(&a.burn_seconds),
+                        && (0.0..=30.0).contains(&a.burn_seconds)
+                        && a.target_sound.len() <= 128
+                        && a.effect.len() <= 128
+                        && a.max_pulses <= 100_000,
                     "Invalid aura of projectile {id}: radius to 16, damage to 100, \
-                     every_ticks 4 to 1200, burn_seconds to 30"
+                     every_ticks 4 to 1200, burn_seconds to 30, names to 128 bytes"
                 );
             }
             if let Some(slow) = p.slow {

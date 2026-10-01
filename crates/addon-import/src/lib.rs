@@ -656,6 +656,18 @@ fn is_plain_string(arg: &str) -> bool {
     a.len() >= 2 && a.starts_with('"') && a.ends_with('"') && !a[1..a.len() - 1].contains('"')
 }
 
+/// Whether a script's quoted path is a file of an Add-On the base game
+/// ships (`"add-ons/weapon_rocket_launcher/server.cs"`).
+fn ships_with_game(arg: &str) -> bool {
+    if !is_plain_string(arg) {
+        return false;
+    }
+    let path = literal(arg).to_ascii_lowercase();
+    path.strip_prefix("add-ons/")
+        .and_then(|rest| rest.split_once('/'))
+        .is_some_and(|(addon, _)| reference::base_package(addon).is_some())
+}
+
 const KNOWN_TOP_LEVEL: &[&str] = &[
     "exec",
     "forcerequiredaddon",
@@ -692,6 +704,9 @@ fn top_level(cx: &mut Ctx, scripts: &[Script]) {
                     at,
                     "registers a brick event; add-on events need the event system's open output set (door-closer 7)".into(),
                 );
+            } else if callee == "isfile" && c.args.len() == 1 && ships_with_game(&c.args[0]) {
+                // `isFile("add-ons/weapon_rocket_launcher/server.cs")`: a
+                // check for an Add-On the base game ships, always there.
             } else if !KNOWN_TOP_LEVEL.contains(&callee.as_str())
                 && c.receiver.is_none()
                 && !behaviour_pure(&callee)
