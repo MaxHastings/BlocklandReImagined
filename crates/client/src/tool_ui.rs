@@ -36,10 +36,12 @@ pub struct ToolUi {
     inspection: Option<Inspection>,
     /// The host's wrench event catalog; empty until installed.
     events: Option<bri_events::Catalog>,
-    /// The installed catalog before the server's Add-Ons' inputs.
+    /// The installed catalog before the server's Add-Ons' inputs and
+    /// outputs.
     base_events: Option<bri_events::Catalog>,
-    /// The server's Add-Ons' wrench event inputs.
+    /// The server's Add-Ons' wrench event inputs and outputs.
     package_inputs: Vec<bri_events::InputDef>,
+    package_outputs: Vec<bri_events::OutputDef>,
     /// Every installed music loop; the wrench lists those the host offers.
     music: Vec<Choice>,
 }
@@ -144,6 +146,7 @@ impl ToolUi {
             events: None,
             base_events: None,
             package_inputs: Vec::new(),
+            package_outputs: Vec::new(),
             music: Vec::new(),
         })
     }
@@ -253,36 +256,41 @@ impl ToolUi {
                 .into(),
         );
         self.base_events = Some(catalog);
-        self.merge_inputs();
+        self.merge_events();
         self.invalidate();
     }
-    /// The server's Add-Ons' wrench event inputs, added to the installed
-    /// catalog. Returns the wrench's new event lists when they changed.
-    pub fn offer_inputs(&mut self, inputs: &[bri_events::InputDef]) -> Option<UiUpdate> {
-        if self.package_inputs.len() == inputs.len()
-            && self
-                .package_inputs
-                .iter()
-                .zip(inputs)
-                .all(|(a, b)| a.id == b.id && a.name == b.name && a.targets == b.targets)
-        {
+    /// The server's Add-Ons' wrench event inputs and outputs, added to the
+    /// installed catalog. Returns the wrench's new event lists when they
+    /// changed.
+    pub fn offer_events(
+        &mut self,
+        inputs: &[bri_events::InputDef],
+        outputs: &[bri_events::OutputDef],
+    ) -> Option<UiUpdate> {
+        fn same<T: serde::Serialize>(a: &[T], b: &[T]) -> bool {
+            serde_json::to_value(a).ok() == serde_json::to_value(b).ok()
+        }
+        if same(&self.package_inputs, inputs) && same(&self.package_outputs, outputs) {
             return None;
         }
         self.package_inputs = inputs.to_vec();
-        self.merge_inputs();
+        self.package_outputs = outputs.to_vec();
+        self.merge_events();
         self.invalidate();
         Some(UiUpdate::Events(
             self.events.as_ref().map(event_catalog).unwrap_or_default(),
         ))
     }
-    fn merge_inputs(&mut self) {
+    fn merge_events(&mut self) {
         self.events = self.base_events.as_ref().map(|base| {
-            base.with_inputs(&self.package_inputs).unwrap_or_else(|error| {
-                bri_console::warn(format!(
-                    "The server's Add-On event inputs are left out: {error:#}"
-                ));
-                base.clone()
-            })
+            base.with_inputs(&self.package_inputs)
+                .and_then(|c| c.with_outputs(&self.package_outputs))
+                .unwrap_or_else(|error| {
+                    bri_console::warn(format!(
+                        "The server's Add-On events are left out: {error:#}"
+                    ));
+                    base.clone()
+                })
         });
     }
     pub fn catalog_updates(&self) -> Vec<UiUpdate> {
@@ -899,11 +907,12 @@ mod tests {
             events: Some(events()),
             base_events: Some(events()),
             package_inputs: Vec::new(),
+            package_outputs: Vec::new(),
             music: Vec::new(),
         }
     }
     #[test]
-    fn the_wrench_lists_the_servers_add_on_inputs() {
+    fn the_wrench_lists_the_servers_add_on_inputs_and_outputs() {
         let mut ui = fixture();
         let flag = bri_events::InputDef {
             id: "ctf:onFlagPickedUp".into(),
@@ -913,13 +922,13 @@ mod tests {
             source: "ctf".into(),
             source_line: 0,
         };
-        let Some(UiUpdate::Events(lists)) = ui.offer_inputs(std::slice::from_ref(&flag)) else {
+        let Some(UiUpdate::Events(lists)) = ui.offer_events(std::slice::from_ref(&flag), &[]) else {
             panic!("the lists change");
         };
         assert!(lists.inputs.iter().any(|i| i.name == "onFlagPickedUp"));
-        assert!(ui.offer_inputs(std::slice::from_ref(&flag)).is_none(), "no change");
+        assert!(ui.offer_events(std::slice::from_ref(&flag), &[]).is_none(), "no change");
         // A server without them takes them away again.
-        let Some(UiUpdate::Events(lists)) = ui.offer_inputs(&[]) else {
+        let Some(UiUpdate::Events(lists)) = ui.offer_events(&[], &[]) else {
             panic!("the lists change");
         };
         assert!(!lists.inputs.iter().any(|i| i.name == "onFlagPickedUp"));
@@ -928,10 +937,32 @@ mod tests {
             name: "onActivate".into(),
             ..flag
         };
-        let Some(UiUpdate::Events(lists)) = ui.offer_inputs(&[clash]) else {
+        let Some(UiUpdate::Events(lists)) = ui.offer_events(&[clash], &[]) else {
             panic!("the lists change");
         };
         assert_eq!(lists.inputs.iter().filter(|i| i.name == "onActivate").count(), 1);
+        // Outputs join the target's class, with their parameters.
+        let control = bri_events::OutputDef {
+            id: "slayer:fxDTSBrick:setTeamControl".into(),
+            class_name: "fxDTSBrick".into(),
+            name: "setTeamControl".into(),
+            params: vec![bri_events::Param::PaintColor { default: 0 }],
+            append_client: false,
+            source: "slayer".into(),
+            source_line: 0,
+            package: Some("slayer".into()),
+        };
+        let Some(UiUpdate::Events(lists)) = ui.offer_events(&[], std::slice::from_ref(&control))
+        else {
+            panic!("the lists change");
+        };
+        let listed = lists
+            .outputs
+            .iter()
+            .find(|o| o.name == "setTeamControl")
+            .expect("listed");
+        assert_eq!(listed.class, "fxDTSBrick");
+        assert_eq!(listed.params.len(), 1);
     }
     #[test]
     fn the_wrench_lists_only_the_music_the_host_offers() {
@@ -978,6 +1009,7 @@ mod tests {
             append_client: false,
             source: "fixture".into(),
             source_line: 1,
+            package: None,
         };
         bri_events::Catalog {
             schema_version: 1,

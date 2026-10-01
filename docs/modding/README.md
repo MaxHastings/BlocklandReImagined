@@ -131,6 +131,7 @@ refused. The engine calls:
 | `on_observer(player, button)` | a spectator (dead with their respawn held, or under a rules camera) presses `"fire"`, `"jump"`, `"jet"` or `"light"`, when `"on_observer": true`: return `true` to take it |
 | `on_minigame(event)` | something happened to a mini-game, delivered at the start of the next tick, when `"on_minigame": true`. `event` is `#{ kind, game, player, team }`: `kind` is `created`, `configured`, `reset`, `ended`, `joined`, `left`, `team` (`player`'s team changed to `team`, or `()`) or `teams` (the game's team list changed) |
 | `on_pick_spawn(player)` | a player is about to spawn or respawn, when `"on_pick_spawn": true`: return a brick id to appear on that brick, `[x, y, z]` to appear there, or `()` to leave it to the engine (spawn bricks, then the map). The first Add-On to answer decides. Called as it happens, so keep it quick |
+| `on_brick_output(output, target, params, info)` | a builder's wrench row ran one of the outputs in `brick_outputs` (see **Brick events**) |
 | `on_zone(player, brick, event)` | a living player enters (`"enter"`), stays in (`"tick"`, with `"ticks": true`) or leaves (`"leave"`) the space over a brick of a kind listed in `zones` (a Torque trigger made with `createTrigger`) |
 | `cmd_<name>(player, args...)` | a player sends a command listed in `commands` |
 
@@ -360,13 +361,40 @@ own:
 ```
 
 Every input targets its brick (`Self`); `targets` adds any of `Player`,
-`Client` and `MiniGame`. `fire_brick_input(brick, "onFlagPickedUp", p)`
+`Client`, `MiniGame`, and `OwnerPlayer` and `OwnerClient` (the brick
+owner's, while they are on). `fire_brick_input(brick, "onFlagPickedUp", p)`
 (`processInputEvent`; capability `brick_events`) runs the rows on `brick`
 wired to it, with `p` filling those targets (or leave `p` out). The rows
 run as the brick owner's, under the same budgets and trust as any other.
 A package fires only its own inputs, and a name the engine or another
 Add-On already uses is refused when the Add-Ons start. Up to 16 per
-package.
+package. Fired from inside `on_brick_output`, an input's rows run once
+the tick's event rows are done.
+
+Rules may add outputs too (`registerOutputEvent`; capability
+`brick_events`), up to 32, each acting on a `fxDTSBrick`, `Player`,
+`GameConnection` or `MiniGame` with up to four parameters the wrench
+shows:
+
+```json
+"brick_outputs": [ { "name": "setTeamControl", "class": "fxDTSBrick",
+                     "params": [ { "type": "paint_color", "default": 0 } ] } ]
+```
+
+A parameter is `int` (`min`, `max`, `default`), `float` (`min`, `max`,
+`step`, `default`), `bool`, `string` (`max_length`, `width`),
+`paint_color` (`default`), `list` (`items`: `[name, number]` pairs, the
+rules getting the number) or `vector` (`max_length`). A port writes them
+from the original's own text with `{{name|event_params}}`, which reads a
+`registerOutputEvent` parameter string (`"int 0 200 1" TAB "bool"`). A row
+that runs one calls `on_brick_output(output, target, params, info)`:
+`target` is the brick's id, the player's or the mini-game's,
+`params` the row's values, and `info` is `#{ brick, owner, client, class,
+input, row }`, `client` being whoever set the row off, or `()`. Return
+`()`, or one of the package's own inputs to run next on the brick, as
+`"onTeamCheckTrue"` or `#{ input: "onTeamCheckTrue", rows: [1, 4] }` to
+run only rows 1 to 4 (Slayer's `checkTeam`). Its targets are filled from
+whoever set the row off.
 
 **Zones** are spaces over bricks that notice players, as Torque's triggers:
 

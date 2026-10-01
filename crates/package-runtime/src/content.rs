@@ -272,15 +272,25 @@ pub struct Behaviour {
     /// them to outputs on their bricks like the engine's own inputs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub brick_inputs: Vec<BrickInputDef>,
+    /// Wrench event outputs these rules carry out (`registerOutputEvent`;
+    /// Slayer's `setTeamControl`): builders pick them like the engine's
+    /// own, and a row that runs one calls
+    /// `on_brick_output(output, target, params, info)`. Needs the
+    /// `brick_events` capability.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub brick_outputs: Vec<BrickOutputDef>,
 }
 /// Most wrench event inputs one behaviour declares.
 pub const MAX_BRICK_INPUTS: usize = 16;
 /// Targets an Add-On's input may offer besides `Self`, the brick, with the
-/// class each one is (`registerInputEvent`'s target list).
-pub const BRICK_INPUT_TARGETS: [(&str, &str); 3] = [
+/// class each one is (`registerInputEvent`'s target list). `OwnerPlayer`
+/// and `OwnerClient` are the brick owner's, while they are on the server.
+pub const BRICK_INPUT_TARGETS: [(&str, &str); 5] = [
     ("Player", "Player"),
     ("Client", "GameConnection"),
     ("MiniGame", "MiniGame"),
+    ("OwnerPlayer", "Player"),
+    ("OwnerClient", "GameConnection"),
 ];
 /// A wrench event input: its name as builders pick it, and the targets its
 /// rows may aim at besides the brick itself.
@@ -313,6 +323,107 @@ impl BrickInputDef {
             ensure!(
                 !self.targets[..i].contains(t),
                 "brick input `{}`: target `{t}` listed twice",
+                self.name
+            );
+        }
+        Ok(())
+    }
+}
+/// Most wrench event outputs one behaviour declares, and parameters one
+/// output takes (the wrench's four).
+pub const MAX_BRICK_OUTPUTS: usize = 32;
+pub const MAX_OUTPUT_PARAMS: usize = 4;
+/// The classes an Add-On's output may act on: what a row's target is.
+pub const BRICK_OUTPUT_CLASSES: [&str; 4] = ["fxDTSBrick", "Player", "GameConnection", "MiniGame"];
+/// A wrench event output: its name, the kind of thing it acts on, and the
+/// parameters a builder fills in.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrickOutputDef {
+    pub name: String,
+    /// One of [`BRICK_OUTPUT_CLASSES`].
+    pub class: String,
+    #[serde(default)]
+    pub params: Vec<OutputParam>,
+}
+/// One field of an output row, as the wrench shows it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum OutputParam {
+    /// A whole number from `min` to `max`.
+    Int { min: i64, max: i64, default: i64 },
+    /// A number from `min` to `max` in steps of `step`.
+    Float {
+        min: f32,
+        max: f32,
+        step: f32,
+        default: f32,
+    },
+    Bool,
+    /// Text of at most `max_length` characters in a box `width` wide.
+    String { max_length: u32, width: i32 },
+    /// A colour of the server's palette.
+    PaintColor { default: u8 },
+    /// One of named choices, each with the number the rules receive.
+    List { items: Vec<(String, i64)> },
+    /// A vector at most `max_length` long.
+    Vector { max_length: f32 },
+}
+impl OutputParam {
+    fn valid(&self) -> bool {
+        match self {
+            Self::Int { min, max, default } => {
+                min <= default && default <= max && *min >= -1_000_000 && *max <= 1_000_000
+            }
+            Self::Float {
+                min,
+                max,
+                step,
+                default,
+            } => {
+                [min, max, step, default].iter().all(|v| v.is_finite())
+                    && min <= default
+                    && default <= max
+                    && *step > 0.
+                    && *step <= 10_000.
+            }
+            Self::Bool | Self::PaintColor { .. } => true,
+            Self::String { max_length, width } => *max_length <= 4096 && (0..=1024).contains(width),
+            Self::List { items } => {
+                !items.is_empty()
+                    && items.len() <= 256
+                    && items.iter().all(|(s, _)| !s.is_empty() && s.len() <= 128)
+            }
+            Self::Vector { max_length } => {
+                max_length.is_finite() && *max_length > 0. && *max_length <= 10_000.
+            }
+        }
+    }
+}
+impl BrickOutputDef {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            (1..=64).contains(&self.name.len())
+                && self.name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
+            "brick output `{}`: a name like setTeamControl, 1 to 64 letters, digits or _",
+            self.name
+        );
+        ensure!(
+            BRICK_OUTPUT_CLASSES.contains(&self.class.as_str()),
+            "brick output `{}`: class `{}` is not one of {}",
+            self.name,
+            self.class,
+            BRICK_OUTPUT_CLASSES.join(", ")
+        );
+        ensure!(
+            self.params.len() <= MAX_OUTPUT_PARAMS,
+            "brick output `{}`: at most {MAX_OUTPUT_PARAMS} params",
+            self.name
+        );
+        for p in &self.params {
+            ensure!(
+                p.valid(),
+                "brick output `{}`: parameter {p:?} is out of range",
                 self.name
             );
         }
@@ -545,6 +656,20 @@ impl Behaviour {
                     .any(|o| o.name.eq_ignore_ascii_case(&input.name)),
                 "brick input `{}` declared twice",
                 input.name
+            );
+        }
+        ensure!(
+            self.brick_outputs.len() <= MAX_BRICK_OUTPUTS,
+            "at most {MAX_BRICK_OUTPUTS} brick_outputs"
+        );
+        for (i, output) in self.brick_outputs.iter().enumerate() {
+            output.validate()?;
+            ensure!(
+                !self.brick_outputs[..i].iter().any(|o| o.class == output.class
+                    && o.name.eq_ignore_ascii_case(&output.name)),
+                "brick output `{}` declared twice for {}",
+                output.name,
+                output.class
             );
         }
         for (key, def) in &self.state.global {

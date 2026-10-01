@@ -7,6 +7,9 @@
     { "name": "onFlagReturned", "targets": ["Player", "Client", "MiniGame"] },
     { "name": "onFlagRecovered", "targets": ["Player", "Client", "MiniGame"] }
   ],
+  "brick_outputs": [
+    { "name": "DropFlag", "class": "Player", "params": {{out_drop_flag|event_params}} }
+  ],
   "commands": [
     { "name": "dropflag", "while_dead": false, "cooldown_ticks": 12 },
     { "name": "ctf", "while_dead": true, "cooldown_ticks": 12 }

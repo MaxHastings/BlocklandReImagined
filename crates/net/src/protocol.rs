@@ -552,6 +552,9 @@ pub struct Checkpoint {
     /// adds to their own catalog.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub brick_inputs: Vec<bri_events::InputDef>,
+    /// The running Add-Ons' wrench event outputs, likewise.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub brick_outputs: Vec<bri_events::OutputDef>,
     /// Entities of enabled packages.
     pub entities: Vec<bri_sim::session::EntityInfo>,
     /// Enabled packages' state as this client sees it: keys visible to
@@ -597,6 +600,7 @@ impl Checkpoint {
             archetypes: session.archetypes().clone(),
             addon_settings: session.addon_settings(),
             brick_inputs: session.package_brick_inputs(),
+            brick_outputs: session.package_brick_outputs(),
             world_bricks: world.bricks.len() as u64,
             world_chunks: 0,
             world_near_chunks: 0,

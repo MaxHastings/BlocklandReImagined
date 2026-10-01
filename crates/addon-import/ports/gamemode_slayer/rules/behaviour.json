@@ -9,7 +9,26 @@
     { "name": "onCPCapture(Team3)", "targets": ["Player", "Client", "MiniGame"] },
     { "name": "onCPCapture(Team4)", "targets": ["Player", "Client", "MiniGame"] },
     { "name": "onCPCapture(Team5)", "targets": ["Player", "Client", "MiniGame"] },
-    { "name": "onCPCapture(Team6)", "targets": ["Player", "Client", "MiniGame"] }
+    { "name": "onCPCapture(Team6)", "targets": ["Player", "Client", "MiniGame"] },
+    { "name": "onTeamCheckTrue", "targets": ["Player", "Client", "MiniGame", "OwnerPlayer", "OwnerClient"] },
+    { "name": "onTeamCheckFalse", "targets": ["Player", "Client", "MiniGame", "OwnerPlayer", "OwnerClient"] }
+  ],
+  "brick_outputs": [
+    { "name": "setTeamControl", "class": "fxDTSBrick", "params": {{out_team_control|event_params}} },
+    { "name": "setTeamControlLocked", "class": "fxDTSBrick", "params": {{out_team_control_locked|event_params}} },
+    { "name": "addLives", "class": "GameConnection", "params": {{out_add_lives|event_params}} },
+    { "name": "addDeaths", "class": "GameConnection", "params": {{out_add_deaths|event_params}} },
+    { "name": "addKills", "class": "GameConnection", "params": {{out_add_kills|event_params}} },
+    { "name": "setLives", "class": "GameConnection", "params": {{out_set_lives|event_params}} },
+    { "name": "setDeaths", "class": "GameConnection", "params": {{out_set_deaths|event_params}} },
+    { "name": "setKills", "class": "GameConnection", "params": {{out_set_kills|event_params}} },
+    { "name": "joinTeam", "class": "GameConnection", "params": {{out_join_team|event_params}} },
+    { "name": "incTimeRemaining", "class": "MiniGame", "params": {{out_inc_time|event_params}} },
+    { "name": "setTimeRemaining", "class": "MiniGame", "params": {{out_set_time|event_params}} },
+    { "name": "Win", "class": "MiniGame", "params": {{out_win|event_params}} },
+    { "name": "checkTeam", "class": "fxDTSBrick", "params": {{out_check_team|event_params}} },
+    { "name": "checkTeamCount", "class": "fxDTSBrick", "params": {{out_check_team_count|event_params}} },
+    { "name": "StartFlyThrough", "class": "MiniGame", "params": {{out_fly_through|event_params}} }
   ],
   "commands": [
     {
@@ -135,6 +154,13 @@
       "category": "Minigame",
       "type": "bool",
       "default": {{pref_allow_move|bool}}
+    },
+    {
+      "key": "clear_stats",
+      "title": "Clear Stats on Reset",
+      "category": "Minigame",
+      "type": "bool",
+      "default": {{pref_clear_stats|bool}}
     },
     {
       "key": "custom_rule",
@@ -353,6 +379,10 @@
       "flycams": {
         "default": {},
         "persist": false
+      },
+      "controls": {
+        "default": {},
+        "persist": false
       }
     },
     "player": {
@@ -373,6 +403,20 @@
         "persist": false
       },
       "body": {
+        "default": "",
+        "persist": false
+      },
+      "kills": {
+        "default": 0,
+        "persist": false,
+        "visible": "everyone"
+      },
+      "deaths": {
+        "default": 0,
+        "persist": false,
+        "visible": "everyone"
+      },
+      "reason": {
         "default": "",
         "persist": false
       }

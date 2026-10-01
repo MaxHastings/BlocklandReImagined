@@ -1174,6 +1174,7 @@ fn recover_vehicle_leaves_a_ridden_vehicle_alone(f: &Fixture) -> anyhow::Result<
         append_client: true,
         source: "v20".into(),
         source_line: 17400,
+        package: None,
     };
     s.set_event_catalog(
         bri_events::Catalog {

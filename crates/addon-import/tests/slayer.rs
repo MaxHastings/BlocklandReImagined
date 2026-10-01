@@ -21,7 +21,7 @@ use bri_sim::{
     },
     simulation::Simulation,
 };
-use bri_world::{BrickId, OwnerId, World};
+use bri_world::{BrickId, EventRow, EventTarget, EventValue, OwnerId, World, authority::Edit};
 use glam::Vec3;
 use rapier3d::prelude::*;
 use bri_minigames::SettingValue as Value;
@@ -93,7 +93,7 @@ fn content(root: &Path) -> (Arc<Catalog>, bri_weapons::Pack) {
         probe.join("package.json"),
         r#"{ "schema_version": 1, "id": "probe", "version": "1.0.0", "api": 1,
              "name": "Probe", "license": "CC0-1.0",
-             "capabilities": ["player"],
+             "capabilities": ["player", "brick_events"],
              "provides": [
                { "kind": "behaviour", "id": "probe:behaviour/main", "file": "behaviour.json" },
                { "kind": "script", "id": "probe:script/main", "file": "probe.rhai" } ] }"#,
@@ -102,14 +102,17 @@ fn content(root: &Path) -> (Arc<Catalog>, bri_weapons::Pack) {
     std::fs::write(
         probe.join("behaviour.json"),
         r#"{ "schema_version": 1, "script": "probe.rhai",
+             "brick_inputs": [ { "name": "onPoke", "targets": ["Player", "Client", "MiniGame"] } ],
              "commands": [ { "name": "goto", "args": ["float", "float", "float"] },
-                           { "name": "colour", "while_dead": true } ],
+                           { "name": "colour", "while_dead": true },
+                           { "name": "poke", "args": ["int"] } ],
              "state": { "global": { "colours": { "default": {}, "visible": "everyone" } } } }"#,
     )
     .unwrap();
     std::fs::write(
         probe.join("probe.rhai"),
         "fn cmd_goto(p, x, y, z) { teleport(p, x, y, z); }\n\
+         fn cmd_poke(p, brick) { fire_brick_input(brick, \"onPoke\", p); }\n\
          fn cmd_colour(p) {\n\
              let me = player(p);\n\
              let colours = get(\"colours\");\n\
@@ -469,7 +472,13 @@ fn an_enemy_flag_rides_on_the_carriers_back_and_scores_at_home() {
     let owner = g.s.minigame_views()[0].owner;
     g.set(owner, &[(&key(SLAYER, "mode"), Value::Text(CTF_MODE.into()))]);
     // Its brick events are in builders' wrench.
-    let inputs: Vec<_> = g.s.package_brick_inputs().into_iter().map(|i| i.name).collect();
+    let inputs: Vec<_> = g
+        .s
+        .package_brick_inputs()
+        .into_iter()
+        .filter(|i| i.source != "probe")
+        .map(|i| i.name)
+        .collect();
     assert!(inputs.ends_with(&[
         "onFlagPickedUp".to_string(),
         "onFlagDropped".into(),
@@ -1037,5 +1046,141 @@ fn the_fly_through_camera_flies_everyone_before_the_round() {
     g.steps(3);
     assert_eq!(g.s.control(b), Some(ControlObject::Player));
     assert_eq!(g.body(b), FROZEN);
+    g.quiet();
+}
+
+/// A wrench row on `input` aiming at `slot` (`SelfBrick`, `Client`,
+/// `MiniGame`).
+fn event(input: &str, slot: &str, output: &str, params: Vec<EventValue>) -> EventRow {
+    EventRow {
+        preserved: None,
+        enabled: true,
+        input: input.into(),
+        delay_ms: 0,
+        target: EventTarget::Slot(serde_json::from_value(serde_json::json!(slot)).unwrap()),
+        output: output.into(),
+        params,
+    }
+}
+
+/// Wrench events on: the host's own catalog is empty here, so the
+/// Add-Ons' inputs and outputs are all there is.
+fn with_events(g: &mut Game) {
+    let empty = serde_json::json!({
+        "schema_version": 1, "inputs": [], "outputs": [], "sources": [], "scope": null
+    });
+    g.s.set_event_catalog(serde_json::from_value(empty).unwrap(), Vec::new())
+        .unwrap();
+}
+/// A number in Slayer's state of `p` that everyone sees.
+fn stat(g: &Game, p: OwnerId, key: &str) -> i64 {
+    g.s.package_state().packages[SLAYER]
+        .players
+        .get(&p)
+        .and_then(|state| state.get(key))
+        .map_or(0, |v| v.as_i64().unwrap())
+}
+/// `p` sets off the probe's `onPoke` rows on `brick`.
+fn poke(g: &mut Game, p: OwnerId, brick: BrickId) {
+    g.run(p, "probe", "poke", vec![PackageArg::Int(brick as i64)]);
+    g.steps(2);
+}
+
+#[test]
+fn slayers_wrench_events_check_teams_hold_bricks_and_win_rounds() {
+    let mut g = Game::new("events");
+    with_events(&mut g);
+    let (red, blue) = two_teams(&mut g);
+    let owner = g.s.minigame_views()[0].owner;
+    let text = |t: &str| EventValue::Text(t.into());
+
+    // `checkTeam`: Red is on Red, so onTeamCheckTrue runs, but only the
+    // rows its range "1 2" names; Blue is not, so onTeamCheckFalse.
+    let checker = g.plant(owner, TEAM_SPAWN, 10.0, 0.0, 2);
+    let rows = vec![
+        event("onPoke", "SelfBrick", "checkTeam", vec![EventValue::Int(0), text("Red"), text("1 2")]),
+        event("onTeamCheckTrue", "Client", "addKills", vec![EventValue::Int(3)]),
+        event("onTeamCheckFalse", "Client", "addDeaths", vec![EventValue::Int(4)]),
+        event("onTeamCheckTrue", "Client", "addDeaths", vec![EventValue::Int(5)]),
+    ];
+    g.s.edit_brick(owner, checker, Edit::Events(rows)).unwrap();
+    poke(&mut g, red, checker);
+    poke(&mut g, blue, checker);
+    assert_eq!(stat(&g, red, "kills"), 3);
+    assert_eq!(stat(&g, red, "deaths"), 0, "row 3 is past the range");
+    assert_eq!(stat(&g, blue, "deaths"), 4);
+    assert_eq!(stat(&g, blue, "kills"), 0);
+
+    // `setTeamControl`: a Red team spawn turned over to Blue spawns Blue.
+    let at = Vec3::new(-15.5, 0.2, 0.25);
+    let spawn = g.plant(owner, TEAM_SPAWN, at.x, 0.0, RED);
+    let rows = vec![event("onPoke", "SelfBrick", "setTeamControl", vec![EventValue::Color(BLUE)])];
+    g.s.edit_brick(owner, spawn, Edit::Events(rows)).unwrap();
+    poke(&mut g, blue, spawn);
+    g.cmd(blue, Command::Suicide).unwrap();
+    g.steps(125);
+    g.cmd(blue, Command::Respawn).unwrap();
+    g.steps(2);
+    let feet = g.feet(blue);
+    assert!(
+        Vec3::new(feet.x - at.x, 0.0, feet.z - at.z).length() < 1.0,
+        "Blue spawned at {feet}"
+    );
+
+    // `setTeamControlLocked`: Blue's colour may not capture the point.
+    let cp = g.plant(owner, CP, 0.0, 8.0, 2);
+    let rows = vec![event(
+        "onPoke",
+        "SelfBrick",
+        "setTeamControlLocked",
+        vec![EventValue::Int(1), EventValue::Color(BLUE), EventValue::Bool(true)],
+    )];
+    g.s.edit_brick(owner, cp, Edit::Events(rows)).unwrap();
+    poke(&mut g, blue, cp);
+    g.s.take_private_notices();
+    g.goto(blue, Vec3::new(0.0, 0.25, 8.25));
+    g.steps(CP_TICK * 8);
+    let notices = g.s.take_private_notices();
+    assert!(
+        notices.iter().any(|(_, n)| matches!(n, Notice::Bottom { text, .. } if text.contains("Locked for now."))),
+        "{notices:?}"
+    );
+    assert_eq!(g.s.simulation().state().bricks[&cp].color, 2, "not captured");
+
+    // `incTimeRemaining` and `Win`, on the mini-game.
+    let game = g.plant(owner, TEAM_SPAWN, 12.0, 4.0, 2);
+    let rows = vec![
+        event("onPoke", "MiniGame", "incTimeRemaining", vec![EventValue::Int(2), EventValue::Bool(true)]),
+        event("onPoke", "MiniGame", "Win", vec![EventValue::Int(4), text("The Builders")]),
+    ];
+    g.s.edit_brick(owner, game, Edit::Events(rows)).unwrap();
+    g.s.take_private_notices();
+    poke(&mut g, red, game);
+    assert!(g.heard("Extended by 2 minutes."));
+    g.steps(2);
+    assert!(g.round_over());
+    g.quiet();
+}
+
+#[test]
+fn the_drop_flag_event_drops_the_flag_and_fires_its_input() {
+    let mut g = Game::new("drop-event");
+    with_events(&mut g);
+    let (_red, blue, red_flag, _) = capture_the_flag(&mut g, &[]);
+    let owner = g.s.minigame_views()[0].owner;
+    let poker = g.plant(owner, TEAM_SPAWN, 12.0, 4.0, 2);
+    let rows = vec![event("onPoke", "Player", "DropFlag", vec![])];
+    g.s.edit_brick(owner, poker, Edit::Events(rows)).unwrap();
+    // The flag's own brick hears it was dropped, and counts it on Blue.
+    let rows = vec![event("onFlagDropped", "Client", "addKills", vec![EventValue::Int(1)])];
+    g.s.edit_brick(owner, red_flag, Edit::Events(rows)).unwrap();
+    g.goto(blue, Vec3::new(-8.5, 0.25, 0.25));
+    g.settle();
+    assert!(g.carried(blue).is_some());
+    g.s.take_private_notices();
+    poke(&mut g, blue, poker);
+    assert_eq!(g.carried(blue), None);
+    assert!(g.heard("dropped the"));
+    assert_eq!(stat(&g, blue, "kills"), 1);
     g.quiet();
 }

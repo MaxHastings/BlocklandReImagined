@@ -4674,9 +4674,11 @@ impl App {
         if a.worker.view.has_changed().unwrap_or(false) {
             a.view = a.worker.view.borrow_and_update().clone();
         }
-        // The server's Add-Ons' wrench event inputs join the wrench's lists.
+        // The server's Add-Ons' wrench events join the wrench's lists.
         if let Some(view) = &a.view
-            && let Some(update) = self.tool_ui.offer_inputs(&view.brick_inputs)
+            && let Some(update) = self
+                .tool_ui
+                .offer_events(&view.brick_inputs, &view.brick_outputs)
             && a.entered
         {
             self.ui.apply_session(a.id, update);

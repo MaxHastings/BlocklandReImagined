@@ -23,7 +23,7 @@ pub(super) fn id(index: u64) -> Id {
         generation: 1,
     }
 }
-fn entity(class: Class, index: u64) -> Entity {
+pub(super) fn entity(class: Class, index: u64) -> Entity {
     Entity {
         class,
         id: id(index),
@@ -59,7 +59,15 @@ pub(super) struct Events {
     /// Explosions and projectiles refused for being over the per-tick limits
     /// since the host last asked.
     pub(super) over_limit: u64,
+    /// Whether the event phase is running rows now, and the inputs Add-On
+    /// rules fired from inside one (an output that drops a flag fires
+    /// `onFlagDropped`): they run once the phase is done
+    /// (`fire_package_input`).
+    advancing: bool,
+    deferred: Vec<(BrickId, String, Option<OwnerId>)>,
 }
+/// Most inputs rules may fire from inside one event phase.
+const MAX_DEFERRED_INPUTS: usize = 256;
 
 /// Event work per host tick, in the engine's cost units (a row plus each job
 /// it expands into): everyone's rows together, and any one owner's, so an
@@ -168,7 +176,9 @@ impl Session {
         };
         let merged = catalog
             .with_inputs(&self.package_brick_inputs())
-            .context("The Add-Ons' wrench event inputs")?;
+            .context("The Add-Ons' wrench event inputs")?
+            .with_outputs(&self.package_brick_outputs())
+            .context("The Add-Ons' wrench event outputs")?;
         let world = EventWorld::new(merged, bindings.clone(), event_limits())?;
         self.events = Events {
             world: Some(world),
@@ -431,39 +441,75 @@ impl Session {
             };
             trigger.client = Some(entity(Class::Client, client));
         } else if let Some(owner) = player.filter(|o| self.peers.contains_key(o)) {
-            if slots.contains(&Slot::Player) {
-                trigger
-                    .targets
-                    .insert(Slot::Player, entity(Class::Player, owner));
-            }
-            if slots.contains(&Slot::Client) {
-                trigger
-                    .targets
-                    .insert(Slot::Client, entity(Class::Client, owner));
-                trigger.client = Some(entity(Class::Client, owner));
-            }
-            let brick_owner = self.simulation.state().bricks.get(&brick).map(|b| b.owner);
-            // v20 onActivate and the other inputs: on single-player and LAN
-            // servers ($Server::LAN) the MiniGame target is the activator's
-            // game; elsewhere only a game the brick shares with them.
-            let client_game = self.game_of(owner);
-            let game = ev::semantics::minigame_target(
-                self.lan_host,
-                brick_owner
-                    .and_then(|o| self.game_of(self.brick_group_owner_for(o, client_game)))
-                    .map(|g| entity(Class::MiniGame, g.0)),
-                client_game.map(|g| entity(Class::MiniGame, g.0)),
-            );
-            if let Some(game) = game.filter(|_| slots.contains(&Slot::MiniGame)) {
-                trigger.targets.insert(Slot::MiniGame, game);
-            }
+            self.player_targets(brick, &slots, owner, &mut trigger);
         }
+        self.owner_targets(brick, &slots, &mut trigger.targets);
         let world = self.events.world.as_mut().unwrap();
         if let Err(error) = world.trigger(trigger) {
             note(
                 &mut self.events.diagnostics,
                 format!("Brick {brick} {input}: {error:#}"),
             );
+        }
+    }
+    /// The targets an input set off by `owner` offers: their player and
+    /// client, and the minigame v20 picks for the brick and them.
+    pub(in crate::session) fn player_targets(
+        &self,
+        brick: BrickId,
+        slots: &BTreeSet<Slot>,
+        owner: OwnerId,
+        trigger: &mut Trigger,
+    ) {
+        if slots.contains(&Slot::Player) {
+            trigger
+                .targets
+                .insert(Slot::Player, entity(Class::Player, owner));
+        }
+        if slots.contains(&Slot::Client) {
+            trigger
+                .targets
+                .insert(Slot::Client, entity(Class::Client, owner));
+            trigger.client = Some(entity(Class::Client, owner));
+        }
+        let brick_owner = self.simulation.state().bricks.get(&brick).map(|b| b.owner);
+        // v20 onActivate and the other inputs: on single-player and LAN
+        // servers ($Server::LAN) the MiniGame target is the activator's
+        // game; elsewhere only a game the brick shares with them.
+        let client_game = self.game_of(owner);
+        let game = ev::semantics::minigame_target(
+            self.lan_host,
+            brick_owner
+                .and_then(|o| self.game_of(self.brick_group_owner_for(o, client_game)))
+                .map(|g| entity(Class::MiniGame, g.0)),
+            client_game.map(|g| entity(Class::MiniGame, g.0)),
+        );
+        if let Some(game) = game.filter(|_| slots.contains(&Slot::MiniGame)) {
+            trigger.targets.insert(Slot::MiniGame, game);
+        }
+    }
+    /// The brick owner's player and client, for inputs that offer them
+    /// (Slayer's `onTeamCheckTrue`), while the owner is on the server.
+    pub(in crate::session) fn owner_targets(
+        &self,
+        brick: BrickId,
+        slots: &BTreeSet<Slot>,
+        targets: &mut BTreeMap<Slot, ev::Entity>,
+    ) {
+        let owner = self
+            .simulation
+            .state()
+            .bricks
+            .get(&brick)
+            .map(|b| b.owner)
+            .filter(|o| self.peers.contains_key(o) && !self.is_bot(*o));
+        if let Some(owner) = owner {
+            if slots.contains(&Slot::OwnerPlayer) {
+                targets.insert(Slot::OwnerPlayer, entity(Class::Player, owner));
+            }
+            if slots.contains(&Slot::OwnerClient) {
+                targets.insert(Slot::OwnerClient, entity(Class::Client, owner));
+            }
         }
     }
     /// Inputs gameplay fires during `tick` (touches, projectile hits) start
@@ -493,8 +539,10 @@ impl Session {
             return Ok(());
         };
         let started = std::time::Instant::now();
+        self.events.advancing = true;
         let report = ev::migration::world_tick_to_us(tick)
             .and_then(|now| world.advance(now, &mut EventHost { session: self }));
+        self.events.advancing = false;
         let elapsed = started.elapsed();
         let result = report.map(|report| {
             self.events.last_work = EventWork {
@@ -549,6 +597,9 @@ impl Session {
             }
         });
         self.events.world = Some(world);
+        for (brick, input, player) in std::mem::take(&mut self.events.deferred) {
+            self.fire_input(brick, &input, player);
+        }
         result
     }
     /// Bring knocked-out bricks back, all at once: a rocket's worth of
@@ -570,6 +621,25 @@ impl Session {
             self.fire_input(brick, "onRespawn", None);
         }
         Ok(())
+    }
+    /// An Add-On's input its rules fired: now, or once the event phase is
+    /// done when an output of theirs fired it from inside one.
+    pub(super) fn fire_package_input(
+        &mut self,
+        brick: BrickId,
+        input: &str,
+        player: Option<OwnerId>,
+    ) {
+        if !self.events.advancing {
+            self.fire_input(brick, input, player);
+        } else if self.events.deferred.len() < MAX_DEFERRED_INPUTS {
+            self.events.deferred.push((brick, input.to_owned(), player));
+        } else {
+            note(
+                &mut self.events.diagnostics,
+                format!("Brick {brick} {input}: too many inputs fired in one event phase"),
+            );
+        }
     }
     /// Fire a brick input from host tooling (admin commands, probes).
     pub fn fire_brick_input(&mut self, brick: BrickId, input: &str, player: Option<OwnerId>) {
@@ -1572,6 +1642,7 @@ impl ev::Host for EventHost<'_> {
             Intent::Projectile(_) => Ok(Apply::Rejected(
                 "projectile outputs are not available yet".into(),
             )),
+            Intent::Package(call) => Ok(self.session.package_output(dispatch, call)),
         };
         result.unwrap_or_else(|error| Apply::Rejected(format!("{error:#}")))
     }

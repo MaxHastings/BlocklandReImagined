@@ -27,7 +27,8 @@ operation that needs a capability.
 | `%obj.getScale()` | `p.scale` | |
 | `%client.currTool`, `getMountedImage(0)`, `getImageState(0)` | `p.slot`, `p.image`, `p.image_state` | `image_state` is the state's name, like `"Ready"`. |
 | `%client.minigame` | `p.minigame` | |
-| `registerInputEvent(fxDTSBrick, "onX", targets)`, `%brick.processInputEvent("onX", %client)` | `brick_inputs` in behaviour.json, `fire_brick_input(brick, "onX", p)` | `$InputTarget_[...]` is filled from `p`: Player, Client and MiniGame. |
+| `registerInputEvent(fxDTSBrick, "onX", targets)`, `%brick.processInputEvent("onX", %client)` | `brick_inputs` in behaviour.json, `fire_brick_input(brick, "onX", p)` | `$InputTarget_[...]` is filled from `p`: Player, Client and MiniGame; OwnerPlayer and OwnerClient are the brick owner's. |
+| `registerOutputEvent(Class, "doX", params)`, `function Class::doX(%this, ..., %client)` | `brick_outputs` in behaviour.json, `on_brick_output(output, target, params, info)` | `info.client` is the appended `%client`. An output that fires its brick's own input (`%this.onX(%client)`) returns it instead, with a row range if it limits the rows. |
 | `%obj.getMuzzlePoint(0)` | `p.mx`, `p.my`, `p.mz` | The held image's muzzle, or the eye with empty hands. |
 | `%obj.tool[%i]` | `p.tools` | Item ids by slot, `""` for an empty one. |
 | `%client.currentColor` | `p.paint` | The palette colour last picked with the paint keys. |

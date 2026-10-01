@@ -65,3 +65,6 @@ package Slayer_Stand_In_Module
 	}
 };
 activatePackage(Slayer_Stand_In_Module);
+
+registerOutputEvent("Minigame", "StartFlyThrough", "", 0);
+$Slayer::Server::Events::RestrictedEvent__["Minigame", "startFlyThrough"] = 3;

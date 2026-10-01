@@ -2500,6 +2500,9 @@ impl Runtime {
             if !behaviour.zones.is_empty() {
                 need("on_zone".into(), 3, "zones");
             }
+            if !behaviour.brick_outputs.is_empty() {
+                need("on_brick_output".into(), 4, "brick_outputs");
+            }
             if behaviour.on_activate {
                 need("on_activate".into(), 1, "on_activate");
             }
@@ -2514,6 +2517,18 @@ impl Runtime {
             }
             for e in package.entities.values() {
                 need(e.think.clone(), 1, &format!("entity `{}`", e.name));
+            }
+            if !behaviour.brick_outputs.is_empty()
+                && !package.manifest.capabilities.iter().any(|c| c == "brick_events")
+            {
+                problems.push(
+                    Diagnostic::error(
+                        "behaviour.brick_outputs",
+                        "brick_outputs need the `brick_events` capability",
+                    )
+                    .at(location(id, &behaviour.script))
+                    .hint("add \"brick_events\" to the manifest's capabilities"),
+                );
             }
             runtime.scripts.insert(id.clone(), Arc::new(ast));
             runtime.sources.insert(id.clone(), behaviour.script.clone());

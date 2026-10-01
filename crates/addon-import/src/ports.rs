@@ -657,35 +657,115 @@ fn check_rules(id: &str, manifest: &[u8], files: &[Written]) -> Result<()> {
     Ok(())
 }
 
-/// `{{name}}` in a rules file becomes that value's text, and
+/// `{{name}}` in a rules file becomes that value's text,
 /// `{{name|bool}}` `true` or `false` for a TorqueScript truth value (`1`,
-/// `0`, `true`, `false`), as a JSON setting's default needs. A `{{word}}`
-/// that names no value is an error, so a misspelt name is caught, as is a
-/// `|bool` value that is not a truth value.
+/// `0`, `true`, `false`), as a JSON setting's default needs, and
+/// `{{name|event_params}}` the JSON parameter list of a
+/// `registerOutputEvent` parameter string (see [`event_params`]). A
+/// `{{word}}` that names no value is an error, so a misspelt name is
+/// caught, as is a value its filter cannot read.
 fn fill_text(text: &str, values: &BTreeMap<String, String>) -> Result<String> {
-    let re = regex::Regex::new(r"\{\{([A-Za-z_][A-Za-z0-9_]*)(\|bool)?\}\}")?;
+    let re = regex::Regex::new(r"\{\{([A-Za-z_][A-Za-z0-9_]*)(\|bool|\|event_params)?\}\}")?;
     let mut problem = None;
     let filled = re.replace_all(text, |c: &regex::Captures| {
         let Some(v) = values.get(&c[1]) else {
             problem.get_or_insert_with(|| format!("uses `{}`, which no pattern captures", &c[0]));
             return String::new();
         };
-        if c.get(2).is_none() {
-            return v.clone();
-        }
-        match v.trim().to_ascii_lowercase().as_str() {
-            "1" | "true" => "true".to_owned(),
-            "0" | "false" => "false".to_owned(),
-            _ => {
-                problem.get_or_insert_with(|| format!("`{}` is `{v}`, not 1, 0, true or false", &c[0]));
+        match c.get(2).map(|m| m.as_str()) {
+            None => v.clone(),
+            Some("|event_params") => event_params(v).unwrap_or_else(|e| {
+                problem.get_or_insert_with(|| format!("`{}`: {e:#}", &c[0]));
                 String::new()
-            }
+            }),
+            Some(_) => match v.trim().to_ascii_lowercase().as_str() {
+                "1" | "true" => "true".to_owned(),
+                "0" | "false" => "false".to_owned(),
+                _ => {
+                    problem.get_or_insert_with(|| {
+                        format!("`{}` is `{v}`, not 1, 0, true or false", &c[0])
+                    });
+                    String::new()
+                }
+            },
         }
     });
     if let Some(problem) = problem {
         bail!("{problem}");
     }
     Ok(filled.into_owned())
+}
+
+/// The parameters of `registerOutputEvent(class, name, params)` as
+/// `behaviour.json` `brick_outputs` writes them. `source` is the params
+/// argument as the script spells it: quoted strings joined by `TAB` (or
+/// holding `\t`), each field a v20 parameter (`int min max default`,
+/// `float min max step default`, `bool`, `string length width`,
+/// `paintColor default`, `list name value ...`).
+fn event_params(source: &str) -> Result<String> {
+    let token = regex::Regex::new(r#"^\s*(?:"((?:[^"\\]|\\.)*)"|(TAB))"#)?;
+    let mut text = String::new();
+    let mut rest = source.trim();
+    let mut want_string = true;
+    while !rest.is_empty() {
+        let c = token
+            .captures(rest)
+            .with_context(|| format!("cannot read `{rest}` as parameter text"))?;
+        if let Some(quoted) = c.get(1) {
+            ensure!(want_string, "two strings in a row in `{source}`");
+            text.push_str(&quoted.as_str().replace("\\t", "\t"));
+        } else {
+            ensure!(!want_string, "TAB without a string before it in `{source}`");
+            text.push('\t');
+        }
+        want_string = !want_string;
+        rest = rest[c.get(0).unwrap().end()..].trim_start();
+    }
+    let number = |w: Option<&&str>, what: &str| -> Result<f64> {
+        w.with_context(|| format!("{what} is missing"))?
+            .parse::<f64>()
+            .with_context(|| format!("{what} is not a number"))
+    };
+    let mut params = Vec::new();
+    for field in text.split('\t').filter(|f| !f.trim().is_empty()) {
+        let w: Vec<&str> = field.split_whitespace().collect();
+        let kind = w[0].to_ascii_lowercase();
+        params.push(match kind.as_str() {
+            "int" => serde_json::json!({
+                "type": "int",
+                "min": number(w.get(1), "int min")? as i64,
+                "max": number(w.get(2), "int max")? as i64,
+                "default": number(w.get(3), "int default")? as i64,
+            }),
+            "float" => serde_json::json!({
+                "type": "float",
+                "min": number(w.get(1), "float min")?,
+                "max": number(w.get(2), "float max")?,
+                "step": number(w.get(3), "float step")?,
+                "default": number(w.get(4), "float default")?,
+            }),
+            "bool" => serde_json::json!({ "type": "bool" }),
+            "string" => serde_json::json!({
+                "type": "string",
+                "max_length": number(w.get(1), "string length")? as u32,
+                "width": number(w.get(2), "string width")? as i32,
+            }),
+            "paintcolor" => serde_json::json!({
+                "type": "paint_color",
+                "default": number(w.get(1), "paintColor default")? as u8,
+            }),
+            "list" => {
+                ensure!(w.len() >= 3 && w.len() % 2 == 1, "list `{field}` is not name value pairs");
+                let items = w[1..]
+                    .chunks(2)
+                    .map(|p| Ok(serde_json::json!([p[0], number(p.get(1), "list value")? as i64])))
+                    .collect::<Result<Vec<_>>>()?;
+                serde_json::json!({ "type": "list", "items": items })
+            }
+            other => bail!("parameter type `{other}` is not one an Add-On output can take"),
+        });
+    }
+    Ok(serde_json::to_string(&params)?)
 }
 
 /// The item presentation the importer writes pins the exact bytes of the
@@ -841,6 +921,26 @@ mod tests {
             json!({"x": 3})
         );
         assert!(fill(&json!("{missing}"), &values).is_err());
+    }
+
+    #[test]
+    fn event_params_read_registeroutputevent_text() {
+        let read = |t: &str| serde_json::from_str::<Value>(&event_params(t).unwrap()).unwrap();
+        assert_eq!(
+            read(r#""list TriggerTeam 0 TeamColor 1 ALL 2" TAB "paintColor 0" TAB "bool""#),
+            json!([
+                {"type": "list", "items": [["TriggerTeam", 0], ["TeamColor", 1], ["ALL", 2]]},
+                {"type": "paint_color", "default": 0},
+                {"type": "bool"}
+            ])
+        );
+        assert_eq!(
+            read(r#""int -999 999 1\tbool 1""#),
+            json!([{"type": "int", "min": -999, "max": 999, "default": 1}, {"type": "bool"}])
+        );
+        assert_eq!(read(r#""""#), json!([]));
+        assert!(event_params(r#""datablock ItemData""#).is_err());
+        assert!(event_params(r#""int 0 1 0" "bool""#).is_err());
     }
 
     #[test]

@@ -65,3 +65,5 @@ new ScriptObject(Slayer_PrefSO : Slayer_DefaultPrefSO)
 	permissionLevel = $Slayer::PermissionLevel["Any"];
 	variable = "%mini.CTF_requireEnemyPlayers";
 };
+
+registerOutputEvent(Player, "DropFlag", "");

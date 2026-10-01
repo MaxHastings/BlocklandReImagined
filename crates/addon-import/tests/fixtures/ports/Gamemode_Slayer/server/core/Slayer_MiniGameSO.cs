@@ -67,12 +67,46 @@ function Slayer_MiniGameSO::startRound(%this)
 
 function Slayer_MiniGameSO::endRound(%this, %winner, %resetTime)
 {
+	if(getField(%winner, 0) $= "CUSTOM")
+		%nameList = getField(%winner, 1);
+	if(%count > 1)
+		%msg = '<color:ff00ff>%1 tied this round.';
+	else
+		%msg = '<color:ffff00>%1 \c5won this round. Resetting in %4 seconds.';
 	%cl.setDead(true);
 	if(!%this.allowMoveWhileResetting)
 		%cl.camera.setMode(corpse, %winner.player);
 	%resetTime = %this.timeBetweenRounds * 1000;
 	%msg = '\c5Nobody won this round. Resetting in %4 seconds.';
 	%this.bottomPrintAll("Resetting in" SPC %timeLeft, 2, 1);
+}
+
+function Slayer_MiniGameSO::incTimeRemaining(%this, %flag, %display)
+{
+	%rmndr = %this.timeRemaining % 30000;
+	if(%rmndr >= 15000)
+		%remain = %this.timeRemaining + (30000 - %rmndr);
+	if(%display)
+		%this.messageAll('', "\c5Extended by\c3" SPC %flag SPC "\c5" @ %min @ ".");
+}
+
+function Slayer_MiniGameSO::setTimeRemaining(%this, %flag, %display)
+{
+	if(%display)
+		%this.messageAll('', "\c5Time now\c3" SPC %flag SPC "\c5" @ %min @ ".");
+}
+
+function MiniGameSO::Win(%this, %mode, %flag, %client)
+{
+	switch(%mode)
+	{
+		case 0: %this.endRound(%client);
+		case 1: %this.endRound(%team);
+		case 2: %cl = findClientByName(%flag);
+		case 3: %team = %this.Teams.getTeamFromName(%flag);
+		case 4: %this.endRound("CUSTOM" TAB %flag);
+		case 5: %this.endRound();
+	}
 }
 
 function serverCmdSlayer(%client, %cmd)
@@ -96,6 +130,11 @@ package Slayer_MiniGameSO
 	function Slayer_MiniGameSO::Reset(%this, %client)
 	{
 		%cl.setLives((isObject(%t) && %t.lives >= 0) ? %t.lives : %this.lives);
+		if(%this.clearStats)
+		{
+			%cl.setKills(0);
+			%cl.setDeaths(0);
+		}
 	}
 };
 activatePackage(Slayer_MiniGameSO);

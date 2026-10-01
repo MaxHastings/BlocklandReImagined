@@ -678,6 +678,34 @@ fn slayer_ports_apply_with_their_rules() {
     ] {
         assert!(slayer.contains(line), "slayer.rhai lacks `{line}`");
     }
+    // The wrench outputs, with this copy's parameters and words.
+    let output = |name: &str| {
+        behaviour["brick_outputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|o| o["name"] == name)
+            .unwrap_or_else(|| panic!("no {name} output"))
+            .clone()
+    };
+    assert_eq!(behaviour["brick_outputs"].as_array().unwrap().len(), 15);
+    assert_eq!(
+        output("setTeamControlLocked")["params"],
+        serde_json::json!([
+            { "type": "list", "items": [["Mine", 0], ["Colour", 1], ["Every", 2]] },
+            { "type": "paint_color", "default": 1 },
+            { "type": "bool" }
+        ])
+    );
+    assert_eq!(
+        output("addLives")["params"],
+        serde_json::json!([{ "type": "int", "min": 0, "max": 50, "default": 2 }])
+    );
+    assert_eq!(output("StartFlyThrough")["params"], serde_json::json!([]));
+    assert_eq!(setting(&behaviour, "clear_stats")["default"], false);
+    for line in ["Locked for now.", "\"Extended by\"", "\"Time now\""] {
+        assert!(slayer.contains(line), "slayer.rhai lacks `{line}`");
+    }
     assert_eq!(setting(&behaviour, "auto_sort")["default"], true);
     assert_eq!(setting(&behaviour, "team_lives")["default"], -1);
     let mode = setting(&behaviour, "mode");

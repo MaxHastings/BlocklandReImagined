@@ -287,6 +287,17 @@ fn drop_flag(p) {
     fire_brick_input(b.id, "onFlagDropped", p);
 }
 
+// The `DropFlag` wrench output (`Player::dropFlag`): the player the row
+// aims at drops the flag they carry, in a Capture the Flag game.
+fn on_brick_output(output, target, params, info) {
+    if output == "DropFlag" {
+        let me = player(target);
+        if me != () && me.minigame != () && playing(me.minigame) && me.team != () {
+            drop_flag(target);
+        }
+    }
+}
+
 fn cmd_dropflag(p) {
     let me = player(p);
     if me == () || me.minigame == () {

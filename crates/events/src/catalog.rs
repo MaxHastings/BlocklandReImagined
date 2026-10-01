@@ -60,6 +60,10 @@ pub struct OutputDef {
     pub append_client: bool,
     pub source: String,
     pub source_line: u32,
+    /// The Add-On whose rules run this output (`registerOutputEvent` in an
+    /// Add-On); the engine's own outputs have none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Catalog {
@@ -113,6 +117,27 @@ impl Catalog {
                 input.name
             );
             out.inputs.push(input.clone());
+        }
+        out.validate()?;
+        Ok(out)
+    }
+    /// This catalog with outputs Add-Ons declare added after its own, each
+    /// marked with its package. A name a class already has is refused.
+    pub fn with_outputs(&self, extra: &[OutputDef]) -> Result<Self> {
+        let mut out = self.clone();
+        for output in extra {
+            let class = Class::parse(&output.class_name).context("Unknown event output class")?;
+            ensure!(
+                output.package.is_some(),
+                "Event output `{}` names no package",
+                output.name
+            );
+            ensure!(
+                out.output(class, &output.name).is_none(),
+                "Event output `{}` is already taken",
+                output.name
+            );
+            out.outputs.push(output.clone());
         }
         out.validate()?;
         Ok(out)
@@ -204,8 +229,14 @@ impl Catalog {
                 };
                 ensure!(valid, "Invalid native event parameter schema");
             }
+            if let Some(package) = &o.package {
+                ensure!(
+                    !package.is_empty() && package.len() <= 128,
+                    "Invalid event output package"
+                );
+            }
             let values: Vec<_> = o.params.iter().map(Param::default_value).collect();
-            compile(Class::parse(&o.class_name).unwrap(), &o.name, &values)?;
+            compile(Class::parse(&o.class_name).unwrap(), o, &values)?;
         }
         Ok(())
     }
@@ -255,7 +286,7 @@ impl Catalog {
         for (s, v) in output.params.iter().zip(&row.params) {
             s.validate_value(v, bindings)?;
         }
-        compile(class, &output.name, &row.params)?;
+        compile(class, output, &row.params)?;
         Ok(class)
     }
 }
@@ -307,7 +338,20 @@ impl Param {
 fn bad() -> anyhow::Error {
     anyhow::anyhow!("Event implementation parameter mismatch")
 }
-pub(crate) fn compile(class: Class, name: &str, p: &[Value]) -> Result<Action> {
+/// What a row of `output` with parameters `p` does: an Add-On's output is
+/// a call of its rules, the engine's its own action.
+pub(crate) fn compile(class: Class, output: &OutputDef, p: &[Value]) -> Result<Action> {
+    if let Some(package) = &output.package {
+        ensure!(p.len() == output.params.len(), bad());
+        return Ok(Action::Intent(Intent::Package(PackageCall {
+            package: package.clone(),
+            output: output.name.clone(),
+            params: p.to_vec(),
+        })));
+    }
+    compile_native(class, &output.name, p)
+}
+fn compile_native(class: Class, name: &str, p: &[Value]) -> Result<Action> {
     // A print count step, saturated rather than wrapped (and negatable).
     let print_step = |v: i64| v.clamp(-i64::from(i8::MAX), i64::from(i8::MAX)) as i8;
     let i = |n| {

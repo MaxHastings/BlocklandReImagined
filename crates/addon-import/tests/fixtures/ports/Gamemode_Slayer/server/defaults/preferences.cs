@@ -113,3 +113,9 @@ new ScriptObject(Slayer_PrefSO : Slayer_DefaultPrefSO)
 	permissionLevel = $Slayer::PermissionLevel["Any"];
 	variable = "%mini.spectateCapturePoints";
 };
+new ScriptObject(Slayer_PrefSO : Slayer_DefaultPrefSO)
+{
+	defaultValue = 0;
+	permissionLevel = $Slayer::PermissionLevel["Any"];
+	variable = "%mini.clearStats";
+};

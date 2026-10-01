@@ -26,6 +26,7 @@ fn fixture() -> Catalog {
         append_client: true,
         source: "fixture".into(),
         source_line: 1,
+        package: None,
     };
     Catalog {
         schema_version: 1,

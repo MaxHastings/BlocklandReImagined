@@ -377,7 +377,7 @@ impl EventWorld {
                     return Ok(None);
                 }
                 let output = self.catalog.output(class, &row.output).unwrap();
-                let action = compile(class, &output.name, &row.params)?;
+                let action = compile(class, output, &row.params)?;
                 let cost = serde_json::to_vec(row)?.len()
                     + serde_json::to_vec(&action)?.len()
                     + output.name.len()
@@ -543,7 +543,10 @@ impl EventWorld {
     }
     fn validate_context(&self, t: &Trigger) -> Result<()> {
         ensure!(
-            t.origin > 0 && t.targets.len() <= 7 && t.input.len() <= 256,
+            t.origin > 0
+                && t.targets.len() <= 7
+                && t.input.len() <= 256
+                && t.rows.is_none_or(|(first, last)| first <= last),
             "Invalid event context"
         );
         if let Some(c) = t.client {
@@ -600,6 +603,9 @@ impl EventWorld {
                 continue;
             };
             if !row.enabled || compiled.input != input.id {
+                continue;
+            }
+            if t.rows.is_some_and(|(first, last)| !(first..=last).contains(&(idx as u16))) {
                 continue;
             }
             let action = &*compiled.action;
@@ -1198,6 +1204,34 @@ impl EventWorld {
                 Self::account_expansion(r, j.context.origin, expanded);
                 Ok(true)
             }
+            Apply::Chain(mut t) => {
+                if let Some(digit) = digit {
+                    self.bricks.get_mut(&j.target.id).unwrap().print_count = digit;
+                }
+                if let Some(token) = timer {
+                    self.reappear.insert(j.target.id, token);
+                }
+                r.cancelled += self.commit(child);
+                Self::account_expansion(r, j.context.origin, expanded);
+                // The output has happened, so a chain that cannot run is
+                // noted and dropped, never retried with the output again.
+                t.source = j.context.source;
+                t.origin = j.context.origin;
+                let planned = self.validate_context(&t).and_then(|()| {
+                    let count = self.check_expansion(j, &[t.source], &t.input, r)?;
+                    let plan = self.plan(&t, j.due, j.order, j.depth.saturating_add(1))?;
+                    ensure!(self.can_commit(&plan), "Event chain admission backpressure");
+                    Ok((count, plan))
+                });
+                match planned {
+                    Ok((count, plan)) => {
+                        r.cancelled += self.commit(plan);
+                        Self::account_expansion(r, j.context.origin, count);
+                    }
+                    Err(error) => Self::note(r, format!("{} -> {}: {error:#}", j.output, t.input)),
+                }
+                Ok(true)
+            }
             Apply::Deferred(reason) => {
                 Self::note(r, format!("host deferred {}: {reason}", j.output));
                 Ok(false)
@@ -1307,10 +1341,7 @@ impl EventWorld {
             );
             let expected = compile(
                 class,
-                &w.catalog
-                    .output(class, &j.row_snapshot.output)
-                    .unwrap()
-                    .name,
+                w.catalog.output(class, &j.row_snapshot.output).unwrap(),
                 &j.row_snapshot.params,
             )?;
             let expected_cancel = j.row_snapshot.delay_ms > 0

@@ -54,7 +54,8 @@ fn round_of(game) {
         return games[key];
     }
     #{ clock: tick(), countdown: (), counted: (), told: (), reset_at: (),
-       shown: (), lives: setting(game, "lives"), flying: (), flyers: [] }
+       shown: (), lives: setting(game, "lives"), flying: (), flyers: [], extra: 0,
+       custom: () }
 }
 fn set_round(game, r) {
     let games = get("games");
@@ -390,12 +391,17 @@ fn time_winner(g) {
     }
     winner
 }
+// Ticks left in the round: its time, with what events added or took.
+fn time_left(g, r) {
+    let extra = if "extra" in r { r.extra } else { 0 };
+    r.clock + setting(g.id, "time") * 60 * 120 + extra - tick()
+}
 fn check_time(g, r) {
     let minutes = setting(g.id, "time");
     if minutes <= 0 {
         return r;
     }
-    let left = r.clock + minutes * 60 * 120 - tick();
+    let left = time_left(g, r);
     if left <= 0 {
         end_round(g.id, time_winner(g));
         return r;
@@ -421,11 +427,17 @@ fn start_round(g) {
     let r = round_of(g.id);
     r.reset_at = ();
     r.shown = ();
+    r.extra = 0;
+    r.custom = ();
     r.lives = setting(g.id, "lives");
     for p in players() {
         if p.minigame == g.id {
             set_player(p.id, "out", false);
             set_player(p.id, "lives", lives_for(g, p.team));
+            if setting(g.id, "clear_stats") {
+                set_player(p.id, "kills", 0);
+                set_player(p.id, "deaths", 0);
+            }
         }
     }
     r.flying = ();
@@ -564,7 +576,15 @@ fn round_ended(g, teams, winners) {
         }
     }
     let seconds = setting(g.id, "time_between_rounds");
-    let msg = if names.is_empty() {
+    // The `Win` output's custom text wins in place of a team or player.
+    let custom = if "custom" in r && r.custom != () { r.custom } else { () };
+    if custom != () {
+        r.custom = ();
+        set_round(g.id, r);
+    }
+    let msg = if custom != () {
+        `${yellow()}${custom} ${c5()}won this round. Resetting in ${seconds} seconds.`
+    } else if names.is_empty() {
         `${c5()}Nobody won this round. Resetting in ${seconds} seconds.`
     } else if names.len() > 1 {
         let list = "";
@@ -627,7 +647,12 @@ fn cp_of(b) {
         return cps[key];
     }
     #{ game: b.game, orig: b.color, control: b.color, capture: #{}, decay: #{},
-       on: #{}, period: 1 }
+       on: #{}, period: 1, locked: #{} }
+}
+// `isLocked[color]`: the colour may not fill the point's bar
+// (`setTeamControlLocked`).
+fn cp_locked(cp, color) {
+    "locked" in cp && `${color}` in cp.locked && cp.locked[`${color}`]
 }
 fn set_cp(id, cp) {
     let cps = get("cps");
@@ -745,6 +770,8 @@ fn on_zone(p, brick_id, event) {
     let have = if key in cp.capture { cp.capture[key] } else { 0 };
     if att == def {
         bottom_print(p, `<just:center><color:${hex(att)}>${bar(max)}`, 1);
+    } else if have < max && cp_locked(cp, att) {
+        bottom_print(p, `<just:center>${c5()}{{cp_locked_text}}`, 1);
     } else if have < max {
         // The first easing back comes a second after the last tick.
         cp.decay[key] = tick() + cp.period + 120;
@@ -861,7 +888,15 @@ fn on_tick() {
 // `GameConnection::onDeath`: a life gone, and out of the round at none.
 fn on_death(victim, killer) {
     let me = player(victim);
-    if me == () || me.minigame == () || !running(me.minigame) {
+    if me == () || me.minigame == () {
+        return;
+    }
+    // The kills and deaths the event outputs and round report count.
+    set_player(victim, "deaths", get_player(victim, "deaths") + 1);
+    if killer != () && killer != victim {
+        set_player(killer, "kills", get_player(killer, "kills") + 1);
+    }
+    if !running(me.minigame) {
         return;
     }
     let lives = get_player(victim, "lives");
@@ -1059,9 +1094,15 @@ fn on_minigame(event) {
             if lives >= 0 && (mine > lives || mine == setting(g.id, "lives")) {
                 set_player(event.player, "lives", lives);
             }
-            tell(event.player, `${c5()}You have joined ${c3()}${team.name}`);
+            // The `joinTeam` output's reason, `(reason)`.
+            let reason = get_player(event.player, "reason");
+            if reason != "" {
+                reason = ` ${c5()}(${c3()}${reason}${c5()})`;
+                set_player(event.player, "reason", "");
+            }
+            tell(event.player, `${c5()}You have joined ${c3()}${team.name}${reason}`);
             if setting(g.id, "notify_member_changes") {
-                tell_minigame(g.id, `${c3()}${me.name} ${c5()}has joined ${c3()}${team.name}`, event.player);
+                tell_minigame(g.id, `${c3()}${me.name} ${c5()}has joined ${c3()}${team.name}${reason}`, event.player);
             }
         }
     }
@@ -1081,7 +1122,7 @@ fn on_pick_spawn(p) {
     }
     let spawns = [];
     for b in bricks(team_spawn()) {
-        if b.game == g.id && b.color == team.color {
+        if b.game == g.id && control_of(b) == team.color {
             spawns.push(b);
         }
     }
@@ -1114,6 +1155,290 @@ fn on_pick_spawn(p) {
     let pool = if open.is_empty() { spawns } else { open };
     let i = (hash3(seed(), tick(), p, pool.len()) * pool.len()).to_int();
     pool[i].id
+}
+
+// The colour that holds a brick: a capture point's holder, else the
+// colour an event gave it (`controlColor`), else its paint
+// (`getTeamControl`).
+fn control_of(b) {
+    if cp_ticks(b.kind) != () {
+        return cp_of(b).control;
+    }
+    let controls = get("controls");
+    let key = `${b.id}`;
+    if key in controls { controls[key] } else { b.color }
+}
+
+// Slayer's wrench outputs (`Slayer::createBrickEvents`). `target` is the
+// brick, player or mini-game the row aims at; `info.client` whoever set
+// the row off.
+fn on_brick_output(output, target, params, info) {
+    switch output {
+        "setTeamControl" => set_team_control(target, params[0], info.client),
+        "setTeamControlLocked" => lock_control(target, params[0], params[1], params[2], info.client),
+        "addLives" => set_player(target, "lives", get_player(target, "lives") + params[0]),
+        "addDeaths" => set_player(target, "deaths", get_player(target, "deaths") + params[0]),
+        "addKills" => set_player(target, "kills", get_player(target, "kills") + params[0]),
+        "setLives" => set_player(target, "lives", params[0]),
+        "setDeaths" => set_player(target, "deaths", params[0]),
+        "setKills" => set_player(target, "kills", params[0]),
+        "joinTeam" => join_by_event(target, params[0], params[1], params[2]),
+        "incTimeRemaining" => change_time(target, params[0], params[1], true),
+        "setTimeRemaining" => change_time(target, params[0], params[1], false),
+        "Win" => win_by_event(target, params[0], params[1], info.client),
+        "checkTeam" => return check_team(info.brick, params[0], params[1], params[2], info.client),
+        "checkTeamCount" => return check_team_count(info.brick, params[0], params[1], params[2], params[3]),
+        "StartFlyThrough" => fly_by_event(target, info.owner),
+    }
+    ()
+}
+// `minigameCanUse(client, brick)`: the brick is of the client's game.
+fn can_use(p, b) {
+    let me = player(p);
+    me != () && me.minigame != () && b.game == me.minigame
+}
+// `FxDtsBrick::setTeamControl`: a team spawn spawns the colour's teams; a
+// capture point is captured for it (scoring for whoever set it off).
+fn set_team_control(id, color, p) {
+    let b = brick(id);
+    if b == () || (p != () && !can_use(p, b)) {
+        return;
+    }
+    if b.kind == team_spawn() {
+        let controls = get("controls");
+        for key in controls.keys() {
+            if brick(parse_int(key)) == () {
+                controls.remove(key);
+            }
+        }
+        controls[`${id}`] = color;
+        set("controls", controls);
+    } else if cp_ticks(b.kind) != () {
+        let g = minigame(b.game);
+        if g != () {
+            set_cp(id, take_control(g, id, cp_of(b), color, p, false));
+        }
+    }
+}
+// `FxDtsBrick::setTeamControlLocked`: lock or unlock the point for the
+// team that set it off (mode 0), a colour (1) or everyone (2); a locked
+// colour's bar empties.
+fn lock_control(id, mode, color, flag, p) {
+    let b = brick(id);
+    if b == () || cp_ticks(b.kind) == () || (p != () && !can_use(p, b)) {
+        return;
+    }
+    let cp = cp_of(b);
+    if !("locked" in cp) {
+        cp.locked = #{};
+    }
+    let colors = [];
+    if mode == 0 {
+        let me = if p == () { () } else { player(p) };
+        if me != () && me.minigame != () && me.team != () {
+            let team = team_by_id(minigame(me.minigame), me.team);
+            if team != () {
+                colors.push(team.color);
+            }
+        }
+    } else if mode == 1 {
+        colors.push(color);
+    } else {
+        for c in 0..64 {
+            colors.push(c);
+        }
+    }
+    for c in colors {
+        let key = `${c}`;
+        if cp_locked(cp, c) != flag {
+            if flag {
+                cp.locked[key] = true;
+            } else {
+                cp.locked.remove(key);
+            }
+            if c != cp.control {
+                cp.capture.remove(key);
+                cp.decay.remove(key);
+            }
+        }
+    }
+    set_cp(id, cp);
+}
+// `GameConnection::joinTeam`: onto the named team of their game, with an
+// optional reason in the join message; `stay` keeps them where they are.
+fn join_by_event(p, name, reason, stay) {
+    let me = player(p);
+    if me == () || me.minigame == () {
+        return;
+    }
+    let g = minigame(me.minigame);
+    let team = team_by_name(g, name);
+    if team == () || me.team == team.id {
+        return;
+    }
+    set_player(p, "reason", reason);
+    if stay {
+        set_team(p, team.id);
+    } else {
+        join(p, team);
+    }
+}
+// `incTimeRemaining` and `setTimeRemaining`: a game with a time limit
+// gets `minutes` more (the time left rounded to the half minute first) or
+// exactly that many left.
+fn change_time(game, minutes, display, add) {
+    let g = minigame(game);
+    if g == () {
+        return;
+    }
+    if display {
+        let unit = plural(minutes, "minute", "minutes");
+        let text = if add { "{{time_extended}}" } else { "{{time_set_to}}" };
+        tell_game(g, `${c5()}${text}${c3()} ${minutes} ${c5()}${unit}.`);
+    }
+    if setting(game, "time") <= 0 || !running(game) {
+        return;
+    }
+    let r = round_of(game);
+    let left = time_left(g, r);
+    let wanted = if add {
+        let half = 30 * 120;
+        let rest = left % half;
+        let rounded = if rest >= half / 2 { left + half - rest } else { left - rest };
+        rounded + minutes * 60 * 120
+    } else {
+        minutes * 60 * 120
+    };
+    r.extra += wanted - left;
+    r.told = ();
+    set_round(game, r);
+}
+// `MiniGameSO::Win`: end the round for whoever set the row off (0), their
+// team (1), a named player (2) or team (3), the text (4), or nobody (5).
+fn win_by_event(game, mode, text, p) {
+    let g = minigame(game);
+    if g == () || !running(game) {
+        return;
+    }
+    let me = if p == () { () } else { player(p) };
+    if me != () && me.minigame != game {
+        return;
+    }
+    if mode == 0 {
+        if me != () {
+            end_round(game, #{ players: [p] });
+        }
+    } else if mode == 1 {
+        if me != () && me.team != () {
+            end_round(game, #{ teams: [me.team] });
+        }
+    } else if mode == 2 {
+        let wanted = text.to_lower();
+        for o in players() {
+            if o.minigame == game && o.name.to_lower().contains(wanted) {
+                end_round(game, #{ players: [o.id] });
+                return;
+            }
+        }
+    } else if mode == 3 {
+        let team = team_by_name(g, text);
+        if team != () {
+            end_round(game, #{ teams: [team.id] });
+        }
+    } else if mode == 4 {
+        let r = round_of(game);
+        r.custom = text;
+        set_round(game, r);
+        end_round(game, #{});
+    } else {
+        end_round(game, #{});
+    }
+}
+// `checkTeam`'s and `checkTeamCount`'s row range: "first last" runs only
+// those rows; anything else runs every row.
+fn check_rows(range) {
+    let parts = words(range);
+    if parts.len() != 2 {
+        return ();
+    }
+    [whole(parts[0]), whole(parts[1])]
+}
+fn team_check(pass, range) {
+    let input = if pass { "onTeamCheckTrue" } else { "onTeamCheckFalse" };
+    let rows = check_rows(range);
+    if rows == () || rows[0] < 0 || rows[1] < 0 {
+        return input;
+    }
+    #{ input: input, rows: rows }
+}
+// `fxDTSBrick::checkTeam`: whether whoever set the row off is on (0), not
+// on (1) or allied with (2) the named team.
+fn check_team(id, kind, name, range, p) {
+    if p == () {
+        return ();
+    }
+    let me = player(p);
+    if me == () || me.minigame == () {
+        return ();
+    }
+    let g = minigame(me.minigame);
+    let check = team_by_name(g, name);
+    let theirs = if me.team == () { 0 } else { me.team };
+    let wanted = if check == () { 0 } else { check.id };
+    let pass = if kind == 0 {
+        theirs == wanted
+    } else if kind == 1 {
+        theirs != wanted
+    } else if me.team == () || check == () {
+        false
+    } else {
+        let mine = team_by_id(g, me.team);
+        mine.id == check.id || (setting(g.id, "ally_same_colors") && mine.color == check.color)
+    };
+    team_check(pass, range)
+}
+// `fxDTSBrick::checkTeamCount`: compares how many are on the named team of
+// the brick's game with a number (`>=`, `<=`, `==`, `!=`).
+fn check_team_count(id, name, op, number, range) {
+    let b = brick(id);
+    if b == () || b.game == () {
+        return ();
+    }
+    let g = minigame(b.game);
+    if g == () {
+        return ();
+    }
+    let team = team_by_name(g, name);
+    let n = if team == () { 0 } else { members(g, team.id).len() };
+    // Text that is not a number counts as 0, as in TorqueScript.
+    let text = number;
+    text.trim();
+    let check = whole(text);
+    let check = if check < 0 { 0 } else { check };
+    let pass = if op == 0 {
+        n >= check
+    } else if op == 1 {
+        n <= check
+    } else if op == 2 {
+        n == check
+    } else {
+        n != check
+    };
+    team_check(pass, range)
+}
+// `StartFlyThrough` (restricted to the mini-game's creator): everyone in
+// the game watches its fly-through, and play carries on.
+fn fly_by_event(game, owner) {
+    let g = minigame(game);
+    let who = player(owner);
+    if g == () || (g.owner != owner && (who == () || !who.admin)) {
+        return;
+    }
+    let cam = flycam_of(game);
+    if cam == () || cam.knots.is_empty() || g.members.is_empty() {
+        return;
+    }
+    start_fly_through(g, false);
 }
 
 fn words(line) {

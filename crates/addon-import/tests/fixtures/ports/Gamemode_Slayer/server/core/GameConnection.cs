@@ -4,6 +4,9 @@ package Slayer_GameConnection
 {
 	function GameConnection::onDeath(%this, %obj, %killer, %type, %area)
 	{
+		%this.addDeaths(1);
+		if(%killer != %this && isFunction(%killerClass, addKills))
+			%killer.addKills(1);
 		if(%this.getLives() > 0)
 		{
 			%this.addLives(-1);
@@ -61,4 +64,11 @@ function Slayer_SpectatePathCamData::onNode(%this, %camera, %node)
 {
 	if(%node == 2)
 		%camera.client.spectateAutoCam();
+}
+
+function GameConnection::joinTeam(%this, %flag, %reason, %noRespawn)
+{
+	%team = %mini.Teams.getTeamFromName(%flag);
+	if(isObject(%team))
+		%team.addMember(%this, %reason, %noRespawn, %noRespawn);
 }

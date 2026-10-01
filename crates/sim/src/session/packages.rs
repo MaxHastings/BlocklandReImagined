@@ -24,7 +24,7 @@ use bri_package_runtime::{
 use bri_world::MAX_BRICKS;
 use std::sync::Arc;
 
-mod brick_inputs;
+mod brick_events;
 mod game_hooks;
 mod item_hooks;
 mod settings;

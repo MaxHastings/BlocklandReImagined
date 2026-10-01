@@ -98,7 +98,8 @@
           "pref_cp_tick": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"\\$Pref::Slayer::Server::CPTriggerTickMS\"",
           "pref_cp_transition": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.CPTransitionColors\"",
           "pref_points_cp": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.points_CP\"",
-          "team_events": "(?s)defaultValue\\s*=\\s*6\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"\\$Pref::Slayer::Server::Teams::maxEvents\""
+          "team_events": "(?s)defaultValue\\s*=\\s*6\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"\\$Pref::Slayer::Server::Teams::maxEvents\"",
+          "pref_clear_stats": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.clearStats\""
         },
         "server/defaults/team-preferences.cs": {
           "team_lives": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"lives\"",
@@ -155,10 +156,12 @@
           "camera": "allowMoveWhileResetting[\\s\\S]*setMode\\(\\s*corpse\\s*,\\s*%winner\\.player\\s*\\)",
           "reset_time": "%this\\.timeBetweenRounds\\s*\\*\\s*1000",
           "nobody": "Nobody won this round",
-          "countdown": "Resetting in"
+          "countdown": "Resetting in",
+          "custom_win": "getField\\(\\s*%winner\\s*,\\s*0\\s*\\)\\s*\\$=\\s*\"CUSTOM\"[\\s\\S]*?<color:ffff00>%1 \\\\c5won this round\\."
         },
         "Slayer_MiniGameSO::Reset": {
-          "lives": "setLives\\(\\s*\\(\\s*isObject\\(\\s*%t\\s*\\)\\s*&&\\s*%t\\.lives\\s*>=\\s*0\\s*\\)\\s*\\?\\s*%t\\.lives\\s*:\\s*%this\\.lives\\s*\\)"
+          "lives": "setLives\\(\\s*\\(\\s*isObject\\(\\s*%t\\s*\\)\\s*&&\\s*%t\\.lives\\s*>=\\s*0\\s*\\)\\s*\\?\\s*%t\\.lives\\s*:\\s*%this\\.lives\\s*\\)",
+          "tally_reset": "%cl\\.setKills\\(\\s*0\\s*\\)\\s*;\\s*%cl\\.setDeaths\\(\\s*0\\s*\\)"
         },
         "Slayer_MiniGameSO::removeMember": {
           "lives": "victoryCheck_Lives\\(\\)"
@@ -182,7 +185,8 @@
           "auto_glide": "pushBack\\(\\s*%startTransform\\s*,\\s*(\\d+)\\s*,\\s*\"Normal\"\\s*,\\s*\"Linear\"\\s*\\)",
           "auto_clear": "containerRayCast\\(\\s*%startTransform\\s*,\\s*%endTransform\\s*,\\s*%mask\\s*,\\s*%obj\\.player\\s*\\)",
           "auto_fov": "setControlCameraFOV\\(\\s*(\\d+)\\s*\\)",
-          "auto_retry": "scheduleNoQuota\\(\\s*(\\d+)\\s*,\\s*\"spectateAutoCam\"\\s*\\)"
+          "auto_retry": "scheduleNoQuota\\(\\s*(\\d+)\\s*,\\s*\"spectateAutoCam\"\\s*\\)",
+          "tally": "%this\\.addDeaths\\(\\s*1\\s*\\)\\s*;[^;]*if\\s*\\(\\s*%killer\\s*!=\\s*%this\\s*&&\\s*isFunction\\(\\s*%killerClass\\s*,\\s*addKills\\s*\\)\\s*\\)\\s*%killer\\.addKills\\(\\s*1\\s*\\)"
         },
         "Slayer_PathCamData::onNode": {
           "fly_end": "%node\\s*==\\s*%cam\\.numNodes\\s*-\\s*1",
@@ -201,7 +205,9 @@
           "fly_rounds": "flyCam_roundsPassed\\s*>\\s*%this\\.flyCam_roundsBetweenFlyThroughs",
           "fly_countdown_ends": "%remain\\s*<=\\s*0[\\s\\S]*?flyCam_lastControlObject",
           "fly_jump_kink": "if\\s*\\(\\s*%type\\s*\\$=\\s*\"\"\\s*\\)\\s*%type\\s*=\\s*\"Kink\"",
-          "fly_create_skips": "addNode\\([^;]*\\)\\s*;\\s*%this\\.flyCam\\.setPosition\\(\\s*1\\.0\\s*\\)\\s*;\\s*%this\\.flyCam\\.popFront\\(\\)"
+          "fly_create_skips": "addNode\\([^;]*\\)\\s*;\\s*%this\\.flyCam\\.setPosition\\(\\s*1\\.0\\s*\\)\\s*;\\s*%this\\.flyCam\\.popFront\\(\\)",
+          "out_fly_through": "registerOutputEvent\\(\\s*\"?(?i:Minigame)\"?\\s*,\\s*\"StartFlyThrough\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
+          "fly_restricted": "RestrictedEvent__\\[\\s*\"Minigame\"\\s*,\\s*\"startFlyThrough\"\\s*\\]\\s*=\\s*3\\s*;"
         },
         "server/core/resources/datablocks.cs": {
           "team_spawn_brick": "datablock\\s+FxDtsBrickData\\s*\\(\\s*brickSlyrSpawnPointData\\s*:\\s*brickSpawnPointData\\s*\\)",
@@ -218,7 +224,8 @@
           "first_ease": "scheduleNoQuota\\(\\s*%this\\.tickPeriodMS\\s*\\+\\s*1000\\s*,\\s*decreaseCapture",
           "bar": "%client\\.bottomPrint\\(\\s*\"<just:center>\"\\s*@\\s*%a\\s*@\\s*%d\\s*,\\s*1",
           "transition": "%mini\\.CPTransitionColors[\\s\\S]*getAverageColor\\(\\s*%rgb\\s*,\\s*%team\\.colorRGB\\s*\\)[\\s\\S]*getClosestPaintColor",
-          "capture": "setCPControl\\(\\s*%attCol\\s*,\\s*0\\s*,\\s*%client\\s*\\)"
+          "capture": "setCPControl\\(\\s*%attCol\\s*,\\s*0\\s*,\\s*%client\\s*\\)",
+          "cp_locked_text": "if\\s*\\(\\s*%brick\\.isLocked\\[%attCol\\]\\s*\\)\\s*%client\\.bottomPrint\\(\\s*\"<just:center>\\\\c5([^\"]*)\""
         },
         "Slayer_CPTriggerData::decreaseCapture": {
           "held": "%cl\\.slyrTeam\\.color\\s*==\\s*%color\\s*\\)\\s*return",
@@ -239,6 +246,50 @@
         "serverCmdSlayer": {
           "rules": "The last %2 standing wins",
           "custom": "%mini\\.customRule"
+        },
+        "server/core/FxDtsBrick.cs": {
+          "out_team_control": "registerOutputEvent\\(\\s*\"?(?i:FxDtsBrick)\"?\\s*,\\s*\"setTeamControl\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
+          "out_team_control_locked": "registerOutputEvent\\(\\s*\"?(?i:FxDtsBrick)\"?\\s*,\\s*\"setTeamControlLocked\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
+          "out_add_lives": "registerOutputEvent\\(\\s*\"?(?i:GameConnection)\"?\\s*,\\s*\"addLives\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
+          "out_add_deaths": "registerOutputEvent\\(\\s*\"?(?i:GameConnection)\"?\\s*,\\s*\"addDeaths\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
+          "out_add_kills": "registerOutputEvent\\(\\s*\"?(?i:GameConnection)\"?\\s*,\\s*\"addKills\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
+          "out_set_lives": "registerOutputEvent\\(\\s*\"?(?i:GameConnection)\"?\\s*,\\s*\"setLives\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
+          "out_set_deaths": "registerOutputEvent\\(\\s*\"?(?i:GameConnection)\"?\\s*,\\s*\"setDeaths\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
+          "out_set_kills": "registerOutputEvent\\(\\s*\"?(?i:GameConnection)\"?\\s*,\\s*\"setKills\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
+          "out_join_team": "registerOutputEvent\\(\\s*\"?(?i:GameConnection)\"?\\s*,\\s*\"joinTeam\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
+          "out_inc_time": "registerOutputEvent\\(\\s*\"?(?i:Minigame)\"?\\s*,\\s*\"incTimeRemaining\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
+          "out_set_time": "registerOutputEvent\\(\\s*\"?(?i:Minigame)\"?\\s*,\\s*\"setTimeRemaining\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
+          "out_win": "registerOutputEvent\\(\\s*\"?(?i:Minigame)\"?\\s*,\\s*\"Win\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
+          "out_check_team": "registerOutputEvent\\(\\s*\"?(?i:FxDtsBrick)\"?\\s*,\\s*\"checkTeam\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
+          "out_check_team_count": "registerOutputEvent\\(\\s*\"?(?i:FxDtsBrick)\"?\\s*,\\s*\"checkTeamCount\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
+          "check_team_outcomes": "registerInputEvent\\(\\s*\"?(?i:fxDTSBrick)\"?\\s*,\\s*\"onTeamCheckTrue\"\\s*,\\s*\"Self fxDTSBrick\"\\s*TAB\\s*\"Player Player\"\\s*TAB\\s*\"Client GameConnection\"\\s*TAB\\s*\"MiniGame MiniGame\"\\s*TAB\\s*\"OwnerPlayer Player\"\\s*TAB\\s*\"OwnerClient GameConnection\""
+        },
+        "FxDtsBrick::setTeamControl": {
+          "spawn_control": "case\\s+\"TeamSpawn\"\\s+or\\s+\"TeamVehicle\"\\s*:\\s*%this\\.controlColor\\s*=\\s*%color\\s*;",
+          "cp_control": "case\\s+\"CP\"\\s*:\\s*%this\\.setCPControl\\(\\s*%color\\s*,\\s*0\\s*,\\s*%client\\s*\\)"
+        },
+        "FxDtsBrick::setTeamControlLocked": {
+          "lock_clears": "%this\\.isLocked\\[%color\\]\\s*=\\s*%flag\\s*;\\s*if\\s*\\(\\s*%color\\s*!=\\s*%brColor\\s*\\)\\s*%this\\.capture\\[%color\\]\\s*=\\s*0\\s*;"
+        },
+        "fxDTSBrick::checkTeam": {
+          "allied": "%pass\\s*=\\s*%team\\.isAlliedTeam\\(\\s*%checkTeam\\s*\\)",
+          "row_range": "getWordCount\\(\\s*%eventnums\\s*\\)\\s*!=\\s*2"
+        },
+        "fxDTSBrick::checkTeamCount": {
+          "count_ops": "case\\s+0\\s*:\\s*%pass\\s*=\\s*%checkteam\\.numMembers\\s*>=\\s*%check\\s*;\\s*case\\s+1\\s*:\\s*%pass\\s*=\\s*%checkteam\\.numMembers\\s*<=\\s*%check\\s*;\\s*case\\s+2\\s*:\\s*%pass\\s*=\\s*%checkteam\\.numMembers\\s*==\\s*%check\\s*;\\s*case\\s+3\\s*:\\s*%pass\\s*=\\s*%checkteam\\.numMembers\\s*!=\\s*%check\\s*;"
+        },
+        "Slayer_MiniGameSO::incTimeRemaining": {
+          "time_extended": "messageAll\\(\\s*''\\s*,\\s*\"\\\\c5([^\"\\\\]*)\\\\c3\"\\s*SPC\\s*%flag",
+          "round_half": "%rmndr\\s*>=\\s*15000"
+        },
+        "Slayer_MiniGameSO::setTimeRemaining": {
+          "time_set_to": "messageAll\\(\\s*''\\s*,\\s*\"\\\\c5([^\"\\\\]*)\\\\c3\"\\s*SPC\\s*%flag"
+        },
+        "MiniGameSO::Win": {
+          "win_modes": "case\\s+0\\s*:[\\s\\S]*?endRound\\(\\s*%client\\s*\\)[\\s\\S]*?case\\s+1\\s*:[\\s\\S]*?endRound\\(\\s*%team\\s*\\)[\\s\\S]*?case\\s+2\\s*:[\\s\\S]*?findClientByName\\(\\s*%flag\\s*\\)[\\s\\S]*?case\\s+3\\s*:[\\s\\S]*?getTeamFromName\\(\\s*%flag\\s*\\)[\\s\\S]*?case\\s+4\\s*:[\\s\\S]*?%this\\.endRound\\(\\s*\"CUSTOM\"\\s*TAB\\s*%flag\\s*\\)"
+        },
+        "GameConnection::joinTeam": {
+          "join_named": "%team\\.addMember\\(\\s*%this\\s*,\\s*%reason\\s*,\\s*%noRespawn\\s*,\\s*%noRespawn\\s*\\)"
         }
       },
       "tests": [
@@ -286,7 +337,8 @@
           "pref_dropped_respawn": "(?s)defaultValue\\s*=\\s*(-?\\d+)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.CTF_flagDroppedRespawnTime\"",
           "pref_returned_respawn": "(?s)defaultValue\\s*=\\s*(-?\\d+)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.CTF_flagReturnedRespawnTime\"",
           "pref_manual_drop": "(?s)defaultValue\\s*=\\s*(-?\\d+)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.CTF_manualFlagDrop\"",
-          "pref_require_enemies": "(?s)defaultValue\\s*=\\s*(-?\\d+)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.CTF_requireEnemyPlayers\""
+          "pref_require_enemies": "(?s)defaultValue\\s*=\\s*(-?\\d+)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.CTF_requireEnemyPlayers\"",
+          "out_drop_flag": "registerOutputEvent\\(\\s*\"?(?i:Player)\"?\\s*,\\s*\"DropFlag\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)"
         },
         "Player::dropFlag": {
           "drop_reach": "vectorScale\\(\\s*%eyeVect\\s*,\\s*([\\d.]+)\\s*\\)\\s*\\)\\s*;\\s*%raycast",

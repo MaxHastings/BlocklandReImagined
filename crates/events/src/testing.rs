@@ -24,6 +24,7 @@ pub fn catalog() -> Catalog {
         append_client: false,
         source: "fixture".into(),
         source_line: 1,
+        package: None,
     };
     let player = [
         ("Self", "fxDTSBrick"),
