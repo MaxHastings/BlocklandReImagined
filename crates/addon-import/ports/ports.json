@@ -19,6 +19,97 @@
         "crates/addon-import/tests/ports.rs shotgun_port_fires_the_spread",
         "crates/addon-import/tests/import.rs real_community_samples"
       ]
+    },
+    {
+      "addon": "Script_PlayerThrowing",
+      "title": "Player Throwing",
+      "port": "script_playerthrowing",
+      "status": "partial",
+      "sha256": [
+        "aef5a4503044f5ec690c8cb3ef693ed885f97f90c7d79d7c453704be56caf0ba"
+      ],
+      "covers": {
+        "Player::attemptGrab": {
+          "node": "%this\\.mountObject\\s*\\(\\s*%col\\s*,\\s*(\\d+)\\s*\\)",
+          "held_scale": "vectorScale\\s*\\(\\s*%this\\.getScale\\s*\\(\\s*\\)\\s*,\\s*([0-9]*\\.?[0-9]+)\\s*\\)",
+          "reach": "vectorScale\\s*\\(\\s*%vector\\s*,\\s*([0-9]*\\.?[0-9]+)\\s*\\*\\s*%zScale\\s*\\)",
+          "look_up": "setLookLimits\\s*\\(\\s*([0-9]*\\.?[0-9]+)\\s*,",
+          "look_down": "setLookLimits\\s*\\(\\s*[0-9.]+\\s*,\\s*([0-9]*\\.?[0-9]+)\\s*\\)",
+          "held_sequence": "%col\\.playThread\\s*\\(\\s*\\d+\\s*,\\s*(\\w+)\\s*\\)",
+          "holder_sequence": "%this\\.playThread\\s*\\(\\s*\\d+\\s*,\\s*(\\w+)\\s*\\)",
+          "dismounts": "%col\\.isMounted\\s*\\(\\s*\\)\\s*\\)\\s*\\{?\\s*%col\\.dismount\\s*\\(",
+          "puts_away": "%col\\.unmountImage\\s*\\(\\s*0\\s*\\)",
+          "grab_timeout": "getSimTime\\s*\\(\\s*\\)\\s*-\\s*%this\\.grabTimeout",
+          "grabs_players": "containerRaycast\\s*\\([^;]*PlayerObjectType"
+        },
+        "Player::throwPlayer": {
+          "min_amount": "mClamp\\s*\\(\\s*%amount\\s*,\\s*(\\d+)\\s*,",
+          "max_amount": "mClamp\\s*\\(\\s*%amount\\s*,\\s*\\d+\\s*,\\s*(\\d+)\\s*\\)",
+          "flings": "addVelocity\\s*\\(\\s*vectorScale\\s*\\(\\s*%eye\\s*,\\s*%amount\\s*\\*\\s*\\$Pref::Server::PlayerThrowing::Multiplier\\s*\\)"
+        },
+        "Player::chargeThrow": {
+          "max_charge": "mClamp\\s*\\(\\s*%this\\.chargeThrowAmount\\s*,\\s*\\d+\\s*,\\s*(\\d+)\\s*\\)",
+          "charges": "%this\\.chargeThrowAmount\\s*=\\s*%amount\\s*\\+\\s*1\\s*;"
+        },
+        "Player::removeFromGrasp": {
+          "down_look": "getWord\\s*\\(\\s*%holder\\.getEyeVector\\s*\\(\\s*\\)\\s*,\\s*2\\s*\\)\\s*<=\\s*(-?[0-9]*\\.?[0-9]+)",
+          "ground": "getWord\\s*\\(\\s*%holder\\.getPosition\\s*\\(\\s*\\)\\s*,\\s*2\\s*\\)\\s*<\\s*([0-9]*\\.?[0-9]+)",
+          "front": "%holder\\.isFrontClear\\s*\\(",
+          "restores": "%this\\.setLookLimits\\s*\\(\\s*1\\s*,\\s*0\\s*\\)"
+        },
+        "Player::isFrontClear": {
+          "front_reach": "%multiplier\\s*=\\s*([0-9]*\\.?[0-9]+)\\s*;"
+        },
+        "Player::canGrab": {
+          "same_minigame": "%targetClient\\.miniGame\\s*!=\\s*%client\\.miniGame",
+          "may_hurt": "miniGameCanDamage\\s*\\(\\s*%this\\s*,\\s*%object\\s*\\)",
+          "not_held": "%object\\.isBeingHeld\\s*\\("
+        },
+        "Player::escapeFromGrasp": {
+          "escape_timeout": "\\$Pref::Server::PlayerThrowing::EscapeTimeout"
+        },
+        "Player::clearAllHolding": {
+          "lets_go": "removeFromGrasp\\s*\\("
+        },
+        "Player::isHoldingPlayer": {
+          "holding": "%this\\.holdingPlayer"
+        },
+        "Player::isBeingHeld": {
+          "held": "%this\\.holderPlayer"
+        },
+        "PlayerThrowing_CanUseTools": {
+          "vetoes": "isBeingHeld\\s*\\(\\s*\\)\\s*\\|\\|\\s*%player\\.isHoldingPlayer"
+        },
+        "Armor::onTrigger": {
+          "trigger": "%triggerNum\\s*==\\s*0\\s*&&\\s*%obj\\.isHoldingPlayer"
+        },
+        "Player::activateStuff": {
+          "escapes": "escapeFromGrasp\\s*\\(",
+          "grabs": "attemptGrab\\s*\\("
+        },
+        "Armor::onRemove": {
+          "clears": "clearAllHolding\\s*\\("
+        },
+        "GameConnection::onDeath": {
+          "clears": "clearAllHolding\\s*\\("
+        },
+        "serverCmdUseTool": {
+          "vetoed": "PlayerThrowing_CanUseTools\\s*\\("
+        },
+        "serverCmdUnuseTool": {
+          "vetoed": "PlayerThrowing_CanUseTools\\s*\\("
+        },
+        "serverCmdUseSprayCan": {
+          "vetoed": "PlayerThrowing_CanUseTools\\s*\\("
+        },
+        "serverCmdUseFxCan": {
+          "vetoed": "PlayerThrowing_CanUseTools\\s*\\("
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/ports.rs player_throwing_port_becomes_host_rules_with_this_copys_numbers",
+        "crates/addon-import/tests/ports.rs ported_player_throwing_grabs_throws_and_lets_go_in_a_hosted_game"
+      ]
     }
   ]
 }

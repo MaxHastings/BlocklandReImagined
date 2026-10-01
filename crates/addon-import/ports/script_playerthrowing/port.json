@@ -1,0 +1,5 @@
+{
+  "schema_version": 1,
+  "notes": "Electrk's Player Throwing as a host rule: with nothing in your hand, click a player in your minigame (one your weapons may hurt) to lift them, limp, onto your hand; hold fire to charge and let go to throw them where you look; they click to struggle free after a few seconds. Its numbers come from this copy's script; its server preferences keep their defaults (on, minigames only, grab every 5 s, escape after 3 s, charged throws at 100 ms a notch, 2.5 times the charge). Not yet as in v20: the held player keeps their own view instead of the orbit camera around the holder, and a brick already in hand is not put away.",
+  "rules": { "capabilities": ["physics", "player", "effects", "chat"] }
+}

@@ -87,6 +87,8 @@ operation that needs a capability.
 | `ItemData::onDrop`, dynamic fields on the dropped `Item` | `on_drop(p, item, slot)`: the value it returns rides the drop to whoever picks it up |
 | `ProjectileData::onCollision` | `on_projectile_hit(hit)` |
 | `Player::activateStuff` packaged (an empty-hand click) | `on_activate(p)`: answer `true` to take the click |
+| `Armor::onTrigger` packaged (fire with an empty hand, pressed and let go) | `on_trigger(p, trigger, down)`: answer `true` to take a press |
+| `serverCmdUseTool`, `serverCmdUnUseTool`, `serverCmdUseSprayCan`, `serverCmdUseFXCan` packaged to refuse | The `equip` policy, `allow_equip(p)` |
 
 ## Not here yet
 

@@ -8248,6 +8248,51 @@ Render: `/mnt/project-files/steel-ball/steel-ball-v2.png`. Max's in-game
 check is a Steel Ball near bricks at Mirrors Medium, in Unified+Shine and
 in Dynamic.
 
+## 2026-10-01 Player Throwing port (branch `claude/project-thread-n5mlwe`, protocol 70, for v0.1.11)
+
+Max picked Electrk's Player Throwing ("Electrk's is fine") as the classic
+throw Add-On, run from the player's own copy ("originals only"). Port
+`crates/addon-import/ports/script_playerthrowing`, listed in `ports.json` as
+partial, checked against the copy the Gate imported (sha256 `aef5a450...`).
+The original is read only to write the port; none of it is in the repo.
+
+The port is a host-rules companion (`script_playerthrowing-rules`, from the
+Fill Can companion work, merged here): `rules/throwing.rhai`, one function
+per v20 function. Its numbers are read from the imported copy by the
+`covers` patterns (mount node, held scale, reach, look limits, throw clamp,
+charge notches, front check, set-down rule, both animations); the server
+preferences keep their defaults (minigames only, grab every 5 s, escape
+after 3 s, 100 ms notches, 2.5 times the charge).
+
+New engine seams it needed (general, documented in `docs/modding`):
+- `on_trigger(player, trigger, down)` (`Armor::onTrigger`): an empty-hand
+  fire press and its release. The client sends `ActivateRelease` when the
+  button that sent `Activate` comes up; a fire press with no image mounted
+  reaches it too. The press is asked before `on_activate`.
+- The `equip` policy (`allow_equip`): the host asks before `EquipTool`,
+  `UseSprayCan` and `UseFxCan` (the Add-On's `serverCmdUseTool` package).
+- `unmount_object` also takes a player out of a vehicle seat (`dismount()`,
+  as a grab does), and checks its caller: the rider, their mount, or a
+  player who may move them.
+
+Not yet as in v20 (why the port is partial): the held player keeps their
+own view instead of the orbit camera around the holder
+(`Observer::onTrigger` "Grabbed"), and a brick already in hand is not put
+away (`serverCmdUseInventory`, `serverCmdInstantUseBrick`; brick choice is
+client-side here).
+
+Tests (content-free; the stand-in Add-On in
+`crates/addon-import/tests/fixtures/ports/Script_PlayerThrowing` is ours,
+CC0, with its own numbers):
+- `cargo test -p bri-addon-import --test ports throwing`: the port fills
+  this copy's numbers into compiling rules; hosted: grab onto the right
+  hand at 0.75 scale with look limits, no tool switching for either, no
+  escape before 3 s then free and restored, the 5 s grab timeout, a charged
+  throw at 2.5 x 11 where the holder looks.
+- `cargo test -p bri-sim --test carry_rules`: `on_trigger` hears press and
+  release, the `equip` veto, `unmount_object` off a vehicle (the test's own
+  horse).
+
 ## 2026-10-01 Riding seams for classic throw Add-Ons (branch `claude/project-thread-n5mlwe`, protocol 70, for v0.1.11)
 
 A modder (lpsroo) ported Nobot's Script_Nobotthrowmod and sent notes on the

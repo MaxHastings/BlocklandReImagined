@@ -586,3 +586,250 @@ fn port_and_check_port_run_from_the_executable() {
     assert!(text.contains("\"status\": \"verified\""), "{text}");
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// The stand-in Player Throwing (`tests/fixtures/ports/Script_PlayerThrowing`,
+/// CC0) imported into `root/addons`, its host rules beside it, both turned
+/// on: the packages a host loads.
+fn throwing_import(root: &Path) -> bri_package::packages::PackageSet {
+    use bri_package::library::Library;
+    let report = import(&options(
+        fixture("ports/Script_PlayerThrowing"),
+        root.join("addons/script_playerthrowing"),
+    ))
+    .unwrap();
+    let applied = &report.ports[0];
+    assert!(applied.applied, "{:?}", applied.reason);
+    let mut library = Library::scan(root).unwrap();
+    let plan = library.plan("script_playerthrowing", true);
+    assert!(plan.allowed(), "{:?}", plan.refused);
+    assert_eq!(plan.also, ["script_playerthrowing-rules"]);
+    library.apply(&plan).unwrap();
+    bri_package::packages::PackageSet {
+        schema_version: 1,
+        packages: ["script_playerthrowing", "script_playerthrowing-rules"]
+            .iter()
+            .map(|id| library.get(id).unwrap().package.clone())
+            .collect(),
+    }
+}
+
+/// The listed port reads this copy's own numbers (held scale, reach, look
+/// limits, throw clamp, charge notches, the front check, the set-down
+/// rule, both animations) into the host rules it writes beside the import.
+#[test]
+fn player_throwing_port_becomes_host_rules_with_this_copys_numbers() {
+    let dir = fresh("throwing");
+    let root = dir.join("content");
+    let set = throwing_import(&root);
+    let rules =
+        std::fs::read_to_string(root.join("addons/script_playerthrowing-rules/throwing.rhai"))
+            .unwrap();
+    for line in [
+        "fn node() { 0 }",
+        "fn held_scale() { parse_float(\"0.75\") }",
+        "fn reach() { parse_float(\"3\") }",
+        "fn look_up() { parse_float(\"0.6\") }",
+        "fn look_down() { parse_float(\"0.4\") }",
+        "fn min_amount() { 1 }",
+        "fn max_amount() { 30 }",
+        "fn max_charge() { 10 }",
+        "fn front_reach() { parse_float(\"2.5\") }",
+        "fn down_look() { parse_float(\"-0.85\") }",
+        "fn ground() { parse_float(\"0.3\") }",
+        "fn held_sequence() { \"death1\" }",
+        "fn holder_sequence() { \"armReadyBoth\" }",
+    ] {
+        assert!(rules.contains(line), "{line} missing from\n{rules}");
+    }
+    assert!(!rules.contains("{{"), "every value is filled");
+    // The rules compile, with every hook and policy they name.
+    let catalog =
+        bri_package_runtime::Catalog::load(&root, &set, true).unwrap_or_else(|e| panic!("{e:#?}"));
+    if let Err(problems) = bri_package_runtime::script::Runtime::compile(&catalog) {
+        panic!("{problems:#?}");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Hosted, on flat ground: in a minigame, an empty-hand click lifts the
+/// player in front onto the hand (shrunk, limp, looking within the copy's
+/// limits); neither may switch tools while held; the held player struggles
+/// free only after 3 s; after the 5 s grab timeout the next grab, a held
+/// fire button and its release throw them at 2.5 times the full charge.
+#[test]
+fn ported_player_throwing_grabs_throws_and_lets_go_in_a_hosted_game() {
+    use bri_content::shape::{Node, Shape};
+    use bri_sim::{
+        player::MoveInput,
+        session::{Command, MiniGameRequest, Session, shape_mount_points},
+    };
+    use rapier3d::prelude::*;
+    use std::collections::BTreeMap;
+
+    let dir = fresh("throwing-hosted");
+    let root = dir.join("content");
+    let set = throwing_import(&root);
+    let catalog = std::sync::Arc::new(
+        bri_package_runtime::Catalog::load(&root, &set, true).unwrap_or_else(|e| panic!("{e:#?}")),
+    );
+    let mut s = Session::new(
+        bri_sim::simulation::Simulation::new(
+            bri_world::World::new("Ports".into(), "ports".into(), vec![[1.0; 4]]),
+            bri_sim::definitions::Definitions {
+                entries: Default::default(),
+            },
+            vec![
+                ColliderBuilder::cuboid(200.0, 0.5, 200.0).translation(Vector::new(0.0, -0.5, 0.0)),
+            ],
+        )
+        .unwrap(),
+    );
+    let node = |name: &str, parent: Option<usize>, translation: [f32; 3]| Node {
+        name: name.into(),
+        parent,
+        translation,
+        rotation: [0.0, 0.0, 0.0, 1.0],
+    };
+    // A Blockhead's hands: mount0 right, mount1 left.
+    let body = Shape {
+        schema_version: 1,
+        id: "v20.shape.m".into(),
+        nodes: vec![
+            node("root", None, [0.0; 3]),
+            node("chest", Some(0), [0.0, 1.5, 0.0]),
+            node("mount0", Some(1), [0.5, 0.2, -0.3]),
+            node("mount1", Some(1), [-0.5, 0.2, -0.3]),
+        ],
+        objects: vec![],
+        details: vec![],
+        meshes: vec![],
+        materials: vec![],
+        animations: vec![],
+    };
+    s.set_spawn_points(vec![Vec3::new(0.0, 0.05, 0.0)]).unwrap();
+    s.set_body_mount_points("v20.shape.m", shape_mount_points(&body))
+        .unwrap();
+    s.install_packages(catalog, None).unwrap();
+
+    let mut seq: BTreeMap<u64, u64> = BTreeMap::new();
+    let mut moves: BTreeMap<u64, u64> = BTreeMap::new();
+    let mut inputs: BTreeMap<u64, MoveInput> = BTreeMap::new();
+    let mut cmd = |s: &mut Session, owner: u64, c: Command| {
+        let n = seq.entry(owner).or_default();
+        *n += 1;
+        s.command(owner, *n, c)
+    };
+    let mut steps = |s: &mut Session, inputs: &BTreeMap<u64, MoveInput>, n: usize| {
+        for _ in 0..n {
+            for (owner, input) in inputs {
+                let m = moves.entry(*owner).or_default();
+                *m += 1;
+                let _ = s.movement(*owner, *m, *input);
+            }
+            s.step().unwrap();
+        }
+    };
+    let state = |s: &Session, owner: u64| {
+        s.motion_states()
+            .into_iter()
+            .find(|(p, _)| p.owner == owner)
+            .map(|(p, _)| p)
+            .unwrap()
+    };
+    let feet = |s: &Session, owner: u64| Vec3::from(state(s, owner).feet);
+
+    let holder = s
+        .join("Holder".into(), Vec3::new(0.0, 0.05, 0.0), false)
+        .unwrap();
+    let held = s
+        .join("Held".into(), Vec3::new(0.0, 0.05, -1.5), false)
+        .unwrap();
+    inputs.insert(holder, MoveInput::default());
+    inputs.insert(held, MoveInput::default());
+    steps(&mut s, &inputs, 2);
+    // A minigame where weapons hurt, both in it where they stand.
+    s.set_spawn_points(vec![feet(&s, holder)]).unwrap();
+    cmd(
+        &mut s,
+        holder,
+        Command::MiniGame(MiniGameRequest::Create {
+            color: 0,
+            settings: bri_minigames::Settings::default(),
+        }),
+    )
+    .unwrap();
+    let game = s.minigame_views()[0].id;
+    s.set_spawn_points(vec![feet(&s, held)]).unwrap();
+    cmd(
+        &mut s,
+        held,
+        Command::MiniGame(MiniGameRequest::Join { game }),
+    )
+    .unwrap();
+    steps(&mut s, &inputs, 330);
+    let aim = |s: &mut Session, inputs: &mut BTreeMap<u64, MoveInput>| {
+        let at = feet(s, held) + Vec3::Y * 1.3 - (feet(s, holder) + Vec3::Y * 2.1);
+        let flat = Vec3::new(at.x, 0.0, at.z).length();
+        let input = inputs.get_mut(&holder).unwrap();
+        input.yaw = at.x.atan2(-at.z);
+        input.pitch = at.y.atan2(flat);
+    };
+    aim(&mut s, &mut inputs);
+    steps(&mut s, &inputs, 2);
+
+    // Lifted onto the right hand.
+    cmd(&mut s, holder, Command::Activate).unwrap();
+    steps(&mut s, &inputs, 1);
+    let vitals = s.vitals();
+    let ride = vitals[&held].ride.expect("held");
+    assert_eq!((ride.mount, ride.seat), (holder, 0));
+    assert!((state(&s, held).scale - 0.75).abs() < 1e-4);
+    assert_eq!(vitals[&held].look_limits, Some([0.4, 0.6]));
+    // Neither switches tools (`PlayerThrowing_CanUseTools`).
+    assert!(cmd(&mut s, held, Command::EquipTool { slot: None }).is_err());
+    assert!(cmd(&mut s, holder, Command::EquipTool { slot: None }).is_err());
+
+    // Struggling: not before 3 s, then free, restored.
+    steps(&mut s, &inputs, 120);
+    cmd(&mut s, held, Command::Activate).unwrap();
+    steps(&mut s, &inputs, 1);
+    assert!(s.vitals()[&held].ride.is_some(), "too soon to escape");
+    steps(&mut s, &inputs, 240);
+    cmd(&mut s, held, Command::Activate).unwrap();
+    steps(&mut s, &inputs, 1);
+    let vitals = s.vitals();
+    assert_eq!(vitals[&held].ride, None, "escaped");
+    assert_eq!(vitals[&held].look_limits, None);
+    assert!((state(&s, held).scale - 1.0).abs() < 1e-4);
+    assert!(cmd(&mut s, holder, Command::EquipTool { slot: None }).is_ok());
+
+    // Grab again once the 5 s timeout has passed since letting go.
+    steps(&mut s, &inputs, 300);
+    aim(&mut s, &mut inputs);
+    steps(&mut s, &inputs, 2);
+    cmd(&mut s, holder, Command::Activate).unwrap();
+    steps(&mut s, &inputs, 1);
+    assert!(s.vitals()[&held].ride.is_none(), "grab timeout");
+    steps(&mut s, &inputs, 300);
+    aim(&mut s, &mut inputs);
+    steps(&mut s, &inputs, 2);
+    cmd(&mut s, holder, Command::Activate).unwrap();
+    steps(&mut s, &inputs, 1);
+    assert!(s.vitals()[&held].ride.is_some(), "grabbed again");
+
+    // Look up, hold fire past the full charge, let go: thrown that way at
+    // 2.5 x 11.
+    inputs.get_mut(&holder).unwrap().pitch = 0.4;
+    cmd(&mut s, holder, Command::Activate).unwrap();
+    steps(&mut s, &inputs, 12 * 15);
+    cmd(&mut s, holder, Command::ActivateRelease).unwrap();
+    steps(&mut s, &inputs, 1);
+    assert_eq!(s.vitals()[&held].ride, None, "thrown");
+    let speed = Vec3::from(state(&s, held).velocity).length();
+    assert!((speed - 27.5).abs() < 1.0, "thrown at {speed}");
+    assert!(
+        state(&s, held).velocity[1] > 5.0,
+        "upward, where the holder looks"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}

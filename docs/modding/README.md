@@ -127,11 +127,20 @@ refused. The engine calls:
 | `on_drop(player, item, slot)` | a player drops a tool of your Add-On (or one it depends on), when `"on_drop": true`. What it returns (a number, a map such as `#{ rounds: 7 }`) is kept with the dropped item and handed to `on_pickup` as `info.data` |
 | `on_projectile_hit(hit)` | a projectile of your weapons (or a dependency's) struck something, delivered at the start of the next tick, when `"on_projectile_hit": true`. `hit` is `#{ projectile, by, kind, id, ref, x, y, z, nx, ny, nz, vx, vy, vz }`: `kind` is `player`, `vehicle`, `entity`, `brick` or `map`, `by` the shooter or `()` |
 | `on_activate(player)` | a living player clicks with nothing in their hand (v20's `Player::activateStuff`), when `"on_activate": true`: return `true` to take the click, or anything else to pass it on. Add-Ons are asked in load order, and a click nobody takes does the usual thing (opens doors, presses buttons, flips vehicles) |
+| `on_trigger(player, trigger, down)` | a living player with nothing in their hand presses (`down` true) or lets go of a trigger (v20's `Armor::onTrigger`), when `"on_trigger": true`. Trigger `0` is fire: the empty-hand click, whose press comes before `on_activate`. Return `true` to take it, anything else to pass it on: Add-Ons are asked in load order, presses and releases alike, and a press nobody takes goes on to `on_activate` and the usual click. A charged throw starts on the press and lets fly on the release |
 | `cmd_<name>(player, args...)` | a player sends a command listed in `commands` |
 
 `player` is the player's id: pass it straight to `tell`, `get_player` and
 the rest. Loading checks that each hook exists with the right number of
 parameters, so a typo shows up in `bri-addon-check`, not mid-game.
+
+**Policies** are decisions the engine owns and asks you about. List them in
+`"policies"` and define `allow_<policy>(player)`: `true` allows, `false` or
+a reason string refuses. `respawn` is a dead player asking to come back,
+`build` any command that builds, and `equip` taking a tool, the spray can or
+the FX can into the hand or putting it away (v20 Add-Ons packaged
+`serverCmdUseTool` and friends for this). Every Add-On that lists a policy
+must allow it.
 
 **Commands** are the only thing a player can ask of your script. Each has a
 `name`, and optionally `args` (a list of `"int"`, `"float"`, `"string"` or
@@ -245,7 +254,9 @@ the mount carrying no rider on that point. A command's player may seat
 someone only on themselves, and only someone they may move (the same rules
 as `hold` and `push`). `unmount_object(rider)` lets them off in place,
 moving as the mount was, so a throw is `unmount_object(t)` then
-`push("player:" + t, ...)`. Landing on a Blockhead still does not seat you:
+`push("player:" + t, ...)`. It also takes a player out of a vehicle seat
+(`dismount()`), as a grab does in v20. A rule's command or hook may unmount
+the rider themselves, their own rider, or a player it may move. Landing on a Blockhead still does not seat you:
 only rideable bodies, such as the horse, take riders by touch.
 
 **Effects** (`effects`) change nothing in the game and are sent once, like

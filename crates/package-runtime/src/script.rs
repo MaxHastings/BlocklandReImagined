@@ -1934,6 +1934,9 @@ impl Runtime {
             if behaviour.on_activate {
                 need("on_activate".into(), 1, "on_activate");
             }
+            if behaviour.on_trigger {
+                need("on_trigger".into(), 3, "on_trigger");
+            }
             for policy in &behaviour.policies {
                 need(format!("allow_{policy}"), 1, &format!("policy `{policy}`"));
             }

@@ -455,6 +455,19 @@ impl Session {
         }
         Ok(())
     }
+    /// `unMountObject` / `dismount()` from a rule: off a ridden player in
+    /// place ([`Self::unmount_player`]), or out of a vehicle seat at its
+    /// dismount point, as jumping out does.
+    pub(super) fn unmount_object(&mut self, rider: OwnerId) -> Result<()> {
+        if self.riding.is_riding(rider) {
+            return self.unmount_player(rider);
+        }
+        ensure!(
+            self.vehicles.is_mounted(rider),
+            "Player {rider} rides nothing"
+        );
+        self.dismount_vehicle(rider)
+    }
     /// `Armor::onDisabled` and disconnects: every rider is forced off.
     pub(super) fn release_riders(&mut self, mount: OwnerId) {
         for (rider, _) in self.riding.riders_of(mount) {

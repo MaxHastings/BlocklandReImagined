@@ -469,41 +469,44 @@ fn a_builder_lifts_the_bot_from_their_own_brick() {
     assert_eq!(g.ride(bot), None, "thrown");
 }
 
-/// A package that notes who each player hook reached.
-fn hook_probe() -> Arc<Catalog> {
-    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("carry-hook-probe");
+/// A one-script test package `probe` in its own folder `name`.
+fn probe(name: &str, capabilities: &str, behaviour: &str, script: &str) -> Arc<Catalog> {
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
     let dir = root.join("probe");
     std::fs::create_dir_all(&dir).unwrap();
-    let files = [
-        (
-            "package.json",
-            r#"{ "schema_version": 1, "id": "probe", "version": "1.0.0", "api": 1,
-  "name": "Probe", "description": "Notes who each player hook reached.",
+    let manifest = format!(
+        r#"{{ "schema_version": 1, "id": "probe", "version": "1.0.0", "api": 1,
+  "name": "Probe", "description": "A test probe.",
   "authors": ["Blockland ReImagined"], "license": "CC0-1.0",
-  "provenance": { "source": "original" }, "capabilities": [],
+  "provenance": {{ "source": "original" }}, "capabilities": [{capabilities}],
   "provides": [
-    { "kind": "behaviour", "id": "probe:behaviour/main", "file": "behaviour.json" },
-    { "kind": "script", "id": "probe:script/main", "file": "probe.rhai" }
-  ] }"#,
-        ),
-        (
-            "behaviour.json",
-            r#"{ "schema_version": 1, "script": "probe.rhai",
+    {{ "kind": "behaviour", "id": "probe:behaviour/main", "file": "behaviour.json" }},
+    {{ "kind": "script", "id": "probe:script/main", "file": "probe.rhai" }}
+  ] }}"#
+    );
+    for (file, text) in [
+        ("package.json", manifest.as_str()),
+        ("behaviour.json", behaviour),
+        ("probe.rhai", script),
+    ] {
+        std::fs::write(dir.join(file), text).unwrap();
+    }
+    catalog(&root, "probe")
+}
+
+/// A package that notes who each player hook reached.
+fn hook_probe() -> Arc<Catalog> {
+    probe(
+        "carry-hook-probe",
+        "",
+        r#"{ "schema_version": 1, "script": "probe.rhai",
   "state": { "global": { "seen": { "default": "", "visible": "everyone", "persist": false } } },
   "on_join": true, "on_loadout": true, "on_spawn": true }"#,
-        ),
-        (
-            "probe.rhai",
-            r#"fn note(hook, who) { set("seen", get("seen") + hook + ":" + who + " "); }
+        r#"fn note(hook, who) { set("seen", get("seen") + hook + ":" + who + " "); }
 fn on_join(who) { note("join", who); }
 fn on_loadout(who) { note("loadout", who); }
 fn on_spawn(who) { note("spawn", who); }"#,
-        ),
-    ];
-    for (name, text) in files {
-        std::fs::write(dir.join(name), text).unwrap();
-    }
-    catalog(&root, "probe")
+    )
 }
 
 /// A new bot is not a joining player to Add-Ons: `on_join`, `on_loadout`
@@ -524,4 +527,77 @@ fn a_new_bot_gets_no_player_hooks() {
         assert!(seen.contains(&format!("{hook}:{builder} ")), "{seen}");
         assert!(!seen.contains(&format!("{hook}:{bot} ")), "{seen}");
     }
+}
+
+/// The seams a rule needs to act on the fire button and tool switching:
+/// `on_trigger` hears an empty hand's press (`Activate`) and its release
+/// (`ActivateRelease`), and a fire press when no image is mounted; the
+/// `equip` policy vetoes switching tools; `unmount_object` takes a rider
+/// off a vehicle. The vehicles are the test's own (no game content).
+#[test]
+fn a_rule_hears_the_fire_button_vetoes_tools_and_takes_a_rider_off_a_vehicle() {
+    let mut g = Game::with_add_ons(
+        World::new("Carry".into(), "carry".into(), vec![[1.0; 4]]),
+        probe(
+            "carry-trigger-probe",
+            r#""player", "physics""#,
+            r#"{ "schema_version": 1, "script": "probe.rhai",
+  "state": { "global": { "seen": { "default": "", "visible": "everyone", "persist": false } } },
+  "on_trigger": true, "policies": ["equip"] }"#,
+            r#"fn note(text) { set("seen", get("seen") + text + " "); }
+fn on_trigger(who, trigger, down) {
+    note(`${trigger}:${down}`);
+    if !down { unmount_object(who); }
+    true
+}
+fn allow_equip(who) { !player(who).mounted }"#,
+        ),
+    );
+    g.s.set_vehicle_pack(
+        bri_vehicles::Pack::load(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/prediction-vehicles.json"),
+        )
+        .unwrap(),
+        Vec::new(),
+    )
+    .unwrap();
+    g.s.spawn_vehicle_at(
+        0,
+        "test:vehicle/horse",
+        Vec3::new(0.0, 0.5, 0.0),
+        0.0,
+        Vec3::ZERO,
+    )
+    .unwrap();
+    // Dropped onto its back: v20 boards from above.
+    let rider = g.join("Rider", Vec3::new(0.0, 4.0, 0.0));
+    for _ in 0..240 {
+        g.steps(1);
+        if g.s.mounted(rider).is_some() {
+            break;
+        }
+    }
+    assert!(g.s.mounted(rider).is_some(), "riding the horse");
+    let seen = |g: &Game| {
+        g.s.package_state().packages["probe"].global["seen"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+
+    // No tools on horseback, by the rule's policy.
+    assert!(g.cmd(rider, Command::EquipTool { slot: None }).is_err());
+    // An empty hand's click is the press; letting go, the release, which
+    // takes the rider off.
+    g.click(rider);
+    assert_eq!(seen(&g), "0:true ");
+    assert!(g.s.mounted(rider).is_some());
+    g.cmd(rider, Command::ActivateRelease).unwrap();
+    assert_eq!(seen(&g), "0:true 0:false ");
+    assert_eq!(g.s.mounted(rider), None, "off the horse");
+    assert!(g.cmd(rider, Command::EquipTool { slot: None }).is_ok());
+    // With no image mounted, a fire press reaches the rule too.
+    g.cmd(rider, Command::WeaponTrigger { down: true }).unwrap();
+    assert_eq!(seen(&g), "0:true 0:false 0:true ");
 }

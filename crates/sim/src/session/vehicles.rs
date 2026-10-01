@@ -1737,6 +1737,23 @@ impl Session {
         }
         Ok(())
     }
+    /// Out of a vehicle seat at its dismount point, as a jump does, now.
+    pub(super) fn dismount_vehicle(&mut self, owner: OwnerId) -> Result<()> {
+        let world = self.vehicles.world.as_mut().context("No vehicles")?;
+        world.dismount(
+            &self.simulation.physics,
+            veh::OwnerId(owner),
+            OccupantId(owner),
+            false,
+        )?;
+        let intents = world.drain_intents();
+        self.apply_vehicle_intents(intents)?;
+        ensure!(
+            !self.vehicles.mounted.contains_key(&owner),
+            "Player {owner} could not get out here"
+        );
+        Ok(())
+    }
     /// Death or disconnect forces the occupant out of a vehicle or off a
     /// ridden player.
     pub(super) fn eject(&mut self, owner: OwnerId) {
