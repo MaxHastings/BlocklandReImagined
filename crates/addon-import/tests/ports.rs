@@ -2524,9 +2524,16 @@ fn new_duplicator_game(
         &std::fs::read(dir.join("content/addons/tool_newduplicator/assets/weapons.json")).unwrap(),
     )
     .unwrap();
+    // Lying in the world it loops the sequence its `ND_Item::onAdd` plays.
+    assert_eq!(pack.items["tool_newduplicator:weapon/nd_item"].idle, "spin");
     for image in ["nd_image", "nd_image_box", "nd_image_blue"] {
         let image = &pack.images[&format!("tool_newduplicator:image/{image}")];
         assert_eq!(image.command.as_deref(), Some("tool_newduplicator-rules:fire"));
+        // Unloaded while a job runs, it spins (`stateSpinThread`).
+        let ready = &image.states[1];
+        let spin = ready.not_loaded.map(|i| &image.states[i]).unwrap();
+        assert_eq!((ready.spin, spin.spin), (bri_weapons::Spin::Stop, bri_weapons::Spin::FullSpeed));
+        assert_eq!(spin.loaded, Some(1));
         assert_eq!(
             image.commands.unmount.as_deref(),
             Some("tool_newduplicator-rules:unmount")
@@ -2680,6 +2687,44 @@ fn new_duplicator_port_selects_stacks_and_boxes_and_plants() {
             .any(|(_, n)| matches!(n, Notice::Blueprint(Some(_)))),
         "[Plant Brick] takes the selection up as a ghost"
     );
+    // Everyone sees a blue box round the ghost, following it as its
+    // player turns and moves it (`spawnGhostBricks`, `getGhostWorldBox`),
+    // gone once it is put away.
+    let pose = bri_sim::session::CopyPose {
+        anchor: [copy.origin[0] + 1.0, copy.origin[1], copy.origin[2]],
+        quarter_turns: 1,
+        mirrored: true,
+        flipped: false,
+    };
+    send(&mut s, host, &seq, Command::CopyPose(Some(pose))).unwrap();
+    s.step().unwrap();
+    s.step().unwrap();
+    let highlight = nd_shapes(&s, host, "highlight");
+    assert_eq!(highlight.len(), 12, "{highlight:#?}");
+    assert!(
+        highlight.iter().all(|x| x.color == [51, 51, 255, 252]),
+        "{highlight:#?}"
+    );
+    let (min, max) = copy.ghost_box(pose.anchor, 1, (false, true));
+    let middle =
+        |a: [f32; 3], b: [f32; 3]| std::array::from_fn::<f32, 3, _>(|i| (a[i] + b[i]) * 0.5);
+    let low = highlight.iter().fold([f32::MAX; 3], |m, x| {
+        std::array::from_fn(|i| m[i].min(x.min[i]))
+    });
+    let high = highlight.iter().fold([f32::MIN; 3], |m, x| {
+        std::array::from_fn(|i| m[i].max(x.max[i]))
+    });
+    let (got, want) = (middle(low, high), middle(min, max));
+    assert!(
+        (0..3).all(|i| (got[i] - want[i]).abs() < 1e-3),
+        "{got:?} vs {want:?}"
+    );
+    // Turned a quarter, the 2x1 copy's box lies along z.
+    assert!(high[2] - low[2] > high[0] - low[0], "{low:?}..{high:?}");
+    send(&mut s, host, &seq, Command::CopyPose(None)).unwrap();
+    s.step().unwrap();
+    s.step().unwrap();
+    assert!(nd_shapes(&s, host, "highlight").is_empty());
 
     // Planted over the lone plate: the bottom plate is blocked, the top
     // one plants on it.
@@ -3241,6 +3286,7 @@ fn new_duplicator_port_pivots_plants_as_waits_and_lists() {
         prints.iter().any(|t| t.contains(r"Planted \c33\c6 / \c33\c6 Bricks!")),
         "{prints:?}"
     );
+    assert!(!prints.iter().any(|t| t.contains("probably mirrored incorrectly")));
     // A plain plate mirrors exactly.
     send(&mut s, host, &seq, typed("me", &[])).unwrap();
     s.step().unwrap();
@@ -3577,7 +3623,21 @@ fn new_duplicator_port_supercuts_and_fills_over_ticks() {
     s.step().unwrap();
     answer(&mut s, host, &seq, "ndconfirmsupercut");
     assert!(s.copy_working(host), "{:?} {}", told(&mut s), s.snapshot().world.bricks.len());
+    // While it works the duplicator spins (`setImageLoaded(0, false)`).
+    let held = |s: &bri_sim::session::Session| s.weapon_view().images[&host][0].state.clone();
+    let mut spun = false;
+    for _ in 0..4 {
+        s.step().unwrap();
+        spun |= held(&s) == "Spin";
+    }
+    assert!(spun && s.copy_working(host), "{}", held(&s));
     assert!(finish(&mut s) > 0);
+    let mut ticks = 0;
+    while held(&s) != "Ready" {
+        s.step().unwrap();
+        ticks += 1;
+        assert!(ticks < 10, "it stops spinning when the job ends: {}", held(&s));
+    }
     let prints = told(&mut s);
     assert!(
         prints.iter().any(|t| t.contains("Supercut in progress... (")
@@ -3773,6 +3833,111 @@ fn new_duplicator_port_cancels_each_job_its_own_way_and_glows_until_let_go() {
     }
     assert_eq!(glow(&s), (1, 0));
 
+    let diagnostics = s.package_diagnostics();
+    assert!(diagnostics.is_empty(), "{diagnostics:#?}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// The New Duplicator's port: a box-mode click on a brick the player may
+/// not select is refused with the original's message and error sound
+/// (`ndTrustCheckMessage`), and makes no box.
+#[test]
+fn new_duplicator_port_refuses_a_box_corner_without_trust() {
+    use bri_sim::session::Command;
+
+    let (dir, mut s, _host, _seq, _) = new_duplicator_game("new-duplicator-box-trust");
+    // Standing on the host's lone plate, looking straight down at it.
+    let guest = s.join("Guest".into(), Vec3::new(2.5, 0.25, 0.25), false).unwrap();
+    let gseq = std::cell::Cell::new(0u64);
+    send(&mut s, guest, &gseq, typed("d", &[])).unwrap();
+    let down = |s: &mut bri_sim::session::Session, n: u64| {
+        s.movement(
+            guest,
+            s.snapshot().world.tick + n + 5000,
+            bri_sim::player::MoveInput {
+                pitch: -1.55,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        s.step().unwrap();
+    };
+    for n in 0..60 {
+        down(&mut s, n);
+    }
+    send(&mut s, guest, &gseq, Command::ToggleLight).unwrap();
+    for n in 0..60 {
+        down(&mut s, n);
+    }
+    heard(&mut s, guest);
+    for pressed in [true, false] {
+        send(&mut s, guest, &gseq, Command::WeaponTrigger { down: pressed }).unwrap();
+        down(&mut s, 0);
+    }
+    for n in 0..5 {
+        down(&mut s, n);
+    }
+    let (prints, sounds) = heard(&mut s, guest);
+    assert!(
+        prints.iter().any(|t| t.contains("You don't have enough trust to do that!")),
+        "{prints:?}"
+    );
+    assert!(sounds.iter().any(|x| x == "errorSound"), "{sounds:?}");
+    assert!(nd_box(&s, guest).is_none(), "no box");
+    let diagnostics = s.package_diagnostics();
+    assert!(diagnostics.is_empty(), "{diagnostics:#?}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// The New Duplicator's port mirrors the player's own ghost brick outside
+/// plant mode (`FxDtsBrick::ndMirrorGhost`), and says the original's line
+/// with no ghost out.
+#[test]
+fn new_duplicator_port_mirrors_a_ghost_brick() {
+    use bri_sim::session::{BrickHand, Command, GhostBrick, Notice};
+
+    let (dir, mut s, host, seq, _) = new_duplicator_game("new-duplicator-ghost-mirror");
+    let hand = |ghost| {
+        Command::BrickHand(BrickHand {
+            stocked: true,
+            equipped: ghost,
+            ghost,
+        })
+    };
+    // Bricks in hand put the duplicator away; no ghost yet.
+    send(&mut s, host, &seq, hand(false)).unwrap();
+    s.step().unwrap();
+    s.take_private_notices();
+    send(&mut s, host, &seq, typed("mx", &[])).unwrap();
+    s.step().unwrap();
+    let prints = told(&mut s);
+    assert!(
+        prints.iter().any(|t| t.contains("The mirror command can only be used in plant mode or with a ghost brick.")),
+        "{prints:?}"
+    );
+    send(&mut s, host, &seq, hand(true)).unwrap();
+    let ghost = GhostBrick {
+        definition: "plate".into(),
+        position: [4.5, 0.1, 4.25],
+        quarter_turns: 0,
+        color: 0,
+        print: None,
+    };
+    send(&mut s, host, &seq, Command::GhostBrick(Some(ghost))).unwrap();
+    s.step().unwrap();
+    s.take_private_notices();
+    send(&mut s, host, &seq, typed("mx", &[])).unwrap();
+    s.step().unwrap();
+    let notices: Vec<Notice> = s
+        .take_private_notices()
+        .into_iter()
+        .filter(|(o, _)| *o == host)
+        .map(|(_, n)| n)
+        .collect();
+    assert!(
+        notices.iter().any(|n| matches!(n, Notice::MirrorGhost { definition, .. } if definition == "plate")),
+        "{notices:?}"
+    );
     let diagnostics = s.package_diagnostics();
     assert!(diagnostics.is_empty(), "{diagnostics:#?}");
     std::fs::remove_dir_all(dir).unwrap();

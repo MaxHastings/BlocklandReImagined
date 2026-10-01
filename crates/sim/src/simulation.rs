@@ -104,6 +104,9 @@ pub struct Simulation {
     /// Every brick by its definition: what `bricks_of` answers without
     /// walking a million-brick world (team spawns, flag stands).
     kinds: BTreeMap<String, BTreeSet<BrickId>>,
+    /// Bricks whose stack belongs to someone else than their owner (see
+    /// [`Self::stack_owner`]). Not saved, as v20's `stackBL_ID` was not.
+    stacks: std::collections::HashMap<BrickId, bri_world::OwnerId>,
 }
 fn definition_key(brick: &Brick) -> Option<&str> {
     match &brick.definition {
@@ -278,6 +281,7 @@ impl Simulation {
             refreshes: 0,
             links: Default::default(),
             kinds,
+            stacks: Default::default(),
         };
         simulation
             .links
@@ -611,6 +615,7 @@ impl Simulation {
             self.brick_waters.insert(id, water);
             self.liquids = std::sync::OnceLock::new();
         }
+        self.note_stack(id);
         self.detect_collisions();
         Ok(id)
     }
@@ -761,6 +766,7 @@ impl Simulation {
             self.brick_waters.insert(id, water);
             self.liquids = std::sync::OnceLock::new();
         }
+        self.note_stack(id);
         Ok(id)
     }
     /// Refresh collisions after bricks went in a slice at a time.
@@ -818,6 +824,7 @@ impl Simulation {
             self.brick_waters.insert(id, water);
             self.liquids = std::sync::OnceLock::new();
         }
+        self.note_stack(id);
         Ok(id)
     }
     /// Whether `brick` could go into the world now, support aside: no
@@ -907,6 +914,7 @@ impl Simulation {
                 self.brick_waters.insert(id, water);
                 self.liquids = std::sync::OnceLock::new();
             }
+            self.note_stack(id);
         }
         self.detect_collisions();
         Ok(ids)
@@ -920,7 +928,7 @@ impl Simulation {
         area: Bounds,
         limited: bool,
         limit: usize,
-        admit: impl FnMut(&Brick) -> bool,
+        admit: impl FnMut(BrickId, &Brick) -> bool,
     ) -> Selection {
         let mut scan = BoxScan::new(self, area, limited, limit);
         let mut all = u32::MAX;
@@ -941,12 +949,49 @@ impl Simulation {
         start: BrickId,
         reach: StackReach,
         limit: usize,
-        mut admit: impl FnMut(&Brick) -> bool,
+        mut admit: impl FnMut(BrickId, &Brick) -> bool,
     ) -> Result<Selection> {
         let mut scan = StackScan::new(self, start, reach, limit)?;
         let mut all = u32::MAX;
         while !scan.step(self, &mut all, &mut admit)? {}
         Ok(scan.selection)
+    }
+    /// Whose stack `id` stands in: the owner of the bricks it was built on
+    /// (v20's `stackBL_ID`). A brick planted on others' bricks takes the
+    /// stack of the lowest-numbered brick under it, else of one on top of
+    /// it, else its own owner's; a duplicator's plant and a restored
+    /// brick the same way. A loaded build's bricks are their owners'.
+    /// v20's trust rules let a stack's owner edit what
+    /// others built on it with their trust (the New Duplicator's).
+    pub fn stack_owner(&self, id: BrickId) -> Option<bri_world::OwnerId> {
+        let brick = self.state().bricks.get(&id)?;
+        Some(self.stacks.get(&id).copied().unwrap_or(brick.owner))
+    }
+    /// Note the stack a brick just put in stands in ([`Self::stack_owner`]).
+    fn note_stack(&mut self, id: BrickId) {
+        let Some(bounds) = self.index.get(id) else {
+            return;
+        };
+        let (bottom, top) = (bounds.min[1], bounds.max()[1]);
+        let (mut down, mut up) = (None::<BrickId>, None::<BrickId>);
+        self.index.visit(bounds.expanded(1), |other, found| {
+            if other == id || !grid::share_face(bounds, found) {
+                return;
+            }
+            if found.max()[1] == bottom {
+                down = Some(down.map_or(other, |d| d.min(other)));
+            } else if found.min[1] == top {
+                up = Some(up.map_or(other, |u| u.min(other)));
+            }
+        });
+        let owner = self.state().bricks[&id].owner;
+        let stack = down
+            .or(up)
+            .and_then(|other| self.stack_owner(other))
+            .unwrap_or(owner);
+        if stack != owner {
+            self.stacks.insert(id, stack);
+        }
     }
     /// The bricks sharing a face with `id` (`grid::share_face`): beside,
     /// on top of or under it, joined by studs or not. Ascending ids.
@@ -1044,6 +1089,7 @@ impl Simulation {
             self.forget_kind(id);
             self.authority.remove(actor, id)?;
             self.index.remove(id);
+            self.stacks.remove(&id);
             if self.brick_waters.remove(&id).is_some() {
                 self.liquids = std::sync::OnceLock::new();
             }

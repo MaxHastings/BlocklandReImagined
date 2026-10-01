@@ -14,7 +14,7 @@ use bri_chaos::{
 };
 use bri_events::{Slot, testing};
 use bri_sim::session::{
-    ActionAim, BrickHand, BuildGesture, CameraView, Command, GhostBrick, InspectMode,
+    ActionAim, BrickHand, BuildGesture, CameraView, Command, CopyPose, GhostBrick, InspectMode,
     MiniGameRequest, PackageArg, PackageCommand, Session, ToolAction, TrustEntry, WrenchProperties,
 };
 use bri_world::{EventRow, EventTarget, EventValue, World, build::SavedBuild};
@@ -65,6 +65,7 @@ fn variant(command: &Command) -> &'static str {
         Command::ControlPlayer => "control_player",
         Command::BrickHand(_) => "brick_hand",
         Command::GhostBrick(_) => "ghost_brick",
+        Command::CopyPose(_) => "copy_pose",
         Command::Wand => "wand",
         Command::Talking(_) => "talking",
         Command::SteeringPrefs { .. } => "steering_prefs",
@@ -75,7 +76,7 @@ fn variant(command: &Command) -> &'static str {
     }
 }
 
-const VARIANTS: usize = 45;
+const VARIANTS: usize = 46;
 
 /// Owners in the fuzzed session: the host (an administrator) and a guest.
 const HOST: u64 = 1;
@@ -240,6 +241,12 @@ fn examples() -> Vec<Command> {
             quarter_turns: 2,
             color: 1,
             print: None,
+        })),
+        Command::CopyPose(Some(CopyPose {
+            anchor: [0.0, 1.0, 0.0],
+            quarter_turns: 3,
+            mirrored: true,
+            flipped: false,
         })),
         Command::Wand,
         Command::Talking(true),

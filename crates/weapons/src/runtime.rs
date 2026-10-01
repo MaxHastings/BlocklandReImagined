@@ -538,6 +538,9 @@ impl Default for DropLook {
         }
     }
 }
+fn loaded() -> bool {
+    true
+}
 fn unit_scale() -> f32 {
     1.
 }
@@ -569,6 +572,10 @@ pub struct Actor {
     pub selected: Option<usize>,
     pub frame: Frame,
     pub ammo: bool,
+    /// Whether the image in hand is loaded (`setImageLoaded`), which its
+    /// states' `loaded` and `not_loaded` transitions read.
+    #[serde(default = "loaded")]
+    pub loaded: bool,
     pub skiing: bool,
     /// Torque's four image slots: 0 the right hand, 1 the left (an akimbo
     /// gun's), 2 and 3 worn on the body (a carried flag on the back). Tool
@@ -697,6 +704,7 @@ impl WeaponsWorld {
                 selected: None,
                 frame: Frame::default(),
                 ammo: true,
+                loaded: true,
                 skiing: false,
                 images: Default::default(),
                 trigger: false,
@@ -741,6 +749,10 @@ impl WeaponsWorld {
     }
     pub fn set_ammo(&mut self, id: ActorId, ammo: bool) -> Result<()> {
         self.actors.get_mut(&id).context("Unknown actor")?.ammo = ammo;
+        Ok(())
+    }
+    pub fn set_loaded(&mut self, id: ActorId, loaded: bool) -> Result<()> {
+        self.actors.get_mut(&id).context("Unknown actor")?.loaded = loaded;
         Ok(())
     }
     pub fn give(&mut self, id: ActorId, item: &str) -> Result<usize> {
@@ -937,10 +949,11 @@ impl WeaponsWorld {
         if self.pack.images.contains_key(image) {
             // `ShapeBase::mountImage(%image, %slot, %loaded = true)` and
             // `WeaponImage::onMount`'s `setImageAmmo(%slot, 1)`: every image
-            // put in the hand starts with ammo. The flag is the hand's, so
-            // an emptied gun must not leave the next one empty.
+            // put in the hand starts loaded and with ammo. The flags are the
+            // hand's, so an emptied gun must not leave the next one empty.
             if hand == 0 {
                 a.ammo = true;
+                a.loaded = true;
             }
             a.images[hand as usize] = Some(Equipped {
                 image: image.into(),
@@ -1589,7 +1602,12 @@ impl WeaponsWorld {
             if e.remaining > 0 && state.wait && !self_loop {
                 return Advance::Keep;
             }
-            let next = if !a.ammo { state.no_ammo } else { state.ammo }
+            let next = if a.loaded {
+                state.loaded
+            } else {
+                state.not_loaded
+            }
+            .or(if !a.ammo { state.no_ammo } else { state.ammo })
                 .or(if e.trigger { state.down } else { state.up })
                 .or(if e.remaining == 0 {
                     state.timeout

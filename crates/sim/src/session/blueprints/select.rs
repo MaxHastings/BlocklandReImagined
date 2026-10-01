@@ -92,7 +92,7 @@ impl SelectWork {
             .bricks
             .get(&brick)
             .context("Unknown brick")?;
-        if !admits(actor, rule, first) {
+        if !admits(actor, rule, &s.simulation, brick, first) {
             return Ok(Err(if first.owner == 0 {
                 ("public", "Public bricks cannot be copied.".to_string())
             } else {
@@ -225,6 +225,7 @@ impl SelectWork {
             .finish()
             .map_err(|error| ("invalid", format!("{error:#}")))?;
         let mut held = HeldCopy::new(self.sources, &self.package, self.rule.partial);
+        held.stack = self.rule.stack;
         held.shown = !self.hold.hidden;
         held.area = self.area;
         // Added to: what glowed until let go still does.
@@ -265,8 +266,14 @@ impl CopyWork for SelectWork {
     fn step(&mut self, s: &mut Session, owner: OwnerId, budget: &mut u32) -> Result<bool> {
         let (actor, rule) = (&self.actor, self.rule);
         let found = match &mut self.finding {
-            Finding::Stack(scan) => scan.step(&s.simulation, budget, |b| admits(actor, rule, b))?,
-            Finding::Box { scan, .. } => scan.step(&s.simulation, budget, |b| admits(actor, rule, b)),
+            Finding::Stack(scan) => {
+                let sim = &s.simulation;
+                scan.step(sim, budget, |id, b| admits(actor, rule, sim, id, b))?
+            }
+            Finding::Box { scan, .. } => {
+                let sim = &s.simulation;
+                scan.step(sim, budget, |id, b| admits(actor, rule, sim, id, b))
+            }
             Finding::Found => true,
         };
         if !found {
