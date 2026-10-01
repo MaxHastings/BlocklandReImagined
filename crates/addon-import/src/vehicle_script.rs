@@ -197,9 +197,7 @@ fn speed_spans(s: &str, fields: &BTreeMap<String, String>) -> Vec<Span> {
     let speeds: Vec<&str> = s
         .match_indices("=vectorlen(")
         .filter_map(|(i, _)| {
-            let var_start = s[..i]
-                .rfind([';', '{', '}'])
-                .map_or(0, |p| p + 1);
+            let var_start = s[..i].rfind([';', '{', '}']).map_or(0, |p| p + 1);
             let rest = &s[i..];
             let call_end = close(s, i + "=vectorlen".len(), '(', ')')?;
             (rest.starts_with("=vectorlen(") && s[i..call_end].contains(".getvelocity()"))

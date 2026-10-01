@@ -243,7 +243,10 @@ fn inventory_drop_pickup_and_disconnect() {
     run(&mut w, 30, &mut q);
     // v20 `ItemData::onPickup` has no duplicate check: a second gun takes
     // the next free slot.
-    assert_eq!(w.give(ActorId(1), &native_id("weapon", "GunItem")).unwrap(), 1);
+    assert_eq!(
+        w.give(ActorId(1), &native_id("weapon", "GunItem")).unwrap(),
+        1
+    );
     let d = w.drop_item(ActorId(1), 0).unwrap();
     assert!(w.pickup(ActorId(1), d).is_err());
     w.add_actor(ActorId(2), 5).unwrap();
@@ -1033,13 +1036,19 @@ fn explosion_debris_lowers_every_stock_debris_explosion() {
     let tires = &debris["jeepexplosion"];
     assert_eq!(tires.model, "Add-Ons/Vehicle_Jeep/jeepTire.dts");
     assert_eq!(tires.emitters, ["JeepTireDebrisTrailEmitter"]);
-    assert_eq!((tires.count, tires.theta, tires.launch_speed), (4, [40., 85.], 14.));
+    assert_eq!(
+        (tires.count, tires.theta, tires.launch_speed),
+        (4, [40., 85.], 14.)
+    );
     assert_eq!((tires.bounces, tires.gravity, tires.lifetime), (3, 2., 2.));
     let sparks = &debris["tankshellexplosion"];
     assert_eq!((sparks.count, sparks.count_variance), (30, 10));
     assert_eq!((sparks.launch_speed, sparks.launch_variance), (140., 50.));
     assert_eq!(sparks.emitters, ["rocketTrailEmitter"]);
-    assert_eq!((sparks.gravity, sparks.lifetime, sparks.fade), (0., 0.1, false));
+    assert_eq!(
+        (sparks.gravity, sparks.lifetime, sparks.fade),
+        (0., 0.1, false)
+    );
 }
 
 #[test]
@@ -1178,6 +1187,14 @@ fn a_thrown_item_goes_through_a_portal_and_keeps_its_speed_turned() {
     }
     let drop = w.drops().find(|d| d.id == id).unwrap();
     // Going -z turned a quarter about y is going -x, out of x = 10.
-    assert!(drop.position.x < 10.0 && drop.position.x > 9.0, "{}", drop.position);
-    assert!(drop.velocity.x < -11.0 && drop.velocity.z.abs() < 1e-3, "{}", drop.velocity);
+    assert!(
+        drop.position.x < 10.0 && drop.position.x > 9.0,
+        "{}",
+        drop.position
+    );
+    assert!(
+        drop.velocity.x < -11.0 && drop.velocity.z.abs() < 1e-3,
+        "{}",
+        drop.velocity
+    );
 }

@@ -347,7 +347,8 @@ fn real_community_samples() {
     // limits; they become the plane's trails instead, and the weapons stay.
     let unsupported: Vec<_> = plane.unsupported.iter().map(|u| u.what.as_str()).collect();
     assert!(
-        !unsupported.iter().any(|u| u.contains("ontrail")) && !unsupported.contains(&"weapon lowering"),
+        !unsupported.iter().any(|u| u.contains("ontrail"))
+            && !unsupported.contains(&"weapon lowering"),
         "{unsupported:?}"
     );
     let status = |name: &str| {
@@ -381,7 +382,14 @@ fn real_community_samples() {
     let trails: Vec<_> = d
         .trails
         .iter()
-        .map(|t| (t.node.as_str(), t.emitter.as_str(), t.min_speed, t.max_speed))
+        .map(|t| {
+            (
+                t.node.as_str(),
+                t.emitter.as_str(),
+                t.min_speed,
+                t.max_speed,
+            )
+        })
         .collect();
     let emitter = "vehicle_stunt_plane:emitter/contrailemitter";
     assert_eq!(
@@ -393,7 +401,10 @@ fn real_community_samples() {
     );
     // At the wing tips, 4.5 either side.
     let x: Vec<f32> = d.trails.iter().map(|t| t.transform.position[0]).collect();
-    assert!((x[0] - 4.5).abs() < 0.01 && (x[1] + 4.5).abs() < 0.01, "{x:?}");
+    assert!(
+        (x[0] - 4.5).abs() < 0.01 && (x[1] + 4.5).abs() < 0.01,
+        "{x:?}"
+    );
     let e = &d.effects.emitters[0];
     assert_eq!(
         (e.id.as_str(), e.period, e.speed, e.particles.as_slice()),
@@ -776,16 +787,20 @@ datablock ShapeBaseImageData(kitScopeImage) { shapeFile = "./gun.dts"; stateName
         version: "1.0.0".into(),
     })
     .unwrap();
-    let pack =
-        Pack::from_json(&std::fs::read(out.join("assets/weapons.json")).unwrap()).unwrap();
+    let pack = Pack::from_json(&std::fs::read(out.join("assets/weapons.json")).unwrap()).unwrap();
     let ns = "weapon_synthetic_kit";
     let id = |kind: &str, name: &str| format!("{ns}:{kind}/{name}");
 
     // Its sound plays: the state names it by id, its description's volume,
     // and not being 3D makes it the holder's alone.
     let fire = id("sound", "kitfiresound");
-    let sound = pack.sound(&fire).expect("the Add-On's sound is in its pack");
-    assert_eq!((sound.volume, sound.local, sound.looping), (0.5, true, false));
+    let sound = pack
+        .sound(&fire)
+        .expect("the Add-On's sound is in its pack");
+    assert_eq!(
+        (sound.volume, sound.local, sound.looping),
+        (0.5, true, false)
+    );
     assert!(out.join("assets").join(&sound.file).is_file());
     let gun = &pack.images[&id("image", "kitgunimage")];
     assert_eq!(gun.states[2].sound, fire);
@@ -794,12 +809,23 @@ datablock ShapeBaseImageData(kitScopeImage) { shapeFile = "./gun.dts"; stateName
     // Its emitter, corrected as the engine's onAdd would, drawn by the
     // state and trailing the round.
     let flash = id("emitter", "kitflashemitter");
-    let emitter = pack.effects.emitters.iter().find(|e| e.id == flash).unwrap();
+    let emitter = pack
+        .effects
+        .emitters
+        .iter()
+        .find(|e| e.id == flash)
+        .unwrap();
     assert!(emitter.period_variance < emitter.period);
     assert_eq!(emitter.theta_degrees, [0.0, 180.0]);
-    assert_eq!(pack.effects.particles[0].id, id("particle", "kitsparkparticle"));
+    assert_eq!(
+        pack.effects.particles[0].id,
+        id("particle", "kitsparkparticle")
+    );
     assert_eq!(gun.states[2].emitter, flash);
-    assert_eq!(pack.projectiles[&id("projectile", "kitroundprojectile")].trail, flash);
+    assert_eq!(
+        pack.projectiles[&id("projectile", "kitroundprojectile")].trail,
+        flash
+    );
     // Its explosion: emitter, burst and fading light, found by its name.
     let boom = &pack.effects.explosions[0];
     assert_eq!(boom.id, id("explosion", "kitboomexplosion"));
@@ -818,7 +844,8 @@ datablock ShapeBaseImageData(kitScopeImage) { shapeFile = "./gun.dts"; stateName
         .find(|p| p.id == id("particle", "kitglowparticle"))
         .unwrap();
     assert!(
-        glow_particle.texture.ends_with("/spark.png") && !glow_particle.texture.starts_with("base/"),
+        glow_particle.texture.ends_with("/spark.png")
+            && !glow_particle.texture.starts_with("base/"),
         "{}",
         glow_particle.texture
     );
@@ -839,7 +866,10 @@ datablock ShapeBaseImageData(kitScopeImage) { shapeFile = "./gun.dts"; stateName
     // The kill icon it forgot to ship leaves its messages, not its kills.
     let round = &pack.damage_types["kitround"];
     assert_eq!(
-        (round.suicide_message.as_str(), round.murder_message.as_str()),
+        (
+            round.suicide_message.as_str(),
+            round.murder_message.as_str()
+        ),
         ("%1", "%2 %1")
     );
 
@@ -847,7 +877,12 @@ datablock ShapeBaseImageData(kitScopeImage) { shapeFile = "./gun.dts"; stateName
     // nobody holds.
     assert!(!pack.items.contains_key(&id("weapon", "kithiddenitem")));
     assert!(pack.images.contains_key(&id("image", "kitscopeimage")));
-    assert!(report.ambiguous.iter().any(|f| f.what == "item kitHiddenItem"));
+    assert!(
+        report
+            .ambiguous
+            .iter()
+            .any(|f| f.what == "item kitHiddenItem")
+    );
     assert_eq!(pack.items[&id("weapon", "kitammoitem")].image, "");
     assert_eq!(pack.items[&id("weapon", "kitammoitem")].ui_name, "Kit Ammo");
     assert_eq!(pack.items[&id("weapon", "kitgunitem")].ui_name, "Kit Gun");
@@ -900,6 +935,9 @@ fn a_required_community_add_on_becomes_a_dependency_on_its_import() {
     );
     let manifest: serde_json::Value =
         serde_json::from_slice(&std::fs::read(root.join("package/package.json")).unwrap()).unwrap();
-    assert_eq!(manifest["dependencies"], serde_json::json!({ "weapon_core_kit": "*" }));
+    assert_eq!(
+        manifest["dependencies"],
+        serde_json::json!({ "weapon_core_kit": "*" })
+    );
     std::fs::remove_dir_all(&root).unwrap();
 }

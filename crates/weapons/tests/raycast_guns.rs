@@ -2,7 +2,8 @@
 //! them: a magazine that keeps `loaded` and `ammo` for the image's states,
 //! rounds that arrive as the image's own reload state runs, a ray that
 //! does its own damage, push, explosion and sound where it lands, a range
-//! and spread that shrink on the move, and a shot that slows its shooter.
+//! and spread that shrink on the move, and a bullet that slows whoever it
+//! hits.
 //! The pack is written here; it is our own.
 use bri_weapons::*;
 use glam::Vec3;
@@ -44,7 +45,8 @@ const GUNS: &str = r#"{
     "schema_version": 3,
     "id": "ray",
     "items": {
-        "ray:weapon/pistol": { "ui_name": "Pistol", "image": "ray:image/pistol" }
+        "ray:weapon/pistol": { "ui_name": "Pistol", "image": "ray:image/pistol" },
+        "ray:weapon/smg": { "ui_name": "SMG", "image": "ray:image/smg" }
     },
     "images": {
         "ray:image/pistol": {
@@ -67,8 +69,7 @@ const GUNS: &str = r#"{
                         "other_sound": "ray:sound/ricochet",
                         "tracer": true
                     }
-                },
-                "slow": { "divisor": 2 }
+                }
             },
             "magazine": { "size": 3, "ammo": "nine", "reload_ticks": 600, "reserve": 4,
                           "reload_state": "onReloaded" },
@@ -88,10 +89,22 @@ const GUNS: &str = r#"{
                 { "name": "ReloadStart", "ticks": 10, "timeout": 13 },
                 { "name": "Reloaded", "ticks": 10, "timeout": 1, "script": "onReloaded" }
             ]
+        },
+        "ray:image/smg": {
+            "projectile": "ray:projectile/bullet",
+            "shot": { "projectiles": 1, "hitscan": { "range": 200 } },
+            "states": [
+                { "name": "Activate", "ticks": 4, "timeout": 1 },
+                { "name": "Ready", "down": 2 },
+                { "name": "Fire", "ticks": 6, "timeout": 3, "script": "onFire" },
+                { "name": "Wait", "up": 1 }
+            ]
         }
     },
     "projectiles": {
         "ray:projectile/tracer": { "speed": 200, "lifetime_ticks": 120 },
+        "ray:projectile/bullet": { "speed": 200, "lifetime_ticks": 120, "damage": 5,
+                                   "collide_players": true, "slow": { "divisor": 2 } },
         "ray:projectile/spark": { "name": "SparkProjectile", "speed": 1, "lifetime_ticks": 1,
                                   "explosion": { "effect": "sparkexplosion" } }
     },
@@ -193,7 +206,10 @@ fn the_light_key_reloads_through_not_loaded_and_an_empty_gun_without_reserve_cli
         state(&w)
     );
     step(&mut w, 40, false);
-    assert_eq!((rounds(&w), w.ammo(A).unwrap().reserve), (3, Reserve::Rounds(3)));
+    assert_eq!(
+        (rounds(&w), w.ammo(A).unwrap().reserve),
+        (3, Reserve::Rounds(3))
+    );
     // Spend everything: three magazines' worth leaves it empty with none
     // to reload, and the trigger only clicks.
     for _ in 0..3 {
@@ -272,7 +288,7 @@ fn a_ray_hit_does_its_own_damage_push_explosion_sound_and_tracer() {
 }
 
 #[test]
-fn a_moving_shooter_reaches_less_and_every_shot_slows_them() {
+fn a_moving_shooter_reaches_less() {
     let mut w = world();
     let still = click(&mut w, false);
     let reach = |events: &[Event]| {
@@ -282,14 +298,6 @@ fn a_moving_shooter_reaches_less_and_every_shot_slows_them() {
         })
     };
     assert_eq!(reach(&still), Some(200.0));
-    let slows: Vec<Slow> = still
-        .iter()
-        .filter_map(|e| match e {
-            Event::Slow { actor, slow } if *actor == A => Some(*slow),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(slows, [Slow { divisor: 2.0 }]);
     w.set_frame(
         A,
         Frame {
@@ -303,15 +311,34 @@ fn a_moving_shooter_reaches_less_and_every_shot_slows_them() {
 }
 
 #[test]
+fn a_bullet_slows_the_player_it_hits_not_its_shooter() {
+    let mut w = world();
+    let slot = w.give(A, "ray:weapon/smg").unwrap();
+    w.equip(A, Some(slot)).unwrap();
+    step(&mut w, 8, false);
+    let slows = |events: &[Event]| -> Vec<(ActorId, Slow)> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Slow { actor, slow } => Some((*actor, *slow)),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(slows(&click(&mut w, false)), []);
+    assert_eq!(slows(&click(&mut w, true)), [(B, Slow { divisor: 2.0 })]);
+}
+
+#[test]
 fn tier_slowdown_falls_from_halfway_to_its_floor() {
     let slow = Slow { divisor: 2.0 };
     // Floor 1 / (3 * 2) = 1/6; the first shot goes halfway to it.
-    let first = slow.after_shot(None);
+    let first = slow.after_hit(None);
     assert!((first - (1.0 + 1.0 / 6.0) / 2.0).abs() < 1e-6);
-    let second = slow.after_shot(Some(first));
+    let second = slow.after_hit(Some(first));
     assert!((second - first / 2.0).abs() < 1e-6);
-    assert!((slow.after_shot(Some(0.2)) - 1.0 / 6.0).abs() < 1e-6);
-    assert_eq!(slow.after_shot(Some(0.1)), 0.1);
+    assert!((slow.after_hit(Some(0.2)) - 1.0 / 6.0).abs() < 1e-6);
+    assert_eq!(slow.after_hit(Some(0.1)), 0.1);
 }
 
 #[test]
@@ -319,13 +346,19 @@ fn bad_ray_hits_and_slowdowns_are_refused() {
     for (good, bad) in [
         (r#""damage": 12,"#, r#""damage": 101,"#),
         (r#""impulse": 100,"#, r#""impulse": -1,"#),
-        (r#""vertical_impulse": 50,"#, r#""vertical_impulse": 20000,"#),
+        (
+            r#""vertical_impulse": 50,"#,
+            r#""vertical_impulse": 20000,"#,
+        ),
         (r#""divisor": 2"#, r#""divisor": 0.5"#),
         (r#""moving_range": 85"#, r#""moving_range": 5000"#),
         (r#""not_loaded": 9"#, r#""not_loaded": 99"#),
     ] {
         assert!(GUNS.contains(good), "{good}");
         let pack = GUNS.replacen(good, bad, 1);
-        assert!(Pack::from_json(pack.as_bytes()).is_err(), "{bad} was accepted");
+        assert!(
+            Pack::from_json(pack.as_bytes()).is_err(),
+            "{bad} was accepted"
+        );
     }
 }

@@ -329,7 +329,10 @@ fn port_rules_become_a_host_only_companion_turned_on_with_the_import() {
         .filter(|e| e.enabled && e.package.id.starts_with("weapon_synthetic"))
         .map(|e| e.id())
         .collect();
-    assert_eq!(on, ["weapon_synthetic_blaster", "weapon_synthetic_blaster-rules"]);
+    assert_eq!(
+        on,
+        ["weapon_synthetic_blaster", "weapon_synthetic_blaster-rules"]
+    );
     // Off again: the rules go with it.
     let plan = library.plan("weapon_synthetic_blaster", false);
     assert_eq!(plan.also, ["weapon_synthetic_blaster-rules"]);
@@ -342,8 +345,7 @@ fn port_rules_become_a_host_only_companion_turned_on_with_the_import() {
             .map(|id| library.get(id).unwrap().package.clone())
             .collect(),
     };
-    bri_package_runtime::Catalog::load(&root, &set, true)
-        .unwrap_or_else(|e| panic!("{e:#?}"));
+    bri_package_runtime::Catalog::load(&root, &set, true).unwrap_or_else(|e| panic!("{e:#?}"));
 
     // A second import may not land on the first one's rules.
     let again = import_with(
@@ -504,7 +506,14 @@ fn port_command_drafts_a_spread_weapon_and_check_port_verifies_it() {
 fn hand_ports_start_from_stubs_and_check_as_partial() {
     let dir = fresh("hand");
     let work = dir.join("work");
-    let s = porting::scaffold(&fixture("Weapon_Synthetic_Blaster"), &work, None, vec![], None).unwrap();
+    let s = porting::scaffold(
+        &fixture("Weapon_Synthetic_Blaster"),
+        &work,
+        None,
+        vec![],
+        None,
+    )
+    .unwrap();
     assert!(s.drafted.is_empty());
     assert!(s.to_port.iter().any(|f| f == "blasterImage::onFire"));
     let stubs = std::fs::read_to_string(work.join("stubs.rhai")).unwrap();

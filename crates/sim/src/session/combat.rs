@@ -1559,7 +1559,7 @@ impl Session {
         }
         Ok(())
     }
-    /// A shot slows its shooter ([`bri_weapons::Slow`]): their velocity
+    /// A bullet slows the player it hit ([`bri_weapons::Slow`]): their velocity
     /// divided, their speeds lowered until a moment after the last shot.
     pub(super) fn slow_player(&mut self, target: OwnerId, slow: bri_weapons::Slow) -> Result<()> {
         let tick = self.simulation.state().tick;
@@ -1568,7 +1568,7 @@ impl Session {
         };
         let velocity = Vec3::from(peer.player.state().velocity);
         peer.player.push(-velocity * (1.0 - 1.0 / slow.divisor));
-        let kept = slow.after_shot(peer.combat.gun_slow.map(|(m, _)| m));
+        let kept = slow.after_hit(peer.combat.gun_slow.map(|(m, _)| m));
         peer.combat.gun_slow = Some((kept, tick + bri_weapons::Slow::TICKS));
         self.apply_speed(target)
     }

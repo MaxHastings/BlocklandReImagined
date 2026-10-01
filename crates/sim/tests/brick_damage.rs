@@ -702,6 +702,7 @@ fn synthetic_rocket_pack() -> bri_weapons::Pack {
         max_bounces: 0,
         children: None,
         aura: None,
+        slow: None,
     };
     let pack = bri_weapons::Pack {
         effects: Default::default(),

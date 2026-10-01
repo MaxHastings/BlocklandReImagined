@@ -286,7 +286,10 @@ fn an_on_fire_command_counts_the_shot_and_the_round_still_flies() {
     );
     let mut w = WeaponsWorld::new(Pack::from_json(json.as_bytes()).unwrap()).unwrap();
     w.add_actor(A, 5).unwrap();
-    for (item, command, rounds) in [("kit:weapon/rifle", "kit:fired", 1), ("kit:weapon/tool", "kit:use", 0)] {
+    for (item, command, rounds) in [
+        ("kit:weapon/rifle", "kit:fired", 1),
+        ("kit:weapon/tool", "kit:use", 0),
+    ] {
         let slot = w.give(A, item).unwrap();
         w.equip(A, Some(slot)).unwrap();
         step(&mut w, 10);
@@ -303,7 +306,11 @@ fn an_on_fire_command_counts_the_shot_and_the_round_still_flies() {
         w.trigger(A, false).unwrap();
         step(&mut w, 20);
         assert_eq!(commands, 1, "{item}: the command runs once a shot");
-        assert_eq!(w.projectiles().count() - before, rounds, "{item}: rounds in flight");
+        assert_eq!(
+            w.projectiles().count() - before,
+            rounds,
+            "{item}: rounds in flight"
+        );
         w.take_item(A, item).unwrap();
     }
 }

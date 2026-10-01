@@ -83,7 +83,16 @@ pub struct Port {
     /// (`docs/modding/porting.md`, "Script rules").
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub scripts: Vec<ScriptRule>,
+    /// Shared parts several ports use, by name: `ports/_shared/<name>.json`
+    /// holds any of this file's fields (an Add-On family's ammo system and
+    /// script rules, written once). They apply first: the port's own
+    /// fields merge over them, and its `scripts` follow theirs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub include: Vec<String>,
 }
+
+/// Where [`Port::include`] files live.
+pub const SHARED_DIR: &str = "_shared";
 
 /// The companion host-rules Add-On a port adds ([`Port::rules`]). Its id is
 /// the import's with `-rules` added ([`rules_id`]), its folder the import's
@@ -230,12 +239,51 @@ impl Ports {
         Ok(ports)
     }
 
+    /// A port.json with its [`Port::include`]s applied under it.
+    fn with_includes(&self, port: Value) -> Result<Value> {
+        let names: Vec<String> = match port.get("include") {
+            None => return Ok(port),
+            Some(v) => serde_json::from_value(v.clone()).context("include")?,
+        };
+        let mut out = Value::Object(Default::default());
+        let mut scripts = vec![];
+        for name in names.iter().map(String::as_str).chain([""]) {
+            let mut part = if name.is_empty() {
+                port.clone()
+            } else {
+                ensure!(
+                    !name.contains(['/', '\\', '.']),
+                    "include `{name}`: a name, not a path"
+                );
+                let bytes = self
+                    .files
+                    .get(&format!("{SHARED_DIR}/{name}.json"))
+                    .with_context(|| format!("{SHARED_DIR}/{name}.json is missing"))?;
+                serde_json::from_slice(bytes)
+                    .with_context(|| format!("{SHARED_DIR}/{name}.json"))?
+            };
+            if let Some(s) = part.as_object_mut().and_then(|m| m.remove("scripts")) {
+                scripts.extend(
+                    s.as_array()
+                        .cloned()
+                        .with_context(|| format!("`scripts` in {name}: a list"))?,
+                );
+            }
+            merge(&mut out, &part);
+        }
+        out["scripts"] = Value::Array(scripts);
+        Ok(out)
+    }
+
     fn port(&self, e: &Entry) -> Result<Port> {
         let bytes = self
             .files
             .get(&format!("{}/port.json", e.port))
             .with_context(|| format!("{}/port.json is missing", e.port))?;
-        let port: Port = serde_json::from_slice(bytes)?;
+        let port: Port = serde_json::from_value(self.with_includes(
+            serde_json::from_slice(bytes).with_context(|| format!("{}/port.json", e.port))?,
+        )?)
+        .with_context(|| format!("{}/port.json", e.port))?;
         ensure!(port.schema_version == 1, "port.json schema_version");
         for file in port.patch.keys() {
             safe_relative(file)?;

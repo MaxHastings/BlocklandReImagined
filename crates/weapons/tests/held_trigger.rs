@@ -196,7 +196,10 @@ fn a_trigger_held_with_empty_hands_fires_the_tool_taken_out() {
     step(&mut w, 5);
     w.equip(A, Some(1)).unwrap();
     let events = step(&mut w, 61);
-    assert_eq!(entered(&events, "t:image/sword"), ["Activate", "Ready", "Fire"]);
+    assert_eq!(
+        entered(&events, "t:image/sword"),
+        ["Activate", "Ready", "Fire"]
+    );
 }
 
 #[test]

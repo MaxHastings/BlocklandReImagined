@@ -456,10 +456,7 @@ impl Magazine {
                 && (self.checks.is_empty() || !self.reload_state.is_empty())
                 && self.reload_from.len() <= 8
                 && self.reload_from.iter().all(|s| (1..=64).contains(&s.len()))
-                && self
-                    .checks
-                    .keys()
-                    .all(|k| (1..=64).contains(&k.len()))
+                && self.checks.keys().all(|k| (1..=64).contains(&k.len()))
                 && self
                     .checks
                     .values()
@@ -582,15 +579,12 @@ pub struct Shot {
     /// own game, from the shot it already sees: nothing is sent for it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kick: Option<Kick>,
-    /// Each shot slows the holder, as Tier+Tactical's submachine guns and
-    /// machine guns do.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub slow: Option<Slow>,
 }
-/// [`Shot::slow`], Tier+Tactical's `TT_dampenVelocity(%obj, divisor)`: each
-/// shot divides the holder's velocity by `divisor` and lowers their speeds
-/// to a share that falls with every shot, from halfway to the floor
-/// `1 / (3 · divisor)` down to it, back to normal 200 ms after the last.
+/// [`ProjectileDef::slow`], Tier+Tactical's `TT_dampenVelocity(%col,
+/// divisor)` in a bullet's `damage`: each hit divides the player's velocity
+/// by `divisor` and lowers their speeds to a share that falls with every
+/// hit, from halfway to the floor `1 / (3 · divisor)` down to it, back to
+/// normal 200 ms after the last.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Slow {
@@ -598,9 +592,9 @@ pub struct Slow {
     pub divisor: f32,
 }
 impl Slow {
-    /// The share of their speeds the holder keeps after a shot, from what
+    /// The share of their speeds a player keeps after a hit, from what
     /// they kept before it (None when not slowed).
-    pub fn after_shot(&self, before: Option<f32>) -> f32 {
+    pub fn after_hit(&self, before: Option<f32>) -> f32 {
         let floor = 1.0 / (3.0 * self.divisor);
         match before {
             None => (1.0 + floor) / 2.0,
@@ -608,7 +602,7 @@ impl Slow {
             Some(m) => m,
         }
     }
-    /// How long a slowdown lasts after the last shot, in ticks (120 a
+    /// How long a slowdown lasts after the last hit, in ticks (120 a
     /// second): `TT_slow`'s 200 ms.
     pub const TICKS: u64 = 24;
 }
@@ -647,7 +641,6 @@ impl Shot {
         rested: None,
         hitscan: None,
         kick: None,
-        slow: None,
     };
     /// The spread of a shot from a holder moving at `speed`, `idle_ticks`
     /// after their last shot (None for never): moving spread while moving,
@@ -854,6 +847,10 @@ pub struct ProjectileDef {
     /// gas, a lingering ember).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub aura: Option<Aura>,
+    /// Slows a player it hits directly, as Tier+Tactical's submachine gun
+    /// and machine gun bullets do.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slow: Option<Slow>,
 }
 fn is_zero_u32(n: &u32) -> bool {
     *n == 0
@@ -950,6 +947,7 @@ impl Default for ProjectileDef {
             max_bounces: 0,
             children: None,
             aura: None,
+            slow: None,
         }
     }
 }
@@ -1381,14 +1379,6 @@ impl Pack {
                  moving_speed 0 to 50, rested after 1 to 1200 ticks, kick amplitude 0 to 1, \
                  frequency 0.1 to 30, seconds 0.05 to 2"
             );
-            if let Some(s) = &image.shot
-                && let Some(slow) = s.slow
-            {
-                ensure!(
-                    (1.0..=10.0).contains(&slow.divisor),
-                    "Invalid shot slow of image {id}: divisor 1 to 10"
-                );
-            }
             if let Some(h) = image.shot.as_ref().and_then(|s| s.hitscan.as_ref()) {
                 if let Some(hit) = &h.hit {
                     ensure!(
@@ -1543,6 +1533,12 @@ impl Pack {
                         && (0.0..=30.0).contains(&a.burn_seconds),
                     "Invalid aura of projectile {id}: radius to 16, damage to 100, \
                      every_ticks 4 to 1200, burn_seconds to 30"
+                );
+            }
+            if let Some(slow) = p.slow {
+                ensure!(
+                    (1.0..=10.0).contains(&slow.divisor),
+                    "Invalid slow of projectile {id}: divisor 1 to 10"
                 );
             }
         }

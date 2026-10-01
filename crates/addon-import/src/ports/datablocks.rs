@@ -315,6 +315,29 @@ pub fn hitscans(h: &Hitscans, weapons: &Value) -> Result<Value> {
     Ok(json!({ "images": images }))
 }
 
+/// A rule's named groups in `owner::method`'s `body`, None when it does
+/// not match; an error when it matches `required` instead.
+fn groups(
+    re: &regex::Regex,
+    required: Option<&regex::Regex>,
+    body: &str,
+    owner: &str,
+    method: &str,
+) -> Result<Option<BTreeMap<String, String>>> {
+    let Some(caps) = re.captures(body) else {
+        if required.is_some_and(|r| r.is_match(body)) {
+            bail!("{owner}::{method} does what a script rule reads, but not as its pattern says");
+        }
+        return Ok(None);
+    };
+    Ok(Some(
+        re.capture_names()
+            .flatten()
+            .filter_map(|g| Some((g.to_owned(), caps.name(g)?.as_str().to_owned())))
+            .collect(),
+    ))
+}
+
 /// What one image script method did, read from its body for every image
 /// of the import that has it: a pattern whose named groups fill `set`, a
 /// JSON merge patch for the image, its `shot` or `magazine`, or each of
@@ -329,7 +352,9 @@ pub fn hitscans(h: &Hitscans, weapons: &Value) -> Result<Value> {
 pub struct ScriptRule {
     /// The method (`onFire`), or `*` for every state script of the image.
     pub method: String,
-    /// `image`, `shot`, `magazine` or `state`.
+    /// `image`, `shot`, `magazine` or `state` read the image's method;
+    /// `projectile` reads the projectile's (`damage`, never `*`) and sets
+    /// its fields.
     pub into: String,
     /// Case-insensitive; `.` does not match a line break unless `(?s)`.
     pub pattern: String,
@@ -352,6 +377,7 @@ pub fn scripts(
     bodies: &BTreeMap<String, String>,
 ) -> Result<Value> {
     let mut images = serde_json::Map::new();
+    let mut projectiles = serde_json::Map::new();
     for rule in rules {
         let re = super::pattern(&rule.pattern).context("a script rule's pattern")?;
         let required = rule
@@ -361,12 +387,39 @@ pub fn scripts(
             .transpose()
             .context("a script rule's required_by")?;
         ensure!(
-            ["image", "shot", "magazine", "state"].contains(&rule.into.as_str()),
-            "a script rule goes into `{}`, not image, shot, magazine or state",
+            ["image", "shot", "magazine", "state", "projectile"].contains(&rule.into.as_str()),
+            "a script rule goes into `{}`, not image, shot, magazine, state or projectile",
             rule.into
         );
+        if rule.into == "projectile" {
+            ensure!(
+                rule.method != "*",
+                "a projectile's script rule names its method"
+            );
+            let method = rule.method.to_ascii_lowercase();
+            for (id, projectile) in weapons["projectiles"].as_object().into_iter().flatten() {
+                let name = projectile["name"].as_str().unwrap_or_default();
+                let Some(body) = bodies.get(&format!("{}::{method}", name.to_ascii_lowercase()))
+                else {
+                    continue;
+                };
+                let Some(values) = groups(&re, required.as_ref(), body, name, &method)? else {
+                    continue;
+                };
+                let set = fill(&rule.set, &values, weapons)
+                    .with_context(|| format!("{name}::{method}"))?;
+                super::merge(
+                    projectiles.entry(id.clone()).or_insert_with(|| json!({})),
+                    &set,
+                );
+            }
+            continue;
+        }
         for (id, image) in weapons["images"].as_object().into_iter().flatten() {
-            let name = image["name"].as_str().unwrap_or_default().to_ascii_lowercase();
+            let name = image["name"]
+                .as_str()
+                .unwrap_or_default()
+                .to_ascii_lowercase();
             let states = image["states"].as_array().cloned().unwrap_or_default();
             let methods: Vec<String> = if rule.method == "*" {
                 let mut m: Vec<String> = states
@@ -385,27 +438,13 @@ pub fn scripts(
                 let Some(body) = bodies.get(&format!("{name}::{method}")) else {
                     continue;
                 };
-                let Some(caps) = re.captures(body) else {
-                    if let Some(r) = &required
-                        && r.is_match(body)
-                    {
-                        bail!(
-                            "{}::{method} does what a script rule reads, but not as its pattern says",
-                            image["name"].as_str().unwrap_or_default()
-                        );
-                    }
+                let owner = image["name"].as_str().unwrap_or_default();
+                let Some(values) = groups(&re, required.as_ref(), body, owner, &method)? else {
                     continue;
                 };
-                let values: BTreeMap<String, String> = re
-                    .capture_names()
-                    .flatten()
-                    .filter_map(|g| Some((g.to_owned(), caps.name(g)?.as_str().to_owned())))
-                    .collect();
                 let set = fill(&rule.set, &values, weapons)
                     .with_context(|| format!("{name}::{method}"))?;
-                let entry = images
-                    .entry(id.clone())
-                    .or_insert_with(|| json!({}));
+                let entry = images.entry(id.clone()).or_insert_with(|| json!({}));
                 match rule.into.as_str() {
                     "image" => super::merge(entry, &set),
                     "shot" => {
@@ -444,7 +483,11 @@ pub fn scripts(
             }
         }
     }
-    Ok(json!({ "images": images }))
+    let mut patch = json!({ "images": images });
+    if !projectiles.is_empty() {
+        patch["projectiles"] = Value::Object(projectiles);
+    }
+    Ok(patch)
 }
 
 /// [`ScriptRule::set`] with its groups' values.

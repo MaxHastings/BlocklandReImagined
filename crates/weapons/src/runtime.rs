@@ -1,9 +1,9 @@
 //! Host-authoritative fixed-tick gameplay. Coordinates: X-right, Y-up, -Z-forward.
 use crate::*;
 use anyhow::{Result, ensure};
+use bri_content::passage::{MAX_CARRIES, PAST};
 use glam::{Quat, Vec3};
 use std::{collections::BTreeMap, sync::Arc};
-use bri_content::passage::{MAX_CARRIES, PAST};
 pub const MAX_ACTORS: usize = 128;
 pub const MAX_PROJECTILES: usize = 1024;
 pub const MAX_DROPS: usize = 1024;
@@ -292,7 +292,7 @@ pub enum Event {
         actor: ActorId,
         velocity: Vec3,
     },
-    /// A shot slows its shooter ([`crate::Shot::slow`]).
+    /// A hit slows the player it hit ([`crate::ProjectileDef::slow`]).
     Slow {
         actor: ActorId,
         slow: crate::Slow,
@@ -1171,8 +1171,8 @@ impl WeaponsWorld {
             // Its state scripts set the flags (`apply_check`).
             return;
         }
-        let shot = a.rounds.get(key).copied().unwrap_or(0) >= magazine.per_shot
-            && a.reload.is_none();
+        let shot =
+            a.rounds.get(key).copied().unwrap_or(0) >= magazine.per_shot && a.reload.is_none();
         let uses_loaded = self.pack.images.get(image).is_some_and(|i| {
             i.states
                 .iter()
@@ -1971,14 +1971,18 @@ impl WeaponsWorld {
             // Torque checks loaded, then ammo, then the trigger, then the
             // timeout. Only the right hand's image keeps these flags.
             let loaded = e.hand != 0 || a.loaded;
-            let next = if loaded { state.loaded } else { state.not_loaded }
-                .or(if !a.ammo { state.no_ammo } else { state.ammo })
-                .or(if e.trigger { state.down } else { state.up })
-                .or(if e.remaining == 0 {
-                    state.timeout
-                } else {
-                    None
-                });
+            let next = if loaded {
+                state.loaded
+            } else {
+                state.not_loaded
+            }
+            .or(if !a.ammo { state.no_ammo } else { state.ammo })
+            .or(if e.trigger { state.down } else { state.up })
+            .or(if e.remaining == 0 {
+                state.timeout
+            } else {
+                None
+            });
             let Some(next) = next else {
                 return Advance::Keep;
             };
@@ -2247,9 +2251,6 @@ impl WeaponsWorld {
                 let shot = image.shot.clone().unwrap_or(Shot::SINGLE);
                 let speed = a.frame.velocity.length();
                 let spread = shot.spread_for(speed, idle_ticks);
-                if let Some(slow) = shot.slow {
-                    self.events.push(Event::Slow { actor: id, slow });
-                }
                 if shot.recoil > 0.0 {
                     // Recoil lands before the projectiles, which inherit it.
                     let kick = -direction * shot.recoil;
@@ -2675,6 +2676,9 @@ impl WeaponsWorld {
                     * p.scale,
                 position,
             });
+        }
+        if let (Some(slow), TargetId::Actor(actor)) = (d.slow, target) {
+            self.events.push(Event::Slow { actor, slow });
         }
         if d.brick.direct && matches!(target, TargetId::Brick(_)) {
             self.events.push(Event::BrickImpact {

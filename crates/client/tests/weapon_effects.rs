@@ -132,6 +132,7 @@ fn weapons() -> Arc<Pack> {
         max_bounces: 0,
         children: None,
         aura: None,
+        slow: None,
     };
     Arc::new(Pack {
         effects: Default::default(),

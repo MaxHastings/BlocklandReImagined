@@ -387,6 +387,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
             max_bounces: 0,
             children: None,
             aura: None,
+            slow: None,
         };
         pack.projectiles.insert(id, p);
     }
