@@ -633,6 +633,8 @@ pub fn lower(
         smash: None,
         shove: false,
         harms_only_in_minigames: false,
+        per_player: None,
+        blast_scale: None,
         trails: vec![],
         effects: Default::default(),
         authored: b.fields.clone(),

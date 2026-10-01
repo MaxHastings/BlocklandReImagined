@@ -857,3 +857,60 @@ fn catalog_accepts_add_on_content_ids() {
     catalog.items.insert("Not An Id".into(), None);
     assert!(MinigamesWorld::new(catalog, PolicyMode::Internet, true).is_err());
 }
+
+#[test]
+fn a_game_modes_minigame_belongs_to_the_server_and_holds_everyone() {
+    let mut w = world(PolicyMode::Internet);
+    let a = connect(&mut w, 1);
+    let b = connect(&mut w, 2);
+    let game = w.host_create(3, Settings::default()).unwrap();
+    assert!(w.game(game).unwrap().is_server());
+    assert_eq!(w.server_game(), Some(game));
+    // Only one runs, and it takes its colour.
+    assert_eq!(
+        w.host_create(4, Settings::default()),
+        Err(Error::ServerGame)
+    );
+    assert!(!w.free_colors().contains(&3));
+    for p in [a, b] {
+        let effects = w.host_place(p, Some(game)).unwrap();
+        assert!(effects.iter().any(|e| matches!(e, Effect::Spawn { .. })));
+        assert_eq!(w.player(p).unwrap().game, Some(game));
+    }
+    // Nobody starts, joins or leaves another; nobody owns it.
+    assert_eq!(
+        w.execute(Command::Leave { actor: a }),
+        Err(Error::ServerGame)
+    );
+    assert_eq!(
+        w.execute(Command::Create {
+            actor: a,
+            color: 0,
+            settings: Settings::default()
+        }),
+        Err(Error::ServerGame)
+    );
+    assert_eq!(w.execute(Command::End { actor: a }), Err(Error::NotOwner));
+    assert_eq!(
+        w.can_damage(DamageSource::Player(a), w.target_for_player(b).unwrap()),
+        Decision::Allow
+    );
+    // The world's own bricks (owner 0) are the game's bricks.
+    let world_brick = Target::Object {
+        kind: ObjectKind::Brick,
+        owner: Some(SERVER.account),
+        membership: Membership::Owner,
+        spawn_brick: false,
+    };
+    assert_eq!(
+        w.can_damage(DamageSource::Player(a), world_brick),
+        Decision::Allow
+    );
+    // A member leaving the server leaves the game running.
+    w.disconnect(a).unwrap();
+    assert_eq!(w.server_game(), Some(game));
+    assert_eq!(w.game(game).unwrap().members.len(), 1);
+    // It saves and restores like any other.
+    let restored = MinigamesWorld::restore(&w.save().unwrap(), w.catalog().clone()).unwrap();
+    assert_eq!(restored.server_game(), Some(game));
+}

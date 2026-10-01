@@ -61,12 +61,20 @@ impl World for ScriptWorld<'_> {
             TargetId::Brick(brick) => RayTarget::Brick(brick),
             TargetId::Map(_) | TargetId::Shape(_) => RayTarget::Map,
         };
+        let region = match hit.target {
+            TargetId::Actor(actor) => session.region_of(actor.0, hit.position),
+            _ => None,
+        };
         Some(RayHit {
             target,
             position: hit.position.to_array(),
             normal: hit.normal.to_array(),
             distance: hit.fraction * range,
+            region,
         })
+    }
+    fn hit_region(&self, player: u64, point: [f32; 3]) -> Option<&'static str> {
+        self.session.region_of(player, Vec3::from(point))
     }
     fn can_damage(&self, by: u64, target: ObjectRef) -> bool {
         let session = self.session;
@@ -88,6 +96,12 @@ impl World for ScriptWorld<'_> {
                         .is_none_or(|p| p.control != ControlObject::Entity(entity))
             }
         }
+    }
+    fn voxel(&self, brick: u64) -> Option<([i64; 3], String)> {
+        self.session.package_voxel(brick)
+    }
+    fn can_place_voxel(&self, position: [i64; 3]) -> bool {
+        self.session.voxel_fits(position)
     }
     fn brick_box(&self, brick: u64) -> Option<([f32; 3], [f32; 3])> {
         let (min, max) = self.session.simulation.brick_box(brick)?;

@@ -753,3 +753,121 @@ fn the_admin_menu_rank_buttons_confirm_before_asking_the_host() {
     );
     assert!(ui.core.admin.pending.is_empty(), "nothing is sent unconfirmed");
 }
+
+#[test]
+fn the_environment_window_applies_a_draft_through_the_host() {
+    use bri_content::atmosphere::{Authored, Settings, light_direction};
+    use bri_ui::{
+        api::{ConnectionState, Settings as UiSettings, UiUpdate},
+        binds::Platform,
+        geom::Rect,
+        input::{InputEvent, MouseButton},
+        models::environment::EnvironmentView,
+        pack::Pack,
+        schema::UiPack,
+        screens::{ScreenId, ctrl},
+        ui::{Ui, UiConfig},
+    };
+    use std::{path::PathBuf, rc::Rc};
+    let mut pack = UiPack::default();
+    for name in ["MainMenuGui", "PlayGui", "LoadingGui", "escapeMenu", "adminGui"] {
+        pack.layouts.insert(
+            name.into(),
+            ctrl("GuiControl", "GuiDefaultProfile", Rect::new(0, 0, 640, 480)),
+        );
+    }
+    let mut ui = Ui::new(
+        Rc::new(Pack::from_parts(pack, PathBuf::new())),
+        UiConfig {
+            size: (640, 480),
+            scale: Some(1.0),
+            platform: Platform::Windows,
+        },
+        UiSettings {
+            binds: Some(vec![]),
+            ..Default::default()
+        },
+    );
+    ui.apply(UiUpdate::Connection(ConnectionState::InGame {
+        server_name: "Test".into(),
+        max_players: 8,
+        local: false,
+        single_player: false,
+        admin: true,
+    }));
+    ui.apply(UiUpdate::Environment(EnvironmentView {
+        authored: Authored {
+            sun_direction: light_direction(90.0, 45.0),
+            direct_light: [0.6; 3],
+            ambient_light: [0.3; 3],
+            fog_start: 0.0,
+            fog_end: 0.0,
+            fog_color: [0.5; 3],
+        },
+        settings: Settings::default(),
+        tick: 0,
+    }));
+    let click = |ui: &mut Ui, screen: ScreenId, key: &str| {
+        let (x, y) = ui.control_center(screen, key).unwrap();
+        ui.handle_input(InputEvent::MouseMove { x, y });
+        ui.handle_input(InputEvent::MouseDown {
+            button: MouseButton::Left,
+            x,
+            y,
+        });
+        ui.handle_input(InputEvent::MouseUp {
+            button: MouseButton::Left,
+            x,
+            y,
+        });
+        ui.update(16);
+    };
+    // Plain players never see the button.
+    ui.core
+        .admin
+        .apply(AdminUpdate::State(state(AdminRole::Admin, false)))
+        .unwrap();
+    ui.core.push(ScreenId::Admin);
+    ui.update(0);
+    click(&mut ui, ScreenId::Admin, "NativeEnvironment");
+    assert_eq!(ui.top_id(), ScreenId::Admin);
+    let mut snapshot = state(AdminRole::Admin, false);
+    snapshot.supported.insert(AdminFeature::Environment);
+    snapshot.revision = 2;
+    ui.apply(UiUpdate::Admin(AdminUpdate::State(snapshot)));
+    ui.update(16);
+    ui.drain_actions();
+    ui.core.admin.pending.clear();
+    click(&mut ui, ScreenId::Admin, "NativeEnvironment");
+    assert_eq!(ui.top_id(), ScreenId::AdminEnvironment);
+    // Nothing changed yet: nothing to apply.
+    click(&mut ui, ScreenId::AdminEnvironment, "EnvApply");
+    assert!(ui.core.admin.pending.is_empty());
+    // Advanced: the sun azimuth slider's middle is 180 degrees.
+    click(&mut ui, ScreenId::AdminEnvironment, "EnvTabAdvanced");
+    click(&mut ui, ScreenId::AdminEnvironment, "EnvA_SunAzimuth");
+    let azimuth = ui.core.environment.draft.as_ref().unwrap().sun_azimuth.unwrap();
+    assert!((azimuth - 180.0).abs() <= 3.0, "{azimuth}");
+    // The direct light's picker: Done puts its colour in the draft.
+    click(&mut ui, ScreenId::AdminEnvironment, "Env_DirectLight");
+    assert_eq!(ui.top_id(), ScreenId::AdminColorPicker);
+    click(&mut ui, ScreenId::AdminColorPicker, "EnvPick0");
+    click(&mut ui, ScreenId::AdminColorPicker, "EnvPickDone");
+    assert_eq!(ui.top_id(), ScreenId::AdminEnvironment);
+    let sun = ui.core.environment.draft.as_ref().unwrap().direct_light.unwrap();
+    assert!((sun[0] - 0.5).abs() < 0.03 && sun[1] == 0.6, "{sun:?}");
+    click(&mut ui, ScreenId::AdminEnvironment, "EnvApply");
+    let sent = ui.core.admin.pending.values().find_map(|a| match a {
+        AdminAction::SetEnvironment { settings } => Some(settings.clone()),
+        _ => None,
+    });
+    let sent = sent.expect("Apply asks the host");
+    assert_eq!(sent.sun_azimuth, Some(azimuth));
+    assert_eq!(sent.direct_light, Some(sun));
+    // Losing the rank closes it.
+    let mut snapshot = state(AdminRole::Player, false);
+    snapshot.revision = 3;
+    ui.apply(UiUpdate::Admin(AdminUpdate::State(snapshot)));
+    ui.update(16);
+    assert!(!ui.stack().contains(&ScreenId::AdminEnvironment));
+}

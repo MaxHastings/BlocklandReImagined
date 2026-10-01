@@ -14,6 +14,7 @@ pub const CAPABILITIES: &[&str] = &[
     "physics",
     "effects",
     "lighting",
+    "environment",
 ];
 
 /// The plain-language line a player reads for `name`, completing
@@ -35,14 +36,20 @@ pub fn describe(name: &str) -> Option<&'static str> {
         // Copy a build for a player to place under the plant rules.
         "build" => "copy builds for players to place again",
         // Push, hold and throw players, vehicles and entities (within the
-        // minigame and trust rules), and spawn its own vehicles.
-        "physics" => "grab, push and throw players and vehicles, and spawn its own vehicles",
+        // minigame and trust rules), spawn its own vehicles, and put away
+        // its kinds of vehicles at their owner's request.
+        "physics" => {
+            "grab, push and throw players and vehicles, and spawn and put away its own kinds of vehicles"
+        }
         // Presentation only: sounds in the world or to one player, beams,
         // and animations on players. Nothing here changes the game.
         "effects" => "play sounds and show effects",
         // Switch the map's lights off and on, dim them or change their
         // colour, for everyone, until the map changes.
         "lighting" => "switch, dim and recolour the map's lights",
+        // The sun, light, fog, sky and time of day, for everyone, until
+        // the map changes.
+        "environment" => "change the sun, sky, fog and time of day",
         _ => return None,
     })
 }

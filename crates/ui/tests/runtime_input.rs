@@ -125,7 +125,10 @@ fn fixture() -> Rc<Pack> {
             icon.visible = false;
             let mut crosshair = node("GuiCrossHairHud", "Crosshair", 224, "");
             crosshair.extent = [32, 32];
-            vec![icon, crosshair]
+            let mut lag = node("GuiBitmapCtrl", "LagIcon", 0, "");
+            lag.extent = [32, 32];
+            lag.visible = false;
+            vec![icon, crosshair, lag]
         }),
         ("LoadingGui", vec![]),
         ("defaultControlsGui", vec![]),
@@ -647,6 +650,23 @@ fn crosshair_shows_only_in_first_person_and_hides_with_names() {
     assert!(!shown(&u));
 }
 #[test]
+fn lag_icon_shows_only_while_the_host_is_quiet() {
+    let mut u = ui();
+    play(&mut u);
+    let shown = |u: &Ui| {
+        let v = u.screen(ScreenId::Play).unwrap().view();
+        v.node(v.id("LagIcon").unwrap()).state.visible
+    };
+    u.update(16);
+    assert!(!shown(&u));
+    u.apply(UiUpdate::Lagging(true));
+    u.update(16);
+    assert!(shown(&u));
+    u.apply(UiUpdate::Lagging(false));
+    u.update(16);
+    assert!(!shown(&u));
+}
+#[test]
 fn ski_crash_whiteout_takes_the_stronger_flash_and_fades() {
     let mut u = ui();
     u.apply(UiUpdate::Whiteout(0.5));
@@ -710,8 +730,30 @@ fn wheel_scrolls_the_open_brick_bar_like_scroll_inventory() {
 fn wheel_goes_to_the_held_tool_while_it_takes_the_wheel() {
     let mut u = ui();
     u.core.binds.bind(BindInput::Wheel, "scrollInventory");
+    u.core.binds.bind(BindInput::Mouse(MouseButton::Left), "mouseFire");
     play(&mut u);
+    let press = |u: &mut Ui, down: bool| {
+        let (x, y) = (640.0, 480.0);
+        let button = MouseButton::Left;
+        u.handle_input(if down {
+            InputEvent::MouseDown { button, x, y }
+        } else {
+            InputEvent::MouseUp { button, x, y }
+        });
+        actions(u)
+    };
+    let to_tool = |a: &[UiAction]| {
+        a.iter()
+            .any(|a| matches!(a, UiAction::Game(GameAction::ToolWheel { .. })))
+    };
     u.apply(UiUpdate::ToolWheel(true));
+    // The tool has a wheel command, but its trigger is not held: the wheel
+    // scrolls the inventory as ever.
+    u.handle_input(InputEvent::Wheel { delta: 1.0 });
+    assert!(!to_tool(&actions(&mut u)));
+    // Trigger held: pressed and rolled in the same frame, before the game
+    // has seen the press, the wheel is the tool's.
+    assert_eq!(press(&mut u, true), vec![held(HeldControl::Fire, true)]);
     // Rolled forward (away from you) is positive, whole notches only.
     u.handle_input(InputEvent::Wheel { delta: 1.0 });
     assert_eq!(
@@ -725,14 +767,15 @@ fn wheel_goes_to_the_held_tool_while_it_takes_the_wheel() {
         actions(&mut u),
         vec![UiAction::Game(GameAction::ToolWheel { notches: -3 })]
     );
-    // Once the tool lets go of it, the wheel scrolls the inventory again.
+    // Let go of the trigger, and the wheel scrolls the inventory again.
+    assert_eq!(press(&mut u, false), vec![held(HeldControl::Fire, false)]);
+    u.handle_input(InputEvent::Wheel { delta: 1.0 });
+    assert!(!to_tool(&actions(&mut u)));
+    // Nor while a tool without a wheel command is held.
+    press(&mut u, true);
     u.apply(UiUpdate::ToolWheel(false));
     u.handle_input(InputEvent::Wheel { delta: 1.0 });
-    assert!(
-        !actions(&mut u)
-            .iter()
-            .any(|a| matches!(a, UiAction::Game(GameAction::ToolWheel { .. })))
-    );
+    assert!(!to_tool(&actions(&mut u)));
 }
 #[test]
 fn start_games_add_ons_tab_opens_the_add_ons_screen() {

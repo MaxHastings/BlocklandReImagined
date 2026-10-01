@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "id": "carry",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Carry (test fixture)",
+  "description": "Test fixture, never shipped: an empty-hand click lifts a player onto your hand and the next throws them, exercising on_activate, mount_object, set_scale and set_look_limits.",
+  "authors": [
+    "Blockland ReImagined"
+  ],
+  "license": "CC0-1.0",
+  "provenance": {
+    "source": "original"
+  },
+  "capabilities": [
+    "physics",
+    "player",
+    "effects"
+  ],
+  "provides": [
+    {
+      "kind": "behaviour",
+      "id": "carry:behaviour/main",
+      "file": "behaviour.json"
+    },
+    {
+      "kind": "script",
+      "id": "carry:script/main",
+      "file": "carry.rhai"
+    }
+  ]
+}

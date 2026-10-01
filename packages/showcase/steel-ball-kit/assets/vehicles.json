@@ -144,6 +144,8 @@
       },
       "shove": true,
       "harms_only_in_minigames": true,
+      "per_player": 3,
+      "blast_scale": 3.0,
       "authored": {
         "category": "Vehicles",
         "uiname": "Steel Ball"

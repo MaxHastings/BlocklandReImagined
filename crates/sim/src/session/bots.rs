@@ -235,7 +235,7 @@ impl Session {
             self.bots.brains.remove(&bot);
             self.bots.hurt.remove(&bot);
         }
-        if same || self.bots.brains.len() >= MAX_BOTS {
+        if same {
             return Ok(());
         }
         let Some(kind) = kind else {
@@ -244,9 +244,30 @@ impl Session {
         let Some(brick) = self.simulation.state().bricks.get(&brick_id) else {
             return Ok(());
         };
-        let home = Vec3::from(brick.position) + Vec3::Y * 0.3;
-        // A crowded spawn is retried on later ticks.
-        if let Ok(bot) = self.join_inner(kind.name.clone(), home, false, true, None) {
+        let (home, builder) = (Vec3::from(brick.position) + Vec3::Y * 0.3, brick.owner);
+        // A refused bot is never silent: the brick's builder is told why,
+        // as for a vehicle the server has no room for.
+        if self.bots.brains.len() >= MAX_BOTS {
+            self.notify(
+                builder,
+                Notice::Center {
+                    text: format!("\u{E000}Server is limited to {MAX_BOTS} bots"),
+                    seconds: 2.0,
+                },
+            );
+            return Ok(());
+        }
+        let joined = self.join_inner(kind.name.clone(), home, false, true, None);
+        if joined.is_err() {
+            self.notify(
+                builder,
+                Notice::Center {
+                    text: "\u{E000}Server is full".into(),
+                    seconds: 2.0,
+                },
+            );
+        }
+        if let Ok(bot) = joined {
             self.bots.by_brick.insert(brick_id, bot);
             self.bots.brains.insert(
                 bot,
@@ -462,7 +483,9 @@ impl Session {
             }
             return Ok(());
         }
-        if self.riding.driver_of(bot).is_some() {
+        // Ridden by a player who steers it, or carried by one
+        // (`mountObject`): its brain rests.
+        if self.riding.driver_of(bot).is_some() || self.riding.is_riding(bot) {
             return Ok(());
         }
         let state = peer.player.state().clone();

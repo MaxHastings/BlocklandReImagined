@@ -1,6 +1,14 @@
+// The live environment (bri_content::atmosphere) is in sun_direction,
+// sun_color, ambient, fog_color and atmosphere; sky is the sky's tint with
+// the sun flare's size in w, flare its colour and strength, shadow_color the
+// light where the sun does not reach (w 1 when set). baked_* are the map's
+// own sun and ambient, as its lightmaps were baked; baked_sun_direction.w
+// is 1 while the live light differs from them, and lightmaps are relit.
 struct Camera {
     view_projection:mat4x4<f32>, eye:vec4<f32>, sun_direction:vec4<f32>,
     sun_color:vec4<f32>, ambient:vec4<f32>, fog_color:vec4<f32>, atmosphere:vec4<f32>,
+    sky:vec4<f32>, flare:vec4<f32>, shadow_color:vec4<f32>,
+    baked_sun_direction:vec4<f32>, baked_sun_color:vec4<f32>, baked_ambient:vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> camera:Camera;
 struct PointLight { position_radius:vec4<f32>, color:vec4<f32> };
@@ -395,18 +403,63 @@ fn shadowed_lightmap(lightmap:vec3<f32>,position:vec3<f32>,normal:vec3<f32>)->ve
 // (map_lighting.rs); 2 Unified with specular highlights; 3 Dynamic (2, with
 // the map's surfaces lit live by every recovered light: `dynamic_lightmap`).
 fn lighting_mode()->i32 {return i32(camera.ambient.w+0.5);}
+// The live environment differs from the map's baked sun or ambient.
+fn relit()->bool {return camera.baked_sun_direction.w>0.5;}
+// The map's own sun and ambient, as its lightmaps were baked: the live
+// values unless the environment was changed (callers may leave baked_*
+// unset then).
+fn baked_ambient()->vec3<f32> {return select(camera.ambient.rgb,camera.baked_ambient.rgb,relit());}
+fn baked_sun_color()->vec3<f32> {return select(camera.sun_color.rgb,camera.baked_sun_color.rgb,relit());}
+fn baked_sun_direction()->vec3<f32> {
+    let d=select(camera.sun_direction.xyz,camera.baked_sun_direction.xyz,relit());
+    return d/max(length(d),0.0001);
+}
+// The live sun comes from where the map's lightmaps were baked from.
+fn baked_sun_direction_kept()->bool {
+    return !relit() || distance(camera.sun_direction.xyz,camera.baked_sun_direction.xyz)<0.0001;
+}
+// Light where the sun does not reach, blending to the ambient light as
+// `reach` (the share of the sun a surface facing it receives) rises.
+fn ambient_at(reach:f32)->vec3<f32> {
+    if camera.shadow_color.w<0.5 {return camera.ambient.rgb;}
+    return mix(camera.shadow_color.rgb,camera.ambient.rgb,clamp(reach,0.0,1.0));
+}
+// The live sun reaching a lightmapped texel whose bake let `baked` of the
+// map's own sun through. From the map's baked direction: that share, past
+// live casters. From a new direction: the map's own surfaces in the shadow
+// cascades near the eye; past them the baked share stands in, as the
+// texel's openness to the sky.
+fn relit_sun(baked:f32,position:vec3<f32>,n:vec3<f32>)->f32 {
+    if baked_sun_direction_kept() {
+        if baked<=0.0 {return 0.0;}
+        return min(baked,sun_visibility(position,n));
+    }
+    let c=shadow_coord(position,n);
+    var map=baked;
+    if c.near.cascade>=0 && shadows.map_params.x>0.0 {
+        var lit=map_cascade_lit(c.near);
+        if c.blend>0.0 {lit=mix(lit,map_cascade_lit(c.far),c.blend);}
+        map=mix(map,lit,c.strength);
+    }
+    if map<=0.0 {return 0.0;}
+    return min(map,shadow_lit(c));
+}
 // An interior lightmap with its decomposition (map_lighting::decompose_sheet
 // in material slot 9): RGB the static light, A the share of the sun the bake
 // let through. In Unified mode a live shadow takes away only the sun the
 // texel actually had, so baked shade is never darkened twice; unshadowed, the
 // mission lightmap shows exactly as baked.
 fn decomposed_lightmap(mission:vec3<f32>,parts:vec4<f32>,uv:vec2<f32>,position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
-    if lighting_mode()==0 {return shadowed_lightmap(mission,position,normal);}
+    if lighting_mode()==0 && !relit() {return shadowed_lightmap(mission,position,normal);}
     let n=normal/max(length(normal),0.0001);
     let direction=camera.sun_direction.xyz/max(length(camera.sun_direction.xyz),0.0001);
     let facing=max(dot(n,-direction),0.0);
     var sun=parts.a;
     if facing>0.0 && sun>0.0 {sun=min(sun,sun_visibility(position,n));}
+    if relit() && facing>0.0 {sun=relit_sun(parts.a,position,n);}
+    // The bake's own sun, which the live sun replaces.
+    let baked_direction=baked_sun_direction();
+    let baked_facing=max(dot(n,-baked_direction),0.0);
     // A lamp's live shadow takes away that lamp's share of the texel's
     // static light (as the map compiler lit it: no cosine), and a light
     // dimmed, recoloured or switched off at run time (`light_tint`) takes
@@ -455,12 +508,13 @@ fn decomposed_lightmap(mission:vec3<f32>,parts:vec4<f32>,uv:vec2<f32>,position:v
             shaded+=share*max(vec3<f32>(1.0)-light_tint(light)*lit,vec3<f32>(0.0));
         }
         if any(shaded>vec3<f32>(0.0)) {
-            let total=map_light_total(position,n,vis)+camera.ambient.rgb;
+            let total=map_light_total(position,n,vis)+baked_ambient();
             shaded=min(shaded*parts.rgb/max(total,max(parts.rgb,vec3<f32>(0.001))),parts.rgb);
         }
     }
-    let baked=min(parts.rgb+camera.sun_color.rgb*facing*parts.a,vec3<f32>(1.0));
-    let live=min(parts.rgb-shaded+camera.sun_color.rgb*facing*sun,vec3<f32>(1.0));
+    let baked=min(parts.rgb+baked_sun_color()*baked_facing*parts.a,vec3<f32>(1.0));
+    let ambient=camera.ambient.rgb-baked_ambient();
+    let live=clamp(parts.rgb-shaded+ambient+camera.sun_color.rgb*facing*sun,vec3<f32>(0.0),vec3<f32>(1.0));
     return max(mission-(baked-live),vec3<f32>(0.0));
 }
 // Every recovered light reaching a map surface as the map compiler lit it
@@ -498,6 +552,7 @@ fn dynamic_lightmap(left:vec4<f32>,uv:vec2<f32>,position:vec3<f32>,normal:vec3<f
     let facing=max(dot(n,-direction),0.0);
     var sun=left.a;
     if facing>0.0 && sun>0.0 {sun=min(sun,sun_visibility(position,n));}
+    if relit() && facing>0.0 {sun=relit_sun(left.a,position,n);}
     let count=min(u32(material[1].y),24u);
     let seen=channel_shares(uv,count);
     var light=vec3<f32>(0.0);
@@ -514,7 +569,8 @@ fn dynamic_lightmap(left:vec4<f32>,uv:vec2<f32>,position:vec3<f32>,normal:vec3<f
             light+=reach;
         }
     }
-    return min(left.rgb+light+camera.sun_color.rgb*facing*sun,vec3<f32>(1.0));
+    let ambient=camera.ambient.rgb-baked_ambient();
+    return clamp(left.rgb+ambient+light+camera.sun_color.rgb*facing*sun,vec3<f32>(0.0),vec3<f32>(1.0));
 }
 // The shares of its lights a lightmap texel holds, four channels to a
 // material slot 1..=6 (map_lighting::DynamicSheet).
@@ -550,6 +606,7 @@ fn channel_light(c:u32)->u32 {
 // visibility; the visibility is recovered from the lightmap itself, and a
 // live shadow removes only the sun share that is there.
 fn terrain_light(lightmap:vec3<f32>,position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
+    if relit() {return relit_terrain(lightmap,position,normal);}
     if lighting_mode()==0 {return shadowed_lightmap(lightmap,position,normal);}
     let n=normal/max(length(normal),0.0001);
     let direction=camera.sun_direction.xyz/max(length(camera.sun_direction.xyz),0.0001);
@@ -560,6 +617,26 @@ fn terrain_light(lightmap:vec3<f32>,position:vec3<f32>,normal:vec3<f32>)->vec3<f
     let baked=clamp(dot(direct,weights)/max(dot(camera.sun_color.rgb,weights)*facing,0.02),0.0,1.0);
     let live=sun_visibility(position,n);
     return lightmap-direct*(1.0-min(1.0,live/max(baked,0.001)));
+}
+// A terrain lightmap under the live environment: its baked sun visibility
+// recovered against the map's own sun, then lit again by the live ambient
+// and sun (the terrain lightmap holds nothing else).
+fn relit_terrain(lightmap:vec3<f32>,position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
+    let n=normal/max(length(normal),0.0001);
+    let weights=vec3<f32>(0.2126,0.7152,0.0722);
+    let baked_direction=baked_sun_direction();
+    let baked_facing=max(dot(n,-baked_direction),0.0);
+    let direct=max(lightmap-baked_ambient(),vec3<f32>(0.0));
+    // Faces the bake's sun never reached say nothing: open sky.
+    var baked=1.0;
+    if baked_facing>0.02 {
+        baked=clamp(dot(direct,weights)/max(dot(baked_sun_color(),weights)*baked_facing,0.02),0.0,1.0);
+    }
+    let direction=camera.sun_direction.xyz/max(length(camera.sun_direction.xyz),0.0001);
+    let facing=max(dot(n,-direction),0.0);
+    var sun=0.0;
+    if facing>0.0 {sun=relit_sun(baked,position,n);}
+    return min(ambient_at(sun)+camera.sun_color.rgb*facing*sun,vec3<f32>(1.0));
 }
 // A map's recovered lights (map_lighting.rs) with a visibility volume from
 // its geometry: two RGBA blocks stacked along z, (sun, channels 0-2) then
@@ -689,10 +766,12 @@ struct VertexOut {
     @location(5) @interpolate(flat) fx:vec2<u32>,
     // Point light at the vertex (vertex-lit materials only).
     @location(6) point_light:vec3<f32>,
+    // Signed distance past the instance's clip plane; cut below zero.
+    @location(7) clip:f32,
 };
 @vertex fn vs_main(@location(0) local_position:vec3<f32>,@location(1) local_normal:vec3<f32>,@location(2) uv:vec2<f32>,@location(3) lightmap_uv:vec2<f32>,@location(4) local_color:vec4<f32>,
     @location(5) m0:vec4<f32>,@location(6) m1:vec4<f32>,@location(7) m2:vec4<f32>,@location(8) m3:vec4<f32>,@location(9) tint:vec4<f32>,
-    @location(10) fx_data:vec4<f32>)->VertexOut {
+    @location(10) fx_data:vec4<f32>,@location(11) clip:vec4<f32>)->VertexOut {
     let model=mat4x4<f32>(m0,m1,m2,m3);
     let position=(model*vec4<f32>(local_position,1.0)).xyz;
     // Cofactor matrix is det(M)*inverse-transpose(M). Positive affine
@@ -702,6 +781,7 @@ struct VertexOut {
     let color=local_color*tint;
     var out:VertexOut;out.position=camera.view_projection*vec4<f32>(position,1.0);
     out.uv=uv;out.lightmap_uv=lightmap_uv;out.color=color;out.normal=normal;out.world_position=position;
+    out.clip=dot(clip.xyz,position)+clip.w;
     let fx=brick_fx(fx_data);out.fx=vec2<u32>(fx.color,fx.shape);
     // The FX centre moves with the model, like the vertices (debris is built
     // at the origin and placed by its instance transform).
@@ -768,12 +848,24 @@ struct VertexOut {
         out.position=camera.view_projection*vec4<f32>(out.world_position,1.0);
     }
     if (material[0].x==4.0 || material[0].x==5.0) {
+        out.world_position=camera.eye.xyz+position;
         out.position=camera.view_projection*vec4<f32>(camera.eye.xyz+position,1.0);
         // At the far plane: depth 0, reversed (scene.rs `DEPTH_CLEAR`).
         out.position.z=0.0;
         if material[0].x==5.0 {out.uv=uv+fract(normal.xy*camera.atmosphere.z);}
     }
     return out;
+}
+// The sun's disc and glow along `along` (display colour to add), from the
+// live sun: camera.flare's colour times its strength, camera.sky.w its size.
+fn sun_flare(along:vec3<f32>)->vec3<f32> {
+    if camera.flare.a<=0.0 {return vec3<f32>(0.0);}
+    let toward=-camera.sun_direction.xyz/max(length(camera.sun_direction.xyz),0.0001);
+    let angle=acos(clamp(dot(along,toward),-1.0,1.0));
+    let size=max(camera.sky.w,0.01);
+    let disc=1.0-smoothstep(0.009*size,0.012*size,angle);
+    let glow=pow(max(1.0-angle/(0.2*size),0.0),3.0);
+    return camera.flare.rgb*camera.flare.a*(disc+0.55*glow);
 }
 fn fog_amount(position:vec3<f32>)->f32 {
     let distance=length(position-camera.eye.xyz);
@@ -836,6 +928,7 @@ fn slot_size(slot:u32)->vec2<f32> {
     }
 }
 @fragment fn fs_main(v:VertexOut)->@location(0) vec4<f32> {
+    if v.clip<0.0 {discard;}
     if material[0].x==6.0 {
         let time=camera.atmosphere.z;
         // Fluid space: Torque x/y plus the terrain's 1024 offset.
@@ -885,9 +978,20 @@ fn slot_size(slot:u32)->vec2<f32> {
     }
     if material[0].x==10.0 {return metal_surface(v);}
     if (material[0].x==4.0 || material[0].x==5.0) {
+        // material[1].x: 0 a sky face or cloud (tinted by the sky colour),
+        // 1 the fog backdrop and horizon band (the live fog colour).
+        let along=normalize(v.world_position-camera.eye.xyz);
+        if material[1].x==1.0 {
+            let fog=min(camera.fog_color.rgb+sun_flare(along),vec3<f32>(1.0));
+            return vec4<f32>(output_color(fog),v.color.a);
+        }
         var sky=textureSample(layer0,clamped,v.uv);
-        if material[0].x==5.0 {sky=textureSample(layer0,tiled,v.uv);}
-        return vec4<f32>(output_color(display_color(sky.rgb)*v.color.rgb),sky.a*v.color.a);
+        if material[0].x==5.0 {
+            sky=textureSample(layer0,tiled,v.uv);
+            return vec4<f32>(output_color(display_color(sky.rgb)*v.color.rgb*camera.sky.rgb),sky.a*v.color.a);
+        }
+        let rgb=min(display_color(sky.rgb)*v.color.rgb*camera.sky.rgb+sun_flare(along),vec3<f32>(1.0));
+        return vec4<f32>(output_color(rgb),sky.a*v.color.a);
     }
     if material[0].x==1.0 {
         let weight_uv=v.lightmap_uv+vec2<f32>(0.5)/vec2<f32>(textureDimensions(weights0));
@@ -977,11 +1081,12 @@ fn slot_size(slot:u32)->vec2<f32> {
         let facing=max(dot(normal,-direction),0.0)*strength;
         var sun=0.0;
         if lighting_mode()==0 {
-            if facing>0.0 {sun=facing*sun_visibility(v.world_position,normal);}
+            var reach=0.0;
+            if facing>0.0 {reach=sun_visibility(v.world_position,normal);sun=facing*reach;}
             // Classic: interior lights exist only in lightmaps; the brighter of
             // the sun and that baked light, so dark maps' lamps light players
             // and bricks.
-            illumination=max(camera.ambient.rgb+camera.sun_color.rgb*sun,baked_surroundings(v.world_position,v.normal))
+            illumination=max(ambient_at(reach)+camera.sun_color.rgb*sun,baked_surroundings(v.world_position,v.normal))
                 +v.point_light*strength;
         } else {
             // Unified: the map's own model. Sun where the map's geometry and
@@ -993,7 +1098,7 @@ fn slot_size(slot:u32)->vec2<f32> {
             if facing>0.0 {sun_share=object_sun(v.world_position,normal,vis);}
             sun=facing*sun_share;
             let local=map_light_sum(v.world_position,normal,vis,lighting_mode()>=2,true,SPECULAR_POWER);
-            illumination=camera.ambient.rgb+camera.sun_color.rgb*sun+local.diffuse*strength
+            illumination=ambient_at(sun_share)+camera.sun_color.rgb*sun+local.diffuse*strength
                 +baked_surroundings(v.world_position,v.normal)
                 +v.point_light*strength;
             if lighting_mode()>=2 {
@@ -1017,6 +1122,9 @@ fn slot_size(slot:u32)->vec2<f32> {
     } else {
         illumination=shadowed_lightmap(illumination,v.world_position,v.normal)
             +point_illumination(v.world_position,v.normal);
+        // A lightmap without its decomposition: only the ambient light
+        // changes with the live environment.
+        if relit() {illumination=max(illumination+camera.ambient.rgb-baked_ambient(),vec3<f32>(0.0));}
     }
     var display=pigment*illumination;
     // Fixed-function lighting clamps the vertex colour before texturing.

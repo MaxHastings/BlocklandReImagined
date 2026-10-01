@@ -63,6 +63,33 @@ pub struct Controls {
     vehicle_mouse_plain: bool,
     /// The held weapon's aim (`Image::zoom`), while one is held.
     aim: Option<bri_weapons::Zoom>,
+    /// The roll an opening in a floor or ceiling turned the view by, and
+    /// how it turned the body's eye and camera pivot about its middle
+    /// (upside down, for a floor onto a floor) past the turn of its
+    /// heading, both easing back upright (`crate::portal_view`).
+    portal_ease: Option<PortalEase>,
+}
+/// The roll and tilt an opening left on the view, and how far they have
+/// eased out.
+#[derive(Clone, Copy, Debug)]
+struct PortalEase {
+    roll: f32,
+    tilt: glam::Quat,
+    seconds: f32,
+}
+impl PortalEase {
+    /// The share left: all of it at first, none after
+    /// [`PORTAL_EASE_SECONDS`], gently at both ends.
+    fn left(&self) -> f32 {
+        let t = (self.seconds / PORTAL_EASE_SECONDS).clamp(0.0, 1.0);
+        1.0 - t * t * (3.0 - 2.0 * t)
+    }
+    fn roll(&self) -> f32 {
+        self.roll * self.left()
+    }
+    fn tilt(&self) -> glam::Quat {
+        glam::Quat::IDENTITY.slerp(self.tilt, self.left())
+    }
 }
 /// A mouse driver's `mHead.x` returning after Free Look as v20 runs it:
 /// in first person each 32 ms tick halves it (blocklandv20.exe 0x5aeb0b),
@@ -171,6 +198,8 @@ const ZOOM_FOV_RANGE: (f32, f32) = (5.0, 85.0);
 const CAMERA_MOVEMENT_SPEED: f32 = 40.0;
 /// Observer cameras stop just short of straight up or down.
 const OBSERVER_PITCH: f32 = FRAC_PI_2 - 0.01;
+/// How long the roll and tilt an opening left take to ease out.
+const PORTAL_EASE_SECONDS: f32 = 0.5;
 fn wrap(a: f32) -> f32 {
     (a + PI).rem_euclid(2.0 * PI) - PI
 }
@@ -441,6 +470,55 @@ impl Controls {
             }
         })
     }
+    /// Turn the look the whole way an opening's carry turned the body: it
+    /// sees the same view from the far side, its pitch and any roll
+    /// included. The body stays upright, so its eye and camera pivot end up
+    /// the other side of its middle from where the carry takes them through
+    /// a floor or ceiling: [`Self::portal_tilt`] puts them there. The roll
+    /// and tilt then ease out (see [`Self::ease_roll`]).
+    pub fn carry_look(&mut self, carry: &glam::Affine3A) {
+        let look = (wrap(self.yaw + self.free_yaw), self.pitch, self.portal_roll());
+        let (yaw, pitch, roll) = crate::portal_view::carried_look(look, carry);
+        let turn = glam::Quat::from_mat3a(&carry.matrix3).normalize();
+        let before = self.yaw;
+        self.yaw = wrap(yaw - self.free_yaw);
+        self.pitch = pitch.clamp(-FRAC_PI_2, FRAC_PI_2);
+        // The eye's offset turns with the heading (`ahead` of the yaw): the
+        // tilt is the rest of the carry's turn.
+        let tilt = turn * self.portal_tilt() * glam::Quat::from_rotation_y(self.yaw - before);
+        let tilt = if tilt.is_finite() {
+            tilt.normalize()
+        } else {
+            glam::Quat::IDENTITY
+        };
+        let roll = wrap(roll);
+        self.portal_ease = (roll.abs() > 1e-4 || tilt.angle_between(glam::Quat::IDENTITY) > 1e-4)
+            .then_some(PortalEase {
+                roll,
+                tilt,
+                seconds: 0.0,
+            });
+    }
+    /// The view's roll left by openings, added to the camera's.
+    pub fn portal_roll(&self) -> f32 {
+        self.portal_ease.map_or(0.0, |e| e.roll())
+    }
+    /// The turn about the body's middle its eye and camera pivot are shown
+    /// with, left by openings.
+    pub fn portal_tilt(&self) -> glam::Quat {
+        self.portal_ease.map_or(glam::Quat::IDENTITY, |e| e.tilt())
+    }
+    /// Ease the roll and tilt an opening left back upright, as Portal does.
+    pub fn ease_roll(&mut self, seconds: f32) {
+        if let Some(ease) = &mut self.portal_ease
+            && seconds.is_finite()
+        {
+            ease.seconds += seconds.clamp(0.0, 0.25);
+            if ease.seconds >= PORTAL_EASE_SECONDS {
+                self.portal_ease = None;
+            }
+        }
+    }
     /// Turn the view with the vehicle it rides.
     pub fn carry_yaw(&mut self, turn: f32) {
         if turn.is_finite() {
@@ -455,10 +533,13 @@ impl Controls {
     pub fn follow(&mut self, control: ControlObject, owner: OwnerId, eye: Option<glam::Vec3>) {
         let mode = match control {
             ControlObject::Player => {
-                self.observer = None;
-                // Fire held on the camera was never passed to the body, so
-                // its release may not reach here either.
-                self.held.remove(&HeldControl::Fire);
+                // Back from a camera: fire held on the camera was never
+                // passed to the body, so its release may not reach here
+                // either. This runs every frame, so only on that change:
+                // on foot, the trigger held stays held.
+                if self.observer.take().is_some() {
+                    self.held.remove(&HeldControl::Fire);
+                }
                 return;
             }
             ControlObject::Camera => match self.observer {

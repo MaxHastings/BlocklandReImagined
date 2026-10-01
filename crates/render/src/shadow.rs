@@ -524,10 +524,11 @@ pub(crate) struct ShadowMaps {
     /// Per cascade: the caster group plus that cascade's caster depth, which
     /// occluders test against.
     pub occluder_groups: Vec<wgpu::BindGroup>,
-    /// Opaque (depth only) and alpha-masked caster pipelines.
-    pub pipelines: [wgpu::RenderPipeline; 2],
-    /// Opaque and alpha-masked occluder pipelines.
-    pub occluder_pipelines: [wgpu::RenderPipeline; 2],
+    /// Opaque (depth only), alpha-masked and clip-plane-cut opaque caster
+    /// pipelines.
+    pub pipelines: [wgpu::RenderPipeline; 3],
+    /// Opaque, alpha-masked and cut opaque occluder pipelines.
+    pub occluder_pipelines: [wgpu::RenderPipeline; 3],
     pub cascades: Vec<Cascade>,
     /// The sun direction the cascades were fitted to (normalized).
     pub sun: Vec3,
@@ -831,6 +832,7 @@ impl ShadowMaps {
                     &masked_layout,
                     Some("fs_masked"),
                 ),
+                pipeline("sun shadow cut casters", &opaque_layout, Some("fs_clipped")),
             ],
             occluder_pipelines: [
                 pipeline(
@@ -842,6 +844,11 @@ impl ShadowMaps {
                     "sun shadow masked occluders",
                     &occluder_masked_layout,
                     Some("fs_occluder_masked"),
+                ),
+                pipeline(
+                    "sun shadow cut occluders",
+                    &occluder_opaque_layout,
+                    Some("fs_occluder"),
                 ),
             ],
             cascades: Vec::new(),

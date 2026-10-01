@@ -32,17 +32,19 @@ mod admin_players;
 mod admin_world;
 mod inventory;
 mod map_change;
+mod environment;
 mod map_lights;
 mod special;
 mod trust;
 mod tutorial;
 pub use tutorial::{Abilities, BRICK_HAND_IMAGES, BrickHand};
 mod riding;
-pub use riding::Ride;
+pub use riding::{Ride, shape_mount_points};
 mod vehicles;
 use vehicles::combat_input_burst;
 pub use vehicles::{
-    DEFAULT_STEERING, SeatedPace, VehicleInfo, VehiclePose, actor_controls, driver_controls,
+    DEFAULT_STEERING, SeatedPace, VehicleInfo, VehiclePose, actor_controls,
+    carry_through_openings, driver_controls,
 };
 mod items;
 mod weapons;
@@ -50,6 +52,8 @@ pub use weapons::{MountedImage, WeaponView};
 mod blueprints;
 mod movables;
 mod packages;
+mod paint_fill;
+pub use paint_fill::Fill;
 mod script_world;
 mod spray;
 mod tools;
@@ -606,6 +610,9 @@ struct Peer {
     avatar: Option<bri_content::avatar::Appearance>,
     /// `SetTempColor` spray paint over the avatar's own colours.
     temp_color: Option<spray::TempColor>,
+    /// Colours an Add-On puts over the avatar's own (`set_avatar_colors`):
+    /// a team's uniform. Spray paint and burns still show over it.
+    uniform: BTreeMap<String, [f32; 4]>,
     /// `%client.currentColor`: the palette index of the last colour spray
     /// can picked (index 0 until one is).
     current_color: u8,
@@ -632,6 +639,9 @@ struct Peer {
     talk_stops: VecDeque<u64>,
     /// v20's splash arming and `inLiquid` exit-sound state.
     water: crate::water::SplashState,
+    /// A rule's `setLookLimits` for this body: `[down, up]` look
+    /// positions its arms and head follow.
+    look_limits: Option<[f32; 2]>,
 }
 /// `serverCmdActivateStuff`'s 320 ms repeat window at 120 ticks per second.
 const ACTIVATE_REPEAT_TICKS: u64 = 38;
@@ -718,9 +728,14 @@ pub struct Session {
     /// v20's player datablocks, then every enabled package's archetypes.
     /// Clients receive the table with the checkpoint.
     archetypes: crate::archetype::Archetypes,
+    /// Mount points by body model, for bodies that declare none.
+    body_mounts: BTreeMap<String, Vec<crate::archetype::MountPoint>>,
     breakables: breakables::Breakables,
     /// Add-On map light rules (`set_map_lights`), replicated to clients.
     map_lights: Vec<map_lights::MapLightRule>,
+    /// The live environment over the map's own (Admin Menu Environment,
+    /// Add-Ons' `set_environment`), replicated to clients.
+    environment: bri_content::atmosphere::Settings,
     /// Holds, pushes and Add-On vehicles (`physics` operations).
     movables: movables::Movables,
 }
@@ -742,8 +757,10 @@ impl Session {
         Self {
             events: Default::default(),
             archetypes: Default::default(),
+            body_mounts: BTreeMap::new(),
             breakables: Default::default(),
             map_lights: Vec::new(),
+            environment: Default::default(),
             movables: Default::default(),
             specials: Default::default(),
             highlights: BTreeMap::new(),
@@ -849,6 +866,9 @@ impl Session {
             .iter()
             .filter_map(|(id, p)| {
                 let mut avatar = p.avatar.clone()?;
+                for (slot, color) in &p.uniform {
+                    avatar.colors.insert(slot.clone(), *color);
+                }
                 if let Some(temp) = &p.temp_color {
                     temp.apply(&mut avatar);
                 }
@@ -1108,6 +1128,7 @@ impl Session {
                 last_drop_tick: None,
                 tutorial: Default::default(),
                 temp_color: None,
+                uniform: BTreeMap::new(),
                 current_color: 0,
                 talking: false,
                 sitting: false,
@@ -1136,6 +1157,7 @@ impl Session {
                 activate_level: 0,
                 talk_stops: VecDeque::new(),
                 water: Default::default(),
+                look_limits: None,
                 avatar: self.avatar_catalog.as_ref().map(|c| c.defaults.clone()),
             },
         );
@@ -1156,7 +1178,12 @@ impl Session {
             }
         }
         self.refresh_trust();
-        self.packages_joined(owner);
+        // A bot is not yet registered as one here; it never joins as a
+        // player for Add-Ons.
+        if !is_bot {
+            self.packages_joined(owner);
+        }
+        self.join_server_game(owner)?;
         if !is_bot {
             let music = self.tool_catalog.sounds.clone();
             self.notify(owner, Notice::MusicTracks(music));
@@ -1319,6 +1346,7 @@ impl Session {
                 last_drop_tick: None,
                 tutorial: Default::default(),
                 temp_color: None,
+                uniform: BTreeMap::new(),
                 current_color: 0,
                 talking: false,
                 sitting: false,
@@ -1347,6 +1375,7 @@ impl Session {
                 activate_level: 0,
                 talk_stops: VecDeque::new(),
                 water: Default::default(),
+                look_limits: None,
                 avatar,
             },
         );
@@ -1356,6 +1385,7 @@ impl Session {
         self.announce(owner, "connected.", "ClientJoinSound");
         self.refresh_trust();
         self.packages_joined(owner);
+        self.join_server_game(owner)?;
         Ok(())
     }
     /// Queue one client input. Each input drives exactly one motor tick, so the
@@ -1963,6 +1993,12 @@ impl Session {
             }
             Command::Activate => {
                 ensure!(peer.combat.alive, "Dead players cannot activate bricks");
+                // An Add-On's `on_activate` (v20's packaged
+                // `Player::activateStuff`) may take the click first.
+                if self.package_activate(owner) {
+                    return Ok(Reply::Activated(None));
+                }
+                let peer = self.peers.get_mut(&owner).context("Unknown connection")?;
                 // `serverCmdActivateStuff`: clicks within 320 ms build up a
                 // level, and the fifth repeat plays the bigger swing.
                 peer.activate_level = if peer

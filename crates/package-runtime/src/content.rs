@@ -205,6 +205,16 @@ pub struct Behaviour {
     /// tick.
     #[serde(default)]
     pub on_projectile_hit: bool,
+    /// `on_activate(player)` as a living player clicks with nothing to
+    /// fire (`serverCmdActivateStuff`, which v20 Add-Ons packaged as
+    /// `Player::activateStuff`), before the engine's own activation: the
+    /// arm's swing, flipping a vehicle, a brick's `onActivate`. Return
+    /// `true` to take the click, so the engine does nothing more; anything
+    /// else lets it carry on. Every package that declares it is asked, in
+    /// load order, until one takes the click. Called as it happens, so it
+    /// must be quick.
+    #[serde(default)]
+    pub on_activate: bool,
     /// `on_tick()` every `tick_interval` ticks, when set.
     #[serde(default)]
     pub tick_interval: Option<u32>,
@@ -377,6 +387,103 @@ pub struct GameMode {
     /// Package ids that run: the mode's own package or its dependencies,
     /// so turning the mode on turns them on.
     pub add_ons: Vec<String>,
+    /// The mode's own mini-game, as v21 gamemodes had: the server runs it,
+    /// every player is in it from joining, and nobody can start, join or
+    /// leave another. None leaves mini-games to the players.
+    #[serde(default)]
+    pub minigame: Option<ModeMiniGame>,
+}
+/// A game mode's mini-game settings, the Mini-Game dialog's fields.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ModeMiniGame {
+    /// Shown in the mini-game list; the mode's name when empty.
+    pub title: String,
+    /// Up to five items, by id (`v20.weapon.gunitem`, `package:weapon/name`).
+    /// Add-Ons can hand out more in `on_loadout`.
+    pub loadout: Vec<String>,
+    /// The body every player gets (`v20.player.<datablock>` or a package
+    /// archetype); the Standard Player when empty.
+    pub player_type: String,
+    pub respawn_seconds: f32,
+    pub brick_respawn_seconds: f32,
+    pub vehicle_respawn_seconds: f32,
+    pub points_kill_player: i32,
+    pub points_kill_self: i32,
+    pub points_die: i32,
+    pub points_break_brick: i32,
+    pub points_plant_brick: i32,
+    pub falling_damage: bool,
+    pub weapon_damage: bool,
+    pub self_damage: bool,
+    pub vehicle_damage: bool,
+    /// Whether weapons break the game's bricks (the world's own, and every
+    /// player's with `use_all_players_bricks`).
+    pub brick_damage: bool,
+    pub building: bool,
+    pub painting: bool,
+    pub use_all_players_bricks: bool,
+}
+impl Default for ModeMiniGame {
+    fn default() -> Self {
+        Self {
+            title: String::new(),
+            loadout: Vec::new(),
+            player_type: String::new(),
+            respawn_seconds: 5.0,
+            brick_respawn_seconds: 30.0,
+            vehicle_respawn_seconds: 5.0,
+            points_kill_player: 1,
+            points_kill_self: -1,
+            points_die: 0,
+            points_break_brick: 0,
+            points_plant_brick: 0,
+            falling_damage: true,
+            weapon_damage: true,
+            self_damage: true,
+            vehicle_damage: true,
+            brick_damage: true,
+            building: true,
+            painting: true,
+            use_all_players_bricks: false,
+        }
+    }
+}
+impl ModeMiniGame {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.title.chars().count() <= 35 && !self.title.chars().any(char::is_control),
+            "minigame title must be at most 35 characters"
+        );
+        ensure!(
+            self.loadout.len() <= 5,
+            "a minigame loadout has at most 5 items"
+        );
+        for item in &self.loadout {
+            ensure!(
+                bri_package::id::is_content_ref(item, Some("weapon")),
+                "minigame loadout item `{item}` is not an item id"
+            );
+        }
+        ensure!(
+            self.player_type.is_empty() || bri_package::id::is_content_ref(&self.player_type, None),
+            "minigame player_type `{}` is not a player type id",
+            self.player_type
+        );
+        ensure!(
+            (1.0..=30.0).contains(&self.respawn_seconds),
+            "respawn_seconds must be 1 to 30"
+        );
+        ensure!(
+            (2.0..=300.0).contains(&self.brick_respawn_seconds),
+            "brick_respawn_seconds must be 2 to 300"
+        );
+        ensure!(
+            (0.0..=300.0).contains(&self.vehicle_respawn_seconds),
+            "vehicle_respawn_seconds must be 0 to 300"
+        );
+        Ok(())
+    }
 }
 impl GameMode {
     pub fn validate(&self) -> Result<()> {
@@ -391,6 +498,9 @@ impl GameMode {
             "map must be a world id or a map id"
         );
         ensure!(self.add_ons.len() <= 64, "at most 64 add_ons");
+        if let Some(minigame) = &self.minigame {
+            minigame.validate()?;
+        }
         for id in &self.add_ons {
             ensure!(
                 bri_package::id::namespace_problem(id).is_none(),
@@ -849,6 +959,25 @@ pub struct HudPanel {
     /// Keys that send a package command, shown as hints on the panel.
     #[serde(default)]
     pub keys: Vec<HudKey>,
+    /// Show the panel only while the viewer holds one of these in hand: a
+    /// weapons package's id (any of its images) or an image id. Empty: the
+    /// panel always shows. An ammo counter lists its guns' package.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub holding: Vec<String>,
+}
+impl HudPanel {
+    /// Whether the panel shows while the viewer holds `image` (`""` for
+    /// empty hands).
+    pub fn shows_holding(&self, image: &str) -> bool {
+        self.holding.is_empty()
+            || (!image.is_empty()
+                && self.holding.iter().any(|h| {
+                    h.eq_ignore_ascii_case(image)
+                        || image
+                            .split_once(':')
+                            .is_some_and(|(package, _)| package.eq_ignore_ascii_case(h))
+                }))
+    }
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -910,6 +1039,14 @@ impl HudPanel {
             );
         }
         ensure!(self.keys.len() <= 8, "at most 8 keys");
+        ensure!(self.holding.len() <= 32, "at most 32 holding entries");
+        for h in &self.holding {
+            ensure!(
+                bri_package::id::namespace_problem(h).is_none()
+                    || bri_package::id::ContentId::parse(h).is_ok_and(|id| id.kind == "image"),
+                "holding `{h}` is neither a package id nor an image id"
+            );
+        }
         for k in &self.keys {
             ensure!(
                 k.key.len() == 1 && k.key.chars().all(|c| c.is_ascii_uppercase()),
@@ -971,6 +1108,30 @@ mod tests {
         bytes.extend(width.to_be_bytes());
         bytes.extend(height.to_be_bytes());
         bytes
+    }
+
+    #[test]
+    fn a_panel_can_show_only_while_its_guns_are_held() {
+        let mut panel: HudPanel = serde_json::from_value(serde_json::json!({
+            "schema_version": 1, "slot": "hud.overlay", "anchor": "bottom_right",
+            "title": "AMMO", "background": [0, 0, 0, 0.5], "accent": [1, 1, 1, 1],
+            "text": [1, 1, 1, 1],
+            "rows": [{ "label": "Rounds", "bind": "guns-rules:player/ammo" }],
+            "holding": ["guns", "tools:image/scope"]
+        }))
+        .unwrap();
+        panel.validate().unwrap();
+        assert!(panel.shows_holding("guns:image/rifle"), "any image of the package");
+        assert!(panel.shows_holding("tools:image/scope"), "one named image");
+        assert!(!panel.shows_holding("tools:image/hammer"));
+        assert!(!panel.shows_holding("gunsmith:image/rifle"), "not a prefix match");
+        assert!(!panel.shows_holding(""), "empty hands");
+        panel.holding.clear();
+        assert!(panel.shows_holding(""), "no list: always shown");
+        panel.holding = vec!["Not An Id".into()];
+        assert!(panel.validate().is_err());
+        panel.holding = vec!["guns:weapon/rifle".into()];
+        assert!(panel.validate().is_err(), "an item is not an image");
     }
 
     #[test]

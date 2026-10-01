@@ -1,7 +1,9 @@
 //! A client predicting the vehicle it drives, against the host running the
-//! same moves: the Flying Wheeled Jeep in the air, pitched up and down by a
-//! scripted mouse. The host's poses reach the client late and only every few
-//! ticks, as on a real connection.
+//! same moves: a flying car in the air, pitched up and down by a scripted
+//! mouse. The host's poses reach the client late and only every few ticks,
+//! as on a real connection. The vehicles are the test's own
+//! (`fixtures/prediction-vehicles.json`): a flying wheeled car, skis and a
+//! horse, one of each kind the client predicts, so it needs no game content.
 use bri_sim::{
     definitions::Definitions,
     player::{MoveInput, PlayerState},
@@ -13,7 +15,9 @@ use glam::{Quat, Vec3};
 use rapier3d::prelude::*;
 use std::collections::VecDeque;
 
-const JEEP: &str = "v20.vehicle.flyingwheeledjeepvehicle";
+const CAR: &str = "test:vehicle/flying-car";
+const SKIS: &str = "test:vehicle/skis";
+const HORSE: &str = "test:vehicle/horse";
 /// A round trip of 100 ms.
 const DELAY: u64 = 12;
 /// A pose every third tick.
@@ -22,7 +26,7 @@ const POSE_EVERY: u64 = 3;
 fn pack() -> Pack {
     Pack::load(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../content/vehicles-pack-012/vehicles.json"
+        "/tests/fixtures/prediction-vehicles.json"
     ))
     .unwrap()
 }
@@ -41,7 +45,7 @@ fn spawn() -> Spawn {
         scale: 1.,
         id: VehicleId(1),
         owner: OwnerId(10),
-        definition: JEEP.into(),
+        definition: CAR.into(),
         transform: Transform {
             position: [0., 120., 0.],
             ..Default::default()
@@ -50,7 +54,7 @@ fn spawn() -> Spawn {
         respawn_ticks: None,
     }
 }
-/// The host: the jeep flying at 45 toward its nose, its driver seated.
+/// The host: the car flying at 45 toward its nose, its driver seated.
 fn host() -> (VehiclesWorld, PhysicsWorld) {
     let mut v = VehiclesWorld::new(pack()).unwrap();
     let mut w = bri_physics::new_world();
@@ -238,7 +242,7 @@ fn at(position: [f32; 3], rotation: Quat) -> Motion {
 #[test]
 fn crashing_predicted_skis_never_fails() {
     let mut client = predict(
-        "v20.vehicle.skivehicle",
+        SKIS,
         at([0., 6., 0.], Quat::from_rotation_z(std::f32::consts::PI)),
     )
     .unwrap();
@@ -257,7 +261,7 @@ fn crashing_predicted_skis_never_fails() {
 /// of failing: the game goes on showing the host's poses.
 #[test]
 fn a_bad_pose_stops_prediction_without_failing() {
-    let mut client = predict("v20.vehicle.flyingwheeledjeepvehicle", at([0., 50., 0.], Quat::IDENTITY)).unwrap();
+    let mut client = predict(CAR, at([0., 50., 0.], Quat::IDENTITY)).unwrap();
     client.record(MoveInput::default()).unwrap();
     let mut bad = at([0., 50., 0.], Quat::IDENTITY);
     bad.velocity = [f32::NAN, 0.0, 0.0];
@@ -277,7 +281,7 @@ fn a_bad_pose_stops_prediction_without_failing() {
 /// with the host under a 100 ms round trip.
 #[test]
 fn a_ridden_horse_is_predicted_and_agrees_with_the_host() {
-    let horse = "v20.vehicle.horsearmor";
+    let horse = HORSE;
     let mut v = VehiclesWorld::new(pack()).unwrap();
     let mut w = bri_physics::new_world();
     w.insert(RigidBodyBuilder::fixed(), ground());
@@ -352,7 +356,7 @@ fn an_unknown_vehicle_is_refused_cleanly() {
         pack(),
         DriveSpawn {
             spawn: Spawn {
-                definition: "v20.vehicle.nosuchvehicle".into(),
+                definition: "test:vehicle/nosuchvehicle".into(),
                 ..spawn()
             },
             seat: 0,
