@@ -26,3 +26,13 @@ and `a_bot_carries_its_catch_out_into_the_open_to_throw` (old: let go
 under the roof) fail on main and pass. bri-sim clippy `-D warnings`
 clean; showcase, portals, unlike_modes, carry_rules, script_api,
 vehicles, v20_events pass.
+
+## Jet chase (Max: bots only jetted straight up and down)
+
+- `Session::air_chase` (bots.rs): an enemy (seen, or last seen) at least
+  2.5 above and within 30 across, where its plan does not walk up to
+  them, is flown to: straight up first (v20 jets lift hardest with no
+  move), out from under anything overhead, then steering over once above
+  them and gliding down by them. Jet physics are unchanged.
+- Guard: `a_bot_jets_over_to_someone_above_it` (a floating platform 7
+  up, 11 across): fails before (the bot stood under it), passes now.

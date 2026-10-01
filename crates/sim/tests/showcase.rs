@@ -1377,6 +1377,54 @@ fn a_bot_carries_its_catch_out_into_the_open_to_throw() {
     );
 }
 
+/// Max, v0.1.11: a bot jetting after someone above it only went straight
+/// up and down. It steers toward them through the air as a player would,
+/// and comes down by them: here, onto a floating platform off to one side
+/// with no way up but the jets.
+#[test]
+fn a_bot_jets_over_to_someone_above_it() {
+    let mut world = bot_world();
+    for x in 9..=13 {
+        for z in -8..=-4 {
+            let id = world.next_brick_id;
+            world.bricks.insert(
+                id,
+                bri_world::Brick::new(
+                    bri_world::ContentRef::Resolved("brick".into()),
+                    [x as f32, 6.9, z as f32],
+                    1,
+                ),
+            );
+            world.next_brick_id += 1;
+        }
+    }
+    let mut g = Game::with(world);
+    g.s.set_bot_kinds(
+        bri_sim::bot_kind::BotPack::from_json(include_bytes!(
+            "../../../packages/blockhead_bot/assets/bots.json"
+        ))
+        .unwrap()
+        .bots,
+    )
+    .unwrap();
+    let builder = g.join_verified("Builder", Vec3::new(11.0, 7.25, -6.0), 1);
+    g.steps(30);
+    let bot = *g.s.names().keys().find(|o| g.s.is_bot(**o)).expect("a bot");
+    g.minigame(builder, &[]);
+    let mut nearest = f32::MAX;
+    for _ in 0..1800 {
+        g.steps(1);
+        let (b, p) = (g.feet(bot), g.feet(builder));
+        if b.y > 6.0 {
+            nearest = nearest.min(Vec3::new(b.x - p.x, 0.0, b.z - p.z).length());
+        }
+        if nearest < 3.0 {
+            return;
+        }
+    }
+    panic!("never flew over to them: nearest {nearest} while up there, bot at {}", g.feet(bot));
+}
+
 /// Max, v0.1.9: a held player spun round in the beam on the holder's
 /// screen while on their own they hung still. A tumbling player watches
 /// through the corpse camera, so their mouse turns nothing; their client

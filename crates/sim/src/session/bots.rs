@@ -52,6 +52,8 @@ const LIFT_TICKS: u64 = 90;
 const SWING_TICKS: u64 = 36;
 /// After a throw, how long before it grabs again.
 const REGRAB_TICKS: u64 = 120;
+/// Farthest across an enemy above may be for a bot to fly to them.
+const AIR_CHASE: f32 = 30.0;
 /// Open space for a throw: sky this far up, room this far all round.
 const OPEN_SKY: f32 = 16.0;
 const OPEN_ROOM: f32 = 6.0;
@@ -117,6 +119,14 @@ struct Brain {
     carry: Option<Carry>,
     /// No grabbing before this tick (just threw).
     next_grab: u64,
+}
+/// An enemy up where a bot flies to them ([`Session::air_chase`]).
+#[derive(Clone, Copy, Debug)]
+struct AirChase {
+    /// Where they stand.
+    to: Vec3,
+    /// Something just over the bot's head.
+    roofed: bool,
 }
 /// A bot holding something with a tool that holds (the Gravity Gun, or
 /// any tool whose trigger reaches and holds: `reach`, `hold`) carries it
@@ -612,6 +622,35 @@ impl Session {
             target: candidates.into_iter().find_map(|(_, owner)| visible(owner)),
         }
     }
+    /// Where a bot flies to reach its enemy (in sight, or last seen) well
+    /// above it, and how the air between lies.
+    fn air_chase(
+        &self,
+        brain: &Brain,
+        sight: &Sight,
+        feet: Vec3,
+        eye: Vec3,
+        grounded: bool,
+    ) -> Option<AirChase> {
+        let to = sight
+            .target
+            .map(|seen| seen.feet)
+            .or(brain.memory.map(|(at, _)| at))?;
+        // Taking off for someone well above; once up, until it is by them.
+        let above = to.y - feet.y;
+        let across = flat(to - feet).length();
+        let landed = !grounded && above < 0.5 && across < 1.0;
+        if across > AIR_CHASE || above < if grounded { 2.5 } else { -3.0 } || landed {
+            return None;
+        }
+        let clear = |from: Vec3, d: Vec3, length: f32| {
+            matches!(self.simulation.target(from, d, length), Ok(None))
+        };
+        Some(AirChase {
+            to,
+            roofed: !clear(eye, Vec3::Y, 3.0),
+        })
+    }
     /// Whether a body standing at `feet` has open sky above and room all
     /// round, to fling something.
     fn open_at(&self, feet: Vec3) -> bool {
@@ -791,6 +830,7 @@ impl Session {
         let grabbing = holding || self.is_reaching(bot);
         let carry_to = (holding && self.bots.brains[&bot].carry.is_none())
             .then(|| self.open_spot(feet));
+        let air = self.air_chase(&self.bots.brains[&bot], &sight, feet, eye, state.grounded);
         let target_velocity = sight.target.map_or(Vec3::ZERO, |seen| {
             self.peers.get(&seen.owner).map_or(Vec3::ZERO, |p| {
                 seen.way.seen_vector(Vec3::from(p.player.state().velocity))
@@ -1089,16 +1129,34 @@ impl Session {
                 direction -= forward;
             }
         }
+        // Someone up where no walk leads: jet up and over to them, as a
+        // player would, and come down by them.
+        let walks_there = |to: Vec3| {
+            brain
+                .plan
+                .last()
+                .is_some_and(|w| w.feet.y > to.y - body.step - 0.5)
+        };
+        if brain.carry.is_none()
+            && let Some(air) = air
+            && !walks_there(air.to)
+        {
+            // Jets lift hardest straight up and lean into the move, so it
+            // climbs first and then steers over, gliding down on them.
+            let toward = flat(air.to - feet);
+            input.jet = toward.length() > 1.0 || feet.y < air.to.y + 0.5;
+            direction = if air.roofed {
+                // Under something: out from under it first.
+                let away = -toward;
+                if away.length() > 0.1 { away.normalize() } else { forward }
+            } else if feet.y > air.to.y + 1.0 && toward.length() > 1.0 {
+                toward.normalize() * (toward.length() / 3.0).min(1.0)
+            } else {
+                Vec3::ZERO
+            };
+        }
         input.forward = direction.dot(forward).clamp(-1.0, 1.0);
         input.right = direction.dot(right).clamp(-1.0, 1.0);
-        if let Some(seen) = sight.target
-            && brain.carry.is_none()
-            && seen.eye.y - eye.y > 3.0
-            && flat(seen.eye - eye).length() < 20.0
-            && wanted.is_none()
-        {
-            input.jet = true;
-        }
         // Walking into something: hop, then plan again, then give up.
         let trying = input.forward != 0.0 || input.right != 0.0;
         if trying && moved < 0.01 {
