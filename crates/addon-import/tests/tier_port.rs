@@ -1897,11 +1897,11 @@ fn medic1_heals_over_time_and_the_syringe_recharges() {
             })
             .collect();
     assert!(
-        printed.contains(&(a, "\\c2B is patched up.".into(), 2.0, true)),
+        printed.contains(&(a, "\u{e002}B is patched up.".into(), 2.0, true)),
         "{printed:?}"
     );
     assert!(
-        printed.contains(&(b, "\\c2A patched you up.".into(), 2.0, true)),
+        printed.contains(&(b, "\u{e002}A patched you up.".into(), 2.0, true)),
         "{printed:?}"
     );
     let healed = g.health(b);
@@ -1944,11 +1944,11 @@ fn medic1_heals_over_time_and_the_syringe_recharges() {
             })
             .collect()
     };
-    assert!(centre(&mut g).contains(&"\\c0Booster still charging.".into()));
+    assert!(centre(&mut g).contains(&"\u{e000}Booster still charging.".into()));
     // Its notice comes 4 seconds after use, and then it heals again.
     g.probe(a, "hurt", vec![PackageArg::Float(20.0)]);
     g.steps(4 * 120);
-    assert!(centre(&mut g).contains(&"\\c2Booster ready.".into()));
+    assert!(centre(&mut g).contains(&"\u{e002}Booster ready.".into()));
     use_booster(&mut g);
     assert_eq!(g.health(a), 100.0, "80 and 25, up to the most");
     assert_eq!(
@@ -2532,4 +2532,47 @@ fn bank_shot(g: &mut Game, a: OwnerId, b: OwnerId) {
     g.steps(2);
     g.cmd(a, Command::WeaponTrigger { down: false });
     g.steps(60);
+}
+
+/// A copy whose required Add-On sits beside it in its folder, as v20's
+/// Add-Ons folder held them, reads it there when the reference (here none)
+/// lacks it: Tier 2's port applies with Tier 1 beside it.
+#[test]
+fn a_required_add_on_beside_the_copy_is_its_reference() {
+    let dir = Dir(std::env::temp_dir().join(format!("bri-tier-beside-{}", std::process::id())));
+    let _ = std::fs::remove_dir_all(&dir.0);
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ports");
+    fn copy(from: &Path, to: &Path) {
+        std::fs::create_dir_all(to).unwrap();
+        for e in std::fs::read_dir(from).unwrap().flatten() {
+            if e.path().is_dir() {
+                copy(&e.path(), &to.join(e.file_name()));
+            } else {
+                std::fs::copy(e.path(), to.join(e.file_name())).unwrap();
+            }
+        }
+    }
+    let import_tier2 = |out: &str| {
+        import(&Options {
+            input: dir.0.join("Add-Ons/Weapon_Package_Tier2"),
+            out: dir.0.join(out),
+            reference: None,
+            core: vec![],
+            installed: None,
+            version: "1.0.0".into(),
+        })
+        .unwrap()
+    };
+    copy(
+        &fixtures.join("Weapon_Package_Tier2"),
+        &dir.0.join("Add-Ons/Weapon_Package_Tier2"),
+    );
+    let alone = import_tier2("alone");
+    assert!(!alone.ports[0].applied, "applied without Tier 1");
+    copy(
+        &fixtures.join("Weapon_Package_Tier1"),
+        &dir.0.join("Add-Ons/Weapon_Package_Tier1"),
+    );
+    let beside = import_tier2("beside");
+    assert!(beside.ports[0].applied, "{:?}", beside.ports[0].reason);
 }

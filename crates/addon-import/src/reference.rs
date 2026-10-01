@@ -342,30 +342,72 @@ impl Reference {
             .collect();
         addons.sort();
         for path in addons {
-            let is_zip = path
-                .extension()
-                .is_some_and(|e| e.eq_ignore_ascii_case("zip"));
-            if !is_zip && !path.is_dir() {
-                continue;
-            }
-            let Ok(src) = source::read(&path) else {
-                continue;
-            };
-            r.addons
-                .insert(src.name.to_ascii_lowercase(), src.name.clone());
-            for (key, file) in &src.files {
-                r.files.insert(key.clone());
-                if key.ends_with(".cs") {
-                    let text = String::from_utf8_lossy(&file.bytes);
-                    r.requires
-                        .entry(src.name.to_ascii_lowercase())
-                        .or_default()
-                        .extend(required_addons(&text));
-                    r.add_script(&src.name, &text, &file.path);
-                }
-            }
+            r.add_addon(&path);
         }
         Ok(r)
+    }
+
+    /// Reads the Add-On at `path` (a folder or zip) into the reference, as
+    /// one of its install's Add-Ons. False when it is neither or unreadable.
+    pub fn add_addon(&mut self, path: &Path) -> bool {
+        let is_zip = path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("zip"));
+        if !is_zip && !path.is_dir() {
+            return false;
+        }
+        let Ok(src) = source::read(path) else {
+            return false;
+        };
+        self.addons
+            .insert(src.name.to_ascii_lowercase(), src.name.clone());
+        for (key, file) in &src.files {
+            self.files.insert(key.clone());
+            if key.ends_with(".cs") {
+                let text = String::from_utf8_lossy(&file.bytes);
+                self.requires
+                    .entry(src.name.to_ascii_lowercase())
+                    .or_default()
+                    .extend(required_addons(&text));
+                self.add_script(&src.name, &text, &file.path);
+            }
+        }
+        true
+    }
+
+    /// Adds the Add-Ons `required` names, and the ones they require in
+    /// turn, from `folder` (the one the imported copy is in, as v20's
+    /// Add-Ons folder held them side by side) where the reference lacks
+    /// them.
+    pub fn add_beside(&mut self, folder: &Path, required: &[String]) {
+        let Ok(entries) = std::fs::read_dir(folder) else {
+            return;
+        };
+        let near: Vec<std::path::PathBuf> = entries.flatten().map(|e| e.path()).collect();
+        let mut wanted: Vec<String> = required.iter().map(|a| a.to_ascii_lowercase()).collect();
+        let mut tried = std::collections::BTreeSet::new();
+        while let Some(a) = wanted.pop() {
+            if self.addons.contains_key(&a) || !tried.insert(a.clone()) {
+                continue;
+            }
+            let found = near.iter().find(|p| {
+                let name = p
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_ascii_lowercase());
+                name.as_deref() == Some(a.as_str()) || name == Some(format!("{a}.zip"))
+            });
+            if let Some(path) = found
+                && self.add_addon(path)
+            {
+                wanted.extend(
+                    self.requires
+                        .get(&a)
+                        .into_iter()
+                        .flatten()
+                        .map(|r| r.to_ascii_lowercase()),
+                );
+            }
+        }
     }
 
     /// The base game's sound that plays `file` (`base/data/sound/clickMove.wav`

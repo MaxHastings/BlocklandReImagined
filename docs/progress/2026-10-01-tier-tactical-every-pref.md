@@ -59,3 +59,12 @@ Event_AddAmmoTT (0/2 behaviours), Frogs Weaponry (0/110, 54 unsupported)
 and Frogs Weaponry WWII (0/24). No port exists for them, so they stay out
 of the bundle and nothing half-ported ships. Every preference of the
 finished packs is carried out; none is left for v0.1.12.
+
+Landing merge (Tier, Adventure and the bundle lane's Kai entries over
+batch174): `Pack::merge` reports Add-On problems, and the dependency-aware
+merge now does too. The bundle builder imports each copy on its own, so
+Tier 2 could not see the Tier 1 it requires and its port failed. The
+importer now reads a required Add-On it lacks from the folder beside the
+copy, as its hint already told players (`Reference::add_beside`; test
+`a_required_add_on_beside_the_copy_is_its_reference`). `bundled_in_game`,
+`bundle`, Tier and Adventure tests pass.

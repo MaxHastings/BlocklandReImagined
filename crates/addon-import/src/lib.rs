@@ -349,6 +349,16 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
         .filter(|(key, _)| key.ends_with(".cs"))
         .flat_map(|(_, f)| reference::required_addons(&String::from_utf8_lossy(&f.bytes)))
         .collect();
+    // One it requires that the reference lacks is looked for beside it.
+    if let Some(folder) = opts.input.parent() {
+        let here = Path::new(".");
+        let folder = if folder.as_os_str().is_empty() {
+            here
+        } else {
+            folder
+        };
+        reference.add_beside(folder, &required);
+    }
     reference.settle_for(&src.name, &required);
     let ns = namespace_for(&src.name)?;
     std::fs::create_dir_all(&opts.out)?;
