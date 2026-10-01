@@ -554,6 +554,9 @@ pub struct App {
     world_job: Option<WorldJob>,
     graphics: crate::graphics::Graphics,
     load_limit: Arc<tokio::sync::Semaphore>,
+    /// Host on a port the system picks instead of `$Pref::Server::Port`
+    /// ([`App::host_on_any_port`]).
+    host_any_port: bool,
     /// Rebuild GPU renderers before the next frame (the map changed).
     gpu_restart: bool,
     /// Map of the installed scene.
@@ -1626,6 +1629,25 @@ impl App {
         let state = self.motion.presented().get(&view.owner)?.clone();
         Some((state, self.local_eye()))
     }
+    /// How far the current host or join attempt has got: a number that
+    /// grows with every step of its loading, and None with no attempt. Waits
+    /// in tests watch it to tell a slow load from a stopped one.
+    /// Host the next games on a port the system picks, free when it is
+    /// bound, instead of `$Pref::Server::Port`; [`App::hosted_port`] says
+    /// which. For tests and tools that host side by side: a port picked
+    /// first and bound later can be taken in between.
+    pub fn host_on_any_port(&mut self) {
+        self.host_any_port = true;
+    }
+    /// The port this game's own server listens on, once it is connected.
+    pub fn hosted_port(&self) -> Option<u16> {
+        self.attempt.as_ref()?.worker.probes.get()?.host_port
+    }
+    pub fn loading_revision(&self) -> Option<u64> {
+        self.attempt
+            .as_ref()
+            .map(|a| a.progress.snapshot().revision)
+    }
     pub fn network_view(&self) -> Option<&network::View> {
         self.attempt
             .as_ref()
@@ -1898,6 +1920,7 @@ impl App {
             world_job: None,
             graphics,
             load_limit: Arc::new(tokio::sync::Semaphore::new(2)),
+            host_any_port: false,
             gpu_restart: false,
             scene_map: None,
             materials: None,
@@ -3212,6 +3235,7 @@ impl App {
             .ok()
             .filter(|p| *p != 0)
             .unwrap_or(bri_net::invite::DEFAULT_PORT);
+        let port = if self.host_any_port { 0 } else { port };
         self.disconnect();
         self.ui.apply_session(
             id,
@@ -10950,35 +10974,18 @@ mod tests {
             admin_password: "headless-admin-fixture".into(),
             super_admin_password: "headless-super-fixture".into(),
         });
-        let start = Instant::now();
-        let mut previous = start;
-        loop {
-            let now = Instant::now();
-            app.tick(now.duration_since(previous))?;
-            app.ui
-                .update(now.duration_since(previous).as_millis() as u64);
-            previous = now;
-            ensure!(app.pump()?.is_empty(), "Unexpected native window command");
-            if let ConnectionState::Failed { reason } = &app.ui.core.conn {
-                anyhow::bail!("Headless startup failed: {reason}");
-            }
-            if let Some(view) = app.network_view()
-                && let Some(inventory) = view.tools.get(&view.owner)
-            {
-                for (slot, expected) in bri_weapons::CORE_TOOLS[..3].iter().enumerate() {
-                    assert_eq!(inventory.slots[slot].as_deref(), Some(*expected));
-                }
-                break;
-            }
-            ensure!(
-                start.elapsed() < Duration::from_secs(90),
-                "Headless host timed out"
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        fn until(app: &mut App, ready: impl Fn(&App) -> bool) -> anyhow::Result<()> {
-            let start = Instant::now();
-            let mut previous = start;
+        // Waits follow the game, not the wall clock: one fails when the
+        // server has run ten seconds of game time without `ready`, or when
+        // neither loading nor the server has moved for two minutes (a stopped
+        // game, not a machine busy building something else).
+        fn until(app: &mut App, what: &str, ready: impl Fn(&App) -> bool) -> anyhow::Result<()> {
+            const TICKS: u64 = 1200;
+            const STALL: Duration = Duration::from_secs(120);
+            let moved = |app: &App| (app.loading_revision(), app.network_view().map(|v| v.tick));
+            let mut previous = Instant::now();
+            let mut seen = moved(app);
+            let mut since = previous;
+            let mut first_tick = None;
             loop {
                 let now = Instant::now();
                 app.tick(now.duration_since(previous))?;
@@ -10986,18 +10993,47 @@ mod tests {
                     .update(now.duration_since(previous).as_millis() as u64);
                 previous = now;
                 ensure!(app.pump()?.is_empty(), "Unexpected native window command");
+                if let ConnectionState::Failed { reason } = &app.ui.core.conn {
+                    anyhow::bail!("{what} failed: {reason}");
+                }
                 if ready(app) {
                     return Ok(());
                 }
+                let now_seen = moved(app);
+                if now_seen != seen {
+                    seen = now_seen;
+                    since = now;
+                }
+                let tick = seen.1;
+                first_tick = first_tick.or(tick);
                 ensure!(
-                    start.elapsed() < Duration::from_secs(10),
-                    "Inventory action timed out: {:?}",
+                    tick.zip(first_tick).is_none_or(|(t, f)| t - f < TICKS),
+                    "{what} timed out after {TICKS} server ticks: {:?}",
+                    app.ui.core.conn
+                );
+                ensure!(
+                    since.elapsed() < STALL,
+                    "{what} stopped advancing: {:?}",
                     app.ui.core.conn
                 );
                 std::thread::sleep(Duration::from_millis(10));
             }
         }
-        until(&mut app, |a| a.ui.core.admin.snapshot.is_some())?;
+        until(&mut app, "Headless host", |app| {
+            let Some(view) = app.network_view() else {
+                return false;
+            };
+            let Some(inventory) = view.tools.get(&view.owner) else {
+                return false;
+            };
+            for (slot, expected) in bri_weapons::CORE_TOOLS[..3].iter().enumerate() {
+                assert_eq!(inventory.slots[slot].as_deref(), Some(*expected));
+            }
+            true
+        })?;
+        until(&mut app, "Inventory action", |a| {
+            a.ui.core.admin.snapshot.is_some()
+        })?;
         assert_eq!(
             app.ui.core.admin.snapshot.as_ref().unwrap().role,
             bri_ui::models::admin::AdminRole::SuperAdmin
@@ -11017,14 +11053,14 @@ mod tests {
             bri_identity::ClientIdentity::load_or_create(state.join("client.identity"))?;
         let original_public_key = *stored_identity.public_key();
         app.ui.core.request(UiAction::OpenAdmin);
-        until(&mut app, |a| {
+        until(&mut app, "Inventory action", |a| {
             !a.ui.core.admin.busy() && a.ui.stack().contains(&ScreenId::Admin)
         })?;
         app.ui
             .core
             .admin_request(bri_ui::models::admin::AdminAction::RequestBrickGroups)
             .context("Host could not request original brick management list")?;
-        until(&mut app, |a| {
+        until(&mut app, "Inventory action", |a| {
             !a.ui.core.admin.busy() && a.pending_requests() == 0
         })?;
         assert!(app.ui.core.admin.groups.is_empty());
@@ -11032,7 +11068,7 @@ mod tests {
             .core
             .admin_request(bri_ui::models::admin::AdminAction::RequestBans)
             .context("Host could not request persistent ban list")?;
-        until(&mut app, |a| {
+        until(&mut app, "Inventory action", |a| {
             !a.ui.core.admin.busy() && a.pending_requests() == 0
         })?;
         assert!(app.ui.core.admin.bans.is_empty());
@@ -11048,7 +11084,7 @@ mod tests {
                 password: bri_ui::models::admin::AdminSecret("changed-admin-fixture".into()),
             })
             .context("Host could not change administrator password")?;
-        until(&mut app, |a| {
+        until(&mut app, "Inventory action", |a| {
             !a.ui.core.admin.busy() && a.pending_requests() == 0
         })?;
         assert!(app.ui.core.admin.status.contains("accepted"));
@@ -11068,7 +11104,7 @@ mod tests {
             IconRef::External(_)
         ));
         app.ui.core.request(UiAction::UseTool { slot: 2 });
-        until(&mut app, |a| {
+        until(&mut app, "Inventory action", |a| {
             a.network_view()
                 .is_some_and(|v| v.tools[&v.owner].selected == Some(2))
                 && a.pending_requests() == 0
@@ -11077,7 +11113,7 @@ mod tests {
         let ui_name = |app: &App, id: &str| app.content.weapons.pack.items[id].ui_name.clone();
         assert_eq!(app.ui.core.hud.tool_name, ui_name(&app, bri_weapons::PRINTER));
         app.ui.core.request(UiAction::UseTool { slot: 1 });
-        until(&mut app, |a| {
+        until(&mut app, "Inventory action", |a| {
             a.network_view()
                 .is_some_and(|v| v.tools[&v.owner].selected == Some(1))
                 && a.pending_requests() == 0
@@ -11155,7 +11191,7 @@ mod tests {
         );
         assert!(animations.is_empty());
         app.ui.core.request(UiAction::Game(GameAction::DropTool));
-        until(&mut app, |a| {
+        until(&mut app, "Inventory action", |a| {
             a.network_view()
                 .is_some_and(|v| v.tools[&v.owner].slots[1].is_none())
                 && a.pending_requests() == 0

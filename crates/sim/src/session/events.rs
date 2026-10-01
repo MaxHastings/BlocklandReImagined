@@ -118,6 +118,10 @@ pub struct EventWork {
     /// Rows waiting after the tick, and those already due.
     pub pending: usize,
     pub due_pending: usize,
+    /// Brick programs installed before the phase ran: the bricks edited
+    /// since the last one, or every brick with events on a session's first
+    /// phase unless [`Session::prepare_events`] already did that.
+    pub installed: usize,
     /// Wall time the phase took, for benchmarks and the watchdog only.
     pub elapsed_us: u64,
 }
@@ -367,9 +371,20 @@ impl Session {
         }
     }
     /// Keep engine programs in step with changed bricks.
-    pub(in crate::session) fn sync_event_programs(&mut self, changed: &BTreeSet<BrickId>) {
+    /// Install every brick's event program now; returns how many bricks
+    /// were looked at. A session owes this whole-world scan to its first
+    /// event phase (and again after the colorset changes size). A host runs
+    /// it before it starts serving, or on the map loader's thread, so a big
+    /// world with events does not stall the first tick that also answers
+    /// joins.
+    pub fn prepare_events(&mut self) -> usize {
+        self.sync_event_programs(&BTreeSet::new())
+    }
+    /// Install the programs of `changed` bricks, or of every brick when the
+    /// world has not been scanned yet; returns how many bricks were looked at.
+    pub(in crate::session) fn sync_event_programs(&mut self, changed: &BTreeSet<BrickId>) -> usize {
         if self.events.world.is_none() {
-            return;
+            return 0;
         }
         self.follow_palette();
         let ids: Vec<BrickId> = if self.events.scanned {
@@ -378,9 +393,11 @@ impl Session {
             self.events.scanned = true;
             self.simulation.state().bricks.keys().copied().collect()
         };
+        let count = ids.len();
         for brick in ids {
             self.install_program(brick);
         }
+        count
     }
     /// Fire an input on a brick. `player` supplies the Player/Bot, Client
     /// and MiniGame targets the input exposes.
@@ -563,7 +580,7 @@ impl Session {
     }
     /// One event phase per tick, after gameplay has fired this tick's inputs.
     pub(super) fn step_events(&mut self, changed: &BTreeSet<BrickId>) -> Result<()> {
-        self.sync_event_programs(changed);
+        let installed = self.sync_event_programs(changed);
         let tick = self.simulation.state().tick;
         let due: Vec<BrickId> = self
             .events
@@ -593,6 +610,7 @@ impl Session {
                 busiest_owner_cost: report.scopes.values().map(|s| s.cost).max().unwrap_or(0),
                 pending: report.pending,
                 due_pending: report.due_pending,
+                installed,
                 elapsed_us: elapsed.as_micros() as u64,
             };
             if elapsed > EVENT_WATCHDOG {

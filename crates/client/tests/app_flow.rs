@@ -15,13 +15,15 @@ use bri_ui::{
 };
 use std::{
     path::Path,
-    thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 #[macro_use]
 mod support;
-use support::content_root::{ContentRoot, RAIN};
+use support::{
+    content_root::{ContentRoot, RAIN},
+    wait,
+};
 
 synthetic_and_content!(ContentRoot: native_weather_map_settings_render_and_disconnect);
 
@@ -48,78 +50,27 @@ fn step(app: &mut App, elapsed: Duration) -> Result<()> {
 
 /// How much game time a wait may take before it counts as a hang. The waits
 /// end on what they wait for; this bound only catches a hang, so it sits far
-/// past what the slowest step takes. It is counted in server ticks: under the
-/// gate's load the hosted server skips missed ticks (`MissedTickBehavior::Skip`)
-/// and the client drops time on long frames (`motion::MAX_STEPS`), so game
-/// time runs slower than wall time, and a wall-clock bound can fail a slow
-/// but healthy run.
+/// past what the slowest step takes ([`wait::until`]).
 const HANG: Duration = Duration::from_secs(300);
-/// Server ticks per second of game time.
-const TICK_HZ: u64 = 120;
 
-/// What shows the game is still moving: the newest server tick seen, and the
-/// loader's stage and progress before there is a game.
-fn progress(app: &App) -> (Option<u64>, Option<(String, u32)>) {
-    let loading = match &app.ui.core.conn {
-        ConnectionState::Loading {
-            status, progress, ..
-        } => Some((status.clone(), progress.to_bits())),
-        _ => None,
-    };
-    (app.network_view().map(|v| v.tick), loading)
-}
-
-/// Step the app until `ready` holds. It fails once `HANG` of game time has
-/// passed in game without it, or once nothing has advanced (no new server
-/// tick, no loading progress) for `HANG` of wall time: a stopped game, not a
-/// slow one.
+/// Step the app until `ready` holds, with `HANG` of game time to spare.
 fn until(app: &mut App, what: &str, ready: impl Fn(&App) -> bool) -> Result<()> {
-    let mut previous = Instant::now();
-    let mut seen = progress(app);
-    let mut advanced = previous;
-    let mut game_ticks = 0;
-    loop {
-        let now = Instant::now();
-        step(app, now.duration_since(previous))?;
-        previous = now;
-        if ready(app) {
-            return Ok(());
-        }
-        let latest = progress(app);
-        if latest != seen {
-            // A rehost starts a new server from tick 0: only forward steps count.
-            if let (Some(before), Some(after)) = (seen.0, latest.0) {
-                game_ticks += after.saturating_sub(before);
-            }
-            seen = latest;
-            advanced = now;
-        }
-        let hung = if game_ticks >= HANG.as_secs() * TICK_HZ {
-            Some("its game time ran out")
-        } else if advanced.elapsed() >= HANG {
-            Some("the game stopped advancing")
-        } else {
-            None
-        };
-        if let Some(hung) = hung {
-            bail!(
-                "Timed out waiting for {what}: {hung}; screens {:?}; tools {:?}; state {:?}; world bricks {:?}; pending {}; ghost {:?}; dialogs {:?}",
-                app.ui.stack(),
-                app.network_view()
-                    .and_then(|v| v.tools.get(&v.owner).cloned()),
-                app.ui.core.conn,
-                app.network_view().map(|v| v.world.bricks.len()),
-                app.pending_requests(),
-                app.building().and_then(|b| b.ghost()),
-                app.ui.screen(ScreenId::MessageBox).map(|s| s
-                    .view()
-                    .walk()
-                    .map(|n| s.view().text_of(n))
-                    .collect::<Vec<_>>())
-            );
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
+    wait::until_one(app, what, HANG, step, ready).map_err(|error| {
+        anyhow::anyhow!(
+            "{error:#}; screens {:?}; tools {:?}; world bricks {:?}; pending {}; ghost {:?}; dialogs {:?}",
+            app.ui.stack(),
+            app.network_view()
+                .and_then(|v| v.tools.get(&v.owner).cloned()),
+            app.network_view().map(|v| v.world.bricks.len()),
+            app.pending_requests(),
+            app.building().and_then(|b| b.ghost()),
+            app.ui.screen(ScreenId::MessageBox).map(|s| s
+                .view()
+                .walk()
+                .map(|n| s.view().text_of(n))
+                .collect::<Vec<_>>())
+        )
+    })
 }
 
 fn host(app: &mut App, name: &str) -> RequestId {
@@ -562,12 +513,23 @@ fn native_host_cancel_rehost_chat_compositor_disconnect_and_settings() -> Result
     );
 
     action(&mut app, UiAction::UseTool { slot: 2 })?;
-    until(&mut app, "authoritative printer slot replicated", |a| {
-        let view = a.network_view().unwrap();
-        view.tools.get(&view.owner).is_some_and(|tools| {
-            tools.selected == Some(2) && tools.slots[2].as_deref() == Some("v20.weapon.printgun")
-        })
-    })?;
+    // Drawn and ready: a click while the image is still activating waits on
+    // the trigger, and a loaded machine can stretch that past the click.
+    until(
+        &mut app,
+        "authoritative printer slot replicated and ready",
+        |a| {
+            let view = a.network_view().unwrap();
+            view.tools.get(&view.owner).is_some_and(|tools| {
+                tools.selected == Some(2)
+                    && tools.slots[2].as_deref() == Some("v20.weapon.printgun")
+            }) && view
+                .weapons
+                .images
+                .get(&view.owner)
+                .is_some_and(|images| images.iter().any(|i| i.state == "Ready"))
+        },
+    )?;
     action(
         &mut app,
         UiAction::Game(GameAction::Look {

@@ -25,13 +25,12 @@ use glam::Vec3;
 use std::{
     f32::consts::{PI, TAU},
     path::PathBuf,
-    thread,
     time::{Duration, Instant},
 };
 
 #[macro_use]
 mod support;
-use support::content_root::ContentRoot;
+use support::{content_root::ContentRoot, wait};
 
 synthetic_and_content!(
     ContentRoot: single_player_pickup_leaves_a_ghost_until_the_item_respawns,
@@ -66,45 +65,26 @@ fn seen_tick(apps: &[&mut App]) -> Option<u64> {
         .into_iter()
         .min()
 }
-/// A wait that stops advancing for this many times its budget of wall time
-/// has a stopped game, not a slow one.
-const STALLED: u32 = 20;
 /// Step every app until `ready` holds. `apps[0]` is the acting player.
-/// `budget` is game time: once every app is in game it counts the server
-/// ticks all of them have seen, so a loaded machine that slows the game and
-/// the clients stretches the wait with them. Before that (loading, joining)
-/// it is wall time.
+/// `budget` is game time once every app is in game ([`wait::until`]).
 fn until(
     apps: &mut [&mut App],
     what: &str,
     budget: Duration,
     ready: impl Fn(&[&mut App]) -> bool,
 ) -> Result<()> {
-    let start = Instant::now();
-    let mut previous = start;
-    let mut first_tick = None;
-    loop {
-        let now = Instant::now();
-        for app in apps.iter_mut() {
-            step(app, now.duration_since(previous))?;
-        }
-        previous = now;
-        if ready(apps) {
-            return Ok(());
-        }
-        let tick = seen_tick(apps);
-        first_tick = first_tick.or(tick);
-        let spent = match (first_tick, tick) {
-            (Some(first), Some(tick)) => tick - first >= ticks(budget.as_millis() as u32),
-            _ => start.elapsed() >= budget,
-        };
-        ensure!(!spent, "Timed out waiting for {what}");
-        ensure!(
-            start.elapsed() < budget * STALLED + Duration::from_secs(60),
-            "Timed out waiting for {what}: the game stopped advancing"
-        );
-        thread::sleep(Duration::from_millis(10));
-    }
+    wait::until(
+        apps,
+        what,
+        budget,
+        |apps, elapsed| {
+            for app in apps.iter_mut() {
+                step(app, elapsed)?;
+            }
+            Ok(())
+        },
+        |apps| Ok(ready(apps)),
+    )
 }
 /// Let `time` of game time pass (server ticks every app has seen).
 fn run_for(apps: &mut [&mut App], time: Duration) -> Result<()> {

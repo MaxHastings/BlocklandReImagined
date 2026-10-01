@@ -559,7 +559,7 @@ pub fn start_with_admin_store_and_limit(
     start_configured(session, options, max_players, Some(store), true)
 }
 fn start_configured(
-    session: Session,
+    mut session: Session,
     options: ServerOptions,
     max_players: usize,
     admin_store: Option<AdminStore>,
@@ -598,6 +598,10 @@ fn start_configured(
     }));
     let perf = Arc::new(Mutex::new(ServerPerf::default()));
     let traffic = Arc::new(Traffic::default());
+    // The whole-world event scan runs here, before anyone can connect: on
+    // the first tick it would hold the server's loop, and the handshakes
+    // waiting behind it, for as long as a big world takes.
+    session.prepare_events();
     let task = tokio::spawn(run(
         players.clone(),
         perf.clone(),
@@ -1364,7 +1368,7 @@ async fn run(
                         match options.map_loader.clone() {
                             Some(loader)=>{let tx=map_tx.clone();tokio::task::spawn_blocking(move||{
                                 // A loader that panics still answers the administrator.
-                                let loaded=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||loader.load(&map))).unwrap_or_else(|panic|Err(anyhow::anyhow!("Loading the map failed: {}",panic_message(&*panic))));
+                                let loaded=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||loader.load(&map).map(|mut new|{new.prepare_events();new}))).unwrap_or_else(|panic|Err(anyhow::anyhow!("Loading the map failed: {}",panic_message(&*panic))));
                                 let _=tx.blocking_send((admin,loaded));});}
                             None=>session.map_change_failed(admin,"This host cannot change maps"),
                         }
