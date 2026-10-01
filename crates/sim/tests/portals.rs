@@ -561,7 +561,7 @@ mod vehicles {
     use std::collections::BTreeMap;
 
     const BALL: &str = "steel-ball-kit:vehicle/steelball";
-    const PLANE: &str = "vehicle_stunt_plane:vehicle/stuntplanevehicle";
+    const PLANE: &str = "test_plane:vehicle/standinplane";
     const JEEP: &str = "steel-ball-kit:vehicle/jeepbox";
     const TANK: &str = "steel-ball-kit:vehicle/tankbox";
 
@@ -598,12 +598,12 @@ mod vehicles {
         pack
     }
 
-    /// The Stunt Plane Add-On's plane: 9 across the wings, though only
-    /// its body (1.8 wide) collides, as in v20.
+    /// A stand-in plane the Stunt Plane's size: 9 across the wings, though
+    /// only its body (1.8 wide) collides, as in v20.
     fn planes() -> Pack {
         Pack::load(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../packages/imported/vehicle_stunt_plane/assets/vehicles.json"
+            "/../vehicles/tests/fixtures/stand-in-plane/vehicles.json"
         ))
         .unwrap()
     }

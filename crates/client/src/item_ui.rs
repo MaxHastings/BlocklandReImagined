@@ -8,6 +8,8 @@ const ICON_BASE: u64 = 0x4954_0000;
 pub struct ItemUi {
     catalog: BTreeMap<String, ToolInfo>,
     icons: BTreeMap<u64, SceneImage>,
+    /// Icons still being drawn from their models, shown when they are.
+    drawing: Vec<(u64, crate::items::DrawnIcon)>,
     uploaded: bool,
 }
 impl ItemUi {
@@ -23,15 +25,26 @@ impl ItemUi {
         ensure!(names.len() <= 1024, "Item HUD catalog budget exceeded");
         let mut catalog = BTreeMap::new();
         let mut icons = BTreeMap::new();
+        let mut drawing = Vec::new();
         // Native stable-ID ordering makes resource IDs independent of display sorting.
         let ordered: BTreeMap<_, _> = names.iter().cloned().collect();
         ensure!(ordered.len() == names.len(), "Duplicate HUD item ID");
         for (index, (id, name)) in ordered.into_iter().enumerate() {
             let item = assets.presentation.items.get(&id);
             let image = item.and_then(|_| assets.icon(&id).ok().flatten());
+            let key = ICON_BASE + index as u64;
+            let pending = item
+                .and_then(|_| assets.drawn_icon(&id))
+                .filter(|slot| slot.get().is_none());
+            if let Some(slot) = pending.clone() {
+                drawing.push((key, slot));
+            }
             let icon = if let Some(image) = image {
-                let key = ICON_BASE + index as u64;
                 icons.insert(key, image.clone());
+                IconRef::External(key)
+            } else if pending.is_some() {
+                // Nothing to show until it is drawn.
+                icons.insert(key, SceneImage { label: id.clone(), width: 1, height: 1, rgba: vec![0; 4], srgb: false });
                 IconRef::External(key)
             } else {
                 // Vanilla handleItemPickup falls back to the item's first-letter print.
@@ -69,6 +82,7 @@ impl ItemUi {
         Ok(Self {
             catalog,
             icons,
+            drawing,
             uploaded: false,
         })
     }
@@ -78,7 +92,27 @@ impl ItemUi {
     pub fn gpu_stopped(&mut self) {
         self.uploaded = false;
     }
+    /// Take the icons drawn since the last call; true when there were any.
+    pub fn take_drawn(&mut self) -> bool {
+        let before = self.drawing.len();
+        let icons = &mut self.icons;
+        self.drawing.retain(|(key, slot)| match slot.get() {
+            Some(image) => {
+                icons.insert(*key, image.clone());
+                false
+            }
+            None => true,
+        });
+        let changed = self.drawing.len() != before;
+        if changed {
+            self.uploaded = false;
+        }
+        changed
+    }
     pub fn register_icons(&mut self, frame: &mut crate::platform::RenderContext<'_>) {
+        if !self.drawing.is_empty() {
+            self.take_drawn();
+        }
         if self.uploaded {
             return;
         }
@@ -126,6 +160,27 @@ impl ItemUi {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// An icon still being drawn replaces the slot's stand-in once it is,
+    /// and the icons are uploaded again.
+    #[test]
+    fn a_drawn_icon_replaces_its_stand_in() {
+        let blank = SceneImage { label: "x".into(), width: 1, height: 1, rgba: vec![0; 4], srgb: false };
+        let slot = crate::items::DrawnIcon::default();
+        let mut ui = ItemUi {
+            catalog: BTreeMap::new(),
+            icons: BTreeMap::from([(ICON_BASE, blank)]),
+            drawing: vec![(ICON_BASE, slot.clone())],
+            uploaded: true,
+        };
+        assert!(!ui.take_drawn(), "not drawn yet");
+        assert!(ui.uploaded);
+        let drawn = SceneImage { label: "x".into(), width: 2, height: 1, rgba: vec![9; 8], srgb: false };
+        slot.set(drawn.clone()).unwrap();
+        assert!(ui.take_drawn());
+        assert_eq!(ui.icons[&ICON_BASE].rgba, drawn.rgba);
+        assert!(!ui.uploaded && ui.drawing.is_empty());
+        assert!(!ui.take_drawn(), "only once");
+    }
     #[test]
     #[ignore = "requires native item pack003; model-only, no GPU/window/audio"]
     fn all_native_item_names_icons_and_source_tints() -> Result<()> {

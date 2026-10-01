@@ -139,56 +139,56 @@
    "collision_hulls": [
     [
      [
-      -1.0,
+      -0.9,
       0.0,
-      -2.0
+      -4.3
      ],
      [
-      1.0,
+      0.9,
       0.0,
-      -2.0
+      -4.3
      ],
      [
-      -1.0,
-      1.2,
-      -2.0
+      -0.9,
+      1.8,
+      -4.3
      ],
      [
-      1.0,
-      1.2,
-      -2.0
+      0.9,
+      1.8,
+      -4.3
      ],
      [
-      -1.0,
+      -0.9,
       0.0,
-      2.0
+      3.3
      ],
      [
-      1.0,
+      0.9,
       0.0,
-      2.0
+      3.3
      ],
      [
-      -1.0,
-      1.2,
-      2.0
+      -0.9,
+      1.8,
+      3.3
      ],
      [
-      1.0,
-      1.2,
-      2.0
+      0.9,
+      1.8,
+      3.3
      ]
     ]
    ],
    "bounds_min": [
-    -1.0,
+    -4.5,
     0.0,
-    -2.0
+    -4.3
    ],
    "bounds_max": [
-    1.0,
-    1.2,
-    2.0
+    4.5,
+    2.4,
+    3.3
    ],
    "mass": 200.0,
    "mass_center": [
@@ -197,9 +197,9 @@
     0.0
    ],
    "inertia_box": [
-    2.0,
-    1.2,
-    4.0
+    9.0,
+    2.4,
+    7.6
    ],
    "density": 1.0,
    "drag": 0.5,
@@ -268,10 +268,83 @@
    "protect_burn": false,
    "trails": [],
    "effects": {
-    "particles": [],
-    "emitters": []
+    "particles": [
+     {
+      "id": "test_plane:particle/smoke",
+      "texture": "base/data/particles/cloud",
+      "alpha_blend": false,
+      "lifetime": 0.5,
+      "lifetime_variance": 0.0,
+      "drag": 0.0,
+      "wind": 0.0,
+      "gravity": 0.0,
+      "inherited_velocity": 0.0,
+      "acceleration": 0.0,
+      "spin_degrees": 0.0,
+      "random_spin": [
+       0.0,
+       0.0
+      ],
+      "keys": [
+       {
+        "time": 0.0,
+        "color": [
+         1.0,
+         1.0,
+         1.0,
+         1.0
+        ],
+        "size": 0.1
+       },
+       {
+        "time": 1.0,
+        "color": [
+         1.0,
+         1.0,
+         1.0,
+         0.0
+        ],
+        "size": 0.1
+       }
+      ]
+     }
+    ],
+    "emitters": [
+     {
+      "id": "test_plane:emitter/smokeemitter",
+      "name": "",
+      "particles": [
+       "test_plane:particle/smoke"
+      ],
+      "period": 0.01,
+      "period_variance": 0.0,
+      "speed": 0.0,
+      "speed_variance": 0.0,
+      "offset": 0.0,
+      "offset_variance": 0.0,
+      "theta_degrees": [
+       0.0,
+       180.0
+      ],
+      "phi_rate_degrees": 0.0,
+      "phi_variance_degrees": 360.0,
+      "lifetime": 0.0,
+      "lifetime_variance": 0.0,
+      "orient": false,
+      "orient_on_velocity": true,
+      "override_advance": false,
+      "use_emitter_colors": false,
+      "use_emitter_sizes": false,
+      "use_placement_velocity": false,
+      "node_time_scale": 1.0,
+      "point_node_time_scale": 1.0
+     }
+    ]
    },
-   "authored": {},
+   "authored": {
+    "damageemitter[0]": "VehicleBurnEmitter",
+    "damageemitter[1]": "VehicleBurnEmitter"
+   },
    "adaptations": []
   }
  ],
