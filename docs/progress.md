@@ -8775,3 +8775,22 @@ test boxes now use these hull sizes. Sizes: 1x4x5 (players), 1x14x10
 (Steel Ball, jeep, tank), 1x20x12 (Stunt Plane); mirrors 1x4x5 and
 1x14x10. Still to confirm on the PC: where the turret's mount node puts
 it.
+
+### 2026-10-01 LAG icon
+
+v20's lag icon now shows on joined servers. The authored `LagIcon`
+(32x32 top-right, `lagIcon.png` from the player's own v20 `base/client/ui`,
+already copied by the UI import) was wired to `UiUpdate::Lagging`, which
+nothing sent. Torque's `GameConnection::detectLag` shows it once the server
+has sent nothing for `$Pref::Net::LagThreshold` (400 ms by default) and hides
+it on the next packet; `setLagIcon` skips "local" connections. The engine
+side is `bri_net::lag::LagWatch`: the client app samples the QUIC transport's
+received datagram count each frame (acknowledgements of the movement it sends
+every tick count, so an idle world never looks like lag) and posts the change.
+The game this process hosts never shows it. No wire or protocol change.
+The setLagIcon body and threshold source were inferred from the v20 function
+index, the stock pref default and Torque's engine; not checked against the
+decompiled script text.
+
+Tests: `bri-net lag::tests` (three deterministic cases with explicit
+instants) and `bri-ui runtime_input::lag_icon_shows_only_while_the_host_is_quiet`.

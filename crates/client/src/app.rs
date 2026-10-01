@@ -605,6 +605,8 @@ pub struct App {
     music_world: Option<Arc<bri_net::protocol::PublicWorld>>,
     /// Connection samples for the net graph and the expanded overlay.
     net_sampler: crate::perf::NetSampler,
+    /// Whether a joined host has gone quiet, for the lag icon.
+    lag_watch: bri_net::lag::LagWatch,
     /// When the performance overlay's slower figures are next refreshed.
     perf_stats_due: std::time::Instant,
     gpu_name: String,
@@ -1797,6 +1799,7 @@ impl App {
             tumble: None,
             music_world: None,
             net_sampler: Default::default(),
+            lag_watch: Default::default(),
             perf_stats_due: std::time::Instant::now(),
             gpu_name: String::new(),
             gpu_passes: Vec::new(),
@@ -2513,6 +2516,36 @@ impl App {
                 .pose_with_animation(avatar_assets, &state, animation_time, &input)?;
         }
         Ok(())
+    }
+    /// v20's lag icon (`GameConnection::setLagIcon`): shown while a joined
+    /// host has sent nothing for `$Pref::Net::LagThreshold` ms. Never for the
+    /// game this process hosts, which v20 skips as a "local" connection.
+    fn update_lag(&mut self) {
+        let joined = self
+            .attempt
+            .as_ref()
+            .filter(|a| a.entered)
+            .and_then(|a| Some((a.id, a.worker.probes.get()?)))
+            .filter(|(_, p)| p.host.is_none());
+        let Some((id, probes)) = joined else {
+            if self.lag_watch.lagging() {
+                self.ui.apply(UiUpdate::Lagging(false));
+            }
+            self.lag_watch.reset();
+            return;
+        };
+        let default = bri_net::lag::DEFAULT_LAG_THRESHOLD.as_millis() as i64;
+        let threshold = self
+            .ui
+            .core
+            .prefs
+            .i64_or("$Pref::Net::LagThreshold", default)
+            .clamp(1, 60_000);
+        self.lag_watch.set_threshold(Duration::from_millis(threshold as u64));
+        let received = probes.link.received();
+        if let Some(lagging) = self.lag_watch.observe(std::time::Instant::now(), received) {
+            self.ui.apply_session(id, UiUpdate::Lagging(lagging));
+        }
     }
     /// Feed the net graph and performance overlay while they show; nothing
     /// is sampled while both are hidden.
@@ -6573,6 +6606,7 @@ impl PlatformApp for App {
         }
         self.update_combat_presentation();
         self.update_perf();
+        self.update_lag();
         if let Some((request, _, receiver)) = &self.add_on_import
             && let Some(result) = finished(receiver, "Add-On import")
         {
