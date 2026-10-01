@@ -20,6 +20,8 @@
 //! What a moved object then hits is credited to whoever moved it for a few
 //! seconds, so a thrown tank that lands on someone is the thrower's kill.
 use bri_package_runtime::ops;
+
+mod perform;
 use super::*;
 use bri_package_runtime::ops::{MAX_HOLD_DISTANCE, ObjectRef, PLAYER_MASS};
 use bri_package_runtime::script::{HoldView, ObjectView, TetherView};
@@ -710,341 +712,29 @@ impl Session {
 
     /// Apply one of the `physics` operations. `caller` is the player whose
     /// command asked, who must be allowed to move what they move.
+    /// For a `physics` operation: the player whose command asked
+    /// (`caller`), or else the player it acts for (`by`), must be allowed
+    /// to move `target`.
+    pub(super) fn ensure_may_move(
+        &self,
+        caller: Option<OwnerId>,
+        target: ObjectRef,
+        by: Option<OwnerId>,
+    ) -> Result<()> {
+        if let Some(mover) = caller.or(by) {
+            ensure!(
+                self.may_move(mover, target),
+                "Player {mover} may not move {target} under the minigame and trust rules"
+            );
+        }
+        Ok(())
+    }
     /// Whether `definition` is `package`'s own or an Add-On's it depends on.
     fn owns_kind(&self, package: &str, definition: &str) -> bool {
         let namespace = definition.split(':').next().unwrap_or_default();
         self.packages
             .as_ref()
             .is_some_and(|host| host.catalog.uses(package, namespace))
-    }
-    pub(super) fn apply_physics_op(
-        &mut self,
-        package: &str,
-        op: bri_package_runtime::Op,
-        caller: Option<OwnerId>,
-    ) -> Result<()> {
-        use bri_package_runtime::Op;
-        let allowed = |s: &Self, target: ObjectRef, by: Option<OwnerId>| -> Result<()> {
-            if let Some(mover) = caller.or(by) {
-                ensure!(
-                    s.may_move(mover, target),
-                    "Player {mover} may not move {target} under the minigame and trust rules"
-                );
-            }
-            Ok(())
-        };
-        match op {
-            Op::Push(ops::Push {
-                target,
-                velocity,
-                by,
-            }) => {
-                let by = by.filter(|b| self.peers.contains_key(b));
-                // Anyone living may shove themselves, as v20's setVelocity
-                // on a shot's own shooter did (a round turned back on them).
-                let own = caller.or(by).is_some_and(|mover| {
-                    target == ObjectRef::Player(mover)
-                        && self.peers.get(&mover).is_some_and(|p| p.combat.alive)
-                });
-                if !own {
-                    allowed(self, target, by)?;
-                }
-                let velocity = Vec3::from(velocity);
-                self.push_object(target, velocity)?;
-                if let Some(by) = by.or(caller) {
-                    self.credit(target, by);
-                }
-                Ok(())
-            }
-            Op::Tumble(ops::Tumble {
-                player,
-                velocity,
-                by,
-                seconds,
-            }) => {
-                let by = by.filter(|b| self.peers.contains_key(b));
-                let target = ObjectRef::Player(player);
-                allowed(self, target, by)?;
-                let peer = self.peers.get(&player).context("No such player")?;
-                ensure!(peer.combat.alive, "Only living players tumble");
-                let velocity = Vec3::from(velocity);
-                match self.ridden(player) {
-                    // Already tumbling: fling the tumble.
-                    Some(v)
-                        if self.vehicles.mounted_family(player) == Some(veh::Family::Tumble) =>
-                    {
-                        self.push_object(
-                            ObjectRef::Vehicle(v.0),
-                            velocity - self.object_velocity(target).unwrap_or_default(),
-                        )?;
-                    }
-                    Some(_) => anyhow::bail!("A seated player cannot tumble"),
-                    None => {
-                        self.tumble_player(player, velocity)?;
-                    }
-                }
-                if let Some(seconds) = seconds
-                    && let Some(v) = self.ridden(player)
-                    && self.vehicles.mounted_family(player) == Some(veh::Family::Tumble)
-                    && let Some(world) = &mut self.vehicles.world
-                {
-                    world.set_tumble_ticks(veh::VehicleId(v.0), (seconds * 120.0).round() as u64)?;
-                }
-                if let Some(by) = by.or(caller) {
-                    self.credit(target, by);
-                    if let Some(v) = self.ridden(player) {
-                        self.credit(ObjectRef::Vehicle(v.0), by);
-                    }
-                }
-                Ok(())
-            }
-            Op::Hold(ops::Hold {
-                player,
-                target,
-                distance,
-                at,
-                force,
-                turn,
-            }) => {
-                ensure!(
-                    caller.is_none_or(|c| c == player),
-                    "A player holds things only by their own command"
-                );
-                self.start_hold(player, target, distance, at, force, turn)
-            }
-            Op::Reach(ops::Reach {
-                player,
-                distance,
-                near,
-                force,
-                turn,
-            }) => {
-                ensure!(
-                    caller.is_none_or(|c| c == player),
-                    "A player reaches only by their own command"
-                );
-                let peer = self.peers.get(&player).context("No such player")?;
-                ensure!(peer.combat.alive, "Only living players hold things");
-                self.movables.reaching.insert(
-                    player,
-                    Reach {
-                        distance,
-                        near,
-                        force,
-                        turn,
-                    },
-                );
-                Ok(())
-            }
-            Op::HoldDistance(ops::HoldDistance { player, distance }) => {
-                ensure!(
-                    caller.is_none_or(|c| c == player),
-                    "A player reels in only by their own command"
-                );
-                if let Some(hold) = self.movables.holds.get_mut(&player) {
-                    hold.distance = distance;
-                }
-                Ok(())
-            }
-            Op::LetGo(ops::LetGo { player }) => {
-                self.movables.reaching.remove(&player);
-                if let Some(hold) = self.movables.holds.remove(&player) {
-                    self.set_down(hold.target);
-                }
-                Ok(())
-            }
-            Op::Tether(ops::Tether {
-                player,
-                anchor,
-                length,
-                brick,
-                reel,
-                swing,
-                object,
-                keys,
-                straight,
-            }) => {
-                ensure!(
-                    caller.is_none_or(|c| c == player),
-                    "A player is roped only by their own command"
-                );
-                ensure!(
-                    object != Some(ObjectRef::Player(player)),
-                    "A player cannot tie a rope to themselves"
-                );
-                let tie_object = match object {
-                    None => None,
-                    Some(target) => {
-                        ensure!(
-                            self.target_alive(target),
-                            "No living {target} to tie a rope to"
-                        );
-                        let in_body = !matches!(target, ObjectRef::Player(_))
-                            && self.held_body(target).is_some();
-                        let at = if in_body {
-                            let b = &self.simulation.physics.bodies
-                                [self.held_body(target).context("No body")?];
-                            b.position().rotation.inverse()
-                                * (Vec3::from(anchor) - b.center_of_mass())
-                        } else {
-                            Vec3::from(anchor)
-                                - self
-                                    .object_centre(target)
-                                    .with_context(|| format!("No {target} to tie a rope to"))?
-                        };
-                        Some((target, at, in_body))
-                    }
-                };
-                ensure!(!self.seated(player), "A seated player cannot be roped");
-                ensure!(
-                    self.ridden(player).is_none(),
-                    "A tumbling player cannot be roped"
-                );
-                if let Some(b) = brick {
-                    ensure!(
-                        self.simulation.state().bricks.contains_key(&b),
-                        "No brick {b} to tie a rope to"
-                    );
-                }
-                let peer = self.peers.get_mut(&player).context("No such player")?;
-                ensure!(peer.combat.alive, "Only living players are roped");
-                let grip = crate::player::Tether::grip(
-                    Vec3::from(peer.player.state().feet),
-                    peer.player.tuning(),
-                );
-                let spans = grip.distance(Vec3::from(anchor));
-                let length = length.unwrap_or(spans.max(crate::player::MIN_TETHER_LENGTH));
-                ensure!(
-                    spans <= length + TETHER_REACH,
-                    "A rope {length} long cannot reach that far"
-                );
-                peer.player.set_tether(Some(crate::player::Tether {
-                    anchor,
-                    length,
-                    target: length,
-                    reel: reel.unwrap_or(TETHER_REEL),
-                    swing: swing.unwrap_or(TETHER_SWING),
-                    drift: [0.0; 3],
-                    keys,
-                    winding: 0,
-                    straight,
-                }))?;
-                self.movables.tethers.insert(
-                    player,
-                    Tie {
-                        brick,
-                        object: tie_object,
-                    },
-                );
-                Ok(())
-            }
-            Op::TetherLength(ops::TetherLength { player, length }) => {
-                ensure!(
-                    caller.is_none_or(|c| c == player),
-                    "A player reels their rope only by their own command"
-                );
-                if let Some(peer) = self.peers.get_mut(&player)
-                    && let Some(mut tether) = peer.player.state().tether
-                {
-                    // The script takes over from the winch keys: letting go of
-                    // one later does not stop this reel.
-                    tether.target = length;
-                    tether.winding = 0;
-                    peer.player.set_tether(Some(tether))?;
-                }
-                Ok(())
-            }
-            Op::Untether(ops::Untether { player, keep }) => {
-                if let Some(keep) = keep
-                    && let Some(peer) = self.peers.get_mut(&player)
-                    && let Some(tether) = peer.player.state().tether
-                {
-                    // The grip slows them relative to what it was tied to.
-                    let drift = Vec3::from(tether.drift);
-                    let relative = Vec3::from(peer.player.state().velocity) - drift;
-                    peer.player.push(relative * (keep.clamp(0.0, 1.0) - 1.0));
-                }
-                self.untether(player);
-                Ok(())
-            }
-            Op::SpawnVehicle(ops::SpawnVehicle {
-                definition,
-                position,
-                yaw,
-                velocity,
-                owner,
-            }) => {
-                ensure!(
-                    self.owns_kind(package, &definition),
-                    "`{definition}` is not a vehicle of `{package}` or an Add-On it depends on"
-                );
-                let count = self
-                    .movables
-                    .spawned
-                    .values()
-                    .filter(|p| p.as_str() == package)
-                    .count();
-                ensure!(
-                    count < MAX_PACKAGE_VEHICLES,
-                    "`{package}` already has {MAX_PACKAGE_VEHICLES} vehicles out"
-                );
-                let owner = owner.filter(|o| self.peers.contains_key(o));
-                // Add-On vehicles count toward the server's vehicle limits.
-                if let Err(text) = self.vehicle_room(owner.unwrap_or(0), &definition) {
-                    if let Some(owner) = owner {
-                        self.notify(
-                            owner,
-                            Notice::Center {
-                                text: text.clone(),
-                                seconds: 2.0,
-                            },
-                        );
-                    }
-                    anyhow::bail!("{}", text.trim_start_matches('\u{E000}'));
-                }
-                let transform = veh::Transform {
-                    position,
-                    rotation: glam::Quat::from_rotation_y(-yaw).to_array(),
-                };
-                let id = self
-                    .spawn_transient(
-                        owner.unwrap_or(0),
-                        &definition,
-                        transform,
-                        Vec3::from(velocity),
-                        1.0,
-                    )
-                    .with_context(|| format!("`{definition}` could not spawn there"))?;
-                self.movables.spawned.insert(id.0, package.to_string());
-                if let Some(owner) = owner {
-                    self.credit(ObjectRef::Vehicle(id.0), owner);
-                }
-                Ok(())
-            }
-            Op::RemoveVehicle(ops::RemoveVehicle { vehicle }) => {
-                if self.movables.spawned.get(&vehicle).map(String::as_str) != Some(package) {
-                    // One of the Add-On's own kind from elsewhere (a spawn
-                    // brick): put away for the player it belongs to, or an
-                    // administrator.
-                    let found = self.vehicles.world.as_ref().and_then(|w| {
-                        w.vehicle_snapshot(&self.simulation.physics, VehicleId(vehicle))
-                    });
-                    let found = found.with_context(|| format!("No vehicle {vehicle}"))?;
-                    ensure!(
-                        self.owns_kind(package, &found.definition),
-                        "Vehicle {vehicle} is not `{package}`'s to remove"
-                    );
-                    let by = caller.context("Only a player's request removes a built vehicle")?;
-                    ensure!(
-                        found.owner.0 == by || self.is_administrator(by),
-                        "Vehicle {vehicle} is not player {by}'s"
-                    );
-                }
-                self.movables.spawned.remove(&vehicle);
-                self.remove_vehicle(VehicleId(vehicle))
-            }
-            other => anyhow::bail!("{other:?} is not a physics operation"),
-        }
     }
 
     /// `player` holds `target` `distance` from their eye (`Op::Hold`).

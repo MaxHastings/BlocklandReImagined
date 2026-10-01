@@ -7,11 +7,9 @@
 //! The engine owns the mechanisms (who is on which team, who may hurt whom,
 //! where a box is and who stands in it); the Add-On owns the policy (how
 //! many teams, what a flag does, what wins).
-use bri_package_runtime::ops;
 use super::*;
 use bri_minigames as mg;
 use bri_package_runtime::content::Behaviour;
-use bri_package_runtime::ops::GameRule;
 use bri_package_runtime::rhai::{ImmutableString, Map};
 use bri_package_runtime::script::{BrickView, MinigameView, TeamView};
 
@@ -699,196 +697,11 @@ impl Session {
         Ok(())
     }
 
-    /// Apply a mini-game operation an Add-On's rules asked for.
-    pub(in crate::session) fn apply_minigame_op(&mut self, op: Op) -> Result<()> {
-        let player_of = |s: &Self, owner: u64| -> Result<mg::PlayerId> {
-            Ok(s.peers.get(&owner).context("No such player")?.combat.player)
-        };
-        let effects = match op {
-            Op::SetTeams(ops::SetTeams {
-                game,
-                teams,
-                friendly_fire,
-                ally_same_color,
-            }) => {
-                let specs = teams
-                    .into_iter()
-                    .map(|t| {
-                        Ok(mg::TeamSpec {
-                            id: t
-                                .id
-                                .map(|id| u32::try_from(id).map(mg::TeamId))
-                                .transpose()
-                                .ok()
-                                .context("No such team")?,
-                            name: t.name,
-                            color: t.color,
-                        })
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                self.minigames
-                    .set_teams(mg::GameId(game), specs, friendly_fire, ally_same_color)
-                    .map_err(|e| anyhow::anyhow!("Teams rejected: {e}"))?
-                    .1
-            }
-            Op::SetTeam(ops::SetTeam { player, team }) => {
-                let target = player_of(self, player)?;
-                let team = team
-                    .map(|t| u32::try_from(t).map(mg::TeamId))
-                    .transpose()
-                    .ok()
-                    .context("No such team")?;
-                self.minigames
-                    .assign_team(target, team)
-                    .map_err(|e| anyhow::anyhow!("Team rejected: {e}"))?
-            }
-            Op::SetScore(ops::SetScore { player, value, add }) => {
-                let target = player_of(self, player)?;
-                let value = i32::try_from(value).context("Score out of range")?;
-                self.minigames
-                    .event_score(target, value, add)
-                    .map_err(|e| anyhow::anyhow!("Score rejected: {e}"))?
-            }
-            Op::ResetMinigame(ops::ResetMinigame { game }) => self
-                .minigames
-                .execute(mg::Command::Reset {
-                    game: mg::GameId(game),
-                    authority: mg::EventAuthority::System,
-                })
-                .map_err(|e| anyhow::anyhow!("Reset rejected: {e}"))?,
-            Op::EndRound(ops::EndRound {
-                game,
-                teams,
-                players,
-            }) => {
-                let teams = teams
-                    .into_iter()
-                    .map(|t| u32::try_from(t).map(mg::TeamId))
-                    .collect::<Result<Vec<_>, _>>()
-                    .ok()
-                    .context("No such team")?;
-                let players = players
-                    .into_iter()
-                    .map(|p| player_of(self, p))
-                    .collect::<Result<Vec<_>>>()?;
-                self.minigames
-                    .end_round(mg::GameId(game), teams, players)
-                    .map_err(|e| anyhow::anyhow!("Round end rejected: {e}"))?
-            }
-            Op::SetGameRule(ops::SetGameRule { game, rule }) => {
-                let game = mg::GameId(game);
-                let rejected = |e: mg::Error| anyhow::anyhow!("Mini-game rule rejected: {e}");
-                match rule {
-                    GameRule::Default(on) => {
-                        let now = self.minigames.default_game();
-                        let next = match (on, now) {
-                            (true, _) => Some(game),
-                            (false, Some(g)) if g == game => None,
-                            (false, other) => other,
-                        };
-                        self.minigames.set_default_game(next).map_err(rejected)?
-                    }
-                    GameRule::PaintColor(paint) => {
-                        self.minigames.set_paint_color(game, paint).map_err(rejected)?
-                    }
-                    GameRule::Region(region) => {
-                        self.minigames
-                            .set_region(game, region.map(|[min, max]| mg::Region { min, max }))
-                            .map_err(rejected)?;
-                        Vec::new()
-                    }
-                    GameRule::NameDistance(d) => {
-                        self.minigames.set_name_distance(game, d).map_err(rejected)?;
-                        Vec::new()
-                    }
-                    GameRule::KeepScores(keep) => {
-                        self.minigames.set_keep_scores(game, keep).map_err(rejected)?;
-                        Vec::new()
-                    }
-                    GameRule::Cleanup { leave } => {
-                        self.minigames
-                            .set_cleanup(game, mg::CleanupRules { leave })
-                            .map_err(rejected)?;
-                        Vec::new()
-                    }
-                    GameRule::ClaimsBricks(on) => {
-                        self.minigames.set_claims_bricks(game, on).map_err(rejected)?;
-                        Vec::new()
-                    }
-                    GameRule::Settings(patch) => {
-                        let current = &self.minigames.game(game).map_err(rejected)?.settings;
-                        let settings = patched_settings(current, &patch)?;
-                        self.minigames.host_configure(game, settings).map_err(rejected)?
-                    }
-                    GameRule::End => self.minigames.host_end(game).map_err(rejected)?,
-                }
-            }
-            Op::CreateMinigame(ops::CreateMinigame {
-                owner,
-                settings,
-                paint,
-            }) => {
-                let defaults = self.minigames.catalog().defaults.clone();
-                let settings = patched_settings(&defaults, &settings)?;
-                let color = *self
-                    .minigames
-                    .free_colors()
-                    .first()
-                    .context("Every mini-game colour is taken")?;
-                let (game, effects) = match owner {
-                    Some(owner) => {
-                        let actor = player_of(self, owner)?;
-                        let effects = self
-                            .minigames
-                            .execute(mg::Command::Create {
-                                actor,
-                                color,
-                                settings,
-                            })
-                            .map_err(|e| anyhow::anyhow!("Mini-game not made: {e}"))?;
-                        let game = self
-                            .minigames
-                            .player(actor)
-                            .ok()
-                            .and_then(|p| p.game)
-                            .context("No mini-game was made")?;
-                        (game, effects)
-                    }
-                    None => {
-                        let game = self
-                            .minigames
-                            .host_create_shared(color, settings)
-                            .map_err(|e| anyhow::anyhow!("Mini-game not made: {e}"))?;
-                        (game, vec![mg::Effect::Created { game }])
-                    }
-                };
-                let mut effects = effects;
-                if let Some(paint) = paint {
-                    effects.extend(
-                        self.minigames
-                            .set_paint_color(game, Some(paint))
-                            .map_err(|e| anyhow::anyhow!("Mini-game colour: {e}"))?,
-                    );
-                }
-                effects
-            }
-            Op::PlaceMember(ops::PlaceMember { player, game }) => {
-                let target = player_of(self, player)?;
-                self.minigames
-                    .host_place(target, game.map(mg::GameId))
-                    .map_err(|e| anyhow::anyhow!("Placing rejected: {e}"))?
-            }
-            Op::HoldRespawn(ops::HoldRespawn { player, held }) => {
-                let target = player_of(self, player)?;
-                self.minigames
-                    .hold_respawn(target, held)
-                    .map_err(|e| anyhow::anyhow!("Respawn hold rejected: {e}"))?;
-                Vec::new()
-            }
-            _ => unreachable!("not a mini-game operation"),
-        };
-        self.apply_minigame_effects(effects)
+    /// The mini-game player of connected player `owner`.
+    pub(super) fn minigame_player(&self, owner: u64) -> Result<mg::PlayerId> {
+        Ok(self.peers.get(&owner).context("No such player")?.combat.player)
     }
+
 }
 
 impl Session {
@@ -1042,7 +855,7 @@ impl Session {
 
 /// `current` with the fields of `patch` over it (`set_minigame`,
 /// `create_minigame`): a mini-game's own settings as JSON.
-fn patched_settings(current: &mg::Settings, patch: &serde_json::Value) -> Result<mg::Settings> {
+pub(super) fn patched_settings(current: &mg::Settings, patch: &serde_json::Value) -> Result<mg::Settings> {
     let mut json = serde_json::to_value(current)?;
     let (Some(fields), Some(over)) = (json.as_object_mut(), patch.as_object()) else {
         anyhow::bail!("mini-game settings are a map");
