@@ -49,9 +49,9 @@ across.
 map folders from the old game's `saves` folder (such as `Slate`) or single
 files. The game converts them in the background the next time it starts,
 or when you next open Load Bricks, and lists them under their map; loose
-files are under **Other**. Your original files are never changed. Saves in
-an old Blockland install under Program Files are listed too. A save that
-can't be converted is skipped and noted in the log.
+files are under **Other**. Your original files are never changed, and the
+game never looks anywhere else for saves: only what is in this folder is
+listed. A save that can't be converted is skipped and noted in the log.
 
 ## Playing together
 
