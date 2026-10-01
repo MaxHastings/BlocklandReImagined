@@ -348,7 +348,13 @@ fn drop_with(item: &str, options: Map) -> Fallible<()> {
         seconds,
     })
 }
-fn wear(player: Dynamic, image: Dynamic, slot: Dynamic, paint: Option<u8>) -> Fallible<()> {
+fn wear(
+    player: Dynamic,
+    image: Dynamic,
+    slot: Dynamic,
+    paint: Option<u8>,
+    keep: bool,
+) -> Fallible<()> {
     let slot = match slot.as_int() {
         Ok(s @ 2..=3) => s as u8,
         _ => {
@@ -368,6 +374,7 @@ fn wear(player: Dynamic, image: Dynamic, slot: Dynamic, paint: Option<u8>) -> Fa
             )
         },
         paint,
+        keep,
     })
 }
 
@@ -576,17 +583,36 @@ pub(super) fn register(engine: &mut Engine) {
     });
     engine.register_fn(
         "mount_image",
-        |p: Dynamic, image: Dynamic, slot: Dynamic| wear(p, image, slot, None),
+        |p: Dynamic, image: Dynamic, slot: Dynamic| wear(p, image, slot, None, false),
     );
+    // The fourth argument is a paint, or `#{ paint, keep }`: `keep: true`
+    // lets no other Add-On replace or take off the image while it is worn.
     engine.register_fn(
         "mount_image",
         |p: Dynamic, image: Dynamic, slot: Dynamic, paint: Dynamic| {
+            if let Some(options) = paint.clone().try_cast::<Map>() {
+                for key in options.keys() {
+                    if !matches!(key.as_str(), "paint" | "keep") {
+                        return fail(format!("mount_image takes `paint` and `keep`, not `{key}`"));
+                    }
+                }
+                let paint = match options.get("paint") {
+                    None => None,
+                    Some(p) if p.is_unit() => None,
+                    Some(p) => Some(palette_index(p)?),
+                };
+                let keep = match options.get("keep") {
+                    None => false,
+                    Some(k) => k.as_bool().map_err(|_| "`keep` is true or false")?,
+                };
+                return wear(p, image, slot, paint, keep);
+            }
             let paint = if paint.is_unit() {
                 None
             } else {
                 Some(palette_index(&paint)?)
             };
-            wear(p, image, slot, paint)
+            wear(p, image, slot, paint, false)
         },
     );
     // Every brick of one kind, lowest id first, at most MAX_BRICKS_LISTED.

@@ -93,7 +93,7 @@ fn content(root: &Path) -> (Arc<Catalog>, bri_weapons::Pack) {
         probe.join("package.json"),
         r#"{ "schema_version": 1, "id": "probe", "version": "1.0.0", "api": 1,
              "name": "Probe", "license": "CC0-1.0",
-             "capabilities": ["player", "brick_events"],
+             "capabilities": ["player", "brick_events", "world.edit"],
              "provides": [
                { "kind": "behaviour", "id": "probe:behaviour/main", "file": "behaviour.json" },
                { "kind": "script", "id": "probe:script/main", "file": "probe.rhai" } ] }"#,
@@ -106,7 +106,9 @@ fn content(root: &Path) -> (Arc<Catalog>, bri_weapons::Pack) {
              "commands": [ { "name": "goto", "args": ["float", "float", "float"] },
                            { "name": "colour", "while_dead": true },
                            { "name": "kit", "while_dead": true },
-                           { "name": "poke", "args": ["int"] } ],
+                           { "name": "poke", "args": ["int"] },
+                           { "name": "unstock", "args": ["int"] },
+                           { "name": "strip", "args": ["int"] } ],
              "state": { "global": { "colours": { "default": {}, "visible": "everyone" },
                                     "kits": { "default": {}, "visible": "everyone" } } } }"#,
     )
@@ -122,7 +124,9 @@ fn content(root: &Path) -> (Arc<Catalog>, bri_weapons::Pack) {
              if me.minigame != () { for t in minigame(me.minigame).teams { if t.id == me.team { colours[`${p}`] = t.color; } } }\n\
              set(\"colours\", colours);\n\
          }\n\
-         fn cmd_kit(p) { let kits = get(\"kits\"); kits[`${p}`] = player(p).tools; set(\"kits\", kits); }\n",
+         fn cmd_kit(p) { let kits = get(\"kits\"); kits[`${p}`] = player(p).tools; set(\"kits\", kits); }\n\
+         fn cmd_unstock(p, brick) { set_brick_item(brick, ()); }\n\
+         fn cmd_strip(p, slot) { mount_image(p, (), slot); }\n",
     )
     .unwrap();
     ids.push(("probe".into(), Side::Server));
@@ -619,6 +623,49 @@ fn an_enemy_flag_rides_on_the_carriers_back_and_scores_at_home() {
     assert!(g.heard("returned the"));
     assert_eq!(g.score(red), 0);
     g.quiet();
+}
+
+/// The flags follow the game mode (`Slayer_CTF::onGameModeStart` and
+/// `onGameModeEnd`), stay on their stands when something else takes the
+/// stand's item (`serverCmdSetWrenchData`, packaged), and a carried flag is
+/// no other Add-On's to take off (`Player::unMountImage`, packaged).
+#[test]
+fn flags_follow_the_mode_and_stay_on_their_stands_and_backs() {
+    let mut g = Game::new("flag-guards");
+    let (red, blue) = two_teams(&mut g);
+    let owner = g.s.minigame_views()[0].owner;
+    let mode = key(SLAYER, "mode");
+    g.set(owner, &[(&mode, Value::Text(CTF_MODE.into()))]);
+    let red_flag = g.plant(owner, FLAG, -8.5, 0.0, RED);
+    let blue_flag = g.plant(owner, FLAG, 8.5, 0.0, BLUE);
+    g.steps(31);
+    assert_eq!(g.flag_on(red_flag), Some(Some(RED)));
+
+    // The stand's item taken: the flag is back on the next check.
+    g.run(owner, "probe", "unstock", vec![PackageArg::Int(red_flag as i64)]);
+    g.steps(31);
+    assert_eq!(g.flag_on(red_flag), Some(Some(RED)));
+
+    // Carried, no other Add-On takes it off.
+    g.goto(blue, Vec3::new(-8.5, 0.25, 0.25));
+    g.settle();
+    assert_eq!(g.carried(blue), Some(Some(RED)));
+    g.run(blue, "probe", "strip", vec![PackageArg::Int(i64::from(FLAG_SLOT))]);
+    g.steps(1);
+    assert_eq!(g.carried(blue), Some(Some(RED)), "still on Blue's back");
+
+    // Another mode: every flag gone at once, stands and backs.
+    g.set(owner, &[(&mode, Value::Text(TEAM_MODE.into()))]);
+    g.steps(1);
+    assert_eq!(g.carried(blue), None);
+    assert_eq!(g.flag_on(red_flag), None);
+    assert_eq!(g.flag_on(blue_flag), None);
+    // Capture the Flag again: both stand at home at once.
+    g.goto(blue, Vec3::new(0.0, 0.25, 0.0));
+    g.set(owner, &[(&mode, Value::Text(CTF_MODE.into()))]);
+    assert_eq!(g.flag_on(red_flag), Some(Some(RED)));
+    assert_eq!(g.flag_on(blue_flag), Some(Some(BLUE)));
+    assert_eq!(g.score(red), 0);
 }
 
 #[test]

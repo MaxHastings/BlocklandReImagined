@@ -76,6 +76,12 @@ pub struct Port {
     /// `binds`). `{{name}}` in them is filled in, as in the rules.
     #[serde(default)]
     pub provides: BTreeMap<String, String>,
+    /// Datablocks of the Add-On its `datablocks.cs` declares in their
+    /// place: ones the Add-On makes at run time under a name the importer
+    /// cannot read (Slayer's countdown voices, one `slayerSound` renamed in
+    /// a loop). The report counts them as the port's.
+    #[serde(default)]
+    pub replaces: Vec<String>,
 }
 
 /// The companion host-rules Add-On a port adds ([`Port::rules`]). Its id is
@@ -240,6 +246,10 @@ impl Ports {
                 "{file}: only JSON files are patched"
             );
         }
+        ensure!(
+            port.replaces.is_empty() || self.files.contains_key(&format!("{}/{DATABLOCKS}", e.port)),
+            "replaces datablocks without a {DATABLOCKS} to declare them"
+        );
         let files = self.added_files(&e.port);
         for (file, kind) in &port.provides {
             ensure!(
@@ -351,6 +361,8 @@ pub struct Applied {
     /// Why it was not applied.
     pub reason: Option<String>,
     pub notes: String,
+    /// The Add-On's datablocks the port declares in their place.
+    pub replaces: Vec<String>,
 }
 
 /// A companion host-rules Add-On written beside an import.
@@ -400,6 +412,7 @@ pub fn apply(ports: &Ports, import: &Import, bodies: &Bodies, out: &Path) -> Opt
         rules: None,
         reason: None,
         notes: String::new(),
+        replaces: Vec::new(),
     };
     match try_apply(ports, e, import, bodies, out, &mut applied) {
         Ok(()) => applied.applied = true,
@@ -468,6 +481,7 @@ fn try_apply(
     applied.values = capture(e, bodies)?;
     let port = ports.port(e)?;
     applied.notes = port.notes.clone();
+    applied.replaces = port.replaces.clone();
     // What every port may use besides the values its patterns read.
     let mut values = applied.values.clone();
     for (name, value) in [

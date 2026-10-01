@@ -38,7 +38,7 @@ async fn ui_transport_pipelines_replies_while_motion_advances_and_cancel_stops_h
         let address = host.address;
         let certificate = host.certificate.clone();
         let pin = certificate.clone();
-        let mut worker = Worker::start(&tokio::runtime::Handle::current(), async move {
+        let mut worker = Worker::start(&tokio::runtime::Handle::current(), Default::default(), async move {
             let client =
                 Client::connect(address, &pin, "Builder".into(), Vec::new(), None).await?;
             Ok(Connected {

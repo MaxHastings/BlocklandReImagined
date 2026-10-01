@@ -343,6 +343,9 @@ pub(super) struct PackageHost {
     brick_fields: brick_fields::BrickFields,
     /// Score reports to send and the columns games changed.
     reports: reports::Reports,
+    /// Worn images a package keeps (`mount_image(..., #{ keep: true })`),
+    /// by player and slot: the package that put each on.
+    kept_worn: BTreeMap<(OwnerId, u8), String>,
     /// Every running Add-On's settings.
     settings: settings::Registry,
     copy_hooks: copy_hooks::CopyHooks,
@@ -683,6 +686,7 @@ impl Session {
             game_hooks: Default::default(),
             brick_fields: Default::default(),
             reports: Default::default(),
+            kept_worn: BTreeMap::new(),
             settings,
             copy_hooks: Default::default(),
             shares: Shares::new(scripts),
@@ -1981,18 +1985,38 @@ impl Session {
                 slot,
                 image,
                 paint,
+                keep,
             } => {
                 let peer = self.peers.get(&player).context("No such player")?;
                 ensure!(peer.combat.alive, "Only living players wear things");
+                let actor = bri_weapons::ActorId(player);
+                let worn = self.weapons.image_id(actor, slot).is_some();
+                let host = self.packages.as_mut().context("No packages are enabled")?;
                 if let Some(image) = &image {
-                    let host = self.packages.as_ref().context("No packages are enabled")?;
                     ensure!(
                         item_hooks::owns(&host.catalog, package, image),
                         "`{image}` is not an image of `{package}` or an Add-On it depends on"
                     );
                 }
-                self.weapons
-                    .wear(bri_weapons::ActorId(player), slot, image.as_deref(), paint)
+                // A kept image is its package's to change while it is worn
+                // (one taken off another way, by death, keeps nothing).
+                if let Some(keeper) = host.kept_worn.get(&(player, slot))
+                    && worn
+                {
+                    ensure!(
+                        keeper == package,
+                        "`{keeper}` keeps the image worn in slot {slot}"
+                    );
+                }
+                let kept = keep && image.is_some();
+                self.weapons.wear(actor, slot, image.as_deref(), paint)?;
+                let host = self.packages.as_mut().context("No packages are enabled")?;
+                if kept {
+                    host.kept_worn.insert((player, slot), package.to_owned());
+                } else {
+                    host.kept_worn.remove(&(player, slot));
+                }
+                Ok(())
             }
             op @ (Op::Push { .. }
             | Op::Tumble { .. }

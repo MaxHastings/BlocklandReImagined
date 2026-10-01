@@ -62,6 +62,21 @@ fn start(code: &AddOnCode, budgets: Budgets) -> Result<bri_client_sandbox::AddOn
         .start(code, budgets, TrustLevel::Sandboxed)
 }
 
+/// Budgets for tests of anything but wall-clock time. Instructions (fuel)
+/// still bound every call and the GPU budgets keep their defaults, but no
+/// wall-clock limit can fire first on a loaded machine: the default 8 ms
+/// frame is a few scheduler slices, so a busy PC turns a draw or memory
+/// refusal into `Stopped::Time`.
+fn budgets() -> Budgets {
+    let timed = Budgets::default();
+    Budgets {
+        gpu_ms_per_frame: timed.gpu_ms_per_frame,
+        gpu_strikes: timed.gpu_strikes,
+        gpu_stop_ms: timed.gpu_stop_ms,
+        ..Budgets::untimed()
+    }
+}
+
 fn frame(t: f32) -> FrameInput {
     FrameInput {
         time: t,
@@ -101,7 +116,7 @@ fn the_sample_draws_a_cube_with_its_own_shader() {
     assert_eq!(code.shaders.len(), 1);
     assert_eq!(code.shaders[0].loops, 1, "the ring loop is bounded");
 
-    let mut addon = start(&code, Budgets::default()).unwrap();
+    let mut addon = start(&code, budgets()).unwrap();
     assert_eq!(addon.layer().meshes.len(), 1);
     assert_eq!(addon.layer().meshes[0].vertices.len(), 24);
     assert_eq!(
@@ -129,7 +144,9 @@ fn the_sample_draws_a_cube_with_its_own_shader() {
 #[test]
 fn the_sample_renders_offscreen_and_animates() {
     let code = load(&sample_dir());
-    let mut addon = start(&code, Budgets::default()).unwrap();
+    // What it draws, not how fast: a loaded machine's slow frame must not
+    // stop it.
+    let mut addon = start(&code, Budgets::untimed()).unwrap();
     let (adapter, images) =
         bri_client_sandbox::gpu::render_offscreen(&mut addon, 256, 192, &[0.0, 0.75]).unwrap();
     let centre = |i: usize| {
@@ -317,13 +334,8 @@ const SPIN_IN_FRAME: &str = r#"(module
 #[test]
 fn a_frame_that_never_returns_is_stopped_and_the_rest_carries_on() {
     let dir = make(SPIN_IN_FRAME, &[], &[]);
-    // A long wall-clock budget, so fuel is what stops it (on a slow or
-    // busy machine the default 8 ms can run out first, which is also fine).
-    let budgets = Budgets {
-        frame_time: Duration::from_secs(30),
-        ..Budgets::default()
-    };
-    let mut addon = start(&load(dir.path()), budgets).unwrap();
+    // No wall-clock budget, so fuel is what stops it, on any machine.
+    let mut addon = start(&load(dir.path()), budgets()).unwrap();
     assert_eq!(addon.frame(frame(0.0)).unwrap_err(), Stopped::Cpu);
     // Stopped for good, and says why every time.
     assert_eq!(addon.frame(frame(1.0)).unwrap_err(), Stopped::Cpu);
@@ -336,7 +348,7 @@ fn wall_clock_time_is_a_budget_too() {
     let budgets = Budgets {
         frame_fuel: u64::MAX / 2,
         frame_time: Duration::from_millis(20),
-        ..Budgets::default()
+        ..budgets()
     };
     let mut addon = start(&load(dir.path()), budgets).unwrap();
     let started = std::time::Instant::now();
@@ -362,14 +374,14 @@ fn memory_past_the_budget_stops_the_addon() {
         (func (export "frame") (param f32 f32)
           (drop (memory.grow (i32.const 2048)))))"#;
     let dir = make(grow, &[], &[]);
-    let mut addon = start(&load(dir.path()), Budgets::default()).unwrap();
+    let mut addon = start(&load(dir.path()), budgets()).unwrap();
     assert_eq!(addon.frame(frame(0.0)).unwrap_err(), Stopped::Memory);
 
     // A module that asks for more up front never starts.
     let big = r#"(module (memory (export "memory") 2048))"#;
     let dir = make(big, &[], &[]);
     assert_eq!(
-        start(&load(dir.path()), Budgets::default()).err(),
+        start(&load(dir.path()), budgets()).err(),
         Some(Stopped::Memory)
     );
 }
@@ -408,11 +420,11 @@ fn draws(count: u32, matrix: u32) -> tempfile::TempDir {
 #[test]
 fn host_requests_have_budgets() {
     let dir = draws(10, 512);
-    let mut addon = start(&load(dir.path()), Budgets::default()).unwrap();
+    let mut addon = start(&load(dir.path()), budgets()).unwrap();
     assert_eq!(addon.frame(frame(0.0)).unwrap().draws.len(), 10);
 
     let dir = draws(100_000, 512);
-    let mut addon = start(&load(dir.path()), Budgets::default()).unwrap();
+    let mut addon = start(&load(dir.path()), budgets()).unwrap();
     assert!(matches!(addon.frame(frame(0.0)), Err(Stopped::Budget(_))));
     // What it held is gone.
     assert!(addon.layer().meshes.is_empty());
@@ -421,7 +433,7 @@ fn host_requests_have_budgets() {
 #[test]
 fn a_pointer_outside_its_memory_is_misuse() {
     let dir = draws(1, 65_530);
-    let mut addon = start(&load(dir.path()), Budgets::default()).unwrap();
+    let mut addon = start(&load(dir.path()), budgets()).unwrap();
     match addon.frame(frame(0.0)) {
         Err(Stopped::Misuse(why)) => assert!(why.contains("outside its memory"), "{why}"),
         other => panic!("{other:?}"),
@@ -431,7 +443,7 @@ fn a_pointer_outside_its_memory_is_misuse() {
 #[test]
 fn the_gpu_budget_allows_spikes_but_not_a_sustained_overrun() {
     let dir = draws(1, 512);
-    let mut addon = start(&load(dir.path()), Budgets::default()).unwrap();
+    let mut addon = start(&load(dir.path()), budgets()).unwrap();
     for _ in 0..19 {
         addon.report_gpu_time(20.0).unwrap();
     }
@@ -445,7 +457,7 @@ fn the_gpu_budget_allows_spikes_but_not_a_sustained_overrun() {
 #[test]
 fn one_frame_far_over_the_gpu_budget_stops_the_addon_at_once() {
     let dir = draws(1, 512);
-    let mut addon = start(&load(dir.path()), Budgets::default()).unwrap();
+    let mut addon = start(&load(dir.path()), budgets()).unwrap();
     addon.report_gpu_time(60.0).unwrap(); // A spike is allowed.
     match addon.report_gpu_time(2400.0) {
         Err(Stopped::Gpu(why)) => assert!(why.contains("2400 ms"), "{why}"),
@@ -496,7 +508,7 @@ fn an_undeclared_capability_is_denied_before_anything_runs() {
 
     // Declared, it loads.
     let dir = make(wat, &["audio"], &[]);
-    assert!(start(&load(dir.path()), Budgets::default()).is_ok());
+    assert!(start(&load(dir.path()), budgets()).is_ok());
 }
 
 #[test]
@@ -559,7 +571,7 @@ fn keys_are_only_readable_while_focused() {
         (i32.store8 (i32.const 0) (i32.add (i32.const 48) (call $key (i32.const 87))))
         (drop (call $send (i32.const 0) (i32.const 1)))))"#;
     let dir = make(wat, &["input.focused", "net.message"], &[]);
-    let mut addon = start(&load(dir.path()), Budgets::default()).unwrap();
+    let mut addon = start(&load(dir.path()), budgets()).unwrap();
     let pressed = |focused| FrameInput {
         focused,
         keys_down: vec![87],
@@ -584,7 +596,7 @@ fn messages_come_from_its_own_server_script_in_order() {
           (drop (call $send (i32.const 0) (local.get $n)))
           (br $l)))))"#;
     let dir = make(wat, &["net.message"], &[]);
-    let mut addon = start(&load(dir.path()), Budgets::default()).unwrap();
+    let mut addon = start(&load(dir.path()), budgets()).unwrap();
     let out = addon
         .frame(FrameInput {
             messages: vec![b"dig".to_vec(), b"crack".to_vec()],
@@ -621,7 +633,7 @@ fn malformed_modules_are_rejected_before_compiling() {
     // Valid, but exports no memory for the host to read.
     let dir = make(r#"(module)"#, &[], &[]);
     assert!(matches!(
-        start(&load(dir.path()), Budgets::default()),
+        start(&load(dir.path()), budgets()),
         Err(Stopped::Misuse(_))
     ));
 }
@@ -772,11 +784,14 @@ fn a_sandboxed_grant_never_covers_elevated_code() {
 }
 
 /// Needs a GPU adapter (software is fine): a fragment shader that loops forever, drawn over the whole
-/// screen, finishes because the loop is bounded. How long the GPU took
-/// depends on the machine and whatever else is drawing, so the budget
-/// checks run only as a benchmark (`BRI_BENCH`).
+/// screen, finishes because the loop is bounded, and runs exactly the cap
+/// the renderer fitted. The GPU's speed is given rather than measured, so
+/// the cap is the same on a loaded machine; fitting caps to measured
+/// speeds and slow frames is checked without a GPU
+/// (`the_shader_loop_cap_starts_low_and_fits_the_measured_gpu`).
 #[test]
 fn an_endless_shader_loop_finishes_on_the_gpu() {
+    use bri_client_sandbox::gpu::{GpuSpeed, loop_limit, render_offscreen_at_speed};
     let endless = "
 @vertex fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
     let p = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));
@@ -793,40 +808,39 @@ fn an_endless_shader_loop_finishes_on_the_gpu() {
         &["render.layer", "render.shader"],
         &[("pass.wgsl", endless)],
     );
-    let mut addon = start(&load(dir.path()), Budgets::default()).unwrap();
-    let started = std::time::Instant::now();
-    let (adapter, images) =
-        bri_client_sandbox::gpu::render_offscreen(&mut addon, 512, 512, &[0.0, 0.1, 0.2]).unwrap();
-    for image in &images {
-        println!(
-            "{adapter}: 512x512 at a loop cap of {} took {:?} ms of GPU time",
-            image.loop_limit, image.gpu_ms
+    let code = load(dir.path());
+    let cost = [code.shaders[0].vertex_cost, code.shaders[0].fragment_cost];
+    let (pixels, vertices) = (512 * 512, 3);
+    let budget = budgets().gpu_ms_per_frame;
+    // The speed at which `cap` iterations fill the frame budget.
+    let speed = |cap: u32| GpuSpeed {
+        work_per_ms: (pixels as f64 * bri_client_sandbox::gpu::OVERDRAW * f64::from(cost[1])
+            + f64::from(vertices as u32 * cost[0]))
+            * (f64::from(cap) + 1.5)
+            / f64::from(budget),
+    };
+    let render = |cap: u32| {
+        let speed = speed(cap);
+        assert_eq!(
+            loop_limit(Some(speed), cost, pixels, vertices, budget, 1.0),
+            cap
         );
-    }
-    println!("{:?} in all, calibration included", started.elapsed());
-    // Every frame finished with the loop capped.
-    assert_eq!(images.len(), 3);
-    assert!(
+        let mut addon = start(&code, budgets()).unwrap();
+        let (adapter, images) =
+            render_offscreen_at_speed(&mut addon, 512, 512, &[0.0, 0.1, 0.2], speed).unwrap();
+        println!("{adapter}: 512x512 at a loop cap of {cap}");
+        // Every frame finished, with the loop capped where it was fitted.
+        assert_eq!(images.len(), 3);
+        for image in &images {
+            assert_eq!(image.loop_limit, cap);
+            assert_eq!(image.gpu_ms, None, "the layer is not timed");
+        }
         images
-            .iter()
-            .all(|i| (1..=shader::MAX_LOOP_LIMIT).contains(&i.loop_limit))
-    );
-    if std::env::var_os("BRI_BENCH").is_none() {
-        return;
-    }
-    // A fast GPU may run the whole allowance within budget at this size
-    // (an RTX 4070 SUPER does 512x512 at the maximum in about 1 ms).
-    assert!(
-        images[0].loop_limit < shader::MAX_LOOP_LIMIT
-            || images[0].gpu_ms.is_some_and(|ms| ms < 4.0),
-        "{:?}",
-        (images[0].loop_limit, images[0].gpu_ms)
-    );
-    assert!(started.elapsed() < Duration::from_secs(20));
-    if let Some(ms) = images[0].gpu_ms {
-        // Within the order of the 4 ms budget, far from the 100 ms stop.
-        assert!(ms < 40.0, "{ms} ms");
-    }
+    };
+    let low = render(shader::DEFAULT_LOOP_LIMIT);
+    let high = render(shader::DEFAULT_LOOP_LIMIT * 4);
+    // The cap reaches the shader: more iterations, a different picture.
+    assert_ne!(low[0].pixels, high[0].pixels);
 }
 
 /// Needs a GPU adapter (software is fine): calibration measures a speed (and, as a benchmark, takes

@@ -48,7 +48,15 @@ fn step(app: &mut App, elapsed: Duration) -> Result<()> {
     Ok(())
 }
 
-fn until(app: &mut App, what: &str, timeout: Duration, ready: impl Fn(&App) -> bool) -> Result<()> {
+/// How long a wait may take before it counts as a hang. Each wait ends on
+/// the state it waits for; this deadline only turns a hang into a failure
+/// with diagnostics, so it sits far past what the slowest step takes on a
+/// loaded PC (the gate runs this debug build beside every other test).
+/// Per-step deadlines of 10 s failed there and passed alone.
+const HANG: Duration = Duration::from_secs(300);
+
+fn until(app: &mut App, what: &str, ready: impl Fn(&App) -> bool) -> Result<()> {
+    let timeout = HANG;
     let start = Instant::now();
     let mut previous = start;
     loop {
@@ -163,9 +171,9 @@ fn capture(
         });
     gpu.device.poll(wgpu::PollType::Wait {
         submission_index: None,
-        timeout: Some(Duration::from_secs(30)),
+        timeout: Some(HANG),
     })?;
-    rx.recv_timeout(Duration::from_secs(5))??;
+    rx.recv()??;
     let mapped = readback
         .slice(..)
         .get_mapped_range()
@@ -257,16 +265,11 @@ fn stress_lab_hosts_shows_the_miner_hud_mines_and_meets_a_creeper(f: &ContentRoo
             super_admin_password: String::new(),
         },
     )?;
-    until(
-        &mut app,
-        "the package world and the player",
-        Duration::from_secs(60),
-        |a| {
-            a.network_view()
-                .is_some_and(|v| v.poses.contains_key(&v.owner) && v.world.bricks.len() > 5_000)
-                && own(a, "bits") == Some(0)
-        },
-    )?;
+    until(&mut app, "the package world and the player", |a| {
+        a.network_view()
+            .is_some_and(|v| v.poses.contains_key(&v.owner) && v.world.bricks.len() > 5_000)
+            && own(a, "bits") == Some(0)
+    })?;
     for _ in 0..40 {
         step(&mut app, Duration::from_millis(16))?;
     }
@@ -333,9 +336,7 @@ fn stress_lab_hosts_shows_the_miner_hud_mines_and_meets_a_creeper(f: &ContentRoo
             step(&mut app, Duration::from_millis(16))?;
         }
     }
-    until(&mut app, "mining", Duration::from_secs(10), |a| {
-        own(a, "mined").unwrap_or(0) > 0
-    })?;
+    until(&mut app, "mining", |a| own(a, "mined").unwrap_or(0) > 0)?;
     for _ in 0..10 {
         step(&mut app, Duration::from_millis(16))?;
     }
@@ -357,7 +358,7 @@ fn stress_lab_hosts_shows_the_miner_hud_mines_and_meets_a_creeper(f: &ContentRoo
             pressed: None,
         }),
     )?;
-    until(&mut app, "the creeper", Duration::from_secs(10), |a| {
+    until(&mut app, "the creeper", |a| {
         a.network_view().is_some_and(|v| !v.entities.is_empty())
     })?;
     action(
@@ -388,17 +389,13 @@ fn stress_lab_hosts_shows_the_miner_hud_mines_and_meets_a_creeper(f: &ContentRoo
     });
     ensure!(accent_found, "the miner panel's accent colour is on screen");
     action(&mut app, UiAction::Disconnect)?;
-    for _ in 0..100 {
-        step(&mut app, Duration::from_millis(16))?;
-        if state
-            .join("packages")
-            .read_dir()
-            .is_ok_and(|mut d| d.next().is_some())
-        {
-            break;
-        }
-        thread::sleep(Duration::from_millis(20));
-    }
+    // The host keeps the package world when it stops, after the client has
+    // left (network.rs: the worker stops the host, which saves on its way
+    // out). Closing the game waits for that, as quitting does, so the save
+    // is checked once it is finished rather than after a fixed number of
+    // frames: its folder fills with a staging file before the save lands.
+    app.gpu_stopped();
+    drop(app);
     let saved = state
         .join("packages")
         .join("stresslab-world-world-strata.save.json");
@@ -414,6 +411,5 @@ fn stress_lab_hosts_shows_the_miner_hud_mines_and_meets_a_creeper(f: &ContentRoo
             "free_letters": free, "save": saved, "visible_window": false, "audio_device": false, "adapter": gpu.adapter_info.name,
         }))?,
     )?;
-    app.gpu_stopped();
     Ok(())
 }

@@ -30,9 +30,9 @@ synthetic_and_content!(
 const SIZE: (u32, u32) = (960, 720);
 const SLATE: &str = "v20/add-ons/map_slate/slate.mis";
 
-fn step(app: &mut App) -> Result<()> {
-    app.tick(Duration::from_millis(16))?;
-    app.ui.update(16);
+fn step(app: &mut App, elapsed: Duration) -> Result<()> {
+    app.tick(elapsed)?;
+    app.ui.update(elapsed.as_millis() as u64);
     let commands = app.pump()?;
     ensure!(
         commands.is_empty(),
@@ -59,6 +59,29 @@ fn in_game(app: &App) -> bool {
             .is_some_and(|v| v.poses.contains_key(&v.owner))
 }
 
+/// The newest server tick every app has seen; None until all are in game.
+fn seen_tick(apps: &[&mut App]) -> Option<u64> {
+    apps.iter()
+        .map(|a| a.network_view().map(|v| v.tick))
+        .collect::<Option<Vec<_>>>()?
+        .into_iter()
+        .min()
+}
+
+/// Server ticks in `secs` of game time (120 a second).
+fn ticks(secs: u64) -> u64 {
+    secs * 120
+}
+
+/// A wait that stops advancing for this many times its budget of wall time
+/// has a stopped game, not a slow one.
+const STALLED: u32 = 20;
+
+/// Step every app, by the wall time each frame took, until `ready`. `secs`
+/// is game time once every app is in game: the server ticks all of them
+/// have seen, so a loaded machine that slows the hosted game (its ticker
+/// skips missed ticks) stretches the wait with it. Before that (loading,
+/// downloading, joining) it is wall time.
 fn until(
     apps: &mut [&mut App],
     what: &str,
@@ -66,10 +89,15 @@ fn until(
     ready: impl Fn(&[&mut App]) -> bool,
 ) -> Result<()> {
     let start = Instant::now();
+    let mut previous = start;
+    let mut first_tick = None;
+    let budget = Duration::from_secs(secs);
     loop {
+        let now = Instant::now();
         for app in apps.iter_mut() {
-            step(app)?;
+            step(app, now.duration_since(previous))?;
         }
+        previous = now;
         if ready(apps) {
             return Ok(());
         }
@@ -78,12 +106,31 @@ fn until(
                 bail!("{what}: connection failed: {reason}");
             }
         }
+        let tick = seen_tick(apps);
+        first_tick = first_tick.or(tick);
+        let spent = match (first_tick, tick) {
+            (Some(first), Some(tick)) => tick - first >= ticks(secs),
+            _ => start.elapsed() >= budget,
+        };
+        ensure!(!spent, "Timed out waiting for {what}");
         ensure!(
-            start.elapsed() < Duration::from_secs(secs),
-            "Timed out waiting for {what}"
+            start.elapsed() < budget * STALLED + Duration::from_secs(60),
+            "Timed out waiting for {what}: the game stopped advancing"
         );
         thread::sleep(Duration::from_millis(8));
     }
+}
+
+/// A free loopback UDP port for one hosted game.
+fn free_port() -> Result<u16> {
+    Ok(std::net::UdpSocket::bind("127.0.0.1:0")?
+        .local_addr()?
+        .port())
+}
+
+/// Whether nothing holds `port` any more, where a LAN host binds it.
+fn port_free(port: u16) -> bool {
+    std::net::UdpSocket::bind(("0.0.0.0", port)).is_ok()
 }
 
 fn app(root: &Path, name: &str) -> Result<App> {
@@ -145,18 +192,17 @@ fn join(app: &mut App, port: u16) -> Result<()> {
     )
 }
 
-fn leave(apps: &mut [&mut App]) -> Result<()> {
+/// Everyone leaves, and the game hosted on `port` stops: a host that stops
+/// in the background keeps its port until it has, and the next game hosted
+/// there would fail to bind it.
+fn leave(apps: &mut [&mut App], port: u16) -> Result<()> {
     for app in apps.iter_mut() {
         request(app, UiAction::Disconnect)?;
         app.ui.core.pop(ScreenId::MessageBox);
     }
-    for _ in 0..60 {
-        for app in apps.iter_mut() {
-            step(app)?;
-        }
-        thread::sleep(Duration::from_millis(8));
-    }
-    Ok(())
+    until(apps, "the hosted game to stop", 60, |a| {
+        a.iter().all(|app| app.network_view().is_none()) && port_free(port)
+    })
 }
 
 fn host_panels(app: &App) -> Vec<String> {
@@ -204,9 +250,7 @@ fn add_ons_the_host_turns_off_are_not_required_and_ones_it_runs_download(
         None => Some(Staged::visible(&content, RAGDOLL)?),
     };
     let installed = installed_ragdoll()?.context("the staged Ragdoll is not found")?;
-    let port = std::net::UdpSocket::bind("127.0.0.1:0")?
-        .local_addr()?
-        .port();
+    let port = free_port()?;
     let mut host_app = app(&content, "Hoster")?;
     let mut guest = app(&content, "Joiner")?;
     let round = |host_app: &mut App,
@@ -261,7 +305,7 @@ fn add_ons_the_host_turns_off_are_not_required_and_ones_it_runs_download(
         host_panels(&host_app)
     );
     println!("off: guest joined, no HUD");
-    leave(&mut [&mut guest, &mut host_app])?;
+    leave(&mut [&mut guest, &mut host_app], port)?;
 
     // 2. A HUD Add-On on: on Slate nobody sees it; in its game mode the
     //    guest downloads it and sees it.
@@ -279,7 +323,7 @@ fn add_ons_the_host_turns_off_are_not_required_and_ones_it_runs_download(
         "HUD shown on Slate: {:?}",
         host_panels(&host_app)
     );
-    leave(&mut [&mut guest, &mut host_app])?;
+    leave(&mut [&mut guest, &mut host_app], port)?;
     round(
         &mut host_app,
         &mut guest,
@@ -303,7 +347,7 @@ fn add_ons_the_host_turns_off_are_not_required_and_ones_it_runs_download(
         "HUD: guest downloaded it and sees {:?}",
         host_panels(&guest)
     );
-    leave(&mut [&mut guest, &mut host_app])?;
+    leave(&mut [&mut guest, &mut host_app], port)?;
 
     // 3. A brick Add-On on: the guest downloads it, joins, and can use it.
     round(
@@ -335,7 +379,7 @@ fn add_ons_the_host_turns_off_are_not_required_and_ones_it_runs_download(
         "the guest's brick menu lacks the downloaded {BRICKS}"
     );
     println!("bricks: guest joined with {BRICKS}");
-    leave(&mut [&mut guest, &mut host_app])?;
+    leave(&mut [&mut guest, &mut host_app], port)?;
 
     // 4. Client code follows the host. The host runs the Ragdoll and the
     //    guest, who has it off, runs it too without being asked (asked
@@ -356,7 +400,7 @@ fn add_ons_the_host_turns_off_are_not_required_and_ones_it_runs_download(
         "the host's Ragdoll does not run for the guest: {:?}",
         guest.add_on_code_running()
     );
-    leave(&mut [&mut guest, &mut host_app])?;
+    leave(&mut [&mut guest, &mut host_app], port)?;
     round(
         &mut host_app,
         &mut guest,
@@ -371,7 +415,7 @@ fn add_ons_the_host_turns_off_are_not_required_and_ones_it_runs_download(
         guest.add_on_code_running()
     );
     println!("code: the guest runs the host's Ragdoll, and only the host's");
-    leave(&mut [&mut guest, &mut host_app])?;
+    leave(&mut [&mut guest, &mut host_app], port)?;
     Ok(())
 }
 
@@ -662,9 +706,7 @@ fn a_guest_joins_a_host_running_every_repository_add_on(f: &ContentRoot) -> Resu
         .find(|id| added.iter().any(|e| e.id == *id))
         .context("every repository weapon Add-On is already listed")?;
     set.packages.extend(added);
-    let port = std::net::UdpSocket::bind("127.0.0.1:0")?
-        .local_addr()?
-        .port();
+    let port = free_port()?;
     let mut host_app = app(&content, "RepoHost")?;
     // What turning them on in the Add-Ons screen loads, without writing the
     // content root's lists.
@@ -678,9 +720,12 @@ fn a_guest_joins_a_host_running_every_repository_add_on(f: &ContentRoot) -> Resu
     // Nothing asks about the download; the guest agrees to the samples'
     // client code, the one question a join may ask.
     let start = Instant::now();
+    let mut previous = start;
     while !in_game(&guest) {
-        step(&mut host_app)?;
-        step(&mut guest)?;
+        let now = Instant::now();
+        step(&mut host_app, now.duration_since(previous))?;
+        step(&mut guest, now.duration_since(previous))?;
+        previous = now;
         if let ConnectionState::Failed { reason } = &guest.ui.core.conn {
             bail!("the guest could not join: {reason}");
         }
@@ -696,7 +741,7 @@ fn a_guest_joins_a_host_running_every_repository_add_on(f: &ContentRoot) -> Resu
         cache.iter().any(|id| id == downloaded),
         "{downloaded} was not downloaded: {cache:?}"
     );
-    leave(&mut [&mut guest, &mut host_app])?;
+    leave(&mut [&mut guest, &mut host_app], port)?;
     Ok(())
 }
 
@@ -721,9 +766,7 @@ fn a_guest_without_a_vehicle_add_on_downloads_it_and_can_spawn_it(f: &ContentRoo
             .get("Vehicle")
             .is_some_and(|list| list.iter().any(|c| c.id == VEHICLE))
     };
-    let port = std::net::UdpSocket::bind("127.0.0.1:0")?
-        .local_addr()?
-        .port();
+    let port = free_port()?;
     let mut host_app = app(&content, "PlaneHost")?;
     host_app
         .apply_packages(&set)
@@ -755,7 +798,7 @@ fn a_guest_without_a_vehicle_add_on_downloads_it_and_can_spawn_it(f: &ContentRoo
         spawnable(&guest),
         "the guest's vehicle list lacks {VEHICLE}"
     );
-    leave(&mut [&mut guest, &mut host_app])?;
+    leave(&mut [&mut guest, &mut host_app], port)?;
     Ok(())
 }
 
@@ -796,10 +839,10 @@ fn a_host_with_the_blockhead_bot_on_spawns_bots_and_one_without_offers_none(
             .is_some_and(|list| list.iter().any(|c| c.id == BOT))
     };
     let players = |app: &App| app.network_view().map_or(0, |v| v.poses.len());
+    // Server ticks from loading the spawn brick to the bot, with it on.
+    let mut bot_ticks = 0;
     for (name, set, on) in [("BotsOn", &with, true), ("BotsOff", &without, false)] {
-        let port = std::net::UdpSocket::bind("127.0.0.1:0")?
-            .local_addr()?
-            .port();
+        let port = free_port()?;
         let mut host_app = app(&content, name)?;
         host_app.apply_packages(set)?;
         host(&mut host_app, port)?;
@@ -856,17 +899,27 @@ fn a_host_with_the_blockhead_bot_on_spawns_bots_and_one_without_offers_none(
                 .is_some_and(|v| v.world.bricks.len() == 1)
         };
         until(&mut [&mut host_app], "the spawn brick loads", 60, loaded)?;
+        let loaded_at = seen_tick(&[&mut host_app]).context("out of game")?;
         if on {
             until(&mut [&mut host_app], "a Blockhead Bot", 60, |a| {
                 players(a[0]) == 2
             })?;
+            let spawned_at = seen_tick(&[&mut host_app]).context("out of game")?;
+            bot_ticks = spawned_at - loaded_at;
         } else {
-            for _ in 0..180 {
-                step(&mut host_app)?;
-            }
+            // Twice the game time the bot took with the Add-On on, and at
+            // least 3 s (this once stepped 180 frames of 16 ms, unpaced).
+            let wait = (2 * bot_ticks).max(ticks(3));
+            let end = loaded_at + wait;
+            until(
+                &mut [&mut host_app],
+                "the time a bot takes",
+                wait / 120 + 5,
+                |a| players(a[0]) != 1 || seen_tick(a).is_some_and(|t| t >= end),
+            )?;
             ensure!(players(&host_app) == 1, "{name}: a bot without the Add-On");
         }
-        leave(&mut [&mut host_app])?;
+        leave(&mut [&mut host_app], port)?;
     }
     Ok(())
 }

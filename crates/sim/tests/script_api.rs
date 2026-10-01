@@ -80,6 +80,7 @@ fn cmd_watch(p, target) { if target < 0 { watch(p, ()); } else { watch(p, target
 fn cmd_orbit(p, target, distance) { orbit_camera(p, target, distance); }
 fn cmd_orbit_zoom(p, target, near, far, distance) { orbit_camera(p, target, near, far, distance); }
 fn cmd_orbit_back(p) { orbit_camera(p, ()); }
+fn cmd_keep(p, image) { if image == "" { mount_image(p, (), 3); } else { mount_image(p, image, 3, #{ paint: 2, keep: true }); } }
 fn cmd_orbit_frozen(p, target) { orbit_camera(p, target, 4, 9, 6, "frozen"); }
 fn cmd_orbit_dazed(p, target) { orbit_camera(p, target, 4, 9, 6, "dazed"); }
 fn on_activate(p) { note("heard", get("heard") + "activate "); true }
@@ -120,6 +121,7 @@ fn behaviour() -> Value {
             command("orbit_zoom", &["int", "float", "float", "float"]),
             command("orbit_back", &[]),
             command("orbit_frozen", &["int"]),
+            command("keep", &["string"]),
             command("orbit_dazed", &["int"]),
             command("put_away", &[]),
         ],
@@ -195,15 +197,41 @@ fn catalog() -> Arc<Catalog> {
     std::fs::write(dir.join("package.json"), manifest.to_string()).unwrap();
     std::fs::write(dir.join("behaviour.json"), behaviour().to_string()).unwrap();
     std::fs::write(dir.join("main.rhai"), SCRIPT).unwrap();
+    // Another Add-On built on the probe's images, to change what a player
+    // wears behind the probe's back.
+    let rival = root.0.join("rival");
+    std::fs::create_dir_all(&rival).unwrap();
+    let manifest = json!({
+        "schema_version": 1, "id": "rival", "version": "1.0.0", "api": 1,
+        "name": "rival", "license": "CC0-1.0",
+        "capabilities": ["player"], "dependencies": { "probe": "^1.0.0" },
+        "provides": [
+            { "kind": "behaviour", "id": "rival:behaviour/main", "file": "behaviour.json" },
+            { "kind": "script", "id": "rival:script/main", "file": "main.rhai" }
+        ]
+    });
+    std::fs::write(rival.join("package.json"), manifest.to_string()).unwrap();
+    let behaviour = json!({
+        "schema_version": 1,
+        "script": "main.rhai",
+        "commands": [{ "name": "wear", "args": ["string"] }]
+    });
+    std::fs::write(rival.join("behaviour.json"), behaviour.to_string()).unwrap();
+    std::fs::write(
+        rival.join("main.rhai"),
+        r#"fn cmd_wear(p, image) { if image == "" { mount_image(p, (), 3); } else { mount_image(p, image, 3); } }"#,
+    )
+    .unwrap();
+    let entry = |id: &str| PackageEntry {
+        id: id.into(),
+        version: "1.0.0".into(),
+        side: Side::Server,
+        dir: id.into(),
+        role: None,
+    };
     let set = PackageSet {
         schema_version: 1,
-        packages: vec![PackageEntry {
-            id: "probe".into(),
-            version: "1.0.0".into(),
-            side: Side::Server,
-            dir: "probe".into(),
-            role: None,
-        }],
+        packages: vec![entry("probe"), entry("rival")],
     };
     Arc::new(Catalog::load(&root.0, &set, true).unwrap_or_else(|e| panic!("{e:#?}")))
 }
@@ -817,4 +845,60 @@ fn an_orbit_camera_either_lets_the_body_act_or_freezes_it() {
     ));
     g.run(a, "watch", vec![PackageArg::Int(a as i64)]);
     assert_eq!(g.s.control(a), Some(ControlObject::Corpse));
+}
+
+/// `mount_image(p, image, slot, #{ keep: true })`: while the image is worn
+/// no other Add-On replaces or takes it off (Slayer CTF's
+/// `Player::mountImage` and `unMountImage` overrides guarding a carried
+/// flag); its own Add-On still may, and once it is off, by death too, the
+/// slot is anyone's again.
+#[test]
+fn a_kept_worn_image_is_only_its_add_ons_to_change() {
+    let mut g = Game::new();
+    let a = g.join(Vec3::new(0.0, 0.05, 0.0));
+    let worn = |g: &Game| -> Vec<(String, Option<u8>)> {
+        g.s.weapon_view()
+            .images
+            .get(&a)
+            .map(|images| {
+                images
+                    .iter()
+                    .map(|i| (i.image.clone(), i.paint))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let rival = |g: &mut Game, image: &str| {
+        g.send(
+            a,
+            Command::Package(PackageCommand {
+                package: "rival".into(),
+                command: "wear".into(),
+                args: vec![PackageArg::String(image.into())],
+            }),
+        )
+    };
+    let gun = "probe:image/gun";
+    let scope = "probe:image/scope";
+    g.run(a, "keep", vec![PackageArg::String(gun.into())]);
+    assert_eq!(worn(&g), [(gun.to_string(), Some(2))]);
+    // The rival's tries are refused, each with a diagnostic.
+    let refusals = |g: &Game| g.diagnostics().iter().filter(|d| d.contains("keeps")).count();
+    rival(&mut g, scope).unwrap();
+    rival(&mut g, "").unwrap();
+    assert_eq!(worn(&g), [(gun.to_string(), Some(2))], "still worn");
+    assert_eq!(refusals(&g), 2, "{:?}", g.diagnostics());
+    // Its own Add-On changes it.
+    g.run(a, "keep", vec![PackageArg::String(String::new())]);
+    assert!(worn(&g).is_empty());
+    rival(&mut g, scope).unwrap();
+    assert_eq!(worn(&g), [(scope.to_string(), None)]);
+    // Kept again, then off with the body: the next one is anyone's.
+    g.run(a, "keep", vec![PackageArg::String(gun.into())]);
+    g.send(a, Command::Suicide).unwrap();
+    g.steps(600);
+    g.send(a, Command::Respawn).unwrap();
+    rival(&mut g, scope).unwrap();
+    assert_eq!(worn(&g), [(scope.to_string(), None)]);
+    assert_eq!(refusals(&g), 2, "{:?}", g.diagnostics());
 }

@@ -52,6 +52,7 @@ operation that needs a capability.
 | `new Projectile() { ... }` | `fire(projectile, x, y, z, vx, vy, vz, by)` | `damage` |
 | `new Explosion()`, `radiusDamage` | `explode(x, y, z, radius, damage, brick_radius)` | `damage` |
 | `%obj.mountImage(%img, 0)` | `mount_image(p, image)`, `mount_image(p, ())` | `player` |
+| `package { function Player::mountImage / unMountImage ... }` guarding an image in a slot | `mount_image(p, image, slot, #{ keep: true })` | `player`; only its Add-On changes it while worn |
 | `%obj.unMountImage(0)` | `unmount_image(p)`: tools, cans and bricks in hand | `player` |
 | `%client.camera.setOrbitMode(%target, ...)`, `setControlObject(%client.camera)`, back with `setControlObject(%player)` | `orbit_camera(p, target, distance)`, `orbit_camera(p, target, min, max, distance)` (the wheel zooms between), `orbit_camera(p, ())` | `player` |
 | `%obj.setScale("s s s")` | `set_scale(p, s)` | `player`; 0.2 to 5, one number |

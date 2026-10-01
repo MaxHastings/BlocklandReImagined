@@ -822,12 +822,17 @@ pub enum Op {
     },
     /// Put an image in a worn slot (2 or 3) of a player, tinted with a
     /// palette colour (`mountImage(%image, 3)`: a flag on the back), or
-    /// take it off with `None`.
+    /// take it off with `None`. With `keep`, no other package replaces or
+    /// takes off that image while it is worn (Slayer CTF's
+    /// `Player::mountImage` and `unMountImage` overrides, which guard the
+    /// flag).
     WearImage {
         player: u64,
         slot: u8,
         image: Option<String>,
         paint: Option<u8>,
+        #[serde(default)]
+        keep: bool,
     },
     /// Set a mini-game's teams and team rules, as Slayer's team list does:
     /// a team with an `id` keeps it and its members, one without is new,

@@ -46,17 +46,38 @@ fn step(app: &mut App, elapsed: Duration) -> Result<()> {
     Ok(())
 }
 
-/// How long a wait may take before it counts as a hang. The waits end on
-/// what they wait for; this deadline only catches a hang, so it sits far
-/// past what the slowest step takes on a loaded PC (the gate runs these
-/// debug builds beside every other test). Tighter per-step deadlines
-/// failed there and passed alone.
+/// How much game time a wait may take before it counts as a hang. The waits
+/// end on what they wait for; this bound only catches a hang, so it sits far
+/// past what the slowest step takes. It is counted in server ticks: under the
+/// gate's load the hosted server skips missed ticks (`MissedTickBehavior::Skip`)
+/// and the client drops time on long frames (`motion::MAX_STEPS`), so game
+/// time runs slower than wall time, and a wall-clock bound can fail a slow
+/// but healthy run.
 const HANG: Duration = Duration::from_secs(300);
+/// Server ticks per second of game time.
+const TICK_HZ: u64 = 120;
 
+/// What shows the game is still moving: the newest server tick seen, and the
+/// loader's stage and progress before there is a game.
+fn progress(app: &App) -> (Option<u64>, Option<(String, u32)>) {
+    let loading = match &app.ui.core.conn {
+        ConnectionState::Loading {
+            status, progress, ..
+        } => Some((status.clone(), progress.to_bits())),
+        _ => None,
+    };
+    (app.network_view().map(|v| v.tick), loading)
+}
+
+/// Step the app until `ready` holds. It fails once `HANG` of game time has
+/// passed in game without it, or once nothing has advanced (no new server
+/// tick, no loading progress) for `HANG` of wall time: a stopped game, not a
+/// slow one.
 fn until(app: &mut App, what: &str, ready: impl Fn(&App) -> bool) -> Result<()> {
-    let timeout = HANG;
-    let start = Instant::now();
-    let mut previous = start;
+    let mut previous = Instant::now();
+    let mut seen = progress(app);
+    let mut advanced = previous;
+    let mut game_ticks = 0;
     loop {
         let now = Instant::now();
         step(app, now.duration_since(previous))?;
@@ -64,22 +85,39 @@ fn until(app: &mut App, what: &str, ready: impl Fn(&App) -> bool) -> Result<()> 
         if ready(app) {
             return Ok(());
         }
-        ensure!(
-            start.elapsed() < timeout,
-            "Timed out waiting for {what}; screens {:?}; tools {:?}; state {:?}; world bricks {:?}; pending {}; ghost {:?}; dialogs {:?}",
-            app.ui.stack(),
-            app.network_view()
-                .and_then(|v| v.tools.get(&v.owner).cloned()),
-            app.ui.core.conn,
-            app.network_view().map(|v| v.world.bricks.len()),
-            app.pending_requests(),
-            app.building().and_then(|b| b.ghost()),
-            app.ui.screen(ScreenId::MessageBox).map(|s| s
-                .view()
-                .walk()
-                .map(|n| s.view().text_of(n))
-                .collect::<Vec<_>>())
-        );
+        let latest = progress(app);
+        if latest != seen {
+            // A rehost starts a new server from tick 0: only forward steps count.
+            if let (Some(before), Some(after)) = (seen.0, latest.0) {
+                game_ticks += after.saturating_sub(before);
+            }
+            seen = latest;
+            advanced = now;
+        }
+        let hung = if game_ticks >= HANG.as_secs() * TICK_HZ {
+            Some("its game time ran out")
+        } else if advanced.elapsed() >= HANG {
+            Some("the game stopped advancing")
+        } else {
+            None
+        };
+        if let Some(hung) = hung {
+            bail!(
+                "Timed out waiting for {what}: {hung}; screens {:?}; tools {:?}; state {:?}; world bricks {:?}; pending {}; ghost {:?}; dialogs {:?}",
+                app.ui.stack(),
+                app.network_view()
+                    .and_then(|v| v.tools.get(&v.owner).cloned()),
+                app.ui.core.conn,
+                app.network_view().map(|v| v.world.bricks.len()),
+                app.pending_requests(),
+                app.building().and_then(|b| b.ghost()),
+                app.ui.screen(ScreenId::MessageBox).map(|s| s
+                    .view()
+                    .walk()
+                    .map(|n| s.view().text_of(n))
+                    .collect::<Vec<_>>())
+            );
+        }
         thread::sleep(Duration::from_millis(10));
     }
 }
@@ -180,11 +218,10 @@ fn capture(
         .map_async(wgpu::MapMode::Read, move |result| {
             let _ = tx.send(result);
         });
-    gpu.device.poll(wgpu::PollType::Wait {
-        submission_index: None,
-        timeout: Some(Duration::from_secs(30)),
-    })?;
-    rx.recv_timeout(Duration::from_secs(5))??;
+    // Wait for the copy itself, not a wall-clock deadline: a loaded machine
+    // is slow, not wrong. The map callback has run once the wait returns.
+    gpu.device.poll(wgpu::PollType::wait_indefinitely())?;
+    rx.recv()??;
     let mapped = readback
         .slice(..)
         .get_mapped_range()

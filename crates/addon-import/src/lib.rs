@@ -2781,6 +2781,14 @@ fn sounds_and_rest(cx: &mut Ctx) {
                 vec![],
                 Some("not used by an imported vehicle".into()),
             ),
+            // A sound's settings, read into each sound that names it.
+            "audiodescription" => cx.mark(
+                &name,
+                "sound_description",
+                "consumed",
+                vec![],
+                Some("its volume, looping and 3D are read into each sound that names it".into()),
+            ),
             "fxdtsbrickdata" | "itemdata" | "shapebaseimagedata" | "projectiledata"
             | "explosiondata" => {}
             _ => {
@@ -3077,6 +3085,18 @@ fn finish(
                     d.notes
                         .push(format!("port {}: its callbacks are host rules now", port.port));
                 }
+            }
+            // One the Add-On makes at run time, which the port declares.
+            for d in cx.report.datablocks.iter_mut().filter(|d| {
+                port.replaces.iter().any(|r| r.eq_ignore_ascii_case(&d.name))
+                    && matches!(d.status.as_str(), "recognised_only" | "unsupported")
+            }) {
+                d.status = "consumed".into();
+                d.notes.push(format!(
+                    "port {}: its {} declares what this makes at run time",
+                    port.port,
+                    ports::DATABLOCKS
+                ));
             }
         }
         // A global the copy sets at load and a ported function reads: the
