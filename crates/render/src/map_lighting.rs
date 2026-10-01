@@ -238,7 +238,7 @@ const LEAK_STEP: i64 = 3;
 const LEAK_LEVELS: f32 = 8.0 / 255.0;
 const LEAK_SUN: f32 = 0.12;
 /// Names the fit, the bake and the stored layout; change it with either.
-const FORMAT: &[u8; 8] = b"BRIML\0\0\x0d";
+const FORMAT: &[u8; 8] = b"BRIML\0\0\x0e";
 
 /// A light recovered from a map's lightmaps. The map compiler's point light:
 /// full `color` out to `inner`, then falling linearly to nothing at `outer`,
@@ -895,9 +895,7 @@ impl Bake {
             // Per texel: the lights its rays see take its authored light
             // first, as far as it holds them; what is left over (`rest`) can
             // go to the lights in reach the rays say are hidden (each with
-            // what it gives here). `seen`: the lights its rays see; `held`:
-            // the brightest hidden light a quarter or more of which is left
-            // over (the light the remainder most likely is).
+            // what it gives here). `seen`: the lights its rays see.
             struct Split {
                 index: usize,
                 position: Vec3,
@@ -909,7 +907,6 @@ impl Bake {
                 hidden: Vec<(usize, Vec3)>,
                 hidden_set: u32,
                 seen: u32,
-                held: u32,
             }
             let (w, h) = (parts.width as i64, parts.height as i64);
             let same_surface = |a: &Lexel, b: &Lexel| {
@@ -1005,11 +1002,6 @@ impl Bake {
                         per_light.join(", ")
                     ));
                 }
-                let held = hidden_given
-                    .iter()
-                    .filter(|(_, g)| share(rest, *g) >= 0.25)
-                    .max_by(|a, b| luminance(a.1).total_cmp(&luminance(b.1)))
-                    .map_or(0, |(k, _)| 1 << k);
                 if let Some(at) = split_at.get_mut(i) {
                     *at = Some(splits.len());
                 }
@@ -1024,7 +1016,6 @@ impl Bake {
                     hidden: hidden_given,
                     hidden_set: hidden,
                     seen,
-                    held,
                 });
             }
             // Each texel's neighbours on its surface, and the lights the rays
@@ -1047,6 +1038,21 @@ impl Bake {
                 neighbours.iter().enumerate().map(|(i, n)| n.iter().fold(near[i], |m, &k| m | near[k])).collect()
             };
             let seen_near = spread(&spread(&splits.iter().map(|t| t.seen).collect::<Vec<_>>()));
+            // The light each texel's remainder most likely is: the brightest
+            // of its hidden lights a quarter or more of which is left over,
+            // among those the rays see within two texels. A brighter light
+            // no ray sees there (behind the wall) is not the patch's.
+            let held: Vec<u32> = splits
+                .iter()
+                .zip(&seen_near)
+                .map(|(t, &near)| {
+                    t.hidden
+                        .iter()
+                        .filter(|&&(k, g)| near & (1 << k) != 0 && share(t.rest, g) >= 0.25)
+                        .max_by(|a, b| luminance(a.1).total_cmp(&luminance(b.1)))
+                        .map_or(0, |(k, _)| 1 << k)
+                })
+                .collect();
             // Where a neighbour on the same surface sees one of the texel's
             // hidden lights by rays, the texel is on the edge of that light's
             // patch: the rays from the fitted light and the compiler's
@@ -1071,11 +1077,10 @@ impl Bake {
             // them unevenly, a blotch when they go out.
             let held_around = |i: usize| {
                 let t = &splits[i];
-                let (seen, held) = neighbours[i].iter().fold((0u32, 0u32), |(seen, held), &k| {
-                    let n = &splits[k];
-                    (seen | (n.seen & t.hidden_set), held | (n.held & seen_near[k] & t.hidden_set))
+                let (seen, held_by) = neighbours[i].iter().fold((0u32, 0u32), |(seen, held_by), &k| {
+                    (seen | (splits[k].seen & t.hidden_set), held_by | (held[k] & t.hidden_set))
                 });
-                if seen != 0 { seen } else { held }
+                if seen != 0 { seen } else { held_by }
             };
             // Per texel: its index, its leftover light and each light's share.
             let mut shared: Vec<(usize, Vec3, Vec<f32>)> = Vec::with_capacity(splits.len());
@@ -1971,6 +1976,24 @@ mod tests {
     /// on would keep a dashed line of it when the patch's light goes out.
     #[test]
     fn the_edge_of_a_lights_patch_goes_dark_with_it() {
+        // The plate's shadow by rays starts at x = 2 on the wall; the
+        // compiler lit up to x = 2.6, one texel further.
+        patch_edge_goes_dark(2.6, 0.3);
+    }
+
+    /// As above, with the compiler's shadow two texels past the rays' and
+    /// the light behind the wall brighter than the patch's light there (the
+    /// Bedroom wall above the dresser, beside light 9's patch, with light 6
+    /// behind it). The texel next to the rays' edge most likely holds the
+    /// patch's light, which the rays see beside it, not the brighter light
+    /// behind the wall no ray sees, so the texel past it takes the patch's
+    /// light too and leaves no strip when it goes out.
+    #[test]
+    fn a_patch_edge_two_texels_out_goes_dark_beside_a_brighter_hidden_light() {
+        patch_edge_goes_dark(3.2, 0.8);
+    }
+
+    fn patch_edge_goes_dark(lit_to: f32, behind: f32) {
         let lights = [
             MapLight {
                 position: [0.0, 0.0, 8.0],
@@ -1989,16 +2012,14 @@ mod tests {
             },
             MapLight {
                 position: [0.0, 0.0, -6.0],
-                color: [0.3, 0.3, 0.3],
+                color: [behind; 3],
                 inner: 5.0,
                 outer: 25.0,
                 channel: Some(2),
             },
         ];
         let patch = lights[0];
-        // The plate's shadow by rays starts at x = 2 on the wall; the
-        // compiler lit up to x = 2.6, one texel further.
-        let lit = |p: Vec3| p.x < 2.6;
+        let lit = |p: Vec3| p.x < lit_to;
         let mut scene = crate::scene::SceneData {
             sun_direction: [0.0, -1.0, 0.0],
             ..Default::default()
