@@ -23,7 +23,7 @@ asked to trust when your Add-On runs code on their PC (section 8).
 | Effects drawn on every player's screen | [`gravity-gun-fx`](../../packages/showcase/gravity-gun-fx) | WebAssembly and WGSL shaders reading what the game shows (section 6) |
 | New bricks | a v20-style brick Add-On you import (section 7) | a brick catalog the importer writes |
 | A game mode in Start Game | [`stresslab-mode`](../../packages/stresslab/stresslab-mode) | a `mode` file naming Add-Ons and a map |
-| A team game on a world players dig into, with its own mini-game | [`trench-warfare`](../../packages/trench-warfare) | four Add-Ons: rules with a generated world, a tool, a HUD and a mode whose `minigame` block runs the game (section 6) |
+| A game mode on a world players dig into, with its own mini-game | [`crates/sim/tests/mode_and_voxels.rs`](../../crates/sim/tests/mode_and_voxels.rs) | rules with a generated world, a tool and a mode whose `minigame` block runs the game (section 6) |
 | Worlds, creatures, bodies, blocks | [`packages/stresslab`](../../packages/stresslab) | see section 6 |
 | A whole new game on top: bodies, scoped guns, creatures that shoot back, scoring | [`sample-commando`](../../packages/samples/sample-commando) and its four siblings | five Add-Ons: a weapon, a look with client code, rules, a HUD and a mode ([total-conversion.md](../audits/total-conversion.md)) |
 
@@ -165,6 +165,7 @@ HUD panels can only show keys the viewer receives. `persist` (default
 | `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)` | | `teleport`, `respawn`, `set_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`, `take_item(p, item)`, `drop_item(item, x, y, z[, vx, vy, vz])`: `player` |
 | `raycast(from, dir, range[, ignore])`, `can_damage(by, target)` | | `set_fov(p, fov)`, `set_image_ammo(p, ammo)`, `mount_image(p, image)`, `unmount_image(p)`, `set_scale(p, scale)`, `set_look_limits(p, up, down)`: `player` |
 | `brick_box(brick)`, `voxel(brick)`, `can_place_voxel(x, y, z)` | | `place_voxel(x, y, z, material)`: `world.edit`; `set_avatar_colors(p, colors)`: `player` |
+| `brick(id)`, `bricks_in(min, max)`, `can_plant(kind, [x, y, z], turns)`, `can_edit(brick)` | | `plant_brick(kind, [x, y, z], turns, color, owner)`: `world.edit` |
 | | | `copy_build(p, brick, limit, above_only, tool)`, `copy_box(p, min, max, limit, tool)`, `mirror_copy(p, axis)`: `build` |
 | | | `cut_copy(p)`, `paint_copy(p, color)`, `paint_fill(p, brick, color, limit)`: `world.edit` |
 | | | `push`, `tumble`, `hold`, `reach`, `hold_distance`, `let_go`, `spawn_vehicle`, `remove_vehicle`, `mount_object(mount, rider, node, can_dismount)`, `unmount_object(rider)`: `physics` |
@@ -320,6 +321,25 @@ it is your Add-On's own, which hurts any living player (as `damage` could)
 and credits nobody. Start it clear of the shooter's body. 240 a second per
 Add-On. The Commando's sentry does this from its think.
 
+**Bricks by kind** (`world.edit`). `brick(id)` reads a placed brick:
+`#{ id, kind, x, y, z, turns, color, owner, min, max }`, `kind` being its
+brick catalog id (`v20/brick/brick2x4data`, or an imported Add-On's
+`<ns>:brick/<datablock>`), `x, y, z` its centre, `turns` its clockwise
+quarter turns, `color` its palette index and `owner` the build it is in (0
+for the world's own). `bricks_in(min, max)` lists up to 1024 bricks
+overlapping a box (`InitContainerBoxSearch`). `plant_brick(kind, [x, y, z],
+turns, color, owner)` plants a brick of any loaded kind into build `owner`,
+centred as near the point as the stud and plate grid allows, as v20 rules
+did with `new fxDTSBrick(...).plant()`; where it does not fit (a brick, a
+player or the map in the way) nothing is planted, so ask `can_plant` first
+when it matters. A rule may plant into, or `remove_brick` from, a build its
+caller has full trust on, or, inside a minigame, a build that minigame plays
+with (its owner's bricks, or everyone's with Use All Players' Bricks); hooks
+with no caller touch only the world's own bricks. `can_edit(brick)` asks
+that before a rule changes anything. `aim()` also has `nx, ny,
+nz`, the face the aim met. The Trench Digging port's rules
+(`crates/addon-import/ports/gamemode_trenchdigging/rules`) are built on these.
+
 **Moving things** (`physics`). Players, vehicles (every loose physics body:
 jeeps, balls, the tumble of a knocked-down player) and package entities
 are *objects*, named by a string: `"player:3"`, `"vehicle:12"`,
@@ -408,9 +428,9 @@ material)` puts a cube of one of the world's materials back (`world.edit`,
 out of the same share of 2,048 edits a second as `remove_brick`), and
 `can_place_voxel(x, y, z)` says whether it would fit now: inside the
 world, its chunk generated, and no brick, player or vehicle in the way.
-Dug and placed cubes are saved with the world. Trench Warfare's pick
-([`packages/trench-warfare/trench`](../../packages/trench-warfare/trench/trench.rhai))
-digs dirt into a player's bag and piles it back up this way.
+Dug and placed cubes are saved with the world. The spade in
+[`crates/sim/tests/mode_and_voxels.rs`](../../crates/sim/tests/mode_and_voxels.rs)
+digs dirt out and piles it back up this way.
 
 **Uniforms.** `set_avatar_colors(p, #{ torso: [0.8, 0.1, 0.1], rarm: [...] })`
 paints parts of a player's own look with the rule's colours (`player`),
@@ -502,16 +522,17 @@ letter.
 
 An item, image or projectile `model` may also be your own model: a native
 model file (`*.shape.json`, the format of `bri_content::shape`: x right, y
-up, -z forward) relative to `assets/`, like the Trench Pick's
-`"model": "models/trench_pick.shape.json"`. Nodes `muzzlePoint` and
+up, -z forward) relative to `assets/`, such as
+`"model": "models/pick.shape.json"`. Nodes `muzzlePoint` and
 `ejectPoint` say where a gun fires and throws its casings. Each material names a PNG
 beside the model (`pick_wood` draws `pick_wood.png`, up to 1,024 pixels a
 side), as a vehicle model's do. A node called `mountPoint` is where the hand
 holds it. A `detail9999` detail is what the holder sees in first person
 and the lower details what everyone else sees, so an image state's
 `sequence` (the pick's `"fire"`) can swing the first-person copy alone.
-Its box is its bounds for dropping. `tools/make_trench_assets.py` writes the
-pick's; `bri-addon-check` names a model or texture it cannot find.
+Its box is its bounds for dropping; `bri-addon-check` names a model or
+texture it cannot find. `bri-client`'s `own_model_tool` test fixture writes a
+small example.
 
 An item has one look wherever it is: in a hand (first or third person),
 dropped, on a spawn brick, in a mirror and as its icon. The look is its
@@ -651,8 +672,8 @@ Add-On for the holder, with `aim()` resolved where they look (declare
 `aim_reach` on the command). The Duplicator's `duplicator-tool` does this.
 A state's `"arm"` swings the holder's arm as the image enters it
 (`"armattack"` to strike, `"root"` to rest); v20 chose the swing from the
-image's name in script, so give your own tools this instead. Trench
-Warfare's pick swings on `PreFire` and rests on `StopFire`.
+image's name in script, so give your own tools this instead, for example
+a swing on `PreFire` and a rest on `StopFire`.
 
 More moments can run commands through the image's `commands`:
 
@@ -794,7 +815,7 @@ visuals depending on the rules. `bri-addon-check` tells you which it is.
 | `world` | host | a generated chunk world: materials, a `generate(cx, cz)` function | `packages/stresslab/stresslab-world` |
 | `entity` | host | a scripted creature: model, `think` function, speed, health | `packages/stresslab/stresslab-creeper` |
 | `archetype` | host | a playable body: movement, collision `box` or `ball`, steering, health, riding, model, camera distance | `crates/sim/tests/unlike_modes.rs` |
-| `mode` | host | a Start Game game mode: name, the Add-Ons it runs, a map, and its own mini-game | `packages/stresslab/stresslab-mode`, `packages/trench-warfare/trench-mode` |
+| `mode` | host | a Start Game game mode: name, the Add-Ons it runs, a map, and its own mini-game | `packages/stresslab/stresslab-mode`, `crates/sim/tests/mode_and_voxels.rs` |
 | `model` | each player | a box model for an entity | `packages/stresslab/stresslab-creeper-model` |
 | `hud` | each player | a HUD panel (section 4) | `packages/samples/sample-points-hud` |
 | `weapons` | everyone | weapons (section 5) | `packages/samples/sample-bubble-blaster` |
@@ -812,8 +833,8 @@ world's own bricks, so its brick damage reaches them.
 
 ```json
 "minigame": {
-  "title": "Trench Warfare",
-  "loadout": ["trench-kit:weapon/pick", "v20.weapon.gunitem"],
+  "title": "Dig Off",
+  "loadout": ["dig-kit:weapon/spade", "v20.weapon.gunitem"],
   "player_type": "v20.player.playernojet",
   "respawn_seconds": 5,
   "brick_respawn_seconds": 30,
@@ -835,7 +856,7 @@ world's own bricks, so its brick damage reaches them.
 
 Teams are not a mini-game setting (v20 had none): a rule keeps each
 player's team in a state key, refuses friendly fire in `on_damage` and
-dresses teams with `set_avatar_colors`, as Trench Warfare does.
+dresses teams with `set_avatar_colors`.
 
 An archetype's `model` may be a package model, a v20 shape, or `"none"`
 for no drawn body (client code can then draw its own). Package models draw
@@ -845,6 +866,14 @@ is a whole new body in a dozen lines: no jet, 150 health and faster feet.
 `movement` accepts any of the motor's constants by name (`gravity`,
 `jump_speed`, `air_control`, `step_height` and the rest); `set_archetype`
 switches a player between bodies at any time.
+
+An archetype with `"adjusts": "v20.player.<datablock>"` (and no `base` or
+`name`) is no new body: it changes the constants it names on one of v20's
+own player types while the Add-On is on, as a v20 Add-On's
+`PlayerNoJet.maxStepHeight = 1.2;` did. Players of that type move by them,
+clients predict with them, and every other type stays v20's. Two Add-Ons
+setting one constant: the later id wins. Test:
+`crates/sim/tests/archetype_adjust.rs`.
 
 **Bots you write.** v20 gives the player objects a Vehicle Spawn brick
 makes no brain; the engine's bots walk, find their way round and over
@@ -1019,8 +1048,15 @@ is imported as `proprietary`; for your own work, set `license` in the new
 `package.json`. From a checkout the same importer runs as:
 
 ```sh
-cargo run -p bri-addon-import --bin bri-import-addon -- Weapon_Example.zip out/weapon_example
+cargo run -p bri-addon-import --bin bri-import-addon -- Weapon_Example.zip out/weapon_example --installed content
 ```
+
+`--installed` names the game's content folder. An Add-On builds on the base
+game: a dirt brick declared `brick1x1DirtData : brick1x1Data` inherits the
+stock 1x1's icon and fields, an image names `weaponSwitchSound`. The
+importer reads those base datablocks' names and fields from the installed
+game's brick catalog, weapons, sounds and effects (Import in the Add-Ons
+screen always passes it); without it they are unknown and the report says so.
 
 Many v20 Add-Ons keep part of what they do in scripts: a shotgun's spread,
 a slash command. The report lists each such function under **Needs

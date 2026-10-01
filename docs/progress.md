@@ -8904,6 +8904,41 @@ Tests: `add_on_join::bot_kinds_come_from_the_blockhead_bot_add_on_the_host_runs`
 (generated content: hosts with the Add-On on and off, loads a saved spawn
 brick, counts players). Not run here: the second needs generated content.
 
+## 2026-10-01 Trench Warfare: originals only (branch `claude/trench-warfare-eq4lxb`)
+
+Max chose "originals only" for classic Add-Ons (cmsg_01GZRn7g8JiQ6aV1cQgSj22DVJoRScxbRAjHRC4md4Ab28):
+the game loads their models, textures, sounds and data from the player's
+own Blockland Add-Ons folder at runtime, and we never commit or ship them.
+- Removed `trench-kit` (our generated pickaxe, textures, sounds and icon)
+  and `tools/make_trench_assets.py`; all four Trench Add-Ons are off the
+  default list.
+- Kept the general seams: a mode's `minigame` block, `place_voxel` /
+  `voxel` / `can_place_voxel`, `set_avatar_colors`, an image state's `arm`,
+  Add-On items with their own `*.shape.json` model, and textured icon
+  renders. Their tests now use synthetic CC0 fixtures
+  (`items::add_on_icon_tests::own_model_tool`, `check.rs`, and a stand-in
+  tool in `crates/sim/tests/trench.rs`).
+- Next: the rules, HUD and mode become the port of the original Trench
+  Digging Add-On on the shared classic Add-On loader (owned by the Tier
+  lane), wired to the original's item, image and sound names once the
+  Gate lists Max's copy.
+
+
+## 2026-10-01 Trench Warfare removed: digging only, from the original
+
+Max picked "Digging only": we ship Lilboarder's original Trench Digging
+(`Gamemode_TrenchDigging`), imported and ported to behave as he made it,
+and drop our own Trench Warfare game mode (teams, generated field and
+sandbags, rounds, `/teams`, `/newround`, HUD panel).
+- Deleted `packages/trench-warfare` and `crates/sim/tests/trench.rs`.
+- The generic seams stay, each with a synthetic CC0 test:
+  `crates/sim/tests/mode_and_voxels.rs` (a mode's `minigame` block,
+  `voxel` / `place_voxel` / `can_place_voxel` saved with the world,
+  `set_avatar_colors`), `crates/weapons/tests/addon_seams.rs`
+  `a_states_arm_plays_on_the_holders_arm_thread`, and the own-model and
+  textured-icon tests in `bri-client` `items` and `package-runtime` check.
+- Next: the Trench Digging port (ports/ + host rules companion) once the
+  Gate's import report of Max's copy arrives.
 ## 2026-10-01 Butterfly Knife and HE Grenade ports (branch `claude/butterfly-knife-q2j2lu`)
 
 Max asked for the Butterfly Knife and HE Grenade from his Steam Blockland,
@@ -9340,6 +9375,41 @@ v0.1.10".
   out of minigames, roll it more than 6 units in two seconds; 3.75 without
   the scale).
 
+## 2026-10-01 Trench Digging port (Lilboarder's original, host rules)
+
+The original `Gamemode_TrenchDigging` now imports with a port
+(`crates/addon-import/ports/gamemode_trenchdigging`): its four images run
+the companion host rules' `dig` and `place` instead of `onFire`, the shovel
+and dirt swing the arm from data (`armattack`, `root` 200 ms later), and
+`rules/trench.rhai` rewrites `TrenchDigging.cs` function by function:
+splitting a dirt brick down to the piece nearest the hit, the 100-dirt
+pocket and its colours, putting 2x cubes and 1x1 flats back and regrouping
+eight cubes (four flats) into the next size up to 64x (8x8), `/dumpdirt`,
+`/speeddig`, `/speedplace`, `/infinitedigging` and the bottom-print count.
+Hosts build their field from the dirt bricks like any bricks and hand out
+the shovel and dirt in a normal minigame loadout.
+- New generic seams (`world.edit`): `brick(id)`, `bricks_in(min, max)`,
+  `can_plant`, `can_edit(brick)`, `plant_brick(kind, pos, turns, color,
+  owner)` (snapped to the grid, skipped where it does not fit), and
+  `aim()` reports the face normal. A rule may change a build its caller
+  has full trust on or, in a minigame, a build the minigame plays with;
+  `remove_brick` follows the same rule.
+- Deliberate differences, in the port's notes: digging follows minigame
+  and trust rules (the original let anyone dig any dirt), regrouping joins
+  one build's dirt only, a flat placed on a flat sits on it.
+- `server.cs`'s `PlayerNoJet.maxStepHeight = 1.2` is the new generic seam
+  `ArchetypeDef::adjusts`: an Add-On archetype that changes named constants
+  of one of v20's player types while it is on (No Jet players step 1.2;
+  every other type, and No Jet with no such Add-On, stay v20). Port rules
+  may carry `rules/archetypes/<name>.json`. Test:
+  `bri-sim --test archetype_adjust`. The port is `verified`.
+- Found while testing: our motor already lets a player step a ledge exactly
+  1.0 high (feet rest 0.01 up, so the rise reads 0.99 < 1.0); the
+  adjustment shows on ledges between 1.0 and 1.2.
+- Tests: `bri-addon-import --test ports trench_digging_port_writes_its_rules`
+  (CC0 stand-in with the folder name) and `bri-sim --test trench_digging`
+  (dig and put back to the original 8x cube; flats; minigame loadout and
+  permission; dump and infinite digging; No Jet stepping onto 1.2).
 ## Saves come only from the saves folder (v0.1.11)
 
 Max (03:23Z): the game must never search players' Blockland, v20 or Steam

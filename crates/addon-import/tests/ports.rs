@@ -25,9 +25,7 @@ fn options(input: PathBuf, out: PathBuf) -> Options {
     Options {
         input,
         out,
-        reference: None,
-        core: vec![],
-        version: "1.0.0".into(),
+        ..Default::default()
     }
 }
 
@@ -441,7 +439,7 @@ fn ported_shotgun_recoils_the_shooter_in_a_hosted_game() {
 fn port_command_drafts_a_spread_weapon_and_check_port_verifies_it() {
     let dir = fresh("scaffold");
     let work = dir.join("work");
-    let s = porting::scaffold(&fixture("ports/Weapon_Shotgun"), &work, None, vec![]).unwrap();
+    let s = porting::scaffold(&fixture("ports/Weapon_Shotgun"), &work, None, vec![], None).unwrap();
     assert_eq!(s.drafted, ["shotgunImage::onFire"]);
     assert!(s.to_port.is_empty());
     assert_eq!(s.listed.as_deref(), Some("weapon_shotgun (verified)"));
@@ -505,7 +503,7 @@ fn port_command_drafts_a_spread_weapon_and_check_port_verifies_it() {
 fn hand_ports_start_from_stubs_and_check_as_partial() {
     let dir = fresh("hand");
     let work = dir.join("work");
-    let s = porting::scaffold(&fixture("Weapon_Synthetic_Blaster"), &work, None, vec![]).unwrap();
+    let s = porting::scaffold(&fixture("Weapon_Synthetic_Blaster"), &work, None, vec![], None).unwrap();
     assert!(s.drafted.is_empty());
     assert!(s.to_port.iter().any(|f| f == "blasterImage::onFire"));
     let stubs = std::fs::read_to_string(work.join("stubs.rhai")).unwrap();
@@ -691,6 +689,98 @@ fn sniper_rifle_updated_port_draws_its_own_hands() {
     );
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// Trench Digging's port on a stand-in with its folder name: the four
+/// images run the host rules' commands, the shovel and dirt swing the arm
+/// from data, the dirt shot is the rules' to fire, and the rules read the
+/// dig reach from this copy.
+#[test]
+fn trench_digging_port_writes_its_rules() {
+    let dir = fresh("trench");
+    let root = dir.join("content");
+    let out = root.join("addons/gamemode_trenchdigging");
+    let report = import(&options(
+        fixture("ports/Gamemode_TrenchDigging"),
+        out.clone(),
+    ))
+    .unwrap();
+    let port = &report.ports[0];
+    assert!(port.applied, "{:?}", port.reason);
+    assert_eq!(port.port, "gamemode_trenchdigging");
+    assert_eq!(port.values["reach"], "10");
+    let rules = port.rules.as_ref().expect("the port has rules");
+    assert_eq!(rules.id, "gamemode_trenchdigging-rules");
+
+    let pack = Pack::from_json(&std::fs::read(out.join("assets/weapons.json")).unwrap()).unwrap();
+    let image = |name: &str| &pack.images[&format!("gamemode_trenchdigging:image/{name}")];
+    for (name, command) in [
+        ("trenchshovelimage", "dig"),
+        ("adminshovelimage", "dig"),
+        ("trenchdirtimage", "place"),
+        ("admindirtimage", "place"),
+    ] {
+        assert_eq!(
+            image(name).command.as_deref(),
+            Some(format!("gamemode_trenchdigging-rules:{command}").as_str()),
+            "{name}"
+        );
+    }
+    assert!(image("trenchdirtimage").projectile.is_none());
+    assert!(image("admindirtimage").projectile.is_none());
+    // onPreFire's swing: armattack on PreFire, root 200 ms in (12 + 12
+    // ticks), the shot itself 12 ticks after PreFire starts as before.
+    for name in ["trenchshovelimage", "trenchdirtimage"] {
+        let states = &image(name).states;
+        let arm: Vec<(&str, u32, &str)> = states
+            .iter()
+            .filter(|s| !s.arm.is_empty())
+            .map(|s| (s.name.as_str(), s.ticks, s.arm.as_str()))
+            .collect();
+        assert_eq!(
+            arm,
+            [("PreFire", 12, "armattack"), ("FireArmRest", 24, "root")],
+            "{name}"
+        );
+        let fire = states.iter().position(|s| s.name == "Fire").unwrap();
+        assert_eq!(states[fire].script, "onFire");
+        assert_eq!(
+            states[fire].timeout,
+            states.iter().position(|s| s.name == "FireArmRest")
+        );
+        assert_eq!(
+            states[states.len() - 1].timeout,
+            states.iter().position(|s| s.name == "CheckFire")
+        );
+    }
+    bri_addon_import::ports::check_pins(&out).unwrap();
+
+    // The rules name this import's ids and read its reach.
+    let rules_dir = root.join("addons/gamemode_trenchdigging-rules");
+    let script = std::fs::read_to_string(rules_dir.join("trench.rhai")).unwrap();
+    assert!(script.contains("\"gamemode_trenchdigging:brick/\""));
+    assert!(!script.contains("{{"));
+    let behaviour: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(rules_dir.join("behaviour.json")).unwrap()).unwrap();
+    assert_eq!(behaviour["commands"][0]["aim_reach"], 10);
+    // server.cs's PlayerNoJet.maxStepHeight = 1.2, as an adjustment the
+    // rules provide.
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(rules_dir.join("package.json")).unwrap()).unwrap();
+    assert!(
+        manifest["provides"].as_array().unwrap().iter().any(|p| p["kind"] == "archetype"
+            && p["id"] == "gamemode_trenchdigging-rules:archetype/playernojet"
+            && p["file"] == "archetypes/playernojet.json"),
+        "{manifest}"
+    );
+    let adjust: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(rules_dir.join("archetypes/playernojet.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(adjust["adjusts"], "v20.player.playernojet");
+    assert_eq!(adjust["movement"]["step_height"], 1.2);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 fn ported(name: &str, addon: &str) -> (PathBuf, PathBuf, bri_addon_import::report::Report) {
     let dir = fresh(name);
     let out = dir.join("package");

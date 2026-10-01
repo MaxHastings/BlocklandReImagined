@@ -66,9 +66,7 @@ fn synthetic_addon_imports_with_report() {
     let report = import(&Options {
         input: fixture,
         out: out.clone(),
-        reference: None,
-        core: vec![],
-        version: "1.0.0".into(),
+        ..Default::default()
     })
     .unwrap();
     let r = json(&report);
@@ -225,9 +223,7 @@ fn refuses_to_overwrite_or_write_inside_the_source() {
     let options = |out: PathBuf| Options {
         input: fixture.clone(),
         out,
-        reference: None,
-        core: vec![],
-        version: "1.0.0".into(),
+        ..Default::default()
     };
     assert!(import(&options(fixture.join("nested-output"))).is_err());
     let existing = fresh("existing");
@@ -265,6 +261,7 @@ fn real_steam_knife_and_grenade_ports() {
             reference: Some(reference.clone().into()),
             core: vec![],
             version: "1.0.0".into(),
+            ..Default::default()
         })
         .unwrap();
         let port = &report.ports[0];
@@ -305,8 +302,7 @@ fn real_community_samples() {
             input: Path::new(&archive).join(format!("{name}.zip")),
             out: out.clone(),
             reference: Some(reference.clone().into()),
-            core: vec![],
-            version: "1.0.0".into(),
+            ..Default::default()
         })
         .unwrap();
         (report, out)
@@ -632,9 +628,7 @@ fn imported_weapon_packs_merge_into_one_runtime_pack() {
         import(&Options {
             input,
             out,
-            reference: None,
-            core: vec![],
-            version: "1.0.0".into(),
+            ..Default::default()
         })
         .unwrap();
     }
@@ -818,9 +812,7 @@ datablock ShapeBaseImageData(kitScopeImage) { shapeFile = "./gun.dts"; stateName
     let report = import(&Options {
         input: source.clone(),
         out: out.clone(),
-        reference: None,
-        core: vec![],
-        version: "1.0.0".into(),
+        ..Default::default()
     })
     .unwrap();
     let pack =
@@ -994,8 +986,7 @@ fn a_required_community_add_on_becomes_a_dependency_on_its_import() {
         input: addon,
         out: root.join("package"),
         reference: Some(install),
-        core: vec![],
-        version: "1.0.0".into(),
+        ..Default::default()
     })
     .unwrap();
     let deps: Vec<_> = report
