@@ -148,6 +148,17 @@ impl EnvironmentModel {
     }
     pub fn apply(&mut self, view: EnvironmentView) {
         self.revision += 1;
+        // The host stamps a cycle it is given with its own tick. Once it
+        // runs the draft's day length from the draft's time of day, the
+        // draft takes that stamp: the window then shows the change as
+        // applied, and a later Apply keeps the cycle turning rather than
+        // restarting it.
+        if let Some(d) = self.draft.as_mut().and_then(|d| d.day_cycle.as_mut())
+            && let Some(host) = view.settings.day_cycle
+            && (d.length_seconds, d.time) == (host.length_seconds, host.time)
+        {
+            d.anchor_tick = host.anchor_tick;
+        }
         self.view = Some(view);
     }
     fn authored(&self) -> Authored {
@@ -441,6 +452,32 @@ mod tests {
         assert_eq!(m.draft.as_ref().unwrap().sky_color, Some([1.0, 0.5, 0.0]));
         assert_eq!(m.current_preset(), None);
         m.draft.as_ref().unwrap().validate().unwrap();
+    }
+
+    #[test]
+    fn a_cycle_the_host_runs_shows_as_applied_and_keeps_turning() {
+        let mut m = EnvironmentModel::default();
+        m.apply(view());
+        m.begin();
+        m.set_day_cycle(true);
+        m.set_number(NumberField::DayLength, 60.0);
+        let sent = m.settings();
+        // The host anchors it at its own, later tick.
+        let mut host = sent.clone();
+        host.day_cycle.as_mut().unwrap().anchor_tick = 1500;
+        m.apply(EnvironmentView {
+            settings: host.clone(),
+            tick: 1560,
+            ..view()
+        });
+        assert!(!m.changed(), "the window still says the cycle is not applied");
+        // Applying another change sends the running cycle untouched.
+        m.set_number(NumberField::SunAzimuth, 200.0);
+        assert_eq!(m.settings().day_cycle, host.day_cycle);
+        // A time of day the admin picks is a new cycle again.
+        m.set_number(NumberField::TimeOfDay, 6.0);
+        assert!(m.changed());
+        assert_ne!(m.settings().day_cycle, host.day_cycle);
     }
 
     #[test]
