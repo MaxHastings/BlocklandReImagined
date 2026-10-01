@@ -8539,9 +8539,9 @@ Max: "the steel ball when it hits a player should keep going not stop".
 Max: "explosions from rockets or tank shells don't move steel ball in
 v0.1.10".
 - Blasts did reach the ball: v20's radius impulse divides by the
-  vehicle's mass, so a rocket-sized push (4000, from v20 memory, not
-  checked against content here) moved the 900 kg ball under 4 units in two
-  seconds, from a hit beside it.
+  vehicle's mass, so a rocket-sized push (4000 within 6,
+  confirmed against content on the PC; the tank shell's is 5000 within 15)
+  moved the 900 kg ball under 4 units in two seconds, from a hit beside it.
 - New generic vehicle field `blast_scale` (default 1): weapon and blast
   impulses on a vehicle (`Session::blast_vehicle`, from weapon `Impulse`
   events and the `radiusImpulse` brick event) are scaled by it. Contacts

@@ -1461,13 +1461,13 @@ fn add_launcher(
     pack.projectiles.insert(projectile_id, projectile);
 }
 
-/// Alpha's blast from a `kind` launcher (v20's rocket: 4000 out within
-/// 6; the tank shell adds 2000 up) on the ground beside a resting Steel
-/// Ball, in a minigame or not: how far it rolled away in two seconds.
-fn blast_beside_ball(kind: &str, impulse: f32, vertical: f32, in_minigame: bool) -> f32 {
+/// Alpha's blast from a `kind` launcher pushing `impulse` out within
+/// `radius` on the ground beside a resting Steel Ball, in a minigame or
+/// not: how far it rolled away in two seconds.
+fn blast_beside_ball(kind: &str, impulse: f32, radius: f32, in_minigame: bool) -> f32 {
     let mut g = Game::new();
     let mut pack = weapons();
-    add_launcher(&mut pack, kind, impulse, vertical, 6.0);
+    add_launcher(&mut pack, kind, impulse, 0.0, radius);
     pack.validate().unwrap();
     g.s.set_weapon_pack(pack).unwrap();
     let a = g.join("Alpha", Vec3::new(0.0, 0.05, 0.0));
@@ -1505,13 +1505,15 @@ fn blast_beside_ball(kind: &str, impulse: f32, vertical: f32, in_minigame: bool)
 /// knocks it about as a third of that weight would be.
 #[test]
 fn rockets_and_tank_shells_knock_the_steel_ball_away() {
+    // The stock explosions' pushes: the rocket's 4000 within 6, the tank
+    // shell's 5000 within 15.
     for in_minigame in [false, true] {
-        let rocket = blast_beside_ball("rocket", 4000.0, 0.0, in_minigame);
+        let rocket = blast_beside_ball("rocket", 4000.0, 6.0, in_minigame);
         assert!(
             rocket > 6.0,
             "a rocket rolls it away (minigame {in_minigame}): {rocket}"
         );
-        let shell = blast_beside_ball("tankshell", 4000.0, 2000.0, in_minigame);
+        let shell = blast_beside_ball("tankshell", 5000.0, 15.0, in_minigame);
         assert!(
             shell > 6.0,
             "so does a tank shell (minigame {in_minigame}): {shell}"
