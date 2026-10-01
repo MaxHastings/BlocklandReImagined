@@ -40,7 +40,8 @@ use support::content_root::ContentRoot;
 
 synthetic_and_content!(
     ContentRoot: every_tank_seat_sees_from_the_riders_eye_for_host_and_guest,
-    invert_mouse_in_vehicles_turns_the_nose_both_ways_through_the_app
+    invert_mouse_in_vehicles_turns_the_nose_both_ways_through_the_app,
+    the_tank_turret_keeps_its_aim_through_seat_changes_for_gunner_and_watcher
 );
 
 const SIZE: (u32, u32) = (320, 240);
@@ -747,13 +748,12 @@ fn turret_stays(apps: &mut [&mut App], rider: usize, aim: [f32; 2], phase: &str)
 /// hull's heading after it had been turned onto the barrel, and the turret
 /// swung round to it. Uses only `App` API that 1b2747e has, so it can be
 /// run there to see it fail.
-#[test]
-#[ignore = "requires converted native v20 content, loopback QUIC and offscreen GPU; no window"]
-fn the_tank_turret_keeps_its_aim_through_seat_changes_for_gunner_and_watcher() -> Result<()> {
-    let f = ContentRoot::content()?;
+fn the_tank_turret_keeps_its_aim_through_seat_changes_for_gunner_and_watcher(
+    f: &ContentRoot,
+) -> Result<()> {
     let content = f.root.clone();
-    let (tank_id, _) = vehicles(&f);
-    let tank = definition(&f, tank_id)?;
+    let (tank_id, _) = vehicles(f);
+    let tank = definition(f, tank_id)?;
     let scratch = f.state()?;
     let state = scratch.path().to_path_buf();
     let port = free_port()?;
@@ -788,7 +788,7 @@ fn the_tank_turret_keeps_its_aim_through_seat_changes_for_gunner_and_watcher() -
         Ok(in_game(a[1]))
     })?;
     run_for(&mut [&mut host, &mut guest], 2.0)?;
-    load_vehicle(&f, &mut host, &state.join("Host"), tank_id)?;
+    load_vehicle(f, &mut host, &state.join("Host"), tank_id)?;
     until(&mut [&mut host, &mut guest], "the Tank", 60, |a| {
         Ok(a.iter().all(|a| {
             a.network_view()
@@ -856,8 +856,7 @@ fn the_tank_turret_keeps_its_aim_through_seat_changes_for_gunner_and_watcher() -
     let pose = view.vehicle_poses.values().next().context("no tank")?;
     let forward = Quat::from_array(pose.rotation) * Vec3::NEG_Z;
     let along = forward.x.atan2(-forward.z) - aim[0];
-    let off = (guest.controls.yaw - along + std::f32::consts::PI)
-        .rem_euclid(std::f32::consts::TAU)
+    let off = (guest.controls.yaw - along + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
         - std::f32::consts::PI;
     ensure!(off.abs() < 0.1, "the gunner looks {off} off the barrel");
     for app in [&mut guest, &mut host] {
