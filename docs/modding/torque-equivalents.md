@@ -79,6 +79,11 @@ operation that needs a capability.
 | `%brick.setColor(%c)` over a hand-written search of touching bricks | `paint_fill(p, brick, color, limit)` | `world.edit` |
 | `%client.score`, dynamic fields | `get_player`/`set_player` on declared state | none |
 | `%player.setNodeColor(%node, %color)` for team uniforms | `set_avatar_colors(p, #{ torso: [r, g, b] })`, `set_avatar_colors(p, ())` | `player` |
+| `hideAllNodes(%player)`, `%player.unHideNode(%node)`, `setFaceName`, `setDecalName` for team uniforms | `set_avatar_parts(p, #{ hat: "copHat", face: "smiley" })`, `set_avatar_parts(p, ())`; `avatar_choices()` for `$hat[%i]`, `$accentsAllowed[%hat]` | `player` |
+| `%client.forceEquip(%slot, %item)` for every slot | `set_tools(p, [item, (), ...])` | `player` |
+| `%client.setRespawnTime(%ms)`, `resetRespawnTime()` | `set_respawn_time(p, ms)`, `set_respawn_time(p, ())` | `minigame` |
+| `%mini.playerDatablock`, `%mini.startEquip[%i]` | `minigame(game).player_type`, `.loadout` | none |
+| A pref of `type = "object"` (`object_class = "ItemData"` or `"PlayerData"`) | a setting of `type` `item` or `player_type` | none |
 | Digging a terrain of bricks: `%brick.delete()`, `new fxDTSBrick()` of a dirt cube | `remove_brick(id)`, `place_voxel(x, y, z, material)`, with `voxel(brick)` and `can_place_voxel(x, y, z)` to read | `world.edit` |
 
 ## Hooks

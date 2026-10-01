@@ -661,11 +661,13 @@ fn check_rules(id: &str, manifest: &[u8], files: &[Written]) -> Result<()> {
 /// `{{name|bool}}` `true` or `false` for a TorqueScript truth value (`1`,
 /// `0`, `true`, `false`), as a JSON setting's default needs, and
 /// `{{name|event_params}}` the JSON parameter list of a
-/// `registerOutputEvent` parameter string (see [`event_params`]). A
+/// `registerOutputEvent` parameter string (see [`event_params`]), and
+/// `{{name|lower}}` the text in lower case, as content ids spell a Torque
+/// name (`v20.weapon.{{equip|lower}}`). A
 /// `{{word}}` that names no value is an error, so a misspelt name is
 /// caught, as is a value its filter cannot read.
 fn fill_text(text: &str, values: &BTreeMap<String, String>) -> Result<String> {
-    let re = regex::Regex::new(r"\{\{([A-Za-z_][A-Za-z0-9_]*)(\|bool|\|event_params)?\}\}")?;
+    let re = regex::Regex::new(r"\{\{([A-Za-z_][A-Za-z0-9_]*)(\|bool|\|event_params|\|lower)?\}\}")?;
     let mut problem = None;
     let filled = re.replace_all(text, |c: &regex::Captures| {
         let Some(v) = values.get(&c[1]) else {
@@ -674,6 +676,7 @@ fn fill_text(text: &str, values: &BTreeMap<String, String>) -> Result<String> {
         };
         match c.get(2).map(|m| m.as_str()) {
             None => v.clone(),
+            Some("|lower") => v.to_ascii_lowercase(),
             Some("|event_params") => event_params(v).unwrap_or_else(|e| {
                 problem.get_or_insert_with(|| format!("`{}`: {e:#}", &c[0]));
                 String::new()
@@ -959,5 +962,9 @@ mod tests {
             ])
         );
         assert!(fill(&json!("kit:{missing:lower}"), &values).is_err());
+        assert_eq!(
+            fill_text("v20.weapon.{{p|lower}} {{p}}", &values).unwrap(),
+            "v20.weapon.knifeprojectile knifeProjectile"
+        );
     }
 }

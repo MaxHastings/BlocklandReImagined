@@ -1688,6 +1688,7 @@ mod tests {
             died_tick,
             score: 0,
             minigame: None,
+            team: None,
             invite: None,
             light: false,
             mounted: None,

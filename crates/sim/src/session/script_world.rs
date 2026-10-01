@@ -117,6 +117,18 @@ impl World for ScriptWorld<'_> {
     fn brick(&self, brick: u64) -> Option<bri_package_runtime::script::BrickView> {
         self.session.brick_view(brick)
     }
+    fn avatar_choices(&self) -> BTreeMap<String, Vec<String>> {
+        let Some(pack) = self.session.avatar_catalog.as_ref() else {
+            return BTreeMap::new();
+        };
+        let mut out = pack.parts.clone();
+        out.insert("face".into(), pack.faces.clone());
+        out.insert("decal".into(), pack.decals.clone());
+        for (hat, accents) in &pack.accents_allowed {
+            out.insert(format!("accents.{hat}"), accents.clone());
+        }
+        out
+    }
     fn palette(&self) -> Vec<[f32; 4]> {
         self.session.simulation.state().palette.clone()
     }

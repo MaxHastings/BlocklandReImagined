@@ -21,6 +21,12 @@ pub struct MinigameView {
     pub ally_same_color: bool,
     /// A rule ended the round (`end_round`); the next reset starts another.
     pub round_over: bool,
+    /// Its player type and start tools (`playerDatablock`, `startEquip0`
+    /// to `4`), an empty id for an empty slot.
+    #[serde(default)]
+    pub player_type: String,
+    #[serde(default)]
+    pub loadout: Vec<String>,
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TeamView {
@@ -100,6 +106,11 @@ fn minigame_map(g: &MinigameView) -> Dynamic {
         ("friendly_fire", g.friendly_fire.into()),
         ("ally_same_color", g.ally_same_color.into()),
         ("round_over", g.round_over.into()),
+        ("player_type", g.player_type.clone().into()),
+        (
+            "loadout",
+            Dynamic::from_array(g.loadout.iter().map(|i| i.clone().into()).collect()),
+        ),
     ])
 }
 pub(super) fn brick_map(b: &BrickView) -> Dynamic {
@@ -498,6 +509,20 @@ pub(super) fn register(engine: &mut Engine) {
         push(Op::SetZonePeriod {
             zone: u32::try_from(zone).map_err(|_| "a zone is its index in behaviour.json's zones")?,
             period_ms: u32::try_from(period_ms).map_err(|_| "a zone's period is 10 to 10000 ms")?,
+        })
+    });
+    // The avatar pack's choices by slot, and its faces and decals, in the
+    // pack's order (`$pref::Avatar::Hat` 6 is the seventh hat).
+    engine.register_fn("avatar_choices", || {
+        with_world(|world, _| {
+            let mut out = Map::new();
+            for (slot, names) in world.avatar_choices() {
+                out.insert(
+                    slot.into(),
+                    Dynamic::from_array(names.into_iter().map(Dynamic::from).collect()),
+                );
+            }
+            Ok(out)
         })
     });
     // The paint palette: `[r, g, b, a]` from 0 to 1 for each colour index

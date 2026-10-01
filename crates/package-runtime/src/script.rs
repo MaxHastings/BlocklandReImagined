@@ -172,6 +172,13 @@ pub trait World {
     fn palette(&self) -> Vec<[f32; 4]> {
         Vec::new()
     }
+    /// The server's avatar pack choices, in the pack's order (v20's list
+    /// positions): each part slot's (`hat`, `pack`, ...), `face` and
+    /// `decal`, and `accents.<hat>` for the accents each hat wears
+    /// (`$accentsAllowed`). Empty when the server has no avatar pack.
+    fn avatar_choices(&self) -> BTreeMap<String, Vec<String>> {
+        BTreeMap::new()
+    }
     /// The items the calling package put in the world with `drop_item`
     /// that still lie there.
     fn drops(&self) -> Vec<DropView> {
@@ -1515,6 +1522,23 @@ fn register_api(engine: &mut Engine) {
             equip,
         })
     });
+    // Every tool slot at once (`forceEquip`): an item id or () per slot.
+    engine.register_fn("set_tools", |player: Dynamic, tools: Array| {
+        let tools = tools
+            .into_iter()
+            .map(|t| {
+                if t.is_unit() || t.to_string().is_empty() {
+                    Ok(None)
+                } else {
+                    t.into_string().map(Some).map_err(|_| "a tool is an item id or ()")
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        push(Op::SetTools {
+            player: id(&player)?,
+            tools,
+        })
+    });
     engine.register_fn("take_item", |player: Dynamic, item: &str| {
         push(Op::TakeItem {
             player: id(&player)?,
@@ -1907,6 +1931,39 @@ fn register_presentation(engine: &mut Engine) {
             colors: out,
         })
     });
+    // A uniform's parts over the avatar's own choices: #{ hat: "copHat",
+    // pack: "none", face: "smiley", decal: "AAA-None" }, or () for the
+    // player's own again.
+    engine.register_fn("set_avatar_parts", |player: Dynamic, look: Dynamic| {
+        let (mut parts, mut face, mut decal) = (BTreeMap::new(), None, None);
+        if !look.is_unit() {
+            let Some(look) = look.try_cast::<Map>() else {
+                return fail("set_avatar_parts takes #{ slot: part, face: name, decal: name } or ()");
+            };
+            for (slot, name) in look {
+                let name = name.into_string().map_err(|_| "a part, face or decal is its name")?;
+                match slot.as_str() {
+                    "face" => face = Some(name),
+                    "decal" => decal = Some(name),
+                    s if crate::ops::AVATAR_PARTS.contains(&s) => {
+                        parts.insert(s.to_owned(), name);
+                    }
+                    s => {
+                        return fail(format!(
+                            "`{s}` is not an avatar part slot ({}), face or decal",
+                            crate::ops::AVATAR_PARTS.join(", ")
+                        ));
+                    }
+                }
+            }
+        }
+        push(Op::SetAvatarParts {
+            player: id(&player)?,
+            parts,
+            face,
+            decal,
+        })
+    });
     // temp_look(player, look, seconds): for a while every colour slot
     // #{ color: [r, g, b, a] } or palette colour #{ paint: n } (and no
     // decal), a face #{ face: "name" },
@@ -2011,6 +2068,25 @@ fn register_presentation(engine: &mut Engine) {
             })
         },
     );
+    // How long `player` waits to respawn, in ms, or () for their
+    // mini-game's time.
+    engine.register_fn("set_respawn_time", |player: Dynamic, ms: Dynamic| {
+        let ms = if ms.is_unit() {
+            None
+        } else {
+            Some(
+                ms.as_int()
+                    .ok()
+                    .and_then(|ms| u32::try_from(ms).ok())
+                    .filter(|ms| *ms <= crate::ops::MAX_RESPAWN_MS)
+                    .ok_or("a respawn time is 0 to 999999 ms, or ()")?,
+            )
+        };
+        push(Op::SetRespawnTime {
+            player: id(&player)?,
+            ms,
+        })
+    });
     engine.register_fn("hold_respawn", |player: Dynamic, held: bool| {
         push(Op::HoldRespawn {
             player: id(&player)?,

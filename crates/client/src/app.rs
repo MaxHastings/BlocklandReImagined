@@ -5309,7 +5309,8 @@ pub fn name_opacity(distance: f32, fog_distance: f32, visible_distance: f32) -> 
 /// eye point (`verticalOffset` 0.85), hidden behind the map and raycasting
 /// bricks ([`crate::building::Building::name_visible`]), faded by
 /// [`name_opacity`] and drawn in the mini-game colour a member's player is
-/// given at spawn (`GameConnection::createPlayer`), white otherwise.
+/// given at spawn (`GameConnection::createPlayer`), or their team's (Slayer's
+/// `setShapeNameColor`), white otherwise.
 #[allow(clippy::too_many_arguments)]
 fn name_tags(
     view: &network::View,
@@ -5349,11 +5350,15 @@ fn name_tags(
         if ndc.x.abs() > 1.0 || ndc.y.abs() > 1.0 {
             continue;
         }
-        let color = view
-            .minigames
-            .iter()
-            .find(|m| m.members.contains(owner))
-            .and_then(|m| crate::minigame_ui::color_rgb(m.color))
+        let game = view.minigames.iter().find(|m| m.members.contains(owner));
+        // A team member's name is in their team's paint colour.
+        let team = view.vitals.get(owner).and_then(|v| v.team).and_then(|team| {
+            let color = game?.teams.iter().find(|t| t.id.0 == team)?.color;
+            let rgba = view.world.palette.get(usize::from(color))?;
+            Some([0, 1, 2].map(|i| (rgba[i].clamp(0.0, 1.0) * 255.0).round() as u8))
+        });
+        let color = team
+            .or_else(|| game.and_then(|m| crate::minigame_ui::color_rgb(m.color)))
             .unwrap_or([255; 3]);
         tags.push(bri_ui::api::NameTag {
             x: (ndc.x + 1.0) * 0.5 * size.0 / scale,

@@ -153,6 +153,41 @@ impl Session {
         self.weapons.give(ActorId(owner), item)
     }
 
+    /// `set_tools`: `tools` in `owner`'s slots, as a loadout is put in
+    /// (`forceEquip` for each slot); an item the server lacks leaves its
+    /// slot empty.
+    pub(super) fn package_set_tools(
+        &mut self,
+        owner: OwnerId,
+        tools: Vec<Option<String>>,
+    ) -> Result<()> {
+        ensure!(self.is_alive(owner), "Only living players carry tools");
+        let slots = self
+            .weapons
+            .actor(ActorId(owner))
+            .context("Unknown connection")?
+            .inventory
+            .len();
+        let tools: Vec<Option<String>> = (0..slots)
+            .map(|i| {
+                tools
+                    .get(i)
+                    .cloned()
+                    .flatten()
+                    .filter(|id| self.weapons.contains_item(id))
+            })
+            .collect();
+        self.weapons.set_inventory(ActorId(owner), &tools)?;
+        if self.brick_equipped(owner) {
+            // As a new loadout: empty hands, the brick still picked.
+            self.hold_brick(owner)?;
+        }
+        if let Some(peer) = self.peers.get_mut(&owner) {
+            peer.inspection = None;
+        }
+        Ok(())
+    }
+
     /// Host configuration boundary for subsequent minigame loadout binding.
     /// The default remains the original three tools, never an implicit weapon.
     pub fn set_spawn_loadout(&mut self, loadout: ToolInventory) -> Result<()> {

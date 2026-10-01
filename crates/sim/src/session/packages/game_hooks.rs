@@ -390,6 +390,8 @@ impl Session {
                 friendly_fire: g.teams.friendly_fire,
                 ally_same_color: g.teams.ally_same_color,
                 round_over: g.round_over,
+                player_type: g.settings.player_type.clone(),
+                loadout: g.settings.loadout.iter().map(|i| i.clone().unwrap_or_default()).collect(),
             })
             .collect()
     }

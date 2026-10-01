@@ -32,3 +32,10 @@ function Slayer_TeamSO::getScore(%this)
 	%score = %this.getArtificialScore();
 	return %score;
 }
+
+function Slayer_TeamSO::updateRespawnTime(%this, %type, %flag, %old)
+{
+	%time = %flag * 1000;
+	if(%flag != -1)
+		%time = mClampF(%time, 1000, 999999);
+}

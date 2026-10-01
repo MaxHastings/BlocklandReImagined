@@ -1330,6 +1330,17 @@ impl Session {
                 peer.uniform = colors;
                 Ok(())
             }
+            Op::SetAvatarParts {
+                player,
+                parts,
+                face,
+                decal,
+            } => {
+                let peer = self.peers.get_mut(&player).context("No such player")?;
+                peer.uniform_parts = (!parts.is_empty() || face.is_some() || decal.is_some())
+                    .then_some(UniformParts { parts, face, decal });
+                Ok(())
+            }
             Op::Explode {
                 position,
                 radius,
@@ -1700,6 +1711,7 @@ impl Session {
                 ensure!(self.peers.contains_key(&player), "No such player");
                 self.give_tool(player, &item, equip)
             }
+            Op::SetTools { player, tools } => self.package_set_tools(player, tools),
             Op::TakeItem { player, item } => self.package_take_item(player, &item),
             Op::DropItem {
                 item,
@@ -1991,6 +2003,11 @@ impl Session {
                 ensure!(self.peers.contains_key(&player), "No such player");
                 self.set_player_scale(player, scale)?;
                 self.follow_player_mounts();
+                Ok(())
+            }
+            Op::SetRespawnTime { player, ms } => {
+                let peer = self.peers.get_mut(&player).context("No such player")?;
+                peer.respawn_ms = ms;
                 Ok(())
             }
             Op::SetLookLimits { player, limits } => {

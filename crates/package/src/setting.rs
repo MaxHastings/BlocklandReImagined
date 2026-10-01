@@ -82,7 +82,17 @@ pub enum SettingType {
     List,
     /// Up to `max_length` characters on one line.
     Text,
+    /// One of the server's items, or none (`""`): a start tool (Slayer's
+    /// team `startEquip`, v20's `object` preference of `ItemData`). The
+    /// value is the item's content id; one the server lacks reads as none.
+    Item,
+    /// One of the server's player types (Slayer's team `playerDatablock`).
+    /// The value is the archetype's content id; one the server lacks, or
+    /// `""`, reads as `""`, the mini-game's own.
+    PlayerType,
 }
+/// Longest content id an item or player type setting holds.
+pub const MAX_CONTENT_ID: usize = 128;
 
 /// Who may change a setting.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -242,6 +252,12 @@ impl SettingDef {
                 }
                 items_ok(&self.items).map_err(|e| format!("setting `{what}`: {e}"))?;
             }
+            SettingType::Item | SettingType::PlayerType => {
+                extra("min", self.min.is_some())?;
+                extra("max", self.max.is_some())?;
+                extra("items", !self.items.is_empty())?;
+                extra("max_length", self.max_length.is_some())?;
+            }
             SettingType::Text => {
                 extra("min", self.min.is_some())?;
                 extra("max", self.max.is_some())?;
@@ -301,6 +317,13 @@ impl SettingDef {
                     Err(format!("{} is at most {max} characters on one line", self.title))
                 }
             }
+            (SettingType::Item | SettingType::PlayerType, SettingValue::Text(t)) => {
+                if t.len() <= MAX_CONTENT_ID && t.chars().all(|c| c.is_ascii_graphic()) {
+                    Ok(())
+                } else {
+                    Err(format!("{} is a content id", self.title))
+                }
+            }
             _ => Err(format!(
                 "{} takes {}",
                 self.title,
@@ -309,6 +332,8 @@ impl SettingDef {
                     SettingType::Int => "a whole number",
                     SettingType::List => "one of its choices",
                     SettingType::Text => "text",
+                    SettingType::Item => "an item",
+                    SettingType::PlayerType => "a player type",
                 }
             )),
         }
@@ -362,5 +387,23 @@ mod tests {
         assert!(bad.validate().is_err(), "a number needs its range");
         let bad = def(r#"{ "key": "Bad", "title": "X", "type": "bool", "default": true }"#);
         assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn item_and_player_type_settings_hold_a_content_id_or_none() {
+        let equip = def(
+            r#"{ "key": "equip", "title": "Start Equip 0", "type": "item",
+                 "default": "v20.weapon.hammeritem", "scope": "team" }"#,
+        );
+        equip.validate().unwrap();
+        assert!(equip.check(&SettingValue::Text(String::new()), &[]).is_ok());
+        assert!(equip.check(&SettingValue::Text("a b".into()), &[]).is_err());
+        assert!(equip.check(&SettingValue::Text("x".repeat(129)), &[]).is_err());
+        assert!(equip.check(&SettingValue::Int(1), &[]).is_err());
+        let body = def(
+            r#"{ "key": "body", "title": "Playertype", "type": "player_type",
+                 "default": "v20.player.playerstandardarmor", "max": 3 }"#,
+        );
+        assert!(body.validate().is_err(), "a player type has no range");
     }
 }
