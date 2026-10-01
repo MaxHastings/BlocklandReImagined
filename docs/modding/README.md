@@ -259,7 +259,8 @@ held image it is out of ammo, so its states' `no_ammo` transitions run;
 `true` gives it back. A gun's magazine is image data (section 5); rules
 change it with `give_ammo(p, ammo, rounds)` (an ammo box, up to the most a
 magazine of that ammo carries), `set_reserve(p, ammo, rounds)` (`()` for
-ammo that never runs out), `set_rounds(p, item, rounds)` and `reload(p)`.
+ammo that never runs out), `set_rounds(p, item, rounds)` (the one in hand, else the first they
+carry) and `reload(p)`.
 `set_speed_scale(p, scale)` moves a player at that share of their running,
 crouching and swimming speeds (0 to 4) until they respawn: a heavy gun's
 slowdown. `set_fov(p, fov)` sets the player's field of view (5 to 120
@@ -747,13 +748,17 @@ clicks with `empty_sound` and reloads. The last round, the light key and
 `reload(p)` start a reload that lasts `reload_ticks` (120 a second, up to
 1200) and fills the magazine from the holder's reserve of its `ammo`.
 Every gun loading the same `ammo` shares that reserve; each gun keeps its
-own rounds, also when thrown and picked up by someone else. `one_by_one`
+own rounds, by the tool slot it sits in (two of one gun each keep theirs),
+also when thrown and picked up by someone else. `one_by_one`
 loads a round per `reload_ticks`, as a shotgun's shells, and a pull of the
 trigger stops the loading and fires. The first gun of an ammo type a
 player draws brings `reserve` rounds, never above `max_reserve` (100000 at
 most); a new life brings full magazines and starting reserves again. The
 holder sees `display  rounds / reserve` at the bottom of their screen,
-sent to them alone and only when it changes. A size is 1 to 1000 rounds;
+sent to them alone and only when it changes; with `display_ticks` (up to
+7200) it stays up that long each time, and the states whose scripts
+`display_scripts` names show it again (a dry pull), as does the light key
+when there is nothing to load. A size is 1 to 1000 rounds;
 an ammo name is 1 to 32 letters, digits, `.`, `_` or `-`.
 
 A magazine can instead follow the image's own states, as Tier+Tactical's
@@ -767,7 +772,8 @@ arrive, and `reload_state` the state script the rounds arrive with; its
 A check with `"spend": true` also takes the shot's rounds as it loads one
 (a burst's later rounds, fired by states that do not run `onFire`), and
 one with `"keeps_reload": true` leaves a reload under way unloaded, so a
-forced reload is not cut short by the next check.
+forced reload is not cut short by the next check. A reload these states
+run stops when a tool is drawn or put away.
 
 A pack may fire projectiles of a package it depends on: list their ids in
 `external_projectiles` (`"external_projectiles": ["tier1:projectile/tracer"]`)
@@ -873,7 +879,9 @@ click to grab, roll to reel, let go to drop or fling.
 An item with no `image` is picked up but held by nobody: an ammo box or a
 health pack whose `on_pickup` answers `"take"`. An item's `label` (up to
 32 characters) shows above it where it lies, as v20's `setShapeName` on an
-item: an ammo box's round count. Every item needs a
+item: an ammo box's round count. One with `"rotate": true` turns slowly
+where it lies, once every three seconds, as a v20 item whose `onAdd` set
+`%obj.rotate`. Every item needs a
 `ui_name`, the name players pick it by.
 
 `effects` holds the pack's own particles, emitters and lights in the base
@@ -1021,7 +1029,10 @@ switches a player between bodies at any time. `push_archetype(p, a)` lays
 another body of the same model over theirs for a while (a machine gunner
 slowed as they fire; v20's `pushDatablock`), keeping their damage, and
 `pop_archetype(p, a)` lifts it; `set_archetype` meanwhile changes the body
-underneath, and death lifts them all.
+underneath, and death lifts them all. An archetype with
+`"first_person_only": true` keeps its player's view in the eye whatever
+their camera toggle says (v20's `firstPersonOnly`: Tier 2's slowed
+machine gunner), and the toggle takes over again once the body changes.
 
 An archetype with `"adjusts": "v20.player.<datablock>"` (and no `base` or
 `name`) is no new body: it changes the constants it names on one of v20's

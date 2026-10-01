@@ -1,6 +1,53 @@
 {
   "schema_version": 1,
   "notes": "Tier+Tactical's ammo system, raycasts and gun scripts, shared by every pack built on it (Support_TT_Ammo.cs, Support_TT_Raycasting.cs and Support_TT_Weapons.cs in Weapon_Package_Tier1). With its default settings: the T+T2 ammo system, recoil on, bullet slowdown on, players drop their ammo.",
+  "handles": {
+    "Player::pickup": "engine: magazines are kept per tool slot; a gun picked up brings the rounds it was thrown with, or comes full",
+    "servercmdDropTool": "engine: a thrown gun takes its own slot's rounds with it",
+    "ItemData::onAdd": "engine: the thrown gun lying in the world keeps those rounds for whoever picks it up",
+    "Weapon::onUse": "engine: drawing another copy of the gun in hand switches to that slot's rounds and shows them",
+    "serverCmdUnUseTool": "engine: the ammo display clears as the gun is put away",
+    "gameConnection::onDeath": "engine: the ammo display clears as the dead player's gun leaves the hand",
+    "WeaponImage::onMount": "engine: a gun new to its slot comes full and shows its ammo as it is drawn",
+    "WeaponImage::onUnMount": "engine: the ammo display clears as the gun leaves the hand",
+    "servercmdLight": "the magazine's light_states: the light key reloads in Ready, Empty and EmptyFire, else works the light",
+    "onMissionEnded": "nothing to free: the ammo types it deletes are the port's tables, read at import",
+    "WeaponImage::TT_displayAmmo": "engine ammo display: the ammo's name, rounds and reserve, up for 4 seconds on each change (display_ticks)",
+    "WeaponImage::TT_decrementAmmo": "engine: each shot takes its rounds from the slot's magazine",
+    "WeaponImage::TT_canReload": "the magazine checks' `reserve` fact",
+    "WeaponImage::TT_needsAmmo": "the magazine checks' `shot` and `empty` facts",
+    "WeaponImage::TT_canFire": "the magazine checks' `shot` fact; a dead player's gun has left the hand",
+    "WeaponImage::TT_canStartReload": "the magazine checks' `reserve` fact",
+    "WeaponImage::TT_onDeathCheck": "the magazine check TT_onDeathCheck (ammo on); a dead player's gun has left the hand, so no reload plays",
+    "WeaponImage::TT_onEmptyFire": "the magazine's display_scripts: a dry pull shows the ammo, with no click",
+    "TT_getActiveTool": "engine: rounds are kept by the slot the gun was drawn from",
+    "TT_initAmmo": "the host rules' registered table holds each pack's ammo types",
+    "call:TT_initAmmo": "the host rules' registered table holds each pack's ammo types",
+    "TT_registerAmmoType": "the host rules' registered table reads each call",
+    "TT_defaultIfUnset": "every setting is fixed at the default it gives: the port's numbers are Kai's defaults",
+    "call:TT_defaultIfUnset": "every setting is fixed at the default it gives: the port's numbers are Kai's defaults",
+    "WeaponImage::onFire": "the port's hitscans: TT_raycast guns hit along rays (engine Shot::hitscan)",
+    "WeaponImage::TT_onRaycastHit": "engine hitscan: damage where the minigame allows, the hit projectile's blast, the player or brick hit sound",
+    "WeaponImage::TT_onRaycastDamage": "engine hitscan damage, impulse and vertical push at the shooter's scale; crits in the host rules' raycast_crit",
+    "WeaponImage::TT_isRaycastCritical": "no crit by default; the guns that override it are the host rules' crit_images",
+    "TT_isRaycastHeadshot": "the host rules' head test (crit_images)",
+    "TT_knockback": "the shot's recoil push (the port's TT_knockback script rule)",
+    "Player::TT_setSpeedMultiplier": "engine: a projectile's `slow` scales the hit player's speed",
+    "Player::TT_resetSpeed": "engine: a projectile's `slow` wears off after its ticks",
+    "Player::TT_slow": "engine: a projectile's `slow`, from TT_dampenVelocity in its onCollision",
+    "Player::pushDatablock": "engine push_archetype: the type is laid over the holder's own, same shape only, health kept, never on the dead",
+    "Player::popDatablock": "engine pop_archetype: the type is lifted and the one beneath comes back",
+    "Player::getFirstDatablock": "engine: the holder's own type stays beneath every laid one",
+    "Player::resetDatablock": "engine: death lifts every laid type (no gun in these packs calls it)",
+    "Player::playPain": "engine: changing a player's type plays no pain sound",
+    "ShapeBase::setDatablock": "engine: a type set while others are laid on changes the one beneath",
+    "Armor::onTrigger": "engine image commands: jet with the gun in hand runs its onAltTrigger (the alt_images table)",
+    "ItemData::TT_initAmmoPickup": "the host rules' ammo_items table: each ammo item's TT_ammoPickup lines",
+    "ShapeBase::pickup": "engine: an ammo item the rules used up counts as picked up, so its spawn brick waits its respawn time",
+    "bigstaticItem::onAdd": "the host rules' ammo_items table: the pile's TT_ammoPickup lines",
+    "TT_registerAmmoSet": "its weapon and grenade sets only decide which types a dead player drops: with Kai's defaults players drop every type a pack lets drop and bots none (the host rules' on_death)",
+    "call:TT_registerAmmoSet": "its weapon and grenade sets only decide which types a dead player drops: with Kai's defaults players drop every type a pack lets drop and bots none (the host rules' on_death)"
+  },
   "magazines": {
     "size": "TT_maxAmmo",
     "ammo": "TT_ammoType",
@@ -176,6 +223,10 @@
           "empty"
         ]
       },
+      "display_ticks": 480,
+      "display_scripts": [
+        "TT_onEmptyFire"
+      ],
       "on_loaded": {
         "loaded": true
       }
@@ -419,6 +470,15 @@
     },
     {
       "method": "*",
+      "into": "state",
+      "keep": true,
+      "pattern": "TT_reload\\(\\s*%obj\\s*,\\s*%slot\\s*,\\s*(?P<s>\\w+)\\s*\\)",
+      "set": {
+        "sound": "{s|sound}"
+      }
+    },
+    {
+      "method": "*",
       "into": "magazine",
       "pattern": "TT_incrementReload\\(\\s*%obj\\s*,\\s*%slot\\b",
       "set": {
@@ -488,6 +548,23 @@
         "label": "{f|field|word1|text}"
       },
       "required_by": "setShapeName\\("
+    },
+    {
+      "on": "item",
+      "method": "onAdd",
+      "into": "item",
+      "pattern": "%obj\\.rotate\\s*=\\s*(true|1)\\s*;",
+      "set": {
+        "rotate": true
+      }
+    },
+    {
+      "method": "onMount",
+      "into": "image",
+      "pattern": "playThread\\(\\s*[12]\\s*,\\s*\"?armreadyboth\"?\\s*\\)",
+      "set": {
+        "both_arms": true
+      }
     }
   ],
   "rules": {

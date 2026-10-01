@@ -3,7 +3,10 @@ use crate::*;
 use anyhow::{Result, ensure};
 use bri_content::passage::{MAX_CARRIES, PAST};
 use glam::{Quat, Vec3};
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 pub const MAX_ACTORS: usize = 128;
 pub const MAX_PROJECTILES: usize = 1024;
 pub const MAX_DROPS: usize = 1024;
@@ -600,7 +603,10 @@ pub struct Actor {
     ball_ready: u64,
     spawn_tick: u64,
     tackle_until: u64,
-    /// Rounds in each item's magazine ([`crate::Magazine`]), by item id.
+    /// Rounds in each carried gun's magazine ([`crate::Magazine`]), by
+    /// [`slot_key`]: two of one gun each keep their own, as the tactical
+    /// packs' `%obj.toolAmmo[%slot]` does. A gun a rule mounted with no tool
+    /// selected keeps its rounds under its image id.
     #[serde(default)]
     rounds: BTreeMap<String, u32>,
     /// Reserve ammo by type.
@@ -661,6 +667,16 @@ pub struct AmmoView {
     pub name: String,
     pub reserve: Reserve,
     pub reloading: bool,
+    /// How long the display stays up ([`crate::Magazine::display_ticks`]).
+    pub display_ticks: u32,
+}
+/// The key the rounds of the gun `item` in tool `slot` are kept under.
+fn slot_key(item: &str, slot: usize) -> String {
+    format!("{item}#{slot}")
+}
+/// The item (or image) a magazine key belongs to.
+fn key_item(key: &str) -> &str {
+    key.rsplit_once('#').map_or(key, |(item, _)| item)
 }
 impl Actor {
     /// Whether the fire button is held, whatever is (or is not) in hand.
@@ -854,6 +870,8 @@ impl WeaponsWorld {
         let place = a.inventory.get_mut(slot).context("Invalid item slot")?;
         ensure!(place.is_none(), "Occupied item slot");
         *place = Some(item.into());
+        // A gun new to the slot comes with a full magazine.
+        a.rounds.remove(&slot_key(item, slot));
         Ok(())
     }
     /// Trusted respawn/loadout replacement: unmount held images, clear the
@@ -874,6 +892,14 @@ impl WeaponsWorld {
         self.unmount(id, &mut a);
         a.selected = None;
         a.inventory = items.to_vec();
+        // Each slot's magazine stays with the gun still in it.
+        let kept: BTreeSet<String> = a
+            .inventory
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, item)| Some(slot_key(item.as_ref()?, slot)))
+            .collect();
+        a.rounds.retain(|key, _| kept.contains(key));
         a.spawn_tick = self.tick;
         self.actors.insert(id, a);
         Ok(())
@@ -915,6 +941,13 @@ impl WeaponsWorld {
             None
         };
         let mut a = self.actors.remove(&id).unwrap();
+        // A reload its image's states run stops as a tool is drawn or put
+        // away, as the states do (Tier+Tactical's `onUse` clearing
+        // `TT_forceToolReload`); drawn again, the gun checks its rounds
+        // afresh.
+        if self.magazine_of(&a).is_some_and(|(_, m)| m.scripted()) {
+            a.reload = None;
+        }
         // Selected first, so the image mounting knows whose magazine it is.
         a.selected = slot;
         match image {
@@ -930,6 +963,7 @@ impl WeaponsWorld {
             None => self.unmount(id, &mut a),
         }
         a.selected = slot;
+        self.switch_magazine(id, &mut a);
         self.actors.insert(id, a);
         Ok(())
     }
@@ -1005,8 +1039,8 @@ impl WeaponsWorld {
             })
     }
     /// The magazine of the gun in the right hand and the key its rounds
-    /// are kept under: the tool item it was drawn as, or the image itself
-    /// when a rule mounted it with no tool selected.
+    /// are kept under: the tool slot it was drawn from ([`slot_key`]), or
+    /// the image itself when a rule mounted it with no tool selected.
     fn magazine_of(&self, a: &Actor) -> Option<(String, crate::Magazine)> {
         self.magazine_in(a.images[0].as_ref()?)
     }
@@ -1025,7 +1059,7 @@ impl WeaponsWorld {
         };
         let key = a
             .selected
-            .and_then(|slot| a.inventory.get(slot)?.clone())
+            .and_then(|slot| Some(slot_key(a.inventory.get(slot)?.as_ref()?, slot)))
             .unwrap_or_else(|| image.to_string());
         if a.reload.as_ref().is_some_and(|r| r.item != key) {
             a.reload = None;
@@ -1036,6 +1070,34 @@ impl WeaponsWorld {
             .or_insert(Reserve::Rounds(magazine.reserve.min(magazine.max_reserve)));
         self.magazine_flags(a, image, &key, &magazine);
         Some(key)
+    }
+    /// Another copy of the gun already in hand was selected: the image
+    /// stays mounted, mid-state, but its rounds are now that slot's (the
+    /// tactical packs' `Weapon::onUse` for duplicates, with its own
+    /// `TT_toolAmmo[%toolNum]`).
+    fn switch_magazine(&mut self, id: ActorId, a: &mut Actor) {
+        let Some(slot) = a.selected else { return };
+        let Some(item) = a.inventory.get(slot).cloned().flatten() else {
+            return;
+        };
+        let key = slot_key(&item, slot);
+        let Some(held) = a.images[0].as_mut() else {
+            return;
+        };
+        if held.magazine.is_none() || held.magazine.as_ref() == Some(&key) {
+            return;
+        }
+        held.magazine = Some(key.clone());
+        let image = held.image.clone();
+        let Some(magazine) = self.pack.images[&image].magazine.clone() else {
+            return;
+        };
+        if a.reload.as_ref().is_some_and(|r| r.item != key) {
+            a.reload = None;
+        }
+        a.rounds.entry(key.clone()).or_insert(magazine.size);
+        self.magazine_flags(a, &image, &key, &magazine);
+        self.events.push(Event::Ammo { actor: id });
     }
     /// A shot from the right hand: with a magazine it takes its rounds, or
     /// is refused (the gun clicks, and an empty one reloads). `Some(true)`
@@ -1332,7 +1394,18 @@ impl WeaponsWorld {
                 .iter()
                 .any(|s| s.eq_ignore_ascii_case(&state.name))
         });
-        Ok(in_state && self.reload(id)?)
+        let reloads = in_state && self.reload(id)?;
+        // A gun short of rounds with nothing to load shows what it has
+        // (`TT_onUseLight` with no reserve), and the key works the light.
+        if !reloads
+            && magazine.display_ticks > 0
+            && let Some(view) = self.ammo(id)
+            && view.rounds < view.size
+            && !view.reserve.any()
+        {
+            self.events.push(Event::Ammo { actor: id });
+        }
+        Ok(reloads)
     }
     /// The held gun's magazine and reserve, when it has one.
     pub fn ammo(&self, id: ActorId) -> Option<AmmoView> {
@@ -1340,7 +1413,7 @@ impl WeaponsWorld {
         let (item, magazine) = self.magazine_of(a)?;
         Some(AmmoView {
             rounds: a.rounds.get(&item).copied().unwrap_or(0),
-            item,
+            item: key_item(&item).to_string(),
             size: magazine.size,
             name: magazine.name().to_string(),
             reserve: a
@@ -1350,6 +1423,7 @@ impl WeaponsWorld {
                 .unwrap_or(Reserve::Rounds(0)),
             ammo: magazine.ammo,
             reloading: a.reload.is_some(),
+            display_ticks: magazine.display_ticks,
         })
     }
     /// Every reserve a holder has, by ammo name.
@@ -1413,9 +1487,26 @@ impl WeaponsWorld {
         };
         self.set_reserve(id, ammo, reserve)
     }
-    /// Set the rounds in a holder's magazine of `item` (a gun picked up
-    /// with what it had), up to its size.
+    /// Set the rounds in a holder's magazine of `item`, up to its size: the
+    /// one in hand if they hold it, else the first they carry.
     pub fn set_rounds(&mut self, id: ActorId, item: &str, rounds: u32) -> Result<()> {
+        let a = self.actors.get(&id).context("Unknown actor")?;
+        let holds = |slot: usize| a.inventory.get(slot).and_then(Option::as_deref) == Some(item);
+        let slot = a
+            .selected
+            .filter(|s| holds(*s))
+            .or_else(|| (0..a.inventory.len()).find(|s| holds(*s)))
+            .context("They carry no such item")?;
+        self.set_slot_rounds(id, slot, rounds)
+    }
+    /// Set the rounds in the magazine of the gun in tool `slot`.
+    fn set_slot_rounds(&mut self, id: ActorId, slot: usize, rounds: u32) -> Result<()> {
+        let a = self.actors.get(&id).context("Unknown actor")?;
+        let item = a
+            .inventory
+            .get(slot)
+            .and_then(Option::as_ref)
+            .context("Empty slot")?;
         let size = self
             .pack
             .items
@@ -1423,8 +1514,9 @@ impl WeaponsWorld {
             .and_then(|i| self.pack.images.get(&i.image)?.magazine.as_ref())
             .map(|m| m.size)
             .context("That item has no magazine")?;
+        let item = slot_key(item, slot);
         let mut a = self.actors.remove(&id).context("Unknown actor")?;
-        a.rounds.insert(item.to_string(), rounds.min(size));
+        a.rounds.insert(item.clone(), rounds.min(size));
         if let Some((key, magazine)) = self.magazine_of(&a)
             && key == item
             && let Some(image) = a.images[0].as_ref().map(|e| e.image.clone())
@@ -1671,12 +1763,9 @@ impl WeaponsWorld {
         }
         let a = self.actors.get_mut(&id).unwrap();
         a.inventory[slot] = None;
-        // The magazine goes with the gun unless they carry another of it.
-        let rounds = if a.inventory.iter().flatten().any(|i| *i == item) {
-            None
-        } else {
-            a.rounds.remove(&item)
-        };
+        // The magazine goes with the gun (`servercmdDropTool` handing
+        // `TT_toolAmmo[%slot]` to the item); another of it keeps its own.
+        let rounds = a.rounds.remove(&slot_key(&item, slot));
         let drop = self.next_id;
         self.next_id += 1;
         self.drops.insert(
@@ -1777,7 +1866,9 @@ impl WeaponsWorld {
         if a.selected == Some(slot) {
             self.equip(id, None)?;
         }
-        self.actors.get_mut(&id).expect("checked").inventory[slot] = None;
+        let a = self.actors.get_mut(&id).expect("checked");
+        a.inventory[slot] = None;
+        a.rounds.remove(&slot_key(item, slot));
         Ok(Some(slot))
     }
     /// Host validates contact and minigame permission. Thrower exclusion applies only to its source.
@@ -1790,15 +1881,11 @@ impl WeaponsWorld {
         );
         let item = d.item.clone();
         let rounds = d.rounds;
-        // A holder has one magazine per gun: one who already carries this
-        // gun keeps theirs, as dropping one of two leaves it with them.
-        let carried = self
-            .actors
-            .get(&id)
-            .is_some_and(|a| a.inventory.iter().flatten().any(|i| *i == item));
         let slot = self.give(id, &item)?;
-        if let Some(rounds) = rounds.filter(|_| !carried) {
-            self.set_rounds(id, &item, rounds)?;
+        // Its own magazine comes with it, into the slot it lands in; one
+        // thrown with none comes full (`Player::pickup`).
+        if let Some(rounds) = rounds {
+            self.set_slot_rounds(id, slot, rounds)?;
         }
         self.drops.remove(&drop);
         self.events.push(Event::DropRemoved { drop });
@@ -2099,6 +2186,16 @@ impl WeaponsWorld {
                     && Self::apply_check(a, key, magazine, check)
                 {
                     a.reload = None;
+                    self.events.push(Event::Ammo { actor: id });
+                }
+                // A state that shows the ammo display again.
+                if e.hand == 0
+                    && let Some(magazine) = &image.magazine
+                    && magazine
+                        .display_scripts
+                        .iter()
+                        .any(|s| s.eq_ignore_ascii_case(&state.script))
+                {
                     self.events.push(Event::Ammo { actor: id });
                 }
                 // The magazine's own reload state: its rounds are due now.
@@ -2682,8 +2779,10 @@ impl WeaponsWorld {
                 }
                 if sport {
                     a.ball_ready = self.tick + 36;
-                    if let Some(slot) = a.selected {
-                        a.inventory[slot] = None;
+                    if let Some(slot) = a.selected
+                        && let Some(item) = a.inventory[slot].take()
+                    {
+                        a.rounds.remove(&slot_key(&item, slot));
                     }
                     self.unmount(id, a);
                     self.animation(id, "root");

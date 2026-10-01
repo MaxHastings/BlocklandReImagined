@@ -6433,7 +6433,12 @@ impl PlatformApp for App {
                 let ride = vitals.and_then(|v| v.ride);
                 self.motion
                     .set_mounted(mounted.is_some() || ride.is_some() || driving);
-                self.controls.set_mounted(mounted.is_some() || ride.is_some());
+                self.controls
+                    .set_mounted(mounted.is_some() || ride.is_some());
+                let first_person_only = self
+                    .presented_local()
+                    .is_some_and(|p| view.archetypes.resolve(p.archetype).look.first_person_only);
+                self.controls.set_first_person_only(first_person_only);
                 let head_yaw = self.controls.movement().head_yaw;
                 self.motion
                     .present(view, self.controls.yaw, self.controls.body_pitch(), head_yaw);

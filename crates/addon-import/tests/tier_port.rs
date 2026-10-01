@@ -261,6 +261,12 @@ fn tier1_guns_get_magazines_hitscans_and_volleys() {
         pack.items[&format!("{NS}:weapon/standinpileitem")].label,
         ""
     );
+    // `%obj.rotate = true`: the box turns where it lies; the pile does not.
+    assert!(pack.items[&format!("{NS}:weapon/standinnineitem")].rotate);
+    assert!(!pack.items[&format!("{NS}:weapon/standinpileitem")].rotate);
+    // TT_displayAmmo's four seconds, and a dry pull's TT_onEmptyFire.
+    assert_eq!(mag.display_ticks, 480);
+    assert_eq!(mag.display_scripts, ["TT_onEmptyFire"]);
 
     // The pair fires both hands from one magazine of 4.
     let pair = image("standinpairimage");
@@ -833,6 +839,17 @@ fn tier2_guns_rest_fire_twice_slow_and_switch_modes() {
     .unwrap();
     assert_eq!(laid["movement"]["forward"], json!(3.0));
     assert_eq!(laid["movement"]["can_jet"], json!(false));
+    // `firstPersonOnly`: the gunner sees from the eye; isSurvivor is a mark
+    // only other Add-Ons read.
+    assert_eq!(laid["first_person_only"], json!(true));
+    assert!(
+        !report
+            .unsupported
+            .iter()
+            .any(|u| u.what.contains("LMGArmor")),
+        "{:?}",
+        report.unsupported
+    );
 
     let both = with_tier1(&dir, pack.clone());
     let hold = |item: &str| {
@@ -1042,6 +1059,8 @@ fn tier2a_bursts_scopes_and_the_free_left_gun() {
         (0.0002, Some(0.0008), 0.1)
     );
     assert!(image("dualsmgleftimage").shot.unwrap().free);
+    // `playThread(1, armreadyboth)` as the left gun mounts: both arms up.
+    assert!(image("dualsmgleftimage").both_arms);
     assert!(!image("dualsmgsimage").shot.unwrap().free);
     let scope = image("snipercarbineimage").magazine.unwrap();
     assert!(scope.checks["TT_onLoadCheck"].keeps_reload);
@@ -1134,4 +1153,22 @@ fn tier2a_bursts_scopes_and_the_free_left_gun() {
     g.steps(240);
     assert_eq!(g.mag(a), json!("5|5|tt-556|89"));
     assert_eq!(g.who(a), unscoped);
+    // A reload stops as the gun is put away (`SniperCarbineItem::onUse`
+    // clearing `TT_forceToolReload`): drawn again, it fires what it has.
+    g.cmd(a, Command::WeaponTrigger { down: true });
+    g.steps(2);
+    g.cmd(a, Command::WeaponTrigger { down: false });
+    g.steps(60);
+    g.cmd(a, Command::ToggleLight);
+    g.steps(10);
+    g.cmd(a, Command::EquipTool { slot: None });
+    g.steps(20);
+    g.equip(a, "snipercarbineitem");
+    g.steps(240);
+    assert_eq!(g.mag(a), json!("4|5|tt-556|89"), "no rounds moved");
+    g.cmd(a, Command::WeaponTrigger { down: true });
+    g.steps(2);
+    g.cmd(a, Command::WeaponTrigger { down: false });
+    g.steps(60);
+    assert_eq!(g.mag(a), json!("3|5|tt-556|89"), "it fired");
 }

@@ -136,6 +136,25 @@ Patch keys are files the importer wrote (`assets/weapons.json`,
 pass the weapons pack's checks, or the port is not applied. The patch is all
 or nothing: a port that fails anywhere changes no file.
 
+### What the port carries out
+
+The import report counts a script function as ported when a port's reader
+read it (a shot, a script rule, a table, a magazine's state script that
+only works its rounds) or the port says how the game does it now, in
+`handles`: the function (`"WeaponImage::TT_canFire"`) or a top-level call
+(`"call:TT_registerAmmoType"`) to one line naming the engine seam or host
+rule that does it. A top-level call the port carries out leaves the
+report's unsupported list for its `ported` list ("Carried out by the
+port"), with that line as its resolution; the summary counts both. Say
+only what the game really does: a claim with no seam behind it is a gap
+the report no longer shows.
+
+```json
+"handles": {
+  "servercmdLight": "the magazine's light_states: the light key reloads in Ready, Empty and EmptyFire, else works the light"
+}
+```
+
 ## The recipe in detail
 
 This is what `port` and `check-port` do for you, step by step, and what to
@@ -340,7 +359,7 @@ copy's own items:
 | `types` | each ammo type by the name the items give it: the engine's `ammo` name, the starting `reserve` and the `max_reserve`. An item naming a type not listed stops the port, so a copy with other ammo is named in the report rather than guessed |
 | `reload_ticks` | the reload's length when the image's states do not show it |
 | `one_by_one` | the state script that loads one round (`onReloadSingle`): images with a state running it reload a round at a time, each round lasting from that state back to it |
-| `every` | magazine fields for every gun (`"light_states": ["Ready", "Empty"]`), before `items` |
+| `every` | magazine fields for every gun (`"light_states": ["Ready", "Empty"]`, `"display_ticks": 480` for an ammo display that stays up four seconds each change, `"display_scripts": ["TT_onEmptyFire"]` for states that show it again), before `items` |
 | `items` | extra magazine fields for one item, by datablock name |
 
 The reload lasts as long as the image's own reload states: from the state
@@ -408,7 +427,7 @@ bodies, in order, a later rule's fields winning:
 |---|---|
 | `on` | `image` (the default), `projectile` or `item`: whose methods |
 | `method` | the method (`onFire`, `damage`), several as `onFire\|onFire2`, or `*` for every state script of an image, also with others (`*\|onMount` for a method no state runs) |
-| `into` | for an image: `image`, `shot` (the shot the method fires: `onFire`'s is the image's `shot`, another state script's is its `state_shots` entry), `magazine`, `check` (the magazine's `checks` entry for that script, as the states spell it: a check that `spend`s a round as it loads, or `keeps_reload`) or `state` (each state running the method); for a projectile: `projectile`; for an item: `item` (an ammo box's `label`). Any can fill a `table` instead |
+| `into` | for an image: `image`, `shot` (the shot the method fires: `onFire`'s is the image's `shot`, another state script's is its `state_shots` entry), `magazine`, `check` (the magazine's `checks` entry for that script, as the states spell it: a check that `spend`s a round as it loads, or `keeps_reload`) or `state` (each state running the method); for a projectile: `projectile`; for an item: `item` (an ammo box's `label`, `rotate` for `%obj.rotate = true`). Any can fill a `table` instead |
 | `table` | with `into: "table"`: the rules' `{{name}}`, a Rhai map from each image's or projectile's id to its `set` |
 | `pattern` | a case-insensitive regex; its named groups fill `set` |
 | `required_by` | when a body matches this but not `pattern`, the port stops and names the image, so a copy that does the same some other way is not guessed |

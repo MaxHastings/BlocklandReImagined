@@ -719,8 +719,9 @@ impl Session {
         Ok(())
     }
     /// The ammo display: the held gun's magazine and reserve as a bottom
-    /// print to its holder alone, kept until it changes, and cleared when
-    /// the hand no longer holds a gun with a magazine.
+    /// print to its holder alone, shown again as it changes for as long as
+    /// the magazine's `display_ticks` (until the next change when 0), and
+    /// cleared when the hand no longer holds a gun with a magazine.
     fn show_ammo(&mut self, owner: OwnerId) {
         let Some(view) = self.weapons.ammo(bri_weapons::ActorId(owner)) else {
             if self.ammo_shown.remove(&owner) {
@@ -740,7 +741,7 @@ impl Session {
             owner,
             Notice::Bottom {
                 text: ammo_text(&view),
-                seconds: 0.0,
+                seconds: view.display_ticks as f32 / 120.0,
                 hide_bar: true,
             },
         );

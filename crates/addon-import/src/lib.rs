@@ -2825,18 +2825,52 @@ fn finish(mut cx: Ctx, opts: &Options, ports: &ports::Ports, code: &ports::Code)
             ));
         }
         for b in &mut cx.report.needs_behaviour {
-            if port
-                .covers
-                .iter()
-                .any(|c| c.eq_ignore_ascii_case(&b.function))
+            let how: Vec<String> = port
+                .handled
+                .get(&b.function.to_ascii_lowercase())
+                .map(|h| h.iter().cloned().collect())
+                .unwrap_or_default();
+            if !how.is_empty()
+                || port
+                    .covers
+                    .iter()
+                    .any(|c| c.eq_ignore_ascii_case(&b.function))
             {
                 b.port = Some(report::PortRef {
                     port: port.port.clone(),
                     status: port.status.clone(),
                     applied: port.applied,
+                    how,
                 });
             }
         }
+        // Top-level calls the port reads are carried out, not unsupported.
+        let (ported, unsupported): (Vec<_>, Vec<_>) = std::mem::take(&mut cx.report.unsupported)
+            .into_iter()
+            .partition(|f| {
+                f.what.strip_prefix("top-level call ").is_some_and(|c| {
+                    port.handled
+                        .contains_key(&format!("call:{}", c.to_ascii_lowercase()))
+                })
+            });
+        cx.report.unsupported = unsupported;
+        cx.report.ported = ported
+            .into_iter()
+            .map(|mut f| {
+                let call = f
+                    .what
+                    .trim_start_matches("top-level call ")
+                    .to_ascii_lowercase();
+                f.resolution = port.handled.get(&format!("call:{call}")).map(|h| {
+                    format!(
+                        "port {}: {}",
+                        port.port,
+                        h.iter().cloned().collect::<Vec<_>>().join("; ")
+                    )
+                });
+                f
+            })
+            .collect();
         cx.report.ports.push(port);
     }
     if !cx.host.files.is_empty() && cx.report.ports.iter().all(|p| p.rules.is_none()) {

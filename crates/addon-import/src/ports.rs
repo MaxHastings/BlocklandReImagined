@@ -95,6 +95,27 @@ pub struct Port {
     /// fields merge over them, and its `scripts` follow theirs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub include: Vec<String>,
+    /// What the port carries out that no reader reads from the copy: a
+    /// function (`WeaponImage::TT_canFire`) or a top-level call
+    /// (`call:TT_registerAmmoType`) to how the game does it now (an engine
+    /// seam, the port's rules). The import report counts it as ported when
+    /// the copy has it. Say only what the game really does.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub handles: BTreeMap<String, String>,
+}
+
+/// What a port accounts for, by lower-case function (`pistolimage::onfire`)
+/// or top-level call (`call:tt_registerammotype`): how each is carried out,
+/// from its readers ([`Port::shots`], [`Port::scripts`], tables) and its
+/// [`Port::handles`].
+pub type Handled = BTreeMap<String, BTreeSet<String>>;
+
+/// Records that `how` carries out `what` ([`Handled`]).
+pub(crate) fn handle(handled: &mut Handled, what: &str, how: &str) {
+    handled
+        .entry(what.to_ascii_lowercase())
+        .or_default()
+        .insert(how.to_owned());
 }
 
 /// Where [`Port::include`] files live.
@@ -461,6 +482,9 @@ pub struct Applied {
     /// Why it was not applied.
     pub reason: Option<String>,
     pub notes: String,
+    /// What it carries out of the copy's scripts, and how.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub handled: Handled,
 }
 
 /// A companion host-rules Add-On written beside an import.
@@ -549,12 +573,14 @@ pub fn apply(ports: &Ports, import: &Import, code: &Code, out: &Path) -> Option<
         rules: None,
         reason: None,
         notes: String::new(),
+        handled: Handled::new(),
     };
     match try_apply(ports, e, import, code, out, &mut applied) {
         Ok(()) => applied.applied = true,
         Err(err) => {
             applied.reason = Some(format!("{err:#}"));
             applied.values.clear();
+            applied.handled.clear();
         }
     }
     Some(applied)
@@ -622,6 +648,10 @@ fn try_apply(
         || port.rules.as_ref().is_some_and(|r| !r.tables.is_empty());
     let mut read_patch = None;
     let mut definitions = vec![];
+    let handled = &mut applied.handled;
+    for (what, how) in &port.handles {
+        handle(handled, what, how);
+    }
     if reads {
         let mut weapons: Value = serde_json::from_slice(
             &std::fs::read(out.join(WEAPONS)).context("the import wrote no weapons")?,
@@ -641,12 +671,12 @@ fn try_apply(
             None => patch = Some(p),
         };
         if let Some(m) = &port.magazines {
-            let (p, v) = datablocks::magazines(m, &weapons, code).context("magazines")?;
+            let (p, v) = datablocks::magazines(m, &weapons, code, handled).context("magazines")?;
             add(p);
             read.extend(v);
         }
         if let Some(s) = &port.shots {
-            add(shots::shots(s, &weapons, bodies).context("shots")?);
+            add(shots::shots(s, &weapons, bodies, handled).context("shots")?);
         }
         if let Some(h) = &port.hitscans {
             let r = shots::hitscans(h, &weapons, code).context("hitscans")?;
@@ -654,8 +684,8 @@ fn try_apply(
             definitions = r.definitions;
         }
         if !port.scripts.is_empty() {
-            let reads =
-                datablocks::scripts(&port.scripts, &weapons, code).context("script rules")?;
+            let reads = datablocks::scripts(&port.scripts, &weapons, code, handled)
+                .context("script rules")?;
             add(reads.patch);
             read.extend(reads.tables);
         }
@@ -663,7 +693,7 @@ fn try_apply(
         merge(&mut weapons, &patch);
         add_definitions(&mut weapons, &definitions)?;
         if let Some(r) = &port.rules {
-            read.extend(datablocks::tables(&r.tables, &weapons, code)?);
+            read.extend(datablocks::tables(&r.tables, &weapons, code, handled)?);
             // Constants, with the values the patterns read filled in.
             for (name, value) in &r.values {
                 let value = fill(value, &values).with_context(|| format!("rules value {name}"))?;

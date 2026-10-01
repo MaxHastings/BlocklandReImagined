@@ -194,7 +194,12 @@ fn blocks(body: &str) -> Vec<Block> {
 }
 
 /// The images' shots and volleys from their `onFire` bodies.
-pub fn shots(s: &Shots, weapons: &Value, bodies: &super::Bodies) -> Result<Value> {
+pub fn shots(
+    s: &Shots,
+    weapons: &Value,
+    bodies: &super::Bodies,
+    handled: &mut super::Handled,
+) -> Result<Value> {
     let mut images = serde_json::Map::new();
     for (id, image) in weapons["images"].as_object().into_iter().flatten() {
         let name = image["name"].as_str().unwrap_or_default();
@@ -206,6 +211,7 @@ pub fn shots(s: &Shots, weapons: &Value, bodies: &super::Bodies) -> Result<Value
             // No spread code, only a kick before the shot it hands on
             // (`Parent::onFire`, a raycast): one projectile straight.
             if let Some(recoil) = recoil_of(&uncommented(body)) {
+                super::handle(handled, &format!("{name}::onFire"), "shots: its recoil");
                 images.insert(
                     id.clone(),
                     json!({ "shot": { "projectiles": 1, "spread": 0.0, "recoil": recoil } }),
@@ -292,6 +298,11 @@ pub fn shots(s: &Shots, weapons: &Value, bodies: &super::Bodies) -> Result<Value
             patch["last_shot"] = json!({ "shot": fired, "volleys": volleys });
             patch["magazine"] = json!({ "last_rounds": last.rounds });
         }
+        super::handle(
+            handled,
+            &format!("{name}::onFire"),
+            "shots: its projectiles, spread, recoil and volleys",
+        );
         images.insert(id.clone(), patch);
     }
     // Fire states with scripts of their own (`onFire2`), each one shot of
@@ -331,6 +342,11 @@ pub fn shots(s: &Shots, weapons: &Value, bodies: &super::Bodies) -> Result<Value
             if b.scale != 1.0 {
                 shot["scale"] = json!(b.scale);
             }
+            super::handle(
+                handled,
+                &format!("{name}::{script}"),
+                "shots: the state's own shot",
+            );
             state_shots.insert(script, shot);
         }
         if !state_shots.is_empty() {
@@ -346,11 +362,16 @@ pub fn shots(s: &Shots, weapons: &Value, bodies: &super::Bodies) -> Result<Value
         if let Some(body) = bodies.get(&format!("{name}::damage"))
             && !uncommented(body).to_ascii_lowercase().contains("getscale")
         {
+            super::handle(
+                handled,
+                &format!("{}::damage", p["name"].as_str().unwrap_or_default()),
+                "shots: its direct damage, unscaled",
+            );
             projectiles.insert(id.clone(), json!({ "fixed_damage": true }));
         }
     }
     for (id, image) in weapons["images"].as_object().into_iter().flatten() {
-        let patch = scripted(image, weapons, bodies);
+        let patch = scripted(image, weapons, bodies, handled);
         if patch.as_object().is_some_and(|p| !p.is_empty()) {
             let entry = images.entry(id.clone()).or_insert_with(|| json!({}));
             super::merge(entry, &patch);
@@ -376,7 +397,12 @@ pub fn shots(s: &Shots, weapons: &Value, bodies: &super::Bodies) -> Result<Value
 /// the state names none; and the kick of the recoil blast `onFire` set off
 /// at the shooter (`spawnExplosion` of a projectile whose explosion shakes
 /// the camera), as the shot's `kick`.
-fn scripted(image: &Value, weapons: &Value, bodies: &super::Bodies) -> Value {
+fn scripted(
+    image: &Value,
+    weapons: &Value,
+    bodies: &super::Bodies,
+    handled: &mut super::Handled,
+) -> Value {
     let name = image["name"]
         .as_str()
         .unwrap_or_default()
@@ -417,22 +443,26 @@ fn scripted(image: &Value, weapons: &Value, bodies: &super::Bodies) -> Value {
             continue;
         };
         let body = uncommented(body);
+        let mut did = vec![];
         if state["sound"].as_str().unwrap_or_default().is_empty()
             && let Some(sound) = sound_re.captures(&body).and_then(|c| sound_id(&c[1]))
         {
             state["sound"] = json!(sound);
+            did.push("sound");
             any = true;
         }
         if state["arm"].as_str().unwrap_or_default().is_empty()
             && let Some(arm) = arm_re.captures(&body)
         {
             state["arm"] = json!(arm[1].to_ascii_lowercase());
+            did.push("arm move");
             any = true;
         }
         if state["gesture"].as_str().unwrap_or_default().is_empty()
             && let Some(gesture) = gesture_re.captures(&body)
         {
             state["gesture"] = json!(gesture[1].to_ascii_lowercase());
+            did.push("gesture");
             any = true;
         }
         if let Some(kick) = blast_re
@@ -441,9 +471,18 @@ fn scripted(image: &Value, weapons: &Value, bodies: &super::Bodies) -> Value {
         {
             if script == "onfire" {
                 patch["shot"] = json!({ "kick": kick });
+                did.push("recoil shake");
             } else if blocks(&body).len() == 1 {
                 patch["state_shots"][&script] = json!({ "kick": kick });
+                did.push("recoil shake");
             }
+        }
+        if !did.is_empty() {
+            super::handle(
+                handled,
+                &format!("{name}::{script}"),
+                &format!("states: its {}", did.join(", ")),
+            );
         }
     }
     if any {

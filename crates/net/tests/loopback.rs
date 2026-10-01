@@ -181,8 +181,8 @@ fn tool_pack() -> bri_weapons::Pack {
                 can_drop: true,
                 sport: false,
                 hidden: false,
-
                 label: String::new(),
+                rotate: false,
             },
         );
     }

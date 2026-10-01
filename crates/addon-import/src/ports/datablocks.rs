@@ -162,6 +162,7 @@ pub fn magazines(
     m: &Magazines,
     weapons: &Value,
     code: &super::Code,
+    handled: &mut super::Handled,
 ) -> Result<(Value, BTreeMap<String, String>)> {
     let blocks = Datablocks::new(weapons, code);
     let mut images = serde_json::Map::new();
@@ -244,6 +245,48 @@ pub fn magazines(
             images.insert(image_id.clone(), gun);
         }
     }
+    // A gun's own reload, check and dry-pull scripts that only work its
+    // magazine (`TT_reload`, `setImageLoaded`, `TT_displayAmmo`) are what
+    // the magazine's states run.
+    for (image_id, image) in &images {
+        let magazine = &image["magazine"];
+        let name = weapons["images"][image_id]["name"]
+            .as_str()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let scripts = magazine["reload_state"]
+            .as_str()
+            .into_iter()
+            .chain(["onFire"])
+            .chain(
+                magazine["checks"]
+                    .as_object()
+                    .into_iter()
+                    .flatten()
+                    .map(|(k, _)| k.as_str()),
+            )
+            .chain(
+                magazine["display_scripts"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str),
+            );
+        for script in scripts {
+            let what = format!("{name}::{}", script.to_ascii_lowercase());
+            if code
+                .bodies
+                .get(&what)
+                .is_some_and(|b| only_magazine(b, script))
+            {
+                super::handle(
+                    handled,
+                    &what,
+                    "its magazine's state: the engine moves the rounds, sets the flags and shows the ammo",
+                );
+            }
+        }
+    }
     let types = m
         .types
         .iter()
@@ -262,6 +305,37 @@ pub fn magazines(
         ("magazine_types".to_owned(), rhai(&Value::Object(types))),
     ]);
     Ok((json!({ "images": images }), values))
+}
+
+/// Whether a gun's script body only works its magazine: every call it
+/// makes is one the magazine's states carry out, and it plays no sound or
+/// arm move of its own (those are read as the state's own). An `onFire`
+/// may also take its rounds and fire the image's own shot.
+fn only_magazine(body: &str, script: &str) -> bool {
+    const MAGAZINE: [&str; 6] = [
+        "tt_reload",
+        "tt_incrementreload",
+        "tt_displayammo",
+        "setimageloaded",
+        "setimageammo",
+        "getdamagepercent",
+    ];
+    let call = regex::Regex::new(r"([A-Za-z_][A-Za-z0-9_]*)\s*\(").expect("call pattern");
+    let calls: Vec<_> = call
+        .captures_iter(body)
+        .map(|c| c[1].to_ascii_lowercase())
+        .filter(|c| !matches!(c.as_str(), "if" | "while" | "for" | "return"))
+        .collect();
+    let sounded = regex::Regex::new(r"(?i)tt_(reload|incrementreload)\s*\(\s*%obj\s*,\s*%slot\s*,")
+        .expect("sound pattern");
+    let fire = script.eq_ignore_ascii_case("onFire");
+    !calls.is_empty()
+        && calls.iter().all(|c| {
+            MAGAZINE.contains(&c.as_str())
+                || fire && matches!(c.as_str(), "tt_decrementammo" | "onfire")
+        })
+        && (!fire || calls.iter().any(|c| c == "onfire"))
+        && !sounded.is_match(body)
 }
 
 /// How long the image's own reload takes: from the state its ready state
@@ -358,6 +432,21 @@ pub struct ScriptRule {
     pub keep: bool,
 }
 
+impl ScriptRule {
+    /// What it reads, for the import report: where it puts what it read.
+    fn reads(&self) -> String {
+        let keys = self
+            .set
+            .as_object()
+            .map(|m| m.keys().cloned().collect::<Vec<_>>().join(", "))
+            .unwrap_or_default();
+        match self.into.as_str() {
+            "table" => format!("script rule: the host rules' {} table ({keys})", self.table),
+            into => format!("script rule: its {into}'s {keys}"),
+        }
+    }
+}
+
 fn image_owner() -> String {
     "image".to_owned()
 }
@@ -371,7 +460,12 @@ pub struct ScriptReads {
 
 /// [`ScriptRule`]s applied to the import's script bodies (lowercase
 /// `owner::method` to body).
-pub fn scripts(rules: &[ScriptRule], weapons: &Value, code: &super::Code) -> Result<ScriptReads> {
+pub fn scripts(
+    rules: &[ScriptRule],
+    weapons: &Value,
+    code: &super::Code,
+    handled: &mut super::Handled,
+) -> Result<ScriptReads> {
     let bodies = &code.bodies;
     let blocks = Datablocks::new(weapons, code);
     let cx = |owner| Fill {
@@ -447,6 +541,7 @@ pub fn scripts(rules: &[ScriptRule], weapons: &Value, code: &super::Code) -> Res
                     };
                     let set = fill(&rule.set, &values, &cx(name))
                         .with_context(|| format!("{name}::{method}"))?;
+                    super::handle(handled, &format!("{name}::{method}"), &rule.reads());
                     let into = if rule.into == "table" {
                         tables.entry(rule.table.clone()).or_default()
                     } else {
@@ -489,6 +584,7 @@ pub fn scripts(rules: &[ScriptRule], weapons: &Value, code: &super::Code) -> Res
                 };
                 let set = fill(&rule.set, &values, &cx(owner))
                     .with_context(|| format!("{name}::{method}"))?;
+                super::handle(handled, &format!("{owner}::{method}"), &rule.reads());
                 if rule.into == "table" {
                     // A row with a field that names nothing is left out.
                     if set
@@ -795,6 +891,7 @@ pub fn tables(
     tables: &BTreeMap<String, Table>,
     weapons: &Value,
     code: &super::Code,
+    handled: &mut super::Handled,
 ) -> Result<BTreeMap<String, String>> {
     let blocks = Datablocks::new(weapons, code);
     let calls = &code.calls;
@@ -834,6 +931,11 @@ pub fn tables(
                     .collect();
                 rows.insert(crate::literal(key).to_owned(), Value::Object(row));
             }
+            super::handle(
+                handled,
+                &format!("call:{}", t.call),
+                &format!("the host rules' {name} table reads each call"),
+            );
             out.insert(name.clone(), rhai(&Value::Object(rows)));
             continue;
         }

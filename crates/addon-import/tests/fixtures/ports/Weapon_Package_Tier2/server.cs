@@ -149,6 +149,8 @@ datablock PlayerData(LMGArmor : PlayerStandardArmor)
    maxSideSpeed = 3;
    canJet = false;
    uiName = "";
+   firstPersonOnly = 1;
+   isSurvivor = 1;
 };
 
 datablock ProjectileData(LightMachinegunProjectile1 : standinSMGProjectile)

@@ -281,6 +281,36 @@ fn a_thrown_gun_keeps_its_rounds_for_whoever_picks_it_up() {
 }
 
 #[test]
+fn two_of_one_gun_each_keep_their_own_magazine() {
+    // Tier+Tactical's `%obj.toolAmmo[%slot]`: one per slot, not per gun.
+    let mut w = world();
+    let first = holding(&mut w, A, "mag:weapon/pistol");
+    let second = w.give(A, "mag:weapon/pistol").unwrap();
+    click(&mut w);
+    click(&mut w);
+    assert_eq!(rounds(&w).0, 1);
+    w.equip(A, Some(second)).unwrap();
+    step(&mut w, 8);
+    assert_eq!(rounds(&w).0, 3, "the other copy is still full");
+    click(&mut w);
+    assert_eq!(rounds(&w).0, 2);
+    w.equip(A, Some(first)).unwrap();
+    step(&mut w, 8);
+    assert_eq!(rounds(&w).0, 1, "the first copy kept what it had");
+    // Each thrown copy takes its own magazine with it; a gun picked into
+    // a slot it never filled before comes with what it had.
+    let drop = w.drop_item(A, second).unwrap();
+    assert_eq!(w.drops().find(|d| d.id == drop).unwrap().rounds, Some(2));
+    assert_eq!(rounds(&w).0, 1, "the one in hand is untouched");
+    let drop = w.drop_item(A, first).unwrap();
+    assert_eq!(w.drops().find(|d| d.id == drop).unwrap().rounds, Some(1));
+    // A new gun in an emptied slot is full, not the old one's leftovers.
+    let slot = holding(&mut w, A, "mag:weapon/pistol");
+    assert_eq!(slot, first);
+    assert_eq!(rounds(&w).0, 3);
+}
+
+#[test]
 fn magazines_and_ammo_commands_are_checked() {
     for (from, to) in [
         ("\"size\": 3,", "\"size\": 0,"),

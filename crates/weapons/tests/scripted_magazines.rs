@@ -248,3 +248,57 @@ fn checks_need_a_reload_state_and_facts() {
     let bad = GUNS.replacen(r#""loaded": ["shot"]"#, r#""loaded": []"#, 1);
     assert!(Pack::from_json(bad.as_bytes()).is_err());
 }
+
+#[test]
+fn the_ammo_display_comes_back_on_a_dry_pull_and_a_light_key_with_nothing_to_load() {
+    // Tier+Tactical's TT_onEmptyFire and TT_onUseLight: the display shows
+    // for its four seconds again, its rounds unchanged.
+    let json = GUNS
+        .replacen(
+            r#""light_states": ["Ready", "Empty"]
+            },
+            "states": [
+                { "name": "Activate", "ticks": 4, "timeout": 7 },
+                { "name": "Ready", "down": 2, "not_loaded": 13 },"#,
+            r#""light_states": ["Ready", "Empty"],
+                "display_ticks": 480, "display_scripts": ["DryPull"]
+            },
+            "states": [
+                { "name": "Activate", "ticks": 4, "timeout": 7 },
+                { "name": "Ready", "down": 2, "not_loaded": 13 },"#,
+            1,
+        )
+        .replacen(
+            r#"{ "name": "EmptyFire", "ammo": 9, "loaded": 1, "up": 14 }"#,
+            r#"{ "name": "EmptyFire", "ammo": 9, "loaded": 1, "up": 14, "script": "DryPull" }"#,
+            1,
+        );
+    assert_ne!(json, GUNS);
+    let mut w = WeaponsWorld::new(Pack::from_json(json.as_bytes()).unwrap()).unwrap();
+    w.add_actor(A, 5).unwrap();
+    let slot = w.give(A, "mag:weapon/pistol").unwrap();
+    w.equip(A, Some(slot)).unwrap();
+    step(&mut w, 10);
+    assert_eq!(w.ammo(A).unwrap().display_ticks, 480);
+    w.set_reserve(A, "nine", Reserve::Rounds(0)).unwrap();
+    for _ in 0..3 {
+        assert_eq!(click(&mut w), 1);
+    }
+    step(&mut w, 40);
+    assert_eq!(state(&w), "Empty");
+    let shown = |events: &[Event]| {
+        events
+            .iter()
+            .filter(|e| matches!(e, Event::Ammo { actor } if *actor == A))
+            .count()
+    };
+    w.trigger(A, true).unwrap();
+    let events = step(&mut w, 2);
+    w.trigger(A, false).unwrap();
+    assert_eq!(state(&w), "EmptyFire");
+    assert_eq!(shown(&events), 1, "the dry pull shows the ammo");
+    step(&mut w, 4);
+    assert!(!w.light_key(A).unwrap(), "nothing to load: the light works");
+    assert_eq!(shown(&step(&mut w, 1)), 1, "and the ammo shows");
+    assert_eq!(rounds(&w), (0, Reserve::Rounds(0)));
+}

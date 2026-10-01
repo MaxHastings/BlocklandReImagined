@@ -44,6 +44,11 @@ const FREE_AT_ZERO: &[&str] = &[
     "minjumpenergy",
 ];
 
+/// Marks Torque never reads, set for other Add-Ons' scripts to find
+/// (Left4Block's survivors): a player type keeps none, as no script of ours
+/// asks.
+const SCRIPT_MARKS: &[&str] = &["issurvivor"];
+
 /// What a `PlayerData` became.
 #[derive(Debug)]
 pub struct Converted {
@@ -101,7 +106,15 @@ pub fn convert(fields: &BTreeMap<String, String>, base: Option<String>) -> Conve
         } else if key == "uiname" {
             archetype["name"] = json!(v);
             continue;
-        } else if key == "mass" || (FREE_AT_ZERO.contains(&key) && number(v) == Some(0.0)) {
+        } else if key == "firstpersononly" {
+            if let Some(b) = flag(v) {
+                archetype["first_person_only"] = json!(b);
+                continue;
+            }
+        } else if key == "mass"
+            || SCRIPT_MARKS.contains(&key)
+            || (FREE_AT_ZERO.contains(&key) && number(v) == Some(0.0))
+        {
             continue;
         }
         left_out.push(key.to_owned());
@@ -175,7 +188,8 @@ mod tests {
         assert_eq!(c.archetype["name"], json!(""));
         assert_eq!(c.archetype["energy_bar"], json!(false));
         assert!(c.archetype.get("base").is_none());
-        assert_eq!(c.left_out, ["firstpersononly", "issurvivor"]);
+        assert!(c.left_out.is_empty(), "{:?}", c.left_out);
+        assert_eq!(c.archetype["first_person_only"], json!(true));
         assert_eq!(number("8.3 * 90"), Some(8.3 * 90.0));
         assert_eq!(number("$foo"), None);
     }

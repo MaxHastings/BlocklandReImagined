@@ -736,6 +736,9 @@ pub struct ArchetypeDef {
     pub model: Option<String>,
     #[serde(default)]
     pub camera_distance: Option<f32>,
+    /// The view stays first person (v20 `firstPersonOnly`).
+    #[serde(default)]
+    pub first_person_only: Option<bool>,
 }
 /// One rider seat: the model node riders follow, its rest position from
 /// the feet (facing -Z, at scale 1) and the rider's action (`root`, `sit`).

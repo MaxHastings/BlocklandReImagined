@@ -674,6 +674,17 @@ pub struct Magazine {
     /// state and never works the light. At most 8.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub light_states: Vec<String>,
+    /// How long the ammo display stays up each time it changes, in ticks
+    /// (120 a second), up to 7200: Tier+Tactical's `bottomPrint` for
+    /// `$Pref::Server::TT::DisplayTime` seconds. 0 keeps it up until the
+    /// gun is put away.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub display_ticks: u32,
+    /// State scripts (any case) whose state shows the ammo display again
+    /// as the image enters it, its rounds unchanged: a dry pull's
+    /// `TT_onEmptyFire`. At most 8.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub display_scripts: Vec<String>,
 }
 /// [`Magazine::checks`]: the flags a script sets, each left as it was when
 /// absent.
@@ -804,6 +815,15 @@ impl Magazine {
                     .iter()
                     .all(|s| (1..=64).contains(&s.len())),
             "Invalid magazine light states"
+        );
+        ensure!(
+            self.display_ticks <= 7200
+                && self.display_scripts.len() <= 8
+                && self
+                    .display_scripts
+                    .iter()
+                    .all(|s| (1..=64).contains(&s.len())),
+            "Invalid magazine display"
         );
         Ok(())
     }
@@ -1210,6 +1230,11 @@ pub struct Item {
     /// characters.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub label: String,
+    /// Where it lies, it turns slowly about its up axis, once every three
+    /// seconds, as a v20 item whose `onAdd` set `%obj.rotate = true` (an
+    /// ammo box). Only its look turns.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub rotate: bool,
 }
 impl Default for Item {
     fn default() -> Self {
@@ -1224,6 +1249,7 @@ impl Default for Item {
             sport: false,
             hidden: false,
             label: String::new(),
+            rotate: false,
         }
     }
 }

@@ -143,12 +143,16 @@ fn raycast_crit(victim, attacker, amount, info) {
 }
 
 // Item_Ammo.cs: an ammo item adds each of its lines up to the type's most,
-// and is used up when it added any. Ammo_Unified.cs: the bag a dead
-// player left holds what they carried.
+// and is used up when it added any; bots leave them ($Pref BotAmmoPickUp
+// off). Ammo_Unified.cs: the bag a dead player left holds what they
+// carried.
 fn on_pickup(p, item, info) {
     let me = player(p);
     if me == () {
         return ();
+    }
+    if me.bot && (item == bag() || ammo_items().contains(item)) {
+        return false;
     }
     let lines = [];
     // Item_Ammo.cs's own sound unless the item names one of its pack's.
@@ -205,10 +209,12 @@ fn on_pickup(p, item, info) {
 
 // Ammo_Unified.cs: a dead player's ammo spills out in a bag thrown up and
 // to a random side: every registered type they hold any of, but the heavy
-// cache Frog's pack keeps.
+// cache Frog's pack keeps. Every type is in the weapon or grenade set,
+// and players drop both ($Pref PlayerAmmoDrop and PlayerNadeDrop on);
+// bots drop neither.
 fn on_death(victim, killer) {
     let me = player(victim);
-    if me == () {
+    if me == () || me.bot {
         return;
     }
     let types = ammo_types();

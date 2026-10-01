@@ -139,6 +139,12 @@ function DualSMGsImage::onMount(%this,%obj,%slot)
    %obj.mountImage(DualSMGLeftImage, 1);
 }
 
+function DualSMGLeftImage::onMount(%this,%obj,%slot)
+{
+   Parent::onMount(%this, %obj, %slot);
+   %obj.playThread(1, armreadyboth);
+}
+
 function DualSMGsImage::onFireAkimbo(%this,%obj,%slot)
 {
    %obj.setImageTrigger(1,1);

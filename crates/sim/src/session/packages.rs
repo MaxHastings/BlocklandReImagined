@@ -536,6 +536,9 @@ fn archetype(
     if let Some(v) = &def.model {
         archetype.look.model = v.clone();
     }
+    if let Some(v) = def.first_person_only {
+        archetype.look.first_person_only = v;
+    }
     if let Some(v) = def.camera_distance {
         archetype.look.camera_distance = v;
     }
