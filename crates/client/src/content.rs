@@ -1473,10 +1473,7 @@ mod tutorial_hammer {
                 administrator: true,
                 ..Default::default()
             };
-            let build = bri_world::build::SavedBuild {
-                schema_version: bri_world::build::BUILD_SCHEMA,
-                world,
-            };
+            let build = bri_world::build::SavedBuild::new(world);
             let plan =
                 bri_world::build::LoadPlan::prepare(sim.state(), build, 1, false, 2).unwrap();
             sim.load_build(&actor, plan).unwrap();

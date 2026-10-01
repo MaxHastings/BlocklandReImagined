@@ -287,6 +287,13 @@ fn reset_flags(game, gone) {
             set_player(p.id, "carrying", ());
         }
     }
+    if g == () {
+        // The game is gone, and what was kept of it with it.
+        let games = get("games");
+        games.remove(`${game}`);
+        set("games", games);
+        return;
+    }
     let s = game_state(game);
     s.returns = #{};
     s.pickups_by = #{};

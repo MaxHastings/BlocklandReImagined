@@ -2154,9 +2154,13 @@ impl Session {
                 self.equip_tool(owner, slot)?;
                 Ok(Reply::Accepted)
             }
-            Command::SaveBuild { events, ownership } => Ok(Reply::Saved(Box::new(
-                bri_world::build::SavedBuild::capture(&self.saved_world(), events, ownership)?,
-            ))),
+            Command::SaveBuild { events, ownership } => {
+                let mut build =
+                    bri_world::build::SavedBuild::capture(&self.saved_world(), events, ownership)?;
+                build.minigame = self.saved_minigame(owner);
+                build.validate()?;
+                Ok(Reply::Saved(Box::new(build)))
+            }
             Command::LoadBuild { build, ownership } => {
                 let bricks = self.start_build_load(owner, *build, ownership)?;
                 Ok(Reply::Loaded { bricks })

@@ -28,6 +28,10 @@ pub struct MinigameView {
     pub player_type: String,
     #[serde(default)]
     pub loadout: Vec<String>,
+    /// Points for killing a player (`points_KillPlayer`), which the
+    /// engine gives the killer at every kill in the game.
+    #[serde(default)]
+    pub points_kill_player: i64,
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TeamView {
@@ -112,6 +116,7 @@ fn minigame_map(g: &MinigameView) -> Dynamic {
             "loadout",
             Dynamic::from_array(g.loadout.iter().map(|i| i.clone().into()).collect()),
         ),
+        ("points_kill_player", Dynamic::from_int(g.points_kill_player)),
     ])
 }
 pub(super) fn brick_map(b: &BrickView) -> Dynamic {
@@ -136,7 +141,7 @@ pub(super) fn brick_map(b: &BrickView) -> Dynamic {
         ("item", b.item.clone().into()),
     ])
 }
-fn optional_id(value: &Dynamic) -> Fallible<Option<u64>> {
+pub(super) fn optional_id(value: &Dynamic) -> Fallible<Option<u64>> {
     if value.is_unit() {
         Ok(None)
     } else {

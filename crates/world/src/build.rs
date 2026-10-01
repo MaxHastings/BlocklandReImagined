@@ -18,6 +18,9 @@ struct FileHead {
     /// The world without its bricks.
     world: World,
     bricks: u64,
+    /// [`SavedBuild::minigame`]; builds saved before it have none.
+    #[serde(default)]
+    minigame: Option<serde_json::Value>,
 }
 #[derive(Serialize, Deserialize)]
 struct FileBricks {
@@ -34,6 +37,7 @@ pub fn encode(build: &SavedBuild) -> Result<Vec<u8>> {
         schema_version: build.schema_version,
         world,
         bricks: bricks.len() as u64,
+        minigame: build.minigame.clone(),
     };
     let body = FileBricks {
         bricks: crate::packed::Packed::pack(bricks.iter().map(|(id, b)| (*id, Some(b)))),
@@ -136,6 +140,7 @@ pub fn decode(bytes: &[u8]) -> Result<SavedBuild> {
         let build = SavedBuild {
             schema_version: head.schema_version,
             world,
+            minigame: head.minigame,
         };
         build.validate()?;
         return Ok(build);
@@ -149,6 +154,7 @@ pub fn decode(bytes: &[u8]) -> Result<SavedBuild> {
             world: serde_json::from_slice::<World>(bytes).with_context(|| {
                 format!("Invalid native build ({build_error}) or imported world")
             })?,
+            minigame: None,
         },
     };
     build.validate()?;
@@ -156,6 +162,8 @@ pub fn decode(bytes: &[u8]) -> Result<SavedBuild> {
 }
 
 pub const BUILD_SCHEMA: u32 = 2;
+/// Most bytes a build's mini-game takes, as JSON.
+pub const MAX_MINIGAME_BYTES: usize = 1 << 20;
 
 /// A saved build. Brick owners are the world's owner numbers, and the
 /// world's owner table says which player (principal) each one is, so loading
@@ -165,12 +173,20 @@ pub const BUILD_SCHEMA: u32 = 2;
 pub struct SavedBuild {
     pub schema_version: u32,
     pub world: World,
+    /// The mini-game the build was saved with (its settings, teams and the
+    /// Add-On data kept per mini-game), as the host describes it, for the
+    /// host to set up again on loading (Slayer's saved mini-game configs).
+    /// Builds saved before it, or by someone running no mini-game, have
+    /// none.
+    #[serde(default)]
+    pub minigame: Option<serde_json::Value>,
 }
 impl SavedBuild {
     pub fn new(world: World) -> Self {
         Self {
             schema_version: BUILD_SCHEMA,
             world,
+            minigame: None,
         }
     }
     pub fn validate(&self) -> Result<()> {
@@ -178,6 +194,12 @@ impl SavedBuild {
             self.schema_version == BUILD_SCHEMA,
             "Unsupported native build schema"
         );
+        if let Some(minigame) = &self.minigame {
+            ensure!(
+                serde_json::to_vec(minigame)?.len() <= MAX_MINIGAME_BYTES,
+                "A build's mini-game is at most {MAX_MINIGAME_BYTES} bytes"
+            );
+        }
         self.world.validate()
     }
     pub fn capture(world: &World, events: bool, ownership: bool) -> Result<Self> {
@@ -517,5 +539,62 @@ mod item_spawn_tests {
             );
             assert_eq!(plan.bricks()[&id].owner, 9);
         }
+    }
+}
+
+#[cfg(test)]
+mod minigame_tests {
+    use super::*;
+
+    fn build() -> SavedBuild {
+        let mut world = World::new("games".into(), "map/test".into(), vec![[1.0; 4]]);
+        world.bricks.insert(
+            1,
+            Brick::new(crate::ContentRef::Resolved("brick/test".into()), [0.0; 3], 0),
+        );
+        world.next_brick_id = 2;
+        SavedBuild::new(world)
+    }
+
+    #[test]
+    fn a_builds_mini_game_saves_with_it_and_older_builds_load_without_one() {
+        let mut saved = build();
+        saved.minigame = Some(serde_json::json!({ "color": 3, "teams": [{ "name": "Red" }] }));
+        let bytes = encode(&saved).unwrap();
+        assert_eq!(decode(&bytes).unwrap(), saved);
+        let json = serde_json::to_vec(&saved).unwrap();
+        assert_eq!(decode(&json).unwrap(), saved);
+
+        // A build saved before builds kept their mini-game: its header
+        // has no such field.
+        #[derive(Serialize)]
+        struct OldHead {
+            schema_version: u32,
+            world: World,
+            bricks: u64,
+        }
+        let (header, body) = parts(&bytes).unwrap().unwrap();
+        let head = super::head(header).unwrap();
+        let old = OldHead {
+            schema_version: head.schema_version,
+            world: head.world,
+            bricks: head.bricks,
+        };
+        let old = zstd::bulk::compress(&rmp_serde::to_vec_named(&old).unwrap(), 3).unwrap();
+        let mut file = MAGIC.to_vec();
+        file.extend_from_slice(&(old.len() as u32).to_le_bytes());
+        file.extend_from_slice(&old);
+        file.extend_from_slice(body);
+        let loaded = decode(&file).unwrap();
+        assert_eq!(loaded.minigame, None);
+        assert_eq!(loaded.world, saved.world);
+        let mut json: serde_json::Value = serde_json::to_value(&saved).unwrap();
+        json.as_object_mut().unwrap().remove("minigame");
+        let loaded = decode(&serde_json::to_vec(&json).unwrap()).unwrap();
+        assert_eq!(loaded.minigame, None);
+
+        // One too big is refused.
+        saved.minigame = Some(serde_json::Value::String("x".repeat(MAX_MINIGAME_BYTES)));
+        assert!(saved.validate().is_err());
     }
 }

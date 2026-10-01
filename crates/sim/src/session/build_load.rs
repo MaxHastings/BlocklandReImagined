@@ -69,6 +69,8 @@ pub(super) struct Loading {
     bricks: Queue,
     total: usize,
     created: usize,
+    /// The build's mini-game, set up once its bricks are in.
+    minigame: Option<serde_json::Value>,
 }
 
 /// Saved bricks still to place, in save order, copied out a slice at a time
@@ -157,6 +159,7 @@ impl Session {
         self.next_owner = mapping.next_owner;
         // Bricks without a definition here are kept with the world, not
         // placed, and the rest of the save still loads.
+        let minigame = build.minigame;
         let mut world = build.world;
         let mut known: std::collections::HashMap<String, bool> = Default::default();
         let mut placeable = |brick: &Brick| {
@@ -206,6 +209,7 @@ impl Session {
             bricks,
             total,
             created: 0,
+            minigame,
         }));
         self.system_message(
             Some(MessageTag::UploadStart),
@@ -334,6 +338,9 @@ impl Session {
             time_string(ticks * 100 / 120)
         );
         self.system_message(Some(MessageTag::ProcessComplete), text);
+        if let Some(minigame) = loading.minigame {
+            self.restore_saved_minigame(loading.loader, minigame);
+        }
     }
 
     /// Whether a save is still being loaded.

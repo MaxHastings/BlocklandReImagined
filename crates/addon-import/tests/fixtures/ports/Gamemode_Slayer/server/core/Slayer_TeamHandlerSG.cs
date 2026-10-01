@@ -64,6 +64,8 @@ function slayerTeamCmdScore(%client, %mini, %clTeam, %a)
 function slayerTeamCmdListMembers(%client, %mini, %clTeam, %a)
 {
 	%cl = %team.member["GameConnection", %i];
+	if(%team.numMembers["AiController"] > 1)
+		messageClient(%client, '', %team.numMembers["AiController"] SPC "bots");
 }
 
 function serverCmdTeams(%client, %cmd, %a)

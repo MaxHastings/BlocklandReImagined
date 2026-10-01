@@ -261,7 +261,7 @@ impl Session {
 
     /// Whether an item or player type setting's `value` names one this
     /// server has (none, `""`, always does). Other kinds always do.
-    fn has_content(&self, kind: SettingType, value: &SettingValue) -> bool {
+    pub(super) fn has_content(&self, kind: SettingType, value: &SettingValue) -> bool {
         let Some(id) = value.as_text().filter(|id| !id.is_empty()) else {
             return true;
         };

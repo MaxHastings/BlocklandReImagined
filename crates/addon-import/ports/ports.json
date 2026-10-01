@@ -74,7 +74,8 @@
           "score": "%team\\.getScore\\(\\)"
         },
         "slayerTeamCmdListMembers": {
-          "members": "member\\[\"GameConnection\"\\s*,\\s*%i\\]"
+          "members": "member\\[\"GameConnection\"\\s*,\\s*%i\\]",
+          "bots": "if\\(\\s*%team\\.numMembers\\[\"AiController\"\\]\\s*>\\s*1\\s*\\)"
         },
         "slayerTeamCmdBalance": {
           "edit": "%mini\\.canEdit\\(\\s*%client\\s*\\)",
@@ -108,7 +109,10 @@
           "pref_eorr_enable": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.eorrEnable\"",
           "pref_eorr_team_scores": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.eorrDisplayTeamScores\"",
           "pref_eorr_victory": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.eorrDisplayVictory\"",
-          "pref_restrict_events": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.restrictOutputEvents\""
+          "pref_restrict_events": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.restrictOutputEvents\"",
+          "pref_points_kill_bot": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.points_killBot\"",
+          "pref_bot_damage": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.botDamage\"",
+          "pref_respawn_bot": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.respawnTime_bot\""
         },
         "server/defaults/team-preferences.cs": {
           "team_lives": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"lives\"",
@@ -154,7 +158,8 @@
           "uni_second_pack": "(?s)defaultValue\\s*=\\s*\"([^\"]*)\"\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"uni_secondPack\"",
           "uni_second_pack_color": "(?s)defaultValue\\s*=\\s*\"([^\"]*)\"\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"uni_secondPackColor\"",
           "uni_torso_color": "(?s)defaultValue\\s*=\\s*\"([^\"]*)\"\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"uni_torsoColor\"",
-          "uni_chest": "(?s)defaultValue\\s*=\\s*\"([^\"]*)\"\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"uni_chest\""
+          "uni_chest": "(?s)defaultValue\\s*=\\s*\"([^\"]*)\"\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"uni_chest\"",
+          "team_bot_fill": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"botFillLimit\""
         },
         "server/core/Slayer_AiController.cs": {
           "skin_1": "SkinColor\\[1\\]\\s*=\\s*\"([^\"]+)\"",
@@ -205,10 +210,12 @@
           "go": "GO!",
           "begin_sound": "play2dAll\\(\\s*Slayer_Begin_Sound\\s*\\)",
           "voice": "\"Slayer_\"\\s*@\\s*%remain\\s*@\\s*\"_Seconds_Sound\"",
-          "freeze": "changeDatablock\\(\\s*PlayerFrozenArmor\\s*\\)"
+          "freeze": "changeDatablock\\(\\s*PlayerFrozenArmor\\s*\\)",
+          "bots_rest": "%ai\\.player\\.stopHoleLoop\\(\\)"
         },
         "Slayer_MiniGameSO::startRound": {
-          "thaw": "getID\\(\\)\\s*==\\s*PlayerFrozenArmor\\.getID\\(\\)[\\s\\S]*?playerDatablock[\\s\\S]*?changeDatablock\\(\\s*%db\\s*\\)"
+          "thaw": "getID\\(\\)\\s*==\\s*PlayerFrozenArmor\\.getID\\(\\)[\\s\\S]*?playerDatablock[\\s\\S]*?changeDatablock\\(\\s*%db\\s*\\)",
+          "bots_play": "%ai\\.player\\.resetHoleLoop\\(\\)"
         },
         "PlayerFrozenArmor::onTrigger": {
           "nothing": "^\\s*return\\s*;\\s*$"
@@ -228,7 +235,8 @@
           "eorr_title": "\\\\\"(End of Round Report)\\\\\"",
           "eorr_send": "if\\s*\\(\\s*%this\\.eorrEnable\\s*\\)\\s*%this\\.sendScoreListAll\\(\\)",
           "countdown": "Resetting in",
-          "custom_win": "getField\\(\\s*%winner\\s*,\\s*0\\s*\\)\\s*\\$=\\s*\"CUSTOM\"[\\s\\S]*?<color:ffff00>%1 \\\\c5won this round\\."
+          "custom_win": "getField\\(\\s*%winner\\s*,\\s*0\\s*\\)\\s*\\$=\\s*\"CUSTOM\"[\\s\\S]*?<color:ffff00>%1 \\\\c5won this round\\.",
+          "bots_out": "%ai\\.setDead\\(\\s*true\\s*\\)[\\s\\S]*?if\\(\\s*!%this\\.allowMoveWhileResetting\\s*\\)[\\s\\S]*?stopHoleLoop\\(\\)"
         },
         "Slayer_MiniGameSO::sendScoreListAll": {
           "eorr_score": "%var3\\s*=\\s*\"([^\"]+)\"\\s*;",
@@ -247,7 +255,8 @@
         },
         "Slayer_MiniGameSO::Reset": {
           "lives": "setLives\\(\\s*\\(\\s*isObject\\(\\s*%t\\s*\\)\\s*&&\\s*%t\\.lives\\s*>=\\s*0\\s*\\)\\s*\\?\\s*%t\\.lives\\s*:\\s*%this\\.lives\\s*\\)",
-          "tally_reset": "%cl\\.setKills\\(\\s*0\\s*\\)\\s*;\\s*%cl\\.setDeaths\\(\\s*0\\s*\\)"
+          "tally_reset": "%cl\\.setKills\\(\\s*0\\s*\\)\\s*;\\s*%cl\\.setDeaths\\(\\s*0\\s*\\)",
+          "bots": "%ai\\.setDead\\(\\s*0\\s*\\)\\s*;\\s*%ai\\.setLives\\("
         },
         "Slayer_MiniGameSO::removeMember": {
           "lives": "victoryCheck_Lives\\(\\)"
@@ -294,7 +303,10 @@
           "fly_jump_kink": "if\\s*\\(\\s*%type\\s*\\$=\\s*\"\"\\s*\\)\\s*%type\\s*=\\s*\"Kink\"",
           "fly_create_skips": "addNode\\([^;]*\\)\\s*;\\s*%this\\.flyCam\\.setPosition\\(\\s*1\\.0\\s*\\)\\s*;\\s*%this\\.flyCam\\.popFront\\(\\)",
           "out_fly_through": "registerOutputEvent\\(\\s*\"?(?i:Minigame)\"?\\s*,\\s*\"StartFlyThrough\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
-          "fly_restricted": "RestrictedEvent__\\[\\s*\"Minigame\"\\s*,\\s*\"startFlyThrough\"\\s*\\]\\s*=\\s*(-?\\d+)\\s*;"
+          "fly_restricted": "RestrictedEvent__\\[\\s*\"Minigame\"\\s*,\\s*\"startFlyThrough\"\\s*\\]\\s*=\\s*(-?\\d+)\\s*;",
+          "pathcam_load": "importMinigamePreferences[\\s\\S]*?\"\\.pathcam\"[\\s\\S]*?createPathCamera[\\s\\S]*?addNode",
+          "pathcam_save": "exportMinigamePreferences[\\s\\S]*?\"\\.pathcam\"[\\s\\S]*?nodeJump",
+          "pathcam_delete": "\\.flyCam\\.delete\\(\\)[\\s\\S]*?\"\\.pathcam\"[\\s\\S]*?fileDelete"
         },
         "server/core/resources/datablocks.cs": {
           "team_spawn_brick": "datablock\\s+FxDtsBrickData\\s*\\(\\s*brickSlyrSpawnPointData\\s*:\\s*brickSpawnPointData\\s*\\)",
@@ -420,10 +432,77 @@
           "team_points_win": "%winner\\s*=\\s*%mini\\.victoryCheck_Points\\(\\)"
         },
         "Slayer_TeamSO::onMinigameReset": {
-          "team_points_reset": "points\\s*>\\s*0\\s*\\)\\s*%this\\.setArtificialScore\\(\\s*0\\s*\\)"
+          "team_points_reset": "points\\s*>\\s*0\\s*\\)\\s*%this\\.setArtificialScore\\(\\s*0\\s*\\)",
+          "bots": "useTeams\\s*&&\\s*!%mini\\.teams_shuffleTeams\\s*\\)\\s*%this\\.botFillTeam\\(\\)"
         },
         "Slayer_TeamSO::getScore": {
           "team_score_own": "%score\\s*=\\s*%this\\.getArtificialScore\\(\\)"
+        },
+        "Slayer_TeamSO::botFillTeam": {
+          "trim": "while\\(\\s*%this\\.numMembers\\s*>\\s*%limit\\s*&&\\s*%this\\.numMembers\\[\"AiController\"\\]\\s*>\\s*0\\s*\\)",
+          "fill": "while\\(\\s*%this\\.numMembers\\s*<\\s*%limit\\s*\\)[\\s\\S]*?%this\\.minigame\\.addBotToGame\\(\\)"
+        },
+        "Slayer_TeamSO::updateBotFillLimit": {
+          "needs": "\\$AddOnLoaded__\\[\"Bot_Hole\"\\]\\s*&&\\s*\\$AddOnLoaded__\\[\"Bot_Blockhead\"\\]",
+          "refuse": "%this\\.botFillLimit\\s*=\\s*-1"
+        },
+        "Slayer_TeamSO::onRemove": {
+          "bots": "%this\\.deleteAllBots\\(\\)"
+        },
+        "Slayer_TeamSO::addMember": {
+          "humans": "if\\(\\s*%class\\s*\\$=\\s*\"GameConnection\"\\s*\\)\\s*\\{\\s*//HUMAN - ANNOUNCEMENT"
+        },
+        "Slayer_TeamSO::onAddMember": {
+          "fill": "%this\\.botFillLimit\\s*>\\s*0\\s*\\)\\s*%this\\.botFillTeam\\(\\)"
+        },
+        "Slayer_TeamSO::onRemoveMember": {
+          "fill": "%this\\.botFillLimit\\s*>\\s*0\\s*\\)\\s*%this\\.botFillTeam\\(\\)"
+        },
+        "Slayer_MiniGameSO::addBotToGame": {
+          "class": "class\\s*=\\s*Slayer_AiController\\s*;",
+          "name": "hName\\s*=\\s*\"Bot\"\\s*SPC\\s*getRandomFirstName\\(\\)"
+        },
+        "Slayer_MiniGameSO::addMember": {
+          "bot": "%class\\s*\\$=\\s*\"AiController\"\\s*\\)\\s*\\{\\s*%client\\.removeAllObjectives\\(\\);\\s*%client\\.assignObjectives\\(\\);\\s*%client\\.spawnPlayer\\(\\);"
+        },
+        "Slayer_MiniGameSO::endGame": {
+          "bots": "for\\(\\s*%i\\s*=\\s*%this\\.numMembers\\[\"AiController\"\\]\\s*-\\s*1\\s*;[^)]*\\)\\s*%this\\.member\\[\"AiController\"\\s*,\\s*%i\\]\\.delete\\(\\)"
+        },
+        "Slayer_MiniGameSO::canDamage": {
+          "bots": "%classA\\s*\\$=\\s*\"AiPlayer\"[\\s\\S]*?return\\s*%this\\.botDamage\\s*;"
+        },
+        "Slayer_MiniGameSO::updateRespawnTime": {
+          "bot": "case\\s*\"bot\"\\s*:\\s*%this\\.botRespawnTime\\s*=\\s*%time\\s*;"
+        },
+        "Slayer_AiController::createPlayer": {
+          "kind": "%hBotType\\s*=\\s*BlockheadHoleBot\\s*;",
+          "roam": "hReturnToSpawn\\s*=\\s*!%useFakeBrick\\s*;",
+          "equip": "%this\\.forceEquip\\(\\s*%i\\s*,\\s*%handler\\.startEquip\\[%i\\]\\s*\\)",
+          "uniform": "%this\\.applyUniform\\(\\)",
+          "name_color": "setShapeNameColor\\(\\s*%handler\\.colorRGB\\s*\\)"
+        },
+        "Slayer_AiController::onSpawn": {
+          "tool": "%this\\.player\\.useRandomTool\\(\\)"
+        },
+        "Slayer_AiController::onDeath": {
+          "respawn": "if\\(\\s*!%this\\.dead\\(\\)\\s*\\)\\s*\\{\\s*%spawnTime\\s*=\\s*%mini\\.botRespawnTime\\s*;"
+        },
+        "Slayer_AiController::applyBodyColors": {
+          "skin": "getRandom\\(\\s*\\$Slayer::Server::Bots::SkinColorCount\\s*\\)",
+          "nodes": "setNodeColor\\(\\s*headSkin\\s*,\\s*%color\\s*\\)"
+        },
+        "Slayer_AiController::assignObjectives": {
+          "none": "^(?:\\s*//[^\\n]*)*\\s*$"
+        },
+        "AiPlayer::useRandomTool": {
+          "pick": "getRandom\\(\\s*0\\s*,\\s*1\\s*\\)\\s*\\|\\|\\s*%i\\s*==\\s*%indexEnd\\s*-\\s*1"
+        },
+        "GameConnection::onDeath": {
+          "bot_kills": "if\\(\\s*%killer\\.isSlayerBot\\s*\\)\\s*\\{\\s*if\\(\\s*%this\\.isSlayerBot\\s*\\)\\s*%killer\\.incScore\\(\\s*%mini\\.points_killBot\\s*\\)",
+          "correction": "else\\s+if\\(\\s*%this\\.isSlayerBot\\s*\\)[^\\n]*\\n\\s*%killer\\.incScore\\(\\s*-%mini\\.points_killPlayer\\s*\\)"
+        },
+        "checkHoleBotTeams": {
+          "allies": "%teamA\\.isAlliedTeam\\(\\s*%teamB\\s*\\)\\s*\\)\\s*return\\s*0\\s*;"
         }
       },
       "tests": [
