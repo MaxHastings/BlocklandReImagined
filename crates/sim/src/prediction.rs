@@ -746,7 +746,9 @@ impl Predictor {
         let corrected = self.player.state();
         // The mirror is not bit-identical to the server world (collider order,
         // other bodies), so replays can differ by float noise. Keep the local
-        // prediction through sub-millimeter differences rather than jittering.
+        // prediction's motion through sub-millimeter differences rather than
+        // jittering; everything else the host decided (a rope tied to the
+        // player, say) is taken as it is.
         if Vec3::from(predicted.feet).distance(Vec3::from(corrected.feet)) < NOISE
             && Vec3::from(predicted.velocity).distance(Vec3::from(corrected.velocity))
                 < NOISE * 10.0
@@ -756,9 +758,11 @@ impl Predictor {
             && predicted.archetype == corrected.archetype
             && predicted.scale == corrected.scale
         {
+            let mut kept = corrected.clone();
+            kept.feet = predicted.feet;
+            kept.velocity = predicted.velocity;
             let tuning = self.player.tuning().clone();
-            self.player
-                .restore(&mut self.world.physics, predicted, tuning)?;
+            self.player.restore(&mut self.world.physics, kept, tuning)?;
             return Ok(Some(Vec3::ZERO));
         }
         Ok(Some(
