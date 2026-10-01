@@ -137,7 +137,7 @@ they're your identity and your server's.
   Menus and building still need a keyboard and mouse.
 - **Vehicle handling** is rebuilt, not copied from v20's engine. Tell us
   where driving feels off.
-- **Bots** steer simply and can get stuck on complex builds.
+- **Bots** (Blockhead Bot Add-On) path round builds but not round moving vehicles or players; they stop, then try another way.
 - **A few v20 settings aren't there yet**, such as Render My Player.
   `FEATURES.md` lists everything still missing.
 - **Old Add-On scripts don't run.** Imported v20 Add-Ons bring their

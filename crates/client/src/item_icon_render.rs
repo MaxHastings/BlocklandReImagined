@@ -25,22 +25,8 @@ pub struct Spec {
     pub schema_version: u32,
     /// The stock item whose icon's pose and framing this one takes.
     pub pose_like: String,
-    /// How the model fills the picture: `like` (the default) at the stock
-    /// item's size and place, for a model of about its size; `model` turned
-    /// as it is but sized to fill the picture as the stock icon does, for a
-    /// longer or smaller model (a rifle posed like the gun).
-    #[serde(default)]
-    pub frame: Frame,
     #[serde(default)]
     pub look: Look,
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum Frame {
-    #[default]
-    Like,
-    Model,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
@@ -346,6 +332,95 @@ pub fn fit_pose(mesh: &Mesh, icon: &SceneImage) -> Option<(Pose, f32)> {
 /// Light for icons, in view space: from above, the left and the front.
 const LIGHT: Vec3 = Vec3::new(-0.45, 0.65, 0.62);
 const SAMPLES: usize = 3;
+/// Icons are shot under a stronger light than play: the stock icons show
+/// their faces clearly apart. The skin's near-black shell is brightened by
+/// this much so its faces read the same way at icon size.
+const EXPOSURE: f32 = 3.0;
+/// How far behind the nearest surface an edge still shows, model units:
+/// past the skin's puff, short of the far side.
+const EDGE_DEPTH: f32 = 0.04;
+/// Faces meeting at more than this, degrees, make a hard edge.
+const CREASE_DEGREES: f32 = 35.0;
+
+/// The model's hard edges: where faces meet at a sharp angle, or where
+/// the surface ends. Positions are welded first, since a flat-shaded
+/// model repeats each corner once per face.
+fn creases(mesh: &Mesh) -> Vec<(Vec3, Vec3)> {
+    use std::collections::BTreeMap;
+    let key = |p: Vec3| (p * 1.0e4).round().to_array().map(|v| v as i64);
+    type Edge = ([i64; 3], [i64; 3]);
+    let mut faces: BTreeMap<Edge, (Vec3, Vec3, Vec<Vec3>)> = BTreeMap::new();
+    for t in mesh.triangles() {
+        let [a, b, c] = t.map(|i| mesh.positions[i]);
+        let normal = (b - a).cross(c - a).normalize_or_zero();
+        if normal == Vec3::ZERO {
+            continue;
+        }
+        for (p, q) in [(a, b), (b, c), (c, a)] {
+            let (kp, kq) = (key(p), key(q));
+            let k = if kp <= kq { (kp, kq) } else { (kq, kp) };
+            faces.entry(k).or_insert((p, q, Vec::new())).2.push(normal);
+        }
+    }
+    let cos = CREASE_DEGREES.to_radians().cos();
+    faces
+        .into_values()
+        .filter(|(_, _, normals)| normals.len() == 1 || normals.iter().any(|n| normals.iter().any(|m| n.dot(*m) < cos)))
+        .map(|(p, q, _)| (p, q))
+        .collect()
+}
+
+/// A pose turned by `rotation` whose drawing (with the skin's `puff`)
+/// fills `target` (a box in icon pixels) as far as it can without
+/// leaving it, centred in it.
+pub fn frame(mesh: &Mesh, rotation: Quat, puff: f32, target: (Vec2, Vec2), size: [u32; 2]) -> Option<Pose> {
+    let mut lo = Vec2::splat(f32::MAX);
+    let mut hi = Vec2::splat(f32::MIN);
+    for (p, n) in mesh.positions.iter().zip(&mesh.normals) {
+        let q = rotation * (*p + *n * puff);
+        let s = Vec2::new(q.x, -q.y);
+        lo = lo.min(s);
+        hi = hi.max(s);
+    }
+    let extent = hi - lo;
+    let room = target.1 - target.0;
+    if !(extent.x > 1e-6 && extent.y > 1e-6 && room.x > 0.0 && room.y > 0.0) {
+        return None;
+    }
+    let scale = (room.x / extent.x).min(room.y / extent.y);
+    let centre = (target.0 + target.1) * 0.5 - (lo + hi) * 0.5 * scale;
+    Some(Pose { rotation, scale, centre, size })
+}
+
+/// The box a stock icon's drawing fills, in its pixels, kept at least
+/// `MARGIN` of the icon clear of every edge (stock icons drawn right to the
+/// edge would leave a new one no clear border).
+fn filled_box(icon: &SceneImage) -> Option<(Vec2, Vec2)> {
+    let (w, h) = (icon.width as usize, icon.height as usize);
+    let mask: Vec<bool> = icon.rgba.chunks_exact(4).map(|p| p[3] >= 128).collect();
+    let (lo, hi) = bounds(&mask, w)?;
+    let margin = Vec2::new(w as f32, h as f32) * MARGIN;
+    let lo = lo.max(margin);
+    let hi = hi.min(Vec2::new(w as f32, h as f32) - margin);
+    (hi.x > lo.x && hi.y > lo.y).then_some((lo, hi))
+}
+/// The least clear border an icon keeps on each side, of its size.
+const MARGIN: f32 = 0.06;
+
+/// How many fully clear rows or columns an icon has at its top, right,
+/// bottom and left.
+pub fn clear_border(image: &SceneImage) -> [usize; 4] {
+    let (w, h) = (image.width as usize, image.height as usize);
+    let clear = |x: usize, y: usize| image.rgba[(y * w + x) * 4 + 3] == 0;
+    let row = |y: usize| (0..w).all(|x| clear(x, y));
+    let column = |x: usize| (0..h).all(|y| clear(x, y));
+    [
+        (0..h).take_while(|y| row(*y)).count(),
+        (0..w).rev().take_while(|x| column(*x)).count(),
+        (0..h).rev().take_while(|y| row(*y)).count(),
+        (0..w).take_while(|x| column(*x)).count(),
+    ]
+}
 
 /// The model drawn under `pose` with `look`, on a clear background.
 pub fn render(mesh: &Mesh, pose: &Pose, look: &Look, label: &str) -> SceneImage {
@@ -387,7 +462,34 @@ pub fn render(mesh: &Mesh, pose: &Pose, look: &Look, label: &str) -> SceneImage 
             .collect();
         let shell = Vec3::from(skin.shell);
         let veins = Vec3::from(skin.veins);
-        draw(&puffed, &|local, n| veined(local, n, light, shell, veins));
+        let pixel = 1.0 / pose.scale.max(1e-3);
+        draw(&puffed, &|local, n| veined(local, n, light, shell, veins, pixel));
+    }
+    if look.skin.is_some() {
+        // The in-game skin is puffed along split normals, so the model's
+        // own colour shows along every hard edge: at icon size those
+        // cracks are thinner than a pixel, so they are drawn a pixel wide.
+        let edge = base * (0.55 + 0.55 * Vec3::new(0.0, 0.3, 0.95).normalize().dot(light).max(0.0));
+        let radius = 0.55 * SAMPLES as f32;
+        for (a, b) in creases(mesh) {
+            let (a, b) = (fine.project(a), fine.project(b));
+            let steps = (a.truncate().distance(b.truncate()) / 0.5).ceil().max(1.0) as usize;
+            for k in 0..=steps {
+                let p = a.lerp(b, k as f32 / steps as f32);
+                let (x0, x1) = ((p.x - radius).floor().max(0.0) as usize, ((p.x + radius).ceil() as usize).min(sw));
+                let (y0, y1) = ((p.y - radius).floor().max(0.0) as usize, ((p.y + radius).ceil() as usize).min(sh));
+                for y in y0..y1 {
+                    for x in x0..x1 {
+                        let i = y * sw + x;
+                        let centre = Vec2::new(x as f32 + 0.5, y as f32 + 0.5);
+                        // Only where the edge is the surface seen there.
+                        if centre.distance(p.truncate()) <= radius && colour[i].is_some() && p.z >= depth[i] - EDGE_DEPTH {
+                            colour[i] = Some(edge);
+                        }
+                    }
+                }
+            }
+        }
     }
     let mut rgba = Vec::with_capacity(w * h * 4);
     for y in 0..h {
@@ -418,9 +520,13 @@ pub fn render(mesh: &Mesh, pose: &Pose, look: &Look, label: &str) -> SceneImage 
 
 /// `alien.wgsl`'s `fs_main` at rest, seen from the front (+Z in view
 /// space) under the icon light.
-fn veined(local: Vec3, n: Vec3, light: Vec3, shell: Vec3, vein: Vec3) -> Vec3 {
+///
+/// `pixel` is one icon pixel in model units: the veins are drawn at least
+/// about a pixel wide, as they are at any distance in play, or the icon's
+/// few pixels would miss them.
+fn veined(local: Vec3, n: Vec3, light: Vec3, shell: Vec3, vein: Vec3, pixel: f32) -> Vec3 {
     let view = Vec3::Z;
-    let lit = shell * (Vec3::splat(0.55) * 1.2 + Vec3::ONE * n.dot(light).max(0.0));
+    let lit = shell * (Vec3::splat(0.55) * 1.2 + Vec3::ONE * n.dot(light).max(0.0)) * EXPOSURE;
     let edge = 1.0 - n.dot(view).abs();
     let hue = edge * 1.3 + local.dot(Vec3::new(0.6, 0.9, 0.4));
     let film = (Vec3::splat(hue) + Vec3::new(0.0, 0.33, 0.67)).map(|v| 0.5 + 0.5 * (std::f32::consts::TAU * v).cos());
@@ -432,7 +538,8 @@ fn veined(local: Vec3, n: Vec3, light: Vec3, shell: Vec3, vein: Vec3) -> Vec3 {
     let w = (q.x * 7.0 + 2.0 * (q.y * 5.0 + q.z * 3.0).sin()).sin()
         + (q.y * 6.0 + 2.0 * (q.z * 4.0 + q.x * 5.0).sin()).sin()
         + 0.7 * (q.z * 8.0 + 1.5 * (q.x * 4.0 + q.y * 2.0).sin()).sin();
-    let t = (w.abs() / 0.16).clamp(0.0, 1.0);
+    // The wave changes about 22 a unit across the model.
+    let t = (w.abs() / (22.0 * 0.6 * pixel).max(0.16)).clamp(0.0, 1.0);
     let lines = 1.0 - t * t * (3.0 - 2.0 * t);
     let flow = 0.5 + 0.5 * (local.y * 9.0).sin();
     let glow = vein * lines * 0.35 * (0.45 + 0.55 * flow);
@@ -452,40 +559,12 @@ pub fn render_like(spec: &Spec, mesh: &Mesh, reference: (&Mesh, &SceneImage), la
 /// `icon` (a pose is fitted once for every icon posed like that item).
 pub fn render_posed(spec: &Spec, mesh: &Mesh, pose: &Pose, icon: &SceneImage, label: &str) -> Result<SceneImage> {
     ensure!(!mesh.indices.is_empty(), "the item has no model to draw");
-    let pose = match spec.frame {
-        Frame::Like => *pose,
-        Frame::Model => filled(mesh, pose, icon).context("the model has no size to draw")?,
-    };
+    // The stock icon's angle; the framing is this model's own, filling the
+    // box the stock drawing fills.
+    let target = filled_box(icon).context("the stock icon is empty")?;
+    let puff = spec.look.skin.as_ref().map_or(0.0, |s| s.puff);
+    let pose = frame(mesh, pose.rotation, puff, target, pose.size).context("the model has no size")?;
     Ok(render(mesh, &pose, &spec.look, label))
-}
-
-/// `pose`'s turn, with `mesh` sized and centred to fill the picture within
-/// the stock icon's own margin (its outline's nearest gap to an edge).
-fn filled(mesh: &Mesh, pose: &Pose, icon: &SceneImage) -> Option<Pose> {
-    const GRID: usize = 64;
-    let (lo, hi) = bounds(&icon_mask(icon, GRID, GRID), GRID)?;
-    let margin = lo.min_element().min(GRID as f32 - hi.max_element()).max(0.0);
-    let to_icon = Vec2::new(pose.size[0] as f32, pose.size[1] as f32) / GRID as f32;
-    let want = (Vec2::splat(GRID as f32 - 2.0 * margin) * to_icon).max(Vec2::ONE);
-    let mut low = Vec2::splat(f32::MAX);
-    let mut high = Vec2::splat(f32::MIN);
-    for p in &mesh.positions {
-        let q = pose.rotation * *p;
-        let s = Vec2::new(q.x, -q.y);
-        low = low.min(s);
-        high = high.max(s);
-    }
-    let extent = high - low;
-    if !(extent.x > 1e-6 && extent.y > 1e-6) {
-        return None;
-    }
-    let scale = (want.x / extent.x).min(want.y / extent.y);
-    let middle = Vec2::new(pose.size[0] as f32, pose.size[1] as f32) * 0.5;
-    Some(Pose {
-        scale,
-        centre: middle - (low + high) * 0.5 * scale,
-        ..*pose
-    })
 }
 
 #[cfg(test)]
@@ -544,31 +623,6 @@ mod tests {
         assert_eq!([redrawn.width, redrawn.height], [64, 64]);
     }
 
-    /// A model three times the stock one's length, framed `model`, fills
-    /// the picture within the stock icon's margin instead of running off it.
-    #[test]
-    fn a_long_model_framed_by_itself_fills_the_picture() {
-        let stock = gun();
-        let truth = Pose { rotation: euler(0.7, 0.35, 0.5), scale: 20.0, centre: Vec2::new(32.0, 32.0), size: [64, 64] };
-        let icon = picture(&stock, &truth);
-        let (pose, _) = fit_pose(&stock, &icon).expect("fits");
-        let mut long = gun();
-        for p in &mut long.positions {
-            p.x *= 3.0;
-        }
-        let covered = |img: &SceneImage| img.rgba.chunks_exact(4).map(|p| p[3] >= 128).collect::<Vec<_>>();
-        let spec = |frame| Spec { schema_version: 1, pose_like: "stock".into(), frame, look: Look { base: [1.0; 3], skin: None } };
-        let like = covered(&render_posed(&spec(Frame::Like), &long, &pose, &icon, "like").unwrap());
-        let edge = |mask: &[bool]| (0..64).any(|i| mask[i] || mask[63 * 64 + i] || mask[i * 64] || mask[i * 64 + 63]);
-        assert!(edge(&like), "at the stock size the long model runs off the picture");
-        let filled = covered(&render_posed(&spec(Frame::Model), &long, &pose, &icon, "model").unwrap());
-        assert!(!edge(&filled), "framed by itself it stays inside");
-        let (lo, hi) = bounds(&filled, 64).expect("drawn");
-        let (slo, shi) = bounds(&covered(&icon), 64).unwrap();
-        let margin = slo.min_element().min(64.0 - shi.max_element());
-        assert!((hi - lo).max_element() >= 64.0 - 2.0 * margin - 2.0, "it fills the picture: {lo} {hi}");
-    }
-
     /// Something else entirely does not pass for the stock item.
     #[test]
     fn a_model_that_is_not_the_icon_does_not_fit() {
@@ -603,6 +657,37 @@ mod tests {
         assert!(dark * 2 > solid.len(), "mostly the dark shell: {dark} of {}", solid.len());
         assert!(solid.iter().any(|p| p[1] > 60 && p[2] > 60 && p[0] < p[1]), "teal veins show");
         assert_eq!(render(&mesh, &pose, &look, "gun").rgba, image.rgba);
+    }
+
+    /// A stock icon drawn right to its edges still gets a new icon with a
+    /// clear border on every side, and the drawing fills the box inside it.
+    #[test]
+    fn the_icon_keeps_a_clear_margin_on_every_side() {
+        let mesh = gun();
+        let mut stock = SceneImage { label: "stock".into(), width: 96, height: 96, rgba: vec![0; 96 * 96 * 4], srgb: false };
+        for y in 0..96 {
+            for x in 0..96 {
+                // A band corner to corner, touching all four edges.
+                if (x as i32 - y as i32).abs() < 40 {
+                    stock.rgba[(y * 96 + x) * 4 + 3] = 255;
+                }
+            }
+        }
+        let target = filled_box(&stock).expect("a box");
+        let look = Look {
+            base: [0.35, 1.0, 0.8],
+            skin: Some(Skin { shell: [0.035, 0.025, 0.05], veins: [0.3, 0.95, 1.0], puff: 0.012 }),
+        };
+        for rotation in [euler(0.7, 0.35, 0.5), euler(-1.2, 0.9, 2.4), Quat::IDENTITY] {
+            let pose = frame(&mesh, rotation, 0.012, target, [96, 96]).expect("frames");
+            let image = render(&mesh, &pose, &look, "gun");
+            let border = clear_border(&image);
+            assert!(border.iter().all(|b| *b >= 5), "clear rows and columns (top, right, bottom, left): {border:?}");
+            // It fills the box one way or the other: no shrunken drawing.
+            let [top, right, bottom, left] = border.map(|b| b as i32);
+            let (w, h) = (96 - left - right, 96 - top - bottom);
+            assert!(w >= 80 || h >= 80, "{w}x{h} drawn, border {border:?}");
+        }
     }
 
     #[test]

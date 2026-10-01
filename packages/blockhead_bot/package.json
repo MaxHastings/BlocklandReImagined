@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "blockhead_bot",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Blockhead Bot",
+  "description": "Adds Blockhead Bot to the Vehicle Spawn brick's list. It strolls around its brick, walks round and over builds to get where it is going, and in its builder's mini-game arms itself and fights: it turns its aim like a person, keeps the distance its weapon wants, turns on whoever hurts it and searches where it last saw you. Bots of the same builder are on one side. Outside mini-games it is harmless.",
+  "authors": ["Blockland ReImagined"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "provides": [
+    { "kind": "bots", "id": "blockhead_bot:bots/main", "file": "assets/bots.json" }
+  ]
+}

@@ -2660,6 +2660,7 @@ async fn a_guest_hammers_their_own_bot_spawn_brick_after_rejoining() -> Result<(
         unresolved: vec![],
         animation_aliases: Default::default(),
     })?;
+    game.set_bot_kinds(bri_sim::bot_kind::BotPack::from_json(include_bytes!("../../../packages/blockhead_bot/assets/bots.json")).unwrap().bots)?;
     game.set_tool_catalog(ToolCatalog {
         vehicles: ["bot.blockhead".to_string()].into(),
         vehicle_bricks: [SPAWN.to_string()].into(),

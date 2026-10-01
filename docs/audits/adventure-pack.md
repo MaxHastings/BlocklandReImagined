@@ -40,7 +40,7 @@ screen.
 | Ammo counter | `bottomPrint` per shot | a HUD panel bound to an owner-visible key | present |
 | Counter only while a gun is out | `bottomPrint` cleared on unmount | HUD `holding` | **new** |
 | Its own models | `.dts` files | `<name>.shape.json` beside the weapons, with its textures | **new** |
-| Icons in the stock style | PNGs | drawn from the model on each machine (`render.json`), `"frame": "model"` to fit long guns | **new** (frame) |
+| Icons in the stock style | PNGs | drawn from the model on each machine (`render.json`), framed to each model's own bounds; the stock pose is fitted once for all of them | present (pose cache **new**) |
 | Sounds | `.wav` | pack `sounds` | present |
 | Scopes | `zoom` and overlays | image `zoom`; the Sniper Rifle thread adds overlays, levels, sway | elsewhere |
 

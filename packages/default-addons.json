@@ -32,6 +32,7 @@
       "path": "advanced-duplicator/advanced-duplicator",
       "enabled": false
     },
+    { "id": "blockhead_bot", "path": "blockhead_bot", "enabled": false },
     { "id": "adventure-pack", "path": "adventure/adventure-pack", "enabled": false },
     { "id": "adventure-pack-rules", "path": "adventure/adventure-pack-rules", "enabled": false },
     { "id": "adventure-pack-hud", "path": "adventure/adventure-pack-hud", "enabled": false }

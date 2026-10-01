@@ -7737,6 +7737,53 @@ Test: `bri-client --lib app::tests::a_first_person_image_stays_on_screen_through
 (an eye offset keeps its screen position for any yaw, pitch and roll against
 the renderer's `rolled_view_basis`). Clippy clean on the client lib. No wire
 protocol change.
+## 2026-09-30: Blockhead Bot is an Add-On; bots find their way and fight like players
+
+Max (thread "Blockhead Bots"): make the Blockhead Bot an Add-On, and give
+bots a smarter brain and path finding. The v20 decompiled scripts
+(`fxDTSBrick::spawnVehicle` allGameScripts 16844-16964; the spawn list,
+client 15786-15807) show a Vehicle Spawn brick makes an `AIPlayer` only for
+rideable player types and that nothing in the stock scripts moves or aims
+one, so v20's spawn-brick bots stand still. Our walking, fighting bot is
+beyond v20 and now ships as the optional **Blockhead Bot** Add-On
+(`packages/blockhead_bot`, installed but off).
+
+- New package kind `bots` (`assets/bots.json`, shared: players load it for
+  the wrench list). `bri_sim::bot_kind` holds the schema; the base game
+  provides no bot kinds. Host: `content_identity::bot_kinds` →
+  `Session::set_bot_kinds`; client wrench list from the same providers. The
+  kind id stays `bot.blockhead`, so saves and the Gravity Gun's bot views
+  keep working.
+- Path finding (`bri_sim::nav`): a half-stud walk grid sampled on demand
+  from fixed collision (chunk colliders, map, terrain), with steps, jumps,
+  drops, slopes and ceilings; paths keep off walls through the middle of
+  doors. Samples are remembered; when bricks change, the rebuilt chunks'
+  boxes (`Simulation::take_collision_changes`) forget only the samples they
+  touch. A* resumes across ticks: all bots together take at most 96 new
+  samples and 384 expansions a tick. With no bots nothing is tracked.
+- Brain (`session/bots.rs`): aim turns at the kind's rate with a reaction
+  delay and error that narrows while it keeps sight; fighting distance from
+  the held weapon (melee closes in, explosive keeps clear of its blast,
+  arcing shots lead and aim for the drop); turns on whoever hurt it and
+  searches where it last saw an enemy; leashed to its brick; fights other
+  builders' bots, never its own builder's.
+- Measured (release, 16 bots in a 800-column maze on the synthetic map,
+  30 s): whole session tick 0.099 ms average with bots vs 0.008 ms without,
+  worst tick 0.78 ms. No wire protocol change: bots are players.
+
+Tests: `bri-sim nav::tests` (7: straight line, round a wall through the
+door's middle, step vs jump, partial path at an unjumpable wall, low
+ceiling and local invalidation, per-tick budget, stairs and determinism),
+`bot_kind::tests`, and `bri-chaos --test bot_brain` (walks round a
+see-through wall the old brain got stuck on; reacts then hits, on the same
+tick every run; one builder's bots don't fight; no Add-On, no bot).
+Not verified here: how the bots feel in play (Max's check).
+
+`/clearBots` now also clears player-type mounts (horses, boats, cannons,
+turrets) no rider controls, as v20's `ServerCmdClearBots` (G:5089-5133)
+deletes every player object no client controls; those mounts are players
+in v20. A ridden mount stays, and its spawn brick keeps its setting. Test:
+`bot_brain::clear_bots_also_clears_the_mounts_nobody_rides`.
 
 ## 2026-09-30 Add-On weapon seams from a modder's second write-up (branch `claude/project-thread-n5mlwe`, protocol 68, for v0.1.10)
 
@@ -8101,10 +8148,28 @@ The shipped PNG stays as the fallback if anything is missing. Tests:
 that is not the icon does not fit; the skin is dark with teal veins on a
 clear background, the same every time; the request is checked), and
 `add_on_icon_tests::the_gravity_gun_icon_is_drawn_from_its_model_like_the_printers`
-(needs content: the icon is the render, the Printer icon's size, its
-outline overlaps the Printer's by 0.8 or more, and it is written to
+(needs content: the icon is the render, the Printer icon's size, and it
+is written to
 `target/gravity-gun-icon.png` for a look).
 
+Gravity Gun icon framing and light (same day). The Gate's first render ran
+off the top, right and bottom edges and was too dark to read. Cause: the
+render reused the Printer's whole fitted pose, scale and centre included,
+so a model of another shape overflowed the frame. Now only the angle is
+taken from the fit. The model's own projected bounds (with the skin's
+puff) are fitted, centred, into the box the Printer's drawing fills, inset
+to keep at least 6% of the icon clear on every side. The shell is lit under
+a brighter icon light (3x, as stock icons are shot brighter than play) so its
+faces read apart. The model's hard edges (welded, faces over 35 degrees
+apart) are drawn a pixel wide in the model's green, which is what the
+puffed skin shows along them in play but is thinner than a pixel at icon
+size. The veins are drawn at least about a pixel wide. New test
+`the_icon_keeps_a_clear_margin_on_every_side` (a stock icon drawn edge to
+edge, three angles: at least 5 clear rows and columns on every side at 96,
+and the drawing still 80 px across one way). The content test now checks
+the clear border and that the drawing spans the Printer's width or height,
+and writes `target/gravity-gun-icon-vs-printer.png` (dark and light slots;
+target/ is never committed).
 ## 2026-09-30 Steel Ball: real steel, minigame-only harm (for v0.1.10, branch `claude/project-thread-bya1ck`)
 
 Max asked for the Steel Ball back, looking like real reflective steel
@@ -8161,6 +8226,24 @@ Tests:
 - Clippy on the changed crates is clean. This container's newer clippy
   also flags three lints in untouched code, which were left alone.
 
+Environment consistency (Max: "need environmental consistency"): the
+probe's faces draw everything a mirror's view does.
+- Sprites and particles, plants, rain and snow, and Add-On world layers
+  are each prepared per face (`EnvironmentProbe::face_views`).
+- Mirror and portal surfaces show their echo or silver
+  (`Reflections::prepare_view`).
+- Bodies are built for every player while the probe draws, and so are the
+  player's own items.
+- The effects, foliage, weather and Add-On renderers now make any higher
+  view on demand, since the probe's views come after the mirrors'.
+
+More tests:
+- `bri-fx-runtime --test metal_sprites`: a sprite behind the viewer shows
+  in the ball, and without the probe's view of the effects it does not.
+- `bri-render --test metal a_mirror_behind_the_viewer_shows_in_the_ball`:
+  the ball shows the mirror's silver, not the yellow wall under it. It
+  fails when the surfaces are not drawn in the probe.
+
 Render: `/mnt/project-files/steel-ball/steel-ball-v2.png`. Max's in-game
 check is a Steel Ball near bricks at Mirrors Medium, in Unified+Shine and
 in Dynamic.
@@ -8185,8 +8268,9 @@ New engine seams (general, documented in `docs/modding/README.md`):
   them and warns about borrowed art only when a pack borrows.
 - HUD `holding`: a panel shows only while the viewer holds an image of the
   listed Add-Ons or images.
-- Icons: `"frame": "model"` fits a long model to the picture at the stock
-  pose. Poses are now fitted once per stock item.
+- Icons: a stock item's pose is fitted once for every icon posed like it
+  (33 icons share the gun's pose). Main's own-bounds framing fits the long
+  guns.
 - An image with a projectile and an `onfire` command runs the command and
   fires, as `Parent::onFire` did.
 

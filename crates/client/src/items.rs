@@ -1572,16 +1572,40 @@ mod add_on_icon_tests {
         let icon = assets.icon(gun)?.unwrap();
         let printer = assets.icon(bri_weapons::runtime::PRINTER)?.unwrap();
         assert_eq!((icon.width, icon.height), (printer.width, printer.height), "framed like the Printer's");
-        // The same gun on the same spot: their outlines all but coincide.
-        let covered = |i: &SceneImage| i.rgba.chunks_exact(4).map(|p| p[3] >= 128).collect::<Vec<_>>();
-        let (a, b) = (covered(icon), covered(printer));
-        let both = a.iter().zip(&b).filter(|(a, b)| **a && **b).count();
-        let either = a.iter().zip(&b).filter(|(a, b)| **a || **b).count();
-        assert!(both as f32 > 0.8 * either as f32, "outline overlap {both}/{either}");
+        // Framed like the Printer: a clear border on every side, and the
+        // drawing as wide or as tall as the Printer's (the models differ in
+        // shape, so not both).
+        let (gun_border, printer_border) = (crate::item_icon_render::clear_border(icon), crate::item_icon_render::clear_border(printer));
+        let min = (icon.width.min(icon.height) as f32 * 0.05) as usize;
+        assert!(gun_border.iter().all(|b| *b >= min), "clear border (top, right, bottom, left) {gun_border:?}");
+        let span = |b: [usize; 4], w: u32, h: u32| (w as i32 - (b[1] + b[3]) as i32, h as i32 - (b[0] + b[2]) as i32);
+        let (gw, gh) = span(gun_border, icon.width, icon.height);
+        let (pw, ph) = span(printer_border, printer.width, printer.height);
+        let near = |a: i32, b: i32| (a - b).abs() as f32 <= 0.12 * b as f32;
+        assert!(near(gw, pw.min(icon.width as i32 * 88 / 100)) || near(gh, ph.min(icon.height as i32 * 88 / 100)),
+            "gun {gw}x{gh} {gun_border:?}, printer {pw}x{ph} {printer_border:?}");
         assert_eq!(icon.rgba[3], 0, "a clear background");
+        // Side by side with the Printer on a dark and a light slot, for a
+        // look; target/ is never committed (the Printer icon is v20's).
+        let (w, h) = (icon.width as usize, icon.height as usize);
+        let mut sheet = vec![255u8; w * 4 * h * 4];
+        for (k, (img, bg)) in [(icon, 40u8), (printer, 40), (icon, 215), (printer, 215)].into_iter().enumerate() {
+            for y in 0..h {
+                for x in 0..w {
+                    let p = &img.rgba[(y * w + x) * 4..][..4];
+                    let a = p[3] as f32 / 255.0;
+                    let o = (y * w * 4 + k * w + x) * 4;
+                    for c in 0..3 {
+                        sheet[o + c] = (p[c] as f32 * a + bg as f32 * (1.0 - a)).round() as u8;
+                    }
+                }
+            }
+        }
+        let side = manifest.join("../../target/gravity-gun-icon-vs-printer.png");
+        image::save_buffer(&side, &sheet, (w * 4) as u32, h as u32, image::ColorType::Rgba8)?;
         let out = manifest.join("../../target/gravity-gun-icon.png");
         image::save_buffer(&out, &icon.rgba, icon.width, icon.height, image::ColorType::Rgba8)?;
-        println!("drawn in {took:?} (whole item load); saved {}", out.display());
+        println!("drawn in {took:?} (whole item load); saved {} and {}", out.display(), side.display());
         Ok(())
     }
 }

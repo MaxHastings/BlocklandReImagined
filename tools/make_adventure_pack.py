@@ -735,7 +735,7 @@ def dump(path, value, indent=None):
 
 
 def icon_request(pose_like='v20.weapon.gunitem', base=(0.92, 0.92, 0.9)):
-    return {'schema_version': 1, 'pose_like': pose_like, 'frame': 'model', 'look': {'base': list(base)}}
+    return {'schema_version': 1, 'pose_like': pose_like, 'look': {'base': list(base)}}
 
 
 def rules_table():
