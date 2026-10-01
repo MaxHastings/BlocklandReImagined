@@ -355,6 +355,54 @@ pub(super) fn catalog(pack: &bri_weapons::Pack) -> mg::Catalog {
     }
 }
 
+/// A game mode's mini-game (`mode.json` `minigame`) as the Mini-Game
+/// dialog's settings.
+pub(super) fn mode_settings(
+    name: &str,
+    m: &bri_package_runtime::content::ModeMiniGame,
+) -> mg::Settings {
+    let ms = |seconds: f32| (seconds * 1000.0).round() as u32;
+    let mut loadout: [Option<String>; 5] = Default::default();
+    for (slot, item) in loadout.iter_mut().zip(&m.loadout) {
+        *slot = Some(item.clone());
+    }
+    let title = if m.title.trim().is_empty() {
+        name.chars().take(35).collect()
+    } else {
+        m.title.clone()
+    };
+    mg::Settings {
+        title,
+        invite_only: false,
+        use_all_players_bricks: m.use_all_players_bricks,
+        players_use_own_bricks: false,
+        use_spawn_bricks: true,
+        points_break_brick: m.points_break_brick,
+        points_plant_brick: m.points_plant_brick,
+        points_kill_player: m.points_kill_player,
+        points_kill_self: m.points_kill_self,
+        points_die: m.points_die,
+        respawn_ms: ms(m.respawn_seconds),
+        vehicle_respawn_ms: ms(m.vehicle_respawn_seconds),
+        brick_respawn_ms: ms(m.brick_respawn_seconds),
+        falling_damage: m.falling_damage,
+        weapon_damage: m.weapon_damage,
+        self_damage: m.self_damage,
+        vehicle_damage: m.vehicle_damage,
+        brick_damage: m.brick_damage,
+        enable_wand: false,
+        enable_building: m.building,
+        enable_painting: m.painting,
+        player_type: if m.player_type.is_empty() {
+            mg::STANDARD_PLAYER.into()
+        } else {
+            m.player_type.clone()
+        },
+        loadout,
+        lives: mg::Lives::Unlimited,
+    }
+}
+
 /// Every selectable archetype (v20's datablocks and packages' named
 /// archetypes), whatever weapons are installed.
 pub(super) fn new_world(
@@ -487,7 +535,12 @@ impl Session {
             .filter_map(|game| {
                 Some(MiniGameView {
                     id: game.id.0,
-                    owner: self.owner_of(game.owner)?,
+                    // A game mode's mini-game belongs to the server (0).
+                    owner: if game.is_server() {
+                        0
+                    } else {
+                        self.owner_of(game.owner)?
+                    },
                     color: game.color,
                     settings: game.settings.clone(),
                     members: game
@@ -911,6 +964,9 @@ impl Session {
                 mg::Error::AlreadyMember => "Already in that mini-game".to_string(),
                 mg::Error::InvalidSettings => "Invalid mini-game settings".to_string(),
                 mg::Error::UnknownContent => "Unknown item or player type".to_string(),
+                mg::Error::ServerGame => {
+                    "This server's game mode runs the only mini-game".to_string()
+                }
                 other => format!("Mini-game request rejected: {other}"),
             })
         })?;
@@ -1248,6 +1304,19 @@ impl Session {
     /// `GameConnection::spawnPlayer` on joining: the same spawn choice as a
     /// respawn and the same spawn effect. The host's map drop point stands
     /// when nothing better applies.
+    /// A game mode's mini-game takes every player in as they join.
+    pub(super) fn join_server_game(&mut self, owner: OwnerId) -> Result<()> {
+        // Bots follow their spawn brick owner's mini-game.
+        let Some(game) = self.minigames.server_game().filter(|_| !self.bots.is_bot(owner)) else {
+            return Ok(());
+        };
+        let player = self.peers.get(&owner).context("Unknown connection")?.combat.player;
+        let effects = self
+            .minigames
+            .host_place(player, Some(game))
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        self.apply_minigame_effects(effects)
+    }
     pub(super) fn enter_world(&mut self, owner: OwnerId) -> Result<()> {
         let choice = self.spawn_choice(owner);
         let peer = self.peers.get_mut(&owner).context("Unknown connection")?;

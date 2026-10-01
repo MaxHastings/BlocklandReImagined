@@ -74,6 +74,7 @@ fn rocket_pack() -> bri_weapons::Pack {
         crosshair: true,
         follow_arm: false,
         fire_animation: None,
+        paint_tint: false,
         states,
     };
     let item = bri_weapons::Item {

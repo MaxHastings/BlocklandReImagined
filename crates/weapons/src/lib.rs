@@ -140,6 +140,11 @@ pub struct State {
     pub no_ammo: Option<usize>,
     pub script: String,
     pub sequence: String,
+    /// The holder's arm animation (thread 2) played on entering the state,
+    /// as v20 scripts did with `playThread(2, armAttack)` in `onPreFire`:
+    /// `armattack` for a swing, `root` to stop.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub arm: String,
     pub sound: String,
     pub emitter: String,
     pub emitter_node: String,
@@ -396,6 +401,11 @@ pub struct Image {
     /// picks as v20's own weapons do (a gun kicks, a spear throws).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fire_animation: Option<String>,
+    /// Held, the image takes its holder's spray colour (the palette colour
+    /// they last picked) as a colour spray can does: a tool that paints
+    /// with that colour shows it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub paint_tint: bool,
 }
 /// Add-On commands (`package:command`) an image runs for its holder, aimed
 /// where they look, beyond `command` (which is `onFire`'s): v20 Add-Ons

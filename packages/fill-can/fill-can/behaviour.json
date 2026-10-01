@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "script": "fill-can.rhai",
+  "commands": [
+    {
+      "name": "fill",
+      "aim_reach": 32,
+      "cooldown_ticks": 30
+    },
+    {
+      "name": "fillcan"
+    },
+    {
+      "name": "fillhelp",
+      "cooldown_ticks": 120
+    }
+  ]
+}

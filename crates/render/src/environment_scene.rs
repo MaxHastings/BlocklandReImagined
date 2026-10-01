@@ -77,6 +77,7 @@ pub fn append(
     // Draw the fog backdrop through the shader's output transfer as well. This
     // covers below-horizon rays identically on sRGB and UNORM attachments.
     let fog_material = material(out, "sky/fog-backdrop".into(), 0, false, false);
+    out.materials[fog_material].parameters = Some(FOG_BACKDROP);
     let c = env.fog.color;
     for side in 0..6 {
         let points = if side < 4 {
@@ -216,6 +217,7 @@ pub fn append(
     }
     if env.horizon_band {
         let index = material(out, "sky/horizon-fog".into(), 0, false, true);
+        out.materials[index].parameters = Some(FOG_BACKDROP);
         for i in 0..16 {
             let a = i as f32 * std::f32::consts::TAU / 16.0;
             let b = (i + 1) as f32 * std::f32::consts::TAU / 16.0;
