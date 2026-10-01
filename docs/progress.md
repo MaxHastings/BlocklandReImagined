@@ -8510,3 +8510,25 @@ Tests: `add_on_join::bot_kinds_come_from_the_blockhead_bot_add_on_the_host_runs`
 `add_on_join::a_host_with_the_blockhead_bot_on_spawns_bots_and_one_without_offers_none`
 (generated content: hosts with the Add-On on and off, loads a saved spawn
 brick, counts players). Not run here: the second needs generated content.
+
+## A vehicle rolls on through a player it hits (v0.1.11)
+
+Max: "the steel ball when it hits a player should keep going not stop".
+- Root cause: a walking player is a kinematic body, which Rapier's contact
+  solver treats as infinitely heavy, so a Steel Ball (or any vehicle) that
+  hit one bounced back off it as off a wall (about 20 u/s to -2).
+- Fix (`VehiclesWorld::share_contacts`, called from `vehicle_post_step`
+  before impacts are judged): last step's side contact impulses between a
+  vehicle and a player on foot (corpses too) are shared as between two free
+  bodies, the player weighing `PLAYER_MASS` (90). Of the impulse J the
+  vehicle keeps J·M/(m+M), and the player takes -J/(m+M) of velocity, so
+  a 900 kg ball barely slows for a player and a player barely moves it.
+  Contacts from above or below (|normal.y| ≥ 0.7) are left alone so
+  standing on a vehicle is unchanged.
+- A `shove` vehicle's run-over push also lifts the player 4 u/s off the
+  ground, as its tumble does, so the ball rolls on instead of plowing them
+  along the ground's braking.
+- Test: `bri-sim --test showcase a_vehicle_rolls_on_through_a_player_it_hits`
+  (ball keeps over 85% of its speed through the hit in and out of
+  minigames and still rolls after 1.5 s; a 300 kg crate slows more but
+  never bounces back). It fails without the fix (20.6 → -2.1).

@@ -900,6 +900,7 @@ fn bowl(in_minigame: bool, speed: f32, at_owner: bool) -> (bool, f32, bool) {
     let mut g = Game::new();
     let a = g.join("Alpha", Vec3::new(0.0, 0.05, 0.0));
     let b = g.join("Bravo", Vec3::new(0.0, 0.05, -12.0));
+
     g.steps(30);
     if in_minigame {
         g.minigame(a, &[b]);
@@ -1271,4 +1272,60 @@ fn a_thrown_player_tumbles_only_when_they_hit_something_hard() {
     // The same throw into a wall.
     let (mut g, b) = hold_and_let_go(0.08, true);
     assert!(tumbled(&mut g, b, 120), "hit the wall hard");
+}
+
+/// A `definition` of Alpha's rolled at 24 u/s into Bravo, in a minigame or
+/// not: its speed along the roll just before and just after the hit (the
+/// biggest one-tick drop), and a second and a half after it was rolled.
+fn run_into_player(definition: &str, in_minigame: bool) -> (f32, f32, f32) {
+    let mut g = Game::new();
+    let a = g.join("Alpha", Vec3::new(0.0, 0.05, 0.0));
+    let b = g.join("Bravo", Vec3::new(0.0, 0.05, -12.0));
+    g.steps(30);
+    if in_minigame {
+        g.minigame(a, &[b]);
+    }
+    let at = g.feet(b);
+    let id =
+        g.s.spawn_vehicle_at(
+            a,
+            definition,
+            at + Vec3::new(9.0, 1.3, 0.0),
+            0.0,
+            Vec3::new(-24.0, 0.0, 0.0),
+        )
+        .unwrap();
+    let mut speeds = vec![24.0];
+    for _ in 0..180 {
+        g.steps(1);
+        speeds.push(-g.vehicle(id).unwrap().1.x);
+    }
+    let hit = (1..speeds.len())
+        .max_by(|i, j| (speeds[i - 1] - speeds[*i]).total_cmp(&(speeds[j - 1] - speeds[*j])))
+        .unwrap();
+    (speeds[hit - 1], speeds[hit], speeds[180])
+}
+
+/// Max, v0.1.10: a Steel Ball that hit a player stopped dead. The solver
+/// took a walking player for an immovable wall; now the two share the hit
+/// by weight, so a 900 kg ball barely slows for a 90 kg player and rolls
+/// on, and a 300 kg crate slows more but never bounces back off one.
+#[test]
+fn a_vehicle_rolls_on_through_a_player_it_hits() {
+    for in_minigame in [false, true] {
+        let (before, after, later) = run_into_player(BALL, in_minigame);
+        assert!(
+            after > before * 0.85,
+            "the ball barely slows (minigame {in_minigame}): {before} -> {after}"
+        );
+        assert!(
+            later > 7.0,
+            "and rolls on (minigame {in_minigame}): {later}"
+        );
+    }
+    let (before, after, _) = run_into_player(CRATE, false);
+    assert!(
+        after > before * 0.5 && after < before * 0.85,
+        "the crate slows more, but never bounces back: {before} -> {after}"
+    );
 }
