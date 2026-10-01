@@ -18,6 +18,7 @@ const WEAPON_TOTAL_LIMIT: u64 = 512 * 1024 * 1024;
 #[derive(Clone)]
 pub struct WeaponContent {
     pub pack: bri_weapons::Pack,
+    /// (id, display name) by name; items sharing a name in load order.
     pub item_choices: Vec<(String, String)>,
     aliases: BTreeMap<String, String>,
     fingerprint: String,
@@ -160,6 +161,18 @@ impl WeaponContent {
             );
             files.insert(key, path);
         }
+        // Load order of each item: the base game's first, then each Add-On's
+        // in `packages.json` order. A duplicate id keeps the earlier, as
+        // `merge` does.
+        let mut load_order: BTreeMap<String, usize> = BTreeMap::new();
+        for (rank, items) in std::iter::once(&pack.items)
+            .chain(parts.iter().map(|(_, _, part)| &part.items))
+            .enumerate()
+        {
+            for id in items.keys() {
+                load_order.entry(id.clone()).or_insert(rank);
+            }
+        }
         let (mut pack, notes) = pack.merge(
             parts
                 .into_iter()
@@ -187,7 +200,6 @@ impl WeaponContent {
             item_choices.len() <= 1024,
             "Weapon item catalog budget exceeded"
         );
-        let mut aliases = BTreeMap::new();
         let mut ids = std::collections::BTreeSet::new();
         for (id, name) in &item_choices {
             bri_world::ContentRef::Resolved(id.clone()).validate()?;
@@ -197,18 +209,21 @@ impl WeaponContent {
                 !name.trim().is_empty() && name.len() <= 128 && !name.chars().any(char::is_control),
                 "Invalid weapon item name"
             );
-            ensure!(
-                aliases
-                    .insert(name.trim().to_ascii_lowercase(), id.clone())
-                    .is_none(),
-                "Ambiguous weapon item display name: {name}"
-            );
         }
+        // Items that share a display name all stay, as in v20; among them the
+        // first loaded comes first, and saved bricks naming one bind to it.
+        let rank = |id: &str| load_order.get(id).copied().unwrap_or(usize::MAX);
         item_choices.sort_by(|a, b| {
             a.1.to_ascii_lowercase()
                 .cmp(&b.1.to_ascii_lowercase())
+                .then(rank(&a.0).cmp(&rank(&b.0)))
                 .then(a.0.cmp(&b.0))
         });
+        let aliases = bri_world::item_aliases(
+            item_choices
+                .iter()
+                .map(|(id, name)| (id.as_str(), name.as_str())),
+        );
         Ok(Self {
             pack,
             item_choices,
@@ -789,6 +804,83 @@ mod tests {
             Some(bri_world::ContentRef::Unresolved(_))
         ));
         assert_eq!(content.resolve_world_items(&mut world).unwrap(), 1);
+    }
+    #[test]
+    fn items_sharing_a_display_name_all_load_and_saves_bind_the_first_loaded() {
+        // Kaje's Sniper Rifle and the Adventure Pack's both say "Sniper
+        // Rifle"; an Add-On's tool may also reuse a base game name. v20 lists
+        // them all, so no Add-On is left out over a name.
+        let (root, base) = weapon_fixture();
+        let hammer = base.items[bri_weapons::HAMMER].clone();
+        let content = root.parent().unwrap();
+        let mut extras = Vec::new();
+        // Loaded first, though its id sorts last.
+        for (dir, items) in [
+            (
+                "zz_sniper",
+                vec![("zz_sniper:weapon/sniperrifleitem", "Sniper Rifle")],
+            ),
+            (
+                "aa_adventure",
+                vec![
+                    ("aa_adventure:weapon/sniperrifleitem", "sniper rifle "),
+                    ("aa_adventure:weapon/hammeritem", "Hammer"),
+                ],
+            ),
+        ] {
+            let abs = content.join(dir);
+            std::fs::create_dir(&abs).unwrap();
+            let mut part = base.clone();
+            part.id = dir.into();
+            part.resources.clear();
+            part.items = items
+                .into_iter()
+                .map(|(id, name)| {
+                    let mut item = hammer.clone();
+                    item.id = id.into();
+                    item.ui_name = name.into();
+                    (id.to_string(), item)
+                })
+                .collect();
+            write_weapons(&abs, &part);
+            extras.push((dir.to_string(), abs));
+        }
+        let weapons = WeaponContent::load_with(&root, &extras).unwrap();
+        assert_eq!(weapons.item_choices.len(), 7, "every item stays");
+        let snipers: Vec<_> = weapons
+            .item_choices
+            .iter()
+            .filter(|(_, name)| name.trim().eq_ignore_ascii_case("sniper rifle"))
+            .map(|(id, _)| id.as_str())
+            .collect();
+        assert_eq!(
+            snipers,
+            [
+                "zz_sniper:weapon/sniperrifleitem",
+                "aa_adventure:weapon/sniperrifleitem"
+            ],
+            "shared names list in load order"
+        );
+        let mut world = bri_world::World::new("test".into(), "map".into(), vec![[1.; 4]]);
+        for (id, name) in [(1, "Sniper Rifle"), (2, "hammer")] {
+            let mut brick =
+                bri_world::Brick::new(bri_world::ContentRef::Resolved("brick".into()), [0.; 3], 0);
+            brick.item_spawn.item = Some(bri_world::ContentRef::unresolved("item_ui", name));
+            world.bricks.insert(id, brick);
+        }
+        assert_eq!(weapons.resolve_world_items(&mut world).unwrap(), 0);
+        let bound = |id| world.bricks[&id].item_spawn.item.clone();
+        assert_eq!(
+            bound(1),
+            Some(bri_world::ContentRef::Resolved(
+                "zz_sniper:weapon/sniperrifleitem".into()
+            ))
+        );
+        assert_eq!(
+            bound(2),
+            Some(bri_world::ContentRef::Resolved(bri_weapons::HAMMER.into())),
+            "the base game's item first"
+        );
     }
     /// The weapons package at `root` loads to the same identity twice and
     /// offers every item as a choice the tool catalog installs. Returns the

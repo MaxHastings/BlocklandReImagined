@@ -989,7 +989,13 @@ fn references(cx: &mut Ctx) {
                             (false, false) => "; no reference install or installed game given",
                         }
                     ),
-                    case_only.then(|| "matches a member by case only".into()),
+                    if case_only {
+                        Some("matches a member by case only".into())
+                    } else {
+                        (base == "explosionshape").then(|| {
+                            "unless an enabled Add-On provides that file, the explosion shows without a shape, as Torque found no file there".into()
+                        })
+                    },
                 );
             }
             continue;
