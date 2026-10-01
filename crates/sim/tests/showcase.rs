@@ -1302,6 +1302,81 @@ fn a_bot_is_grabbed_like_a_player() {
     assert!(g.s.held_by(builder).is_none());
 }
 
+/// Max, v0.1.11: a Blockhead Bot with the Gravity Gun only clicked
+/// rapidly. A bot whose tool reaches and holds keeps its trigger down
+/// until it catches, carries what it caught to open space (here, where it
+/// stands) and flings it with a swing of its aim.
+/// A bot with the gun in the builder's minigame, and how it handles the
+/// builder: the longest it held them, and where it stood when it let go
+/// (`None` if it never did).
+fn bot_throws(world: World) -> (u32, Option<Vec3>, Game, OwnerId) {
+    let mut g = Game::with(world);
+    g.s.set_bot_kinds(
+        bri_sim::bot_kind::BotPack::from_json(include_bytes!(
+            "../../../packages/blockhead_bot/assets/bots.json"
+        ))
+        .unwrap()
+        .bots,
+    )
+    .unwrap();
+    let builder = g.join_verified("Builder", Vec3::new(0.0, 0.05, 0.0), 1);
+    g.steps(30);
+    let bot = *g.s.names().keys().find(|o| g.s.is_bot(**o)).expect("a bot");
+    g.minigame(builder, &[]);
+    g.s.give_tool(bot, GUN, true).unwrap();
+    let mut held = 0;
+    let mut longest = 0;
+    for _ in 0..2400 {
+        let at = g.feet(bot);
+        g.steps(1);
+        if g.s.held_by(bot) == Some(ObjectRef::Player(builder)) {
+            held += 1;
+            longest = longest.max(held);
+        } else if held > 0 {
+            return (longest, Some(at), g, builder);
+        }
+    }
+    (longest, None, g, builder)
+}
+
+#[test]
+fn a_bot_with_the_gun_grabs_holds_and_throws() {
+    let (longest, thrown, mut g, builder) = bot_throws(bot_world());
+    assert!(longest > 60, "held, not clicked: {longest} ticks at most");
+    assert!(thrown.is_some(), "and let go");
+    // Flung: it flies off from the swing.
+    let start = g.feet(builder);
+    g.steps(12);
+    let flown = g.feet(builder).distance(start);
+    assert!(flown > 1.5, "thrown, not dropped: {flown} in 0.1 s");
+}
+
+/// Under a roof, it carries its catch out from under it before the throw.
+#[test]
+fn a_bot_carries_its_catch_out_into_the_open_to_throw() {
+    let mut world = bot_world();
+    for x in -4..=4 {
+        for z in -10..=4 {
+            let id = world.next_brick_id;
+            world.bricks.insert(
+                id,
+                bri_world::Brick::new(
+                    bri_world::ContentRef::Resolved("brick".into()),
+                    [x as f32, 4.5, z as f32],
+                    1,
+                ),
+            );
+            world.next_brick_id += 1;
+        }
+    }
+    let (longest, thrown, _, _) = bot_throws(world);
+    let at = thrown.unwrap_or_else(|| panic!("never let go; held {longest} ticks"));
+    assert!(
+        at.x.abs() > 4.5 || at.z < -10.5 || at.z > 4.5,
+        "thrown from out under the sky, not under the roof: {at}"
+    );
+}
+
 /// Max, v0.1.9: a held player spun round in the beam on the holder's
 /// screen while on their own they hung still. A tumbling player watches
 /// through the corpse camera, so their mouse turns nothing; their client
