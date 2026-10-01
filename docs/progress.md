@@ -8248,7 +8248,7 @@ Render: `/mnt/project-files/steel-ball/steel-ball-v2.png`. Max's in-game
 check is a Steel Ball near bricks at Mirrors Medium, in Unified+Shine and
 in Dynamic.
 
-## 2026-10-01 Player Throwing port (branch `claude/project-thread-n5mlwe`, protocol 70, for v0.1.11)
+## 2026-10-01 Player Throwing port (branch `claude/project-thread-n5mlwe`, protocol 71, for v0.1.11)
 
 Max picked Electrk's Player Throwing ("Electrk's is fine") as the classic
 throw Add-On, run from the player's own copy ("originals only"). Port
