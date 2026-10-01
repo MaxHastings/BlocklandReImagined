@@ -17,7 +17,7 @@ use std::{
 
 #[macro_use]
 mod support;
-use support::{content_root::ContentRoot, wait};
+use support::{content_root::ContentRoot, files, wait};
 
 synthetic_and_content!(
     ContentRoot: add_ons_the_host_turns_off_are_not_required_and_ones_it_runs_download,
@@ -95,9 +95,11 @@ fn until(
 }
 
 fn app(root: &Path, name: &str) -> Result<App> {
-    let state = std::env::temp_dir().join(format!("bri-add-on-join-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&state);
-    let mut app = App::load(root, &state, SIZE)?;
+    app_in(root, name, &files::state_dir(name)?)
+}
+
+fn app_in(root: &Path, name: &str, state: &Path) -> Result<App> {
+    let mut app = App::load(root, state, SIZE)?;
     app.ui.core.pop(ScreenId::DefaultControls);
     app.ui.core.settings.avatar.lan_name = name.into();
     Ok(app)
@@ -792,7 +794,8 @@ fn a_host_with_the_blockhead_bot_on_spawns_bots_and_one_without_offers_none(
     // Server ticks from loading the spawn brick to the bot, with it on.
     let mut bot_ticks = 0;
     for (name, set, on) in [("BotsOn", &with, true), ("BotsOff", &without, false)] {
-        let mut host_app = app(&content, name)?;
+        let state = files::state_dir(name)?;
+        let mut host_app = app_in(&content, name, &state)?;
         host_app.apply_packages(set)?;
         host(&mut host_app)?;
         until(&mut [&mut host_app], "host in game", 180, |a| in_game(a[0]))?;
@@ -822,8 +825,6 @@ fn a_host_with_the_blockhead_bot_on_spawns_bots_and_one_without_offers_none(
         }));
         world.bricks.insert(1, brick);
         world.next_brick_id = 2;
-        let state =
-            std::env::temp_dir().join(format!("bri-add-on-join-{name}-{}", std::process::id()));
         use sha2::Digest;
         let folder = state
             .join("saves")

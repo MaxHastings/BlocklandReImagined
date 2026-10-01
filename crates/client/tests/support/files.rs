@@ -39,6 +39,14 @@ pub fn scratch(label: &str) -> Result<tempfile::TempDir> {
     Ok(tempfile::Builder::new().prefix(label).tempdir_in(parent)?)
 }
 
+/// A fresh state folder for one app a test runs, its own even when two
+/// cases of one test binary (`synthetic` and `content`) run side by side
+/// with the same player name. Kept for the test's length: the app writes
+/// to it until the process ends.
+pub fn state_dir(label: &str) -> Result<PathBuf> {
+    Ok(scratch(label)?.keep())
+}
+
 /// The repository root (where the generated `content/` packs live).
 pub fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
