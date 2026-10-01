@@ -6,6 +6,7 @@ pub mod content_identity;
 pub mod dedicated;
 pub mod discovery;
 pub mod impair;
+pub mod lag;
 pub mod packages;
 pub mod invite;
 pub mod natpmp;

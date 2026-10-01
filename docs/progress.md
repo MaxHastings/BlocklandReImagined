@@ -8510,3 +8510,22 @@ Tests: `add_on_join::bot_kinds_come_from_the_blockhead_bot_add_on_the_host_runs`
 `add_on_join::a_host_with_the_blockhead_bot_on_spawns_bots_and_one_without_offers_none`
 (generated content: hosts with the Add-On on and off, loads a saved spawn
 brick, counts players). Not run here: the second needs generated content.
+
+### 2026-10-01 LAG icon
+
+v20's lag icon now shows on joined servers. The authored `LagIcon`
+(32x32 top-right, `lagIcon.png` from the player's own v20 `base/client/ui`,
+already copied by the UI import) was wired to `UiUpdate::Lagging`, which
+nothing sent. Torque's `GameConnection::detectLag` shows it once the server
+has sent nothing for `$Pref::Net::LagThreshold` (400 ms by default) and hides
+it on the next packet; `setLagIcon` skips "local" connections. The engine
+side is `bri_net::lag::LagWatch`: the client app samples the QUIC transport's
+received datagram count each frame (acknowledgements of the movement it sends
+every tick count, so an idle world never looks like lag) and posts the change.
+The game this process hosts never shows it. No wire or protocol change.
+The setLagIcon body and threshold source were inferred from the v20 function
+index, the stock pref default and Torque's engine; not checked against the
+decompiled script text.
+
+Tests: `bri-net lag::tests` (three deterministic cases with explicit
+instants) and `bri-ui runtime_input::lag_icon_shows_only_while_the_host_is_quiet`.
