@@ -196,6 +196,10 @@ fn on_tick() {
         if f == () {
             // `onMiniGameBrickAdded`: a new Flag Spawn gets its flag.
             flags.send_home(b);
+        } else if f.state == "home" && b.item != flag_item() {
+            // `serverCmdSetWrenchData`, packaged: the wrench does not take
+            // a standing flag off its stand.
+            flags.send_home(b);
         } else if (f.state == "dropped" || f.state == "waiting") && tick() >= f.respawn_at {
             // `Slayer_CTF::flagRespawnTick`.
             tell_game(g, `${magenta()}The ${flag_name(g, b)} ${magenta()}flag was respawned.`);
@@ -227,31 +231,9 @@ fn on_tick() {
 
 fn on_minigame(event) {
     if event.kind == "reset" || event.kind == "ended" {
-        // `Slayer_CTF::preMinigameReset` / `onGameModeEnd`: every flag home
+        // `Slayer_CTF::preMinigameReset` / the game gone: every flag home
         // (or gone, when the game ends) and the captures cleared.
-        let flags = flags();
-        for b in bricks(flag_spawn()) {
-            if b.game == event.game {
-                remove_dropped(b.id);
-                if event.kind == "reset" {
-                    flags.send_home(b);
-                } else {
-                    set_brick_item(b.id, ());
-                    flags.remove(`${b.id}`);
-                }
-            }
-        }
-        set("flags", flags);
-        for p in players() {
-            if p.minigame == event.game {
-                set_player(p.id, "carrying", ());
-            }
-        }
-        let s = game_state(event.game);
-        s.returns = #{};
-        s.pickups_by = #{};
-        s.returns_by = #{};
-        set_game_state(event.game, s);
+        reset_flags(event.game, event.kind == "ended");
         // `Slayer_CTF::onClientDisplayRules`, after Slayer's rules.
         let g = minigame(event.game);
         if event.kind == "reset" && g != () && playing(g.id) {
@@ -262,21 +244,54 @@ fn on_minigame(event) {
         }
     } else if event.kind == "round_end" && playing(event.game) {
         report_columns(event.game);
-    } else if event.kind == "settings" && event.keys.contains("{{slayer_rules}}:mode") && !playing(event.game) {
-        // Another mode: carried flags are gone too (the flags on their
-        // stands go at the next check), and Slayer's report has its own
-        // columns again.
-        drop_report_columns(event.game);
-        for p in players() {
-            if p.minigame == event.game && get_player(p.id, "carrying") != () {
-                mount_image(p.id, (), flag_slot());
-                set_player(p.id, "carrying", ());
-            }
+    } else if event.kind == "settings" && event.keys.contains("{{slayer_rules}}:mode") {
+        // `Slayer_CTF::onGameModeStart`: the flags stand on their stands.
+        // `onGameModeEnd`: they and the captures are gone, and Slayer's
+        // report has its own columns again.
+        let ending = !playing(event.game);
+        reset_flags(event.game, ending);
+        if ending {
+            drop_report_columns(event.game);
         }
     } else if event.kind == "left" || event.kind == "team" {
         // `onClientLeaveGame` / `onClientLeaveTeam`.
         drop_flag(event.player);
     }
+}
+
+// `Slayer_CTF::resetFlags(%doNotRespawn)`: every flag of the game home, or
+// with `gone` none at all, carried and dropped ones included, and this
+// round's captures and tallies cleared.
+fn reset_flags(game, gone) {
+    // Without teams there are no flags (`on_tick`).
+    let g = minigame(game);
+    let gone = gone || g == () || g.teams.is_empty();
+    let flags = flags();
+    for b in bricks(flag_spawn()) {
+        if b.game == game {
+            remove_dropped(b.id);
+            if gone {
+                set_brick_item(b.id, ());
+                flags.remove(`${b.id}`);
+            } else {
+                flags.send_home(b);
+            }
+        }
+    }
+    set("flags", flags);
+    for p in players() {
+        if p.minigame == game && get_player(p.id, "carrying") != () {
+            if p.alive {
+                mount_image(p.id, (), flag_slot());
+            }
+            set_player(p.id, "carrying", ());
+        }
+    }
+    let s = game_state(game);
+    s.returns = #{};
+    s.pickups_by = #{};
+    s.returns_by = #{};
+    set_game_state(game, s);
 }
 
 // `Slayer_CTF::prePlayerDeath`.
@@ -381,7 +396,9 @@ fn take_flag(s, b, flags, dropped) {
     } else {
         remove_drop(dropped);
     }
-    mount_image(p, flag_image(), flag_slot(), b.color);
+    // Kept: no other Add-On swaps or takes off the flag while it is carried
+    // (`Player::mountImage` and `unMountImage`, packaged).
+    mount_image(p, flag_image(), flag_slot(), #{ paint: b.color, keep: true });
     set_player(p, "carrying", b.id);
     flags[`${b.id}`] = #{ state: "carried", since: tick(), carrier: p };
     set("flags", flags);
