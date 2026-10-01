@@ -8,7 +8,6 @@
       "ui_name": "Fill Can",
       "image": "fill-can-tool:image/fill-can",
       "model": "base/data/shapes/spraycan.dts",
-      "icon": "icons/fill_can",
       "can_drop": true,
       "sport": false
     }

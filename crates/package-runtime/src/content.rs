@@ -220,6 +220,16 @@ pub struct Behaviour {
     /// tick.
     #[serde(default)]
     pub on_projectile_hit: bool,
+    /// `on_activate(player)` as a living player clicks with nothing to
+    /// fire (`serverCmdActivateStuff`, which v20 Add-Ons packaged as
+    /// `Player::activateStuff`), before the engine's own activation: the
+    /// arm's swing, flipping a vehicle, a brick's `onActivate`. Return
+    /// `true` to take the click, so the engine does nothing more; anything
+    /// else lets it carry on. Every package that declares it is asked, in
+    /// load order, until one takes the click. Called as it happens, so it
+    /// must be quick.
+    #[serde(default)]
+    pub on_activate: bool,
     /// `on_tick()` every `tick_interval` ticks, when set.
     #[serde(default)]
     pub tick_interval: Option<u32>,

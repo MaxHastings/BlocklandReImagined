@@ -643,6 +643,7 @@ fn synthetic_rocket_pack() -> bri_weapons::Pack {
         last_shot: None,
         state_shots: Default::default(),
         cook: None,
+        scripts: Default::default(),
         states,
     };
     let item = bri_weapons::Item {

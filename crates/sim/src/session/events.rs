@@ -1258,8 +1258,8 @@ impl EventHost<'_> {
                 continue;
             }
             if let Some((radial, up)) = split(at) {
-                self.session.push_vehicle(vehicle, at, radial);
-                self.session.push_vehicle(vehicle, center, up);
+                self.session.blast_vehicle(vehicle, at, radial);
+                self.session.blast_vehicle(vehicle, center, up);
             }
         }
         // Dropped items.

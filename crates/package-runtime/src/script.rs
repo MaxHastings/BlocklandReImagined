@@ -107,6 +107,16 @@ pub struct PlayerView {
     /// never runs out.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub reserves: BTreeMap<String, Option<u32>>,
+    /// A bot (an `AIPlayer`), not a connected player.
+    #[serde(default)]
+    pub bot: bool,
+    /// A bot's spawn brick's owner (`%bot.spawnBrick.client`), if any.
+    #[serde(default)]
+    pub bot_owner: Option<u64>,
+    /// The player this one rides (`getObjectMount`), and on which of its
+    /// mount points.
+    #[serde(default)]
+    pub riding: Option<(u64, u8)>,
 }
 /// A held gun's magazine and the reserve that fills it.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -243,6 +253,9 @@ pub struct Snapshot {
     /// The live environment settings (`environment()`).
     pub environment: bri_content::atmosphere::Settings,
     pub players: Vec<PlayerView>,
+    /// Bots: player bodies without a connection. [`player`](Self::player)
+    /// finds them; `players()` leaves them out.
+    pub bots: Vec<PlayerView>,
     pub entities: Vec<EntityView>,
     /// Vehicles and other loose physics bodies, and bots (players without
     /// a connection, `object: player`, `definition` their kind, `owner`
@@ -252,6 +265,10 @@ pub struct Snapshot {
     pub holds: Vec<HoldView>,
 }
 impl Snapshot {
+    /// A connected player or a bot.
+    pub fn player(&self, id: u64) -> Option<&PlayerView> {
+        self.players.iter().chain(&self.bots).find(|p| p.id == id)
+    }
     /// Any movable object by reference, players and entities included.
     pub fn object(&self, object: ObjectRef) -> Option<ObjectView> {
         match object {
@@ -509,6 +526,22 @@ fn player_map(p: &PlayerView) -> Dynamic {
                     })
                     .collect(),
             ),
+        ),
+        ("bot", p.bot.into()),
+        (
+            "bot_owner",
+            p.bot_owner
+                .map_or(Dynamic::UNIT, |o| Dynamic::from_int(o as i64)),
+        ),
+        (
+            "riding",
+            p.riding
+                .map_or(Dynamic::UNIT, |(m, _)| Dynamic::from_int(m as i64)),
+        ),
+        (
+            "seat",
+            p.riding
+                .map_or(Dynamic::UNIT, |(_, s)| Dynamic::from_int(i64::from(s))),
         ),
     ])
 }
@@ -827,12 +860,11 @@ fn register_api(engine: &mut Engine) {
     engine.register_fn("player", |player: Dynamic| {
         with(|i| {
             let player = id(&player)?;
-            Ok(i.snapshot
-                .players
-                .iter()
-                .find(|p| p.id == player)
-                .map_or(Dynamic::UNIT, player_map))
+            Ok(i.snapshot.player(player).map_or(Dynamic::UNIT, player_map))
         })
+    });
+    engine.register_fn("bots", || {
+        with(|i| Ok(i.snapshot.bots.iter().map(player_map).collect::<Array>()))
     });
     engine.register_fn("entities", || {
         with(|i| {
@@ -1680,6 +1712,32 @@ fn register_presentation(engine: &mut Engine) {
             ammo,
         })
     });
+    engine.register_fn("unmount_image", |player: Dynamic| {
+        push(Op::UnmountImage {
+            player: id(&player)?,
+        })
+    });
+    engine.register_fn("set_scale", |player: Dynamic, scale: Dynamic| {
+        push(Op::SetScale {
+            player: id(&player)?,
+            scale: float(&scale)?,
+        })
+    });
+    engine.register_fn(
+        "set_look_limits",
+        |player: Dynamic, up: Dynamic, down: Dynamic| {
+            push(Op::SetLookLimits {
+                player: id(&player)?,
+                limits: Some([float(&down)?, float(&up)?]),
+            })
+        },
+    );
+    engine.register_fn("set_look_limits", |player: Dynamic, _: ()| {
+        push(Op::SetLookLimits {
+            player: id(&player)?,
+            limits: None,
+        })
+    });
     engine.register_fn("mount_image", |player: Dynamic, image: Dynamic| {
         push(Op::MountImage {
             player: id(&player)?,
@@ -1875,10 +1933,67 @@ fn register_physics(engine: &mut Engine) {
             distance: float(&distance)?,
         })
     });
+    // `reach(player, distance, #{ near: d, force: f, turn: true })`: hold
+    // the first thing that comes where they look within `distance`
+    // (`Op::Reach`); every option may be left out.
+    engine.register_fn(
+        "reach",
+        |player: Dynamic, distance: Dynamic, options: rhai::Map| {
+            for key in options.keys() {
+                if !matches!(key.as_str(), "near" | "force" | "turn") {
+                    return fail(format!("reach has no option `{key}` (near, force, turn)"));
+                }
+            }
+            let near = options.get("near").map(float).transpose()?.unwrap_or(0.5);
+            let force = options.get("force").map(float).transpose()?;
+            let turn = match options.get("turn") {
+                None => false,
+                Some(value) => match value.as_bool() {
+                    Ok(b) => b,
+                    Err(_) => return fail("reach's `turn` is true or false"),
+                },
+            };
+            push(Op::Reach {
+                player: id(&player)?,
+                distance: float(&distance)?,
+                near,
+                force,
+                turn,
+            })
+        },
+    );
+    // How far off what `player` holds is carried, or () when nothing is held.
+    engine.register_fn("held_distance", |player: Dynamic| {
+        with(|i| {
+            let player = id(&player)?;
+            Ok(i.snapshot
+                .holds
+                .iter()
+                .find(|h| h.player == player)
+                .map_or(Dynamic::UNIT, |h| Dynamic::from_float(f64::from(h.distance))))
+        })
+    });
     engine.register_fn("let_go", |player: Dynamic| {
         push(Op::LetGo {
             player: id(&player)?,
         })
+    });
+    engine.register_fn(
+        "mount_object",
+        |mount: Dynamic, rider: Dynamic, node: i64, can_dismount: bool| {
+            push(Op::MountObject {
+                mount: id(&mount)?,
+                rider: id(&rider)?,
+                node: u8::try_from(node)
+                    .ok()
+                    .filter(|n| usize::from(*n) < crate::ops::MAX_MOUNT_POINTS)
+                    .ok_or("a mount point is 0 to 7")?,
+                can_dismount,
+            })
+        },
+    );
+    engine.register_fn("unmount_object", |rider: Dynamic| {
+        push(Op::UnmountObject { rider: id(&rider)? })
     });
     engine.register_fn(
         "spawn_vehicle",
@@ -2063,6 +2178,9 @@ impl Runtime {
             }
             if behaviour.on_projectile_hit {
                 need("on_projectile_hit".into(), 1, "on_projectile_hit");
+            }
+            if behaviour.on_activate {
+                need("on_activate".into(), 1, "on_activate");
             }
             for policy in &behaviour.policies {
                 need(format!("allow_{policy}"), 1, &format!("policy `{policy}`"));

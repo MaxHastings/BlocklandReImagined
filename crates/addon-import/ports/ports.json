@@ -169,6 +169,77 @@
         "crates/addon-import/tests/adventure_port.rs glass_release_guns_shoot_like_their_scripts",
         "crates/addon-import/tests/adventure_port.rs glass_release_taser_tumbles_and_sniper_headshots"
       ]
+    },
+    {
+      "addon": "Weapon_ButterflyKnife",
+      "title": "Butterfly Knife",
+      "port": "weapon_butterflyknife",
+      "status": "verified",
+      "sha256": [
+        "4d8d0cc59be118094a2e6e39056b895e19447c05ed8d3a644fd7a56780a7afa4"
+      ],
+      "covers": {
+        "butterflyknifeImage::onCharge": {
+          "charge_arm": "playthread\\s*\\(\\s*2\\s*,\\s*\"?(\\w+)"
+        },
+        "butterflyknifeImage::onStopFire": {
+          "stop_arm": "playthread\\s*\\(\\s*2\\s*,\\s*\"?(\\w+)"
+        },
+        "butterflyknifeImage::onFire": {
+          "stab_arm": "playthread\\s*\\(\\s*2\\s*,\\s*\"?(\\w+)",
+          "parent": "parent::onfire\\s*\\("
+        },
+        "butterflyknifeImage::onFiretwo": {
+          "jab": "%projectile\\s*=\\s*(\\w+)\\s*;",
+          "one": "%shellcount\\s*=\\s*1\\s*;",
+          "spawns": "new\\s*\\(\\s*%this\\.projectiletype\\s*\\)"
+        }
+      },
+      "tests": [
+        "weapon_butterflyknife/checks.json",
+        "crates/addon-import/tests/ports.rs butterfly_knife_port_jabs_and_stabs",
+        "crates/weapons/tests/state_attacks.rs a_click_jabs_with_the_scripts_own_projectile",
+        "crates/addon-import/tests/import.rs real_steam_knife_and_grenade_ports"
+      ]
+    },
+    {
+      "addon": "Weapon_HEGrenade",
+      "title": "HE Grenade",
+      "port": "weapon_hegrenade",
+      "status": "verified",
+      "sha256": [
+        "1cae396e8616bf57e62dcfb4fda35490e93a772ee09979af45a3f7d4601dc351"
+      ],
+      "covers": {
+        "hegrenadeImage::onCharge": {
+          "charge_arm": "playthread\\s*\\(\\s*2\\s*,\\s*\"?(\\w+)"
+        },
+        "hegrenadeImage::onAbortCharge": {
+          "abort_arm": "playthread\\s*\\(\\s*2\\s*,\\s*\"?(\\w+)"
+        },
+        "hegrenadeImage::onFire": {
+          "throw_arm": "playthread\\s*\\(\\s*2\\s*,\\s*\"?(\\w+)",
+          "parent": "parent::onfire\\s*\\(",
+          "clears_tool": "%obj\\.tool\\[[^\\]]*\\]\\s*=\\s*0\\s*;",
+          "unuse": "servercmdunusetool\\s*\\("
+        },
+        "hegrenadeImage::onDone": {
+          "unmount": "unmountimage\\s*\\(\\s*%slot\\s*\\)"
+        },
+        "hegrenadeProjectile::onCollision": {
+          "bounce_sound": "serverplay3d\\s*\\(\\s*(\\w+)\\s*,"
+        },
+        "Armor::onCollision": {
+          "item": "hegrenadeitem",
+          "pickup": "%obj\\.pickup\\s*\\(\\s*%col\\s*\\)"
+        }
+      },
+      "tests": [
+        "weapon_hegrenade/checks.json",
+        "crates/addon-import/tests/ports.rs he_grenade_port_pulls_the_pin_then_throws_it_away",
+        "crates/weapons/tests/state_attacks.rs a_thrown_grenade_is_used_up_and_the_next_one_stays",
+        "crates/addon-import/tests/import.rs real_steam_knife_and_grenade_ports"
+      ]
     }
   ]
 }

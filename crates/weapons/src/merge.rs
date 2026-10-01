@@ -99,14 +99,18 @@ impl Pack {
         }
         // Drop what a missing package would have provided, innermost first.
         let projectiles: Vec<String> = self.projectiles.keys().cloned().collect();
-        self.images.retain(|id, image| match &image.projectile {
-            Some(p) if !projectiles.contains(p) => {
+        self.images.retain(|id, image| {
+            let missing = image
+                .projectile
+                .iter()
+                .chain(image.scripts.values().filter_map(|s| s.projectile.as_ref()))
+                .find(|p| !projectiles.contains(p));
+            if let Some(p) = missing {
                 notes.push(format!(
                     "image {id} dropped: projectile {p} is not provided"
                 ));
-                false
             }
-            _ => true,
+            missing.is_none()
         });
         for p in self.projectiles.values_mut() {
             if let Some(image) = &p.sport_image

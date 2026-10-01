@@ -819,9 +819,15 @@ fn fill(v: &Value, values: &BTreeMap<String, String>) -> Result<Value> {
                 && !s[1..s.len() - 1].contains(['{', '}']) =>
         {
             let name = &s[1..s.len() - 1];
+            let (name, lower) = name
+                .strip_suffix(":lower")
+                .map_or((name, false), |n| (n, true));
             let value = values
                 .get(name)
                 .with_context(|| format!("the patch uses `{s}`, which no pattern captures"))?;
+            if lower {
+                return Ok(Value::String(value.to_ascii_lowercase()));
+            }
             if let Ok(n) = value.parse::<i64>() {
                 serde_json::json!(n)
             } else {
@@ -835,7 +841,13 @@ fn fill(v: &Value, values: &BTreeMap<String, String>) -> Result<Value> {
             let mut s = s.clone();
             for (name, value) in values {
                 s = s.replace(&format!("{{{name}}}"), value);
+                // Ids are lower case, as Torque's names ignore it.
+                s = s.replace(&format!("{{{name}:lower}}"), &value.to_ascii_lowercase());
             }
+            ensure!(
+                !s.contains(":lower}"),
+                "the patch uses `{s}`, which no pattern captures"
+            );
             Value::String(s)
         }
         // Keys too, so a patch names the import's ids (`{namespace}:image/x`).
@@ -894,5 +906,23 @@ mod tests {
             json!({"x": 3})
         );
         assert!(fill(&json!("{missing}"), &values).is_err());
+    }
+
+    #[test]
+    fn fill_lowers_names_for_ids() {
+        let values = BTreeMap::from([("p".to_string(), "knifeProjectile".to_string())]);
+        assert_eq!(
+            fill(
+                &json!(["kit:projectile/{p:lower}", "{p:lower}", "{p}"]),
+                &values
+            )
+            .unwrap(),
+            json!([
+                "kit:projectile/knifeprojectile",
+                "knifeprojectile",
+                "knifeProjectile"
+            ])
+        );
+        assert!(fill(&json!("kit:{missing:lower}"), &values).is_err());
     }
 }

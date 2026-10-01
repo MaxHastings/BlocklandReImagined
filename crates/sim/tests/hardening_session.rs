@@ -173,6 +173,7 @@ fn tool_pack() -> bri_weapons::Pack {
                 last_shot: None,
                 state_shots: Default::default(),
                 cook: None,
+                scripts: Default::default(),
             },
         );
         items.insert(

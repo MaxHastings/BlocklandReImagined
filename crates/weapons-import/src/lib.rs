@@ -499,6 +499,8 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 last_shot: None,
                 state_shots: Default::default(),
                 cook: None,
+                // v20's own scripts run by image name (`runtime::callback`).
+                scripts: Default::default(),
             },
         );
     }

@@ -631,6 +631,7 @@ mod tests {
                     last_shot: None,
                     state_shots: Default::default(),
                     cook: None,
+                    scripts: Default::default(),
                 },
             );
             items.insert(

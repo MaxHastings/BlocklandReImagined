@@ -154,6 +154,8 @@ pub struct Vitals {
     pub mounted: Option<(u64, u8)>,
     /// The player this one rides, and the seat.
     pub ride: Option<super::Ride>,
+    /// A rule's look limits for this body (`setLookLimits`), `[down, up]`.
+    pub look_limits: Option<[f32; 2]>,
     /// What this player's moves steer.
     pub control: super::ControlObject,
     /// Typing in the chat box (`MsgStartTalking`).
@@ -557,6 +559,7 @@ impl Session {
                         light: peer.combat.light,
                         mounted: self.mounted(*owner),
                         ride: self.ride(*owner),
+                        look_limits: peer.look_limits,
                         control: peer.control,
                         talking: peer.talking,
                         sitting: peer.sitting,
@@ -1352,6 +1355,7 @@ impl Session {
             peer.combat.health = kind.max_health;
             peer.combat.alive = true;
             peer.combat.spawn_tick = tick;
+            peer.look_limits = None;
             peer.combat.shot_once = false;
             peer.combat.last_direct = None;
             // A new life starts with full magazines and starting reserves.
