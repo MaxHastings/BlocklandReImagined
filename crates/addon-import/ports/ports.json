@@ -45,6 +45,12 @@
           "plain_spawn": "getName\\(\\)\\s*!\\$=\\s*\"brickSpawnPointData\"",
           "open_first": "if\\s*\\(\\s*!\\s*%sp\\.isBlocked\\(\\)\\s*\\)"
         },
+        "server/core/resources/sounds/Sounds.cs": {
+          "countdown": "MaxCountDown\\s*=\\s*10\\s*;",
+          "voice": "filename\\s*=\\s*\"\\./\"\\s*@\\s*\\$sound\\s*@\\s*\"\\.wav\"",
+          "named": "setName\\(\\s*\"Slayer_\"\\s*@\\s*\\$sound\\s*@\\s*\"_Seconds_Sound\"\\s*\\)",
+          "begin": "datablock\\s+AudioProfile\\s*\\(\\s*Slayer_Begin_Sound\\s*\\)"
+        },
         "server/core/resources/datablocks.cs": {
           "team_spawn_brick": "datablock\\s+FxDtsBrickData\\s*\\(\\s*brickSlyrSpawnPointData\\s*:\\s*brickSpawnPointData\\s*\\)"
         },
@@ -122,7 +128,9 @@
         },
         "Slayer_MiniGameSO::preRoundCountdownTick": {
           "remain": "%this\\.preRoundSeconds\\s*-\\s*%ticks",
-          "go": "GO!"
+          "go": "GO!",
+          "begin_sound": "play2dAll\\(\\s*Slayer_Begin_Sound\\s*\\)",
+          "voice": "\"Slayer_\"\\s*@\\s*%remain\\s*@\\s*\"_Seconds_Sound\""
         },
         "Slayer_MiniGameSO::endRound": {
           "dead": "setDead\\(\\s*true\\s*\\)",

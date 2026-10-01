@@ -643,6 +643,24 @@ fn a_team_out_of_lives_loses_and_the_next_round_counts_down() {
     for p in [red, blue] {
         assert_eq!(g.s.control(p), Some(ControlObject::Player));
     }
+    // A voice for each second, then the buzzer, for each player.
+    let sounds: Vec<_> = g
+        .s
+        .take_private_notices()
+        .into_iter()
+        .filter_map(|(p, n)| match n {
+            Notice::Sound(s) if p == red => Some(s),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        sounds,
+        [
+            "gamemode_slayer:sound/slayer_2_seconds_sound",
+            "gamemode_slayer:sound/slayer_1_seconds_sound",
+            "gamemode_slayer:sound/slayer_begin_sound"
+        ]
+    );
     g.quiet();
 }
 

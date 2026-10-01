@@ -457,12 +457,25 @@ fn count_down(g, r) {
                 watch(m, ());
             }
         }
+        play_all(g, "{{namespace}}:sound/slayer_begin_sound");
         center_print_minigame(g.id, `<font:Arial Bold:100>${magenta()}GO!`, 2.0);
     } else if r.counted != left {
         r.counted = left;
+        // A voice for each of the last ten seconds, as the original's
+        // `Slayer_<n>_Seconds_Sound`s.
+        if left <= 10 {
+            play_all(g, `{{namespace}}:sound/slayer_${left}_seconds_sound`);
+        }
         center_print_minigame(g.id, `<font:Arial Bold:100>${magenta()}${left}`, 1.5);
     }
     r
+}
+
+// `Slayer_MiniGameSO::play2dAll`: a sound every member hears.
+fn play_all(g, sound) {
+    for m in g.members {
+        play_sound(m, sound);
+    }
 }
 
 // `Slayer_MiniGameSO::endRound`, for a round any rule ended: who won (and

@@ -229,6 +229,16 @@ Add-On's do (`mountPoint = $BackSlot` reads the base game's value).
 `{{namespace}}`. The report notes how many datablocks it declared. The
 declarations are the port's own text, never the Add-On's.
 
+Sounds declared this way (Slayer's countdown voices, made in a loop) play
+by id from the rules, `play_sound(p, "<namespace>:sound/<name>")`: every
+converted `AudioProfile` goes into the Add-On's weapons pack, which an
+Add-On with no weapons gets just for its sounds.
+
+A `covers` pattern reads a function's plain definition, the last one if
+the Add-On defines it twice, as Torque keeps. A definition inside a
+`package` wraps that one (it calls `Parent::`), so it is read only when
+there is no plain one.
+
 ## Handing it to an agent
 
 `AGENT.md` in the work folder holds the prompt, filled in for the Add-On.

@@ -9133,6 +9133,16 @@ of theirs in the repo). Both ports are `partial`.
   them from `Checkpoint.brick_inputs` (protocol). Slayer_CTF fires
   onFlagPickedUp, onFlagDropped, onFlagReturned and onFlagRecovered where
   the original does. Test: `crates/sim/tests/package_brick_inputs.rs`.
+- Step 4, from the Gate's real-copy reports: Slayer's port had stopped
+  applying (main's "last definition wins" read FlyThroughCam's packaged
+  wrapper of `preRoundCountdownTick`). Ports now read a function's plain
+  definition, the last one; a packaged override only where there is none
+  (it calls `Parent::`). An Add-On with sounds but no weapons now gets a
+  sounds-only weapons pack, so its rules play them by id; Slayer's port
+  declares its run-time countdown voices (`datablocks.cs`, pinned to
+  `MaxCountDown = 10`) and plays them and the GO buzzer to every member.
+  DTS files with up to 16 stray bytes after the material list convert
+  (Torque never reads them), for Slayer's cube.dts.
 - Not yet: uniforms, team loadouts/player types/scale, team respawn times,
   friendly-fire penalties, team swaps, end-of-round report, spectating,
   bots, capture points, Slayer's own events (onTeamCheck, onCP*, team

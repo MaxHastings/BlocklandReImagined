@@ -611,6 +611,17 @@ fn slayer_ports_apply_with_their_rules() {
         ids.push(applied.rules.as_ref().expect("rules").id.clone());
     }
     let slayer = std::fs::read_to_string(root.join("addons/gamemode_slayer-rules/slayer.rhai")).unwrap();
+    // Its countdown voices and buzzer, made at run time in the original,
+    // are declared by the port and play by id; a voice whose file this copy
+    // lacks stays out.
+    let sounds = Pack::from_json(&std::fs::read(root.join("addons/gamemode_slayer/assets/weapons.json")).unwrap())
+        .unwrap()
+        .sounds;
+    for id in ["slayer_begin_sound", "slayer_1_seconds_sound"] {
+        assert!(sounds.contains_key(&format!("gamemode_slayer:sound/{id}")), "{id}: {:?}", sounds.keys());
+    }
+    assert!(!sounds.contains_key("gamemode_slayer:sound/slayer_2_seconds_sound"));
+    assert!(slayer.contains("`gamemode_slayer:sound/slayer_${left}_seconds_sound`"));
     assert!(slayer.contains("\"gamemode_slayer:brick/brickslyrspawnpointdata\""));
     // Settings at this copy's defaults, its game modes in the mode list.
     let read = |path: &str| -> serde_json::Value {
@@ -701,6 +712,8 @@ fn slayer_ports_apply_with_their_rules() {
             .collect(),
     };
     bri_package_runtime::Catalog::load(&root, &set, true).unwrap_or_else(|e| panic!("{e:#?}"));
+    std::fs::remove_dir_all(dir).unwrap();
+}
 
 fn ported(name: &str, addon: &str) -> (PathBuf, PathBuf, bri_addon_import::report::Report) {
     let dir = fresh(name);

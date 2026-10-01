@@ -338,8 +338,16 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
     // set outside any function.
     let mut bodies = ports::Bodies::new();
     // Torque keeps the last definition of a function (names ignore case).
-    for f in scripts.iter().flat_map(|s| &s.functions) {
+    // A packaged one only wraps it (`Parent::`), so ports read the plain
+    // definition, and a packaged body only where there is none.
+    let functions = || scripts.iter().flat_map(|s| &s.functions);
+    for f in functions().filter(|f| f.package.is_none()) {
         bodies.insert(f.qualified().to_ascii_lowercase(), f.body.clone());
+    }
+    for f in functions().filter(|f| f.package.is_some()) {
+        bodies
+            .entry(f.qualified().to_ascii_lowercase())
+            .or_insert_with(|| f.body.clone());
     }
     for f in src.files.values() {
         if f.path.to_ascii_lowercase().ends_with(".cs") {
@@ -1076,7 +1084,16 @@ fn weapons(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
             }
         }
     }
-    if defs.is_empty() {
+    // An Add-On with sounds but no weapons (a game mode's countdown) still
+    // gets a pack, holding just its sounds, so its rules play them by id.
+    let has_sounds = cx.owned.values().any(|o| {
+        o.d.class.eq_ignore_ascii_case("AudioProfile")
+            && o.fields.get("filename").is_some_and(|f| {
+                let file = source::resolve(&o.path, literal(f));
+                cx.outputs.contains_key(&file.to_ascii_lowercase())
+            })
+    });
+    if defs.is_empty() && !has_sounds {
         return Ok(());
     }
     // Pull in the dependency datablocks these name, so `lower` can resolve

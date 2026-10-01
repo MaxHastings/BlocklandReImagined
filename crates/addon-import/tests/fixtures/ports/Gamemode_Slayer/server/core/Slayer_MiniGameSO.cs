@@ -50,7 +50,9 @@ function Slayer_MiniGameSO::victoryCheck_Time(%this, %ticks)
 function Slayer_MiniGameSO::preRoundCountdownTick(%this, %ticks)
 {
 	%remain = %this.preRoundSeconds - %ticks;
+	%this.play2dAll(Slayer_Begin_Sound);
 	%this.centerPrintAll("GO!", 2);
+	%sound = "Slayer_" @ %remain @ "_Seconds_Sound";
 }
 
 function Slayer_MiniGameSO::endRound(%this, %winner, %resetTime)
