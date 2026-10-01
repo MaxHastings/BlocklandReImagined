@@ -42,7 +42,7 @@ its own values.
 | Camera kick | `spawnExplosion` of a shaking recoil blast | shot `kick` | ported |
 | Headshots | `getHitbox`, crouched counts as head, `headshotMultiplier` | `info.region`, rules | **ported** |
 | Hitscan guns | Support_RaycastingWeapons image fields | `shot.hitscan`, a ray projectile per gun, the `hitscans` reader | **ported** |
-| Crits and their kill message | `isRaycastCritical`, ×3, `raycastCritDirectDamageType`, only `if(isObject(CritProjectile))` | rules, `on_damage` answers `#{ amount, type }`; port rules `requires` (ModernWarbattles' server.cs exec'd Emote_Critical, so it turns on with it), script `enabled` | **ported** |
+| Crits and their kill message | `isRaycastCritical`, ×3, `raycastCritDirectDamageType`, only `if(isObject(CritProjectile))` | rules, `on_damage` answers `#{ amount, type }`; port rules `loads` (ModernWarbattles' server.cs exec'd Emote_Critical when it was there, so an installed one turns on with it), script `enabled` | **ported** |
 | Melee swings kill players and vehicles | `onRaycastDamage`: twice `maxDamage`, own type | rules `on_damage`, new `on_vehicle_damage` | **ported** |
 | Swing hit sounds | random pair set in `onFire` | rules `on_projectile_hit`, `sound_at` | **ported** |
 | Grenade shrapnel and trails | `onExplode` loops | projectile `children` as a list | **ported** |

@@ -119,6 +119,7 @@
         "crates/addon-import/tests/adventure_port.rs melee_swings_wreck_vehicles",
         "crates/addon-import/tests/adventure_port.rs a_dropped_spare_gun_empties_its_magazine_into_the_reserve",
         "crates/addon-import/tests/adventure_port.rs crits_play_with_the_critical_hit_emote",
+        "crates/addon-import/tests/adventure_port.rs without_the_critical_hit_emote_it_runs_with_no_crits",
         "crates/addon-import/tests/adventure_port.rs a_grenade_cooks_in_the_hand"
       ]
     },

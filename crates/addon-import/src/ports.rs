@@ -131,12 +131,14 @@ pub struct Rules {
     /// `{uses:Emote_Critical}` in a value is its import's id.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub uses: Vec<String>,
-    /// Other Add-Ons the scripts loaded themselves (`exec("add-ons/
-    /// Emote_Critical/server.cs")`): each is a dependency of the rules, so
-    /// turning the Add-On on turns its import on too, and `{uses:X}` names
-    /// its id as for `uses`.
+    /// Other Add-Ons the scripts loaded themselves when they were there
+    /// (`exec("add-ons/Emote_Critical/server.cs")`): optional dependencies
+    /// the rules also name as companions, so turning the Add-On on turns
+    /// each installed one on with it, and the Add-On runs without one that
+    /// is missing, as the `exec` of a missing file did nothing. `{uses:X}`
+    /// names its id as for `uses`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub requires: Vec<String>,
+    pub loads: Vec<String>,
 }
 
 /// The companion host-rules Add-On's id for the import `namespace`.
@@ -551,7 +553,7 @@ fn try_apply(
             "a pattern is named `{name}`, which every port already has"
         );
     }
-    for addon in port.rules.iter().flat_map(|r| r.uses.iter().chain(&r.requires)) {
+    for addon in port.rules.iter().flat_map(|r| r.uses.iter().chain(&r.loads)) {
         let namespace = crate::namespace_for(addon)?;
         ensure!(
             namespace != import.namespace,
@@ -757,7 +759,7 @@ fn rules_package(
         }));
         files.push((file, text.into_bytes()));
     }
-    let manifest = serde_json::json!({
+    let mut manifest = serde_json::json!({
         "schema_version": 1,
         "id": id,
         "version": import.version,
@@ -773,17 +775,23 @@ fn rules_package(
             "source": format!("Port {} of Blockland Add-On {}", e.port, e.addon),
             "notes": port_notes(ports, e),
         },
-        "dependencies": std::iter::once(Ok((import.namespace.to_owned(), Value::from(format!("={}", import.version)))))
-            .chain(rules.requires.iter().map(|addon| Ok((crate::namespace_for(addon)?, Value::from("*")))))
-            .collect::<Result<serde_json::Map<_, _>>>()?,
+        "dependencies": { import.namespace: format!("={}", import.version) },
         "optional_dependencies": rules
             .uses
             .iter()
+            .chain(&rules.loads)
             .map(|addon| Ok((crate::namespace_for(addon)?, Value::from("*"))))
             .collect::<Result<serde_json::Map<_, _>>>()?,
         "capabilities": rules.capabilities,
         "provides": provides,
     });
+    if !rules.loads.is_empty() {
+        manifest["companions"] = rules
+            .loads
+            .iter()
+            .map(|addon| crate::namespace_for(addon).map(Value::from))
+            .collect::<Result<Value>>()?;
+    }
     let bytes = serde_json::to_vec_pretty(&manifest)?;
     files.push(("package.json".to_owned(), bytes.clone()));
     check_rules(&id, &bytes, &files)?;

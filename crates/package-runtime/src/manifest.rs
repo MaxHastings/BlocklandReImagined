@@ -45,9 +45,10 @@ pub struct Manifest {
     pub capabilities: Vec<String>,
     #[serde(default)]
     pub provides: Vec<Provide>,
-    /// Add-Ons turned on and off with this one, such as the host rules an
-    /// imported Add-On's port adds beside it (`docs/modding/porting.md`).
-    /// Each depends on this one; a missing one is skipped.
+    /// Add-Ons turned on with this one, a missing one skipped: the host
+    /// rules an imported Add-On's port adds beside it, which depend on it
+    /// and so also turn off with it, or an Add-On its scripts loaded
+    /// themselves when it was there (`docs/modding/porting.md`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub companions: Vec<String>,
     /// Sandboxed client code (`docs/architecture/client-sandbox.md`), read

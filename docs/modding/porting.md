@@ -476,6 +476,8 @@ folder name (`["Emote_Critical"]`). The rules then name it in
 `optional_dependencies`, `{uses:Emote_Critical}` in a value is its import's
 id, and the script asks `enabled(...)` before using its content. When the
 Add-On loaded the other one itself (`exec("add-ons/Emote_Critical/
-server.cs")`, as ModernWarbattles did), list it in `"requires"` instead:
-the rules then name it in `dependencies`, so turning the Add-On on turns
-its import on too, and `{uses:...}` names it the same way.
+server.cs")`, as ModernWarbattles did), list it in `"loads"` instead: the
+rules then name it in `optional_dependencies` and in `companions`, so
+turning the Add-On on turns that import on too when it is installed, the
+Add-On runs without it when it is not (the `exec` of a missing file did
+nothing), and `{uses:...}` names it the same way.

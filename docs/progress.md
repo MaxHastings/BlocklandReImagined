@@ -9272,11 +9272,12 @@ Tests: `adventure_port.rs` `crits_play_with_the_critical_hit_emote`,
 hitscan test now expects no crit or shove without Emote_Critical.
 
 Follow-up: ModernWarbattles' own server.cs `exec`s Emote_Critical's, so
-its port now lists it in the new port-rules `requires` (a hard
-`dependencies` entry of the rules package): turning ModernWarbattles on
-turns Emote_Critical on with it, as the library resolves any dependency;
-1019 has no crits. The tests import the stand-in beside every
-ModernWarbattles import and check the library's enable plan.
+its port now lists it in the new port-rules `loads` (an optional
+dependency and a companion of the rules package): turning
+ModernWarbattles on turns an installed Emote_Critical on with it, and
+without one ModernWarbattles still turns on and runs with no crits, as
+the `exec` of a missing file did nothing; 1019 has no crits. The tests
+check the library's enable plan both ways.
 
 ## 2026-10-01 Body threads and scheduled animations: the Adventure head-hit flinch (branch `claude/adventure-pack-n3spj2`)
 

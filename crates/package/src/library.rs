@@ -79,8 +79,9 @@ pub struct PackageInfo {
     pub capabilities: Vec<String>,
     #[serde(default)]
     pub provides: Vec<Provided>,
-    /// Add-Ons turned on with this one, after it (an import's host rules).
-    /// They depend on it, so turning it off turns them off too.
+    /// Add-Ons turned on with this one, after it, when installed: an
+    /// import's host rules (which depend on it, so turning it off turns
+    /// them off too), or an Add-On its scripts loaded themselves.
     #[serde(default)]
     pub companions: Vec<String>,
     /// Client code (`client.module`), which runs on each player's screen;
