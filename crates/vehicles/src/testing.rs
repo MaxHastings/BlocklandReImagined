@@ -31,7 +31,7 @@ pub const SKIS: &str = "v20.vehicle.skivehicle";
 pub const CARPET: &str = "test:vehicle/carpet";
 /// A player-type mount that runs and jumps.
 pub const HORSE: &str = "v20.vehicle.horsearmor";
-/// A player-type mount that floats and rows.
+/// A player-type mount that floats and rows, with a passenger seat.
 pub const ROWBOAT: &str = "test:vehicle/rowboat";
 /// A player-type gun that charges its shot while the trigger is held.
 pub const CANNON: &str = "test:vehicle/cannon";
@@ -478,8 +478,9 @@ pub fn carpet() -> Definition {
             ..base(CARPET, "", Family::Flying).energy
         },
         flight: Some(FlightSettings {
-            hover_height: 3.,
-            create_hover_height: 3.,
+            // Low enough for a player to jump on.
+            hover_height: 1.5,
+            create_hover_height: 1.5,
             min_drag: 30.,
             max_auto_speed: 10.,
             auto_linear_force: 50.,
@@ -535,7 +536,10 @@ pub fn horse() -> Definition {
 
 pub fn rowboat() -> Definition {
     Definition {
-        seats: vec![seat("mount0", [0., 0.8, 0.], true, false)],
+        seats: vec![
+            seat("mount0", [0., 0.8, -0.6], true, false),
+            seat("mount1", [0., 0.8, 0.8], false, false),
+        ],
         engine_force: 1500.,
         max_speed: 6.,
         reverse_speed: 3.,

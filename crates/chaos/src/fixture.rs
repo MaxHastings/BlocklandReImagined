@@ -5,12 +5,8 @@
 //! weapon behaviour ([`bri_weapons::testing`]). With `BRI_CONTENT` the real
 //! game content is served instead.
 use anyhow::Result;
-use bri_content::{
-    brick::Brick as Mesh,
-    collision::{CollisionBody, Part},
-};
 use bri_sim::{
-    definitions::{Definition, Definitions, Special},
+    definitions::Definitions,
     session::{Session, ToolInventory},
     simulation::Simulation,
 };
@@ -43,88 +39,13 @@ pub fn content_root() -> Option<PathBuf> {
     std::env::var_os("BRI_CONTENT").map(PathBuf::from)
 }
 
-pub const PLATE: &str = "chaos/brick/plate";
-pub const BRICK: &str = "chaos/brick/brick2x4";
-pub const TALL: &str = "chaos/brick/tall";
-pub const BASEPLATE: &str = "chaos/brick/baseplate";
-pub const WATER: &str = "chaos/brick/water";
-pub const STONE: &str = "chaos/brick/stone";
+pub use bri_sim::testing::{BASEPLATE, BRICK, PLATE, STONE, TALL, WATER};
 /// The spawn-brick kind that makes a wandering bot (the Blockhead Bot Add-On's).
 pub const BOT: &str = "bot.blockhead";
 
-fn definition(
-    id: &str,
-    studs: [u8; 2],
-    plates: u16,
-    special: Special,
-    stone: bool,
-) -> Result<Definition> {
-    let size = [
-        f32::from(studs[0]) * 0.5,
-        f32::from(plates) * 0.2,
-        f32::from(studs[1]) * 0.5,
-    ];
-    let collision = CollisionBody {
-        id: id.into(),
-        parts: vec![Part::Box {
-            center: [0.0; 3],
-            size,
-        }],
-    };
-    let shape = bri_physics::content::collider(&collision)?
-        .build()
-        .shared_shape()
-        .clone();
-    Ok(Definition {
-        mesh: Mesh {
-            schema_version: 1,
-            id: id.into(),
-            footprint_studs: [studs[0].into(), studs[1].into()],
-            height_plates: plates.into(),
-            // Per stud row, top plate first: studs on top, sockets below.
-            attachment_rows: (0..studs[1])
-                .flat_map(|_| {
-                    (0..plates).map(move |y| {
-                        let cell = match (y, plates) {
-                            (_, 1) => "b",
-                            (0, _) => "u",
-                            (y, h) if y == h - 1 => "d",
-                            _ => "x",
-                        };
-                        cell.repeat(studs[0].into())
-                    })
-                })
-                .collect(),
-            collision_boxes: vec![],
-            needs_external_collision: false,
-            coverage: None,
-            quads: vec![],
-        },
-        collision,
-        shape,
-        indestructible: stone,
-        special,
-        reflection: None,
-        link: None,
-        glass: [0.0; 4],
-    })
-}
-
+/// The made-up bricks of [`bri_sim::testing`].
 pub fn synthetic_definitions() -> Result<Definitions> {
-    let entries = [
-        definition(PLATE, [1, 1], 1, Special::None, false)?,
-        definition(BRICK, [4, 2], 3, Special::None, false)?,
-        definition(TALL, [1, 1], 15, Special::None, false)?,
-        definition(BASEPLATE, [16, 16], 1, Special::None, false)?,
-        definition(WATER, [4, 4], 3, Special::Water, false)?,
-        definition(STONE, [2, 2], 3, Special::None, true)?,
-    ];
-    Ok(Definitions {
-        entries: entries
-            .into_iter()
-            .map(|d| (d.mesh.id.clone(), d))
-            .collect(),
-    })
+    Ok(bri_sim::testing::definitions())
 }
 
 /// Content-free weapons: [`bri_weapons::testing`]'s made-up pack, and the
