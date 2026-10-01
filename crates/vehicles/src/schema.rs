@@ -526,6 +526,37 @@ impl Definition {
         matches!(self.family, Family::Wheeled | Family::Flying | Family::Ball)
             .then_some([0., 0., 0., 1.])
     }
+    /// The emitters a wreck burns with until the final explosion: its
+    /// `damageEmitter[0..3]`, by native emitter id (an Add-On's own from
+    /// `effects`, else the base game's), each once. Torque's
+    /// `Vehicle::updateDamageSmoke` runs emitter `i` past
+    /// `damageLevelTolerance[i]` of `maxDamage`, so a destroyed vehicle runs
+    /// every one it has; one without (a horse, a rowboat) does not burn.
+    pub fn wreck_emitters(&self) -> Vec<String> {
+        let mut ids: Vec<String> = vec![];
+        for i in 0..3 {
+            let Some(name) = self.authored.get(&format!("damageemitter[{i}]")) else {
+                continue;
+            };
+            let name = name.trim().to_ascii_lowercase();
+            if name.is_empty() {
+                continue;
+            }
+            let id = self
+                .effects
+                .emitters
+                .iter()
+                .find(|e| {
+                    e.id.rsplit_once(":emitter/")
+                        .is_some_and(|(_, n)| n == name)
+                })
+                .map_or_else(|| format!("v20/emitter/{name}"), |e| e.id.clone());
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+        ids
+    }
     pub fn seat_role(&self, seat: usize) -> SeatRole {
         self.seat_role_for(seat, true)
     }

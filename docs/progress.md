@@ -8264,5 +8264,10 @@ its turret too. Full step-by-step table in
   wire or protocol change.
 - Accepted gap: v20 also burns in the last 1% of health; health is not
   replicated, so ours burns from destruction.
+- Wreck fire has one source: the replicated `destroyed` flag plus each
+  definition's `damageEmitter`s (`Definition::wreck_emitters`). The host's
+  burn cue at destruction is gone (one less cue on the wire); actor mounts
+  without damage emitters no longer burn; Add-On damage emitters import.
 - Tests: `bri-client` `vehicles::tests::a_destroyed_vehicle_is_drawn_black_without_its_tires`,
-  `only_vehicle_classes_char_and_player_mounts_keep_their_colour`.
+  `only_vehicle_classes_char_and_player_mounts_keep_their_colour`,
+  `a_wreck_burns_with_its_own_damage_emitters`, `--test actor_effects`.

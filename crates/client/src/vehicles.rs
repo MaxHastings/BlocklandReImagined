@@ -1260,6 +1260,28 @@ mod tests {
         };
         assert_eq!(body_tint(&d, &plain, &palette), [1.0; 4]);
     }
+    /// A wreck burns with its own `damageEmitter`s, each once: the stunt
+    /// plane names `VehicleBurnEmitter` twice; an Add-On's own emitter
+    /// resolves to its id; a mount without any (a horse) does not burn.
+    #[test]
+    fn a_wreck_burns_with_its_own_damage_emitters() {
+        let plane: Pack = serde_json::from_slice(include_bytes!(
+            "../../../packages/imported/vehicle_stunt_plane/assets/vehicles.json"
+        ))
+        .unwrap();
+        let mut d = plane.definitions[0].clone();
+        assert_eq!(d.wreck_emitters(), ["v20/emitter/vehicleburnemitter"]);
+        let own = d.effects.emitters[0].id.clone();
+        let (_, name) = own.rsplit_once(":emitter/").unwrap();
+        d.authored
+            .insert("damageemitter[2]".into(), name.to_ascii_uppercase());
+        assert_eq!(
+            d.wreck_emitters(),
+            ["v20/emitter/vehicleburnemitter".to_string(), own]
+        );
+        d.authored.retain(|k, _| !k.starts_with("damageemitter"));
+        assert!(d.wreck_emitters().is_empty());
+    }
     #[test]
     fn vehicle_samples_interpolate_between_poses() {
         let history: VecDeque<_> = [pose(10, 0.0), pose(13, 3.0)].into();
