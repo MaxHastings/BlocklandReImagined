@@ -195,3 +195,43 @@ the wedge's twin and turn match a mirrored copy of the same brick; twice
 is the original; upside down has no image), the client's
 `a_mirrored_ghost_takes_its_image_where_it_stands_and_plants_it`, and
 `new_duplicator_port_mirrors_a_ghost_brick`.
+
+## The ghost box others see, and what a copy carries
+
+Other players saw nothing while someone placed a copy; the original drew
+a blue box round the ghost and sent the ghost bricks to everyone. The
+client now reports where its copy ghost stands (`Command::CopyPose`,
+wire change `protocol-changes/copy-pose.md`, sharing the ghost brick
+rate bucket and sent at most every 100 ms). The host works out the box
+from the copy's size alone (`Blueprint::ghost_box`) and tells the rules
+through `on_copy_ghost(p, #{box})`, and `()` when the ghost goes away.
+The port draws the original's blue box there. The ghost bricks
+themselves stay with their owner (`spawnGhostBricks`,
+`ndUpdateSpawnedClientList` are marked not run): the host spends no
+bandwidth on cosmetics.
+
+Copies now keep each brick's name, light, emitter, item, sound, vehicle
+and events (`Blueprint.extras`, wire change
+`protocol-changes/copy-extras.md`; saved copies keep them too). They
+turn and mirror with the copy: emitter and item directions, `fireRelay`
+directions, direction list params (from the event catalog) and vector
+params. A row aimed at a named brick turns only when the copy carries
+that name, as the original's `ndTransformDirection` did. Planting
+applies them one at a time through the same checks as the wrench
+(quota, tool catalog, item spawners, event review, relay delay clamp
+for non-admins). v20 duplication files dropped in the Duplications
+folder are bound the same way as saves, so their lights, emitters,
+items and events load too. The New Duplicator item now idles with its
+original spin (`ND_Item::onAdd`, read by a cover).
+
+Save progress (`NDM_SaveProgress::onCancelBrick`, `getBottomPrint`,
+`ND_Selection::cancelSaving`) is not run: the copy store writes a save
+off the tick, so there is no save job to cancel or show.
+
+Tests: `a_copy_carries_its_bricks_settings_and_turns_them_with_it`
+(bri-sim), `a_ghost_box_holds_the_copy_however_it_is_placed`
+(blueprint), the New Duplicator port test's blue box checks, the
+client's copy report serial test, and the content test
+`a_dropped_duplication_keeps_its_bricks_names_and_events`. New
+Duplicator: 362 of 363 (left: `GameConnection::ndSetMode`, the item
+spinning while a job runs; prefs wait for the settings seam).

@@ -3394,6 +3394,9 @@ impl Runtime {
             if behaviour.on_place {
                 need("on_place".into(), 2, "on_place");
             }
+            if behaviour.on_copy_ghost {
+                need("on_copy_ghost".into(), 2, "on_copy_ghost");
+            }
             if behaviour.on_activate {
                 need("on_activate".into(), 1, "on_activate");
             }

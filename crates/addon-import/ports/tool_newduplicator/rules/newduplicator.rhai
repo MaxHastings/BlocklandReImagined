@@ -287,11 +287,13 @@ fn draw_selection_box(p) {
 }
 
 // `ND_HighlightBox`, seen by everyone: gold edges round a selection, as
-// wide as the selection is big.
+// wide as the selection is big; blue round the ghost in plant mode
+// (`spawnGhostBricks`, `getGhostWorldBox`), following it as it moves.
 fn draw_highlight_box(p) {
     let mode = get_player(p, "mode");
-    let area = get_player(p, "selection_box");
-    if !(mode == "stack" || mode == "box") || get_player(p, "selected") == 0 || area.len() != 6 {
+    let area = if mode == "plant" { get_player(p, "ghost_box") } else { get_player(p, "selection_box") };
+    let held = mode == "plant" || ((mode == "stack" || mode == "box") && get_player(p, "selected") > 0);
+    if !held || area.len() != 6 {
         hide_shapes(p, "highlight");
         return;
     }
@@ -299,13 +301,22 @@ fn draw_highlight_box(p) {
     let p2 = [area[3], area[4], area[5]];
     let len = [p2[0] - p1[0], p2[1] - p1[1], p2[2] - p1[2]];
     let width = (7.0 / 1280.0) * longest(len) + 1.0;
+    // `ND_HighlightBox::applyColors`.
+    let color = if mode == "plant" { [0.2, 0.2, 1.0, 0.99] } else { [1.0, 0.84, 0.0, 0.99] };
     let shapes = [];
     for axis in 0..3 {
         for k in 0..4 {
-            shapes.push(edge(p1, p2, axis, k, width, width * 0.05, [1.0, 0.84, 0.0, 0.99]));
+            shapes.push(edge(p1, p2, axis, k, width, width * 0.05, color));
         }
     }
     show_shapes(p, "highlight", shapes);
+}
+
+// The ghost moved, turned, mirrored or flipped, or went away: the box
+// round it (`ND_Selection::updateHighlightBox`).
+fn on_copy_ghost(p, info) {
+    set_player(p, "ghost_box", if info.box == () { [] } else { info.box.min + info.box.max });
+    draw_highlight_box(p);
 }
 
 fn draw_boxes(p) {

@@ -362,6 +362,11 @@ pub struct App {
     brick_hand: Option<bri_sim::session::BrickHand>,
     /// Last ghost brick reported to the server, and when.
     ghost_report: Option<(Option<bri_sim::session::GhostBrick>, std::time::Instant)>,
+    /// Last place of the copy in hand reported to the server, and when.
+    copy_report: Option<(
+        Option<(u64, bri_sim::session::CopyPose)>,
+        std::time::Instant,
+    )>,
     /// Other players' ghost bricks as uploaded, by owner.
     remote_ghosts: BTreeMap<bri_world::OwnerId, (bri_sim::session::GhostBrick, Option<GpuScene>)>,
     pub(crate) item_assets: Arc<crate::items::ItemAssets>,
@@ -1709,6 +1714,7 @@ impl App {
             abilities: Default::default(),
             brick_hand: None,
             ghost_report: None,
+            copy_report: None,
             remote_ghosts: BTreeMap::new(),
             cpu_scene: None,
             steering_sent: None,
@@ -1917,6 +1923,7 @@ impl App {
         self.abilities = Default::default();
         self.brick_hand = None;
         self.ghost_report = None;
+        self.copy_report = None;
         self.remote_ghosts.clear();
         self.foliage.clear();
         self.weather.clear();
@@ -4883,6 +4890,22 @@ impl App {
                     .is_ok()
             {
                 self.ghost_report = Some((ghost, std::time::Instant::now()));
+            }
+            // Where the copy in hand stands, for its Add-On to show the
+            // others; at the same pace.
+            let copy = building.copy_report();
+            let due = self.copy_report.as_ref().is_none_or(|(sent, at)| {
+                *sent != copy && (copy.is_none() || at.elapsed() >= GHOST_REPORT_INTERVAL)
+            }) && (copy.is_some() || self.copy_report.is_some());
+            if due
+                && a.worker
+                    .request(
+                        REPORT_REQUEST,
+                        Command::CopyPose(copy.map(|(_, pose)| pose)),
+                    )
+                    .is_ok()
+            {
+                self.copy_report = Some((copy, std::time::Instant::now()));
             }
         }
         if let (Some(building), Some(view)) = (&mut self.building, &a.view) {

@@ -34,6 +34,13 @@ datablock ItemData(ND_Item)
    canDrop   = true;
 };
 
+// Lying in the world it loops its "spin" sequence.
+function ND_Item::onAdd(%this, %obj)
+{
+   parent::onAdd(%this, %obj);
+   %obj.playThread(0, spin);
+}
+
 datablock ShapeBaseImageData(ND_Image)
 {
    shapeFile  = "./wand.dts";

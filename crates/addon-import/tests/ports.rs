@@ -2524,6 +2524,8 @@ fn new_duplicator_game(
         &std::fs::read(dir.join("content/addons/tool_newduplicator/assets/weapons.json")).unwrap(),
     )
     .unwrap();
+    // Lying in the world it loops the sequence its `ND_Item::onAdd` plays.
+    assert_eq!(pack.items["tool_newduplicator:weapon/nd_item"].idle, "spin");
     for image in ["nd_image", "nd_image_box", "nd_image_blue"] {
         let image = &pack.images[&format!("tool_newduplicator:image/{image}")];
         assert_eq!(image.command.as_deref(), Some("tool_newduplicator-rules:fire"));
@@ -2680,6 +2682,44 @@ fn new_duplicator_port_selects_stacks_and_boxes_and_plants() {
             .any(|(_, n)| matches!(n, Notice::Blueprint(Some(_)))),
         "[Plant Brick] takes the selection up as a ghost"
     );
+    // Everyone sees a blue box round the ghost, following it as its
+    // player turns and moves it (`spawnGhostBricks`, `getGhostWorldBox`),
+    // gone once it is put away.
+    let pose = bri_sim::session::CopyPose {
+        anchor: [copy.origin[0] + 1.0, copy.origin[1], copy.origin[2]],
+        quarter_turns: 1,
+        mirrored: true,
+        flipped: false,
+    };
+    send(&mut s, host, &seq, Command::CopyPose(Some(pose))).unwrap();
+    s.step().unwrap();
+    s.step().unwrap();
+    let highlight = nd_shapes(&s, host, "highlight");
+    assert_eq!(highlight.len(), 12, "{highlight:#?}");
+    assert!(
+        highlight.iter().all(|x| x.color == [51, 51, 255, 252]),
+        "{highlight:#?}"
+    );
+    let (min, max) = copy.ghost_box(pose.anchor, 1, (false, true));
+    let middle =
+        |a: [f32; 3], b: [f32; 3]| std::array::from_fn::<f32, 3, _>(|i| (a[i] + b[i]) * 0.5);
+    let low = highlight.iter().fold([f32::MAX; 3], |m, x| {
+        std::array::from_fn(|i| m[i].min(x.min[i]))
+    });
+    let high = highlight.iter().fold([f32::MIN; 3], |m, x| {
+        std::array::from_fn(|i| m[i].max(x.max[i]))
+    });
+    let (got, want) = (middle(low, high), middle(min, max));
+    assert!(
+        (0..3).all(|i| (got[i] - want[i]).abs() < 1e-3),
+        "{got:?} vs {want:?}"
+    );
+    // Turned a quarter, the 2x1 copy's box lies along z.
+    assert!(high[2] - low[2] > high[0] - low[0], "{low:?}..{high:?}");
+    send(&mut s, host, &seq, Command::CopyPose(None)).unwrap();
+    s.step().unwrap();
+    s.step().unwrap();
+    assert!(nd_shapes(&s, host, "highlight").is_empty());
 
     // Planted over the lone plate: the bottom plate is blocked, the top
     // one plants on it.

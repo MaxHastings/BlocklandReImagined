@@ -1,5 +1,6 @@
 //! A duplicator Add-On hearing how its copies went: `on_copy` after it
-//! took one, `on_place` after the player planted it. An Add-On that
+//! took one, `on_place` after the player planted it, `on_copy_ghost` as
+//! the player moves it. An Add-On that
 //! declares the hook says what it likes to the player; for one that does
 //! not, the engine says it plainly.
 use super::*;
@@ -272,6 +273,33 @@ impl Session {
         info.insert("mirror_errors".into(), mirror_errors.into());
         self.queue_report(package, "on_place", player, info);
         true
+    }
+
+    /// Tell `package` where the copy `player` places stands now: the box
+    /// round it (`#{ min, max }`), or `()` once it is gone.
+    pub(in crate::session) fn report_copy_ghost(
+        &mut self,
+        package: &str,
+        player: OwnerId,
+        area: Option<([f32; 3], [f32; 3])>,
+    ) {
+        if !self.declares(package, |b| b.on_copy_ghost) {
+            return;
+        }
+        let point = |p: [f32; 3]| {
+            Dynamic::from_array(p.map(|v| Dynamic::from_float(f64::from(v))).to_vec())
+        };
+        let mut info = Map::new();
+        info.insert(
+            "box".into(),
+            area.map_or(Dynamic::UNIT, |(min, max)| {
+                let mut corners = Map::new();
+                corners.insert("min".into(), point(min));
+                corners.insert("max".into(), point(max));
+                corners.into()
+            }),
+        );
+        self.queue_report(package, "on_copy_ghost", player, info);
     }
 
     /// `on_copy` and `on_place` for each report since the last tick. Each

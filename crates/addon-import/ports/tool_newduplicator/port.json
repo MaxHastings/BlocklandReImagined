@@ -74,6 +74,11 @@
             }
           }
         }
+      },
+      "items": {
+        "{namespace}:weapon/nd_item": {
+          "idle": "{item_idle}"
+        }
       }
     }
   },
@@ -347,6 +352,20 @@
     "ndTrustCheckModify": "copy_rule stack: cutting, painting and wrenching through the copy need full trust in the brick's owner or its stack's owner, or admin",
     "ndTrustCheckMessage": "no_trust: a box corner the player may not select (may_copy) and a refused stack selection get the error sound and the original's 'not enough trust' line",
     "FxDtsBrick::ndMirrorGhost": "mirror_ghost: the player's ghost brick becomes its mirror image where it stands (itself turned or its twin, from the bricks' shapes rather than the symmetry table), with the original's asymmetric and not vertically symmetric lines",
-    "GameConnection::ndMirror": "mirror: the selection in plant mode (mirror_copy), else the ghost brick (mirror_ghost), else the original's line"
+    "GameConnection::ndMirror": "mirror: the selection in plant mode (mirror_copy), else the ghost brick (mirror_ghost), else the original's line",
+    "ND_Selection::updateHighlightBox": "on_copy_ghost and draw_highlight_box: the box round the selection, then round the ghost as its player moves it",
+    "ND_Selection::getGhostWorldBox": "Blueprint::ghost_box: the box round the copy as its player places it (pivot, turn, mirror, upside down), heard by on_copy_ghost",
+    "ND_HighlightBox::applyColors": "draw_highlight_box: gold edges round a selection, blue round the ghost in plant mode",
+    "ND_Selection::spawnGhostBricks": "show_copy: the player sees the copy's bricks (at most 10,000, spread evenly, as MaxGhostBricks did) as the engine's copy ghost, and everyone sees the blue box round it (on_copy_ghost); the other players do not get its bricks, as the host spends no bandwidth on cosmetics",
+    "ndUpdateSpawnedClientList": "not run: it listed the players to send ghost bricks to; only the copy's player gets its bricks, and the others see the blue box round them (the host spends no bandwidth on cosmetics)",
+    "NDM_PlantCopy::onStartMode": "set_mode: a selection taken up shows as the ghost where it was selected (show_copy), with its box; the brick keys move it relative to the body, so no angle reference is kept",
+    "ND_Selection::recordBrickData": "the engine's copy (CopyBuilder): each brick's shape, paint, print, raycasting, colliding and rendering, and its name, light, emitter, item, music, vehicle and events (CopyExtras); the selection's size from the bricks' boxes",
+    "ND_Selection::plantBrick": "the plant job (PlantWork): each brick mirrored and turned, planted under the plant rules and trust, floating only with force plant, its stack owner kept; then its settings and events as the player's own wrench and events dialog would set them (the server's limits, the Add-Ons' event review, the relay delay floor), each left off on its own when it may not go in",
+    "ndTransformDirection": "turn_direction and turn_vector: emitter and item directions, directional relays, direction choices and event vectors turn and mirror with the copy; rows aimed at a named brick only when the copy has that name",
+    "ND_Selection::tickSaveBricks": "save_copy: the copy, with its bricks' settings and events, goes to the host's copy store, which writes it off the tick",
+    "ND_Selection::tickLoadBricks": "load_copy: a saved copy or a v20 duplication file (its bricks' names, lights, emitters, items, music, vehicles and events read by the BLS reader) comes back a slice a tick, colours and event colours matched to this world's palette",
+    "NDM_SaveProgress::onCancelBrick": "not run: the host's copy store writes a save off the tick, so there is no save job under way for cancelling to stop",
+    "NDM_SaveProgress::getBottomPrint": "not run: the host's copy store writes a save off the tick, so there is no save progress to show; the saved report says when it is written",
+    "ND_Selection::cancelSaving": "not run: the host's copy store writes a save off the tick, so there is no save job under way to cancel"
   }
 }

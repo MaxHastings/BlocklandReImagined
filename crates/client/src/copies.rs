@@ -219,6 +219,7 @@ mod tests {
                     print: None,
                     off: 0,
                 }],
+                extras: Vec::new(),
             },
         };
         files.save(1, "My House", copy.clone(), true);

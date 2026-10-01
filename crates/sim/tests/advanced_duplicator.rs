@@ -1203,3 +1203,144 @@ fn a_ghost_brick_mirrors_into_its_twin_where_it_stands() {
     g.typed(host, "mirghostx");
     assert!(!g.notices(host).iter().any(|n| matches!(n, Notice::MirrorGhost { .. })));
 }
+
+/// A copy carries its bricks' names, lights, emitters, items and events
+/// (the New Duplicator's `recordBrickData`), and a plant gives them back
+/// under the player's own wrench rules, turned with the copy
+/// (`ndTransformDirection`): a quarter turn faces the emitter, the item,
+/// the directional relay, a direction choice and a vector round with it,
+/// and a light the server no longer has stays off. They keep in a saved
+/// copy.
+#[test]
+fn a_copy_carries_its_bricks_settings_and_turns_them_with_it() {
+    use bri_sim::session::{ToolCatalog, WrenchProperties};
+    use bri_world::{EventRow, EventTarget, EventValue, ItemSpawn, authority::Edit};
+    const ITEM: &str = "advanced-duplicator-tool:weapon/advanced-duplicator";
+    let mut g = Game::new();
+    let catalog = |light: bool| {
+        let mut tools = ToolCatalog::default();
+        if light {
+            tools.lights.insert("light-a".into());
+        }
+        tools.emitters.insert("emitter-a".into());
+        tools.items.insert(ITEM.into());
+        tools
+    };
+    g.s.set_tool_catalog(catalog(true)).unwrap();
+    let mut events = bri_events::testing::catalog();
+    let output = |name: &str, params| bri_events::OutputDef {
+        id: format!("out/fxDTSBrick/{name}"),
+        class_name: "fxDTSBrick".into(),
+        name: name.into(),
+        params,
+        append_client: false,
+        source: "fixture".into(),
+        source_line: 1,
+        package: None,
+    };
+    events.outputs.push(output("fireRelayNorth", vec![]));
+    events.outputs.push(output("fireRelayEast", vec![]));
+    let sides = ["North", "East", "South", "West"];
+    events.outputs.push(output(
+        "setItemDirection",
+        vec![bri_events::Param::List {
+            items: sides
+                .iter()
+                .zip(2..)
+                .map(|(s, n)| (s.to_string(), n))
+                .collect(),
+        }],
+    ));
+    g.s.set_event_catalog(events, Vec::new()).unwrap();
+    let host = host(&mut g);
+    let a = g.plant(host, [0.5, 0.1, 0.25]);
+    g.s.edit_brick(
+        host,
+        a,
+        Edit::Properties(WrenchProperties {
+            name: Some("door".into()),
+            light: Some("light-a".into()),
+            emitter: Some("emitter-a".into()),
+            emitter_direction: 3,
+            item_spawn: ItemSpawn {
+                item: Some(ContentRef::Resolved(ITEM.into())),
+                position: 2,
+                direction: 2,
+                respawn_ms: 4000,
+            },
+            raycast: true,
+            colliding: true,
+            visible: true,
+            ..Default::default()
+        }),
+    )
+    .unwrap();
+    let row = |target, output: &str, params| EventRow {
+        preserved: None,
+        enabled: true,
+        input: "onActivate".into(),
+        delay_ms: 100,
+        target,
+        output: output.into(),
+        params,
+    };
+    let own = || EventTarget::Slot(bri_events::Slot::SelfBrick);
+    g.s.edit_brick(
+        host,
+        a,
+        Edit::Events(vec![
+            row(own(), "fireRelayNorth", vec![]),
+            row(own(), "setItemDirection", vec![EventValue::Int(3)]),
+            row(
+                EventTarget::Slot(bri_events::Slot::Player),
+                "addVelocity",
+                vec![EventValue::Vector(Vec3::new(1.0, 0.0, 0.0))],
+            ),
+        ]),
+    )
+    .unwrap();
+    assert_eq!(
+        copy_box(&mut g, host, [0.0, 0.0, 0.0], [1.0, 0.2, 0.5], 10),
+        Ok(1)
+    );
+    let copy = g.s.blueprint(host).unwrap().clone();
+    assert_eq!(copy.extras.len(), 1);
+    // Kept in a saved copy as they were.
+    let saved: bri_sim::blueprint::Blueprint =
+        serde_json::from_slice(&serde_json::to_vec(&copy).unwrap()).unwrap();
+    saved.validate().unwrap();
+    assert_eq!(saved, copy);
+    // The light goes from the server before the plant.
+    g.s.set_tool_catalog(catalog(false)).unwrap();
+    let before: Vec<BrickId> = g.bricks().into_keys().collect();
+    let Ok(Reply::Planted(_)) = g.place(host, [4.0, 0.0, 4.0], 1, false) else {
+        panic!("the copy plants")
+    };
+    let bricks = g.bricks();
+    let (_, planted) = bricks.iter().find(|(id, _)| !before.contains(id)).unwrap();
+    assert_eq!(planted.owner, host);
+    assert_eq!(planted.name.as_deref(), Some("door"));
+    assert!(planted.light.is_none(), "the server has no such light now");
+    let emitter = planted.emitter.as_ref().unwrap();
+    assert_eq!(
+        emitter.asset,
+        Some(ContentRef::Resolved("emitter-a".into()))
+    );
+    assert_eq!(emitter.direction, 4, "east turned a quarter faces south");
+    let item = &planted.item_spawn;
+    assert_eq!(item.item, Some(ContentRef::Resolved(ITEM.into())));
+    assert_eq!(
+        (item.position, item.direction),
+        (3, 3),
+        "north turned faces east"
+    );
+    assert_eq!(planted.events.len(), 3);
+    assert_eq!(planted.events[0].output, "fireRelayEast");
+    assert_eq!(planted.events[1].params, vec![EventValue::Int(4)]);
+    let EventValue::Vector(v) = planted.events[2].params[0] else {
+        panic!("a vector")
+    };
+    assert!(v.distance(Vec3::new(0.0, 0.0, 1.0)) < 1e-5, "{v}");
+    // The original keeps its own.
+    assert_eq!(bricks[&a].events[0].output, "fireRelayNorth");
+}

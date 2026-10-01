@@ -14,6 +14,7 @@ use crate::blueprint::{Blueprint, MAX_BLUEPRINT_BRICKS, Outline, snap_anchor};
 use bri_package_runtime::ops::{CopyHold, CopyRule, CopyTrust, MirrorAxis, StackReach};
 use bri_world::authority::trust as level;
 use super::copy_store::CopyOutcome;
+mod extras;
 mod plant;
 mod select;
 pub(super) use plant::Refusals;
@@ -47,6 +48,9 @@ pub(super) struct HeldCopy {
     /// Full trust in a brick's stack owner lets its player change it
     /// (`CopyRule::stack`).
     pub stack: bool,
+    /// The box round the copy as its player last placed it, as its
+    /// Add-On last heard it (`on_copy_ghost`).
+    pub ghost_box: Option<([f32; 3], [f32; 3])>,
 }
 
 /// Another player's brick group a copy is planted into.
@@ -114,6 +118,7 @@ impl HeldCopy {
             plant_as: None,
             lit: false,
             stack: false,
+            ghost_box: None,
         }
     }
 }
@@ -341,10 +346,14 @@ impl Session {
             self.notify(owner, Notice::Blueprint(None));
         }
         self.blueprints.insert(owner, blueprint);
-        if let Some(old) = self.copies.insert(owner, held)
-            && !self.copies[&owner].lit
-        {
-            self.end_glow(old);
+        if let Some(old) = self.copies.insert(owner, held) {
+            // The new copy stands nowhere until its player says.
+            if old.ghost_box.is_some() {
+                self.report_copy_ghost(&old.package, owner, None);
+            }
+            if !self.copies[&owner].lit {
+                self.end_glow(old);
+            }
         }
     }
 
@@ -379,7 +388,40 @@ impl Session {
         {
             held.shown = false;
             self.notify(owner, Notice::Blueprint(None));
+            self.place_copy_ghost(owner, None);
         }
+    }
+
+    /// Where `owner`'s copy stands as they place it (`Command::CopyPose`),
+    /// or that it went away. Only they see its bricks; its Add-On hears
+    /// the box round it whenever that changes, to show the others.
+    pub(super) fn set_copy_pose(&mut self, owner: OwnerId, pose: Option<CopyPose>) -> Result<()> {
+        if let Some(pose) = &pose {
+            pose.validate()?;
+        }
+        let area = match (pose, self.copies.get(&owner), self.blueprints.get(&owner)) {
+            (Some(pose), Some(held), Some(copy)) if held.shown => Some(copy.ghost_box(
+                pose.anchor,
+                pose.quarter_turns,
+                (pose.flipped, pose.mirrored),
+            )),
+            _ => None,
+        };
+        self.place_copy_ghost(owner, area);
+        Ok(())
+    }
+
+    /// The box round `owner`'s copy as they place it is now `area`.
+    fn place_copy_ghost(&mut self, owner: OwnerId, area: Option<([f32; 3], [f32; 3])>) {
+        let Some(held) = self.copies.get_mut(&owner) else {
+            return;
+        };
+        if held.ghost_box == area {
+            return;
+        }
+        held.ghost_box = area;
+        let package = held.package.clone();
+        self.report_copy_ghost(&package, owner, area);
     }
 
     /// The copy `owner` holds and places, or why there is none.
@@ -792,6 +834,7 @@ impl Session {
             (partial, float),
         );
         work.float_refused = float_refused;
+        work.look = (quarter_turns % 4, (flipped, mirrored));
         // What fits in this tick's copy work plants now; a bigger copy
         // plants over the next ticks.
         match self.begin_copy_job(owner, package, work)? {
@@ -894,6 +937,9 @@ impl Session {
     pub(super) fn forget_blueprint(&mut self, owner: OwnerId) {
         self.blueprints.remove(&owner);
         if let Some(held) = self.copies.remove(&owner) {
+            if held.ghost_box.is_some() {
+                self.report_copy_ghost(&held.package, owner, None);
+            }
             self.end_glow(held);
         }
     }

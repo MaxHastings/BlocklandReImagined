@@ -785,7 +785,11 @@ left in `wait`. `float_copy(p, float)` lets the copy's plants float in
 mid air (v20's Force Plant); with `#{ admin_only: true }` that is checked
 again at each plant, and a plant by a player no longer an administrator
 goes in as a normal one, with `float_refused` true in `on_place` and the
-float turned off.
+float turned off. Only the player sees the bricks of the copy they place;
+with `on_copy_ghost`, `on_copy_ghost(player, #{ box })` hears the box
+round it (`#{ min, max }`, world units) each time they move, turn, mirror
+or flip it, and `()` once it is put away or let go, for the Add-On to show
+the others where it stands (the New Duplicator's blue box).
 
 Copies can be kept by name on the host. `save_copy(p, name)` keeps the copy
 the player holds, replacing one saved under that name; with `#{ overwrite:
