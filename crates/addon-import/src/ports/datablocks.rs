@@ -42,6 +42,18 @@ pub struct Magazines {
     /// a script ammo system's `reload_state` and `checks`).
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub every: serde_json::Map<String, Value>,
+    /// The ammo system's own functions (`hl2DisplayAmmo`, `hl2AmmoCheck`,
+    /// its `serverCmdLight`), which each gun's magazine does in their
+    /// place: each one the import defines is carried out, and so is a
+    /// gun's script that calls only these, the magazine's own and its
+    /// parent's method.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub calls: Vec<String>,
+    /// More of each gun's scripts that may only work its magazine
+    /// (`onMount`, `onAmmoCheck`, `onEmpty`), besides its reload, checks,
+    /// ammo display and `onFire`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scripts: Vec<String>,
 }
 
 /// One ammo type of [`Magazines`].
@@ -258,6 +270,7 @@ pub fn magazines(
             .as_str()
             .into_iter()
             .chain(["onFire"])
+            .chain(m.scripts.iter().map(String::as_str))
             .chain(
                 magazine["checks"]
                     .as_object()
@@ -277,7 +290,7 @@ pub fn magazines(
             if code
                 .bodies
                 .get(&what)
-                .is_some_and(|b| only_magazine(b, script))
+                .is_some_and(|b| only_magazine(b, script, &m.calls))
             {
                 super::handle(
                     handled,
@@ -285,6 +298,16 @@ pub fn magazines(
                     "its magazine's state: the engine moves the rounds, sets the flags and shows the ammo",
                 );
             }
+        }
+    }
+    for call in &m.calls {
+        if code.bodies.contains_key(&call.to_ascii_lowercase()) {
+            super::handle(
+                handled,
+                call,
+                "the ammo system: each gun's magazine keeps its rounds and reserve, reloads, \
+                 answers the light key and shows the ammo",
+            );
         }
     }
     let types = m
@@ -308,10 +331,11 @@ pub fn magazines(
 }
 
 /// Whether a gun's script body only works its magazine: every call it
-/// makes is one the magazine's states carry out, and it plays no sound or
-/// arm move of its own (those are read as the state's own). An `onFire`
-/// may also take its rounds and fire the image's own shot.
-fn only_magazine(body: &str, script: &str) -> bool {
+/// makes is one the magazine's states carry out (the ammo system's own
+/// `system` calls among them) or its parent's method, and it plays no
+/// sound or arm move of its own (those are read as the state's own). An
+/// `onFire` may also take its rounds and fire the image's own shot.
+fn only_magazine(body: &str, script: &str, system: &[String]) -> bool {
     const MAGAZINE: [&str; 6] = [
         "tt_reload",
         "tt_incrementreload",
@@ -332,6 +356,8 @@ fn only_magazine(body: &str, script: &str) -> bool {
     !calls.is_empty()
         && calls.iter().all(|c| {
             MAGAZINE.contains(&c.as_str())
+                || system.iter().any(|s| s.eq_ignore_ascii_case(c))
+                || !fire && c.eq_ignore_ascii_case(script)
                 || fire && matches!(c.as_str(), "tt_decrementammo" | "onfire")
         })
         && (!fire || calls.iter().any(|c| c == "onfire"))

@@ -2748,6 +2748,26 @@ impl WeaponsWorld {
                             .is_some()
                         })
                 });
+                // Where the look meets something, for a muzzle shot that
+                // converges on it.
+                let look_point = shot
+                    .hitscan
+                    .as_ref()
+                    .filter(|h| h.converge && !h.from_eye && !eye_first)
+                    .map(|h| {
+                        let end = a.frame.eye + direction * h.range;
+                        q.sweep(
+                            a.frame.eye,
+                            end,
+                            Filter {
+                                projectile_age_ticks: None,
+                                source: id,
+                                players: p.collide_players,
+                                world_only: false,
+                            },
+                        )
+                        .map_or(end, |hit| hit.position)
+                    });
                 for n in 0..shot.projectiles {
                     let turn = if spread > 0.0 {
                         let angle = |axis: u64| {
@@ -2765,10 +2785,10 @@ impl WeaponsWorld {
                         };
                         let from_eye = hitscan.from_eye || eye_first;
                         let from = if from_eye { a.frame.eye } else { origin };
-                        let aim = if from_eye {
-                            direction
-                        } else {
-                            velocity.normalize_or(direction)
+                        let aim = match look_point {
+                            _ if from_eye => direction,
+                            Some(point) => (point - origin).normalize_or(direction),
+                            None => velocity.normalize_or(direction),
                         };
                         self.hitscan(
                             id,

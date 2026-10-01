@@ -1222,6 +1222,11 @@ pub struct Hitscan {
     /// guns' `checkForObstruction`): 0.1 to 50.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub eye_within: Option<f32>,
+    /// A muzzle shot aims at what the eye's look meets within `range` (or
+    /// its end), so it lands on the crosshair from a muzzle off to the
+    /// side (the 1019 Adventure Pack's `getLOSPoint`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub converge: bool,
     /// The streak each player draws from the muzzle to where the ray ended.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracer: Option<Tracer>,

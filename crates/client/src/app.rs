@@ -248,6 +248,10 @@ impl ContentParts {
             &content.ui_pack,
         )?;
         tool_ui.install_items(content.weapons.item_choices.clone())?;
+        tool_ui.install_effects(
+            content.weapons.emitter_choices.clone(),
+            content.weapons.light_choices.clone(),
+        )?;
         tool_ui.install_special(
             content.music.clone(),
             content

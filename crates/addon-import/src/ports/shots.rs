@@ -89,6 +89,10 @@ pub struct Hitscans {
     /// `eye_within`), as the scripts' obstruction test did.
     #[serde(default)]
     pub eye_within: Option<f32>,
+    /// For the guns cast from the muzzle: aim at what the eye's look meets
+    /// (the engine's `converge`), as the scripts' `getLOSPoint` did.
+    #[serde(default)]
+    pub converge: bool,
     /// A streak for each image whose `field` is set, drawn as `look`
     /// (the engine's tracer: `color`, `width`, `seconds`).
     #[serde(default)]
@@ -615,6 +619,9 @@ pub fn hitscans(h: &Hitscans, weapons: &Value, code: &super::Code) -> Result<Rea
         let mut hitscan = json!({ "range": range, "from_eye": from_eye });
         if let Some(within) = h.eye_within.filter(|_| !from_eye) {
             hitscan["eye_within"] = json!(within);
+        }
+        if h.converge && !from_eye {
+            hitscan["converge"] = json!(true);
         }
         if let Some(t) = &h.tracer
             && set(blocks.field(name, &t.field))

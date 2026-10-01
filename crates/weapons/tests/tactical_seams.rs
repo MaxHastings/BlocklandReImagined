@@ -735,3 +735,66 @@ fn a_rested_round_is_checked() {
         .to_string();
     assert!(error.contains("Missing projectile kit:projectile/none"), "{error}");
 }
+
+/// The pistol with its hitscan cast from a muzzle held 1.5 units to the
+/// right of the eye, in third person, and `extra` in its hitscan.
+fn muzzle_off_to_the_side(extra: &str) -> (WeaponsWorld, Range) {
+    let json = PISTOLS
+        .replace(r#""spread": 0.01, "moving_spread": 0.05,"#, "")
+        .replace(
+            r#""hitscan": { "range": 200, "tracer""#,
+            &format!(r#""hitscan": {{ "range": 200, {extra} "tracer""#),
+        );
+    let mut w = world(&json);
+    let slot = w.give(A, "kit:weapon/pistol").unwrap();
+    w.equip(A, Some(slot)).unwrap();
+    w.set_frame(
+        A,
+        Frame {
+            muzzle: [Vec3::new(1.5, 0.0, 0.0); 2],
+            first_person: false,
+            ..Frame::default()
+        },
+    )
+    .unwrap();
+    let mut q = Range::default();
+    step(&mut w, &mut q, 8, &mut Vec::new());
+    (w, q)
+}
+
+fn hit_b(events: &[Event]) -> bool {
+    events
+        .iter()
+        .any(|e| matches!(e, Event::Damage { target: TargetId::Actor(t), .. } if *t == B))
+}
+
+#[test]
+fn a_muzzle_shot_starts_at_the_eye_when_something_stands_right_before_it() {
+    // B stands 1.5 units before the eye: the muzzle's straight line passes
+    // beside them.
+    let (mut w, mut q) = muzzle_off_to_the_side("");
+    q.player = Vec3::new(0.0, 0.0, -1.5);
+    assert!(!hit_b(&click(&mut w, &mut q)), "from the muzzle it misses");
+    let (mut w, mut q) = muzzle_off_to_the_side(r#""eye_within": 4.5,"#);
+    q.player = Vec3::new(0.0, 0.0, -1.5);
+    assert!(hit_b(&click(&mut w, &mut q)), "from the eye it hits");
+    // Nothing that close: the shot still leaves the muzzle.
+    let (mut w, mut q) = muzzle_off_to_the_side(r#""eye_within": 4.5,"#);
+    let events = click(&mut w, &mut q);
+    assert!(!hit_b(&events));
+    let lines = tracers(&events);
+    assert!((lines[0].1.x - 1.5).abs() < 0.01, "{lines:?}");
+}
+
+#[test]
+fn a_converging_muzzle_shot_lands_where_the_eye_looks() {
+    let (mut w, mut q) = muzzle_off_to_the_side("");
+    assert!(!hit_b(&click(&mut w, &mut q)), "parallel to the look it misses");
+    let (mut w, mut q) = muzzle_off_to_the_side(r#""converge": true,"#);
+    assert!(hit_b(&click(&mut w, &mut q)), "aimed at the look's point it hits");
+    // With nothing in the look, it aims at the far end of the range.
+    let (mut w, mut q) = muzzle_off_to_the_side(r#""converge": true,"#);
+    q.player = Vec3::new(50.0, 0.0, 0.0);
+    let lines = tracers(&click(&mut w, &mut q));
+    assert!(lines[0].1.distance(Vec3::new(0.0, 0.0, -200.0)) < 0.5, "{lines:?}");
+}

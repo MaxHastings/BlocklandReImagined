@@ -927,6 +927,65 @@ datablock ShapeBaseImageData(kitScopeImage) { shapeFile = "./gun.dts"; stateName
     std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
 }
 
+/// An emitter Add-On written here: an emitter with a `uiName` is one
+/// players put on bricks, so it is converted with its name though nothing
+/// else uses it; one without a name that nothing uses is left out, as v20
+/// never drew it.
+#[test]
+fn a_named_emitter_is_offered_for_bricks() {
+    let root = fresh("glow-source");
+    let source = root.with_file_name("Emote_Synthetic_Glow");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(
+        source.join("description.txt"),
+        "Title: Synthetic Glow\nAuthor: Blockland ReImagined tests\nWritten for the importer tests.",
+    )
+    .unwrap();
+    std::fs::write(
+        source.join("server.cs"),
+        r#"
+datablock ParticleData(glowParticle) { textureName = "base/data/particles/cloud"; lifetimeMS = 500; };
+datablock ParticleEmitterData(glowEmitter)
+{
+   ejectionPeriodMS = 35; ejectionOffset = 1.8; particles = "glowParticle";
+   uiName = "Emote - Synthetic Glow";
+};
+datablock ParticleEmitterData(spareEmitter) { ejectionPeriodMS = 35; particles = "glowParticle"; };
+"#,
+    )
+    .unwrap();
+    let out = fresh("glow");
+    let report = import(&Options {
+        input: source.clone(),
+        out: out.clone(),
+        ..Default::default()
+    })
+    .unwrap();
+    let pack = Pack::from_json(&std::fs::read(out.join("assets/weapons.json")).unwrap()).unwrap();
+    let names: Vec<_> = pack
+        .effects
+        .emitters
+        .iter()
+        .map(|e| (e.id.as_str(), e.name.as_str()))
+        .collect();
+    assert_eq!(
+        names,
+        [("emote_synthetic_glow:emitter/glowemitter", "Emote - Synthetic Glow")]
+    );
+    let status = |name: &str| {
+        report
+            .datablocks
+            .iter()
+            .find(|d| d.name == name)
+            .map(|d| d.status.clone())
+            .unwrap()
+    };
+    assert_eq!(status("glowEmitter"), "converted");
+    assert_eq!(status("spareEmitter"), "consumed");
+    std::fs::remove_dir_all(out.parent().unwrap()).unwrap();
+    std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
+}
+
 /// Kaje's Sniper Rifle and Conan's Sniper Rifle Updated, from the copies on
 /// Maxwell's PC (read only): the listed ports apply and each fires one round
 /// a click, straight. `BRI_SNIPER_RIFLES` names other folders to look in.

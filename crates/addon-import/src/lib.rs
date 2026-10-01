@@ -1188,7 +1188,14 @@ fn weapons(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
         .filter(|o| is_weapon(&o.d.class))
         .map(|o| weapon_definition(o, &o.d.fields))
         .collect();
-    if defs.is_empty() {
+    // Emitters players put on bricks travel in the weapons pack's effects.
+    let brick_emitters = cx.owned.values().any(|o| {
+        o.d.class.eq_ignore_ascii_case("ParticleEmitterData")
+            && o.fields
+                .get("uiname")
+                .is_some_and(|n| !literal(n).trim().is_empty())
+    });
+    if defs.is_empty() && !brick_emitters {
         return Ok(());
     }
     // Pull in the dependency datablocks these name, so `lower` can resolve

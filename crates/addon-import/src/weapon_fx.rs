@@ -386,6 +386,27 @@ pub(crate) fn weapon_effects(cx: &mut Ctx, pack: &mut bri_weapons::Pack) {
         }
         pack.effects.explosions.push(effect);
     }
+    // An emitter with a uiName is one players put on bricks (the wrench's
+    // emitter list), whether or not anything else uses it.
+    let mut offered: Vec<String> = cx
+        .owned
+        .values()
+        .filter(|o| o.d.class.eq_ignore_ascii_case("ParticleEmitterData"))
+        .filter(|o| {
+            o.fields
+                .get("uiname")
+                .is_some_and(|n| !literal(n).trim().is_empty())
+        })
+        .map(|o| o.d.name.clone())
+        .collect();
+    offered.sort();
+    for name in offered {
+        if emitter(cx, pack, &name).is_some()
+            && let Some(e) = cx.entry(&name)
+        {
+            e.notes.push("offered for bricks by its uiName".into());
+        }
+    }
     sounds(cx, pack);
 }
 
