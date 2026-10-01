@@ -125,6 +125,7 @@ refused. The engine calls:
 | `on_pickup(player, item, info)` | a living player touches an item of your Add-On (or one it depends on) lying in the world, before they pick it up, whether or not they have room, when `"on_pickup": true`: return `false` to leave it, `"take"` to use it up without giving it (a spawn brick's item then starts its respawn), or `()` for the usual pickup. `info` is `#{ drop, spawner, data }`: the dropped item's id or the spawn brick's, and what `on_drop` kept with it. Called as it happens, so keep it quick |
 | `on_drop(player, item, slot)` | a player drops a tool of your Add-On (or one it depends on), when `"on_drop": true`. What it returns (a number, a map such as `#{ rounds: 7 }`) is kept with the dropped item and handed to `on_pickup` as `info.data` |
 | `on_projectile_hit(hit)` | a projectile of your weapons (or a dependency's) struck something, delivered at the start of the next tick, when `"on_projectile_hit": true`. `hit` is `#{ projectile, by, kind, id, ref, x, y, z, nx, ny, nz, vx, vy, vz }`: `kind` is `player`, `vehicle`, `entity`, `brick` or `map`, `by` the shooter or `()` |
+| `on_activate(player)` | a living player clicks with nothing in their hand (v20's `Player::activateStuff`), when `"on_activate": true`: return `true` to take the click, or anything else to pass it on. Add-Ons are asked in load order, and a click nobody takes does the usual thing (opens doors, presses buttons, flips vehicles) |
 | `cmd_<name>(player, args...)` | a player sends a command listed in `commands` |
 
 `player` is the player's id: pass it straight to `tell`, `get_player` and
@@ -157,14 +158,14 @@ HUD panels can only show keys the viewer receives. `persist` (default
 | Read | Change state | Act on the world (needs capability) |
 |---|---|---|
 | `tick()`, `seed()`, `caller()` | `get(key)`, `set(key, value)` | `tell(player, text)`, `broadcast(text)`: `chat` |
-| `players()`, `player(id)` | `get_player(p, key)`, `set_player(p, key, v)` | `remove_brick`, `place_brick`, `set_block_state(brick, state)`: `world.edit` |
+| `players()`, `bots()`, `player(id)` | `get_player(p, key)`, `set_player(p, key, v)` | `remove_brick`, `place_brick`, `set_block_state(brick, state)`: `world.edit` |
 | `aim()`, `me()`, `entities()` | `add_player(p, key, amount)` | `damage(target, amount[, by[, type]])`, `explode(...)`: `damage` |
 | `noise(seed, x, z)`, `hash3(seed, x, y, z)` | `entity_get(e, key)`, `entity_set(e, key, v)` | `spawn_entity`, `remove_entity`, `steer`, `label`: `entity` |
 | `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)` | | `teleport`, `respawn`, `set_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`, `take_item(p, item)`, `drop_item(item, x, y, z[, vx, vy, vz])`: `player` |
-| `raycast(from, dir, range[, ignore])`, `can_damage(by, target)` | | `set_fov(p, fov)`, `set_image_ammo(p, ammo)`, `mount_image(p, image)`: `player` |
+| `raycast(from, dir, range[, ignore])`, `can_damage(by, target)` | | `set_fov(p, fov)`, `set_image_ammo(p, ammo)`, `mount_image(p, image)`, `unmount_image(p)`, `set_scale(p, scale)`, `set_look_limits(p, up, down)`: `player` |
 | `brick_box(brick)` | | `copy_build(p, brick, limit, above_only, tool)`, `copy_box(p, min, max, limit, tool)`, `mirror_copy(p, axis)`: `build` |
 | | | `cut_copy(p)`, `paint_copy(p, color)`: `world.edit` |
-| | | `push`, `tumble`, `hold`, `hold_distance`, `let_go`, `spawn_vehicle`, `remove_vehicle`: `physics` |
+| | | `push`, `tumble`, `hold`, `hold_distance`, `let_go`, `spawn_vehicle`, `remove_vehicle`, `mount_object(mount, rider, node, can_dismount)`, `unmount_object(rider)`: `physics` |
 | | | `heal(p, amount)`, `fire(...)`: `damage` |
 | | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds)` (`()` for everyone): `chat` |
 | | | `play_sound(p, sound)` at a player's ears, `sound_at(sound, x, y, z)`, `beam(from, to[, options])`, `play_thread(p, thread, sequence)`, `show_box(p, min, max, tool)`, `hide_box(p)`: `effects` |
@@ -184,8 +185,16 @@ body, `getWorldBoxCenter`), `slot` (the selected tool slot from 0, or
 name of that image's state, such as `"Ready"`), `paint` (the palette
 index their spray can last picked), `mx`, `my`, `mz` (where the host fires
 the held image's shots from, `getMuzzlePoint`; the eye when nothing is
-held) and `tools` (each tool slot's item id, `""` for an empty slot, as
-`%obj.tool[%i]`).
+held), `tools` (each tool slot's item id, `""` for an empty slot, as
+`%obj.tool[%i]`), `riding` and `seat` (the player this one rides and on
+which mount point, or `()`), `bot` (`true` for a bot) and `bot_owner` (for a
+bot from a bot brick, the brick owner's id, as `%bot.spawnBrick.getGroup()
+.bl_id`; else `()`).
+
+**Bots** are players without a connection. `players()` lists only people;
+`bots()` lists the bots, as the same maps, and `player(id)` reads either.
+Player hooks (`on_join`, `on_loadout`, `on_spawn`, `on_leave`) and player
+state keys are for people only.
 
 **Rays and damage.** `raycast([x, y, z], [dx, dy, dz], range)` returns the
 first thing a ray meets, now, as the script runs: a map with `kind`
@@ -213,7 +222,28 @@ held image it is out of ammo, so its states' `no_ammo` transitions run;
 `true` gives it back. A magazine is then a player state key your rule
 counts down. `set_fov(p, fov)` sets the player's field of view (5 to 120
 degrees), and `set_fov(p, ())` hands it back to their own setting; aiming
-and the zoom key still work on top of it.
+and the zoom key still work on top of it. `unmount_image(p)` empties the
+player's hand (`unMountImage(0)`).
+
+**Bodies.** `set_scale(p, scale)` resizes a player's body, from 0.2 to 5
+(`setScale`); a respawn puts it back to 1. `set_look_limits(p, up, down)`
+bounds how far their arms and head follow their look, each from 0 (looking
+straight up) to 1 (straight down), as v20's `setLookLimits`: `(0.5, 0.5)`
+holds them level. `set_look_limits(p, ())` lifts it; a respawn does too.
+
+**Riding players.** `mount_object(mount, rider, node, can_dismount)` seats
+player `rider` on player `mount` at mount point `node` (`mountObject`).
+Mount points are the body model's `mount0` to `mount7` nodes; on the
+Blockhead `1` is the left hand. The rider rides along, turns with their own
+mouse and drops what the gravity gun or a hold had of them; with
+`can_dismount` `false` jumping does not get them off. They stay seated if
+either body changes archetype or size. Both must be alive and not seated,
+the mount carrying no rider on that point. A command's player may seat
+someone only on themselves, and only someone they may move (the same rules
+as `hold` and `push`). `unmount_object(rider)` lets them off in place,
+moving as the mount was, so a throw is `unmount_object(t)` then
+`push("player:" + t, ...)`. Landing on a Blockhead still does not seat you:
+only rideable bodies, such as the horse, take riders by touch.
 
 **Effects** (`effects`) change nothing in the game and are sent once, like
 a sound. `beam(from, to)` draws a straight beam for a moment: a tracer, a
@@ -224,6 +254,9 @@ and `muzzle` starts it at that player's gun muzzle as each player draws it.
 The beam thins and fades out over its life. `play_thread(p, thread,
 sequence)` plays one of the body's animations: thread 3 a gesture any time
 (`"activate2"`, `"root"` to stop), thread 2 the arms with what they hold.
+An arm pose started with empty hands (`"armreadyboth"`) keeps playing until
+the hand changes, and whole-body sequences such as `"death1"` play over the
+walk and look as in v20.
 Prints, sounds, beams and animations share one allowance of 64 a second
 per Add-On.
 

@@ -6,6 +6,10 @@
 //! mount keeps its own controls; riders sit on its mount points, look around
 //! and use items, and leave with jet. A bot mount (no controlling client) is
 //! steered by the rider in its first seat, as v20's `setControlObject` did.
+//!
+//! Rules also seat players and bots on any body's mount points
+//! (`mountObject`), rideable or not: a Blockhead carrying another in its
+//! arms. Landing on a body that is not rideable never boards it.
 use super::*;
 use rapier3d::parry::query::ShapeCastOptions;
 use rapier3d::prelude::*;
@@ -39,6 +43,11 @@ pub(super) struct Riding {
     /// The world yaw a rider's moves carried when they mounted, which is
     /// not a turn (their client did not yet know it was seated).
     mount_yaw: BTreeMap<OwnerId, f32>,
+    /// Riders a rule seated (`mountObject`): they need only their mount
+    /// point, not a rideable body.
+    scripted: BTreeSet<OwnerId>,
+    /// Riders who may not jump off (`canDismount = 0`).
+    locked: BTreeSet<OwnerId>,
 }
 impl Riding {
     pub(super) fn is_riding(&self, owner: OwnerId) -> bool {
@@ -63,7 +72,79 @@ impl Riding {
     }
 }
 
+/// A model's mount points (`numMountPoints`): its `mount0`, `mount1`, ...
+/// nodes in order, as Torque counts them, at the model's rest pose, from
+/// the feet facing -Z. They stop at the first number the model lacks, or
+/// at [`crate::archetype::MAX_MOUNT_POINTS`].
+pub fn shape_mount_points(shape: &bri_content::shape::Shape) -> Vec<crate::archetype::MountPoint> {
+    let rest = |mut i: usize| {
+        let mut transform = glam::Mat4::IDENTITY;
+        for _ in 0..shape.nodes.len() {
+            let n = &shape.nodes[i];
+            transform = glam::Mat4::from_rotation_translation(
+                glam::Quat::from_array(n.rotation).normalize(),
+                Vec3::from(n.translation),
+            ) * transform;
+            match n.parent {
+                Some(p) if p < shape.nodes.len() => i = p,
+                _ => break,
+            }
+        }
+        transform.w_axis.truncate()
+    };
+    let mut points = Vec::new();
+    for number in 0..crate::archetype::MAX_MOUNT_POINTS {
+        let name = format!("mount{number}");
+        let Some(index) = shape
+            .nodes
+            .iter()
+            .position(|n| n.name.eq_ignore_ascii_case(&name))
+        else {
+            break;
+        };
+        let position = rest(index);
+        if !position.is_finite() {
+            break;
+        }
+        points.push(crate::archetype::MountPoint {
+            node: shape.nodes[index].name.clone(),
+            position: position.to_array(),
+            pose: "root".into(),
+        });
+    }
+    points
+}
+
 impl Session {
+    /// Bodies drawn with `model` (`v20.shape.m`, the Blockhead) that
+    /// declare no mount points get these, derived from the model
+    /// ([`shape_mount_points`]): rules seat riders on them
+    /// (`mount_object`), but nobody boards them by landing on them unless
+    /// they are rideable. Set before players join.
+    pub fn set_body_mount_points(
+        &mut self,
+        model: &str,
+        points: Vec<crate::archetype::MountPoint>,
+    ) -> Result<()> {
+        ensure!(
+            self.peers.is_empty(),
+            "Mount points are set before players join"
+        );
+        self.archetypes.fill_mount_points(model, &points)?;
+        self.body_mounts.insert(model.to_owned(), points);
+        Ok(())
+    }
+    /// Reapply [`Self::set_body_mount_points`] to a rebuilt archetype table.
+    pub(super) fn fill_body_mount_points(&mut self) -> Result<()> {
+        for (model, points) in &self.body_mounts {
+            self.archetypes.fill_mount_points(model, points)?;
+        }
+        Ok(())
+    }
+    /// The player this one rides and the mount point.
+    pub(super) fn riding_seat(&self, owner: OwnerId) -> Option<(OwnerId, u8)> {
+        self.riding.seats.get(&owner).copied()
+    }
     /// The player this one rides, and where.
     pub fn ride(&self, owner: OwnerId) -> Option<Ride> {
         let (mount, seat) = *self.riding.seats.get(&owner)?;
@@ -175,7 +256,10 @@ impl Session {
             .insert(rider, input.jet)
             .unwrap_or(true);
         if input.jet && !was_held {
-            self.dismount_player(rider, false);
+            // `canDismount = 0`: `Armor::onTrigger` ignores the jump.
+            if !self.riding.locked.contains(&rider) {
+                self.dismount_player(rider, false);
+            }
             return Ok(());
         }
         if seat == 0 && self.bots.is_bot(mount) {
@@ -250,8 +334,7 @@ impl Session {
                 (s.scale, Vec3::from(s.velocity), Some(p.player.collider()))
             });
         let Some(peer) = self.peers.get(&rider) else {
-            self.riding.seats.remove(&rider);
-            self.riding.jet_held.remove(&rider);
+            self.forget_ride(rider);
             return;
         };
         let start = Vec3::from(peer.player.state().feet);
@@ -279,10 +362,7 @@ impl Session {
             None if forced => (Vec3::ZERO, Vec3::ZERO),
             None => (offsets[4] * scale, Vec3::ZERO),
         };
-        self.riding.seats.remove(&rider);
-        self.riding.jet_held.remove(&rider);
-        self.riding.turn.remove(&rider);
-        self.riding.mount_yaw.remove(&rider);
+        self.forget_ride(rider);
         self.vehicles
             .note_dismount(rider, self.simulation.state().tick);
         if let Some(peer) = self.peers.get_mut(&rider) {
@@ -301,6 +381,80 @@ impl Session {
             peer.inputs.clear();
         }
     }
+    fn forget_ride(&mut self, rider: OwnerId) {
+        self.riding.seats.remove(&rider);
+        self.riding.jet_held.remove(&rider);
+        self.riding.turn.remove(&rider);
+        self.riding.mount_yaw.remove(&rider);
+        self.riding.scripted.remove(&rider);
+        self.riding.locked.remove(&rider);
+    }
+    /// `%mount.mountObject(%rider, %node)` from a rule: `rider` (a player
+    /// or bot) sits on `mount`'s mount point `node`, carried with it, not
+    /// solid, and drawn on that node as it animates. The body need not be
+    /// rideable. With `can_dismount` false the rider cannot jump off
+    /// (`canDismount = 0`).
+    pub(super) fn mount_player(
+        &mut self,
+        mount: OwnerId,
+        rider: OwnerId,
+        node: u8,
+        can_dismount: bool,
+    ) -> Result<()> {
+        ensure!(mount != rider, "A player cannot mount themselves");
+        let alive = |o: OwnerId| self.peers.get(&o).is_some_and(|p| p.combat.alive);
+        ensure!(alive(mount) && alive(rider), "Only living players mount");
+        ensure!(
+            !self.seated(rider) && !self.seated(mount),
+            "The rider or the mount is already seated"
+        );
+        ensure!(
+            self.riding.riders_of(rider).is_empty(),
+            "The rider carries riders of their own"
+        );
+        let kind = self
+            .archetypes
+            .resolve(self.peers[&mount].player.state().archetype);
+        ensure!(
+            usize::from(node) < kind.mount_points.len(),
+            "The mount's body has no mount point {node}"
+        );
+        ensure!(
+            !self.riding.taken(mount, node),
+            "Mount point {node} is taken"
+        );
+        // A carried rider is no one's physics grip any more.
+        self.release_holds_on(rider);
+        self.riding.scripted.insert(rider);
+        if !can_dismount {
+            self.riding.locked.insert(rider);
+        }
+        self.seat_rider(rider, mount, node);
+        Ok(())
+    }
+    /// `unMountObject` from a rule: the rider leaves the mount where they
+    /// are, moving as it moved, solid again.
+    pub(super) fn unmount_player(&mut self, rider: OwnerId) -> Result<()> {
+        let &(mount, _) = self
+            .riding
+            .seats
+            .get(&rider)
+            .with_context(|| format!("Player {rider} rides no one"))?;
+        let velocity = self
+            .peers
+            .get(&mount)
+            .map_or(Vec3::ZERO, |p| Vec3::from(p.player.state().velocity));
+        self.forget_ride(rider);
+        self.vehicles
+            .note_dismount(rider, self.simulation.state().tick);
+        if let Some(peer) = self.peers.get_mut(&rider) {
+            peer.player.push(velocity);
+            peer.player
+                .set_solid(&mut self.simulation.physics, peer.combat.alive);
+            peer.inputs.clear();
+        }
+        Ok(())
+    }
     /// `Armor::onDisabled` and disconnects: every rider is forced off.
     pub(super) fn release_riders(&mut self, mount: OwnerId) {
         for (rider, _) in self.riding.riders_of(mount) {
@@ -314,13 +468,16 @@ impl Session {
             return;
         };
         let kind = self.archetypes.resolve(state.archetype);
-        let seats = if kind.rideable {
-            kind.mount_points.len()
-        } else {
-            0
-        };
+        let points = kind.mount_points.len();
+        let seats = if kind.rideable { points } else { 0 };
         for (rider, seat) in self.riding.riders_of(mount) {
-            if usize::from(seat) >= seats {
+            // A rule's rider needs only its mount point.
+            let limit = if self.riding.scripted.contains(&rider) {
+                points
+            } else {
+                seats
+            };
+            if usize::from(seat) >= limit {
                 self.dismount_player(rider, true);
             }
         }

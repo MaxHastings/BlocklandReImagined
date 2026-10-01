@@ -462,7 +462,9 @@ impl Session {
             }
             return Ok(());
         }
-        if self.riding.driver_of(bot).is_some() {
+        // Ridden by a player who steers it, or carried by one
+        // (`mountObject`): its brain rests.
+        if self.riding.driver_of(bot).is_some() || self.riding.is_riding(bot) {
             return Ok(());
         }
         let state = peer.player.state().clone();

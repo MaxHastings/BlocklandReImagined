@@ -58,7 +58,9 @@ use std::collections::{BTreeMap, BTreeSet};
 ///     Also mirrored copies (`PlaceBlueprint::mirrored`, `Notice::MirrorCopy`) and Add-On selection boxes (`Notice::SelectionBox`).
 /// 68: `Command::CancelBrick`: the cancel key reaches the host, for Add-On
 /// images that take it (`commands.cancel`).
-pub const VERSION: u32 = 68;
+/// 69: `Vitals::look_limits`: a rule's `set_look_limits` bounds how far a
+/// body's arms and head follow its look.
+pub const VERSION: u32 = 69;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).

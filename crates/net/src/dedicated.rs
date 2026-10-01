@@ -150,9 +150,22 @@ pub fn load_packages(
         audio_event_sounds(&audio_dir)?,
     )?;
     session.set_item_bounds(item_physics.bounds)?;
-    session.set_avatar_catalog(serde_json::from_slice(&std::fs::read(
-        avatar_dir.join("avatar.json"),
-    )?)?)?;
+    let avatar: bri_content::avatar::Package =
+        serde_json::from_slice(&std::fs::read(avatar_dir.join("avatar.json"))?)?;
+    avatar.validate()?;
+    // The Blockhead's mount points (`mountObject`), from its rig.
+    let bytes = std::fs::read(avatar_dir.join(&avatar.rig))?;
+    anyhow::ensure!(
+        format!("{:x}", <sha2::Sha256 as sha2::Digest>::digest(&bytes)) == avatar.rig_sha256,
+        "Avatar rig checksum mismatch"
+    );
+    let rig: bri_content::avatar::Rig = serde_json::from_slice(&bytes)?;
+    rig.validate()?;
+    session.set_body_mount_points(
+        "v20.shape.m",
+        bri_sim::session::shape_mount_points(&rig.shape),
+    )?;
+    session.set_avatar_catalog(avatar)?;
     Ok(Dedicated {
         session,
         environment,

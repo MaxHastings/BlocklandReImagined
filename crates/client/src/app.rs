@@ -356,11 +356,15 @@ struct HostSetup {
     weapon_pack: bri_weapons::Pack,
     item_bounds: BTreeMap<String, bri_weapons::ItemBounds>,
     avatar_catalog: bri_content::avatar::Package,
+    /// The Blockhead's mount points, from its rig.
+    body_mounts: Vec<bri_sim::archetype::MountPoint>,
     vehicle_pack: bri_vehicles::Pack,
     event_catalog: bri_events::Catalog,
     event_sounds: Vec<String>,
     maps: Vec<bri_sim::session::MapListing>,
 }
+/// The Blockhead's model id (`m.dts`).
+const BLOCKHEAD_MODEL: &str = "v20.shape.m";
 impl HostSetup {
     fn session(&self, loaded: crate::content::LoadedMap) -> Result<Session> {
         let mut session = Session::new(loaded.simulation);
@@ -369,6 +373,7 @@ impl HostSetup {
         session.set_weapon_pack(self.weapon_pack.clone())?;
         session.set_item_bounds(self.item_bounds.clone())?;
         session.set_avatar_catalog(self.avatar_catalog.clone())?;
+        session.set_body_mount_points(BLOCKHEAD_MODEL, self.body_mounts.clone())?;
         session.set_vehicle_pack(self.vehicle_pack.clone())?;
         session.set_event_catalog(self.event_catalog.clone(), self.event_sounds.clone())?;
         session.set_spawn_points(loaded.spawn_points)?;
@@ -1225,7 +1230,8 @@ impl App {
         avatar_actions.retain(|owner, _| view.poses.contains_key(owner));
         avatar_gestures.retain(|owner, _| view.poses.contains_key(owner));
         avatar_action_images.retain(|owner, _| view.poses.contains_key(owner));
-        let identity = |owner: &u64| -> Option<String> {
+        // The images in a player's hands; empty when they hold nothing.
+        let identity = |owner: &u64| -> String {
             let mut parts = Vec::new();
             if let Some(images) = view.weapons.images.get(owner) {
                 let mut images: Vec<_> = images.iter().collect();
@@ -1236,18 +1242,18 @@ impl App {
                         .map(|image| format!("{}:{}", image.hand, image.image)),
                 );
             }
-            (!parts.is_empty()).then(|| parts.join("|"))
+            parts.join("|")
         };
+        // An action belongs to the hands it started with: a tool's swing
+        // ends when the tool changes or is put away. One a rule started
+        // with empty hands (`playThread(2, armReadyBoth)`, `death1`) plays
+        // on, as v20's thread 2 does, until a tool is taken out.
         for owner in view.poses.keys() {
             let current = identity(owner);
             if avatar_action_images
                 .get(owner)
-                .is_some_and(|old| current.as_ref() != Some(old))
+                .is_some_and(|old| current != *old)
             {
-                avatar_actions.remove(owner);
-                avatar_action_images.remove(owner);
-            }
-            if current.is_none() {
                 avatar_actions.remove(owner);
                 avatar_action_images.remove(owner);
             }
@@ -1289,13 +1295,15 @@ impl App {
                 continue;
             }
             let current = identity(actor);
+            // An image's own animation waits for that image to arrive; a
+            // rule's (`image_hand: None`) plays with whatever is in hand.
             let hand_matches = image_hand.is_none_or(|hand| {
                 view.weapons
                     .images
                     .get(actor)
                     .is_some_and(|images| images.iter().any(|image| image.hand == hand))
             });
-            if current.is_none() || !hand_matches {
+            if !hand_matches {
                 if age >= 0.5 {
                     *weapon_animation_drops = weapon_animation_drops.saturating_add(1);
                     continue;
@@ -1308,7 +1316,7 @@ impl App {
                 started_at,
             };
             avatar_actions.insert(*actor, action);
-            avatar_action_images.insert(*actor, current.unwrap());
+            avatar_action_images.insert(*actor, current);
         }
     }
     pub fn item_assets(&self) -> &Arc<crate::items::ItemAssets> {
@@ -2867,6 +2875,7 @@ impl App {
         let physics_snapshot = self.content.item_physics.clone();
         let selected = self.content.selectable.clone();
         let avatar_catalog = self.avatar_assets.package.clone();
+        let body_mounts = bri_sim::session::shape_mount_points(&self.avatar_assets.rig.shape);
         let mut catalog = self.tool_ui.server_catalog();
         // Start Game's Music Files: the loops this game's music bricks offer.
         let prefs = &self.ui.core.prefs;
@@ -3056,6 +3065,7 @@ impl App {
                 weapon_pack,
                 item_bounds,
                 avatar_catalog,
+                body_mounts,
                 vehicle_pack,
                 event_catalog,
                 event_sounds,
@@ -6809,23 +6819,25 @@ impl PlatformApp for App {
                 self.avatars.get_mut(owner).unwrap().set_dead(dead);
                 // `Armor::onMount` applies the mount's look limits; the Tank's
                 // gunner rides TankTurretPlayer, so it takes that datablock's.
-                let look_limits =
-                    view.vitals
-                        .get(owner)
-                        .and_then(|v| v.mounted)
-                        .and_then(|(vehicle, seat)| {
-                            let info = view.vehicles.get(&vehicle)?;
-                            let d = self.vehicle_assets.definition(&info.definition)?;
-                            if d.seat_role(usize::from(seat)) == SeatRole::Gunner
-                                && d.attachment_mount.is_some()
-                            {
-                                return self
-                                    .vehicle_assets
-                                    .definition("v20.vehicle.tankturretplayer")
-                                    .map(|t| t.look_limits);
-                            }
-                            Some(d.look_limits)
-                        });
+                let look_limits = view
+                    .vitals
+                    .get(owner)
+                    .and_then(|v| v.mounted)
+                    .and_then(|(vehicle, seat)| {
+                        let info = view.vehicles.get(&vehicle)?;
+                        let d = self.vehicle_assets.definition(&info.definition)?;
+                        if d.seat_role(usize::from(seat)) == SeatRole::Gunner
+                            && d.attachment_mount.is_some()
+                        {
+                            return self
+                                .vehicle_assets
+                                .definition("v20.vehicle.tankturretplayer")
+                                .map(|t| t.look_limits);
+                        }
+                        Some(d.look_limits)
+                    })
+                    // A rule's `setLookLimits` for the body.
+                    .or_else(|| view.vitals.get(owner).and_then(|v| v.look_limits));
                 let held = crate::avatar::HeldToolPose::from_mounted_images(ready_hands);
                 let input = crate::avatar::AvatarAnimationInput {
                     look_limits,

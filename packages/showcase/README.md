@@ -12,6 +12,7 @@ three Add-Ons, split the way the platform splits sides:
 | `steel-ball` | host | the rule: roll or hurl a ball, three per player |
 | `steel-ball-kit` | everyone | the ball (a seatless `Ball` vehicle: in minigames only it punches through bricks, kills the players it hits and wrecks vehicles), its bare-metal model and textures, and the hand-held ball |
 | `steel-ball-fx` | each player | the clank and thud sounds |
+| `throwmod` | host | with empty hands, click a player in a minigame (or the bot from your own bot brick) to lift them limp into your arms, click again to throw them; our own rule after Nobot's Script_Nobotthrowmod (`on_activate`, `mount_object`, `set_scale`, `set_look_limits`) |
 | `ragdoll` | each player | a dead Blockhead goes floppy instead of the death animation (`physics.local`, `avatar.pose`); other Add-Ons can grab and throw the body |
 
 Every copy of the game carries them turned off (`"enabled": false` in
@@ -26,6 +27,7 @@ sounds); each `client/main.wasm` is built from the `main.wat` beside it
 `--test ragdoll` for the Ragdoll).
 
 Tests: `cargo test -p bri-sim --test showcase` (gameplay),
+`cargo test -p bri-sim --test throwmod` (Throwmod and the seams under it),
 `cargo test -p bri-net --test showcase` (a second player sees a lift and drop),
 `cargo test -p bri-client-sandbox --test showcase -- --include-ignored`
 (the effects, rendered offscreen with a GPU).

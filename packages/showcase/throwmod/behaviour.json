@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "script": "throw.rhai",
+  "state": {
+    "player": {
+      "holding": { "default": -1, "persist": false },
+      "body": { "default": "", "persist": false }
+    }
+  },
+  "on_activate": true,
+  "on_spawn": true,
+  "on_leave": true,
+  "tick_interval": 8
+}

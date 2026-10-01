@@ -404,7 +404,8 @@ mod tests {
                 "steel-ball-fx",
                 "advanced-duplicator-tool",
                 "advanced-duplicator",
-                "blockhead_bot"
+                "blockhead_bot",
+                "throwmod"
             ]
         );
         let mut available: Vec<(String, String)> = PackageSet::base()
@@ -505,7 +506,8 @@ mod tests {
                 "steel-ball-fx",
                 "advanced-duplicator-tool",
                 "advanced-duplicator",
-                "blockhead_bot"
+                "blockhead_bot",
+                "throwmod"
             ]
         );
         assert!(done.listed.is_empty());
@@ -548,6 +550,7 @@ mod tests {
             "gravity-gun",
             "gravity-gun-fx",
             "blockhead_bot",
+            "throwmod",
         ] {
             let entry = library.get(id).unwrap();
             assert!(entry.problems.is_empty(), "{id}: {:?}", entry.problems);

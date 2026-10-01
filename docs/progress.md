@@ -8247,3 +8247,68 @@ More tests:
 Render: `/mnt/project-files/steel-ball/steel-ball-v2.png`. Max's in-game
 check is a Steel Ball near bricks at Mirrors Medium, in Unified+Shine and
 in Dynamic.
+
+## 2026-10-01 Throwmod and the riding seams under it (branch `claude/project-thread-n5mlwe`, protocol 69 claimed, for v0.1.11)
+
+A modder (lpsroo) ported Nobot's Script_Nobotthrowmod and sent notes on the
+engine changes his port needed. Max: "The mounting part most imporant". His
+code was read as diagnosis only; the seams are built as general functions.
+
+Engine and script API:
+- `mount_object(mount, rider, node, can_dismount)` and
+  `unmount_object(rider)` (`physics`). A player rides another player on any
+  `mount<N>` node of the body model. The Blockhead's mount points come from
+  its model at host start (`shape_mount_points`, `set_body_mount_points`,
+  client and dedicated server), not from copied numbers. They are filled
+  into bodies drawn with `v20.shape.m` that declare none. `rideable` stays
+  false, so landing on a Blockhead still seats nobody.
+  - `can_dismount` false: jump does not get them off (v20 `canDismount`);
+    turning stays free.
+  - Riders stay seated through either body's archetype change or rescale.
+  - In-place unmount carries the mount's velocity.
+  - A command's player seats only on themselves, and only someone they may
+    move (`may_move`, as hold and push).
+- `on_activate(player)`: the empty-hand click (`Player::activateStuff`).
+  Returning true takes the click; else the stock activate runs.
+- `set_scale(p, s)` (0.2 to 5), `unmount_image(p)`, `set_look_limits(p, up,
+  down)` / `set_look_limits(p, ())` (`player`). Look limits replicate in
+  `Vitals::look_limits` (protocol 69; the Gate renumbers if another lane
+  lands first) and reset on respawn.
+- Bots for rules: `bots()`, `player(bot)`, and `bot`, `bot_owner`, `riding`,
+  `seat` in player maps.
+- Bot fixes lpsroo reported, checked on main first:
+  - `player(bot)` returned `()`; now it reads the bot.
+  - A new bot got `on_join`/`on_loadout`/`on_spawn` before it was registered
+    as a bot. Bots now get no player hooks.
+  - A bot from your own brick may be moved by you inside a minigame too (it
+    already could outside). A held bot's brain rests.
+
+Client:
+- A thread-2 action started with empty hands (`armReadyBoth`) keeps
+  playing until the hand changes.
+- Absolute action clips (`armReadyBoth`, `death1`) are layered by priority
+  over locomotion instead of being refused as non-additive. Images that
+  follow the arm still sample the pose without actions (`unacted_nodes`).
+- A rule's look limits bound the arms and head when not on a vehicle.
+
+Throwmod (`packages/showcase/throwmod`, installed but off, CC0, design
+credit to Nobot). With empty hands, click a player within two body
+lengths, no bigger than you, in a minigame whose weapons may hurt them (or
+the bot from your own bot brick). They shrink to 0.6, go limp (`death1`),
+lose their item and ride your left hand (mount 1). You raise your arms
+(`armReadyBoth`) and cannot jet. Click again to throw them at 50 along your
+look, credited to you. Dying, leaving or losing them puts both back.
+
+Tests (content-free): `cargo test -p bri-sim --test throwmod`.
+- Mount points from a synthetic model, with the gap rule.
+- Lift, locked jump, carry, throw ahead with velocity, size and body back.
+- Nobody lifted outside minigames; a dying holder drops the held player.
+- The builder lifts their own bot and a stranger cannot.
+- A new bot reaches no player hook. Mutation-checked: with the old join
+  path it sees `join:2 loadout:2 spawn:2`.
+- `bri-client` avatar test `absolute_actions_take_over_the_nodes_they_animate`
+  (needs the avatar pack, runs in the Gate).
+
+Not done: `mode.json` minigame block (Trench Warfare's is not on main yet).
+Only-Max check: lift and throw a friend or your own bot in a minigame; the
+held player should hang limp in the left hand in front of the chest.

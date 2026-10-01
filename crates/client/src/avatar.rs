@@ -1198,24 +1198,72 @@ impl AvatarMesh {
                 weight: 1.0,
             });
         }
+        // Thread-2/3 actions. An absolute one (a rule's `playThread(2,
+        // armReadyBoth)` or `death1`) takes over the nodes it animates by
+        // its priority, as Torque's threads do: armReadyBoth (14) over
+        // locomotion's arms, death1 (128) over the whole body. It holds its
+        // last frame once played. Additive ones add on top of everything.
+        let mut absolute_actions = Vec::new();
+        let mut additive_actions = Vec::new();
+        for action in [&animation_input.action, &animation_input.gesture]
+            .into_iter()
+            .flatten()
+        {
+            let name = action.sequence.to_ascii_lowercase();
+            if name == "root" {
+                continue;
+            }
+            let clip = assets
+                .rig
+                .sequence(&name)
+                .with_context(|| format!("Missing avatar action clip {}", action.sequence))?;
+            let played = (time - action.started_at).max(0.0) as f32;
+            if clip.additive {
+                additive_actions.push(Layer {
+                    animation: clip,
+                    time: played,
+                    weight: 1.0,
+                });
+            } else {
+                let at = if clip.looping && clip.duration > 0.0 {
+                    played.rem_euclid(clip.duration)
+                } else {
+                    played.min(clip.duration)
+                };
+                absolute_actions.push(Layer {
+                    animation: clip,
+                    time: at,
+                    weight: 1.0,
+                });
+            }
+        }
         // Absolute clips establish the base pose before additive deltas. The
         // original jump clip is additive even though other locomotion clips
         // are absolute; priority alone would put it before armReady/crouch and
         // make the sampler reject an ordinary jump while holding a tool.
-        layers.sort_by_key(|layer| (layer.animation.additive, layer.animation.priority));
+        let order = |layers: &mut Vec<Layer<'_>>| {
+            layers.sort_by_key(|layer| (layer.animation.additive, layer.animation.priority));
+        };
+        // The pose without actions, for images that follow the arm
+        // (`mount_action`).
+        let mut unacted = layers.clone();
+        order(&mut unacted);
+        layers.extend(absolute_actions.iter().copied());
+        order(&mut layers);
+        let mut overlays = Vec::new();
         if self.outfit.head_up {
             let clip = assets
                 .rig
                 .sequence("headup")
                 .context("Missing pack head pose")?;
-            layers.push(Layer {
+            overlays.push(Layer {
                 animation: clip,
                 time: clip.duration,
                 weight: 1.0,
             });
         }
         let look = assets.rig.sequence("look").context("Missing look clip")?;
-        layers.push(Layer {
+        overlays.push(Layer {
             animation: look,
             time: look_position(player.pitch, animation_input.look_limits) * look.duration,
             weight: 1.0,
@@ -1226,52 +1274,34 @@ impl AvatarMesh {
             .rig
             .sequence("headside")
             .context("Missing headside clip")?;
-        layers.push(Layer {
+        overlays.push(Layer {
             animation: headside,
             time: (0.5 + player.head_yaw / std::f32::consts::PI).clamp(0.0, 1.0)
                 * headside.duration,
             weight: 1.0,
         });
-        let unacted = layers.len();
-        let threads = [(2, &animation_input.action), (3, &animation_input.gesture)];
-        for (thread, action) in threads {
-            let Some(action) = action else {
-                continue;
-            };
-            let name = action.sequence.to_ascii_lowercase();
-            if name != "root" {
-                let clip = assets
-                    .rig
-                    .sequence(&name)
-                    .with_context(|| format!("Missing avatar action clip {}", action.sequence))?;
-                ensure!(
-                    clip.additive,
-                    "Thread-{thread} avatar action clip {} must be additive",
-                    action.sequence
-                );
-                let action_time = (time - action.started_at).max(0.0) as f32;
-                layers.push(Layer {
-                    animation: clip,
-                    time: action_time,
-                    weight: 1.0,
-                });
-            }
-        }
+        layers.extend(overlays.iter().copied());
+        unacted.extend(overlays);
+        let acted = !absolute_actions.is_empty() || !additive_actions.is_empty();
+        layers.extend(additive_actions);
         // `transitionToSequence` blends the locomotion thread from the pose it
         // had when the action changed. Its channels end right after the
         // locomotion clip, or where the absolute layers end for additive jumps.
-        let at = if clip.additive {
-            layers
-                .iter()
-                .position(|layer| layer.animation.additive)
-                .unwrap_or(layers.len())
-        } else {
-            layers
-                .iter()
-                .position(|layer| std::ptr::eq(layer.animation, clip))
-                .context("Missing avatar movement layer")?
-                + 1
+        let transition_at = |layers: &[Layer<'_>]| -> Result<usize> {
+            Ok(if clip.additive {
+                layers
+                    .iter()
+                    .position(|layer| layer.animation.additive)
+                    .unwrap_or(layers.len())
+            } else {
+                layers
+                    .iter()
+                    .position(|layer| std::ptr::eq(layer.animation, clip))
+                    .context("Missing avatar movement layer")?
+                    + 1
+            })
         };
+        let at = transition_at(&layers)?;
         let transition_time = if mode == "jump" {
             JUMP_TRANSITION_TIME
         } else {
@@ -1290,9 +1320,13 @@ impl AvatarMesh {
         });
         let (pose, channels) = sample_layers_with_transition(&assets.rig.shape, &layers, at, from)?;
         self.unacted_nodes.clear();
-        if layers.len() > unacted {
-            let (rest, _) =
-                sample_layers_with_transition(&assets.rig.shape, &layers[..unacted], at, from)?;
+        if acted {
+            let (rest, _) = sample_layers_with_transition(
+                &assets.rig.shape,
+                &unacted,
+                transition_at(&unacted)?,
+                from,
+            )?;
             self.unacted_nodes = rest.nodes;
         }
         self.channels = Some(channels);
@@ -1622,6 +1656,7 @@ mod tests {
             light: false,
             mounted: None,
             ride: None,
+            look_limits: None,
             control: Default::default(),
             talking: false,
             sitting: false,
@@ -2005,6 +2040,47 @@ mod tests {
                     },
                 )
                 .is_err()
+        );
+        Ok(())
+    }
+
+    /// A rule's `playThread(2, armReadyBoth)` or `death1` (Throwmod's
+    /// holder and held player) are absolute clips: they take over the
+    /// nodes they animate instead of being refused as non-additive.
+    #[test]
+    #[ignore = "requires original native avatar package"]
+    fn absolute_actions_take_over_the_nodes_they_animate() -> Result<()> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-002");
+        let assets = AvatarAssets::load(&root)?;
+        for name in ["armreadyboth", "death1"] {
+            let clip = assets.rig.sequence(name).context(name)?;
+            assert!(!clip.additive, "{name} is absolute");
+        }
+        let p = player();
+        let mut baseline = assets.mesh(assets.package.defaults.clone())?;
+        baseline.pose(&assets, &p, 1.0)?;
+        let acting = |sequence: &str| AvatarAnimationInput {
+            action: Some(ActionAnimation {
+                sequence: sequence.into(),
+                started_at: 0.0,
+            }),
+            ..Default::default()
+        };
+        let mut raised = assets.mesh(assets.package.defaults.clone())?;
+        raised.pose_with_animation(&assets, &p, 1.0, &acting("armreadyboth"))?;
+        for arm in ["LeftArm", "RightArm"] {
+            assert_ne!(
+                baseline.world_node(&assets, arm),
+                raised.world_node(&assets, arm),
+                "{arm} raised"
+            );
+        }
+        let mut limp = assets.mesh(assets.package.defaults.clone())?;
+        limp.pose_with_animation(&assets, &p, 1.0, &acting("death1"))?;
+        assert_ne!(
+            baseline.world_node(&assets, "Head"),
+            limp.world_node(&assets, "Head"),
+            "the whole body goes limp"
         );
         Ok(())
     }

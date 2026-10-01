@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "id": "throwmod",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Throwmod",
+  "description": "Pick up and throw other players. With nothing in your hand, click a player no bigger than you to lift them, limp, into your arms; click again to throw them where you look. You can only lift players in a minigame with weapon damage, or a bot from your own bot brick. While carrying you cannot jet. Our own version of Nobot's Script_Nobotthrowmod for Blockland.",
+  "authors": ["Blockland ReImagined", "design by Nobot (Script_Nobotthrowmod)"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "capabilities": ["physics", "player", "effects"],
+  "provides": [
+    { "kind": "behaviour", "id": "throwmod:behaviour/main", "file": "behaviour.json" },
+    { "kind": "script", "id": "throwmod:script/main", "file": "throw.rhai" }
+  ]
+}
