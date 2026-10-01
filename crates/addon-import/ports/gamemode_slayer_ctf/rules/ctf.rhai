@@ -46,17 +46,43 @@ fn prefs_of(game) {
     }
 }
 
-// Per game: the preferences and the captures by team id this round.
+// Per game: the preferences, the captures by team id this round, and the
+// report's tallies (`CTF_numFlagPickups`, `CTF_numFlagReturns`) by row:
+// `team:<id>` and `player:<id>`.
 fn game_state(game) {
     let games = get("games");
     let key = `${game}`;
-    let returns = if key in games { games[key].returns } else { #{} };
-    #{ prefs: prefs_of(game), returns: returns }
+    let kept = if key in games { games[key] } else { #{} };
+    #{
+        prefs: prefs_of(game),
+        returns: if "returns" in kept { kept.returns } else { #{} },
+        pickups_by: if "pickups_by" in kept { kept.pickups_by } else { #{} },
+        returns_by: if "returns_by" in kept { kept.returns_by } else { #{} }
+    }
 }
 fn set_game_state(game, s) {
     let games = get("games");
-    games[`${game}`] = #{ returns: s.returns };
+    games[`${game}`] = #{ returns: s.returns, pickups_by: s.pickups_by, returns_by: s.returns_by };
     set("games", games);
+}
+// One more for the player and their team.
+fn tally(counts, p, team) {
+    for key in [`player:${p}`, `team:${team}`] {
+        counts[key] = if key in counts { counts[key] + 1 } else { 1 };
+    }
+    counts
+}
+// `Slayer_CTF::scoreListInit` and `scoreListAdd`: the End of Round Report
+// shows flag pick-ups and returns where Slayer shows kills and deaths,
+// blank for none.
+fn report_columns(game) {
+    let s = game_state(game);
+    report_column(game, "kills", "{{pickups_title}}", s.pickups_by);
+    report_column(game, "deaths", "{{returns_title}}", s.returns_by);
+}
+fn drop_report_columns(game) {
+    report_column(game, "kills", ());
+    report_column(game, "deaths", ());
 }
 
 // Flags by Flag Spawn brick: where each is (`home`, `carried`, `dropped`,
@@ -223,6 +249,8 @@ fn on_minigame(event) {
         }
         let s = game_state(event.game);
         s.returns = #{};
+        s.pickups_by = #{};
+        s.returns_by = #{};
         set_game_state(event.game, s);
         // `Slayer_CTF::onClientDisplayRules`, after Slayer's rules.
         let g = minigame(event.game);
@@ -232,9 +260,13 @@ fn on_minigame(event) {
                 tell_game(g, line);
             }
         }
+    } else if event.kind == "round_end" && playing(event.game) {
+        report_columns(event.game);
     } else if event.kind == "settings" && event.keys.contains("{{slayer_rules}}:mode") && !playing(event.game) {
         // Another mode: carried flags are gone too (the flags on their
-        // stands go at the next check).
+        // stands go at the next check), and Slayer's report has its own
+        // columns again.
+        drop_report_columns(event.game);
         for p in players() {
             if p.minigame == event.game && get_player(p.id, "carrying") != () {
                 mount_image(p.id, (), flag_slot());
@@ -342,6 +374,10 @@ fn take_flag(s, b, flags, dropped) {
     let p = s.me.id;
     if dropped == () {
         set_brick_item(b.id, ());
+        // Only a flag taken from its stand counts as a pick-up.
+        let state = game_state(s.game.id);
+        state.pickups_by = tally(state.pickups_by, p, s.team.id);
+        set_game_state(s.game.id, state);
     } else {
         remove_drop(dropped);
     }
@@ -565,6 +601,7 @@ fn capture(s, home, flags, prefs) {
     // On the captured flag's own Flag Spawn, as the original.
     fire_brick_input(home.id, "onFlagReturned", p);
     state.returns[key] = done + 1;
+    state.returns_by = tally(state.returns_by, p, s.team.id);
     set_game_state(g.id, state);
     if win > 0 && done + 1 >= win {
         // `Slayer_MiniGameSO::endRound(%team)`: Slayer announces it and

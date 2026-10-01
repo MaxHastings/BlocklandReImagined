@@ -107,6 +107,8 @@ operation that needs a capability.
 | `ItemData::onDrop`, dynamic fields on the dropped `Item` | `on_drop(p, item, slot)`: the value it returns rides the drop to whoever picks it up |
 | `%brick.isLocked[%color] = 1` and other dynamic fields on a brick | `set_brick_field(brick, key, v)`; any Add-On reads it with `brick_field(brick, "namespace:key")` |
 | `%item.setShapeName(%text)` with `setShapeNameColor` on a dropped item | `name_drop(id, text, c)` |
+| `commandToClient(%cl, 'Slayer_ctrDisplayAdd', ...)` lines of an ML score list, `Slayer_ForceGUI` | `show_report(p, report)`, `hide_report(p)` |
+| A Slayer mode's `scoreListInit` / `scoreListAdd` replacing columns | `report_column(game, key, title, cells)` |
 | `serverCmdDropTool` packaged for empty hands (`currTool == -1`) | `on_drop_key(p)` |
 | `hasLight`, `lightType = ConstantLight`, `lightRadius`, `lightColor` on a `ShapeBaseImageData` | The image's `light` (the importer reads them) |
 | `ProjectileData::onCollision` | `on_projectile_hit(hit)` |

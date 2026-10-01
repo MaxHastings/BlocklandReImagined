@@ -131,3 +131,21 @@ new ScriptObject(Slayer_PrefSO : Slayer_DefaultPrefSO)
 	permissionLevel = $Slayer::PermissionLevel["Host"];
 	variable = "%mini.restrictOutputEvents";
 };
+new ScriptObject(Slayer_PrefSO : Slayer_DefaultPrefSO)
+{
+	defaultValue = 1;
+	permissionLevel = $Slayer::PermissionLevel["Any"];
+	variable = "%mini.eorrEnable";
+};
+new ScriptObject(Slayer_PrefSO : Slayer_DefaultPrefSO)
+{
+	defaultValue = 1;
+	permissionLevel = $Slayer::PermissionLevel["Any"];
+	variable = "%mini.eorrDisplayTeamScores";
+};
+new ScriptObject(Slayer_PrefSO : Slayer_DefaultPrefSO)
+{
+	defaultValue = 1;
+	permissionLevel = $Slayer::PermissionLevel["Any"];
+	variable = "%mini.eorrDisplayVictory";
+};

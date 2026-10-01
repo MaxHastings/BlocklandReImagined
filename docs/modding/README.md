@@ -184,7 +184,7 @@ HUD panels can only show keys the viewer receives. `persist` (default
 | `noise(seed, x, z)`, `hash3(seed, x, y, z)` | `entity_get(e, key)`, `entity_set(e, key, v)` | `spawn_entity`, `remove_entity`, `steer`, `label`: `entity` |
 | `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)`, `tethered(p)` | | `teleport`, `respawn`, `set_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`, `take_item(p, item)`, `drop_item(item, x, y, z[, vx, vy, vz])`, `drop_item(item, #{ ... })`, `remove_drop(id)`, `name_drop(id, text, c)`: `player` |
 | `raycast(from, dir, range[, ignore])`, `can_damage(by, target)` | | `set_fov(p, fov)`, `set_image_ammo(p, ammo)`, `mount_image(p, image)`, `mount_image(p, image, slot[, paint])`, `unmount_image(p)`, `set_scale(p, scale)`, `set_look_limits(p, up, down)`, `orbit_camera(p, target[, nearest, farthest], distance)`: `player` |
-| `minigames()`, `minigame(id)`, `setting(game, key)`, `team_setting(game, team, key)`, `bricks(kind)`, `brick(id)`, `palette()`, `drops()` | | `set_teams(game, teams, options)`, `set_team(p, team)`, `set_score(p, n)`, `add_score(p, n)`, `reset_minigame(game)`, `set_setting(game, key, v)`, `set_team_setting(game, team, key, v)`, `hold_respawn(p, held)`, `end_round(game, winners)`: `minigame`; `watch(p, target)`, `follow_path(p, knots)`, `free_camera(p)`, `orbit_point(p, at, distance)`: `player`; `set_brick_item(brick, item)`, `set_brick_color(brick, c)`: `world.edit`; `fire_brick_input(brick, input, p)`, `fire_game_input(game, input, p, killer)`, `set_brick_field(brick, key, v)`: `brick_events`; `brick_field(brick, key)` reads |
+| `minigames()`, `minigame(id)`, `setting(game, key)`, `team_setting(game, team, key)`, `bricks(kind)`, `brick(id)`, `palette()`, `drops()` | | `set_teams(game, teams, options)`, `set_team(p, team)`, `set_score(p, n)`, `add_score(p, n)`, `reset_minigame(game)`, `set_setting(game, key, v)`, `set_team_setting(game, team, key, v)`, `hold_respawn(p, held)`, `end_round(game, winners)`, `report_column(game, key, title, cells)`: `minigame`; `show_report(p, report)`, `hide_report(p)`: `chat`; `watch(p, target)`, `follow_path(p, knots)`, `free_camera(p)`, `orbit_point(p, at, distance)`: `player`; `set_brick_item(brick, item)`, `set_brick_color(brick, c)`: `world.edit`; `fire_brick_input(brick, input, p)`, `fire_game_input(game, input, p, killer)`, `set_brick_field(brick, key, v)`: `brick_events`; `brick_field(brick, key)` reads |
 | `brick_box(brick)`, `voxel(brick)`, `can_place_voxel(x, y, z)` | | `place_voxel(x, y, z, material)`: `world.edit`; `set_avatar_colors(p, colors)`, `temp_look(p, look, seconds)`: `player` |
 | `brick(id)`, `bricks_in(min, max)`, `can_plant(kind, [x, y, z], turns)`, `can_edit(brick)` | | `plant_brick(kind, [x, y, z], turns, color, owner)`: `world.edit` |
 | | | `copy_build(p, brick, limit, way, tool[, options])`, `copy_box(p, min, max, limit, tool[, options])`, `mirror_copy(p, axis)`, `highlight_copy(p, rgba, seconds)`, `save_copy(p, name[, options])`, `load_copy(p, name, limit, tool[, options])`, `list_copies(p, filter)`, `plant_wait(p, seconds)`, `pivot_copy(p, pivot)`, `plant_as(p, target, admin)`: `build` |
@@ -380,6 +380,22 @@ Add-On reads it with `brick_field(brick, key)` (your own key) or
 bytes and goes with its brick. Slayer keeps a brick's locked team colours
 (`setTeamControlLocked`) as `locked`, and Capture the Flag refuses a locked
 flag from it.
+
+**Score reports.** `show_report(p, #{ title, banner, columns, sections })`
+opens a window of its own for player `p` with a score table, as Slayer's End
+of Round Report did: `banner` is large text over it ("VICTORY") or `()`,
+`columns` is `[#{ key, title }]` after each row's name, and `sections` is
+`[#{ title, rows: [#{ key, name, color, cells: #{ column: value } }] }]`,
+names in palette colour `color` or `()` for the window's own. Cells are
+written as text, `()` blank. `hide_report(p)` closes it. Another Add-On
+changes a game's report with `report_column(game, key, title, cells)`: the
+column `key` is retitled and filled by row `key` (`team:<id>`,
+`player:<id>` by convention), or added at the end when the report has no
+such column; `report_column(game, key, ())` takes it out. Changes hold for
+the game until changed again, at most 8, and are put in when the report is
+sent at the end of the tick, so the order Add-Ons' hooks run in does not
+matter (Slayer's modes did this with `scoreListInit` and `scoreListAdd`).
+Up to 11 columns, 4 sections, 256 rows and 64 characters a text.
 
 **Brick events.** Rules may add inputs to the wrench's event list
 (`registerInputEvent`), which builders wire to outputs like the engine's

@@ -4614,6 +4614,10 @@ impl App {
                             }
                             continue;
                         }
+                        bri_sim::session::Notice::Report(report) => {
+                            let palette = a.view.as_ref().map_or(&[][..], |v| &v.world.palette[..]);
+                            UiUpdate::Report(report.map(|r| report_view(&r, palette)))
+                        }
                         bri_sim::session::Notice::Inspected { .. } => unreachable!(),
                     };
                     self.ui.apply_session(a.id, update);
@@ -5660,6 +5664,42 @@ fn plain_chat(text: &str) -> String {
             _ => c,
         })
         .collect()
+}
+/// A score report as the Report window shows it: plain text, each column
+/// in the host's order, team names in their paint.
+fn report_view(
+    report: &bri_package_runtime::report::Report,
+    palette: &[[f32; 4]],
+) -> bri_ui::api::ReportView {
+    use bri_ui::api::{ReportRowView, ReportSectionView, ReportView};
+    ReportView {
+        title: plain_chat(&report.title),
+        banner: report.banner.as_deref().map(plain_chat),
+        columns: report.columns.iter().map(|c| plain_chat(&c.title)).collect(),
+        sections: report
+            .sections
+            .iter()
+            .map(|s| ReportSectionView {
+                title: plain_chat(&s.title),
+                rows: s
+                    .rows
+                    .iter()
+                    .map(|r| ReportRowView {
+                        name: plain_chat(&r.name),
+                        color: r
+                            .color
+                            .and_then(|c| palette.get(usize::from(c)))
+                            .map(|c| bri_ui::geom::from_f32([c[0], c[1], c[2], 1.0])),
+                        cells: report
+                            .columns
+                            .iter()
+                            .map(|c| r.cells.get(&c.key).map_or_else(String::new, |v| plain_chat(v)))
+                            .collect(),
+                    })
+                    .collect(),
+            })
+            .collect(),
+    }
 }
 /// Center and bottom prints are server ML markup (parsed and bounded by
 /// `bri_ui::ml`) on several lines. `<key:cmd>` names the player's own binding
@@ -9988,6 +10028,37 @@ fn update_small_json<T: serde::de::DeserializeOwned + serde::Serialize + Default
 const MAX_RECONNECTS: u8 = 3;
 #[cfg(test)]
 mod tests {
+    /// A host's report reaches the Report window as plain text, a cell for
+    /// every column in order and team names in their paint.
+    #[test]
+    fn a_score_report_shows_in_column_order_as_plain_text() {
+        use bri_package_runtime::report::{Report, ReportColumn, ReportRow, ReportSection};
+        let report = Report {
+            title: "End of Round Report".into(),
+            banner: Some("VICTORY".into()),
+            columns: ["score", "kills"]
+                .map(|k| ReportColumn {
+                    key: k.into(),
+                    title: k.to_uppercase(),
+                })
+                .into(),
+            sections: vec![ReportSection {
+                title: "Teams:".into(),
+                rows: vec![ReportRow {
+                    key: "team:1".into(),
+                    name: "<b>Blue".into(),
+                    color: Some(1),
+                    cells: [("kills".to_string(), "2".to_string())].into(),
+                }],
+            }],
+        };
+        let view = super::report_view(&report, &[[1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]]);
+        assert_eq!(view.columns, ["SCORE", "KILLS"]);
+        let row = &view.sections[0].rows[0];
+        assert_eq!(row.name, "‹b›Blue");
+        assert_eq!(row.color, Some([0, 0, 255, 255]));
+        assert_eq!(row.cells, ["", "2"]);
+    }
     /// A first-person image sits in the view's frame, so it stays put on
     /// screen however a seat pitches, rolls or loops: the frame's axes are
     /// the rendered camera's.

@@ -105,6 +105,9 @@
           "pref_points_cp": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.points_CP\"",
           "team_events": "(?s)defaultValue\\s*=\\s*6\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"\\$Pref::Slayer::Server::Teams::maxEvents\"",
           "pref_clear_stats": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.clearStats\"",
+          "pref_eorr_enable": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.eorrEnable\"",
+          "pref_eorr_team_scores": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.eorrDisplayTeamScores\"",
+          "pref_eorr_victory": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.eorrDisplayVictory\"",
           "pref_restrict_events": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.restrictOutputEvents\""
         },
         "server/defaults/team-preferences.cs": {
@@ -222,8 +225,25 @@
           "camera": "allowMoveWhileResetting[\\s\\S]*setMode\\(\\s*corpse\\s*,\\s*%winner\\.player\\s*\\)",
           "reset_time": "%this\\.timeBetweenRounds\\s*\\*\\s*1000",
           "nobody": "Nobody won this round",
+          "eorr_title": "\\\\\"(End of Round Report)\\\\\"",
+          "eorr_send": "if\\s*\\(\\s*%this\\.eorrEnable\\s*\\)\\s*%this\\.sendScoreListAll\\(\\)",
           "countdown": "Resetting in",
           "custom_win": "getField\\(\\s*%winner\\s*,\\s*0\\s*\\)\\s*\\$=\\s*\"CUSTOM\"[\\s\\S]*?<color:ffff00>%1 \\\\c5won this round\\."
+        },
+        "Slayer_MiniGameSO::sendScoreListAll": {
+          "eorr_score": "%var3\\s*=\\s*\"([^\"]+)\"\\s*;",
+          "eorr_kills": "%var4\\s*=\\s*\"([^\"]+)\"\\s*;",
+          "eorr_deaths": "%var5\\s*=\\s*\"([^\"]+)\"\\s*;",
+          "eorr_wins": "%var6\\s*=\\s*\"([^\"]+)\"\\s*;",
+          "eorr_victory": "%cl\\.roundWon\\s*\\?\\s*\"([^\"]+)\"\\s*:",
+          "eorr_defeat": "%cl\\.roundWon\\s*\\?\\s*\"[^\"]+\"\\s*:\\s*\"([^\"]+)\"",
+          "eorr_victory_option": "if\\s*\\(\\s*%this\\.eorrDisplayVictory\\s*\\)",
+          "eorr_team_option": "useTeams\\s*&&\\s*%this\\.Teams\\.getCount\\(\\)\\s*>\\s*0\\s*&&\\s*%this\\.eorrDisplayTeamScores",
+          "eorr_teams": "<b>([^<]+)</b><br>",
+          "eorr_players": "<br><b>([^<]+)</b><br>",
+          "eorr_sorted": "getTeamListSortedScore\\(\\)[\\s\\S]*getMemberListSortedScore\\(\\)",
+          "eorr_team_tally": "%t\\.getKills\\(\\)\\s*;\\s*%var5\\s*=\\s*%t\\.getDeaths\\(\\)\\s*;\\s*%var6\\s*=\\s*%t\\.wins",
+          "eorr_player_wins": "%var6\\s*=\\s*\\(\\s*%team\\s*>\\s*0\\s*\\?\\s*\"\"\\s*:\\s*%cl\\.wins\\s*\\)"
         },
         "Slayer_MiniGameSO::Reset": {
           "lives": "setLives\\(\\s*\\(\\s*isObject\\(\\s*%t\\s*\\)\\s*&&\\s*%t\\.lives\\s*>=\\s*0\\s*\\)\\s*\\?\\s*%t\\.lives\\s*:\\s*%this\\.lives\\s*\\)",
@@ -483,13 +503,15 @@
           "points": "CTF_points_Flag\\s*;",
           "to_win": "CTF_flagReturnsToWin\\s*-\\s*%team\\.CTF_numFlagReturns\\s*-\\s*1",
           "respawn": "CTF_flagReturnedRespawnTime",
-          "win": "endRound\\(\\s*%team\\s*\\)"
+          "win": "endRound\\(\\s*%team\\s*\\)",
+          "count_return": "%team\\.CTF_numFlagReturns\\s*\\+\\+\\s*;\\s*%client\\.CTF_numFlagReturns\\s*\\+\\+"
         },
         "Slayer_CTF::onFlagRecovery": {
           "points": "CTF_points_FlagRecovery"
         },
         "Slayer_CTF::onFlagPickup": {
-          "mount": "mountImage\\([^;]*flagImageSlot"
+          "mount": "mountImage\\([^;]*flagImageSlot",
+          "count_pickup": "if\\s*\\(\\s*!\\s*%flag\\.dropped\\s*\\)\\s*\\{\\s*%team\\.CTF_numFlagPickups\\s*\\+\\+\\s*;\\s*%client\\.CTF_numFlagPickups\\s*\\+\\+"
         },
         "Slayer_CTF::onFlagDrop": {
           "message": "dropped the"
@@ -502,7 +524,16 @@
           "reset": "%br\\.resetFlag\\(\\)"
         },
         "Slayer_CTF::preMinigameReset": {
-          "reset": "%this\\.resetFlags\\("
+          "reset": "%this\\.resetFlags\\(",
+          "clear_tally": "%cl\\.CTF_numFlagReturns\\s*=\\s*\"\"\\s*;\\s*%cl\\.CTF_numFlagPickups\\s*=\\s*\"\""
+        },
+        "Slayer_CTF::scoreListInit": {
+          "pickups_title": "%var4\\s*=\\s*\"([^\"]+)\"",
+          "returns_title": "%var5\\s*=\\s*\"([^\"]+)\""
+        },
+        "Slayer_CTF::scoreListAdd": {
+          "pickups": "%var4\\s*=\\s*%obj\\.CTF_numFlagPickups",
+          "returns": "%var5\\s*=\\s*%obj\\.CTF_numFlagReturns"
         },
         "Slayer_CTF::prePlayerDeath": {
           "drop": "\\.dropFlag\\(\\)"

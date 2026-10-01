@@ -291,6 +291,8 @@ pub struct Core {
     pub name_asked: bool,
     /// The page `getHelp` asked HelpDlg to open on.
     pub help_page: Option<String>,
+    /// The report the host last showed (the Report window's).
+    pub report: Option<crate::api::ReportView>,
     pub print_letters_visible: bool,
     // catalogs
     pub maps: Vec<MapInfo>,
@@ -498,6 +500,7 @@ impl Core {
         self.wrench = WrenchState::default();
         self.players.clear();
         self.minigames = MiniGameUiState::default();
+        self.report = None;
         self.admin = Default::default();
         self.environment = Default::default();
         self.server_name.clear();
@@ -1286,6 +1289,7 @@ impl Ui {
             help_open: false,
             name_asked: false,
             help_page: None,
+            report: None,
             print_letters_visible: false,
             maps: Vec::new(),
             game_modes: Vec::new(),
@@ -1866,6 +1870,14 @@ impl Ui {
                 c.trust_invites.push(invitation);
                 c.pop(ScreenId::TrustInvitation);
                 c.push(ScreenId::TrustInvitation);
+            }
+            UiUpdate::Report(report) => {
+                // A new report opens a window sized to its columns.
+                c.pop(ScreenId::Report);
+                if report.is_some() {
+                    c.push(ScreenId::Report);
+                }
+                c.report = report;
             }
             UiUpdate::MiniGameInvite(invitation) => {
                 c.minigames

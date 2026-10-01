@@ -48,6 +48,20 @@ function Slayer_CTF::onMiniGameBrickAdded(%this, %brick, %type)
 function Slayer_CTF::preMinigameReset(%this, %client)
 {
 	%this.resetFlags(false);
+	%cl.CTF_numFlagReturns = "";
+	%cl.CTF_numFlagPickups = "";
+}
+
+function Slayer_CTF::scoreListInit(%this, %header, %var1, %var2, %var3, %var4, %var5, %var6, %var7, %var8, %var9)
+{
+	%var4 = "Flag Pick-ups";
+	%var5 = "Flag Returns";
+}
+
+function Slayer_CTF::scoreListAdd(%this, %obj, %line, %var1, %var2, %var3, %var4, %var5, %var6, %var7, %var8, %var9)
+{
+	%var4 = %obj.CTF_numFlagPickups;
+	%var5 = %obj.CTF_numFlagReturns;
 }
 
 function Slayer_CTF::prePlayerDeath(%this, %client, %obj, %killer, %type, %area)
@@ -90,6 +104,8 @@ function Slayer_CTF::onFlagReturn(%this, %client, %team, %brick, %flag)
 	%points = %this.minigame.CTF_points_Flag;
 	%remain = %this.minigame.CTF_flagReturnsToWin - %team.CTF_numFlagReturns - 1;
 	%respawnTime = %this.minigame.CTF_flagReturnedRespawnTime;
+	%team.CTF_numFlagReturns ++;
+	%client.CTF_numFlagReturns ++;
 	%this.minigame.endRound(%team);
 }
 
@@ -101,6 +117,11 @@ function Slayer_CTF::onFlagRecovery(%this, %client, %team, %brick, %flag)
 function Slayer_CTF::onFlagPickup(%this, %client, %team, %brick, %flag)
 {
 	%client.player.mountImage(%image, $Slayer::Server::CTF::flagImageSlot);
+	if(!%flag.dropped)
+	{
+		%team.CTF_numFlagPickups ++;
+		%client.CTF_numFlagPickups ++;
+	}
 }
 
 function Slayer_CTF::onFlagDrop(%this, %client, %team, %brick, %flag)

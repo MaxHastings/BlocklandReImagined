@@ -1220,6 +1220,30 @@ pub enum TrustAnswer {
     Reject,
     Ignore,
 }
+/// A score report the host showed (Slayer's End of Round Report): plain
+/// text, laid out by the Report window.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ReportView {
+    pub title: String,
+    /// Large text over the table ("VICTORY").
+    pub banner: Option<String>,
+    /// Column titles after the name column.
+    pub columns: Vec<String>,
+    pub sections: Vec<ReportSectionView>,
+}
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ReportSectionView {
+    pub title: String,
+    pub rows: Vec<ReportRowView>,
+}
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ReportRowView {
+    pub name: String,
+    /// The name's colour (a team's paint), else the window's text colour.
+    pub color: Option<Rgba>,
+    /// One per column, blank where the row has none.
+    pub cells: Vec<String>,
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MiniGameInvitation {
     pub game: MiniGameId,
@@ -1414,6 +1438,8 @@ pub enum UiUpdate {
     },
     MiniGames(MiniGameUiState),
     MiniGameInvite(MiniGameInvitation),
+    /// Open the Report window on this report, or close it.
+    Report(Option<ReportView>),
     /// Server `MessageBoxOK`.
     MessageBox {
         title: String,

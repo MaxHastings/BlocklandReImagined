@@ -1329,6 +1329,108 @@ fn the_drop_flag_event_drops_the_flag_and_fires_its_input() {
 }
 
 /// Bottom prints `p` was sent since the last look that contain `text`.
+/// The reports each player was shown or had closed since the last look.
+fn reports(g: &mut Game) -> Vec<(OwnerId, Option<bri_package_runtime::report::Report>)> {
+    g.s.take_private_notices()
+        .into_iter()
+        .filter_map(|(p, n)| match n {
+            Notice::Report(r) => Some((p, r.map(|r| *r))),
+            _ => None,
+        })
+        .collect()
+}
+fn row<'a>(
+    report: &'a bri_package_runtime::report::Report,
+    section: usize,
+    key: &str,
+) -> &'a bri_package_runtime::report::ReportRow {
+    report.sections[section]
+        .rows
+        .iter()
+        .find(|r| r.key == key)
+        .unwrap_or_else(|| panic!("no row {key} in {report:?}"))
+}
+fn cell<'a>(row: &'a bri_package_runtime::report::ReportRow, column: &str) -> &'a str {
+    row.cells.get(column).map_or("", String::as_str)
+}
+
+#[test]
+fn the_end_of_round_report_shows_teams_and_players_with_flag_columns() {
+    let mut g = Game::new("ctf-report");
+    let to_win = key(CTF, "flag_returns_to_win");
+    let (red, blue, _, _) = capture_the_flag(&mut g, &[(&to_win, Value::Int(1))]);
+    g.s.take_private_notices();
+    capture(&mut g, blue);
+    g.steps(13);
+    // `sendScoreListAll` to every member, with Capture the Flag's columns
+    // in place of Kills and Deaths (`scoreListInit`), whichever Add-On's
+    // round-end hook ran first.
+    let shown = reports(&mut g);
+    assert_eq!(shown.len(), 2, "{shown:?}");
+    let of = |p: OwnerId| {
+        shown
+            .iter()
+            .find(|(o, _)| *o == p)
+            .and_then(|(_, r)| r.clone())
+            .expect("a report")
+    };
+    let (won, lost) = (of(blue), of(red));
+    assert_eq!(won.title, "End of Round Report");
+    assert_eq!(won.banner.as_deref(), Some("VICTORY"));
+    assert_eq!(lost.banner.as_deref(), Some("DEFEAT"));
+    let titles: Vec<&str> = won.columns.iter().map(|c| c.title.as_str()).collect();
+    assert_eq!(titles, ["Score", "Flag Pick-ups", "Flag Returns", "Rounds Won"]);
+    assert_eq!(won.sections[0].title, "Teams:");
+    assert_eq!(won.sections[1].title, "Players:");
+    let teams: Vec<&str> = won.sections[0].rows.iter().map(|r| r.name.as_str()).collect();
+    assert_eq!(teams, ["Blue", "Red"], "highest score first");
+    let blue_team = &won.sections[0].rows[0];
+    assert_eq!(blue_team.color, Some(BLUE));
+    assert_eq!(cell(blue_team, "score"), CAPTURE_POINTS.to_string());
+    assert_eq!(cell(blue_team, "kills"), "1", "one flag taken from its stand");
+    assert_eq!(cell(blue_team, "deaths"), "1", "one flag returned");
+    assert_eq!(cell(blue_team, "wins"), "1");
+    assert_eq!(cell(&won.sections[0].rows[1], "kills"), "", "none is blank");
+    let me = row(&won, 1, &format!("player:{blue}"));
+    assert_eq!(won.sections[1].rows[0].key, me.key, "highest score first");
+    assert_eq!(cell(me, "kills"), "1");
+    assert_eq!(cell(me, "deaths"), "1");
+    assert_eq!(cell(me, "wins"), "", "a team player's wins are the team's");
+    assert_eq!(me.color, Some(BLUE));
+    // The reset closes it; the tallies start again.
+    g.steps(BETWEEN_ROUNDS * 120);
+    let closed = reports(&mut g);
+    for p in [red, blue] {
+        assert!(closed.iter().any(|(o, r)| *o == p && r.is_none()), "{closed:?}");
+    }
+    // Without Victory/Defeat or Team Scores: one plain list.
+    let owner = g.s.minigame_views()[0].owner;
+    let victory = key(SLAYER, "eorr_display_victory");
+    let team_scores = key(SLAYER, "eorr_display_team_scores");
+    g.set(owner, &[(&victory, Value::Bool(false)), (&team_scores, Value::Bool(false))]);
+    g.steps(31);
+    g.s.take_private_notices();
+    capture(&mut g, blue);
+    g.steps(13);
+    let shown = reports(&mut g);
+    let (_, report) = shown.iter().find(|(o, _)| *o == red).expect("a report");
+    let report = report.as_ref().expect("shown");
+    assert_eq!(report.banner, None);
+    assert_eq!(report.sections.len(), 1);
+    assert_eq!(report.sections[0].title, "");
+    assert_eq!(cell(row(report, 0, &format!("player:{blue}")), "kills"), "1");
+    // With the report off, nobody is shown one.
+    let enable = key(SLAYER, "eorr_enable");
+    g.steps(BETWEEN_ROUNDS * 120);
+    g.set(owner, &[(&enable, Value::Bool(false))]);
+    g.steps(31);
+    reports(&mut g);
+    capture(&mut g, blue);
+    g.steps(13);
+    assert!(reports(&mut g).iter().all(|(_, r)| r.is_none()));
+    g.quiet();
+}
+
 fn bottom_printed(g: &mut Game, text: &str) -> bool {
     g.s.take_private_notices()
         .iter()

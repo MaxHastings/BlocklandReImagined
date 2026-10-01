@@ -80,9 +80,33 @@ function Slayer_MiniGameSO::endRound(%this, %winner, %resetTime)
 		%cl.camera.setMode(corpse, %winner.player);
 	%resetTime = %this.timeBetweenRounds * 1000;
 	%msg = '\c5Nobody won this round. Resetting in %4 seconds.';
+	messageClient(%cl, '', "\c3No \"End of Round Report\" without the client.");
+	if(%this.eorrEnable)
+		%this.sendScoreListAll();
 	%this.bottomPrintAll("Resetting in" SPC %timeLeft, 2, 1);
 	$InputTarget_["MiniGame"] = %this;
 	processMultiSourceInputEvent("onMinigameRoundEnd", 0, %this);
+}
+
+function Slayer_MiniGameSO::sendScoreListAll(%this)
+{
+	%var2 = "Name";
+	%var3 = "Score";
+	%var4 = "Kills";
+	%var5 = "Deaths";
+	%var6 = "Rounds Won";
+	if(%this.eorrDisplayVictory)
+		%victoryStatus = 1;
+	%var1 = (%cl.roundWon ? "VICTORY" : "DEFEAT");
+	if(%this.gameMode.template.useTeams && %this.Teams.getCount() > 0 && %this.eorrDisplayTeamScores)
+		%this.commandToAllSlayerClients('Slayer_ctrDisplayAdd', "<b>Teams:</b><br>");
+	%teamList = %this.Teams.getTeamListSortedScore();
+	%var4 = %t.getKills();
+	%var5 = %t.getDeaths();
+	%var6 = %t.wins;
+	%this.commandToAllSlayerClients('Slayer_ctrDisplayAdd', "<br><b>Players:</b><br>");
+	%memberList = %this.getMemberListSortedScore();
+	%var6 = (%team > 0 ? "" : %cl.wins);
 }
 
 function Slayer_MiniGameSO::incTimeRemaining(%this, %flag, %display)

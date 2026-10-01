@@ -334,6 +334,9 @@ pub enum Notice {
     /// The host emptied this player's hand (an Add-On's `unmount_image`):
     /// bricks, spray can and tools are put away on the client too.
     PutAway,
+    /// A score report in its own window (an Add-On's `show_report`, Slayer's
+    /// End of Round Report), or `None` to close it.
+    Report(Option<Box<bri_package_runtime::report::Report>>),
 }
 
 /// Minigame requests. The actor is always the authenticated connection.

@@ -462,6 +462,8 @@ fn start_round(g) {
     set_round(g.id, r);
     for m in g.members {
         spectate_end(m);
+        // `Slayer_MiniGameSO::reset`: `Slayer_ForceGUI Slayer_CtrDisplay 0`.
+        hide_report(m);
     }
     // `Slayer_Module_FlyThruCam`'s `onReset`: the fly-through first, and the
     // countdown after it unless it plays during the countdown.
@@ -904,6 +906,9 @@ fn round_ended(g, teams, winners) {
         }
     }
     tell_game(g, msg);
+    if setting(g.id, "eorr_enable") {
+        send_report(g, teams, winners);
+    }
     // A reset waits at least the engine's 5 s between resets.
     r.countdown = ();
     r.reset_at = tick() + seconds * 120;
@@ -911,6 +916,82 @@ fn round_ended(g, teams, winners) {
     set_round(g.id, r);
     // `endRound`'s `onMinigameRoundEnd`.
     fire_game_input(g.id, "onMinigameRoundEnd");
+}
+
+// Highest score first, ties in the order given (Slayer's bubble sorts).
+fn by_score(list) {
+    let out = [];
+    for item in list {
+        let at = out.len();
+        while at > 0 && out[at - 1].score < item.score {
+            at -= 1;
+        }
+        out.insert(at, item);
+    }
+    out
+}
+// `Slayer_MiniGameSO::sendScoreListAll`: the End of Round Report, each
+// member's with VICTORY or DEFEAT over it. Teams first (with Display Team
+// Scores), then players; a team player's Rounds Won is blank. Another
+// Add-On may change its columns (`report_column`), as Slayer's modes did
+// with `scoreListInit` and `scoreListAdd`.
+fn send_report(g, teams, winners) {
+    let wins = get("wins");
+    let sections = [];
+    let team_rows = [];
+    if uses_teams(g.id) && !g.teams.is_empty() && setting(g.id, "eorr_display_team_scores") {
+        let list = [];
+        for t in g.teams {
+            let kills = 0;
+            let deaths = 0;
+            for m in members(g, t.id) {
+                kills += get_player(m.id, "kills");
+                deaths += get_player(m.id, "deaths");
+            }
+            let key = `${g.id}:${t.id}`;
+            list.push(#{ key: `team:${t.id}`, name: t.name, color: t.color, score: team_score(g, t.id),
+                         kills: kills, deaths: deaths, wins: if key in wins { wins[key] } else { 0 } });
+        }
+        for t in by_score(list) {
+            team_rows.push(#{ key: t.key, name: t.name, color: t.color,
+                              cells: #{ score: t.score, kills: t.kills, deaths: t.deaths, wins: t.wins } });
+        }
+        sections.push(#{ title: "{{eorr_teams}}", rows: team_rows });
+    }
+    let list = [];
+    for m in g.members {
+        let me = player(m);
+        if me != () {
+            list.push(me);
+        }
+    }
+    let rows = [];
+    for me in by_score(list) {
+        let team = if me.team == () { () } else { team_by_id(g, me.team) };
+        rows.push(#{ key: `player:${me.id}`, name: me.name, color: if team == () { () } else { team.color },
+                     cells: #{ score: me.score, kills: get_player(me.id, "kills"), deaths: get_player(me.id, "deaths"),
+                               wins: if team == () { get_player(me.id, "wins") } else { () } } });
+    }
+    sections.push(#{ title: if team_rows.is_empty() { "" } else { "{{eorr_players}}" }, rows: rows });
+    let columns = [
+        #{ key: "score", title: "{{eorr_score}}" },
+        #{ key: "kills", title: "{{eorr_kills}}" },
+        #{ key: "deaths", title: "{{eorr_deaths}}" },
+        #{ key: "wins", title: "{{eorr_wins}}" }
+    ];
+    let victory = setting(g.id, "eorr_display_victory");
+    for m in g.members {
+        if player(m) == () {
+            continue;
+        }
+        let banner = ();
+        if victory {
+            let me = player(m);
+            let won = winners.contains(m) || (me.team != () && teams.contains(me.team));
+            banner = if won { "{{eorr_victory}}" } else { "{{eorr_defeat}}" };
+        }
+        show_report(m, #{ title: "{{eorr_title}}", banner: banner, columns: columns, sections: sections });
+    }
 }
 
 // Capture points (`Slayer_CPTriggerData`, `FxDtsBrick::setCPControl`):
@@ -1416,6 +1497,7 @@ fn on_minigame(event) {
         // the last one standing.
         if player(event.player) != () {
             fire_game_input(g.id, "onMinigameLeave", event.player);
+            hide_report(event.player);
         } else {
             fire_game_input(g.id, "onMinigameLeave");
         }

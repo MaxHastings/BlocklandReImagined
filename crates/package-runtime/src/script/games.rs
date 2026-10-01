@@ -3,6 +3,7 @@
 //! Slayer-style team games are built from.
 use super::*;
 use crate::ops::{MAX_DROP_SECONDS, MAX_SCORE, MAX_TEAMS, TeamOp};
+use crate::report::{ColumnChange, Report};
 use bri_package::setting::SettingValue;
 
 /// One mini-game as scripts see it (`minigames()`).
@@ -269,6 +270,46 @@ fn vector(value: &Dynamic, what: &str) -> Fallible<[f32; 3]> {
         _ => fail(format!("`{what}` is [x, y, z]")),
     }
 }
+/// A report cell as text: numbers as they print, `()` blank.
+fn cell(value: &Dynamic) -> String {
+    if value.is_unit() {
+        String::new()
+    } else {
+        value.to_string()
+    }
+}
+/// A report from a script's map, its cells written as text.
+fn report_from(mut report: Map) -> Fallible<Report> {
+    if let Some(sections) = report.get_mut("sections")
+        && let Some(mut sections_list) = sections.write_lock::<Array>()
+    {
+        for section in sections_list.iter_mut() {
+            let Some(mut section) = section.write_lock::<Map>() else {
+                continue;
+            };
+            let Some(rows) = section.get_mut("rows") else {
+                continue;
+            };
+            let Some(mut rows) = rows.write_lock::<Array>() else {
+                continue;
+            };
+            for row in rows.iter_mut() {
+                let Some(mut row) = row.write_lock::<Map>() else {
+                    continue;
+                };
+                if let Some(cells) = row.get_mut("cells")
+                    && let Some(mut cells) = cells.write_lock::<Map>()
+                {
+                    for value in cells.values_mut() {
+                        *value = cell(value).into();
+                    }
+                }
+            }
+        }
+    }
+    rhai::serde::from_dynamic(&Dynamic::from_map(report))
+        .map_err(|e| format!("show_report: {e}").into())
+}
 /// `drop_item(item, #{ at, velocity, paint, data, seconds })`.
 fn drop_with(item: &str, options: Map) -> Fallible<()> {
     for key in options.keys() {
@@ -481,6 +522,54 @@ pub(super) fn register(engine: &mut Engine) {
             return fail("name_drop(drop, text, colour); name_drop(drop, ()) takes the name away");
         }
         push(Op::NameDrop { drop: id(&drop)?, text: None, color: 0 })
+    });
+    // A score report in its own window (`show_report(p, #{ title, banner,
+    // columns: [#{ key, title }], sections: [#{ title, rows: [#{ key,
+    // name, color, cells: #{ column: value } }] }] })`), closed with
+    // `hide_report(p)`.
+    engine.register_fn("show_report", |player: Dynamic, report: Map| {
+        push(Op::ShowReport {
+            player: id(&player)?,
+            report: Some(Box::new(report_from(report)?)),
+        })
+    });
+    engine.register_fn("hide_report", |player: Dynamic| {
+        push(Op::ShowReport {
+            player: id(&player)?,
+            report: None,
+        })
+    });
+    // A game's report column by key: retitled and filled by row key
+    // (`report_column(g, "kills", "Flag Pick-ups", #{ "player:3": 2 })`),
+    // or taken out with `report_column(g, key, ())`.
+    engine.register_fn(
+        "report_column",
+        |game: Dynamic, key: &str, title: Dynamic, cells: Map| {
+            push(Op::ReportColumn {
+                game: id(&game)?,
+                change: ColumnChange {
+                    key: key.into(),
+                    title: Some(title.to_string()),
+                    cells: cells
+                        .into_iter()
+                        .map(|(k, v)| (k.to_string(), cell(&v)))
+                        .collect(),
+                },
+            })
+        },
+    );
+    engine.register_fn("report_column", |game: Dynamic, key: &str, title: Dynamic| {
+        if !title.is_unit() {
+            return fail("report_column(game, key, title, cells); report_column(game, key, ()) takes the column out");
+        }
+        push(Op::ReportColumn {
+            game: id(&game)?,
+            change: ColumnChange {
+                key: key.into(),
+                title: None,
+                cells: BTreeMap::new(),
+            },
+        })
     });
     engine.register_fn("drops", || {
         with_world(|world, _| Ok(world.drops().iter().map(drop_map).collect::<Array>()))

@@ -51,6 +51,11 @@ impl Session {
     /// Queue what a mini-game effect means to Add-On rules. Runs before the
     /// effect is applied, so a membership change still knows the old game.
     pub(in crate::session) fn note_minigame_effect(&mut self, effect: &mg::Effect) {
+        if let mg::Effect::Ended { game } = effect
+            && let Some(host) = self.packages.as_mut()
+        {
+            host.reports.forget_game(game.0);
+        }
         let Some(host) = self.packages.as_ref() else {
             return;
         };

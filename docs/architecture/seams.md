@@ -37,5 +37,5 @@ Owners are named by thread title.
 | Drop key with empty hands | `Command::DropKey`, `on_drop_key` | Capture the Flag (Slayer) | in flight |
 | Dropped item names | `Drop::name`, `name_drop`, name tags over drops | Capture the Flag (Slayer) | in flight |
 | Image lights | `Image::light`, drawn at the mounted image in its paint | Capture the Flag (Slayer) | in flight |
-| End-of-round report | a scored table rules send to players at a round's end | Capture the Flag (Slayer) | in flight |
+| End-of-round report | `show_report`, `report_column`, `Notice::Report`, the client's Report window | Capture the Flag (Slayer) | in flight |
 | Copy jobs | big copy work a slice each tick (`CopyWork`, `cancel_copy`, `copy_working`), copy ghost subset, `IdMap` | Duplicators | in flight |

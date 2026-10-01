@@ -747,6 +747,20 @@ pub enum Op {
         text: String,
         command: String,
     },
+    /// Show `player` a score report in its own window (Slayer's End of
+    /// Round Report), with the columns Add-Ons changed for their game; or
+    /// close it with `None`.
+    ShowReport {
+        player: u64,
+        report: Option<Box<crate::report::Report>>,
+    },
+    /// Change a column of the reports a game's players are shown, from now
+    /// on: retitle and fill it, add it, or take it out (`title: None`).
+    /// Capture the Flag's Flag Pick-ups in place of Slayer's Kills.
+    ReportColumn {
+        game: u64,
+        change: crate::report::ColumnChange,
+    },
     /// Play a sound profile (an Add-On weapons pack's `sounds`, or v20's):
     /// at `position` for everyone near, or at one player's ears.
     Sound {
@@ -1258,6 +1272,7 @@ impl Op {
             Self::Tell { .. }
             | Self::Broadcast { .. }
             | Self::Print { .. }
+            | Self::ShowReport { .. }
             | Self::TellMinigame { .. }
             | Self::PrintMinigame { .. }
             | Self::Ask { .. } => "chat",
@@ -1294,7 +1309,8 @@ impl Op {
             | Self::SetRespawnTime { .. }
             | Self::EndRound { .. }
             | Self::SetSetting { .. }
-            | Self::SetZonePeriod { .. } => "minigame",
+            | Self::SetZonePeriod { .. }
+            | Self::ReportColumn { .. } => "minigame",
             Self::SetBrickItem { .. } | Self::SetBrickColor { .. } => "world.edit",
             Self::FireBrickInput { .. }
             | Self::FireGameInput { .. }
@@ -1773,6 +1789,8 @@ impl Op {
                     && seconds.is_finite()
                     && (0.0..=600.0).contains(seconds)
             }
+            Self::ShowReport { report, .. } => report.as_ref().is_none_or(|r| r.is_bounded()),
+            Self::ReportColumn { change, .. } => change.is_bounded(),
             Self::Sound { profile, at } => {
                 !profile.is_empty()
                     && profile.len() <= 128
@@ -1946,6 +1964,9 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::RemoveVehicle { .. } => "remove_vehicle",
         Op::Fire { .. } => "fire",
         Op::Heal { .. } => "heal",
+        Op::ShowReport { report: Some(_), .. } => "show_report",
+        Op::ShowReport { report: None, .. } => "hide_report",
+        Op::ReportColumn { .. } => "report_column",
         Op::Print { bottom: false, .. } => "center_print",
         Op::Print { bottom: true, .. } => "bottom_print",
         Op::Ask { .. } => "ask",

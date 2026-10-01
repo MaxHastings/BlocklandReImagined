@@ -189,6 +189,27 @@
       "default": {{pref_clear_stats|bool}}
     },
     {
+      "key": "eorr_enable",
+      "title": "Display End of Round Report",
+      "category": "EoRR",
+      "type": "bool",
+      "default": {{pref_eorr_enable|bool}}
+    },
+    {
+      "key": "eorr_display_team_scores",
+      "title": "Display Team Scores",
+      "category": "EoRR",
+      "type": "bool",
+      "default": {{pref_eorr_team_scores|bool}}
+    },
+    {
+      "key": "eorr_display_victory",
+      "title": "Display Victory/Defeat",
+      "category": "EoRR",
+      "type": "bool",
+      "default": {{pref_eorr_victory|bool}}
+    },
+    {
       "key": "restrict_output_events",
       "title": "Restrict Output Events",
       "category": "Events",

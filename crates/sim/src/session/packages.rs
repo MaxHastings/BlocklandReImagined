@@ -30,6 +30,7 @@ pub(in crate::session) use brick_events::Follower;
 mod game_hooks;
 pub(super) mod copy_hooks;
 mod item_hooks;
+mod reports;
 mod settings;
 pub use settings::{AddOnSetting, MAX_ADDON_SETTINGS, SettingEdit, TeamEdit};
 pub(in crate::session) use settings::Editor;
@@ -340,6 +341,8 @@ pub(super) struct PackageHost {
     game_hooks: game_hooks::GameHooks,
     /// Values rules keep on bricks (`set_brick_field`).
     brick_fields: brick_fields::BrickFields,
+    /// Score reports to send and the columns games changed.
+    reports: reports::Reports,
     /// Every running Add-On's settings.
     settings: settings::Registry,
     copy_hooks: copy_hooks::CopyHooks,
@@ -679,6 +682,7 @@ impl Session {
             item_hooks: Default::default(),
             game_hooks: Default::default(),
             brick_fields: Default::default(),
+            reports: Default::default(),
             settings,
             copy_hooks: Default::default(),
             shares: Shares::new(scripts),
@@ -1970,6 +1974,8 @@ impl Session {
             } => self.package_drop_item(package, &item, position, velocity, paint, data, seconds),
             Op::RemoveDrop { drop } => self.package_remove_drop(package, drop),
             Op::NameDrop { drop, text, color } => self.package_name_drop(package, drop, text, color),
+            Op::ShowReport { player, report } => self.package_show_report(package, player, report),
+            Op::ReportColumn { game, change } => self.package_report_column(game, change),
             Op::WearImage {
                 player,
                 slot,
@@ -3533,6 +3539,7 @@ impl Session {
                 }
             }
         }
+        self.flush_reports();
         Ok(())
     }
 
