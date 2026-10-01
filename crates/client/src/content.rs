@@ -318,6 +318,11 @@ impl ContentPaths {
         )
     }
     /// The base vehicles pack merged with every other package's.
+    /// The bot kinds the enabled Add-Ons provide (`bots.json`): what a
+    /// vehicle spawn brick may make besides vehicles.
+    pub fn bot_kinds(&self) -> Result<Vec<bri_sim::bot_kind::BotKind>> {
+        bri_net::content_identity::bot_kinds_from(&self.bot_extras)
+    }
     pub fn vehicle_pack(&self) -> Result<bri_vehicles::Pack> {
         let mut parts = Vec::new();
         for (dir, abs) in &self.vehicle_extras {

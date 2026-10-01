@@ -199,7 +199,7 @@ impl Game {
         );
         s.set_spawn_points(vec![Vec3::new(0.0, 0.05, 0.0)]).unwrap();
         s.set_weapon_pack(weapons()).unwrap();
-        s.set_vehicle_pack(vehicles()).unwrap();
+        s.set_vehicle_pack(vehicles(), Vec::new()).unwrap();
         s.install_packages(add_ons(), None).unwrap();
         // "brick" doubles as a vehicle spawn brick that may hold the ball.
         s.set_tool_catalog(ToolCatalog {

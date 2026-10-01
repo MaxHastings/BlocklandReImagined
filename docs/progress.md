@@ -8490,3 +8490,23 @@ the game does: drain and note the trigger, follow control, claim the wheel;
 it fails on 1b2747e4 with the trigger dropped), and
 `runtime_input::wheel_goes_to_the_held_tool_while_it_takes_the_wheel` (no
 trigger, scrolls; trigger held, reels in whole notches; released, scrolls).
+## 2026-10-01: Blockhead Bots spawn in games the game itself hosts
+
+Max, v0.1.10: he could not spawn a Blockhead Bot. The game's own host (Start
+Game, Change Map, the save host) built its session without the bot kinds the
+enabled Add-Ons provide; only the dedicated server installed them. So the
+Vehicle list offered Blockhead Bot (the client's list reads the Add-On) but
+the brick made nothing. `Session::set_vehicle_pack` now takes the bot kinds
+with the vehicle definitions, so no host can install a spawn list without
+them; every host path passes `ContentPaths::bot_kinds()` or
+`content_identity::bot_kinds`. With the Add-On off the Vehicle list leaves
+the bot out, as before.
+A bot the server has no room for (16 bots, or a full server) now tells its
+builder in the centre of the screen, as a refused vehicle does
+(`bot_brain::a_bot_over_the_server_limit_tells_its_builder`).
+
+Tests: `add_on_join::bot_kinds_come_from_the_blockhead_bot_add_on_the_host_runs`
+(content-free: the repository's Add-On staged in a content root) and
+`add_on_join::a_host_with_the_blockhead_bot_on_spawns_bots_and_one_without_offers_none`
+(generated content: hosts with the Add-On on and off, loads a saved spawn
+brick, counts players). Not run here: the second needs generated content.

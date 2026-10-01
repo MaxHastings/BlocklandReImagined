@@ -63,7 +63,7 @@ impl SaveHost {
         let mut session = Session::new(simulation);
         session.set_weapon_pack(self.weapons.pack.clone())?;
         session.set_item_bounds(self.item_bounds.clone())?;
-        session.set_vehicle_pack(self.vehicles.clone())?;
+        session.set_vehicle_pack(self.vehicles.clone(), self.content.paths.bot_kinds()?)?;
         session.set_event_catalog(
             self.content.events.clone(),
             self.content
