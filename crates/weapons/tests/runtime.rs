@@ -1234,7 +1234,10 @@ fn explosion_debris_lowers_its_definitions(fx: &Fx) {
         if let Some(emitters) = field(d, "emitters") {
             assert_eq!(
                 spec.emitters,
-                emitters.split_whitespace().collect::<Vec<_>>(),
+                emitters
+                    .split_whitespace()
+                    .map(|n| format!("v20/emitter/{}", n.to_ascii_lowercase()))
+                    .collect::<Vec<_>>(),
                 "{explosion}"
             );
         }
@@ -1265,7 +1268,7 @@ fn explosion_debris_lowers_every_stock_debris_explosion() {
     );
     let tires = &debris["jeepexplosion"];
     assert_eq!(tires.model, "Add-Ons/Vehicle_Jeep/jeepTire.dts");
-    assert_eq!(tires.emitters, ["JeepTireDebrisTrailEmitter"]);
+    assert_eq!(tires.emitters, ["v20/emitter/jeeptiredebristrailemitter"]);
     assert_eq!(
         (tires.count, tires.theta, tires.launch_speed),
         (4, [40., 85.], 14.)
@@ -1274,7 +1277,7 @@ fn explosion_debris_lowers_every_stock_debris_explosion() {
     let sparks = &debris["tankshellexplosion"];
     assert_eq!((sparks.count, sparks.count_variance), (30, 10));
     assert_eq!((sparks.launch_speed, sparks.launch_variance), (140., 50.));
-    assert_eq!(sparks.emitters, ["rocketTrailEmitter"]);
+    assert_eq!(sparks.emitters, ["v20/emitter/rockettrailemitter"]);
     assert_eq!(
         (sparks.gravity, sparks.lifetime, sparks.fade),
         (0., 0.1, false)

@@ -3,7 +3,7 @@
 Kai's Melee Extended II (five more melee weapons, the chainsaw, the riot
 shield and three hidden easter-egg weapons) gets its port,
 `weapon_melee_extended_ii`, pinned to the Gate's real copy (sha256
-16ea8908…a697). On that copy, imported beside Melee Extended, the port
+cae20f11…c4e2). On that copy, imported beside Melee Extended, the port
 applies with all 47 cover patterns matching. The 7 calls it leaves
 unsupported are all preferences (`isFunction`, 3 `RTB_registerPref`,
 3 `TT_defaultIfUnset`) waiting for the Add-On settings seam. A CC0

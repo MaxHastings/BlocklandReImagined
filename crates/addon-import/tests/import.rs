@@ -843,11 +843,15 @@ datablock ParticleEmitterData(kitFlashEmitter)
 };
 datablock ParticleData(kitGlowParticle) { textureName = "./spark"; lifetimeMS = 300; };
 datablock ParticleEmitterData(kitGlowEmitter) { ejectionPeriodMS = 10; particles = "kitGlowParticle"; };
-datablock DebrisData(kitShellDebris) { shapeFile = "./shell.dts"; lifetime = 2; numBounces = 3; };
+datablock ParticleData(kitTrailParticle) { textureName = "base/data/particles/cloud"; lifetimeMS = 400; };
+datablock ParticleEmitterData(kitTrailEmitter) { ejectionPeriodMS = 20; particles = "kitTrailParticle"; };
+datablock ParticleData(kitStrayParticle) { textureName = "base/data/particles/cloud"; lifetimeMS = 400; };
+datablock ParticleEmitterData(kitStrayEmitter) { ejectionPeriodMS = 20; particles = "kitStrayParticle"; };
+datablock DebrisData(kitShellDebris) { shapeFile = "./shell.dts"; lifetime = 2; numBounces = 3; emitters = "kitTrailEmitter"; };
 datablock ExplosionData(kitBoomExplosion)
 {
    lifetimeMS = 300; soundProfile = kitFireSound;
-   emitter[0] = kitFlashEmitter; emitter[1] = kitGlowEmitter;
+   emitter[0] = kitFlashEmitter; emitter[1] = kitGlowEmitter; emitter[4] = kitStrayEmitter;
    particleEmitter = kitFlashEmitter; particleDensity = 12; particleRadius = 0.5;
    lightStartRadius = 3; lightEndRadius = 0; lightStartColor = "1 0.5 0";
    debris = kitShellDebris; debrisNum = 2;
@@ -957,6 +961,26 @@ datablock ShapeBaseImageData(kitScopeImage) { shapeFile = "./gun.dts"; stateName
     // And its debris.
     let debris = bri_weapons::debris::explosion_debris(&pack);
     assert!(debris.contains_key("kitboomexplosion"), "{debris:?}");
+    // Its pieces trail the Add-On's own emitter, converted for them.
+    let trail = id("emitter", "kittrailemitter");
+    assert_eq!(debris["kitboomexplosion"].emitters, vec![trail.clone()]);
+    assert!(pack.effects.emitters.iter().any(|e| e.id == trail));
+    let status = |name: &str| {
+        report
+            .datablocks
+            .iter()
+            .find(|d| d.name == name)
+            .map(|d| d.status.clone())
+            .unwrap_or_default()
+    };
+    assert_eq!(status("kitTrailEmitter"), "converted");
+    // An emitter only in a fifth explosion slot was refused as v20 loaded
+    // it, and so was its particle.
+    assert!(!boom.emitters.iter().any(|e| e.contains("kitstray")));
+    assert_eq!(
+        (status("kitStrayEmitter"), status("kitStrayParticle")),
+        ("consumed".to_owned(), "consumed".to_owned())
+    );
 
     // The kill icon it forgot to ship leaves its messages, not its kills.
     let round = &pack.damage_types["kitround"];

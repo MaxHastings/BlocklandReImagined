@@ -2683,10 +2683,39 @@ fn sounds_and_rest(cx: &mut Ctx) {
         ))
         .map_or(usize::MAX, |re| re.find_iter(&script_text).count())
     };
-    let used = |name: &str| mentions(name) > 1;
+    // An emitter written into an array slot past the engine's (an
+    // `ExplosionData`'s 4 `emitter`s, a `DebrisData`'s 2 `emitters`) was
+    // refused when the datablock loaded, so that mention draws nothing.
+    let mut past_slots: BTreeMap<String, usize> = BTreeMap::new();
+    for o in cx.owned.values() {
+        let (field, slots) = match o.d.class.to_ascii_lowercase().as_str() {
+            "explosiondata" => ("emitter[", 4),
+            "debrisdata" => ("emitters[", 2),
+            _ => continue,
+        };
+        for (key, value) in &o.fields {
+            if key
+                .strip_prefix(field)
+                .and_then(|r| r.strip_suffix(']'))
+                .and_then(|i| i.trim().parse::<usize>().ok())
+                .is_some_and(|i| i >= slots)
+            {
+                *past_slots
+                    .entry(literal(value).trim().to_ascii_lowercase())
+                    .or_default() += 1;
+            }
+        }
+    }
+    let past = |name: &str| {
+        past_slots
+            .get(&name.to_ascii_lowercase())
+            .copied()
+            .unwrap_or(0)
+    };
+    let used = |name: &str| mentions(name).saturating_sub(past(name)) > 1;
     // The particles each emitter nothing uses names: those mentions draw
     // nothing either.
-    let mut idle_mentions: BTreeMap<String, usize> = BTreeMap::new();
+    let mut idle_mentions = past_slots.clone();
     for (name, class, fields, ..) in &pending {
         if class == "particleemitterdata" && !used(name) && !fields.contains_key("uiname") {
             for particle in fields
@@ -2839,7 +2868,7 @@ fn sounds_and_rest(cx: &mut Ctx) {
                     },
                     "consumed",
                     vec![],
-                    Some("nothing uses it (or only an emitter nothing uses) and it has no uiName, so v20 never drew it".into()),
+                    Some("nothing uses it (or only an emitter nothing uses, or an array slot past the engine's) and it has no uiName, so v20 never drew it".into()),
                 )
             }
             "particledata" | "particleemitterdata" | "particleemitternodedata" => cx.mark(

@@ -1085,7 +1085,7 @@
       "port": "weapon_melee_extended_ii",
       "status": "partial",
       "sha256": [
-        "16ea89089e138521c905220283f176aef75e8e3ce56f2f2f030643198b3ea697"
+        "cae20f116fee91f3d5b10aba44ac89a73a2c72409cb8ce590c934e9f9803c4e2"
       ],
       "covers": {
         "TT_defaultIfUnset": {

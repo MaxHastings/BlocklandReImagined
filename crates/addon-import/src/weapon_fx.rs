@@ -386,6 +386,24 @@ pub(crate) fn weapon_effects(cx: &mut Ctx, pack: &mut bri_weapons::Pack) {
         }
         pack.effects.explosions.push(effect);
     }
+    // The trails of the debris its explosions and casings throw: its own
+    // emitters convert, and the pieces find them by name
+    // (`bri_weapons::debris`); others are the base game's.
+    let trails: BTreeSet<String> = bri_weapons::debris::explosion_debris(pack)
+        .into_values()
+        .chain(
+            bri_weapons::debris::casings(pack)
+                .into_values()
+                .map(|c| c.debris),
+        )
+        .flat_map(|d| d.emitters)
+        .map(|id| bri_weapons::effect_symbol(&id).to_owned())
+        .collect();
+    for name in trails {
+        if own(cx, &name, "ParticleEmitterData") {
+            emitter(cx, pack, &name);
+        }
+    }
     // An emitter with a uiName is one players put on bricks (the wrench's
     // emitter list), whether or not anything else uses it.
     let mut offered: Vec<String> = cx

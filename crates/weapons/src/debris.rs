@@ -16,7 +16,8 @@ pub struct DebrisSpec {
     pub name: String,
     /// Model's source path (`Add-Ons/Vehicle_Jeep/jeepTire.dts`), or empty.
     pub model: String,
-    /// Trail emitters by name (`emitters`).
+    /// Trail emitter ids (`emitters`, at most 2): the pack's own by name,
+    /// else the base game's (`v20/emitter/<name>`).
     pub emitters: Vec<String>,
     /// `debrisNum` and `debrisNumVariance`.
     pub count: u32,
@@ -60,6 +61,8 @@ fn text(v: &str) -> &str {
 /// datablocks do.
 struct Fields<'a> {
     by_name: BTreeMap<String, &'a Definition>,
+    /// The pack's own emitters by lower-case name.
+    emitters: BTreeMap<String, &'a str>,
 }
 impl<'a> Fields<'a> {
     fn new(pack: &'a Pack) -> Self {
@@ -68,6 +71,17 @@ impl<'a> Fields<'a> {
                 .definitions
                 .iter()
                 .map(|d| (d.name.to_ascii_lowercase(), d))
+                .collect(),
+            emitters: pack
+                .effects
+                .emitters
+                .iter()
+                .map(|e| {
+                    (
+                        crate::effect_symbol(&e.id).to_ascii_lowercase(),
+                        e.id.as_str(),
+                    )
+                })
                 .collect(),
         }
     }
@@ -119,6 +133,27 @@ impl<'a> Fields<'a> {
         };
         [x, z, -y]
     }
+    /// Its trail emitters' ids: `emitters = "a b"` or `emitters[0]` and
+    /// `emitters[1]` (Torque's 2 slots; later ones never load).
+    fn trails(&self, debris: &Definition) -> Vec<String> {
+        let names: Vec<String> = match self.field(debris, "emitters") {
+            Some(v) => v.split_whitespace().map(str::to_owned).collect(),
+            None => (0..2)
+                .filter_map(|i| self.field(debris, &format!("emitters[{i}]")))
+                .filter(|v| !v.is_empty())
+                .collect(),
+        };
+        names
+            .iter()
+            .take(2)
+            .map(|n| {
+                let n = n.to_ascii_lowercase();
+                self.emitters
+                    .get(&n)
+                    .map_or_else(|| format!("v20/emitter/{n}"), |id| (*id).to_owned())
+            })
+            .collect()
+    }
     /// A `DebrisData` with the explosion that throws it, or on its own (a
     /// casing: the explosion's fields keep their defaults).
     fn debris(&self, debris: &Definition, e: Option<&Definition>) -> DebrisSpec {
@@ -145,12 +180,7 @@ impl<'a> Fields<'a> {
         DebrisSpec {
             name: debris.name.clone(),
             model,
-            emitters: self
-                .field(debris, "emitters")
-                .unwrap_or_default()
-                .split_whitespace()
-                .map(str::to_owned)
-                .collect(),
+            emitters: self.trails(debris),
             count: explosion("debrisnum", 1.0).clamp(0.0, 1000.0) as u32,
             count_variance: explosion("debrisnumvariance", 0.0).clamp(0.0, 1000.0) as u32,
             theta: [
