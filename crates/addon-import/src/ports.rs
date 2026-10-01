@@ -100,21 +100,24 @@ pub struct Port {
     /// fields merge over them, and its `scripts` follow theirs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub include: Vec<String>,
-    /// What the port carries out that no reader reads from the copy: a
-    /// function (`WeaponImage::TT_canFire`), a top-level call
-    /// (`call:TT_registerAmmoType`), a datablock the game has no class
-    /// for (`datablock:ShortRifleRaycastTracer`) or an RTB preference the
-    /// game carries out with no setting (`pref:$Pref::Server::TT::X`, a
-    /// bug fix it always makes) to how the game does it
-    /// now (an engine seam, the port's rules). The import report counts it as ported when
-    /// the copy has it. Say only what the game really does.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub handles: BTreeMap<String, String>,
     /// Files the port adds to the import (`ports/<port>/files/`) that are
     /// content the import provides, to their kind (`binds.json` →
     /// `binds`). `{{name}}` in them is filled in, as in the rules.
     #[serde(default)]
     pub provides: BTreeMap<String, String>,
+    /// What the port carries out that no reader reads from the copy: a
+    /// function (`WeaponImage::TT_canFire`) or a top-level call
+    /// (`call:TT_registerAmmoType`) to how the game does it now (an engine
+    /// seam, the port's rules). The import report counts it as ported when
+    /// the copy has it. Say only what the game really does. An RTB
+    /// preference the game carries out with no setting (a bug fix it always
+    /// makes) is `pref:$Pref::Server::TT::X`. Other findings
+    /// the importer could not convert are named as the report spells them,
+    /// by kind: `file:client.cs`, `new:ScriptGroup` (an object made at
+    /// load), `set:MessageBoxYesNoDlg.yesCallBack` (an object changed at
+    /// load) and `datablock:ND_SelectionBoxOuter`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub handles: BTreeMap<String, String>,
     /// Datablocks of the Add-On its `datablocks.cs` declares in their
     /// place: ones the Add-On makes at run time under a name the importer
     /// cannot read (Slayer's countdown voices, one `slayerSound` renamed in
@@ -125,8 +128,7 @@ pub struct Port {
 
 /// What a port accounts for, by lower-case function (`pistolimage::onfire`)
 /// or top-level call (`call:tt_registerammotype`): how each is carried out,
-/// from its readers ([`Port::shots`], [`Port::scripts`], tables) and its
-/// [`Port::handles`].
+/// from its readers and its [`Port::handles`].
 pub type Handled = BTreeMap<String, BTreeSet<String>>;
 
 /// Records that `how` carries out `what` ([`Handled`]).
@@ -726,6 +728,9 @@ fn try_apply(
     applied.values = capture(e, bodies)?;
     let port = ports.port(e)?;
     applied.notes = port.notes.clone();
+    for (what, how) in &port.handles {
+        handle(&mut applied.handled, what, how);
+    }
     applied.replaces = port.replaces.clone();
     // What every port may use besides the values its patterns read.
     let mut values = applied.values.clone();

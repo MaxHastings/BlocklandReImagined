@@ -2,13 +2,9 @@
 //! respawn) under the LAN, minigame and ownership rules of
 //! `ProjectileData::onExplode`; the hammer deletes them for good; and every
 //! brick death is announced for client debris. See docs/audits/brick-damage.md.
-use bri_content::{
-    brick::Brick as Mesh,
-    collision::{CollisionBody, Part},
-};
 use bri_minigames::Settings;
 use bri_sim::{
-    definitions::{Definition, Definitions},
+    definitions::{Definitions, Special},
     player::{MoveInput, PlayerState, PlayerTuning},
     presentation::CueKind,
     session::{ActionAim, Command, MiniGameRequest, Reply, Session},
@@ -18,49 +14,16 @@ use bri_world::{ContentRef, EventRow, EventTarget, EventValue, World, authority:
 use glam::Vec3;
 use rapier3d::prelude::*;
 mod common;
-use common::{move_sequence, swing, weapon_pack};
+use common::*;
 
 const HZ: u64 = bri_weapons::TICK_HZ as u64;
-const ROCKET: &str = "v20.weapon.rocketlauncheritem";
-const HAMMER: &str = "v20.weapon.hammeritem";
+const HAMMER: &str = bri_weapons::testing::HAMMER;
 
 fn session() -> Session {
-    let mesh = Mesh {
-        schema_version: 1,
-        id: "brick".into(),
-        footprint_studs: [2, 2],
-        height_plates: 3,
-        attachment_rows: vec!["bb".into(); 6],
-        collision_boxes: vec![],
-        needs_external_collision: false,
-        coverage: None,
-        quads: vec![],
-    };
-    let collision = CollisionBody {
-        id: "brick".into(),
-        parts: vec![Part::Box {
-            center: [0.0; 3],
-            size: [1.0, 0.6, 1.0],
-        }],
-    };
-    let shape = bri_physics::content::collider(&collision)
-        .unwrap()
-        .build()
-        .shared_shape()
-        .clone();
     let definitions = Definitions {
         entries: [(
             "brick".into(),
-            Definition {
-                mesh,
-                collision,
-                shape,
-                indestructible: false,
-                special: Default::default(),
-                reflection: None,
-                link: None,
-                glass: [0.0; 4],
-            },
+            bri_sim::testing::definition("brick", [2, 2], 3, Special::None, false),
         )]
         .into(),
     };
@@ -148,10 +111,10 @@ fn aim_at(s: &mut Session, owner: u64, target: Vec3) -> ActionAim {
     aim
 }
 
-fn with_weapons(lan: bool) -> Session {
+fn with_weapons(f: &Fixture, lan: bool) -> Session {
     let mut s = session();
     s.set_lan_host(lan);
-    s.set_weapon_pack(weapon_pack()).unwrap();
+    s.set_weapon_pack(f.weapons.clone()).unwrap();
     s
 }
 
@@ -200,8 +163,8 @@ impl Blast {
     }
 }
 
-fn fire(shot: Rocket) -> Blast {
-    let mut s = with_weapons(shot.lan);
+fn fire(f: &Fixture, shot: Rocket) -> Blast {
+    let mut s = with_weapons(f, shot.lan);
     let shooter = s
         .join(
             "Shooter".into(),
@@ -229,13 +192,14 @@ fn fire(shot: Rocket) -> Blast {
     }
     // The default minigame loadout carries the rocket launcher; outside a
     // minigame the shooter picks one up.
+    let rocket = f.item(Item::Rocket);
     let slot = match s.tool_inventories()[&shooter]
         .slots
         .iter()
-        .position(|s| s.as_deref() == Some(ROCKET))
+        .position(|s| s.as_deref() == Some(rocket))
     {
         Some(slot) => slot,
-        None => s.give_item(shooter, ROCKET).unwrap(),
+        None => s.give_item(shooter, rocket).unwrap(),
     };
     s.command(shooter, 4, Command::EquipTool { slot: Some(slot) })
         .unwrap();
@@ -269,10 +233,12 @@ fn fire(shot: Rocket) -> Blast {
     Blast { s, bricks, thrown }
 }
 
-fn brick_damage(on: bool) -> Option<Settings> {
+/// The fixture's default minigame, its rocket launcher in the loadout,
+/// with brick damage on or off.
+fn brick_damage(f: &Fixture, on: bool) -> Option<Settings> {
     Some(Settings {
         brick_damage: on,
-        ..Settings::default()
+        ..f.minigame_settings()
     })
 }
 
@@ -287,14 +253,13 @@ fn respawned(blast: &mut Blast, within_ticks: u64) -> Option<u64> {
     None
 }
 
-#[test]
-#[ignore = "requires the converted native weapons pack"]
-fn rocket_knocks_bricks_out_in_a_brick_damage_minigame_and_they_respawn() {
+on_both! {
+fn rocket_knocks_bricks_out_in_a_brick_damage_minigame_and_they_respawn(f: &Fixture) {
     for lan in [false, true] {
-        let mut blast = fire(Rocket {
+        let mut blast = fire(f, Rocket {
             lan,
             bystander_bricks: false,
-            game: brick_damage(true),
+            game: brick_damage(f, true),
             drop_in_flight: false,
         });
         blast.assert_knocked_out();
@@ -340,37 +305,37 @@ fn rocket_knocks_bricks_out_in_a_brick_damage_minigame_and_they_respawn() {
         );
     }
 }
+}
 
-#[test]
-#[ignore = "requires the converted native weapons pack"]
-fn rocket_leaves_bricks_alone_in_a_minigame_with_brick_damage_off() {
+on_both! {
+fn rocket_leaves_bricks_alone_in_a_minigame_with_brick_damage_off(f: &Fixture) {
     for lan in [false, true] {
         for bystander_bricks in [false, true] {
-            fire(Rocket {
+            fire(f, Rocket {
                 lan,
                 bystander_bricks,
-                game: brick_damage(false),
+                game: brick_damage(f, false),
                 drop_in_flight: false,
             })
             .assert_untouched();
         }
     }
 }
+}
 
+on_both! {
 /// Outside minigames, single player and LAN hosts break anyone's bricks
 /// (`onExplode` checks nothing else under `$Server::LAN`); internet servers
 /// only the shooter's own. They come back after the server's brick respawn
 /// time, 30 s by default (`$Pref::Server::BrickRespawnTime`).
-#[test]
-#[ignore = "requires the converted native weapons pack"]
-fn rocket_outside_a_minigame_follows_v20_lan_and_ownership_rules() {
+fn rocket_outside_a_minigame_follows_v20_lan_and_ownership_rules(f: &Fixture) {
     for (lan, bystander_bricks, breaks) in [
         (true, false, true),
         (true, true, true),
         (false, false, true),
         (false, true, false),
     ] {
-        let mut blast = fire(Rocket {
+        let mut blast = fire(f, Rocket {
             lan,
             bystander_bricks,
             game: None,
@@ -390,48 +355,48 @@ fn rocket_outside_a_minigame_follows_v20_lan_and_ownership_rules() {
         );
     }
 }
+}
 
-#[test]
-#[ignore = "requires the converted native weapons pack"]
-fn lan_hosts_let_minigame_rockets_break_anyones_bricks_like_v20() {
-    fire(Rocket {
+on_both! {
+fn lan_hosts_let_minigame_rockets_break_anyones_bricks_like_v20(f: &Fixture) {
+    fire(f, Rocket {
         lan: true,
         bystander_bricks: true,
-        game: brick_damage(true),
+        game: brick_damage(f, true),
         drop_in_flight: false,
     })
     .assert_knocked_out();
     // Internet servers keep miniGameCanDamage's ownership rule.
-    fire(Rocket {
+    fire(f, Rocket {
         lan: false,
         bystander_bricks: true,
-        game: brick_damage(true),
+        game: brick_damage(f, true),
         drop_in_flight: false,
     })
     .assert_untouched();
 }
+}
 
+on_both! {
 /// `ProjectileData::onExplode` returns for 3 s after the shooter's F8 drop
 /// inside a minigame, so a rocket already in flight breaks nothing.
-#[test]
-#[ignore = "requires the converted native weapons pack"]
-fn a_rocket_in_flight_breaks_nothing_after_its_shooter_drops_in_a_minigame() {
-    fire(Rocket {
+fn a_rocket_in_flight_breaks_nothing_after_its_shooter_drops_in_a_minigame(f: &Fixture) {
+    fire(f, Rocket {
         lan: true,
         bystander_bricks: false,
-        game: brick_damage(true),
+        game: brick_damage(f, true),
         drop_in_flight: true,
     })
     .assert_untouched();
 }
+}
 
+on_both! {
 /// The hammer deletes bricks for real (`killBrick`), inside a minigame
 /// with brick damage off too: it asks trust, never the minigame.
-#[test]
-#[ignore = "requires the converted native weapons pack"]
-fn hammer_deletes_bricks_for_good_whatever_the_minigame_says() {
-    for game in [None, brick_damage(false)] {
-        let mut s = with_weapons(true);
+fn hammer_deletes_bricks_for_good_whatever_the_minigame_says(f: &Fixture) {
+    for game in [None, brick_damage(f, false)] {
+        let mut s = with_weapons(f, true);
         let owner = s
             .join("Builder".into(), Vec3::new(0.0, 0.05, 0.0), false)
             .unwrap();
@@ -471,20 +436,15 @@ fn hammer_deletes_bricks_for_good_whatever_the_minigame_says() {
         assert!(!s.simulation().state().bricks.contains_key(&id));
     }
 }
+}
 
+on_both! {
 /// `fakeKillBrick` is an event output: it needs no minigame and ignores
 /// brick damage, and the brick returns after its own time (0 to 300 s).
-#[test]
-#[ignore = "requires the converted native event catalog"]
-fn fake_kill_brick_ignores_brick_damage_and_respawns_on_its_own_time() {
-    for game in [None, brick_damage(false)] {
-        let mut s = with_weapons(false);
-        let catalog = bri_events::Catalog::load(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../content/events-pack-002/catalog.json"),
-        )
-        .unwrap();
-        s.set_event_catalog(catalog, Vec::new()).unwrap();
+fn fake_kill_brick_ignores_brick_damage_and_respawns_on_its_own_time(f: &Fixture) {
+    for game in [None, brick_damage(f, false)] {
+        let mut s = with_weapons(f, false);
+        s.set_event_catalog(f.events(), Vec::new()).unwrap();
         let owner = s
             .join("Builder".into(), Vec3::new(0.0, 0.05, 0.0), false)
             .unwrap();
@@ -540,6 +500,7 @@ fn fake_kill_brick_ignores_brick_damage_and_respawns_on_its_own_time() {
         );
     }
 }
+}
 
 /// Planting passes the same build gate as painting and the wand: a mini-game
 /// with building off refuses it, and leaving the mini-game allows it again.
@@ -581,161 +542,7 @@ fn planting_obeys_the_minigame_building_rule() {
     plant(&mut s, builder, 5, [2.0, 0.3, -4.0]);
 }
 
-const SYNTHETIC_ROCKET: &str = "test:weapon/rocketitem";
-const SYNTHETIC_IMAGE: &str = "test:image/rocketimage";
-const SYNTHETIC_PROJECTILE: &str = "test:projectile/rocket";
-
-/// A content-free rocket launcher whose blast reaches 30 units.
-fn synthetic_rocket_pack() -> bri_weapons::Pack {
-    let state = |name: &str, ticks, script: &str| bri_weapons::State {
-        name: name.into(),
-        ticks,
-        wait: true,
-        allow_change: true,
-        script: script.into(),
-        ..Default::default()
-    };
-    let states = vec![
-        bri_weapons::State {
-            timeout: Some(1),
-            ..state("Activate", 0, "")
-        },
-        bri_weapons::State {
-            down: Some(2),
-            ..state("Ready", 0, "")
-        },
-        bri_weapons::State {
-            timeout: Some(3),
-            ..state("Fire", 60, "onFire")
-        },
-        bri_weapons::State {
-            timeout: Some(1),
-            ..state("Reload", 0, "")
-        },
-    ];
-    let image = bri_weapons::Image {
-        id: SYNTHETIC_IMAGE.into(),
-        name: "rocketLauncherImage".into(),
-        model: String::new(),
-        projectile: Some(SYNTHETIC_PROJECTILE.into()),
-        mount_point: 0,
-        offset: [0.; 3],
-        eye_offset: [0.; 3],
-        source_rotation_degrees: [0.; 3],
-        correct_muzzle: false,
-        melee: false,
-        color: [1.; 4],
-        color_shift: false,
-        arm_ready: true,
-        casing: String::new(),
-        min_shot_ticks: 0,
-        command: Default::default(),
-        commands: Default::default(),
-        shot: None,
-        eye_rotation: [0.0; 3],
-        zoom: None,
-        crosshair: true,
-        follow_arm: false,
-        hide_nodes: Vec::new(),
-        both_arms: false,
-        paint_tint: false,
-        left_image: None,
-        magazine: None,
-        volleys: vec![],
-        last_shot: None,
-        state_shots: Default::default(),
-        cook: None,
-        guard: None,
-        rope: None,
-        light: None,
-        paint_picker: false,
-        scripts: Default::default(),
-        states,
-    };
-    let item = bri_weapons::Item {
-        id: SYNTHETIC_ROCKET.into(),
-        name: "rocketLauncherItem".into(),
-        ui_name: "Rocket L.".into(),
-        image: SYNTHETIC_IMAGE.into(),
-        model: String::new(),
-        icon: String::new(),
-        can_drop: true,
-        sport: false,
-        ..Default::default()
-    };
-    let projectile = bri_weapons::ProjectileDef {
-        id: SYNTHETIC_PROJECTILE.into(),
-        name: "rocketLauncherProjectile".into(),
-        model: String::new(),
-        speed: 40.,
-        inherit: 0.,
-        gravity: 0.,
-        lifetime_ticks: 480,
-        fade_ticks: 0,
-        arm_ticks: 0,
-        ballistic: false,
-        elasticity: 0.,
-        friction: 0.,
-        damage: 0.,
-        damage_type: String::new(),
-        radius_damage_type: String::new(),
-        impulse: 0.,
-        vertical: 0.,
-        explode_player: true,
-        explode_death: true,
-        collide_players: true,
-        explosion: bri_weapons::Explosion {
-            effect: String::new(),
-            damage: 0.,
-            radius: 10.,
-            impulse: 0.,
-            impulse_radius: 0.,
-            impulse_vertical: 0.,
-            burn_seconds: 0.,
-        },
-        brick: bri_weapons::BrickImpact {
-            radius: 30.,
-            direct: true,
-            force: 20.,
-            max_volume: 1000.,
-            max_floating_volume: 1000.,
-        },
-        bounce_effect: String::new(),
-        stick_effect: String::new(),
-        blood_effect: String::new(),
-        bounce_angle: 0.,
-        min_stick_speed: 0.,
-        trail: String::new(),
-        sound: String::new(),
-        light_radius: 0.,
-        light_color: [0.; 3],
-        sport_image: None,
-        rest_speed: 0.,
-        max_bounces: 0,
-        children: Vec::new(),
-        aura: None,
-        slow: None,
-        fixed_damage: false,
-    };
-    let pack = bri_weapons::Pack {
-        effects: Default::default(),
-        schema_version: bri_weapons::SCHEMA,
-        id: "test.rockets".into(),
-        items: [(SYNTHETIC_ROCKET.to_string(), item)].into(),
-        images: [(SYNTHETIC_IMAGE.to_string(), image)].into(),
-        projectiles: [(SYNTHETIC_PROJECTILE.to_string(), projectile)].into(),
-        external_projectiles: Default::default(),
-        damage_types: Default::default(),
-        explosions: Default::default(),
-        sounds: Default::default(),
-        definitions: vec![],
-        resources: vec![],
-        diagnostics: vec![],
-        bindings: vec![],
-    };
-    pack.validate().unwrap();
-    pack
-}
+use bri_weapons::testing::{ROCKET_ITEM, ROCKET_PROJECTILE};
 
 /// Fire one synthetic rocket whose blast reaches `brick_radius` into 160
 /// bricks; how many it knocks out.
@@ -752,9 +559,9 @@ fn rocket_into_160_bricks(brick_radius: f32) -> usize {
 fn rocket_into_160(brick_radius: f32) -> (Session, Vec<u64>) {
     let mut s = session();
     s.set_lan_host(true);
-    let mut pack = synthetic_rocket_pack();
+    let mut pack = bri_weapons::testing::pack();
     pack.projectiles
-        .get_mut(SYNTHETIC_PROJECTILE)
+        .get_mut(ROCKET_PROJECTILE)
         .unwrap()
         .brick
         .radius = brick_radius;
@@ -775,7 +582,7 @@ fn rocket_into_160(brick_radius: f32) -> (Session, Vec<u64>) {
             }
         }
     }
-    let slot = s.give_item(shooter, SYNTHETIC_ROCKET).unwrap();
+    let slot = s.give_item(shooter, ROCKET_ITEM).unwrap();
     seq += 1;
     s.command(shooter, seq, Command::EquipTool { slot: Some(slot) })
         .unwrap();
@@ -846,7 +653,7 @@ fn a_direct_hit_knocks_out_only_the_brick_it_hits() {
 fn rocket_into_loaded_save(ownership: bool, admin_shooter: bool) -> usize {
     let mut s = session();
     s.set_lan_host(false);
-    s.set_weapon_pack(synthetic_rocket_pack()).unwrap();
+    s.set_weapon_pack(bri_weapons::testing::pack()).unwrap();
     let host = s
         .join("Host".into(), Vec3::new(0.0, 0.05, 0.0), true)
         .unwrap();
@@ -895,7 +702,7 @@ fn rocket_into_loaded_save(ownership: bool, admin_shooter: bool) -> usize {
         }),
     )
     .unwrap();
-    let slot = s.give_item(shooter, SYNTHETIC_ROCKET).unwrap();
+    let slot = s.give_item(shooter, ROCKET_ITEM).unwrap();
     s.command(shooter, 3, Command::EquipTool { slot: Some(slot) })
         .unwrap();
     for _ in 0..120 {

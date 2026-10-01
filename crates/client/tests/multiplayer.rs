@@ -1,7 +1,8 @@
 //! Two headless clients on one Internet host over loopback: name tags,
 //! minigame listing, trust invitations and admin Change Map. Never creates a
-//! window or OS input; the host binds UDP 28000/28050.
-//! Run: cargo test -p bri-client --test multiplayer --release -- --ignored --nocapture
+//! window or OS input; the host binds a free test port. Runs on the made-up
+//! content root; the ignored variant runs on the generated v20 content
+//! (`--release -- --ignored`, BRI_CONTENT or content/).
 use anyhow::{Context, Result, bail, ensure};
 use bri_client::{
     app::App,
@@ -16,8 +17,14 @@ use bri_ui::{
 use std::{
     path::Path,
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
+
+#[macro_use]
+mod support;
+use support::content_root::ContentRoot;
+
+synthetic_and_content!(ContentRoot: two_clients_see_names_minigames_trust_and_follow_a_map_change);
 
 const SIZE: (u32, u32) = (960, 720);
 const BEDROOM: &str = "v20/add-ons/map_bedroom/bedroom.mis";
@@ -164,7 +171,6 @@ fn player_row<'a>(app: &'a App, name: &str) -> Option<&'a PlayerRow> {
     app.ui.core.players.iter().find(|p| p.name == name)
 }
 
-
 /// Host and discovery ports for this test process, away from the game's
 /// 28000/28050 so a real game on this machine never collides with it.
 fn use_test_ports() -> u16 {
@@ -172,7 +178,8 @@ fn use_test_ports() -> u16 {
         .and_then(|s| s.local_addr())
         .map(|a| a.port())
         .expect("a free UDP port");
-    // SAFETY: set before any host or join starts; this binary runs one test.
+    // SAFETY: set before any host or join starts, under the GPU turn, which
+    // every test here holding a port takes first.
     unsafe {
         std::env::set_var("BRI_TEST_HOST_PORT", port.to_string());
         std::env::set_var("BRI_TEST_DISCOVERY_PORT", "0");
@@ -180,40 +187,39 @@ fn use_test_ports() -> u16 {
     port
 }
 
-#[test]
-#[ignore = "converted native content, loopback UDP 28000/28050 and an offscreen GPU; no window"]
-fn two_clients_see_names_minigames_trust_and_follow_a_map_change() -> Result<()> {
+fn two_clients_see_names_minigames_trust_and_follow_a_map_change(f: &ContentRoot) -> Result<()> {
+    let gpu = support::gpu::turn().context("offscreen adapter")?;
     let port = use_test_ports();
-    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let artifact = workspace.join("artifacts/native-multiplayer");
-    let stamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-    let load = |name: &str| -> Result<App> {
-        let state = artifact.join(format!("state-{name}-{stamp}"));
-        std::fs::create_dir_all(&state)?;
-        let mut settings = App::load(&workspace.join("content"), &state, SIZE)?;
+    let artifact = f.out("native-multiplayer")?;
+    let load = |name: &str, state: &Path| -> Result<App> {
+        let mut settings = App::load(&f.root, state, SIZE)?;
         settings.ui.core.pop(ScreenId::DefaultControls);
         settings.ui.core.settings.avatar.lan_name = name.into();
         Ok(settings)
     };
-    let mut host = load("Hosty")?;
-    let mut guest = load("Guesty")?;
-    let gpu = Headless::new().context("offscreen adapter")?;
+    let (host_state, guest_state) = (f.state()?, f.state()?);
+    let mut host = load("Hosty", host_state.path())?;
+    let mut guest = load("Guesty", guest_state.path())?;
     let mut ui_renderer = UiRenderer::new(&gpu.device, &gpu.queue);
     host.gpu_ready(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm)?;
     guest.gpu_ready(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm)?;
 
     host.ui.core.request(UiAction::HostGame {
         map: BEDROOM.into(),
-        mode: ServerMode::Internet, game_mode: None,
+        mode: ServerMode::Internet,
+        game_mode: None,
         max_players: 8,
         server_name: "Multiplayer probe".into(),
         password: String::new(),
         admin_password: String::new(),
         super_admin_password: String::new(),
     });
-    until(&mut [&mut host], "host in game", Duration::from_secs(90), |a| {
-        in_game(a[0])
-    })?;
+    until(
+        &mut [&mut host],
+        "host in game",
+        Duration::from_secs(90),
+        |a| in_game(a[0]),
+    )?;
     request(
         &mut guest,
         UiAction::JoinServer {
@@ -233,23 +239,47 @@ fn two_clients_see_names_minigames_trust_and_follow_a_map_change() -> Result<()>
         &mut [&mut host, &mut guest],
         "join announcement",
         Duration::from_secs(5),
-        |a| a[0].ui.core.chat.lines.iter().any(|l| l.text.contains("Guesty connected.")),
+        |a| {
+            a[0].ui
+                .core
+                .chat
+                .lines
+                .iter()
+                .any(|l| l.text.contains("Guesty connected."))
+        },
     )
     .with_context(|| {
         format!(
             "host chat {:?}, players {:?}",
-            host.ui.core.chat.lines.iter().map(|l| &l.text).collect::<Vec<_>>(),
-            host.ui.core.players.iter().map(|p| &p.name).collect::<Vec<_>>()
+            host.ui
+                .core
+                .chat
+                .lines
+                .iter()
+                .map(|l| &l.text)
+                .collect::<Vec<_>>(),
+            host.ui
+                .core
+                .players
+                .iter()
+                .map(|p| &p.name)
+                .collect::<Vec<_>>()
         )
     })?;
 
     // Name tags: face the guest toward the host and render with the HUD.
     let (from, to) = {
         let view = guest.network_view().unwrap();
-        (view.poses[&guest_id].player.feet, view.poses[&host_id].player.feet)
+        (
+            view.poses[&guest_id].player.feet,
+            view.poses[&host_id].player.feet,
+        )
     };
     let yaw = (to[0] - from[0]).atan2(-(to[2] - from[2]));
-    request(&mut guest, UiAction::Game(GameAction::Look { yaw, pitch: 0.0 }))?;
+    request(
+        &mut guest,
+        UiAction::Game(GameAction::Look { yaw, pitch: 0.0 }),
+    )?;
     until(
         &mut [&mut host, &mut guest],
         "guest scene ready",
@@ -266,19 +296,19 @@ fn two_clients_see_names_minigames_trust_and_follow_a_map_change() -> Result<()>
     );
     ensure!(!tags.iter().any(|t| t.text == "Guesty"), "Own name shown");
 
-    // Minigame listing reaches the other client's Join Mini-Game list.
-    request(
-        &mut host,
-        UiAction::CreateMiniGame {
-            color: 2,
-            rules: MiniGameRules {
-                title: "Probe Deathmatch".into(),
-                respawn_seconds: 5,
-                brick_respawn_seconds: 30,
-                ..Default::default()
-            },
+    // Minigame listing reaches the other client's Join Mini-Game list. The
+    // loadout keeps only the default items this content offers, as the
+    // Create Mini-Game screen does.
+    let rules = support::minigame::offered(
+        &host,
+        MiniGameRules {
+            title: "Probe Deathmatch".into(),
+            respawn_seconds: 5,
+            brick_respawn_seconds: 30,
+            ..Default::default()
         },
-    )?;
+    );
+    request(&mut host, UiAction::CreateMiniGame { color: 2, rules })?;
     until(
         &mut [&mut host, &mut guest],
         "minigame in guest's list",
@@ -305,7 +335,13 @@ fn two_clients_see_names_minigames_trust_and_follow_a_map_change() -> Result<()>
         Duration::from_secs(10),
         |a| player_row(a[0], "Guesty").is_some_and(|p| p.trust == "-" && p.bl_id.is_some()),
     )?;
-    request(&mut host, UiAction::TrustInvite { target: guest_id, level: 2 })?;
+    request(
+        &mut host,
+        UiAction::TrustInvite {
+            target: guest_id,
+            level: 2,
+        },
+    )?;
     until(
         &mut [&mut host, &mut guest],
         "trust invitation",
@@ -349,7 +385,10 @@ fn two_clients_see_names_minigames_trust_and_follow_a_map_change() -> Result<()>
         |a| a[0].ui.core.admin.maps.iter().any(|m| m.id == SLATE),
     )?;
     host.ui.core.pop(ScreenId::AdminMaps);
-    request(&mut host, UiAction::Admin(AdminAction::ChangeMap { map: SLATE.into() }))?;
+    request(
+        &mut host,
+        UiAction::Admin(AdminAction::ChangeMap { map: SLATE.into() }),
+    )?;
     until(
         &mut [&mut host, &mut guest],
         "guest shows the loading screen",
@@ -432,7 +471,10 @@ fn two_clients_see_names_minigames_trust_and_follow_a_map_change() -> Result<()>
     )?;
     let frame = capture(&mut guest, &gpu, &mut ui_renderer)?;
     save(&artifact.join("guest-rejoined-slate.png"), &frame)?;
-    println!("rejoined presented {:?}", guest.presented_local().map(|p| p.feet));
+    println!(
+        "rejoined presented {:?}",
+        guest.presented_local().map(|p| p.feet)
+    );
     println!("artifacts: {}", artifact.display());
     Ok(())
 }

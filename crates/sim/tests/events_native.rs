@@ -14,7 +14,7 @@ fn json(path: &Path) -> anyhow::Result<serde_json::Value> {
 }
 
 #[test]
-#[ignore = "requires the converted native worlds, event catalog and content packs"]
+#[ignore = "requires generated v20 content"]
 fn vanilla_save_events_install_and_run() -> anyhow::Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let content = root.join("content");

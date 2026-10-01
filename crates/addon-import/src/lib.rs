@@ -1227,7 +1227,13 @@ fn references(cx: &mut Ctx) {
                             (false, false) => "; no reference install or installed game given",
                         }
                     ),
-                    case_only.then(|| "matches a member by case only".into()),
+                    if case_only {
+                        Some("matches a member by case only".into())
+                    } else {
+                        (base == "explosionshape").then(|| {
+                            "unless an enabled Add-On provides that file, the explosion shows without a shape, as Torque found no file there".into()
+                        })
+                    },
                 );
             }
             continue;
@@ -1862,8 +1868,11 @@ fn presentation(cx: &mut Ctx, pack: &bri_weapons::Pack, weapons_sha256: &str) ->
             match found {
                 Some(t) => bindings.push(t),
                 None => {
+                    // Torque drew a material whose bitmap it could not find
+                    // untextured (white, then the image's colour shift), and
+                    // kept the rest of the model.
                     cx.report.diagnostics.push(format!(
-                        "presentation: {key} material {} has no texture in its folder or any above it; drawn untextured, as v20 drew it",
+                        "presentation: {key} material {} has no texture; drawn plain white, as Torque drew it",
                         m.name
                     ));
                     bindings.push(white_texture(cx, &mut textures)?);
@@ -1987,32 +1996,30 @@ fn presentation(cx: &mut Ctx, pack: &bri_weapons::Pack, weapons_sha256: &str) ->
     Ok(())
 }
 
-/// A 0.2 unit cube with one white material, and its 1x1 white PNG.
+/// The plain white texture (`placeholder:white`) this package's
+/// presentation draws untextured materials and placeholder cubes with,
+/// written once.
+fn white_texture(cx: &mut Ctx, textures: &mut serde_json::Map<String, serde_json::Value>) -> Result<String> {
+    const KEY: &str = "placeholder:white";
+    if !textures.contains_key(KEY) {
+        let (_, white) = placeholder();
+        let rel = format!("textures/{}.png", &hash(&white)[..24]);
+        cx.write(&format!("assets/{rel}"), &white)?;
+        textures.insert(
+            KEY.into(),
+            json!({ "file": rel, "sha256": hash(&white), "width": 1, "height": 1, "source": "placeholder" }),
+        );
+    }
+    Ok(KEY.into())
+}
+
 /// Where Torque looked for a shape's material texture: the shape's folder,
 /// then each folder above it.
 fn texture_folders(folder: &str) -> impl Iterator<Item = &str> {
     std::iter::successors(Some(folder), |d| d.rsplit_once('/').map(|(up, _)| up))
 }
 
-/// The 1x1 white texture an untextured material or a placeholder model
-/// draws with, written once.
-fn white_texture(
-    cx: &mut Ctx,
-    textures: &mut serde_json::Map<String, serde_json::Value>,
-) -> Result<String> {
-    let key = "placeholder:white".to_owned();
-    if !textures.contains_key(&key) {
-        let (_, white) = placeholder();
-        let rel = format!("textures/{}.png", &hash(&white)[..24]);
-        cx.write(&format!("assets/{rel}"), &white)?;
-        textures.insert(
-            key.clone(),
-            json!({ "file": rel, "sha256": hash(&white), "width": 1, "height": 1, "source": "placeholder" }),
-        );
-    }
-    Ok(key)
-}
-
+/// A 0.2 unit cube with one white material, and its 1x1 white PNG.
 fn placeholder() -> (bri_content::shape::Shape, Vec<u8>) {
     use bri_content::shape::*;
     let mut positions = vec![];
@@ -3247,6 +3254,22 @@ fn state_script(note: &str) -> Option<(&str, &str)> {
 
 /// Rewrites each gap note `settle` resolves into what resolves it, and
 /// marks the datablock converted once no gap note is left.
+/// The [`ports::Port::handles`] key naming an unsupported finding: a
+/// top-level call (`call:`), a file (`file:`), an object made at load
+/// (`new:`) or one changed at load (`set:`), lower-case.
+fn handles_key(what: &str) -> Option<String> {
+    let key = if let Some(call) = what.strip_prefix("top-level call ") {
+        format!("call:{call}")
+    } else if let Some(file) = what.strip_prefix("file ") {
+        format!("file:{file}")
+    } else if let Some(class) = what.strip_prefix("new ").and_then(|w| w.strip_suffix(" at load")) {
+        format!("new:{class}")
+    } else {
+        format!("set:{}", what.split_once(" = ")?.0.trim())
+    };
+    Some(key.to_ascii_lowercase())
+}
+
 fn settle_notes(e: &mut report::DatablockEntry, settle: impl Fn(&str) -> Option<String>) {
     for note in &mut e.notes {
         if let Some(settled) = settle(note) {
@@ -3651,43 +3674,41 @@ fn finish(mut cx: Ctx, opts: &Options, ports: &ports::Ports, code: &ports::Code)
                 });
             }
         }
-        // Top-level calls the port reads are carried out, not unsupported,
-        // and so are the RTB preferences its rules read.
+        // What the port carries out is not unsupported: top-level calls,
+        // files and objects made or changed at load, by their `handles` key,
+        // and the RTB preferences its rules read or the game carries out.
+        let how_of = |key: &str| {
+            port.handled.get(key).map(|h| {
+                format!(
+                    "port {}: {}",
+                    port.port,
+                    h.iter().cloned().collect::<Vec<_>>().join("; ")
+                )
+            })
+        };
         let pref = |what: &str| {
             what.strip_prefix("RTB_registerPref ")
                 .and_then(|g| port.prefs.get(&g.to_ascii_lowercase()))
+                .map(|how| format!("port {}: {how}", port.port))
         };
         let (ported, unsupported): (Vec<_>, Vec<_>) = std::mem::take(&mut cx.report.unsupported)
             .into_iter()
-            .partition(|f| {
-                pref(&f.what).is_some()
-                    || f.what.strip_prefix("top-level call ").is_some_and(|c| {
-                        port.handled
-                            .contains_key(&format!("call:{}", c.to_ascii_lowercase()))
-                    })
-            });
-        cx.report.unsupported = unsupported;
-        cx.report.ported = ported
-            .into_iter()
             .map(|mut f| {
-                if let Some(how) = pref(&f.what) {
-                    f.resolution = Some(format!("port {}: {how}", port.port));
-                    return f;
-                }
-                let call = f
-                    .what
-                    .trim_start_matches("top-level call ")
-                    .to_ascii_lowercase();
-                f.resolution = port.handled.get(&format!("call:{call}")).map(|h| {
-                    format!(
-                        "port {}: {}",
-                        port.port,
-                        h.iter().cloned().collect::<Vec<_>>().join("; ")
-                    )
-                });
+                f.resolution =
+                    pref(&f.what).or_else(|| handles_key(&f.what).and_then(|k| how_of(&k)));
                 f
             })
-            .collect();
+            .partition(|f| f.resolution.is_some());
+        cx.report.unsupported = unsupported;
+        cx.report.ported = ported;
+        for e in &mut cx.report.datablocks {
+            if e.status == "unsupported"
+                && let Some(how) = how_of(&format!("datablock:{}", e.name.to_ascii_lowercase()))
+            {
+                e.status = "ported".into();
+                e.notes.push(how);
+            }
+        }
         // A datablock that only drove script callbacks (a trigger's
         // `onTickTrigger`) is done by the port's rules that rewrote them.
         if port.applied {
@@ -3769,7 +3790,10 @@ fn finish(mut cx: Ctx, opts: &Options, ports: &ports::Ports, code: &ports::Code)
             }
         }
         if port.applied {
-            let covered = |f: &str| port.covers.iter().any(|c| c.eq_ignore_ascii_case(f));
+            let covered = |f: &str| {
+                port.covers.iter().any(|c| c.eq_ignore_ascii_case(f))
+                    || port.handled.contains_key(&f.to_ascii_lowercase())
+            };
             for e in &mut cx.report.datablocks {
                 let name = e.name.clone();
                 settle_notes(e, |note| {

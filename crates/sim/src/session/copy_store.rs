@@ -158,6 +158,7 @@ pub(super) struct SavedCopies {
 
 /// How a copy, save or load went, for the Add-On's `on_copy` or else the
 /// player.
+#[derive(Default)]
 pub(super) struct CopyOutcome {
     /// `select`, `save`, `list`, `load`, `cut`, `paint`, `wrench`,
     /// `supercut`, `fill` or `plant_as`.
@@ -180,6 +181,10 @@ pub(super) struct CopyOutcome {
     pub error: Option<(&'static str, String)>,
     /// The work goes on over the next ticks: `bricks` of `total` done.
     pub working: bool,
+    /// While working: bricks found still to look around, and how far a
+    /// search has got in percent ([`super::copy_jobs::Progress`]).
+    pub queued: usize,
+    pub searched: Option<usize>,
 }
 impl CopyOutcome {
     /// `action` refused: with no copy held (`held` false), for that.
@@ -208,23 +213,35 @@ impl CopyOutcome {
             refused: 0,
             error,
             working: false,
+            ..Default::default()
         }
     }
 }
 impl From<blueprints::Copied> for CopyOutcome {
     fn from(copied: blueprints::Copied) -> Self {
-        let bricks = copied.selection.bricks.len();
+        Self::selected(copied.selection.bricks.len(), &copied.selection, copied.error)
+    }
+}
+impl CopyOutcome {
+    /// A selection of `bricks` bricks, with `selection`'s limit and
+    /// refusals (its own bricks are not read).
+    pub(super) fn selected(
+        bricks: usize,
+        selection: &crate::simulation::Selection,
+        error: Option<(&'static str, String)>,
+    ) -> Self {
         Self {
             action: "select",
             names: Vec::new(),
             name: None,
             bricks,
             placed: 0,
-            total: bricks + copied.selection.refused,
-            limit_reached: copied.selection.limit_reached,
-            refused: copied.selection.refused,
-            error: copied.error,
+            total: bricks + selection.refused,
+            limit_reached: selection.limit_reached,
+            refused: selection.refused,
+            error,
             working: false,
+            ..Default::default()
         }
     }
 }
@@ -257,6 +274,7 @@ impl Session {
             limit_reached: false,
             refused: 0,
             error: Some((code, message.to_string())),
+            ..Default::default()
         };
         let Some(store) = self.saved_copies.store.clone() else {
             let outcome = failed("unavailable", "This server does not keep copies.");
@@ -301,6 +319,7 @@ impl Session {
                 limit_reached: false,
                 refused: 0,
                 error: Some(("empty", "Copy a build first.".into())),
+                ..Default::default()
             };
             self.report_copy(package, owner, outcome);
             return;
@@ -394,6 +413,7 @@ impl Session {
                         )),
                         Err(e) => Some(("failed", format!("Could not save the copy: {e:#}"))),
                     },
+                    ..Default::default()
                 },
                 (Want::List, StoreDone::Listed(result)) => {
                     let (names, error) = match result {
@@ -414,6 +434,7 @@ impl Session {
                         limit_reached: false,
                         refused: 0,
                         error,
+                        ..Default::default()
                     }
                 }
                 (
@@ -638,6 +659,7 @@ impl super::copy_jobs::CopyWork for LoadWork {
             total: self.total,
             placed: 0,
             refused: 0,
+            ..Default::default()
         }
     }
     fn step(&mut self, s: &mut Session, _: OwnerId, budget: &mut u32) -> Result<bool> {
@@ -649,7 +671,7 @@ impl super::copy_jobs::CopyWork for LoadWork {
             }
             if self.builder.len() >= limit {
                 self.limit_reached = true;
-                return Ok(true);
+                break;
             }
             let i = self.next;
             self.next += 1;
@@ -665,19 +687,23 @@ impl super::copy_jobs::CopyWork for LoadWork {
                         continue;
                     }
                     let mut brick = placement.brick(copy, b);
-                    brick.color = self.colors[usize::from(brick.color)];
+                    if let Some(extras) = copy.extras_of(i) {
+                        extras.put_on(&mut brick);
+                    }
+                    brick.recolor(|c| self.colors[usize::from(c)]);
                     self.builder.push(&brick, definitions)?;
                 }
                 Source::Loose { bricks, shift } => {
                     let mut brick = bricks[i].clone();
-                    brick.color = self.colors[usize::from(brick.color)];
+                    brick.recolor(|c| self.colors[usize::from(c)]);
                     if self.builder.push_moved(&brick, *shift, definitions).is_err() {
                         self.left_out += 1;
                     }
                 }
             }
         }
-        Ok(true)
+        // All in: moved round the copy's pivot, a slice at a time too.
+        Ok(self.builder.is_empty() || crate::simulation::center_copy(&mut self.builder, budget))
     }
     fn finish(self: Box<Self>, s: &mut Session, owner: OwnerId, ending: super::copy_jobs::Ending) {
         use super::copy_jobs::Ending;

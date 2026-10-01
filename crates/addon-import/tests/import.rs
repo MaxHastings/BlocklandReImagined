@@ -1402,3 +1402,127 @@ datablock AudioProfile(JingleBell) { fileName = "./bell.wav"; description = Audi
     std::fs::remove_dir_all(out.parent().unwrap()).unwrap();
     std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
 }
+
+/// The smallest DTS (v24) Torque reads: no nodes, objects or meshes, the
+/// box `lo` to `hi`, and these materials. Written here; ours (CC0).
+fn tiny_dts(lo: [f32; 3], hi: [f32; 3], materials: &[&str]) -> Vec<u8> {
+    let mut wide: Vec<u32> = vec![0; 17]; // every count zero
+    wide.extend([0, 0]);
+    let guards = 17u32;
+    let mut guard = 0u32;
+    let mut push_guard = |wide: &mut Vec<u32>| {
+        wide.push(guard);
+        guard += 1;
+    };
+    push_guard(&mut wide); // shape counts
+    let radius = 1.0f32;
+    wide.extend([radius, radius, 0.0, 0.0, 0.0].map(f32::to_bits));
+    wide.extend(lo.map(f32::to_bits));
+    wide.extend(hi.map(f32::to_bits));
+    for _ in 1..guards {
+        push_guard(&mut wide); // each empty section
+    }
+    let mut short: Vec<u8> = (0..guards).flat_map(|g| (g as u16).to_le_bytes()).collect();
+    let mut byte: Vec<u8> = (0..guards).map(|g| g as u8).collect();
+    for b in [&mut short, &mut byte] {
+        while b.len() % 4 != 0 {
+            b.push(0);
+        }
+    }
+    let first16 = wide.len() as u32;
+    let first8 = first16 + short.len() as u32 / 4;
+    let size = first8 + byte.len() as u32 / 4;
+    let mut out = Vec::new();
+    for w in [24, size, first16, first8].into_iter().chain(wide) {
+        out.extend(w.to_le_bytes());
+    }
+    out.extend(short);
+    out.extend(byte);
+    out.extend(0u32.to_le_bytes()); // no sequences
+    out.push(1); // material list version
+    out.extend((materials.len() as u32).to_le_bytes());
+    for m in materials {
+        out.push(m.len() as u8);
+        out.extend(m.as_bytes());
+    }
+    for _ in materials {
+        out.extend(3u32.to_le_bytes()); // wrap u and v
+    }
+    for _ in 0..3 {
+        for _ in materials {
+            out.extend((-1i32).to_le_bytes());
+        }
+    }
+    for value in [1.0f32, 1.0] {
+        for _ in materials {
+            out.extend(value.to_le_bytes());
+        }
+    }
+    out
+}
+
+/// A model material whose texture is nowhere (not in the Add-On, not in
+/// the base game) draws plain white, as Torque drew a material it found no
+/// bitmap for: the model stays, tinted by the image's colour shift, and is
+/// not swapped for a placeholder cube (Loz's Hookshot's `black50`).
+#[test]
+fn a_material_with_no_texture_draws_plain_and_keeps_its_model() {
+    let source = fresh("plain-source").with_file_name("Weapon_Plain");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(source.join("description.txt"), "Title: Plain\nAuthor: Tester\nA test.").unwrap();
+    std::fs::write(source.join("server.cs"), "exec(\"./plain.cs\");\n").unwrap();
+    std::fs::write(
+        source.join("gun.dts"),
+        tiny_dts([-0.1, -0.2, -0.3], [0.1, 0.4, 0.3], &["metal", "nowhere"]),
+    )
+    .unwrap();
+    let mut metal = std::io::Cursor::new(Vec::new());
+    image::RgbaImage::from_pixel(4, 4, image::Rgba([90, 90, 100, 255]))
+        .write_to(&mut metal, image::ImageFormat::Png)
+        .unwrap();
+    std::fs::write(source.join("metal.png"), metal.into_inner()).unwrap();
+    std::fs::write(
+        source.join("plain.cs"),
+        r#"
+datablock ItemData(plainGunItem) { shapeFile = "./gun.dts"; uiName = "Plain Gun"; image = plainGunImage; doColorShift = true; colorShiftColor = "0.2 0.2 1 1"; };
+datablock ShapeBaseImageData(plainGunImage) { shapeFile = "./gun.dts"; item = plainGunItem; doColorShift = true; colorShiftColor = "0.2 0.2 1 1"; stateName[0] = "Ready"; };
+"#,
+    )
+    .unwrap();
+    let out = fresh("plain-out").join("weapon_plain");
+    let report = import(&Options {
+        input: source.clone(),
+        out: out.clone(),
+        ..Default::default()
+    })
+    .unwrap();
+    let r = serde_json::to_value(&report).unwrap();
+    assert!(
+        !r["ambiguous"].to_string().contains("placeholder cube"),
+        "{}",
+        r["ambiguous"]
+    );
+    let presentation: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(out.join("assets/presentation.json")).unwrap())
+            .unwrap();
+    let model = &presentation["models"]["add-ons/weapon_plain/gun.dts"];
+    assert_ne!(model["source"], "placeholder", "{model}");
+    assert_eq!(
+        model["textures"],
+        serde_json::json!(["add-ons/weapon_plain/metal.png", "placeholder:white"]),
+        "{model}"
+    );
+    assert!(
+        presentation["textures"]["placeholder:white"]["file"]
+            .as_str()
+            .is_some_and(|f| out.join("assets").join(f).is_file())
+    );
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|d| d.contains("material nowhere has no texture; drawn plain white")),
+        "{:?}",
+        report.diagnostics
+    );
+}

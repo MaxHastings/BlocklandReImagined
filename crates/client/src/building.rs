@@ -42,6 +42,8 @@ struct CopyGhost {
     /// It turns about the brick it was taken from first (its first
     /// brick) rather than the whole of it ([`Building::pivot_copy`]).
     start: bool,
+    /// Which copy taken this is ([`Building::copy_report`]).
+    serial: u64,
 }
 impl CopyGhost {
     fn place(&mut self) {
@@ -159,6 +161,8 @@ pub struct Building {
     /// A copied build (`Notice::Blueprint`), shown as a ghost and moved by
     /// the brick keys while its tool is in hand.
     copy: Option<CopyGhost>,
+    /// Copies taken so far.
+    copies_taken: u64,
     /// Copies turn about the whole of them, else their start brick.
     pivot_whole: bool,
     /// Bricks' mirror images, found as copies are mirrored; the host finds
@@ -222,6 +226,7 @@ impl Building {
             palette_len: 0,
             ghost: None,
             copy: None,
+            copies_taken: 0,
             pivot_whole: true,
             mirrors: Default::default(),
             outline: None,
@@ -543,7 +548,9 @@ impl Building {
                 for kind in &blueprint.kinds {
                     self.definitions.by_id(kind)?;
                 }
+                self.copies_taken += 1;
                 let mut copy = CopyGhost {
+                    serial: self.copies_taken,
                     anchor: blueprint.origin,
                     blueprint,
                     seen: None,
@@ -584,6 +591,19 @@ impl Building {
         copy.mirrored = !copy.mirrored;
         copy.reseen(&self.definitions, &mut self.mirrors);
         copy.keep_root(root);
+        self.ghost_generation = self.ghost_generation.wrapping_add(1);
+    }
+    /// The ghost brick becomes its mirror image `definition` turned
+    /// `quarter_turns` where it stands (`Notice::MirrorGhost`), until the
+    /// next click puts the brick in hand out again.
+    pub fn mirror_ghost(&mut self, definition: &str, quarter_turns: u8) {
+        let (Some(entry), Some(ghost)) = (self.definitions.entries.get(definition), self.ghost.as_mut())
+        else {
+            return;
+        };
+        ghost.definition = ContentRef::Resolved(definition.into());
+        ghost.quarter_turns = quarter_turns % 4;
+        snap(ghost, &entry.mesh);
         self.ghost_generation = self.ghost_generation.wrapping_add(1);
     }
     /// Turn the copy upside down where it stands (`Notice::FlipCopy`), or
@@ -660,6 +680,20 @@ impl Building {
     /// Where the copy's pivot is and how it is turned, while in hand.
     pub fn copy_pose(&self) -> Option<([f32; 3], u8)> {
         self.active_copy().map(|c| (c.anchor, c.turns))
+    }
+    /// Where the copy in hand stands, for the host to tell its Add-On
+    /// (`Command::CopyPose`), with which copy it is: a new copy is
+    /// reported even where the last one stood.
+    pub fn copy_report(&self) -> Option<(u64, bri_sim::session::CopyPose)> {
+        self.active_copy().map(|c| {
+            let pose = bri_sim::session::CopyPose {
+                anchor: c.anchor,
+                quarter_turns: c.turns,
+                mirrored: c.mirrored,
+                flipped: c.flipped,
+            };
+            (c.serial, pose)
+        })
     }
     fn active_copy(&self) -> Option<&CopyGhost> {
         self.copy
@@ -763,6 +797,14 @@ impl Building {
     /// (`commands.paint`), the image staying in hand.
     pub fn takes_paint(&self) -> bool {
         self.paint_taken && self.image_keys.paint.is_some()
+    }
+    /// Whether the tool in hand stays out when the paint box opens and a
+    /// can is picked: it takes the cans, or it is a paint picker.
+    pub fn keeps_tool_for_paint(&self) -> bool {
+        self.takes_paint() || self.picker_in_hand()
+    }
+    fn picker_in_hand(&self) -> bool {
+        self.image_keys.paint_picker && self.active_tool.is_some()
     }
     /// A key the held image takes, as the command the client sends.
     fn image_key(command: &Option<String>, args: Vec<PackageArg>) -> Option<Command> {
@@ -1407,8 +1449,12 @@ impl Building {
                 );
                 self.paint = *color as u8;
                 self.random_color = None;
-                self.equipment = Equipment::Paint(self.paint);
-                self.active_tool = None;
+                // A paint picker stays in hand: the host puts it back
+                // after the can (`serverCmdUseSprayCan` packaged).
+                if !self.picker_in_hand() {
+                    self.equipment = Equipment::Paint(self.paint);
+                    self.active_tool = None;
+                }
                 out.commands
                     .push(Command::UseSprayCan { color: self.paint });
                 if let Some(ghost) = &mut self.ghost {
@@ -1417,13 +1463,16 @@ impl Building {
                 }
             }
             UiAction::UseFxCan { fx } => {
-                self.equipment = match fx {
+                let equipment = match fx {
                     0..=6 => Equipment::ColorEffect(*fx as u8),
                     7 => Equipment::ShapeEffect(0),
                     8 => Equipment::ShapeEffect(1),
                     _ => anyhow::bail!("Unknown FX can"),
                 };
-                self.active_tool = None;
+                if !self.picker_in_hand() {
+                    self.equipment = equipment;
+                    self.active_tool = None;
+                }
                 out.commands.push(Command::UseFxCan { fx: *fx as u8 });
             }
             UiAction::Game(GameAction::Held {
@@ -1874,7 +1923,11 @@ mod tests {
         let mut id = 1;
         for i in 0..60 {
             let t = i as f32 * 1.5;
-            let brick = Brick::new(ContentRef::Resolved("plate".into()), [t + 3.5, 1.1, t + 0.25], 1);
+            let brick = Brick::new(
+                ContentRef::Resolved("plate".into()),
+                [t + 3.5, 1.1, t + 0.25],
+                1,
+            );
             world.bricks.insert(id, brick);
             id += 1;
         }
@@ -1882,7 +1935,10 @@ mod tests {
         let eye = Vec3::new(0.5, 1.15, 0.25);
         let target = Vec3::new(80.5, 1.15, 80.25);
         assert!(building.effect_visible(BrickId::MAX, eye, target).unwrap());
-        world.bricks.insert(id, Brick::new(ContentRef::Resolved("plate".into()), [60.5, 1.1, 60.25], 1));
+        world.bricks.insert(
+            id,
+            Brick::new(ContentRef::Resolved("plate".into()), [60.5, 1.1, 60.25], 1),
+        );
         building.sync_world(&world).unwrap();
         assert!(!building.effect_visible(BrickId::MAX, eye, target).unwrap());
         assert!(building.effect_visible(id, eye, target).unwrap());
@@ -2028,6 +2084,34 @@ mod tests {
     }
 
     #[test]
+    fn a_mirrored_ghost_takes_its_image_where_it_stands_and_plants_it() {
+        let mut b = controller();
+        assert!(b.ghost().is_none());
+        b.mirror_ghost("plate", 1);
+        assert!(b.ghost().is_none(), "no ghost, nothing to mirror");
+        let mut ghost = Brick::new(ContentRef::Resolved("plate".into()), [0.5, 0.1, 0.25], 1);
+        ghost.color = 0;
+        b.ghost = Some(ghost);
+        let generation = b.ghost_generation();
+        b.mirror_ghost("plate", 1);
+        let mirrored = b.ghost().unwrap();
+        assert_eq!(mirrored.quarter_turns, 1);
+        assert!((mirrored.position[1] - 0.1).abs() < 0.001, "where it stood");
+        assert_ne!(b.ghost_generation(), generation, "redrawn");
+        // Unknown bricks are not taken.
+        b.mirror_ghost("nothing", 2);
+        assert_eq!(b.ghost().unwrap().quarter_turns, 1);
+        let plant = b
+            .ui_action(&UiAction::Game(GameAction::PlantBrick), &player())
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            &plant.commands[..],
+            [Command::Plant { quarter_turns: 1, .. }]
+        ));
+    }
+
+    #[test]
     fn a_ghost_that_would_overlap_or_float_is_blocked() {
         let mut b = controller();
         let plate = |y: f32| {
@@ -2162,7 +2246,7 @@ mod tests {
             shift: Some("dup:shift".into()),
             rotate: Some("dup:turn".into()),
             plant: Some("dup:plant".into()),
-            paint: None,
+            ..Default::default()
         });
         let sent = |commands: Vec<Command>| match commands.as_slice() {
             [Command::Package(p)] => (p.command.clone(), p.args.clone()),
@@ -2224,6 +2308,41 @@ mod tests {
             ..keys
         });
         assert!(!b.takes_paint());
+    }
+
+    /// The ported Fill Can: with a paint picker out, opening the paint box
+    /// and picking a can keeps the tool out (no `UnUseTool`, the tool still
+    /// active) while the pick still reaches the host, which remounts it.
+    #[test]
+    fn picking_a_can_keeps_a_paint_picker_in_hand() {
+        let mut b = controller();
+        b.ui_action(&UiAction::UseTool { slot: 0 }, &player())
+            .unwrap();
+        let tool = b.equipment().clone();
+        assert!(!b.keeps_tool_for_paint(), "a plain tool is put away");
+        b.set_image_keys(ImageKeys {
+            paint_picker: true,
+            ..Default::default()
+        });
+        assert!(b.keeps_tool_for_paint());
+        let pick = |b: &mut Building, action: UiAction| {
+            b.ui_action(&action, &player()).unwrap().unwrap().commands
+        };
+        assert!(matches!(
+            pick(&mut b, UiAction::UseSprayCan { color: 1 }).as_slice(),
+            [Command::UseSprayCan { color: 1 }]
+        ));
+        assert!(matches!(
+            pick(&mut b, UiAction::UseFxCan { fx: 3 }).as_slice(),
+            [Command::UseFxCan { fx: 3 }]
+        ));
+        assert_eq!(b.equipment(), &tool, "the tool stays in hand");
+        assert!(b.keeps_tool_for_paint());
+        // Put away, the next pick takes out the can as ever.
+        b.ui_action(&UiAction::UnUseTool, &player()).unwrap();
+        assert!(!b.keeps_tool_for_paint());
+        pick(&mut b, UiAction::UseSprayCan { color: 1 });
+        assert_eq!(b.equipment(), &Equipment::Paint(1));
     }
 
     #[test]
@@ -2307,6 +2426,27 @@ mod tests {
             assert_eq!(flipped.position[1..], before.position[1..]);
             Bounds::new(flipped, &b.definitions.entries["plate"].mesh).unwrap();
         }
+        // Where the host hears it stands boxes the very bricks shown, for
+        // its Add-On to show the others (`Command::CopyPose`).
+        let (serial, pose) = b.copy_report().unwrap();
+        assert_eq!(
+            (pose.anchor, pose.quarter_turns, pose.mirrored),
+            (anchor, 3, true)
+        );
+        let (min, max) = copy.ghost_box(
+            pose.anchor,
+            pose.quarter_turns,
+            (pose.flipped, pose.mirrored),
+        );
+        let cell = Vec3::from(grid::CELL);
+        let (mut low, mut high) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+        for brick in b.copy_ghost().unwrap() {
+            let bounds = Bounds::new(brick, &b.definitions.entries["plate"].mesh).unwrap();
+            let corner = Vec3::from(bounds.min.map(|v| v as f32)) * cell;
+            low = low.min(corner);
+            high = high.max(corner + Vec3::from(bounds.size.map(|v| v as f32)) * cell);
+        }
+        assert!(low.distance(min.into()) < 1e-4 && high.distance(max.into()) < 1e-4);
         let plant = b
             .ui_action(&UiAction::Game(GameAction::PlantBrick), &player())
             .unwrap()
@@ -2369,6 +2509,9 @@ mod tests {
         b.ui_action(&UiAction::Game(GameAction::CancelBrick), &player())
             .unwrap();
         assert!(b.copy_ghost().is_none());
+        // A new copy is reported even where the last one stood.
+        b.set_blueprint(Some(copy.clone())).unwrap();
+        assert!(b.copy_report().unwrap().0 > serial);
         // A copy of a brick this client cannot draw is refused.
         let mut unknown = copy;
         unknown.kinds[0] = "missing".into();
@@ -2458,15 +2601,39 @@ mod tests {
         }
     }
 
-    #[test]
-    #[ignore = "requires converted stock-catalog-004; native camera shape coverage, no window"]
-    fn original_stock_camera_shapes_all_orientations() -> Result<()> {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let definitions = Definitions::load(
-            &root.join("content/stock-catalog-004"),
-            &root.join("content/maps-pass-008"),
-        )?;
-        let mut b = Building::new(definitions, vec![])?;
+    /// A brick catalog: `bri_sim::testing`'s made-up bricks, or the
+    /// converted stock catalog.
+    struct Catalog {
+        definitions: Definitions,
+        /// Definitions the catalog has.
+        count: usize,
+        /// Where the evidence goes (the converted catalog's only).
+        evidence: Option<std::path::PathBuf>,
+    }
+    impl Catalog {
+        fn synthetic() -> Result<Self> {
+            let definitions = bri_sim::testing::definitions();
+            Ok(Self {
+                count: definitions.entries.len(),
+                definitions,
+                evidence: None,
+            })
+        }
+        fn content() -> Result<Self> {
+            let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+            Ok(Self {
+                definitions: Definitions::load(
+                    &root.join("content/stock-catalog-004"),
+                    &root.join("content/maps-pass-008"),
+                )?,
+                count: 170,
+                evidence: Some(root.join("artifacts/native-camera")),
+            })
+        }
+    }
+    crate::testing::synthetic_and_content!(Catalog: original_stock_camera_shapes_all_orientations);
+    fn original_stock_camera_shapes_all_orientations(fx: &Catalog) -> Result<()> {
+        let mut b = Building::new(fx.definitions.clone(), vec![])?;
         let ids: Vec<_> = b.definitions.entries.keys().cloned().collect();
         let mut records = vec![];
         let mut total_hits = 0;
@@ -2521,11 +2688,13 @@ mod tests {
             records.push(serde_json::json!({"id":id,"sweeps":24,"hits":hits}));
         }
         ensure!(
-            ids.len() == 170 && total_hits > 170,
+            ids.len() == fx.count && total_hits > fx.count,
             "Unexpected stock camera coverage"
         );
-        let out = root.join("artifacts/native-camera");
-        std::fs::create_dir_all(&out)?;
+        let Some(out) = &fx.evidence else {
+            return Ok(());
+        };
+        std::fs::create_dir_all(out)?;
         std::fs::write(
             out.join("stock-shapes.json"),
             serde_json::to_vec_pretty(
@@ -2564,7 +2733,10 @@ mod tests {
         let (camera, carry) = b
             .camera_boom(eye, eye, Vec3::NEG_Z, 8.0, &passages(2.0))
             .unwrap();
-        assert!(camera.abs_diff_eq(Vec3::new(20.5, 2.1, 8.25), 1e-4), "{camera}");
+        assert!(
+            camera.abs_diff_eq(Vec3::new(20.5, 2.1, 8.25), 1e-4),
+            "{camera}"
+        );
         assert_eq!(carry, Some(opening(2.0).carry));
         // A wall before the opening stops the boom as it always did.
         let (camera, carry) = b
@@ -3122,4 +3294,7 @@ pub struct ImageKeys {
     pub plant: Option<String>,
     /// Takes the paint and FX cans while it asks to (`take_paint`).
     pub paint: Option<String>,
+    /// Stays in hand when a paint or FX can is picked (the image's
+    /// `paint_picker`, as the Fill Can): the pick goes to the host as ever.
+    pub paint_picker: bool,
 }

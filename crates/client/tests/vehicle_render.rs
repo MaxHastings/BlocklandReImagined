@@ -1,11 +1,23 @@
 //! Native vehicle models (chassis, wheels, turret) rendered through the
-//! client instancing path, offscreen.
+//! client instancing path, offscreen. Each body runs on the made-up
+//! vehicle catalog (`support::vehicle_fixture`) and again, ignored, on the
+//! generated v20 pack.
+#[macro_use]
+mod support;
+
 use anyhow::{Context, Result, ensure};
 use bri_client::vehicles::{ClientVehicles, VehicleAssets};
 use bri_render::scene::{Camera, SceneRenderer, create_depth};
 use bri_sim::session::{VehicleInfo, VehiclePose};
 use bri_ui::gpu::Headless;
-use std::{collections::BTreeMap, path::Path};
+use std::collections::BTreeMap;
+use support::{gpu, vehicle_fixture::VehicleFixture};
+
+synthetic_and_content!(
+    VehicleFixture: vehicles_render_with_wheels_and_paint,
+    riders_tilt_with_a_car_on_a_slope,
+    every_explosion_debris_model_is_in_the_vehicle_pack,
+);
 
 const SIZE: u32 = 384;
 
@@ -78,30 +90,20 @@ fn render(
     Ok(buffer.slice(..).get_mapped_range()?.to_vec())
 }
 
-#[test]
-#[ignore = "requires the converted native vehicle pack and an offscreen GPU"]
-fn stock_vehicles_render_with_wheels_and_paint() -> Result<()> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let mut assets = VehicleAssets::load(&root.join("content/vehicles-pack-012"))?;
-    let gpu = Headless::new().context("offscreen vehicle adapter")?;
+fn vehicles_render_with_wheels_and_paint(f: &VehicleFixture) -> Result<()> {
+    let mut assets = VehicleAssets::load(&f.dir)?;
+    let gpu = gpu::turn().context("offscreen vehicle adapter")?;
     let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
-    let out = root.join("artifacts/native-vehicles");
-    std::fs::create_dir_all(&out)?;
+    let out = &f.out;
+    std::fs::create_dir_all(out)?;
     let mut report = serde_json::Map::new();
     // Horses are drawn by the avatar horse rig, not this vehicle path;
     // horse_riding_render covers them.
-    for (definition, distance) in [
-        ("v20.vehicle.jeepvehicle", 12.0),
-        ("v20.vehicle.tankvehicle", 14.0),
-        ("v20.vehicle.magiccarpetvehicle", 9.0),
-        ("v20.vehicle.rowboatarmor", 9.0),
-        ("v20.vehicle.cannonturret", 7.0),
-        ("v20.vehicle.ballvehicle", 6.0),
-        ("v20.vehicle.flyingwheeledjeepvehicle", 12.0),
-    ] {
+    for (definition, distance) in &f.drawn {
+        let (definition, distance) = (definition.as_str(), *distance);
         let wheels = assets
             .definition(definition)
-            .context("stock vehicle definition")?
+            .context("vehicle definition")?
             .wheels
             .len();
         let infos: BTreeMap<u64, VehicleInfo> = [(
@@ -162,7 +164,9 @@ fn stock_vehicles_render_with_wheels_and_paint() -> Result<()> {
             .chunks_exact(4)
             .filter(|p| (0..3).any(|i| (i32::from(p[i]) - background[i]).abs() > 12))
             .count();
-        let name = definition.trim_start_matches("v20.vehicle.");
+        let name = definition
+            .trim_start_matches("v20.vehicle.")
+            .replace([':', '/'], "-");
         image::save_buffer(
             out.join(format!("{name}.png")),
             &image,
@@ -170,7 +174,7 @@ fn stock_vehicles_render_with_wheels_and_paint() -> Result<()> {
             SIZE,
             image::ColorType::Rgba8,
         )?;
-        report.insert(name.into(), visible.into());
+        report.insert(name, visible.into());
         ensure!(visible > 2000, "{definition} drew only {visible} pixels");
     }
     std::fs::write(
@@ -180,13 +184,10 @@ fn stock_vehicles_render_with_wheels_and_paint() -> Result<()> {
     Ok(())
 }
 
-#[test]
-#[ignore = "requires the converted native vehicle pack"]
-fn riders_tilt_with_a_jeep_on_a_slope() -> Result<()> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let assets = VehicleAssets::load(&root.join("content/vehicles-pack-012"))?;
-    let definition = "v20.vehicle.jeepvehicle";
-    let wheels = assets.definition(definition).context("jeep")?.wheels.len();
+fn riders_tilt_with_a_car_on_a_slope(f: &VehicleFixture) -> Result<()> {
+    let assets = VehicleAssets::load(&f.dir)?;
+    let definition = f.car.as_str();
+    let wheels = assets.definition(definition).context("car")?.wheels.len();
     let info = VehicleInfo {
         id: 1,
         definition: definition.into(),
@@ -244,15 +245,22 @@ fn riders_tilt_with_a_jeep_on_a_slope() -> Result<()> {
 }
 
 #[test]
-#[ignore = "requires the converted native vehicle and weapon packs"]
-fn every_explosion_debris_model_is_in_the_vehicle_pack() -> Result<()> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let assets = VehicleAssets::load(&root.join("content/vehicles-pack-012"))?;
-    let weapons = bri_weapons::Pack::from_json(&std::fs::read(
-        root.join("content/weapons-pack-009/weapons.json"),
-    )?)?;
-    let debris = bri_weapons::debris::explosion_debris(&weapons);
-    ensure!(debris.len() == 6, "stock debris explosions: {}", debris.len());
+#[ignore = "requires generated v20 content"]
+fn the_stock_weapons_have_six_debris_explosions() -> Result<()> {
+    let f = VehicleFixture::content()?;
+    let debris = bri_weapons::debris::explosion_debris(&f.weapons);
+    ensure!(
+        debris.len() == 6,
+        "stock debris explosions: {}",
+        debris.len()
+    );
+    Ok(())
+}
+
+fn every_explosion_debris_model_is_in_the_vehicle_pack(f: &VehicleFixture) -> Result<()> {
+    let assets = VehicleAssets::load(&f.dir)?;
+    let debris = bri_weapons::debris::explosion_debris(&f.weapons);
+    ensure!(!debris.is_empty(), "no debris explosions");
     for (explosion, spec) in debris {
         ensure!(
             assets.has_source_model(&spec.model),

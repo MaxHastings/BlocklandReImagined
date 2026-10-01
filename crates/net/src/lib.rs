@@ -1,4 +1,5 @@
 //! QUIC transport and bounded replication for native game sessions.
+pub mod allocator;
 pub mod client;
 mod admin_store;
 pub mod codec;
@@ -16,6 +17,7 @@ pub mod reach;
 pub mod replica;
 pub mod server;
 pub mod stream;
+pub mod testing;
 pub mod traffic;
 pub mod upnp;
 pub mod wire;

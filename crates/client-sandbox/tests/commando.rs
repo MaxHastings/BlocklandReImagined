@@ -1,7 +1,7 @@
 //! The Commando sample's client code (`packages/samples/sample-commando-look`):
 //! the rifle drawn in view space in first person, the scope drawn in
 //! screen space while aiming, and nothing when the player holds something
-//! else. With a GPU (`--ignored`), it renders offscreen to PNGs.
+//! else. It also renders offscreen to PNGs (any adapter, software included).
 use bri_client_sandbox::{
     AddOn, AddOnCode, Budgets, Capability, FrameInput, Sandbox, Space, TrustLevel, View, World,
     world::Player,
@@ -21,9 +21,12 @@ fn start() -> (AddOnCode, AddOn) {
         Ok(None) => panic!("no client code"),
         Err(problems) => panic!("{problems:#?}"),
     };
+    // What it draws, not how fast: a loaded machine's slow software frame
+    // must not stop it. The GPU hard stop is proven with given times in
+    // sandbox.rs.
     let addon = Sandbox::new()
         .unwrap()
-        .start(&code, Budgets::default(), TrustLevel::Sandboxed)
+        .start(&code, Budgets::untimed(), TrustLevel::Sandboxed)
         .unwrap_or_else(|e| panic!("stopped: {e}"));
     (code, addon)
 }
@@ -143,9 +146,8 @@ fn the_rifle_is_drawn_in_view_space_and_the_scope_on_the_screen() {
     );
 }
 
-/// Needs a GPU: the rifle in first person, then the scope, to PNGs.
+/// Needs a GPU adapter (software is fine): the rifle in first person, then the scope, to PNGs.
 #[test]
-#[ignore = "needs a GPU adapter"]
 fn the_commando_sights_render_offscreen() {
     let (_, mut addon) = start();
     let (adapter, images) = bri_client_sandbox::gpu::render_offscreen_views(

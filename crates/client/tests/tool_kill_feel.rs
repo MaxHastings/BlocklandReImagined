@@ -17,7 +17,6 @@ use bri_client::{
 };
 use bri_net::{client::Client, protocol::PublicWorld, server};
 use bri_sim::{
-    definitions::Definitions,
     player::{MoveInput, PlayerState, PlayerTuning},
     presentation::{BrickDeath, Cue, CueKind},
     session::{Command, MiniGameRequest, Reply, Session, ToolInventory},
@@ -27,14 +26,10 @@ use bri_world::{BrickId, World};
 use glam::Vec3;
 use rapier3d::prelude::*;
 use std::{
-    path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, Instant},
 };
 
-const BRICK: &str = "v20/brick/brick2x2data";
-const HAMMER: &str = "v20.weapon.hammeritem";
-const ROCKET: &str = "v20.weapon.rocketlauncheritem";
 /// Frame time the debris is stepped at.
 const FRAME: f32 = 1.0 / 60.0;
 /// A piece fainter than this is gone to the eye.
@@ -43,33 +38,30 @@ const SEEN: f32 = 0.05;
 /// seeing (and rebuilding) what was destroyed.
 const IN_THE_WAY: f32 = 2.0;
 
-fn content() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content")
-}
-fn definitions() -> Result<Definitions> {
-    Definitions::load(
-        &content().join("stock-catalog-004"),
-        &content().join("maps-pass-008"),
-    )
-}
+#[macro_use]
+mod support;
+
+use support::host_content::HostContent;
+
+synthetic_and_content!(HostContent: tool_kills_fall_through_the_world_and_blasts_tumble_on_every_screen);
+
 fn ground() -> Vec<ColliderBuilder> {
     vec![ColliderBuilder::cuboid(200.0, 0.5, 200.0).translation(Vector::new(0.0, -0.5, 0.0))]
 }
 
 /// The app's Start Game host (single player and LAN): hammer and rocket
 /// in the spawn loadout; the Destructo Wand is `/wand`.
-fn host() -> Result<server::ServerHandle> {
+fn host(f: &HostContent) -> Result<server::ServerHandle> {
     let mut session = Session::new(Simulation::new(
         World::new("Free build".into(), "fixture".into(), vec![[1.0; 4]; 2]),
-        definitions()?,
+        f.definitions()?,
         ground(),
     )?);
     session.set_lan_host(true);
-    let pack = std::fs::read(content().join("weapons-pack-009/weapons.json"))?;
-    session.set_weapon_pack(bri_weapons::Pack::from_json(&pack)?)?;
+    session.set_weapon_pack(f.weapons()?)?;
     let mut loadout = ToolInventory::default();
-    loadout.slots[0] = Some(HAMMER.into());
-    loadout.slots[3] = Some(ROCKET.into());
+    loadout.slots[0] = Some(f.hammer.clone());
+    loadout.slots[3] = Some(f.rocket.clone());
     session.set_spawn_loadout(loadout)?;
     server::start(
         session,
@@ -95,7 +87,7 @@ struct Screen {
 }
 
 impl Screen {
-    async fn open(name: &'static str, connected: Connected) -> Result<Self> {
+    async fn open(f: &HostContent, name: &'static str, connected: Connected) -> Result<Self> {
         let mut worker = Worker::start(
             &tokio::runtime::Handle::current(),
             Default::default(),
@@ -109,7 +101,7 @@ impl Screen {
         Ok(Self {
             name,
             worker,
-            building: Building::new(definitions()?, ground())?,
+            building: Building::new(f.definitions()?, ground())?,
             applied: None,
             replies: Default::default(),
             kills: Vec::new(),
@@ -212,12 +204,17 @@ async fn command(screens: &mut [&mut Screen; 2], who: usize, command: Command) -
     reply(screens, who, request).await
 }
 
-async fn plant(screens: &mut [&mut Screen; 2], who: usize, at: Vec3) -> Result<BrickId> {
+async fn plant(
+    f: &HostContent,
+    screens: &mut [&mut Screen; 2],
+    who: usize,
+    at: Vec3,
+) -> Result<BrickId> {
     match command(
         screens,
         who,
         Command::Plant {
-            definition: BRICK.into(),
+            definition: f.brick.clone(),
             position: at.to_array(),
             quarter_turns: 0,
             color: 1,
@@ -322,13 +319,23 @@ fn feel(screen: &Screen, cue: &Cue) -> Result<Feel> {
     Ok(feel)
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires the converted stock catalog and native weapons pack; ~10 s of real time"]
-async fn tool_kills_fall_through_the_world_and_blasts_tumble_on_every_screen() -> Result<()> {
-    let server = host()?;
+/// About 10 s of real time.
+fn tool_kills_fall_through_the_world_and_blasts_tumble_on_every_screen(
+    f: &HostContent,
+) -> Result<()> {
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()?
+        .block_on(kills_on_every_screen(f))
+}
+
+async fn kills_on_every_screen(f: &HostContent) -> Result<()> {
+    let server = host(f)?;
     let (address, certificate) = (server.address, server.certificate.clone());
     let client = Client::connect(address, &certificate, "Host".into(), Vec::new(), None).await?;
     let mut host = Screen::open(
+        f,
         "host",
         Connected {
             client,
@@ -339,6 +346,7 @@ async fn tool_kills_fall_through_the_world_and_blasts_tumble_on_every_screen() -
     .await?;
     let client = Client::connect(address, &certificate, "Joiner".into(), Vec::new(), None).await?;
     let mut joiner = Screen::open(
+        f,
         "joiner",
         Connected {
             client,
@@ -359,8 +367,8 @@ async fn tool_kills_fall_through_the_world_and_blasts_tumble_on_every_screen() -
     let (host_feet, joiner_feet) = (screens[0].feet(), screens[1].feet());
     let at = |feet: Vec3, ahead: f32| Vec3::new(feet.x, 0.3, feet.z - ahead);
     let mut spots = [at(host_feet, 2.5), at(joiner_feet, 2.5), Vec3::ZERO];
-    let hammered = plant(screens, 0, spots[0]).await?;
-    let wanded = plant(screens, 1, spots[1]).await?;
+    let hammered = plant(f, screens, 0, spots[0]).await?;
+    let wanded = plant(f, screens, 1, spots[1]).await?;
 
     let killed = |id: BrickId| move |s: &Screen| s.kill(id).is_some();
     use_on(screens, 0, Command::EquipTool { slot: Some(0) }, spots[0]).await?;
@@ -380,8 +388,18 @@ async fn tool_kills_fall_through_the_world_and_blasts_tumble_on_every_screen() -
     )
     .await?;
     // Knocked out by a rocket only happens in a Brick Damage minigame.
+    // Its loadout holds the hammer and the rocket in the default's slots
+    // (the default's other items are v20's, which the made-up pack does
+    // not have).
     let settings = bri_minigames::Settings {
         brick_damage: true,
+        loadout: [
+            Some(f.hammer.clone()),
+            None,
+            None,
+            None,
+            Some(f.rocket.clone()),
+        ],
         ..Default::default()
     };
     command(
@@ -398,12 +416,12 @@ async fn tool_kills_fall_through_the_world_and_blasts_tumble_on_every_screen() -
     })
     .await?;
     spots[2] = at(screens[0].feet(), 10.0);
-    let rocketed = plant(screens, 0, spots[2]).await?;
+    let rocketed = plant(f, screens, 0, spots[2]).await?;
     let owner = screens[0].view().owner;
     let rocket = screens[0].view().tools[&owner]
         .slots
         .iter()
-        .position(|s| s.as_deref() == Some(ROCKET))
+        .position(|s| s.as_deref() == Some(f.rocket.as_str()))
         .context("rocket in the minigame loadout")?;
     use_on(
         screens,

@@ -52,6 +52,9 @@ pub struct Chunks {
     /// Boxes of collision rebuilt since `take_changed`, while someone reads
     /// them (`track_changes`): bots' walk grid forgets what lies inside.
     changed: Option<Vec<([f32; 3], [f32; 3])>>,
+    /// Bricks already in the chunks marked dirty since `take_rebuilt`: what
+    /// the next `flush` builds again besides the bricks changed.
+    rebuilt: usize,
 }
 
 impl Chunks {
@@ -69,21 +72,38 @@ impl Chunks {
             }
         });
         self.by_serial.insert(chunk.serial, key);
-        if chunk.members.insert(id) {
-            self.dirty.insert(key);
+        let had = chunk.members.len();
+        if chunk.members.insert(id) && self.dirty.insert(key) {
+            self.rebuilt += had;
         }
     }
     /// Take a brick out of its chunk; false when it was not a part.
     pub fn remove(&mut self, id: BrickId, position: [f32; 3]) -> bool {
         let key = chunk_of(position);
-        let removed = self
-            .chunks
-            .get_mut(&key)
-            .is_some_and(|chunk| chunk.members.remove(&id));
-        if removed {
-            self.dirty.insert(key);
+        let Some(chunk) = self.chunks.get_mut(&key) else {
+            return false;
+        };
+        let removed = chunk.members.remove(&id);
+        if removed && self.dirty.insert(key) {
+            self.rebuilt += chunk.members.len();
         }
         removed
+    }
+    /// Mark the chunk of the brick at `position` for rebuilding, ahead of
+    /// a change to it (a slice of bricks removed together).
+    pub fn mark(&mut self, id: BrickId, position: [f32; 3]) {
+        let key = chunk_of(position);
+        if let Some(chunk) = self.chunks.get(&key)
+            && chunk.members.contains(&id)
+            && self.dirty.insert(key)
+        {
+            self.rebuilt += chunk.members.len() - 1;
+        }
+    }
+    /// Bricks the chunks marked since the last call hold besides the ones
+    /// changed: what rebuilding them costs on top of the change itself.
+    pub fn take_rebuilt(&mut self) -> usize {
+        std::mem::take(&mut self.rebuilt)
     }
     /// Whether a brick is a part of its chunk.
     pub fn contains(&self, id: BrickId, position: [f32; 3]) -> bool {
@@ -109,6 +129,9 @@ impl Chunks {
         shape_of: impl Fn(BrickId) -> Option<(Pose, SharedShape)>,
     ) {
         let mut retired = Vec::new();
+        // The shapes rebuilt chunks had, freed off the tick.
+        let mut old = Vec::new();
+        self.rebuilt = 0;
         for key in std::mem::take(&mut self.dirty) {
             let Some(chunk) = self.chunks.get_mut(&key) else {
                 continue;
@@ -152,7 +175,11 @@ impl Chunks {
                 changed.push(aabb(&shape.compute_aabb(&Pose::IDENTITY)));
             }
             match chunk.handle {
-                Some(handle) => physics.colliders[handle].set_shape(shape),
+                Some(handle) => {
+                    let collider = &mut physics.colliders[handle];
+                    old.push(collider.shared_shape().clone());
+                    collider.set_shape(shape);
+                }
                 None => {
                     chunk.handle = Some(physics.insert_collider(
                         ColliderBuilder::new(shape).user_data(CHUNK_TAG | u128::from(chunk.serial)),
@@ -164,6 +191,9 @@ impl Chunks {
         }
         if !retired.is_empty() {
             parking.remove(physics, &retired);
+        }
+        if !old.is_empty() {
+            crate::drop_later::drop_later(old);
         }
     }
     /// Start or stop recording the boxes of rebuilt chunks.

@@ -37,25 +37,39 @@ impl ExplosionShapes {
         let root = root.canonicalize()?;
         let mut models = BTreeMap::new();
         for (key, explosion) in pack.explosions.iter().filter(|(_, e)| !e.shape.is_empty()) {
+            // A shape no package converted, such as a path naming a folder
+            // the game does not have (HE Grenade's `Weapon_Rocket Launcher`,
+            // with a space), means no shape: the explosion keeps its
+            // particles, lights, sounds and damage. Torque found no file
+            // there either, so the original drew none.
+            let Some((resource, file)) = pack
+                .resources
+                .iter()
+                .find(|r| {
+                    r.path.eq_ignore_ascii_case(&explosion.shape) && r.native_file.is_some()
+                })
+                .and_then(|r| Some((r, r.native_file.as_deref()?)))
+            else {
+                bri_console::warn(format!(
+                    "Explosion {}: shape {} is not provided by the game or any Add-On, so it shows without one",
+                    explosion.name, explosion.shape
+                ));
+                continue;
+            };
             // An Add-On's explosion shape that does not load is a cosmetic
             // fault (`crate::cosmetic`): the explosion keeps its particles,
             // lights and sounds and loses only the shape.
-            let owner = pack
-                .resources
-                .iter()
-                .find(|r| r.path.eq_ignore_ascii_case(&explosion.shape))
-                .and_then(|r| {
-                    let dir = r.package.as_ref()?;
-                    Some(bri_package::library::add_on_label(&bri_weapons::resource_root(&root, r), dir))
+            let owner = resource
+                .package
+                .as_ref()
+                .map(|dir| {
+                    bri_package::library::add_on_label(
+                        &bri_weapons::resource_root(&root, resource),
+                        dir,
+                    )
                 })
                 .or_else(|| key.split_once(':').map(|(package, _)| package.to_string()));
             let model = (|| -> Result<Model> {
-            let (resource, file) = pack
-                .resources
-                .iter()
-                .find(|r| r.path.eq_ignore_ascii_case(&explosion.shape))
-                .and_then(|r| Some((r, r.native_file.as_deref()?)))
-                .with_context(|| format!("Unconverted explosion shape {}", explosion.shape))?;
             let shape: Shape = serde_json::from_slice(&crate::materials::read_resource(
                 &bri_weapons::resource_root(&root, resource),
                 file,
@@ -278,17 +292,98 @@ mod tests {
         assert_eq!(sample1(&[], 0.5), None);
     }
     #[test]
-    #[ignore = "requires generated native weapons-pack-009; CPU only"]
-    fn rocket_explosion_sphere_expands_and_fades() -> Result<()> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/weapons-pack-009");
+    fn an_explosion_whose_shape_no_package_converted_loads_without_one() -> Result<()> {
+        // HE Grenade names `Weapon_Rocket Launcher` (a space) where the game
+        // has `Weapon_Rocket_Launcher`; another explosion names a shape whose
+        // conversion failed. Neither stops the load or the explosion.
+        let explosion = |name: &str, shape: &str| bri_weapons::ExplosionInfo {
+            name: name.into(),
+            sound: String::new(),
+            shake: None,
+            shape: shape.into(),
+            seconds: 0.5,
+            play_speed: 1.0,
+            face_viewer: true,
+            scale: [1.0; 3],
+            sizes: Vec::new(),
+        };
+        let pack = bri_weapons::Pack {
+            effects: Default::default(),
+            schema_version: bri_weapons::SCHEMA,
+            id: "test".into(),
+            items: Default::default(),
+            images: Default::default(),
+            projectiles: Default::default(),
+            damage_types: Default::default(),
+            explosions: [
+                (
+                    "hegrenadeexplosion".into(),
+                    explosion(
+                        "hegrenadeExplosion",
+                        "Add-Ons/Weapon_Rocket Launcher/explosionSphere1.dts",
+                    ),
+                ),
+                (
+                    "brokenexplosion".into(),
+                    explosion("brokenExplosion", "Add-Ons/Weapon_Broken/shape.dts"),
+                ),
+            ]
+            .into(),
+            sounds: Default::default(),
+            definitions: Vec::new(),
+            resources: vec![bri_weapons::Resource {
+                path: "Add-Ons/Weapon_Broken/shape.dts".into(),
+                sha256: "0".repeat(64),
+                native_file: None,
+                diagnostics: vec!["DTS conversion: unsupported".into()],
+                package: None,
+            }],
+            diagnostics: Vec::new(),
+            external_projectiles: Default::default(),
+            bindings: Vec::new(),
+        };
+        let root = tempfile::tempdir()?;
+        let shapes = ExplosionShapes::load(&pack, root.path())?;
+        assert!(shapes.models.is_empty());
+        Ok(())
+    }
+    /// A weapons pack with an explosion shape, and that explosion's name:
+    /// made up (`crate::testing::explosions`), or the converted v20 pack's
+    /// rocket explosion.
+    struct Blast {
+        root: std::path::PathBuf,
+        explosion: String,
+        _scratch: Option<crate::testing::ScratchDir>,
+    }
+    impl Blast {
+        fn synthetic() -> Result<Self> {
+            let scratch = crate::testing::ScratchDir::new("explosions")?;
+            crate::testing::explosions::write_pack(scratch.path())?;
+            Ok(Self {
+                root: scratch.path().to_path_buf(),
+                explosion: crate::testing::explosions::EXPLOSION.into(),
+                _scratch: Some(scratch),
+            })
+        }
+        fn content() -> Result<Self> {
+            Ok(Self {
+                root: Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/weapons-pack-009"),
+                explosion: "rocketExplosion".into(),
+                _scratch: None,
+            })
+        }
+    }
+    crate::testing::synthetic_and_content!(Blast: rocket_explosion_sphere_expands_and_fades);
+    fn rocket_explosion_sphere_expands_and_fades(fx: &Blast) -> Result<()> {
+        let root = &fx.root;
         let pack = bri_weapons::Pack::from_json(&std::fs::read(root.join("weapons.json"))?)?;
-        let mut shapes = ExplosionShapes::load(&pack, &root)?;
+        let mut shapes = ExplosionShapes::load(&pack, root)?;
         shapes.cue(&Cue {
             id: 1,
             tick: 1,
             kind: CueKind::WeaponEffect {
                 source: bri_weapons::TargetId::Map(0),
-                definition: "rocketExplosion".into(),
+                definition: fx.explosion.clone(),
                 node: String::new(),
                 seconds: 0.0,
                 image: None,
@@ -299,10 +394,11 @@ mod tests {
             position: [1.0, 2.0, 3.0],
         });
         shapes.advance(0.05);
-        let model = &shapes.models["rocketexplosion"];
+        let key = fx.explosion.to_ascii_lowercase();
+        let model = &shapes.models[&key];
         let first = model.transforms[0];
         shapes.advance(0.1);
-        let model = &shapes.models["rocketexplosion"];
+        let model = &shapes.models[&key];
         let later = &model.transforms[0];
         assert!(
             later.transform.x_axis.x > first.transform.x_axis.x,

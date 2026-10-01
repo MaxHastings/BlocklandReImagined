@@ -34,6 +34,13 @@ datablock ItemData(ND_Item)
    canDrop   = true;
 };
 
+// Lying in the world it loops its "spin" sequence.
+function ND_Item::onAdd(%this, %obj)
+{
+   parent::onAdd(%this, %obj);
+   %obj.playThread(0, spin);
+}
+
 datablock ShapeBaseImageData(ND_Image)
 {
    shapeFile  = "./wand.dts";
@@ -48,6 +55,8 @@ datablock ShapeBaseImageData(ND_Image)
 
    stateName[1]                    = "Ready";
    stateTransitionOnTriggerDown[1] = "Fire";
+   stateTransitionOnNotLoaded[1]   = "Spin";
+   stateSpinThread[1]              = "Stop";
    stateAllowImageChange[1]        = true;
 
    stateName[2]                    = "Fire";
@@ -56,6 +65,10 @@ datablock ShapeBaseImageData(ND_Image)
    stateFire[2]                    = true;
    stateScript[2]                  = "onFire";
    stateWaitForTimeout[2]          = true;
+
+   stateName[3]                    = "Spin";
+   stateSpinThread[3]              = "FullSpeed";
+   stateTransitionOnLoaded[3]      = "Ready";
 };
 
 datablock ShapeBaseImageData(ND_Image_Box : ND_Image)

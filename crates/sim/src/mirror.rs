@@ -50,7 +50,50 @@ pub struct Mirrors {
     signatures: BTreeMap<String, Signature>,
 }
 
+/// A mirror a lone brick is seen in where it stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Across {
+    /// East and west swap.
+    X,
+    /// North and south swap.
+    Z,
+    /// Top and bottom swap.
+    UpsideDown,
+}
+
 impl Mirrors {
+    /// The brick `id`, turned `turns` quarter turns, as it shows in the
+    /// mirror `across` where it stands: its image's kind and turn, as a
+    /// mirrored copy places each of its bricks.
+    pub fn mirror_brick(
+        &mut self,
+        definitions: &Definitions,
+        id: &str,
+        turns: u8,
+        across: Across,
+    ) -> MirrorImage {
+        let turns = turns % 4;
+        match across {
+            Across::UpsideDown => {
+                let image = self.image_in(definitions, id, Reflection::UpsideDown);
+                MirrorImage {
+                    turns: (image.turns + turns) % 4,
+                    ..image
+                }
+            }
+            Across::X | Across::Z => {
+                let image = self.image_in(definitions, id, Reflection::Side);
+                // Across x: the image's turn less the brick's; across z is
+                // that turned half way round.
+                let half = if across == Across::Z { 2 } else { 0 };
+                MirrorImage {
+                    turns: (image.turns + 4 - turns + half) % 4,
+                    ..image
+                }
+            }
+        }
+    }
+
     /// The image of the brick `id` across its own x axis.
     pub fn image(&mut self, definitions: &Definitions, id: &str) -> MirrorImage {
         self.image_in(definitions, id, Reflection::Side)

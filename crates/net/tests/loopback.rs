@@ -454,8 +454,8 @@ async fn full_event_list_crosses_real_quic_replication_and_native_save_atomicall
         brick: id,
         events: events.clone(),
     });
-    let size = serde_json::to_vec(&bri_net::protocol::Request::new(3, command.clone(), None))?
-    .len();
+    let size =
+        serde_json::to_vec(&bri_net::protocol::Request::new(3, command.clone(), None))?.len();
     assert!(size > 64 * 1024 && size <= bri_net::codec::MAX_REQUEST);
     assert_eq!(owner.command(command).await?, Reply::Accepted);
     wait(&mut owner, |client| {
@@ -547,13 +547,46 @@ async fn full_event_list_crosses_real_quic_replication_and_native_save_atomicall
     );
     Ok(())
 }
+/// A weapons pack with the v20 gun (by the ids the engine names it with)
+/// and the sound its shot plays.
+struct GunPack {
+    pack: bri_weapons::Pack,
+    shot_sound: String,
+}
+impl GunPack {
+    fn synthetic() -> Self {
+        use bri_weapons::testing::GUN_IMAGE;
+        let pack = bri_weapons::testing::pack();
+        let shot_sound = pack.images[GUN_IMAGE]
+            .states
+            .iter()
+            .find(|s| s.name == "Fire")
+            .map(|s| s.sound.clone())
+            .expect("the made-up gun has a Fire state");
+        assert!(!shot_sound.is_empty());
+        Self { pack, shot_sound }
+    }
+    fn content() -> Result<Self> {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../content/weapons-pack-009/weapons.json");
+        Ok(Self {
+            pack: bri_weapons::Pack::from_json(&std::fs::read(root)?)?,
+            shot_sound: "gunShot1Sound".into(),
+        })
+    }
+}
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires native weapons pack; headless QUIC only"]
+async fn projectiles_and_equipped_images_survive_real_quic_late_join_synthetic() -> Result<()> {
+    projectiles_and_equipped_images_survive_real_quic_late_join(GunPack::synthetic()).await
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires generated v20 content"]
 async fn native_projectiles_and_equipped_images_survive_real_quic_late_join() -> Result<()> {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../content/weapons-pack-009/weapons.json");
+    projectiles_and_equipped_images_survive_real_quic_late_join(GunPack::content()?).await
+}
+async fn projectiles_and_equipped_images_survive_real_quic_late_join(gun: GunPack) -> Result<()> {
     let mut game = session();
-    game.set_weapon_pack(bri_weapons::Pack::from_json(&std::fs::read(root)?)?)?;
+    game.set_weapon_pack(gun.pack)?;
     let mut loadout = bri_sim::session::ToolInventory::default();
     loadout.slots[3] = Some("v20.weapon.gunitem".into());
     game.set_spawn_loadout(loadout)?;
@@ -625,8 +658,9 @@ async fn native_projectiles_and_equipped_images_survive_real_quic_late_join() ->
     );
     cues.extend(first.replica.take_cues());
     assert!(
-        cues.iter().any(|c| matches!(&c.kind, bri_sim::presentation::CueKind::WeaponSound { profile } if profile == "gunShot1Sound")),
-        "no gunShot1Sound cue by the projectile's first update; cues: {:?}\n{}",
+        cues.iter().any(|c| matches!(&c.kind, bri_sim::presentation::CueKind::WeaponSound { profile } if *profile == gun.shot_sound)),
+        "no {} cue by the projectile's first update; cues: {:?}\n{}",
+        gun.shot_sound,
         cues.iter().map(|c| (c.tick, &c.kind)).collect::<Vec<_>>(),
         timeline.join("\n")
     );
@@ -1490,13 +1524,31 @@ async fn build_request_larger_than_old_frame_limit_crosses_real_quic() -> Result
     Ok(())
 }
 
+/// An avatar catalog's `avatar.json`: the made-up package of
+/// `bri_content::testing::avatar`, or the converted original.
+fn avatar_package(dir: &std::path::Path) -> Result<bri_content::avatar::Package> {
+    Ok(serde_json::from_slice(&std::fs::read(
+        dir.join("avatar.json"),
+    )?)?)
+}
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires converted original avatar catalog"]
+async fn avatar_changes_replicate_late_join_reject_invalid_and_resume() -> Result<()> {
+    let dir = bri_content::testing::ScratchDir::new("net-avatar")?;
+    bri_content::testing::avatar::write(dir.path())?;
+    avatar_changes_replicate_late_join_reject_invalid_and_resume_with(avatar_package(dir.path())?)
+        .await
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires generated v20 content"]
 async fn original_avatar_changes_replicate_late_join_reject_invalid_and_resume() -> Result<()> {
-    let root =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-002");
-    let package: bri_content::avatar::Package =
-        serde_json::from_slice(&std::fs::read(root.join("avatar.json"))?)?;
+    avatar_changes_replicate_late_join_reject_invalid_and_resume_with(avatar_package(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-002"),
+    )?)
+    .await
+}
+async fn avatar_changes_replicate_late_join_reject_invalid_and_resume_with(
+    package: bri_content::avatar::Package,
+) -> Result<()> {
     let mut session = session();
     session.set_avatar_catalog(package.clone())?;
     let server = server::start(session, options())?;
@@ -1566,7 +1618,10 @@ async fn original_avatar_changes_replicate_late_join_reject_invalid_and_resume()
         c.replica.avatars.get(&owner) == Some(&appearance)
     })
     .await?;
-    wait(&mut a, |c| c.replica.avatars.get(&owner) == Some(&appearance)).await?;
+    wait(&mut a, |c| {
+        c.replica.avatars.get(&owner) == Some(&appearance)
+    })
+    .await?;
     drop(a);
     wait(&mut b, |c| !c.replica.names.contains_key(&owner)).await?;
     assert!(!b.replica.avatars.contains_key(&owner));
@@ -2672,14 +2727,21 @@ async fn a_guest_hammers_their_own_bot_spawn_brick_after_rejoining() -> Result<(
     const SPAWN: &str = "vehicle_spawn";
     let mut game = session_with_sturdy(&[SPAWN]);
     game.set_weapon_pack(tool_pack())?;
-    game.set_vehicle_pack(bri_vehicles::Pack {
-        schema_version: bri_vehicles::schema::SCHEMA_VERSION,
-        definitions: vec![],
-        assets: vec![],
-        evidence: vec![],
-        unresolved: vec![],
-        animation_aliases: Default::default(),
-    }, bri_sim::bot_kind::BotPack::from_json(include_bytes!("../../../packages/blockhead_bot/assets/bots.json")).unwrap().bots)?;
+    game.set_vehicle_pack(
+        bri_vehicles::Pack {
+            schema_version: bri_vehicles::schema::SCHEMA_VERSION,
+            definitions: vec![],
+            assets: vec![],
+            evidence: vec![],
+            unresolved: vec![],
+            animation_aliases: Default::default(),
+        },
+        bri_sim::bot_kind::BotPack::from_json(include_bytes!(
+            "../../../packages/blockhead_bot/assets/bots.json"
+        ))
+        .unwrap()
+        .bots,
+    )?;
     game.set_tool_catalog(ToolCatalog {
         vehicles: ["bot.blockhead".to_string()].into(),
         vehicle_bricks: [SPAWN.to_string()].into(),
@@ -2949,7 +3011,10 @@ async fn clan_tags_from_the_join_and_avatar_done_reach_chat() -> Result<()> {
     wait(&mut guest, move |c| said(c, "Host", "hello").is_some()).await?;
     // Cleaned as `onConnectRequest` does: ML tags and control characters
     // dropped, 4 characters, trimmed.
-    assert_eq!(said(&guest, "Host", "hello"), Some(join("", "[H]", "").clan));
+    assert_eq!(
+        said(&guest, "Host", "hello"),
+        Some(join("", "[H]", "").clan)
+    );
     assert_eq!(said(&host, "Guest", "hi"), Some(join("", "[G]", "~").clan));
 
     // Avatar Done while connected sends the new tags.
@@ -2961,7 +3026,10 @@ async fn clan_tags_from_the_join_and_avatar_done_reach_chat() -> Result<()> {
         .await?;
     guest.command(Command::Chat("again".into())).await?;
     wait(&mut host, move |c| said(c, "Guest", "again").is_some()).await?;
-    assert_eq!(said(&host, "Guest", "again"), Some(join("", "", "[NW]").clan));
+    assert_eq!(
+        said(&host, "Guest", "again"),
+        Some(join("", "", "[NW]").clan)
+    );
     drop((host, guest));
     server.stop().await?;
     Ok(())

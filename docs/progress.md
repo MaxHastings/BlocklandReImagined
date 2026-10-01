@@ -9832,39 +9832,6 @@ test boxes now use these hull sizes. Sizes: 1x4x5 (players), 1x14x10
 1x14x10. Still to confirm on the PC: where the turret's mount node puts
 it.
 
-## 2026-10-01 Adventurer's Weapons port on the magazine seam (branch `claude/adventure-pack-n3spj2`)
-
-Max's "originals only" and "bundle in download" decisions: the release zip
-carries Bushido's own pack, imported from Max's copy at release time, and
-the repository holds only our port. This branch now sits on Tier's
-magazine seam (`claude/tier-tactical-3onhik` 2717c502) and the Fill Can
-lane's host-rules companion (95c4d124, cherry-picked). The hit region
-seam now reads Tier's `combat::Hit`: `damage_player` measures the region
-from the hit point, and `damage_player_at` is gone.
-
-Port `weapon_modernwarbattles` (partial), against the Gate's notes on
-`Weapon_ModernWarbattles.zip` (sha256 `4d938fe3…92ed`):
-- Ports gain two general readers of the imported datablocks
-  (`crates/addon-import/src/ports/datablocks.rs`, `porting.md`):
-  `magazines` turns an ammo system's item fields (`maxmag`, `ammotype`)
-  into each gun image's `magazine`, with reload ticks from the image's own
-  reload states; rules `tables` hand the rules a map of datablock fields
-  (each projectile's `headshotMultiplier` by damage type, each ammo box).
-- The rules: a projectile's damage times its `headshotMultiplier` on a
-  head hit or a crouched target; ammo boxes top up carried guns' reserves
-  (ALL once, a typed box twice, capped), and are used up only when they
-  gave something.
-- Not yet: the hitscan guns (Support_RaycastingWeapons, crit ×3 with
-  `gunHeadshot` and its shove), the melee vehicle kill, the grenade's
-  shrapnel, the HUD's `<mag>/<reserve> AMMO` wording (the engine's ammo
-  display shows the same numbers). These wait on the real import report
-  and on Glass 1019, the full pack, which is the main target.
-
-Tests: `crates/addon-import/tests/adventure_port.rs` on a CC0 stand-in
-(`tests/fixtures/ports/Weapon_ModernWarbattles`): the magazines, one reload
-pass through the image's states, boxes and headshots in a hosted game.
-`cargo test -p bri-addon-import`, the touched bri-sim and bri-weapons
-suites, clippy on the touched crates.
 ## 2026-10-01 Classic Add-Ons from one drop folder (branch `claude/tier-tactical-3onhik`)
 
 Max did not want the game looking for players' Blockland folders, so the
@@ -10679,3 +10646,31 @@ it); `bri-render --lib a_shade_facing_away_from_its_light_goes_dark_with_it`
 (the light given, so the fit cannot explain the shade with lights placed
 outside it; 153 levels kept without the change, at most 2 with it);
 `bri-client --lib a_broken_bulb_switches_off_its_lights_and_rules_tint_the_rest`.
+
+## 2026-10-01 Shots drawn from the gun's muzzle (branch `claude/sniper-rifle-u9z1bd`)
+
+Max, playing Kaje's Sniper Rifle in the d6152ab58 test build: some of the
+bullet's effects start in the wrong spot, not at the muzzle.
+
+Cause: the host flies every fired projectile from the shooter's eye
+(`session/weapons.rs` sets `Frame::muzzle` to the eye), and clients drew
+the projectile and its trail on that path, so tracers left the shooter's
+face. v20 starts the projectile at the image's `muzzlePoint` and, with
+`correctMuzzleVector`, aims it at the point the eye looks at. The muzzle
+flash, smoke and casings were already right: state emitters use their node
+(a missing one, like Kaje's `muzzleNode`, falls back to `muzzlePoint`, as
+Torque's image preload does) and casings use `ejectPoint`.
+
+Fix, for every weapon (`crates/client/src/shot_origins.rs`): each fresh
+fired projectile is drawn from the muzzle of the image its shooter holds,
+as this client draws it (first person included), and closes on the host's
+path along a straight line to where the aim meets the world (the client's
+own building raycast, capped at the projectile's range). That is the line
+v20's projectile flew. From there, and once it bounces or sticks, it is
+where the host has it. Gameplay, hits and bandwidth are unchanged.
+Projectiles first seen late, spawn and death effects, and muzzles more
+than 4 units from the eye are drawn where the host has them.
+
+Tests: `bri-client --lib shot_origins` (a shot leaves the muzzle, is
+halfway across halfway to the wall, and is on the host's path at and after
+it; late, bounced and far-muzzle shots are untouched).

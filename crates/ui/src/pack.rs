@@ -160,6 +160,13 @@ impl Pack {
         raster
     }
 
+    /// Supplies decoded pixels for `key` instead of reading them from the
+    /// pack directory: packs built in memory (tests' made-up assets, see
+    /// [`crate::testing`]) have no files.
+    pub fn insert_pixels(&self, key: TexKey, pixels: Pixels) {
+        self.cache.borrow_mut().insert(key, Some(Rc::new(pixels)));
+    }
+
     pub fn has_image(&self, id: &str) -> bool {
         self.data.images.contains_key(id)
     }

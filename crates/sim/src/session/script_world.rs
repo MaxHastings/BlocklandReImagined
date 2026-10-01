@@ -179,6 +179,13 @@ impl World for ScriptWorld<'_> {
             .get(&brick)
             .is_some_and(|b| self.session.rule_may_edit(caller, b.owner))
     }
+    fn may_copy(&self, player: u64, brick: u64, rule: bri_package_runtime::ops::CopyRule) -> bool {
+        let sim = &self.session.simulation;
+        match (self.session.peers.get(&player), sim.state().bricks.get(&brick)) {
+            (Some(peer), Some(b)) => blueprints::admits(&peer.actor, rule, sim, brick, b),
+            _ => false,
+        }
+    }
     fn can_plant(&self, kind: &str, position: [f32; 3], turns: u8) -> bool {
         self.session
             .planted_brick(kind, position, turns, 0, 0)

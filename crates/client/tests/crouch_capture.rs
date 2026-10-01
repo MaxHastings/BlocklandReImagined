@@ -1,13 +1,18 @@
-//! Offscreen capture of v20's crouch-thread "humping" quirk on the original
-//! rig: a side-view contact sheet plus the sampled hip heights. No window.
-//!
-//! cargo test -p bri-client --test crouch_capture -- --ignored
+//! Offscreen capture of v20's crouch-thread "humping" quirk: a side-view
+//! contact sheet plus the sampled hip heights, on the made-up avatar
+//! (`bri_client::testing::avatar`) and, ignored, on the original rig. No
+//! window.
+#[macro_use]
+mod support;
+
 use anyhow::{Context, Result};
-use bri_client::avatar::{AvatarAssets, AvatarMesh};
+use bri_client::avatar::AvatarMesh;
 use bri_render::scene::{Camera, SceneRenderer, create_depth};
 use bri_sim::player::PlayerState;
 use bri_ui::gpu::Headless;
-use std::path::Path;
+use support::{avatar_fixture::AvatarFixture, gpu};
+
+synthetic_and_content!(AvatarFixture: recrouching_while_rising_snaps_the_rig_to_standing);
 
 const TILE: (u32, u32) = (240, 360);
 
@@ -115,13 +120,10 @@ fn render(gpu: &Headless, renderer: &mut SceneRenderer, mesh: &AvatarMesh) -> Re
     Ok(pixels)
 }
 
-#[test]
-#[ignore = "requires original native avatar pack and offscreen GPU; no window"]
-fn recrouching_while_rising_snaps_the_original_rig_to_standing() -> Result<()> {
-    let content = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-002");
-    let assets = AvatarAssets::load(&content)?;
+fn recrouching_while_rising_snaps_the_rig_to_standing(f: &AvatarFixture) -> Result<()> {
+    let assets = &f.assets;
     let mut mesh = assets.mesh(assets.package.defaults.clone())?;
-    let gpu = Headless::new()?;
+    let gpu = gpu::turn()?;
     let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8Unorm);
 
     // Stand, crouch for 0.3 s, release for 0.1 s, then tap crouch again.
@@ -132,8 +134,8 @@ fn recrouching_while_rising_snaps_the_original_rig_to_standing() -> Result<()> {
     let mut tiles = Vec::new();
     for frame in 0..frames {
         let state = player(crouched_at(frame));
-        mesh.pose(&assets, &state, f64::from(frame) / 60.0)?;
-        let hip = mesh.world_node(&assets, "Hip").context("Hip")?.w_axis.y;
+        mesh.pose(assets, &state, f64::from(frame) / 60.0)?;
+        let hip = mesh.world_node(assets, "Hip").context("Hip")?.w_axis.y;
         hips.push((frame, state.crouched, hip));
         if captured.contains(&frame) {
             mesh.upload(&renderer, &gpu.device, &gpu.queue)?;
@@ -147,8 +149,7 @@ fn recrouching_while_rising_snaps_the_original_rig_to_standing() -> Result<()> {
     assert!(at(30) > at(29) + 0.1, "re-crouch did not snap: {hips:?}");
     assert!(at(41) < at(30));
 
-    let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../artifacts/torque-quirks");
-    std::fs::create_dir_all(&out)?;
+    let out = f.out("torque-quirks")?;
     let (width, height) = TILE;
     let sheet_width = width * tiles.len() as u32;
     let mut sheet = vec![0u8; (sheet_width * height * 4) as usize];

@@ -2,8 +2,10 @@
 //! on a brick roof shades the roof only (the room's ceiling above once let
 //! the shadow fall through to the floor below as well), and a spawned horse
 //! casts like every other vehicle (see side-on-roof.png).
-//! Run with: cargo test -p bri-client --test shadow_render --release -- --ignored --nocapture
-//! Requires converted v20 content, loopback QUIC and an offscreen GPU; never opens a window.
+//! Runs on the made-up content root (its Bedroom a lit room); the ignored
+//! variant runs on the generated v20 content (`--release -- --ignored`,
+//! BRI_CONTENT or content/). Loopback QUIC and an offscreen GPU; never
+//! opens a window.
 use anyhow::{Context, Result, ensure};
 use bri_client::{
     app::App,
@@ -17,11 +19,16 @@ use glam::Vec3;
 use std::{
     path::Path,
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 
+#[macro_use]
+mod support;
+use support::content_root::ContentRoot;
+
+synthetic_and_content!(ContentRoot: a_player_on_a_roof_shades_the_roof_not_the_floor_below);
+
 const SIZE: (u32, u32) = (640, 480);
-const BEDROOM: &str = "v20/add-ons/map_bedroom/bedroom.mis";
 /// Pillar layers of 2x2 bricks (0.6 units each) under the player.
 const LAYERS: usize = 14;
 /// Roof bricks along each side (one unit each) on top of the pillar.
@@ -214,22 +221,14 @@ fn red(pixel: &[u8]) -> bool {
     r > 60 && r > 2 * g && r > 2 * b
 }
 
-#[test]
-#[ignore = "requires converted native v20 content, loopback QUIC and offscreen GPU; no window/audio device"]
-fn a_player_on_a_roof_shades_the_roof_not_the_floor_below() -> Result<()> {
-    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let artifact = workspace.join("artifacts/shadow-render");
-    std::fs::create_dir_all(&artifact)?;
-    let state = artifact.join(format!(
-        "state-{}-{}",
-        std::process::id(),
-        SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
-    ));
-    std::fs::create_dir_all(&state)?;
-    let mut app = App::load(&workspace.join("content"), &state, SIZE)?;
+fn a_player_on_a_roof_shades_the_roof_not_the_floor_below(f: &ContentRoot) -> Result<()> {
+    let artifact = f.out("shadow-render")?;
+    let state_dir = f.state()?;
+    let state = state_dir.path();
+    let mut app = App::load(&f.root, state, SIZE)?;
     app.ui.core.pop(bri_ui::screens::ScreenId::DefaultControls);
     app.ui.core.request(UiAction::HostGame {
-        map: BEDROOM.into(),
+        map: f.open_map.0.clone(),
         mode: ServerMode::SinglePlayer,
         game_mode: None,
         max_players: 1,
@@ -239,7 +238,7 @@ fn a_player_on_a_roof_shades_the_roof_not_the_floor_below() -> Result<()> {
         super_admin_password: String::new(),
     });
     pump(&mut app)?;
-    until(&mut app, "Bedroom host/player", |a| {
+    until(&mut app, "host/player", |a| {
         matches!(a.ui.core.conn, ConnectionState::InGame { .. })
             && a.network_view()
                 .is_some_and(|v| v.poses.contains_key(&v.owner))
@@ -266,7 +265,7 @@ fn a_player_on_a_roof_shades_the_roof_not_the_floor_below() -> Result<()> {
     let mut next = 1;
     let mut red_brick = |x: f32, layer: usize, z: f32| {
         let mut brick = bri_world::Brick::new(
-            bri_world::ContentRef::Resolved("v20/brick/brick2x2data".into()),
+            bri_world::ContentRef::Resolved(f.brick.clone()),
             [x, floor + 0.3 + 0.6 * layer as f32, z],
             view.owner,
         );
@@ -286,12 +285,12 @@ fn a_player_on_a_roof_shades_the_roof_not_the_floor_below() -> Result<()> {
         }
     }
     let mut spawn = bri_world::Brick::new(
-        bri_world::ContentRef::Resolved("v20/brick/brickvehiclespawndata".into()),
+        bri_world::ContentRef::Resolved(f.vehicle_spawn.clone()),
         [horse.x, floor + 0.1, horse.z],
         view.owner,
     );
     spawn.vehicle = Some(Box::new(bri_world::VehicleSpawn {
-        vehicle: bri_world::ContentRef::Resolved("v20.vehicle.horsearmor".into()),
+        vehicle: bri_world::ContentRef::Resolved(bri_vehicles::testing::HORSE.into()),
         recolor: false,
     }));
     world.bricks.insert(next, spawn);
@@ -307,7 +306,7 @@ fn a_player_on_a_roof_shades_the_roof_not_the_floor_below() -> Result<()> {
         serde_json::to_vec(&build)?,
     )?;
     app.ui.core.request(UiAction::LoadBricks {
-        map: "Bedroom".into(),
+        map: f.open_map.1.clone(),
         name: "shadow.world.json".into(),
         ownership: true,
     });
@@ -317,7 +316,7 @@ fn a_player_on_a_roof_shades_the_roof_not_the_floor_below() -> Result<()> {
             !v.vehicles.is_empty() && v.world.bricks.len() > 4 * LAYERS + ROOF * ROOF
         })
     })?;
-    let gpu = Headless::new().context("offscreen shadow renderer")?;
+    let gpu = support::gpu::turn().context("offscreen shadow renderer")?;
     let mut renderer = UiRenderer::new(&gpu.device, &gpu.queue);
     app.gpu_ready(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm)?;
     let top = pillar + Vec3::Y * (0.6 * (LAYERS + 1) as f32);
@@ -362,10 +361,31 @@ fn a_player_on_a_roof_shades_the_roof_not_the_floor_below() -> Result<()> {
     // through the roof.
     let (with, without) = (&shots[0], &empty[0]);
     let luma = |p: &[u8]| i32::from(p[0]) + i32::from(p[1]) + i32::from(p[2]);
+    // The roof seen straight down is a square: inside its outline is roof,
+    // whatever stands on it (the player's own darker parts are not floor).
+    let width = SIZE.0 as usize;
+    let outline = without
+        .chunks_exact(4)
+        .enumerate()
+        .filter(|(_, p)| red(p))
+        .fold(None, |r: Option<[usize; 4]>, (i, _)| {
+            let (x, y) = (i % width, i / width);
+            Some(r.map_or([x, y, x, y], |[x0, y0, x1, y1]| {
+                [x0.min(x), y0.min(y), x1.max(x), y1.max(y)]
+            }))
+        });
+    let inside = |i: usize| {
+        let (x, y) = (i % width, i / width);
+        outline.is_some_and(|[x0, y0, x1, y1]| (x0..=x1).contains(&x) && (y0..=y1).contains(&y))
+    };
     let (mut roof, mut shaded, mut leaked) = (0, 0, 0);
     let mut mask = Vec::with_capacity(with.len());
-    for (a, b) in with.chunks_exact(4).zip(without.chunks_exact(4)) {
-        let on_roof = red(b);
+    for (i, (a, b)) in with
+        .chunks_exact(4)
+        .zip(without.chunks_exact(4))
+        .enumerate()
+    {
+        let on_roof = red(b) || inside(i);
         let darker = luma(b) - luma(a) > 45;
         roof += usize::from(on_roof);
         shaded += usize::from(darker && on_roof);

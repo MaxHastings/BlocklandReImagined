@@ -112,6 +112,14 @@ fn cmd_orbit_dazed(p, target) { orbit_camera(p, target, 4, 9, 6, "dazed"); }
 fn on_activate(p) { note("heard", get("heard") + "activate "); true }
 fn on_observer(p, button) { note("heard", get("heard") + button + " "); true }
 fn cmd_put_away(p) { unmount_image(p); }
+fn cmd_frame(p, mine, size) {
+    let owner = if mine { p } else { () };
+    show_shapes(owner, "frame", [
+        #{ min: [0.0, 0.0, 0.0], max: [size, size, size], color: [0.0, 0.0, 0.0, 0.35], inside: [0.0, 0.0, 0.0, 0.6] },
+        #{ min: [0.0, size, 0.0], max: [0.1, size + 0.1, 0.1], sides: [[1.0, 0.84, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0], [1.0, 1.0, 1.0, 1.0]], label: "Frame" },
+    ]);
+}
+fn cmd_unframe(p, mine) { hide_shapes(if mine { p } else { () }, "frame"); }
 fn cmd_bot(p, name) {
     let kinds = bot_kinds();
     note("kinds", `${kinds[0].id} ${kinds[0].first_names.len() > 0} ${bot_limit()}`);
@@ -178,6 +186,8 @@ fn behaviour() -> Value {
             command("keep", &["string"]),
             command("orbit_dazed", &["int"]),
             command("put_away", &[]),
+            command("frame", &["bool", "float"]),
+            command("unframe", &["bool"]),
             command("bot", &["string"]),
             command("bots", &[]),
             command("rest", &["int", "bool"]),
@@ -611,6 +621,64 @@ fn scripts_switch_dim_and_recolour_map_lights_for_everyone() {
     // A later, wider sphere wins where it overlaps.
     g.run(a, "lamp", vec![PackageArg::Float(0.0), PackageArg::Float(10.0), PackageArg::Bool(false)]);
     assert_eq!(MapLightRule::tint_at(&g.s.map_light_rules(), Vec3::new(4.0, 2.0, 0.0)), Vec3::ZERO);
+}
+
+#[test]
+fn scripts_draw_world_shapes_for_everyone() {
+    use bri_package_runtime::ops::WorldShape;
+    let mut g = Game::new();
+    let a = g.join(Vec3::new(0.0, 0.05, 0.0));
+    let b = g.join(Vec3::new(4.0, 0.05, 0.0));
+    g.run(a, "frame", vec![PackageArg::Bool(true), PackageArg::Float(2.0)]);
+    g.run(b, "frame", vec![PackageArg::Bool(true), PackageArg::Float(1.0)]);
+    g.run(a, "frame", vec![PackageArg::Bool(false), PackageArg::Float(3.0)]);
+    let sets = g.s.world_shapes();
+    let keys: Vec<_> = sets.keys().cloned().collect();
+    assert_eq!(keys, [format!("probe/{a}/frame"), format!("probe/{b}/frame"), "probe/frame".into()]);
+    assert_eq!(
+        *sets[&format!("probe/{a}/frame")],
+        [
+            WorldShape {
+                min: [0.0; 3],
+                max: [2.0; 3],
+                color: [0, 0, 0, 89],
+                inside: [0, 0, 0, 153],
+                sides: None,
+                label: String::new(),
+            },
+            WorldShape {
+                min: [0.0, 2.0, 0.0],
+                max: [0.1, 2.1, 0.1],
+                color: [0; 4],
+                inside: [0; 4],
+                sides: Some([[255, 214, 0, 255], [0, 0, 255, 255], [255; 4]]),
+                label: "Frame".into(),
+            },
+        ]
+    );
+    // The same set again changes nothing; another replaces it.
+    let revision = g.s.world_shapes_revision();
+    g.run(a, "frame", vec![PackageArg::Bool(true), PackageArg::Float(2.0)]);
+    assert_eq!(g.s.world_shapes_revision(), revision);
+    g.run(a, "frame", vec![PackageArg::Bool(true), PackageArg::Float(5.0)]);
+    assert_ne!(g.s.world_shapes_revision(), revision);
+    assert_eq!(g.s.world_shapes()[&format!("probe/{a}/frame")][0].max, [5.0; 3]);
+    // A player's own sets go when they leave; hiding takes one away.
+    g.s.disconnect(b).unwrap();
+    assert!(!g.s.world_shapes().contains_key(&format!("probe/{b}/frame")));
+    g.run(a, "unframe", vec![PackageArg::Bool(true)]);
+    assert_eq!(g.s.world_shapes().keys().collect::<Vec<_>>(), ["probe/frame"]);
+    // A box past the longest side is refused.
+    let refused = g.send(
+        a,
+        Command::Package(PackageCommand {
+            package: "probe".into(),
+            command: "frame".into(),
+            args: vec![PackageArg::Bool(false), PackageArg::Float(2000.0)],
+        }),
+    );
+    assert!(format!("{:#}", refused.unwrap_err()).contains("outside the operation's limits"));
+    assert_eq!(g.s.world_shapes()["probe/frame"][0].max, [3.0; 3]);
 }
 
 #[test]

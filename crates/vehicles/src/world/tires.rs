@@ -383,83 +383,6 @@ mod tests {
         Vec3::from(s.velocity).length() / s.angular_velocity[1].abs()
     }
 
-    /// A four-wheel, four-wheel-steered vehicle with v20's Tank drivetrain
-    /// and tyres (Vehicle_Tank.cs; `TankVehicle::onAdd` steers the rear
-    /// wheels by -0.8 and powers all four) on made-up springs and body.
-    fn tank_like() -> Pack {
-        let wheel = |x: f32, z: f32, steering: f32| {
-            serde_json::json!({
-                "position": [x, 0.3, z], "radius": 0.66, "rest_length": 0.6,
-                "spring": 3000.0, "damping": 800.0, "anti_sway": 1.0,
-                "tire": {
-                    "static_friction": 5.0, "kinetic_friction": 5.0,
-                    "lateral_force": 18000.0, "lateral_damping": 4000.0,
-                    "lateral_relaxation": 0.01,
-                    "longitudinal_force": 14000.0, "longitudinal_damping": 2000.0,
-                    "longitudinal_relaxation": 0.01
-                },
-                "steering": steering, "powered": true, "model": "tire",
-                "model_rotation": [0.0, 0.0, 0.0, 1.0]
-            })
-        };
-        let box_hull: Vec<[f32; 3]> = (0..8)
-            .map(|i| {
-                [
-                    if i & 1 == 0 { -2.4 } else { 2.4 },
-                    if i & 2 == 0 { 0.2 } else { 2.2 },
-                    if i & 4 == 0 { -3.2 } else { 3.2 },
-                ]
-            })
-            .collect();
-        let definition = serde_json::json!({
-            "id": "v20.vehicle.tanklike", "datablock": "TankLike", "name": "Tank-like",
-            "family": "Wheeled",
-            "energy": {"maximum": 0.0, "minimum_jet": 0.0, "drain_per_32ms": 0.0,
-                       "recharge_per_32ms": 0.0, "jet_force": 0.0},
-            "flight": null, "model": "hull",
-            "seats": [{"node": "mount0", "transform": {"position": [0.0, 1.5, 0.0],
-                       "rotation": [0.0, 0.0, 0.0, 1.0]}, "pose": "root",
-                       "controls": true, "weapon": false}],
-            "wheels": [wheel(-1.92, -1.6, 1.0), wheel(1.92, -1.6, 1.0),
-                       wheel(-1.92, 1.55, -0.8), wheel(1.92, 1.55, -0.8)],
-            "weapon": null, "attachment_model": null, "attachment_collision_hulls": [],
-            "attachment_mount": null, "attachment_fallback_seat": null,
-            "collision_hulls": [box_hull],
-            "bounds_min": [-2.4, 0.2, -3.2], "bounds_max": [2.4, 2.2, 3.2]
-        });
-        let body: serde_json::Value = serde_json::from_str(
-            r#"{
-            "mass": 300.0, "mass_center": [0.0, 0.0, 0.0], "inertia_box": [4.87, 2.0, 6.47],
-            "density": 1.0, "drag": 1.6, "friction": 0.6, "restitution": 0.0,
-            "max_damage": 1000.0, "burn_ticks": 0, "invulnerable_ticks": 0,
-            "initial_explosion": null, "final_explosion": null,
-            "initial_explosion_offset": 0.0, "final_explosion_offset": 0.0,
-            "mount_distance": 5.0, "engine_force": 25000.0, "engine_brake": 2000.0,
-            "brake_force": 5000.0, "max_speed": 20.0, "reverse_speed": 10.0,
-            "max_steering": 0.9785, "thrust": 0.0, "reverse_thrust": 0.0, "lift": 0.0,
-            "yaw_force": 0.0, "pitch_force": 0.0, "roll_force": 0.0, "angular_drag": 0.2,
-            "jump_speed": 0.0, "max_side_speed": 0.0, "run_surface_angle": 0.0,
-            "impact_threshold": 1000.0, "impact_damage": 0.0, "strafe_steering": false,
-            "look_pitch": [-1.5, 1.5], "underwater_speeds": [0.0, 0.0, 0.0],
-            "camera": {"max_dist": 8.0, "offset": 2.0, "tilt": 0.0, "lag": 0.0, "decay": 0.0},
-            "look_limits": [0.0, 1.0], "runover_speed": 1000.0, "runover_damage": 0.0,
-            "runover_push": 0.0, "protect_direct": false, "protect_radius": false,
-            "protect_burn": false, "authored": {}, "adaptations": []
-            }"#,
-        )
-        .unwrap();
-        let mut definition = definition;
-        definition
-            .as_object_mut()
-            .unwrap()
-            .extend(body.as_object().unwrap().clone());
-        serde_json::from_value(serde_json::json!({
-            "schema_version": SCHEMA_VERSION, "definitions": [definition], "assets": [],
-            "evidence": [], "unresolved": [], "animation_aliases": {}
-        }))
-        .unwrap()
-    }
-
     fn check(pack: Pack, id: &str) {
         let d = pack
             .definitions
@@ -477,13 +400,13 @@ mod tests {
         }
     }
 
-    /// At full lock the Tank's rear tyres, steering against the front,
-    /// slide round and it pivots almost on the spot; at part lock it holds
-    /// a wide circle. Rapier's near-rigid wheels circled 23.5 at full lock
-    /// where Torque's tyres give 3.9.
+    /// At full lock a tank's rear tyres, steering against the front, slide
+    /// round and it pivots almost on the spot; at part lock it holds a wide
+    /// circle. Rapier's near-rigid wheels circled far wider at full lock
+    /// than Torque's tyres do.
     #[test]
-    fn a_tank_like_vehicle_turns_as_torques_tyres_do() {
-        check(tank_like(), "v20.vehicle.tanklike");
+    fn a_tank_turns_as_torques_tyres_do() {
+        check(crate::testing::pack(), crate::testing::TANK);
     }
 
     /// A driving client resets its vehicle to the host's pose and replays
@@ -491,10 +414,21 @@ mod tests {
     /// replay lands exactly where the host does, slipping tyres included.
     #[test]
     fn a_replay_from_the_hosts_pose_matches_the_host() {
-        let (mut host, mut hw) = driven(tank_like(), "v20.vehicle.tanklike");
-        let (mut client, mut cw) = driven(tank_like(), "v20.vehicle.tanklike");
+        let tank = crate::testing::TANK;
+        let full_lock = crate::testing::definition(tank).max_steering;
+        // Slick tyres, so the replay has slipping wheels to get right.
+        let slick = || {
+            crate::testing::pack_with(|d| {
+                for wheel in &mut d.wheels {
+                    wheel.tire.static_friction = 0.3;
+                    wheel.tire.kinetic_friction = 0.2;
+                }
+            })
+        };
+        let (mut host, mut hw) = driven(slick(), tank);
+        let (mut client, mut cw) = driven(slick(), tank);
         for step in 0..240 {
-            drive(&mut host, &mut hw, turning(step, 0.9785));
+            drive(&mut host, &mut hw, turning(step, full_lock));
         }
         let s = host.snapshot(&hw).vehicles.remove(0);
         assert!(s.wheel_tire.iter().any(|t| t.slipping), "full lock slides");
@@ -534,8 +468,8 @@ mod tests {
     /// its steering was squared and whose full lock circled 12 on
     /// Rapier's wheels.
     #[test]
-    #[ignore = "requires the converted vehicles-pack-012"]
-    fn the_tank_turns_as_torques_tyres_do() {
+    #[ignore = "requires generated v20 content"]
+    fn the_v20_tank_turns_as_torques_tyres_do() {
         let pack = Pack::load(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../content/vehicles-pack-012/vehicles.json"

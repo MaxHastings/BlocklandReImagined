@@ -1,5 +1,6 @@
 //! A duplicator Add-On hearing how its copies went: `on_copy` after it
-//! took one, `on_place` after the player planted it. An Add-On that
+//! took one, `on_place` after the player planted it, `on_copy_ghost` as
+//! the player moves it. An Add-On that
 //! declares the hook says what it likes to the player; for one that does
 //! not, the engine says it plainly.
 use super::*;
@@ -101,6 +102,11 @@ impl Session {
             info.insert("limit_reached".into(), outcome.limit_reached.into());
             info.insert("refused".into(), (outcome.refused as i64).into());
             info.insert("working".into(), outcome.working.into());
+            // While working: bricks found still to look around, and how far
+            // a search has got in percent (-1: not searching).
+            info.insert("queued".into(), (outcome.queued as i64).into());
+            let searched = outcome.searched.map_or(-1, |percent| percent as i64);
+            info.insert("searched".into(), searched.into());
             info.insert(
                 "names".into(),
                 Dynamic::from_array(outcome.names.iter().cloned().map(Dynamic::from).collect()),
@@ -216,7 +222,7 @@ impl Session {
         &mut self,
         package: &str,
         player: OwnerId,
-        (planted, bricks, canceled): (usize, usize, bool),
+        (planted, bricks, canceled, float_refused): (usize, usize, bool, bool),
         refused: &crate::session::blueprints::Refusals,
         inexact: &crate::blueprint::Inexact,
     ) -> bool {
@@ -228,6 +234,7 @@ impl Session {
         info.insert("planted".into(), (planted as i64).into());
         info.insert("bricks".into(), (bricks as i64).into());
         info.insert("canceled".into(), canceled.into());
+        info.insert("float_refused".into(), float_refused.into());
         // How many bricks each plant error kept out.
         let mut failed = Map::new();
         for (code, count) in &refused.by_error {
@@ -266,6 +273,33 @@ impl Session {
         info.insert("mirror_errors".into(), mirror_errors.into());
         self.queue_report(package, "on_place", player, info);
         true
+    }
+
+    /// Tell `package` where the copy `player` places stands now: the box
+    /// round it (`#{ min, max }`), or `()` once it is gone.
+    pub(in crate::session) fn report_copy_ghost(
+        &mut self,
+        package: &str,
+        player: OwnerId,
+        area: Option<([f32; 3], [f32; 3])>,
+    ) {
+        if !self.declares(package, |b| b.on_copy_ghost) {
+            return;
+        }
+        let point = |p: [f32; 3]| {
+            Dynamic::from_array(p.map(|v| Dynamic::from_float(f64::from(v))).to_vec())
+        };
+        let mut info = Map::new();
+        info.insert(
+            "box".into(),
+            area.map_or(Dynamic::UNIT, |(min, max)| {
+                let mut corners = Map::new();
+                corners.insert("min".into(), point(min));
+                corners.insert("max".into(), point(max));
+                corners.into()
+            }),
+        );
+        self.queue_report(package, "on_copy_ghost", player, info);
     }
 
     /// `on_copy` and `on_place` for each report since the last tick. Each

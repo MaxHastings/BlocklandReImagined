@@ -20,9 +20,17 @@
 //! game's members do, roam from wherever they are rather than a brick, fight
 //! whoever the game lets them hurt, rest while the rules hold them still
 //! and leave with their game.
+//!
+//! Portals (linked bricks) are part of the world a bot knows: it sees and
+//! aims through an opening at what stands beyond its partner, its paths
+//! lead through openings where that is the way (`crate::nav`), and it
+//! follows an enemy it watched go in. Its leash to its brick stretches the
+//! way it walked, through openings included.
 use super::*;
 use crate::bot_kind::BotKind;
 use crate::nav::{Body, Found, Ground, Nav, Search, Waypoint};
+use bri_content::passage::{Way, carried_yaw};
+use bri_package_runtime::ops::ObjectRef;
 use bri_weapons::ActorId;
 
 pub const MAX_BOTS: usize = bri_package_runtime::ops::MAX_BOTS;
@@ -57,6 +65,12 @@ struct Brain {
     /// Where it strolls around: its brick, or for a rules bot wherever it
     /// last stood idle.
     home: Vec3,
+    /// `home` as seen from where it stands: carried with it through every
+    /// opening it goes through, so how far it strayed is how far it walked.
+    leash: Vec3,
+    /// The last trip through a portal (`Session::crossings`) it took
+    /// account of.
+    crossed: u64,
     /// The rules hold its brain still (`rest_bot`).
     resting: bool,
     /// A rules bot came back to life: where it stands next is its home.
@@ -102,11 +116,13 @@ impl Goal {
     }
 }
 impl Brain {
-    fn new(brick: Option<BrickId>, kind: BotKind, home: Vec3, bot: OwnerId) -> Self {
+    fn new(brick: Option<BrickId>, kind: BotKind, home: Vec3, bot: OwnerId, crossed: u64) -> Self {
         Self {
             brick,
             kind,
             home,
+            leash: home,
+            crossed,
             resting: false,
             rehome: brick.is_none(),
             sequence: 0,
@@ -223,9 +239,21 @@ fn turn(from: f32, to: f32, step: f32) -> f32 {
     wrap(from + wrap(to - from).clamp(-step, step))
 }
 
+/// An enemy a bot sees, and by which way.
+#[derive(Clone, Copy)]
+struct Seen {
+    owner: OwnerId,
+    /// Its eye and feet as seen along the way (through an opening, where
+    /// they would stand were the partner's side right behind it).
+    eye: Vec3,
+    feet: Vec3,
+    /// Where its feet really are.
+    real: Vec3,
+    way: Way,
+}
 /// What one bot sees this tick.
 struct Sight {
-    target: Option<(OwnerId, Vec3, Vec3)>,
+    target: Option<Seen>,
 }
 
 impl Session {
@@ -319,11 +347,12 @@ impl Session {
                 },
             );
         }
+        let crossed = self.crossings.count();
         if let Ok(bot) = joined {
             self.bots.by_brick.insert(brick_id, bot);
             self.bots
                 .brains
-                .insert(bot, Brain::new(Some(brick_id), kind, home, bot));
+                .insert(bot, Brain::new(Some(brick_id), kind, home, bot, crossed));
             self.weapons.set_bot(bri_weapons::ActorId(bot), true)?;
         }
         Ok(())
@@ -372,9 +401,10 @@ impl Session {
             .context("No such team")?;
         let drop = self.spawn_points.first().copied().unwrap_or(Vec3::Y);
         let bot = self.join_inner(name.to_owned(), drop, false, true, None)?;
+        let crossed = self.crossings.count();
         self.bots
             .brains
-            .insert(bot, Brain::new(None, kind, drop, bot));
+            .insert(bot, Brain::new(None, kind, drop, bot, crossed));
         self.weapons.set_bot(bri_weapons::ActorId(bot), true)?;
         self.bots.by_rules.insert(bot, (package.to_owned(), game.0));
         let placed = (|| -> Result<()> {
@@ -514,56 +544,40 @@ impl Session {
         }
         self.can_damage_player(bot, other, false)
     }
-    /// Whether `from` sees `to`: nothing solid between them.
-    fn bot_sees(&self, from: Vec3, to: Vec3) -> bool {
-        let delta = to - from;
-        let distance = delta.length();
-        distance > 0.1
-            && self
-                .simulation
-                .target(
-                    from,
-                    delta / distance,
-                    distance.min(Simulation::MAX_TARGET_DISTANCE),
-                )
-                .ok()
-                .flatten()
-                .is_none_or(|hit| hit.distance > distance - 0.5)
-    }
     fn bot_sight(&self, bot: OwnerId, brain: &Brain, eye: Vec3) -> Sight {
         let kind = &brain.kind;
-        let visible = |owner: OwnerId| -> Option<(Vec3, Vec3)> {
+        let visible = |owner: OwnerId| -> Option<Seen> {
             let p = self.peers.get(&owner)?;
-            let (at, feet) = (p.player.eye(), Vec3::from(p.player.state().feet));
-            (at.distance(eye) < kind.sight
-                && self.bot_enemy(bot, kind, owner)
-                && self.bot_sees(eye, at))
-            .then_some((at, feet))
+            if !self.bot_enemy(bot, kind, owner) {
+                return None;
+            }
+            let real = Vec3::from(p.player.state().feet);
+            let way = self.simulation.sight(eye, p.player.eye(), kind.sight)?;
+            Some(Seen {
+                owner,
+                eye: way.aim,
+                feet: way.seen(real),
+                real,
+                way,
+            })
         };
         // Keep fighting the same enemy while it stays in view.
-        if let Some(current) = brain.target
-            && let Some((at, feet)) = visible(current)
-        {
-            return Sight {
-                target: Some((current, at, feet)),
-            };
+        if let Some(seen) = brain.target.and_then(visible) {
+            return Sight { target: Some(seen) };
         }
-        let mut best: Option<(OwnerId, Vec3, Vec3)> = None;
+        // Through an opening, anyone may be in sight wherever they stand.
+        let portals = !self.simulation.passages().list.is_empty();
         let mut candidates: Vec<(f32, OwnerId)> = self
             .peers
             .iter()
             .filter(|(owner, p)| **owner != bot && p.combat.alive)
             .map(|(owner, p)| (p.player.eye().distance(eye), *owner))
-            .filter(|(d, _)| *d < kind.sight)
+            .filter(|(d, _)| portals || *d < kind.sight)
             .collect();
         candidates.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
-        for (_, owner) in candidates {
-            if let Some((at, feet)) = visible(owner) {
-                best = Some((owner, at, feet));
-                break;
-            }
+        Sight {
+            target: candidates.into_iter().find_map(|(_, owner)| visible(owner)),
         }
-        Sight { target: best }
     }
     /// The held weapon's reach and flight.
     fn bot_weapon(&self, bot: OwnerId) -> Option<Weapon> {
@@ -646,6 +660,7 @@ impl Session {
                 brain.target = None;
                 brain.memory = None;
                 brain.rehome = brain.brick.is_none();
+                brain.leash = brain.home;
             }
             return Ok(());
         }
@@ -675,8 +690,21 @@ impl Session {
         let feet = Vec3::from(state.feet);
         let eye = peer.player.eye();
         let body = Body::of(peer.player.tuning(), state.scale);
+        self.bot_crossed(bot);
         let brain = &self.bots.brains[&bot];
         let sight = self.bot_sight(bot, brain, eye);
+        // An enemy it was watching went in through an opening as it went
+        // out of sight: it knows where that leads.
+        let followed = brain
+            .target
+            .filter(|_| sight.target.is_none())
+            .filter(|owner| {
+                self.crossings
+                    .last_of(ObjectRef::Player(*owner))
+                    .is_some_and(|c| tick.saturating_sub(c.tick) <= 2)
+            })
+            .and_then(|owner| self.peers.get(&owner))
+            .map(|p| Vec3::from(p.player.state().feet));
         let weapon = self.bot_weapon(bot);
         let hurt = self.bots.hurt.remove(&bot);
         let hurt_by = hurt.and_then(|(source, _)| {
@@ -685,15 +713,17 @@ impl Session {
             self.bot_enemy(bot, kind, source)
                 .then(|| Vec3::from(p.player.state().feet))
         });
-        let target_velocity = sight
-            .target
-            .and_then(|(owner, _, _)| self.peers.get(&owner))
-            .map_or(Vec3::ZERO, |p| Vec3::from(p.player.state().velocity));
+        let target_velocity = sight.target.map_or(Vec3::ZERO, |seen| {
+            self.peers.get(&seen.owner).map_or(Vec3::ZERO, |p| {
+                seen.way.seen_vector(Vec3::from(p.player.state().velocity))
+            })
+        });
 
         let brain = self.bots.brains.get_mut(&bot).unwrap();
         let kind = brain.kind.clone();
         if std::mem::take(&mut brain.rehome) {
             brain.home = feet;
+            brain.leash = feet;
             brain.last_position = feet;
         }
         let moved = feet.distance(brain.last_position);
@@ -704,16 +734,16 @@ impl Session {
         // Remember enemies seen, and where a hit came from.
         let memory_ticks = (kind.memory_seconds * 120.0) as u64;
         match sight.target {
-            Some((owner, _, target_feet)) => {
-                if brain.target != Some(owner) {
-                    brain.target = Some(owner);
+            Some(seen) => {
+                if brain.target != Some(seen.owner) {
+                    brain.target = Some(seen.owner);
                     brain.seen_since = tick;
                 }
-                brain.memory = Some((target_feet, tick + memory_ticks));
+                brain.memory = Some((seen.real, tick + memory_ticks));
             }
             None => {
                 brain.target = None;
-                if let Some(at) = hurt_by {
+                if let Some(at) = hurt_by.or(followed) {
                     brain.memory = Some((at, tick + memory_ticks));
                 }
             }
@@ -721,7 +751,7 @@ impl Session {
         if brain.memory.is_some_and(|(_, until)| tick >= until) {
             brain.memory = None;
         }
-        let away = flat(feet - brain.home).length();
+        let away = flat(feet - brain.leash).length();
         if away > kind.chase_radius {
             brain.memory = None;
             brain.target = None;
@@ -734,16 +764,18 @@ impl Session {
             sight.target.filter(|_| away <= kind.chase_radius),
             brain.memory,
         ) {
-            (Some((_, _, target_feet)), _) => {
+            (Some(seen), _) => {
                 let (near, far) = weapon.map_or((2.0, 3.0), |w| w.band());
-                let distance = flat(target_feet - feet).length();
-                if distance > far || (target_feet.y - feet.y).abs() > body.step + 1.0 {
+                // How far it is the way it is seen; the chase heads for
+                // where it really stands, and the path finds the way there.
+                let distance = flat(seen.feet - feet).length();
+                if distance > far || (seen.feet.y - feet.y).abs() > body.step + 1.0 {
                     let moved_on = match brain.goal {
-                        Some(Goal::Chase(p)) => p.distance(target_feet) > 2.5,
+                        Some(Goal::Chase(p)) => p.distance(seen.real) > 2.5,
                         _ => true,
                     };
                     if moved_on {
-                        brain.set_goal(Some(Goal::Chase(target_feet)));
+                        brain.set_goal(Some(Goal::Chase(seen.real)));
                     }
                 } else {
                     brain.set_goal(None);
@@ -804,6 +836,7 @@ impl Session {
                 let ground = Ground {
                     physics,
                     terrain: &terrain,
+                    passages: simulation.passages(),
                 };
                 let at = match self.bots.navs.iter().position(|(b, _)| *b == body) {
                     Some(at) => at,
@@ -831,7 +864,8 @@ impl Session {
             let brain = self.bots.brains.get_mut(&bot).unwrap();
             while let Some(next) = brain.plan.first() {
                 let d = next.feet - feet;
-                if flat(d).length() < 0.4 && d.y.abs() < body.step + 0.5 {
+                // One through an opening is reached by going through.
+                if next.through.is_none() && flat(d).length() < 0.4 && d.y.abs() < body.step + 0.5 {
                     brain.plan.remove(0);
                     brain.stuck = 0;
                 } else {
@@ -853,8 +887,8 @@ impl Session {
         let mut aim_yaw = brain.yaw;
         let mut aim_pitch = 0.0;
         let mut fire = false;
-        if let Some((_, target_eye, _)) = sight.target {
-            let mut at = target_eye - Vec3::Y * 0.5;
+        if let Some(seen) = sight.target {
+            let mut at = seen.eye - Vec3::Y * 0.5;
             if let Some(w) = weapon.filter(|w| !w.melee && w.speed > 0.0) {
                 let time = at.distance(eye) / w.speed;
                 at += target_velocity * time;
@@ -880,7 +914,7 @@ impl Session {
                 && wrap(aim_yaw - brain.yaw).abs() < 0.1
                 && (aim_pitch - brain.pitch).abs() < 0.12;
         } else if let Some(next) = wanted {
-            let d = flat(next.feet - feet);
+            let d = flat(next.through.unwrap_or(next.feet) - feet);
             if d.length() > 0.05 {
                 aim_yaw = yaw_to(d);
             }
@@ -902,7 +936,7 @@ impl Session {
         let right = Vec3::new(brain.yaw.cos(), 0.0, brain.yaw.sin());
         let mut direction = Vec3::ZERO;
         if let Some(next) = wanted {
-            direction = flat(next.feet - feet).normalize_or_zero();
+            direction = flat(next.through.unwrap_or(next.feet) - feet).normalize_or_zero();
             input.jump = next.jump && flat(next.feet - feet).length() < 1.6 && state.grounded;
         } else if hold && sight.target.is_some() {
             // In its band: strafe so it is not a still target, and give
@@ -919,9 +953,9 @@ impl Session {
         }
         input.forward = direction.dot(forward).clamp(-1.0, 1.0);
         input.right = direction.dot(right).clamp(-1.0, 1.0);
-        if let Some((_, target_eye, _)) = sight.target
-            && target_eye.y - eye.y > 3.0
-            && flat(target_eye - eye).length() < 20.0
+        if let Some(seen) = sight.target
+            && seen.eye.y - eye.y > 3.0
+            && flat(seen.eye - eye).length() < 20.0
             && wanted.is_none()
         {
             input.jet = true;
@@ -980,6 +1014,39 @@ impl Session {
             }
         }
         Ok(())
+    }
+    /// The bot went through an opening since it last looked: its heading,
+    /// leash and plan go with it. A path leading through that opening
+    /// walks on from where it let out; any other is planned again.
+    fn bot_crossed(&mut self, bot: OwnerId) {
+        let Some(brain) = self.bots.brains.get_mut(&bot) else {
+            return;
+        };
+        let seen = std::mem::replace(&mut brain.crossed, self.crossings.count());
+        let Some(carry) = self
+            .crossings
+            .since(seen)
+            .filter(|c| c.object == ObjectRef::Player(bot))
+            .map(|c| c.carry)
+            .reduce(|before, then| then * before)
+        else {
+            return;
+        };
+        brain.yaw = carried_yaw(&carry, brain.yaw);
+        brain.leash = carry.transform_point3(brain.leash);
+        brain.last_position = carry.transform_point3(brain.last_position);
+        brain.stuck = 0;
+        match brain.plan.iter().take(2).position(|w| w.through.is_some()) {
+            Some(at) => {
+                brain.plan.drain(..at);
+                brain.plan[0].through = None;
+            }
+            None => {
+                brain.plan.clear();
+                brain.search = None;
+                brain.settled = false;
+            }
+        }
     }
     /// Equip the first real weapon (not a building tool) in the inventory,
     /// unless it holds one already (the rules may have put one in its

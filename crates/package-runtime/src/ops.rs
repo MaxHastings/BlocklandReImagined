@@ -5,6 +5,63 @@ use bri_package::setting::SettingValue;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+/// The plant errors [`Op::PlantError`] shows: v20's `MsgPlantError_`
+/// names, lower-case, as `on_place` reports them (`too_far`).
+pub const PLANT_ERRORS: [&str; 7] = [
+    "overlap", "float", "stuck", "buried", "too_far", "limit", "flood",
+];
+/// Most boxes one `show_shapes` set holds.
+pub const MAX_SHAPES: usize = 64;
+/// Longest label a shape carries, characters.
+pub const MAX_SHAPE_LABEL: usize = 48;
+/// Longest key naming a set of shapes, bytes.
+pub const MAX_SHAPE_KEY: usize = 64;
+
+/// A box [`Op::ShowShapes`] draws in the world for every player, unlit:
+/// its faces in `color` seen from outside and `inside` seen from within
+/// (alpha 0 draws no face), and `label` over its top centre like a
+/// player's name, in `color` at full strength. Torque Add-Ons draw these with scaled `StaticShape`s
+/// (the New Duplicator's selection box).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorldShape {
+    pub min: [f32; 3],
+    pub max: [f32; 3],
+    /// Straight RGBA, 0-255.
+    pub color: [u8; 4],
+    #[serde(default)]
+    pub inside: [u8; 4],
+    /// Outside colours of the faces across x, y and z, instead of `color`
+    /// (`setNodeColor("out+X", …)`: a shaded cube).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sides: Option<[[u8; 4]; 3]>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub label: String,
+}
+impl WorldShape {
+    /// The outside colour of the faces across each axis.
+    pub fn outside(&self) -> [[u8; 4]; 3] {
+        self.sides.unwrap_or([self.color; 3])
+    }
+}
+impl WorldShape {
+    /// Shape limits: a finite box no side longer than [`MAX_BOX_SPAN`]
+    /// (and its frame), a short one-line label.
+    pub fn check(&self) -> bool {
+        let finite = |v: &[f32; 3]| v.iter().all(|x| x.is_finite() && x.abs() <= 1_000_000.0);
+        finite(&self.min)
+            && finite(&self.max)
+            && (0..3).all(|a| {
+                self.max[a] >= self.min[a] && self.max[a] - self.min[a] <= MAX_BOX_SPAN + 16.0
+            })
+            && self.label.chars().count() <= MAX_SHAPE_LABEL
+            && !self.label.chars().any(char::is_control)
+    }
+}
+/// A set of shapes' key: short, printable, no spaces.
+pub fn shape_key(key: &str) -> bool {
+    !key.is_empty() && key.len() <= MAX_SHAPE_KEY && key.bytes().all(|b| b.is_ascii_graphic())
+}
+
 /// Variables an entity may be given when it is spawned.
 pub const MAX_SPAWN_VARS: usize = 16;
 /// Fastest a script may set anything moving, units per second.
@@ -354,7 +411,8 @@ pub enum Op {
     /// Light the bricks `player`'s copy was taken from in the palette
     /// colour nearest `color` (RGBA), glowing, for `seconds`, then give
     /// them their own colours back, as v20's duplicators showed a
-    /// selection. Everyone sees it.
+    /// selection. Everyone sees it. A negative `seconds` keeps them lit
+    /// until the copy is let go or lit again; 0 puts them out now.
     HighlightCopy {
         player: u64,
         /// `None` lights them in their own colours (only the glow, as the
@@ -398,6 +456,15 @@ pub enum Op {
     MirrorCopy {
         player: u64,
         axis: MirrorAxis,
+    },
+    /// Mirror `player`'s ghost brick (the brick in their hand, where it
+    /// would plant) across `axis` where it stands: it becomes its mirror
+    /// image, itself turned or its twin. A brick with no exact image in
+    /// that mirror stays as it is and the player is told `asymmetric`.
+    MirrorGhost {
+        player: u64,
+        axis: MirrorAxis,
+        asymmetric: String,
     },
     /// Move the copy `player` holds against the surface at `point` whose
     /// outward `normal` is given, as a ghost brick is put where it is
@@ -443,10 +510,15 @@ pub enum Op {
         player: u64,
         float: bool,
     },
-    /// Let every plant of the copy `player` holds float, or not.
+    /// Let every plant of the copy `player` holds float, or not; with
+    /// `admin_only`, only while they are an administrator (a plant that
+    /// finds them not one does not float, and `on_place` says so with
+    /// `float_refused`).
     FloatCopy {
         player: u64,
         float: bool,
+        #[serde(default)]
+        admin_only: bool,
     },
     /// After each plant of a copy, `player`'s next copy plant waits this
     /// long; one sooner is refused and `on_place` hears `error` `wait`,
@@ -481,9 +553,13 @@ pub enum Op {
         admin: bool,
     },
     /// Remove the bricks `player`'s copy was taken from, as their hammer
-    /// would (their full trust), as one step Ctrl+Z puts back as it was.
+    /// would (their full trust), as one step Ctrl+Z puts back as it was:
+    /// all or none, or with `each` every brick they may cut, the rest
+    /// counted (`on_copy`, `action` `"cut"`, `refused`).
     CutCopy {
         player: u64,
+        #[serde(default)]
+        each: bool,
     },
     /// Paint the bricks `player`'s copy was taken from with `paint`, as
     /// their spray or FX can would, as one step Ctrl+Z takes back. With
@@ -578,6 +654,14 @@ pub enum Op {
         player: u64,
         area: Option<([f32; 3], [f32; 3])>,
         tool: String,
+    },
+    /// Draw the set of boxes named `key` for every player (joiners too),
+    /// replacing the set drawn under that key; none takes it away. A set
+    /// with an `owner` goes when that player leaves.
+    ShowShapes {
+        owner: Option<u64>,
+        key: String,
+        shapes: Vec<WorldShape>,
     },
     /// Put an item in a player's tool list (unless they carry it) and,
     /// with `equip`, in their hand.
@@ -780,6 +864,14 @@ pub enum Op {
         #[serde(default)]
         hide_bar: bool,
     },
+    /// One player's plant-error icon and sound, as v20's
+    /// `messageClient(%client, 'MsgPlantError_…')`: one of
+    /// [`PLANT_ERRORS`]. `flood` (planting too soon) shows what the
+    /// engine's own plant rate shows when a player plants too fast.
+    PlantError {
+        player: u64,
+        error: String,
+    },
     /// Tell one player something in a message box they close with OK
     /// (v20's `MessageBoxOK` from the server).
     MessageBox {
@@ -894,6 +986,13 @@ pub enum Op {
     SetImageAmmo {
         player: u64,
         ammo: bool,
+    },
+    /// Whether the image in a player's hand is loaded (`setImageLoaded`),
+    /// which its states' `loaded` and `not_loaded` transitions read: a tool
+    /// that spins while it works.
+    SetImageLoaded {
+        player: u64,
+        loaded: bool,
     },
     /// Put another image in a player's hand, keeping their tool slot
     /// (`mountImage`): a scope, a second fire mode. `None` puts back the
@@ -1271,6 +1370,12 @@ pub struct CopyRule {
     /// Planting the copy plants each brick that fits and skips the rest,
     /// as v20's Duplorcator did, rather than all or nothing.
     pub partial: bool,
+    /// The same trust in the owner of a brick's stack (who owns the bricks
+    /// it was built on, v20's `stackBL_ID`) also lets a player copy it, and,
+    /// with full trust, cut, paint or wrench it through the copy (the New
+    /// Duplicator's trust checks).
+    #[serde(default)]
+    pub stack: bool,
 }
 impl Default for CopyRule {
     fn default() -> Self {
@@ -1279,6 +1384,7 @@ impl Default for CopyRule {
             public: true,
             admin: true,
             partial: false,
+            stack: false,
         }
     }
 }
@@ -1430,6 +1536,7 @@ impl Op {
             Self::Tell { .. }
             | Self::Broadcast { .. }
             | Self::Print { .. }
+            | Self::PlantError { .. }
             | Self::ShowReport { .. }
             | Self::TellMinigame { .. }
             | Self::PrintMinigame { .. }
@@ -1438,12 +1545,14 @@ impl Op {
             Self::Sound { .. }
             | Self::Beam { .. }
             | Self::PlayThread { .. }
-            | Self::ShowBox { .. } => "effects",
+            | Self::ShowBox { .. }
+            | Self::ShowShapes { .. } => "effects",
             Self::CopyBuild { .. }
             | Self::CopyBox { .. }
             | Self::SaveCopy { .. }
             | Self::LoadCopy { .. }
             | Self::MirrorCopy { .. }
+            | Self::MirrorGhost { .. }
             | Self::MoveCopy { .. }
             | Self::DropCopy { .. }
             | Self::ShowCopy { .. }
@@ -1499,6 +1608,7 @@ impl Op {
             | Self::SetRounds { .. }
             | Self::Reload { .. }
             | Self::SetImageAmmo { .. }
+            | Self::SetImageLoaded { .. }
             | Self::MountImage { .. }
             | Self::Emote { .. }
             | Self::UnmountImage { .. }
@@ -1548,6 +1658,7 @@ impl Op {
             | Self::Respawn { .. }
             | Self::Control { .. }
             | Self::SetImageAmmo { .. }
+            | Self::SetImageLoaded { .. }
             | Self::MirrorCopy { .. }
             | Self::DropCopy { .. }
             | Self::ShowCopy { .. }
@@ -1565,6 +1676,7 @@ impl Op {
             | Self::RemoveBot { .. }
             | Self::RestBot { .. }
             | Self::UnmountObject { .. } => true,
+            Self::MirrorGhost { asymmetric, .. } => chat(asymmetric),
             Self::BotTool { slot, .. } => slot.is_none_or(|s| usize::from(s) < MAX_TOOL_SLOTS),
             Self::AddBot { kind, name, .. } => {
                 !kind.is_empty()
@@ -1852,7 +1964,7 @@ impl Op {
                     .iter()
                     .flatten()
                     .all(|c| (0.0..=1.0).contains(c))
-                    && (0.0..=60.0).contains(seconds)
+                    && *seconds <= 60.0
             }
             Self::ShowBox { area, tool, .. } => match area {
                 Some((min, max)) => item(tool) && span(min, max),
@@ -2024,6 +2136,10 @@ impl Op {
                     && seconds.is_finite()
                     && (0.0..=600.0).contains(seconds)
             }
+            Self::PlantError { error, .. } => PLANT_ERRORS.contains(&error.as_str()),
+            Self::ShowShapes { key, shapes, .. } => {
+                shape_key(key) && shapes.len() <= MAX_SHAPES && shapes.iter().all(WorldShape::check)
+            }
             Self::ShowReport { report, .. } => report.as_ref().is_none_or(|r| r.is_bounded()),
             Self::ReportColumn { change, .. } => change.is_bounded(),
             Self::Sound { profile, at } => {
@@ -2109,6 +2225,7 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::SetMapLights { .. } => "set_map_lights",
         Op::SetEnvironment { .. } => "set_environment",
         Op::SetImageAmmo { .. } => "set_image_ammo",
+        Op::SetImageLoaded { .. } => "set_image_loaded",
         Op::MountImage { .. } => "mount_image",
         Op::Emote { .. } => "emote",
         Op::SetTeams { .. } => "set_teams",
@@ -2168,6 +2285,7 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::CopyBuild { .. } => "copy_build",
         Op::CopyBox { .. } => "copy_box",
         Op::MirrorCopy { .. } => "mirror_copy",
+        Op::MirrorGhost { .. } => "mirror_ghost",
         Op::MoveCopy { .. } => "move_copy",
         Op::DropCopy { .. } => "drop_copy",
         Op::ShowCopy { .. } => "show_copy",
@@ -2220,6 +2338,9 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::ReportColumn { .. } => "report_column",
         Op::Print { bottom: false, .. } => "center_print",
         Op::Print { bottom: true, .. } => "bottom_print",
+        Op::PlantError { .. } => "plant_error",
+        Op::ShowShapes { shapes, .. } if shapes.is_empty() => "hide_shapes",
+        Op::ShowShapes { .. } => "show_shapes",
         Op::Ask { .. } => "ask",
         Op::MessageBox { .. } => "message_box",
         Op::Sound {

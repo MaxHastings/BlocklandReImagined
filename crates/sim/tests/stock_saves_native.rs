@@ -38,7 +38,7 @@ fn floor_gaps(
 }
 
 #[test]
-#[ignore = "needs generated content (map-bundle-017, worlds-pass-006); set BRI_CONTENT"]
+#[ignore = "requires generated v20 content (map-bundle-017, worlds-pass-006, or BRI_CONTENT)"]
 fn stock_saves_load_and_rest_on_the_lifted_floors() -> Result<()> {
     let root = content();
     let definitions =

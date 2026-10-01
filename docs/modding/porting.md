@@ -149,22 +149,22 @@ or nothing: a port that fails anywhere changes no file.
 
 ### What the port carries out
 
-The import report counts a script function as ported when a port's reader
-read it (a shot, a script rule, a table, a magazine's state script that
-only works its rounds) or the port says how the game does it now, in
-`handles`: the function (`"WeaponImage::TT_canFire"`) or a top-level call
-(`"call:TT_registerAmmoType"`), a datablock the import could not convert
-(`"datablock:ShortRifleRaycastTracer"`, a line shape a script spawned) or
-an RTB preference the game carries out with no setting
-(`"pref:$Pref::Server::TT::DeathStopFiring"`, a bug fix the engine always
-makes) to one line naming the engine seam or host rule that does it. A top-level call the port carries out leaves the
-report's unsupported list for its `ported` list ("Carried out by the
-port"), with that line as its resolution; the summary counts both. Say
-only what the game really does: a claim with no seam behind it is a gap
-the report no longer shows.
+A port also names what it carries out without a rules function of the
+same name, in `handles`: each key is an original function, `call:<name>`
+(a top-level call at load), `new:<Class>` (an object made at load),
+`set:<global>` (a top-level assignment), `file:<path>` (a file the
+importer does not convert), `datablock:<name>` (a datablock it does not
+convert) or `pref:<global>` (an RTB preference the game carries out with
+no setting, a bug fix the engine always makes), any case, and its value says how, in a sentence a reader can
+check. The report lists these under "Carried out by the port" and counts
+them as ported, and such a datablock as `ported`. Name only what the port
+does; a behaviour it does in part stays unported until it does all of it,
+and something deliberately not run says so and why ("not run: ...").
 
 ```json
 "handles": {
+  "ND_SelectionBox::setSize": "the rules' draw_selection_box: show_shapes sizes the faces, edges, corners and label to the box",
+  "datablock:ND_SelectionBoxBorder": "drawn with show_shapes: the twelve edges, as wide as the box is big",
   "servercmdLight": "the magazine's light_states: the light key reloads in Ready, Empty and EmptyFire, else works the light"
 }
 ```

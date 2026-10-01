@@ -191,18 +191,18 @@ run are left out. Your rules remove a game's entry when it ends.
 | `aim()`, `me()`, `entities()` | `add_player(p, key, amount)` | `damage(target, amount[, by[, type]])`, `explode(...)`: `damage` |
 | `noise(seed, x, z)`, `hash3(seed, x, y, z)` | `entity_get(e, key)`, `entity_set(e, key, v)` | `spawn_entity`, `remove_entity`, `steer`, `label`: `entity` |
 | `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)`, `tethered(p)` | | `teleport`, `respawn`, `set_archetype`, `push_archetype`, `pop_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`, `take_item(p, item)`, `drop_item(item, x, y, z[, vx, vy, vz[, data]])`, `drop_item(item, #{ ... })`, `remove_drop(id)`, `name_drop(id, text, c)`: `player` |
-| `raycast(from, dir, range[, ignore])`, `can_damage(by, target)`, `enabled(add_on)`, `lan()` | | `set_fov(p, fov)`, `set_speed_scale(p, scale)`, `set_image_ammo(p, ammo)`, `mount_image(p, image)`, `mount_image(p, image, slot[, paint or #{ paint, keep }])`, `unmount_image(p)`, `emote(p, image[, skip_spam])`, `set_scale(p, scale)`, `set_look_limits(p, up, down)`, `orbit_camera(p, target[, nearest, farthest], distance[, body])`: `player` |
+| `raycast(from, dir, range[, ignore])`, `can_damage(by, target)`, `enabled(add_on)`, `lan()` | | `set_fov(p, fov)`, `set_speed_scale(p, scale)`, `set_image_ammo(p, ammo)`, `set_image_loaded(p, loaded)`, `mount_image(p, image)`, `mount_image(p, image, slot[, paint or #{ paint, keep }])`, `unmount_image(p)`, `emote(p, image[, skip_spam])`, `set_scale(p, scale)`, `set_look_limits(p, up, down)`, `orbit_camera(p, target[, nearest, farthest], distance[, body])`: `player` |
 | | | `give_ammo(p, ammo, rounds)`, `set_reserve(p, ammo, rounds)`, `set_rounds(p, item, rounds)`, `reload(p)`: `player` |
 | `minigames()`, `minigame(id)`, `setting(game, key)`, `team_setting(game, team, key)`, `server_setting(key)`, `pref(global)`, `bricks(kind)`, `brick(id)`, `palette()`, `drops()` | | `set_teams(game, teams, options)`, `set_team(p, team)`, `set_score(p, n)`, `add_score(p, n)`, `reset_minigame(game)`, `set_setting(game, key, v)`, `set_team_setting(game, team, key, v)`, `hold_respawn(p, held)`, `end_round(game, winners)`, `report_column(game, key, title, cells)`: `minigame`; `show_report(p, report)`, `hide_report(p)`: `chat`; `watch(p, target)`, `follow_path(p, knots)`, `free_camera(p)`, `orbit_point(p, at, distance)`: `player`; `set_brick_item(brick, item)`, `set_brick_color(brick, c)`: `world.edit`; `fire_brick_input(brick, input, p)`, `fire_game_input(game, input, p, killer)`, `set_brick_field(brick, key, v)`: `brick_events`; `brick_field(brick, key)` reads |
 | `brick_box(brick)`, `voxel(brick)`, `can_place_voxel(x, y, z)` | | `place_voxel(x, y, z, material)`: `world.edit`; `set_avatar_colors(p, colors)`, `temp_look(p, look, seconds)`: `player` |
 | `brick(id)`, `bricks_in(min, max)`, `can_plant(kind, [x, y, z], turns)`, `can_edit(brick)` | | `plant_brick(kind, [x, y, z], turns, color, owner)`: `world.edit` |
-| | | `copy_build(p, brick, limit, way, tool[, options])`, `copy_box(p, min, max, limit, tool[, options])`, `mirror_copy(p, axis)`, `highlight_copy(p, rgba, seconds)`, `save_copy(p, name[, options])`, `load_copy(p, name, limit, tool[, options])`, `list_copies(p, filter)`, `plant_wait(p, seconds)`, `pivot_copy(p, pivot)`, `plant_as(p, target, admin)`: `build` |
+| | | `copy_build(p, brick, limit, way, tool[, options])`, `copy_box(p, min, max, limit, tool[, options])`, `mirror_copy(p, axis)`, `mirror_ghost(p, axis, asymmetric)`, `highlight_copy(p, rgba, seconds)`, `save_copy(p, name[, options])`, `load_copy(p, name, limit, tool[, options])`, `list_copies(p, filter)`, `plant_wait(p, seconds)`, `pivot_copy(p, pivot)`, `plant_as(p, target, admin)`: `build` |
 | | | `cut_copy(p)`, `paint_copy(p, color)`, `paint_copy(p, paint)`, `wrench_copy(p)`, `super_cut(p, min, max)`, `fill_box(p, min, max, color)`, `paint_fill(p, brick, paint, options)`, `paint_vehicle(p, vehicle, paint, options)`: `world.edit` |
 | | | `push`, `tumble`, `hold`, `reach`, `hold_distance`, `let_go`, `tether`, `tether_length`, `untether`, `spawn_vehicle`, `remove_vehicle`, `mount_object(mount, rider, node, can_dismount[, turn])`, `unmount_object(rider)`: `physics` |
 | | | `heal(p, amount)`, `fire(...)`, `spawn_explosion(p, projectile, scale)`: `damage` |
-| | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds[, hide_bar])` (`()` for everyone), `tell_minigame(game, text[, except])`, `center_print_minigame(game, text, seconds)`, `bottom_print_minigame(game, text, seconds)` (a mini-game's members, counted once), `ask(p, title, text, command)` (a yes/no box; yes sends the package's own argument-less `command` as if typed, as v20's `MessageBoxYesNo` did), `message_box(p, title, text)` (an OK box, v20's `MessageBoxOK`): `chat` |
+| | | `play_sound(p, sound)` at a player's ears, `sound_at(sound, x, y, z)`, `beam(from, to[, options])`, `play_thread(p, thread, sequence[, after])`, `show_box(p, min, max, tool)`, `hide_box(p)`, `show_shapes(owner, key, shapes)`, `hide_shapes(owner, key)`: `effects` |
+| | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds[, hide_bar])` (`()` for everyone), `tell_minigame(game, text[, except])`, `center_print_minigame(game, text, seconds)`, `bottom_print_minigame(game, text, seconds)` (a mini-game's members, counted once), `ask(p, title, text, command)` (a yes/no box; yes sends the package's own argument-less `command` as if typed, as v20's `MessageBoxYesNo` did), `plant_error(p, error)`, `message_box(p, title, text)` (an OK box, v20's `MessageBoxOK`): `chat` |
 | `bot_kinds()` (each `#{ id, name, first_names }`), `bot_limit()` | | `add_bot(game, #{ kind, name[, team] })`, `remove_bot(bot)`, `rest_bot(bot, rest)`, `bot_tool(bot, slot or ())`: `bots` |
-| | | `play_sound(p, sound)` at a player's ears, `sound_at(sound, x, y, z)`, `beam(from, to[, options])`, `play_thread(p, thread, sequence[, after])`, `show_box(p, min, max, tool)`, `hide_box(p)`: `effects` |
 | | | `set_map_lights([x, y, z], radius, options)`: `lighting` |
 | `environment()` | | `set_environment(#{ ... })`, `reset_environment()`: `environment` |
 
@@ -312,6 +312,12 @@ change it with `give_ammo(p, ammo, rounds)` (an ammo box, up to the most a
 magazine of that ammo carries), `set_reserve(p, ammo, rounds)` (`()` for
 ammo that never runs out), `set_rounds(p, item, rounds)` (the one in hand, else the first they
 carry) and `reload(p)`.
+`set_image_loaded(p, false)` unloads the held image (`setImageLoaded`),
+so its states' `not_loaded` transitions run, and `true` runs their
+`loaded` ones; putting an image in hand loads it. A state's `spin`
+(`stop`, `spin_up`, `spin_down`, `full_speed`, v20's `stateSpinThread`)
+turns the image's `spin` sequence while it is in that state: the New
+Duplicator spins while a job runs this way.
 `set_speed_scale(p, scale)` moves a player at that share of their running,
 crouching and swimming speeds (0 to 4) until they respawn: a heavy gun's
 slowdown. `set_fov(p, fov)` sets the player's field of view (5 to 120
@@ -753,8 +759,14 @@ everything near a point. A bot (a Blockhead Bot) is a `player:` object
 that is not among `players()`: its `definition` is its kind
 (`bot.blockhead`) and its `owner` is whoever owns its spawn brick, who
 decides, outside minigames, who may move it. A command with `aim_reach` also reports the nearest object in
-front of the brick it hit: `aim().object`, `aim().object_distance` and
-`aim().movable`, whether the caller may move it.
+front of the brick it hit: `aim().object`, `aim().object_distance`,
+`aim().object_at` (`[x, y, z]`, where the aim met it) and
+`aim().movable`, whether the caller may move it. The aim looks through
+portals (the openings of linked bricks) as players see through them: its
+`x, y, z` and `object_at` are where things are on the far side, and its
+distances run along the sight, so take positions from these rather than
+from the eye and the look. A `hold` or `reach` through a portal holds the
+object on its side, and one carried through a portal stays held.
 
 | Operation | Does |
 |---|---|
@@ -814,21 +826,27 @@ A last `options` map changes what a copy may take and how it plants:
 in a brick's owner), `public_bricks` (public bricks may be copied; default
 true), `admin` (administrators may copy any brick; default true),
 `partial` (planting plants each brick that fits and skips the rest, as
-v20's Duplorcator did; default false) and, for a stack, `limited` (keep
+v20's Duplorcator did; default false), `stack` (the same trust in the
+owner of a brick's stack also counts: whoever owns the bricks it was built
+on, v20's `stackBL_ID`, so the copy's player may also cut, paint or wrench
+through the copy what others built on their stack with their full trust;
+default false) and, for a stack, `limited` (keep
 the stack on its side of the clicked brick: going up, nothing reaching
-below its bottom). `highlight_copy(p, [r, g, b, a], seconds)` then lights
+below its bottom). `may_copy(p, brick, options)` says whether a copy with
+those options would take a brick, before the player picks it. `highlight_copy(p, [r, g, b, a], seconds)` then lights
 the copied bricks in the palette colour nearest that one (`()` for each
 brick's own), glowing, for everyone to see, and gives them their own
-colours back after; a copy
+colours back after (a negative `seconds` keeps them lit until the copy is
+let go, lit again or taken up to place; 0 puts them out now); a copy
 takes a lit brick as it is underneath. An Add-On with `on_copy` in its
 behaviour hears `on_copy(player, #{ action, name, bricks, total,
-limit_reached, refused, error, message, size, names })` instead of the player getting
+limit_reached, refused, error, message, size, names, queued, searched })` instead of the player getting
 the engine's message (`action` is `"select"`, `"save"`, `"load"`,
 `"list"` or `"plant_as"`, below;
 `size` is the held copy's `[studs, plates, studs]` along x, up and z, or
 `()` when it holds none), and
 with `on_place`, `on_place(player, #{ planted, bricks, error, message,
-failed, wait, mirror_errors })` after the player plants its copy (`failed` counts the bricks
+failed, wait, mirror_errors, float_refused })` after the player plants its copy (`failed` counts the bricks
 each plant error kept out, `#{ float: 2, overlap: 1 }`; a partial plant
 tries a floating brick again once the rest are in). `mirror_errors` is
 `#{ side, upside_down }`, the catalog names (`Category/Group/Name`) of
@@ -836,7 +854,15 @@ the bricks a mirrored plant had no exact mirror image for, across and
 upside down. `plant_wait(p, seconds)` makes each of the player's copy
 plants wait that long after the last (0 to 60; 0, the default, none): one
 sooner is refused and `on_place` hears `error` `"wait"` with the seconds
-left in `wait`.
+left in `wait`. `float_copy(p, float)` lets the copy's plants float in
+mid air (v20's Force Plant); with `#{ admin_only: true }` that is checked
+again at each plant, and a plant by a player no longer an administrator
+goes in as a normal one, with `float_refused` true in `on_place` and the
+float turned off. Only the player sees the bricks of the copy they place;
+with `on_copy_ghost`, `on_copy_ghost(player, #{ box })` hears the box
+round it (`#{ min, max }`, world units) each time they move, turn, mirror
+or flip it, and `()` once it is put away or let go, for the Add-On to show
+the others where it stands (the New Duplicator's blue box).
 
 Copies can be kept by name on the host. `save_copy(p, name)` keeps the copy
 the player holds, replacing one saved under that name; with `#{ overwrite:
@@ -869,7 +895,11 @@ other side and becomes its mirror image, the same brick turned or its
 twin in the catalog (a left wedge for a right one), found from the bricks'
 own shapes; a brick with no twin keeps its shape (`on_place` names those
 in `mirror_errors`). The mirror is part of
-where the player puts the copy, like its turn. `move_copy(p, point,
+where the player puts the copy, like its turn. `mirror_ghost(p, axis,
+asymmetric)` does the same to the player's ghost brick where it stands
+(`player(p).ghost` says whether they have one out, bricks in hand); a
+brick with no exact image in that mirror stays as it is and the player is
+told `asymmetric`. `move_copy(p, point,
 normal)` puts the copy against the surface at `point` whose outward
 `normal` is given (a `raycast` hit's), as a ghost brick goes where it is
 aimed: the middle of the copy's box half its size out along the normal,
@@ -892,7 +922,9 @@ and `paint_copy(p, color)` paints them, all or none, with the player's own
 full trust (the hammer's and spray can's), each as one Ctrl+Z step; the
 undo of a cut puts every brick back exactly as it was, events, lights and
 owner included; an Add-On with `on_copy` hears how a cut went there
-(`action` `"cut"`, `error` `"empty"` or `"refused"`). With
+(`action` `"cut"`, `error` `"empty"` or `"refused"`). `cut_copy(p, #{ each:
+true })` cuts each brick the player may and leaves the rest, counted in
+`refused` (the New Duplicator's cut). With
 `"undo_confirm_over": n` in its behaviour, a player's Ctrl+Z of one of
 these steps (a plant, paint, wrench, cut or fill) changing more than `n`
 bricks is held the first time: `on_copy` hears `action` `"undo"` with the
@@ -901,6 +933,23 @@ between starts over), as the New Duplicator asked before a big undo. `show_box(p
 player's screen while `tool` is in their hand (a selection, a zone being
 marked) and `hide_box(p)` takes it away. The port of the New Duplicator
 uses them all.
+
+`show_shapes(owner, key, shapes)` draws boxes in the world that every
+player sees, joiners too, as Torque Add-Ons did with scaled
+`StaticShape`s: each shape is `#{ min, max, color, inside, sides, label }`,
+colours RGBA from 0 to 1. Its faces are `color` seen from outside and
+`inside` seen from within (alpha 0, the default, draws none), `sides` gives
+the faces across x, y and z their own outside colours (a shaded cube), and
+`label` is drawn over its top centre like a player's name, in `color`.
+The set replaces the one the package last showed under `key` (64 shapes
+at most, each side up to 1,040 units); `hide_shapes(owner, key)` takes it
+away. With a player as `owner` the set is theirs and goes when they
+leave; `()` shows one nobody owns. The New Duplicator's port draws its
+selection box and the edges round a selection this way.
+`plant_error(p, error)` shows v20's plant error to a player (`"overlap"`,
+`"float"`, `"stuck"`, `"buried"`, `"too_far"`, `"limit"` or `"flood"`):
+the icon and sound `MsgPlantError_…` gave. `player(p).copy` is the copy
+they hold, `#{ addon, bricks }` (the Add-On that took it), or `()`.
 
 Big copy work goes on over several ticks, a slice each tick, so a copy
 of up to 1,000,000 bricks (the most any `limit` may be) never holds the
@@ -911,11 +960,14 @@ server's brick limit with `limit_reached`); one that fits in the tick's slice
 finishes at once as before. While a player's job runs,
 `player(p).copy_working` is true, their other copy work and undo are
 refused as busy, and `on_copy` hears `working: true` with the `action`,
-`bricks` done and `total` four times a second (the engine shows
+`bricks` done and `total` four times a second (a stack selection also
+gives the bricks still `queued` to look around; a box selection, and a
+plant's later passes for bricks that now have something under them, how
+far they have `searched` in percent, otherwise -1) (the engine shows
 "Working... (N%)" for an Add-On without `on_copy`). `cancel_copy(p)`
 stops it: what it did stays done, as one undo step, and the job's report
-comes as usual (`on_place` with `canceled: true`; a cancelled selection's
-`on_copy` has `error` `"canceled"`). An undo done over several ticks ends with `on_copy`
+comes as usual (`on_place` with `canceled: true`; any other cancelled
+job's `on_copy` has `error` `"canceled"`, with what it did). An undo done over several ticks ends with `on_copy`
 `action` `"undone"`. A held copy's player sees at most 10,000 of its
 bricks as the ghost; `on_copy` gives how many as `ghosted`.
 
@@ -1986,6 +2038,11 @@ partner's opposite side when that side is open too (a doorway), else out of
 the same side (a wall portal). Pairing follows from the bricks themselves,
 so nothing extra is sent; each player's game draws the views, and the host
 decides who goes through.
+
+Bots know portals too, with nothing for a bot kind to set: a bot sees and
+shoots through an opening at whoever stands beyond its partner, its paths
+lead through openings where walking through is the way, and it follows an
+enemy it watched go in.
 
 | Field | Meaning | Default |
 |---|---|---|

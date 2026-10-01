@@ -7,75 +7,38 @@
 //! glass) and Medium; the jeep from 12 and 100 units. Any glass pixel that
 //! shows the red frame through it fails the test (the mirror sits 1 mm over
 //! its brick: forward depth lost that from about 30 units).
-//! Pictures and a report go to artifacts/distant-render/.
-//! Run with: cargo test -p bri-client --test distant_render --release -- --ignored --nocapture
-//! Requires converted v20 content (BRI_CONTENT or content/), loopback QUIC
-//! and an offscreen GPU; never opens a window.
+//! Runs on the made-up content root (its Slopes a lit room, its jeep a
+//! made-up car); the ignored variant runs on the generated v20 content
+//! (`-- --ignored`, BRI_CONTENT or content/), its pictures and report in
+//! artifacts/distant-render/. Loopback QUIC and an offscreen GPU; never
+//! opens a window.
 use anyhow::{Context, Result, ensure};
 use bri_client::{
     app::App,
     platform::{PlatformApp, RenderContext},
 };
-use bri_package::{defaults, packages::PackageSet};
 use bri_ui::{
     api::*,
     gpu::{Headless, UiRenderer},
 };
 use glam::Vec3;
 use std::{
-    path::{Path, PathBuf},
+    path::Path,
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
+
+#[macro_use]
+mod support;
+use support::content_root::ContentRoot;
+
+synthetic_and_content!(ContentRoot: distant_mirrors_and_riders_draw_cleanly);
 
 const SIZE: (u32, u32) = (1280, 960);
 const SLOPES: &str = "v20/add-ons/map_slopes/slopes.mis";
 const MIRROR: &str = "brick_mirror:brick/brickmirror1x4x5data";
-const VEHICLE_SPAWN: &str = "v20/brick/brickvehiclespawndata";
-const JEEP: &str = "v20.vehicle.jeepvehicle";
-
-fn generated_content() -> PathBuf {
-    std::env::var_os("BRI_CONTENT").map_or_else(
-        || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
-        PathBuf::from,
-    )
-}
-/// Copy a folder; `link` hard-links its files instead where it can.
-fn copy_dir(from: &Path, to: &Path, link: bool) -> Result<()> {
-    std::fs::create_dir_all(to)?;
-    for entry in std::fs::read_dir(from)? {
-        let entry = entry?;
-        let target = to.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
-            copy_dir(&entry.path(), &target, link)?;
-        } else if !link || std::fs::hard_link(entry.path(), &target).is_err() {
-            std::fs::copy(entry.path(), &target)
-                .with_context(|| format!("Copying {}", entry.path().display()))?;
-        }
-    }
-    Ok(())
-}
-/// The generated base game (hard-linked) with the default Add-Ons installed,
-/// so the shared content stays as it is.
-fn content_with_defaults(root: &Path) -> Result<PathBuf> {
-    let generated = generated_content();
-    let content = root.join("content");
-    for package in PackageSet::base().packages {
-        let from = generated.join(&package.dir);
-        ensure!(
-            from.is_dir(),
-            "{} lacks {}",
-            generated.display(),
-            package.dir
-        );
-        copy_dir(&from, &content.join(&package.dir), true)?;
-    }
-    defaults::install(
-        &content,
-        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages"),
-    )?;
-    Ok(content)
-}
+/// The stock jeep, which the made-up vehicle pack offers too.
+const JEEP: &str = bri_vehicles::testing::CAR;
 
 fn pump(app: &mut App) -> Result<()> {
     ensure!(
@@ -379,14 +342,11 @@ fn fights(red_wall: &[u8], white_wall: &[u8], box_size: [usize; 2]) -> (usize, u
 
 /// Two walls of Mirrors on Slopes, one framed red and one white, and a
 /// jeep the player rides; pictures from 60 to 120 units.
-fn probe(artifact: &Path) -> Result<Vec<String>> {
-    let scratch = std::env::temp_dir().join(format!(
-        "bri-distant-render-{}-{}",
-        std::process::id(),
-        SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
-    ));
+fn probe(f: &ContentRoot, artifact: &Path) -> Result<Vec<String>> {
+    let scratch_dir = f.state()?;
+    let scratch = scratch_dir.path().to_path_buf();
     let result = (|| {
-        let content = content_with_defaults(&scratch)?;
+        let content = f.with_defaults(&scratch)?;
         let state = scratch.join("state");
         std::fs::create_dir_all(&state)?;
         let mut app = App::load(&content, &state, SIZE)?;
@@ -478,7 +438,7 @@ fn probe(artifact: &Path) -> Result<Vec<String>> {
                 }
             }
         }
-        let mut spawn = brick(VEHICLE_SPAWN, snap(0.0, 10.0) + Vec3::Y * 0.1);
+        let mut spawn = brick(&f.vehicle_spawn, snap(0.0, 10.0) + Vec3::Y * 0.1);
         spawn.vehicle = Some(Box::new(bri_world::VehicleSpawn {
             vehicle: bri_world::ContentRef::Resolved(JEEP.into()),
             recolor: false,
@@ -528,7 +488,7 @@ fn probe(artifact: &Path) -> Result<Vec<String>> {
         })?;
         let rider = board(&mut app)?;
         let mut notes = vec![format!("rider seated: {rider}")];
-        let gpu = Headless::new().context("offscreen distant renderer")?;
+        let gpu = support::gpu::turn().context("offscreen distant renderer")?;
         let mut renderer = UiRenderer::new(&gpu.device, &gpu.queue);
         app.gpu_ready(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm)?;
         // Each wall from 60, 90 and 120 units, 25 degrees from above,
@@ -604,16 +564,13 @@ fn probe(artifact: &Path) -> Result<Vec<String>> {
         ensure!(rider, "the player never boarded the jeep");
         Ok(notes)
     })();
-    let _ = std::fs::remove_dir_all(&scratch);
+    drop(scratch_dir);
     result
 }
 
-#[test]
-#[ignore = "requires converted native v20 content, loopback QUIC and offscreen GPU; no window/audio device"]
-fn distant_mirrors_and_riders_draw_cleanly() -> Result<()> {
-    let artifact = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../artifacts/distant-render");
-    std::fs::create_dir_all(&artifact)?;
-    let notes = probe(&artifact)?;
+fn distant_mirrors_and_riders_draw_cleanly(f: &ContentRoot) -> Result<()> {
+    let artifact = f.out("distant-render")?;
+    let notes = probe(f, &artifact)?;
     std::fs::write(artifact.join("report.txt"), notes.join("\n"))?;
     Ok(())
 }

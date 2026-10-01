@@ -1,6 +1,8 @@
-//! Bounded normal-App render probe for v20 player types.
-//! Run with: cargo test -p bri-client --test player_types_render --release -- --ignored --nocapture
-//! Requires converted v20 content, loopback QUIC and an offscreen GPU; never opens a window.
+//! Bounded normal-App render probe for v20 player types: the Horse draws
+//! as a horse and the Fuel Jet shows and drains its energy. Runs on the
+//! made-up content root; the ignored variant runs on the generated v20
+//! content (`--release -- --ignored`, BRI_CONTENT or content/). Loopback
+//! QUIC and an offscreen GPU; never opens a window.
 use anyhow::{Context, Result, ensure};
 use bri_client::{
     app::App,
@@ -13,11 +15,16 @@ use bri_ui::{
 use std::{
     path::Path,
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 
+#[macro_use]
+mod support;
+use support::content_root::ContentRoot;
+
+synthetic_and_content!(ContentRoot: horse_players_draw_as_horses_and_fuel_jets_show_energy);
+
 const SIZE: (u32, u32) = (640, 480);
-const BEDROOM: &str = "v20/add-ons/map_bedroom/bedroom.mis";
 
 fn pump(app: &mut App) -> Result<()> {
     ensure!(
@@ -160,22 +167,13 @@ fn save(path: &Path, data: &[u8]) -> Result<()> {
     image::save_buffer(path, data, SIZE.0, SIZE.1, image::ColorType::Rgba8)?;
     Ok(())
 }
-#[test]
-#[ignore = "requires converted native v20 content, loopback QUIC and offscreen GPU; no window/audio device"]
-fn horse_players_draw_as_horses_and_fuel_jets_show_energy() -> Result<()> {
-    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let artifact = workspace.join("artifacts/player-types");
-    std::fs::create_dir_all(&artifact)?;
-    let state = artifact.join(format!(
-        "state-{}-{}",
-        std::process::id(),
-        SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
-    ));
-    std::fs::create_dir_all(&state)?;
-    let mut app = App::load(&workspace.join("content"), &state, SIZE)?;
+fn horse_players_draw_as_horses_and_fuel_jets_show_energy(f: &ContentRoot) -> Result<()> {
+    let artifact = f.out("player-types")?;
+    let state = f.state()?;
+    let mut app = App::load(&f.root, state.path(), SIZE)?;
     app.ui.core.pop(bri_ui::screens::ScreenId::DefaultControls);
     app.ui.core.request(UiAction::HostGame {
-        map: BEDROOM.into(),
+        map: f.map.0.clone(),
         mode: ServerMode::SinglePlayer,
         game_mode: None,
         max_players: 1,
@@ -185,12 +183,12 @@ fn horse_players_draw_as_horses_and_fuel_jets_show_energy() -> Result<()> {
         super_admin_password: String::new(),
     });
     pump(&mut app)?;
-    until(&mut app, "Bedroom host/player", |a| {
+    until(&mut app, "host/player", |a| {
         matches!(a.ui.core.conn, ConnectionState::InGame { .. })
             && a.network_view()
                 .is_some_and(|v| v.poses.contains_key(&v.owner))
     })?;
-    let gpu = Headless::new().context("offscreen player-type renderer")?;
+    let gpu = support::gpu::turn().context("offscreen player-type renderer")?;
     let mut renderer = UiRenderer::new(&gpu.device, &gpu.queue);
     app.gpu_ready(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm)?;
     app.ui
@@ -212,10 +210,13 @@ fn horse_players_draw_as_horses_and_fuel_jets_show_energy() -> Result<()> {
         ("v20.player.horsearmor", "horse"),
         ("v20.player.playerfueljet", "fueljet"),
     ] {
-        let rules = MiniGameRules {
-            player_type: id.into(),
-            ..MiniGameRules::default()
-        };
+        let rules = support::minigame::offered(
+            &app,
+            MiniGameRules {
+                player_type: id.into(),
+                ..MiniGameRules::default()
+            },
+        );
         let action = if label == "horse" {
             UiAction::CreateMiniGame { color: 0, rules }
         } else {

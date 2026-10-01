@@ -3,7 +3,8 @@
 use super::*;
 use crate::blueprint::CopyBuilder;
 use crate::session::copy_jobs::{CopyWork, Ending, Progress};
-use crate::simulation::{BoxScan, Selection, StackScan, spend, work};
+use crate::session::copy_store::CopyOutcome;
+use crate::simulation::{BoxScan, Selection, StackScan, center_copy, spend, work};
 
 /// A brick taken into a copy: read under its highlight and stored small.
 const CAPTURE: u32 = work::EDIT * 2;
@@ -91,7 +92,7 @@ impl SelectWork {
             .bricks
             .get(&brick)
             .context("Unknown brick")?;
-        if !admits(actor, rule, first) {
+        if !admits(actor, rule, &s.simulation, brick, first) {
             return Ok(Err(if first.owner == 0 {
                 ("public", "Public bricks cannot be copied.".to_string())
             } else {
@@ -185,34 +186,56 @@ impl SelectWork {
             }
             None => selection.bricks,
         };
+        // Grown once here, not doubled (and copied) a tick at a time.
+        let taking = self.ids.len().min(self.limit);
+        self.builder.reserve(taking);
+        self.sources.reserve(taking);
         Ok(())
     }
 
     /// The copy taken, held by `owner`; or why there is none.
     pub fn complete(self, s: &mut Session, owner: OwnerId) -> Copied {
-        let failed = |error| Copied {
-            selection: Default::default(),
-            error: Some(error),
-        };
-        if let Some(refusal) = self.refusal {
-            return failed(refusal);
+        match self.hold(s, owner) {
+            Ok((selection, sources)) => Copied {
+                selection: Selection {
+                    bricks: sources.to_vec(),
+                    ..selection
+                },
+                error: None,
+            },
+            Err(error) => Copied {
+                selection: Default::default(),
+                error: Some(error),
+            },
         }
-        let blueprint = match self.builder.finish() {
-            Ok(blueprint) => blueprint,
-            Err(error) => return failed(("invalid", format!("{error:#}"))),
-        };
+    }
+
+    /// The copy taken, held by `owner`, with the selection's counts and
+    /// the bricks it came from; or why there is none.
+    fn hold(
+        self,
+        s: &mut Session,
+        owner: OwnerId,
+    ) -> std::result::Result<(Selection, Arc<Vec<BrickId>>), Refusal> {
+        if let Some(refusal) = self.refusal {
+            return Err(refusal);
+        }
+        let blueprint = self
+            .builder
+            .finish()
+            .map_err(|error| ("invalid", format!("{error:#}")))?;
         let mut held = HeldCopy::new(self.sources, &self.package, self.rule.partial);
+        held.stack = self.rule.stack;
         held.shown = !self.hold.hidden;
         held.area = self.area;
-        let selection = Selection {
-            bricks: held.sources.to_vec(),
-            ..self.selection
-        };
+        // Added to: what glowed until let go still does.
+        held.lit = self.hold.add
+            && s.copies
+                .get(&owner)
+                .is_some_and(|c| c.lit && c.package == self.package);
+        let sources = held.sources.clone();
         s.hold_blueprint(owner, Arc::new(blueprint), held);
-        Copied {
-            selection,
-            error: None,
-        }
+        Ok((self.selection, sources))
     }
 }
 
@@ -222,23 +245,20 @@ impl CopyWork for SelectWork {
             Finding::Stack(scan) => Progress {
                 action: "select",
                 done: scan.selection.bricks.len(),
-                total: 0,
-                placed: 0,
-                refused: 0,
+                queued: scan.queued(),
+                ..Default::default()
             },
             Finding::Box { scan, .. } => Progress {
                 action: "select",
-                done: scan.selection.bricks.len(),
-                total: 0,
-                placed: 0,
-                refused: 0,
+                done: scan.found(),
+                searched: Some(scan.searched()),
+                ..Default::default()
             },
             Finding::Found => Progress {
                 action: "select",
                 done: self.next,
                 total: self.ids.len(),
-                placed: 0,
-                refused: 0,
+                ..Default::default()
             },
         }
     }
@@ -246,8 +266,14 @@ impl CopyWork for SelectWork {
     fn step(&mut self, s: &mut Session, owner: OwnerId, budget: &mut u32) -> Result<bool> {
         let (actor, rule) = (&self.actor, self.rule);
         let found = match &mut self.finding {
-            Finding::Stack(scan) => scan.step(&s.simulation, budget, |b| admits(actor, rule, b))?,
-            Finding::Box { scan, .. } => scan.step(&s.simulation, budget, |b| admits(actor, rule, b)),
+            Finding::Stack(scan) => {
+                let sim = &s.simulation;
+                scan.step(sim, budget, |id, b| admits(actor, rule, sim, id, b))?
+            }
+            Finding::Box { scan, .. } => {
+                let sim = &s.simulation;
+                scan.step(sim, budget, |id, b| admits(actor, rule, sim, id, b))
+            }
             Finding::Found => true,
         };
         if !found {
@@ -287,23 +313,29 @@ impl CopyWork for SelectWork {
             });
             self.sources.push(id);
         }
-        Ok(true)
+        // All in: moved round the copy's pivot, a slice at a time too.
+        Ok(self.builder.is_empty() || center_copy(&mut self.builder, budget))
     }
 
     fn finish(self: Box<Self>, s: &mut Session, owner: OwnerId, ending: Ending) {
         let package = self.package.clone();
-        let copied = match ending {
-            Ending::Done => self.complete(s, owner),
+        // Told by count: the bricks' ids stay with the held copy.
+        let none = Selection::default();
+        let outcome = match ending {
+            Ending::Done => match self.hold(s, owner) {
+                Ok((selection, sources)) => CopyOutcome::selected(sources.len(), &selection, None),
+                Err(error) => CopyOutcome::selected(0, &none, Some(error)),
+            },
             Ending::Left => return,
-            Ending::Canceled => Copied {
-                selection: Default::default(),
-                error: Some(("canceled", "Selection canceled!".to_string())),
-            },
-            Ending::Failed(error) => Copied {
-                selection: Default::default(),
-                error: Some(("invalid", format!("{error:#}"))),
-            },
+            Ending::Canceled => CopyOutcome::selected(
+                0,
+                &none,
+                Some(("canceled", "Selection canceled!".to_string())),
+            ),
+            Ending::Failed(error) => {
+                CopyOutcome::selected(0, &none, Some(("invalid", format!("{error:#}"))))
+            }
         };
-        s.report_copy(&package, owner, copied);
+        s.report_copy(&package, owner, outcome);
     }
 }

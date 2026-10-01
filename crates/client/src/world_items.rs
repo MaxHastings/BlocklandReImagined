@@ -158,6 +158,18 @@ struct AnimationClock {
     /// loops Fire, CheckFire, Fire), so the clip starts over even though
     /// the replicated state name never changed.
     restart: Option<String>,
+    /// The image's spin thread (`stateSpinThread`): how far into its
+    /// `spin` sequence it has turned, how fast it turns now and turned on
+    /// entering the state, and when the state and the last frame began.
+    spin: SpinClock,
+}
+#[derive(Clone, Default)]
+struct SpinClock {
+    turned: f64,
+    speed: f64,
+    entered_speed: f64,
+    state_started: f64,
+    last: f64,
 }
 #[derive(Clone)]
 struct MountedPose {
@@ -859,10 +871,22 @@ impl WorldItems {
                 speed: 1.,
                 frozen: false,
                 restart: None,
+                spin: SpinClock {
+                    state_started: seconds,
+                    last: seconds,
+                    ..SpinClock::default()
+                },
             });
         if clock.image != image || clock.state != state {
+            clock.spin.state_started = seconds;
+            clock.spin.entered_speed = clock.spin.speed;
             if clock.image != image {
                 clock.sequence = None;
+                clock.spin = SpinClock {
+                    state_started: seconds,
+                    last: seconds,
+                    ..SpinClock::default()
+                };
             } else if clock
                 .sequence
                 .as_ref()
@@ -892,20 +916,52 @@ impl WorldItems {
             clock.started = seconds;
             clock.frozen = false;
         }
-        let result = clock
-            .sequence
-            .as_ref()
-            .and_then(|n| shape.animations.iter().find(|a| &a.name == n))
-            .map_or_else(PoseKey::default, |clip| {
-                normalized_pose(
-                    clip,
-                    if clock.frozen {
-                        0.
-                    } else {
-                        (seconds - clock.started) * clock.speed
-                    },
-                )
-            });
+        // The spin turns at the speed the state gives it, from where it was.
+        let spin = &mut clock.spin;
+        let speed = definition.map_or(spin.speed, |s| {
+            s.spin.speed(
+                seconds - spin.state_started,
+                f64::from(s.ticks) / f64::from(bri_weapons::TICK_HZ),
+                spin.entered_speed,
+            )
+        });
+        spin.turned += (seconds - spin.last).max(0.) * (spin.speed + speed) / 2.;
+        spin.speed = speed;
+        spin.last = seconds;
+        let spin_clip = (spin.turned > 0. && clip.is_none())
+            .then(|| {
+                shape
+                    .animations
+                    .iter()
+                    .find(|a| a.name.eq_ignore_ascii_case("spin"))
+            })
+            .flatten();
+        // A state with its own sequence plays that; one without shows the
+        // spin where it has turned to.
+        let result = if let Some(spin_clip) = spin_clip {
+            let duration = f64::from(spin_clip.duration);
+            let at = if duration > 0. {
+                spin.turned.rem_euclid(duration)
+            } else {
+                0.
+            };
+            normalized_pose(spin_clip, at)
+        } else {
+            clock
+                .sequence
+                .as_ref()
+                .and_then(|n| shape.animations.iter().find(|a| &a.name == n))
+                .map_or_else(PoseKey::default, |clip| {
+                    normalized_pose(
+                        clip,
+                        if clock.frozen {
+                            0.
+                        } else {
+                            (seconds - clock.started) * clock.speed
+                        },
+                    )
+                })
+        };
         if let Some(sequence) = missing_sequence {
             self.diagnostics.missing_sequences += 1;
             self.message(format!("{image}/{state}: absent authored sequence {sequence}; preserves prior sequence semantics"));

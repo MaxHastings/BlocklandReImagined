@@ -1101,6 +1101,7 @@ fn removal(setup: &Setup, count: usize) -> Result<serde_json::Value> {
 }
 
 fn main() -> Result<()> {
+    bri_net::allocator::tune();
     let args: Vec<String> = std::env::args().skip(1).collect();
     ensure!(
         args.len() >= 2,

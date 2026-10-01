@@ -345,6 +345,13 @@ pub enum Notice {
     /// the world's z axis (north and south swap), or else across its x
     /// axis (east and west swap).
     MirrorCopy { across_z: bool },
+    /// This player's ghost brick becomes `definition` turned
+    /// `quarter_turns` where it stands: its mirror image
+    /// ([`super::Session::mirror_ghost`]).
+    MirrorGhost {
+        definition: String,
+        quarter_turns: u8,
+    },
     /// Put the copy this player holds against the surface at `point`
     /// facing out along `normal`, as a ghost brick is put where it is
     /// aimed.

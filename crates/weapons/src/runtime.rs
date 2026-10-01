@@ -610,6 +610,9 @@ impl Default for DropLook {
         }
     }
 }
+fn loaded() -> bool {
+    true
+}
 fn unit_scale() -> f32 {
     1.
 }
@@ -644,8 +647,8 @@ pub struct Actor {
     pub selected: Option<usize>,
     pub frame: Frame,
     pub ammo: bool,
-    /// The right hand's image is loaded (`setImageLoaded`), for states'
-    /// `loaded`/`not_loaded` transitions.
+    /// Whether the image in hand is loaded (`setImageLoaded`), which its
+    /// states' `loaded` and `not_loaded` transitions read.
     #[serde(default = "loaded")]
     pub loaded: bool,
     pub skiing: bool,
@@ -719,9 +722,6 @@ struct Cooking {
     image: String,
     /// The tick the fuse was lit.
     lit: u64,
-}
-fn loaded() -> bool {
-    true
 }
 /// A holder's reserve of one ammo type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1073,6 +1073,10 @@ impl WeaponsWorld {
     }
     pub fn set_ammo(&mut self, id: ActorId, ammo: bool) -> Result<()> {
         self.actors.get_mut(&id).context("Unknown actor")?.ammo = ammo;
+        Ok(())
+    }
+    pub fn set_loaded(&mut self, id: ActorId, loaded: bool) -> Result<()> {
+        self.actors.get_mut(&id).context("Unknown actor")?.loaded = loaded;
         Ok(())
     }
     pub fn give(&mut self, id: ActorId, item: &str) -> Result<usize> {

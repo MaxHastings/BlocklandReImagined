@@ -1354,6 +1354,16 @@ fn a_predicted_driver_needs_no_corrections_when_moves_arrive_in_pairs(f: &Fixtur
 }
 }
 
+/// The least the scripted second of mouse turning (0.004 a tick, from a
+/// standstill at full throttle) turns the car: right in the steering test,
+/// and left with D held against it in the prefs test. A turn that small is
+/// still four times the 0.05 the tests allow an input that does not steer.
+/// On the Jeep the turns are about 0.27 and 0.35; the made-up car, lighter
+/// to launch but on a longer wheelbase, turns about 0.19 and 0.2.
+fn mouse_turn_floors(f: &Fixture) -> (f32, f32) {
+    if f.is_native() { (0.2, 0.3) } else { (0.15, 0.15) }
+}
+
 /// Heading of the one vehicle in the session.
 fn vehicle_heading(s: &Session) -> f32 {
     pose_heading(s.vehicle_poses()[0].rotation)
@@ -1407,8 +1417,9 @@ fn the_jeep_steers_by_the_mouse_without_strafe_steering_and_by_the_keys_with_it(
     // Which input steers is the point; how far a second from standstill
     // turns depends on the tyres and the car (Torque's give a little and
     // share their grip with the launch: on the Jeep, 0.27 against 0.9 for a
-    // held key), so the turns are only told apart from no turn at all.
-    assert!(mouse_off > 0.05, "the mouse steers right: {mouse_off}");
+    // held key).
+    let (floor, _) = mouse_turn_floors(f);
+    assert!(mouse_off > floor, "the mouse steers right: {mouse_off}");
     assert!(keys_off.abs() < 0.05, "the keys do nothing: {keys_off}");
     assert!(mouse_on.abs() < 0.05, "the mouse only looks: {mouse_on}");
     assert!(keys_on > 0.3, "D steers right: {keys_on}");
@@ -1711,7 +1722,8 @@ fn the_host_steers_a_driver_by_the_prefs_it_echoes(f: &Fixture) -> anyhow::Resul
     // No prefs heard yet: the client's shipped ones, echoed.
     assert_eq!(s.vehicle_poses()[0].driver_steering, DEFAULT_STEERING);
     let mouse = turn(&mut s, &mut p)?;
-    assert!(mouse < -0.05, "the mouse steers without any prefs sent: {mouse}");
+    let (_, floor) = mouse_turn_floors(f);
+    assert!(mouse < -floor, "the mouse steers without any prefs sent: {mouse}");
     // The player's own: strafe steering on, echoed, and the key steers.
     s.command(
         owner,

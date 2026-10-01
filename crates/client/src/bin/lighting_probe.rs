@@ -553,10 +553,9 @@ fn main() -> Result<()> {
                     let shares: Vec<String> = sheet
                         .lights
                         .iter()
-                        .enumerate()
-                        .map(|(c, &k)| (k, sheet.visibility[c / 4][j * 4 + c % 4]))
-                        .filter(|&(_, s)| s > 0)
-                        .map(|(k, s)| format!("{k}:{s}"))
+                        .map(|&k| (k, sheet.share(k, j)))
+                        .filter(|&(_, s)| s > 0.0)
+                        .map(|(k, s)| format!("{k}:{s:.2}"))
                         .collect();
                     let facing: Vec<String> = owned
                         .iter()
@@ -759,11 +758,11 @@ fn main() -> Result<()> {
                     let i = i as usize;
                     let left = Vec3::new(sheet.left[i * 4] as f32, sheet.left[i * 4 + 1] as f32, sheet.left[i * 4 + 2] as f32);
                     let (mut whole, mut broke) = (left, left);
-                    for (c, &k) in sheet.lights.iter().enumerate() {
+                    for &k in &sheet.lights {
                         let l = &u.lights[k as usize];
                         let distance = Vec3::from(l.position).distance(at);
                         let falloff = ((l.outer - distance) / (l.outer - l.inner).max(1e-3)).clamp(0.0, 1.0);
-                        let given = Vec3::from(l.color) * falloff * 255.0 * f32::from(sheet.visibility[c / 4][i * 4 + c % 4]) / 255.0;
+                        let given = Vec3::from(l.color) * falloff * 255.0 * sheet.share(k, i);
                         whole += given;
                         if !broken[k as usize] {
                             broke += given;

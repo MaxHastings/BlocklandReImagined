@@ -1,3 +1,4 @@
+#[macro_use]
 mod common;
 use anyhow::Result;
 use bri_foliage::*;
@@ -108,12 +109,13 @@ impl Gpu {
         Ok(bytes)
     }
 }
-#[test]
-#[ignore = "requires private converted foliage/map packs; offscreen only"]
-fn original_native_foliage_offscreen_gpu_sway_depth_and_upload_bounds() -> Result<()> {
-    let p = pack();
-    let images = p.images(root().join("content/foliage-pack-003"))?;
-    let w = original_world();
+/// Places every definition against the fixture's world, renders the field
+/// offscreen and checks sway, depth occlusion and upload bounds. Returns the
+/// first frame and a probe report.
+fn offscreen_gpu_sway_depth_and_upload_bounds(f: &Fixture) -> Result<(Vec<u8>, serde_json::Value)> {
+    let p = &f.pack;
+    let images = f.images();
+    let w = f.world();
     let mut fields = vec![];
     for d in &p.definitions {
         let mut b = PlacementBuilder::new(d.clone())?;
@@ -122,13 +124,14 @@ fn original_native_foliage_offscreen_gpu_sway_depth_and_upload_bounds() -> Resul
         }
         fields.push(b.finish()?);
     }
+    let total: usize = fields.iter().map(|f| f.plants().len()).sum();
     let target = fields[0].plants()[0].position + Vec3::Y * 2.;
     let c = camera(target + Vec3::new(0., 4., 14.), target);
     let gpu = Gpu::new()?;
     let mut r = FoliageRenderer::new(
         &gpu.device,
         &gpu.queue,
-        &p,
+        p,
         &images,
         fields,
         RenderConfig {
@@ -138,22 +141,15 @@ fn original_native_foliage_offscreen_gpu_sway_depth_and_upload_bounds() -> Resul
         },
     )?;
     let stats = r.prepare(&gpu.queue, &c, 0., 500., 900.)?;
-    assert!(stats.visible > 0 && stats.visible < 10000);
+    assert!(stats.visible > 0 && stats.visible < total, "{stats:?}");
     assert_eq!(stats.upload_bytes, 112 + stats.visible * 4);
-    assert!(stats.draw_calls <= 2);
+    assert!(stats.draw_calls <= p.definitions.len());
     let first = gpu.frame(&r, bri_render::scene::DEPTH_CLEAR)?;
     let colored = first
         .chunks_exact(4)
         .filter(|p| p[0] > 0 || p[1] > 0 || p[2] > 0)
         .count();
     assert!(colored > 100);
-    image::save_buffer(
-        root().join("artifacts/native-foliage/offscreen.png"),
-        &first,
-        256,
-        256,
-        image::ColorType::Rgba8,
-    )?;
     r.prepare(&gpu.queue, &c, 4., 500., 900.)?;
     let second = gpu.frame(&r, bri_render::scene::DEPTH_CLEAR)?;
     assert_ne!(first, second);
@@ -183,6 +179,24 @@ fn original_native_foliage_offscreen_gpu_sway_depth_and_upload_bounds() -> Resul
     }
     let micros = start.elapsed().as_secs_f64() * 1e6 / 200.;
     let report = serde_json::json!({"schema_version":1,"adapter":gpu.name,"stats":stats,"mean_prepare_microseconds_debug":micros,"colored_pixels":colored,"sway_light_changes_pixels":true,"depth_occlusion_passed":true,"offscreen_only":true,"native_terrain_static_collision":true,"not_subjective_acceptance":true});
+    Ok((first, report))
+}
+#[test]
+fn offscreen_gpu_sway_depth_and_upload_bounds_synthetic() -> Result<()> {
+    offscreen_gpu_sway_depth_and_upload_bounds(&Fixture::synthetic())?;
+    Ok(())
+}
+#[test]
+#[ignore = "requires generated v20 content"]
+fn original_native_foliage_offscreen_gpu_sway_depth_and_upload_bounds() -> Result<()> {
+    let (first, report) = offscreen_gpu_sway_depth_and_upload_bounds(&Fixture::content())?;
+    image::save_buffer(
+        root().join("artifacts/native-foliage/offscreen.png"),
+        &first,
+        256,
+        256,
+        image::ColorType::Rgba8,
+    )?;
     std::fs::write(
         root().join("artifacts/native-foliage/gpu-probe.json"),
         serde_json::to_vec_pretty(&report)?,

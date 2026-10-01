@@ -1,11 +1,19 @@
 //! Headless regression probe for the released client's reported Shift/Space crash.
-//! Exercises the real converted Blockhead rig and the production avatar pose path.
+//! Exercises the production avatar pose path on the made-up avatar
+//! (`bri_client::testing::avatar`) and, ignored, the converted Blockhead rig.
+#[macro_use]
+mod support;
+
 use anyhow::Result;
 use bri_client::avatar::{AvatarAnimationInput, AvatarAssets, AvatarMesh, HeldToolPose};
 use bri_render::scene::SceneRenderer;
 use bri_sim::player::PlayerState;
 use bri_ui::gpu::Headless;
-use std::path::Path;
+use support::{avatar_fixture::AvatarFixture, gpu};
+
+synthetic_and_content!(
+    AvatarFixture: avatar_survives_held_crouch_jump_and_locomotion_transitions
+);
 
 fn player() -> PlayerState {
     PlayerState {
@@ -41,13 +49,10 @@ fn sample(
         .and_then(|()| mesh.upload(renderer, &gpu.device, &gpu.queue))
 }
 
-#[test]
-#[ignore = "requires original native avatar pack and offscreen GPU; no window"]
-fn original_avatar_survives_held_crouch_jump_and_locomotion_transitions() -> Result<()> {
-    let content = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/avatar-pack-002");
-    let assets = AvatarAssets::load(&content)?;
+fn avatar_survives_held_crouch_jump_and_locomotion_transitions(f: &AvatarFixture) -> Result<()> {
+    let assets = &f.assets;
     let mut mesh = assets.mesh(assets.package.defaults.clone())?;
-    let gpu = Headless::new()?;
+    let gpu = gpu::turn()?;
     let renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8Unorm);
     let mut state = player();
     let mut time = 0.0;
@@ -59,14 +64,14 @@ fn original_avatar_survives_held_crouch_jump_and_locomotion_transitions() -> Res
         state.velocity = velocity;
         for _ in 0..120 {
             time += 1.0 / 60.0;
-            sample(&mut mesh, &assets, &renderer, &gpu, &state, time, &no_tool)?;
+            sample(&mut mesh, assets, &renderer, &gpu, &state, time, &no_tool)?;
         }
     }
     state.crouched = false;
     state.velocity = [0.0; 3];
     for _ in 0..4 {
         time += 1.0 / 60.0;
-        sample(&mut mesh, &assets, &renderer, &gpu, &state, time, &no_tool)?;
+        sample(&mut mesh, assets, &renderer, &gpu, &state, time, &no_tool)?;
     }
 
     // Basic ascent/descent and actual jet pose both succeed in the production
@@ -76,7 +81,7 @@ fn original_avatar_survives_held_crouch_jump_and_locomotion_transitions() -> Res
     for frame in 0..240 {
         state.velocity[1] = if frame < 120 { 12.0 } else { -12.0 };
         time += 1.0 / 60.0;
-        sample(&mut mesh, &assets, &renderer, &gpu, &state, time, &no_tool)?;
+        sample(&mut mesh, assets, &renderer, &gpu, &state, time, &no_tool)?;
     }
 
     // These combinations previously failed because the additive jump clip was
@@ -96,7 +101,7 @@ fn original_avatar_survives_held_crouch_jump_and_locomotion_transitions() -> Res
             ..Default::default()
         };
         time += 1.0 / 60.0;
-        sample(&mut mesh, &assets, &renderer, &gpu, &state, time, &animation)?;
+        sample(&mut mesh, assets, &renderer, &gpu, &state, time, &animation)?;
     }
 
     // A held jet changes jump to the absolute fall clip, so crouch and held
@@ -110,7 +115,15 @@ fn original_avatar_survives_held_crouch_jump_and_locomotion_transitions() -> Res
         ..Default::default()
     };
     time += 1.0 / 60.0;
-    sample(&mut mesh, &assets, &renderer, &gpu, &state, time, &jet_animation)?;
+    sample(
+        &mut mesh,
+        assets,
+        &renderer,
+        &gpu,
+        &state,
+        time,
+        &jet_animation,
+    )?;
 
     // Include the landing/idle transition after jump release.
     state.grounded = true;
@@ -119,6 +132,6 @@ fn original_avatar_survives_held_crouch_jump_and_locomotion_transitions() -> Res
     state.velocity = [0.0; 3];
     state.jump = Default::default();
     time += 1.0 / 60.0;
-    sample(&mut mesh, &assets, &renderer, &gpu, &state, time, &no_tool)?;
+    sample(&mut mesh, assets, &renderer, &gpu, &state, time, &no_tool)?;
     Ok(())
 }

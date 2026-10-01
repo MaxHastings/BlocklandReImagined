@@ -18,8 +18,8 @@ pub struct Report {
     pub dependencies: Vec<Dependency>,
     pub unsupported: Vec<Finding>,
     /// What the importer could not convert but the applied port carries
-    /// out, each with how (`resolution`): a top-level call a port's table
-    /// reads.
+    /// out, each with how (`resolution`): a top-level call, a file, an
+    /// object made or changed at load ([`crate::ports::Port::handles`]).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub ported: Vec<Finding>,
     pub ambiguous: Vec<Finding>,
@@ -209,7 +209,8 @@ impl Report {
             datablocks: self.datablocks.len(),
             datablocks_converted: status("converted")
                 + status("converted_with_gaps")
-                + status("consumed"),
+                + status("consumed")
+                + status("ported"),
             datablocks_recognised_only: status("recognised_only"),
             datablocks_unsupported: status("unsupported"),
             datablocks_external: status("external"),

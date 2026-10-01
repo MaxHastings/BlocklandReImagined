@@ -14,6 +14,7 @@ use crate::blueprint::{Blueprint, MAX_BLUEPRINT_BRICKS, Outline, snap_anchor};
 use bri_package_runtime::ops::{CopyHold, CopyRule, CopyTrust, MirrorAxis, StackReach};
 use bri_world::authority::trust as level;
 use super::copy_store::CopyOutcome;
+mod extras;
 mod plant;
 mod select;
 pub(super) use plant::Refusals;
@@ -30,8 +31,10 @@ pub(super) struct HeldCopy {
     pub partial: bool,
     /// The player has it to place; else it is a selection only.
     pub shown: bool,
-    /// Every plant of it may float ([`Session::float_copy`]).
+    /// Every plant of it may float ([`Session::float_copy`]), with
+    /// `float_admin` only while the player is an administrator.
     pub float: bool,
+    pub float_admin: bool,
     /// The next plant may float, until this tick ([`Session::plant_copy`]).
     pub float_once: Option<u64>,
     /// The fill wrench is open on its bricks ([`Session::open_copy_wrench`]).
@@ -39,6 +42,15 @@ pub(super) struct HeldCopy {
     /// The brick group its plants go into instead of the player's own
     /// ([`Session::plant_as`]).
     pub plant_as: Option<PlantAs>,
+    /// Its bricks glow until it is let go or taken up to place
+    /// ([`Session::highlight_copy`] with no end).
+    pub lit: bool,
+    /// Full trust in a brick's stack owner lets its player change it
+    /// (`CopyRule::stack`).
+    pub stack: bool,
+    /// The box round the copy as its player last placed it, as its
+    /// Add-On last heard it (`on_copy_ghost`).
+    pub ghost_box: Option<([f32; 3], [f32; 3])>,
 }
 
 /// Another player's brick group a copy is planted into.
@@ -79,11 +91,17 @@ impl std::fmt::Display for CopyRefusal {
 impl std::error::Error for CopyRefusal {}
 
 /// The pause after each copy plant ([`Session::plant_wait`]), in ticks,
-/// and the first tick the next may come.
+/// and the tick of the last plant, which the pause runs from.
 #[derive(Debug, Clone, Copy, Default)]
 pub(super) struct PlantWait {
     pub ticks: u64,
-    pub next: u64,
+    pub last: Option<u64>,
+}
+impl PlantWait {
+    /// The first tick the next copy plant may come.
+    fn next(&self) -> u64 {
+        self.last.map_or(0, |last| last + self.ticks)
+    }
 }
 impl HeldCopy {
     pub fn new(sources: Vec<BrickId>, package: &str, partial: bool) -> Self {
@@ -94,9 +112,13 @@ impl HeldCopy {
             partial,
             shown: true,
             float: false,
+            float_admin: false,
             float_once: None,
             wrench_open: false,
             plant_as: None,
+            lit: false,
+            stack: false,
+            ghost_box: None,
         }
     }
 }
@@ -120,8 +142,14 @@ pub struct Copied {
     pub error: Option<(&'static str, String)>,
 }
 
-/// Whether `rule` lets `actor` copy `brick`.
-fn admits(actor: &Actor, rule: CopyRule, brick: &Brick) -> bool {
+/// Whether `rule` lets `actor` copy `brick` (`id`).
+pub(super) fn admits(
+    actor: &Actor,
+    rule: CopyRule,
+    sim: &crate::simulation::Simulation,
+    id: BrickId,
+    brick: &Brick,
+) -> bool {
     if brick.owner == 0 {
         return rule.public;
     }
@@ -133,6 +161,10 @@ fn admits(actor: &Actor, rule: CopyRule, brick: &Brick) -> bool {
         CopyTrust::Full => level::FULL,
     };
     actor.trust_level(brick.owner) >= needed
+        || (rule.stack
+            && sim
+                .stack_owner(id)
+                .is_some_and(|o| o != 0 && actor.trust_level(o) >= needed))
 }
 
 impl Session {
@@ -314,7 +346,15 @@ impl Session {
             self.notify(owner, Notice::Blueprint(None));
         }
         self.blueprints.insert(owner, blueprint);
-        self.copies.insert(owner, held);
+        if let Some(old) = self.copies.insert(owner, held) {
+            // The new copy stands nowhere until its player says.
+            if old.ghost_box.is_some() {
+                self.report_copy_ghost(&old.package, owner, None);
+            }
+            if !self.copies[&owner].lit {
+                self.end_glow(old);
+            }
+        }
     }
 
     /// Give `owner` the copy they hold as a selection to place, where it
@@ -323,6 +363,7 @@ impl Session {
         let held = self.copies.get_mut(&owner).context("Copy a build first")?;
         if !held.shown {
             held.shown = true;
+            held.lit = false;
             // Taken up to place, the selection stops glowing.
             let sources = held.sources.clone();
             self.unlight_bricks(sources)?;
@@ -347,7 +388,40 @@ impl Session {
         {
             held.shown = false;
             self.notify(owner, Notice::Blueprint(None));
+            self.place_copy_ghost(owner, None);
         }
+    }
+
+    /// Where `owner`'s copy stands as they place it (`Command::CopyPose`),
+    /// or that it went away. Only they see its bricks; its Add-On hears
+    /// the box round it whenever that changes, to show the others.
+    pub(super) fn set_copy_pose(&mut self, owner: OwnerId, pose: Option<CopyPose>) -> Result<()> {
+        if let Some(pose) = &pose {
+            pose.validate()?;
+        }
+        let area = match (pose, self.copies.get(&owner), self.blueprints.get(&owner)) {
+            (Some(pose), Some(held), Some(copy)) if held.shown => Some(copy.ghost_box(
+                pose.anchor,
+                pose.quarter_turns,
+                (pose.flipped, pose.mirrored),
+            )),
+            _ => None,
+        };
+        self.place_copy_ghost(owner, area);
+        Ok(())
+    }
+
+    /// The box round `owner`'s copy as they place it is now `area`.
+    fn place_copy_ghost(&mut self, owner: OwnerId, area: Option<([f32; 3], [f32; 3])>) {
+        let Some(held) = self.copies.get_mut(&owner) else {
+            return;
+        };
+        if held.ghost_box == area {
+            return;
+        }
+        held.ghost_box = area;
+        let package = held.package.clone();
+        self.report_copy_ghost(&package, owner, area);
     }
 
     /// The copy `owner` holds and places, or why there is none.
@@ -383,25 +457,33 @@ impl Session {
         Ok(())
     }
 
-    /// Let every plant of the copy `owner` holds float, or not.
-    pub fn float_copy(&mut self, owner: OwnerId, float: bool) -> Result<()> {
-        self.copies
-            .get_mut(&owner)
-            .context("Copy a build first")?
-            .float = float;
+    /// Let every plant of the copy `owner` holds float, or not; with
+    /// `admin_only`, only while they are an administrator.
+    pub fn float_copy(&mut self, owner: OwnerId, float: bool, admin_only: bool) -> Result<()> {
+        let held = self.copies.get_mut(&owner).context("Copy a build first")?;
+        held.float = float;
+        held.float_admin = admin_only;
         Ok(())
     }
 
     /// Light the bricks `owner`'s copy was taken from in the palette
-    /// colour nearest `rgba` (or their own), glowing, for `seconds`.
+    /// colour nearest `rgba` (or their own), glowing, for `seconds`; with
+    /// a negative time until the copy is let go or taken up to place, and
+    /// with none, put their own colours back now.
     pub fn highlight_copy(
         &mut self,
         owner: OwnerId,
         rgba: Option<[f32; 4]>,
         seconds: f32,
     ) -> Result<()> {
-        let ids = self.copies.get(&owner).context("Copy a build first")?.sources.clone();
+        let held = self.copies.get_mut(&owner).context("Copy a build first")?;
+        let ids = held.sources.clone();
+        held.lit = seconds < 0.0;
+        if seconds == 0.0 {
+            return self.unlight_bricks(ids);
+        }
         let color = rgba.map(|rgba| self.closest_paint(rgba));
+        let seconds = if seconds < 0.0 { f32::INFINITY } else { seconds };
         self.light_bricks(ids, color, super::highlight::GLOW, seconds)
     }
 
@@ -431,6 +513,50 @@ impl Session {
         Ok(())
     }
 
+    /// Mirror `owner`'s ghost brick across `axis` where it stands: it
+    /// becomes its mirror image, itself turned or its twin, on their screen
+    /// and for the others. One with no exact image stays as it is, and they
+    /// are told `asymmetric`.
+    pub fn mirror_ghost(&mut self, owner: OwnerId, axis: MirrorAxis, asymmetric: &str) -> Result<()> {
+        let ghost = self.ghost_brick(owner).context("Hold a ghost brick to mirror it")?;
+        let peer = self.peers.get(&owner).context("Unknown connection")?;
+        let across = match axis {
+            MirrorAxis::Y => crate::mirror::Across::UpsideDown,
+            MirrorAxis::X => crate::mirror::Across::X,
+            MirrorAxis::Z => crate::mirror::Across::Z,
+            MirrorAxis::View => {
+                let facing = crate::ghost::cardinal(peer.player.state().forward());
+                if facing.x.abs() > facing.z.abs() {
+                    crate::mirror::Across::Z
+                } else {
+                    crate::mirror::Across::X
+                }
+            }
+        };
+        let image = self.mirrors.mirror_brick(
+            &self.simulation.definitions,
+            &ghost.definition,
+            ghost.quarter_turns,
+            across,
+        );
+        if !image.exact {
+            self.notify(owner, Notice::Chat(asymmetric.into()));
+            return Ok(());
+        }
+        if let Some(shown) = self.peers.get_mut(&owner).and_then(|p| p.ghost.as_mut()) {
+            shown.definition = image.definition.clone();
+            shown.quarter_turns = image.turns;
+        }
+        self.notify(
+            owner,
+            Notice::MirrorGhost {
+                definition: image.definition,
+                quarter_turns: image.turns,
+            },
+        );
+        Ok(())
+    }
+
     /// Move the copy `owner` holds against the surface at `point` facing
     /// out along `normal`. Where the copy stands is the player's to choose,
     /// like its turn, so the host only tells them.
@@ -449,6 +575,8 @@ impl Session {
     }
 
     /// Make `owner` wait `seconds` after each copy plant before the next.
+    /// The wait runs from their last plant, so a changed one counts from
+    /// there too (v20 Add-Ons compared the time since it with theirs).
     pub fn plant_wait(&mut self, owner: OwnerId, seconds: f32) -> Result<()> {
         ensure!(
             seconds.is_finite() && (0.0..=60.0).contains(&seconds),
@@ -456,10 +584,7 @@ impl Session {
         );
         ensure!(self.peers.contains_key(&owner), "No such player");
         let ticks = (seconds * bri_world::TICKS_PER_SECOND as f32).round() as u64;
-        let wait = self.plant_waits.entry(owner).or_default();
-        // A shorter wait shortens the one running now.
-        wait.next = wait.next.saturating_sub(wait.ticks.saturating_sub(ticks));
-        wait.ticks = ticks;
+        self.plant_waits.entry(owner).or_default().ticks = ticks;
         Ok(())
     }
 
@@ -549,17 +674,18 @@ impl Session {
     /// once: an Add-On's cut is a job ([`Self::start_cut`]).
     pub fn cut_copy(&mut self, owner: OwnerId) -> Result<usize> {
         self.ensure_copy_idle(owner)?;
-        let mut work = copy_edits::CutWork::new(self, owner)?;
+        let mut work = copy_edits::CutWork::new(self, owner, false)?;
         self.run_copy_work(owner, &mut work)?;
         Ok(work.complete(self, owner))
     }
 
-    /// An Add-On's cut ([`Op::CutCopy`]) as a copy job.
-    pub(super) fn start_cut(&mut self, owner: OwnerId, package: &str) {
+    /// An Add-On's cut ([`Op::CutCopy`]) as a copy job: with `each`, the
+    /// bricks the player may cut, the rest counted.
+    pub(super) fn start_cut(&mut self, owner: OwnerId, package: &str, each: bool) {
         let held = self.blueprints.contains_key(&owner);
         let started = self
             .ensure_copy_idle(owner)
-            .and_then(|()| copy_edits::CutWork::new(self, owner));
+            .and_then(|()| copy_edits::CutWork::new(self, owner, each));
         match started {
             Ok(work) => self.start_copy_job(owner, Some(package.into()), Box::new(work)),
             Err(error) => {
@@ -623,8 +749,8 @@ impl Session {
         // The player's pause since their last copy plant.
         let wait = self.plant_waits.get(&owner).copied().unwrap_or_default();
         let now = self.simulation.state().tick;
-        if now < wait.next && self.blueprints.contains_key(&owner) {
-            let left = (wait.next - now) as f32 / bri_world::TICKS_PER_SECOND as f32;
+        if now < wait.next() && self.blueprints.contains_key(&owner) {
+            let left = (wait.next() - now) as f32 / bri_world::TICKS_PER_SECOND as f32;
             let package = self.copies.get(&owner).map(|c| c.package.clone());
             return self.refuse_place(package, owner, CopyRefusal::Wait(left));
         }
@@ -684,14 +810,21 @@ impl Session {
             actor.owner = into.group;
         }
         let blueprint = blueprint.clone();
-        let (partial, float) = match self.copies.get_mut(&owner) {
+        let administrator = peer.actor.administrator;
+        let (partial, float, float_refused) = match self.copies.get_mut(&owner) {
             Some(c) => {
                 let once = c.float_once.take().is_some_and(|until| tick <= until);
-                (c.partial, c.float || once)
+                // Floating for administrators only, and they are not one
+                // (now): this plant does not, nor do the next.
+                let refused = c.float && c.float_admin && !administrator;
+                if refused {
+                    c.float = false;
+                }
+                (c.partial, (c.float || once) && !refused, refused)
             }
-            None => (false, false),
+            None => (false, false, false),
         };
-        let work = plant::PlantWork::new(
+        let mut work = plant::PlantWork::new(
             blueprint,
             placement,
             inexact,
@@ -700,6 +833,8 @@ impl Session {
             anchor,
             (partial, float),
         );
+        work.float_refused = float_refused;
+        work.look = (quarter_turns % 4, (flipped, mirrored));
         // What fits in this tick's copy work plants now; a bigger copy
         // plants over the next ticks.
         match self.begin_copy_job(owner, package, work)? {
@@ -719,7 +854,7 @@ impl Session {
         let error = anyhow::Error::new(refusal);
         let refused = Refusals::all(error);
         if let Some(package) = package
-            && self.report_place(&package, owner, (0, 0, false), &refused, &Default::default())
+            && self.report_place(&package, owner, (0, 0, false, false), &refused, &Default::default())
         {
             return Ok(Reply::Accepted);
         }
@@ -801,7 +936,20 @@ impl Session {
 
     pub(super) fn forget_blueprint(&mut self, owner: OwnerId) {
         self.blueprints.remove(&owner);
-        self.copies.remove(&owner);
+        if let Some(held) = self.copies.remove(&owner) {
+            if held.ghost_box.is_some() {
+                self.report_copy_ghost(&held.package, owner, None);
+            }
+            self.end_glow(held);
+        }
+    }
+
+    /// A copy let go: its bricks lit until then get their colours back.
+    fn end_glow(&mut self, held: HeldCopy) {
+        if held.lit {
+            // Bricks gone meanwhile are passed over.
+            let _ = self.unlight_bricks(held.sources);
+        }
     }
 }
 

@@ -1,15 +1,29 @@
 //! Brick visual audit scene: fixed camera and sun, one brick per family.
 //! Writes our render plus a layout the independent v20 reference renderer
 //! (`tools/brick_reference.py`) reads. Offscreen only, no window or input.
+//! Each scene is drawn from made-up bricks and materials
+//! (`support::brick_fixture`) and again, ignored, from the generated v20
+//! catalog, which is the layout the v20 reference renderer compares.
+#[macro_use]
+mod support;
+
 use anyhow::{Context, Result, ensure};
-use bri_client::{materials::BrickMaterials, world_scene::build_world_scene_materials};
+use bri_client::world_scene::build_world_scene_materials;
 use bri_content::brick::Catalog;
 use bri_net::protocol::PublicWorld;
 use bri_render::scene::{Camera, SceneData, SceneRenderer, create_depth};
 use bri_sim::definitions::Definitions;
 use bri_ui::gpu::Headless;
 use bri_world::{Brick, ContentRef};
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
+use support::{
+    brick_fixture::{BrickFixture, block},
+    files::repo_root,
+    gpu,
+};
 
 const WIDTH: u32 = 1280;
 const HEIGHT: u32 = 800;
@@ -84,19 +98,20 @@ fn render(gpu: &Headless, scene: &SceneData, camera: &Camera, path: &Path) -> Re
     Ok(())
 }
 
+#[derive(Clone)]
 struct Entry {
-    id: &'static str,
+    id: String,
     x: f32,
     z: f32,
     color: u8,
-    print: Option<&'static str>,
+    print: Option<String>,
     color_fx: u8,
     shape_fx: u8,
     quarter_turns: u8,
 }
-const fn plain(id: &'static str, x: f32, z: f32, color: u8) -> Entry {
+fn plain(id: &str, x: f32, z: f32, color: u8) -> Entry {
     Entry {
-        id,
+        id: id.into(),
         x,
         z,
         color,
@@ -106,86 +121,207 @@ const fn plain(id: &'static str, x: f32, z: f32, color: u8) -> Entry {
         quarter_turns: 0,
     }
 }
-const fn turned(id: &'static str, x: f32, z: f32, color: u8, quarter_turns: u8) -> Entry {
+fn turned(id: &str, x: f32, z: f32, color: u8, quarter_turns: u8) -> Entry {
     Entry {
         quarter_turns,
         ..plain(id, x, z, color)
     }
 }
-const fn printed(id: &'static str, x: f32, z: f32, print: &'static str) -> Entry {
+fn printed(id: &str, x: f32, z: f32, print: &str) -> Entry {
     Entry {
-        print: Some(print),
+        print: Some(print.into()),
         ..plain(id, x, z, 2)
     }
 }
-const fn fx(x: f32, z: f32, color: u8, color_fx: u8, shape_fx: u8) -> Entry {
+fn fx(id: &str, x: f32, z: f32, color: u8, color_fx: u8, shape_fx: u8) -> Entry {
     Entry {
         color_fx,
         shape_fx,
-        ..plain("v20/brick/brick2x4data", x, z, color)
+        ..plain(id, x, z, color)
     }
 }
-const FAMILIES: &[Entry] = &[
-    plain("v20/brick/brick2x4data", -3.0, -2.0, 0),
-    plain("v20/brick/brick4x4fdata", -1.0, -2.0, 1),
-    plain("v20/brick/brick1x4fdata", 1.0, -2.25, 2),
-    plain("v20/brick/brick2x2rampdata", 3.0, -2.0, 3),
-    plain("v20/brick/brick2x2x5rampdata", 5.0, -2.0, 0),
-    plain("v20/brick/brick2x2rampcornerdata", -3.0, 0.5, 1),
-    plain("v20/brick/brick3x3rampcornerdata", -0.75, 0.25, 2),
-    plain("v20/brick/brick2x2cresthighcornerdata", 1.5, 0.5, 3),
-    plain("v20/brick/brick1x2rampupdata", 3.25, 0.5, 0),
-    plain("v20/brick/brick2x2rounddata", 5.0, 0.5, 1),
-    plain("v20/brick/brick2x2x2conedata", -3.0, 3.0, 2),
-    plain("v20/brick/brick1x1rounddata", -1.25, 3.25, 3),
-    printed("v20/brick/brick1x1printdata", 0.25, 3.25, "Letters/A"),
-    printed("v20/brick/brick2x2fprintdata", 2.0, 3.0, "Letters/B"),
-    printed("v20/brick/brick1x4x4printdata", 4.0, 3.25, "Letters/C"),
-    plain("v20/brick/brick2x4data", 6.0, 3.0, 4),
-];
+
 /// Every colour FX (top row: pearl, chrome, glow, blink; middle: swirl,
-/// rainbow, none) and both shape FX, frozen at 0.37 s.
-const FX: &[Entry] = &[
-    fx(-3.0, -2.0, 0, 1, 0),
-    fx(-0.5, -2.0, 3, 2, 0),
-    fx(2.0, -2.0, 1, 3, 0),
-    fx(4.5, -2.0, 0, 4, 0),
-    fx(-3.0, 1.0, 3, 5, 0),
-    fx(-0.5, 1.0, 2, 6, 0),
-    fx(2.0, 1.0, 1, 0, 0),
-    fx(4.5, 1.0, 2, 0, 1),
-    fx(-0.5, 4.0, 3, 0, 2),
-    fx(2.0, 4.0, 0, 1, 2),
-];
+/// rainbow, none) and both shape FX on one brick, frozen at 0.37 s.
+fn fx_layout(id: &str) -> Vec<Entry> {
+    vec![
+        fx(id, -3.0, -2.0, 0, 1, 0),
+        fx(id, -0.5, -2.0, 3, 2, 0),
+        fx(id, 2.0, -2.0, 1, 3, 0),
+        fx(id, 4.5, -2.0, 0, 4, 0),
+        fx(id, -3.0, 1.0, 3, 5, 0),
+        fx(id, -0.5, 1.0, 2, 6, 0),
+        fx(id, 2.0, 1.0, 1, 0, 0),
+        fx(id, 4.5, 1.0, 2, 0, 1),
+        fx(id, -0.5, 4.0, 3, 0, 2),
+        fx(id, 2.0, 4.0, 0, 1, 2),
+    ]
+}
+
+/// Stud tops seen from straight above, the way a builder looks down a well:
+/// 1x1, 1x2 and 2x2 bricks packed together at every quarter turn.
+fn tops_layout(one: &str, one_by_two: &str, two: &str) -> Vec<Entry> {
+    vec![
+        turned(one, -1.25, -1.25, 1, 0),
+        turned(one, -0.75, -1.25, 1, 1),
+        turned(one, -1.25, -0.75, 1, 2),
+        turned(one, -0.75, -0.75, 1, 3),
+        turned(two, 0.0, -1.0, 0, 1),
+        turned(two, 1.0, -1.0, 0, 2),
+        turned(two, 2.0, -1.0, 0, 3),
+        turned(two, -1.0, 0.0, 2, 3),
+        turned(two, 0.0, 0.0, 2, 0),
+        turned(one_by_two, 0.75, 0.0, 2, 0),
+        turned(one_by_two, 1.25, 0.0, 2, 2),
+        turned(two, 2.0, 0.0, 2, 2),
+        turned(two, -1.0, 1.0, 3, 1),
+        turned(two, 0.0, 1.0, 3, 2),
+        turned(two, 1.0, 1.0, 3, 0),
+        turned(two, 2.0, 1.0, 3, 3),
+    ]
+}
+
+/// Brick materials, meshes and the three audit layouts.
+struct Audit {
+    bricks: BrickFixture,
+    /// Each brick's source mesh name, for the reference renderer.
+    blb: BTreeMap<String, String>,
+    families: Vec<Entry>,
+    fx: Vec<Entry>,
+    tops: Vec<Entry>,
+    /// The materials folder the layout names, and where scenes are written.
+    materials_dir: PathBuf,
+    out: PathBuf,
+}
+
+impl Audit {
+    fn content() -> Result<Self> {
+        let root = repo_root();
+        let content = root.join("content");
+        let packages = bri_package::packages::PackageSet::base();
+        let catalog: Catalog = serde_json::from_slice(&std::fs::read(
+            packages
+                .role_dir(&content, "brick_catalog")?
+                .join("stock-catalog.json"),
+        )?)?;
+        let definitions = Definitions::load(
+            &packages.role_dir(&content, "brick_catalog")?,
+            &packages.role_dir(&content, "geometry")?,
+        )?;
+        let mut bricks = BrickFixture::content()?;
+        bricks.meshes = definitions
+            .entries
+            .into_iter()
+            .map(|(id, def)| (id, def.mesh))
+            .collect();
+        let v20 = |s: &str| format!("v20/brick/{s}data");
+        let families = vec![
+            plain(&v20("brick2x4"), -3.0, -2.0, 0),
+            plain(&v20("brick4x4f"), -1.0, -2.0, 1),
+            plain(&v20("brick1x4f"), 1.0, -2.25, 2),
+            plain(&v20("brick2x2ramp"), 3.0, -2.0, 3),
+            plain(&v20("brick2x2x5ramp"), 5.0, -2.0, 0),
+            plain(&v20("brick2x2rampcorner"), -3.0, 0.5, 1),
+            plain(&v20("brick3x3rampcorner"), -0.75, 0.25, 2),
+            plain(&v20("brick2x2cresthighcorner"), 1.5, 0.5, 3),
+            plain(&v20("brick1x2rampup"), 3.25, 0.5, 0),
+            plain(&v20("brick2x2round"), 5.0, 0.5, 1),
+            plain(&v20("brick2x2x2cone"), -3.0, 3.0, 2),
+            plain(&v20("brick1x1round"), -1.25, 3.25, 3),
+            printed(&v20("brick1x1print"), 0.25, 3.25, "Letters/A"),
+            printed(&v20("brick2x2fprint"), 2.0, 3.0, "Letters/B"),
+            printed(&v20("brick1x4x4print"), 4.0, 3.25, "Letters/C"),
+            plain(&v20("brick2x4"), 6.0, 3.0, 4),
+        ];
+        Ok(Self {
+            bricks,
+            blb: catalog
+                .bricks
+                .iter()
+                .map(|b| (b.id.clone(), b.mesh_id.clone()))
+                .collect(),
+            families,
+            fx: fx_layout(&v20("brick2x4")),
+            tops: tops_layout(&v20("brick1x1"), &v20("brick1x2"), &v20("brick2x2")),
+            materials_dir: packages.role_dir(&content, "brick_materials")?,
+            out: root.join("artifacts/brick-audit"),
+        })
+    }
+
+    /// Made-up blocks of several footprints and heights, the fixture's
+    /// printed tile and literal-coloured block, on the fixture's materials.
+    fn synthetic() -> Result<Self> {
+        let mut bricks = BrickFixture::synthetic()?;
+        let look = |face| {
+            (
+                match face {
+                    bri_content::brick::Face::Top => bri_content::brick::Surface::Top,
+                    bri_content::brick::Face::Bottom => bri_content::brick::Surface::BottomLoop,
+                    _ => bri_content::brick::Surface::Side,
+                },
+                None,
+            )
+        };
+        let id = |s: &str| format!("fixture/brick/{s}");
+        for (name, studs, plates) in [
+            ("1x1", [1, 1], 3),
+            ("1x2", [1, 2], 3),
+            ("2x2", [2, 2], 3),
+            ("2x4", [2, 4], 3),
+            ("4x4f", [4, 4], 1),
+            ("1x4f", [1, 4], 1),
+            ("2x2x5", [2, 2], 15),
+        ] {
+            let mesh = block(&id(name), studs, plates, look);
+            bricks.meshes.insert(mesh.id.clone(), mesh);
+        }
+        let print = bricks.print.clone();
+        let families = vec![
+            plain(&id("2x4"), -3.0, -2.0, 0),
+            plain(&id("4x4f"), -1.0, -2.0, 1),
+            plain(&id("1x4f"), 1.0, -2.25, 2),
+            plain(&id("2x2x5"), 3.0, -2.0, 3),
+            plain(&id("2x2"), 5.0, -2.0, 0),
+            plain(&bricks.literal, -3.0, 0.5, 1),
+            plain(&id("1x1"), -1.25, 3.25, 3),
+            printed(&bricks.printable, 2.0, 3.0, &print),
+            plain(&id("2x4"), 6.0, 3.0, 4),
+        ];
+        Ok(Self {
+            blb: bricks
+                .meshes
+                .keys()
+                .map(|id| (id.clone(), format!("{id}.blb")))
+                .collect(),
+            families,
+            fx: fx_layout(&id("2x4")),
+            tops: tops_layout(&id("1x1"), &id("1x2"), &id("2x2")),
+            materials_dir: PathBuf::from("synthetic"),
+            out: PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("brick-audit-synthetic"),
+            bricks,
+        })
+    }
+}
+
+synthetic_and_content!(
+    Audit: brick_family_audit_scene,
+    brick_fx_audit_scene,
+    brick_top_audit_scene,
+);
 
 const EYE: [f32; 3] = [1.5, 7.5, 10.5];
 const TARGET: [f32; 3] = [1.5, 0.0, 0.5];
 
 fn audit_scene(
+    a: &Audit,
     name: &str,
     layout: &[Entry],
     time: f32,
     eye: [f32; 3],
     target: [f32; 3],
 ) -> Result<()> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let content = root.join("content");
-    let packages = bri_package::packages::PackageSet::base();
-    let materials = BrickMaterials::load(&packages.role_dir(&content, "brick_materials")?)?;
-    let catalog: Catalog = serde_json::from_slice(&std::fs::read(
-        packages
-            .role_dir(&content, "brick_catalog")?
-            .join("stock-catalog.json"),
-    )?)?;
-    let definitions = Definitions::load(
-        &packages.role_dir(&content, "brick_catalog")?,
-        &packages.role_dir(&content, "geometry")?,
-    )?;
-    let meshes: BTreeMap<String, bri_content::brick::Brick> = definitions
-        .entries
-        .into_iter()
-        .map(|(id, def)| (id, def.mesh))
-        .collect();
+    let materials = &a.bricks.materials;
+    let meshes = &a.bricks.meshes;
     // Palette entries mirror default v20 colours; the last is translucent.
     let palette = vec![
         [0.9, 0.0, 0.0, 1.0],
@@ -202,15 +338,16 @@ fn audit_scene(
     };
     let mut records = vec![];
     for (index, entry) in layout.iter().enumerate() {
-        let catalog_entry = catalog
-            .bricks
-            .iter()
-            .find(|b| b.id == entry.id)
+        let blb = a
+            .blb
+            .get(&entry.id)
             .with_context(|| format!("Missing catalog brick {}", entry.id))?;
-        let mesh = &meshes[entry.id];
+        let mesh = meshes
+            .get(&entry.id)
+            .with_context(|| format!("Missing brick mesh {}", entry.id))?;
         let height = mesh.height_plates as f32 * 0.2;
         let mut brick = Brick::new(
-            ContentRef::Resolved(entry.id.into()),
+            ContentRef::Resolved(entry.id.clone()),
             [entry.x, height * 0.5, entry.z],
             1,
         );
@@ -218,22 +355,22 @@ fn audit_scene(
         brick.quarter_turns = entry.quarter_turns;
         brick.color_effect = entry.color_fx;
         brick.shape_effect = entry.shape_fx;
-        let print_path = entry.print.map(|alias| {
+        let print_path = entry.print.as_deref().map(|alias| {
             let p = materials.bundle.resolve(alias).expect("print alias");
             brick.print = Some(ContentRef::Resolved(p.id.clone()));
             p.diffuse.path.clone()
         });
         records.push(serde_json::json!({
-            "id": entry.id, "blb": catalog_entry.mesh_id, "position": brick.position,
+            "id": entry.id, "blb": blb, "position": brick.position,
             "quarter_turns": entry.quarter_turns, "paint": palette[entry.color as usize],
             "print": print_path, "color_fx": entry.color_fx, "shape_fx": entry.shape_fx,
             "depth_studs": mesh.footprint_studs[1],
         }));
         world.bricks.insert(index as u64 + 1, brick);
     }
-    let scene = build_world_scene_materials(&world, &meshes, 4_000_000, Some(&materials))?;
+    let scene = build_world_scene_materials(&world, meshes, 4_000_000, Some(materials))?;
     ensure!(!scene.indices.is_empty(), "Empty audit scene");
-    let out = root.join("artifacts/brick-audit").join(name);
+    let out = a.out.join(name);
     std::fs::create_dir_all(&out)?;
     let fov = 45_f32;
     let mut camera = Camera::perspective(
@@ -245,7 +382,7 @@ fn audit_scene(
         200.0,
     );
     camera.atmosphere[2] = time;
-    let gpu = Headless::new()?;
+    let gpu = gpu::turn()?;
     render(&gpu, &scene, &camera, &out.join("ours.png"))?;
     std::fs::write(
         out.join("layout.json"),
@@ -254,48 +391,21 @@ fn audit_scene(
             "fov_y_degrees": fov, "near": 0.1, "far": 200.0, "time_seconds": time,
             "sun_direction": &camera.sun_direction[..3], "sun_color": &camera.sun_color[..3],
             "ambient": &camera.ambient[..3], "background": [0.3, 0.3, 0.3],
-            "materials": packages.role_dir(&content, "brick_materials")?,
+            "materials": a.materials_dir,
             "bricks": records,
         }))?,
     )?;
     Ok(())
 }
 
-#[test]
-#[ignore = "requires local converted original assets; offscreen only"]
-fn brick_family_audit_scene() -> Result<()> {
-    audit_scene("families", FAMILIES, 0.0, EYE, TARGET)
+fn brick_family_audit_scene(a: &Audit) -> Result<()> {
+    audit_scene(a, "families", &a.families, 0.0, EYE, TARGET)
 }
 
-#[test]
-#[ignore = "requires local converted original assets; offscreen only"]
-fn brick_fx_audit_scene() -> Result<()> {
-    audit_scene("fx", FX, 0.37, EYE, TARGET)
+fn brick_fx_audit_scene(a: &Audit) -> Result<()> {
+    audit_scene(a, "fx", &a.fx, 0.37, EYE, TARGET)
 }
 
-/// Stud tops seen from straight above, the way a builder looks down a well:
-/// 1x1, 1x2 and 2x2 bricks packed together at every quarter turn.
-const TOPS: &[Entry] = &[
-    turned("v20/brick/brick1x1data", -1.25, -1.25, 1, 0),
-    turned("v20/brick/brick1x1data", -0.75, -1.25, 1, 1),
-    turned("v20/brick/brick1x1data", -1.25, -0.75, 1, 2),
-    turned("v20/brick/brick1x1data", -0.75, -0.75, 1, 3),
-    turned("v20/brick/brick2x2data", 0.0, -1.0, 0, 1),
-    turned("v20/brick/brick2x2data", 1.0, -1.0, 0, 2),
-    turned("v20/brick/brick2x2data", 2.0, -1.0, 0, 3),
-    turned("v20/brick/brick2x2data", -1.0, 0.0, 2, 3),
-    turned("v20/brick/brick2x2data", 0.0, 0.0, 2, 0),
-    turned("v20/brick/brick1x2data", 0.75, 0.0, 2, 0),
-    turned("v20/brick/brick1x2data", 1.25, 0.0, 2, 2),
-    turned("v20/brick/brick2x2data", 2.0, 0.0, 2, 2),
-    turned("v20/brick/brick2x2data", -1.0, 1.0, 3, 1),
-    turned("v20/brick/brick2x2data", 0.0, 1.0, 3, 2),
-    turned("v20/brick/brick2x2data", 1.0, 1.0, 3, 0),
-    turned("v20/brick/brick2x2data", 2.0, 1.0, 3, 3),
-];
-
-#[test]
-#[ignore = "requires local converted original assets; offscreen only"]
-fn brick_top_audit_scene() -> Result<()> {
-    audit_scene("tops", TOPS, 0.0, [0.5, 6.0, 1.0], [0.5, 0.0, 0.0])
+fn brick_top_audit_scene(a: &Audit) -> Result<()> {
+    audit_scene(a, "tops", &a.tops, 0.0, [0.5, 6.0, 1.0], [0.5, 0.0, 0.0])
 }

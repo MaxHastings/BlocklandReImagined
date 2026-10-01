@@ -438,21 +438,35 @@ fn shape_centres(
 const MIN_CELL: f32 = 2.0;
 const MAX_CELLS: usize = 1_000_000;
 
-#[test]
-#[ignore = "requires locally converted map-bundle-017; bakes every stock map"]
-fn stock_map_lamps_light_their_surroundings() -> Result<()> {
-    let bundle = content().join("map-bundle-017");
+/// A light source to stand around: its centre, the offsets a player stands
+/// at, the least luminance each must get, and a label.
+struct Lamp {
+    centre: Vec3,
+    offsets: Vec<Vec3>,
+    least: f32,
+    label: String,
+}
+
+/// Bakes every map in `bundle` with the client's settings and checks the
+/// work stays bounded and each of `lamps(id, map)` lights its surroundings.
+/// Returns how many maps had lightmapped surfaces.
+fn lamps_light_their_surroundings(
+    bundle: &std::path::Path,
+    lamps: impl Fn(&str, &bri_render::scene_loader::MapScene) -> Result<Vec<Lamp>>,
+) -> Result<usize> {
     let index: serde_json::Value =
         serde_json::from_slice(&std::fs::read(bundle.join("bundle.json"))?)?;
+    let mut baked = 0;
     for record in index["maps"].as_array().context("maps")? {
         let id = record["id"].as_str().context("id")?;
-        let map = load_map_bundle(&bundle, id)?;
+        let map = load_map_bundle(bundle, id)?;
         let started = std::time::Instant::now();
         let volume = LightVolume::bake(&map.scene, MIN_CELL, MAX_CELLS);
         let Some(volume) = volume else {
             eprintln!("{id}: no lightmapped surfaces");
             continue;
         };
+        baked += 1;
         eprintln!(
             "{id}: {:?} cells of {:.2} in {:?}; sun {:?} ambient {:?}",
             volume.dims,
@@ -466,31 +480,106 @@ fn stock_map_lamps_light_their_surroundings() -> Result<()> {
         let every_cell = volume.texels.len() as u64 * RAYS_PER_CELL;
         eprintln!("  rays {} of {every_cell}", volume.rays);
         assert!(volume.rays * 3 < every_cell * 2);
-        // A player (feet to head, about 2.7 units) around each light source.
-        // Around the Bedroom bulb (a player on the shade's bars stands just
-        // above it) and under the Kitchen ceiling lights.
-        let around = [
-            Vec3::new(0.0, 1.5, 0.0),
-            Vec3::new(0.0, -3.0, 0.0),
-            Vec3::new(2.0, 0.0, 0.0),
-            Vec3::new(0.0, 0.0, -2.0),
-        ];
-        let under = [Vec3::new(0.0, -4.0, 0.0), Vec3::new(0.0, -8.0, 0.0)];
-        for (datablock, offsets, least) in [
-            ("lightBulbA", &around[..], 0.45),
-            ("fluorescentLight", &under[..], 0.25),
-        ] {
-            for centre in shape_centres(&bundle, &map, id, datablock)? {
-                let mut darkest = f32::INFINITY;
-                for &offset in offsets {
-                    let light = volume.light((centre + offset).to_array(), [0.0, 0.0, 1.0]);
-                    eprintln!("  {datablock} {:?} {offset}: {light:?}", centre.to_array());
-                    darkest = darkest.min(luminance(light));
-                }
-                assert!(darkest > least, "{id} {datablock} at {centre}: {darkest}");
+        for lamp in lamps(id, &map)? {
+            let mut darkest = f32::INFINITY;
+            for &offset in &lamp.offsets {
+                let light = volume.light((lamp.centre + offset).to_array(), [0.0, 0.0, 1.0]);
+                eprintln!(
+                    "  {} {:?} {offset}: {light:?}",
+                    lamp.label,
+                    lamp.centre.to_array()
+                );
+                darkest = darkest.min(luminance(light));
             }
+            assert!(
+                darkest > lamp.least,
+                "{id} {} at {}: {darkest}",
+                lamp.label,
+                lamp.centre
+            );
         }
     }
+    Ok(baked)
+}
+
+/// A player (feet to head, about 2.7 units) around a light source.
+fn around() -> Vec<Vec3> {
+    vec![
+        Vec3::new(0.0, 1.5, 0.0),
+        Vec3::new(0.0, -3.0, 0.0),
+        Vec3::new(2.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, -2.0),
+    ]
+}
+
+/// The fixture bundle in a fresh scratch folder.
+fn fixture_bundle(label: &str) -> Result<(PathBuf, Vec<bri_render::testing::RoomMap>)> {
+    let dir =
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{label}-{}", std::process::id()));
+    let maps = bri_render::testing::rooms();
+    bri_render::testing::write_bundle(&dir, &maps)?;
+    Ok((dir, maps))
+}
+
+fn fixture_room<'a>(
+    maps: &'a [bri_render::testing::RoomMap],
+    id: &str,
+) -> &'a bri_render::testing::RoomMap {
+    maps.iter().find(|m| m.id == id).unwrap()
+}
+
+/// The fixture lamp of map `id`, lifted with its map onto the plate lattice.
+fn fixture_lamp(
+    maps: &[bri_render::testing::RoomMap],
+    id: &str,
+    map: &bri_render::scene_loader::MapScene,
+) -> Vec3 {
+    let room = fixture_room(maps, id);
+    let lift = map.scene.spawn[1] - room.spawn_position().y;
+    Vec3::from(room.lamp.position) + Vec3::Y * lift
+}
+
+#[test]
+fn fixture_lamps_light_their_surroundings() -> Result<()> {
+    let (dir, maps) = fixture_bundle("light-volume-lamps")?;
+    let baked = lamps_light_their_surroundings(&dir, |id, map| {
+        Ok(vec![Lamp {
+            centre: fixture_lamp(&maps, id, map),
+            offsets: around(),
+            // Half the lamp's own light, at least.
+            least: 0.5 * luminance(fixture_room(&maps, id).lamp.color),
+            label: "lamp".into(),
+        }])
+    });
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(baked?, maps.len());
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires generated v20 content"]
+fn stock_map_lamps_light_their_surroundings() -> Result<()> {
+    let bundle = content().join("map-bundle-017");
+    // Around the Bedroom bulb (a player on the shade's bars stands just
+    // above it) and under the Kitchen ceiling lights.
+    let under = [Vec3::new(0.0, -4.0, 0.0), Vec3::new(0.0, -8.0, 0.0)];
+    lamps_light_their_surroundings(&bundle, |id, map| {
+        let mut lamps = vec![];
+        for (datablock, offsets, least) in [
+            ("lightBulbA", around(), 0.45),
+            ("fluorescentLight", under.to_vec(), 0.25),
+        ] {
+            for centre in shape_centres(&bundle, map, id, datablock)? {
+                lamps.push(Lamp {
+                    centre,
+                    offsets: offsets.clone(),
+                    least,
+                    label: datablock.into(),
+                });
+            }
+        }
+        Ok(lamps)
+    })?;
     Ok(())
 }
 
@@ -535,15 +624,10 @@ fn stand_in_box(centre: Vec3, size: Vec3) -> SceneData {
     scene
 }
 
-/// Offscreen before/after of a player-sized box on the BedroomDark lamp
-/// shade's bars, written to BRI_EVIDENCE when set. Never opens a window.
-#[test]
-#[ignore = "requires locally converted map-bundle-017 and an offscreen GPU"]
-fn bedroom_dark_lamp_render() -> Result<()> {
-    let bundle = content().join("map-bundle-017");
-    let id = "v20/add-ons/map_bedroomdark/bedroomdark.mis";
-    let map = load_map_bundle(&bundle, id)?;
-    let bulb = shape_centres(&bundle, &map, id, "lightBulbA")?[0];
+/// Offscreen before/after of a player-sized box just above `bulb` in `map`,
+/// written to BRI_EVIDENCE as `<name>-lamp-*.png` when set. The baked light
+/// volume must brighten it. Never opens a window.
+fn lamp_render(map: &bri_render::scene_loader::MapScene, bulb: Vec3, name: &str) -> Result<()> {
     let gpu = Gpu::new()?;
     let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
     let world = renderer.upload(&gpu.device, &gpu.queue, &map.scene)?;
@@ -635,9 +719,9 @@ fn bedroom_dark_lamp_render() -> Result<()> {
     if let Some(dir) = std::env::var_os("BRI_EVIDENCE") {
         let dir = PathBuf::from(dir);
         std::fs::create_dir_all(&dir)?;
-        for (name, pixels) in [("before", &before), ("after", &after)] {
+        for (shot, pixels) in [("before", &before), ("after", &after)] {
             image::save_buffer(
-                dir.join(format!("bedroomdark-lamp-{name}.png")),
+                dir.join(format!("{name}-lamp-{shot}.png")),
                 pixels,
                 width,
                 height,
@@ -647,4 +731,26 @@ fn bedroom_dark_lamp_render() -> Result<()> {
     }
     assert!(after[centre] > before[centre] + 60);
     Ok(())
+}
+
+#[test]
+fn fixture_lamp_render() -> Result<()> {
+    let (dir, maps) = fixture_bundle("light-volume-render")?;
+    let id = maps[0].id.clone();
+    let map = load_map_bundle(&dir, &id);
+    let _ = std::fs::remove_dir_all(&dir);
+    let map = map?;
+    let bulb = fixture_lamp(&maps, &id, &map);
+    lamp_render(&map, bulb, "fixture")
+}
+
+/// On the BedroomDark lamp shade's bars.
+#[test]
+#[ignore = "requires generated v20 content"]
+fn bedroom_dark_lamp_render() -> Result<()> {
+    let bundle = content().join("map-bundle-017");
+    let id = "v20/add-ons/map_bedroomdark/bedroomdark.mis";
+    let map = load_map_bundle(&bundle, id)?;
+    let bulb = shape_centres(&bundle, &map, id, "lightBulbA")?[0];
+    lamp_render(&map, bulb, "bedroomdark")
 }

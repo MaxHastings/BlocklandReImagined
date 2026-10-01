@@ -37,9 +37,15 @@ impl Parking {
             || self.parked.len() * CROWDED >= colliders
             || self.parked.len() >= MOST;
         if batch {
-            for handle in handles.iter().copied().chain(self.parked.drain(..)) {
-                physics.remove_collider(handle);
-            }
+            // Each parked collider still holds the shape it had, a whole
+            // chunk's: freed here, hundreds of them cost a tick.
+            let gone: Vec<_> = handles
+                .iter()
+                .copied()
+                .chain(self.parked.drain(..))
+                .filter_map(|handle| physics.remove_collider(handle))
+                .collect();
+            crate::drop_later::drop_later(gone);
             return;
         }
         for &handle in handles {

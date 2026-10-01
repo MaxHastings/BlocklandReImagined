@@ -11,7 +11,7 @@ use glam::Vec3;
 use rapier3d::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
 mod scan;
-pub use scan::{BoxScan, StackScan, spend, work};
+pub use scan::{BoxScan, StackScan, center_copy, spend, work};
 // Brick IDs occupy u64; zero remains available for untagged dynamic bodies.
 pub const MAP_TAG: u128 = u128::MAX;
 /// How far a brick may dip into an upward-facing map floor. Map floors need
@@ -104,6 +104,9 @@ pub struct Simulation {
     /// Every brick by its definition: what `bricks_of` answers without
     /// walking a million-brick world (team spawns, flag stands).
     kinds: BTreeMap<String, BTreeSet<BrickId>>,
+    /// Bricks whose stack belongs to someone else than their owner (see
+    /// [`Self::stack_owner`]). Not saved, as v20's `stackBL_ID` was not.
+    stacks: std::collections::HashMap<BrickId, bri_world::OwnerId>,
 }
 fn definition_key(brick: &Brick) -> Option<&str> {
     match &brick.definition {
@@ -278,6 +281,7 @@ impl Simulation {
             refreshes: 0,
             links: Default::default(),
             kinds,
+            stacks: Default::default(),
         };
         simulation
             .links
@@ -611,6 +615,7 @@ impl Simulation {
             self.brick_waters.insert(id, water);
             self.liquids = std::sync::OnceLock::new();
         }
+        self.note_stack(id);
         self.detect_collisions();
         Ok(id)
     }
@@ -761,11 +766,28 @@ impl Simulation {
             self.brick_waters.insert(id, water);
             self.liquids = std::sync::OnceLock::new();
         }
+        self.note_stack(id);
         Ok(id)
     }
     /// Refresh collisions after bricks went in a slice at a time.
     pub fn settle(&mut self) {
         self.detect_collisions();
+    }
+    /// Mark the solid bricks' collision round `id` for rebuilding, ahead of
+    /// removing it with others in one go (a slice of a copy job).
+    pub fn mark_rebuild(&mut self, id: BrickId) {
+        if let Some(brick) = self.authority.state().bricks.get(&id) {
+            self.chunks.mark(id, brick.position);
+        }
+    }
+    /// Take from `budget` what rebuilding the solid bricks' collision that
+    /// changes since the last charge costs: a brick changed in a big build
+    /// rebuilds its whole chunk ([`crate::chunks`]) at the next settle, and
+    /// that, not the brick, is most of what a copy job's first touch of a
+    /// build costs.
+    pub fn charge_rebuilds(&mut self, budget: &mut u32) {
+        let bricks = u32::try_from(self.chunks.take_rebuilt()).unwrap_or(u32::MAX);
+        *budget = budget.saturating_sub(bricks.saturating_mul(work::REBUILD));
     }
     /// While `hold`, removing bricks leaves collisions to one
     /// [`Self::settle`] for the lot (a slice of a copy job breaking bricks
@@ -802,6 +824,7 @@ impl Simulation {
             self.brick_waters.insert(id, water);
             self.liquids = std::sync::OnceLock::new();
         }
+        self.note_stack(id);
         Ok(id)
     }
     /// Whether `brick` could go into the world now, support aside: no
@@ -891,6 +914,7 @@ impl Simulation {
                 self.brick_waters.insert(id, water);
                 self.liquids = std::sync::OnceLock::new();
             }
+            self.note_stack(id);
         }
         self.detect_collisions();
         Ok(ids)
@@ -904,7 +928,7 @@ impl Simulation {
         area: Bounds,
         limited: bool,
         limit: usize,
-        admit: impl FnMut(&Brick) -> bool,
+        admit: impl FnMut(BrickId, &Brick) -> bool,
     ) -> Selection {
         let mut scan = BoxScan::new(self, area, limited, limit);
         let mut all = u32::MAX;
@@ -925,12 +949,49 @@ impl Simulation {
         start: BrickId,
         reach: StackReach,
         limit: usize,
-        mut admit: impl FnMut(&Brick) -> bool,
+        mut admit: impl FnMut(BrickId, &Brick) -> bool,
     ) -> Result<Selection> {
         let mut scan = StackScan::new(self, start, reach, limit)?;
         let mut all = u32::MAX;
         while !scan.step(self, &mut all, &mut admit)? {}
         Ok(scan.selection)
+    }
+    /// Whose stack `id` stands in: the owner of the bricks it was built on
+    /// (v20's `stackBL_ID`). A brick planted on others' bricks takes the
+    /// stack of the lowest-numbered brick under it, else of one on top of
+    /// it, else its own owner's; a duplicator's plant and a restored
+    /// brick the same way. A loaded build's bricks are their owners'.
+    /// v20's trust rules let a stack's owner edit what
+    /// others built on it with their trust (the New Duplicator's).
+    pub fn stack_owner(&self, id: BrickId) -> Option<bri_world::OwnerId> {
+        let brick = self.state().bricks.get(&id)?;
+        Some(self.stacks.get(&id).copied().unwrap_or(brick.owner))
+    }
+    /// Note the stack a brick just put in stands in ([`Self::stack_owner`]).
+    fn note_stack(&mut self, id: BrickId) {
+        let Some(bounds) = self.index.get(id) else {
+            return;
+        };
+        let (bottom, top) = (bounds.min[1], bounds.max()[1]);
+        let (mut down, mut up) = (None::<BrickId>, None::<BrickId>);
+        self.index.visit(bounds.expanded(1), |other, found| {
+            if other == id || !grid::share_face(bounds, found) {
+                return;
+            }
+            if found.max()[1] == bottom {
+                down = Some(down.map_or(other, |d| d.min(other)));
+            } else if found.min[1] == top {
+                up = Some(up.map_or(other, |u| u.min(other)));
+            }
+        });
+        let owner = self.state().bricks[&id].owner;
+        let stack = down
+            .or(up)
+            .and_then(|other| self.stack_owner(other))
+            .unwrap_or(owner);
+        if stack != owner {
+            self.stacks.insert(id, stack);
+        }
     }
     /// The bricks sharing a face with `id` (`grid::share_face`): beside,
     /// on top of or under it, joined by studs or not. Ascending ids.
@@ -1028,6 +1089,7 @@ impl Simulation {
             self.forget_kind(id);
             self.authority.remove(actor, id)?;
             self.index.remove(id);
+            self.stacks.remove(&id);
             if self.brick_waters.remove(&id).is_some() {
                 self.liquids = std::sync::OnceLock::new();
             }
@@ -1315,6 +1377,48 @@ impl Simulation {
     pub const MAX_TARGET_DISTANCE: f32 = 2000.0;
     pub fn target(&self, origin: Vec3, direction: Vec3, max_distance: f32) -> Result<Option<Hit>> {
         self.target_filtered(origin, direction, max_distance, false)
+    }
+    /// The shortest way `from` sees `to` by, no longer than `reach`:
+    /// straight across, or in through one opening of a linked brick and
+    /// out of its partner ([`bri_content::passage::Passages::ways`]), with
+    /// nothing that stops a targeting ray on any leg (within half a unit
+    /// of `to`, which may stand in a body).
+    pub fn sight(&self, from: Vec3, to: Vec3, reach: f32) -> Option<bri_content::passage::Way> {
+        // Nothing within `slack` of a leg's end counts.
+        let clear = |origin: Vec3, direction: Vec3, length: f32, slack: f32| {
+            length <= 1e-3
+                || self
+                    .target(origin, direction, length.min(Self::MAX_TARGET_DISTANCE))
+                    .ok()
+                    .flatten()
+                    .is_none_or(|hit| hit.distance > length - slack)
+        };
+        let passages = self.passages();
+        let across = from.distance(to);
+        if passages.list.is_empty() {
+            // No portals: straight across or not at all, without a search.
+            let seen =
+                across > 0.1 && across <= reach && clear(from, (to - from) / across, across, 0.5);
+            return seen.then_some(bri_content::passage::Way {
+                aim: to,
+                carry: None,
+                length: across,
+            });
+        }
+        let mut ways: Vec<_> = passages
+            .ways(from, to, reach)
+            .filter(|w| w.carry.is_some() || across > 0.1)
+            .collect();
+        ways.sort_by(|a, b| a.length.total_cmp(&b.length));
+        ways.into_iter().find(|way| {
+            let legs = passages.sight(from, (way.aim - from) / way.length, way.length);
+            let last = legs.len() - 1;
+            legs.iter().enumerate().all(|(i, leg)| {
+                // A leg up to an opening must reach it.
+                let slack = if i == last { 0.5 } else { 0.01 };
+                clear(leg.from, leg.direction, leg.length, slack)
+            })
+        })
     }
     /// Stock editing tools use FxBrickAlwaysObjectType, including bricks whose
     /// ordinary raycasting flag is disabled. Map geometry still obstructs tools.

@@ -1358,6 +1358,31 @@ fn link(linker: &mut Linker<HostState>, declared: &BTreeSet<Capability>) -> wasm
         )?;
         linker.func_wrap(
             m,
+            "sight",
+            |mut caller: Host<'_>,
+             x: f32,
+             y: f32,
+             z: f32,
+             dx: f32,
+             dy: f32,
+             dz: f32,
+             length: f32,
+             ptr: i32,
+             capacity: i32|
+             -> wasmtime::Result<i32> {
+                let records = caller.data().world.sight_records(
+                    [x, y, z],
+                    [dx, dy, dz],
+                    length,
+                    capacity.max(0) as usize,
+                );
+                let bytes: Vec<u8> = records.iter().flat_map(|v| v.to_le_bytes()).collect();
+                write(&mut caller, ptr, &bytes)?;
+                Ok((records.len() / crate::world::LEG_RECORD) as i32)
+            },
+        )?;
+        linker.func_wrap(
+            m,
             "image_mesh",
             |mut caller: Host<'_>, kind: i32| -> wasmtime::Result<i32> {
                 let state = caller.data();

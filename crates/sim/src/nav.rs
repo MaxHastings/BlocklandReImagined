@@ -12,6 +12,12 @@
 //! the next, so a long path never stalls a tick: bots spend at most
 //! [`SAMPLES_PER_TICK`] new samples and [`EXPANSIONS_PER_TICK`] node
 //! expansions between them each tick.
+//!
+//! The openings of linked bricks (portals) are links in the grid: a step
+//! whose body middle goes in through one, as the motor carries a body, leads
+//! to the cell it comes out at by the partner, so paths lead through portals
+//! wherever walking through one is the way.
+use bri_content::passage::Passages;
 use glam::Vec3;
 use rapier3d::prelude::*;
 use rustc_hash::FxHashMap;
@@ -75,6 +81,8 @@ pub struct Ground<'a> {
     /// Exact terrain ray (origin, normalized direction, reach) giving the
     /// distance and normal, when the map has terrain.
     pub terrain: &'a dyn Fn(Vec3, Vec3, f32) -> Option<(f32, Vec3)>,
+    /// The openings bodies pass through.
+    pub passages: &'a Passages,
 }
 impl Ground<'_> {
     fn filter() -> QueryFilter<'static> {
@@ -153,7 +161,15 @@ pub struct Waypoint {
     pub feet: Vec3,
     /// Reaching it takes a jump.
     pub jump: bool,
+    /// Reaching it takes going in through an opening: walk toward this
+    /// point, past the opening on the near side, until carried to `feet`.
+    pub through: Option<Vec3>,
 }
+
+/// A step of the grid: the node it reaches, whether that takes a jump,
+/// whether the body is snug there, and the point it walks toward through
+/// an opening when the step goes through one.
+type Step = (Node, bool, bool, Option<Vec3>);
 
 /// The remembered ground samples.
 #[derive(Default)]
@@ -236,24 +252,50 @@ impl Nav {
     }
     /// Walkable neighbours of `node` and whether each takes a jump.
     /// `None` when the budget ran out before all eight were known.
-    fn neighbours(
-        &mut self,
-        ground: &Ground,
-        body: &Body,
-        node: Node,
-    ) -> Option<Vec<(Node, bool, bool)>> {
+    fn neighbours(&mut self, ground: &Ground, body: &Body, node: Node) -> Option<Vec<Step>> {
         let from = node.feet().y;
         let mut straight = [None; 4];
         let mut out = Vec::with_capacity(8);
         const AXES: [(i32, i32); 4] = [(1, 0), (-1, 0), (0, 1), (0, -1)];
+        let middle = Vec3::Y * (body.height * 0.5);
+        let goes_in = |dx: i32, dz: i32| {
+            if ground.passages.list.is_empty() {
+                return None;
+            }
+            let a = node.feet() + middle;
+            let b = a + Vec3::new(dx as f32, 0.0, dz as f32) * CELL;
+            ground
+                .passages
+                .first(a, b)
+                .map(|(p, _)| (p.carry, b - middle))
+        };
         for (i, (dx, dz)) in AXES.into_iter().enumerate() {
+            if let Some((carry, past)) = goes_in(dx, dz) {
+                // In through an opening: out by the partner, a little past
+                // its plane so the cell is one in front of it.
+                // The first cell it can stand in, within a body's width.
+                let ahead = carry.transform_vector3(Vec3::new(dx as f32, 0.0, dz as f32));
+                let out_at = carry.transform_point3(past + middle) - middle + ahead * 0.2;
+                for k in 0..3 {
+                    let at = out_at + ahead * (CELL * k as f32);
+                    let (x, z) = cell_of(at);
+                    let floor = self.floor(ground, body, x, z, at.y + body.step * 0.5)?;
+                    if let Some(f) = floor.filter(|f| (f.y - at.y).abs() <= body.step + 0.5) {
+                        let walk =
+                            node.feet() + Vec3::new(dx as f32, 0.0, dz as f32) * (CELL * 3.0);
+                        out.push((Node::at(x, z, f.y), false, f.snug, Some(walk)));
+                        break;
+                    }
+                }
+                continue;
+            }
             let floor = self.floor(ground, body, node.x + dx, node.z + dz, from)?;
             if let Some(f) = floor
                 && let Some(jump) = edge(body, from, f.y)
             {
                 let next = Node::at(node.x + dx, node.z + dz, f.y);
                 straight[i] = Some((next, jump));
-                out.push((next, jump, f.snug));
+                out.push((next, jump, f.snug, None));
             }
         }
         // Diagonals only where both sides are open at walking height, so a
@@ -263,13 +305,17 @@ impl Nav {
                 continue;
             };
             let (dx, dz) = (AXES[a].0, AXES[b].1);
+            // Corners are never cut through an opening.
+            if goes_in(dx, dz).is_some() {
+                continue;
+            }
             let floor = self.floor(ground, body, node.x + dx, node.z + dz, from)?;
             if let Some(f) = floor
                 && edge(body, from, f.y) == Some(false)
                 && (f.y - na.feet().y).abs() <= body.step
                 && (f.y - nb.feet().y).abs() <= body.step
             {
-                out.push((Node::at(node.x + dx, node.z + dz, f.y), false, f.snug));
+                out.push((Node::at(node.x + dx, node.z + dz, f.y), false, f.snug, None));
             }
         }
         Some(out)
@@ -370,11 +416,15 @@ pub struct Search {
     start: Option<Node>,
     started: Vec3,
     open: BinaryHeap<Open>,
-    came: FxHashMap<Node, (Node, bool, f32)>,
+    came: FxHashMap<Node, (Node, bool, f32, Option<Vec3>)>,
     best: Option<(Node, f32)>,
     expanded: u32,
-    /// Nodes farther than this from the start, across, are not visited.
+    /// Nodes farther than this from the start (or from where an opening
+    /// lets out), across, are not visited.
     bound: f32,
+    /// The openings when the search began: where each is and where it
+    /// lets out, with the estimate from there to the goal.
+    links: Vec<(Vec3, Vec3, f32)>,
     /// The node being expanded when the budget ran out.
     pending: Option<Node>,
 }
@@ -389,12 +439,22 @@ impl Search {
             best: None,
             expanded: 0,
             bound,
+            links: Vec::new(),
             pending: None,
         }
     }
-    fn h(&self, node: Node) -> f32 {
-        let d = node.feet() - self.goal;
+    fn estimate(a: Vec3, b: Vec3) -> f32 {
+        let d = a - b;
         Vec3::new(d.x, 0.0, d.z).length() + d.y.abs() * 0.5
+    }
+    /// The estimate to the goal: straight there, or to an opening and on
+    /// from where it lets out, whichever is shorter.
+    fn h(&self, node: Node) -> f32 {
+        let feet = node.feet();
+        self.links
+            .iter()
+            .map(|(entry, _, rest)| Self::estimate(feet, *entry) + rest)
+            .fold(Self::estimate(feet, self.goal), f32::min)
     }
     fn arrived(&self, node: Node) -> bool {
         let d = node.feet() - self.goal;
@@ -443,7 +503,16 @@ impl Search {
                     }
                 };
                 self.start = Some(node);
-                self.came.insert(node, (node, false, 0.0));
+                self.links = ground
+                    .passages
+                    .list
+                    .iter()
+                    .map(|p| {
+                        let exit = p.carry.transform_point3(p.centre);
+                        (p.centre, exit, Self::estimate(exit, self.goal))
+                    })
+                    .collect();
+                self.came.insert(node, (node, false, 0.0, None));
                 self.open.push(Open {
                     f: self.h(node),
                     node,
@@ -485,21 +554,33 @@ impl Search {
             nav.expansions -= 1;
             self.expanded += 1;
             let g = self.came[&node].2;
-            for (to, jump, snug) in next {
-                let offset = to.feet() - start.feet();
-                if Vec3::new(offset.x, 0.0, offset.z).length() > self.bound {
+            for (to, jump, snug, through) in next {
+                let within = |from: Vec3| {
+                    let offset = to.feet() - from;
+                    Vec3::new(offset.x, 0.0, offset.z).length() <= self.bound
+                };
+                if !within(start.feet()) && !self.links.iter().any(|(_, exit, _)| within(*exit)) {
                     continue;
                 }
                 let d = to.feet() - node.feet();
+                // Through an opening it is one step, wherever it lets out.
+                let (across, drop) = match through {
+                    Some(_) => (CELL, 0.0),
+                    None => (Vec3::new(d.x, 0.0, d.z).length(), (-d.y).max(0.0)),
+                };
                 let cost = g
-                    + Vec3::new(d.x, 0.0, d.z).length()
+                    + across
                     + if jump { 1.0 } else { 0.0 }
                     + if snug { 0.6 } else { 0.0 }
-                    + (-d.y).max(0.0) * 0.1;
-                if self.came.get(&to).is_some_and(|(_, _, old)| *old <= cost) {
+                    + drop * 0.1;
+                if self
+                    .came
+                    .get(&to)
+                    .is_some_and(|(_, _, old, _)| *old <= cost)
+                {
                     continue;
                 }
-                self.came.insert(to, (node, jump, cost));
+                self.came.insert(to, (node, jump, cost, through));
                 let h = self.h(to);
                 if self.best.is_none_or(|(_, best)| h < best) {
                     self.best = Some((to, h));
@@ -517,10 +598,11 @@ impl Search {
         };
         let mut steps = Vec::new();
         loop {
-            let (parent, jump, _) = self.came[&node];
+            let (parent, jump, _, through) = self.came[&node];
             steps.push(Waypoint {
                 feet: node.feet(),
                 jump,
+                through,
             });
             if parent == node {
                 break;
@@ -537,11 +619,13 @@ impl Search {
     }
 }
 
-/// Drop waypoints in the middle of straight, level, jump-free runs.
+/// Drop waypoints in the middle of straight, level, jump-free runs that go
+/// through no opening.
 fn simplify(steps: Vec<Waypoint>) -> Vec<Waypoint> {
     let mut out: Vec<Waypoint> = Vec::with_capacity(steps.len());
     for (i, step) in steps.iter().enumerate() {
-        let keep = i == 0 || i + 1 == steps.len() || step.jump || steps[i + 1].jump || {
+        let special = |w: &Waypoint| w.jump || w.through.is_some();
+        let keep = i == 0 || i + 1 == steps.len() || special(step) || special(&steps[i + 1]) || {
             let a = step.feet - steps[i - 1].feet;
             let b = steps[i + 1].feet - step.feet;
             (a.x - b.x).abs() > 1e-3 || (a.z - b.z).abs() > 1e-3 || (a.y - b.y).abs() > 0.05
@@ -581,10 +665,15 @@ mod tests {
     fn no_terrain(_: Vec3, _: Vec3, _: f32) -> Option<(f32, Vec3)> {
         None
     }
+    static NO_PASSAGES: Passages = Passages {
+        list: Vec::new(),
+        closed: Vec::new(),
+    };
     fn search(physics: &PhysicsWorld, from: Vec3, to: Vec3) -> (Found, Nav) {
         let ground = Ground {
             physics,
             terrain: &no_terrain,
+            passages: &NO_PASSAGES,
         };
         let body = body();
         let mut nav = Nav::default();
@@ -699,6 +788,7 @@ mod tests {
         let ground = Ground {
             physics: &physics,
             terrain: &no_terrain,
+            passages: &NO_PASSAGES,
         };
         let mut search = Search::new(Vec3::ZERO, Vec3::new(10.0, 0.0, 0.0), 60.0);
         let found = loop {
@@ -716,6 +806,7 @@ mod tests {
         let ground = Ground {
             physics: &physics,
             terrain: &no_terrain,
+            passages: &NO_PASSAGES,
         };
         let body = body();
         let mut nav = Nav::default();
@@ -752,5 +843,56 @@ mod tests {
         assert_eq!(a, b);
         assert!(a.iter().all(|w| !w.jump), "stairs need no jump: {a:?}");
         assert!((a.last().unwrap().feet.y - 3.0).abs() < 0.11);
+    }
+
+    #[test]
+    fn a_portal_is_a_way_through_a_wall_with_no_way_round() {
+        // A wall too tall to jump across the whole floor. An opening stands
+        // in the open on the near side, facing the start, and lets out ten
+        // units east, beyond the wall.
+        let physics = world(&[
+            floor(),
+            (Vec3::new(5.0, 0.0, -40.0), Vec3::new(5.5, 8.0, 40.0)),
+        ]);
+        let carry = glam::Affine3A::from_translation(Vec3::new(10.0, 0.0, 0.0));
+        let passages = Passages {
+            list: vec![bri_content::passage::Passage {
+                brick: 1,
+                centre: Vec3::new(2.25, 1.5, 0.0),
+                normal: Vec3::NEG_X,
+                u: Vec3::Z,
+                v: Vec3::Y,
+                half: glam::Vec2::new(1.0, 1.5),
+                carry,
+            }],
+            closed: vec![],
+        };
+        let ground = Ground {
+            physics: &physics,
+            terrain: &no_terrain,
+            passages: &passages,
+        };
+        let goal = Vec3::new(16.0, 0.0, 3.0);
+        let mut nav = Nav::default();
+        let mut search = Search::new(Vec3::ZERO, goal, 60.0);
+        let found = loop {
+            nav.begin_tick();
+            if let Some(found) = search.step(&mut nav, &ground, &body()) {
+                break found;
+            }
+        };
+        let p = path(found);
+        let at = p
+            .iter()
+            .position(|w| w.through.is_some())
+            .expect("the path goes through the opening");
+        let through = p[at];
+        // It walks into the opening from the near side and comes out by
+        // the partner, past the wall.
+        let walk = through.through.unwrap();
+        assert!(walk.x > 2.25 && walk.x < 4.0 && walk.z.abs() < 1.0, "{p:?}");
+        assert!(through.feet.x > 12.25 && through.feet.x < 13.5, "{p:?}");
+        assert!(p[..at].iter().all(|w| w.feet.x < 2.25), "{p:?}");
+        assert!((p.last().unwrap().feet - goal).length() < 1.0, "{p:?}");
     }
 }

@@ -23,6 +23,9 @@ pub struct WeaponContent {
     /// The pack as authored, when bindings make the played one depend on
     /// server settings, and the values it was last played with.
     authored: Option<(std::sync::Arc<bri_weapons::Pack>, BTreeMap<String, String>)>,
+    /// Each item's load rank, which orders items sharing a name.
+    load_order: BTreeMap<String, usize>,
+    /// (id, display name) by name; items sharing a name in load order.
     pub item_choices: Vec<(String, String)>,
     /// The emitters and lights Add-Ons give a name (`uiName`), as
     /// (id, name): a brick's wrench offers them beside the base game's.
@@ -169,7 +172,19 @@ impl WeaponContent {
             );
             files.insert(key, path);
         }
-        // What the Add-Ons name of their effects, for the wrench.
+        // Load order of each item: the base game's first, then each Add-On's
+        // in `packages.json` order. A duplicate id keeps the earlier, as
+        // `merge` does.
+        let mut load_order: BTreeMap<String, usize> = BTreeMap::new();
+        for (rank, items) in std::iter::once(&pack.items)
+            .chain(parts.iter().map(|(_, _, part)| &part.items))
+            .enumerate()
+        {
+            for id in items.keys() {
+                load_order.entry(id.clone()).or_insert(rank);
+            }
+        }
+                // What the Add-Ons name of their effects, for the wrench.
         let named = |list: Vec<(&str, &str)>| -> Vec<(String, String)> {
             list.into_iter()
                 .filter(|(_, name)| !name.trim().is_empty())
@@ -223,7 +238,7 @@ impl WeaponContent {
             WEAPON_RESOURCE_LIMIT,
             WEAPON_TOTAL_LIMIT,
         )?;
-        let (item_choices, aliases) = item_choices(&pack)?;
+        let (item_choices, aliases) = item_choices(&pack, &load_order)?;
         // Only what the merge kept, each id once and no name twice.
         for (choices, kept) in [
             (
@@ -255,6 +270,7 @@ impl WeaponContent {
         Ok(Self {
             pack,
             authored,
+            load_order,
             item_choices,
             emitter_choices,
             light_choices,
@@ -290,7 +306,7 @@ impl WeaponContent {
         let played = authored.with_settings(|name| values.get(name).cloned());
         let failed = played.as_ref().err().map(|e| anyhow::anyhow!("{e:#}"));
         self.pack = played.unwrap_or_else(|_| (**authored).clone());
-        let (choices, aliases) = item_choices(&self.pack)?;
+        let (choices, aliases) = item_choices(&self.pack, &self.load_order)?;
         let changed = choices != self.item_choices;
         self.item_choices = choices;
         self.aliases = aliases;
@@ -666,8 +682,13 @@ type ItemChoices = (Vec<(String, String)>, BTreeMap<String, String>);
 
 /// The items players pick from a pack, by name, and their names in lower
 /// case to their ids. Hidden items are put in the world by scripts only:
-/// no one picks them from a list.
-fn item_choices(pack: &bri_weapons::Pack) -> Result<ItemChoices> {
+/// no one picks them from a list. Items that share a display name all
+/// stay, as in v20; among them the first loaded (`load_order`) comes
+/// first, and saved bricks naming one bind to it.
+fn item_choices(
+    pack: &bri_weapons::Pack,
+    load_order: &BTreeMap<String, usize>,
+) -> Result<ItemChoices> {
     let mut item_choices: Vec<_> = pack
         .items
         .values()
@@ -678,7 +699,6 @@ fn item_choices(pack: &bri_weapons::Pack) -> Result<ItemChoices> {
         item_choices.len() <= 1024,
         "Weapon item catalog budget exceeded"
     );
-    let mut aliases = BTreeMap::new();
     let mut ids = std::collections::BTreeSet::new();
     for (id, name) in &item_choices {
         bri_world::ContentRef::Resolved(id.clone()).validate()?;
@@ -688,18 +708,19 @@ fn item_choices(pack: &bri_weapons::Pack) -> Result<ItemChoices> {
             !name.trim().is_empty() && name.len() <= 128 && !name.chars().any(char::is_control),
             "Invalid weapon item name"
         );
-        ensure!(
-            aliases
-                .insert(name.trim().to_ascii_lowercase(), id.clone())
-                .is_none(),
-            "Ambiguous weapon item display name: {name}"
-        );
     }
+    let rank = |id: &str| load_order.get(id).copied().unwrap_or(usize::MAX);
     item_choices.sort_by(|a, b| {
         a.1.to_ascii_lowercase()
             .cmp(&b.1.to_ascii_lowercase())
+            .then(rank(&a.0).cmp(&rank(&b.0)))
             .then(a.0.cmp(&b.0))
     });
+    let aliases = bri_world::item_aliases(
+        item_choices
+            .iter()
+            .map(|(id, name)| (id.as_str(), name.as_str())),
+    );
     Ok((item_choices, aliases))
 }
 
@@ -1028,21 +1049,128 @@ mod tests {
         assert_eq!(content.resolve_world_items(&mut world).unwrap(), 1);
     }
     #[test]
-    #[ignore = "requires generated native weapons-pack-009; no window or audio"]
-    fn native_weapons_pack_identity_and_all_21_choices() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/weapons-pack-009");
-        let content = WeaponContent::load(&root).unwrap();
-        // 17 weapons plus the four core tools, which are v20 images too.
-        assert_eq!(content.pack.items.len(), 21);
-        assert_eq!(content.item_choices.len(), 21);
+    fn items_sharing_a_display_name_all_load_and_saves_bind_the_first_loaded() {
+        // Kaje's Sniper Rifle and the Adventure Pack's both say "Sniper
+        // Rifle"; an Add-On's tool may also reuse a base game name. v20 lists
+        // them all, so no Add-On is left out over a name.
+        let (root, base) = weapon_fixture();
+        let hammer = base.items[bri_weapons::HAMMER].clone();
+        let content = root.parent().unwrap();
+        let mut extras = Vec::new();
+        // Loaded first, though its id sorts last.
+        for (dir, items) in [
+            (
+                "zz_sniper",
+                vec![("zz_sniper:weapon/sniperrifleitem", "Sniper Rifle")],
+            ),
+            (
+                "aa_adventure",
+                vec![
+                    ("aa_adventure:weapon/sniperrifleitem", "sniper rifle "),
+                    ("aa_adventure:weapon/hammeritem", "Hammer"),
+                ],
+            ),
+        ] {
+            let abs = content.join(dir);
+            std::fs::create_dir(&abs).unwrap();
+            let mut part = base.clone();
+            part.id = dir.into();
+            part.resources.clear();
+            part.items = items
+                .into_iter()
+                .map(|(id, name)| {
+                    let mut item = hammer.clone();
+                    item.id = id.into();
+                    item.ui_name = name.into();
+                    (id.to_string(), item)
+                })
+                .collect();
+            write_weapons(&abs, &part);
+            extras.push((dir.to_string(), abs));
+        }
+        let weapons = WeaponContent::load_with(&root, &extras).unwrap();
+        assert_eq!(weapons.item_choices.len(), 7, "every item stays");
+        let snipers: Vec<_> = weapons
+            .item_choices
+            .iter()
+            .filter(|(_, name)| name.trim().eq_ignore_ascii_case("sniper rifle"))
+            .map(|(id, _)| id.as_str())
+            .collect();
+        assert_eq!(
+            snipers,
+            [
+                "zz_sniper:weapon/sniperrifleitem",
+                "aa_adventure:weapon/sniperrifleitem"
+            ],
+            "shared names list in load order"
+        );
+        let mut world = bri_world::World::new("test".into(), "map".into(), vec![[1.; 4]]);
+        for (id, name) in [(1, "Sniper Rifle"), (2, "hammer")] {
+            let mut brick =
+                bri_world::Brick::new(bri_world::ContentRef::Resolved("brick".into()), [0.; 3], 0);
+            brick.item_spawn.item = Some(bri_world::ContentRef::unresolved("item_ui", name));
+            world.bricks.insert(id, brick);
+        }
+        assert_eq!(weapons.resolve_world_items(&mut world).unwrap(), 0);
+        let bound = |id| world.bricks[&id].item_spawn.item.clone();
+        assert_eq!(
+            bound(1),
+            Some(bri_world::ContentRef::Resolved(
+                "zz_sniper:weapon/sniperrifleitem".into()
+            ))
+        );
+        assert_eq!(
+            bound(2),
+            Some(bri_world::ContentRef::Resolved(bri_weapons::HAMMER.into())),
+            "the base game's item first"
+        );
+    }
+    /// The weapons package at `root` loads to the same identity twice and
+    /// offers every item as a choice the tool catalog installs. Returns the
+    /// item count.
+    fn weapons_pack_identity_and_every_choice(root: &Path) -> usize {
+        let content = WeaponContent::load(root).unwrap();
+        let items = content.pack.items.len();
+        assert!(items > 0);
+        assert_eq!(content.item_choices.len(), items);
         content
-            .ensure_same(&WeaponContent::load(&root).unwrap())
+            .ensure_same(&WeaponContent::load(root).unwrap())
             .unwrap();
         let mut catalog = bri_sim::session::ToolCatalog::default();
         catalog
             .install_items(content.item_choices.into_iter().map(|(id, _)| id))
             .unwrap();
-        assert_eq!(catalog.items.len(), 21);
+        assert_eq!(catalog.items.len(), items);
+        items
+    }
+    #[test]
+    fn test_weapons_pack_identity_and_every_choice() {
+        let root = tempfile::tempdir().unwrap().keep().join("weapons");
+        std::fs::create_dir(&root).unwrap();
+        let pack = bri_weapons::testing::pack();
+        // Every native file the pack names, with made-up bytes.
+        for name in pack
+            .resources
+            .iter()
+            .filter_map(|r| r.native_file.clone())
+            .chain(pack.sounds.values().map(|s| s.file.clone()))
+        {
+            let path = root.join(&name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, format!("native {name}")).unwrap();
+        }
+        write_weapons(&root, &pack);
+        assert_eq!(
+            weapons_pack_identity_and_every_choice(&root),
+            pack.items.len()
+        );
+    }
+    #[test]
+    #[ignore = "requires generated v20 content"]
+    fn native_weapons_pack_identity_and_all_21_choices() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/weapons-pack-009");
+        // 17 weapons plus the four core tools, which are v20 images too.
+        assert_eq!(weapons_pack_identity_and_every_choice(&root), 21);
     }
     fn physics_fixture() -> (PathBuf, WeaponContent, serde_json::Value, serde_json::Value) {
         let (root, _) = weapon_fixture();
@@ -1196,16 +1324,29 @@ mod tests {
         );
         std::fs::File::create(root.join("item-physics.json")).unwrap();
     }
-    #[test]
-    #[ignore = "requires native weapons/presentation pack003; no renderer or original readers"]
-    fn native_item_physics_covers_all_21_and_pins_authored_bounds() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
-        let weapons = WeaponContent::load(&root.join("weapons-pack-009")).unwrap();
-        let physics =
-            ItemPhysicsContent::load(&root.join("item-presentation-pack-010"), &weapons).unwrap();
-        assert_eq!(physics.bounds.len(), 21);
+    /// The presentation pack at `root` pins valid bounds for every item
+    /// choice of `weapons`. Returns how many.
+    fn item_physics_covers_every_item(root: &Path, weapons: &WeaponContent) -> usize {
+        let physics = ItemPhysicsContent::load(root, weapons).unwrap();
+        assert_eq!(physics.bounds.len(), weapons.item_choices.len());
         for bounds in physics.bounds.values() {
             bounds.validate().unwrap();
         }
+        physics.bounds.len()
+    }
+    #[test]
+    fn test_item_physics_covers_every_item() {
+        let (root, weapons, _, _) = physics_fixture();
+        assert!(item_physics_covers_every_item(&root, &weapons) > 0);
+    }
+    #[test]
+    #[ignore = "requires generated v20 content"]
+    fn native_item_physics_covers_all_21_and_pins_authored_bounds() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
+        let weapons = WeaponContent::load(&root.join("weapons-pack-009")).unwrap();
+        assert_eq!(
+            item_physics_covers_every_item(&root.join("item-presentation-pack-010"), &weapons),
+            21
+        );
     }
 }

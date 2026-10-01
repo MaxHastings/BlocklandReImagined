@@ -1,14 +1,17 @@
-//! Original casing DTS uploaded and rendered through the shared scene/instance path.
+//! The casing model uploaded and rendered through the shared
+//! scene/instance path, on a made-up debris pack
+//! (`support::debris_fixture`) and, ignored, on the generated v20 pack.
+#[macro_use]
+mod support;
+
 use anyhow::{Context, Result, ensure};
 use bri_client::weapon_debris::{WeaponDebris, WeaponDebrisAssets};
 use bri_render::scene::{Camera, GpuInstances, SceneRenderer, SceneTransform, create_depth};
 use bri_ui::gpu::Headless;
 use glam::{Mat4, Vec3};
-use std::path::{Path, PathBuf};
+use support::{debris_fixture::DebrisFixture, gpu};
 
-fn root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
+synthetic_and_content!(DebrisFixture: shell_uses_persistent_shared_scene_and_instanced_gpu_draw);
 async fn pixels(
     gpu: &Headless,
     renderer: &mut SceneRenderer,
@@ -73,11 +76,9 @@ async fn pixels(
     Ok(buffer.slice(..).get_mapped_range()?.to_vec())
 }
 
-#[test]
-#[ignore = "requires ignored source-converted weapon debris pack and an offscreen GPU adapter"]
-fn source_shell_uses_persistent_shared_scene_and_instanced_gpu_draw() -> Result<()> {
+fn shell_uses_persistent_shared_scene_and_instanced_gpu_draw(f: &DebrisFixture) -> Result<()> {
     pollster::block_on(async {
-        let assets = WeaponDebrisAssets::load(&root().join("content/weapon-debris-pack-001"))?;
+        let assets = WeaponDebrisAssets::load(&f.dir)?;
         let mut debris = WeaponDebris::new(assets, Default::default())?;
         let cue = bri_sim::presentation::Cue {
             id: 1,
@@ -90,7 +91,7 @@ fn source_shell_uses_persistent_shared_scene_and_instanced_gpu_draw() -> Result<
             position: [0.; 3],
         };
         debris.cues(&[cue], |_, _, _| Some(Mat4::IDENTITY), |_| Vec3::ZERO)?;
-        let gpu = Headless::new().context("offscreen weapon casing adapter")?;
+        let gpu = gpu::turn().context("offscreen weapon casing adapter")?;
         let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
         let scene = renderer.upload(&gpu.device, &gpu.queue, &debris.assets().shell_scene)?;
         let transforms: Vec<_> = debris
@@ -117,10 +118,10 @@ fn source_shell_uses_persistent_shared_scene_and_instanced_gpu_draw() -> Result<
             .count();
         ensure!(
             visible > 12,
-            "original gunShell DTS produced only {visible} foreground pixels"
+            "the casing model produced only {visible} foreground pixels"
         );
-        let out = root().join("artifacts/native-weapon-debris");
-        std::fs::create_dir_all(&out)?;
+        let out = &f.out;
+        std::fs::create_dir_all(out)?;
         image::save_buffer(
             out.join("gun-shell-offscreen.png"),
             &image,
