@@ -688,7 +688,14 @@ fn tier_preferences_are_server_settings_the_host_changes() {
     use bri_package::setting::SettingValue as V;
     let (dir, out, report) = imported("prefs");
     assert!(report.ports[0].applied, "{:?}", report.ports[0].reason);
-    for pref in ["Start9MM", "Max9MM", "PlayerAmmoDrop"] {
+    for pref in [
+        "Start9MM",
+        "Max9MM",
+        "PlayerAmmoDrop",
+        "Recoil",
+        "Ammo",
+        "DisplayAmmo",
+    ] {
         let what = format!("RTB_registerPref $Pref::Server::TT::{pref}");
         let row = report.ported.iter().find(|f| f.what == what);
         assert!(
@@ -698,12 +705,29 @@ fn tier_preferences_are_server_settings_the_host_changes() {
             report.ported
         );
     }
-    let recoil = report
-        .unsupported
-        .iter()
-        .find(|f| f.what == "RTB_registerPref $Pref::Server::TT::Recoil")
-        .expect("Recoil stays a gap");
-    assert!(recoil.detail.contains("default true"), "{}", recoil.detail);
+    assert!(
+        !report
+            .unsupported
+            .iter()
+            .any(|f| f.what.contains("$Pref::")),
+        "{:?}",
+        report.unsupported
+    );
+    // The guns' fields the preferences decide, as bindings of the pack.
+    let authored = pack(&out);
+    let bound = authored.bound_settings();
+    for global in [
+        "Recoil",
+        "Ammo",
+        "DisplayAmmo",
+        "DisplayTime",
+        "DisableBulletSlow",
+    ] {
+        assert!(
+            bound.contains(format!("$Pref::Server::TT::{global}").as_str()),
+            "{bound:?}"
+        );
+    }
     let rules: Value = serde_json::from_slice(
         &std::fs::read(dir.0.join(format!("addons/{NS}-rules/behaviour.json"))).unwrap(),
     )
@@ -780,6 +804,64 @@ fn tier_preferences_are_server_settings_the_host_changes() {
             .iter()
             .any(|d| d.item == format!("{NS}:weapon/ammodroppeditem")),
         "no bag"
+    );
+
+    // The Ammo System and Recoil decide the guns' fields as the host
+    // changes them, on the host and for players alike.
+    let ammo = format!("{NS}-rules:tt_ammo");
+    let recoil = format!("{NS}-rules:tt_recoil");
+    let played = |g: &Game| {
+        authored
+            .with_settings(|name| g.s.weapon_settings().get(name).cloned())
+            .unwrap()
+    };
+    let kicks = |p: &Pack| {
+        p.images[&format!("{NS}:image/standinsidearmimage")]
+            .shot
+            .as_ref()
+            .unwrap()
+            .kick
+            .is_some()
+    };
+    assert!(kicks(&played(&g)));
+    g.equip(a, "standinsidearmitem");
+    g.shoot_at(a, b, 1.2);
+    assert_eq!(
+        g.mag(a),
+        json!("5|6|tt-9mm|100"),
+        "T+T2: the magazine's round"
+    );
+    g.configure(
+        a,
+        &[
+            (ammo.as_str(), V::Int(2)),
+            (recoil.as_str(), V::Bool(false)),
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        g.s.weapon_settings()[&"$Pref::Server::TT::Ammo".to_owned()],
+        "2"
+    );
+    assert!(!kicks(&played(&g)), "Recoil off");
+    for _ in 0..8 {
+        g.shoot_at(a, b, 1.2);
+    }
+    assert_eq!(
+        g.mag(a),
+        json!("6|6|tt-9mm|100"),
+        "Classic: nothing is used"
+    );
+    assert!(
+        g.configure(a, &[(ammo.as_str(), V::Int(4))]).is_err(),
+        "not a choice"
+    );
+    g.configure(a, &[(ammo.as_str(), V::Int(3))]).unwrap();
+    g.shoot_at(a, b, 1.2);
+    assert_eq!(
+        g.mag(a),
+        json!("99|6|tt-9mm|99"),
+        "Arena: shots are the reserve's"
     );
 }
 

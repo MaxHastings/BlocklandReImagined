@@ -731,6 +731,7 @@ fn synthetic_rocket_pack() -> bri_weapons::Pack {
         definitions: vec![],
         resources: vec![],
         diagnostics: vec![],
+        bindings: vec![],
     };
     pack.validate().unwrap();
     pack

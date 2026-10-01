@@ -656,6 +656,7 @@ impl AdminRuntime {
                     // shown as set.
                     settings.validate()?;
                     session.check_server_addon_settings(&settings.addon_settings)?;
+                    session.check_weapon_settings(&settings.addon_settings)?;
                     self.settings = settings;
                     changed = true;
                 }
@@ -729,8 +730,14 @@ impl Session {
         persist: &mut impl FnMut(&DurableState) -> Result<()>,
     ) -> Result<AdminCall> {
         let mut runtime = std::mem::take(&mut self.admin);
+        let before = runtime.settings.addon_settings.clone();
         let result = runtime.request(self, owner, request, now, persist);
+        let retune = runtime.settings.addon_settings != before;
         self.admin = runtime;
+        // Checked before they were taken, so this derives.
+        if retune {
+            self.retune_weapons()?;
+        }
         result
     }
 }

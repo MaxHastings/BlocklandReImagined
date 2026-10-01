@@ -211,6 +211,7 @@ fn tool_pack() -> bri_weapons::Pack {
         definitions: vec![],
         resources: vec![],
         diagnostics: vec![],
+        bindings: vec![],
     };
     pack.validate().unwrap();
     pack

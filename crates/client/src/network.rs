@@ -61,6 +61,9 @@ pub struct View {
     /// The host's environment settings (the Admin Menu's Environment
     /// window, Add-Ons) over the map's own.
     pub environment: bri_content::atmosphere::Settings,
+    /// The server settings the weapons pack's bindings read
+    /// ([`bri_net::content_identity::WeaponContent::apply_settings`]).
+    pub weapon_settings: Arc<BTreeMap<String, String>>,
     pub vehicles: BTreeMap<u64, bri_sim::session::VehicleInfo>,
     pub vehicle_poses: BTreeMap<u64, bri_sim::session::VehiclePose>,
     /// The host's player archetypes; poses name them by index.
@@ -391,6 +394,7 @@ fn publish(
         targets: client.replica.targets.clone(),
         map_lights: client.replica.map_lights.clone(),
         environment: client.replica.environment.clone(),
+        weapon_settings: Arc::new(client.replica.weapon_settings.clone()),
         vehicles: client.replica.vehicles.clone(),
         vehicle_poses: client.replica.vehicle_poses.clone(),
         archetypes: client.replica.archetypes.clone(),

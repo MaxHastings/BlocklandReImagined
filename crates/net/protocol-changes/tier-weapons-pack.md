@@ -19,10 +19,10 @@ state shots may hitscan.
 Melee Extended II: `Image::guard` (a raised shield's cover, damage and push
 scales, reflection, clang, sounds, durability and break burst) and
 `DamageType::special` (Support_SpecialKills icons). Content schema only.
-Server-wide Add-On settings (RTB preferences): `SettingScope::Server` and
-`SettingDef::global` in the Add-On settings players receive, and
-`ServerSettings::addon_settings` in the host's Server Settings (the admin
-snapshot and `HostConfigure`).
 Short Rifle: hitscan `ricochet` (`times`, `damage`, `shooter`). Damage types
 and explosions two Add-Ons declare differently are kept apart as
 `<package>:<Name>` in the merged pack. Content schema only.
+Weapon fields from server settings: `Pack::bindings` (a pack field a
+server setting decides), magazine `supply` and `hide_display`; and
+`Checkpoint::weapon_settings` and `Delta::weapon_settings`: the values of
+the settings the host's weapons pack binds, so players derive the same pack.

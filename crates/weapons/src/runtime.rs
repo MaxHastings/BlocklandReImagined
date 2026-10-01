@@ -759,6 +759,10 @@ pub struct AmmoView {
     /// Counted from the reserve ([`crate::Magazine::from_reserve`]):
     /// `rounds` is the reserve, and there is no magazine to show.
     pub counted: bool,
+    /// Where its rounds come from ([`crate::Magazine::supply`]).
+    pub supply: crate::Supply,
+    /// Whether it has a display at all ([`crate::Magazine::displayed`]).
+    pub shown: bool,
 }
 /// The key the rounds of the gun `item` in tool `slot` are kept under.
 fn slot_key(item: &str, slot: usize) -> String {
@@ -771,15 +775,57 @@ fn key_item(key: &str) -> &str {
 /// The rounds `key`'s magazine holds: one counted from its reserve
 /// ([`crate::Magazine::from_reserve`]) holds what the reserve does.
 fn rounds_in(a: &Actor, key: &str, magazine: &crate::Magazine) -> u32 {
-    if magazine.from_reserve {
+    if magazine.counts_reserve() {
         match a.reserve.get(&magazine.ammo) {
             Some(Reserve::Endless) => u32::MAX,
             Some(Reserve::Rounds(n)) => *n,
             None => 0,
         }
+    } else if magazine.supply == crate::Supply::Unlimited {
+        // Never used: always full.
+        magazine.size
     } else {
         a.rounds.get(key).copied().unwrap_or(0)
     }
+}
+/// Whether a reload of `magazine` has something to fill it from: reserve,
+/// or nothing at all ([`crate::Supply::Endless`]).
+fn can_fill(a: &Actor, magazine: &crate::Magazine) -> bool {
+    match magazine.supply {
+        crate::Supply::Endless | crate::Supply::Unlimited => true,
+        _ => a.reserve.get(&magazine.ammo).is_some_and(|r| r.any()),
+    }
+}
+/// Whether `key`'s magazine has a shot: its rounds, and under
+/// [`crate::Supply::Both`] as many in the reserve too.
+fn has_shot(a: &Actor, key: &str, magazine: &crate::Magazine) -> bool {
+    magazine.fires(rounds_in(a, key, magazine))
+        && (magazine.supply != crate::Supply::Both
+            || a.reserve.get(&magazine.ammo).is_some_and(|r| match r {
+                Reserve::Endless => true,
+                Reserve::Rounds(n) => *n >= magazine.per_shot,
+            }))
+}
+/// A shot's rounds out of `key`'s magazine and, by its supply, the
+/// reserve. Whether it was the magazine's last shot.
+fn take_shot(a: &mut Actor, key: &str, magazine: &crate::Magazine) -> bool {
+    use crate::Supply;
+    let rounds = rounds_in(a, key, magazine);
+    let last = magazine.last(rounds);
+    if matches!(
+        magazine.supply,
+        Supply::Reserve | Supply::Endless | Supply::Both
+    ) && !magazine.from_reserve
+    {
+        let left = if last { 0 } else { rounds - magazine.per_shot };
+        a.rounds.insert(key.to_owned(), left);
+    }
+    if (magazine.counts_reserve() || magazine.supply == Supply::Both)
+        && let Some(reserve) = a.reserve.get_mut(&magazine.ammo)
+    {
+        reserve.take(magazine.per_shot);
+    }
+    last
 }
 impl Actor {
     /// Whether the fire button is held, whatever is (or is not) in hand.
@@ -861,6 +907,27 @@ impl WeaponsWorld {
             reflected: BTreeMap::new(),
             stopped: vec![],
         })
+    }
+    /// Plays `pack` from now on in place of the pack it plays: the same
+    /// definitions with some fields changed ([`Pack::with_settings`]), so
+    /// everything held, flying and lying keeps going. Each field takes
+    /// effect where the game next reads it: the next shot, reload or spawn.
+    pub fn retune(&mut self, pack: Pack) -> Result<()> {
+        pack.validate()?;
+        anyhow::ensure!(
+            self.pack.items.keys().eq(pack.items.keys())
+                && self.pack.projectiles.keys().eq(pack.projectiles.keys())
+                && self.pack.images.len() == pack.images.len()
+                && self
+                    .pack
+                    .images
+                    .iter()
+                    .zip(&pack.images)
+                    .all(|((a, x), (b, y))| a == b && x.states.len() == y.states.len()),
+            "A retuned pack has the same definitions"
+        );
+        self.pack = Arc::new(pack);
+        Ok(())
     }
     /// The id of the image `id` holds in `hand`.
     pub fn image_id(&self, id: ActorId, hand: u8) -> Option<&str> {
@@ -1251,16 +1318,15 @@ impl WeaponsWorld {
         let Some((key, magazine)) = self.magazine_in(held) else {
             return Some(false);
         };
-        let rounds = rounds_in(a, &key, &magazine);
-        if magazine.from_reserve {
-            // A grenade counted from the reserve: the throw takes it there.
-            if !magazine.fires(rounds) {
+        let shot = has_shot(a, &key, &magazine);
+        if !magazine.reloads() {
+            // Counted from the reserve (a grenade's throw, an Arena gun's
+            // shot takes it there), or never used at all.
+            if !shot {
                 self.empty_click(id, a, &magazine);
                 return None;
             }
-            if let Some(reserve) = a.reserve.get_mut(&magazine.ammo) {
-                reserve.take(magazine.per_shot);
-            }
+            take_shot(a, &key, &magazine);
             self.magazine_flags(a, &held.image, &key, &magazine);
             self.events.push(Event::Ammo { actor: id });
             return Some(false);
@@ -1268,34 +1334,30 @@ impl WeaponsWorld {
         if magazine.scripted() {
             // The image's states decide when it fires and reloads; a shot
             // ends a reload under way, as a pump's trigger stops its shells.
-            if !magazine.fires(rounds) {
+            if !shot {
                 self.empty_click(id, a, &magazine);
                 return None;
             }
             a.reload = None;
-            let last = magazine.last(rounds);
-            let left = if last { 0 } else { rounds - magazine.per_shot };
-            a.rounds.insert(key, left);
+            let last = take_shot(a, &key, &magazine);
             self.events.push(Event::Ammo { actor: id });
             return Some(last);
         }
         let reloading = a.reload.is_some();
-        if reloading && magazine.one_by_one && magazine.fires(rounds) {
+        if reloading && magazine.one_by_one && shot {
             // A pull of the trigger stops loading shells one by one.
             a.reload = None;
-        } else if reloading || !magazine.fires(rounds) {
+        } else if reloading || !shot {
             self.empty_click(id, a, &magazine);
             if !self.begin_reload(id, a, key.clone(), &magazine) {
                 self.magazine_flags(a, &held.image, &key, &magazine);
             }
             return None;
         }
-        let last = magazine.last(rounds);
-        let left = if last { 0 } else { rounds - magazine.per_shot };
-        a.rounds.insert(key.clone(), left);
+        let last = take_shot(a, &key, &magazine);
         self.magazine_flags(a, &held.image, &key, &magazine);
         self.events.push(Event::Ammo { actor: id });
-        if !magazine.fires(left) {
+        if !magazine.fires(rounds_in(a, &key, &magazine)) {
             self.begin_reload(id, a, key, &magazine);
         }
         Some(last)
@@ -1327,12 +1389,10 @@ impl WeaponsWorld {
         magazine: &crate::Magazine,
     ) -> bool {
         let rounds = a.rounds.get(&key).copied().unwrap_or(0);
-        let reserve = a
-            .reserve
-            .get(&magazine.ammo)
-            .copied()
-            .unwrap_or(Reserve::Rounds(0));
-        if a.reload.is_some() || magazine.from_reserve || rounds >= magazine.size || !reserve.any()
+        if a.reload.is_some()
+            || !magazine.reloads()
+            || rounds >= magazine.size
+            || !can_fill(a, magazine)
         {
             return false;
         }
@@ -1398,15 +1458,19 @@ impl WeaponsWorld {
         } else {
             magazine.size.saturating_sub(rounds)
         };
-        let taken = a
-            .reserve
-            .get_mut(&magazine.ammo)
-            .map_or(0, |r| r.take(wanted));
+        let taken = match magazine.supply {
+            // Filled from nothing: the reserve only says it may reload.
+            crate::Supply::Endless | crate::Supply::Both => wanted,
+            _ => a
+                .reserve
+                .get_mut(&magazine.ammo)
+                .map_or(0, |r| r.take(wanted)),
+        };
         let rounds = (rounds + taken).min(magazine.size);
         a.rounds.insert(key.clone(), rounds);
         self.events.push(Event::Ammo { actor: id });
         if magazine.one_by_one && rounds < magazine.size && !magazine.scripted() {
-            let more = a.reserve.get(&magazine.ammo).is_some_and(|r| r.any());
+            let more = can_fill(a, &magazine);
             if more {
                 a.reload = Some(Reload {
                     item: key.clone(),
@@ -1438,7 +1502,7 @@ impl WeaponsWorld {
             // Its state scripts set the flags (`apply_check`).
             return;
         }
-        let shot = magazine.fires(rounds_in(a, key, magazine)) && a.reload.is_none();
+        let shot = has_shot(a, key, magazine) && a.reload.is_none();
         let uses_loaded = self.pack.images.get(image).is_some_and(|i| {
             i.states
                 .iter()
@@ -1446,7 +1510,7 @@ impl WeaponsWorld {
         });
         if uses_loaded {
             a.loaded = shot;
-            a.ammo = a.reserve.get(&magazine.ammo).is_some_and(|r| r.any());
+            a.ammo = can_fill(a, magazine);
         } else {
             a.ammo = shot;
         }
@@ -1459,8 +1523,13 @@ impl WeaponsWorld {
         magazine: &crate::Magazine,
         check: &crate::Check,
     ) -> bool {
-        let rounds = a.rounds.get(key).copied().unwrap_or(0);
-        let reserve = a.reserve.get(&magazine.ammo).is_some_and(|r| r.any());
+        // Under Both a shot needs its rounds in the reserve as well: short
+        // of them, the magazine reads as empty.
+        let mut rounds = rounds_in(a, key, magazine);
+        if magazine.fires(rounds) && !has_shot(a, key, magazine) {
+            rounds = 0;
+        }
+        let reserve = can_fill(a, magazine);
         if let Some(c) = &check.loaded {
             a.loaded = c.holds(magazine, rounds, reserve);
         }
@@ -1471,12 +1540,7 @@ impl WeaponsWorld {
             a.loaded = false;
         }
         if check.spend && a.loaded && magazine.fires(rounds) {
-            let left = if magazine.last(rounds) {
-                0
-            } else {
-                rounds - magazine.per_shot
-            };
-            a.rounds.insert(key.to_owned(), left);
+            take_shot(a, key, magazine);
             return true;
         }
         false
@@ -1546,8 +1610,9 @@ impl WeaponsWorld {
         else {
             return Ok(false);
         };
-        // A grenade has nothing to reload: the key works the light.
-        if magazine.from_reserve {
+        // A grenade, or a gun that never reloads, has nothing to reload:
+        // the key works the light.
+        if !magazine.reloads() {
             return Ok(false);
         }
         if magazine.light_states.is_empty() {
@@ -1563,11 +1628,14 @@ impl WeaponsWorld {
         let reloads = in_state && self.reload(id)?;
         // A gun short of rounds with nothing to load shows what it has
         // (`TT_onUseLight` with no reserve), and the key works the light.
+        // (Tier's display is up for a time, or until put away when that
+        // time is 0; its dry pulls show it again.)
         if !reloads
-            && magazine.display_ticks > 0
+            && magazine.displayed()
+            && (magazine.display_ticks > 0 || !magazine.display_scripts.is_empty())
             && let Some(view) = self.ammo(id)
             && view.rounds < view.size
-            && !view.reserve.any()
+            && !self.actors.get(&id).is_some_and(|a| can_fill(a, &magazine))
         {
             self.events.push(Event::Ammo { actor: id });
         }
@@ -1580,7 +1648,9 @@ impl WeaponsWorld {
         let (item, magazine) = self.magazine_of(a).or_else(|| self.stowed(a))?;
         Some(AmmoView {
             rounds: rounds_in(a, &item, &magazine).min(100_000),
-            counted: magazine.from_reserve,
+            counted: magazine.counts_reserve(),
+            supply: magazine.supply,
+            shown: magazine.displayed(),
             item: key_item(&item).to_string(),
             size: magazine.size,
             name: magazine.name().to_string(),

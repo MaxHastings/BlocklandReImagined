@@ -6536,6 +6536,13 @@ impl PlatformApp for App {
             }));
             self.disconnect();
         }
+        // The server's settings decide some weapon fields: play the pack
+        // they make, and the authored one outside a game.
+        let values = self.attempt.as_ref().and_then(|a| a.view.as_ref());
+        let values = values.map(|v| v.weapon_settings.clone()).unwrap_or_default();
+        if let Err(error) = self.content.weapons.apply_settings(&values) {
+            bri_console::warn(format!("The server's weapon settings: {error:#}"));
+        }
         self.poll_files();
         if let Some((map, name)) = self.save_previews.poll() {
             self.ui.apply(UiUpdate::SavePreview {

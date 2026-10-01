@@ -277,6 +277,7 @@ pub fn with_addon_settings(
             title: s.def.title.clone(),
             team: s.def.scope == SettingScope::Team,
             server: s.def.scope == SettingScope::Server,
+            restart: s.def.restart,
             kind: match s.def.kind {
                 SettingType::Bool => MiniGameSettingKind::Bool,
                 SettingType::Int => MiniGameSettingKind::Int {

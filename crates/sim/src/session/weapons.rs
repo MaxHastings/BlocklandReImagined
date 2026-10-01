@@ -806,7 +806,13 @@ impl Session {
     /// the magazine's `display_ticks` (until the next change when 0), and
     /// cleared when the hand no longer holds a gun with a magazine.
     fn show_ammo(&mut self, owner: OwnerId) {
-        let Some(view) = self.weapons.ammo(bri_weapons::ActorId(owner)) else {
+        // A magazine without a display (Display Ammo off, nothing used)
+        // shows nothing, as no gun.
+        let view = self
+            .weapons
+            .ammo(bri_weapons::ActorId(owner))
+            .filter(|v| v.shown);
+        let Some(view) = view else {
             if self.ammo_shown.remove(&owner) {
                 self.notify(
                     owner,
@@ -922,8 +928,9 @@ pub(crate) fn ammo_text(view: &bri_weapons::runtime::AmmoView) -> String {
     };
     let name = plain_name(&view.name);
     // A grenade counted from the reserve shows only how many are left,
-    // `--` when they never run out (`TT_displayAmmo` for a `TT_grenade`).
-    if view.counted {
+    // `--` when they never run out (`TT_displayAmmo` for a `TT_grenade`),
+    // and so does an Arena gun's reserve.
+    if view.counted || view.supply == bri_weapons::Supply::Both {
         let count = match view.reserve {
             bri_weapons::runtime::Reserve::Rounds(n) => n.to_string(),
             bri_weapons::runtime::Reserve::Endless => "--".to_string(),
@@ -932,6 +939,12 @@ pub(crate) fn ammo_text(view: &bri_weapons::runtime::AmmoView) -> String {
             "<just:right><font:impact:24><color:fff000>{name} <font:impact:34><color:ffffff> {count} "
         );
     }
+    // Filled from nothing, the magazine is out of its size (T+T1).
+    let reserve = if view.supply == bri_weapons::Supply::Endless {
+        view.size.to_string()
+    } else {
+        reserve
+    };
     format!(
         "<just:right><font:impact:24><color:fff000>{name} <font:impact:34><color:ffffff>{} \
          <font:impact:24>/ {reserve}{state} ",

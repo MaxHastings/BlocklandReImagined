@@ -55,6 +55,7 @@ fn content() -> SessionContent {
             definitions: vec![],
             resources: vec![],
             diagnostics: vec![],
+            bindings: vec![],
         },
         item_bounds: Default::default(),
         avatar_catalog: serde_json::from_value(serde_json::json!({

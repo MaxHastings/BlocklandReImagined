@@ -646,6 +646,177 @@
     },
     "uses": [
       "Emote_Critical"
-    ]
+    ],
+    "settings": {
+      "$Pref::Server::TT::Ammo": {
+        "how": "the guns' magazines follow it (T+T2: reloads fill from the reserve; T+T1: endless reloads; Classic: nothing is used and there is no display; Arena: shots come from the reserve with no reloads; a gun that must reload keeps its magazine under Classic and Arena, its reloads free)",
+        "fields": [
+          {
+            "path": [
+              "images",
+              "*",
+              "magazine",
+              "supply"
+            ],
+            "values": {
+              "0": "reserve",
+              "1": "endless",
+              "2": "unlimited",
+              "3": "counted"
+            },
+            "only": {
+              "item.TT_reloads": true
+            },
+            "existing": false
+          },
+          {
+            "path": [
+              "images",
+              "*",
+              "magazine",
+              "supply"
+            ],
+            "values": {
+              "2": "endless",
+              "3": "both"
+            },
+            "only": {
+              "item.TT_reloads": true,
+              "item.TT_alwaysReload": true
+            },
+            "existing": false
+          },
+          {
+            "path": [
+              "images",
+              "*",
+              "magazine",
+              "supply"
+            ],
+            "values": {
+              "2": "endless",
+              "3": "both"
+            },
+            "only": {
+              "item.TT_reloads": true,
+              "item.TT_alwaysReloadPref": "Ex"
+            },
+            "existing": false,
+            "when": {
+              "$Pref::Server::TT::AlwaysReloadEx": "true"
+            }
+          },
+          {
+            "path": [
+              "images",
+              "*",
+              "magazine",
+              "supply"
+            ],
+            "values": {
+              "2": "endless",
+              "3": "both"
+            },
+            "only": {
+              "item.TT_reloads": true,
+              "item.TT_alwaysReloadPref": "NonEx"
+            },
+            "existing": false,
+            "when": {
+              "$Pref::Server::TT::AlwaysReloadNonEx": "true"
+            }
+          },
+          {
+            "path": [
+              "images",
+              "*",
+              "magazine",
+              "hide_display"
+            ],
+            "values": {
+              "2": true
+            },
+            "only": {
+              "item.TT_reloads": true
+            },
+            "existing": false
+          }
+        ]
+      },
+      "$Pref::Server::TT::AlwaysReloadEx": {
+        "how": "explosive single-shot guns (TT_alwaysReloadPref \"Ex\") keep loading under the Classic and Arena ammo systems (the Ammo System's magazine supply)",
+        "fields": []
+      },
+      "$Pref::Server::TT::AlwaysReloadNonEx": {
+        "how": "other single-shot guns (TT_alwaysReloadPref \"NonEx\") keep loading under the Classic and Arena ammo systems (the Ammo System's magazine supply)",
+        "fields": []
+      },
+      "$Pref::Server::TT::DisplayAmmo": {
+        "how": "off, the guns show no ammo display (their magazines' hide_display)",
+        "fields": [
+          {
+            "path": [
+              "images",
+              "*",
+              "magazine",
+              "hide_display"
+            ],
+            "values": {
+              "false": true
+            },
+            "only": {
+              "item.TT_reloads": true
+            },
+            "existing": false
+          }
+        ]
+      },
+      "$Pref::Server::TT::DisplayTime": {
+        "how": "how many seconds the ammo display stays up (the magazines' display_ticks; 0 keeps it up)",
+        "fields": [
+          {
+            "path": [
+              "images",
+              "*",
+              "magazine",
+              "display_ticks"
+            ],
+            "scale": 120,
+            "existing": false
+          }
+        ]
+      },
+      "$Pref::Server::TT::Recoil": {
+        "how": "off, the guns lose their recoil kick (their shots' kick)",
+        "fields": [
+          {
+            "path": [
+              "images",
+              "*",
+              "shot",
+              "kick"
+            ],
+            "values": {
+              "false": null
+            }
+          }
+        ]
+      },
+      "$Pref::Server::TT::DisableBulletSlow": {
+        "how": "on, bullets no longer slow who they hit (their projectiles' slow)",
+        "fields": [
+          {
+            "path": [
+              "projectiles",
+              "*",
+              "slow"
+            ],
+            "values": {
+              "true": null
+            }
+          }
+        ]
+      }
+    }
   }
 }

@@ -149,6 +149,7 @@ fn weapons() -> Arc<Pack> {
         definitions: vec![],
         resources: vec![],
         diagnostics: vec![],
+        bindings: vec![],
     })
 }
 fn view() -> WeaponView {

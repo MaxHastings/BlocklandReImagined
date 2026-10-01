@@ -556,6 +556,10 @@ pub struct Checkpoint {
     /// The live environment over the map's own.
     #[serde(default)]
     pub environment: bri_content::atmosphere::Settings,
+    /// The server settings the weapons pack's bindings read, as text by
+    /// the name each binding uses: players play the same derived pack.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub weapon_settings: BTreeMap<String, String>,
     /// v20's player datablocks, then the enabled packages' archetypes.
     /// Poses name a player's archetype by its index here.
     pub archetypes: bri_sim::archetype::Archetypes,
@@ -609,6 +613,7 @@ impl Checkpoint {
             targets: session.tutorial_targets(),
             map_lights: session.map_light_rules(),
             environment: session.environment(),
+            weapon_settings: session.weapon_settings().clone(),
             archetypes: session.archetypes().clone(),
             addon_settings: session.addon_settings(),
             brick_events: session.package_brick_events(),
@@ -910,6 +915,9 @@ pub struct Delta {
     /// The live environment, whole, whenever it changed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub environment: Option<bri_content::atmosphere::Settings>,
+    /// The weapons pack's bound server settings, whole, whenever one changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weapon_settings: Option<BTreeMap<String, String>>,
     /// Package entities that appeared, changed, moved or left.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entities: Option<EntityDelta>,
@@ -938,6 +946,7 @@ impl Delta {
             targets,
             map_lights,
             environment,
+            weapon_settings,
             entities,
         } = self;
         weapons.is_none()
@@ -956,6 +965,7 @@ impl Delta {
             && targets.is_none()
             && map_lights.is_none()
             && environment.is_none()
+            && weapon_settings.is_none()
             && entities.is_none()
     }
 }

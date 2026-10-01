@@ -268,6 +268,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
         definitions,
         resources: vec![],
         diagnostics: vec![],
+        bindings: vec![],
     };
     for d in resolved.values_mut() {
         if d.name.eq_ignore_ascii_case("pushBroomItem")

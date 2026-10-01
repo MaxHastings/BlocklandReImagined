@@ -12,8 +12,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 mod datablocks;
+mod settings;
 mod shots;
 pub use datablocks::{AmmoType, Magazines, ScriptRule, Table};
+pub use settings::{FieldSpec, WeaponSetting};
 pub use shots::{Hitscans, Last, Shots, TracerField};
 
 mod builtin {
@@ -184,11 +186,28 @@ pub struct Rules {
     /// ([`crate::rtb`]); the copy's others stay unsupported.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub prefs: BTreeMap<String, String>,
+    /// The copy's server preferences that set weapon fields, by their
+    /// global: the import's pack binds each field to the preference
+    /// ([`bri_weapons::Binding`]), so the weapons follow it as the host
+    /// changes it (`docs/modding/porting.md`, "Weapon fields from
+    /// settings"). A preference here the copy registers is a setting of
+    /// the rules, as for `prefs`; the bindings name its global, so a pack
+    /// that leaves the preference to another (Tier 2 to Tier 1) binds its
+    /// guns to it all the same.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub settings: BTreeMap<String, WeaponSetting>,
 }
 
 impl Rules {
     /// How the rules use the preference `global`, if they read it.
     pub fn pref(&self, global: &str) -> Option<&str> {
+        if let Some((_, s)) = self
+            .settings
+            .iter()
+            .find(|(g, _)| g.eq_ignore_ascii_case(global))
+        {
+            return Some(&s.how);
+        }
         let global = global.to_ascii_lowercase();
         self.prefs.iter().find_map(|(pattern, how)| {
             let pattern = pattern.to_ascii_lowercase();
@@ -818,7 +837,12 @@ fn try_apply(
         read_patch = Some(patch);
     }
     let mut patches = port.patch.clone();
-    if read_patch.is_some() {
+    let weapon_settings = port
+        .rules
+        .as_ref()
+        .map(|r| &r.settings)
+        .filter(|s| !s.is_empty());
+    if read_patch.is_some() || weapon_settings.is_some() {
         patches
             .entry(WEAPONS.to_owned())
             .or_insert_with(|| Value::Object(Default::default()));
@@ -850,6 +874,11 @@ fn try_apply(
             add_definitions(&mut doc, &definitions)?;
         }
         merge(&mut doc, &fill(patch, &values)?);
+        if file == WEAPONS
+            && let Some(s) = weapon_settings
+        {
+            settings::write(s, &mut doc, code).context("weapon settings")?;
+        }
         let bytes = serde_json::to_vec_pretty(&doc)?;
         if file == WEAPONS {
             bri_weapons::Pack::from_json(&bytes).context("the patched weapons.json")?;

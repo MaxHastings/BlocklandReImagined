@@ -1120,6 +1120,7 @@ pub fn pack() -> Pack {
         definitions,
         resources: vec![],
         diagnostics: vec![],
+        bindings: vec![],
     };
     // The Bubble Blaster sample, as it ships.
     let bubble = Pack::from_json(BUBBLE_PACK.as_bytes()).expect("Bubble Blaster sample pack");

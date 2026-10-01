@@ -379,6 +379,9 @@ impl AddOnSettings {
                 y += ROW + 4;
             }
         }
+        if self.server && settings.iter().any(|s| s.server && s.restart) {
+            heading(&mut self.view, &mut y, RESTART_NOTE);
+        }
         if !settings.iter().any(|s| s.server == self.server) {
             heading(
                 &mut self.view,
@@ -417,7 +420,11 @@ impl AddOnSettings {
         let width = W - 42;
         self.view.add(
             rows,
-            text("GuiTextProfile", Rect::new(x, y, 200 - x + 20, 20), &s.title),
+            text(
+                "GuiTextProfile",
+                Rect::new(x, y, 200 - x + 20, 20),
+                &title(s),
+            ),
         );
         let control = Rect::new(230, y, width - 238, 20);
         let n = match &s.kind {
@@ -815,5 +822,18 @@ impl Screen for AddOnSettings {
                 }
             }
         }
+    }
+}
+
+/// What marks a setting the game reads only as it starts.
+pub const RESTART_NOTE: &str = "* Takes effect when the server starts or loads a map.";
+
+/// A setting's label: its title, marked when a change waits for the next
+/// start ([`RESTART_NOTE`]).
+fn title(s: &MiniGameAddOnSetting) -> String {
+    if s.restart {
+        format!("{} *", s.title)
+    } else {
+        s.title.clone()
     }
 }

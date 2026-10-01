@@ -17,7 +17,12 @@ const WEAPON_TOTAL_LIMIT: u64 = 512 * 1024 * 1024;
 /// Source resource hashes describe originals, not converted native bytes.
 #[derive(Clone)]
 pub struct WeaponContent {
+    /// The pack played: as authored, or with the server settings its
+    /// bindings read applied ([`Self::apply_settings`]).
     pub pack: bri_weapons::Pack,
+    /// The pack as authored, when bindings make the played one depend on
+    /// server settings, and the values it was last played with.
+    authored: Option<(std::sync::Arc<bri_weapons::Pack>, BTreeMap<String, String>)>,
     pub item_choices: Vec<(String, String)>,
     /// The emitters and lights Add-Ons give a name (`uiName`), as
     /// (id, name): a brick's wrench offers them beside the base game's.
@@ -278,8 +283,11 @@ impl WeaponContent {
                     .then(a.0.cmp(&b.0))
             });
         }
+        let authored = (!pack.bindings.is_empty())
+            .then(|| (std::sync::Arc::new(pack.clone()), BTreeMap::new()));
         Ok(Self {
             pack,
+            authored,
             item_choices,
             emitter_choices,
             light_choices,
@@ -288,6 +296,32 @@ impl WeaponContent {
             manifest_sha256: format!("{:x}", Sha256::digest(&bytes)),
             base_items,
         })
+    }
+
+    /// The pack as its Add-Ons author it, which a host plays with its own
+    /// settings.
+    pub fn authored(&self) -> &bri_weapons::Pack {
+        self.authored.as_ref().map_or(&self.pack, |(a, _)| a)
+    }
+
+    /// Plays the pack the server settings `values` make of the authored
+    /// one (by the name each binding uses, as a server sends them); no
+    /// values play it as authored.
+    pub fn apply_settings(&mut self, values: &BTreeMap<String, String>) -> Result<()> {
+        let Some((authored, applied)) = &mut self.authored else {
+            return Ok(());
+        };
+        if applied == values {
+            return Ok(());
+        }
+        applied.clone_from(values);
+        // Values it cannot take play it as authored, once.
+        let played = authored.with_settings(|name| values.get(name).cloned());
+        self.pack = match &played {
+            Ok(pack) => pack.clone(),
+            Err(_) => (**authored).clone(),
+        };
+        played.map(drop)
     }
 
     /// Catalogs are immutable during an App lifetime. Reloading requires restart
@@ -752,6 +786,7 @@ mod tests {
                 package: None,
             }],
             diagnostics: vec![],
+            bindings: vec![],
         };
         std::fs::write(root.join("shape.json"), b"native shape bytes").unwrap();
         write_weapons(&root, &pack);
@@ -843,6 +878,7 @@ mod tests {
                 }],
                 explosions: vec![],
             },
+            bindings: vec![],
         };
         write_weapons(&part_root, &part);
         let content =

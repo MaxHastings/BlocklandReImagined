@@ -191,6 +191,7 @@ fn addon_state() -> MiniGameUiState {
         title: title.into(),
         team,
         server: false,
+        restart: false,
         kind,
         default,
         admin_only: false,
@@ -327,8 +328,23 @@ fn server_addon_settings_open_from_the_admin_menu_for_the_host_and_go_with_host_
         title: "Ammo System".into(),
         team: false,
         server: true,
+        restart: false,
         kind: MiniGameSettingKind::Int { min: 0, max: 3 },
         default: MiniGameSettingValue::Int(0),
+        admin_only: false,
+        shown_when: None,
+    });
+    // One the game reads only as it starts is marked, with the note.
+    state.addon_settings.push(MiniGameAddOnSetting {
+        key: "tier:tt_disableammoitems".into(),
+        add_on: "Tier+Tactical".into(),
+        category: "Ammo".into(),
+        title: "Disable Pickups".into(),
+        team: false,
+        server: true,
+        restart: true,
+        kind: MiniGameSettingKind::Bool,
+        default: MiniGameSettingValue::Bool(false),
         admin_only: false,
         shown_when: None,
     });
@@ -359,6 +375,17 @@ fn server_addon_settings_open_from_the_admin_menu_for_the_host_and_go_with_host_
     assert!(
         addon_view(&mut ui).id("AOS_S0").is_none(),
         "only the server's"
+    );
+    let texts: Vec<String> = {
+        let view = addon_view(&mut ui);
+        (0..view.nodes.len()).map(|n| view.text_of(n)).collect()
+    };
+    assert!(texts.iter().any(|t| t == "Disable Pickups *"), "{texts:?}");
+    assert!(
+        texts
+            .iter()
+            .any(|t| t == bri_ui::screens::minigame_addons::RESTART_NOTE),
+        "{texts:?}"
     );
     let ammo = addon_view(&mut ui)
         .id("AOS_S4")

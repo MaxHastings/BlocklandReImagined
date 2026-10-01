@@ -5,10 +5,12 @@ use std::collections::{BTreeMap, BTreeSet};
 pub mod debris;
 mod merge;
 pub mod rotation;
+pub mod settings;
 pub mod testing;
 pub use merge::{resource_root, sound_root};
 pub mod runtime;
 pub use runtime::*;
+pub use settings::Binding;
 /// 3 adds explosion vertical impulse and per-type vehicle damage scale.
 pub const SCHEMA: u32 = 3;
 pub const TICK_HZ: u32 = 120;
@@ -912,6 +914,43 @@ pub struct Magazine {
     /// `checks`, `one_by_one`, `last_rounds` or `light_states`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub from_reserve: bool,
+    /// Where its shots' rounds come from ([`Supply`]): Tier+Tactical's Ammo
+    /// System server setting.
+    #[serde(default, skip_serializing_if = "Supply::is_reserve")]
+    pub supply: Supply,
+    /// No ammo display at all (Tier+Tactical's Display Ammo off).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hide_display: bool,
+}
+/// [`Magazine::supply`]: what a shot uses and a reload fills, as
+/// Tier+Tactical's four ammo systems (`$Pref::Server::TT::Ammo`) did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Supply {
+    /// Shots take the magazine's rounds and a reload fills it from the
+    /// reserve (T+T2).
+    #[default]
+    Reserve,
+    /// Shots take the magazine's rounds and a reload fills it from nothing,
+    /// the reserve untouched; the display shows the magazine's size (T+T1).
+    Endless,
+    /// Nothing is used: every shot fires, nothing reloads and there is no
+    /// display (Classic).
+    Unlimited,
+    /// No magazine: each shot takes its rounds from the reserve and nothing
+    /// reloads; with none left the gun clicks. The display shows the
+    /// reserve alone (Arena).
+    Counted,
+    /// Shots take the magazine's rounds and as many from the reserve; a
+    /// reload fills the magazine from nothing while there is reserve. The
+    /// display shows the reserve alone (Arena, for a gun that must
+    /// reload).
+    Both,
+}
+impl Supply {
+    fn is_reserve(&self) -> bool {
+        *self == Self::Reserve
+    }
 }
 /// [`Magazine::checks`]: the flags a script sets, each left as it was when
 /// absent.
@@ -977,6 +1016,19 @@ fn max_reserve() -> u32 {
     100_000
 }
 impl Magazine {
+    /// Whether its rounds are the reserve's: a grenade's, or a gun's under
+    /// [`Supply::Counted`].
+    pub fn counts_reserve(&self) -> bool {
+        self.from_reserve || self.supply == Supply::Counted
+    }
+    /// Whether it ever reloads.
+    pub fn reloads(&self) -> bool {
+        !self.from_reserve && matches!(self.supply, Supply::Reserve | Supply::Endless | Supply::Both)
+    }
+    /// Whether its display shows.
+    pub fn displayed(&self) -> bool {
+        !self.hide_display && self.supply != Supply::Unlimited
+    }
     /// Whether `rounds` in the magazine make a shot.
     pub fn fires(&self, rounds: u32) -> bool {
         rounds >= self.per_shot || self.last(rounds)
@@ -1052,6 +1104,10 @@ impl Magazine {
                     .iter()
                     .all(|s| (1..=64).contains(&s.len())),
             "Invalid magazine display"
+        );
+        ensure!(
+            !self.from_reserve || self.supply == Supply::Reserve,
+            "A magazine counted from the reserve has no other supply"
         );
         ensure!(
             !self.from_reserve
@@ -2261,7 +2317,7 @@ impl PackEffects {
         Ok(())
     }
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Pack {
     pub schema_version: u32,
     pub id: String,
@@ -2296,6 +2352,10 @@ pub struct Pack {
     pub resources: Vec<Resource>,
     #[serde(default)]
     pub diagnostics: Vec<String>,
+    /// Fields of this pack server settings decide ([`settings`]); the game
+    /// plays [`Pack::with_settings`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bindings: Vec<Binding>,
 }
 impl Pack {
     pub fn from_json(bytes: &[u8]) -> Result<Self> {
@@ -2352,6 +2412,7 @@ impl Pack {
     }
     pub fn validate(&self) -> Result<()> {
         ensure!(self.schema_version == SCHEMA, "Unknown weapon schema");
+        settings::validate(self)?;
         ensure!(
             self.items.len() <= 1024
                 && self.images.len() <= 4096

@@ -162,6 +162,11 @@ pub struct SettingDef {
     /// as every script read the one global.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub global: Option<String>,
+    /// A server-wide setting the game reads only as the server starts or
+    /// loads a map (an RTB preference marked needsRestart): a host's change
+    /// waits for the next start.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub restart: bool,
 }
 
 /// Longest v20 global name a setting stands for.
@@ -315,6 +320,11 @@ impl SettingDef {
         {
             return Err(format!(
                 "setting `{what}`: `global` is a server setting's `$Pref::Server::` name"
+            ));
+        }
+        if self.restart && self.scope != SettingScope::Server {
+            return Err(format!(
+                "setting `{what}`: only a server setting waits for the next start"
             ));
         }
         if let Some(when) = &self.shown_when

@@ -121,6 +121,7 @@ impl Pack {
             self.external_projectiles.extend(part.external_projectiles);
             merge_effects(&mut self.effects, part.effects, &dir, &mut notes);
             self.definitions.extend(part.definitions);
+            self.bindings.extend(part.bindings);
             self.resources
                 .extend(part.resources.into_iter().map(|mut r| {
                     r.package.get_or_insert_with(|| dir.clone());
@@ -167,6 +168,13 @@ impl Pack {
                 ));
             }
             keep
+        });
+        // Bindings of what was dropped go with it.
+        let (items, images, projectiles) = (&self.items, &self.images, &self.projectiles);
+        self.bindings.retain(|b| match b.field[0].as_str() {
+            "items" => items.contains_key(&b.field[1]),
+            "images" => images.contains_key(&b.field[1]),
+            _ => projectiles.contains_key(&b.field[1]),
         });
         (self, notes)
     }

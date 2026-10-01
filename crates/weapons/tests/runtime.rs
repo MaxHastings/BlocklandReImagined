@@ -302,6 +302,7 @@ fn empty() -> Pack {
         definitions: vec![],
         resources: vec![],
         diagnostics: vec![],
+        bindings: vec![],
     }
 }
 #[test]

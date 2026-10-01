@@ -57,12 +57,6 @@ fn setting(args: &[String], global: &str) -> Result<SettingDef, String> {
     if !bri_package::setting::is_pref_global(global) {
         return Err(format!("`{global}` is not a $Pref::Server:: global"));
     }
-    if args.get(6).is_some_and(|a| crate::literal(a).trim() == "1") {
-        return Err(
-            "takes effect only when the server starts again, as the Add-On reads it while loading"
-                .into(),
-        );
-    }
     let key = key(global).ok_or_else(|| format!("`{global}` makes no setting key"))?;
     let title = crate::literal(&args[0]).trim().to_owned();
     // "Tier+Tactical | Ammo": the menu heads the Add-On's settings with its
@@ -92,6 +86,8 @@ fn setting(args: &[String], global: &str) -> Result<SettingDef, String> {
         editor: SettingEditor::Admin,
         shown_when: None,
         global: Some(global.to_owned()),
+        // needsRestart: the Add-On read it as it loaded.
+        restart: args.get(6).is_some_and(|a| crate::literal(a).trim() == "1"),
     };
     let whole = |n: f32| (n.fract() == 0.0 && n.abs() <= 1e9).then_some(n as i64);
     match words.next().map(str::to_ascii_lowercase).as_deref() {
@@ -237,7 +233,10 @@ mod tests {
             "1",
             "1",
         ]);
-        assert!(restart.setting.unwrap_err().contains("starts again"));
+        // needsRestart: a setting the game reads at the next start.
+        let restart = restart.setting.unwrap();
+        assert!(restart.restart);
+        assert_eq!(restart.default, SettingValue::Bool(false));
         let odd = read(&[
             "\"X\"",
             "\"Y\"",

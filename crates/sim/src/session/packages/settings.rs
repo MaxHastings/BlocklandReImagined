@@ -259,6 +259,9 @@ impl Session {
             .get(&key)
             .ok_or_else(|| format!("No setting `{key}`"))?;
         let stored = match (s.def.scope, game) {
+            // One read only as the server starts or loads a map has the
+            // value it had then.
+            (SettingScope::Server, None) if s.def.restart => self.started_settings.get(&key),
             (SettingScope::Server, None) => self.admin.settings.addon_settings.get(&key),
             (SettingScope::Server, Some(_)) => {
                 return Err(format!("`{key}` is the server's: server_setting(key)"));
@@ -292,6 +295,28 @@ impl Session {
         } else {
             SettingValue::Text(String::new())
         })
+    }
+
+    /// As the server starts or loads a map with its Add-Ons: the server
+    /// settings read only then ([`SettingDef::restart`]) take the values the
+    /// host has set, until the next start.
+    pub(in crate::session) fn start_settings(&mut self) {
+        let Some(host) = self.packages.as_ref() else {
+            return;
+        };
+        self.started_settings = host
+            .settings
+            .list()
+            .iter()
+            .filter(|s| s.def.restart)
+            .filter_map(|s| {
+                let key = s.key();
+                Some((
+                    key.clone(),
+                    self.admin.settings.addon_settings.get(&key)?.clone(),
+                ))
+            })
+            .collect();
     }
 
     /// The server setting standing for the v20 global `name`

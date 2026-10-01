@@ -214,6 +214,7 @@ fn weapons() -> Arc<Pack> {
         definitions: vec![],
         resources: vec![],
         diagnostics: vec![],
+        bindings: vec![],
     })
 }
 fn cue(id: u64, kind: CueKind) -> Cue {

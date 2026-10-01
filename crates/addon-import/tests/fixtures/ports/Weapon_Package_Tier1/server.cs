@@ -12,6 +12,8 @@ if($RTB::Hooks::ServerControl)
    RTB_registerPref("Most 9mm","Stand-in | Maximum Ammo","$Pref::Server::TT::Max9MM","int 1 560","Weapon_Package_Tier1",280,0,1);
    RTB_registerPref("Players Drop Ammo","Stand-in | Ammo","$Pref::Server::TT::PlayerAmmoDrop","bool","Weapon_Package_Tier1",1,0,1);
    RTB_registerPref("Shake on Firing","Stand-in | Miscellaneous","$Pref::Server::TT::Recoil","bool","Weapon_Package_Tier1",1,0,1);
+   RTB_registerPref("Ammo Rules","Stand-in | Ammo","$Pref::Server::TT::Ammo","list Magazines 0 Bottomless 1 Free 2 Pool 3","Weapon_Package_Tier1",0,0,1);
+   RTB_registerPref("Show Ammo","Stand-in | Ammo","$Pref::Server::TT::DisplayAmmo","bool","Weapon_Package_Tier1",1,0,1);
 }
 else
 {
@@ -19,6 +21,8 @@ else
    TT_defaultIfUnset("Max9MM", 280);
    TT_defaultIfUnset("PlayerAmmoDrop", 1);
    TT_defaultIfUnset("Recoil", 1);
+   TT_defaultIfUnset("Ammo", 0);
+   TT_defaultIfUnset("DisplayAmmo", 1);
 }
 
 // The ammo types this pack hands every player, as Kai's packs register them.

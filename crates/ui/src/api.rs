@@ -1150,6 +1150,10 @@ pub struct MiniGameAddOnSetting {
     /// Admin menu's Add-On Settings).
     #[serde(default)]
     pub server: bool,
+    /// A server setting the game reads only as it starts or loads a map:
+    /// a change waits for the next start.
+    #[serde(default)]
+    pub restart: bool,
     pub kind: MiniGameSettingKind,
     pub default: MiniGameSettingValue,
     /// Only admins may change it.

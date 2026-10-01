@@ -348,7 +348,7 @@ pub(super) struct PackageHost {
     /// by player and slot: the package that put each on.
     kept_worn: BTreeMap<(OwnerId, u8), String>,
     /// Every running Add-On's settings.
-    settings: settings::Registry,
+    pub(in crate::session) settings: settings::Registry,
     copy_hooks: copy_hooks::CopyHooks,
     /// Per-origin shares of the server's package capacity (stress campaign
     /// W1): no one package, or one player's commands, can take a pool
@@ -503,7 +503,7 @@ const MAX_PENDING_DEATHS: usize = 1024;
 /// Cooldown entries kept before expired ones are swept.
 const MAX_COOLDOWNS: usize = 4096;
 
-fn note(host: &mut PackageHost, diagnostic: Diagnostic) {
+pub(in crate::session) fn note(host: &mut PackageHost, diagnostic: Diagnostic) {
     if host.diagnostics.len() == MAX_DIAGNOSTICS {
         host.diagnostics.pop_front();
     }
@@ -706,6 +706,8 @@ impl Session {
             self.refresh_event_bindings()?;
             return Err(error);
         }
+        // Their server settings decide the weapons' bound fields.
+        self.start_weapon_settings();
         let Some(view) = self
             .packages
             .as_ref()
