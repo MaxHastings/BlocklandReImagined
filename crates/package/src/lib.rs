@@ -9,6 +9,7 @@
 //!
 //! Format: `docs/architecture/packages.md`.
 pub mod capability;
+pub mod classic;
 pub mod defaults;
 pub mod diag;
 pub mod environment;

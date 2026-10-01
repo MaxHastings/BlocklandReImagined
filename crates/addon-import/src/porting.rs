@@ -498,8 +498,10 @@ pub fn check(dir: &Path) -> Result<CheckOutcome> {
     );
     let ports = Ports::single(entry.clone(), &dir.join("port"))?;
     let out = dir.join("check-output");
-    if out.exists() {
-        std::fs::remove_dir_all(&out)?;
+    for last in [out.clone(), crate::ports::rules_dir(&out)] {
+        if last.exists() {
+            std::fs::remove_dir_all(&last)?;
+        }
     }
     let report = import_with(
         &Options {

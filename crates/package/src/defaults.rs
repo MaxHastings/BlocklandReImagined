@@ -405,8 +405,6 @@ mod tests {
                 "advanced-duplicator-tool",
                 "advanced-duplicator",
                 "blockhead_bot",
-                "fill-can-tool",
-                "fill-can"
             ]
         );
         let mut available: Vec<(String, String)> = PackageSet::base()
@@ -508,8 +506,6 @@ mod tests {
                 "advanced-duplicator-tool",
                 "advanced-duplicator",
                 "blockhead_bot",
-                "fill-can-tool",
-                "fill-can"
             ]
         );
         assert!(done.listed.is_empty());
