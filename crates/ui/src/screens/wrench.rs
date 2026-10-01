@@ -1924,16 +1924,13 @@ mod tests {
         );
     }
 
-    #[test]
+    /// The three wrench dialogs and the events editor with one row filled
+    /// in, drawn on `pack` and rendered offscreen; PNGs go to `output` when
+    /// given.
     #[cfg(feature = "gpu")]
-    #[ignore = "bounded offscreen rendering requires converted original content and GPU"]
-    fn authored_wrench_offscreen() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let pack = Rc::new(Pack::load(&root.join("content/ui-pack-004")).unwrap());
+    fn wrench_offscreen(pack: Rc<Pack>, output: Option<&std::path::Path>) {
         let mut ui = fixture();
         ui.core.pack = pack.clone();
-        let output = root.join("artifacts/ui-native-wrench");
-        std::fs::create_dir_all(&output).unwrap();
         let gpu = crate::gpu::Headless::new().unwrap();
         let mut renderer = crate::gpu::UiRenderer::new(&gpu.device, &gpu.queue);
         let mut render = |name: &str, screen: &mut dyn Screen, core: &mut Core| {
@@ -1955,14 +1952,16 @@ mod tests {
                 renderer.missing_textures().next().is_none(),
                 "missing texture in {name}"
             );
-            image::save_buffer(
-                output.join(format!("{name}.png")),
-                &rgba,
-                640,
-                480,
-                image::ColorType::Rgba8,
-            )
-            .unwrap();
+            if let Some(output) = output {
+                image::save_buffer(
+                    output.join(format!("{name}.png")),
+                    &rgba,
+                    640,
+                    480,
+                    image::ColorType::Rgba8,
+                )
+                .unwrap();
+            }
         };
         for variant in [
             WrenchVariant::Normal,
@@ -2023,10 +2022,28 @@ mod tests {
         );
         choose(&mut events, "WrenchEvent_1_param0", "Alpha", &mut ui.core);
         render("Events", &mut events, &mut ui.core);
+        let Some(output) = output else { return };
         std::fs::write(output.join("verification.json"), serde_json::to_vec_pretty(&serde_json::json!({
             "schema_version":1, "pack":"content/ui-pack-004", "viewport":[640,480],
             "screens":["Normal","Sound","VehicleSpawn","Events"], "no_missing_textures":true,
             "scope":"bounded offscreen dialog check; host actions and interactive play remain separate"
         })).unwrap()).unwrap();
+    }
+
+    #[test]
+    #[cfg(feature = "gpu")]
+    fn wrench_offscreen_synthetic() {
+        wrench_offscreen(crate::testing::pack(fixture().core.pack.data.clone()), None);
+    }
+
+    #[test]
+    #[cfg(feature = "gpu")]
+    #[ignore = "requires generated v20 content"]
+    fn authored_wrench_offscreen() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let pack = Rc::new(Pack::load(&root.join("content/ui-pack-004")).unwrap());
+        let output = root.join("artifacts/ui-native-wrench");
+        std::fs::create_dir_all(&output).unwrap();
+        wrench_offscreen(pack, Some(&output));
     }
 }

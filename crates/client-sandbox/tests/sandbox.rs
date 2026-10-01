@@ -125,9 +125,8 @@ fn the_sample_draws_a_cube_with_its_own_shader() {
     assert!(second.log.is_empty());
 }
 
-/// Needs a GPU: renders the sample and checks the cube is there and moves.
+/// Needs a GPU adapter (software is fine): renders the sample and checks the cube is there and moves.
 #[test]
-#[ignore = "needs a GPU adapter"]
 fn the_sample_renders_offscreen_and_animates() {
     let code = load(&sample_dir());
     let mut addon = start(&code, Budgets::default()).unwrap();
@@ -772,12 +771,11 @@ fn a_sandboxed_grant_never_covers_elevated_code() {
     assert_eq!(prompt.level, TrustLevel::Elevated);
 }
 
-/// Needs a GPU: a fragment shader that loops forever, drawn over the whole
+/// Needs a GPU adapter (software is fine): a fragment shader that loops forever, drawn over the whole
 /// screen, finishes because the loop is bounded. How long the GPU took
 /// depends on the machine and whatever else is drawing, so the budget
 /// checks run only as a benchmark (`BRI_BENCH`).
 #[test]
-#[ignore = "needs a GPU adapter"]
 fn an_endless_shader_loop_finishes_on_the_gpu() {
     let endless = "
 @vertex fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
@@ -831,10 +829,9 @@ fn an_endless_shader_loop_finishes_on_the_gpu() {
     }
 }
 
-/// Needs a GPU: calibration measures a speed (and, as a benchmark, takes
+/// Needs a GPU adapter (software is fine): calibration measures a speed (and, as a benchmark, takes
 /// well under a second).
 #[test]
-#[ignore = "needs a GPU adapter"]
 fn calibration_measures_the_gpu_quickly() {
     let (adapter, device, queue) = bri_client_sandbox::gpu::headless_device().unwrap();
     let started = std::time::Instant::now();

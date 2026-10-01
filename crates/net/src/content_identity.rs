@@ -786,22 +786,52 @@ mod tests {
         ));
         assert_eq!(content.resolve_world_items(&mut world).unwrap(), 1);
     }
-    #[test]
-    #[ignore = "requires generated native weapons-pack-009; no window or audio"]
-    fn native_weapons_pack_identity_and_all_21_choices() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/weapons-pack-009");
-        let content = WeaponContent::load(&root).unwrap();
-        // 17 weapons plus the four core tools, which are v20 images too.
-        assert_eq!(content.pack.items.len(), 21);
-        assert_eq!(content.item_choices.len(), 21);
+    /// The weapons package at `root` loads to the same identity twice and
+    /// offers every item as a choice the tool catalog installs. Returns the
+    /// item count.
+    fn weapons_pack_identity_and_every_choice(root: &Path) -> usize {
+        let content = WeaponContent::load(root).unwrap();
+        let items = content.pack.items.len();
+        assert!(items > 0);
+        assert_eq!(content.item_choices.len(), items);
         content
-            .ensure_same(&WeaponContent::load(&root).unwrap())
+            .ensure_same(&WeaponContent::load(root).unwrap())
             .unwrap();
         let mut catalog = bri_sim::session::ToolCatalog::default();
         catalog
             .install_items(content.item_choices.into_iter().map(|(id, _)| id))
             .unwrap();
-        assert_eq!(catalog.items.len(), 21);
+        assert_eq!(catalog.items.len(), items);
+        items
+    }
+    #[test]
+    fn test_weapons_pack_identity_and_every_choice() {
+        let root = tempfile::tempdir().unwrap().keep().join("weapons");
+        std::fs::create_dir(&root).unwrap();
+        let pack = bri_weapons::testing::pack();
+        // Every native file the pack names, with made-up bytes.
+        for name in pack
+            .resources
+            .iter()
+            .filter_map(|r| r.native_file.clone())
+            .chain(pack.sounds.values().map(|s| s.file.clone()))
+        {
+            let path = root.join(&name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, format!("native {name}")).unwrap();
+        }
+        write_weapons(&root, &pack);
+        assert_eq!(
+            weapons_pack_identity_and_every_choice(&root),
+            pack.items.len()
+        );
+    }
+    #[test]
+    #[ignore = "requires generated v20 content"]
+    fn native_weapons_pack_identity_and_all_21_choices() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/weapons-pack-009");
+        // 17 weapons plus the four core tools, which are v20 images too.
+        assert_eq!(weapons_pack_identity_and_every_choice(&root), 21);
     }
     fn physics_fixture() -> (PathBuf, WeaponContent, serde_json::Value, serde_json::Value) {
         let (root, _) = weapon_fixture();
@@ -955,16 +985,29 @@ mod tests {
         );
         std::fs::File::create(root.join("item-physics.json")).unwrap();
     }
-    #[test]
-    #[ignore = "requires native weapons/presentation pack003; no renderer or original readers"]
-    fn native_item_physics_covers_all_21_and_pins_authored_bounds() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
-        let weapons = WeaponContent::load(&root.join("weapons-pack-009")).unwrap();
-        let physics =
-            ItemPhysicsContent::load(&root.join("item-presentation-pack-010"), &weapons).unwrap();
-        assert_eq!(physics.bounds.len(), 21);
+    /// The presentation pack at `root` pins valid bounds for every item
+    /// choice of `weapons`. Returns how many.
+    fn item_physics_covers_every_item(root: &Path, weapons: &WeaponContent) -> usize {
+        let physics = ItemPhysicsContent::load(root, weapons).unwrap();
+        assert_eq!(physics.bounds.len(), weapons.item_choices.len());
         for bounds in physics.bounds.values() {
             bounds.validate().unwrap();
         }
+        physics.bounds.len()
+    }
+    #[test]
+    fn test_item_physics_covers_every_item() {
+        let (root, weapons, _, _) = physics_fixture();
+        assert!(item_physics_covers_every_item(&root, &weapons) > 0);
+    }
+    #[test]
+    #[ignore = "requires generated v20 content"]
+    fn native_item_physics_covers_all_21_and_pins_authored_bounds() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
+        let weapons = WeaponContent::load(&root.join("weapons-pack-009")).unwrap();
+        assert_eq!(
+            item_physics_covers_every_item(&root.join("item-presentation-pack-010"), &weapons),
+            21
+        );
     }
 }

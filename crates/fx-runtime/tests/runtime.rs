@@ -1,108 +1,16 @@
 use bri_content::effects::*;
-use bri_fx_runtime::{
-    pack::{TextureImage, digest},
-    *,
-};
+use bri_fx_runtime::{pack::digest, *};
 use glam::{Mat4, Vec3};
-use std::{collections::BTreeMap, sync::Arc};
-fn fixture(mut change: impl FnMut(&mut Library)) -> Arc<EffectsPack> {
-    let mut library = Library {
-        schema_version: 1,
-        textures: BTreeMap::from([("original".into(), "texture.png".into())]),
-        lights: vec![Light {
-            id: "light".into(),
-            name: "Light".into(),
-            enabled: true,
-            color: [1., 0.5, 0.],
-            brightness: 2.,
-            radius: 5.,
-            color_curves: None,
-            brightness_curve: None,
-            radius_curve: None,
-            flare: Some(Flare {
-                texture: "original".into(),
-                color: [1.; 3],
-                third_person: true,
-                constant_size: Some(1.),
-                near_size: 1.,
-                far_size: 0.5,
-                near_distance: 0.,
-                far_distance: 10.,
-                fade_seconds: 0.5,
-                blend_mode: 0,
-                link_color: true,
-                link_size: true,
-            }),
-        }],
-        particles: vec![Particle {
-            id: "particle".into(),
-            texture: "original".into(),
-            alpha_blend: true,
-            lifetime: 2.,
-            lifetime_variance: 0.,
-            drag: 0.,
-            wind: 0.,
-            gravity: 0.,
-            inherited_velocity: 0.,
-            acceleration: 0.,
-            spin_degrees: 90.,
-            random_spin: [0., 0.],
-            keys: vec![
-                ParticleKey {
-                    time: 0.,
-                    color: [1., 0., 0., 1.],
-                    size: 1.,
-                },
-                ParticleKey {
-                    time: 1.,
-                    color: [0., 0., 1., 0.],
-                    size: 3.,
-                },
-            ],
-        }],
-        emitters: vec![Emitter {
-            id: "emitter".into(),
-            name: "Emitter".into(),
-            particles: vec!["particle".into()],
-            period: 0.1,
-            period_variance: 0.,
-            speed: 2.,
-            speed_variance: 0.,
-            offset: 0.,
-            offset_variance: 0.,
-            theta_degrees: [0., 0.],
-            phi_rate_degrees: 0.,
-            phi_variance_degrees: 0.,
-            lifetime: 0.,
-            lifetime_variance: 0.,
-            orient: false,
-            orient_on_velocity: true,
-            override_advance: false,
-            use_emitter_colors: false,
-            use_emitter_sizes: false,
-            use_placement_velocity: false,
-            node_time_scale: 1.,
-            point_node_time_scale: 1.,
-        }],
-    };
-    change(&mut library);
-    EffectsPack::from_parts(
-        library,
-        Manifest {
-            schema_version: 1,
-            library_sha256: String::new(),
-            textures: BTreeMap::new(),
-            emitter_alpha: BTreeMap::new(),
-            bindings: Vec::new(),
-            composites: Vec::new(),
-            unresolved: Vec::new(),
-        },
-        vec![TextureImage {
-            id: "original".into(),
-            width: 1,
-            height: 1,
-            rgba: vec![120, 80, 20, 255],
-        }],
+use std::sync::Arc;
+fn fixture(change: impl FnMut(&mut Library)) -> Arc<EffectsPack> {
+    bri_fx_runtime::testing::pack(change)
+}
+/// A converted pack under `content/`.
+fn content_pack(name: &str) -> Arc<EffectsPack> {
+    EffectsPack::load(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../content")
+            .join(name),
     )
     .unwrap()
 }
@@ -474,15 +382,8 @@ impl ErrorText for anyhow::Result<Arc<EffectsPack>> {
     }
 }
 
-#[test]
-#[ignore = "requires locally converted original content; run explicitly"]
-fn original_pack_all_emitters_lights_and_composites_execute() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../content/effects-runtime-pack-001");
-    let pack = EffectsPack::load(root).unwrap();
-    assert_eq!(pack.library.particles.len(), 119);
-    assert_eq!(pack.library.emitters.len(), 120);
-    assert_eq!(pack.textures.len(), 18);
+fn all_emitters_lights_and_composites_execute(pack: Arc<EffectsPack>) {
+    assert!(!pack.library.emitters.is_empty() && !pack.manifest.composites.is_empty());
     for e in &pack.library.emitters {
         let mut w = world(pack.clone());
         let h = w
@@ -517,6 +418,23 @@ fn original_pack_all_emitters_lights_and_composites_execute() {
         assert_eq!(w.particle_count(), 0);
         assert_eq!(w.source_count(), 0);
     }
+}
+#[test]
+fn all_emitters_lights_and_composites_execute_synthetic() {
+    all_emitters_lights_and_composites_execute(bri_fx_runtime::testing::showcase_pack());
+}
+#[test]
+#[ignore = "requires generated v20 content"]
+fn original_pack_all_emitters_lights_and_composites_execute() {
+    all_emitters_lights_and_composites_execute(content_pack("effects-runtime-pack-001"));
+}
+#[test]
+#[ignore = "requires generated v20 content"]
+fn original_pack_counts() {
+    let pack = content_pack("effects-runtime-pack-001");
+    assert_eq!(pack.library.particles.len(), 119);
+    assert_eq!(pack.library.emitters.len(), 120);
+    assert_eq!(pack.textures.len(), 18);
 }
 #[test]
 fn brick_paint_tints_rgb_but_keeps_authored_alpha_keys() {
@@ -585,15 +503,16 @@ fn brick_paint_tints_rgb_but_keeps_authored_alpha_keys() {
             .all(|p| p.color.truncate().to_array() == [1.; 3] && p.color.w <= 0.5 + 1e-6)
     );
 }
-#[test]
-#[ignore = "requires locally converted original content; run explicitly"]
-fn original_painted_brick_emitters_never_exceed_authored_alpha() {
-    // Slate "Ice Palace.bls": 199 Fog A/B emitters on opaque white bricks.
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../content/effects-runtime-pack-005");
-    let pack = EffectsPack::load(root).unwrap();
+/// Every paint-taking emitter, on an opaque white brick, stays at or below
+/// its particles' authored alpha peak; `expected` must all be among them.
+fn painted_brick_emitters_never_exceed_authored_alpha(pack: Arc<EffectsPack>, expected: &[&str]) {
     let mut checked = Vec::new();
-    for e in pack.library.emitters.iter().filter(|e| e.use_emitter_colors) {
+    for e in pack
+        .library
+        .emitters
+        .iter()
+        .filter(|e| e.use_emitter_colors)
+    {
         let peak = pack
             .library
             .particles
@@ -627,9 +546,25 @@ fn original_painted_brick_emitters_never_exceed_authored_alpha() {
         }
         checked.push(e.name.as_str());
     }
-    for name in ["Fog A", "Fog B", "Fog C"] {
+    for &name in expected {
         assert!(checked.contains(&name), "{name} missing: {checked:?}");
     }
+}
+#[test]
+fn painted_brick_emitters_never_exceed_authored_alpha_synthetic() {
+    painted_brick_emitters_never_exceed_authored_alpha(
+        bri_fx_runtime::testing::showcase_pack(),
+        &bri_fx_runtime::testing::PAINTED_EMITTERS,
+    );
+}
+// Slate "Ice Palace.bls": 199 Fog A/B emitters on opaque white bricks.
+#[test]
+#[ignore = "requires generated v20 content"]
+fn original_painted_brick_emitters_never_exceed_authored_alpha() {
+    painted_brick_emitters_never_exceed_authored_alpha(
+        content_pack("effects-runtime-pack-005"),
+        &["Fog A", "Fog B", "Fog C"],
+    );
 }
 #[test]
 fn recolor_replaces_rgb_keeps_alpha_keys_and_overrides_blend() {

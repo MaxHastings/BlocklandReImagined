@@ -451,7 +451,7 @@ fn cloud_wind_updates_without_geometry_upload_and_calm_stays_still() -> Result<(
 }
 
 #[test]
-#[ignore = "requires local avatar rig and offscreen GPU"]
+#[ignore = "requires generated v20 content"]
 fn original_avatar_layers_update_one_persistent_gpu_scene() -> Result<()> {
     use bri_content::{
         animation::{Layer, sample, sample_layers, triangles},
@@ -1045,7 +1045,7 @@ fn persistent_gpu_camera_depth_alpha_and_resize() -> Result<()> {
 }
 
 #[test]
-#[ignore = "requires locally converted map-bundle-017; produces offscreen evidence only"]
+#[ignore = "requires generated v20 content"]
 fn real_native_maps_upload_once_camera_motion() -> Result<()> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let output = root.join("artifacts/persistent-scene");

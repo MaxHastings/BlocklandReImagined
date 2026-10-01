@@ -1,71 +1,8 @@
 use bri_weather::*;
 use glam::Vec3;
-use std::{collections::BTreeMap, sync::Arc};
+use std::sync::Arc;
 fn fixture(change: impl FnOnce(&mut WeatherManifest)) -> Arc<WeatherPack> {
-    let pixels = vec![255; 4 * 4 * 4];
-    let mut manifest = WeatherManifest {
-        schema_version: 1,
-        legacy_tick_seconds: 0.032,
-        definitions: vec![Definition {
-            id: "rain".into(),
-            drop_texture: "atlas".into(),
-            splash_texture: Some("atlas".into()),
-            drop_radius: 0.75,
-            splash_radius: 0.2,
-            true_billboards: false,
-            splash_seconds: 0.25,
-            drop_animation_seconds: 0.,
-            animate_splashes: true,
-            drops_per_side: 2,
-            splashes_per_side: 2,
-        }],
-        placements: vec![Placement {
-            id: "map#rain".into(),
-            map_id: "map".into(),
-            definition: "rain".into(),
-            position: [0.; 3],
-            drops: 64,
-            width: 10.,
-            height: 10.,
-            speed_per_tick: [0.2, 0.3],
-            mass: [0.75, 0.85],
-            turbulence_amplitude: 0.1,
-            turbulence_radians_per_tick: 0.2,
-            use_turbulence: false,
-            rotate_with_camera_velocity: true,
-            collision: true,
-            follow_camera: true,
-            use_wind: true,
-            authored_sky_wind: [0.; 3],
-            reference_wind_velocity: [0.; 3],
-            original_fields: BTreeMap::new(),
-        }],
-        textures: BTreeMap::from([(
-            "atlas".into(),
-            TextureRecord {
-                file: "atlas.png".into(),
-                sha256: String::new(),
-                rgba_sha256: sha256(&pixels),
-                width: 4,
-                height: 4,
-                source_paths: vec![],
-                alpha_policy: "native_fixture".into(),
-            },
-        )]),
-        sources: Vec::new(),
-        assumptions: Vec::new(),
-    };
-    change(&mut manifest);
-    WeatherPack::from_parts(
-        manifest,
-        vec![WeatherTexture {
-            id: "atlas".into(),
-            width: 4,
-            height: 4,
-            rgba: pixels,
-        }],
-    )
-    .unwrap()
+    bri_weather::testing::pack(change)
 }
 fn world(pack: Arc<WeatherPack>) -> WeatherWorld {
     let mut w = WeatherWorld::new(pack, WeatherLimits::default(), 91).unwrap();
@@ -340,14 +277,10 @@ fn density_caps_stalls_and_map_teardown_are_bounded() {
     w.clear();
     assert!(w.map_id().is_none());
 }
-#[test]
-#[ignore = "requires converted original weather pack"]
-fn actual_original_weather_preserves_counts_atlases_and_alpha() {
-    let path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/weather-pack-002");
-    let pack = WeatherPack::load(path).unwrap();
-    assert_eq!(pack.manifest.placements.len(), 2);
-    assert_eq!(pack.textures.len(), 3);
+/// Every placement in `pack` keeps its authored drop count and draws and
+/// lands drops over a solid floor in its reference wind.
+fn every_placement_rains_its_authored_drops(pack: Arc<WeatherPack>) {
+    assert!(!pack.manifest.placements.is_empty());
     for p in &pack.manifest.placements {
         let mut w = WeatherWorld::new(pack.clone(), WeatherLimits::default(), 54).unwrap();
         w.set_map(&p.map_id).unwrap();
@@ -381,6 +314,28 @@ fn actual_original_weather_preserves_counts_atlases_and_alpha() {
         assert!(w.snapshot().drops > 0);
         assert!(w.diagnostics().impacts > 0);
     }
+}
+#[test]
+fn every_placement_rains_its_authored_drops_synthetic() {
+    every_placement_rains_its_authored_drops(bri_weather::testing::showcase_pack());
+}
+fn content_pack() -> Arc<WeatherPack> {
+    WeatherPack::load(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/weather-pack-002"),
+    )
+    .unwrap()
+}
+#[test]
+#[ignore = "requires generated v20 content"]
+fn actual_original_weather_rains_its_authored_drops() {
+    every_placement_rains_its_authored_drops(content_pack());
+}
+#[test]
+#[ignore = "requires generated v20 content"]
+fn actual_original_weather_preserves_counts_atlases_and_alpha() {
+    let pack = content_pack();
+    assert_eq!(pack.manifest.placements.len(), 2);
+    assert_eq!(pack.textures.len(), 3);
     let snow = pack
         .manifest
         .definitions

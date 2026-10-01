@@ -32,6 +32,7 @@ pub mod models;
 pub mod pack;
 pub mod prefs;
 pub mod schema;
+pub mod testing;
 pub mod text;
 pub mod view;
 

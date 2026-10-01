@@ -5,7 +5,6 @@ use glam::{Mat4, Vec3, Vec4};
 use std::collections::BTreeMap;
 
 #[test]
-#[ignore = "requires a headless GPU adapter"]
 fn billboard_blends_and_depth_match_the_host_pass() {
     pollster::block_on(async {
         let pack = EffectsPack::from_parts(

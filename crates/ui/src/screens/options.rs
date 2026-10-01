@@ -3084,12 +3084,11 @@ mod tests {
         assert!(!ui.is_open(ScreenId::Remap));
     }
 
-    #[test]
+    /// Every options pane, a remap conflict, save/load and the player list
+    /// drawn on `pack` and rendered offscreen; PNGs go to `output` when
+    /// given.
     #[cfg(feature = "gpu")]
-    #[ignore = "bounded headless rendering requires local converted original content and GPU"]
-    fn authored_options_save_players_offscreen() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let pack = Rc::new(Pack::load(&root.join("content/ui-pack-001")).unwrap());
+    fn options_save_players_offscreen(pack: Rc<Pack>, output: Option<&std::path::Path>) {
         let mut ui = fixture();
         ui.core.pack = pack.clone();
         ui.core.remap = crate::binds::remap_entries(&pack.data.data);
@@ -3105,8 +3104,6 @@ mod tests {
             brick_count: Some(42),
             damaged: false,
         }];
-        let output = root.join("artifacts/ui-native-dialogs");
-        std::fs::create_dir_all(&output).unwrap();
         let gpu = crate::gpu::Headless::new().unwrap();
         let mut renderer = crate::gpu::UiRenderer::new(&gpu.device, &gpu.queue);
         let mut render = |name: &str, screen: &mut dyn Screen, core: &mut Core| {
@@ -3124,14 +3121,17 @@ mod tests {
                     [0.12, 0.12, 0.15, 1.0],
                 )
                 .unwrap();
-            image::save_buffer(
-                output.join(format!("{name}.png")),
-                &rgba,
-                640,
-                480,
-                image::ColorType::Rgba8,
-            )
-            .unwrap();
+            assert_eq!(rgba.len(), 640 * 480 * 4);
+            if let Some(output) = output {
+                image::save_buffer(
+                    output.join(format!("{name}.png")),
+                    &rgba,
+                    640,
+                    480,
+                    image::ColorType::Rgba8,
+                )
+                .unwrap();
+            }
         };
         let mut options = Options::new(&ui.core);
         for pane in ["Graphics", "Controls", "Audio", "Network", "AdvGraphics"] {
@@ -3148,5 +3148,24 @@ mod tests {
         }
         let mut players = crate::screens::players::Players::new(&ui.core);
         render("players", &mut players, &mut ui.core);
+    }
+
+    #[test]
+    #[cfg(feature = "gpu")]
+    fn options_save_players_offscreen_synthetic() {
+        let mut data = fixture().core.pack.data.clone();
+        crate::testing::add_dialogs(&mut data);
+        options_save_players_offscreen(crate::testing::pack(data), None);
+    }
+
+    #[test]
+    #[cfg(feature = "gpu")]
+    #[ignore = "requires generated v20 content"]
+    fn authored_options_save_players_offscreen() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let pack = Rc::new(Pack::load(&root.join("content/ui-pack-001")).unwrap());
+        let output = root.join("artifacts/ui-native-dialogs");
+        std::fs::create_dir_all(&output).unwrap();
+        options_save_players_offscreen(pack, Some(&output));
     }
 }

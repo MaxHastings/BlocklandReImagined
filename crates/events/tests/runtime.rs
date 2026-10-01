@@ -530,45 +530,72 @@ fn source_math_keeps_health_projectile_and_relay_semantics() {
     );
     assert!(!sound_allowed(true, true));
 }
-#[test]
-#[ignore = "requires private native event catalog"]
-fn actual_catalog_compiles_all_65_outputs_and_covers_all_16_inputs() {
-    let catalog = Catalog::load(
+/// The converted vanilla catalog (`content/events-pack-002`).
+fn content_catalog() -> Catalog {
+    Catalog::load(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../content/events-pack-002/catalog.json"),
     )
-    .unwrap();
-    assert_eq!(catalog.inputs.len(), 16);
-    assert_eq!(catalog.outputs.len(), 65);
-    for output in &catalog.outputs {
-        let class = Class::parse(&output.class_name).unwrap();
-        let input = catalog
-            .inputs
-            .iter()
-            .find(|i| {
-                i.targets
-                    .iter()
-                    .any(|(_, c)| Class::parse(c) == Some(class))
-            })
-            .unwrap();
-        let slot = Slot::parse(
-            &input
-                .targets
+    .unwrap()
+}
+/// Emits a synthetic `#[test]` running `$body` on the made-up
+/// `bri_events::testing::catalog_extended()` and an ignored one running the same body
+/// on the converted vanilla catalog.
+macro_rules! on_both_catalogs {
+    ($synthetic:ident, $content:ident, $body:ident) => {
+        #[test]
+        fn $synthetic() {
+            $body(bri_events::testing::catalog_extended());
+        }
+        #[test]
+        #[ignore = "requires generated v20 content"]
+        fn $content() {
+            $body(content_catalog());
+        }
+    };
+}
+/// The first input that can target `class`, with the slot naming it.
+fn input_for(catalog: &Catalog, class: Class) -> (&InputDef, Slot) {
+    let input = catalog
+        .inputs
+        .iter()
+        .find(|i| {
+            i.targets
                 .iter()
-                .find(|(_, c)| Class::parse(c) == Some(class))
-                .unwrap()
-                .0,
-        )
+                .any(|(_, c)| Class::parse(c) == Some(class))
+        })
         .unwrap();
-        let row = Row {
-            preserved: None,
-            enabled: true,
-            input: input.name.clone(),
-            delay_ms: 0,
-            target: Target::Slot(slot),
-            output: output.name.clone(),
-            params: output.params.iter().map(Param::default_value).collect(),
-        };
+    let slot = Slot::parse(
+        &input
+            .targets
+            .iter()
+            .find(|(_, c)| Class::parse(c) == Some(class))
+            .unwrap()
+            .0,
+    )
+    .unwrap();
+    (input, slot)
+}
+/// A default-parameter row wiring `output` to the first input reaching its
+/// class.
+fn default_row(catalog: &Catalog, output: &OutputDef) -> (Row, Class, Slot) {
+    let class = Class::parse(&output.class_name).unwrap();
+    let (input, slot) = input_for(catalog, class);
+    let row = Row {
+        preserved: None,
+        enabled: true,
+        input: input.name.clone(),
+        delay_ms: 0,
+        target: Target::Slot(slot),
+        output: output.name.clone(),
+        params: output.params.iter().map(Param::default_value).collect(),
+    };
+    (row, class, slot)
+}
+fn every_output_compiles_with_default_params(catalog: Catalog) {
+    assert!(!catalog.outputs.is_empty());
+    for output in &catalog.outputs {
+        let (row, _, _) = default_row(&catalog, output);
         catalog
             .validate_row(
                 &row,
@@ -579,6 +606,18 @@ fn actual_catalog_compiles_all_65_outputs_and_covers_all_16_inputs() {
             )
             .unwrap();
     }
+}
+on_both_catalogs!(
+    every_output_compiles_with_default_params_synthetic,
+    every_output_compiles_with_default_params_content,
+    every_output_compiles_with_default_params
+);
+#[test]
+#[ignore = "requires generated v20 content"]
+fn actual_catalog_has_all_65_outputs_and_16_inputs() {
+    let catalog = content_catalog();
+    assert_eq!(catalog.inputs.len(), 16);
+    assert_eq!(catalog.outputs.len(), 65);
 }
 
 #[test]
@@ -733,43 +772,11 @@ fn cancel_prepass_frees_origin_admission_and_saved_context_is_validated() {
     );
 }
 
-#[test]
-#[ignore = "requires private native event catalog"]
-fn every_vanilla_output_reaches_its_native_dispatch_or_internal_route() {
-    let catalog = Catalog::load(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../content/events-pack-002/catalog.json"),
-    )
-    .unwrap();
+fn every_output_reaches_its_dispatch_or_internal_route(catalog: Catalog) {
+    assert!(!catalog.outputs.is_empty());
     for output in &catalog.outputs {
-        let class = Class::parse(&output.class_name).unwrap();
-        let input = catalog
-            .inputs
-            .iter()
-            .find(|i| {
-                i.targets
-                    .iter()
-                    .any(|(_, c)| Class::parse(c) == Some(class))
-            })
-            .unwrap();
-        let slot = Slot::parse(
-            &input
-                .targets
-                .iter()
-                .find(|(_, c)| Class::parse(c) == Some(class))
-                .unwrap()
-                .0,
-        )
-        .unwrap();
-        let row = Row {
-            preserved: None,
-            enabled: true,
-            input: input.name.clone(),
-            delay_ms: 0,
-            target: Target::Slot(slot),
-            output: output.name.clone(),
-            params: output.params.iter().map(Param::default_value).collect(),
-        };
+        let (row, class, slot) = default_row(&catalog, output);
+        let input = row.input.clone();
         let mut world = EventWorld::new(
             catalog.clone(),
             Bindings {
@@ -780,7 +787,7 @@ fn every_vanilla_output_reaches_its_native_dispatch_or_internal_route() {
         )
         .unwrap();
         world.install_brick(brick(1, vec![row])).unwrap();
-        let mut trigger = Trigger::new(id(1), &input.name, 1);
+        let mut trigger = Trigger::new(id(1), &input, 1);
         if slot != Slot::SelfBrick {
             trigger.targets.insert(slot, Entity { class, id: id(2) });
         }
@@ -794,6 +801,11 @@ fn every_vanilla_output_reaches_its_native_dispatch_or_internal_route() {
         assert_eq!(world.pending(), 0);
     }
 }
+on_both_catalogs!(
+    every_output_reaches_its_dispatch_synthetic,
+    every_vanilla_output_reaches_its_native_dispatch_or_internal_route,
+    every_output_reaches_its_dispatch_or_internal_route
+);
 #[test]
 fn expansion_budget_preserves_finite_branches_across_same_time_phases() {
     let mut w = world(Limits {

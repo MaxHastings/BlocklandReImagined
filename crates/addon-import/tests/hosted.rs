@@ -78,7 +78,7 @@ fn fire(session: &mut Session, spawn: glam::Vec3, item: &str) -> Vec<String> {
 }
 
 #[test]
-#[ignore = "requires generated content (content/, see docs/content-regeneration.md)"]
+#[ignore = "requires generated v20 content"]
 fn imported_weapon_package_is_hosted_beside_vanilla() {
     let root = content_root();
     let scratch = Scratch(root.join(format!("_addon-hosted-{}", std::process::id())));
