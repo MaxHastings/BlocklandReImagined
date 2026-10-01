@@ -35,6 +35,11 @@ pub struct Look {
     /// The model's own colour (its image's tint), seen where no skin is.
     #[serde(default = "white")]
     pub base: [f32; 3],
+    /// Each surface also takes its material's own colour (its texture's
+    /// average), so a model of several materials, such as a dark handle
+    /// and a steel blade, keeps them apart.
+    #[serde(default)]
+    pub materials: bool,
     #[serde(default)]
     pub skin: Option<Skin>,
 }
@@ -85,10 +90,45 @@ pub struct Mesh {
     pub positions: Vec<Vec3>,
     pub normals: Vec<Vec3>,
     pub indices: Vec<u32>,
+    /// Each vertex's material colour (`Look::materials`); empty is white.
+    pub colours: Vec<Vec3>,
 }
 
 impl Mesh {
     pub fn from_scene(scene: &SceneData) -> Self {
+        // A material's colour: its diffuse texture's average, times the
+        // vertex colour, as the model is drawn.
+        let average = |image: &SceneImage| -> Vec3 {
+            let (mut sum, mut weight) = (Vec3::ZERO, 0.0);
+            for px in image.rgba.chunks_exact(4) {
+                let a = f32::from(px[3]) / 255.0;
+                sum += Vec3::new(f32::from(px[0]), f32::from(px[1]), f32::from(px[2])) / 255.0 * a;
+                weight += a;
+            }
+            if weight > 0.0 { sum / weight } else { Vec3::ONE }
+        };
+        let materials: Vec<Vec3> = scene
+            .materials
+            .iter()
+            .map(|m| scene.images.get(m.images[0]).map_or(Vec3::ONE, average))
+            .collect();
+        let mut colours: Vec<Vec3> = scene
+            .vertices
+            .iter()
+            .map(|v| Vec3::new(v.color[0], v.color[1], v.color[2]))
+            .collect();
+        let mut tinted = vec![false; colours.len()];
+        for batch in &scene.batches {
+            let colour = materials.get(batch.material).copied().unwrap_or(Vec3::ONE);
+            let range = batch.indices.start as usize..batch.indices.end as usize;
+            for &i in scene.indices.get(range).unwrap_or(&[]) {
+                if let Some(c) = colours.get_mut(i as usize)
+                    && !std::mem::replace(&mut tinted[i as usize], true)
+                {
+                    *c *= colour;
+                }
+            }
+        }
         Self {
             positions: scene.vertices.iter().map(|v| Vec3::from(v.position)).collect(),
             normals: scene
@@ -97,6 +137,7 @@ impl Mesh {
                 .map(|v| Vec3::from(v.normal).normalize_or_zero())
                 .collect(),
             indices: scene.indices.clone(),
+            colours,
         }
     }
     fn triangles(&self) -> impl Iterator<Item = [usize; 3]> + '_ {
@@ -432,6 +473,12 @@ pub fn render(mesh: &Mesh, pose: &Pose, look: &Look, label: &str) -> SceneImage 
     let mut depth = vec![f32::MIN; sw * sh];
     let mut colour = vec![None::<Vec3>; sw * sh];
     let light = LIGHT.normalize();
+    let base = Vec3::from(look.base);
+    let coloured = look.materials && mesh.colours.len() == mesh.positions.len();
+    if coloured {
+        let shade = |c: Vec3, n: Vec3| base * c * (0.45 + 0.6 * n.dot(light).max(0.0));
+        draw_coloured(mesh, &fine, sw, sh, &mut depth, &mut colour, &shade, pose.rotation);
+    }
     let mut draw = |positions: &[Vec3], shade: &dyn Fn(Vec3, Vec3) -> Vec3| {
         let projected: Vec<Vec3> = positions.iter().map(|p| fine.project(*p)).collect();
         for t in mesh.triangles() {
@@ -449,8 +496,9 @@ pub fn render(mesh: &Mesh, pose: &Pose, look: &Look, label: &str) -> SceneImage 
             });
         }
     };
-    let base = Vec3::from(look.base);
-    draw(&mesh.positions, &|_, n| base * (0.45 + 0.6 * n.dot(light).max(0.0)));
+    if !coloured {
+        draw(&mesh.positions, &|_, n| base * (0.45 + 0.6 * n.dot(light).max(0.0)));
+    }
     if let Some(skin) = &look.skin {
         // Puffed along its normals, as the in-game skin is drawn over the
         // model: at hard edges the model's own colour shows through.
@@ -515,6 +563,36 @@ pub fn render(mesh: &Mesh, pose: &Pose, look: &Look, label: &str) -> SceneImage 
         height: pose.size[1],
         rgba,
         srgb: false,
+    }
+}
+
+/// Draw `mesh` with each vertex's material colour interpolated across its
+/// triangles into the depth and colour buffers `render` keeps.
+#[allow(clippy::too_many_arguments)]
+fn draw_coloured(
+    mesh: &Mesh,
+    fine: &Pose,
+    sw: usize,
+    sh: usize,
+    depth: &mut [f32],
+    colour: &mut [Option<Vec3>],
+    shade: &dyn Fn(Vec3, Vec3) -> Vec3,
+    rotation: Quat,
+) {
+    let projected: Vec<Vec3> = mesh.positions.iter().map(|p| fine.project(*p)).collect();
+    for t in mesh.triangles() {
+        let [a, b, c] = t.map(|i| projected[i]);
+        raster(a.truncate(), b.truncate(), c.truncate(), sw, sh, |x, y, bary| {
+            let z = a.z * bary.x + b.z * bary.y + c.z * bary.z;
+            let i = y * sw + x;
+            if z > depth[i] {
+                depth[i] = z;
+                let normal = (mesh.normals[t[0]] * bary.x + mesh.normals[t[1]] * bary.y + mesh.normals[t[2]] * bary.z)
+                    .normalize_or_zero();
+                let tint = mesh.colours[t[0]] * bary.x + mesh.colours[t[1]] * bary.y + mesh.colours[t[2]] * bary.z;
+                colour[i] = Some(shade(tint, rotation * normal));
+            }
+        });
     }
 }
 
@@ -592,7 +670,7 @@ mod tests {
     }
 
     fn picture(mesh: &Mesh, pose: &Pose) -> SceneImage {
-        render(mesh, pose, &Look { base: [1.0; 3], skin: None }, "reference")
+        render(mesh, pose, &Look { base: [1.0; 3], materials: false, skin: None }, "reference")
     }
 
     /// The pose of a stock icon is recovered from its picture alone, so a
@@ -640,6 +718,7 @@ mod tests {
         let pose = Pose { rotation: euler(0.7, 0.35, 0.5), scale: 30.0, centre: Vec2::new(34.0, 30.0), size: [64, 64] };
         let look = Look {
             base: [0.35, 1.0, 0.8],
+            materials: false,
             skin: Some(Skin { shell: [0.035, 0.025, 0.05], veins: [0.3, 0.95, 1.0], puff: 0.012 }),
         };
         let image = render(&mesh, &pose, &look, "gun");
@@ -650,6 +729,27 @@ mod tests {
         assert!(dark * 2 > solid.len(), "mostly the dark shell: {dark} of {}", solid.len());
         assert!(solid.iter().any(|p| p[1] > 60 && p[2] > 60 && p[0] < p[1]), "teal veins show");
         assert_eq!(render(&mesh, &pose, &look, "gun").rgba, image.rgba);
+    }
+
+    /// With `materials`, each part keeps its own material's colour: a dark
+    /// handle stays dark beside a light blade.
+    #[test]
+    fn material_colours_keep_the_parts_apart() {
+        let mut mesh = gun();
+        // The first box is dark, the rest light.
+        mesh.colours = (0..mesh.positions.len())
+            .map(|i| if i < 24 { Vec3::splat(0.1) } else { Vec3::splat(0.9) })
+            .collect();
+        let pose = Pose { rotation: euler(0.7, 0.35, 0.5), scale: 24.0, centre: Vec2::new(34.0, 30.0), size: [64, 64] };
+        let look = Look { base: [1.0; 3], materials: true, skin: None };
+        let image = render(&mesh, &pose, &look, "gun");
+        let solid: Vec<_> = image.rgba.chunks_exact(4).filter(|p| p[3] == 255).collect();
+        let dark = solid.iter().filter(|p| p[0] < 80).count();
+        let light = solid.iter().filter(|p| p[0] > 120).count();
+        assert!(dark > 50 && light > 50, "{dark} dark and {light} light pixels");
+        // Without it the model is one colour.
+        let plain = render(&mesh, &pose, &Look { materials: false, ..look }, "gun");
+        assert!(plain.rgba.chunks_exact(4).filter(|p| p[3] == 255).all(|p| p[0] > 100));
     }
 
     /// A stock icon drawn right to its edges still gets a new icon with a
@@ -669,6 +769,7 @@ mod tests {
         let target = filled_box(&stock).expect("a box");
         let look = Look {
             base: [0.35, 1.0, 0.8],
+            materials: false,
             skin: Some(Skin { shell: [0.035, 0.025, 0.05], veins: [0.3, 0.95, 1.0], puff: 0.012 }),
         };
         for rotation in [euler(0.7, 0.35, 0.5), euler(-1.2, 0.9, 2.4), Quat::IDENTITY] {

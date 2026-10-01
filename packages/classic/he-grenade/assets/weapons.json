@@ -1,0 +1,581 @@
+{
+  "schema_version": 3,
+  "id": "he-grenade",
+  "items": {
+    "he-grenade:weapon/hegrenade": {
+      "name": "HEGrenadeItem",
+      "ui_name": "HE-Grenade",
+      "image": "he-grenade:image/hegrenade",
+      "model": "he-grenade/models/he-grenade.shape.json",
+      "icon": "icons/he_grenade"
+    }
+  },
+  "images": {
+    "he-grenade:image/hegrenade": {
+      "name": "HEGrenadeImage",
+      "model": "he-grenade/models/he-grenade.shape.json",
+      "projectile": "he-grenade:projectile/hegrenade",
+      "correct_muzzle": true,
+      "arm_ready": true,
+      "color": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "casing": "HEGrenadePinDebris",
+      "states": [
+        {
+          "name": "Activate",
+          "ticks": 12,
+          "timeout": 1,
+          "sequence": "ready",
+          "sound": "weaponSwitchSound"
+        },
+        {
+          "name": "Ready",
+          "down": 2
+        },
+        {
+          "name": "PinPull",
+          "ticks": 24,
+          "timeout": 3,
+          "allow_change": false,
+          "sequence": "pinpull",
+          "sound": "he-grenade:pin",
+          "eject_shell": true
+        },
+        {
+          "name": "PinOut",
+          "down": 4,
+          "allow_change": false
+        },
+        {
+          "name": "Charge",
+          "ticks": 84,
+          "wait": false,
+          "timeout": 6,
+          "up": 5,
+          "allow_change": false,
+          "holder_sequence": "spearReady"
+        },
+        {
+          "name": "AbortCharge",
+          "ticks": 36,
+          "timeout": 3,
+          "allow_change": false,
+          "holder_sequence": "root"
+        },
+        {
+          "name": "Armed",
+          "up": 7,
+          "allow_change": false
+        },
+        {
+          "name": "Throw",
+          "ticks": 30,
+          "timeout": 8,
+          "script": "onFire",
+          "allow_change": false,
+          "sequence": "thrown",
+          "holder_sequence": "spearThrow"
+        },
+        {
+          "name": "Thrown",
+          "use_up": true
+        }
+      ]
+    }
+  },
+  "projectiles": {
+    "he-grenade:projectile/hegrenade": {
+      "name": "HEGrenadeProjectile",
+      "model": "he-grenade/models/he-grenade-thrown.shape.json",
+      "speed": 30.0,
+      "inherit": 0.0,
+      "gravity": 1.0,
+      "lifetime_ticks": 300,
+      "fade_ticks": 360,
+      "arm_ticks": 300,
+      "ballistic": true,
+      "elasticity": 0.4,
+      "friction": 0.3,
+      "explode_death": true,
+      "damage": 0.0,
+      "impulse": 200.0,
+      "vertical": 200.0,
+      "damage_type": "$DamageType::HEGrenade",
+      "radius_damage_type": "$DamageType::HEGrenade",
+      "explosion": {
+        "effect": "heGrenadeExplosion",
+        "damage": 250.0,
+        "radius": 17.0,
+        "impulse": 4000.0,
+        "impulse_radius": 20.0
+      },
+      "brick": {
+        "radius": 10.0,
+        "direct": false,
+        "force": 25.0,
+        "max_volume": 100.0,
+        "max_floating_volume": 60.0
+      },
+      "bounce_effect": "heGrenadeBounce"
+    }
+  },
+  "damage_types": {
+    "hegrenade": {
+      "name": "HEGrenade",
+      "suicide_message": "%1 held on too long",
+      "murder_message": "%2 blew up %1",
+      "vehicle_scale": 1.0,
+      "direct": false
+    }
+  },
+  "explosions": {
+    "hegrenadeexplosion": {
+      "name": "heGrenadeExplosion",
+      "sound": "vehicleExplosionSound",
+      "shake": {
+        "frequency": [
+          7.0,
+          8.0,
+          7.0
+        ],
+        "amplitude": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "seconds": 0.5,
+        "radius": 15.0,
+        "falloff": 10.0
+      },
+      "shape": "Add-Ons/Weapon_Rocket_Launcher/explosionSphere1.dts",
+      "seconds": 0.15,
+      "play_speed": 1.0,
+      "face_viewer": true,
+      "scale": [
+        1.6,
+        1.6,
+        1.6
+      ],
+      "sizes": []
+    },
+    "hegrenadebounce": {
+      "name": "heGrenadeBounce",
+      "sound": "he-grenade:bounce",
+      "shake": null,
+      "shape": "",
+      "seconds": 0.3,
+      "play_speed": 1.0,
+      "face_viewer": true,
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "sizes": []
+    }
+  },
+  "sounds": {
+    "he-grenade:pin": {
+      "file": "sounds/pin.wav",
+      "volume": 0.7
+    },
+    "he-grenade:bounce": {
+      "file": "sounds/bounce.wav",
+      "volume": 0.8
+    }
+  },
+  "effects": {
+    "particles": [
+      {
+        "id": "he-grenade:particle/fire",
+        "texture": "base/data/particles/cloud",
+        "alpha_blend": false,
+        "lifetime": 0.45,
+        "lifetime_variance": 0.2,
+        "drag": 3.0,
+        "wind": 0.0,
+        "gravity": -0.4,
+        "inherited_velocity": 0.0,
+        "acceleration": 0.0,
+        "spin_degrees": 0.0,
+        "random_spin": [
+          -90.0,
+          90.0
+        ],
+        "keys": [
+          {
+            "time": 0.0,
+            "color": [
+              1.0,
+              0.9,
+              0.5,
+              1.0
+            ],
+            "size": 2.0
+          },
+          {
+            "time": 0.35,
+            "color": [
+              1.0,
+              0.5,
+              0.12,
+              0.7
+            ],
+            "size": 4.5
+          },
+          {
+            "time": 1.0,
+            "color": [
+              0.35,
+              0.1,
+              0.03,
+              0.0
+            ],
+            "size": 6.0
+          }
+        ]
+      },
+      {
+        "id": "he-grenade:particle/smoke",
+        "texture": "base/data/particles/cloud",
+        "alpha_blend": true,
+        "lifetime": 3.0,
+        "lifetime_variance": 1.5,
+        "drag": 1.6,
+        "wind": 0.0,
+        "gravity": -0.15,
+        "inherited_velocity": 0.0,
+        "acceleration": 0.0,
+        "spin_degrees": 0.0,
+        "random_spin": [
+          -40.0,
+          40.0
+        ],
+        "keys": [
+          {
+            "time": 0.0,
+            "color": [
+              0.12,
+              0.12,
+              0.12,
+              0.0
+            ],
+            "size": 2.5
+          },
+          {
+            "time": 0.06,
+            "color": [
+              0.2,
+              0.2,
+              0.19,
+              0.85
+            ],
+            "size": 6.0
+          },
+          {
+            "time": 1.0,
+            "color": [
+              0.42,
+              0.41,
+              0.4,
+              0.0
+            ],
+            "size": 12.0
+          }
+        ]
+      },
+      {
+        "id": "he-grenade:particle/dirt",
+        "texture": "base/data/particles/chunk",
+        "alpha_blend": true,
+        "lifetime": 1.1,
+        "lifetime_variance": 0.5,
+        "drag": 0.1,
+        "wind": 0.0,
+        "gravity": 4.0,
+        "inherited_velocity": 0.0,
+        "acceleration": 0.0,
+        "spin_degrees": 0.0,
+        "random_spin": [
+          -300.0,
+          300.0
+        ],
+        "keys": [
+          {
+            "time": 0.0,
+            "color": [
+              0.13,
+              0.11,
+              0.09,
+              1.0
+            ],
+            "size": 0.45
+          },
+          {
+            "time": 1.0,
+            "color": [
+              0.2,
+              0.18,
+              0.15,
+              0.0
+            ],
+            "size": 0.15
+          }
+        ]
+      },
+      {
+        "id": "he-grenade:particle/dust",
+        "texture": "base/data/particles/cloud",
+        "alpha_blend": true,
+        "lifetime": 0.6,
+        "lifetime_variance": 0.25,
+        "drag": 3.0,
+        "wind": 0.0,
+        "gravity": -0.05,
+        "inherited_velocity": 0.0,
+        "acceleration": 0.0,
+        "spin_degrees": 0.0,
+        "random_spin": [
+          -60.0,
+          60.0
+        ],
+        "keys": [
+          {
+            "time": 0.0,
+            "color": [
+              0.5,
+              0.47,
+              0.42,
+              0.45
+            ],
+            "size": 0.25
+          },
+          {
+            "time": 1.0,
+            "color": [
+              0.6,
+              0.58,
+              0.52,
+              0.0
+            ],
+            "size": 1.0
+          }
+        ]
+      }
+    ],
+    "emitters": [
+      {
+        "id": "he-grenade:emitter/fire",
+        "name": "",
+        "particles": [
+          "he-grenade:particle/fire"
+        ],
+        "period": 0.004,
+        "period_variance": 0.0,
+        "speed": 9.0,
+        "speed_variance": 4.0,
+        "offset": 0.6,
+        "offset_variance": 0.0,
+        "theta_degrees": [
+          0.0,
+          180.0
+        ],
+        "phi_rate_degrees": 0.0,
+        "phi_variance_degrees": 360.0,
+        "lifetime": 0.07,
+        "lifetime_variance": 0.0,
+        "orient": false,
+        "orient_on_velocity": true,
+        "override_advance": false,
+        "use_emitter_colors": false,
+        "use_emitter_sizes": false,
+        "use_placement_velocity": false,
+        "node_time_scale": 1.0,
+        "point_node_time_scale": 1.0
+      },
+      {
+        "id": "he-grenade:emitter/smokering",
+        "name": "",
+        "particles": [
+          "he-grenade:particle/smoke"
+        ],
+        "period": 0.012,
+        "period_variance": 0.0,
+        "speed": 16.0,
+        "speed_variance": 5.0,
+        "offset": 0.0,
+        "offset_variance": 0.0,
+        "theta_degrees": [
+          80.0,
+          90.0
+        ],
+        "phi_rate_degrees": 0.0,
+        "phi_variance_degrees": 360.0,
+        "lifetime": 0.14,
+        "lifetime_variance": 0.0,
+        "orient": false,
+        "orient_on_velocity": true,
+        "override_advance": false,
+        "use_emitter_colors": false,
+        "use_emitter_sizes": false,
+        "use_placement_velocity": false,
+        "node_time_scale": 1.0,
+        "point_node_time_scale": 1.0
+      },
+      {
+        "id": "he-grenade:emitter/smokecolumn",
+        "name": "",
+        "particles": [
+          "he-grenade:particle/smoke"
+        ],
+        "period": 0.025,
+        "period_variance": 0.0,
+        "speed": 6.0,
+        "speed_variance": 2.0,
+        "offset": 0.0,
+        "offset_variance": 0.0,
+        "theta_degrees": [
+          0.0,
+          35.0
+        ],
+        "phi_rate_degrees": 0.0,
+        "phi_variance_degrees": 360.0,
+        "lifetime": 0.2,
+        "lifetime_variance": 0.0,
+        "orient": false,
+        "orient_on_velocity": true,
+        "override_advance": false,
+        "use_emitter_colors": false,
+        "use_emitter_sizes": false,
+        "use_placement_velocity": false,
+        "node_time_scale": 1.0,
+        "point_node_time_scale": 1.0
+      },
+      {
+        "id": "he-grenade:emitter/dirt",
+        "name": "",
+        "particles": [
+          "he-grenade:particle/dirt"
+        ],
+        "period": 0.002,
+        "period_variance": 0.0,
+        "speed": 24.0,
+        "speed_variance": 8.0,
+        "offset": 0.0,
+        "offset_variance": 0.0,
+        "theta_degrees": [
+          0.0,
+          70.0
+        ],
+        "phi_rate_degrees": 0.0,
+        "phi_variance_degrees": 360.0,
+        "lifetime": 0.03,
+        "lifetime_variance": 0.0,
+        "orient": false,
+        "orient_on_velocity": true,
+        "override_advance": false,
+        "use_emitter_colors": false,
+        "use_emitter_sizes": false,
+        "use_placement_velocity": false,
+        "node_time_scale": 1.0,
+        "point_node_time_scale": 1.0
+      },
+      {
+        "id": "he-grenade:emitter/dust",
+        "name": "",
+        "particles": [
+          "he-grenade:particle/dust"
+        ],
+        "period": 0.012,
+        "period_variance": 0.0,
+        "speed": 1.6,
+        "speed_variance": 0.8,
+        "offset": 0.0,
+        "offset_variance": 0.0,
+        "theta_degrees": [
+          20.0,
+          90.0
+        ],
+        "phi_rate_degrees": 0.0,
+        "phi_variance_degrees": 360.0,
+        "lifetime": 0.05,
+        "lifetime_variance": 0.0,
+        "orient": false,
+        "orient_on_velocity": true,
+        "override_advance": false,
+        "use_emitter_colors": false,
+        "use_emitter_sizes": false,
+        "use_placement_velocity": false,
+        "node_time_scale": 1.0,
+        "point_node_time_scale": 1.0
+      }
+    ],
+    "explosions": [
+      {
+        "id": "he-grenade:explosion/heGrenadeExplosion",
+        "lifetime": 0.5,
+        "emitters": [
+          "he-grenade:emitter/fire",
+          "he-grenade:emitter/smokering",
+          "he-grenade:emitter/smokecolumn",
+          "he-grenade:emitter/dirt"
+        ],
+        "burst": [
+          "he-grenade:emitter/smokecolumn",
+          14,
+          1.2
+        ]
+      },
+      {
+        "id": "he-grenade:explosion/heGrenadeBounce",
+        "lifetime": 0.2,
+        "emitters": [
+          "he-grenade:emitter/dust"
+        ]
+      }
+    ]
+  },
+  "definitions": [
+    {
+      "name": "HEGrenadePinDebris",
+      "class": "DebrisData",
+      "parent": null,
+      "source": {
+        "path": "he-grenade/weapons.json",
+        "sha256": "",
+        "line": 0
+      },
+      "fields": {
+        "shapefile": "he-grenade/models/he-grenade-pin.shape.json",
+        "lifetime": "4.0",
+        "minspinspeed": "-400",
+        "maxspinspeed": "200",
+        "elasticity": "0.5",
+        "friction": "0.2",
+        "numbounces": "3",
+        "staticonmaxbounce": "1",
+        "fade": "1",
+        "gravmodifier": "2"
+      }
+    },
+    {
+      "name": "HEGrenadeImage",
+      "class": "ShapeBaseImageData",
+      "parent": null,
+      "source": {
+        "path": "he-grenade/weapons.json",
+        "sha256": "",
+        "line": 0
+      },
+      "fields": {
+        "shellexitdir": "-2.0 1.0 1.0",
+        "shellexitvariance": "15.0",
+        "shellvelocity": "7.0"
+      }
+    }
+  ]
+}

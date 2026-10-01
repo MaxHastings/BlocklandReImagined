@@ -134,3 +134,16 @@ The same modder's second write-up (September 2026), judged the same way:
 | Capping `stateEmitterTime` at 300 s | Left out | v20 does not cap it and the effects runtime already limits live particles. |
 | A sound that is not 3D | Heard by its holder only | A sound with no position has no place for other players to hear it from, so it stays with the player who fired. |
 
+## Image state callbacks as data
+
+v20 weapons scripted three things in their image's state callbacks that
+are plain fields of an image state here, so a melee or thrown weapon needs
+no rule at all (the [Butterfly Knife and HE-Grenade](../../packages/classic/README.md)
+are built this way):
+
+| TorqueScript in a state callback | State field | Notes |
+|---|---|---|
+| `%obj.playThread(2, spearReady)` in `onCharge`, `spearThrow` in `onFire`, `root` in `onStopFire` | `holder_sequence` | The holder's arm animation (thread 2) as the state is entered. Letters, digits and `_`, up to 64; `root` lowers the arm. |
+| A second `ProjectileData` spawned in a callback (`%p = new Projectile() { dataBlock = jabProjectile; ... }`) | `projectile` | The state's `onFire` launches this one instead of the image's `projectile`, from the same muzzle with the same aim, spread and recoil. It must be in the pack (or a merged one); an image whose state projectile nobody provides is dropped like one missing its own. |
+| `%obj.tool[%slot] = 0; serverCmdUnUseTool(%client)` after a throw | `use_up` | Entering the state takes the held item out of the holder's tools and empties the hand. Put it on the state after the one that fires. |
+

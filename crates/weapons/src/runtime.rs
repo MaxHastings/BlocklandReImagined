@@ -1337,6 +1337,9 @@ impl WeaponsWorld {
                         image_hand: Some(e.hand),
                     });
                 }
+                if !state.holder_sequence.is_empty() {
+                    self.animation(id, &state.holder_sequence);
+                }
                 if !state.sound.is_empty() {
                     self.events.push(Event::Sound {
                         source: TargetId::Actor(id),
@@ -1364,7 +1367,16 @@ impl WeaponsWorld {
                         hand: e.hand,
                     });
                 }
-                if !self.callback(id, a, e, &image, &state.script, q) {
+                if !self.callback(id, a, e, &image, state, q)
+                    || state.use_up
+                {
+                    if state.use_up
+                        && let Some(slot) = a.selected
+                        && let Some(tool) = a.inventory.get_mut(slot)
+                    {
+                        *tool = None;
+                        self.unmount(id, a);
+                    }
                     if a.images[e.hand as usize].is_none() {
                         self.events.push(Event::Unmounted {
                             actor: id,
@@ -1417,9 +1429,10 @@ impl WeaponsWorld {
         a: &mut Actor,
         e: &Equipped,
         image: &Image,
-        script: &str,
+        state: &State,
         q: &mut impl Query,
     ) -> bool {
+        let script = state.script.as_str();
         let name = image.name.to_ascii_lowercase();
         // An Add-On tool's own moments run its commands, then carry on.
         if let Some(command) = image.commands.for_script(script)
@@ -1534,7 +1547,8 @@ impl WeaponsWorld {
                     }
                     return false;
                 }
-                let Some(projectile) = &image.projectile else {
+                // A state's own projectile (`State::projectile`) before the image's.
+                let Some(projectile) = state.projectile.as_deref().or(image.projectile.as_deref()) else {
                     return true;
                 };
                 let p = self.pack.projectiles[projectile].clone();

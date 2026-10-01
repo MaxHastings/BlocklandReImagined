@@ -433,6 +433,10 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 emitter_node: f("stateEmitterNode"),
                 emitter_seconds: num(d, &format!("stateEmitterTime[{n}]"), 0.0),
                 eject_shell: flag(d, &format!("stateEjectShell[{n}]"), false),
+                // v20's own images script these by name (`runtime::callback`).
+                holder_sequence: String::new(),
+                projectile: None,
+                use_up: false,
             });
         }
         let p = field(d, "projectile");

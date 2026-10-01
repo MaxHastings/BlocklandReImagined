@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "pose_like": "v20.weapon.gunitem",
+  "look": {
+    "base": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "materials": true
+  }
+}

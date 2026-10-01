@@ -1880,3 +1880,143 @@ mod metal_tests {
         Ok(())
     }
 }
+
+/// The classic weapon Add-Ons' own art (`tools/make_classic_weapons.py`):
+/// their presentation matches their weapons packs, their models load and
+/// animate as the game draws them. Writes `target/classic-weapons.png`, a
+/// sheet of the knife's flip and the grenade's parts, for a look.
+#[cfg(test)]
+mod classic_tests {
+    use super::*;
+    use crate::item_icon_render::{Look, Mesh, Pose as IconPose, render};
+    use glam::Vec2;
+
+    fn assets(name: &str) -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../packages/classic")
+            .join(name)
+            .join("assets")
+            .canonicalize()
+            .unwrap()
+    }
+
+    struct Loaded {
+        part: Presentation,
+        physics: ItemPhysicsCatalog,
+        pack: bri_weapons::Pack,
+        dir: std::path::PathBuf,
+    }
+
+    fn load(name: &str) -> Loaded {
+        let dir = assets(name);
+        let weapons = std::fs::read(dir.join("weapons.json")).unwrap();
+        let pack = bri_weapons::Pack::from_json(&weapons).unwrap();
+        let (part, physics) = read_part(&dir, &weapons, &pack).expect("presentation matches weapons.json");
+        Loaded { part, physics, pack, dir }
+    }
+
+    fn shape(l: &Loaded, key: &str) -> (Shape, Vec<SceneImage>) {
+        let m = &l.part.models[key];
+        let bytes = checked_read(&l.dir, &m.file, &m.sha256, 32 * 1024 * 1024).unwrap();
+        let shape: Shape = serde_json::from_slice(&bytes).unwrap();
+        shape.validate().unwrap();
+        assert_eq!(m.textures.len(), shape.materials.len(), "{key}: a texture per material");
+        let textures = m
+            .textures
+            .iter()
+            .map(|t| {
+                let t = &l.part.textures[t];
+                let bytes = checked_read(&l.dir, &t.file, &t.sha256, 1024 * 1024).unwrap();
+                let rgba = image::load_from_memory(&bytes).unwrap().to_rgba8();
+                assert_eq!(rgba.dimensions(), (t.width, t.height));
+                SceneImage { label: t.file.clone(), width: t.width, height: t.height, rgba: rgba.into_raw(), srgb: false }
+            })
+            .collect();
+        (shape, textures)
+    }
+
+    fn posed(shape: &Shape, textures: &[SceneImage], clip: Option<&str>, seconds: f32) -> Mesh {
+        let animation = clip.map(|name| shape.animations.iter().find(|a| a.name == name).expect(name));
+        let pose = sample(shape, animation, seconds).unwrap();
+        let refs: Vec<&SceneImage> = textures.iter().collect();
+        Mesh::from_scene(&native_shape_scene("m", shape, &refs, [1.; 4], true, Mat4::IDENTITY, &pose).unwrap())
+    }
+
+    fn node_at(shape: &Shape, clip: Option<&str>, seconds: f32, node: &str, local: Vec3) -> Vec3 {
+        let animation = clip.map(|name| shape.animations.iter().find(|a| a.name == name).unwrap());
+        let pose = sample(shape, animation, seconds).unwrap();
+        let i = shape.nodes.iter().position(|n| n.name == node).unwrap();
+        pose.nodes[i].transform_point3(local)
+    }
+
+    #[test]
+    fn the_butterfly_knife_flips_open_and_the_grenade_loses_its_pin() {
+        let knife = load("butterfly-knife");
+        let key = "butterfly-knife/models/butterfly-knife.shape.json";
+        let item = "butterfly-knife:weapon/butterflyknife";
+        assert_eq!(knife.part.items[item].model, key);
+        assert_eq!(knife.physics.items[item], knife.part.models[key].bounds());
+        let (k, kt) = shape(&knife, key);
+        for state in &knife.pack.images["butterfly-knife:image/butterflyknife"].states {
+            assert!(state.sequence.is_empty() || k.animations.iter().any(|a| a.name == state.sequence), "{}", state.name);
+        }
+        // Closed, the blade's tip points down between the handles; open, it
+        // stands above the hand, and both handles hang below the pivot.
+        let tip = Vec3::new(0.0, -0.43, 0.0);
+        assert!(node_at(&k, None, 0.0, "blade", tip).y < -0.2);
+        let open = node_at(&k, Some("ready"), 0.0, "blade", tip);
+        assert!(open.y > 0.55, "open tip {open}");
+        assert!(node_at(&k, Some("activate"), 0.4667, "blade", tip).distance(open) < 1e-3, "activate ends on ready");
+        for handle in ["handleSafe", "handleBite"] {
+            assert!(node_at(&k, Some("ready"), 0.0, handle, Vec3::new(0.0, -0.45, 0.0)).y < -0.2, "{handle}");
+        }
+
+        let grenade = load("he-grenade");
+        let held_key = "he-grenade/models/he-grenade.shape.json";
+        let (g, gt) = shape(&grenade, held_key);
+        let pin = g.objects.iter().position(|o| o.name == "pin").unwrap();
+        let visible = |clip: &str| sample(&g, g.animations.iter().find(|a| a.name == clip), 0.0).unwrap().visibility[pin];
+        assert_eq!((visible("ready"), visible("pinpull")), (1.0, 0.0));
+        let (thrown, tt) = shape(&grenade, "he-grenade/models/he-grenade-thrown.shape.json");
+        assert!(thrown.animations.iter().any(|a| a.name == "activate" && a.looping), "it tumbles in flight");
+        let (pin_shape, pt) = shape(&grenade, "he-grenade/models/he-grenade-pin.shape.json");
+        let casing = &bri_weapons::debris::casings(&grenade.pack)["he-grenade:image/hegrenade"];
+        assert!(grenade.part.models.contains_key(&casing.debris.model), "the pin casing is presented");
+
+        // A sheet: the flip in six steps, then the grenade held, pinless,
+        // thrown and its pin, seen from the holder's right and a little in
+        // front, as in a third-person view.
+        let side = Quat::from_rotation_y(-1.1) * Quat::from_rotation_x(0.25);
+        let frames: Vec<Mesh> = [0.0, 0.08, 0.16, 0.24, 0.32, 0.4667]
+            .into_iter()
+            .map(|t| posed(&k, &kt, Some("activate"), t))
+            .chain([
+                posed(&g, &gt, Some("ready"), 0.0),
+                posed(&g, &gt, Some("pinpull"), 0.0),
+                posed(&thrown, &tt, Some("activate"), 0.15),
+                posed(&pin_shape, &pt, None, 0.0),
+            ])
+            .collect();
+        let (w, h) = (160usize, 160usize);
+        let mut sheet = vec![200u8; w * frames.len() * h * 4];
+        for (k, mesh) in frames.iter().enumerate() {
+            let pose = IconPose { rotation: side, scale: if k < 6 { 120.0 } else { 300.0 }, centre: Vec2::new(80.0, if k < 6 { 95.0 } else { 90.0 }), size: [w as u32, h as u32] };
+            let img = render(mesh, &pose, &Look { base: [1.0; 3], materials: true, skin: None }, "preview");
+            let solid = img.rgba.chunks_exact(4).filter(|p| p[3] > 0).count();
+            assert!(solid > 200, "frame {k} draws ({solid} pixels)");
+            for y in 0..h {
+                for x in 0..w {
+                    let p = &img.rgba[(y * w + x) * 4..][..4];
+                    let a = p[3] as f32 / 255.0;
+                    let o = (y * w * frames.len() + k * w + x) * 4;
+                    for c in 0..3 {
+                        sheet[o + c] = (p[c] as f32 * a + 200.0 * (1.0 - a)).round() as u8;
+                    }
+                    sheet[o + 3] = 255;
+                }
+            }
+        }
+        let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/classic-weapons.png");
+        image::save_buffer(&out, &sheet, (w * frames.len()) as u32, h as u32, image::ColorType::Rgba8).unwrap();
+    }
+}

@@ -399,6 +399,11 @@ base game art. Put `<icon>.render.json` beside it:
             "skin": { "shell": [0.035, 0.025, 0.05], "veins": [0.3, 0.95, 1.0] } } }
 ```
 
+With `"materials": true` in `look`, each part keeps its own material's
+colour (its texture's average) times `base`, so a dark handle stays dark
+beside a steel blade; the [Butterfly Knife](../../packages/classic/butterfly-knife)
+does this.
+
 `pose_like` names a stock item: its model is fitted to its own icon's
 outline to find the angle it was drawn at. Your model is drawn at that
 angle, sized to its own bounds to fill the box the stock drawing fills,
@@ -420,7 +425,22 @@ The fields you are most likely to change:
 | image | `zoom` | `{ "fov": 20, "on_jet": true, "crosshair": false, "first_person": true }`: aim with the zoom key (and the right mouse button with `on_jet`), hide the crosshair, force first person while aiming |
 | image | `eye_offset`, `eye_rotation` | where the weapon sits in first person: exactly there, relative to the camera, as Torque places it, so a scope whose sight is on the eye line stays centred at any zoom |
 | image | `follow_arm` | `true` also moves a first-person `eye_offset` image with the arm's actions (shift, plant, swing), as the base game's brick, hammer and spray cans do; off by default |
+| image state | `holder_sequence` | the holder's arm animation as the state starts (`spearReady` while charging, `spearThrow` or `armattack` on the swing, `root` to lower the arm) |
+| image state | `projectile` | a second attack: this state's `onFire` launches this projectile instead of the image's (a knife's jab beside its stab) |
+| image state | `use_up` | entering the state uses the held item up: it leaves the holder's tools and hand (a thrown grenade) |
 | pack | `sounds` | `{ "your-id:shot": { "file": "sounds/shot.wav", "volume": 0.8 } }`: your own `.wav`/`.ogg` files, named by a state's `sound` and by rules; `local` for sounds only the holder hears, `looping` for a state-long hum |
+
+**Your own models.** An Add-On draws its own models by shipping
+`assets/presentation.json` and `assets/item-physics.json` beside
+`weapons.json` (the format Import Add-On writes): `models` maps each model
+key an item, image, projectile or casing names to a `*.shape.json` file
+and its SHA-256, the textures bound to its materials and its bounds;
+`weapons_sha256` is `weapons.json`'s hash, so the two cannot drift apart.
+A model's sequences animate it as its image states name them (`sequence`),
+an `activate` sequence plays on a projectile in flight (looping when it is
+marked so), and an object's visibility can be animated (a grenade's pin
+that disappears as it is pulled). The classic Add-Ons'
+`tools/make_classic_weapons.py` writes all of it from code.
 
 The engine has no idea of clips, magazines or reloads: a rule builds them
 from a player state key, `set_image_ammo` and image commands (section 3,

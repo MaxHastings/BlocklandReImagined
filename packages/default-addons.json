@@ -32,6 +32,8 @@
       "path": "advanced-duplicator/advanced-duplicator",
       "enabled": false
     },
-    { "id": "blockhead_bot", "path": "blockhead_bot", "enabled": false }
+    { "id": "blockhead_bot", "path": "blockhead_bot", "enabled": false },
+    { "id": "butterfly-knife", "path": "classic/butterfly-knife", "enabled": false },
+    { "id": "he-grenade", "path": "classic/he-grenade", "enabled": false }
   ]
 }

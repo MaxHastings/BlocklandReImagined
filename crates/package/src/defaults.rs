@@ -404,7 +404,9 @@ mod tests {
                 "steel-ball-fx",
                 "advanced-duplicator-tool",
                 "advanced-duplicator",
-                "blockhead_bot"
+                "blockhead_bot",
+                "butterfly-knife",
+                "he-grenade"
             ]
         );
         let mut available: Vec<(String, String)> = PackageSet::base()
@@ -448,20 +450,24 @@ mod tests {
         }
     }
 
-    /// Every showcase Add-On (`packages/showcase`) either ships, listed
-    /// turned off for players to turn on, or is held back on purpose: one
-    /// meant to ship cannot be left out of the releases, which package
-    /// exactly this list.
+    /// Every showcase and classic Add-On (`packages/showcase`,
+    /// `packages/classic`) either ships, listed turned off for players to
+    /// turn on, or is held back on purpose: one meant to ship cannot be
+    /// left out of the releases, which package exactly this list.
     #[test]
     fn every_showcase_add_on_ships_turned_off_or_is_held_back() {
         const HELD_BACK: [&str; 0] = [];
-        let mut found: Vec<(String, String)> = std::fs::read_dir(repo_packages().join("showcase"))
-            .unwrap()
-            .map(|e| e.unwrap().path())
-            .filter(|dir| dir.join(MANIFEST_FILE).is_file())
-            .map(|dir| {
+        let mut found: Vec<(String, String)> = ["showcase", "classic"]
+            .into_iter()
+            .flat_map(|group| {
+                std::fs::read_dir(repo_packages().join(group))
+                    .unwrap()
+                    .map(move |e| (group, e.unwrap().path()))
+            })
+            .filter(|(_, dir)| dir.join(MANIFEST_FILE).is_file())
+            .map(|(group, dir)| {
                 let id = read_info(&dir.join(MANIFEST_FILE)).unwrap().id;
-                (id, dir.file_name().unwrap().to_string_lossy().into_owned())
+                (id, format!("{group}/{}", dir.file_name().unwrap().to_string_lossy()))
             })
             .collect();
         found.sort();
@@ -474,7 +480,7 @@ mod tests {
                         "{id} is both listed and held back"
                     );
                     assert!(!addon.enabled, "showcase Add-On {id} must ship turned off");
-                    assert_eq!(addon.path, format!("showcase/{folder}"));
+                    assert_eq!(&addon.path, folder);
                 }
                 None => assert!(
                     HELD_BACK.contains(&id.as_str()),
@@ -505,7 +511,9 @@ mod tests {
                 "steel-ball-fx",
                 "advanced-duplicator-tool",
                 "advanced-duplicator",
-                "blockhead_bot"
+                "blockhead_bot",
+                "butterfly-knife",
+                "he-grenade"
             ]
         );
         assert!(done.listed.is_empty());
@@ -548,6 +556,8 @@ mod tests {
             "gravity-gun",
             "gravity-gun-fx",
             "blockhead_bot",
+            "butterfly-knife",
+            "he-grenade",
         ] {
             let entry = library.get(id).unwrap();
             assert!(entry.problems.is_empty(), "{id}: {:?}", entry.problems);

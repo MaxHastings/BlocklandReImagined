@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "items": {
+    "butterfly-knife:weapon/butterflyknife": {
+      "min": [
+        -0.029,
+        -0.312,
+        -0.038
+      ],
+      "max": [
+        0.029,
+        0.2,
+        0.038
+      ]
+    }
+  }
+}

@@ -8247,3 +8247,46 @@ More tests:
 Render: `/mnt/project-files/steel-ball/steel-ball-v2.png`. Max's in-game
 check is a Steel Ball near bricks at Mirrors Medium, in Unified+Shine and
 in Dynamic.
+
+## 2026-10-01 Classic Add-Ons: Butterfly Knife and HE-Grenade (for v0.1.11, branch `claude/butterfly-knife-q2j2lu`)
+
+Max asked for the Butterfly Knife and the HE-Grenade from his Steam
+Blockland as bundled Add-Ons, installed but off. His knife is
+Stratofortress's `Weapon_ButterflyKnife` (RTB 1707), not Space Guy's
+"TF2 Butterfly Knife" he linked (RTB 327, a different model with instant
+backstabs); his grenade is `Weapon_HEGrenade` by TheGeek, Pload, Rotondo
+and Ephialtes. Both were read on his PC, read-only, into
+`.research/butterfly-knife` (never committed).
+
+How the originals play, and ours:
+- Knife: `activate` flips it open over the 0.5 s Activate state; a click
+  shorter than 0.7 s jabs (30 damage), holding past 0.7 s and letting go
+  stabs (100); both are 50 u/s projectiles living 0.1 s that hit with the
+  stock `swordExplosion`. The original's `backstab` field did nothing, so
+  ours has no backstab. Two deliberate differences: the original's jab arm
+  swing (`armattack`) was lost to a second `onFiretwo` definition and its
+  fire sound was never defined; ours swings and swishes.
+- Grenade: first click pulls the pin (a casing that flies off), then
+  charge 0.7 s and release to throw at 30 u/s, ballistic, elasticity 0.4;
+  2.5 s fuse from the throw; 250 damage within 17, impulse 4000 within 20;
+  bricks within 10 (force 25, volume 100, floating 60). The thrown grenade
+  is used up. Explosion: the stock `vehicleExplosionSound` and the Rocket
+  Launcher's fireball by reference, with our own smoke, fire and dirt.
+
+Engine seams (general, documented in docs/modding, tested in
+`crates/weapons/tests/state_attacks.rs`): image state `holder_sequence`
+(the holder's thread-2 animation), state `projectile` (a second attack's
+projectile; merge drops an image whose state projectile is missing) and
+state `use_up` (a thrown item leaves the tools). Item icons drawn from a
+model can keep each material's colour (`look.materials`). No protocol
+change: packs travel as files and the events already existed.
+
+Art: `tools/make_classic_weapons.py` writes the models (balisong with a
+blade, two handles on their own pins, rivets and latch; segmented grenade
+with fuze, spoon, pin and ring; tumbling thrown grenade; the pin casing),
+flat-colour textures and synthesized sounds. `target/classic-weapons.png`
+from `cargo test -p bri-client --lib classic_tests` shows the flip.
+
+Only-Max: feel check of the flip, jab/stab reach and the grenade's throw
+and blast; icons (drawn at the Sword's and Gun's angles) need the gate's
+content run to see.
