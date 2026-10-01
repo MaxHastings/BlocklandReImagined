@@ -39,7 +39,9 @@ pub(super) struct Vehicles {
     centres: BTreeMap<VehicleId, Vec3>,
     by_brick: BTreeMap<BrickId, VehicleId>,
     brick_of: BTreeMap<VehicleId, BrickId>,
-    colors: BTreeMap<VehicleId, Option<u8>>,
+    /// Each vehicle's colour (`%vehicle.color`), red, green, blue and
+    /// alpha; `None` draws it as its model is.
+    pub(super) colors: BTreeMap<VehicleId, Option<[f32; 4]>>,
     next_id: u64,
     mounted: BTreeMap<OwnerId, Mount>,
     last_dismount: BTreeMap<OwnerId, u64>,
@@ -126,8 +128,9 @@ pub const DEFAULT_STEERING: (bool, bool) = (false, false);
 pub struct VehicleInfo {
     pub id: u64,
     pub definition: String,
-    /// Palette index when the spawn brick recolors the vehicle.
-    pub color: Option<u8>,
+    /// Its colour, red, green, blue and alpha (`%vehicle.color`): its
+    /// spawn brick's when the brick recolours it, or what painted it.
+    pub color: Option<[f32; 4]>,
     pub occupants: Vec<Option<OwnerId>>,
     pub destroyed: bool,
     /// The spawn's uniform scale: a driving client predicts the vehicle at it.
@@ -581,7 +584,8 @@ impl Session {
         self.tag_vehicle(id);
         self.vehicles.by_brick.insert(brick_id, id);
         self.vehicles.brick_of.insert(id, brick_id);
-        self.vehicles.colors.insert(id, spawn_color(&brick));
+        let color = spawn_color(&brick, &self.simulation.state().palette);
+        self.vehicles.colors.insert(id, color);
         Ok(())
     }
     /// Whether `owner` may have one more vehicle of `definition`, or the
@@ -673,6 +677,21 @@ impl Session {
         }
         self.forget_vehicle(id);
         Ok(())
+    }
+    /// The players riding `vehicle` (`getMountedObject`).
+    pub(super) fn vehicle_riders(&self, vehicle: u64) -> impl Iterator<Item = OwnerId> + use<> {
+        let riders: Vec<OwnerId> = self
+            .vehicles
+            .mounted
+            .iter()
+            .filter(|(_, m)| m.vehicle == VehicleId(vehicle))
+            .map(|(owner, _)| *owner)
+            .collect();
+        riders.into_iter()
+    }
+    /// The brick that spawned `vehicle` (`%vehicle.spawnBrick`), if one did.
+    pub(super) fn vehicle_spawn_brick(&self, vehicle: VehicleId) -> Option<BrickId> {
+        self.vehicles.brick_of.get(&vehicle).copied()
     }
     fn forget_vehicle(&mut self, id: VehicleId) {
         if let Some(brick) = self.vehicles.brick_of.remove(&id)
@@ -1362,7 +1381,8 @@ impl Session {
                 // `setNodeColor("LSki"/"RSki", getColorIDTable(%client.currentColor))`:
                 // the skis take the skier's paint colour; the ski vehicle
                 // itself is invisible, so its colour carries it.
-                self.vehicles.colors.insert(id, Some(paint));
+                let color = self.simulation.state().palette.get(usize::from(paint));
+                self.vehicles.colors.insert(id, color.copied());
                 let due = self.simulation.state().tick + u64::from(after_ticks);
                 self.vehicles.pending_skis.push((owner, id, due));
             }
@@ -1957,10 +1977,13 @@ impl Session {
     }
 }
 
-fn spawn_color(brick: &Brick) -> Option<u8> {
+/// `fxDTSBrick::colorVehicle`: a brick that recolours its vehicle gives
+/// it the brick's colour, opaque.
+fn spawn_color(brick: &Brick, palette: &[[f32; 4]]) -> Option<[f32; 4]> {
     brick
         .vehicle
         .as_ref()
         .filter(|v| v.recolor)
-        .map(|_| brick.color)
+        .and_then(|_| palette.get(usize::from(brick.color)))
+        .map(|&[r, g, b, _]| [r, g, b, 1.0])
 }

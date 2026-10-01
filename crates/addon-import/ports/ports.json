@@ -374,6 +374,85 @@
       ]
     },
     {
+      "addon": "Tool_Fill_Can",
+      "title": "Fill can",
+      "port": "tool_fill_can",
+      "status": "verified",
+      "sha256": [
+        "d40fc7127fe87da3b5027baf37a928fd1f575970d9e55eab1ebf89f5ed198ef8"
+      ],
+      "covers": {
+        "paintfill": {
+          "admin_limit": "%limit\\s*=\\s*(\\d+)\\s*;",
+          "reach_side": "%sizex\\s*\\*\\s*0\\.5\\s*\\+\\s*([0-9]*\\.?[0-9]+)\\s*\\)",
+          "reach_up": "%sizez\\s*\\*\\s*0\\.2\\s*\\+\\s*([0-9]*\\.?[0-9]+)\\s*\\)",
+          "limit_seconds": "reached fill can brick limit \\(\\\"\\s*@\\s*\\$pref::server::fillcan_maxbricks\\s*@\\s*\\\"\\)\\\"\\s*,\\s*([0-9]*\\.?[0-9]+)",
+          "paints_colour": "%obj\\.setcolor\\s*\\(\\s*%newcolor\\s*\\)",
+          "full_trust": "gettrustlevel\\s*\\(\\s*%client\\s*,\\s*%target\\s*\\)\\s*>=\\s*2",
+          "same_colour": "%target\\.getcolorid\\s*\\(\\s*\\)\\s*==\\s*%oldcolor",
+          "box_search": "initcontainerboxsearch\\s*\\(\\s*%obj\\.getposition\\s*\\(\\s*\\)\\s*,\\s*%box\\s*,\\s*\\$typemasks::fxbrickobjecttype\\s*\\)",
+          "stops_at_limit": "if\\s*\\(\\s*%fillcount\\s*>=\\s*%limit\\s*\\)\\s*\\{[^}]*break\\s*;",
+          "undo_step": "undostack\\.push\\s*\\(\\s*%list\\s+tab\\s+\\\"fillpaint\\\"\\s*\\)",
+          "limit_error": "messageclient\\s*\\(\\s*%client\\s*,\\s*'msgplanterror_limit'\\s*\\)"
+        },
+        "paintFXfill": {
+          "paints_colour_fx": "%obj\\.setcolorfx\\s*\\(\\s*%newfx\\s*\\)",
+          "full_trust": "gettrustlevel\\s*\\(\\s*%client\\s*,\\s*%target\\s*\\)\\s*>=\\s*2",
+          "same_colour": "%target\\.getcolorid\\s*\\(\\s*\\)\\s*==\\s*%oldcolor",
+          "box_search": "initcontainerboxsearch\\s*\\(\\s*%obj\\.getposition\\s*\\(\\s*\\)\\s*,\\s*%box\\s*,\\s*\\$typemasks::fxbrickobjecttype\\s*\\)",
+          "stops_at_limit": "if\\s*\\(\\s*%fillcount\\s*>=\\s*%limit\\s*\\)\\s*\\{[^}]*break\\s*;"
+        },
+        "shapeFXfill": {
+          "paints_shape_fx": "%obj\\.setshapefx\\s*\\(\\s*%newfx\\s*\\)",
+          "full_trust": "gettrustlevel\\s*\\(\\s*%client\\s*,\\s*%target\\s*\\)\\s*>=\\s*2",
+          "same_colour": "%target\\.getcolorid\\s*\\(\\s*\\)\\s*==\\s*%oldcolor",
+          "box_search": "initcontainerboxsearch\\s*\\(\\s*%obj\\.getposition\\s*\\(\\s*\\)\\s*,\\s*%box\\s*,\\s*\\$typemasks::fxbrickobjecttype\\s*\\)",
+          "stops_at_limit": "if\\s*\\(\\s*%fillcount\\s*>=\\s*%limit\\s*\\)\\s*\\{[^}]*break\\s*;"
+        },
+        "fillcanprojectile::oncollision": {
+          "vehicle_trust": "gettrustlevel\\s*\\(\\s*%client\\s*,\\s*%col\\.spawnbrick\\s*\\)\\s*>=\\s*2",
+          "refusal_seconds": "%name\\s*@\\s*\\\"\\s*does not trust you enough to do that\\.\\\"\\s*,\\s*([0-9]*\\.?[0-9]+)",
+          "player_ms": "%col\\.settempcolor\\s*\\(\\s*%color\\s*,\\s*(\\d+)\\s*\\)",
+          "face_ms": "faceresetsched\\s*=\\s*schedule\\s*\\(\\s*(\\d+)\\s*,",
+          "visor_alpha": "getwords\\s*\\(\\s*%col\\.client\\.accentcolor\\s*,\\s*0\\s*,\\s*2\\s*\\)\\s*spc\\s*\\\"([0-9]*\\.?[0-9]+)\\\"",
+          "riders_ms": "getmountedobject\\s*\\(\\s*%x\\s*\\)\\.settempcolor\\s*\\(\\s*%col\\.color\\s*,\\s*(\\d+)\\s*\\)",
+          "random_colour": "getrandom\\s*\\(\\s*0\\s*,\\s*100\\s*\\)\\s*/\\s*100",
+          "recolors_brick": "%col\\.spawnbrick\\.setcolor\\s*\\(\\s*%client\\.currentcolor\\s*\\)"
+        },
+        "resetface": {
+          "own_face": "setfacename\\s*\\(\\s*%obj\\.client\\.facename\\s*\\)"
+        },
+        "servercmdfillcan": {
+          "disabled_seconds": "\\\"\\\\c5painting is currently disabled\\.\\\"\\s*,\\s*([0-9]*\\.?[0-9]+)",
+          "mounts": "mountimage\\s*\\(\\s*fillcanimage\\s*,\\s*0\\s*\\)"
+        },
+        "servercmdundobrick": {
+          "undoes_fill": "getfield\\s*\\(\\s*%str\\s*,\\s*1\\s*\\)\\s*\\$=\\s*\\\"fillpaint\\\"",
+          "only_unchanged": "getcolorid\\s*\\(\\s*\\)\\s*==\\s*%list\\.newcolor"
+        },
+        "servercmdusefxcan": {
+          "remounts": "mountimage\\s*\\(\\s*fillcanimage\\s*,\\s*0\\s*\\)",
+          "remembers": "currentfxcan\\s*=\\s*%can\\s*\\+\\s*1"
+        },
+        "servercmdusespraycan": {
+          "remounts": "mountimage\\s*\\(\\s*fillcanimage\\s*,\\s*0\\s*\\)",
+          "forgets": "currentfxcan\\s*=\\s*0\\s*;"
+        },
+        "gameconnection::onclientleavegame": {
+          "frees_fills": "\\\"fillpaint\\\"\\s*\\)\\s*getword\\s*\\(\\s*%t\\s*,\\s*0\\s*\\)\\.delete"
+        },
+        "round": {
+          "rounds": "%a\\s*\\+=\\s*0\\.5"
+        }
+      },
+      "tests": [
+        "tool_fill_can/checks.json",
+        "crates/addon-import/tests/ports.rs fill_can_port_rules_fill_what_v20_filled",
+        "crates/sim/tests/fill_can.rs with_reach_a_fill_finds_what_v20s_box_search_found_and_can_stop_at_its_limit",
+        "crates/sim/tests/fill_can.rs a_vehicle_is_painted_through_its_recolouring_brick_or_alone_and_undone"
+      ]
+    },
+    {
       "addon": "Weapon_Package_Tier1",
       "title": "Tier+Tactical Tier 1 (Kai)",
       "port": "weapon_package_tier1",

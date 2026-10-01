@@ -636,6 +636,7 @@ mod tests {
                     last_shot: None,
                     state_shots: Default::default(),
                     cook: None,
+                    paint_picker: false,
                     scripts: Default::default(),
                 },
             );

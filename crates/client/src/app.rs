@@ -2607,10 +2607,7 @@ impl App {
                 continue;
             };
             let mut appearance = avatar_assets.package.defaults.clone();
-            let color = info
-                .color
-                .and_then(|c| view.world.palette.get(usize::from(c)))
-                .map_or([1.0; 4], |c| [c[0], c[1], c[2], 1.0]);
+            let color = info.color.map_or([1.0; 4], |[r, g, b, _]| [r, g, b, 1.0]);
             appearance.colors.insert("chest".into(), color);
             if mount_meshes
                 .get(&info.id)
@@ -4026,18 +4023,8 @@ impl App {
         });
         let result = match plant_failure {
             Some(failure) => {
-                use bri_sim::simulation::PlantFailure as F;
-                let icon = match failure {
-                    F::Overlap => PlantError::Overlap,
-                    F::Float => PlantError::Float,
-                    F::Buried => PlantError::Buried,
-                    F::Stuck => PlantError::Stuck,
-                    F::TooFar => PlantError::TooFar,
-                    F::Forbidden => PlantError::Forbidden,
-                    F::Limit => PlantError::Limit,
-                };
                 self.ui
-                    .apply_session(attempt.id, UiUpdate::PlantError(icon));
+                    .apply_session(attempt.id, UiUpdate::PlantError(plant_error(failure)));
                 Ok(())
             }
             None => result,
@@ -4524,6 +4511,9 @@ impl App {
                         bri_sim::session::Notice::Fov(fov) => {
                             self.controls.set_server_fov(fov);
                             continue;
+                        }
+                        bri_sim::session::Notice::PlantError(failure) => {
+                            UiUpdate::PlantError(plant_error(failure))
                         }
                         bri_sim::session::Notice::Invite {
                             game,
@@ -5603,6 +5593,21 @@ fn linked_chat(text: &str, resume: char) -> String {
 }
 /// Player-typed text is shown literally: no ML tags, colour codes or control
 /// characters (v20's server strips ML control characters from chat).
+/// The plant-error icon for why a plant, or an Add-On's
+/// `MsgPlantError_…`, was refused.
+fn plant_error(failure: bri_sim::simulation::PlantFailure) -> PlantError {
+    use bri_sim::simulation::PlantFailure as F;
+    match failure {
+        F::Overlap => PlantError::Overlap,
+        F::Float => PlantError::Float,
+        F::Buried => PlantError::Buried,
+        F::Stuck => PlantError::Stuck,
+        F::TooFar => PlantError::TooFar,
+        F::Forbidden => PlantError::Forbidden,
+        F::Limit => PlantError::Limit,
+    }
+}
+
 fn plain_chat(text: &str) -> String {
     text.chars()
         .filter(|c| !c.is_control() && !(0xE000..0xE010).contains(&(*c as u32)))
@@ -6746,11 +6751,8 @@ impl PlatformApp for App {
                     );
                 }
                 self.vehicles.set_passages(&self.motion.passages());
-                self.vehicles.prepare(
-                    &mut self.vehicle_assets,
-                    &view.vehicles,
-                    &view.world.palette,
-                );
+                self.vehicles
+                    .prepare(&mut self.vehicle_assets, &view.vehicles);
                 // Add-On casings, and debris that is not a vehicle's model,
                 // draw as loose item models.
                 let mut loose: Vec<_> = self.weapon_shells.model_instances().collect();
@@ -7133,9 +7135,8 @@ impl PlatformApp for App {
                     })
                     .map(|info| {
                         info.color
-                            .and_then(|c| view.world.palette.get(usize::from(c)))
-                            .or_else(|| view.world.palette.first())
-                            .map_or([1.0; 4], |c| [c[0], c[1], c[2], c[3]])
+                            .or_else(|| view.world.palette.first().copied())
+                            .unwrap_or([1.0; 4])
                     });
                 self.avatars.get_mut(owner).unwrap().set_skis(skis);
                 let dead = life.is_some_and(|life| life.dead);

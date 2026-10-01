@@ -93,6 +93,12 @@ operation that needs a capability.
 | `ItemData::onPickup` | `on_pickup(p, item, info)`: answer `false` to leave it, `"take"` to use it up |
 | `ItemData::onDrop`, dynamic fields on the dropped `Item` | `on_drop(p, item, slot)`: the value it returns rides the drop to whoever picks it up |
 | `ProjectileData::onCollision` | `on_projectile_hit(hit)` |
+| A flood fill over `InitContainerBoxSearch` with `setColor`, `setColorFX` or `setShapeFX`, pushed as one undo | `paint_fill(p, brick, paint, #{ limit, reach, stop_at_limit })` |
+| `Player::SetTempColor(%color, %ms)` with no position; `setFaceName` with a reset `schedule` | `temp_look(p, #{ color \| paint, face, alpha }, seconds)` |
+| `%vehicle.color = …; %vehicle.spawnBrick.colorVehicle()`, its `COLORGENERIC` undo, and `setTempColor` on its mounted riders | `paint_vehicle(p, vehicle, #{ color \| rgb }, #{ riders_seconds })` |
+| `messageClient(%client, 'MsgPlantError_Limit')` when a fill stops at its limit | `paint_fill`'s `limit_error: true` |
+| `serverCmdUseSprayCan` / `serverCmdUseFXCan` packaged to remount a tool, `%client.currentFXcan` | The image's `paint_picker`; `player(p).fx_can` |
+| `%client.minigame.enablePainting` | `player(p).may_paint` |
 | `Player::activateStuff` packaged (an empty-hand click) | `on_activate(p)`: answer `true` to take the click |
 
 ## Not here yet

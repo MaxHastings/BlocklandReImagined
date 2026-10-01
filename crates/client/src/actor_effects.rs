@@ -1396,6 +1396,7 @@ fn teleport_image() -> bri_weapons::Image {
         last_shot: None,
         state_shots: Default::default(),
         cook: None,
+        paint_picker: false,
         scripts: Default::default(),
     }
 }

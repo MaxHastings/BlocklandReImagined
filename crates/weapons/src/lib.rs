@@ -456,6 +456,12 @@ pub struct Image {
     /// A grenade cooked in the hand ([`Cook`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cook: Option<Cook>,
+    /// Picking a colour or FX can with this image in hand remembers the
+    /// pick and puts this image back in hand (v20 Add-Ons packaged
+    /// `serverCmdUseSprayCan` and `serverCmdUseFXCan` to remount theirs):
+    /// a tool that paints with the picked can stays out.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub paint_picker: bool,
     /// What the image's own state scripts do, by script name in lower case
     /// (`oncharge`, `onfire`, `onfiretwo`): entering a state whose `script`
     /// is listed does this instead of the game's built-in handling of that

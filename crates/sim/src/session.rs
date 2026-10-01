@@ -53,7 +53,7 @@ mod blueprints;
 mod movables;
 mod packages;
 mod paint_fill;
-pub use paint_fill::Fill;
+pub use paint_fill::{Fill, FillRules};
 mod script_world;
 mod spray;
 mod tools;
@@ -172,7 +172,7 @@ pub const EMOTES: [&str; 7] = ["alarm", "bsd", "confusion", "hate", "hug", "love
 /// (`%player.getEyePoint()`).
 const V20_EYE_NODE: f32 = 2.156;
 pub use map_lights::{MAX_MAP_LIGHT_RULES, MapLightRule};
-pub use tools::{InspectMode, ToolAction, ToolCatalog};
+pub use tools::{FX_CAN_IMAGES, InspectMode, SPRAY_CAN_IMAGE, ToolAction, ToolCatalog};
 pub use trust::{MAX_TRUST_LIST, PlayerTrust, TrustEntry, TrustLevel};
 pub use undo::UNDO_QUEUE_SIZE;
 
@@ -621,12 +621,17 @@ struct Peer {
     avatar: Option<bri_content::avatar::Appearance>,
     /// `SetTempColor` spray paint over the avatar's own colours.
     temp_color: Option<spray::TempColor>,
+    /// What Add-On rules put over the avatar for a while (`temp_look`).
+    temp_look: Option<spray::TempLook>,
     /// Colours an Add-On puts over the avatar's own (`set_avatar_colors`):
     /// a team's uniform. Spray paint and burns still show over it.
     uniform: BTreeMap<String, [f32; 4]>,
     /// `%client.currentColor`: the palette index of the last colour spray
     /// can picked (index 0 until one is).
     current_color: u8,
+    /// The FX can (`serverCmdUseFXCan`'s index) picked after that colour,
+    /// or `None` when a colour can was picked last.
+    fx_can: Option<u8>,
     combat: combat::Combat,
     special: special::Progress,
     control: ControlObject,
@@ -894,6 +899,9 @@ impl Session {
                 for (slot, color) in &p.uniform {
                     avatar.colors.insert(slot.clone(), *color);
                 }
+                if let Some(look) = &p.temp_look {
+                    look.apply(&mut avatar);
+                }
                 if let Some(temp) = &p.temp_color {
                     temp.apply(&mut avatar);
                 }
@@ -1153,8 +1161,10 @@ impl Session {
                 last_drop_tick: None,
                 tutorial: Default::default(),
                 temp_color: None,
+                temp_look: None,
                 uniform: BTreeMap::new(),
                 current_color: 0,
+                fx_can: None,
                 talking: false,
                 sitting: false,
                 ghost: None,
@@ -1373,8 +1383,10 @@ impl Session {
                 last_drop_tick: None,
                 tutorial: Default::default(),
                 temp_color: None,
+                temp_look: None,
                 uniform: BTreeMap::new(),
                 current_color: 0,
+                fx_can: None,
                 talking: false,
                 sitting: false,
                 ghost: None,

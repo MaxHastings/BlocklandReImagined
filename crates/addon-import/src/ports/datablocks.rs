@@ -689,7 +689,8 @@ fn value_of(text: &str) -> Value {
 }
 
 /// The view kick of the projectile `name`'s explosion (a recoil blast):
-/// its camera shake, the largest of its amplitudes and frequencies, and
+/// its camera shake, the largest of its amplitudes, the mean of its
+/// frequencies, and
 /// its radius, within which other players feel it too. None when it does
 /// not shake.
 pub(super) fn kick(weapons: &Value, name: &str) -> Option<Value> {
@@ -708,13 +709,19 @@ pub(super) fn kick(weapons: &Value, name: &str) -> Option<Value> {
             .reduce(f64::max)
     };
     let amplitude = most("amplitude")?;
+    let frequency: Vec<f64> = shake["frequency"]
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_f64)
+        .collect();
     let seconds = shake["seconds"].as_f64()?;
-    if amplitude <= 0.0 || seconds <= 0.0 {
+    if amplitude <= 0.0 || frequency.is_empty() || seconds <= 0.0 {
         return None;
     }
+    let frequency = frequency.iter().sum::<f64>() / frequency.len() as f64;
     Some(json!({
         "amplitude": amplitude.min(1.0),
-        "frequency": most("frequency")?.clamp(0.1, 30.0),
+        "frequency": frequency.clamp(0.1, 30.0),
         "seconds": seconds.clamp(0.05, 2.0),
         "radius": shake["radius"].as_f64().unwrap_or(0.0).clamp(0.0, 100.0),
     }))

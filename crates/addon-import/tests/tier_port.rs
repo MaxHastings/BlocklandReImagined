@@ -715,7 +715,7 @@ fn tier1a_shotgun_knocks_back_and_the_nailgun_stays_hidden() {
     let kick = shot.kick.unwrap();
     assert_eq!(
         (kick.amplitude, kick.frequency, kick.seconds, kick.radius),
-        (0.4, 4.0, 0.4, 10.0),
+        (0.4, 3.0, 0.4, 10.0),
         "Tier 1's recoil projectile's shake, felt within its radius"
     );
     assert_eq!(single.volleys.len(), 1);

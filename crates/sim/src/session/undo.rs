@@ -23,6 +23,10 @@ pub(super) enum UndoEntry {
     Cut(Vec<(BrickId, Brick)>),
     /// Bricks painted together (`paint_copy`), with the colour each had.
     Colors(Vec<(BrickId, u8)>),
+    /// `FILLPAINT`, from `paint_fill`: what it painted, and each brick with
+    /// the colour or effect it had. Undo puts back only bricks still as
+    /// the fill left them.
+    Fill(bri_package_runtime::ops::FillPaint, Vec<(BrickId, u8)>),
     /// `COLOR`, from the colour spray cans.
     Color(BrickId, u8),
     /// `COLORFX`, from the colour FX cans.
@@ -31,12 +35,24 @@ pub(super) enum UndoEntry {
     ShapeEffect(BrickId, u8),
     /// `PRINT`, from `serverCmdSetPrint`.
     Print(BrickId, Option<ContentRef>),
+    /// `COLORGENERIC`, from `paint_vehicle`: the colour a vehicle took and
+    /// the one it had, with its spawn brick's palette colour, from and to,
+    /// when that was painted too. Undo puts back only what is still as the
+    /// paint left it.
+    Vehicle {
+        vehicle: bri_vehicles::VehicleId,
+        color: [f32; 4],
+        before: Option<[f32; 4]>,
+        brick: Option<(BrickId, u8, u8)>,
+    },
 }
 impl UndoEntry {
     fn brick(&self) -> BrickId {
         match *self {
             Self::Group(ref ids) => ids[0],
-            Self::Cut(_) | Self::Colors(_) => unreachable!("undone as a whole"),
+            Self::Cut(_) | Self::Colors(_) | Self::Fill(..) | Self::Vehicle { .. } => {
+                unreachable!("undone as a whole")
+            }
             Self::Plant(id)
             | Self::Color(id, _)
             | Self::ColorEffect(id, _)
@@ -58,7 +74,14 @@ impl UndoEntry {
             | Self::Print(id, _) => follow(id),
             Self::Group(ids) => ids.iter_mut().for_each(follow),
             Self::Cut(bricks) => bricks.iter_mut().for_each(|(id, _)| follow(id)),
-            Self::Colors(colors) => colors.iter_mut().for_each(|(id, _)| follow(id)),
+            Self::Colors(colors) | Self::Fill(_, colors) => {
+                colors.iter_mut().for_each(|(id, _)| follow(id))
+            }
+            Self::Vehicle { brick, .. } => {
+                if let Some((id, ..)) = brick {
+                    follow(id)
+                }
+            }
         }
     }
 }
@@ -94,6 +117,13 @@ impl Session {
             UndoEntry::Group(ids) => return self.undo_group(owner, ids),
             UndoEntry::Cut(bricks) => return self.undo_cut(owner, bricks),
             UndoEntry::Colors(colors) => return self.undo_colors(owner, colors),
+            UndoEntry::Fill(paint, bricks) => return self.undo_fill(owner, paint, bricks),
+            UndoEntry::Vehicle {
+                vehicle,
+                color,
+                before,
+                brick,
+            } => return self.undo_vehicle_paint(owner, vehicle, color, before, brick),
             _ => {}
         }
         let id = entry.brick();
@@ -109,7 +139,11 @@ impl Session {
             .actor
             .clone();
         let edit = match entry {
-            UndoEntry::Group(_) | UndoEntry::Cut(_) | UndoEntry::Colors(_) => {
+            UndoEntry::Group(_)
+            | UndoEntry::Cut(_)
+            | UndoEntry::Colors(_)
+            | UndoEntry::Fill(..)
+            | UndoEntry::Vehicle { .. } => {
                 unreachable!("undone above")
             }
             UndoEntry::Plant(_) => {
@@ -249,6 +283,71 @@ impl Session {
 
     /// Undo painting a copy's bricks: each still standing that the undoer
     /// may paint takes its old colour back.
+    /// The Fill Can's `serverCmdUndoBrick`: last painted first, each brick
+    /// still as the fill left it goes back, whoever's it is now.
+    fn undo_fill(
+        &mut self,
+        owner: OwnerId,
+        paint: bri_package_runtime::ops::FillPaint,
+        bricks: Vec<(BrickId, u8)>,
+    ) -> Result<Reply> {
+        use bri_package_runtime::ops::FillPaint as P;
+        let tick = self.simulation.state().tick;
+        self.play_thread(tick, owner, 3, "undo");
+        let mut first = None;
+        for (id, old) in bricks.into_iter().rev() {
+            let Some(brick) = self.simulation.state().bricks.get(&id) else {
+                continue;
+            };
+            let still = match paint {
+                P::Color(c) => brick.color == c,
+                P::ColorEffect(fx) => brick.color_effect == fx,
+                P::ShapeEffect(fx) => brick.shape_effect == fx,
+            };
+            if !still {
+                continue;
+            }
+            self.simulation.mutate(id, |b| match paint {
+                P::Color(_) => b.color = old,
+                P::ColorEffect(_) => b.color_effect = old,
+                P::ShapeEffect(_) => b.shape_effect = old,
+            })?;
+            self.dirty.insert(id);
+            first = Some(id);
+        }
+        Ok(Reply::Undone(first))
+    }
+
+    /// Undo a `paint_vehicle`: the vehicle's colour, if it still has the
+    /// one it was painted, and its spawn brick's, if that was painted too
+    /// and has not changed since.
+    fn undo_vehicle_paint(
+        &mut self,
+        owner: OwnerId,
+        vehicle: bri_vehicles::VehicleId,
+        color: [f32; 4],
+        before: Option<[f32; 4]>,
+        brick: Option<(BrickId, u8, u8)>,
+    ) -> Result<Reply> {
+        let tick = self.simulation.state().tick;
+        self.play_thread(tick, owner, 3, "undo");
+        if let Some(c) = self.vehicles.colors.get_mut(&vehicle)
+            && *c == Some(color)
+        {
+            *c = before;
+        }
+        let Some((id, old, painted)) = brick else {
+            return Ok(Reply::Undone(None));
+        };
+        let bricks = &self.simulation.state().bricks;
+        if bricks.get(&id).is_none_or(|b| b.color != painted) {
+            return Ok(Reply::Undone(None));
+        }
+        self.simulation.mutate(id, |b| b.color = old)?;
+        self.dirty.insert(id);
+        Ok(Reply::Undone(Some(id)))
+    }
+
     fn undo_colors(&mut self, owner: OwnerId, colors: Vec<(BrickId, u8)>) -> Result<Reply> {
         let tick = self.simulation.state().tick;
         self.play_thread(tick, owner, 3, "undo");
