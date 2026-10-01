@@ -151,3 +151,110 @@ Left: stack-owner trust (`ndTrustCheck*` with `stackBL_ID`), the mirrored
 plain-brick ghost, the ghost shown to other players with its box, brick
 extras in copies, the save progress line, prefs through the settings
 seam, `ND_Item::onAdd`, `ndSetMode`'s image flag.
+
+## Stack ownership (New Duplicator trust rules)
+
+`ndTrustCheckSelect` and `ndTrustCheckModify` let a player select and
+change a brick when they own its stack (`stackBL_ID`: whoever owns the
+bricks it was built on) or have the trust in that stack's owner. The
+engine now keeps this as `Simulation::stack_owner`: a brick planted,
+copied in or restored takes the stack of the lowest-numbered brick under
+it, else of one on top, else is its owner's, as the original's own plant
+set `stackBL_ID`. Only bricks in someone else's stack are noted, and it is
+not saved (v20 did not save it either). A copy rule's `stack` option
+counts it when copying and when cutting, painting or wrenching through
+the copy; `may_copy(p, brick, options)` asks the same before a box corner
+is taken, which the port uses for `ndTrustCheckMessage`'s refusal.
+
+The 1M probe after the change (three runs, Linux container): worst ticks
+select 2.2 to 2.3 ms, cut 1.8 to 3.1, plant 3.0 to 4.4, undo plant 2.4 to
+3.3, undo cut 3.2 to 3.4, supercut 1.7 to 1.9, undo supercut 2.7 to 3.4;
+totals as before.
+
+Tests: `a_stack_owner_copies_and_cuts_what_others_built_on_their_stack`
+(bri-sim), `new_duplicator_port_refuses_a_box_corner_without_trust`
+(ports; fails without the rules' check). New Duplicator: 345 of 363.
+
+## Mirroring a ghost brick
+
+`FxDtsBrick::ndMirrorGhost`: outside plant mode, the New Duplicator's
+`/MirX`, `/MirY` and `/MirZ` mirror the player's own ghost brick. The
+engine's `mirror_ghost(p, axis, asymmetric)` finds its image the way a
+mirrored copy places each brick (`Mirrors::mirror_brick`: the image's
+turn less the brick's across x, half way round across z, the image's
+turn added upside down) and sends `Notice::MirrorGhost` (wire change,
+`protocol-changes/mirror-ghost.md`); the client swaps its ghost where it
+stands. A brick with no exact image stays and the player is told the
+Add-On's line (the original's "asymmetric" and "not vertically
+symmetric"). `player(p).ghost` says whether a ghost is out. After a
+mirrored plant with inexact bricks, the port now says the original's
+"Some bricks were probably mirrored incorrectly" line.
+
+Tests: `a_ghost_brick_mirrors_into_its_twin_where_it_stands` (bri-sim:
+the wedge's twin and turn match a mirrored copy of the same brick; twice
+is the original; upside down has no image), the client's
+`a_mirrored_ghost_takes_its_image_where_it_stands_and_plants_it`, and
+`new_duplicator_port_mirrors_a_ghost_brick`.
+
+## The ghost box others see, and what a copy carries
+
+Other players saw nothing while someone placed a copy; the original drew
+a blue box round the ghost and sent the ghost bricks to everyone. The
+client now reports where its copy ghost stands (`Command::CopyPose`,
+wire change `protocol-changes/copy-pose.md`, sharing the ghost brick
+rate bucket and sent at most every 100 ms). The host works out the box
+from the copy's size alone (`Blueprint::ghost_box`) and tells the rules
+through `on_copy_ghost(p, #{box})`, and `()` when the ghost goes away.
+The port draws the original's blue box there. The ghost bricks
+themselves stay with their owner (`spawnGhostBricks`,
+`ndUpdateSpawnedClientList` are marked not run): the host spends no
+bandwidth on cosmetics.
+
+Copies now keep each brick's name, light, emitter, item, sound, vehicle
+and events (`Blueprint.extras`, wire change
+`protocol-changes/copy-extras.md`; saved copies keep them too). They
+turn and mirror with the copy: emitter and item directions, `fireRelay`
+directions, direction list params (from the event catalog) and vector
+params. A row aimed at a named brick turns only when the copy carries
+that name, as the original's `ndTransformDirection` did. Planting
+applies them one at a time through the same checks as the wrench
+(quota, tool catalog, item spawners, event review, relay delay clamp
+for non-admins). v20 duplication files dropped in the Duplications
+folder are bound the same way as saves, so their lights, emitters,
+items and events load too. The New Duplicator item now idles with its
+original spin (`ND_Item::onAdd`, read by a cover).
+
+Save progress (`NDM_SaveProgress::onCancelBrick`, `getBottomPrint`,
+`ND_Selection::cancelSaving`) is not run: the copy store writes a save
+off the tick, so there is no save job to cancel or show.
+
+Tests: `a_copy_carries_its_bricks_settings_and_turns_them_with_it`
+(bri-sim), `a_ghost_box_holds_the_copy_however_it_is_placed`
+(blueprint), the New Duplicator port test's blue box checks, the
+client's copy report serial test, and the content test
+`a_dropped_duplication_keeps_its_bricks_names_and_events`. New
+Duplicator: 362 of 363 (left: `GameConnection::ndSetMode`, the item
+spinning while a job runs; prefs wait for the settings seam).
+
+## The duplicator spins while it works
+
+`GameConnection::ndSetMode` gave each progress mode a `spin`, applied as
+`setImageLoaded(0, !spin)`; the image's states (`stateTransitionOnLoaded`,
+`stateTransitionOnNotLoaded`, `stateSpinThread`) then spin it up, keep
+it turning and slow it down. Image states now carry `loaded`,
+`not_loaded` and `spin` (the importer reads the three v20 fields), the
+weapon runtime checks the loaded transitions before ammo as
+`ShapeBase::updateImageState` does, and an image put in hand starts
+loaded. Rules unload the held image with `set_image_loaded(p, loaded)`.
+The spin is presentation: each game turns the image's `spin` sequence
+from the state the image is in (a speed per state, kept between
+states), so it costs no bandwidth. The port's `set_working` unloads the
+image while a job runs and loads it when the job ends.
+
+Tests: `a_spin_speeds_up_and_slows_over_its_state_and_keeps_otherwise`
+(bri-weapons), the New Duplicator supercut test (the held image is in
+its spinning state during the job and back to its idle state after;
+fails without the rules' `set_image_loaded`), and the port's image
+state checks. The real copy's `ND_Image` imports with spin up, full
+speed and spin down states and no diagnostics. New Duplicator: 363 of
+363; its prefs (`ndRegisterPrefs`) wait for the settings seam.

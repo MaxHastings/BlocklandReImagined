@@ -410,6 +410,8 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 "stateTransitionOnTriggerUp",
                 "stateTransitionOnAmmo",
                 "stateTransitionOnNoAmmo",
+                "stateTransitionOnLoaded",
+                "stateTransitionOnNotLoaded",
             ] {
                 if !f(key).is_empty() && target(key).is_none() {
                     pack.diagnostics
@@ -426,6 +428,20 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 up: target("stateTransitionOnTriggerUp"),
                 ammo: target("stateTransitionOnAmmo"),
                 no_ammo: target("stateTransitionOnNoAmmo"),
+                loaded: target("stateTransitionOnLoaded"),
+                not_loaded: target("stateTransitionOnNotLoaded"),
+                spin: match f("stateSpinThread").to_ascii_lowercase().as_str() {
+                    "stop" => Spin::Stop,
+                    "spinup" => Spin::SpinUp,
+                    "spindown" => Spin::SpinDown,
+                    "fullspeed" => Spin::FullSpeed,
+                    "" | "ignore" => Spin::Keep,
+                    other => {
+                        pack.diagnostics
+                            .push(format!("{} unknown stateSpinThread {other}", d.name));
+                        Spin::Keep
+                    }
+                },
                 script: f("stateScript"),
                 sequence: f("stateSequence"),
                 sound: f("stateSound"),

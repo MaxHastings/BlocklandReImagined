@@ -101,7 +101,7 @@ impl StackScan {
         &mut self,
         sim: &Simulation,
         budget: &mut u32,
-        mut admit: impl FnMut(&Brick) -> bool,
+        mut admit: impl FnMut(BrickId, &Brick) -> bool,
     ) -> Result<bool> {
         let world = sim.state();
         while !self.done {
@@ -141,7 +141,7 @@ impl StackScan {
                     break;
                 }
                 self.seen.insert(other);
-                if !admit(&world.bricks[&other]) {
+                if !admit(other, &world.bricks[&other]) {
                     self.selection.refused += 1;
                     continue;
                 }
@@ -246,7 +246,7 @@ impl BoxScan {
         &mut self,
         sim: &Simulation,
         budget: &mut u32,
-        mut admit: impl FnMut(&Brick) -> bool,
+        mut admit: impl FnMut(BrickId, &Brick) -> bool,
     ) -> bool {
         let world = sim.state();
         let area = self.area;
@@ -293,7 +293,7 @@ impl BoxScan {
                 {
                     continue;
                 }
-                if !admit(&world.bricks[&id]) {
+                if !admit(id, &world.bricks[&id]) {
                     self.selection.refused += 1;
                     continue;
                 }
@@ -376,7 +376,7 @@ mod tests {
         loop {
             let before = scan.selection.bricks.len();
             let mut left = budget;
-            let done = scan.step(&sim, &mut left, |_| true);
+            let done = scan.step(&sim, &mut left, |_, _| true);
             // A slice: never the 40,000-plate row at once.
             let joined = scan.selection.bricks.len() - before;
             assert!(joined <= budget as usize * work::MOVED_PER_UNIT, "{joined}");
@@ -388,10 +388,10 @@ mod tests {
         assert_eq!(scan.selection.bricks.len(), 200 * 200);
         assert!(steps > 40_000 / (100 * work::MOVED_PER_UNIT));
         // The same bricks in the same order as all at once.
-        let all = sim.select_box(area, false, usize::MAX, |_| true);
+        let all = sim.select_box(area, false, usize::MAX, |_, _| true);
         assert_eq!(scan.selection.bricks, all.bricks);
         // Cut short at a limit inside a row.
-        let limited = sim.select_box(area, false, 12_345, |_| true);
+        let limited = sim.select_box(area, false, 12_345, |_, _| true);
         assert_eq!(limited.bricks[..], all.bricks[..12_345]);
         assert!(limited.limit_reached);
     }
