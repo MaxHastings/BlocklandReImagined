@@ -34,6 +34,9 @@ pub struct Magazines {
     /// (`"one_by_one": true` for a gun loaded a shell at a time).
     #[serde(default)]
     pub items: BTreeMap<String, Value>,
+    /// Fields for every gun's magazine (`light_states`), before `items`.
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub every: serde_json::Map<String, Value>,
 }
 
 /// One ammo type of [`Magazines`].
@@ -165,6 +168,7 @@ pub fn magazines(m: &Magazines, weapons: &Value) -> Result<(Value, BTreeMap<Stri
         if single.is_some() {
             magazine["one_by_one"] = json!(true);
         }
+        super::merge(&mut magazine, &Value::Object(m.every.clone()));
         if let Some((_, extra)) = m.items.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)) {
             super::merge(&mut magazine, extra);
         }

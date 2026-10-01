@@ -25,6 +25,10 @@ fn each_gun() { {{each_gun}} }
 fn rays() { {{rays}} }
 // Hitscan ray => #{ raycastcritdirectdamagetype }: a crit's kill message.
 fn crit_types() { {{crit_types}} }
+// The crit Add-On (Emote_Critical) the hitscan guns test for, or () for
+// none: they crit, and shove what they hit, only while it is on, as the
+// original checked isObject(CritProjectile).
+fn critical() { {{critical}} }
 // Taser projectile => #{ spread, offset, up, ms }: the random sideways
 // push (getRandom(spread) - offset on each axis), the push up, and how
 // long the tumble lasts.
@@ -45,14 +49,27 @@ fn on_damage(victim, attacker, amount, info) {
     if rays.contains(info.projectile) {
         let ray = rays[info.projectile];
         let me = player(victim);
-        if attacker != () && player(attacker) != () {
-            let f = forward(attacker);
-            push(`player:${victim}`, f[0] * ray.shove, ray.up, f[1] * ray.shove, attacker);
-        }
+        let shooter = if attacker != () && player(attacker) != () { attacker } else { () };
+        // The melee swings shove and kill outright.
         if ray.kill != () {
+            if shooter != () {
+                let f = forward(shooter);
+                push(`player:${victim}`, f[0] * ray.shove, ray.up, f[1] * ray.shove, shooter);
+            }
             return #{ amount: me.max_health * me.scale * ray.kill, type: ray.kill_type };
         }
-        if ray.crit && info.y > me.cy - 3.3 * me.scale {
+        // The guns' crit test shoves, then crits a hit above the middle
+        // less 3.3 times the target's scale.
+        let critical = critical();
+        if !ray.crit || critical == () || !enabled(critical) {
+            return ();
+        }
+        if shooter != () {
+            let f = forward(shooter);
+            push(`player:${victim}`, f[0] * ray.shove, ray.up, f[1] * ray.shove, shooter);
+        }
+        if info.y > me.cy - 3.3 * me.scale {
+            crit_effects(critical, victim, shooter);
             let types = crit_types();
             let crit_type = if types.contains(info.projectile) {
                 types[info.projectile].raycastcritdirectdamagetype
@@ -76,6 +93,24 @@ fn on_damage(victim, attacker, amount, info) {
         return amount * multiplier;
     }
     ()
+}
+
+// A crit's show, from the crit Add-On: its burst on the target, sized to
+// them, and its sound in their ears; once a shot, the crit sound where the
+// shooter stands and the hit sound in their ears.
+fn crit_effects(critical, victim, shooter) {
+    spawn_explosion(victim, `${critical}:projectile/critprojectile`, player(victim).scale);
+    play_sound(victim, `${critical}:sound/critrecievesound`);
+    if shooter == () {
+        return;
+    }
+    if get_player(shooter, "crit_shot") == tick() {
+        return;
+    }
+    set_player(shooter, "crit_shot", tick());
+    let me = player(shooter);
+    sound_at(`${critical}:sound/critfiresound`, me.cx, me.cy, me.cz);
+    play_sound(shooter, `${critical}:sound/crithitsound`);
 }
 
 // The melee swings shove and wreck a vehicle as a player: twice what the

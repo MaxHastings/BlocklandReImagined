@@ -151,6 +151,11 @@ pub trait World {
     fn hit_region(&self, _player: u64, _point: [f32; 3]) -> Option<&'static str> {
         None
     }
+    /// Whether the Add-On `id` is enabled in this game, so a package can
+    /// use an optional dependency's content only while it is there.
+    fn enabled(&self, _id: &str) -> bool {
+        false
+    }
 }
 /// What a ray met.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1311,6 +1316,16 @@ fn register_api(engine: &mut Engine) {
             amount: float(&amount)?,
         })
     });
+    engine.register_fn(
+        "spawn_explosion",
+        |player: Dynamic, projectile: &str, scale: Dynamic| {
+            push(Op::SpawnExplosion {
+                player: id(&player)?,
+                projectile: projectile.into(),
+                scale: float(&scale)?,
+            })
+        },
+    );
     // `()` as the player prints to everyone.
     for (name, bottom) in [("center_print", false), ("bottom_print", true)] {
         engine.register_fn(
@@ -1410,6 +1425,10 @@ fn register_queries(engine: &mut Engine) {
         };
         let target = target(&target_value)?;
         with_world(|world, _| Ok(world.can_damage(by, target)))
+    });
+    // Whether an Add-On is enabled in this game (an optional dependency).
+    engine.register_fn("enabled", |id: &str| {
+        with_world(|world, _| Ok(world.enabled(id)))
     });
     // The generated world's voxel a brick is, #{ x, y, z, material } in
     // voxel coordinates, or () for any other brick.

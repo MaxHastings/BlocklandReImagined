@@ -42,12 +42,16 @@ its own values.
 | Camera kick | `spawnExplosion` of a shaking recoil blast | shot `kick` | ported |
 | Headshots | `getHitbox`, crouched counts as head, `headshotMultiplier` | `info.region`, rules | **ported** |
 | Hitscan guns | Support_RaycastingWeapons image fields | `shot.hitscan`, a ray projectile per gun, the `hitscans` reader | **ported** |
-| Crits and their kill message | `isRaycastCritical`, ×3, `raycastCritDirectDamageType` | rules, `on_damage` answers `#{ amount, type }` | **ported** |
+| Crits and their kill message | `isRaycastCritical`, ×3, `raycastCritDirectDamageType`, only `if(isObject(CritProjectile))` | rules, `on_damage` answers `#{ amount, type }`; manifest `optional_dependencies`, script `enabled` | **ported** |
 | Melee swings kill players and vehicles | `onRaycastDamage`: twice `maxDamage`, own type | rules `on_damage`, new `on_vehicle_damage` | **ported** |
 | Swing hit sounds | random pair set in `onFire` | rules `on_projectile_hit`, `sound_at` | **ported** |
 | Grenade shrapnel and trails | `onExplode` loops | projectile `children` as a list | **ported** |
 | Taser tumble | `tumble(%col, ms)` | `tumble(..., seconds)` | **ported** |
-| Crit effects (explosion, crit sounds) | `Emote_Critical`'s `critProjectile` and sounds | needs that separate Add-On imported beside it | **waits on Max** |
+| Crit effects (explosion, crit sounds) | `Emote_Critical`'s `critProjectile` and sounds, `spawnExplosion`, `play2d`, `serverPlay3d` | script `spawn_explosion`, `play_sound`, `sound_at`; Emote_Critical imports whole (no scripts) | **ported** |
+| Grenade cooking and countdown | `onPinDrop` `burnSched`, `sendCenterNade`, `burnedIt`, thrown fuse `4000 - chargeTime` | image `cook`, projectile fuses | **new** |
+| Bomblet fuses | `projectile::onAdd` `400 - getRandom(...)` | children `fuse_ticks` | **new** |
+| Light key reloads | hl2 `serverCmdLight` | magazine `light_states` | **new** |
+| Head-hit flinch | hitbox `playThread(0/2, jump)`, `plant` after 50 ms | needs a client body thread 0 and a timer | **not yet** |
 | Hitmarker | `commandToClient('hitmarker')` | nothing in either pack draws it | none in the original |
 
 ## Approximations
@@ -56,16 +60,16 @@ its own values.
   upward. Each set's speed is the script's mean.
 - The engine keeps one magazine per gun per holder, where v20 kept one per
   tool slot: two of the same gun share theirs.
-- Without `Emote_Critical` the original has no crits at all (its raycast
-  script checks `isObject(CritProjectile)`); the port keeps the crits the
-  author built the guns around.
+- The hitbox head hit's `goremodHitProjectile` and `gamedamage2Sound` are
+  defined nowhere, so the original never showed them; the port has none.
 
 ## Tests
 
 - `crates/addon-import/tests/adventure_port.rs`: both ports on CC0
   stand-ins: magazines and reloads, shots, volleys, last shot, state shots
   and both hands' moves, hitscans and shrapnel from the scripts; boxes,
-  headshots, crits with their kill message, melee kills with their own
+  headshots, crits with their kill message only beside Emote_Critical's stand-in and
+  its effects and sounds, grenade cooking and bomblet fuses, melee kills with their own
   message and hit sound, vehicle wrecks, dropped spare guns and the taser
   in hosted games.
 - `crates/weapons/tests/addon_seams.rs`: volleys, the last shot, state

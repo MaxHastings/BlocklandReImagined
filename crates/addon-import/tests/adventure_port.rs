@@ -273,7 +273,7 @@ fn cmd_mag(p) {
 }
 "#;
 
-fn catalog(root: &Path, ns: &str) -> Arc<Catalog> {
+fn catalog(root: &Path, ns: &str, extra: &[&str]) -> Arc<Catalog> {
     let dir = root.join("addons/probe");
     std::fs::create_dir_all(&dir).unwrap();
     let manifest = json!({
@@ -308,13 +308,15 @@ fn catalog(root: &Path, ns: &str) -> Arc<Catalog> {
         dir: format!("addons/{id}"),
         role: None,
     };
+    let mut packages = vec![
+        entry(ns, Side::Shared),
+        entry(&format!("{ns}-rules"), Side::Server),
+        entry("probe", Side::Server),
+    ];
+    packages.extend(extra.iter().map(|id| entry(id, Side::Shared)));
     let set = PackageSet {
         schema_version: 1,
-        packages: vec![
-            entry(ns, Side::Shared),
-            entry(&format!("{ns}-rules"), Side::Server),
-            entry("probe", Side::Server),
-        ],
+        packages,
     };
     Arc::new(Catalog::load(root, &set, true).unwrap_or_else(|e| panic!("{e:#?}")))
 }
@@ -379,6 +381,10 @@ impl Game {
         Self::with(root, out, NS)
     }
     fn with(root: &Path, out: &Path, ns: &str) -> Self {
+        Self::with_add_ons(root, out, ns, &[])
+    }
+    /// With other imports in `<root>/addons` enabled beside it, by id.
+    fn with_add_ons(root: &Path, out: &Path, ns: &str, extra: &[&str]) -> Self {
         let ground = ColliderBuilder::cuboid(100.0, 0.5, 100.0)
             .translation(Vector::new(0.0, -0.5, 0.0))
             .user_data(u128::MAX);
@@ -390,7 +396,13 @@ impl Game {
             )
             .unwrap(),
         );
-        s.set_weapon_pack(pack(out)).unwrap();
+        let parts = extra
+            .iter()
+            .map(|id| (format!("addons/{id}"), pack(&root.join("addons").join(id))))
+            .collect();
+        let (merged, notes) = pack(out).merge(parts);
+        assert!(notes.is_empty(), "{notes:?}");
+        s.set_weapon_pack(merged).unwrap();
         // Item boxes from the import's item physics, as a host loads them.
         let physics: Value =
             serde_json::from_slice(&std::fs::read(out.join("assets/item-physics.json")).unwrap())
@@ -398,7 +410,7 @@ impl Game {
         s.set_item_bounds(serde_json::from_value(physics["items"].clone()).unwrap())
             .unwrap();
         s.set_vehicle_pack(tumble_pack(), Vec::new()).unwrap();
-        s.install_packages(catalog(root, ns), None).unwrap();
+        s.install_packages(catalog(root, ns, extra), None).unwrap();
         Self {
             s,
             seq: BTreeMap::new(),
@@ -558,6 +570,17 @@ fn ammo_boxes_and_headshots_play_in_a_hosted_game() {
     g.shoot_at(a, b, 0.9);
     assert!((g.health(b) - (75.0 - 31.5)).abs() < 0.5, "{}", g.health(b));
     assert_eq!(g.mag(a), json!("9|12|pistol|64"));
+
+    // The light key reloads a magazine that is not full from the ready
+    // state; with a full one it works the light, as the ammo system's
+    // serverCmdLight fell through to the original.
+    let light = |g: &Game| g.s.vitals()[&a].light;
+    g.cmd(a, Command::ToggleLight);
+    g.steps(600);
+    assert_eq!(g.mag(a), json!("12|12|pistol|61"));
+    assert!(!light(&g));
+    g.cmd(a, Command::ToggleLight);
+    assert!(light(&g));
 }
 
 /// A dropped gun touched by a player who carries it and is short of its
@@ -626,9 +649,9 @@ fn duel(g: &mut Game, items: &[&str], distance: f32) -> (OwnerId, OwnerId) {
     (a, b)
 }
 
-/// The raycast guns' host rules: the revolver's hit is a crit (×3, as
-/// nearly every body hit is under the original's height test) and shoves
-/// its target away and up; the baton's swing kills outright.
+/// The raycast guns' host rules without the crit Add-On: the baton's swing
+/// kills outright, and the revolver's hit neither crits nor shoves, as the
+/// original's crit test never ran without `CritProjectile`.
 #[test]
 fn hitscan_crits_and_melee_kills_play_in_a_hosted_game() {
     let (dir, out, report) = imported("rays");
@@ -673,13 +696,89 @@ fn hitscan_crits_and_melee_kills_play_in_a_hosted_game() {
     g.equip(a, &revolver);
     let before = g.feet(b);
     g.shoot_at(a, b, 1.2);
-    assert!((g.health(b) - 55.0).abs() < 0.5, "{}", g.health(b));
+    assert!((g.health(b) - 85.0).abs() < 0.5, "{}", g.health(b));
+    assert!((g.feet(b) - before).length() < 0.01, "{before} {}", g.feet(b));
+}
+
+/// With the Critical Hit Emote's stand-in imported and on, the revolver's
+/// hit is a crit (×3, as nearly every body hit is under the original's
+/// height test) that shoves its target away and up, bursts the crit
+/// effect on them with its sound in their ears, and plays the crit sounds
+/// for the shooter; a crit kill shows the gun's crit kill message.
+#[test]
+fn crits_play_with_the_critical_hit_emote() {
+    let (dir, out, report) = imported("crits");
+    assert!(report.ports[0].applied, "{:?}", report.ports[0].reason);
+    let critical = import(&Options {
+        input: Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ports/Emote_Critical"),
+        out: dir.0.join("addons/emote_critical"),
+        reference: None,
+        core: vec![],
+        version: "1.0.0".into(),
+    })
+    .unwrap();
+    // Its burst draws its own particle, though the emitter names a base
+    // game brick node this import cannot see.
+    let effects: Value = serde_json::from_slice(
+        &std::fs::read(dir.0.join("addons/emote_critical/assets/weapons.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        critical
+            .unsupported
+            .iter()
+            .all(|f| f.what.starts_with("file ")),
+        "{:?}",
+        critical.unsupported
+    );
+    assert!(effects["effects"]["emitters"].as_array().is_some_and(|e| e.len() == 1), "{effects}");
+    let rules: Value = serde_json::from_slice(
+        &std::fs::read(dir.0.join(format!("addons/{NS}-rules/package.json"))).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(rules["optional_dependencies"], json!({ "emote_critical": "*" }));
+
+    let mut g = Game::with_add_ons(&dir.0, &out, NS, &["emote_critical"]);
+    let revolver = format!("{NS}:weapon/revolveritem");
+    let (a, b) = duel(&mut g, &[&revolver], 3.0);
+    g.equip(a, &revolver);
+    g.s.take_cues();
+    g.s.take_private_notices();
+    let before = g.feet(b);
+    g.shoot_at(a, b, 1.2);
+    assert!((g.health(b) - 55.0).abs() < 0.5, "{} {:?}", g.health(b), g.s.package_diagnostics());
     assert!(g.feet(b).z < before.z - 0.05, "{before} {}", g.feet(b));
-    // A crit kill shows the gun's crit kill message.
+    let cues = g.s.take_cues();
+    assert!(
+        cues.iter().any(|c| matches!(&c.kind,
+            bri_sim::presentation::CueKind::WeaponEffect { definition, scale, .. }
+                if definition.eq_ignore_ascii_case("critexplosion") && *scale == 1.0)),
+        "{cues:?}"
+    );
+    assert!(
+        cues.iter().any(|c| matches!(&c.kind,
+            bri_sim::presentation::CueKind::WeaponSound { profile }
+                if profile == "emote_critical:sound/critfiresound")),
+        "{cues:?}"
+    );
+    let notices = g.s.take_private_notices();
+    let heard = |who: OwnerId, sound: &str| {
+        notices
+            .iter()
+            .any(|(o, n)| *o == who && matches!(n, Notice::Sound(p) if p == sound))
+    };
+    assert!(heard(b, "emote_critical:sound/critrecievesound"), "{notices:?}");
+    assert!(heard(a, "emote_critical:sound/crithitsound"), "{notices:?}");
     g.shoot_at(a, b, 1.2);
     g.shoot_at(a, b, 1.2);
     assert_eq!(g.health(b), 0.0);
-    said(&mut g, "hit B hard");
+    let notices = g.s.take_private_notices();
+    assert!(
+        notices
+            .iter()
+            .any(|(_, n)| matches!(n, Notice::Chat(t) if t.contains("hit B hard"))),
+        "{notices:?}"
+    );
 }
 
 /// The melee swings wreck a vehicle as they kill a player (twice what it
@@ -866,4 +965,74 @@ fn glass_release_taser_tumbles_and_sniper_headshots() {
     assert_eq!(g.state(b), json!("true|100.0"));
     g.steps(4 * 120);
     assert_eq!(g.state(b), json!("false|100.0"));
+}
+
+/// The frag grenade cooks: its fuse lights as the pin drops, counting down
+/// in the middle of the thrower's screen, and the thrown grenade goes off
+/// with what is left of it, its bomblets bursting one after another within
+/// their own fuses. Held for the whole fuse, it goes off in the hand: the
+/// holder puts it away and keeps the grenade.
+#[test]
+fn a_grenade_cooks_in_the_hand() {
+    let (dir, out, report) = imported("cook");
+    assert!(report.ports[0].applied, "{:?}", report.ports[0].reason);
+    let mut g = Game::new(&dir.0, &out);
+    let grenade = format!("{NS}:weapon/shrapgrenitem");
+    let (a, _) = duel(&mut g, &[&grenade], 30.0);
+    g.equip(a, &grenade);
+    // Up into the open sky, where it meets nothing.
+    g.looks.get_mut(&a).unwrap().pitch = 1.2;
+    let live = |g: &Game, name: &str| {
+        g.s.snapshot()
+            .weapons
+            .projectiles
+            .iter()
+            .filter(|p| p.definition == format!("{NS}:projectile/{name}"))
+            .count()
+    };
+    g.s.take_private_notices();
+    g.cmd(a, Command::WeaponTrigger { down: true });
+    g.steps(240);
+    let prints: Vec<String> = g
+        .s
+        .take_private_notices()
+        .into_iter()
+        .filter_map(|(o, n)| match n {
+            Notice::Center { text, .. } if o == a => Some(text),
+            _ => None,
+        })
+        .collect();
+    let line = |left: &str| format!("\u{E005}{left}\u{E006} cooking time left.");
+    assert_eq!(prints.first(), Some(&line("4 Seconds")), "{prints:?}");
+    assert_eq!(prints.get(1), Some(&line("3.9 seconds")), "{prints:?}");
+    // A tenth of a second apart, from a tenth after the pin dropped.
+    assert!((19..=20).contains(&prints.len()), "{prints:?}");
+    g.cmd(a, Command::WeaponTrigger { down: false });
+    g.steps(4);
+    assert_eq!(live(&g, "shrapgrenprojectile"), 1);
+    // About two seconds of fuse were left, well short of its lifetime.
+    g.steps(220);
+    assert_eq!(live(&g, "shrapgrenprojectile"), 1);
+    g.steps(30);
+    assert_eq!(live(&g, "shrapgrenprojectile"), 0);
+    assert!(live(&g, "shrapgrenclusterprojectile") > 0);
+    // The bomblets go off within their 400 ms, before their own 500.
+    g.steps(50);
+    assert_eq!(live(&g, "shrapgrenclusterprojectile"), 0);
+
+    // The next grenade, from the reserve, held past its fuse.
+    g.steps(240);
+    assert_eq!(g.mag(a), json!("1|1|frag-grenades|0"));
+    g.cmd(a, Command::WeaponTrigger { down: true });
+    g.steps(485);
+    assert!(live(&g, "shrapgrenclusterprojectile") > 0);
+    let held = g.s.snapshot().weapons.images.get(&a).cloned().unwrap_or_default();
+    assert!(held.is_empty(), "{held:?}");
+    assert!(
+        g.s.tool_inventories()[&a]
+            .slots
+            .iter()
+            .any(|s| s.as_deref() == Some(grenade.as_str()))
+    );
+    g.cmd(a, Command::WeaponTrigger { down: false });
 }

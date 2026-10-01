@@ -459,7 +459,14 @@ pub enum Event {
     DropRemoved {
         drop: u64,
     },
-    Diagnostic {
+/// Text in the middle of the holder's screen for `seconds`: a cooked
+    /// grenade's countdown.
+    Print {
+        actor: ActorId,
+        text: String,
+        seconds: f32,
+    },
+        Diagnostic {
         actor: Option<ActorId>,
         message: String,
     },
@@ -588,6 +595,16 @@ pub struct Actor {
     reserve: BTreeMap<String, Reserve>,
     #[serde(default)]
     reload: Option<Reload>,
+    /// The grenade whose fuse is burning in the hand ([`crate::Cook`]).
+    #[serde(default)]
+    cook: Option<Cooking>,
+}
+/// [`Actor::cook`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct Cooking {
+    image: String,
+    /// The tick the fuse was lit.
+    lit: u64,
 }
 /// A holder's reserve of one ammo type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -654,6 +671,9 @@ pub struct WeaponsWorld {
     events: Vec<Event>,
     /// Explosions queued for the next tick; they never fly.
     explosions: Vec<Projectile>,
+    /// Projectiles that go off at this age, before their lifetime: a cooked
+    /// grenade's fuse, a cluster's bomblets ([`crate::Children::fuse_ticks`]).
+    fuses: BTreeMap<u64, u32>,
 }
 impl WeaponsWorld {
     pub fn new(pack: Pack) -> Result<Self> {
@@ -668,6 +688,7 @@ impl WeaponsWorld {
             next_id: 1,
             events: vec![],
             explosions: vec![],
+            fuses: BTreeMap::new(),
         })
     }
     pub fn image_state(&self, id: ActorId, hand: u8) -> Option<(&Image, &State)> {
@@ -737,6 +758,7 @@ impl WeaponsWorld {
                 rounds: BTreeMap::new(),
                 reserve: BTreeMap::new(),
                 reload: None,
+                cook: None,
             },
         );
         Ok(())
@@ -1105,6 +1127,71 @@ impl WeaponsWorld {
         self.actors.insert(id, a);
         Ok(started)
     }
+    /// A fuse burning in the hand ([`crate::Cook`]): its countdown, and
+    /// going off when it runs out. Put out when the grenade is put away.
+    fn burn_fuse(&mut self, id: ActorId, a: &mut Actor) {
+        let Some(cooking) = a.cook.clone() else {
+            return;
+        };
+        let held = a.images[0].as_ref().map(|e| e.image.as_str());
+        let Some((image, cook)) = self
+            .pack
+            .images
+            .get(&cooking.image)
+            .and_then(|i| Some((i.clone(), i.cook.clone()?)))
+            .filter(|_| held == Some(cooking.image.as_str()))
+        else {
+            a.cook = None;
+            return;
+        };
+        let burned = self.tick.saturating_sub(cooking.lit).min(u64::from(u32::MAX)) as u32;
+        if burned >= cook.fuse_ticks {
+            a.cook = None;
+            if let Some(projectile) = &image.projectile {
+                let at = a.frame.position + Vec3::Y * cook.burst_height;
+                if let Err(error) = self.spawn_explosion(projectile, id, at, 1.0) {
+                    self.events.push(Event::Diagnostic {
+                        actor: Some(id),
+                        message: format!("Cooked {}: {error}", image.id),
+                    });
+                }
+            }
+            self.unmount(id, a);
+            return;
+        }
+        if let Some(text) = cook.print_at(burned) {
+            self.events.push(Event::Print {
+                actor: id,
+                text,
+                seconds: cook.print_seconds,
+            });
+        }
+    }
+    /// The light key with a gun in hand: whether the gun took it. A gun
+    /// with a magazine reloads; one whose magazine names `light_states`
+    /// leaves the key to the light outside those states or when no reload
+    /// starts ([`crate::Magazine::light_states`]).
+    pub fn light_key(&mut self, id: ActorId) -> Result<bool> {
+        let Some(magazine) = self
+            .actors
+            .get(&id)
+            .and_then(|a| self.magazine_of(a))
+            .map(|(_, m)| m)
+        else {
+            return Ok(false);
+        };
+        if magazine.light_states.is_empty() {
+            self.reload(id)?;
+            return Ok(true);
+        }
+        let in_state = self.image_state(id, 0).is_some_and(|(_, state)| {
+            magazine
+                .light_states
+                .iter()
+                .any(|s| s.eq_ignore_ascii_case(&state.name))
+        });
+        Ok(in_state && self.reload(id)?)
+    }
     /// The held gun's magazine and reserve, when it has one.
     pub fn ammo(&self, id: ActorId) -> Option<AmmoView> {
         let a = self.actors.get(&id)?;
@@ -1320,6 +1407,7 @@ impl WeaponsWorld {
         }
         a.next = None;
         a.selected = None;
+        a.cook = None;
     }
     /// The held fire button. It is the player's, so it holds across image
     /// changes, colour cans, empty hands and mid-fire switches, as v20's
@@ -1638,6 +1726,7 @@ impl WeaponsWorld {
         for id in ids {
             let mut a = self.actors.remove(&id).unwrap();
             self.finish_reload(id, &mut a);
+            self.burn_fuse(id, &mut a);
             // v20 `Player::updateMove` sets image slot 1's trigger from move
             // trigger 1, which Blockland never sends, before the images run.
             // `AkimboGunImage::onFireAkimbo`'s setImageTrigger(1, 1) is
@@ -1679,6 +1768,10 @@ impl WeaponsWorld {
             } else {
                 self.events.push(Event::Removed { projectile: id });
             }
+        }
+        if !self.fuses.is_empty() {
+            let live = &self.projectiles;
+            self.fuses.retain(|id, _| live.contains_key(id));
         }
         // v20 `Item::updatePos`: the item's box falls under gravity 20 and
         // rests on its lowest face, bouncing with elasticity 0.2, friction 0.6.
@@ -1923,6 +2016,16 @@ impl WeaponsWorld {
             }
         }
         let script = script.to_ascii_lowercase();
+        if let Some(cook) = &image.cook
+            && cook.script == script
+            && e.hand == 0
+            && a.cook.is_none()
+        {
+            a.cook = Some(Cooking {
+                image: image.id.clone(),
+                lit: self.tick,
+            });
+        }
         // A fire state of its own (`onFire2`): its shot fires as onFire's.
         let state_shot = image.state_shots.get(&script).copied();
         let script = if state_shot.is_some() {
@@ -2218,6 +2321,18 @@ impl WeaponsWorld {
                         p.was_thrown = name.contains("football");
                         p.paint = e.paint;
                     }
+                    // A cooked grenade flies with what is left of its fuse.
+                    if let (Some(cook), Some(lit)) = (
+                        &image.cook,
+                        a.cook.as_ref().filter(|c| c.image == image.id).map(|c| c.lit),
+                    ) {
+                        let burned = self.tick.saturating_sub(lit).min(u64::from(u32::MAX)) as u32;
+                        self.fuses
+                            .insert(self.next_id - 1, cook.fuse_ticks.saturating_sub(burned));
+                    }
+                }
+                if a.cook.as_ref().is_some_and(|c| c.image == image.id) {
+                    a.cook = None;
                 }
                 // Further volleys (a shotgun's slug after its pellets): each
                 // its own projectile and spread, along the same aim, with the
@@ -2282,6 +2397,12 @@ impl WeaponsWorld {
     fn projectile_step(&mut self, p: &mut Projectile, q: &mut impl Query) -> bool {
         let d = self.pack.projectiles[&p.definition].clone();
         p.age += 1;
+        if let Some(fuse) = self.fuses.get(&p.id).copied()
+            && p.age >= fuse
+        {
+            self.explode(p, &d, q, None);
+            return false;
+        }
         if p.age >= d.lifetime_ticks {
             if d.explode_death {
                 self.explode(p, &d, q, None);
@@ -2710,12 +2831,21 @@ impl WeaponsWorld {
             let direction = Vec3::new(r * phi.cos(), z, r * phi.sin());
             let velocity = (direction * c.speed + p.velocity * c.inherit) * p.scale;
             let at = p.position + direction * 0.05 * p.scale;
-            if let Err(error) = self.spawn(&c.projectile, p.source, at, velocity, p.scale) {
-                self.events.push(Event::Diagnostic {
-                    actor: Some(p.source),
-                    message: format!("Children of projectile {}: {error}", p.id),
-                });
-                return;
+            match self.spawn(&c.projectile, p.source, at, velocity, p.scale) {
+                Ok(child) => {
+                    if let Some([low, high]) = c.fuse_ticks {
+                        let r = unit_random(self.tick, p.id, 1000 + n);
+                        let fuse = low + ((high - low + 1) as f32 * r) as u32;
+                        self.fuses.insert(child, fuse.min(high));
+                    }
+                }
+                Err(error) => {
+                    self.events.push(Event::Diagnostic {
+                        actor: Some(p.source),
+                        message: format!("Children of projectile {}: {error}", p.id),
+                    });
+                    return;
+                }
             }
         }
     }

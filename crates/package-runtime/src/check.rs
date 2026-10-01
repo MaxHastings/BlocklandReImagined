@@ -40,6 +40,7 @@ pub struct AddOnView {
     /// What it may do, in the words players see.
     pub capabilities: Vec<CapabilityView>,
     pub dependencies: BTreeMap<String, String>,
+    pub optional_dependencies: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -151,6 +152,15 @@ pub fn check(folder: &Path) -> Report {
                         );
                     }
                 }
+                // An optional one beside it is checked with it; a missing
+                // one is fine.
+                for dependency in manifest.optional_dependencies.keys() {
+                    if !bri_package::id::is_reserved(dependency)
+                        && siblings.contains_key(dependency)
+                    {
+                        queue.push_back(dependency.clone());
+                    }
+                }
                 found.push((manifest, dir));
             }
             Err(mut problems) => {
@@ -213,6 +223,7 @@ pub fn check(folder: &Path) -> Report {
                 })
                 .collect(),
             dependencies: manifest.dependencies.clone(),
+            optional_dependencies: manifest.optional_dependencies.clone(),
         });
     }
     // As the host loads it (and compiles its scripts), then as a player does.
@@ -354,6 +365,9 @@ impl std::fmt::Display for Report {
             }
             for (id, requirement) in &a.dependencies {
                 writeln!(f, "  Needs {id} {requirement}")?;
+            }
+            for (id, requirement) in &a.optional_dependencies {
+                writeln!(f, "  Uses {id} {requirement} when it is on")?;
             }
         }
         for d in &self.diagnostics {

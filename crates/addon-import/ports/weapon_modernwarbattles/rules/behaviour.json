@@ -4,5 +4,13 @@
   "on_damage": true,
   "on_vehicle_damage": true,
   "on_pickup": true,
-  "on_projectile_hit": true
+  "on_projectile_hit": true,
+  "state": {
+    "player": {
+      "crit_shot": {
+        "default": -1,
+        "persist": false
+      }
+    }
+  }
 }

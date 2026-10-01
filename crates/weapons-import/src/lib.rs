@@ -498,6 +498,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 volleys: vec![],
                 last_shot: None,
                 state_shots: Default::default(),
+                cook: None,
             },
         );
     }

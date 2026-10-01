@@ -107,7 +107,12 @@ pub struct Rules {
     /// Another port whose `rules/` these are, when two Add-Ons share one
     /// ruleset (two releases of a pack); this port then has no `rules/`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub from: Option<String>,
+    pub from: Option<String>,    /// Other Add-Ons (by v20 folder name, `Emote_Critical`) whose content
+    /// the rules use while their imports are on too, as the scripts tested
+    /// `isObject` on their datablocks: each is an optional dependency, and
+    /// `{uses:Emote_Critical}` in a value is its import's id.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub uses: Vec<String>,
 }
 
 /// The companion host-rules Add-On's id for the import `namespace`.
@@ -456,6 +461,14 @@ fn try_apply(
             "a pattern is named `{name}`, which every port already has"
         );
     }
+    for addon in port.rules.iter().flat_map(|r| &r.uses) {
+        let namespace = crate::namespace_for(addon)?;
+        ensure!(
+            namespace != import.namespace,
+            "the rules use `{addon}`, the Add-On they are for"
+        );
+        values.insert(format!("uses:{addon}"), namespace);
+    }
     // What the port reads from the imported datablocks and scripts: a
     // patch for weapons.json, the definitions it makes, and values for
     // the rules. Tables read the pack as patched, so they see what the
@@ -648,6 +661,11 @@ fn rules_package(
             "notes": port_notes(ports, e),
         },
         "dependencies": { import.namespace: format!("={}", import.version) },
+        "optional_dependencies": rules
+            .uses
+            .iter()
+            .map(|addon| Ok((crate::namespace_for(addon)?, Value::from("*"))))
+            .collect::<Result<serde_json::Map<_, _>>>()?,
         "capabilities": rules.capabilities,
         "provides": provides,
     });

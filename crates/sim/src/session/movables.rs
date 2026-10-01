@@ -460,13 +460,9 @@ impl Session {
     /// Whether `definition` is `package`'s own or an Add-On's it depends on.
     fn owns_kind(&self, package: &str, definition: &str) -> bool {
         let namespace = definition.split(':').next().unwrap_or_default();
-        namespace == package
-            || self.packages.as_ref().is_some_and(|host| {
-                host.catalog
-                    .packages
-                    .get(package)
-                    .is_some_and(|p| p.manifest.dependencies.contains_key(namespace))
-            })
+        self.packages
+            .as_ref()
+            .is_some_and(|host| host.catalog.uses(package, namespace))
     }
     pub(super) fn apply_physics_op(
         &mut self,

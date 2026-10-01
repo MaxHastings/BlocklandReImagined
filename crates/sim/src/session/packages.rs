@@ -1602,6 +1602,35 @@ impl Session {
                 )?;
                 Ok(())
             }
+            Op::SpawnExplosion {
+                player,
+                projectile,
+                scale,
+            } => {
+                let host = self.packages.as_ref().context("No packages are enabled")?;
+                ensure!(
+                    item_hooks::owns(&host.catalog, package, &projectile),
+                    "`{projectile}` is not a projectile of `{package}` or an Add-On it depends on"
+                );
+                let peer = self.peers.get(&player).context("No such player")?;
+                ensure!(peer.combat.alive, "Only living players");
+                let at = self.explosion_point(player)?;
+                let origin = package.to_string();
+                let tick = self.simulation.state().tick;
+                let host = self.packages.as_mut().context("No packages are enabled")?;
+                ensure!(
+                    host.shares.shots.available(&origin, tick) >= 1,
+                    "Dropped: more than {PACKAGE_SHOTS} projectiles a second"
+                );
+                host.shares.shots.spend(&origin, tick, 1);
+                self.weapons.spawn_explosion(
+                    &projectile,
+                    bri_weapons::ActorId(PACKAGE_SHOOTER),
+                    at,
+                    scale,
+                )?;
+                Ok(())
+            }
             Op::Heal { player, amount } => {
                 let max = {
                     let peer = self.peers.get(&player).context("No such player")?;
@@ -1774,14 +1803,8 @@ impl Session {
                 match image {
                     Some(image) => {
                         let host = self.packages.as_ref().context("No packages are enabled")?;
-                        let namespace = image.split(':').next().unwrap_or_default();
-                        let depends = host
-                            .catalog
-                            .packages
-                            .get(package)
-                            .is_some_and(|p| p.manifest.dependencies.contains_key(namespace));
                         ensure!(
-                            namespace == package || depends,
+                            item_hooks::owns(&host.catalog, package, &image),
                             "`{image}` is not an image of `{package}` or an Add-On it depends on"
                         );
                         self.weapons.swap_image(actor, Some(&image))
@@ -2091,6 +2114,12 @@ impl Session {
             world.added.remove(&voxel.position);
             world.removed.insert(voxel.position);
         }
+    }
+    /// Where `%player.spawnExplosion` sets off an explosion: a unit above
+    /// their feet.
+    pub(super) fn explosion_point(&self, player: OwnerId) -> Result<Vec3> {
+        let peer = self.peers.get(&player).context("No such player")?;
+        Ok(Vec3::from(peer.player.state().feet) + Vec3::Y)
     }
     /// The one explosion operation: damage players within `radius` (full at
     /// the centre, none at the edge) whom the caller may hurt, damage package

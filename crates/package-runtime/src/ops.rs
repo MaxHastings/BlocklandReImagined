@@ -346,6 +346,14 @@ pub enum Op {
         velocity: [f32; 3],
         by: Option<u64>,
     },
+    /// A projectile's explosion on a living player (`%obj.spawnExplosion`),
+    /// `scale` times its size (0.1 to 10): an emote, a crit's burst. It
+    /// hurts and pushes as the explosion would.
+    SpawnExplosion {
+        player: u64,
+        projectile: String,
+        scale: f32,
+    },
     /// Give a living player health, up to their archetype's most.
     Heal {
         player: u64,
@@ -506,7 +514,11 @@ impl Op {
             | Self::CutCopy { .. }
             | Self::PaintCopy { .. }
             | Self::PaintFill { .. } => "world.edit",
-            Self::Explode { .. } | Self::Damage { .. } | Self::Heal { .. } | Self::Fire { .. } => {
+            Self::Explode { .. }
+            | Self::Damage { .. }
+            | Self::Heal { .. }
+            | Self::Fire { .. }
+            | Self::SpawnExplosion { .. } => {
                 "damage"
             }
             Self::SpawnEntity { .. }
@@ -766,6 +778,12 @@ impl Op {
                     && finite(velocity)
                     && glam_length(velocity) <= MAX_FIRE_SPEED
             }
+            Self::SpawnExplosion {
+                projectile, scale, ..
+            } => {
+                bri_package::id::is_content_ref(projectile, Some("projectile"))
+                    && (0.1..=10.0).contains(scale)
+            }
             Self::Heal { amount, .. } => amount.is_finite() && (0.0..=100_000.0).contains(amount),
             Self::Print { text, seconds, .. } => {
                 text.chars().count() <= MAX_PRINT_CHARS
@@ -885,6 +903,7 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::SpawnVehicle { .. } => "spawn_vehicle",
         Op::RemoveVehicle { .. } => "remove_vehicle",
         Op::Fire { .. } => "fire",
+        Op::SpawnExplosion { .. } => "spawn_explosion",
         Op::Heal { .. } => "heal",
         Op::Print { bottom: false, .. } => "center_print",
         Op::Print { bottom: true, .. } => "bottom_print",

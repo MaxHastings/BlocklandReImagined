@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "notes": "Bushido's Adventurer's Weapons on the hl2 ammo system: each gun's maxmag and ammotype become its image's magazine, with the original's reserve and cap per ammo type and the reload its own states play (a shell at a time for the guns that load one). Each onFire's spread code becomes its shot (the Hunting Shotgun's blast as a second volley; the Heavy Machine Gun's second and third fire states their own wider shots, its rounds one and a half times the size, their damage unscaled as its own damage method dealt it), and the Revolver, Battle Rifle, Sniper Rifle, Baton and Machete are hitscan from their raycast fields. The frag grenade throws its cluster shrapnel and its smoke trails as it explodes, each set as fast on average as the script's random throw (its shrapnel hurts by the cluster's own blast; the script's ShrapProjectile damage belongs to no datablock, so it never ran). The host rules, shared with the Glass 1019 release, give ammo boxes (a typed box adds twice its amount for each gun of its type, as the original does) and spare guns their ammo (a spawned one a box's worth, a dropped one its magazine, picked up as usual with what is left), multiply a projectile's damage by its headshotMultiplier on a head hit or a crouched target, give the hitscan guns their crits (×3) and shoves, and make the melee swings kill outright, players and vehicles alike (twice what the part struck can take), each with its kill message and one of its pair of hit sounds; a crit shows the gun's crit kill message. Not yet ported: the crit hit effects and sounds, which belong to the separate Emote_Critical Add-On it runs (without it the original had no crits at all).",
+  "notes": "Bushido's Adventurer's Weapons on the hl2 ammo system: each gun's maxmag and ammotype become its image's magazine, with the original's reserve and cap per ammo type and the reload its own states play (a shell at a time for the guns that load one). Each onFire's spread code becomes its shot (the Hunting Shotgun's blast as a second volley; the Heavy Machine Gun's second and third fire states their own wider shots, its rounds one and a half times the size, their damage unscaled as its own damage method dealt it), and the Revolver, Battle Rifle, Sniper Rifle, Baton and Machete are hitscan from their raycast fields. The frag grenade throws its cluster shrapnel and its smoke trails as it explodes, each set as fast on average as the script's random throw (its shrapnel hurts by the cluster's own blast; the script's ShrapProjectile damage belongs to no datablock, so it never ran). The host rules, shared with the Glass 1019 release, give ammo boxes (a typed box adds twice its amount for each gun of its type, as the original does) and spare guns their ammo (a spawned one a box's worth, a dropped one its magazine, picked up as usual with what is left), multiply a projectile's damage by its headshotMultiplier on a head hit or a crouched target, give the hitscan guns their crits (×3) and shoves only while the separate Emote_Critical Add-On is on (the original checked for its CritProjectile; without it there are no crits and no shove), play that Add-On's crit explosion on the victim at their scale, its received sound to the victim and its fire and hit sounds to the shooter once per shot, and make the melee swings kill outright, players and vehicles alike (twice what the part struck can take), each with its kill message and one of its pair of hit sounds; a crit shows the gun's crit kill message. The frag grenade cooks in the hand once its pin is pulled: a countdown prints as the original's did, a throw keeps what is left of the four-second fuse, and one held too long bursts two units above the thrower's feet and empties the hand while the item stays, as lastFragSlot was never set. The cluster and trail bomblets each burst at their own random time within the script's window. The light key reloads (hl2 serverCmdLight) while the gun's Ready or Empty state is up and toggles the light otherwise. Not yet ported: the hitbox head-hit flinch (the goremod hit projectile and second damage sound it also names were defined nowhere and never ran).",
   "patch": {
     "assets/weapons.json": {
       "projectiles": {
@@ -10,15 +10,36 @@
               "projectile": "{namespace}:projectile/shrapgrenclusterprojectile",
               "count": "{shrap_count}",
               "speed": 20.5,
-              "on_explode": true
+              "on_explode": true,
+              "fuse_ticks": [
+                0,
+                48
+              ]
             },
             {
               "projectile": "{namespace}:projectile/shrapgrentrailprojectile",
               "count": "{trail_count}",
               "speed": 39.3,
-              "on_explode": true
+              "on_explode": true,
+              "fuse_ticks": [
+                0,
+                36
+              ]
             }
           ]
+        }
+      },
+      "images": {
+        "{namespace}:image/shrapgrenimage": {
+          "cook": {
+            "script": "onpindrop",
+            "fuse_ticks": 480,
+            "burst_height": 2.0,
+            "print": "\ue005{seconds} second{s}\ue006 cooking time left.",
+            "first_print": "\ue0054 Seconds\ue006 cooking time left.",
+            "print_ticks": 12,
+            "print_seconds": 0.15
+          }
         }
       }
     }
@@ -79,6 +100,12 @@
         "reserve": 1,
         "max_reserve": 5
       }
+    },
+    "every": {
+      "light_states": [
+        "Ready",
+        "Empty"
+      ]
     }
   },
   "shots": {},
@@ -197,7 +224,11 @@
           ]
         }
       },
-      "tasers": {}
-    }
+      "tasers": {},
+      "critical": "{uses:Emote_Critical}"
+    },
+    "uses": [
+      "Emote_Critical"
+    ]
   }
 }

@@ -1351,8 +1351,8 @@ impl EventHost<'_> {
             }
             PlayerOp::SpawnExplosion { projectile, scale } => {
                 if let Some(projectile) = projectile {
-                    let feet = Vec3::from(self.session.peers[&owner].player.state().feet);
-                    self.spawn_explosion(d, projectile, feet + Vec3::Y, *scale);
+                    let at = self.session.explosion_point(owner)?;
+                    self.spawn_explosion(d, projectile, at, *scale);
                 }
             }
             // `Player::ChangeDataBlock`: unknown datablocks are ignored.

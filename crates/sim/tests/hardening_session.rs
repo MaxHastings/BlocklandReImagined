@@ -172,6 +172,7 @@ fn tool_pack() -> bri_weapons::Pack {
                 volleys: vec![],
                 last_shot: None,
                 state_shots: Default::default(),
+                cook: None,
             },
         );
         items.insert(

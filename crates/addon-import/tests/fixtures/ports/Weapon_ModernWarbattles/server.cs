@@ -210,6 +210,49 @@ datablock ProjectileData(shrapGrenProjectile : standinPistolProjectile)
    explodeOnDeath      = true;
 };
 
+datablock ItemData(shrapGrenItem : standinPistolItem)
+{
+   uiName = "Stand-in Grenade";
+   image = shrapGrenImage;
+   maxmag = 1;
+   ammotype = "Frag Grenades";
+};
+
+// The pin drops as the trigger goes down; it flies as it comes up.
+datablock ShapeBaseImageData(shrapGrenImage)
+{
+   shapeFile = "./pistol.dts";
+   mountPoint = 0;
+   className = "WeaponImage";
+   item = shrapGrenItem;
+   projectile = shrapGrenProjectile;
+   projectileType = Projectile;
+
+   stateName[0]                     = "Activate";
+   stateTimeoutValue[0]             = 0.1;
+   stateTransitionOnTimeout[0]      = "Ready";
+
+   stateName[1]                     = "Ready";
+   stateTransitionOnTriggerDown[1]  = "Tick";
+   stateTransitionOnNoAmmo[1]       = "Empty";
+   stateAllowImageChange[1]         = true;
+
+   stateName[2]                     = "Tick";
+   stateTransitionOnTriggerUp[2]    = "Fire";
+   stateScript[2]                   = "onPinDrop";
+   stateAllowImageChange[2]         = true;
+
+   stateName[3]                     = "Fire";
+   stateTransitionOnTimeout[3]      = "Activate";
+   stateTimeoutValue[3]             = 0.2;
+   stateFire[3]                     = true;
+   stateScript[3]                   = "onFire";
+   stateWaitForTimeout[3]           = true;
+
+   stateName[4]                     = "Empty";
+   stateTransitionOnAmmo[4]         = "Ready";
+};
+
 datablock ProjectileData(heavyMachineGunProjectile : standinPistolProjectile)
 {
    directDamage        = 12;
@@ -411,6 +454,80 @@ function shrapGrenprojectile::onExplode(%this, %obj)
    for(%i = 0; %i < %shards; %i++)
       spawnShard(%shrapData, %obj.getPosition(), getRandom(-12,12), getRandom(-12,12), getRandom(-12,12));
 }
+
+function shrapGrenImage::onPinDrop(%this, %obj, %slot)
+{
+   %obj.chargeStart = getSimTime();
+   if(!isEventPending(%obj.burnSched))
+   {
+      %obj.burnSched = schedule(4000,0,"burnedIt",%obj,%slot);
+      %obj.warnTime = "4 Seconds";
+      %obj.warnSched = schedule(100,0,sendCenterNade,%obj.client);
+   }
+}
+
+function sendCenterNade(%client)
+{
+   if(isObject(%client.player) && %client.player.warntime !$= "0 seconds")
+   {
+      commandtoclient(%client,'centerprint',"\c5"@%client.player.warnTime@"\c6 cooking time left.",0.15);
+      %client.player.warntime = getWord(%client.player.warntime,0)-0.1@" seconds";
+      if(getWord(%client.player.warnTime,0) == 1)
+         %client.player.warnTime = "1 second";
+      %client.player.warnsched = schedule(100,0,sendCenterNade,%client);
+   }
+}
+
+function shrapGrenImage::onFire(%this, %obj, %slot)
+{
+   cancel(%obj.burnSched);
+   cancel(%obj.warnSched);
+   %obj.chargeEnd = getSimTime();
+   %obj.chargeTime = %obj.chargeEnd - %obj.chargeStart;
+   Parent::onFire(%this, %obj, %slot);
+}
+
+function burnedIt(%player, %slot)
+{
+   cancel(%player.warnSched);
+   %pos = %player.getPosition();
+   %posz = getWord(%pos,2);
+   %burned = new Projectile()
+   {
+      datablock = shrapGrenProjectile;
+      initialPosition = getWords(%pos,0,1) SPC %posz + 2;
+      sourceObject = %player;
+      isBurned = true;
+   };
+   %burned.explode();
+}
+
+package standinGrenadeFuse
+{
+   function projectile::onAdd(%obj,%a,%b)
+   {
+      parent::onAdd(%obj,%a,%b);
+      if(%obj.dataBlock $= "shrapGrenProjectile" && !%obj.isBurned)
+      {
+         %oldLT = 4000;
+         %cookTime = %obj.client.player.chargeTime;
+         %new = %oldLT - %cookTime;
+         %obj.schedule(%new,"explode");
+      }
+      if(%obj.dataBlock $= "shrapGrenClusterProjectile" && !%obj.isBurned)
+      {
+         %oldLT = 400;
+         %new = %oldLT - (getRandom(0,400));
+         %obj.schedule(%new,"explode");
+      }
+      if(%obj.dataBlock $= "shrapGrenTrailProjectile" && !%obj.isBurned)
+      {
+         %oldLT = 400;
+         %new = %oldLT - (getRandom(100,400));
+         %obj.schedule(%new,"explode");
+      }
+   }
+};
 
 function hl2AmmoOnReload(%this, %obj, %slot)
 {

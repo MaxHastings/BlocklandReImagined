@@ -170,6 +170,7 @@ fn image(name: &str, states: Vec<State>) -> (String, Image) {
             volleys: vec![],
             last_shot: None,
             state_shots: Default::default(),
+            cook: None,
         },
     )
 }

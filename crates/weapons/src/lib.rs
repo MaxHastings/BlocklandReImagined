@@ -303,6 +303,88 @@ pub struct Image {
     /// Each takes rounds and fires `volleys` as `onFire`'s shot does.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub state_shots: BTreeMap<String, Shot>,
+    /// A grenade cooked in the hand ([`Cook`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cook: Option<Cook>,
+}
+/// [`Image::cook`]: a fuse that starts burning in the hand, as v20 grenade
+/// scripts timed one (`getSimTime` as the pin drops, a schedule to go off
+/// in the hand). The image's next shot carries what is left of it and goes
+/// off when it runs out; held that long, it goes off in the hand instead:
+/// the image's projectile explodes above the holder, who puts it away and
+/// keeps the grenade. Putting it away first puts the fuse out.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Cook {
+    /// The state script that lights the fuse (`onPinDrop`), lowercase.
+    pub script: String,
+    /// How long the fuse burns, in ticks (120 a second), 1 to 36000.
+    pub fuse_ticks: u32,
+    /// Where it goes off in the hand, in units above the holder's feet.
+    #[serde(default)]
+    pub burst_height: f32,
+    /// Shown in the middle of the holder's screen while it burns, every
+    /// `print_ticks` from the first, for `print_seconds`: `{seconds}` is
+    /// the time left to a tenth (`3.9`, `1`) and `{s}` an `s` unless that is
+    /// exactly 1. `first_print` replaces the first. Empty for none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub print: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub first_print: String,
+    /// 1 to 1200.
+    #[serde(default = "twelve")]
+    pub print_ticks: u32,
+    /// 0 to 10.
+    #[serde(default)]
+    pub print_seconds: f32,
+}
+fn twelve() -> u32 {
+    12
+}
+impl Cook {
+    /// What the holder reads `burned` ticks after the fuse was lit, if
+    /// it is a print tick: the first at `print_ticks`, showing it whole.
+    pub fn print_at(&self, burned: u32) -> Option<String> {
+        if self.print.is_empty() || burned == 0 || !burned.is_multiple_of(self.print_ticks) {
+            return None;
+        }
+        if burned == self.print_ticks && !self.first_print.is_empty() {
+            return Some(self.first_print.clone());
+        }
+        // Counted down a step at a time from the whole fuse, as the
+        // scripts' own text was.
+        let left = self
+            .fuse_ticks
+            .checked_sub(burned - self.print_ticks)
+            .filter(|l| *l > 0)?;
+        let tenths = (left as f32 / 12.0).round() as u32;
+        let seconds = if tenths.is_multiple_of(10) {
+            format!("{}", tenths / 10)
+        } else {
+            format!("{}.{}", tenths / 10, tenths % 10)
+        };
+        Some(
+            self.print
+                .replace("{seconds}", &seconds)
+                .replace("{s}", if tenths == 10 { "" } else { "s" }),
+        )
+    }
+    fn validate(&self) -> Result<()> {
+        ensure!(
+            !self.script.is_empty()
+                && self.script.len() <= 64
+                && self.script == self.script.to_ascii_lowercase()
+                && (1..=36_000).contains(&self.fuse_ticks)
+                && self.burst_height.is_finite()
+                && (-10.0..=10.0).contains(&self.burst_height)
+                && (1..=1200).contains(&self.print_ticks)
+                && (0.0..=10.0).contains(&self.print_seconds)
+                && self.print.len() <= 255
+                && self.first_print.len() <= 255,
+            "Invalid cook"
+        );
+        Ok(())
+    }
 }
 /// [`Image::last_shot`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -372,6 +454,13 @@ pub struct Magazine {
     /// a two-barrel gun's last barrel. 0 for none.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub last_rounds: u32,
+    /// The image states (by name, any case) the light key reloads in. In
+    /// any other state, or when no reload can start (a full magazine, no
+    /// reserve, one already under way), the key works the light as usual,
+    /// as the hl2 ammo system's packaged `serverCmdLight` did. Empty: the
+    /// key reloads in any state and never works the light. At most 8.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub light_states: Vec<String>,
 }
 fn max_reserve() -> u32 {
     100_000
@@ -416,6 +505,14 @@ impl Magazine {
         for sound in [&self.reload_sound, &self.empty_sound] {
             ensure!(sound.len() <= 128, "Invalid magazine sound");
         }
+        ensure!(
+            self.light_states.len() <= 8
+                && self
+                    .light_states
+                    .iter()
+                    .all(|s| (1..=64).contains(&s.len())),
+            "Invalid magazine light states"
+        );
         Ok(())
     }
     /// What the ammo display calls it.
@@ -780,6 +877,11 @@ pub struct Children {
     /// When it explodes.
     #[serde(default)]
     pub on_explode: bool,
+    /// Each child goes off after a random number of ticks in this range,
+    /// inclusive, as scripts scheduled each one's `explode` (cluster
+    /// bomblets bursting one after another); 0 to 36000.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fuse_ticks: Option<[u32; 2]>,
 }
 fn one_u32() -> u32 {
     1
@@ -1330,6 +1432,14 @@ impl Pack {
                 "Invalid state shots of image {id}: at most 8, by lowercase state script other \
                  than onfire, each a shot as its own without hitscan"
             );
+            if let Some(cook) = &image.cook {
+                cook.validate()
+                    .with_context(|| format!("image {id}: fuse_ticks 1 to 36000, burst_height -10 to 10, print_ticks 1 to 1200, print_seconds 0 to 10, a lowercase script"))?;
+                ensure!(
+                    image.projectile.is_some(),
+                    "Image {id} cooks but has no projectile to go off"
+                );
+            }
             ensure!(
                 volleys_ok(&image.volleys),
                 "Invalid volleys of image {id}: at most 4, each a projectile of the pack, \
@@ -1461,9 +1571,11 @@ impl Pack {
                         && (0.0..=500.0).contains(&c.speed)
                         && (0.0..=1.0).contains(&c.inherit)
                         && (c.every_ticks == 0 || c.every_ticks >= 4)
-                        && (c.every_ticks > 0 || c.on_bounce || c.on_explode),
+                        && (c.every_ticks > 0 || c.on_bounce || c.on_explode)
+                        && c.fuse_ticks.is_none_or(|[a, b]| a <= b && b <= 36_000),
                     "Invalid children of projectile {id}: count 1 to 16, speed 0 to 500, \
-                     inherit 0 to 1, every_ticks 0 or at least 4, and some moment to throw them"
+                     inherit 0 to 1, every_ticks 0 or at least 4, some moment to throw them, \
+                     fuse_ticks rising and at most 36000"
                 );
             }
             if let Some(a) = &p.aura {

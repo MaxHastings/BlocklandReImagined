@@ -1680,9 +1680,9 @@ impl Session {
                     return Ok(Reply::Accepted);
                 }
                 // A gun with a magazine reloads on the light key, as tactical
-                // packs packaged `serverCmdLight` to do.
-                if self.weapons.ammo(bri_weapons::ActorId(owner)).is_some() {
-                    self.weapons.reload(bri_weapons::ActorId(owner))?;
+                // packs packaged `serverCmdLight` to do; some leave the key
+                // to the light when they cannot reload.
+                if self.weapons.light_key(bri_weapons::ActorId(owner))? {
                     return Ok(Reply::Accepted);
                 }
                 self.toggle_light(owner)?;

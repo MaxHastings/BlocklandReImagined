@@ -212,7 +212,7 @@ page as well.
 | Add-On | Port | Status | What it covers |
 |---|---|---|---|
 | `Weapon_Shotgun` (Sawn-off Shotgun) | `weapon_shotgun` | verified | `shotgunImage::onFire`: the pellets, their spread and the recoil, read from the copy's own script |
-| `Weapon_ModernWarbattles` (Bushido's Adventurer's Weapons) | `weapon_modernwarbattles` | partial | the hl2 ammo system (magazines, reserves, reloads, ammo boxes, spare guns), every gun's shot from its own `onFire` (the Heavy Machine Gun's three fire states), the hitscan guns and their crits, the melee swings (players and vehicles, kill messages, hit sounds), headshots and the frag grenade's shrapnel. Not yet: the crit effects, which belong to the separate `Emote_Critical` |
+| `Weapon_ModernWarbattles` (Bushido's Adventurer's Weapons) | `weapon_modernwarbattles` | partial | the hl2 ammo system (magazines, reserves, reloads, ammo boxes, spare guns), every gun's shot from its own `onFire` (the Heavy Machine Gun's three fire states), the light key falling through to the light, the hitscan guns, their crits and shoves while `Emote_Critical` is on (its burst and sounds), the melee swings (players and vehicles, kill messages, hit sounds), headshots, and the frag grenade's cooking, countdown and shrapnel. Not yet: a head hit's flinch |
 | `Weapon_AdventurePack` (the Glass 1019 release) | `weapon_adventurepack` | partial | the same ammo system with its own reserves, its shots (the Paired Shotgun's single barrel), hitscan guns, headshots and the taser's tumble, sharing the rules above |
 
 ## Host rules
@@ -312,6 +312,7 @@ copy's own items:
 | `types` | each ammo type by the name the items give it: the engine's `ammo` name, the starting `reserve` and the `max_reserve`. An item naming a type not listed stops the port, so a copy with other ammo is named in the report rather than guessed |
 | `reload_ticks` | the reload's length when the image's states do not show it |
 | `one_by_one` | the state script that loads one round (`onReloadSingle`): images with a state running it reload a round at a time, each round lasting from that state back to it |
+| `every` | magazine fields for every gun (`"light_states": ["Ready", "Empty"]`), before `items` |
 | `items` | extra magazine fields for one item, by datablock name |
 
 The reload lasts as long as the image's own reload states: from the state
@@ -402,3 +403,8 @@ goes in `"values"`: each becomes `{{name}}` in the script as a Rhai
 literal, after `{capture}`s in it are filled, so a value can be built from
 what the patterns read (`"{namespace}:sound/{baton_sound_a}"`).
 
+When the scripts used another Add-On's datablocks only if it was there
+(`if(isObject(CritProjectile))`), list it in the rules' `"uses"` by its v20
+folder name (`["Emote_Critical"]`). The rules then name it in
+`optional_dependencies`, `{uses:Emote_Critical}` in a value is its import's
+id, and the script asks `enabled(...)` before using its content.

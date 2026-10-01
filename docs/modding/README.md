@@ -163,13 +163,13 @@ HUD panels can only show keys the viewer receives. `persist` (default
 | `aim()`, `me()`, `entities()` | `add_player(p, key, amount)` | `damage(target, amount[, by[, type]])`, `explode(...)`: `damage` |
 | `noise(seed, x, z)`, `hash3(seed, x, y, z)` | `entity_get(e, key)`, `entity_set(e, key, v)` | `spawn_entity`, `remove_entity`, `steer`, `label`: `entity` |
 | `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)` | | `teleport`, `respawn`, `set_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`, `take_item(p, item)`, `drop_item(item, x, y, z[, vx, vy, vz[, data]])`: `player` |
-| `raycast(from, dir, range[, ignore])`, `can_damage(by, target)` | | `set_fov(p, fov)`, `set_speed_scale(p, scale)`, `set_image_ammo(p, ammo)`, `mount_image(p, image)`: `player` |
+| `raycast(from, dir, range[, ignore])`, `can_damage(by, target)`, `enabled(add_on)` | | `set_fov(p, fov)`, `set_speed_scale(p, scale)`, `set_image_ammo(p, ammo)`, `mount_image(p, image)`: `player` |
 | | | `give_ammo(p, ammo, rounds)`, `set_reserve(p, ammo, rounds)`, `set_rounds(p, item, rounds)`, `reload(p)`: `player` |
 | `brick_box(brick)`, `voxel(brick)`, `can_place_voxel(x, y, z)` | | `place_voxel(x, y, z, material)`: `world.edit`; `set_avatar_colors(p, colors)`: `player` |
 | | | `copy_build(p, brick, limit, above_only, tool)`, `copy_box(p, min, max, limit, tool)`, `mirror_copy(p, axis)`: `build` |
 | | | `cut_copy(p)`, `paint_copy(p, color)`, `paint_fill(p, brick, color, limit)`: `world.edit` |
 | | | `push`, `tumble`, `hold`, `hold_distance`, `let_go`, `spawn_vehicle`, `remove_vehicle`: `physics` |
-| | | `heal(p, amount)`, `fire(...)`: `damage` |
+| | | `heal(p, amount)`, `fire(...)`, `spawn_explosion(p, projectile, scale)`: `damage` |
 | | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds)` (`()` for everyone): `chat` |
 | | | `play_sound(p, sound)` at a player's ears, `sound_at(sound, x, y, z)`, `beam(from, to[, options])`, `play_thread(p, thread, sequence)`, `show_box(p, min, max, tool)`, `hide_box(p)`: `effects` |
 | | | `set_map_lights([x, y, z], radius, options)`: `lighting` |
@@ -177,6 +177,15 @@ HUD panels can only show keys the viewer receives. `persist` (default
 
 Coming from TorqueScript? [torque-equivalents.md](torque-equivalents.md)
 lists what each v20 call you know became here, and what is not here yet.
+
+**Another Add-On's content.** A rule fires projectiles, mounts images and
+spawns vehicles of its own package and of each Add-On in its
+`dependencies`. One it uses only when that Add-On happens to be on, as a
+v20 script tested `isObject(critProjectile)` for a datablock another
+Add-On made, goes in `optional_dependencies` instead
+(`"optional_dependencies": { "emote_critical": "*" }`): the game runs
+without it, an enabled one must meet the requirement, and
+`enabled("emote_critical")` says whether it is on in this game.
 
 A value from `players()` is a map with `id`, `name`, `x`, `y`, `z` (the
 feet), `alive`, `admin`, `ex`, `ey`, `ez` (the eye), `lx`, `ly`, `lz` (the
@@ -534,7 +543,8 @@ The fields you are most likely to change:
 | image | `last_shot` | `{ "shot": {...}, "volleys": [...] }`: what the magazine's last `last_rounds` rounds fire instead (a two-barrel gun's single barrel) |
 | image | `state_shots` | `{ "onfire2": {...} }`: a shot fired on entering a state with that script, as onFire's is, so a gun can spread wider as it keeps firing |
 | image state | `arm`, `gesture` | the holder's animation on entering it: `arm` on thread 2 (`shiftright`), `gesture` on thread 3, the other hand |
-| projectile | `children` | smaller projectiles it throws out as it flies, bounces or explodes: one set or a list of up to 4, each its own `projectile`, `count`, `speed` |
+| projectile | `children` | smaller projectiles it throws out as it flies, bounces or explodes: one set or a list of up to 4, each its own `projectile`, `count`, `speed`; `fuse_ticks: [0, 48]` sets each child off after a random time in that range, as cluster bomblets |
+| image | `cook` | a grenade whose fuse burns from a state in the hand (below) |
 | projectile | `fixed_damage` | its direct damage stays as authored at any scale |
 | item | `ui_name` | the name players see |
 | image | `zoom` | `{ "fov": 20, "on_jet": true, "crosshair": false, "first_person": true }`: aim with the zoom key (and the right mouse button with `on_jet`), hide the crosshair, force first person while aiming |
@@ -567,7 +577,24 @@ sent to them alone and only when it changes. A size is 1 to 1000 rounds;
 an ammo name is 1 to 32 letters, digits, `.`, `_` or `-`.
 
 The light key reloads a gun with a magazine unless its image gives the key
-its own command (below). The
+its own command (below). With `"light_states": ["Ready", "Empty"]` it
+reloads only from those states, and works the light as usual whenever it
+cannot reload (a full magazine, no reserve), as the hl2 ammo system did.
+
+**Cooked grenades.** An image's `cook` lights a fuse in the hand as a
+state script runs, and the shot it fires next carries what is left:
+
+```json
+"cook": { "script": "onpindrop", "fuse_ticks": 480, "burst_height": 2.0,
+          "print": "{seconds} second{s} left", "print_ticks": 12, "print_seconds": 0.15 }
+```
+
+The holder reads `print` in the middle of their screen every
+`print_ticks` while it burns (`{seconds}` the time left to a tenth, `{s}`
+an `s` unless it is exactly 1; `first_print` replaces the first). Held for
+the whole `fuse_ticks`, the image's projectile goes off `burst_height`
+above their feet and they put it away, keeping the grenade. Putting it
+away first puts the fuse out. The
 [Commando rifle](../../packages/samples/sample-commando-rifle/assets/weapons.json)
 is a plain scoped rifle: raise it, fire, let go, fire again.
 

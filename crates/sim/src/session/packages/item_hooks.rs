@@ -37,14 +37,9 @@ pub(in crate::session) struct ItemHooks {
 }
 
 /// Whether `package` may speak for `id` (`namespace:kind/name`): its own
-/// content or a dependency's.
+/// content, a dependency's or an enabled optional dependency's.
 pub(in crate::session) fn owns(catalog: &Catalog, package: &str, id: &str) -> bool {
-    let namespace = id.split(':').next().unwrap_or_default();
-    namespace == package
-        || catalog
-            .packages
-            .get(package)
-            .is_some_and(|p| p.manifest.dependencies.contains_key(namespace))
+    catalog.uses(package, id.split(':').next().unwrap_or_default())
 }
 
 impl Session {

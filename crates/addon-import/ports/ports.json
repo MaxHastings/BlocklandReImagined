@@ -58,14 +58,39 @@
           "battlerifle_up": "getforwardvector\\s*\\(\\s*\\)\\s*,\\s*[0-9.]+\\s*\\)\\s*,\\s*\"\\s*0\\s+0\\s+([0-9]*\\.?[0-9]+)\\s*\"",
           "battlerifle_test": "getworldboxcenter\\s*\\(\\s*\\)\\s*,\\s*2\\s*\\)\\s*-\\s*3\\.3\\s*\\*"
         },
+        "burnedIt": {
+          "burn_height": "%posz\\s*\\+\\s*2\\b",
+          "burn_grenade": "datablock\\s*=\\s*shrapgrenprojectile\\s*;",
+          "burn_now": "%burned\\.explode\\s*\\(\\s*\\)"
+        },
         "hl2AmmoOnReload": {
           "magazine": "toolmag",
           "reserve": "toolammo"
+        },
+        "projectile::onAdd": {
+          "fuse_thrown": "\"shrapgrenprojectile\"[\\s\\S]*?%oldlt\\s*=\\s*4000\\s*;[\\s\\S]*?%\\w+\\s*=\\s*%obj\\.client\\.player\\.chargetime\\s*;[\\s\\S]*?%new\\s*=\\s*%oldlt\\s*-\\s*%\\w+\\s*;[\\s\\S]*?schedule\\s*\\(\\s*%new\\s*,\\s*\"explode\"",
+          "fuse_cluster": "\"shrapgrenclusterprojectile\"[\\s\\S]*?%oldlt\\s*=\\s*400\\s*;[\\s\\S]*?%oldlt\\s*-\\s*\\(\\s*getrandom\\s*\\(\\s*0\\s*,\\s*400\\s*\\)\\s*\\)",
+          "fuse_trail": "\"shrapgrentrailprojectile\"[\\s\\S]*?%oldlt\\s*=\\s*400\\s*;[\\s\\S]*?%oldlt\\s*-\\s*\\(\\s*getrandom\\s*\\(\\s*100\\s*,\\s*400\\s*\\)\\s*\\)"
         },
         "revolverImage::isRaycastCritical": {
           "revolver_shove": "getforwardvector\\s*\\(\\s*\\)\\s*,\\s*([0-9]*\\.?[0-9]+)\\s*\\)\\s*,\\s*\"[^\"]*\"\\s*\\)\\s*\\)",
           "revolver_up": "getforwardvector\\s*\\(\\s*\\)\\s*,\\s*[0-9.]+\\s*\\)\\s*,\\s*\"\\s*0\\s+0\\s+([0-9]*\\.?[0-9]+)\\s*\"",
           "revolver_test": "getworldboxcenter\\s*\\(\\s*\\)\\s*,\\s*2\\s*\\)\\s*-\\s*3\\.3\\s*\\*"
+        },
+        "sendCenterNade": {
+          "cook_print": "'centerprint'\\s*,\\s*\"\\\\c5\"\\s*@\\s*%client\\.player\\.warntime\\s*@\\s*\"\\\\c6 cooking time left\\.\"\\s*,\\s*0\\.15\\s*\\)",
+          "cook_step": "getword\\s*\\(\\s*%client\\.player\\.warntime\\s*,\\s*0\\s*\\)\\s*-\\s*0\\.1\\s*@\\s*\" seconds\"",
+          "cook_one": "==\\s*1\\s*\\)\\s*%client\\.player\\.warntime\\s*=\\s*\"1 second\"",
+          "cook_every": "schedule\\s*\\(\\s*100\\s*,\\s*0\\s*,\\s*sendcenternade"
+        },
+        "shrapGrenImage::onFire": {
+          "cook_out": "cancel\\s*\\(\\s*%obj\\.burnsched\\s*\\)",
+          "cook_held": "%obj\\.chargetime\\s*=\\s*%obj\\.chargeend\\s*-\\s*%obj\\.chargestart"
+        },
+        "shrapGrenImage::onPinDrop": {
+          "cook_start": "%obj\\.chargestart\\s*=\\s*getsimtime\\s*\\(\\s*\\)",
+          "cook_fuse": "schedule\\s*\\(\\s*4000\\s*,\\s*0\\s*,\\s*\"burnedit\"",
+          "cook_first": "%obj\\.warntime\\s*=\\s*\"4 seconds\"\\s*;\\s*%obj\\.warnsched\\s*=\\s*schedule\\s*\\(\\s*100\\s*,\\s*0\\s*,\\s*sendcenternade"
         },
         "shrapGrenprojectile::onExplode": {
           "shrap_cluster": "%shrapdata\\s*=\\s*shrapgrenclusterprojectile",
@@ -85,7 +110,9 @@
         "crates/addon-import/tests/adventure_port.rs ammo_boxes_and_headshots_play_in_a_hosted_game",
         "crates/addon-import/tests/adventure_port.rs hitscan_crits_and_melee_kills_play_in_a_hosted_game",
         "crates/addon-import/tests/adventure_port.rs melee_swings_wreck_vehicles",
-        "crates/addon-import/tests/adventure_port.rs a_dropped_spare_gun_empties_its_magazine_into_the_reserve"
+        "crates/addon-import/tests/adventure_port.rs a_dropped_spare_gun_empties_its_magazine_into_the_reserve",
+        "crates/addon-import/tests/adventure_port.rs crits_play_with_the_critical_hit_emote",
+        "crates/addon-import/tests/adventure_port.rs a_grenade_cooks_in_the_hand"
       ]
     },
     {

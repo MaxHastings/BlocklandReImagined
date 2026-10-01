@@ -8875,3 +8875,28 @@ test boxes now use these hull sizes. Sizes: 1x4x5 (players), 1x14x10
 (Steel Ball, jeep, tank), 1x20x12 (Stunt Plane); mirrors 1x4x5 and
 1x14x10. Still to confirm on the PC: where the turret's mount node puts
 it.
+
+## 2026-10-01 Adventure ports: crit effects, grenade cooking, light key (branch `claude/adventure-pack-n3spj2`)
+
+Emote_Critical (the Add-On ModernWarbattles' raycast script checks for)
+holds only datablocks, so the importer converts it whole; the bundle pins
+its sha256 (503b3d0d...1ec6). The importer now resolves an emitter's
+`emitterNode` by name (falling back to a time multiple of 1 with a
+diagnostic) instead of dropping the emitter. New seams: manifest
+`optional_dependencies` (an Add-On's rules may use another's content when
+it is on; `Catalog::uses`, script `enabled(id)`), op and script
+`spawn_explosion(player, projectile, scale)` (capability damage, same
+point as the events' SpawnExplosion), port rules `uses`, magazine
+`light_states` (the light key reloads in those states, hl2
+`serverCmdLight`), magazines-port `every`, image `cook` (pin pulled lights
+a fuse that prints a countdown, carries into the thrown shot and bursts in
+the hand when it runs out; saved with the world), children `fuse_ticks`
+(random per-bomblet fuse). ModernWarbattles crits and shoves only while
+Emote_Critical is on, with its explosion and four sounds as the original
+played them; 1019 never crits. Remaining gap: the hitbox head-hit flinch
+(needs client body thread 0 and a timer); the head hit's goremod
+projectile and second sound were defined nowhere and never ran.
+
+Tests: `adventure_port.rs` `crits_play_with_the_critical_hit_emote`,
+`a_grenade_cooks_in_the_hand`, light-key checks in the ammo test, and the
+hitscan test now expects no crit or shove without Emote_Critical.

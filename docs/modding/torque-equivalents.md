@@ -55,6 +55,8 @@ operation that needs a capability.
 | `centerPrint`, `bottomPrint` | `center_print(p, text, s)`, `bottom_print(p, text, s)` | `chat` |
 | `messageClient`, `messageAll` | `tell(p, text)`, `broadcast(text)` | `chat` |
 | `serverPlay3D(%profile, %pos)`, `%client.play2D` | `sound_at(profile, x, y, z)`, `play_sound(p, profile)` | `effects` |
+| `%player.spawnExplosion(%projectile, %scale)` | `spawn_explosion(p, projectile, scale)` | `damage` |
+| `isObject(SomeDatablock)` of another Add-On | `optional_dependencies` and `enabled(add_on)` | |
 | `%obj.playThread(%slot, %seq)` | `play_thread(p, thread, sequence)` | `effects` |
 | A stretched `StaticShape` tracer | `beam(from, to, #{ color, width, seconds, muzzle })` | `effects` |
 | Mission lights baked into the map (v20 scripts could not change them) | `set_map_lights([x, y, z], radius, #{ on, color, brightness })` | `lighting` |

@@ -433,6 +433,15 @@ impl Session {
                     was_thrown,
                 } => self.football_catch(source.0, catcher.0, distance_feet, was_thrown),
                 WeaponEvent::DropRemoved { drop } => self.forget_drop(drop),
+                WeaponEvent::Print {
+                    actor,
+                    text,
+                    seconds,
+                } => {
+                    if self.peers.contains_key(&actor.0) {
+                        self.notify(actor.0, Notice::Center { text, seconds });
+                    }
+                }
                 WeaponEvent::Diagnostic { message, .. } => {
                     if self.notices.len() == 64 {
                         self.notices.pop_front();
