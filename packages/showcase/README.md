@@ -1,8 +1,8 @@
 # Showcase Add-Ons
 
 Add-Ons built only from what any Add-On maker gets: data, Rhai rules,
-WebAssembly and WGSL shaders. The Gravity Gun and the Steel Ball are each
-three Add-Ons, split the way the platform splits sides:
+WebAssembly and WGSL shaders. The Gravity Gun and the Steel Ball are each three Add-Ons, split the way
+the platform splits sides:
 
 | Add-On | Side | What it is |
 |---|---|---|
@@ -25,7 +25,8 @@ sounds); each `client/main.wasm` is built from the `main.wat` beside it
 (`BRI_BLESS=1 cargo test -p bri-client-sandbox --test showcase`, and
 `--test ragdoll` for the Ragdoll).
 
-Tests: `cargo test -p bri-sim --test showcase` (gameplay),
+Tests: `cargo test -p bri-sim --test showcase`
+(gameplay; `--test tether` for the engine's rope),
 `cargo test -p bri-net --test showcase` (a second player sees a lift and drop),
 `cargo test -p bri-client-sandbox --test showcase -- --include-ignored`
 (the effects, rendered offscreen with a GPU).

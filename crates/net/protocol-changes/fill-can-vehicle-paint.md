@@ -1,0 +1,1 @@
+`VehicleInfo::color` is the vehicle's own colour (red, green, blue, alpha) instead of a palette index, so Add-Ons paint vehicles any colour (`paint_vehicle`); `Notice::PlantError` shows an Add-On's plant-limit error; weapon images carry `paint_picker`.

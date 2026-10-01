@@ -2,6 +2,8 @@ use crate::protocol::*;
 use anyhow::{Result, ensure};
 use bri_world::OwnerId;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+/// Poses kept per player: over six seconds at the slowest remote rate.
+pub const POSE_HISTORY: usize = 32;
 pub struct Replica {
     pub weapons: bri_sim::session::WeaponView,
     pub tools: BTreeMap<OwnerId, bri_sim::session::ToolInventory>,
@@ -15,7 +17,9 @@ pub struct Replica {
     pub avatars: BTreeMap<OwnerId, bri_content::avatar::Appearance>,
     pub chat: VecDeque<bri_sim::session::ChatLine>,
     pub poses: BTreeMap<OwnerId, Pose>,
-    history: BTreeMap<OwnerId, VecDeque<Pose>>,
+    /// Each player's recent poses, oldest first. Persistent vectors: a copy
+    /// for the UI costs a reference count, not the poses.
+    history: BTreeMap<OwnerId, imbl::Vector<Pose>>,
     pub vitals: BTreeMap<OwnerId, bri_sim::session::Vitals>,
     pub minigames: Vec<bri_sim::session::MiniGameView>,
     pub vehicles: BTreeMap<u64, bri_sim::session::VehicleInfo>,
@@ -154,6 +158,13 @@ fn validate_minigames(games: &[bri_sim::session::MiniGameView]) -> Result<()> {
     Ok(())
 }
 impl Replica {
+    /// The vehicle and seat `owner` sits in, as last replicated.
+    pub fn seat_of(&self, owner: OwnerId) -> Option<(u64, u8)> {
+        self.vehicles.values().find_map(|v| {
+            let seat = v.occupants.iter().position(|o| *o == Some(owner))?;
+            Some((v.id, u8::try_from(seat).ok()?))
+        })
+    }
     pub fn new(checkpoint: Checkpoint) -> Result<Self> {
         ensure!(
             checkpoint.world.bricks.len() <= bri_world::MAX_BRICKS
@@ -482,11 +493,17 @@ impl Replica {
         }
         let history = self.history.entry(p.owner).or_default();
         history.push_back(pose.clone());
-        while history.len() > 32 {
+        while history.len() > POSE_HISTORY {
             history.pop_front();
         }
         self.poses.insert(p.owner, pose);
         Ok(())
+    }
+    /// Every player's recent poses, oldest first, including a resting pose
+    /// sent just before the move that ended it: what remote players are
+    /// interpolated from.
+    pub fn pose_history(&self) -> &BTreeMap<OwnerId, imbl::Vector<Pose>> {
+        &self.history
     }
     /// Render remote players behind the latest server tick; never extrapolate
     /// unbounded motion during a network stall. Local prediction is separate.

@@ -30,10 +30,10 @@ fn bot_brick(at: [f32; 3], owner: OwnerId) -> Brick {
 fn spawn_brick(kind: &str, at: [f32; 3], owner: OwnerId) -> Brick {
     let at = [at[0] + 0.25, at[1], at[2] + 0.25];
     let mut brick = Brick::new(ContentRef::Resolved(fixture::PLATE.into()), at, owner);
-    brick.vehicle = Some(VehicleSpawn {
+    brick.vehicle = Some(Box::new(VehicleSpawn {
         vehicle: ContentRef::Resolved(kind.into()),
         recolor: false,
-    });
+    }));
     brick
 }
 

@@ -40,6 +40,7 @@ fn variant(command: &Command) -> &'static str {
         Command::SaveBuild { .. } => "save_build",
         Command::LoadBuild { .. } => "load_build",
         Command::Activate => "activate",
+        Command::ActivateRelease => "activate_release",
         Command::Chat(_) => "chat",
         Command::Suicide => "suicide",
         Command::Respawn => "respawn",

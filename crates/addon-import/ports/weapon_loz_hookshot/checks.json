@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "checks": [
+    {
+      "fire": "weapon_loz_hookshot:weapon/hookshotitem",
+      "projectiles": 1,
+      "recoil": null,
+      "max_spread_degrees": null,
+      "why": "hookshotImage: stateFire on Fire with no onFire script, so one hookshotProjectile a click"
+    }
+  ]
+}

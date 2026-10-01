@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "notes": "Grapple Rope: where the hook strikes with a clear line to the holder, they hang from that spot on a rope as long as the distance then, for as long as they hold the click; the original's rope particles are drawn along it.",
+  "rules": {
+    "capabilities": [
+      "physics",
+      "player"
+    ]
+  },
+  "patch": {
+    "assets/weapons.json": {
+      "images": {
+        "{namespace}:image/grappleropeimage": {
+          "commands": {
+            "states": {
+              "onrelease": "{rules}:release"
+            }
+          },
+          "rope": {
+            "projectile": "{namespace}:projectile/chainprojectile",
+            "speed": "{speed}"
+          }
+        }
+      }
+    }
+  }
+}

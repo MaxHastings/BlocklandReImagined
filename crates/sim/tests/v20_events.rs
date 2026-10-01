@@ -490,10 +490,10 @@ fn bot_and_plate(s: &mut Session, builder: OwnerId, rows: Vec<EventRow>) -> (Own
     .unwrap();
     let mut world = World::new("Bots".into(), "v20".into(), vec![[1.0; 4], [0.0; 4]]);
     let mut spawn = bri_world::Brick::new(bri_world::ContentRef::Resolved("plate".into()), [8.0, 0.3, 8.0], builder);
-    spawn.vehicle = Some(bri_world::VehicleSpawn {
+    spawn.vehicle = Some(Box::new(bri_world::VehicleSpawn {
         vehicle: bri_world::ContentRef::Resolved("bot.blockhead".into()),
         recolor: false,
-    });
+    }));
     let mut plate = bri_world::Brick::new(bri_world::ContentRef::Resolved("plate".into()), [-8.0, 0.3, 8.0], builder);
     plate.events = rows;
     world.bricks.insert(1, spawn);

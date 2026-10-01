@@ -948,9 +948,9 @@ fn fill_color(p) {
         return;
     }
     if fill[1] < 7 {
-        paint_copy(p, #{ fx: fill[1] });
+        paint_copy(p, #{ color_effect: fill[1] });
     } else {
-        paint_copy(p, #{ shape: fill[1] - 7 });
+        paint_copy(p, #{ shape_effect: fill[1] - 7 });
     }
 }
 

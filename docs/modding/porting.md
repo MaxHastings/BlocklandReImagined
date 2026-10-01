@@ -77,6 +77,17 @@ names the port. If they do not match (a different version of the Add-On), it
 changes nothing, and the report names the port and says which part did not
 match.
 
+An applied port also settles its datablocks: a function it covers, or an image
+state script that calls one, becomes "ported by" that port, and a state script
+the Add-On leaves to the stock `WeaponImage` (`onFire`, `onCharge` and the
+others `WeaponsWorld::NATIVE_STATE_SCRIPTS` lists) "runs the engine's own".
+A datablock with nothing else outstanding is `converted`. For a copy listed by
+its hash, a script global it sets at load that a covered function reads (the
+Grapple Rope's `$Pref::Server::GrappleRopeAnywhere`) is noted as ported with
+that value. A field write that runs only when a required Add-On was turned off
+(`if (%error == $Error::AddOn_Disabled)`, hiding its item) is a note, not a
+gap: turning a package on turns what it needs on with it.
+
 ### A list entry
 
 ```json
@@ -216,6 +227,8 @@ page as well.
 | Add-On | Port | Status | What it covers |
 |---|---|---|---|
 | `Weapon_Shotgun` (Sawn-off Shotgun) | `weapon_shotgun` | verified | `shotgunImage::onFire`: the pellets, their spread and the recoil, read from the copy's own script |
+| `Tool_GrappleRope` (Grapple Rope) | `tool_grapplerope` | verified | host rules: where the hook strikes with a clear line of sight from `lift` above the feet, the holder hangs on a rope (`tether`) as long as the distance then while the click is held, and flies off with their speed on letting go; the image draws the rope with the chain projectile's trail (`rope`). The engine's rope stands in for `GrappleRope`'s 10 ms velocity correction; the movement keys steer only by the player's air control, as in v20 |
+| `Weapon_Loz_Hookshot` (Hookshot) | `weapon_loz_hookshot` | verified | host rules: where the spearhead strikes, the shooter's speed is set straight at the spot every `every` ms, `fast` beyond `far` and `slow` within `near`, until within `stop`; a struck player or vehicle is followed; a seated shooter pulls their vehicle only toward a player or vehicle; `/degrapple` stops it. All numbers read from the copy |
 | `Tool_Duplicator` (Plornt's Duplorcator) | `tool_duplicator` | partial | `/dup`, `/duplorcator`, `/duplicator`; `DuplorcatorImage::onFire` (reach, full trust, no public bricks, selection wait); `getStack` (up from the clicked brick, every way from the rest; the cyan highlight and how long it lasts); planting brick by brick with its count, one undo; `/saveDup` and `/loadDup` (v20 duplication files load too). Not ported: uploading a duplication from the player's computer |
 | `Tool_NewDuplicator` (Zeblote's New Duplicator) | `tool_newduplicator` | verified | its preference defaults and `$ND::Version`; `/newduplicator` and `/duplicator` down to `/d`; stack and box selection (direction, limited, box corners, its 64 and 1024-unit box limits, select wait); the mode images and their mount handling; plant mode with its planted, blocked, floating and missing-trust counts, the pivot ([Prev Seat]), `/PlantAs`, the plant wait and the big-undo question; clicking to move a selection; `/MirrorX`, `/MirrorY`, `/MirrorZ` (up and down), `/MirErrors`, `/Cut`, `/SaveDup` (with its overwrite warning), `/LoadDup`, `/AllDups`, `/DupVersion`, `/DupClients`, `/ClearDups`, `/DupHelp`; its keys (Ctrl C, V and X, Ctrl held to multiselect, Shift-Ctrl X and V, and every Send entry, under New Duplicator in Controls); force plant and `/ForcePlant`, fill colour (spray and FX cans on a selection), `/FillWrench`, `/SuperCut` and `/FillBricks` with their confirm questions, the selection box from a selection; `ndFormatMessage`. Its 10,000-brick player limit and 1,000,000-brick admin limit, with each big job's progress bar, `[Cancel Brick]` and `% Ghosted` (below) |
 | `Weapon_Sniper_Rifle` (Kaje's Sniper Rifle) | `weapon_sniper_rifle` | verified | `SniperRifleImage::onFire`: the arm's kick then the shot (`scripts.onfire`), the animation's name read from the copy's script |
@@ -315,6 +328,14 @@ command on entering any state whose script is that name; `jet`, `light`,
 `wheel` and `cancel` are the other keys while it is in hand. The rules'
 `behaviour.json` declares each command by the name after the colon, with
 its `aim_reach` and `cooldown_ticks`.
+
+A rule hears its import's projectiles with `"on_projectile_hit": true` in
+`behaviour.json`, the native form of `<projectile>::onCollision`; the
+shooter is the caller, so a hit may `paint_fill` or `paint_vehicle` for
+them. The ported
+Fill Can (`ports/tool_fill_can`) is the worked example: its image keeps
+firing its own projectile, `paint_picker` keeps it out when a can is
+picked, and its rules fill or paint what the shot hit.
 
 ## The image `shot` field
 

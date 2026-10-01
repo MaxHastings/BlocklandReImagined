@@ -237,6 +237,14 @@ pub struct Behaviour {
     /// must be quick.
     #[serde(default)]
     pub on_activate: bool,
+    /// `on_trigger(player, trigger, down)` as a living player with nothing
+    /// in their hand presses (`down` true) or lets go of a trigger
+    /// (v20's `Armor::onTrigger`). Trigger 0 is fire, the empty-hand click;
+    /// its press comes before `on_activate`. Return `true` to take the
+    /// press, so the engine does nothing more with it. Every package that
+    /// declares it is asked, in load order, until one takes it.
+    #[serde(default)]
+    pub on_trigger: bool,
     /// `on_tick()` every `tick_interval` ticks, when set.
     #[serde(default)]
     pub tick_interval: Option<u32>,
@@ -261,6 +269,10 @@ pub const POLICIES: &[&str] = &[
     // A dead player asking to come back.
     "respawn", // Any command that builds (plant, paint, wand, wrench edits).
     "build",
+    // Taking a tool, spray can or FX can into the hand, or putting it away
+    // (`serverCmdUseTool`, `serverCmdUnUseTool`, `serverCmdUseSprayCan`,
+    // `serverCmdUseFXCan`).
+    "equip",
 ];
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

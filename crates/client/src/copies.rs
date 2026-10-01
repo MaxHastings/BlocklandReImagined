@@ -182,8 +182,7 @@ impl CopyStore for CopyFiles {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bri_sim::blueprint::Blueprint;
-    use bri_world::{Brick, ContentRef};
+    use bri_sim::blueprint::{Blueprint, CopyBrick};
 
     fn wait(files: &CopyFiles) -> StoreDone {
         for _ in 0..500 {
@@ -200,8 +199,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let old = OldSaves::new(dir.path().join("saves"), dir.path().join("cache"));
         let files = CopyFiles::new(old);
-        let mut brick = Brick::new(ContentRef::Resolved("plate".into()), [0.5, 0.1, 0.25], 0);
-        brick.color = 2;
         let copy = SavedCopy {
             schema_version: SavedCopy::SCHEMA_VERSION,
             saved_by: "Host".into(),
@@ -210,7 +207,18 @@ mod tests {
                 tool: "dup:weapon/wand".into(),
                 origin: [0.0; 3],
                 size: [2, 1, 1],
-                bricks: vec![brick],
+                kinds: vec!["plate".into()],
+                prints: Vec::new(),
+                bricks: vec![CopyBrick {
+                    kind: 0,
+                    position: [0.5, 0.1, 0.25],
+                    quarter_turns: 0,
+                    color: 2,
+                    color_effect: 0,
+                    shape_effect: 0,
+                    print: None,
+                    off: 0,
+                }],
             },
         };
         files.save(1, "My House", copy.clone(), true);

@@ -587,6 +587,990 @@ fn port_and_check_port_run_from_the_executable() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// The stand-in Player Throwing (`tests/fixtures/ports/Script_PlayerThrowing`,
+/// CC0) imported into `root/addons`, its host rules beside it, both turned
+/// on: the packages a host loads.
+fn throwing_import(root: &Path) -> bri_package::packages::PackageSet {
+    use bri_package::library::Library;
+    let report = import(&options(
+        fixture("ports/Script_PlayerThrowing"),
+        root.join("addons/script_playerthrowing"),
+    ))
+    .unwrap();
+    let applied = &report.ports[0];
+    assert!(applied.applied, "{:?}", applied.reason);
+    let mut library = Library::scan(root).unwrap();
+    let plan = library.plan("script_playerthrowing", true);
+    assert!(plan.allowed(), "{:?}", plan.refused);
+    assert_eq!(plan.also, ["script_playerthrowing-rules"]);
+    library.apply(&plan).unwrap();
+    bri_package::packages::PackageSet {
+        schema_version: 1,
+        packages: ["script_playerthrowing", "script_playerthrowing-rules"]
+            .iter()
+            .map(|id| library.get(id).unwrap().package.clone())
+            .collect(),
+    }
+}
+
+/// The listed port reads this copy's own numbers (held scale, reach, look
+/// limits, throw clamp, charge notches, the front check, the set-down
+/// rule, both animations) into the host rules it writes beside the import.
+#[test]
+fn player_throwing_port_becomes_host_rules_with_this_copys_numbers() {
+    let dir = fresh("throwing");
+    let root = dir.join("content");
+    let set = throwing_import(&root);
+    let rules =
+        std::fs::read_to_string(root.join("addons/script_playerthrowing-rules/throwing.rhai"))
+            .unwrap();
+    for line in [
+        "fn node() { 0 }",
+        "fn held_scale() { parse_float(\"0.75\") }",
+        "fn reach() { parse_float(\"3\") }",
+        "fn look_up() { parse_float(\"0.6\") }",
+        "fn look_down() { parse_float(\"0.4\") }",
+        "fn min_amount() { 1 }",
+        "fn max_amount() { 30 }",
+        "fn max_charge() { 10 }",
+        "fn front_reach() { parse_float(\"2.5\") }",
+        "fn down_look() { parse_float(\"-0.85\") }",
+        "fn ground() { parse_float(\"0.3\") }",
+        "fn held_sequence() { \"death1\" }",
+        "fn holder_sequence() { \"armReadyBoth\" }",
+        "fn orbit_distance() { parse_float(\"6\") }",
+        "fn orbit_nearest() { parse_float(\"4\") }",
+        "fn orbit_farthest() { parse_float(\"9\") }",
+        "let half = parse_float(\"1.5708\") / 2.0;",
+        "let z = parse_float(\"1\") * half.sin();",
+    ] {
+        assert!(rules.contains(line), "{line} missing from\n{rules}");
+    }
+    assert!(!rules.contains("{{"), "every value is filled");
+    // The rules compile, with every hook and policy they name.
+    let catalog =
+        bri_package_runtime::Catalog::load(&root, &set, true).unwrap_or_else(|e| panic!("{e:#?}"));
+    if let Err(problems) = bri_package_runtime::script::Runtime::compile(&catalog) {
+        panic!("{problems:#?}");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Hosted, on flat ground: in a minigame, an empty-hand click lifts the
+/// player in front onto the hand (shrunk, limp, looking within the copy's
+/// limits, bricks put away, their camera circling the holder); neither may
+/// switch tools or take bricks in hand while held; the held player struggles free only after 3 s
+/// and has their body's view back; after the 5 s grab timeout the next
+/// grab, a held fire button and its release throw them at 2.5 times the
+/// full charge.
+#[test]
+fn ported_player_throwing_grabs_throws_and_lets_go_in_a_hosted_game() {
+    use bri_content::shape::{Node, Shape};
+    use bri_sim::{
+        player::MoveInput,
+        session::{Command, ControlObject, MiniGameRequest, Notice, Session, shape_mount_points},
+    };
+    use rapier3d::prelude::*;
+    use std::collections::BTreeMap;
+
+    let dir = fresh("throwing-hosted");
+    let root = dir.join("content");
+    let set = throwing_import(&root);
+    let catalog = std::sync::Arc::new(
+        bri_package_runtime::Catalog::load(&root, &set, true).unwrap_or_else(|e| panic!("{e:#?}")),
+    );
+    let mut s = Session::new(
+        bri_sim::simulation::Simulation::new(
+            bri_world::World::new("Ports".into(), "ports".into(), vec![[1.0; 4]]),
+            bri_sim::definitions::Definitions {
+                entries: Default::default(),
+            },
+            vec![
+                ColliderBuilder::cuboid(200.0, 0.5, 200.0).translation(Vector::new(0.0, -0.5, 0.0)),
+            ],
+        )
+        .unwrap(),
+    );
+    let node = |name: &str, parent: Option<usize>, translation: [f32; 3]| Node {
+        name: name.into(),
+        parent,
+        translation,
+        rotation: [0.0, 0.0, 0.0, 1.0],
+    };
+    // A Blockhead's hands: mount0 right, mount1 left.
+    let body = Shape {
+        schema_version: 1,
+        id: "v20.shape.m".into(),
+        nodes: vec![
+            node("root", None, [0.0; 3]),
+            node("chest", Some(0), [0.0, 1.5, 0.0]),
+            node("mount0", Some(1), [0.5, 0.2, -0.3]),
+            node("mount1", Some(1), [-0.5, 0.2, -0.3]),
+        ],
+        objects: vec![],
+        details: vec![],
+        meshes: vec![],
+        materials: vec![],
+        animations: vec![],
+    };
+    s.set_spawn_points(vec![Vec3::new(0.0, 0.05, 0.0)]).unwrap();
+    s.set_body_mount_points("v20.shape.m", shape_mount_points(&body))
+        .unwrap();
+    s.install_packages(catalog, None).unwrap();
+
+    let mut seq: BTreeMap<u64, u64> = BTreeMap::new();
+    let mut moves: BTreeMap<u64, u64> = BTreeMap::new();
+    let mut inputs: BTreeMap<u64, MoveInput> = BTreeMap::new();
+    let mut cmd = |s: &mut Session, owner: u64, c: Command| {
+        let n = seq.entry(owner).or_default();
+        *n += 1;
+        s.command(owner, *n, c)
+    };
+    let mut steps = |s: &mut Session, inputs: &BTreeMap<u64, MoveInput>, n: usize| {
+        for _ in 0..n {
+            for (owner, input) in inputs {
+                let m = moves.entry(*owner).or_default();
+                *m += 1;
+                let _ = s.movement(*owner, *m, *input);
+            }
+            s.step().unwrap();
+        }
+    };
+    let state = |s: &Session, owner: u64| {
+        s.motion_states()
+            .into_iter()
+            .find(|(p, _)| p.owner == owner)
+            .map(|(p, _)| p)
+            .unwrap()
+    };
+    let feet = |s: &Session, owner: u64| Vec3::from(state(s, owner).feet);
+
+    let holder = s
+        .join("Holder".into(), Vec3::new(0.0, 0.05, 0.0), false)
+        .unwrap();
+    let held = s
+        .join("Held".into(), Vec3::new(0.0, 0.05, -1.5), false)
+        .unwrap();
+    inputs.insert(holder, MoveInput::default());
+    inputs.insert(held, MoveInput::default());
+    steps(&mut s, &inputs, 2);
+    // A minigame where weapons hurt, both in it where they stand.
+    s.set_spawn_points(vec![feet(&s, holder)]).unwrap();
+    cmd(
+        &mut s,
+        holder,
+        Command::MiniGame(MiniGameRequest::Create {
+            color: 0,
+            settings: bri_minigames::Settings::default(),
+        }),
+    )
+    .unwrap();
+    let game = s.minigame_views()[0].id;
+    s.set_spawn_points(vec![feet(&s, held)]).unwrap();
+    cmd(
+        &mut s,
+        held,
+        Command::MiniGame(MiniGameRequest::Join { game }),
+    )
+    .unwrap();
+    steps(&mut s, &inputs, 330);
+    let aim = |s: &mut Session, inputs: &mut BTreeMap<u64, MoveInput>| {
+        let at = feet(s, held) + Vec3::Y * 1.3 - (feet(s, holder) + Vec3::Y * 2.1);
+        let flat = Vec3::new(at.x, 0.0, at.z).length();
+        let input = inputs.get_mut(&holder).unwrap();
+        input.yaw = at.x.atan2(-at.z);
+        input.pitch = at.y.atan2(flat);
+    };
+    aim(&mut s, &mut inputs);
+    steps(&mut s, &inputs, 2);
+
+    // The held player has bricks in hand.
+    cmd(
+        &mut s,
+        held,
+        Command::BrickHand(bri_sim::session::BrickHand {
+            stocked: true,
+            equipped: true,
+            ghost: false,
+        }),
+    )
+    .unwrap();
+    s.take_private_notices();
+
+    // Lifted onto the right hand.
+    cmd(&mut s, holder, Command::Activate).unwrap();
+    steps(&mut s, &inputs, 1);
+    let vitals = s.vitals();
+    let ride = vitals[&held].ride.expect("held");
+    assert_eq!((ride.mount, ride.seat), (holder, 0));
+    assert!((state(&s, held).scale - 0.75).abs() < 1e-4);
+    assert_eq!(vitals[&held].look_limits, Some([0.4, 0.6]));
+    // Their camera circles the holder, 6 units out, and stays there.
+    assert_eq!(
+        vitals[&held].control,
+        ControlObject::Orbit {
+            target: holder,
+            min: 4,
+            max: 9,
+            distance: 6
+        }
+    );
+    assert!(cmd(&mut s, held, Command::ControlPlayer).is_err());
+    // Turned a quarter right on the hand (`setTransform`'s " 0 0 1 1.5708"),
+    // and kept so while their mouse turns the camera.
+    let turn = |s: &Session| {
+        let d = state(s, held).yaw - state(s, holder).yaw;
+        (d + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
+    };
+    assert!(
+        (turn(&s) - std::f32::consts::FRAC_PI_2).abs() < 1e-3,
+        "{}",
+        turn(&s)
+    );
+    inputs.get_mut(&held).unwrap().yaw = 2.0;
+    steps(&mut s, &inputs, 24);
+    assert!(
+        (turn(&s) - std::f32::consts::FRAC_PI_2).abs() < 1e-3,
+        "{}",
+        turn(&s)
+    );
+    // Their bricks are put away (`unmountImage(0)`).
+    assert!(
+        s.take_private_notices()
+            .iter()
+            .any(|(o, n)| *o == held && matches!(n, Notice::PutAway))
+    );
+    // Neither switches tools (`PlayerThrowing_CanUseTools`).
+    assert!(cmd(&mut s, held, Command::EquipTool { slot: None }).is_err());
+    assert!(cmd(&mut s, holder, Command::EquipTool { slot: None }).is_err());
+    // Nor take bricks in hand (`serverCmdUseInventory`): put back.
+    cmd(
+        &mut s,
+        held,
+        Command::BrickHand(bri_sim::session::BrickHand {
+            stocked: true,
+            equipped: true,
+            ghost: false,
+        }),
+    )
+    .unwrap();
+    assert!(
+        s.take_private_notices()
+            .iter()
+            .any(|(o, n)| *o == held && matches!(n, Notice::PutAway))
+    );
+
+    // Struggling: not before 3 s, then free, restored.
+    steps(&mut s, &inputs, 120);
+    cmd(&mut s, held, Command::Activate).unwrap();
+    steps(&mut s, &inputs, 1);
+    assert!(s.vitals()[&held].ride.is_some(), "too soon to escape");
+    steps(&mut s, &inputs, 240);
+    cmd(&mut s, held, Command::Activate).unwrap();
+    steps(&mut s, &inputs, 1);
+    let vitals = s.vitals();
+    assert_eq!(vitals[&held].ride, None, "escaped");
+    assert_eq!(vitals[&held].look_limits, None);
+    assert_eq!(vitals[&held].control, ControlObject::Player);
+    assert!((state(&s, held).scale - 1.0).abs() < 1e-4);
+    assert!(cmd(&mut s, holder, Command::EquipTool { slot: None }).is_ok());
+
+    // Grab again once the 5 s timeout has passed since letting go.
+    steps(&mut s, &inputs, 300);
+    aim(&mut s, &mut inputs);
+    steps(&mut s, &inputs, 2);
+    cmd(&mut s, holder, Command::Activate).unwrap();
+    steps(&mut s, &inputs, 1);
+    assert!(s.vitals()[&held].ride.is_none(), "grab timeout");
+    steps(&mut s, &inputs, 300);
+    aim(&mut s, &mut inputs);
+    steps(&mut s, &inputs, 2);
+    cmd(&mut s, holder, Command::Activate).unwrap();
+    steps(&mut s, &inputs, 1);
+    assert!(s.vitals()[&held].ride.is_some(), "grabbed again");
+
+    // Look up, hold fire past the full charge, let go: thrown that way at
+    // 2.5 x 11.
+    inputs.get_mut(&holder).unwrap().pitch = 0.4;
+    cmd(&mut s, holder, Command::Activate).unwrap();
+    steps(&mut s, &inputs, 12 * 15);
+    cmd(&mut s, holder, Command::ActivateRelease).unwrap();
+    steps(&mut s, &inputs, 1);
+    assert_eq!(s.vitals()[&held].ride, None, "thrown");
+    let speed = Vec3::from(state(&s, held).velocity).length();
+    assert!((speed - 27.5).abs() < 1.0, "thrown at {speed}");
+    assert!(
+        state(&s, held).velocity[1] > 5.0,
+        "upward, where the holder looks"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A 2x1 plate, for a hosted game with bricks.
+fn plate() -> bri_sim::definitions::Definitions {
+    use bri_content::{
+        brick::{Brick as Mesh, Face, Quad, Surface, Vertex},
+        collision::{CollisionBody, Part},
+    };
+    let mesh = Mesh {
+        schema_version: 1,
+        id: "plate".into(),
+        footprint_studs: [2, 1],
+        height_plates: 1,
+        attachment_rows: vec!["bb".into()],
+        collision_boxes: vec![],
+        needs_external_collision: false,
+        coverage: None,
+        quads: vec![Quad {
+            face: Face::Top,
+            surface: Surface::Ramp,
+            vertices: [
+                [-0.5, 0.1, -0.25],
+                [0.5, 0.1, -0.25],
+                [0.5, 0.1, 0.25],
+                [-0.5, 0.1, 0.25],
+            ]
+            .map(|position| Vertex {
+                position,
+                normal: [0.0, 1.0, 0.0],
+                uv: [0.0; 2],
+            }),
+            colors: None,
+        }],
+    };
+    let collision = CollisionBody {
+        id: "plate".into(),
+        parts: vec![Part::Box {
+            center: [0.0; 3],
+            size: [1.0, 0.2, 0.5],
+        }],
+    };
+    let shape = bri_physics::content::collider(&collision)
+        .unwrap()
+        .build()
+        .shared_shape()
+        .clone();
+    bri_sim::definitions::Definitions {
+        entries: [(
+            "plate".to_string(),
+            bri_sim::definitions::Definition {
+                mesh,
+                collision,
+                shape,
+                indestructible: false,
+                special: Default::default(),
+                reflection: None,
+                link: None,
+                glass: [0.0; 4],
+            },
+        )]
+        .into(),
+    }
+}
+
+/// Hosted: the stand-in Fill Can, imported with the listed port, fires its
+/// projectile at a row of plates and its host rules fill them as v20 did:
+/// the colour picked, an FX can picked while it stays in hand, an
+/// administrator's limit (3 in this copy) with its message, and one undo.
+#[test]
+fn fill_can_port_rules_fill_what_v20_filled() {
+    use bri_package::{library::Library, packages::PackageSet};
+    use bri_sim::session::{Command, Notice, PackageCommand, Reply, Session, ToolAction};
+    use bri_world::{BrickId, OwnerId};
+    use rapier3d::prelude::*;
+    const NS: &str = "tool_fill_can";
+    const IMAGE: &str = "tool_fill_can:image/fillcanimage";
+    let dir = fresh("fill-can");
+    let root = dir.join("content");
+    let out = root.join(format!("addons/{NS}"));
+    let report = import(&options(fixture("ports/Tool_Fill_Can"), out.clone())).unwrap();
+    let applied = &report.ports[0];
+    assert!(applied.applied, "{:?}", applied.reason);
+    assert_eq!(applied.values["admin_limit"], "3");
+    let rules = std::fs::read_to_string(root.join(format!("addons/{NS}-rules/fill.rhai"))).unwrap();
+    assert!(rules.contains("[0.6 / 2.0, 0.3 / 2.0]"), "{rules}");
+    let library = Library::scan(&root).unwrap();
+    let set = PackageSet {
+        schema_version: 1,
+        packages: [NS.to_string(), format!("{NS}-rules")]
+            .iter()
+            .map(|id| library.get(id).unwrap().package.clone())
+            .collect(),
+    };
+    let catalog = std::sync::Arc::new(
+        bri_package_runtime::Catalog::load(&root, &set, true).unwrap_or_else(|e| panic!("{e:#?}")),
+    );
+    let mut pack =
+        Pack::from_json(&std::fs::read(out.join("assets/weapons.json")).unwrap()).unwrap();
+    assert!(pack.images[IMAGE].paint_picker);
+    // Stand-ins for the stock spray cans (base game content).
+    for can in
+        std::iter::once(bri_sim::session::SPRAY_CAN_IMAGE).chain(bri_sim::session::FX_CAN_IMAGES)
+    {
+        let mut image = pack.images[IMAGE].clone();
+        image.id = can.into();
+        image.projectile = None;
+        image.paint_picker = false;
+        pack.images.insert(image.id.clone(), image);
+    }
+    const RED: u8 = 2;
+    const BLUE: u8 = 1;
+    // A spawn brick, of a build no one here owns, whose committed stunt
+    // plane takes its colour.
+    let mut world = bri_world::World::new(
+        "Fill".into(),
+        "fill".into(),
+        vec![[1.0; 4], [0.2, 0.4, 1.0, 1.0], [0.9, 0.1, 0.1, 1.0]],
+    );
+    let mut pad = bri_world::Brick::new(
+        bri_world::ContentRef::Resolved("plate".into()),
+        [-1.0, 0.1, 10.25],
+        4242,
+    );
+    pad.color = RED;
+    pad.vehicle = Some(Box::new(bri_world::VehicleSpawn {
+        vehicle: bri_world::ContentRef::Resolved(
+            "vehicle_stunt_plane:vehicle/stuntplanevehicle".into(),
+        ),
+        recolor: true,
+    }));
+    world.bricks.insert(1, pad);
+    world.next_brick_id = 2;
+    let mut s = Session::new(
+        bri_sim::simulation::Simulation::new(
+            world,
+            plate(),
+            vec![
+                ColliderBuilder::cuboid(100.0, 0.5, 100.0).translation(Vector::new(0.0, -0.5, 0.0)),
+            ],
+        )
+        .unwrap(),
+    );
+    let spawn = Vec3::new(0.5, 0.05, 4.0);
+    s.set_spawn_points(vec![spawn]).unwrap();
+    s.set_weapon_pack(pack).unwrap();
+    let plane = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../packages/imported/vehicle_stunt_plane/assets/vehicles.json");
+    s.set_vehicle_pack(bri_vehicles::Pack::load(plane).unwrap(), Vec::new())
+        .unwrap();
+    s.install_packages(catalog, None).unwrap();
+    // One sequence for every message, so each player's only rises.
+    let seq = std::cell::Cell::new(0u64);
+    let next = || {
+        seq.set(seq.get() + 1);
+        seq.get()
+    };
+    let cmd = |s: &mut Session, owner: OwnerId, command: Command| s.command(owner, next(), command);
+    let steps = |s: &mut Session, n: usize| {
+        for _ in 0..n {
+            s.step().unwrap();
+        }
+    };
+    // Five red plates in a row on the ground, one end facing whoever
+    // planted them, at `x`.
+    let plant_row = |s: &mut Session, owner: OwnerId, x: f32| -> Vec<BrickId> {
+        (0..5)
+            .map(|i| {
+                steps(s, 121);
+                match cmd(
+                    s,
+                    owner,
+                    Command::Plant {
+                        definition: "plate".into(),
+                        position: [x, 0.1, 0.25 - 0.5 * i as f32],
+                        quarter_turns: 0,
+                        color: RED,
+                    },
+                ) {
+                    Ok(Reply::Planted(id)) => id,
+                    other => panic!("plant {i}: {other:?}"),
+                }
+            })
+            .collect()
+    };
+    let colors = |s: &Session, row: &[BrickId]| -> Vec<(u8, u8)> {
+        let world = s.snapshot().world;
+        row.iter()
+            .map(|id| (world.bricks[id].color, world.bricks[id].color_effect))
+            .collect()
+    };
+    // Spray once at `target`.
+    let spray_at = |s: &mut Session, owner: OwnerId, target: Vec3| {
+        let feet = s
+            .snapshot()
+            .players
+            .iter()
+            .find(|p| p.owner == owner)
+            .unwrap()
+            .feet;
+        let d = (target - (Vec3::from(feet) + Vec3::Y * 2.156)).normalize();
+        let input = bri_sim::player::MoveInput {
+            yaw: d.x.atan2(-d.z),
+            pitch: d.y.asin(),
+            ..Default::default()
+        };
+        for i in 0..90u64 {
+            s.movement(owner, next(), input).unwrap();
+            if i == 30 || i == 31 {
+                s.command(owner, next(), Command::WeaponTrigger { down: i == 30 })
+                    .unwrap();
+            }
+            s.step().unwrap();
+        }
+    };
+    // Spray once at the nearest plate of the row at `x`.
+    let spray =
+        |s: &mut Session, owner: OwnerId, x: f32| spray_at(s, owner, Vec3::new(x, 0.2, 0.25));
+    let held = |s: &Session, owner: OwnerId| {
+        s.weapon_view().images[&owner]
+            .iter()
+            .any(|i| i.image == IMAGE && i.hand == 0)
+    };
+    let fillcan = Command::Package(PackageCommand {
+        package: String::new(),
+        command: "fillcan".into(),
+        args: vec![],
+    });
+
+    // A player picks blue, takes the Fill Can out and sprays: every red
+    // plate joined to the one hit turns blue. One Ctrl+Z takes it back.
+    let painter = s.join("Painter".into(), spawn, false).unwrap();
+    let row = plant_row(&mut s, painter, 0.5);
+    cmd(&mut s, painter, Command::UseSprayCan { color: BLUE }).unwrap();
+    cmd(&mut s, painter, fillcan.clone()).unwrap();
+    steps(&mut s, 30);
+    assert!(held(&s, painter));
+    spray(&mut s, painter, 0.5);
+    assert_eq!(colors(&s, &row), vec![(BLUE, 0); 5]);
+    assert!(matches!(
+        cmd(&mut s, painter, Command::Tool(ToolAction::UndoBrick)),
+        Ok(Reply::Undone(Some(_)))
+    ));
+    assert_eq!(colors(&s, &row), vec![(RED, 0); 5]);
+
+    // Picking an FX can with the Fill Can out keeps it in hand, and the
+    // next spray gives the red plates that effect.
+    cmd(&mut s, painter, Command::UseFxCan { fx: 3 }).unwrap();
+    steps(&mut s, 30);
+    assert!(held(&s, painter), "the Fill Can stays out");
+    spray(&mut s, painter, 0.5);
+    assert_eq!(colors(&s, &row), vec![(RED, 3); 5]);
+
+    // An administrator's fill stops at this copy's limit, and says so.
+    let admin = s
+        .join("Admin".into(), Vec3::new(-2.5, 0.05, 4.0), true)
+        .unwrap();
+    let theirs = plant_row(&mut s, admin, -2.5);
+    cmd(&mut s, admin, Command::UseSprayCan { color: BLUE }).unwrap();
+    cmd(&mut s, admin, fillcan).unwrap();
+    steps(&mut s, 30);
+    s.take_private_notices();
+    spray(&mut s, admin, -2.5);
+    let painted = colors(&s, &theirs)
+        .iter()
+        .filter(|(c, _)| *c == BLUE)
+        .count();
+    assert_eq!(painted, 3);
+    let told: Vec<Notice> = s
+        .take_private_notices()
+        .into_iter()
+        .filter(|(o, _)| *o == admin)
+        .map(|(_, n)| n)
+        .filter(|n| matches!(n, Notice::Center { .. } | Notice::PlantError(_)))
+        .collect();
+    assert_eq!(
+        told,
+        [
+            Notice::PlantError(bri_sim::simulation::PlantFailure::Limit),
+            Notice::Center {
+                text: "\u{E003}Reached Fill Can Brick Limit (500)".to_string(),
+                seconds: 4.0
+            }
+        ]
+    );
+
+    // A spray at the plane paints it, through the brick that recolours
+    // it; the painter, not trusted by its build, is refused for this
+    // copy's time.
+    let plane = || {
+        let v = s.vehicle_poses();
+        assert_eq!(v.len(), 1, "the plane is on its spawn");
+        Vec3::from(v[0].position)
+    };
+    let at = plane() + Vec3::Y * 0.8;
+    let paint = |s: &Session| s.vehicle_infos()[0].color;
+    let red = paint(&s);
+    cmd(&mut s, painter, Command::UseSprayCan { color: BLUE }).unwrap();
+    s.take_private_notices();
+    spray_at(&mut s, painter, at);
+    assert_eq!(paint(&s), red);
+    let refused: Vec<Notice> = s
+        .take_private_notices()
+        .into_iter()
+        .filter(|(o, n)| *o == painter && matches!(n, Notice::Center { .. }))
+        .map(|(_, n)| n)
+        .collect();
+    assert_eq!(
+        refused,
+        [Notice::Center {
+            text: "BL_ID: 4242 does not trust you enough to do that.".into(),
+            seconds: 2.0
+        }]
+    );
+    spray_at(&mut s, admin, at);
+    let [r, g, b, _] = s.simulation().state().palette[usize::from(BLUE)];
+    assert_eq!(paint(&s), Some([r, g, b, 1.0]));
+    assert_eq!(s.snapshot().world.bricks[&1].color, BLUE);
+    // With an FX can it takes a colour of its own; its brick stays blue.
+    cmd(&mut s, admin, Command::UseFxCan { fx: 1 }).unwrap();
+    steps(&mut s, 30);
+    spray_at(&mut s, admin, at);
+    assert_ne!(paint(&s), Some([r, g, b, 1.0]));
+    assert_eq!(s.snapshot().world.bricks[&1].color, BLUE);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Kaje's Sniper Rifle: `onFire` kicks the arm with `shiftAway` (read from
+/// the copy's script) and fires one round as any weapon does. The import
+/// ships nothing of the original; the stand-in carries its shape.
+#[test]
+fn sniper_rifle_port_kicks_the_arm() {
+    let dir = fresh("sniper");
+    let out = dir.join("package");
+    let report = import(&options(fixture("ports/Weapon_Sniper_Rifle"), out.clone())).unwrap();
+    let port = &report.ports[0];
+    assert!(port.applied, "{:?}", port.reason);
+    assert_eq!(
+        (port.port.as_str(), port.status.as_str()),
+        ("weapon_sniper_rifle", "verified")
+    );
+    assert!(port.values["fire_arm"].eq_ignore_ascii_case("shiftaway"));
+    assert_eq!(report.summary.needs_behaviour_ported, 1);
+    bri_addon_import::ports::check_pins(&out).unwrap();
+    let pack = Pack::from_json(&std::fs::read(out.join("assets/weapons.json")).unwrap()).unwrap();
+    let image = &pack.images["weapon_sniper_rifle:image/sniperrifleimage"];
+    let on_fire = &image.scripts["onfire"];
+    assert!(on_fire.arm.eq_ignore_ascii_case("shiftaway") && on_fire.fire);
+    assert!(image.hide_nodes.is_empty() && !image.both_arms);
+
+    // One round straight down the aim, and the arm kicks with it.
+    let mut world = WeaponsWorld::new(pack).unwrap();
+    world.add_actor(ActorId(1), 5).unwrap();
+    let slot = world
+        .give(ActorId(1), "weapon_sniper_rifle:weapon/sniperrifleitem")
+        .unwrap();
+    world.equip(ActorId(1), Some(slot)).unwrap();
+    let (mut rounds, mut kicks) = (vec![], vec![]);
+    for tick in 0..240 {
+        if tick == 60 || tick == 61 {
+            world.trigger(ActorId(1), tick == 60).unwrap();
+        }
+        for e in world.step(&mut Empty) {
+            match e {
+                Event::Spawned { velocity, .. } => rounds.push(velocity),
+                Event::Animation { sequence, .. } => kicks.push(sequence),
+                _ => {}
+            }
+        }
+    }
+    assert_eq!(rounds.len(), 1);
+    assert!(rounds[0].angle_between(Vec3::NEG_Z) < 1e-4);
+    assert!(
+        kicks.iter().any(|k| k.eq_ignore_ascii_case("shiftaway")),
+        "{kicks:?}"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Conan's Sniper Rifle Updated draws its own hands: held, it hides the
+/// Blockhead's hands and hooks and raises both arms, and its shot plays
+/// `plant`. All three of its image callbacks are covered.
+#[test]
+fn sniper_rifle_updated_port_draws_its_own_hands() {
+    let dir = fresh("sniper-updated");
+    let out = dir.join("package");
+    let report = import(&options(
+        fixture("ports/Weapon_Sniper_Rifle_Updated"),
+        out.clone(),
+    ))
+    .unwrap();
+    let port = &report.ports[0];
+    assert!(port.applied, "{:?}", port.reason);
+    assert_eq!(port.port, "weapon_sniper_rifle_updated");
+    assert_eq!(report.summary.needs_behaviour, 3);
+    assert_eq!(report.summary.needs_behaviour_ported, 3);
+    bri_addon_import::ports::check_pins(&out).unwrap();
+    let pack = Pack::from_json(&std::fs::read(out.join("assets/weapons.json")).unwrap()).unwrap();
+    let image = &pack.images["weapon_sniper_rifle_updated:image/sniperrifleanimatedimage"];
+    let on_fire = &image.scripts["onfire"];
+    assert!(on_fire.arm.eq_ignore_ascii_case("plant") && on_fire.fire);
+    assert_eq!(image.hide_nodes, ["lhand", "rhand", "lhook", "rhook"]);
+    assert!(image.both_arms);
+
+    // A copy that hides other nodes is a different script: no port.
+    let copy = dir.join("Weapon_Sniper_Rifle_Updated");
+    std::fs::create_dir_all(&copy).unwrap();
+    for f in [
+        "server.cs",
+        "Weapon_Sniper Rifle.cs",
+        "description.txt",
+        "LICENSE.txt",
+    ] {
+        let text = std::fs::read_to_string(fixture("ports/Weapon_Sniper_Rifle_Updated").join(f))
+            .unwrap()
+            .replace("hideNode(\"rhook\")", "hideNode(\"rarm\")");
+        std::fs::write(copy.join(f), text).unwrap();
+    }
+    let other = import(&options(copy, dir.join("other"))).unwrap();
+    assert!(!other.ports[0].applied);
+    assert!(
+        other.ports[0]
+            .reason
+            .as_deref()
+            .unwrap()
+            .contains("`rhook`")
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Trench Digging's port on a stand-in with its folder name: the four
+/// images run the host rules' commands, the shovel and dirt swing the arm
+/// from data, the dirt shot is the rules' to fire, and the rules read the
+/// dig reach from this copy.
+#[test]
+fn trench_digging_port_writes_its_rules() {
+    let dir = fresh("trench");
+    let root = dir.join("content");
+    let out = root.join("addons/gamemode_trenchdigging");
+    let report = import(&options(
+        fixture("ports/Gamemode_TrenchDigging"),
+        out.clone(),
+    ))
+    .unwrap();
+    let port = &report.ports[0];
+    assert!(port.applied, "{:?}", port.reason);
+    assert_eq!(port.port, "gamemode_trenchdigging");
+    assert_eq!(port.values["reach"], "10");
+    let rules = port.rules.as_ref().expect("the port has rules");
+    assert_eq!(rules.id, "gamemode_trenchdigging-rules");
+
+    let pack = Pack::from_json(&std::fs::read(out.join("assets/weapons.json")).unwrap()).unwrap();
+    let image = |name: &str| &pack.images[&format!("gamemode_trenchdigging:image/{name}")];
+    for (name, command) in [
+        ("trenchshovelimage", "dig"),
+        ("adminshovelimage", "dig"),
+        ("trenchdirtimage", "place"),
+        ("admindirtimage", "place"),
+    ] {
+        assert_eq!(
+            image(name).command.as_deref(),
+            Some(format!("gamemode_trenchdigging-rules:{command}").as_str()),
+            "{name}"
+        );
+    }
+    assert!(image("trenchdirtimage").projectile.is_none());
+    assert!(image("admindirtimage").projectile.is_none());
+    // onPreFire's swing: armattack on PreFire, root 200 ms in (12 + 12
+    // ticks), the shot itself 12 ticks after PreFire starts as before.
+    for name in ["trenchshovelimage", "trenchdirtimage"] {
+        let states = &image(name).states;
+        let arm: Vec<(&str, u32, &str)> = states
+            .iter()
+            .filter(|s| !s.arm.is_empty())
+            .map(|s| (s.name.as_str(), s.ticks, s.arm.as_str()))
+            .collect();
+        assert_eq!(
+            arm,
+            [("PreFire", 12, "armattack"), ("FireArmRest", 24, "root")],
+            "{name}"
+        );
+        let fire = states.iter().position(|s| s.name == "Fire").unwrap();
+        assert_eq!(states[fire].script, "onFire");
+        assert_eq!(
+            states[fire].timeout,
+            states.iter().position(|s| s.name == "FireArmRest")
+        );
+        assert_eq!(
+            states[states.len() - 1].timeout,
+            states.iter().position(|s| s.name == "CheckFire")
+        );
+    }
+    bri_addon_import::ports::check_pins(&out).unwrap();
+
+    // The rules name this import's ids and read its reach.
+    let rules_dir = root.join("addons/gamemode_trenchdigging-rules");
+    let script = std::fs::read_to_string(rules_dir.join("trench.rhai")).unwrap();
+    assert!(script.contains("\"gamemode_trenchdigging:brick/\""));
+    assert!(!script.contains("{{"));
+    let behaviour: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(rules_dir.join("behaviour.json")).unwrap()).unwrap();
+    assert_eq!(behaviour["commands"][0]["aim_reach"], 10);
+    // server.cs's PlayerNoJet.maxStepHeight = 1.2, as an adjustment the
+    // rules provide.
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(rules_dir.join("package.json")).unwrap()).unwrap();
+    assert!(
+        manifest["provides"].as_array().unwrap().iter().any(|p| p["kind"] == "archetype"
+            && p["id"] == "gamemode_trenchdigging-rules:archetype/playernojet"
+            && p["file"] == "archetypes/playernojet.json"),
+        "{manifest}"
+    );
+    let adjust: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(rules_dir.join("archetypes/playernojet.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(adjust["adjusts"], "v20.player.playernojet");
+    assert_eq!(adjust["movement"]["step_height"], 1.2);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+fn ported(name: &str, addon: &str) -> (PathBuf, PathBuf, bri_addon_import::report::Report) {
+    let dir = fresh(name);
+    let out = dir.join("package");
+    let report = import(&options(fixture(&format!("ports/{addon}")), out.clone())).unwrap();
+    assert!(report.ports[0].applied, "{:?}", report.ports[0].reason);
+    assert!(report.needs_behaviour.iter().all(|n| n.port.is_some()));
+    bri_addon_import::ports::check_pins(&out).unwrap();
+    (dir, out, report)
+}
+
+fn holder(package: &Path, items: &[&str]) -> WeaponsWorld {
+    let pack =
+        Pack::from_json(&std::fs::read(package.join("assets/weapons.json")).unwrap()).unwrap();
+    let mut world = WeaponsWorld::new(pack).unwrap();
+    world.add_actor(ActorId(1), 5).unwrap();
+    for (slot, item) in items.iter().enumerate() {
+        world.give_at(ActorId(1), slot, item).unwrap();
+    }
+    world.equip(ActorId(1), Some(0)).unwrap();
+    world
+}
+
+fn run(world: &mut WeaponsWorld, ticks: usize) -> Vec<Event> {
+    (0..ticks).flat_map(|_| world.step(&mut Empty)).collect()
+}
+
+fn arm(events: &[Event]) -> Vec<String> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            Event::Animation {
+                thread: 2,
+                sequence,
+                ..
+            } => Some(sequence.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn launched(events: &[Event]) -> Vec<String> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            Event::Spawned { definition, .. } => Some(definition.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The stand-in's v20 states and scripts: a click lets go during Charge
+/// (0.5 s), so `onFiretwo` (its later definition) jabs with
+/// `butterflyknifeProjectile`; held past Charge, letting go runs `onFire`,
+/// `spearThrow` then `Parent::onFire` with the image's
+/// `butterflyknifekillProjectile`. `onCharge` raises the arm with
+/// `spearReady` and `onStopFire` lowers it with `root`.
+#[test]
+fn butterfly_knife_port_jabs_and_stabs() {
+    let (dir, out, report) = ported("butterfly-knife", "Weapon_ButterflyKnife");
+    assert_eq!(report.ports[0].values["jab"], "butterflyknifeProjectile");
+    let knife = "weapon_butterflyknife:weapon/butterflyknifeitem";
+    let mut w = holder(&out, &[knife]);
+    run(&mut w, 60);
+    w.trigger(ActorId(1), true).unwrap();
+    let mut events = run(&mut w, 6);
+    w.trigger(ActorId(1), false).unwrap();
+    events.extend(run(&mut w, 120));
+    assert_eq!(
+        launched(&events),
+        ["weapon_butterflyknife:projectile/butterflyknifeprojectile"]
+    );
+    assert_eq!(
+        arm(&events),
+        ["spearReady", "root"],
+        "the jab swings no arm in v20"
+    );
+
+    w.trigger(ActorId(1), true).unwrap();
+    let mut events = run(&mut w, 59);
+    assert!(launched(&events).is_empty(), "still charging");
+    events.extend(run(&mut w, 30));
+    w.trigger(ActorId(1), false).unwrap();
+    events.extend(run(&mut w, 60));
+    assert_eq!(
+        launched(&events),
+        ["weapon_butterflyknife:projectile/butterflyknifekillprojectile"]
+    );
+    assert_eq!(arm(&events), ["spearReady", "spearThrow"]);
+    let pack = &w.pack;
+    assert_eq!(
+        pack.projectiles["weapon_butterflyknife:projectile/butterflyknifeprojectile"].damage,
+        20.0
+    );
+    assert_eq!(
+        pack.projectiles["weapon_butterflyknife:projectile/butterflyknifekillprojectile"].damage,
+        80.0
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// The stand-in's v20 states and scripts: the first press goes to Pindrop,
+/// which ejects the pin (`stateEjectShell`) and fires nothing. The second,
+/// held through Charge (0.5 s, `onCharge`: `spearReady`) and let go, runs
+/// `onFire`: `spearThrow`, `Parent::onFire`, then the grenade leaves its
+/// tool slot and the hand (`serverCmdUnUseTool`). Another grenade stays.
+/// The thrown one plays `hegrenadeBounceSound` when it bounces.
+#[test]
+fn he_grenade_port_pulls_the_pin_then_throws_it_away() {
+    let (dir, out, report) = ported("he-grenade", "Weapon_HEGrenade");
+    assert_eq!(
+        report.ports[0].values["bounce_sound"],
+        "hegrenadeBounceSound"
+    );
+    let grenade = "weapon_hegrenade:weapon/hegrenadeitem";
+    let mut w = holder(&out, &[grenade, grenade]);
+    run(&mut w, 30);
+    w.trigger(ActorId(1), true).unwrap();
+    let mut events = run(&mut w, 2);
+    w.trigger(ActorId(1), false).unwrap();
+    events.extend(run(&mut w, 60));
+    assert!(
+        events.iter().any(|e| matches!(e, Event::Shell { .. })),
+        "the pin flies off"
+    );
+    assert!(launched(&events).is_empty(), "a click only pulls the pin");
+
+    w.trigger(ActorId(1), true).unwrap();
+    let mut events = run(&mut w, 70);
+    w.trigger(ActorId(1), false).unwrap();
+    events.extend(run(&mut w, 4));
+    assert_eq!(
+        launched(&events),
+        ["weapon_hegrenade:projectile/hegrenadeprojectile"]
+    );
+    assert_eq!(arm(&events), ["spearReady", "spearThrow"]);
+    let a = w.actor(ActorId(1)).unwrap();
+    assert_eq!(a.inventory[0], None, "the thrown grenade left the tools");
+    assert_eq!(a.inventory[1].as_deref(), Some(grenade));
+    assert!(w.image_state(ActorId(1), 0).is_none(), "the hand is empty");
+
+    let p = &w.pack.projectiles["weapon_hegrenade:projectile/hegrenadeprojectile"];
+    let bounce = &w.pack.explosions[&p.bounce_effect.to_ascii_lowercase()];
+    assert_eq!(bounce.sound, "weapon_hegrenade:sound/hegrenadebouncesound");
+    assert!(w.pack.sounds.contains_key(&bounce.sound));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// The stand-in Duplicator imported with its port, hosted on a flat floor
 /// with 2x1 plates, and the host joined.
 fn duplorcator_game(name: &str) -> (PathBuf, bri_sim::session::Session, u64) {
@@ -1040,240 +2024,6 @@ fn told(s: &mut bri_sim::session::Session) -> Vec<String> {
             Notice::Center { text, .. } | Notice::Bottom { text, .. } | Notice::Chat(text) => {
                 Some(text)
             }
-            _ => None,
-        })
-        .collect()
-}
-
-/// Kaje's Sniper Rifle: `onFire` kicks the arm with `shiftAway` (read from
-/// the copy's script) and fires one round as any weapon does. The import
-/// ships nothing of the original; the stand-in carries its shape.
-#[test]
-fn sniper_rifle_port_kicks_the_arm() {
-    let dir = fresh("sniper");
-    let out = dir.join("package");
-    let report = import(&options(fixture("ports/Weapon_Sniper_Rifle"), out.clone())).unwrap();
-    let port = &report.ports[0];
-    assert!(port.applied, "{:?}", port.reason);
-    assert_eq!(
-        (port.port.as_str(), port.status.as_str()),
-        ("weapon_sniper_rifle", "verified")
-    );
-    assert!(port.values["fire_arm"].eq_ignore_ascii_case("shiftaway"));
-    assert_eq!(report.summary.needs_behaviour_ported, 1);
-    bri_addon_import::ports::check_pins(&out).unwrap();
-    let pack = Pack::from_json(&std::fs::read(out.join("assets/weapons.json")).unwrap()).unwrap();
-    let image = &pack.images["weapon_sniper_rifle:image/sniperrifleimage"];
-    let on_fire = &image.scripts["onfire"];
-    assert!(on_fire.arm.eq_ignore_ascii_case("shiftaway") && on_fire.fire);
-    assert!(image.hide_nodes.is_empty() && !image.both_arms);
-
-    // One round straight down the aim, and the arm kicks with it.
-    let mut world = WeaponsWorld::new(pack).unwrap();
-    world.add_actor(ActorId(1), 5).unwrap();
-    let slot = world
-        .give(ActorId(1), "weapon_sniper_rifle:weapon/sniperrifleitem")
-        .unwrap();
-    world.equip(ActorId(1), Some(slot)).unwrap();
-    let (mut rounds, mut kicks) = (vec![], vec![]);
-    for tick in 0..240 {
-        if tick == 60 || tick == 61 {
-            world.trigger(ActorId(1), tick == 60).unwrap();
-        }
-        for e in world.step(&mut Empty) {
-            match e {
-                Event::Spawned { velocity, .. } => rounds.push(velocity),
-                Event::Animation { sequence, .. } => kicks.push(sequence),
-                _ => {}
-            }
-        }
-    }
-    assert_eq!(rounds.len(), 1);
-    assert!(rounds[0].angle_between(Vec3::NEG_Z) < 1e-4);
-    assert!(
-        kicks.iter().any(|k| k.eq_ignore_ascii_case("shiftaway")),
-        "{kicks:?}"
-    );
-    std::fs::remove_dir_all(dir).unwrap();
-}
-
-/// Conan's Sniper Rifle Updated draws its own hands: held, it hides the
-/// Blockhead's hands and hooks and raises both arms, and its shot plays
-/// `plant`. All three of its image callbacks are covered.
-#[test]
-fn sniper_rifle_updated_port_draws_its_own_hands() {
-    let dir = fresh("sniper-updated");
-    let out = dir.join("package");
-    let report = import(&options(
-        fixture("ports/Weapon_Sniper_Rifle_Updated"),
-        out.clone(),
-    ))
-    .unwrap();
-    let port = &report.ports[0];
-    assert!(port.applied, "{:?}", port.reason);
-    assert_eq!(port.port, "weapon_sniper_rifle_updated");
-    assert_eq!(report.summary.needs_behaviour, 3);
-    assert_eq!(report.summary.needs_behaviour_ported, 3);
-    bri_addon_import::ports::check_pins(&out).unwrap();
-    let pack = Pack::from_json(&std::fs::read(out.join("assets/weapons.json")).unwrap()).unwrap();
-    let image = &pack.images["weapon_sniper_rifle_updated:image/sniperrifleanimatedimage"];
-    let on_fire = &image.scripts["onfire"];
-    assert!(on_fire.arm.eq_ignore_ascii_case("plant") && on_fire.fire);
-    assert_eq!(image.hide_nodes, ["lhand", "rhand", "lhook", "rhook"]);
-    assert!(image.both_arms);
-
-    // A copy that hides other nodes is a different script: no port.
-    let copy = dir.join("Weapon_Sniper_Rifle_Updated");
-    std::fs::create_dir_all(&copy).unwrap();
-    for f in [
-        "server.cs",
-        "Weapon_Sniper Rifle.cs",
-        "description.txt",
-        "LICENSE.txt",
-    ] {
-        let text = std::fs::read_to_string(fixture("ports/Weapon_Sniper_Rifle_Updated").join(f))
-            .unwrap()
-            .replace("hideNode(\"rhook\")", "hideNode(\"rarm\")");
-        std::fs::write(copy.join(f), text).unwrap();
-    }
-    let other = import(&options(copy, dir.join("other"))).unwrap();
-    assert!(!other.ports[0].applied);
-    assert!(
-        other.ports[0]
-            .reason
-            .as_deref()
-            .unwrap()
-            .contains("`rhook`")
-    );
-    std::fs::remove_dir_all(dir).unwrap();
-}
-
-/// Trench Digging's port on a stand-in with its folder name: the four
-/// images run the host rules' commands, the shovel and dirt swing the arm
-/// from data, the dirt shot is the rules' to fire, and the rules read the
-/// dig reach from this copy.
-#[test]
-fn trench_digging_port_writes_its_rules() {
-    let dir = fresh("trench");
-    let root = dir.join("content");
-    let out = root.join("addons/gamemode_trenchdigging");
-    let report = import(&options(
-        fixture("ports/Gamemode_TrenchDigging"),
-        out.clone(),
-    ))
-    .unwrap();
-    let port = &report.ports[0];
-    assert!(port.applied, "{:?}", port.reason);
-    assert_eq!(port.port, "gamemode_trenchdigging");
-    assert_eq!(port.values["reach"], "10");
-    let rules = port.rules.as_ref().expect("the port has rules");
-    assert_eq!(rules.id, "gamemode_trenchdigging-rules");
-
-    let pack = Pack::from_json(&std::fs::read(out.join("assets/weapons.json")).unwrap()).unwrap();
-    let image = |name: &str| &pack.images[&format!("gamemode_trenchdigging:image/{name}")];
-    for (name, command) in [
-        ("trenchshovelimage", "dig"),
-        ("adminshovelimage", "dig"),
-        ("trenchdirtimage", "place"),
-        ("admindirtimage", "place"),
-    ] {
-        assert_eq!(
-            image(name).command.as_deref(),
-            Some(format!("gamemode_trenchdigging-rules:{command}").as_str()),
-            "{name}"
-        );
-    }
-    assert!(image("trenchdirtimage").projectile.is_none());
-    assert!(image("admindirtimage").projectile.is_none());
-    // onPreFire's swing: armattack on PreFire, root 200 ms in (12 + 12
-    // ticks), the shot itself 12 ticks after PreFire starts as before.
-    for name in ["trenchshovelimage", "trenchdirtimage"] {
-        let states = &image(name).states;
-        let arm: Vec<(&str, u32, &str)> = states
-            .iter()
-            .filter(|s| !s.arm.is_empty())
-            .map(|s| (s.name.as_str(), s.ticks, s.arm.as_str()))
-            .collect();
-        assert_eq!(
-            arm,
-            [("PreFire", 12, "armattack"), ("FireArmRest", 24, "root")],
-            "{name}"
-        );
-        let fire = states.iter().position(|s| s.name == "Fire").unwrap();
-        assert_eq!(states[fire].script, "onFire");
-        assert_eq!(
-            states[fire].timeout,
-            states.iter().position(|s| s.name == "FireArmRest")
-        );
-        assert_eq!(
-            states[states.len() - 1].timeout,
-            states.iter().position(|s| s.name == "CheckFire")
-        );
-    }
-    bri_addon_import::ports::check_pins(&out).unwrap();
-
-    // The rules name this import's ids and read its reach.
-    let rules_dir = root.join("addons/gamemode_trenchdigging-rules");
-    let script = std::fs::read_to_string(rules_dir.join("trench.rhai")).unwrap();
-    assert!(script.contains("\"gamemode_trenchdigging:brick/\""));
-    assert!(!script.contains("{{"));
-    let behaviour: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(rules_dir.join("behaviour.json")).unwrap()).unwrap();
-    assert_eq!(behaviour["commands"][0]["aim_reach"], 10);
-    // server.cs's PlayerNoJet.maxStepHeight = 1.2, as an adjustment the
-    // rules provide.
-    let manifest: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(rules_dir.join("package.json")).unwrap()).unwrap();
-    assert!(
-        manifest["provides"].as_array().unwrap().iter().any(|p| p["kind"] == "archetype"
-            && p["id"] == "gamemode_trenchdigging-rules:archetype/playernojet"
-            && p["file"] == "archetypes/playernojet.json"),
-        "{manifest}"
-    );
-    let adjust: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(rules_dir.join("archetypes/playernojet.json")).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(adjust["adjusts"], "v20.player.playernojet");
-    assert_eq!(adjust["movement"]["step_height"], 1.2);
-    std::fs::remove_dir_all(dir).unwrap();
-}
-
-fn ported(name: &str, addon: &str) -> (PathBuf, PathBuf, bri_addon_import::report::Report) {
-    let dir = fresh(name);
-    let out = dir.join("package");
-    let report = import(&options(fixture(&format!("ports/{addon}")), out.clone())).unwrap();
-    assert!(report.ports[0].applied, "{:?}", report.ports[0].reason);
-    assert!(report.needs_behaviour.iter().all(|n| n.port.is_some()));
-    bri_addon_import::ports::check_pins(&out).unwrap();
-    (dir, out, report)
-}
-
-fn holder(package: &Path, items: &[&str]) -> WeaponsWorld {
-    let pack =
-        Pack::from_json(&std::fs::read(package.join("assets/weapons.json")).unwrap()).unwrap();
-    let mut world = WeaponsWorld::new(pack).unwrap();
-    world.add_actor(ActorId(1), 5).unwrap();
-    for (slot, item) in items.iter().enumerate() {
-        world.give_at(ActorId(1), slot, item).unwrap();
-    }
-    world.equip(ActorId(1), Some(0)).unwrap();
-    world
-}
-
-fn run(world: &mut WeaponsWorld, ticks: usize) -> Vec<Event> {
-    (0..ticks).flat_map(|_| world.step(&mut Empty)).collect()
-}
-
-fn arm(events: &[Event]) -> Vec<String> {
-    events
-        .iter()
-        .filter_map(|e| match e {
-            Event::Animation {
-                thread: 2,
-                sequence,
-                ..
-            } => Some(sequence.clone()),
             _ => None,
         })
         .collect()
@@ -2274,112 +3024,6 @@ fn new_duplicator_port_keys_and_admin_commands() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-fn launched(events: &[Event]) -> Vec<String> {
-    events
-        .iter()
-        .filter_map(|e| match e {
-            Event::Spawned { definition, .. } => Some(definition.clone()),
-            _ => None,
-        })
-        .collect()
-}
-
-/// The stand-in's v20 states and scripts: a click lets go during Charge
-/// (0.5 s), so `onFiretwo` (its later definition) jabs with
-/// `butterflyknifeProjectile`; held past Charge, letting go runs `onFire`,
-/// `spearThrow` then `Parent::onFire` with the image's
-/// `butterflyknifekillProjectile`. `onCharge` raises the arm with
-/// `spearReady` and `onStopFire` lowers it with `root`.
-#[test]
-fn butterfly_knife_port_jabs_and_stabs() {
-    let (dir, out, report) = ported("butterfly-knife", "Weapon_ButterflyKnife");
-    assert_eq!(report.ports[0].values["jab"], "butterflyknifeProjectile");
-    let knife = "weapon_butterflyknife:weapon/butterflyknifeitem";
-    let mut w = holder(&out, &[knife]);
-    run(&mut w, 60);
-    w.trigger(ActorId(1), true).unwrap();
-    let mut events = run(&mut w, 6);
-    w.trigger(ActorId(1), false).unwrap();
-    events.extend(run(&mut w, 120));
-    assert_eq!(
-        launched(&events),
-        ["weapon_butterflyknife:projectile/butterflyknifeprojectile"]
-    );
-    assert_eq!(
-        arm(&events),
-        ["spearReady", "root"],
-        "the jab swings no arm in v20"
-    );
-
-    w.trigger(ActorId(1), true).unwrap();
-    let mut events = run(&mut w, 59);
-    assert!(launched(&events).is_empty(), "still charging");
-    events.extend(run(&mut w, 30));
-    w.trigger(ActorId(1), false).unwrap();
-    events.extend(run(&mut w, 60));
-    assert_eq!(
-        launched(&events),
-        ["weapon_butterflyknife:projectile/butterflyknifekillprojectile"]
-    );
-    assert_eq!(arm(&events), ["spearReady", "spearThrow"]);
-    let pack = &w.pack;
-    assert_eq!(
-        pack.projectiles["weapon_butterflyknife:projectile/butterflyknifeprojectile"].damage,
-        20.0
-    );
-    assert_eq!(
-        pack.projectiles["weapon_butterflyknife:projectile/butterflyknifekillprojectile"].damage,
-        80.0
-    );
-    std::fs::remove_dir_all(dir).unwrap();
-}
-
-/// The stand-in's v20 states and scripts: the first press goes to Pindrop,
-/// which ejects the pin (`stateEjectShell`) and fires nothing. The second,
-/// held through Charge (0.5 s, `onCharge`: `spearReady`) and let go, runs
-/// `onFire`: `spearThrow`, `Parent::onFire`, then the grenade leaves its
-/// tool slot and the hand (`serverCmdUnUseTool`). Another grenade stays.
-/// The thrown one plays `hegrenadeBounceSound` when it bounces.
-#[test]
-fn he_grenade_port_pulls_the_pin_then_throws_it_away() {
-    let (dir, out, report) = ported("he-grenade", "Weapon_HEGrenade");
-    assert_eq!(
-        report.ports[0].values["bounce_sound"],
-        "hegrenadeBounceSound"
-    );
-    let grenade = "weapon_hegrenade:weapon/hegrenadeitem";
-    let mut w = holder(&out, &[grenade, grenade]);
-    run(&mut w, 30);
-    w.trigger(ActorId(1), true).unwrap();
-    let mut events = run(&mut w, 2);
-    w.trigger(ActorId(1), false).unwrap();
-    events.extend(run(&mut w, 60));
-    assert!(
-        events.iter().any(|e| matches!(e, Event::Shell { .. })),
-        "the pin flies off"
-    );
-    assert!(launched(&events).is_empty(), "a click only pulls the pin");
-
-    w.trigger(ActorId(1), true).unwrap();
-    let mut events = run(&mut w, 70);
-    w.trigger(ActorId(1), false).unwrap();
-    events.extend(run(&mut w, 4));
-    assert_eq!(
-        launched(&events),
-        ["weapon_hegrenade:projectile/hegrenadeprojectile"]
-    );
-    assert_eq!(arm(&events), ["spearReady", "spearThrow"]);
-    let a = w.actor(ActorId(1)).unwrap();
-    assert_eq!(a.inventory[0], None, "the thrown grenade left the tools");
-    assert_eq!(a.inventory[1].as_deref(), Some(grenade));
-    assert!(w.image_state(ActorId(1), 0).is_none(), "the hand is empty");
-
-    let p = &w.pack.projectiles["weapon_hegrenade:projectile/hegrenadeprojectile"];
-    let bounce = &w.pack.explosions[&p.bounce_effect.to_ascii_lowercase()];
-    assert_eq!(bounce.sound, "weapon_hegrenade:sound/hegrenadebouncesound");
-    assert!(w.pack.sounds.contains_key(&bounce.sound));
-    std::fs::remove_dir_all(dir).unwrap();
-}
 
 /// A plant bigger than a tick's copy work goes on over the next ticks
 /// behind the original's progress line (`NDM_PlantCopyProgress`), and

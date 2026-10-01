@@ -806,10 +806,10 @@ fn a_host_with_the_blockhead_bot_on_spawns_bots_and_one_without_offers_none() ->
             ],
             view.owner,
         );
-        brick.vehicle = Some(bri_world::VehicleSpawn {
+        brick.vehicle = Some(Box::new(bri_world::VehicleSpawn {
             vehicle: bri_world::ContentRef::Resolved(BOT.into()),
             recolor: false,
-        });
+        }));
         world.bricks.insert(1, brick);
         world.next_brick_id = 2;
         let state =

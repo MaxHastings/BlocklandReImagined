@@ -46,15 +46,18 @@ operation that needs a capability.
 | `new Projectile() { ... }` | `fire(projectile, x, y, z, vx, vy, vz, by)` | `damage` |
 | `new Explosion()`, `radiusDamage` | `explode(x, y, z, radius, damage, brick_radius)` | `damage` |
 | `%obj.mountImage(%img, 0)` | `mount_image(p, image)`, `mount_image(p, ())` | `player` |
-| `%obj.unMountImage(0)` | `unmount_image(p)` | `player` |
+| `%obj.unMountImage(0)` | `unmount_image(p)`: tools, cans and bricks in hand | `player` |
+| `%client.camera.setOrbitMode(%target, ...)`, `setControlObject(%client.camera)`, back with `setControlObject(%player)` | `orbit_camera(p, target, distance)`, `orbit_camera(p, target, min, max, distance)` (the wheel zooms between), `orbit_camera(p, ())` | `player` |
 | `%obj.setScale("s s s")` | `set_scale(p, s)` | `player`; 0.2 to 5, one number |
 | `%obj.setLookLimits(%up, %down)` | `set_look_limits(p, up, down)`, `set_look_limits(p, ())` | `player` |
 | `%obj.mountObject(%rider, %node)`, `%rider.canDismount = 0` | `mount_object(mount, rider, node, can_dismount)` | `physics`; node is a `mount<N>` of the body model |
+| `%rider.setTransform(...)` after `mountObject`, to turn them on the mount | `mount_object(mount, rider, node, can_dismount, turn)`, `turn` in degrees clockwise from above | `physics`; Torque's angle is radians |
 | `%rider.unMountObject()`, `dismount()` | `unmount_object(rider)` | `physics`; keeps the mount's velocity |
 | `%obj.setImageAmmo(0, %x)` | `set_image_ammo(p, ammo)` | `player` |
 | `%client.setControlCameraFov(%fov)` | `set_fov(p, fov)`, `set_fov(p, ())` | `player` |
 | `%obj.setTransform`, `%client.spawnPlayer()` | `teleport(p, x, y, z)`, `respawn(p)` | `player` |
 | `%obj.setVelocity`, `addVelocity` | `push(ref, vx, vy, vz, by)` | `physics` |
+| A rope or grappling hook scripted from a schedule that re-aims `setVelocity` toward a point each tick | `tether(p, point, length, #{brick, object, reel, swing, keys, straight})`, `tether_length`, `untether` | `physics` |
 | `%player.tool[%i] = ...` | `give_item(p, item, equip)` | `player` |
 | `%player.tool[%i] = 0`, `serverCmdDropTool` | `take_item(p, item)` | `player` |
 | `new Item() { ... }` at a point | `drop_item(item, x, y, z)`, `drop_item(item, x, y, z, vx, vy, vz)` | `player` |
@@ -87,7 +90,17 @@ operation that needs a capability.
 | `ItemData::onPickup` | `on_pickup(p, item, info)`: answer `false` to leave it, `"take"` to use it up |
 | `ItemData::onDrop`, dynamic fields on the dropped `Item` | `on_drop(p, item, slot)`: the value it returns rides the drop to whoever picks it up |
 | `ProjectileData::onCollision` | `on_projectile_hit(hit)` |
+| A flood fill over `InitContainerBoxSearch` with `setColor`, `setColorFX` or `setShapeFX`, pushed as one undo | `paint_fill(p, brick, paint, #{ limit, reach, stop_at_limit })` |
+| `Player::SetTempColor(%color, %ms)` with no position; `setFaceName` with a reset `schedule` | `temp_look(p, #{ color \| paint, face, alpha }, seconds)` |
+| `%vehicle.color = …; %vehicle.spawnBrick.colorVehicle()`, its `COLORGENERIC` undo, and `setTempColor` on its mounted riders | `paint_vehicle(p, vehicle, #{ color \| rgb }, #{ riders_seconds })` |
+| `messageClient(%client, 'MsgPlantError_Limit')` when a fill stops at its limit | `paint_fill`'s `limit_error: true` |
+| `serverCmdUseSprayCan` / `serverCmdUseFXCan` packaged to remount a tool, `%client.currentFXcan` | The image's `paint_picker`; `player(p).fx_can` |
+| `%client.minigame.enablePainting` | `player(p).may_paint` |
 | `Player::activateStuff` packaged (an empty-hand click) | `on_activate(p)`: answer `true` to take the click |
+| `Observer::onTrigger` packaged for an Add-On's camera mode | The player's click in an `orbit_camera` reaches `on_trigger` and `on_activate` |
+| `serverCmdUseInventory`, `serverCmdInstantUseBrick` packaged to refuse bricks | The `equip` policy: taking bricks in hand puts the tool slot away, which it refuses |
+| `Armor::onTrigger` packaged (fire with an empty hand, pressed and let go) | `on_trigger(p, trigger, down)`: answer `true` to take a press |
+| `serverCmdUseTool`, `serverCmdUnUseTool`, `serverCmdUseSprayCan`, `serverCmdUseFXCan` packaged to refuse | The `equip` policy, `allow_equip(p)` |
 
 ## Not here yet
 

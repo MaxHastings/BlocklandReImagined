@@ -87,7 +87,6 @@ fn stock_vehicles_render_with_wheels_and_paint() -> Result<()> {
     let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
     let out = root.join("artifacts/native-vehicles");
     std::fs::create_dir_all(&out)?;
-    let palette = [[0.9, 0.1, 0.1, 1.0]];
     let mut report = serde_json::Map::new();
     // Horses are drawn by the avatar horse rig, not this vehicle path;
     // horse_riding_render covers them.
@@ -110,7 +109,7 @@ fn stock_vehicles_render_with_wheels_and_paint() -> Result<()> {
             VehicleInfo {
                 id: 1,
                 definition: definition.into(),
-                color: Some(0),
+                color: Some([0.9, 0.1, 0.1, 1.0]),
                 occupants: vec![],
                 destroyed: false,
                 scale: 1.0,
@@ -143,7 +142,7 @@ fn stock_vehicles_render_with_wheels_and_paint() -> Result<()> {
         .into();
         let mut vehicles = ClientVehicles::default();
         vehicles.update(&infos, &poses, None, None, &Default::default());
-        vehicles.prepare(&mut assets, &infos, &palette);
+        vehicles.prepare(&mut assets, &infos);
         ClientVehicles::upload(&mut assets, &renderer, &gpu.device, &gpu.queue)?;
         let camera = Camera::perspective(
             [distance * 0.8, distance * 0.45, distance * 0.8],
@@ -191,7 +190,7 @@ fn riders_tilt_with_a_jeep_on_a_slope() -> Result<()> {
     let info = VehicleInfo {
         id: 1,
         definition: definition.into(),
-        color: Some(0),
+        color: Some([0.9, 0.1, 0.1, 1.0]),
         occupants: vec![],
         destroyed: false,
         scale: 1.0,

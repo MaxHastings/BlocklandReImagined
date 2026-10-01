@@ -287,9 +287,11 @@ impl GeneratedWorld {
         brick.look = self.def.materials[material]
             .block
             .clone()
-            .map(|block| bri_world::BlockLook {
-                block,
-                state: String::new(),
+            .map(|block| {
+                Box::new(bri_world::BlockLook {
+                    block,
+                    state: String::new(),
+                })
             });
         brick
     }
@@ -638,6 +640,7 @@ impl Session {
             .filter(|(id, _)| runtime.has_script(id))
             .count();
         let state_bytes = store.stored_size();
+        self.package_revision += 1;
         self.packages = Some(Box::new(PackageHost {
             catalog,
             runtime,
@@ -965,6 +968,12 @@ impl Session {
             image,
             image_state,
             paint: p.current_color,
+            fx_can: p.fx_can,
+            may_paint: !matches!(
+                self.minigames
+                    .can_build(p.combat.player, bri_minigames::BuildAction::Paint),
+                Ok(bri_minigames::Decision::Deny(_))
+            ),
             bot: self.bots.is_bot(owner),
             bot_owner: self.bot_brick_owner(owner),
             riding: self.riding_seat(owner),
@@ -1011,6 +1020,7 @@ impl Session {
                 .unwrap_or_default(),
             objects: self.movable_views(),
             holds: self.hold_views(),
+            tethers: self.tether_views(),
         }
     }
     /// Give a joining player every package's player defaults and run
@@ -1019,6 +1029,7 @@ impl Session {
         if self.packages.is_none() || self.bots.is_bot(owner) {
             return;
         }
+        self.package_revision += 1;
         let key = self.player_key(owner);
         let hooks: Vec<String> = {
             let host = self.packages.as_mut().expect("checked");
@@ -1253,7 +1264,11 @@ impl Session {
             }
         }
         host.state_bytes = total;
-        *host.store.namespace_mut(package) = outcome.state;
+        let namespace = host.store.namespace_mut(package);
+        if *namespace != outcome.state {
+            *namespace = outcome.state;
+            self.package_revision += 1;
+        }
         for (id, vars) in outcome.entity_vars {
             if let Some(e) = host.entities.get_mut(&id) {
                 e.vars = vars;
@@ -1773,17 +1788,84 @@ impl Session {
             Op::PaintFill {
                 player,
                 brick,
-                color,
+                paint,
                 limit,
+                reach,
+                stop_at_limit,
+                limit_message,
+                refusal_seconds,
+                limit_error,
             } => {
                 ensure!(
                     caller == Some(player),
-                    "Bricks are filled only for the player whose command asked"
+                    "Bricks are filled only for the player whose command or shot asked"
                 );
-                match self.paint_fill(player, brick, color, limit as usize) {
-                    Ok(fill) => self.bottom_fill(player, fill),
-                    Err(error) => self.center_print(player, format!("{error:#}")),
+                let rules = super::FillRules {
+                    limit: limit as usize,
+                    reach,
+                    stop_at_limit,
+                };
+                match self.paint_fill(player, brick, paint, rules) {
+                    Ok(fill) => {
+                        if fill.stopped && limit_error {
+                            self.notify(
+                                player,
+                                Notice::PlantError(crate::simulation::PlantFailure::Limit),
+                            );
+                        }
+                        if let (true, Some((text, seconds))) = (fill.stopped, limit_message) {
+                            self.notify(player, Notice::Center { text, seconds });
+                        }
+                    }
+                    Err(error) => self.notify(
+                        player,
+                        Notice::Center {
+                            text: format!("{error:#}"),
+                            seconds: refusal_seconds.unwrap_or(1.0),
+                        },
+                    ),
                 }
+                Ok(())
+            }
+            Op::PaintVehicle {
+                player,
+                vehicle,
+                paint,
+                riders_seconds,
+                refusal_seconds,
+            } => {
+                ensure!(
+                    caller == Some(player),
+                    "Vehicles are painted only for the player whose command or shot asked"
+                );
+                match self.paint_vehicle(player, vehicle, paint) {
+                    Ok(color) => {
+                        let seconds = riders_seconds.unwrap_or(0.0);
+                        for rider in self.vehicle_riders(vehicle).filter(|_| seconds > 0.0) {
+                            let look = bri_package_runtime::ops::TempLook {
+                                color: Some(color),
+                                ..Default::default()
+                            };
+                            self.temp_look(rider, look, seconds);
+                        }
+                    }
+                    Err(error) => self.notify(
+                        player,
+                        Notice::Center {
+                            text: format!("{error:#}"),
+                            seconds: refusal_seconds.unwrap_or(1.0),
+                        },
+                    ),
+                }
+                Ok(())
+            }
+            Op::TempLook {
+                player,
+                look,
+                seconds,
+            } => {
+                ensure!(self.peers.contains_key(&player), "No such player");
+                self.temp_look(player, look, seconds);
                 Ok(())
             }
             Op::ShowBox { player, area, tool } => self.show_box(player, area, &tool),
@@ -1806,6 +1888,9 @@ impl Session {
             | Op::Hold { .. }
             | Op::HoldDistance { .. }
             | Op::LetGo { .. }
+            | Op::Tether { .. }
+            | Op::TetherLength { .. }
+            | Op::Untether { .. }
             | Op::Reach { .. }
             | Op::SpawnVehicle { .. }
             | Op::RemoveVehicle { .. }) => self.apply_physics_op(package, op, caller),
@@ -2014,15 +2099,13 @@ impl Session {
                     None => self.weapons.swap_image(actor, None),
                 }
             }
-            Op::UnmountImage { player } => {
-                ensure!(self.peers.contains_key(&player), "No such player");
-                self.equip_tool(player, None)
-            }
+            Op::UnmountImage { player } => self.put_away_hand(player),
             Op::MountObject {
                 mount,
                 rider,
                 node,
                 can_dismount,
+                turn,
             } => {
                 ensure!(
                     caller.is_none_or(|c| c == mount),
@@ -2033,9 +2116,22 @@ impl Session {
                     self.may_move(mount, ObjectRef::Player(rider)),
                     "Player {mount} may not move {rider} under the minigame and trust rules"
                 );
-                self.mount_player(mount, rider, node, can_dismount)
+                self.mount_player(mount, rider, node, can_dismount)?;
+                self.turn_rider(rider, turn);
+                Ok(())
             }
-            Op::UnmountObject { rider } => self.unmount_player(rider),
+            Op::UnmountObject { rider } => {
+                // A command's player lets themselves off, or someone they
+                // carry or may move.
+                ensure!(
+                    caller.is_none_or(|c| c == rider
+                        || self.riding_seat(rider).is_some_and(|(mount, _)| mount == c)
+                        || self.may_move(c, ObjectRef::Player(rider))),
+                    "Player {} may not take {rider} off their mount",
+                    caller.unwrap_or_default()
+                );
+                self.unmount_object(rider)
+            }
             Op::SetScale { player, scale } => {
                 ensure!(self.peers.contains_key(&player), "No such player");
                 self.set_player_scale(player, scale)?;
@@ -2047,6 +2143,7 @@ impl Session {
                 peer.look_limits = limits;
                 Ok(())
             }
+            Op::OrbitCamera { player, orbit } => self.orbit_camera(player, orbit),
             Op::Sound { profile, at } => {
                 self.take_cue(package)?;
                 match at {
@@ -2430,25 +2527,6 @@ impl Session {
         let text = match count {
             1 => format!("{verb} 1 brick"),
             n => format!("{verb} {n} bricks"),
-        };
-        self.notify(
-            player,
-            Notice::Bottom {
-                text,
-                seconds: 2.0,
-                hide_bar: false,
-            },
-        );
-    }
-    fn bottom_fill(&mut self, player: OwnerId, fill: super::Fill) {
-        let painted = match fill.painted {
-            1 => "Filled 1 brick".to_string(),
-            n => format!("Filled {n} bricks"),
-        };
-        let text = match fill.refused {
-            0 => painted,
-            1 => format!("{painted}; 1 more is not yours to paint"),
-            n => format!("{painted}; {n} more are not yours to paint"),
         };
         self.notify(
             player,
@@ -3370,20 +3448,53 @@ impl Session {
     /// `on_activate(player)` of every package that declares it, in load
     /// order, until one takes the click (returns `true`).
     pub(super) fn package_activate(&mut self, owner: OwnerId) -> bool {
+        self.package_take(
+            owner,
+            |b| b.on_activate,
+            "on_activate",
+            vec![Dynamic::from_int(owner as i64)],
+        )
+    }
+    /// `on_trigger(player, trigger, down)` of every package that declares
+    /// it, in load order, until one takes the press (returns `true`).
+    pub(super) fn package_trigger(&mut self, owner: OwnerId, trigger: u8, down: bool) -> bool {
+        self.package_take(
+            owner,
+            |b| b.on_trigger,
+            "on_trigger",
+            vec![
+                Dynamic::from_int(owner as i64),
+                Dynamic::from_int(i64::from(trigger)),
+                Dynamic::from_bool(down),
+            ],
+        )
+    }
+    /// Ask a player's input hook of each declaring package, in load order,
+    /// until one answers `true`. Bots have no input to take.
+    fn package_take(
+        &mut self,
+        owner: OwnerId,
+        declared: fn(&bri_package_runtime::content::Behaviour) -> bool,
+        function: &str,
+        args: Vec<Dynamic>,
+    ) -> bool {
         let Some(host) = self.packages.as_ref() else {
             return false;
         };
+        if self.bots.is_bot(owner) {
+            return false;
+        }
         let hooks: Vec<String> = host
             .catalog
             .behaviours()
-            .filter(|(_, b)| b.on_activate)
+            .filter(|(_, b)| declared(b))
             .map(|(id, _)| id.clone())
             .collect();
         for package in hooks {
             let reply = self.run_package(
                 &package,
-                "on_activate",
-                vec![Dynamic::from_int(owner as i64)],
+                function,
+                args.clone(),
                 Budget::Command,
                 Some(owner),
                 None,
@@ -3703,6 +3814,12 @@ impl Session {
     }
     /// Package state one client receives: keys visible to everyone, plus
     /// that player's own keys visible to their owner.
+    /// Changes whenever any client's `package_state_for` may have changed,
+    /// apart from players joining or leaving, so a host can skip rebuilding
+    /// and comparing every view when nothing did.
+    pub fn package_state_revision(&self) -> u64 {
+        self.package_revision
+    }
     pub fn package_state_for(&self, viewer: OwnerId) -> PackageStateView {
         self.package_view(Some(viewer))
     }

@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "checks": [
+    {
+      "fire": "tool_fill_can:weapon/fillcanitem",
+      "projectiles": 1,
+      "recoil": null,
+      "max_spread_degrees": null,
+      "why": "fillcanImage fires one fillcanProjectile (projectile = fillcanProjectile; no onFire of its own)"
+    }
+  ]
+}

@@ -449,7 +449,7 @@ fn relit_sun(baked:f32,position:vec3<f32>,n:vec3<f32>)->f32 {
 // let through. In Unified mode a live shadow takes away only the sun the
 // texel actually had, so baked shade is never darkened twice; unshadowed, the
 // mission lightmap shows exactly as baked.
-fn decomposed_lightmap(mission:vec3<f32>,parts:vec4<f32>,position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
+fn decomposed_lightmap(mission:vec3<f32>,parts:vec4<f32>,uv:vec2<f32>,position:vec3<f32>,normal:vec3<f32>)->vec3<f32> {
     if lighting_mode()==0 && !relit() {return shadowed_lightmap(mission,position,normal);}
     let n=normal/max(length(normal),0.0001);
     let direction=camera.sun_direction.xyz/max(length(camera.sun_direction.xyz),0.0001);
@@ -470,7 +470,25 @@ fn decomposed_lightmap(mission:vec3<f32>,parts:vec4<f32>,position:vec3<f32>,norm
     // a switched-off light is never darker than the light it really gave.
     var shaded=vec3<f32>(0.0);
     let tinted=map_lights.count.y!=0u;
-    if shadows.lamp_params.x>0.0 || tinted {
+    let channels=min(u32(material[1].y),24u);
+    if channels>0u && (shadows.lamp_params.x>0.0 || tinted) {
+        // The bake's per-texel shares (map_lighting::DynamicSheet), when the
+        // material carries them: exactly the light each gave this texel, as
+        // the Dynamic mode switches it.
+        let seen=channel_shares(uv,channels);
+        for(var c=0u;c<channels;c+=1u) {
+            let i=channel_light(c);
+            if i<min(map_lights.count.z,24u) {
+                let light=map_lights.values[i];
+                let given=light_given(light,position)*seen[c/4u][c%4u];
+                var lit=1.0;
+                let slot=lamp_slot(i);
+                if slot>=0 {lit=lamp_lit(u32(slot),position,n);}
+                shaded+=given*max(vec3<f32>(1.0)-light_tint(light)*lit,vec3<f32>(0.0));
+            }
+        }
+        shaded=min(shaded,parts.rgb);
+    } else if shadows.lamp_params.x>0.0 || tinted {
         let vis=map_visibility(position,n);
         var v=vis;
         for(var i=0u;i<min(map_lights.count.x,24u);i+=1u) {
@@ -536,26 +554,16 @@ fn dynamic_lightmap(left:vec4<f32>,uv:vec2<f32>,position:vec3<f32>,normal:vec3<f
     if facing>0.0 && sun>0.0 {sun=min(sun,sun_visibility(position,n));}
     if relit() && facing>0.0 {sun=relit_sun(left.a,position,n);}
     let count=min(u32(material[1].y),24u);
-    var seen=array<vec4<f32>,6>();
-    if count>0u {seen[0]=textureSampleLevel(layer1,clamped_exact,uv,0.0);}
-    if count>4u {seen[1]=textureSampleLevel(layer2,clamped_exact,uv,0.0);}
-    if count>8u {seen[2]=textureSampleLevel(layer3,clamped_exact,uv,0.0);}
-    if count>12u {seen[3]=textureSampleLevel(layer4,clamped_exact,uv,0.0);}
-    if count>16u {seen[4]=textureSampleLevel(layer5,clamped_exact,uv,0.0);}
-    if count>20u {seen[5]=textureSampleLevel(layer6,clamped_exact,uv,0.0);}
+    let seen=channel_shares(uv,count);
     var light=vec3<f32>(0.0);
-    let lights=min(map_lights.count.x,24u);
+    let lights=min(map_lights.count.z,24u);
     for(var c=0u;c<count;c+=1u) {
-        let share=seen[c/4u][c%4u];
         let i=channel_light(c);
         // Branch on the light, not the texel's share: llvmpipe's JIT
         // crashes on a share-dependent branch around the shadow taps.
         if i<lights {
             let l=map_lights.values[i];
-            let distance=length(l.position_inner.xyz-position);
-            let outer=l.color_outer.w;
-            let inner=l.position_inner.w;
-            var reach=l.color_outer.rgb*light_tint(l)*clamp((outer-distance)/max(outer-inner,0.001),0.0,1.0)*share;
+            var reach=light_given(l,position)*light_tint(l)*seen[c/4u][c%4u];
             let slot=lamp_slot(i);
             if slot>=0 {reach*=lamp_lit(u32(slot),position,n);}
             light+=reach;
@@ -564,12 +572,35 @@ fn dynamic_lightmap(left:vec4<f32>,uv:vec2<f32>,position:vec3<f32>,normal:vec3<f
     let ambient=camera.ambient.rgb-baked_ambient();
     return clamp(left.rgb+ambient+light+camera.sun_color.rgb*facing*sun,vec3<f32>(0.0),vec3<f32>(1.0));
 }
+// The shares of its lights a lightmap texel holds, four channels to a
+// material slot 1..=6 (map_lighting::DynamicSheet).
+fn channel_shares(uv:vec2<f32>,count:u32)->array<vec4<f32>,6> {
+    var seen=array<vec4<f32>,6>();
+    if count>0u {seen[0]=textureSampleLevel(layer1,clamped_exact,uv,0.0);}
+    if count>4u {seen[1]=textureSampleLevel(layer2,clamped_exact,uv,0.0);}
+    if count>8u {seen[2]=textureSampleLevel(layer3,clamped_exact,uv,0.0);}
+    if count>12u {seen[3]=textureSampleLevel(layer4,clamped_exact,uv,0.0);}
+    if count>16u {seen[4]=textureSampleLevel(layer5,clamped_exact,uv,0.0);}
+    if count>20u {seen[5]=textureSampleLevel(layer6,clamped_exact,uv,0.0);}
+    return seen;
+}
+// A map light as the map compiler lit a surface at `position` facing it:
+// its colour by its linear falloff, no cosine.
+fn light_given(l:MapLight,position:vec3<f32>)->vec3<f32> {
+    let distance=length(l.position_inner.xyz-position);
+    let outer=l.color_outer.w;
+    let inner=l.position_inner.w;
+    return l.color_outer.rgb*clamp((outer-distance)/max(outer-inner,0.001),0.0,1.0);
+}
 // Light channel `c` of a decomposed material in the Dynamic mode: two light
 // indices to a parameter float (map_lighting::pack_channels).
 fn channel_light(c:u32)->u32 {
     let f=c/2u;
     let word=u32(material[2u+f/4u][f%4u]+0.5);
-    return select(word%32u,word/32u,c%2u==1u);
+    let index=select(word%32u,word/32u,c%2u==1u);
+    // Its place in the uniform (24, past every light, when not there).
+    let slot=map_lights.slots[index/4u][index%4u];
+    return select(24u,u32(slot+0.5),slot>=0.0 && index<24u);
 }
 // The mission terrain lightmap is ambient plus sun times its baked
 // visibility; the visibility is recovered from the lightmap itself, and a
@@ -624,7 +655,7 @@ fn light_tint(light:MapLight)->vec3<f32> {
 // texel per unit of distance); cube_faces each light's six face matrices.
 struct MapLights {
     origin_cell:vec4<f32>, dims:vec4<f32>, count:vec4<u32>, values:array<MapLight,24>,
-    cube_atlas:vec4<f32>, cube_params:vec4<f32>, cube_faces:array<mat4x4<f32>,144>,
+    slots:array<vec4<f32>,6>, cube_atlas:vec4<f32>, cube_params:vec4<f32>, cube_faces:array<mat4x4<f32>,144>,
 };
 @group(0) @binding(13) var visibility_volume:texture_3d<f32>;
 @group(0) @binding(14) var<uniform> map_lights:MapLights;
@@ -1086,7 +1117,7 @@ fn slot_size(slot:u32)->vec2<f32> {
         illumination=dynamic_lightmap(textureSample(weights1,clamped_exact,v.lightmap_uv),v.lightmap_uv,v.world_position,v.normal)
             +point_illumination(v.world_position,v.normal);
     } else if material[1].x==1.0 {
-        illumination=decomposed_lightmap(baked_light.rgb,textureSample(weights0,clamped_exact,v.lightmap_uv),v.world_position,v.normal)
+        illumination=decomposed_lightmap(baked_light.rgb,textureSample(weights0,clamped_exact,v.lightmap_uv),v.lightmap_uv,v.world_position,v.normal)
             +point_illumination(v.world_position,v.normal);
     } else {
         illumination=shadowed_lightmap(illumination,v.world_position,v.normal)

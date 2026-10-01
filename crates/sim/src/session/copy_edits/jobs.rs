@@ -157,7 +157,7 @@ pub(in crate::session) struct PaintWork {
     ids: Arc<Vec<BrickId>>,
     actor: Actor,
     package: String,
-    paint: CopyPaint,
+    paint: FillPaint,
     each: bool,
     check: TrustCheck,
     next: usize,
@@ -166,7 +166,7 @@ pub(in crate::session) struct PaintWork {
     before: Vec<(BrickId, Look)>,
 }
 impl PaintWork {
-    pub fn new(s: &Session, owner: OwnerId, paint: CopyPaint, each: bool) -> Result<Self> {
+    pub fn new(s: &Session, owner: OwnerId, paint: FillPaint, each: bool) -> Result<Self> {
         let peer = s.peers.get(&owner).context("Unknown connection")?;
         combat::ensure_may_build(
             &peer.combat,
@@ -174,12 +174,12 @@ impl PaintWork {
             bri_minigames::BuildAction::Paint,
         )?;
         match paint {
-            CopyPaint::Color(color) => ensure!(
+            FillPaint::Color(color) => ensure!(
                 usize::from(color) < s.simulation.state().palette.len(),
                 "That colour is not in this server's palette"
             ),
-            CopyPaint::ColorEffect(fx) => ensure!(fx <= 6, "Unknown colour effect"),
-            CopyPaint::ShapeEffect(fx) => ensure!(fx <= 2, "Unknown shape effect"),
+            FillPaint::ColorEffect(fx) => ensure!(fx <= 6, "Unknown colour effect"),
+            FillPaint::ShapeEffect(fx) => ensure!(fx <= 2, "Unknown shape effect"),
         }
         let held = s.copies.get(&owner).context("Copy a build first")?;
         // Painting each that may be: only none standing refuses it.

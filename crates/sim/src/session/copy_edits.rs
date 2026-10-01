@@ -10,7 +10,7 @@
 //! the hammer's), as the New Duplicator asked; the rest are counted.
 use super::*;
 use crate::grid::Bounds;
-use bri_package_runtime::ops::CopyPaint;
+use bri_package_runtime::ops::FillPaint;
 use bri_world::authority::trust as level;
 use bri_world::{Emitter, Light};
 mod box_jobs;
@@ -38,11 +38,11 @@ impl Look {
         brick.color_effect = self.color_effect;
         brick.shape_effect = self.shape_effect;
     }
-    pub(super) fn painted(mut self, paint: CopyPaint) -> Self {
+    pub(super) fn painted(mut self, paint: FillPaint) -> Self {
         match paint {
-            CopyPaint::Color(c) => self.color = c,
-            CopyPaint::ColorEffect(c) => self.color_effect = c,
-            CopyPaint::ShapeEffect(c) => self.shape_effect = c,
+            FillPaint::Color(c) => self.color = c,
+            FillPaint::ColorEffect(c) => self.color_effect = c,
+            FillPaint::ShapeEffect(c) => self.shape_effect = c,
         }
         self
     }
@@ -110,14 +110,18 @@ impl WrenchFill {
             next.name.clone_from(name);
         }
         if let Some(light) = &self.light {
-            next.light = light.as_ref().map(|id| Light {
-                asset: ContentRef::Resolved(id.clone()),
-                enabled: true,
+            next.light = light.as_ref().map(|id| {
+                Box::new(Light {
+                    asset: ContentRef::Resolved(id.clone()),
+                    enabled: true,
+                })
             });
         }
-        let emitter = next.emitter.get_or_insert(Emitter {
-            asset: None,
-            direction: 0,
+        let emitter = next.emitter.get_or_insert_with(|| {
+            Box::new(Emitter {
+                asset: None,
+                direction: 0,
+            })
         });
         if let Some(asset) = &self.emitter {
             emitter.asset = asset.clone().map(ContentRef::Resolved);
@@ -381,7 +385,7 @@ impl Session {
     /// Paint the bricks `owner`'s copy was taken from in `color`, all or
     /// none, as one undo step. The number painted.
     pub fn paint_copy(&mut self, owner: OwnerId, color: u8) -> Result<usize> {
-        self.paint_copy_with(owner, CopyPaint::Color(color), false)
+        self.paint_copy_with(owner, FillPaint::Color(color), false)
             .map(|(painted, _)| painted)
     }
 
@@ -392,7 +396,7 @@ impl Session {
     pub fn paint_copy_with(
         &mut self,
         owner: OwnerId,
-        paint: CopyPaint,
+        paint: FillPaint,
         each: bool,
     ) -> Result<(usize, usize)> {
         self.ensure_copy_idle(owner)?;
@@ -402,7 +406,7 @@ impl Session {
     }
 
     /// An Add-On's paint ([`Op::PaintCopy`]) as a copy job.
-    pub(super) fn start_paint(&mut self, owner: OwnerId, package: &str, paint: CopyPaint, each: bool) {
+    pub(super) fn start_paint(&mut self, owner: OwnerId, package: &str, paint: FillPaint, each: bool) {
         let started = self
             .ensure_copy_idle(owner)
             .and_then(|()| PaintWork::new(self, owner, paint, each));

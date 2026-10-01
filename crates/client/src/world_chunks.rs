@@ -902,10 +902,7 @@ pub(crate) mod tests {
             b
         };
         let unresolved = |namespace: &str, name: &str| {
-            Some(ContentRef::Unresolved {
-                namespace: namespace.into(),
-                name: name.into(),
-            })
+            Some(ContentRef::unresolved(namespace, name))
         };
         let drawn = |brick: &Brick| {
             let scene =

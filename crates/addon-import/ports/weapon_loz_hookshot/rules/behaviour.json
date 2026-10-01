@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "script": "hookshot.rhai",
+  "commands": [
+    { "name": "degrapple", "cooldown_ticks": 0 }
+  ],
+  "state": {
+    "player": {
+      "pull": { "default": [], "persist": false }
+    }
+  },
+  "on_projectile_hit": true,
+  "tick_interval": 1
+}

@@ -1157,10 +1157,10 @@ fn bot_world() -> World {
         [0.0, 0.3, -6.0],
         1,
     );
-    brick.vehicle = Some(bri_world::VehicleSpawn {
+    brick.vehicle = Some(Box::new(bri_world::VehicleSpawn {
         vehicle: bri_world::ContentRef::Resolved("bot.blockhead".into()),
         recolor: false,
-    });
+    }));
     world.bricks.insert(1, brick);
     world.next_brick_id = 2;
     world
@@ -1436,6 +1436,8 @@ fn add_launcher(
         crosshair: true,
         follow_arm: false,
         paint_tint: false,
+        rope: None,
+        paint_picker: false,
         scripts: Default::default(),
         hide_nodes: Vec::new(),
         both_arms: false,
