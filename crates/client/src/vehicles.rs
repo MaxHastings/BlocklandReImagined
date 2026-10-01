@@ -1305,7 +1305,7 @@ mod tests {
         assert_eq!(body_tint(&d, &plain, &palette), [1.0; 4]);
     }
     /// A wreck burns with its own `damageEmitter`s, each once: the stand-in
-    /// plane names `VehicleBurnEmitter` twice, as the stunt plane does; an Add-On's own emitter
+    /// plane names `StandInWreckEmitter` (a base-game name to it) twice; an Add-On's own emitter
     /// resolves to its id; a mount without any (a horse) does not burn.
     #[test]
     fn a_wreck_burns_with_its_own_damage_emitters() {
@@ -1314,14 +1314,14 @@ mod tests {
         ))
         .unwrap();
         let mut d = plane.definitions[0].clone();
-        assert_eq!(d.wreck_emitters(), ["v20/emitter/vehicleburnemitter"]);
+        assert_eq!(d.wreck_emitters(), ["v20/emitter/standinwreckemitter"]);
         let own = d.effects.emitters[0].id.clone();
         let (_, name) = own.rsplit_once(":emitter/").unwrap();
         d.authored
             .insert("damageemitter[2]".into(), name.to_ascii_uppercase());
         assert_eq!(
             d.wreck_emitters(),
-            ["v20/emitter/vehicleburnemitter".to_string(), own]
+            ["v20/emitter/standinwreckemitter".to_string(), own]
         );
         d.authored.retain(|k, _| !k.starts_with("damageemitter"));
         assert!(d.wreck_emitters().is_empty());

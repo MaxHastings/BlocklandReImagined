@@ -139,56 +139,56 @@
    "collision_hulls": [
     [
      [
-      -0.9,
+      -0.8,
       0.0,
-      -4.3
+      -4.0
      ],
      [
-      0.9,
+      0.8,
       0.0,
-      -4.3
+      -4.0
      ],
      [
-      -0.9,
-      1.8,
-      -4.3
+      -0.8,
+      1.7,
+      -4.0
      ],
      [
-      0.9,
-      1.8,
-      -4.3
+      0.8,
+      1.7,
+      -4.0
      ],
      [
-      -0.9,
+      -0.8,
       0.0,
-      3.3
+      3.0
      ],
      [
-      0.9,
+      0.8,
       0.0,
-      3.3
+      3.0
      ],
      [
-      -0.9,
-      1.8,
-      3.3
+      -0.8,
+      1.7,
+      3.0
      ],
      [
-      0.9,
-      1.8,
-      3.3
+      0.8,
+      1.7,
+      3.0
      ]
     ]
    ],
    "bounds_min": [
-    -4.5,
+    -4.2,
     0.0,
-    -4.3
+    -4.0
    ],
    "bounds_max": [
-    4.5,
-    2.4,
-    3.3
+    4.2,
+    2.2,
+    3.0
    ],
    "mass": 200.0,
    "mass_center": [
@@ -197,9 +197,9 @@
     0.0
    ],
    "inertia_box": [
-    9.0,
-    2.4,
-    7.6
+    8.4,
+    2.2,
+    7.0
    ],
    "density": 1.0,
    "drag": 0.5,
@@ -270,7 +270,7 @@
    "effects": {
     "particles": [
      {
-      "id": "test_plane:particle/smoke",
+      "id": "test_plane:particle/standinsmoke",
       "texture": "base/data/particles/cloud",
       "alpha_blend": false,
       "lifetime": 0.5,
@@ -311,10 +311,10 @@
     ],
     "emitters": [
      {
-      "id": "test_plane:emitter/smokeemitter",
+      "id": "test_plane:emitter/standinsmokeemitter",
       "name": "",
       "particles": [
-       "test_plane:particle/smoke"
+       "test_plane:particle/standinsmoke"
       ],
       "period": 0.01,
       "period_variance": 0.0,
@@ -342,8 +342,8 @@
     ]
    },
    "authored": {
-    "damageemitter[0]": "VehicleBurnEmitter",
-    "damageemitter[1]": "VehicleBurnEmitter"
+    "damageemitter[0]": "StandInWreckEmitter",
+    "damageemitter[1]": "StandInWreckEmitter"
    },
    "adaptations": []
   }

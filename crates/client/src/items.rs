@@ -2214,6 +2214,86 @@ mod add_on_icon_tests {
 }
 
 #[cfg(test)]
+mod own_model_icon_tests {
+    use super::*;
+    /// An Add-On tool's icon drawn from its own model in wood and iron, at
+    /// the Hammer icon's angle and size so it sits in the tool slots like
+    /// a stock tool: the stand-in pick (`add_on_icon_tests::own_model_tool`)
+    /// asking for it as our Trench Pick did. Writes it to
+    /// `target/own-model-icon.png` for a look.
+    #[test]
+    #[ignore = "requires the converted item and weapons packs; CPU only"]
+    fn an_add_on_icon_is_drawn_from_its_model_like_the_hammers() -> Result<()> {
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let root = manifest.join("../../content");
+        let dir = tempfile::tempdir()?;
+        let abs = super::add_on_icon_tests::own_model_tool(dir.path())?;
+        std::fs::create_dir_all(abs.join("icons"))?;
+        image::save_buffer(abs.join("icons/pick.png"), &[0u8; 4], 1, 1, image::ColorType::Rgba8)?;
+        std::fs::write(
+            abs.join("icons/pick.render.json"),
+            r#"{ "schema_version": 1, "pose_like": "v20.weapon.hammeritem", "look": { "textured": true } }"#,
+        )?;
+        let path = abs.join("weapons.json");
+        let mut weapons: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
+        weapons["items"]["tool:weapon/pick"]["icon"] = "icons/pick".into();
+        std::fs::write(&path, serde_json::to_vec_pretty(&weapons)?)?;
+        let extras = vec![("addons/tool/assets".to_string(), abs.canonicalize()?)];
+        let mut assets = ItemAssets::load_with(
+            &root.join("item-presentation-pack-010"),
+            &root.join("weapons-pack-009"),
+            &extras,
+        )?;
+        assert!(assets.faults.is_empty(), "{:?}", assets.faults);
+        let pick = "tool:weapon/pick";
+        // Drawn from its model, off the load path (`ItemAssets::draw_icons`).
+        assert_eq!(assets.draw_icons(None), IconDraws { kept: 0, drawing: 1 });
+        assets.finish_icons();
+        let slot = assets.drawn_icon(pick).expect("an icon drawn from its model");
+        let icon = slot.get().expect("drawn");
+        assert!(std::ptr::eq(assets.icon(pick)?.unwrap(), icon), "the drawn icon is shown");
+        let hammer = assets.icon("v20.weapon.hammeritem")?.unwrap();
+        assert_eq!((icon.width, icon.height), (hammer.width, hammer.height), "framed like the Hammer's");
+        assert_eq!(icon.rgba[3], 0, "a clear background");
+        // Two materials show: the wooden handle and the iron head.
+        let solid: Vec<&[u8]> = icon.rgba.chunks_exact(4).filter(|p| p[3] == 255).collect();
+        let wood = solid.iter().filter(|p| p[0] as i32 - p[2] as i32 > 40).count();
+        let iron = solid.iter().filter(|p| (p[0] as i32 - p[2] as i32).abs() < 12 && p[0] > 40).count();
+        assert!(wood > 50 && iron > 50, "wood {wood} and iron {iron}");
+        // Held like the Hammer: at the grip, in the right hand.
+        let image = &assets.presentation.images["tool:image/pick"];
+        assert_eq!(image.mount_point, assets.presentation.images["v20.image.hammerimage"].mount_point);
+        // The pick is modelled as the Hammer is held: handle up out of the
+        // fist (+y) and the head across its top, front to back (z), about
+        // as big. Each model's box, seen from its grip.
+        let grip_box = |model: &str| -> Result<(Vec3, Vec3)> {
+            let shape = assets.shape(model)?;
+            let bind = sample(shape, None, 0.0)?;
+            let grip = shape
+                .nodes
+                .iter()
+                .position(|n| n.name.eq_ignore_ascii_case("mountPoint"))
+                .map_or(Vec3::ZERO, |i| bind.nodes[i].w_axis.truncate());
+            let bounds = assets.presentation.models[model].bounds();
+            Ok((Vec3::from(bounds.min) - grip, Vec3::from(bounds.max) - grip))
+        };
+        let hammer = grip_box(&assets.presentation.images["v20.image.hammerimage"].model)?;
+        let ours = grip_box(&image.model)?;
+        println!("from the grip, hammer {hammer:?}, pick {ours:?}");
+        for (name, (lo, hi)) in [("hammer", hammer), ("pick", ours)] {
+            let size = hi - lo;
+            assert!(size.y > size.x && hi.y > -lo.y * 2.0, "{name}: the handle stands up out of the fist");
+            assert!(size.z > size.x, "{name}: the head runs front to back");
+        }
+        let ratio = (ours.1.y - ours.0.y) / (hammer.1.y - hammer.0.y);
+        assert!((0.7..1.6).contains(&ratio), "about the Hammer's size: {ratio}");
+        let out = manifest.join("../../target/own-model-icon.png");
+        image::save_buffer(&out, &icon.rgba, icon.width, icon.height, image::ColorType::Rgba8)?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
 mod bounds_tests {
     use super::*;
     fn root() -> std::path::PathBuf {
