@@ -260,10 +260,10 @@ fn load_plane_spawn(app: &mut App, state: &Path) -> Result<()> {
         ],
         view.owner,
     );
-    brick.vehicle = Some(bri_world::VehicleSpawn {
+    brick.vehicle = Some(Box::new(bri_world::VehicleSpawn {
         vehicle: bri_world::ContentRef::Resolved(PLANE.into()),
         recolor: false,
-    });
+    }));
     world.bricks.insert(1, brick);
     world.next_brick_id = 2;
     let folder = state

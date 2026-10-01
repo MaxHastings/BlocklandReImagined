@@ -8,6 +8,12 @@ use std::{
     path::PathBuf,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+/// mimalloc: the persistent world maps and replication allocate heavily.
+/// On a 200k-brick world it cut world build 17%, wire decode 20%, JSON
+/// load 16% and collider inserts 18% against the system allocator (Linux;
+/// Windows' heap usually gains more).
+#[global_allocator]
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();

@@ -161,10 +161,9 @@ fn print_material(
     materials: &crate::materials::BrickMaterials,
     print: &ContentRef,
 ) -> Result<Option<usize>> {
-    let (ContentRef::Resolved(name) | ContentRef::Unresolved { name, .. }) = print;
-    let print_namespace = match print {
-        ContentRef::Resolved(_) => true,
-        ContentRef::Unresolved { namespace, .. } => namespace.eq_ignore_ascii_case("print"),
+    let (name, print_namespace) = match print {
+        ContentRef::Resolved(name) => (name, true),
+        ContentRef::Unresolved(u) => (&u.name, u.namespace.eq_ignore_ascii_case("print")),
     };
     if print_namespace && materials.bundle.resolve(name).is_some() {
         return materials.print_material(scene, name).map(Some);
@@ -553,10 +552,7 @@ pub(crate) mod tests {
                 .to_string()
                 .contains("no native render mesh")
         );
-        world.bricks.get_mut(&1).unwrap().definition = ContentRef::Unresolved {
-            namespace: "stock".into(),
-            name: "unknown".into(),
-        };
+        world.bricks.get_mut(&1).unwrap().definition = ContentRef::unresolved("stock", "unknown");
         assert!(
             build_world_scene(&world, &meshes, 4)
                 .unwrap_err()

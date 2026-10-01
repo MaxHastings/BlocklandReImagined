@@ -54,10 +54,10 @@ fn boarded() -> (Session, Rider) {
         [0.25, 0.1, -6.25],
         0,
     );
-    brick.vehicle = Some(VehicleSpawn {
+    brick.vehicle = Some(Box::new(VehicleSpawn {
         vehicle: ContentRef::Resolved(TANK.into()),
         recolor: false,
-    });
+    }));
     let mut s = Session::new(fixture::synthetic_simulation(&[brick]).unwrap());
     let (pack, _) = fixture::synthetic_vehicles().unwrap();
     s.set_vehicle_pack(pack, Vec::new()).unwrap();

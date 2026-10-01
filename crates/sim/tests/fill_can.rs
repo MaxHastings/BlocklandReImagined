@@ -524,10 +524,10 @@ fn a_vehicle_is_painted_through_its_recolouring_brick_or_alone_and_undone() {
             4242,
         );
         brick.color = RED;
-        brick.vehicle = Some(bri_world::VehicleSpawn {
+        brick.vehicle = Some(Box::new(bri_world::VehicleSpawn {
             vehicle: bri_world::ContentRef::Resolved(PLANE.into()),
             recolor,
-        });
+        }));
         brick
     };
     let mut g = Game::with(|w| {

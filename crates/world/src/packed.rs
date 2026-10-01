@@ -263,17 +263,14 @@ pub(crate) mod tests {
             b.color_effect = (i % 7) as u8;
             b.shape_effect = (i % 3) as u8;
             if i % 11 == 0 {
-                b.print = Some(ContentRef::Unresolved {
-                    namespace: "print".into(),
-                    name: format!("Letters/{}", i % 4),
-                });
+                b.print = Some(ContentRef::unresolved("print", format!("Letters/{}", i % 4)));
             }
             if i % 13 == 0 {
                 b.name = Some(format!("brick{i}"));
-                b.light = Some(Light {
+                b.light = Some(Box::new(Light {
                     asset: ContentRef::Resolved("light".into()),
                     enabled: true,
-                });
+                }));
             }
             if i % 5 == 1 {
                 b.source_records.push(SourceRecord {
@@ -283,10 +280,10 @@ pub(crate) mod tests {
                 });
             }
             if i % 17 == 0 {
-                b.emitter = Some(Emitter {
+                b.emitter = Some(Box::new(Emitter {
                     asset: None,
                     direction: 2,
-                });
+                }));
             }
             // Ids out of order, as a nearest-first chunk sends them.
             out.push((1000 - i * 3, b));

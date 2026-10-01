@@ -137,7 +137,9 @@ pub struct Building {
     map_generation: u64,
     broken: bri_sim::prediction::BrokenShapes,
     terrain: Vec<Arc<TerrainField>>,
-    bricks: BTreeMap<BrickId, Brick>,
+    /// The replica's bricks as last synced: a structurally shared handle to
+    /// the replica's own map, not a second copy of every brick.
+    bricks: bri_world::Bricks,
     index: Index,
     camera_index: Index,
     visibility_index: Index,
@@ -366,14 +368,14 @@ impl Building {
                     "Invalid replicated brick transform"
                 );
                 let definition = self.definitions.get(brick)?;
-                changed.push((id, brick.clone(), Bounds::new(brick, &definition.mesh)?));
+                changed.push((id, brick, Bounds::new(brick, &definition.mesh)?));
             }
         }
         let removed: Vec<_> = match known {
             Some(known) => known
                 .bricks
                 .iter()
-                .filter(|id| self.bricks.contains_key(id) && !world.bricks.contains_key(*id))
+                .filter(|id| self.bricks.contains_key(*id) && !world.bricks.contains_key(*id))
                 .copied()
                 .collect(),
             None => self
@@ -403,9 +405,9 @@ impl Building {
             if brick.colliding {
                 let aabb = self
                     .definitions
-                    .get(&brick)?
+                    .get(brick)?
                     .shape
-                    .compute_aabb(&brick_pose(&brick));
+                    .compute_aabb(&brick_pose(brick));
                 self.camera_index.insert(
                     id,
                     query_bounds(
@@ -414,8 +416,10 @@ impl Building {
                     ),
                 );
             }
-            self.bricks.insert(id, brick);
         }
+        // The change log names everything that differs, so the replica's map
+        // now matches what the indexes hold; share it instead of copying.
+        self.bricks = world.bricks.clone();
         self.palette_len = world.palette.len();
         if usize::from(self.paint) >= self.palette_len {
             self.paint = 0;
@@ -458,7 +462,7 @@ impl Building {
     fn placement(&self, ghost: &Brick) -> Option<(bool, bool)> {
         let definition = self.definitions.entries.get(match &ghost.definition {
             ContentRef::Resolved(id) => id.as_str(),
-            ContentRef::Unresolved { .. } => return None,
+            ContentRef::Unresolved(_) => return None,
         })?;
         let bounds = Bounds::new(ghost, &definition.mesh).ok()?;
         let mut supported = false;

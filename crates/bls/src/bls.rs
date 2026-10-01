@@ -6,10 +6,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 fn reference(namespace: &str, name: &str) -> ContentRef {
-    ContentRef::Unresolved {
-        namespace: namespace.into(),
-        name: name.trim().into(),
-    }
+    ContentRef::unresolved(namespace, name.trim())
 }
 fn boolean(s: &str) -> Result<bool> {
     match s.trim() {
@@ -96,10 +93,10 @@ fn extension(brick: &mut Brick, line: &str) -> Result<Option<String>> {
             } else {
                 boolean(tail)?
             };
-            brick.light = Some(Light {
+            brick.light = Some(Box::new(Light {
                 asset: reference("light_ui", name),
                 enabled,
-            });
+            }));
             Ok(Some(
                 "Light state preserved; content reference requires resolution".into(),
             ))
@@ -111,11 +108,11 @@ fn extension(brick: &mut Brick, line: &str) -> Result<Option<String>> {
                 direction <= 5 && !name.trim().is_empty(),
                 "Invalid emitter attachment"
             );
-            brick.emitter = Some(Emitter {
+            brick.emitter = Some(Box::new(Emitter {
                 asset: (!name.trim().eq_ignore_ascii_case("NONE"))
                     .then(|| reference("emitter_ui", name)),
                 direction,
-            });
+            }));
             Ok(Some(
                 "Emitter state preserved; content reference requires resolution".into(),
             ))
@@ -304,7 +301,7 @@ pub fn read_counting(
                 .map(|id| ContentRef::Resolved(id.clone()))
                 .unwrap_or_else(|| reference("brick_ui", display));
             let mut diagnostics = vec![];
-            if matches!(definition, ContentRef::Unresolved { .. }) {
+            if matches!(definition, ContentRef::Unresolved(_)) {
                 diagnostics.push(format!(
                     "Brick definition missing from supplied catalog: {display}"
                 ));

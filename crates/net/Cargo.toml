@@ -5,6 +5,8 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+mimalloc.workspace = true
+imbl = "7"
 bri-files.workspace = true
 bri-weapons = { path = "../weapons" }
 anyhow.workspace = true

@@ -376,6 +376,10 @@ pub struct App {
     pub controls: Controls,
     state_dir: PathBuf,
     runtime: tokio::runtime::Runtime,
+    /// Runs a hosted game's server (its tick, peers and saves) on threads of
+    /// its own, so a heavy tick never holds up this client's networking,
+    /// file jobs or the host player's own connection.
+    host_runtime: tokio::runtime::Runtime,
     attempt: Option<Attempt>,
     cpu_scene: Option<SceneData>,
     /// Steering prefs last sent to this session (`SteeringPrefsEvent`).
@@ -1671,6 +1675,11 @@ impl App {
             state_dir: state_dir.into(),
             runtime: tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(2)
+                .enable_all()
+                .build()?,
+            host_runtime: tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .thread_name("bri-host")
                 .enable_all()
                 .build()?,
             attempt: None,
@@ -3004,6 +3013,7 @@ impl App {
         let progress = bri_progress::Progress::new();
         progress.set_subject(&map);
         let reporting = progress.clone();
+        let host_runtime = self.host_runtime.handle().clone();
         let worker = Worker::start(self.runtime.handle(), async move {
             let identity_file = state_dir.join("client.identity");
             let native_identity = tokio::task::spawn_blocking(move || {
@@ -3154,6 +3164,8 @@ impl App {
             });
             let (session, spawn_points) = setup.session(&hosted, loaded.into_session())?;
             let map_loader: server::MapLoader = setup;
+            // The server's tasks spawn onto the host runtime it is started in.
+            let entered = host_runtime.enter();
             let mut host = server::start_with_admin_store_and_limit(
                 session,
                 ServerOptions {
@@ -3177,6 +3189,7 @@ impl App {
                 max_players as usize,
                 state_dir.join("administration.json"),
             )?;
+            drop(entered);
             let address = SocketAddr::from(([127, 0, 0, 1], host.address.port()));
             if !single {
                 // LAN players find this host (and its certificate) by broadcast;

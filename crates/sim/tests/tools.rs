@@ -777,10 +777,7 @@ fn wrench_item_catalog_ranges_and_clear_are_authoritative_and_atomic(f: &Fixture
             ..Default::default()
         },
         bri_world::ItemSpawn {
-            item: Some(ContentRef::Unresolved {
-                namespace: "item_ui".into(),
-                name: "Gun".into(),
-            }),
+            item: Some(ContentRef::unresolved("item_ui", "Gun")),
             ..Default::default()
         },
         bri_world::ItemSpawn {
@@ -1956,8 +1953,12 @@ fn destructo_wand_breaks_a_brick_like_the_hammer_with_its_own_hit_sound(f: &Fixt
     );
     let second = plant(&mut s, admin, 4, [0.5, 0.1, -3.25]);
     aim(&mut s, admin, 5, [0.5, 0.1, -3.25]);
-    s.command(admin, 6, Command::Admin(Request::new(Action::DestructoWand)))
-        .unwrap();
+    s.command(
+        admin,
+        6,
+        Command::Admin(Request::new(Action::DestructoWand)),
+    )
+    .unwrap();
     hold_still(&mut s, admin);
     s.take_cues();
     s.command(admin, 7, Command::WeaponTrigger { down: true })

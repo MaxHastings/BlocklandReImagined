@@ -19,23 +19,28 @@ use bri_sim::{
 };
 use bri_world::OwnerId;
 use glam::Vec3;
-use std::{
-    collections::{BTreeMap, VecDeque},
-    f32::consts::PI,
-    sync::Arc,
-};
+use std::{collections::BTreeMap, f32::consts::PI, sync::Arc};
 
 const TICK: f32 = bri_physics::FIXED_DT;
 const TICK_RATE: f64 = 120.0;
 /// At most this many fixed ticks per frame; a longer stall drops time rather
 /// than freezing the frame to catch up.
 const MAX_STEPS: u32 = 12;
-/// Remote players render this many server ticks behind the newest estimate:
-/// three pose intervals absorbs one lost datagram plus ordinary jitter.
+/// Remote players render this many server ticks behind the newest estimate
+/// at the full pose rate: three pose intervals absorbs one lost datagram
+/// plus ordinary jitter. The host sends far players less often, so each
+/// remote renders two of its own intervals plus one full-rate interval
+/// behind ([`remote_delay`]).
 const INTERPOLATION_TICKS: f64 = (POSE_INTERVAL * 3) as f64;
+/// Longest interval between a moving remote's poses (5 Hz, far away).
+const SLOWEST_INTERVAL: u64 = POSE_INTERVAL * 8;
+/// How fast a remote's render delay follows its rate, as a fraction of real
+/// time: its motion plays up to this much slower while the delay grows, and
+/// faster while it shrinks, never jumping.
+const DELAY_SLEW_UP: f64 = 0.1;
+const DELAY_SLEW_DOWN: f64 = 0.05;
 /// Bounded extrapolation beyond the newest remote pose, in ticks.
 const EXTRAPOLATION_TICKS: f64 = 6.0;
-const REMOTE_HISTORY: usize = 32;
 /// Corrections larger than this are teleports (respawn, spawn) and snap.
 const SNAP_DISTANCE: f32 = 4.0;
 /// Visual correction decay rate per second.
@@ -87,7 +92,13 @@ pub struct Motion {
     /// The local view follows v20's crouch thread, including its re-crouch snap.
     crouch: CrouchThread,
     eye_height: Option<f32>,
-    remotes: BTreeMap<OwnerId, VecDeque<bri_net::protocol::Pose>>,
+    /// Each remote's recent poses, held poses included (the replica's
+    /// history, shared, not copied).
+    remotes: BTreeMap<OwnerId, imbl::Vector<bri_net::protocol::Pose>>,
+    /// Ticks each remote renders behind the server, following its pose rate.
+    remote_delays: BTreeMap<OwnerId, f64>,
+    /// Seconds the last `advance` moved time by.
+    frame_seconds: f64,
     /// Estimated `server_tick - local_seconds * TICK_RATE`.
     clock_offset: Option<f64>,
     /// The offset presented, slewing toward `clock_offset`.
@@ -354,17 +365,21 @@ impl Motion {
             self.observe_clock(pose.tick);
             if *owner == view.owner {
                 self.observe_local(pose, &view.archetypes)?;
-            } else {
-                let history = self.remotes.entry(*owner).or_default();
-                if history.back().is_none_or(|last| last.tick < pose.tick) {
-                    if history.len() == REMOTE_HISTORY {
-                        history.pop_front();
-                    }
-                    history.push_back(pose.clone());
-                }
             }
         }
-        self.remotes.retain(|owner, _| view.poses.contains_key(owner));
+        // A far player is sent less often, and a pose it held still before
+        // moving again arrives in the same interval as the move; the
+        // replica keeps both, where the view's latest pose has only one.
+        self.remotes = view
+            .pose_history
+            .iter()
+            .filter(|(owner, history)| {
+                **owner != view.owner && !history.is_empty() && view.poses.contains_key(owner)
+            })
+            .map(|(owner, history)| (*owner, history.clone()))
+            .collect();
+        self.remote_delays
+            .retain(|owner, _| self.remotes.contains_key(owner));
         // The host's motor collides with every other living body on foot;
         // corpses and seated riders are sensors there, so a horse is not
         // pushed by the player riding it.
@@ -449,6 +464,7 @@ impl Motion {
             0.0
         };
         self.local_seconds += f64::from(seconds);
+        self.frame_seconds = f64::from(seconds);
         if let Some(offset) = self.clock_offset {
             let shown = self.shown_offset.unwrap_or(offset);
             let error = offset - shown;
@@ -570,7 +586,7 @@ impl Motion {
         {
             self.presented.insert(view.owner, pose.player.clone());
         }
-        let render_tick = self.server_tick().map(|tick| tick - INTERPOLATION_TICKS);
+        let server_tick = self.server_tick();
         let passages = self
             .collision()
             .map(|c| c.links().passages().clone())
@@ -579,6 +595,7 @@ impl Motion {
             if *owner == view.owner {
                 continue;
             }
+            let render_tick = server_tick.and_then(|tick| self.remote_render_tick(*owner, tick));
             let (state, ticked) = match (self.remotes.get(owner), render_tick) {
                 (Some(history), Some(tick)) if !history.is_empty() => (
                     sample(history, tick, &passages),
@@ -595,6 +612,21 @@ impl Motion {
             self.presented.insert(*owner, state);
         }
         &self.presented
+    }
+    /// The server tick `owner` renders at this frame: its delay eases toward
+    /// its pose rate's ([`remote_delay`]) so its motion never jumps.
+    fn remote_render_tick(&mut self, owner: OwnerId, server_tick: f64) -> Option<f64> {
+        let target = remote_delay(self.remotes.get(&owner)?);
+        let delay = self.remote_delays.entry(owner).or_insert(target);
+        let error = target - *delay;
+        let rate = if error > 0.0 {
+            DELAY_SLEW_UP
+        } else {
+            DELAY_SLEW_DOWN
+        };
+        let step = rate * TICK_RATE * self.frame_seconds;
+        *delay += error.clamp(-step, step);
+        Some(server_tick - *delay)
     }
     /// The local player's presented state from its prediction, looking
     /// (`yaw`, `pitch`, `head_yaw`) as the controls do this frame. False
@@ -685,8 +717,24 @@ impl Motion {
     }
 }
 
+/// Ticks a remote renders behind the server: two of its own pose intervals
+/// (the shortest of its last few, so a rest or a lost datagram does not
+/// count) plus one full-rate interval.
+fn remote_delay(history: &imbl::Vector<bri_net::protocol::Pose>) -> f64 {
+    let gaps = history
+        .iter()
+        .rev()
+        .zip(history.iter().rev().skip(1))
+        .take(4)
+        .map(|(b, a)| b.tick.saturating_sub(a.tick));
+    let interval = gaps
+        .min()
+        .unwrap_or(POSE_INTERVAL)
+        .clamp(POSE_INTERVAL, SLOWEST_INTERVAL);
+    INTERPOLATION_TICKS + (2 * (interval - POSE_INTERVAL)) as f64
+}
 fn sample(
-    history: &VecDeque<bri_net::protocol::Pose>,
+    history: &imbl::Vector<bri_net::protocol::Pose>,
     tick: f64,
     passages: &bri_content::passage::Passages,
 ) -> PlayerState {
@@ -811,7 +859,7 @@ mod tests {
         let frame = 1.0 / 144.0;
         let mut motion = Motion::default();
         let mut rng = 7u64;
-        let mut arrivals = VecDeque::new();
+        let mut arrivals = std::collections::VecDeque::new();
         let (mut time, mut sent) = (0.0f64, 0u64);
         let mut previous: Option<f64> = None;
         let mut worst: f64 = 0.0;
@@ -867,7 +915,9 @@ mod tests {
     }
     #[test]
     fn remote_samples_interpolate_extrapolate_and_wrap_yaw() {
-        let history: VecDeque<_> = [pose(3, 0.0, 3.0), pose(6, 3.0, -3.0)].into();
+        let history: imbl::Vector<_> = [pose(3, 0.0, 3.0), pose(6, 3.0, -3.0)]
+            .into_iter()
+            .collect();
         assert_eq!(sample(&history, 0.0, &Default::default()).feet[0], 0.0);
         assert!((sample(&history, 4.5, &Default::default()).feet[0] - 1.5).abs() < 1e-5);
         // Shortest arc through +/-PI rather than spinning through zero.
@@ -875,6 +925,62 @@ mod tests {
         // Extrapolation is bounded to EXTRAPOLATION_TICKS of velocity.
         let far = sample(&history, 1000.0, &Default::default()).feet[0];
         assert!((far - (3.0 + 10.0 * 6.0 / 120.0)).abs() < 1e-4);
+    }
+    /// Near players render three full-rate intervals behind; a far player
+    /// sent at 5 Hz two of its intervals plus one; rests and lost datagrams
+    /// do not stretch it.
+    #[test]
+    fn remote_delay_follows_each_players_pose_rate() {
+        let every = |gap: u64, count: u64| -> imbl::Vector<_> {
+            (1..=count).map(|i| pose(i * gap, 0.0, 0.0)).collect()
+        };
+        assert_eq!(remote_delay(&every(POSE_INTERVAL, 8)), INTERPOLATION_TICKS);
+        assert_eq!(remote_delay(&every(POSE_INTERVAL * 8, 8)), 51.0);
+        assert_eq!(remote_delay(&every(POSE_INTERVAL * 100, 8)), 51.0);
+        assert_eq!(remote_delay(&imbl::Vector::new()), INTERPOLATION_TICKS);
+        // A keepalive rest, then the held pose and a move at 10 Hz.
+        let mut history = every(POSE_INTERVAL * 4, 4);
+        for tick in [200, 300, 420, 432, 444] {
+            history.push_back(pose(tick, 0.0, 0.0));
+        }
+        assert_eq!(remote_delay(&history), 27.0);
+    }
+    /// A far player's pose rate halves: its render delay grows smoothly,
+    /// never moving its presented time backwards.
+    #[test]
+    fn a_remote_slowing_down_never_rewinds() {
+        let mut motion = Motion::default();
+        let owner = 9;
+        let mut view_tick = 0;
+        let mut last_shown: Option<f32> = None;
+        let mut history = imbl::Vector::new();
+        for frame in 0..1440_u64 {
+            let seconds = 1.0 / 144.0;
+            motion.advance(seconds, MoveInput::default(), 1).unwrap();
+            let now = (frame as f64 * TICK_RATE / 144.0) as u64 + 30;
+            let gap = if frame < 400 {
+                POSE_INTERVAL
+            } else {
+                POSE_INTERVAL * 8
+            };
+            while view_tick + gap <= now {
+                view_tick += gap;
+                // Walking at one unit per tick.
+                history.push_back(pose(view_tick, view_tick as f32, 0.0));
+                motion.observe_clock(view_tick);
+            }
+            motion.remotes = [(owner, history.clone())].into();
+            let Some(tick) = motion.server_tick() else {
+                continue;
+            };
+            let render = motion.remote_render_tick(owner, tick).unwrap();
+            let shown = sample(&history, render, &Default::default()).feet[0];
+            if let Some(last) = last_shown {
+                assert!(shown >= last - 1e-3, "frame {frame}: {shown} after {last}");
+            }
+            last_shown = Some(shown);
+        }
+        assert!((motion.remote_delays[&owner] - 51.0).abs() < 1.0);
     }
     /// How the driven vehicle is drawn over a real connection: the host
     /// runs the moves as they arrive (late, jittered, sometimes starved),

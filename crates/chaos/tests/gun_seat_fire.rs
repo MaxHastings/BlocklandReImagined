@@ -58,10 +58,10 @@ fn a_release_in_another_seat_ends_the_gun_seat_hold() {
         [0.0, 0.1, -8.0],
         0,
     );
-    brick.vehicle = Some(VehicleSpawn {
+    brick.vehicle = Some(Box::new(VehicleSpawn {
         vehicle: ContentRef::Resolved(TANK.into()),
         recolor: false,
-    });
+    }));
     let mut s = Session::new(fixture::synthetic_simulation(&[brick]).unwrap());
     let (weapons, _) = fixture::synthetic_weapons().unwrap();
     let (vehicles, _) = fixture::synthetic_vehicles().unwrap();
