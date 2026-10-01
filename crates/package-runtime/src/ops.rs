@@ -315,9 +315,13 @@ pub enum Op {
         player: u64,
         length: f32,
     },
-    /// Cut `player`'s rope.
+    /// Cut `player`'s rope. With `keep` (0 to 1), the player keeps only
+    /// that fraction of their speed relative to what the rope was tied to,
+    /// as a rope's grip slows them as it lets go.
     Untether {
         player: u64,
+        #[serde(default)]
+        keep: Option<f32>,
     },
     /// Spawn a vehicle definition (`namespace:vehicle/name`) of this package
     /// or one it depends on, turned `yaw` radians and moving at `velocity`.

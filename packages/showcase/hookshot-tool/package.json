@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "hookshot-tool",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "HookShot Tool",
+  "description": "The HookShot you hold: the Printer, rebuilt as an ancient temple relic of weathered bronze, whose trigger runs the HookShot Add-On. The HookShot Add-On hands it out and does the pulling.",
+  "authors": ["Blockland ReImagined"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "provides": [
+    { "kind": "weapons", "id": "hookshot-tool:weapons/main", "file": "assets/weapons.json" }
+  ]
+}

@@ -16,6 +16,10 @@ Outputs 128x128 RGBA PNG:
     the Grappling Hook the same way: a gunmetal winch gun with a brass
     drum wound with steel cable, and the four-claw grapnel with its red
     band seated in the muzzle.
+  packages/showcase/hookshot-tool/assets/icons/hookshot.png
+    the HookShot the same way: a temple relic of old bronze with gold
+    bands, green with verdigris, a teal eye-stone on top, and the
+    gold-bronze spearhead with its two barbs seated in the muzzle.
 
 Each model is a few rounded boxes, capsules and rings, ray marched with a
 key light, a fill and a highlight. Run it again after changing the model below; the output is the
@@ -355,6 +359,66 @@ def hook_shade(px, py):
     return lit(n, mix(GUNMETAL, (0.5, 0.5, 0.52), rivet), 0.6)
 
 
+# ---- The HookShot ----
+
+def shot_parts(p):
+    """Bronze (barrel, body, grip), gold (bands, muzzle ring, the
+    spearhead), and the teal stone on top."""
+    x, y, z = p
+    barrel = cyl_x((x, y - 0.25, z), -0.5, 0.88, 0.16)
+    body = rbox(p, (-0.62, 0.2, 0.0), (0.32, 0.2, 0.15), 0.07)
+    g = rot_z((x + 0.45, y, z), -GRIP)
+    grip = rbox(g, (0.0, -0.3, 0.0), (0.12, 0.36, 0.13), 0.06)
+    bronze = smin(smin(barrel, body, 0.08), grip, 0.08)
+    bands = min(ring_x((x, y - 0.25, z), -0.1, 0.165, 0.035),
+                ring_x((x, y - 0.25, z), 0.45, 0.165, 0.035),
+                cyl_x((x, y - 0.25, z), 0.82, 0.98, 0.2, 0.04))
+    stone = math.sqrt((x + 0.6) ** 2 + (y - 0.42) ** 2 + z * z * 1.5) - 0.085
+    # The spearhead: a socket out of the muzzle, a flat leaf blade, and two
+    # barbs hooked back from its neck.
+    socket = capsule(p, (0.98, 0.25, 0.0), (1.12, 0.25, 0.0), 0.065)
+    u = (x - 1.12) / 0.5
+    if 0.0 <= u <= 1.0:
+        wide = 0.19 * math.sin(min(u * 1.7, 1.0) * 1.5708) * (1.0 - u) ** 0.7 + 0.005
+        blade = max(math.hypot((y - 0.25) / wide, z / (wide * 0.3)) - 1.0, 0.0) * wide * 0.3 - 0.002
+    else:
+        blade = 9.0
+    blade = min(blade, capsule(p, (1.12, 0.25, 0.0), (1.6, 0.25, 0.0), 0.016))
+    barbs = 9.0
+    for side in (1.0, -1.0):
+        out = (1.06, 0.25 + 0.2 * side, 0.0)
+        barbs = min(barbs, capsule(p, (1.14, 0.25 + 0.05 * side, 0.0), out, 0.032),
+                    capsule(p, out, (0.96, 0.25 + 0.24 * side, 0.0), 0.018))
+    spear = min(socket, blade, barbs)
+    return bronze, bands, stone, spear
+
+
+def shot_scene(p):
+    return min(shot_parts(p))
+
+
+BRONZE = (0.5, 0.33, 0.14)
+PATINA = (0.25, 0.52, 0.43)
+GOLD = (0.95, 0.74, 0.32)
+TEAL = (0.1, 0.72, 0.64)
+
+
+def shot_shade(px, py):
+    hit = march(px, py, shot_scene)
+    if hit is None:
+        return (0.0, 0.0, 0.0, 0.0)
+    p, n = hit
+    bronze, bands, stone, spear = shot_parts(p)
+    nearest = min(bronze, bands, stone, spear)
+    if nearest == stone:
+        return lit(n, TEAL, 1.0, 40)
+    if nearest in (bands, spear):
+        return lit(n, GOLD, 1.0, 30)
+    # Old bronze, green where the patina has crept in.
+    patch = math.sin(p[0] * 13.0 + math.sin(p[1] * 17.0) * 1.5) * math.sin(p[1] * 11.0 + p[2] * 9.0 + p[0] * 4.0)
+    return lit(n, mix(BRONZE, PATINA, 0.55 if patch > 0.75 else 0.0), 0.5)
+
+
 def render(model=None):
     rows = []
     step = 1.0 / SAMPLES
@@ -393,4 +457,8 @@ if __name__ == '__main__':
     print(out.relative_to(ROOT), out.stat().st_size)
     out = ROOT / 'grappling-hook-tool' / 'assets' / 'icons' / 'grappling_hook.png'
     out.write_bytes(png(render(hook_shade)))
+    print(out.relative_to(ROOT), out.stat().st_size)
+    out = ROOT / 'hookshot-tool' / 'assets' / 'icons' / 'hookshot.png'
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(png(render(shot_shade)))
     print(out.relative_to(ROOT), out.stat().st_size)

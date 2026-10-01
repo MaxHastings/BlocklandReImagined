@@ -274,10 +274,94 @@ def grappling_hook():
     write(out / 'release.wav', fade_out(mix((whirr, 0.5), (hiss, 0.25), (clack, 1.0))), peak=0.6)
 
 
+def chain_rattle(seconds, start, every, jitter, pitch):
+    """Chain links chinking past a lip, `every` seconds apart from `start`."""
+    n = int(seconds * RATE)
+    out = [0.0] * n
+    at = start
+    k = 0
+    while at < seconds - 0.02:
+        f = pitch * (1.0 + 0.25 * rng.random())
+        m = int(0.03 * RATE)
+        start_i = int(at * RATE)
+        for i in range(m):
+            t = i / RATE
+            v = math.sin(2 * math.pi * f * t) + 0.5 * math.sin(2 * math.pi * f * 2.7 * t)
+            v *= math.exp(-t / 0.006)
+            if start_i + i < n:
+                out[start_i + i] += v * (0.6 + 0.4 * rng.random())
+        at += every * (1.0 + jitter * (rng.random() - 0.5))
+        k += 1
+    return out
+
+
+def hookshot():
+    rng.seed(SEED + 4)
+    out = ROOT / 'hookshot-fx' / 'client' / 'sounds'
+    # The shot: a spring let go with a twang, and the chain rattling out
+    # of the barrel after the spearhead.
+    n = 0.5
+    w = int(n * RATE)
+    twang = [0.0] * w
+    for ratio, gain, decay in [(1.0, 1.0, 0.09), (2.1, 0.5, 0.05), (3.3, 0.3, 0.03)]:
+        for i in range(w):
+            t = i / RATE
+            f = 210.0 * ratio * (1.0 + 0.6 * math.exp(-t / 0.02))
+            twang[i] += gain * math.sin(2 * math.pi * f * t) * math.exp(-t / decay)
+    thunk = envelope(sweep(n, 180, 70), 0.0004, 0.02)
+    rattle = chain_rattle(n, 0.02, 0.012, 0.6, 2600)
+    rattle = [x * math.exp(-i / (0.16 * RATE)) for i, x in enumerate(rattle)]
+    write(out / 'shoot.wav', fade_out(mix((twang, 0.6), (thunk, 0.8), (rattle, 0.35))), peak=0.8)
+
+    # The bite: the spearhead's point chunking in, a short bright chink.
+    m = 0.4
+    c = int(m * RATE)
+    ring = [0.0] * c
+    for ratio, gain, decay in [(1.0, 1.0, 0.07), (2.4, 0.5, 0.04), (4.1, 0.3, 0.02)]:
+        f = 1500.0 * ratio
+        for i in range(c):
+            t = i / RATE
+            ring[i] += gain * math.sin(2 * math.pi * f * t) * math.exp(-t / decay)
+    chunk = envelope(lowpass(noise(m), 1800), 0.0003, 0.015)
+    write(out / 'chink.wav', fade_out(mix((ring, 0.45), (chunk, 1.0))), peak=0.8)
+
+    # The haul: the chain reeling in hard, its links racing over the
+    # barrel's lip faster and faster.
+    r = 0.7
+    links = [0.0] * int(r * RATE)
+    at = 0.0
+    every = 0.03
+    while at < r - 0.03:
+        piece = chain_rattle(0.04, 0.0, 1.0, 0.0, 2200)
+        start = int(at * RATE)
+        for i, x in enumerate(piece):
+            if start + i < len(links):
+                links[start + i] += x * min(1.0, (r - at) / 0.15)
+        at += every
+        every = max(0.008, every * 0.9)
+    drag = [x * min(1.0, i / (0.05 * RATE)) * max(0.0, 1.0 - i / (r * RATE))
+            for i, x in enumerate(lowpass(noise(r), 900))]
+    write(out / 'reel.wav', fade_out(mix((links, 0.5), (drag, 0.5))), peak=0.65)
+
+    # Letting go: the chain whips back into the barrel and the spearhead
+    # seats with a clack.
+    b = 0.3
+    back = chain_rattle(b, 0.0, 0.007, 0.5, 2400)
+    back = [x * (1.0 - i / (b * RATE)) for i, x in enumerate(back)]
+    clack = [0.0] * int(b * RATE)
+    seat = envelope(sweep(0.05, 800, 420), 0.0003, 0.01)
+    for i, x in enumerate(seat):
+        at = int(0.22 * RATE) + i
+        if at < len(clack):
+            clack[at] += x
+    write(out / 'retract.wav', fade_out(mix((back, 0.5), (clack, 1.0))), peak=0.6)
+
+
 if __name__ == '__main__':
     gravity_gun()
     steel_ball()
     grapple_rope()
     grappling_hook()
+    hookshot()
     for path in sorted(ROOT.glob('*/client/sounds/*.wav')):
         print(path.relative_to(ROOT), path.stat().st_size)

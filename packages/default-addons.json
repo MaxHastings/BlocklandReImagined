@@ -28,6 +28,9 @@
     { "id": "grappling-hook-tool", "path": "showcase/grappling-hook-tool", "enabled": false },
     { "id": "grappling-hook", "path": "showcase/grappling-hook", "enabled": false },
     { "id": "grappling-hook-fx", "path": "showcase/grappling-hook-fx", "enabled": false },
+    { "id": "hookshot-tool", "path": "showcase/hookshot-tool", "enabled": false },
+    { "id": "hookshot", "path": "showcase/hookshot", "enabled": false },
+    { "id": "hookshot-fx", "path": "showcase/hookshot-fx", "enabled": false },
     {
       "id": "advanced-duplicator-tool",
       "path": "advanced-duplicator/advanced-duplicator-tool",

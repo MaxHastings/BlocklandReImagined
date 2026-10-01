@@ -832,7 +832,16 @@ impl Session {
                 }
                 Ok(())
             }
-            Op::Untether { player } => {
+            Op::Untether { player, keep } => {
+                if let Some(keep) = keep
+                    && let Some(peer) = self.peers.get_mut(&player)
+                    && let Some(tether) = peer.player.state().tether
+                {
+                    // The grip slows them relative to what it was tied to.
+                    let drift = Vec3::from(tether.drift);
+                    let relative = Vec3::from(peer.player.state().velocity) - drift;
+                    peer.player.push(relative * (keep.clamp(0.0, 1.0) - 1.0));
+                }
                 self.untether(player);
                 Ok(())
             }

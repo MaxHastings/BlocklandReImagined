@@ -914,3 +914,247 @@ fn the_grappling_hook_renders_offscreen() {
     );
     assert!(lit(1) > lit(0), "the cable pays out as the grapnel flies");
 }
+
+// ---- HookShot Effects ----
+
+const RELIC: &str = "hookshot-tool:image/hookshot";
+
+/// Player 1 at `feet` looking along -z, their HookShot's `hook` as given:
+/// [phase, x, y, z, distance, kind, id].
+fn hookshot_world(feet: [f32; 3], hook: [f64; 7]) -> World {
+    let mut world = World {
+        local: 1,
+        players: vec![player(1, feet, [0.0, 0.0, -1.0])],
+        ..Default::default()
+    };
+    world
+        .state
+        .entry("hookshot".into())
+        .or_default()
+        .players
+        .insert(1, [("hook".to_string(), serde_json::json!(hook))].into());
+    world
+}
+
+/// The relic drawn in player 1's hand, as `holding_the_launcher`.
+fn holding_the_relic(world: &mut World) -> [f32; 3] {
+    let muzzle = holding_the_launcher(world);
+    world.players[0].image = RELIC.into();
+    world
+        .image_meshes
+        .insert(RELIC.into(), Arc::new(stand_in_gun()));
+    muzzle
+}
+
+/// The spearhead's point: the first of its three draws, which come last.
+fn spearhead_point(out: &bri_client_sandbox::host::Frame) -> glam::Vec3 {
+    glam::Vec3::from_slice(&out.draws[out.draws.len() - 3].params.unwrap()[0][..3])
+}
+
+#[test]
+fn the_hookshot_module_is_built_from_its_source() {
+    built_from_source("hookshot-fx");
+}
+
+#[test]
+fn the_hookshot_shoots_bites_hauls_and_whips_back() {
+    let (code, mut addon) = start("hookshot-fx");
+    assert_eq!(code.name, "HookShot Effects");
+    let run = |addon: &mut AddOn, t: f32, world: World| {
+        addon.frame(frame(t, &Arc::new(world))).unwrap().clone()
+    };
+    let at = [0.0, 20.0, -16.0];
+    let idle = run(&mut addon, 0.0, hookshot_world([0.0; 3], [0.0; 7]));
+    assert!(idle.draws.is_empty() && idle.sounds.is_empty());
+    // Shot at a spot 25 away: a twang at the hands (nothing in them) and
+    // the spearhead's three parts leaving, then the chain paying out.
+    let shot = [1.0, 0.0, 20.0, -16.0, 25.0, 0.0, 0.0];
+    let out = run(&mut addon, 0.1, hookshot_world([0.0; 3], shot));
+    assert_eq!(names(&out), ["client/sounds/shoot.wav"]);
+    assert_eq!(out.sounds[0].at, Some([0.0, 2.25, 0.0]), "from the hands");
+    assert_eq!(out.draws.len(), 3, "{:#?}", out.draws);
+    let later = run(&mut addon, 0.16, hookshot_world([0.0; 3], shot));
+    let point = spearhead_point(&later);
+    let flown = point.distance(glam::Vec3::new(0.0, 2.25, 0.0));
+    assert!(
+        flown > 6.0 && flown < 8.5,
+        "7.2 units out after 0.06 s: {point}"
+    );
+    // The chain: two runs of links (one for the links sliding in), each
+    // starting 32 links on from the last, 0.25 apart.
+    assert_eq!(later.draws.len(), 5);
+    assert_eq!(later.draws[0].params.unwrap()[2][3], 0.0);
+    assert_eq!(later.draws[1].params.unwrap()[2][3], 32.0);
+    assert_eq!(later.draws[0].params.unwrap()[0][3], 0.25);
+    for part in 0..3 {
+        assert_eq!(later.draws[2 + part].params.unwrap()[1][3], part as f32);
+    }
+    // It bites with a chink at the spot.
+    let bitten = run(&mut addon, 0.4, hookshot_world([0.0; 3], shot));
+    assert_eq!(names(&bitten), ["client/sounds/chink.wav"]);
+    assert_eq!(bitten.sounds[0].at, Some(at));
+    // Hauling: the chain rattles in, the claws spring out, the chain is
+    // straight, and its links run back into the barrel as it shortens.
+    let hauling = [2.0, 0.0, 20.0, -16.0, 25.0, 0.0, 0.0];
+    let reeling = run(&mut addon, 0.45, hookshot_world([0.0; 3], hauling));
+    assert_eq!(names(&reeling), ["client/sounds/reel.wav"]);
+    let open = |out: &bri_client_sandbox::host::Frame| {
+        out.draws[out.draws.len() - 1].params.unwrap()[3][3]
+    };
+    let before = run(&mut addon, 0.6, hookshot_world([0.0, 4.0, -3.0], hauling));
+    assert_eq!(open(&before), 1.0);
+    let chain = before.draws[0].params.unwrap();
+    assert!(chain[1][3] < 0.05, "straight: sag {}", chain[1][3]);
+    let tie = glam::Vec3::from_slice(&chain[1][..3]);
+    assert!(
+        (tie.distance(glam::Vec3::from(at)) - 0.7).abs() < 0.01,
+        "tied behind the point"
+    );
+    let pulled = run(
+        &mut addon,
+        0.65,
+        hookshot_world([0.0, 12.0, -10.0], hauling),
+    );
+    let ran = pulled.draws[0].params.unwrap()[3][3] - before.draws[0].params.unwrap()[3][3];
+    assert!(ran < -5.0, "{ran}");
+    assert!(
+        pulled.draws.len() < before.draws.len(),
+        "fewer links as it shortens"
+    );
+    // Arrived (or clicked again): it lets go, the spearhead folds and the
+    // chain whips back in, then nothing.
+    let let_go = run(
+        &mut addon,
+        1.0,
+        hookshot_world([0.0, 17.0, -15.0], [0.0; 7]),
+    );
+    assert_eq!(names(&let_go), ["client/sounds/retract.wav"]);
+    assert_eq!(open(&let_go), 0.0);
+    assert!(
+        run(
+            &mut addon,
+            1.3,
+            hookshot_world([0.0, 17.0, -15.0], [0.0; 7])
+        )
+        .draws
+        .is_empty()
+    );
+    // A miss: out at its speed and back as fast.
+    let missed = [3.0, 0.0, 2.25, -60.0, 60.0, 0.0, 0.0];
+    let out = run(&mut addon, 3.0, hookshot_world([0.0; 3], missed));
+    assert_eq!(names(&out), ["client/sounds/shoot.wav"]);
+    let far = spearhead_point(&run(&mut addon, 3.5, hookshot_world([0.0; 3], missed)));
+    assert!((far.z + 60.0).abs() < 0.5, "all the way out: {far}");
+    let back = spearhead_point(&run(&mut addon, 3.75, hookshot_world([0.0; 3], missed)));
+    assert!((back.z + 30.0).abs() < 0.5, "half way back: {back}");
+    assert!(
+        run(&mut addon, 4.05, hookshot_world([0.0; 3], missed))
+            .draws
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_spearhead_in_a_vehicle_rides_along_with_it() {
+    let (_, mut addon) = start("hookshot-fx");
+    let truck = |x: f32, turn: f32| Vehicle {
+        id: 7,
+        definition: "v20.vehicle.jeep".into(),
+        position: [x, 1.0, -10.0],
+        rotation: glam::Quat::from_rotation_y(turn).to_array(),
+        velocity: [0.0; 3],
+        radius: 3.0,
+    };
+    let hauling = [2.0, 2.0, 1.0, -10.0, 10.0, 2.0, 7.0];
+    let world = |x: f32, turn: f32| {
+        let mut w = hookshot_world([0.0; 3], hauling);
+        w.vehicles = vec![truck(x, turn)];
+        w
+    };
+    let first = addon
+        .frame(frame(0.0, &Arc::new(world(0.0, 0.0))))
+        .unwrap()
+        .clone();
+    assert!(spearhead_point(&first).distance(glam::Vec3::new(2.0, 1.0, -10.0)) < 0.01);
+    let moved = addon
+        .frame(frame(
+            0.1,
+            &Arc::new(world(5.0, std::f32::consts::FRAC_PI_2)),
+        ))
+        .unwrap()
+        .clone();
+    let spot = glam::Vec3::new(5.0, 1.0, -10.0)
+        + glam::Quat::from_rotation_y(std::f32::consts::FRAC_PI_2) * glam::Vec3::new(2.0, 0.0, 0.0);
+    assert!(
+        spearhead_point(&moved).distance(spot) < 0.01,
+        "{} vs {spot}",
+        spearhead_point(&moved)
+    );
+}
+
+#[test]
+fn the_chain_comes_out_of_the_relics_muzzle_and_the_relic_wears_its_skin() {
+    let (_, mut addon) = start("hookshot-fx");
+    let mut world = hookshot_world([0.0; 3], [2.0, 0.0, 20.0, -16.0, 25.0, 0.0, 0.0]);
+    let muzzle = holding_the_relic(&mut world);
+    let drawn = addon.frame(frame(0.0, &Arc::new(world))).unwrap().clone();
+    assert_eq!(
+        drawn.draws[0].params.unwrap()[0][0],
+        1.0,
+        "its stone glows while the chain is out"
+    );
+    assert_eq!(
+        &drawn.draws[1].params.unwrap()[0][..3],
+        &muzzle,
+        "from the muzzle"
+    );
+    // Holding the Grappling Hook's launcher instead: no relic, and the
+    // chain comes from the hands.
+    let mut world = hookshot_world([0.0; 3], [2.0, 0.0, 20.0, -16.0, 25.0, 0.0, 0.0]);
+    holding_the_winch(&mut world);
+    let other = addon.frame(frame(0.1, &Arc::new(world))).unwrap().clone();
+    assert_eq!(other.draws.len(), drawn.draws.len() - 1);
+    assert_eq!(&other.draws[0].params.unwrap()[0][..3], &[0.0, 2.25, 0.0]);
+}
+
+/// Needs a GPU: renders a shot, the spearhead biting, the haul and the
+/// relic up close to PNGs.
+#[test]
+#[ignore = "needs a GPU adapter"]
+fn the_hookshot_renders_offscreen() {
+    let (_, mut addon) = start("hookshot-fx");
+    let world = |t: f32| {
+        let (feet, hook) = if t < 0.5 {
+            ([0.0, 0.0, 0.0], [1.0, 0.0, 9.0, -8.0, 12.0, 0.0, 0.0])
+        } else {
+            ([0.0, 3.0, -4.0], [2.0, 0.0, 9.0, -8.0, 12.0, 0.0, 0.0])
+        };
+        let mut world = hookshot_world(feet, hook);
+        holding_the_relic(&mut world);
+        Arc::new(world)
+    };
+    let (adapter, images) = bri_client_sandbox::gpu::render_offscreen_scene(
+        &mut addon,
+        640,
+        384,
+        &[0.0, 0.04, 1.0, 2.0],
+        glam::Vec3::new(5.0, 4.0, 3.0),
+        glam::Vec3::new(0.0, 4.0, -4.0),
+        world,
+    )
+    .unwrap();
+    save("hookshot", &images);
+    let background = images[0].pixels[0..4].to_vec();
+    let lit = |i: usize| {
+        images[i]
+            .pixels
+            .chunks_exact(4)
+            .filter(|p| *p != background.as_slice())
+            .count()
+    };
+    println!(
+        "lit pixels per frame on {adapter}: {:?}",
+        (0..images.len()).map(lit).collect::<Vec<_>>()
+    );
+    assert!(lit(1) > lit(0), "the chain pays out as the spearhead flies");
+}

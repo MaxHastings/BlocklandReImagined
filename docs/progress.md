@@ -8333,3 +8333,38 @@ wheel; a hook in a player carries you and /hookobjects turns it off;
 loadout), `bri-client-sandbox --test showcase` (fire, bite, winch, buzz,
 release, miss; rides a turning vehicle and a running player; muzzle and
 skin; offscreen render on lavapipe).
+
+HookShot Add-On (2026-10-01, Max: "I want HookShot too"). Three more
+showcase Add-Ons, installed but off: `hookshot`, `hookshot-tool`,
+`hookshot-fx`. After the Hookshot by Loz (RTB add-on 2859), read for
+behaviour only from its forum description; nothing of it is used. Point
+and click: the spearhead flies (64 reach, 120 u/s), bites a brick, the
+map, a player or a vehicle, and the chain hauls you straight there at 80
+u/s (the rope's `straight` winch, braking at the end) and lets go when you
+arrive, so you land on the spot; stuck for 3 s, it gives up. A miss flies
+out and back at its speed. Clicking again or putting it away lets go
+mid-flight.
+
+Engine seam: `untether(player, #{keep})` (0 to 1): letting go keeps only
+that fraction of the player's speed relative to the rope's anchor. Without
+it, letting go mid-haul in front of a wall flew the player into it at 45
+u/s and killed them, and a rule cannot `push` its own caller. The HookShot
+keeps 0.35.
+
+Effects: the Printer recast as a temple relic (weathered bronze, verdigris
+mottling, carved glyph rings, gold filigree bands, a teal eye-stone that
+wakes while the chain is out); a chain of real interlocking oval bronze
+links, each turned a quarter from the last, drawn in runs of 32 links
+(14 rows each, the joints between links cut away), sliding back into the
+barrel as it hauls; a gold-bronze leaf spearhead on a filigreed socket
+with a teal stone, whose two barbs spring out on biting; it follows
+players and vehicles as the Grappling Hook's grapnel does. Sounds: shoot,
+chink, reel, retract. Icon in `tools/make_showcase_icons.py` (earlier
+icons byte-identical).
+
+Tests: `bri-sim --test hookshot` (4: flies to the spot and lands unhurt;
+second click and putting it away let go, slowed below 45%, and land;
+flies to another player, misses into open sky; loadout),
+`bri-client-sandbox --test showcase` (shoot, bite, haul, links running,
+whip back, miss out and back; rides a turning vehicle; muzzle and relic
+skin; offscreen render on lavapipe).

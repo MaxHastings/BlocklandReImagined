@@ -408,6 +408,9 @@ mod tests {
                 "grappling-hook-tool",
                 "grappling-hook",
                 "grappling-hook-fx",
+                "hookshot-tool",
+                "hookshot",
+                "hookshot-fx",
                 "advanced-duplicator-tool",
                 "advanced-duplicator",
                 "blockhead_bot"
@@ -515,6 +518,9 @@ mod tests {
                 "grappling-hook-tool",
                 "grappling-hook",
                 "grappling-hook-fx",
+                "hookshot-tool",
+                "hookshot",
+                "hookshot-fx",
                 "advanced-duplicator-tool",
                 "advanced-duplicator",
                 "blockhead_bot"

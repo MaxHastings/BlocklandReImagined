@@ -1516,6 +1516,25 @@ fn register_physics(engine: &mut Engine) {
     engine.register_fn("untether", |player: Dynamic| {
         push(Op::Untether {
             player: id(&player)?,
+            keep: None,
+        })
+    });
+    // `untether(player, #{ keep: k })`: let go, keeping only `k` (0 to 1) of
+    // their speed relative to what the rope was tied to.
+    engine.register_fn("untether", |player: Dynamic, options: rhai::Map| {
+        let keep = match options.get("keep") {
+            Some(k) => {
+                let k = float(k)?;
+                if !(0.0..=1.0).contains(&k) {
+                    return Err("untether keep must be between 0 and 1".into());
+                }
+                Some(k)
+            }
+            None => None,
+        };
+        push(Op::Untether {
+            player: id(&player)?,
+            keep,
         })
     });
     engine.register_fn(

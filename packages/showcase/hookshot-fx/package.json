@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "id": "hookshot-fx",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "HookShot Effects",
+  "description": "The HookShot's look and sound on everyone's screen: the Printer it is built from recast as a temple relic of weathered bronze, carved glyph rings and gold filigree with a teal eye-stone that wakes while the chain is out; a gold-bronze spearhead whose barbed claws spring out to bite, riding along on players and vehicles; a chain of interlocking bronze links that runs back into the barrel as it hauls you in; and sounds for shooting, biting, hauling and letting go.",
+  "authors": ["Blockland ReImagined"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "dependencies": { "hookshot": "^1.0.0" },
+  "client": {
+    "module": "client/main.wasm",
+    "capabilities": ["render.layer", "render.shader", "audio", "world.read"],
+    "shaders": ["client/chain.wgsl", "client/spearhead.wgsl", "client/relic.wgsl"],
+    "sounds": [
+      "client/sounds/shoot.wav",
+      "client/sounds/chink.wav",
+      "client/sounds/reel.wav",
+      "client/sounds/retract.wav"
+    ]
+  }
+}

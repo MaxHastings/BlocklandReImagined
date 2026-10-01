@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "script": "hookshot.rhai",
+  "commands": [
+    { "name": "hookshot", "cooldown_ticks": 60 },
+    { "name": "fire", "cooldown_ticks": 6 }
+  ],
+  "state": {
+    "player": {
+      "hook": { "default": [0, 0.0, 0.0, 0.0, 0.0, 0, 0], "visible": "everyone", "persist": false },
+      "flight": { "default": [0, -1, "", 0.0, 0.0, 0.0], "persist": false }
+    },
+    "global": {
+      "tool": { "default": "hookshot-tool:weapon/hookshot", "persist": false }
+    }
+  },
+  "on_loadout": true,
+  "tick_interval": 3
+}

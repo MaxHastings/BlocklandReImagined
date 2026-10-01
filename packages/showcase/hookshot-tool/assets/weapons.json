@@ -1,0 +1,137 @@
+{
+  "schema_version": 3,
+  "id": "hookshot-tool",
+  "items": {
+    "hookshot-tool:weapon/hookshot": {
+      "id": "hookshot-tool:weapon/hookshot",
+      "name": "HookshotItem",
+      "ui_name": "HookShot",
+      "image": "hookshot-tool:image/hookshot",
+      "model": "base/data/shapes/printGun.dts",
+      "icon": "icons/hookshot",
+      "can_drop": true,
+      "sport": false
+    }
+  },
+  "images": {
+    "hookshot-tool:image/hookshot": {
+      "id": "hookshot-tool:image/hookshot",
+      "name": "HookshotImage",
+      "model": "base/data/shapes/printGun.dts",
+      "projectile": null,
+      "mount_point": 0,
+      "offset": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "eye_offset": [
+        0.7,
+        -0.55,
+        -1.2
+      ],
+      "source_rotation_degrees": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "correct_muzzle": false,
+      "melee": false,
+      "color": [
+        0.45,
+        0.5,
+        0.35,
+        1.0
+      ],
+      "color_shift": true,
+      "arm_ready": true,
+      "casing": "",
+      "min_shot_ticks": 0,
+      "states": [
+        {
+          "name": "Activate",
+          "ticks": 12,
+          "wait": true,
+          "allow_change": true,
+          "timeout": 1,
+          "down": null,
+          "up": null,
+          "ammo": null,
+          "no_ammo": null,
+          "script": "",
+          "sequence": "",
+          "sound": "weaponSwitchSound",
+          "emitter": "",
+          "emitter_node": "",
+          "emitter_seconds": 0.0,
+          "eject_shell": false
+        },
+        {
+          "name": "Ready",
+          "ticks": 0,
+          "wait": true,
+          "allow_change": true,
+          "timeout": null,
+          "down": 2,
+          "up": null,
+          "ammo": null,
+          "no_ammo": null,
+          "script": "",
+          "sequence": "",
+          "sound": "",
+          "emitter": "",
+          "emitter_node": "",
+          "emitter_seconds": 0.0,
+          "eject_shell": false
+        },
+        {
+          "name": "Fire",
+          "ticks": 0,
+          "wait": true,
+          "allow_change": true,
+          "timeout": null,
+          "down": null,
+          "up": 3,
+          "ammo": null,
+          "no_ammo": null,
+          "script": "onFire",
+          "sequence": "",
+          "sound": "",
+          "emitter": "",
+          "emitter_node": "",
+          "emitter_seconds": 0.0,
+          "eject_shell": false
+        },
+        {
+          "name": "Release",
+          "ticks": 2,
+          "wait": true,
+          "allow_change": true,
+          "timeout": 1,
+          "down": null,
+          "up": null,
+          "ammo": null,
+          "no_ammo": null,
+          "script": "",
+          "sequence": "",
+          "sound": "",
+          "emitter": "",
+          "emitter_node": "",
+          "emitter_seconds": 0.0,
+          "eject_shell": false
+        }
+      ],
+      "commands": {
+        "states": {
+          "onfire": "hookshot:fire"
+        }
+      }
+    }
+  },
+  "projectiles": {},
+  "damage_types": {},
+  "explosions": {},
+  "definitions": [],
+  "resources": [],
+  "diagnostics": []
+}
