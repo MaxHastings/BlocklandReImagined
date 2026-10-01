@@ -217,6 +217,13 @@ pub enum Notice {
         title: String,
         text: String,
     },
+    /// `MessageBoxYesNo` from an Add-On: yes sends `package`'s `command`.
+    Question {
+        title: String,
+        text: String,
+        package: String,
+        command: String,
+    },
     /// `clientCmdTrustInvite`.
     TrustInvite {
         from: OwnerId,
@@ -244,6 +251,35 @@ pub enum Notice {
     /// the world's z axis (north and south swap), or else across its x
     /// axis (east and west swap).
     MirrorCopy { across_z: bool },
+    /// Put the copy this player holds against the surface at `point`
+    /// facing out along `normal`, as a ghost brick is put where it is
+    /// aimed.
+    MoveCopy { point: [f32; 3], normal: [f32; 3] },
+    /// Turn the copy this player holds upside down where it stands, as
+    /// they see and place it.
+    FlipCopy,
+    /// What this player's copies turn about, are super shifted by and put
+    /// against a clicked surface by from now on: the whole copy (`whole`),
+    /// else the brick each was taken from first.
+    PivotCopy { whole: bool },
+    /// Move the copy this player holds as their brick shift keys would.
+    ShiftCopy {
+        offset: [i32; 3],
+        super_shift: bool,
+    },
+    /// Turn the copy this player holds as their rotate keys would.
+    RotateCopy { direction: i8 },
+    /// Plant the copy this player holds where it stands, as their plant
+    /// key would.
+    PlantCopy,
+    /// Open the wrench for every brick of this player's copy: what they
+    /// tick comes back as `Command::WrenchCopy`.
+    WrenchCopy { bricks: u32 },
+    /// Whether the image in this player's hand takes their paint and FX
+    /// cans (its `commands.paint`) rather than the can coming out.
+    TakePaint(bool),
+    /// `clientCmdSetScrollMode`: what this player's mouse wheel picks.
+    ScrollMode(bri_package_runtime::ops::ScrollMode),
     /// Outline a box for this player while its tool is in their hand (an
     /// Add-On's selection); `None` takes it away.
     SelectionBox(Option<Box<crate::blueprint::Outline>>),

@@ -30,6 +30,7 @@ fn variant(command: &Command) -> &'static str {
         Command::Plant { .. } => "plant",
         Command::Tool(_) => "tool",
         Command::PlaceBlueprint { .. } => "place_blueprint",
+        Command::WrenchCopy(_) => "wrench_copy",
         Command::UseSprayCan { .. } => "use_spray_can",
         Command::UseFxCan { .. } => "use_fx_can",
         Command::EquipTool { .. } => "equip_tool",
@@ -72,7 +73,7 @@ fn variant(command: &Command) -> &'static str {
     }
 }
 
-const VARIANTS: usize = 42;
+const VARIANTS: usize = 43;
 
 /// Owners in the fuzzed session: the host (an administrator) and a guest.
 const HOST: u64 = 1;
@@ -157,7 +158,13 @@ fn examples() -> Vec<Command> {
             position: [2.0, 0.0, 2.0],
             quarter_turns: 3,
             mirrored: true,
+            flipped: true,
         },
+        Command::WrenchCopy(bri_sim::session::WrenchFill {
+            name: Some(Some("door".into())),
+            raycast: Some(false),
+            ..Default::default()
+        }),
         Command::UseSprayCan { color: 1 },
         Command::UseFxCan { fx: 3 },
         Command::EquipTool { slot: Some(3) },

@@ -44,6 +44,15 @@ impl ToolCatalog {
                 .map(|p| (p.id.clone(), p.aspect.clone()))
                 .collect(),
             brick_print_aspects,
+            brick_names: catalog
+                .bricks
+                .iter()
+                .filter(|b| !b.display_name.is_empty())
+                .map(|b| {
+                    let name = format!("{}/{}/{}", b.category, b.subcategory, b.display_name);
+                    (b.id.clone(), name)
+                })
+                .collect(),
             default_print: Some(default.id.clone()),
             items: BTreeSet::new(),
             sounds: BTreeSet::new(),

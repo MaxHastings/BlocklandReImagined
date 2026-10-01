@@ -5,6 +5,7 @@ pub mod bot_kind;
 pub mod definitions;
 pub mod ghost;
 pub mod grid;
+pub mod id_map;
 pub mod item_spawners;
 pub mod links;
 pub mod chunks;

@@ -14,7 +14,7 @@ use bri_sim::{
     ghost,
     grid::{self, Bounds, Index},
     player::PlayerState,
-    session::{BuildGesture, Command, ToolAction, ToolInventory},
+    session::{BuildGesture, Command, PackageArg, PackageCommand, ToolAction, ToolInventory},
     simulation::Hit,
 };
 use bri_ui::api::{GameAction, HeldControl, IconRef, ToolInfo, UiAction, UiUpdate};
@@ -27,24 +27,52 @@ const SLOTS: usize = 10;
 const DEPLOY_REACH: f32 = 15.0;
 
 /// A copied build as the player moves it: the pivot's place, the turn,
-/// whether it is mirrored, and the bricks there.
+/// whether it is mirrored or upside down, and the bricks there.
 #[derive(Debug, Clone)]
 struct CopyGhost {
     blueprint: Blueprint,
-    /// The copy seen in a mirror across its x axis, once asked for.
-    image: Option<Blueprint>,
+    /// The copy mirrored and turned upside down as asked
+    /// (`Blueprint::seen`), while it is either.
+    seen: Option<Blueprint>,
     anchor: [f32; 3],
     turns: u8,
     mirrored: bool,
+    flipped: bool,
     bricks: Vec<Brick>,
+    /// It turns about the brick it was taken from first (its first
+    /// brick) rather than the whole of it ([`Building::pivot_copy`]).
+    start: bool,
 }
 impl CopyGhost {
     fn place(&mut self) {
-        let source = match (&self.image, self.mirrored) {
-            (Some(image), true) => image,
-            _ => &self.blueprint,
-        };
+        let source = self.seen.as_ref().unwrap_or(&self.blueprint);
         self.bricks = source.placed(self.anchor, self.turns);
+    }
+    /// Where the start brick stands now.
+    fn root(&self) -> [f32; 3] {
+        self.bricks[0].position
+    }
+    /// After a turn, mirror or flip: with the start brick as pivot, move
+    /// the copy back so that brick stays where it stood (`before`), to
+    /// the nearest stud.
+    fn keep_root(&mut self, before: [f32; 3]) {
+        if self.start {
+            let moved = Vec3::from(before) - Vec3::from(self.root());
+            self.anchor =
+                bri_sim::blueprint::snap_anchor((Vec3::from(self.anchor) + moved).to_array());
+            self.place();
+        }
+    }
+    /// See the copy as it is now mirrored and flipped, and place it so.
+    fn reseen(&mut self, definitions: &Definitions, mirrors: &mut bri_sim::mirror::Mirrors) {
+        self.seen = (self.mirrored || self.flipped).then(|| {
+            self.blueprint
+                .seen(self.flipped, self.mirrored, |id, reflection| {
+                    mirrors.image_in(definitions, id, reflection)
+                })
+                .0
+        });
+        self.place();
     }
 }
 
@@ -112,6 +140,11 @@ pub struct Building {
     /// The server shows an image in this player's right hand (for example
     /// a ball picked up without a tool slot), so fire goes to its trigger.
     held_image: bool,
+    /// The held image's brick key commands (`commands.shift`, `rotate`,
+    /// `plant`), which the keys go to when no ghost or copy takes them.
+    image_keys: ImageKeys,
+    /// The held image asked for the paint and FX cans (`take_paint`).
+    paint_taken: bool,
     /// The server shows the grey brick (`brickImage`) in this player's hand.
     held_brick: bool,
     fire_request: u64,
@@ -126,6 +159,8 @@ pub struct Building {
     /// A copied build (`Notice::Blueprint`), shown as a ghost and moved by
     /// the brick keys while its tool is in hand.
     copy: Option<CopyGhost>,
+    /// Copies turn about the whole of them, else their start brick.
+    pivot_whole: bool,
     /// Bricks' mirror images, found as copies are mirrored; the host finds
     /// the same ones from the same catalog.
     mirrors: bri_sim::mirror::Mirrors,
@@ -176,6 +211,8 @@ impl Building {
             weapon_fire_down: false,
             activate_down: false,
             held_image: false,
+            image_keys: ImageKeys::default(),
+            paint_taken: false,
             held_brick: false,
             fire_request: 0,
             tool_catalog_installed: false,
@@ -185,6 +222,7 @@ impl Building {
             palette_len: 0,
             ghost: None,
             copy: None,
+            pivot_whole: true,
             mirrors: Default::default(),
             outline: None,
             ghost_generation: 0,
@@ -502,16 +540,18 @@ impl Building {
         self.copy = match blueprint {
             Some(blueprint) => {
                 blueprint.validate()?;
-                for brick in &blueprint.bricks {
-                    self.definitions.get(brick)?;
+                for kind in &blueprint.kinds {
+                    self.definitions.by_id(kind)?;
                 }
                 let mut copy = CopyGhost {
                     anchor: blueprint.origin,
                     blueprint,
-                    image: None,
+                    seen: None,
                     turns: 0,
                     mirrored: false,
+                    flipped: false,
                     bricks: Vec::new(),
+                    start: !self.pivot_whole,
                 };
                 copy.place();
                 Some(copy)
@@ -521,6 +561,14 @@ impl Building {
         self.ghost_generation = self.ghost_generation.wrapping_add(1);
         Ok(())
     }
+    /// Turn copies about the whole of them (`whole`), else the brick each
+    /// was taken from first, from now on (`Notice::PivotCopy`).
+    pub fn pivot_copy(&mut self, whole: bool) {
+        self.pivot_whole = whole;
+        if let Some(copy) = self.copy.as_mut() {
+            copy.start = !whole;
+        }
+    }
     /// Mirror the copy (`Notice::MirrorCopy`) where it stands: across the
     /// world's z axis, or else its x axis, about its pivot. The mirror is
     /// part of how it is placed, like its turn.
@@ -528,16 +576,63 @@ impl Building {
         let Some(copy) = self.copy.as_mut() else {
             return;
         };
-        if copy.image.is_none() {
-            let (definitions, mirrors) = (&self.definitions, &mut self.mirrors);
-            let (image, _) = copy.blueprint.mirrored(|id| mirrors.image(definitions, id));
-            copy.image = Some(image);
-        }
+        let root = copy.root();
         // Across x: turned -T and mirrored once more. Across z is that
         // turned half way round.
         let half = if across_z { 2 } else { 0 };
         copy.turns = (half + 4 - copy.turns) % 4;
         copy.mirrored = !copy.mirrored;
+        copy.reseen(&self.definitions, &mut self.mirrors);
+        copy.keep_root(root);
+        self.ghost_generation = self.ghost_generation.wrapping_add(1);
+    }
+    /// Turn the copy upside down where it stands (`Notice::FlipCopy`), or
+    /// back. Like its mirror, it is part of how the copy is placed.
+    pub fn flip_copy(&mut self) {
+        let Some(copy) = self.copy.as_mut() else {
+            return;
+        };
+        let root = copy.root();
+        copy.flipped = !copy.flipped;
+        copy.reseen(&self.definitions, &mut self.mirrors);
+        copy.keep_root(root);
+        self.ghost_generation = self.ghost_generation.wrapping_add(1);
+    }
+    /// Put the copy against the surface at `point` facing out along
+    /// `normal` (`Notice::MoveCopy`), as a ghost brick goes where it is
+    /// aimed: the middle of the copy's box half its size out along the
+    /// normal, its pivot on the grid.
+    pub fn move_copy(&mut self, point: [f32; 3], normal: [f32; 3]) {
+        let Some(copy) = self.copy.as_mut() else {
+            return;
+        };
+        let mut low = Vec3::splat(f32::MAX);
+        let mut high = Vec3::splat(f32::MIN);
+        // The start brick goes where it is aimed, as a ghost brick would.
+        let pivot = if copy.start { &copy.bricks[..1] } else { &copy.bricks[..] };
+        for brick in pivot {
+            let Ok(definition) = self.definitions.get(brick) else {
+                continue;
+            };
+            let Ok(bounds) = Bounds::new(brick, &definition.mesh) else {
+                continue;
+            };
+            let cell = Vec3::from(grid::CELL);
+            let min = Vec3::from(bounds.min.map(|v| v as f32)) * cell;
+            low = low.min(min);
+            high = high.max(min + Vec3::from(bounds.size.map(|v| v as f32)) * cell);
+        }
+        if low.x > high.x {
+            return;
+        }
+        let half = (high - low) * 0.5;
+        // Only the normal's sign along each axis counts, as v20 rounded it.
+        let out = Vec3::from(normal).round();
+        let target = Vec3::from(point) + half * out;
+        let middle = (low + high) * 0.5;
+        copy.anchor = bri_sim::blueprint::snap_anchor(
+            (Vec3::from(copy.anchor) + target - middle).to_array(),
+        );
         copy.place();
         self.ghost_generation = self.ghost_generation.wrapping_add(1);
     }
@@ -570,6 +665,14 @@ impl Building {
         self.copy
             .as_ref()
             .filter(|c| matches!(&self.equipment, Equipment::Weapon(id) if *id == c.blueprint.tool))
+    }
+    /// The grid size of the start brick of the copy in hand, as it is
+    /// turned, while it is the pivot.
+    fn copy_root_size(&self) -> Option<[i32; 3]> {
+        let copy = self.active_copy().filter(|c| c.start)?;
+        let brick = &copy.bricks[0];
+        let mesh = &self.definitions.get(brick).ok()?.mesh;
+        Bounds::new(brick, mesh).ok().map(|b| b.size)
     }
     fn copy_in_hand(&mut self) -> Option<&mut CopyGhost> {
         self.active_copy()?;
@@ -641,6 +744,34 @@ impl Building {
     }
     pub fn equipment(&self) -> &Equipment {
         &self.equipment
+    }
+    /// The brick key commands of the image in the local player's right
+    /// hand.
+    pub fn set_image_keys(&mut self, keys: ImageKeys) {
+        if keys.paint != self.image_keys.paint {
+            // A new image takes the cans only once it says so.
+            self.paint_taken = false;
+        }
+        self.image_keys = keys;
+    }
+    /// The held image takes the paint and FX cans (`Notice::TakePaint`),
+    /// or stops.
+    pub fn set_paint_taken(&mut self, taken: bool) {
+        self.paint_taken = taken;
+    }
+    /// Whether picking a paint or FX can goes to the held image
+    /// (`commands.paint`), the image staying in hand.
+    pub fn takes_paint(&self) -> bool {
+        self.paint_taken && self.image_keys.paint.is_some()
+    }
+    /// A key the held image takes, as the command the client sends.
+    fn image_key(command: &Option<String>, args: Vec<PackageArg>) -> Option<Command> {
+        let (package, command) = command.as_deref()?.split_once(':')?;
+        Some(Command::Package(PackageCommand {
+            package: package.into(),
+            command: command.into(),
+            args,
+        }))
     }
     /// Replicated right-hand image for the local player.
     pub fn set_held_image(&mut self, held: bool) {
@@ -1252,6 +1383,23 @@ impl Building {
                 self.selected_slot = None;
                 out.commands.push(Command::EquipTool { slot: None });
             }
+            UiAction::UseSprayCan { color } if self.takes_paint() => {
+                ensure!(
+                    (*color as usize) < self.palette_len,
+                    "Color outside world palette"
+                );
+                out.commands.extend(Self::image_key(
+                    &self.image_keys.paint,
+                    vec![PackageArg::Bool(false), PackageArg::Int(i64::from(*color))],
+                ));
+            }
+            UiAction::UseFxCan { fx } if self.takes_paint() => {
+                ensure!(*fx <= 8, "Unknown FX can");
+                out.commands.extend(Self::image_key(
+                    &self.image_keys.paint,
+                    vec![PackageArg::Bool(true), PackageArg::Int(i64::from(*fx))],
+                ));
+            }
             UiAction::UseSprayCan { color } => {
                 ensure!(
                     (*color as usize) < self.palette_len,
@@ -1315,10 +1463,13 @@ impl Building {
                 let super_shift =
                     matches!(action, UiAction::Game(GameAction::SuperShiftBrick { .. }));
                 let body = body_forward(player)?;
+                let root_size = self.copy_root_size();
                 if let Some(copy) = self.copy_in_hand() {
+                    // A super shift goes by the pivot's size.
+                    let size = root_size.unwrap_or(copy.blueprint.turned_size(copy.turns));
                     copy.anchor = bri_sim::blueprint::shift(
                         copy.anchor,
-                        copy.blueprint.turned_size(copy.turns),
+                        size,
                         body,
                         *x,
                         *y,
@@ -1336,13 +1487,25 @@ impl Building {
                     self.ghost_generation = self.ghost_generation.wrapping_add(1);
                     out.commands
                         .extend(BuildGesture::shift(*x, *y, *z).map(Command::BuildGesture));
+                } else if let Some(command) = Self::image_key(
+                    &self.image_keys.shift,
+                    vec![
+                        PackageArg::Int(i64::from(*x)),
+                        PackageArg::Int(i64::from(*y)),
+                        PackageArg::Int(i64::from(*z)),
+                        PackageArg::Bool(super_shift),
+                    ],
+                ) {
+                    out.commands.push(command);
                 }
             }
             UiAction::Game(GameAction::RotateBrick { dir }) => {
                 ensure!((-1..=1).contains(dir), "Invalid brick rotation");
                 if let Some(copy) = self.copy_in_hand() {
+                    let root = copy.root();
                     copy.turns = (i32::from(copy.turns) + dir.signum()).rem_euclid(4) as u8;
                     copy.place();
+                    copy.keep_root(root);
                     self.ghost_generation = self.ghost_generation.wrapping_add(1);
                     out.commands
                         .extend(BuildGesture::rotate(*dir).map(Command::BuildGesture));
@@ -1353,6 +1516,11 @@ impl Building {
                     self.ghost_generation = self.ghost_generation.wrapping_add(1);
                     out.commands
                         .extend(BuildGesture::rotate(*dir).map(Command::BuildGesture));
+                } else if let Some(command) = Self::image_key(
+                    &self.image_keys.rotate,
+                    vec![PackageArg::Int(i64::from(dir.signum()))],
+                ) {
+                    out.commands.push(command);
                 }
             }
             UiAction::Game(GameAction::CancelBrick) => {
@@ -1373,7 +1541,14 @@ impl Building {
                     position: copy.anchor,
                     quarter_turns: copy.turns,
                     mirrored: copy.mirrored,
+                    flipped: copy.flipped,
                 });
+            }
+            UiAction::Game(GameAction::PlantBrick)
+                if self.ghost.is_none() && self.image_keys.plant.is_some() =>
+            {
+                out.commands
+                    .extend(Self::image_key(&self.image_keys.plant, vec![]));
             }
             UiAction::Game(GameAction::PlantBrick) => {
                 let brick = self
@@ -1975,6 +2150,85 @@ mod tests {
     }
 
     #[test]
+    fn brick_keys_go_to_a_held_image_that_takes_them_when_nothing_else_does() {
+        let mut b = controller();
+        let key = |b: &mut Building, action: GameAction| {
+            b.ui_action(&UiAction::Game(action), &player())
+                .unwrap()
+                .map(|o| o.commands)
+                .unwrap_or_default()
+        };
+        // No image takes them: the keys do nothing without a ghost.
+        assert!(key(&mut b, GameAction::ShiftBrick { x: 1, y: 0, z: 0 }).is_empty());
+        b.set_image_keys(ImageKeys {
+            shift: Some("dup:shift".into()),
+            rotate: Some("dup:turn".into()),
+            plant: Some("dup:plant".into()),
+            paint: None,
+        });
+        let sent = |commands: Vec<Command>| match commands.as_slice() {
+            [Command::Package(p)] => (p.command.clone(), p.args.clone()),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(
+            sent(key(&mut b, GameAction::SuperShiftBrick { x: 0, y: -1, z: 3 })),
+            (
+                "shift".to_string(),
+                vec![
+                    PackageArg::Int(0),
+                    PackageArg::Int(-1),
+                    PackageArg::Int(3),
+                    PackageArg::Bool(true)
+                ]
+            )
+        );
+        assert_eq!(
+            sent(key(&mut b, GameAction::RotateBrick { dir: -1 })),
+            ("turn".to_string(), vec![PackageArg::Int(-1)])
+        );
+        assert_eq!(
+            sent(key(&mut b, GameAction::PlantBrick)),
+            ("plant".to_string(), vec![])
+        );
+    }
+
+    #[test]
+    fn paint_cans_go_to_a_held_image_only_while_it_takes_them() {
+        let mut b = controller();
+        let keys = ImageKeys {
+            paint: Some("dup:paint".into()),
+            ..Default::default()
+        };
+        b.set_image_keys(keys.clone());
+        let pick = |b: &mut Building, action: UiAction| {
+            b.ui_action(&action, &player()).unwrap().unwrap().commands
+        };
+        // Not asked for: the can comes out as ever.
+        assert!(matches!(
+            pick(&mut b, UiAction::UseSprayCan { color: 1 }).as_slice(),
+            [Command::UseSprayCan { color: 1 }]
+        ));
+        b.set_paint_taken(true);
+        assert!(b.takes_paint());
+        let before = b.equipment().clone();
+        let sent = pick(&mut b, UiAction::UseFxCan { fx: 8 });
+        let [Command::Package(p)] = sent.as_slice() else {
+            panic!("{sent:?}")
+        };
+        assert_eq!(
+            (p.command.as_str(), p.args.as_slice()),
+            ("paint", &[PackageArg::Bool(true), PackageArg::Int(8)][..])
+        );
+        assert_eq!(b.equipment(), &before, "the image stays in hand");
+        // Another image takes them only once it asks.
+        b.set_image_keys(ImageKeys {
+            paint: Some("other:paint".into()),
+            ..keys
+        });
+        assert!(!b.takes_paint());
+    }
+
+    #[test]
     fn a_copied_build_moves_turns_and_plants_whole_while_its_tool_is_in_hand() {
         const TOOL: &str = "duplicator-tool:weapon/duplicator";
         let mut b = controller();
@@ -2070,6 +2324,23 @@ mod tests {
         // Mirrored again the same way, it is as it was.
         b.mirror_copy(false);
         assert_eq!(b.copy_ghost().unwrap(), &turned[..]);
+        // Upside down, each brick's height within the copy turns over,
+        // and the plant says so; turned back, it is as it was.
+        let height = turned.iter().map(|b| b.position[1]).fold(0.0, f32::max) + 0.1;
+        b.flip_copy();
+        for (upside, before) in b.copy_ghost().unwrap().iter().zip(&turned) {
+            assert!((upside.position[1] - (height - before.position[1])).abs() < 1e-5);
+        }
+        let plant = b
+            .ui_action(&UiAction::Game(GameAction::PlantBrick), &player())
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            plant.commands.as_slice(),
+            [Command::PlaceBlueprint { flipped: true, mirrored: false, .. }]
+        ));
+        b.flip_copy();
+        assert_eq!(b.copy_ghost().unwrap(), &turned[..]);
         // An Add-On's selection box shows only with its tool in hand.
         b.set_outline(Some(bri_sim::blueprint::Outline {
             tool: TOOL.into(),
@@ -2086,7 +2357,7 @@ mod tests {
             .unwrap();
         assert!(matches!(
             plant.commands.as_slice(),
-            [Command::PlaceBlueprint { position, quarter_turns, mirrored: false }] if *position == anchor && *quarter_turns == turns
+            [Command::PlaceBlueprint { position, quarter_turns, mirrored: false, flipped: false }] if *position == anchor && *quarter_turns == turns
         ));
         // Another tool in hand: the keys go back to the brick ghost.
         inventory.selected = None;
@@ -2102,8 +2373,60 @@ mod tests {
         assert!(b.copy_ghost().is_none());
         // A copy of a brick this client cannot draw is refused.
         let mut unknown = copy;
-        unknown.bricks[0].definition = ContentRef::Resolved("missing".into());
+        unknown.kinds[0] = "missing".into();
         assert!(b.set_blueprint(Some(unknown)).is_err());
+    }
+
+    #[test]
+    fn a_copy_moved_to_a_surface_sits_against_it_on_the_grid() {
+        const TOOL: &str = "duplicator-tool:weapon/duplicator";
+        let mut b = controller();
+        let mut catalog = b.tool_catalog.clone();
+        catalog.insert(
+            TOOL.to_string(),
+            ToolInfo {
+                id: TOOL.into(),
+                name: "Duplicator".into(),
+                icon: IconRef::None,
+                tint: None,
+            },
+        );
+        b.set_tool_catalog(catalog).unwrap();
+        let plate =
+            |x: f32, y: f32| Brick::new(ContentRef::Resolved("plate".into()), [x, y, 0.25], 1);
+        let copy =
+            Blueprint::capture(TOOL, &[plate(0.5, 0.1), plate(1.0, 0.3)], &b.definitions).unwrap();
+        b.set_blueprint(Some(copy)).unwrap();
+        b.sync_tools(&ToolInventory {
+            slots: vec![Some(TOOL.into()), None, None, None, None],
+            selected: Some(0),
+        })
+        .unwrap();
+        // The copy's box, 3 studs by 2 plates by 1 stud.
+        let span = |b: &Building| {
+            let mut low = [f32::MAX; 3];
+            let mut high = [f32::MIN; 3];
+            for brick in b.copy_ghost().unwrap() {
+                let mesh = &b.definitions.get(brick).unwrap().mesh;
+                let bounds = Bounds::new(brick, mesh).unwrap();
+                for a in 0..3 {
+                    low[a] = low[a].min(bounds.min[a] as f32 * grid::CELL[a]);
+                    high[a] = high[a].max((bounds.min[a] + bounds.size[a]) as f32 * grid::CELL[a]);
+                }
+            }
+            (low, high)
+        };
+        // Put on a floor: standing on it, over the point.
+        b.move_copy([5.0, 0.0, 5.0], [0.0, 1.0, 0.0]);
+        let (low, high) = span(&b);
+        assert!((low[1]).abs() < 1e-4 && (high[1] - 0.4).abs() < 1e-4);
+        assert!(((low[0] + high[0]) / 2.0 - 5.0).abs() <= 0.25);
+        assert!(((low[2] + high[2]) / 2.0 - 5.0).abs() <= 0.25);
+        // Against a wall facing -x: its side against the wall.
+        b.move_copy([10.0, 0.2, 5.0], [-1.0, 0.0, 0.0]);
+        let (low, high) = span(&b);
+        assert!((high[0] - 10.0).abs() < 1e-4, "{low:?} {high:?}");
+        assert!((low[1]).abs() < 1e-4);
     }
 
     #[test]
@@ -2812,4 +3135,14 @@ mod tests {
             assert_eq!(b.ghost().unwrap(), &start);
         }
     }
+}
+
+/// The brick keys a held image takes (`bri_weapons::ImageCommands`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ImageKeys {
+    pub shift: Option<String>,
+    pub rotate: Option<String>,
+    pub plant: Option<String>,
+    /// Takes the paint and FX cans while it asks to (`take_paint`).
+    pub paint: Option<String>,
 }

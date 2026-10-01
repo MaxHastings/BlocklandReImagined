@@ -359,6 +359,11 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
     for f in scripts.iter().flat_map(|s| &s.functions) {
         bodies.insert(f.qualified().to_ascii_lowercase(), f.body.clone());
     }
+    // Top-level globals too, by `$name` (`$ND::Version`): their value's
+    // source, the last one set.
+    for g in scripts.iter().flat_map(|s| &s.globals) {
+        bodies.insert(g.name.to_ascii_lowercase(), g.value.clone());
+    }
     finish(cx, opts, ports, &bodies)
 }
 

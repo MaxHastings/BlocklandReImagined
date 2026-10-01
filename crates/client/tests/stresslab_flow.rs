@@ -325,6 +325,7 @@ fn stress_lab_hosts_shows_the_miner_hud_mines_and_meets_a_creeper(f: &ContentRoo
                 UiAction::Game(GameAction::Package {
                     package: "stresslab-economy".into(),
                     command: "mine".into(),
+                    pressed: None,
                 }),
             )?;
         }
@@ -353,6 +354,7 @@ fn stress_lab_hosts_shows_the_miner_hud_mines_and_meets_a_creeper(f: &ContentRoo
         UiAction::Game(GameAction::Package {
             package: "stresslab-creeper".into(),
             command: "spawn".into(),
+            pressed: None,
         }),
     )?;
     until(&mut app, "the creeper", Duration::from_secs(10), |a| {
