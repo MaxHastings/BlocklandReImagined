@@ -703,6 +703,8 @@ impl Session {
             self.refresh_event_bindings()?;
             return Err(error);
         }
+        // Settings read only as the server starts take the host's now.
+        self.start_settings();
         let Some(view) = self
             .packages
             .as_ref()

@@ -190,6 +190,8 @@ fn addon_state() -> MiniGameUiState {
         category: "Victory Method".into(),
         title: title.into(),
         team,
+        server: false,
+        restart: false,
         kind,
         default,
         admin_only: false,
@@ -310,4 +312,110 @@ fn addon_settings_window_refuses_bad_numbers_and_is_read_only_for_others() {
     assert!(v.id("AOS_AddTeam").is_none());
     let apply = v.id("AOS_Apply").unwrap();
     assert!(!v.node(apply).state.visible);
+}
+
+#[test]
+fn server_addon_settings_open_from_the_admin_menu_for_the_host_and_go_with_host_options() {
+    use bri_ui::models::admin::{
+        AdminAction, AdminFeature, AdminOptions, AdminSnapshot, AdminUpdate,
+    };
+    let mut ui = test_ui();
+    let mut state = addon_state();
+    state.addon_settings.push(MiniGameAddOnSetting {
+        key: "tier:tt_ammo".into(),
+        add_on: "Tier+Tactical".into(),
+        category: "Ammo".into(),
+        title: "Ammo System".into(),
+        team: false,
+        server: true,
+        restart: false,
+        kind: MiniGameSettingKind::Int { min: 0, max: 3 },
+        default: MiniGameSettingValue::Int(0),
+        admin_only: false,
+        shown_when: None,
+    });
+    // One the game reads only as it starts is marked, with the note.
+    state.addon_settings.push(MiniGameAddOnSetting {
+        key: "tier:tt_disableammoitems".into(),
+        add_on: "Tier+Tactical".into(),
+        category: "Ammo".into(),
+        title: "Disable Pickups".into(),
+        team: false,
+        server: true,
+        restart: true,
+        kind: MiniGameSettingKind::Bool,
+        default: MiniGameSettingValue::Bool(false),
+        admin_only: false,
+        shown_when: None,
+    });
+    ui.apply(UiUpdate::MiniGames(state));
+    let mut options = AdminOptions::default();
+    options
+        .addon_settings
+        .insert("other:kept".into(), MiniGameSettingValue::Bool(true));
+    ui.apply(UiUpdate::Admin(AdminUpdate::State(AdminSnapshot {
+        revision: 1,
+        role: bri_ui::models::admin::AdminRole::SuperAdmin,
+        local_host: true,
+        legacy_lan: false,
+        supported: [AdminFeature::HostOptions].into_iter().collect(),
+        players: Vec::new(),
+        options: Some(options),
+    })));
+    // A mini-game's window leaves the server's settings out.
+    ui.core.minigame_addons = Some(MiniGameId(42));
+    ui.core.push(ScreenId::MiniGameAddOns);
+    ui.update(0);
+    assert!(addon_view(&mut ui).id("AOS_S4").is_none());
+    ui.core.pop(ScreenId::MiniGameAddOns);
+    ui.core.minigame_addons = None;
+    ui.core.server_addon_settings = true;
+    ui.core.push(ScreenId::MiniGameAddOns);
+    ui.update(0);
+    assert!(
+        addon_view(&mut ui).id("AOS_S0").is_none(),
+        "only the server's"
+    );
+    let texts: Vec<String> = {
+        let view = addon_view(&mut ui);
+        (0..view.nodes.len()).map(|n| view.text_of(n)).collect()
+    };
+    assert!(texts.iter().any(|t| t == "Disable Pickups *"), "{texts:?}");
+    assert!(
+        texts
+            .iter()
+            .any(|t| t == bri_ui::screens::minigame_addons::RESTART_NOTE),
+        "{texts:?}"
+    );
+    let ammo = addon_view(&mut ui)
+        .id("AOS_S4")
+        .expect("the server's setting");
+    assert!(
+        addon_view(&mut ui).node(ammo).state.active,
+        "the host may change it"
+    );
+    addon_view(&mut ui).set_text(ammo, "2");
+    addon_event(&mut ui, "AOS_Apply", EventKind::Click);
+    let (_, action) = ui
+        .drain_actions()
+        .into_iter()
+        .find(|(_, a)| matches!(a, UiAction::Admin(AdminAction::ConfigureHost { .. })))
+        .expect("Apply sends the host's settings");
+    let UiAction::Admin(AdminAction::ConfigureHost { options }) = action else {
+        unreachable!()
+    };
+    assert_eq!(
+        options.addon_settings.get("tier:tt_ammo"),
+        Some(&MiniGameSettingValue::Int(2))
+    );
+    assert_eq!(
+        options.addon_settings.get("other:kept"),
+        Some(&MiniGameSettingValue::Bool(true)),
+        "an Add-On not running now keeps its value"
+    );
+    assert_eq!(
+        ui.core.prefs.get("$Pref::Server::AddOn::tier::tt_ammo"),
+        Some("2"),
+        "saved with the host's other server prefs"
+    );
 }
