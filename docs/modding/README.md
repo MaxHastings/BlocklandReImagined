@@ -198,6 +198,8 @@ run are left out. Your rules remove a game's entry when it ends.
 | | | `cut_copy(p)`, `paint_copy(p, color)`, `paint_copy(p, paint)`, `wrench_copy(p)`, `super_cut(p, min, max)`, `fill_box(p, min, max, color)`, `paint_fill(p, brick, paint, options)`, `paint_vehicle(p, vehicle, paint, options)`: `world.edit` |
 | | | `push`, `tumble`, `hold`, `reach`, `hold_distance`, `let_go`, `tether`, `tether_length`, `untether`, `spawn_vehicle`, `remove_vehicle`, `mount_object(mount, rider, node, can_dismount[, turn])`, `unmount_object(rider)`: `physics` |
 | | | `heal(p, amount)`, `fire(...)`: `damage` |
+| | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds[, hide_bar])` (`()` for everyone), `tell_minigame(game, text[, except])`, `center_print_minigame(game, text, seconds)`, `bottom_print_minigame(game, text, seconds)` (a mini-game's members, counted once), `ask(p, title, text, command)` (a yes/no box; yes sends the package's own argument-less `command` as if typed, as v20's `MessageBoxYesNo` did), `plant_error(p, error)`: `chat` |
+| | | `play_sound(p, sound)` at a player's ears, `sound_at(sound, x, y, z)`, `beam(from, to[, options])`, `play_thread(p, thread, sequence)`, `show_box(p, min, max, tool)`, `hide_box(p)`, `show_shapes(owner, key, shapes)`, `hide_shapes(owner, key)`: `effects` |
 | | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds[, hide_bar])` (`()` for everyone), `tell_minigame(game, text[, except])`, `center_print_minigame(game, text, seconds)`, `bottom_print_minigame(game, text, seconds)` (a mini-game's members, counted once), `ask(p, title, text, command)` (a yes/no box; yes sends the package's own argument-less `command` as if typed, as v20's `MessageBoxYesNo` did), `message_box(p, title, text)` (an OK box, v20's `MessageBoxOK`): `chat` |
 | `bot_kinds()` (each `#{ id, name, first_names }`), `bot_limit()` | | `add_bot(game, #{ kind, name[, team] })`, `remove_bot(bot)`, `rest_bot(bot, rest)`, `bot_tool(bot, slot or ())`: `bots` |
 | | | `play_sound(p, sound)` at a player's ears, `sound_at(sound, x, y, z)`, `beam(from, to[, options])`, `play_thread(p, thread, sequence)`, `show_box(p, min, max, tool)`, `hide_box(p)`: `effects` |
@@ -756,16 +758,17 @@ the stack on its side of the clicked brick: going up, nothing reaching
 below its bottom). `highlight_copy(p, [r, g, b, a], seconds)` then lights
 the copied bricks in the palette colour nearest that one (`()` for each
 brick's own), glowing, for everyone to see, and gives them their own
-colours back after; a copy
+colours back after (a negative `seconds` keeps them lit until the copy is
+let go, lit again or taken up to place; 0 puts them out now); a copy
 takes a lit brick as it is underneath. An Add-On with `on_copy` in its
 behaviour hears `on_copy(player, #{ action, name, bricks, total,
-limit_reached, refused, error, message, size, names })` instead of the player getting
+limit_reached, refused, error, message, size, names, queued, searched })` instead of the player getting
 the engine's message (`action` is `"select"`, `"save"`, `"load"`,
 `"list"` or `"plant_as"`, below;
 `size` is the held copy's `[studs, plates, studs]` along x, up and z, or
 `()` when it holds none), and
 with `on_place`, `on_place(player, #{ planted, bricks, error, message,
-failed, wait, mirror_errors })` after the player plants its copy (`failed` counts the bricks
+failed, wait, mirror_errors, float_refused })` after the player plants its copy (`failed` counts the bricks
 each plant error kept out, `#{ float: 2, overlap: 1 }`; a partial plant
 tries a floating brick again once the rest are in). `mirror_errors` is
 `#{ side, upside_down }`, the catalog names (`Category/Group/Name`) of
@@ -773,7 +776,11 @@ the bricks a mirrored plant had no exact mirror image for, across and
 upside down. `plant_wait(p, seconds)` makes each of the player's copy
 plants wait that long after the last (0 to 60; 0, the default, none): one
 sooner is refused and `on_place` hears `error` `"wait"` with the seconds
-left in `wait`.
+left in `wait`. `float_copy(p, float)` lets the copy's plants float in
+mid air (v20's Force Plant); with `#{ admin_only: true }` that is checked
+again at each plant, and a plant by a player no longer an administrator
+goes in as a normal one, with `float_refused` true in `on_place` and the
+float turned off.
 
 Copies can be kept by name on the host. `save_copy(p, name)` keeps the copy
 the player holds, replacing one saved under that name; with `#{ overwrite:
@@ -829,7 +836,9 @@ and `paint_copy(p, color)` paints them, all or none, with the player's own
 full trust (the hammer's and spray can's), each as one Ctrl+Z step; the
 undo of a cut puts every brick back exactly as it was, events, lights and
 owner included; an Add-On with `on_copy` hears how a cut went there
-(`action` `"cut"`, `error` `"empty"` or `"refused"`). With
+(`action` `"cut"`, `error` `"empty"` or `"refused"`). `cut_copy(p, #{ each:
+true })` cuts each brick the player may and leaves the rest, counted in
+`refused` (the New Duplicator's cut). With
 `"undo_confirm_over": n` in its behaviour, a player's Ctrl+Z of one of
 these steps (a plant, paint, wrench, cut or fill) changing more than `n`
 bricks is held the first time: `on_copy` hears `action` `"undo"` with the
@@ -838,6 +847,23 @@ between starts over), as the New Duplicator asked before a big undo. `show_box(p
 player's screen while `tool` is in their hand (a selection, a zone being
 marked) and `hide_box(p)` takes it away. The port of the New Duplicator
 uses them all.
+
+`show_shapes(owner, key, shapes)` draws boxes in the world that every
+player sees, joiners too, as Torque Add-Ons did with scaled
+`StaticShape`s: each shape is `#{ min, max, color, inside, sides, label }`,
+colours RGBA from 0 to 1. Its faces are `color` seen from outside and
+`inside` seen from within (alpha 0, the default, draws none), `sides` gives
+the faces across x, y and z their own outside colours (a shaded cube), and
+`label` is drawn over its top centre like a player's name, in `color`.
+The set replaces the one the package last showed under `key` (64 shapes
+at most, each side up to 1,040 units); `hide_shapes(owner, key)` takes it
+away. With a player as `owner` the set is theirs and goes when they
+leave; `()` shows one nobody owns. The New Duplicator's port draws its
+selection box and the edges round a selection this way.
+`plant_error(p, error)` shows v20's plant error to a player (`"overlap"`,
+`"float"`, `"stuck"`, `"buried"`, `"too_far"`, `"limit"` or `"flood"`):
+the icon and sound `MsgPlantError_…` gave. `player(p).copy` is the copy
+they hold, `#{ addon, bricks }` (the Add-On that took it), or `()`.
 
 Big copy work goes on over several ticks, a slice each tick, so a copy
 of up to 1,000,000 bricks (the most any `limit` may be) never holds the
@@ -848,11 +874,14 @@ server's brick limit with `limit_reached`); one that fits in the tick's slice
 finishes at once as before. While a player's job runs,
 `player(p).copy_working` is true, their other copy work and undo are
 refused as busy, and `on_copy` hears `working: true` with the `action`,
-`bricks` done and `total` four times a second (the engine shows
+`bricks` done and `total` four times a second (a stack selection also
+gives the bricks still `queued` to look around; a box selection, and a
+plant's later passes for bricks that now have something under them, how
+far they have `searched` in percent, otherwise -1) (the engine shows
 "Working... (N%)" for an Add-On without `on_copy`). `cancel_copy(p)`
 stops it: what it did stays done, as one undo step, and the job's report
-comes as usual (`on_place` with `canceled: true`; a cancelled selection's
-`on_copy` has `error` `"canceled"`). An undo done over several ticks ends with `on_copy`
+comes as usual (`on_place` with `canceled: true`; any other cancelled
+job's `on_copy` has `error` `"canceled"`, with what it did). An undo done over several ticks ends with `on_copy`
 `action` `"undone"`. A held copy's player sees at most 10,000 of its
 bricks as the ghost; `on_copy` gives how many as `ghosted`.
 

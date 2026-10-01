@@ -911,3 +911,148 @@ fn a_supercut_puts_plain_bricks_over_what_stuck_out_and_its_undo_goes_over_ticks
     expected.sort_by(|x, y| x.position.partial_cmp(&y.position).unwrap());
     assert_eq!(back, expected);
 }
+
+/// A copy planted while its player runs a mini-game saves with the build
+/// and that mini-game, and loads back brick for brick, mini-game and all,
+/// where the duplicator copies and plants it again.
+#[test]
+fn a_planted_copy_saves_and_loads_back_with_its_mini_game() {
+    use bri_sim::session::MiniGameRequest;
+    let mut g = Game::new();
+    let host = host(&mut g);
+    let settings = bri_minigames::Settings {
+        title: "Copies".into(),
+        loadout: Default::default(),
+        ..bri_minigames::Settings::default()
+    };
+    scene(&mut g, host);
+    copy_box(&mut g, host, [-1.5, 0.0, -0.5], [1.0, 0.4, 0.5], 100).unwrap();
+    g.cmd(host, Command::MiniGame(MiniGameRequest::Create { color: 3, settings: settings.clone() }))
+        .unwrap();
+    g.steps(130);
+    let Ok(Reply::Planted(_)) = g.place(host, [-4.0, 0.0, -3.0], 0, false) else {
+        panic!("the copy plants")
+    };
+    assert_eq!(g.bricks().len(), 7);
+    let build = match g.cmd(host, Command::SaveBuild { events: true, ownership: true }) {
+        Ok(Reply::Saved(build)) => build,
+        other => panic!("{other:?}"),
+    };
+    assert!(build.minigame.is_some());
+    let shape = |bricks: BTreeMap<BrickId, Brick>| {
+        let mut v: Vec<_> = bricks
+            .into_values()
+            .map(|b| (b.definition, b.position.map(f32::to_bits), b.quarter_turns, b.color))
+            .collect();
+        v.sort_by(|x, y| x.1.cmp(&y.1));
+        v
+    };
+    let saved = shape(g.bricks());
+
+    let mut h = Game::new();
+    let loader = self::host(&mut h);
+    let bytes = bri_world::build::encode(&build).unwrap();
+    let build = bri_world::build::decode(&bytes).unwrap();
+    h.cmd(loader, Command::LoadBuild { build: Box::new(build), ownership: true })
+        .unwrap();
+    while h.s.build_loading() {
+        h.steps(1);
+    }
+    h.steps(2);
+    assert_eq!(shape(h.bricks()), saved);
+    let view = h.s.minigame_views();
+    assert_eq!(view.len(), 1);
+    assert_eq!(view[0].settings, settings);
+    // The loaded build is the loader's to copy and plant again.
+    assert_eq!(copy_box(&mut h, loader, [-1.5, 0.0, -0.5], [1.0, 0.4, 0.5], 100), Ok(3));
+    h.steps(130);
+    let Ok(Reply::Planted(_)) = h.place(loader, [4.0, 0.0, 4.0], 0, false) else {
+        panic!("the loaded build copies")
+    };
+    assert_eq!(h.bricks().len(), 10);
+}
+
+/// An Add-On's cut of each brick (`cut_copy` with `each`) takes the bricks
+/// its player may cut and leaves the rest, where a cut of all or none
+/// takes none; cancelled part way, it says so and what went is one undo.
+#[test]
+fn a_cut_of_each_brick_leaves_what_its_player_may_not_cut() {
+    let mut g = Game::new();
+    let verified = |g: &mut Game, name: &str, x: f32, key: u8| {
+        g.s.join_verified(
+            name.into(),
+            Vec3::new(x, 0.05, 3.0),
+            false,
+            Some(bri_admin::Principal([key; 32])),
+        )
+        .unwrap()
+    };
+    let ann = verified(&mut g, "Ann", 0.0, 1);
+    let bob = verified(&mut g, "Bob", 2.0, 2);
+    let [a, b, c, d] = scene(&mut g, ann);
+    // Build trust both ways: Ann may copy Bob's plate, not cut it.
+    g.cmd(ann, Command::TrustInvite { target: bob, level: 1 }).unwrap();
+    g.cmd(bob, Command::AcceptTrust { from: ann }).unwrap();
+    let theirs = g.plant(bob, [-0.5, 0.1, 0.25]);
+    assert_eq!(copy_box(&mut g, ann, [-1.5, 0.0, -0.5], [1.0, 0.4, 0.5], 100), Ok(4));
+    assert!(g.s.cut_copy(ann).is_err(), "all or none: none");
+    assert_eq!(g.bricks().len(), 5);
+    g.notices(ann);
+    g.steps(61);
+    g.typed(ann, "cuteach");
+    finish_work(&mut g, ann);
+    g.steps(2);
+    let world = g.bricks();
+    assert!(world.contains_key(&theirs) && world.contains_key(&d));
+    assert!(![a, b, c].iter().any(|id| world.contains_key(id)));
+    let told = prints(&g.notices(ann));
+    assert!(told.iter().any(|t| t.contains("Cut 3")), "{told:?}");
+    assert!(g.undo(ann).is_some());
+    assert_eq!(g.bricks().len(), 5);
+
+    // Cancelled after a brick.
+    copy_box(&mut g, ann, [-1.5, 0.0, -0.5], [1.0, 0.4, 0.5], 100).unwrap();
+    g.s.set_copy_work(32);
+    g.steps(121);
+    g.typed(ann, "cuteach");
+    assert!(g.s.copy_working(ann));
+    g.notices(ann);
+    assert!(g.s.cancel_copy(ann));
+    g.steps(2);
+    let told = prints(&g.notices(ann));
+    assert!(told.iter().any(|t| t.contains("Cut canceled!")), "{told:?}");
+    let left = g.bricks().len();
+    assert!((2..5).contains(&left), "{left}");
+    g.undo(ann);
+    finish_work(&mut g, ann);
+    assert_eq!(g.bricks().len(), 5);
+}
+
+/// A copy set to float only for administrators (`float_copy` with
+/// `admin_only`) floats for one and not for anyone else.
+#[test]
+fn a_copy_floats_admin_only_for_administrators_alone() {
+    let mut g = Game::new();
+    let host = host(&mut g);
+    let [_, _, _, d] = scene(&mut g, host);
+    let guest =
+        g.s.join("Guest".into(), Vec3::new(2.0, 0.05, 3.0), false)
+            .unwrap();
+    let theirs = g.plant(guest, [-3.5, 0.1, 2.25]);
+    let up = StackReach {
+        up: true,
+        limited: true,
+    };
+    for (who, brick) in [(guest, theirs), (host, d)] {
+        let copied = g.s.copy_build(who, brick, 100, up, CopyRule::default(), TOOL, "advanced-duplicator");
+        assert!(copied.error.is_none());
+        g.typed(who, "floatadmin");
+    }
+    let before = g.bricks().len();
+    let floated = g.place(guest, [-6.0, 3.0, -6.0], 0, false);
+    assert!(!matches!(floated, Ok(Reply::Planted(_))), "{floated:?}");
+    assert_eq!(g.bricks().len(), before);
+    let floated = g.place(host, [6.0, 3.0, 6.0], 0, false);
+    assert!(matches!(floated, Ok(Reply::Planted(_))), "{floated:?}");
+    assert_eq!(g.bricks().len(), before + 1);
+}

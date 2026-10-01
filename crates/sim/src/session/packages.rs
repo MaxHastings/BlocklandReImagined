@@ -1043,6 +1043,10 @@ impl Session {
                 .player(p.combat.player)
                 .map_or(0, |m| m.score),
             copy_working: self.copy_working(owner),
+            copy: self.copies.get(&owner).map(|c| {
+                let bricks = self.blueprints.get(&owner).map_or(0, |b| b.len());
+                (c.package.clone(), bricks as u64)
+            }),
         }
     }
     fn package_snapshot(&self) -> Snapshot {
@@ -1677,8 +1681,12 @@ impl Session {
             }
             Op::PlantWait { player, seconds } => self.plant_wait(player, seconds),
             Op::CancelCopy { player } => {
+                // An administrator may stop anyone's (`/ClearDups`).
+                let admin = caller
+                    .and_then(|c| self.peers.get(&c))
+                    .is_some_and(|p| p.actor.administrator);
                 ensure!(
-                    caller == Some(player),
+                    caller == Some(player) || admin,
                     "Copy work is cancelled only for the player whose command asked"
                 );
                 self.cancel_copy(player);
@@ -1772,13 +1780,13 @@ impl Session {
                 self.drop_copy(player);
                 Ok(())
             }
-            Op::CutCopy { player } => {
+            Op::CutCopy { player, each } => {
                 // Bricks go with the trust of the player who asked.
                 ensure!(
                     caller == Some(player),
                     "A copy's bricks are cut only for the player whose command asked"
                 );
-                self.start_cut(player, package);
+                self.start_cut(player, package, each);
                 Ok(())
             }
             Op::PaintCopy {
@@ -1839,12 +1847,16 @@ impl Session {
                 let _ = self.plant_copy(player, float);
                 Ok(())
             }
-            Op::FloatCopy { player, float } => {
+            Op::FloatCopy {
+                player,
+                float,
+                admin_only,
+            } => {
                 ensure!(
                     caller == Some(player),
                     "A copy floats only for the player whose command asked"
                 );
-                let _ = self.float_copy(player, float);
+                let _ = self.float_copy(player, float, admin_only);
                 Ok(())
             }
             Op::WrenchCopy { player } => {
@@ -1977,6 +1989,9 @@ impl Session {
                 Ok(())
             }
             Op::ShowBox { player, area, tool } => self.show_box(player, area, &tool),
+            Op::ShowShapes { owner, key, shapes } => {
+                self.show_shapes(package, owner, &key, shapes)
+            }
             Op::GiveItem {
                 player,
                 item,
@@ -2128,6 +2143,23 @@ impl Session {
                         command,
                     },
                 );
+                Ok(())
+            }
+            Op::PlantError { player, error } => {
+                use crate::simulation::PlantFailure as F;
+                self.take_cue(package)?;
+                ensure!(self.peers.contains_key(&player), "No such player");
+                let failure = match error.as_str() {
+                    "overlap" => F::Overlap,
+                    "float" => F::Float,
+                    "stuck" => F::Stuck,
+                    "buried" => F::Buried,
+                    "too_far" => F::TooFar,
+                    // Planting too soon, as the engine's own plant rate
+                    // refuses it.
+                    _ => F::Limit,
+                };
+                self.notify(player, Notice::PlantError(failure));
                 Ok(())
             }
             Op::Print {

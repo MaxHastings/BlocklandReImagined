@@ -147,6 +147,24 @@ Patch keys are files the importer wrote (`assets/weapons.json`,
 pass the weapons pack's checks, or the port is not applied. The patch is all
 or nothing: a port that fails anywhere changes no file.
 
+A port also names what it carries out without a rules function of the
+same name, in `handles`: each key is an original function, `call:<name>`
+(a top-level call at load), `new:<Class>` (an object made at load),
+`set:<global>` (a top-level assignment), `file:<path>` (a file the
+importer does not convert) or `datablock:<name>` (a datablock it does not
+convert), any case, and its value says how, in a sentence a reader can
+check. The report lists these under "Carried out by the port" and counts
+them as ported, and such a datablock as `ported`. Name only what the port
+does; a behaviour it does in part stays unported until it does all of it,
+and something deliberately not run says so and why ("not run: ...").
+
+```json
+"handles": {
+  "ND_SelectionBox::setSize": "the rules' draw_selection_box: show_shapes sizes the faces, edges, corners and label to the box",
+  "datablock:ND_SelectionBoxBorder": "drawn with show_shapes: the twelve edges, as wide as the box is big"
+}
+```
+
 ## The recipe in detail
 
 This is what `port` and `check-port` do for you, step by step, and what to

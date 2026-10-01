@@ -40,6 +40,7 @@ pub(super) enum Ending {
 }
 
 /// How far a job has got, for its Add-On's `on_copy`.
+#[derive(Default)]
 pub(super) struct Progress {
     /// The `on_copy` action it reports as when done.
     pub action: &'static str,
@@ -50,6 +51,11 @@ pub(super) struct Progress {
     pub placed: usize,
     /// Bricks of `done` left as they were (no trust, or in the way).
     pub refused: usize,
+    /// Bricks found and still to be looked around (a stack selection).
+    pub queued: usize,
+    /// How far through what it searches, in percent, while it searches
+    /// (a box's buckets; a plant's later passes for bricks that now fit).
+    pub searched: Option<usize>,
 }
 
 /// One kind of copy job.
@@ -263,6 +269,8 @@ impl Session {
         outcome.total = progress.total;
         outcome.placed = progress.placed;
         outcome.refused = progress.refused;
+        outcome.queued = progress.queued;
+        outcome.searched = progress.searched;
         self.report_copy(package, owner, outcome);
     }
 }
@@ -274,26 +282,5 @@ impl Session {
     }
     pub(super) fn set_copy_jobs_left(&mut self, left: u32) {
         self.copy_jobs.left = left;
-    }
-}
-
-/// Free `value` off the tick: a big copy's bricks (each with its name,
-/// events and lights) take a while to free, as long as they took to
-/// gather. A thread of their own frees them in the background.
-pub(super) fn drop_later<T: Send + 'static>(value: T) {
-    use std::sync::{OnceLock, mpsc};
-    type Trash = Box<dyn Send>;
-    static BIN: OnceLock<Option<mpsc::Sender<Trash>>> = OnceLock::new();
-    let bin = BIN.get_or_init(|| {
-        let (send, receive) = mpsc::channel::<Trash>();
-        std::thread::Builder::new()
-            .name("copy-drop".into())
-            .spawn(move || receive.into_iter().for_each(drop))
-            .ok()
-            .map(|_| send)
-    });
-    // No thread to hand it to: free it here.
-    if let Some(bin) = bin {
-        let _ = bin.send(Box::new(value));
     }
 }

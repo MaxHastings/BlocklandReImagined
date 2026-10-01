@@ -101,6 +101,11 @@ impl Session {
             info.insert("limit_reached".into(), outcome.limit_reached.into());
             info.insert("refused".into(), (outcome.refused as i64).into());
             info.insert("working".into(), outcome.working.into());
+            // While working: bricks found still to look around, and how far
+            // a search has got in percent (-1: not searching).
+            info.insert("queued".into(), (outcome.queued as i64).into());
+            let searched = outcome.searched.map_or(-1, |percent| percent as i64);
+            info.insert("searched".into(), searched.into());
             info.insert(
                 "names".into(),
                 Dynamic::from_array(outcome.names.iter().cloned().map(Dynamic::from).collect()),
@@ -216,7 +221,7 @@ impl Session {
         &mut self,
         package: &str,
         player: OwnerId,
-        (planted, bricks, canceled): (usize, usize, bool),
+        (planted, bricks, canceled, float_refused): (usize, usize, bool, bool),
         refused: &crate::session::blueprints::Refusals,
         inexact: &crate::blueprint::Inexact,
     ) -> bool {
@@ -228,6 +233,7 @@ impl Session {
         info.insert("planted".into(), (planted as i64).into());
         info.insert("bricks".into(), (bricks as i64).into());
         info.insert("canceled".into(), canceled.into());
+        info.insert("float_refused".into(), float_refused.into());
         // How many bricks each plant error kept out.
         let mut failed = Map::new();
         for (code, count) in &refused.by_error {
