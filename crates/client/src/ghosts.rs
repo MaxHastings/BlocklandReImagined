@@ -18,6 +18,7 @@
 //! frames; teleports snap. [`Ghosts`] adapts the replicated weapon view and
 //! package entities onto tracks, so any future replicated rigid body only
 //! needs to feed `observe` and read `pose`.
+use bri_content::passage::{PAST, Passages};
 use bri_sim::session::{EntityInfo, WeaponView};
 use glam::{Quat, Vec3};
 use std::collections::{BTreeMap, VecDeque};
@@ -107,6 +108,30 @@ pub struct Hit {
     pub position: Vec3,
     pub normal: Vec3,
     pub fraction: f32,
+    /// An opening of a linked brick rather than a surface: the body goes
+    /// on out of its partner, carried by this, as the host flies it.
+    pub carry: Option<glam::Affine3A>,
+}
+impl Hit {
+    /// What a body moving from `from` to `to` meets first: `solid`, the
+    /// surface `sweep` finds, or an opening of `passages` before it.
+    pub fn first(
+        passages: &Passages,
+        from: Vec3,
+        to: Vec3,
+        sweep: impl FnOnce(Vec3, Vec3) -> Option<Hit>,
+    ) -> Option<Hit> {
+        let solid = sweep(from, to);
+        match passages.first(from, to) {
+            Some((opening, t)) if solid.is_none_or(|s| s.fraction > t) => Some(Hit {
+                position: from.lerp(to, t),
+                normal: opening.normal,
+                fraction: t,
+                carry: Some(opening.carry),
+            }),
+            _ => solid,
+        }
+    }
 }
 
 /// A body's pose for this frame.
@@ -487,6 +512,16 @@ fn step(
         body.velocity = v + a * t;
         body.ticks += f64::from(t) * TICK_RATE;
         body.contacts += 1;
+        if let Some(carry) = hit.carry {
+            // Out of the partner, turned, a hair past its plane so the rest
+            // of the chord does not go back in.
+            let (_, turn, _) = carry.to_scale_rotation_translation();
+            body.velocity = turn * body.velocity;
+            body.position =
+                carry.transform_point3(hit.position) + body.velocity.normalize_or_zero() * PAST;
+            body.stopped = body.contacts >= MAX_CONTACTS;
+            continue;
+        }
         let normal = hit.normal.normalize_or_zero();
         match update.bounce {
             Some(bounce) if normal != Vec3::ZERO && body.contacts < MAX_CONTACTS => {
@@ -705,8 +740,74 @@ mod tests {
                 position: from.lerp(to, fraction),
                 normal: Vec3::Y,
                 fraction,
+                carry: None,
             }
         })
+    }
+    /// Two doorways linked as the sim's portal test places them, each a
+    /// pair of openings back to back on one plane: in through the south
+    /// side of the one at z = -4.25, out of the north side of the one at
+    /// x = 10.25 turned a quarter, and back the other way.
+    fn doorways() -> Passages {
+        use bri_content::passage::Passage;
+        use glam::{Affine3A, Vec2};
+        let (a, b) = (Vec3::new(0.0, 1.5, -4.25), Vec3::new(10.25, 1.5, -4.0));
+        let turn = Affine3A::from_rotation_y(-std::f32::consts::FRAC_PI_2);
+        let link = |from: Vec3, to: Vec3| {
+            Affine3A::from_translation(to) * turn * Affine3A::from_translation(-from)
+        };
+        let opening = |centre, normal: Vec3, carry| Passage {
+            brick: 1,
+            centre,
+            normal,
+            u: Vec3::Y.cross(normal),
+            v: Vec3::Y,
+            half: Vec2::new(1.0, 1.5),
+            carry,
+        };
+        Passages {
+            list: vec![
+                opening(a, Vec3::Z, link(a, b)),
+                opening(b, Vec3::NEG_X, link(b, a)),
+                opening(a, Vec3::NEG_Z, link(a, b).inverse()),
+                opening(b, Vec3::X, link(b, a).inverse()),
+            ],
+            closed: vec![],
+        }
+    }
+    #[test]
+    fn a_ghost_flies_through_an_opening_as_the_host_does() {
+        let passages = doorways();
+        let carry = passages.list[0].carry;
+        for speed in [3.0f32, 40.0, 200.0, 900.0] {
+            for across in [-0.9f32, -0.3, 0.0, 0.55] {
+                for before in [0.0005f32, 0.3, 2.0] {
+                    // Slow arrows fall below the opening before they reach it.
+                    let falls: &[f32] = if speed < 40.0 { &[0.0] } else { &[0.0, 9.81] };
+                    for &gravity in falls {
+                        let update = Update {
+                            velocity: Vec3::new(0.1, 0.0, -1.0).normalize() * speed,
+                            acceleration: Vec3::NEG_Y * gravity,
+                            horizon: 1000.0,
+                            ..Update::at(Vec3::new(across, 1.5, -4.25 + before))
+                        };
+                        // Half a unit past the opening.
+                        let ticks = ((before + 0.5) / speed * 120.0).ceil() as f64;
+                        let pose = simulate(&update, ticks, &mut |from, to| {
+                            Hit::first(&passages, from, to, none)
+                        });
+                        let free = simulate(&update, ticks, &mut none);
+                        let (position, velocity) = (
+                            carry.transform_point3(free.position),
+                            carry.transform_vector3(free.velocity),
+                        );
+                        let label = format!("{speed} at {across} from {before}, g {gravity}");
+                        assert!(pose.position.distance(position) < 2e-3, "{label}: {pose:?}");
+                        assert!(pose.velocity.distance(velocity) < 2e-3, "{label}: {pose:?}");
+                    }
+                }
+            }
+        }
     }
     #[test]
     fn simulation_matches_the_hosts_tick_integration() {

@@ -1,4 +1,4 @@
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
 pub const BRICK_SCHEMA: u32 = 1;
@@ -34,6 +34,11 @@ pub struct CatalogEntry {
     /// an Add-On sets it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link: Option<Link>,
+    /// Built on `mesh_id`'s shape at another size: width and depth in
+    /// studs, height in plates (not in v20; an Add-On sets it). See
+    /// [`Brick::stretched`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stretch: Option<[u32; 3]>,
 }
 
 /// Flat mirrors on a brick's sides. Each player's game draws what a mirror
@@ -414,6 +419,35 @@ impl Link {
         out
     }
 }
+/// Give a quad moved from `old` to `moved` corners the texture of the same
+/// size it had: its texture coordinates follow position as they did, from
+/// its first corner (a quad whose coordinates do not follow its position
+/// evenly keeps them).
+fn retexture(quad: &mut Quad, old: &[glam::Vec3; 4], moved: &[glam::Vec3; 4]) {
+    use glam::{Vec2, Vec3};
+    let uv = quad.vertices.map(|v| Vec2::from(v.uv));
+    let (e1, e2) = (old[1] - old[0], old[3] - old[0]);
+    let (a, b, c) = (e1.dot(e1), e1.dot(e2), e2.dot(e2));
+    let det = a * c - b * b;
+    if det.abs() < 1e-10 {
+        return;
+    }
+    // `d` in the old quad's own two directions.
+    let along = |d: Vec3| {
+        let (p, q) = (e1.dot(d), e2.dot(d));
+        ((c * p - b * q) / det, (a * q - b * p) / det)
+    };
+    let texture = |s: f32, t: f32| uv[0] + (uv[1] - uv[0]) * s + (uv[3] - uv[0]) * t;
+    let (s, t) = along(old[2] - old[0]);
+    if texture(s, t).distance(uv[2]) > 1e-3 {
+        return;
+    }
+    for (v, p) in quad.vertices.iter_mut().zip(moved) {
+        let (s, t) = along(*p - moved[0]);
+        v.uv = texture(s, t).to_array();
+    }
+}
+
 /// The side facing the other way.
 pub fn opposite(face: Face) -> Face {
     match face {
@@ -525,15 +559,130 @@ pub struct Vertex {
     pub uv: [f32; 2],
 }
 
+/// How much of each edge of a brick [`Brick::stretched`] keeps as it is,
+/// in world units (half a stud): frames, sills, bevels and studs' edges.
+pub const STRETCH_KEEP: f32 = 0.25;
+
 impl Brick {
-    /// Half the brick's grid size along a unit axis of its own frame.
-    pub fn half_extent(&self, axis: glam::Vec3) -> f32 {
-        let half = glam::Vec3::new(
+    /// Half the brick's grid size along each axis of its own frame.
+    pub fn half_size(&self) -> glam::Vec3 {
+        glam::Vec3::new(
             self.footprint_studs[0] as f32 * STUD,
             self.height_plates as f32 * PLATE,
             self.footprint_studs[1] as f32 * STUD,
+        ) * 0.5
+    }
+    /// Where [`Self::stretched`] to `[width, depth, height]` moves a point
+    /// of this shape's frame: the one map its faces, collision (boxes and
+    /// collision recipes alike, [`crate::collision::CollisionBody::stretched`])
+    /// and openings all follow.
+    pub fn stretching(
+        &self,
+        [width, depth, height]: [u32; 3],
+    ) -> Result<impl Fn(glam::Vec3) -> glam::Vec3 + use<>> {
+        let from = self.half_size();
+        let to = glam::Vec3::new(
+            width as f32 * STUD,
+            height as f32 * PLATE,
+            depth as f32 * STUD,
         ) * 0.5;
-        (axis.abs() * half).element_sum()
+        let keep = (from * 0.5).min(glam::Vec3::splat(STRETCH_KEEP));
+        ensure!(
+            (to - keep).min_element() > 0.0,
+            "too small to stretch {} to",
+            self.id
+        );
+        Ok(move |p: glam::Vec3| {
+            glam::Vec3::from_array(std::array::from_fn(|a| {
+                let (h, n, k) = (from[a], to[a], keep[a]);
+                if p[a].abs() >= h - k {
+                    p[a] + p[a].signum() * (n - h)
+                } else {
+                    p[a] * (n - k) / (h - k)
+                }
+            }))
+        })
+    }
+    /// This shape at another size (`[width, depth]` studs and `height`
+    /// plates), named `id`, as a nine-slice picture stretches: what lies
+    /// within [`STRETCH_KEEP`] of an edge moves out with that edge
+    /// unchanged and the middle stretches, so a window's frame keeps its
+    /// width round a bigger pane. Studs and bottoms keep their texture's
+    /// size (more studs); other surfaces stretch theirs.
+    pub fn stretched(&self, id: &str, [width, depth, height]: [u32; 3]) -> Result<Brick> {
+        let mut out = Brick {
+            id: id.into(),
+            footprint_studs: [width, depth],
+            height_plates: height,
+            ..self.clone()
+        };
+        let point = self
+            .stretching([width, depth, height])
+            .with_context(|| format!("Brick {id}"))?;
+        let (from, to) = (self.half_size(), out.half_size());
+        let keep = (from * 0.5).min(glam::Vec3::splat(STRETCH_KEEP));
+        for quad in &mut out.quads {
+            let old = quad.vertices.map(|v| glam::Vec3::from(v.position));
+            let moved = old.map(&point);
+            if matches!(
+                quad.surface,
+                Surface::Top | Surface::BottomEdge | Surface::BottomLoop
+            ) {
+                retexture(quad, &old, &moved);
+            }
+            for (v, p) in quad.vertices.iter_mut().zip(moved) {
+                v.position = p.to_array();
+            }
+        }
+        for b in &mut out.collision_boxes {
+            let (c, h) = (glam::Vec3::from(b.center), glam::Vec3::from(b.size) * 0.5);
+            let (lo, hi) = (point(c - h), point(c + h));
+            b.center = ((lo + hi) * 0.5).to_array();
+            b.size = (hi - lo).to_array();
+        }
+        // Each new grid cell takes the old one its middle stretches from.
+        let cell = |i: u32, old: u32, unit: f32, a: usize| {
+            let c = -to[a] + (i as f32 + 0.5) * unit;
+            let (h, n, k) = (from[a], to[a], keep[a]);
+            let back = if c.abs() >= n - k {
+                c - c.signum() * (n - h)
+            } else {
+                c * (h - k) / (n - k)
+            };
+            (((back + h) / unit).floor() as i64).clamp(0, i64::from(old) - 1) as usize
+        };
+        let [old_width, old_depth] = self.footprint_studs;
+        let rows: Vec<&[u8]> = self.attachment_rows.iter().map(|r| r.as_bytes()).collect();
+        out.attachment_rows = (0..depth)
+            .flat_map(|z| (0..height).map(move |y| (z, y)))
+            .map(|(z, y)| {
+                let row = cell(z, old_depth, STUD, 2) * self.height_plates as usize
+                    + cell(y, self.height_plates, PLATE, 1);
+                (0..width)
+                    .map(|x| char::from(rows[row][cell(x, old_width, STUD, 0)]))
+                    .collect()
+            })
+            .collect();
+        if let Some(coverage) = &mut out.coverage {
+            let ratio = to / from;
+            let areas = [
+                ratio.x * ratio.z,
+                ratio.x * ratio.z,
+                ratio.x * ratio.y,
+                ratio.z * ratio.y,
+                ratio.x * ratio.y,
+                ratio.z * ratio.y,
+            ];
+            for (c, area) in coverage.iter_mut().zip(areas) {
+                c.required_area *= area;
+            }
+        }
+        out.validate()?;
+        Ok(out)
+    }
+    /// Half the brick's grid size along a unit axis of its own frame.
+    pub fn half_extent(&self, axis: glam::Vec3) -> f32 {
+        (axis.abs() * self.half_size()).element_sum()
     }
     /// Two axes spanning a side, with the brick's half size along each;
     /// the first crossed with the second points out of the side.
@@ -693,6 +842,87 @@ mod tests {
             coverage: None,
             quads: vec![],
         }
+    }
+    /// A quad of `surface` with these corners and texture coordinates.
+    fn quad(surface: Surface, corners: [[f32; 3]; 4], uv: [[f32; 2]; 4]) -> Quad {
+        let normal = (glam::Vec3::from(corners[1]) - glam::Vec3::from(corners[0]))
+            .cross(glam::Vec3::from(corners[2]) - glam::Vec3::from(corners[1]))
+            .normalize();
+        Quad {
+            face: Face::Omni,
+            surface,
+            vertices: std::array::from_fn(|i| Vertex {
+                position: corners[i],
+                normal: normal.to_array(),
+                uv: uv[i],
+            }),
+            colors: None,
+        }
+    }
+
+    #[test]
+    fn a_stretched_window_keeps_its_frame_and_studs_and_grows_its_pane() {
+        let mut mesh = window();
+        // Studs on top, one texture repeat a stud; the right post of the
+        // frame; the pane; studs on the top row of the grid.
+        mesh.quads = vec![
+            quad(
+                Surface::Top,
+                [[-1.0, 1.5, 0.25], [1.0, 1.5, 0.25], [1.0, 1.5, -0.25], [-1.0, 1.5, -0.25]],
+                [[0.0, 0.0], [4.0, 0.0], [4.0, 1.0], [0.0, 1.0]],
+            ),
+            quad(
+                Surface::Side,
+                [[0.95, -1.5, 0.25], [1.0, -1.5, 0.25], [1.0, 1.5, 0.25], [0.95, 1.5, 0.25]],
+                [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            ),
+            quad(
+                Surface::Side,
+                [[-0.95, -1.3, 0.0], [0.95, -1.3, 0.0], [0.95, 1.45, 0.0], [-0.95, 1.45, 0.0]],
+                [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            ),
+        ];
+        mesh.attachment_rows = std::iter::once("uuuu".to_owned())
+            .chain(std::iter::repeat_n("xxxx".to_owned(), 13))
+            .chain(std::iter::once("dddd".to_owned()))
+            .collect();
+        mesh.collision_boxes = vec![CollisionBox {
+            center: [0.0, 0.0, 0.0],
+            size: [2.0, 3.0, 0.5],
+        }];
+        let big = mesh.stretched("mesh/window@8x1x30", [8, 1, 30]).unwrap();
+        assert_eq!((big.footprint_studs, big.height_plates), ([8, 1], 30));
+        let corners = |q: &Quad| q.vertices.map(|v| glam::Vec3::from(v.position));
+        let near = |a: glam::Vec3, b: [f32; 3]| a.abs_diff_eq(glam::Vec3::from(b), 1e-5);
+        // Eight studs across the top, the same size as before.
+        let top = &big.quads[0];
+        assert!(near(corners(top)[2], [2.0, 3.0, -0.25]));
+        assert_eq!(top.vertices[2].uv, [8.0, 1.0]);
+        // The post moves out to the new edge, as thin as it was.
+        let post = corners(&big.quads[1]);
+        assert!(near(post[0], [1.95, -3.0, 0.25]) && near(post[2], [2.0, 3.0, 0.25]));
+        assert_eq!(big.quads[1].vertices[2].uv, [1.0, 1.0]);
+        // The pane fills the bigger opening.
+        let pane = corners(&big.quads[2]);
+        assert!(near(pane[0], [-1.95, -2.8, 0.0]) && near(pane[2], [1.95, 2.95, 0.0]));
+        assert_eq!(big.attachment_rows.len(), 30);
+        assert_eq!(big.attachment_rows[0], "uuuuuuuu");
+        assert_eq!(big.attachment_rows[15], "xxxxxxxx");
+        assert_eq!(big.attachment_rows[29], "dddddddd");
+        assert!(near(glam::Vec3::from(big.collision_boxes[0].size), [4.0, 6.0, 0.5]));
+        // The portal's way through grows the same and keeps its frame.
+        let link: Link = serde_json::from_str(
+            r#"{"faces": ["north", "south"], "depth": 0.5, "pass": true, "name": "Portal",
+                "frame": {"sides": 0.05, "top": 0.05, "bottom": 0.2}}"#,
+        )
+        .unwrap();
+        link.validate(&big).unwrap();
+        for o in link.passages(&big) {
+            let half = glam::Vec2::new(o.half.min_element(), o.half.max_element());
+            assert!(half.abs_diff_eq(glam::Vec2::new(1.95, 2.875), 1e-5), "{o:?}");
+        }
+        // Too small to keep the edges it has.
+        assert!(mesh.stretched("mesh/sliver", [4, 1, 1]).is_err());
     }
     fn reflection(faces: Vec<Face>) -> Reflection {
         Reflection {

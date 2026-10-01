@@ -43,7 +43,8 @@ pub use riding::Ride;
 mod vehicles;
 use vehicles::combat_input_burst;
 pub use vehicles::{
-    DEFAULT_STEERING, SeatedPace, VehicleInfo, VehiclePose, actor_controls, driver_controls, rider,
+    DEFAULT_STEERING, SeatedPace, VehicleInfo, VehiclePose, actor_controls,
+    carry_through_openings, driver_controls, rider,
 };
 mod items;
 mod weapons;
