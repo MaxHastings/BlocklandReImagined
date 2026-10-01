@@ -299,6 +299,7 @@ impl Session {
                     scale: state.scale,
                     can_jet: peer.player.tuning().can_jet,
                     horse: self.archetypes.resolve(state.archetype).look.is_horse(),
+                    middle: Some(Vec3::from(state.feet) + Vec3::Y * peer.player.middle()),
                     ..Frame::default()
                 },
             )?;

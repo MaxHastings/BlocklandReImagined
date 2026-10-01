@@ -455,6 +455,18 @@ impl EffectsWorld {
             .transform = transform;
         Ok(())
     }
+    /// Move a source somewhere it did not travel to (through a portal):
+    /// it emits from there on, with no streak back to where it was.
+    pub fn jump_source(&mut self, handle: EffectHandle, transform: SourceTransform) -> Result<()> {
+        transform.validate()?;
+        let source = self
+            .sources
+            .get_mut(&handle)
+            .context("Stale effect handle")?;
+        source.transform = transform;
+        source.previous = transform;
+        Ok(())
+    }
     pub fn update_options(&mut self, handle: EffectHandle, options: SourceOptions) -> Result<()> {
         options.validate()?;
         let source = self

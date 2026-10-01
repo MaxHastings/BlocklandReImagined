@@ -3,6 +3,7 @@
 //! cues and advance. The host provides animated attachment poses and consumes
 //! shell/animation requests; this module never guesses a mount or gameplay hit.
 use anyhow::{Result, ensure};
+use bri_content::passage::Passages;
 use bri_fx_runtime::{
     BlendMode, EffectHandle, EffectsLimits, EffectsPack, EffectsWorld, Recolor, SourceOptions,
     SourceTransform, StopMode,
@@ -45,6 +46,8 @@ enum Kind {
 struct Attached {
     resource: String,
     handle: EffectHandle,
+    /// Where the projectile was drawn last.
+    position: Vec3,
 }
 struct Timed {
     cue: Cue,
@@ -70,6 +73,9 @@ pub struct WeaponEffects {
     limits: EffectsLimits,
     /// World palette for `color<N>Paint*` spray effects.
     palette: Vec<[f32; 4]>,
+    /// The world's portals: a trail carried through one goes on from the
+    /// far side instead of streaking across between them.
+    passages: Passages,
     pub diagnostics: Diagnostics,
 }
 
@@ -181,6 +187,7 @@ impl WeaponEffects {
             cursor: 0,
             limits,
             palette: Vec::new(),
+            passages: Passages::default(),
             diagnostics: Diagnostics {
                 messages: notes.into_iter().take(MAX_MESSAGES).collect(),
                 ..Default::default()
@@ -199,6 +206,11 @@ impl WeaponEffects {
     }
     pub fn timed_count(&self) -> usize {
         self.timed.len()
+    }
+    pub fn set_passages(&mut self, passages: &Passages) {
+        if &self.passages != passages {
+            self.passages = passages.clone();
+        }
     }
     pub fn set_palette(&mut self, palette: &[[f32; 4]]) {
         if self.palette != palette {
@@ -327,12 +339,18 @@ impl WeaponEffects {
         }
         self.diagnostics.deferred_attachments = 0;
         for (key, (resource, transform)) in desired {
-            if let Some(a) = self.trails.get(&key) {
+            if let Some(a) = self.trails.get_mut(&key) {
                 // Keep a tombstone until the projectile disappears: a finite authored
                 // emitter must not restart every network/render frame.
                 if self.world.is_active(a.handle) {
-                    self.world.update_source(a.handle, transform)?;
+                    let through = self.passages.bridge(a.position, transform.position);
+                    if through.is_some() {
+                        self.world.jump_source(a.handle, transform)?;
+                    } else {
+                        self.world.update_source(a.handle, transform)?;
+                    }
                 }
+                a.position = transform.position;
                 continue;
             }
             let result = if key.1 {
@@ -344,7 +362,15 @@ impl WeaponEffects {
             };
             match result {
                 Ok(handle) => {
-                    self.trails.insert(key, Attached { resource, handle });
+                    let position = transform.position;
+                    self.trails.insert(
+                        key,
+                        Attached {
+                            resource,
+                            handle,
+                            position,
+                        },
+                    );
                 }
                 Err(_) => {
                     self.diagnostics.deferred_attachments += 1;

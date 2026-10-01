@@ -6648,6 +6648,7 @@ impl PlatformApp for App {
             // Balls, projectiles, dropped items and package entities move at
             // the frame rate between the host's 20 Hz updates.
             let projectiles = &self.content.weapons.pack.projectiles;
+            let passages = self.motion.passages();
             self.ghosts.update(
                 game_elapsed.as_secs_f32(),
                 view.tick,
@@ -6670,13 +6671,17 @@ impl PlatformApp for App {
                         ),
                     })
                 },
+                // Through portals as the host flies them.
                 |from, to| {
-                    let length = (to - from).length();
-                    let hit = building.solid_segment(from, to).ok()??;
-                    Some(crate::ghosts::Hit {
-                        position: hit.position,
-                        normal: hit.normal,
-                        fraction: hit.distance / length,
+                    crate::ghosts::Hit::first(&passages, from, to, |from, to| {
+                        let length = (to - from).length();
+                        let hit = building.solid_segment(from, to).ok()??;
+                        Some(crate::ghosts::Hit {
+                            position: hit.position,
+                            normal: hit.normal,
+                            fraction: hit.distance / length,
+                            carry: None,
+                        })
                     })
                 },
             );
@@ -6948,6 +6953,7 @@ impl PlatformApp for App {
                     .bool_or("$pref::Player::renderMyItems", true),
             );
             self.weapon_effects.set_palette(&view.world.palette);
+            self.weapon_effects.set_passages(&self.motion.passages());
             let items = self.world_items.sync(
                 weapons,
                 crate::world_items::WorldItemFrame {

@@ -8294,3 +8294,42 @@ Tests:
 Remaining: in third person the body itself still moves across in one
 frame when its middle crosses (half of it shows on each side). Drawing a
 clone on both sides needs per-instance clip planes in the renderer.
+
+### Shooting through portals, every time
+
+Max: "sometimes i can shoot through a portal but other times i can not".
+Three causes, all reproduced by new tests that fail on 1b2747e4:
+- The shot started at the muzzle, which is ahead of the eye. Standing
+  close, the muzzle was already past the opening, so the shot started
+  behind the portal and flew off through the back of the doorway.
+- A doorway's two sides share one plane back to back. A carried shot
+  landed on the partner's plane only to within rounding; about half the
+  time the rest of the tick went in through the partner's other side and
+  was carried straight back. 1460 of 3914 shots in the sweep went wrong.
+- Each player's screen flew projectiles on with no portals at all, and
+  the trail streaked across the map between the two portals.
+
+The fix:
+- `bri_content::passage::PAST`: a carried move goes on from a hair past
+  the partner's plane (`Passages::travel`, projectile flight, and the
+  client's ghost flight).
+- `bri_weapons` fire: the shot's start is followed from the body's
+  middle (new `Frame::middle`, set by the host) to the eye to the muzzle
+  through any opening in between, and its velocity is turned with it.
+- `ghosts::Hit::first`: the client's projectile flight goes through the
+  same openings as the host's. `WeaponEffects::set_passages` makes a
+  trail carried through a portal jump (`EffectsWorld::jump_source`)
+  instead of streaking.
+- Speed, spin (velocity turns with the carry) and owner credit (`source`)
+  are kept. Hitscan in this engine is only the build tools (hammer,
+  wrench, printer, wand), which act on bricks and do not go through.
+
+Tests:
+- `bri-sim --test portals shots::every_shot_into_the_opening...`: 3914
+  shots (speeds 3 to 900, five yaws, three pitches, five edge offsets,
+  three heights, from 0.0005 to 1.7 units out, bullets and falling
+  arrows) each match free flight carried by the portal.
+- `shots::each_weapon_fires_through_from_any_distance`: gun, rocket, bow
+  and sword fired from 3 units out to the eye leading the body through.
+- `bri-client ghosts::a_ghost_flies_through_an_opening_as_the_host_does`
+  and `--test weapon_effects a_trail_carried_through_a_portal...`.
