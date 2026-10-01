@@ -561,7 +561,7 @@ mod vehicles {
     use std::collections::BTreeMap;
 
     const BALL: &str = "steel-ball-kit:vehicle/steelball";
-    const PLANE: &str = "vehicle_stunt_plane:vehicle/stuntplanevehicle";
+    const PLANE: &str = "test_plane:vehicle/standinplane";
     const JEEP: &str = "steel-ball-kit:vehicle/jeepbox";
     const TANK: &str = "steel-ball-kit:vehicle/tankbox";
 
@@ -598,12 +598,13 @@ mod vehicles {
         pack
     }
 
-    /// The Stunt Plane Add-On's plane: 9 across the wings, though only
-    /// its body (1.8 wide) collides, as in v20.
+    /// The stand-in plane: its wings are wider than the 1x14x10 opening
+    /// (6.9) but fit the 1x20x12's (9.9), though only its narrow body
+    /// collides, as a v20 plane's does.
     fn planes() -> Pack {
         Pack::load(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../packages/imported/vehicle_stunt_plane/assets/vehicles.json"
+            "/../vehicles/tests/fixtures/stand-in-plane/assets/vehicles.json"
         ))
         .unwrap()
     }
@@ -706,14 +707,14 @@ mod vehicles {
     }
 
     #[test]
-    fn the_stunt_plane_flies_through_the_biggest_portal_wings_and_all() {
+    fn a_plane_flies_through_the_biggest_portal_wings_and_all() {
         let span = {
             let p = planes();
             let d = p.definitions.iter().find(|d| d.id == PLANE).unwrap();
             d.bounds_max[0] - d.bounds_min[0]
         };
-        // 9 across the wings; the opening is 9.9 wide inside its frame.
-        assert!((span - 9.0).abs() < 0.01, "{span}");
+        // Too wide for the 1x14x10 (6.9 inside), within the 1x20x12's 9.9.
+        assert!(span > 6.9 && span < 9.9, "{span}");
         for across in [-0.3f32, 0.0, 0.4] {
             for speed in [40.0f32, 80.0] {
                 // Flying level at the opening's middle height, nose first.

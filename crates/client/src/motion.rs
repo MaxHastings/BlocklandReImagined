@@ -1006,11 +1006,13 @@ mod tests {
     fn vehicle_pack() -> Option<bri_vehicles::Pack> {
         pack_for("")
     }
-    /// The pack `definition` is in: the Stunt Plane's is its Add-On's.
+    /// The pack `definition` is in: a plane's is the stand-in plane's
+    /// (crates/vehicles/tests/fixtures), in place of the bundled Stunt Plane
+    /// no checkout holds.
     fn pack_for(definition: &str) -> Option<bri_vehicles::Pack> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let path = if definition.starts_with("vehicle_stunt_plane:") {
-            root.join("packages/imported/vehicle_stunt_plane/assets/vehicles.json")
+        let path = if definition.starts_with("test_plane:") {
+            root.join("crates/vehicles/tests/fixtures/stand-in-plane/assets/vehicles.json")
         } else {
             root.join("content/vehicles-pack-012/vehicles.json")
         };
@@ -1271,11 +1273,15 @@ mod tests {
         for definition in [
             "v20.vehicle.magiccarpetvehicle",
             "v20.vehicle.flyingwheeledjeepvehicle",
-            "vehicle_stunt_plane:vehicle/stuntplanevehicle",
+            "test_plane:vehicle/standinplane",
             "v20.vehicle.horsearmor",
             "v20.vehicle.jeepvehicle",
             "v20.vehicle.tankvehicle",
         ] {
+            if pack_for(definition).is_none() {
+                eprintln!("{definition}: its pack is not in content/; skipped");
+                continue;
+            }
             for seed in [0x9e37_79b9_7f4a_7c15, 0x2545_f491_4f6c_dd1d] {
                 let run = drive_run(definition, seed)?;
                 println!(

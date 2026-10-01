@@ -19,6 +19,9 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+mod games;
+pub use games::{BrickView, DropView, MAX_BRICKS_LISTED, MinigameView, TeamView};
+
 /// Operation budgets per kind of call.
 #[derive(Debug, Clone, Copy)]
 pub enum Budget {
@@ -54,6 +57,15 @@ pub struct PlayerView {
     pub eye: [f32; 3],
     #[serde(default)]
     pub look: [f32; 3],
+    /// Their control object's transform (`getControlObject().getTransform()`):
+    /// a free or path camera's eye and heading while one has control, else
+    /// the body's eye and heading. Yaw and pitch in radians.
+    #[serde(default)]
+    pub camera: [f32; 3],
+    #[serde(default)]
+    pub camera_yaw: f32,
+    #[serde(default)]
+    pub camera_pitch: f32,
     #[serde(default)]
     pub velocity: [f32; 3],
     /// The item in their hand (`namespace:weapon/name`), or empty.
@@ -108,6 +120,12 @@ pub struct PlayerView {
     /// Each tool slot's item id, empty for an empty slot (`%obj.tool[%i]`).
     #[serde(default)]
     pub tools: Vec<String>,
+    /// The team of their mini-game they play for, if it has teams.
+    #[serde(default)]
+    pub team: Option<u64>,
+    /// Their mini-game score (0 outside mini-games).
+    #[serde(default)]
+    pub score: i64,
     /// A bot (an `AIPlayer`), not a connected player.
     #[serde(default)]
     pub bot: bool,
@@ -151,9 +169,33 @@ pub trait World {
     /// Whether a voxel could be placed at voxel coordinates `position`
     /// now: inside the world, its chunk generated, and nothing in the way.
     fn can_place_voxel(&self, position: [i64; 3]) -> bool;
-    /// A placed brick: its kind, centre, turn, colour and owner.
-    fn brick(&self, _brick: u64) -> Option<BrickInfo> {
+    /// Up to `limit` bricks of definition `kind`, lowest id first.
+    fn bricks_of(&self, _kind: &str, _limit: usize) -> Vec<BrickView> {
+        Vec::new()
+    }
+    fn brick(&self, _brick: u64) -> Option<BrickView> {
         None
+    }
+    /// The value a package keeps on `brick` as `key` (`set_brick_field`):
+    /// the calling package's own key, or `namespace:key` for another's.
+    fn brick_field(&self, _brick: u64, _key: &str) -> Option<serde_json::Value> {
+        None
+    }
+    /// The world's paint palette, RGBA from 0 to 1, by colour index.
+    fn palette(&self) -> Vec<[f32; 4]> {
+        Vec::new()
+    }
+    /// The server's avatar pack choices, in the pack's order (v20's list
+    /// positions): each part slot's (`hat`, `pack`, ...), `face` and
+    /// `decal`, and `accents.<hat>` for the accents each hat wears
+    /// (`$accentsAllowed`). Empty when the server has no avatar pack.
+    fn avatar_choices(&self) -> BTreeMap<String, Vec<String>> {
+        BTreeMap::new()
+    }
+    /// The items the calling package put in the world with `drop_item`
+    /// that still lie there.
+    fn drops(&self) -> Vec<DropView> {
+        Vec::new()
     }
     /// Bricks whose box overlaps the box from `min` to `max`, at most
     /// `limit` of them (`InitContainerBoxSearch`).
@@ -177,22 +219,18 @@ pub trait World {
     fn hit_region(&self, _player: u64, _point: [f32; 3]) -> Option<&'static str> {
         None
     }
-}
-/// A placed brick as a script reads it ([`World::brick`]).
-#[derive(Debug, Clone, PartialEq)]
-pub struct BrickInfo {
-    /// Its brick catalog id (`v20/brick/brick2x4data`,
-    /// `gamemode_trenchdigging:brick/brick4xcubedirtdata`).
-    pub kind: String,
-    pub position: [f32; 3],
-    /// Clockwise quarter turns seen from above.
-    pub turns: u8,
-    /// Palette index.
-    pub color: u8,
-    /// The build it belongs to (0 for the world's own bricks).
-    pub owner: u64,
-    pub min: [f32; 3],
-    pub max: [f32; 3],
+    /// An Add-On setting of mini-game `game` (or of its team `team`):
+    /// `key` is the calling package's own or `namespace:key`. Its value,
+    /// or its default when nobody changed it; an error names what is
+    /// wrong (no such game, team or setting).
+    fn setting(
+        &self,
+        _game: u64,
+        _team: Option<u64>,
+        _key: &str,
+    ) -> Result<bri_package::setting::SettingValue, String> {
+        Err("this host has no Add-On settings".into())
+    }
 }
 /// Most bricks one `bricks_in` returns.
 pub const MAX_BRICKS_IN: usize = 1024;
@@ -312,6 +350,8 @@ pub struct Snapshot {
     /// and in [`object`](Self::object)'s answers.
     pub objects: Vec<ObjectView>,
     pub holds: Vec<HoldView>,
+    /// Every mini-game, with its members and teams.
+    pub minigames: Vec<MinigameView>,
     pub tethers: Vec<TetherView>,
 }
 impl Snapshot {
@@ -557,6 +597,22 @@ fn player_map(p: &PlayerView) -> Dynamic {
         float_entry("lx", p.look[0]),
         float_entry("ly", p.look[1]),
         float_entry("lz", p.look[2]),
+        (
+            "camera",
+            map([
+                (
+                    "at",
+                    Dynamic::from_array(
+                        p.camera
+                            .iter()
+                            .map(|v| Dynamic::from_float(f64::from(*v)))
+                            .collect(),
+                    ),
+                ),
+                float_entry("yaw", p.camera_yaw),
+                float_entry("pitch", p.camera_pitch),
+            ]),
+        ),
         float_entry("vx", p.velocity[0]),
         float_entry("vy", p.velocity[1]),
         float_entry("vz", p.velocity[2]),
@@ -595,6 +651,11 @@ fn player_map(p: &PlayerView) -> Dynamic {
             "tools",
             Dynamic::from_array(p.tools.iter().map(|t| t.clone().into()).collect()),
         ),
+        (
+            "team",
+            p.team.map_or(Dynamic::UNIT, |t| Dynamic::from_int(t as i64)),
+        ),
+        ("score", Dynamic::from_int(p.score)),
         ("bot", p.bot.into()),
         (
             "bot_owner",
@@ -831,6 +892,47 @@ fn object_ref(value: &Dynamic) -> Fallible<ObjectRef> {
         .ok_or_else(|| format!("`{text}` is not an object like \"vehicle:3\"").into())
 }
 /// `[x, y, z]`.
+fn path_knot(value: &Dynamic) -> Fallible<crate::ops::PathKnot> {
+    let knot = value
+        .read_lock::<rhai::Map>()
+        .ok_or("a knot is #{ at, yaw, pitch, speed, type, path, jump }")?;
+    let field = |key: &str| knot.get(key).cloned().unwrap_or(Dynamic::UNIT);
+    let text = |key: &str, default: &str| -> Fallible<String> {
+        let v = field(key);
+        if v.is_unit() {
+            Ok(default.to_owned())
+        } else {
+            v.into_string()
+                .map(|s| s.to_ascii_lowercase())
+                .map_err(|_| format!("a knot's {key} is a string").into())
+        }
+    };
+    let at = field("at")
+        .try_cast::<Array>()
+        .ok_or("a knot's at is [x, y, z]")?;
+    let number = |key: &str, default: f32| -> Fallible<f32> {
+        let v = field(key);
+        if v.is_unit() { Ok(default) } else { float(&v) }
+    };
+    Ok(crate::ops::PathKnot {
+        at: vector(&at)?,
+        yaw: number("yaw", 0.0)?,
+        pitch: number("pitch", 0.0)?,
+        speed: number("speed", 7.0)?,
+        kind: match text("type", "normal")?.as_str() {
+            "normal" => crate::ops::KnotKind::Normal,
+            "kink" => crate::ops::KnotKind::Kink,
+            "position" | "position only" => crate::ops::KnotKind::PositionOnly,
+            other => return fail(format!("a knot's type is normal, kink or position, not {other}")),
+        },
+        linear: match text("path", "spline")?.as_str() {
+            "spline" => false,
+            "linear" => true,
+            other => return fail(format!("a knot's path is spline or linear, not {other}")),
+        },
+        jump: field("jump").as_bool().unwrap_or(false),
+    })
+}
 fn vector(value: &Array) -> Fallible<[f32; 3]> {
     match value.as_slice() {
         [x, y, z] => Ok([float(x)?, float(y)?, float(z)?]),
@@ -1831,6 +1933,23 @@ fn register_api(engine: &mut Engine) {
             equip,
         })
     });
+    // Every tool slot at once (`forceEquip`): an item id or () per slot.
+    engine.register_fn("set_tools", |player: Dynamic, tools: Array| {
+        let tools = tools
+            .into_iter()
+            .map(|t| {
+                if t.is_unit() || t.to_string().is_empty() {
+                    Ok(None)
+                } else {
+                    t.into_string().map(Some).map_err(|_| "a tool is an item id or ()")
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        push(Op::SetTools {
+            player: id(&player)?,
+            tools,
+        })
+    });
     engine.register_fn("take_item", |player: Dynamic, item: &str| {
         push(Op::TakeItem {
             player: id(&player)?,
@@ -1844,6 +1963,9 @@ fn register_api(engine: &mut Engine) {
                 item: item.into(),
                 position: [float(&x)?, float(&y)?, float(&z)?],
                 velocity: [0.0; 3],
+                paint: None,
+                data: None,
+                seconds: None,
             })
         },
     );
@@ -1854,6 +1976,9 @@ fn register_api(engine: &mut Engine) {
                 item: item.into(),
                 position: [float(&x)?, float(&y)?, float(&z)?],
                 velocity: [float(&vx)?, float(&vy)?, float(&vz)?],
+                paint: None,
+                data: None,
+                seconds: None,
             })
         },
     );
@@ -1874,6 +1999,57 @@ fn register_api(engine: &mut Engine) {
                     } else {
                         Some(id(&player)?)
                     },
+                    text: text.into(),
+                    seconds: float(&seconds)?,
+                    bottom,
+                    hide_bar: false,
+                })
+            },
+        );
+    }
+    engine.register_fn(
+        "bottom_print",
+        |player: Dynamic, text: &str, seconds: Dynamic, hide_bar: bool| {
+            push(Op::Print {
+                player: if player.is_unit() {
+                    None
+                } else {
+                    Some(id(&player)?)
+                },
+                text: text.into(),
+                seconds: float(&seconds)?,
+                bottom: true,
+                hide_bar,
+            })
+        },
+    );
+    // Every member of a mini-game, counted once.
+    engine.register_fn("tell_minigame", |game: Dynamic, text: &str| {
+        push(Op::TellMinigame {
+            game: id(&game)?,
+            text: text.into(),
+            except: None,
+        })
+    });
+    engine.register_fn(
+        "tell_minigame",
+        |game: Dynamic, text: &str, except: Dynamic| {
+            push(Op::TellMinigame {
+                game: id(&game)?,
+                text: text.into(),
+                except: Some(id(&except)?),
+            })
+        },
+    );
+    for (name, bottom) in [
+        ("center_print_minigame", false),
+        ("bottom_print_minigame", true),
+    ] {
+        engine.register_fn(
+            name,
+            move |game: Dynamic, text: &str, seconds: Dynamic| {
+                push(Op::PrintMinigame {
+                    game: id(&game)?,
                     text: text.into(),
                     seconds: float(&seconds)?,
                     bottom,
@@ -1916,6 +2092,7 @@ fn register_api(engine: &mut Engine) {
     register_physics(engine);
     register_queries(engine);
     register_presentation(engine);
+    games::register(engine);
 }
 
 /// A copy's options map: `trust` ("build" or "full"), `public_bricks`, `admin`,
@@ -2050,27 +2227,6 @@ fn register_queries(engine: &mut Engine) {
             })
         },
     );
-    // A placed brick, #{ id, kind, x, y, z, turns, color, owner, min, max },
-    // or () when there is no such brick.
-    engine.register_fn("brick", |brick: Dynamic| {
-        let brick = id(&brick)?;
-        with_world(|world, _| {
-            Ok(world.brick(brick).map_or(Dynamic::UNIT, |b| {
-                map([
-                    ("id", Dynamic::from_int(brick as i64)),
-                    ("kind", b.kind.into()),
-                    ("x", Dynamic::from_float(f64::from(b.position[0]))),
-                    ("y", Dynamic::from_float(f64::from(b.position[1]))),
-                    ("z", Dynamic::from_float(f64::from(b.position[2]))),
-                    ("turns", Dynamic::from_int(i64::from(b.turns))),
-                    ("color", Dynamic::from_int(i64::from(b.color))),
-                    ("owner", Dynamic::from_int(b.owner as i64)),
-                    ("min", point3(b.min)),
-                    ("max", point3(b.max)),
-                ])
-            }))
-        })
-    });
     // The bricks overlapping a box, as ids: up to 1024.
     engine.register_fn("bricks_in", |min: Array, max: Array| {
         let min = vector(&min)?;
@@ -2239,6 +2395,39 @@ fn register_presentation(engine: &mut Engine) {
             colors: out,
         })
     });
+    // A uniform's parts over the avatar's own choices: #{ hat: "copHat",
+    // pack: "none", face: "smiley", decal: "AAA-None" }, or () for the
+    // player's own again.
+    engine.register_fn("set_avatar_parts", |player: Dynamic, look: Dynamic| {
+        let (mut parts, mut face, mut decal) = (BTreeMap::new(), None, None);
+        if !look.is_unit() {
+            let Some(look) = look.try_cast::<Map>() else {
+                return fail("set_avatar_parts takes #{ slot: part, face: name, decal: name } or ()");
+            };
+            for (slot, name) in look {
+                let name = name.into_string().map_err(|_| "a part, face or decal is its name")?;
+                match slot.as_str() {
+                    "face" => face = Some(name),
+                    "decal" => decal = Some(name),
+                    s if crate::ops::AVATAR_PARTS.contains(&s) => {
+                        parts.insert(s.to_owned(), name);
+                    }
+                    s => {
+                        return fail(format!(
+                            "`{s}` is not an avatar part slot ({}), face or decal",
+                            crate::ops::AVATAR_PARTS.join(", ")
+                        ));
+                    }
+                }
+            }
+        }
+        push(Op::SetAvatarParts {
+            player: id(&player)?,
+            parts,
+            face,
+            decal,
+        })
+    });
     // temp_look(player, look, seconds): for a while every colour slot
     // #{ color: [r, g, b, a] } or palette colour #{ paint: n } (and no
     // decal), a face #{ face: "name" },
@@ -2343,18 +2532,112 @@ fn register_presentation(engine: &mut Engine) {
             })
         },
     );
+    // How long `player` waits to respawn, in ms, or () for their
+    // mini-game's time.
+    engine.register_fn("set_respawn_time", |player: Dynamic, ms: Dynamic| {
+        let ms = if ms.is_unit() {
+            None
+        } else {
+            Some(
+                ms.as_int()
+                    .ok()
+                    .and_then(|ms| u32::try_from(ms).ok())
+                    .filter(|ms| *ms <= crate::ops::MAX_RESPAWN_MS)
+                    .ok_or("a respawn time is 0 to 999999 ms, or ()")?,
+            )
+        };
+        push(Op::SetRespawnTime {
+            player: id(&player)?,
+            ms,
+        })
+    });
+    engine.register_fn("hold_respawn", |player: Dynamic, held: bool| {
+        push(Op::HoldRespawn {
+            player: id(&player)?,
+            held,
+        })
+    });
+    // A rule's `watch`: the frozen orbit camera (`orbit_camera` below)
+    // around `target` at the corpse camera's distance, which the wheel
+    // does not zoom; `watch(p, ())` hands back any rules camera.
+    engine.register_fn("watch", |player: Dynamic, target: Dynamic| {
+        let at = crate::ops::WATCH_DISTANCE;
+        push(Op::OrbitCamera {
+            player: id(&player)?,
+            body: crate::ops::OrbitBody::Frozen,
+            orbit: Some(crate::ops::Orbit {
+                target: id(&target)?,
+                min: at,
+                max: at,
+                distance: at,
+            }),
+        })
+    });
+    engine.register_fn("watch", |player: Dynamic, _: ()| {
+        push(Op::OrbitCamera {
+            player: id(&player)?,
+            body: crate::ops::OrbitBody::Frozen,
+            orbit: None,
+        })
+    });
+    // A camera path (`PathCamera`): `knots` is an array of
+    // `#{ at: [x, y, z], yaw, pitch, speed, type, path, jump }`, `type`
+    // "normal", "kink" or "position", `path` "spline" or "linear".
+    engine.register_fn("follow_path", |player: Dynamic, knots: Array| {
+        push(Op::FollowPath {
+            player: id(&player)?,
+            knots: Some(knots.iter().map(path_knot).collect::<Fallible<_>>()?),
+        })
+    });
+    engine.register_fn("follow_path", |player: Dynamic, _: ()| {
+        push(Op::FollowPath {
+            player: id(&player)?,
+            knots: None,
+        })
+    });
+    // A spectator's free camera from where their camera is, and an orbit
+    // `distance` units out around a point; `watch(p, ())` ends either.
+    engine.register_fn("free_camera", |player: Dynamic| {
+        push(Op::Camera {
+            player: id(&player)?,
+            camera: crate::ops::CameraOp::Free,
+        })
+    });
+    engine.register_fn(
+        "orbit_point",
+        |player: Dynamic, at: Array, distance: Dynamic| {
+            push(Op::Camera {
+                player: id(&player)?,
+                camera: crate::ops::CameraOp::Point {
+                    at: vector(&at)?,
+                    distance: float(&distance)?,
+                },
+            })
+        },
+    );
     engine.register_fn("set_look_limits", |player: Dynamic, _: ()| {
         push(Op::SetLookLimits {
             player: id(&player)?,
             limits: None,
         })
     });
+    /// `"acts"` (the default) or `"frozen"`: see [`crate::ops::OrbitBody`].
+    fn orbit_body(body: &str) -> Fallible<crate::ops::OrbitBody> {
+        match body {
+            "acts" => Ok(crate::ops::OrbitBody::Acts),
+            "frozen" => Ok(crate::ops::OrbitBody::Frozen),
+            _ => fail(format!(
+                "an orbit camera's body \"acts\" or is \"frozen\", not \"{body}\""
+            )),
+        }
+    }
     fn orbit_camera(
         player: Dynamic,
         target: Dynamic,
         min: Dynamic,
         max: Dynamic,
         distance: Dynamic,
+        body: crate::ops::OrbitBody,
     ) -> Fallible<()> {
         let range = crate::ops::ORBIT_DISTANCE;
         let units = |v: &Dynamic| -> Fallible<u8> {
@@ -2379,22 +2662,56 @@ fn register_presentation(engine: &mut Engine) {
         }
         push(Op::OrbitCamera {
             player: id(&player)?,
+            body,
             orbit: Some(orbit),
         })
     }
+    // `orbit_camera(p, target[, nearest, farthest], distance[, body])`,
+    // `body` "acts" (the default: the click still reaches `on_activate`)
+    // or "frozen" (`watch`'s: keys go to `on_observer`);
+    // `orbit_camera(p, ()[, body])` ends that kind.
     engine.register_fn(
         "orbit_camera",
         |player: Dynamic, target: Dynamic, distance: Dynamic| {
-            orbit_camera(player, target, distance.clone(), distance.clone(), distance)
+            let body = crate::ops::OrbitBody::Acts;
+            orbit_camera(player, target, distance.clone(), distance.clone(), distance, body)
         },
     );
-    engine.register_fn("orbit_camera", orbit_camera);
+    engine.register_fn(
+        "orbit_camera",
+        |player: Dynamic, target: Dynamic, min: Dynamic, max: Dynamic, distance: Dynamic| {
+            let body = crate::ops::OrbitBody::Acts;
+            orbit_camera(player, target, min, max, distance, body)
+        },
+    );
+    engine.register_fn(
+        "orbit_camera",
+        |player: Dynamic,
+         target: Dynamic,
+         min: Dynamic,
+         max: Dynamic,
+         distance: Dynamic,
+         body: rhai::ImmutableString| {
+            orbit_camera(player, target, min, max, distance, orbit_body(&body)?)
+        },
+    );
     engine.register_fn("orbit_camera", |player: Dynamic, _: ()| {
         push(Op::OrbitCamera {
             player: id(&player)?,
+            body: crate::ops::OrbitBody::Acts,
             orbit: None,
         })
     });
+    engine.register_fn(
+        "orbit_camera",
+        |player: Dynamic, _: (), body: rhai::ImmutableString| {
+            push(Op::OrbitCamera {
+                player: id(&player)?,
+                body: orbit_body(&body)?,
+                orbit: None,
+            })
+        },
+    );
     engine.register_fn("mount_image", |player: Dynamic, image: Dynamic| {
         push(Op::MountImage {
             player: id(&player)?,
@@ -2800,6 +3117,16 @@ fn register_physics(engine: &mut Engine) {
     });
 }
 
+/// Whether `source` compiles as a package script, with the line of the
+/// first problem: for tools that write scripts (an Add-On port's rules)
+/// to refuse one the game would not load.
+pub fn check_syntax(source: &str) -> Result<(), String> {
+    sandbox().compile(source).map(drop).map_err(|e| match e.1.line() {
+        Some(line) => format!("line {line}: {}", e.0),
+        None => e.0.to_string(),
+    })
+}
+
 fn sandbox() -> Engine {
     use rhai::packages::{
         BasicArrayPackage, BasicMapPackage, BasicMathPackage, BasicStringPackage, CorePackage,
@@ -2931,6 +3258,12 @@ impl Runtime {
             if behaviour.on_leave {
                 need("on_leave".into(), 1, "on_leave");
             }
+            if behaviour.on_path_node {
+                need("on_path_node".into(), 2, "on_path_node");
+            }
+            if behaviour.on_observer {
+                need("on_observer".into(), 2, "on_observer");
+            }
             if behaviour.on_damage {
                 need("on_damage".into(), 4, "on_damage");
             }
@@ -2949,6 +3282,22 @@ impl Runtime {
             if behaviour.on_projectile_hit {
                 need("on_projectile_hit".into(), 1, "on_projectile_hit");
             }
+            if behaviour.on_minigame {
+                need("on_minigame".into(), 1, "on_minigame");
+            }
+            if behaviour.on_pick_spawn {
+                need("on_pick_spawn".into(), 1, "on_pick_spawn");
+            }
+            if !behaviour.zones.is_empty() {
+                need("on_zone".into(), 3, "zones");
+            }
+            if !behaviour.brick_outputs.is_empty() {
+                need("on_brick_output".into(), 4, "brick_outputs");
+            }
+            let follows = behaviour.brick_inputs.iter().any(|i| i.follows.is_some());
+            if follows {
+                need("on_brick_input".into(), 3, "brick_inputs that follow an input");
+            }
             if behaviour.on_copy {
                 need("on_copy".into(), 2, "on_copy");
             }
@@ -2958,8 +3307,14 @@ impl Runtime {
             if behaviour.on_activate {
                 need("on_activate".into(), 1, "on_activate");
             }
+            if behaviour.on_event_row {
+                need("on_event_row".into(), 3, "on_event_row");
+            }
             if behaviour.on_trigger {
                 need("on_trigger".into(), 3, "on_trigger");
+            }
+            if behaviour.on_drop_key {
+                need("on_drop_key".into(), 1, "on_drop_key");
             }
             for policy in &behaviour.policies {
                 need(format!("allow_{policy}"), 1, &format!("policy `{policy}`"));
@@ -2972,6 +3327,21 @@ impl Runtime {
             }
             for e in package.entities.values() {
                 need(e.think.clone(), 1, &format!("entity `{}`", e.name));
+            }
+            let adds_events = follows
+                || !behaviour.brick_outputs.is_empty()
+                || !behaviour.brick_targets.is_empty();
+            if adds_events && !package.manifest.capabilities.iter().any(|c| c == "brick_events")
+            {
+                problems.push(
+                    Diagnostic::error(
+                        "behaviour.brick_outputs",
+                        "brick_outputs, brick_targets and inputs that follow another need the \
+                         `brick_events` capability",
+                    )
+                    .at(location(id, &behaviour.script))
+                    .hint("add \"brick_events\" to the manifest's capabilities"),
+                );
             }
             runtime.scripts.insert(id.clone(), Arc::new(ast));
             runtime.sources.insert(id.clone(), behaviour.script.clone());

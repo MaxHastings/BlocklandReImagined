@@ -1449,11 +1449,15 @@ impl Building {
                     self.fire(player, &mut out)?;
                 }
             }
-            UiAction::Game(GameAction::DropTool) => {
-                let slot = self.active_tool.context("No selected tool to drop")?;
-                self.slot_equipment(slot)?;
-                out.commands.push(Command::DropTool { slot });
-            }
+            // With nothing in hand the key still goes to the host, for
+            // Add-Ons' rules (a carried flag).
+            UiAction::Game(GameAction::DropTool) => match self.active_tool {
+                Some(slot) => {
+                    self.slot_equipment(slot)?;
+                    out.commands.push(Command::DropTool { slot });
+                }
+                None => out.commands.push(Command::DropKey),
+            },
             UiAction::Game(GameAction::ShiftBrick { x, y, z })
             | UiAction::Game(GameAction::SuperShiftBrick { x, y, z }) => {
                 ensure!(
@@ -2847,6 +2851,14 @@ mod tests {
         inventory.selected = None;
         b.sync_tools(&inventory).unwrap();
         assert_eq!(b.equipment(), &Equipment::None);
+        // With tools put away the key still goes to the host, for Add-Ons.
+        assert!(matches!(
+            &b.ui_action(&UiAction::Game(GameAction::DropTool), &player())
+                .unwrap()
+                .unwrap()
+                .commands[..],
+            [Command::DropKey]
+        ));
         inventory.slots[0] = Some("v20.weapon.wanditem".into());
         let updates = b.sync_tools(&inventory).unwrap();
         assert!(

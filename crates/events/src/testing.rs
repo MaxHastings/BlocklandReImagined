@@ -24,6 +24,7 @@ pub fn catalog() -> Catalog {
         append_client: false,
         source: "fixture".into(),
         source_line: 1,
+        package: None,
     };
     let player = [
         ("Self", "fxDTSBrick"),
@@ -119,6 +120,7 @@ pub fn catalog() -> Catalog {
                 ],
             ),
         ],
+        targets: vec![],
         sources: vec![],
         scope: serde_json::Value::Null,
     }

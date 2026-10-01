@@ -1,0 +1,128 @@
+{
+ "schema_version": 1,
+ "id": "plane",
+ "nodes": [
+  {
+   "name": "root",
+   "parent": null,
+   "translation": [
+    0,
+    0,
+    0
+   ],
+   "rotation": [
+    0,
+    0,
+    0,
+    1
+   ]
+  }
+ ],
+ "objects": [
+  {
+   "name": "body",
+   "node": 0,
+   "meshes": [
+    0
+   ],
+   "visibility": 1.0,
+   "frame": 0,
+   "material_frame": 0
+  }
+ ],
+ "details": [
+  {
+   "name": "detail1",
+   "pixel_threshold": 0.0,
+   "object_start": 0,
+   "object_count": 1,
+   "mesh_offset": 0,
+   "collision": false
+  }
+ ],
+ "meshes": [
+  {
+   "frame_vertices": 3,
+   "positions": [
+    [
+     0,
+     0,
+     0
+    ],
+    [
+     1,
+     0,
+     0
+    ],
+    [
+     0,
+     1,
+     0
+    ]
+   ],
+   "normals": [
+    [
+     0,
+     0,
+     1
+    ],
+    [
+     0,
+     0,
+     1
+    ],
+    [
+     0,
+     0,
+     1
+    ]
+   ],
+   "uv": [
+    [
+     0,
+     0
+    ],
+    [
+     1,
+     0
+    ],
+    [
+     0,
+     1
+    ]
+   ],
+   "primitives": [
+    {
+     "material": 0,
+     "triangles": [
+      [
+       0,
+       1,
+       2
+      ]
+     ]
+    }
+   ],
+   "skin": null,
+   "billboard": false,
+   "billboard_y": false
+  }
+ ],
+ "materials": [
+  {
+   "name": "blank",
+   "wrap_u": true,
+   "wrap_v": true,
+   "blend": "opaque",
+   "unlit": false,
+   "environment": false,
+   "mipmaps": true,
+   "detail_map": null,
+   "bump_map": null,
+   "reflectance_map": null,
+   "detail_scale": 1.0,
+   "reflectance": 0.0
+  }
+ ],
+ "animations": []
+}

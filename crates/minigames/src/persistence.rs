@@ -119,6 +119,10 @@ impl MinigamesWorld {
         let mut colors = BTreeSet::new();
         for g in s.games {
             g.settings.validate(&world.catalog)?;
+            g.teams.validate()?;
+            if !crate::model::valid_addon_settings(&g.addon_settings) {
+                return Err(Error::InvalidSnapshot);
+            }
             if g.id.0 == 0
                 || g.id.0 >= s.next_game
                 || g.color >= 10
@@ -144,6 +148,9 @@ impl MinigamesWorld {
                     .games
                     .get(&id)
                     .is_none_or(|g| !g.members.contains(&p.id))
+            }) || p.team.is_some_and(|t| {
+                p.game
+                    .is_none_or(|id| world.games[&id].teams.get(t).is_none())
             }) || p
                 .invite
                 .is_some_and(|id| !world.games.contains_key(&id) || p.game == Some(id))

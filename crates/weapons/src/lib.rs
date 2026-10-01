@@ -408,7 +408,9 @@ pub struct Image {
     pub both_arms: bool,
     /// Held, the image takes its holder's spray colour (the palette colour
     /// they last picked) as a colour spray can does: a tool that paints
-    /// with that colour shows it.
+    /// with that colour shows it. Its item on a brick shows the brick's
+    /// colour, and worn or dropped by an Add-On's rules it shows the colour
+    /// they give (a team's flag).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub paint_tint: bool,
     /// While its holder hangs on a rope (`tether`), each player's game
@@ -429,7 +431,25 @@ pub struct Image {
     /// did.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub scripts: BTreeMap<String, Script>,
+    /// The light it gives off while mounted on a player (`hasLight`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub light: Option<ImageLight>,
 }
+/// A mounted image's light ([`Image::light`]): v20's `ConstantLight`
+/// image light, a point light at the image (Capture the Flag's flag glows
+/// in its team's colour on the carrier's back).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImageLight {
+    /// Units, above 0 and at most [`MAX_IMAGE_LIGHT_RADIUS`]
+    /// (`lightRadius`).
+    pub radius: f32,
+    /// RGB from 0 to 1 (`lightColor`). Worn in a paint colour (a
+    /// `paint_tint` image), the light takes that colour too.
+    pub color: [f32; 3],
+}
+/// Largest radius an image's light may have, units.
+pub const MAX_IMAGE_LIGHT_RADIUS: f32 = 100.0;
 /// How a held image's rope is drawn ([`Image::rope`]): the trail of the
 /// projectile v20 fired along it, swept from the image's muzzle to the
 /// rope's anchor every frame, laying as many particles along the rope as
@@ -468,7 +488,7 @@ pub struct Script {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub use_up: bool,
 }
-/// An arm animation name: letters, digits and `_`, up to 64 bytes.
+/// A sequence name (an arm animation, an idle loop): letters, digits and `_`, up to 64 bytes.
 fn is_sequence_name(name: &str) -> bool {
     name.len() <= 64 && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
 }
@@ -630,6 +650,11 @@ pub struct Item {
     pub icon: String,
     pub can_drop: bool,
     pub sport: bool,
+    /// The sequence the item's shape loops while it lies in the world, as
+    /// a script's `%obj.playThread(0, <sequence>)` in `ItemData::onAdd`
+    /// did (Slayer CTF's waving flag). Empty: it lies still.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub idle: String,
 }
 impl Default for Item {
     fn default() -> Self {
@@ -642,6 +667,7 @@ impl Default for Item {
             icon: String::new(),
             can_drop: true,
             sport: false,
+            idle: String::new(),
         }
     }
 }
@@ -1110,6 +1136,10 @@ impl Pack {
                     && !item.ui_name.chars().any(char::is_control),
                 "Item {id} needs a ui_name: the name players pick it by"
             );
+            ensure!(
+                item.idle.is_empty() || is_sequence_name(&item.idle),
+                "Item {id}'s idle sequence must be a sequence name"
+            );
         }
         for (id, image) in &self.images {
             ensure!(
@@ -1157,6 +1187,14 @@ impl Pack {
                     .into_iter()
                     .all(|c| c.as_deref().is_none_or(is_image_command)),
                 "Invalid image command {id}"
+            );
+            ensure!(
+                image.light.is_none_or(|l| {
+                    l.radius > 0.0
+                        && l.radius <= MAX_IMAGE_LIGHT_RADIUS
+                        && l.color.iter().all(|c| (0.0..=1.0).contains(c))
+                }),
+                "Invalid image light {id}: radius above 0 to {MAX_IMAGE_LIGHT_RADIUS}, colour 0 to 1"
             );
             ensure!(
                 image.rope.as_ref().is_none_or(|r| {

@@ -24,8 +24,17 @@ use bri_package_runtime::{
 use bri_world::MAX_BRICKS;
 use std::sync::Arc;
 
+mod brick_events;
+mod brick_fields;
+pub(in crate::session) use brick_events::Follower;
+mod game_hooks;
 pub(super) mod copy_hooks;
 mod item_hooks;
+mod reports;
+mod settings;
+pub use settings::{AddOnSetting, MAX_ADDON_SETTINGS, SettingEdit, TeamEdit};
+pub(in crate::session) use settings::Editor;
+
 pub(super) use item_hooks::Pickup;
 
 /// Collider tag kind for package entities (players are 1, vehicles 2).
@@ -328,6 +337,14 @@ pub(super) struct PackageHost {
     in_damage_hook: bool,
     /// Pending `on_projectile_hit` calls and what dropped items carry.
     item_hooks: item_hooks::ItemHooks,
+    /// Pending `on_minigame` events and who stands in each zone.
+    game_hooks: game_hooks::GameHooks,
+    /// Values rules keep on bricks (`set_brick_field`).
+    brick_fields: brick_fields::BrickFields,
+    /// Score reports to send and the columns games changed.
+    reports: reports::Reports,
+    /// Every running Add-On's settings.
+    settings: settings::Registry,
     copy_hooks: copy_hooks::CopyHooks,
     /// Per-origin shares of the server's package capacity (stress campaign
     /// W1): no one package, or one player's commands, can take a pool
@@ -551,6 +568,12 @@ fn archetype(
     if let Some(v) = def.camera_distance {
         archetype.look.camera_distance = v;
     }
+    if let Some(v) = def.third_person_only {
+        archetype.look.third_person_only = v;
+    }
+    if let Some(v) = def.uses_items {
+        archetype.uses_items = v;
+    }
     archetype.validate()?;
     Ok(archetype)
 }
@@ -640,6 +663,7 @@ impl Session {
             .filter(|(id, _)| runtime.has_script(id))
             .count();
         let state_bytes = store.stored_size();
+        let settings = settings::Registry::build(&catalog)?;
         self.package_revision += 1;
         self.packages = Some(Box::new(PackageHost {
             catalog,
@@ -656,6 +680,10 @@ impl Session {
             spawns: VecDeque::new(),
             in_damage_hook: false,
             item_hooks: Default::default(),
+            game_hooks: Default::default(),
+            brick_fields: Default::default(),
+            reports: Default::default(),
+            settings,
             copy_hooks: Default::default(),
             shares: Shares::new(scripts),
             script_time: BTreeMap::new(),
@@ -664,6 +692,12 @@ impl Session {
             hooks_paused: BTreeMap::new(),
             view: None,
         }));
+        // Their wrench event inputs join the host's catalog.
+        if let Err(error) = self.refresh_event_bindings() {
+            self.packages = None;
+            self.refresh_event_bindings()?;
+            return Err(error);
+        }
         let Some(view) = self
             .packages
             .as_ref()
@@ -917,6 +951,7 @@ impl Session {
             .map(|(image, state)| (image.id.clone(), state.name.clone()))
             .unwrap_or_default();
         let state = p.player.state();
+        let camera = self.control_view(p);
         let tuning = p.player.tuning();
         let height = if state.crouched {
             tuning.crouch_height
@@ -932,6 +967,9 @@ impl Session {
             admin: p.actor.administrator,
             eye: p.player.eye().to_array(),
             look: p.player.state().forward().to_array(),
+            camera: camera.eye,
+            camera_yaw: camera.yaw,
+            camera_pitch: camera.pitch,
             velocity: p.player.state().velocity,
             item,
             minigame: self
@@ -977,6 +1015,11 @@ impl Session {
             bot: self.bots.is_bot(owner),
             bot_owner: self.bot_brick_owner(owner),
             riding: self.riding_seat(owner),
+            team: self.minigames.team_of(p.combat.player).map(|t| u64::from(t.0)),
+            score: self
+                .minigames
+                .player(p.combat.player)
+                .map_or(0, |m| m.score),
             copy_working: self.copy_working(owner),
             copy: self.copies.get(&owner).map(|c| {
                 let bricks = self.blueprints.get(&owner).map_or(0, |b| b.len());
@@ -1024,6 +1067,7 @@ impl Session {
                 .unwrap_or_default(),
             objects: self.movable_views(),
             holds: self.hold_views(),
+            minigames: self.script_minigames(),
             tethers: self.tether_views(),
         }
     }
@@ -1107,7 +1151,7 @@ impl Session {
         let input = state.clone();
         // Scripts ask the live world mid-call (`raycast`, `can_damage`), so
         // the session is only read while the script runs.
-        let world = super::script_world::ScriptWorld::new(self);
+        let world = super::script_world::ScriptWorld::new(self, package);
         let call = Call {
             function,
             args,
@@ -1320,6 +1364,17 @@ impl Session {
                 peer.uniform = colors;
                 Ok(())
             }
+            Op::SetAvatarParts {
+                player,
+                parts,
+                face,
+                decal,
+            } => {
+                let peer = self.peers.get_mut(&player).context("No such player")?;
+                peer.uniform_parts = (!parts.is_empty() || face.is_some() || decal.is_some())
+                    .then_some(UniformParts { parts, face, decal });
+                Ok(())
+            }
             Op::Explode {
                 position,
                 radius,
@@ -1500,6 +1555,36 @@ impl Session {
                 let _ = tick;
                 self.take_chat_line(package, caller)?;
                 self.system_chat(text);
+                Ok(())
+            }
+            Op::TellMinigame { game, text, except } => {
+                let members = self.minigame_members(game)?;
+                self.take_chat_line(package, caller)?;
+                for owner in members.into_iter().filter(|o| Some(*o) != except) {
+                    self.notify(owner, Notice::Chat(text.clone()));
+                }
+                Ok(())
+            }
+            Op::PrintMinigame {
+                game,
+                text,
+                seconds,
+                bottom,
+            } => {
+                let members = self.minigame_members(game)?;
+                self.take_cue(package)?;
+                let notice = if bottom {
+                    Notice::Bottom {
+                        text,
+                        seconds,
+                        hide_bar: false,
+                    }
+                } else {
+                    Notice::Center { text, seconds }
+                };
+                for owner in members {
+                    self.notify(owner, notice.clone());
+                }
                 Ok(())
             }
             Op::CopyBuild {
@@ -1884,12 +1969,38 @@ impl Session {
                 ensure!(self.peers.contains_key(&player), "No such player");
                 self.give_tool(player, &item, equip)
             }
+            Op::SetTools { player, tools } => self.package_set_tools(player, tools),
             Op::TakeItem { player, item } => self.package_take_item(player, &item),
             Op::DropItem {
                 item,
                 position,
                 velocity,
-            } => self.package_drop_item(package, &item, position, velocity),
+                paint,
+                data,
+                seconds,
+            } => self.package_drop_item(package, &item, position, velocity, paint, data, seconds),
+            Op::RemoveDrop { drop } => self.package_remove_drop(package, drop),
+            Op::NameDrop { drop, text, color } => self.package_name_drop(package, drop, text, color),
+            Op::ShowReport { player, report } => self.package_show_report(package, player, report),
+            Op::ReportColumn { game, change } => self.package_report_column(game, change),
+            Op::WearImage {
+                player,
+                slot,
+                image,
+                paint,
+            } => {
+                let peer = self.peers.get(&player).context("No such player")?;
+                ensure!(peer.combat.alive, "Only living players wear things");
+                if let Some(image) = &image {
+                    let host = self.packages.as_ref().context("No packages are enabled")?;
+                    ensure!(
+                        item_hooks::owns(&host.catalog, package, image),
+                        "`{image}` is not an image of `{package}` or an Add-On it depends on"
+                    );
+                }
+                self.weapons
+                    .wear(bri_weapons::ActorId(player), slot, image.as_deref(), paint)
+            }
             op @ (Op::Push { .. }
             | Op::Tumble { .. }
             | Op::Hold { .. }
@@ -1995,13 +2106,14 @@ impl Session {
                 text,
                 seconds,
                 bottom,
+                hide_bar,
             } => {
                 self.take_cue(package)?;
                 let notice = if bottom {
                     Notice::Bottom {
                         text,
                         seconds,
-                        hide_bar: false,
+                        hide_bar,
                     }
                 } else {
                     Notice::Center { text, seconds }
@@ -2123,6 +2235,62 @@ impl Session {
                     None => self.weapons.swap_image(actor, None),
                 }
             }
+            op @ (Op::SetTeams { .. }
+            | Op::SetTeam { .. }
+            | Op::SetScore { .. }
+            | Op::ResetMinigame { .. }
+            | Op::HoldRespawn { .. }
+            | Op::EndRound { .. }) => self.apply_minigame_op(op),
+            Op::SetSetting {
+                game,
+                team,
+                key,
+                value,
+            } => self.package_set_setting(package, game, team, key, value),
+            Op::SetBrickItem { brick, item } => {
+                if let Some(item) = &item {
+                    let host = self.packages.as_ref().context("No packages are enabled")?;
+                    ensure!(
+                        item.starts_with("v20/") || item_hooks::owns(&host.catalog, package, item),
+                        "`{item}` is not an item of `{package}` or an Add-On it depends on"
+                    );
+                }
+                self.package_set_brick_item(brick, item, caller)
+            }
+            Op::SetBrickColor { brick, color } => {
+                self.package_set_brick_color(brick, color, caller)
+            }
+            Op::SetBrickField { brick, key, value } => {
+                self.package_set_brick_field(package, brick, &key, value)
+            }
+            Op::FollowPath { player, knots } => self.follow_path(
+                package,
+                player,
+                knots.map(|k| k.iter().map(super::camera_path::Knot::from_op).collect()),
+            ),
+            Op::Camera { player, camera } => self.rules_camera(
+                player,
+                match camera {
+                    bri_package_runtime::ops::CameraOp::Free => super::RulesCamera::Free,
+                    bri_package_runtime::ops::CameraOp::Point { at, distance } => {
+                        super::RulesCamera::Point(super::OrbitPoint { at, distance })
+                    }
+                },
+            ),
+            Op::SetZonePeriod { zone, period_ms } => {
+                self.package_set_zone_period(package, zone, period_ms)
+            }
+            Op::FireBrickInput {
+                brick,
+                input,
+                player,
+            } => self.package_fire_brick_input(package, brick, &input, player),
+            Op::FireGameInput {
+                game,
+                input,
+                player,
+                killer,
+            } => self.package_fire_game_input(package, game, &input, player, killer),
             Op::UnmountImage { player } => self.put_away_hand(player),
             Op::MountObject {
                 mount,
@@ -2162,12 +2330,21 @@ impl Session {
                 self.follow_player_mounts();
                 Ok(())
             }
+            Op::SetRespawnTime { player, ms } => {
+                let peer = self.peers.get_mut(&player).context("No such player")?;
+                peer.respawn_ms = ms;
+                Ok(())
+            }
             Op::SetLookLimits { player, limits } => {
                 let peer = self.peers.get_mut(&player).context("No such player")?;
                 peer.look_limits = limits;
                 Ok(())
             }
-            Op::OrbitCamera { player, orbit } => self.orbit_camera(player, orbit),
+            Op::OrbitCamera {
+                player,
+                body,
+                orbit,
+            } => self.orbit_camera(player, body, orbit),
             Op::Sound { profile, at } => {
                 self.take_cue(package)?;
                 match at {
@@ -2883,8 +3060,15 @@ impl Session {
             .collect::<Result<_>>()?;
         let mut args = Vec::with_capacity(def.args.len());
         for (i, kind) in def.args.iter().enumerate() {
-            let Some(word) = words.get(i) else { break };
             let last = i + 1 == def.args.len();
+            let Some(word) = words.get(i) else {
+                // A final `string` takes the rest of the line, which may be
+                // nothing (`/teams` alone, as v20's `serverCmdTeams`).
+                if last && *kind == ArgType::String {
+                    args.push(PackageArg::String(String::new()));
+                }
+                break;
+            };
             args.push(match kind {
                 ArgType::String if last => PackageArg::String(words[i..].join(" ")),
                 ArgType::Int => word
@@ -3160,12 +3344,39 @@ impl Session {
 
     /// Package work for one tick: entity thinking and movement, world
     /// streaming around players, and `on_tick` hooks.
+    /// `on_path_node(player, knot)` for each knot a rule's camera path
+    /// reached (`PathCameraData::onNode`).
+    fn step_paths(&mut self) {
+        for (package, owner, knot) in self.knots_reached() {
+            let listens = self.packages.as_ref().is_some_and(|host| {
+                host.catalog
+                    .behaviours()
+                    .any(|(id, b)| *id == package && b.on_path_node)
+            });
+            if !listens {
+                continue;
+            }
+            let _ = self.run_package(
+                &package,
+                "on_path_node",
+                vec![Dynamic::from_int(owner as i64), Dynamic::from_int(knot as i64)],
+                Budget::Command,
+                None,
+                None,
+                None,
+            );
+            self.charge_work(&package);
+        }
+    }
     pub(super) fn step_packages(&mut self) -> Result<()> {
         self.deliver_image_mounts();
         self.deliver_deaths();
         self.deliver_loadouts();
         self.deliver_spawns();
         self.deliver_hits();
+        self.deliver_minigame_events();
+        self.step_zones();
+        self.step_paths();
         self.step_saved_copies();
         self.deliver_copy_reports();
         let changed = self.dirty.read(super::dirty::Reader::Packages);
@@ -3188,6 +3399,11 @@ impl Session {
             self.forget_voxel(id);
         }
         let host = self.packages.as_mut().expect("checked");
+        for id in &changed {
+            if !self.simulation.state().bricks.contains_key(id) {
+                host.brick_fields.forget(*id);
+            }
+        }
         let hooks: Vec<String> = host
             .catalog
             .behaviours()
@@ -3350,6 +3566,7 @@ impl Session {
                 }
             }
         }
+        self.flush_reports();
         Ok(())
     }
 
@@ -3493,6 +3710,16 @@ impl Session {
             ],
         )
     }
+    /// `on_drop_key(player)` of every package that declares it, in load
+    /// order, until one takes the key (returns `true`).
+    pub(super) fn package_drop_key(&mut self, owner: OwnerId) -> bool {
+        self.package_take(
+            owner,
+            |b| b.on_drop_key,
+            "on_drop_key",
+            vec![Dynamic::from_int(owner as i64)],
+        )
+    }
     /// Ask a player's input hook of each declaring package, in load order,
     /// until one answers `true`. Bots have no input to take.
     fn package_take(
@@ -3530,6 +3757,34 @@ impl Session {
             }
         }
         false
+    }
+    /// `on_observer(player, button)` of every package that declares it, in
+    /// load order, until one takes the key (returns `true`).
+    pub(super) fn package_observer(&mut self, owner: OwnerId, button: super::ObserverButton) {
+        let Some(host) = self.packages.as_ref() else {
+            return;
+        };
+        let hooks: Vec<String> = host
+            .catalog
+            .behaviours()
+            .filter(|(_, b)| b.on_observer)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for package in hooks {
+            let reply = self.run_package(
+                &package,
+                "on_observer",
+                vec![Dynamic::from_int(owner as i64), button.name().into()],
+                Budget::Command,
+                Some(owner),
+                None,
+                None,
+            );
+            self.charge_work(&package);
+            if matches!(reply, Ok(v) if v.as_bool() == Ok(true)) {
+                return;
+            }
+        }
     }
     /// `on_leave(player)` as `owner` leaves, while they are still readable.
     pub(super) fn package_leave(&mut self, owner: OwnerId) {

@@ -7,6 +7,8 @@ use bri_world::OwnerId;
 use glam::{Quat, Vec3};
 use serde::{Deserialize, Serialize};
 
+pub use bri_package_runtime::ops::OrbitBody;
+
 /// What a connection's moves steer. Replicated in [`super::Vitals`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
@@ -23,24 +25,85 @@ pub enum ControlObject {
     /// `Corpse` camera after death: orbits the player's own body until
     /// respawn, so the corpse takes no more input.
     Corpse,
-    /// An Add-On's orbit camera around another player (`orbit_camera`;
-    /// v20's `%client.camera.setOrbitMode(%target, %xform, %min, %max,
-    /// %cur)` then `setControlObject(%client.camera)`): `distance` units
-    /// out, which the wheel zooms between `min` and `max`. The body takes
-    /// no moves, the camera does not hand control back on a click (the
-    /// click still reaches Add-Ons as an empty-hand trigger), and only the
+    /// An Add-On's orbit camera around a player's body (`orbit_camera`,
+    /// `watch`; v20's `%client.camera.setOrbitMode(%target, %xform, %min,
+    /// %max, %cur)` then `setControlObject(%client.camera)`): `distance`
+    /// units out, which the wheel zooms between `min` and `max`. The body
+    /// takes no moves and the camera does not hand control back on a
+    /// click; `body` says where the click goes ([`OrbitBody`]). Only the
     /// Add-On or the target leaving ends it.
     Orbit {
         target: OwnerId,
         min: u8,
         max: u8,
         distance: u8,
+        body: OrbitBody,
     },
     /// A package entity (a kart, a drone, a second body) that a package
     /// handed this player (`control(player, entity)`). The player's moves
     /// drive that entity's body with its archetype's movement; the avatar
     /// stands where it was.
     Entity(u64),
+    /// A rule's path camera (`follow_path`): the camera flies the path in
+    /// [`super::Vitals::camera_path`] while the body stands still.
+    Path,
+    /// A rule's free camera (`free_camera`, `Camera::setMode("Observer")`
+    /// for a spectator): flown and reported like the admin camera, without
+    /// its orb or its drop.
+    Observer,
+    /// A rule's orbit around a point (`orbit_point`,
+    /// `Camera::setOrbitPointMode`), at [`super::Vitals::camera_point`].
+    Point,
+}
+
+impl ControlObject {
+    /// The cameras rules hand out and take back (`watch`, `follow_path`,
+    /// `free_camera`, `orbit_point`) besides the body itself: the player's
+    /// keys go to the rules (`on_observer`). An admin's cameras, a driven
+    /// entity and an orbit whose body still acts are not among them.
+    pub fn rules_camera(self) -> bool {
+        matches!(
+            self,
+            Self::Corpse
+                | Self::Path
+                | Self::Observer
+                | Self::Point
+                | Self::Orbit {
+                    body: OrbitBody::Frozen,
+                    ..
+                }
+        )
+    }
+}
+
+/// The point a [`ControlObject::Point`] camera circles, and how far out.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OrbitPoint {
+    pub at: [f32; 3],
+    pub distance: f32,
+}
+
+impl OrbitPoint {
+    /// Nearest and farthest a point camera sits from its point.
+    pub const DISTANCES: std::ops::RangeInclusive<f32> = 0.5..=100.0;
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.at.iter().all(|x| x.is_finite() && x.abs() < 1_000_000.0)
+                && Self::DISTANCES.contains(&self.distance),
+            "Invalid orbit point"
+        );
+        Ok(())
+    }
+}
+
+/// A camera a rule hands a player besides `watch` and `follow_path`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RulesCamera {
+    /// Fly freely from where the camera is now.
+    Free,
+    /// Circle a point.
+    Point(OrbitPoint),
 }
 
 /// `%client.Camera`'s transform: the eye it sits at and where it looks. The
@@ -159,9 +222,15 @@ impl Session {
         let peer = self.peers.get(&owner)?;
         match peer.control {
             ControlObject::Player | ControlObject::Corpse => Some(peer.player.state().feet),
-            ControlObject::Camera => peer
+            // A rule's path and free cameras report their view as the
+            // admin camera does.
+            ControlObject::Camera | ControlObject::Observer | ControlObject::Path => peer
                 .camera
                 .map(|c| c.eye)
+                .or(Some(peer.player.state().feet)),
+            ControlObject::Point => peer
+                .orbit
+                .map(|o| o.at)
                 .or(Some(peer.player.state().feet)),
             ControlObject::Spy(target) | ControlObject::Orbit { target, .. } => {
                 Some(self.peers.get(&target)?.player.state().feet)
@@ -215,44 +284,109 @@ impl Session {
         };
         Ok(())
     }
-    /// Spies watching a departing player return to their own bodies.
-    /// An Add-On's `orbit_camera`: `owner` watches `orbit.target`, or
-    /// (`None`) has their body back. Only a player on their body or in
-    /// another Add-On orbit is given one: an admin camera or a driven
-    /// entity keeps control.
+    /// A rule's `free_camera` or `orbit_point`. Taken only from the body or
+    /// another rules camera, as `watch`'s frozen orbit is.
+    pub(super) fn rules_camera(&mut self, owner: OwnerId, camera: RulesCamera) -> Result<()> {
+        let peer = self.peers.get(&owner).context("No such player")?;
+        ensure!(
+            peer.control.rules_camera() || peer.control == ControlObject::Player,
+            "That player is controlling something else"
+        );
+        let view = self.control_view(peer);
+        let peer = self.peers.get_mut(&owner).context("No such player")?;
+        match camera {
+            RulesCamera::Free => {
+                peer.camera = Some(view);
+                peer.control = ControlObject::Observer;
+            }
+            RulesCamera::Point(point) => {
+                point.validate()?;
+                peer.orbit = Some(point);
+                peer.control = ControlObject::Point;
+            }
+        }
+        Ok(())
+    }
+    /// Whether the body has handed its moves to a camera while it can still
+    /// act (a rules camera, an admin's spy): a body in that state takes no
+    /// actions.
+    pub(super) fn watching(&self, owner: OwnerId) -> bool {
+        self.peers.get(&owner).is_some_and(|p| {
+            p.combat.alive && (p.control.rules_camera() || matches!(p.control, ControlObject::Spy(_)))
+        })
+    }
+    /// An Add-On's `orbit_camera` (and a rule's `watch`, its frozen kind):
+    /// `owner` orbits `orbit.target`'s body, or (`None`) has their body
+    /// back from the kind of camera `body` names. See [`OrbitBody`] for
+    /// who may be given each kind; an admin camera or a driven entity
+    /// always keeps control.
     pub(super) fn orbit_camera(
         &mut self,
         owner: OwnerId,
+        body: OrbitBody,
         orbit: Option<bri_package_runtime::ops::Orbit>,
     ) -> Result<()> {
         let peer = self.peers.get(&owner).context("No such player")?;
+        let acting = |c: ControlObject| {
+            matches!(
+                c,
+                ControlObject::Orbit {
+                    body: OrbitBody::Acts,
+                    ..
+                }
+            )
+        };
         let Some(orbit) = orbit else {
-            if matches!(peer.control, ControlObject::Orbit { .. }) {
+            let ends = match body {
+                OrbitBody::Acts => acting(peer.control),
+                OrbitBody::Frozen => peer.control.rules_camera(),
+            };
+            if ends {
                 self.return_to_body(owner)?;
             }
             return Ok(());
         };
-        ensure!(
-            peer.combat.alive,
-            "Only living players are given an orbit camera"
-        );
-        ensure!(
-            matches!(
-                peer.control,
-                ControlObject::Player | ControlObject::Orbit { .. }
-            ),
-            "That player's camera is in other hands"
-        );
         let target = orbit.target;
         ensure!(orbit.valid(), "Invalid orbit distances");
-        ensure!(target != owner, "A player cannot orbit themselves");
         ensure!(self.peers.contains_key(&target), "No such player to orbit");
-        self.peers.get_mut(&owner).expect("checked").control = ControlObject::Orbit {
-            target,
-            min: orbit.min,
-            max: orbit.max,
-            distance: orbit.distance,
+        let control = match body {
+            OrbitBody::Acts => {
+                ensure!(
+                    peer.combat.alive,
+                    "Only living players are given an orbit camera"
+                );
+                ensure!(
+                    peer.control == ControlObject::Player || acting(peer.control),
+                    "That player's camera is in other hands"
+                );
+                ensure!(target != owner, "A player cannot orbit themselves");
+                ControlObject::Orbit {
+                    target,
+                    min: orbit.min,
+                    max: orbit.max,
+                    distance: orbit.distance,
+                    body,
+                }
+            }
+            OrbitBody::Frozen => {
+                ensure!(
+                    peer.control.rules_camera() || peer.control == ControlObject::Player,
+                    "That player is controlling something else"
+                );
+                if target == owner && !peer.combat.alive {
+                    ControlObject::Corpse
+                } else {
+                    ControlObject::Orbit {
+                        target,
+                        min: orbit.min,
+                        max: orbit.max,
+                        distance: orbit.distance,
+                        body,
+                    }
+                }
+            }
         };
+        self.peers.get_mut(&owner).expect("checked").control = control;
         Ok(())
     }
     /// Whoever watched `target` (an admin spy, an Add-On orbit) has their

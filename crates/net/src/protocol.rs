@@ -558,6 +558,14 @@ pub struct Checkpoint {
     /// v20's player datablocks, then the enabled packages' archetypes.
     /// Poses name a player's archetype by its index here.
     pub archetypes: bri_sim::archetype::Archetypes,
+    /// The running Add-Ons' settings, for the Mini-Game window's Add-On
+    /// Settings; mini-games carry their values.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub addon_settings: Vec<bri_sim::session::AddOnSetting>,
+    /// The running Add-Ons' wrench event inputs, targets and outputs,
+    /// which players' wrench adds to their own catalog.
+    #[serde(default, skip_serializing_if = "bri_events::Extension::is_empty")]
+    pub brick_events: bri_events::Extension,
     /// Entities of enabled packages.
     pub entities: Vec<bri_sim::session::EntityInfo>,
     /// Enabled packages' state as this client sees it: keys visible to
@@ -604,6 +612,8 @@ impl Checkpoint {
             map_lights: session.map_light_rules(),
             environment: session.environment(),
             archetypes: session.archetypes().clone(),
+            addon_settings: session.addon_settings(),
+            brick_events: session.package_brick_events(),
             world_bricks: world.bricks.len() as u64,
             world_chunks: 0,
             world_near_chunks: 0,

@@ -101,6 +101,15 @@ pub struct Simulation {
     refreshes: u64,
     /// Linked bricks and the openings bodies pass through.
     links: crate::links::Links,
+    /// Every brick by its definition: what `bricks_of` answers without
+    /// walking a million-brick world (team spawns, flag stands).
+    kinds: BTreeMap<String, BTreeSet<BrickId>>,
+}
+fn definition_key(brick: &Brick) -> Option<&str> {
+    match &brick.definition {
+        bri_world::ContentRef::Resolved(id) => Some(id),
+        _ => None,
+    }
 }
 fn pose(brick: &Brick) -> Pose {
     grid_pose(brick.position, brick.quarter_turns)
@@ -232,8 +241,12 @@ impl Simulation {
         let mut handles = BTreeMap::new();
         let mut chunks = crate::chunks::Chunks::default();
         let mut brick_waters = BTreeMap::new();
+        let mut kinds: BTreeMap<String, BTreeSet<BrickId>> = BTreeMap::new();
         for (id, brick) in &world.bricks {
             let definition = definitions.get(brick)?;
+            if let Some(key) = definition_key(brick) {
+                kinds.entry(key.to_string()).or_default().insert(*id);
+            }
             if let Some(water) = brick_water(brick, definition) {
                 brick_waters.insert(*id, water);
             }
@@ -264,6 +277,7 @@ impl Simulation {
             terrain: None,
             refreshes: 0,
             links: Default::default(),
+            kinds,
         };
         simulation
             .links
@@ -566,6 +580,7 @@ impl Simulation {
         let ids = self.authority.load_build(actor, plan)?;
         for (id, bounds) in prepared {
             self.index.insert(id, bounds);
+            self.note_kind(id);
             let brick = &self.authority.state().bricks[&id];
             if let Some(water) = brick_water(brick, self.definitions.get(brick)?) {
                 self.brick_waters.insert(id, water);
@@ -589,6 +604,7 @@ impl Simulation {
             validate_placement(world, defs, index, physics, terrain, builder, brick)
         })?;
         self.attach(id)?;
+        self.note_kind(id);
         let brick = &self.authority.state().bricks[&id];
         self.index.insert(id, bounds);
         if let Some(water) = brick_water(brick, self.definitions.get(brick)?) {
@@ -883,6 +899,7 @@ impl Simulation {
         }
         for (&id, bounds) in ids.iter().zip(prepared) {
             self.attach(id)?;
+            self.note_kind(id);
             let brick = &self.authority.state().bricks[&id];
             let definition = self.definitions.get(brick)?;
             self.index.insert(id, bounds);
@@ -1024,6 +1041,7 @@ impl Simulation {
             if let Some(handle) = self.detach(id) {
                 handles.push(handle);
             }
+            self.forget_kind(id);
             self.authority.remove(actor, id)?;
             self.index.remove(id);
             if self.brick_waters.remove(&id).is_some() {
@@ -1260,12 +1278,36 @@ impl Simulation {
         if let Some(handle) = self.detach(id) {
             self.parked.remove(&mut self.physics, &[handle]);
         }
+        self.forget_kind(id);
         self.authority.mutate(id, |b| {
             b.definition = bri_world::ContentRef::Resolved(definition)
         })?;
+        self.note_kind(id);
         self.attach(id)?;
         self.detect_collisions();
         Ok(())
+    }
+    /// Every brick of definition `definition` (`v20/brick/...` or a
+    /// package's brick id), lowest id first.
+    pub fn bricks_of(&self, definition: &str) -> impl Iterator<Item = BrickId> + '_ {
+        self.kinds.get(definition).into_iter().flatten().copied()
+    }
+    fn note_kind(&mut self, id: BrickId) {
+        if let Some(key) = self.authority.state().bricks.get(&id).and_then(definition_key) {
+            self.kinds.entry(key.to_string()).or_default().insert(id);
+        }
+    }
+    fn forget_kind(&mut self, id: BrickId) {
+        let Some(key) = self.authority.state().bricks.get(&id).and_then(definition_key) else {
+            return;
+        };
+        if let Some(set) = self.kinds.get_mut(key) {
+            set.remove(&id);
+            if set.is_empty() {
+                let key = key.to_string();
+                self.kinds.remove(&key);
+            }
+        }
     }
     /// Bricks whose grid volume overlaps a world-space box.
     pub fn bricks_in_box(&self, min: Vec3, max: Vec3) -> Vec<BrickId> {

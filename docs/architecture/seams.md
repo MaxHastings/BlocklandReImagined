@@ -33,4 +33,10 @@ Owners are named by thread title.
 | Importer base datablocks | base v20 bricks, projectiles and damage types without `--core` | Trench Warfare game mode | in flight |
 | Client app split | `crates/client/src/app.rs` into modules | Code health audit | in flight, lands last |
 | Registries, protocol changes, progress entries | how features add ops, messages and notes without editing shared lists | Tech debt hot spots | in flight |
+| Brick values | `set_brick_field`, `brick_field`: values rules keep on bricks, readable by every Add-On | Capture the Flag (Slayer) | in flight |
+| Drop key with empty hands | `Command::DropKey`, `on_drop_key` | Capture the Flag (Slayer) | in flight |
+| Dropped item names | `Drop::name`, `name_drop`, name tags over drops | Capture the Flag (Slayer) | in flight |
+| Image lights | `Image::light`, drawn at the mounted image in its paint | Capture the Flag (Slayer) | in flight |
+| End-of-round report | `show_report`, `report_column`, `Notice::Report`, the client's Report window | Capture the Flag (Slayer) | in flight |
+| Orbit camera | `orbit_camera` with a body that acts (Throwing) or is frozen (`watch`, spectating), `ControlObject::Orbit::body` | Capture the Flag (Slayer) | in flight |
 | Copy jobs | big copy work a slice each tick (`CopyWork`, `cancel_copy`, `copy_working`), copy ghost subset, `IdMap` | Duplicators | in flight |

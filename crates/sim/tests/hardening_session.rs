@@ -170,6 +170,7 @@ fn tool_pack() -> bri_weapons::Pack {
                 both_arms: false,
                 paint_tint: false,
                 rope: None,
+                light: None,
                 paint_picker: false,
                 scripts: Default::default(),
             },
@@ -185,6 +186,7 @@ fn tool_pack() -> bri_weapons::Pack {
                 icon: String::new(),
                 can_drop: true,
                 sport: false,
+                ..Default::default()
             },
         );
     }

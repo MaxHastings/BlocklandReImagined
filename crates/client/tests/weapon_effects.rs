@@ -710,3 +710,51 @@ fn a_trail_carried_through_a_portal_does_not_streak_between_the_two() -> Result<
     );
     Ok(())
 }
+
+/// v20's image light (`hasLight`, `ConstantLight`): a worn image lights
+/// the world around it, in the paint colour it is worn in, and goes out
+/// with it.
+#[test]
+fn a_worn_image_with_a_light_glows_in_its_paint_and_goes_out_with_it() -> Result<()> {
+    let mut pack = (*weapons()).clone();
+    pack.images.insert(
+        "flag".into(),
+        bri_weapons::Image {
+            id: "flag".into(),
+            paint_tint: true,
+            light: Some(bri_weapons::ImageLight {
+                radius: 20.,
+                color: [1.; 3],
+            }),
+            ..Default::default()
+        },
+    );
+    let mut fx = WeaponEffects::new(fixture(false), Arc::new(pack), EffectsLimits::default())?;
+    fx.set_palette(&[[1., 1., 1., 1.], [0., 0., 1., 1.]]);
+    let worn = |paint| WeaponView {
+        images: BTreeMap::from([(
+            7,
+            vec![bri_sim::session::MountedImage {
+                image: "flag".into(),
+                state: "Idle".into(),
+                hand: 3,
+                paint,
+            }],
+        )]),
+        ..Default::default()
+    };
+    let at = Vec3::new(2., 1., 0.);
+    fx.sync_image_lights(&worn(Some(1)), |owner, hand| (owner == 7 && hand == 3).then_some(at))?;
+    fx.advance(0.01, Vec3::ZERO, pose)?;
+    let lights = fx.world().snapshot(&camera()).lights;
+    let [light] = &lights[..] else {
+        panic!("one light: {}", lights.len());
+    };
+    assert_eq!(light.position, at);
+    assert_eq!(light.radius, 20.);
+    assert_eq!(light.color, Vec3::new(0., 0., 1.), "blue, as it is worn");
+    fx.sync_image_lights(&WeaponView::default(), |_, _| Some(at))?;
+    fx.advance(0.01, Vec3::ZERO, pose)?;
+    assert!(fx.world().snapshot(&camera()).lights.is_empty());
+    Ok(())
+}

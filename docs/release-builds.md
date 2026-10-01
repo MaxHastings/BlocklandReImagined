@@ -10,8 +10,9 @@ release, so once a release is out, older builds say a newer one exists.
 The workflow runs the same recipe as a release built by hand
 ([playtest-package-layout.md](playtest-package-layout.md)):
 
-1. Fetch the generated v20 content (below). It stops here with a clear error
-   when the content was never uploaded or lacks a pack this commit needs.
+1. Fetch the generated v20 content and the Add-On bundle (below). It stops
+   here with a clear error when either was never uploaded or lacks a pack or
+   an original this commit needs.
 2. `cargo build --release --locked` of `bri-client`, `bri-import-addon` and
    `bri-launcher`, with `BRI_VERSION` set to the version.
 3. `bri-client --check` against the content.
@@ -81,9 +82,58 @@ draft**, never Publish.
 
 Upload again whenever the content changes: after a bootstrap run that rebuilt
 packs, or when `crates/package/base-packages.json` names a new pack. The
-default Add-Ons (`packages/default-addons.json`: the Duplicator, the Stunt
-Plane) come from the repository, never from this zip. A release
+default Add-Ons never come from this zip: our own are committed under
+`packages/`, and the bundled originals have their own draft release (next
+section). A release
 run built with content older than its commit fails at step 1 and says so.
+
+## Bundled original Add-Ons
+
+Releases carry classic community Add-Ons (the Duplicator, the Stunt Plane,
+the Sniper Rifle and others) as their authors' originals, credited to them,
+with our ports adding the behaviour their scripts had. The public repository
+never holds their files or anything converted from them. It holds only
+`packages/default-addons.json`: per original, its Add-On name, title,
+credited authors, version, on or off at start, and the sha256 of each copy
+pinned for bundling. Its port is the one
+`crates/addon-import/ports/ports.json` lists for that name.
+
+`tools/addon_bundle.py` does the rest on the PC:
+
+```powershell
+python tools/addon_bundle.py find      # where each original is, its sha256, whether its port applies
+python tools/addon_bundle.py upload    # build the bundle, then put it on the addon-bundle draft release
+```
+
+`build` (which `upload` runs) searches Steam's
+`S:\SteamLibrary\steamapps\common\Blockland\Add-Ons`, the v20 install's
+`Add-Ons`, Maxwell's archive and any `--search` folder; imports the pinned
+copy of each original with `bri-import-addon` against the v20 install
+and, as a player's Import does, the game's generated content
+(`--installed`; `--content-root`, default `content/`);
+refuses one whose listed port does not apply; writes the credited authors
+into its `package.json` (the Add-Ons screen shows them); and packs
+`addons/<id>/`, `bundle.json` and `CREDITS.md` into `dist/addon-bundle.zip`.
+`upload` refuses while an original has no pinned copy, since the release
+would lack it (`--allow-unpinned` releases without it).
+
+The draft release is `addon-bundle`, like `ci-content`: visible only to people
+who can push and to the workflows. The Windows release workflow runs
+`python tools/addon_bundle.py fetch`, and its packager copies the originals
+into `content/addons/<id>` and `CREDITS.md` beside the docs. The Mac and
+Linux workflows already take the base game from that release's Windows zip
+(checked against its `MANIFEST.json`); they take the originals and
+`CREDITS.md` from it too (`python tools/addon_bundle.py from-release`), so
+every platform ships the same credited originals whenever the draft was
+last uploaded.
+
+- **Pin an original:** run `find`, check the copy it names is the one to
+  credit, and add its sha256 to the entry's `sha256`.
+- **Pull one** an author objected to: add `"withdrawn": "<why>"` to its
+  entry, upload, and make a release. The game, the bundle and every packager
+  leave it out.
+- **A new original:** add an entry (its `id` is the importer's name for it,
+  `Weapon_Example` becoming `weapon_example`) and its port.
 
 ## Making a release
 

@@ -1,6 +1,7 @@
 //! The operations package behaviour may ask the engine to perform, and the
 //! one place they are checked against a package's declared capabilities.
 use bri_package::diag::Diagnostic;
+use bri_package::setting::SettingValue;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -247,6 +248,18 @@ pub enum Op {
         player: u64,
         colors: BTreeMap<String, [f32; 4]>,
     },
+    /// Dress a player's avatar in parts over their own choices, per part
+    /// slot (`hat: "copHat"`, `pack: "none"`), and a face and decal: a
+    /// team's full uniform (Slayer's `hideAllNodes` and `unHideNode`). A
+    /// part, face or decal the server's avatar pack lacks is left as theirs.
+    /// No parts, face or decal gives them their own back. Kept across
+    /// respawns.
+    SetAvatarParts {
+        player: u64,
+        parts: BTreeMap<String, String>,
+        face: Option<String>,
+        decal: Option<String>,
+    },
     /// Damage players within `radius` (falling off linearly) and destroy
     /// bricks within `brick_radius`.
     Explode {
@@ -323,6 +336,22 @@ pub enum Op {
     },
     Broadcast {
         text: String,
+    },
+    /// A chat line to every member of a mini-game (`MiniGameSO::messageAll`).
+    /// One line of the package's chat share, however many members;
+    /// `except` leaves one member out (`messageAllExcept`).
+    TellMinigame {
+        game: u64,
+        text: String,
+        except: Option<u64>,
+    },
+    /// A center or bottom print to every member of a mini-game
+    /// (`centerPrintAll`, `bottomPrintAll`): one print of the share.
+    PrintMinigame {
+        game: u64,
+        text: String,
+        seconds: f32,
+        bottom: bool,
     },
     /// Copy the stack at `brick` for `player` to place with `tool`, as
     /// v20's duplicators select one (`reach`, `rule`), cut short at
@@ -593,6 +622,14 @@ pub enum Op {
         item: String,
         equip: bool,
     },
+    /// Put a whole tool list in a living player's hands, slot by slot
+    /// (`forceEquip`, a team's start tools): `None` empties a slot, slots
+    /// past the list are emptied, and items the server lacks leave theirs
+    /// empty. What they held is put away.
+    SetTools {
+        player: u64,
+        tools: Vec<Option<String>>,
+    },
     /// Take one `item` out of a player's tool list (`%obj.tool[%slot] =
     /// 0`): the held slot if it holds one, else the first that does. A held
     /// item is put away.
@@ -607,6 +644,28 @@ pub enum Op {
         item: String,
         position: [f32; 3],
         velocity: [f32; 3],
+        /// A palette colour tinting it (a team's flag).
+        #[serde(default)]
+        paint: Option<u8>,
+        /// Kept with it: `on_pickup` sees it as `info.data`, `drops()` too.
+        #[serde(default)]
+        data: Option<serde_json::Value>,
+        /// Seconds until it pops (1 to [`MAX_DROP_SECONDS`]); `None` is
+        /// v20's ten.
+        #[serde(default)]
+        seconds: Option<u32>,
+    },
+    /// Take back an item this package put in the world with `drop_item`.
+    RemoveDrop {
+        drop: u64,
+    },
+    /// Float `text` over an item this package put in the world, in palette
+    /// colour `color` (`setShapeName` with `setShapeNameColor`: a dropped
+    /// flag's countdown), or take it away with `None`.
+    NameDrop {
+        drop: u64,
+        text: Option<String>,
+        color: u8,
     },
     /// Change an object's velocity by `velocity` (units per second). `by`
     /// is the player credited when what it hits is hurt or broken.
@@ -734,11 +793,15 @@ pub enum Op {
     /// Text in the middle of the screen (`centerPrint`), or above the
     /// bottom edge (`bottomPrint`), for `seconds`: one player's, or
     /// everyone's when `player` is `None`. Empty text clears it.
+    /// `hide_bar` hides the bottom print's bar (`bottomPrint`'s third
+    /// argument).
     Print {
         player: Option<u64>,
         text: String,
         seconds: f32,
         bottom: bool,
+        #[serde(default)]
+        hide_bar: bool,
     },
     /// One player's plant-error icon and sound, as v20's
     /// `messageClient(%client, 'MsgPlantError_…')`: one of
@@ -756,6 +819,20 @@ pub enum Op {
         title: String,
         text: String,
         command: String,
+    },
+    /// Show `player` a score report in its own window (Slayer's End of
+    /// Round Report), with the columns Add-Ons changed for their game; or
+    /// close it with `None`.
+    ShowReport {
+        player: u64,
+        report: Option<Box<crate::report::Report>>,
+    },
+    /// Change a column of the reports a game's players are shown, from now
+    /// on: retitle and fill it, add it, or take it out (`title: None`).
+    /// Capture the Flag's Flag Pick-ups in place of Slayer's Kills.
+    ReportColumn {
+        game: u64,
+        change: crate::report::ColumnChange,
     },
     /// Play a sound profile (an Add-On weapons pack's `sounds`, or v20's):
     /// at `position` for everyone near, or at one player's ears.
@@ -816,6 +893,108 @@ pub enum Op {
         player: u64,
         image: Option<String>,
     },
+    /// Put an image in a worn slot (2 or 3) of a player, tinted with a
+    /// palette colour (`mountImage(%image, 3)`: a flag on the back), or
+    /// take it off with `None`.
+    WearImage {
+        player: u64,
+        slot: u8,
+        image: Option<String>,
+        paint: Option<u8>,
+    },
+    /// Set a mini-game's teams and team rules, as Slayer's team list does:
+    /// a team with an `id` keeps it and its members, one without is new,
+    /// and teams left out are removed (their members are left on none).
+    SetTeams {
+        game: u64,
+        teams: Vec<TeamOp>,
+        friendly_fire: bool,
+        ally_same_color: bool,
+    },
+    /// Put a member of a mini-game on one of its teams, or on none.
+    SetTeam {
+        player: u64,
+        team: Option<u64>,
+    },
+    /// Set a player's mini-game score, or with `add` change it by `value`
+    /// (`incScore`).
+    SetScore {
+        player: u64,
+        value: i64,
+        add: bool,
+    },
+    /// Reset a mini-game (`MiniGameSO::reset`): every member respawns with
+    /// a score of 0 and the game's bricks come back.
+    ResetMinigame {
+        game: u64,
+    },
+    /// End a mini-game's round (Slayer's `endRound`), won by these teams
+    /// and players, or by nobody. Every rule hears `on_minigame` with
+    /// `kind == "round_end"`; the round stays over until a reset.
+    EndRound {
+        game: u64,
+        teams: Vec<u64>,
+        players: Vec<u64>,
+    },
+    /// Change an Add-On setting of a mini-game, or of one of its teams
+    /// (`Slayer_MiniGameSO::setPref`): `key` is the package's own or
+    /// `namespace:key`; `None` puts it back to its default.
+    SetSetting {
+        game: u64,
+        team: Option<u64>,
+        key: String,
+        value: Option<SettingValue>,
+    },
+    /// The item a brick holds out to be picked up (`setItem`): an item of
+    /// this package, a dependency's or v20's, or `None` for none.
+    SetBrickItem {
+        brick: u64,
+        item: Option<String>,
+    },
+    /// Repaint a brick in palette colour `color` (`fxDTSBrick::setColor`
+    /// from a game's script: a capture point taking its holder's colour).
+    /// Nothing to undo; the brick must be the world's, a mini-game's or one
+    /// the calling player has full trust on.
+    SetBrickColor {
+        brick: u64,
+        color: u8,
+    },
+    /// Keep `value` on a brick as this package's `key`, or clear it with
+    /// `None`: a v20 script's dynamic field on a brick (Slayer's
+    /// `isLocked[color]`). Every package reads it with `brick_field`; it
+    /// goes with the brick. Keys are 1 to [`MAX_BRICK_FIELD_KEY`] letters,
+    /// digits or `_`.
+    SetBrickField {
+        brick: u64,
+        key: String,
+        value: Option<serde_json::Value>,
+    },
+    /// How often one of this package's zones (`behaviour.zones`, by index)
+    /// is checked from now on, 10 to 10000 ms, as a script setting
+    /// `TriggerData.tickPeriodMS` did (Slayer's capture point Tick Time).
+    SetZonePeriod {
+        zone: u32,
+        period_ms: u32,
+    },
+    /// Fire one of this package's wrench event inputs on a brick
+    /// (`processInputEvent`): the rows its builder wired to it run, as
+    /// theirs. `player` fills the Player, Client and MiniGame targets.
+    FireBrickInput {
+        brick: u64,
+        input: String,
+        player: Option<u64>,
+    },
+    /// Fire one of this package's inputs on every brick of mini-game `game`
+    /// wired to it (Slayer's `processMultiSourceInputEvent`:
+    /// `onMinigameDeath`, `onMinigameRoundStart`). `player` fills the
+    /// Player and Client targets, `killer` the `Player(Killer)` and
+    /// `Client(Killer)` ones, and the game the MiniGame target.
+    FireGameInput {
+        game: u64,
+        input: String,
+        player: Option<u64>,
+        killer: Option<u64>,
+    },
     /// Empty a player's hand (`unMountImage(0)`): the tool they held is put
     /// away, still in its slot.
     UnmountImage {
@@ -855,12 +1034,65 @@ pub enum Op {
         player: u64,
         limits: Option<[f32; 2]>,
     },
-    /// Give a player an orbit camera around another (v20's `setOrbitMode`
-    /// and `setControlObject(camera)`), or (`None`) their body back.
+    /// Keep a mini-game member from respawning until their mini-game resets
+    /// or a rule lets them (Slayer's `setDead`: out of lives, between
+    /// rounds). The client hides its respawn prompt while held.
+    HoldRespawn {
+        player: u64,
+        held: bool,
+    },
+    /// How long a mini-game member waits to respawn after dying, in ms,
+    /// in place of their mini-game's time (`setRespawnTime`; Slayer's team
+    /// Respawn Time), or `None` for the mini-game's again. Kept until they
+    /// leave the mini-game.
+    SetRespawnTime {
+        player: u64,
+        ms: Option<u32>,
+    },
+    /// Fly a player's camera along knots (`setControlObject(pathCamera)`),
+    /// their body standing still, or with `None` hand control back. The
+    /// package's `on_path_node` hears each knot reached.
+    FollowPath {
+        player: u64,
+        knots: Option<Vec<PathKnot>>,
+    },
+    /// Give a player a free camera from where their camera is
+    /// (`Camera::setMode("Observer")`), or an orbit around a point
+    /// (`setOrbitPointMode`); a frozen [`Op::OrbitCamera`]'s `None` hands
+    /// control back.
+    Camera {
+        player: u64,
+        camera: CameraOp,
+    },
+    /// Give a player an orbit camera around a player's body (v20's
+    /// `setOrbitMode` and `setControlObject(camera)`), or (`None`) their
+    /// body back from the kind of camera `body` names. One seam for both
+    /// of v20's uses: Throwing's held player, whose click still acts, and
+    /// a rule's `watch`, whose body freezes and whose keys go to the rules.
     OrbitCamera {
         player: u64,
+        body: OrbitBody,
         orbit: Option<Orbit>,
     },
+}
+/// What the body of a player under an [`Op::OrbitCamera`] does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OrbitBody {
+    /// It keeps its trigger: the body takes no moves, but a click is the
+    /// player's empty-hand trigger for Add-Ons (`on_activate`), as
+    /// Throwing's "Grabbed" camera struggles (`Observer::onTrigger`). Only
+    /// a living player on their body or in another such orbit gets one,
+    /// never around themselves, and `None` ends only this kind.
+    #[default]
+    Acts,
+    /// It freezes (`setControlObject(%client.camera)`): the body takes no
+    /// actions and the player's keys go to the rules (`on_observer`), as a
+    /// spectator's do. A rule's `watch`: given from the body or another
+    /// rules camera, dead or alive, around the player themselves too (a
+    /// dead player's own is the corpse camera); `None` ends any rules
+    /// camera.
+    Frozen,
 }
 /// An orbit camera ([`Op::OrbitCamera`]): around player `target`, starting
 /// `distance` whole units out, which the player's wheel zooms between `min`
@@ -881,6 +1113,58 @@ impl Orbit {
             && self.distance <= self.max
     }
 }
+
+/// The camera [`Op::Camera`] gives.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CameraOp {
+    Free,
+    Point { at: [f32; 3], distance: f32 },
+}
+/// Nearest and farthest an orbit camera sits from its point.
+pub const ORBIT_DISTANCES: std::ops::RangeInclusive<f32> = 0.5..=100.0;
+
+/// Most knots a camera path holds (`PathCameraData.maxNodes`).
+pub const MAX_PATH_KNOTS: usize = 20;
+/// How a knot shapes the camera path through it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KnotKind {
+    Normal,
+    Kink,
+    PositionOnly,
+}
+/// One knot of a camera path: where the camera is and looks, its speed to
+/// the next knot in units per second, and how the path passes it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct PathKnot {
+    pub at: [f32; 3],
+    pub yaw: f32,
+    pub pitch: f32,
+    pub speed: f32,
+    pub kind: KnotKind,
+    pub linear: bool,
+    pub jump: bool,
+}
+/// One team as [`Op::SetTeams`] asks for it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TeamOp {
+    pub id: Option<u64>,
+    pub name: String,
+    /// The team's paint palette index.
+    pub color: u8,
+}
+/// Longest a dropped item may lie, seconds.
+pub const MAX_DROP_SECONDS: u32 = 600;
+/// Largest data a dropped item carries, bytes of JSON.
+pub const MAX_DROP_DATA_BYTES: usize = 1024;
+/// Most players one `end_round` names as winners.
+pub const MAX_ROUND_WINNERS: usize = 256;
+/// Most teams one mini-game may have, and the longest team name.
+pub const MAX_TEAMS: usize = 64;
+pub const MAX_TEAM_NAME: usize = 50;
+/// Largest score `set_score` sets or adds.
+pub const MAX_SCORE: i64 = 1_000_000_000;
 /// The name a copy is saved under, from what a player typed: the file
 /// name only (v20's `fileBase`, so a path or a `.bls` ending is dropped),
 /// 1 to 64 letters, digits, spaces and `_ - ( ) .`, not starting with a
@@ -998,6 +1282,10 @@ pub enum SoundAt {
     /// At one player's ears only.
     Player(u64),
 }
+/// Most tool slots `set_tools` lists.
+pub const MAX_TOOL_SLOTS: usize = 10;
+/// The longest respawn time `set_respawn_time` sets (Slayer's 999 s).
+pub const MAX_RESPAWN_MS: u32 = 999_999;
 /// Mount points a body may have (`mountObject`'s node).
 pub const MAX_MOUNT_POINTS: usize = 8;
 /// Body scales `set_scale` allows.
@@ -1005,6 +1293,25 @@ pub const SCALE_RANGE: std::ops::RangeInclusive<f32> = 0.2..=5.0;
 /// How far out an Add-On's orbit camera may sit ([`Op::OrbitCamera`]), in
 /// whole units.
 pub const ORBIT_DISTANCE: std::ops::RangeInclusive<u8> = 1..=20;
+/// Where a rule's `watch` sits: the corpse camera's distance
+/// (`Observer::setMode("Corpse")`, 8 units).
+pub const WATCH_DISTANCE: u8 = 8;
+/// The avatar's part slots, each holding one of the avatar pack's choices
+/// (`$pref::Avatar::Hat` and the rest).
+pub const AVATAR_PARTS: [&str; 12] = [
+    "hat",
+    "accent",
+    "pack",
+    "secondpack",
+    "chest",
+    "hip",
+    "rarm",
+    "larm",
+    "rhand",
+    "lhand",
+    "rleg",
+    "lleg",
+];
 /// The avatar's colour slots, as `setNodeColor` names them.
 pub const AVATAR_SLOTS: [&str; 13] = [
     "head",
@@ -1021,6 +1328,13 @@ pub const AVATAR_SLOTS: [&str; 13] = [
     "rleg",
     "lleg",
 ];
+/// Longest key of a value kept on a brick (`set_brick_field`).
+pub const MAX_BRICK_FIELD_KEY: usize = 32;
+/// Whether `key` may name a value a package keeps on a brick.
+pub fn is_brick_field_key(key: &str) -> bool {
+    (1..=MAX_BRICK_FIELD_KEY).contains(&key.len())
+        && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
 /// Longest text a print may show.
 pub const MAX_PRINT_CHARS: usize = 512;
 impl Op {
@@ -1051,6 +1365,9 @@ impl Op {
             | Self::Broadcast { .. }
             | Self::Print { .. }
             | Self::PlantError { .. }
+            | Self::ShowReport { .. }
+            | Self::TellMinigame { .. }
+            | Self::PrintMinigame { .. }
             | Self::Ask { .. } => "chat",
             Self::Sound { .. }
             | Self::Beam { .. }
@@ -1078,22 +1395,43 @@ impl Op {
             | Self::TakePaint { .. }
             | Self::HighlightCopy { .. } => "build",
             Self::SetMapLights { .. } => "lighting",
+            Self::SetTeams { .. }
+            | Self::SetTeam { .. }
+            | Self::SetScore { .. }
+            | Self::ResetMinigame { .. }
+            | Self::HoldRespawn { .. }
+            | Self::SetRespawnTime { .. }
+            | Self::EndRound { .. }
+            | Self::SetSetting { .. }
+            | Self::SetZonePeriod { .. }
+            | Self::ReportColumn { .. } => "minigame",
+            Self::SetBrickItem { .. } | Self::SetBrickColor { .. } => "world.edit",
+            Self::FireBrickInput { .. }
+            | Self::FireGameInput { .. }
+            | Self::SetBrickField { .. } => "brick_events",
             Self::SetEnvironment { .. } => "environment",
             Self::Teleport { .. }
             | Self::Respawn { .. }
             | Self::SetArchetype { .. }
             | Self::Control { .. }
             | Self::GiveItem { .. }
+            | Self::SetTools { .. }
             | Self::TakeItem { .. }
             | Self::DropItem { .. }
+            | Self::RemoveDrop { .. }
+            | Self::NameDrop { .. }
+            | Self::WearImage { .. }
             | Self::SetFov { .. }
             | Self::SetImageAmmo { .. }
             | Self::MountImage { .. }
             | Self::UnmountImage { .. }
             | Self::SetScale { .. }
             | Self::SetLookLimits { .. }
+            | Self::FollowPath { .. }
+            | Self::Camera { .. }
             | Self::OrbitCamera { .. }
             | Self::SetAvatarColors { .. }
+            | Self::SetAvatarParts { .. }
             | Self::ScrollMode { .. } => "player",
             Self::MountObject { .. } | Self::UnmountObject { .. } => "physics",
             Self::Push { .. }
@@ -1140,6 +1478,7 @@ impl Op {
             | Self::CutCopy { .. }
             | Self::WrenchCopy { .. }
             | Self::UnmountImage { .. }
+            | Self::HoldRespawn { .. }
             | Self::UnmountObject { .. } => true,
             Self::MountObject {
                 mount,
@@ -1149,9 +1488,20 @@ impl Op {
                 ..
             } => mount != rider && usize::from(*node) < MAX_MOUNT_POINTS && turn.is_finite(),
             Self::SetScale { scale, .. } => scale.is_finite() && SCALE_RANGE.contains(scale),
-            Self::OrbitCamera { player, orbit } => {
-                orbit.is_none_or(|o| o.target != *player && o.valid())
+            Self::OrbitCamera {
+                player,
+                body,
+                orbit,
+            } => orbit
+                .is_none_or(|o| o.valid() && (o.target != *player || *body == OrbitBody::Frozen)),
+            Self::SetTools { tools, .. } => {
+                tools.len() <= MAX_TOOL_SLOTS
+                    && tools
+                        .iter()
+                        .flatten()
+                        .all(|id| !id.is_empty() && id.len() <= 160 && id.is_ascii())
             }
+            Self::SetRespawnTime { ms, .. } => ms.is_none_or(|ms| ms <= MAX_RESPAWN_MS),
             Self::SetLookLimits { limits, .. } => limits
                 .is_none_or(|[down, up]| (0.0..=1.0).contains(&down) && (0.0..=1.0).contains(&up)),
             Self::PaintFill {
@@ -1228,6 +1578,16 @@ impl Op {
                         AVATAR_SLOTS.contains(&slot.as_str())
                             && c.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))
                     })
+            }
+            Self::SetAvatarParts {
+                parts, face, decal, ..
+            } => {
+                let name = |n: &str| !n.is_empty() && n.len() <= 64 && n.is_ascii();
+                parts.len() <= AVATAR_PARTS.len()
+                    && parts
+                        .iter()
+                        .all(|(slot, part)| AVATAR_PARTS.contains(&slot.as_str()) && name(part))
+                    && face.iter().chain(decal).all(|n| n.len() <= 256 && n.is_ascii())
             }
             Self::SetBlockState { state, .. } => {
                 state.len() <= 64 && !state.chars().any(char::is_control)
@@ -1318,6 +1678,13 @@ impl Op {
             Self::MountImage { image, .. } => image
                 .as_deref()
                 .is_none_or(|i| bri_package::id::is_content_ref(i, Some("image"))),
+            Self::WearImage { slot, image, .. } => {
+                (2..=3).contains(slot)
+                    && image
+                        .as_deref()
+                        .is_none_or(|i| bri_package::id::is_content_ref(i, Some("image")))
+            }
+            Self::RemoveDrop { .. } => true,
             Self::SpawnEntity {
                 kind,
                 position,
@@ -1330,7 +1697,9 @@ impl Op {
             }
             Self::Steer { direction, .. } => finite(direction),
             Self::Label { label, .. } => label.len() <= 32 && !label.chars().any(char::is_control),
-            Self::Tell { text, .. } | Self::Broadcast { text } => chat(text),
+            Self::Tell { text, .. }
+            | Self::Broadcast { text }
+            | Self::TellMinigame { text, .. } => chat(text),
             Self::CopyBuild { limit, tool, .. } => (1..=MAX_COPY_BRICKS).contains(limit) && item(tool),
             Self::CopyBox {
                 min,
@@ -1373,8 +1742,15 @@ impl Op {
                 item: id,
                 position,
                 velocity,
+                data,
+                seconds,
+                ..
             } => {
-                item(id)
+                seconds.is_none_or(|s| (1..=MAX_DROP_SECONDS).contains(&s))
+                    && data.as_ref().is_none_or(|d| {
+                        serde_json::to_vec(d).is_ok_and(|b| b.len() <= MAX_DROP_DATA_BYTES)
+                    })
+                    && item(id)
                     && finite(position)
                     && finite(velocity)
                     && glam_length(velocity) <= MAX_PUSH_SPEED
@@ -1432,6 +1808,51 @@ impl Op {
                     && force.is_none_or(|f| f.is_finite() && f > 0.0 && f <= MAX_HOLD_FORCE)
             }
             Self::LetGo { .. } | Self::Untether { .. } | Self::RemoveVehicle { .. } => true,
+            Self::SetTeams { teams, .. } => {
+                teams.len() <= MAX_TEAMS
+                    && teams.iter().all(|t| {
+                        !t.name.trim().is_empty()
+                            && t.name.chars().count() <= MAX_TEAM_NAME
+                            && !t.name.chars().any(char::is_control)
+                    })
+            }
+            Self::SetTeam { .. } | Self::ResetMinigame { .. } => true,
+            Self::EndRound { teams, players, .. } => {
+                teams.len() <= MAX_TEAMS && players.len() <= MAX_ROUND_WINNERS
+            }
+            Self::SetSetting { key, value, .. } => {
+                bri_package::setting::is_setting_ref(key)
+                    && !matches!(value, Some(SettingValue::Text(t)) if t.len() > bri_package::setting::MAX_TEXT)
+            }
+            Self::SetScore { value, .. } => value.abs() <= MAX_SCORE,
+            Self::SetBrickItem { item: id, .. } => id.as_deref().is_none_or(item),
+            Self::SetBrickColor { .. } => true,
+            Self::SetBrickField { key, .. } => is_brick_field_key(key),
+            Self::NameDrop { text, .. } => text.as_deref().is_none_or(|t| {
+                t.chars().count() <= bri_weapons::MAX_DROP_NAME && !t.chars().any(char::is_control)
+            }),
+            Self::FollowPath { knots, .. } => knots.as_ref().is_none_or(|k| {
+                (1..=MAX_PATH_KNOTS).contains(&k.len())
+                    && k.iter().all(|k| {
+                        finite(&k.at)
+                            && k.yaw.is_finite()
+                            && k.pitch.is_finite()
+                            && k.pitch.abs() <= std::f32::consts::FRAC_PI_2
+                            && (0.1..=1000.0).contains(&k.speed)
+                    })
+            }),
+            Self::Camera { camera, .. } => match camera {
+                CameraOp::Free => true,
+                CameraOp::Point { at, distance } => {
+                    finite(at) && ORBIT_DISTANCES.contains(distance)
+                }
+            },
+            Self::SetZonePeriod { zone, period_ms } => {
+                (*zone as usize) < crate::content::MAX_ZONES && (10..=10_000).contains(period_ms)
+            }
+            Self::FireBrickInput { input, .. } | Self::FireGameInput { input, .. } => {
+                input.len() <= 64
+            }
             Self::Fire {
                 projectile,
                 position,
@@ -1457,7 +1878,7 @@ impl Op {
                     && command.len() <= 64
                     && command.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
             }
-            Self::Print { text, seconds, .. } => {
+            Self::Print { text, seconds, .. } | Self::PrintMinigame { text, seconds, .. } => {
                 text.chars().count() <= MAX_PRINT_CHARS
                     && !text.chars().any(|c| c.is_control() && c != '\n')
                     && seconds.is_finite()
@@ -1467,6 +1888,8 @@ impl Op {
             Self::ShowShapes { key, shapes, .. } => {
                 shape_key(key) && shapes.len() <= MAX_SHAPES && shapes.iter().all(WorldShape::check)
             }
+            Self::ShowReport { report, .. } => report.as_ref().is_none_or(|r| r.is_bounded()),
+            Self::ReportColumn { change, .. } => change.is_bounded(),
             Self::Sound { profile, at } => {
                 !profile.is_empty()
                     && profile.len() <= 128
@@ -1536,6 +1959,7 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::PlantBrick { .. } => "plant_brick",
         Op::PlaceVoxel { .. } => "place_voxel",
         Op::SetAvatarColors { .. } => "set_avatar_colors",
+        Op::SetAvatarParts { .. } => "set_avatar_parts",
         Op::Explode { .. } => "explode",
         Op::Damage { .. } => "damage",
         Op::Beam { .. } => "beam",
@@ -1545,11 +1969,39 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::SetEnvironment { .. } => "set_environment",
         Op::SetImageAmmo { .. } => "set_image_ammo",
         Op::MountImage { .. } => "mount_image",
+        Op::SetTeams { .. } => "set_teams",
+        Op::SetTeam { .. } => "set_team",
+        Op::SetScore { add: false, .. } => "set_score",
+        Op::SetScore { add: true, .. } => "add_score",
+        Op::ResetMinigame { .. } => "reset_minigame",
+        Op::EndRound { .. } => "end_round",
+        Op::SetSetting { team: None, .. } => "set_setting",
+        Op::SetSetting { team: Some(_), .. } => "set_team_setting",
+        Op::SetBrickItem { .. } => "set_brick_item",
+        Op::SetBrickColor { .. } => "set_brick_color",
+        Op::SetBrickField { .. } => "set_brick_field",
+        Op::NameDrop { .. } => "name_drop",
+        Op::SetZonePeriod { .. } => "set_zone_period",
+        Op::FireBrickInput { .. } => "fire_brick_input",
+        Op::FireGameInput { .. } => "fire_game_input",
         Op::UnmountImage { .. } => "unmount_image",
         Op::MountObject { .. } => "mount_object",
         Op::UnmountObject { .. } => "unmount_object",
         Op::SetScale { .. } => "set_scale",
         Op::SetLookLimits { .. } => "set_look_limits",
+        Op::HoldRespawn { .. } => "hold_respawn",
+        Op::SetTools { .. } => "set_tools",
+        Op::SetRespawnTime { .. } => "set_respawn_time",
+        Op::FollowPath { .. } => "follow_path",
+        Op::Camera {
+            camera: CameraOp::Free,
+            ..
+        } => "free_camera",
+        Op::Camera { .. } => "orbit_point",
+        Op::OrbitCamera {
+            body: OrbitBody::Frozen,
+            ..
+        } => "watch",
         Op::OrbitCamera { .. } => "orbit_camera",
         Op::SpawnEntity { .. } => "spawn_entity",
         Op::RemoveEntity { .. } => "remove_entity",
@@ -1562,6 +2014,9 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::Control { .. } => "control",
         Op::SetBlockState { .. } => "set_block_state",
         Op::Broadcast { .. } => "broadcast",
+        Op::TellMinigame { .. } => "tell_minigame",
+        Op::PrintMinigame { bottom: false, .. } => "center_print_minigame",
+        Op::PrintMinigame { bottom: true, .. } => "bottom_print_minigame",
         Op::CopyBuild { .. } => "copy_build",
         Op::CopyBox { .. } => "copy_box",
         Op::MirrorCopy { .. } => "mirror_copy",
@@ -1596,6 +2051,8 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::GiveItem { .. } => "give_item",
         Op::TakeItem { .. } => "take_item",
         Op::DropItem { .. } => "drop_item",
+        Op::RemoveDrop { .. } => "remove_drop",
+        Op::WearImage { .. } => "mount_image",
         Op::Push { .. } => "push",
         Op::Tumble { .. } => "tumble",
         Op::Hold { .. } => "hold",
@@ -1609,6 +2066,9 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::RemoveVehicle { .. } => "remove_vehicle",
         Op::Fire { .. } => "fire",
         Op::Heal { .. } => "heal",
+        Op::ShowReport { report: Some(_), .. } => "show_report",
+        Op::ShowReport { report: None, .. } => "hide_report",
+        Op::ReportColumn { .. } => "report_column",
         Op::Print { bottom: false, .. } => "center_print",
         Op::Print { bottom: true, .. } => "bottom_print",
         Op::PlantError { .. } => "plant_error",
@@ -1623,5 +2083,34 @@ pub fn op_name(op: &Op) -> &'static str {
             at: SoundAt::Player(_),
             ..
         } => "play_sound",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn uniform_kit_and_respawn_ops_stay_in_their_limits() {
+        let parts = |slot: &str, part: &str| Op::SetAvatarParts {
+            player: 1,
+            parts: BTreeMap::from([(slot.to_owned(), part.to_owned())]),
+            face: None,
+            decal: None,
+        };
+        assert!(parts("hat", "copHat").bounded().is_ok());
+        assert!(parts("head", "copHat").bounded().is_err(), "the head is a colour, not a part");
+        assert!(parts("hat", "").bounded().is_err());
+        assert!(parts("hat", &"x".repeat(65)).bounded().is_err());
+        let tools = |tools: Vec<Option<String>>| Op::SetTools { player: 1, tools };
+        assert!(tools(vec![Some("v20.weapon.hammeritem".into()), None]).bounded().is_ok());
+        assert!(tools(vec![None; MAX_TOOL_SLOTS + 1]).bounded().is_err());
+        assert!(tools(vec![Some(String::new())]).bounded().is_err());
+        let respawn = |ms| Op::SetRespawnTime { player: 1, ms };
+        assert!(respawn(None).bounded().is_ok());
+        assert!(respawn(Some(MAX_RESPAWN_MS)).bounded().is_ok());
+        assert!(respawn(Some(MAX_RESPAWN_MS + 1)).bounded().is_err());
+        assert_eq!(respawn(None).capability(), "minigame");
+        assert_eq!(parts("hat", "copHat").capability(), "player");
     }
 }

@@ -311,7 +311,7 @@ impl Brick {
             if let Some(p) = &row.preserved {
                 bytes += text(&p.original) + text(&p.diagnostic);
             }
-            if let EventTarget::Named(n) = &row.target {
+            if let EventTarget::Named(n) | EventTarget::Derived(n) = &row.target {
                 bytes += text(n);
             }
             for value in &row.params {
@@ -394,7 +394,7 @@ impl Brick {
                     "Oversized preserved event row"
                 );
             }
-            if let EventTarget::Named(n) = &e.target {
+            if let EventTarget::Named(n) | EventTarget::Derived(n) = &e.target {
                 ensure!(!n.is_empty() && n.len() <= 128, "Invalid target name");
             }
             for value in &e.params {

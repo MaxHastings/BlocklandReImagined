@@ -89,8 +89,7 @@ fn write(path: &Path, bytes: &[u8]) -> Result<()> {
 fn lines(src: &source::Source, file: &str, from: usize, to: usize) -> String {
     src.get(file)
         .map(|f| {
-            String::from_utf8_lossy(&f.bytes)
-                .replace('\r', "")
+            crate::script_text(&f.bytes)
                 .lines()
                 .skip(from.saturating_sub(1))
                 .take(to.saturating_sub(from) + 1)

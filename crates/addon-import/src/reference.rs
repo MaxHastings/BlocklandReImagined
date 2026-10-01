@@ -37,6 +37,10 @@ pub struct Reference {
     pub files: BTreeSet<String>,
     /// Lower-case Add-On name to its spelling.
     pub addons: BTreeMap<String, String>,
+    /// Globals the core scripts set to constants (`$backslot` → `4`), by
+    /// lower-case name with its `$`: Add-On fields name them
+    /// (`mountPoint = $BackSlot;`).
+    pub globals: bri_convert::catalog::Globals,
     /// The installed game's item textures, by their lower-case source path
     /// (`base/data/shapes/black50.png`): an imported model may draw with
     /// them by that key, as its players' games already have them.
@@ -197,11 +201,19 @@ impl Reference {
             let name = core
                 .file_name()
                 .map_or(String::new(), |n| n.to_string_lossy().into_owned());
-            self.add_script(
-                "base",
-                &text,
-                &format!("base/server/scripts/{name} (recovered)"),
-            );
+            let path = format!("base/server/scripts/{name} (recovered)");
+            self.add_script("base", &text, &path);
+            if let Ok(script) = tscript::read(&text, &path) {
+                for g in &script.globals {
+                    if let Some(v) = bri_convert::catalog::constant_global(
+                        &g.value,
+                        "base/server/scripts",
+                        &self.globals,
+                    ) {
+                        self.globals.insert(g.name.to_ascii_lowercase(), v);
+                    }
+                }
+            }
         }
         Ok(())
     }

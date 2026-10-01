@@ -1205,6 +1205,11 @@ impl App {
         elapsed: f32,
     ) -> Result<()> {
         weapon_effects.sync(view)?;
+        weapon_effects.sync_image_lights(view, |owner, hand| {
+            world_items
+                .mounted_transform(owner, hand)
+                .map(|m| m.w_axis.truncate())
+        })?;
         let elapsed = elapsed.min(0.25);
         for (_, age) in weapon_cues.iter_mut() {
             *age += elapsed;
@@ -2012,6 +2017,25 @@ impl App {
         }
     }
     /// The authoritative local player is alive (or not yet known).
+    /// Watching the game as a spectator: dead with a rule holding the
+    /// respawn, or under a camera a rule gave (free, a point, a path).
+    fn spectating(&self) -> bool {
+        self.network_view()
+            .and_then(|v| v.vitals.get(&v.owner))
+            .is_some_and(|v| {
+                (!v.alive && v.respawn_held)
+                    || matches!(
+                        v.control,
+                        bri_sim::session::ControlObject::Observer
+                            | bri_sim::session::ControlObject::Point
+                            | bri_sim::session::ControlObject::Path
+                            | bri_sim::session::ControlObject::Orbit {
+                                body: bri_sim::session::OrbitBody::Frozen,
+                                ..
+                            }
+                    )
+            })
+    }
     fn local_alive(&self) -> bool {
         self.network_view()
             .and_then(|v| v.vitals.get(&v.owner))
@@ -2651,17 +2675,33 @@ impl App {
                 .get(&view.owner)
                 .map(|p| view.archetypes.eye(&p.player))
         });
-        self.controls.follow(control, view.owner, eye);
+        // A path camera flies its replicated path on the server's clock.
+        let path = view
+            .vitals
+            .get(&view.owner)
+            .and_then(|v| v.camera_path.as_ref())
+            .zip(self.motion.server_tick())
+            .map(|(path, tick)| path.sample(tick));
+        let point = view.vitals.get(&view.owner).and_then(|v| v.camera_point);
+        let owner = view.owner;
+        self.controls.follow(control, owner, eye);
+        if let Some(path) = path {
+            self.controls.fly_path(path);
+        }
+        if let Some(point) = point {
+            self.controls.orbit_point(point);
+        }
     }
     /// The camera in control, as the server's `%client.Camera` transform:
     /// the free camera's position, or where the orbit camera was drawn from.
     fn camera_view(&self) -> Option<bri_sim::session::CameraView> {
         let observer = self.controls.observer()?;
         let eye = match observer.mode {
-            crate::controls::ObserverMode::Free(position) => position,
-            crate::controls::ObserverMode::Orbit(_) | crate::controls::ObserverMode::Drive(_) => {
-                self.observer_eye?
-            }
+            crate::controls::ObserverMode::Free(position)
+            | crate::controls::ObserverMode::Path(position) => position,
+            crate::controls::ObserverMode::Orbit(_)
+            | crate::controls::ObserverMode::Drive(_)
+            | crate::controls::ObserverMode::Point(..) => self.observer_eye?,
         };
         let view = bri_sim::session::CameraView {
             eye: eye.to_array(),
@@ -2815,9 +2855,16 @@ impl App {
                 if c.alive == Some(true) {
                     updates.push(UiUpdate::DamageFlash(0.75));
                 }
-                // handleYourDeath / respawnCountDownTick.
-                let remaining = local.respawn_tick.saturating_sub(view.tick).div_ceil(120);
-                if c.countdown != Some(remaining) {
+                // handleYourDeath / respawnCountDownTick. A rule holding the
+                // respawn (out of lives) prints its own message instead.
+                let remaining = if local.respawn_held {
+                    u64::MAX
+                } else {
+                    local.respawn_tick.saturating_sub(view.tick).div_ceil(120)
+                };
+                if remaining == u64::MAX {
+                    c.countdown = Some(remaining);
+                } else if c.countdown != Some(remaining) {
                     c.countdown = Some(remaining);
                     updates.push(UiUpdate::CenterPrint {
                         text: match remaining {
@@ -2840,6 +2887,14 @@ impl App {
             &self.content.weapons.item_choices,
             &view.archetypes,
             c.minigame_revision,
+        );
+        let state = crate::minigame_ui::with_addon_settings(
+            state,
+            &view.minigames,
+            &view.addon_settings,
+            view.owner,
+            view.administrator,
+            &view.world.palette,
         );
         let changed = c.minigame_state.as_ref().is_none_or(|old| {
             MiniGameUiState {
@@ -4572,6 +4627,10 @@ impl App {
                             }
                             continue;
                         }
+                        bri_sim::session::Notice::Report(report) => {
+                            let palette = a.view.as_ref().map_or(&[][..], |v| &v.world.palette[..]);
+                            UiUpdate::Report(report.map(|r| report_view(&r, palette)))
+                        }
                         bri_sim::session::Notice::Inspected { .. } => unreachable!(),
                     };
                     self.ui.apply_session(a.id, update);
@@ -4703,6 +4762,15 @@ impl App {
         }
         if a.worker.view.has_changed().unwrap_or(false) {
             a.view = a.worker.view.borrow_and_update().clone();
+        }
+        // The server's Add-Ons' wrench events join the wrench's lists.
+        if let Some(view) = &a.view
+            && let Some(update) = self
+                .tool_ui
+                .offer_events(&view.brick_events)
+            && a.entered
+        {
+            self.ui.apply_session(a.id, update);
         }
         if let (Some(building), Some(view)) = (&mut self.building, &a.view) {
             building.set_held_brick(view.weapons.images.get(&view.owner).is_some_and(|images| {
@@ -5327,10 +5395,11 @@ pub fn name_opacity(distance: f32, fog_distance: f32, visible_distance: f32) -> 
     })
 }
 /// `GuiShapeNameHud::onRender`: every other living player's name above their
-/// eye point (`verticalOffset` 0.85), hidden behind the map and raycasting
+/// eye point (`verticalOffset` 0.85), and any named dropped item's, hidden behind the map and raycasting
 /// bricks ([`crate::building::Building::name_visible`]), faded by
 /// [`name_opacity`] and drawn in the mini-game colour a member's player is
-/// given at spawn (`GameConnection::createPlayer`), white otherwise.
+/// given at spawn (`GameConnection::createPlayer`), or their team's (Slayer's
+/// `setShapeNameColor`), white otherwise.
 #[allow(clippy::too_many_arguments)]
 fn name_tags(
     view: &network::View,
@@ -5342,8 +5411,33 @@ fn name_tags(
     size: (f32, f32),
     scale: f32,
     controlling_body: bool,
+    drop_center: impl Fn(&bri_weapons::Drop) -> Vec3,
 ) -> Vec<bri_ui::api::NameTag> {
     const VERTICAL_OFFSET: f32 = 0.85;
+    // Where a name anchored at `target` goes on screen, and how strongly.
+    let place = |target: Vec3| -> Option<(f32, f32, f32)> {
+        let opacity = name_opacity(target.distance(camera), fog_distance, visible_distance)?;
+        if building.is_some_and(|b| !b.name_visible(camera, target).unwrap_or(true)) {
+            return None;
+        }
+        let clip = view_projection * (target + Vec3::Y * VERTICAL_OFFSET).extend(1.0);
+        if clip.w <= 0.0 {
+            return None;
+        }
+        let ndc = clip.truncate() / clip.w;
+        if ndc.x.abs() > 1.0 || ndc.y.abs() > 1.0 {
+            return None;
+        }
+        Some((
+            (ndc.x + 1.0) * 0.5 * size.0 / scale,
+            (1.0 - ndc.y) * 0.5 * size.1 / scale,
+            opacity,
+        ))
+    };
+    let paint = |color: u8| {
+        let rgba = view.world.palette.get(usize::from(color))?;
+        Some([0, 1, 2].map(|i| (rgba[i].clamp(0.0, 1.0) * 255.0).round() as u8))
+    };
     let mut tags = Vec::new();
     for (owner, name) in &view.names {
         if (*owner == view.owner && controlling_body)
@@ -5354,31 +5448,20 @@ fn name_tags(
         let Some(state) = presented.get(owner) else {
             continue;
         };
-        let target = view.archetypes.eye(state);
-        let Some(opacity) = name_opacity(target.distance(camera), fog_distance, visible_distance)
-        else {
+        let Some((x, y, opacity)) = place(view.archetypes.eye(state)) else {
             continue;
         };
-        if building.is_some_and(|b| !b.name_visible(camera, target).unwrap_or(true)) {
-            continue;
-        }
-        let clip = view_projection * (target + Vec3::Y * VERTICAL_OFFSET).extend(1.0);
-        if clip.w <= 0.0 {
-            continue;
-        }
-        let ndc = clip.truncate() / clip.w;
-        if ndc.x.abs() > 1.0 || ndc.y.abs() > 1.0 {
-            continue;
-        }
-        let color = view
-            .minigames
-            .iter()
-            .find(|m| m.members.contains(owner))
-            .and_then(|m| crate::minigame_ui::color_rgb(m.color))
+        let game = view.minigames.iter().find(|m| m.members.contains(owner));
+        // A team member's name is in their team's paint colour.
+        let team = view.vitals.get(owner).and_then(|v| v.team).and_then(|team| {
+            paint(game?.teams.iter().find(|t| t.id.0 == team)?.color)
+        });
+        let color = team
+            .or_else(|| game.and_then(|m| crate::minigame_ui::color_rgb(m.color)))
             .unwrap_or([255; 3]);
         tags.push(bri_ui::api::NameTag {
-            x: (ndc.x + 1.0) * 0.5 * size.0 / scale,
-            y: (1.0 - ndc.y) * 0.5 * size.1 / scale,
+            x,
+            y,
             text: plain_chat(name),
             opacity,
             color,
@@ -5391,25 +5474,33 @@ fn name_tags(
             continue;
         }
         let (min, max) = (Vec3::from(shape.min), Vec3::from(shape.max));
-        let target = Vec3::new((min.x + max.x) / 2.0, max.y, (min.z + max.z) / 2.0);
-        let Some(opacity) = name_opacity(target.distance(camera), fog_distance, visible_distance)
-        else {
+        let top = Vec3::new((min.x + max.x) / 2.0, max.y, (min.z + max.z) / 2.0);
+        let Some((x, y, opacity)) = place(top) else {
             continue;
         };
-        let clip = view_projection * target.extend(1.0);
-        if clip.w <= 0.0 {
-            continue;
-        }
-        let ndc = clip.truncate() / clip.w;
-        if ndc.x.abs() > 1.0 || ndc.y.abs() > 1.0 {
-            continue;
-        }
         tags.push(bri_ui::api::NameTag {
-            x: (ndc.x + 1.0) * 0.5 * size.0 / scale,
-            y: (1.0 - ndc.y) * 0.5 * size.1 / scale,
+            x,
+            y,
             text: shape.label.clone(),
             opacity,
             color: [shape.color[0], shape.color[1], shape.color[2]],
+        });
+    }
+    // Any other shape's name sits above the middle of its box
+    // (`getBoxCenter`): a dropped flag's countdown in its team's colour.
+    for drop in &view.weapons.drops {
+        let Some(name) = &drop.name else {
+            continue;
+        };
+        let Some((x, y, opacity)) = place(drop_center(drop)) else {
+            continue;
+        };
+        tags.push(bri_ui::api::NameTag {
+            x,
+            y,
+            text: plain_chat(&name.text),
+            opacity,
+            color: paint(name.color).unwrap_or([255; 3]),
         });
     }
     tags
@@ -5439,19 +5530,17 @@ fn camera_eye(
     passages: &bri_content::passage::Passages,
 ) -> Result<(Vec3, Option<glam::Affine3A>)> {
     use crate::controls::ObserverMode;
-    let distance = controls.observer().map(|o| o.distance);
     match controls.observer().map(|o| o.mode) {
-        Some(ObserverMode::Free(position)) => Ok((position, None)),
+        Some(ObserverMode::Free(position) | ObserverMode::Path(position)) => Ok((position, None)),
         // `setOrbitMode(target, ..., 0, 8, 8)` from `Observer::setMode("Corpse")`,
         // or an Add-On's own distance. Its boom goes back through a portal
         // behind the focus, as a chase camera's does.
-        Some(ObserverMode::Orbit(_) | ObserverMode::Drive(_)) => {
+        Some(ObserverMode::Orbit(_) | ObserverMode::Drive(_) | ObserverMode::Point(..)) => {
             let focus = controls
                 .orbit_focus(presented, building.archetypes(), entities)
                 .map(|focus| focus + drawn_offset.unwrap_or(Vec3::ZERO))
                 .unwrap_or(own_eye);
-            let distance = distance.unwrap_or(crate::controls::CORPSE_ORBIT_DISTANCE);
-            building.camera_boom(focus, focus, forward, distance, passages)
+            building.camera_boom(focus, focus, forward, controls.orbit_distance(), passages)
         }
         None => match chase {
             // A chase camera's boom from `own_eye`, its pivot, which rides
@@ -5607,6 +5696,42 @@ fn plain_chat(text: &str) -> String {
             _ => c,
         })
         .collect()
+}
+/// A score report as the Report window shows it: plain text, each column
+/// in the host's order, team names in their paint.
+fn report_view(
+    report: &bri_package_runtime::report::Report,
+    palette: &[[f32; 4]],
+) -> bri_ui::api::ReportView {
+    use bri_ui::api::{ReportRowView, ReportSectionView, ReportView};
+    ReportView {
+        title: plain_chat(&report.title),
+        banner: report.banner.as_deref().map(plain_chat),
+        columns: report.columns.iter().map(|c| plain_chat(&c.title)).collect(),
+        sections: report
+            .sections
+            .iter()
+            .map(|s| ReportSectionView {
+                title: plain_chat(&s.title),
+                rows: s
+                    .rows
+                    .iter()
+                    .map(|r| ReportRowView {
+                        name: plain_chat(&r.name),
+                        color: r
+                            .color
+                            .and_then(|c| palette.get(usize::from(c)))
+                            .map(|c| bri_ui::geom::from_f32([c[0], c[1], c[2], 1.0])),
+                        cells: report
+                            .columns
+                            .iter()
+                            .map(|c| r.cells.get(&c.key).map_or_else(String::new, |v| plain_chat(v)))
+                            .collect(),
+                    })
+                    .collect(),
+            })
+            .collect(),
+    }
 }
 /// Center and bottom prints are server ML markup (parsed and bounded by
 /// `bri_ui::ml`) on several lines. `<key:cmd>` names the player's own binding
@@ -6314,6 +6439,13 @@ impl PlatformApp for App {
         self.controls.advance_sway(elapsed.as_secs_f32());
         self.controls.advance_zoom(elapsed.as_secs_f32());
         self.controls.ease_roll(elapsed.as_secs_f32());
+        let third_person_only = self.attempt.as_ref().filter(|a| a.entered).and_then(|a| {
+            let view = a.view.as_ref()?;
+            let body = self.motion.presented().get(&view.owner)?;
+            Some(view.archetypes.resolve(body.archetype).look.third_person_only)
+        });
+        self.controls
+            .set_third_person_only(third_person_only.unwrap_or(false));
         self.controls.advance_view(elapsed.as_secs_f32());
         self.controls.advance_head(elapsed.as_secs_f32());
         if let Some(a) = self.attempt.as_ref().filter(|a| a.entered) {
@@ -7546,6 +7678,41 @@ impl PlatformApp for App {
         let mut platform = Vec::new();
         for (id, action) in self.ui.drain_actions() {
             note_trigger(&mut self.controls, &action);
+            // A spectator's keys go to the rules that hold them
+            // (`Observer::onTrigger`, `serverCmdLight`).
+            if self.spectating() {
+                let button = match action {
+                    UiAction::Game(GameAction::Held { control, down: true }) => match control {
+                        HeldControl::Fire => Some(bri_sim::session::ObserverButton::Fire),
+                        HeldControl::Jump => Some(bri_sim::session::ObserverButton::Jump),
+                        HeldControl::Jet => Some(bri_sim::session::ObserverButton::Jet),
+                        _ => None,
+                    },
+                    UiAction::Game(GameAction::UseLight) => {
+                        Some(bri_sim::session::ObserverButton::Light)
+                    }
+                    _ => None,
+                };
+                let swallowed = button.is_some()
+                    || matches!(
+                        action,
+                        UiAction::Game(GameAction::Held {
+                            control: HeldControl::Fire | HeldControl::Jump | HeldControl::Jet,
+                            down: false,
+                        })
+                    );
+                if let Some(button) = button {
+                    let command = Command::ObserverButton(button);
+                    if let Err(error) = self.command(id, command, action.clone()) {
+                        self.answer(id, Err(error));
+                    }
+                    continue;
+                }
+                if swallowed {
+                    self.answer(id, Ok(()));
+                    continue;
+                }
+            }
             // Dead players click to respawn; other fire/tool input is ignored.
             if !self.local_alive()
                 && matches!(
@@ -7560,7 +7727,7 @@ impl PlatformApp for App {
                     let ready = self.network_view().is_some_and(|view| {
                         view.vitals
                             .get(&view.owner)
-                            .is_some_and(|v| view.tick >= v.respawn_tick)
+                            .is_some_and(|v| !v.respawn_held && view.tick >= v.respawn_tick)
                     });
                     if ready {
                         if let Err(error) = self.command(id, Command::Respawn, action.clone()) {
@@ -7575,8 +7742,10 @@ impl PlatformApp for App {
             // Clicking out of the spy orbit returns to the body
             // (`Observer::onTrigger` in `Corpse` mode); the free camera
             // uses it only to fly faster. The dead click to respawn above.
-            // In an Add-On's orbit the click is the player's empty-hand
-            // trigger, for the Add-On (`Observer::onTrigger` in its mode).
+            // In an Add-On's orbit whose body acts the click is the
+            // player's empty-hand trigger, for the Add-On
+            // (`Observer::onTrigger` in its mode); a frozen one's keys went
+            // to the rules above.
             if let Some(observer) = self.controls.observer()
                 && let UiAction::Game(GameAction::Held {
                     control: HeldControl::Fire,
@@ -7585,7 +7754,13 @@ impl PlatformApp for App {
             {
                 let addon_orbit = self.network_view().is_some_and(|v| {
                     v.vitals.get(&v.owner).is_some_and(|v| {
-                        matches!(v.control, bri_sim::session::ControlObject::Orbit { .. })
+                        matches!(
+                            v.control,
+                            bri_sim::session::ControlObject::Orbit {
+                                body: bri_sim::session::OrbitBody::Acts,
+                                ..
+                            }
+                        )
                     })
                 });
                 if addon_orbit {
@@ -9493,6 +9668,7 @@ impl PlatformApp for App {
             (frame.size.0 as f32, frame.size.1 as f32),
             self.ui.scale(),
             controls.observer().is_none(),
+            |drop| self.world_items.drop_center(drop),
         );
         self.foliage.prepare(
             frame,
@@ -9936,6 +10112,37 @@ fn update_small_json<T: serde::de::DeserializeOwned + serde::Serialize + Default
 const MAX_RECONNECTS: u8 = 3;
 #[cfg(test)]
 mod tests {
+    /// A host's report reaches the Report window as plain text, a cell for
+    /// every column in order and team names in their paint.
+    #[test]
+    fn a_score_report_shows_in_column_order_as_plain_text() {
+        use bri_package_runtime::report::{Report, ReportColumn, ReportRow, ReportSection};
+        let report = Report {
+            title: "End of Round Report".into(),
+            banner: Some("VICTORY".into()),
+            columns: ["score", "kills"]
+                .map(|k| ReportColumn {
+                    key: k.into(),
+                    title: k.to_uppercase(),
+                })
+                .into(),
+            sections: vec![ReportSection {
+                title: "Teams:".into(),
+                rows: vec![ReportRow {
+                    key: "team:1".into(),
+                    name: "<b>Blue".into(),
+                    color: Some(1),
+                    cells: [("kills".to_string(), "2".to_string())].into(),
+                }],
+            }],
+        };
+        let view = super::report_view(&report, &[[1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]]);
+        assert_eq!(view.columns, ["SCORE", "KILLS"]);
+        let row = &view.sections[0].rows[0];
+        assert_eq!(row.name, "‹b›Blue");
+        assert_eq!(row.color, Some([0, 0, 255, 255]));
+        assert_eq!(row.cells, ["", "2"]);
+    }
     /// A first-person image sits in the view's frame, so it stays put on
     /// screen however a seat pitches, rolls or loops: the frame's axes are
     /// the rendered camera's.

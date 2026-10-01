@@ -44,6 +44,7 @@ fn catalog() -> Catalog {
         append_client: true,
         source: "v20".into(),
         source_line: 17368,
+        package: None,
     };
     Catalog {
         schema_version: 1,
@@ -113,6 +114,7 @@ fn catalog() -> Catalog {
             output("Player", "Kill", vec![]),
             output("MiniGame", "Reset", vec![]),
         ],
+        targets: vec![],
         sources: vec![],
         scope: serde_json::Value::Null,
     }
