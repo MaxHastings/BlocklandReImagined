@@ -1286,6 +1286,480 @@
         "crates/weapons/tests/guard.rs a_raised_shield_stops_a_shot_from_in_front_and_sends_it_back",
         "crates/weapons/tests/guard.rs a_shield_breaks_on_its_last_stop_and_leaves_the_holder"
       ]
+    },
+    {
+      "addon": "Weapon_Skins_Pistol",
+      "title": "Tier+Tactical Pistol Skins (Kai)",
+      "port": "weapon_skins_pistol",
+      "status": "partial",
+      "sha256": [],
+      "covers": {
+        "ClassicPistolImage::onFire": {
+          "fires": "Parent::onFire\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "ModernPistolImage::onFire": {
+          "fires": "Parent::onFire\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "SilencedPistolImage::onFire": {
+          "fires": "Parent::onFire\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "RetroPistolImage::onFire": {
+          "fires": "Parent::onFire\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/tier_port.rs skins_are_their_hosts_guns_under_their_own_names"
+      ]
+    },
+    {
+      "addon": "Weapon_Skins_Bullpup",
+      "title": "Tier+Tactical Bullpup Skins (Kai)",
+      "port": "weapon_skins_bullpup",
+      "status": "partial",
+      "sha256": [],
+      "covers": {
+        "CompactBullpupImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "CompactBullpupImage::onBurstFire": {
+          "fires_free": "TT_createProjectile\\s*\\("
+        },
+        "CompactBullpupImage::onBurstCheck": {
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "TacticalBullpupImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "TacticalBullpupImage::onBurstFire": {
+          "fires_free": "TT_createProjectile\\s*\\("
+        },
+        "TacticalBullpupImage::onBurstCheck": {
+          "spends": "TT_decrementAmmo\\s*\\("
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/tier_port.rs skins_are_their_hosts_guns_under_their_own_names"
+      ]
+    },
+    {
+      "addon": "Weapon_Skins_Dualies",
+      "title": "Tier+Tactical Dualies Skins (Kai)",
+      "port": "weapon_skins_dualies",
+      "status": "partial",
+      "sha256": [],
+      "covers": {
+        "AkimboClassicPistolImage::onMount": {
+          "left_hand": "mountImage\\(\\s*\\w+\\s*,\\s*1\\s*\\)"
+        },
+        "AkimboClassicPistolImage::onUnMount": {
+          "drops_left": "unMountImage\\(\\s*1\\s*\\)"
+        },
+        "AkimboClassicPistolImage::onFire": {
+          "fires": "Parent::onFire\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "AkimboClassicPistolImage::onFireAkimbo": {
+          "left_fires": "setImageTrigger\\(\\s*1\\s*,\\s*1\\s*\\)"
+        },
+        "LeftHandedClassicPistolImage::onFire": {
+          "fires": "Parent::onFire\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "AkimboModernPistolImage::onMount": {
+          "left_hand": "mountImage\\(\\s*\\w+\\s*,\\s*1\\s*\\)"
+        },
+        "AkimboModernPistolImage::onUnMount": {
+          "drops_left": "unMountImage\\(\\s*1\\s*\\)"
+        },
+        "AkimboModernPistolImage::onFire": {
+          "fires": "Parent::onFire\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "AkimboModernPistolImage::onFireAkimbo": {
+          "left_fires": "setImageTrigger\\(\\s*1\\s*,\\s*1\\s*\\)"
+        },
+        "LeftHandedModernPistolImage::onFire": {
+          "fires": "Parent::onFire\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "AkimboSilencedPistolImage::onMount": {
+          "left_hand": "mountImage\\(\\s*\\w+\\s*,\\s*1\\s*\\)"
+        },
+        "AkimboSilencedPistolImage::onUnMount": {
+          "drops_left": "unMountImage\\(\\s*1\\s*\\)"
+        },
+        "AkimboSilencedPistolImage::onFire": {
+          "fires": "Parent::onFire\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "AkimboSilencedPistolImage::onFireAkimbo": {
+          "left_fires": "setImageTrigger\\(\\s*1\\s*,\\s*1\\s*\\)"
+        },
+        "LeftHandedSilencedPistolImage::onFire": {
+          "fires": "Parent::onFire\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/tier_port.rs skins_are_their_hosts_guns_under_their_own_names"
+      ]
+    },
+    {
+      "addon": "Weapon_Skins_LMG",
+      "title": "Tier+Tactical LMG Skins (Kai)",
+      "port": "weapon_skins_lmg",
+      "status": "partial",
+      "sha256": [],
+      "covers": {
+        "ClassicLMGImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "ClassicLMGImage::onFire2": {
+          "fires_free": "TT_createProjectile\\s*\\("
+        },
+        "ClassicLMGImage::onClick": {
+          "lays": "pushDatablock\\s*\\("
+        },
+        "ClassicLMGImage::onHalt": {
+          "lifts": "popDatablock\\s*\\("
+        },
+        "ClassicLMGImage::onEmptyTransition": {
+          "lifts": "popDatablock\\s*\\("
+        },
+        "ClassicLMGImage::onUnMount": {
+          "lifts": "popDatablock\\s*\\("
+        },
+        "ClassicLMGProjectile1::damage": {
+          "slow": "TT_dampenVelocity\\s*\\("
+        },
+        "BlockyLMGImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\(",
+          "knockback": "TT_knockback\\s*\\("
+        },
+        "BlockyLMGImage::onFire2": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "knockback": "TT_knockback\\s*\\("
+        },
+        "BlockyLMGImage::onClick": {
+          "lays": "pushDatablock\\s*\\("
+        },
+        "BlockyLMGImage::onHalt": {
+          "lifts": "popDatablock\\s*\\("
+        },
+        "BlockyLMGImage::onEmptyTransition": {
+          "lifts": "popDatablock\\s*\\("
+        },
+        "BlockyLMGImage::onUnMount": {
+          "lifts": "popDatablock\\s*\\("
+        },
+        "BlockyLMGProjectile1::damage": {
+          "slow": "TT_dampenVelocity\\s*\\("
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/tier_port.rs skins_are_their_hosts_guns_under_their_own_names"
+      ]
+    },
+    {
+      "addon": "Weapon_Skins_MPistol",
+      "title": "Tier+Tactical Machine Pistol Skins (Kai)",
+      "port": "weapon_skins_mpistol",
+      "status": "partial",
+      "sha256": [],
+      "covers": {
+        "ModernMPImage::onFire": {
+          "fires": "Parent::onFire\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "ClassicMPImage::onFire": {
+          "fires": "Parent::onFire\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/tier_port.rs skins_are_their_hosts_guns_under_their_own_names"
+      ]
+    },
+    {
+      "addon": "Weapon_Skins_Magnum",
+      "title": "Tier+Tactical Magnum Skins (Kai)",
+      "port": "weapon_skins_magnum",
+      "status": "partial",
+      "sha256": [],
+      "covers": {
+        "semiMagnumImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "semiMagnumProjectile::damage": {
+          "headshot": "TT_processHeadshotDamage\\s*\\("
+        },
+        "WesternMagnumImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "WesternMagnumImage::onReloaded": {
+          "one_by_one": "TT_incrementReload\\s*\\("
+        },
+        "WesternMagnumProjectile::damage": {
+          "headshot": "TT_processHeadshotDamage\\s*\\("
+        },
+        "MavMagnumImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "MavMagnumImage::onReloaded": {
+          "one_by_one": "TT_incrementReload\\s*\\("
+        },
+        "MavMagnumProjectile::damage": {
+          "headshot": "TT_processHeadshotDamage\\s*\\("
+        },
+        "RetroMagnumImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "RetroMagnumProjectile::damage": {
+          "headshot": "TT_processHeadshotDamage\\s*\\("
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/tier_port.rs skins_are_their_hosts_guns_under_their_own_names"
+      ]
+    },
+    {
+      "addon": "Weapon_Skins_Rifles",
+      "title": "Tier+Tactical Rifle Skins (Kai)",
+      "port": "weapon_skins_rifles",
+      "status": "partial",
+      "sha256": [],
+      "covers": {
+        "BoltRifleImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "BoltRifleImage::onMount": {
+          "draws": "playThread\\(\\s*[023]\\s*,"
+        },
+        "BoltRifleProjectile::damage": {
+          "headshot": "TT_processHeadshotDamage\\s*\\("
+        },
+        "BoltRifleWeakProjectile::damage": {
+          "headshot": "TT_processHeadshotDamage\\s*\\("
+        },
+        "HuntingRifleImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "HuntingRifleProjectile::damage": {
+          "headshot": "TT_processHeadshotDamage\\s*\\("
+        },
+        "HuntingRifleWeakProjectile::damage": {
+          "headshot": "TT_processHeadshotDamage\\s*\\("
+        },
+        "RetroRifleImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "RetroRifleProjectile::damage": {
+          "headshot": "TT_processHeadshotDamage\\s*\\("
+        },
+        "RetroRifleWeakProjectile::damage": {
+          "headshot": "TT_processHeadshotDamage\\s*\\("
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/tier_port.rs skins_are_their_hosts_guns_under_their_own_names"
+      ]
+    },
+    {
+      "addon": "Weapon_Skins_RiflesT2",
+      "title": "Tier+Tactical Tier 2 Rifle Skins (Kai)",
+      "port": "weapon_skins_riflest2",
+      "status": "partial",
+      "sha256": [],
+      "covers": {
+        "ModernTAssaultRifleImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "ClassicTAssaultRifleImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "ClassicBattleRifleImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "BattlerifleProjectile1::damage": {
+          "slow": "TT_dampenVelocity\\s*\\("
+        },
+        "BrowningTAssaultRifleImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "ScoutTAssaultRifleImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "SemiBattleRifleImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "CompactTAssaultRifleImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/tier_port.rs skins_are_their_hosts_guns_under_their_own_names"
+      ]
+    },
+    {
+      "addon": "Weapon_Skins_SMG",
+      "title": "Tier+Tactical SMG Skins (Kai)",
+      "port": "weapon_skins_smg",
+      "status": "partial",
+      "sha256": [],
+      "covers": {
+        "NavalSMGImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "NavalSubmachinegunProjectile1::damage": {
+          "slow": "TT_dampenVelocity\\s*\\("
+        },
+        "ClassicSMGImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "ClassicSubmachinegunProjectile1::damage": {
+          "slow": "TT_dampenVelocity\\s*\\("
+        },
+        "ModernSMGImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "ModernSubmachinegunProjectile1::damage": {
+          "slow": "TT_dampenVelocity\\s*\\("
+        },
+        "SilencedSMGImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "SilencedSubmachinegunProjectile1::damage": {
+          "slow": "TT_dampenVelocity\\s*\\("
+        },
+        "MicroSMGImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "MicroSubmachinegunProjectile1::damage": {
+          "slow": "TT_dampenVelocity\\s*\\("
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/tier_port.rs skins_are_their_hosts_guns_under_their_own_names"
+      ]
+    },
+    {
+      "addon": "Weapon_Skins_Shotgun",
+      "title": "Tier+Tactical Shotgun Skins (Kai)",
+      "port": "weapon_skins_shotgun",
+      "status": "partial",
+      "sha256": [],
+      "covers": {
+        "SquaredShotgunImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "SquaredShotgunImage::onReloaded": {
+          "one_by_one": "TT_incrementReload\\s*\\("
+        },
+        "ScattergunImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "ScattergunImage::onReloaded": {
+          "one_by_one": "TT_incrementReload\\s*\\("
+        },
+        "classicShotgunImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "ClassicShotgunImage::onReloaded": {
+          "one_by_one": "TT_incrementReload\\s*\\("
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/tier_port.rs skins_are_their_hosts_guns_under_their_own_names"
+      ]
+    },
+    {
+      "addon": "Weapon_Skins_ShotgunT2",
+      "title": "Tier+Tactical Tier 2 Shotgun Skins (Kai)",
+      "port": "weapon_skins_shotgunt2",
+      "status": "partial",
+      "sha256": [],
+      "covers": {
+        "SlickShotgunImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "SlickShotgunImage::onReloaded": {
+          "one_by_one": "TT_incrementReload\\s*\\("
+        },
+        "tacticalShotgunImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "tacticalShotgunImage::onReloaded": {
+          "one_by_one": "TT_incrementReload\\s*\\("
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/tier_port.rs skins_are_their_hosts_guns_under_their_own_names"
+      ]
+    },
+    {
+      "addon": "Weapon_Skins_Sniper",
+      "title": "Tier+Tactical Sniper Skins (Kai)",
+      "port": "weapon_skins_sniper",
+      "status": "partial",
+      "sha256": [],
+      "covers": {
+        "MagnifiedSniperRifleImage::onFire": {
+          "fires": "Parent::onFire\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "MagnifiedSniperRifleImage::TT_isRaycastCritical": {
+          "head_crit": "TT_isRaycastHeadshot\\s*\\("
+        },
+        "ClassicSniperRifleImage::onFire": {
+          "fires": "Parent::onFire\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "ClassicSniperRifleImage::TT_isRaycastCritical": {
+          "head_crit": "TT_isRaycastHeadshot\\s*\\("
+        },
+        "SemiSniperRifleImage::onFire": {
+          "fires": "Parent::onFire\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "SemiSniperRifleImage::TT_isRaycastCritical": {
+          "head_crit": "TT_isRaycastHeadshot\\s*\\("
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/tier_port.rs skins_are_their_hosts_guns_under_their_own_names"
+      ]
     }
   ]
 }

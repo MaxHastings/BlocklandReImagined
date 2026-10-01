@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "include": [
+    "tier-tactical-core",
+    "tier-tactical"
+  ],
+  "notes": "Tier+Tactical Magnum skins on Tier 2's Magnum and ammo system, with their own models, numbers and headshot kill messages. The Retro Magnum's onReloadWait is named by none of its states, so v20 never ran it.",
+  "handles": {
+    "RetroMagnumImage::onReloadWait": "never runs: none of the Retro Magnum's states names it, so v20 never called it"
+  }
+}

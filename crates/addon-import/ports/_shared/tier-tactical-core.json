@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "notes": "Support_TT_Raycasting.cs and the image scripts' arm moves and sounds, shared by every Tier+Tactical Add-On: the gun packs (with tier-tactical, their ammo system) and Kai's melee packs, which each ship their own copy of the raycasting script.",
+  "notes": "Support_TT_Raycasting.cs and the image scripts' arm moves and sounds (an onMount's played as the gun is drawn), shared by every Tier+Tactical Add-On: the gun packs (with tier-tactical, their ammo system) and Kai's melee packs, which each ship their own copy of the raycasting script.",
   "handles": {
     "WeaponImage::onFire": "the port's hitscans: TT_raycast guns hit along rays (engine Shot::hitscan)",
     "WeaponImage::TT_onRaycastHit": "engine hitscan: damage where the minigame allows, the hit projectile's blast, the player or brick hit sound",
@@ -24,6 +24,14 @@
     "other_sound": "TT_raycastExplosionBrickSound"
   },
   "scripts": [
+    {
+      "method": "onMount",
+      "into": "state",
+      "pattern": "%obj\\.playThread\\(\\s*(?P<t>[023])\\s*,\\s*(?P<s>\\w+)\\s*\\)",
+      "set": {
+        "cues": [{ "after_ms": 0, "thread": "{t}", "sequence": "{s}" }]
+      }
+    },
     {
       "method": "*",
       "into": "state",

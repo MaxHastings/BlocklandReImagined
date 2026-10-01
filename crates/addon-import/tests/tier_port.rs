@@ -1894,3 +1894,89 @@ fn melee_extended_ii_shield_stops_shots_from_in_front_and_sends_them_back() {
         "{said:?}"
     );
 }
+
+/// Kai's twelve Skins packs on our stand-ins: each skin is its host gun
+/// (Tier 1, 2 or 2A, or the Pistol skins) under its own name and numbers,
+/// and its scripts are copies of the host's, so the shared Tier+Tactical
+/// rules port every function. The Dualies hold twice their pistol's
+/// magazine and hit as hard, as Kai's `classicPistolItem.TT_maxAmmo*2` and
+/// `classicPistolImage.TT_raycastDirectDamage` fields read; the Light MG
+/// skins lay and lift their gunner's slow body; the Bolt Rifle shifts its
+/// arm as it is drawn.
+#[test]
+fn skins_are_their_hosts_guns_under_their_own_names() {
+    let t1 = "Weapon_Package_Tier1";
+    let t2 = "Weapon_Package_Tier2";
+    let t2a = "Weapon_Package_Tier2A";
+    let packs: [(&str, &[&str]); 12] = [
+        ("Weapon_Skins_Pistol", &[t1]),
+        ("Weapon_Skins_Dualies", &[t1, "Weapon_Skins_Pistol"]),
+        ("Weapon_Skins_Rifles", &[t1]),
+        ("Weapon_Skins_SMG", &[t1]),
+        ("Weapon_Skins_Shotgun", &[t1]),
+        ("Weapon_Skins_LMG", &[t1, t2]),
+        ("Weapon_Skins_Magnum", &[t1, t2]),
+        ("Weapon_Skins_RiflesT2", &[t1, t2]),
+        ("Weapon_Skins_ShotgunT2", &[t1, t2]),
+        ("Weapon_Skins_Sniper", &[t1, t2]),
+        ("Weapon_Skins_Bullpup", &[t1, t2a]),
+        ("Weapon_Skins_MPistol", &[t1, t2a]),
+    ];
+    for (addon, refs) in packs {
+        let ns = addon.to_ascii_lowercase();
+        let (_dir, out, report) = imported_on(addon, &ns, refs, "skins");
+        let port = &report.ports[0];
+        assert!(port.applied, "{addon}: {:?}", port.reason);
+        assert_eq!(port.port, ns);
+        assert!(
+            report.needs_behaviour.iter().all(|b| b.port.is_some()),
+            "{addon}: {:?}",
+            report
+                .needs_behaviour
+                .iter()
+                .filter(|b| b.port.is_none())
+                .map(|b| &b.function)
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            report.unsupported.is_empty(),
+            "{addon}: {:?}",
+            report.unsupported
+        );
+        let pack = pack(&out);
+        assert!(!pack.items.is_empty(), "{addon}");
+        for (id, item) in &pack.items {
+            assert!(item.ui_name.starts_with("Stand-in "), "{id}");
+            // Every skin keeps its host's ammo system.
+            let image = &pack.images[&item.image];
+            assert!(image.magazine.is_some(), "{id}");
+        }
+        match addon {
+            "Weapon_Skins_Dualies" => {
+                let image = &pack.images[&format!("{ns}:image/akimboclassicpistolimage")];
+                assert_eq!(image.magazine.as_ref().unwrap().size, 12);
+                assert_eq!(
+                    image.left_image.as_deref(),
+                    Some(format!("{ns}:image/lefthandedclassicpistolimage").as_str())
+                );
+                let ray = image.projectile.as_ref().unwrap();
+                assert_eq!(pack.projectiles[ray].damage, 12.0);
+            }
+            "Weapon_Skins_LMG" => {
+                let image = &pack.images[&format!("{ns}:image/classiclmgimage")];
+                let commands = &image.commands;
+                assert_eq!(commands.states["onclick"], format!("{ns}-rules:lay"));
+                assert_eq!(
+                    commands.unmount.as_deref(),
+                    Some(format!("{ns}-rules:lift").as_str())
+                );
+            }
+            "Weapon_Skins_Rifles" => {
+                let image = &pack.images[&format!("{ns}:image/boltrifleimage")];
+                let cue = &image.states[0].cues[0];
+                assert_eq!((cue.thread, cue.sequence.as_str()), (Some(2), "shiftLeft"));
+            }
+            _ => {}
+        }
+    }
+}

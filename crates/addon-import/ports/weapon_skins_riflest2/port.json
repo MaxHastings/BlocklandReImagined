@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "include": [
+    "tier-tactical-core",
+    "tier-tactical"
+  ],
+  "notes": "Tier+Tactical rifle skins on Tier 2's Assault and Battle Rifles and ammo system: the assault rifles' truer first round after a pause and the battle rifles' slowing rounds, with their own models and numbers."
+}

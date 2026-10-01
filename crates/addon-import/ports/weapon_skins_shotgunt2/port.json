@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "include": [
+    "tier-tactical-core",
+    "tier-tactical"
+  ],
+  "notes": "Tier+Tactical Combat Shotgun skins on Tier 2's Combat Shotgun and ammo system: pellets and a close blast, loaded a shell at a time. The skins define no onAltTrigger, so as in v20 jet does not fire the double blast."
+}

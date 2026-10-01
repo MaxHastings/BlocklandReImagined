@@ -625,8 +625,9 @@ pub fn hitscans(
         blocks
             .field(image, field)
             .map(|v| {
-                v.trim()
-                    .parse::<f32>()
+                blocks
+                    .number(image, field)
+                    .map(|n| n as f32)
                     .with_context(|| format!("{image}: {field} `{v}` is not a number"))
             })
             .transpose()

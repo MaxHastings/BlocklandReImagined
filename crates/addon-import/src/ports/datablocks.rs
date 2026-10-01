@@ -167,12 +167,104 @@ impl<'a> Datablocks<'a> {
         self.raw(name, field).map(crate::literal)
     }
 
+    /// `field` as a number, evaluated as the datablock was when it loaded:
+    /// a literal, or arithmetic (`+ - * /`, brackets) on literals and other
+    /// datablocks' fields (`classicPistolItem.TT_maxAmmo * 2`). `None` for
+    /// anything else.
+    pub(super) fn number(&self, name: &str, field: &str) -> Option<f64> {
+        self.number_at(name, field, 0)
+    }
+
+    fn number_at(&self, name: &str, field: &str, depth: u32) -> Option<f64> {
+        if depth > 16 {
+            return None;
+        }
+        let text = self.field(name, field)?;
+        let mut e = Expression {
+            blocks: self,
+            text: text.as_bytes(),
+            at: 0,
+            depth,
+        };
+        let v = e.sum()?;
+        e.space();
+        (e.at == e.text.len() && v.is_finite()).then_some(v)
+    }
+
     pub(super) fn of_class<'b>(&'b self, class: &'b str) -> impl Iterator<Item = &'a Value> + 'b {
         self.by_name.values().copied().filter(move |d| {
             d["class"]
                 .as_str()
                 .is_some_and(|c| c.eq_ignore_ascii_case(class))
         })
+    }
+}
+
+/// A datablock field's arithmetic, parsed by precedence.
+struct Expression<'b, 'a> {
+    blocks: &'b Datablocks<'a>,
+    text: &'b [u8],
+    at: usize,
+    depth: u32,
+}
+
+impl Expression<'_, '_> {
+    fn space(&mut self) {
+        while self.text.get(self.at).is_some_and(u8::is_ascii_whitespace) {
+            self.at += 1;
+        }
+    }
+    fn eat(&mut self, c: u8) -> bool {
+        self.space();
+        let hit = self.text.get(self.at) == Some(&c);
+        self.at += usize::from(hit);
+        hit
+    }
+    fn sum(&mut self) -> Option<f64> {
+        let mut v = self.product()?;
+        loop {
+            if self.eat(b'+') {
+                v += self.product()?;
+            } else if self.eat(b'-') {
+                v -= self.product()?;
+            } else {
+                return Some(v);
+            }
+        }
+    }
+    fn product(&mut self) -> Option<f64> {
+        let mut v = self.unary()?;
+        loop {
+            if self.eat(b'*') {
+                v *= self.unary()?;
+            } else if self.eat(b'/') {
+                v /= self.unary()?;
+            } else {
+                return Some(v);
+            }
+        }
+    }
+    fn unary(&mut self) -> Option<f64> {
+        if self.eat(b'-') {
+            return Some(-self.unary()?);
+        }
+        if self.eat(b'(') {
+            let v = self.sum()?;
+            return self.eat(b')').then_some(v);
+        }
+        self.space();
+        let start = self.at;
+        let word = |c: &u8| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'.');
+        while self.text.get(self.at).is_some_and(word) {
+            self.at += 1;
+        }
+        let token = std::str::from_utf8(&self.text[start..self.at]).ok()?;
+        if let Ok(v) = token.parse::<f64>() {
+            return Some(v);
+        }
+        // Another datablock's field.
+        let (name, field) = token.split_once('.')?;
+        self.blocks.number_at(name, field, self.depth + 1)
     }
 }
 
@@ -208,10 +300,14 @@ pub fn magazines(
         let (Some(size), Some(kind)) = (size, blocks.field(name, &m.ammo)) else {
             continue;
         };
-        let size: u32 = size
-            .trim()
-            .parse()
-            .with_context(|| format!("{name}: {} `{size}` is not a whole number", m.size))?;
+        let size: u32 = match counted {
+            Some(_) => 1,
+            None => blocks
+                .number(name, &m.size)
+                .filter(|n| n.fract() == 0.0 && (0.0..=u32::MAX as f64).contains(n))
+                .with_context(|| format!("{name}: {} `{size}` is not a whole number", m.size))?
+                as u32,
+        };
         if size == 0 {
             // No magazine: the system counts these straight from the reserve.
             continue;
