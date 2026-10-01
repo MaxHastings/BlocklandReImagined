@@ -144,6 +144,9 @@ fn validate_vitals(
     for ghost in vitals.values().filter_map(|v| v.ghost.as_ref()) {
         ghost.validate()?;
     }
+    for path in vitals.values().filter_map(|v| v.camera_path.as_ref()) {
+        path.validate()?;
+    }
     Ok(())
 }
 fn validate_minigames(games: &[bri_sim::session::MiniGameView]) -> Result<()> {

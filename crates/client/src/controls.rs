@@ -185,6 +185,9 @@ pub enum ObserverMode {
     /// Orbit a package entity the player drives (`ControlObject::Entity`):
     /// the moves go to the entity, steered by this camera's yaw.
     Drive(u64),
+    /// A rule's path camera (`ControlObject::Path`), at this point of its
+    /// path; [`Controls::fly_path`] moves and turns it each frame.
+    Path(glam::Vec3),
 }
 /// `setFov` only sets a target; each frame `$cameraFov` moves toward it by
 /// elapsed ms / zoomSpeed * 90 degrees (blocklandv20.exe 0x58ee10).
@@ -557,6 +560,13 @@ impl Controls {
             ControlObject::Spy(target) => ObserverMode::Orbit(target),
             ControlObject::Corpse => ObserverMode::Orbit(owner),
             ControlObject::Entity(entity) => ObserverMode::Drive(entity),
+            ControlObject::Path => match self.observer {
+                Some(Observer {
+                    mode: ObserverMode::Path(_),
+                    ..
+                }) => return,
+                _ => ObserverMode::Path(eye.unwrap_or_default()),
+            },
         };
         if let Some(observer) = &mut self.observer {
             observer.mode = mode;
@@ -587,7 +597,7 @@ impl Controls {
     pub fn free_camera(&self) -> Option<glam::Vec3> {
         match self.observer?.mode {
             ObserverMode::Free(position) => Some(position),
-            ObserverMode::Orbit(_) | ObserverMode::Drive(_) => None,
+            ObserverMode::Orbit(_) | ObserverMode::Drive(_) | ObserverMode::Path(_) => None,
         }
     }
     /// The orbited player's presented eye, or the driven entity's head,
@@ -603,7 +613,18 @@ impl Controls {
             ObserverMode::Drive(entity) => entities
                 .get(&entity)
                 .map(|e| glam::Vec3::from(e.position) + glam::Vec3::Y * 1.5),
-            ObserverMode::Free(_) => None,
+            ObserverMode::Free(_) | ObserverMode::Path(_) => None,
+        }
+    }
+    /// Put the path camera where its path is now: the look keys do not turn
+    /// it, as a `PathCamera` in control ignores the mouse.
+    pub fn fly_path(&mut self, view: bri_sim::session::CameraView) {
+        if let Some(observer) = &mut self.observer
+            && let ObserverMode::Path(position) = &mut observer.mode
+        {
+            *position = view.eye();
+            observer.yaw = view.yaw;
+            observer.pitch = view.pitch;
         }
     }
     /// Fly the free camera with the movement keys.

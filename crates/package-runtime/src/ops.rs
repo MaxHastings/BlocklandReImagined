@@ -580,6 +580,36 @@ pub enum Op {
         player: u64,
         target: Option<u64>,
     },
+    /// Fly a player's camera along knots (`setControlObject(pathCamera)`),
+    /// their body standing still, or with `None` hand control back. The
+    /// package's `on_path_node` hears each knot reached.
+    FollowPath {
+        player: u64,
+        knots: Option<Vec<PathKnot>>,
+    },
+}
+
+/// Most knots a camera path holds (`PathCameraData.maxNodes`).
+pub const MAX_PATH_KNOTS: usize = 20;
+/// How a knot shapes the camera path through it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KnotKind {
+    Normal,
+    Kink,
+    PositionOnly,
+}
+/// One knot of a camera path: where the camera is and looks, its speed to
+/// the next knot in units per second, and how the path passes it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct PathKnot {
+    pub at: [f32; 3],
+    pub yaw: f32,
+    pub pitch: f32,
+    pub speed: f32,
+    pub kind: KnotKind,
+    pub linear: bool,
+    pub jump: bool,
 }
 /// One team as [`Op::SetTeams`] asks for it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -706,6 +736,7 @@ impl Op {
             | Self::SetScale { .. }
             | Self::SetLookLimits { .. }
             | Self::Watch { .. }
+            | Self::FollowPath { .. }
             | Self::SetAvatarColors { .. } => "player",
             Self::MountObject { .. } | Self::UnmountObject { .. } => "physics",
             Self::Push { .. }
@@ -952,6 +983,16 @@ impl Op {
             Self::SetScore { value, .. } => value.abs() <= MAX_SCORE,
             Self::SetBrickItem { item: id, .. } => id.as_deref().is_none_or(item),
             Self::SetBrickColor { .. } => true,
+            Self::FollowPath { knots, .. } => knots.as_ref().is_none_or(|k| {
+                (1..=MAX_PATH_KNOTS).contains(&k.len())
+                    && k.iter().all(|k| {
+                        finite(&k.at)
+                            && k.yaw.is_finite()
+                            && k.pitch.is_finite()
+                            && k.pitch.abs() <= std::f32::consts::FRAC_PI_2
+                            && (0.1..=1000.0).contains(&k.speed)
+                    })
+            }),
             Self::SetZonePeriod { zone, period_ms } => {
                 (*zone as usize) < crate::content::MAX_ZONES && (10..=10_000).contains(period_ms)
             }
@@ -1070,6 +1111,7 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::SetLookLimits { .. } => "set_look_limits",
         Op::HoldRespawn { .. } => "hold_respawn",
         Op::Watch { .. } => "watch",
+        Op::FollowPath { .. } => "follow_path",
         Op::SpawnEntity { .. } => "spawn_entity",
         Op::RemoveEntity { .. } => "remove_entity",
         Op::Steer { .. } => "steer",

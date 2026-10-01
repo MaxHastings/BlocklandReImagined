@@ -913,6 +913,7 @@ impl Session {
             .map(|(image, state)| (image.id.clone(), state.name.clone()))
             .unwrap_or_default();
         let state = p.player.state();
+        let camera = self.control_view(p);
         let tuning = p.player.tuning();
         let height = if state.crouched {
             tuning.crouch_height
@@ -928,6 +929,9 @@ impl Session {
             admin: p.actor.administrator,
             eye: p.player.eye().to_array(),
             look: p.player.state().forward().to_array(),
+            camera: camera.eye,
+            camera_yaw: camera.yaw,
+            camera_pitch: camera.pitch,
             velocity: p.player.state().velocity,
             item,
             minigame: self
@@ -1837,6 +1841,11 @@ impl Session {
             Op::SetBrickColor { brick, color } => {
                 self.package_set_brick_color(brick, color, caller)
             }
+            Op::FollowPath { player, knots } => self.follow_path(
+                package,
+                player,
+                knots.map(|k| k.iter().map(super::camera_path::Knot::from_op).collect()),
+            ),
             Op::SetZonePeriod { zone, period_ms } => {
                 self.package_set_zone_period(package, zone, period_ms)
             }
@@ -2738,6 +2747,30 @@ impl Session {
 
     /// Package work for one tick: entity thinking and movement, world
     /// streaming around players, and `on_tick` hooks.
+    /// `on_path_node(player, knot)` for each knot a rule's camera path
+    /// reached (`PathCameraData::onNode`).
+    fn step_paths(&mut self) {
+        for (package, owner, knot) in self.knots_reached() {
+            let listens = self.packages.as_ref().is_some_and(|host| {
+                host.catalog
+                    .behaviours()
+                    .any(|(id, b)| *id == package && b.on_path_node)
+            });
+            if !listens {
+                continue;
+            }
+            let _ = self.run_package(
+                &package,
+                "on_path_node",
+                vec![Dynamic::from_int(owner as i64), Dynamic::from_int(knot as i64)],
+                Budget::Command,
+                None,
+                None,
+                None,
+            );
+            self.charge_work(&package);
+        }
+    }
     pub(super) fn step_packages(&mut self) -> Result<()> {
         self.deliver_deaths();
         self.deliver_loadouts();
@@ -2745,6 +2778,7 @@ impl Session {
         self.deliver_hits();
         self.deliver_minigame_events();
         self.step_zones();
+        self.step_paths();
         let changed = self.dirty.read(super::dirty::Reader::Packages);
         let Some(host) = self.packages.as_ref() else {
             return Ok(());

@@ -28,6 +28,9 @@ pub enum ControlObject {
     /// drive that entity's body with its archetype's movement; the avatar
     /// stands where it was.
     Entity(u64),
+    /// A rule's path camera (`follow_path`): the camera flies the path in
+    /// [`super::Vitals::camera_path`] while the body stands still.
+    Path,
 }
 
 /// `%client.Camera`'s transform: the eye it sits at and where it looks. The
@@ -167,7 +170,11 @@ impl Session {
     /// still act: a body in that state takes no actions.
     pub(super) fn watching(&self, owner: OwnerId) -> bool {
         self.peers.get(&owner).is_some_and(|p| {
-            p.combat.alive && matches!(p.control, ControlObject::Spy(_) | ControlObject::Corpse)
+            p.combat.alive
+                && matches!(
+                    p.control,
+                    ControlObject::Spy(_) | ControlObject::Corpse | ControlObject::Path
+                )
         })
     }
     /// Spies watching a departing player return to their own bodies.

@@ -19,6 +19,8 @@ pub use build_load::LoadPace;
 mod combat;
 mod control;
 pub use control::{CameraView, ControlObject};
+pub mod camera_path;
+pub use camera_path::CameraPath;
 mod debris;
 mod dirty;
 mod events;
@@ -621,6 +623,9 @@ struct Peer {
     control: ControlObject,
     /// `%client.Camera`'s last transform; `None` until a camera is used.
     camera: Option<CameraView>,
+    /// The camera path a rule has this player's camera fly
+    /// (`ControlObject::Path`).
+    path: Option<camera_path::Following>,
     /// `%client.lastF8Time`: when an admin teleport last moved this player.
     last_drop_tick: Option<u64>,
     tutorial: tutorial::Progress,
@@ -1158,6 +1163,7 @@ impl Session {
                 talk_stops: VecDeque::new(),
                 water: Default::default(),
                 look_limits: None,
+                path: None,
                 avatar: self.avatar_catalog.as_ref().map(|c| c.defaults.clone()),
             },
         );
@@ -1376,6 +1382,7 @@ impl Session {
                 talk_stops: VecDeque::new(),
                 water: Default::default(),
                 look_limits: None,
+                path: None,
                 avatar,
             },
         );

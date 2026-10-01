@@ -1676,6 +1676,7 @@ mod tests {
             ride: None,
             look_limits: None,
             control: Default::default(),
+            camera_path: None,
             talking: false,
             sitting: false,
             ghost: None,

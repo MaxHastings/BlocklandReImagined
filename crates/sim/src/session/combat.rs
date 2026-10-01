@@ -161,6 +161,9 @@ pub struct Vitals {
     pub look_limits: Option<[f32; 2]>,
     /// What this player's moves steer.
     pub control: super::ControlObject,
+    /// The path their camera flies while `control` is `Path`.
+    #[serde(default)]
+    pub camera_path: Option<super::CameraPath>,
     /// Typing in the chat box (`MsgStartTalking`).
     pub talking: bool,
     /// Seated by the sit emote.
@@ -575,6 +578,11 @@ impl Session {
                         ride: self.ride(*owner),
                         look_limits: peer.look_limits,
                         control: peer.control,
+                        camera_path: peer
+                            .path
+                            .as_ref()
+                            .filter(|_| peer.control == super::ControlObject::Path)
+                            .map(|f| f.path.clone()),
                         talking: peer.talking,
                         sitting: peer.sitting,
                         ghost: self.ghost_brick(*owner),

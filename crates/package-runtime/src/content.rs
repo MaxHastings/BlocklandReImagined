@@ -164,6 +164,11 @@ pub struct Behaviour {
     /// is still readable.
     #[serde(default)]
     pub on_leave: bool,
+    /// `on_path_node(player, knot)` as a camera path this package gave the
+    /// player (`follow_path`) reaches each knot, from 0
+    /// (`PathCameraData::onNode`).
+    #[serde(default)]
+    pub on_path_node: bool,
     /// `on_damage(victim, attacker, amount, info)` before a player takes
     /// damage: return the amount to take instead (0 prevents it), or `()`
     /// to leave it. `attacker` is the player responsible, or `()`; `info`

@@ -57,6 +57,15 @@ pub struct PlayerView {
     pub eye: [f32; 3],
     #[serde(default)]
     pub look: [f32; 3],
+    /// Their control object's transform (`getControlObject().getTransform()`):
+    /// a free or path camera's eye and heading while one has control, else
+    /// the body's eye and heading. Yaw and pitch in radians.
+    #[serde(default)]
+    pub camera: [f32; 3],
+    #[serde(default)]
+    pub camera_yaw: f32,
+    #[serde(default)]
+    pub camera_pitch: f32,
     #[serde(default)]
     pub velocity: [f32; 3],
     /// The item in their hand (`namespace:weapon/name`), or empty.
@@ -480,6 +489,22 @@ fn player_map(p: &PlayerView) -> Dynamic {
         float_entry("lx", p.look[0]),
         float_entry("ly", p.look[1]),
         float_entry("lz", p.look[2]),
+        (
+            "camera",
+            map([
+                (
+                    "at",
+                    Dynamic::from_array(
+                        p.camera
+                            .iter()
+                            .map(|v| Dynamic::from_float(f64::from(*v)))
+                            .collect(),
+                    ),
+                ),
+                float_entry("yaw", p.camera_yaw),
+                float_entry("pitch", p.camera_pitch),
+            ]),
+        ),
         float_entry("vx", p.velocity[0]),
         float_entry("vy", p.velocity[1]),
         float_entry("vz", p.velocity[2]),
@@ -753,6 +778,47 @@ fn object_ref(value: &Dynamic) -> Fallible<ObjectRef> {
         .ok_or_else(|| format!("`{text}` is not an object like \"vehicle:3\"").into())
 }
 /// `[x, y, z]`.
+fn path_knot(value: &Dynamic) -> Fallible<crate::ops::PathKnot> {
+    let knot = value
+        .read_lock::<rhai::Map>()
+        .ok_or("a knot is #{ at, yaw, pitch, speed, type, path, jump }")?;
+    let field = |key: &str| knot.get(key).cloned().unwrap_or(Dynamic::UNIT);
+    let text = |key: &str, default: &str| -> Fallible<String> {
+        let v = field(key);
+        if v.is_unit() {
+            Ok(default.to_owned())
+        } else {
+            v.into_string()
+                .map(|s| s.to_ascii_lowercase())
+                .map_err(|_| format!("a knot's {key} is a string").into())
+        }
+    };
+    let at = field("at")
+        .try_cast::<Array>()
+        .ok_or("a knot's at is [x, y, z]")?;
+    let number = |key: &str, default: f32| -> Fallible<f32> {
+        let v = field(key);
+        if v.is_unit() { Ok(default) } else { float(&v) }
+    };
+    Ok(crate::ops::PathKnot {
+        at: vector(&at)?,
+        yaw: number("yaw", 0.0)?,
+        pitch: number("pitch", 0.0)?,
+        speed: number("speed", 7.0)?,
+        kind: match text("type", "normal")?.as_str() {
+            "normal" => crate::ops::KnotKind::Normal,
+            "kink" => crate::ops::KnotKind::Kink,
+            "position" | "position only" => crate::ops::KnotKind::PositionOnly,
+            other => return fail(format!("a knot's type is normal, kink or position, not {other}")),
+        },
+        linear: match text("path", "spline")?.as_str() {
+            "spline" => false,
+            "linear" => true,
+            other => return fail(format!("a knot's path is spline or linear, not {other}")),
+        },
+        jump: field("jump").as_bool().unwrap_or(false),
+    })
+}
 fn vector(value: &Array) -> Fallible<[f32; 3]> {
     match value.as_slice() {
         [x, y, z] => Ok([float(x)?, float(y)?, float(z)?]),
@@ -1673,6 +1739,21 @@ fn register_presentation(engine: &mut Engine) {
             target: None,
         })
     });
+    // A camera path (`PathCamera`): `knots` is an array of
+    // `#{ at: [x, y, z], yaw, pitch, speed, type, path, jump }`, `type`
+    // "normal", "kink" or "position", `path` "spline" or "linear".
+    engine.register_fn("follow_path", |player: Dynamic, knots: Array| {
+        push(Op::FollowPath {
+            player: id(&player)?,
+            knots: Some(knots.iter().map(path_knot).collect::<Fallible<_>>()?),
+        })
+    });
+    engine.register_fn("follow_path", |player: Dynamic, _: ()| {
+        push(Op::FollowPath {
+            player: id(&player)?,
+            knots: None,
+        })
+    });
     engine.register_fn("set_look_limits", |player: Dynamic, _: ()| {
         push(Op::SetLookLimits {
             player: id(&player)?,
@@ -2092,6 +2173,9 @@ impl Runtime {
             }
             if behaviour.on_leave {
                 need("on_leave".into(), 1, "on_leave");
+            }
+            if behaviour.on_path_node {
+                need("on_path_node".into(), 2, "on_path_node");
             }
             if behaviour.on_damage {
                 need("on_damage".into(), 4, "on_damage");

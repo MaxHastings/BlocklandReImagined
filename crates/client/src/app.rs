@@ -2662,14 +2662,26 @@ impl App {
                 .get(&view.owner)
                 .map(|p| view.archetypes.eye(&p.player))
         });
-        self.controls.follow(control, view.owner, eye);
+        // A path camera flies its replicated path on the server's clock.
+        let path = view
+            .vitals
+            .get(&view.owner)
+            .and_then(|v| v.camera_path.as_ref())
+            .zip(self.motion.server_tick())
+            .map(|(path, tick)| path.sample(tick));
+        let owner = view.owner;
+        self.controls.follow(control, owner, eye);
+        if let Some(path) = path {
+            self.controls.fly_path(path);
+        }
     }
     /// The camera in control, as the server's `%client.Camera` transform:
     /// the free camera's position, or where the orbit camera was drawn from.
     fn camera_view(&self) -> Option<bri_sim::session::CameraView> {
         let observer = self.controls.observer()?;
         let eye = match observer.mode {
-            crate::controls::ObserverMode::Free(position) => position,
+            crate::controls::ObserverMode::Free(position)
+            | crate::controls::ObserverMode::Path(position) => position,
             crate::controls::ObserverMode::Orbit(_) | crate::controls::ObserverMode::Drive(_) => {
                 self.observer_eye?
             }
@@ -5343,7 +5355,7 @@ fn camera_eye(
 ) -> Result<(Vec3, Option<glam::Affine3A>)> {
     use crate::controls::ObserverMode;
     match controls.observer().map(|o| o.mode) {
-        Some(ObserverMode::Free(position)) => Ok((position, None)),
+        Some(ObserverMode::Free(position) | ObserverMode::Path(position)) => Ok((position, None)),
         // `setOrbitMode(target, ..., 0, 8, 8)` from `Observer::setMode("Corpse")`.
         Some(ObserverMode::Orbit(_) | ObserverMode::Drive(_)) => building
             .camera_position(
