@@ -1,7 +1,7 @@
 //! Offscreen comparison of the lighting modes (`$pref::Video::Lighting`):
 //! loads a map and a saved build (or a synthetic one of any size), bakes the
 //! map's light volume and recovered lights as the client does, then renders
-//! the same views in Classic, Unified and Unified+Shine with Best shadows and
+//! the same views in Classic and Unified with Best shadows and
 //! brick shadows on, saving `{view}-{mode}.png` and GPU frame times. It never
 //! opens a window or reads input.
 //!
@@ -905,7 +905,7 @@ fn main() -> Result<()> {
     let modes: &[(u8, &str)] = if dynamic {
         &[(3, "dynamic")]
     } else {
-        &[(0, "classic"), (1, "unified"), (2, "shine"), (0, "classic-again")]
+        &[(0, "classic"), (2, "unified"), (0, "classic-again")]
     };
     for &(mode, label) in modes {
         match (mode, &unified) {
