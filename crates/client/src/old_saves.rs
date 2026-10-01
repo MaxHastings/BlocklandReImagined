@@ -89,7 +89,7 @@ impl Converter {
         })
     }
     #[cfg(test)]
-    fn bricks_only(catalog: Catalog, fingerprint: &str) -> Self {
+    pub(crate) fn bricks_only(catalog: Catalog, fingerprint: &str) -> Self {
         Self {
             catalog,
             bindings: None,
@@ -225,10 +225,6 @@ impl OldSaves {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
-    }
-    /// The saves folders of the old Blockland installs found.
-    pub fn old_installs(&self) -> &[PathBuf] {
-        &self.old_installs
     }
     /// Convert new and changed saves on a background thread. A call while
     /// one runs makes it look again when it finishes.

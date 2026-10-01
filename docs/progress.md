@@ -8970,10 +8970,12 @@ Follow-up the same day: `/saveDup` and `/loadDup`, through a generic seam.
 `on_copy` (`action` `save` or `load`). The client keeps them as
 `saves/Duplications/<name>.copy.json` (`SavedCopy`, schema 1, with the
 palette they were saved in), and loading also finds v20 duplication files
-in that folder and in old installs' `saves/Duplications` and
-`config/NewDuplicator/Saves` (`bri_bls::bls::read_duplication` accepts
-both duplicators' headers; `Blueprint::from_loose` moves their bricks onto
-the grid by the first brick). Colours are matched to the nearest in this
+a player dropped in that same folder, never in a Blockland install (Max's
+rule: the game never reads players' Blockland, v20 or Steam folders;
+`copies::tests::v20_duplication_files_load_only_from_the_games_own_folder`
+holds it). `bri_bls::bls::read_duplication` accepts
+both duplicators' headers, and `Blueprint::from_loose` moves their bricks onto
+the grid by the first brick. Colours are matched to the nearest in this
 world's palette. Over the limit, what fits loads, as answering yes to the
 Duplorcator's question did; asking first waits for a yes/no prompt seam,
 which the New Duplicator's undo confirmation needs too. Uploading from a

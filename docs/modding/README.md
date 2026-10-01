@@ -407,8 +407,9 @@ the player holds; `load_copy(p, name, limit, tool[, #{ partial }])` gives
 them the copy saved under that name, its first `limit` bricks, in this
 world's nearest colours. Saved copies are the host's, whichever duplicator
 saved them, and loading also finds v20 duplication files (Plornt's
-Duplorcator and Zeblote's New Duplicator wrote them) in the host's saves
-and old Blockland installs, moved onto the grid. The host reads and writes
+Duplorcator and Zeblote's New Duplicator wrote them) that the host's
+player dropped in its `saves/Duplications` folder, moved onto the grid. The
+game never looks for them in a Blockland install. The host reads and writes
 them while the game runs on, so the answer comes to `on_copy` a tick or
 more later; `error` is then also `missing` (no copy by that name),
 `unavailable` (this host keeps none), `busy` (the player's last one is

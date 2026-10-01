@@ -1,10 +1,10 @@
 //! Where a host keeps the copies duplicators save by name: `Duplications`
-//! in its saves folder, one file per copy. Loading also finds v20
-//! duplication files, read but never changed: in that folder (where a
-//! player can drop their old ones), and in old Blockland installs, both
-//! Plornt's Duplorcator's `saves/Duplications` and Zeblote's New
-//! Duplicator's `config/NewDuplicator/Saves`. Each request runs on a thread
-//! of its own, so the game never waits on the disk.
+//! in its saves folder, one file per copy. Loading also reads v20
+//! duplication files a player dropped in that same folder, Plornt's
+//! Duplorcator's and Zeblote's New Duplicator's alike, and never changes
+//! them. The game never looks in a player's Blockland folders for them.
+//! Each request runs on a thread of its own, so the game never waits on
+//! the disk.
 use crate::old_saves::OldSaves;
 use anyhow::{Context, Result, ensure};
 use bri_sim::blueprint::SavedCopy;
@@ -35,18 +35,6 @@ impl CopyFiles {
             old_saves,
             done: Default::default(),
         }
-    }
-
-    /// Folders v20 duplication files are looked for in, first found wins.
-    fn classic_folders(&self) -> Vec<PathBuf> {
-        let mut folders = vec![self.own.clone()];
-        for saves in self.old_saves.old_installs() {
-            folders.push(saves.join(FOLDER));
-            if let Some(install) = saves.parent() {
-                folders.push(install.join("config/NewDuplicator/Saves"));
-            }
-        }
-        folders
     }
 
     fn finish(&self, request: u64, done: StoreDone) {
@@ -100,11 +88,7 @@ fn load(files: &CopyFiles, name: &str) -> Result<Option<LoadedCopy>> {
         saved.validate()?;
         return Ok(Some(LoadedCopy::Saved(saved)));
     }
-    let Some(path) = files
-        .classic_folders()
-        .iter()
-        .find_map(|folder| find(folder, name, "bls"))
-    else {
+    let Some(path) = find(&files.own, name, "bls") else {
         return Ok(None);
     };
     let converter = files
@@ -207,5 +191,53 @@ mod tests {
         let files = CopyFiles::new(old);
         files.load(1, "old");
         assert!(matches!(wait(&files), StoreDone::Loaded(Err(_))));
+    }
+
+    /// Both mods' v20 files load from the game's own folder, and a file in
+    /// a Blockland install beside it is never read.
+    #[test]
+    fn v20_duplication_files_load_only_from_the_games_own_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("saves").join(FOLDER);
+        std::fs::create_dir_all(&folder).unwrap();
+        let body = format!(
+            "{}Linecount 2\n2x2 Brick\" 0 0 0 0 0 5  0 0 1 1 1\n2x2 Brick\" 0 0 0.6 0 0 3  0 0 1 1 1\n",
+            "0.5 0.25 0 1\n".repeat(64)
+        );
+        let plornt = format!("Duplorcation save file\t2\n1\nDuplication saved by Plornt\n{body}");
+        let zeblote = format!(
+            "Do not modify this file at all. You will break it.\n1\nSaved by Zeblote (4928)\n{body}"
+        );
+        std::fs::write(folder.join("Plornt.bls"), &plornt).unwrap();
+        std::fs::write(folder.join("Zeblote.bls"), &zeblote).unwrap();
+        // An old install's folders, which the game must leave alone.
+        let install = dir.path().join("Blockland");
+        for elsewhere in ["saves/Duplications", "config/NewDuplicator/Saves"] {
+            std::fs::create_dir_all(install.join(elsewhere)).unwrap();
+            std::fs::write(install.join(elsewhere).join("Away.bls"), &plornt).unwrap();
+        }
+        let old = OldSaves::new(
+            dir.path().join("saves"),
+            dir.path().join("cache"),
+            vec![install.join("saves")],
+        );
+        old.set_converter(crate::old_saves::Converter::bricks_only(
+            serde_json::from_value(serde_json::json!({"schema_version": 1, "bricks": []}))
+                .unwrap(),
+            "a",
+        ));
+        let files = CopyFiles::new(old);
+        for (request, name) in [(1, "plornt"), (2, "ZEBLOTE")] {
+            files.load(request, name);
+            match wait(&files) {
+                StoreDone::Loaded(Ok(Some(LoadedCopy::Loose { bricks, palette }))) => {
+                    assert_eq!(bricks.len(), 2, "{name}");
+                    assert_eq!(palette.len(), 64, "{name}");
+                }
+                _ => panic!("{name} did not load"),
+            }
+        }
+        files.load(3, "away");
+        assert!(matches!(wait(&files), StoreDone::Loaded(Ok(None))));
     }
 }
