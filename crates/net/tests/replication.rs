@@ -40,6 +40,7 @@ fn checkpoint() -> Checkpoint {
         map_lights: Vec::new(),
         environment: Default::default(),
         archetypes: Default::default(),
+        addon_settings: Vec::new(),
         entities: vec![],
         package_state: Default::default(),
         projectile_falls: Default::default(),

@@ -68,7 +68,7 @@ pub use combat::{
 };
 pub use inventory::{TOOL_SLOTS, ToolInventory};
 pub use packages::{
-    ENTITY_TAG, EntityInfo, NamespaceView, PACKAGE_SAVE_SCHEMA, PackageArg, PackageCommand,
+    AddOnSetting, MAX_ADDON_SETTINGS, SettingEdit, TeamEdit, ENTITY_TAG, EntityInfo, NamespaceView, PACKAGE_SAVE_SCHEMA, PackageArg, PackageCommand,
     PackageSave, PackageStateView, PackageStats, WorldSave,
 };
 /// Stock emotes: the `Emote_*` add-ons (`/alarm`, `/love`, `/hate`,

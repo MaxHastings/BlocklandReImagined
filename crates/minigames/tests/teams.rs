@@ -237,3 +237,57 @@ fn teams_are_checked_and_survive_a_save() {
     assert_ne!(broken, text);
     assert!(MinigamesWorld::restore(broken.as_bytes(), Catalog::minimal_vanilla()).is_err());
 }
+
+#[test]
+fn addon_settings_live_on_games_and_teams_and_only_owners_or_admins_edit() {
+    let (mut w, game, [a, b, _], [red, blue]) = red_blue();
+    assert!(w.can_edit(a, game));
+    assert!(!w.can_edit(b, game));
+    w.set_admin(b, true).unwrap();
+    assert!(w.can_edit(b, game));
+    let change = |team, key: &str, value| SettingChange {
+        team,
+        key: key.into(),
+        value,
+    };
+    let out = w
+        .set_addon_settings(
+            game,
+            vec![
+                change(None, "slayer:lives", Some(SettingValue::Int(3))),
+                change(Some(red), "slayer:lives", Some(SettingValue::Int(5))),
+            ],
+        )
+        .unwrap();
+    assert_eq!(
+        out,
+        vec![Effect::AddOnSettings {
+            game,
+            keys: vec!["slayer:lives".into()]
+        }]
+    );
+    // Setting the same value again changes nothing.
+    let same = w
+        .set_addon_settings(game, vec![change(None, "slayer:lives", Some(SettingValue::Int(3)))])
+        .unwrap();
+    assert!(same.is_empty());
+    let g = w.game(game).unwrap();
+    assert_eq!(g.addon_settings["slayer:lives"], SettingValue::Int(3));
+    assert_eq!(g.teams.get(red).unwrap().addon_settings["slayer:lives"], SettingValue::Int(5));
+    // A kept team keeps its settings through a team list change.
+    let specs = vec![TeamSpec {
+        id: Some(red),
+        name: "Crimson".into(),
+        color: 0,
+    }];
+    w.set_teams(game, specs, false, false).unwrap();
+    let g = w.game(game).unwrap();
+    assert_eq!(g.teams.get(red).unwrap().addon_settings["slayer:lives"], SettingValue::Int(5));
+    assert_eq!(
+        w.set_addon_settings(game, vec![change(Some(blue), "slayer:lives", None)]),
+        Err(Error::StaleTeam)
+    );
+    w.set_addon_settings(game, vec![change(None, "slayer:lives", None)])
+        .unwrap();
+    assert!(w.game(game).unwrap().addon_settings.is_empty());
+}

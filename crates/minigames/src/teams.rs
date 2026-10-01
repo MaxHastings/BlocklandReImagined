@@ -58,6 +58,8 @@ impl MinigamesWorld {
             .filter(|p| self.players[p].team.is_some_and(|t| !kept.contains(&t)))
             .collect();
         let teams = &mut self.games.get_mut(&game).expect("validated game").teams;
+        let mut old: BTreeMap<TeamId, Team> =
+            std::mem::take(&mut teams.list).into_iter().map(|t| (t.id, t)).collect();
         let mut ids = Vec::with_capacity(specs.len());
         teams.list = specs
             .into_iter()
@@ -72,6 +74,10 @@ impl MinigamesWorld {
                     id,
                     name: spec.name,
                     color: spec.color,
+                    addon_settings: old
+                        .remove(&id)
+                        .map(|t| t.addon_settings)
+                        .unwrap_or_default(),
                 }
             })
             .collect();
@@ -104,6 +110,76 @@ impl MinigamesWorld {
             out.push(Effect::TeamChanged { player, game, team });
         }
         Ok(out)
+    }
+    /// Whether `actor` may change a game's settings and teams (Slayer's
+    /// `canEdit`): its owner, or an admin.
+    pub fn can_edit(&self, actor: PlayerId, game: GameId) -> bool {
+        self.games.get(&game).is_some_and(|g| g.owner == actor)
+            || self.players.get(&actor).is_some_and(|p| p.admin)
+    }
+    /// Change Add-On settings of a game and its teams. The host has checked
+    /// each value against its definition and who may change it; `None`
+    /// puts a setting back to its default.
+    pub fn set_addon_settings(
+        &mut self,
+        game: GameId,
+        changes: Vec<SettingChange>,
+    ) -> Result<Vec<Effect>, Error> {
+        let g = self.game(game)?;
+        if changes.len() > MAX_ADDON_SETTINGS {
+            return Err(Error::Capacity);
+        }
+        for c in &changes {
+            if c.key.is_empty() || c.key.len() > MAX_SETTING_KEY {
+                return Err(Error::InvalidSettings);
+            }
+            if let Some(SettingValue::Text(t)) = &c.value
+                && t.len() > MAX_SETTING_TEXT
+            {
+                return Err(Error::InvalidSettings);
+            }
+            if let Some(t) = c.team
+                && g.teams.get(t).is_none()
+            {
+                return Err(Error::StaleTeam);
+            }
+        }
+        let g = self.games.get_mut(&game).expect("validated game");
+        let mut keys = BTreeSet::new();
+        for c in changes {
+            let map = match c.team {
+                None => &mut g.addon_settings,
+                Some(t) => {
+                    &mut g
+                        .teams
+                        .list
+                        .iter_mut()
+                        .find(|team| team.id == t)
+                        .expect("validated team")
+                        .addon_settings
+                }
+            };
+            let changed = match c.value {
+                Some(v) => {
+                    if !map.contains_key(&c.key) && map.len() >= MAX_ADDON_SETTINGS {
+                        return Err(Error::Capacity);
+                    }
+                    map.insert(c.key.clone(), v.clone()) != Some(v)
+                }
+                None => map.remove(&c.key).is_some(),
+            };
+            if changed {
+                keys.insert(c.key);
+            }
+        }
+        Ok(if keys.is_empty() {
+            Vec::new()
+        } else {
+            vec![Effect::AddOnSettings {
+                game,
+                keys: keys.into_iter().collect(),
+            }]
+        })
     }
     pub(crate) fn clear_team(&mut self, player: PlayerId, game: GameId, out: &mut Vec<Effect>) {
         let p = self.players.get_mut(&player).expect("validated player");

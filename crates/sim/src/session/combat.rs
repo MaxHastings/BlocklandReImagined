@@ -174,6 +174,35 @@ pub struct MiniGameView {
     pub color: u8,
     pub settings: mg::Settings,
     pub members: Vec<OwnerId>,
+    /// Its teams, which an Add-On sets up (Slayer).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub teams: Vec<mg::Team>,
+    /// Add-On settings changed from their defaults, by `namespace:key`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub addon_settings: BTreeMap<String, mg::SettingValue>,
+}
+impl MiniGameView {
+    /// Within what a host may send (a client checks what it receives).
+    pub fn is_valid(&self) -> bool {
+        let settings_ok = |map: &BTreeMap<String, mg::SettingValue>| {
+            map.len() <= mg::MAX_ADDON_SETTINGS
+                && map.iter().all(|(k, v)| {
+                    k.len() <= mg::MAX_SETTING_KEY
+                        && !matches!(v, mg::SettingValue::Text(t) if t.len() > mg::MAX_SETTING_TEXT)
+                })
+        };
+        self.members.len() <= 64
+            && self.color < 10
+            && self.settings.title.len() <= 256
+            && !self.settings.title.chars().any(char::is_control)
+            && self.teams.len() <= mg::MAX_TEAMS
+            && self.teams.iter().all(|t| {
+                t.name.len() <= 4 * mg::MAX_TEAM_NAME
+                    && !t.name.chars().any(char::is_control)
+                    && settings_ok(&t.addon_settings)
+            })
+            && settings_ok(&self.addon_settings)
+    }
 }
 
 /// A message for one player only (minigame chat, prints, invitations).
@@ -271,6 +300,14 @@ pub enum MiniGameRequest {
     Reset,
     RespawnAll,
     End,
+    /// Change Add-On settings of `game` (the Mini-Game window's Add-On
+    /// Settings), and with `teams` its team list and team settings. The
+    /// game's owner or an admin.
+    AddOnSettings {
+        game: u64,
+        settings: Vec<super::SettingEdit>,
+        teams: Option<Vec<super::TeamEdit>>,
+    },
 }
 
 /// Damage classes from `DamageTypes.cs`; weapon types carry their own name.
@@ -560,6 +597,8 @@ impl Session {
                         .iter()
                         .filter_map(|m| self.owner_of(*m))
                         .collect(),
+                    teams: game.teams.list.clone(),
+                    addon_settings: game.addon_settings.clone(),
                 })
             })
             .collect()
@@ -958,6 +997,18 @@ impl Session {
             Ok(game)
         };
         let command = match request {
+            MiniGameRequest::AddOnSettings {
+                game,
+                settings,
+                teams,
+            } => {
+                return self.edit_settings(
+                    super::packages::Editor::Player(owner),
+                    GameId(game),
+                    settings,
+                    teams,
+                );
+            }
             MiniGameRequest::Create { color, settings } => mg::Command::Create {
                 actor,
                 color,
@@ -1255,6 +1306,7 @@ impl Session {
                 | mg::Effect::Score { .. }
                 | mg::Effect::Reset { .. }
                 | mg::Effect::TeamsConfigured { .. }
+                | mg::Effect::AddOnSettings { .. }
                 | mg::Effect::TeamChanged { .. } => {}
                 // `updatePlayerBalls`: members with empty hands get the ball.
                 mg::Effect::StartBall { player, image, .. } => {

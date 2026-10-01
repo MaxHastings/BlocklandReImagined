@@ -3,6 +3,7 @@
 //! Slayer-style team games are built from.
 use super::*;
 use crate::ops::{MAX_DROP_SECONDS, MAX_SCORE, MAX_TEAMS, TeamOp};
+use bri_package::setting::SettingValue;
 
 /// One mini-game as scripts see it (`minigames()`).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -165,6 +166,47 @@ fn set_teams(game: Dynamic, list: Array, options: Map) -> Fallible<()> {
         ally_same_color: flag("ally_same_color")?,
     })
 }
+fn setting_dynamic(value: SettingValue) -> Dynamic {
+    match value {
+        SettingValue::Bool(b) => b.into(),
+        SettingValue::Int(n) => Dynamic::from_int(n),
+        SettingValue::Text(t) => t.into(),
+    }
+}
+fn setting_value(value: Dynamic) -> Fallible<Option<SettingValue>> {
+    if value.is_unit() {
+        Ok(None)
+    } else if let Ok(b) = value.as_bool() {
+        Ok(Some(SettingValue::Bool(b)))
+    } else if let Ok(n) = value.as_int() {
+        Ok(Some(SettingValue::Int(n)))
+    } else if let Ok(t) = value.into_string() {
+        Ok(Some(SettingValue::Text(t)))
+    } else {
+        fail("a setting's value is true or false, a whole number, text, or () for its default")
+    }
+}
+fn read_setting(game: &Dynamic, team: Option<&Dynamic>, key: &str) -> Fallible<Dynamic> {
+    let game = id(game)?;
+    let team = team.map(id).transpose()?;
+    with_world(|world, _| {
+        world
+            .setting(game, team, key)
+            .map(setting_dynamic)
+            .map_err(Into::into)
+    })
+}
+fn write_setting(game: &Dynamic, team: Option<&Dynamic>, key: &str, value: Dynamic) -> Fallible<()> {
+    if !bri_package::setting::is_setting_ref(key) {
+        return fail(format!("`{key}` is not a setting key"));
+    }
+    push(Op::SetSetting {
+        game: id(game)?,
+        team: team.map(id).transpose()?,
+        key: key.into(),
+        value: setting_value(value)?,
+    })
+}
 fn score(player: &Dynamic, value: &Dynamic, add: bool) -> Fallible<()> {
     let value = value.as_int().map_err(|_| "a score is a whole number")?;
     if value.abs() > MAX_SCORE {
@@ -301,6 +343,22 @@ pub(super) fn register(engine: &mut Engine) {
     engine.register_fn("add_score", |player: Dynamic, value: Dynamic| {
         score(&player, &value, true)
     });
+    // Add-On settings (`behaviour.json` `settings`).
+    engine.register_fn("setting", |game: Dynamic, key: &str| {
+        read_setting(&game, None, key)
+    });
+    engine.register_fn("team_setting", |game: Dynamic, team: Dynamic, key: &str| {
+        read_setting(&game, Some(&team), key)
+    });
+    engine.register_fn("set_setting", |game: Dynamic, key: &str, value: Dynamic| {
+        write_setting(&game, None, key, value)
+    });
+    engine.register_fn(
+        "set_team_setting",
+        |game: Dynamic, team: Dynamic, key: &str, value: Dynamic| {
+            write_setting(&game, Some(&team), key, value)
+        },
+    );
     engine.register_fn("reset_minigame", |game: Dynamic| {
         push(Op::ResetMinigame { game: id(&game)? })
     });

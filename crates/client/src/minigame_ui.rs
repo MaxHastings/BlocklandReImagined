@@ -2,7 +2,10 @@
 //! actions → authoritative minigame requests.
 use anyhow::{Result, ensure};
 use bri_minigames::Settings;
-use bri_sim::session::{Command, MiniGameRequest, MiniGameView, Vitals};
+use bri_package::setting::{SettingScope, SettingType, SettingValue};
+use bri_sim::session::{
+    AddOnSetting, Command, MiniGameRequest, MiniGameView, SettingEdit, TeamEdit, Vitals,
+};
 use bri_ui::api::*;
 use bri_world::OwnerId;
 use std::collections::BTreeMap;
@@ -151,6 +154,25 @@ pub fn state(
                 member_count: g.members.len() as u32,
                 invite_only: g.settings.invite_only,
                 rules: rules(&g.settings),
+                teams: g
+                    .teams
+                    .iter()
+                    .map(|t| MiniGameTeam {
+                        id: t.id.0,
+                        name: t.name.clone(),
+                        color: t.color,
+                        settings: t
+                            .addon_settings
+                            .iter()
+                            .map(|(k, v)| (k.clone(), ui_value(v)))
+                            .collect(),
+                    })
+                    .collect(),
+                addon_settings: g
+                    .addon_settings
+                    .iter()
+                    .map(|(k, v)| (k.clone(), ui_value(v)))
+                    .collect(),
             })
             .collect(),
         colors: COLORS
@@ -203,7 +225,95 @@ pub fn state(
             })
             .collect(),
         status: String::new(),
+        addon_settings: Vec::new(),
+        addon_editable: Vec::new(),
+        palette: Vec::new(),
     }
+}
+
+fn ui_value(v: &SettingValue) -> MiniGameSettingValue {
+    match v {
+        SettingValue::Bool(b) => MiniGameSettingValue::Bool(*b),
+        SettingValue::Int(n) => MiniGameSettingValue::Int(*n),
+        SettingValue::Text(t) => MiniGameSettingValue::Text(t.clone()),
+    }
+}
+fn host_value(v: &MiniGameSettingValue) -> SettingValue {
+    match v {
+        MiniGameSettingValue::Bool(b) => SettingValue::Bool(*b),
+        MiniGameSettingValue::Int(n) => SettingValue::Int(*n),
+        MiniGameSettingValue::Text(t) => SettingValue::Text(t.clone()),
+    }
+}
+fn edits(list: &[(String, Option<MiniGameSettingValue>)]) -> Vec<SettingEdit> {
+    list.iter()
+        .map(|(key, value)| SettingEdit {
+            key: key.clone(),
+            value: value.as_ref().map(host_value),
+        })
+        .collect()
+}
+
+/// Add the running Add-Ons' settings to the dialog state: what each is,
+/// which games `local` may change (theirs, or any as an admin; the host
+/// checks again) and the paint colours teams take.
+pub fn with_addon_settings(
+    mut state: MiniGameUiState,
+    games: &[MiniGameView],
+    settings: &[AddOnSetting],
+    local: OwnerId,
+    admin: bool,
+    palette: &[[f32; 4]],
+) -> MiniGameUiState {
+    state.addon_settings = settings
+        .iter()
+        .map(|s| MiniGameAddOnSetting {
+            key: s.key(),
+            add_on: s.package_name.clone(),
+            category: s.def.category.clone(),
+            title: s.def.title.clone(),
+            team: s.def.scope == SettingScope::Team,
+            kind: match s.def.kind {
+                SettingType::Bool => MiniGameSettingKind::Bool,
+                SettingType::Int => MiniGameSettingKind::Int {
+                    min: s.def.min.unwrap_or(0),
+                    max: s.def.max.unwrap_or(0),
+                },
+                SettingType::List => MiniGameSettingKind::List {
+                    items: s.items.iter().map(|i| (ui_value(&i.value), i.name.clone())).collect(),
+                },
+                SettingType::Text => MiniGameSettingKind::Text {
+                    max_length: s.def.max_length.unwrap_or(0),
+                },
+            },
+            default: ui_value(&s.def.default),
+            admin_only: s.def.editor == bri_package::setting::SettingEditor::Admin,
+            shown_when: s.def.shown_when.as_ref().map(|w| {
+                // The host names a same-Add-On setting by its bare key.
+                let key = if w.setting.contains(':') {
+                    w.setting.clone()
+                } else {
+                    format!("{}:{}", s.package, w.setting)
+                };
+                (key, w.is.iter().map(ui_value).collect())
+            }),
+        })
+        .collect();
+    state.addon_editable = if settings.is_empty() {
+        Vec::new()
+    } else {
+        games
+            .iter()
+            .filter(|g| admin || g.owner == local)
+            .map(|g| MiniGameId(g.id))
+            .collect()
+    };
+    state.palette = palette
+        .iter()
+        .map(|c| c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8))
+        .map(|[r, g, b, _]| [r, g, b])
+        .collect();
+    state
 }
 
 /// Map a dialog request to a server command. `None` for local-only actions.
@@ -229,6 +339,24 @@ pub fn command(action: &UiAction) -> Result<Option<Command>> {
         UiAction::ResetMiniGame { .. } => MiniGameRequest::Reset,
         UiAction::RespawnMiniGameMembers { .. } => MiniGameRequest::RespawnAll,
         UiAction::EndMiniGame { .. } => MiniGameRequest::End,
+        UiAction::EditMiniGameAddOns {
+            game,
+            settings,
+            teams,
+        } => MiniGameRequest::AddOnSettings {
+            game: game.0,
+            settings: edits(settings),
+            teams: teams.as_ref().map(|list| {
+                list.iter()
+                    .map(|t| TeamEdit {
+                        id: t.id,
+                        name: t.name.clone(),
+                        color: t.color,
+                        settings: edits(&t.settings),
+                    })
+                    .collect()
+            }),
+        },
         _ => anyhow::bail!("Not a mini-game action"),
     };
     Ok(Some(Command::MiniGame(request)))
@@ -249,6 +377,7 @@ pub fn is_minigame_action(action: &UiAction) -> bool {
             | UiAction::ResetMiniGame { .. }
             | UiAction::RespawnMiniGameMembers { .. }
             | UiAction::EndMiniGame { .. }
+            | UiAction::EditMiniGameAddOns { .. }
     )
 }
 
@@ -270,6 +399,8 @@ mod tests {
             color: 3,
             settings,
             members: vec![2],
+            teams: Vec::new(),
+            addon_settings: Default::default(),
         };
         let names: BTreeMap<_, _> = [(2, "Host".to_string()), (3, "Guest".to_string())].into();
         let state = state(

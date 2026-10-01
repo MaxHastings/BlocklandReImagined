@@ -26,6 +26,8 @@ pub(in crate::session) struct GameEvent {
     game: u64,
     player: Option<OwnerId>,
     team: Option<u64>,
+    /// The `namespace:key`s of a `settings` event.
+    keys: Vec<String>,
 }
 
 /// Add-On state a session keeps for these hooks.
@@ -55,6 +57,7 @@ impl Session {
             game: game.0,
             player: None,
             team: None,
+            keys: Vec::new(),
         };
         let mut out = Vec::new();
         match effect {
@@ -63,6 +66,10 @@ impl Session {
             mg::Effect::Ended { game } => out.push(event("ended", *game)),
             mg::Effect::Reset { game, .. } => out.push(event("reset", *game)),
             mg::Effect::TeamsConfigured { game } => out.push(event("teams", *game)),
+            mg::Effect::AddOnSettings { game, keys } => out.push(GameEvent {
+                keys: keys.clone(),
+                ..event("settings", *game)
+            }),
             mg::Effect::TeamChanged { player, game, team } => {
                 if let Some(owner) = self.owner_of(*player) {
                     out.push(GameEvent {
@@ -118,6 +125,12 @@ impl Session {
             map.insert("game".into(), Dynamic::from_int(e.game as i64));
             map.insert("player".into(), id(e.player));
             map.insert("team".into(), id(e.team));
+            if e.kind == "settings" {
+                map.insert(
+                    "keys".into(),
+                    Dynamic::from_array(e.keys.iter().map(|k| k.clone().into()).collect()),
+                );
+            }
             for package in &hooks {
                 let _ = self.run_package(
                     package,

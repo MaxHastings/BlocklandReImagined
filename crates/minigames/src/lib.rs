@@ -368,6 +368,7 @@ impl MinigamesWorld {
                         last_reset: None,
                         ball_update_at: None,
                         teams: Teams::default(),
+                        addon_settings: BTreeMap::new(),
                     },
                 );
                 out.push(Effect::Created { game: id });
@@ -625,6 +626,7 @@ impl MinigamesWorld {
                 last_reset: None,
                 ball_update_at: None,
                 teams: Teams::default(),
+                addon_settings: BTreeMap::new(),
             },
         );
         Ok(id)

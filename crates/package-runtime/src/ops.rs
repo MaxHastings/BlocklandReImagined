@@ -1,6 +1,7 @@
 //! The operations package behaviour may ask the engine to perform, and the
 //! one place they are checked against a package's declared capabilities.
 use bri_package::diag::Diagnostic;
+use bri_package::setting::SettingValue;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -451,6 +452,15 @@ pub enum Op {
     ResetMinigame {
         game: u64,
     },
+    /// Change an Add-On setting of a mini-game, or of one of its teams
+    /// (`Slayer_MiniGameSO::setPref`): `key` is the package's own or
+    /// `namespace:key`; `None` puts it back to its default.
+    SetSetting {
+        game: u64,
+        team: Option<u64>,
+        key: String,
+        value: Option<SettingValue>,
+    },
     /// The item a brick holds out to be picked up (`setItem`): an item of
     /// this package, a dependency's or v20's, or `None` for none.
     SetBrickItem {
@@ -589,7 +599,8 @@ impl Op {
             Self::SetTeams { .. }
             | Self::SetTeam { .. }
             | Self::SetScore { .. }
-            | Self::ResetMinigame { .. } => "minigame",
+            | Self::ResetMinigame { .. }
+            | Self::SetSetting { .. } => "minigame",
             Self::SetBrickItem { .. } => "world.edit",
             Self::SetEnvironment { .. } => "environment",
             Self::Teleport { .. }
@@ -826,6 +837,10 @@ impl Op {
                     })
             }
             Self::SetTeam { .. } | Self::ResetMinigame { .. } => true,
+            Self::SetSetting { key, value, .. } => {
+                bri_package::setting::is_setting_ref(key)
+                    && !matches!(value, Some(SettingValue::Text(t)) if t.len() > bri_package::setting::MAX_TEXT)
+            }
             Self::SetScore { value, .. } => value.abs() <= MAX_SCORE,
             Self::SetBrickItem { item: id, .. } => id.as_deref().is_none_or(item),
             Self::Fire {
@@ -928,6 +943,8 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::SetScore { add: false, .. } => "set_score",
         Op::SetScore { add: true, .. } => "add_score",
         Op::ResetMinigame { .. } => "reset_minigame",
+        Op::SetSetting { team: None, .. } => "set_setting",
+        Op::SetSetting { team: Some(_), .. } => "set_team_setting",
         Op::SetBrickItem { .. } => "set_brick_item",
         Op::UnmountImage { .. } => "unmount_image",
         Op::MountObject { .. } => "mount_object",

@@ -12,6 +12,7 @@ pub mod help;
 pub mod menus;
 pub mod modes;
 pub mod music;
+pub mod minigame_addons;
 pub mod minigames;
 pub mod name;
 pub mod options;
@@ -49,6 +50,9 @@ pub enum ScreenId {
     PlayerList,
     MiniGames,
     MiniGameSettings,
+    /// A mini-game's Add-On Settings and teams (native; v20 had none,
+    /// Slayer had its own window).
+    MiniGameAddOns,
     MiniGameInvitation,
     TrustInvitation,
     Admin,
@@ -172,6 +176,7 @@ pub fn make(id: ScreenId, core: &mut Core) -> Box<dyn Screen> {
         ScreenId::MiniGames => return Box::new(minigames::MiniGameScreen::list(core)),
         ScreenId::MiniGameSettings => return Box::new(minigames::MiniGameScreen::settings(core)),
         ScreenId::MiniGameInvitation => return Box::new(minigames::MiniGameScreen::invitation(core)),
+        ScreenId::MiniGameAddOns => return Box::new(minigame_addons::AddOnSettings::new(core)),
         ScreenId::TrustInvitation => return Box::new(trust::TrustInvite::new(core)),
         ScreenId::Admin
         | ScreenId::AdminLogin

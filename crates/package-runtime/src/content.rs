@@ -3,6 +3,7 @@
 //! scripts, world providers) never leave the host.
 use anyhow::{Result, ensure};
 use bri_package::packages::Side;
+pub use bri_package::setting::{SettingDef, SettingItems};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -243,6 +244,14 @@ pub struct Behaviour {
     /// allows, `false` or a reason string refuses.
     #[serde(default)]
     pub policies: Vec<String>,
+    /// Settings a host edits in the Mini-Game window's Add-On Settings and
+    /// these rules read with `setting(game, key)` (Slayer's preferences).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub settings: Vec<SettingDef>,
+    /// Choices added to a list setting of an Add-On this one depends on
+    /// (a game mode joining Slayer's mode picker).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub setting_items: Vec<SettingItems>,
 }
 /// Most touch zones one behaviour declares, and brick kinds one zone names.
 pub const MAX_ZONES: usize = 16;
@@ -429,6 +438,30 @@ impl Behaviour {
                 !self.policies[..i].contains(policy),
                 "policy `{policy}` listed twice"
             );
+        }
+        ensure!(
+            self.settings.len() <= bri_package::setting::MAX_SETTINGS,
+            "at most {} settings",
+            bri_package::setting::MAX_SETTINGS
+        );
+        ensure!(self.setting_items.len() <= 16, "at most 16 setting_items");
+        let mut keys = std::collections::BTreeSet::new();
+        for def in &self.settings {
+            def.validate().map_err(anyhow::Error::msg)?;
+            ensure!(keys.insert(&def.key), "setting `{}` declared twice", def.key);
+        }
+        for def in &self.settings {
+            if let Some(when) = &def.shown_when {
+                ensure!(
+                    when.setting.contains(':') || keys.contains(&when.setting),
+                    "setting `{}`: shown_when names `{}`, which is not one of these settings",
+                    def.key,
+                    when.setting
+                );
+            }
+        }
+        for more in &self.setting_items {
+            more.validate().map_err(anyhow::Error::msg)?;
         }
         for (key, def) in &self.state.global {
             ensure!(

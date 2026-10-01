@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+pub use bri_package::setting::SettingValue;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const SCHEMA_VERSION: u32 = 1;
@@ -236,6 +237,11 @@ pub struct MiniGame {
     /// Slayer added them). Empty: every member plays for themself.
     #[serde(default)]
     pub teams: Teams,
+    /// Add-On settings changed from their defaults, by `namespace:key`
+    /// (see [`bri_package::setting`]). The host checks each against its
+    /// definition; a setting not here has its default.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub addon_settings: BTreeMap<String, SettingValue>,
 }
 impl MiniGame {
     /// A game mode's mini-game, owned by the server ([`SERVER`]).
@@ -260,6 +266,24 @@ pub struct Team {
     /// Index into the server's paint palette: the team's colour, which also
     /// claims the bricks painted it (team spawns, flags).
     pub color: u8,
+    /// Add-On team settings changed from their defaults, by
+    /// `namespace:key`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub addon_settings: BTreeMap<String, SettingValue>,
+}
+/// Most Add-On settings one game (or one team) holds apart from defaults.
+pub const MAX_ADDON_SETTINGS: usize = 512;
+/// Longest `namespace:key`.
+pub const MAX_SETTING_KEY: usize = 96;
+/// Longest text setting, in bytes.
+pub const MAX_SETTING_TEXT: usize = 1024;
+/// One Add-On setting to change: the game's own (`team` None) or a team's.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SettingChange {
+    pub team: Option<TeamId>,
+    pub key: String,
+    /// `None` puts it back to its default.
+    pub value: Option<SettingValue>,
 }
 /// One team as an Add-On asks for it: an existing `id` keeps that team and
 /// its members, `None` makes a new one.
@@ -295,12 +319,24 @@ impl Teams {
             return Err(Error::Capacity);
         }
         for t in &self.list {
-            if !ids.insert(t.id) || t.id.0 >= self.next || !valid_team_name(&t.name) {
+            if !ids.insert(t.id)
+                || t.id.0 >= self.next
+                || !valid_team_name(&t.name)
+                || !valid_addon_settings(&t.addon_settings)
+            {
                 return Err(Error::InvalidSettings);
             }
         }
         Ok(())
     }
+}
+pub(crate) fn valid_addon_settings(map: &BTreeMap<String, SettingValue>) -> bool {
+    map.len() <= MAX_ADDON_SETTINGS
+        && map.iter().all(|(k, v)| {
+            !k.is_empty()
+                && k.len() <= MAX_SETTING_KEY
+                && !matches!(v, SettingValue::Text(t) if t.len() > MAX_SETTING_TEXT)
+        })
 }
 pub(crate) fn valid_team_name(name: &str) -> bool {
     !name.trim().is_empty()
@@ -393,6 +429,12 @@ pub enum Effect {
     /// The game's team list or team rules changed.
     TeamsConfigured {
         game: GameId,
+    },
+    /// Add-On settings of the game or its teams changed: their
+    /// `namespace:key`s.
+    AddOnSettings {
+        game: GameId,
+        keys: Vec<String>,
     },
     Cleanup {
         player: PlayerId,

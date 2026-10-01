@@ -120,6 +120,14 @@ impl World for ScriptWorld<'_> {
     fn drops(&self) -> Vec<bri_package_runtime::script::DropView> {
         self.session.package_drop_views(self.package)
     }
+    fn setting(
+        &self,
+        game: u64,
+        team: Option<u64>,
+        key: &str,
+    ) -> Result<bri_package::setting::SettingValue, String> {
+        self.session.setting_value(self.package, game, team, key)
+    }
     fn brick_box(&self, brick: u64) -> Option<([f32; 3], [f32; 3])> {
         let (min, max) = self.session.simulation.brick_box(brick)?;
         Some((min.to_array(), max.to_array()))

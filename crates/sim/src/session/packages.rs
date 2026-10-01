@@ -26,6 +26,10 @@ use std::sync::Arc;
 
 mod game_hooks;
 mod item_hooks;
+mod settings;
+pub use settings::{AddOnSetting, MAX_ADDON_SETTINGS, SettingEdit, TeamEdit};
+pub(in crate::session) use settings::Editor;
+
 pub(super) use item_hooks::Pickup;
 
 /// Collider tag kind for package entities (players are 1, vehicles 2).
@@ -328,6 +332,8 @@ pub(super) struct PackageHost {
     item_hooks: item_hooks::ItemHooks,
     /// Pending `on_minigame` events and who stands in each zone.
     game_hooks: game_hooks::GameHooks,
+    /// Every running Add-On's settings.
+    settings: settings::Registry,
     /// Per-origin shares of the server's package capacity (stress campaign
     /// W1): no one package, or one player's commands, can take a pool
     /// every player needs.
@@ -616,6 +622,7 @@ impl Session {
             .filter(|(id, _)| runtime.has_script(id))
             .count();
         let state_bytes = store.stored_size();
+        let settings = settings::Registry::build(&catalog)?;
         self.packages = Some(Box::new(PackageHost {
             catalog,
             runtime,
@@ -632,6 +639,7 @@ impl Session {
             in_damage_hook: false,
             item_hooks: Default::default(),
             game_hooks: Default::default(),
+            settings,
             shares: Shares::new(scripts),
             script_time: BTreeMap::new(),
             state_bytes,
@@ -1762,6 +1770,12 @@ impl Session {
             | Op::SetTeam { .. }
             | Op::SetScore { .. }
             | Op::ResetMinigame { .. }) => self.apply_minigame_op(op),
+            Op::SetSetting {
+                game,
+                team,
+                key,
+                value,
+            } => self.package_set_setting(package, game, team, key, value),
             Op::SetBrickItem { brick, item } => {
                 if let Some(item) = &item {
                     let host = self.packages.as_ref().context("No packages are enabled")?;

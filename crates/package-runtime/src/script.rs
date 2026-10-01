@@ -162,6 +162,18 @@ pub trait World {
     fn hit_region(&self, _player: u64, _point: [f32; 3]) -> Option<&'static str> {
         None
     }
+    /// An Add-On setting of mini-game `game` (or of its team `team`):
+    /// `key` is the calling package's own or `namespace:key`. Its value,
+    /// or its default when nobody changed it; an error names what is
+    /// wrong (no such game, team or setting).
+    fn setting(
+        &self,
+        _game: u64,
+        _team: Option<u64>,
+        _key: &str,
+    ) -> Result<bri_package::setting::SettingValue, String> {
+        Err("this host has no Add-On settings".into())
+    }
 }
 /// What a ray met.
 #[derive(Debug, Clone, Copy, PartialEq)]

@@ -120,6 +120,9 @@ impl MinigamesWorld {
         for g in s.games {
             g.settings.validate(&world.catalog)?;
             g.teams.validate()?;
+            if !crate::model::valid_addon_settings(&g.addon_settings) {
+                return Err(Error::InvalidSnapshot);
+            }
             if g.id.0 == 0
                 || g.id.0 >= s.next_game
                 || g.color >= 10

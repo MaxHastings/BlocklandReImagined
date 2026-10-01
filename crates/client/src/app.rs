@@ -2808,6 +2808,14 @@ impl App {
             &view.archetypes,
             c.minigame_revision,
         );
+        let state = crate::minigame_ui::with_addon_settings(
+            state,
+            &view.minigames,
+            &view.addon_settings,
+            view.owner,
+            view.administrator,
+            &view.world.palette,
+        );
         let changed = c.minigame_state.as_ref().is_none_or(|old| {
             MiniGameUiState {
                 revision: 0,

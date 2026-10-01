@@ -339,6 +339,8 @@ pub struct Core {
     /// The host's environment and the Environment window's draft.
     pub environment: crate::models::environment::EnvironmentModel,
     pub minigames: MiniGameUiState,
+    /// The mini-game whose Add-On Settings window is open (or opening).
+    pub minigame_addons: Option<MiniGameId>,
     /// Open `TrustInviteGui` invitation.
     /// Open trust invitations, newest last, one per sender, like mini-game
     /// invitations: the dialog shows the newest and Escape leaves them open.
@@ -574,6 +576,7 @@ impl Core {
             MiniGameOperation::Reset => Op::Reset,
             MiniGameOperation::RespawnAll => Op::RespawnAll,
             MiniGameOperation::End => Op::End,
+            MiniGameOperation::AddOnSettings => Op::AddOnSettings,
         });
         if !allowed {
             self.minigames.status =
@@ -1283,6 +1286,7 @@ impl Ui {
             admin: Default::default(),
             environment: Default::default(),
             minigames: MiniGameUiState::default(),
+            minigame_addons: None,
             trust_invites: Vec::new(),
             name_tags: Vec::new(),
             package_panels: Vec::new(),

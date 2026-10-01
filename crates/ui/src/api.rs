@@ -796,6 +796,14 @@ pub enum UiAction {
     EndMiniGame {
         game: MiniGameId,
     },
+    /// The Add-On Settings window's Apply: changed settings (`None` back to
+    /// the default) and, when the game's teams were edited, its whole team
+    /// list.
+    EditMiniGameAddOns {
+        game: MiniGameId,
+        settings: Vec<(String, Option<MiniGameSettingValue>)>,
+        teams: Option<Vec<MiniGameTeamEdit>>,
+    },
     // ---- add-ons (the package library; see docs/architecture/mod-manager.md)
     /// Read the installed packages; answered with [`UiUpdate::AddOns`].
     RequestAddOns,
@@ -1066,6 +1074,62 @@ pub struct MiniGameSummary {
     pub member_count: u32,
     pub invite_only: bool,
     pub rules: MiniGameRules,
+    /// Its teams (an Add-On's, such as Slayer's).
+    #[serde(default)]
+    pub teams: Vec<MiniGameTeam>,
+    /// Add-On settings changed from their defaults, by `namespace:key`.
+    #[serde(default)]
+    pub addon_settings: BTreeMap<String, MiniGameSettingValue>,
+}
+/// An Add-On setting's value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MiniGameSettingValue {
+    Bool(bool),
+    Int(i64),
+    Text(String),
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MiniGameSettingKind {
+    Bool,
+    Int { min: i64, max: i64 },
+    /// Choices: value and name.
+    List { items: Vec<(MiniGameSettingValue, String)> },
+    Text { max_length: u32 },
+}
+/// One setting an Add-On declares, for the Add-On Settings window.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MiniGameAddOnSetting {
+    /// `namespace:key`.
+    pub key: String,
+    /// The Add-On's name, heading its settings.
+    pub add_on: String,
+    pub category: String,
+    pub title: String,
+    /// Each team has its own value.
+    pub team: bool,
+    pub kind: MiniGameSettingKind,
+    pub default: MiniGameSettingValue,
+    /// Only admins may change it.
+    pub admin_only: bool,
+    /// Shown only while that setting (`namespace:key`) holds one of these.
+    pub shown_when: Option<(String, Vec<MiniGameSettingValue>)>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MiniGameTeam {
+    pub id: u32,
+    pub name: String,
+    /// A paint colour index.
+    pub color: u8,
+    pub settings: BTreeMap<String, MiniGameSettingValue>,
+}
+/// A team as the Add-On Settings window leaves it: `id` keeps an existing
+/// team (and its players), none makes a new one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MiniGameTeamEdit {
+    pub id: Option<u32>,
+    pub name: String,
+    pub color: u8,
+    pub settings: Vec<(String, Option<MiniGameSettingValue>)>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MiniGameColor {
@@ -1162,6 +1226,16 @@ pub struct MiniGameUiState {
     pub player_types: Vec<MiniGameChoice>,
     pub items: Vec<MiniGameChoice>,
     pub status: String,
+    /// The running Add-Ons' settings (the Add-On Settings window).
+    #[serde(default)]
+    pub addon_settings: Vec<MiniGameAddOnSetting>,
+    /// Whether the Add-On Settings window may change `game`'s settings and
+    /// teams: the host's answer (its owner, or an admin), by game.
+    #[serde(default)]
+    pub addon_editable: Vec<MiniGameId>,
+    /// The paint colours a team may take, by index.
+    #[serde(default)]
+    pub palette: Vec<[u8; 3]>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1179,6 +1253,7 @@ pub enum MiniGameOperation {
     Reset,
     RespawnAll,
     End,
+    AddOnSettings,
 }
 
 /// Fullscreen is borderless at the monitor's `native` size; a window may take
