@@ -69,7 +69,7 @@ const KIT: &str = r#"{
             "children": { "projectile": "nade:projectile/ember", "count": 3, "max_count": 4,
                           "on_explode": true,
                           "steps": { "low": [-3, -3, -2], "high": [3, 3, 4],
-                                     "offset": [-0.5, -0.5, -0.5], "step": [3.14, 3.14, -3.14] } } },
+                                     "offset": [-0.5, -0.5, -0.5], "step": [2.5, 2.5, -2.5] } } },
         "nade:projectile/ember": { "speed": 5, "ballistic": true, "lifetime_ticks": 1800,
             "aura": { "radius": 4, "damage": 4, "every_ticks": 36, "players_only": true,
                       "effect": "emberFlames", "target_sound": "nade:sound/burn",
@@ -215,7 +215,7 @@ fn embers_scatter_along_each_axis_and_burn_only_the_players_near() {
             && definition == "nade:projectile/ember"
         {
             for (axis, v) in velocity.to_array().into_iter().enumerate() {
-                let whole = v / [3.14, 3.14, -3.14][axis] + 0.5;
+                let whole = v / [2.5, 2.5, -2.5][axis] + 0.5;
                 let (low, high) = [(-3.0, 3.0), (-3.0, 3.0), (-2.0, 4.0)][axis];
                 assert!(
                     (whole - whole.round()).abs() < 1e-3 && (low..=high).contains(&whole.round()),
@@ -307,7 +307,7 @@ fn counted_magazines_and_scattered_children_are_checked() {
     assert!(Pack::from_json(few.as_bytes()).is_err());
     let falling = KIT.replace("\"low\": [-3, -3, -2]", "\"low\": [-3, 4, -2]");
     assert!(Pack::from_json(falling.as_bytes()).is_err());
-    let fast = KIT.replace("\"step\": [3.14", "\"step\": [300");
+    let fast = KIT.replace("\"step\": [2.5", "\"step\": [300");
     assert!(Pack::from_json(fast.as_bytes()).is_err());
     assert!(Pack::from_json(KIT.as_bytes()).is_ok());
 }

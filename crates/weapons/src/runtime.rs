@@ -2331,7 +2331,7 @@ impl WeaponsWorld {
                         image_hand: Some(e.hand),
                     });
                 }
-                if !state.arm.is_empty() && !(state.arm_once && left == Some(e.state)) {
+                if !state.arm.is_empty() && (!state.arm_once || left != Some(e.state)) {
                     self.animation(id, &state.arm);
                 }
                 if !state.gesture.is_empty() {
