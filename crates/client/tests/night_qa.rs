@@ -8,7 +8,6 @@
 //!   cargo test -p bri-client --test night_qa --release -- --ignored --nocapture
 use anyhow::{Context, Result, bail, ensure};
 use bri_client::{app::App, platform::PlatformApp};
-use bri_package::classic::Discovery;
 use bri_ui::{
     api::*,
     gpu::{Headless, UiRenderer},
@@ -1232,7 +1231,7 @@ fn imported_v20_add_ons_play() -> Result<()> {
     let out = PathBuf::from(std::env::var_os("BRI_QA_OUT").context("BRI_QA_OUT")?).join("import");
     let _ = std::fs::remove_dir_all(&out);
     std::fs::create_dir_all(&out)?;
-    let before = bri_client::add_ons::view(&root, &Discovery::root_only());
+    let before = bri_client::add_ons::view(&root);
     let rows = |v: &AddOnsView| {
         v.rows
             .iter()
@@ -1242,19 +1241,18 @@ fn imported_v20_add_ons_play() -> Result<()> {
     println!("before: {:#?}\nnotice {:?}", rows(&before), before.notice);
     ensure!(
         before.rows.iter().any(|r| r.id == "legacy:Weapon_Shotgun"),
-        "The dropped zip is not offered for import"
+        "The dropped zip is not listed as converting"
     );
-    // The Import button's worker.
-    let done = bri_client::add_ons::start_import(
-        &root,
-        &Discovery::root_only(),
-        "legacy:Weapon_Shotgun",
-        &importer,
-    )?
-        .recv_timeout(Duration::from_secs(300))?;
-    println!("import: {done:?}");
-    let notice = done?;
-    let after = bri_client::add_ons::view(&root, &Discovery::root_only());
+    // The Add-Ons folder's worker, which opening Add-Ons starts.
+    let notes = bri_client::add_ons::start_sync(&root, &importer)?;
+    let notice = loop {
+        let note = notes.recv_timeout(Duration::from_secs(300))?;
+        println!("sync: {note:?}");
+        if note.finished {
+            break note.notice;
+        }
+    };
+    let after = bri_client::add_ons::view(&root);
     println!("after: {:#?}\nnotice {:?}", rows(&after), after.notice);
     let weapon = after
         .rows
@@ -1264,10 +1262,10 @@ fn imported_v20_add_ons_play() -> Result<()> {
         .id
         .clone();
     for id in [weapon.as_str(), "brick_fence"] {
-        let view = bri_client::add_ons::set_enabled(&root, &Discovery::root_only(), id, true)?;
+        let view = bri_client::add_ons::set_enabled(&root, id, true)?;
         println!("enable {id}: {:?}", view.notice);
     }
-    std::fs::write(out.join("rows.txt"), rows(&bri_client::add_ons::view(&root, &Discovery::root_only())).join("\n"))?;
+    std::fs::write(out.join("rows.txt"), rows(&bri_client::add_ons::view(&root)).join("\n"))?;
 
     let mut app = App::load(&root, &out.join("state"), SIZE)?;
     app.ui.core.pop(ScreenId::DefaultControls);
