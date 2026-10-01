@@ -1,30 +1,24 @@
 //! The Flying Wheeled Jeep against blocklandv20.exe `WheeledVehicle::updateForces`:
 //! thrust below `maxForwardVel`, lift from speed along the nose, control
 //! surfaces that bite only above `stallSpeed`, and no jets.
+#[macro_use]
+mod common;
 use bri_vehicles::*;
+use common::Fixture;
 use glam::{Quat, Vec3};
 use rapier3d::prelude::*;
 
-/// A mounted Flying Wheeled Jeep at `height`, moving `speed` toward its nose.
-fn flying_jeep(height: f32, speed: f32) -> (VehiclesWorld, PhysicsWorld) {
-    let pack = Pack::load(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../content/vehicles-pack-012/vehicles.json"
-    ))
-    .unwrap();
-    let mut v = VehiclesWorld::new(pack).unwrap();
-    let mut w = bri_physics::new_world();
-    w.insert(
-        RigidBodyBuilder::fixed().translation(Vec3::new(0., -0.5, 0.)),
-        ColliderBuilder::cuboid(2000., 0.5, 2000.),
-    );
+/// A mounted flying car at `height`, moving `speed` toward its nose.
+fn flying_jeep(f: &Fixture, height: f32, speed: f32) -> (VehiclesWorld, PhysicsWorld) {
+    let mut v = f.vehicles();
+    let mut w = common::floor(2000.);
     v.spawn(
         &mut w,
         Spawn {
             scale: 1.,
             id: VehicleId(1),
             owner: OwnerId(10),
-            definition: "v20.vehicle.flyingwheeledjeepvehicle".into(),
+            definition: f.flying_car.into(),
             transform: Transform {
                 position: [0., height, 0.],
                 ..Default::default()
@@ -84,15 +78,32 @@ fn zero() -> Controls {
     Controls::default()
 }
 
-#[test]
-fn takes_off_from_speed_and_climbs_on_mouse_down() {
-    let (mut v, mut w) = flying_jeep(3., 0.);
+/// The flying car's top speed under thrust (`max_forward_vel`).
+fn top_speed(f: &Fixture) -> f32 {
+    f.definition(f.flying_car)
+        .wheeled_flight
+        .as_ref()
+        .expect("flies")
+        .max_forward_vel
+}
+
+on_both! {
+fn takes_off_from_speed_and_climbs_on_mouse_down(f: &Fixture) {
+    let (mut v, mut w) = flying_jeep(f, 3., 0.);
     fly(&mut v, &mut w, 720, throttle());
     let (p, vel, rot, _) = state(&v, &w);
     println!("runway {p} {vel}");
-    // Thrust stops at maxForwardVel 40, where lift (100 × speed, capped at
-    // 4000) carries the jeep's 200 × 20 weight.
-    assert!(vel.length() > 36. && vel.length() < 42., "speed {vel}");
+    // Thrust stops at `max_forward_vel`, where the lift (`lift` × speed,
+    // capped at 4000) carries about the weight.
+    let top = top_speed(f);
+    let d = f.definition(f.flying_car);
+    let lift = (d.lift * top).min(4000.);
+    let weight = d.mass * VEHICLE_GRAVITY;
+    assert!((lift - weight).abs() <= weight * 0.1, "lift {lift}, weight {weight}");
+    assert!(
+        vel.length() > top * 0.9 && vel.length() < top * 1.05,
+        "speed {vel}"
+    );
     assert!((rot * Vec3::Y).y > 0.97, "stays level on the runway");
     // Mouse down, with v20's default vehicle mouse invert, raises the nose.
     // Steering returns on every move without a mouse turn while the
@@ -110,20 +121,22 @@ fn takes_off_from_speed_and_climbs_on_mouse_down() {
     println!("climb {q} {vel}");
     assert!(q.y > p.y + 8., "pulled up from {p} to {q}");
 }
+}
 
-#[test]
-fn holds_level_flight_at_full_speed() {
-    let (mut v, mut w) = flying_jeep(100., 40.);
+on_both! {
+fn holds_level_flight_at_full_speed(f: &Fixture) {
+    let (mut v, mut w) = flying_jeep(f, 100., top_speed(f));
     fly(&mut v, &mut w, 240, throttle());
     let (p, vel, _, _) = state(&v, &w);
     println!("level {p} {vel}");
     assert!((p.y - 100.).abs() < 4., "level flight drifted to {p}");
-    assert!(p.z < -70., "flew forward, {p}");
+    assert!(p.z < -top_speed(f) * 1.75, "flew forward, {p}");
+}
 }
 
-#[test]
-fn mouse_turns_right_and_strafe_rolls_right() {
-    let (mut v, mut w) = flying_jeep(100., 40.);
+on_both! {
+fn mouse_turns_right_and_strafe_rolls_right(f: &Fixture) {
+    let (mut v, mut w) = flying_jeep(f, 100., top_speed(f));
     fly(
         &mut v,
         &mut w,
@@ -136,7 +149,7 @@ fn mouse_turns_right_and_strafe_rolls_right() {
     let (p, vel, rot, spin) = state(&v, &w);
     println!("turn {p} {vel} {spin} nose {}", rot * Vec3::NEG_Z);
     assert!((rot * Vec3::NEG_Z).x > 0.1, "mouse right turns right");
-    let (mut v, mut w) = flying_jeep(100., 40.);
+    let (mut v, mut w) = flying_jeep(f, 100., top_speed(f));
     fly(
         &mut v,
         &mut w,
@@ -150,10 +163,11 @@ fn mouse_turns_right_and_strafe_rolls_right() {
     println!("roll up {}", rot * Vec3::Y);
     assert!((rot * Vec3::Y).x > 0.1, "D rolls the right side down");
 }
+}
 
-#[test]
-fn controls_do_nothing_below_stall_speed() {
-    let (mut v, mut w) = flying_jeep(100., 0.);
+on_both! {
+fn controls_do_nothing_below_stall_speed(f: &Fixture) {
+    let (mut v, mut w) = flying_jeep(f, 100., 0.);
     fly(
         &mut v,
         &mut w,
@@ -171,14 +185,16 @@ fn controls_do_nothing_below_stall_speed() {
     assert!((rot * Vec3::Y).y > 0.99);
     assert!(p.y < 92., "falls, {p}");
 }
+}
 
-#[test]
-fn glides_down_and_lands_on_its_wheels() {
-    let (mut v, mut w) = flying_jeep(12., 20.);
+on_both! {
+fn glides_down_and_lands_on_its_wheels(f: &Fixture) {
+    let (mut v, mut w) = flying_jeep(f, 12., 20.);
     fly(&mut v, &mut w, 480, zero());
     let s = &v.snapshot(&w).vehicles[0];
     let rot = Quat::from_array(s.transform.rotation);
     println!("landed {:?} {:?}", s.transform.position, s.wheel_suspension);
     assert!((rot * Vec3::Y).y > 0.98, "landed upright");
     assert!(s.transform.position[1] < 3., "on the ground");
+}
 }

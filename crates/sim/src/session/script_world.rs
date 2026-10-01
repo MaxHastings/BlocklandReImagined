@@ -3,7 +3,7 @@
 //! engine's own weapons use.
 use super::*;
 use bri_package_runtime::ops::ObjectRef;
-use bri_package_runtime::script::{RayHit, RayTarget, World};
+use bri_package_runtime::script::{BrickInfo, RayHit, RayTarget, World};
 use bri_weapons::{Filter, Query, TargetId};
 use std::cell::OnceCell;
 
@@ -106,5 +106,42 @@ impl World for ScriptWorld<'_> {
     fn brick_box(&self, brick: u64) -> Option<([f32; 3], [f32; 3])> {
         let (min, max) = self.session.simulation.brick_box(brick)?;
         Some((min.to_array(), max.to_array()))
+    }
+    fn brick(&self, brick: u64) -> Option<BrickInfo> {
+        let b = self.session.simulation.state().bricks.get(&brick)?;
+        let bri_world::ContentRef::Resolved(kind) = &b.definition else {
+            return None;
+        };
+        let (min, max) = self.session.simulation.brick_box(brick)?;
+        Some(BrickInfo {
+            kind: kind.clone(),
+            position: b.position,
+            turns: b.quarter_turns,
+            color: b.color,
+            owner: b.owner,
+            min: min.to_array(),
+            max: max.to_array(),
+        })
+    }
+    fn bricks_in(&self, min: [f32; 3], max: [f32; 3], limit: usize) -> Vec<u64> {
+        let mut found = self
+            .session
+            .simulation
+            .bricks_in_box(Vec3::from(min), Vec3::from(max));
+        found.truncate(limit);
+        found
+    }
+    fn can_edit(&self, caller: Option<u64>, brick: u64) -> bool {
+        self.session
+            .simulation
+            .state()
+            .bricks
+            .get(&brick)
+            .is_some_and(|b| self.session.rule_may_edit(caller, b.owner))
+    }
+    fn can_plant(&self, kind: &str, position: [f32; 3], turns: u8) -> bool {
+        self.session
+            .planted_brick(kind, position, turns, 0, 0)
+            .is_some_and(|b| self.session.simulation.fits(&b))
     }
 }

@@ -1,7 +1,8 @@
-//! Vehicle spawn bricks, mounting, driving, dismounting and destruction with
-//! the converted native vehicle pack.
+//! Vehicle spawn bricks, mounting, driving, dismounting and destruction.
+//! Each test runs on the made-up vehicles, weapons and bricks
+//! (`bri_vehicles::testing`, `bri_weapons::testing`, `bri_sim::testing`) and
+//! again, ignored, on the converted native packs for the push gate.
 use bri_sim::{
-    definitions::Definitions,
     player::MoveInput,
     session::{Command, Session, ToolAction},
     simulation::Simulation,
@@ -9,32 +10,29 @@ use bri_sim::{
 use bri_world::{Brick, ContentRef, VehicleSpawn, World};
 use glam::Vec3;
 use rapier3d::prelude::*;
-use std::path::Path;
+mod common;
+use common::{Fixture, Item, Vehicle};
 
-const SPAWN: &str = "v20/brick/brickvehiclespawndata";
-const JEEP: &str = "v20.vehicle.jeepvehicle";
-
-fn session(root: &Path) -> anyhow::Result<(Session, u64)> {
-    session_with(root, JEEP)
+/// A session with one car on its spawn brick and its driver-to-be.
+fn session(f: &Fixture) -> anyhow::Result<(Session, u64)> {
+    session_with(f, f.vehicle(Vehicle::Car))
 }
 
-fn definitions(root: &Path) -> anyhow::Result<Definitions> {
-    Definitions::load(
-        &root.join("content/stock-catalog-004"),
-        &root.join("content/maps-pass-008"),
-    )
-}
 fn ground() -> ColliderBuilder {
     ColliderBuilder::cuboid(200.0, 0.5, 200.0).translation(Vector::new(0.0, -0.5, 0.0))
 }
 /// The test world: one vehicle spawn brick 12 ahead of the spawn point.
-fn vehicle_world(vehicle: &str) -> World {
+fn vehicle_world(f: &Fixture, vehicle: &str) -> World {
     let mut world = World::new(
         "Vehicles".into(),
         "test".into(),
         vec![[1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]],
     );
-    let mut brick = Brick::new(ContentRef::Resolved(SPAWN.into()), [0.0, 0.1, -12.0], 0);
+    let mut brick = Brick::new(
+        ContentRef::Resolved(f.vehicle_spawn_brick().into()),
+        [0.0, 0.1, -12.0],
+        0,
+    );
     brick.vehicle = Some(VehicleSpawn {
         vehicle: ContentRef::Resolved(vehicle.into()),
         recolor: true,
@@ -43,28 +41,30 @@ fn vehicle_world(vehicle: &str) -> World {
     world.next_brick_id = 2;
     world
 }
-fn session_with(root: &Path, vehicle: &str) -> anyhow::Result<(Session, u64)> {
+fn session_with(f: &Fixture, vehicle: &str) -> anyhow::Result<(Session, u64)> {
     let mut s = Session::new(Simulation::new(
-        vehicle_world(vehicle),
-        definitions(root)?,
+        vehicle_world(f, vehicle),
+        f.bricks(),
         vec![ground()],
     )?);
-    s.set_weapon_pack(bri_weapons::Pack::from_json(&std::fs::read(
-        root.join("content/weapons-pack-009/weapons.json"),
-    )?)?)?;
-    s.set_vehicle_pack(bri_vehicles::Pack::load(
-        root.join("content/vehicles-pack-012/vehicles.json"),
-    )?, Vec::new())?;
+    s.set_weapon_pack(f.weapons.clone())?;
+    s.set_vehicle_pack(f.vehicles(), Vec::new())?;
     s.set_spawn_points(vec![Vec3::new(0.0, 0.05, 0.0)])?;
     let owner = s.join("Driver".into(), Vec3::new(0.0, 0.05, 0.0), true)?;
     Ok((s, owner))
 }
+/// The Blockhead Bot sample package's bot kinds.
+fn bots() -> Vec<bri_sim::bot_kind::BotKind> {
+    bri_sim::bot_kind::BotPack::from_json(include_bytes!(
+        "../../../packages/blockhead_bot/assets/bots.json"
+    ))
+    .unwrap()
+    .bots
+}
 
-#[test]
-#[ignore = "requires the converted native vehicle and brick packs"]
-fn spawn_brick_vehicle_mounts_drives_dismounts_and_respawns() -> anyhow::Result<()> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let (mut s, owner) = session(&root)?;
+on_both! {
+fn spawn_brick_vehicle_mounts_drives_dismounts_and_respawns(f: &Fixture) -> anyhow::Result<()> {
+    let (mut s, owner) = session(f)?;
     let mut sequence = 0;
     let mut feed = |s: &mut Session, input: MoveInput, ticks: usize| -> anyhow::Result<()> {
         for _ in 0..ticks {
@@ -77,7 +77,7 @@ fn spawn_brick_vehicle_mounts_drives_dismounts_and_respawns() -> anyhow::Result<
     feed(&mut s, MoveInput::default(), 120)?;
     let infos = s.vehicle_infos();
     assert_eq!(infos.len(), 1, "spawn brick produced its jeep");
-    assert_eq!(infos[0].definition, JEEP);
+    assert_eq!(infos[0].definition, f.vehicle(Vehicle::Car));
     assert_eq!(infos[0].color, Some(0), "recolored with the brick color");
     let parked = Vec3::from(s.vehicle_poses()[0].position);
     assert!(
@@ -160,32 +160,24 @@ fn spawn_brick_vehicle_mounts_drives_dismounts_and_respawns() -> anyhow::Result<
     }
     Ok(())
 }
+}
 
-#[test]
-#[ignore = "requires the converted native vehicle, weapon and brick packs"]
-fn bot_brick_spawns_a_bot_that_fights_inside_its_owners_minigame() -> anyhow::Result<()> {
+on_both! {
+fn bot_brick_spawns_a_bot_that_fights_inside_its_owners_minigame(f: &Fixture) -> anyhow::Result<()> {
     use bri_sim::session::{InspectMode, MiniGameRequest, Notice, ToolCatalog, WrenchProperties};
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let definitions = Definitions::load(
-        &root.join("content/stock-catalog-004"),
-        &root.join("content/maps-pass-008"),
-    )?;
-    let height = definitions.entries[SPAWN].mesh.height_plates as f32 * 0.2;
+    let definitions = f.bricks();
+    let height = definitions.entries[f.vehicle_spawn_brick()].mesh.height_plates as f32 * 0.2;
     let world = World::new("Bots".into(), "test".into(), vec![[1.0, 0.0, 0.0, 1.0]]);
     let mut s = Session::new(Simulation::new(
         world,
         definitions,
         vec![ColliderBuilder::cuboid(200.0, 0.5, 200.0).translation(Vector::new(0.0, -0.5, 0.0))],
     )?);
-    s.set_weapon_pack(bri_weapons::Pack::from_json(&std::fs::read(
-        root.join("content/weapons-pack-009/weapons.json"),
-    )?)?)?;
-    s.set_vehicle_pack(bri_vehicles::Pack::load(
-        root.join("content/vehicles-pack-012/vehicles.json"),
-    )?, bri_sim::bot_kind::BotPack::from_json(include_bytes!("../../../packages/blockhead_bot/assets/bots.json")).unwrap().bots)?;
+    s.set_weapon_pack(f.weapons.clone())?;
+    s.set_vehicle_pack(f.vehicles(), bots())?;
     s.set_tool_catalog(ToolCatalog {
         vehicles: ["bot.blockhead".to_string()].into(),
-        vehicle_bricks: [SPAWN.to_string()].into(),
+        vehicle_bricks: [f.vehicle_spawn_brick().to_string()].into(),
         ..Default::default()
     })?;
     s.set_spawn_points(vec![Vec3::new(0.0, 0.05, 6.0)])?;
@@ -206,7 +198,7 @@ fn bot_brick_spawns_a_bot_that_fights_inside_its_owners_minigame() -> anyhow::Re
         human,
         1,
         Command::Plant {
-            definition: SPAWN.into(),
+            definition: f.vehicle_spawn_brick().into(),
             position: brick_center.to_array(),
             quarter_turns: 0,
             color: 0,
@@ -257,7 +249,7 @@ fn bot_brick_spawns_a_bot_that_fights_inside_its_owners_minigame() -> anyhow::Re
         5,
         Command::MiniGame(MiniGameRequest::Create {
             color: 0,
-            settings: Default::default(),
+            settings: f.minigame_settings(),
         }),
     )?;
     let mut hurt = false;
@@ -272,6 +264,7 @@ fn bot_brick_spawns_a_bot_that_fights_inside_its_owners_minigame() -> anyhow::Re
     assert_eq!(s.vitals()[&bot].minigame, s.vitals()[&human].minigame);
     assert!(hurt, "the bot shot its minigame opponent");
     Ok(())
+}
 }
 
 /// Feeds one player's input for a number of ticks.
@@ -311,11 +304,9 @@ fn pose_heading(rotation: [f32; 4]) -> f32 {
     forward.x.atan2(-forward.z)
 }
 
-#[test]
-#[ignore = "requires the converted native vehicle and brick packs"]
-fn walking_into_a_vehicle_does_not_board_it_but_jumping_on_does() -> anyhow::Result<()> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let (mut s, owner) = session(&root)?;
+on_both! {
+fn walking_into_a_vehicle_does_not_board_it_but_jumping_on_does(f: &Fixture) -> anyhow::Result<()> {
+    let (mut s, owner) = session(f)?;
     let mut p = Feeder { owner, sequence: 0 };
     p.feed(&mut s, MoveInput::default(), 120)?;
     p.feed(
@@ -339,12 +330,12 @@ fn walking_into_a_vehicle_does_not_board_it_but_jumping_on_does() -> anyhow::Res
     );
     Ok(())
 }
+}
 
-#[test]
-#[ignore = "requires the converted native vehicle and brick packs"]
-fn horse_runs_where_its_rider_looks_jumps_and_lets_go_on_jet() -> anyhow::Result<()> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let (mut s, owner) = session_with(&root, "v20.vehicle.horsearmor")?;
+on_both! {
+fn horse_runs_where_its_rider_looks_jumps_and_lets_go_on_jet(f: &Fixture) -> anyhow::Result<()> {
+    let horse = f.vehicle_definition(Vehicle::Horse);
+    let (mut s, owner) = session_with(f, &horse.id)?;
     let mut p = Feeder { owner, sequence: 0 };
     p.feed(&mut s, MoveInput::default(), 120)?;
     p.board(&mut s, 0.0)?;
@@ -367,9 +358,11 @@ fn horse_runs_where_its_rider_looks_jumps_and_lets_go_on_jet() -> anyhow::Result
         (pose_heading(pose.rotation) - look).abs() < 0.01,
         "faces the look"
     );
+    // Two seconds from a stand: most of the way at its top speed.
     assert!(
-        after.x - before.x > 15.0,
-        "runs at maxForwardSpeed 12: {before} -> {after}"
+        after.x - before.x > horse.max_speed * 2.0 * 0.625,
+        "runs at its maxForwardSpeed {}: {before} -> {after}",
+        horse.max_speed
     );
     // The rider sits facing the horse's way.
     let rider = s
@@ -379,7 +372,11 @@ fn horse_runs_where_its_rider_looks_jumps_and_lets_go_on_jet() -> anyhow::Result
         .unwrap()
         .0;
     assert!((rider.yaw - look).abs() < 0.01);
-    // Jump uses jumpForce 17 * 90.
+    // Jump leaves the ground at its jump speed (`jumpForce` over its mass):
+    // a third of a second in, near the height a drag-free jump reaches by then.
+    let gravity = bri_sim::player::PlayerTuning::default().gravity;
+    let t = (40.0 / 120.0_f32).min(horse.jump_speed / gravity);
+    let rise = horse.jump_speed * t - 0.5 * gravity * t * t;
     let ground = after.y;
     let mut peak = ground;
     for _ in 0..40 {
@@ -394,7 +391,10 @@ fn horse_runs_where_its_rider_looks_jumps_and_lets_go_on_jet() -> anyhow::Result
         )?;
         peak = peak.max(s.vehicle_poses()[0].position[1]);
     }
-    assert!(peak - ground > 3.0, "horse jumped {peak} from {ground}");
+    assert!(
+        peak - ground > rise * 0.75,
+        "horse jumped {peak} from {ground}, {rise} drag-free"
+    );
     p.feed(
         &mut s,
         MoveInput {
@@ -415,12 +415,11 @@ fn horse_runs_where_its_rider_looks_jumps_and_lets_go_on_jet() -> anyhow::Result
     assert_eq!(s.mounted(owner), None, "jet dismounts the horse");
     Ok(())
 }
+}
 
-#[test]
-#[ignore = "requires the converted native vehicle and brick packs"]
-fn tank_gunner_aims_where_they_look_relative_to_the_hull() -> anyhow::Result<()> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let (mut s, owner) = session_with(&root, "v20.vehicle.tankvehicle")?;
+on_both! {
+fn tank_gunner_aims_where_they_look_relative_to_the_hull(f: &Fixture) -> anyhow::Result<()> {
+    let (mut s, owner) = session_with(f, f.vehicle(Vehicle::Tank))?;
     let mut p = Feeder { owner, sequence: 0 };
     p.feed(&mut s, MoveInput::default(), 120)?;
     p.board(&mut s, 0.0)?;
@@ -443,12 +442,11 @@ fn tank_gunner_aims_where_they_look_relative_to_the_hull() -> anyhow::Result<()>
     assert!((aim[1] - 0.2).abs() < 0.01, "barrel pitch {aim:?}");
     Ok(())
 }
+}
 
-#[test]
-#[ignore = "requires the converted native vehicle and brick packs"]
-fn a_new_tank_gunner_takes_the_turret_where_it_was_left() -> anyhow::Result<()> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let (mut s, owner) = session_with(&root, "v20.vehicle.tankvehicle")?;
+on_both! {
+fn a_new_tank_gunner_takes_the_turret_where_it_was_left(f: &Fixture) -> anyhow::Result<()> {
+    let (mut s, owner) = session_with(f, f.vehicle(Vehicle::Tank))?;
     let mut p = Feeder { owner, sequence: 0 };
     p.feed(&mut s, MoveInput::default(), 120)?;
     p.board(&mut s, 0.0)?;
@@ -494,32 +492,33 @@ fn a_new_tank_gunner_takes_the_turret_where_it_was_left() -> anyhow::Result<()> 
     assert!((aim[0] + 1.0).abs() < 0.01, "turret yaw {aim:?}");
     Ok(())
 }
+}
 
-#[test]
-#[ignore = "requires the converted native vehicle and brick packs"]
-fn standalone_tank_turret_is_on_the_spawn_list() -> anyhow::Result<()> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let (s, _) = session(&root)?;
+on_both! {
+fn standalone_tank_turret_is_on_the_spawn_list(f: &Fixture) -> anyhow::Result<()> {
+    let (s, _) = session(f)?;
+    let turret = f.vehicle_definition(Vehicle::Turret);
     let choices = s.vehicle_choices();
     assert!(
         choices
             .iter()
-            .any(|(id, name)| id == "v20.vehicle.tankturretplayer" && name == "Tank Turret")
+            .any(|(id, name)| id == turret.id.as_str() && name == turret.name.trim()),
+        "{choices:?}"
     );
-    assert!(!choices.iter().any(|(id, _)| id.contains("skivehicle")));
+    // Skis come only from their item.
+    assert!(!choices.iter().any(|(id, _)| id == f.vehicle(Vehicle::Skis)));
     Ok(())
 }
+}
 
-#[test]
-#[ignore = "requires the converted native vehicle, weapon and brick packs"]
-fn skis_item_boards_skis_and_fires_again_to_step_off() -> anyhow::Result<()> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let (mut s, owner) = session(&root)?;
+on_both! {
+fn skis_item_boards_skis_and_fires_again_to_step_off(f: &Fixture) -> anyhow::Result<()> {
+    let (mut s, owner) = session(f)?;
     let mut p = Feeder { owner, sequence: 0 };
     p.feed(&mut s, MoveInput::default(), 60)?;
     // The skis take the last colour spray can's paint (`currentColor`).
     s.command(owner, 99, Command::UseSprayCan { color: 1 })?;
-    let slot = s.give_item(owner, "v20.weapon.skiitem")?;
+    let slot = s.give_item(owner, f.item(Item::Skis))?;
     let mut command = 100;
     let mut fire = |s: &mut Session, p: &mut Feeder| -> anyhow::Result<()> {
         s.equip_tool(owner, Some(slot))?;
@@ -539,7 +538,7 @@ fn skis_item_boards_skis_and_fires_again_to_step_off() -> anyhow::Result<()> {
         .into_iter()
         .find(|v| v.id == vehicle)
         .unwrap();
-    assert_eq!(skis.definition, "v20.vehicle.skivehicle");
+    assert_eq!(skis.definition, f.vehicle(Vehicle::Skis));
     assert_eq!(skis.color, Some(1));
     fire(&mut s, &mut p)?;
     p.feed(&mut s, MoveInput::default(), 4)?;
@@ -550,22 +549,21 @@ fn skis_item_boards_skis_and_fires_again_to_step_off() -> anyhow::Result<()> {
     );
     Ok(())
 }
+}
 
-#[test]
-#[ignore = "requires the converted native vehicle, weapon and brick packs"]
-fn skis_work_again_after_jetting_off_them_and_after_respawning() -> anyhow::Result<()> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let (mut s, owner) = session(&root)?;
+on_both! {
+fn skis_work_again_after_jetting_off_them_and_after_respawning(f: &Fixture) -> anyhow::Result<()> {
+    let (mut s, owner) = session(f)?;
     let mut p = Feeder { owner, sequence: 0 };
     p.feed(&mut s, MoveInput::default(), 60)?;
     let use_skis = |s: &mut Session, p: &mut Feeder| -> anyhow::Result<()> {
         let slot = match s.tool_inventories()[&owner]
             .slots
             .iter()
-            .position(|i| i.as_deref() == Some("v20.weapon.skiitem"))
+            .position(|i| i.as_deref() == Some(f.item(Item::Skis)))
         {
             Some(slot) => slot,
-            None => s.give_item(owner, "v20.weapon.skiitem")?,
+            None => s.give_item(owner, f.item(Item::Skis))?,
         };
         s.equip_tool(owner, Some(slot))?;
         p.feed(s, MoveInput::default(), 80)?;
@@ -606,13 +604,12 @@ fn skis_work_again_after_jetting_off_them_and_after_respawning() -> anyhow::Resu
     assert!(s.mounted(owner).is_some(), "the skis work after respawning");
     Ok(())
 }
+}
 
-#[test]
-#[ignore = "requires the converted native vehicle, weapon and brick packs"]
-fn seated_riders_face_the_seat_and_use_tools_but_gunners_fire_the_gun() -> anyhow::Result<()> {
+on_both! {
+fn seated_riders_face_the_seat_and_use_tools_but_gunners_fire_the_gun(f: &Fixture) -> anyhow::Result<()> {
     use bri_sim::session::ActionAim;
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let (mut s, owner) = session_with(&root, "v20.vehicle.tankvehicle")?;
+    let (mut s, owner) = session_with(f, f.vehicle(Vehicle::Tank))?;
     let mut p = Feeder { owner, sequence: 0 };
     p.feed(&mut s, MoveInput::default(), 120)?;
     p.board(&mut s, 0.0)?;
@@ -639,7 +636,7 @@ fn seated_riders_face_the_seat_and_use_tools_but_gunners_fire_the_gun() -> anyho
         - std::f32::consts::PI;
     assert!(turn.abs() < 0.2, "rider faces the seat: {facing} vs {hull}");
     // The driver fires a held gun.
-    let slot = s.give_item(owner, "v20.weapon.gunitem")?;
+    let slot = s.give_item(owner, f.item(Item::Gun))?;
     s.equip_tool(owner, Some(slot))?;
     p.feed(&mut s, MoveInput::default(), 40)?;
     let aim = Some(ActionAim {
@@ -676,20 +673,27 @@ fn seated_riders_face_the_seat_and_use_tools_but_gunners_fire_the_gun() -> anyho
     );
     Ok(())
 }
+}
 
-#[test]
-#[ignore = "requires the converted native vehicle and brick packs"]
-fn pirate_cannon_shows_its_charge_as_a_bottom_print() -> anyhow::Result<()> {
+on_both! {
+fn pirate_cannon_shows_its_charge_as_a_bottom_print(f: &Fixture) -> anyhow::Result<()> {
     use bri_sim::session::Notice;
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let (mut s, owner) = session_with(&root, "v20.vehicle.cannonturret")?;
+    let (mut s, owner) = session_with(f, f.vehicle(Vehicle::Cannon))?;
     let mut p = Feeder { owner, sequence: 0 };
     p.feed(&mut s, MoveInput::default(), 120)?;
     p.board(&mut s, 0.0)?;
+    let weapon = f
+        .vehicle_definition(Vehicle::Cannon)
+        .weapon
+        .expect("the cannon has a gun");
+    let steps = usize::from(weapon.charge_steps);
+    assert!(steps > 1, "a charge of several steps");
     s.take_private_notices();
     s.command(owner, 50, Command::WeaponTrigger { down: true })?;
-    // `CannonStrengthLoop` adds a step at once and every 200 ms up to 10.
-    p.feed(&mut s, MoveInput::default(), 300)?;
+    // `CannonStrengthLoop` adds a step at once and one every `charge_ticks`
+    // up to the last: held well past that, every step is shown once.
+    let full = weapon.charge_ticks as usize * steps;
+    p.feed(&mut s, MoveInput::default(), full + 60)?;
     let prints: Vec<String> = s
         .take_private_notices()
         .into_iter()
@@ -702,7 +706,8 @@ fn pirate_cannon_shows_its_charge_as_a_bottom_print() -> anyhow::Result<()> {
             _ => None,
         })
         .collect();
-    assert_eq!(prints.len(), 10, "{prints:?}");
+    assert_eq!(prints.len(), steps, "{prints:?}");
+    // A bar of 20, lit in proportion to the charge.
     let bar = |lit: usize| {
         format!(
             "<just:center><color:FF0000>Fire! <color:FFFFFF>:<color:FFFF00>{}<color:000000>{}",
@@ -710,22 +715,21 @@ fn pirate_cannon_shows_its_charge_as_a_bottom_print() -> anyhow::Result<()> {
             "|".repeat(20 - lit)
         )
     };
-    assert_eq!(prints[0], bar(2));
-    assert_eq!(prints[9], bar(20));
+    assert_eq!(prints[0], bar(20 / steps));
+    assert_eq!(prints[steps - 1], bar(20));
     Ok(())
 }
+}
 
-#[test]
-#[ignore = "requires the converted native vehicle and brick packs"]
-fn admin_drop_at_camera_carries_the_ridden_vehicle() -> anyhow::Result<()> {
+on_both! {
+fn admin_drop_at_camera_carries_the_ridden_vehicle(f: &Fixture) -> anyhow::Result<()> {
     use bri_admin::{Action, Request};
     use bri_sim::{
         presentation::CueKind,
         session::{CameraView, ControlObject},
     };
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    for vehicle in [JEEP, "v20.vehicle.horsearmor"] {
-        let (mut s, owner) = session_with(&root, vehicle)?;
+    for vehicle in [f.vehicle(Vehicle::Car), f.vehicle(Vehicle::Horse)] {
+        let (mut s, owner) = session_with(f, vehicle)?;
         let mut p = Feeder { owner, sequence: 0 };
         p.feed(&mut s, MoveInput::default(), 120)?;
         p.board(&mut s, 0.0)?;
@@ -779,13 +783,12 @@ fn admin_drop_at_camera_carries_the_ridden_vehicle() -> anyhow::Result<()> {
     }
     Ok(())
 }
+}
 
-#[test]
-#[ignore = "requires the converted native vehicle, weapon and brick packs"]
-fn riders_keep_their_look_on_every_mount() -> anyhow::Result<()> {
+on_both! {
+fn riders_keep_their_look_on_every_mount(f: &Fixture) -> anyhow::Result<()> {
     // `Player::updateMove` still turns `mHead` while mounted: other players
     // see a rider look up, down and around in any seat.
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let look = MoveInput {
         pitch: 0.6,
         head_yaw: -1.1,
@@ -812,11 +815,11 @@ fn riders_keep_their_look_on_every_mount() -> anyhow::Result<()> {
         Ok(())
     };
     for (vehicle, seats) in [
-        (JEEP, &[0u8, 1][..]),
-        ("v20.vehicle.horsearmor", &[0][..]),
-        ("v20.vehicle.tankvehicle", &[0, 1][..]),
+        (f.vehicle(Vehicle::Car), &[0u8, 1][..]),
+        (f.vehicle(Vehicle::Horse), &[0][..]),
+        (f.vehicle(Vehicle::Tank), &[0, 1][..]),
     ] {
-        let (mut s, owner) = session_with(&root, vehicle)?;
+        let (mut s, owner) = session_with(f, vehicle)?;
         let mut p = Feeder { owner, sequence: 0 };
         p.feed(&mut s, MoveInput::default(), 120)?;
         p.board(&mut s, 0.0)?;
@@ -828,15 +831,15 @@ fn riders_keep_their_look_on_every_mount() -> anyhow::Result<()> {
             let seat = s.mounted(owner).map(|m| m.1);
             // With the shipped steering prefs the Jeep's and Tank's driver
             // steers with the mouse, pitch included; the horse faces its look.
-            let steers = seat == Some(0) && vehicle != "v20.vehicle.horsearmor";
+            let steers = seat == Some(0) && vehicle != f.vehicle(Vehicle::Horse);
             check(&mut s, &mut p, &format!("{vehicle} seat {seat:?}"), steers)?;
         }
     }
     // Skis come from their item, not a spawn brick.
-    let (mut s, owner) = session(&root)?;
+    let (mut s, owner) = session(f)?;
     let mut p = Feeder { owner, sequence: 0 };
     p.feed(&mut s, MoveInput::default(), 60)?;
-    let slot = s.give_item(owner, "v20.weapon.skiitem")?;
+    let slot = s.give_item(owner, f.item(Item::Skis))?;
     s.equip_tool(owner, Some(slot))?;
     p.feed(&mut s, MoveInput::default(), 80)?;
     for (command, down) in [(100, true), (101, false)] {
@@ -847,12 +850,11 @@ fn riders_keep_their_look_on_every_mount() -> anyhow::Result<()> {
     check(&mut s, &mut p, "skis", true)?;
     Ok(())
 }
+}
 
-#[test]
-#[ignore = "requires the converted native vehicle and brick packs"]
-fn the_hosts_physics_vehicle_limit_holds_back_a_spawn() -> anyhow::Result<()> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let (mut s, owner) = session(&root)?;
+on_both! {
+fn the_hosts_physics_vehicle_limit_holds_back_a_spawn(f: &Fixture) -> anyhow::Result<()> {
+    let (mut s, owner) = session(f)?;
     s.set_server_settings(bri_admin::ServerSettings {
         physics_vehicles: 0,
         ..Default::default()
@@ -870,14 +872,12 @@ fn the_hosts_physics_vehicle_limit_holds_back_a_spawn() -> anyhow::Result<()> {
     )));
     Ok(())
 }
+}
 
-#[test]
-#[ignore = "requires the converted native vehicle and brick packs"]
-fn an_internet_hosts_per_builder_vehicle_quota_holds_back_a_spawn_but_lan_does_not()
--> anyhow::Result<()> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+on_both! {
+fn an_internet_hosts_per_builder_vehicle_quota_holds_back_a_spawn_but_lan_does_not(f: &Fixture) -> anyhow::Result<()> {
     for lan in [false, true] {
-        let (mut s, owner) = session(&root)?;
+        let (mut s, owner) = session(f)?;
         s.set_lan_host(lan);
         let mut settings = bri_admin::ServerSettings::default();
         settings.per_player.vehicles = 0;
@@ -897,18 +897,21 @@ fn an_internet_hosts_per_builder_vehicle_quota_holds_back_a_spawn_but_lan_does_n
     }
     Ok(())
 }
+}
 
 /// HorseArmor's player seat is horse.dts's `mount2` at rest, the same node
-/// and place the converted pack seats a horse bot's rider.
+/// and place the converted pack seats a horse bot's rider. This pins the
+/// engine's built-in horse mount points to the real pack, so it has no
+/// synthetic variant.
 #[test]
-#[ignore = "requires the converted native vehicle pack"]
+#[ignore = "requires generated v20 content"]
 fn horse_player_seat_is_the_horse_shapes_mount_node() -> anyhow::Result<()> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let pack = bri_vehicles::Pack::load(root.join("content/vehicles-pack-012/vehicles.json"))?;
+    let f = &Fixture::content();
+    let pack = f.vehicles();
     let horse = pack
         .definitions
         .iter()
-        .find(|d| d.id == "v20.vehicle.horsearmor")
+        .find(|d| d.id == f.vehicle(Vehicle::Horse))
         .expect("HorseArmor");
     let points = bri_sim::player_types::PlayerType::Horse.mount_points();
     assert_eq!(points.len(), horse.seats.len(), "numMountPoints");
@@ -920,24 +923,19 @@ fn horse_player_seat_is_the_horse_shapes_mount_node() -> anyhow::Result<()> {
     Ok(())
 }
 
+on_both! {
 /// A bot hit by the Horse Ray becomes a rideable horse. It has no client of
 /// its own, so v20 gives the rider in its first seat control of it
 /// (`setControlObject`): its brain stops and it runs where the rider looks.
-#[test]
-#[ignore = "requires the converted native vehicle, weapon and brick packs"]
-fn a_horse_rayed_bot_is_ridden_and_steered_by_its_rider() -> anyhow::Result<()> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+fn a_horse_rayed_bot_is_ridden_and_steered_by_its_rider(f: &Fixture) -> anyhow::Result<()> {
     // A bot brick the shooter owns, so the bot follows their minigame.
-    let definitions = Definitions::load(
-        &root.join("content/stock-catalog-004"),
-        &root.join("content/maps-pass-008"),
-    )?;
+    let definitions = f.bricks();
     let mut world = World::new("Bot horse".into(), "test".into(), vec![[1.0; 4]]);
     let principal = [7; 32];
     world
         .owners
         .insert(1, bri_world::OwnerRecord::new(principal, "Shooter".into()));
-    let mut brick = Brick::new(ContentRef::Resolved(SPAWN.into()), [0.0, 0.1, -12.0], 1);
+    let mut brick = Brick::new(ContentRef::Resolved(f.vehicle_spawn_brick().into()), [0.0, 0.1, -12.0], 1);
     brick.vehicle = Some(VehicleSpawn {
         vehicle: ContentRef::Resolved("bot.blockhead".into()),
         recolor: false,
@@ -949,12 +947,8 @@ fn a_horse_rayed_bot_is_ridden_and_steered_by_its_rider() -> anyhow::Result<()> 
         definitions,
         vec![ColliderBuilder::cuboid(200.0, 0.5, 200.0).translation(Vector::new(0.0, -0.5, 0.0))],
     )?);
-    s.set_weapon_pack(bri_weapons::Pack::from_json(&std::fs::read(
-        root.join("content/weapons-pack-009/weapons.json"),
-    )?)?)?;
-    s.set_vehicle_pack(bri_vehicles::Pack::load(
-        root.join("content/vehicles-pack-012/vehicles.json"),
-    )?, bri_sim::bot_kind::BotPack::from_json(include_bytes!("../../../packages/blockhead_bot/assets/bots.json")).unwrap().bots)?;
+    s.set_weapon_pack(f.weapons.clone())?;
+    s.set_vehicle_pack(f.vehicles(), bots())?;
     s.set_spawn_points(vec![Vec3::new(0.0, 0.05, 0.0)])?;
     let shooter = s.join_verified(
         "Shooter".into(),
@@ -1004,7 +998,7 @@ fn a_horse_rayed_bot_is_ridden_and_steered_by_its_rider() -> anyhow::Result<()> 
     idle(&mut s, shooter, 60, MoveInput::default());
     let game = s.vitals()[&shooter].minigame.expect("minigame");
     assert_eq!(s.vitals()[&bot].minigame, Some(game));
-    let slot = s.give_item(shooter, "v20.weapon.horserayitem")?;
+    let slot = s.give_item(shooter, f.item(Item::HorseRay))?;
     s.equip_tool(shooter, Some(slot))?;
     let mut horse = false;
     for shot in 0..10 {
@@ -1039,6 +1033,8 @@ fn a_horse_rayed_bot_is_ridden_and_steered_by_its_rider() -> anyhow::Result<()> 
         }
     }
     assert!(horse, "the Horse Ray turned the bot into a horse");
+    // The new horse comes up to its shooter; let it settle there.
+    idle(&mut s, shooter, 120, MoveInput::default());
     // A player of the same minigame dropped on its back takes the reins.
     let rider = s.join("Rider".into(), Vec3::new(30.0, 0.05, 30.0), false)?;
     s.set_spawn_points(vec![feet(&s, bot) + Vec3::Y * 6.0])?;
@@ -1071,36 +1067,28 @@ fn a_horse_rayed_bot_is_ridden_and_steered_by_its_rider() -> anyhow::Result<()> 
     assert_eq!(s.vitals()[&rider].ride.map(|r| r.mount), Some(bot));
     Ok(())
 }
+}
 
+on_both! {
 /// Playtest a20: a guest could not hammer their own vehicle spawn brick back.
 /// v20's `indestructable` only keeps explosions off spawn bricks; the hammer
 /// asks trust alone, and `fxDTSBrick::onDeath` deletes the brick's vehicle.
-#[test]
-#[ignore = "requires the converted native vehicle, weapon and brick packs"]
-fn a_guest_hammers_their_own_vehicle_spawn_and_its_jeep_goes_with_it() -> anyhow::Result<()> {
+fn a_guest_hammers_their_own_vehicle_spawn_and_its_jeep_goes_with_it(f: &Fixture) -> anyhow::Result<()> {
     use bri_sim::session::{ToolCatalog, WrenchProperties};
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let definitions = Definitions::load(
-        &root.join("content/stock-catalog-004"),
-        &root.join("content/maps-pass-008"),
-    )?;
-    assert!(definitions.entries[SPAWN].indestructible);
-    let height = definitions.entries[SPAWN].mesh.height_plates as f32 * 0.2;
+    let definitions = f.bricks();
+    assert!(definitions.entries[f.vehicle_spawn_brick()].indestructible);
+    let height = definitions.entries[f.vehicle_spawn_brick()].mesh.height_plates as f32 * 0.2;
     let world = World::new("Hammer".into(), "test".into(), vec![[1.0, 0.0, 0.0, 1.0]]);
     let mut s = Session::new(Simulation::new(
         world,
         definitions,
         vec![ColliderBuilder::cuboid(200.0, 0.5, 200.0).translation(Vector::new(0.0, -0.5, 0.0))],
     )?);
-    s.set_weapon_pack(bri_weapons::Pack::from_json(&std::fs::read(
-        root.join("content/weapons-pack-009/weapons.json"),
-    )?)?)?;
-    s.set_vehicle_pack(bri_vehicles::Pack::load(
-        root.join("content/vehicles-pack-012/vehicles.json"),
-    )?, Vec::new())?;
+    s.set_weapon_pack(f.weapons.clone())?;
+    s.set_vehicle_pack(f.vehicles(), Vec::new())?;
     s.set_tool_catalog(ToolCatalog {
-        vehicles: [JEEP.to_string()].into(),
-        vehicle_bricks: [SPAWN.to_string()].into(),
+        vehicles: [f.vehicle(Vehicle::Car).to_string()].into(),
+        vehicle_bricks: [f.vehicle_spawn_brick().to_string()].into(),
         ..Default::default()
     })?;
     s.set_spawn_points(vec![Vec3::new(0.0, 0.05, 4.5)])?;
@@ -1123,7 +1111,7 @@ fn a_guest_hammers_their_own_vehicle_spawn_and_its_jeep_goes_with_it() -> anyhow
         guest,
         1,
         Command::Plant {
-            definition: SPAWN.into(),
+            definition: f.vehicle_spawn_brick().into(),
             position: [0.0, height * 0.5, 0.0],
             quarter_turns: 0,
             color: 0,
@@ -1137,7 +1125,7 @@ fn a_guest_hammers_their_own_vehicle_spawn_and_its_jeep_goes_with_it() -> anyhow
         guest,
         brick,
         bri_world::authority::Edit::Properties(WrenchProperties {
-            vehicle: Some(JEEP.into()),
+            vehicle: Some(f.vehicle(Vehicle::Car).into()),
             raycast: true,
             colliding: true,
             visible: true,
@@ -1166,14 +1154,13 @@ fn a_guest_hammers_their_own_vehicle_spawn_and_its_jeep_goes_with_it() -> anyhow
     assert!(s.vehicle_infos().is_empty(), "the jeep goes with its brick");
     Ok(())
 }
+}
 
+on_both! {
 /// allGameScripts.cs:17839 `fxDTSBrick::recoverVehicle`: the event respawns
 /// the brick's vehicle, except while a player rides it.
-#[test]
-#[ignore = "requires the converted native vehicle and brick packs"]
-fn recover_vehicle_leaves_a_ridden_vehicle_alone() -> anyhow::Result<()> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let (mut s, owner) = session(&root)?;
+fn recover_vehicle_leaves_a_ridden_vehicle_alone(f: &Fixture) -> anyhow::Result<()> {
+    let (mut s, owner) = session(f)?;
     let output = bri_events::OutputDef {
         id: "out/fxDTSBrick/recoverVehicle".into(),
         class_name: "fxDTSBrick".into(),
@@ -1246,19 +1233,18 @@ fn recover_vehicle_leaves_a_ridden_vehicle_alone() -> anyhow::Result<()> {
     assert_ne!(s.vehicle_infos()[0].id, ridden, "an empty vehicle was not recovered");
     Ok(())
 }
+}
 
+on_both! {
 /// The host consumes a driver's moves one per tick, as it does a walker's,
 /// so a client predicting its vehicle (one step per move) agrees with it
 /// even though moves arrive two to a datagram. Draining the whole queue
 /// each tick ran two moves' steering in one step and none in the next, and
 /// every pose then corrected the prediction: the view shook while steering.
-#[test]
-#[ignore = "requires the converted native vehicle and brick packs"]
-fn a_predicted_driver_needs_no_corrections_when_moves_arrive_in_pairs() -> anyhow::Result<()> {
+fn a_predicted_driver_needs_no_corrections_when_moves_arrive_in_pairs(f: &Fixture) -> anyhow::Result<()> {
     use bri_sim::prediction::{CollisionMirror, DriveSpawn, Predictor};
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let jeep = "v20.vehicle.flyingwheeledjeepvehicle";
-    let (mut s, owner) = session_with(&root, jeep)?;
+    let jeep = f.vehicle(Vehicle::FlyingCar);
+    let (mut s, owner) = session_with(f, jeep)?;
     let mut p = Feeder { owner, sequence: 0 };
     p.feed(&mut s, MoveInput::default(), 120)?;
     p.board(&mut s, 0.0)?;
@@ -1272,13 +1258,13 @@ fn a_predicted_driver_needs_no_corrections_when_moves_arrive_in_pairs() -> anyho
         .find(|(r, _)| r.owner == owner)
         .unwrap()
         .0;
-    let world = vehicle_world(jeep);
-    let mut mirror = CollisionMirror::new(definitions(&root)?, vec![ground()], vec![]);
+    let world = vehicle_world(f, jeep);
+    let mut mirror = CollisionMirror::new(f.bricks(), vec![ground()], vec![]);
     mirror.sync(&world.bricks)?;
     let mut client = Predictor::new(mirror, rider, Default::default())?;
     client.continue_after(p.sequence);
     client.drive(Some((
-        bri_vehicles::Pack::load(root.join("content/vehicles-pack-012/vehicles.json"))?,
+        f.vehicles(),
         DriveSpawn {
             spawn: bri_vehicles::Spawn {
                 id: bri_vehicles::VehicleId(info.id),
@@ -1301,6 +1287,7 @@ fn a_predicted_driver_needs_no_corrections_when_moves_arrive_in_pairs() -> anyho
         yaw: 0.003 * tick as f32,
         ..Default::default()
     };
+    let start = Vec3::from(s.vehicle_poses()[0].position);
     let mut outbox = Vec::new();
     let mut in_flight = std::collections::VecDeque::new();
     let (mut worst_move, mut worst_turn) = (0.0_f32, 0.0_f32);
@@ -1336,11 +1323,14 @@ fn a_predicted_driver_needs_no_corrections_when_moves_arrive_in_pairs() -> anyho
         }
     }
     println!("worst correction {worst_move} units, {worst_turn} rad");
+    let driven = start.distance(Vec3::from(s.vehicle_poses()[0].position));
+    assert!(driven > 5.0, "the driver drove: {driven}");
     assert!(
         worst_move < 0.02 && worst_turn < 0.002,
         "corrections of {worst_move} units and {worst_turn} rad would shake the view"
     );
     Ok(())
+}
 }
 
 /// Heading of the one vehicle in the session.
@@ -1348,16 +1338,14 @@ fn vehicle_heading(s: &Session) -> f32 {
     pose_heading(s.vehicle_poses()[0].rotation)
 }
 
+on_both! {
 /// `$pref::Input::UseStrafeSteering` off (the reference install's default):
 /// the Jeep's driver steers with the mouse and the strafe keys do nothing;
 /// on, the strafe keys steer and the mouse only looks
 /// (`Player::processTick` 0x5b2d15 to 0x5b2e97).
-#[test]
-#[ignore = "requires the converted native vehicle and brick packs"]
-fn the_jeep_steers_by_the_mouse_without_strafe_steering_and_by_the_keys_with_it() -> anyhow::Result<()> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+fn the_jeep_steers_by_the_mouse_without_strafe_steering_and_by_the_keys_with_it(f: &Fixture) -> anyhow::Result<()> {
     let turned = |strafe: bool, input: &dyn Fn(u64) -> MoveInput| -> anyhow::Result<f32> {
-        let (mut s, owner) = session(&root)?;
+        let (mut s, owner) = session(f)?;
         s.command(
             owner,
             1,
@@ -1396,24 +1384,24 @@ fn the_jeep_steers_by_the_mouse_without_strafe_steering_and_by_the_keys_with_it(
     let keys_on = turned(true, &keys)?;
     println!("mouse/keys, strafe off: {mouse_off} {keys_off}; on: {mouse_on} {keys_on}");
     // Which input steers is the point; how far a second from standstill
-    // turns depends on the tyres (Torque's give a little and share their
-    // grip with the launch, 0.27 here against 0.9 for a held key).
-    assert!(mouse_off > 0.2, "the mouse steers right: {mouse_off}");
+    // turns depends on the tyres and the car (Torque's give a little and
+    // share their grip with the launch: on the Jeep, 0.27 against 0.9 for a
+    // held key), so the turns are only told apart from no turn at all.
+    assert!(mouse_off > 0.05, "the mouse steers right: {mouse_off}");
     assert!(keys_off.abs() < 0.05, "the keys do nothing: {keys_off}");
     assert!(mouse_on.abs() < 0.05, "the mouse only looks: {mouse_on}");
     assert!(keys_on > 0.3, "D steers right: {keys_on}");
     Ok(())
 }
+}
 
+on_both! {
 /// A passenger's mouse turns their whole body on the seat: the host adds
 /// the turn (their move's yaw, relative to the seat) to the seat's heading,
 /// as `Player::setPosition` (0x5a6bc0) turns the mount node by `mRot.z`.
 /// A driver's body stays facing the seat.
-#[test]
-#[ignore = "requires the converted native vehicle and brick packs"]
-fn a_passenger_turns_on_the_seat_and_the_driver_does_not() -> anyhow::Result<()> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let (mut s, owner) = session(&root)?;
+fn a_passenger_turns_on_the_seat_and_the_driver_does_not(f: &Fixture) -> anyhow::Result<()> {
+    let (mut s, owner) = session(f)?;
     let mut p = Feeder { owner, sequence: 0 };
     p.feed(&mut s, MoveInput::default(), 120)?;
     p.board(&mut s, 0.0)?;
@@ -1453,14 +1441,13 @@ fn a_passenger_turns_on_the_seat_and_the_driver_does_not() -> anyhow::Result<()>
     }
     Ok(())
 }
+}
 
+on_both! {
 /// A rowboat is a player-type mount, but its passengers have no control
 /// object either: they turn on their seats the same way.
-#[test]
-#[ignore = "requires the converted native vehicle and brick packs"]
-fn a_rowboat_passenger_turns_on_the_seat() -> anyhow::Result<()> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let (mut s, owner) = session_with(&root, "v20.vehicle.rowboatarmor")?;
+fn a_rowboat_passenger_turns_on_the_seat(f: &Fixture) -> anyhow::Result<()> {
+    let (mut s, owner) = session_with(f, f.vehicle(Vehicle::Rowboat))?;
     let mut p = Feeder { owner, sequence: 0 };
     p.feed(&mut s, MoveInput::default(), 120)?;
     p.board(&mut s, 0.0)?;
@@ -1487,6 +1474,7 @@ fn a_rowboat_passenger_turns_on_the_seat() -> anyhow::Result<()> {
     assert!((turn - 1.3).abs() < 1e-3, "turned {turn}");
     Ok(())
 }
+}
 
 /// A deterministic xorshift for jittered timing.
 struct Jitter(u64);
@@ -1507,15 +1495,22 @@ impl Jitter {
 /// `vehicle` sees with real-world timing: uneven client frames, inputs sent
 /// once a frame with the last six repeated, 40 ms each way with 0 to 15 ms of
 /// jitter, and the host ticking on its own clock.
-fn corrections_under_timing(vehicle: &str, jittered: bool) -> anyhow::Result<(f32, f32, usize)> {
+fn corrections_under_timing(
+    f: &Fixture,
+    vehicle: &str,
+    jittered: bool,
+) -> anyhow::Result<(f32, f32, usize)> {
     use bri_sim::prediction::{CollisionMirror, DriveSpawn, Predictor};
     const TICK_US: u64 = 1_000_000 / 120;
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let (mut s, owner) = session_with(&root, vehicle)?;
+    let (mut s, owner) = session_with(f, vehicle)?;
     let mut p = Feeder { owner, sequence: 0 };
     p.feed(&mut s, MoveInput::default(), 120)?;
-    p.board(&mut s, 0.0)?;
-    anyhow::ensure!(s.mounted(owner).map(|m| m.1) == Some(0), "not driving");
+    p.board(&mut s, 0.0)
+        .map_err(|e| e.context(vehicle.to_string()))?;
+    anyhow::ensure!(
+        s.mounted(owner).map(|m| m.1) == Some(0),
+        "not driving {vehicle}"
+    );
     p.feed(&mut s, MoveInput::default(), 30)?;
     let info = s.vehicle_infos().remove(0);
     let pose = s.vehicle_poses().remove(0);
@@ -1525,13 +1520,13 @@ fn corrections_under_timing(vehicle: &str, jittered: bool) -> anyhow::Result<(f3
         .find(|(r, _)| r.owner == owner)
         .unwrap()
         .0;
-    let world = vehicle_world(vehicle);
-    let mut mirror = CollisionMirror::new(definitions(&root)?, vec![ground()], vec![]);
+    let world = vehicle_world(f, vehicle);
+    let mut mirror = CollisionMirror::new(f.bricks(), vec![ground()], vec![]);
     mirror.sync(&world.bricks)?;
     let mut client = Predictor::new(mirror, rider, Default::default())?;
     client.continue_after(p.sequence);
     client.drive(Some((
-        bri_vehicles::Pack::load(root.join("content/vehicles-pack-012/vehicles.json"))?,
+        f.vehicles(),
         DriveSpawn {
             spawn: bri_vehicles::Spawn {
                 id: bri_vehicles::VehicleId(info.id),
@@ -1558,6 +1553,7 @@ fn corrections_under_timing(vehicle: &str, jittered: bool) -> anyhow::Result<(f3
             ..Default::default()
         }
     };
+    let start = Vec3::from(s.vehicle_poses()[0].position);
     let mut rng = Jitter(0x9e37_79b9_7f4a_7c15);
     let mut to_host: Vec<(u64, Vec<(u64, MoveInput)>)> = Vec::new();
     let mut to_client: Vec<(u64, bri_sim::session::VehiclePose)> = Vec::new();
@@ -1583,7 +1579,11 @@ fn corrections_under_timing(vehicle: &str, jittered: bool) -> anyhow::Result<(f3
             }
         }
         if now >= next_frame {
-            let frame = if jittered { rng.between(6_000..25_000) } else { TICK_US };
+            let frame = if jittered {
+                rng.between(6_000..25_000)
+            } else {
+                TICK_US
+            };
             next_frame += frame;
             accumulator += frame;
             while accumulator >= TICK_US {
@@ -1602,7 +1602,8 @@ fn corrections_under_timing(vehicle: &str, jittered: bool) -> anyhow::Result<(f3
             to_client.sort_by_key(|(at, _)| *at);
             while to_client.first().is_some_and(|(at, _)| *at <= now) {
                 let (_, pose) = to_client.remove(0);
-                let Some(before) = client.drive_pose(pose.tick, pose.driver_input, &pose.motion())?
+                let Some(before) =
+                    client.drive_pose(pose.tick, pose.driver_input, &pose.motion())?
                 else {
                     continue;
                 };
@@ -1621,36 +1622,39 @@ fn corrections_under_timing(vehicle: &str, jittered: bool) -> anyhow::Result<(f3
             }
         }
     }
+    let driven = start.distance(Vec3::from(s.vehicle_poses()[0].position));
+    anyhow::ensure!(driven > 5.0, "{vehicle} was not driven: {driven}");
     Ok((worst_move, worst_turn, corrections))
 }
 
+on_both! {
 /// The real host and a predicting client over a jittered connection with
 /// uneven frames: the host runs the driver's moves as the client predicted
 /// them, so a driven vehicle on its wheels or in the air needs no visible
 /// correction. The Magic Carpet scraping the ground is reported only: its
 /// contacts are not reproducible step for step, and the client eases what
 /// that leaves out gently (`motion.rs`).
-#[test]
-#[ignore = "requires the converted native vehicle and brick packs"]
-fn predicted_vehicles_stay_uncorrected_under_real_timing() -> anyhow::Result<()> {
+fn predicted_vehicles_stay_uncorrected_under_real_timing(f: &Fixture) -> anyhow::Result<()> {
     for vehicle in [
-        "v20.vehicle.magiccarpetvehicle",
-        "v20.vehicle.flyingwheeledjeepvehicle",
-        "v20.vehicle.jeepvehicle",
+        f.vehicle(Vehicle::Carpet),
+        f.vehicle(Vehicle::FlyingCar),
+        f.vehicle(Vehicle::Car),
     ] {
         for jittered in [true, false] {
-            let (moved, turned, count) = corrections_under_timing(vehicle, jittered)?;
+            let (moved, turned, count) = corrections_under_timing(f, vehicle, jittered)?;
             println!(
                 "{vehicle} (jittered {jittered}): worst correction {moved:.4} units, {turned:.4} rad; {count} visible"
             );
-            if vehicle != "v20.vehicle.magiccarpetvehicle" {
+            if vehicle != f.vehicle(Vehicle::Carpet) {
                 assert_eq!(count, 0, "{vehicle}: visible corrections");
             }
         }
     }
     Ok(())
 }
+}
 
+on_both! {
 /// Max, v0.1.4: the Tank's mouse and A/D steering fought. The host steers
 /// a driver by its copy of their steering prefs while their client
 /// predicted by its own, so any gap between the two (before the prefs
@@ -1658,12 +1662,9 @@ fn predicted_vehicles_stay_uncorrected_under_real_timing() -> anyhow::Result<()>
 /// the client steered by the mouse. The host assumes the client's shipped
 /// prefs, keeps a player's own across seats and maps, forgets them when
 /// they leave, and tells the driver's client in every pose which it uses.
-#[test]
-#[ignore = "requires the converted native vehicle and brick packs"]
-fn the_host_steers_a_driver_by_the_prefs_it_echoes() -> anyhow::Result<()> {
+fn the_host_steers_a_driver_by_the_prefs_it_echoes(f: &Fixture) -> anyhow::Result<()> {
     use bri_sim::session::DEFAULT_STEERING;
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let (mut s, owner) = session_with(&root, "v20.vehicle.tankvehicle")?;
+    let (mut s, owner) = session_with(f, f.vehicle(Vehicle::StrafeSteered))?;
     let mut p = Feeder { owner, sequence: 0 };
     p.feed(&mut s, MoveInput::default(), 120)?;
     p.board(&mut s, 0.0)?;
@@ -1689,7 +1690,7 @@ fn the_host_steers_a_driver_by_the_prefs_it_echoes() -> anyhow::Result<()> {
     // No prefs heard yet: the client's shipped ones, echoed.
     assert_eq!(s.vehicle_poses()[0].driver_steering, DEFAULT_STEERING);
     let mouse = turn(&mut s, &mut p)?;
-    assert!(mouse < -0.3, "the mouse steers without any prefs sent: {mouse}");
+    assert!(mouse < -0.05, "the mouse steers without any prefs sent: {mouse}");
     // The player's own: strafe steering on, echoed, and the key steers.
     s.command(
         owner,
@@ -1713,18 +1714,16 @@ fn the_host_steers_a_driver_by_the_prefs_it_echoes() -> anyhow::Result<()> {
         2,
     )?;
     p.feed(&mut s, MoveInput::default(), 2)?;
-    assert_eq!(s.mounted(owner), None, "jet left the Tank");
+    assert_eq!(s.mounted(owner), None, "jet left the vehicle");
     assert_eq!(s.vehicle_poses()[0].driver_steering, DEFAULT_STEERING, "no driver");
     assert_eq!(s.steering_prefs(owner), (true, false));
     // So does a map change.
     let mut next = Session::new(Simulation::new(
-        vehicle_world("v20.vehicle.tankvehicle"),
-        definitions(&root)?,
+        vehicle_world(f, f.vehicle(Vehicle::StrafeSteered)),
+        f.bricks(),
         vec![ground()],
     )?);
-    next.set_vehicle_pack(bri_vehicles::Pack::load(
-        root.join("content/vehicles-pack-012/vehicles.json"),
-    )?, Vec::new())?;
+    next.set_vehicle_pack(f.vehicles(), Vec::new())?;
     next.set_spawn_points(vec![Vec3::new(0.0, 0.05, 0.0)])?;
     next.adopt(s, owner)?;
     let mut s = next;
@@ -1734,4 +1733,5 @@ fn the_host_steers_a_driver_by_the_prefs_it_echoes() -> anyhow::Result<()> {
     s.resume(owner, Vec3::new(0.0, 0.05, 0.0))?;
     assert_eq!(s.steering_prefs(owner), DEFAULT_STEERING);
     Ok(())
+}
 }

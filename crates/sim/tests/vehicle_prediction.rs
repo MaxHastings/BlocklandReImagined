@@ -1,9 +1,9 @@
 //! A client predicting the vehicle it drives, against the host running the
 //! same moves: a flying car in the air, pitched up and down by a scripted
 //! mouse. The host's poses reach the client late and only every few ticks,
-//! as on a real connection. The vehicles are the test's own
-//! (`fixtures/prediction-vehicles.json`): a flying wheeled car, skis and a
-//! horse, one of each kind the client predicts, so it needs no game content.
+//! as on a real connection. The vehicles are the made-up ones of
+//! [`bri_vehicles::testing`]: a flying wheeled car, skis and a horse, one of
+//! each kind the client predicts, so it needs no game content.
 use bri_sim::{
     definitions::Definitions,
     player::{MoveInput, PlayerState},
@@ -15,20 +15,16 @@ use glam::{Quat, Vec3};
 use rapier3d::prelude::*;
 use std::collections::VecDeque;
 
-const CAR: &str = "test:vehicle/flying-car";
-const SKIS: &str = "test:vehicle/skis";
-const HORSE: &str = "test:vehicle/horse";
+const CAR: &str = testing::FLYING_CAR;
+const SKIS: &str = testing::SKIS;
+const HORSE: &str = testing::HORSE;
 /// A round trip of 100 ms.
 const DELAY: u64 = 12;
 /// A pose every third tick.
 const POSE_EVERY: u64 = 3;
 
 fn pack() -> Pack {
-    Pack::load(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/prediction-vehicles.json"
-    ))
-    .unwrap()
+    testing::pack()
 }
 fn ground() -> ColliderBuilder {
     ColliderBuilder::cuboid(2000., 0.5, 2000.).translation(Vector::new(0., -0.5, 0.))
@@ -148,7 +144,8 @@ fn a_driven_vehicle_answers_its_own_mouse_at_once_and_agrees_with_the_host() {
         // The host runs the same move this tick.
         let controls = driver_controls(&input(tick), (last.yaw, last.pitch), false, (false, false));
         last = input(tick);
-        v.set_controls(OwnerId(10), OccupantId(20), controls).unwrap();
+        v.set_controls(OwnerId(10), OccupantId(20), controls)
+            .unwrap();
         v.pre_step(&mut w, &[]).unwrap();
         w.step();
         v.post_step(&mut w).unwrap();
@@ -157,14 +154,18 @@ fn a_driven_vehicle_answers_its_own_mouse_at_once_and_agrees_with_the_host() {
         if tick % POSE_EVERY == 0 {
             in_flight.push_back((tick + DELAY, tick, motion(&v, &w)));
         }
-        while in_flight.front().is_some_and(|(arrive, ..)| *arrive <= tick) {
+        while in_flight
+            .front()
+            .is_some_and(|(arrive, ..)| *arrive <= tick)
+        {
             let (_, at, pose) = in_flight.pop_front().unwrap();
             client.drive_pose(at, at, &pose).unwrap();
         }
         let (_, _, predicted) = client.driven().unwrap();
         let host = &host_after[tick as usize];
         let apart = Vec3::from(predicted.position).distance(Vec3::from(host.position));
-        let turned = Quat::from_array(predicted.rotation).angle_between(Quat::from_array(host.rotation));
+        let turned =
+            Quat::from_array(predicted.rotation).angle_between(Quat::from_array(host.rotation));
         worst = worst.max(apart);
         assert!(
             apart < 0.05 && turned < 0.01,
@@ -201,7 +202,11 @@ fn rider_at(feet: [f32; 3]) -> PlayerState {
 }
 fn predict(definition: &str, motion: Motion) -> anyhow::Result<Predictor> {
     let mirror = CollisionMirror::new(Definitions::default(), vec![ground()], vec![]);
-    let mut client = Predictor::new(mirror, rider_at(motion.transform.position), Default::default())?;
+    let mut client = Predictor::new(
+        mirror,
+        rider_at(motion.transform.position),
+        Default::default(),
+    )?;
     client.drive(Some((
         pack(),
         DriveSpawn {
@@ -330,17 +335,26 @@ fn a_ridden_horse_is_predicted_and_agrees_with_the_host() {
         if tick % POSE_EVERY == 0 {
             in_flight.push_back((tick + DELAY, tick, motion(&v, &w)));
         }
-        while in_flight.front().is_some_and(|(arrive, ..)| *arrive <= tick) {
+        while in_flight
+            .front()
+            .is_some_and(|(arrive, ..)| *arrive <= tick)
+        {
             let (_, at, pose) = in_flight.pop_front().unwrap();
             client.drive_pose(at, at, &pose).unwrap();
         }
         let (_, _, predicted) = client.driven().expect("the horse is predicted");
         let apart = Vec3::from(predicted.position).distance(Vec3::from(host.position));
         worst = worst.max(apart);
-        assert!(apart < 0.05, "tick {tick}: predicted {predicted:?} vs host {host:?}");
+        assert!(
+            apart < 0.05,
+            "tick {tick}: predicted {predicted:?} vs host {host:?}"
+        );
     }
     let (_, _, end) = client.driven().unwrap();
-    assert!(Vec3::from(end.position).length() > 5.0, "the horse ran: {end:?}");
+    assert!(
+        Vec3::from(end.position).length() > 5.0,
+        "the horse ran: {end:?}"
+    );
     println!("worst horse prediction error {worst}");
 }
 

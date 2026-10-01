@@ -220,34 +220,37 @@ fn stale_or_missing_item_presentation_warns_without_failing() {
 
 #[test]
 fn an_items_own_model_checks_and_a_missing_texture_is_named() {
-    let kit = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../packages/trench-warfare/trench-kit");
-    let report = check(&kit);
+    // A tool Add-On whose item is a model of its own, its materials each
+    // naming a PNG beside it.
+    let dir = tempfile::tempdir().unwrap();
+    let tool = dir.path().join("tool");
+    write(&tool, "package.json", manifest("tool", json!({})));
+    let assets = tool.join("assets");
+    write(
+        &assets,
+        "weapons.json",
+        json!({ "schema_version": 3, "id": "tool",
+            "items": { "tool:weapon/pick": { "ui_name": "Pick", "image": "tool:image/pick",
+                "model": "models/pick.shape.json", "icon": "", "can_drop": false } },
+            "images": { "tool:image/pick": { "name": "PickImage", "model": "models/pick.shape.json",
+                "states": [{ "name": "Ready" }] } } }),
+    );
+    write(
+        &assets.join("models"),
+        "pick.shape.json",
+        json!({ "schema_version": 1, "materials": [{ "name": "wood" }, { "name": "iron" }] }),
+    );
+    for png in ["wood.png", "iron.png"] {
+        std::fs::write(assets.join("models").join(png), b"png").unwrap();
+    }
+    let report = check(&tool);
     assert!(report.ok, "{report}");
     // Its own model needs no presentation.json: nothing to warn about.
     assert!(codes(&report).is_empty(), "{report}");
 
-    fn copy(from: &std::path::Path, to: &std::path::Path) {
-        std::fs::create_dir_all(to).unwrap();
-        for entry in std::fs::read_dir(from).unwrap() {
-            let entry = entry.unwrap();
-            let target = to.join(entry.file_name());
-            if entry.file_type().unwrap().is_dir() {
-                copy(&entry.path(), &target);
-            } else {
-                std::fs::copy(entry.path(), target).unwrap();
-            }
-        }
-    }
-    let dir = tempfile::tempdir().unwrap();
-    let broken = dir.path().join("trench-kit");
-    copy(&kit, &broken);
-    std::fs::remove_file(broken.join("assets/models/pick_grip.png")).unwrap();
-    let report = check(&broken);
+    std::fs::remove_file(assets.join("models/iron.png")).unwrap();
+    let report = check(&tool);
     assert!(report.ok, "a look problem never stops the load: {report}");
     assert_eq!(codes(&report), ["check.weapons.model"], "{report}");
-    assert!(
-        report.diagnostics[0].message.contains("pick_grip.png"),
-        "{report}"
-    );
+    assert!(report.diagnostics[0].message.contains("iron.png"), "{report}");
 }
