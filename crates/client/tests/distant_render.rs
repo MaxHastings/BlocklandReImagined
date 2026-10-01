@@ -78,9 +78,12 @@ fn until(app: &mut App, what: &str, ready: impl Fn(&App) -> bool) -> Result<()> 
             .map_or(0, |(t, f)| t.saturating_sub(f));
         ensure!(
             game < GAME_BUDGET,
-            "{what} did not happen within {} s of game time: {:?}",
+            "{what} did not happen within {} s of game time: {:?}; screens {:?}; observer {:?}; vitals {:?}",
             GAME_BUDGET / 120,
             app.ui.core.conn,
+            app.ui.stack(),
+            app.controls.observer(),
+            app.network_view().and_then(|v| v.vitals.get(&v.owner).cloned()),
         );
         ensure!(
             now.duration_since(last_progress) < STALL,
