@@ -2223,11 +2223,6 @@ impl App {
         passages: &bri_content::passage::Passages,
         drawn_offset: Option<Vec3>,
     ) -> Result<(Vec3, f32, f32, f32)> {
-        let passages = if controls.observer().is_some() {
-            &bri_content::passage::Passages::default()
-        } else {
-            passages
-        };
         let (eye, yaw, pitch, roll, boom) = Self::view_camera_here(
             controls,
             presented,
@@ -2240,7 +2235,13 @@ impl App {
             drawn_offset,
             passages,
         )?;
+        // A free camera flies through openings itself (`Controls::fly`); an
+        // orbit camera's boom went back through one, which turns its look.
         if controls.observer().is_some() {
+            let (yaw, pitch, roll) = match boom {
+                Some(carry) => crate::portal_view::carried_look((yaw, pitch, roll), &carry),
+                None => (yaw, pitch, roll),
+            };
             return Ok((eye, yaw, pitch, roll));
         }
         // A chase camera whose boom went through an opening is already
@@ -5258,16 +5259,15 @@ fn camera_eye(
     match controls.observer().map(|o| o.mode) {
         Some(ObserverMode::Free(position)) => Ok((position, None)),
         // `setOrbitMode(target, ..., 0, 8, 8)` from `Observer::setMode("Corpse")`.
-        Some(ObserverMode::Orbit(_) | ObserverMode::Drive(_)) => building
-            .camera_position(
-                controls
-                    .orbit_focus(presented, building.archetypes(), entities)
-                    .map(|focus| focus + drawn_offset.unwrap_or(Vec3::ZERO))
-                    .unwrap_or(own_eye),
-                forward,
-                8.0,
-            )
-            .map(|eye| (eye, None)),
+        // Its boom goes back through a portal behind the focus, as a chase
+        // camera's does.
+        Some(ObserverMode::Orbit(_) | ObserverMode::Drive(_)) => {
+            let focus = controls
+                .orbit_focus(presented, building.archetypes(), entities)
+                .map(|focus| focus + drawn_offset.unwrap_or(Vec3::ZERO))
+                .unwrap_or(own_eye);
+            building.camera_boom(focus, focus, forward, 8.0, passages)
+        }
         None => match chase {
             // A chase camera's boom from `own_eye`, its pivot, which rides
             // on the body at `from`.
@@ -6102,7 +6102,8 @@ impl PlatformApp for App {
         }
         let alive = self.local_alive();
         self.follow_control();
-        self.controls.fly(elapsed.as_secs_f32());
+        self.controls
+            .fly(elapsed.as_secs_f32(), &self.motion.passages());
         let prefs = &self.ui.core.prefs;
         self.controls.set_fov_prefs(
             bri_ui::screens::options::default_fov(prefs),

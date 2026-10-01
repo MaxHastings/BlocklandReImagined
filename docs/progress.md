@@ -8708,3 +8708,10 @@ pass bodies through; `MirrorIndex::link`). A linked side shows its view
 even on a brick not drawn (a seamless hole); unlinked glass is the
 brick's look and shows only when drawn. Test: `bri-client
 mirrors::windows_follow_the_openings_bodies_pass_through`.
+
+View paths, step 2: cameras with no body go through portals. The free
+camera flies through an opening as a body does, its look turned with it
+(`Controls::fly` takes the passages); an orbit or spectate camera's boom
+goes back through a portal behind its focus (`camera_boom`), its look
+turned by the boom's carry, as the player's chase camera does. Test:
+`bri-client controls::a_free_camera_flies_through_a_portal`.
