@@ -172,11 +172,12 @@ pub struct Liquid {
 /// `density` of every stock v20 `ItemData` (tools, weapons, keys, skis and
 /// balls). `drag` is never set, so items feel no liquid drag.
 pub const ITEM_DENSITY: f32 = 0.2;
-/// `Item::mGravity`.
 /// Dropped items' mass: v20's item datablocks set `mass = 1` (inferred from
 /// the stock weapon items; the PC's v20 audit can confirm).
 pub const ITEM_MASS: f32 = 1.0;
-const ITEM_GRAVITY: f32 = 20.0;
+/// `Item::mGravity`: how fast a dropped item falls, on the host and in the
+/// clients' smoothing between its updates.
+pub const ITEM_GRAVITY: f32 = 20.0;
 /// Adapter must sweep the entire segment, including thin native map and brick colliders.
 /// Radius results use closest bounds distance, deterministic target order, and the given cap.
 /// Permissions and visibility are authoritative host decisions; no numeric ID grants access.
@@ -434,7 +435,7 @@ pub struct Projectile {
 /// none unless it is ballistic.
 pub fn fall_per_tick(d: &crate::ProjectileDef) -> f32 {
     if d.ballistic {
-        9.81 * d.gravity / 120.0
+        9.81 * d.gravity / crate::TICK_HZ as f32
     } else {
         0.0
     }

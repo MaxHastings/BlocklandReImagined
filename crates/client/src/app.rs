@@ -6587,7 +6587,9 @@ impl PlatformApp for App {
                 &view.entities,
                 |id| {
                     let d = projectiles.get(id)?;
-                    let gravity = if d.ballistic { 9.81 * d.gravity } else { 0.0 };
+                    // The host's fall per tick, as an acceleration.
+                    let gravity =
+                        bri_weapons::runtime::fall_per_tick(d) * bri_weapons::TICK_HZ as f32;
                     Some(crate::ghosts::Flight {
                         acceleration: Vec3::NEG_Y * gravity,
                         lifetime: d.lifetime_ticks,
