@@ -97,12 +97,12 @@ struct Shadows {
     matrices:array<mat4x4<f32>,4>, splits:vec4<f32>, texels:vec4<f32>,
     forward_count:vec4<f32>, params:vec4<f32>, depth_scale:vec4<f32>,
     origin:vec4<f32>,
-    // Lamp shadows (shadow.rs): six faces per slot; per slot the shaded
-    // map light it belongs to (-1 unused); (slots used, face resolution,
+    // Lamp shadows (shadow.rs): six faces per slot; per shaded map light
+    // its slot (-1 none); (slots used, face resolution,
     // world texel per unit of distance, fade distance); position and reach.
     // Faces are tiles of shadow_map layers: (first layer, tiles per row,
     // tile share of a layer).
-    lamp_faces:array<mat4x4<f32>,24>, lamp_lights:vec4<f32>, lamp_params:vec4<f32>,
+    lamp_faces:array<mat4x4<f32>,24>, light_slots:array<vec4<f32>,6>, lamp_params:vec4<f32>,
     // Moving casters' faces the same way, then their resolution.
     lamp_atlas:vec4<f32>, lamp_dynamic:vec4<f32>, lamp_centers:array<vec4<f32>,4>,
     // The map layer (layer cascade + 2 * count): per cascade, caster depth
@@ -378,12 +378,11 @@ fn lamp_taps(atlas:vec4<f32>,size:f32,index:u32,face_uv:vec2<f32>,depth:f32)->f3
     return lit*0.25;
 
 }
-// The shadow slot of shaded map light `light`, or -1.
+// The shadow slot of shaded map light `light` (under 24), or -1: one read
+// of the table shadow.rs fills each frame, not a search of the slots for
+// every light at every pixel.
 fn lamp_slot(light:u32)->i32 {
-    for(var s=0;s<i32(shadows.lamp_params.x);s+=1) {
-        if abs(shadows.lamp_lights[s]-f32(light))<0.5 {return s;}
-    }
-    return -1;
+    return i32(shadows.light_slots[light/4u][light%4u]);
 }
 // Like v20's projected shape shadows, a caster darkens a baked (lightmapped)
 // surface by a fixed share whatever its baked light, so players and vehicles

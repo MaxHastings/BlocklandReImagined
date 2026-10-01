@@ -286,12 +286,6 @@ fn body_and_held_item_hold_still_against_a_turning_camera(f: &ContentRoot) -> Re
             .is_some_and(|v| v.tools[&v.owner].selected == Some(0))
             && a.held_image_transform(0).is_some()
     })?;
-    if !f.content {
-        // lavapipe crashes in the Unified lighting path here: see
-        // `support::gpu::pin_classic_lighting` (an open renderer follow-up;
-        // the content variant keeps Unified lighting).
-        support::gpu::pin_classic_lighting(&mut app)?;
-    }
     let gpu = support::gpu::turn().context("offscreen renderer")?;
     let mut renderer = UiRenderer::new(&gpu.device, &gpu.queue);
     app.gpu_ready(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm)?;

@@ -198,12 +198,6 @@ fn start_ball_is_held_and_thrown_and_akimbo_raises_both_arms(f: &ContentRoot) ->
             .is_some_and(|(p, _)| p.grounded && glam::Vec3::from(p.velocity).length() < 0.001)
     })?;
     run_for(&mut app, 0.5)?;
-    if !f.content {
-        // lavapipe crashes in the Unified lighting path here: see
-        // `support::gpu::pin_classic_lighting` (an open renderer follow-up;
-        // the content variant keeps Unified lighting).
-        support::gpu::pin_classic_lighting(&mut app)?;
-    }
     let gpu = support::gpu::turn().context("offscreen held-item renderer")?;
     let mut renderer = UiRenderer::new(&gpu.device, &gpu.queue);
     app.gpu_ready(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm)?;

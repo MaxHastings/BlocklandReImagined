@@ -188,12 +188,6 @@ fn horse_players_draw_as_horses_and_fuel_jets_show_energy(f: &ContentRoot) -> Re
             && a.network_view()
                 .is_some_and(|v| v.poses.contains_key(&v.owner))
     })?;
-    if !f.content {
-        // lavapipe crashes in the Unified lighting path here: see
-        // `support::gpu::pin_classic_lighting` (an open renderer follow-up;
-        // the content variant keeps Unified lighting).
-        support::gpu::pin_classic_lighting(&mut app)?;
-    }
     let gpu = support::gpu::turn().context("offscreen player-type renderer")?;
     let mut renderer = UiRenderer::new(&gpu.device, &gpu.queue);
     app.gpu_ready(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm)?;

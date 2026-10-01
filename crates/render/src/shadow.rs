@@ -73,6 +73,7 @@
 //! receiver is lit by the lamp only where neither shades it.
 //! Inside a million-brick build this keeps lamp shadows to a few percent.
 use anyhow::{Result, ensure};
+use crate::map_lighting::MAX_LIGHTS;
 use crate::scene::{FAR_DEPTH, NEAR_DEPTH};
 use glam::{Mat4, Vec3, Vec4};
 
@@ -262,8 +263,9 @@ pub(crate) struct ShadowUniform {
     origin: [f32; 4],
     /// Per lamp slot, its six face matrices.
     lamp_faces: [[f32; 16]; MAX_LAMPS * FACES],
-    /// Per slot, the index of its light among the shaded map lights, or -1.
-    lamp_lights: [f32; 4],
+    /// Per shaded map light (as the shader indexes them), its lamp slot, or
+    /// -1 without one.
+    light_slots: [[f32; 4]; MAX_LIGHTS / 4],
     /// Lamps in use, face resolution, world texel size per unit of distance,
     /// and the eye distance lamp shadows fade out by.
     lamp_params: [f32; 4],
@@ -987,7 +989,7 @@ impl ShadowMaps {
                         self.drawn[index] = Some(*matrix);
                     }
                 }
-                uniform.lamp_lights[slot] = lamp.light as f32;
+                uniform.light_slots[lamp.light / 4][lamp.light % 4] = slot as f32;
                 uniform.lamp_centers[slot] = l.position.extend(l.outer).to_array();
             }
             // One kept face a frame is drawn again in turn, so a changed
@@ -1175,7 +1177,7 @@ impl ShadowUniform {
             depth_scale: [0.0; 4],
             origin: [0.0; 4],
             lamp_faces: [Mat4::IDENTITY.to_cols_array(); MAX_LAMPS * FACES],
-            lamp_lights: [-1.0; 4],
+            light_slots: [[-1.0; 4]; MAX_LIGHTS / 4],
             lamp_params: [0.0, 1.0, 0.0, 0.0],
             lamp_atlas: [0.0, 1.0, 1.0, 0.0],
             lamp_dynamic: [0.0, 1.0, 1.0, 1.0],
