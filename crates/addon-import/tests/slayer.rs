@@ -2014,3 +2014,81 @@ fn a_teams_preferred_player_count_fills_it_with_bots() {
     assert_eq!(bots_by_team(&g), (0, 0, 0));
     g.quiet();
 }
+
+#[test]
+fn a_saved_build_keeps_its_mini_game_and_fly_through_path() {
+    let mut g = Game::new("saved-game");
+    two_teams_as(&mut g, true);
+    let owner = g.s.minigame_views()[0].owner;
+    g.plant(owner, TEAM_SPAWN, -15.5, 0.0, RED);
+    // The game's own settings, Add-On settings and a team's.
+    let mut settings = g.s.minigame_views()[0].settings.clone();
+    settings.title = "Trench CTF".into();
+    settings.points_kill_player = 4;
+    g.cmd(owner, Command::MiniGame(MiniGameRequest::Configure { settings }))
+        .unwrap();
+    g.set(owner, &[(&key(SLAYER, "mode"), Value::Text(CTF_MODE.into()))]);
+    g.set_team(owner, BLUE, &[(&key(SLAYER, "team_respawn_time"), Value::Int(3))]);
+    // A fly-through path of two knots and a jump.
+    g.run(owner, SLAYER, "createflycam", vec![]);
+    g.steps(13);
+    for (at, command) in [
+        (Vec3::new(0.0, 0.05, 0.0), "setknot"),
+        (Vec3::new(10.0, 0.05, 0.0), "setknot"),
+        (Vec3::new(10.0, 0.05, 30.0), "setjump"),
+    ] {
+        g.goto(owner, at);
+        g.steps(2);
+        let line = if command == "setknot" { "20 Normal Linear" } else { "" };
+        g.run(owner, SLAYER, command, vec![PackageArg::String(line.into())]);
+        g.steps(13);
+    }
+    let before = g.s.minigame_views()[0].clone();
+
+    let build = match g
+        .cmd(owner, Command::SaveBuild { events: true, ownership: false })
+        .unwrap()
+    {
+        Reply::Saved(build) => build,
+        other => panic!("{other:?}"),
+    };
+    assert!(build.minigame.is_some());
+    // Through the file and back, as the Load screen reads it.
+    let build = bri_world::build::decode(&bri_world::build::encode(&build).unwrap()).unwrap();
+
+    // The game ends, its path with it; loading the build brings both back
+    // as a new game of the loader's.
+    g.cmd(owner, Command::MiniGame(MiniGameRequest::End)).unwrap();
+    g.steps(5 * 120);
+    assert!(g.s.minigame_views().is_empty());
+    g.cmd(owner, Command::LoadBuild { build: Box::new(build), ownership: false })
+        .unwrap();
+    while g.s.build_loading() {
+        g.steps(1);
+    }
+    g.steps(13);
+    let after = g.s.minigame_views()[0].clone();
+    assert_eq!(after.owner, owner);
+    assert_eq!(after.settings, before.settings);
+    assert_eq!(after.settings.title, "Trench CTF");
+    assert_eq!(after.addon_settings, before.addon_settings);
+    let teams = |v: &bri_sim::session::MiniGameView| -> Vec<(String, u8, BTreeMap<String, Value>)> {
+        v.teams
+            .iter()
+            .map(|t| (t.name.clone(), t.color, t.addon_settings.clone()))
+            .collect()
+    };
+    assert_eq!(teams(&after), teams(&before));
+    assert_eq!(
+        after.addon_settings[&key(SLAYER, "mode")],
+        Value::Text(CTF_MODE.into())
+    );
+    // The path flies as it did.
+    g.steps(5 * 120);
+    g.run(owner, SLAYER, "testflycam", vec![]);
+    g.steps(2);
+    assert_eq!(g.s.control(owner), Some(ControlObject::Path));
+    let path = g.s.vitals()[&owner].camera_path.clone().unwrap();
+    assert_eq!(path.knots.len(), 3);
+    g.quiet();
+}

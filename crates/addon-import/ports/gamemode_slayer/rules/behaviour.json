@@ -842,7 +842,8 @@
       },
       "flycams": {
         "default": {},
-        "persist": false
+        "persist": false,
+        "per_minigame": true
       },
       "controls": {
         "default": {},

@@ -129,7 +129,7 @@ refused. The engine calls:
 | `on_activate(player)` | a living player clicks with nothing in their hand (v20's `Player::activateStuff`), when `"on_activate": true`: return `true` to take the click, or anything else to pass it on. Add-Ons are asked in load order, and a click nobody takes does the usual thing (opens doors, presses buttons, flips vehicles) |
 | `on_path_node(player, knot)` | a camera path the rules gave (`follow_path`) reaches knot `knot`, from 0, when `"on_path_node": true` |
 | `on_observer(player, button)` | a spectator (dead with their respawn held, or under a rules camera) presses `"fire"`, `"jump"`, `"jet"` or `"light"`, when `"on_observer": true`: return `true` to take it |
-| `on_minigame(event)` | something happened to a mini-game, delivered at the start of the next tick, when `"on_minigame": true`. `event` is `#{ kind, game, player, team }`: `kind` is `created`, `configured`, `reset`, `ended`, `joined`, `left`, `team` (`player`'s team changed to `team`, or `()`) or `teams` (the game's team list changed) |
+| `on_minigame(event)` | something happened to a mini-game, delivered at the start of the next tick, when `"on_minigame": true`. `event` is `#{ kind, game, player, team }`: `kind` is `created`, `configured`, `reset`, `ended`, `joined`, `left`, `team` (`player`'s team changed to `team`, or `()`), `teams` (the game's team list changed) or `loaded` (a loaded build set the game up again, `per_minigame` state included) |
 | `on_pick_spawn(player)` | a player is about to spawn or respawn, when `"on_pick_spawn": true`: return a brick id to appear on that brick, `[x, y, z]` to appear there, or `()` to leave it to the engine (spawn bricks, then the map). The first Add-On to answer decides. Called as it happens, so keep it quick |
 | `on_brick_output(output, target, params, info)` | a builder's wrench row ran one of the outputs in `brick_outputs` (see **Brick events**) |
 | `on_brick_input(input, brick, player)` | a player set off an engine input that some of your `brick_inputs` follow, on a brick with rows on one of them: return the name of one to run it too, or `()` (see **Brick events**) |
@@ -173,6 +173,14 @@ value: `server` (the default; it never leaves the server), `owner` (a
 player key sent only to that player, like a hand of cards) or `everyone`.
 HUD panels can only show keys the viewer receives. `persist` (default
 `true`) saves the key with the host's world and restores it after a restart.
+A `global` key with `"per_minigame": true` (default `{}`) is a map from a
+mini-game's id, as text, to that game's value, such as Slayer's fly-through
+path. A game's entry travels with the build: saving a build keeps the
+mini-game its saver runs (its settings, Add-On settings, teams and these
+entries), and loading the build sets that up again in the game its loader
+runs, or a new one of theirs, under that game's id, then sends
+`on_minigame` a `loaded` event. Settings of Add-Ons the server does not
+run are left out. Your rules remove a game's entry when it ends.
 
 **Script functions:**
 

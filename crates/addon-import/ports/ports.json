@@ -303,7 +303,10 @@
           "fly_jump_kink": "if\\s*\\(\\s*%type\\s*\\$=\\s*\"\"\\s*\\)\\s*%type\\s*=\\s*\"Kink\"",
           "fly_create_skips": "addNode\\([^;]*\\)\\s*;\\s*%this\\.flyCam\\.setPosition\\(\\s*1\\.0\\s*\\)\\s*;\\s*%this\\.flyCam\\.popFront\\(\\)",
           "out_fly_through": "registerOutputEvent\\(\\s*\"?(?i:Minigame)\"?\\s*,\\s*\"StartFlyThrough\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
-          "fly_restricted": "RestrictedEvent__\\[\\s*\"Minigame\"\\s*,\\s*\"startFlyThrough\"\\s*\\]\\s*=\\s*(-?\\d+)\\s*;"
+          "fly_restricted": "RestrictedEvent__\\[\\s*\"Minigame\"\\s*,\\s*\"startFlyThrough\"\\s*\\]\\s*=\\s*(-?\\d+)\\s*;",
+          "pathcam_load": "importMinigamePreferences[\\s\\S]*?\"\\.pathcam\"[\\s\\S]*?createPathCamera[\\s\\S]*?addNode",
+          "pathcam_save": "exportMinigamePreferences[\\s\\S]*?\"\\.pathcam\"[\\s\\S]*?nodeJump",
+          "pathcam_delete": "\\.flyCam\\.delete\\(\\)[\\s\\S]*?\"\\.pathcam\"[\\s\\S]*?fileDelete"
         },
         "server/core/resources/datablocks.cs": {
           "team_spawn_brick": "datablock\\s+FxDtsBrickData\\s*\\(\\s*brickSlyrSpawnPointData\\s*:\\s*brickSpawnPointData\\s*\\)",

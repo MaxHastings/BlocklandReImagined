@@ -31,6 +31,7 @@ mod game_hooks;
 pub(super) mod copy_hooks;
 mod item_hooks;
 mod reports;
+mod saved_games;
 mod settings;
 pub use settings::{AddOnSetting, MAX_ADDON_SETTINGS, SettingEdit, TeamEdit};
 pub(in crate::session) use settings::Editor;
@@ -918,11 +919,12 @@ impl Session {
         let Some(host) = self.packages.as_mut() else {
             return;
         };
-        let mut changed = false;
+        let mut freed = 0;
         for ns in host.store.namespaces.values_mut() {
-            changed |= ns.players.remove(&key).is_some();
+            freed += ns.players.remove(&key).map_or(0, |v| state::stored_size(&v));
         }
-        if changed {
+        if freed > 0 {
+            host.state_bytes = host.state_bytes.saturating_sub(freed);
             self.package_revision += 1;
         }
     }

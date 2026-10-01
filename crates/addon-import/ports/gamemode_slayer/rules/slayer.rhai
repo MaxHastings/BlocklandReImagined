@@ -1673,6 +1673,18 @@ fn on_minigame(event) {
         start_round(g);
         // `Slayer_TeamSO::onMinigameReset`: each team filled with bots.
         fill_bots(g);
+    } else if event.kind == "loaded" {
+        // A build's saved mini-game (`importMinigamePreferences`, its
+        // `.pathcam` read with it): the fly-through path came back with
+        // the build, untested and its rounds counted afresh, and the game
+        // resets, as `serverCmdSlayer_loadConfig` does.
+        let cam = flycam_of(g.id);
+        if cam != () {
+            cam.test = ();
+            cam.passed = 0;
+            set_flycam(g.id, cam);
+        }
+        reset_minigame(g.id);
     } else if event.kind == "round_end" {
         round_ended(g, event.teams, event.players);
     } else if event.kind == "settings" {

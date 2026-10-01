@@ -537,7 +537,7 @@ pub(super) fn new_world(
     })
 }
 
-fn color_code(n: u32) -> char {
+pub(super) fn color_code(n: u32) -> char {
     char::from_u32(0xE000 + n).unwrap_or(' ')
 }
 

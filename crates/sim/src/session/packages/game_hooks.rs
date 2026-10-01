@@ -130,6 +130,26 @@ impl Session {
         }
     }
 
+    /// Queue a `kind` event of `game` for `on_minigame` that no mini-game
+    /// effect raises (`loaded`, a build's mini-game set up again).
+    pub(in crate::session) fn queue_game_event(&mut self, kind: &'static str, game: u64) {
+        let Some(host) = self.packages.as_mut() else {
+            return;
+        };
+        if host.game_hooks.events.len() == MAX_PENDING_EVENTS {
+            host.game_hooks.events.pop_front();
+        }
+        host.game_hooks.events.push_back(GameEvent {
+            kind,
+            game,
+            player: None,
+            team: None,
+            keys: Vec::new(),
+            teams: Vec::new(),
+            players: Vec::new(),
+        });
+    }
+
     pub(in crate::session) fn deliver_minigame_events(&mut self) {
         let Some(host) = self.packages.as_mut() else {
             return;

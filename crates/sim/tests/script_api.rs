@@ -101,6 +101,8 @@ fn cmd_give(p, b) { give_item(b, "probe:weapon/gun", false); }
 fn cmd_bot_tool(p, b, slot) { if slot < 0 { bot_tool(b, ()); } else { bot_tool(b, slot); } }
 fn cmd_unbot(p, b) { remove_bot(b); }
 fn cmd_box(p) { message_box(p, "Probe", "A box"); }
+fn cmd_keep_game(p, v) { let s = get("per_game"); s[`${player(p).minigame}`] = v; set("per_game", s); }
+fn on_minigame(event) { if event.kind == "loaded" { note("heard", get("heard") + "loaded "); } }
 "#;
 
 fn behaviour() -> Value {
@@ -110,6 +112,7 @@ fn behaviour() -> Value {
         "script": "main.rhai",
         "on_activate": true,
         "on_observer": true,
+        "on_minigame": true,
         "commands": [
             command("ray", &["float", "float", "float", "float", "float", "float", "bool"]),
             command("many_rays", &[]),
@@ -146,6 +149,7 @@ fn behaviour() -> Value {
             command("bot_tool", &["int", "int"]),
             command("unbot", &["int"]),
             command("box", &[]),
+            command("keep_game", &["string"]),
         ],
         "state": { "global": {
             "hit": { "default": "", "visible": "everyone" },
@@ -158,7 +162,8 @@ fn behaviour() -> Value {
             "env": { "default": "", "visible": "everyone" },
             "heard": { "default": "", "visible": "everyone" },
             "kinds": { "default": "", "visible": "everyone" },
-            "bots": { "default": "", "visible": "everyone" }
+            "bots": { "default": "", "visible": "everyone" },
+            "per_game": { "default": {}, "visible": "everyone", "per_minigame": true }
         } }
     })
 }
@@ -1039,4 +1044,60 @@ fn a_mini_games_rules_add_rest_arm_and_take_away_their_own_bots() {
     g.steps(1);
     assert!(g.s.take_private_notices().iter().any(|(o, n)| *o == a
         && matches!(n, Notice::MessageBox { title, text } if title == "Probe" && text == "A box")));
+}
+
+#[test]
+fn a_saved_build_brings_back_its_mini_game_and_the_add_on_state_kept_per_game() {
+    use bri_minigames::Settings;
+    use bri_sim::session::{MiniGameRequest, Reply};
+    let mut g = Game::new();
+    let a = g.join(Vec3::new(0.0, 0.05, 0.0));
+    let b = g.join(Vec3::new(4.0, 0.05, 0.0));
+    let settings = Settings {
+        title: "Saved".into(),
+        points_kill_player: 7,
+        loadout: Default::default(),
+        ..Settings::default()
+    };
+    g.send(a, Command::MiniGame(MiniGameRequest::Create { color: 2, settings: settings.clone() }))
+        .unwrap();
+    let game = g.s.minigame_views()[0].id;
+    g.run(a, "keep_game", vec![PackageArg::String("path".into())]);
+    let save = |g: &mut Game, who: OwnerId| {
+        g.seq += 1;
+        match g.s.command(who, g.seq, Command::SaveBuild { events: true, ownership: false }) {
+            Ok(Reply::Saved(build)) => build,
+            other => panic!("{other:?}"),
+        }
+    };
+    // Someone running no mini-game saves none.
+    assert_eq!(save(&mut g, b).minigame, None);
+    let mut build = save(&mut g, a);
+    assert!(build.minigame.is_some());
+    // A brick of a kind this test's server lacks: it is kept, not placed.
+    build.world.bricks.insert(
+        1,
+        bri_world::Brick::new(bri_world::ContentRef::Resolved("brick/none".into()), [0.0; 3], 0),
+    );
+    build.world.next_brick_id = 2;
+
+    // Changed since, then the build loads into the game its loader runs.
+    let mut changed = settings.clone();
+    changed.title = "Changed".into();
+    g.send(a, Command::MiniGame(MiniGameRequest::Configure { settings: changed }))
+        .unwrap();
+    g.run(a, "keep_game", vec![PackageArg::String("other".into())]);
+    g.steps(5 * 120);
+    g.send(a, Command::LoadBuild { build, ownership: false }).unwrap();
+    while g.s.build_loading() {
+        g.steps(1);
+    }
+    g.steps(2);
+    let view = g.s.minigame_views();
+    assert_eq!(view.len(), 1);
+    assert_eq!(view[0].id, game);
+    assert_eq!(view[0].settings, settings);
+    assert_eq!(g.value("per_game")[game.to_string()], "path");
+    assert!(g.text("heard").contains("loaded"), "{}", g.text("heard"));
+    assert!(g.diagnostics().is_empty(), "{:?}", g.diagnostics());
 }

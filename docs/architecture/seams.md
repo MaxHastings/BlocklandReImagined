@@ -42,4 +42,5 @@ Owners are named by thread title.
 | Orbit camera | `orbit_camera` with a body that acts (Throwing) or is frozen (`watch`, spectating), `ControlObject::Orbit::body` | Capture the Flag (Slayer) | in flight |
 | Rules bots | `add_bot`, `remove_bot`, `rest_bot`, `bot_tool`, `bot_kinds`, `bot_limit`, a player's `spawner`; capability `bots`; the engine brain roams, fights and respawns them, sharing the 16-bot cap with spawn-brick bots | Capture the Flag (Slayer) | in flight |
 | Message box | `message_box(p, title, text)` (v20 `MessageBoxOK`), capability `chat` | Capture the Flag (Slayer) | in flight |
+| Saved mini-games | a build keeps its saver's mini-game (settings, Add-On settings, teams, `per_minigame` state keys); loading sets it up again and sends `on_minigame` `loaded` | Capture the Flag (Slayer) | in flight |
 | Copy jobs | big copy work a slice each tick (`CopyWork`, `cancel_copy`, `copy_working`), copy ghost subset, `IdMap` | Duplicators | in flight |

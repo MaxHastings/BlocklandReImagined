@@ -74,6 +74,7 @@ operation that needs a capability.
 | `new Item() { ... }` at a point | `drop_item(item, x, y, z)`, `drop_item(item, x, y, z, vx, vy, vz)` | `player` |
 | `centerPrint`, `bottomPrint` | `center_print(p, text, s)`, `bottom_print(p, text, s)` | `chat` |
 | `commandToClient(%c, 'MessageBoxOK', %title, %text)` | `message_box(p, title, text)` | `chat` |
+| Slayer's `exportMinigamePreferences` / `importMinigamePreferences` (`.mgame.csv`, `.teams.csv`, `.pathcam`) | a build keeps its mini-game; `per_minigame` state keys travel with it; `on_minigame` hears `loaded` | Saved with the build, not as a file of its own. |
 | `messageClient`, `messageAll` | `tell(p, text)`, `broadcast(text)` | `chat` |
 | `%mini.messageAll`, `messageAllExcept`, `centerPrintAll`, `bottomPrintAll` | `tell_minigame(game, text[, except])`, `center_print_minigame(game, text, s)`, `bottom_print_minigame(game, text, s)` | `chat`; one line of the share for the whole game |
 | Slayer's `%mini.endRound(%winner)` | `end_round(game, #{ teams, players })`, then `on_minigame` `round_end` | `minigame` |
