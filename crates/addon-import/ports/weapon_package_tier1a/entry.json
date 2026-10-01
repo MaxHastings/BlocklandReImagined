@@ -1,0 +1,29 @@
+{
+  "addon": "Weapon_Package_Tier1A",
+  "title": "Tier+Tactical Tier 1A (Kai)",
+  "port": "weapon_package_tier1a",
+  "status": "partial",
+  "sha256": [
+    "c1cc5b4c98154507898f1086c6729fe3749ff936e28e34615bf8e44fec7b704c"
+  ],
+  "covers": {
+    "SingleShotgunImage::onFire": {
+      "knockback": "TT_knockback\\s*\\(",
+      "blast": "TT_createProjectile\\s*\\([^;]*SingleShotgunBlastProjectile",
+      "pellets": "%shellCount\\s*=\\s*\\d+"
+    },
+    "PepperpistolImage::onFire": {
+      "fires": "Parent::onFire\\s*\\(",
+      "spends": "TT_decrementAmmo\\s*\\("
+    },
+    "SnubnoseProjectile::damage": {
+      "headshot": "TT_processHeadshotDamage\\s*\\("
+    },
+    "nailgunProjectile1::damage": {
+      "slow": "TT_dampenVelocity\\s*\\("
+    }
+  },
+  "tests": [
+    "crates/addon-import/tests/tier_port.rs tier1a_shotgun_knocks_back_and_the_nailgun_stays_hidden"
+  ]
+}

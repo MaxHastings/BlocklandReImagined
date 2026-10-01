@@ -1,0 +1,28 @@
+{
+  "addon": "Weapon_Skins_ShotgunT2",
+  "title": "Tier+Tactical Tier 2 Shotgun Skins (Kai)",
+  "port": "weapon_skins_shotgunt2",
+  "status": "partial",
+  "sha256": [
+    "9aff2e9ce079ca22e124a698b1f0d08d5c2692136b943ddd0684be4e45976240"
+  ],
+  "covers": {
+    "SlickShotgunImage::onFire": {
+      "fires_free": "TT_createProjectile\\s*\\(",
+      "spends": "TT_decrementAmmo\\s*\\("
+    },
+    "SlickShotgunImage::onReloaded": {
+      "one_by_one": "TT_incrementReload\\s*\\("
+    },
+    "tacticalShotgunImage::onFire": {
+      "fires_free": "TT_createProjectile\\s*\\(",
+      "spends": "TT_decrementAmmo\\s*\\("
+    },
+    "tacticalShotgunImage::onReloaded": {
+      "one_by_one": "TT_incrementReload\\s*\\("
+    }
+  },
+  "tests": [
+    "crates/addon-import/tests/tier_port.rs skins_are_their_hosts_guns_under_their_own_names"
+  ]
+}

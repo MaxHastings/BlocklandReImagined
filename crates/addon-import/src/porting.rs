@@ -5,7 +5,7 @@
 //! weapons), checks that state what v20 does, stubs quoting every function
 //! still to port, and an `AGENT.md` with the instructions. `bri-import-addon
 //! check-port DIR` imports the Add-On again with the drafted port, runs the
-//! checks and prints the `ports.json` entry to submit. Both run from the
+//! checks and prints the port's `entry.json` to submit. Both run from the
 //! release folder; neither needs a checkout. Recipe: `docs/modding/porting.md`.
 use crate::ports::{Entry, Ports};
 use crate::report::Report;
@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 
 /// v20's common spread `onFire`: `%shellcount` projectiles, each turned by
 /// random angles scaled by `%spread`, after a `setVelocity` recoil along the
-/// eye vector. The same patterns cover `Weapon_Shotgun` in `ports.json`.
+/// eye vector. The same patterns cover `Weapon_Shotgun` in its `entry.json`.
 pub const SPREAD_PATTERNS: [(&str, &str); 3] = [
     ("projectiles", r"%shellcount\s*=\s*(\d+)\s*;"),
     ("spread", r"%spread\s*=\s*([0-9]*\.?[0-9]+)\s*;"),
@@ -457,9 +457,9 @@ fn agent_md(
          ```\nbri-import-addon check-port <this folder>\n```\n\n\
          It imports {addon} again with your port, runs `port/checks.json` and lists any function still \
          unported. When the checks pass it prints this Add-On's entry for the ports list and writes it to \
-         `submit.json`: `verified` when every function is covered, otherwise `partial`. To submit, add that \
-         entry to `crates/addon-import/ports/ports.json` in the Blockland ReImagined repository and copy \
-         `port/` to `crates/addon-import/ports/{ns}/`.\n"
+         `submit.json`: `verified` when every function is covered, otherwise `partial`. To submit, copy \
+         `port/` to `crates/addon-import/ports/{ns}/` in the Blockland ReImagined repository and put \
+         `submit.json` there as `entry.json`.\n"
     );
     m
 }
@@ -473,7 +473,7 @@ pub struct CheckOutcome {
     /// One line per check, and whether it passed.
     pub results: Vec<(String, bool)>,
     pub unported: Vec<String>,
-    /// The ports.json entry to submit.
+    /// The `entry.json` to submit.
     pub entry: Entry,
 }
 

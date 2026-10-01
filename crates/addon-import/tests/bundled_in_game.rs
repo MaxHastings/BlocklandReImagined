@@ -57,7 +57,7 @@ fn read(path: &Path) -> Value {
 /// host rules has none, so no ported original goes untested.
 fn bundled_originals() -> Vec<(String, String)> {
     let list = read(&repo().join("packages/default-addons.json"));
-    let ports = read(&repo().join("crates/addon-import/ports/ports.json"));
+    let ports: Vec<Value> = port_entries(&repo()).iter().map(|p| read(p)).collect();
     let mut out = Vec::new();
     for addon in list["addons"].as_array().unwrap() {
         let Some(original) = addon.get("original") else {
@@ -69,11 +69,7 @@ fn bundled_originals() -> Vec<(String, String)> {
             out.push((name.to_owned(), id.to_owned()));
             continue;
         }
-        let port = ports["ports"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|p| p["addon"].as_str() == Some(name));
+        let port = ports.iter().find(|p| p["addon"].as_str() == Some(name));
         let rules = port.is_some_and(|p| {
             let dir = repo()
                 .join("crates/addon-import/ports")
@@ -129,13 +125,10 @@ fn install_bundle(root: &Path, originals: &[(String, String)]) {
         serde_json::to_vec_pretty(&json!({ "schema_version": 2, "addons": addons })).unwrap(),
     )
     .unwrap();
-    for file in [
-        "crates/addon-import/ports/ports.json",
-        "crates/package/base-packages.json",
-    ] {
-        std::fs::create_dir_all(checkout.join(file).parent().unwrap()).unwrap();
-        std::fs::copy(repo().join(file), checkout.join(file)).unwrap();
-    }
+    copy_port_entries(&repo(), &checkout);
+    let base = "crates/package/base-packages.json";
+    std::fs::create_dir_all(checkout.join(base).parent().unwrap()).unwrap();
+    std::fs::copy(repo().join(base), checkout.join(base)).unwrap();
     std::fs::write(checkout.join("core.cs"), "").unwrap();
     std::fs::create_dir_all(checkout.join("v20/base")).unwrap();
     std::fs::create_dir_all(checkout.join("v20/Add-Ons")).unwrap();
@@ -748,4 +741,25 @@ async fn wrench_an_add_on_brick(client: &mut Client, root: &Path, set: &PackageS
             .is_some_and(|b| b.name.as_deref() == Some("paired"))
     })
     .await
+}
+
+/// Each port's `entry.json`, as the importer finds them.
+fn port_entries(repo: &Path) -> Vec<PathBuf> {
+    let mut out: Vec<_> = std::fs::read_dir(repo.join("crates/addon-import/ports"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.path().join("entry.json"))
+        .filter(|p| p.is_file())
+        .collect();
+    out.sort();
+    out
+}
+
+/// Copy every port's `entry.json` into a checkout at `root`.
+fn copy_port_entries(repo: &Path, root: &Path) {
+    for entry in port_entries(repo) {
+        let to = root.join(entry.strip_prefix(repo).unwrap());
+        std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+        std::fs::copy(&entry, to).unwrap();
+    }
 }

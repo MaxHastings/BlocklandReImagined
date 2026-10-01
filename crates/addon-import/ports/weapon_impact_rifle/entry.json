@@ -1,0 +1,19 @@
+{
+  "addon": "Weapon_Impact_Rifle",
+  "title": "Kai's Impact Rifle (Tier+Tactical)",
+  "port": "weapon_impact_rifle",
+  "status": "partial",
+  "sha256": [
+    "65a1332168740664ce6389a5b057622192f19e8f5f3546c009911a8a3847e01b"
+  ],
+  "covers": {
+    "ImpactRifleImage::onFire": {
+      "fires_free": "TT_createProjectile\\s*\\(",
+      "spends": "TT_decrementAmmo\\s*\\(",
+      "still": "vectorLen\\(\\s*%obj\\.getVelocity\\(\\s*\\)\\s*\\)\\s*<\\s*[\\d.]+\\s*&&"
+    }
+  },
+  "tests": [
+    "crates/addon-import/tests/tier_port.rs the_impact_rifle_spreads_by_whether_its_holder_stands_still"
+  ]
+}

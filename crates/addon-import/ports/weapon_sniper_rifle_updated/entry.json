@@ -1,0 +1,29 @@
+{
+  "addon": "Weapon_Sniper_Rifle_Updated",
+  "title": "Sniper Rifle Updated",
+  "port": "weapon_sniper_rifle_updated",
+  "status": "verified",
+  "sha256": [
+    "b9d6ee94a2f605bafba0e53aa79ee12b4d40cac61d81135c26896973693ed9e2"
+  ],
+  "covers": {
+    "SniperRifleAnimatedImage::onFire": {
+      "fire_arm": "playthread\\s*\\(\\s*2\\s*,\\s*\"?([a-z_][a-z0-9_]*)\"?\\s*\\)"
+    },
+    "SniperRifleAnimatedImage::onMount": {
+      "lhand": "hidenode\\s*\\(\\s*\"?lhand\"?\\s*\\)",
+      "rhand": "hidenode\\s*\\(\\s*\"?rhand\"?\\s*\\)",
+      "lhook": "hidenode\\s*\\(\\s*\"?lhook\"?\\s*\\)",
+      "rhook": "hidenode\\s*\\(\\s*\"?rhook\"?\\s*\\)",
+      "both_arms": "playthread\\s*\\(\\s*2\\s*,\\s*\"?armreadyboth\"?\\s*\\)"
+    },
+    "SniperRifleAnimatedImage::onUnMount": {
+      "restores": "applybodyparts\\s*\\(\\s*\\)"
+    }
+  },
+  "tests": [
+    "weapon_sniper_rifle_updated/checks.json",
+    "crates/addon-import/tests/ports.rs sniper_rifle_updated_port_draws_its_own_hands",
+    "crates/addon-import/tests/import.rs real_sniper_rifles"
+  ]
+}

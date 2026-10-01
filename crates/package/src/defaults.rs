@@ -77,7 +77,7 @@ pub struct DefaultAddOn {
 pub struct Original {
     /// Its folder or zip name, which is a Blockland Add-On's identity
     /// (`Vehicle_Stunt_Plane`). The package id is the importer's namespace
-    /// for it, and its port is the one `ports.json` lists for this name.
+    /// for it, and its port is the one whose `entry.json` names it.
     pub addon: String,
     pub title: String,
     /// Who made it, as the credits and the Add-Ons screen name them.

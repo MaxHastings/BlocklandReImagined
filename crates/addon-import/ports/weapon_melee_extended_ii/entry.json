@@ -1,0 +1,208 @@
+{
+  "addon": "Weapon_Melee_Extended_II",
+  "title": "Tier+Tactical Melee Extended II (Kai)",
+  "port": "weapon_melee_extended_ii",
+  "status": "partial",
+  "sha256": [
+    "cae20f116fee91f3d5b10aba44ac89a73a2c72409cb8ce590c934e9f9803c4e2"
+  ],
+  "covers": {
+    "TT_defaultIfUnset": {
+      "default": "\\$Pref::Server\\[\\s*\\\"::\\\"\\s*@\\s*%category\\s*@\\s*\\\"::\\\"\\s*@\\s*%pref\\s*\\]\\s*=\\s*%default"
+    },
+    "addSpecialDamageMsg": {
+      "messages": "\\$SpecialDamage_MurderMessage\\[%id\\]\\s*=\\s*%murderMsg\\s*;\\s*\\$SpecialDamage_SuicideMessage\\[%id\\]\\s*=\\s*%suicideMsg"
+    },
+    "GameConnection::onDeath": {
+      "between": "%curmsg\\s*=\\s*strReplace\\(\\s*%curmsg\\s*,\\s*\\\"%3\\\"\\s*,\\s*%ciString\\s*\\)",
+      "last": "%msg\\s*=\\s*strReplace\\(\\s*%curmsg\\s*,\\s*\\\"%3\\\"\\s*,\\s*%ciString\\s*\\)"
+    },
+    "L4BAxeImage::onFire": {
+      "alive": "if\\s*\\(\\s*%obj\\.getDamagePercent\\(\\s*\\)\\s*>=\\s*1(?:\\.0)?\\s*\\)\\s*return\\s*;",
+      "arm": "%obj\\.playThread\\(\\s*2\\s*,\\s*shiftTo\\s*\\)",
+      "sounds": "if\\s*\\(\\s*getRandom\\(\\s*0\\s*,\\s*1\\s*\\)\\s*\\)\\s*\\{\\s*%this\\.TT_raycastExplosionBrickSound\\s*=\\s*\\w+\\s*;",
+      "fires": "Parent::onFire\\(\\s*%this\\s*,\\s*%obj\\s*,\\s*%slot\\s*\\)"
+    },
+    "L4BAxeImage::onActivate": {
+      "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*plant\\s*\\)"
+    },
+    "L4BAxeImage::onPreFire": {
+      "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*shiftAway\\s*\\)"
+    },
+    "L4BAxeImage::TT_isRaycastCritical": {
+      "melee": "return\\s+TT_isMeleeRaycastCrit\\("
+    },
+    "L4BBigStickImage::onFire": {
+      "alive": "if\\s*\\(\\s*%obj\\.getDamagePercent\\(\\s*\\)\\s*>=\\s*1(?:\\.0)?\\s*\\)\\s*return\\s*;",
+      "arm": "%obj\\.playThread\\(\\s*2\\s*,\\s*shiftTo\\s*\\)",
+      "sounds": "if\\s*\\(\\s*getRandom\\(\\s*0\\s*,\\s*1\\s*\\)\\s*\\)\\s*\\{\\s*%this\\.TT_raycastExplosionBrickSound\\s*=\\s*\\w+\\s*;",
+      "fires": "Parent::onFire\\(\\s*%this\\s*,\\s*%obj\\s*,\\s*%slot\\s*\\)"
+    },
+    "L4BBigStickImage::onActivate": {
+      "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*plant\\s*\\)"
+    },
+    "L4BBigStickImage::onPreFire": {
+      "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*shiftAway\\s*\\)"
+    },
+    "L4BBigStickImage::TT_isRaycastCritical": {
+      "melee": "return\\s+TT_isMeleeRaycastCrit\\("
+    },
+    "L4BCookingKnifeImage::onFire": {
+      "alive": "if\\s*\\(\\s*%obj\\.getDamagePercent\\(\\s*\\)\\s*>=\\s*1(?:\\.0)?\\s*\\)\\s*return\\s*;",
+      "arm": "%obj\\.playThread\\(\\s*2\\s*,\\s*shiftTo\\s*\\)",
+      "sounds": "if\\s*\\(\\s*getRandom\\(\\s*0\\s*,\\s*1\\s*\\)\\s*\\)\\s*\\{\\s*%this\\.TT_raycastExplosionBrickSound\\s*=\\s*\\w+\\s*;",
+      "fires": "Parent::onFire\\(\\s*%this\\s*,\\s*%obj\\s*,\\s*%slot\\s*\\)"
+    },
+    "L4BCookingKnifeImage::onActivate": {
+      "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*plant\\s*\\)"
+    },
+    "L4BCookingKnifeImage::onPreFire": {
+      "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*shiftAway\\s*\\)"
+    },
+    "L4BCookingKnifeImage::TT_isRaycastCritical": {
+      "melee": "return\\s+TT_isMeleeRaycastCrit\\("
+    },
+    "L4BGaffImage::onFire": {
+      "alive": "if\\s*\\(\\s*%obj\\.getDamagePercent\\(\\s*\\)\\s*>=\\s*1(?:\\.0)?\\s*\\)\\s*return\\s*;",
+      "arm": "%obj\\.playThread\\(\\s*2\\s*,\\s*shiftTo\\s*\\)",
+      "sounds": "if\\s*\\(\\s*getRandom\\(\\s*0\\s*,\\s*1\\s*\\)\\s*\\)\\s*\\{\\s*%this\\.TT_raycastExplosionBrickSound\\s*=\\s*\\w+\\s*;\\s*%this\\.TT_raycastExplosionPlayerSound\\s*=\\s*\\w+\\s*;",
+      "fires": "Parent::onFire\\(\\s*%this\\s*,\\s*%obj\\s*,\\s*%slot\\s*\\)"
+    },
+    "L4BGaffImage::onActivate": {
+      "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*plant\\s*\\)"
+    },
+    "L4BGaffImage::onPreFire": {
+      "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*shiftAway\\s*\\)"
+    },
+    "L4BGaffImage::TT_isRaycastCritical": {
+      "melee": "return\\s+TT_isMeleeRaycastCrit\\("
+    },
+    "L4BKnifeonaStickImage::onFire": {
+      "alive": "if\\s*\\(\\s*%obj\\.getDamagePercent\\(\\s*\\)\\s*>=\\s*1(?:\\.0)?\\s*\\)\\s*return\\s*;",
+      "arm": "%obj\\.playThread\\(\\s*2\\s*,\\s*shiftTo\\s*\\)",
+      "sounds": "if\\s*\\(\\s*getRandom\\(\\s*0\\s*,\\s*1\\s*\\)\\s*\\)\\s*\\{\\s*%this\\.TT_raycastExplosionBrickSound\\s*=\\s*\\w+\\s*;",
+      "fires": "Parent::onFire\\(\\s*%this\\s*,\\s*%obj\\s*,\\s*%slot\\s*\\)"
+    },
+    "L4BKnifeonaStickImage::onActivate": {
+      "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*plant\\s*\\)"
+    },
+    "L4BKnifeonaStickImage::onPreFire": {
+      "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*shiftAway\\s*\\)"
+    },
+    "L4BKnifeonaStickImage::TT_isRaycastCritical": {
+      "melee": "return\\s+TT_isMeleeRaycastCrit\\("
+    },
+    "L4BNailbatImage::onFire": {
+      "alive": "if\\s*\\(\\s*%obj\\.getDamagePercent\\(\\s*\\)\\s*>=\\s*1(?:\\.0)?\\s*\\)\\s*return\\s*;",
+      "arm": "%obj\\.playThread\\(\\s*2\\s*,\\s*shiftTo\\s*\\)",
+      "sounds": "if\\s*\\(\\s*getRandom\\(\\s*0\\s*,\\s*1\\s*\\)\\s*\\)\\s*\\{\\s*%this\\.TT_raycastExplosionBrickSound\\s*=\\s*\\w+\\s*;",
+      "fires": "WeaponImage::onFire\\(\\s*%this\\s*,\\s*%obj\\s*,\\s*%slot\\s*\\)"
+    },
+    "L4BNailbatImage::onActivate": {
+      "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*plant\\s*\\)"
+    },
+    "L4BNailbatImage::onPreFire": {
+      "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*shiftAway\\s*\\)"
+    },
+    "L4BNailbatImage::TT_isRaycastCritical": {
+      "melee": "return\\s+TT_isMeleeRaycastCrit\\("
+    },
+    "L4BPaddleImage::onFire": {
+      "alive": "if\\s*\\(\\s*%obj\\.getDamagePercent\\(\\s*\\)\\s*>=\\s*1(?:\\.0)?\\s*\\)\\s*return\\s*;",
+      "arm": "%obj\\.playThread\\(\\s*2\\s*,\\s*shiftTo\\s*\\)",
+      "sounds": "if\\s*\\(\\s*getRandom\\(\\s*0\\s*,\\s*1\\s*\\)\\s*\\)\\s*\\{\\s*%this\\.TT_raycastExplosionBrickSound\\s*=\\s*\\w+\\s*;",
+      "fires": "Parent::onFire\\(\\s*%this\\s*,\\s*%obj\\s*,\\s*%slot\\s*\\)"
+    },
+    "L4BPaddleImage::onActivate": {
+      "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*plant\\s*\\)"
+    },
+    "L4BPaddleImage::onPreFire": {
+      "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*shiftAway\\s*\\)"
+    },
+    "L4BPaddleImage::TT_isRaycastCritical": {
+      "melee": "return\\s+TT_isMeleeRaycastCrit\\("
+    },
+    "L4BPipeWrenchImage::onFire": {
+      "alive": "if\\s*\\(\\s*%obj\\.getDamagePercent\\(\\s*\\)\\s*>=\\s*1(?:\\.0)?\\s*\\)\\s*return\\s*;",
+      "arm": "%obj\\.playThread\\(\\s*2\\s*,\\s*shiftTo\\s*\\)",
+      "sounds": "if\\s*\\(\\s*getRandom\\(\\s*0\\s*,\\s*1\\s*\\)\\s*\\)\\s*\\{\\s*%this\\.TT_raycastExplosionBrickSound\\s*=\\s*\\w+\\s*;",
+      "fires": "Parent::onFire\\(\\s*%this\\s*,\\s*%obj\\s*,\\s*%slot\\s*\\)"
+    },
+    "L4BPipeWrenchImage::onActivate": {
+      "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*shiftto\\s*\\)"
+    },
+    "L4BPipeWrenchImage::onPreFire": {
+      "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*shiftAway\\s*\\)"
+    },
+    "L4BPipeWrenchImage::TT_isRaycastCritical": {
+      "melee": "return\\s+TT_isMeleeRaycastCrit\\("
+    },
+    "L4BChainsawImage::onFire": {
+      "arm": "%obj\\.playThread\\(\\s*2\\s*,\\s*plant\\s*\\)",
+      "fires": "Parent::onFire\\(\\s*%this\\s*,\\s*%obj\\s*,\\s*%slot\\s*\\)"
+    },
+    "L4BChainsawImage::onMount": {
+      "move": "%obj\\.playThread\\(\\s*0\\s*,\\s*plant\\s*\\)",
+      "parent": "Parent::onMount\\("
+    },
+    "isSpecialKill_Reflected": {
+      "reflected": "return\\s*\\(\\s*%sourceObject\\.reflectTime\\s*>\\s*0\\s*\\)"
+    },
+    "ShieldRiotTTImage::onActivate": {
+      "arms": "%obj\\.playthread\\(\\s*1\\s*,\\s*armReadyBoth\\s*\\)"
+    },
+    "shieldRiotTTImage::onUnMount": {
+      "arms": "fixArmReady\\(\\s*%obj\\s*\\)"
+    },
+    "ShieldRiotTTImage::onPrefire": {
+      "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*shiftUp\\s*\\)"
+    },
+    "ShieldRiotTTImage::onFire": {
+      "fires": "Parent::onFire\\(\\s*%this\\s*,\\s*%obj\\s*,\\s*%slot\\s*\\)\\s*;\\s*%obj\\.playthread\\(\\s*2\\s*,\\s*shiftDown\\s*\\)"
+    },
+    "ProjectileData::damage": {
+      "shield": "%image0\\s*==\\s*shieldRiotTTImage\\.getID\\(\\)",
+      "ready": "%image0\\s*==\\s*\\w+\\.getID\\(\\)\\s*&&\\s*%state0\\s*\\$=\\s*\\\"(\\w+)\\\"",
+      "up": "if\\s*\\(\\s*%eZ\\s*>\\s*([\\d.]+)\\s*\\)\\s*%shielded\\s*=\\s*\\(\\s*getword\\(\\s*%pos\\s*,\\s*2\\s*\\)\\s*>\\s*getword\\(\\s*%col\\.getWorldBoxCenter\\(\\)\\s*,\\s*2\\s*\\)\\s*-\\s*[\\d.]+\\s*\\*\\s*%scale\\s*\\)",
+      "above": "if\\s*\\(\\s*%eZ\\s*>\\s*[\\d.]+\\s*\\)\\s*%shielded\\s*=\\s*\\(\\s*getword\\(\\s*%pos\\s*,\\s*2\\s*\\)\\s*>\\s*getword\\(\\s*%col\\.getWorldBoxCenter\\(\\)\\s*,\\s*2\\s*\\)\\s*-\\s*([\\d.]+)\\s*\\*\\s*%scale\\s*\\)",
+      "down": "else\\s+if\\s*\\(\\s*%ez\\s*<\\s*-\\s*([\\d.]+)\\s*\\)\\s*%shielded\\s*=\\s*\\(\\s*getword\\(\\s*%pos\\s*,\\s*2\\s*\\)\\s*<\\s*getword\\(\\s*%col\\.getWorldBoxCenter\\(\\)\\s*,\\s*2\\s*\\)\\s*-\\s*[\\d.]+\\s*\\*\\s*%scale\\s*\\)",
+      "below": "else\\s+if\\s*\\(\\s*%ez\\s*<\\s*-\\s*[\\d.]+\\s*\\)\\s*%shielded\\s*=\\s*\\(\\s*getword\\(\\s*%pos\\s*,\\s*2\\s*\\)\\s*<\\s*getword\\(\\s*%col\\.getWorldBoxCenter\\(\\)\\s*,\\s*2\\s*\\)\\s*-\\s*([\\d.]+)\\s*\\*\\s*%scale\\s*\\)",
+      "facing": "else\\s*%shielded\\s*=\\s*\\(\\s*vectorDot\\(\\s*vectorNormalize\\(\\s*%obj\\.getVelocity\\(\\)\\s*\\)\\s*,\\s*%aimVec\\s*\\)\\s*<\\s*0\\s*\\)",
+      "aim": "%aimVec\\s*=\\s*%fX\\s*\\*\\s*%eXY\\s+SPC\\s+%fY\\s*\\*\\s*%eXY\\s+SPC\\s+%eZ\\s*;",
+      "projectile_damage": "%damageScale\\s*=\\s*([\\d.]+)\\s*;\\s*%reflect\\s*=\\s*1\\s*;",
+      "ahead": "%reflectPoint\\s*=\\s*vectorAdd\\(\\s*%col\\.getHackPosition\\(\\)\\s*,\\s*vectorScale\\(\\s*%reflectVector\\s*,\\s*vectorLen\\(\\s*%col\\.getVelocity\\(\\)\\s*\\)\\s*/\\s*5\\s*\\+\\s*1\\s*\\)\\s*\\)",
+      "push": "%impulseScale\\s*=\\s*([\\d.]+)\\s*;\\s*if\\s*\\(\\s*%shielded\\s*\\)\\s*%col\\.spawnExplosion\\(",
+      "clang": "%impulseScale\\s*=\\s*[\\d.]+\\s*;\\s*if\\s*\\(\\s*%shielded\\s*\\)\\s*%col\\.spawnExplosion\\(\\s*(\\w+)\\s*,\\s*getWord\\(\\s*%col\\.getScale\\(\\)\\s*,\\s*2\\s*\\)\\s*\\)",
+      "lately": "if\\s*\\(\\s*getSimTime\\(\\)\\s*-\\s*%obj\\.reflectTime\\s*<\\s*500\\s*\\)\\s*%reflect\\s*=\\s*0\\s*;",
+      "durability": "%col\\.shieldHP\\s*=\\s*\\$Pref::Server::TT::ShieldDurability\\s*;",
+      "breaks": "%col\\.shieldHP--\\s*;\\s*if\\s*\\(\\s*%col\\.shieldHP\\s*<=\\s*0\\s*\\)",
+      "pieces": "if\\s*\\(\\s*%col\\.currtool\\s*==\\s*%i\\s*\\)\\s*\\{\\s*%col\\.unmountImage\\(0\\)\\s*;\\s*%col\\.spawnExplosion\\(\\s*(\\w+)\\s*,",
+      "s1": "%sound\\s*=\\s*getRandom\\(\\s*1\\s*,\\s*3\\s*\\)\\s*;\\s*switch\\s*\\(\\s*%sound\\s*\\)\\s*\\{\\s*case\\s+1\\s*:\\s*serverPlay3D\\(\\s*(\\w+)\\s*,\\s*%pos\\s*\\)\\s*;",
+      "s2": "case\\s+2\\s*:\\s*serverPlay3D\\(\\s*(\\w+)\\s*,\\s*%pos\\s*\\)\\s*;\\s*case\\s+3\\s*:",
+      "s3": "case\\s+3\\s*:\\s*serverPlay3D\\(\\s*(\\w+)\\s*,\\s*%pos\\s*\\)\\s*;\\s*default\\s*:",
+      "back": "%vec\\s*=\\s*vectorScale\\(\\s*%reflectVector\\s*,\\s*vectorLen\\(\\s*%obj\\.getVelocity\\(\\)\\s*\\)\\s*\\)\\s*;\\s*%vel\\s*=\\s*vectorAdd\\(\\s*%vec\\s*,\\s*vectorScale\\(\\s*%col\\.getVelocity\\(\\)\\s*,\\s*%obj\\.dataBlock\\.velInheritFactor\\s*\\)\\s*\\)",
+      "theirs": "sourceObject\\s*=\\s*%col\\s*;"
+    },
+    "ProjectileData::radiusDamage": {
+      "spared": "if\\s*\\(\\s*%obj\\.damageCancel\\[%col\\]\\s*\\)\\s*return\\s*;"
+    },
+    "ProjectileData::radiusImpulse": {
+      "push": "%b\\s*\\*=\\s*%obj\\.impulseScale\\[%col\\]"
+    },
+    "ProjectileData::impactImpulse": {
+      "push": "%this\\.impactImpulse\\s*\\*=\\s*%obj\\.impulseScale\\[%col\\]"
+    },
+    "ShapeBase::damage": {
+      "falls": "if\\s*\\(\\s*%shielded\\s*&&\\s*\\$Pref::Server::TT::ShieldCancelFalling\\s*\\)",
+      "facing": "%shielded\\s*=\\s*\\(\\s*vectorDot\\(\\s*%attackvec\\s*,\\s*%aimVec\\s*\\)\\s*<\\s*0\\s*\\)",
+      "never": "if\\s*\\(\\s*%directDamage\\s*>\\s*5000\\s*\\|\\|\\s*%pos\\s*\\$=\\s*\\\"\\\"\\s*\\|\\|\\s*vectorDist\\(\\s*%pos\\s*,\\s*%this\\.getPosition\\(\\)\\s*\\)\\s*<\\s*0\\.1\\s*\\)",
+      "scaled": "if\\s*\\(\\s*%shielded\\s*\\)\\s*%directDamage\\s*\\*=\\s*%damageScale\\s*;",
+      "damage": "%damageScale\\s*=\\s*([\\d.]+)\\s*;"
+    }
+  },
+  "tests": [
+    "crates/addon-import/tests/tier_port.rs melee_extended_ii_shield_stops_shots_from_in_front_and_sends_them_back",
+    "crates/weapons/tests/guard.rs a_raised_shield_stops_a_shot_from_in_front_and_sends_it_back",
+    "crates/weapons/tests/guard.rs a_shield_breaks_on_its_last_stop_and_leaves_the_holder"
+  ]
+}

@@ -1,0 +1,50 @@
+{
+  "addon": "Weapon_Package_Explosive2",
+  "title": "Tier+Tactical Explosive 2 (Kai)",
+  "port": "weapon_package_explosive2",
+  "status": "partial",
+  "sha256": [
+    "12213bebd0fcd476c17a94e72d969842691ce442b7c6deb579fb330bcf89d869"
+  ],
+  "covers": {
+    "Projectile::onAdd": {
+      "loops": "PrjLoop_enabled[\\s\\S]*schedule\\(\\s*%db\\.PrjLoop_tickTime"
+    },
+    "Projectile::PrjLoop_tick": {
+      "limit": "%prj\\.ticks\\s*>=\\s*%db\\.PrjLoop_maxTicks"
+    },
+    "PrjLoop_emitPrj": {
+      "angles": "mcos\\(\\s*%a\\s*\\)\\s*SPC\\s*msin\\(\\s*%a\\s*\\)\\s*SPC\\s*mcos\\(\\s*%b\\s*\\)"
+    },
+    "FlakCannonProjectile::PrjLoop_onTick": {
+      "sparks": "PrjLoop_emitPrj\\(\\s*%obj\\s*,"
+    },
+    "FlakCannonProjectile::onCollision": {
+      "burst": "%i\\s*<\\s*getRandom\\(",
+      "then_hits": "Parent::onCollision\\("
+    },
+    "FlakCannonImage::onFire": {
+      "fires": "Parent::onFire\\("
+    },
+    "GrenaderImage::onFire": {
+      "fires": "Parent::onFire\\("
+    },
+    "RPGImage::onFire": {
+      "moving": "vectorLen\\(\\s*%obj\\.getVelocity\\(\\s*\\)\\s*\\)\\s*>"
+    },
+    "MortarImage::onFire": {
+      "lob": "containerRayCast\\(\\s*%start\\s*,\\s*%end\\s*,\\s*\\$TypeMasks::All"
+    },
+    "MortarImage::onMount": {
+      "both_arms": "armReadyBoth"
+    },
+    "MortarImage::onUnMount": {
+      "arms": "fixArmReady\\(\\s*%obj\\s*\\)"
+    }
+  },
+  "tests": [
+    "crates/addon-import/tests/tier_port.rs explosive2_flak_sheds_sparks_and_the_mortar_lobs",
+    "crates/weapons/tests/thrown_grenades.rs flak_sparks_fly_at_kais_angles_and_burst_on_each_hit",
+    "crates/weapons/tests/thrown_grenades.rs a_lob_comes_down_by_how_far_the_look_lands"
+  ]
+}

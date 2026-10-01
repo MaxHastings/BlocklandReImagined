@@ -1,0 +1,68 @@
+{
+  "addon": "Weapon_Package_Medic1",
+  "title": "Tier+Tactical Medical (Kai)",
+  "port": "weapon_package_medic1",
+  "status": "partial",
+  "sha256": [
+    "1dedc7af42ce1c062f666ec35ee4626a8551434d7ddcde43be306710bc9da01c"
+  ],
+  "covers": {
+    "TT_canHeal": {
+      "players": "\\$TypeMasks::PlayerObjectType",
+      "bots_by_pref": "\\$Pref::Server::TT::MedicHealBots\\s*\\|\\|\\s*%targetObject\\.getClassName\\(\\s*\\)\\s*\\$=\\s*\"Player\"",
+      "same_minigame": "%mini\\s*==\\s*getMinigameFromObject\\(\\s*%targetObject\\s*\\)",
+      "slayer_teams": "%mini\\.isSlayerMinigame",
+      "lan": "\\$Server::LAN\\s*&&\\s*!isObject\\(\\s*getMinigameFromObject\\(\\s*%targetObject\\s*\\)\\s*\\)",
+      "own_bots": "getBL_IDFromObject\\(\\s*%client\\s*\\)"
+    },
+    "TT_projectileHeal": {
+      "can_heal": "if\\s*\\(\\s*TT_canHeal\\(\\s*%healer\\s*,\\s*%col\\s*\\)\\s*\\)",
+      "hurt_enough": "%col\\.getDamageLevel\\(\\s*\\)\\s*>=\\s*%healBurst\\s*\\)\\s*%col\\.spawnExplosion\\(",
+      "cross": "%col\\.spawnExplosion\\(\\s*(\\w+)\\s*,\\s*%col\\.getScale\\(\\s*\\)\\s*\\)",
+      "burst": "%col\\.setDamageLevel\\(\\s*%col\\.getDamageLevel\\(\\s*\\)\\s*-\\s*%healBurst\\s*\\)",
+      "healed_pre": "bottomPrint\\(\\s*%obj\\.client\\s*,\\s*\"([^\"]*)\"\\s*@\\s*%colName\\s*@",
+      "healed_post": "%colName\\s*@\\s*\"([^\"]*)\"\\s*,",
+      "print_seconds": "%colName\\s*@\\s*\"[^\"]*\"\\s*,\\s*([\\d.]+)\\s*,",
+      "print_hide_bar": "%colName\\s*@\\s*\"[^\"]*\"\\s*,\\s*[\\d.]+\\s*,\\s*(\\d)\\s*\\)",
+      "healing_pre": "bottomPrint\\(\\s*%col\\.client\\s*,\\s*\"([^\"]*)\"\\s*@\\s*%healerName\\s*@",
+      "healing_post": "%healerName\\s*@\\s*\"([^\"]*)\"\\s*,",
+      "heal_image": "%col\\.emote\\(\\s*(\\w+)\\s*\\)"
+    },
+    "stimRechargedNotice": {
+      "alive": "if\\s*\\(\\s*%obj\\.getDamagePercent\\(\\s*\\)\\s*>=\\s*1(?:\\.0)?\\s*\\)\\s*return\\s*;",
+      "notice_text": "centerprint\\(\\s*%obj\\.client\\s*,\\s*\"([^\"]*)\"",
+      "notice_seconds": "centerprint\\(\\s*%obj\\.client\\s*,\\s*\"[^\"]*\"\\s*,\\s*([\\d.]+)\\s*\\)",
+      "notice_sound": "serverPlay3D\\(\\s*(\\w+)\\s*,\\s*%obj\\.getPosition\\(\\s*\\)\\s*\\)"
+    },
+    "Armor::onTrigger": {
+      "alt_trigger": "onAltTrigger\\s*\\("
+    },
+    "medigunImage::onFire": {
+      "fires": "Parent::onFire\\("
+    },
+    "medigunHealImage::onMount": {
+      "count": "%obj\\.healing\\s*=\\s*0"
+    },
+    "medigunHealImage::onHeal": {
+      "heals": "%obj\\.setDamageLevel\\("
+    },
+    "medigunProjectile::onCollision": {
+      "heals": "TT_projectileHeal\\(",
+      "then_hits": "Parent::onCollision\\("
+    },
+    "stimpackProjectile::onCollision": {
+      "heals": "TT_projectileHeal\\(",
+      "then_hits": "Parent::onCollision\\("
+    },
+    "stimpackImage::onFire": {
+      "recharge": "%obj\\.lastStimTime\\s*\\+\\s*%this\\.minShotTime"
+    },
+    "stimpackImage::onAltTrigger": {
+      "jet": "%triggerSlot\\s*==\\s*4"
+    }
+  },
+  "tests": [
+    "crates/addon-import/tests/tier_port.rs medic1_heals_over_time_and_the_syringe_recharges",
+    "crates/weapons/tests/emote_slot.rs an_emote_image_runs_its_state_commands_until_replaced"
+  ]
+}

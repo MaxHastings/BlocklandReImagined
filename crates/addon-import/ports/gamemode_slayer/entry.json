@@ -1,0 +1,575 @@
+{
+  "addon": "Gamemode_Slayer",
+  "title": "Slayer",
+  "port": "gamemode_slayer",
+  "status": "partial",
+  "sha256": [
+    "e199627045d2d0250226605727b9ec32f6b1909dbadcc58d23d0f059fae0c7b9"
+  ],
+  "covers": {
+    "Slayer_TeamHandlerSG::pickTeam": {
+      "share": "numMembers\\[\"GameConnection\"\\]\\s*/\\s*%t\\.sortWeight",
+      "tie": "getRandom\\(\\s*0\\s*,\\s*getFieldCount\\(\\s*%teams\\s*\\)\\s*-\\s*1\\s*\\)",
+      "skips": "!\\s*%t\\.sort\\s*\\|\\|\\s*%t\\.sortWeight\\s*<=\\s*0\\s*\\|\\|\\s*\\(\\s*%t\\.numMembers\\[\"GameConnection\"\\]\\s*>=\\s*%t\\.maxPlayers\\s*&&\\s*%t\\.maxPlayers\\s*>=\\s*0\\s*\\)"
+    },
+    "Slayer_TeamHandlerSG::autoSort": {
+      "picks": "%this\\.pickTeam\\(\\s*%client\\s*\\)"
+    },
+    "Slayer_TeamHandlerSG::canDamage": {
+      "friendly_fire": "!\\s*%this\\.minigame\\.teams_friendlyFire\\s*&&\\s*%teamA\\.isAlliedTeam\\(\\s*%teamB\\s*\\)"
+    },
+    "server/core/Slayer_MiniGameSO.cs": {
+      "team_spawn": "slyrType\\s*;[\\s\\S]*?%type\\s*!\\$=\\s*\"TeamSpawn\"[\\s\\S]*?%color\\s*!=\\s*%team\\.color",
+      "plain_spawn": "getName\\(\\)\\s*!\\$=\\s*\"brickSpawnPointData\"",
+      "open_first": "if\\s*\\(\\s*!\\s*%sp\\.isBlocked\\(\\)\\s*\\)",
+      "fires_join": "processMultiSourceInputEvent\\(\\s*\"onMinigameJoin\"\\s*,\\s*%client\\s*,\\s*%this\\s*\\)",
+      "fires_leave": "processMultiSourceInputEvent\\(\\s*\"onMinigameLeave\"\\s*,\\s*%client\\s*,\\s*%this\\s*\\)",
+      "fires_round_start": "processMultiSourceInputEvent\\(\\s*\"onMinigameRoundStart\"\\s*,\\s*0\\s*,\\s*%this\\s*\\)",
+      "fires_round_end": "processMultiSourceInputEvent\\(\\s*\"onMinigameRoundEnd\"\\s*,\\s*0\\s*,\\s*%this\\s*\\)"
+    },
+    "server/core/resources/sounds/Sounds.cs": {
+      "countdown": "MaxCountDown\\s*=\\s*10\\s*;",
+      "voice": "filename\\s*=\\s*\"\\./\"\\s*@\\s*\\$sound\\s*@\\s*\"\\.wav\"",
+      "named": "setName\\(\\s*\"Slayer_\"\\s*@\\s*\\$sound\\s*@\\s*\"_Seconds_Sound\"\\s*\\)",
+      "begin": "datablock\\s+AudioProfile\\s*\\(\\s*Slayer_Begin_Sound\\s*\\)"
+    },
+    "slayerTeamCmdJoin": {
+      "locked": "teams_lock\\s*&&\\s*isObject\\(\\s*%clTeam\\s*\\)",
+      "find": "getTeamFromName\\(\\s*%name\\s*\\)",
+      "team_lock": "%clTeam\\.lock\\s*\\|\\|\\s*%team\\.lock",
+      "full": "%team\\.maxPlayers\\s*==\\s*0"
+    },
+    "slayerTeamCmdLeave": {
+      "locked": "\\(\\s*%mini\\.teams_lock\\s*\\|\\|\\s*%mini\\.teams_autoSort\\s*\\)\\s*&&\\s*!\\s*%mini\\.canEdit\\(\\s*%client\\s*\\)"
+    },
+    "slayerTeamCmdList": {
+      "names": "getColorHex\\(\\)\\s*@\\s*%team\\.name"
+    },
+    "slayerTeamCmdCount": {
+      "members": "%team\\.numMembers\\s*@"
+    },
+    "slayerTeamCmdScore": {
+      "score": "%team\\.getScore\\(\\)"
+    },
+    "slayerTeamCmdListMembers": {
+      "members": "member\\[\"GameConnection\"\\s*,\\s*%i\\]",
+      "bots": "if\\(\\s*%team\\.numMembers\\[\"AiController\"\\]\\s*>\\s*1\\s*\\)"
+    },
+    "slayerTeamCmdBalance": {
+      "edit": "%mini\\.canEdit\\(\\s*%client\\s*\\)",
+      "balance": "balanceTeams\\("
+    },
+    "serverCmdTeams": {
+      "dispatch": "\"slayerTeamCmd\"\\s*@\\s*%cmd"
+    },
+    "server/defaults/preferences.cs": {
+      "pref_team_only_dead_cam": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.teams_teamOnlyDeadCam\"",
+      "pref_spectate_auto_cam": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.spectateAutoCam\"",
+      "pref_spectate_cps": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.spectateCapturePoints\"",
+      "pref_time_between_rounds": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.timeBetweenRounds\"",
+      "pref_pre_round": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.preRoundSeconds\"",
+      "pref_allow_move": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.allowMoveWhileResetting\"",
+      "pref_lives": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.lives\"",
+      "pref_points": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.points\"",
+      "pref_time": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.time\"",
+      "pref_auto_sort": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.teams_autoSort\"",
+      "pref_balance_new": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.teams_balanceOnNew\"",
+      "pref_notify": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.teams_notifyMemberChanges\"",
+      "pref_friendly_fire": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.teams_friendlyFire\"",
+      "pref_lock": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.teams_lock\"",
+      "pref_ally": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.teams_allySameColors\"",
+      "pref_custom_faces": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.teams_allowCustomFaces\"",
+      "pref_cp_tick": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"\\$Pref::Slayer::Server::CPTriggerTickMS\"",
+      "pref_cp_transition": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.CPTransitionColors\"",
+      "pref_points_cp": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.points_CP\"",
+      "team_events": "(?s)defaultValue\\s*=\\s*6\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"\\$Pref::Slayer::Server::Teams::maxEvents\"",
+      "pref_clear_stats": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.clearStats\"",
+      "pref_eorr_enable": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.eorrEnable\"",
+      "pref_eorr_team_scores": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.eorrDisplayTeamScores\"",
+      "pref_eorr_victory": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.eorrDisplayVictory\"",
+      "pref_restrict_events": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.restrictOutputEvents\"",
+      "pref_points_kill_bot": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.points_killBot\"",
+      "pref_bot_damage": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.botDamage\"",
+      "pref_respawn_bot": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.respawnTime_bot\"",
+      "pref_dead_chat_mode": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.chat_deadChatMode\"",
+      "pref_dead_chat_mode_items": "(?s)variable\\s*=\\s*\"%mini\\.chat_deadChatMode\"\\s*;[^}]*?list_items\\s*=\\s*\"0\\s*Disabled\"\\s*NL\\s*\"1\\s*Enabled\"\\s*NL\\s*\"2\\s*Enabled\\s*\\-\\s*Global\\s*Only\"\\s*NL\\s*\"3\\s*Enabled\\s*\\-\\s*Team\\s*Only\"",
+      "pref_death_msg_mode": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.deathMsgMode\"",
+      "pref_death_msg_mode_items": "(?s)variable\\s*=\\s*\"%mini\\.deathMsgMode\"\\s*;[^}]*?list_items\\s*=\\s*\"0\\s*Do\\s*Not\\s*Display\"\\s*NL\\s*\"1\\s*Colored\\s*Names\"\\s*NL\\s*\"2\\s*Non\\-Colored\\s*Names\"",
+      "pref_enable_team_chat": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.chat_enableTeamChat\"",
+      "pref_team_display_mode": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.chat_teamDisplayMode\"",
+      "pref_team_display_mode_items": "(?s)variable\\s*=\\s*\"%mini\\.chat_teamDisplayMode\"\\s*;[^}]*?list_items\\s*=\\s*\"0\\s*Disabled\"\\s*NL\\s*\"1\\s*Color\\s*Tag\"\\s*NL\\s*\"2\\s*Color\\s*Name\"\\s*NL\\s*\"3\\s*Add\\s*Name\\s*to\\s*Tag\"",
+      "pref_disable_messages": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.disableSlayerMessages\"",
+      "pref_auto_start": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"\\$Pref::Slayer::Server::AutoStartMiniGame\"",
+      "pref_clear_scores": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.clearScores\"",
+      "pref_color": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.colorIdx\"",
+      "pref_default_minigame": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.isDefaultMinigame\"",
+      "pref_host_name": "(?s)defaultValue\\s*=\\s*\"([^\"]*)\"\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.hostName\"",
+      "pref_late_join_time": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.lateJoinTime\"",
+      "pref_reset_when_empty": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.resetOnEmpty\"",
+      "pref_spawn_brick_color": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.spawnBrickColor\"",
+      "pref_create_rights": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"\\$Pref::Slayer::Server::MiniGameCreationRights\"",
+      "pref_create_rights_items": "(?s)variable\\s*=\\s*\"\\$Pref::Slayer::Server::MiniGameCreationRights\"\\s*;[^}]*?list_items\\s*=\\s*\"0\\s*Host\"\\s*NL\\s*\"1\\s*Super\\s*Admin\"\\s*NL\\s*\"2\\s*Admin\"\\s*NL\\s*\"3\\s*Everyone\"",
+      "pref_edit_rights": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.editRights\"",
+      "pref_edit_rights_items": "(?s)variable\\s*=\\s*\"%mini\\.editRights\"\\s*;[^}]*?list_items\\s*=\\s*\"3\\s*Creator\"\\s*NL\\s*\"4\\s*Full\\s*Trust\"\\s*NL\\s*\"5\\s*Build\\s*Trust\"\\s*NL\\s*\"0\\s*Host\"\\s*NL\\s*\"1\\s*Super\\s*Admin\"\\s*NL\\s*\"2\\s*Admin\"",
+      "pref_leave_rights": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.leaveRights\"",
+      "pref_leave_rights_items": "(?s)variable\\s*=\\s*\"%mini\\.leaveRights\"\\s*;[^}]*?list_items\\s*=\\s*\"3\\s*Creator\"\\s*NL\\s*\"4\\s*Full\\s*Trust\"\\s*NL\\s*\"5\\s*Build\\s*Trust\"\\s*NL\\s*\"0\\s*Host\"\\s*NL\\s*\"1\\s*Super\\s*Admin\"\\s*NL\\s*\"2\\s*Admin\"\\s*NL\\s*\"6\\s*Everyone\"",
+      "pref_reset_rights": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.resetRights\"",
+      "pref_reset_rights_items": "(?s)variable\\s*=\\s*\"%mini\\.resetRights\"\\s*;[^}]*?list_items\\s*=\\s*\"3\\s*Creator\"\\s*NL\\s*\"4\\s*Full\\s*Trust\"\\s*NL\\s*\"5\\s*Build\\s*Trust\"\\s*NL\\s*\"0\\s*Host\"\\s*NL\\s*\"1\\s*Super\\s*Admin\"\\s*NL\\s*\"2\\s*Admin\"",
+      "pref_enable_lights": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.enablePlayerLights\"",
+      "pref_enable_suicide": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.enablePlayerSuicide\"",
+      "pref_name_distance": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.nameDistance\"",
+      "pref_points_friendly_fire": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.points_friendlyFire\"",
+      "pref_ff_progressive": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.friendlyFireProgressivePenalty\"",
+      "pref_ff_penalty": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.respawnPenalty_FriendlyFire\"",
+      "pref_announcements": "(?s)defaultValue\\s*=\\s*\"([^\"]*)\"\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.announcements\"",
+      "pref_save_on_update": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"\\$Pref::Slayer::Server::SavePrefsOnUpdate\"",
+      "pref_balance_teams": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.teams_balanceTeams\"",
+      "pref_punish_ff": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.teams_punishFF\"",
+      "pref_ff_warning": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.friendlyFireDisplayWarning\"",
+      "pref_rounds_between_shuffle": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.teams_roundsBetweenShuffles\"",
+      "pref_shuffle_teams": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.teams_shuffleTeams\"",
+      "pref_shuffle_mode": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.teams_shuffleMode\"",
+      "pref_shuffle_mode_items": "(?s)variable\\s*=\\s*\"%mini\\.teams_shuffleMode\"\\s*;[^}]*?list_items\\s*=\\s*\"0\\s*Random\"\\s*NL\\s*\"1\\s*New\\s*Team\\s*Every\\s*Time\"",
+      "pref_swap_mode": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.teams_swapMode\"",
+      "pref_swap_mode_items": "(?s)variable\\s*=\\s*\"%mini\\.teams_swapMode\"\\s*;[^}]*?list_items\\s*=\\s*\"0\\s*Regulated\"\\s*NL\\s*\"1\\s*Unregulated\\s*\\(always\\s*join\\)\"",
+      "pref_max_teams": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*variable\\s*=\\s*\"\\$Pref::Server::Slayer::Teams::maxTeams\"",
+      "mg_title": "(?s)defaultValue\\s*=\\s*\"([^\"]*)\"\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.Title\"",
+      "mg_respawn": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.respawnTime_player\"",
+      "mg_vehicle_respawn": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.respawnTime_vehicle\"",
+      "mg_brick_respawn": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.respawnTime_brick\"",
+      "mg_enable_wand": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.enableWand\"",
+      "mg_equip_0": "(?s)defaultValue\\s*=\\s*nameToID\\(\\s*(\\w+)\\s*\\)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.startEquip0\"",
+      "mg_equip_1": "(?s)defaultValue\\s*=\\s*nameToID\\(\\s*(\\w+)\\s*\\)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.startEquip1\"",
+      "mg_equip_2": "(?s)defaultValue\\s*=\\s*nameToID\\(\\s*(\\w+)\\s*\\)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.startEquip2\"",
+      "mg_equip_3_none": "(?s)defaultValue\\s*=\\s*0\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.startEquip3\"",
+      "mg_equip_4_none": "(?s)defaultValue\\s*=\\s*0\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.startEquip4\""
+    },
+    "server/defaults/team-preferences.cs": {
+      "team_lives": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"lives\"",
+      "team_sort": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"sort\"",
+      "team_sort_weight": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"sortWeight\"",
+      "team_max_players": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"maxPlayers\"",
+      "team_lock": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"lock\"",
+      "team_win_on_time_up": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"winOnTimeUp\"",
+      "team_scale": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"playerScale\"",
+      "team_player_type": "(?s)defaultValue\\s*=\\s*nameToID\\(\\s*(\\w+)\\s*\\)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"playerDatablock\"",
+      "team_respawn_time": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"respawnTime_Player\"",
+      "team_equip_0": "(?s)defaultValue\\s*=\\s*nameToID\\(\\s*(\\w+)\\s*\\)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"startEquip0\"",
+      "team_equip_1": "(?s)defaultValue\\s*=\\s*nameToID\\(\\s*(\\w+)\\s*\\)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"startEquip1\"",
+      "team_equip_2": "(?s)defaultValue\\s*=\\s*nameToID\\(\\s*(\\w+)\\s*\\)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"startEquip2\"",
+      "team_equip_3_none": "(?s)defaultValue\\s*=\\s*0\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"startEquip3\"",
+      "team_equip_4_none": "(?s)defaultValue\\s*=\\s*0\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"startEquip4\"",
+      "team_sync_loadout": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"syncLoadout\"",
+      "team_uniform": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"uniform\"",
+      "team_uniform_items": "list_items\\s*=\\s*\"0 NONE\"\\s*NL\\s*\"1 Shirt Only\"\\s*NL\\s*\"2 Full\"\\s*NL\\s*\"3 Custom\"",
+      "uni_accent": "(?s)defaultValue\\s*=\\s*\"([^\"]*)\"\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"uni_accent\"",
+      "uni_accent_color": "(?s)defaultValue\\s*=\\s*\"([^\"]*)\"\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"uni_accentColor\"",
+      "uni_decal_name": "(?s)defaultValue\\s*=\\s*\"([^\"]*)\"\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"uni_decalName\"",
+      "uni_face_name": "(?s)defaultValue\\s*=\\s*\"([^\"]*)\"\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"uni_faceName\"",
+      "uni_hat": "(?s)defaultValue\\s*=\\s*\"([^\"]*)\"\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"uni_hat\"",
+      "uni_hat_color": "(?s)defaultValue\\s*=\\s*\"([^\"]*)\"\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"uni_hatColor\"",
+      "uni_head_color": "(?s)defaultValue\\s*=\\s*\"([^\"]*)\"\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"uni_headColor\"",
+      "uni_hip": "(?s)defaultValue\\s*=\\s*\"([^\"]*)\"\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"uni_hip\"",
+      "uni_hip_color": "(?s)defaultValue\\s*=\\s*\"([^\"]*)\"\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"uni_hipColor\"",
+      "uni_l_arm": "(?s)defaultValue\\s*=\\s*\"([^\"]*)\"\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"uni_lArm\"",
+      "uni_l_arm_color": "(?s)defaultValue\\s*=\\s*\"([^\"]*)\"\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"uni_lArmColor\"",
+      "uni_l_hand": "(?s)defaultValue\\s*=\\s*\"([^\"]*)\"\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"uni_lHand\"",
+      "uni_l_hand_color": "(?s)defaultValue\\s*=\\s*\"([^\"]*)\"\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"uni_lHandColor\"",
+      "uni_l_leg": "(?s)defaultValue\\s*=\\s*\"([^\"]*)\"\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"uni_lLeg\"",
+      "uni_l_leg_color": "(?s)defaultValue\\s*=\\s*\"([^\"]*)\"\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"uni_lLegColor\"",
+      "uni_pack": "(?s)defaultValue\\s*=\\s*\"([^\"]*)\"\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"uni_pack\"",
+      "uni_pack_color": "(?s)defaultValue\\s*=\\s*\"([^\"]*)\"\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"uni_packColor\"",
+      "uni_r_arm": "(?s)defaultValue\\s*=\\s*\"([^\"]*)\"\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"uni_rArm\"",
+      "uni_r_arm_color": "(?s)defaultValue\\s*=\\s*\"([^\"]*)\"\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"uni_rArmColor\"",
+      "uni_r_hand": "(?s)defaultValue\\s*=\\s*\"([^\"]*)\"\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"uni_rHand\"",
+      "uni_r_hand_color": "(?s)defaultValue\\s*=\\s*\"([^\"]*)\"\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"uni_rHandColor\"",
+      "uni_r_leg": "(?s)defaultValue\\s*=\\s*\"([^\"]*)\"\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"uni_rLeg\"",
+      "uni_r_leg_color": "(?s)defaultValue\\s*=\\s*\"([^\"]*)\"\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"uni_rLegColor\"",
+      "uni_second_pack": "(?s)defaultValue\\s*=\\s*\"([^\"]*)\"\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"uni_secondPack\"",
+      "uni_second_pack_color": "(?s)defaultValue\\s*=\\s*\"([^\"]*)\"\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"uni_secondPackColor\"",
+      "uni_torso_color": "(?s)defaultValue\\s*=\\s*\"([^\"]*)\"\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"uni_torsoColor\"",
+      "uni_chest": "(?s)defaultValue\\s*=\\s*\"([^\"]*)\"\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"uni_chest\"",
+      "team_bot_fill": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"botFillLimit\"",
+      "captain_player_type": "(?s)defaultValue\\s*=\\s*nameToID\\(\\s*(\\w+)\\s*\\)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"captain_playerDatablock\"",
+      "captain_equip_0": "(?s)defaultValue\\s*=\\s*nameToID\\(\\s*(\\w+)\\s*\\)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"captain_startEquip0\"",
+      "captain_equip_1": "(?s)defaultValue\\s*=\\s*nameToID\\(\\s*(\\w+)\\s*\\)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"captain_startEquip1\"",
+      "captain_equip_2": "(?s)defaultValue\\s*=\\s*nameToID\\(\\s*(\\w+)\\s*\\)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"captain_startEquip2\"",
+      "captain_equip_3_none": "(?s)defaultValue\\s*=\\s*0\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"captain_startEquip3\"",
+      "captain_equip_4_none": "(?s)defaultValue\\s*=\\s*0\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"captain_startEquip4\"",
+      "team_chat": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"enableTeamChat\"",
+      "team_hide_kills": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"hideKillMsgs\"",
+      "team_chat_color": "(?s)defaultValue\\s*=\\s*\"([^\"]*)\"\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"chatColor\"",
+      "team_spectate": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"spectate\""
+    },
+    "server/core/Slayer_AiController.cs": {
+      "skin_1": "SkinColor\\[1\\]\\s*=\\s*\"([^\"]+)\"",
+      "skin_2": "SkinColor\\[2\\]\\s*=\\s*\"([^\"]+)\"",
+      "skin_3": "SkinColor\\[3\\]\\s*=\\s*\"([^\"]+)\"",
+      "skin_4": "SkinColor\\[4\\]\\s*=\\s*\"([^\"]+)\"",
+      "skin_count": "SkinColorCount\\s*=\\s*4\\s*;"
+    },
+    "GameConnection::applyUniform": {
+      "full_hat": "case\\s+2\\s*:[\\s\\S]*?hideAllNodes\\(\\s*%player\\s*\\)[\\s\\S]*?unHideNode\\(\\s*copHat\\s*\\)",
+      "skin_pick": "getRandom\\(\\s*\\$Slayer::Server::Bots::SkinColorCount\\s*\\)",
+      "skin_default": "%player\\.skinColor\\s*=\\s*\"([^\"]+)\"",
+      "team_color": "%val\\s*\\$=\\s*\"TEAMCOLOR\""
+    },
+    "GameConnection::createPlayer": {
+      "player_type": "changeDatablock\\(\\s*%team\\.playerDatablock\\s*\\)",
+      "equip": "forceEquip\\(\\s*%i\\s*,\\s*%team\\.startEquip\\[%i\\]\\s*\\)",
+      "scale": "%team\\.playerScale\\s*\\)\\s*!=\\s*1",
+      "respawn": "%team\\.respawnTime\\s*>=\\s*0"
+    },
+    "Slayer_TeamSO::updateRespawnTime": {
+      "clamp": "mClampF\\(\\s*%time\\s*,\\s*1000\\s*,\\s*999999\\s*\\)"
+    },
+    "server/defaults/game-modes.cs": {
+      "dm_class": "Slayer_DefaultGameModeTemplateSG\\)\\s*\\{[^}]*?className\\s*=\\s*\"(\\w+)\"",
+      "dm_name": "Slayer_DefaultGameModeTemplateSG\\)\\s*\\{[^}]*?uiName\\s*=\\s*\"([^\"]+)\"",
+      "dm_no_teams": "Slayer_DefaultGameModeTemplateSG\\)\\s*\\{[^}]*?useTeams\\s*=\\s*false",
+      "tdm_class": "new\\s+ScriptGroup\\(\\s*Slayer_GameModeTemplateSG\\s*\\)\\s*\\{[^}]*?className\\s*=\\s*\"(\\w+)\"",
+      "tdm_name": "new\\s+ScriptGroup\\(\\s*Slayer_GameModeTemplateSG\\s*\\)\\s*\\{[^}]*?uiName\\s*=\\s*\"([^\"]+)\""
+    },
+    "Slayer_MiniGameSO::victoryCheck_Lives": {
+      "team_dead": "!\\s*%t\\.isTeamDead\\(\\)",
+      "allies": "teams_allySameColors\\s*&&\\s*%t\\.color\\s*==\\s*%winnerColor",
+      "last_one": "%count\\s*==\\s*1\\s*\\)\\s*return\\s*%winner"
+    },
+    "Slayer_MiniGameSO::victoryCheck_Points": {
+      "team": "%t\\.getScore\\(\\)\\s*>=\\s*%this\\.points",
+      "player": "%cl\\.score\\s*>=\\s*%this\\.points"
+    },
+    "Slayer_MiniGameSO::victoryCheck_Time": {
+      "minutes": "%this\\.time\\s*\\*\\s*60000",
+      "win_on_time_up": "%t\\.winOnTimeUp",
+      "ties": "%sc\\s*==\\s*%least\\s*&&\\s*%least\\s*>\\s*0",
+      "announce": "remaining\\."
+    },
+    "Slayer_MiniGameSO::preRoundCountdownTick": {
+      "remain": "%this\\.preRoundSeconds\\s*-\\s*%ticks",
+      "go": "GO!",
+      "begin_sound": "play2dAll\\(\\s*Slayer_Begin_Sound\\s*\\)",
+      "voice": "\"Slayer_\"\\s*@\\s*%remain\\s*@\\s*\"_Seconds_Sound\"",
+      "freeze": "changeDatablock\\(\\s*PlayerFrozenArmor\\s*\\)",
+      "bots_rest": "%ai\\.player\\.stopHoleLoop\\(\\)"
+    },
+    "Slayer_MiniGameSO::startRound": {
+      "thaw": "getID\\(\\)\\s*==\\s*PlayerFrozenArmor\\.getID\\(\\)[\\s\\S]*?playerDatablock[\\s\\S]*?changeDatablock\\(\\s*%db\\s*\\)",
+      "bots_play": "%ai\\.player\\.resetHoleLoop\\(\\)"
+    },
+    "PlayerFrozenArmor::onTrigger": {
+      "nothing": "^\\s*return\\s*;\\s*$"
+    },
+    "serverCmdUseTool": {
+      "frozen": "getID\\(\\)\\s*!=\\s*PlayerFrozenArmor\\.getID\\(\\)"
+    },
+    "server/core/resources/playertypes/Player_Frozen.cs": {
+      "frozen": "datablock\\s+PlayerData\\s*\\(\\s*PlayerFrozenArmor\\s*:\\s*PlayerStandardArmor\\s*\\)",
+      "third_person": "thirdPersonOnly\\s*=\\s*1\\s*;"
+    },
+    "Slayer_MiniGameSO::endRound": {
+      "dead": "setDead\\(\\s*true\\s*\\)",
+      "camera": "allowMoveWhileResetting[\\s\\S]*setMode\\(\\s*corpse\\s*,\\s*%winner\\.player\\s*\\)",
+      "reset_time": "%this\\.timeBetweenRounds\\s*\\*\\s*1000",
+      "nobody": "Nobody won this round",
+      "eorr_title": "\\\\\"(End of Round Report)\\\\\"",
+      "eorr_send": "if\\s*\\(\\s*%this\\.eorrEnable\\s*\\)\\s*%this\\.sendScoreListAll\\(\\)",
+      "countdown": "Resetting in",
+      "custom_win": "getField\\(\\s*%winner\\s*,\\s*0\\s*\\)\\s*\\$=\\s*\"CUSTOM\"[\\s\\S]*?<color:ffff00>%1 \\\\c5won this round\\.",
+      "bots_out": "%ai\\.setDead\\(\\s*true\\s*\\)[\\s\\S]*?if\\(\\s*!%this\\.allowMoveWhileResetting\\s*\\)[\\s\\S]*?stopHoleLoop\\(\\)"
+    },
+    "Slayer_MiniGameSO::sendScoreListAll": {
+      "eorr_score": "%var3\\s*=\\s*\"([^\"]+)\"\\s*;",
+      "eorr_kills": "%var4\\s*=\\s*\"([^\"]+)\"\\s*;",
+      "eorr_deaths": "%var5\\s*=\\s*\"([^\"]+)\"\\s*;",
+      "eorr_wins": "%var6\\s*=\\s*\"([^\"]+)\"\\s*;",
+      "eorr_victory": "%cl\\.roundWon\\s*\\?\\s*\"([^\"]+)\"\\s*:",
+      "eorr_defeat": "%cl\\.roundWon\\s*\\?\\s*\"[^\"]+\"\\s*:\\s*\"([^\"]+)\"",
+      "eorr_victory_option": "if\\s*\\(\\s*%this\\.eorrDisplayVictory\\s*\\)",
+      "eorr_team_option": "useTeams\\s*&&\\s*%this\\.Teams\\.getCount\\(\\)\\s*>\\s*0\\s*&&\\s*%this\\.eorrDisplayTeamScores",
+      "eorr_teams": "<b>([^<]+)</b><br>",
+      "eorr_players": "<br><b>([^<]+)</b><br>",
+      "eorr_sorted": "getTeamListSortedScore\\(\\)[\\s\\S]*getMemberListSortedScore\\(\\)",
+      "eorr_team_tally": "%t\\.getKills\\(\\)\\s*;\\s*%var5\\s*=\\s*%t\\.getDeaths\\(\\)\\s*;\\s*%var6\\s*=\\s*%t\\.wins",
+      "eorr_player_wins": "%var6\\s*=\\s*\\(\\s*%team\\s*>\\s*0\\s*\\?\\s*\"\"\\s*:\\s*%cl\\.wins\\s*\\)"
+    },
+    "Slayer_MiniGameSO::Reset": {
+      "lives": "setLives\\(\\s*\\(\\s*isObject\\(\\s*%t\\s*\\)\\s*&&\\s*%t\\.lives\\s*>=\\s*0\\s*\\)\\s*\\?\\s*%t\\.lives\\s*:\\s*%this\\.lives\\s*\\)",
+      "tally_reset": "%cl\\.setKills\\(\\s*0\\s*\\)\\s*;\\s*%cl\\.setDeaths\\(\\s*0\\s*\\)",
+      "bots": "%ai\\.setDead\\(\\s*0\\s*\\)\\s*;\\s*%ai\\.setLives\\("
+    },
+    "Slayer_MiniGameSO::removeMember": {
+      "lives": "victoryCheck_Lives\\(\\)"
+    },
+    "server/core/GameConnection.cs": {
+      "lose_life": "addLives\\(\\s*-1\\s*\\)\\s*;\\s*if\\s*\\(\\s*%this\\.getLives\\(\\)\\s*<=\\s*0\\s*\\)\\s*%this\\.setDead\\(\\s*1\\s*\\)",
+      "lives_left": "You have \\\\c3",
+      "points": "setScore[\\s\\S]*victoryCheck_Points\\(\\)",
+      "spectate_delay": "scheduleNoQuota\\(\\s*(\\d+)\\s*,\\s*\"spectateInit\"\\s*\\)",
+      "death_grace": "getSimTime\\(\\)\\s*-\\s*%client\\.lastDeathTime\\s*<\\s*(\\d+)",
+      "next_key": "%button\\s*==\\s*0\\s*&&\\s*%camera\\.isOrbitMode\\(\\)\\s*\\)\\s*\\{?\\s*%client\\.spectateNextTarget\\(\\)",
+      "previous_key": "%button\\s*==\\s*4\\s*&&\\s*%camera\\.isOrbitMode\\(\\)\\s*\\)\\s*\\{?\\s*%client\\.spectatePrevTarget\\(\\)",
+      "mode_key": "%button\\s*==\\s*2\\s*\\)\\s*\\{?\\s*%client\\.spectateChangeMode\\(\\)",
+      "light_key": "%client\\.isSpectator\\s*\\)\\s*\\{?\\s*%client\\.spectateChangeMode\\(\\)",
+      "cp_lift": "%pos\\s*=\\s*vectorAdd\\(\\s*%obj\\.position\\s*,\\s*\"0 0 ([\\d.]+)\"\\s*\\)",
+      "cp_orbit": "setOrbitPointMode\\(\\s*%pos\\s*,\\s*([\\d.]+)\\s*\\)",
+      "auto_high": "%relStartTransformZ\\s*=\\s*\"0 0 ([\\d.]+)\"",
+      "auto_low": "%relEndTransformZ\\s*=\\s*\"0 0 ([\\d.]+)\"",
+      "auto_far": "getForwardVector\\(\\)\\s*,\\s*-([\\d.]+)\\s*\\)\\s*,\\s*%startTransform",
+      "auto_near": "getForwardVector\\(\\)\\s*,\\s*-([\\d.]+)\\s*\\)\\s*,\\s*%endTransform",
+      "auto_glide": "pushBack\\(\\s*%startTransform\\s*,\\s*(\\d+)\\s*,\\s*\"Normal\"\\s*,\\s*\"Linear\"\\s*\\)",
+      "auto_clear": "containerRayCast\\(\\s*%startTransform\\s*,\\s*%endTransform\\s*,\\s*%mask\\s*,\\s*%obj\\.player\\s*\\)",
+      "auto_fov": "setControlCameraFOV\\(\\s*(\\d+)\\s*\\)",
+      "auto_retry": "scheduleNoQuota\\(\\s*(\\d+)\\s*,\\s*\"spectateAutoCam\"\\s*\\)",
+      "tally": "%this\\.addDeaths\\(\\s*1\\s*\\)\\s*;[^;]*if\\s*\\(\\s*%killer\\s*!=\\s*%this\\s*&&\\s*isFunction\\(\\s*%killerClass\\s*,\\s*addKills\\s*\\)\\s*\\)\\s*%killer\\.addKills\\(\\s*1\\s*\\)",
+      "fires_death": "\\$InputTarget_\\[\\s*\"Client\\(Killer\\)\"\\s*\\]\\s*=\\s*%killer\\s*;[\\s\\S]*?processMultiSourceInputEvent\\(\\s*\"onMinigameDeath\"\\s*,\\s*%this\\s*,\\s*%mini\\s*\\)"
+    },
+    "Slayer_PathCamData::onNode": {
+      "fly_end": "%node\\s*==\\s*%cam\\.numNodes\\s*-\\s*1",
+      "fly_jump": "%cam\\.nodeJump\\[\\s*%node\\s*\\+\\s*1\\s*\\]\\s*\\)[\\s\\S]*?setPosition\\(\\s*%node\\s*\\+\\s*1\\s*\\)"
+    },
+    "Slayer_SpectatePathCamData::onNode": {
+      "auto_next": "%node\\s*==\\s*2\\s*\\)[\\s\\S]*?%camera\\.client\\.spectateAutoCam\\(\\)"
+    },
+    "server/modules/FlyThroughCam.cs": {
+      "fly_max_nodes": "Slayer_PathCamData\\s*:\\s*Observer\\s*\\)\\s*\\{[^}]*?maxNodes\\s*=\\s*(\\d+)",
+      "fly_default_speed": "Slayer_PathCamData\\s*:\\s*Observer\\s*\\)\\s*\\{[^}]*?defaultSpeed\\s*=\\s*(\\d+)",
+      "fly_play_on_reset": "(?s)title\\s*=\\s*\"Play At Beginning of Round\"\\s*;\\s*defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;",
+      "fly_during_countdown": "(?s)title\\s*=\\s*\"Countdown During Fly-Thru\"\\s*;\\s*defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;",
+      "fly_rounds_between": "(?s)title\\s*=\\s*\"Rounds Between Fly-Thrus\"\\s*;\\s*defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;",
+      "fly_starts_round": "%cam\\.startRound\\s*&&\\s*!\\s*%mini\\.flyCam_playDuringCountdown",
+      "fly_rounds": "flyCam_roundsPassed\\s*>\\s*%this\\.flyCam_roundsBetweenFlyThroughs",
+      "fly_countdown_ends": "%remain\\s*<=\\s*0[\\s\\S]*?flyCam_lastControlObject",
+      "fly_jump_kink": "if\\s*\\(\\s*%type\\s*\\$=\\s*\"\"\\s*\\)\\s*%type\\s*=\\s*\"Kink\"",
+      "fly_create_skips": "addNode\\([^;]*\\)\\s*;\\s*%this\\.flyCam\\.setPosition\\(\\s*1\\.0\\s*\\)\\s*;\\s*%this\\.flyCam\\.popFront\\(\\)",
+      "out_fly_through": "registerOutputEvent\\(\\s*\"?(?i:Minigame)\"?\\s*,\\s*\"StartFlyThrough\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
+      "fly_restricted": "RestrictedEvent__\\[\\s*\"Minigame\"\\s*,\\s*\"startFlyThrough\"\\s*\\]\\s*=\\s*(-?\\d+)\\s*;",
+      "pathcam_load": "importMinigamePreferences[\\s\\S]*?\"\\.pathcam\"[\\s\\S]*?createPathCamera[\\s\\S]*?addNode",
+      "pathcam_save": "exportMinigamePreferences[\\s\\S]*?\"\\.pathcam\"[\\s\\S]*?nodeJump",
+      "pathcam_delete": "\\.flyCam\\.delete\\(\\)[\\s\\S]*?\"\\.pathcam\"[\\s\\S]*?fileDelete"
+    },
+    "server/core/resources/datablocks.cs": {
+      "team_spawn_brick": "datablock\\s+FxDtsBrickData\\s*\\(\\s*brickSlyrSpawnPointData\\s*:\\s*brickSpawnPointData\\s*\\)",
+      "cp_ticks": "brickSlyrCPData\\s*:\\s*\\w+\\s*\\)\\s*\\{[^}]*?slyrType\\s*=\\s*\"CP\"[^}]*?CPMaxTicks\\s*=\\s*(\\d+)",
+      "lrg_cp_ticks": "brickSlyrLrgCPData\\s*:\\s*\\w+\\s*\\)\\s*\\{[^}]*?slyrType\\s*=\\s*\"CP\"[^}]*?CPMaxTicks\\s*=\\s*(\\d+)",
+      "cp_trigger": "TriggerData\\(\\s*Slayer_CPTriggerData\\s*\\)\\s*\\{\\s*tickPeriodMS\\s*=\\s*\\$Pref::Slayer::Server::CPTriggerTickMS\\s*;"
+    },
+    "FxDtsBrick::createTrigger": {
+      "above": "vectorAdd\\(\\s*%boxDiff\\s*,\\s*\"0 0 0\\.2\"\\s*\\)"
+    },
+    "Slayer_CPTriggerData::onTickTrigger": {
+      "full": "%brick\\.capture\\[%attCol\\]\\s*<\\s*%maxTicks",
+      "fill": "%brick\\.capture\\[%attCol\\]\\s*\\+\\+",
+      "first_ease": "scheduleNoQuota\\(\\s*%this\\.tickPeriodMS\\s*\\+\\s*1000\\s*,\\s*decreaseCapture",
+      "bar": "%client\\.bottomPrint\\(\\s*\"<just:center>\"\\s*@\\s*%a\\s*@\\s*%d\\s*,\\s*1",
+      "transition": "%mini\\.CPTransitionColors[\\s\\S]*getAverageColor\\(\\s*%rgb\\s*,\\s*%team\\.colorRGB\\s*\\)[\\s\\S]*getClosestPaintColor",
+      "capture": "setCPControl\\(\\s*%attCol\\s*,\\s*0\\s*,\\s*%client\\s*\\)",
+      "cp_locked_text": "if\\s*\\(\\s*%brick\\.isLocked\\[%attCol\\]\\s*\\)\\s*%client\\.bottomPrint\\(\\s*\"<just:center>\\\\c5([^\"]*)\""
+    },
+    "Slayer_CPTriggerData::decreaseCapture": {
+      "held": "%cl\\.slyrTeam\\.color\\s*==\\s*%color\\s*\\)\\s*return",
+      "ease": "%brick\\.capture\\[%color\\]\\s*--",
+      "empty": "%brick\\.capture\\[%color\\]\\s*<=\\s*0\\s*\\)\\s*%brick\\.setColor\\(\\s*%defCol\\s*\\)",
+      "next": "scheduleNoQuota\\(\\s*%this\\.tickPeriodMS\\s*,\\s*decreaseCapture"
+    },
+    "FxDtsBrick::setCPControl": {
+      "score": "incScore\\(\\s*%mini\\.points_cp\\s*\\)",
+      "paint": "%this\\.setColor\\(\\s*%color\\s*\\)",
+      "reset_event": "processInputEvent\\(\\s*\"onCPReset\"",
+      "capture_event": "processInputEvent\\(\\s*\"onCPCapture\"",
+      "team_event": "\"onCPCapture\\(Team\"\\s*@\\s*%i\\s*\\+\\s*1\\s*@\\s*\"\\)\""
+    },
+    "Slayer_MiniGameSO::resetCapturePoints": {
+      "reset": "setCPControl\\(\\s*%cp\\.origColor\\s*,\\s*1"
+    },
+    "serverCmdSlayer": {
+      "rules": "The last %2 standing wins",
+      "custom": "%mini\\.customRule"
+    },
+    "server/core/FxDtsBrick.cs": {
+      "out_team_control": "registerOutputEvent\\(\\s*\"?(?i:FxDtsBrick)\"?\\s*,\\s*\"setTeamControl\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
+      "out_team_control_locked": "registerOutputEvent\\(\\s*\"?(?i:FxDtsBrick)\"?\\s*,\\s*\"setTeamControlLocked\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
+      "out_add_lives": "registerOutputEvent\\(\\s*\"?(?i:GameConnection)\"?\\s*,\\s*\"addLives\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
+      "out_add_deaths": "registerOutputEvent\\(\\s*\"?(?i:GameConnection)\"?\\s*,\\s*\"addDeaths\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
+      "out_add_kills": "registerOutputEvent\\(\\s*\"?(?i:GameConnection)\"?\\s*,\\s*\"addKills\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
+      "out_set_lives": "registerOutputEvent\\(\\s*\"?(?i:GameConnection)\"?\\s*,\\s*\"setLives\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
+      "out_set_deaths": "registerOutputEvent\\(\\s*\"?(?i:GameConnection)\"?\\s*,\\s*\"setDeaths\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
+      "out_set_kills": "registerOutputEvent\\(\\s*\"?(?i:GameConnection)\"?\\s*,\\s*\"setKills\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
+      "out_join_team": "registerOutputEvent\\(\\s*\"?(?i:GameConnection)\"?\\s*,\\s*\"joinTeam\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
+      "out_inc_time": "registerOutputEvent\\(\\s*\"?(?i:Minigame)\"?\\s*,\\s*\"incTimeRemaining\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
+      "out_set_time": "registerOutputEvent\\(\\s*\"?(?i:Minigame)\"?\\s*,\\s*\"setTimeRemaining\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
+      "out_win": "registerOutputEvent\\(\\s*\"?(?i:Minigame)\"?\\s*,\\s*\"Win\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
+      "out_check_team": "registerOutputEvent\\(\\s*\"?(?i:FxDtsBrick)\"?\\s*,\\s*\"checkTeam\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
+      "out_check_team_count": "registerOutputEvent\\(\\s*\"?(?i:FxDtsBrick)\"?\\s*,\\s*\"checkTeamCount\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
+      "check_team_outcomes": "registerInputEvent\\(\\s*\"?(?i:fxDTSBrick)\"?\\s*,\\s*\"onTeamCheckTrue\"\\s*,\\s*\"Self fxDTSBrick\"\\s*TAB\\s*\"Player Player\"\\s*TAB\\s*\"Client GameConnection\"\\s*TAB\\s*\"MiniGame MiniGame\"\\s*TAB\\s*\"OwnerPlayer Player\"\\s*TAB\\s*\"OwnerClient GameConnection\"",
+      "team_client_target": "registerEventTarget\\(\\s*\"Team\\(Client\\) Slayer_TeamSO\"\\s*,\\s*\"GameConnection\"\\s*,\\s*\"%client\\.slyrTeam\"\\s*\\)",
+      "team_brick_target": "registerEventTarget\\(\\s*\"Team\\(Brick\\) Slayer_TeamSO\"\\s*,\\s*\"FxDtsBrick\"\\s*,\\s*\"%this\\.getTeamControlList\\(\\)\"\\s*\\)",
+      "out_team_bottom_print": "registerOutputEvent\\(\\s*\"?(?i:Slayer_TeamSO)\"?\\s*,\\s*\"BottomPrintAll\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
+      "out_team_center_print": "registerOutputEvent\\(\\s*\"?(?i:Slayer_TeamSO)\"?\\s*,\\s*\"CenterPrintAll\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
+      "out_team_chat": "registerOutputEvent\\(\\s*\"?(?i:Slayer_TeamSO)\"?\\s*,\\s*\"ChatMsgAll\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
+      "out_team_respawn": "registerOutputEvent\\(\\s*\"?(?i:Slayer_TeamSO)\"?\\s*,\\s*\"RespawnAll\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
+      "out_team_inc_score": "registerOutputEvent\\(\\s*\"?(?i:Slayer_TeamSO)\"?\\s*,\\s*\"IncScore\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
+      "touch_team_inputs": "registerInputEvent\\(\\s*FxDtsBrick\\s*,\\s*\"onPlayerTouch\\(Team\"\\s*@\\s*%i\\s*@\\s*\"\\)\"\\s*,\\s*\"Self FxDtsBrick\\\\tPlayer Player\\\\tClient GameConnection\\\\tMiniGame MiniGame\"\\s*\\)",
+      "activate_team_inputs": "registerInputEvent\\(\\s*FxDtsBrick\\s*,\\s*\"onActivate\\(Team\"\\s*@\\s*%i\\s*@\\s*\"\\)\"\\s*,\\s*\"Self FxDtsBrick\\\\tPlayer Player\\\\tClient GameConnection\\\\tMiniGame MiniGame\"\\s*\\)",
+      "team_inputs_up_to": "%i\\s*<=\\s*\\$Pref::Slayer::Server::Teams::maxEvents\\s*;",
+      "touch_team_fires": "processInputEvent\\(\\s*\"onPlayerTouch\\(Team\"\\s*@\\s*%team\\.getGroup\\(\\)\\.indexOf\\(%team\\)\\s*\\+\\s*1\\s*@\\s*\"\\)\"\\s*,\\s*%client\\s*\\)",
+      "activate_team_fires": "processInputEvent\\(\\s*\"onActivate\\(Team\"\\s*@\\s*%team\\.getGroup\\(\\)\\.indexOf\\(%team\\)\\s*\\+\\s*1\\s*@\\s*\"\\)\"\\s*,\\s*%client\\s*\\)",
+      "minigame_death_input": "registerMultiSourceInputEvent\\(\\s*FxDtsBrick\\s*,\\s*\"onMinigameDeath\"\\s*,\\s*\"Self FxDtsBrick\\\\tClient GameConnection\\\\tPlayer\\(Killer\\) Player\\\\tClient\\(Killer\\) GameConnection\\\\tMiniGame MiniGame\"\\s*\\)",
+      "minigame_join_input": "registerMultiSourceInputEvent\\(\\s*FxDtsBrick\\s*,\\s*\"onMinigameJoin\"\\s*,\\s*\"Self FxDtsBrick\\\\tPlayer Player\\\\tClient GameConnection\\\\tMiniGame MiniGame\"\\s*\\)",
+      "minigame_leave_input": "registerMultiSourceInputEvent\\(\\s*FxDtsBrick\\s*,\\s*\"onMinigameLeave\"\\s*,\\s*\"Self FxDtsBrick\\\\tPlayer Player\\\\tClient GameConnection\\\\tMiniGame MiniGame\"\\s*\\)",
+      "minigame_roundstart_input": "registerMultiSourceInputEvent\\(\\s*FxDtsBrick\\s*,\\s*\"onMinigameRoundStart\"\\s*,\\s*\"Self FxDtsBrick\\\\tMiniGame MiniGame\"\\s*\\)",
+      "minigame_roundend_input": "registerMultiSourceInputEvent\\(\\s*FxDtsBrick\\s*,\\s*\"onMinigameRoundEnd\"\\s*,\\s*\"Self FxDtsBrick\\\\tMiniGame MiniGame\"\\s*\\)",
+      "restrict_on": "isSlayerMinigame\\(\\s*%mini\\s*\\)\\s*&&\\s*%mini\\.restrictOutputEvents",
+      "restrict_check": "!\\s*%mini\\.canEdit\\(\\s*%client\\s*,\\s*\\$Slayer::Server::Events::RestrictedEvent__\\[\\s*%target\\s*,\\s*%outputEvent\\s*\\]\\s*\\)",
+      "restrict_mg_bottom_print_all": "RestrictedEvent__\\[\\s*\"Minigame\"\\s*,\\s*\"BottomPrintAll\"\\s*\\]\\s*=\\s*(-?\\d+)\\s*;",
+      "restrict_mg_center_print_all": "RestrictedEvent__\\[\\s*\"Minigame\"\\s*,\\s*\"CenterPrintAll\"\\s*\\]\\s*=\\s*(-?\\d+)\\s*;",
+      "restrict_mg_chat_msg_all": "RestrictedEvent__\\[\\s*\"Minigame\"\\s*,\\s*\"ChatMsgAll\"\\s*\\]\\s*=\\s*(-?\\d+)\\s*;",
+      "restrict_mg_inc_time_remaining": "RestrictedEvent__\\[\\s*\"Minigame\"\\s*,\\s*\"incTimeRemaining\"\\s*\\]\\s*=\\s*(-?\\d+)\\s*;",
+      "restrict_mg_reset": "RestrictedEvent__\\[\\s*\"Minigame\"\\s*,\\s*\"Reset\"\\s*\\]\\s*=\\s*(-?\\d+)\\s*;",
+      "restrict_mg_respawn_all": "RestrictedEvent__\\[\\s*\"Minigame\"\\s*,\\s*\"RespawnAll\"\\s*\\]\\s*=\\s*(-?\\d+)\\s*;",
+      "restrict_mg_set_time_remaining": "RestrictedEvent__\\[\\s*\"Minigame\"\\s*,\\s*\"setTimeRemaining\"\\s*\\]\\s*=\\s*(-?\\d+)\\s*;",
+      "restrict_mg_win": "RestrictedEvent__\\[\\s*\"Minigame\"\\s*,\\s*\"Win\"\\s*\\]\\s*=\\s*(-?\\d+)\\s*;",
+      "restrict_team_bottom_print_all": "RestrictedEvent__\\[\\s*\"Slayer_TeamSO\"\\s*,\\s*\"BottomPrintAll\"\\s*\\]\\s*=\\s*(-?\\d+)\\s*;",
+      "restrict_team_center_print_all": "RestrictedEvent__\\[\\s*\"Slayer_TeamSO\"\\s*,\\s*\"CenterPrintAll\"\\s*\\]\\s*=\\s*(-?\\d+)\\s*;",
+      "restrict_team_chat_msg_all": "RestrictedEvent__\\[\\s*\"Slayer_TeamSO\"\\s*,\\s*\"ChatMsgAll\"\\s*\\]\\s*=\\s*(-?\\d+)\\s*;",
+      "restrict_team_respawn_all": "RestrictedEvent__\\[\\s*\"Slayer_TeamSO\"\\s*,\\s*\"RespawnAll\"\\s*\\]\\s*=\\s*(-?\\d+)\\s*;",
+      "restrict_team_inc_score": "RestrictedEvent__\\[\\s*\"Slayer_TeamSO\"\\s*,\\s*\"IncScore\"\\s*\\]\\s*=\\s*(-?\\d+)\\s*;"
+    },
+    "FxDtsBrick::setTeamControl": {
+      "spawn_control": "case\\s+\"TeamSpawn\"\\s+or\\s+\"TeamVehicle\"\\s*:\\s*%this\\.controlColor\\s*=\\s*%color\\s*;",
+      "cp_control": "case\\s+\"CP\"\\s*:\\s*%this\\.setCPControl\\(\\s*%color\\s*,\\s*0\\s*,\\s*%client\\s*\\)"
+    },
+    "FxDtsBrick::setTeamControlLocked": {
+      "lock_clears": "%this\\.isLocked\\[%color\\]\\s*=\\s*%flag\\s*;\\s*if\\s*\\(\\s*%color\\s*!=\\s*%brColor\\s*\\)\\s*%this\\.capture\\[%color\\]\\s*=\\s*0\\s*;"
+    },
+    "fxDTSBrick::checkTeam": {
+      "allied": "%pass\\s*=\\s*%team\\.isAlliedTeam\\(\\s*%checkTeam\\s*\\)",
+      "row_range": "getWordCount\\(\\s*%eventnums\\s*\\)\\s*!=\\s*2"
+    },
+    "fxDTSBrick::checkTeamCount": {
+      "count_ops": "case\\s+0\\s*:\\s*%pass\\s*=\\s*%checkteam\\.numMembers\\s*>=\\s*%check\\s*;\\s*case\\s+1\\s*:\\s*%pass\\s*=\\s*%checkteam\\.numMembers\\s*<=\\s*%check\\s*;\\s*case\\s+2\\s*:\\s*%pass\\s*=\\s*%checkteam\\.numMembers\\s*==\\s*%check\\s*;\\s*case\\s+3\\s*:\\s*%pass\\s*=\\s*%checkteam\\.numMembers\\s*!=\\s*%check\\s*;"
+    },
+    "Slayer_MiniGameSO::incTimeRemaining": {
+      "time_extended": "messageAll\\(\\s*''\\s*,\\s*\"\\\\c5([^\"\\\\]*)\\\\c3\"\\s*SPC\\s*%flag",
+      "round_half": "%rmndr\\s*>=\\s*15000"
+    },
+    "Slayer_MiniGameSO::setTimeRemaining": {
+      "time_set_to": "messageAll\\(\\s*''\\s*,\\s*\"\\\\c5([^\"\\\\]*)\\\\c3\"\\s*SPC\\s*%flag"
+    },
+    "MiniGameSO::Win": {
+      "win_modes": "case\\s+0\\s*:[\\s\\S]*?endRound\\(\\s*%client\\s*\\)[\\s\\S]*?case\\s+1\\s*:[\\s\\S]*?endRound\\(\\s*%team\\s*\\)[\\s\\S]*?case\\s+2\\s*:[\\s\\S]*?findClientByName\\(\\s*%flag\\s*\\)[\\s\\S]*?case\\s+3\\s*:[\\s\\S]*?getTeamFromName\\(\\s*%flag\\s*\\)[\\s\\S]*?case\\s+4\\s*:[\\s\\S]*?%this\\.endRound\\(\\s*\"CUSTOM\"\\s*TAB\\s*%flag\\s*\\)"
+    },
+    "GameConnection::joinTeam": {
+      "join_named": "%team\\.addMember\\(\\s*%this\\s*,\\s*%reason\\s*,\\s*%noRespawn\\s*,\\s*%noRespawn\\s*\\)"
+    },
+    "Slayer_TeamSO::chatMsgAll": {
+      "team_name_sub": "strReplace\\(\\s*%msg\\s*,\\s*\"%1\"\\s*,\\s*%client\\.getPlayerName\\(\\)\\s*\\)"
+    },
+    "Slayer_TeamSO::respawnAll": {
+      "team_respawn_all": "\\.member\\[%i\\]\\.spawnPlayer\\(\\)"
+    },
+    "Slayer_TeamSO::setArtificialScore": {
+      "team_points_win": "%winner\\s*=\\s*%mini\\.victoryCheck_Points\\(\\)"
+    },
+    "Slayer_TeamSO::onMinigameReset": {
+      "team_points_reset": "points\\s*>\\s*0\\s*\\)\\s*%this\\.setArtificialScore\\(\\s*0\\s*\\)",
+      "bots": "useTeams\\s*&&\\s*!%mini\\.teams_shuffleTeams\\s*\\)\\s*%this\\.botFillTeam\\(\\)"
+    },
+    "Slayer_TeamSO::getScore": {
+      "team_score_own": "%score\\s*=\\s*%this\\.getArtificialScore\\(\\)"
+    },
+    "Slayer_TeamSO::botFillTeam": {
+      "trim": "while\\(\\s*%this\\.numMembers\\s*>\\s*%limit\\s*&&\\s*%this\\.numMembers\\[\"AiController\"\\]\\s*>\\s*0\\s*\\)",
+      "fill": "while\\(\\s*%this\\.numMembers\\s*<\\s*%limit\\s*\\)[\\s\\S]*?%this\\.minigame\\.addBotToGame\\(\\)"
+    },
+    "Slayer_TeamSO::updateBotFillLimit": {
+      "needs": "\\$AddOnLoaded__\\[\"Bot_Hole\"\\]\\s*&&\\s*\\$AddOnLoaded__\\[\"Bot_Blockhead\"\\]",
+      "refuse": "%this\\.botFillLimit\\s*=\\s*-1"
+    },
+    "Slayer_TeamSO::onRemove": {
+      "bots": "%this\\.deleteAllBots\\(\\)"
+    },
+    "Slayer_TeamSO::addMember": {
+      "humans": "if\\(\\s*%class\\s*\\$=\\s*\"GameConnection\"\\s*\\)\\s*\\{"
+    },
+    "Slayer_TeamSO::onAddMember": {
+      "fill": "%this\\.botFillLimit\\s*>\\s*0\\s*\\)\\s*%this\\.botFillTeam\\(\\)"
+    },
+    "Slayer_TeamSO::onRemoveMember": {
+      "fill": "%this\\.botFillLimit\\s*>\\s*0\\s*\\)\\s*%this\\.botFillTeam\\(\\)"
+    },
+    "Slayer_MiniGameSO::addBotToGame": {
+      "class": "class\\s*=\\s*Slayer_AiController\\s*;",
+      "name": "hName\\s*=\\s*\"Bot\"\\s*SPC\\s*getRandomFirstName\\(\\)"
+    },
+    "Slayer_MiniGameSO::addMember": {
+      "bot": "%class\\s*\\$=\\s*\"AiController\"\\s*\\)\\s*\\{\\s*%client\\.removeAllObjectives\\(\\);\\s*%client\\.assignObjectives\\(\\);\\s*%client\\.spawnPlayer\\(\\);"
+    },
+    "Slayer_MiniGameSO::endGame": {
+      "bots": "for\\(\\s*%i\\s*=\\s*%this\\.numMembers\\[\"AiController\"\\]\\s*-\\s*1\\s*;[^)]*\\)\\s*%this\\.member\\[\"AiController\"\\s*,\\s*%i\\]\\.delete\\(\\)"
+    },
+    "Slayer_MiniGameSO::canDamage": {
+      "bots": "%classA\\s*\\$=\\s*\"AiPlayer\"[\\s\\S]*?return\\s*%this\\.botDamage\\s*;"
+    },
+    "Slayer_MiniGameSO::updateRespawnTime": {
+      "bot": "case\\s*\"bot\"\\s*:\\s*%this\\.botRespawnTime\\s*=\\s*%time\\s*;"
+    },
+    "Slayer_AiController::createPlayer": {
+      "kind": "%hBotType\\s*=\\s*BlockheadHoleBot\\s*;",
+      "roam": "hReturnToSpawn\\s*=\\s*!%useFakeBrick\\s*;",
+      "equip": "%this\\.forceEquip\\(\\s*%i\\s*,\\s*%handler\\.startEquip\\[%i\\]\\s*\\)",
+      "uniform": "%this\\.applyUniform\\(\\)",
+      "name_color": "setShapeNameColor\\(\\s*%handler\\.colorRGB\\s*\\)"
+    },
+    "Slayer_AiController::onSpawn": {
+      "tool": "%this\\.player\\.useRandomTool\\(\\)"
+    },
+    "Slayer_AiController::onDeath": {
+      "respawn": "if\\(\\s*!%this\\.dead\\(\\)\\s*\\)\\s*\\{\\s*%spawnTime\\s*=\\s*%mini\\.botRespawnTime\\s*;"
+    },
+    "Slayer_AiController::applyBodyColors": {
+      "skin": "getRandom\\(\\s*\\$Slayer::Server::Bots::SkinColorCount\\s*\\)",
+      "nodes": "setNodeColor\\(\\s*headSkin\\s*,\\s*%color\\s*\\)"
+    },
+    "Slayer_AiController::assignObjectives": {
+      "none": "^(?:\\s*//[^\\n]*)*\\s*$"
+    },
+    "AiPlayer::useRandomTool": {
+      "pick": "getRandom\\(\\s*0\\s*,\\s*1\\s*\\)\\s*\\|\\|\\s*%i\\s*==\\s*%indexEnd\\s*-\\s*1"
+    },
+    "GameConnection::onDeath": {
+      "bot_kills": "if\\(\\s*%killer\\.isSlayerBot\\s*\\)\\s*\\{\\s*if\\(\\s*%this\\.isSlayerBot\\s*\\)\\s*%killer\\.incScore\\(\\s*%mini\\.points_killBot\\s*\\)",
+      "correction": "else\\s+if\\(\\s*%this\\.isSlayerBot\\s*\\)[^\\n]*\\n\\s*%killer\\.incScore\\(\\s*-%mini\\.points_killPlayer\\s*\\)"
+    },
+    "checkHoleBotTeams": {
+      "allies": "%teamA\\.isAlliedTeam\\(\\s*%teamB\\s*\\)\\s*\\)\\s*return\\s*0\\s*;"
+    },
+    "server/modules/BK.cs": {
+      "pref_bk_enable": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.bKills_enable\"",
+      "pref_bk_spree_start": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.bKills_kSpree\"",
+      "pref_bk_points_spree": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.bKills_pointsKillSpree\"",
+      "pref_bk_points_multi": "(?s)defaultValue\\s*=\\s*(-?\\d+|true|false)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.bKills_pointsMultiKill\"",
+      "bk_spree_0": "\\$Slayer::Server::BK::KillSpree\\[0\\]\\s*=\\s*\"((?:[^\"\\\\]|\\\\.)*)\"\\s*;",
+      "bk_spree_100": "\\$Slayer::Server::BK::KillSpree\\[100\\]\\s*=\\s*\"((?:[^\"\\\\]|\\\\.)*)\"\\s*;",
+      "bk_spree_200": "\\$Slayer::Server::BK::KillSpree\\[200\\]\\s*=\\s*\"((?:[^\"\\\\]|\\\\.)*)\"\\s*;",
+      "bk_quick_ms": "\\$Slayer::Server::BK::QuickKillTimeOut\\s*=\\s*(\\d+)\\s*;",
+      "bk_quick_0": "\\$Slayer::Server::BK::QuickKill\\[0\\]\\s*=\\s*\"((?:[^\"\\\\]|\\\\.)*)\"\\s*;",
+      "bk_quick_2": "\\$Slayer::Server::BK::QuickKill\\[2\\]\\s*=\\s*\"((?:[^\"\\\\]|\\\\.)*)\"\\s*;",
+      "bk_quick_3": "\\$Slayer::Server::BK::QuickKill\\[3\\]\\s*=\\s*\"((?:[^\"\\\\]|\\\\.)*)\"\\s*;",
+      "bk_quick_4": "\\$Slayer::Server::BK::QuickKill\\[4\\]\\s*=\\s*\"((?:[^\"\\\\]|\\\\.)*)\"\\s*;",
+      "bk_quick_5": "\\$Slayer::Server::BK::QuickKill\\[5\\]\\s*=\\s*\"((?:[^\"\\\\]|\\\\.)*)\"\\s*;",
+      "bk_quick_6": "\\$Slayer::Server::BK::QuickKill\\[6\\]\\s*=\\s*\"((?:[^\"\\\\]|\\\\.)*)\"\\s*;",
+      "bk_quick_7": "\\$Slayer::Server::BK::QuickKill\\[7\\]\\s*=\\s*\"((?:[^\"\\\\]|\\\\.)*)\"\\s*;",
+      "bk_quick_8": "\\$Slayer::Server::BK::QuickKill\\[8\\]\\s*=\\s*\"((?:[^\"\\\\]|\\\\.)*)\"\\s*;",
+      "bk_quick_9": "\\$Slayer::Server::BK::QuickKill\\[9\\]\\s*=\\s*\"((?:[^\"\\\\]|\\\\.)*)\"\\s*;",
+      "bk_quick_10": "\\$Slayer::Server::BK::QuickKill\\[10\\]\\s*=\\s*\"((?:[^\"\\\\]|\\\\.)*)\"\\s*;"
+    },
+    "client/modules/HolidayGreetings/HolidayGreetings.gui": {
+      "splash_tip": "(?s)new\\s+GuiMLTextCtrl\\s*\\(\\s*HolidayTip\\s*\\)\\s*\\{[^}]*?\\btext\\s*=\\s*\"((?:[^\"\\\\]|\\\\.)*)\""
+    }
+  },
+  "tests": [
+    "crates/addon-import/tests/ports.rs slayer_ports_apply_with_their_rules",
+    "crates/addon-import/tests/slayer.rs teams_sort_and_spawn_on_their_own_team_spawns"
+  ]
+}

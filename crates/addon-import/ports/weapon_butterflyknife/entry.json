@@ -1,0 +1,32 @@
+{
+  "addon": "Weapon_ButterflyKnife",
+  "title": "Butterfly Knife",
+  "port": "weapon_butterflyknife",
+  "status": "verified",
+  "sha256": [
+    "4d8d0cc59be118094a2e6e39056b895e19447c05ed8d3a644fd7a56780a7afa4"
+  ],
+  "covers": {
+    "butterflyknifeImage::onCharge": {
+      "charge_arm": "playthread\\s*\\(\\s*2\\s*,\\s*\"?(\\w+)"
+    },
+    "butterflyknifeImage::onStopFire": {
+      "stop_arm": "playthread\\s*\\(\\s*2\\s*,\\s*\"?(\\w+)"
+    },
+    "butterflyknifeImage::onFire": {
+      "stab_arm": "playthread\\s*\\(\\s*2\\s*,\\s*\"?(\\w+)",
+      "parent": "parent::onfire\\s*\\("
+    },
+    "butterflyknifeImage::onFiretwo": {
+      "jab": "%projectile\\s*=\\s*(\\w+)\\s*;",
+      "one": "%shellcount\\s*=\\s*1\\s*;",
+      "spawns": "new\\s*\\(\\s*%this\\.projectiletype\\s*\\)"
+    }
+  },
+  "tests": [
+    "weapon_butterflyknife/checks.json",
+    "crates/addon-import/tests/ports.rs butterfly_knife_port_jabs_and_stabs",
+    "crates/weapons/tests/state_attacks.rs a_click_jabs_with_the_scripts_own_projectile",
+    "crates/addon-import/tests/import.rs real_steam_knife_and_grenade_ports"
+  ]
+}

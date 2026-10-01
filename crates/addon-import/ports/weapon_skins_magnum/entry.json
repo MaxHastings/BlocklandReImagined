@@ -1,0 +1,48 @@
+{
+  "addon": "Weapon_Skins_Magnum",
+  "title": "Tier+Tactical Magnum Skins (Kai)",
+  "port": "weapon_skins_magnum",
+  "status": "partial",
+  "sha256": [
+    "6b610406733882b00664a4a7eb308020e7bab3ea2f434b24bac941662b121ffd"
+  ],
+  "covers": {
+    "semiMagnumImage::onFire": {
+      "fires_free": "TT_createProjectile\\s*\\(",
+      "spends": "TT_decrementAmmo\\s*\\("
+    },
+    "semiMagnumProjectile::damage": {
+      "headshot": "TT_processHeadshotDamage\\s*\\("
+    },
+    "WesternMagnumImage::onFire": {
+      "fires_free": "TT_createProjectile\\s*\\(",
+      "spends": "TT_decrementAmmo\\s*\\("
+    },
+    "WesternMagnumImage::onReloaded": {
+      "one_by_one": "TT_incrementReload\\s*\\("
+    },
+    "WesternMagnumProjectile::damage": {
+      "headshot": "TT_processHeadshotDamage\\s*\\("
+    },
+    "MavMagnumImage::onFire": {
+      "fires_free": "TT_createProjectile\\s*\\(",
+      "spends": "TT_decrementAmmo\\s*\\("
+    },
+    "MavMagnumImage::onReloaded": {
+      "one_by_one": "TT_incrementReload\\s*\\("
+    },
+    "MavMagnumProjectile::damage": {
+      "headshot": "TT_processHeadshotDamage\\s*\\("
+    },
+    "RetroMagnumImage::onFire": {
+      "fires_free": "TT_createProjectile\\s*\\(",
+      "spends": "TT_decrementAmmo\\s*\\("
+    },
+    "RetroMagnumProjectile::damage": {
+      "headshot": "TT_processHeadshotDamage\\s*\\("
+    }
+  },
+  "tests": [
+    "crates/addon-import/tests/tier_port.rs skins_are_their_hosts_guns_under_their_own_names"
+  ]
+}

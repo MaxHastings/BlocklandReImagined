@@ -56,12 +56,7 @@ impl Checkout {
             serde_json::to_vec_pretty(&json!({ "schema_version": 2, "addons": addons })).unwrap(),
         )
         .unwrap();
-        std::fs::create_dir_all(root.join("crates/addon-import/ports")).unwrap();
-        std::fs::copy(
-            repo().join("crates/addon-import/ports/ports.json"),
-            root.join("crates/addon-import/ports/ports.json"),
-        )
-        .unwrap();
+        copy_port_entries(&repo(), &root);
         std::fs::create_dir_all(root.join("crates/package")).unwrap();
         std::fs::copy(
             repo().join("crates/package/base-packages.json"),
@@ -544,4 +539,25 @@ fn an_originals_host_rules_ship_beside_it_and_load() {
         "{}",
         text(&refused)
     );
+}
+
+/// Each port's `entry.json`, as the importer finds them.
+fn port_entries(repo: &Path) -> Vec<PathBuf> {
+    let mut out: Vec<_> = std::fs::read_dir(repo.join("crates/addon-import/ports"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.path().join("entry.json"))
+        .filter(|p| p.is_file())
+        .collect();
+    out.sort();
+    out
+}
+
+/// Copy every port's `entry.json` into a checkout at `root`.
+fn copy_port_entries(repo: &Path, root: &Path) {
+    for entry in port_entries(repo) {
+        let to = root.join(entry.strip_prefix(repo).unwrap());
+        std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+        std::fs::copy(&entry, to).unwrap();
+    }
 }

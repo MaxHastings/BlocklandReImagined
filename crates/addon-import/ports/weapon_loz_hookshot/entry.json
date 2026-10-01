@@ -1,0 +1,33 @@
+{
+  "addon": "Weapon_Loz_Hookshot",
+  "title": "Hookshot",
+  "port": "weapon_loz_hookshot",
+  "status": "verified",
+  "sha256": [
+    "aa63bc56831c06a9b4b6692fdf64c53e8a3eedd589e922c9e240dd55b7b9f54e"
+  ],
+  "covers": {
+    "hookshotProjectile::onCollision": {
+      "follow": "pushplayertoobj2\\s*\\(\\s*%player\\s*,\\s*%col\\s*\\)"
+    },
+    "pushPlayerToObj": {
+      "stop": "if\\s*\\(\\s*%len\\s*<\\s*([0-9]*\\.?[0-9]+)\\s*\\)\\s*\\{?\\s*return",
+      "near": "if\\s*\\(\\s*%len\\s*<\\s*([0-9]*\\.?[0-9]+)\\s*\\)\\s*\\{?\\s*%vec\\s*=\\s*vectorscale",
+      "slow": "%len\\s*<\\s*[0-9]*\\.?[0-9]+\\s*\\)\\s*\\{?\\s*%vec\\s*=\\s*vectorscale\\s*\\(\\s*%vec\\s*,\\s*([0-9]*\\.?[0-9]+)",
+      "far": "%len\\s*>\\s*([0-9]*\\.?[0-9]+)\\s*\\)\\s*\\{?\\s*%vec\\s*=\\s*vectorscale",
+      "fast": "%len\\s*>\\s*[0-9]*\\.?[0-9]+\\s*\\)\\s*\\{?\\s*%vec\\s*=\\s*vectorscale\\s*\\(\\s*%vec\\s*,\\s*([0-9]*\\.?[0-9]+)",
+      "every": "schedule\\s*\\(\\s*(\\d+)\\s*,\\s*0\\s*,\\s*\\\"pushplayertoobj\\\""
+    },
+    "pushPlayerToObj2": {
+      "vehicles": "getclassname\\s*\\(\\s*\\)\\s*\\$=\\s*\\\"flyingvehicle\\\""
+    },
+    "ServerCmddegrapple": {
+      "cancel": "cancel\\s*\\(\\s*%client\\.player\\.pptotick\\s*\\)"
+    }
+  },
+  "tests": [
+    "weapon_loz_hookshot/checks.json",
+    "crates/addon-import/tests/grapples.rs the_hookshot_pulls_its_shooter_to_where_it_strikes",
+    "crates/addon-import/tests/grapples.rs the_hookshot_follows_a_player_it_strikes"
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "addon": "Weapon_Skins_Pistol",
+  "title": "Tier+Tactical Pistol Skins (Kai)",
+  "port": "weapon_skins_pistol",
+  "status": "partial",
+  "sha256": [
+    "3eedb253809a6b985ccf8b22515503d8454a8eee6ec300b3b7ccfc0ac56c5a7e"
+  ],
+  "covers": {
+    "ClassicPistolImage::onFire": {
+      "fires": "Parent::onFire\\s*\\(",
+      "spends": "TT_decrementAmmo\\s*\\("
+    },
+    "ModernPistolImage::onFire": {
+      "fires": "Parent::onFire\\s*\\(",
+      "spends": "TT_decrementAmmo\\s*\\("
+    },
+    "SilencedPistolImage::onFire": {
+      "fires": "Parent::onFire\\s*\\(",
+      "spends": "TT_decrementAmmo\\s*\\("
+    },
+    "RetroPistolImage::onFire": {
+      "fires": "Parent::onFire\\s*\\(",
+      "spends": "TT_decrementAmmo\\s*\\("
+    }
+  },
+  "tests": [
+    "crates/addon-import/tests/tier_port.rs skins_are_their_hosts_guns_under_their_own_names"
+  ]
+}

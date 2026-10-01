@@ -1,0 +1,19 @@
+{
+  "addon": "Weapon_Shotgun",
+  "title": "Sawn-off Shotgun",
+  "port": "weapon_shotgun",
+  "status": "verified",
+  "sha256": [],
+  "covers": {
+    "shotgunImage::onFire": {
+      "projectiles": "%shellcount\\s*=\\s*(\\d+)\\s*;",
+      "spread": "%spread\\s*=\\s*([0-9]*\\.?[0-9]+)\\s*;",
+      "recoil": "setvelocity\\s*\\(.*geteyevector\\s*\\(\\s*\\)\\s*,\\s*\"?\\s*-\\s*([0-9]*\\.?[0-9]+)"
+    }
+  },
+  "tests": [
+    "weapon_shotgun/checks.json",
+    "crates/addon-import/tests/ports.rs shotgun_port_fires_the_spread",
+    "crates/addon-import/tests/import.rs real_community_samples"
+  ]
+}

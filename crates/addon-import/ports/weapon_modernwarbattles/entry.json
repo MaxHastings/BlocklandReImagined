@@ -1,0 +1,109 @@
+{
+  "addon": "Weapon_ModernWarbattles",
+  "title": "Adventurer's Weapons (Bushido)",
+  "port": "weapon_modernwarbattles",
+  "status": "verified",
+  "sha256": [
+    "4d938fe308610289aabdfe0d74a8ac01048e2ece458545640c5737c14d7792ed"
+  ],
+  "covers": {
+    "BatonImage::onFire": {
+      "baton_sound_a": "if\\s*\\(\\s*getrandom\\s*\\(\\s*0\\s*,\\s*1\\s*\\)\\s*\\)\\s*\\{\\s*%this\\.raycastexplosionbricksound\\s*=\\s*(\\w+)\\s*;\\s*%this\\.raycastexplosionplayersound\\s*=\\s*\\w+",
+      "baton_sound_b": "else\\s*\\{\\s*%this\\.raycastexplosionbricksound\\s*=\\s*(\\w+)\\s*;\\s*%this\\.raycastexplosionplayersound\\s*=\\s*\\w+"
+    },
+    "BatonImage::onRaycastDamage": {
+      "baton_kill": "datablock\\.maxdamage\\s*\\*\\s*([0-9]*\\.?[0-9]+)",
+      "baton_shove": "getforwardvector\\s*\\(\\s*\\)\\s*,\\s*([0-9]*\\.?[0-9]+)\\s*\\)",
+      "baton_up": "getforwardvector\\s*\\(\\s*\\)\\s*,\\s*[0-9.]+\\s*\\)\\s*,\\s*\"\\s*0\\s+0\\s+([0-9]*\\.?[0-9]+)\\s*\"",
+      "baton_type": "maxdamage\\s*\\*\\s*[0-9.]+\\s*;\\s*%damagetype\\s*=\\s*\\$damagetype::(\\w+)"
+    },
+    "MacheteImage::onFire": {
+      "machete_sound_a": "if\\s*\\(\\s*getrandom\\s*\\(\\s*0\\s*,\\s*1\\s*\\)\\s*\\)\\s*\\{\\s*%this\\.raycastexplosionbricksound\\s*=\\s*(\\w+)\\s*;\\s*%this\\.raycastexplosionplayersound\\s*=\\s*\\w+",
+      "machete_sound_b": "else\\s*\\{\\s*%this\\.raycastexplosionbricksound\\s*=\\s*(\\w+)\\s*;\\s*%this\\.raycastexplosionplayersound\\s*=\\s*\\w+"
+    },
+    "MacheteImage::onRaycastDamage": {
+      "machete_kill": "datablock\\.maxdamage\\s*\\*\\s*([0-9]*\\.?[0-9]+)",
+      "machete_shove": "getforwardvector\\s*\\(\\s*\\)\\s*,\\s*([0-9]*\\.?[0-9]+)\\s*\\)",
+      "machete_up": "getforwardvector\\s*\\(\\s*\\)\\s*,\\s*[0-9.]+\\s*\\)\\s*,\\s*\"\\s*0\\s+0\\s+([0-9]*\\.?[0-9]+)\\s*\"",
+      "machete_type": "maxdamage\\s*\\*\\s*[0-9.]+\\s*;\\s*%damagetype\\s*=\\s*\\$damagetype::(\\w+)"
+    },
+    "WeaponImage::onRaycastDamage": {
+      "ray_limit": "mclampf\\s*\\(\\s*%this\\.raycastdirectdamage\\s*,\\s*-100\\s*,\\s*100\\s*\\)",
+      "ray_crit": "%directdamage\\s*\\*\\s*3\\b"
+    },
+    "battleRifleImage::isRaycastCritical": {
+      "battlerifle_shove": "getforwardvector\\s*\\(\\s*\\)\\s*,\\s*([0-9]*\\.?[0-9]+)\\s*\\)\\s*,\\s*\"[^\"]*\"\\s*\\)\\s*\\)",
+      "battlerifle_up": "getforwardvector\\s*\\(\\s*\\)\\s*,\\s*[0-9.]+\\s*\\)\\s*,\\s*\"\\s*0\\s+0\\s+([0-9]*\\.?[0-9]+)\\s*\"",
+      "battlerifle_test": "getworldboxcenter\\s*\\(\\s*\\)\\s*,\\s*2\\s*\\)\\s*-\\s*3\\.3\\s*\\*"
+    },
+    "burnedIt": {
+      "burn_height": "%posz\\s*\\+\\s*2\\b",
+      "burn_grenade": "datablock\\s*=\\s*shrapgrenprojectile\\s*;",
+      "burn_now": "%burned\\.explode\\s*\\(\\s*\\)"
+    },
+    "hl2AmmoOnReload": {
+      "magazine": "toolmag",
+      "reserve": "toolammo"
+    },
+    "projectile::onAdd": {
+      "fuse_thrown": "\"shrapgrenprojectile\"[\\s\\S]*?%oldlt\\s*=\\s*4000\\s*;[\\s\\S]*?%\\w+\\s*=\\s*%obj\\.client\\.player\\.chargetime\\s*;[\\s\\S]*?%new\\s*=\\s*%oldlt\\s*-\\s*%\\w+\\s*;[\\s\\S]*?schedule\\s*\\(\\s*%new\\s*,\\s*\"explode\"",
+      "fuse_cluster": "\"shrapgrenclusterprojectile\"[\\s\\S]*?%oldlt\\s*=\\s*400\\s*;[\\s\\S]*?%oldlt\\s*-\\s*\\(\\s*getrandom\\s*\\(\\s*0\\s*,\\s*400\\s*\\)\\s*\\)",
+      "fuse_trail": "\"shrapgrentrailprojectile\"[\\s\\S]*?%oldlt\\s*=\\s*400\\s*;[\\s\\S]*?%oldlt\\s*-\\s*\\(\\s*getrandom\\s*\\(\\s*100\\s*,\\s*400\\s*\\)\\s*\\)"
+    },
+    "revolverImage::isRaycastCritical": {
+      "revolver_shove": "getforwardvector\\s*\\(\\s*\\)\\s*,\\s*([0-9]*\\.?[0-9]+)\\s*\\)\\s*,\\s*\"[^\"]*\"\\s*\\)\\s*\\)",
+      "revolver_up": "getforwardvector\\s*\\(\\s*\\)\\s*,\\s*[0-9.]+\\s*\\)\\s*,\\s*\"\\s*0\\s+0\\s+([0-9]*\\.?[0-9]+)\\s*\"",
+      "revolver_test": "getworldboxcenter\\s*\\(\\s*\\)\\s*,\\s*2\\s*\\)\\s*-\\s*3\\.3\\s*\\*"
+    },
+    "sendCenterNade": {
+      "cook_print": "'centerprint'\\s*,\\s*\"\\\\c5\"\\s*@\\s*%client\\.player\\.warntime\\s*@\\s*\"\\\\c6 cooking time left\\.\"\\s*,\\s*0\\.15\\s*\\)",
+      "cook_step": "getword\\s*\\(\\s*%client\\.player\\.warntime\\s*,\\s*0\\s*\\)\\s*-\\s*0\\.1\\s*@\\s*\" seconds\"",
+      "cook_one": "==\\s*1\\s*\\)\\s*%client\\.player\\.warntime\\s*=\\s*\"1 second\"",
+      "cook_every": "schedule\\s*\\(\\s*100\\s*,\\s*0\\s*,\\s*sendcenternade"
+    },
+    "shrapGrenImage::onFire": {
+      "cook_out": "cancel\\s*\\(\\s*%obj\\.burnsched\\s*\\)",
+      "cook_held": "%obj\\.chargetime\\s*=\\s*%obj\\.chargeend\\s*-\\s*%obj\\.chargestart"
+    },
+    "shrapGrenImage::onPinDrop": {
+      "cook_start": "%obj\\.chargestart\\s*=\\s*getsimtime\\s*\\(\\s*\\)",
+      "cook_fuse": "schedule\\s*\\(\\s*4000\\s*,\\s*0\\s*,\\s*\"burnedit\"",
+      "cook_first": "%obj\\.warntime\\s*=\\s*\"4 seconds\"\\s*;\\s*%obj\\.warnsched\\s*=\\s*schedule\\s*\\(\\s*100\\s*,\\s*0\\s*,\\s*sendcenternade"
+    },
+    "shrapGrenprojectile::onExplode": {
+      "shrap_cluster": "%shrapdata\\s*=\\s*shrapgrenclusterprojectile",
+      "shrap_count": "%shards\\s*=\\s*(\\d+)",
+      "shrap_speed": "getrandom\\s*\\(\\s*-6\\s*,\\s*6\\s*\\)",
+      "trail_count": "%shrapdata\\s*=\\s*shrapgrentrailprojectile\\s*;[\\s\\S]*?%shards\\s*=\\s*(\\d+)",
+      "trail_speed": "getrandom\\s*\\(\\s*-12\\s*,\\s*12\\s*\\)"
+    },
+    "sniperrifleImage::isRaycastCritical": {
+      "sniperrifle_shove": "getforwardvector\\s*\\(\\s*\\)\\s*,\\s*([0-9]*\\.?[0-9]+)\\s*\\)\\s*,\\s*\"[^\"]*\"\\s*\\)\\s*\\)",
+      "sniperrifle_up": "getforwardvector\\s*\\(\\s*\\)\\s*,\\s*[0-9.]+\\s*\\)\\s*,\\s*\"\\s*0\\s+0\\s+([0-9]*\\.?[0-9]+)\\s*\"",
+      "sniperrifle_test": "getworldboxcenter\\s*\\(\\s*\\)\\s*,\\s*2\\s*\\)\\s*-\\s*3\\.3\\s*\\*"
+    },
+    "getHitbox": {
+      "flinch_first": "playthread\\s*\\(\\s*0\\s*,\\s*\"?([a-z0-9_]+)\"?\\s*\\)",
+      "flinch_arms": "playthread\\s*\\(\\s*2\\s*,\\s*\"?jump\"?\\s*\\)",
+      "flinch_ms": "schedule\\s*\\(\\s*([0-9]+)\\s*,\\s*\"playthread\"\\s*,\\s*\"0\"\\s*,\\s*\"[a-z0-9_]+\"\\s*\\)",
+      "flinch_then": "schedule\\s*\\(\\s*[0-9]+\\s*,\\s*\"playthread\"\\s*,\\s*\"0\"\\s*,\\s*\"([a-z0-9_]+)\"\\s*\\)",
+      "flinch_arms_then": "schedule\\s*\\(\\s*50\\s*,\\s*\"playthread\"\\s*,\\s*\"2\"\\s*,\\s*\"plant\"\\s*\\)"
+    },
+    "shrapGrenProjectile::onCollision": {
+      "shrap_bounce_sound": "serverplay3d\\s*\\(\\s*(\\w+)\\s*,"
+    },
+    "checkForObstruction": {
+      "obstruction_range": "vectorscale\\s*\\(\\s*%eyevector\\s*,\\s*4\\.5\\s*\\)"
+    }
+  },
+  "tests": [
+    "crates/addon-import/tests/adventure_port.rs ammo_system_guns_get_magazines_that_reload_like_their_states",
+    "crates/addon-import/tests/adventure_port.rs ammo_boxes_and_headshots_play_in_a_hosted_game",
+    "crates/addon-import/tests/adventure_port.rs hitscan_crits_and_melee_kills_play_in_a_hosted_game",
+    "crates/addon-import/tests/adventure_port.rs melee_swings_wreck_vehicles",
+    "crates/addon-import/tests/adventure_port.rs a_dropped_spare_gun_empties_its_magazine_into_the_reserve",
+    "crates/addon-import/tests/adventure_port.rs crits_play_with_the_critical_hit_emote",
+    "crates/addon-import/tests/adventure_port.rs without_the_critical_hit_emote_it_runs_with_no_crits",
+    "crates/addon-import/tests/adventure_port.rs a_grenade_cooks_in_the_hand"
+  ]
+}
