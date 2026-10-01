@@ -5717,20 +5717,30 @@ fn name_tags(
     size: (f32, f32),
     scale: f32,
     controlling_body: bool,
+    passages: &bri_content::passage::Passages,
     drop_center: impl Fn(&bri_weapons::Drop) -> Vec3,
 ) -> Vec<bri_ui::api::NameTag> {
     const VERTICAL_OFFSET: f32 = 0.85;
-    // Where a name anchored at `target` goes on screen, and how strongly.
+    let sees = |from: Vec3, to: Vec3| {
+        building.is_none_or(|b| b.name_visible(from, to).unwrap_or(true))
+    };
+    // Where a name anchored at `target` goes on screen, and how strongly:
+    // where its body shows, straight on or in a portal's view, never
+    // through a portal's view of somewhere else.
     let place = |target: Vec3, name_distance: f32| -> Option<(f32, f32, f32)> {
+        let seen = crate::portal_view::seen_at(passages, camera, target)
+            .into_iter()
+            .find(|s| match s.through {
+                None => sees(camera, target),
+                Some((near, far)) => sees(camera, near) && sees(far, target),
+            })?;
+        let target = seen.at;
         let opacity = name_opacity(
             target.distance(camera),
             name_distance,
             fog_distance,
             visible_distance,
         )?;
-        if building.is_some_and(|b| !b.name_visible(camera, target).unwrap_or(true)) {
-            return None;
-        }
         let clip = view_projection * (target + Vec3::Y * VERTICAL_OFFSET).extend(1.0);
         if clip.w <= 0.0 {
             return None;
@@ -10132,6 +10142,7 @@ impl PlatformApp for App {
             (frame.size.0 as f32, frame.size.1 as f32),
             self.ui.scale(),
             controls.observer().is_none(),
+            &passages,
             |drop| self.world_items.drop_center(drop),
         );
         self.foliage.prepare(
