@@ -9133,6 +9133,18 @@ than the light the bulb gave.
   share of its light). The remainder goes as surely as the surest of
   them, shared by light given times weight. With one hidden light this is
   the old rule.
+- That still left the line; the Gate's `BRI_PIXELS` run found it. It is on
+  the wall at x = -59.86 (`bedroom.dif/224/86`), on the edge of light 0's
+  patch along the window frame's shadow. The edge texels hold part of
+  light 0, which the rays call hidden there, and every hidden light in
+  reach (0, 2, 3, 5, 6, 8, 9) qualified, so each took the same share. After
+  the break 2, 5, 6 and 8 kept theirs: [109,109,84] and [120,120,95]
+  against [102,102,77] around them. Neither the live sun nor the lamp
+  shadow maps play a part (`BRI_SUN=0` and `BRI_LAMPS=0` leave it). Now,
+  where a neighbour on the same surface sees one of a texel's hidden lights
+  by rays, the texel is on that light's patch edge and its remainder goes
+  to those lights alone, with no cutoff. This replaces the neighbour rule
+  from format 8. Bake format 12.
 - `lighting_probe`: `BRI_BREAK=1` breaks every bulb and tube by the
   client's rule. Within 4 units of a light shape it prints each triangle's
   lightmap, Dynamic leftover, light shares and facing. `BRI_DUMP_LEFT=1`
@@ -9151,13 +9163,17 @@ than the light the bulb gave.
   rule. The Gate's probe at format 7 showed that the lamp's stem and
   socket within 4 units hold only the compiler's ambient
   ([102,102,77]), which rightly stays. The shade sits 6 or more units
-  out, so the probe now prints triangles within 8 units. Bake format 11.
+  out, so the probe now prints triangles within 8 units.
 
 Tests: `bri-render --test unified_lighting a_switched_off_light_leaves_the_same_light_in_every_live_mode`
 (modes 1-3 identical, fails without the Unified per-texel branch);
 `--test map_lighting a_switched_off_light_leaves_no_line_along_its_shadows_edges`
 (a turned slab's filtered shadow; an edge texel keeps 9 levels without the
 neighbour rule, at most 3 with it);
+`bri-render --lib the_edge_of_a_lights_patch_goes_dark_with_it` (a patch
+the compiler lit a texel past the rays' shadow, with a faint far light and
+a light behind the wall; an edge texel draws 33 levels with the patch's
+light off on format 11, at most 2 now);
 `bri-render --lib a_strip_lit_through_a_gap_goes_dark_with_its_light`
 (a dim light's strip behind a plate its rays hit, two strong lights behind
 the wall; the strip keeps 20 levels on format 10, at most 2 now);

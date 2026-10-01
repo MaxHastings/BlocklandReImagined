@@ -238,7 +238,7 @@ const LEAK_STEP: i64 = 3;
 const LEAK_LEVELS: f32 = 8.0 / 255.0;
 const LEAK_SUN: f32 = 0.12;
 /// Names the fit, the bake and the stored layout; change it with either.
-const FORMAT: &[u8; 8] = b"BRIML\0\0\x0b";
+const FORMAT: &[u8; 8] = b"BRIML\0\0\x0c";
 
 /// A light recovered from a map's lightmaps. The map compiler's point light:
 /// full `color` out to `inner`, then falling linearly to nothing at `outer`,
@@ -895,8 +895,7 @@ impl Bake {
             // Per texel: the lights its rays see take its authored light
             // first, as far as it holds them; what is left over (`rest`) can
             // go to the lights in reach the rays say are hidden (each with
-            // what it gives here). `holds`: the lights it plainly holds, seen
-            // by rays or hidden with a quarter of their light left over.
+            // what it gives here). `seen`: the lights its rays see.
             struct Split {
                 index: usize,
                 position: Vec3,
@@ -907,7 +906,7 @@ impl Bake {
                 rest: Vec3,
                 hidden: Vec<(usize, Vec3)>,
                 hidden_set: u32,
-                holds: u32,
+                seen: u32,
             }
             let (w, h) = (parts.width as i64, parts.height as i64);
             let same_surface = |a: &Lexel, b: &Lexel| {
@@ -976,7 +975,6 @@ impl Bake {
                 let rest = (held - given).max(Vec3::ZERO);
                 let hidden_given: Vec<(usize, Vec3)> =
                     (0..lights.len()).filter(|&k| hidden & (1 << k) != 0).map(|k| (k, given_by[k])).collect();
-                let holds = hidden_given.iter().filter(|(_, g)| share(rest, *g) >= 0.25).fold(seen, |m, (k, _)| m | 1 << k);
                 if traced.contains(&(*parts_image as u32, i as u32)) {
                     let alpha = parts.rgba.get(i * 4 + 3).copied().unwrap_or(0);
                     let per_light: Vec<String> = (0..lights.len())
@@ -1017,20 +1015,24 @@ impl Bake {
                     rest,
                     hidden: hidden_given,
                     hidden_set: hidden,
-                    holds,
+                    seen,
                 });
             }
-            // A hidden light the remainder is far short of (under a tenth
-            // of its light, fading in up to a quarter) did not leave it: the
+            // Where a neighbour on the same surface sees one of the texel's
+            // hidden lights by rays, the texel is on the edge of that light's
+            // patch: the rays from the fitted light and the compiler's
+            // filtered shadow disagree by a texel or two there, and the
+            // remainder is that light's (the neighbours' lights alone, with
+            // no cutoff). Shared out over every light in reach instead, the
+            // lights that stay on would keep a line of it when the patch's
+            // light goes out (the Bedroom wall by the window). Elsewhere a
+            // hidden light the remainder is far short of (under a tenth of
+            // its light, fading in up to a quarter) did not leave it: the
             // remainder is the fit's error or a light it never traced, and
             // stays in the leftover. Each hidden light is judged on its own,
             // so a strong light behind a wall does not stop a dim one the
-            // compiler let through from taking its light back. Unless a
-            // neighbour on the same surface plainly holds that light: then
-            // this is a shadow's edge, where the rays from the fitted light
-            // and the compiler's filtered shadow disagree by a texel or two,
-            // and keeping it would leave a line of the light after it goes
-            // out. Lights the neighbours hold, per texel:
+            // compiler let through from taking its light back. The hidden
+            // lights the neighbours see, per texel:
             let held_around = |t: &Split| {
                 let (x, y) = (t.index as i64 % w.max(1), t.index as i64 / w.max(1));
                 (-1..=1).flat_map(|dy| (-1..=1).map(move |dx| (x + dx, y + dy))).fold(0u32, |held, (nx, ny)| {
@@ -1041,7 +1043,7 @@ impl Bake {
                     let apart = n.position - t.position;
                     let on_surface =
                         n.normal.dot(t.normal) > 0.95 && apart.dot(t.normal).abs() <= 0.1 * apart.length() + 1e-3;
-                    if on_surface { held | (n.holds & t.hidden_set) } else { held }
+                    if on_surface { held | (n.seen & t.hidden_set) } else { held }
                 })
             };
             // Per texel: its index, its leftover light and each light's share.
@@ -1060,8 +1062,10 @@ impl Bake {
                     .iter()
                     .map(|&(k, g)| {
                         let r = share(t.rest, g);
-                        if around & (1 << k) != 0 || r >= 0.25 {
-                            f32::from(r > 0.0)
+                        if around != 0 {
+                            f32::from(around & (1 << k) != 0 && r > 0.0)
+                        } else if r >= 0.25 {
+                            1.0
                         } else {
                             let fade = ((r - 0.1) / 0.15).clamp(0.0, 1.0);
                             fade * fade * (3.0 - 2.0 * fade)
@@ -1095,7 +1099,7 @@ impl Bake {
                         .map(|(k, s)| format!("{k}:{s:.2}"))
                         .collect();
                     trace.push(format!(
-                        "  texel {parts_image}:{}: hidden weights [{}] (neighbours hold {around:b}), shares [{}], leftover {:.0?}",
+                        "  texel {parts_image}:{}: hidden weights [{}] (neighbours see {around:b}), shares [{}], leftover {:.0?}",
                         t.index,
                         hidden.join(" "),
                         taken.join(" "),
@@ -1926,6 +1930,99 @@ mod tests {
         let lines = bake.explain(&lights, &[(wall.parts_image, texel.index)]);
         assert_eq!(lines.len(), 2, "{lines:?}");
         assert!(lines[0].contains("0:20 faces hidden") && lines[1].contains("shares [0:0.9"), "{lines:?}");
+    }
+
+    /// The edge of a light's patch on a wall, where the map compiler's
+    /// filtered shadow reaches a texel further than the fitted light's rays,
+    /// with a faint far light and a light behind the wall also in reach.
+    /// The edge texels' light is the patch light's, as their neighbours'
+    /// rays say: shared out over every light in reach, the lights that stay
+    /// on would keep a dashed line of it when the patch's light goes out.
+    #[test]
+    fn the_edge_of_a_lights_patch_goes_dark_with_it() {
+        let lights = [
+            MapLight {
+                position: [0.0, 0.0, 8.0],
+                color: [0.5, 0.5, 0.5],
+                inner: 5.0,
+                outer: 25.0,
+                channel: Some(0),
+            },
+            // Faint and far, past the wall as the rays see it.
+            MapLight {
+                position: [30.0, 20.0, -40.0],
+                color: [0.03, 0.03, 0.03],
+                inner: 80.0,
+                outer: 430.0,
+                channel: Some(1),
+            },
+            MapLight {
+                position: [0.0, 0.0, -6.0],
+                color: [0.3, 0.3, 0.3],
+                inner: 5.0,
+                outer: 25.0,
+                channel: Some(2),
+            },
+        ];
+        let patch = lights[0];
+        // The plate's shadow by rays starts at x = 2 on the wall; the
+        // compiler lit up to x = 2.6, one texel further.
+        let lit = |p: Vec3| p.x < 2.6;
+        let mut scene = crate::scene::SceneData {
+            sun_direction: [0.0, -1.0, 0.0],
+            ..Default::default()
+        };
+        let given = |light: &MapLight, p: Vec3| Vec3::from(light.color) * falloff(Vec3::from(light.position).distance(p), light.inner, light.outer);
+        lit_quad(&mut scene, |a, b| Vec3::new(10.0 * a, 10.0 * b, 0.0), Vec3::Z, |p| {
+            if lit(p) { given(&patch, p) } else { Vec3::ZERO }
+        });
+        let first = scene.vertices.len() as u32;
+        for (x, y) in [(1.0, -20.0), (20.0, -20.0), (20.0, 20.0), (1.0, 20.0)] {
+            scene.vertices.push(crate::scene::SceneVertex {
+                position: [x, y, 4.0],
+                normal: [0.0, 0.0, 1.0],
+                uv: [0.0; 2],
+                lightmap_uv: [0.0; 2],
+                color: [1.0; 4],
+                fx: [0.0; 4],
+            });
+        }
+        let start = scene.indices.len() as u32;
+        scene.indices.extend([0, 1, 2, 0, 2, 3].map(|i| first + i));
+        scene.batches.push(crate::scene::MeshBatch {
+            indices: start..start + 6,
+            material: scene.materials.len(),
+            center: [0.0; 3],
+        });
+        scene.materials.push(crate::scene::Material::surface("plate", 0, 0));
+        let bake = Bake::new(&scene).expect("lightmapped wall");
+        let seen: Vec<u32> = bake
+            .lexels
+            .iter()
+            .map(|l| {
+                lights.iter().enumerate().fold(0u32, |m, (k, light)| {
+                    let lit = light.shade(l.position, l.normal).max_element() > 0.0
+                        && bake.sees(l.position, l.normal, light.position.into());
+                    m | u32::from(lit) << k
+                })
+            })
+            .collect();
+        let wall = &bake.dynamic_sheets(&lights, &seen, &[])[0];
+        // With the patch's light off, each texel draws its leftover and the
+        // other lights' shares: the compiler's ambient (none) everywhere.
+        let mut edge = 0;
+        for (l, mask) in bake.lexels.iter().zip(&seen).filter(|(l, _)| l.sheet == 0) {
+            let i = l.index as usize;
+            let mut drawn = f32::from(wall.left[i * 4]);
+            for (c, &k) in wall.lights.iter().enumerate() {
+                if k != 0 {
+                    drawn += given(&lights[k as usize], l.position).x * f32::from(wall.visibility[c / 4][i * 4 + c % 4]);
+                }
+            }
+            edge += usize::from(lit(l.position) && mask & 1 == 0);
+            assert!(drawn <= 2.0, "texel {i} at {:.2?} draws {drawn:.0} levels with the patch's light off", l.position);
+        }
+        assert!(edge > 0, "some lit texels the rays call hidden");
     }
 
     /// A lamp's shade: a band of panels around a light, facing out, away
