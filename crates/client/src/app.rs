@@ -229,7 +229,9 @@ impl ContentParts {
                 })
                 .map(|d| (d.id.clone(), d.name.trim().to_string()))
                 .chain(
-                    bri_net::content_identity::bot_kinds_from(&content.paths.bot_extras)?
+                    content
+                        .paths
+                        .bot_kinds()?
                         .into_iter()
                         .map(|k| (k.id, k.name)),
                 )
@@ -357,6 +359,7 @@ struct HostSetup {
     item_bounds: BTreeMap<String, bri_weapons::ItemBounds>,
     avatar_catalog: bri_content::avatar::Package,
     vehicle_pack: bri_vehicles::Pack,
+    bot_kinds: Vec<bri_sim::bot_kind::BotKind>,
     event_catalog: bri_events::Catalog,
     event_sounds: Vec<String>,
     maps: Vec<bri_sim::session::MapListing>,
@@ -369,7 +372,7 @@ impl HostSetup {
         session.set_weapon_pack(self.weapon_pack.clone())?;
         session.set_item_bounds(self.item_bounds.clone())?;
         session.set_avatar_catalog(self.avatar_catalog.clone())?;
-        session.set_vehicle_pack(self.vehicle_pack.clone())?;
+        session.set_vehicle_pack(self.vehicle_pack.clone(), self.bot_kinds.clone())?;
         session.set_event_catalog(self.event_catalog.clone(), self.event_sounds.clone())?;
         session.set_spawn_points(loaded.spawn_points)?;
         session.set_breakables(loaded.breakables)?;
@@ -412,8 +415,8 @@ pub struct App {
     steering_sent: Option<(RequestId, (bool, bool))>,
     /// Whether the UI was last told to hide the crosshair.
     crosshair_hidden: bool,
-    /// The held tool's `wheel` command while its trigger is held, which
-    /// then takes the mouse wheel.
+    /// The held tool's `wheel` command: while its trigger is held, it takes
+    /// the mouse wheel (`UiUpdate::ToolWheel`).
     tool_wheel: Option<String>,
     cpu_terrain: Vec<Arc<bri_render::terrain_scene::TerrainScene>>,
     renderer: Option<crate::gpu_build::Building<SceneRenderer>>,
@@ -463,6 +466,10 @@ pub struct App {
     /// Outlines of non-rendering bricks, drawn only while a building tool is
     /// out, and whether the uploaded lines are the shown ones (None: stale).
     hidden_lines: Option<bri_render::lines::LineRenderer>,
+    /// The Environment window's vignette over the world.
+    vignette: Option<bri_render::vignette::VignetteRenderer>,
+    /// The environment the UI was last told of, for which session.
+    environment_sent: Option<(RequestId, bri_ui::models::environment::EnvironmentView)>,
     /// An Add-On's selection box (`Notice::SelectionBox`), and the box it
     /// last uploaded.
     selection_lines: Option<bri_render::lines::LineRenderer>,
@@ -1702,6 +1709,8 @@ impl App {
             package_models: Default::default(),
             brick_kills: Vec::new(),
             hidden_lines: None,
+            vignette: None,
+            environment_sent: None,
             selection_lines: None,
             selection_uploaded: None,
             hidden_uploaded: None,
@@ -2629,13 +2638,13 @@ impl App {
             self.crosshair_hidden = hidden;
             self.ui.apply(UiUpdate::HideCrosshair(hidden));
         }
+        // The trigger goes to the tool only on foot or in a seat that is not
+        // a gunner's, and not from a camera. Whether it is held is the UI's
+        // to know: it gives the tool the wheel only while it is.
         let wheel = image
             .and_then(|i| i.commands.wheel.clone())
-            .filter(|_| self.controls.held(HeldControl::Fire));
-        if wheel.is_some() != self.tool_wheel.is_some() {
-            self.ui.apply(UiUpdate::ToolWheel(wheel.is_some()));
-        }
-        self.tool_wheel = wheel;
+            .filter(|_| self.controls.observer().is_none() && !self.local_weapon_seat());
+        claim_wheel(&mut self.ui, &mut self.tool_wheel, wheel);
     }
     /// Dead players watch their corpse from the orbit camera.
     fn third_person_view(&self) -> bool {
@@ -2954,7 +2963,15 @@ impl App {
                 None,
             );
             let permit = load_limit.acquire_owned().await?;
-            let (loaded, visual, identity, catalog, weapon_pack, item_bounds, vehicle_pack) =
+            let (
+                loaded,
+                visual,
+                identity,
+                catalog,
+                weapon_pack,
+                item_bounds,
+                (vehicle_pack, bot_kinds),
+            ) =
                 tokio::task::spawn_blocking(move || -> Result<_> {
                     let _permit = permit;
                     let weapons = paths.weapon_content()?;
@@ -2968,6 +2985,7 @@ impl App {
                     // Every package this host loaded, hashed: what joiners must match.
                     let identity = paths.environment()?;
                     let vehicle_pack = paths.vehicle_pack()?;
+                    let bot_kinds = paths.bot_kinds()?;
                     let meshes = Arc::new(
                         loaded
                             .simulation
@@ -3035,7 +3053,7 @@ impl App {
                         catalog,
                         weapons.pack,
                         item_physics.bounds,
-                        vehicle_pack,
+                        (vehicle_pack, bot_kinds),
                     ))
                 })
                 .await??;
@@ -3065,6 +3083,7 @@ impl App {
                 item_bounds,
                 avatar_catalog,
                 vehicle_pack,
+                bot_kinds,
                 event_catalog,
                 event_sounds,
                 maps: map_list,
@@ -4880,6 +4899,26 @@ impl App {
                 .request(REPORT_REQUEST, Command::TrustList(list.entries()))?;
         }
         if let Some(view) = &a.view {
+            // The Environment window's view: on every change, and each
+            // second while a day/night cycle turns.
+            if let Some(scene) = &self.cpu_scene {
+                let next = bri_ui::models::environment::EnvironmentView {
+                    authored: authored_environment(scene),
+                    settings: view.environment.clone(),
+                    tick: view.tick,
+                };
+                let due = self.environment_sent.as_ref().is_none_or(|(session, sent)| {
+                    *session != a.id
+                        || sent.authored != next.authored
+                        || sent.settings != next.settings
+                        || next.settings.day_cycle.is_some()
+                            && next.tick.abs_diff(sent.tick) >= bri_content::atmosphere::TICKS_PER_SECOND
+                });
+                if due {
+                    self.environment_sent = Some((a.id, next.clone()));
+                    self.ui.apply_session(a.id, UiUpdate::Environment(next));
+                }
+            }
             if let Some(snapshot) = &view.admin_snapshot
                 && (self.ui.core.admin.snapshot.is_none()
                     || snapshot.revision > self.ui.core.admin.revision)
@@ -5515,6 +5554,15 @@ fn driven_vehicle(
 ) -> Option<u64> {
     let (vehicle, seat) = mounted.filter(|(_, seat)| *seat == 0)?;
     steers(vehicle, usize::from(seat)).then_some(vehicle)
+}
+
+/// Tell the UI whether the held tool can take the wheel (its image's
+/// `wheel` command, "package:command"), once each time that changes.
+fn claim_wheel(ui: &mut Ui, current: &mut Option<String>, wheel: Option<String>) {
+    if wheel.is_some() != current.is_some() {
+        ui.apply(UiUpdate::ToolWheel(wheel.is_some()));
+    }
+    *current = wheel;
 }
 
 /// Whether the trigger is down is the player's, whichever path then takes
@@ -8191,6 +8239,12 @@ impl PlatformApp for App {
             bri_render::scene::DEPTH_FORMAT,
             samples,
         ));
+        self.vignette = Some(bri_render::vignette::VignetteRenderer::new(
+            device,
+            format,
+            bri_render::scene::DEPTH_FORMAT,
+            samples,
+        ));
         self.selection_lines = Some(bri_render::lines::LineRenderer::new(
             device,
             format,
@@ -8867,6 +8921,21 @@ impl PlatformApp for App {
             FAR_PLANE,
         );
         camera.apply_environment(scene);
+        // The host's environment (Admin Menu, Add-Ons) over the map's own;
+        // an untouched map skips it and draws exactly as authored.
+        let live = (!view.environment.is_empty()).then(|| {
+            bri_content::atmosphere::resolve(&authored_environment(scene), &view.environment, view.tick)
+        });
+        if let Some(live) = &live {
+            camera.apply_atmosphere(live);
+        }
+        if let Some(vignette) = &mut self.vignette {
+            vignette.update(
+                frame.queue,
+                live.and_then(|l| l.vignette).map(|v| (v.color, v.multiply)),
+                aspect,
+            );
+        }
         camera.ambient[3] = f32::from(self.light_volume.mode(self.graphics.lighting));
         camera.atmosphere[2] = (self.animation_time % 86400.0) as f32;
         // `$pref::visibleDistanceMax` caps the map's visible distance; the
@@ -9251,7 +9320,12 @@ impl PlatformApp for App {
             .as_ref()
             .map(|color| color.create_view(&Default::default()));
         let world_target = multisampled.as_ref().unwrap_or(frame.target);
-        let [r, g, b, a] = scene.clear_color.map(f64::from);
+        // A changed fog colour clears the frame with it too.
+        let clear_color = match &live {
+            Some(l) if l.fog_color != scene.fog.color => [l.fog_color[0], l.fog_color[1], l.fog_color[2], 1.0],
+            _ => scene.clear_color,
+        };
+        let [r, g, b, a] = clear_color.map(f64::from);
         if let (Some(gpu), Some(view)) = (
             self.gpu_scene.as_mut(),
             self.attempt.as_ref().and_then(|a| a.view.as_ref()),
@@ -9464,10 +9538,25 @@ impl PlatformApp for App {
         if let Some(lines) = &self.selection_lines {
             lines.render(&mut pass);
         }
+        if let Some(vignette) = &self.vignette {
+            vignette.render(&mut pass);
+        }
         drop(pass);
         self.client_code.resolve(frame.encoder);
         renderer.end_timing(frame.encoder, "effects");
         Ok(true)
+    }
+}
+/// The map's own sun, light and fog, which the host's environment
+/// settings change.
+fn authored_environment(scene: &SceneData) -> bri_content::atmosphere::Authored {
+    bri_content::atmosphere::Authored {
+        sun_direction: scene.sun_direction,
+        direct_light: scene.sun_color,
+        ambient_light: scene.ambient,
+        fog_start: scene.fog.start,
+        fog_end: scene.fog.end,
+        fog_color: scene.fog.color,
     }
 }
 /// An Add-On selection box's outline: the Duplicator family's gold.
@@ -9650,6 +9739,86 @@ mod tests {
         assert!(c.held(HeldControl::Fire), "other actions leave it");
         super::note_trigger(&mut c, &fire(false));
         assert!(!c.held(HeldControl::Fire));
+    }
+    /// Max, v0.1.10: "gravity gun scrolling still switches tool instead of
+    /// letting me reel in or out whatever i am currently grabbed on to".
+    /// Every frame `follow_control` told `controls` the player was in
+    /// control of their body, which dropped the held trigger, so the tool
+    /// never claimed the wheel. Here the real UI takes the mouse, and each
+    /// frame runs as the game's does: actions drained and the trigger
+    /// noted, control followed, the held tool's wheel claimed.
+    #[test]
+    fn rolling_the_wheel_with_the_trigger_held_reels_and_never_switches_tools() {
+        use bri_ui::{
+            api::{BindInput, GameAction, HeldControl, UiAction},
+            binds::Platform,
+            geom::Rect,
+            input::{InputEvent, MouseButton},
+            schema::UiPack,
+            screens::ctrl,
+            ui::UiConfig,
+        };
+        use super::{PathBuf, Ui, UiUpdate};
+        let mut pack = UiPack::default();
+        for name in ["PlayGui", "LoadingGui"] {
+            pack.layouts.insert(name.into(), ctrl("GuiControl", "GuiDefaultProfile", Rect::new(0, 0, 640, 480)));
+        }
+        let mut ui = Ui::new(
+            std::rc::Rc::new(bri_ui::pack::Pack::from_parts(pack, PathBuf::new())),
+            UiConfig { size: (1280, 960), scale: Some(2.0), platform: Platform::Windows },
+            bri_ui::api::Settings { binds: Some(vec![]), mouse_type: 2, ..Default::default() },
+        );
+        ui.core.binds.bind(BindInput::Wheel, "scrollInventory");
+        ui.core.binds.bind(BindInput::Mouse(MouseButton::Left), "mouseFire");
+        ui.apply(UiUpdate::Connection(bri_ui::api::ConnectionState::InGame {
+            server_name: "Test".into(),
+            max_players: 8,
+            local: true,
+            single_player: true,
+            admin: true,
+        }));
+        ui.drain_actions();
+        let mut controls = super::Controls::default();
+        let mut tool_wheel = None;
+        let mut frame = |ui: &mut Ui, controls: &mut super::Controls| -> Vec<UiAction> {
+            let actions: Vec<_> = ui.drain_actions().into_iter().map(|(_, a)| a).collect();
+            for action in &actions {
+                super::note_trigger(controls, action);
+                if let UiAction::Game(action) = action {
+                    controls.action(action);
+                }
+            }
+            controls.follow(bri_sim::session::ControlObject::Player, 1, None);
+            super::claim_wheel(ui, &mut tool_wheel, Some("gravity-gun:reel".into()));
+            actions
+        };
+        let reels = |actions: &[UiAction]| {
+            actions.iter().filter(|a| matches!(a, UiAction::Game(GameAction::ToolWheel { .. }))).count()
+        };
+        let (x, y) = (640.0, 480.0);
+        let button = MouseButton::Left;
+        // Grab: the trigger held over many frames stays held.
+        ui.handle_input(InputEvent::MouseDown { button, x, y });
+        for _ in 0..10 {
+            frame(&mut ui, &mut controls);
+        }
+        assert!(controls.held(HeldControl::Fire), "the trigger is still held");
+        // Rolled forward and back: each notch reels, nothing else moves.
+        for delta in [1.0, 1.0, -1.0] {
+            ui.handle_input(InputEvent::Wheel { delta });
+            let actions = frame(&mut ui, &mut controls);
+            assert_eq!(
+                actions,
+                vec![UiAction::Game(GameAction::ToolWheel { notches: delta as i32 })],
+                "only the tool sees the wheel"
+            );
+        }
+        // Let go: the wheel is the inventory's again.
+        ui.handle_input(InputEvent::MouseUp { button, x, y });
+        frame(&mut ui, &mut controls);
+        assert!(!controls.held(HeldControl::Fire));
+        ui.handle_input(InputEvent::Wheel { delta: 1.0 });
+        assert_eq!(reels(&frame(&mut ui, &mut controls)), 0);
     }
     #[test]
     fn only_a_steering_seat_drives_its_vehicle() {

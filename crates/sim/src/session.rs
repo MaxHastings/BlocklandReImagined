@@ -32,6 +32,7 @@ mod admin_players;
 mod admin_world;
 mod inventory;
 mod map_change;
+mod environment;
 mod map_lights;
 mod special;
 mod trust;
@@ -51,6 +52,8 @@ pub use weapons::{MountedImage, WeaponView};
 mod blueprints;
 mod movables;
 mod packages;
+mod paint_fill;
+pub use paint_fill::Fill;
 mod script_world;
 mod spray;
 mod tools;
@@ -607,6 +610,9 @@ struct Peer {
     avatar: Option<bri_content::avatar::Appearance>,
     /// `SetTempColor` spray paint over the avatar's own colours.
     temp_color: Option<spray::TempColor>,
+    /// Colours an Add-On puts over the avatar's own (`set_avatar_colors`):
+    /// a team's uniform. Spray paint and burns still show over it.
+    uniform: BTreeMap<String, [f32; 4]>,
     /// `%client.currentColor`: the palette index of the last colour spray
     /// can picked (index 0 until one is).
     current_color: u8,
@@ -722,6 +728,9 @@ pub struct Session {
     breakables: breakables::Breakables,
     /// Add-On map light rules (`set_map_lights`), replicated to clients.
     map_lights: Vec<map_lights::MapLightRule>,
+    /// The live environment over the map's own (Admin Menu Environment,
+    /// Add-Ons' `set_environment`), replicated to clients.
+    environment: bri_content::atmosphere::Settings,
     /// Holds, pushes and Add-On vehicles (`physics` operations).
     movables: movables::Movables,
 }
@@ -745,6 +754,7 @@ impl Session {
             archetypes: Default::default(),
             breakables: Default::default(),
             map_lights: Vec::new(),
+            environment: Default::default(),
             movables: Default::default(),
             specials: Default::default(),
             highlights: BTreeMap::new(),
@@ -850,6 +860,9 @@ impl Session {
             .iter()
             .filter_map(|(id, p)| {
                 let mut avatar = p.avatar.clone()?;
+                for (slot, color) in &p.uniform {
+                    avatar.colors.insert(slot.clone(), *color);
+                }
                 if let Some(temp) = &p.temp_color {
                     temp.apply(&mut avatar);
                 }
@@ -1109,6 +1122,7 @@ impl Session {
                 last_drop_tick: None,
                 tutorial: Default::default(),
                 temp_color: None,
+                uniform: BTreeMap::new(),
                 current_color: 0,
                 talking: false,
                 sitting: false,
@@ -1158,6 +1172,7 @@ impl Session {
         }
         self.refresh_trust();
         self.packages_joined(owner);
+        self.join_server_game(owner)?;
         if !is_bot {
             let music = self.tool_catalog.sounds.clone();
             self.notify(owner, Notice::MusicTracks(music));
@@ -1320,6 +1335,7 @@ impl Session {
                 last_drop_tick: None,
                 tutorial: Default::default(),
                 temp_color: None,
+                uniform: BTreeMap::new(),
                 current_color: 0,
                 talking: false,
                 sitting: false,
@@ -1357,6 +1373,7 @@ impl Session {
         self.announce(owner, "connected.", "ClientJoinSound");
         self.refresh_trust();
         self.packages_joined(owner);
+        self.join_server_game(owner)?;
         Ok(())
     }
     /// Queue one client input. Each input drives exactly one motor tick, so the

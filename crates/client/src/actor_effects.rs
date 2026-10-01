@@ -1275,6 +1275,7 @@ fn teleport_image() -> bri_weapons::Image {
         zoom: None,
         crosshair: true,
         follow_arm: false,
+        paint_tint: false,
     }
 }
 

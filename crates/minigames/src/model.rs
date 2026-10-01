@@ -16,6 +16,14 @@ pub struct PlayerId {
     pub account: AccountId,
     pub session: u64,
 }
+/// The server itself as a mini-game owner: a game mode's mini-game, which
+/// every player is in and nobody owns. Its account is the world's (brick
+/// owner 0), so the world's own bricks, such as a generated map, are the
+/// game's bricks.
+pub const SERVER: PlayerId = PlayerId {
+    account: AccountId(0),
+    session: 0,
+};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct GameId(pub u64);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -222,6 +230,12 @@ pub struct MiniGame {
     pub last_reset: Option<u64>,
     pub ball_update_at: Option<u64>,
 }
+impl MiniGame {
+    /// A game mode's mini-game, owned by the server ([`SERVER`]).
+    pub fn is_server(&self) -> bool {
+        self.owner == SERVER
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
     StalePlayer,
@@ -246,6 +260,9 @@ pub enum Error {
     InvalidSnapshot,
     InvalidClock,
     RespawnNotReady,
+    /// The server runs a game mode's mini-game: players stay in it and
+    /// cannot start, join or leave another.
+    ServerGame,
 }
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

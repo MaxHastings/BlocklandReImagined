@@ -89,6 +89,12 @@ impl World for ScriptWorld<'_> {
             }
         }
     }
+    fn voxel(&self, brick: u64) -> Option<([i64; 3], String)> {
+        self.session.package_voxel(brick)
+    }
+    fn can_place_voxel(&self, position: [i64; 3]) -> bool {
+        self.session.voxel_fits(position)
+    }
     fn brick_box(&self, brick: u64) -> Option<([f32; 3], [f32; 3])> {
         let (min, max) = self.session.simulation.brick_box(brick)?;
         Some((min.to_array(), max.to_array()))
