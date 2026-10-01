@@ -8297,6 +8297,33 @@ that one chance. Now:
   uses only `App` API that 1b2747e has and names the phase, seat, look and
   hull heading when it fails.
 
+## 2026-10-01: turret seat changes, take three (protocol 70)
+
+f552ba6 failed on the gate: passenger moves still in flight after a switch
+to the gun ((0, 0) with the mouse still) reset the turret to the hull's
+heading, and no look-matching rule on the host can tell them apart from a
+gunner really looking that way. Root cause: the host read every move by the
+seat it is in now, not the seat the move was made for. Now the client says
+so:
+
+- Every movement datagram carries `seat: Option<SeatSince>` (vehicle, seat,
+  and the first move sequence shaped for it). The client sets it once the
+  new seat's view is in place (a gunner on an attached turret: once it
+  looks along the barrel, which waits for the turret's pose), from the next
+  move on (`App::seat_report`, `SeatSince::follow`).
+- The host (`Session::seat_report`, `vehicle_input`) reads a move as this
+  seat's only when the report names the seat it is in and the move's
+  sequence is at or past `since`. Anything else (the old seat's moves in
+  flight) steers, turns and aims nothing; a held turret keeps its aim. A
+  report from an older datagram is ignored. Host-side riders that never
+  report keep the boarding-look rule.
+- Chaos net bots report their seats from the replica (`Replica::seat_of`).
+- `bri-chaos --test turret_seats` now sends each move with its report:
+  passes at 0, 1, 4 and 12 ticks of lag each way and fails at lag 1 when the
+  reports are left out; a late report from the old seat is ignored.
+- Not run in the cloud (no content): `bri-sim --test vehicles` (all
+  ignored there) and the app test; the gate runs them.
+
 ## 2026-09-30 Trench Warfare game mode (branch `claude/trench-warfare-eq4lxb`)
 
 Max asked for the classic Trench Warfare mode (Glass Add-On 829). That

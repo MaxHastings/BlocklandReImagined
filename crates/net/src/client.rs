@@ -4,7 +4,7 @@ use bri_identity::ClientIdentity;
 use bri_progress::{Progress, Stage, Unit};
 use bri_sim::{
     player::MoveInput,
-    session::{CameraView, Command, Reply},
+    session::{CameraView, Command, Reply, SeatSince},
 };
 use bri_world::OwnerId;
 use sha2::Digest;
@@ -603,6 +603,7 @@ impl Client {
         newest: u64,
         inputs: &[MoveInput],
         camera: Option<CameraView>,
+        seat: Option<SeatSince>,
     ) -> Result<()> {
         ensure!(
             inputs.len() <= MAX_MOVEMENT_BATCH && newest >= inputs.len() as u64,
@@ -620,6 +621,7 @@ impl Client {
                 newest: newest - (inputs.len() - end) as u64,
                 inputs: inputs[start..end].to_vec(),
                 camera,
+                seat,
             };
             movement.validate()?;
             datagrams.push(codec::encode_datagram(&movement)?);

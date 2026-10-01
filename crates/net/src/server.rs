@@ -1339,7 +1339,7 @@ async fn run(
                     }
                 }
             },
-            Event::Move{owner,generation,movement}=>{if peers.get(&owner).is_some_and(|p|p.generation==generation){for (sequence,input) in movement.sequenced(){let _=session.movement(owner,sequence,input);}if let Some(camera)=movement.camera{let _=session.camera_report(owner,camera);}}},
+            Event::Move{owner,generation,movement}=>{if peers.get(&owner).is_some_and(|p|p.generation==generation){let _=session.seat_report(owner,movement.newest,movement.seat);for (sequence,input) in movement.sequenced(){let _=session.movement(owner,sequence,input);}if let Some(camera)=movement.camera{let _=session.camera_report(owner,camera);}}},
         }},
         _=ticker.tick()=>{
             players.store(peers.len() as u32,std::sync::atomic::Ordering::Relaxed);

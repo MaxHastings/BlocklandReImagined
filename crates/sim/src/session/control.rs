@@ -41,6 +41,36 @@ pub struct CameraView {
     pub pitch: f32,
 }
 
+/// The seat a client's moves are made for: from move `since` on, it knows
+/// it sits in `seat` of `vehicle` and shapes its moves for that seat (a
+/// driver's mouse turn, a passenger's turn on the seat, a gunner's look along
+/// the turret). Sent with its moves; the host reads a move by the seat it was
+/// made for, so moves still in flight from the seat a rider just left never
+/// steer, turn or aim anything in the new one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SeatSince {
+    pub vehicle: u64,
+    pub seat: u8,
+    pub since: u64,
+}
+impl SeatSince {
+    /// The report to send with move `next` by a client that now knows it
+    /// sits in `seat` (vehicle, seat index), or is on foot: `report`, the
+    /// last one sent, while the seat is the same, else a new one from `next`.
+    pub fn follow(report: Option<Self>, seat: Option<(u64, u8)>, next: u64) -> Option<Self> {
+        let (vehicle, seat) = seat?;
+        match report {
+            Some(report) if (report.vehicle, report.seat) == (vehicle, seat) => Some(report),
+            _ => Some(Self {
+                vehicle,
+                seat,
+                since: next,
+            }),
+        }
+    }
+}
+
 impl CameraView {
     pub fn validate(&self) -> Result<()> {
         ensure!(
@@ -82,6 +112,21 @@ impl Peer {
 impl Session {
     pub fn control(&self, owner: OwnerId) -> Option<ControlObject> {
         self.peers.get(&owner).map(|p| p.control)
+    }
+    /// The seat the client's moves are made for, reported with the moves
+    /// up to `newest`; `None` is on foot. A report older than one already
+    /// heard (a reordered datagram) is ignored. See [`SeatSince`].
+    pub fn seat_report(
+        &mut self,
+        owner: OwnerId,
+        newest: u64,
+        seat: Option<SeatSince>,
+    ) -> Result<()> {
+        let peer = self.peers.get_mut(&owner).context("Unknown connection")?;
+        if peer.seat_since.is_none_or(|(heard, _)| newest >= heard) {
+            peer.seat_since = Some((newest, seat));
+        }
+        Ok(())
     }
     /// The client's latest camera view, reported alongside its moves while a
     /// camera has control. Reports from the body are ignored.

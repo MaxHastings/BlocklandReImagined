@@ -154,6 +154,13 @@ fn validate_minigames(games: &[bri_sim::session::MiniGameView]) -> Result<()> {
     Ok(())
 }
 impl Replica {
+    /// The vehicle and seat `owner` sits in, as last replicated.
+    pub fn seat_of(&self, owner: OwnerId) -> Option<(u64, u8)> {
+        self.vehicles.values().find_map(|v| {
+            let seat = v.occupants.iter().position(|o| *o == Some(owner))?;
+            Some((v.id, u8::try_from(seat).ok()?))
+        })
+    }
     pub fn new(checkpoint: Checkpoint) -> Result<Self> {
         ensure!(
             checkpoint.world.bricks.len() <= bri_world::MAX_BRICKS
