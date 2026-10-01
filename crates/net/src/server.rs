@@ -68,8 +68,21 @@ fn check_packages(
         unavailable: blocking,
     })
 }
-/// Loads a map for Change Map; runs on a blocking thread.
-pub type MapLoader = Arc<dyn Fn(&str) -> Result<Session> + Send + Sync>;
+/// The host's side of Change Map: loads the next map's session and keeps
+/// what a session leaving play (a map change, the host stopping) saves.
+pub trait MapHost: Send + Sync {
+    /// The session for `map`, set up as the host's first map was; runs on a
+    /// blocking thread.
+    fn load(&self, map: &str) -> Result<Session>;
+    /// `session` is leaving play.
+    fn outgoing(&self, _session: &Session) {}
+}
+impl<F: Fn(&str) -> Result<Session> + Send + Sync> MapHost for F {
+    fn load(&self, map: &str) -> Result<Session> {
+        self(map)
+    }
+}
+pub type MapLoader = Arc<dyn MapHost>;
 /// Self-signed QUIC host certificate and its PKCS#8 private key.
 #[derive(Clone)]
 pub struct HostCertificate {
@@ -1259,6 +1272,7 @@ async fn run(
             match loaded {
                 Ok(new)=>{
                     let old=std::mem::replace(&mut session,new);
+                    if let Some(host)=&options.map_loader{host.outgoing(&old);}
                     session.adopt(old,admin)?;
                     // Players the new map could not place are let go with the reason.
                     close_admin_disconnects(&mut session,&mut peers);
@@ -1332,7 +1346,7 @@ async fn run(
                         match options.map_loader.clone() {
                             Some(loader)=>{let tx=map_tx.clone();tokio::task::spawn_blocking(move||{
                                 // A loader that panics still answers the administrator.
-                                let loaded=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||loader(&map))).unwrap_or_else(|panic|Err(anyhow::anyhow!("Loading the map failed: {}",panic_message(&*panic))));
+                                let loaded=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||loader.load(&map))).unwrap_or_else(|panic|Err(anyhow::anyhow!("Loading the map failed: {}",panic_message(&*panic))));
                                 let _=tx.blocking_send((admin,loaded));});}
                             None=>session.map_change_failed(admin,"This host cannot change maps"),
                         }
@@ -1401,6 +1415,9 @@ async fn run(
     tasks.abort_all();
     while tasks.join_next().await.is_some() {}
     outcome?;
+    if let Some(host) = &options.map_loader {
+        host.outgoing(&session);
+    }
     Ok(ServerReport {
         step_errors,
         weapon_adapter_gaps: session.weapon_adapter_gaps().clone(),

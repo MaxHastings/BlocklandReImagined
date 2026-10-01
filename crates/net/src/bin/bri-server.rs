@@ -53,6 +53,7 @@ async fn main() -> Result<()> {
     let world = bri_world::persistence::load_startup(&world_path)?;
     let dedicated::Dedicated {
         session,
+        setup,
         environment,
         spawn_points,
         tool_summary,
@@ -72,7 +73,8 @@ async fn main() -> Result<()> {
             environment: environment.clone(),
             spawn_points,
             certificate: Some(server::HostCertificate::load_or_create(&state_dir)?),
-            map_loader: None,
+            // Cannot change maps yet; keeps the Add-Ons' state when stopping.
+            map_loader: Some(setup),
             // Joiners download the Add-Ons this host runs.
             packages: Some(std::sync::Arc::new(bri_net::packages::PackageShelf::new(
                 &content_root,

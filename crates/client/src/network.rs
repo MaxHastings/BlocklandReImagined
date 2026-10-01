@@ -18,8 +18,6 @@ pub struct Connected {
     pub host: Option<ServerHandle>,
     /// Add-On packages downloaded from this server and loaded for it.
     pub mods: Arc<bri_package_runtime::Catalog>,
-    /// Where a hosted package world saves its state and edits on shutdown.
-    pub package_save: Option<std::path::PathBuf>,
 }
 #[derive(Clone)]
 pub struct View {
@@ -201,17 +199,10 @@ impl Worker {
                     };
                     connection.client.close();
                     if let Some(host)=connection.host.take() {
-                        // Stop the host even when dispatch failed or the UI cancelled,
-                        // and keep the package world it ends with, if any.
-                        match host.stop().await {
-                            Ok(report)=>{
-                                if let (Some(path),Some(save))=(connection.package_save.take(),report.packages)
-                                    && let Err(error)=save.encode().and_then(|bytes|bri_files::replace(&path,&bytes).map_err(Into::into))
-                                {
-                                    eprintln!("Could not save the package world: {error:#}");
-                                }
-                            }
-                            Err(error)=>bri_console::warn(format!("Host stopped with an error: {error:#}")),
+                        // Stop the host even when dispatch failed or the UI cancelled;
+                        // the host keeps the package state it ends with.
+                        if let Err(error)=host.stop().await {
+                            bri_console::warn(format!("Host stopped with an error: {error:#}"));
                         }
                     }
                     result

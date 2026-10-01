@@ -25,6 +25,15 @@ pub fn session() -> Session {
 
 /// The synthetic session over `world`, whose bricks use the `plate` definition.
 pub fn session_with(world: World) -> Session {
+    let mut session = Session::new(simulation_with(world));
+    session
+        .set_event_catalog(bri_events::testing::catalog(), Vec::new())
+        .unwrap();
+    session
+}
+
+/// The synthetic simulation over `world`: the `plate` definition on flat ground.
+pub fn simulation_with(world: World) -> Simulation {
     let mesh = Mesh {
         schema_version: 1,
         id: "plate".into(),
@@ -64,20 +73,12 @@ pub fn session_with(world: World) -> Session {
         )]
         .into(),
     };
-    let mut session = Session::new(
-        Simulation::new(
-            world,
-            defs,
-            vec![
-                ColliderBuilder::cuboid(100.0, 0.5, 100.0).translation(Vector::new(0.0, -0.5, 0.0)),
-            ],
-        )
-        .unwrap(),
-    );
-    session
-        .set_event_catalog(bri_events::testing::catalog(), Vec::new())
-        .unwrap();
-    session
+    Simulation::new(
+        world,
+        defs,
+        vec![ColliderBuilder::cuboid(100.0, 0.5, 100.0).translation(Vector::new(0.0, -0.5, 0.0))],
+    )
+    .unwrap()
 }
 
 pub fn options() -> ServerOptions {

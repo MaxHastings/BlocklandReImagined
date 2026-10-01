@@ -8904,6 +8904,39 @@ Tests: `add_on_join::bot_kinds_come_from_the_blockhead_bot_add_on_the_host_runs`
 (generated content: hosts with the Add-On on and off, loads a saved spawn
 brick, counts players). Not run here: the second needs generated content.
 
+## 2026-10-01: Code health pass: one host setup, gun-seat fire, drive state
+
+Max asked whether technical debt was piling up. The worst pattern was the
+same job written in several places that drift apart, and systems that undo
+each other inside one frame. Three refactors, one commit each:
+
+- **One host setup.** `bri_net::host_setup::HostSetup` builds every map's
+  session for Start Game, Change Map and the dedicated server, Add-On
+  scripts included. Before, Change Map in a game the client hosted dropped
+  every Add-On script (Duplicator, Advanced Duplicator, Gravity Gun, Steel
+  Ball, Ragdoll), and the dedicated server never ran Add-On scripts.
+  `SessionContent` has only required fields, so a new kind of content is
+  added once and every host must supply it. Each map's Add-On state is kept
+  under its own key on a map change and when the host stops
+  (`MapHost::outgoing`). `Family::spawnable` is the one rule for the spawn
+  brick list. The client used to hide the standalone Tank Turret that v20
+  and the server list; every host now lists it. Test: `bri-net host_setup` drives an admin Change Map over loopback
+  and fails without the fix.
+- **Gun-seat fire.** The hold records the seat it was pressed in, and every
+  release ends it. Before, a release in a seat without a gun left the gun
+  "held", so it ignored the next press. Test: `bri-chaos gun_seat_fire`
+  (content-free; fails on the old code).
+- **Drive state in `Motion`.** Which vehicle the client predicts now lives
+  with the prediction, so a map change resets both. Before, after a map
+  change while seated in a vehicle with the same id, prediction never
+  restarted.
+
+The `app.rs` split plan is in `docs/architecture/client-app-split.md`.
+Remaining findings for their owners: `follow(Player)` still clears held
+Fire on main (Gravity Gun lane's `ab3c814`), turret aim overwritten by the
+seat reset in the same tick (turret work), captions ignore the 80-unit
+earshot (fixed by the split's `NetFrame`). The save host and
+`brick_load_bench` still set up sessions by hand; they are probes.
 ## 2026-10-01 Trench Warfare: originals only (branch `claude/trench-warfare-eq4lxb`)
 
 Max chose "originals only" for classic Add-Ons (cmsg_01GZRn7g8JiQ6aV1cQgSj22DVJoRScxbRAjHRC4md4Ab28):

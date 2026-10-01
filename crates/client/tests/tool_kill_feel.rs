@@ -333,7 +333,6 @@ async fn tool_kills_fall_through_the_world_and_blasts_tumble_on_every_screen() -
             client,
             host: Some(server),
             mods: Default::default(),
-            package_save: None,
         },
     )
     .await?;
@@ -344,7 +343,6 @@ async fn tool_kills_fall_through_the_world_and_blasts_tumble_on_every_screen() -
             client,
             host: None,
             mods: Default::default(),
-            package_save: None,
         },
     )
     .await?;

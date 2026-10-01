@@ -17,7 +17,7 @@ use bri_render::{
 };
 use bri_sim::{
     definitions::Definitions,
-    session::{Command, InspectMode, Reply, Session, ToolAction},
+    session::{Command, InspectMode, Reply, ToolAction},
 };
 use bri_ui::{
     api::*,
@@ -226,14 +226,7 @@ impl ContentParts {
                 .vehicles
                 .definitions
                 .iter()
-                .filter(|d| {
-                    !matches!(
-                        d.family,
-                        bri_vehicles::Family::Skis
-                            | bri_vehicles::Family::Tumble
-                            | bri_vehicles::Family::Turret
-                    )
-                })
+                .filter(|d| d.family.spawnable())
                 .map(|d| (d.id.clone(), d.name.trim().to_string()))
                 .chain(
                     content
@@ -356,44 +349,6 @@ fn prepare_map(
         shape_indices: visual.shape_indices,
         light_volume,
     })
-}
-/// Everything a host installs in a map's session; kept to build the next
-/// map's session when an administrator changes maps.
-struct HostSetup {
-    lan: bool,
-    catalog: bri_sim::session::ToolCatalog,
-    weapon_pack: bri_weapons::Pack,
-    item_bounds: BTreeMap<String, bri_weapons::ItemBounds>,
-    avatar_catalog: bri_content::avatar::Package,
-    /// The Blockhead's mount points, from its rig.
-    body_mounts: Vec<bri_sim::archetype::MountPoint>,
-    vehicle_pack: bri_vehicles::Pack,
-    bot_kinds: Vec<bri_sim::bot_kind::BotKind>,
-    event_catalog: bri_events::Catalog,
-    event_sounds: Vec<String>,
-    maps: Vec<bri_sim::session::MapListing>,
-}
-/// The Blockhead's model id (`m.dts`).
-const BLOCKHEAD_MODEL: &str = "v20.shape.m";
-impl HostSetup {
-    fn session(&self, loaded: crate::content::LoadedMap) -> Result<Session> {
-        let mut session = Session::new(loaded.simulation);
-        session.set_lan_host(self.lan);
-        session.set_tool_catalog(self.catalog.clone())?;
-        session.set_weapon_pack(self.weapon_pack.clone())?;
-        session.set_item_bounds(self.item_bounds.clone())?;
-        session.set_avatar_catalog(self.avatar_catalog.clone())?;
-        session.set_body_mount_points(BLOCKHEAD_MODEL, self.body_mounts.clone())?;
-        session.set_vehicle_pack(self.vehicle_pack.clone(), self.bot_kinds.clone())?;
-        session.set_event_catalog(self.event_catalog.clone(), self.event_sounds.clone())?;
-        session.set_spawn_points(loaded.spawn_points)?;
-        session.set_breakables(loaded.breakables)?;
-        session.set_map_list(self.maps.clone())?;
-        if let Some(tutorial) = loaded.tutorial {
-            session.set_tutorial(tutorial)?;
-        }
-        Ok(session)
-    }
 }
 /// Request ID for unsolicited state reports; their replies are not awaited.
 const REPORT_REQUEST: RequestId = RequestId::MAX;
@@ -606,7 +561,6 @@ pub struct App {
     /// The camera the last rendered frame was drawn from (eye, yaw, pitch).
     rendered_camera: Option<(Vec3, f32, f32)>,
     /// Which driven vehicle is predicted, and one whose prediction failed.
-    drive_state: DriveState,
     /// The rendered camera's roll about its forward axis (a rider's
     /// first-person view tilting with the seat), radians.
     rendered_roll: f32,
@@ -1825,7 +1779,6 @@ impl App {
             rider_eye: None,
             observer_eye: None,
             rendered_camera: None,
-            drive_state: DriveState::default(),
             rendered_roll: 0.0,
             drawn_controls: None,
             tumble: None,
@@ -2080,7 +2033,6 @@ impl App {
         assets: &crate::vehicles::VehicleAssets,
         prefs: &bri_ui::prefs::Prefs,
         faults: &mut crate::cosmetic::CosmeticFaults,
-        state: &mut DriveState,
         view: &network::View,
         driven: Option<u64>,
     ) {
@@ -2092,7 +2044,7 @@ impl App {
             let pose = view.vehicle_poses.get(&id)?;
             let d = assets.definition(&info.definition)?;
             let target = drive_target(info, d, pose.driver_steering.0)?;
-            (state.refused.as_ref() != Some(&target)).then_some(())?;
+            (motion.drive_state.refused.as_ref() != Some(&target)).then_some(())?;
             Some((target, info, pose))
         });
         let steering = steering_in_use(wanted.as_ref().map(|(_, _, pose)| *pose), prefs);
@@ -2100,8 +2052,8 @@ impl App {
         // A new vehicle, a respawn under a new id, a changed definition or
         // scale, or leaving the seat: start again or stop.
         let target = wanted.as_ref().map(|(t, ..)| t.clone());
-        if target != state.target {
-            state.target = target;
+        if target != motion.drive_state.target {
+            motion.drive_state.target = target;
             let request = wanted.as_ref().map(|(target, info, pose)| {
                 let owner = view.owner;
                 (
@@ -2118,11 +2070,6 @@ impl App {
                             scale: info.scale,
                         },
                         seat: 0,
-                        occupant: bri_vehicles::Occupant {
-                            id: bri_vehicles::OccupantId(owner),
-                            owner: bri_vehicles::OwnerId(owner),
-                            body: [1.25, 2.65],
-                        },
                         prefs,
                     },
                     pose.motion(),
@@ -2133,7 +2080,7 @@ impl App {
                 .is_none()
             {
                 // Show the host's poses for this vehicle instead.
-                state.refused = state.target.take();
+                motion.drive_state.refused = motion.drive_state.target.take();
                 let _ = motion.drive(None);
             }
         }
@@ -2144,12 +2091,12 @@ impl App {
                 .absorb("vehicle prediction", corrected)
                 .is_none()
             {
-                state.refused = state.target.take();
+                motion.drive_state.refused = motion.drive_state.target.take();
                 let _ = motion.drive(None);
             }
         }
         if driven.is_none() {
-            state.refused = None;
+            motion.drive_state.refused = None;
         }
         vehicles.set_predicted(motion.driven_frame());
     }
@@ -2938,7 +2885,7 @@ impl App {
         // environment map; the packages then generate the ground.
         let hosted =
             crate::packages::hosted(self.server_packages.as_ref(), &map, game_mode.as_deref())?;
-        let map = hosted.map;
+        let map = hosted.map.clone();
         ensure!(
             self.content.maps.iter().any(|m| m.id == map),
             "This map has no usable native bundle yet"
@@ -2946,14 +2893,15 @@ impl App {
         let paths = self.content.paths.clone();
         let light_cache = self.state_dir.join("light-volumes");
         let paths_for_maps = paths.clone();
-        let base_map = hosted.base_map;
-        let package_world = hosted.catalog;
-        let package_save = package_world.as_ref().map(|_| {
-            self.state_dir.join("packages").join(format!(
-                "{}.save.json",
-                hosted.save_key.replace([':', '/'], "-")
-            ))
-        });
+        let base_map = hosted.base_map.clone();
+        let add_ons =
+            self.server_packages
+                .clone()
+                .map(|server| bri_net::host_setup::HostedAddOns {
+                    server,
+                    mode: game_mode.clone(),
+                    saves: Some(self.state_dir.join("packages")),
+                });
         // Admin Change Map choices (the Tutorial has its own entry point).
         let map_list: Vec<_> = self
             .content
@@ -3160,52 +3108,33 @@ impl App {
             } else {
                 SocketAddr::from(([0, 0, 0, 0], port))
             };
-            let setup = HostSetup {
+            let setup = Arc::new(bri_net::host_setup::HostSetup {
                 // v20 `$Server::LAN`: single-player and LAN hosts keep the looser
                 // brick-damage rule; internet hosts use miniGameCanDamage.
                 lan: !internet,
-                catalog,
-                weapon_pack,
-                item_bounds,
-                avatar_catalog,
-                body_mounts,
-                vehicle_pack,
-                bot_kinds,
-                event_catalog,
-                event_sounds,
+                content: bri_net::host_setup::SessionContent {
+                    tool_catalog: catalog,
+                    weapon_pack,
+                    item_bounds,
+                    avatar_catalog,
+                    body_mounts,
+                    vehicle_pack,
+                    bot_kinds,
+                    event_catalog,
+                    event_sounds,
+                },
                 maps: map_list,
-            };
-            let mut spawn_points = loaded.spawn_points.clone();
-            let mut session = setup.session(loaded)?;
-            session.set_server_settings(server_settings.clone())?;
-            if let Some(catalog) = package_world {
-                let save = match package_save.as_ref().map(std::fs::read) {
-                    Some(Ok(bytes)) => Some(bri_sim::session::PackageSave::decode(&bytes)?),
-                    _ => None,
-                };
-                let world = catalog.world().is_some();
-                let generated = session.install_packages(catalog, save)?;
-                if world {
-                    ensure!(
-                        !generated.is_empty(),
-                        "The package world generated no ground to stand on"
-                    );
-                    spawn_points = generated;
-                }
-                if let Some(dir) = package_save.as_ref().and_then(|p| p.parent()) {
-                    std::fs::create_dir_all(dir)?;
-                }
-            }
-            session.set_admin_passwords(admin, super_admin)?;
-            let map_loader: server::MapLoader = {
-                let paths = paths_for_maps.clone();
-                Arc::new(move |map: &str| {
-                    // Change Map keeps the host's Server Settings.
-                    let mut session = setup.session(paths.load_map(map, None)?)?;
-                    session.set_server_settings(server_settings.clone())?;
-                    Ok(session)
-                })
-            };
+                // Change Map keeps the host's Server Settings.
+                settings: Some(server_settings),
+                passwords: Some((admin, super_admin)),
+                add_ons,
+                load_map: Some({
+                    let paths = paths_for_maps.clone();
+                    Arc::new(move |map: &str| Ok(paths.load_map(map, None)?.into_session()))
+                }),
+            });
+            let (session, spawn_points) = setup.session(&hosted, loaded.into_session())?;
+            let map_loader: server::MapLoader = setup;
             let mut host = server::start_with_admin_store_and_limit(
                 session,
                 ServerOptions {
@@ -3279,7 +3208,6 @@ impl App {
                 client,
                 host: Some(host),
                 mods: Default::default(),
-                package_save,
             })
         });
         self.attempt = Some(Attempt {
@@ -3556,7 +3484,6 @@ impl App {
                 client,
                 host: None,
                 mods,
-                package_save: None,
             })
         });
         self.attempt = Some(Attempt {
@@ -5752,21 +5679,7 @@ fn rider_input(
         abilities.apply(input)
     }
 }
-/// The vehicle a client predicts: which one, from which definition, at
-/// which scale. Any change starts its prediction again.
-#[derive(Clone, Debug, PartialEq)]
-struct DriveTarget {
-    id: u64,
-    definition: String,
-    scale_bits: u32,
-}
-#[derive(Default)]
-struct DriveState {
-    target: Option<DriveTarget>,
-    /// A target whose prediction failed: the host's poses are shown until
-    /// the player leaves it.
-    refused: Option<DriveTarget>,
-}
+use crate::motion::DriveTarget;
 /// What the local player, in `info`'s first seat, predicts: a live vehicle
 /// they steer or a player-type mount they control (horse, rowboat, cannon,
 /// turret), as v20 predicts the object a client controls. Destroyed
@@ -6322,7 +6235,6 @@ impl PlatformApp for App {
                     &self.vehicle_assets,
                     &self.ui.core.prefs,
                     &mut self.cosmetic_faults,
-                    &mut self.drive_state,
                     view,
                     driven,
                 );
@@ -6838,7 +6750,9 @@ impl PlatformApp for App {
                 &view.entities,
                 |id| {
                     let d = projectiles.get(id)?;
-                    let gravity = if d.ballistic { 9.81 * d.gravity } else { 0.0 };
+                    // The host's fall per tick, as an acceleration.
+                    let gravity =
+                        bri_weapons::runtime::fall_per_tick(d) * bri_weapons::TICK_HZ as f32;
                     Some(crate::ghosts::Flight {
                         acceleration: Vec3::NEG_Y * gravity,
                         lifetime: d.lifetime_ticks,

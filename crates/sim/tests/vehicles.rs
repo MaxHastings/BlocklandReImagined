@@ -1281,11 +1281,6 @@ fn a_predicted_driver_needs_no_corrections_when_moves_arrive_in_pairs(f: &Fixtur
                 scale: info.scale,
             },
             seat: 0,
-            occupant: bri_vehicles::Occupant {
-                id: bri_vehicles::OccupantId(owner),
-                owner: bri_vehicles::OwnerId(owner),
-                body: [1.25, 2.65],
-            },
             // As the client does: the host's copy of the driver's prefs.
             prefs: (!pose.driver_steering.0, !pose.driver_steering.1),
         },
@@ -1548,11 +1543,6 @@ fn corrections_under_timing(
                 scale: info.scale,
             },
             seat: 0,
-            occupant: bri_vehicles::Occupant {
-                id: bri_vehicles::OccupantId(owner),
-                owner: bri_vehicles::OwnerId(owner),
-                body: [1.25, 2.65],
-            },
             // As the client does: the host's copy of the driver's prefs.
             prefs: (!pose.driver_steering.0, !pose.driver_steering.1),
         },

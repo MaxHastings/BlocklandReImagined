@@ -44,7 +44,7 @@ mod vehicles;
 use vehicles::combat_input_burst;
 pub use vehicles::{
     DEFAULT_STEERING, SeatedPace, VehicleInfo, VehiclePose, actor_controls,
-    carry_through_openings, driver_controls,
+    carry_through_openings, driver_controls, rider,
 };
 mod items;
 mod weapons;
@@ -1674,6 +1674,10 @@ impl Session {
                 Ok(Reply::Accepted)
             }
             Command::WeaponTrigger { down } => {
+                // A release ends a gun-seat hold too, wherever the press was.
+                if !down {
+                    self.vehicles.set_fire(owner, false);
+                }
                 ensure!(!down || peer.combat.alive, "Dead players cannot fire");
                 self.weapon_trigger(owner, down, direction, aim.is_some())?;
                 if down {

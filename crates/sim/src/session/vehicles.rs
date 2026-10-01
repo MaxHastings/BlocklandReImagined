@@ -12,8 +12,6 @@ use rapier3d::prelude::*;
 
 /// `$Game::MinMountTime`: a player cannot remount right after leaving.
 const MIN_MOUNT_TICKS: u64 = 120;
-/// Families that are not placed on spawn bricks (item/state vehicles).
-const INTERNAL_FAMILIES: [veh::Family; 2] = [veh::Family::Skis, veh::Family::Tumble];
 /// `WheeledVehicleData::onCollision`/`Armor::onCollision`: a player mounts
 /// only from above, feet this far over the mount's origin.
 const MOUNT_ABOVE: f32 = 0.2;
@@ -36,7 +34,10 @@ pub(super) struct Vehicles {
     last_dismount: BTreeMap<OwnerId, u64>,
     /// Jet held last input: a new press leaves the vehicle.
     jet_held: BTreeMap<OwnerId, bool>,
-    fire_held: BTreeMap<OwnerId, bool>,
+    /// The gun seat each gunner holds fire in. A hold belongs to the seat
+    /// it was pressed in: leaving or switching seats ends it, whichever path
+    /// the release later takes.
+    fire_held: BTreeMap<OwnerId, Mount>,
     /// Look angles last fed to the vehicle, for mouse steering deltas.
     last_look: BTreeMap<OwnerId, (f32, f32)>,
     /// Players whose `$pref::Input::UseStrafeSteering` and
@@ -98,7 +99,7 @@ impl SeatedPace {
         if low > SEATED_SPARE { 2 } else { 1 }
     }
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 struct Mount {
     vehicle: VehicleId,
     seat: usize,
@@ -276,6 +277,11 @@ fn occupant(peers: &BTreeMap<OwnerId, Peer>, owner: OwnerId) -> veh::Occupant {
         .map_or_else(bri_motor::player::PlayerTuning::default, |p| {
             p.player.tuning().clone()
         });
+    rider(owner, &tuning)
+}
+/// A player riding a vehicle, sized by their body (archetype and scale):
+/// the host and the driver's prediction seat and unseat the same body.
+pub fn rider(owner: OwnerId, tuning: &bri_motor::player::PlayerTuning) -> veh::Occupant {
     veh::Occupant {
         id: OccupantId(owner),
         owner: veh::OwnerId(owner),
@@ -332,7 +338,14 @@ impl Vehicles {
     }
     /// A gunner's fire button drives the vehicle weapon, not items.
     pub(super) fn set_fire(&mut self, owner: OwnerId, down: bool) {
-        self.fire_held.insert(owner, down);
+        match self.mounted.get(&owner).filter(|_| down) {
+            Some(mount) => {
+                self.fire_held.insert(owner, mount.clone());
+            }
+            None => {
+                self.fire_held.remove(&owner);
+            }
+        }
     }
 }
 pub(super) fn combat_input_burst() -> f32 {
@@ -366,7 +379,7 @@ impl Session {
             .as_ref()
             .map(|w| {
                 w.definitions()
-                    .filter(|d| !INTERNAL_FAMILIES.contains(&d.family))
+                    .filter(|d| d.family.spawnable())
                     .map(|d| (d.id.clone(), d.name.trim().to_string()))
                     .chain(self.bot_choices())
                     .collect()
@@ -961,12 +974,8 @@ impl Session {
             }
             return Ok(());
         }
-        let fire = self
-            .vehicles
-            .fire_held
-            .get(&owner)
-            .copied()
-            .unwrap_or(false);
+        // Fire held in the seat they sit in now.
+        let fire = self.vehicles.fire_held.get(&owner) == Some(&mount);
         let (strafe, auto_return) = self
             .vehicles
             .steering
