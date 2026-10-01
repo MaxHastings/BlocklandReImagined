@@ -26,3 +26,5 @@ Weapon fields from server settings: `Pack::bindings` (a pack field a
 server setting decides), magazine `supply` and `hide_display`; and
 `Checkpoint::weapon_settings` and `Delta::weapon_settings`: the values of
 the settings the host's weapons pack binds, so players derive the same pack.
+Every Tier preference: magazine `remount` and `clear_when_out`, guard
+`bots_keep` and `fall_damage`, aura `ally_damage`. Content schema only.

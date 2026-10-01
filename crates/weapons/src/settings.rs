@@ -30,11 +30,13 @@ pub struct Binding {
     pub field: Vec<String>,
     /// The field's value for each value of the setting, by that value as
     /// text (`"true"`, `"3"`, an item id); `null` clears an optional field.
-    /// A setting value not listed leaves the field as authored.
+    /// A setting value not listed leaves the field as authored, or with
+    /// `scale` too, scales.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub values: BTreeMap<String, Value>,
-    /// Instead of `values`: a number setting's value times `scale`, whole
-    /// when it comes out whole (a duration in seconds as ticks).
+    /// A number setting's value times `scale`, whole when it comes out
+    /// whole (a duration in seconds as ticks), for values `values` does not
+    /// list (Tier's shield durability: -1 for none, else the count).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scale: Option<f64>,
     /// Applies only while each of these settings (named as `setting`) has
@@ -69,8 +71,8 @@ impl Binding {
             "A binding cannot change a definition's id, states or what it names"
         );
         ensure!(
-            self.values.is_empty() != self.scale.is_none(),
-            "A binding has either `values` or `scale`"
+            !self.values.is_empty() || self.scale.is_some(),
+            "A binding has `values` or `scale`"
         );
         ensure!(
             self.values.len() <= 64
@@ -98,6 +100,9 @@ impl Binding {
         let Some(v) = value(&self.setting) else {
             return Ok(None);
         };
+        if let Some(listed) = self.values.get(&v) {
+            return Ok(Some(listed.clone()));
+        }
         if let Some(scale) = self.scale {
             let n: f64 = v
                 .parse()
@@ -109,7 +114,7 @@ impl Binding {
                 Value::from(n)
             }));
         }
-        Ok(self.values.get(&v).cloned())
+        Ok(None)
     }
 }
 

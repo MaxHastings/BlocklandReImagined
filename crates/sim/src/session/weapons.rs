@@ -397,6 +397,10 @@ impl Session {
             TargetId::Actor(target) => policy.player(source.0, target.0, true),
             other => affect(source, other),
         };
+        let ally = |source: ActorId, target| match target {
+            TargetId::Actor(target) => policy.ally(source.0, target.0),
+            _ => false,
+        };
         // `passBallCheck`: a living player catches a ball thrown from the
         // same minigame, or when neither is in one (`sportIsInSameMinigame`).
         let games: BTreeMap<OwnerId, Option<bri_minigames::GameId>> = self
@@ -420,6 +424,7 @@ impl Session {
             simulation: &self.simulation,
             affect: &affect,
             affect_radius: &affect_radius,
+            ally: &ally,
             catch: &catch,
             responses: &self.events.projectile_responses,
             truncated_targets: 0,

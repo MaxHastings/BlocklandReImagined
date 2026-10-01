@@ -680,9 +680,9 @@ fn ammo_items_bags_and_headshots_play_in_a_hosted_game() {
 }
 
 /// The copy's RTB preferences the rules read are server settings: the
-/// report says so (and keeps one no rule reads, Recoil, as a gap at its
-/// default), the host changes them in its Server Settings (a value out of
-/// range is refused), and a new life, ammo items and a death follow them.
+/// report says so, the host changes them in its Server Settings (a value
+/// out of range is refused), and a new life, ammo items, a death and the
+/// guns' fields follow them.
 #[test]
 fn tier_preferences_are_server_settings_the_host_changes() {
     use bri_package::setting::SettingValue as V;
@@ -863,6 +863,74 @@ fn tier_preferences_are_server_settings_the_host_changes() {
         json!("99|6|tt-9mm|99"),
         "Arena: shots are the reserve's"
     );
+}
+
+/// A preference that took effect at the next start in RTB (Disable Tier
+/// 1: the pack's guns left out of item lists) is a setting that waits for
+/// the next start or map; a bug fix the engine always makes is reported
+/// carried out, with no setting.
+#[test]
+fn a_restart_preference_hides_the_guns_from_the_next_start() {
+    use bri_package::setting::SettingValue as V;
+    let (dir, out, report) = imported("restart");
+    assert!(report.ports[0].applied, "{:?}", report.ports[0].reason);
+    let resolution = |pref: &str| {
+        let what = format!("RTB_registerPref $Pref::Server::TT::{pref}");
+        report
+            .ported
+            .iter()
+            .find(|f| f.what == what)
+            .and_then(|f| f.resolution.clone())
+            .unwrap_or_default()
+    };
+    assert!(resolution("DisableTier1").contains("server setting"));
+    assert!(resolution("DeathStopFiring").contains("always on"));
+    let rules: Value = serde_json::from_slice(
+        &std::fs::read(dir.0.join(format!("addons/{NS}-rules/behaviour.json"))).unwrap(),
+    )
+    .unwrap();
+    let defs = rules["settings"].as_array().unwrap();
+    let def = |key: &str| defs.iter().find(|d| d["key"] == key);
+    assert_eq!(def("tt_disabletier1").unwrap()["restart"], true);
+    assert!(def("tt_deathstopfiring").is_none(), "no setting to change");
+
+    let sidearm = format!("{NS}:weapon/standinsidearmitem");
+    let create = |g: &mut Game, host| {
+        let mut loadout: [Option<String>; 5] = Default::default();
+        loadout[0] = Some(sidearm.clone());
+        g.s.command(
+            host,
+            100,
+            Command::MiniGame(MiniGameRequest::Create {
+                color: 0,
+                settings: Settings {
+                    loadout,
+                    ..Settings::default()
+                },
+            }),
+        )
+    };
+    let disable = format!("{NS}-rules:tt_disabletier1");
+    let mut g = Game::new(&dir.0, &out);
+    let a = g.join_host("A", Vec3::new(0.0, 0.05, 0.0));
+    g.configure(a, &[(disable.as_str(), V::Bool(true))]).unwrap();
+    assert_eq!(
+        g.s.weapon_settings()["$Pref::Server::TT::DisableTier1"],
+        "false",
+        "kept as the server started"
+    );
+    assert!(create(&mut g, a).is_ok(), "still offered");
+
+    // The next start: the guns are hidden, and no loadout offers them.
+    let settings = g.s.server_settings().clone();
+    let mut g = Game::new(&dir.0, &out);
+    g.s.set_server_settings(settings).unwrap();
+    let a = g.join_host("A", Vec3::new(0.0, 0.05, 0.0));
+    assert_eq!(
+        g.s.weapon_settings()["$Pref::Server::TT::DisableTier1"],
+        "true"
+    );
+    assert!(create(&mut g, a).is_err(), "left out");
 }
 
 /// The stand-in `addon` imported as `ns` with the stand-ins it requires

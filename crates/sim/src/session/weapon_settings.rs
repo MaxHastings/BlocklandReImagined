@@ -69,8 +69,15 @@ impl Session {
         let pack = self
             .authored_weapons
             .with_settings(|name| values.get(name).cloned())?;
+        let catalog = super::combat::catalog(&pack);
         self.weapons.retune(pack)?;
         self.weapon_values = values;
+        // Items a setting shows or hides come and go from loadouts.
+        if &catalog != self.minigames.catalog() {
+            self.minigames
+                .set_catalog(catalog)
+                .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+        }
         Ok(())
     }
 

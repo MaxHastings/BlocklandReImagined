@@ -223,40 +223,7 @@ impl WeaponContent {
             WEAPON_RESOURCE_LIMIT,
             WEAPON_TOTAL_LIMIT,
         )?;
-        // Hidden items are put in the world by scripts only: no one picks
-        // them from a list.
-        let mut item_choices: Vec<_> = pack
-            .items
-            .values()
-            .filter(|item| !item.hidden)
-            .map(|item| (item.id.clone(), item.ui_name.trim().to_string()))
-            .collect();
-        ensure!(
-            item_choices.len() <= 1024,
-            "Weapon item catalog budget exceeded"
-        );
-        let mut aliases = BTreeMap::new();
-        let mut ids = std::collections::BTreeSet::new();
-        for (id, name) in &item_choices {
-            bri_world::ContentRef::Resolved(id.clone()).validate()?;
-            ensure!(!id.chars().any(char::is_control), "Invalid weapon item ID");
-            ensure!(ids.insert(id.clone()), "Duplicate weapon item ID: {id}");
-            ensure!(
-                !name.trim().is_empty() && name.len() <= 128 && !name.chars().any(char::is_control),
-                "Invalid weapon item name"
-            );
-            ensure!(
-                aliases
-                    .insert(name.trim().to_ascii_lowercase(), id.clone())
-                    .is_none(),
-                "Ambiguous weapon item display name: {name}"
-            );
-        }
-        item_choices.sort_by(|a, b| {
-            a.1.to_ascii_lowercase()
-                .cmp(&b.1.to_ascii_lowercase())
-                .then(a.0.cmp(&b.0))
-        });
+        let (item_choices, aliases) = item_choices(&pack)?;
         // Only what the merge kept, each id once and no name twice.
         for (choices, kept) in [
             (
@@ -307,21 +274,30 @@ impl WeaponContent {
     /// Plays the pack the server settings `values` make of the authored
     /// one (by the name each binding uses, as a server sends them); no
     /// values play it as authored.
-    pub fn apply_settings(&mut self, values: &BTreeMap<String, String>) -> Result<()> {
+    /// Plays the pack the server's `values` make of the authored one
+    /// ([`bri_weapons::Binding`]); `Ok(true)` when the items players pick
+    /// from changed with it (a setting showing or hiding some), so lists
+    /// built from [`Self::item_choices`] are built again.
+    pub fn apply_settings(&mut self, values: &BTreeMap<String, String>) -> Result<bool> {
         let Some((authored, applied)) = &mut self.authored else {
-            return Ok(());
+            return Ok(false);
         };
         if applied == values {
-            return Ok(());
+            return Ok(false);
         }
         applied.clone_from(values);
         // Values it cannot take play it as authored, once.
         let played = authored.with_settings(|name| values.get(name).cloned());
-        self.pack = match &played {
-            Ok(pack) => pack.clone(),
-            Err(_) => (**authored).clone(),
-        };
-        played.map(drop)
+        let failed = played.as_ref().err().map(|e| anyhow::anyhow!("{e:#}"));
+        self.pack = played.unwrap_or_else(|_| (**authored).clone());
+        let (choices, aliases) = item_choices(&self.pack)?;
+        let changed = choices != self.item_choices;
+        self.item_choices = choices;
+        self.aliases = aliases;
+        match failed {
+            Some(error) => Err(error),
+            None => Ok(changed),
+        }
     }
 
     /// Catalogs are immutable during an App lifetime. Reloading requires restart
@@ -682,6 +658,49 @@ fn hash_files_bounded(
         }
     }
     Ok(format!("{:x}", hash.finalize()))
+}
+
+/// The items players pick, by id and name, and their names in lower case
+/// to their ids ([`item_choices`]).
+type ItemChoices = (Vec<(String, String)>, BTreeMap<String, String>);
+
+/// The items players pick from a pack, by name, and their names in lower
+/// case to their ids. Hidden items are put in the world by scripts only:
+/// no one picks them from a list.
+fn item_choices(pack: &bri_weapons::Pack) -> Result<ItemChoices> {
+    let mut item_choices: Vec<_> = pack
+        .items
+        .values()
+        .filter(|item| !item.hidden)
+        .map(|item| (item.id.clone(), item.ui_name.trim().to_string()))
+        .collect();
+    ensure!(
+        item_choices.len() <= 1024,
+        "Weapon item catalog budget exceeded"
+    );
+    let mut aliases = BTreeMap::new();
+    let mut ids = std::collections::BTreeSet::new();
+    for (id, name) in &item_choices {
+        bri_world::ContentRef::Resolved(id.clone()).validate()?;
+        ensure!(!id.chars().any(char::is_control), "Invalid weapon item ID");
+        ensure!(ids.insert(id.clone()), "Duplicate weapon item ID: {id}");
+        ensure!(
+            !name.trim().is_empty() && name.len() <= 128 && !name.chars().any(char::is_control),
+            "Invalid weapon item name"
+        );
+        ensure!(
+            aliases
+                .insert(name.trim().to_ascii_lowercase(), id.clone())
+                .is_none(),
+            "Ambiguous weapon item display name: {name}"
+        );
+    }
+    item_choices.sort_by(|a, b| {
+        a.1.to_ascii_lowercase()
+            .cmp(&b.1.to_ascii_lowercase())
+            .then(a.0.cmp(&b.0))
+    });
+    Ok((item_choices, aliases))
 }
 
 #[cfg(test)]

@@ -124,12 +124,37 @@ const KIT: &str = r#"{
         "reflected": { "name": "Reflected", "suicide_message": "<bitmap:ci/reflect> %3%1",
                        "murder_message": "%2 <bitmap:ci/reflect>%3%1", "vehicle_scale": 1.0,
                        "direct": false, "special": true }
-    }
+    },
+    "bindings": [
+        { "setting": "$Pref::Server::Test::Durability",
+          "field": ["images", "kit:image/shield", "guard", "durability"],
+          "values": { "-1": null, "0": 1 }, "scale": 1 },
+        { "setting": "$Pref::Server::Test::BreakBot",
+          "field": ["images", "kit:image/shield", "guard", "bots_keep"],
+          "values": { "false": true } },
+        { "setting": "$Pref::Server::Test::StopFalls",
+          "field": ["images", "kit:image/shield", "guard", "fall_damage"],
+          "values": { "true": 0.125 } }
+    ]
 }"#;
 
 /// `A` holds `gun`; `B` holds the shield up, looking along `look`.
 fn field(gun: &str, look: Vec3) -> WeaponsWorld {
-    let mut w = WeaponsWorld::new(Pack::from_json(KIT.as_bytes()).unwrap()).unwrap();
+    field_set(gun, look, &[])
+}
+
+/// [`field`] with the kit's settings at these values.
+fn field_set(gun: &str, look: Vec3, settings: &[(&str, &str)]) -> WeaponsWorld {
+    let pack = Pack::from_json(KIT.as_bytes())
+        .unwrap()
+        .with_settings(|name| {
+            settings
+                .iter()
+                .find(|(n, _)| format!("$Pref::Server::Test::{n}") == name)
+                .map(|(_, v)| (*v).to_owned())
+        })
+        .unwrap();
+    let mut w = WeaponsWorld::new(pack).unwrap();
     w.add_actor(A, 5).unwrap();
     w.add_actor(B, 5).unwrap();
     let slot = w.give(A, gun).unwrap();
@@ -312,4 +337,59 @@ fn a_shield_breaks_on_its_last_stop_and_leaves_the_holder() {
     }
     fire(&mut w);
     assert!(w.image_state(B, 0).is_some());
+}
+
+#[test]
+fn the_durability_setting_counts_stops_and_minus_one_never_breaks() {
+    // 1 stop, as 0 is.
+    let mut w = field_set("kit:weapon/gun", Vec3::Z, &[("Durability", "0")]);
+    fire(&mut w);
+    assert!(w.image_state(B, 0).is_none(), "broken at the first stop");
+    let mut w = field_set("kit:weapon/gun", Vec3::Z, &[("Durability", "-1")]);
+    for _ in 0..4 {
+        fire(&mut w);
+    }
+    assert!(w.image_state(B, 0).is_some(), "never breaks");
+}
+
+#[test]
+fn with_bots_keeping_their_shields_only_players_wear_theirs_out() {
+    let mut w = field_set("kit:weapon/gun", Vec3::Z, &[("BreakBot", "false")]);
+    w.set_bot(B, true).unwrap();
+    for _ in 0..4 {
+        fire(&mut w);
+    }
+    assert!(w.image_state(B, 0).is_some(), "a bot's never wears out");
+    w.set_bot(B, false).unwrap();
+    fire(&mut w);
+    fire(&mut w);
+    assert!(w.image_state(B, 0).is_none(), "a player's does");
+    // Breaking for bots (the default), a bot's breaks too.
+    let mut w = field_set("kit:weapon/gun", Vec3::Z, &[("BreakBot", "true")]);
+    w.set_bot(B, true).unwrap();
+    fire(&mut w);
+    fire(&mut w);
+    assert!(w.image_state(B, 0).is_none());
+}
+
+#[test]
+fn a_shield_raised_the_way_its_holder_falls_takes_most_of_the_fall() {
+    // Off (the default), a fall hurts in full.
+    let mut w = field("kit:weapon/gun", Vec3::NEG_Y);
+    assert_eq!(w.guard_fall(B, 40.0, Vec3::NEG_Y), 40.0);
+    let mut w = field_set("kit:weapon/gun", Vec3::NEG_Y, &[("StopFalls", "true")]);
+    assert!(near(w.guard_fall(B, 40.0, Vec3::NEG_Y), 5.0), "an eighth");
+    let clang = w.step(&mut Field);
+    assert!(
+        clang.iter().any(|e| matches!(e,
+        Event::Effect { definition, .. } if definition == "clangexplosion")),
+        "{clang:?}"
+    );
+    // Looking up, the fall is not met.
+    let mut w = field_set("kit:weapon/gun", Vec3::Y, &[("StopFalls", "true")]);
+    assert_eq!(w.guard_fall(B, 40.0, Vec3::NEG_Y), 40.0);
+    // Nor is it with the shield put away.
+    let mut w = field_set("kit:weapon/gun", Vec3::NEG_Y, &[("StopFalls", "true")]);
+    w.equip(B, None).unwrap();
+    assert_eq!(w.guard_fall(B, 40.0, Vec3::NEG_Y), 40.0);
 }

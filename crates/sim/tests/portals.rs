@@ -340,6 +340,7 @@ mod shots {
             simulation: sim,
             affect: &yes,
             affect_radius: &yes,
+            ally: &|_, _| false,
             catch: &catch,
             responses: &responses,
             truncated_targets: 0,

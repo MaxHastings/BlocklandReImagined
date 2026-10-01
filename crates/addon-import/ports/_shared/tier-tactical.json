@@ -652,12 +652,7 @@
         "how": "the guns' magazines follow it (T+T2: reloads fill from the reserve; T+T1: endless reloads; Classic: nothing is used and there is no display; Arena: shots come from the reserve with no reloads; a gun that must reload keeps its magazine under Classic and Arena, its reloads free)",
         "fields": [
           {
-            "path": [
-              "images",
-              "*",
-              "magazine",
-              "supply"
-            ],
+            "path": ["images", "*", "magazine", "supply"],
             "values": {
               "0": "reserve",
               "1": "endless",
@@ -670,12 +665,7 @@
             "existing": false
           },
           {
-            "path": [
-              "images",
-              "*",
-              "magazine",
-              "supply"
-            ],
+            "path": ["images", "*", "magazine", "supply"],
             "values": {
               "2": "endless",
               "3": "both"
@@ -687,12 +677,7 @@
             "existing": false
           },
           {
-            "path": [
-              "images",
-              "*",
-              "magazine",
-              "supply"
-            ],
+            "path": ["images", "*", "magazine", "supply"],
             "values": {
               "2": "endless",
               "3": "both"
@@ -707,12 +692,7 @@
             }
           },
           {
-            "path": [
-              "images",
-              "*",
-              "magazine",
-              "supply"
-            ],
+            "path": ["images", "*", "magazine", "supply"],
             "values": {
               "2": "endless",
               "3": "both"
@@ -727,12 +707,7 @@
             }
           },
           {
-            "path": [
-              "images",
-              "*",
-              "magazine",
-              "hide_display"
-            ],
+            "path": ["images", "*", "magazine", "hide_display"],
             "values": {
               "2": true
             },
@@ -755,12 +730,7 @@
         "how": "off, the guns show no ammo display (their magazines' hide_display)",
         "fields": [
           {
-            "path": [
-              "images",
-              "*",
-              "magazine",
-              "hide_display"
-            ],
+            "path": ["images", "*", "magazine", "hide_display"],
             "values": {
               "false": true
             },
@@ -775,12 +745,7 @@
         "how": "how many seconds the ammo display stays up (the magazines' display_ticks; 0 keeps it up)",
         "fields": [
           {
-            "path": [
-              "images",
-              "*",
-              "magazine",
-              "display_ticks"
-            ],
+            "path": ["images", "*", "magazine", "display_ticks"],
             "scale": 120,
             "existing": false
           }
@@ -790,12 +755,7 @@
         "how": "off, the guns lose their recoil kick (their shots' kick)",
         "fields": [
           {
-            "path": [
-              "images",
-              "*",
-              "shot",
-              "kick"
-            ],
+            "path": ["images", "*", "shot", "kick"],
             "values": {
               "false": null
             }
@@ -806,14 +766,97 @@
         "how": "on, bullets no longer slow who they hit (their projectiles' slow)",
         "fields": [
           {
-            "path": [
-              "projectiles",
-              "*",
-              "slow"
-            ],
+            "path": ["projectiles", "*", "slow"],
             "values": {
               "true": null
             }
+          }
+        ]
+      },
+      "$Pref::Server::TT::EasterEgg": {
+        "how": "on, the easter-egg weapons (Tier 1A's nailgun, Tier 2's scoped magnum, Tier 2A's match pistol, Explosive 2's mortar, the Retro Magnum, Classic Shotgun and the Browning, Scout, Semi-auto Battle and Compact rifles skins) are offered in item lists, from the next start; off they stay hidden, as the original did not load them",
+        "fields": [
+          {
+            "path": ["items", "*", "hidden"],
+            "values": {
+              "true": false
+            },
+            "only": {
+              "datablock": [
+                "NailgunItem", "ScopedMagnumItem", "MatchPistolItem", "MortarItem", "RetroMagnumItem",
+                "ClassicShotgunItem", "BrowningTAssaultRifleItem", "ScoutTAssaultRifleItem",
+                "SemiBattleRifleItem", "CompactTAssaultRifleItem"
+              ]
+            }
+          }
+        ]
+      },
+      "$Pref::Server::TT::DisplayNades": {
+        "how": "off, grenades show no count (their magazines' hide_display)",
+        "fields": [
+          {
+            "path": ["images", "*", "magazine", "hide_display"],
+            "values": {
+              "false": true
+            },
+            "only": {
+              "item.TT_grenade": true
+            },
+            "existing": false
+          }
+        ]
+      },
+      "$Pref::Server::TT::MolNadeTargetBugfix": {
+        "how": "off, a molotov's fire burns only one player each time it sears, as the original's loop stopped at the first (the fire's aura max_targets); on, everyone in it",
+        "fields": [
+          {
+            "path": ["projectiles", "*", "aura", "max_targets"],
+            "values": {
+              "false": 1
+            },
+            "existing": false
+          }
+        ]
+      },
+      "$Pref::Server::TT::MolNadeTeamkill": {
+        "how": "on, a molotov's fire sears its thrower's teammates and allies too, 1 each time instead of 4, in a mini-game with weapon damage on, friendly fire or not (the fire's aura ally_damage)",
+        "fields": [
+          {
+            "path": ["projectiles", "*", "aura", "ally_damage"],
+            "values": {
+              "true": 1
+            },
+            "existing": false
+          }
+        ]
+      },
+      "$Pref::Server::TT::RemountDups": {
+        "how": "on, drawing another copy of the gun in hand puts it away and draws it afresh, its draw sound and wait again (the magazines' remount); off, the gun stays up and takes that copy's rounds",
+        "fields": [
+          {
+            "path": ["images", "*", "magazine", "remount"],
+            "values": {
+              "true": true
+            },
+            "only": {
+              "item.TT_reloads": true
+            },
+            "existing": false
+          }
+        ]
+      },
+      "$Pref::Server::TT::RemoveOnNoNades": {
+        "how": "on, a grenade's tool is taken from the inventory as its last grenade goes (the magazines' clear_when_out); off, the tool stays for more grenades to come",
+        "fields": [
+          {
+            "path": ["images", "*", "magazine", "clear_when_out"],
+            "values": {
+              "true": true
+            },
+            "only": {
+              "item.TT_grenade": true
+            },
+            "existing": false
           }
         ]
       }

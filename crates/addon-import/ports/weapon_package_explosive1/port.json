@@ -4,6 +4,37 @@
     "tier-tactical-core",
     "tier-tactical"
   ],
+  "rules": {
+    "settings": {
+      "$Pref::Server::TT::DisableExplosive1": {
+        "how": "on, Explosive 1's items are left out of every item list from the next start, as the original did not load them; items already placed in a build stay",
+        "fields": [
+          {
+            "path": ["items", "*", "hidden"],
+            "values": {
+              "true": true
+            },
+            "existing": false
+          }
+        ]
+      },
+      "$Pref::Server::TT::DisableNadePickups": {
+        "how": "on, the grenade bag pickup is left out of every item list from the next start, as the original did not load it; ones already placed in a build stay",
+        "fields": [
+          {
+            "path": ["items", "*", "hidden"],
+            "values": {
+              "true": true
+            },
+            "only": {
+              "datablock": "GrenadeBagItem"
+            },
+            "existing": false
+          }
+        ]
+      }
+    }
+  },
   "notes": "Tier+Tactical Explosive 1 on Tier 1's ammo system: the Conc' Grenade, Stick Grenade and Molotov are counted from the holder's grenades (TT_grenade), a throw taking one; with none left the grenade leaves the hand, its tool still selected, and comes back as a Grenade Bag or a dead player's bag brings more. The Conc' Grenade goes off on its third knock with a knock sound at each; the Molotov bursts into three or four embers thrown as its script threw them, which for the ember's life sear every player within reach with flames and a sizzle only they hear. One difference: Kai played each toss sound twice at once to make it a little louder; it plays once here.",
   "handles": {
     "Projectile::PrjLoop_tick": "engine aura: it pulses every PrjLoop_tickTime, PrjLoop_maxTicks times at most (the ember's aura, read from PrjLoop_onTick)",

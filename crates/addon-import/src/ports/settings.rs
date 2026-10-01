@@ -34,7 +34,8 @@ pub struct FieldSpec {
     /// The field's value for each of the preference's values, as text.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub values: BTreeMap<String, Value>,
-    /// Instead of `values`: the preference's number times this.
+    /// The preference's number times this, for values `values` does not
+    /// list.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scale: Option<f64>,
     /// Only while these other preferences (by global) have these values.
@@ -42,8 +43,10 @@ pub struct FieldSpec {
     pub when: BTreeMap<String, String>,
     /// Only definitions whose datablock has these fields: `true` for one
     /// that is set (not empty, 0 or false), `false` for one that is not, a
-    /// string for that value (any case). `item.<field>` reads an image's
-    /// item.
+    /// string for that value (any case; `*` at its start or end matches
+    /// the rest), a list for any of them. `item.<field>` reads an image's
+    /// item; `datablock` is the definition's own datablock name
+    /// (`"*staticItem"`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub only: BTreeMap<String, Value>,
     /// The field must already be there (a kick to turn off); `false` adds
@@ -73,8 +76,8 @@ pub fn bindings(
         );
         for (i, spec) in setting.fields.iter().enumerate() {
             ensure!(
-                spec.path.len() >= 3 && spec.values.is_empty() != spec.scale.is_none(),
-                "settings {global} field {i}: a path of a kind, an id and a field, and either values or scale"
+                spec.path.len() >= 3 && (!spec.values.is_empty() || spec.scale.is_some()),
+                "settings {global} field {i}: a path of a kind, an id and a field, and values or scale"
             );
             for field in expand(weapons, &spec.path, spec.existing) {
                 if !spec
@@ -152,6 +155,9 @@ fn matches(
     wanted: &Value,
 ) -> bool {
     let (kind, id) = (field[0].as_str(), field[1].as_str());
+    if name.eq_ignore_ascii_case("datablock") {
+        return is(weapons[kind][id]["name"].as_str(), wanted);
+    }
     let (datablock, name) = match name.split_once('.') {
         Some((of, rest)) if of.eq_ignore_ascii_case("item") && kind == "images" => {
             let item = weapons["items"]
@@ -163,10 +169,22 @@ fn matches(
         }
         _ => (weapons[kind][id]["name"].as_str(), name),
     };
-    let value = datablock.and_then(|d| blocks.field(d, name));
+    is(datablock.and_then(|d| blocks.field(d, name)), wanted)
+}
+
+/// Whether a datablock field's `value` is as `wanted` ([`FieldSpec::only`]).
+fn is(value: Option<&str>, wanted: &Value) -> bool {
     match wanted {
         Value::Bool(b) => set(value) == *b,
-        Value::String(s) => value.is_some_and(|v| v.trim().eq_ignore_ascii_case(s)),
+        Value::String(w) => value.is_some_and(|v| {
+            let (v, w) = (v.trim().to_ascii_lowercase(), w.to_ascii_lowercase());
+            match (w.strip_prefix('*'), w.strip_suffix('*')) {
+                (Some(end), _) => v.ends_with(end),
+                (_, Some(start)) => v.starts_with(start),
+                _ => v == w,
+            }
+        }),
+        Value::Array(any) => any.iter().any(|w| !w.is_array() && is(value, w)),
         _ => false,
     }
 }

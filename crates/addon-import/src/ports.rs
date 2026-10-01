@@ -102,8 +102,10 @@ pub struct Port {
     pub include: Vec<String>,
     /// What the port carries out that no reader reads from the copy: a
     /// function (`WeaponImage::TT_canFire`), a top-level call
-    /// (`call:TT_registerAmmoType`) or a datablock the game has no class
-    /// for (`datablock:ShortRifleRaycastTracer`) to how the game does it
+    /// (`call:TT_registerAmmoType`), a datablock the game has no class
+    /// for (`datablock:ShortRifleRaycastTracer`) or an RTB preference the
+    /// game carries out with no setting (`pref:$Pref::Server::TT::X`, a
+    /// bug fix it always makes) to how the game does it
     /// now (an engine seam, the port's rules). The import report counts it as ported when
     /// the copy has it. Say only what the game really does.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -146,7 +148,8 @@ pub const SHARED_DIR: &str = "_shared";
 #[serde(deny_unknown_fields)]
 pub struct Rules {
     /// What the rules may do (`player`, `world.edit`, `chat`, ...), as in any
-    /// Add-On's `package.json`.
+    /// Add-On's `package.json`; none for rules that only declare settings.
+    #[serde(default)]
     pub capabilities: Vec<String>,
     /// Tables of datablock fields, by the `{{name}}` the rules use them as.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -430,14 +433,10 @@ impl Ports {
             );
         }
         match &port.rules {
-            Some(r) => {
+            Some(_) => {
                 ensure!(
                     rules.iter().any(|(f, _)| f == RULES_BEHAVIOUR),
                     "rules/{RULES_BEHAVIOUR} is missing"
-                );
-                ensure!(
-                    !r.capabilities.is_empty(),
-                    "rules: name the capabilities the rules use"
                 );
                 for (file, _) in &rules {
                     safe_relative(file)?;
@@ -567,7 +566,8 @@ pub struct Applied {
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub handled: Handled,
     /// The copy's RTB preferences its rules read, by lower-case global, to
-    /// the server setting each became and how the rules use it.
+    /// the server setting each became and how the rules use it, or how the
+    /// game carries out one with no setting (`handles`' `pref:`).
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub prefs: BTreeMap<String, String>,
     /// The Add-On's datablocks the port declares in their place.
@@ -773,10 +773,18 @@ fn try_apply(
         || port.rules.as_ref().is_some_and(|r| !r.tables.is_empty());
     let mut read_patch = None;
     let mut definitions = vec![];
-    let handled = &mut applied.handled;
     for (what, how) in &port.handles {
-        handle(handled, what, how);
+        // A preference the game carries out with no setting to change it.
+        match what.strip_prefix("pref:") {
+            Some(global) => {
+                applied
+                    .prefs
+                    .insert(global.to_ascii_lowercase(), how.clone());
+            }
+            None => handle(&mut applied.handled, what, how),
+        }
     }
+    let handled = &mut applied.handled;
     if reads {
         let mut weapons: Value = serde_json::from_slice(
             &std::fs::read(out.join(WEAPONS)).context("the import wrote no weapons")?,

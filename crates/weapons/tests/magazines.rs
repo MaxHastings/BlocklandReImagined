@@ -334,6 +334,40 @@ fn two_of_one_gun_each_keep_their_own_magazine() {
 }
 
 #[test]
+fn a_remounting_gun_drawn_from_another_slot_comes_out_afresh() {
+    // Tier's Remount Duplicate Items: drawing the other copy puts the gun
+    // away and draws it again; without it the gun stays up mid-state.
+    let state = |w: &WeaponsWorld| w.image_state(A, 0).unwrap().1.name.clone();
+    let mut w = world();
+    holding(&mut w, A, "mag:weapon/pistol");
+    let second = w.give(A, "mag:weapon/pistol").unwrap();
+    click(&mut w);
+    w.equip(A, Some(second)).unwrap();
+    assert_eq!(state(&w), "Ready", "stays up");
+    assert_eq!(rounds(&w).0, 3, "with the other copy's rounds");
+
+    let guns = GUNS.replace(
+        "\"display\": \"Light Rounds\"",
+        "\"display\": \"Light Rounds\", \"remount\": true",
+    );
+    let mut w = WeaponsWorld::new(Pack::from_json(guns.as_bytes()).unwrap()).unwrap();
+    w.add_actor(A, 5).unwrap();
+    let first = holding(&mut w, A, "mag:weapon/pistol");
+    let second = w.give(A, "mag:weapon/pistol").unwrap();
+    click(&mut w);
+    w.equip(A, Some(second)).unwrap();
+    assert_eq!(state(&w), "Activate", "drawn afresh");
+    step(&mut w, 8);
+    assert_eq!(rounds(&w).0, 3);
+    // Drawing the same slot again does not.
+    w.equip(A, Some(second)).unwrap();
+    assert_eq!(state(&w), "Ready");
+    w.equip(A, Some(first)).unwrap();
+    step(&mut w, 8);
+    assert_eq!(rounds(&w).0, 2, "each copy keeps its own");
+}
+
+#[test]
 fn magazines_and_ammo_commands_are_checked() {
     for (from, to) in [
         ("\"size\": 3,", "\"size\": 0,"),

@@ -1170,7 +1170,7 @@ The fields you are most likely to change:
 | image state | `arm`, `gesture` | the holder's animation on entering it: `arm` on thread 2 (`shiftright`), `gesture` on thread 3, the other hand; `"arm_once": true` does not play `arm` again as the state times out into itself (an arm raised while a throw waits) |
 | image state | `cues` | up to 16 things a while after it is entered, as scripts scheduled them: `[{ "after_ms": 450, "thread": 2, "sequence": "plant", "sound": "your-id:sound/pump" }]`, each played even if the state has moved on |
 | projectile | `children` | smaller projectiles it throws out as it flies, bounces or explodes: one set or a list of up to 4, each its own `projectile`, `count`, `speed`; `fuse_ticks: [0, 48]` sets each child off after a random time in that range, as cluster bomblets; `max_count` throws a random number from `count` to it; `steps` (`low`, `high`, `offset`, `step`, each `[x, up, back]`) sets each axis of a child's velocity to a whole number from `low` to `high`, plus `offset`, times `step`, as a script that threw embers with `getRandom`; `on_hit` throws them at each thing it hits, bouncing or bursting, never as it dies in the air; `angles` flings each along `(cos a, cos b, sin a)` at `speed`, `a` and `b` whole degrees at random (Tier+Tactical's `PrjLoop_emitPrj`); `redraw` draws the count's limit again before each child past `count`, as a `for(%i = 0; %i < getRandom(3, 5); %i++)` loop; `max_times` stops `every_ticks` after so many |
-| projectile | `aura` | hurts what is within `radius` every `every_ticks` as it flies: `damage`, `players_only` to pass vehicles by, `effect` played on each one hurt at its scale, `target_sound` heard by that player alone, `max_pulses` to stop after so many (it flies on), `max_targets` to hurt only the first so many each pulse |
+| projectile | `aura` | hurts what is within `radius` every `every_ticks` as it flies: `damage`, `players_only` to pass vehicles by, `effect` played on each one hurt at its scale, `target_sound` heard by that player alone, `max_pulses` to stop after so many (it flies on), `max_targets` to hurt only the first so many each pulse, `ally_damage` (0 to 100) dealt instead to a teammate or ally of its thrower in a mini-game with weapon damage on, friendly fire or not |
 | image | `shot.lob` | `{ "speed": 18.25, "range": 300, "otherwise": 100, "distance_divisor": 3.75, "jitter_steps": [3, 3], "jitter_divisor": [6, 6] }`: lobbed to come down about where the holder looks, as Tier+Tactical's mortar: `speed` along the aim, plus upward the distance from their feet to where the look lands (`otherwise` past `range` times their scale) over `distance_divisor`, plus a little along the world's x and -z |
 | image | `cook` | a grenade whose fuse burns from a state in the hand (below) |
 | image | `guard` | a shield raised in some states (below) |
@@ -1251,8 +1251,13 @@ A magazine with `"from_reserve": true` (size 1) has no rounds of its own:
 each throw takes `per_shot` straight from the reserve and nothing
 reloads, as Tier+Tactical's counted grenades. With none left the image
 leaves the hand while its tool stays selected; more ammo of its kind
-(a grenade bag) puts it back. The display shows the reserve alone, and
-the light key works the light.
+(a grenade bag) puts it back, or with `"clear_when_out": true` its tool
+goes too. The display shows the reserve alone, and the light key works the
+light.
+
+`"remount": true` draws the gun afresh (out of the hand and back, its
+draw states again) when the holder picks another copy of it from another
+slot; without it the gun stays up and takes that copy's rounds.
 
 A magazine's `supply` says where its rounds come from, as Tier+Tactical's
 ammo systems did: `reserve` (the default: shots take the magazine's rounds,
@@ -1401,7 +1406,10 @@ at the holder, and with `reflect` flies back the way they look as theirs
 (a kill by it reads as the damage type `reflect_kill` when the pack has
 one). A ray it stops does `projectile_damage` and is not sent back; any
 other harm it covers does `damage`. After `durability` stops the shield
-breaks: `break_explosion` goes off and the item leaves their tools.
+breaks: `break_explosion` goes off and the item leaves their tools; with
+`"bots_keep": true` a bot's never wears out. With `fall_damage` (0 to 1),
+a fall or crash the holder meets looking the way they were going (down,
+for a fall) does that share, with `hit_explosion` at twice their scale.
 
 Shots hit players, vehicles, bricks and Add-On creatures. A creature's
 own rule decides what the hit does (`on_entity_damage`).

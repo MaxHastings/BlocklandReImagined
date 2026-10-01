@@ -224,6 +224,11 @@ pub trait Query {
         self.can_affect(source, target)
     }
     fn can_catch(&self, source: ActorId, target: ActorId) -> bool;
+    /// Whether `target` is `source`'s teammate or ally in a mini-game with
+    /// weapon damage on, whatever its friendly fire ([`crate::Aura::ally_damage`]).
+    fn is_ally(&self, _source: ActorId, _target: TargetId) -> bool {
+        false
+    }
     /// The liquid covering most of the axis-aligned box standing on `bottom`
     /// and `height` tall, if any.
     fn liquid(&mut self, _bottom: Vec3, _height: f32) -> Option<Liquid> {
@@ -689,6 +694,9 @@ pub struct Actor {
     /// which lasts until the holder dies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     guard_left: Option<u32>,
+    /// A bot, not a player ([`WeaponsWorld::set_bot`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    bot: bool,
 }
 /// Torque's image slot 3, which `Player::emote` and `Player::burn` mount
 /// into: a new emote replaces the one there. Its image runs its states on
@@ -1006,9 +1014,33 @@ impl WeaponsWorld {
                 cues: Vec::new(),
                 emote: None,
                 guard_left: None,
+                bot: false,
             },
         );
         Ok(())
+    }
+    /// Whether `id` is a bot, which some rules treat apart
+    /// ([`crate::Guard::bots_keep`]).
+    pub fn set_bot(&mut self, id: ActorId, bot: bool) -> Result<()> {
+        self.actors.get_mut(&id).context("Unknown actor")?.bot = bot;
+        Ok(())
+    }
+    /// A fall or crash's `amount` of hurt to `id`, moving along `toward`
+    /// as it struck: the share a guard they hold and face it with lets
+    /// through ([`crate::Guard::fall_damage`]), with its clang.
+    pub fn guard_fall(&mut self, id: ActorId, amount: f32, toward: Vec3) -> f32 {
+        let Some((guard, _, a)) = guard_held(&self.actors, &self.pack, id) else {
+            return amount;
+        };
+        let Some(share) = guard.fall_damage else {
+            return amount;
+        };
+        if a.frame.direction.dot(toward) <= 0.0 {
+            return amount;
+        }
+        let (explosion, middle, scale) = (guard.hit_explosion.clone(), body(a), a.frame.scale);
+        self.burst(&explosion, id, middle, scale * 2.0);
+        amount * share
     }
     /// Remove one live projectile without exploding it (`killObjects`).
     pub fn remove_projectile(&mut self, projectile: u64) -> bool {
@@ -1140,6 +1172,21 @@ impl WeaponsWorld {
         // afresh.
         if self.magazine_of(&a).is_some_and(|(_, m)| m.scripted()) {
             a.reload = None;
+        }
+        // Another copy of the gun in hand drawn from another slot comes out
+        // afresh when its magazine says so (Tier's Remount Duplicate
+        // Items: `serverCmdUnUseTool`, then `serverCmdUseTool`); else the
+        // image stays mid-state with that slot's rounds.
+        let remount = slot != a.selected
+            && image.as_ref().is_some_and(|image| {
+                a.images[0].as_ref().is_some_and(|h| &h.image == image)
+                    && self.pack.images[image]
+                        .magazine
+                        .as_ref()
+                        .is_some_and(|m| m.remount)
+            });
+        if remount {
+            self.unmount(id, &mut a);
         }
         // Selected first, so the image mounting knows whose magazine it is.
         a.selected = slot;
@@ -2756,6 +2803,14 @@ impl WeaponsWorld {
                     let selected = a.selected;
                     self.unmount(id, a);
                     a.selected = selected;
+                    // Or its tool goes too (Tier's Clear Unusable Grenades).
+                    if magazine.clear_when_out
+                        && let Some(slot) = selected
+                        && let Some(tool) = a.inventory.get_mut(slot)
+                    {
+                        *tool = None;
+                        a.selected = None;
+                    }
                     self.events.push(Event::Unmounted { actor: id, hand: 0 });
                     self.events.push(Event::Ammo { actor: id });
                     return Advance::Drop;
@@ -3790,14 +3845,17 @@ impl WeaponsWorld {
         let Some(a) = self.actors.get(&holder) else {
             return;
         };
-        let (look, middle, scale, velocity) = (
+        let (look, middle, scale, velocity, bot) = (
             a.frame.direction.normalize_or_zero(),
             body(a),
             a.frame.scale,
             a.frame.velocity,
+            a.bot,
         );
         self.burst(&guard.hit_explosion, holder, middle, scale);
-        if let Some(durability) = guard.durability {
+        if let Some(durability) = guard.durability
+            && !(guard.bots_keep && bot)
+        {
             let a = self.actors.get_mut(&holder).expect("checked");
             let left = a.guard_left.unwrap_or(durability).saturating_sub(1);
             a.guard_left = Some(left);
@@ -4217,9 +4275,14 @@ impl WeaponsWorld {
             if aura.max_targets > 0 && hurt >= aura.max_targets {
                 break;
             }
+            // An ally takes the aura's ally damage instead, friendly fire
+            // or not.
+            let ally = aura.ally_damage.filter(|_| {
+                target.target != TargetId::Actor(p.source) && q.is_ally(p.source, target.target)
+            });
             if !target.center.is_finite()
                 || aura.players_only && matches!(target.target, TargetId::Vehicle(_))
-                || !q.can_affect_radius(p.source, target.target)
+                || ally.is_none() && !q.can_affect_radius(p.source, target.target)
             {
                 continue;
             }
@@ -4248,11 +4311,12 @@ impl WeaponsWorld {
                     profile: aura.target_sound.clone(),
                 });
             }
-            if aura.damage > 0.0 {
+            let damage = ally.unwrap_or(aura.damage);
+            if damage > 0.0 {
                 self.events.push(Event::Damage {
                     source: p.source,
                     target: target.target,
-                    amount: aura.damage * p.scale,
+                    amount: damage * p.scale,
                     kind: kind.clone(),
                     position: p.position,
                     direction: (target.center - p.position).normalize_or_zero(),

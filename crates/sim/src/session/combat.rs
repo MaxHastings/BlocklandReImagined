@@ -69,6 +69,23 @@ impl DamagePolicy<'_> {
         };
         decision == Decision::Allow
     }
+    /// Whether living `target` is `source`'s teammate or ally in a
+    /// mini-game with weapon damage on, friendly fire or not.
+    pub(super) fn ally(&self, source: OwnerId, target: OwnerId) -> bool {
+        let (Some(s), Some(t)) = (self.peers.get(&source), self.peers.get(&target)) else {
+            return false;
+        };
+        source != target
+            && t.combat.alive
+            && self.minigames.allied(s.combat.player, t.combat.player)
+            && self
+                .minigames
+                .player(s.combat.player)
+                .ok()
+                .and_then(|p| p.game)
+                .and_then(|g| self.minigames.game(g).ok())
+                .is_some_and(|g| g.settings.weapon_damage)
+    }
     /// `WheeledVehicle::damage`: vehicles outside minigames can be damaged;
     /// inside, the minigame's vehicle damage rule applies. `owner` is the
     /// vehicle's owner, `None` when there is no such vehicle.
@@ -1853,7 +1870,13 @@ impl Session {
                 } else {
                     DamageKind::Impact
                 };
-                self.damage_player(owner, speed * SPEED_DAMAGE_SCALE, kind, None)?;
+                // A guard faced the way they fell takes some of it.
+                let amount = self.weapons.guard_fall(
+                    ActorId(owner),
+                    speed * SPEED_DAMAGE_SCALE,
+                    impact.normalize_or_zero(),
+                );
+                self.damage_player(owner, amount, kind, None)?;
             }
         }
         Ok(())

@@ -180,6 +180,33 @@ fn a_grenade_counted_from_the_reserve_is_put_away_with_the_last_and_back_as_more
 }
 
 #[test]
+fn a_grenade_cleared_when_out_leaves_the_inventory_with_the_last() {
+    // Tier's Clear Unusable Grenades: the last thrown, its tool goes too.
+    let kit = KIT.replace(
+        "\"from_reserve\": true",
+        "\"from_reserve\": true, \"clear_when_out\": true",
+    );
+    let mut w = WeaponsWorld::new(Pack::from_json(kit.as_bytes()).unwrap()).unwrap();
+    w.add_actor(A, 5).unwrap();
+    let mut q = Air::default();
+    let slot = w.give(A, "nade:weapon/grenade").unwrap();
+    w.equip(A, Some(slot)).unwrap();
+    step(&mut w, &mut q, 4);
+    assert_eq!(throw(&mut w, &mut q), 1);
+    assert_eq!(
+        w.actor(A).unwrap().inventory[slot].as_deref(),
+        Some("nade:weapon/grenade")
+    );
+    assert_eq!(throw(&mut w, &mut q), 1);
+    let a = w.actor(A).unwrap();
+    assert!(a.inventory[slot].is_none() && a.selected.is_none());
+    assert!(!in_hand(&w));
+    // Only a grenade counted from its reserve can be.
+    let bad = KIT.replace("\"from_reserve\": true", "\"clear_when_out\": true");
+    assert!(Pack::from_json(bad.as_bytes()).is_err());
+}
+
+#[test]
 fn endless_grenades_never_run_out() {
     let mut w = world();
     let mut q = Air::default();
@@ -554,6 +581,68 @@ fn an_aura_that_stops_at_its_first_target_hurts_one_a_pulse() {
     let bad = KIT.replace(
         "\"max_pulses\": 2",
         "\"max_pulses\": 2, \"max_targets\": 65",
+    );
+    assert!(Pack::from_json(bad.as_bytes()).is_err());
+}
+
+/// Teammates of the thrower that friendly fire spares, and an enemy.
+struct Team {
+    near: Vec<Nearby>,
+}
+impl Query for Team {
+    fn sweep(&mut self, _: Vec3, _: Vec3, _: Filter) -> Option<Hit> {
+        None
+    }
+    fn radius(&mut self, _: Vec3, _: f32, _: usize) -> Vec<Nearby> {
+        self.near.clone()
+    }
+    fn can_affect(&self, _: ActorId, target: TargetId) -> bool {
+        target == TargetId::Actor(ActorId(3))
+    }
+    fn can_catch(&self, _: ActorId, _: ActorId) -> bool {
+        false
+    }
+    fn is_ally(&self, _: ActorId, target: TargetId) -> bool {
+        matches!(target, TargetId::Actor(t) if t != ActorId(3))
+    }
+}
+
+#[test]
+fn an_aura_with_ally_damage_sears_teammates_friendly_fire_spares() {
+    // Kai's Molotov Friendly Fire Override: allies take 1, not 4, the
+    // thrower none; without it friendly fire spares them.
+    let hurt = |kit: &str| {
+        let mut w = WeaponsWorld::new(Pack::from_json(kit.as_bytes()).unwrap()).unwrap();
+        w.add_actor(A, 5).unwrap();
+        let near = |target| Nearby {
+            target,
+            center: Vec3::ZERO,
+            distance: 1.0,
+        };
+        let mut q = Team {
+            near: vec![
+                near(TargetId::Actor(A)),
+                near(TargetId::Actor(B)),
+                near(TargetId::Actor(ActorId(3))),
+            ],
+        };
+        w.spawn("nade:projectile/ember", A, Vec3::ZERO, Vec3::ZERO, 1.0)
+            .unwrap();
+        step(&mut w, &mut q, 36)
+            .into_iter()
+            .filter_map(|e| match e {
+                Event::Damage { target, amount, .. } => Some((target, amount)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let enemy = (TargetId::Actor(ActorId(3)), 4.0);
+    assert_eq!(hurt(KIT), [enemy]);
+    let kit = KIT.replace("\"max_pulses\": 2", "\"max_pulses\": 2, \"ally_damage\": 1");
+    assert_eq!(hurt(&kit), [(TargetId::Actor(B), 1.0), enemy]);
+    let bad = KIT.replace(
+        "\"max_pulses\": 2",
+        "\"max_pulses\": 2, \"ally_damage\": 101",
     );
     assert!(Pack::from_json(bad.as_bytes()).is_err());
 }

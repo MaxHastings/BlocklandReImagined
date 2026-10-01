@@ -4,7 +4,7 @@
     "tier-tactical-core",
     "tier-tactical-melee"
   ],
-  "notes": "Tier+Tactical Melee Extended II (Kai), on Melee Extended: eight more melee weapons swinging along short rays as Melee Extended's do, the Chainsaw cutting every twentieth of a second while held, and the Riot Shield. Raised (its Ready state), the shield takes what strikes its holder from in front (engine Image::guard): a flying shot's hit keeps 5% and then a fifth of that, as Kai's two packages each scaled it; blasts, rays and swings keep a fifth; a stopped shot pushes at 30%, its blast spares the holder, and it flies back the way the holder looks as theirs, a kill by it reading as Reflected. Looking steeply up or down the shield covers by height, as Kai wrote it. It breaks after 20 stops (the Riot Shield Durability setting's default) and leaves the holder's tools. Falls are not stopped (Riot Shield Stops Falls is off by default), and hurt that Add-On rules deal by script, not by a weapon, passes it. The Chainsaw's LarmReady field is not one v20 reads. The Big Stick, Pipe Wrench and Gaff are Kai's easter eggs, loaded only with the hidden \"???\" setting: they are imported hidden.",
+  "notes": "Tier+Tactical Melee Extended II (Kai), on Melee Extended: eight more melee weapons swinging along short rays as Melee Extended's do, the Chainsaw cutting every twentieth of a second while held, and the Riot Shield. Raised (its Ready state), the shield takes what strikes its holder from in front (engine Image::guard): a flying shot's hit keeps 5% and then a fifth of that, as Kai's two packages each scaled it; blasts, rays and swings keep a fifth; a stopped shot pushes at 30%, its blast spares the holder, and it flies back the way the holder looks as theirs, a kill by it reading as Reflected. Looking steeply up or down the shield covers by height, as Kai wrote it. It breaks after 20 stops (the Riot Shield Durability setting's default) and leaves the holder's tools. Falls are not stopped (Riot Shield Stops Falls is off by default), and hurt that Add-On rules deal by script, not by a weapon, passes it. The Chainsaw's LarmReady field is not one v20 reads. The Big Stick, Pipe Wrench and Gaff are Kai's easter eggs, loaded only with the hidden \"???\" setting: they are imported hidden and offered while that setting is on.",
   "handles": {
     "TT_defaultIfUnset": "never runs: it is the fallback for a server without RTB; the port keeps the copy's RTB defaults (shield durability 20, falls not stopped, bots' shields break too)",
     "call:TT_defaultIfUnset": "never runs: it is the fallback for a server without RTB; the port keeps the copy's RTB defaults (shield durability 20, falls not stopped, bots' shields break too)",
@@ -36,6 +36,50 @@
       }
     }
   ],
+  "rules": {
+    "settings": {
+      "$Pref::Server::TT::ShieldDurability": {
+        "how": "the Riot Shield's stops before it breaks (guard durability), for shields raised after the change: -1 never breaks, 0 breaks at the first stop as 1 does",
+        "fields": [
+          {
+            "path": ["images", "*", "guard", "durability"],
+            "values": { "-1": null, "0": 1 },
+            "scale": 1
+          }
+        ]
+      },
+      "$Pref::Server::TT::ShieldBreakBot": {
+        "how": "off, a bot's raised shield never wears out (guard bots_keep); players' still do",
+        "fields": [
+          {
+            "path": ["images", "*", "guard", "bots_keep"],
+            "values": { "false": true },
+            "existing": false
+          }
+        ]
+      },
+      "$Pref::Server::TT::ShieldCancelFalling": {
+        "how": "on, a fall or crash met with the shield raised the way the holder was going hurts an eighth, with the shield's clang (guard fall_damage)",
+        "fields": [
+          {
+            "path": ["images", "*", "guard", "fall_damage"],
+            "values": { "true": 0.125 },
+            "existing": false
+          }
+        ]
+      },
+      "$Pref::Server::TT::EasterEgg": {
+        "how": "on (Tier 1's hidden \"???\" setting), the Big Stick, Pipe Wrench and Gaff are offered in item lists, from the next start; off they stay hidden, as the original did not load them",
+        "fields": [
+          {
+            "path": ["items", "*", "hidden"],
+            "values": { "true": false },
+            "only": { "datablock": ["L4BBigStickItem", "L4BPipeWrenchItem", "L4BGaffItem"] }
+          }
+        ]
+      }
+    }
+  },
   "patch": {
     "assets/weapons.json": {
       "images": {

@@ -6539,9 +6539,28 @@ impl PlatformApp for App {
         // The server's settings decide some weapon fields: play the pack
         // they make, and the authored one outside a game.
         let values = self.attempt.as_ref().and_then(|a| a.view.as_ref());
-        let values = values.map(|v| v.weapon_settings.clone()).unwrap_or_default();
-        if let Err(error) = self.content.weapons.apply_settings(&values) {
-            bri_console::warn(format!("The server's weapon settings: {error:#}"));
+        let values = values
+            .map(|v| v.weapon_settings.clone())
+            .unwrap_or_default();
+        match self.content.weapons.apply_settings(&values) {
+            Ok(false) => {}
+            // Items a setting shows or hides: the lists offer what the
+            // server does.
+            Ok(true) => {
+                let choices = self.content.weapons.item_choices.clone();
+                let rebuilt = self.tool_ui.install_items(choices.clone()).and_then(|()| {
+                    self.item_ui = crate::item_ui::ItemUi::new(
+                        &self.item_assets,
+                        &choices,
+                        &self.content.ui_pack,
+                    )?;
+                    Ok(())
+                });
+                if let Err(error) = rebuilt {
+                    bri_console::warn(format!("The server's items: {error:#}"));
+                }
+            }
+            Err(error) => bri_console::warn(format!("The server's weapon settings: {error:#}")),
         }
         self.poll_files();
         if let Some((map, name)) = self.save_previews.poll() {

@@ -717,6 +717,16 @@ pub struct Guard {
     /// `hit_explosion` does.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub break_explosion: String,
+    /// A bot's guard never wears out (Kai's Riot Shield Breaks for Bots
+    /// off): `durability` counts players' stops only.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub bots_keep: bool,
+    /// The share of a fall's or a crash's hurt that still hurts when the
+    /// holder, guarding, looks the way they were going (down, for a fall),
+    /// 0 to 1, with `hit_explosion` at twice the holder's scale (Kai's
+    /// Riot Shield Stops Falls: an eighth). None leaves falls alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fall_damage: Option<f32>,
 }
 /// [`Guard::front`]: looking more than `up` up (the look's upward part,
 /// 0 to 1), the guard covers what strikes above `above` units below the
@@ -777,7 +787,8 @@ impl Guard {
                     .all(|e| e.is_empty() || name(e))
                 && self.sounds.len() <= Self::MAX_SOUNDS
                 && self.sounds.iter().all(name)
-                && self.durability.is_none_or(|d| (1..=100_000).contains(&d)),
+                && self.durability.is_none_or(|d| (1..=100_000).contains(&d))
+                && self.fall_damage.is_none_or(share),
             "Invalid guard: 1 to 16 states, shares 0 to 1, steep looks 0 to 1 and heights \
              -100 to 100, up to 8 sounds, durability 1 to 100000, names up to 128 bytes"
         );
@@ -921,6 +932,17 @@ pub struct Magazine {
     /// No ammo display at all (Tier+Tactical's Display Ammo off).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hide_display: bool,
+    /// Another copy of the gun drawn while one is in hand is put away and
+    /// drawn afresh, its draw states and sounds again (Tier+Tactical's
+    /// Remount Duplicate Items); without it the image stays as it is and
+    /// takes that copy's rounds.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub remount: bool,
+    /// Its tool is taken from the holder's inventory as the last of its
+    /// reserve goes (Tier+Tactical's Clear Unusable Grenades), for a
+    /// magazine counted `from_reserve`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub clear_when_out: bool,
 }
 /// [`Magazine::supply`]: what a shot uses and a reload fills, as
 /// Tier+Tactical's four ammo systems (`$Pref::Server::TT::Ammo`) did.
@@ -1108,6 +1130,10 @@ impl Magazine {
         ensure!(
             !self.from_reserve || self.supply == Supply::Reserve,
             "A magazine counted from the reserve has no other supply"
+        );
+        ensure!(
+            self.from_reserve || !self.clear_when_out,
+            "Only a magazine counted from the reserve clears its tool when out"
         );
         ensure!(
             !self.from_reserve
@@ -1997,6 +2023,12 @@ pub struct Aura {
     /// Up to 64.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub max_targets: u32,
+    /// What it does each pulse to a teammate or ally of its thrower in a
+    /// mini-game with weapon damage on, 0 to 100, friendly fire or not
+    /// (Kai's Molotov Friendly Fire Override: 1); its effect and sound come
+    /// too. None leaves allies to the splash rules.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ally_damage: Option<f32>,
 }
 /// v20's `ProjectileData` defaults, for fields an Add-On leaves out.
 impl Default for ProjectileDef {
@@ -2810,9 +2842,10 @@ impl Pack {
                         && a.target_sound.len() <= 128
                         && a.effect.len() <= 128
                         && a.max_pulses <= 100_000
-                        && a.max_targets <= 64,
-                    "Invalid aura of projectile {id}: radius to 16, damage to 100, \
-                     every_ticks 4 to 1200, burn_seconds to 30, names to 128 bytes, \
+                        && a.max_targets <= 64
+                        && a.ally_damage.is_none_or(|d| (0.0..=100.0).contains(&d)),
+                    "Invalid aura of projectile {id}: radius to 16, damage and ally_damage \
+                     to 100, every_ticks 4 to 1200, burn_seconds to 30, names to 128 bytes, \
                      max_targets to 64"
                 );
             }

@@ -1,0 +1,51 @@
+# 2026-10-01 Tier+Tactical: every preference carried out
+
+The coordinator's goal was no unsupported preference across the Tier packs,
+reported honestly. On the real copies every Tier pack now reports 0
+unsupported; the three packs not yet ported (Event_AddAmmoTT, Frogs
+Weaponry and its WWII pack) are next.
+
+What changed:
+
+- Item lists follow settings: an item's `hidden` may be bound. The
+  session refreshes the mini-game catalog when a retune hides or shows an
+  item (`MinigamesWorld::set_catalog`), and the client reinstalls its item
+  choices (`WeaponContent::apply_settings` says when they changed). Tier's
+  Disable Tier 1, Disable Ammo Items, Disable Explosive 1, Disable Grenade
+  Pickups and the `???` easter eggs bind it; each is a restart preference
+  in RTB, so it applies from the next start or map.
+- Easter eggs: the Retro Magnum, Classic Shotgun and the four Tier 2 rifle
+  skins were imported visible though Kai loads them only with `???`; they
+  are now hidden like the others and offered while it is on.
+- Magazine `remount` (Remount Duplicate Items) and `clear_when_out` (Clear
+  Unusable Grenades); `hide_display` per grenade (Display Grenade Count).
+- Guard `bots_keep` (Riot Shield Breaks for Bots off) and `fall_damage`
+  (Riot Shield Stops Falls: a fall or crash met with the raised shield
+  does an eighth, with its clang); actors know they are bots
+  (`WeaponsWorld::set_bot`, set when a bot is made).
+- Aura `ally_damage` and `Query::is_ally` (Molotov Friendly Fire
+  Override): the fire sears the thrower's teammates and allies for 1 in a
+  mini-game with weapon damage on, friendly fire or not, as Kai's did.
+- Importer: bindings combine `values` with `scale` (shield durability:
+  -1 never breaks, 0 is 1, else the count); `only` takes `datablock`,
+  `*` globs and lists; rules with only settings need no capabilities; a
+  `pref:<global>` handle reports a preference carried out with no setting.
+
+A pivot, said plainly: Tier 1's four bug-fix preferences (Firing on Death
+Bugfix, Stop Anims on Death, SetInventory Bugfix, RemoveItem Bugfix) have
+no setting. The engine always puts a dead player's tools away and keeps
+each slot's magazine with the gun in it, which is each preference's "on".
+Their "off" only brought back the bug, so it is not reproduced; RemoveItem
+Bugfix was off by default in Kai's pack, so that default differs.
+
+Evidence on the real copies (`run4.sh`, behaviours ported / unsupported):
+Tier 1 88/88, 0; Explosive 1 21/21, 0; Melee Extended II 47/47, 0; every
+other Tier pack 0 unsupported. Every binding of every import derives a
+valid pack at each value and each combination (scratch checker).
+
+Tests: `bri-weapons` guard (durability values, bots keep theirs, falls
+met), magazines (remount), thrown grenades (cleared when out, ally
+damage); `tier_port` a restart preference hides the guns from the next
+start, and the bug-fix preference is reported carried out with no setting.
+
+Next: Event_AddAmmoTT, Frogs Weaponry, Frogs WWII.

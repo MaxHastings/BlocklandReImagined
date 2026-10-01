@@ -324,6 +324,7 @@ impl Session {
             self.bots
                 .brains
                 .insert(bot, Brain::new(Some(brick_id), kind, home, bot));
+            self.weapons.set_bot(bri_weapons::ActorId(bot), true)?;
         }
         Ok(())
     }
@@ -371,10 +372,11 @@ impl Session {
             .context("No such team")?;
         let drop = self.spawn_points.first().copied().unwrap_or(Vec3::Y);
         let bot = self.join_inner(name.to_owned(), drop, false, true, None)?;
-        self.bots.brains.insert(bot, Brain::new(None, kind, drop, bot));
         self.bots
-            .by_rules
-            .insert(bot, (package.to_owned(), game.0));
+            .brains
+            .insert(bot, Brain::new(None, kind, drop, bot));
+        self.weapons.set_bot(bri_weapons::ActorId(bot), true)?;
+        self.bots.by_rules.insert(bot, (package.to_owned(), game.0));
         let placed = (|| -> Result<()> {
             let player = self.peers[&bot].combat.player;
             let effects = self

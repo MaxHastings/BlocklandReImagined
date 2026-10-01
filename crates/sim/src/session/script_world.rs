@@ -39,6 +39,7 @@ impl World for ScriptWorld<'_> {
             simulation: &session.simulation,
             affect: &never,
             affect_radius: &never,
+            ally: &never,
             catch: &never_catch,
             responses: &session.events.projectile_responses,
             truncated_targets: 0,

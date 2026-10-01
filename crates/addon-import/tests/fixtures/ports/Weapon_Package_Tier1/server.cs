@@ -14,6 +14,8 @@ if($RTB::Hooks::ServerControl)
    RTB_registerPref("Shake on Firing","Stand-in | Miscellaneous","$Pref::Server::TT::Recoil","bool","Weapon_Package_Tier1",1,0,1);
    RTB_registerPref("Ammo Rules","Stand-in | Ammo","$Pref::Server::TT::Ammo","list Magazines 0 Bottomless 1 Free 2 Pool 3","Weapon_Package_Tier1",0,0,1);
    RTB_registerPref("Show Ammo","Stand-in | Ammo","$Pref::Server::TT::DisplayAmmo","bool","Weapon_Package_Tier1",1,0,1);
+   RTB_registerPref("Leave Out Stand-ins","Stand-in | Miscellaneous","$Pref::Server::TT::DisableTier1","bool","Weapon_Package_Tier1",0,1,1);
+   RTB_registerPref("Stop Firing on Death","Stand-in | Miscellaneous","$Pref::Server::TT::DeathStopFiring","bool","Weapon_Package_Tier1",1,0,1);
 }
 else
 {
@@ -23,6 +25,8 @@ else
    TT_defaultIfUnset("Recoil", 1);
    TT_defaultIfUnset("Ammo", 0);
    TT_defaultIfUnset("DisplayAmmo", 1);
+   TT_defaultIfUnset("DisableTier1", 0);
+   TT_defaultIfUnset("DeathStopFiring", 1);
 }
 
 // The ammo types this pack hands every player, as Kai's packs register them.
