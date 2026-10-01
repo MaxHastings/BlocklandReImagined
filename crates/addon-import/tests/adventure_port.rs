@@ -213,7 +213,8 @@ fn ammo_system_guns_get_magazines_that_reload_like_their_states() {
     );
     assert!(!pack.projectiles[&format!("{NS}:projectile/standinshotgunprojectile")].fixed_damage);
     // The raycast guns: hitscan with a ray projectile of their own that
-    // carries the image's damage, the revolver's kick from its onFire.
+    // carries the image's damage, the revolver's kick from its onFire, shot
+    // from its muzzle (raycastFromMuzzle).
     let revolver = image("revolverimage");
     let shot = revolver.shot.unwrap();
     let hitscan = shot.hitscan.unwrap();
@@ -224,7 +225,7 @@ fn ammo_system_guns_get_magazines_that_reload_like_their_states() {
             hitscan.range,
             hitscan.from_eye
         ),
-        (1, 3.0, 200.0, true)
+        (1, 3.0, 200.0, false)
     );
     let ray = &pack.projectiles[revolver.projectile.as_deref().unwrap()];
     assert_eq!(
@@ -722,6 +723,37 @@ fn duel(g: &mut Game, items: &[&str], distance: f32) -> (OwnerId, OwnerId) {
 fn hitscan_crits_and_melee_kills_play_in_a_hosted_game() {
     let (dir, out, report) = imported("rays");
     assert!(report.ports[0].applied, "{:?}", report.ports[0].reason);
+    // The revolver shoots from its muzzle: from the eye when something
+    // stands within 4.5 units of it (checkForObstruction), with the beam
+    // its onFire drew for 150 ms and its bullet hit sound. The melee
+    // swings leave their hit sounds to the rules, which pick one of the
+    // pair each swing as their onFire did.
+    let pack = pack(&out);
+    let ray = |name: &str| {
+        pack.images[&format!("{NS}:image/{name}")]
+            .shot
+            .clone()
+            .unwrap()
+            .hitscan
+            .unwrap()
+    };
+    let shot = ray("revolverimage");
+    assert_eq!(shot.eye_within, Some(4.5));
+    let tracer = shot.tracer.unwrap();
+    assert_eq!((tracer.width, tracer.seconds), (0.3, 0.15));
+    let club = format!("{NS}:sound/standinclubsoundb");
+    assert_eq!(
+        (shot.player_sound.as_str(), shot.other_sound.as_str()),
+        (club.as_str(), club.as_str())
+    );
+    for melee in ["batonimage", "macheteimage"] {
+        let shot = ray(melee);
+        assert_eq!(
+            (shot.player_sound.as_str(), shot.other_sound.as_str()),
+            ("", ""),
+            "{melee}"
+        );
+    }
     let mut g = Game::new(&dir.0, &out);
     let revolver = format!("{NS}:weapon/revolveritem");
     let baton = format!("{NS}:weapon/batonitem");
@@ -962,11 +994,58 @@ fn glass_release_guns_shoot_like_their_scripts() {
         (kick.amplitude, kick.frequency, kick.seconds),
         (0.9, 3.0, 0.4)
     );
+    // A shot after half a second's pause is twice as true.
+    let rested = shot.rested.unwrap();
+    assert_eq!((rested.after_ticks, rested.spread), (60, 0.0001));
+    // The reload's arm move, and the moves and sounds it timed by hand.
+    let sound = "weapon_adventurepack:sound/standinfiresound";
+    let reload = pistol.states.iter().find(|s| s.script == "onReload").unwrap();
+    assert_eq!(reload.arm, "shiftup");
+    assert_eq!(
+        reload.cues,
+        [
+            bri_weapons::Cue {
+                after_ms: 450,
+                thread: Some(2),
+                sequence: "plant".into(),
+                ..Default::default()
+            },
+            bri_weapons::Cue {
+                after_ms: 650,
+                sound: sound.into(),
+                ..Default::default()
+            }
+        ]
+    );
     let paired = image("pairedshotgunimage");
     let m = paired.magazine.unwrap();
     assert_eq!(
         (m.size, m.per_shot, m.one_by_one, m.reload_ticks),
         (6, 2, true, 60 + 30)
+    );
+    // Two shells each pass, each pass with a second arm move and tap.
+    assert_eq!(m.per_load, 2);
+    let load = paired
+        .states
+        .iter()
+        .find(|s| s.script == "onReloadSingle")
+        .unwrap();
+    assert_eq!((load.arm.as_str(), load.sound.as_str()), ("shiftright", sound));
+    assert_eq!(
+        load.cues,
+        [
+            bri_weapons::Cue {
+                after_ms: 250,
+                thread: Some(2),
+                sequence: "plant".into(),
+                ..Default::default()
+            },
+            bri_weapons::Cue {
+                after_ms: 250,
+                sound: sound.into(),
+                ..Default::default()
+            }
+        ]
     );
     let shot = paired.shot.unwrap();
     assert_eq!(
@@ -992,7 +1071,10 @@ fn glass_release_guns_shoot_like_their_scripts() {
     let sniper = image("sniperrifleimage2");
     let hitscan = sniper.shot.unwrap().hitscan.unwrap();
     assert_eq!((hitscan.range, hitscan.from_eye), (300.0, false));
-    assert!(hitscan.tracer.is_some());
+    // Shot from the muzzle toward where the eye looks (getLOSPoint), with
+    // its white beam.
+    assert!(hitscan.converge);
+    assert_eq!(hitscan.tracer.unwrap().color, [1.0; 4]);
     let ray = &pack.projectiles[sniper.projectile.as_deref().unwrap()];
     assert_eq!(
         (ray.id.as_str(), ray.damage),

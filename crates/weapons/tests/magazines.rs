@@ -242,6 +242,29 @@ fn shells_load_one_at_a_time_and_a_pull_of_the_trigger_fires_instead() {
     assert_eq!(rounds(&w), (1, Reserve::Rounds(7), false));
 }
 
+/// Two shells a pass (the Paired Shotgun's script loaded two): into a
+/// magazine with room for one, the second is lost, as its chamber check
+/// threw it away.
+#[test]
+fn a_load_of_two_shells_fills_and_loses_what_does_not_fit() {
+    let json = GUNS.replace(
+        r#""one_by_one": true,"#,
+        r#""one_by_one": true, "per_load": 2,"#,
+    );
+    let mut w = WeaponsWorld::new(Pack::from_json(json.as_bytes()).unwrap()).unwrap();
+    w.add_actor(A, 5).unwrap();
+    holding(&mut w, A, "mag:weapon/shotgun");
+    for _ in 0..3 {
+        click(&mut w);
+    }
+    assert_eq!(rounds(&w), (1, Reserve::Rounds(8), false));
+    assert!(w.reload(A).unwrap());
+    step(&mut w, 12);
+    assert_eq!(rounds(&w), (3, Reserve::Rounds(6), true));
+    step(&mut w, 12);
+    assert_eq!(rounds(&w), (4, Reserve::Rounds(4), false), "one shell lost");
+}
+
 #[test]
 fn endless_reserve_never_runs_out_and_a_new_life_refills() {
     let mut w = world();

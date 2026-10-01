@@ -362,6 +362,8 @@ copy's own items:
 | `one_by_one` | the state script that loads one round (`onReloadSingle`): images with a state running it reload a round at a time, each round lasting from that state back to it |
 | `every` | magazine fields for every gun (`"light_states": ["Ready", "Empty"]`, `"display_ticks": 480` for an ammo display that stays up four seconds each change, `"display_scripts": ["TT_onEmptyFire"]` for states that show it again), before `items` |
 | `items` | extra magazine fields for one item, by datablock name |
+| `calls` | the ammo system's own functions (`hl2AmmoCheck`): a state script may call them and still count as only working its rounds, and each one the copy defines is reported as carried out by the magazine |
+| `scripts` | more image methods checked the same way (`onMount`, `onReload`); one that only works its rounds is reported as read |
 
 The reload lasts as long as the image's own reload states: from the state
 its ready state goes to without ammo, along each timeout, up to the state
@@ -432,7 +434,7 @@ bodies, in order, a later rule's fields winning:
 | `table` | with `into: "table"`: the rules' `{{name}}`, a Rhai map from each image's or projectile's id to its `set` |
 | `pattern` | a case-insensitive regex; its named groups fill `set` |
 | `required_by` | when a body matches this but not `pattern`, the port stops and names the image, so a copy that does the same some other way is not guessed |
-| `set` | a merge patch: `"{group}"` becomes the group's value (a number when it reads as one; `"{group\|text}"` keeps it text), `"{group\|field}"` the value of the datablock field the group names (`%obj.TT_ammoPickup[0]`), `"{group\|word1}"` its second word (`getWord`), filters in that order, `"{group\|neg}"` that number negated (a push the script wrote as negative), `"{group\|projectile}"`, `"{group\|image}"` and `"{group\|sound}"` the import's datablock it names, `"{group\|kick}"` the camera shake of the explosion a projectile names (this Add-On's, or one it depends on); a `null` removes a field |
+| `set` | a merge patch: `"{group}"` becomes the group's value (a number when it reads as one; `"{group\|text}"` keeps it text), `"{group\|field}"` the value of the datablock field the group names (`%obj.TT_ammoPickup[0]`), `"{group\|word1}"` its second word (`getWord`), filters in that order, `"{group\|seconds}"` milliseconds as seconds, `"{group\|neg}"` that number negated (a push the script wrote as negative), `"{group\|projectile}"`, `"{group\|image}"` and `"{group\|sound}"` the import's datablock it names, `"{group\|kick}"` the camera shake of the explosion a projectile names (this Add-On's, or one it depends on); a `null` removes a field |
 | `keep` | with `state`: only fields the state leaves empty |
 
 Every reader here follows a datablock's parents into the Add-Ons it
@@ -513,6 +515,8 @@ the image's fields on it).
 | `tracer` | `{ "field": ..., "look": { "color", "width", "seconds" } }`: a streak for images where the field is set |
 | `flown` | the field naming a projectile flown from the muzzle to where the ray ended, as the script spawned it |
 | `player_sound`, `other_sound` | the fields naming the sounds where a ray lands on a player, and on anything else |
+| `eye_within` | with a muzzle cast, the distance in front of the eye within which anything makes the ray start at the eye (a script's obstruction check) |
+| `converge` | with a muzzle cast, aim at the point the eye looks at (`getLOSPoint`) |
 
 ## Rules shared between ports, and their values
 

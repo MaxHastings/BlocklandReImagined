@@ -19,6 +19,10 @@ const WEAPON_TOTAL_LIMIT: u64 = 512 * 1024 * 1024;
 pub struct WeaponContent {
     pub pack: bri_weapons::Pack,
     pub item_choices: Vec<(String, String)>,
+    /// The emitters and lights Add-Ons give a name (`uiName`), as
+    /// (id, name): a brick's wrench offers them beside the base game's.
+    pub emitter_choices: Vec<(String, String)>,
+    pub light_choices: Vec<(String, String)>,
     aliases: BTreeMap<String, String>,
     fingerprint: String,
     manifest_sha256: String,
@@ -160,6 +164,27 @@ impl WeaponContent {
             );
             files.insert(key, path);
         }
+        // What the Add-Ons name of their effects, for the wrench.
+        let named = |list: Vec<(&str, &str)>| -> Vec<(String, String)> {
+            list.into_iter()
+                .filter(|(_, name)| !name.trim().is_empty())
+                .map(|(id, name)| (id.to_owned(), name.trim().to_owned()))
+                .collect()
+        };
+        let mut emitter_choices = named(
+            parts
+                .iter()
+                .flat_map(|(_, _, part)| &part.effects.emitters)
+                .map(|e| (e.id.as_str(), e.name.as_str()))
+                .collect(),
+        );
+        let mut light_choices = named(
+            parts
+                .iter()
+                .flat_map(|(_, _, part)| &part.effects.lights)
+                .map(|l| (l.id.as_str(), l.name.as_str()))
+                .collect(),
+        );
         let (mut pack, notes) = pack.merge(
             parts
                 .into_iter()
@@ -212,9 +237,37 @@ impl WeaponContent {
                 .cmp(&b.1.to_ascii_lowercase())
                 .then(a.0.cmp(&b.0))
         });
+        // Only what the merge kept, each id once and no name twice.
+        for (choices, kept) in [
+            (
+                &mut emitter_choices,
+                pack.effects.emitters.iter().map(|e| &e.id).collect::<std::collections::BTreeSet<_>>(),
+            ),
+            (
+                &mut light_choices,
+                pack.effects.lights.iter().map(|l| &l.id).collect(),
+            ),
+        ] {
+            let mut names = std::collections::BTreeSet::new();
+            choices.retain(|(id, name)| {
+                kept.contains(id)
+                    && name.len() <= 128
+                    && !name.chars().any(char::is_control)
+                    && bri_world::ContentRef::Resolved(id.clone()).validate().is_ok()
+                    && names.insert(name.to_ascii_lowercase())
+            });
+            ensure!(choices.len() <= 1024, "Add-On effect choice budget exceeded");
+            choices.sort_by(|a, b| {
+                a.1.to_ascii_lowercase()
+                    .cmp(&b.1.to_ascii_lowercase())
+                    .then(a.0.cmp(&b.0))
+            });
+        }
         Ok(Self {
             pack,
             item_choices,
+            emitter_choices,
+            light_choices,
             aliases,
             fingerprint,
             manifest_sha256: format!("{:x}", Sha256::digest(&bytes)),
@@ -685,6 +738,109 @@ mod tests {
     }
     fn write_weapons(root: &Path, pack: &bri_weapons::Pack) {
         std::fs::write(root.join("weapons.json"), serde_json::to_vec(pack).unwrap()).unwrap();
+    }
+    #[test]
+    fn add_on_effects_with_names_are_offered_once_each() {
+        let (root, _) = weapon_fixture();
+        let part_root = root.parent().unwrap().join("crit");
+        std::fs::create_dir(&part_root).unwrap();
+        let emitter = |id: &str, name: &str| bri_content::effects::Emitter {
+            id: id.into(),
+            name: name.into(),
+            particles: vec!["crit:particle/critparticle".into()],
+            period: 0.035,
+            period_variance: 0.0,
+            speed: 0.0,
+            speed_variance: 0.0,
+            offset: 1.8,
+            offset_variance: 0.0,
+            theta_degrees: [0.0, 0.0],
+            phi_rate_degrees: 0.0,
+            phi_variance_degrees: 0.0,
+            lifetime: 0.1,
+            lifetime_variance: 0.0,
+            orient: false,
+            orient_on_velocity: false,
+            override_advance: false,
+            use_emitter_colors: false,
+            use_emitter_sizes: false,
+            use_placement_velocity: false,
+            node_time_scale: 1.0,
+            point_node_time_scale: 1.0,
+        };
+        let part = bri_weapons::Pack {
+            schema_version: bri_weapons::SCHEMA,
+            id: "crit".into(),
+            items: BTreeMap::new(),
+            images: BTreeMap::new(),
+            projectiles: BTreeMap::new(),
+            external_projectiles: Default::default(),
+            damage_types: BTreeMap::new(),
+            explosions: BTreeMap::new(),
+            sounds: Default::default(),
+            definitions: vec![],
+            resources: vec![],
+            diagnostics: vec![],
+            effects: bri_weapons::PackEffects {
+                particles: vec![bri_content::effects::Particle {
+                    id: "crit:particle/critparticle".into(),
+                    texture: "base/data/particles/dot".into(),
+                    alpha_blend: false,
+                    lifetime: 0.5,
+                    lifetime_variance: 0.0,
+                    drag: 5.0,
+                    wind: 0.0,
+                    gravity: 0.0,
+                    inherited_velocity: 0.0,
+                    acceleration: 0.0,
+                    spin_degrees: 0.0,
+                    random_spin: [0.0, 0.0],
+                    keys: [0.0, 1.0]
+                        .map(|time| bri_content::effects::ParticleKey {
+                            time,
+                            color: [0.0, 1.0, 0.0, 1.0],
+                            size: 1.5,
+                        })
+                        .into(),
+                }],
+                emitters: vec![
+                    emitter("crit:emitter/critemitter", " Emote - Critical Hit "),
+                    emitter("crit:emitter/unnamed", ""),
+                    emitter("crit:emitter/again", "emote - critical hit"),
+                ],
+                lights: vec![bri_content::effects::Light {
+                    id: "crit:light/glow".into(),
+                    name: "Glow".into(),
+                    enabled: true,
+                    color: [1.0, 1.0, 1.0],
+                    brightness: 1.0,
+                    radius: 4.0,
+                    color_curves: None,
+                    brightness_curve: None,
+                    radius_curve: None,
+                    flare: None,
+                }],
+                explosions: vec![],
+            },
+        };
+        write_weapons(&part_root, &part);
+        let content =
+            WeaponContent::load_with(&root, &[("crit/assets".into(), part_root)]).unwrap();
+        assert_eq!(
+            content.emitter_choices,
+            [(
+                "crit:emitter/critemitter".to_string(),
+                "Emote - Critical Hit".to_string()
+            )]
+        );
+        assert_eq!(
+            content.light_choices,
+            [("crit:light/glow".to_string(), "Glow".to_string())]
+        );
+        assert!(
+            WeaponContent::load(&root).unwrap().emitter_choices.is_empty(),
+            "the base pack's own are the native library's"
+        );
     }
     #[test]
     fn weapons_identity_hashes_native_bytes_and_rejects_catalog_replacement() {

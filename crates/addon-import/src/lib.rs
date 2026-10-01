@@ -374,6 +374,31 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
             bri_convert::tscript::without_comments(&f.body),
         );
     }
+    // Torque links a datablock's namespace to its `className`'s: a method
+    // the datablock lacks runs the class's (`BatonImage::onPreFire` is
+    // `TF2MeleeWeaponImage::onPreFire`). The readers see it by both names.
+    let mut linked = vec![];
+    for o in cx.owned.values() {
+        let Some(class) = o
+            .fields
+            .get("classname")
+            .map(|c| literal(c).trim().to_ascii_lowercase())
+            .filter(|c| !c.is_empty())
+        else {
+            continue;
+        };
+        let name = o.d.name.to_ascii_lowercase();
+        let prefix = format!("{class}::");
+        for (function, body) in &code.bodies {
+            if let Some(method) = function.strip_prefix(&prefix) {
+                let own = format!("{name}::{method}");
+                if !code.bodies.contains_key(&own) {
+                    linked.push((own, body.clone()));
+                }
+            }
+        }
+    }
+    code.bodies.extend(linked);
     code.reference = cx
         .reference
         .datablocks
@@ -582,6 +607,16 @@ fn inventory(cx: &mut Ctx, scripts: &[Script]) -> Option<BTreeSet<String>> {
     });
     let follows = has_server && written == followed;
     let metadata = ["description.txt", "rtbinfo.txt", "namecheck.txt"];
+    // What the scripts could open by name: a file of a kind the game only
+    // read when a script named it, that no script names, never loaded.
+    let script_text: String = cx
+        .src
+        .files
+        .values()
+        .filter(|f| kind_of(&f.path) == "script")
+        .map(|f| tscript::without_comments(&String::from_utf8_lossy(&f.bytes)).to_ascii_lowercase())
+        .collect::<Vec<_>>()
+        .join("\n");
     for f in cx.src.files.values() {
         let member = cx.src.member(f).to_ascii_lowercase();
         let kind = kind_of(&f.path);
@@ -616,6 +651,17 @@ fn inventory(cx: &mut Ctx, scripts: &[Script]) -> Option<BTreeSet<String>> {
             ),
             "text" if metadata.contains(&member.as_str()) => ("consumed", vec!["metadata".into()]),
             "shape" | "texture" | "sound" | "brick_geometry" => ("pending", vec![]),
+            "text" | "other"
+                if !script_text.contains(member.rsplit('/').next().unwrap_or(&member)) =>
+            {
+                (
+                    "skipped",
+                    vec![
+                        "no script names it, so the game never loaded it (an editor file or a copy's leftover)"
+                            .into(),
+                    ],
+                )
+            }
             _ => (
                 "unsupported",
                 vec![format!("no native importer for {kind} files")],
@@ -698,6 +744,15 @@ fn top_level(cx: &mut Ctx, scripts: &[Script]) {
                         None,
                     );
                 }
+            } else if callee == "isfile" {
+                // A query with no effect of its own: a top-level `if` choosing
+                // between another Add-On's files and the Add-On's own.
+                cx.ambiguous(
+                    format!("isFile({})", c.args.join(", ")),
+                    at,
+                    "checks at load whether a file outside this Add-On exists; read as absent, so the Add-On uses its own".into(),
+                    None,
+                );
             } else if callee.starts_with("register") && callee.contains("event") {
                 cx.unsupported(
                     format!("{}({})", c.callee, c.args.join(", ")),
@@ -1148,7 +1203,14 @@ fn weapons(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
         .filter(|o| is_weapon(&o.d.class))
         .map(|o| weapon_definition(o, &o.d.fields))
         .collect();
-    if defs.is_empty() {
+    // Emitters players put on bricks travel in the weapons pack's effects.
+    let brick_emitters = cx.owned.values().any(|o| {
+        o.d.class.eq_ignore_ascii_case("ParticleEmitterData")
+            && o.fields
+                .get("uiname")
+                .is_some_and(|n| !literal(n).trim().is_empty())
+    });
+    if defs.is_empty() && !brick_emitters {
         return Ok(());
     }
     // Pull in the dependency datablocks these name, so `lower` can resolve
@@ -1524,18 +1586,21 @@ fn presentation(cx: &mut Ctx, pack: &bri_weapons::Pack, weapons_sha256: &str) ->
         let folder = f.path.rsplit_once('/').map_or("", |(d, _)| d).to_owned();
         let mut bindings = vec![];
         for m in &shape.materials {
-            match texture(cx, &mut textures, &format!("{folder}/{}", m.name)) {
+            // Torque looks for a material's texture beside the shape, then
+            // in each folder above it; a material it finds nowhere is drawn
+            // untextured (white, under the item's colour shift).
+            let found = texture_folders(&folder)
+                .find_map(|dir| texture(cx, &mut textures, &format!("{dir}/{}", m.name)));
+            match found {
                 Some(t) => bindings.push(t),
                 None => {
                     cx.report.diagnostics.push(format!(
-                        "presentation: {key} material {} has no texture",
+                        "presentation: {key} material {} has no texture in its folder or any above it; drawn untextured, as v20 drew it",
                         m.name
                     ));
+                    bindings.push(white_texture(cx, &mut textures)?);
                 }
             }
-        }
-        if bindings.len() != shape.materials.len() {
-            continue;
         }
         let native = std::fs::read(cx.out.join("assets").join(&rel))?;
         models.insert(
@@ -1558,16 +1623,11 @@ fn presentation(cx: &mut Ctx, pack: &bri_weapons::Pack, weapons_sha256: &str) ->
         .cloned()
         .collect();
     if !missing.is_empty() {
-        let (shape, white) = placeholder();
+        let (shape, _) = placeholder();
         let shape_bytes = serde_json::to_vec(&shape)?;
         let shape_rel = format!("models/{}.shape.json", &hash(&shape_bytes)[..24]);
         cx.write(&format!("assets/{shape_rel}"), &shape_bytes)?;
-        let white_rel = format!("textures/{}.png", &hash(&white)[..24]);
-        cx.write(&format!("assets/{white_rel}"), &white)?;
-        textures.insert(
-            "placeholder:white".into(),
-            json!({ "file": white_rel, "sha256": hash(&white), "width": 1, "height": 1, "source": "placeholder" }),
-        );
+        white_texture(cx, &mut textures)?;
         for key in missing {
             cx.report.ambiguous.push(Finding {
                 what: format!("model {key}"),
@@ -1660,6 +1720,31 @@ fn presentation(cx: &mut Ctx, pack: &bri_weapons::Pack, weapons_sha256: &str) ->
 }
 
 /// A 0.2 unit cube with one white material, and its 1x1 white PNG.
+/// Where Torque looked for a shape's material texture: the shape's folder,
+/// then each folder above it.
+fn texture_folders(folder: &str) -> impl Iterator<Item = &str> {
+    std::iter::successors(Some(folder), |d| d.rsplit_once('/').map(|(up, _)| up))
+}
+
+/// The 1x1 white texture an untextured material or a placeholder model
+/// draws with, written once.
+fn white_texture(
+    cx: &mut Ctx,
+    textures: &mut serde_json::Map<String, serde_json::Value>,
+) -> Result<String> {
+    let key = "placeholder:white".to_owned();
+    if !textures.contains_key(&key) {
+        let (_, white) = placeholder();
+        let rel = format!("textures/{}.png", &hash(&white)[..24]);
+        cx.write(&format!("assets/{rel}"), &white)?;
+        textures.insert(
+            key.clone(),
+            json!({ "file": rel, "sha256": hash(&white), "width": 1, "height": 1, "source": "placeholder" }),
+        );
+    }
+    Ok(key)
+}
+
 fn placeholder() -> (bri_content::shape::Shape, Vec<u8>) {
     use bri_content::shape::*;
     let mut positions = vec![];
@@ -2533,6 +2618,20 @@ fn sounds_and_rest(cx: &mut Ctx) {
             })
         })
         .collect();
+    // How often each name is written in the Add-On's scripts: a datablock
+    // written only where it is declared is one nothing uses.
+    let script_text: String = cx
+        .src
+        .files
+        .values()
+        .filter(|f| kind_of(&f.path) == "script")
+        .map(|f| tscript::without_comments(&String::from_utf8_lossy(&f.bytes)).to_ascii_lowercase())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let used = |name: &str| {
+        regex::Regex::new(&format!(r"\b{}\b", regex::escape(&name.to_ascii_lowercase())))
+            .map_or(true, |re| re.find_iter(&script_text).count() > 1)
+    };
     for (name, class, fields, own, path, line) in pending {
         let at = Location::new(&path, line);
         match class.as_str() {
@@ -2544,6 +2643,32 @@ fn sounds_and_rest(cx: &mut Ctx) {
                 if let Some(rel) = cx.outputs.get(&file.to_ascii_lowercase()).cloned() {
                     let id = cx.id("sound", &name, &name, &format!("assets/{rel}"));
                     cx.mark(&name, "sound", "converted_with_gaps", vec![id], Some("the audio system reads one fixed pack (role audio); this sound is packaged but nothing plays it by id yet".into()));
+                } else if let Some(base) = fields
+                    .get("filename")
+                    .and_then(|f| f.rsplit_once('"').and_then(|(head, _)| head.rsplit_once('"')))
+                    .map(|(_, tail)| tail.rsplit('/').next().unwrap_or(tail).to_ascii_lowercase())
+                    .filter(|b| !b.is_empty())
+                    .filter(|_| {
+                        fields.get("filename").is_some_and(|f| f.trim_start().starts_with('%'))
+                    })
+                    .filter(|b| {
+                        !cx.src
+                            .files
+                            .values()
+                            .any(|f| f.path.to_ascii_lowercase().ends_with(&format!("/{b}")))
+                    })
+                {
+                    // A path built at load (`%path @ "x.wav"`) whose file the
+                    // Add-On has nowhere: v20 found nothing to play either.
+                    cx.mark(
+                        &name,
+                        "sound",
+                        "consumed",
+                        vec![],
+                        Some(format!(
+                            "it names {base} by a path built at load, and the Add-On has no file of that name, so v20 played nothing"
+                        )),
+                    );
                 } else {
                     cx.mark(
                         &name,
@@ -2552,6 +2677,32 @@ fn sounds_and_rest(cx: &mut Ctx) {
                         vec![],
                         Some(format!("sound file {file} is not in this Add-On")),
                     );
+                }
+            }
+            "audiodescription" => {
+                // Its volume, looping and 3D flag are read into each sound
+                // that names it (`weapon_fx::sounds`).
+                let users: Vec<String> = cx
+                    .report
+                    .datablocks
+                    .iter()
+                    .filter(|e| e.class.eq_ignore_ascii_case("AudioProfile"))
+                    .filter(|e| {
+                        cx.owned
+                            .get(&e.name.to_ascii_lowercase())
+                            .and_then(|o| o.fields.get("description"))
+                            .is_some_and(|d| literal(d).trim().eq_ignore_ascii_case(&name))
+                    })
+                    .flat_map(|e| e.ids.clone())
+                    .collect();
+                let note = if users.is_empty() {
+                    "no sound of this Add-On names it, so it changed nothing".to_owned()
+                } else {
+                    "its volume, looping and 3D flag are read into the sounds that name it".to_owned()
+                };
+                cx.mark(&name, "sound_description", "consumed", vec![], Some(note));
+                if let Some(e) = cx.entry(&name) {
+                    e.notes.extend(users.into_iter().map(|id| format!("used by {id}")));
                 }
             }
             "playerdata" if !fields.contains_key("isholebot") => player_type(cx, &name, &own, at),
@@ -2575,16 +2726,40 @@ fn sounds_and_rest(cx: &mut Ctx) {
                     format!("Bot_Hole AI settings ({}) configure a script framework this import does not have", ai.join(", ")),
                 );
             }
+            // Images' casings and explosions' debris throw it
+            // (`bri_weapons::debris`), drawn with its model.
+            "debrisdata" if used(&name) => cx.mark(
+                &name,
+                "debris",
+                "converted",
+                vec![],
+                Some("thrown by the images and explosions that name it".into()),
+            ),
             "debrisdata" => cx.mark(
                 &name,
                 "debris",
-                "recognised_only",
+                "consumed",
                 vec![],
-                Some("the weapon debris importer is a fixed vanilla pipeline".into()),
+                Some("nothing throws it, so v20 never did".into()),
             ),
             // A vehicle trail converted the ones it uses.
             "particledata" | "particleemitterdata"
                 if cx.entry(&name).is_some_and(|e| e.status == "converted") => {}
+            "particledata" | "particleemitterdata" | "particleemitternodedata"
+                if !used(&name) && !fields.contains_key("uiname") =>
+            {
+                cx.mark(
+                    &name,
+                    if class == "particledata" {
+                        "particle"
+                    } else {
+                        "emitter"
+                    },
+                    "consumed",
+                    vec![],
+                    Some("nothing uses it and it has no uiName, so v20 never drew it".into()),
+                )
+            }
             "particledata" | "particleemitterdata" | "particleemitternodedata" => cx.mark(
                 &name,
                 if class == "particledata" {
@@ -2729,6 +2904,19 @@ fn dependencies(cx: &mut Ctx, scripts: &[Script]) {
                 uses: vec![],
             });
         d.uses.extend(uses);
+    }
+    let own = cx.src.name.to_ascii_lowercase();
+    for (key, d) in &mut deps {
+        if *key == own {
+            // Requiring itself does nothing: it is already loading.
+            d.status = "self".into();
+        } else if d.status == "missing" && d.uses.is_empty() && cx.reference.root.is_some() {
+            // `forceRequiredAddOn` of a missing Add-On only printed an
+            // error; with none of its content named (every name the
+            // Add-On uses resolved against the install, or is reported as
+            // declared nowhere), v20 ran the same.
+            d.status = "unused".into();
+        }
     }
     cx.report.dependencies = deps.into_values().collect();
 }
@@ -2913,4 +3101,20 @@ fn finish(mut cx: Ctx, opts: &Options, ports: &ports::Ports, code: &ports::Code)
     )?;
     cx.write("IMPORT-REPORT.md", cx.report.markdown().as_bytes())?;
     Ok(cx.report)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn material_textures_are_looked_for_up_the_folders() {
+        assert_eq!(
+            super::texture_folders("add-ons/weapon_x/shapes/items").collect::<Vec<_>>(),
+            [
+                "add-ons/weapon_x/shapes/items",
+                "add-ons/weapon_x/shapes",
+                "add-ons/weapon_x",
+                "add-ons"
+            ]
+        );
+    }
 }

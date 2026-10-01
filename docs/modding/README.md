@@ -688,6 +688,7 @@ The fields you are most likely to change:
 | image | `last_shot` | `{ "shot": {...}, "volleys": [...] }`: what the magazine's last `last_rounds` rounds fire instead (a two-barrel gun's single barrel) |
 | image | `state_shots` | `{ "onfire2": {...} }`: a shot fired on entering a state with that script, as onFire's is, so a gun can spread wider as it keeps firing |
 | image state | `arm`, `gesture` | the holder's animation on entering it: `arm` on thread 2 (`shiftright`), `gesture` on thread 3, the other hand; `"arm_once": true` does not play `arm` again as the state times out into itself (an arm raised while a throw waits) |
+| image state | `cues` | up to 16 things a while after it is entered, as scripts scheduled them: `[{ "after_ms": 450, "thread": 2, "sequence": "plant", "sound": "your-id:sound/pump" }]`, each played even if the state has moved on |
 | projectile | `children` | smaller projectiles it throws out as it flies, bounces or explodes: one set or a list of up to 4, each its own `projectile`, `count`, `speed`; `fuse_ticks: [0, 48]` sets each child off after a random time in that range, as cluster bomblets; `max_count` throws a random number from `count` to it; `steps` (`low`, `high`, `offset`, `step`, each `[x, up, back]`) sets each axis of a child's velocity to a whole number from `low` to `high`, plus `offset`, times `step`, as a script that threw embers with `getRandom` |
 | projectile | `aura` | hurts what is within `radius` every `every_ticks` as it flies: `damage`, `players_only` to pass vehicles by, `effect` played on each one hurt at its scale, `target_sound` heard by that player alone, `max_pulses` to stop after so many (it flies on) |
 | image | `cook` | a grenade whose fuse burns from a state in the hand (below) |
@@ -751,7 +752,8 @@ clicks with `empty_sound` and reloads. The last round, the light key and
 Every gun loading the same `ammo` shares that reserve; each gun keeps its
 own rounds, by the tool slot it sits in (two of one gun each keep theirs),
 also when thrown and picked up by someone else. `one_by_one`
-loads a round per `reload_ticks`, as a shotgun's shells, and a pull of the
+loads a round per `reload_ticks` (`per_load` rounds with a two-barrel
+gun), as a shotgun's shells, and a pull of the
 trigger stops the loading and fires. The first gun of an ammo type a
 player draws brings `reserve` rounds, never above `max_reserve` (100000 at
 most); a new life brings full magazines and starting reserves again. The
@@ -794,7 +796,11 @@ An image's `shot` can say more of how it fires. `hitscan` (`range`, and
 damage and push; `explosion` names another projectile exploded there in
 place of its own, `player_sound` and `other_sound` play there by what it
 hit, `flown` names a projectile flown from the muzzle to that point, and
-`tracer` (`color`, `width`, `seconds`) draws a streak to it.
+`tracer` (`color`, `width`, `seconds`) draws a streak to it. A ray from
+the muzzle (`from_eye` false) starts at the eye instead when something
+stands within `eye_within` units in front of it, so a muzzle poking
+through a wall does not shoot past it; with `converge` it heads for the
+point the eye looks at rather than along the muzzle.
 `moving_spread` and `moving_projectile` replace the spread and the
 projectile while the shooter moves faster than `moving_speed`; `rested`
 (`after_ticks`, `spread`, and optionally `still` and `projectile`) is
@@ -1248,7 +1254,9 @@ description is not 3D is heard by its holder alone), and its `DebrisData`
 with its model, so its casings and explosion debris are its own. v20 datablocks the engine
 would have corrected on load (an emitter's period or angles) are corrected
 the same way and noted. An `ItemData` with no `uiName` is hidden in v20,
-so it is left out and its image kept for rules to mount; one with a
+so it is left out and its image kept for rules to mount; a
+`ParticleEmitterData` with a `uiName` is offered in the wrench's emitter
+list, as v20 listed it, and so is a named light; one with a
 `uiName` and no image becomes a pickup nobody holds. A kill icon the
 Add-On forgot to ship is left out of its messages. Its particles may draw
 its own textures; players load at most 64 of them from all Add-Ons, and

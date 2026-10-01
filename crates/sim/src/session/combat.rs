@@ -1375,6 +1375,7 @@ impl Session {
             peer.combat.last_direct = None;
             // A new life starts with full magazines and starting reserves.
             let _ = self.weapons.reset_ammo(ActorId(owner));
+            let _ = self.weapons.respawned(ActorId(owner));
             peer.combat.corpse_cleared = false;
             // `serverCmdLight` mounts its fxLight on the player object, which
             // stays with the corpse: a new body starts dark.

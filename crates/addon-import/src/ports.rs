@@ -288,7 +288,8 @@ impl Ports {
         Ok(ports)
     }
 
-    /// A port.json with its [`Port::include`]s applied under it.
+    /// A port.json with its [`Port::include`]s applied under it, keeping
+    /// its `null`s.
     fn with_includes(&self, port: Value) -> Result<Value> {
         let names: Vec<String> = match port.get("include") {
             None => return Ok(port),
@@ -318,7 +319,9 @@ impl Ports {
                         .with_context(|| format!("`scripts` in {name}: a list"))?,
                 );
             }
-            merge(&mut out, &part);
+            // A `null` in a port is a value too (an empty rules slot, or a
+            // patch removing a field), so it stays.
+            compose(&mut out, &part);
         }
         out["scripts"] = Value::Array(scripts);
         Ok(out)

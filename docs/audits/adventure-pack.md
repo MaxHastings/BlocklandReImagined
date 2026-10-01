@@ -53,6 +53,16 @@ its own values.
 | Light key reloads | hl2 `serverCmdLight` | magazine `light_states` | **new** |
 | Head-hit flinch | hitbox `playThread(0/2, jump)`, `schedule(50, playThread, 0/2, plant)` | `play_thread` on threads 0 to 3 with `after` | **new** (threads 0 and 1, delay) |
 | Hitmarker | `commandToClient('hitmarker')` | nothing in either pack draws it | none in the original |
+| Timed arm moves and sounds in a state | `%obj.schedule(450, playThread, 2, plant)`, `schedule(650, 0, serverPlay3D, ...)` | state `cues` | **new** |
+| Truer first shot after a pause | `getSimTime() - lastFire` spread | shot `rested` | **new** |
+| Two shells a load | Paired Shotgun's `onReloadSingle` | magazine `per_load` | **new** |
+| Muzzle through a wall | `checkForObstruction`: from the eye within 4.5 units | hitscan `eye_within` | **new** |
+| Sniper aims where the eye looks | `getLOSPoint` | hitscan `converge` | **new** |
+| Rifle beams | `drawRaylineRifleTracer`, `createTracer`, deleted after a while | hitscan `tracer`, read by a script rule | **ported** |
+| Bullet hit sounds | `raycastExplosionPlayerSound`, `raycastExplosionBrickSound` | hitscan `player_sound`, `other_sound` | **ported** |
+| Grenade bounce sound | `shrapGrenProjectile::onCollision` `serverPlay3D` | projectile `bounce_effect` | **ported** |
+| Named emitters (Critical Hit glow) | a `ParticleEmitterData` with a `uiName` shows in the wrench | Add-On emitters and lights join the wrench lists | **new** |
+| Everything else the scripts define | ammo system calls, pickups, death drops, hitbox helpers | each in the port's `handles` (the shared ones in `_shared/bushido-hl2.json`), listed in the report as carried out by the port | **accounted** |
 
 ## Approximations
 
@@ -60,6 +70,9 @@ its own values.
   upward. Each set's speed is the script's mean.
 - The engine keeps one magazine per gun per holder, where v20 kept one per
   tool slot: two of the same gun share theirs.
+- The 1019 Sniper Rifle's beam is drawn white and 0.1 wide: its script
+  sets the node colour to white and its comment gives the model's width;
+  the model itself is not read.
 - The hitbox head hit's `goremodHitProjectile` and `gamedamage2Sound` are
   defined nowhere, so the original never showed them; the port has none.
 

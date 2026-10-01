@@ -125,7 +125,7 @@ fn main() -> Result<()> {
     for d in &declarations.entries {
         if d.class == "particleemitternodedata" {
             let mut f = effects::Fields::new(d);
-            nodes.insert(d.name.to_lowercase(), f.number("timemultiple", 1.0)?);
+            nodes.insert(d.name.to_lowercase(), f.ratio("timemultiple", 1.0)?);
         }
     }
     for d in &declarations.entries {

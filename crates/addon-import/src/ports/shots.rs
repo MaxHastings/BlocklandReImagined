@@ -84,6 +84,15 @@ pub struct Hitscans {
     pub spread: Option<String>,
     #[serde(default)]
     pub spread_degrees: bool,
+    /// For the guns cast from the muzzle: cast from the eye instead when
+    /// something stands this close before it (the engine's
+    /// `eye_within`), as the scripts' obstruction test did.
+    #[serde(default)]
+    pub eye_within: Option<f32>,
+    /// For the guns cast from the muzzle: aim at what the eye's look meets
+    /// (the engine's `converge`), as the scripts' `getLOSPoint` did.
+    #[serde(default)]
+    pub converge: bool,
     /// A streak for each image whose `field` is set, drawn as `look`
     /// (the engine's tracer: `color`, `width`, `seconds`).
     #[serde(default)]
@@ -127,6 +136,22 @@ struct Block {
     recoil: Option<f32>,
     /// The `scale` the script gave the projectiles it made.
     scale: f32,
+    /// `if (getSimTime() - %obj.lastFired > ms) %spread /= d;`: a steadier
+    /// shot after a pause, as (milliseconds, divisor).
+    rested: Option<(u32, f32)>,
+}
+
+/// A block's pause rule, written right after its spread line.
+fn rested_of(text: &str) -> Option<(u32, f32)> {
+    let rested = regex::RegexBuilder::new(
+        r"^\s*if\s*\(\s*getsimtime\s*\(\s*\)\s*-\s*%obj\.lastfired\s*>\s*(\d+)\s*\)\s*%spread\s*/=\s*([0-9]*\.?[0-9]+)\s*;\s*%obj\.lastfired\s*=\s*getsimtime\s*\(\s*\)\s*;",
+    )
+    .case_insensitive(true)
+    .build()
+    .expect("pattern");
+    let c = rested.captures(text)?;
+    let divisor: f32 = c[2].parse().ok().filter(|d: &f32| *d >= 1.0)?;
+    Some((c[1].parse().ok()?, divisor))
 }
 
 /// A body without its `//` comments.
@@ -188,6 +213,7 @@ fn blocks(body: &str) -> Vec<Block> {
                 count: c[3].parse().unwrap_or(1),
                 recoil: recoil_of(&body[whole.end()..end]),
                 scale: scale_of(&body[whole.end()..end]),
+                rested: rested_of(&body[whole.end()..end]),
             }
         })
         .collect()
@@ -271,6 +297,11 @@ pub fn shots(
             });
             if main.scale != 1.0 {
                 fired["scale"] = json!(main.scale);
+            }
+            if let Some((ms, divisor)) = main.rested {
+                // `getSimTime()` milliseconds as ticks, 120 a second.
+                let ticks = (u64::from(ms) * 120).div_ceil(1000).clamp(1, 1200);
+                fired["rested"] = json!({ "after_ticks": ticks, "spread": main.spread / divisor });
             }
             Ok((fired, volleys, projectile(main)?))
         };
@@ -420,6 +451,14 @@ fn scripted(
     let arm_re = call(r"playthread\s*\(\s*2\s*,\s*([A-Za-z_]\w*)\s*\)");
     let gesture_re = call(r"playthread\s*\(\s*3\s*,\s*([A-Za-z_]\w*)\s*\)");
     let blast_re = call(r"spawnexplosion\s*\(\s*([A-Za-z_]\w*)\s*,");
+    // What a script scheduled on the holder or played on its other threads.
+    let later_thread_re = call(
+        r#"%obj\s*\.\s*schedule\s*\(\s*(\d+)\s*,\s*"?playthread"?\s*,\s*"?([0-3])"?\s*,\s*"?([A-Za-z_]\w*)"?\s*\)"#,
+    );
+    let later_sound_re = call(
+        r"(?:^|[^.\w])schedule\s*\(\s*(\d+)\s*,\s*0\s*,\s*serverplay3d\s*,\s*([A-Za-z_]\w*)\s*,",
+    );
+    let other_thread_re = call(r"%obj\s*\.\s*playthread\s*\(\s*([01])\s*,\s*([A-Za-z_]\w*)\s*\)");
     let sound_id = |n: &str| {
         let suffix = format!(":sound/{}", n.to_ascii_lowercase());
         weapons["sounds"]
@@ -444,11 +483,15 @@ fn scripted(
         };
         let body = uncommented(body);
         let mut did = vec![];
+        // The script's first sound becomes the state's own when it has none;
+        // any other is a cue.
+        let mut first_sound_taken = false;
         if state["sound"].as_str().unwrap_or_default().is_empty()
             && let Some(sound) = sound_re.captures(&body).and_then(|c| sound_id(&c[1]))
         {
             state["sound"] = json!(sound);
             did.push("sound");
+            first_sound_taken = true;
             any = true;
         }
         if state["arm"].as_str().unwrap_or_default().is_empty()
@@ -464,6 +507,54 @@ fn scripted(
             state["gesture"] = json!(gesture[1].to_ascii_lowercase());
             did.push("gesture");
             any = true;
+        }
+        if state["cues"].as_array().is_none_or(Vec::is_empty) {
+            // Each cue in the order the script wrote it; a sound the pack
+            // does not have played nothing in v20 either.
+            let mut cues: Vec<(usize, Value)> = vec![];
+            for c in other_thread_re.captures_iter(&body) {
+                cues.push((
+                    c.get(0).map_or(0, |m| m.start()),
+                    json!({ "thread": c[1].parse::<u8>().unwrap_or(0), "sequence": c[2].to_ascii_lowercase() }),
+                ));
+            }
+            for c in sound_re
+                .captures_iter(&body)
+                .skip(usize::from(first_sound_taken))
+            {
+                if let Some(sound) = sound_id(&c[1]) {
+                    cues.push((c.get(0).map_or(0, |m| m.start()), json!({ "sound": sound })));
+                }
+            }
+            for c in later_thread_re.captures_iter(&body) {
+                cues.push((
+                    c.get(0).map_or(0, |m| m.start()),
+                    json!({
+                        "after_ms": c[1].parse::<u32>().unwrap_or(0),
+                        "thread": c[2].parse::<u8>().unwrap_or(0),
+                        "sequence": c[3].to_ascii_lowercase(),
+                    }),
+                ));
+            }
+            for c in later_sound_re.captures_iter(&body) {
+                if let Some(sound) = sound_id(&c[2]) {
+                    cues.push((
+                        c.get(0).map_or(0, |m| m.start()),
+                        json!({ "after_ms": c[1].parse::<u32>().unwrap_or(0), "sound": sound }),
+                    ));
+                }
+            }
+            cues.sort_by_key(|(at, _)| *at);
+            if !cues.is_empty() {
+                state["cues"] = Value::Array(
+                    cues.into_iter()
+                        .map(|(_, c)| c)
+                        .take(bri_weapons::Cue::MAX)
+                        .collect(),
+                );
+                did.push("timed moves and sounds");
+                any = true;
+            }
         }
         if let Some(kick) = blast_re
             .captures(&body)
@@ -526,6 +617,12 @@ pub fn hitscans(h: &Hitscans, weapons: &Value, code: &super::Code) -> Result<Rea
             (None, None) => false,
         };
         let mut hitscan = json!({ "range": range, "from_eye": from_eye });
+        if let Some(within) = h.eye_within.filter(|_| !from_eye) {
+            hitscan["eye_within"] = json!(within);
+        }
+        if h.converge && !from_eye {
+            hitscan["converge"] = json!(true);
+        }
         if let Some(t) = &h.tracer
             && set(blocks.field(name, &t.field))
         {
@@ -651,6 +748,7 @@ mod tests {
                     count: 15,
                     recoil: Some(2.0),
                     scale: 1.5,
+                    rested: None,
                 },
                 Block {
                     projectile: Some("slugProjectile".into()),
@@ -658,9 +756,24 @@ mod tests {
                     count: 1,
                     recoil: None,
                     scale: 1.0,
+                    rested: None,
                 },
             ]
         );
+    }
+
+    #[test]
+    fn a_pause_before_the_shot_halves_its_spread() {
+        let body = r#"
+            %projectile = %this.projectile; %spread = 0.0014; %shellcount = 1;
+            if (getSimTime() - %obj.lastFired > 500)
+               %spread /= 2;
+            %obj.lastFired = getSimTime();
+            %obj.setVelocity(VectorAdd(%obj.getVelocity(),VectorScale(%aimVec,"-1")));"#;
+        assert_eq!(blocks(body)[0].rested, Some((500, 2.0)));
+        // Not right after the spread line: some other rule.
+        let later = body.replace("%shellcount = 1;", "%shellcount = 1; %x = 1;");
+        assert_eq!(blocks(&later)[0].rested, None);
     }
 
     #[test]

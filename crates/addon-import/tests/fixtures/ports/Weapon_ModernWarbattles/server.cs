@@ -169,6 +169,9 @@ datablock ShapeBaseImageData(revolverImage : standinPistolImage)
    raycastDirectDamageType = $DamageType::StandinPistol;
    raycastCritDirectDamageType = $DamageType::StandinCrit;
    raycastExplosionProjectile = standinPistolProjectile;
+   raycastFromMuzzle = true;
+   raycastExplosionBrickSound = standinClubSoundB;
+   raycastExplosionPlayerSound = standinClubSoundB;
 };
 
 datablock ItemData(BatonItem)
@@ -188,6 +191,20 @@ datablock ShapeBaseImageData(BatonImage : standinPistolImage)
    raycastDirectDamage = 10;
    raycastDirectDamageType = $DamageType::StandinPistol;
    raycastFromMuzzle = false;
+   raycastExplosionBrickSound = standinClubSoundA;
+   raycastExplosionPlayerSound = standinClubSoundB;
+};
+
+datablock ItemData(MacheteItem : BatonItem)
+{
+   uiName = "Stand-in Machete";
+   image = MacheteImage;
+};
+
+datablock ShapeBaseImageData(MacheteImage : BatonImage)
+{
+   item = MacheteItem;
+   raycastDirectDamage = 15;
 };
 
 // A frag grenade that bursts into shrapnel.
@@ -361,6 +378,8 @@ function standinShotgunImage::onFire(%this, %obj, %slot)
 function revolverImage::onFire(%this, %obj, %slot)
 {
    %obj.setVelocity(VectorAdd(%obj.getVelocity(), VectorScale(%obj.getEyeVector(), "-3")));
+   %line = drawRaylineRifleTracer(%obj.getMuzzlePoint(%slot), %obj.getMuzzleVector(%slot));
+   %line.schedule(150, "delete");
    Parent::onFire(%this, %obj, %slot);
 }
 
@@ -573,4 +592,18 @@ function getHitbox(%obj, %col, %pos)
    %col.schedule(50, "playThread", "0", "plant");
    %col.schedule(50, "playThread", "2", "plant");
    return "headSkin";
+}
+
+function checkForObstruction(%obj, %targets)
+{
+   %eye = %obj.getEyePoint();
+   %eyeVector = %obj.getEyeVector();
+   %end = vectorAdd(%eye, vectorScale(%eyeVector, 4.5));
+   return containerRaycast(%eye, %end, %targets, %obj);
+}
+
+function shrapGrenProjectile::onCollision(%this, %obj, %col, %fade, %pos, %normal)
+{
+   serverPlay3D(standinClubSoundA, %obj.getTransform());
+   Parent::onCollision(%this, %obj, %col, %fade, %pos, %normal);
 }

@@ -570,3 +570,81 @@ fn a_fire_state_of_its_own_fires_its_own_shot() {
     let bad = json.replace(r#""onfire2": {"#, r#""onfire": {"#);
     assert!(Pack::from_json(bad.as_bytes()).is_err());
 }
+
+/// A reload state's timed cues: an arm move and a sound at their own
+/// milliseconds after the state began (v20's `%obj.schedule(450,
+/// "playThread", 2, plant)` and `schedule(650, 0, serverPlay3D, ...)`),
+/// each played even once the state has moved on, and the sound where the
+/// holder stood as it began. A new body drops the animations still due.
+#[test]
+fn a_states_cues_play_at_their_times_after_it_begins() {
+    let json = format!(
+        r#"{{ "schema_version": {SCHEMA}, "id": "kit",
+            "sounds": {{ "kit:sound/tap": {{ "file": "tap.wav" }} }},
+            "items": {{ "kit:weapon/gun": {{ "ui_name": "Gun", "image": "kit:image/gun" }} }},
+            "images": {{ "kit:image/gun": {{ "states": [
+                {{ "name": "Activate", "ticks": 2, "timeout": 1 }},
+                {{ "name": "Ready", "down": 2 }},
+                {{ "name": "Reload", "ticks": 12, "timeout": 3, "cues": [
+                    {{ "thread": 0, "sequence": "shiftright" }},
+                    {{ "after_ms": 100, "thread": 2, "sequence": "plant" }},
+                    {{ "after_ms": 250, "sound": "kit:sound/tap" }}
+                ] }},
+                {{ "name": "Done", "up": 1 }}
+            ] }} }} }}"#
+    );
+    let mut w = WeaponsWorld::new(Pack::from_json(json.as_bytes()).unwrap()).unwrap();
+    w.add_actor(A, 5).unwrap();
+    let gun = w.give(A, "kit:weapon/gun").unwrap();
+    w.equip(A, Some(gun)).unwrap();
+    step(&mut w, 10);
+    let mut frame = Frame {
+        position: Vec3::new(1.0, 0.0, 0.0),
+        ..Default::default()
+    };
+    w.set_frame(A, frame.clone()).unwrap();
+    w.trigger(A, true).unwrap();
+    let mut seen = vec![];
+    for tick in 0..40 {
+        if tick == 5 {
+            // The holder walks on; the sound stays where the reload began.
+            frame.position = Vec3::new(9.0, 0.0, 0.0);
+            w.set_frame(A, frame.clone()).unwrap();
+        }
+        for e in w.step(&mut Open) {
+            match e {
+                Event::Animation {
+                    thread, sequence, ..
+                } if thread != 2 || sequence == "plant" => seen.push((tick, format!("{thread} {sequence}"))),
+                Event::Sound { profile, position, .. } if profile == "kit:sound/tap" => {
+                    assert_eq!(position, Vec3::new(1.0, 0.0, 0.0));
+                    seen.push((tick, profile));
+                }
+                _ => {}
+            }
+        }
+    }
+    // 100 ms is 12 ticks and 250 ms 30, counted from the state's tick.
+    assert_eq!(
+        seen,
+        [
+            (0, "0 shiftright".to_string()),
+            (12, "2 plant".to_string()),
+            (30, "kit:sound/tap".to_string())
+        ],
+        "{seen:?}"
+    );
+
+    // A cue still due when the holder gets a new body keeps its sound only.
+    w.trigger(A, false).unwrap();
+    step(&mut w, 30);
+    w.trigger(A, true).unwrap();
+    step(&mut w, 2);
+    w.respawned(A).unwrap();
+    let later: Vec<Event> = (0..40).flat_map(|_| w.step(&mut Open)).collect();
+    assert!(
+        !later.iter().any(|e| matches!(e, Event::Animation { sequence, .. } if sequence == "plant")),
+        "{later:?}"
+    );
+    assert!(later.iter().any(|e| matches!(e, Event::Sound { profile, .. } if profile == "kit:sound/tap")));
+}

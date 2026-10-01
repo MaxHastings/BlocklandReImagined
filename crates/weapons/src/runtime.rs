@@ -623,7 +623,20 @@ pub struct Actor {
     /// The grenade whose fuse is burning in the hand ([`crate::Cook`]).
     #[serde(default)]
     cook: Option<Cooking>,
+    /// Image states' timed cues still to play ([`crate::State::cues`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    cues: Vec<PendingCue>,
 }
+/// A [`crate::Cue`] waiting for its tick, with where the holder was as its
+/// state began (v20 scheduled `serverPlay3D` with the position then).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct PendingCue {
+    due: u64,
+    cue: crate::Cue,
+    position: Vec3,
+}
+/// The most cues one holder has waiting.
+const MAX_PENDING_CUES: usize = 64;
 /// [`Actor::cook`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct Cooking {
@@ -836,6 +849,7 @@ impl WeaponsWorld {
                 reserve: BTreeMap::new(),
                 reload: None,
                 cook: None,
+                cues: Vec::new(),
             },
         );
         Ok(())
@@ -1286,8 +1300,11 @@ impl WeaponsWorld {
             return;
         };
         let rounds = a.rounds.get(&key).copied().unwrap_or(0);
+        // A load of several rounds into a magazine with less room loses the
+        // rest, as the Paired Shotgun's chamber check threw its second
+        // shell away.
         let wanted = if magazine.one_by_one {
-            1
+            magazine.per_load
         } else {
             magazine.size.saturating_sub(rounds)
         };
@@ -1295,7 +1312,7 @@ impl WeaponsWorld {
             .reserve
             .get_mut(&magazine.ammo)
             .map_or(0, |r| r.take(wanted));
-        let rounds = rounds + taken;
+        let rounds = (rounds + taken).min(magazine.size);
         a.rounds.insert(key.clone(), rounds);
         self.events.push(Event::Ammo { actor: id });
         if magazine.one_by_one && rounds < magazine.size && !magazine.scripted() {
@@ -1614,6 +1631,18 @@ impl WeaponsWorld {
     }
     /// A fresh life: magazines full again and reserves back to each gun's
     /// starting amount when next drawn.
+    /// A new body for the holder: animations its states scheduled on the
+    /// old one are gone with it (their sounds still play, as v20's global
+    /// `schedule` did).
+    pub fn respawned(&mut self, id: ActorId) -> Result<()> {
+        let a = self.actors.get_mut(&id).context("Unknown actor")?;
+        a.cues.retain(|c| !c.cue.sound.is_empty());
+        for c in &mut a.cues {
+            c.cue.thread = None;
+            c.cue.sequence.clear();
+        }
+        Ok(())
+    }
     pub fn reset_ammo(&mut self, id: ActorId) -> Result<()> {
         let a = self.actors.get_mut(&id).context("Unknown actor")?;
         a.rounds.clear();
@@ -2078,6 +2107,7 @@ impl WeaponsWorld {
             let mut a = self.actors.remove(&id).unwrap();
             self.finish_reload(id, &mut a);
             self.burn_fuse(id, &mut a);
+            self.play_cues(id, &mut a);
             // v20 `Player::updateMove` sets image slot 1's trigger from move
             // trigger 1, which Blockland never sends, before the images run.
             // `AkimboGunImage::onFireAkimbo`'s setImageTrigger(1, 1) is
@@ -2319,6 +2349,18 @@ impl WeaponsWorld {
                         position: a.frame.muzzle[e.hand as usize],
                     });
                 }
+                for cue in &state.cues {
+                    let pending = PendingCue {
+                        due: self.tick + cue.ticks(),
+                        cue: cue.clone(),
+                        position: a.frame.position,
+                    };
+                    if cue.ticks() == 0 {
+                        self.play_cue(id, pending);
+                    } else if a.cues.len() < MAX_PENDING_CUES {
+                        a.cues.push(pending);
+                    }
+                }
                 if !state.emitter.is_empty() {
                     self.events.push(Event::Effect {
                         source: TargetId::Actor(id),
@@ -2412,6 +2454,38 @@ impl WeaponsWorld {
             ),
         });
         Advance::Drop
+    }
+    /// Play each of the holder's state cues whose time has come.
+    fn play_cues(&mut self, id: ActorId, a: &mut Actor) {
+        if a.cues.is_empty() {
+            return;
+        }
+        let (due, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut a.cues)
+            .into_iter()
+            .partition(|c| c.due <= self.tick);
+        a.cues = waiting;
+        for c in due {
+            self.play_cue(id, c);
+        }
+    }
+    fn play_cue(&mut self, id: ActorId, c: PendingCue) {
+        if let Some(thread) = c.cue.thread
+            && !c.cue.sequence.is_empty()
+        {
+            self.events.push(Event::Animation {
+                actor: id,
+                thread,
+                sequence: c.cue.sequence,
+                image_hand: None,
+            });
+        }
+        if !c.cue.sound.is_empty() {
+            self.events.push(Event::Sound {
+                source: TargetId::Actor(id),
+                profile: c.cue.sound,
+                position: c.position,
+            });
+        }
     }
     fn animation(&mut self, id: ActorId, sequence: &str) {
         self.events.push(Event::Animation {
@@ -2744,6 +2818,45 @@ impl WeaponsWorld {
                 let body = a.frame.middle.unwrap_or(a.frame.eye);
                 let (origin, through) = follow(q, &[body, a.frame.eye, origin]);
                 let velocity = through.map_or(velocity, |c| carried(&c, Vec3::ZERO, velocity).1);
+                // A muzzle shot with something right before the eye starts
+                // at the eye, so it cannot leave through a wall the gun is
+                // pressed into.
+                let eye_first = shot.hitscan.as_ref().is_some_and(|h| {
+                    !h.from_eye
+                        && h.eye_within.is_some_and(|within| {
+                            q.sweep(
+                                a.frame.eye,
+                                a.frame.eye + direction * within,
+                                Filter {
+                                    projectile_age_ticks: None,
+                                    source: id,
+                                    players: p.collide_players,
+                                    world_only: false,
+                                },
+                            )
+                            .is_some()
+                        })
+                });
+                // Where the look meets something, for a muzzle shot that
+                // converges on it.
+                let look_point = shot
+                    .hitscan
+                    .as_ref()
+                    .filter(|h| h.converge && !h.from_eye && !eye_first)
+                    .map(|h| {
+                        let end = a.frame.eye + direction * h.range;
+                        q.sweep(
+                            a.frame.eye,
+                            end,
+                            Filter {
+                                projectile_age_ticks: None,
+                                source: id,
+                                players: p.collide_players,
+                                world_only: false,
+                            },
+                        )
+                        .map_or(end, |hit| hit.position)
+                    });
                 for n in 0..shot.projectiles {
                     let turn = if spread > 0.0 {
                         let angle = |axis: u64| {
@@ -2759,15 +2872,12 @@ impl WeaponsWorld {
                             Some(moving) if pace > shot.moving_speed => moving,
                             _ => hitscan.range,
                         };
-                        let from = if hitscan.from_eye {
-                            a.frame.eye
-                        } else {
-                            origin
-                        };
-                        let aim = if hitscan.from_eye {
-                            direction
-                        } else {
-                            velocity.normalize_or(direction)
+                        let from_eye = hitscan.from_eye || eye_first;
+                        let from = if from_eye { a.frame.eye } else { origin };
+                        let aim = match look_point {
+                            _ if from_eye => direction,
+                            Some(point) => (point - origin).normalize_or(direction),
+                            None => velocity.normalize_or(direction),
                         };
                         self.hitscan(
                             id,
