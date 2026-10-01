@@ -55,6 +55,7 @@ operation that needs a capability.
 | `%client.setControlCameraFov(%fov)` | `set_fov(p, fov)`, `set_fov(p, ())` | `player` |
 | `%obj.setTransform`, `%client.spawnPlayer()` | `teleport(p, x, y, z)`, `respawn(p)` | `player` |
 | `%obj.setVelocity`, `addVelocity` | `push(ref, vx, vy, vz, by)` | `physics` |
+| A rope or grappling hook scripted from a schedule that re-aims `setVelocity` toward a point each tick | `tether(p, point, length, #{brick, object, reel, swing, keys, straight})`, `tether_length`, `untether` | `physics` |
 | `%player.tool[%i] = ...` | `give_item(p, item, equip)` | `player` |
 | `%player.tool[%i] = 0`, `serverCmdDropTool` | `take_item(p, item)` | `player` |
 | `new Item() { ... }` at a point | `drop_item(item, x, y, z)`, `drop_item(item, x, y, z, vx, vy, vz)` | `player` |

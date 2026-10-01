@@ -434,6 +434,17 @@ mod tests {
                     phase: u8::MAX,
                     jump: true,
                 },
+                tether: Some(bri_sim::player::Tether {
+                    anchor: [f32::MAX; 3],
+                    length: f32::MAX,
+                    target: f32::MAX,
+                    reel: f32::MAX,
+                    swing: f32::MAX,
+                    drift: [f32::MAX; 3],
+                    keys: Some([f32::MAX; 2]),
+                    winding: i8::MAX,
+                    straight: true,
+                }),
             },
         });
         let vehicle = Datagram::Vehicle(bri_sim::session::VehiclePose {

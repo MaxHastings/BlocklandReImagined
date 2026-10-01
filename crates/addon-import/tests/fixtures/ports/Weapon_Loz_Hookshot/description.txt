@@ -1,0 +1,5 @@
+Title: Stand-in Hookshot
+Author: Blockland ReImagined tests
+Written for tests. It has the community Hookshot's folder name and the
+shape of its script functions, with its own numbers, so the listed port
+applies to it. It is not the original Add-On and holds none of its files.

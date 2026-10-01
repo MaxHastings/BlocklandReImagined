@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "script": "grapple.rhai",
+  "commands": [
+    { "name": "release", "cooldown_ticks": 0 }
+  ],
+  "state": {
+    "player": {
+      "rope": { "default": [], "persist": false }
+    }
+  },
+  "on_projectile_hit": true,
+  "tick_interval": 4
+}

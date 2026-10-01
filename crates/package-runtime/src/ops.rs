@@ -16,6 +16,14 @@ pub const MAX_FIRE_SPEED: f32 = 10_000.0;
 pub const PLAYER_MASS: f32 = 90.0;
 /// Farthest ahead of a player's eye a held object may float.
 pub const MAX_HOLD_DISTANCE: f32 = 64.0;
+/// Longest a tether's rope may be, and shortest, units (the player
+/// motor's own limits).
+pub const MAX_TETHER_LENGTH: f32 = 1000.0;
+pub const MIN_TETHER_LENGTH: f32 = 1.0;
+/// Fastest a tether reels, units a second.
+pub const MAX_TETHER_REEL: f32 = 80.0;
+/// Strongest push a tether's swing gives, units a second squared.
+pub const MAX_TETHER_SWING: f32 = 60.0;
 /// Strongest a hold may pull, in mass units times units per second
 /// squared: what it gives a thing of mass `m` is at most `force / m`.
 pub const MAX_HOLD_FORCE: f32 = 1.0e7;
@@ -392,6 +400,45 @@ pub enum Op {
     LetGo {
         player: u64,
     },
+    /// Tie `player` to `anchor` with a rope `length` long (`None`: exactly
+    /// as long as it spans now): they move freely within it and swing on
+    /// it (the player motor's `Tether`). `brick`
+    /// ties it to that brick, and the rope breaks when the brick goes;
+    /// `object` ties it to that spot on a player, vehicle or entity, which
+    /// carries the anchor along as it moves and turns, and the rope breaks
+    /// when it goes. `reel` is how fast `TetherLength` changes it and
+    /// `swing` how hard the movement keys push a hanging player (the
+    /// engine's defaults otherwise). `keys` (`[shortest, longest]`) lets
+    /// the player's jump and crouch keys reel it in and out between those.
+    /// With `straight`, reeling in draws the player straight along it.
+    /// A player has one rope; a new one replaces it.
+    Tether {
+        player: u64,
+        anchor: [f32; 3],
+        length: Option<f32>,
+        brick: Option<u64>,
+        reel: Option<f32>,
+        swing: Option<f32>,
+        #[serde(default)]
+        object: Option<ObjectRef>,
+        #[serde(default)]
+        keys: Option<[f32; 2]>,
+        #[serde(default)]
+        straight: bool,
+    },
+    /// Reel `player`'s rope toward `length`.
+    TetherLength {
+        player: u64,
+        length: f32,
+    },
+    /// Cut `player`'s rope. With `keep` (0 to 1), the player keeps only
+    /// that fraction of their speed relative to what the rope was tied to,
+    /// as a rope's grip slows them as it lets go.
+    Untether {
+        player: u64,
+        #[serde(default)]
+        keep: Option<f32>,
+    },
     /// Keep reaching for something to hold: every tick, while `player`
     /// holds nothing, the engine looks where they look, up to `distance`,
     /// and holds the first thing it meets that they may move, by the spot
@@ -641,6 +688,9 @@ impl Op {
             | Self::Hold { .. }
             | Self::HoldDistance { .. }
             | Self::LetGo { .. }
+            | Self::Tether { .. }
+            | Self::TetherLength { .. }
+            | Self::Untether { .. }
             | Self::Reach { .. }
             | Self::SpawnVehicle { .. }
             | Self::RemoveVehicle { .. } => "physics",
@@ -888,6 +938,29 @@ impl Op {
             Self::HoldDistance { distance, .. } => {
                 distance.is_finite() && (0.5..=MAX_HOLD_DISTANCE).contains(distance)
             }
+            Self::Tether {
+                anchor,
+                length,
+                brick,
+                reel,
+                swing,
+                object,
+                keys,
+                ..
+            } => {
+                let span = MIN_TETHER_LENGTH..=MAX_TETHER_LENGTH;
+                finite(anchor)
+                    && length.is_none_or(|l| span.contains(&l))
+                    && reel.is_none_or(|r| (0.0..=MAX_TETHER_REEL).contains(&r))
+                    && swing.is_none_or(|s| (0.0..=MAX_TETHER_SWING).contains(&s))
+                    && !(brick.is_some() && object.is_some())
+                    && keys.is_none_or(|[short, long]| {
+                        span.contains(&short) && span.contains(&long) && short <= long
+                    })
+            }
+            Self::TetherLength { length, .. } => {
+                (MIN_TETHER_LENGTH..=MAX_TETHER_LENGTH).contains(length)
+            }
             Self::Reach {
                 distance,
                 near,
@@ -900,7 +973,7 @@ impl Op {
                     && (*near..=MAX_HOLD_DISTANCE).contains(distance)
                     && force.is_none_or(|f| f.is_finite() && f > 0.0 && f <= MAX_HOLD_FORCE)
             }
-            Self::LetGo { .. } | Self::RemoveVehicle { .. } => true,
+            Self::LetGo { .. } | Self::Untether { .. } | Self::RemoveVehicle { .. } => true,
             Self::Fire {
                 projectile,
                 position,
@@ -1031,6 +1104,9 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::Hold { .. } => "hold",
         Op::HoldDistance { .. } => "hold_distance",
         Op::LetGo { .. } => "let_go",
+        Op::Tether { .. } => "tether",
+        Op::TetherLength { .. } => "tether_length",
+        Op::Untether { .. } => "untether",
         Op::Reach { .. } => "reach",
         Op::SpawnVehicle { .. } => "spawn_vehicle",
         Op::RemoveVehicle { .. } => "remove_vehicle",

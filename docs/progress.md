@@ -8132,6 +8132,51 @@ the Hammer and Wrench. It keeps the gun's in-play looks (dark shell, teal
 veins, green-lit edges, teal muzzle), with no outline or glow. It is still
 original art, not a render of any game model.
 
+Grapple Rope Add-On (2026-09-30, Max: "we should have grapple rope in our
+Blockland but make the rope part less ugly and also make the printer look
+cooler same kind of idea we did with gravity gun ... from a Jungle
+environment"). Three showcase Add-Ons, installed but off:
+`grapple-rope` (the host rule), `grapple-rope-tool` (the stock Printer by
+reference) and `grapple-rope-fx` (effects). After the v20 Grapple Rope by
+Demian, SolarFlare and Uristqwerty (original code by Qwertyuiopas), read for
+behaviour only; none of its files are used. Hold left click to throw the
+hook where you aim (64 reach, flies at 160 u/s); it bites bricks and the
+map, and you hang and swing from it; the wheel climbs and pays out
+2.5 units a notch; letting go drops off. Same in and out of minigames. A
+miss flies out and back. The rope breaks when its brick goes, on death,
+teleport, sitting, tumbling, or putting the launcher away.
+
+Engine piece: `PlayerState::tether`, a rope from a point to a player's
+raised hands, run by the motor each 32 ms tick after drag: reel toward the
+target (easing off over the last units, so a full-speed climb never flings
+anyone into a ceiling), movement keys pump the swing while taut and
+airborne, then the tick's move is projected onto the rope's sphere
+(position projection, pulled in at most 60 u/s faster). Projection rather
+than a velocity spring keeps a fast swing on a short rope from gaining
+energy: the first spring version reeled a swinging player into the test
+ceiling at 34 u/s, past `minImpactSpeed`, and killed them; now the climb
+peaks near 25 u/s and settles. Because it is player state, the owner's
+prediction runs the same rope, so this changes the wire (protocol 72 after batch 153, the
+Gate's number after Throwmod's 70). Script ops (`physics`): `tether`,
+`tether_length`, `untether`, and `tethered(p)` to read it; limits in
+docs/modding/README.md section 3.
+
+Effects, all original: a braided rope tube of three hemp strands with a
+vine-green strand, sagging in a parabola when slack, shivering when it
+snaps taut (with a Karplus-Strong twang); a brass three-pronged hook with
+cord lashing; the Printer reskinned as carved jungle hardwood with bamboo
+bands, a leafy vine, moss on up-facing surfaces and brass pins; a
+generated icon in the stock icon style; throw, bite, twang and zip sounds.
+Rope state goes to clients only on change (`rope` player state); nothing
+cosmetic travels per frame.
+
+Tests: `bri-sim --test tether` (7: pendulum keeps its energy, slack fall
+then catch, reel lifts and lowers, leash on the ground, pumping, breaking,
+restored swing replays exactly), `bri-sim --test grapple_rope` (4: bite,
+leash, climb, let go; miss; brick removed and launcher put away; everyone
+gets it outside minigames), `bri-client-sandbox --test showcase` (throw,
+bite, hang, twang, zip; muzzle and skin; offscreen render, checked on
+lavapipe).
 Gravity Gun icon from its model (same day, Max: "take the 3d model +
 shaders + snap pic -> make transparent background -> use as the icon just
 like the other tools"). The gun in play is the Printer's model (v20
@@ -8368,6 +8413,95 @@ so:
   (`TANK`, via `fixture::synthetic_vehicles`); the chaos-only
   `synthetic_tank` is gone with the chaos vehicles it was built from.
 
+Grappling Hook Add-On (2026-10-01, Max: "Grappling Hook took you straight
+to the point iirc while Grapling rope was more swinging behavior ... lets
+just add both to the game", "they both become TWo seperate Addons that
+just come with the release"). Three more showcase Add-Ons, installed but
+off: `grappling-hook`, `grappling-hook-tool`, `grappling-hook-fx`. After
+the Grappling Hook by Conan (Blockland Glass add-on 860), read for
+behaviour only; nothing of it is used. One click fires (80 reach, 200 u/s)
+and the winch pulls you straight to the brick, map, player or vehicle it
+bites; you hang there, may switch items, and the next click lets go; jump
+reels in, crouch lets out, the wheel too. `/hookobjects` (declared admin
+command) limits it to bricks and the map; default on, as Conan's prefs.
+
+Engine additions to the rope, all predicted by the owner's client:
+`drift` (a moving anchor: the host re-ties the rope to the object's spot
+each step, in its physics body's frame for vehicles, and the motor carries
+the anchor on between updates), `keys` (jump/crouch winch, braking to a
+stop when let go, `TETHER_HALT`), `straight` (reeling in draws the body
+along the rope at the winch's speed: without it the pull turned into a
+32 u/s swing into the test wall and killed the player), a winch that
+brakes at `TETHER_STOP` (40 u/s²) over both the rope's and the body's
+remaining way in (replacing the first ease), and a winch that stalls
+rather than out-running a body held back by something in its way. A
+script setting the length takes over from the keys (a key let go a tick
+later had cancelled a wheel reel).
+
+Effects: a riveted gunmetal winch gun with brass drum bands wound with
+cable and an amber gauge, a six-strand steel cable that buzzes as it takes
+the load, a forged four-claw grapnel with a red band whose claws spring
+open on biting; it follows players and vehicles from their drawn records
+(the spot is learned when the bite is first seen; a late joiner sees the
+stored bite point offset by however far the target moved since). Sounds:
+fire, clamp, winch, release.
+
+Tests: `bri-sim --test tether` (11, adding winch keys, moving anchor, hard
+pull braking, straight pull), `--test grappling_hook` (4: pulled to the
+wall and hangs, switching items keeps the rope, click lets go; keys and
+wheel; a hook in a player carries you and /hookobjects turns it off;
+loadout), `bri-client-sandbox --test showcase` (fire, bite, winch, buzz,
+release, miss; rides a turning vehicle and a running player; muzzle and
+skin; offscreen render on lavapipe).
+
+HookShot Add-On (2026-10-01, Max: "I want HookShot too"). Three more
+showcase Add-Ons, installed but off: `hookshot`, `hookshot-tool`,
+`hookshot-fx`. After the Hookshot by Loz (RTB add-on 2859), read for
+behaviour only from its forum description; nothing of it is used. Point
+and click: the spearhead flies (64 reach, 120 u/s), bites a brick, the
+map, a player or a vehicle, and the chain hauls you straight there at 80
+u/s (the rope's `straight` winch, braking at the end) and lets go when you
+arrive, so you land on the spot; stuck for 3 s, it gives up. A miss flies
+out and back at its speed. Clicking again or putting it away lets go
+mid-flight.
+
+Engine seam: `untether(player, #{keep})` (0 to 1): letting go keeps only
+that fraction of the player's speed relative to the rope's anchor. Without
+it, letting go mid-haul in front of a wall flew the player into it at 45
+u/s and killed them, and a rule cannot `push` its own caller. The HookShot
+keeps 0.35.
+
+Effects: the Printer recast as a temple relic (weathered bronze, verdigris
+mottling, carved glyph rings, gold filigree bands, a teal eye-stone that
+wakes while the chain is out); a chain of real interlocking oval bronze
+links, each turned a quarter from the last, drawn in runs of 32 links
+(14 rows each, the joints between links cut away), sliding back into the
+barrel as it hauls; a gold-bronze leaf spearhead on a filigreed socket
+with a teal stone, whose two barbs spring out on biting; it follows
+players and vehicles as the Grappling Hook's grapnel does. Sounds: shoot,
+chink, reel, retract. Icon in `tools/make_showcase_icons.py` (earlier
+icons byte-identical).
+
+Tests: `bri-sim --test hookshot` (4: flies to the spot and lands unhurt;
+second click and putting it away let go, slowed below 45%, and land;
+flies to another player, misses into open sky; loadout),
+`bri-client-sandbox --test showcase` (shoot, bite, haul, links running,
+whip back, miss out and back; rides a turning vehicle; muzzle and relic
+skin; offscreen render on lavapipe).
+
+Grappling Hook and HookShot merged (2026-10-01, Max asked whether all
+three grapples were different enough and picked merging): two grapple
+Add-Ons ship, the Grapple Rope (swing) and the HookShot. The HookShot now
+does both: tap the click to fly there and land (Loz's Hookshot); hold it a
+quarter second or more and you hang there until the next click, jump
+reeling in, crouch letting out, the wheel too, keeping the chain when you
+switch items (Conan's Grappling Hook). `/hookobjects` (admin) moved over.
+The tool's image now runs a command on letting go of the trigger, and the
+rule decides tap or hold from how long it was down (`grip` state). The
+HookShot's temple-relic look won over the gunmetal winch; the
+`grappling-hook*` Add-Ons, their sounds and icon are gone. Engine seams
+unchanged. Tests: `bri-sim --test hookshot` 7 (adds hold-to-hang and let
+go, winch keys and wheel, carried by a player and /hookobjects).
 ## 2026-10-01 Portals: going through shows the same picture (branch `claude/portal-bricks-5be9t8`)
 
 Max, v0.1.10: walking through a portal felt "98% perfect" but jarred at
@@ -9329,6 +9463,73 @@ Every main CI run since about run 180 failed three content-free targets.
   machine. No test is skipped or ignored and the 30 s waits are unchanged.
   Locally: mirrors 5 passed, persistent_scene 12 passed, 2 ignored (as
   before, for local packs).
+
+## 2026-10-01 Fill Can: originals only
+
+Max chose "originals only" for every classic Add-On. Our remade Fill Can is
+no longer bundled: its packages, generated icon and icon script are gone
+and it is off the default Add-On list. The engine seams stay (`paint_fill`,
+`Simulation::touching_region`, `grid::share_face`, image `paint_tint`) and
+are still tested through a small fill tool of the test's own in
+`crates/sim/tests/fixtures/fill-can`. Loading the player's own original
+Fill Can from their Blockland Add-Ons folder follows on the shared classic
+Add-On loader.
+
+## 2026-10-01 Grapple Rope and Hookshot: ports of the originals
+
+Max's final pick: the Grapple Rope (Uristqwerty, SolarFlare and Demian;
+code by Qwertyuiopas) and Loz's Hookshot, each exactly as the original
+works; no Grappling Hook. The game imports the player's own copies, so
+both are now ports (`crates/addon-import/ports/tool_grapplerope`,
+`weapon_loz_hookshot`) on the Fill Can lane's host-rules companion. Our
+stand-in rule packages, and their tests in `crates/sim/tests`, are gone.
+The engine rope seams stay (`tether`, winch, moving anchors,
+`untether(p, #{keep})`, prediction), tested in `crates/sim/tests/tether.rs`.
+
+Evidence: the Gate imported both originals on Maxwell's PC (with `--core`)
+and handed over their import reports and scripts, read here only and not
+committed. Every `covers` pattern was checked against the real scripts:
+Grapple Rope lift 1 and chain speed 160; Hookshot stop 5, near 15, slow 30,
+far 16, fast 50, every 100 ms. Both copies' hashes are listed.
+
+- Grapple Rope: the launcher fires its own hook projectile. Where it
+  strikes (anything, as `$Pref::Server::GrappleRopeAnywhere` is on), if no
+  brick or map stands between it and a point `lift` above the feet, the
+  holder hangs from that spot on a rope as long as the distance then, for
+  as long as they hold the click (`Fire`/`Hold`), and flies off with all
+  their speed on letting go (`onRelease`). The rope stays on the spot even
+  if what it struck goes, as in the original. The movement keys steer
+  only by the player's ordinary air control, as in v20 (`swing: 0`: the
+  original added no push of its own). The engine's longest rope went from
+  200 to 1000, so the hook's full reach (200 a second for 4 s, 800) holds.
+  One pivot, said plainly: the engine's rope replaces `GrappleRope`'s 10 ms
+  velocity correction (it looked one second ahead, so the original pulled
+  a little early). A hook that lands after
+  the click is let go holds nothing (the original kept it for the next
+  click, a bug).
+- New image field `rope` (engine seam): while the holder is roped, every
+  player's game draws the rope with a projectile's trail swept from the
+  muzzle to the rope's end each frame, as densely as that projectile
+  flying it would lay it. The original fired a chain projectile every
+  10 ms to draw it; this costs nothing on the wire. The port points it at
+  the copy's own `ChainProjectile` and speed.
+- Hookshot: where the spearhead strikes, every `every` ms the shooter's
+  speed is set straight at the spot, `fast` beyond `far`, `slow` within
+  `near` (1 in between, as the original's arithmetic gives), until within
+  `stop`, where it ends with the last speed kept. A struck player or
+  vehicle is followed (a vehicle's middle stands in for its origin plus the
+  original's 1 or 2 up). Seated, a hit on a player or vehicle pulls the
+  vehicle (this reads `riding`, the Throwmod lane's field, so it works once
+  that lands); a hit on anything else pulls nothing (the original's typo).
+  `/degrapple` stops the shooter's own pull. The spearhead's 100 direct
+  damage comes from the imported projectile.
+
+Tests: `crates/addon-import/tests/grapples.rs` (3, hosted with the
+companion rules), `crates/client/tests/weapon_effects.rs
+held_ropes_lay_their_trail_along_the_rope`, and the ports list test. The
+importer report for the Hookshot still shows its gun as a placeholder cube
+(materials `blank` and `black50` have no texture): an importer issue, not
+the port's.
 ### A big portal, and cars through it
 
 Max: "two different portal sizes. the one we currently have and one that
@@ -9423,6 +9624,21 @@ test boxes now use these hull sizes. Sizes: 1x4x5 (players), 1x14x10
 1x14x10. Still to confirm on the PC: where the turret's mount node puts
 it.
 
+## 2026-10-01 Import Add-On: models draw with the base game's stock textures
+
+Loz's Hookshot imported as a placeholder cube: its gun's materials `blank`
+and `black50` are not in the zip. They are v20's stock material textures
+in `base/data/shapes` (with `black`, `gray75`, `white` and the rest), which
+Add-On models use when they ship no copy. With the installed game given
+(`--installed`, as the Add-Ons screen's Import passes it), the importer now
+reads the installed item presentation's texture keys, and a material the
+Add-On lacks binds to `base/data/shapes/<name>` by that key. Players' games
+already load those textures with the base game, so nothing of v20 is copied
+into an import. Any Add-On gets this; nothing is Hookshot-specific.
+Inferred, not measured: that v20 drew these materials from
+`base/data/shapes` (the Hookshot ships its own `gray75.png` but not these
+two, and draws in v20). Test: `crates/addon-import/tests/installed.rs
+a_missing_material_draws_with_the_installed_games_texture`.
 ### 2026-10-01 LAG icon
 
 v20's lag icon now shows on joined servers. The authored `LagIcon`
@@ -9625,3 +9841,35 @@ folders; classic files come in through drop folders in our own folders.
 - Tests: `bri-client --lib old_saves` (temp folders; an install beside the
   saves folder is never read, and an earlier index's install entries and
   copies are dropped).
+
+## 2026-10-01 Grapple Rope import closes with no gaps
+
+The Gate imported Max's real `Tool_GrappleRope` (sha 456a082b…, `--installed`
+only) at 39540f83: verdict `converted_with_gaps`, with every behaviour ported
+(4/4). What was left, and what closes each item, all generic in the importer:
+
+- `BowItem.uiName = ""` (unsupported): it sits in
+  `if (%error == $Error::AddOn_Disabled)` after `ForceRequiredAddOn("Weapon_Bow")`.
+  v20 force-loads a required Add-On the player had off and the script hides
+  its item; here enabling a package enables its dependencies (base packs are
+  always on), so the branch never runs. Such writes are now a noted ambiguity
+  with that resolution, not a gap.
+- `ChainTrailParticle.textureName = "base/data/particles/dot"` (ambiguous): the
+  installed reference now knows the effects pack's textures by key, as the
+  client draws them.
+- `GrappleRopeProjectile` and `GrappleRopeImage` stayed `converted_with_gaps`
+  because their notes ignored the port. An applied port now settles them:
+  covered functions and the state scripts that call them read "ported by", and
+  a state script the Add-On leaves to the stock `WeaponImage`
+  (`WeaponsWorld::NATIVE_STATE_SCRIPTS`, beside the code that runs them) reads
+  "runs the engine's own".
+- `$Pref::Server::GrappleRopeAnywhere = 1` (ambiguous): for a copy listed by
+  hash, a load-time global that a covered function reads is noted as ported
+  with that value (the rules hook anything, as with it on).
+- `license.txt`/`licence.txt`/`readme.txt` are read as metadata, like
+  `description.txt`.
+
+Tests: `grapples.rs` now asserts every datablock `converted` and the verdict
+`converted`; `the_anywhere_setting_is_covered_for_a_checked_copy`;
+`installed.rs` `hiding_a_force_loaded_add_on_is_not_a_gap` and the dot texture.
+The stand-in's particle now draws the base dot, as the original does.
