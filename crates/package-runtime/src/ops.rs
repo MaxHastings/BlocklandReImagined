@@ -176,6 +176,18 @@ pub enum Op {
         player: u64,
         colors: BTreeMap<String, [f32; 4]>,
     },
+    /// Dress a player's avatar in parts over their own choices, per part
+    /// slot (`hat: "copHat"`, `pack: "none"`), and a face and decal: a
+    /// team's full uniform (Slayer's `hideAllNodes` and `unHideNode`). A
+    /// part, face or decal the server's avatar pack lacks is left as theirs.
+    /// No parts, face or decal gives them their own back. Kept across
+    /// respawns.
+    SetAvatarParts {
+        player: u64,
+        parts: BTreeMap<String, String>,
+        face: Option<String>,
+        decal: Option<String>,
+    },
     /// Damage players within `radius` (falling off linearly) and destroy
     /// bricks within `brick_radius`.
     Explode {
@@ -362,6 +374,14 @@ pub enum Op {
         player: u64,
         item: String,
         equip: bool,
+    },
+    /// Put a whole tool list in a living player's hands, slot by slot
+    /// (`forceEquip`, a team's start tools): `None` empties a slot, slots
+    /// past the list are emptied, and items the server lacks leave theirs
+    /// empty. What they held is put away.
+    SetTools {
+        player: u64,
+        tools: Vec<Option<String>>,
     },
     /// Take one `item` out of a player's tool list (`%obj.tool[%slot] =
     /// 0`): the held slot if it holds one, else the first that does. A held
@@ -725,6 +745,14 @@ pub enum Op {
         player: u64,
         held: bool,
     },
+    /// How long a mini-game member waits to respawn after dying, in ms,
+    /// in place of their mini-game's time (`setRespawnTime`; Slayer's team
+    /// Respawn Time), or `None` for the mini-game's again. Kept until they
+    /// leave the mini-game.
+    SetRespawnTime {
+        player: u64,
+        ms: Option<u32>,
+    },
     /// Point a player's camera somewhere else while their body stays put
     /// (`setControlObject(camera)`): `Some(player)` orbits that player's
     /// body (the player themselves: their own body or corpse), `None`
@@ -853,6 +881,10 @@ pub enum SoundAt {
     /// At one player's ears only.
     Player(u64),
 }
+/// Most tool slots `set_tools` lists.
+pub const MAX_TOOL_SLOTS: usize = 10;
+/// The longest respawn time `set_respawn_time` sets (Slayer's 999 s).
+pub const MAX_RESPAWN_MS: u32 = 999_999;
 /// Mount points a body may have (`mountObject`'s node).
 pub const MAX_MOUNT_POINTS: usize = 8;
 /// Body scales `set_scale` allows.
@@ -860,6 +892,22 @@ pub const SCALE_RANGE: std::ops::RangeInclusive<f32> = 0.2..=5.0;
 /// How far out an Add-On's orbit camera may sit ([`Op::OrbitCamera`]), in
 /// whole units.
 pub const ORBIT_DISTANCE: std::ops::RangeInclusive<u8> = 1..=20;
+/// The avatar's part slots, each holding one of the avatar pack's choices
+/// (`$pref::Avatar::Hat` and the rest).
+pub const AVATAR_PARTS: [&str; 12] = [
+    "hat",
+    "accent",
+    "pack",
+    "secondpack",
+    "chest",
+    "hip",
+    "rarm",
+    "larm",
+    "rhand",
+    "lhand",
+    "rleg",
+    "lleg",
+];
 /// The avatar's colour slots, as `setNodeColor` names them.
 pub const AVATAR_SLOTS: [&str; 13] = [
     "head",
@@ -915,6 +963,7 @@ impl Op {
             | Self::SetScore { .. }
             | Self::ResetMinigame { .. }
             | Self::HoldRespawn { .. }
+            | Self::SetRespawnTime { .. }
             | Self::EndRound { .. }
             | Self::SetSetting { .. }
             | Self::SetZonePeriod { .. } => "minigame",
@@ -926,6 +975,7 @@ impl Op {
             | Self::SetArchetype { .. }
             | Self::Control { .. }
             | Self::GiveItem { .. }
+            | Self::SetTools { .. }
             | Self::TakeItem { .. }
             | Self::DropItem { .. }
             | Self::RemoveDrop { .. }
@@ -940,7 +990,8 @@ impl Op {
             | Self::FollowPath { .. }
             | Self::Camera { .. }
             | Self::OrbitCamera { .. }
-            | Self::SetAvatarColors { .. } => "player",
+            | Self::SetAvatarColors { .. }
+            | Self::SetAvatarParts { .. } => "player",
             Self::MountObject { .. } | Self::UnmountObject { .. } => "physics",
             Self::Push { .. }
             | Self::Tumble { .. }
@@ -991,6 +1042,14 @@ impl Op {
             Self::OrbitCamera { player, orbit } => {
                 orbit.is_none_or(|o| o.target != *player && o.valid())
             }
+            Self::SetTools { tools, .. } => {
+                tools.len() <= MAX_TOOL_SLOTS
+                    && tools
+                        .iter()
+                        .flatten()
+                        .all(|id| !id.is_empty() && id.len() <= 160 && id.is_ascii())
+            }
+            Self::SetRespawnTime { ms, .. } => ms.is_none_or(|ms| ms <= MAX_RESPAWN_MS),
             Self::SetLookLimits { limits, .. } => limits
                 .is_none_or(|[down, up]| (0.0..=1.0).contains(&down) && (0.0..=1.0).contains(&up)),
             Self::PaintFill {
@@ -1063,6 +1122,16 @@ impl Op {
                         AVATAR_SLOTS.contains(&slot.as_str())
                             && c.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))
                     })
+            }
+            Self::SetAvatarParts {
+                parts, face, decal, ..
+            } => {
+                let name = |n: &str| !n.is_empty() && n.len() <= 64 && n.is_ascii();
+                parts.len() <= AVATAR_PARTS.len()
+                    && parts
+                        .iter()
+                        .all(|(slot, part)| AVATAR_PARTS.contains(&slot.as_str()) && name(part))
+                    && face.iter().chain(decal).all(|n| n.len() <= 256 && n.is_ascii())
             }
             Self::SetBlockState { state, .. } => {
                 state.len() <= 64 && !state.chars().any(char::is_control)
@@ -1386,6 +1455,7 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::PlantBrick { .. } => "plant_brick",
         Op::PlaceVoxel { .. } => "place_voxel",
         Op::SetAvatarColors { .. } => "set_avatar_colors",
+        Op::SetAvatarParts { .. } => "set_avatar_parts",
         Op::Explode { .. } => "explode",
         Op::Damage { .. } => "damage",
         Op::Beam { .. } => "beam",
@@ -1414,6 +1484,8 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::SetScale { .. } => "set_scale",
         Op::SetLookLimits { .. } => "set_look_limits",
         Op::HoldRespawn { .. } => "hold_respawn",
+        Op::SetTools { .. } => "set_tools",
+        Op::SetRespawnTime { .. } => "set_respawn_time",
         Op::Watch { .. } => "watch",
         Op::FollowPath { .. } => "follow_path",
         Op::Camera {
@@ -1474,5 +1546,34 @@ pub fn op_name(op: &Op) -> &'static str {
             at: SoundAt::Player(_),
             ..
         } => "play_sound",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn uniform_kit_and_respawn_ops_stay_in_their_limits() {
+        let parts = |slot: &str, part: &str| Op::SetAvatarParts {
+            player: 1,
+            parts: BTreeMap::from([(slot.to_owned(), part.to_owned())]),
+            face: None,
+            decal: None,
+        };
+        assert!(parts("hat", "copHat").bounded().is_ok());
+        assert!(parts("head", "copHat").bounded().is_err(), "the head is a colour, not a part");
+        assert!(parts("hat", "").bounded().is_err());
+        assert!(parts("hat", &"x".repeat(65)).bounded().is_err());
+        let tools = |tools: Vec<Option<String>>| Op::SetTools { player: 1, tools };
+        assert!(tools(vec![Some("v20.weapon.hammeritem".into()), None]).bounded().is_ok());
+        assert!(tools(vec![None; MAX_TOOL_SLOTS + 1]).bounded().is_err());
+        assert!(tools(vec![Some(String::new())]).bounded().is_err());
+        let respawn = |ms| Op::SetRespawnTime { player: 1, ms };
+        assert!(respawn(None).bounded().is_ok());
+        assert!(respawn(Some(MAX_RESPAWN_MS)).bounded().is_ok());
+        assert!(respawn(Some(MAX_RESPAWN_MS + 1)).bounded().is_err());
+        assert_eq!(respawn(None).capability(), "minigame");
+        assert_eq!(parts("hat", "copHat").capability(), "player");
     }
 }

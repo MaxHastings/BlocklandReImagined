@@ -744,6 +744,15 @@ fn slayer_ports_apply_with_their_rules() {
     }
     assert_eq!(setting(&behaviour, "auto_sort")["default"], true);
     assert_eq!(setting(&behaviour, "team_lives")["default"], -1);
+    // The team kit and uniform, from the copy's team preferences.
+    assert_eq!(setting(&behaviour, "team_uniform")["default"], 3);
+    assert_eq!(setting(&behaviour, "team_equip_0")["default"], "v20.weapon.hammeritem");
+    assert_eq!(setting(&behaviour, "team_equip_3")["default"], "");
+    assert_eq!(setting(&behaviour, "team_player_type")["default"], "v20.player.playerstandardarmor");
+    assert_eq!(setting(&behaviour, "uni_hat")["default"], 1);
+    assert_eq!(setting(&behaviour, "uni_head_color")["default"], "0.5 0.25 0 1");
+    assert_eq!(setting(&behaviour, "allow_custom_faces")["default"], false);
+    assert!(slayer.contains(r#"let skins = ["0.9 0.8 0.6 1", "0.9 0.8 0.6 1", "0.4 0.3 0.2 1""#));
     let mode = setting(&behaviour, "mode");
     assert_eq!(mode["default"], "Slayer_Deathmatch");
     assert_eq!(

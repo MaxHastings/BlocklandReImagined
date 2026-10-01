@@ -245,6 +245,9 @@ fn host_value(v: &MiniGameSettingValue) -> SettingValue {
         MiniGameSettingValue::Text(t) => SettingValue::Text(t.clone()),
     }
 }
+fn choice(c: &MiniGameChoice) -> (MiniGameSettingValue, String) {
+    (MiniGameSettingValue::Text(c.id.clone()), c.name.clone())
+}
 fn edits(list: &[(String, Option<MiniGameSettingValue>)]) -> Vec<SettingEdit> {
     list.iter()
         .map(|(key, value)| SettingEdit {
@@ -284,6 +287,16 @@ pub fn with_addon_settings(
                 },
                 SettingType::Text => MiniGameSettingKind::Text {
                     max_length: s.def.max_length.unwrap_or(0),
+                },
+                // The server's items and player types, as the mini-game's
+                // own loadout offers them.
+                SettingType::Item => MiniGameSettingKind::List {
+                    items: std::iter::once((MiniGameSettingValue::Text(String::new()), "NONE".into()))
+                        .chain(state.items.iter().map(choice))
+                        .collect(),
+                },
+                SettingType::PlayerType => MiniGameSettingKind::List {
+                    items: state.player_types.iter().map(choice).collect(),
                 },
             },
             default: ui_value(&s.def.default),

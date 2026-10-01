@@ -299,6 +299,13 @@
       "default": {{pref_ally|bool}}
     },
     {
+      "key": "allow_custom_faces",
+      "title": "Allow Custom Face Decals",
+      "category": "Teams",
+      "type": "bool",
+      "default": {{pref_custom_faces|bool}}
+    },
+    {
       "key": "team_only_dead_cam",
       "title": "Team-Only DeadCam",
       "category": "Teams",
@@ -393,6 +400,373 @@
       "type": "bool",
       "default": {{team_win_on_time_up|bool}},
       "scope": "team"
+    },
+    {
+      "key": "team_player_type",
+      "title": "Playertype",
+      "category": "Team",
+      "type": "player_type",
+      "default": "v20.player.{{team_player_type|lower}}",
+      "scope": "team"
+    },
+    {
+      "key": "team_equip_0",
+      "title": "Start Equip 0",
+      "category": "Team",
+      "type": "item",
+      "default": "v20.weapon.{{team_equip_0|lower}}",
+      "scope": "team"
+    },
+    {
+      "key": "team_equip_1",
+      "title": "Start Equip 1",
+      "category": "Team",
+      "type": "item",
+      "default": "v20.weapon.{{team_equip_1|lower}}",
+      "scope": "team"
+    },
+    {
+      "key": "team_equip_2",
+      "title": "Start Equip 2",
+      "category": "Team",
+      "type": "item",
+      "default": "v20.weapon.{{team_equip_2|lower}}",
+      "scope": "team"
+    },
+    {
+      "key": "team_equip_3",
+      "title": "Start Equip 3",
+      "category": "Team",
+      "type": "item",
+      "default": "",
+      "scope": "team"
+    },
+    {
+      "key": "team_equip_4",
+      "title": "Start Equip 4",
+      "category": "Team",
+      "type": "item",
+      "default": "",
+      "scope": "team"
+    },
+    {
+      "key": "team_sync_loadout",
+      "title": "Sync w/ Minigame Loadout",
+      "category": "Team",
+      "type": "bool",
+      "default": {{team_sync_loadout|bool}},
+      "scope": "team"
+    },
+    {
+      "key": "team_scale",
+      "title": "Player Scale",
+      "category": "Team",
+      "type": "int",
+      "default": {{team_scale}},
+      "scope": "team",
+      "min": 1,
+      "max": 5
+    },
+    {
+      "key": "team_respawn_time",
+      "title": "Respawn Time",
+      "category": "Team",
+      "type": "int",
+      "default": {{team_respawn_time}},
+      "scope": "team",
+      "min": -1,
+      "max": 999
+    },
+    {
+      "key": "team_uniform",
+      "title": "Uniform",
+      "category": "Team",
+      "type": "list",
+      "default": {{team_uniform}},
+      "scope": "team",
+      "items": [ { "value": 0, "name": "NONE" }, { "value": 1, "name": "Shirt Only" }, { "value": 2, "name": "Full" }, { "value": 3, "name": "Custom" } ]
+    },
+    {
+      "key": "uni_accent",
+      "title": "Accent",
+      "category": "Uniform",
+      "type": "int",
+      "default": {{uni_accent}},
+      "scope": "team",
+      "min": 0,
+      "max": 63,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_chest",
+      "title": "Chest",
+      "category": "Uniform",
+      "type": "int",
+      "default": {{uni_chest}},
+      "scope": "team",
+      "min": 0,
+      "max": 63,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_hat",
+      "title": "Hat",
+      "category": "Uniform",
+      "type": "int",
+      "default": {{uni_hat}},
+      "scope": "team",
+      "min": 0,
+      "max": 63,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_hip",
+      "title": "Hip",
+      "category": "Uniform",
+      "type": "int",
+      "default": {{uni_hip}},
+      "scope": "team",
+      "min": 0,
+      "max": 63,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_l_arm",
+      "title": "Left Arm",
+      "category": "Uniform",
+      "type": "int",
+      "default": {{uni_l_arm}},
+      "scope": "team",
+      "min": 0,
+      "max": 63,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_l_hand",
+      "title": "Left Hand",
+      "category": "Uniform",
+      "type": "int",
+      "default": {{uni_l_hand}},
+      "scope": "team",
+      "min": 0,
+      "max": 63,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_l_leg",
+      "title": "Left Leg",
+      "category": "Uniform",
+      "type": "int",
+      "default": {{uni_l_leg}},
+      "scope": "team",
+      "min": 0,
+      "max": 63,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_pack",
+      "title": "Pack",
+      "category": "Uniform",
+      "type": "int",
+      "default": {{uni_pack}},
+      "scope": "team",
+      "min": 0,
+      "max": 63,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_r_arm",
+      "title": "Right Arm",
+      "category": "Uniform",
+      "type": "int",
+      "default": {{uni_r_arm}},
+      "scope": "team",
+      "min": 0,
+      "max": 63,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_r_hand",
+      "title": "Right Hand",
+      "category": "Uniform",
+      "type": "int",
+      "default": {{uni_r_hand}},
+      "scope": "team",
+      "min": 0,
+      "max": 63,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_r_leg",
+      "title": "Right Leg",
+      "category": "Uniform",
+      "type": "int",
+      "default": {{uni_r_leg}},
+      "scope": "team",
+      "min": 0,
+      "max": 63,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_second_pack",
+      "title": "Second Pack",
+      "category": "Uniform",
+      "type": "int",
+      "default": {{uni_second_pack}},
+      "scope": "team",
+      "min": 0,
+      "max": 63,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_accent_color",
+      "title": "Accent Color",
+      "category": "Uniform",
+      "type": "text",
+      "default": "{{uni_accent_color}}",
+      "scope": "team",
+      "max_length": 100,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_hat_color",
+      "title": "Hat Color",
+      "category": "Uniform",
+      "type": "text",
+      "default": "{{uni_hat_color}}",
+      "scope": "team",
+      "max_length": 100,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_head_color",
+      "title": "Head Color",
+      "category": "Uniform",
+      "type": "text",
+      "default": "{{uni_head_color}}",
+      "scope": "team",
+      "max_length": 100,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_hip_color",
+      "title": "Hip Color",
+      "category": "Uniform",
+      "type": "text",
+      "default": "{{uni_hip_color}}",
+      "scope": "team",
+      "max_length": 100,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_l_arm_color",
+      "title": "Left Arm Color",
+      "category": "Uniform",
+      "type": "text",
+      "default": "{{uni_l_arm_color}}",
+      "scope": "team",
+      "max_length": 100,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_l_hand_color",
+      "title": "Left Hand Color",
+      "category": "Uniform",
+      "type": "text",
+      "default": "{{uni_l_hand_color}}",
+      "scope": "team",
+      "max_length": 100,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_l_leg_color",
+      "title": "Left Leg Color",
+      "category": "Uniform",
+      "type": "text",
+      "default": "{{uni_l_leg_color}}",
+      "scope": "team",
+      "max_length": 100,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_pack_color",
+      "title": "Pack Color",
+      "category": "Uniform",
+      "type": "text",
+      "default": "{{uni_pack_color}}",
+      "scope": "team",
+      "max_length": 100,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_r_arm_color",
+      "title": "Right Arm Color",
+      "category": "Uniform",
+      "type": "text",
+      "default": "{{uni_r_arm_color}}",
+      "scope": "team",
+      "max_length": 100,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_r_hand_color",
+      "title": "Right Hand Color",
+      "category": "Uniform",
+      "type": "text",
+      "default": "{{uni_r_hand_color}}",
+      "scope": "team",
+      "max_length": 100,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_r_leg_color",
+      "title": "Right Leg Color",
+      "category": "Uniform",
+      "type": "text",
+      "default": "{{uni_r_leg_color}}",
+      "scope": "team",
+      "max_length": 100,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_second_pack_color",
+      "title": "Second Pack Color",
+      "category": "Uniform",
+      "type": "text",
+      "default": "{{uni_second_pack_color}}",
+      "scope": "team",
+      "max_length": 100,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_torso_color",
+      "title": "Torso Color",
+      "category": "Uniform",
+      "type": "text",
+      "default": "{{uni_torso_color}}",
+      "scope": "team",
+      "max_length": 100,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_face_name",
+      "title": "Face",
+      "category": "Uniform",
+      "type": "text",
+      "default": "{{uni_face_name}}",
+      "scope": "team",
+      "max_length": 100,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "uni_decal_name",
+      "title": "Decal",
+      "category": "Uniform",
+      "type": "text",
+      "default": "{{uni_decal_name}}",
+      "scope": "team",
+      "max_length": 100,
+      "shown_when": { "setting": "team_uniform", "is": [3] }
     }
   ],
   "state": {
@@ -420,6 +794,10 @@
       "team_points": {
         "default": {},
         "persist": false
+      },
+      "kits": {
+        "default": {},
+        "persist": false
       }
     },
     "player": {
@@ -439,8 +817,12 @@
         "default": {},
         "persist": false
       },
-      "body": {
-        "default": "",
+      "skin": {
+        "default": -1,
+        "persist": false
+      },
+      "dressed": {
+        "default": false,
         "persist": false
       },
       "kills": {

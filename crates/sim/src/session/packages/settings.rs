@@ -10,7 +10,9 @@
 //! setting means.
 use super::*;
 use bri_minigames as mg;
-use bri_package::setting::{SettingDef, SettingEditor, SettingItem, SettingScope, SettingValue};
+use bri_package::setting::{
+    SettingDef, SettingEditor, SettingItem, SettingScope, SettingType, SettingValue,
+};
 use serde::{Deserialize, Serialize};
 
 /// Most settings all running Add-Ons declare together.
@@ -126,7 +128,7 @@ impl Registry {
                 })?;
                 let s = &mut out.list[i];
                 ensure!(
-                    s.def.kind == bri_package::setting::SettingType::List,
+                    s.def.kind == SettingType::List,
                     "{id}: setting_items: `{}` is not a list",
                     more.setting
                 );
@@ -245,10 +247,29 @@ impl Session {
         };
         // A stored value an Add-On update no longer allows reads as the
         // default.
-        Ok(stored
+        let value = stored
             .filter(|v| s.check(v).is_ok())
             .cloned()
-            .unwrap_or_else(|| s.def.default.clone()))
+            .unwrap_or_else(|| s.def.default.clone());
+        // An item or player type this server lacks reads as none.
+        Ok(if self.has_content(s.def.kind, &value) {
+            value
+        } else {
+            SettingValue::Text(String::new())
+        })
+    }
+
+    /// Whether an item or player type setting's `value` names one this
+    /// server has (none, `""`, always does). Other kinds always do.
+    fn has_content(&self, kind: SettingType, value: &SettingValue) -> bool {
+        let Some(id) = value.as_text().filter(|id| !id.is_empty()) else {
+            return true;
+        };
+        match kind {
+            SettingType::Item => self.weapons.contains_item(id),
+            SettingType::PlayerType => self.archetypes.find(id).is_some(),
+            _ => true,
+        }
     }
 
     /// Change settings of `game` and its teams, and (from the menu) its
@@ -297,6 +318,7 @@ impl Session {
             );
             if let Some(v) = &edit.value {
                 s.check(v).map_err(anyhow::Error::msg)?;
+                ensure!(self.has_content(s.def.kind, v), "This server has no {v}");
             }
             Ok(key)
         };
@@ -388,6 +410,7 @@ impl Session {
                 );
                 if let Some(v) = &edit.value {
                     s.check(v).map_err(anyhow::Error::msg)?;
+                    ensure!(self.has_content(s.def.kind, v), "This server has no {v}");
                 }
                 let effects = self
                     .minigames

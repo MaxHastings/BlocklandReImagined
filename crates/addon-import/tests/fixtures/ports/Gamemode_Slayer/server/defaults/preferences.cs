@@ -73,6 +73,12 @@ new ScriptObject(Slayer_PrefSO : Slayer_DefaultPrefSO)
 };
 new ScriptObject(Slayer_PrefSO : Slayer_DefaultPrefSO)
 {
+	defaultValue = false;
+	permissionLevel = $Slayer::PermissionLevel["Any"];
+	variable = "%mini.teams_allowCustomFaces";
+};
+new ScriptObject(Slayer_PrefSO : Slayer_DefaultPrefSO)
+{
 	defaultValue = 7;
 	permissionLevel = $Slayer::PermissionLevel["Any"];
 	variable = "%mini.points_CP";

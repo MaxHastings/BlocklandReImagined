@@ -151,6 +151,10 @@ pub struct Vitals {
     pub died_tick: Option<u64>,
     pub score: i64,
     pub minigame: Option<u64>,
+    /// The team of their mini-game they play for (an Add-On's teams):
+    /// their name shows in its colour, as Slayer's `setShapeNameColor`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team: Option<u32>,
     pub invite: Option<u64>,
     pub light: bool,
     /// Vehicle id and seat while riding.
@@ -581,6 +585,7 @@ impl Session {
                             .then_some(peer.combat.died_tick),
                         score: state.map_or(0, |s| s.score),
                         minigame: state.and_then(|s| s.game).map(|g| g.0),
+                        team: state.and_then(|s| s.team).map(|t| t.0),
                         invite: state.and_then(|s| s.invite).map(|g| g.0),
                         light: peer.combat.light,
                         mounted: self.mounted(*owner),
@@ -1142,7 +1147,9 @@ impl Session {
                 }
                 mg::Effect::RestoreOwner { player, .. } => {
                     if let Some(owner) = self.owner_of(player) {
-                        // Outside a minigame the body is a Standard Player.
+                        // Outside a minigame the body is a Standard Player,
+                        // and respawns at once.
+                        self.peers.get_mut(&owner).unwrap().respawn_ms = None;
                         self.set_player_archetype(owner, PlayerType::Standard.archetype())?;
                         self.set_player_scale(owner, 1.0)?;
                         let peer = self.peers.get_mut(&owner).unwrap();
@@ -1177,7 +1184,11 @@ impl Session {
                     if let Some(owner) = self.owner_of(player) {
                         let peer = self.peers.get_mut(&owner).unwrap();
                         // Rule-engine ticks advance with ours; convert to world ticks.
-                        let delay = ready_at.saturating_sub(self.minigames.tick());
+                        let delay = match peer.respawn_ms {
+                            // A rule's own time for them (`setRespawnTime`).
+                            Some(ms) => (u64::from(ms) * u64::from(bri_weapons::TICK_HZ)).div_ceil(1000),
+                            None => ready_at.saturating_sub(self.minigames.tick()),
+                        };
                         peer.combat.respawn_tick = tick + delay.max(MIN_RESPAWN_TICKS);
                     }
                 }

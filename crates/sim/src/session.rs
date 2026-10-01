@@ -633,6 +633,46 @@ pub enum Reply {
     },
     Admin(Box<AdminReply>),
 }
+/// What `set_avatar_parts` dresses a player in over their own avatar.
+#[derive(Debug, Clone, PartialEq)]
+struct UniformParts {
+    parts: BTreeMap<String, String>,
+    face: Option<String>,
+    decal: Option<String>,
+}
+impl UniformParts {
+    /// `avatar` in these parts, face and decal, each only where the
+    /// server's avatar `pack` has it (any without a pack); the rest stays
+    /// the player's own, and an accent its new hat cannot wear comes off.
+    fn dress(
+        &self,
+        avatar: &mut bri_content::avatar::Appearance,
+        pack: Option<&bri_content::avatar::Package>,
+    ) {
+        // The pack's own spelling of `name`, or `name` itself without a pack.
+        let pick = |list: Option<&Vec<String>>, name: &str| match pack {
+            None => Some(name.to_owned()),
+            Some(_) => list?.iter().find(|c| c.eq_ignore_ascii_case(name)).cloned(),
+        };
+        for (slot, name) in &self.parts {
+            let found = pick(pack.and_then(|p| p.parts.get(slot)), name);
+            let found = found.or_else(|| (slot == "accent").then(|| name.to_ascii_lowercase()));
+            if let Some(found) = found {
+                avatar.parts.insert(slot.clone(), found);
+            }
+        }
+        if let Some(face) = self.face.as_deref().and_then(|f| pick(pack.map(|p| &p.faces), f)) {
+            avatar.face = face;
+        }
+        if let Some(decal) = self.decal.as_deref().and_then(|d| pick(pack.map(|p| &p.decals), d)) {
+            avatar.decal = decal;
+        }
+        if let Some(pack) = pack {
+            *avatar = pack.repaired(avatar).0;
+        }
+    }
+}
+
 struct Peer {
     player: Player,
     actor: Actor,
@@ -687,6 +727,9 @@ struct Peer {
     /// Colours an Add-On puts over the avatar's own (`set_avatar_colors`):
     /// a team's uniform. Spray paint and burns still show over it.
     uniform: BTreeMap<String, [f32; 4]>,
+    /// Parts, face and decal an Add-On dresses the avatar in over the
+    /// player's own (`set_avatar_parts`): a team's full uniform.
+    uniform_parts: Option<UniformParts>,
     /// `%client.currentColor`: the palette index of the last colour spray
     /// can picked (index 0 until one is).
     current_color: u8,
@@ -725,6 +768,9 @@ struct Peer {
     /// A rule's `setLookLimits` for this body: `[down, up]` look
     /// positions its arms and head follow.
     look_limits: Option<[f32; 2]>,
+    /// A rule's respawn time for this player in ms (`setRespawnTime`), in
+    /// place of their mini-game's, until they leave it.
+    respawn_ms: Option<u32>,
 }
 /// `serverCmdActivateStuff`'s 320 ms repeat window at 120 ticks per second.
 const ACTIVATE_REPEAT_TICKS: u64 = 38;
@@ -953,6 +999,9 @@ impl Session {
             .iter()
             .filter_map(|(id, p)| {
                 let mut avatar = p.avatar.clone()?;
+                if let Some(uniform) = &p.uniform_parts {
+                    uniform.dress(&mut avatar, self.avatar_catalog.as_ref());
+                }
                 for (slot, color) in &p.uniform {
                     avatar.colors.insert(slot.clone(), *color);
                 }
@@ -1220,6 +1269,7 @@ impl Session {
                 temp_color: None,
                 temp_look: None,
                 uniform: BTreeMap::new(),
+                uniform_parts: None,
                 current_color: 0,
                 fx_can: None,
                 talking: false,
@@ -1252,6 +1302,7 @@ impl Session {
                 talk_stops: VecDeque::new(),
                 water: Default::default(),
                 look_limits: None,
+                respawn_ms: None,
                 path: None,
                 orbit: None,
                 avatar: self.avatar_catalog.as_ref().map(|c| c.defaults.clone()),
@@ -1444,6 +1495,7 @@ impl Session {
                 temp_color: None,
                 temp_look: None,
                 uniform: BTreeMap::new(),
+                uniform_parts: None,
                 current_color: 0,
                 fx_can: None,
                 talking: false,
@@ -1476,6 +1528,7 @@ impl Session {
                 talk_stops: VecDeque::new(),
                 water: Default::default(),
                 look_limits: None,
+                respawn_ms: None,
                 path: None,
                 orbit: None,
                 avatar,

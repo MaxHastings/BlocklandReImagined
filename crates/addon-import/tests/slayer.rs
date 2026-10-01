@@ -105,8 +105,10 @@ fn content(root: &Path) -> (Arc<Catalog>, bri_weapons::Pack) {
              "brick_inputs": [ { "name": "onPoke", "targets": ["Player", "Client", "MiniGame"] } ],
              "commands": [ { "name": "goto", "args": ["float", "float", "float"] },
                            { "name": "colour", "while_dead": true },
+                           { "name": "kit", "while_dead": true },
                            { "name": "poke", "args": ["int"] } ],
-             "state": { "global": { "colours": { "default": {}, "visible": "everyone" } } } }"#,
+             "state": { "global": { "colours": { "default": {}, "visible": "everyone" },
+                                    "kits": { "default": {}, "visible": "everyone" } } } }"#,
     )
     .unwrap();
     std::fs::write(
@@ -119,7 +121,8 @@ fn content(root: &Path) -> (Arc<Catalog>, bri_weapons::Pack) {
              colours[`${p}`] = ();\n\
              if me.minigame != () { for t in minigame(me.minigame).teams { if t.id == me.team { colours[`${p}`] = t.color; } } }\n\
              set(\"colours\", colours);\n\
-         }\n",
+         }\n\
+         fn cmd_kit(p) { let kits = get(\"kits\"); kits[`${p}`] = player(p).tools; set(\"kits\", kits); }\n",
     )
     .unwrap();
     ids.push(("probe".into(), Side::Server));
@@ -196,6 +199,50 @@ fn definitions() -> Definitions {
     }
 }
 
+/// v20's avatar lists, in their order: Slayer's custom uniform names parts
+/// by their place in them.
+fn avatars() -> bri_content::avatar::Package {
+    let texture = |file: &str| {
+        serde_json::json!({ "file": file, "sha256": "", "source": "", "width": 1, "height": 1 })
+    };
+    let color = |c: f32| serde_json::json!([c, c, c, 1.0]);
+    let slots = [
+        "head", "torso", "hat", "accent", "pack", "secondpack", "hip", "rarm", "larm", "rhand",
+        "lhand", "rleg", "lleg",
+    ];
+    let plumes = serde_json::json!(["none", "plume", "triplume", "septplume"]);
+    serde_json::from_value(serde_json::json!({
+        "schema_version": 1, "id": "test", "rig": "rig.json", "rig_sha256": "",
+        "parts": {
+            "hat": ["none", "helmet", "pointyhelmet", "flarehelmet", "scouthat", "bicorn",
+                "cophat", "knithat"],
+            "accent": ["none", "plume", "triplume", "septplume", "visor"],
+            "pack": ["none", "armor", "bucket", "cape", "pack", "quiver", "tank"],
+            "secondpack": ["none", "epaulets", "epauletsranka", "epauletsrankb",
+                "epauletsrankc", "epauletsrankd", "shoulderpads"],
+            "chest": ["chest", "femchest"], "hip": ["pants", "skirthip"],
+            "rarm": ["rarm", "rarmslim"], "larm": ["larm", "larmslim"],
+            "rhand": ["rhand", "rhook"], "lhand": ["lhand", "lhook"],
+            "rleg": ["rshoe", "rpeg"], "lleg": ["lshoe", "lpeg"]
+        },
+        "accents_allowed": {
+            "helmet": ["none", "visor"], "pointyhelmet": plumes, "flarehelmet": plumes,
+            "scouthat": plumes, "bicorn": plumes, "cophat": plumes, "knithat": plumes
+        },
+        "faces": ["smiley", "smileyEvil1"], "decals": ["AAA-None", "Alyx"], "surfaces": {},
+        "textures": {
+            "smiley": texture("smiley.png"), "smileyEvil1": texture("evil.png"),
+            "AAA-None": texture("none.png"), "Alyx": texture("alyx.png")
+        },
+        "defaults": {
+            "parts": {},
+            "colors": slots.iter().map(|s| (s.to_string(), color(0.5))).collect::<serde_json::Map<_, _>>(),
+            "face": "smiley", "decal": "AAA-None"
+        }
+    }))
+    .unwrap()
+}
+
 struct Game {
     s: Session,
     seq: BTreeMap<OwnerId, u64>,
@@ -235,6 +282,7 @@ impl Game {
         );
         s.set_spawn_points(vec![Vec3::new(0.0, 0.05, 20.0)])
             .unwrap();
+        s.set_avatar_catalog(avatars()).unwrap();
         s.set_weapon_pack(pack).unwrap();
         s.set_item_bounds(BTreeMap::new()).unwrap();
         s.install_packages(catalog, None).unwrap();
@@ -374,6 +422,57 @@ impl Game {
         )
         .unwrap();
         self.steps(1);
+    }
+    /// Changes Add-On settings of the team in `color`, as the game's owner
+    /// in the Mini-Game window, leaving the other teams as they are.
+    fn set_team(&mut self, owner: OwnerId, color: u8, settings: &[(&str, Value)]) {
+        let view = self.s.minigame_views()[0].clone();
+        let teams = view
+            .teams
+            .iter()
+            .map(|t| TeamEdit {
+                id: Some(t.id.0),
+                name: t.name.clone(),
+                color: t.color,
+                settings: if t.color == color {
+                    settings
+                        .iter()
+                        .map(|(key, value)| SettingEdit {
+                            key: (*key).into(),
+                            value: Some(value.clone()),
+                        })
+                        .collect()
+                } else {
+                    vec![]
+                },
+            })
+            .collect();
+        self.cmd(
+            owner,
+            Command::MiniGame(MiniGameRequest::AddOnSettings {
+                game: view.id,
+                settings: vec![],
+                teams: Some(teams),
+            }),
+        )
+        .unwrap();
+        self.steps(2);
+    }
+    /// The item in each of `owner`'s tool slots, empty for none.
+    fn tools(&mut self, owner: OwnerId) -> Vec<String> {
+        self.run(owner, "probe", "kit", vec![]);
+        self.steps(13);
+        let kits = self.s.package_state().packages["probe"].global["kits"].clone();
+        serde_json::from_value(kits[owner.to_string()].clone()).unwrap()
+    }
+    fn scale(&self, owner: OwnerId) -> f32 {
+        let (state, _) = self
+            .s
+            .motion_states()
+            .into_iter()
+            .find(|(p, _)| p.owner == owner)
+            .unwrap();
+        state.scale
     }
     fn round_over(&self) -> bool {
         // Everyone's camera is off their body while a round is over.
@@ -1376,5 +1475,163 @@ fn team_and_mini_game_inputs_run_and_restricted_outputs_need_rights() {
     g.cmd(other, Command::MiniGame(MiniGameRequest::Join { game })).unwrap();
     g.steps(2);
     assert_eq!(stat(&g, other, "deaths"), deaths + 4 + 5);
+    g.quiet();
+}
+
+/// The stand-in's skin colours (`Slayer_AiController.cs`) and its default.
+const SKINS: [[f32; 4]; 5] = [
+    [0.9, 0.8, 0.6, 1.0],
+    [0.9, 0.8, 0.6, 1.0],
+    [0.4, 0.3, 0.2, 1.0],
+    [0.2, 0.1, 0.05, 1.0],
+    [0.7, 0.5, 0.4, 1.0],
+];
+const STANDARD: &str = "v20.player.playerstandardarmor";
+
+#[test]
+fn teams_dress_their_members_and_give_them_their_kit() {
+    let mut g = Game::new("uniforms");
+    let own = {
+        let a = g.s.join("Solo".into(), Vec3::new(0.0, 0.05, 25.0), false).unwrap();
+        g.s.avatars()[&a].clone()
+    };
+    let (red, blue) = two_teams(&mut g);
+    let owner = g.s.minigame_views()[0].owner;
+    let palette = g.s.simulation().state().palette.clone();
+    let (red_rgb, blue_rgb) = (palette[RED as usize], palette[BLUE as usize]);
+
+    // The stand-in's teams wear the Custom uniform: each part by its place
+    // in v20's list, TEAMCOLOR for the team's colour, its face and decal.
+    let look = g.s.avatars()[&red].clone();
+    let part = |slot: &str| look.parts.get(slot).map(String::as_str);
+    assert_eq!(part("hat"), Some("helmet"));
+    assert_eq!(part("accent"), Some("visor"), "a helmet's accent is its visor");
+    assert_eq!(part("chest"), Some("femchest"));
+    assert_eq!(part("pack"), Some("bucket"));
+    assert_eq!(part("secondpack"), Some("epaulets"));
+    assert_eq!(part("larm"), Some("larmslim"));
+    assert_eq!(part("rarm"), Some("rarm"));
+    assert_eq!(part("lhand"), Some("lhook"));
+    assert_eq!(part("lleg"), Some("lpeg"));
+    assert_eq!(part("hip"), Some("pants"));
+    assert_eq!(look.colors["torso"], red_rgb);
+    assert_eq!(look.colors["hat"], red_rgb);
+    assert_eq!(look.colors["head"], [0.5, 0.25, 0.0, 1.0]);
+    assert_eq!(look.colors["hip"], [0.0, 0.0, 1.0, 1.0]);
+    assert_eq!(look.colors["secondpack"], [1.0, 1.0, 0.0, 1.0]);
+    assert_eq!((look.face.as_str(), look.decal.as_str()), ("smileyEvil1", "Alyx"));
+    assert_eq!(g.s.avatars()[&blue].colors["torso"], blue_rgb);
+    // Allow Custom Face Decals keeps players' own faces.
+    g.set(owner, &[(&key(SLAYER, "allow_custom_faces"), Value::Bool(true))]);
+    assert_eq!(g.s.avatars()[&red].face, own.face);
+    assert_eq!(g.s.avatars()[&red].decal, "Alyx");
+
+    // Full: a cop hat and plain clothes in the team's colour, a skin
+    // colour on the head and hands.
+    g.set_team(owner, RED, &[(&key(SLAYER, "team_uniform"), Value::Int(2))]);
+    let look = g.s.avatars()[&red].clone();
+    assert_eq!(look.parts["hat"], "cophat");
+    assert_eq!(look.parts["accent"], "none");
+    assert_eq!(look.parts["pack"], "none");
+    assert_eq!(look.parts["chest"], "chest");
+    assert_eq!(look.parts["lleg"], "lshoe");
+    for slot in ["hat", "torso", "hip", "larm", "rarm", "lleg", "rleg"] {
+        assert_eq!(look.colors[slot], red_rgb, "{slot}");
+    }
+    let skin = look.colors["head"];
+    assert!(SKINS.contains(&skin), "{skin:?}");
+    assert_eq!((look.colors["lhand"], look.colors["rhand"]), (skin, skin));
+    assert_eq!((look.face.as_str(), look.decal.as_str()), (own.face.as_str(), own.decal.as_str()));
+    assert_eq!(g.s.avatars()[&blue].parts["hat"], "helmet", "Blue's own uniform");
+
+    // Shirt Only: their own avatar, the torso and pack in the team's colour.
+    g.set_team(owner, RED, &[(&key(SLAYER, "team_uniform"), Value::Int(1))]);
+    let look = g.s.avatars()[&red].clone();
+    assert_eq!(look.parts, own.parts);
+    assert_eq!((look.colors["torso"], look.colors["pack"]), (red_rgb, red_rgb));
+    assert_eq!(look.colors["hip"], own.colors["hip"]);
+
+    // None: their own avatar.
+    g.set_team(owner, RED, &[(&key(SLAYER, "team_uniform"), Value::Int(0))]);
+    assert_eq!(g.s.avatars()[&red], own);
+
+    // The stand-in's teams keep their own start tools, not the game's
+    // (none here).
+    let tools = g.tools(red);
+    assert_eq!(
+        &tools[..3],
+        ["v20.weapon.hammeritem", "v20.weapon.wrenchitem", "v20.weapon.printgun"]
+    );
+    assert!(tools[3..].iter().all(String::is_empty), "{tools:?}");
+    assert_eq!(g.body(red), STANDARD);
+
+    // Changes reach members at once: a start tool where they still carry
+    // the old one, the player type and the scale.
+    g.set_team(
+        owner,
+        RED,
+        &[
+            (&key(SLAYER, "team_equip_1"), Value::Text(String::new())),
+            (&key(SLAYER, "team_equip_3"), Value::Text("v20.weapon.wanditem".into())),
+            (&key(SLAYER, "team_scale"), Value::Int(2)),
+        ],
+    );
+    let tools = g.tools(red);
+    assert_eq!(tools[1], "");
+    assert_eq!(tools[3], "v20.weapon.wanditem");
+    g.set_team(owner, RED, &[(&key(SLAYER, "team_player_type"), Value::Text(FROZEN.into()))]);
+    assert_eq!(g.body(red), FROZEN);
+    assert_eq!(g.scale(red), 2.0);
+    assert_eq!(g.body(blue), STANDARD, "Blue keeps its own");
+    assert_eq!(g.scale(blue), 1.0);
+    // An item the server lacks is refused.
+    let game = g.s.minigame_views()[0].id;
+    let teams = g.s.minigame_views()[0].teams.clone();
+    let bad = MiniGameRequest::AddOnSettings {
+        game,
+        settings: vec![],
+        teams: Some(
+            teams
+                .iter()
+                .map(|t| TeamEdit {
+                    id: Some(t.id.0),
+                    name: t.name.clone(),
+                    color: t.color,
+                    settings: vec![SettingEdit {
+                        key: key(SLAYER, "team_equip_0"),
+                        value: Some(Value::Text("v20.weapon.nosuchitem".into())),
+                    }],
+                })
+                .collect(),
+        ),
+    };
+    assert!(g.cmd(owner, Command::MiniGame(bad)).is_err());
+
+    // Synced with the mini-game's loadout, a team spawns with the game's.
+    g.set_team(owner, RED, &[(&key(SLAYER, "team_sync_loadout"), Value::Bool(true))]);
+    assert_eq!(g.body(red), STANDARD);
+    g.cmd(red, Command::Suicide).unwrap();
+    g.steps(125);
+    g.cmd(red, Command::Respawn).unwrap();
+    g.steps(2);
+    assert!(g.tools(red).iter().all(String::is_empty));
+    assert_eq!(g.scale(red), 2.0, "the scale is the team's still");
+
+    // The team's respawn time, at least a second.
+    g.set_team(owner, RED, &[(&key(SLAYER, "team_respawn_time"), Value::Int(3))]);
+    g.cmd(red, Command::Suicide).unwrap();
+    g.steps(125);
+    assert!(g.cmd(red, Command::Respawn).is_err(), "three seconds");
+    g.steps(3 * 120);
+    g.cmd(red, Command::Respawn).unwrap();
+    g.steps(2);
+
+    // Out of the game, their own avatar and body again.
+    g.set_team(owner, RED, &[(&key(SLAYER, "team_uniform"), Value::Int(3))]);
+    assert_ne!(g.s.avatars()[&red], own);
+    g.cmd(red, Command::MiniGame(MiniGameRequest::Leave)).unwrap();
+    g.steps(2);
+    assert_eq!(g.s.avatars()[&red], own);
+    assert_eq!(g.scale(red), 1.0);
     g.quiet();
 }

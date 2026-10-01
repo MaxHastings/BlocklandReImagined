@@ -540,27 +540,291 @@ fn count_down(g, r) {
 
 // `changeDatablock(PlayerFrozenArmor)` through the countdown: no moving,
 // jumping or using items, the camera behind the body.
-// The body they had is kept to give back.
+fn frozen_body() { "{{namespace}}:archetype/playerfrozenarmor" }
 fn freeze(p) {
     let me = player(p);
-    let frozen = "{{namespace}}:archetype/playerfrozenarmor";
-    if me == () || me.archetype == frozen {
+    if me == () || !me.alive || me.archetype == frozen_body() {
         return;
     }
-    set_player(p, "body", me.archetype);
-    set_archetype(p, frozen);
+    set_archetype(p, frozen_body());
     // A body for now, not a choice kept across respawns.
     set_archetype(p, "");
 }
-// `startRound`: back to the body they had.
+// `startRound`: the team's player type, or the game's
+// (`%t.playerDatablock`, else `%this.playerDatablock`).
 fn thaw(p) {
-    let body = get_player(p, "body");
     let me = player(p);
-    if body != "" && me != () && me.alive {
+    if me == () || !me.alive || me.minigame == () {
+        return;
+    }
+    let body = body_for(minigame(me.minigame), me.team);
+    if body != "" {
         set_archetype(p, body);
         set_archetype(p, "");
     }
-    set_player(p, "body", "");
+}
+
+// A team's player type and start tools (`playerDatablock`,
+// `startEquip0` to `4`): the game's own while the team syncs with the
+// mini-game's loadout (Sync w/ Minigame Loadout, which copies them in
+// Slayer's window) or names no type.
+fn body_for(g, team) {
+    if g == () {
+        return "";
+    }
+    if team != () && !team_setting(g.id, team, "team_sync_loadout") {
+        let body = team_setting(g.id, team, "team_player_type");
+        if body != "" {
+            return body;
+        }
+    }
+    g.player_type
+}
+fn tools_for(g, team) {
+    if team == () || team_setting(g.id, team, "team_sync_loadout") {
+        return g.loadout;
+    }
+    let tools = [];
+    for i in 0..5 {
+        tools.push(team_setting(g.id, team, `team_equip_${i}`));
+    }
+    tools
+}
+// `Slayer_TeamSO::updateRespawnTime`: seconds, at least one, or the
+// game's own at -1.
+fn respawn_for(g, team) {
+    let s = if team == () { -1 } else { team_setting(g.id, team, "team_respawn_time") };
+    if s < 0 { () } else { max(s * 1000, 1000) }
+}
+
+// `GameConnection::createPlayer`: the team's player type, start tools,
+// scale and respawn time on every new body.
+fn kit(p, g, team) {
+    set_respawn_time(p, respawn_for(g, team));
+    if team == () {
+        return;
+    }
+    let kits = get("kits");
+    kits[kit_key(g.id, team)] = tools_for(g, team);
+    set("kits", kits);
+    let scale = team_setting(g.id, team, "team_scale");
+    if scale != 1 {
+        set_scale(p, scale.to_float());
+    }
+    if !team_setting(g.id, team, "team_sync_loadout") {
+        let body = team_setting(g.id, team, "team_player_type");
+        if body != "" {
+            set_archetype(p, body);
+            set_archetype(p, "");
+        }
+        set_tools(p, tools_for(g, team));
+    }
+}
+
+// What each team's start tools were, to tell which a change replaces
+// (`updateEquip`'s `%old`).
+fn kit_key(game, team) { `${game}:${team}` }
+fn note_kits(g) {
+    let kits = get("kits");
+    for key in kits.keys() {
+        if key.starts_with(`${g.id}:`) {
+            kits.remove(key);
+        }
+    }
+    for t in g.teams {
+        kits[kit_key(g.id, t.id)] = tools_for(g, t.id);
+    }
+    set("kits", kits);
+}
+// `GameConnection::updateEquip`: a changed start tool replaces the old
+// one in each member's slot, where they still carry it.
+fn update_equips(g) {
+    let kits = get("kits");
+    for t in g.teams {
+        let key = kit_key(g.id, t.id);
+        let now = tools_for(g, t.id);
+        if key in kits {
+            let old = kits[key];
+            for m in members(g, t.id) {
+                if !m.alive {
+                    continue;
+                }
+                let tools = m.tools;
+                let changed = false;
+                for i in 0..min(5, tools.len()) {
+                    let was = if i < old.len() { old[i] } else { "" };
+                    if now[i] != was && tools[i] == was {
+                        tools[i] = now[i];
+                        changed = true;
+                    }
+                }
+                if changed {
+                    set_tools(m.id, tools);
+                }
+            }
+        }
+    }
+    note_kits(g);
+}
+// `Slayer_TeamSO::updateDatablock`, `updatePlayerScale` and
+// `updateRespawnTime`: members' bodies now. A frozen body keeps the
+// countdown's and gets the new one at the start.
+fn update_bodies(g, keys) {
+    let counting = round_of(g.id).countdown != ();
+    for t in g.teams {
+        for m in members(g, t.id) {
+            if !m.alive {
+                continue;
+            }
+            if is_key(keys, "team_respawn_time") {
+                set_respawn_time(m.id, respawn_for(g, t.id));
+            }
+            if is_key(keys, "team_scale") {
+                set_scale(m.id, team_setting(g.id, t.id, "team_scale").to_float());
+            }
+            let body = body_for(g, t.id);
+            if (is_key(keys, "team_player_type") || is_key(keys, "team_sync_loadout"))
+                && body != "" && !counting && m.archetype != body {
+                set_archetype(m.id, body);
+                set_archetype(m.id, "");
+            }
+        }
+    }
+}
+
+// `GameConnection::applyUniform`: the team's look by its Uniform, over
+// the player's own avatar. None leaves it; Shirt Only paints the torso
+// and pack the team's colour; Full is a cop hat, plain chest, pants,
+// shoes and arms in the team's colour, with a skin colour on the head and
+// hands; Custom is the team's Uniform settings, part by part.
+fn team_color(team) {
+    let pal = palette();
+    if team.color < pal.len() { pal[team.color] } else { [1.0, 1.0, 1.0, 1.0] }
+}
+// A v20 colour, "r g b a" from 0 to 1, or the team's for "TEAMCOLOR".
+fn color_of(text, team) {
+    if text == "TEAMCOLOR" {
+        return team;
+    }
+    let out = [];
+    for w in text.split(" ") {
+        if w == "" {
+            continue;
+        }
+        let n = 0.0;
+        try {
+            n = parse_float(w);
+        } catch {
+            return ();
+        }
+        out.push(if n < 0.0 { 0.0 } else if n > 1.0 { 1.0 } else { n });
+    }
+    if out.len() == 3 || out.len() == 4 { out } else { () }
+}
+// `$Slayer::Server::Bots::SkinColor[getRandom(SkinColorCount)]`: 0 to 4,
+// and 0 names none, so the default; once a body.
+fn skin_color(p) {
+    let skins = ["{{skin_default}}", "{{skin_1}}", "{{skin_2}}", "{{skin_3}}", "{{skin_4}}"];
+    let i = get_player(p, "skin");
+    if i < 0 {
+        i = (hash3(seed(), tick(), p, skins.len()) * skins.len()).to_int();
+        set_player(p, "skin", i);
+    }
+    color_of(skins[i], ())
+}
+// `fileBase`: a decal or face file's name without its folder or ending.
+fn file_base(path) {
+    let name = path;
+    while name.contains("/") {
+        name = name.sub_string(name.index_of("/") + 1);
+    }
+    let dot = name.index_of(".");
+    if dot >= 0 { name.sub_string(0, dot) } else { name }
+}
+fn uni(g, team, key) { team_setting(g.id, team.id, `uni_${key}`) }
+fn custom_uniform(p, g, team, c) {
+    let choices = avatar_choices();
+    let parts = #{};
+    // Each Uniform part is its place in v20's list for the slot.
+    for slot in [["chest", "chest"], ["hat", "hat"], ["hip", "hip"], ["larm", "l_arm"],
+                 ["lhand", "l_hand"], ["lleg", "l_leg"], ["pack", "pack"], ["rarm", "r_arm"],
+                 ["rhand", "r_hand"], ["rleg", "r_leg"], ["secondpack", "second_pack"]] {
+        let i = uni(g, team, slot[1]);
+        if slot[0] in choices && i < choices[slot[0]].len() {
+            parts[slot[0]] = choices[slot[0]][i];
+        }
+    }
+    // The accent is the hat's: a helmet's visor, or another hat's plumes.
+    let hat = if "hat" in parts { parts.hat.to_lower() } else { "" };
+    let accents = `accents.${hat}`;
+    let i = uni(g, team, "accent");
+    if accents in choices && i < choices[accents].len() {
+        parts.accent = choices[accents][i];
+    } else if i == 0 {
+        parts.accent = "none";
+    }
+    let decal = file_base(uni(g, team, "decal_name"));
+    if decal != "" {
+        parts.decal = decal;
+    }
+    let face = file_base(uni(g, team, "face_name"));
+    if face != "" && !setting(g.id, "allow_custom_faces") {
+        parts.face = face;
+    }
+    let colors = #{};
+    for slot in [["head", "head_color"], ["torso", "torso_color"], ["hat", "hat_color"],
+                 ["accent", "accent_color"], ["pack", "pack_color"],
+                 ["secondpack", "second_pack_color"], ["hip", "hip_color"],
+                 ["larm", "l_arm_color"], ["rarm", "r_arm_color"], ["lhand", "l_hand_color"],
+                 ["rhand", "r_hand_color"], ["lleg", "l_leg_color"], ["rleg", "r_leg_color"]] {
+        let color = color_of(uni(g, team, slot[1]), c);
+        if color != () {
+            colors[slot[0]] = color;
+        }
+    }
+    set_avatar_parts(p, parts);
+    set_avatar_colors(p, colors);
+}
+fn undress(p) {
+    if get_player(p, "dressed") {
+        set_avatar_parts(p, ());
+        set_avatar_colors(p, ());
+        set_player(p, "dressed", false);
+    }
+}
+fn dress(p) {
+    let me = player(p);
+    let g = if me == () || me.minigame == () { () } else { minigame(me.minigame) };
+    let team = if g == () || me.team == () { () } else { team_by_id(g, me.team) };
+    let mode = if team == () { 0 } else { team_setting(g.id, team.id, "team_uniform") };
+    if mode == 0 {
+        undress(p);
+        return;
+    }
+    set_player(p, "dressed", true);
+    let c = team_color(team);
+    if mode == 1 {
+        set_avatar_parts(p, ());
+        set_avatar_colors(p, #{ torso: c, pack: c });
+    } else if mode == 2 {
+        let skin = skin_color(p);
+        set_avatar_parts(p, #{
+            hat: "copHat", accent: "none", pack: "none", secondpack: "none", chest: "chest",
+            hip: "pants", larm: "lArm", rarm: "rArm", lhand: "lHand", rhand: "rHand",
+            lleg: "lShoe", rleg: "rShoe"
+        });
+        set_avatar_colors(p, #{
+            hat: c, torso: c, hip: c, larm: c, rarm: c, lleg: c, rleg: c,
+            head: skin, lhand: skin, rhand: skin
+        });
+    } else {
+        custom_uniform(p, g, team, c);
+    }
+}
+fn dress_game(g) {
+    for m in g.members {
+        dress(m);
+    }
 }
 
 // `Slayer_MiniGameSO::play2dAll`: a sound every member hears.
@@ -958,8 +1222,12 @@ fn on_spawn(p) {
     if me == () || me.minigame == () {
         return;
     }
-    // `createPlayer`: out of spectate mode.
+    // `createPlayer`: out of spectate mode, the team's kit and look.
     spectate_end(p);
+    let g = minigame(me.minigame);
+    kit(p, g, me.team);
+    set_player(p, "skin", -1);
+    dress(p);
     let r = round_of(me.minigame);
     if r.countdown != () {
         freeze(p);
@@ -1042,11 +1310,45 @@ fn mode_changed(g) {
     }
 }
 
+fn balance_new(g) {
+    // `Slayer_TeamHandlerSG::onNewTeam`: everyone without a team is
+    // sorted, then teams are evened out.
+    let counts = counts(g);
+    let on = #{};
+    for p in players() {
+        if p.minigame == g.id && p.team != () && `${p.team}` in counts {
+            on[`${p.id}`] = p.team;
+        }
+    }
+    for p in players() {
+        if p.minigame == g.id && !(`${p.id}` in on) {
+            let team = counts.pick_team(g, p.id);
+            if team != () {
+                on[`${p.id}`] = team.id;
+                join(p.id, team);
+            }
+        }
+    }
+    even_out(g, counts, on);
+}
+
 fn on_minigame(event) {
     let g = minigame(event.game);
     if g == () {
         if event.kind == "ended" {
             reset_cps(event.game);
+            for p in players() {
+                if p.minigame == () {
+                    undress(p.id);
+                }
+            }
+            let kits = get("kits");
+            for key in kits.keys() {
+                if key.starts_with(`${event.game}:`) {
+                    kits.remove(key);
+                }
+            }
+            set("kits", kits);
             let games = get("games");
             games.remove(`${event.game}`);
             set("games", games);
@@ -1059,6 +1361,7 @@ fn on_minigame(event) {
     }
     if event.kind == "created" || event.kind == "reset" {
         reset_cps(g.id);
+        note_kits(g);
         start_round(g);
     } else if event.kind == "round_end" {
         round_ended(g, event.teams, event.players);
@@ -1075,6 +1378,21 @@ fn on_minigame(event) {
         if is_key(event.keys, "cp_tick_ms") {
             // `Slayer_CPTriggerData.tickPeriodMS = %1`: every point's.
             set_zone_period(0, setting(g.id, "cp_tick_ms"));
+        }
+        let looks = is_key(event.keys, "team_uniform") || is_key(event.keys, "allow_custom_faces");
+        for key in event.keys {
+            looks = looks || key.starts_with(`{{rules}}:uni_`);
+        }
+        if looks {
+            dress_game(g);
+        }
+        update_bodies(g, event.keys);
+        let equips = is_key(event.keys, "team_sync_loadout");
+        for i in 0..5 {
+            equips = equips || is_key(event.keys, `team_equip_${i}`);
+        }
+        if equips {
+            update_equips(g);
         }
         if is_key(event.keys, "time") {
             let r = round_of(g.id);
@@ -1101,27 +1419,18 @@ fn on_minigame(event) {
         }
         set_player(event.player, "out", false);
         spectate_end(event.player);
+        undress(event.player);
         check_lives(g);
-    } else if event.kind == "teams" && uses_teams(g.id) && setting(g.id, "balance_new_teams") {
-        // `Slayer_TeamHandlerSG::onNewTeam`: everyone without a team is
-        // sorted, then teams are evened out.
-        let counts = counts(g);
-        let on = #{};
-        for p in players() {
-            if p.minigame == g.id && p.team != () && `${p.team}` in counts {
-                on[`${p.id}`] = p.team;
-            }
+    } else if event.kind == "teams" {
+        // `Slayer_TeamSO::updateColor`: members in their team's new colour.
+        // (The Mini-Game window's Apply sends its teams before their
+        // settings, so the kits noted are still the old ones.)
+        dress_game(g);
+        if uses_teams(g.id) && setting(g.id, "balance_new_teams") {
+            balance_new(g);
         }
-        for p in players() {
-            if p.minigame == g.id && !(`${p.id}` in on) {
-                let team = counts.pick_team(g, p.id);
-                if team != () {
-                    on[`${p.id}`] = team.id;
-                    join(p.id, team);
-                }
-            }
-        }
-        even_out(g, counts, on);
+    } else if event.kind == "team" && event.team == () {
+        undress(event.player);
     } else if event.kind == "team" && event.team != () {
         let team = team_by_id(g, event.team);
         let me = player(event.player);
@@ -1143,6 +1452,7 @@ fn on_minigame(event) {
             if setting(g.id, "notify_member_changes") {
                 tell_minigame(g.id, `${c3()}${me.name} ${c5()}has joined ${c3()}${team.name}${reason}`, event.player);
             }
+            dress(event.player);
         }
     }
 }

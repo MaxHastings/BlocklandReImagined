@@ -305,7 +305,9 @@ names nothing is an error. The importer's ids are
 `<ns>:<kind>/<datablock name in lower case>`, so a rule gives out the
 imported item as `"{{namespace}}:weapon/fillcanitem"`. `{{name|bool}}`
 writes a captured TorqueScript truth value (`1`, `0`, `true`, `false`) as
-`true` or `false`, for a setting's `default` in `behaviour.json`:
+`true` or `false`, for a setting's `default` in `behaviour.json`, and
+`{{name|lower}}` writes it in lower case, as content ids spell a Torque
+name (`"v20.weapon.{{team_equip_0|lower}}"` for a captured `hammerItem`):
 
 ```json
 { "key": "auto_sort", "title": "Auto Sort", "type": "bool", "default": {{pref_auto_sort|bool}} }

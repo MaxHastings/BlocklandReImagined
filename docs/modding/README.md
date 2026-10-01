@@ -269,7 +269,10 @@ every worn image off.
 
 **Mini-games and teams.** `minigames()` lists the mini-games and
 `minigame(id)` reads one: `#{ id, title, owner, members, round, teams,
-friendly_fire, ally_same_color, round_over }`, each team `#{ id, name, color }`.
+friendly_fire, ally_same_color, round_over, player_type, loadout }`, each
+team `#{ id, name, color }`; `player_type` and `loadout` (five item ids,
+`""` for an empty slot) are the game's own (`playerDatablock`,
+`startEquip`).
 `set_teams(game, teams, #{ friendly_fire, ally_same_color })` sets a game's
 teams: a team map with an `id` keeps that team and its members, one
 without is new, and a team left out is removed. `set_team(p, team)` puts a
@@ -299,7 +302,11 @@ window's Add-On Settings, grouped by Add-On and `category`:
 ```
 
 `type` is `bool`, `int` (with `min` and `max`), `list` (a pick from
-`items`) or `text` (up to `max_length`, at most 256). `scope: "team"` gives
+`items`), `text` (up to `max_length`, at most 256), `item` (one of the
+server's items, by id, or `""` for none, as Slayer's team start tools) or
+`player_type` (one of the server's player types, by id, or `""`); the
+window lists the server's choices for those two, and an id the server
+lacks reads as `""`. `scope: "team"` gives
 every team of the game its own value, edited beside the team's name and
 colour in the same window, which also adds and removes teams.
 `editor: "admin"` lets only an admin change it. `shown_when` hides a
@@ -475,7 +482,14 @@ its carrier died is this: `on_pickup` answers `false` and decides what
 touching it means.
 
 **Bodies.** `set_scale(p, scale)` resizes a player's body, from 0.2 to 5
-(`setScale`); a respawn puts it back to 1. `set_look_limits(p, up, down)`
+(`setScale`); a respawn puts it back to 1. `set_tools(p, [item, (), ...])`
+fills a living player's tool slots in order (`forceEquip`, Slayer's team
+start tools): an id per slot, `()` or `""` for an empty one, slots past the
+list emptied, and items the server lacks left out (`player`, as
+`give_item`). `set_respawn_time(p, ms)` makes their next deaths wait `ms`
+(at most 999999) before they may respawn, over the mini-game's own
+(`setRespawnTime`); `set_respawn_time(p, ())` and leaving the mini-game
+give the game's back (`minigame`). `set_look_limits(p, up, down)`
 bounds how far their arms and head follow their look, each from 0 (looking
 straight up) to 1 (straight down), as v20's `setLookLimits`: `(0.5, 0.5)`
 holds them level. `set_look_limits(p, ())` lifts it; a respawn does too.
@@ -738,6 +752,17 @@ gives them back their own. The parts are `head`, `torso`, `hat`,
 `accent`, `pack`, `secondpack`, `hip`, `rarm`, `larm`, `rhand`, `lhand`,
 `rleg` and `lleg`; colours are 0 to 1, with an optional alpha. Everyone
 sees the change with the player's look: it costs nothing beyond it.
+`set_avatar_parts(p, #{ hat: "copHat", pack: "none", face: "smiley",
+decal: "AAA-None" })` dresses them in parts too (`hideAllNodes` and
+`unHideNode`, a full team uniform), per part slot (`hat`, `accent`, `pack`,
+`secondpack`, `chest`, `hip`, `rarm`, `larm`, `rhand`, `lhand`, `rleg`,
+`lleg`) with a face and decal; a part the server's avatar pack lacks stays
+theirs, and an accent their hat cannot wear comes off.
+`set_avatar_parts(p, ())` gives them their own. `avatar_choices()` lists
+the pack's choices in v20's order, a slot's list (`hat`, `face`, `decal`)
+and each hat's accents (`accents.helmet`), so a rule reading v20's list
+positions (`$pref::Avatar::Hat` 6) finds the part. Both last across
+respawns until the rule changes them.
 
 **Filling.** `paint_fill(p, brick, color, limit)` paints `brick` and every
 brick of the same colour joined to it through shared faces (side by side,
