@@ -1421,7 +1421,11 @@ impl WeaponsWorld {
         q: &mut impl Query,
     ) -> bool {
         let name = image.name.to_ascii_lowercase();
-        // An Add-On tool's own moments run its commands, then carry on.
+        // An Add-On tool's own moments run its commands, then carry on. A
+        // gun's `onFire` command runs and its projectile still flies, as a
+        // v20 `Image::onFire` package calling `Parent::onFire` did (a
+        // magazine counting its rounds); a tool with no projectile only
+        // runs the command.
         if let Some(command) = image.commands.for_script(script)
             && !(script.eq_ignore_ascii_case("onfire") && image.command.is_some())
         {
@@ -1431,7 +1435,7 @@ impl WeaponsWorld {
                 hand: e.hand,
                 command: Some(command.clone()),
             });
-            if script.eq_ignore_ascii_case("onfire") {
+            if script.eq_ignore_ascii_case("onfire") && image.projectile.is_none() {
                 return true;
             }
         }

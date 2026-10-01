@@ -8164,3 +8164,49 @@ Tests:
 Render: `/mnt/project-files/steel-ball/steel-ball-v2.png`. Max's in-game
 check is a Steel Ball near bricks at Mirrors Medium, in Unified+Shine and
 in Dynamic.
+
+## 2026-10-01 Adventure Pack: our own remake, and the seams it needed (for v0.1.11, branch `claude/adventure-pack-n3spj2`)
+
+Max asked for Bushido's Adventure Pack as a bundled Add-On and as a test of
+the engine's seams. The repo is public, so the pack is our own remake:
+code, models, icons and sounds all ours, crediting Bushido's design. The
+audit is `docs/audits/adventure-pack.md`.
+
+New engine seams (general, documented in `docs/modding/README.md`):
+- Hit regions: `bri_sim::player::hit_region` uses Torque's
+  `getDamageLocation` bands (head above 85% of the box, torso above 55%).
+  `on_damage` info gains `region`, `x`, `y`, `z` for shots and blasts.
+  `raycast` and `on_projectile_hit` give `region` for players, and
+  `hit_region(p, x, y, z)` is a script function. `info.type` is now the
+  damage type's name without `$DamageType::`.
+- Own models: a weapons `model` naming no base file loads
+  `assets/<name>.shape.json` and its material PNGs
+  (`bri_weapons::own_model`, with limits). `bri-addon-check` validates
+  them and warns about borrowed art only when a pack borrows.
+- HUD `holding`: a panel shows only while the viewer holds an image of the
+  listed Add-Ons or images.
+- Icons: `"frame": "model"` fits a long model to the picture at the stock
+  pose. Poses are now fitted once per stock item.
+- An image with a projectile and an `onfire` command runs the command and
+  fires, as `Parent::onFire` did.
+
+The pack (`packages/adventure`, all three turned off in
+`default-addons.json`) has 23 guns and 8 ammo pickups. It has magazines,
+reserves, the light key reload and shell-by-shell reloads the trigger
+stops. Ammo boxes and spare guns feed reserves, and a dropped gun keeps
+its magazine. It has headshots, hitscan revolver and sniper rifle, a taser
+that tumbles, and an ammo panel shown only with a gun out.
+`tools/make_adventure_pack.py` writes all generated parts.
+
+Not built: per-shot recoil animation and camera kick (cue budget; a weapon
+format change if wanted), scope overlays (Sniper Rifle thread).
+
+Tests: `crates/sim/tests/adventure_pack.rs` (6), region tests in
+`script_api.rs` and `player.rs`, `check.rs` own models, `items.rs` own-model
+presentation, `addon_seams.rs` onFire. bri-weapons, bri-package-runtime,
+bri-package, the bri-client lib and the touched bri-sim suites pass. Some
+suites need generated `content/` and could not run in the cloud:
+bri-weapons `runtime.rs` and bri-sim `tools.rs`. clippy is clean on the
+touched crates. The cloud's newer clippy also flags older code elsewhere
+(`manual_checked_ops`, `question_mark`, `unnecessary_sort_by`). No protocol
+change: regions and HUD fields are host- or content-side.

@@ -118,12 +118,12 @@ refused. The engine calls:
 | `on_loadout(player)` | a player's items were set afresh (spawn, respawn, joining or leaving a minigame), when `"on_loadout": true`: the place to hand out your Add-On's items |
 | `on_spawn(player)` | a player comes to life (joining, respawning), after `on_loadout`, when `"on_spawn": true` |
 | `on_leave(player)` | a player leaves, while their state can still be read, when `"on_leave": true` |
-| `on_damage(victim, attacker, amount, info)` | before a player is hurt, when `"on_damage": true`: return the amount to take (0 prevents it) or `()` to leave it. `info` is `#{ kind, type, direct }`, `kind` being `weapon`, `fall`, `package` and so on |
+| `on_damage(victim, attacker, amount, info)` | before a player is hurt, when `"on_damage": true`: return the amount to take (0 prevents it) or `()` to leave it. `info` is `#{ kind, type, direct }`, `kind` being `weapon`, `fall`, `package` and so on, `type` the damage type's name without `$DamageType::`. A shot or blast also gives `region` (`"head"`, `"torso"` or `"legs"`, where it struck) and its point `x`, `y`, `z` |
 | `on_entity_damage(entity, attacker, amount, info)` | before one of your creatures is hurt by a shot, a blast or `explode`, when `"on_entity_damage": true`: answered like `on_damage` |
 | `on_entity_death(entity, killer, info)` | one of your creatures ran out of health, just before it is removed, when `"on_entity_death": true` |
 | `on_pickup(player, item, info)` | a living player touches an item of your Add-On (or one it depends on) lying in the world, before they pick it up, whether or not they have room, when `"on_pickup": true`: return `false` to leave it, `"take"` to use it up without giving it (a spawn brick's item then starts its respawn), or `()` for the usual pickup. `info` is `#{ drop, spawner, data }`: the dropped item's id or the spawn brick's, and what `on_drop` kept with it. Called as it happens, so keep it quick |
 | `on_drop(player, item, slot)` | a player drops a tool of your Add-On (or one it depends on), when `"on_drop": true`. What it returns (a number, a map such as `#{ rounds: 7 }`) is kept with the dropped item and handed to `on_pickup` as `info.data` |
-| `on_projectile_hit(hit)` | a projectile of your weapons (or a dependency's) struck something, delivered at the start of the next tick, when `"on_projectile_hit": true`. `hit` is `#{ projectile, by, kind, id, ref, x, y, z, nx, ny, nz, vx, vy, vz }`: `kind` is `player`, `vehicle`, `entity`, `brick` or `map`, `by` the shooter or `()` |
+| `on_projectile_hit(hit)` | a projectile of your weapons (or a dependency's) struck something, delivered at the start of the next tick, when `"on_projectile_hit": true`. `hit` is `#{ projectile, by, kind, id, ref, x, y, z, nx, ny, nz, vx, vy, vz }`: `kind` is `player`, `vehicle`, `entity`, `brick` or `map`, `by` the shooter or `()`; a player hit also has `region` |
 | `cmd_<name>(player, args...)` | a player sends a command listed in `commands` |
 
 `player` is the player's id: pass it straight to `tell`, `get_player` and
@@ -191,7 +191,8 @@ first thing a ray meets, now, as the script runs: a map with `kind`
 (`"player"`, `"vehicle"`, `"entity"`, `"brick"` or `"map"`), `id` (`()` for
 the map), `ref` (an object like `"player:3"`, for players, vehicles and
 entities), `x`, `y`, `z`, the surface normal `nx`, `ny`, `nz`, and
-`distance`; or `()` when it meets nothing. Rays reach up to 2000 units and
+`distance`, and for a player `region` (`"head"`, `"torso"` or `"legs"`);
+or `()` when it meets nothing. Rays reach up to 2000 units and
 a call casts at most 64. A fourth argument names a player whose body the
 ray passes through, usually the shooter: `raycast(eye, look, 200.0, p.id)`.
 Rays see the world as it was when the call began: a brick the same call
@@ -203,6 +204,14 @@ a player's shot should obey them. Give `damage` a type from your weapons
 pack (`"CommandoRifle"` or `"$DamageType::CommandoRifle"`) to use its kill
 message, vehicle scale and whether it is a direct hit, as a projectile of that
 type would; without one the damage is your Add-On's own.
+
+**Where a hit lands.** `hit_region(player, x, y, z)` names the part of a
+living player's body at a point: the top 15% of their box is the `"head"`,
+the next 30% the `"torso"`, the rest the `"legs"` (Torque's
+`getDamageLocation` with the player defaults v20 never changed); `()` for
+anyone else. The engine measures the same for `raycast`, `on_damage` and
+`on_projectile_hit`, so a headshot rule reads `info.region == "head"`
+instead of working it out.
 
 **Held images.** `mount_image(p, image)` puts another image of your
 weapons (or a dependency's) in the player's hand and keeps their tool
@@ -373,6 +382,10 @@ Add-On that depends on the rule, as `sample-points-hud` depends on
   rule's command (`package` is the rule's id) with no arguments. The game
   refuses letters it already uses.
 - Colors are RGBA from 0 to 1.
+- `holding` (optional, up to 32) shows the panel only while the viewer
+  holds one of these: an Add-On id (any of its images) or an image id.
+  The Adventure Pack's ammo panel lists `["adventure-pack"]`, so it
+  appears with one of its guns out and nowhere else.
 
 ## 5. Weapons
 
@@ -404,6 +417,24 @@ background. `look.base` is the model's colour (its image's tint). The
 optional `skin` is the Gravity Gun's alien shell: a dark sheen with glowing
 veins, puffed out by `puff` (default 0.012) as it is in play. If the icon
 cannot be drawn, the item keeps its PNG or letter and the log says why.
+`"frame": "model"` keeps the stock item's angle and light but fits your
+model to the picture by itself, for a model much longer or shorter than
+the stock one (a sniper rifle drawn like the pistol); the default `"like"`
+frames it as the stock icon is.
+
+### Your own models
+
+A hand-written Add-On can ship its own models rather than point at base
+game files. A `model` that names no base game file, such as
+`"models/revolver"`, is looked for as `assets/models/revolver.shape.json`:
+the game's native shape format (the one Import Add-On writes from
+`.dts`), with `nodes` such as `mountPoint`, `muzzlePoint` and `ejectPoint`
+where the image mounts, fires and throws its casings. Each material `m`
+is a texture `assets/models/m.png` beside it. Up to 8 MB a model, 16
+materials, textures up to 4 MB and 1024 pixels a side. `bri-addon-check`
+warns about a model it cannot read. The Adventure Pack's 33 models are
+written by `tools/make_adventure_pack.py`: boxes and cylinders on one
+palette texture, so a model is a few kilobytes.
 
 The fields you are most likely to change:
 
@@ -428,6 +459,10 @@ is a plain scoped rifle: raise it, fire, let go, fire again.
 
 Shots hit players, vehicles, bricks and Add-On creatures. A creature's
 own rule decides what the hit does (`on_entity_damage`).
+
+An image with a projectile and an `onfire` command (in `commands.states`)
+does both: the round flies and the command runs, as a v20 gun's `onFire`
+that called `Parent::onFire` did. That is how a rule counts a magazine.
 
 A tool rather than a gun: give its image `"command": "your-rule:command"`
 and no projectile. Its `onFire` state then runs that command of your rule

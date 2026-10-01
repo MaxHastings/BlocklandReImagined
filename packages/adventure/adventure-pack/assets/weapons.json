@@ -1,0 +1,2872 @@
+{
+  "schema_version": 3,
+  "id": "adventure-pack",
+  "items": {
+    "adventure-pack:weapon/assaultrifle": {
+      "name": "AdvassaultrifleItem",
+      "ui_name": "Assault Rifle",
+      "image": "adventure-pack:image/assaultrifle",
+      "model": "models/assaultrifle",
+      "icon": "icons/assaultrifle"
+    },
+    "adventure-pack:weapon/automaticrifle": {
+      "name": "AdvautomaticrifleItem",
+      "ui_name": "Automatic Rifle",
+      "image": "adventure-pack:image/automaticrifle",
+      "model": "models/automaticrifle",
+      "icon": "icons/automaticrifle"
+    },
+    "adventure-pack:weapon/burstrifle": {
+      "name": "AdvburstrifleItem",
+      "ui_name": "Burst Rifle",
+      "image": "adventure-pack:image/burstrifle",
+      "model": "models/burstrifle",
+      "icon": "icons/burstrifle"
+    },
+    "adventure-pack:weapon/servicerifle": {
+      "name": "AdvservicerifleItem",
+      "ui_name": "Service Rifle",
+      "image": "adventure-pack:image/servicerifle",
+      "model": "models/servicerifle",
+      "icon": "icons/servicerifle"
+    },
+    "adventure-pack:weapon/submachinegun": {
+      "name": "AdvsubmachinegunItem",
+      "ui_name": "Submachine Gun",
+      "image": "adventure-pack:image/submachinegun",
+      "model": "models/submachinegun",
+      "icon": "icons/submachinegun"
+    },
+    "adventure-pack:weapon/machinepistol": {
+      "name": "AdvmachinepistolItem",
+      "ui_name": "Machine Pistol",
+      "image": "adventure-pack:image/machinepistol",
+      "model": "models/machinepistol",
+      "icon": "icons/machinepistol"
+    },
+    "adventure-pack:weapon/revolver": {
+      "name": "AdvrevolverItem",
+      "ui_name": "Revolver",
+      "image": "adventure-pack:image/revolver",
+      "model": "models/revolver",
+      "icon": "icons/revolver"
+    },
+    "adventure-pack:weapon/brushpistol": {
+      "name": "AdvbrushpistolItem",
+      "ui_name": "Brush Pistol",
+      "image": "adventure-pack:image/brushpistol",
+      "model": "models/brushpistol",
+      "icon": "icons/brushpistol"
+    },
+    "adventure-pack:weapon/servicepistol": {
+      "name": "AdvservicepistolItem",
+      "ui_name": "Service Pistol",
+      "image": "adventure-pack:image/servicepistol",
+      "model": "models/servicepistol",
+      "icon": "icons/servicepistol"
+    },
+    "adventure-pack:weapon/huntingmagnum": {
+      "name": "AdvhuntingmagnumItem",
+      "ui_name": "Hunting Magnum",
+      "image": "adventure-pack:image/huntingmagnum",
+      "model": "models/huntingmagnum",
+      "icon": "icons/huntingmagnum"
+    },
+    "adventure-pack:weapon/automaticpistol": {
+      "name": "AdvautomaticpistolItem",
+      "ui_name": "Automatic Pistol",
+      "image": "adventure-pack:image/automaticpistol",
+      "model": "models/automaticpistol",
+      "icon": "icons/automaticpistol"
+    },
+    "adventure-pack:weapon/doubleshotgun": {
+      "name": "AdvdoubleshotgunItem",
+      "ui_name": "Double Shotgun",
+      "image": "adventure-pack:image/doubleshotgun",
+      "model": "models/doubleshotgun",
+      "icon": "icons/doubleshotgun"
+    },
+    "adventure-pack:weapon/pairedshotgun": {
+      "name": "AdvpairedshotgunItem",
+      "ui_name": "Paired Shotgun",
+      "image": "adventure-pack:image/pairedshotgun",
+      "model": "models/pairedshotgun",
+      "icon": "icons/pairedshotgun"
+    },
+    "adventure-pack:weapon/singleshotgun": {
+      "name": "AdvsingleshotgunItem",
+      "ui_name": "Single Shotgun",
+      "image": "adventure-pack:image/singleshotgun",
+      "model": "models/singleshotgun",
+      "icon": "icons/singleshotgun"
+    },
+    "adventure-pack:weapon/levershotgun": {
+      "name": "AdvlevershotgunItem",
+      "ui_name": "Lever Shotgun",
+      "image": "adventure-pack:image/levershotgun",
+      "model": "models/levershotgun",
+      "icon": "icons/levershotgun"
+    },
+    "adventure-pack:weapon/huntingshotgun": {
+      "name": "AdvhuntingshotgunItem",
+      "ui_name": "Hunting Shotgun",
+      "image": "adventure-pack:image/huntingshotgun",
+      "model": "models/huntingshotgun",
+      "icon": "icons/huntingshotgun"
+    },
+    "adventure-pack:weapon/automaticshotgun": {
+      "name": "AdvautomaticshotgunItem",
+      "ui_name": "Automatic Shotgun",
+      "image": "adventure-pack:image/automaticshotgun",
+      "model": "models/automaticshotgun",
+      "icon": "icons/automaticshotgun"
+    },
+    "adventure-pack:weapon/fieldrifle": {
+      "name": "AdvfieldrifleItem",
+      "ui_name": "Field Rifle",
+      "image": "adventure-pack:image/fieldrifle",
+      "model": "models/fieldrifle",
+      "icon": "icons/fieldrifle"
+    },
+    "adventure-pack:weapon/leverrifle": {
+      "name": "AdvleverrifleItem",
+      "ui_name": "Lever Rifle",
+      "image": "adventure-pack:image/leverrifle",
+      "model": "models/leverrifle",
+      "icon": "icons/leverrifle"
+    },
+    "adventure-pack:weapon/sniperrifle": {
+      "name": "AdvsniperrifleItem",
+      "ui_name": "Sniper Rifle",
+      "image": "adventure-pack:image/sniperrifle",
+      "model": "models/sniperrifle",
+      "icon": "icons/sniperrifle"
+    },
+    "adventure-pack:weapon/sniperrepeater": {
+      "name": "AdvsniperrepeaterItem",
+      "ui_name": "Sniper Repeater",
+      "image": "adventure-pack:image/sniperrepeater",
+      "model": "models/sniperrepeater",
+      "icon": "icons/sniperrepeater"
+    },
+    "adventure-pack:weapon/huntingrifle": {
+      "name": "AdvhuntingrifleItem",
+      "ui_name": "Hunting Rifle",
+      "image": "adventure-pack:image/huntingrifle",
+      "model": "models/huntingrifle",
+      "icon": "icons/huntingrifle"
+    },
+    "adventure-pack:weapon/taser": {
+      "name": "AdvtaserItem",
+      "ui_name": "Taser",
+      "image": "adventure-pack:image/taser",
+      "model": "models/taser",
+      "icon": "icons/taser"
+    },
+    "adventure-pack:weapon/ammopistol": {
+      "name": "AdvpistolAmmoItem",
+      "ui_name": "Pistol Ammo",
+      "model": "models/ammopistol",
+      "icon": "icons/ammopistol"
+    },
+    "adventure-pack:weapon/ammorevolver": {
+      "name": "AdvrevolverAmmoItem",
+      "ui_name": "Revolver Ammo",
+      "model": "models/ammorevolver",
+      "icon": "icons/ammorevolver"
+    },
+    "adventure-pack:weapon/ammomachinepistol": {
+      "name": "AdvmachinepistolAmmoItem",
+      "ui_name": "Machine Pistol Ammo",
+      "model": "models/ammomachinepistol",
+      "icon": "icons/ammomachinepistol"
+    },
+    "adventure-pack:weapon/ammorifle": {
+      "name": "AdvrifleAmmoItem",
+      "ui_name": "Rifle Ammo",
+      "model": "models/ammorifle",
+      "icon": "icons/ammorifle"
+    },
+    "adventure-pack:weapon/ammomachinerifle": {
+      "name": "AdvmachinerifleAmmoItem",
+      "ui_name": "Machine Rifle Ammo",
+      "model": "models/ammomachinerifle",
+      "icon": "icons/ammomachinerifle"
+    },
+    "adventure-pack:weapon/ammoshotgun": {
+      "name": "AdvshotgunAmmoItem",
+      "ui_name": "Shotgun Shells",
+      "model": "models/ammoshotgun",
+      "icon": "icons/ammoshotgun"
+    },
+    "adventure-pack:weapon/ammosniper": {
+      "name": "AdvsniperAmmoItem",
+      "ui_name": "Sniper Ammo",
+      "model": "models/ammosniper",
+      "icon": "icons/ammosniper"
+    },
+    "adventure-pack:weapon/ammopile": {
+      "name": "AdvAmmoPileItem",
+      "ui_name": "Ammo Pile",
+      "model": "models/ammopile",
+      "icon": "icons/ammopile"
+    }
+  },
+  "images": {
+    "adventure-pack:image/assaultrifle": {
+      "name": "AdvassaultrifleImage",
+      "model": "models/assaultrifle",
+      "mount_point": 0,
+      "arm_ready": true,
+      "correct_muzzle": true,
+      "casing": "gunShellDebris",
+      "states": [
+        {
+          "name": "Activate",
+          "ticks": 30,
+          "script": "onActivate",
+          "sound": "weaponSwitchSound",
+          "timeout": 1
+        },
+        {
+          "name": "Ready",
+          "no_ammo": 4,
+          "down": 2
+        },
+        {
+          "name": "Fire",
+          "ticks": 10,
+          "no_ammo": 4,
+          "timeout": 3,
+          "wait": true,
+          "allow_change": false,
+          "script": "onFire",
+          "sound": "adventure-pack:rifle",
+          "eject_shell": true,
+          "emitter": "gunFlashEmitter",
+          "emitter_node": "muzzlePoint",
+          "emitter_seconds": 0.05
+        },
+        {
+          "name": "After",
+          "ticks": 0,
+          "no_ammo": 4,
+          "timeout": 1
+        },
+        {
+          "name": "Check",
+          "ticks": 1,
+          "script": "onCheck",
+          "ammo": 5,
+          "no_ammo": 7
+        },
+        {
+          "name": "Reload",
+          "ticks": 264,
+          "timeout": 6,
+          "allow_change": true,
+          "sound": "adventure-pack:reload"
+        },
+        {
+          "name": "Reloaded",
+          "ticks": 1,
+          "script": "onReloaded",
+          "ammo": 1,
+          "no_ammo": 7
+        },
+        {
+          "name": "Empty",
+          "ammo": 4,
+          "down": 8
+        },
+        {
+          "name": "Click",
+          "ticks": 30,
+          "timeout": 7,
+          "sound": "adventure-pack:click"
+        }
+      ],
+      "commands": {
+        "states": {
+          "onactivate": "adventure-pack-rules:equip",
+          "onfire": "adventure-pack-rules:fired",
+          "oncheck": "adventure-pack-rules:check",
+          "onreloaded": "adventure-pack-rules:reloaded"
+        },
+        "light": "adventure-pack-rules:reload"
+      },
+      "projectile": "adventure-pack:projectile/assaultrifle",
+      "shot": {
+        "projectiles": 1,
+        "spread": 0.001,
+        "recoil": 0
+      }
+    },
+    "adventure-pack:image/automaticrifle": {
+      "name": "AdvautomaticrifleImage",
+      "model": "models/automaticrifle",
+      "mount_point": 0,
+      "arm_ready": true,
+      "correct_muzzle": true,
+      "casing": "gunShellDebris",
+      "states": [
+        {
+          "name": "Activate",
+          "ticks": 30,
+          "script": "onActivate",
+          "sound": "weaponSwitchSound",
+          "timeout": 1
+        },
+        {
+          "name": "Ready",
+          "no_ammo": 4,
+          "down": 2
+        },
+        {
+          "name": "Fire",
+          "ticks": 13,
+          "no_ammo": 4,
+          "timeout": 3,
+          "wait": true,
+          "allow_change": false,
+          "script": "onFire",
+          "sound": "adventure-pack:heavyrifle",
+          "eject_shell": true,
+          "emitter": "gunFlashEmitter",
+          "emitter_node": "muzzlePoint",
+          "emitter_seconds": 0.05
+        },
+        {
+          "name": "After",
+          "ticks": 0,
+          "no_ammo": 4,
+          "timeout": 1
+        },
+        {
+          "name": "Check",
+          "ticks": 1,
+          "script": "onCheck",
+          "ammo": 5,
+          "no_ammo": 7
+        },
+        {
+          "name": "Reload",
+          "ticks": 288,
+          "timeout": 6,
+          "allow_change": true,
+          "sound": "adventure-pack:reload"
+        },
+        {
+          "name": "Reloaded",
+          "ticks": 1,
+          "script": "onReloaded",
+          "ammo": 1,
+          "no_ammo": 7
+        },
+        {
+          "name": "Empty",
+          "ammo": 4,
+          "down": 8
+        },
+        {
+          "name": "Click",
+          "ticks": 30,
+          "timeout": 7,
+          "sound": "adventure-pack:click"
+        }
+      ],
+      "commands": {
+        "states": {
+          "onactivate": "adventure-pack-rules:equip",
+          "onfire": "adventure-pack-rules:fired",
+          "oncheck": "adventure-pack-rules:check",
+          "onreloaded": "adventure-pack-rules:reloaded"
+        },
+        "light": "adventure-pack-rules:reload"
+      },
+      "projectile": "adventure-pack:projectile/automaticrifle",
+      "shot": {
+        "projectiles": 1,
+        "spread": 0.0008,
+        "recoil": 0
+      }
+    },
+    "adventure-pack:image/burstrifle": {
+      "name": "AdvburstrifleImage",
+      "model": "models/burstrifle",
+      "mount_point": 0,
+      "arm_ready": true,
+      "correct_muzzle": true,
+      "casing": "gunShellDebris",
+      "states": [
+        {
+          "name": "Activate",
+          "ticks": 30,
+          "script": "onActivate",
+          "sound": "weaponSwitchSound",
+          "timeout": 1
+        },
+        {
+          "name": "Ready",
+          "no_ammo": 6,
+          "down": 2
+        },
+        {
+          "name": "Fire",
+          "ticks": 7,
+          "no_ammo": 6,
+          "timeout": 3,
+          "wait": true,
+          "allow_change": false,
+          "script": "onFire",
+          "sound": "adventure-pack:rifle",
+          "eject_shell": true,
+          "emitter": "gunFlashEmitter",
+          "emitter_node": "muzzlePoint",
+          "emitter_seconds": 0.05
+        },
+        {
+          "name": "Burst2",
+          "ticks": 7,
+          "no_ammo": 6,
+          "timeout": 4,
+          "wait": true,
+          "allow_change": false,
+          "script": "onFire",
+          "sound": "adventure-pack:rifle",
+          "eject_shell": true,
+          "emitter": "gunFlashEmitter",
+          "emitter_node": "muzzlePoint",
+          "emitter_seconds": 0.05
+        },
+        {
+          "name": "Burst3",
+          "ticks": 36,
+          "no_ammo": 6,
+          "timeout": 5,
+          "wait": true,
+          "allow_change": false,
+          "script": "onFire",
+          "sound": "adventure-pack:rifle",
+          "eject_shell": true,
+          "emitter": "gunFlashEmitter",
+          "emitter_node": "muzzlePoint",
+          "emitter_seconds": 0.05
+        },
+        {
+          "name": "After",
+          "no_ammo": 6,
+          "up": 1
+        },
+        {
+          "name": "Check",
+          "ticks": 1,
+          "script": "onCheck",
+          "ammo": 7,
+          "no_ammo": 9
+        },
+        {
+          "name": "Reload",
+          "ticks": 264,
+          "timeout": 8,
+          "allow_change": true,
+          "sound": "adventure-pack:reload"
+        },
+        {
+          "name": "Reloaded",
+          "ticks": 1,
+          "script": "onReloaded",
+          "ammo": 1,
+          "no_ammo": 9
+        },
+        {
+          "name": "Empty",
+          "ammo": 6,
+          "down": 10
+        },
+        {
+          "name": "Click",
+          "ticks": 30,
+          "timeout": 9,
+          "sound": "adventure-pack:click"
+        }
+      ],
+      "commands": {
+        "states": {
+          "onactivate": "adventure-pack-rules:equip",
+          "onfire": "adventure-pack-rules:fired",
+          "oncheck": "adventure-pack-rules:check",
+          "onreloaded": "adventure-pack-rules:reloaded"
+        },
+        "light": "adventure-pack-rules:reload"
+      },
+      "projectile": "adventure-pack:projectile/burstrifle",
+      "shot": {
+        "projectiles": 1,
+        "spread": 0.0006,
+        "recoil": 0
+      }
+    },
+    "adventure-pack:image/servicerifle": {
+      "name": "AdvservicerifleImage",
+      "model": "models/servicerifle",
+      "mount_point": 0,
+      "arm_ready": true,
+      "correct_muzzle": true,
+      "casing": "gunShellDebris",
+      "states": [
+        {
+          "name": "Activate",
+          "ticks": 30,
+          "script": "onActivate",
+          "sound": "weaponSwitchSound",
+          "timeout": 1
+        },
+        {
+          "name": "Ready",
+          "no_ammo": 4,
+          "down": 2
+        },
+        {
+          "name": "Fire",
+          "ticks": 17,
+          "no_ammo": 4,
+          "timeout": 3,
+          "wait": true,
+          "allow_change": false,
+          "script": "onFire",
+          "sound": "adventure-pack:heavyrifle",
+          "eject_shell": true,
+          "emitter": "gunFlashEmitter",
+          "emitter_node": "muzzlePoint",
+          "emitter_seconds": 0.05
+        },
+        {
+          "name": "After",
+          "no_ammo": 4,
+          "up": 1
+        },
+        {
+          "name": "Check",
+          "ticks": 1,
+          "script": "onCheck",
+          "ammo": 5,
+          "no_ammo": 7
+        },
+        {
+          "name": "Reload",
+          "ticks": 240,
+          "timeout": 6,
+          "allow_change": true,
+          "sound": "adventure-pack:reload"
+        },
+        {
+          "name": "Reloaded",
+          "ticks": 1,
+          "script": "onReloaded",
+          "ammo": 1,
+          "no_ammo": 7
+        },
+        {
+          "name": "Empty",
+          "ammo": 4,
+          "down": 8
+        },
+        {
+          "name": "Click",
+          "ticks": 30,
+          "timeout": 7,
+          "sound": "adventure-pack:click"
+        }
+      ],
+      "commands": {
+        "states": {
+          "onactivate": "adventure-pack-rules:equip",
+          "onfire": "adventure-pack-rules:fired",
+          "oncheck": "adventure-pack-rules:check",
+          "onreloaded": "adventure-pack-rules:reloaded"
+        },
+        "light": "adventure-pack-rules:reload"
+      },
+      "projectile": "adventure-pack:projectile/servicerifle",
+      "shot": {
+        "projectiles": 1,
+        "spread": 0.0003,
+        "recoil": 0
+      }
+    },
+    "adventure-pack:image/submachinegun": {
+      "name": "AdvsubmachinegunImage",
+      "model": "models/submachinegun",
+      "mount_point": 0,
+      "arm_ready": true,
+      "correct_muzzle": true,
+      "casing": "gunShellDebris",
+      "states": [
+        {
+          "name": "Activate",
+          "ticks": 30,
+          "script": "onActivate",
+          "sound": "weaponSwitchSound",
+          "timeout": 1
+        },
+        {
+          "name": "Ready",
+          "no_ammo": 4,
+          "down": 2
+        },
+        {
+          "name": "Fire",
+          "ticks": 8,
+          "no_ammo": 4,
+          "timeout": 3,
+          "wait": true,
+          "allow_change": false,
+          "script": "onFire",
+          "sound": "adventure-pack:smg",
+          "eject_shell": true,
+          "emitter": "gunFlashEmitter",
+          "emitter_node": "muzzlePoint",
+          "emitter_seconds": 0.05
+        },
+        {
+          "name": "After",
+          "ticks": 0,
+          "no_ammo": 4,
+          "timeout": 1
+        },
+        {
+          "name": "Check",
+          "ticks": 1,
+          "script": "onCheck",
+          "ammo": 5,
+          "no_ammo": 7
+        },
+        {
+          "name": "Reload",
+          "ticks": 228,
+          "timeout": 6,
+          "allow_change": true,
+          "sound": "adventure-pack:reload"
+        },
+        {
+          "name": "Reloaded",
+          "ticks": 1,
+          "script": "onReloaded",
+          "ammo": 1,
+          "no_ammo": 7
+        },
+        {
+          "name": "Empty",
+          "ammo": 4,
+          "down": 8
+        },
+        {
+          "name": "Click",
+          "ticks": 30,
+          "timeout": 7,
+          "sound": "adventure-pack:click"
+        }
+      ],
+      "commands": {
+        "states": {
+          "onactivate": "adventure-pack-rules:equip",
+          "onfire": "adventure-pack-rules:fired",
+          "oncheck": "adventure-pack-rules:check",
+          "onreloaded": "adventure-pack-rules:reloaded"
+        },
+        "light": "adventure-pack-rules:reload"
+      },
+      "projectile": "adventure-pack:projectile/submachinegun",
+      "shot": {
+        "projectiles": 1,
+        "spread": 0.002,
+        "recoil": 0
+      }
+    },
+    "adventure-pack:image/machinepistol": {
+      "name": "AdvmachinepistolImage",
+      "model": "models/machinepistol",
+      "mount_point": 0,
+      "arm_ready": true,
+      "correct_muzzle": true,
+      "casing": "gunShellDebris",
+      "states": [
+        {
+          "name": "Activate",
+          "ticks": 30,
+          "script": "onActivate",
+          "sound": "weaponSwitchSound",
+          "timeout": 1
+        },
+        {
+          "name": "Ready",
+          "no_ammo": 4,
+          "down": 2
+        },
+        {
+          "name": "Fire",
+          "ticks": 7,
+          "no_ammo": 4,
+          "timeout": 3,
+          "wait": true,
+          "allow_change": false,
+          "script": "onFire",
+          "sound": "adventure-pack:smg",
+          "eject_shell": true,
+          "emitter": "gunFlashEmitter",
+          "emitter_node": "muzzlePoint",
+          "emitter_seconds": 0.05
+        },
+        {
+          "name": "After",
+          "ticks": 0,
+          "no_ammo": 4,
+          "timeout": 1
+        },
+        {
+          "name": "Check",
+          "ticks": 1,
+          "script": "onCheck",
+          "ammo": 5,
+          "no_ammo": 7
+        },
+        {
+          "name": "Reload",
+          "ticks": 180,
+          "timeout": 6,
+          "allow_change": true,
+          "sound": "adventure-pack:reload"
+        },
+        {
+          "name": "Reloaded",
+          "ticks": 1,
+          "script": "onReloaded",
+          "ammo": 1,
+          "no_ammo": 7
+        },
+        {
+          "name": "Empty",
+          "ammo": 4,
+          "down": 8
+        },
+        {
+          "name": "Click",
+          "ticks": 30,
+          "timeout": 7,
+          "sound": "adventure-pack:click"
+        }
+      ],
+      "commands": {
+        "states": {
+          "onactivate": "adventure-pack-rules:equip",
+          "onfire": "adventure-pack-rules:fired",
+          "oncheck": "adventure-pack-rules:check",
+          "onreloaded": "adventure-pack-rules:reloaded"
+        },
+        "light": "adventure-pack-rules:reload"
+      },
+      "projectile": "adventure-pack:projectile/machinepistol",
+      "shot": {
+        "projectiles": 1,
+        "spread": 0.003,
+        "recoil": 0
+      }
+    },
+    "adventure-pack:image/revolver": {
+      "name": "AdvrevolverImage",
+      "model": "models/revolver",
+      "mount_point": 0,
+      "arm_ready": true,
+      "correct_muzzle": true,
+      "casing": "",
+      "states": [
+        {
+          "name": "Activate",
+          "ticks": 30,
+          "script": "onActivate",
+          "sound": "weaponSwitchSound",
+          "timeout": 1
+        },
+        {
+          "name": "Ready",
+          "no_ammo": 4,
+          "down": 2
+        },
+        {
+          "name": "Fire",
+          "ticks": 36,
+          "no_ammo": 4,
+          "timeout": 3,
+          "wait": true,
+          "allow_change": false,
+          "script": "onFire",
+          "sound": "adventure-pack:magnum",
+          "eject_shell": false,
+          "emitter": "gunFlashEmitter",
+          "emitter_node": "muzzlePoint",
+          "emitter_seconds": 0.05
+        },
+        {
+          "name": "After",
+          "no_ammo": 4,
+          "up": 1
+        },
+        {
+          "name": "Check",
+          "ticks": 1,
+          "script": "onCheck",
+          "ammo": 5,
+          "no_ammo": 7
+        },
+        {
+          "name": "Reload",
+          "ticks": 312,
+          "timeout": 6,
+          "allow_change": true,
+          "sound": "adventure-pack:reload"
+        },
+        {
+          "name": "Reloaded",
+          "ticks": 1,
+          "script": "onReloaded",
+          "ammo": 1,
+          "no_ammo": 7
+        },
+        {
+          "name": "Empty",
+          "ammo": 4,
+          "down": 8
+        },
+        {
+          "name": "Click",
+          "ticks": 30,
+          "timeout": 7,
+          "sound": "adventure-pack:click"
+        }
+      ],
+      "commands": {
+        "states": {
+          "onactivate": "adventure-pack-rules:equip",
+          "onfire": "adventure-pack-rules:fired",
+          "oncheck": "adventure-pack-rules:check",
+          "onreloaded": "adventure-pack-rules:reloaded"
+        },
+        "light": "adventure-pack-rules:reload"
+      }
+    },
+    "adventure-pack:image/brushpistol": {
+      "name": "AdvbrushpistolImage",
+      "model": "models/brushpistol",
+      "mount_point": 0,
+      "arm_ready": true,
+      "correct_muzzle": true,
+      "casing": "gunShellDebris",
+      "states": [
+        {
+          "name": "Activate",
+          "ticks": 30,
+          "script": "onActivate",
+          "sound": "weaponSwitchSound",
+          "timeout": 1
+        },
+        {
+          "name": "Ready",
+          "no_ammo": 4,
+          "down": 2
+        },
+        {
+          "name": "Fire",
+          "ticks": 24,
+          "no_ammo": 4,
+          "timeout": 3,
+          "wait": true,
+          "allow_change": false,
+          "script": "onFire",
+          "sound": "adventure-pack:magnum",
+          "eject_shell": true,
+          "emitter": "gunFlashEmitter",
+          "emitter_node": "muzzlePoint",
+          "emitter_seconds": 0.05
+        },
+        {
+          "name": "After",
+          "no_ammo": 4,
+          "up": 1
+        },
+        {
+          "name": "Check",
+          "ticks": 1,
+          "script": "onCheck",
+          "ammo": 5,
+          "no_ammo": 7
+        },
+        {
+          "name": "Reload",
+          "ticks": 216,
+          "timeout": 6,
+          "allow_change": true,
+          "sound": "adventure-pack:reload"
+        },
+        {
+          "name": "Reloaded",
+          "ticks": 1,
+          "script": "onReloaded",
+          "ammo": 1,
+          "no_ammo": 7
+        },
+        {
+          "name": "Empty",
+          "ammo": 4,
+          "down": 8
+        },
+        {
+          "name": "Click",
+          "ticks": 30,
+          "timeout": 7,
+          "sound": "adventure-pack:click"
+        }
+      ],
+      "commands": {
+        "states": {
+          "onactivate": "adventure-pack-rules:equip",
+          "onfire": "adventure-pack-rules:fired",
+          "oncheck": "adventure-pack-rules:check",
+          "onreloaded": "adventure-pack-rules:reloaded"
+        },
+        "light": "adventure-pack-rules:reload"
+      },
+      "projectile": "adventure-pack:projectile/brushpistol",
+      "shot": {
+        "projectiles": 1,
+        "spread": 0.0015,
+        "recoil": 0
+      }
+    },
+    "adventure-pack:image/servicepistol": {
+      "name": "AdvservicepistolImage",
+      "model": "models/servicepistol",
+      "mount_point": 0,
+      "arm_ready": true,
+      "correct_muzzle": true,
+      "casing": "gunShellDebris",
+      "states": [
+        {
+          "name": "Activate",
+          "ticks": 30,
+          "script": "onActivate",
+          "sound": "weaponSwitchSound",
+          "timeout": 1
+        },
+        {
+          "name": "Ready",
+          "no_ammo": 4,
+          "down": 2
+        },
+        {
+          "name": "Fire",
+          "ticks": 14,
+          "no_ammo": 4,
+          "timeout": 3,
+          "wait": true,
+          "allow_change": false,
+          "script": "onFire",
+          "sound": "adventure-pack:pistol",
+          "eject_shell": true,
+          "emitter": "gunFlashEmitter",
+          "emitter_node": "muzzlePoint",
+          "emitter_seconds": 0.05
+        },
+        {
+          "name": "After",
+          "no_ammo": 4,
+          "up": 1
+        },
+        {
+          "name": "Check",
+          "ticks": 1,
+          "script": "onCheck",
+          "ammo": 5,
+          "no_ammo": 7
+        },
+        {
+          "name": "Reload",
+          "ticks": 168,
+          "timeout": 6,
+          "allow_change": true,
+          "sound": "adventure-pack:reload"
+        },
+        {
+          "name": "Reloaded",
+          "ticks": 1,
+          "script": "onReloaded",
+          "ammo": 1,
+          "no_ammo": 7
+        },
+        {
+          "name": "Empty",
+          "ammo": 4,
+          "down": 8
+        },
+        {
+          "name": "Click",
+          "ticks": 30,
+          "timeout": 7,
+          "sound": "adventure-pack:click"
+        }
+      ],
+      "commands": {
+        "states": {
+          "onactivate": "adventure-pack-rules:equip",
+          "onfire": "adventure-pack-rules:fired",
+          "oncheck": "adventure-pack-rules:check",
+          "onreloaded": "adventure-pack-rules:reloaded"
+        },
+        "light": "adventure-pack-rules:reload"
+      },
+      "projectile": "adventure-pack:projectile/servicepistol",
+      "shot": {
+        "projectiles": 1,
+        "spread": 0.0006,
+        "recoil": 0
+      }
+    },
+    "adventure-pack:image/huntingmagnum": {
+      "name": "AdvhuntingmagnumImage",
+      "model": "models/huntingmagnum",
+      "mount_point": 0,
+      "arm_ready": true,
+      "correct_muzzle": true,
+      "casing": "gunShellDebris",
+      "states": [
+        {
+          "name": "Activate",
+          "ticks": 30,
+          "script": "onActivate",
+          "sound": "weaponSwitchSound",
+          "timeout": 1
+        },
+        {
+          "name": "Ready",
+          "no_ammo": 4,
+          "down": 2
+        },
+        {
+          "name": "Fire",
+          "ticks": 42,
+          "no_ammo": 4,
+          "timeout": 3,
+          "wait": true,
+          "allow_change": false,
+          "script": "onFire",
+          "sound": "adventure-pack:magnum",
+          "eject_shell": true,
+          "emitter": "gunFlashEmitter",
+          "emitter_node": "muzzlePoint",
+          "emitter_seconds": 0.05
+        },
+        {
+          "name": "After",
+          "no_ammo": 4,
+          "up": 1
+        },
+        {
+          "name": "Check",
+          "ticks": 1,
+          "script": "onCheck",
+          "ammo": 5,
+          "no_ammo": 7
+        },
+        {
+          "name": "Reload",
+          "ticks": 288,
+          "timeout": 6,
+          "allow_change": true,
+          "sound": "adventure-pack:reload"
+        },
+        {
+          "name": "Reloaded",
+          "ticks": 1,
+          "script": "onReloaded",
+          "ammo": 1,
+          "no_ammo": 7
+        },
+        {
+          "name": "Empty",
+          "ammo": 4,
+          "down": 8
+        },
+        {
+          "name": "Click",
+          "ticks": 30,
+          "timeout": 7,
+          "sound": "adventure-pack:click"
+        }
+      ],
+      "commands": {
+        "states": {
+          "onactivate": "adventure-pack-rules:equip",
+          "onfire": "adventure-pack-rules:fired",
+          "oncheck": "adventure-pack-rules:check",
+          "onreloaded": "adventure-pack-rules:reloaded"
+        },
+        "light": "adventure-pack-rules:reload"
+      },
+      "projectile": "adventure-pack:projectile/huntingmagnum",
+      "zoom": {
+        "fov": 45,
+        "on_jet": true,
+        "crosshair": true,
+        "first_person": false
+      }
+    },
+    "adventure-pack:image/automaticpistol": {
+      "name": "AdvautomaticpistolImage",
+      "model": "models/automaticpistol",
+      "mount_point": 0,
+      "arm_ready": true,
+      "correct_muzzle": true,
+      "casing": "gunShellDebris",
+      "states": [
+        {
+          "name": "Activate",
+          "ticks": 30,
+          "script": "onActivate",
+          "sound": "weaponSwitchSound",
+          "timeout": 1
+        },
+        {
+          "name": "Ready",
+          "no_ammo": 4,
+          "down": 2
+        },
+        {
+          "name": "Fire",
+          "ticks": 9,
+          "no_ammo": 4,
+          "timeout": 3,
+          "wait": true,
+          "allow_change": false,
+          "script": "onFire",
+          "sound": "adventure-pack:pistol",
+          "eject_shell": true,
+          "emitter": "gunFlashEmitter",
+          "emitter_node": "muzzlePoint",
+          "emitter_seconds": 0.05
+        },
+        {
+          "name": "After",
+          "ticks": 0,
+          "no_ammo": 4,
+          "timeout": 1
+        },
+        {
+          "name": "Check",
+          "ticks": 1,
+          "script": "onCheck",
+          "ammo": 5,
+          "no_ammo": 7
+        },
+        {
+          "name": "Reload",
+          "ticks": 180,
+          "timeout": 6,
+          "allow_change": true,
+          "sound": "adventure-pack:reload"
+        },
+        {
+          "name": "Reloaded",
+          "ticks": 1,
+          "script": "onReloaded",
+          "ammo": 1,
+          "no_ammo": 7
+        },
+        {
+          "name": "Empty",
+          "ammo": 4,
+          "down": 8
+        },
+        {
+          "name": "Click",
+          "ticks": 30,
+          "timeout": 7,
+          "sound": "adventure-pack:click"
+        }
+      ],
+      "commands": {
+        "states": {
+          "onactivate": "adventure-pack-rules:equip",
+          "onfire": "adventure-pack-rules:fired",
+          "oncheck": "adventure-pack-rules:check",
+          "onreloaded": "adventure-pack-rules:reloaded"
+        },
+        "light": "adventure-pack-rules:reload"
+      },
+      "projectile": "adventure-pack:projectile/automaticpistol",
+      "shot": {
+        "projectiles": 1,
+        "spread": 0.0025,
+        "recoil": 0
+      }
+    },
+    "adventure-pack:image/doubleshotgun": {
+      "name": "AdvdoubleshotgunImage",
+      "model": "models/doubleshotgun",
+      "mount_point": 0,
+      "arm_ready": true,
+      "correct_muzzle": true,
+      "casing": "gunShellDebris",
+      "states": [
+        {
+          "name": "Activate",
+          "ticks": 30,
+          "script": "onActivate",
+          "sound": "weaponSwitchSound",
+          "timeout": 1
+        },
+        {
+          "name": "Ready",
+          "no_ammo": 4,
+          "down": 2
+        },
+        {
+          "name": "Fire",
+          "ticks": 14,
+          "no_ammo": 4,
+          "timeout": 3,
+          "wait": true,
+          "allow_change": false,
+          "script": "onFire",
+          "sound": "adventure-pack:shotgun",
+          "eject_shell": true,
+          "emitter": "gunFlashEmitter",
+          "emitter_node": "muzzlePoint",
+          "emitter_seconds": 0.05
+        },
+        {
+          "name": "After",
+          "no_ammo": 4,
+          "up": 1
+        },
+        {
+          "name": "Check",
+          "ticks": 1,
+          "script": "onCheck",
+          "ammo": 5,
+          "no_ammo": 7
+        },
+        {
+          "name": "Reload",
+          "ticks": 288,
+          "timeout": 6,
+          "allow_change": true,
+          "sound": "adventure-pack:reload"
+        },
+        {
+          "name": "Reloaded",
+          "ticks": 1,
+          "script": "onReloaded",
+          "ammo": 1,
+          "no_ammo": 7
+        },
+        {
+          "name": "Empty",
+          "ammo": 4,
+          "down": 8
+        },
+        {
+          "name": "Click",
+          "ticks": 30,
+          "timeout": 7,
+          "sound": "adventure-pack:click"
+        }
+      ],
+      "commands": {
+        "states": {
+          "onactivate": "adventure-pack-rules:equip",
+          "onfire": "adventure-pack-rules:fired",
+          "oncheck": "adventure-pack-rules:check",
+          "onreloaded": "adventure-pack-rules:reloaded"
+        },
+        "light": "adventure-pack-rules:reload"
+      },
+      "projectile": "adventure-pack:projectile/doubleshotgun",
+      "shot": {
+        "projectiles": 8,
+        "spread": 0.004,
+        "recoil": 6
+      }
+    },
+    "adventure-pack:image/pairedshotgun": {
+      "name": "AdvpairedshotgunImage",
+      "model": "models/pairedshotgun",
+      "mount_point": 0,
+      "arm_ready": true,
+      "correct_muzzle": true,
+      "casing": "gunShellDebris",
+      "states": [
+        {
+          "name": "Activate",
+          "ticks": 30,
+          "script": "onActivate",
+          "sound": "weaponSwitchSound",
+          "timeout": 1
+        },
+        {
+          "name": "Ready",
+          "no_ammo": 4,
+          "down": 2
+        },
+        {
+          "name": "Fire",
+          "ticks": 24,
+          "no_ammo": 4,
+          "timeout": 3,
+          "wait": true,
+          "allow_change": false,
+          "script": "onFire",
+          "sound": "adventure-pack:bigshotgun",
+          "eject_shell": true,
+          "emitter": "gunFlashEmitter",
+          "emitter_node": "muzzlePoint",
+          "emitter_seconds": 0.05
+        },
+        {
+          "name": "After",
+          "no_ammo": 4,
+          "up": 1
+        },
+        {
+          "name": "Check",
+          "ticks": 1,
+          "script": "onCheck",
+          "ammo": 5,
+          "no_ammo": 7
+        },
+        {
+          "name": "Reload",
+          "ticks": 312,
+          "timeout": 6,
+          "allow_change": true,
+          "sound": "adventure-pack:reload"
+        },
+        {
+          "name": "Reloaded",
+          "ticks": 1,
+          "script": "onReloaded",
+          "ammo": 1,
+          "no_ammo": 7
+        },
+        {
+          "name": "Empty",
+          "ammo": 4,
+          "down": 8
+        },
+        {
+          "name": "Click",
+          "ticks": 30,
+          "timeout": 7,
+          "sound": "adventure-pack:click"
+        }
+      ],
+      "commands": {
+        "states": {
+          "onactivate": "adventure-pack-rules:equip",
+          "onfire": "adventure-pack-rules:fired",
+          "oncheck": "adventure-pack-rules:check",
+          "onreloaded": "adventure-pack-rules:reloaded"
+        },
+        "light": "adventure-pack-rules:reload"
+      },
+      "projectile": "adventure-pack:projectile/pairedshotgun",
+      "shot": {
+        "projectiles": 16,
+        "spread": 0.0055,
+        "recoil": 12
+      }
+    },
+    "adventure-pack:image/singleshotgun": {
+      "name": "AdvsingleshotgunImage",
+      "model": "models/singleshotgun",
+      "mount_point": 0,
+      "arm_ready": true,
+      "correct_muzzle": true,
+      "casing": "gunShellDebris",
+      "states": [
+        {
+          "name": "Activate",
+          "ticks": 30,
+          "script": "onActivate",
+          "sound": "weaponSwitchSound",
+          "timeout": 1
+        },
+        {
+          "name": "Ready",
+          "no_ammo": 4,
+          "down": 2
+        },
+        {
+          "name": "Fire",
+          "ticks": 24,
+          "no_ammo": 4,
+          "timeout": 3,
+          "wait": true,
+          "allow_change": false,
+          "script": "onFire",
+          "sound": "adventure-pack:shotgun",
+          "eject_shell": true,
+          "emitter": "gunFlashEmitter",
+          "emitter_node": "muzzlePoint",
+          "emitter_seconds": 0.05
+        },
+        {
+          "name": "After",
+          "no_ammo": 4,
+          "up": 1
+        },
+        {
+          "name": "Check",
+          "ticks": 1,
+          "script": "onCheck",
+          "ammo": 5,
+          "no_ammo": 7
+        },
+        {
+          "name": "Reload",
+          "ticks": 132,
+          "timeout": 6,
+          "allow_change": true,
+          "sound": "adventure-pack:reload"
+        },
+        {
+          "name": "Reloaded",
+          "ticks": 1,
+          "script": "onReloaded",
+          "ammo": 1,
+          "no_ammo": 7
+        },
+        {
+          "name": "Empty",
+          "ammo": 4,
+          "down": 8
+        },
+        {
+          "name": "Click",
+          "ticks": 30,
+          "timeout": 7,
+          "sound": "adventure-pack:click"
+        }
+      ],
+      "commands": {
+        "states": {
+          "onactivate": "adventure-pack-rules:equip",
+          "onfire": "adventure-pack-rules:fired",
+          "oncheck": "adventure-pack-rules:check",
+          "onreloaded": "adventure-pack-rules:reloaded"
+        },
+        "light": "adventure-pack-rules:reload"
+      },
+      "projectile": "adventure-pack:projectile/singleshotgun",
+      "shot": {
+        "projectiles": 9,
+        "spread": 0.003,
+        "recoil": 5
+      }
+    },
+    "adventure-pack:image/levershotgun": {
+      "name": "AdvlevershotgunImage",
+      "model": "models/levershotgun",
+      "mount_point": 0,
+      "arm_ready": true,
+      "correct_muzzle": true,
+      "casing": "gunShellDebris",
+      "states": [
+        {
+          "name": "Activate",
+          "ticks": 30,
+          "script": "onActivate",
+          "sound": "weaponSwitchSound",
+          "timeout": 1
+        },
+        {
+          "name": "Ready",
+          "no_ammo": 5,
+          "down": 2
+        },
+        {
+          "name": "Fire",
+          "ticks": 34,
+          "no_ammo": 5,
+          "timeout": 3,
+          "wait": true,
+          "allow_change": false,
+          "script": "onFire",
+          "sound": "adventure-pack:shotgun",
+          "eject_shell": false,
+          "emitter": "gunFlashEmitter",
+          "emitter_node": "muzzlePoint",
+          "emitter_seconds": 0.05
+        },
+        {
+          "name": "Cycle",
+          "ticks": 30,
+          "no_ammo": 5,
+          "timeout": 4,
+          "wait": true,
+          "sound": "adventure-pack:lever",
+          "eject_shell": true,
+          "allow_change": false
+        },
+        {
+          "name": "After",
+          "no_ammo": 5,
+          "up": 1
+        },
+        {
+          "name": "Check",
+          "ticks": 1,
+          "script": "onCheck",
+          "ammo": 6,
+          "no_ammo": 9
+        },
+        {
+          "name": "Reload",
+          "ticks": 60,
+          "wait": false,
+          "down": 8,
+          "timeout": 7,
+          "sound": "adventure-pack:shell"
+        },
+        {
+          "name": "Reloaded",
+          "ticks": 1,
+          "script": "onReloaded",
+          "ammo": 1,
+          "no_ammo": 6
+        },
+        {
+          "name": "Interrupt",
+          "ticks": 1,
+          "script": "onInterrupt",
+          "ammo": 1,
+          "no_ammo": 6
+        },
+        {
+          "name": "Empty",
+          "ammo": 5,
+          "down": 10
+        },
+        {
+          "name": "Click",
+          "ticks": 30,
+          "timeout": 9,
+          "sound": "adventure-pack:click"
+        }
+      ],
+      "commands": {
+        "states": {
+          "onactivate": "adventure-pack-rules:equip",
+          "onfire": "adventure-pack-rules:fired",
+          "oncheck": "adventure-pack-rules:check",
+          "onreloaded": "adventure-pack-rules:reloaded",
+          "oninterrupt": "adventure-pack-rules:interrupt"
+        },
+        "light": "adventure-pack-rules:reload"
+      },
+      "projectile": "adventure-pack:projectile/levershotgun",
+      "shot": {
+        "projectiles": 8,
+        "spread": 0.0038,
+        "recoil": 5
+      }
+    },
+    "adventure-pack:image/huntingshotgun": {
+      "name": "AdvhuntingshotgunImage",
+      "model": "models/huntingshotgun",
+      "mount_point": 0,
+      "arm_ready": true,
+      "correct_muzzle": true,
+      "casing": "gunShellDebris",
+      "states": [
+        {
+          "name": "Activate",
+          "ticks": 30,
+          "script": "onActivate",
+          "sound": "weaponSwitchSound",
+          "timeout": 1
+        },
+        {
+          "name": "Ready",
+          "no_ammo": 5,
+          "down": 2
+        },
+        {
+          "name": "Fire",
+          "ticks": 43,
+          "no_ammo": 5,
+          "timeout": 3,
+          "wait": true,
+          "allow_change": false,
+          "script": "onFire",
+          "sound": "adventure-pack:shotgun",
+          "eject_shell": false,
+          "emitter": "gunFlashEmitter",
+          "emitter_node": "muzzlePoint",
+          "emitter_seconds": 0.05
+        },
+        {
+          "name": "Cycle",
+          "ticks": 30,
+          "no_ammo": 5,
+          "timeout": 4,
+          "wait": true,
+          "sound": "adventure-pack:pump",
+          "eject_shell": true,
+          "allow_change": false
+        },
+        {
+          "name": "After",
+          "no_ammo": 5,
+          "up": 1
+        },
+        {
+          "name": "Check",
+          "ticks": 1,
+          "script": "onCheck",
+          "ammo": 6,
+          "no_ammo": 9
+        },
+        {
+          "name": "Reload",
+          "ticks": 66,
+          "wait": false,
+          "down": 8,
+          "timeout": 7,
+          "sound": "adventure-pack:shell"
+        },
+        {
+          "name": "Reloaded",
+          "ticks": 1,
+          "script": "onReloaded",
+          "ammo": 1,
+          "no_ammo": 6
+        },
+        {
+          "name": "Interrupt",
+          "ticks": 1,
+          "script": "onInterrupt",
+          "ammo": 1,
+          "no_ammo": 6
+        },
+        {
+          "name": "Empty",
+          "ammo": 5,
+          "down": 10
+        },
+        {
+          "name": "Click",
+          "ticks": 30,
+          "timeout": 9,
+          "sound": "adventure-pack:click"
+        }
+      ],
+      "commands": {
+        "states": {
+          "onactivate": "adventure-pack-rules:equip",
+          "onfire": "adventure-pack-rules:fired",
+          "oncheck": "adventure-pack-rules:check",
+          "onreloaded": "adventure-pack-rules:reloaded",
+          "oninterrupt": "adventure-pack-rules:interrupt"
+        },
+        "light": "adventure-pack-rules:reload"
+      },
+      "projectile": "adventure-pack:projectile/huntingshotgun",
+      "shot": {
+        "projectiles": 6,
+        "spread": 0.0022,
+        "recoil": 6
+      }
+    },
+    "adventure-pack:image/automaticshotgun": {
+      "name": "AdvautomaticshotgunImage",
+      "model": "models/automaticshotgun",
+      "mount_point": 0,
+      "arm_ready": true,
+      "correct_muzzle": true,
+      "casing": "gunShellDebris",
+      "states": [
+        {
+          "name": "Activate",
+          "ticks": 30,
+          "script": "onActivate",
+          "sound": "weaponSwitchSound",
+          "timeout": 1
+        },
+        {
+          "name": "Ready",
+          "no_ammo": 4,
+          "down": 2
+        },
+        {
+          "name": "Fire",
+          "ticks": 22,
+          "no_ammo": 4,
+          "timeout": 3,
+          "wait": true,
+          "allow_change": false,
+          "script": "onFire",
+          "sound": "adventure-pack:shotgun",
+          "eject_shell": true,
+          "emitter": "gunFlashEmitter",
+          "emitter_node": "muzzlePoint",
+          "emitter_seconds": 0.05
+        },
+        {
+          "name": "After",
+          "ticks": 0,
+          "no_ammo": 4,
+          "timeout": 1
+        },
+        {
+          "name": "Check",
+          "ticks": 1,
+          "script": "onCheck",
+          "ammo": 5,
+          "no_ammo": 7
+        },
+        {
+          "name": "Reload",
+          "ticks": 336,
+          "timeout": 6,
+          "allow_change": true,
+          "sound": "adventure-pack:reload"
+        },
+        {
+          "name": "Reloaded",
+          "ticks": 1,
+          "script": "onReloaded",
+          "ammo": 1,
+          "no_ammo": 7
+        },
+        {
+          "name": "Empty",
+          "ammo": 4,
+          "down": 8
+        },
+        {
+          "name": "Click",
+          "ticks": 30,
+          "timeout": 7,
+          "sound": "adventure-pack:click"
+        }
+      ],
+      "commands": {
+        "states": {
+          "onactivate": "adventure-pack-rules:equip",
+          "onfire": "adventure-pack-rules:fired",
+          "oncheck": "adventure-pack-rules:check",
+          "onreloaded": "adventure-pack-rules:reloaded"
+        },
+        "light": "adventure-pack-rules:reload"
+      },
+      "projectile": "adventure-pack:projectile/automaticshotgun",
+      "shot": {
+        "projectiles": 7,
+        "spread": 0.0045,
+        "recoil": 3
+      }
+    },
+    "adventure-pack:image/fieldrifle": {
+      "name": "AdvfieldrifleImage",
+      "model": "models/fieldrifle",
+      "mount_point": 0,
+      "arm_ready": true,
+      "correct_muzzle": true,
+      "casing": "gunShellDebris",
+      "states": [
+        {
+          "name": "Activate",
+          "ticks": 30,
+          "script": "onActivate",
+          "sound": "weaponSwitchSound",
+          "timeout": 1
+        },
+        {
+          "name": "Ready",
+          "no_ammo": 5,
+          "down": 2
+        },
+        {
+          "name": "Fire",
+          "ticks": 50,
+          "no_ammo": 5,
+          "timeout": 3,
+          "wait": true,
+          "allow_change": false,
+          "script": "onFire",
+          "sound": "adventure-pack:heavyrifle",
+          "eject_shell": false,
+          "emitter": "gunFlashEmitter",
+          "emitter_node": "muzzlePoint",
+          "emitter_seconds": 0.05
+        },
+        {
+          "name": "Cycle",
+          "ticks": 30,
+          "no_ammo": 5,
+          "timeout": 4,
+          "wait": true,
+          "sound": "adventure-pack:bolt",
+          "eject_shell": true,
+          "allow_change": false
+        },
+        {
+          "name": "After",
+          "no_ammo": 5,
+          "up": 1
+        },
+        {
+          "name": "Check",
+          "ticks": 1,
+          "script": "onCheck",
+          "ammo": 6,
+          "no_ammo": 8
+        },
+        {
+          "name": "Reload",
+          "ticks": 288,
+          "timeout": 7,
+          "allow_change": true,
+          "sound": "adventure-pack:reload"
+        },
+        {
+          "name": "Reloaded",
+          "ticks": 1,
+          "script": "onReloaded",
+          "ammo": 1,
+          "no_ammo": 8
+        },
+        {
+          "name": "Empty",
+          "ammo": 5,
+          "down": 9
+        },
+        {
+          "name": "Click",
+          "ticks": 30,
+          "timeout": 8,
+          "sound": "adventure-pack:click"
+        }
+      ],
+      "commands": {
+        "states": {
+          "onactivate": "adventure-pack-rules:equip",
+          "onfire": "adventure-pack-rules:fired",
+          "oncheck": "adventure-pack-rules:check",
+          "onreloaded": "adventure-pack-rules:reloaded"
+        },
+        "light": "adventure-pack-rules:reload"
+      },
+      "projectile": "adventure-pack:projectile/fieldrifle",
+      "zoom": {
+        "fov": 40,
+        "on_jet": true,
+        "crosshair": true,
+        "first_person": false
+      }
+    },
+    "adventure-pack:image/leverrifle": {
+      "name": "AdvleverrifleImage",
+      "model": "models/leverrifle",
+      "mount_point": 0,
+      "arm_ready": true,
+      "correct_muzzle": true,
+      "casing": "gunShellDebris",
+      "states": [
+        {
+          "name": "Activate",
+          "ticks": 30,
+          "script": "onActivate",
+          "sound": "weaponSwitchSound",
+          "timeout": 1
+        },
+        {
+          "name": "Ready",
+          "no_ammo": 5,
+          "down": 2
+        },
+        {
+          "name": "Fire",
+          "ticks": 32,
+          "no_ammo": 5,
+          "timeout": 3,
+          "wait": true,
+          "allow_change": false,
+          "script": "onFire",
+          "sound": "adventure-pack:heavyrifle",
+          "eject_shell": false,
+          "emitter": "gunFlashEmitter",
+          "emitter_node": "muzzlePoint",
+          "emitter_seconds": 0.05
+        },
+        {
+          "name": "Cycle",
+          "ticks": 30,
+          "no_ammo": 5,
+          "timeout": 4,
+          "wait": true,
+          "sound": "adventure-pack:lever",
+          "eject_shell": true,
+          "allow_change": false
+        },
+        {
+          "name": "After",
+          "no_ammo": 5,
+          "up": 1
+        },
+        {
+          "name": "Check",
+          "ticks": 1,
+          "script": "onCheck",
+          "ammo": 6,
+          "no_ammo": 9
+        },
+        {
+          "name": "Reload",
+          "ticks": 54,
+          "wait": false,
+          "down": 8,
+          "timeout": 7,
+          "sound": "adventure-pack:shell"
+        },
+        {
+          "name": "Reloaded",
+          "ticks": 1,
+          "script": "onReloaded",
+          "ammo": 1,
+          "no_ammo": 6
+        },
+        {
+          "name": "Interrupt",
+          "ticks": 1,
+          "script": "onInterrupt",
+          "ammo": 1,
+          "no_ammo": 6
+        },
+        {
+          "name": "Empty",
+          "ammo": 5,
+          "down": 10
+        },
+        {
+          "name": "Click",
+          "ticks": 30,
+          "timeout": 9,
+          "sound": "adventure-pack:click"
+        }
+      ],
+      "commands": {
+        "states": {
+          "onactivate": "adventure-pack-rules:equip",
+          "onfire": "adventure-pack-rules:fired",
+          "oncheck": "adventure-pack-rules:check",
+          "onreloaded": "adventure-pack-rules:reloaded",
+          "oninterrupt": "adventure-pack-rules:interrupt"
+        },
+        "light": "adventure-pack-rules:reload"
+      },
+      "projectile": "adventure-pack:projectile/leverrifle"
+    },
+    "adventure-pack:image/sniperrifle": {
+      "name": "AdvsniperrifleImage",
+      "model": "models/sniperrifle",
+      "mount_point": 0,
+      "arm_ready": true,
+      "correct_muzzle": true,
+      "casing": "",
+      "states": [
+        {
+          "name": "Activate",
+          "ticks": 30,
+          "script": "onActivate",
+          "sound": "weaponSwitchSound",
+          "timeout": 1
+        },
+        {
+          "name": "Ready",
+          "no_ammo": 5,
+          "down": 2
+        },
+        {
+          "name": "Fire",
+          "ticks": 102,
+          "no_ammo": 5,
+          "timeout": 3,
+          "wait": true,
+          "allow_change": false,
+          "script": "onFire",
+          "sound": "adventure-pack:sniper",
+          "eject_shell": false,
+          "emitter": "gunFlashEmitter",
+          "emitter_node": "muzzlePoint",
+          "emitter_seconds": 0.05
+        },
+        {
+          "name": "Cycle",
+          "ticks": 30,
+          "no_ammo": 5,
+          "timeout": 4,
+          "wait": true,
+          "sound": "adventure-pack:bolt",
+          "eject_shell": false,
+          "allow_change": false
+        },
+        {
+          "name": "After",
+          "no_ammo": 5,
+          "up": 1
+        },
+        {
+          "name": "Check",
+          "ticks": 1,
+          "script": "onCheck",
+          "ammo": 6,
+          "no_ammo": 8
+        },
+        {
+          "name": "Reload",
+          "ticks": 360,
+          "timeout": 7,
+          "allow_change": true,
+          "sound": "adventure-pack:reload"
+        },
+        {
+          "name": "Reloaded",
+          "ticks": 1,
+          "script": "onReloaded",
+          "ammo": 1,
+          "no_ammo": 8
+        },
+        {
+          "name": "Empty",
+          "ammo": 5,
+          "down": 9
+        },
+        {
+          "name": "Click",
+          "ticks": 30,
+          "timeout": 8,
+          "sound": "adventure-pack:click"
+        }
+      ],
+      "commands": {
+        "states": {
+          "onactivate": "adventure-pack-rules:equip",
+          "onfire": "adventure-pack-rules:fired",
+          "oncheck": "adventure-pack-rules:check",
+          "onreloaded": "adventure-pack-rules:reloaded"
+        },
+        "light": "adventure-pack-rules:reload"
+      },
+      "zoom": {
+        "fov": 12,
+        "on_jet": true,
+        "crosshair": false,
+        "first_person": true
+      }
+    },
+    "adventure-pack:image/sniperrepeater": {
+      "name": "AdvsniperrepeaterImage",
+      "model": "models/sniperrepeater",
+      "mount_point": 0,
+      "arm_ready": true,
+      "correct_muzzle": true,
+      "casing": "gunShellDebris",
+      "states": [
+        {
+          "name": "Activate",
+          "ticks": 30,
+          "script": "onActivate",
+          "sound": "weaponSwitchSound",
+          "timeout": 1
+        },
+        {
+          "name": "Ready",
+          "no_ammo": 4,
+          "down": 2
+        },
+        {
+          "name": "Fire",
+          "ticks": 36,
+          "no_ammo": 4,
+          "timeout": 3,
+          "wait": true,
+          "allow_change": false,
+          "script": "onFire",
+          "sound": "adventure-pack:sniper",
+          "eject_shell": true,
+          "emitter": "gunFlashEmitter",
+          "emitter_node": "muzzlePoint",
+          "emitter_seconds": 0.05
+        },
+        {
+          "name": "After",
+          "no_ammo": 4,
+          "up": 1
+        },
+        {
+          "name": "Check",
+          "ticks": 1,
+          "script": "onCheck",
+          "ammo": 5,
+          "no_ammo": 7
+        },
+        {
+          "name": "Reload",
+          "ticks": 336,
+          "timeout": 6,
+          "allow_change": true,
+          "sound": "adventure-pack:reload"
+        },
+        {
+          "name": "Reloaded",
+          "ticks": 1,
+          "script": "onReloaded",
+          "ammo": 1,
+          "no_ammo": 7
+        },
+        {
+          "name": "Empty",
+          "ammo": 4,
+          "down": 8
+        },
+        {
+          "name": "Click",
+          "ticks": 30,
+          "timeout": 7,
+          "sound": "adventure-pack:click"
+        }
+      ],
+      "commands": {
+        "states": {
+          "onactivate": "adventure-pack-rules:equip",
+          "onfire": "adventure-pack-rules:fired",
+          "oncheck": "adventure-pack-rules:check",
+          "onreloaded": "adventure-pack-rules:reloaded"
+        },
+        "light": "adventure-pack-rules:reload"
+      },
+      "projectile": "adventure-pack:projectile/sniperrepeater",
+      "zoom": {
+        "fov": 25,
+        "on_jet": true,
+        "crosshair": false,
+        "first_person": true
+      }
+    },
+    "adventure-pack:image/huntingrifle": {
+      "name": "AdvhuntingrifleImage",
+      "model": "models/huntingrifle",
+      "mount_point": 0,
+      "arm_ready": true,
+      "correct_muzzle": true,
+      "casing": "gunShellDebris",
+      "states": [
+        {
+          "name": "Activate",
+          "ticks": 30,
+          "script": "onActivate",
+          "sound": "weaponSwitchSound",
+          "timeout": 1
+        },
+        {
+          "name": "Ready",
+          "no_ammo": 5,
+          "down": 2
+        },
+        {
+          "name": "Fire",
+          "ticks": 72,
+          "no_ammo": 5,
+          "timeout": 3,
+          "wait": true,
+          "allow_change": false,
+          "script": "onFire",
+          "sound": "adventure-pack:heavyrifle",
+          "eject_shell": false,
+          "emitter": "gunFlashEmitter",
+          "emitter_node": "muzzlePoint",
+          "emitter_seconds": 0.05
+        },
+        {
+          "name": "Cycle",
+          "ticks": 30,
+          "no_ammo": 5,
+          "timeout": 4,
+          "wait": true,
+          "sound": "adventure-pack:bolt",
+          "eject_shell": true,
+          "allow_change": false
+        },
+        {
+          "name": "After",
+          "no_ammo": 5,
+          "up": 1
+        },
+        {
+          "name": "Check",
+          "ticks": 1,
+          "script": "onCheck",
+          "ammo": 6,
+          "no_ammo": 9
+        },
+        {
+          "name": "Reload",
+          "ticks": 72,
+          "wait": false,
+          "down": 8,
+          "timeout": 7,
+          "sound": "adventure-pack:shell"
+        },
+        {
+          "name": "Reloaded",
+          "ticks": 1,
+          "script": "onReloaded",
+          "ammo": 1,
+          "no_ammo": 6
+        },
+        {
+          "name": "Interrupt",
+          "ticks": 1,
+          "script": "onInterrupt",
+          "ammo": 1,
+          "no_ammo": 6
+        },
+        {
+          "name": "Empty",
+          "ammo": 5,
+          "down": 10
+        },
+        {
+          "name": "Click",
+          "ticks": 30,
+          "timeout": 9,
+          "sound": "adventure-pack:click"
+        }
+      ],
+      "commands": {
+        "states": {
+          "onactivate": "adventure-pack-rules:equip",
+          "onfire": "adventure-pack-rules:fired",
+          "oncheck": "adventure-pack-rules:check",
+          "onreloaded": "adventure-pack-rules:reloaded",
+          "oninterrupt": "adventure-pack-rules:interrupt"
+        },
+        "light": "adventure-pack-rules:reload"
+      },
+      "projectile": "adventure-pack:projectile/huntingrifle",
+      "zoom": {
+        "fov": 30,
+        "on_jet": true,
+        "crosshair": false,
+        "first_person": true
+      }
+    },
+    "adventure-pack:image/taser": {
+      "name": "AdvtaserImage",
+      "model": "models/taser",
+      "mount_point": 0,
+      "arm_ready": true,
+      "correct_muzzle": true,
+      "casing": "",
+      "states": [
+        {
+          "name": "Activate",
+          "ticks": 30,
+          "script": "onActivate",
+          "sound": "weaponSwitchSound",
+          "timeout": 1
+        },
+        {
+          "name": "Ready",
+          "no_ammo": 4,
+          "down": 2
+        },
+        {
+          "name": "Fire",
+          "ticks": 24,
+          "no_ammo": 4,
+          "timeout": 3,
+          "wait": true,
+          "allow_change": false,
+          "script": "onFire",
+          "sound": "adventure-pack:taser",
+          "eject_shell": false
+        },
+        {
+          "name": "After",
+          "no_ammo": 4,
+          "up": 1
+        },
+        {
+          "name": "Check",
+          "ticks": 1,
+          "script": "onCheck",
+          "ammo": 5,
+          "no_ammo": 7
+        },
+        {
+          "name": "Reload",
+          "ticks": 300,
+          "timeout": 6,
+          "allow_change": true,
+          "sound": "adventure-pack:charge"
+        },
+        {
+          "name": "Reloaded",
+          "ticks": 1,
+          "script": "onReloaded",
+          "ammo": 1,
+          "no_ammo": 7
+        },
+        {
+          "name": "Empty",
+          "ammo": 4,
+          "down": 8
+        },
+        {
+          "name": "Click",
+          "ticks": 30,
+          "timeout": 7,
+          "sound": "adventure-pack:click"
+        }
+      ],
+      "commands": {
+        "states": {
+          "onactivate": "adventure-pack-rules:equip",
+          "onfire": "adventure-pack-rules:fired",
+          "oncheck": "adventure-pack-rules:check",
+          "onreloaded": "adventure-pack-rules:reloaded"
+        },
+        "light": "adventure-pack-rules:reload"
+      }
+    }
+  },
+  "projectiles": {
+    "adventure-pack:projectile/assaultrifle": {
+      "name": "AdvassaultrifleProjectile",
+      "model": "models/round",
+      "speed": 220,
+      "gravity": 0.0,
+      "lifetime_ticks": 240,
+      "fade_ticks": 240,
+      "damage": 16,
+      "damage_type": "$DamageType::Advassaultrifle",
+      "impulse": 60.0,
+      "explosion": {
+        "effect": "gunExplosion"
+      }
+    },
+    "adventure-pack:projectile/automaticrifle": {
+      "name": "AdvautomaticrifleProjectile",
+      "model": "models/round",
+      "speed": 240,
+      "gravity": 0.0,
+      "lifetime_ticks": 240,
+      "fade_ticks": 240,
+      "damage": 22,
+      "damage_type": "$DamageType::Advautomaticrifle",
+      "impulse": 60.0,
+      "explosion": {
+        "effect": "gunExplosion"
+      }
+    },
+    "adventure-pack:projectile/burstrifle": {
+      "name": "AdvburstrifleProjectile",
+      "model": "models/round",
+      "speed": 230,
+      "gravity": 0.0,
+      "lifetime_ticks": 240,
+      "fade_ticks": 240,
+      "damage": 20,
+      "damage_type": "$DamageType::Advburstrifle",
+      "impulse": 60.0,
+      "explosion": {
+        "effect": "gunExplosion"
+      }
+    },
+    "adventure-pack:projectile/servicerifle": {
+      "name": "AdvservicerifleProjectile",
+      "model": "models/round",
+      "speed": 260,
+      "gravity": 0.0,
+      "lifetime_ticks": 240,
+      "fade_ticks": 240,
+      "damage": 32,
+      "damage_type": "$DamageType::Advservicerifle",
+      "impulse": 60.0,
+      "explosion": {
+        "effect": "gunExplosion"
+      }
+    },
+    "adventure-pack:projectile/submachinegun": {
+      "name": "AdvsubmachinegunProjectile",
+      "model": "models/round",
+      "speed": 180,
+      "gravity": 0.0,
+      "lifetime_ticks": 240,
+      "fade_ticks": 240,
+      "damage": 12,
+      "damage_type": "$DamageType::Advsubmachinegun",
+      "impulse": 60.0,
+      "explosion": {
+        "effect": "gunExplosion"
+      }
+    },
+    "adventure-pack:projectile/machinepistol": {
+      "name": "AdvmachinepistolProjectile",
+      "model": "models/round",
+      "speed": 170,
+      "gravity": 0.0,
+      "lifetime_ticks": 240,
+      "fade_ticks": 240,
+      "damage": 10,
+      "damage_type": "$DamageType::Advmachinepistol",
+      "impulse": 60.0,
+      "explosion": {
+        "effect": "gunExplosion"
+      }
+    },
+    "adventure-pack:projectile/brushpistol": {
+      "name": "AdvbrushpistolProjectile",
+      "model": "models/round",
+      "speed": 150,
+      "gravity": 0.0,
+      "lifetime_ticks": 240,
+      "fade_ticks": 240,
+      "damage": 40,
+      "damage_type": "$DamageType::Advbrushpistol",
+      "impulse": 60.0,
+      "explosion": {
+        "effect": "gunExplosion"
+      }
+    },
+    "adventure-pack:projectile/servicepistol": {
+      "name": "AdvservicepistolProjectile",
+      "model": "models/round",
+      "speed": 180,
+      "gravity": 0.0,
+      "lifetime_ticks": 240,
+      "fade_ticks": 240,
+      "damage": 20,
+      "damage_type": "$DamageType::Advservicepistol",
+      "impulse": 60.0,
+      "explosion": {
+        "effect": "gunExplosion"
+      }
+    },
+    "adventure-pack:projectile/huntingmagnum": {
+      "name": "AdvhuntingmagnumProjectile",
+      "model": "models/round",
+      "speed": 260,
+      "gravity": 0.0,
+      "lifetime_ticks": 240,
+      "fade_ticks": 240,
+      "damage": 60,
+      "damage_type": "$DamageType::Advhuntingmagnum",
+      "impulse": 60.0,
+      "explosion": {
+        "effect": "gunExplosion"
+      }
+    },
+    "adventure-pack:projectile/automaticpistol": {
+      "name": "AdvautomaticpistolProjectile",
+      "model": "models/round",
+      "speed": 180,
+      "gravity": 0.0,
+      "lifetime_ticks": 240,
+      "fade_ticks": 240,
+      "damage": 13,
+      "damage_type": "$DamageType::Advautomaticpistol",
+      "impulse": 60.0,
+      "explosion": {
+        "effect": "gunExplosion"
+      }
+    },
+    "adventure-pack:projectile/doubleshotgun": {
+      "name": "AdvdoubleshotgunProjectile",
+      "model": "models/pellet",
+      "speed": 160,
+      "gravity": 0.0,
+      "lifetime_ticks": 240,
+      "fade_ticks": 240,
+      "damage": 9,
+      "damage_type": "$DamageType::Advdoubleshotgun",
+      "impulse": 20.0,
+      "explosion": {
+        "effect": "gunExplosion"
+      }
+    },
+    "adventure-pack:projectile/pairedshotgun": {
+      "name": "AdvpairedshotgunProjectile",
+      "model": "models/pellet",
+      "speed": 160,
+      "gravity": 0.0,
+      "lifetime_ticks": 240,
+      "fade_ticks": 240,
+      "damage": 8,
+      "damage_type": "$DamageType::Advpairedshotgun",
+      "impulse": 20.0,
+      "explosion": {
+        "effect": "gunExplosion"
+      }
+    },
+    "adventure-pack:projectile/singleshotgun": {
+      "name": "AdvsingleshotgunProjectile",
+      "model": "models/pellet",
+      "speed": 170,
+      "gravity": 0.0,
+      "lifetime_ticks": 240,
+      "fade_ticks": 240,
+      "damage": 10,
+      "damage_type": "$DamageType::Advsingleshotgun",
+      "impulse": 20.0,
+      "explosion": {
+        "effect": "gunExplosion"
+      }
+    },
+    "adventure-pack:projectile/levershotgun": {
+      "name": "AdvlevershotgunProjectile",
+      "model": "models/pellet",
+      "speed": 160,
+      "gravity": 0.0,
+      "lifetime_ticks": 240,
+      "fade_ticks": 240,
+      "damage": 9,
+      "damage_type": "$DamageType::Advlevershotgun",
+      "impulse": 20.0,
+      "explosion": {
+        "effect": "gunExplosion"
+      }
+    },
+    "adventure-pack:projectile/huntingshotgun": {
+      "name": "AdvhuntingshotgunProjectile",
+      "model": "models/pellet",
+      "speed": 190,
+      "gravity": 0.0,
+      "lifetime_ticks": 240,
+      "fade_ticks": 240,
+      "damage": 12,
+      "damage_type": "$DamageType::Advhuntingshotgun",
+      "impulse": 20.0,
+      "explosion": {
+        "effect": "gunExplosion"
+      }
+    },
+    "adventure-pack:projectile/automaticshotgun": {
+      "name": "AdvautomaticshotgunProjectile",
+      "model": "models/pellet",
+      "speed": 160,
+      "gravity": 0.0,
+      "lifetime_ticks": 240,
+      "fade_ticks": 240,
+      "damage": 7,
+      "damage_type": "$DamageType::Advautomaticshotgun",
+      "impulse": 20.0,
+      "explosion": {
+        "effect": "gunExplosion"
+      }
+    },
+    "adventure-pack:projectile/fieldrifle": {
+      "name": "AdvfieldrifleProjectile",
+      "model": "models/round",
+      "speed": 300,
+      "gravity": 0.0,
+      "lifetime_ticks": 240,
+      "fade_ticks": 240,
+      "damage": 55,
+      "damage_type": "$DamageType::Advfieldrifle",
+      "impulse": 60.0,
+      "explosion": {
+        "effect": "gunExplosion"
+      }
+    },
+    "adventure-pack:projectile/leverrifle": {
+      "name": "AdvleverrifleProjectile",
+      "model": "models/round",
+      "speed": 260,
+      "gravity": 0.0,
+      "lifetime_ticks": 240,
+      "fade_ticks": 240,
+      "damage": 38,
+      "damage_type": "$DamageType::Advleverrifle",
+      "impulse": 60.0,
+      "explosion": {
+        "effect": "gunExplosion"
+      }
+    },
+    "adventure-pack:projectile/sniperrepeater": {
+      "name": "AdvsniperrepeaterProjectile",
+      "model": "models/round",
+      "speed": 400,
+      "gravity": 0.0,
+      "lifetime_ticks": 240,
+      "fade_ticks": 240,
+      "damage": 50,
+      "damage_type": "$DamageType::Advsniperrepeater",
+      "impulse": 60.0,
+      "explosion": {
+        "effect": "gunExplosion"
+      }
+    },
+    "adventure-pack:projectile/huntingrifle": {
+      "name": "AdvhuntingrifleProjectile",
+      "model": "models/round",
+      "speed": 340,
+      "gravity": 0.0,
+      "lifetime_ticks": 240,
+      "fade_ticks": 240,
+      "damage": 75,
+      "damage_type": "$DamageType::Advhuntingrifle",
+      "impulse": 60.0,
+      "explosion": {
+        "effect": "gunExplosion"
+      }
+    }
+  },
+  "damage_types": {
+    "advassaultrifle": {
+      "name": "Advassaultrifle",
+      "suicide_message": "%1 shot themselves",
+      "murder_message": "%2 shot %1 (Assault Rifle)",
+      "vehicle_scale": 1.0,
+      "direct": true
+    },
+    "advautomaticrifle": {
+      "name": "Advautomaticrifle",
+      "suicide_message": "%1 shot themselves",
+      "murder_message": "%2 shot %1 (Automatic Rifle)",
+      "vehicle_scale": 1.0,
+      "direct": true
+    },
+    "advburstrifle": {
+      "name": "Advburstrifle",
+      "suicide_message": "%1 shot themselves",
+      "murder_message": "%2 shot %1 (Burst Rifle)",
+      "vehicle_scale": 1.0,
+      "direct": true
+    },
+    "advservicerifle": {
+      "name": "Advservicerifle",
+      "suicide_message": "%1 shot themselves",
+      "murder_message": "%2 shot %1 (Service Rifle)",
+      "vehicle_scale": 1.0,
+      "direct": true
+    },
+    "advsubmachinegun": {
+      "name": "Advsubmachinegun",
+      "suicide_message": "%1 shot themselves",
+      "murder_message": "%2 shot %1 (Submachine Gun)",
+      "vehicle_scale": 1.0,
+      "direct": true
+    },
+    "advmachinepistol": {
+      "name": "Advmachinepistol",
+      "suicide_message": "%1 shot themselves",
+      "murder_message": "%2 shot %1 (Machine Pistol)",
+      "vehicle_scale": 1.0,
+      "direct": true
+    },
+    "advrevolver": {
+      "name": "Advrevolver",
+      "suicide_message": "%1 shot themselves",
+      "murder_message": "%2 shot %1 (Revolver)",
+      "vehicle_scale": 1.0,
+      "direct": true
+    },
+    "advbrushpistol": {
+      "name": "Advbrushpistol",
+      "suicide_message": "%1 shot themselves",
+      "murder_message": "%2 shot %1 (Brush Pistol)",
+      "vehicle_scale": 1.0,
+      "direct": true
+    },
+    "advservicepistol": {
+      "name": "Advservicepistol",
+      "suicide_message": "%1 shot themselves",
+      "murder_message": "%2 shot %1 (Service Pistol)",
+      "vehicle_scale": 1.0,
+      "direct": true
+    },
+    "advhuntingmagnum": {
+      "name": "Advhuntingmagnum",
+      "suicide_message": "%1 shot themselves",
+      "murder_message": "%2 shot %1 (Hunting Magnum)",
+      "vehicle_scale": 1.0,
+      "direct": true
+    },
+    "advautomaticpistol": {
+      "name": "Advautomaticpistol",
+      "suicide_message": "%1 shot themselves",
+      "murder_message": "%2 shot %1 (Automatic Pistol)",
+      "vehicle_scale": 1.0,
+      "direct": true
+    },
+    "advdoubleshotgun": {
+      "name": "Advdoubleshotgun",
+      "suicide_message": "%1 shot themselves",
+      "murder_message": "%2 shot %1 (Double Shotgun)",
+      "vehicle_scale": 1.0,
+      "direct": true
+    },
+    "advpairedshotgun": {
+      "name": "Advpairedshotgun",
+      "suicide_message": "%1 shot themselves",
+      "murder_message": "%2 shot %1 (Paired Shotgun)",
+      "vehicle_scale": 1.0,
+      "direct": true
+    },
+    "advsingleshotgun": {
+      "name": "Advsingleshotgun",
+      "suicide_message": "%1 shot themselves",
+      "murder_message": "%2 shot %1 (Single Shotgun)",
+      "vehicle_scale": 1.0,
+      "direct": true
+    },
+    "advlevershotgun": {
+      "name": "Advlevershotgun",
+      "suicide_message": "%1 shot themselves",
+      "murder_message": "%2 shot %1 (Lever Shotgun)",
+      "vehicle_scale": 1.0,
+      "direct": true
+    },
+    "advhuntingshotgun": {
+      "name": "Advhuntingshotgun",
+      "suicide_message": "%1 shot themselves",
+      "murder_message": "%2 shot %1 (Hunting Shotgun)",
+      "vehicle_scale": 1.0,
+      "direct": true
+    },
+    "advautomaticshotgun": {
+      "name": "Advautomaticshotgun",
+      "suicide_message": "%1 shot themselves",
+      "murder_message": "%2 shot %1 (Automatic Shotgun)",
+      "vehicle_scale": 1.0,
+      "direct": true
+    },
+    "advfieldrifle": {
+      "name": "Advfieldrifle",
+      "suicide_message": "%1 shot themselves",
+      "murder_message": "%2 shot %1 (Field Rifle)",
+      "vehicle_scale": 1.0,
+      "direct": true
+    },
+    "advleverrifle": {
+      "name": "Advleverrifle",
+      "suicide_message": "%1 shot themselves",
+      "murder_message": "%2 shot %1 (Lever Rifle)",
+      "vehicle_scale": 1.0,
+      "direct": true
+    },
+    "advsniperrifle": {
+      "name": "Advsniperrifle",
+      "suicide_message": "%1 shot themselves",
+      "murder_message": "%2 shot %1 (Sniper Rifle)",
+      "vehicle_scale": 1.0,
+      "direct": true
+    },
+    "advsniperrepeater": {
+      "name": "Advsniperrepeater",
+      "suicide_message": "%1 shot themselves",
+      "murder_message": "%2 shot %1 (Sniper Repeater)",
+      "vehicle_scale": 1.0,
+      "direct": true
+    },
+    "advhuntingrifle": {
+      "name": "Advhuntingrifle",
+      "suicide_message": "%1 shot themselves",
+      "murder_message": "%2 shot %1 (Hunting Rifle)",
+      "vehicle_scale": 1.0,
+      "direct": true
+    },
+    "advtaser": {
+      "name": "Advtaser",
+      "suicide_message": "%1 shot themselves",
+      "murder_message": "%2 tased %1 (Taser)",
+      "vehicle_scale": 1.0,
+      "direct": true
+    }
+  },
+  "sounds": {
+    "adventure-pack:pistol": {
+      "file": "sounds/pistol.wav",
+      "volume": 0.8
+    },
+    "adventure-pack:magnum": {
+      "file": "sounds/magnum.wav"
+    },
+    "adventure-pack:smg": {
+      "file": "sounds/smg.wav",
+      "volume": 0.75
+    },
+    "adventure-pack:rifle": {
+      "file": "sounds/rifle.wav",
+      "volume": 0.85
+    },
+    "adventure-pack:heavyrifle": {
+      "file": "sounds/heavyrifle.wav"
+    },
+    "adventure-pack:shotgun": {
+      "file": "sounds/shotgun.wav"
+    },
+    "adventure-pack:bigshotgun": {
+      "file": "sounds/bigshotgun.wav"
+    },
+    "adventure-pack:sniper": {
+      "file": "sounds/sniper.wav"
+    },
+    "adventure-pack:taser": {
+      "file": "sounds/taser.wav",
+      "volume": 0.8
+    },
+    "adventure-pack:reload": {
+      "file": "sounds/reload.wav",
+      "volume": 0.7
+    },
+    "adventure-pack:shell": {
+      "file": "sounds/shell.wav",
+      "volume": 0.7
+    },
+    "adventure-pack:charge": {
+      "file": "sounds/charge.wav",
+      "volume": 0.6
+    },
+    "adventure-pack:lever": {
+      "file": "sounds/lever.wav",
+      "volume": 0.7
+    },
+    "adventure-pack:pump": {
+      "file": "sounds/pump.wav",
+      "volume": 0.7
+    },
+    "adventure-pack:bolt": {
+      "file": "sounds/bolt.wav",
+      "volume": 0.7
+    },
+    "adventure-pack:click": {
+      "file": "sounds/click.wav",
+      "volume": 0.6,
+      "local": true
+    },
+    "adventure-pack:headshot": {
+      "file": "sounds/headshot.wav",
+      "volume": 0.7,
+      "local": true
+    },
+    "adventure-pack:ammo": {
+      "file": "sounds/ammo.wav",
+      "volume": 0.7,
+      "local": true
+    }
+  }
+}

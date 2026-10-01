@@ -785,8 +785,10 @@ impl ItemAssets {
             shapes,
             textures,
         };
+        // Each stock item's pose is fitted once, however many icons take it.
+        let mut poses = BTreeMap::new();
         for (item, dir, file, spec) in std::mem::take(&mut added.icon_renders) {
-            if let Err(error) = assets.render_icon(&item, &dir, &spec) {
+            if let Err(error) = assets.render_icon(&item, &dir, &spec, &mut poses) {
                 assets.faults.push(crate::cosmetic::add_on_fault(
                     &dir,
                     &file,
@@ -798,8 +800,14 @@ impl ItemAssets {
     }
     /// Draw `item`'s icon from its model, posed like `spec.pose_like`'s
     /// icon (`crate::item_icon_render`), and show it in place of any other.
-    fn render_icon(&mut self, item: &str, dir: &str, spec: &crate::item_icon_render::Spec) -> Result<()> {
-        use crate::item_icon_render::{Mesh, render_like};
+    fn render_icon(
+        &mut self,
+        item: &str,
+        dir: &str,
+        spec: &crate::item_icon_render::Spec,
+        poses: &mut BTreeMap<String, Option<crate::item_icon_render::Pose>>,
+    ) -> Result<()> {
+        use crate::item_icon_render::{Mesh, fit_pose, render_posed};
         let mesh = |assets: &Self, model: &str| -> Result<Mesh> {
             ensure!(!model.is_empty(), "no model");
             Ok(Mesh::from_scene(&assets.model_scene(model, [1.; 4], Mat4::IDENTITY, None, 0.)?))
@@ -816,9 +824,18 @@ impl ItemAssets {
             .as_ref()
             .and_then(|i| self.textures.get(i))
             .with_context(|| format!("{} has no icon", spec.pose_like))?;
-        let reference = mesh(self, &stock.model).with_context(|| format!("{} has no model", spec.pose_like))?;
+        let pose = match poses.get(&spec.pose_like) {
+            Some(pose) => *pose,
+            None => {
+                let reference = mesh(self, &stock.model).with_context(|| format!("{} has no model", spec.pose_like))?;
+                let pose = fit_pose(&reference, icon).map(|(pose, _)| pose);
+                poses.insert(spec.pose_like.clone(), pose);
+                pose
+            }
+        }
+        .with_context(|| format!("{}'s model does not match its icon", spec.pose_like))?;
         let key = format!("{dir}/{item}.render").to_ascii_lowercase();
-        let image = render_like(spec, &model, (&reference, icon), &key)?;
+        let image = render_posed(spec, &model, &pose, icon, &key)?;
         self.textures.insert(key.clone(), image);
         self.presentation.items.get_mut(item).unwrap().icon = Some(key);
         Ok(())
@@ -1135,28 +1152,33 @@ fn present_gaps(
         sha256: sha256.clone(),
         line: 0,
     };
-    // The model key `name` presents, or none (logged once per model).
+    // The model key `name` presents, or none (logged once per model): a
+    // stock model, else the Add-On's own (`own_model`).
     let mut missing = std::collections::BTreeSet::new();
-    let mut model = |manifest: &Presentation, faults: &mut Vec<String>, name: &str| -> String {
+    let mut model = |manifest: &mut Presentation, added: &mut Added, faults: &mut Vec<String>, name: &str| -> String {
         let model = name.replace('\\', "/").to_ascii_lowercase();
         if model.is_empty() || manifest.models.contains_key(&model) {
             return model;
+        }
+        if let Some(own) = own_model(dir, abs, name, manifest, added, faults) {
+            return own;
         }
         if missing.insert(model.clone()) {
             faults.push(crate::cosmetic::add_on_fault(
                 dir,
                 "weapons.json",
-                format!("model {name} is in neither this Add-On's presentation nor the base game"),
+                format!("model {name} is in neither this Add-On's presentation, its own files nor the base game"),
             ));
         }
         String::new()
     };
     let mut images = BTreeMap::new();
-    for (id, image) in pack.images.iter().filter(|(id, _)| !manifest.images.contains_key(*id)) {
+    let unpresented: Vec<_> = pack.images.iter().filter(|(id, _)| !manifest.images.contains_key(*id)).collect();
+    for (id, image) in unpresented {
         images.insert(
             id.clone(),
             ImagePresentation {
-                model: model(manifest, faults, &image.model),
+                model: model(manifest, added, faults, &image.model),
                 mount_point: image.mount_point,
                 offset: image.offset,
                 eye_offset: image.eye_offset,
@@ -1175,7 +1197,7 @@ fn present_gaps(
         if manifest.projectiles.contains_key(id) {
             continue;
         }
-        let model = model(manifest, faults, &projectile.model);
+        let model = model(manifest, added, faults, &projectile.model);
         added.projectiles.insert(id.clone());
         manifest.projectiles.insert(
             id.clone(),
@@ -1189,7 +1211,7 @@ fn present_gaps(
         if manifest.items.contains_key(id) {
             continue;
         }
-        let model = model(manifest, faults, &item.model);
+        let model = model(manifest, added, faults, &item.model);
         if let Some(stock) = manifest.models.get(&model) {
             item_physics.items.insert(id.clone(), stock.bounds());
         }
@@ -1344,6 +1366,88 @@ fn own_icon(
         }
     }
 }
+/// An Add-On's own model (`bri_weapons::own_model`): `<name>.shape.json`
+/// in `abs`, the folder holding `weapons.json`, its materials' textures
+/// beside it. It joins the models under a key of its own
+/// (`<dir>/<name>.shape.json`). None when there is no such file; one that
+/// cannot be read is logged and the item draws no model.
+fn own_model(
+    dir: &str,
+    abs: &Path,
+    name: &str,
+    manifest: &mut Presentation,
+    added: &mut Added,
+    faults: &mut Vec<String>,
+) -> Option<String> {
+    use bri_weapons::own_model;
+    let file = own_model::file_of(name)?;
+    let key = format!("{dir}/{file}").to_ascii_lowercase();
+    if manifest.models.contains_key(&key) {
+        return Some(key);
+    }
+    // The model and its textures by key.
+    type Read = (ModelResource, Vec<(String, TextureResource)>);
+    let read = || -> Result<Option<Read>> {
+        let Some(model) = own_model::read(abs, name)? else {
+            return Ok(None);
+        };
+        let mut textures = Vec::new();
+        for texture in &model.textures {
+            let image = crate::materials::read_resource(abs, texture, own_model::MAX_TEXTURE_BYTES)?;
+            let (width, height) = image::ImageReader::new(std::io::Cursor::new(&image))
+                .with_guessed_format()?
+                .into_dimensions()?;
+            let side = own_model::MAX_TEXTURE_SIDE;
+            ensure!(
+                (1..=side).contains(&width) && (1..=side).contains(&height),
+                "{texture} is {width}x{height}; at most {side} a side"
+            );
+            textures.push((
+                format!("{dir}/{texture}").to_ascii_lowercase(),
+                TextureResource {
+                    file: texture.clone(),
+                    sha256: hash(&image),
+                    width,
+                    height,
+                    source: format!("{dir}/{texture}"),
+                },
+            ));
+        }
+        let sha256 = hash(&model.bytes);
+        Ok(Some((
+            ModelResource {
+                file: model.file.clone(),
+                sha256: sha256.clone(),
+                source: format!("{dir}/{}", model.file),
+                source_sha256: sha256,
+                textures: textures.iter().map(|(k, _)| k.clone()).collect(),
+                bounds_min: model.bounds.0,
+                bounds_max: model.bounds.1,
+            },
+            textures,
+        )))
+    };
+    match read() {
+        Ok(Some((model, textures))) => {
+            for (id, texture) in textures {
+                added.origin.insert(format!("texture:{id}"), abs.to_path_buf());
+                added.owners.insert(format!("texture:{id}"), dir.to_string());
+                added.textures.insert(id.clone());
+                manifest.textures.insert(id, texture);
+            }
+            added.origin.insert(format!("model:{key}"), abs.to_path_buf());
+            added.owners.insert(format!("model:{key}"), dir.to_string());
+            added.models.insert(key.clone());
+            manifest.models.insert(key.clone(), model);
+            Some(key)
+        }
+        Ok(None) => None,
+        Err(error) => {
+            faults.push(crate::cosmetic::add_on_fault(dir, &file, format!("{error:#}")));
+            None
+        }
+    }
+}
 /// Largest Add-On icon file, and side.
 const ICON_BYTES: u64 = 1024 * 1024;
 const ICON_SIDE: u32 = 512;
@@ -1413,6 +1517,31 @@ mod add_on_icon_tests {
         };
         assert_eq!((item.as_str(), file.as_str()), ("gravity-gun-tool:weapon/gravitygun", "icons/gravity_gun.render.json"));
         assert_eq!(spec.pose_like, bri_weapons::runtime::PRINTER);
+    }
+    /// A hand-written Add-On (the Adventure Pack) ships its own models
+    /// beside its weapons: `models/<name>.shape.json` and its palette
+    /// texture. Nothing is borrowed from the base game and nothing faults.
+    #[test]
+    fn a_hand_written_add_on_draws_its_own_models() {
+        let abs = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../packages/adventure/adventure-pack/assets")
+            .canonicalize()
+            .unwrap();
+        let weapons = std::fs::read(abs.join("weapons.json")).unwrap();
+        let pack = bri_weapons::Pack::from_json(&weapons).unwrap();
+        let mut manifest = empty();
+        let (mut added, mut faults) = (Added::default(), Vec::new());
+        let mut physics = ItemPhysicsCatalog { schema_version: 1, items: BTreeMap::new() };
+        present_gaps("Adventure Pack", &abs, &weapons, &pack, &mut manifest, &mut physics, &mut added, &mut faults);
+        assert!(!faults.iter().any(|f| f.contains("model")), "{faults:?}");
+        let item = &manifest.items["adventure-pack:weapon/revolver"];
+        let model = &manifest.models[&item.model];
+        assert!(added.origin.contains_key(&format!("model:{}", item.model)), "{:?}", added.origin.keys());
+        assert!(model.textures.iter().any(|t| manifest.textures.contains_key(t)), "{:?}", model.textures);
+        // Its image and round draw from its own files too.
+        assert!(manifest.images.contains_key("adventure-pack:image/revolver"));
+        let round = &manifest.projectiles["adventure-pack:projectile/servicepistol"];
+        assert!(manifest.models.contains_key(round.model.as_deref().unwrap()));
     }
     /// Max, v0.1.9: "take the 3d model + shaders + snap pic -> make
     /// transparent background -> use as the icon just like the other

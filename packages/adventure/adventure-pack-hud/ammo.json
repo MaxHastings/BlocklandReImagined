@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "slot": "hud.overlay",
+  "anchor": "bottom_right",
+  "title": "AMMO",
+  "background": [0.06, 0.06, 0.06, 0.75],
+  "accent": [0.95, 0.72, 0.3, 1.0],
+  "text": [0.96, 0.94, 0.88, 1.0],
+  "rows": [
+    { "label": "Rounds", "bind": "adventure-pack-rules:player/hud" }
+  ],
+  "holding": ["adventure-pack"]
+}

@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "script": "adventure.rhai",
+  "on_spawn": true,
+  "on_damage": true,
+  "on_pickup": true,
+  "on_drop": true,
+  "commands": [
+    { "name": "equip", "tool_only": true },
+    { "name": "fired", "tool_only": true },
+    { "name": "check", "tool_only": true },
+    { "name": "reloaded", "tool_only": true },
+    { "name": "interrupt", "tool_only": true },
+    { "name": "reload", "tool_only": true }
+  ],
+  "state": {
+    "player": {
+      "mags": { "default": {}, "persist": false },
+      "reserve": { "default": {}, "persist": false },
+      "hud": { "default": "", "visible": "owner", "persist": false }
+    }
+  }
+}

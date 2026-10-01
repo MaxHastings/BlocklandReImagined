@@ -25,8 +25,22 @@ pub struct Spec {
     pub schema_version: u32,
     /// The stock item whose icon's pose and framing this one takes.
     pub pose_like: String,
+    /// How the model fills the picture: `like` (the default) at the stock
+    /// item's size and place, for a model of about its size; `model` turned
+    /// as it is but sized to fill the picture as the stock icon does, for a
+    /// longer or smaller model (a rifle posed like the gun).
+    #[serde(default)]
+    pub frame: Frame,
     #[serde(default)]
     pub look: Look,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Frame {
+    #[default]
+    Like,
+    Model,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
@@ -428,10 +442,50 @@ fn veined(local: Vec3, n: Vec3, light: Vec3, shell: Vec3, vein: Vec3) -> Vec3 {
 /// Render the icon `spec` asks for: `mesh` posed like `reference` (the
 /// stock item's model and its icon).
 pub fn render_like(spec: &Spec, mesh: &Mesh, reference: (&Mesh, &SceneImage), label: &str) -> Result<SceneImage> {
+    let pose = fit_pose(reference.0, reference.1)
+        .with_context(|| format!("{}'s model does not match its icon", spec.pose_like))?
+        .0;
+    render_posed(spec, mesh, &pose, reference.1, label)
+}
+
+/// [`render_like`] from the stock item's pose, already fitted to its
+/// `icon` (a pose is fitted once for every icon posed like that item).
+pub fn render_posed(spec: &Spec, mesh: &Mesh, pose: &Pose, icon: &SceneImage, label: &str) -> Result<SceneImage> {
     ensure!(!mesh.indices.is_empty(), "the item has no model to draw");
-    let (pose, _) = fit_pose(reference.0, reference.1)
-        .with_context(|| format!("{}'s model does not match its icon", spec.pose_like))?;
+    let pose = match spec.frame {
+        Frame::Like => *pose,
+        Frame::Model => filled(mesh, pose, icon).context("the model has no size to draw")?,
+    };
     Ok(render(mesh, &pose, &spec.look, label))
+}
+
+/// `pose`'s turn, with `mesh` sized and centred to fill the picture within
+/// the stock icon's own margin (its outline's nearest gap to an edge).
+fn filled(mesh: &Mesh, pose: &Pose, icon: &SceneImage) -> Option<Pose> {
+    const GRID: usize = 64;
+    let (lo, hi) = bounds(&icon_mask(icon, GRID, GRID), GRID)?;
+    let margin = lo.min_element().min(GRID as f32 - hi.max_element()).max(0.0);
+    let to_icon = Vec2::new(pose.size[0] as f32, pose.size[1] as f32) / GRID as f32;
+    let want = (Vec2::splat(GRID as f32 - 2.0 * margin) * to_icon).max(Vec2::ONE);
+    let mut low = Vec2::splat(f32::MAX);
+    let mut high = Vec2::splat(f32::MIN);
+    for p in &mesh.positions {
+        let q = pose.rotation * *p;
+        let s = Vec2::new(q.x, -q.y);
+        low = low.min(s);
+        high = high.max(s);
+    }
+    let extent = high - low;
+    if !(extent.x > 1e-6 && extent.y > 1e-6) {
+        return None;
+    }
+    let scale = (want.x / extent.x).min(want.y / extent.y);
+    let middle = Vec2::new(pose.size[0] as f32, pose.size[1] as f32) * 0.5;
+    Some(Pose {
+        scale,
+        centre: middle - (low + high) * 0.5 * scale,
+        ..*pose
+    })
 }
 
 #[cfg(test)]
@@ -488,6 +542,31 @@ mod tests {
         let agree = overlap(&covered(&redrawn), &covered(&icon));
         assert!(agree > 0.9, "redrawn icon overlaps the stock one {agree}");
         assert_eq!([redrawn.width, redrawn.height], [64, 64]);
+    }
+
+    /// A model three times the stock one's length, framed `model`, fills
+    /// the picture within the stock icon's margin instead of running off it.
+    #[test]
+    fn a_long_model_framed_by_itself_fills_the_picture() {
+        let stock = gun();
+        let truth = Pose { rotation: euler(0.7, 0.35, 0.5), scale: 20.0, centre: Vec2::new(32.0, 32.0), size: [64, 64] };
+        let icon = picture(&stock, &truth);
+        let (pose, _) = fit_pose(&stock, &icon).expect("fits");
+        let mut long = gun();
+        for p in &mut long.positions {
+            p.x *= 3.0;
+        }
+        let covered = |img: &SceneImage| img.rgba.chunks_exact(4).map(|p| p[3] >= 128).collect::<Vec<_>>();
+        let spec = |frame| Spec { schema_version: 1, pose_like: "stock".into(), frame, look: Look { base: [1.0; 3], skin: None } };
+        let like = covered(&render_posed(&spec(Frame::Like), &long, &pose, &icon, "like").unwrap());
+        let edge = |mask: &[bool]| (0..64).any(|i| mask[i] || mask[63 * 64 + i] || mask[i * 64] || mask[i * 64 + 63]);
+        assert!(edge(&like), "at the stock size the long model runs off the picture");
+        let filled = covered(&render_posed(&spec(Frame::Model), &long, &pose, &icon, "model").unwrap());
+        assert!(!edge(&filled), "framed by itself it stays inside");
+        let (lo, hi) = bounds(&filled, 64).expect("drawn");
+        let (slo, shi) = bounds(&covered(&icon), 64).unwrap();
+        let margin = slo.min_element().min(64.0 - shi.max_element());
+        assert!((hi - lo).max_element() >= 64.0 - 2.0 * margin - 2.0, "it fills the picture: {lo} {hi}");
     }
 
     /// Something else entirely does not pass for the stock item.

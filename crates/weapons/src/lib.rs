@@ -3,6 +3,7 @@ use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 pub mod debris;
+pub mod own_model;
 mod merge;
 pub mod rotation;
 pub use merge::{resource_root, sound_root};

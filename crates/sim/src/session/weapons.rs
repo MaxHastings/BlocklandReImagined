@@ -539,18 +539,19 @@ impl Session {
                     target: TargetId::Actor(target),
                     amount,
                     kind,
-                    ..
+                    position,
                 } => {
                     let direct = self
                         .weapons
                         .pack
                         .damage_type(&kind)
                         .is_some_and(|t| t.direct);
-                    self.damage_player(
+                    self.damage_player_at(
                         target.0,
                         amount,
                         combat::DamageKind::Weapon { name: kind, direct },
                         shooter(source),
+                        Some(position),
                     )?;
                 }
                 WeaponEvent::Impulse {

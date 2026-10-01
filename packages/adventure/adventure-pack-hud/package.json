@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "id": "adventure-pack-hud",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Adventure Pack Ammo",
+  "description": "The Adventure Pack's ammo counter: rounds in the magazine and in reserve, shown while an Adventure Pack gun is in hand.",
+  "authors": ["Blockland ReImagined"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "dependencies": { "adventure-pack-rules": "^1.0.0" },
+  "provides": [
+    { "kind": "hud", "id": "adventure-pack-hud:hud/ammo", "file": "ammo.json" }
+  ]
+}

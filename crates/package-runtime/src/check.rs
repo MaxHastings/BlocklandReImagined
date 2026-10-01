@@ -234,18 +234,47 @@ pub fn check(folder: &Path) -> Report {
         let Ok(bytes) = std::fs::read(&file) else {
             continue;
         };
-        if let Err(e) = bri_weapons::Pack::from_json(&bytes) {
-            diagnostics.push(
-                Diagnostic::error("check.weapons", format!("{e:#}"))
-                    .at(format!("{}/assets/weapons.json", manifest.id))
-                    .hint("compare it with packages/samples/sample-bubble-blaster/assets/weapons.json"),
-            );
-            continue;
+        let pack = match bri_weapons::Pack::from_json(&bytes) {
+            Ok(pack) => pack,
+            Err(e) => {
+                diagnostics.push(
+                    Diagnostic::error("check.weapons", format!("{e:#}"))
+                        .at(format!("{}/assets/weapons.json", manifest.id))
+                        .hint("compare it with packages/samples/sample-bubble-blaster/assets/weapons.json"),
+                );
+                continue;
+            }
+        };
+        let assets = parent.join(dir).join("assets");
+        // The Add-On's own models (`bri_weapons::own_model`), drawn as the
+        // game draws them; any other name borrows a stock model.
+        let mut borrows = false;
+        let names: std::collections::BTreeSet<&str> = pack
+            .items
+            .values()
+            .map(|i| i.model.as_str())
+            .chain(pack.images.values().map(|i| i.model.as_str()))
+            .chain(pack.projectiles.values().map(|p| p.model.as_str()))
+            .filter(|m| !m.is_empty())
+            .collect();
+        for name in names {
+            match bri_weapons::own_model::read(&assets, name) {
+                Ok(Some(_)) => {}
+                Ok(None) => borrows = true,
+                Err(e) => diagnostics.push(
+                    Diagnostic::warning("check.weapons.model", format!("{e:#}"))
+                        .at(format!("{}/assets/{}", manifest.id, bri_weapons::own_model::file_of(name).unwrap_or_default()))
+                        .hint("players see no model for it; see docs/modding/README.md section 5, Your own models"),
+                ),
+            }
         }
         // Presentation is how items look. Without it the game still loads
-        // the Add-On: items use the stock models and icons they name, and
-        // one the base game lacks shows no model and its first letter.
-        if let Some(problem) = presentation_problem(&parent.join(dir).join("assets"), &bytes) {
+        // the Add-On: items use their own models, or the stock models and
+        // icons they name, and one the base game lacks shows no model and
+        // its first letter.
+        if let Some(problem) = presentation_problem(&assets, &bytes)
+            && (borrows || assets.join("presentation.json").is_file())
+        {
             diagnostics.push(
                 Diagnostic::warning("check.weapons.presentation", problem)
                     .at(format!("{}/assets/presentation.json", manifest.id))

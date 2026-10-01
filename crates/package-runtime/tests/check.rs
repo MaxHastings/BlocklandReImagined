@@ -217,3 +217,50 @@ fn stale_or_missing_item_presentation_warns_without_failing() {
         "{report}"
     );
 }
+
+/// The Adventure Pack draws only its own models (`<name>.shape.json` beside
+/// its weapons), so it checks without the borrowed-art warning, and its
+/// rules and ammo panel check with it. A model whose texture is missing is
+/// named.
+#[test]
+fn an_add_on_with_its_own_models_checks_clean_and_a_broken_model_is_named() {
+    let adventure = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/adventure");
+    for name in ["adventure-pack", "adventure-pack-rules", "adventure-pack-hud"] {
+        let report = check(&adventure.join(name));
+        assert!(report.ok, "{report}");
+        assert!(report.diagnostics.is_empty(), "{report}");
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let broken = dir.path().join("adventure-pack");
+    let copy = |from: &Path, to: &Path| {
+        std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+        std::fs::copy(from, to).unwrap();
+    };
+    let assets = adventure.join("adventure-pack/assets");
+    copy(&adventure.join("adventure-pack/package.json"), &broken.join("package.json"));
+    for entry in walk(&assets) {
+        let relative = entry.strip_prefix(&assets).unwrap();
+        // Every texture left out.
+        if relative.extension().is_some_and(|e| e == "png") && relative.starts_with("models") {
+            continue;
+        }
+        copy(&entry, &broken.join("assets").join(relative));
+    }
+    let report = check(&broken);
+    assert!(report.ok, "{report}");
+    assert!(codes(&report).contains(&"check.weapons.model"), "{report}");
+}
+
+fn walk(dir: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            files.extend(walk(&path));
+        } else {
+            files.push(path);
+        }
+    }
+    files
+}
