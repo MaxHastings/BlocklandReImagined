@@ -1056,3 +1056,291 @@ fn a_copy_floats_admin_only_for_administrators_alone() {
     assert!(matches!(floated, Ok(Reply::Planted(_))), "{floated:?}");
     assert_eq!(g.bricks().len(), before + 1);
 }
+
+/// A brick built on someone else's stands in their stack (v20's
+/// `stackBL_ID`); a copy rule with `stack` lets the stack's owner copy and
+/// cut what others built on it with only build trust between them.
+#[test]
+fn a_stack_owner_copies_and_cuts_what_others_built_on_their_stack() {
+    let mut g = Game::new();
+    let verified = |g: &mut Game, name: &str, x: f32, key: u8| {
+        g.s.join_verified(
+            name.into(),
+            Vec3::new(x, 0.05, 3.0),
+            false,
+            Some(bri_admin::Principal([key; 32])),
+        )
+        .unwrap()
+    };
+    let ann = verified(&mut g, "Ann", 0.0, 1);
+    let bob = verified(&mut g, "Bob", 2.0, 2);
+    g.cmd(ann, Command::TrustInvite { target: bob, level: 1 }).unwrap();
+    g.cmd(bob, Command::AcceptTrust { from: ann }).unwrap();
+    let a = g.plant(ann, [0.5, 0.1, 0.25]);
+    let b = g.plant(bob, [0.5, 0.3, 0.25]);
+    let c = g.plant(bob, [0.5, 0.5, 0.25]);
+    let own = g.plant(bob, [3.5, 0.1, 0.25]);
+    let sim = g.s.simulation();
+    assert_eq!(sim.stack_owner(a), Some(ann));
+    assert_eq!(sim.stack_owner(b), Some(ann), "built on Ann's plate");
+    assert_eq!(sim.stack_owner(c), Some(ann), "built on Bob's, in Ann's stack");
+    assert_eq!(sim.stack_owner(own), Some(bob));
+
+    let up = StackReach {
+        up: true,
+        limited: true,
+    };
+    let full = CopyRule {
+        trust: bri_package_runtime::ops::CopyTrust::Full,
+        admin: false,
+        ..CopyRule::default()
+    };
+    // Full trust needed: Bob's bricks stop the copy, as they are not
+    // Ann's to change...
+    let copied = g.s.copy_build(ann, a, 100, up, full, TOOL, "advanced-duplicator");
+    assert_eq!(copied.selection.bricks.len(), 1, "{:?}", copied.error);
+    // ...unless the rule counts the stack: they stand on hers.
+    let stacked = CopyRule { stack: true, ..full };
+    let copied = g.s.copy_build(ann, a, 100, up, stacked, TOOL, "advanced-duplicator");
+    assert_eq!(copied.selection.bricks.len(), 3, "{:?}", copied.error);
+    g.steps(61);
+    g.typed(ann, "cuteach");
+    finish_work(&mut g, ann);
+    let world = g.bricks();
+    assert!(![a, b, c].iter().any(|id| world.contains_key(id)), "all three cut");
+    assert!(world.contains_key(&own));
+    // Put back by the undo, they are still in Ann's stack.
+    g.undo(ann);
+    finish_work(&mut g, ann);
+    let world = g.bricks();
+    assert_eq!(world.len(), 4);
+    let sim = g.s.simulation();
+    assert!(world
+        .iter()
+        .filter(|(_, brick)| brick.owner == bob && brick.position[0] < 1.0)
+        .all(|(id, _)| sim.stack_owner(*id) == Some(ann)));
+}
+
+/// `mirror_ghost` turns a player's ghost brick into its mirror image where
+/// it stands, as a mirrored copy places the same brick: a wedge becomes
+/// its twin, mirroring again brings it back, and a brick with no image in
+/// that mirror stays as it is with the Add-On's line.
+#[test]
+fn a_ghost_brick_mirrors_into_its_twin_where_it_stands() {
+    use bri_sim::session::{BrickHand, GhostBrick};
+    let mut g = Game::new();
+    let host = host(&mut g);
+    g.cmd(
+        host,
+        Command::BrickHand(BrickHand {
+            stocked: true,
+            equipped: true,
+            ghost: true,
+        }),
+    )
+    .unwrap();
+    let ghost = |definition: &str, quarter_turns: u8| GhostBrick {
+        definition: definition.into(),
+        position: [0.25, 0.3, 0.5],
+        quarter_turns,
+        color: 0,
+        print: None,
+    };
+    g.cmd(host, Command::GhostBrick(Some(ghost("wedge-right", 1)))).unwrap();
+    g.notices(host);
+    g.typed(host, "mirghostx");
+    let mirrored = g.notices(host).into_iter().find_map(|n| match n {
+        Notice::MirrorGhost {
+            definition,
+            quarter_turns,
+        } => Some((definition, quarter_turns)),
+        _ => None,
+    });
+    // The same brick copied and placed mirrored across x.
+    let wedge = Brick::new(ContentRef::Resolved("wedge-right".into()), [0.25, 0.3, 0.5], host);
+    let mut turned = wedge.clone();
+    turned.quarter_turns = 1;
+    let defs = definitions();
+    let copy = bri_sim::blueprint::Blueprint::capture(TOOL, &[turned], &defs).unwrap();
+    let mut mirrors = bri_sim::mirror::Mirrors::default();
+    let (seen, inexact) = copy.seen(false, true, |id, r| mirrors.image_in(&defs, id, r));
+    assert!(inexact.side.is_empty());
+    let expected = seen.brick(0);
+    let ContentRef::Resolved(kind) = &expected.definition else {
+        unreachable!()
+    };
+    assert_eq!(kind, "wedge-left");
+    assert_eq!(mirrored, Some((kind.clone(), expected.quarter_turns)));
+    // Mirrored again, it is the wedge it was.
+    g.typed(host, "mirghostx");
+    let back = g.notices(host).into_iter().find_map(|n| match n {
+        Notice::MirrorGhost {
+            definition,
+            quarter_turns,
+        } => Some((definition, quarter_turns)),
+        _ => None,
+    });
+    assert_eq!(back, Some(("wedge-right".to_string(), 1)));
+    // A wedge has no image upside down.
+    g.typed(host, "mirghosty");
+    let told = g.notices(host);
+    assert!(!told.iter().any(|n| matches!(n, Notice::MirrorGhost { .. })));
+    assert!(
+        told.iter().any(|n| matches!(n, Notice::Chat(t) if t == "That brick has no image upside down")),
+        "{told:?}"
+    );
+    // With no ghost out, nothing is mirrored.
+    g.cmd(
+        host,
+        Command::BrickHand(BrickHand {
+            stocked: true,
+            equipped: false,
+            ghost: false,
+        }),
+    )
+    .unwrap();
+    g.notices(host);
+    g.typed(host, "mirghostx");
+    assert!(!g.notices(host).iter().any(|n| matches!(n, Notice::MirrorGhost { .. })));
+}
+
+/// A copy carries its bricks' names, lights, emitters, items and events
+/// (the New Duplicator's `recordBrickData`), and a plant gives them back
+/// under the player's own wrench rules, turned with the copy
+/// (`ndTransformDirection`): a quarter turn faces the emitter, the item,
+/// the directional relay, a direction choice and a vector round with it,
+/// and a light the server no longer has stays off. They keep in a saved
+/// copy.
+#[test]
+fn a_copy_carries_its_bricks_settings_and_turns_them_with_it() {
+    use bri_sim::session::{ToolCatalog, WrenchProperties};
+    use bri_world::{EventRow, EventTarget, EventValue, ItemSpawn, authority::Edit};
+    const ITEM: &str = "advanced-duplicator-tool:weapon/advanced-duplicator";
+    let mut g = Game::new();
+    let catalog = |light: bool| {
+        let mut tools = ToolCatalog::default();
+        if light {
+            tools.lights.insert("light-a".into());
+        }
+        tools.emitters.insert("emitter-a".into());
+        tools.items.insert(ITEM.into());
+        tools
+    };
+    g.s.set_tool_catalog(catalog(true)).unwrap();
+    let mut events = bri_events::testing::catalog();
+    let output = |name: &str, params| bri_events::OutputDef {
+        id: format!("out/fxDTSBrick/{name}"),
+        class_name: "fxDTSBrick".into(),
+        name: name.into(),
+        params,
+        append_client: false,
+        source: "fixture".into(),
+        source_line: 1,
+        package: None,
+    };
+    events.outputs.push(output("fireRelayNorth", vec![]));
+    events.outputs.push(output("fireRelayEast", vec![]));
+    let sides = ["North", "East", "South", "West"];
+    events.outputs.push(output(
+        "setItemDirection",
+        vec![bri_events::Param::List {
+            items: sides
+                .iter()
+                .zip(2..)
+                .map(|(s, n)| (s.to_string(), n))
+                .collect(),
+        }],
+    ));
+    g.s.set_event_catalog(events, Vec::new()).unwrap();
+    let host = host(&mut g);
+    let a = g.plant(host, [0.5, 0.1, 0.25]);
+    g.s.edit_brick(
+        host,
+        a,
+        Edit::Properties(WrenchProperties {
+            name: Some("door".into()),
+            light: Some("light-a".into()),
+            emitter: Some("emitter-a".into()),
+            emitter_direction: 3,
+            item_spawn: ItemSpawn {
+                item: Some(ContentRef::Resolved(ITEM.into())),
+                position: 2,
+                direction: 2,
+                respawn_ms: 4000,
+            },
+            raycast: true,
+            colliding: true,
+            visible: true,
+            ..Default::default()
+        }),
+    )
+    .unwrap();
+    let row = |target, output: &str, params| EventRow {
+        preserved: None,
+        enabled: true,
+        input: "onActivate".into(),
+        delay_ms: 100,
+        target,
+        output: output.into(),
+        params,
+    };
+    let own = || EventTarget::Slot(bri_events::Slot::SelfBrick);
+    g.s.edit_brick(
+        host,
+        a,
+        Edit::Events(vec![
+            row(own(), "fireRelayNorth", vec![]),
+            row(own(), "setItemDirection", vec![EventValue::Int(3)]),
+            row(
+                EventTarget::Slot(bri_events::Slot::Player),
+                "addVelocity",
+                vec![EventValue::Vector(Vec3::new(1.0, 0.0, 0.0))],
+            ),
+        ]),
+    )
+    .unwrap();
+    assert_eq!(
+        copy_box(&mut g, host, [0.0, 0.0, 0.0], [1.0, 0.2, 0.5], 10),
+        Ok(1)
+    );
+    let copy = g.s.blueprint(host).unwrap().clone();
+    assert_eq!(copy.extras.len(), 1);
+    // Kept in a saved copy as they were.
+    let saved: bri_sim::blueprint::Blueprint =
+        serde_json::from_slice(&serde_json::to_vec(&copy).unwrap()).unwrap();
+    saved.validate().unwrap();
+    assert_eq!(saved, copy);
+    // The light goes from the server before the plant.
+    g.s.set_tool_catalog(catalog(false)).unwrap();
+    let before: Vec<BrickId> = g.bricks().into_keys().collect();
+    let Ok(Reply::Planted(_)) = g.place(host, [4.0, 0.0, 4.0], 1, false) else {
+        panic!("the copy plants")
+    };
+    let bricks = g.bricks();
+    let (_, planted) = bricks.iter().find(|(id, _)| !before.contains(id)).unwrap();
+    assert_eq!(planted.owner, host);
+    assert_eq!(planted.name.as_deref(), Some("door"));
+    assert!(planted.light.is_none(), "the server has no such light now");
+    let emitter = planted.emitter.as_ref().unwrap();
+    assert_eq!(
+        emitter.asset,
+        Some(ContentRef::Resolved("emitter-a".into()))
+    );
+    assert_eq!(emitter.direction, 4, "east turned a quarter faces south");
+    let item = &planted.item_spawn;
+    assert_eq!(item.item, Some(ContentRef::Resolved(ITEM.into())));
+    assert_eq!(
+        (item.position, item.direction),
+        (3, 3),
+        "north turned faces east"
+    );
+    assert_eq!(planted.events.len(), 3);
+    assert_eq!(planted.events[0].output, "fireRelayEast");
+    assert_eq!(planted.events[1].params, vec![EventValue::Int(4)]);
+    let EventValue::Vector(v) = planted.events[2].params[0] else {
+        panic!("a vector")
+    };
+    assert!(v.distance(Vec3::new(0.0, 0.0, 1.0)) < 1e-5, "{v}");
+    // The original keeps its own.
+    assert_eq!(bricks[&a].events[0].output, "fireRelayNorth");
+}

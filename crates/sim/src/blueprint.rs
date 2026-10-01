@@ -12,13 +12,20 @@
 //! ([`CopyBrick`]: its kind and paint as indices, about 32 bytes, where a
 //! world brick takes over 500) and is made a world brick only as it is
 //! placed ([`Placement`]), a slice at a time.
+//!
+//! The few bricks that carry more than a shape and a look (a name, a
+//! light, an emitter, an item, music, a vehicle, events) keep that apart
+//! ([`CopyExtras`]); it goes into the world under the player's own wrench
+//! rules as the copy plants, turned and mirrored with it.
 use crate::{
     definitions::Definitions,
     grid::Bounds,
     mirror::{MirrorImage, Reflection},
 };
 use anyhow::{Context, Result, ensure};
-use bri_world::{Brick, ContentRef};
+use bri_world::{
+    Brick, ContentRef, Emitter, EventRow, EventTarget, EventValue, ItemSpawn, Light, VehicleSpawn,
+};
 use glam::Vec3;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -48,6 +55,10 @@ pub struct Blueprint {
     pub prints: Vec<ContentRef>,
     /// The bricks, positions relative to the pivot.
     pub bricks: Vec<CopyBrick>,
+    /// What some of the bricks carry besides their shape and look, in
+    /// brick order. Never sent to show the ghost.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extras: Vec<CopyExtras>,
 }
 
 /// One brick of a copy: its shape and look, owned by nobody.
@@ -80,6 +91,234 @@ fn is_zero(v: &u8) -> bool {
 const NO_RAYCAST: u8 = 1;
 const NO_COLLIDE: u8 = 2;
 const HIDDEN: u8 = 4;
+
+/// What one brick of a copy carries besides its shape and look: its name,
+/// light, emitter, item spawn, music, vehicle and events (`recordBrickData`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CopyExtras {
+    /// Index into [`Blueprint::bricks`].
+    pub brick: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub light: Option<ContentRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emitter: Option<Emitter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item: Option<ItemSpawn>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sound: Option<ContentRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vehicle: Option<VehicleSpawn>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub events: Vec<EventRow>,
+}
+impl CopyExtras {
+    /// What `brick` (brick `index` of a copy) carries, if anything.
+    pub fn of(index: u32, brick: &Brick) -> Option<Self> {
+        let has = brick.name.is_some()
+            || brick.light.is_some()
+            || brick.emitter.as_ref().is_some_and(|e| e.asset.is_some())
+            || brick.item_spawn.item.is_some()
+            || brick.sound.is_some()
+            || brick.vehicle.is_some()
+            || !brick.events.is_empty();
+        has.then(|| Self {
+            brick: index,
+            name: brick.name.clone(),
+            light: brick.light.as_ref().map(|l| l.asset.clone()),
+            emitter: brick
+                .emitter
+                .as_deref()
+                .filter(|e| e.asset.is_some())
+                .cloned(),
+            item: brick
+                .item_spawn
+                .item
+                .is_some()
+                .then(|| brick.item_spawn.clone()),
+            sound: brick.sound.clone(),
+            vehicle: brick.vehicle.as_deref().cloned(),
+            events: brick.events.clone(),
+        })
+    }
+
+    /// Put these on `brick`, as it was when they were taken.
+    pub fn put_on(&self, brick: &mut Brick) {
+        brick.name.clone_from(&self.name);
+        brick.light = self.light.clone().map(|asset| {
+            Box::new(Light {
+                asset,
+                enabled: true,
+            })
+        });
+        brick.emitter = self.emitter.clone().map(Box::new);
+        brick.item_spawn = self.item.clone().unwrap_or_default();
+        brick.sound.clone_from(&self.sound);
+        brick.vehicle = self.vehicle.clone().map(Box::new);
+        brick.events.clone_from(&self.events);
+    }
+
+    /// These as the copy is placed, turned `turns` and upside down and
+    /// mirrored as asked: the emitter's and item's directions, the
+    /// directional relays and the events' vectors and direction choices
+    /// (`catalog` says which parameters are those) turn with it, as
+    /// `ndTransformDirection` turned them. Rows aimed at a named brick turn
+    /// only when the copy has a brick of that name (`named`), as the New
+    /// Duplicator did.
+    pub fn placed(
+        &self,
+        turns: u8,
+        look: (bool, bool),
+        named: impl Fn(&str) -> bool,
+        catalog: Option<&bri_events::Catalog>,
+    ) -> Self {
+        let mut extras = self.clone();
+        if let Some(emitter) = &mut extras.emitter {
+            emitter.direction = turn_direction(emitter.direction, turns, look);
+        }
+        if let Some(item) = &mut extras.item {
+            item.position = turn_direction(item.position, turns, look);
+            item.direction = turn_direction(item.direction, turns, look);
+        }
+        for row in &mut extras.events {
+            if !turns_with_copy(&row.target, &named) {
+                continue;
+            }
+            if let Some(dir) = relay_direction(&row.output) {
+                let turned = turn_direction(dir, turns, look);
+                row.output = RELAYS[usize::from(turned)].into();
+            }
+            let params = catalog
+                .and_then(|c| c.row_output(&row.input, &row.target, &row.output).ok())
+                .map(|(_, output)| output.params.as_slice())
+                .unwrap_or_default();
+            for (k, value) in row.params.iter_mut().enumerate() {
+                match (value, params.get(k)) {
+                    (EventValue::Vector(v), _) => *v = turn_vector(*v, turns, look),
+                    (EventValue::Int(n), Some(bri_events::Param::List { items })) => {
+                        let label = |n: i64| items.iter().find(|(_, v)| *v == n).map(|(l, _)| l);
+                        let Some(dir) = label(*n).and_then(|l| {
+                            DIRECTIONS.iter().position(|d| d.eq_ignore_ascii_case(l))
+                        }) else {
+                            continue;
+                        };
+                        let turned =
+                            DIRECTIONS[usize::from(turn_direction(dir as u8, turns, look))];
+                        if let Some((_, v)) =
+                            items.iter().find(|(l, _)| l.eq_ignore_ascii_case(turned))
+                        {
+                            *n = *v;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        extras
+    }
+
+    /// Every palette index these name (their events' colours), through
+    /// `remap`.
+    pub fn recolor(&mut self, mut remap: impl FnMut(u8) -> u8) {
+        for value in self.events.iter_mut().flat_map(|e| &mut e.params) {
+            if let EventValue::Color(c) = value {
+                *c = remap(*c);
+            }
+        }
+    }
+
+    fn validate(&self) -> Result<()> {
+        let plain = |s: &str| !s.chars().any(char::is_control);
+        ensure!(
+            self.name
+                .as_deref()
+                .is_none_or(|n| !n.is_empty() && n.len() <= 256 && plain(n))
+                && self
+                    .emitter
+                    .as_ref()
+                    .is_none_or(|e| e.direction <= 5 && e.asset.is_some())
+                && self.events.len() <= bri_world::MAX_EVENTS_PER_BRICK,
+            "Invalid copied brick settings"
+        );
+        for asset in [&self.light, &self.sound].into_iter().flatten() {
+            asset.validate()?;
+        }
+        if let Some(asset) = self.emitter.as_ref().and_then(|e| e.asset.as_ref()) {
+            asset.validate()?;
+        }
+        if let Some(item) = &self.item {
+            item.validate()?;
+        }
+        if let Some(vehicle) = &self.vehicle {
+            vehicle.vehicle.validate()?;
+        }
+        Ok(())
+    }
+}
+
+/// v20's directional relays, by direction (up, down, north, east, south,
+/// west).
+const RELAYS: [&str; 6] = [
+    "fireRelayUp",
+    "fireRelayDown",
+    "fireRelayNorth",
+    "fireRelayEast",
+    "fireRelaySouth",
+    "fireRelayWest",
+];
+
+/// v20's direction choices in events, in the same order.
+const DIRECTIONS: [&str; 6] = ["Up", "Down", "North", "East", "South", "West"];
+
+fn relay_direction(output: &str) -> Option<u8> {
+    RELAYS
+        .iter()
+        .position(|r| r.eq_ignore_ascii_case(output))
+        .map(|i| i as u8)
+}
+
+/// Whether a row aimed at `target` turns with the copy: one aimed at the
+/// brick itself or a player, or at a named brick the copy has.
+fn turns_with_copy(target: &EventTarget, named: &impl Fn(&str) -> bool) -> bool {
+    match target {
+        EventTarget::Named(name) => named(name),
+        _ => true,
+    }
+}
+
+/// A v20 direction (0 up, 1 down, 2 north, 3 east, 4 south, 5 west) as a
+/// copy turned `turns` quarter turns, upside down and mirrored across its
+/// x axis as asked, sees it (`ndTransformDirection`).
+pub fn turn_direction(dir: u8, turns: u8, (flipped, mirrored): (bool, bool)) -> u8 {
+    match dir {
+        0 | 1 if flipped => 1 - dir,
+        0 | 1 => dir,
+        2..=5 => {
+            // Across x, east and west change places.
+            let dir = if mirrored && dir % 2 == 1 {
+                dir + 2
+            } else {
+                dir
+            };
+            (dir - 2 + turns) % 4 + 2
+        }
+        _ => dir,
+    }
+}
+
+/// A vector of a copy's events (world axes) as the copy is placed.
+pub fn turn_vector(v: Vec3, turns: u8, (flipped, mirrored): (bool, bool)) -> Vec3 {
+    let mut v = v;
+    if mirrored {
+        v.x = -v.x;
+    }
+    if flipped {
+        v.y = -v.y;
+    }
+    turn(v, turns)
+}
 
 /// The bricks of a mirrored or upside-down copy that had no exact image
 /// (see [`crate::mirror`]): their definitions, each once, in copy order.
@@ -129,6 +368,7 @@ pub struct CopyBuilder {
     prints: Vec<ContentRef>,
     print_of: HashMap<ContentRef, u32>,
     bricks: Vec<CopyBrick>,
+    extras: Vec<CopyExtras>,
     min: [i32; 3],
     max: [i32; 3],
     /// The pivot, once centering began, and the bricks moved round it.
@@ -144,6 +384,7 @@ impl CopyBuilder {
             prints: Vec::new(),
             print_of: HashMap::new(),
             bricks: Vec::new(),
+            extras: Vec::new(),
             min: [i32::MAX; 3],
             max: [i32::MIN; 3],
             pivot: None,
@@ -161,10 +402,10 @@ impl CopyBuilder {
     pub fn reserve(&mut self, more: usize) {
         self.bricks.reserve(more);
     }
-    /// Take `brick` as it stands: only its shape and look come along
-    /// (owner, name, events, lights, emitters, items, sounds and vehicles
-    /// stay with the original). Refused when it is off the grid or of a
-    /// kind this server lacks, or the copy is full.
+    /// Take `brick` as it stands: its shape and look, and its name,
+    /// light, emitter, item, music, vehicle and events ([`CopyExtras`]);
+    /// its owner stays with the original. Refused when it is off the grid
+    /// or of a kind this server lacks, or the copy is full.
     pub fn push(&mut self, brick: &Brick, definitions: &Definitions) -> Result<()> {
         self.push_moved(brick, [0.0; 3], definitions)
     }
@@ -206,6 +447,9 @@ impl CopyBuilder {
         for axis in 0..3 {
             self.min[axis] = self.min[axis].min(bounds.min[axis]);
             self.max[axis] = self.max[axis].max(bounds.max()[axis]);
+        }
+        if let Some(extras) = CopyExtras::of(self.bricks.len() as u32, brick) {
+            self.extras.push(extras);
         }
         let off = (u8::from(!brick.raycast) * NO_RAYCAST)
             | (u8::from(!brick.colliding) * NO_COLLIDE)
@@ -259,6 +503,7 @@ impl CopyBuilder {
             kinds: self.kinds,
             prints: self.prints,
             bricks: self.bricks,
+            extras: self.extras,
         })
     }
 }
@@ -445,7 +690,34 @@ impl Blueprint {
                 "Invalid copied brick"
             );
         }
+        ensure!(
+            self.extras.windows(2).all(|w| w[0].brick < w[1].brick)
+                && self
+                    .extras
+                    .last()
+                    .is_none_or(|e| (e.brick as usize) < self.bricks.len()),
+            "Invalid copied brick settings"
+        );
+        for extras in &self.extras {
+            extras.validate()?;
+        }
         Ok(())
+    }
+
+    /// What brick `i` carries besides its shape and look, if anything.
+    pub fn extras_of(&self, i: usize) -> Option<&CopyExtras> {
+        self.extras
+            .binary_search_by_key(&i, |e| e.brick as usize)
+            .ok()
+            .map(|at| &self.extras[at])
+    }
+
+    /// The names the copy's bricks have, lower-case.
+    pub fn names(&self) -> std::collections::HashSet<String> {
+        self.extras
+            .iter()
+            .filter_map(|e| e.name.as_ref().map(|n| n.to_ascii_lowercase()))
+            .collect()
     }
 
     /// At most `most` of the copy's bricks, spread evenly through it and
@@ -459,6 +731,7 @@ impl Blueprint {
             kinds: self.kinds.clone(),
             prints: self.prints.clone(),
             bricks: Vec::new(),
+            extras: Vec::new(),
         };
         let n = self.bricks.len();
         ghost.bricks = if n <= most {
@@ -508,6 +781,15 @@ impl Blueprint {
             brick.position = placed.position;
             brick.quarter_turns = placed.quarter_turns;
         }
+        let names = self.names();
+        for extras in &mut copy.extras {
+            *extras = extras.placed(
+                0,
+                (flipped, mirrored),
+                |n| names.contains(&n.to_ascii_lowercase()),
+                None,
+            );
+        }
         (copy, inexact)
     }
 
@@ -540,6 +822,36 @@ impl Blueprint {
         } else {
             [z, y, x]
         }
+    }
+
+    /// The box round the copy placed with its pivot at `anchor`, turned
+    /// `turns`, upside down if `flipped` and mirrored if `mirrored`, as
+    /// [`Placement`] places it: its lowest and highest corners. Worked out
+    /// from its size alone (the pivot is the stud corner nearest the
+    /// middle at the bottom plate), so a big copy costs no more.
+    pub fn ghost_box(
+        &self,
+        anchor: [f32; 3],
+        turns: u8,
+        // Upside down, the copy keeps its bottom and top.
+        (_flipped, mirrored): (bool, bool),
+    ) -> ([f32; 3], [f32; 3]) {
+        let size = Vec3::from(self.size.map(|v| v as f32)) * Vec3::from(crate::grid::CELL);
+        let mut low = Vec3::new(
+            -(self.size[0].div_euclid(2) as f32) * 0.5,
+            0.0,
+            -(self.size[2].div_euclid(2) as f32) * 0.5,
+        );
+        let mut high = low + size;
+        if mirrored {
+            (low.x, high.x) = (-high.x, -low.x);
+        }
+        let (a, b) = (turn(low, turns), turn(high, turns));
+        let anchor = Vec3::from(anchor);
+        (
+            (anchor + a.min(b)).to_array(),
+            (anchor + a.max(b)).to_array(),
+        )
     }
 }
 
@@ -750,6 +1062,43 @@ mod tests {
             }
         }
         assert_eq!(copy.turned_size(1), [1, 4, 2]);
+    }
+
+    #[test]
+    fn a_ghost_box_holds_the_copy_however_it_is_placed() {
+        let defs = definitions();
+        // Lopsided: an odd width, a brick turned, one stacked off centre.
+        let source = [
+            brick("2x1", [0.5, 0.1, 0.25], 0),
+            brick("2x1", [1.25, 0.1, 0.5], 1),
+            brick("1x1", [0.25, 0.5, 0.25], 0),
+        ];
+        let copy = Blueprint::capture("dup:weapon/tool", &source, &defs).unwrap();
+        let same = |id: &str, _| MirrorImage {
+            definition: id.into(),
+            turns: 0,
+            exact: true,
+        };
+        for turns in 0..4 {
+            for look in [(false, false), (true, false), (false, true), (true, true)] {
+                let anchor = [3.0, 1.0, -2.5];
+                let (placement, _) = Placement::new(&copy, anchor, turns, look, same);
+                let (mut low, mut high) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+                for b in &copy.bricks {
+                    let brick = placement.brick(&copy, b);
+                    let bounds = Bounds::new(&brick, &defs.get(&brick).unwrap().mesh).unwrap();
+                    let cell = Vec3::from(crate::grid::CELL);
+                    let min = Vec3::from(bounds.min.map(|v| v as f32)) * cell;
+                    low = low.min(min);
+                    high = high.max(min + Vec3::from(bounds.size.map(|v| v as f32)) * cell);
+                }
+                let (min, max) = copy.ghost_box(anchor, turns, look);
+                assert!(
+                    low.distance(min.into()) < 1e-4 && high.distance(max.into()) < 1e-4,
+                    "{turns} {look:?}: {low}..{high} vs {min:?}..{max:?}"
+                );
+            }
+        }
     }
 
     #[test]

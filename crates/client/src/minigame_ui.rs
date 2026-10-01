@@ -231,14 +231,14 @@ pub fn state(
     }
 }
 
-fn ui_value(v: &SettingValue) -> MiniGameSettingValue {
+pub(crate) fn ui_value(v: &SettingValue) -> MiniGameSettingValue {
     match v {
         SettingValue::Bool(b) => MiniGameSettingValue::Bool(*b),
         SettingValue::Int(n) => MiniGameSettingValue::Int(*n),
         SettingValue::Text(t) => MiniGameSettingValue::Text(t.clone()),
     }
 }
-fn host_value(v: &MiniGameSettingValue) -> SettingValue {
+pub(crate) fn host_value(v: &MiniGameSettingValue) -> SettingValue {
     match v {
         MiniGameSettingValue::Bool(b) => SettingValue::Bool(*b),
         MiniGameSettingValue::Int(n) => SettingValue::Int(*n),
@@ -276,6 +276,8 @@ pub fn with_addon_settings(
             category: s.def.category.clone(),
             title: s.def.title.clone(),
             team: s.def.scope == SettingScope::Team,
+            server: s.def.scope == SettingScope::Server,
+            restart: s.def.restart,
             kind: match s.def.kind {
                 SettingType::Bool => MiniGameSettingKind::Bool,
                 SettingType::Int => MiniGameSettingKind::Int {

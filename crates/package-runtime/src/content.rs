@@ -263,6 +263,12 @@ pub struct Behaviour {
     /// player. Delivered at the start of the next tick.
     #[serde(default)]
     pub on_place: bool,
+    /// `on_copy_ghost(player, info)` as `player` moves, turns, mirrors or
+    /// flips a copy this package gave them to place (its bricks only they
+    /// see), and once it is gone: `info.box` is `#{ min, max }` round it,
+    /// or `()`. Delivered at the start of the next tick.
+    #[serde(default)]
+    pub on_copy_ghost: bool,
     /// `on_activate(player)` as a living player clicks with nothing to
     /// fire (`serverCmdActivateStuff`, which v20 Add-Ons packaged as
     /// `Player::activateStuff`), before the engine's own activation: the

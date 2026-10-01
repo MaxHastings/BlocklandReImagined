@@ -38,6 +38,7 @@ fn options() -> AdminOptions {
             players: 1,
             vehicles: 1,
         },
+        addon_settings: Default::default(),
     }
 }
 
@@ -880,6 +881,43 @@ fn the_environment_window_applies_a_draft_through_the_host() {
     // Nothing changed yet: nothing to apply.
     click(&mut ui, ScreenId::AdminEnvironment, "EnvApply");
     assert!(ui.core.admin.pending.is_empty());
+    // The day/night cycle's check box turns it on (and back off), and
+    // brings its sliders to life.
+    let cycle = |ui: &Ui| ui.core.environment.draft.as_ref().unwrap().day_cycle;
+    click(&mut ui, ScreenId::AdminEnvironment, "EnvDayCycleSimple");
+    assert!(cycle(&ui).is_some(), "the check box did not turn the cycle on");
+    click(&mut ui, ScreenId::AdminEnvironment, "EnvS_TimeOfDay");
+    let at = cycle(&ui).unwrap().time;
+    assert!((at - 0.5).abs() <= 0.02, "{at}");
+    click(&mut ui, ScreenId::AdminEnvironment, "EnvDayCycleSimple");
+    assert_eq!(cycle(&ui), None);
+    click(&mut ui, ScreenId::AdminEnvironment, "EnvDayCycleSimple");
+    click(&mut ui, ScreenId::AdminEnvironment, "EnvApply");
+    let sent = ui.core.admin.pending.values().find_map(|a| match a {
+        AdminAction::SetEnvironment { settings } => settings.day_cycle,
+        _ => None,
+    });
+    assert_eq!(sent.map(|d| d.length_seconds), Some(300.0), "Apply sends the cycle");
+    ui.core.admin.pending.clear();
+    // The same on the Advanced tab, and Vignette Multiply beside it.
+    click(&mut ui, ScreenId::AdminEnvironment, "EnvTabAdvanced");
+    click(&mut ui, ScreenId::AdminEnvironment, "EnvDayCycleAdvanced");
+    assert_eq!(cycle(&ui), None);
+    click(&mut ui, ScreenId::AdminEnvironment, "EnvDayCycleAdvanced");
+    assert!(cycle(&ui).is_some());
+    // Vignette Multiply is the last row, below the page's fold: scroll to it.
+    let (x, y) = ui.control_center(ScreenId::AdminEnvironment, "EnvAdvancedPage").unwrap();
+    ui.handle_input(InputEvent::MouseMove { x, y });
+    ui.handle_input(InputEvent::Wheel { delta: -10.0 });
+    ui.update(16);
+    let (_, y) = ui.control_center(ScreenId::AdminEnvironment, "EnvVignetteMultiply").unwrap();
+    assert!(y < 386.0, "Vignette Multiply is still below the fold at {y}");
+    click(&mut ui, ScreenId::AdminEnvironment, "EnvVignetteMultiply");
+    assert!(ui.core.environment.vignette_multiply());
+    ui.core.environment.reset();
+    ui.handle_input(InputEvent::Wheel { delta: 10.0 });
+    ui.update(16);
+    click(&mut ui, ScreenId::AdminEnvironment, "EnvTabSimple");
     // Advanced: the sun azimuth slider's middle is 180 degrees.
     click(&mut ui, ScreenId::AdminEnvironment, "EnvTabAdvanced");
     click(&mut ui, ScreenId::AdminEnvironment, "EnvA_SunAzimuth");

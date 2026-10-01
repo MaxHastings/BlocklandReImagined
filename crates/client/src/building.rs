@@ -42,6 +42,8 @@ struct CopyGhost {
     /// It turns about the brick it was taken from first (its first
     /// brick) rather than the whole of it ([`Building::pivot_copy`]).
     start: bool,
+    /// Which copy taken this is ([`Building::copy_report`]).
+    serial: u64,
 }
 impl CopyGhost {
     fn place(&mut self) {
@@ -159,6 +161,8 @@ pub struct Building {
     /// A copied build (`Notice::Blueprint`), shown as a ghost and moved by
     /// the brick keys while its tool is in hand.
     copy: Option<CopyGhost>,
+    /// Copies taken so far.
+    copies_taken: u64,
     /// Copies turn about the whole of them, else their start brick.
     pivot_whole: bool,
     /// Bricks' mirror images, found as copies are mirrored; the host finds
@@ -222,6 +226,7 @@ impl Building {
             palette_len: 0,
             ghost: None,
             copy: None,
+            copies_taken: 0,
             pivot_whole: true,
             mirrors: Default::default(),
             outline: None,
@@ -543,7 +548,9 @@ impl Building {
                 for kind in &blueprint.kinds {
                     self.definitions.by_id(kind)?;
                 }
+                self.copies_taken += 1;
                 let mut copy = CopyGhost {
+                    serial: self.copies_taken,
                     anchor: blueprint.origin,
                     blueprint,
                     seen: None,
@@ -584,6 +591,19 @@ impl Building {
         copy.mirrored = !copy.mirrored;
         copy.reseen(&self.definitions, &mut self.mirrors);
         copy.keep_root(root);
+        self.ghost_generation = self.ghost_generation.wrapping_add(1);
+    }
+    /// The ghost brick becomes its mirror image `definition` turned
+    /// `quarter_turns` where it stands (`Notice::MirrorGhost`), until the
+    /// next click puts the brick in hand out again.
+    pub fn mirror_ghost(&mut self, definition: &str, quarter_turns: u8) {
+        let (Some(entry), Some(ghost)) = (self.definitions.entries.get(definition), self.ghost.as_mut())
+        else {
+            return;
+        };
+        ghost.definition = ContentRef::Resolved(definition.into());
+        ghost.quarter_turns = quarter_turns % 4;
+        snap(ghost, &entry.mesh);
         self.ghost_generation = self.ghost_generation.wrapping_add(1);
     }
     /// Turn the copy upside down where it stands (`Notice::FlipCopy`), or
@@ -660,6 +680,20 @@ impl Building {
     /// Where the copy's pivot is and how it is turned, while in hand.
     pub fn copy_pose(&self) -> Option<([f32; 3], u8)> {
         self.active_copy().map(|c| (c.anchor, c.turns))
+    }
+    /// Where the copy in hand stands, for the host to tell its Add-On
+    /// (`Command::CopyPose`), with which copy it is: a new copy is
+    /// reported even where the last one stood.
+    pub fn copy_report(&self) -> Option<(u64, bri_sim::session::CopyPose)> {
+        self.active_copy().map(|c| {
+            let pose = bri_sim::session::CopyPose {
+                anchor: c.anchor,
+                quarter_turns: c.turns,
+                mirrored: c.mirrored,
+                flipped: c.flipped,
+            };
+            (c.serial, pose)
+        })
     }
     fn active_copy(&self) -> Option<&CopyGhost> {
         self.copy
@@ -2049,6 +2083,34 @@ mod tests {
     }
 
     #[test]
+    fn a_mirrored_ghost_takes_its_image_where_it_stands_and_plants_it() {
+        let mut b = controller();
+        assert!(b.ghost().is_none());
+        b.mirror_ghost("plate", 1);
+        assert!(b.ghost().is_none(), "no ghost, nothing to mirror");
+        let mut ghost = Brick::new(ContentRef::Resolved("plate".into()), [0.5, 0.1, 0.25], 1);
+        ghost.color = 0;
+        b.ghost = Some(ghost);
+        let generation = b.ghost_generation();
+        b.mirror_ghost("plate", 1);
+        let mirrored = b.ghost().unwrap();
+        assert_eq!(mirrored.quarter_turns, 1);
+        assert!((mirrored.position[1] - 0.1).abs() < 0.001, "where it stood");
+        assert_ne!(b.ghost_generation(), generation, "redrawn");
+        // Unknown bricks are not taken.
+        b.mirror_ghost("nothing", 2);
+        assert_eq!(b.ghost().unwrap().quarter_turns, 1);
+        let plant = b
+            .ui_action(&UiAction::Game(GameAction::PlantBrick), &player())
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            &plant.commands[..],
+            [Command::Plant { quarter_turns: 1, .. }]
+        ));
+    }
+
+    #[test]
     fn a_ghost_that_would_overlap_or_float_is_blocked() {
         let mut b = controller();
         let plate = |y: f32| {
@@ -2363,6 +2425,27 @@ mod tests {
             assert_eq!(flipped.position[1..], before.position[1..]);
             Bounds::new(flipped, &b.definitions.entries["plate"].mesh).unwrap();
         }
+        // Where the host hears it stands boxes the very bricks shown, for
+        // its Add-On to show the others (`Command::CopyPose`).
+        let (serial, pose) = b.copy_report().unwrap();
+        assert_eq!(
+            (pose.anchor, pose.quarter_turns, pose.mirrored),
+            (anchor, 3, true)
+        );
+        let (min, max) = copy.ghost_box(
+            pose.anchor,
+            pose.quarter_turns,
+            (pose.flipped, pose.mirrored),
+        );
+        let cell = Vec3::from(grid::CELL);
+        let (mut low, mut high) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+        for brick in b.copy_ghost().unwrap() {
+            let bounds = Bounds::new(brick, &b.definitions.entries["plate"].mesh).unwrap();
+            let corner = Vec3::from(bounds.min.map(|v| v as f32)) * cell;
+            low = low.min(corner);
+            high = high.max(corner + Vec3::from(bounds.size.map(|v| v as f32)) * cell);
+        }
+        assert!(low.distance(min.into()) < 1e-4 && high.distance(max.into()) < 1e-4);
         let plant = b
             .ui_action(&UiAction::Game(GameAction::PlantBrick), &player())
             .unwrap()
@@ -2425,6 +2508,9 @@ mod tests {
         b.ui_action(&UiAction::Game(GameAction::CancelBrick), &player())
             .unwrap();
         assert!(b.copy_ghost().is_none());
+        // A new copy is reported even where the last one stood.
+        b.set_blueprint(Some(copy.clone())).unwrap();
+        assert!(b.copy_report().unwrap().0 > serial);
         // A copy of a brick this client cannot draw is refused.
         let mut unknown = copy;
         unknown.kinds[0] = "missing".into();

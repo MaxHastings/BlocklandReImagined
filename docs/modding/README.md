@@ -190,11 +190,11 @@ run are left out. Your rules remove a game's entry when it ends.
 | `aim()`, `me()`, `entities()` | `add_player(p, key, amount)` | `damage(target, amount[, by[, type]])`, `explode(...)`: `damage` |
 | `noise(seed, x, z)`, `hash3(seed, x, y, z)` | `entity_get(e, key)`, `entity_set(e, key, v)` | `spawn_entity`, `remove_entity`, `steer`, `label`: `entity` |
 | `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)`, `tethered(p)` | | `teleport`, `respawn`, `set_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`, `take_item(p, item)`, `drop_item(item, x, y, z[, vx, vy, vz])`, `drop_item(item, #{ ... })`, `remove_drop(id)`, `name_drop(id, text, c)`: `player` |
-| `raycast(from, dir, range[, ignore])`, `can_damage(by, target)` | | `set_fov(p, fov)`, `set_image_ammo(p, ammo)`, `mount_image(p, image)`, `mount_image(p, image, slot[, paint or #{ paint, keep }])`, `unmount_image(p)`, `set_scale(p, scale)`, `set_look_limits(p, up, down)`, `orbit_camera(p, target[, nearest, farthest], distance[, body])`: `player` |
-| `minigames()`, `minigame(id)`, `setting(game, key)`, `team_setting(game, team, key)`, `bricks(kind)`, `brick(id)`, `palette()`, `drops()` | | `set_teams(game, teams, options)`, `set_team(p, team)`, `set_score(p, n)`, `add_score(p, n)`, `reset_minigame(game)`, `set_setting(game, key, v)`, `set_team_setting(game, team, key, v)`, `hold_respawn(p, held)`, `end_round(game, winners)`, `report_column(game, key, title, cells)`: `minigame`; `show_report(p, report)`, `hide_report(p)`: `chat`; `watch(p, target)`, `follow_path(p, knots)`, `free_camera(p)`, `orbit_point(p, at, distance)`: `player`; `set_brick_item(brick, item)`, `set_brick_color(brick, c)`: `world.edit`; `fire_brick_input(brick, input, p)`, `fire_game_input(game, input, p, killer)`, `set_brick_field(brick, key, v)`: `brick_events`; `brick_field(brick, key)` reads |
+| `raycast(from, dir, range[, ignore])`, `can_damage(by, target)` | | `set_fov(p, fov)`, `set_image_ammo(p, ammo)`, `set_image_loaded(p, loaded)`, `mount_image(p, image)`, `mount_image(p, image, slot[, paint or #{ paint, keep }])`, `unmount_image(p)`, `set_scale(p, scale)`, `set_look_limits(p, up, down)`, `orbit_camera(p, target[, nearest, farthest], distance[, body])`: `player` |
+| `minigames()`, `minigame(id)`, `setting(game, key)`, `team_setting(game, team, key)`, `server_setting(key)`, `pref(global)`, `bricks(kind)`, `brick(id)`, `palette()`, `drops()` | | `set_teams(game, teams, options)`, `set_team(p, team)`, `set_score(p, n)`, `add_score(p, n)`, `reset_minigame(game)`, `set_setting(game, key, v)`, `set_team_setting(game, team, key, v)`, `hold_respawn(p, held)`, `end_round(game, winners)`, `report_column(game, key, title, cells)`: `minigame`; `show_report(p, report)`, `hide_report(p)`: `chat`; `watch(p, target)`, `follow_path(p, knots)`, `free_camera(p)`, `orbit_point(p, at, distance)`: `player`; `set_brick_item(brick, item)`, `set_brick_color(brick, c)`: `world.edit`; `fire_brick_input(brick, input, p)`, `fire_game_input(game, input, p, killer)`, `set_brick_field(brick, key, v)`: `brick_events`; `brick_field(brick, key)` reads |
 | `brick_box(brick)`, `voxel(brick)`, `can_place_voxel(x, y, z)` | | `place_voxel(x, y, z, material)`: `world.edit`; `set_avatar_colors(p, colors)`, `temp_look(p, look, seconds)`: `player` |
 | `brick(id)`, `bricks_in(min, max)`, `can_plant(kind, [x, y, z], turns)`, `can_edit(brick)` | | `plant_brick(kind, [x, y, z], turns, color, owner)`: `world.edit` |
-| | | `copy_build(p, brick, limit, way, tool[, options])`, `copy_box(p, min, max, limit, tool[, options])`, `mirror_copy(p, axis)`, `highlight_copy(p, rgba, seconds)`, `save_copy(p, name[, options])`, `load_copy(p, name, limit, tool[, options])`, `list_copies(p, filter)`, `plant_wait(p, seconds)`, `pivot_copy(p, pivot)`, `plant_as(p, target, admin)`: `build` |
+| | | `copy_build(p, brick, limit, way, tool[, options])`, `copy_box(p, min, max, limit, tool[, options])`, `mirror_copy(p, axis)`, `mirror_ghost(p, axis, asymmetric)`, `highlight_copy(p, rgba, seconds)`, `save_copy(p, name[, options])`, `load_copy(p, name, limit, tool[, options])`, `list_copies(p, filter)`, `plant_wait(p, seconds)`, `pivot_copy(p, pivot)`, `plant_as(p, target, admin)`: `build` |
 | | | `cut_copy(p)`, `paint_copy(p, color)`, `paint_copy(p, paint)`, `wrench_copy(p)`, `super_cut(p, min, max)`, `fill_box(p, min, max, color)`, `paint_fill(p, brick, paint, options)`, `paint_vehicle(p, vehicle, paint, options)`: `world.edit` |
 | | | `push`, `tumble`, `hold`, `reach`, `hold_distance`, `let_go`, `tether`, `tether_length`, `untether`, `spawn_vehicle`, `remove_vehicle`, `mount_object(mount, rider, node, can_dismount[, turn])`, `unmount_object(rider)`: `physics` |
 | | | `heal(p, amount)`, `fire(...)`: `damage` |
@@ -286,7 +286,12 @@ slot: a scope over a rifle, a second fire mode. `mount_image(p, ())` puts
 the selected tool's own image back. `set_image_ammo(p, false)` tells the
 held image it is out of ammo, so its states' `no_ammo` transitions run;
 `true` gives it back. A magazine is then a player state key your rule
-counts down. `set_fov(p, fov)` sets the player's field of view (5 to 120
+counts down. `set_image_loaded(p, false)` unloads the held image
+(`setImageLoaded`), so its states' `not_loaded` transitions run, and
+`true` runs their `loaded` ones; putting an image in hand loads it. A
+state's `spin` (`stop`, `spin_up`, `spin_down`, `full_speed`, v20's
+`stateSpinThread`) turns the image's `spin` sequence while it is in that
+state: the New Duplicator spins while a job runs this way. `set_fov(p, fov)` sets the player's field of view (5 to 120
 degrees), and `set_fov(p, ())` hands it back to their own setting; aiming
 and the zoom key still work on top of it. `unmount_image(p)` empties the
 player's hand (`unMountImage(0)`): a tool, a spray can or bricks, which the
@@ -345,6 +350,15 @@ window lists the server's choices for those two, and an id the server
 lacks reads as `""`. `scope: "team"` gives
 every team of the game its own value, edited beside the team's name and
 colour in the same window, which also adds and removes teams.
+`scope: "server"` gives the whole server one value, as RTB's
+`$Pref::Server::*` preferences were: only the host changes it, in the Admin
+menu's Add-On Settings, and it is kept with the host's Server Settings
+(saved as `$Pref::Server::AddOn::<namespace>::<key>`, and kept for an
+Add-On that is off until it runs again). A server setting may name the v20
+global it stands for (`"global": "$Pref::Server::TT::Ammo"`). One with
+`"restart": true` is read only as the server starts or loads a map (RTB's
+needsRestart): it keeps the value it had then, and a host's change waits
+for the next start, marked in the window.
 `editor: "admin"` lets only an admin change it. `shown_when` hides a
 setting unless another (`key`, or `ns:key` of an Add-On this one depends on)
 holds one of the listed values. A dependent Add-On adds its own items to a
@@ -354,7 +368,11 @@ the declaration and keeps only values that differ from the default, on the
 mini-game and its teams.
 
 `setting(game, key)` and `team_setting(game, team, key)` read a value (the
-default when unset); `set_setting(game, key, value)` and
+default when unset), `server_setting(key)` a server-wide one, and
+`pref("$Pref::Server::TT::Ammo")` the server setting standing for that
+global whichever running Add-On declares it, or `()` when none does (an
+unset global), as every script read the one global; `set_setting(game, key,
+value)` and
 `set_team_setting(game, team, key, value)` change it, `()` putting the
 default back (`minigame` capability). `on_minigame` gets `kind ==
 "settings"` with the changed `keys` when anyone changes them.
@@ -759,9 +777,14 @@ A last `options` map changes what a copy may take and how it plants:
 in a brick's owner), `public_bricks` (public bricks may be copied; default
 true), `admin` (administrators may copy any brick; default true),
 `partial` (planting plants each brick that fits and skips the rest, as
-v20's Duplorcator did; default false) and, for a stack, `limited` (keep
+v20's Duplorcator did; default false), `stack` (the same trust in the
+owner of a brick's stack also counts: whoever owns the bricks it was built
+on, v20's `stackBL_ID`, so the copy's player may also cut, paint or wrench
+through the copy what others built on their stack with their full trust;
+default false) and, for a stack, `limited` (keep
 the stack on its side of the clicked brick: going up, nothing reaching
-below its bottom). `highlight_copy(p, [r, g, b, a], seconds)` then lights
+below its bottom). `may_copy(p, brick, options)` says whether a copy with
+those options would take a brick, before the player picks it. `highlight_copy(p, [r, g, b, a], seconds)` then lights
 the copied bricks in the palette colour nearest that one (`()` for each
 brick's own), glowing, for everyone to see, and gives them their own
 colours back after (a negative `seconds` keeps them lit until the copy is
@@ -786,7 +809,11 @@ left in `wait`. `float_copy(p, float)` lets the copy's plants float in
 mid air (v20's Force Plant); with `#{ admin_only: true }` that is checked
 again at each plant, and a plant by a player no longer an administrator
 goes in as a normal one, with `float_refused` true in `on_place` and the
-float turned off.
+float turned off. Only the player sees the bricks of the copy they place;
+with `on_copy_ghost`, `on_copy_ghost(player, #{ box })` hears the box
+round it (`#{ min, max }`, world units) each time they move, turn, mirror
+or flip it, and `()` once it is put away or let go, for the Add-On to show
+the others where it stands (the New Duplicator's blue box).
 
 Copies can be kept by name on the host. `save_copy(p, name)` keeps the copy
 the player holds, replacing one saved under that name; with `#{ overwrite:
@@ -819,7 +846,11 @@ other side and becomes its mirror image, the same brick turned or its
 twin in the catalog (a left wedge for a right one), found from the bricks'
 own shapes; a brick with no twin keeps its shape (`on_place` names those
 in `mirror_errors`). The mirror is part of
-where the player puts the copy, like its turn. `move_copy(p, point,
+where the player puts the copy, like its turn. `mirror_ghost(p, axis,
+asymmetric)` does the same to the player's ghost brick where it stands
+(`player(p).ghost` says whether they have one out, bricks in hand); a
+brick with no exact image in that mirror stays as it is and the player is
+told `asymmetric`. `move_copy(p, point,
 normal)` puts the copy against the surface at `point` whose outward
 `normal` is given (a `raycast` hit's), as a ghost brick goes where it is
 aimed: the middle of the copy's box half its size out along the normal,

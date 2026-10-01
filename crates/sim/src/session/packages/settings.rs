@@ -1,7 +1,10 @@
 //! Add-On settings (`behaviour.json` `settings`): typed values a mini-game's
 //! owner or an admin edits in the Mini-Game window's Add-On Settings, and
 //! the Add-On's rules read with `setting(game, key)`. Slayer's preferences
-//! and team preferences are these.
+//! and team preferences are these. Server-wide ones (RTB's
+//! `$Pref::Server::*` preferences) are kept with the host's Server
+//! Settings, which only the host changes, and read with
+//! `server_setting(key)`.
 //!
 //! The engine keeps the values (on the mini-game and its teams), checks
 //! every change against its definition and who made it, sends the
@@ -82,6 +85,10 @@ pub struct TeamEdit {
 pub(in crate::session) struct Registry {
     list: Vec<AddOnSetting>,
     by_key: BTreeMap<String, usize>,
+    /// Server settings by the v20 global they stand for, lower-case: the
+    /// first Add-On declaring one has it, as RTB kept a preference's first
+    /// registration.
+    by_global: BTreeMap<String, usize>,
 }
 impl Registry {
     pub(in crate::session) fn build(catalog: &bri_package_runtime::package::Catalog) -> Result<Self> {
@@ -96,7 +103,13 @@ impl Registry {
                 .or_else(|| catalog.packages.get(id));
             let name = owner.map_or_else(|| id.clone(), |p| p.manifest.name.clone());
             for def in &behaviour.settings {
-                out.by_key.insert(format!("{id}:{}", def.key), out.list.len());
+                if let Some(global) = &def.global {
+                    out.by_global
+                        .entry(global.to_ascii_lowercase())
+                        .or_insert(out.list.len());
+                }
+                out.by_key
+                    .insert(format!("{id}:{}", def.key), out.list.len());
                 out.list.push(AddOnSetting {
                     package: id.clone(),
                     package_name: name.clone(),
@@ -141,6 +154,19 @@ impl Registry {
                 );
             }
             for def in &behaviour.settings {
+                // A server-wide setting shows by another server-wide one:
+                // it has no mini-game to read a mini-game's from.
+                if let Some(when) = &def.shown_when
+                    && def.scope == SettingScope::Server
+                {
+                    let target = out.get(&full_key(id, &when.setting));
+                    ensure!(
+                        target.is_none_or(|t| t.def.scope == SettingScope::Server),
+                        "{id}: server setting `{}` is shown by `{}`, which is not the server's",
+                        def.key,
+                        when.setting
+                    );
+                }
                 if let Some(when) = def.shown_when.as_ref().filter(|w| w.setting.contains(':')) {
                     let (target, _) = when.setting.split_once(':').unwrap_or_default();
                     ensure!(
@@ -179,6 +205,12 @@ impl Registry {
     pub(in crate::session) fn get(&self, key: &str) -> Option<&AddOnSetting> {
         self.by_key.get(key).map(|&i| &self.list[i])
     }
+    /// The server setting standing for the v20 global `name`.
+    pub(in crate::session) fn by_global(&self, name: &str) -> Option<&AddOnSetting> {
+        self.by_global
+            .get(&name.to_ascii_lowercase())
+            .map(|&i| &self.list[i])
+    }
     pub(in crate::session) fn has_team_settings(&self) -> bool {
         self.list.iter().any(|s| s.def.scope == SettingScope::Team)
     }
@@ -211,11 +243,12 @@ impl Session {
             .unwrap_or_default()
     }
 
-    /// A setting's value in `game` (or its `team`), or its default.
+    /// A setting's value in `game` (or its `team`), or the server's (no
+    /// game), or its default.
     pub(in crate::session) fn setting_value(
         &self,
         package: &str,
-        game: u64,
+        game: Option<u64>,
         team: Option<u64>,
         key: &str,
     ) -> Result<SettingValue, String> {
@@ -225,24 +258,29 @@ impl Session {
             .settings
             .get(&key)
             .ok_or_else(|| format!("No setting `{key}`"))?;
-        let g = self
-            .minigames
-            .game(mg::GameId(game))
-            .map_err(|_| format!("No mini-game {game}"))?;
-        let stored = match (s.def.scope, team) {
-            (SettingScope::Minigame, None) => g.addon_settings.get(&key),
-            (SettingScope::Team, Some(team)) => {
-                let t = u32::try_from(team)
-                    .ok()
-                    .and_then(|t| g.teams.get(mg::TeamId(t)))
-                    .ok_or_else(|| format!("No team {team} in mini-game {game}"))?;
-                t.addon_settings.get(&key)
+        let stored = match (s.def.scope, game) {
+            // One read only as the server starts or loads a map has the
+            // value it had then.
+            (SettingScope::Server, None) if s.def.restart => self.started_settings.get(&key),
+            (SettingScope::Server, None) => self.admin.settings.addon_settings.get(&key),
+            (SettingScope::Server, Some(_)) => {
+                return Err(format!("`{key}` is the server's: server_setting(key)"));
             }
-            (SettingScope::Minigame, Some(_)) => {
-                return Err(format!("`{key}` is the mini-game's: setting(game, key)"));
+            (_, None) => {
+                return Err(format!(
+                    "`{key}` is {}",
+                    match s.def.scope {
+                        SettingScope::Team => "each team's: team_setting(game, team, key)",
+                        _ => "each mini-game's: setting(game, key)",
+                    }
+                ));
             }
-            (SettingScope::Team, None) => {
-                return Err(format!("`{key}` is each team's: team_setting(game, team, key)"));
+            (_, Some(game)) => {
+                let g = self
+                    .minigames
+                    .game(mg::GameId(game))
+                    .map_err(|_| format!("No mini-game {game}"))?;
+                self.game_setting(g, s, team, &key)?
             }
         };
         // A stored value an Add-On update no longer allows reads as the
@@ -257,6 +295,95 @@ impl Session {
         } else {
             SettingValue::Text(String::new())
         })
+    }
+
+    /// As the server starts or loads a map with its Add-Ons: the server
+    /// settings read only then ([`SettingDef::restart`]) take the values the
+    /// host has set, until the next start.
+    pub(in crate::session) fn start_settings(&mut self) {
+        let Some(host) = self.packages.as_ref() else {
+            return;
+        };
+        self.started_settings = host
+            .settings
+            .list()
+            .iter()
+            .filter(|s| s.def.restart)
+            .filter_map(|s| {
+                let key = s.key();
+                Some((
+                    key.clone(),
+                    self.admin.settings.addon_settings.get(&key)?.clone(),
+                ))
+            })
+            .collect();
+    }
+
+    /// The server setting standing for the v20 global `name`
+    /// (`$Pref::Server::TT::Ammo`), whichever running Add-On declares it,
+    /// or `None` when none does: an unset global.
+    pub(in crate::session) fn pref_value(&self, name: &str) -> Option<SettingValue> {
+        let s = self.packages.as_ref()?.settings.by_global(name)?;
+        self.setting_value(&s.package, None, None, &s.def.key).ok()
+    }
+
+    /// A mini-game's (or its team's) stored value of `s`.
+    fn game_setting<'g>(
+        &self,
+        g: &'g mg::MiniGame,
+        s: &AddOnSetting,
+        team: Option<u64>,
+        key: &str,
+    ) -> Result<Option<&'g SettingValue>, String> {
+        let game = g.id.0;
+        Ok(match (s.def.scope, team) {
+            (SettingScope::Minigame, None) => g.addon_settings.get(key),
+            (SettingScope::Team, Some(team)) => {
+                let t = u32::try_from(team)
+                    .ok()
+                    .and_then(|t| g.teams.get(mg::TeamId(t)))
+                    .ok_or_else(|| format!("No team {team} in mini-game {game}"))?;
+                t.addon_settings.get(key)
+            }
+            (SettingScope::Minigame, Some(_)) => {
+                return Err(format!("`{key}` is the mini-game's: setting(game, key)"));
+            }
+            (SettingScope::Team, None) => {
+                return Err(format!(
+                    "`{key}` is each team's: team_setting(game, team, key)"
+                ));
+            }
+            (SettingScope::Server, _) => {
+                return Err(format!("`{key}` is the server's: server_setting(key)"));
+            }
+        })
+    }
+
+    /// Check the host's new server-wide Add-On settings against the running
+    /// Add-Ons' definitions. Keys no running Add-On declares are kept
+    /// unchecked for when it runs again; they never reach a rule.
+    pub(in crate::session) fn check_server_addon_settings(
+        &self,
+        values: &BTreeMap<String, SettingValue>,
+    ) -> Result<()> {
+        let Some(host) = self.packages.as_ref() else {
+            return Ok(());
+        };
+        for (key, value) in values {
+            let Some(s) = host.settings.get(key) else {
+                continue;
+            };
+            ensure!(
+                s.def.scope == SettingScope::Server,
+                "`{key}` is not a server-wide setting"
+            );
+            s.check(value).map_err(anyhow::Error::msg)?;
+            ensure!(
+                self.has_content(s.def.kind, value),
+                "This server has no {value}"
+            );
+        }
+        Ok(())
     }
 
     /// Whether an item or player type setting's `value` names one this
@@ -309,6 +436,8 @@ impl Session {
                 match s.def.scope {
                     SettingScope::Minigame => "the mini-game's, not a team's",
                     SettingScope::Team => "each team's, not the mini-game's",
+                    SettingScope::Server =>
+                        "the server's: the host changes it in the Admin menu's Add-On Settings",
                 }
             );
             ensure!(
@@ -406,7 +535,7 @@ impl Session {
                 let s = host.settings.get(&key).with_context(|| format!("No setting `{key}`"))?;
                 ensure!(
                     s.def.scope == SettingScope::Team,
-                    "`{key}` is the mini-game's: set_setting(game, key, value)"
+                    "`{key}` is not each team's"
                 );
                 if let Some(v) = &edit.value {
                     s.check(v).map_err(anyhow::Error::msg)?;

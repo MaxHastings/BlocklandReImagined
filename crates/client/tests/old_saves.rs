@@ -178,3 +178,28 @@ fn dropped_v20_saves_list_and_load_in_load_bricks() -> Result<()> {
     );
     Ok(())
 }
+
+/// A v20 duplication keeps its bricks' names and events, bound as a save's
+/// are, so a copy loaded from it plants them.
+#[test]
+#[ignore = "generated content (BRI_CONTENT or content/); no window"]
+fn a_dropped_duplication_keeps_its_bricks_names_and_events() -> Result<()> {
+    let content = content()?;
+    let converter = Converter::new(&content)?;
+    let source = format!(
+        "Duplorcation save file\t2\n1\nDuplication saved by test\n{}Linecount 1\n",
+        "0.5 0.25 0 1\n".repeat(64)
+    ) + "2x2\" 0 0 0.3 0 1 5  0 0 1 1 1\n"
+        + "+-NTOBJECTNAME _door\n"
+        + "+-EVENT\t0\t1\tonActivate\t0\tSelf\t\tfireRelay\t\t\t\t\n";
+    let (bricks, palette) = converter.read_duplication(source.as_bytes(), "dup")?;
+    ensure!(palette.len() == 64);
+    ensure!(bricks.len() == 1, "{} bricks", bricks.len());
+    ensure!(
+        bricks[0].name.as_deref() == Some("_door"),
+        "{:?}",
+        bricks[0].name
+    );
+    ensure!(bricks[0].events.len() == 1, "{:?}", bricks[0].events);
+    Ok(())
+}
