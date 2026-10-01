@@ -30,12 +30,6 @@ reason = "Scripted three-minute walkthrough; opt-in only (Max, 2026-09-29). Run 
 # whole target here only when all of it needs content. Format:
 # "<package>/<test target>", or "<package>/lib" for unit tests.
 
-[[ci_skip_target]]
-target = "bri-client/brick_fx"
-
-[[ci_skip_target]]
-target = "bri-client/item_rendering"
-
 # Test targets that host a game on the fixed ports (UDP 28000/28050). The gate
 # runs them one at a time, after one another, instead of in parallel. Prefer
 # BRI_TEST_HOST_PORT / BRI_TEST_DISCOVERY_PORT (see multiplayer.rs) so a test
