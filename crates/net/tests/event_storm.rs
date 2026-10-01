@@ -117,8 +117,11 @@ async fn run_loop(packs: Packs, delay_ms: u32) -> Result<(usize, usize, server::
             .context("the host stopped sending updates")?
             .context("player connection failed")?;
         let fresh = player.replica.take_cues();
+        // Count by the tick each explosion happened on: one update can carry
+        // many ticks under load, the last past the window's end.
         explosions += fresh
             .iter()
+            .filter(|c| c.tick > start && c.tick <= start + 1200)
             .filter(|c| matches!(&c.kind, CueKind::WeaponEffect { definition, .. } if *definition == packs.explosion))
             .count();
         // The player's own join `spawnProjectile` is not the loop's.

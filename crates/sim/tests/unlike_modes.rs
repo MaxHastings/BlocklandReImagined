@@ -1050,9 +1050,12 @@ fn a_thousand_agents_all_get_to_think() {
         "{:#?}",
         s.package_diagnostics()
     );
-    let start = std::time::Instant::now();
     steps(&mut s, 120);
-    let took = start.elapsed();
+    let total: i64 = s
+        .package_entity_vars()
+        .into_iter()
+        .map(|(_, vars)| vars.get("thoughts").and_then(|t| t.as_i64()).unwrap_or(0))
+        .sum();
     let starved = s
         .package_entity_vars()
         .into_iter()
@@ -1062,9 +1065,12 @@ fn a_thousand_agents_all_get_to_think() {
         starved, 0,
         "{starved} of 1000 agents never thought in 120 ticks"
     );
+    // The tick stays short because the work is rationed, counted in script
+    // operations, not timed: far fewer thinks run than the swarm asks for
+    // (one each per tick). About 26,000 fit the package's share.
     assert!(
-        took < std::time::Duration::from_secs(30),
-        "120 ticks of a 1000-agent swarm took {took:?}"
+        total < 1000 * 120 / 2,
+        "{total} thinks in 120 ticks: the swarm was not rationed"
     );
 }
 
