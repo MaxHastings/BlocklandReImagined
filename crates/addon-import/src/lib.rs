@@ -337,10 +337,9 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
     // file's whole text by its path in the Add-On (`server.cs`), for values
     // set outside any function.
     let mut bodies = ports::Bodies::new();
+    // Torque keeps the last definition of a function (names ignore case).
     for f in scripts.iter().flat_map(|s| &s.functions) {
-        bodies
-            .entry(f.qualified().to_ascii_lowercase())
-            .or_insert_with(|| f.body.clone());
+        bodies.insert(f.qualified().to_ascii_lowercase(), f.body.clone());
     }
     for f in src.files.values() {
         if f.path.to_ascii_lowercase().ends_with(".cs") {

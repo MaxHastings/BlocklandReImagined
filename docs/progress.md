@@ -8170,6 +8170,38 @@ and the drawing still 80 px across one way). The content test now checks
 the clear border and that the drawing spans the Printer's width or height,
 and writes `target/gravity-gun-icon-vs-printer.png` (dark and light slots;
 target/ is never committed).
+
+Gravity Gun icon kept on disk, drawn off the load path, seen side on
+(v0.1.11 follow-up). The Gate measured the whole Gravity Gun item load at
+286 ms in release (1.65 s in debug), with the icon drawn inside it. Now
+`ItemAssets::load_with` only prepares the request (`item_icon_render::Request`:
+the item's model, the stock model and icon, the spec).
+`ItemAssets::draw_icons(cache)` shows an icon kept under
+`<state>/item-icons/<sha256>.png` at once. Otherwise it draws the icon on a
+thread named "item icon" and keeps it, written through a partial file. The
+sha256 covers a drawing version (`DRAWING`), both meshes and their axes, the
+stock icon's pixels and the spec. Until then the HUD slot shows the PNG or
+letter, and `ItemUi::register_icons` swaps the drawn icon in and uploads
+again. A failed draw is logged to the console.
+
+Angle: Max, in game on v0.1.10, said the icon was "great just seems to be
+wrong perspective angle". The outline fit had searched every turn, and the
+Printer icon's outline also fitted a tumbled one (seen from above and
+behind, nose rolled down). The fit now tries only side profiles
+(`item_icon_render::Profile`): the item's own forward across the picture
+(either way) and its up up the picture, tipped up to 60 degrees in the
+picture and turned up to 46 degrees towards or away. The item is drawn with
+the same profile on its own axes (`Axes`: +Y forward and +Z up as item
+models are held, or mountPoint to muzzlePoint made level). Max liked the
+look, so the relighting tried for this was dropped. Tests:
+`a_drawn_icon_is_kept_for_the_same_request`, `item_ui::a_drawn_icon_replaces_its_stand_in`,
+`a_models_pose_is_recovered_from_its_icon` (the profile and axis directions
+recovered), and `an_item_drawn_like_a_stock_one_points_the_same_way` (a
+model built along other axes gets the stock item's screen directions, up up
+and nose across). The content test now also checks that the gun's forward
+and up point the same ways on screen as the Printer's, and prints the fitted
+profile. It times the load without the icon, the drawing, and the next load
+with the icon kept, and asserts the kept icon is reused.
 ## 2026-09-30 Steel Ball: real steel, minigame-only harm (for v0.1.10, branch `claude/project-thread-bya1ck`)
 
 Max asked for the Steel Ball back, looking like real reflective steel
@@ -8628,6 +8660,108 @@ Tests: `add_on_join::bot_kinds_come_from_the_blockhead_bot_add_on_the_host_runs`
 `add_on_join::a_host_with_the_blockhead_bot_on_spawns_bots_and_one_without_offers_none`
 (generated content: hosts with the Add-On on and off, loads a saved spawn
 brick, counts players). Not run here: the second needs generated content.
+
+## 2026-10-01 Butterfly Knife and HE Grenade ports (branch `claude/butterfly-knife-q2j2lu`)
+
+Max asked for the Butterfly Knife and HE Grenade from his Steam Blockland,
+then chose "originals only": players import their own copies (Start Game >
+Add-Ons > Import) and the game ships only the behaviour. His knife is
+Stratofortress's `Weapon_ButterflyKnife` (RTB 1707), not the "TF2 Butterfly
+Knife" he linked (RTB 327); his grenade is `Weapon_HEGrenade` by TheGeek,
+Pload, Rotondo and Ephialtes. Both were read on his PC, read-only, into
+`.research/butterfly-knife` (never committed). The first version, with
+models and sounds of our own (553df19), was dropped before it shipped.
+
+Engine seam: an image's `scripts` describes, by lower-case state script
+name, what an `Image::on...` function did: `arm` (thread 2 animation),
+`fire` (`Parent::onFire`), `projectile` (a second `ProjectileData` the
+function spawned) and `use_up` (`%obj.tool[%slot] = 0` with
+`serverCmdUnUseTool`). It replaces the built-in name-matched handling for
+that script. Ports may also write `{name:lower}` for ids. The importer now
+keeps the last definition of a function, as Torque does; the knife defines
+`onFiretwo` twice and the later one spawns the jab.
+
+Ports (`crates/addon-import/ports/weapon_butterflyknife`,
+`weapon_hegrenade`), both `verified` against v20's scripts:
+- Knife: a click jabs with `butterflyknifeprojectile` (30 in the original)
+  and swings no arm, as in v20 (its `armattack` version of `onFiretwo` is
+  replaced by the later one). Held 0.7 s and let go it stabs with the
+  image's projectile (100) after `spearThrow`. `backstab = 180` is not a
+  projectile field and does nothing in v20 either.
+- Grenade: a click pulls the pin (it flies off as the casing); held 0.7 s
+  and let go it is thrown and used up, and another grenade in the tools
+  stays. It bounces with its own sound and goes off on its 2.5 s fuse.
+  Its `Armor::onCollision` package (pick up while holding one) needs
+  nothing: the game has no duplicate check.
+
+Tests: `crates/weapons/tests/state_attacks.rs` (the seam), stand-in
+Add-Ons of our own (CC0) in `crates/addon-import/tests/fixtures/ports` with
+`butterfly_knife_port_jabs_and_stabs` and
+`he_grenade_port_pulls_the_pin_then_throws_it_away`, each port's
+`checks.json` through `check-port`, and `real_steam_knife_and_grenade_ports`
+(skips unless Max's Steam Add-Ons and the v20 reference exist). The Gate
+ran it on the PC at 5576cf1: both ports applied to Max's copies (knife
+4d8d0cc5…, grenade 1cae396e…, now listed in `ports.json`).
+## 2026-10-01: One look per item, in the hand, in the world and as its icon
+
+Max, v0.1.10: "my gravity gun looks different on the item spawn than in my
+hand" and "when i drop the item or tool it can look different than the one
+in my hand". The cause: held images, dropped and spawn-brick items and the
+icon each picked their own model and colour, and the Gravity Gun's alien
+skin was drawn only by its effects Add-On over guns in hands. Now an item
+has one look (`items::Appearance`, `Presentation::item_appearance`): its
+image's model, its colour (shifted only with `color_shift`, as the stock
+importer does) and its skin. Held, dropped, spawn-brick, mirrored and icon
+copies all read it, for every item and tool, stock included.
+
+- Skins are part of the look: an Add-On's `looks.json` names a WGSL shader
+  per image (`items::ItemSkin`). The game draws it over every copy
+  (`item_skins`, on `bri_client_sandbox::gpu::LayerRenderer` through the new
+  `LayerSource`), with an Add-On's GPU budgets, in the player's view and in
+  mirrors and the environment probe. A server's skins draw only when the
+  player trusts its code (`ClientCode::trusts_server`), as WGSL in a
+  `client` section does. The alien shell moved from `gravity-gun-fx` into
+  `gravity-gun-tool/assets/skins/alien.wgsl`; the effects no longer draw it.
+- A respawning ghost or an expiring drop no longer turns white: it keeps
+  its look and fades by alpha.
+- A dropped paint-tinted tool (the Fill Can) lies in the colour it was held
+  in: `Drop::paint`, protocol 70.
+- The held tool's shadow is cast from the hand as others see it, not from
+  the first-person copy at the eye: in first person the third-person copy
+  is always posed (`WorldItemFrame::reflected_self`) and casts.
+- The icon's model and colours come from the look: `gravity_gun.render.json`
+  is now `{"skin": {}}`, its base the image's tint and its veins the skin's
+  colour. Its drawing is unchanged (the CPU port of the shader Max approved
+  in v0.1.10), so the icon looks as shipped.
+
+Add-On items checked: Duplicator, Advanced Duplicator, Bubble Blaster and
+the Gravity Gun shift their image colour; Trench Pick and Fill Can are
+white; all held and world models matched. The Gravity Gun alone had a skin.
+Adventure guns, Sniper and Knife/Grenade are not on main yet; they take the
+same path when they land.
+
+Tests: `items::add_on_icon_tests::an_item_looks_the_same_in_the_hand_and_in_the_world`,
+`a_look_is_checked`, `item_skins::tests::*` (views, energy, trust, a stopped
+layer), `runtime::a_dropped_paint_tinted_tool_keeps_the_colour_it_was_held_in`;
+`stock_items_that_looked_different_in_the_world` (ignored, needs content)
+lists stock items whose own model or colour differed from their image's.
+
+## 2026-10-01: The Gravity Gun catches what comes in range with the trigger held
+
+Max, v0.1.10: "if i have it activated (but distance to grab is too far) but
+then i move closer while still holding it active it doesn't pick it up
+until i let go of left click and click again". The grab ran once, on the
+press. A new engine seam, `reach` (`Op::Reach`), keeps reaching: while the
+player holds nothing, each tick the engine looks where they look (the
+server's own look state, so no extra traffic) up to the reach, before any
+brick, and holds the first thing they may move by the spot it met, as the
+grab would. The Gravity Gun reaches whenever its grab finds nothing; letting
+go (`let_go`) ends it. Its `on_tick` shows the catch in the beam
+(`held_distance` gives the reach). Holds run only on the host, so there is
+nothing to predict. Test:
+`showcase::holding_the_trigger_catches_what_comes_in_range_without_a_second_click`
+(a crate 75 units off, trigger held, walk toward it: caught between 50 and
+62 units off with no second click, and let go stays let go).
 ## 2026-10-01 Vehicle destruction looks (v20 audit)
 
 Max: destroyed vehicles "would turn black right away when on fire" in v20,
@@ -9005,3 +9139,22 @@ of theirs in the repo). Both ports are `partial`.
   outputs like joinTeam/addLives, which need package outputs); CTF's
   DropFlag output, Drop Tool key, dropped-flag countdown, flag light,
   locked flags, score columns.
+## Saves come only from the saves folder (v0.1.11)
+
+Max (03:23Z): the game must never search players' Blockland, v20 or Steam
+folders; classic files come in through drop folders in our own folders.
+- `.bls` saves were already a drop folder (`<state>/saves`, the folder the
+  game's own saves use): dropped files convert in the background, once,
+  and join Load Bricks under their map (loose files under Other). The
+  converter also listed the saves of old installs under Program Files and
+  `C:\Blockland` (`OldSaves::find_old_installs`); that search is gone, with
+  the `old_install` flag and its ordering.
+- Saves an earlier version converted from an old install leave the list on
+  the next scan, and their native copies leave the cache. Saves converted
+  from the saves folder keep their copies and do not convert again.
+- Load Bricks' Saves Folder button opens the folder (made first if needed)
+  through `show_drop_folder` in app.rs, the one helper for drop folders
+  (the Add-Ons Folder button can share it).
+- Tests: `bri-client --lib old_saves` (temp folders; an install beside the
+  saves folder is never read, and an earlier index's install entries and
+  copies are dropped).

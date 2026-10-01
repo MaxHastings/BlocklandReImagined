@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "notes": "The image's scripts as data. onCharge raises the arm and onAbortCharge lowers it. onFire swings the arm, throws the grenade and uses it up, which also covers the slot onCharge remembered and onDone's unmount. The projectile's onCollision plays its bounce sound through a bounce effect. The Armor::onCollision package lets a player pick up another grenade while holding one, which the game already allows, so it needs nothing.",
+  "patch": {
+    "assets/weapons.json": {
+      "images": {
+        "weapon_hegrenade:image/hegrenadeimage": {
+          "scripts": {
+            "oncharge": { "arm": "{charge_arm}" },
+            "onabortcharge": { "arm": "{abort_arm}" },
+            "onfire": { "arm": "{throw_arm}", "fire": true, "use_up": true }
+          }
+        }
+      },
+      "projectiles": {
+        "weapon_hegrenade:projectile/hegrenadeprojectile": { "bounce_effect": "hegrenadePortBounce" }
+      },
+      "explosions": {
+        "hegrenadeportbounce": {
+          "name": "hegrenadePortBounce",
+          "sound": "weapon_hegrenade:sound/{bounce_sound:lower}",
+          "shake": null,
+          "shape": "",
+          "seconds": 0.0,
+          "play_speed": 1.0,
+          "face_viewer": false,
+          "scale": [1.0, 1.0, 1.0],
+          "sizes": []
+        }
+      }
+    }
+  }
+}

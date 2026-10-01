@@ -1626,6 +1626,7 @@ impl Session {
             | Op::Hold { .. }
             | Op::HoldDistance { .. }
             | Op::LetGo { .. }
+            | Op::Reach { .. }
             | Op::SpawnVehicle { .. }
             | Op::RemoveVehicle { .. }) => self.apply_physics_op(package, op, caller),
             Op::Fire {

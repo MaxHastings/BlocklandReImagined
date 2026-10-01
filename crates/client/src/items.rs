@@ -69,6 +69,50 @@ pub struct ImagePresentation {
     /// an Add-On's image does only when it asks.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub follow_arm: bool,
+    /// A skin its Add-On gives it (`looks.json`), drawn over every copy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skin: Option<ItemSkin>,
+}
+/// A skin an Add-On gives one of its own items' images in `looks.json`:
+/// the game draws it with the Add-On's shader over every copy of the item,
+/// in a hand (first or third person), dropped, on a spawn brick and in a
+/// mirror, so the item looks the same wherever it is (the Gravity Gun's
+/// alien shell). The shader is an Add-On shader (`bri_client_sandbox::
+/// shader`) and gets, per copy: `params[0]` the skin's colour and its
+/// energy (1 in an `energy_states` state of the holder's image, else 0),
+/// `params[1]` the direction sunlight travels and a seed for that copy,
+/// `params[2]` the sun's colour, `params[3]` the ambient light.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ItemSkin {
+    /// Its WGSL file, in the Add-On's folder.
+    pub shader: String,
+    pub color: [f32; 3],
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub energy_states: Vec<String>,
+}
+/// An Add-On's `looks.json`: skins for its own images.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Looks {
+    schema_version: u32,
+    #[serde(default)]
+    images: BTreeMap<String, ImageLook>,
+}
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ImageLook {
+    skin: Option<ItemSkin>,
+}
+/// A skin's shader, read from its Add-On.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SkinShader {
+    /// The file, as its Add-On names it (for messages).
+    pub name: String,
+    pub source: String,
+    /// Sent by a server rather than installed: drawn only when the player
+    /// trusts that server's code (`ClientCode::trusts_server`).
+    pub downloaded: bool,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ProjectilePresentation {
@@ -88,6 +132,31 @@ pub struct Presentation {
     pub projectiles: BTreeMap<String, ProjectilePresentation>,
     pub diagnostics: Vec<String>,
 }
+impl Presentation {
+    /// The look of image `image` (a held item): its model, its colour and
+    /// its skin (`ItemSkin`), named by the image.
+    pub fn image_appearance(&self, id: &str) -> Option<Appearance> {
+        let image = self.images.get(id)?;
+        (!image.model.is_empty()).then(|| Appearance {
+            model: image.model.clone(),
+            tint: image.tint,
+            skin: image.skin.is_some().then(|| id.to_string()),
+        })
+    }
+    /// The look of item `item` lying in the world: the look of the image
+    /// it is held as, so it is the same thing in the hand and on the
+    /// ground. An item with no image to hold draws its own model.
+    pub fn item_appearance(&self, item: &str) -> Option<Appearance> {
+        let presented = self.items.get(item)?;
+        self.image_appearance(&presented.image).or_else(|| {
+            (!presented.model.is_empty()).then(|| Appearance {
+                model: presented.model.clone(),
+                tint: presented.tint,
+                skin: None,
+            })
+        })
+    }
+}
 pub struct ItemAssets {
     pub presentation: Presentation,
     pub item_physics: ItemPhysicsCatalog,
@@ -96,6 +165,34 @@ pub struct ItemAssets {
     pub faults: Vec<String>,
     shapes: BTreeMap<String, Shape>,
     textures: BTreeMap<String, SceneImage>,
+    /// Icons to draw from their models, until [`Self::draw_icons`].
+    icon_requests: Vec<(String, String, String, crate::item_icon_render::Request)>,
+    /// Icons drawn from their models, each filled once drawn; until then
+    /// the item shows its picture or letter.
+    drawn: BTreeMap<String, DrawnIcon>,
+    drawing: std::sync::Mutex<Vec<std::thread::JoinHandle<()>>>,
+    /// Each skinned image's skin and shader (`ItemSkin`).
+    skins: BTreeMap<String, (ItemSkin, SkinShader)>,
+}
+/// An icon drawn from its model (`crate::item_icon_render`), once it is.
+pub type DrawnIcon = std::sync::Arc<std::sync::OnceLock<SceneImage>>;
+/// What [`ItemAssets::draw_icons`] did.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct IconDraws {
+    /// Found on disk, drawn before and shown at once.
+    pub kept: usize,
+    /// Being drawn on a thread of their own.
+    pub drawing: usize,
+}
+/// What an item looks like, wherever it is drawn: in a hand, dropped, on
+/// a spawn brick or as its icon. One item, one look (Max, v0.1.10: "my
+/// gravity gun looks different on the item spawn than in my hand").
+#[derive(Clone, Debug, PartialEq)]
+pub struct Appearance {
+    pub model: String,
+    pub tint: [f32; 4],
+    /// The image whose skin it wears (`ItemAssets::skin`), if it has one.
+    pub skin: Option<String>,
 }
 /// Resource bindings persist while the host updates only posed geometry.
 pub struct ItemMesh {
@@ -420,6 +517,23 @@ impl ItemAssets {
             tint,
         })
     }
+    /// The look of image `image` (a held item).
+    pub fn image_appearance(&self, image: &str) -> Option<Appearance> {
+        self.presentation.image_appearance(image)
+    }
+    /// Image `image`'s skin and its shader, if its Add-On gives it one.
+    pub fn skin(&self, image: &str) -> Option<&(ItemSkin, SkinShader)> {
+        self.skins.get(image)
+    }
+    /// Every skinned image, by image id.
+    pub fn skins(&self) -> &BTreeMap<String, (ItemSkin, SkinShader)> {
+        &self.skins
+    }
+    /// The look of item `item` lying in the world
+    /// ([`Presentation::item_appearance`]).
+    pub fn item_appearance(&self, item: &str) -> Option<Appearance> {
+        self.presentation.item_appearance(item)
+    }
     /// Both directories are native generated content. No source field is interpreted.
     pub fn load(root: &Path, weapons_root: &Path) -> Result<Self> {
         Self::load_with(root, weapons_root, &[])
@@ -554,6 +668,7 @@ impl ItemAssets {
         // to the stock art it names, then to no model and a letter icon.
         let mut added = Added::default();
         let mut faults = Vec::new();
+        let mut skins = BTreeMap::new();
         for (dir, abs) in extras {
             // Faults name the Add-On as players do, not its folder.
             let label = bri_package::library::add_on_label(abs, dir);
@@ -594,6 +709,7 @@ impl ItemAssets {
                 &mut added,
                 &mut faults,
             );
+            read_looks(dir, &abs, &part_pack, &mut manifest, &mut skins, &mut faults);
         }
         let file_root = |kind: &str, id: &str| added.origin.get(&format!("{kind}:{id}")).unwrap_or(&root).clone();
         let mut textures = BTreeMap::new();
@@ -784,36 +900,58 @@ impl ItemAssets {
             faults,
             shapes,
             textures,
+            icon_requests: Vec::new(),
+            drawn: BTreeMap::new(),
+            drawing: Default::default(),
+            skins,
         };
-        // Each stock item's pose is fitted once, however many icons take it.
-        let mut poses = BTreeMap::new();
         for (item, dir, file, spec) in std::mem::take(&mut added.icon_renders) {
-            if let Err(error) = assets.render_icon(&item, &dir, &spec, &mut poses) {
-                assets.faults.push(crate::cosmetic::add_on_fault(
+            match assets.icon_request(&item, &dir, spec) {
+                Ok(request) => assets.icon_requests.push((item, dir, file, request)),
+                Err(error) => assets.faults.push(crate::cosmetic::add_on_fault(
                     &dir,
                     &file,
                     format!("the icon of {item} could not be drawn from its model, so it keeps its picture: {error:#}"),
-                ));
+                )),
             }
         }
         Ok(assets)
     }
-    /// Draw `item`'s icon from its model, posed like `spec.pose_like`'s
-    /// icon (`crate::item_icon_render`), and show it in place of any other.
-    fn render_icon(
-        &mut self,
+    /// What `item`'s icon is drawn from: its model, posed like
+    /// `spec.pose_like`'s icon (`crate::item_icon_render`).
+    fn icon_request(
+        &self,
         item: &str,
         dir: &str,
-        spec: &crate::item_icon_render::Spec,
-        poses: &mut BTreeMap<String, Option<crate::item_icon_render::Pose>>,
-    ) -> Result<()> {
-        use crate::item_icon_render::{Mesh, fit_pose, render_posed};
+        spec: crate::item_icon_render::Spec,
+    ) -> Result<crate::item_icon_render::Request> {
+        use crate::item_icon_render::{Axes, Mesh, Request};
         let mesh = |assets: &Self, model: &str| -> Result<Mesh> {
             ensure!(!model.is_empty(), "no model");
-            Ok(Mesh::from_scene(&assets.model_scene(model, [1.; 4], Mat4::IDENTITY, None, 0.)?))
+            let mut mesh = Mesh::from_scene(&assets.model_scene(model, [1.; 4], Mat4::IDENTITY, None, 0.)?);
+            // Pointing from where it is held to its muzzle, level (the
+            // muzzle sits above the grip), when it has both.
+            let pose = assets.pose(model, None, 0.)?;
+            let node = |name| assets.node_transform(model, &pose, Mat4::IDENTITY, name).ok();
+            if let (Some(mount), Some(muzzle)) = (node("mountPoint"), node("muzzlePoint")) {
+                let up = Axes::default().up;
+                let along = muzzle.w_axis.truncate() - mount.w_axis.truncate();
+                let level = along - up * along.dot(up);
+                if level.length() > 1e-3 {
+                    mesh.axes = Axes::new(level, up);
+                }
+            }
+            Ok(mesh)
         };
-        let own = &self.presentation.items[item];
-        let model = mesh(self, &own.model).context("the item has no model")?;
+        // Drawn as the item looks in play (`Self::item_appearance`): its
+        // model, its colour and its skin's colour, unless the request
+        // names its own.
+        let look = self.item_appearance(item).context("the item has no model")?;
+        let veins = look.skin.as_deref().and_then(|image| self.skin(image)).map(|(skin, _)| skin.color);
+        let [r, g, b, _] = look.tint;
+        let spec = spec.with_defaults([r, g, b], veins);
+        let model = mesh(self, &look.model).context("the item has no model")?;
+        ensure!(!model.indices.is_empty(), "the item has no model to draw");
         let stock = self
             .presentation
             .items
@@ -823,30 +961,85 @@ impl ItemAssets {
             .icon
             .as_ref()
             .and_then(|i| self.textures.get(i))
-            .with_context(|| format!("{} has no icon", spec.pose_like))?;
-        let pose = match poses.get(&spec.pose_like) {
-            Some(pose) => *pose,
-            None => {
-                let reference = mesh(self, &stock.model).with_context(|| format!("{} has no model", spec.pose_like))?;
-                let pose = fit_pose(&reference, icon).map(|(pose, _)| pose);
-                poses.insert(spec.pose_like.clone(), pose);
-                pose
+            .with_context(|| format!("{} has no icon", spec.pose_like))?
+            .clone();
+        let reference = mesh(self, &stock.model).with_context(|| format!("{} has no model", spec.pose_like))?;
+        Ok(Request { spec, mesh: model, reference, icon, label: format!("{dir}/{item}.render").to_ascii_lowercase() })
+    }
+    /// Draw the icons Add-Ons ask to have drawn from their models. One kept
+    /// in `cache` from an earlier drawing of the same request is shown at
+    /// once; the others are drawn on threads of their own, off the load
+    /// path, and kept there. Until one is drawn its item shows its picture
+    /// or letter ([`Self::drawn_icon`] says when it is ready).
+    pub fn draw_icons(&mut self, cache: Option<&Path>) -> IconDraws {
+        let mut draws = IconDraws::default();
+        // Icons still to draw, by the stock item they are posed like: its
+        // pose is fitted once for them all, on one thread.
+        let mut groups: BTreeMap<String, Vec<_>> = BTreeMap::new();
+        for (item, dir, file, request) in std::mem::take(&mut self.icon_requests) {
+            let slot = DrawnIcon::default();
+            self.drawn.insert(item.clone(), slot.clone());
+            if let Some(image) = cache.and_then(|cache| request.cached(cache)) {
+                let _ = slot.set(image);
+                draws.kept += 1;
+                continue;
+            }
+            groups.entry(request.spec.pose_like.clone()).or_default().push((item, dir, file, request, slot));
+        }
+        for (pose_like, group) in groups {
+            let cache = cache.map(Path::to_path_buf);
+            let count = group.len();
+            let thread = std::thread::Builder::new().name("item icon".into()).spawn(move || {
+                let fitted = group[0].3.fit();
+                for (item, dir, file, request, slot) in group {
+                    let drawn = fitted
+                        .as_ref()
+                        .with_context(|| format!("{pose_like}'s model does not match its icon"))
+                        .and_then(|fitted| request.draw_fitted(fitted, cache.as_deref()));
+                    match drawn {
+                        Ok(image) => {
+                            let _ = slot.set(image);
+                        }
+                        Err(error) => bri_console::warn(crate::cosmetic::add_on_fault(
+                            &dir,
+                            &file,
+                            format!("the icon of {item} could not be drawn from its model, so it keeps its picture: {error:#}"),
+                        )),
+                    }
+                }
+            });
+            match thread {
+                Ok(thread) => {
+                    self.drawing.lock().unwrap_or_else(|e| e.into_inner()).push(thread);
+                    draws.drawing += count;
+                }
+                Err(error) => bri_console::warn(format!("Item icons: no thread to draw one: {error}")),
             }
         }
-        .with_context(|| format!("{}'s model does not match its icon", spec.pose_like))?;
-        let key = format!("{dir}/{item}.render").to_ascii_lowercase();
-        let image = render_posed(spec, &model, &pose, icon, &key)?;
-        self.textures.insert(key.clone(), image);
-        self.presentation.items.get_mut(item).unwrap().icon = Some(key);
-        Ok(())
+        draws
     }
-    pub fn icon(&self, item: &str) -> Result<Option<&SceneImage>> {
+    /// Wait until every icon [`Self::draw_icons`] started is drawn (or
+    /// could not be).
+    pub fn finish_icons(&self) {
+        let threads = std::mem::take(&mut *self.drawing.lock().unwrap_or_else(|e| e.into_inner()));
+        for thread in threads {
+            let _ = thread.join();
+        }
+    }
+    /// `item`'s icon drawn from its model: empty until drawn.
+    pub fn drawn_icon(&self, item: &str) -> Option<DrawnIcon> {
+        self.drawn.get(item).cloned()
+    }
+    /// The item's icon: the one drawn from its model once it is, else its
+    /// picture.
+    pub fn icon(&self, id: &str) -> Result<Option<&SceneImage>> {
         let item = self
             .presentation
             .items
-            .get(item)
+            .get(id)
             .context("Unknown item icon identity")?;
-        Ok(item.icon.as_ref().and_then(|id| self.textures.get(id)))
+        let drawn = self.drawn.get(id).and_then(|slot| slot.get());
+        Ok(drawn.or_else(|| item.icon.as_ref().and_then(|id| self.textures.get(id))))
     }
     pub fn shape(&self, model: &str) -> Result<&Shape> {
         self.shapes.get(model).context("Unknown native item model")
@@ -1195,9 +1388,12 @@ fn present_gaps(
                 eye_offset: image.eye_offset,
                 source_rotation_degrees: image.source_rotation_degrees,
                 eye_rotation_degrees: image.eye_rotation,
-                tint: image.color,
+                // As the stock importer does: the colour shows only when
+                // the image shifts it (`doColorShift`).
+                tint: if image.color_shift { image.color } else { [1.0; 4] },
                 evidence: evidence(),
                 follow_arm: image.follow_arm,
+                skin: None,
             },
         );
     }
@@ -1248,6 +1444,10 @@ fn present_gaps(
             ItemPresentation {
                 model,
                 image: item.image.clone(),
+                // Its icon's tint in the tool slots. An Add-On's icon is
+                // drawn in its own colours (a PNG, or drawn from the look),
+                // so it is not tinted again; in the world the item takes
+                // its image's look (`Presentation::item_appearance`).
                 tint: [1.0; 4],
                 icon,
                 evidence: evidence(),
@@ -1298,6 +1498,69 @@ pub(crate) fn place_image(
         "Invalid image mount transform"
     );
     Ok(transform)
+}
+/// Skins an Add-On gives its own images (`looks.json`, `ItemSkin`). One
+/// that does not read, names an image the Add-On does not make, or whose
+/// shader is missing or does not compile is a fault; the item then draws
+/// without it.
+fn read_looks(
+    dir: &str,
+    abs: &Path,
+    pack: &bri_weapons::Pack,
+    manifest: &mut Presentation,
+    skins: &mut BTreeMap<String, (ItemSkin, SkinShader)>,
+    faults: &mut Vec<String>,
+) {
+    if !abs.join("looks.json").is_file() {
+        return;
+    }
+    let looks = crate::materials::read_resource(abs, "looks.json", 256 * 1024)
+        .and_then(|bytes| Ok(serde_json::from_slice::<Looks>(&bytes)?));
+    let looks = match looks {
+        Ok(looks) if looks.schema_version == 1 => looks,
+        Ok(looks) => {
+            faults.push(crate::cosmetic::add_on_fault(dir, "looks.json", format!("unknown schema {}", looks.schema_version)));
+            return;
+        }
+        Err(error) => {
+            faults.push(crate::cosmetic::add_on_fault(dir, "looks.json", format!("{error:#}")));
+            return;
+        }
+    };
+    for (id, look) in looks.images {
+        let Some(skin) = look.skin else {
+            continue;
+        };
+        let read = || -> Result<SkinShader> {
+            ensure!(pack.images.contains_key(&id), "{id} is not one of this Add-On's images");
+            ensure!(
+                skin.color.iter().all(|c| c.is_finite() && (0.0..=1.0).contains(c)),
+                "skin colours must be 0 to 1"
+            );
+            ensure!(skin.energy_states.len() <= 16, "at most 16 energy states");
+            ensure!(
+                bri_content::brick_materials::safe_relative(&skin.shader) && skin.shader.ends_with(".wgsl"),
+                "the skin's shader must be a .wgsl file in the Add-On"
+            );
+            let bytes = crate::materials::read_resource(abs, &skin.shader, 64 * 1024)?;
+            let source = String::from_utf8(bytes).context("the skin's shader is not text")?;
+            bri_client_sandbox::shader::compile(&skin.shader, &source).map_err(|e| anyhow::anyhow!("{e}"))?;
+            Ok(SkinShader {
+                name: format!("{dir}/{}", skin.shader),
+                source,
+                downloaded: dir.starts_with(crate::client_code::DOWNLOADS),
+            })
+        };
+        match read() {
+            Ok(shader) => {
+                if let Some(image) = manifest.images.get_mut(&id) {
+                    image.skin = Some(skin.clone());
+                }
+                skins.insert(id, (skin, shader));
+            }
+            Err(error) => faults.push(crate::cosmetic::add_on_fault(dir, "looks.json", format!("{error:#}"))),
+        }
+    }
 }
 /// An icon rendered from the item's model: `<name>.render.json` in `abs`
 /// (`crate::item_icon_render`). None without one; one that does not read is
@@ -1554,6 +1817,134 @@ mod add_on_icon_tests {
         assert_eq!((item.as_str(), file.as_str()), ("gravity-gun-tool:weapon/gravitygun", "icons/gravity_gun.render.json"));
         assert_eq!(spec.pose_like, bri_weapons::runtime::PRINTER);
     }
+    /// Max, v0.1.10: "my gravity gun looks different on the item spawn
+    /// than in my hand", and "when i drop the item or tool it can look
+    /// different". An item in the world takes the look of the image it is
+    /// held as: model, colour and skin.
+    #[test]
+    fn an_item_looks_the_same_in_the_hand_and_in_the_world() {
+        let abs = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../packages/showcase/gravity-gun-tool/assets")
+            .canonicalize()
+            .unwrap();
+        let weapons = std::fs::read(abs.join("weapons.json")).unwrap();
+        let pack = bri_weapons::Pack::from_json(&weapons).unwrap();
+        let mut manifest = empty();
+        let (mut added, mut faults, mut skins) = (Added::default(), Vec::new(), BTreeMap::new());
+        let mut physics = ItemPhysicsCatalog { schema_version: 1, items: BTreeMap::new() };
+        present_gaps("Gravity Gun Tool", &abs, &weapons, &pack, &mut manifest, &mut physics, &mut added, &mut faults);
+        // Without the base game here the Printer it borrows is a stand-in.
+        assert!(faults.iter().all(|f| f.contains("printGun.dts")), "{faults:?}");
+        faults.clear();
+        read_looks("Gravity Gun Tool", &abs, &pack, &mut manifest, &mut skins, &mut faults);
+        assert!(faults.is_empty(), "{faults:?}");
+        let (gun, image) = ("gravity-gun-tool:weapon/gravitygun", "gravity-gun-tool:image/gravitygun");
+        for printer in [&mut manifest.images.get_mut(image).unwrap().model, &mut manifest.items.get_mut(gun).unwrap().model] {
+            if printer.is_empty() {
+                *printer = "base/data/shapes/printgun.dts".into();
+            }
+        }
+        let held = manifest.image_appearance(image).expect("held");
+        assert_eq!(manifest.item_appearance(gun), Some(held.clone()), "on a spawn brick or dropped, as in the hand");
+        assert_eq!(held.tint, [0.35, 1.0, 0.8, 1.0], "the image's colour shift");
+        assert_eq!(held.skin.as_deref(), Some(image), "its alien skin, wherever it is");
+        let (skin, shader) = &skins[image];
+        assert_eq!((skin.color, &skin.energy_states[..]), ([0.3, 0.95, 1.0], &["Grab".to_string()][..]));
+        assert!(shader.source.contains("fn fs_main"));
+        // An item whose own model and colour differ from its image's (the
+        // stock packs record both) still looks like what is held.
+        let mut manifest = empty();
+        let evidence = bri_weapons::Evidence { path: String::new(), sha256: String::new(), line: 0 };
+        manifest.images.insert("image".into(), ImagePresentation {
+            model: "held.dts".into(),
+            mount_point: 0,
+            offset: [0.; 3],
+            eye_offset: [0.; 3],
+            source_rotation_degrees: [0.; 3],
+            eye_rotation_degrees: [0.; 3],
+            tint: [0.2, 0.4, 0.6, 1.],
+            evidence: evidence.clone(),
+            follow_arm: false,
+            skin: None,
+        });
+        let item = |image: &str| ItemPresentation {
+            model: "lying.dts".into(),
+            image: image.into(),
+            tint: [1.; 4],
+            icon: None,
+            evidence: evidence.clone(),
+        };
+        manifest.items.insert("item".into(), item("image"));
+        manifest.items.insert("loose".into(), item(""));
+        let look = manifest.item_appearance("item").unwrap();
+        assert_eq!(Some(look.clone()), manifest.image_appearance("image"));
+        assert_eq!((look.model.as_str(), look.tint, look.skin), ("held.dts", [0.2, 0.4, 0.6, 1.], None));
+        // Nothing to hold: its own model.
+        assert_eq!(manifest.item_appearance("loose").unwrap().model, "lying.dts");
+    }
+    /// A `looks.json` that names another Add-On's image, a colour out of
+    /// range, a shader outside the Add-On or one that does not compile is
+    /// a fault, and the item draws without a skin.
+    #[test]
+    fn a_look_is_checked() {
+        let assets = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages/showcase/gravity-gun-tool/assets");
+        let weapons = std::fs::read(assets.join("weapons.json")).unwrap();
+        let pack = bri_weapons::Pack::from_json(&weapons).unwrap();
+        let image = "gravity-gun-tool:image/gravitygun";
+        let shader = std::fs::read_to_string(assets.join("skins/alien.wgsl")).unwrap();
+        let look = |image: &str, shader: &str, color: &str| {
+            format!(r#"{{"schema_version": 1, "images": {{"{image}": {{"skin": {{"shader": "{shader}", "color": {color}}}}}}}}}"#)
+        };
+        let cases = [
+            ("good", look(image, "skins/alien.wgsl", "[0.3, 0.95, 1]"), true),
+            ("not its own image", look("v20.image.hammer", "skins/alien.wgsl", "[1, 1, 1]"), false),
+            ("colour out of range", look(image, "skins/alien.wgsl", "[2, 1, 1]"), false),
+            ("outside the Add-On", look(image, "../alien.wgsl", "[1, 1, 1]"), false),
+            ("not WGSL", look(image, "skins/broken.wgsl", "[1, 1, 1]"), false),
+            ("missing", look(image, "skins/missing.wgsl", "[1, 1, 1]"), false),
+            ("unknown field", r#"{"schema_version": 1, "images": {}, "extra": 1}"#.to_string(), false),
+            ("unknown schema", r#"{"schema_version": 2, "images": {}}"#.to_string(), false),
+        ];
+        for (what, json, good) in cases {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::create_dir(dir.path().join("skins")).unwrap();
+            std::fs::write(dir.path().join("skins/alien.wgsl"), &shader).unwrap();
+            std::fs::write(dir.path().join("skins/broken.wgsl"), "fn fs_main( {").unwrap();
+            std::fs::write(dir.path().join("looks.json"), json).unwrap();
+            let mut manifest = empty();
+            let (mut added, mut faults, mut skins) = (Added::default(), Vec::new(), BTreeMap::new());
+            let mut physics = ItemPhysicsCatalog { schema_version: 1, items: BTreeMap::new() };
+            present_gaps("Test", &assets.canonicalize().unwrap(), &weapons, &pack, &mut manifest, &mut physics, &mut added, &mut faults);
+            faults.clear();
+            read_looks("Test", dir.path(), &pack, &mut manifest, &mut skins, &mut faults);
+            let skinned = manifest.images[image].skin.is_some();
+            assert_eq!((skinned, skins.contains_key(image), faults.is_empty()), (good, good, good), "{what}: {faults:?}");
+        }
+    }
+    /// For the record: every stock item whose own model or colour differs
+    /// from what it is held as, which before one look per item drew
+    /// differently on the ground than in the hand.
+    #[test]
+    #[ignore = "requires the converted item and weapons packs"]
+    fn stock_items_that_looked_different_in_the_world() -> Result<()> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
+        let assets = ItemAssets::load(&root.join("item-presentation-pack-010"), &root.join("weapons-pack-009"))?;
+        let presentation = &assets.presentation;
+        let mut differed = 0;
+        for (id, item) in &presentation.items {
+            let Some(image) = presentation.images.get(&item.image) else {
+                continue;
+            };
+            if item.model != image.model || item.tint != image.tint {
+                differed += 1;
+                println!("{id}: lying {} {:?}, held {} {:?}", item.model, item.tint, image.model, image.tint);
+            }
+            let look = presentation.item_appearance(id);
+            assert_eq!(look, presentation.image_appearance(&item.image), "{id}");
+        }
+        println!("{differed} of {} stock items differed", presentation.items.len());
+        Ok(())
+    }
     /// The Trench Pick is a model of its own, not a borrowed one: a native
     /// model beside its `weapons.json` whose materials name the PNGs beside
     /// it, presented under the Add-On with its box as its bounds. Its icon
@@ -1605,7 +1996,7 @@ mod add_on_icon_tests {
             centre: glam::Vec2::new(58.0, 76.0),
             size: [128, 128],
         };
-        let look = Look { base: [1.0; 3], textured: true, skin: None };
+        let look = Look { base: None, textured: true, skin: None };
         let icon = render(&Mesh::from_scene(&scene), &pose, &look, "pick");
         if std::env::var_os("BRI_ICON_SHOT").is_some() {
             let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/trench-pick-preview.png");
@@ -1643,18 +2034,35 @@ mod add_on_icon_tests {
             "addons/gravity-gun-tool/assets".to_string(),
             manifest.join("../../packages/showcase/gravity-gun-tool/assets"),
         )];
-        let started = std::time::Instant::now();
-        let assets = ItemAssets::load_with(
-            &root.join("item-presentation-pack-010"),
-            &root.join("weapons-pack-009"),
-            &extras,
-        )?;
-        let took = started.elapsed();
-        assert!(!assets.faults.iter().any(|f| f.contains("icon")), "{:?}", assets.faults);
+        let load = || {
+            ItemAssets::load_with(&root.join("item-presentation-pack-010"), &root.join("weapons-pack-009"), &extras)
+        };
+        let cache = tempfile::tempdir()?;
         let gun = "gravity-gun-tool:weapon/gravitygun";
-        let key = assets.presentation.items[gun].icon.clone().unwrap();
-        assert!(key.ends_with(".render"), "{key}");
-        let icon = assets.icon(gun)?.unwrap();
+        // First run: nothing kept, so it is drawn on a thread of its own and
+        // the load does not wait for it.
+        let started = std::time::Instant::now();
+        let mut assets = load()?;
+        let loaded = started.elapsed();
+        assert!(!assets.faults.iter().any(|f| f.contains("icon")), "{:?}", assets.faults);
+        let started = std::time::Instant::now();
+        assert_eq!(assets.draw_icons(Some(cache.path())), IconDraws { kept: 0, drawing: 1 });
+        let started_drawing = started.elapsed();
+        assets.finish_icons();
+        let drawn = started.elapsed();
+        // Next run: the same icon, read back from disk, ready at once.
+        let started = std::time::Instant::now();
+        let mut again = load()?;
+        assert_eq!(again.draw_icons(Some(cache.path())), IconDraws { kept: 1, drawing: 0 });
+        let reloaded = started.elapsed();
+        assert_eq!(again.icon(gun)?.unwrap().rgba, assets.icon(gun)?.unwrap().rgba);
+        println!(
+            "item load without the icon {loaded:?}; starting its drawing {started_drawing:?}; drawing it {drawn:?}; \
+             next load with it kept {reloaded:?}"
+        );
+        let slot = assets.drawn_icon(gun).expect("drawn");
+        let icon = slot.get().expect("drawn");
+        assert!(std::ptr::eq(assets.icon(gun)?.unwrap(), icon), "the drawn icon is shown");
         let printer = assets.icon(bri_weapons::runtime::PRINTER)?.unwrap();
         assert_eq!((icon.width, icon.height), (printer.width, printer.height), "framed like the Printer's");
         // Framed like the Printer: a clear border on every side, and the
@@ -1670,16 +2078,38 @@ mod add_on_icon_tests {
         assert!(near(gw, pw.min(icon.width as i32 * 88 / 100)) || near(gh, ph.min(icon.height as i32 * 88 / 100)),
             "gun {gw}x{gh} {gun_border:?}, printer {pw}x{ph} {printer_border:?}");
         assert_eq!(icon.rgba[3], 0, "a clear background");
-        // Side by side with the Printer on a dark and a light slot, for a
-        // look; target/ is never committed (the Printer icon is v20's).
+        // Seen in the Printer icon's profile: the gun's own forward and up
+        // point the same ways in the picture as the Printer's, up is up and
+        // forward is across (Max, v0.1.10: "wrong perspective angle").
+        let spec = crate::item_icon_render::Spec::parse(&std::fs::read(
+            manifest.join("../../packages/showcase/gravity-gun-tool/assets/icons/gravity_gun.render.json"),
+        )?)?;
+        let request = assets.icon_request(gun, "check", spec)?;
+        // Coloured as the gun is in play: its image's tint, its skin's veins.
+        let look = &request.spec.look;
+        assert_eq!(look.base, Some([0.35, 1.0, 0.8]));
+        assert_eq!(look.skin.as_ref().and_then(|s| s.veins), Some([0.3, 0.95, 1.0]));
+        let (_, profile, overlap) = crate::item_icon_render::fit_pose(&request.reference, &request.icon).unwrap();
+        let on_screen = |axes: crate::item_icon_render::Axes, axis: glam::Vec3| {
+            (profile.rotation(axes) * axis).truncate().normalize_or_zero()
+        };
+        let (g, p) = (request.mesh.axes, request.reference.axes);
+        println!("Printer profile {profile:?}, outline overlap {overlap}, gun axes {g:?}, Printer axes {p:?}");
+        for (ours, theirs) in [(on_screen(g, g.forward), on_screen(p, p.forward)), (on_screen(g, g.up), on_screen(p, p.up))] {
+            assert!(ours.dot(theirs) > 0.97, "gun {ours}, Printer {theirs}");
+        }
+        assert!(on_screen(g, g.up).y > 0.5 && on_screen(g, g.forward).x.abs() > 0.5, "side on");
+        // Side by side with the Printer's icon on a dark and a light slot,
+        // for a look; target/ is never committed (the Printer is v20's).
         let (w, h) = (icon.width as usize, icon.height as usize);
-        let mut sheet = vec![255u8; w * 4 * h * 4];
-        for (k, (img, bg)) in [(icon, 40u8), (printer, 40), (icon, 215), (printer, 215)].into_iter().enumerate() {
+        let shots = [(icon, 40u8), (printer, 40), (icon, 215), (printer, 215)];
+        let mut sheet = vec![255u8; w * shots.len() * h * 4];
+        for (k, (img, bg)) in shots.into_iter().enumerate() {
             for y in 0..h {
                 for x in 0..w {
                     let p = &img.rgba[(y * w + x) * 4..][..4];
                     let a = p[3] as f32 / 255.0;
-                    let o = (y * w * 4 + k * w + x) * 4;
+                    let o = (y * w * shots.len() + k * w + x) * 4;
                     for c in 0..3 {
                         sheet[o + c] = (p[c] as f32 * a + bg as f32 * (1.0 - a)).round() as u8;
                     }
@@ -1687,10 +2117,10 @@ mod add_on_icon_tests {
             }
         }
         let side = manifest.join("../../target/gravity-gun-icon-vs-printer.png");
-        image::save_buffer(&side, &sheet, (w * 4) as u32, h as u32, image::ColorType::Rgba8)?;
+        image::save_buffer(&side, &sheet, (w * shots.len()) as u32, h as u32, image::ColorType::Rgba8)?;
         let out = manifest.join("../../target/gravity-gun-icon.png");
         image::save_buffer(&out, &icon.rgba, icon.width, icon.height, image::ColorType::Rgba8)?;
-        println!("drawn in {took:?} (whole item load); saved {} and {}", out.display(), side.display());
+        println!("saved {} and {}", out.display(), side.display());
         Ok(())
     }
 }
@@ -1710,15 +2140,19 @@ mod trench_pick_tests {
             "addons/trench-kit/assets".to_string(),
             manifest.join("../../packages/trench-warfare/trench-kit/assets"),
         )];
-        let assets = ItemAssets::load_with(
+        let mut assets = ItemAssets::load_with(
             &root.join("item-presentation-pack-010"),
             &root.join("weapons-pack-009"),
             &extras,
         )?;
         assert!(assets.faults.is_empty(), "{:?}", assets.faults);
         let pick = "trench-kit:weapon/pick";
-        assert!(assets.presentation.items[pick].icon.as_deref().is_some_and(|k| k.ends_with(".render")));
-        let icon = assets.icon(pick)?.unwrap();
+        // Drawn from its model, off the load path (`ItemAssets::draw_icons`).
+        assert_eq!(assets.draw_icons(None), IconDraws { kept: 0, drawing: 1 });
+        assets.finish_icons();
+        let slot = assets.drawn_icon(pick).expect("an icon drawn from its model");
+        let icon = slot.get().expect("drawn");
+        assert!(std::ptr::eq(assets.icon(pick)?.unwrap(), icon), "the drawn icon is shown");
         let hammer = assets.icon("v20.weapon.hammeritem")?.unwrap();
         assert_eq!((icon.width, icon.height), (hammer.width, hammer.height), "framed like the Hammer's");
         assert_eq!(icon.rgba[3], 0, "a clear background");
@@ -2032,6 +2466,7 @@ mod placement_tests {
                 line: 0,
             },
             follow_arm,
+            skin: None,
         }
     }
     fn close(a: Mat4, b: Mat4) -> bool {
