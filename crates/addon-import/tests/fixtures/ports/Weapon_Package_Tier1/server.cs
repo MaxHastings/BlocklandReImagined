@@ -708,3 +708,10 @@ function TT_processHeadshotDamage(%this, %obj, %col, %pos, %dmg, %multiplier, %h
    }
    %col.damage(%obj, %pos, %dmg, %damageType);
 }
+
+// Every image's class answers no crit; an image with no test of its own
+// runs this one through its className.
+function WeaponImage::TT_isRaycastCritical(%this,%obj,%slot,%col,%pos,%normal,%hit)
+{
+	return 0;
+}

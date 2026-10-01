@@ -237,7 +237,6 @@ fn refuses_to_overwrite_or_write_inside_the_source() {
     std::fs::remove_dir_all(existing.parent().unwrap()).unwrap();
 }
 
-const ARCHIVE: &str = "C:/Users/Maxwell/Documents/_Blockland_Maxwell_1588_Archive/Addons";
 const REFERENCE: &str = "E:/Downloads/B4v21Launcher/versions/Blockland v20";
 
 /// Maxwell's Steam copy of Blockland, whose Add-Ons folder holds the
@@ -293,10 +292,18 @@ fn real_steam_knife_and_grenade_ports() {
 
 #[test]
 fn real_community_samples() {
-    let archive = std::env::var("BRI_ADDON_ARCHIVE").unwrap_or(ARCHIVE.into());
-    let reference = std::env::var("BRI_V20_REFERENCE").unwrap_or(REFERENCE.into());
+    // Only folders named for this run: the test reads nothing of the
+    // machine's on its own. `required_framework_stays_missing` covers the
+    // bot case without them.
+    let (Ok(archive), Ok(reference)) = (
+        std::env::var("BRI_ADDON_ARCHIVE"),
+        std::env::var("BRI_V20_REFERENCE"),
+    ) else {
+        eprintln!("skipped: set BRI_ADDON_ARCHIVE and BRI_V20_REFERENCE to run it");
+        return;
+    };
     if !Path::new(&archive).is_dir() || !Path::new(&reference).is_dir() {
-        eprintln!("skipped: community archive or v20 reference install not on this machine");
+        eprintln!("skipped: {archive} or {reference} is not a folder");
         return;
     }
     let run = |name: &str| {
@@ -510,6 +517,52 @@ fn real_community_samples() {
             .any(|d| d.recognised_as == "bot" && d.status == "recognised_only")
     );
     std::fs::remove_dir_all(out.parent().unwrap()).unwrap();
+}
+
+/// A bot that runs on another Add-On's AI framework (`Bot_Zombie` on
+/// `Bot_Hole`), with that one absent from the reference install: it names
+/// none of its datablocks, but calls its functions, so it is still missing,
+/// not unused. Synthetic files in a temp folder only.
+#[test]
+fn required_framework_stays_missing() {
+    let root = fresh("framework-source");
+    let reference = root.with_file_name("reference");
+    std::fs::create_dir_all(reference.join("Add-Ons")).unwrap();
+    std::fs::create_dir_all(reference.join("base")).unwrap();
+    let source = root.with_file_name("Bot_Synthetic_Zombie");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(
+        source.join("description.txt"),
+        "Title: Synthetic Zombie\nAuthor: tests",
+    )
+    .unwrap();
+    std::fs::write(
+        source.join("server.cs"),
+        r#"
+ForceRequiredAddOn("Bot_Synthetic_Hole");
+function ZombieArmor::onBotLoop(%this, %obj)
+{
+   holeSyntheticWander(%obj);
+}
+"#,
+    )
+    .unwrap();
+    let out = fresh("framework");
+    let report = import(&Options {
+        input: source,
+        out: out.clone(),
+        reference: Some(reference),
+        ..Default::default()
+    })
+    .unwrap();
+    let hole = report
+        .dependencies
+        .iter()
+        .find(|d| d.addon == "Bot_Synthetic_Hole")
+        .unwrap();
+    assert_eq!(hole.status, "missing");
+    std::fs::remove_dir_all(out.parent().unwrap()).unwrap();
+    std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
 }
 
 /// Spawns the imported car in the vehicles runtime on a flat floor, seats a

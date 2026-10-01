@@ -541,6 +541,10 @@ pub type Bodies = BTreeMap<String, String>;
 #[derive(Debug, Default)]
 pub struct Code {
     pub bodies: Bodies,
+    /// The [`Code::bodies`] a datablock has only through its `className`
+    /// (lower-case `name::method`): the class's own method, judged under
+    /// the class's name.
+    pub inherited: std::collections::BTreeSet<String>,
     pub calls: Vec<bri_convert::tscript::Call>,
     /// The weapon datablocks of the Add-Ons it depends on and the base
     /// game, by lower-case name: what a script names from them (another

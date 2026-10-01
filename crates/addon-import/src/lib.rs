@@ -398,6 +398,7 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
             }
         }
     }
+    code.inherited.extend(linked.iter().map(|(own, _)| own.clone()));
     code.bodies.extend(linked);
     code.reference = cx
         .reference
@@ -3118,6 +3119,14 @@ fn dependencies(cx: &mut Ctx, scripts: &[Script]) {
         d.uses.extend(uses);
     }
     let own = cx.src.name.to_ascii_lowercase();
+    // A function the scripts call that neither they, the engine nor the
+    // reference install define may be the missing Add-On's (Bot_Zombie
+    // calls Bot_Hole's AI framework), so such an Add-On is not unused.
+    let calls_unknown = cx
+        .report
+        .needs_behaviour
+        .iter()
+        .any(|b| !b.unknown_calls.is_empty() || b.hook.kind == "framework_callback");
     for (key, d) in &mut deps {
         if *key == own {
             // Requiring itself does nothing: it is already loading.
@@ -3125,6 +3134,7 @@ fn dependencies(cx: &mut Ctx, scripts: &[Script]) {
         } else if matches!(d.status.as_str(), "missing" | "base")
             && d.uses.is_empty()
             && cx.reference.root.is_some()
+            && !(d.status == "missing" && calls_unknown)
         {
             // `forceRequiredAddOn` of a missing Add-On only printed an
             // error; with none of its content named (every name the

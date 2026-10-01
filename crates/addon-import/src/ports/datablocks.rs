@@ -626,7 +626,9 @@ pub fn scripts(
                     else {
                         continue;
                     };
-                    let Some(values) = groups(&re, required.as_ref(), body, name, &method)? else {
+                    let own = format!("{}::{method}", name.to_ascii_lowercase());
+                    let required = required.as_ref().filter(|_| !code.inherited.contains(&own));
+                    let Some(values) = groups(&re, required, body, name, &method)? else {
                         continue;
                     };
                     let set = fill(&rule.set, &values, &cx(name))
@@ -679,7 +681,13 @@ pub fn scripts(
                     continue;
                 };
                 let owner = image["name"].as_str().unwrap_or_default();
-                let Some(values) = groups(&re, required.as_ref(), body, owner, &method)? else {
+                // A method the image has only through its `className` that
+                // the rule does not read is the class's, judged under the
+                // class's own name (`WeaponImage::TT_isRaycastCritical`).
+                let required = required
+                    .as_ref()
+                    .filter(|_| !code.inherited.contains(&format!("{name}::{method}")));
+                let Some(values) = groups(&re, required, body, owner, &method)? else {
                     continue;
                 };
                 let set = fill(&rule.set, &values, &cx(owner))
