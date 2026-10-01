@@ -2769,10 +2769,11 @@ impl App {
             rotate: i.commands.rotate.clone(),
             plant: i.commands.plant.clone(),
             paint: i.commands.paint.clone(),
+            paint_picker: i.paint_picker,
         });
         if let Some(building) = self.building.as_mut() {
             building.set_image_keys(keys);
-            let takes = building.takes_paint();
+            let takes = building.keeps_tool_for_paint();
             if takes != self.tool_takes_paint {
                 self.tool_takes_paint = takes;
                 self.ui.apply(UiUpdate::ToolTakesPaint(takes));

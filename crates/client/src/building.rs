@@ -764,6 +764,14 @@ impl Building {
     pub fn takes_paint(&self) -> bool {
         self.paint_taken && self.image_keys.paint.is_some()
     }
+    /// Whether the tool in hand stays out when the paint box opens and a
+    /// can is picked: it takes the cans, or it is a paint picker.
+    pub fn keeps_tool_for_paint(&self) -> bool {
+        self.takes_paint() || self.picker_in_hand()
+    }
+    fn picker_in_hand(&self) -> bool {
+        self.image_keys.paint_picker && self.active_tool.is_some()
+    }
     /// A key the held image takes, as the command the client sends.
     fn image_key(command: &Option<String>, args: Vec<PackageArg>) -> Option<Command> {
         let (package, command) = command.as_deref()?.split_once(':')?;
@@ -1407,8 +1415,12 @@ impl Building {
                 );
                 self.paint = *color as u8;
                 self.random_color = None;
-                self.equipment = Equipment::Paint(self.paint);
-                self.active_tool = None;
+                // A paint picker stays in hand: the host puts it back
+                // after the can (`serverCmdUseSprayCan` packaged).
+                if !self.picker_in_hand() {
+                    self.equipment = Equipment::Paint(self.paint);
+                    self.active_tool = None;
+                }
                 out.commands
                     .push(Command::UseSprayCan { color: self.paint });
                 if let Some(ghost) = &mut self.ghost {
@@ -1417,13 +1429,16 @@ impl Building {
                 }
             }
             UiAction::UseFxCan { fx } => {
-                self.equipment = match fx {
+                let equipment = match fx {
                     0..=6 => Equipment::ColorEffect(*fx as u8),
                     7 => Equipment::ShapeEffect(0),
                     8 => Equipment::ShapeEffect(1),
                     _ => anyhow::bail!("Unknown FX can"),
                 };
-                self.active_tool = None;
+                if !self.picker_in_hand() {
+                    self.equipment = equipment;
+                    self.active_tool = None;
+                }
                 out.commands.push(Command::UseFxCan { fx: *fx as u8 });
             }
             UiAction::Game(GameAction::Held {
@@ -2168,7 +2183,7 @@ mod tests {
             shift: Some("dup:shift".into()),
             rotate: Some("dup:turn".into()),
             plant: Some("dup:plant".into()),
-            paint: None,
+            ..Default::default()
         });
         let sent = |commands: Vec<Command>| match commands.as_slice() {
             [Command::Package(p)] => (p.command.clone(), p.args.clone()),
@@ -2230,6 +2245,41 @@ mod tests {
             ..keys
         });
         assert!(!b.takes_paint());
+    }
+
+    /// The ported Fill Can: with a paint picker out, opening the paint box
+    /// and picking a can keeps the tool out (no `UnUseTool`, the tool still
+    /// active) while the pick still reaches the host, which remounts it.
+    #[test]
+    fn picking_a_can_keeps_a_paint_picker_in_hand() {
+        let mut b = controller();
+        b.ui_action(&UiAction::UseTool { slot: 0 }, &player())
+            .unwrap();
+        let tool = b.equipment().clone();
+        assert!(!b.keeps_tool_for_paint(), "a plain tool is put away");
+        b.set_image_keys(ImageKeys {
+            paint_picker: true,
+            ..Default::default()
+        });
+        assert!(b.keeps_tool_for_paint());
+        let pick = |b: &mut Building, action: UiAction| {
+            b.ui_action(&action, &player()).unwrap().unwrap().commands
+        };
+        assert!(matches!(
+            pick(&mut b, UiAction::UseSprayCan { color: 1 }).as_slice(),
+            [Command::UseSprayCan { color: 1 }]
+        ));
+        assert!(matches!(
+            pick(&mut b, UiAction::UseFxCan { fx: 3 }).as_slice(),
+            [Command::UseFxCan { fx: 3 }]
+        ));
+        assert_eq!(b.equipment(), &tool, "the tool stays in hand");
+        assert!(b.keeps_tool_for_paint());
+        // Put away, the next pick takes out the can as ever.
+        b.ui_action(&UiAction::UnUseTool, &player()).unwrap();
+        assert!(!b.keeps_tool_for_paint());
+        pick(&mut b, UiAction::UseSprayCan { color: 1 });
+        assert_eq!(b.equipment(), &Equipment::Paint(1));
     }
 
     #[test]
@@ -3157,4 +3207,7 @@ pub struct ImageKeys {
     pub plant: Option<String>,
     /// Takes the paint and FX cans while it asks to (`take_paint`).
     pub paint: Option<String>,
+    /// Stays in hand when a paint or FX can is picked (the image's
+    /// `paint_picker`, as the Fill Can): the pick goes to the host as ever.
+    pub paint_picker: bool,
 }
