@@ -14,6 +14,9 @@ operation that needs a capability.
 | TorqueScript | Here | Notes |
 |---|---|---|
 | `ClientGroup` loop, `%client.player` | `players()`, `player(id)` | A player map, below. |
+| `AIPlayer`s in `MissionCleanup`, `%bot.spawnBrick.getGroup().bl_id` | `bots()`, `player(id)`, `p.bot`, `p.bot_owner` | A bot reads like a player. |
+| `%obj.getObjectMount()`, `getMountNodeObject` | `p.riding`, `p.seat`, `p.mounted` | |
+| `%obj.getScale()` | `p.scale` | |
 | `%obj.getPosition()`, `getTransform()` | `p.x`, `p.y`, `p.z` | The feet. |
 | `%obj.getWorldBoxCenter()` | `p.cx`, `p.cy`, `p.cz` | The middle of the body, crouch and scale included. |
 | `%obj.getEyePoint()`, `getEyeVector()` | `p.ex`..`p.ez`, `p.lx`..`p.lz` | The look is a unit vector. |
@@ -27,7 +30,8 @@ operation that needs a capability.
 | `%obj.getMuzzlePoint(0)` | `p.mx`, `p.my`, `p.mz` | The held image's muzzle, or the eye with empty hands. |
 | `%obj.tool[%i]` | `p.tools` | Item ids by slot, `""` for an empty one. |
 | `%client.currentColor` | `p.paint` | The palette colour last picked with the paint keys. |
-| `containerRayCast(%start, %end, %mask, %exempt)` | `raycast(from, dir, range, ignore)` | Answers at once. A map with `kind`, `id`, `ref`, `x`, `y`, `z`, `nx`, `ny`, `nz`, `distance`, or `()`. No type mask: check `kind`. |
+| `containerRayCast(%start, %end, %mask, %exempt)` | `raycast(from, dir, range, ignore)` | Answers at once. A map with `kind`, `id`, `ref`, `x`, `y`, `z`, `nx`, `ny`, `nz`, `distance` (and `region` for a player), or `()`. No type mask: check `kind`. |
+| `%obj.getDamageLocation(%pos)` | `hit_region(p, x, y, z)`, `info.region` | `"head"`, `"torso"` or `"legs"`, by Torque's default bands. `on_damage`, `on_projectile_hit` and `raycast` carry it already. |
 | `initContainerRadiusSearch` | `objects_near(x, y, z, r)` | Players, vehicles and entities. |
 | `minigameCanDamage(%a, %b)` | `can_damage(by, target)` | Players, vehicles and entities. |
 | `getRandom()` | `hash3(tick(), a, b, c)`, `noise(...)` | Deterministic, so a replay agrees. |
@@ -42,6 +46,11 @@ operation that needs a capability.
 | `new Projectile() { ... }` | `fire(projectile, x, y, z, vx, vy, vz, by)` | `damage` |
 | `new Explosion()`, `radiusDamage` | `explode(x, y, z, radius, damage, brick_radius)` | `damage` |
 | `%obj.mountImage(%img, 0)` | `mount_image(p, image)`, `mount_image(p, ())` | `player` |
+| `%obj.unMountImage(0)` | `unmount_image(p)` | `player` |
+| `%obj.setScale("s s s")` | `set_scale(p, s)` | `player`; 0.2 to 5, one number |
+| `%obj.setLookLimits(%up, %down)` | `set_look_limits(p, up, down)`, `set_look_limits(p, ())` | `player` |
+| `%obj.mountObject(%rider, %node)`, `%rider.canDismount = 0` | `mount_object(mount, rider, node, can_dismount)` | `physics`; node is a `mount<N>` of the body model |
+| `%rider.unMountObject()`, `dismount()` | `unmount_object(rider)` | `physics`; keeps the mount's velocity |
 | `%obj.setImageAmmo(0, %x)` | `set_image_ammo(p, ammo)` | `player` |
 | `%client.setControlCameraFov(%fov)` | `set_fov(p, fov)`, `set_fov(p, ())` | `player` |
 | `%obj.setTransform`, `%client.spawnPlayer()` | `teleport(p, x, y, z)`, `respawn(p)` | `player` |
@@ -52,7 +61,7 @@ operation that needs a capability.
 | `centerPrint`, `bottomPrint` | `center_print(p, text, s)`, `bottom_print(p, text, s)` | `chat` |
 | `messageClient`, `messageAll` | `tell(p, text)`, `broadcast(text)` | `chat` |
 | `serverPlay3D(%profile, %pos)`, `%client.play2D` | `sound_at(profile, x, y, z)`, `play_sound(p, profile)` | `effects` |
-| `%obj.playThread(%slot, %seq)` | `play_thread(p, thread, sequence)` | `effects` |
+| `%obj.playThread(%slot, %seq)` | `play_thread(p, thread, sequence)` | `effects`; whole-body sequences (`death1`) override by priority, empty-hand arm poses (`armReadyBoth`) hold |
 | A stretched `StaticShape` tracer | `beam(from, to, #{ color, width, seconds, muzzle })` | `effects` |
 | Mission lights baked into the map (v20 scripts could not change them) | `set_map_lights([x, y, z], radius, #{ on, color, brightness })` | `lighting` |
 | The mission `Sun`'s `azimuth`, `elevation`, `color`, `ambient` and the `Sky`'s `fogColor`, `fogDistance`, `visibleDistance` (fixed in v20; changed live here) | `set_environment(#{ sun_azimuth, direct_light, fog_color, visible_distance, day_length, ... })`, `environment()` | `environment` |
@@ -82,6 +91,7 @@ operation that needs a capability.
 | `Player::SetTempColor(%color, %ms)` with no position; `setFaceName` with a reset `schedule` | `temp_look(p, #{ color \| paint, face, alpha }, seconds)` |
 | `serverCmdUseSprayCan` / `serverCmdUseFXCan` packaged to remount a tool, `%client.currentFXcan` | The image's `paint_picker`; `player(p).fx_can` |
 | `%client.minigame.enablePainting` | `player(p).may_paint` |
+| `Player::activateStuff` packaged (an empty-hand click) | `on_activate(p)`: answer `true` to take the click |
 
 ## Not here yet
 

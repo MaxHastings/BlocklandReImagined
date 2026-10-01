@@ -2,9 +2,13 @@
 //! interpolated authoritative transforms, with wheels, steering, suspension
 //! and turrets, plus seat transforms for riders and the driving camera.
 use crate::items::native_shape_scene;
+use crate::portal_view::Straddle;
 use anyhow::{Context, Result, ensure};
+use bri_content::passage::Passages;
 use bri_content::shape::{Animation, Shape};
-use bri_render::scene::{GpuInstances, GpuScene, SceneImage, SceneRenderer, SceneTransform};
+use bri_render::scene::{
+    ClipPlane, GpuInstances, GpuScene, KEEP_ALL, SceneImage, SceneRenderer, SceneTransform,
+};
 use bri_sim::session::{VehicleInfo, VehiclePose};
 use bri_vehicles::{Definition, Pack, schema::Wheel};
 use glam::{Mat4, Quat, Vec3};
@@ -34,6 +38,8 @@ struct Model {
     gpu: Option<GpuScene>,
     instances: Option<GpuInstances>,
     transforms: Vec<SceneTransform>,
+    /// Each transform's cut (`crate::portal_view::Straddle`).
+    clips: Vec<ClipPlane>,
 }
 
 pub struct VehicleAssets {
@@ -269,6 +275,7 @@ impl VehicleAssets {
                         gpu: None,
                         instances: None,
                         transforms: Vec::new(),
+                        clips: Vec::new(),
                     },
                 );
                 Ok(())
@@ -486,6 +493,7 @@ impl VehicleAssets {
         match self.models.get_mut(path) {
             Some(model) if transform.is_finite() => {
                 model.transforms.push(SceneTransform { transform, tint });
+                model.clips.push(KEEP_ALL);
                 true
             }
             _ => false,
@@ -544,6 +552,10 @@ pub struct ClientVehicles {
     clock: f64,
     /// The driven vehicle's predicted place (`set_predicted`).
     predicted: Option<(u64, Vec3, Quat)>,
+    /// The openings vehicles pass through (`set_passages`).
+    passages: Passages,
+    /// The vehicles drawn part way through an opening this frame.
+    straddles: BTreeMap<u64, Straddle>,
 }
 /// How far the driven vehicle is drawn from its extrapolated newest pose:
 /// a disagreeing pose shifts the path, and the difference decays instead of
@@ -557,6 +569,18 @@ struct Warp {
 }
 
 impl ClientVehicles {
+    /// The openings of linked bricks: a vehicle part way through one draws
+    /// on both sides of it.
+    pub fn set_passages(&mut self, passages: &Passages) {
+        if self.passages.list != passages.list {
+            self.passages = passages.clone();
+        }
+    }
+    /// The opening vehicle `id` is drawn part way through this frame (after
+    /// `prepare`): its riders draw cut there too.
+    pub fn straddle(&self, id: u64) -> Option<&Straddle> {
+        self.straddles.get(&id)
+    }
     pub fn clear(&mut self) {
         self.history.clear();
         self.frames.clear();
@@ -734,7 +758,9 @@ impl ClientVehicles {
         } = assets;
         for model in models.values_mut() {
             model.transforms.clear();
+            model.clips.clear();
         }
+        self.straddles.clear();
         for (id, frame) in &self.frames {
             let Some(info) = infos.get(id) else { continue };
             let Some(d) = index.get(&info.definition).map(|i| &pack.definitions[*i]) else {
@@ -744,18 +770,33 @@ impl ClientVehicles {
             if d.family == bri_vehicles::Family::Horse {
                 continue;
             }
-            let tint = info
-                .color
-                .and_then(|c| palette.get(usize::from(c)))
-                .map_or([1.0; 4], |c| [c[0], c[1], c[2], 1.0]);
+            let tint = body_tint(d, info, palette);
             let body = to_transform(frame.position, frame.rotation);
             let pitch = frame.turret_aim[1];
+            // Openings carry a vehicle by its centre of mass, as the host
+            // does; part way through one it draws on both sides, cut there.
+            let (low, high) = (Vec3::from(d.bounds_min), Vec3::from(d.bounds_max));
+            let centre = Vec3::from(d.mass_center);
+            let reach = (centre - low).abs().max((high - centre).abs()).length() * 2.0 * info.scale;
+            let middle = body.transform_point3(centre * info.scale);
+            let straddle = Straddle::find(&self.passages, middle, reach);
+            if let Some(straddle) = straddle {
+                self.straddles.insert(*id, straddle);
+            }
             let mut push = |model: &str, transform: Mat4, tint: [f32; 4]| {
                 for (model, transform) in posed(looks, model, pitch, transform) {
                     if let Some(m) = models.get_mut(model)
                         && transform.is_finite()
                     {
                         m.transforms.push(SceneTransform { transform, tint });
+                        match &straddle {
+                            Some(s) => {
+                                let transform = s.carried(transform);
+                                m.transforms.push(SceneTransform { transform, tint });
+                                m.clips.extend([s.near, s.far]);
+                            }
+                            None => m.clips.push(KEEP_ALL),
+                        }
                     }
                 }
             };
@@ -768,7 +809,8 @@ impl ClientVehicles {
                     push(model, transform, tint);
                 }
             }
-            for (i, wheel) in d.wheels.iter().enumerate() {
+            // A wreck's tires are gone (`emptyTire`): it rests on its body.
+            for (i, wheel) in d.wheels.iter().enumerate().filter(|_| !info.destroyed) {
                 let suspension = frame
                     .wheel_suspension
                     .get(i)
@@ -812,11 +854,11 @@ impl ClientVehicles {
                     model.transforms.len().next_power_of_two().max(4),
                 )?);
             }
-            model
-                .instances
-                .as_mut()
-                .unwrap()
-                .update(queue, &model.transforms)?;
+            model.instances.as_mut().unwrap().update_clipped(
+                queue,
+                &model.transforms,
+                &model.clips,
+            )?;
         }
         Ok(())
     }
@@ -935,6 +977,22 @@ fn sample(
     let ahead = ((tick - last.tick as f64).min(6.0) / TICK_RATE) as f32;
     frame.position += frame.velocity * ahead;
     frame
+}
+
+/// A vehicle's body, attachment and moving parts are drawn in its spawn
+/// brick's colour, or its class's wreck colour once destroyed (v20 paints a
+/// wreck black until the final explosion removes it). Driven by the
+/// replicated `destroyed` flag, so late joiners see it and it costs nothing
+/// on the wire.
+pub fn body_tint(d: &Definition, info: &VehicleInfo, palette: &[[f32; 4]]) -> [f32; 4] {
+    if info.destroyed
+        && let Some(wreck) = d.wreck_color()
+    {
+        return wreck;
+    }
+    info.color
+        .and_then(|c| palette.get(usize::from(c)))
+        .map_or([1.0; 4], |c| [c[0], c[1], c[2], 1.0])
 }
 
 #[cfg(test)]
@@ -1138,6 +1196,135 @@ mod tests {
             }
         }
         Ok(())
+    }
+    /// Max, v0.1.10: a destroyed jeep, tank or plane kept its paint while it
+    /// burned. v20 paints the wreck black and its tires are gone until the
+    /// final explosion; PlayerData mounts keep their colour. Uses the
+    /// committed stunt plane Add-On, a `WheeledVehicleData` with three wheels.
+    #[test]
+    fn a_destroyed_vehicle_is_drawn_black_without_its_tires() -> Result<()> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../packages/imported/vehicle_stunt_plane/assets");
+        let mut assets = VehicleAssets::load(&root)?;
+        let d = assets.pack.definitions[0].clone();
+        ensure!(d.family == bri_vehicles::Family::Wheeled && d.wheels.len() == 3);
+        let palette = [[0.9, 0.1, 0.1, 1.0]];
+        let draw = |assets: &mut VehicleAssets, destroyed: bool| {
+            let infos = BTreeMap::from([(
+                1,
+                VehicleInfo {
+                    id: 1,
+                    definition: d.id.clone(),
+                    color: Some(0),
+                    occupants: vec![],
+                    destroyed,
+                    scale: 1.0,
+                },
+            )]);
+            let mut vehicles = ClientVehicles::default();
+            vehicles.update(
+                &infos,
+                &BTreeMap::from([(1, pose(1, 0.0))]),
+                None,
+                None,
+                &Default::default(),
+            );
+            vehicles.prepare(assets, &infos, &palette);
+            let body: Vec<_> = assets.models[&d.model]
+                .transforms
+                .iter()
+                .map(|t| t.tint)
+                .collect();
+            let wheels: usize = d
+                .wheels
+                .iter()
+                .map(|w| w.model.as_str())
+                .collect::<std::collections::BTreeSet<_>>()
+                .iter()
+                .map(|m| assets.models.get(*m).map_or(0, |m| m.transforms.len()))
+                .sum();
+            (body, wheels)
+        };
+        let (body, wheels) = draw(&mut assets, false);
+        assert_eq!(
+            body,
+            vec![[0.9, 0.1, 0.1, 1.0]],
+            "a live vehicle wears its paint"
+        );
+        assert_eq!(wheels, 3, "and rolls on its tires");
+        let (body, wheels) = draw(&mut assets, true);
+        assert_eq!(body, vec![[0.0, 0.0, 0.0, 1.0]], "a wreck is charred black");
+        assert_eq!(wheels, 0, "and its tires are gone");
+        Ok(())
+    }
+    #[test]
+    fn only_vehicle_classes_char_and_player_mounts_keep_their_colour() {
+        let plane: Pack = serde_json::from_slice(include_bytes!(
+            "../../../packages/imported/vehicle_stunt_plane/assets/vehicles.json"
+        ))
+        .unwrap();
+        let mut d = plane.definitions[0].clone();
+        let info = |destroyed| VehicleInfo {
+            id: 1,
+            definition: d.id.clone(),
+            color: Some(1),
+            occupants: vec![],
+            destroyed,
+            scale: 1.0,
+        };
+        let (live, dead) = (info(false), info(true));
+        let palette = [[1.0; 4], [0.2, 0.4, 0.6, 1.0]];
+        use bri_vehicles::Family::*;
+        for family in [Wheeled, Flying, Ball] {
+            d.family = family;
+            assert_eq!(
+                body_tint(&d, &live, &palette),
+                [0.2, 0.4, 0.6, 1.0],
+                "{family:?}"
+            );
+            assert_eq!(
+                body_tint(&d, &dead, &palette),
+                [0.0, 0.0, 0.0, 1.0],
+                "{family:?}"
+            );
+        }
+        for family in [Horse, Rowboat, Cannon, Turret, Skis, Tumble] {
+            d.family = family;
+            assert_eq!(
+                body_tint(&d, &dead, &palette),
+                [0.2, 0.4, 0.6, 1.0],
+                "{family:?}"
+            );
+        }
+        // Unpainted, a live vehicle shows its own texture.
+        d.family = Wheeled;
+        let plain = VehicleInfo {
+            color: None,
+            ..live.clone()
+        };
+        assert_eq!(body_tint(&d, &plain, &palette), [1.0; 4]);
+    }
+    /// A wreck burns with its own `damageEmitter`s, each once: the stunt
+    /// plane names `VehicleBurnEmitter` twice; an Add-On's own emitter
+    /// resolves to its id; a mount without any (a horse) does not burn.
+    #[test]
+    fn a_wreck_burns_with_its_own_damage_emitters() {
+        let plane: Pack = serde_json::from_slice(include_bytes!(
+            "../../../packages/imported/vehicle_stunt_plane/assets/vehicles.json"
+        ))
+        .unwrap();
+        let mut d = plane.definitions[0].clone();
+        assert_eq!(d.wreck_emitters(), ["v20/emitter/vehicleburnemitter"]);
+        let own = d.effects.emitters[0].id.clone();
+        let (_, name) = own.rsplit_once(":emitter/").unwrap();
+        d.authored
+            .insert("damageemitter[2]".into(), name.to_ascii_uppercase());
+        assert_eq!(
+            d.wreck_emitters(),
+            ["v20/emitter/vehicleburnemitter".to_string(), own]
+        );
+        d.authored.retain(|k, _| !k.starts_with("damageemitter"));
+        assert!(d.wreck_emitters().is_empty());
     }
     #[test]
     fn vehicle_samples_interpolate_between_poses() {

@@ -565,6 +565,7 @@ impl Session {
             archetypes.add(archetype)?;
         }
         self.archetypes = archetypes;
+        self.fill_body_mount_points()?;
         self.minigames = combat::new_world(self.minigames.catalog().clone(), &self.archetypes);
         if let Some((id, mode)) = catalog.running_mode()
             && let Some(minigame) = &mode.minigame
@@ -875,6 +876,80 @@ impl Session {
             vars: vars.into_iter().map(|(k, v)| (k, Arc::new(v))).collect(),
         }
     }
+    /// What scripts read of a player or bot.
+    fn player_view(&self, owner: OwnerId, p: &Peer) -> PlayerView {
+        let actor = self.weapons.actor(bri_weapons::ActorId(owner));
+        let item = actor
+            .and_then(|a| a.inventory.get(a.selected?)?.clone())
+            .unwrap_or_default();
+        let (image, image_state) = self
+            .weapons
+            .image_state(bri_weapons::ActorId(owner), 0)
+            .map(|(image, state)| (image.id.clone(), state.name.clone()))
+            .unwrap_or_default();
+        let state = p.player.state();
+        let tuning = p.player.tuning();
+        let height = if state.crouched {
+            tuning.crouch_height
+        } else {
+            tuning.stand_height
+        };
+        PlayerView {
+            id: owner,
+            key: self.player_key(owner),
+            name: p.name.clone(),
+            position: p.player.state().feet,
+            alive: p.combat.alive,
+            admin: p.actor.administrator,
+            eye: p.player.eye().to_array(),
+            look: p.player.state().forward().to_array(),
+            velocity: p.player.state().velocity,
+            item,
+            minigame: self
+                .minigames
+                .player(p.combat.player)
+                .ok()
+                .and_then(|m| m.game)
+                .map(|g| g.0),
+            health: p.combat.health,
+            max_health: self
+                .archetypes
+                .resolve(p.player.state().archetype)
+                .max_health,
+            archetype: self
+                .archetypes
+                .resolve(p.player.state().archetype)
+                .id
+                .clone(),
+            crouched: state.crouched,
+            mounted: self.seated(owner),
+            scale: state.scale,
+            center: [state.feet[0], state.feet[1] + height * 0.5, state.feet[2]],
+            slot: actor.and_then(|a| a.selected).map(|s| s as u64),
+            muzzle: actor
+                .filter(|_| !image.is_empty())
+                .map_or(p.player.eye(), |a| a.frame.muzzle[0])
+                .to_array(),
+            tools: actor.map_or_else(Vec::new, |a| {
+                a.inventory
+                    .iter()
+                    .map(|t| t.clone().unwrap_or_default())
+                    .collect()
+            }),
+            image,
+            image_state,
+            paint: p.current_color,
+            fx_can: p.fx_can,
+            may_paint: !matches!(
+                self.minigames
+                    .can_build(p.combat.player, bri_minigames::BuildAction::Paint),
+                Ok(bri_minigames::Decision::Deny(_))
+            ),
+            bot: self.bots.is_bot(owner),
+            bot_owner: self.bot_brick_owner(owner),
+            riding: self.riding_seat(owner),
+        }
+    }
     fn package_snapshot(&self) -> Snapshot {
         let host = self.packages.as_ref();
         Snapshot {
@@ -885,80 +960,13 @@ impl Session {
                 .peers
                 .iter()
                 .filter(|(o, _)| !self.bots.is_bot(**o))
-                .map(|(owner, p)| {
-                    let actor = self.weapons.actor(bri_weapons::ActorId(*owner));
-                    let item = actor
-                        .and_then(|a| a.inventory.get(a.selected?)?.clone())
-                        .unwrap_or_default();
-                    let (image, image_state) = self
-                        .weapons
-                        .image_state(bri_weapons::ActorId(*owner), 0)
-                        .map(|(image, state)| (image.id.clone(), state.name.clone()))
-                        .unwrap_or_default();
-                    let state = p.player.state();
-                    let tuning = p.player.tuning();
-                    let height = if state.crouched {
-                        tuning.crouch_height
-                    } else {
-                        tuning.stand_height
-                    };
-                    PlayerView {
-                        id: *owner,
-                        key: self.player_key(*owner),
-                        name: p.name.clone(),
-                        position: p.player.state().feet,
-                        alive: p.combat.alive,
-                        admin: p.actor.administrator,
-                        eye: p.player.eye().to_array(),
-                        look: p.player.state().forward().to_array(),
-                        velocity: p.player.state().velocity,
-                        item,
-                        minigame: self
-                            .minigames
-                            .player(p.combat.player)
-                            .ok()
-                            .and_then(|m| m.game)
-                            .map(|g| g.0),
-                        health: p.combat.health,
-                        max_health: self
-                            .archetypes
-                            .resolve(p.player.state().archetype)
-                            .max_health,
-                        archetype: self
-                            .archetypes
-                            .resolve(p.player.state().archetype)
-                            .id
-                            .clone(),
-                        crouched: state.crouched,
-                        mounted: self.seated(*owner),
-                        scale: state.scale,
-                        center: [
-                            state.feet[0],
-                            state.feet[1] + height * 0.5,
-                            state.feet[2],
-                        ],
-                        slot: actor.and_then(|a| a.selected).map(|s| s as u64),
-                        muzzle: actor
-                            .filter(|_| !image.is_empty())
-                            .map_or(p.player.eye(), |a| a.frame.muzzle[0])
-                            .to_array(),
-                        tools: actor.map_or_else(Vec::new, |a| {
-                            a.inventory
-                                .iter()
-                                .map(|t| t.clone().unwrap_or_default())
-                                .collect()
-                        }),
-                        image,
-                        image_state,
-                        paint: p.current_color,
-                        fx_can: p.fx_can,
-                        may_paint: !matches!(
-                            self.minigames
-                                .can_build(p.combat.player, bri_minigames::BuildAction::Paint),
-                            Ok(bri_minigames::Decision::Deny(_))
-                        ),
-                    }
-                })
+                .map(|(owner, p)| self.player_view(*owner, p))
+                .collect(),
+            bots: self
+                .peers
+                .iter()
+                .filter(|(o, _)| self.bots.is_bot(**o))
+                .map(|(owner, p)| self.player_view(*owner, p))
                 .collect(),
             entities: host
                 .map(|h| {
@@ -1751,6 +1759,39 @@ impl Session {
                     }
                     None => self.weapons.swap_image(actor, None),
                 }
+            }
+            Op::UnmountImage { player } => {
+                ensure!(self.peers.contains_key(&player), "No such player");
+                self.equip_tool(player, None)
+            }
+            Op::MountObject {
+                mount,
+                rider,
+                node,
+                can_dismount,
+            } => {
+                ensure!(
+                    caller.is_none_or(|c| c == mount),
+                    "A player mounts others on themselves only by their own command"
+                );
+                // Carrying someone moves them: the same rules as `hold`.
+                ensure!(
+                    self.may_move(mount, ObjectRef::Player(rider)),
+                    "Player {mount} may not move {rider} under the minigame and trust rules"
+                );
+                self.mount_player(mount, rider, node, can_dismount)
+            }
+            Op::UnmountObject { rider } => self.unmount_player(rider),
+            Op::SetScale { player, scale } => {
+                ensure!(self.peers.contains_key(&player), "No such player");
+                self.set_player_scale(player, scale)?;
+                self.follow_player_mounts();
+                Ok(())
+            }
+            Op::SetLookLimits { player, limits } => {
+                let peer = self.peers.get_mut(&player).context("No such player")?;
+                peer.look_limits = limits;
+                Ok(())
             }
             Op::Sound { profile, at } => {
                 self.take_cue(package)?;
@@ -2891,6 +2932,35 @@ impl Session {
         let owners = std::mem::take(&mut host.spawns);
         self.deliver_player_hook(owners, |b| b.on_spawn, "on_spawn");
     }
+    /// `on_activate(player)` of every package that declares it, in load
+    /// order, until one takes the click (returns `true`).
+    pub(super) fn package_activate(&mut self, owner: OwnerId) -> bool {
+        let Some(host) = self.packages.as_ref() else {
+            return false;
+        };
+        let hooks: Vec<String> = host
+            .catalog
+            .behaviours()
+            .filter(|(_, b)| b.on_activate)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for package in hooks {
+            let reply = self.run_package(
+                &package,
+                "on_activate",
+                vec![Dynamic::from_int(owner as i64)],
+                Budget::Command,
+                Some(owner),
+                None,
+                None,
+            );
+            self.charge_work(&package);
+            if matches!(reply, Ok(v) if v.as_bool() == Ok(true)) {
+                return true;
+            }
+        }
+        false
+    }
     /// `on_leave(player)` as `owner` leaves, while they are still readable.
     pub(super) fn package_leave(&mut self, owner: OwnerId) {
         if self.bots.is_bot(owner) {
@@ -2907,6 +2977,7 @@ impl Session {
         attacker: Option<OwnerId>,
         amount: f32,
         kind: &combat::DamageKind,
+        hit: Option<(Vec3, &'static str)>,
     ) -> f32 {
         let Some(host) = self.packages.as_mut() else {
             return amount;
@@ -2926,8 +2997,16 @@ impl Session {
         host.in_damage_hook = true;
         let mut info = bri_package_runtime::rhai::Map::new();
         info.insert("kind".into(), kind.hook_kind().into());
-        info.insert("type".into(), kind.type_name().to_string().into());
+        info.insert("type".into(), kind.hook_type().to_string().into());
         info.insert("direct".into(), kind.direct().into());
+        // Where a weapon hit (a shot's contact point, a blast's centre) and
+        // the part of the body that is.
+        if let Some((point, region)) = hit {
+            info.insert("region".into(), region.into());
+            for (key, value) in ["x", "y", "z"].into_iter().zip(point.to_array()) {
+                info.insert(key.into(), Dynamic::from_float(f64::from(value)));
+            }
+        }
         let mut amount = amount;
         for package in hooks {
             let answer = self.run_package(
@@ -3100,7 +3179,9 @@ impl Session {
             return;
         }
         for owner in owners {
-            if !self.peers.contains_key(&owner) {
+            // Player hooks are for connected players. A bot queued while it
+            // joined, before it was registered as one, is left out here.
+            if !self.peers.contains_key(&owner) || self.bots.is_bot(owner) {
                 continue;
             }
             for package in &hooks {

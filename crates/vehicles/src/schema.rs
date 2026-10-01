@@ -444,6 +444,12 @@ pub struct Definition {
     /// they already have that many.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub per_player: Option<u32>,
+    /// How hard blasts push it, as a multiple of v20's rule (the impulse
+    /// divided by its mass): a heavy toy that should still be knocked about
+    /// by rockets sets more than 1. Only explosions and shots; contacts and
+    /// a click's flip go by its mass alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blast_scale: Option<f32>,
     /// Emitters the vehicle runs at its nodes while its speed is in range.
     /// Cosmetic: each client draws them from the vehicle's presented motion.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -521,6 +527,47 @@ impl Definition {
             Family::Horse | Family::Rowboat | Family::Cannon | Family::Turret
         )
     }
+    /// The colour a destroyed one is painted while it burns, over its spawn
+    /// colour. v20's `WheeledVehicleData::Damage` and
+    /// `FlyingVehicleData::Damage` (core scripts 18821, 18910) paint every
+    /// node black (`setNodeColor("ALL", "0 0 0 1")`) the moment damage
+    /// reaches `maxDamage`, so every vehicle of those classes, an Add-On's
+    /// included, chars; PlayerData mounts die like players and keep theirs.
+    pub fn wreck_color(&self) -> Option<[f32; 4]> {
+        matches!(self.family, Family::Wheeled | Family::Flying | Family::Ball)
+            .then_some([0., 0., 0., 1.])
+    }
+    /// The emitters a wreck burns with until the final explosion: its
+    /// `damageEmitter[0..3]`, by native emitter id (an Add-On's own from
+    /// `effects`, else the base game's), each once. Torque's
+    /// `Vehicle::updateDamageSmoke` runs emitter `i` past
+    /// `damageLevelTolerance[i]` of `maxDamage`, so a destroyed vehicle runs
+    /// every one it has; one without (a horse, a rowboat) does not burn.
+    pub fn wreck_emitters(&self) -> Vec<String> {
+        let mut ids: Vec<String> = vec![];
+        for i in 0..3 {
+            let Some(name) = self.authored.get(&format!("damageemitter[{i}]")) else {
+                continue;
+            };
+            let name = name.trim().to_ascii_lowercase();
+            if name.is_empty() {
+                continue;
+            }
+            let id = self
+                .effects
+                .emitters
+                .iter()
+                .find(|e| {
+                    e.id.rsplit_once(":emitter/")
+                        .is_some_and(|(_, n)| n == name)
+                })
+                .map_or_else(|| format!("v20/emitter/{name}"), |e| e.id.clone());
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+        ids
+    }
     pub fn seat_role(&self, seat: usize) -> SeatRole {
         self.seat_role_for(seat, true)
     }
@@ -574,6 +621,11 @@ impl Pack {
                 "duplicate/invalid vehicle identity"
             );
             ensure!(d.per_player != Some(0), "a per-player cap of 0 allows none");
+            ensure!(
+                d.blast_scale
+                    .is_none_or(|s| s.is_finite() && s > 0. && s <= 100.),
+                "blast_scale must be above 0 and at most 100"
+            );
             ensure!(
                 d.mass.is_finite() && d.mass > 0. && d.max_damage.is_finite() && d.max_damage > 0.,
                 "invalid vehicle mass/damage"

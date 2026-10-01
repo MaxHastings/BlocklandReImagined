@@ -204,6 +204,30 @@ pub fn driver_controls(
     }
 }
 
+/// Carry each vehicle whose middle went in through an opening of a linked
+/// brick since `before` (each one's middle then) out of its partner, turned
+/// with its velocity and spin, as a player is carried. Only a body that fits
+/// the opening gets its middle there: the brick's frame stops the rest. Its
+/// riders follow their seats. Returns the carries made.
+pub fn carry_through_openings(
+    world: &mut veh::VehiclesWorld,
+    physics: &mut PhysicsWorld,
+    passages: &bri_content::passage::Passages,
+    before: &BTreeMap<VehicleId, Vec3>,
+) -> Result<Vec<(VehicleId, glam::Affine3A)>> {
+    let mut carried = Vec::new();
+    for (&id, &before) in before {
+        let Some(after) = world.centre(physics, id) else {
+            continue;
+        };
+        if let (_, Some(carry)) = passages.travel(before, after) {
+            world.carry(physics, id, &carry)?;
+            carried.push((id, carry));
+        }
+    }
+    Ok(carried)
+}
+
 /// The move of the rider controlling a player-type mount (horse, rowboat,
 /// cannon, turret) as its controls: the mount walks by the keys and faces
 /// where the rider looks; a horse jumps with jump, and nothing brakes. The
@@ -841,6 +865,17 @@ impl Session {
         }
         Ok(())
     }
+    /// A blast's or a shot's push: the vehicle's `blast_scale` times it.
+    pub(super) fn blast_vehicle(&mut self, vehicle: u64, position: Vec3, impulse: Vec3) {
+        let scale = self
+            .vehicles
+            .world
+            .as_ref()
+            .and_then(|w| w.definition_of(VehicleId(vehicle)))
+            .and_then(|d| d.blast_scale)
+            .unwrap_or(1.0);
+        self.push_vehicle(vehicle, position, impulse * scale);
+    }
     pub(super) fn push_vehicle(&mut self, vehicle: u64, position: Vec3, impulse: Vec3) {
         if let Some(world) = &mut self.vehicles.world {
             let _ = world.apply_impulse(
@@ -1223,22 +1258,36 @@ impl Session {
         Ok(())
     }
     pub(super) fn vehicle_post_step(&mut self) -> Result<()> {
-        let Some(world) = &mut self.vehicles.world else {
+        if self.vehicles.world.is_none() {
             return Ok(());
-        };
+        }
+        // A vehicle that ran into a player standing or lying on foot (a
+        // corpse too) shares the hit with them as with any body of a
+        // player's mass, instead of stopping against them as against a
+        // wall, before its impacts are judged.
+        let walking: Vec<_> = self
+            .peers
+            .iter()
+            .filter(|(owner, _)| !self.vehicles.is_mounted(**owner))
+            .map(|(owner, peer)| (*owner, peer.player.collider()))
+            .collect();
+        let world = self.vehicles.world.as_mut().context("No vehicle world")?;
+        for (owner, collider) in walking {
+            let kick =
+                world.share_contacts(&mut self.simulation.physics, collider, combat::PLAYER_MASS);
+            if kick != Vec3::ZERO
+                && let Some(peer) = self.peers.get_mut(&owner)
+            {
+                peer.player.push(kick);
+            }
+        }
         world.post_step(&mut self.simulation.physics)?;
         // Through the openings of linked bricks their middles crossed.
         if !self.vehicles.centres.is_empty() {
             let passages = self.simulation.links().passages().clone();
             let world = self.vehicles.world.as_mut().context("No vehicle world")?;
-            for (id, before) in std::mem::take(&mut self.vehicles.centres) {
-                let Some(after) = world.centre(&self.simulation.physics, id) else {
-                    continue;
-                };
-                if let (_, Some(carry)) = passages.travel(before, after) {
-                    world.carry(&mut self.simulation.physics, id, &carry)?;
-                }
-            }
+            let before = std::mem::take(&mut self.vehicles.centres);
+            carry_through_openings(world, &mut self.simulation.physics, &passages, &before)?;
         }
         let world = self.vehicles.world.as_mut().context("No vehicle world")?;
         let intents = world.drain_intents();
@@ -1672,7 +1721,11 @@ impl Session {
                     // setVelocity: the push replaces the player's velocity.
                     if let Some(peer) = self.peers.get_mut(&victim) {
                         let current = Vec3::from(peer.player.state().velocity);
-                        peer.player.push(Vec3::from(velocity) - current);
+                        // A heavy shoving vehicle (the Steel Ball) bumps them
+                        // off their feet a little, as a tumble would, so it
+                        // rolls on instead of plowing them along the ground.
+                        let pop = if shoves { Vec3::Y * 4.0 } else { Vec3::ZERO };
+                        peer.player.push(Vec3::from(velocity) + pop - current);
                     }
                 }
                 Intent::TumbleRequested {
