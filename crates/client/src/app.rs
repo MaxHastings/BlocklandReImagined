@@ -631,7 +631,8 @@ pub struct App {
     reconnects: u8,
     lan_query: Option<mpsc::Receiver<JoinList>>,
     /// Add-On import in progress: request, row id and the worker's answer.
-    add_on_import: Option<(RequestId, String, mpsc::Receiver<Result<String>>)>,
+    /// Converting the Add-Ons folder (`add_ons::start_sync`).
+    add_on_sync: Option<mpsc::Receiver<crate::add_ons::SyncNote>>,
     /// The Add-On list last asked for, the list that loaded without the
     /// Add-Ons that broke it, and why each was left out.
     left_out_add_ons: Option<(
@@ -790,6 +791,18 @@ impl App {
     }
     /// The Add-Ons screen changed which Add-Ons are on: the next game uses
     /// the new list, with no restart.
+    /// Convert what is new or changed in the Add-Ons folder, and remove
+    /// what was taken out, unless that is already under way.
+    fn sync_add_ons(&mut self) -> Result<()> {
+        if self.add_on_sync.is_none() {
+            let importer = crate::add_ons::importer()?;
+            self.add_on_sync = Some(crate::add_ons::start_sync(
+                &self.content.paths.root,
+                &importer,
+            )?);
+        }
+        Ok(())
+    }
     fn add_ons_changed(&mut self, mut view: AddOnsView) {
         self.packages_from_tools = false;
         let root = self.content.paths.root.clone();
@@ -1871,7 +1884,7 @@ impl App {
             lan_hosts: BTreeMap::new(),
             reconnects: 0,
             lan_query: None,
-            add_on_import: None,
+            add_on_sync: None,
             left_out_add_ons: None,
             invite: None,
             firewall_fix: None,
@@ -6648,22 +6661,36 @@ impl PlatformApp for App {
         }
         self.update_combat_presentation();
         self.update_perf();
-        if let Some((request, _, receiver)) = &self.add_on_import
-            && let Some(result) = finished(receiver, "Add-On import")
-        {
-            let result = result.and_then(|imported| imported);
-            let request = *request;
-            self.add_on_import = None;
-            let mut view = crate::add_ons::view(&self.content.paths.root, crate::add_ons::machine());
-            match result {
-                Ok(notice) => {
-                    view.notice = notice;
-                    self.ui.apply(UiUpdate::AddOns(view));
-                    self.answer(request, Ok(()));
+        if let Some(receiver) = &self.add_on_sync {
+            let mut notes = vec![];
+            let mut done = false;
+            loop {
+                match receiver.try_recv() {
+                    Ok(note) => {
+                        done |= note.finished;
+                        notes.push(note);
+                    }
+                    Err(mpsc::TryRecvError::Empty) => break,
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        done = true;
+                        break;
+                    }
                 }
-                Err(error) => {
+            }
+            if done {
+                self.add_on_sync = None;
+            }
+            if !notes.is_empty() || done {
+                let mut view = crate::add_ons::view(&self.content.paths.root);
+                let last = notes.iter().rev().find(|n| !n.notice.is_empty());
+                if let Some(note) = last {
+                    view.notice = note.notice.clone();
+                }
+                if last.is_some_and(|n| n.finished) {
+                    // A conversion that was on, replaced or removed.
+                    self.add_ons_changed(view);
+                } else {
                     self.ui.apply(UiUpdate::AddOns(view));
-                    self.answer(request, Err(error));
                 }
             }
         }
@@ -8149,43 +8176,38 @@ impl PlatformApp for App {
                     Ok(())
                 }
                 UiAction::RequestAddOns => {
-                    let view = crate::add_ons::view(&self.content.paths.root, crate::add_ons::machine());
+                    let mut view = crate::add_ons::view(&self.content.paths.root);
+                    if let Err(error) = self.sync_add_ons() {
+                        view.notice = format!("{error:#}");
+                    }
                     self.ui.apply(UiUpdate::AddOns(view));
                     Ok(())
                 }
                 UiAction::SetAddOnEnabled { ref id, enabled } => {
-                    crate::add_ons::set_enabled(
-                        &self.content.paths.root,
-                        crate::add_ons::machine(),
-                        id,
-                        enabled,
-                    )
+                    crate::add_ons::set_enabled(&self.content.paths.root, id, enabled)
                         .map(|view| self.add_ons_changed(view))
                 }
-                UiAction::DefaultAddOns => crate::add_ons::defaults(&self.content.paths.root, crate::add_ons::machine())
+                UiAction::DefaultAddOns => crate::add_ons::defaults(&self.content.paths.root)
                     .map(|view| self.add_ons_changed(view)),
                 UiAction::ImportAddOn { id: ref row } => {
                     let root = self.content.paths.root.clone();
-                    let started = if self.add_on_import.is_some() {
-                        Err(anyhow::anyhow!(
-                            "Another add-on is importing; wait for it to finish."
-                        ))
-                    } else {
-                        crate::add_ons::importer().and_then(|importer| {
-                            crate::add_ons::start_import(&root, crate::add_ons::machine(), row, &importer)
+                    crate::add_ons::retry(&root, row).and_then(|()| {
+                        self.sync_add_ons()?;
+                        let mut view = crate::add_ons::view(&root);
+                        view.notice = "Converting... the game keeps running meanwhile.".into();
+                        self.ui.apply(UiUpdate::AddOns(view));
+                        Ok(())
+                    })
+                }
+                UiAction::OpenAddOnsFolder => {
+                    let folder = bri_package::classic::folder(&self.content.paths.root);
+                    std::fs::create_dir_all(&folder)
+                        .with_context(|| format!("Could not create {}", folder.display()))
+                        .map(|()| {
+                            if !bri_crash::open(&folder.to_string_lossy()) {
+                                bri_console::warn(format!("Could not open {}", folder.display()));
+                            }
                         })
-                    };
-                    match started {
-                        Ok(receiver) => {
-                            let mut view = crate::add_ons::view(&root, crate::add_ons::machine());
-                            crate::add_ons::mark_importing(&mut view, row);
-                            view.notice = "Importing... the game keeps running meanwhile.".into();
-                            self.ui.apply(UiUpdate::AddOns(view));
-                            self.add_on_import = Some((id, row.clone(), receiver));
-                            continue;
-                        }
-                        Err(error) => Err(error),
-                    }
                 }
                 UiAction::ToggleFavorite { ref address } => {
                     let path = self.state_dir.join("servers.json");

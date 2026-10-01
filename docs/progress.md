@@ -8887,3 +8887,26 @@ Tests: `crates/addon-import/tests/adventure_port.rs` on a CC0 stand-in
 pass through the image's states, boxes and headshots in a hosted game.
 `cargo test -p bri-addon-import`, the touched bri-sim and bri-weapons
 suites, clippy on the touched crates.
+## 2026-10-01 Classic Add-Ons from one drop folder (branch `claude/tier-tactical-3onhik`)
+
+Max did not want the game looking for players' Blockland folders, so the
+classic loader now works like the `.bls` saves: the only place it reads is
+`content/Add-Ons/`. Steam, registry, Flatpak/Snap, remembered-v20 and
+player-added folder discovery are gone (replacing c0b6faf2 and the discovery
+half of 29bbc4ab). Opening Add-Ons plans against `content/classic-imports.json`
+(`bri_package::classic::plan`): new or changed zips and folders convert (a
+changed one replaces its old conversion and stays on if it was on), removed ones
+take their conversion and companion rules with them, failures keep their reason
+until the file changes or Retry is pressed, and conversions made before records
+existed are adopted. Only packages the game converted under `addons/` are ever
+deleted (`Library::uninstall`). The importer gets the content root as
+`--reference`, so `ForceRequiredAddOn` finds other zips in the same folder. The
+screen has an Add-Ons Folder button and a status line saying what the folder is
+for. Dev tooling (`bri-import-addon --reference`, the bundle's `find`) still
+takes explicit paths.
+
+Evidence: `cargo test -p bri-package --lib classic` (5 tests: plan, failures and
+adoption, folder stamps, unreadable state, uninstall), `cargo test -p bri-client
+--lib add_ons` (the worker with a stand-in importer converts, retries,
+re-converts keeping it on, and removes), `cargo test -p bri-ui addons` (Retry,
+the folder button and hint); clippy `-D warnings` on package, ui and client.
