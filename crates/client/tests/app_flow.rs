@@ -513,12 +513,23 @@ fn native_host_cancel_rehost_chat_compositor_disconnect_and_settings() -> Result
     );
 
     action(&mut app, UiAction::UseTool { slot: 2 })?;
-    until(&mut app, "authoritative printer slot replicated", |a| {
-        let view = a.network_view().unwrap();
-        view.tools.get(&view.owner).is_some_and(|tools| {
-            tools.selected == Some(2) && tools.slots[2].as_deref() == Some("v20.weapon.printgun")
-        })
-    })?;
+    // Drawn and ready: a click while the image is still activating waits on
+    // the trigger, and a loaded machine can stretch that past the click.
+    until(
+        &mut app,
+        "authoritative printer slot replicated and ready",
+        |a| {
+            let view = a.network_view().unwrap();
+            view.tools.get(&view.owner).is_some_and(|tools| {
+                tools.selected == Some(2)
+                    && tools.slots[2].as_deref() == Some("v20.weapon.printgun")
+            }) && view
+                .weapons
+                .images
+                .get(&view.owner)
+                .is_some_and(|images| images.iter().any(|i| i.state == "Ready"))
+        },
+    )?;
     action(
         &mut app,
         UiAction::Game(GameAction::Look {

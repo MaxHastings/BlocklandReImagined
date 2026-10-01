@@ -33,3 +33,16 @@ fails about 3 runs in 4 on main when its binary runs in parallel. Seat 0's
 rendered eye trails the latest tank pose by 0.06 to 0.13 m along z, against
 a 0.05 m tolerance. It compares the presented camera with the newest network
 pose while the tank drifts. That is a separate flake for the vehicle owner.
+
+## Follow-up from the Gate's logs
+
+- **add_on_join: a port race.** The test picked a free port, dropped it, and
+  had the host bind it later. Another test could take the port in between
+  ("os error 10048"). `App::host_on_any_port` now lets the host bind port 0,
+  and `App::hosted_port` reports the port it got. add_on_join,
+  default_add_ons and vehicle_first_person join through that; the
+  pick-then-bind step is gone.
+- **app_flow: a click during the printer's activation.** The click is
+  aimed at the brick and sent while the printer may still be activating.
+  The test now waits for the image's Ready state first, the same way
+  brick_respawn and tool_kill_feel do.

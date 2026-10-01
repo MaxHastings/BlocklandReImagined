@@ -4,7 +4,7 @@
 //!
 //! Every test runs on one content root (the made-up one; ignored, the
 //! generated one: BRI_CONTENT, else the checkout's `content/`), hosts on a
-//! free loopback port, and stages the repository's Add-Ons it needs in a
+//! system-picked loopback port, and stages the repository's Add-Ons it needs in a
 //! hidden folder of that root for its length. Host and guest load their
 //! Add-On lists without writing the root's.
 use anyhow::{Context, Result, ensure};
@@ -94,18 +94,6 @@ fn until(
     )
 }
 
-/// A free loopback UDP port for one hosted game.
-fn free_port() -> Result<u16> {
-    Ok(std::net::UdpSocket::bind("127.0.0.1:0")?
-        .local_addr()?
-        .port())
-}
-
-/// Whether nothing holds `port` any more, where a LAN host binds it.
-fn port_free(port: u16) -> bool {
-    std::net::UdpSocket::bind(("0.0.0.0", port)).is_ok()
-}
-
 fn app(root: &Path, name: &str) -> Result<App> {
     let state = std::env::temp_dir().join(format!("bri-add-on-join-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&state);
@@ -115,11 +103,10 @@ fn app(root: &Path, name: &str) -> Result<App> {
     Ok(app)
 }
 
-fn host(app: &mut App, port: u16) -> Result<()> {
-    app.ui
-        .core
-        .prefs
-        .set("$Pref::Server::Port", port.to_string());
+/// Host on a port the system picks as it binds, so tests running side by
+/// side never take the same one; `join` reads it from the host.
+fn host(app: &mut App) -> Result<()> {
+    app.host_on_any_port();
     request(
         app,
         UiAction::HostGame {
@@ -135,11 +122,8 @@ fn host(app: &mut App, port: u16) -> Result<()> {
     )
 }
 
-fn host_mode(app: &mut App, port: u16, mode: &GameModeInfo) -> Result<()> {
-    app.ui
-        .core
-        .prefs
-        .set("$Pref::Server::Port", port.to_string());
+fn host_mode(app: &mut App, mode: &GameModeInfo) -> Result<()> {
+    app.host_on_any_port();
     request(
         app,
         UiAction::HostGame {
@@ -155,7 +139,9 @@ fn host_mode(app: &mut App, port: u16, mode: &GameModeInfo) -> Result<()> {
     )
 }
 
-fn join(app: &mut App, port: u16) -> Result<()> {
+/// Join the game `host` runs.
+fn join(app: &mut App, host: &App) -> Result<()> {
+    let port = host.hosted_port().context("the host has no server")?;
     request(
         app,
         UiAction::JoinServer {
@@ -165,16 +151,15 @@ fn join(app: &mut App, port: u16) -> Result<()> {
     )
 }
 
-/// Everyone leaves, and the game hosted on `port` stops: a host that stops
-/// in the background keeps its port until it has, and the next game hosted
-/// there would fail to bind it.
-fn leave(apps: &mut [&mut App], port: u16) -> Result<()> {
+/// Everyone leaves. Each game hosts on its own system-picked port, so the
+/// next one never waits for this one's to come free.
+fn leave(apps: &mut [&mut App]) -> Result<()> {
     for app in apps.iter_mut() {
         request(app, UiAction::Disconnect)?;
         app.ui.core.pop(ScreenId::MessageBox);
     }
     until(apps, "the hosted game to stop", 60, |a| {
-        a.iter().all(|app| app.network_view().is_none()) && port_free(port)
+        a.iter().all(|app| app.network_view().is_none())
     })
 }
 
@@ -192,7 +177,7 @@ fn host_panels(app: &App) -> Vec<String> {
 /// mode that shows it; bricks reach the guest's menu; and client code (the
 /// Ragdoll) runs for a guest who never turned it on, without asking, and for
 /// no one when the host has it off. Uses the repository's Add-Ons, staged
-/// in the content root for the test's length, on a free port.
+/// in the content root for the test's length.
 fn add_ons_the_host_turns_off_are_not_required_and_ones_it_runs_download(
     f: &ContentRoot,
 ) -> Result<()> {
@@ -223,7 +208,6 @@ fn add_ons_the_host_turns_off_are_not_required_and_ones_it_runs_download(
         None => Some(Staged::visible(&content, RAGDOLL)?),
     };
     let installed = installed_ragdoll()?.context("the staged Ragdoll is not found")?;
-    let port = free_port()?;
     let mut host_app = app(&content, "Hoster")?;
     let mut guest = app(&content, "Joiner")?;
     let round = |host_app: &mut App,
@@ -247,14 +231,14 @@ fn add_ons_the_host_turns_off_are_not_required_and_ones_it_runs_download(
                 .first()
                 .cloned()
                 .context("no game mode")?;
-            host_mode(host_app, port, &mode)?;
+            host_mode(host_app, &mode)?;
         } else {
-            host(host_app, port)?;
+            host(host_app)?;
         }
         until(&mut [&mut *host_app], "host in game", 180, |a| {
             in_game(a[0])
         })?;
-        join(guest, port)?;
+        join(guest, host_app)?;
         until(&mut [&mut *host_app, &mut *guest], what, 300, |a| {
             in_game(a[1])
         })?;
@@ -278,7 +262,7 @@ fn add_ons_the_host_turns_off_are_not_required_and_ones_it_runs_download(
         host_panels(&host_app)
     );
     println!("off: guest joined, no HUD");
-    leave(&mut [&mut guest, &mut host_app], port)?;
+    leave(&mut [&mut guest, &mut host_app])?;
 
     // 2. A HUD Add-On on: on Slate nobody sees it; in its game mode the
     //    guest downloads it and sees it.
@@ -296,7 +280,7 @@ fn add_ons_the_host_turns_off_are_not_required_and_ones_it_runs_download(
         "HUD shown on Slate: {:?}",
         host_panels(&host_app)
     );
-    leave(&mut [&mut guest, &mut host_app], port)?;
+    leave(&mut [&mut guest, &mut host_app])?;
     round(
         &mut host_app,
         &mut guest,
@@ -320,7 +304,7 @@ fn add_ons_the_host_turns_off_are_not_required_and_ones_it_runs_download(
         "HUD: guest downloaded it and sees {:?}",
         host_panels(&guest)
     );
-    leave(&mut [&mut guest, &mut host_app], port)?;
+    leave(&mut [&mut guest, &mut host_app])?;
 
     // 3. A brick Add-On on: the guest downloads it, joins, and can use it.
     round(
@@ -352,7 +336,7 @@ fn add_ons_the_host_turns_off_are_not_required_and_ones_it_runs_download(
         "the guest's brick menu lacks the downloaded {BRICKS}"
     );
     println!("bricks: guest joined with {BRICKS}");
-    leave(&mut [&mut guest, &mut host_app], port)?;
+    leave(&mut [&mut guest, &mut host_app])?;
 
     // 4. Client code follows the host. The host runs the Ragdoll and the
     //    guest, who has it off, runs it too without being asked (asked
@@ -373,7 +357,7 @@ fn add_ons_the_host_turns_off_are_not_required_and_ones_it_runs_download(
         "the host's Ragdoll does not run for the guest: {:?}",
         guest.add_on_code_running()
     );
-    leave(&mut [&mut guest, &mut host_app], port)?;
+    leave(&mut [&mut guest, &mut host_app])?;
     round(
         &mut host_app,
         &mut guest,
@@ -388,7 +372,7 @@ fn add_ons_the_host_turns_off_are_not_required_and_ones_it_runs_download(
         guest.add_on_code_running()
     );
     println!("code: the guest runs the host's Ragdoll, and only the host's");
-    leave(&mut [&mut guest, &mut host_app], port)?;
+    leave(&mut [&mut guest, &mut host_app])?;
     Ok(())
 }
 
@@ -679,7 +663,6 @@ fn a_guest_joins_a_host_running_every_repository_add_on(f: &ContentRoot) -> Resu
         .find(|id| added.iter().any(|e| e.id == *id))
         .context("every repository weapon Add-On is already listed")?;
     set.packages.extend(added);
-    let port = free_port()?;
     let mut host_app = app(&content, "RepoHost")?;
     // What turning them on in the Add-Ons screen loads, without writing the
     // content root's lists.
@@ -687,9 +670,9 @@ fn a_guest_joins_a_host_running_every_repository_add_on(f: &ContentRoot) -> Resu
         .apply_packages(&set)
         .context("the host loads every repository Add-On")?;
     let mut guest = app(&content, "RepoGuest")?;
-    host(&mut host_app, port)?;
+    host(&mut host_app)?;
     until(&mut [&mut host_app], "host in game", 180, |a| in_game(a[0]))?;
-    join(&mut guest, port)?;
+    join(&mut guest, &host_app)?;
     // Nothing asks about the download; the guest agrees to the samples'
     // client code, the one question a join may ask.
     wait::until(
@@ -709,7 +692,7 @@ fn a_guest_joins_a_host_running_every_repository_add_on(f: &ContentRoot) -> Resu
         cache.iter().any(|id| id == downloaded),
         "{downloaded} was not downloaded: {cache:?}"
     );
-    leave(&mut [&mut guest, &mut host_app], port)?;
+    leave(&mut [&mut guest, &mut host_app])?;
     Ok(())
 }
 
@@ -734,7 +717,6 @@ fn a_guest_without_a_vehicle_add_on_downloads_it_and_can_spawn_it(f: &ContentRoo
             .get("Vehicle")
             .is_some_and(|list| list.iter().any(|c| c.id == VEHICLE))
     };
-    let port = free_port()?;
     let mut host_app = app(&content, "PlaneHost")?;
     host_app
         .apply_packages(&set)
@@ -744,13 +726,13 @@ fn a_guest_without_a_vehicle_add_on_downloads_it_and_can_spawn_it(f: &ContentRoo
         .apply_packages(&without)
         .context("the guest turns the plane off")?;
     ensure!(!spawnable(&guest), "the guest has the plane before joining");
-    host(&mut host_app, port)?;
+    host(&mut host_app)?;
     until(&mut [&mut host_app], "host in game", 180, |a| in_game(a[0]))?;
     ensure!(
         spawnable(&host_app),
         "the host's vehicle list lacks {VEHICLE}"
     );
-    join(&mut guest, port)?;
+    join(&mut guest, &host_app)?;
     until(
         &mut [&mut host_app, &mut guest],
         "guest in game",
@@ -766,7 +748,7 @@ fn a_guest_without_a_vehicle_add_on_downloads_it_and_can_spawn_it(f: &ContentRoo
         spawnable(&guest),
         "the guest's vehicle list lacks {VEHICLE}"
     );
-    leave(&mut [&mut guest, &mut host_app], port)?;
+    leave(&mut [&mut guest, &mut host_app])?;
     Ok(())
 }
 
@@ -810,10 +792,9 @@ fn a_host_with_the_blockhead_bot_on_spawns_bots_and_one_without_offers_none(
     // Server ticks from loading the spawn brick to the bot, with it on.
     let mut bot_ticks = 0;
     for (name, set, on) in [("BotsOn", &with, true), ("BotsOff", &without, false)] {
-        let port = free_port()?;
         let mut host_app = app(&content, name)?;
         host_app.apply_packages(set)?;
-        host(&mut host_app, port)?;
+        host(&mut host_app)?;
         until(&mut [&mut host_app], "host in game", 180, |a| in_game(a[0]))?;
         ensure!(
             offered(&host_app) == on,
@@ -887,7 +868,7 @@ fn a_host_with_the_blockhead_bot_on_spawns_bots_and_one_without_offers_none(
             )?;
             ensure!(players(&host_app) == 1, "{name}: a bot without the Add-On");
         }
-        leave(&mut [&mut host_app], port)?;
+        leave(&mut [&mut host_app])?;
     }
     Ok(())
 }

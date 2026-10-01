@@ -130,11 +130,6 @@ fn in_game(app: &App) -> bool {
             .network_view()
             .is_some_and(|v| v.poses.contains_key(&v.owner))
 }
-fn free_port() -> Result<u16> {
-    Ok(std::net::UdpSocket::bind("127.0.0.1:0")?
-        .local_addr()?
-        .port())
-}
 fn app(content: &Path, state: &Path, name: &str) -> Result<App> {
     let state = state.join(name);
     let _ = std::fs::remove_dir_all(&state);
@@ -444,13 +439,10 @@ fn every_tank_seat_sees_from_the_riders_eye_for_host_and_guest(f: &ContentRoot) 
     let state = scratch.path().to_path_buf();
     // The GPU turn first: tests holding it never share a port.
     let gpu = support::gpu::turn().context("offscreen renderer")?;
-    let port = free_port()?;
     let mut host = app(&content, &state, "Host")?;
     let mut guest = app(&content, &state, "Guest")?;
-    host.ui
-        .core
-        .prefs
-        .set("$Pref::Server::Port", port.to_string());
+    // A port the system picks as it binds: tests side by side never share one.
+    host.host_on_any_port();
     request(
         &mut host,
         UiAction::HostGame {
@@ -465,6 +457,7 @@ fn every_tank_seat_sees_from_the_riders_eye_for_host_and_guest(f: &ContentRoot) 
         },
     )?;
     until(&mut [&mut host], "host in game", 180, |a| Ok(in_game(a[0])))?;
+    let port = host.hosted_port().context("the host has no server")?;
     request(
         &mut guest,
         UiAction::JoinServer {
@@ -659,13 +652,10 @@ fn mouse_up_pitch(
             .max_forward_vel
             - 2.0
     };
-    let port = free_port()?;
     let mut host = app(&content, &state, "Host")?;
     host.gpu_ready(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm)?;
-    host.ui
-        .core
-        .prefs
-        .set("$Pref::Server::Port", port.to_string());
+    // A port the system picks as it binds: tests side by side never share one.
+    host.host_on_any_port();
     if let Some(invert) = invert {
         host.ui.core.prefs.set(
             "$Pref::Input::VehicleMouseInvert",
@@ -865,13 +855,10 @@ fn the_tank_turret_keeps_its_aim_through_seat_changes_for_gunner_and_watcher(
     let tank = definition(f, tank_id)?;
     let scratch = f.state()?;
     let state = scratch.path().to_path_buf();
-    let port = free_port()?;
     let mut host = app(&content, &state, "Host")?;
     let mut guest = app(&content, &state, "Guest")?;
-    host.ui
-        .core
-        .prefs
-        .set("$Pref::Server::Port", port.to_string());
+    // A port the system picks as it binds: tests side by side never share one.
+    host.host_on_any_port();
     request(
         &mut host,
         UiAction::HostGame {
@@ -886,6 +873,7 @@ fn the_tank_turret_keeps_its_aim_through_seat_changes_for_gunner_and_watcher(
         },
     )?;
     until(&mut [&mut host], "host in game", 180, |a| Ok(in_game(a[0])))?;
+    let port = host.hosted_port().context("the host has no server")?;
     request(
         &mut guest,
         UiAction::JoinServer {

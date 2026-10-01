@@ -215,11 +215,10 @@ fn app(root: &Path, state: &Path, name: &str) -> Result<App> {
     Ok(app)
 }
 
-fn host(app: &mut App, mode: ServerMode, port: u16) -> Result<()> {
-    app.ui
-        .core
-        .prefs
-        .set("$Pref::Server::Port", port.to_string());
+/// Host on a port the system picks as it binds, so tests running side by
+/// side never take the same one ([`App::hosted_port`] says which).
+fn host(app: &mut App, mode: ServerMode) -> Result<()> {
+    app.host_on_any_port();
     request(
         app,
         UiAction::HostGame {
@@ -233,12 +232,6 @@ fn host(app: &mut App, mode: ServerMode, port: u16) -> Result<()> {
             super_admin_password: String::new(),
         },
     )
-}
-
-fn free_port() -> Result<u16> {
-    Ok(std::net::UdpSocket::bind("127.0.0.1:0")?
-        .local_addr()?
-        .port())
 }
 
 /// The Vehicle list a vehicle spawn brick's wrench offers.
@@ -409,7 +402,7 @@ fn a_fresh_checkout_installs_its_default_add_ons_and_spawns_the_default_plane() 
 
     // 3. Single player: the default plane is on offer and spawns.
     let mut solo = app(&content, &state, "Solo")?;
-    host(&mut solo, ServerMode::SinglePlayer, free_port()?)?;
+    host(&mut solo, ServerMode::SinglePlayer)?;
     until(&mut [&mut solo], "single player in game", 180, |a| {
         in_game(a[0])
     })?;
@@ -431,11 +424,11 @@ fn a_fresh_checkout_installs_its_default_add_ons_and_spawns_the_default_plane() 
 
     // 4. A LAN game: a guest from the same checkout joins with nothing to
     //    download, and sees and is offered the default plane the host spawns.
-    let port = free_port()?;
     let mut host_app = app(&content, &state, "Host")?;
     let mut guest = app(&content, &state, "Guest")?;
-    host(&mut host_app, ServerMode::Lan, port)?;
+    host(&mut host_app, ServerMode::Lan)?;
     until(&mut [&mut host_app], "host in game", 180, |a| in_game(a[0]))?;
+    let port = host_app.hosted_port().context("the host has no server")?;
     request(
         &mut guest,
         UiAction::JoinServer {

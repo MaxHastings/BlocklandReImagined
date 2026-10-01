@@ -516,6 +516,9 @@ pub struct App {
     world_job: Option<WorldJob>,
     graphics: crate::graphics::Graphics,
     load_limit: Arc<tokio::sync::Semaphore>,
+    /// Host on a port the system picks instead of `$Pref::Server::Port`
+    /// ([`App::host_on_any_port`]).
+    host_any_port: bool,
     /// Rebuild GPU renderers before the next frame (the map changed).
     gpu_restart: bool,
     /// Map of the installed scene.
@@ -1529,8 +1532,21 @@ impl App {
     /// How far the current host or join attempt has got: a number that
     /// grows with every step of its loading, and None with no attempt. Waits
     /// in tests watch it to tell a slow load from a stopped one.
+    /// Host the next games on a port the system picks, free when it is
+    /// bound, instead of `$Pref::Server::Port`; [`App::hosted_port`] says
+    /// which. For tests and tools that host side by side: a port picked
+    /// first and bound later can be taken in between.
+    pub fn host_on_any_port(&mut self) {
+        self.host_any_port = true;
+    }
+    /// The port this game's own server listens on, once it is connected.
+    pub fn hosted_port(&self) -> Option<u16> {
+        self.attempt.as_ref()?.worker.probes.get()?.host_port
+    }
     pub fn loading_revision(&self) -> Option<u64> {
-        self.attempt.as_ref().map(|a| a.progress.snapshot().revision)
+        self.attempt
+            .as_ref()
+            .map(|a| a.progress.snapshot().revision)
     }
     pub fn network_view(&self) -> Option<&network::View> {
         self.attempt
@@ -1802,6 +1818,7 @@ impl App {
             world_job: None,
             graphics,
             load_limit: Arc::new(tokio::sync::Semaphore::new(2)),
+            host_any_port: false,
             gpu_restart: false,
             scene_map: None,
             materials: None,
@@ -3115,6 +3132,7 @@ impl App {
             .ok()
             .filter(|p| *p != 0)
             .unwrap_or(bri_net::invite::DEFAULT_PORT);
+        let port = if self.host_any_port { 0 } else { port };
         self.disconnect();
         self.ui.apply_session(
             id,
