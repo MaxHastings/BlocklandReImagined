@@ -955,5 +955,56 @@ fn duplorcator_port_saves_and_loads_duplications() {
             .iter()
             .any(|t| t.as_deref() == Some("tool_duplicator:weapon/duplorcatoritem"))
     );
+
+    // One brick over the admin limit: it asks first, and yes loads what
+    // fits.
+    let tower: Vec<_> = (0..5001)
+        .map(|i| loose([0.0, 0.2 * i as f32, 0.0]))
+        .collect();
+    store.put_loose("Huge", tower, vec![[0.0, 1.0, 1.0, 1.0]; 64]);
+    for _ in 0..130 {
+        s.step().unwrap();
+    }
+    s.take_private_notices();
+    cmd(
+        &mut s,
+        Command::Package(PackageCommand {
+            package: String::new(),
+            command: "loaddup".into(),
+            args: vec![PackageArg::String("huge".into())],
+        }),
+    )
+    .unwrap();
+    for _ in 0..3 {
+        s.step().unwrap();
+    }
+    let asked = s.take_private_notices().into_iter().find_map(|(_, n)| match n {
+        Notice::Question {
+            package, command, ..
+        } => Some((package, command)),
+        _ => None,
+    });
+    let (package, command) = asked.expect("the load asked first");
+    assert_eq!(s.blueprint(host).unwrap().bricks.len(), 2, "nothing loaded yet");
+    let prints = {
+        cmd(
+            &mut s,
+            Command::Package(PackageCommand {
+                package,
+                command,
+                args: vec![],
+            }),
+        )
+        .unwrap();
+        for _ in 0..3 {
+            s.step().unwrap();
+        }
+        s.take_private_notices()
+    };
+    assert_eq!(s.blueprint(host).unwrap().bricks.len(), 5000);
+    assert!(
+        prints.iter().any(|(_, n)| matches!(n, Notice::Center { text, .. } if text.contains("5000<color:99AAAA>/\\c45001"))),
+        "{prints:?}"
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }

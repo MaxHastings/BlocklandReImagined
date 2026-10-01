@@ -1496,6 +1496,7 @@ impl Session {
                 limit,
                 tool,
                 partial,
+                whole,
             } => {
                 ensure!(
                     caller == Some(player),
@@ -1505,7 +1506,7 @@ impl Session {
                     self.weapons.contains_item(&tool),
                     "The copy's tool {tool} is not an item on this server"
                 );
-                self.load_copy(player, name, limit as usize, tool, partial, package);
+                self.load_copy(player, name, limit as usize, tool, partial, whole, package);
                 Ok(())
             }
             Op::HighlightCopy {
@@ -1632,6 +1633,36 @@ impl Session {
                 let peer = self.peers.get_mut(&player).context("No such player")?;
                 ensure!(peer.combat.alive, "Only the living heal");
                 peer.combat.health = (peer.combat.health + amount).min(max);
+                Ok(())
+            }
+            Op::Ask {
+                player,
+                title,
+                text,
+                command,
+            } => {
+                self.take_cue(package)?;
+                ensure!(self.peers.contains_key(&player), "No such player");
+                let declared = self
+                    .packages
+                    .as_ref()
+                    .and_then(|host| host.catalog.packages.get(package))
+                    .and_then(|p| p.behaviour.as_ref())
+                    .and_then(|b| b.commands.iter().find(|c| c.name == command))
+                    .is_some_and(|c| c.args.is_empty() && !c.tool_only);
+                ensure!(
+                    declared,
+                    "ask's command `{command}` must be one of the package's own, with no arguments, that players may send"
+                );
+                self.notify(
+                    player,
+                    Notice::Question {
+                        title,
+                        text,
+                        package: package.into(),
+                        command,
+                    },
+                );
                 Ok(())
             }
             Op::Print {
@@ -2346,7 +2377,7 @@ impl Session {
 
     /// A client asked to run a package command.
     /// A command typed in chat (`/sell stone`) names no package, like any
-    /// other slash command: the host finds the one package that declares it
+    /// other slash command: the host finds the package that declares it
     /// and reads each word as that command's argument type, a final string
     /// taking the rest of the line. HUD keys name their package already.
     fn resolve_typed_command(&self, request: PackageCommand) -> Result<PackageCommand> {
@@ -2364,12 +2395,10 @@ impl Session {
                 .find(|c| c.name.eq_ignore_ascii_case(&request.command))?;
             Some((id, def))
         });
-        let (package, def) = declaring.next().ok_or_else(unknown)?;
-        ensure!(
-            declaring.next().is_none(),
-            "More than one Add-On declares /{}",
-            request.command
-        );
+        // When several Add-Ons declare it, the last by name answers, as in
+        // v20, which ran Add-Ons in name order so the last one's packaged
+        // `serverCmd` won (two duplicators' `/dup`).
+        let (package, def) = declaring.next_back().ok_or_else(unknown)?;
         let words: Vec<&str> = request
             .args
             .iter()
@@ -2498,18 +2527,16 @@ impl Session {
                     ),
                 )
             })?;
-        // A tool's command runs from its image. The mouse wheel's command
-        // comes from the client as a command like any other, so the held
-        // image's wheel command is let through too.
+        // A tool's command runs from its image. The mouse wheel's and the
+        // brick keys' commands come from the client as commands like any
+        // other, so the held image's are let through too.
+        let full = format!("{}:{}", request.package, request.command);
         if def.tool_only
             && !from_image
             && !self
                 .weapons
                 .image_state(bri_weapons::ActorId(owner), 0)
-                .and_then(|(image, _)| image.commands.wheel.as_deref())
-                .is_some_and(|wheel| {
-                    wheel.split_once(':') == Some((&request.package, &request.command))
-                })
+                .is_some_and(|(image, _)| image.commands.sent_by_client(&full))
         {
             return Err(reject(
                 "command.tool_only",

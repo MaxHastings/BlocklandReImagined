@@ -1849,6 +1849,21 @@ impl Session {
             }
             Command::SwitchSeat(step) => {
                 ensure!(step == 1 || step == -1, "Invalid seat step");
+                // On foot, an image may take the seat keys
+                // (`serverCmdNextSeat` packaged by a duplicator).
+                if let Some(command) = self
+                    .weapons
+                    .image_state(bri_weapons::ActorId(owner), 0)
+                    .filter(|_| peer.combat.alive && !self.vehicles.is_mounted(owner))
+                    .and_then(|(image, _)| image.commands.seat.clone())
+                {
+                    self.addon_tool_command(
+                        owner,
+                        &command,
+                        vec![packages::PackageArg::Int(i64::from(step))],
+                    );
+                    return Ok(Reply::Accepted);
+                }
                 self.switch_seat(owner, i32::from(step))?;
                 Ok(Reply::Accepted)
             }

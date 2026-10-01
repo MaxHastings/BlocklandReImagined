@@ -166,8 +166,20 @@ fn cmd_loaddup(player, typed) {
     }
     set_player(player, "last_load", tick());
     let limit = if me.admin { admin_limit() } else { player_limit() };
-    // A duplication bigger than the limit asked whether to load what fits;
-    // here what fits loads, as answering yes did.
+    // A duplication bigger than the limit asks first (on_copy).
+    load_copy(player, name, limit, tool(), #{ partial: true, whole: true });
+}
+
+// `servercmdDuplorcatorLoadAnyways`: yes to loading what fits of a
+// duplication over the limit.
+fn cmd_duplorcatorloadanyways(player) {
+    let name = get_player(player, "asked_load");
+    if name == "" {
+        return;
+    }
+    set_player(player, "asked_load", "");
+    let me = player(player);
+    let limit = if me.admin { admin_limit() } else { player_limit() };
     load_copy(player, name, limit, tool(), #{ partial: true });
 }
 
@@ -184,6 +196,11 @@ fn on_copy(player, info) {
         return;
     }
     if info.action == "load" {
+        if info.error == "limit" {
+            set_player(player, "asked_load", info.name);
+            ask(player, "Duplication Upload", "This duplication exceeds the max bricks you can duplicate. The whole build will not be loaded, would you like to load it anyways?", "duplorcatorloadanyways");
+            return;
+        }
         if info.error == "missing" {
             center_print(player, `<color:99AAAA>Duplorcation save\c4 ${info.name}<color:99AAAA> does not exist`, 3);
             return;

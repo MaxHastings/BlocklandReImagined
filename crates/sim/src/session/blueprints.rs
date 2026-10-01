@@ -491,6 +491,16 @@ impl Session {
     /// where the swing looks. A refusal (no such Add-On running, a
     /// cooldown) is only logged: the swing already played.
     pub(super) fn addon_tool_fire(&mut self, owner: OwnerId, command: &str) {
+        self.addon_tool_command(owner, command, Vec::new());
+    }
+
+    /// [`Self::addon_tool_fire`] with arguments (a key's).
+    pub(super) fn addon_tool_command(
+        &mut self,
+        owner: OwnerId,
+        command: &str,
+        args: Vec<super::packages::PackageArg>,
+    ) {
         let Some(direction) = self
             .weapons
             .actor(bri_weapons::ActorId(owner))
@@ -505,7 +515,7 @@ impl Session {
         let request = PackageCommand {
             package: package.into(),
             command: command.into(),
-            args: Vec::new(),
+            args,
         };
         if let Err(error) = self.run_command(owner, request, direction, true) {
             if self.notices.len() == 64 {

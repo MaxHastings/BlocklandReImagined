@@ -92,7 +92,12 @@ impl CopyStore for MemoryCopies {
 
 enum Want {
     Save { bricks: usize },
-    Load { limit: usize, tool: String, partial: bool },
+    Load {
+        limit: usize,
+        tool: String,
+        partial: bool,
+        whole: bool,
+    },
 }
 struct Request {
     owner: OwnerId,
@@ -121,8 +126,8 @@ pub(super) struct CopyOutcome {
     pub total: usize,
     pub limit_reached: bool,
     pub refused: usize,
-    /// `trust`, `public`, `empty`, `invalid`, `missing`, `unavailable` or
-    /// `failed`, and the engine's words for it.
+    /// `trust`, `public`, `empty`, `invalid`, `missing`, `unavailable`,
+    /// `busy`, `limit` or `failed`, and the engine's words for it.
     pub error: Option<(&'static str, String)>,
 }
 impl From<blueprints::Copied> for CopyOutcome {
@@ -219,6 +224,7 @@ impl Session {
     }
 
     /// Give `owner` the copy saved as `name`, once the store has it.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn load_copy(
         &mut self,
         owner: OwnerId,
@@ -226,6 +232,7 @@ impl Session {
         limit: usize,
         tool: String,
         partial: bool,
+        whole: bool,
         package: &str,
     ) {
         if let Some((id, store)) = self.copy_request(Request {
@@ -236,6 +243,7 @@ impl Session {
                 limit,
                 tool,
                 partial,
+                whole,
             },
         }) {
             store.load(id, &name);
@@ -268,13 +276,14 @@ impl Session {
                         limit,
                         tool,
                         partial,
+                        whole,
                     },
                     StoreDone::Loaded(found),
                 ) => self.hold_loaded(
                     request.owner,
                     &request.name,
                     found,
-                    limit,
+                    (limit, whole),
                     &tool,
                     partial,
                     &request.package,
@@ -293,7 +302,7 @@ impl Session {
         owner: OwnerId,
         name: &str,
         found: Result<Option<LoadedCopy>>,
-        limit: usize,
+        (limit, whole): (usize, bool),
         tool: &str,
         partial: bool,
         package: &str,
@@ -321,6 +330,17 @@ impl Session {
         };
         outcome.total = bricks.len();
         let limit = limit.min(MAX_BLUEPRINT_BRICKS);
+        if whole && bricks.len() > limit {
+            outcome.limit_reached = true;
+            outcome.error = Some((
+                "limit",
+                format!(
+                    "'{name}' has {} bricks, more than the {limit} you may copy.",
+                    bricks.len()
+                ),
+            ));
+            return outcome;
+        }
         if bricks.len() > limit {
             bricks.truncate(limit);
             outcome.limit_reached = true;

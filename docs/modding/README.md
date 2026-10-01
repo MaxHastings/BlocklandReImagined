@@ -144,8 +144,10 @@ refused, so nobody types a gun's `/fire` or `/reload`. Players send a
 command by typing it in chat,
 `/sell coal`, or with a HUD panel's keys (section 4). Typed words become the
 declared arguments in order; a final `string` argument takes the rest of the
-line. Two Add-Ons declaring the same command name make the typed form
-ambiguous, and the host says so.
+line. When two Add-Ons declare the same command name, the typed form runs
+the one whose package id comes last by name, as v20 ran Add-Ons in name
+order and the last one's command won (both duplicators' `/dup`); a HUD key
+names its package and always reaches its own.
 
 **State** is declared up front with defaults. `player` keys exist for every
 player; `global` keys once per server. `visible` says who receives the
@@ -169,7 +171,7 @@ HUD panels can only show keys the viewer receives. `persist` (default
 | | | `cut_copy(p)`, `paint_copy(p, color)`, `paint_fill(p, brick, color, limit)`: `world.edit` |
 | | | `push`, `tumble`, `hold`, `hold_distance`, `let_go`, `spawn_vehicle`, `remove_vehicle`, `mount_object(mount, rider, node, can_dismount)`, `unmount_object(rider)`: `physics` |
 | | | `heal(p, amount)`, `fire(...)`: `damage` |
-| | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds)` (`()` for everyone): `chat` |
+| | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds)` (`()` for everyone), `ask(p, title, text, command)` (a yes/no box; yes sends the package's own argument-less `command` as if typed, as v20's `MessageBoxYesNo` did): `chat` |
 | | | `play_sound(p, sound)` at a player's ears, `sound_at(sound, x, y, z)`, `beam(from, to[, options])`, `play_thread(p, thread, sequence)`, `show_box(p, min, max, tool)`, `hide_box(p)`: `effects` |
 | | | `set_map_lights([x, y, z], radius, options)`: `lighting` |
 | `environment()` | | `set_environment(#{ ... })`, `reset_environment()`: `environment` |
@@ -632,6 +634,16 @@ as its one `int` argument (positive rolled forward, away from you), and
 the wheel then does not change tools; declare `"args": ["int"]` on that
 command. The Gravity Gun's `gravity-gun-tool` uses `states` and `wheel`:
 hold left click to grab, roll to reel, let go to drop or fling.
+
+`light` and `cancel` take those keys. `shift`, `rotate` and `plant` take
+the brick keys whenever the player has no ghost brick out and holds no
+copy to place with the tool (a copy moves and plants with them as
+always), with v20's `serverCmdShiftBrick` arguments: declare `"args":
+["int", "int", "int", "bool"]` (studs away from and to the left of the
+player's facing, plates up, and whether it was the super shift),
+`["int"]` for `rotate` (1 clockwise seen from above, or -1), and none for
+`plant`. `seat` takes the next and previous seat keys on foot, with 1 or
+-1 (`["int"]`). A duplicator's selection box uses them.
 
 An item with no `image` is picked up but held by nobody: an ammo box or a
 health pack whose `on_pickup` answers `"take"`. Every item needs a

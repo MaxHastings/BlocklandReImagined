@@ -227,7 +227,8 @@ pub enum Op {
     },
     /// Give `player` the copy saved under `name` to place with `tool`, at
     /// most `limit` bricks of it (the first ones saved), replacing any copy
-    /// they hold. Saved copies are the host's: copies saved with any
+    /// they hold (or, with `whole`, nothing when it holds more). Saved
+    /// copies are the host's: copies saved with any
     /// duplicator, and v20 duplication files in the host's saves. The
     /// package's `on_copy` hears how it went (`action` `"load"`).
     LoadCopy {
@@ -236,6 +237,8 @@ pub enum Op {
         limit: u32,
         tool: String,
         partial: bool,
+        /// Take nothing, and report `limit`, when the copy holds more.
+        whole: bool,
     },
     /// Mirror the copy `player` holds across `axis`. It shows and plants
     /// mirrored; mirroring it again the same way puts it back.
@@ -371,6 +374,15 @@ pub enum Op {
         text: String,
         seconds: f32,
         bottom: bool,
+    },
+    /// Ask one player a yes or no question (v20's `MessageBoxYesNo` from
+    /// the server): yes sends the package's own `command`, which takes no
+    /// arguments, as if they had typed it; no does nothing.
+    Ask {
+        player: u64,
+        title: String,
+        text: String,
+        command: String,
     },
     /// Play a sound profile (an Add-On weapons pack's `sounds`, or v20's):
     /// at `position` for everyone near, or at one player's ears.
@@ -594,7 +606,9 @@ impl Op {
             | Self::RemoveEntity { .. }
             | Self::Steer { .. }
             | Self::Label { .. } => "entity",
-            Self::Tell { .. } | Self::Broadcast { .. } | Self::Print { .. } => "chat",
+            Self::Tell { .. } | Self::Broadcast { .. } | Self::Print { .. } | Self::Ask { .. } => {
+                "chat"
+            }
             Self::Sound { .. }
             | Self::Beam { .. }
             | Self::PlayThread { .. }
@@ -839,6 +853,19 @@ impl Op {
                     && glam_length(velocity) <= MAX_FIRE_SPEED
             }
             Self::Heal { amount, .. } => amount.is_finite() && (0.0..=100_000.0).contains(amount),
+            Self::Ask {
+                title,
+                text,
+                command,
+                ..
+            } => {
+                title.chars().count() <= 64
+                    && text.chars().count() <= MAX_PRINT_CHARS
+                    && ![title, text].iter().any(|t| t.chars().any(|c| c.is_control() && c != '\n'))
+                    && !command.is_empty()
+                    && command.len() <= 64
+                    && command.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+            }
             Self::Print { text, seconds, .. } => {
                 text.chars().count() <= MAX_PRINT_CHARS
                     && !text.chars().any(|c| c.is_control() && c != '\n')
@@ -963,6 +990,7 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::Heal { .. } => "heal",
         Op::Print { bottom: false, .. } => "center_print",
         Op::Print { bottom: true, .. } => "bottom_print",
+        Op::Ask { .. } => "ask",
         Op::Sound {
             at: SoundAt::Position(_),
             ..

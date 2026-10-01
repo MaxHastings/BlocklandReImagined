@@ -217,6 +217,13 @@ pub enum Notice {
         title: String,
         text: String,
     },
+    /// `MessageBoxYesNo` from an Add-On: yes sends `package`'s `command`.
+    Question {
+        title: String,
+        text: String,
+        package: String,
+        command: String,
+    },
     /// `clientCmdTrustInvite`.
     TrustInvite {
         from: OwnerId,

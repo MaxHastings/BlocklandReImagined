@@ -302,6 +302,26 @@ pub struct ImageCommands {
     /// player's ghost brick.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cancel: Option<String>,
+    /// The brick shift keys while the image is in hand and the player holds
+    /// no copy to place with it (v20 Add-Ons packaged `serverCmdShiftBrick`
+    /// and `serverCmdSuperShiftBrick`: a duplicator's selection box). The
+    /// command runs with v20's arguments, `(x, y, z, super)`: studs away
+    /// from and to the left of the player's facing, plates up, and whether
+    /// it was the super shift.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shift: Option<String>,
+    /// The rotate keys likewise (`serverCmdRotateBrick`), with the
+    /// direction, 1 clockwise seen from above or -1, as its argument.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotate: Option<String>,
+    /// The plant key likewise (`serverCmdPlantBrick`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plant: Option<String>,
+    /// The next and previous seat keys while the image is in hand on foot
+    /// (`serverCmdNextSeat`, `serverCmdPrevSeat`), with 1 or -1 as the
+    /// argument.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seat: Option<String>,
 }
 impl ImageCommands {
     pub fn is_empty(&self) -> bool {
@@ -310,12 +330,32 @@ impl ImageCommands {
             && self.light.is_none()
             && self.wheel.is_none()
             && self.cancel.is_none()
+            && self.shift.is_none()
+            && self.rotate.is_none()
+            && self.plant.is_none()
+            && self.seat.is_none()
+    }
+    /// The commands the client sends itself as a key is pressed with the
+    /// image in hand, rather than the host's image running them.
+    pub fn sent_by_client(&self, command: &str) -> bool {
+        [&self.wheel, &self.shift, &self.rotate, &self.plant]
+            .into_iter()
+            .any(|c| c.as_deref() == Some(command))
     }
     /// Whether the image runs `command` (`package:command`) from any of its
-    /// moments: a state, jet, light, wheel or cancel.
+    /// moments: a state, jet, light, wheel, cancel or brick key.
     pub fn runs(&self, command: &str) -> bool {
         self.states.values().any(|c| c == command)
-            || [&self.jet, &self.light, &self.wheel, &self.cancel]
+            || [
+                &self.jet,
+                &self.light,
+                &self.wheel,
+                &self.cancel,
+                &self.shift,
+                &self.rotate,
+                &self.plant,
+                &self.seat,
+            ]
                 .into_iter()
                 .any(|c| c.as_deref() == Some(command))
     }
@@ -880,11 +920,15 @@ impl Pack {
                     && image.commands.jet.as_deref().is_none_or(is_image_command)
                     && image.commands.light.as_deref().is_none_or(is_image_command)
                     && image.commands.wheel.as_deref().is_none_or(is_image_command)
-                    && image
-                        .commands
-                        .cancel
-                        .as_deref()
-                        .is_none_or(is_image_command),
+                    && [
+                        &image.commands.cancel,
+                        &image.commands.shift,
+                        &image.commands.rotate,
+                        &image.commands.plant,
+                        &image.commands.seat,
+                    ]
+                    .into_iter()
+                    .all(|c| c.as_deref().is_none_or(is_image_command)),
                 "Invalid image command {id}"
             );
             ensure!(

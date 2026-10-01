@@ -14,7 +14,7 @@ use bri_sim::{
     ghost,
     grid::{self, Bounds, Index},
     player::PlayerState,
-    session::{BuildGesture, Command, ToolAction, ToolInventory},
+    session::{BuildGesture, Command, PackageArg, PackageCommand, ToolAction, ToolInventory},
     simulation::Hit,
 };
 use bri_ui::api::{GameAction, HeldControl, IconRef, ToolInfo, UiAction, UiUpdate};
@@ -109,6 +109,9 @@ pub struct Building {
     /// The server shows an image in this player's right hand (for example
     /// a ball picked up without a tool slot), so fire goes to its trigger.
     held_image: bool,
+    /// The held image's brick key commands (`commands.shift`, `rotate`,
+    /// `plant`), which the keys go to when no ghost or copy takes them.
+    image_keys: ImageKeys,
     /// The server shows the grey brick (`brickImage`) in this player's hand.
     held_brick: bool,
     fire_request: u64,
@@ -170,6 +173,7 @@ impl Building {
             active_tool: None,
             weapon_fire_down: false,
             held_image: false,
+            image_keys: ImageKeys::default(),
             held_brick: false,
             fire_request: 0,
             tool_catalog_installed: false,
@@ -633,6 +637,20 @@ impl Building {
     }
     pub fn equipment(&self) -> &Equipment {
         &self.equipment
+    }
+    /// The brick key commands of the image in the local player's right
+    /// hand.
+    pub fn set_image_keys(&mut self, keys: ImageKeys) {
+        self.image_keys = keys;
+    }
+    /// A key the held image takes, as the command the client sends.
+    fn image_key(command: &Option<String>, args: Vec<PackageArg>) -> Option<Command> {
+        let (package, command) = command.as_deref()?.split_once(':')?;
+        Some(Command::Package(PackageCommand {
+            package: package.into(),
+            command: command.into(),
+            args,
+        }))
     }
     /// Replicated right-hand image for the local player.
     pub fn set_held_image(&mut self, held: bool) {
@@ -1311,6 +1329,16 @@ impl Building {
                     self.ghost_generation = self.ghost_generation.wrapping_add(1);
                     out.commands
                         .extend(BuildGesture::shift(*x, *y, *z).map(Command::BuildGesture));
+                } else if let Some(command) = Self::image_key(
+                    &self.image_keys.shift,
+                    vec![
+                        PackageArg::Int(i64::from(*x)),
+                        PackageArg::Int(i64::from(*y)),
+                        PackageArg::Int(i64::from(*z)),
+                        PackageArg::Bool(super_shift),
+                    ],
+                ) {
+                    out.commands.push(command);
                 }
             }
             UiAction::Game(GameAction::RotateBrick { dir }) => {
@@ -1328,6 +1356,11 @@ impl Building {
                     self.ghost_generation = self.ghost_generation.wrapping_add(1);
                     out.commands
                         .extend(BuildGesture::rotate(*dir).map(Command::BuildGesture));
+                } else if let Some(command) = Self::image_key(
+                    &self.image_keys.rotate,
+                    vec![PackageArg::Int(i64::from(dir.signum()))],
+                ) {
+                    out.commands.push(command);
                 }
             }
             UiAction::Game(GameAction::CancelBrick) => {
@@ -1349,6 +1382,12 @@ impl Building {
                     quarter_turns: copy.turns,
                     mirrored: copy.mirrored,
                 });
+            }
+            UiAction::Game(GameAction::PlantBrick)
+                if self.ghost.is_none() && self.image_keys.plant.is_some() =>
+            {
+                out.commands
+                    .extend(Self::image_key(&self.image_keys.plant, vec![]));
             }
             UiAction::Game(GameAction::PlantBrick) => {
                 let brick = self
@@ -1936,6 +1975,48 @@ mod tests {
             cancel.unwrap().commands.as_slice(),
             [Command::CancelBrick]
         ));
+    }
+
+    #[test]
+    fn brick_keys_go_to_a_held_image_that_takes_them_when_nothing_else_does() {
+        let mut b = controller();
+        let key = |b: &mut Building, action: GameAction| {
+            b.ui_action(&UiAction::Game(action), &player())
+                .unwrap()
+                .map(|o| o.commands)
+                .unwrap_or_default()
+        };
+        // No image takes them: the keys do nothing without a ghost.
+        assert!(key(&mut b, GameAction::ShiftBrick { x: 1, y: 0, z: 0 }).is_empty());
+        b.set_image_keys(ImageKeys {
+            shift: Some("dup:shift".into()),
+            rotate: Some("dup:turn".into()),
+            plant: Some("dup:plant".into()),
+        });
+        let sent = |commands: Vec<Command>| match commands.as_slice() {
+            [Command::Package(p)] => (p.command.clone(), p.args.clone()),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(
+            sent(key(&mut b, GameAction::SuperShiftBrick { x: 0, y: -1, z: 3 })),
+            (
+                "shift".to_string(),
+                vec![
+                    PackageArg::Int(0),
+                    PackageArg::Int(-1),
+                    PackageArg::Int(3),
+                    PackageArg::Bool(true)
+                ]
+            )
+        );
+        assert_eq!(
+            sent(key(&mut b, GameAction::RotateBrick { dir: -1 })),
+            ("turn".to_string(), vec![PackageArg::Int(-1)])
+        );
+        assert_eq!(
+            sent(key(&mut b, GameAction::PlantBrick)),
+            ("plant".to_string(), vec![])
+        );
     }
 
     #[test]
@@ -2731,4 +2812,12 @@ mod tests {
             assert_eq!(b.ghost().unwrap(), &start);
         }
     }
+}
+
+/// The brick keys a held image takes (`bri_weapons::ImageCommands`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ImageKeys {
+    pub shift: Option<String>,
+    pub rotate: Option<String>,
+    pub plant: Option<String>,
 }

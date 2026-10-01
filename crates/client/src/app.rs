@@ -2706,6 +2706,14 @@ impl App {
             .and_then(|i| i.commands.wheel.clone())
             .filter(|_| self.controls.observer().is_none() && !self.local_weapon_seat());
         claim_wheel(&mut self.ui, &mut self.tool_wheel, wheel);
+        let keys = image.map_or_else(Default::default, |i| crate::building::ImageKeys {
+            shift: i.commands.shift.clone(),
+            rotate: i.commands.rotate.clone(),
+            plant: i.commands.plant.clone(),
+        });
+        if let Some(building) = self.building.as_mut() {
+            building.set_image_keys(keys);
+        }
     }
     /// Dead players watch their corpse from the orbit camera.
     fn third_person_view(&self) -> bool {
@@ -4419,6 +4427,19 @@ impl App {
                                 text: plain_chat(&text),
                             }
                         }
+                        bri_sim::session::Notice::Question {
+                            title,
+                            text,
+                            package,
+                            command,
+                        } => UiUpdate::Confirm {
+                            title: plain_chat(&title),
+                            text: plain_chat(&text),
+                            action: Box::new(UiAction::Game(GameAction::Package {
+                                package,
+                                command,
+                            })),
+                        },
                         bri_sim::session::Notice::TrustInvite {
                             from,
                             name,

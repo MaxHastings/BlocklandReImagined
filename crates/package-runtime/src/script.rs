@@ -1226,13 +1226,16 @@ fn register_api(engine: &mut Engine) {
         options: Map,
     ) -> Result<(), Box<EvalAltResult>> {
         let mut partial = false;
+        let mut whole = false;
         for (key, value) in &options {
+            let flag = || {
+                value
+                    .as_bool()
+                    .map_err(|_| format!("load option `{key}` is true or false"))
+            };
             match key.as_str() {
-                "partial" => {
-                    partial = value
-                        .as_bool()
-                        .map_err(|_| "copy option `partial` is true or false")?
-                }
+                "partial" => partial = flag()?,
+                "whole" => whole = flag()?,
                 other => return Err(format!("unknown load option `{other}`").into()),
             }
         }
@@ -1242,6 +1245,7 @@ fn register_api(engine: &mut Engine) {
             limit: u32::try_from(limit).map_err(|_| "limit must be 1 to 10000")?,
             tool: tool.into(),
             partial,
+            whole,
         })
     }
     engine.register_fn(
@@ -1369,6 +1373,17 @@ fn register_api(engine: &mut Engine) {
             },
         );
     }
+    engine.register_fn(
+        "ask",
+        |player: Dynamic, title: &str, text: &str, command: &str| {
+            push(Op::Ask {
+                player: id(&player)?,
+                title: title.into(),
+                text: text.into(),
+                command: command.into(),
+            })
+        },
+    );
     engine.register_fn("play_sound", |player: Dynamic, profile: &str| {
         push(Op::Sound {
             profile: profile.into(),
