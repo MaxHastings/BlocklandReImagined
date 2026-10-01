@@ -375,6 +375,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tokio",
  "zip 6.0.0",
 ]
 
