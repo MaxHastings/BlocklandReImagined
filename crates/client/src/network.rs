@@ -55,6 +55,9 @@ pub struct View {
     pub targets: Vec<bri_sim::tutorial::TargetView>,
     /// Add-On map light rules, oldest first.
     pub map_lights: Vec<bri_sim::session::MapLightRule>,
+    /// The host's environment settings (the Admin Menu's Environment
+    /// window, Add-Ons) over the map's own.
+    pub environment: bri_content::atmosphere::Settings,
     pub vehicles: BTreeMap<u64, bri_sim::session::VehicleInfo>,
     pub vehicle_poses: BTreeMap<u64, bri_sim::session::VehiclePose>,
     /// The host's player archetypes; poses name them by index.
@@ -342,6 +345,7 @@ fn publish(
         broken_shapes: client.replica.broken_shapes.clone(),
         targets: client.replica.targets.clone(),
         map_lights: client.replica.map_lights.clone(),
+        environment: client.replica.environment.clone(),
         vehicles: client.replica.vehicles.clone(),
         vehicle_poses: client.replica.vehicle_poses.clone(),
         archetypes: client.replica.archetypes.clone(),

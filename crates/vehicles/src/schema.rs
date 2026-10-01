@@ -446,6 +446,11 @@ pub struct Definition {
     /// host's rules for rockets are. It still pushes what it touches.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub harms_only_in_minigames: bool,
+    /// At most this many of this vehicle per player at once, on top of the
+    /// server's vehicle limits: a spawn brick past it tells its builder
+    /// they already have that many.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub per_player: Option<u32>,
     /// Emitters the vehicle runs at its nodes while its speed is in range.
     /// Cosmetic: each client draws them from the vehicle's presented motion.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -575,6 +580,7 @@ impl Pack {
                             .is_some_and(|(_, rest)| rest.starts_with("vehicle/"))),
                 "duplicate/invalid vehicle identity"
             );
+            ensure!(d.per_player != Some(0), "a per-player cap of 0 allows none");
             ensure!(
                 d.mass.is_finite() && d.mass > 0. && d.max_damage.is_finite() && d.max_damage > 0.,
                 "invalid vehicle mass/damage"

@@ -192,6 +192,11 @@ pub enum Action {
     TimeScale {
         scale: f32,
     },
+    /// The Environment window's Apply: the whole live environment, each
+    /// setting unset to keep the map's own.
+    SetEnvironment {
+        settings: bri_content::atmosphere::Settings,
+    },
     SetAdminPassword {
         password: Secret,
     },
@@ -279,6 +284,9 @@ impl Action {
                 }
             }
             Self::TimeScale { scale } if !scale.is_finite() => Err(Error::InvalidValue),
+            Self::SetEnvironment { settings } => {
+                settings.validate().map_err(|_| Error::InvalidValue)
+            }
             Self::HostSetAutoRole { principal, .. } => validate_principal(*principal),
             Self::HostConfigure { settings } => settings.validate(),
             _ => Ok(()),
@@ -448,6 +456,7 @@ pub enum GameplayCommand {
     ClearBots,
     Warp,
     TimeScale(f32),
+    SetEnvironment(Box<bri_content::atmosphere::Settings>),
     RequestBrickGroups,
     RequestMaps,
 }
@@ -1004,6 +1013,7 @@ impl Administration {
             Action::ClearBots => GameplayCommand::ClearBots,
             Action::Warp => GameplayCommand::Warp,
             Action::TimeScale { scale } => GameplayCommand::TimeScale(scale.clamp(0.2, 2.0)),
+            Action::SetEnvironment { settings } => GameplayCommand::SetEnvironment(Box::new(settings)),
             Action::RequestBrickGroups => GameplayCommand::RequestBrickGroups,
             Action::RequestMaps => GameplayCommand::RequestMaps,
         };

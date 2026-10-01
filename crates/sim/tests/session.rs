@@ -2126,3 +2126,51 @@ fn an_aimed_click_with_a_ghost_report_still_fires_the_brick_image() {
     assert!(effects.contains(&"bricktrailemitter".into()), "{effects:?}");
     assert!(effects.contains(&"brickdeployexplosion".into()), "{effects:?}");
 }
+#[test]
+fn admins_set_the_environment_and_a_changed_day_restarts_from_now() {
+    use bri_admin::{Action, Request};
+    use bri_content::atmosphere::{DayCycle, Settings};
+    let mut s = session();
+    let admin = s
+        .join("Admin".into(), Vec3::new(0.0, 0.05, 0.0), true)
+        .unwrap();
+    let guest = s
+        .join("Guest".into(), Vec3::new(20.0, 0.05, 0.0), false)
+        .unwrap();
+    for _ in 0..10 {
+        s.step().unwrap();
+    }
+    let set = |settings: Settings| Command::Admin(Request::new(Action::SetEnvironment { settings }));
+    let day = |time: f32, anchor_tick: u64| DayCycle { length_seconds: 120.0, time, anchor_tick };
+    let wanted = Settings {
+        sun_elevation: Some(20.0),
+        fog_color: Some([0.5, 0.4, 0.3]),
+        day_cycle: Some(day(0.75, 999_999)),
+        ..Default::default()
+    };
+    assert!(s.command(guest, 1, set(wanted.clone())).is_err(), "players may not");
+    assert!(s.environment().is_empty());
+    assert!(
+        s.admin_state(admin)
+            .unwrap()
+            .supported
+            .contains(&bri_sim::session::AdminCapability::Environment)
+    );
+    let tick = s.simulation().state().tick;
+    s.command(admin, 1, set(wanted.clone())).unwrap();
+    // The host stamps the tick, whatever the request said.
+    let applied = s.environment();
+    assert_eq!(applied.day_cycle, Some(day(0.75, tick)));
+    assert_eq!(applied.fog_color, wanted.fog_color);
+    // Applying the same day again keeps it running.
+    for _ in 0..10 {
+        s.step().unwrap();
+    }
+    s.command(admin, 2, set(applied.clone())).unwrap();
+    assert_eq!(s.environment().day_cycle, Some(day(0.75, tick)));
+    // Out-of-range values are refused; Reset is every setting unset.
+    let bad = Settings { visible_distance: Some(5.0), ..Default::default() };
+    assert!(s.command(admin, 3, set(bad)).is_err());
+    s.command(admin, 4, set(Settings::default())).unwrap();
+    assert!(s.environment().is_empty());
+}

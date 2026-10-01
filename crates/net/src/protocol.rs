@@ -58,7 +58,9 @@ use std::collections::{BTreeMap, BTreeSet};
 ///     Also mirrored copies (`PlaceBlueprint::mirrored`, `Notice::MirrorCopy`) and Add-On selection boxes (`Notice::SelectionBox`).
 /// 68: `Command::CancelBrick`: the cancel key reaches the host, for Add-On
 /// images that take it (`commands.cancel`).
-pub const VERSION: u32 = 68;
+/// 69: `Checkpoint::environment` and `Delta::environment`: the live
+/// environment (Admin Menu Environment, `set_environment`).
+pub const VERSION: u32 = 69;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).
@@ -531,6 +533,9 @@ pub struct Checkpoint {
     /// Add-On map light rules, oldest first.
     #[serde(default)]
     pub map_lights: Vec<bri_sim::session::MapLightRule>,
+    /// The live environment over the map's own.
+    #[serde(default)]
+    pub environment: bri_content::atmosphere::Settings,
     /// v20's player datablocks, then the enabled packages' archetypes.
     /// Poses name a player's archetype by its index here.
     pub archetypes: bri_sim::archetype::Archetypes,
@@ -575,6 +580,7 @@ impl Checkpoint {
             broken_shapes: session.broken_shapes(),
             targets: session.tutorial_targets(),
             map_lights: session.map_light_rules(),
+            environment: session.environment(),
             archetypes: session.archetypes().clone(),
             world_bricks: world.bricks.len() as u64,
             world_chunks: 0,
@@ -871,6 +877,9 @@ pub struct Delta {
     /// Add-On map light rules, whole, whenever one changed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub map_lights: Option<Vec<bri_sim::session::MapLightRule>>,
+    /// The live environment, whole, whenever it changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<bri_content::atmosphere::Settings>,
     /// Package entities that appeared, changed, moved or left.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entities: Option<EntityDelta>,
@@ -898,6 +907,7 @@ impl Delta {
             broken_shapes,
             targets,
             map_lights,
+            environment,
             entities,
         } = self;
         weapons.is_none()
@@ -915,6 +925,7 @@ impl Delta {
             && broken_shapes.is_none()
             && targets.is_none()
             && map_lights.is_none()
+            && environment.is_none()
             && entities.is_none()
     }
 }

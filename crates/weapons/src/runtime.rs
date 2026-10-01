@@ -506,6 +506,10 @@ pub struct Actor {
     #[serde(default)]
     next: Option<NextImage>,
     last_shot: Option<u64>,
+    /// The palette colour the holder last picked for their spray can,
+    /// which `paint_tint` images take.
+    #[serde(default)]
+    spray: u8,
     ball_ready: u64,
     spawn_tick: u64,
     tackle_until: u64,
@@ -611,6 +615,7 @@ impl WeaponsWorld {
                 trigger: false,
                 next: None,
                 last_shot: None,
+                spray: 0,
                 ball_ready: 0,
                 spawn_tick: self.tick,
                 tackle_until: 0,
@@ -732,11 +737,26 @@ impl WeaponsWorld {
         };
         let mut a = self.actors.remove(&id).unwrap();
         match image {
-            Some(image) => self.change_image(id, &mut a, &image, None),
+            Some(image) => {
+                let paint = self
+                    .pack
+                    .images
+                    .get(&image)
+                    .filter(|i| i.paint_tint)
+                    .map(|_| a.spray);
+                self.change_image(id, &mut a, &image, paint)
+            }
             None => self.unmount(id, &mut a),
         }
         a.selected = slot;
         self.actors.insert(id, a);
+        Ok(())
+    }
+    /// The palette colour `id` last picked for their spray can
+    /// (`%client.currentColor`), which `paint_tint` images they take out
+    /// show.
+    pub fn set_spray_color(&mut self, id: ActorId, color: u8) -> Result<()> {
+        self.actors.get_mut(&id).context("Unknown actor")?.spray = color;
         Ok(())
     }
     /// `Player::mountImage` for an image that is not an inventory item: spray
@@ -1337,6 +1357,9 @@ impl WeaponsWorld {
                         sequence: state.sequence.clone(),
                         image_hand: Some(e.hand),
                     });
+                }
+                if !state.arm.is_empty() {
+                    self.animation(id, &state.arm);
                 }
                 if !state.sound.is_empty() {
                     self.events.push(Event::Sound {

@@ -79,6 +79,22 @@ impl Bounds {
         false
     }
 }
+/// Whether two boxes share part of a face: they meet on one axis and
+/// overlap by at least a cell on the other two. Side by side, stacked or
+/// hung beneath, studs or not; boxes meeting only along an edge or at a
+/// corner do not share a face.
+pub fn share_face(a: Bounds, b: Bounds) -> bool {
+    let (a_max, b_max) = (a.max(), b.max());
+    let mut meeting = 0;
+    for axis in 0..3 {
+        if a_max[axis] == b.min[axis] || b_max[axis] == a.min[axis] {
+            meeting += 1;
+        } else if a.min[axis] >= b_max[axis] || b.min[axis] >= a_max[axis] {
+            return false;
+        }
+    }
+    meeting == 1
+}
 pub fn overlaps(a: (&Brick, &Mesh, Bounds), b: (&Brick, &Mesh, Bounds)) -> bool {
     a.2.intersection(b.2).is_some_and(|intersection| {
         intersection.any(|p| {
@@ -258,6 +274,20 @@ impl Index {
 mod tests {
     use super::*;
     use bri_world::ContentRef;
+    #[test]
+    fn faces_are_shared_side_by_side_and_stacked_never_at_edges() {
+        let b = |min: [i32; 3], size: [i32; 3]| Bounds { min, size };
+        let plate = b([0, 0, 0], [2, 1, 1]);
+        // Beside it, above it and below it, partly overlapping the face.
+        assert!(share_face(plate, b([2, 0, 0], [1, 3, 1])));
+        assert!(share_face(plate, b([1, 1, 0], [4, 1, 4])));
+        assert!(share_face(b([-3, -3, -3], [4, 3, 4]), plate));
+        // A gap, an edge, a corner and an overlap are not faces.
+        assert!(!share_face(plate, b([3, 0, 0], [1, 1, 1])));
+        assert!(!share_face(plate, b([2, 1, 0], [1, 1, 1])));
+        assert!(!share_face(plate, b([2, 1, 1], [1, 1, 1])));
+        assert!(!share_face(plate, b([1, 0, 0], [2, 1, 1])));
+    }
     #[test]
     fn sparse_large_query_uses_occupied_buckets_and_exact_bounds() {
         let mut index = Index::default();

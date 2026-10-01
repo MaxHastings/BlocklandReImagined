@@ -1192,6 +1192,8 @@ pub struct DisplayModes {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum UiUpdate {
     Admin(crate::models::admin::AdminUpdate),
+    /// The host's environment over the map's own (the Environment window).
+    Environment(crate::models::environment::EnvironmentView),
     /// Answer to a request (`Err` carries the user-visible reason).
     ActionResult {
         id: RequestId,
@@ -1269,8 +1271,10 @@ pub enum UiUpdate {
     /// The held weapon hides the crosshair (its own, or its scope while
     /// aiming, draws the aim instead).
     HideCrosshair(bool),
-    /// The held tool takes the mouse wheel (its trigger is held and its
-    /// image has a `wheel` command) instead of the inventory.
+    /// The held tool's image has a `wheel` command: while the trigger
+    /// (`mouseFire`) is held down here, the mouse wheel goes to that tool
+    /// and nothing else sees it. The UI tracks the trigger itself, so a
+    /// press and a roll in the same frame already reach the tool.
     ToolWheel(bool),
     /// A net graph sample (`NetGraph::updateStats`); dropped while hidden.
     NetSample(crate::models::perf::NetSample),
