@@ -259,6 +259,8 @@ fn real_steam_knife_and_grenade_ports() {
             input: Path::new(&addons).join(format!("{name}.zip")),
             out: out.clone(),
             reference: Some(reference.clone().into()),
+            core: vec![],
+            version: "1.0.0".into(),
             ..Default::default()
         })
         .unwrap();

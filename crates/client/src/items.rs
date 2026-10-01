@@ -1820,11 +1820,17 @@ mod add_on_icon_tests {
     /// A stand-in tool Add-On with a model of its own: a wooden handle and
     /// an iron head (two materials, each naming its PNG), held at a
     /// `mountPoint` grip, with a first-person copy (`detail9999`) that a
-    /// `fire` sequence swings. Written into `root`; returns its `assets/`.
+    /// `fire` sequence swings; its icon is drawn from the model at the
+    /// Hammer icon's pose. Written into `root`; returns its `assets/`.
     pub(crate) fn own_model_tool(root: &Path) -> Result<std::path::PathBuf> {
         use serde_json::json;
         let assets = root.join("assets");
         std::fs::create_dir_all(assets.join("models"))?;
+        std::fs::create_dir_all(assets.join("icons"))?;
+        std::fs::write(
+            assets.join("icons/pick.render.json"),
+            r#"{ "schema_version": 1, "pose_like": "v20.weapon.hammeritem", "look": { "textured": true } }"#,
+        )?;
         // An axis-aligned box per part, faces outward and counter-clockwise.
         let mut positions = Vec::new();
         let mut normals = Vec::new();
@@ -1898,7 +1904,7 @@ mod add_on_icon_tests {
         let weapons = json!({
             "schema_version": 3, "id": "tool",
             "items": { "tool:weapon/pick": { "ui_name": "Pick", "image": "tool:image/pick",
-                "model": "models/tool.shape.json", "icon": "", "can_drop": false } },
+                "model": "models/tool.shape.json", "icon": "icons/pick", "can_drop": false } },
             "images": { "tool:image/pick": { "name": "PickImage", "model": "models/tool.shape.json",
                 "melee": true, "arm_ready": true, "color": [1.0, 1.0, 1.0, 1.0],
                 "states": [{ "name": "Ready" }] } },
@@ -2054,6 +2060,12 @@ mod add_on_icon_tests {
         assert!(faults.is_empty(), "{faults:?}");
         let key = "tool/models/tool.shape.json";
         let (item, image) = ("tool:weapon/pick", "tool:image/pick");
+        // Its icon is asked to be drawn from the model at the Hammer's pose.
+        let [(drawn, _, file, spec)] = &added.icon_renders[..] else {
+            panic!("one render request: {:?}", added.icon_renders);
+        };
+        assert_eq!((drawn.as_str(), file.as_str()), (item, "icons/pick.render.json"));
+        assert_eq!(spec.pose_like, "v20.weapon.hammeritem");
         assert_eq!(manifest.items[item].model, key);
         assert_eq!(manifest.images[image].model, key);
         let resource = &manifest.models[key];
@@ -2216,29 +2228,17 @@ mod add_on_icon_tests {
 #[cfg(test)]
 mod own_model_icon_tests {
     use super::*;
-    /// An Add-On tool's icon drawn from its own model in wood and iron, at
-    /// the Hammer icon's angle and size so it sits in the tool slots like
-    /// a stock tool: the stand-in pick (`add_on_icon_tests::own_model_tool`)
-    /// asking for it as our Trench Pick did. Writes it to
-    /// `target/own-model-icon.png` for a look.
+    /// A tool Add-On's icon is its own model in wood and iron, drawn at the
+    /// Hammer icon's angle and size so it sits in the tool slots like a
+    /// stock tool (the stand-in `own_model_tool`, as the Trench Pick was).
+    /// Writes it to `target/own-model-icon.png` for a look.
     #[test]
     #[ignore = "requires the converted item and weapons packs; CPU only"]
-    fn an_add_on_icon_is_drawn_from_its_model_like_the_hammers() -> Result<()> {
+    fn an_add_on_tool_icon_is_drawn_from_its_model_like_the_hammers() -> Result<()> {
         let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
         let root = manifest.join("../../content");
         let dir = tempfile::tempdir()?;
-        let abs = super::add_on_icon_tests::own_model_tool(dir.path())?;
-        std::fs::create_dir_all(abs.join("icons"))?;
-        image::save_buffer(abs.join("icons/pick.png"), &[0u8; 4], 1, 1, image::ColorType::Rgba8)?;
-        std::fs::write(
-            abs.join("icons/pick.render.json"),
-            r#"{ "schema_version": 1, "pose_like": "v20.weapon.hammeritem", "look": { "textured": true } }"#,
-        )?;
-        let path = abs.join("weapons.json");
-        let mut weapons: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
-        weapons["items"]["tool:weapon/pick"]["icon"] = "icons/pick".into();
-        std::fs::write(&path, serde_json::to_vec_pretty(&weapons)?)?;
-        let extras = vec![("addons/tool/assets".to_string(), abs.canonicalize()?)];
+        let extras = vec![("addons/tool/assets".to_string(), add_on_icon_tests::own_model_tool(dir.path())?)];
         let mut assets = ItemAssets::load_with(
             &root.join("item-presentation-pack-010"),
             &root.join("weapons-pack-009"),
@@ -2263,9 +2263,9 @@ mod own_model_icon_tests {
         // Held like the Hammer: at the grip, in the right hand.
         let image = &assets.presentation.images["tool:image/pick"];
         assert_eq!(image.mount_point, assets.presentation.images["v20.image.hammerimage"].mount_point);
-        // The pick is modelled as the Hammer is held: handle up out of the
-        // fist (+y) and the head across its top, front to back (z), about
-        // as big. Each model's box, seen from its grip.
+        // Modelled as the Hammer is held: handle up out of the fist (+y)
+        // and the head across its top, front to back (z), about as big.
+        // Each model's box, seen from its grip.
         let grip_box = |model: &str| -> Result<(Vec3, Vec3)> {
             let shape = assets.shape(model)?;
             let bind = sample(shape, None, 0.0)?;
@@ -2279,8 +2279,8 @@ mod own_model_icon_tests {
         };
         let hammer = grip_box(&assets.presentation.images["v20.image.hammerimage"].model)?;
         let ours = grip_box(&image.model)?;
-        println!("from the grip, hammer {hammer:?}, pick {ours:?}");
-        for (name, (lo, hi)) in [("hammer", hammer), ("pick", ours)] {
+        println!("from the grip, hammer {hammer:?}, tool {ours:?}");
+        for (name, (lo, hi)) in [("hammer", hammer), ("tool", ours)] {
             let size = hi - lo;
             assert!(size.y > size.x && hi.y > -lo.y * 2.0, "{name}: the handle stands up out of the fist");
             assert!(size.z > size.x, "{name}: the head runs front to back");
