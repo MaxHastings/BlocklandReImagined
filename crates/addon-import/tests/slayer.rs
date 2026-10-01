@@ -78,6 +78,7 @@ fn content(root: &Path) -> (Arc<Catalog>, bri_weapons::Pack) {
                 reference: None,
                 core: vec![],
                 version: "1.0.0".into(),
+                ..Default::default()
             },
             &ports,
         )

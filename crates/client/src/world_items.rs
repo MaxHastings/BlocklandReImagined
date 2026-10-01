@@ -209,6 +209,7 @@ pub struct WorldItems {
     /// items in first person (Torque `Player::renderObject`); their mount
     /// poses stay for muzzle effects.
     hide_own_first_person: bool,
+    scoped: bool,
     /// Each projectile's last flight direction. A stuck arrow's velocity is
     /// zero, but it keeps pointing the way it flew into the wall, as v20's
     /// projectile keeps its last render transform.
@@ -265,6 +266,7 @@ impl WorldItems {
             last_seconds: None,
             palette: Vec::new(),
             hide_own_first_person: false,
+            scoped: false,
             headings: BTreeMap::new(),
             diagnostics: Default::default(),
         })
@@ -308,6 +310,11 @@ impl WorldItems {
     /// Options > Advanced's Render Items.
     pub fn set_render_my_items(&mut self, on: bool) {
         self.hide_own_first_person = !on;
+    }
+    /// Looking through a scope (`Zoom::overlay`): the player's own
+    /// first-person weapon is not drawn behind its picture.
+    pub fn set_scoped(&mut self, on: bool) {
+        self.scoped = on;
     }
     pub fn set_palette(&mut self, palette: &[[f32; 4]]) {
         if self.palette != palette {
@@ -623,7 +630,7 @@ impl WorldItems {
                     });
                 }
             }
-            if local_first && self.hide_own_first_person {
+            if local_first && (self.hide_own_first_person || self.scoped) {
                 continue;
             }
             // A sequence that leaves the drawn detail still (most fire

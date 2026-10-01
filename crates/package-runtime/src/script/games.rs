@@ -29,7 +29,8 @@ pub struct TeamView {
     /// The team's paint palette index.
     pub color: u8,
 }
-/// A brick as scripts see it (`bricks(kind)`, `brick(id)`).
+/// A brick as scripts see it (`bricks(kind)`, `brick(id)`): #{ id, kind,
+/// x, y, z, turns, min, max, color, owner, game, name, item }.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BrickView {
     pub id: u64,
@@ -37,6 +38,11 @@ pub struct BrickView {
     pub kind: String,
     /// The middle of the brick.
     pub position: [f32; 3],
+    /// Clockwise quarter turns seen from above.
+    pub turns: u8,
+    /// Its box.
+    pub min: [f32; 3],
+    pub max: [f32; 3],
     /// Its paint palette index.
     pub color: u8,
     /// The player (BL_ID) who owns it; 0 for the world's own.
@@ -104,6 +110,9 @@ pub(super) fn brick_map(b: &BrickView) -> Dynamic {
         x,
         y,
         z,
+        ("turns", Dynamic::from_int(i64::from(b.turns))),
+        ("min", super::point3(b.min)),
+        ("max", super::point3(b.max)),
         ("color", Dynamic::from_int(i64::from(b.color))),
         ("owner", Dynamic::from_int(b.owner as i64)),
         (

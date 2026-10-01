@@ -1437,6 +1437,8 @@ fn add_launcher(
         follow_arm: false,
         paint_tint: false,
         scripts: Default::default(),
+        hide_nodes: Vec::new(),
+        both_arms: false,
         states,
     };
     let item = bri_weapons::Item {
