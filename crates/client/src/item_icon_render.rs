@@ -710,13 +710,23 @@ fn veined(local: Vec3, n: Vec3, light: Vec3, shell: Vec3, vein: Vec3, pixel: f32
 /// Render the icon `spec` asks for: `mesh` posed like `reference` (the
 /// stock item's model and its icon).
 pub fn render_like(spec: &Spec, mesh: &Mesh, reference: (&Mesh, &SceneImage), label: &str) -> Result<SceneImage> {
-    ensure!(!mesh.indices.is_empty(), "the item has no model to draw");
-    let (fitted, profile, _) = fit_pose(reference.0, reference.1)
+    let (pose, profile, _) = fit_pose(reference.0, reference.1)
         .with_context(|| format!("{}'s model does not match its icon", spec.pose_like))?;
+    render_posed(spec, mesh, &(pose, profile), reference.1, label)
+}
+
+/// A stock item's pose and side profile, fitted to its icon (`fit_pose`).
+pub type Fitted = (Pose, Profile);
+
+/// [`render_like`] from the stock item's pose, already fitted to its
+/// `icon` (a pose is fitted once for every icon posed like that item).
+pub fn render_posed(spec: &Spec, mesh: &Mesh, fitted: &Fitted, icon: &SceneImage, label: &str) -> Result<SceneImage> {
+    ensure!(!mesh.indices.is_empty(), "the item has no model to draw");
     // The stock icon's profile, applied to this model's own axes, so it
     // points the way the stock item does; the framing is this model's own,
     // filling the box the stock drawing fills.
-    let target = filled_box(reference.1).context("the stock icon is empty")?;
+    let (fitted, profile) = fitted;
+    let target = filled_box(icon).context("the stock icon is empty")?;
     let puff = spec.look.skin.as_ref().map_or(0.0, |s| s.puff);
     let pose = frame(mesh, profile.rotation(mesh.axes), puff, target, fitted.size).context("the model has no size")?;
     Ok(render(mesh, &pose, &spec.look, label))
@@ -810,7 +820,17 @@ impl Request {
     /// Draw the icon, and keep it in `cache` for next time. A lost write
     /// only means drawing it again.
     pub fn draw(&self, cache: Option<&Path>) -> Result<SceneImage> {
-        let image = render_like(&self.spec, &self.mesh, (&self.reference, &self.icon), &self.label)?;
+        let fitted = self.fit().with_context(|| format!("{}'s model does not match its icon", self.spec.pose_like))?;
+        self.draw_fitted(&fitted, cache)
+    }
+    /// The stock item's pose, fitted to its icon: the same for every
+    /// request posed like the same item, so fitted once for them all.
+    pub fn fit(&self) -> Option<Fitted> {
+        fit_pose(&self.reference, &self.icon).map(|(pose, profile, _)| (pose, profile))
+    }
+    /// [`Self::draw`] from the stock item's pose, already [`Self::fit`]ted.
+    pub fn draw_fitted(&self, fitted: &Fitted, cache: Option<&Path>) -> Result<SceneImage> {
+        let image = render_posed(&self.spec, &self.mesh, fitted, &self.icon, &self.label)?;
         if let Some(cache) = cache {
             let file = self.file(cache);
             let partial = file.with_extension("partial");

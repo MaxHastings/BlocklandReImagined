@@ -973,6 +973,9 @@ impl ItemAssets {
     /// or letter ([`Self::drawn_icon`] says when it is ready).
     pub fn draw_icons(&mut self, cache: Option<&Path>) -> IconDraws {
         let mut draws = IconDraws::default();
+        // Icons still to draw, by the stock item they are posed like: its
+        // pose is fitted once for them all, on one thread.
+        let mut groups: BTreeMap<String, Vec<_>> = BTreeMap::new();
         for (item, dir, file, request) in std::mem::take(&mut self.icon_requests) {
             let slot = DrawnIcon::default();
             self.drawn.insert(item.clone(), slot.clone());
@@ -981,23 +984,34 @@ impl ItemAssets {
                 draws.kept += 1;
                 continue;
             }
+            groups.entry(request.spec.pose_like.clone()).or_default().push((item, dir, file, request, slot));
+        }
+        for (pose_like, group) in groups {
             let cache = cache.map(Path::to_path_buf);
-            let thread = std::thread::Builder::new()
-                .name("item icon".into())
-                .spawn(move || match request.draw(cache.as_deref()) {
-                    Ok(image) => {
-                        let _ = slot.set(image);
+            let count = group.len();
+            let thread = std::thread::Builder::new().name("item icon".into()).spawn(move || {
+                let fitted = group[0].3.fit();
+                for (item, dir, file, request, slot) in group {
+                    let drawn = fitted
+                        .as_ref()
+                        .with_context(|| format!("{pose_like}'s model does not match its icon"))
+                        .and_then(|fitted| request.draw_fitted(fitted, cache.as_deref()));
+                    match drawn {
+                        Ok(image) => {
+                            let _ = slot.set(image);
+                        }
+                        Err(error) => bri_console::warn(crate::cosmetic::add_on_fault(
+                            &dir,
+                            &file,
+                            format!("the icon of {item} could not be drawn from its model, so it keeps its picture: {error:#}"),
+                        )),
                     }
-                    Err(error) => bri_console::warn(crate::cosmetic::add_on_fault(
-                        &dir,
-                        &file,
-                        format!("the icon of {item} could not be drawn from its model, so it keeps its picture: {error:#}"),
-                    )),
-                });
+                }
+            });
             match thread {
                 Ok(thread) => {
                     self.drawing.lock().unwrap_or_else(|e| e.into_inner()).push(thread);
-                    draws.drawing += 1;
+                    draws.drawing += count;
                 }
                 Err(error) => bri_console::warn(format!("Item icons: no thread to draw one: {error}")),
             }

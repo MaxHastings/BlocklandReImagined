@@ -3,6 +3,7 @@ use crate::*;
 use anyhow::{Result, ensure};
 use glam::{Quat, Vec3};
 use std::{collections::BTreeMap, sync::Arc};
+use bri_content::passage::{MAX_CARRIES, PAST};
 pub const MAX_ACTORS: usize = 128;
 pub const MAX_PROJECTILES: usize = 1024;
 pub const MAX_DROPS: usize = 1024;
@@ -67,6 +68,11 @@ pub struct Frame {
     pub horse: bool,
     pub first_person: bool,
     pub can_jet: bool,
+    /// The body's middle, the point an opening of a linked brick carries
+    /// it by. A shot from an eye or muzzle already through an opening the
+    /// body is not yet through comes out of the far side, as it is seen.
+    #[serde(default)]
+    pub middle: Option<Vec3>,
 }
 impl Default for Frame {
     fn default() -> Self {
@@ -83,6 +89,7 @@ impl Default for Frame {
             horse: false,
             first_person: true,
             can_jet: true,
+            middle: None,
         }
     }
 }
@@ -95,7 +102,8 @@ impl Frame {
                 self.direction,
                 self.velocity,
                 self.muzzle[0],
-                self.muzzle[1]
+                self.muzzle[1],
+                self.middle.unwrap_or(self.eye)
             ]
             .iter()
             .all(|v| v.is_finite() && v.abs().max_element() < 1e7),
@@ -223,6 +231,33 @@ pub trait Query {
     fn passage(&mut self, _start: Vec3, _end: Vec3) -> Option<(f32, glam::Affine3A)> {
         None
     }
+}
+/// Follow a path of points through the openings of linked bricks it goes
+/// in through: where its last point ends up and the carries applied,
+/// composed (None when it went through none).
+fn follow(q: &mut impl Query, path: &[Vec3]) -> (Vec3, Option<glam::Affine3A>) {
+    let Some(&start) = path.first() else {
+        return (Vec3::ZERO, None);
+    };
+    let (mut at, mut total) = (start, None::<glam::Affine3A>);
+    for &next in &path[1..] {
+        let mut to = total.map_or(next, |c| c.transform_point3(next));
+        for _ in 0..MAX_CARRIES {
+            let Some((t, carry)) = q.passage(at, to) else {
+                break;
+            };
+            at = carry.transform_point3(at.lerp(to, t));
+            to = carry.transform_point3(to);
+            total = Some(carry * total.unwrap_or(glam::Affine3A::IDENTITY));
+            let rest = to - at;
+            if rest.length_squared() < 1e-12 {
+                break;
+            }
+            at += rest.normalize() * PAST.min(rest.length());
+        }
+        at = to;
+    }
+    (at, total)
 }
 /// Carry `position` and `velocity` (and a `rotation`) by a linked brick's
 /// rigid move.
@@ -1457,7 +1492,11 @@ impl WeaponsWorld {
         q: &mut impl Query,
     ) -> bool {
         let name = image.name.to_ascii_lowercase();
-        // An Add-On tool's own moments run its commands, then carry on.
+        // An Add-On tool's own moments run its commands, then carry on. A
+        // gun's `onFire` command runs and its projectile still flies, as a
+        // v20 `Image::onFire` package calling `Parent::onFire` did (a
+        // magazine counting its rounds); a tool with no projectile only
+        // runs the command.
         if let Some(command) = image.commands.for_script(script)
             && !(script.eq_ignore_ascii_case("onfire") && image.command.is_some())
         {
@@ -1467,7 +1506,7 @@ impl WeaponsWorld {
                 hand: e.hand,
                 command: Some(command.clone()),
             });
-            if script.eq_ignore_ascii_case("onfire") {
+            if script.eq_ignore_ascii_case("onfire") && image.projectile.is_none() {
                 return true;
             }
         }
@@ -1691,6 +1730,11 @@ impl WeaponsWorld {
                         velocity: kick,
                     });
                 }
+                // Out of the far side of any opening between the body and
+                // where the shot starts.
+                let body = a.frame.middle.unwrap_or(a.frame.eye);
+                let (origin, through) = follow(q, &[body, a.frame.eye, origin]);
+                let velocity = through.map_or(velocity, |c| carried(&c, Vec3::ZERO, velocity).1);
                 for n in 0..shot.projectiles {
                     let turn = if shot.spread > 0.0 {
                         let angle = |axis: u64| {
@@ -1772,7 +1816,9 @@ impl WeaponsWorld {
                 let at = p.position.lerp(end, t);
                 if q.sweep(p.position, at, filter).is_none() {
                     let (moved, velocity, _) = carried(&carry, at, p.velocity);
-                    p.position = moved;
+                    // Past the partner's plane by a hair, so the rest of the
+                    // tick does not go back in through it.
+                    p.position = moved + velocity.normalize_or_zero() * PAST;
                     p.velocity = velocity;
                     p.heading = p.heading.map(|h| carried(&carry, Vec3::ZERO, h).1);
                     remaining *= 1.0 - t;

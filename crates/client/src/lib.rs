@@ -43,6 +43,7 @@ pub mod old_saves;
 pub mod packages;
 pub mod perf;
 pub mod platform;
+pub mod portal_view;
 pub mod save_host;
 pub mod save_picture;
 pub mod playback;
