@@ -1,0 +1,201 @@
+{
+  "schema_version": 1,
+  "script": "newduplicator.rhai",
+  "commands": [
+    {
+      "name": "fire",
+      "aim_reach": {{reach}},
+      "tool_only": true
+    },
+    {
+      "name": "light",
+      "tool_only": true
+    },
+    {
+      "name": "cancel",
+      "tool_only": true
+    },
+    {
+      "name": "shift",
+      "tool_only": true,
+      "args": [
+        "int",
+        "int",
+        "int",
+        "bool"
+      ]
+    },
+    {
+      "name": "rotate",
+      "tool_only": true,
+      "args": [
+        "int"
+      ]
+    },
+    {
+      "name": "plant",
+      "tool_only": true
+    },
+    {
+      "name": "seat",
+      "tool_only": true,
+      "args": [
+        "int"
+      ]
+    },
+    {
+      "name": "mount",
+      "tool_only": true
+    },
+    {
+      "name": "unmount",
+      "tool_only": true,
+      "while_dead": true
+    },
+    {
+      "name": "newduplicator"
+    },
+    {
+      "name": "duplicator"
+    },
+    {
+      "name": "duplicato"
+    },
+    {
+      "name": "duplicat"
+    },
+    {
+      "name": "duplica"
+    },
+    {
+      "name": "duplic"
+    },
+    {
+      "name": "dupli"
+    },
+    {
+      "name": "dupl"
+    },
+    {
+      "name": "dup"
+    },
+    {
+      "name": "du"
+    },
+    {
+      "name": "d"
+    },
+    {
+      "name": "mirrorx"
+    },
+    {
+      "name": "mirrory"
+    },
+    {
+      "name": "mirrorz"
+    },
+    {
+      "name": "mx"
+    },
+    {
+      "name": "my"
+    },
+    {
+      "name": "mz"
+    },
+    {
+      "name": "cut"
+    },
+    {
+      "name": "ndcut"
+    },
+    {
+      "name": "duphelp"
+    },
+    {
+      "name": "dh"
+    },
+    {
+      "name": "savedup",
+      "args": [
+        "string"
+      ]
+    },
+    {
+      "name": "sd",
+      "args": [
+        "string"
+      ]
+    },
+    {
+      "name": "loaddup",
+      "args": [
+        "string"
+      ]
+    },
+    {
+      "name": "ld",
+      "args": [
+        "string"
+      ]
+    }
+  ],
+  "on_copy": true,
+  "on_place": true,
+  "state": {
+    "player": {
+      "mode": {
+        "default": "",
+        "persist": false
+      },
+      "last_select": {
+        "default": "stack",
+        "persist": false
+      },
+      "direction": {
+        "default": true,
+        "persist": false
+      },
+      "limited": {
+        "default": true,
+        "persist": false
+      },
+      "selected": {
+        "default": 0,
+        "persist": false
+      },
+      "size": {
+        "default": [],
+        "persist": false
+      },
+      "box": {
+        "default": [],
+        "persist": false
+      },
+      "corner": {
+        "default": true,
+        "persist": false
+      },
+      "box_selected": {
+        "default": false,
+        "persist": false
+      },
+      "last_select_tick": {
+        "default": -1000000,
+        "persist": false
+      },
+      "last_save_tick": {
+        "default": -1000000,
+        "persist": false
+      },
+      "last_load_tick": {
+        "default": -1000000,
+        "persist": false
+      },
+      "swapping": {
+        "default": false,
+        "persist": false
+      }
+    }
+  }
+}

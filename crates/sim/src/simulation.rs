@@ -750,18 +750,20 @@ impl Simulation {
         self.detect_collisions();
         Ok(ids)
     }
-    /// Every brick lying wholly inside `area` that `admit` accepts, lowest
-    /// first: what a copy of the box takes, cut short at `limit`.
+    /// Every brick lying wholly inside `area` (or, not `limited`, reaching
+    /// into it) that `admit` accepts, lowest first: what a copy of the box
+    /// takes, cut short at `limit`.
     pub fn select_box(
         &self,
         area: Bounds,
+        limited: bool,
         limit: usize,
         mut admit: impl FnMut(&Brick) -> bool,
     ) -> Selection {
         let world = self.state();
         let inside = |b: Bounds| {
             let (max, outer) = (b.max(), area.max());
-            (0..3).all(|a| b.min[a] >= area.min[a] && max[a] <= outer[a])
+            !limited || (0..3).all(|a| b.min[a] >= area.min[a] && max[a] <= outer[a])
         };
         let mut found: Vec<(i32, BrickId)> = Vec::new();
         let mut selection = Selection::default();

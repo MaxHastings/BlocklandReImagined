@@ -4494,6 +4494,12 @@ impl App {
                             }
                             continue;
                         }
+                        bri_sim::session::Notice::MoveCopy { point, normal } => {
+                            if let Some(building) = self.building.as_mut() {
+                                building.move_copy(point, normal);
+                            }
+                            continue;
+                        }
                         bri_sim::session::Notice::SelectionBox(outline) => {
                             if let Some(building) = self.building.as_mut()
                                 && let Err(error) = building.set_outline(outline.map(|o| *o))

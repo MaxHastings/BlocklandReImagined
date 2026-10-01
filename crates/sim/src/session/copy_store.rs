@@ -116,7 +116,7 @@ pub(super) struct SavedCopies {
 /// How a copy, save or load went, for the Add-On's `on_copy` or else the
 /// player.
 pub(super) struct CopyOutcome {
-    /// `select`, `save` or `load`.
+    /// `select`, `save`, `load` or `cut`.
     pub action: &'static str,
     pub name: Option<String>,
     /// Bricks now held (or saved).
@@ -127,7 +127,8 @@ pub(super) struct CopyOutcome {
     pub limit_reached: bool,
     pub refused: usize,
     /// `trust`, `public`, `empty`, `invalid`, `missing`, `unavailable`,
-    /// `busy`, `limit` or `failed`, and the engine's words for it.
+    /// `busy`, `limit`, `failed` or (a cut) `refused`, and the engine's
+    /// words for it.
     pub error: Option<(&'static str, String)>,
 }
 impl From<blueprints::Copied> for CopyOutcome {

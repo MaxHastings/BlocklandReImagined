@@ -68,6 +68,207 @@
         "crates/addon-import/tests/ports.rs duplorcator_port_copies_lights_and_plants_brick_by_brick",
         "crates/addon-import/tests/ports.rs duplorcator_port_saves_and_loads_duplications"
       ]
+    },
+    {
+      "addon": "Tool_NewDuplicator",
+      "title": "New Duplicator",
+      "port": "tool_newduplicator",
+      "status": "partial",
+      "sha256": [
+        "b443eab7e97dfc51c1532c88411e5c93ed9a13b4a7fa0c60b7707b405fefa118"
+      ],
+      "covers": {
+        "serverCmdNewDuplicator": {
+          "equips": "mountimage\\s*\\(\\s*%image\\s*,\\s*0\\s*\\)",
+          "admin_message": "admin only"
+        },
+        "serverCmdDuplicator": {
+          "equips": "servercmdnewduplicator\\s*\\(\\s*%client\\s*\\)"
+        },
+        "serverCmdD": {
+          "equips": "servercmdnewduplicator\\s*\\(\\s*%client\\s*\\)"
+        },
+        "ndApplyDefaultPrefValues": {
+          "admin_only": "\\$pref::server::nd::adminonly\\s*=\\s*(true|false)\\s*;",
+          "save_admin_only": "\\$pref::server::nd::saveadminonly\\s*=\\s*(true|false)\\s*;",
+          "load_admin_only": "\\$pref::server::nd::loadadminonly\\s*=\\s*(true|false)\\s*;",
+          "trust_limit": "\\$pref::server::nd::trustlimit\\s*=\\s*(\\d+)\\s*;",
+          "admin_bypass": "\\$pref::server::nd::admintrustbypass1\\s*=\\s*(true|false)\\s*;",
+          "select_public": "\\$pref::server::nd::selectpublicbricks\\s*=\\s*(true|false)\\s*;",
+          "max_bricks_admin": "\\$pref::server::nd::maxbricksadmin\\s*=\\s*(\\d+)\\s*;",
+          "max_bricks_player": "\\$pref::server::nd::maxbricksplayer\\s*=\\s*(\\d+)\\s*;",
+          "max_box_admin": "\\$pref::server::nd::maxboxsizeadmin\\s*=\\s*(\\d+)\\s*;",
+          "max_box_player": "\\$pref::server::nd::maxboxsizeplayer\\s*=\\s*(\\d+)\\s*;",
+          "select_timeout_ms": "\\$pref::server::nd::selecttimeoutms\\s*=\\s*(\\d+)\\s*;"
+        },
+        "Player::ndFired": {
+          "reach": "%len\\[2\\]\\s*=\\s*(\\d+)\\s*;",
+          "spark": "nd_hitprojectile",
+          "selects": "%client\\.ndmode\\.onselectobject"
+        },
+        "ND_Image::onMount": {
+          "equipped": "%player\\.ndequipped\\s*\\(\\s*\\)"
+        },
+        "ND_Image::onUnMount": {
+          "unequipped": "%player\\.ndunequipped\\s*\\(\\s*\\)"
+        },
+        "Player::ndEquipped": {
+          "resumes": "ndsetmode\\s*\\(\\s*%client\\.ndlastselectmode\\s*\\)",
+          "ignores": "ndignorenextmount"
+        },
+        "Player::ndUnEquipped": {
+          "kills": "ndkillmode\\s*\\(\\s*\\)"
+        },
+        "GameConnection::ndSetImage": {
+          "ignores": "ndignorenextmount\\s*=\\s*true"
+        },
+        "ndFormatMessage": {
+          "title_font": "<font:arial:22>",
+          "row_font": "<font:verdana:16>",
+          "justify": "<just:right>"
+        },
+        "NDM_StackSelect::onSelectObject": {
+          "timeout": "selecttimeoutms",
+          "selects": "startstackselection\\s*\\(\\s*%obj\\s*,\\s*%client\\.nddirection\\s*,\\s*%client\\.ndlimited\\s*\\)"
+        },
+        "NDM_StackSelect::onLight": {
+          "box": "ndsetmode\\s*\\(\\s*ndm_boxselect\\s*\\)"
+        },
+        "NDM_StackSelect::onNextSeat": {
+          "direction": "%client\\.nddirection\\s*=\\s*!\\s*%client\\.nddirection"
+        },
+        "NDM_StackSelect::onPrevSeat": {
+          "limited": "%client\\.ndlimited\\s*=\\s*!\\s*%client\\.ndlimited"
+        },
+        "NDM_StackSelect::onCancelBrick": {
+          "clears": "ndselection\\.deletedata\\s*\\(\\s*\\)"
+        },
+        "NDM_StackSelect::onCut": {
+          "cuts": "startcutting\\s*\\(\\s*\\)"
+        },
+        "NDM_StackSelect::getBottomPrint": {
+          "title": "\\\"selection mode\\\"",
+          "direction": "direction:"
+        },
+        "NDM_BoxSelect::onSelectObject": {
+          "box": "%obj\\.getworldbox\\s*\\(\\s*\\)",
+          "aligned": "setsizealigned"
+        },
+        "NDM_BoxSelect::onLight": {
+          "stack": "ndsetmode\\s*\\(\\s*ndm_stackselect\\s*\\)"
+        },
+        "NDM_BoxSelect::onPrevSeat": {
+          "limited": "%client\\.ndlimited\\s*=\\s*!\\s*%client\\.ndlimited"
+        },
+        "NDM_BoxSelect::onShiftBrick": {
+          "studs": "mfloor\\s*\\(\\s*%newx\\s*\\)\\s*/\\s*2",
+          "plates": "mfloor\\s*\\(\\s*%z\\s*\\)\\s*/\\s*5",
+          "limit": "maxboxsizeplayer"
+        },
+        "NDM_BoxSelect::onSuperShiftBrick": {
+          "super_studs": "%x\\s*\\*\\s*(\\d+)",
+          "super_plates": "%z\\s*\\*\\s*(\\d+)"
+        },
+        "NDM_BoxSelect::onRotateBrick": {
+          "corner": "switchcorner\\s*\\(\\s*\\)"
+        },
+        "NDM_BoxSelect::onPlantBrick": {
+          "selects": "startboxselection\\s*\\(\\s*%box\\s*,\\s*%client\\.ndlimited\\s*\\)"
+        },
+        "NDM_BoxSelect::onCancelBrick": {
+          "canceled": "selection canceled"
+        },
+        "NDM_BoxSelect::getBottomPrint": {
+          "size": "plates\\\""
+        },
+        "ND_SelectionBox::setSizeAligned": {
+          "facing": "getangleidfromplayer\\s*\\(\\s*%player\\s*\\)"
+        },
+        "ND_SelectionBox::shiftCorner": {
+          "limit": "%limitreached\\s*=\\s*true"
+        },
+        "ND_SelectionBox::switchCorner": {
+          "corner": "%this\\.selectedcorner\\s*=\\s*!\\s*%this\\.selectedcorner"
+        },
+        "NDM_PlantCopy::onSelectObject": {
+          "moves": "movebricksto\\s*\\(\\s*%client\\s*,\\s*%pos\\s*,\\s*%normal\\s*\\)"
+        },
+        "NDM_PlantCopy::onCancelBrick": {
+          "back": "ndsetmode\\s*\\(\\s*%client\\.ndlastselectmode\\s*\\)"
+        },
+        "NDM_PlantCopy::getBottomPrint": {
+          "title": "\\\"plant mode"
+        },
+        "ND_Selection::finishStackSelection": {
+          "limit": "\\(limit reached\\)",
+          "trust": "missing trust"
+        },
+        "ND_Selection::finishBoxSelection": {
+          "adjust": "press \\[cancel brick\\] to adjust the box"
+        },
+        "ND_Selection::finishPlant": {
+          "blocked": "blocked\\.",
+          "floating": "floating\\."
+        },
+        "ND_Selection::finishCutting": {
+          "cut": "\\\"<font:verdana:20>\\\\c6cut \\\\c3\\\"\\s*@\\s*%this\\.cutsuccesscount"
+        },
+        "serverCmdMirrorX": {
+          "mirrors": "ndmirror\\s*\\(\\s*0\\s*\\)"
+        },
+        "serverCmdMirrorY": {
+          "mirrors": "ndmirror\\s*\\(\\s*1\\s*\\)"
+        },
+        "serverCmdCut": {
+          "cuts": "servercmdndcut\\s*\\(\\s*%client\\s*\\)"
+        },
+        "serverCmdSaveDup": {
+          "admin": "saveadminonly",
+          "name_length": "strlen\\s*\\(\\s*%filename\\s*\\)\\s*>\\s*(\\d+)",
+          "wait": "ndlastsavetime\\s*\\+\\s*10\\s*>"
+        },
+        "serverCmdLoadDup": {
+          "admin": "loadadminonly",
+          "wait": "ndlastloadtime\\s*\\+\\s*5\\s*>"
+        },
+        "ND_Selection::finishSaving": {
+          "done": "finished saving selection"
+        },
+        "ND_Selection::finishLoading": {
+          "done": "finished loading selection"
+        },
+        "serverCmdDupHelp": {
+          "help": "you can use the following commands"
+        },
+        "serverCmdLight": {
+          "light": "%client\\.ndmode\\.onlight\\s*\\(\\s*%client\\s*\\)"
+        },
+        "serverCmdNextSeat": {
+          "seat": "%client\\.ndmode\\.onnextseat\\s*\\(\\s*%client\\s*\\)"
+        },
+        "serverCmdPrevSeat": {
+          "seat": "%client\\.ndmode\\.onprevseat\\s*\\(\\s*%client\\s*\\)"
+        },
+        "serverCmdShiftBrick": {
+          "shift": "%client\\.ndmode\\.onshiftbrick"
+        },
+        "serverCmdSuperShiftBrick": {
+          "shift": "%client\\.ndmode\\.onsupershiftbrick"
+        },
+        "serverCmdRotateBrick": {
+          "rotate": "%client\\.ndmode\\.onrotatebrick"
+        },
+        "serverCmdPlantBrick": {
+          "plant": "%client\\.ndmode\\.onplantbrick\\s*\\(\\s*%client\\s*\\)"
+        },
+        "serverCmdCancelBrick": {
+          "cancel": "%client\\.ndmode\\.oncancelbrick\\s*\\(\\s*%client\\s*\\)"
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/ports.rs new_duplicator_port_selects_stacks_and_boxes_and_plants",
+        "crates/addon-import/tests/ports.rs new_duplicator_port_mirrors_cuts_saves_and_loads"
+      ]
     }
   ]
 }

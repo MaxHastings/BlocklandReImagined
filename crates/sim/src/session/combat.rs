@@ -251,6 +251,10 @@ pub enum Notice {
     /// the world's z axis (north and south swap), or else across its x
     /// axis (east and west swap).
     MirrorCopy { across_z: bool },
+    /// Put the copy this player holds against the surface at `point`
+    /// facing out along `normal`, as a ghost brick is put where it is
+    /// aimed.
+    MoveCopy { point: [f32; 3], normal: [f32; 3] },
     /// Outline a box for this player while its tool is in their hand (an
     /// Add-On's selection); `None` takes it away.
     SelectionBox(Option<Box<crate::blueprint::Outline>>),

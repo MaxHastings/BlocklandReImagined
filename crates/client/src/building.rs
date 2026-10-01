@@ -537,6 +537,42 @@ impl Building {
         copy.place();
         self.ghost_generation = self.ghost_generation.wrapping_add(1);
     }
+    /// Put the copy against the surface at `point` facing out along
+    /// `normal` (`Notice::MoveCopy`), as a ghost brick goes where it is
+    /// aimed: the middle of the copy's box half its size out along the
+    /// normal, its pivot on the grid.
+    pub fn move_copy(&mut self, point: [f32; 3], normal: [f32; 3]) {
+        let Some(copy) = self.copy.as_mut() else {
+            return;
+        };
+        let mut low = Vec3::splat(f32::MAX);
+        let mut high = Vec3::splat(f32::MIN);
+        for brick in &copy.bricks {
+            let Ok(definition) = self.definitions.get(brick) else {
+                continue;
+            };
+            let Ok(bounds) = Bounds::new(brick, &definition.mesh) else {
+                continue;
+            };
+            let cell = Vec3::from(grid::CELL);
+            let min = Vec3::from(bounds.min.map(|v| v as f32)) * cell;
+            low = low.min(min);
+            high = high.max(min + Vec3::from(bounds.size.map(|v| v as f32)) * cell);
+        }
+        if low.x > high.x {
+            return;
+        }
+        let half = (high - low) * 0.5;
+        // Only the normal's sign along each axis counts, as v20 rounded it.
+        let out = Vec3::from(normal).round();
+        let target = Vec3::from(point) + half * out;
+        let middle = (low + high) * 0.5;
+        copy.anchor = bri_sim::blueprint::snap_anchor(
+            (Vec3::from(copy.anchor) + target - middle).to_array(),
+        );
+        copy.place();
+        self.ghost_generation = self.ghost_generation.wrapping_add(1);
+    }
     /// Outline a box while its tool is in hand (`Notice::SelectionBox`);
     /// `None` takes it away.
     pub fn set_outline(&mut self, outline: Option<bri_sim::blueprint::Outline>) -> Result<()> {
@@ -2149,6 +2185,58 @@ mod tests {
         let mut unknown = copy;
         unknown.bricks[0].definition = ContentRef::Resolved("missing".into());
         assert!(b.set_blueprint(Some(unknown)).is_err());
+    }
+
+    #[test]
+    fn a_copy_moved_to_a_surface_sits_against_it_on_the_grid() {
+        const TOOL: &str = "duplicator-tool:weapon/duplicator";
+        let mut b = controller();
+        let mut catalog = b.tool_catalog.clone();
+        catalog.insert(
+            TOOL.to_string(),
+            ToolInfo {
+                id: TOOL.into(),
+                name: "Duplicator".into(),
+                icon: IconRef::None,
+                tint: None,
+            },
+        );
+        b.set_tool_catalog(catalog).unwrap();
+        let plate =
+            |x: f32, y: f32| Brick::new(ContentRef::Resolved("plate".into()), [x, y, 0.25], 1);
+        let copy =
+            Blueprint::capture(TOOL, &[plate(0.5, 0.1), plate(1.0, 0.3)], &b.definitions).unwrap();
+        b.set_blueprint(Some(copy)).unwrap();
+        b.sync_tools(&ToolInventory {
+            slots: vec![Some(TOOL.into()), None, None, None, None],
+            selected: Some(0),
+        })
+        .unwrap();
+        // The copy's box, 3 studs by 2 plates by 1 stud.
+        let span = |b: &Building| {
+            let mut low = [f32::MAX; 3];
+            let mut high = [f32::MIN; 3];
+            for brick in b.copy_ghost().unwrap() {
+                let mesh = &b.definitions.get(brick).unwrap().mesh;
+                let bounds = Bounds::new(brick, mesh).unwrap();
+                for a in 0..3 {
+                    low[a] = low[a].min(bounds.min[a] as f32 * grid::CELL[a]);
+                    high[a] = high[a].max((bounds.min[a] + bounds.size[a]) as f32 * grid::CELL[a]);
+                }
+            }
+            (low, high)
+        };
+        // Put on a floor: standing on it, over the point.
+        b.move_copy([5.0, 0.0, 5.0], [0.0, 1.0, 0.0]);
+        let (low, high) = span(&b);
+        assert!((low[1]).abs() < 1e-4 && (high[1] - 0.4).abs() < 1e-4);
+        assert!(((low[0] + high[0]) / 2.0 - 5.0).abs() <= 0.25);
+        assert!(((low[2] + high[2]) / 2.0 - 5.0).abs() <= 0.25);
+        // Against a wall facing -x: its side against the wall.
+        b.move_copy([10.0, 0.2, 5.0], [-1.0, 0.0, 0.0]);
+        let (low, high) = span(&b);
+        assert!((high[0] - 10.0).abs() < 1e-4, "{low:?} {high:?}");
+        assert!((low[1]).abs() < 1e-4);
     }
 
     #[test]

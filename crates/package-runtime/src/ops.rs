@@ -198,13 +198,14 @@ pub enum Op {
         tool: String,
     },
     /// Copy every brick lying wholly inside the box from `min` to `max`
-    /// (world units, grown out to the stud and plate grid) that `rule`
-    /// lets `player` take, for them to place with `tool`, cut short at
-    /// `limit` bricks.
+    /// (world units, grown out to the stud and plate grid; not `limited`,
+    /// every brick reaching into it) that `rule` lets `player` take, for
+    /// them to place with `tool`, cut short at `limit` bricks.
     CopyBox {
         player: u64,
         min: [f32; 3],
         max: [f32; 3],
+        limited: bool,
         limit: u32,
         rule: CopyRule,
         tool: String,
@@ -247,6 +248,19 @@ pub enum Op {
     MirrorCopy {
         player: u64,
         axis: MirrorAxis,
+    },
+    /// Move the copy `player` holds against the surface at `point` whose
+    /// outward `normal` is given, as a ghost brick is put where it is
+    /// aimed: its box's middle sits half its size out along the normal,
+    /// on the grid.
+    MoveCopy {
+        player: u64,
+        point: [f32; 3],
+        normal: [f32; 3],
+    },
+    /// Take away the copy `player` holds, as if they had never copied.
+    DropCopy {
+        player: u64,
     },
     /// Remove the bricks `player`'s copy was taken from, as their hammer
     /// would (their full trust), as one step Ctrl+Z puts back as it was.
@@ -620,6 +634,8 @@ impl Op {
             | Self::SaveCopy { .. }
             | Self::LoadCopy { .. }
             | Self::MirrorCopy { .. }
+            | Self::MoveCopy { .. }
+            | Self::DropCopy { .. }
             | Self::HighlightCopy { .. } => "build",
             Self::SetMapLights { .. } => "lighting",
             Self::SetEnvironment { .. } => "environment",
@@ -666,6 +682,7 @@ impl Op {
             | Self::Control { .. }
             | Self::SetImageAmmo { .. }
             | Self::MirrorCopy { .. }
+            | Self::DropCopy { .. }
             | Self::CutCopy { .. }
             | Self::PaintCopy { .. }
             | Self::UnmountImage { .. }
@@ -800,6 +817,9 @@ impl Op {
                 ..
             } => (1..=10_000).contains(limit) && item(tool) && span(min, max),
             Self::SaveCopy { name, .. } => copy_name(name).as_deref() == Some(name.as_str()),
+            Self::MoveCopy { point, normal, .. } => {
+                finite(point) && point.iter().all(|v| v.abs() <= 1_000_000.0) && finite(normal)
+            }
             Self::LoadCopy {
                 name, limit, tool, ..
             } => {
@@ -974,6 +994,8 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::CopyBuild { .. } => "copy_build",
         Op::CopyBox { .. } => "copy_box",
         Op::MirrorCopy { .. } => "mirror_copy",
+        Op::MoveCopy { .. } => "move_copy",
+        Op::DropCopy { .. } => "drop_copy",
         Op::CutCopy { .. } => "cut_copy",
         Op::PaintCopy { .. } => "paint_copy",
         Op::PaintFill { .. } => "paint_fill",

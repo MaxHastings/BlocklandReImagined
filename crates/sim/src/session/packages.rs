@@ -1470,6 +1470,7 @@ impl Session {
                 player,
                 min,
                 max,
+                limited,
                 limit,
                 rule,
                 tool,
@@ -1478,7 +1479,16 @@ impl Session {
                     caller == Some(player),
                     "A build is copied only for the player whose command asked"
                 );
-                let copied = self.copy_box(player, min, max, limit as usize, rule, &tool, package);
+                let copied = self.copy_box(
+                    player,
+                    min,
+                    max,
+                    limited,
+                    limit as usize,
+                    rule,
+                    &tool,
+                    package,
+                );
                 self.report_copy(package, player, copied);
                 Ok(())
             }
@@ -1532,16 +1542,51 @@ impl Session {
                 }
                 Ok(())
             }
+            Op::MoveCopy {
+                player,
+                point,
+                normal,
+            } => {
+                ensure!(
+                    caller == Some(player),
+                    "A copy is moved only for the player whose command asked"
+                );
+                if let Err(error) = self.move_copy(player, point, normal) {
+                    self.center_print(player, format!("{error:#}"));
+                }
+                Ok(())
+            }
+            Op::DropCopy { player } => {
+                ensure!(
+                    caller == Some(player),
+                    "A copy is put away only for the player whose command asked"
+                );
+                self.drop_copy(player);
+                Ok(())
+            }
             Op::CutCopy { player } => {
                 // Bricks go with the trust of the player who asked.
                 ensure!(
                     caller == Some(player),
                     "A copy's bricks are cut only for the player whose command asked"
                 );
-                match self.cut_copy(player) {
-                    Ok(count) => self.bottom_count(player, "Cut", count),
-                    Err(error) => self.center_print(player, format!("{error:#}")),
-                }
+                let held = self.blueprints.contains_key(&player);
+                let result = self.cut_copy(player);
+                let (bricks, error) = match result {
+                    Ok(count) => (count, None),
+                    Err(_) if !held => (0, Some(("empty", "Copy a build first.".to_string()))),
+                    Err(error) => (0, Some(("refused", format!("{error:#}")))),
+                };
+                let outcome = crate::session::copy_store::CopyOutcome {
+                    action: "cut",
+                    name: None,
+                    bricks,
+                    total: bricks,
+                    limit_reached: false,
+                    refused: 0,
+                    error,
+                };
+                self.report_copy(package, player, outcome);
                 Ok(())
             }
             Op::PaintCopy { player, color } => {

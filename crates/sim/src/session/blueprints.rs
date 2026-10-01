@@ -94,14 +94,16 @@ impl Session {
     }
 
     /// Copy every brick wholly inside the box from `min` to `max` (world
-    /// units, grown out to the grid) that `rule` lets `owner` take, as
-    /// [`Self::copy_build`] does.
+    /// units, grown out to the grid; not `limited`, every brick reaching
+    /// into it) that `rule` lets `owner` take, as [`Self::copy_build`]
+    /// does.
     #[allow(clippy::too_many_arguments)]
     pub fn copy_box(
         &mut self,
         owner: OwnerId,
         min: [f32; 3],
         max: [f32; 3],
+        limited: bool,
         limit: usize,
         rule: CopyRule,
         tool: &str,
@@ -113,7 +115,7 @@ impl Session {
             let actor = &self.peers.get(&owner).context("Unknown connection")?.actor;
             let selection = self
                 .simulation
-                .select_box(area, limit, |b| admits(actor, rule, b));
+                .select_box(area, limited, limit, |b| admits(actor, rule, b));
             Ok(if selection.bricks.is_empty() && selection.refused > 0 {
                 Err((
                     "trust",
@@ -123,7 +125,12 @@ impl Session {
             } else if selection.bricks.is_empty() {
                 Err((
                     "empty",
-                    "There are no bricks wholly inside that box.".to_string(),
+                    if limited {
+                        "There are no bricks wholly inside that box."
+                    } else {
+                        "There are no bricks in that box."
+                    }
+                    .to_string(),
                 ))
             } else {
                 Ok(selection)
@@ -230,6 +237,26 @@ impl Session {
         };
         self.notify(owner, Notice::MirrorCopy { across_z });
         Ok(())
+    }
+
+    /// Move the copy `owner` holds against the surface at `point` facing
+    /// out along `normal`. Where the copy stands is the player's to choose,
+    /// like its turn, so the host only tells them.
+    pub fn move_copy(&mut self, owner: OwnerId, point: [f32; 3], normal: [f32; 3]) -> Result<()> {
+        ensure!(
+            self.blueprints.contains_key(&owner),
+            "Copy a build before moving it"
+        );
+        self.notify(owner, Notice::MoveCopy { point, normal });
+        Ok(())
+    }
+
+    /// Take away the copy `owner` holds, if any.
+    pub fn drop_copy(&mut self, owner: OwnerId) {
+        if self.blueprints.contains_key(&owner) {
+            self.forget_blueprint(owner);
+            self.notify(owner, Notice::Blueprint(None));
+        }
     }
 
     /// The bricks `owner`'s copy was taken from that still stand.

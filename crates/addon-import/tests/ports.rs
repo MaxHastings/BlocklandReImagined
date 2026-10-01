@@ -590,29 +590,45 @@ fn port_and_check_port_run_from_the_executable() {
 /// The stand-in Duplicator imported with its port, hosted on a flat floor
 /// with 2x1 plates, and the host joined.
 fn duplorcator_game(name: &str) -> (PathBuf, bri_sim::session::Session, u64) {
-    use bri_package::packages::{PackageEntry, PackageSet, Side};
-    use bri_sim::session::Session;
-    use rapier3d::prelude::*;
-
-    let dir = fresh(name);
-    let root = dir.join("content");
-    let out = root.join("addons/tool_duplicator");
-    let report = import(&options(fixture("ports/Tool_Duplicator"), out.clone())).unwrap();
+    let (dir, s, host, report) = duplicator_game(name, "Tool_Duplicator", "tool_duplicator");
     let applied = &report.ports[0];
-    assert!(applied.applied, "{:?}", applied.reason);
     // Read from the stand-in's own script, not the original's.
     assert_eq!(applied.values["reach"], "8");
     assert_eq!(applied.values["highlight_ms"], "2000");
-    let rules = applied.rules.as_ref().expect("the port has host rules");
-    assert_eq!(rules.id, "tool_duplicator-rules");
-    let pack = Pack::from_json(&std::fs::read(out.join("assets/weapons.json")).unwrap()).unwrap();
+    let pack = Pack::from_json(
+        &std::fs::read(dir.join("content/addons/tool_duplicator/assets/weapons.json")).unwrap(),
+    )
+    .unwrap();
     assert_eq!(
         pack.images["tool_duplicator:image/duplorcatorimage"]
             .command
             .as_deref(),
         Some("tool_duplicator-rules:fire")
     );
+    (dir, s, host)
+}
 
+/// A stand-in duplicator Add-On (`fixture` under the port fixtures)
+/// imported with its port as `id`, hosted on a flat floor with 2x1 plates,
+/// and the host (an admin) joined.
+fn duplicator_game(
+    name: &str,
+    fixture_name: &str,
+    id: &str,
+) -> (PathBuf, bri_sim::session::Session, u64, bri_addon_import::report::Report) {
+    use bri_package::packages::{PackageEntry, PackageSet, Side};
+    use bri_sim::session::Session;
+    use rapier3d::prelude::*;
+
+    let dir = fresh(name);
+    let root = dir.join("content");
+    let out = root.join(format!("addons/{id}"));
+    let report = import(&options(fixture(&format!("ports/{fixture_name}")), out.clone())).unwrap();
+    let applied = &report.ports[0];
+    assert!(applied.applied, "{:?}", applied.reason);
+    let rules = applied.rules.as_ref().expect("the port has host rules");
+    assert_eq!(rules.id, format!("{id}-rules"));
+    let pack = Pack::from_json(&std::fs::read(out.join("assets/weapons.json")).unwrap()).unwrap();
     // A flat floor and a 2x1 plate.
     let mesh = bri_content::brick::Brick {
         schema_version: 1,
@@ -677,8 +693,8 @@ fn duplorcator_game(name: &str) -> (PathBuf, bri_sim::session::Session, u64) {
     let set = PackageSet {
         schema_version: 1,
         packages: vec![
-            entry("tool_duplicator", Side::Shared),
-            entry("tool_duplicator-rules", Side::Server),
+            entry(id, Side::Shared),
+            entry(&format!("{id}-rules"), Side::Server),
         ],
     };
     let catalog = bri_package_runtime::Catalog::load(&root, &set, true)
@@ -686,7 +702,7 @@ fn duplorcator_game(name: &str) -> (PathBuf, bri_sim::session::Session, u64) {
     s.install_packages(std::sync::Arc::new(catalog), None).unwrap();
 
     let host = s.join("Host".into(), Vec3::new(0.0, 0.05, 2.0), true).unwrap();
-    (dir, s, host)
+    (dir, s, host, report)
 }
 
 /// The Duplorcator's port, on the stand-in Duplicator in a hosted game:
@@ -1006,5 +1022,428 @@ fn duplorcator_port_saves_and_loads_duplications() {
         prints.iter().any(|(_, n)| matches!(n, Notice::Center { text, .. } if text.contains("5000<color:99AAAA>/\\c45001"))),
         "{prints:?}"
     );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// What the host told the player since last asked: centre and bottom
+/// prints and chat lines.
+fn told(s: &mut bri_sim::session::Session) -> Vec<String> {
+    use bri_sim::session::Notice;
+    s.take_private_notices()
+        .into_iter()
+        .filter_map(|(_, n)| match n {
+            Notice::Center { text, .. } | Notice::Bottom { text, .. } | Notice::Chat(text) => {
+                Some(text)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// A command the player's client sends: a typed one (no package), or a key
+/// the held duplicator takes.
+fn send(
+    s: &mut bri_sim::session::Session,
+    host: u64,
+    seq: &std::cell::Cell<u64>,
+    command: bri_sim::session::Command,
+) -> anyhow::Result<bri_sim::session::Reply> {
+    seq.set(seq.get() + 1);
+    s.command(host, seq.get(), command)
+}
+
+fn typed(command: &str, args: &[&str]) -> bri_sim::session::Command {
+    bri_sim::session::Command::Package(bri_sim::session::PackageCommand {
+        package: String::new(),
+        command: command.into(),
+        args: args
+            .iter()
+            .map(|a| bri_sim::session::PackageArg::String((*a).into()))
+            .collect(),
+    })
+}
+
+fn nd_key(command: &str, args: Vec<bri_sim::session::PackageArg>) -> bri_sim::session::Command {
+    bri_sim::session::Command::Package(bri_sim::session::PackageCommand {
+        package: "tool_newduplicator-rules".into(),
+        command: command.into(),
+        args,
+    })
+}
+
+/// The stand-in New Duplicator hosted, with a plate, a half-on plate on it
+/// and a lone plate beside them; the duplicator in hand and the host
+/// looking down at the bottom plate's uncovered half.
+fn new_duplicator_game(
+    name: &str,
+) -> (
+    PathBuf,
+    bri_sim::session::Session,
+    u64,
+    std::cell::Cell<u64>,
+    u64,
+) {
+    use bri_sim::session::{Command, Reply};
+
+    let (dir, mut s, host, report) =
+        duplicator_game(name, "Tool_NewDuplicator", "tool_newduplicator");
+    let values = &report.ports[0].values;
+    // Read from the stand-in's own script, not the original's.
+    assert_eq!(values["reach"], "12");
+    assert_eq!(values["max_bricks_player"], "3");
+    assert_eq!(values["super_studs"], "4");
+    assert_eq!(values["super_plates"], "10");
+    let pack = Pack::from_json(
+        &std::fs::read(dir.join("content/addons/tool_newduplicator/assets/weapons.json")).unwrap(),
+    )
+    .unwrap();
+    for image in ["nd_image", "nd_image_box", "nd_image_blue"] {
+        let image = &pack.images[&format!("tool_newduplicator:image/{image}")];
+        assert_eq!(image.command.as_deref(), Some("tool_newduplicator-rules:fire"));
+        assert_eq!(
+            image.commands.unmount.as_deref(),
+            Some("tool_newduplicator-rules:unmount")
+        );
+    }
+    let seq = std::cell::Cell::new(0u64);
+    let mut base = 0;
+    for (i, position) in [[0.5, 0.1, 0.25], [1.0, 0.3, 0.25], [2.5, 0.1, 0.25]]
+        .into_iter()
+        .enumerate()
+    {
+        let reply = send(
+            &mut s,
+            host,
+            &seq,
+            Command::Plant {
+                definition: "plate".into(),
+                position,
+                quarter_turns: 0,
+                color: 1,
+            },
+        );
+        match reply {
+            Ok(Reply::Planted(id)) if i == 0 => base = id,
+            Ok(Reply::Planted(_)) => {}
+            other => panic!("plant at {position:?}: {other:?}"),
+        }
+    }
+    // /d, the shortest of its names, puts it in hand.
+    send(&mut s, host, &seq, typed("d", &[])).unwrap();
+    for tick in 0..30u64 {
+        s.movement(
+            host,
+            tick + 1,
+            bri_sim::player::MoveInput {
+                yaw: 0.142,
+                pitch: -0.85,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        s.step().unwrap();
+    }
+    (dir, s, host, seq, base)
+}
+
+/// One tick of the host looking down at the bottom plate's uncovered half.
+fn look(s: &mut bri_sim::session::Session, host: u64) {
+    let sequence = s.snapshot().world.tick + 1000;
+    s.movement(
+        host,
+        sequence,
+        bri_sim::player::MoveInput {
+            yaw: 0.142,
+            pitch: -0.85,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    s.step().unwrap();
+}
+
+/// Swing the duplicator where the host looks, once a newly mounted image
+/// is ready.
+fn swing(s: &mut bri_sim::session::Session, host: u64, seq: &std::cell::Cell<u64>) {
+    use bri_sim::session::Command;
+    for _ in 0..20 {
+        look(s, host);
+    }
+    for down in [true, false] {
+        send(s, host, seq, Command::WeaponTrigger { down }).unwrap();
+        look(s, host);
+    }
+    for _ in 0..30 {
+        look(s, host);
+    }
+}
+
+/// The New Duplicator's port on the stand-in in a hosted game: taking it
+/// out starts stack mode; a click selects the stack up from a brick, lights
+/// it in its own colours and holds it; planting it says what fit and what
+/// was blocked and goes to plant mode; cancel goes back. [Light] gives box
+/// mode, where a click boxes a brick, the brick keys grow the box and
+/// planting selects what lies in it.
+#[test]
+fn new_duplicator_port_selects_stacks_and_boxes_and_plants() {
+    use bri_sim::session::{Command, Notice, PackageArg, Reply, ToolAction};
+
+    let (dir, mut s, host, seq, base) = new_duplicator_game("new-duplicator");
+    assert!(
+        s.tool_inventories()[&host]
+            .slots
+            .iter()
+            .any(|t| t.as_deref() == Some("tool_newduplicator:weapon/nd_item"))
+    );
+    let prints = told(&mut s);
+    assert!(
+        prints.iter().any(|t| t.contains("Selection Mode") && t.contains("Select stack up")),
+        "taking it out starts stack mode: {prints:?}"
+    );
+
+    swing(&mut s, host, &seq);
+    if s.blueprint(host).is_none() {
+        panic!("the click selected the stack: {:?}", told(&mut s));
+    }
+    let copy = s.blueprint(host).unwrap().clone();
+    assert_eq!(copy.bricks.len(), 2);
+    assert_eq!(copy.tool, "tool_newduplicator:weapon/nd_item");
+    let world = s.snapshot().world;
+    assert_eq!(
+        (world.bricks[&base].color, world.bricks[&base].color_effect),
+        (1, 3),
+        "the selection glows in its own colour"
+    );
+    let prints = told(&mut s);
+    assert!(
+        prints.iter().any(|t| t.contains(r"Selected \c32\c6 Bricks!")),
+        "{prints:?}"
+    );
+    assert!(
+        prints.iter().any(|t| t.contains(r"Selection Mode (\c32\c6 Bricks)")
+            && t.contains("<just:right>")
+            && t.contains("[Plant Brick]: Duplicate")),
+        "{prints:?}"
+    );
+
+    // Planted over the lone plate: the bottom plate is blocked, the top
+    // one plants on it.
+    let before = s.snapshot().world.bricks.len();
+    let reply = send(
+        &mut s,
+        host,
+        &seq,
+        Command::PlaceBlueprint {
+            position: [2.5, 0.0, 0.0],
+            quarter_turns: 0,
+            mirrored: false,
+        },
+    );
+    assert!(matches!(reply, Ok(Reply::Planted(_))), "{reply:?}");
+    assert_eq!(s.snapshot().world.bricks.len(), before + 1);
+    for _ in 0..3 {
+        s.step().unwrap();
+    }
+    let prints = told(&mut s);
+    assert!(
+        prints.iter().any(|t| t.contains(r"Planted \c31\c6 / \c32\c6 Brick!")
+            && t.contains(r"\c31\c6 blocked.")),
+        "{prints:?}"
+    );
+    assert!(
+        prints.iter().any(|t| t.contains(r"Plant Mode (\c32\c6 Bricks)")
+            && t.contains(r"Size: \c33\c6 x \c31\c6 x \c32\c6 Plates")),
+        "{prints:?}"
+    );
+    send(&mut s, host, &seq, Command::Tool(ToolAction::UndoBrick)).unwrap();
+    assert_eq!(s.snapshot().world.bricks.len(), before);
+
+    // Cancel leaves plant mode, letting the selection go.
+    send(&mut s, host, &seq, Command::CancelBrick).unwrap();
+    s.step().unwrap();
+    assert!(s.blueprint(host).is_none());
+    let prints = told(&mut s);
+    assert!(
+        prints.iter().any(|t| t.contains("Click Brick: Select stack up")),
+        "{prints:?}"
+    );
+
+    // [Light]: box mode. A click boxes the brick it hits.
+    send(&mut s, host, &seq, Command::ToggleLight).unwrap();
+    for _ in 0..3 {
+        s.step().unwrap();
+    }
+    assert!(told(&mut s).iter().any(|t| t.contains(r"Type: \c3Box")));
+    swing(&mut s, host, &seq);
+    let outline = s.take_private_notices().into_iter().find_map(|(_, n)| match n {
+        Notice::SelectionBox(Some(o)) => Some(*o),
+        _ => None,
+    });
+    let outline = outline.expect("the click put a box round the brick");
+    assert_eq!((outline.min, outline.max), ([0.0, 0.0, 0.0], [1.0, 0.2, 0.5]));
+    // The brick keys move its top corner: a brick (3 plates) up, then a
+    // super shift of the stand-in's 10 plates down, which the 8-unit box
+    // allows.
+    send(
+        &mut s,
+        host,
+        &seq,
+        nd_key(
+            "shift",
+            vec![
+                PackageArg::Int(0),
+                PackageArg::Int(0),
+                PackageArg::Int(3),
+                PackageArg::Bool(false),
+            ],
+        ),
+    )
+    .unwrap();
+    s.step().unwrap();
+    let grown = s.take_private_notices().into_iter().find_map(|(_, n)| match n {
+        Notice::SelectionBox(Some(o)) => Some(*o),
+        _ => None,
+    });
+    let grown = grown.expect("the box grew");
+    assert!((grown.max[1] - 0.8).abs() < 1e-4, "{grown:?}");
+    // Plant selects what lies wholly in the box: the bottom plate, not the
+    // one half over its edge.
+    send(&mut s, host, &seq, nd_key("plant", vec![])).unwrap();
+    for _ in 0..3 {
+        s.step().unwrap();
+    }
+    assert_eq!(s.blueprint(host).map(|b| b.bricks.len()), Some(1));
+    let prints = told(&mut s);
+    assert!(
+        prints.iter().any(|t| t.contains("Press [Cancel Brick] to adjust the box.")),
+        "{prints:?}"
+    );
+    // Cancel lets the selection go and keeps the box.
+    send(&mut s, host, &seq, Command::CancelBrick).unwrap();
+    s.step().unwrap();
+    assert!(s.blueprint(host).is_none());
+    assert!(told(&mut s).iter().any(|t| t.contains("Selection canceled!")));
+    // [Prev Seat]: not limited, the box takes what reaches into it too.
+    send(&mut s, host, &seq, Command::SwitchSeat(-1)).unwrap();
+    s.step().unwrap();
+    assert!(told(&mut s).iter().any(|t| t.contains(r"Limited: \c0No")));
+    for _ in 0..60 {
+        s.step().unwrap();
+    }
+    send(&mut s, host, &seq, nd_key("plant", vec![])).unwrap();
+    for _ in 0..3 {
+        s.step().unwrap();
+    }
+    assert_eq!(s.blueprint(host).map(|b| b.bricks.len()), Some(2));
+    send(&mut s, host, &seq, Command::CancelBrick).unwrap();
+    s.step().unwrap();
+    send(&mut s, host, &seq, Command::CancelBrick).unwrap();
+    s.step().unwrap();
+    assert!(
+        s.take_private_notices()
+            .into_iter()
+            .any(|(_, n)| matches!(n, Notice::SelectionBox(None)))
+    );
+    let diagnostics = s.package_diagnostics();
+    assert!(diagnostics.is_empty(), "{diagnostics:#?}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// The New Duplicator's port: /MirrorX mirrors a selection, /MirrorZ says
+/// it cannot, /Cut cuts the originals away and goes to plant mode, a click
+/// puts the selection against what it hits, and /SaveDup and /LoadDup keep
+/// it by name.
+#[test]
+fn new_duplicator_port_mirrors_cuts_saves_and_loads() {
+    use bri_sim::session::{Command, MemoryCopies, Notice};
+    use std::sync::Arc;
+
+    let (dir, mut s, host, seq, base) = new_duplicator_game("new-duplicator-saves");
+    let store = Arc::new(MemoryCopies::default());
+    s.set_copy_store(store.clone());
+    swing(&mut s, host, &seq);
+    assert_eq!(s.blueprint(host).map(|b| b.bricks.len()), Some(2));
+    told(&mut s);
+
+    send(&mut s, host, &seq, typed("mx", &[])).unwrap();
+    s.step().unwrap();
+    assert!(
+        s.take_private_notices()
+            .into_iter()
+            .any(|(_, n)| matches!(n, Notice::MirrorCopy { .. }))
+    );
+    send(&mut s, host, &seq, typed("mirrorz", &[])).unwrap();
+    s.step().unwrap();
+    assert!(told(&mut s).iter().any(|t| t.contains("not available")));
+
+    // /Cut: the stack is gone, the selection stays to plant.
+    let before = s.snapshot().world.bricks.len();
+    send(&mut s, host, &seq, typed("cut", &[])).unwrap();
+    for _ in 0..3 {
+        s.step().unwrap();
+    }
+    assert_eq!(s.snapshot().world.bricks.len(), before - 2);
+    assert!(!s.snapshot().world.bricks.contains_key(&base));
+    let prints = told(&mut s);
+    assert!(
+        prints.iter().any(|t| t.contains(r"Cut \c32\c6 Bricks!")),
+        "{prints:?}"
+    );
+    assert!(prints.iter().any(|t| t.contains("Plant Mode")), "{prints:?}");
+
+    // In plant mode a click puts the selection against what it hits.
+    swing(&mut s, host, &seq);
+    assert!(
+        s.take_private_notices()
+            .into_iter()
+            .any(|(_, n)| matches!(n, Notice::MoveCopy { .. }))
+    );
+
+    // Saved by name (the host is an admin), then loaded back.
+    for _ in 0..130 {
+        s.step().unwrap();
+    }
+    send(&mut s, host, &seq, typed("savedup", &["Tower"])).unwrap();
+    for _ in 0..3 {
+        s.step().unwrap();
+    }
+    let prints = told(&mut s);
+    assert!(
+        prints.iter().any(|t| t.contains(r"wrote \c32\c6 Bricks!")),
+        "{prints:?}"
+    );
+    assert_eq!(store.saved("tower").expect("kept").copy.bricks.len(), 2);
+    send(&mut s, host, &seq, typed("savedup", &["Bad/Name"])).unwrap();
+    s.step().unwrap();
+    assert!(told(&mut s).iter().any(|t| t.contains("Bad save name")));
+
+    for _ in 0..130 {
+        s.step().unwrap();
+    }
+    send(&mut s, host, &seq, typed("ld", &["Nothing"])).unwrap();
+    for _ in 0..3 {
+        s.step().unwrap();
+    }
+    assert!(told(&mut s).iter().any(|t| t.contains("does not exist")));
+    send(&mut s, host, &seq, Command::CancelBrick).unwrap();
+    s.step().unwrap();
+    assert!(s.blueprint(host).is_none());
+    for _ in 0..130 {
+        s.step().unwrap();
+    }
+    told(&mut s);
+    send(&mut s, host, &seq, typed("loaddup", &["tower"])).unwrap();
+    for _ in 0..3 {
+        s.step().unwrap();
+    }
+    let prints = told(&mut s);
+    assert!(
+        prints.iter().any(|t| t.contains(r"got \c32\c6 Bricks!")),
+        "{prints:?}"
+    );
+    assert!(prints.iter().any(|t| t.contains("Plant Mode")), "{prints:?}");
+    assert_eq!(s.blueprint(host).map(|b| b.bricks.len()), Some(2));
+    let diagnostics = s.package_diagnostics();
+    assert!(diagnostics.is_empty(), "{diagnostics:#?}");
     std::fs::remove_dir_all(dir).unwrap();
 }

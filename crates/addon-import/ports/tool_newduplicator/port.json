@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "notes": "The New Duplicator's stack and box selection, planting, mirroring, cutting, saving and loading as host rules on the native copy seams, with its preference defaults: anyone may use it, full trust to select (admins may select anything, public bricks too), 10,000 bricks a selection (its 1,000,000 for admins is cut to the 10,000 a copy holds here), a 64-unit box for players (its 1024 for admins is cut to 256), a 0.4 s select wait for non-admins, saving for admins only. Stack mode selects up or down, limited or not; [Light] switches to box mode, where a click boxes a brick, the brick keys move a corner, [Rotate Brick] switches corner and [Plant Brick] selects what lies in the box. A selection glows for a few seconds and is held as a ghost at once (the original showed the ghost at the first brick key); the brick keys move it, a click puts it against what was clicked, and [Plant Brick] plants what fits and says how much was blocked, floating or missing trust. /MirrorX and /MirrorY mirror it, /Cut cuts the originals away, /SaveDup and /LoadDup keep and load it by name (and load v20 duplication files). Not ported: multi-select (Ctrl+click), turning an existing selection into a box, the pivot setting, force plant, plant as, fill colour, fill wrench, supercut, fill bricks, mirroring up and down, /AllDups, /DupVersion, the overwrite warning on /SaveDup, the plant wait, the undo confirmation for big plants, and selections over 10,000 bricks.",
+  "rules": {
+    "capabilities": [
+      "build",
+      "player",
+      "chat",
+      "damage",
+      "effects",
+      "world.edit"
+    ]
+  },
+  "patch": {
+    "assets/weapons.json": {
+      "images": {
+        "{namespace}:image/nd_image": {
+          "command": "{rules}:fire",
+          "commands": {
+            "light": "{rules}:light",
+            "cancel": "{rules}:cancel",
+            "shift": "{rules}:shift",
+            "rotate": "{rules}:rotate",
+            "plant": "{rules}:plant",
+            "seat": "{rules}:seat",
+            "mount": "{rules}:mount",
+            "unmount": "{rules}:unmount"
+          }
+        },
+        "{namespace}:image/nd_image_box": {
+          "command": "{rules}:fire",
+          "commands": {
+            "light": "{rules}:light",
+            "cancel": "{rules}:cancel",
+            "shift": "{rules}:shift",
+            "rotate": "{rules}:rotate",
+            "plant": "{rules}:plant",
+            "seat": "{rules}:seat",
+            "mount": "{rules}:mount",
+            "unmount": "{rules}:unmount"
+          }
+        },
+        "{namespace}:image/nd_image_blue": {
+          "command": "{rules}:fire",
+          "commands": {
+            "light": "{rules}:light",
+            "cancel": "{rules}:cancel",
+            "shift": "{rules}:shift",
+            "rotate": "{rules}:rotate",
+            "plant": "{rules}:plant",
+            "seat": "{rules}:seat",
+            "mount": "{rules}:mount",
+            "unmount": "{rules}:unmount"
+          }
+        }
+      }
+    }
+  }
+}

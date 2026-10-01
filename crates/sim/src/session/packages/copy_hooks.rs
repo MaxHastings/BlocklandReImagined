@@ -99,6 +99,14 @@ impl Session {
             };
             info.insert("error".into(), error);
             info.insert("message".into(), message.into());
+            // The held copy's grid size, for a duplicator to show.
+            let size = match (&outcome.error, self.blueprints.get(&player)) {
+                (None, Some(copy)) if outcome.action != "save" => Dynamic::from_array(
+                    copy.size.iter().map(|n| Dynamic::from_int(i64::from(*n))).collect(),
+                ),
+                _ => Dynamic::UNIT,
+            };
+            info.insert("size".into(), size);
             self.queue_report(package, "on_copy", player, info);
             return;
         }
@@ -109,6 +117,7 @@ impl Session {
         let name = outcome.name.unwrap_or_default();
         match outcome.action {
             "save" => self.center_print(player, format!("Saved the copy as '{name}'.")),
+            "cut" => self.bottom_count(player, "Cut", outcome.bricks),
             _ => {
                 let verb = if outcome.action == "load" { "Loaded" } else { "Copied" };
                 self.bottom_count(player, verb, outcome.bricks);
@@ -164,7 +173,9 @@ impl Session {
         true
     }
 
-    /// `on_copy` and `on_place` for each report since the last tick.
+    /// `on_copy` and `on_place` for each report since the last tick. Each
+    /// answers the player's own command, so the hook acts for them as that
+    /// command did (their copy lit, moved, put away).
     pub(super) fn deliver_copy_reports(&mut self) {
         let Some(host) = self.packages.as_mut() else {
             return;
@@ -176,7 +187,7 @@ impl Session {
                 report.hook,
                 vec![Dynamic::from_int(report.player as i64), report.info.into()],
                 Budget::Command,
-                None,
+                Some(report.player),
                 None,
                 None,
             );

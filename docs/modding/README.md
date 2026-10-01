@@ -393,8 +393,10 @@ brick's own), glowing, for everyone to see, and gives them their own
 colours back after; a copy
 takes a lit brick as it is underneath. An Add-On with `on_copy` in its
 behaviour hears `on_copy(player, #{ action, name, bricks, total,
-limit_reached, refused, error, message })` instead of the player getting
-the engine's message (`action` is `"select"`, `"save"` or `"load"`), and
+limit_reached, refused, error, message, size })` instead of the player getting
+the engine's message (`action` is `"select"`, `"save"` or `"load"`;
+`size` is the held copy's `[studs, plates, studs]` along x, up and z, or
+`()` when it holds none), and
 with `on_place`, `on_place(player, #{ planted, bricks, error, message,
 failed })` after the player plants its copy (`failed` counts the bricks
 each plant error kept out, `#{ float: 2, overlap: 1 }`; a partial plant
@@ -416,7 +418,8 @@ a name a copy may have (the file name only, without `.bls`), or `()`.
 `copy_box(p, [x, y, z], [x, y, z], limit, tool)` copies instead every
 brick lying wholly inside a box (world units, grown out to whole studs
 and plates, at most 256 units a side) that the player may build on,
-lowest first, with the same options but `limited`.
+lowest first, with the same options; `limited: false` takes every brick
+reaching into the box as well.
 `brick_box(brick)` gives the box a brick fills, `#{ min: [x, y, z], max:
 [x, y, z] }`, to build boxes from clicked bricks. `mirror_copy(p, axis)`
 mirrors the copy the player holds, across `"x"` or `"z"` (the world's
@@ -424,13 +427,19 @@ axes) or `"view"` (left and right as they face): each brick crosses to the
 other side and becomes its mirror image, the same brick turned or its
 twin in the catalog (a left wedge for a right one), found from the bricks'
 own shapes; a brick with no twin keeps its shape. The mirror is part of
-where the player puts the copy, like its turn.
+where the player puts the copy, like its turn. `move_copy(p, point,
+normal)` puts the copy against the surface at `point` whose outward
+`normal` is given (a `raycast` hit's), as a ghost brick goes where it is
+aimed: the middle of the copy's box half its size out along the normal,
+its pivot on the grid.
 
-A copy remembers the bricks it was taken from. `cut_copy(p)` removes them
+`drop_copy(p)` takes the copy away from the player. A copy remembers the
+bricks it was taken from. `cut_copy(p)` removes them
 and `paint_copy(p, color)` paints them, all or none, with the player's own
 full trust (the hammer's and spray can's), each as one Ctrl+Z step; the
 undo of a cut puts every brick back exactly as it was, events, lights and
-owner included. `show_box(p, min, max, tool)` outlines a box on that
+owner included; an Add-On with `on_copy` hears how a cut went there
+(`action` `"cut"`, `error` `"empty"` or `"refused"`). `show_box(p, min, max, tool)` outlines a box on that
 player's screen while `tool` is in their hand (a selection, a zone being
 marked) and `hide_box(p)` takes it away. The Advanced Duplicator
 ([`packages/advanced-duplicator`](../../packages/advanced-duplicator)) uses

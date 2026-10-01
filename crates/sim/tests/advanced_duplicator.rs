@@ -337,6 +337,7 @@ fn copy_box(
         owner,
         min,
         max,
+        true,
         limit,
         CopyRule::default(),
         TOOL,
@@ -376,11 +377,29 @@ fn a_box_copies_what_lies_wholly_inside_it() {
         copy_box(&mut g, host, [0.0, 0.0, -0.5], [1.0, 0.4, 0.5], 100).unwrap(),
         2
     );
+    // ...unless the box is not limited to what lies wholly inside it: the
+    // neighbour reaching into this one comes too.
+    assert_eq!(
+        copy_box(&mut g, host, [-0.75, 0.0, -0.5], [1.0, 0.4, 0.5], 100).unwrap(),
+        2
+    );
+    let copied = g.s.copy_box(
+        host,
+        [-0.75, 0.0, -0.5],
+        [1.0, 0.4, 0.5],
+        false,
+        100,
+        CopyRule::default(),
+        TOOL,
+        "advanced-duplicator",
+    );
+    assert_eq!(copied.selection.bricks.len(), 3);
     // Too many is cut short, lowest first, and says so.
     let copied = g.s.copy_box(
         host,
         [-1.5, 0.0, -0.5],
         [1.0, 0.4, 0.5],
+        true,
         2,
         CopyRule::default(),
         TOOL,

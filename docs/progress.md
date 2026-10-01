@@ -8982,3 +8982,51 @@ player's own computer (`/clientLoad`) is not ported.
 - Tests: `bri-addon-import --test ports
   duplorcator_port_saves_and_loads_duplications`, `bri-client --lib
   copies`, `bri-bls duplication_files_of_both_v20_duplicators_read_but_are_not_saves`.
+
+## 2026-10-01 New Duplicator: Zeblote's, ported
+
+The New Duplicator (`Tool_NewDuplicator`, off by default) now has a port
+(`crates/addon-import/ports/tool_newduplicator`) with its preference
+defaults read from `ndApplyDefaultPrefValues`: stack mode (up or down,
+limited or not, on the seat keys), box mode on [Light] (a click boxes a
+brick, the brick keys move a corner, [Rotate Brick] switches corner,
+[Plant Brick] selects what lies in it, limited to wholly inside or not),
+the selection glowing in its own colours, plant mode with its "Planted X /
+Y" breakdown (missing trust, blocked, floating), clicking to put the
+selection against a surface, /MirrorX and /MirrorY, /Cut, /SaveDup and
+/LoadDup, /DupHelp, and every bottom print through a port of
+`ndFormatMessage`. Its three images (gold, box, blue) swap with the mode
+and ignore their own mount and unmount as `ndIgnoreNextMount` did. Both
+duplicators answer `/dup` and `/duplicator`; with both on, the New
+Duplicator does, as in v20.
+
+Pivots, said plainly: a selection is held as a ghost at once rather than at
+the first brick key, and glows for 5 s rather than until then. Limits above
+the engine's (1,000,000 bricks and 1024-unit boxes for admins) are cut to
+10,000 bricks and 256 units. Not ported: multi-select, turning a stack
+selection into a box, the pivot setting, force plant, plant as, fill
+colour, fill wrench, supercut, fill bricks, mirroring up and down,
+/AllDups, the /SaveDup overwrite warning, the plant wait, and the undo
+confirmation for big plants.
+
+Engine seams added for it, each generic: image `shift`, `rotate`, `plant`
+and `seat` keys (the client sends the brick keys to the held image when it
+holds no ghost or copy), `mount` and `unmount` image commands (Torque's
+`onMount`/`onUnMount`, from the host comparing each player's held image
+every tick), typed-command precedence (the last Add-On by id answers, as
+v20 ran Add-Ons in name order), `ask` (v20's `MessageBoxYesNo`, now used by
+the Duplorcator before loading a duplication over its limit), `move_copy`,
+`drop_copy`, `highlight_copy(p, (), s)` (glow only), `copy_box`'s
+`limited`, cuts and the held copy's `size` reported to `on_copy`, `on_place`
+counting failures by reason, partial plants retrying floating bricks, and
+`aim_reach` up to 1000. `on_copy` and `on_place` now run as the player they
+report on. Protocol 71 carries `Notice::Question` and `Notice::MoveCopy`.
+
+- Tests: `bri-addon-import --test ports
+  new_duplicator_port_selects_stacks_and_boxes_and_plants` and
+  `new_duplicator_port_mirrors_cuts_saves_and_loads` (a CC0 stand-in with
+  its own numbers, hosted: stack select, plant half-blocked, cancel, box
+  select limited and not, mirror, cut, click to move, save and load);
+  `bri-client --lib building` (`a_copy_moved_to_a_surface_sits_against_it_on_the_grid`,
+  `brick_keys_go_to_a_held_image_that_takes_them_when_nothing_else_does`);
+  `bri-sim --test advanced_duplicator` (a box not limited).

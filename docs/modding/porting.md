@@ -213,6 +213,7 @@ page as well.
 |---|---|---|---|
 | `Weapon_Shotgun` (Sawn-off Shotgun) | `weapon_shotgun` | verified | `shotgunImage::onFire`: the pellets, their spread and the recoil, read from the copy's own script |
 | `Tool_Duplicator` (Plornt's Duplorcator) | `tool_duplicator` | partial | `/dup`, `/duplorcator`, `/duplicator`; `DuplorcatorImage::onFire` (reach, full trust, no public bricks, selection wait); `getStack` (up from the clicked brick, every way from the rest; the cyan highlight and how long it lasts); planting brick by brick with its count, one undo; `/saveDup` and `/loadDup` (v20 duplication files load too). Not ported: uploading a duplication from the player's computer |
+| `Tool_NewDuplicator` (Zeblote's New Duplicator) | `tool_newduplicator` | partial | its preference defaults; `/newduplicator` and `/duplicator` down to `/d`; stack and box selection (direction, limited, box corners and size limit, select wait); the mode images and their mount handling; plant mode with its planted, blocked, floating and missing-trust counts; clicking to move a selection; `/MirrorX`, `/MirrorY`, `/Cut`, `/SaveDup`, `/LoadDup`, `/DupHelp`; `ndFormatMessage`. Not ported: multi-select, force plant, plant as, fill colour, fill wrench, supercut, fill bricks, mirroring up and down, `/AllDups` |
 
 ## Host rules
 

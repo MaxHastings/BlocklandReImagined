@@ -1153,6 +1153,7 @@ fn register_api(engine: &mut Engine) {
         options: Map,
     ) -> Result<(), Box<EvalAltResult>> {
         let (rule, limited) = copy_rule(&options)?;
+        let limited = limited.unwrap_or(false);
         push(Op::CopyBuild {
             player: id(&player)?,
             brick: id(&brick)?,
@@ -1185,13 +1186,12 @@ fn register_api(engine: &mut Engine) {
         options: Map,
     ) -> Result<(), Box<EvalAltResult>> {
         let (rule, limited) = copy_rule(&options)?;
-        if limited {
-            return Err("`limited` is for stacks".into());
-        }
         push(Op::CopyBox {
             player: id(&player)?,
             min: vector(&min)?,
             max: vector(&max)?,
+            // A box takes what lies wholly inside it unless told otherwise.
+            limited: limited.unwrap_or(true),
             limit: u32::try_from(limit).map_err(|_| "limit must be 1 to 10000")?,
             rule,
             tool: tool.into(),
@@ -1284,6 +1284,21 @@ fn register_api(engine: &mut Engine) {
             player: id(&player)?,
             axis: crate::ops::MirrorAxis::parse(axis)
                 .ok_or("mirror_copy's axis is \"x\", \"z\" or \"view\"")?,
+        })
+    });
+    engine.register_fn(
+        "move_copy",
+        |player: Dynamic, point: Array, normal: Array| {
+            push(Op::MoveCopy {
+                player: id(&player)?,
+                point: vector(&point)?,
+                normal: vector(&normal)?,
+            })
+        },
+    );
+    engine.register_fn("drop_copy", |player: Dynamic| {
+        push(Op::DropCopy {
+            player: id(&player)?,
         })
     });
     engine.register_fn("cut_copy", |player: Dynamic| {
@@ -1414,11 +1429,15 @@ fn register_api(engine: &mut Engine) {
 }
 
 /// A copy's options map: `trust` ("build" or "full"), `public_bricks`, `admin`,
-/// `partial` (bools, see [`crate::ops::CopyRule`]) and, for a stack,
-/// `limited`. Unnamed options keep their defaults.
-fn copy_rule(options: &Map) -> Result<(crate::ops::CopyRule, bool), Box<EvalAltResult>> {
+/// `partial` (bools, see [`crate::ops::CopyRule`]) and `limited`: a stack
+/// keeps to its side of the clicked brick (default false); a box takes only
+/// what lies wholly inside it (default true). Unnamed options keep their
+/// defaults.
+fn copy_rule(
+    options: &Map,
+) -> Result<(crate::ops::CopyRule, Option<bool>), Box<EvalAltResult>> {
     let mut rule = crate::ops::CopyRule::default();
-    let mut limited = false;
+    let mut limited = None;
     for (key, value) in options {
         let flag = || {
             value
@@ -1436,7 +1455,7 @@ fn copy_rule(options: &Map) -> Result<(crate::ops::CopyRule, bool), Box<EvalAltR
             "public_bricks" => rule.public = flag()?,
             "admin" => rule.admin = flag()?,
             "partial" => rule.partial = flag()?,
-            "limited" => limited = flag()?,
+            "limited" => limited = Some(flag()?),
             other => return Err(format!("unknown copy option `{other}`").into()),
         }
     }
