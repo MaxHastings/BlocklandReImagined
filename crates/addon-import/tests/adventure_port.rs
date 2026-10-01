@@ -48,6 +48,7 @@ fn imported(name: &str) -> (Dir, PathBuf, bri_addon_import::report::Report) {
         out: out.clone(),
         reference: None,
         core: vec![],
+        installed: None,
         version: "1.0.0".into(),
     })
     .unwrap();

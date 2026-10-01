@@ -45,6 +45,7 @@ fn client_loads_imported_packages_beside_the_base_game() {
             out: scratch.0.join(id),
             reference,
             core: vec![],
+            installed: None,
             version: "1.0.0".into(),
         })
         .unwrap();

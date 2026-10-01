@@ -1554,27 +1554,115 @@ mod add_on_icon_tests {
         assert_eq!((item.as_str(), file.as_str()), ("gravity-gun-tool:weapon/gravitygun", "icons/gravity_gun.render.json"));
         assert_eq!(spec.pose_like, bri_weapons::runtime::PRINTER);
     }
-    /// The Trench Pick is a model of its own, not a borrowed one: a native
-    /// model beside its `weapons.json` whose materials name the PNGs beside
-    /// it, presented under the Add-On with its box as its bounds. Its icon
-    /// is drawn from it in its own wood and iron, and only the holder sees
-    /// it swing. `BRI_ICON_SHOT=1` saves a picture to
-    /// `target/trench-pick-preview.png`.
+    /// A stand-in tool Add-On with a model of its own: a wooden handle and
+    /// an iron head (two materials, each naming its PNG), held at a
+    /// `mountPoint` grip, with a first-person copy (`detail9999`) that a
+    /// `fire` sequence swings. Written into `root`; returns its `assets/`.
+    pub(crate) fn own_model_tool(root: &Path) -> Result<std::path::PathBuf> {
+        use serde_json::json;
+        let assets = root.join("assets");
+        std::fs::create_dir_all(assets.join("models"))?;
+        // An axis-aligned box per part, faces outward and counter-clockwise.
+        let mut positions = Vec::new();
+        let mut normals = Vec::new();
+        let mut uv = Vec::new();
+        let mut primitives = Vec::new();
+        for (material, (lo, hi)) in [([-0.05f32, -0.3, -0.05], [0.05f32, 0.8, 0.05]), ([-0.06, 0.7, -0.5], [0.06, 0.85, 0.4])]
+            .into_iter()
+            .enumerate()
+        {
+            let (lo, hi) = (Vec3::from(lo), Vec3::from(hi));
+            let (c, h) = ((lo + hi) * 0.5, (hi - lo) * 0.5);
+            let mut triangles = Vec::new();
+            for (n, u, v) in [
+                (Vec3::X, Vec3::Y, Vec3::Z),
+                (Vec3::NEG_X, Vec3::Z, Vec3::Y),
+                (Vec3::Y, Vec3::Z, Vec3::X),
+                (Vec3::NEG_Y, Vec3::X, Vec3::Z),
+                (Vec3::Z, Vec3::X, Vec3::Y),
+                (Vec3::NEG_Z, Vec3::Y, Vec3::X),
+            ] {
+                let base = positions.len() as u32;
+                for (a, b) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+                    positions.push((c + (n + u * a + v * b) * h).to_array());
+                    normals.push(n.to_array());
+                    uv.push([(a + 1.0) * 0.5, (b + 1.0) * 0.5]);
+                }
+                triangles.extend([[base, base + 1, base + 2], [base, base + 2, base + 3]]);
+            }
+            primitives.push(json!({ "material": material, "triangles": triangles }));
+        }
+        let mesh = json!({
+            "frame_vertices": positions.len(), "positions": positions, "normals": normals, "uv": uv,
+            "primitives": primitives, "skin": null, "billboard": false, "billboard_y": false,
+        });
+        let node = |name: &str, parent: Option<usize>| {
+            json!({ "name": name, "parent": parent, "translation": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0] })
+        };
+        let material = |name: &str| {
+            json!({ "name": name, "wrap_u": true, "wrap_v": true, "blend": "opaque", "unlit": false,
+                "environment": false, "mipmaps": true, "detail_map": null, "bump_map": null,
+                "reflectance_map": null, "detail_scale": 1.0, "reflectance": 1.0 })
+        };
+        let swing: Vec<[f32; 4]> = [0.0f32, 0.4, -1.1, 0.0]
+            .iter()
+            .map(|a| Quat::from_rotation_x(*a).to_array())
+            .collect();
+        let shape = json!({
+            "schema_version": 1, "id": "tool:file/models/tool.shape.json",
+            "nodes": [node("root", None), node("mountPoint", Some(0)), node("swing", Some(0))],
+            "objects": [
+                { "name": "tool", "node": 0, "meshes": [0], "visibility": 1.0, "frame": 0, "material_frame": 0 },
+                { "name": "toolheld", "node": 2, "meshes": [2, 1], "visibility": 1.0, "frame": 0, "material_frame": 0 },
+            ],
+            "details": [
+                { "name": "detail32", "pixel_threshold": 32.0, "object_start": 0, "object_count": 1, "mesh_offset": 0, "collision": false },
+                { "name": "detail9999", "pixel_threshold": 9999.0, "object_start": 1, "object_count": 1, "mesh_offset": 1, "collision": false },
+            ],
+            "meshes": [mesh.clone(), mesh, null],
+            "materials": [material("handle"), material("head")],
+            "animations": [{
+                "name": "fire", "frames": swing.len(), "duration": 0.3, "looping": false, "additive": false,
+                "priority": 0, "nodes": [{ "node": "swing", "rotations": swing, "translations": [], "scales": [], "scale_rotations": [] }],
+                "objects": [], "ground_translations": [], "ground_rotations": [], "triggers": [],
+            }],
+        });
+        std::fs::write(assets.join("models/tool.shape.json"), serde_json::to_vec(&shape)?)?;
+        for (name, rgb) in [("handle", [150u8, 100, 55]), ("head", [110, 112, 116])] {
+            let pixels: Vec<u8> = (0..16).flat_map(|_| [rgb[0], rgb[1], rgb[2], 255]).collect();
+            image::save_buffer(assets.join(format!("models/{name}.png")), &pixels, 4, 4, image::ColorType::Rgba8)?;
+        }
+        let weapons = json!({
+            "schema_version": 3, "id": "tool",
+            "items": { "tool:weapon/pick": { "ui_name": "Pick", "image": "tool:image/pick",
+                "model": "models/tool.shape.json", "icon": "", "can_drop": false } },
+            "images": { "tool:image/pick": { "name": "PickImage", "model": "models/tool.shape.json",
+                "melee": true, "arm_ready": true, "color": [1.0, 1.0, 1.0, 1.0],
+                "states": [{ "name": "Ready" }] } },
+        });
+        std::fs::write(assets.join("weapons.json"), serde_json::to_vec_pretty(&weapons)?)?;
+        Ok(assets)
+    }
+    /// An Add-On's item may be a model of its own, not a borrowed one: a
+    /// native model beside its `weapons.json` whose materials name the PNGs
+    /// beside it, presented under the Add-On with its box as its bounds. Its
+    /// icon can be drawn from it in its own colours, and only the holder
+    /// sees it swing. `BRI_ICON_SHOT=1` saves a picture to
+    /// `target/own-model-preview.png`.
     #[test]
     fn an_add_on_item_brings_its_own_model() -> Result<()> {
         use crate::item_icon_render::{Look, Mesh, Pose, render};
-        let abs = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../packages/trench-warfare/trench-kit/assets")
-            .canonicalize()?;
+        let dir = tempfile::tempdir()?;
+        let abs = own_model_tool(dir.path())?.canonicalize()?;
         let weapons = std::fs::read(abs.join("weapons.json"))?;
         let pack = bri_weapons::Pack::from_json(&weapons)?;
         let mut manifest = empty();
         let (mut added, mut faults) = (Added::default(), Vec::new());
         let mut physics = ItemPhysicsCatalog { schema_version: 1, items: BTreeMap::new() };
-        present_gaps("Trench Kit", &abs, &weapons, &pack, &mut manifest, &mut physics, &mut added, &mut faults);
+        present_gaps("Tool", &abs, &weapons, &pack, &mut manifest, &mut physics, &mut added, &mut faults);
         assert!(faults.is_empty(), "{faults:?}");
-        let key = "trench kit/models/trench_pick.shape.json";
-        let (item, image) = ("trench-kit:weapon/pick", "trench-kit:image/pick");
+        let key = "tool/models/tool.shape.json";
+        let (item, image) = ("tool:weapon/pick", "tool:image/pick");
         assert_eq!(manifest.items[item].model, key);
         assert_eq!(manifest.images[image].model, key);
         let resource = &manifest.models[key];
@@ -1594,7 +1682,7 @@ mod add_on_icon_tests {
             let rgba = image::load_from_memory(&bytes)?.to_rgba8();
             images.push(SceneImage { label: texture.clone(), width: rgba.width(), height: rgba.height(), rgba: rgba.into_raw(), srgb: false });
         }
-        assert_eq!(images.len(), 3, "wood, grip and iron");
+        assert_eq!(images.len(), 2, "wood and iron");
         let refs: Vec<&SceneImage> = images.iter().collect();
         let scene = native_shape_scene(key, &shape, &refs, [1.0; 4], true, Mat4::IDENTITY, &sample(&shape, None, 0.0)?)?;
         scene.validate()?;
@@ -1608,7 +1696,7 @@ mod add_on_icon_tests {
         let look = Look { base: [1.0; 3], textured: true, skin: None };
         let icon = render(&Mesh::from_scene(&scene), &pose, &look, "pick");
         if std::env::var_os("BRI_ICON_SHOT").is_some() {
-            let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/trench-pick-preview.png");
+            let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/own-model-preview.png");
             image::save_buffer(&out, &icon.rgba, icon.width, icon.height, image::ColorType::Rgba8)?;
         }
         let solid: Vec<&[u8]> = icon.rgba.chunks_exact(4).filter(|p| p[3] == 255).collect();
@@ -1621,7 +1709,7 @@ mod add_on_icon_tests {
         assert!(moves_visible_detail(&shape, fire, true));
         assert!(!moves_visible_detail(&shape, fire, false));
         // A model that is not there, or outside the Add-On: no model, logged.
-        for name in ["models/missing.shape.json", "../assets/models/trench_pick.shape.json"] {
+        for name in ["models/missing.shape.json", "../assets/models/tool.shape.json"] {
             let mut faults = Vec::new();
             assert!(own_model("x", &abs, name, &mut empty(), &mut Added::default(), &mut faults).is_none(), "{name}");
             assert_eq!(faults.len(), 1, "{faults:?}");
@@ -1691,71 +1779,6 @@ mod add_on_icon_tests {
         let out = manifest.join("../../target/gravity-gun-icon.png");
         image::save_buffer(&out, &icon.rgba, icon.width, icon.height, image::ColorType::Rgba8)?;
         println!("drawn in {took:?} (whole item load); saved {} and {}", out.display(), side.display());
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-mod trench_pick_tests {
-    use super::*;
-    /// The Trench Pick's icon is its own model in wood and iron, drawn at
-    /// the Hammer icon's angle and size so it sits in the tool slots like
-    /// a stock tool. Writes it to `target/trench-pick-icon.png` for a look.
-    #[test]
-    #[ignore = "requires the converted item and weapons packs; CPU only"]
-    fn the_trench_pick_icon_is_drawn_from_its_model_like_the_hammers() -> Result<()> {
-        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let root = manifest.join("../../content");
-        let extras = vec![(
-            "addons/trench-kit/assets".to_string(),
-            manifest.join("../../packages/trench-warfare/trench-kit/assets"),
-        )];
-        let assets = ItemAssets::load_with(
-            &root.join("item-presentation-pack-010"),
-            &root.join("weapons-pack-009"),
-            &extras,
-        )?;
-        assert!(assets.faults.is_empty(), "{:?}", assets.faults);
-        let pick = "trench-kit:weapon/pick";
-        assert!(assets.presentation.items[pick].icon.as_deref().is_some_and(|k| k.ends_with(".render")));
-        let icon = assets.icon(pick)?.unwrap();
-        let hammer = assets.icon("v20.weapon.hammeritem")?.unwrap();
-        assert_eq!((icon.width, icon.height), (hammer.width, hammer.height), "framed like the Hammer's");
-        assert_eq!(icon.rgba[3], 0, "a clear background");
-        // Two materials show: the ash handle and the iron head.
-        let solid: Vec<&[u8]> = icon.rgba.chunks_exact(4).filter(|p| p[3] == 255).collect();
-        let wood = solid.iter().filter(|p| p[0] as i32 - p[2] as i32 > 40).count();
-        let iron = solid.iter().filter(|p| (p[0] as i32 - p[2] as i32).abs() < 12 && p[0] > 40).count();
-        assert!(wood > 50 && iron > 50, "wood {wood} and iron {iron}");
-        // Held like the Hammer: at the grip, in the right hand.
-        let image = &assets.presentation.images["trench-kit:image/pick"];
-        assert_eq!(image.mount_point, assets.presentation.images["v20.image.hammerimage"].mount_point);
-        // The pick is modelled as the Hammer is held: handle up out of the
-        // fist (+y) and the head across its top, front to back (z), about
-        // as big. Each model's box, seen from its grip.
-        let grip_box = |model: &str| -> Result<(Vec3, Vec3)> {
-            let shape = assets.shape(model)?;
-            let bind = sample(shape, None, 0.0)?;
-            let grip = shape
-                .nodes
-                .iter()
-                .position(|n| n.name.eq_ignore_ascii_case("mountPoint"))
-                .map_or(Vec3::ZERO, |i| bind.nodes[i].w_axis.truncate());
-            let bounds = assets.presentation.models[model].bounds();
-            Ok((Vec3::from(bounds.min) - grip, Vec3::from(bounds.max) - grip))
-        };
-        let hammer = grip_box(&assets.presentation.images["v20.image.hammerimage"].model)?;
-        let ours = grip_box(&image.model)?;
-        println!("from the grip, hammer {hammer:?}, pick {ours:?}");
-        for (name, (lo, hi)) in [("hammer", hammer), ("pick", ours)] {
-            let size = hi - lo;
-            assert!(size.y > size.x && hi.y > -lo.y * 2.0, "{name}: the handle stands up out of the fist");
-            assert!(size.z > size.x, "{name}: the head runs front to back");
-        }
-        let ratio = (ours.1.y - ours.0.y) / (hammer.1.y - hammer.0.y);
-        assert!((0.7..1.6).contains(&ratio), "about the Hammer's size: {ratio}");
-        let out = manifest.join("../../target/trench-pick-icon.png");
-        image::save_buffer(&out, &icon.rgba, icon.width, icon.height, image::ColorType::Rgba8)?;
         Ok(())
     }
 }

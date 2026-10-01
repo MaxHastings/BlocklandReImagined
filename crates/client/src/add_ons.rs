@@ -312,15 +312,22 @@ pub fn start_import(
     let dir = library.import_dir(name);
     let out = root.join(&dir);
     let input = legacy.path.clone();
-    // The install it sits in satisfies what it builds on (the base game's
-    // datablocks, another Add-On it extends), read in place.
+    // The install it sits in satisfies what it builds on (another Add-On
+    // it extends) read in place, and the game's own content the base
+    // bricks, sounds and the rest.
     let reference = legacy.install.clone();
+    let installed = root.to_path_buf();
     let importer = importer.to_path_buf();
     let name = name.to_string();
     let (send, receive) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let mut command = std::process::Command::new(&importer);
-        command.arg(&input).arg(&out).arg("--json");
+        command
+            .arg(&input)
+            .arg(&out)
+            .arg("--installed")
+            .arg(&installed)
+            .arg("--json");
         if let Some(reference) = &reference {
             command.arg("--reference").arg(reference);
         }

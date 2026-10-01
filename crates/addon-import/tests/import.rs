@@ -68,6 +68,7 @@ fn synthetic_addon_imports_with_report() {
         out: out.clone(),
         reference: None,
         core: vec![],
+        installed: None,
         version: "1.0.0".into(),
     })
     .unwrap();
@@ -227,6 +228,7 @@ fn refuses_to_overwrite_or_write_inside_the_source() {
         out,
         reference: None,
         core: vec![],
+        installed: None,
         version: "1.0.0".into(),
     };
     assert!(import(&options(fixture.join("nested-output"))).is_err());
@@ -254,6 +256,7 @@ fn real_community_samples() {
             out: out.clone(),
             reference: Some(reference.clone().into()),
             core: vec![],
+            installed: None,
             version: "1.0.0".into(),
         })
         .unwrap();
@@ -582,6 +585,7 @@ fn imported_weapon_packs_merge_into_one_runtime_pack() {
             out,
             reference: None,
             core: vec![],
+            installed: None,
             version: "1.0.0".into(),
         })
         .unwrap();
@@ -768,6 +772,7 @@ datablock ShapeBaseImageData(kitScopeImage) { shapeFile = "./gun.dts"; stateName
         out: out.clone(),
         reference: None,
         core: vec![],
+        installed: None,
         version: "1.0.0".into(),
     })
     .unwrap();
@@ -877,6 +882,7 @@ fn a_required_community_add_on_becomes_a_dependency_on_its_import() {
         out: root.join("package"),
         reference: Some(install),
         core: vec![],
+        installed: None,
         version: "1.0.0".into(),
     })
     .unwrap();

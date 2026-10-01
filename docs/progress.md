@@ -8587,6 +8587,41 @@ Commands: `cargo test -p bri-weapons -p bri-package-runtime -p bri-sim
 -p bri-ui -p bri-net`, `cargo clippy --no-deps ... -D warnings` (the newer
 toolchain here also flags `unnecessary_sort_by` and `question_mark` in
 client and addon-import code this branch does not touch).
+## 2026-10-01 Trench Warfare: originals only (branch `claude/trench-warfare-eq4lxb`)
+
+Max chose "originals only" for classic Add-Ons (cmsg_01GZRn7g8JiQ6aV1cQgSj22DVJoRScxbRAjHRC4md4Ab28):
+the game loads their models, textures, sounds and data from the player's
+own Blockland Add-Ons folder at runtime, and we never commit or ship them.
+- Removed `trench-kit` (our generated pickaxe, textures, sounds and icon)
+  and `tools/make_trench_assets.py`; all four Trench Add-Ons are off the
+  default list.
+- Kept the general seams: a mode's `minigame` block, `place_voxel` /
+  `voxel` / `can_place_voxel`, `set_avatar_colors`, an image state's `arm`,
+  Add-On items with their own `*.shape.json` model, and textured icon
+  renders. Their tests now use synthetic CC0 fixtures
+  (`items::add_on_icon_tests::own_model_tool`, `check.rs`, and a stand-in
+  tool in `crates/sim/tests/trench.rs`).
+- Next: the rules, HUD and mode become the port of the original Trench
+  Digging Add-On on the shared classic Add-On loader (owned by the Tier
+  lane), wired to the original's item, image and sound names once the
+  Gate lists Max's copy.
+
+
+## 2026-10-01 Trench Warfare removed: digging only, from the original
+
+Max picked "Digging only": we ship Lilboarder's original Trench Digging
+(`Gamemode_TrenchDigging`), imported and ported to behave as he made it,
+and drop our own Trench Warfare game mode (teams, generated field and
+sandbags, rounds, `/teams`, `/newround`, HUD panel).
+- Deleted `packages/trench-warfare` and `crates/sim/tests/trench.rs`.
+- The generic seams stay, each with a synthetic CC0 test:
+  `crates/sim/tests/mode_and_voxels.rs` (a mode's `minigame` block,
+  `voxel` / `place_voxel` / `can_place_voxel` saved with the world,
+  `set_avatar_colors`), `crates/weapons/tests/addon_seams.rs`
+  `a_states_arm_plays_on_the_holders_arm_thread`, and the own-model and
+  textured-icon tests in `bri-client` `items` and `package-runtime` check.
+- Next: the Trench Digging port (ports/ + host rules companion) once the
+  Gate's import report of Max's copy arrives.
 ## 2026-10-01 Vehicle destruction looks (v20 audit)
 
 Max: destroyed vehicles "would turn black right away when on fire" in v20,
