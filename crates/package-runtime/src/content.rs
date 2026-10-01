@@ -40,12 +40,16 @@ pub enum Kind {
     /// A brick catalog (`brick-catalog/stock-catalog.json` with its meshes
     /// and collisions beside it), merged the same way.
     Bricks,
+    /// Bot kinds a Vehicle Spawn brick can hold (`bots.json`): the name the
+    /// list shows and how the engine's bot brain plays. Read by the engine
+    /// like weapons and vehicles; players load it for the wrench list.
+    Bots,
     /// A game mode the host can pick in Start Game: which Add-Ons run and
     /// on which map (JSON). Server side: only the host reads it.
     Mode,
 }
 impl Kind {
-    pub const NAMES: [&str; 13] = [
+    pub const NAMES: [&str; 14] = [
         "behaviour",
         "script",
         "world",
@@ -58,6 +62,7 @@ impl Kind {
         "weapons",
         "vehicles",
         "bricks",
+        "bots",
         "mode",
     ];
     pub fn parse(text: &str) -> Option<Self> {
@@ -74,6 +79,7 @@ impl Kind {
             "weapons" => Self::Weapons,
             "vehicles" => Self::Vehicles,
             "bricks" => Self::Bricks,
+            "bots" => Self::Bots,
             "mode" => Self::Mode,
             _ => return None,
         })
@@ -93,7 +99,8 @@ impl Kind {
             | Self::Block
             | Self::Weapons
             | Self::Vehicles
-            | Self::Bricks => Side::Client,
+            | Self::Bricks
+            | Self::Bots => Side::Client,
         }
     }
     /// Largest accepted file of this kind.

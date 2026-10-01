@@ -151,6 +151,13 @@ fn main() -> Result<()> {
     session.set_vehicle_pack(bri_vehicles::Pack::load(
         paths.vehicles.join("vehicles.json"),
     )?)?;
+    // Bots come from the Blockhead Bot Add-On, on or off.
+    session.set_bot_kinds(
+        bri_sim::bot_kind::BotPack::from_json(include_bytes!(
+            "../../../../packages/blockhead_bot/assets/bots.json"
+        ))?
+        .bots,
+    )?;
     session.set_spawn_points(loaded.spawn_points.clone())?;
     let mut humans = Vec::new();
     for i in 0..HUMANS {

@@ -19,6 +19,10 @@ pub const CHUNK_TAG: u128 = 4 << 64;
 /// Chunk edge, in world units, on every axis.
 pub const CHUNK_SIZE: f32 = 8.0;
 
+fn aabb(b: &Aabb) -> ([f32; 3], [f32; 3]) {
+    (b.mins.to_array(), b.maxs.to_array())
+}
+
 /// Whether a collider tag is a chunk's.
 pub fn is_chunk(tag: u128) -> bool {
     tag >> 64 == CHUNK_TAG >> 64
@@ -45,6 +49,9 @@ pub struct Chunks {
     by_serial: BTreeMap<u64, ChunkKey>,
     dirty: BTreeSet<ChunkKey>,
     next_serial: u64,
+    /// Boxes of collision rebuilt since `take_changed`, while someone reads
+    /// them (`track_changes`): bots' walk grid forgets what lies inside.
+    changed: Option<Vec<([f32; 3], [f32; 3])>>,
 }
 
 impl Chunks {
@@ -126,6 +133,9 @@ impl Chunks {
                 }
             }
             if parts.is_empty() {
+                if let (Some(changed), Some(handle)) = (&mut self.changed, chunk.handle) {
+                    changed.push(aabb(&physics.colliders[handle].compute_aabb()));
+                }
                 if let Some(handle) = chunk.handle.take() {
                     retired.push(handle);
                 }
@@ -135,6 +145,12 @@ impl Chunks {
                 continue;
             }
             let shape = SharedShape::compound(parts);
+            if let Some(changed) = &mut self.changed {
+                if let Some(handle) = chunk.handle {
+                    changed.push(aabb(&physics.colliders[handle].compute_aabb()));
+                }
+                changed.push(aabb(&shape.compute_aabb(&Pose::IDENTITY)));
+            }
             match chunk.handle {
                 Some(handle) => physics.colliders[handle].set_shape(shape),
                 None => {
@@ -149,6 +165,24 @@ impl Chunks {
         if !retired.is_empty() {
             parking.remove(physics, &retired);
         }
+    }
+    /// Start or stop recording the boxes of rebuilt chunks.
+    pub fn track_changes(&mut self, track: bool) {
+        match (track, self.changed.is_some()) {
+            (true, false) => self.changed = Some(Vec::new()),
+            (false, true) => self.changed = None,
+            _ => {}
+        }
+    }
+    /// Record a changed box from outside the chunks (map collision).
+    pub fn note_changed(&mut self, b: &Aabb) {
+        if let Some(changed) = &mut self.changed {
+            changed.push(aabb(b));
+        }
+    }
+    /// Boxes of collision rebuilt since the last take (old and new shapes).
+    pub fn take_changed(&mut self) -> Vec<([f32; 3], [f32; 3])> {
+        self.changed.as_mut().map(std::mem::take).unwrap_or_default()
     }
     /// Chunks waiting for `flush`.
     pub fn is_dirty(&self) -> bool {

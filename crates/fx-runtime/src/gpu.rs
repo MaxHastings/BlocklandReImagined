@@ -298,10 +298,7 @@ impl EffectsRenderer {
         camera: &Camera,
         frame: &FrameEffects,
     ) -> Result<RenderStats> {
-        ensure!(
-            view >= 1 && view <= self.views.len(),
-            "Effects views are made in order"
-        );
+        ensure!(view >= 1, "View 0 is the player's");
         // Grown to what this view needs, not the player's full budget.
         let needed = frame
             .particles
@@ -309,6 +306,12 @@ impl EffectsRenderer {
             .max(256)
             .next_power_of_two()
             .min(self.max_instances);
+        // Views past the ones in use (an environment probe's after the
+        // mirrors') leave the ones between empty until they are prepared.
+        while self.views.len() < view {
+            let empty = Self::view(device, &self.camera_layout, 256.min(self.max_instances));
+            self.views.push(empty);
+        }
         if view == self.views.len() {
             self.views.push(Self::view(device, &self.camera_layout, needed));
         } else if self.views[view].capacity < frame.particles.len() {
