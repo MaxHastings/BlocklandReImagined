@@ -1115,9 +1115,11 @@ fn tiny_dts(lo: [f32; 3], hi: [f32; 3], materials: &[&str]) -> Vec<u8> {
 }
 
 /// A model material whose texture is nowhere (not in the Add-On, not in
-/// the base game) draws plain white, as Torque drew a material it found no
-/// bitmap for: the model stays, tinted by the image's colour shift, and is
-/// not swapped for a placeholder cube (Loz's Hookshot's `black50`).
+/// the base game) draws in the item's colour shift, as Torque drew a
+/// material it found no bitmap for: the model stays, its plain parts take
+/// the colour (Loz's Hookshot's `black50`, blue), and it is not swapped for
+/// a placeholder cube. The clear texture shows the tint through, as a
+/// colour-shift model's clear texels do; an opaque white one hid it.
 #[test]
 fn a_material_with_no_texture_draws_plain_and_keeps_its_model() {
     let source = fresh("plain-source").with_file_name("Weapon_Plain");
@@ -1162,19 +1164,25 @@ datablock ShapeBaseImageData(plainGunImage) { shapeFile = "./gun.dts"; item = pl
     assert_ne!(model["source"], "placeholder", "{model}");
     assert_eq!(
         model["textures"],
-        serde_json::json!(["add-ons/weapon_plain/metal.png", "placeholder:white"]),
+        serde_json::json!(["add-ons/weapon_plain/metal.png", "placeholder:clear"]),
         "{model}"
     );
-    assert!(
-        presentation["textures"]["placeholder:white"]["file"]
+    let clear = out.join("assets").join(
+        presentation["textures"]["placeholder:clear"]["file"]
             .as_str()
-            .is_some_and(|f| out.join("assets").join(f).is_file())
+            .unwrap(),
+    );
+    let clear = image::open(clear).unwrap().to_rgba8();
+    assert_eq!(clear.get_pixel(0, 0).0[3], 0, "the colour shift shows through");
+    assert_eq!(
+        presentation["items"]["weapon_plain:weapon/plaingunitem"]["tint"],
+        serde_json::json!([0.2f32, 0.2f32, 1.0, 1.0])
     );
     assert!(
         report
             .diagnostics
             .iter()
-            .any(|d| d.contains("material nowhere has no texture; drawn plain white")),
+            .any(|d| d.contains("material nowhere has no texture; drawn in the colour shift")),
         "{:?}",
         report.diagnostics
     );

@@ -1611,13 +1611,15 @@ fn presentation(cx: &mut Ctx, pack: &bri_weapons::Pack, weapons_sha256: &str) ->
                 Some(t) => bindings.push(t),
                 None => {
                     // Torque drew a material whose bitmap it could not find
-                    // untextured (white, then the image's colour shift), and
-                    // kept the rest of the model.
+                    // untextured, in the item's colour shift (white without
+                    // one), and kept the rest of the model. A clear texture
+                    // shows the tint through, as a colour-shift model's
+                    // clear texels do.
                     cx.report.diagnostics.push(format!(
-                        "presentation: {key} material {} has no texture; drawn plain white, as Torque drew it",
+                        "presentation: {key} material {} has no texture; drawn in the colour shift (white without one), as Torque drew it",
                         m.name
                     ));
-                    bindings.push(white_texture(cx, &mut textures)?);
+                    bindings.push(flat_texture(cx, &mut textures, Flat::Clear)?);
                 }
             }
         }
@@ -1642,11 +1644,11 @@ fn presentation(cx: &mut Ctx, pack: &bri_weapons::Pack, weapons_sha256: &str) ->
         .cloned()
         .collect();
     if !missing.is_empty() {
-        let (shape, _) = placeholder();
+        let shape = placeholder();
         let shape_bytes = serde_json::to_vec(&shape)?;
         let shape_rel = format!("models/{}.shape.json", &hash(&shape_bytes)[..24]);
         cx.write(&format!("assets/{shape_rel}"), &shape_bytes)?;
-        white_texture(cx, &mut textures)?;
+        flat_texture(cx, &mut textures, Flat::White)?;
         for key in missing {
             cx.report.ambiguous.push(Finding {
                 what: format!("model {key}"),
@@ -1738,25 +1740,41 @@ fn presentation(cx: &mut Ctx, pack: &bri_weapons::Pack, weapons_sha256: &str) ->
     Ok(())
 }
 
-/// The plain white texture (`placeholder:white`) this package's
-/// presentation draws untextured materials and placeholder cubes with,
-/// written once.
-fn white_texture(cx: &mut Ctx, textures: &mut serde_json::Map<String, serde_json::Value>) -> Result<String> {
-    const KEY: &str = "placeholder:white";
-    if !textures.contains_key(KEY) {
-        let (_, white) = placeholder();
-        let rel = format!("textures/{}.png", &hash(&white)[..24]);
-        cx.write(&format!("assets/{rel}"), &white)?;
-        textures.insert(
-            KEY.into(),
-            json!({ "file": rel, "sha256": hash(&white), "width": 1, "height": 1, "source": "placeholder" }),
-        );
-    }
-    Ok(KEY.into())
+/// A 1x1 texture of one colour, written once.
+#[derive(Clone, Copy)]
+enum Flat {
+    /// Opaque white: the placeholder cube.
+    White,
+    /// Clear white: a material with no texture, showing the tint.
+    Clear,
 }
 
-/// A 0.2 unit cube with one white material, and its 1x1 white PNG.
-fn placeholder() -> (bri_content::shape::Shape, Vec<u8>) {
+fn flat_texture(
+    cx: &mut Ctx,
+    textures: &mut serde_json::Map<String, serde_json::Value>,
+    flat: Flat,
+) -> Result<String> {
+    let (key, alpha) = match flat {
+        Flat::White => ("placeholder:white", 255),
+        Flat::Clear => ("placeholder:clear", 0),
+    };
+    if !textures.contains_key(key) {
+        let mut png = vec![];
+        image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 255, 255, alpha]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .expect("in-memory PNG");
+        let rel = format!("textures/{}.png", &hash(&png)[..24]);
+        cx.write(&format!("assets/{rel}"), &png)?;
+        textures.insert(
+            key.into(),
+            json!({ "file": rel, "sha256": hash(&png), "width": 1, "height": 1, "source": "placeholder" }),
+        );
+    }
+    Ok(key.into())
+}
+
+/// A 0.2 unit cube with one white material.
+fn placeholder() -> bri_content::shape::Shape {
     use bri_content::shape::*;
     let mut positions = vec![];
     let mut normals = vec![];
@@ -1781,7 +1799,7 @@ fn placeholder() -> (bri_content::shape::Shape, Vec<u8>) {
             triangles.push([base, base + 2, base + 3]);
         }
     }
-    let shape = Shape {
+    Shape {
         schema_version: 1,
         id: "placeholder:shape/cube".into(),
         nodes: vec![Node {
@@ -1835,12 +1853,7 @@ fn placeholder() -> (bri_content::shape::Shape, Vec<u8>) {
             metal: None,
         }],
         animations: vec![],
-    };
-    let mut png = vec![];
-    image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 255, 255, 255]))
-        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-        .expect("in-memory PNG");
-    (shape, png)
+    }
 }
 
 fn vehicles(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {

@@ -34,7 +34,7 @@ datablock ShapeBaseImageData(hookshotImage)
    armReady = true;
 
    stateName[0]                    = "Activate";
-   stateTimeoutValue[0]            = 0.1;
+   stateTimeoutValue[0]            = 0.5;
    stateTransitionOnTimeout[0]     = "Ready";
 
    stateName[1]                    = "Ready";
