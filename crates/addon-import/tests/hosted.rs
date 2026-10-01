@@ -89,6 +89,7 @@ fn imported_weapon_package_is_hosted_beside_vanilla() {
         out: scratch.0.join("blaster"),
         reference: None,
         core: vec![],
+        installed: None,
         version: "1.0.0".into(),
     })
     .unwrap();
@@ -169,6 +170,7 @@ fn community_shotgun_and_car_work_in_a_hosted_game() {
             out: scratch.0.join(dir),
             reference: Some(reference.clone().into()),
             core: vec![],
+            installed: None,
             version: "1.0.0".into(),
         })
         .unwrap();

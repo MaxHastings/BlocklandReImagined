@@ -902,8 +902,15 @@ is imported as `proprietary`; for your own work, set `license` in the new
 `package.json`. From a checkout the same importer runs as:
 
 ```sh
-cargo run -p bri-addon-import --bin bri-import-addon -- Weapon_Example.zip out/weapon_example
+cargo run -p bri-addon-import --bin bri-import-addon -- Weapon_Example.zip out/weapon_example --installed content
 ```
+
+`--installed` names the game's content folder. An Add-On builds on the base
+game: a dirt brick declared `brick1x1DirtData : brick1x1Data` inherits the
+stock 1x1's icon and fields, an image names `weaponSwitchSound`. The
+importer reads those base datablocks' names and fields from the installed
+game's brick catalog, weapons, sounds and effects (Import in the Add-Ons
+screen always passes it); without it they are unknown and the report says so.
 
 Many v20 Add-Ons keep part of what they do in scripts: a shotgun's spread,
 a slash command. The report lists each such function under **Needs
