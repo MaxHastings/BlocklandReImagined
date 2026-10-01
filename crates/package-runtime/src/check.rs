@@ -260,7 +260,7 @@ pub fn check(folder: &Path) -> Report {
                 diagnostics.push(
                     Diagnostic::warning("check.weapons.model", problem)
                         .at(format!("{}/assets/{model}", manifest.id))
-                        .hint("an item's own model is a native model whose materials each name a PNG beside it; tools/make_trench_assets.py writes one"),
+                        .hint("an item's own model is a native model whose materials each name a PNG beside it"),
                 );
             }
         }

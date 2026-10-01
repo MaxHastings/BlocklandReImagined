@@ -8530,3 +8530,19 @@ own Blockland Add-Ons folder at runtime, and we never commit or ship them.
   lane), wired to the original's item, image and sound names once the
   Gate lists Max's copy.
 
+
+## 2026-10-01 Trench Warfare removed: digging only, from the original
+
+Max picked "Digging only": we ship Lilboarder's original Trench Digging
+(`Gamemode_TrenchDigging`), imported and ported to behave as he made it,
+and drop our own Trench Warfare game mode (teams, generated field and
+sandbags, rounds, `/teams`, `/newround`, HUD panel).
+- Deleted `packages/trench-warfare` and `crates/sim/tests/trench.rs`.
+- The generic seams stay, each with a synthetic CC0 test:
+  `crates/sim/tests/mode_and_voxels.rs` (a mode's `minigame` block,
+  `voxel` / `place_voxel` / `can_place_voxel` saved with the world,
+  `set_avatar_colors`), `crates/weapons/tests/addon_seams.rs`
+  `a_states_arm_plays_on_the_holders_arm_thread`, and the own-model and
+  textured-icon tests in `bri-client` `items` and `package-runtime` check.
+- Next: the Trench Digging port (ports/ + host rules companion) once the
+  Gate's import report of Max's copy arrives.
