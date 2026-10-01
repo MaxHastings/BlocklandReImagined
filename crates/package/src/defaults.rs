@@ -445,7 +445,7 @@ mod tests {
     }
 
     /// Our own default Add-Ons, as `install` copies them, in load order.
-    const OURS: [&str; 12] = [
+    const OURS: [&str; 10] = [
         "brick_mirror",
         "ragdoll",
         "brick_portal",
@@ -456,8 +456,6 @@ mod tests {
         "steel-ball",
         "steel-ball-fx",
         "blockhead_bot",
-        "fill-can-tool",
-        "fill-can",
     ];
 
     /// What `tools/addon_bundle.py install` leaves for a bundled original:

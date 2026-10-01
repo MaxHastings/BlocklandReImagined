@@ -8,6 +8,7 @@
 //!   cargo test -p bri-client --test night_qa --release -- --ignored --nocapture
 use anyhow::{Context, Result, bail, ensure};
 use bri_client::{app::App, platform::PlatformApp};
+use bri_package::classic::Discovery;
 use bri_ui::{
     api::*,
     gpu::{Headless, UiRenderer},
@@ -1231,7 +1232,7 @@ fn imported_v20_add_ons_play() -> Result<()> {
     let out = PathBuf::from(std::env::var_os("BRI_QA_OUT").context("BRI_QA_OUT")?).join("import");
     let _ = std::fs::remove_dir_all(&out);
     std::fs::create_dir_all(&out)?;
-    let before = bri_client::add_ons::view(&root);
+    let before = bri_client::add_ons::view(&root, &Discovery::root_only());
     let rows = |v: &AddOnsView| {
         v.rows
             .iter()
@@ -1244,11 +1245,16 @@ fn imported_v20_add_ons_play() -> Result<()> {
         "The dropped zip is not offered for import"
     );
     // The Import button's worker.
-    let done = bri_client::add_ons::start_import(&root, "legacy:Weapon_Shotgun", &importer)?
+    let done = bri_client::add_ons::start_import(
+        &root,
+        &Discovery::root_only(),
+        "legacy:Weapon_Shotgun",
+        &importer,
+    )?
         .recv_timeout(Duration::from_secs(300))?;
     println!("import: {done:?}");
     let notice = done?;
-    let after = bri_client::add_ons::view(&root);
+    let after = bri_client::add_ons::view(&root, &Discovery::root_only());
     println!("after: {:#?}\nnotice {:?}", rows(&after), after.notice);
     let weapon = after
         .rows
@@ -1258,10 +1264,10 @@ fn imported_v20_add_ons_play() -> Result<()> {
         .id
         .clone();
     for id in [weapon.as_str(), "brick_fence"] {
-        let view = bri_client::add_ons::set_enabled(&root, id, true)?;
+        let view = bri_client::add_ons::set_enabled(&root, &Discovery::root_only(), id, true)?;
         println!("enable {id}: {:?}", view.notice);
     }
-    std::fs::write(out.join("rows.txt"), rows(&bri_client::add_ons::view(&root)).join("\n"))?;
+    std::fs::write(out.join("rows.txt"), rows(&bri_client::add_ons::view(&root, &Discovery::root_only())).join("\n"))?;
 
     let mut app = App::load(&root, &out.join("state"), SIZE)?;
     app.ui.core.pop(ScreenId::DefaultControls);

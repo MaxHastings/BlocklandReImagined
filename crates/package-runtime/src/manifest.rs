@@ -14,6 +14,7 @@ use std::collections::BTreeMap;
 pub const MANIFEST_FILE: &str = "package.json";
 pub const MANIFEST_SCHEMA: u32 = 1;
 const MAX_MANIFEST_BYTES: usize = 256 * 1024;
+const MAX_COMPANIONS: usize = 8;
 
 /// Unknown fields are errors, so a misspelt field is reported rather than
 /// silently ignored.
@@ -38,6 +39,11 @@ pub struct Manifest {
     pub capabilities: Vec<String>,
     #[serde(default)]
     pub provides: Vec<Provide>,
+    /// Add-Ons turned on and off with this one, such as the host rules an
+    /// imported Add-On's port adds beside it (`docs/modding/porting.md`).
+    /// Each depends on this one; a missing one is skipped.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub companions: Vec<String>,
     /// Sandboxed client code (`docs/architecture/client-sandbox.md`), read
     /// and checked by `bri-client-sandbox`, not by the runtime.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -171,6 +177,31 @@ impl Manifest {
                 out.push(
                     Diagnostic::error("manifest.dependency", format!("`{dependency}`: {problem}"))
                         .at(format!("{at}#/dependencies")),
+                );
+            }
+        }
+        if manifest.companions.len() > MAX_COMPANIONS {
+            out.push(
+                Diagnostic::error(
+                    "manifest.companions",
+                    format!("at most {MAX_COMPANIONS} companions"),
+                )
+                .at(format!("{at}#/companions")),
+            );
+        }
+        for companion in &manifest.companions {
+            if let Some(problem) = id::namespace_problem(companion) {
+                out.push(
+                    Diagnostic::error(
+                        "manifest.companions",
+                        format!("companion `{companion}` {problem}"),
+                    )
+                    .at(format!("{at}#/companions")),
+                );
+            } else if *companion == manifest.id {
+                out.push(
+                    Diagnostic::error("manifest.companions", "a package is not its own companion")
+                        .at(format!("{at}#/companions")),
                 );
             }
         }

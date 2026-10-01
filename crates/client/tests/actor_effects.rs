@@ -292,7 +292,14 @@ fn jets_burning_vehicles_and_splashes_follow_their_sources() -> Result<()> {
     let mut fx = ActorEffects::new(effects(), weapons(), Default::default())?;
     let feet = [Mat4::IDENTITY, Mat4::from_translation(Vec3::X)];
     let wreck = Mat4::from_translation(Vec3::new(5., 0., 5.));
-    fx.advance(0.1, head, &[(7, feet, Vec3::ZERO)], &[(9, wreck)], &[])?;
+    let fire = "v20/emitter/vehicleburnemitter".to_string();
+    fx.advance(
+        0.1,
+        head,
+        &[(7, feet, Vec3::ZERO)],
+        &[(9, fire, wreck)],
+        &[],
+    )?;
     assert_eq!((fx.jet_count(), fx.burning_count()), (2, 1));
     assert!(fx.world().particle_count() > 0);
     fx.advance(0.1, head, &[], &[], &[])?;
@@ -482,7 +489,7 @@ fn original_emote_pain_burn_and_vehicle_images_resolve() -> Result<()> {
         0.1,
         muzzle,
         &[(7, [Mat4::IDENTITY; 2], Vec3::ZERO)],
-        &[(9, Mat4::IDENTITY)],
+        &[(9, "v20/emitter/vehicleburnemitter".into(), Mat4::IDENTITY)],
         &[],
     )?;
     assert!(fx.world().particle_count() > 0);

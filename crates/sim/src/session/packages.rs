@@ -490,7 +490,7 @@ fn archetype(
     id: &str,
     def: &bri_package_runtime::content::ArchetypeDef,
 ) -> Result<crate::archetype::Archetype> {
-    let base = match &def.base {
+    let base = match def.adjusts.as_ref().or(def.base.as_ref()) {
         Some(base) => table
             .find(base)
             .with_context(|| format!("base {base} is not a known archetype"))?,
@@ -559,12 +559,28 @@ impl Session {
         );
         let runtime = Runtime::compile(&catalog).map_err(diagnostics_error)?;
         let mut archetypes = crate::archetype::Archetypes::default();
-        for (id, def) in catalog.archetypes() {
+        // Adjustments to v20's player types first, so archetypes built on
+        // one start from it as adjusted. Two Add-Ons setting one constant:
+        // the later id wins, as the later `exec` did in v20.
+        for (id, def) in catalog.archetypes().filter(|(_, d)| d.adjusts.is_some()) {
+            let stock = def.adjusts.as_deref().expect("filtered");
+            let index = archetypes
+                .find(stock)
+                .with_context(|| format!("Archetype {id}: {stock} is not a v20 player type"))?;
+            let mut adjusted =
+                archetype(&archetypes, id, def).with_context(|| format!("Archetype {id}"))?;
+            let original = archetypes.resolve(index);
+            adjusted.id = original.id.clone();
+            adjusted.name = original.name.clone();
+            archetypes.replace(index, adjusted)?;
+        }
+        for (id, def) in catalog.archetypes().filter(|(_, d)| d.adjusts.is_none()) {
             let archetype =
                 archetype(&archetypes, id, def).with_context(|| format!("Archetype {id}"))?;
             archetypes.add(archetype)?;
         }
         self.archetypes = archetypes;
+        self.fill_body_mount_points()?;
         self.minigames = combat::new_world(self.minigames.catalog().clone(), &self.archetypes);
         if let Some((id, mode)) = catalog.running_mode()
             && let Some(minigame) = &mode.minigame
@@ -875,6 +891,74 @@ impl Session {
             vars: vars.into_iter().map(|(k, v)| (k, Arc::new(v))).collect(),
         }
     }
+    /// What scripts read of a player or bot.
+    fn player_view(&self, owner: OwnerId, p: &Peer) -> PlayerView {
+        let actor = self.weapons.actor(bri_weapons::ActorId(owner));
+        let item = actor
+            .and_then(|a| a.inventory.get(a.selected?)?.clone())
+            .unwrap_or_default();
+        let (image, image_state) = self
+            .weapons
+            .image_state(bri_weapons::ActorId(owner), 0)
+            .map(|(image, state)| (image.id.clone(), state.name.clone()))
+            .unwrap_or_default();
+        let state = p.player.state();
+        let tuning = p.player.tuning();
+        let height = if state.crouched {
+            tuning.crouch_height
+        } else {
+            tuning.stand_height
+        };
+        PlayerView {
+            id: owner,
+            key: self.player_key(owner),
+            name: p.name.clone(),
+            position: p.player.state().feet,
+            alive: p.combat.alive,
+            admin: p.actor.administrator,
+            eye: p.player.eye().to_array(),
+            look: p.player.state().forward().to_array(),
+            velocity: p.player.state().velocity,
+            item,
+            minigame: self
+                .minigames
+                .player(p.combat.player)
+                .ok()
+                .and_then(|m| m.game)
+                .map(|g| g.0),
+            health: p.combat.health,
+            max_health: self
+                .archetypes
+                .resolve(p.player.state().archetype)
+                .max_health,
+            archetype: self
+                .archetypes
+                .resolve(p.player.state().archetype)
+                .id
+                .clone(),
+            crouched: state.crouched,
+            mounted: self.seated(owner),
+            scale: state.scale,
+            center: [state.feet[0], state.feet[1] + height * 0.5, state.feet[2]],
+            slot: actor.and_then(|a| a.selected).map(|s| s as u64),
+            muzzle: actor
+                .filter(|_| !image.is_empty())
+                .map_or(p.player.eye(), |a| a.frame.muzzle[0])
+                .to_array(),
+            tools: actor.map_or_else(Vec::new, |a| {
+                a.inventory
+                    .iter()
+                    .map(|t| t.clone().unwrap_or_default())
+                    .collect()
+            }),
+            image,
+            image_state,
+            paint: p.current_color,
+            bot: self.bots.is_bot(owner),
+            bot_owner: self.bot_brick_owner(owner),
+            riding: self.riding_seat(owner),
+        }
+    }
     fn package_snapshot(&self) -> Snapshot {
         let host = self.packages.as_ref();
         Snapshot {
@@ -885,74 +969,13 @@ impl Session {
                 .peers
                 .iter()
                 .filter(|(o, _)| !self.bots.is_bot(**o))
-                .map(|(owner, p)| {
-                    let actor = self.weapons.actor(bri_weapons::ActorId(*owner));
-                    let item = actor
-                        .and_then(|a| a.inventory.get(a.selected?)?.clone())
-                        .unwrap_or_default();
-                    let (image, image_state) = self
-                        .weapons
-                        .image_state(bri_weapons::ActorId(*owner), 0)
-                        .map(|(image, state)| (image.id.clone(), state.name.clone()))
-                        .unwrap_or_default();
-                    let state = p.player.state();
-                    let tuning = p.player.tuning();
-                    let height = if state.crouched {
-                        tuning.crouch_height
-                    } else {
-                        tuning.stand_height
-                    };
-                    PlayerView {
-                        id: *owner,
-                        key: self.player_key(*owner),
-                        name: p.name.clone(),
-                        position: p.player.state().feet,
-                        alive: p.combat.alive,
-                        admin: p.actor.administrator,
-                        eye: p.player.eye().to_array(),
-                        look: p.player.state().forward().to_array(),
-                        velocity: p.player.state().velocity,
-                        item,
-                        minigame: self
-                            .minigames
-                            .player(p.combat.player)
-                            .ok()
-                            .and_then(|m| m.game)
-                            .map(|g| g.0),
-                        health: p.combat.health,
-                        max_health: self
-                            .archetypes
-                            .resolve(p.player.state().archetype)
-                            .max_health,
-                        archetype: self
-                            .archetypes
-                            .resolve(p.player.state().archetype)
-                            .id
-                            .clone(),
-                        crouched: state.crouched,
-                        mounted: self.seated(*owner),
-                        scale: state.scale,
-                        center: [
-                            state.feet[0],
-                            state.feet[1] + height * 0.5,
-                            state.feet[2],
-                        ],
-                        slot: actor.and_then(|a| a.selected).map(|s| s as u64),
-                        muzzle: actor
-                            .filter(|_| !image.is_empty())
-                            .map_or(p.player.eye(), |a| a.frame.muzzle[0])
-                            .to_array(),
-                        tools: actor.map_or_else(Vec::new, |a| {
-                            a.inventory
-                                .iter()
-                                .map(|t| t.clone().unwrap_or_default())
-                                .collect()
-                        }),
-                        image,
-                        image_state,
-                        paint: p.current_color,
-                    }
-                })
+                .map(|(owner, p)| self.player_view(*owner, p))
+                .collect(),
+            bots: self
+                .peers
+                .iter()
+                .filter(|(o, _)| self.bots.is_bot(**o))
+                .map(|(owner, p)| self.player_view(*owner, p))
                 .collect(),
             entities: host
                 .map(|h| {
@@ -1236,7 +1259,8 @@ impl Session {
         Ok(returned)
     }
     /// Apply an authorized operation. `caller` is the player whose command
-    /// asked for it: brick changes then need that player's trust, so a
+    /// asked for it: brick changes then need that player's trust, or a
+    /// build their minigame plays with ([`Self::rule_may_edit`]), so a
     /// package cannot be used to reach another player's build (stress
     /// campaign W9). Without a caller (hooks, think, generation) a package
     /// acts only on world-owned bricks, such as its generated world.
@@ -1249,6 +1273,13 @@ impl Session {
                 position,
                 color,
             } => self.package_place_brick(package, &shape, position, color),
+            Op::PlantBrick {
+                kind,
+                position,
+                turns,
+                color,
+                owner,
+            } => self.package_plant_brick(package, &kind, position, turns, color, owner, caller),
             Op::PlaceVoxel { position, material } => {
                 self.package_place_voxel(package, position, &material)
             }
@@ -1718,6 +1749,39 @@ impl Session {
                     None => self.weapons.swap_image(actor, None),
                 }
             }
+            Op::UnmountImage { player } => {
+                ensure!(self.peers.contains_key(&player), "No such player");
+                self.equip_tool(player, None)
+            }
+            Op::MountObject {
+                mount,
+                rider,
+                node,
+                can_dismount,
+            } => {
+                ensure!(
+                    caller.is_none_or(|c| c == mount),
+                    "A player mounts others on themselves only by their own command"
+                );
+                // Carrying someone moves them: the same rules as `hold`.
+                ensure!(
+                    self.may_move(mount, ObjectRef::Player(rider)),
+                    "Player {mount} may not move {rider} under the minigame and trust rules"
+                );
+                self.mount_player(mount, rider, node, can_dismount)
+            }
+            Op::UnmountObject { rider } => self.unmount_player(rider),
+            Op::SetScale { player, scale } => {
+                ensure!(self.peers.contains_key(&player), "No such player");
+                self.set_player_scale(player, scale)?;
+                self.follow_player_mounts();
+                Ok(())
+            }
+            Op::SetLookLimits { player, limits } => {
+                let peer = self.peers.get_mut(&player).context("No such player")?;
+                peer.look_limits = limits;
+                Ok(())
+            }
             Op::Sound { profile, at } => {
                 self.take_cue(package)?;
                 match at {
@@ -1867,6 +1931,114 @@ impl Session {
         host.shares.edits.spend(&origin, tick, 1);
         Ok(())
     }
+    /// A brick of `kind` centred as near `position` as the stud and plate
+    /// grid allows, or `None` for a kind the world has no definition of.
+    pub(super) fn planted_brick(
+        &self,
+        kind: &str,
+        position: [f32; 3],
+        turns: u8,
+        color: u8,
+        owner: OwnerId,
+    ) -> Option<Brick> {
+        let mut brick = Brick::new(ContentRef::Resolved(kind.into()), position, owner);
+        brick.quarter_turns = turns % 4;
+        brick.color = color;
+        let mesh = &self.simulation.definitions.get(&brick).ok()?.mesh;
+        let [w, d] = mesh.footprint_studs.map(|v| v as f32);
+        let size = if turns.is_multiple_of(2) {
+            [w, mesh.height_plates as f32, d]
+        } else {
+            [d, mesh.height_plates as f32, w]
+        };
+        for axis in 0..3 {
+            let cell = crate::grid::CELL[axis];
+            let half = size[axis] * cell * 0.5;
+            brick.position[axis] = ((position[axis] - half) / cell).round() * cell + half;
+        }
+        Some(brick)
+    }
+    /// Whether a rule acting for `caller` may change bricks of build
+    /// `owner`: the caller's own full trust, or, inside a minigame, a build
+    /// that minigame plays with (its owner's bricks, or everyone's with Use
+    /// All Players' Bricks), as its weapons may break them. Without a
+    /// caller, only the world's own bricks.
+    pub(super) fn rule_may_edit(&self, caller: Option<OwnerId>, owner: OwnerId) -> bool {
+        if owner == 0 {
+            return true;
+        }
+        let Some(caller) = caller else {
+            return false;
+        };
+        if self
+            .peers
+            .get(&caller)
+            .is_some_and(|p| p.actor.trusted(owner, bri_world::authority::trust::FULL))
+        {
+            return true;
+        }
+        let Some(game) = self.game_of(caller) else {
+            return false;
+        };
+        let Ok(g) = self.minigames.game(game) else {
+            return false;
+        };
+        g.settings.use_all_players_bricks
+            || self.brick_group_owner_for(owner, Some(game)) == g.owner.account.0
+    }
+    /// Plant a brick into build `owner`. A brick that does
+    /// not fit is skipped without a report, as v20's `plant()` errors were
+    /// checked by the script that asked.
+    #[allow(clippy::too_many_arguments)]
+    fn package_plant_brick(
+        &mut self,
+        package: &str,
+        kind: &str,
+        position: [f32; 3],
+        turns: u8,
+        color: u8,
+        owner: OwnerId,
+        caller: Option<OwnerId>,
+    ) -> Result<()> {
+        let state = self.simulation.state();
+        ensure!(
+            usize::from(color) < state.palette.len(),
+            "Colour {color} is not in the world's palette"
+        );
+        ensure!(
+            self.rule_may_edit(caller, owner),
+            "Build {owner} is not one the caller has trust on"
+        );
+        let brick = self
+            .planted_brick(kind, position, turns, color, owner)
+            .with_context(|| format!("No brick `{kind}` is loaded"))?;
+        let tick = self.simulation.state().tick;
+        let origin = package.to_string();
+        let host = self.packages.as_mut().context("No packages are enabled")?;
+        ensure!(
+            host.shares.edits.available(&origin, tick) >= 1,
+            "`{package}` used its share of world edits for now"
+        );
+        if !self.simulation.fits(&brick) {
+            return Ok(());
+        }
+        let state = self.simulation.state();
+        let palette = state.palette.clone();
+        let plan =
+            bri_world::build::LoadPlan::batch(state, &palette, vec![brick], self.next_owner)?;
+        let ids = self.simulation.load_build(
+            &Actor {
+                owner: 0,
+                administrator: true,
+                ..Default::default()
+            },
+            plan,
+        )?;
+        self.dirty.extend(ids);
+        let host = self.packages.as_mut().expect("checked");
+        host.shares.edits.spend(&origin, tick, 1);
+        Ok(())
+    }
     /// Put a voxel into the generated world: a world-owned brick of the
     /// material, recorded as a world edit and saved with the world.
     fn package_place_voxel(
@@ -1936,10 +2108,7 @@ impl Session {
             .bricks
             .get(&brick)
             .context("No such brick")?;
-        let trusted = b.owner == 0
-            || caller
-                .and_then(|c| self.peers.get(&c))
-                .is_some_and(|p| p.actor.trusted(b.owner, bri_world::authority::trust::FULL));
+        let trusted = self.rule_may_edit(caller, b.owner);
         ensure!(
             trusted,
             "Brick {brick} belongs to a build the caller has no trust on"
@@ -2511,6 +2680,7 @@ impl Session {
                         }),
                         brick: hit.brick,
                         position: hit.position.to_array(),
+                        normal: hit.normal.to_array(),
                         distance: hit.distance,
                         object,
                     }),
@@ -2519,6 +2689,7 @@ impl Session {
                         tag: None,
                         look: None,
                         position: o.position,
+                        normal: [0.0; 3],
                         distance: o.distance,
                         object: Some(o),
                     }),
@@ -2876,6 +3047,35 @@ impl Session {
         let owners = std::mem::take(&mut host.spawns);
         self.deliver_player_hook(owners, |b| b.on_spawn, "on_spawn");
     }
+    /// `on_activate(player)` of every package that declares it, in load
+    /// order, until one takes the click (returns `true`).
+    pub(super) fn package_activate(&mut self, owner: OwnerId) -> bool {
+        let Some(host) = self.packages.as_ref() else {
+            return false;
+        };
+        let hooks: Vec<String> = host
+            .catalog
+            .behaviours()
+            .filter(|(_, b)| b.on_activate)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for package in hooks {
+            let reply = self.run_package(
+                &package,
+                "on_activate",
+                vec![Dynamic::from_int(owner as i64)],
+                Budget::Command,
+                Some(owner),
+                None,
+                None,
+            );
+            self.charge_work(&package);
+            if matches!(reply, Ok(v) if v.as_bool() == Ok(true)) {
+                return true;
+            }
+        }
+        false
+    }
     /// `on_leave(player)` as `owner` leaves, while they are still readable.
     pub(super) fn package_leave(&mut self, owner: OwnerId) {
         if self.bots.is_bot(owner) {
@@ -3094,7 +3294,9 @@ impl Session {
             return;
         }
         for owner in owners {
-            if !self.peers.contains_key(&owner) {
+            // Player hooks are for connected players. A bot queued while it
+            // joined, before it was registered as one, is left out here.
+            if !self.peers.contains_key(&owner) || self.bots.is_bot(owner) {
                 continue;
             }
             for package in &hooks {

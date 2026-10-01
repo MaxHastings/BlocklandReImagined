@@ -100,6 +100,16 @@ pub struct PlayerView {
     /// Each tool slot's item id, empty for an empty slot (`%obj.tool[%i]`).
     #[serde(default)]
     pub tools: Vec<String>,
+    /// A bot (an `AIPlayer`), not a connected player.
+    #[serde(default)]
+    pub bot: bool,
+    /// A bot's spawn brick's owner (`%bot.spawnBrick.client`), if any.
+    #[serde(default)]
+    pub bot_owner: Option<u64>,
+    /// The player this one rides (`getObjectMount`), and on which of its
+    /// mount points.
+    #[serde(default)]
+    pub riding: Option<(u64, u8)>,
 }
 /// Live questions a script may ask the engine during a call. They read the
 /// world as it is when the call runs: a call's own operations apply after it
@@ -125,6 +135,26 @@ pub trait World {
     /// Whether a voxel could be placed at voxel coordinates `position`
     /// now: inside the world, its chunk generated, and nothing in the way.
     fn can_place_voxel(&self, position: [i64; 3]) -> bool;
+    /// A placed brick: its kind, centre, turn, colour and owner.
+    fn brick(&self, _brick: u64) -> Option<BrickInfo> {
+        None
+    }
+    /// Bricks whose box overlaps the box from `min` to `max`, at most
+    /// `limit` of them (`InitContainerBoxSearch`).
+    fn bricks_in(&self, _min: [f32; 3], _max: [f32; 3], _limit: usize) -> Vec<u64> {
+        vec![]
+    }
+    /// Whether a rule acting for `caller` may remove brick `brick`, or
+    /// plant into its build (`miniGameCanDamage` with the trust rules).
+    fn can_edit(&self, _caller: Option<u64>, _brick: u64) -> bool {
+        false
+    }
+    /// Whether a brick of `kind` turned `turns` quarter turns would fit
+    /// centred at `position` now (snapped to the grid as `plant_brick`
+    /// does): nothing in the way, inside the world.
+    fn can_plant(&self, _kind: &str, _position: [f32; 3], _turns: u8) -> bool {
+        false
+    }
     /// Which part of player `player` a hit at `point` strikes
     /// (`getDamageLocation`): `"head"`, `"torso"` or `"legs"`, or `None`
     /// for no living player.
@@ -132,6 +162,24 @@ pub trait World {
         None
     }
 }
+/// A placed brick as a script reads it ([`World::brick`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct BrickInfo {
+    /// Its brick catalog id (`v20/brick/brick2x4data`,
+    /// `gamemode_trenchdigging:brick/brick4xcubedirtdata`).
+    pub kind: String,
+    pub position: [f32; 3],
+    /// Clockwise quarter turns seen from above.
+    pub turns: u8,
+    /// Palette index.
+    pub color: u8,
+    /// The build it belongs to (0 for the world's own bricks).
+    pub owner: u64,
+    pub min: [f32; 3],
+    pub max: [f32; 3],
+}
+/// Most bricks one `bricks_in` returns.
+pub const MAX_BRICKS_IN: usize = 1024;
 /// What a ray met.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum RayTarget {
@@ -196,6 +244,9 @@ pub struct Aim {
     #[serde(default)]
     pub look: Option<(String, String)>,
     pub position: [f32; 3],
+    /// The face it met points this way (zero when it met only an object).
+    #[serde(default)]
+    pub normal: [f32; 3],
     pub distance: f32,
     /// The movable object the aim met before any brick.
     #[serde(default)]
@@ -218,6 +269,9 @@ pub struct Snapshot {
     /// The live environment settings (`environment()`).
     pub environment: bri_content::atmosphere::Settings,
     pub players: Vec<PlayerView>,
+    /// Bots: player bodies without a connection. [`player`](Self::player)
+    /// finds them; `players()` leaves them out.
+    pub bots: Vec<PlayerView>,
     pub entities: Vec<EntityView>,
     /// Vehicles and other loose physics bodies, and bots (players without
     /// a connection, `object: player`, `definition` their kind, `owner`
@@ -227,6 +281,10 @@ pub struct Snapshot {
     pub holds: Vec<HoldView>,
 }
 impl Snapshot {
+    /// A connected player or a bot.
+    pub fn player(&self, id: u64) -> Option<&PlayerView> {
+        self.players.iter().chain(&self.bots).find(|p| p.id == id)
+    }
     /// Any movable object by reference, players and entities included.
     pub fn object(&self, object: ObjectRef) -> Option<ObjectView> {
         match object {
@@ -325,6 +383,10 @@ thread_local! {
     static CURRENT: RefCell<Option<Invocation>> = const { RefCell::new(None) };
     /// Script operations the running call may use.
     static LIMIT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+/// A point as a script reads it, `[x, y, z]`.
+fn point3(p: [f32; 3]) -> Dynamic {
+    Dynamic::from_array(p.iter().map(|v| Dynamic::from_float(f64::from(*v))).collect())
 }
 /// The running call's world.
 fn with_world<T>(f: impl FnOnce(&dyn World, &mut Invocation) -> Fallible<T>) -> Fallible<T> {
@@ -455,6 +517,22 @@ fn player_map(p: &PlayerView) -> Dynamic {
         (
             "tools",
             Dynamic::from_array(p.tools.iter().map(|t| t.clone().into()).collect()),
+        ),
+        ("bot", p.bot.into()),
+        (
+            "bot_owner",
+            p.bot_owner
+                .map_or(Dynamic::UNIT, |o| Dynamic::from_int(o as i64)),
+        ),
+        (
+            "riding",
+            p.riding
+                .map_or(Dynamic::UNIT, |(m, _)| Dynamic::from_int(m as i64)),
+        ),
+        (
+            "seat",
+            p.riding
+                .map_or(Dynamic::UNIT, |(_, s)| Dynamic::from_int(i64::from(s))),
         ),
     ])
 }
@@ -773,12 +851,11 @@ fn register_api(engine: &mut Engine) {
     engine.register_fn("player", |player: Dynamic| {
         with(|i| {
             let player = id(&player)?;
-            Ok(i.snapshot
-                .players
-                .iter()
-                .find(|p| p.id == player)
-                .map_or(Dynamic::UNIT, player_map))
+            Ok(i.snapshot.player(player).map_or(Dynamic::UNIT, player_map))
         })
+    });
+    engine.register_fn("bots", || {
+        with(|i| Ok(i.snapshot.bots.iter().map(player_map).collect::<Array>()))
     });
     engine.register_fn("entities", || {
         with(|i| {
@@ -827,6 +904,9 @@ fn register_api(engine: &mut Engine) {
                     x,
                     y,
                     z,
+                    float_entry("nx", a.normal[0]),
+                    float_entry("ny", a.normal[1]),
+                    float_entry("nz", a.normal[2]),
                     ("distance", Dynamic::from_float(a.distance as f64)),
                     (
                         "object",
@@ -954,6 +1034,24 @@ fn register_api(engine: &mut Engine) {
             push(Op::PlaceVoxel {
                 position: [x, y, z],
                 material: material.into(),
+            })
+        },
+    );
+    // A brick into build `owner` (a brick's owner): plant_brick(kind,
+    // [x, y, z], turns, color, owner).
+    engine.register_fn(
+        "plant_brick",
+        |kind: &str, position: Array, turns: i64, color: i64, owner: i64| {
+            let position = vector(&position)?;
+            let Ok(color) = u8::try_from(color) else {
+                return fail("plant_brick's colour is a palette index, 0 to 255");
+            };
+            push(Op::PlantBrick {
+                kind: kind.into(),
+                position,
+                turns: u8::try_from(turns.rem_euclid(4)).expect("0..4"),
+                color,
+                owner: u64::try_from(owner).or_else(|_| fail("an owner is 0 or more"))?,
             })
         },
     );
@@ -1352,6 +1450,58 @@ fn register_queries(engine: &mut Engine) {
             })
         },
     );
+    // A placed brick, #{ id, kind, x, y, z, turns, color, owner, min, max },
+    // or () when there is no such brick.
+    engine.register_fn("brick", |brick: Dynamic| {
+        let brick = id(&brick)?;
+        with_world(|world, _| {
+            Ok(world.brick(brick).map_or(Dynamic::UNIT, |b| {
+                map([
+                    ("id", Dynamic::from_int(brick as i64)),
+                    ("kind", b.kind.into()),
+                    ("x", Dynamic::from_float(f64::from(b.position[0]))),
+                    ("y", Dynamic::from_float(f64::from(b.position[1]))),
+                    ("z", Dynamic::from_float(f64::from(b.position[2]))),
+                    ("turns", Dynamic::from_int(i64::from(b.turns))),
+                    ("color", Dynamic::from_int(i64::from(b.color))),
+                    ("owner", Dynamic::from_int(b.owner as i64)),
+                    ("min", point3(b.min)),
+                    ("max", point3(b.max)),
+                ])
+            }))
+        })
+    });
+    // The bricks overlapping a box, as ids: up to 1024.
+    engine.register_fn("bricks_in", |min: Array, max: Array| {
+        let min = vector(&min)?;
+        let max = vector(&max)?;
+        if (0..3).any(|a| max[a] < min[a] || max[a] - min[a] > crate::ops::MAX_BOX_SPAN) {
+            return fail("bricks_in needs a box no more than 256 units a side, min before max");
+        }
+        with_world(|world, _| {
+            Ok(Dynamic::from_array(
+                world
+                    .bricks_in(min, max, MAX_BRICKS_IN)
+                    .into_iter()
+                    .map(|b| Dynamic::from_int(b as i64))
+                    .collect(),
+            ))
+        })
+    });
+    // Whether this call's player may change a brick: their own trust, or
+    // inside a minigame a build it plays with.
+    engine.register_fn("can_edit", |brick: Dynamic| {
+        let brick = id(&brick)?;
+        with_world(|world, i| Ok(world.can_edit(i.caller, brick)))
+    });
+    engine.register_fn(
+        "can_plant",
+        |kind: &str, position: Array, turns: i64| {
+            let position = vector(&position)?;
+            let turns = u8::try_from(turns.rem_euclid(4)).expect("0..4");
+            with_world(|world, _| Ok(world.can_plant(kind, position, turns)))
+        },
+    );
     // The box a brick fills, #{ min: [x, y, z], max: [x, y, z] } in world
     // units, or () when there is no such brick.
     engine.register_fn("brick_box", |brick: Dynamic| {
@@ -1516,6 +1666,32 @@ fn register_presentation(engine: &mut Engine) {
         push(Op::SetImageAmmo {
             player: id(&player)?,
             ammo,
+        })
+    });
+    engine.register_fn("unmount_image", |player: Dynamic| {
+        push(Op::UnmountImage {
+            player: id(&player)?,
+        })
+    });
+    engine.register_fn("set_scale", |player: Dynamic, scale: Dynamic| {
+        push(Op::SetScale {
+            player: id(&player)?,
+            scale: float(&scale)?,
+        })
+    });
+    engine.register_fn(
+        "set_look_limits",
+        |player: Dynamic, up: Dynamic, down: Dynamic| {
+            push(Op::SetLookLimits {
+                player: id(&player)?,
+                limits: Some([float(&down)?, float(&up)?]),
+            })
+        },
+    );
+    engine.register_fn("set_look_limits", |player: Dynamic, _: ()| {
+        push(Op::SetLookLimits {
+            player: id(&player)?,
+            limits: None,
         })
     });
     engine.register_fn("mount_image", |player: Dynamic, image: Dynamic| {
@@ -1703,6 +1879,23 @@ fn register_physics(engine: &mut Engine) {
         })
     });
     engine.register_fn(
+        "mount_object",
+        |mount: Dynamic, rider: Dynamic, node: i64, can_dismount: bool| {
+            push(Op::MountObject {
+                mount: id(&mount)?,
+                rider: id(&rider)?,
+                node: u8::try_from(node)
+                    .ok()
+                    .filter(|n| usize::from(*n) < crate::ops::MAX_MOUNT_POINTS)
+                    .ok_or("a mount point is 0 to 7")?,
+                can_dismount,
+            })
+        },
+    );
+    engine.register_fn("unmount_object", |rider: Dynamic| {
+        push(Op::UnmountObject { rider: id(&rider)? })
+    });
+    engine.register_fn(
         "spawn_vehicle",
         |definition: &str,
          x: Dynamic,
@@ -1882,6 +2075,9 @@ impl Runtime {
             }
             if behaviour.on_projectile_hit {
                 need("on_projectile_hit".into(), 1, "on_projectile_hit");
+            }
+            if behaviour.on_activate {
+                need("on_activate".into(), 1, "on_activate");
             }
             for policy in &behaviour.policies {
                 need(format!("allow_{policy}"), 1, &format!("policy `{policy}`"));

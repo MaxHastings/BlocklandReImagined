@@ -167,12 +167,11 @@ add when you work in a checkout.
    | A fire-rate check on `%obj.lastFireTime` and `minShotTime` | nothing: the image's `min_shot_ticks` already does it, from the datablock |
    | Anything a field in [Making Add-Ons](README.md) section 5 or 6 expresses | a patch setting that field |
    | A `serverCmd` in an Add-On with no weapons, vehicles or bricks | a rule (section 3 of the guide): `behaviour.json` and a script under `files/`, and a `package.json` patch adding them to `provides` and their `capabilities` |
+   | An image's `onFire` (or charge, release, jet, light, wheel or cancel) or a `serverCmd` that does host work in an Add-On with weapons, vehicles or bricks | host rules (below): `rules/` in the port, and a patch pointing the image at their commands |
    | Anything whose `runtime_hook` is null or that needs a missing capability | not portable yet: port the rest, mark the entry `partial`, and say what is missing in `notes` |
 
    Keep the Add-On's own data where the importer put it. A port changes what
-   the scripts changed, nothing else. A rule is host-only and weapons data is
-   for everyone, and one Add-On cannot be both, so an Add-On that needs both
-   is `partial` for now.
+   the scripts changed, nothing else.
 
 4. **Write the patterns** for every number or name the port relies on. Match
    the script's own spelling loosely (`\s*` around `=`), and capture the
@@ -213,6 +212,62 @@ page as well.
 | Add-On | Port | Status | What it covers |
 |---|---|---|---|
 | `Weapon_Shotgun` (Sawn-off Shotgun) | `weapon_shotgun` | verified | `shotgunImage::onFire`: the pellets, their spread and the recoil, read from the copy's own script |
+| `Gamemode_TrenchDigging` (Trench Digging, Lilboarder) | `gamemode_trenchdigging` | verified | Every function of `TrenchDigging.cs` and the four images' `onPreFire`/`onFire`, as host rules (`rules/trench.rhai`): dig, put back, regroup, `/dumpdirt`, `/speeddig`, `/speedplace`, `/infinitedigging`; `server.cs` raising No Jet's `maxStepHeight` to 1.2 is `rules/archetypes/playernojet.json` |
+
+## Host rules
+
+An imported Add-On is one `shared` package: its items, images and bricks go
+to every player, and a shared package cannot carry host code. A port that
+needs a host rule as well puts it in `ports/<port>/rules/`, and the importer
+writes it as a second Add-On beside the import that only the host loads:
+
+```
+ports/<port>/
+  port.json      { "schema_version": 1, "rules": { "capabilities": ["player", "world.edit"] }, "patch": { ... } }
+  rules/
+    behaviour.json
+    <name>.rhai
+    archetypes/<name>.json   (optional) player archetypes, or adjustments to v20's
+```
+
+| | The import | Its rules |
+|---|---|---|
+| Folder | `addons/<ns>` | `addons/<ns>-rules` |
+| Id | `<ns>`, from the Add-On's folder name (`Tool_FillCan` is `tool_fillcan`) | `<ns>-rules` |
+| Side | `shared` | `server`: players never download it |
+| `package.json` | the importer's, with `"companions": ["<ns>-rules"]` | written for it: your `capabilities`, `behaviour`, `script` and `archetype` provides, and `dependencies` on the import at its version |
+
+Turning the import on in the Add-Ons screen turns its rules on after it, and
+turning it off turns them off. The importer checks the rules as the game
+loads them (the manifest, `behaviour.json`, the script it names) and, as
+with any patch, applies all of the port or none of it. The report lists the
+rules under `ports[].rules`.
+
+**Names.** In rules files, `{{name}}` becomes a value at import:
+`{{namespace}}` (the import's id), `{{rules}}` (the rules' id),
+`{{version}}`, or anything a `covers` pattern captured. A `{{word}}` that
+names nothing is an error. The importer's ids are
+`<ns>:<kind>/<datablock name in lower case>`, so a rule gives out the
+imported item as `"{{namespace}}:weapon/fillcanitem"`.
+
+**Reaching the rules.** In the patch, `{namespace}`, `{rules}` and
+`{version}` work like captured values, in keys too. Point the image's
+moments at the rules' commands ([Making Add-Ons](README.md) section 5,
+`command` and `commands`):
+
+```json
+"assets/weapons.json": { "images": { "{namespace}:image/fillcanimage": {
+  "command": "{rules}:fill",
+  "commands": { "states": { "oncharge": "{rules}:charge", "onabortcharge": "{rules}:release" } }
+} } }
+```
+
+`command` is `onFire`: it runs the rules' `cmd_fill(player)`, aimed where
+the holder looks, instead of firing a projectile. `commands.states` runs a
+command on entering any state whose script is that name; `jet`, `light`,
+`wheel` and `cancel` are the other keys while it is in hand. The rules'
+`behaviour.json` declares each command by the name after the colon, with
+its `aim_reach` and `cooldown_ticks`.
 
 ## The image `shot` field
 
