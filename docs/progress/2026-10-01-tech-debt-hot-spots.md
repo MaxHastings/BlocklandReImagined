@@ -6,14 +6,15 @@ debt in v0.1.11. Survey of the 118 merge commits on main since 2026-09-28
 crates/client/src/app.rs 59, docs/modding/README.md 24, sim session.rs 11,
 render scene.rs and scene.wgsl 11 each, package defaults.rs 11,
 default-addons.json 10, package-runtime script.rs 10, session/packages.rs 9,
-ops.rs 8. The protocol VERSION line was hand-renumbered for every network
+ops.rs 8 (progress.md already merges with the union driver, so its count
+rarely meant a real conflict; app.rs and the shared lists did). The protocol VERSION line was hand-renumbered for every network
 lane. The full findings and ranked plan are in the project's
 tech-debt/plan.md.
 
 First two fixes, which touch nothing a lane is editing:
 
 - Progress entries are one file each in `docs/progress/` (this is the
-  first). docs/progress.md keeps the history and is only appended to, so
+  first), so entries no longer interleave under the union merge. docs/progress.md keeps the history and is only appended to, so
   entries already written there on older branches still merge.
 - `docs/architecture/seams.md` lists each engine seam being built and the
   thread that owns it, so a second thread builds on it instead of starting
