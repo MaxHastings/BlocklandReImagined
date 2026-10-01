@@ -28,10 +28,13 @@
 //! way it walked, through openings included.
 use super::*;
 use crate::bot_kind::BotKind;
+use behaviour::{Behaviour, Situation, choose};
 use crate::nav::{Body, Found, Ground, Nav, Search, Waypoint};
 use bri_content::passage::{Way, carried_yaw};
 use bri_package_runtime::ops::ObjectRef;
 use bri_weapons::ActorId;
+
+mod behaviour;
 
 pub const MAX_BOTS: usize = bri_package_runtime::ops::MAX_BOTS;
 const TICK: f32 = 1.0 / 120.0;
@@ -115,6 +118,8 @@ struct Brain {
     error: (f32, f32),
     next_error: u64,
     fire_down: bool,
+    /// What it is doing ([`behaviour`]).
+    behaviour: Behaviour,
     /// Carrying what it holds to throw it.
     carry: Option<Carry>,
     /// No grabbing before this tick (just threw).
@@ -184,6 +189,7 @@ impl Brain {
             error: (0.0, 0.0),
             next_error: 0,
             fire_down: false,
+            behaviour: Behaviour::default(),
             carry: None,
             next_grab: 0,
         }
@@ -205,11 +211,69 @@ impl Brain {
             self.settled = false;
         }
     }
+    /// The goal of going after an enemy: standing its ground in its band
+    /// (`fight`), after the enemy in sight, or to where one was. Whether it
+    /// stands, and whether it gives ground (closer than `near`).
+    fn pursue(&mut self, enemy: Option<Seen>, fight: bool, near: f32, feet: Vec3) -> (bool, bool) {
+        match (enemy, self.memory) {
+            (Some(seen), _) if fight => {
+                self.set_goal(None);
+                (true, flat(seen.feet - feet).length() < near)
+            }
+            (Some(seen), _) => {
+                // The chase heads for where it really stands, and the path
+                // finds the way there.
+                let moved_on = match self.goal {
+                    Some(Goal::Chase(p)) => p.distance(seen.real) > 2.5,
+                    _ => true,
+                };
+                if moved_on {
+                    self.set_goal(Some(Goal::Chase(seen.real)));
+                }
+                (false, false)
+            }
+            (None, Some((at, _))) => {
+                if flat(at - feet).length() > 1.5 {
+                    if self.goal != Some(Goal::Search(at)) {
+                        self.set_goal(Some(Goal::Search(at)));
+                    }
+                    (false, false)
+                } else {
+                    // Got there: look around until it forgets.
+                    self.set_goal(None);
+                    (true, false)
+                }
+            }
+            (None, None) => (false, false),
+        }
+    }
+    /// The goal of strolling: somewhere near its brick, or for a rules bot
+    /// (no brick to return to) near wherever it is (Slayer's bots,
+    /// `hReturnToSpawn` off), now and then.
+    fn wander(&mut self, feet: Vec3, tick: u64) {
+        if !matches!(self.goal, None | Some(Goal::Wander(_))) {
+            // A fight or a carry is over.
+            self.set_goal(None);
+        }
+        if self.brick.is_none() {
+            self.home = feet;
+        }
+        if self.goal.is_none() && tick >= self.next_wander {
+            let angle = self.random() * std::f32::consts::TAU;
+            let radius = self.random() * self.kind.wander_radius;
+            let around = if self.brick.is_none() { feet } else { self.home };
+            let point = around + Vec3::new(angle.sin(), 0.0, angle.cos()) * radius;
+            self.set_goal(Some(Goal::Wander(point)));
+            self.next_wander = tick + 240 + (self.random() * 480.0) as u64;
+        }
+    }
 }
 /// What the held weapon wants: how far it reaches and how its shots fly.
 #[derive(Clone, Copy, Debug)]
 struct Weapon {
     melee: bool,
+    /// Its trigger is held down on target rather than tapped (`BotUse`).
+    hold: bool,
     reach: f32,
     speed: f32,
     /// Downward acceleration of its projectile, units per second squared.
@@ -694,6 +758,8 @@ impl Session {
     /// The held weapon's reach and flight.
     fn bot_weapon(&self, bot: OwnerId) -> Option<Weapon> {
         let (image, _) = self.weapons.image_state(ActorId(bot), 0)?;
+        let using = image.bot.unwrap_or_default();
+        let hold = using.fire == bri_weapons::BotFire::Hold;
         let projectile = image
             .projectile
             .as_ref()
@@ -701,15 +767,19 @@ impl Session {
         let Some(p) = projectile else {
             return Some(Weapon {
                 melee: true,
-                reach: 3.0,
+                hold,
+                reach: using.reach.unwrap_or(3.0),
                 speed: 0.0,
                 fall: 0.0,
                 splash: 0.0,
             });
         };
-        let reach = p.speed * p.lifetime_ticks as f32 * TICK;
+        let reach = using
+            .reach
+            .unwrap_or(p.speed * p.lifetime_ticks as f32 * TICK);
         Some(Weapon {
             melee: image.melee || reach < 6.0,
+            hold,
             reach,
             speed: p.speed,
             fall: bri_weapons::runtime::fall_per_tick(p) * 120.0,
@@ -884,73 +954,54 @@ impl Session {
             brain.target = None;
         }
 
+        // Behaviour: the most urgent that applies.
+        let enemy = sight.target.filter(|_| away <= kind.chase_radius);
+        let (near, far) = weapon.map_or((2.0, 3.0), |w| w.band());
+        let walks_up = |to: Vec3| {
+            brain
+                .plan
+                .last()
+                .is_some_and(|w| w.feet.y > to.y - body.step - 0.5)
+        };
+        let situation = Situation {
+            holding,
+            fly: air.is_some_and(|a| !walks_up(a.to)),
+            enemy: enemy.map(|seen| (flat(seen.feet - feet).length(), seen.feet.y - feet.y)),
+            far,
+            step: body.step,
+            remembers: brain.memory.is_some(),
+            strayed: brain.brick.is_some() && away > kind.wander_radius + 4.0,
+            home: brain.goal != Some(Goal::Home),
+        };
+        let behaviour = choose(brain.behaviour, &situation);
+        brain.behaviour = behaviour;
+
         // Goal.
-        let mut hold = false;
-        let mut back_off = false;
-        if let Some(carry) = brain.carry {
-            brain.set_goal(carry.to.map(Goal::Carry));
-        } else {
-            match (
-                sight.target.filter(|_| away <= kind.chase_radius),
-                brain.memory,
-            ) {
-                (Some(seen), _) => {
-                    let (near, far) = weapon.map_or((2.0, 3.0), |w| w.band());
-                    // How far it is the way it is seen; the chase heads for
-                    // where it really stands, and the path finds the way there.
-                    let distance = flat(seen.feet - feet).length();
-                    if distance > far || (seen.feet.y - feet.y).abs() > body.step + 1.0 {
-                        let moved_on = match brain.goal {
-                            Some(Goal::Chase(p)) => p.distance(seen.real) > 2.5,
-                            _ => true,
-                        };
-                        if moved_on {
-                            brain.set_goal(Some(Goal::Chase(seen.real)));
-                        }
-                    } else {
-                        brain.set_goal(None);
-                        hold = true;
-                        back_off = distance < near;
-                    }
-                }
-                (None, Some((at, _))) => {
-                    if flat(at - feet).length() > 1.5 {
-                        if brain.goal != Some(Goal::Search(at)) {
-                            brain.set_goal(Some(Goal::Search(at)));
-                        }
-                    } else {
-                        // Got there: look around until it forgets.
-                        brain.set_goal(None);
-                        hold = true;
-                    }
-                }
-                (None, None) => match brain.goal {
-                    // The fight is over: back to its brick's surroundings.
-                    Some(Goal::Chase(_) | Goal::Search(_)) => brain.set_goal(None),
-                    // A rules bot has no brick to return to: it roams on from
-                    // wherever it is (Slayer's bots, `hReturnToSpawn` off).
-                    None if brain.brick.is_none() => {
-                        brain.home = feet;
-                        if tick >= brain.next_wander {
-                            let angle = brain.random() * std::f32::consts::TAU;
-                            let radius = brain.random() * kind.wander_radius;
-                            let point = feet + Vec3::new(angle.sin(), 0.0, angle.cos()) * radius;
-                            brain.set_goal(Some(Goal::Wander(point)));
-                            brain.next_wander = tick + 240 + (brain.random() * 480.0) as u64;
-                        }
-                    }
-                    _ if away > kind.wander_radius + 4.0 => brain.set_goal(Some(Goal::Home)),
-                    None if tick >= brain.next_wander => {
-                        let angle = brain.random() * std::f32::consts::TAU;
-                        let radius = brain.random() * kind.wander_radius;
-                        let point = brain.home + Vec3::new(angle.sin(), 0.0, angle.cos()) * radius;
-                        brain.set_goal(Some(Goal::Wander(point)));
-                        brain.next_wander = tick + 240 + (brain.random() * 480.0) as u64;
-                    }
-                    _ => {}
-                },
+        let (hold, back_off) = match behaviour {
+            Behaviour::Carry => {
+                brain.set_goal(brain.carry.and_then(|c| c.to).map(Goal::Carry));
+                (false, false)
             }
-        }
+            Behaviour::Fight => brain.pursue(enemy, true, near, feet),
+            Behaviour::Chase | Behaviour::Search => brain.pursue(enemy, false, near, feet),
+            // Flying goes after them as walking would, so its path tells
+            // when a walk leads up after all.
+            Behaviour::Fly => {
+                let fight = enemy.is_some_and(|seen| {
+                    flat(seen.feet - feet).length() <= far
+                        && (seen.feet.y - feet.y).abs() <= body.step + 1.0
+                });
+                brain.pursue(enemy, fight, near, feet)
+            }
+            Behaviour::Return => {
+                brain.set_goal(Some(Goal::Home));
+                (false, false)
+            }
+            Behaviour::Wander => {
+                brain.wander(feet, tick);
+                (false, false)
+            }
+        };
 
         // Path.
         let home = brain.home;
@@ -1033,7 +1084,9 @@ impl Session {
         let mut aim_pitch = 0.0;
         let mut fire = false;
         let mut step = kind.turn_degrees.to_radians() * TICK;
-        if let Some(carry) = brain.carry {
+        if behaviour == Behaviour::Carry
+            && let Some(carry) = brain.carry
+        {
             // Hold on while carrying; the swing turns as fast as it can,
             // rising, and lets go while still turning, so it flings.
             fire = true;
@@ -1116,44 +1169,41 @@ impl Session {
         if let Some(next) = wanted {
             direction = flat(next.through.unwrap_or(next.feet) - feet).normalize_or_zero();
             input.jump = next.jump && flat(next.feet - feet).length() < 1.6 && state.grounded;
-        } else if hold && sight.target.is_some() && brain.carry.is_none() {
+        }
+        match behaviour {
             // In its band: strafe so it is not a still target, and give
             // ground if too close.
-            let side = if (tick / 90 + bot).is_multiple_of(2) {
-                0.7
-            } else {
-                -0.7
-            };
-            direction = right * side;
-            if back_off {
-                direction -= forward;
+            Behaviour::Fight if wanted.is_none() && hold => {
+                let side = if (tick / 90 + bot).is_multiple_of(2) {
+                    0.7
+                } else {
+                    -0.7
+                };
+                direction = right * side;
+                if back_off {
+                    direction -= forward;
+                }
             }
-        }
-        // Someone up where no walk leads: jet up and over to them, as a
-        // player would, and come down by them.
-        let walks_there = |to: Vec3| {
-            brain
-                .plan
-                .last()
-                .is_some_and(|w| w.feet.y > to.y - body.step - 0.5)
-        };
-        if brain.carry.is_none()
-            && let Some(air) = air
-            && !walks_there(air.to)
-        {
-            // Jets lift hardest straight up and lean into the move, so it
-            // climbs first and then steers over, gliding down on them.
-            let toward = flat(air.to - feet);
-            input.jet = toward.length() > 1.0 || feet.y < air.to.y + 0.5;
-            direction = if air.roofed {
-                // Under something: out from under it first.
-                let away = -toward;
-                if away.length() > 0.1 { away.normalize() } else { forward }
-            } else if feet.y > air.to.y + 1.0 && toward.length() > 1.0 {
-                toward.normalize() * (toward.length() / 3.0).min(1.0)
-            } else {
-                Vec3::ZERO
-            };
+            // Up where no walk leads: jet up and over to them, as a player
+            // would, and come down by them. Jets lift hardest straight up
+            // and lean into the move, so it climbs first and then steers
+            // over, gliding down on them.
+            Behaviour::Fly => {
+                if let Some(air) = air {
+                    let toward = flat(air.to - feet);
+                    input.jet = toward.length() > 1.0 || feet.y < air.to.y + 0.5;
+                    direction = if air.roofed {
+                        // Under something: out from under it first.
+                        let away = -toward;
+                        if away.length() > 0.1 { away.normalize() } else { forward }
+                    } else if feet.y > air.to.y + 1.0 && toward.length() > 1.0 {
+                        toward.normalize() * (toward.length() / 3.0).min(1.0)
+                    } else {
+                        Vec3::ZERO
+                    };
+                }
+            }
+            _ => {}
         }
         input.forward = direction.dot(forward).clamp(-1.0, 1.0);
         input.right = direction.dot(right).clamp(-1.0, 1.0);
@@ -1188,9 +1238,11 @@ impl Session {
         if forget && let Some((_, nav)) = self.bots.navs.iter_mut().find(|(b, _)| *b == body) {
             nav.invalidate(feet - Vec3::splat(1.0), feet + Vec3::splat(1.0), &body);
         }
-        // Pulse the trigger so semi-automatic weapons keep firing; a tool
-        // that reaches and holds keeps it down.
-        let pulse = fire && !grabbing && tick.is_multiple_of(40);
+        // Tap the trigger so semi-automatic weapons keep firing; a tool
+        // that holds (as its data says, or reaching or holding now) keeps
+        // it down.
+        let held_down = grabbing || weapon.is_some_and(|w| w.hold);
+        let pulse = fire && !held_down && tick.is_multiple_of(40);
         brain.fire_down = fire && !pulse;
         self.movement(bot, sequence, input)?;
         if sight.target.is_some() {

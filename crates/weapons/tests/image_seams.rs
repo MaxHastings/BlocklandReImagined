@@ -100,3 +100,24 @@ fn sway_is_a_figure_of_eight() {
     assert!((pitch - a / 2.0).abs() < 1e-6, "{pitch}");
     assert_eq!(sway.offset(0.3), sway.offset(1.3));
 }
+
+/// How bots use an image (`bot`): its fire style and reach, from data.
+#[test]
+fn bot_use_is_read_and_limited() {
+    let with = |bot: serde_json::Value| {
+        let mut json: serde_json::Value = serde_json::to_value(pack()).unwrap();
+        json["images"][IMAGE]["bot"] = bot;
+        serde_json::from_value::<Pack>(json)
+            .map_err(|e| e.to_string())
+            .and_then(|p| p.validate().map(|_| p).map_err(|e| e.to_string()))
+    };
+    let pack = with(serde_json::json!({"fire": "hold", "reach": 8.0})).unwrap();
+    let bot = pack.images[IMAGE].bot.unwrap();
+    assert_eq!(bot.fire, BotFire::Hold);
+    assert_eq!(bot.reach, Some(8.0));
+    assert_eq!(with(serde_json::json!({})).unwrap().images[IMAGE].bot.unwrap().fire, BotFire::Tap);
+    assert!(with(serde_json::json!({"fire": "spray"})).is_err());
+    assert!(with(serde_json::json!({"reach": 0.0})).is_err());
+    assert!(with(serde_json::json!({"reach": 5000.0})).is_err());
+    assert!(with(serde_json::json!({"aim": 1})).is_err());
+}

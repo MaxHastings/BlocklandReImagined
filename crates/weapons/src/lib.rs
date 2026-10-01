@@ -459,6 +459,28 @@ pub struct SoundDef {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub stock: bool,
 }
+/// How bots use an image (`Image::bot`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BotUse {
+    #[serde(default)]
+    pub fire: BotFire,
+    /// How far it reaches, in units, when its projectile does not say
+    /// (or it has none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reach: Option<f32>,
+}
+/// How a bot pulls an image's trigger.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BotFire {
+    /// Pressed again and again, so a semi-automatic weapon keeps firing.
+    #[default]
+    Tap,
+    /// Held down while it is on target: a tool that reaches and holds
+    /// (the Gravity Gun).
+    Hold,
+}
 fn full_volume() -> f32 {
     1.0
 }
@@ -501,6 +523,10 @@ pub struct Image {
     /// Aiming zoom (a scope, or aim down sights).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub zoom: Option<Zoom>,
+    /// How bots use it. Without, they take its reach from its projectile
+    /// (close range without one) and tap the trigger.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot: Option<BotUse>,
     /// The game's crosshair shows while this image is held.
     #[serde(default = "yes", skip_serializing_if = "is_true")]
     pub crosshair: bool,
@@ -2586,6 +2612,13 @@ impl Pack {
             ensure!(
                 image.min_shot_ticks <= 36000 && image.mount_point < 32,
                 "Invalid image mount/timing"
+            );
+            ensure!(
+                image
+                    .bot
+                    .and_then(|b| b.reach)
+                    .is_none_or(|r| r.is_finite() && r > 0.0 && r <= 2000.0),
+                "Invalid image bot reach"
             );
             ensure!(
                 image.command.as_deref().is_none_or(is_image_command)

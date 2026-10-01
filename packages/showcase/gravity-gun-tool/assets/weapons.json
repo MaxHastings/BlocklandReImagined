@@ -47,6 +47,9 @@
       "arm_ready": true,
       "casing": "",
       "min_shot_ticks": 0,
+      "bot": {
+        "fire": "hold"
+      },
       "states": [
         {
           "name": "Activate",
