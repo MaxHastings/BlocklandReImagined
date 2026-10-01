@@ -4,7 +4,7 @@
   "port": "event_addammott",
   "status": "partial",
   "sha256": [
-    "3dfd229feab03f8a979b26f79c3a22902df113127338640af5fedba0536b943b"
+    "ee9357dbb0586d7a452d5402899077f8c83bca4bdf48d993b06ee3a4390b21e5"
   ],
   "covers": {
     "server.cs": {

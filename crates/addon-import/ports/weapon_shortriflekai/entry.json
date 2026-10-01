@@ -4,7 +4,7 @@
   "port": "weapon_shortriflekai",
   "status": "partial",
   "sha256": [
-    "a1ad64d8de4742a69bb9f78752ea54c50f0a63e6d6e8765e62e217ab4aac8f09"
+    "cc237206b654849a99be74f0041ec85a3b7d04f34acd025ade3d7ac1d3be9baf"
   ],
   "covers": {
     "ShortRifleImage::fireRaycast": {
