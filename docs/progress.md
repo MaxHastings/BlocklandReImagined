@@ -8586,3 +8586,20 @@ Tests: `items::add_on_icon_tests::an_item_looks_the_same_in_the_hand_and_in_the_
 layer), `runtime::a_dropped_paint_tinted_tool_keeps_the_colour_it_was_held_in`;
 `stock_items_that_looked_different_in_the_world` (ignored, needs content)
 lists stock items whose own model or colour differed from their image's.
+
+## 2026-10-01: The Gravity Gun catches what comes in range with the trigger held
+
+Max, v0.1.10: "if i have it activated (but distance to grab is too far) but
+then i move closer while still holding it active it doesn't pick it up
+until i let go of left click and click again". The grab ran once, on the
+press. A new engine seam, `reach` (`Op::Reach`), keeps reaching: while the
+player holds nothing, each tick the engine looks where they look (the
+server's own look state, so no extra traffic) up to the reach, before any
+brick, and holds the first thing they may move by the spot it met, as the
+grab would. The Gravity Gun reaches whenever its grab finds nothing; letting
+go (`let_go`) ends it. Its `on_tick` shows the catch in the beam
+(`held_distance` gives the reach). Holds run only on the host, so there is
+nothing to predict. Test:
+`showcase::holding_the_trigger_catches_what_comes_in_range_without_a_second_click`
+(a crate 75 units off, trigger held, walk toward it: caught between 50 and
+62 units off with no second click, and let go stays let go).

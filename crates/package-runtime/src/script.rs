@@ -1670,6 +1670,46 @@ fn register_physics(engine: &mut Engine) {
             distance: float(&distance)?,
         })
     });
+    // `reach(player, distance, #{ near: d, force: f, turn: true })`: hold
+    // the first thing that comes where they look within `distance`
+    // (`Op::Reach`); every option may be left out.
+    engine.register_fn(
+        "reach",
+        |player: Dynamic, distance: Dynamic, options: rhai::Map| {
+            for key in options.keys() {
+                if !matches!(key.as_str(), "near" | "force" | "turn") {
+                    return fail(format!("reach has no option `{key}` (near, force, turn)"));
+                }
+            }
+            let near = options.get("near").map(float).transpose()?.unwrap_or(0.5);
+            let force = options.get("force").map(float).transpose()?;
+            let turn = match options.get("turn") {
+                None => false,
+                Some(value) => match value.as_bool() {
+                    Ok(b) => b,
+                    Err(_) => return fail("reach's `turn` is true or false"),
+                },
+            };
+            push(Op::Reach {
+                player: id(&player)?,
+                distance: float(&distance)?,
+                near,
+                force,
+                turn,
+            })
+        },
+    );
+    // How far off what `player` holds is carried, or () when nothing is held.
+    engine.register_fn("held_distance", |player: Dynamic| {
+        with(|i| {
+            let player = id(&player)?;
+            Ok(i.snapshot
+                .holds
+                .iter()
+                .find(|h| h.player == player)
+                .map_or(Dynamic::UNIT, |h| Dynamic::from_float(f64::from(h.distance))))
+        })
+    });
     engine.register_fn("let_go", |player: Dynamic| {
         push(Op::LetGo {
             player: id(&player)?,

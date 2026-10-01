@@ -300,9 +300,24 @@ pub enum Op {
         player: u64,
         distance: f32,
     },
-    /// Let go of what `player` holds.
+    /// Let go of what `player` holds, and stop reaching.
     LetGo {
         player: u64,
+    },
+    /// Keep reaching for something to hold: every tick, while `player`
+    /// holds nothing, the engine looks where they look, up to `distance`,
+    /// and holds the first thing it meets that they may move, by the spot
+    /// it met, as far off as it was (at least `near`), as [`Op::Hold`]
+    /// with `force` and `turn` would. Reaching ends once it holds
+    /// something, on `let_go`, or when the player dies. The script sees
+    /// the catch with `held` (a gun whose trigger stays down catches what
+    /// comes in range, with no second click).
+    Reach {
+        player: u64,
+        distance: f32,
+        near: f32,
+        force: Option<f32>,
+        turn: bool,
     },
     /// Spawn a vehicle definition (`namespace:vehicle/name`) of this package
     /// or one it depends on, turned `yaw` radians and moving at `velocity`.
@@ -491,6 +506,7 @@ impl Op {
             | Self::Hold { .. }
             | Self::HoldDistance { .. }
             | Self::LetGo { .. }
+            | Self::Reach { .. }
             | Self::SpawnVehicle { .. }
             | Self::RemoveVehicle { .. } => "physics",
         }
@@ -671,6 +687,18 @@ impl Op {
             Self::HoldDistance { distance, .. } => {
                 distance.is_finite() && (0.5..=MAX_HOLD_DISTANCE).contains(distance)
             }
+            Self::Reach {
+                distance,
+                near,
+                force,
+                ..
+            } => {
+                distance.is_finite()
+                    && near.is_finite()
+                    && (0.5..=MAX_HOLD_DISTANCE).contains(near)
+                    && (*near..=MAX_HOLD_DISTANCE).contains(distance)
+                    && force.is_none_or(|f| f.is_finite() && f > 0.0 && f <= MAX_HOLD_FORCE)
+            }
             Self::LetGo { .. } | Self::RemoveVehicle { .. } => true,
             Self::Fire {
                 projectile,
@@ -794,6 +822,7 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::Hold { .. } => "hold",
         Op::HoldDistance { .. } => "hold_distance",
         Op::LetGo { .. } => "let_go",
+        Op::Reach { .. } => "reach",
         Op::SpawnVehicle { .. } => "spawn_vehicle",
         Op::RemoveVehicle { .. } => "remove_vehicle",
         Op::Fire { .. } => "fire",
