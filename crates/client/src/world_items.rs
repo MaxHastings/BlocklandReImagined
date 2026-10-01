@@ -1,6 +1,6 @@
 //! Shared native item geometry projected from authoritative item/weapon state.
 //! No source script fields, physics authority, window or gameplay input.
-use crate::items::{ItemAssets, ItemMesh};
+use crate::items::{Appearance, ItemAssets, ItemMesh};
 use anyhow::{Context, Result, ensure};
 use bri_render::scene::{
     GpuInstances, GpuScene, MeshBatch, SceneRenderer, SceneTransform, SceneVertex,
@@ -40,8 +40,9 @@ pub struct WorldItemFrame {
     pub eye: Vec3,
     pub local_owner: Option<u64>,
     pub first_person: bool,
-    /// Mirrors may show the local player: in first person their held
-    /// images also pose as others see them, drawn only in reflections.
+    /// In first person the local player's held images also pose as others
+    /// see them (`ItemIdentity::Reflected`), for mirrors, metal and the
+    /// shadows they cast ([`WorldItems::reflection_draws`]).
     pub reflected_self: bool,
 }
 /// World-space poses from the SAME sampled avatar used by its visible geometry.
@@ -172,6 +173,25 @@ struct Candidate {
     pose: PoseKey,
     transform: SceneTransform,
     priority: bool,
+    /// The image whose skin it wears, and whether that skin is lit up
+    /// (`ItemSkin::energy_states`).
+    skin: Option<(String, bool)>,
+}
+/// A copy of a skinned item drawn this frame (`ItemSkin`), for
+/// `item_skins`: its skin is drawn over it, wherever it is.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SkinnedCopy {
+    pub identity: ItemIdentity,
+    /// The image whose skin it wears.
+    pub image: String,
+    pub model: String,
+    pub transform: Mat4,
+    /// Its holder's image is in one of the skin's energy states.
+    pub energized: bool,
+    /// The holder's own first-person copy: not seen in mirrors.
+    pub first_person: bool,
+    /// The holder's copy as mirrors show it: seen only in them.
+    pub reflected: bool,
 }
 type PoseGroups = Vec<(PoseKey, Vec<Candidate>)>;
 
@@ -200,6 +220,8 @@ pub struct WorldItems {
     addon_meshes: BTreeMap<String, Option<Arc<bri_client_sandbox::host::Mesh>>>,
     /// Loose models to draw next sync: model key, transform, tint.
     loose: Vec<(String, Mat4, [f32; 4])>,
+    /// Skinned copies the last sync drew.
+    skinned: Vec<SkinnedCopy>,
     pub diagnostics: WorldItemDiagnostics,
 }
 /// Most loose models drawn at once.
@@ -238,6 +260,7 @@ impl WorldItems {
             moves_drawn: BTreeMap::new(),
             addon_meshes: BTreeMap::new(),
             loose: Vec::new(),
+            skinned: Vec::new(),
             mounted: BTreeMap::new(),
             last_seconds: None,
             palette: Vec::new(),
@@ -251,6 +274,7 @@ impl WorldItems {
         self.clocks.clear();
         self.mounted.clear();
         self.headings.clear();
+        self.skinned.clear();
         self.last_seconds = None;
         self.diagnostics = Default::default();
     }
@@ -348,7 +372,7 @@ impl WorldItems {
             if ghost {
                 self.diagnostics.cooling_down += 1;
             }
-            let Some(key) = self.item_key(&item.item, ghost) else {
+            let Some((key, skin)) = self.item_key(&item.item, None, ghost) else {
                 continue;
             };
             candidates.push(Candidate {
@@ -363,6 +387,8 @@ impl WorldItems {
                     tint: [1., 1., 1., if ghost { RESPAWN_GHOST_ALPHA } else { 1. }],
                 },
                 priority: false,
+                // A ghost is the item's colour alone (`Item::fadeOut`).
+                skin: skin.filter(|_| !ghost).map(|image| (image, false)),
             });
         }
         for drop in &view.drops {
@@ -370,9 +396,8 @@ impl WorldItems {
             if alpha == 0. {
                 continue;
             }
-            let Some(key) =
-                self.item_key(&drop.item, frame.tick.saturating_add(120) >= drop.expires)
-            else {
+            let fading = frame.tick.saturating_add(120) >= drop.expires;
+            let Some((key, skin)) = self.item_key(&drop.item, drop.paint, fading) else {
                 continue;
             };
             candidates.push(Candidate {
@@ -388,6 +413,8 @@ impl WorldItems {
                     tint: [1., 1., 1., alpha],
                 },
                 priority: false,
+                // The skin is solid: it leaves once the drop starts to fade.
+                skin: skin.filter(|_| alpha >= 1.).map(|image| (image, false)),
             });
         }
         for (i, (model, transform, tint)) in self.loose.iter().enumerate() {
@@ -400,6 +427,7 @@ impl WorldItems {
                     tint: *tint,
                 },
                 priority: false,
+                skin: None,
             });
         }
         self.headings
@@ -476,6 +504,7 @@ impl WorldItems {
                     tint: [1., 1., 1., alpha],
                 },
                 priority: false,
+                skin: None,
             });
         }
         let mounted: BTreeMap<(u64, u8), (String, String, Option<u8>)> = view
@@ -498,18 +527,20 @@ impl WorldItems {
                 self.missing(format!("Missing mounted image {image_id}"));
                 continue;
             };
-            if image.model.is_empty() {
+            // Its look is the item's look (`ItemAssets::image_appearance`).
+            let Some(look) = self.assets.image_appearance(image_id) else {
                 self.diagnostics.model_less += 1;
                 continue;
-            }
-            if let Some(color) = paint.and_then(|p| self.palette.get(usize::from(p))) {
-                // The derived `color<N>SprayCanImage`: palette colour shift,
-                // alpha at least 10/255, clear can for translucent colours.
-                image.tint = [color[0], color[1], color[2], color[3].max(10. / 255.)];
-                if color[3] <= 0.99 {
-                    image.model = TRANSLUCENT_SPRAY_CAN.into();
-                }
-            }
+            };
+            let look = self.painted(look, *paint);
+            (image.model, image.tint) = (look.model, look.tint);
+            let skin = look.skin.map(|id| {
+                let energized = self
+                    .assets
+                    .skin(&id)
+                    .is_some_and(|(skin, _)| skin.energy_states.iter().any(|s| s == state_name));
+                (id, energized)
+            });
             let pose_key = self.image_pose(owner, hand, image_id, state_name, frame.seconds)?;
             let pose = poses.entry(owner).or_insert_with(|| host_pose(owner));
             let Some(pose) = pose.as_ref() else {
@@ -585,6 +616,7 @@ impl WorldItems {
                             tint: [1.; 4],
                         },
                         priority: true,
+                        skin: skin.clone(),
                     });
                 }
             }
@@ -612,6 +644,7 @@ impl WorldItems {
                     tint: [1.; 4],
                 },
                 priority: frame.local_owner == Some(owner),
+                skin,
             });
         }
         candidates.sort_by(|a, b| {
@@ -637,34 +670,62 @@ impl WorldItems {
             self.diagnostics.deferred += candidates.len() - self.limits.instances;
             candidates.truncate(self.limits.instances);
         }
+        self.skinned = candidates
+            .iter()
+            .filter_map(|c| {
+                let (image, energized) = c.skin.clone()?;
+                Some(SkinnedCopy {
+                    identity: c.identity,
+                    image,
+                    model: c.model.model.clone(),
+                    transform: c.transform.transform,
+                    energized,
+                    first_person: c.model.first_person,
+                    reflected: c.model.reflected,
+                })
+            })
+            .collect();
         self.prepare(candidates)?;
         Ok(())
     }
 
-    /// `faded` items (`schedulePop`, `Item::fadeOut`) take the ItemData colour
-    /// (or white) and leave their alpha to the instance.
-    fn item_key(&mut self, id: &str, faded: bool) -> Option<ModelKey> {
-        let Some(item) = self.assets.presentation.items.get(id) else {
+    /// An item in the world looks as it does in the hand
+    /// (`ItemAssets::item_appearance`). `faded` items (`schedulePop`,
+    /// `Item::fadeOut`) leave their alpha to the instance.
+    fn item_key(
+        &mut self,
+        id: &str,
+        paint: Option<u8>,
+        faded: bool,
+    ) -> Option<(ModelKey, Option<String>)> {
+        if !self.assets.presentation.items.contains_key(id) {
             self.missing(format!("Missing item presentation {id}"));
             return None;
-        };
-        if item.model.is_empty() {
+        }
+        let Some(look) = self.assets.item_appearance(id) else {
             self.diagnostics.model_less += 1;
             return None;
-        }
-        // Core onAdd applies image color when enabled; schedulePop and fadeOut
-        // set the ItemData color/white separately with their own node alpha.
-        let mut tint = item.tint;
-        if !faded
-            && let Some(image) = self.weapons.images.get(&item.image)
-            && image.color_shift
-        {
-            tint = image.color;
-        }
+        };
+        let look = self.painted(look, paint);
+        let mut tint = look.tint;
         if faded {
             tint[3] = 1.;
         }
-        Some(ModelKey::new(&item.model, tint))
+        Some((ModelKey::new(&look.model, tint), look.skin))
+    }
+    /// `look` in palette colour `paint` (a colour spray can, or a
+    /// `paint_tint` tool held or dropped in its holder's colour).
+    fn painted(&self, mut look: Appearance, paint: Option<u8>) -> Appearance {
+        if let Some(color) = paint.and_then(|p| self.palette.get(usize::from(p))) {
+            // The derived `color<N>SprayCanImage`: palette colour shift,
+            // alpha at least 10/255, clear can for translucent colours.
+            look.tint = [color[0], color[1], color[2], color[3].max(10. / 255.)];
+            if color[3] <= 0.99 {
+                look.model = TRANSLUCENT_SPRAY_CAN.into();
+            }
+            look.skin = None;
+        }
+        look
     }
     fn projectile_pose(&self, model: &str, age: f64) -> Result<PoseKey> {
         let shape = self.assets.shape(model)?;
@@ -989,8 +1050,8 @@ impl WorldItems {
     pub fn draws(&self) -> Vec<(&GpuScene, &GpuInstances)> {
         self.draws_where(|key| !key.reflected)
     }
-    /// What mirrors show: the local player's images as others see them,
-    /// not as first person holds them.
+    /// What mirrors show and what casts shadows: the local player's
+    /// images as others see them, not as first person holds them.
     pub fn reflection_draws(&self) -> Vec<(&GpuScene, &GpuInstances)> {
         self.draws_where(|key| !key.first_person)
     }
@@ -1058,40 +1119,57 @@ impl WorldItems {
     pub fn held_image_meshes(
         &mut self,
     ) -> BTreeMap<String, Arc<bri_client_sandbox::host::Mesh>> {
+        let held: Vec<_> = self
+            .mounted
+            .values()
+            .map(|m| (m.image.clone(), m.model.clone()))
+            .collect();
         let mut out = BTreeMap::new();
-        for m in self.mounted.values() {
-            if m.model.is_empty() || out.contains_key(&m.image) {
+        for (image, model) in held {
+            if model.is_empty() || out.contains_key(&image) {
                 continue;
             }
-            let assets = &self.assets;
-            let mesh = self
-                .addon_meshes
-                .entry(m.model.clone())
-                .or_insert_with(|| {
-                    let scene = assets
-                        .model_scene(&m.model, [1.; 4], Mat4::IDENTITY, None, 0.)
-                        .ok()?;
-                    let vertices: Vec<_> = scene
-                        .vertices
-                        .iter()
-                        .map(|v| bri_client_sandbox::host::Vertex {
-                            position: v.position,
-                            normal: v.normal,
-                            uv: v.uv,
-                        })
-                        .collect();
-                    (!vertices.is_empty() && !scene.indices.is_empty()).then(|| {
-                        Arc::new(bri_client_sandbox::host::Mesh {
-                            vertices,
-                            indices: scene.indices,
-                        })
-                    })
-                });
-            if let Some(mesh) = mesh {
-                out.insert(m.image.clone(), mesh.clone());
+            if let Some(mesh) = self.addon_mesh(&model) {
+                out.insert(image, mesh);
             }
         }
         out
+    }
+    /// Model `model` as an Add-On mesh (position, normal, uv at rest, in
+    /// its own space), built once; `None` for one that will not build.
+    pub fn addon_mesh(&mut self, model: &str) -> Option<Arc<bri_client_sandbox::host::Mesh>> {
+        let assets = &self.assets;
+        self.addon_meshes
+            .entry(model.to_owned())
+            .or_insert_with(|| {
+                let scene = assets
+                    .model_scene(model, [1.; 4], Mat4::IDENTITY, None, 0.)
+                    .ok()?;
+                let vertices: Vec<_> = scene
+                    .vertices
+                    .iter()
+                    .map(|v| bri_client_sandbox::host::Vertex {
+                        position: v.position,
+                        normal: v.normal,
+                        uv: v.uv,
+                    })
+                    .collect();
+                (!vertices.is_empty() && !scene.indices.is_empty()).then(|| {
+                    Arc::new(bri_client_sandbox::host::Mesh {
+                        vertices,
+                        indices: scene.indices,
+                    })
+                })
+            })
+            .clone()
+    }
+    /// The skinned copies the last [`Self::sync`] drew.
+    pub fn skinned(&self) -> &[SkinnedCopy] {
+        &self.skinned
+    }
+    /// The item presentation this draws from.
+    pub fn assets(&self) -> &Arc<ItemAssets> {
+        &self.assets
     }
     /// Source engine falls back from a missing state emitter node to muzzlePoint,
     /// and an image without a muzzlePoint (brickWeapon.dts) emits from its own

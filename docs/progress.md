@@ -8172,6 +8172,38 @@ and the drawing still 80 px across one way). The content test now checks
 the clear border and that the drawing spans the Printer's width or height,
 and writes `target/gravity-gun-icon-vs-printer.png` (dark and light slots;
 target/ is never committed).
+
+Gravity Gun icon kept on disk, drawn off the load path, seen side on
+(v0.1.11 follow-up). The Gate measured the whole Gravity Gun item load at
+286 ms in release (1.65 s in debug), with the icon drawn inside it. Now
+`ItemAssets::load_with` only prepares the request (`item_icon_render::Request`:
+the item's model, the stock model and icon, the spec).
+`ItemAssets::draw_icons(cache)` shows an icon kept under
+`<state>/item-icons/<sha256>.png` at once. Otherwise it draws the icon on a
+thread named "item icon" and keeps it, written through a partial file. The
+sha256 covers a drawing version (`DRAWING`), both meshes and their axes, the
+stock icon's pixels and the spec. Until then the HUD slot shows the PNG or
+letter, and `ItemUi::register_icons` swaps the drawn icon in and uploads
+again. A failed draw is logged to the console.
+
+Angle: Max, in game on v0.1.10, said the icon was "great just seems to be
+wrong perspective angle". The outline fit had searched every turn, and the
+Printer icon's outline also fitted a tumbled one (seen from above and
+behind, nose rolled down). The fit now tries only side profiles
+(`item_icon_render::Profile`): the item's own forward across the picture
+(either way) and its up up the picture, tipped up to 60 degrees in the
+picture and turned up to 46 degrees towards or away. The item is drawn with
+the same profile on its own axes (`Axes`: +Y forward and +Z up as item
+models are held, or mountPoint to muzzlePoint made level). Max liked the
+look, so the relighting tried for this was dropped. Tests:
+`a_drawn_icon_is_kept_for_the_same_request`, `item_ui::a_drawn_icon_replaces_its_stand_in`,
+`a_models_pose_is_recovered_from_its_icon` (the profile and axis directions
+recovered), and `an_item_drawn_like_a_stock_one_points_the_same_way` (a
+model built along other axes gets the stock item's screen directions, up up
+and nose across). The content test now also checks that the gun's forward
+and up point the same ways on screen as the Printer's, and prints the fitted
+profile. It times the load without the icon, the drawing, and the next load
+with the icon kept, and asserts the kept icon is reused.
 ## 2026-09-30 Steel Ball: real steel, minigame-only harm (for v0.1.10, branch `claude/project-thread-bya1ck`)
 
 Max asked for the Steel Ball back, looking like real reflective steel
@@ -8284,6 +8316,90 @@ bri-package-runtime, bri-package, the bri-client lib and the touched bri-sim
 suites pass. Suites needing generated `content/` could not run in the
 cloud. No protocol change.
 
+Max: destroyed vehicles "would turn black right away when on fire" in v20,
+ours kept their colour. Confirmed from the recovered core scripts (read on
+the PC, never run): `WheeledVehicleData::Damage` (18821) and
+`FlyingVehicleData::Damage` (18910) paint every node black at `maxDamage`
+and swap the tires for `emptyTire`; the Tank's own destroy code blackens
+its turret too. Full step-by-step table in
+`docs/audits/vehicle-destruction.md`.
+- `Definition::wreck_color`: black for every Wheeled, Flying and Ball
+  vehicle, Add-On vehicles included; PlayerData mounts keep their colour.
+- The client paints body, turret and animated parts with it while the
+  replicated `destroyed` flag is set, and draws no wheels on a wreck. No
+  wire or protocol change.
+- Accepted gap: v20 also burns in the last 1% of health; health is not
+  replicated, so ours burns from destruction.
+- Wreck fire has one source: the replicated `destroyed` flag plus each
+  definition's `damageEmitter`s (`Definition::wreck_emitters`). The host's
+  burn cue at destruction is gone (one less cue on the wire); actor mounts
+  without damage emitters no longer burn; Add-On damage emitters import.
+- Tests: `bri-client` `vehicles::tests::a_destroyed_vehicle_is_drawn_black_without_its_tires`,
+  `only_vehicle_classes_char_and_player_mounts_keep_their_colour`,
+  `a_wreck_burns_with_its_own_damage_emitters`, `--test actor_effects`.
+## 2026-10-01 Riding seams for classic throw Add-Ons (branch `claude/project-thread-n5mlwe`, protocol 70, for v0.1.11)
+
+A modder (lpsroo) ported Nobot's Script_Nobotthrowmod and sent notes on the
+engine changes his port needed. Max: "The mounting part most imporant". His
+code was read as diagnosis only; the seams are built as general functions.
+
+Engine and script API:
+- `mount_object(mount, rider, node, can_dismount)` and
+  `unmount_object(rider)` (`physics`). A player rides another player on any
+  `mount<N>` node of the body model. The Blockhead's mount points come from
+  its model at host start (`shape_mount_points`, `set_body_mount_points`,
+  client and dedicated server), not from copied numbers. They are filled
+  into bodies drawn with `v20.shape.m` that declare none. `rideable` stays
+  false, so landing on a Blockhead still seats nobody.
+  - `can_dismount` false: jump does not get them off (v20 `canDismount`);
+    turning stays free.
+  - Riders stay seated through either body's archetype change or rescale.
+  - In-place unmount carries the mount's velocity.
+  - A command's player seats only on themselves, and only someone they may
+    move (`may_move`, as hold and push).
+- `on_activate(player)`: the empty-hand click (`Player::activateStuff`).
+  Returning true takes the click; else the stock activate runs.
+- `set_scale(p, s)` (0.2 to 5), `unmount_image(p)`, `set_look_limits(p, up,
+  down)` / `set_look_limits(p, ())` (`player`). Look limits replicate in
+  `Vitals::look_limits` (protocol 70) and reset on respawn.
+- Bots for rules: `bots()`, `player(bot)`, and `bot`, `bot_owner`, `riding`,
+  `seat` in player maps.
+- Bot fixes lpsroo reported, checked on main first:
+  - `player(bot)` returned `()`; now it reads the bot.
+  - A new bot got `on_join`/`on_loadout`/`on_spawn` before it was registered
+    as a bot. Bots now get no player hooks.
+  - A bot from your own brick may be moved by you inside a minigame too (it
+    already could outside). A held bot's brain rests.
+
+Client:
+- A thread-2 action started with empty hands (`armReadyBoth`) keeps
+  playing until the hand changes.
+- Absolute action clips (`armReadyBoth`, `death1`) are layered by priority
+  over locomotion instead of being refused as non-additive. Images that
+  follow the arm still sample the pose without actions (`unacted_nodes`).
+- A rule's look limits bound the arms and head when not on a vehicle.
+
+No bundled throw Add-On: Max picked "originals only" for classic Add-Ons,
+and Electrk's Player Throwing (Script_PlayerThrowing) as the one to port
+("Electrk's is fine"). Players import their own copy (Import Add-On) and a
+port in `crates/addon-import/ports` adds its behaviour on these seams. A
+rule using them lives only as a sim test fixture
+(`crates/sim/tests/fixtures/carry`): an empty-hand click lifts a player
+onto your left hand (mount 1) at 0.6 scale, limp, and the next throws them.
+
+Tests (content-free): `cargo test -p bri-sim --test carry_rules`.
+- Mount points from a synthetic model, with the gap rule.
+- Lift, locked jump, carry, throw ahead with velocity, size and body back.
+- Nobody lifted outside minigames; a dying holder drops the held player.
+- The builder lifts their own bot and a stranger cannot.
+- A new bot reaches no player hook. Mutation-checked: with the old join
+  path it sees `join:2 loadout:2 spawn:2`.
+- `bri-client` avatar test `absolute_actions_take_over_the_nodes_they_animate`
+  (needs the avatar pack, runs in the Gate).
+
+Not done: `mode.json` minigame block (Trench Warfare's is not on main yet).
+Only-Max check: once the Player Throwing port lands, import the original
+and lift and throw a friend or your own bot in a minigame.
 ## 2026-09-30 Trench Warfare game mode (branch `claude/trench-warfare-eq4lxb`)
 
 Max asked for the classic Trench Warfare mode (Glass Add-On 829). That
@@ -8546,6 +8662,108 @@ Tests: `add_on_join::bot_kinds_come_from_the_blockhead_bot_add_on_the_host_runs`
 `add_on_join::a_host_with_the_blockhead_bot_on_spawns_bots_and_one_without_offers_none`
 (generated content: hosts with the Add-On on and off, loads a saved spawn
 brick, counts players). Not run here: the second needs generated content.
+
+## 2026-10-01 Butterfly Knife and HE Grenade ports (branch `claude/butterfly-knife-q2j2lu`)
+
+Max asked for the Butterfly Knife and HE Grenade from his Steam Blockland,
+then chose "originals only": players import their own copies (Start Game >
+Add-Ons > Import) and the game ships only the behaviour. His knife is
+Stratofortress's `Weapon_ButterflyKnife` (RTB 1707), not the "TF2 Butterfly
+Knife" he linked (RTB 327); his grenade is `Weapon_HEGrenade` by TheGeek,
+Pload, Rotondo and Ephialtes. Both were read on his PC, read-only, into
+`.research/butterfly-knife` (never committed). The first version, with
+models and sounds of our own (553df19), was dropped before it shipped.
+
+Engine seam: an image's `scripts` describes, by lower-case state script
+name, what an `Image::on...` function did: `arm` (thread 2 animation),
+`fire` (`Parent::onFire`), `projectile` (a second `ProjectileData` the
+function spawned) and `use_up` (`%obj.tool[%slot] = 0` with
+`serverCmdUnUseTool`). It replaces the built-in name-matched handling for
+that script. Ports may also write `{name:lower}` for ids. The importer now
+keeps the last definition of a function, as Torque does; the knife defines
+`onFiretwo` twice and the later one spawns the jab.
+
+Ports (`crates/addon-import/ports/weapon_butterflyknife`,
+`weapon_hegrenade`), both `verified` against v20's scripts:
+- Knife: a click jabs with `butterflyknifeprojectile` (30 in the original)
+  and swings no arm, as in v20 (its `armattack` version of `onFiretwo` is
+  replaced by the later one). Held 0.7 s and let go it stabs with the
+  image's projectile (100) after `spearThrow`. `backstab = 180` is not a
+  projectile field and does nothing in v20 either.
+- Grenade: a click pulls the pin (it flies off as the casing); held 0.7 s
+  and let go it is thrown and used up, and another grenade in the tools
+  stays. It bounces with its own sound and goes off on its 2.5 s fuse.
+  Its `Armor::onCollision` package (pick up while holding one) needs
+  nothing: the game has no duplicate check.
+
+Tests: `crates/weapons/tests/state_attacks.rs` (the seam), stand-in
+Add-Ons of our own (CC0) in `crates/addon-import/tests/fixtures/ports` with
+`butterfly_knife_port_jabs_and_stabs` and
+`he_grenade_port_pulls_the_pin_then_throws_it_away`, each port's
+`checks.json` through `check-port`, and `real_steam_knife_and_grenade_ports`
+(skips unless Max's Steam Add-Ons and the v20 reference exist). The Gate
+ran it on the PC at 5576cf1: both ports applied to Max's copies (knife
+4d8d0cc5…, grenade 1cae396e…, now listed in `ports.json`).
+## 2026-10-01: One look per item, in the hand, in the world and as its icon
+
+Max, v0.1.10: "my gravity gun looks different on the item spawn than in my
+hand" and "when i drop the item or tool it can look different than the one
+in my hand". The cause: held images, dropped and spawn-brick items and the
+icon each picked their own model and colour, and the Gravity Gun's alien
+skin was drawn only by its effects Add-On over guns in hands. Now an item
+has one look (`items::Appearance`, `Presentation::item_appearance`): its
+image's model, its colour (shifted only with `color_shift`, as the stock
+importer does) and its skin. Held, dropped, spawn-brick, mirrored and icon
+copies all read it, for every item and tool, stock included.
+
+- Skins are part of the look: an Add-On's `looks.json` names a WGSL shader
+  per image (`items::ItemSkin`). The game draws it over every copy
+  (`item_skins`, on `bri_client_sandbox::gpu::LayerRenderer` through the new
+  `LayerSource`), with an Add-On's GPU budgets, in the player's view and in
+  mirrors and the environment probe. A server's skins draw only when the
+  player trusts its code (`ClientCode::trusts_server`), as WGSL in a
+  `client` section does. The alien shell moved from `gravity-gun-fx` into
+  `gravity-gun-tool/assets/skins/alien.wgsl`; the effects no longer draw it.
+- A respawning ghost or an expiring drop no longer turns white: it keeps
+  its look and fades by alpha.
+- A dropped paint-tinted tool (the Fill Can) lies in the colour it was held
+  in: `Drop::paint`, protocol 70.
+- The held tool's shadow is cast from the hand as others see it, not from
+  the first-person copy at the eye: in first person the third-person copy
+  is always posed (`WorldItemFrame::reflected_self`) and casts.
+- The icon's model and colours come from the look: `gravity_gun.render.json`
+  is now `{"skin": {}}`, its base the image's tint and its veins the skin's
+  colour. Its drawing is unchanged (the CPU port of the shader Max approved
+  in v0.1.10), so the icon looks as shipped.
+
+Add-On items checked: Duplicator, Advanced Duplicator, Bubble Blaster and
+the Gravity Gun shift their image colour; Trench Pick and Fill Can are
+white; all held and world models matched. The Gravity Gun alone had a skin.
+Adventure guns, Sniper and Knife/Grenade are not on main yet; they take the
+same path when they land.
+
+Tests: `items::add_on_icon_tests::an_item_looks_the_same_in_the_hand_and_in_the_world`,
+`a_look_is_checked`, `item_skins::tests::*` (views, energy, trust, a stopped
+layer), `runtime::a_dropped_paint_tinted_tool_keeps_the_colour_it_was_held_in`;
+`stock_items_that_looked_different_in_the_world` (ignored, needs content)
+lists stock items whose own model or colour differed from their image's.
+
+## 2026-10-01: The Gravity Gun catches what comes in range with the trigger held
+
+Max, v0.1.10: "if i have it activated (but distance to grab is too far) but
+then i move closer while still holding it active it doesn't pick it up
+until i let go of left click and click again". The grab ran once, on the
+press. A new engine seam, `reach` (`Op::Reach`), keeps reaching: while the
+player holds nothing, each tick the engine looks where they look (the
+server's own look state, so no extra traffic) up to the reach, before any
+brick, and holds the first thing they may move by the spot it met, as the
+grab would. The Gravity Gun reaches whenever its grab finds nothing; letting
+go (`let_go`) ends it. Its `on_tick` shows the catch in the beam
+(`held_distance` gives the reach). Holds run only on the host, so there is
+nothing to predict. Test:
+`showcase::holding_the_trigger_catches_what_comes_in_range_without_a_second_click`
+(a crate 75 units off, trigger held, walk toward it: caught between 50 and
+62 units off with no second click, and let go stays let go).
 ## 2026-10-01 Vehicle destruction looks (v20 audit)
 
 Max: destroyed vehicles "would turn black right away when on fire" in v20,
@@ -8777,3 +8995,94 @@ test boxes now use these hull sizes. Sizes: 1x4x5 (players), 1x14x10
 (Steel Ball, jeep, tank), 1x20x12 (Stunt Plane); mirrors 1x4x5 and
 1x14x10. Still to confirm on the PC: where the turret's mount node puts
 it.
+
+### 2026-10-01 LAG icon
+
+v20's lag icon now shows on joined servers. The authored `LagIcon`
+(32x32 top-right, `lagIcon.png` from the player's own v20 `base/client/ui`,
+already copied by the UI import) was wired to `UiUpdate::Lagging`, which
+nothing sent. Torque's `GameConnection::detectLag` shows it once the server
+has sent nothing for `$Pref::Net::LagThreshold` (400 ms by default) and hides
+it on the next packet; `setLagIcon` skips "local" connections. The engine
+side is `bri_net::lag::LagWatch`: the client app samples the QUIC transport's
+received datagram count each frame (acknowledgements of the movement it sends
+every tick count, so an idle world never looks like lag) and posts the change.
+The game this process hosts never shows it. No wire or protocol change.
+The setLagIcon body and threshold source were inferred from the v20 function
+index, the stock pref default and Torque's engine; not checked against the
+decompiled script text.
+
+Tests: `bri-net lag::tests` (three deterministic cases with explicit
+instants) and `bri-ui runtime_input::lag_icon_shows_only_while_the_host_is_quiet`.
+
+## 2026-10-01 Fill Can: originals only
+
+Max chose "originals only" for every classic Add-On. Our remade Fill Can is
+no longer bundled: its packages, generated icon and icon script are gone
+and it is off the default Add-On list. The engine seams stay (`paint_fill`,
+`Simulation::touching_region`, `grid::share_face`, image `paint_tint`) and
+are still tested through a small fill tool of the test's own in
+`crates/sim/tests/fixtures/fill-can`. Loading the player's own original
+Fill Can from their Blockland Add-Ons folder follows on the shared classic
+Add-On loader.
+
+## A vehicle rolls on through a player it hits (v0.1.11)
+
+Max: "the steel ball when it hits a player should keep going not stop".
+- Root cause: a walking player is a kinematic body, which Rapier's contact
+  solver treats as infinitely heavy, so a Steel Ball (or any vehicle) that
+  hit one bounced back off it as off a wall (about 20 u/s to -2).
+- Fix (`VehiclesWorld::share_contacts`, called from `vehicle_post_step`
+  before impacts are judged): last step's side contact impulses between a
+  vehicle and a player on foot (corpses too) are shared as between two free
+  bodies, the player weighing `PLAYER_MASS` (90). Of the impulse J the
+  vehicle keeps J·M/(m+M), and the player takes -J/(m+M) of velocity, so
+  a 900 kg ball barely slows for a player and a player barely moves it.
+  Contacts from above or below (|normal.y| ≥ 0.7) are left alone so
+  standing on a vehicle is unchanged.
+- A `shove` vehicle's run-over push also lifts the player 4 u/s off the
+  ground, as its tumble does, so the ball rolls on instead of plowing them
+  along the ground's braking.
+- Test: `bri-sim --test showcase a_vehicle_rolls_on_through_a_player_it_hits`
+  (outside a minigame, and in one at a bump, a bowl-over and a kill — Max:
+  "IN A MINIGAME" — the ball keeps over 75% of its speed through the hit
+  and still rolls after 1.5 s; a 300 kg crate slows more but
+  never bounces back). It fails without the fix (20.6 → -2.1).
+
+## Blasts knock the Steel Ball about (v0.1.11)
+
+Max: "explosions from rockets or tank shells don't move steel ball in
+v0.1.10".
+- Blasts did reach the ball: v20's radius impulse divides by the
+  vehicle's mass, so a rocket-sized push (4000 within 6,
+  confirmed against content on the PC; the tank shell's is 5000 within 15)
+  moved the 900 kg ball under 4 units in two seconds, from a hit beside it.
+- New generic vehicle field `blast_scale` (default 1): weapon and blast
+  impulses on a vehicle (`Session::blast_vehicle`, from weapon `Impulse`
+  events and the `radiusImpulse` brick event) are scaled by it. Contacts
+  and the click flip still go by mass. The Steel Ball sets 3.
+- Test: `bri-sim --test showcase
+  rockets_and_tank_shells_knock_the_steel_ball_away` (a synthetic rocket
+  and tank shell exploding on the ground 2.5 units beside the ball, in and
+  out of minigames, roll it more than 6 units in two seconds; 3.75 without
+  the scale).
+
+## Saves come only from the saves folder (v0.1.11)
+
+Max (03:23Z): the game must never search players' Blockland, v20 or Steam
+folders; classic files come in through drop folders in our own folders.
+- `.bls` saves were already a drop folder (`<state>/saves`, the folder the
+  game's own saves use): dropped files convert in the background, once,
+  and join Load Bricks under their map (loose files under Other). The
+  converter also listed the saves of old installs under Program Files and
+  `C:\Blockland` (`OldSaves::find_old_installs`); that search is gone, with
+  the `old_install` flag and its ordering.
+- Saves an earlier version converted from an old install leave the list on
+  the next scan, and their native copies leave the cache. Saves converted
+  from the saves folder keep their copies and do not convert again.
+- Load Bricks' Saves Folder button opens the folder (made first if needed)
+  through `show_drop_folder` in app.rs, the one helper for drop folders
+  (the Add-Ons Folder button can share it).
+- Tests: `bri-client --lib old_saves` (temp folders; an install beside the
+  saves folder is never read, and an earlier index's install entries and
+  copies are dropped).

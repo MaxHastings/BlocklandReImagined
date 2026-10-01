@@ -593,7 +593,7 @@ impl Session {
                     impulse,
                     position,
                     ..
-                } => self.push_vehicle(vehicle, position, impulse),
+                } => self.blast_vehicle(vehicle, position, impulse),
                 WeaponEvent::Key {
                     actor,
                     brick,

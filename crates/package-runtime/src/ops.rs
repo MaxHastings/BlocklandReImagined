@@ -300,9 +300,24 @@ pub enum Op {
         player: u64,
         distance: f32,
     },
-    /// Let go of what `player` holds.
+    /// Let go of what `player` holds, and stop reaching.
     LetGo {
         player: u64,
+    },
+    /// Keep reaching for something to hold: every tick, while `player`
+    /// holds nothing, the engine looks where they look, up to `distance`,
+    /// and holds the first thing it meets that they may move, by the spot
+    /// it met, as far off as it was (at least `near`), as [`Op::Hold`]
+    /// with `force` and `turn` would. Reaching ends once it holds
+    /// something, on `let_go`, or when the player dies. The script sees
+    /// the catch with `held` (a gun whose trigger stays down catches what
+    /// comes in range, with no second click).
+    Reach {
+        player: u64,
+        distance: f32,
+        near: f32,
+        force: Option<f32>,
+        turn: bool,
     },
     /// Spawn a vehicle definition (`namespace:vehicle/name`) of this package
     /// or one it depends on, turned `yaw` radians and moving at `velocity`.
@@ -402,6 +417,42 @@ pub enum Op {
         player: u64,
         image: Option<String>,
     },
+    /// Empty a player's hand (`unMountImage(0)`): the tool they held is put
+    /// away, still in its slot.
+    UnmountImage {
+        player: u64,
+    },
+    /// Seat player `rider` on player `mount`'s mount point `node`
+    /// (`%mount.mountObject(%rider, %node)`; a Blockhead's `Mount<node>`):
+    /// carried with it and drawn on that node as it animates. With
+    /// `can_dismount` false the rider cannot get off by jumping
+    /// (`canDismount = 0`). Riders a rule seats stay on through the mount
+    /// changing body while the new one has the node.
+    MountObject {
+        mount: u64,
+        rider: u64,
+        node: u8,
+        can_dismount: bool,
+    },
+    /// Take `rider` off the player they ride, where they are, moving as
+    /// the mount moved (`unMountObject`).
+    UnmountObject {
+        rider: u64,
+    },
+    /// A player's body scale (`setScale`, `setPlayerScale`); a new body
+    /// is full size again.
+    SetScale {
+        player: u64,
+        scale: f32,
+    },
+    /// Bound how far a player's arms and head follow their look
+    /// (`setLookLimits(%up, %down)`), as `[down, up]` positions from 0
+    /// (all the way up) to 1, or `None` for the whole range. A new body
+    /// looks freely again.
+    SetLookLimits {
+        player: u64,
+        limits: Option<[f32; 2]>,
+    },
 }
 /// The mirror [`Op::MirrorCopy`] stands in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -431,6 +482,10 @@ pub enum SoundAt {
     /// At one player's ears only.
     Player(u64),
 }
+/// Mount points a body may have (`mountObject`'s node).
+pub const MAX_MOUNT_POINTS: usize = 8;
+/// Body scales `set_scale` allows.
+pub const SCALE_RANGE: std::ops::RangeInclusive<f32> = 0.2..=5.0;
 /// The avatar's colour slots, as `setNodeColor` names them.
 pub const AVATAR_SLOTS: [&str; 13] = [
     "head",
@@ -485,12 +540,17 @@ impl Op {
             | Self::SetFov { .. }
             | Self::SetImageAmmo { .. }
             | Self::MountImage { .. }
+            | Self::UnmountImage { .. }
+            | Self::SetScale { .. }
+            | Self::SetLookLimits { .. }
             | Self::SetAvatarColors { .. } => "player",
+            Self::MountObject { .. } | Self::UnmountObject { .. } => "physics",
             Self::Push { .. }
             | Self::Tumble { .. }
             | Self::Hold { .. }
             | Self::HoldDistance { .. }
             | Self::LetGo { .. }
+            | Self::Reach { .. }
             | Self::SpawnVehicle { .. }
             | Self::RemoveVehicle { .. } => "physics",
         }
@@ -515,7 +575,15 @@ impl Op {
             | Self::SetImageAmmo { .. }
             | Self::MirrorCopy { .. }
             | Self::CutCopy { .. }
-            | Self::PaintCopy { .. } => true,
+            | Self::PaintCopy { .. }
+            | Self::UnmountImage { .. }
+            | Self::UnmountObject { .. } => true,
+            Self::MountObject {
+                mount, rider, node, ..
+            } => mount != rider && usize::from(*node) < MAX_MOUNT_POINTS,
+            Self::SetScale { scale, .. } => scale.is_finite() && SCALE_RANGE.contains(scale),
+            Self::SetLookLimits { limits, .. } => limits
+                .is_none_or(|[down, up]| (0.0..=1.0).contains(&down) && (0.0..=1.0).contains(&up)),
             Self::PaintFill { limit, .. } => (1..=MAX_FILL_BRICKS as u32).contains(limit),
             Self::Teleport { position, .. } => finite(position),
             Self::PlaceVoxel { position, material } => {
@@ -671,6 +739,18 @@ impl Op {
             Self::HoldDistance { distance, .. } => {
                 distance.is_finite() && (0.5..=MAX_HOLD_DISTANCE).contains(distance)
             }
+            Self::Reach {
+                distance,
+                near,
+                force,
+                ..
+            } => {
+                distance.is_finite()
+                    && near.is_finite()
+                    && (0.5..=MAX_HOLD_DISTANCE).contains(near)
+                    && (*near..=MAX_HOLD_DISTANCE).contains(distance)
+                    && force.is_none_or(|f| f.is_finite() && f > 0.0 && f <= MAX_HOLD_FORCE)
+            }
             Self::LetGo { .. } | Self::RemoveVehicle { .. } => true,
             Self::Fire {
                 projectile,
@@ -767,6 +847,11 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::SetEnvironment { .. } => "set_environment",
         Op::SetImageAmmo { .. } => "set_image_ammo",
         Op::MountImage { .. } => "mount_image",
+        Op::UnmountImage { .. } => "unmount_image",
+        Op::MountObject { .. } => "mount_object",
+        Op::UnmountObject { .. } => "unmount_object",
+        Op::SetScale { .. } => "set_scale",
+        Op::SetLookLimits { .. } => "set_look_limits",
         Op::SpawnEntity { .. } => "spawn_entity",
         Op::RemoveEntity { .. } => "remove_entity",
         Op::Steer { .. } => "steer",
@@ -794,6 +879,7 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::Hold { .. } => "hold",
         Op::HoldDistance { .. } => "hold_distance",
         Op::LetGo { .. } => "let_go",
+        Op::Reach { .. } => "reach",
         Op::SpawnVehicle { .. } => "spawn_vehicle",
         Op::RemoveVehicle { .. } => "remove_vehicle",
         Op::Fire { .. } => "fire",
