@@ -934,6 +934,7 @@ fn real_sniper_rifles() {
             out: out.clone(),
             reference,
             core: vec![],
+            installed: None,
             version: "1.0.0".into(),
         })
         .unwrap();
