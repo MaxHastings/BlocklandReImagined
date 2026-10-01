@@ -385,15 +385,17 @@ fn sky_orientation_translation_depth_and_distance_fog() -> Result<()> {
     );
     camera.apply_environment(&data);
     let fog = gpu.frame(&mut renderer, &[&foreground, &sky], &camera, (64, 64))?;
+    let haze = (255.0 * env.fog.amount(2.0)).round() as u8;
     for value in &fog[center..center + 3] {
         assert!(
-            value.abs_diff(191) <= 1,
-            "Expected 75% haze halfway through authored range, got {value}"
+            value.abs_diff(haze) <= 2,
+            "Expected {haze} haze halfway through authored range, got {value}"
         );
     }
     assert_eq!(env.fog.amount(0.5), 0.0);
     assert_eq!(env.fog.amount(1.0), 0.0);
-    assert_eq!(env.fog.amount(2.0), 0.75);
+    assert!((env.fog.amount(2.0) - (1.0 - (-2.0_f32).exp())).abs() < 1e-5);
+    assert_eq!(env.fog.amount(3.0), 1.0);
     assert_eq!(env.fog.amount(10.0), 1.0);
     Ok(())
 }
@@ -411,19 +413,19 @@ fn sky_fades_into_the_world_fog_at_the_horizon() -> Result<()> {
     bri_render::environment_scene::append(&mut data, &env, &[1, 2, 3, 4, 5, 6], &[])?;
     let sky = renderer.upload(&gpu.device, &gpu.queue, &data)?;
     let center = (32 * 64 + 32) * 4;
-    // A ray rising so that it reaches the fog ceiling halfway into the fog.
-    let up = bri_content::environment::SKY_FOG_CEILING / 550.0;
-    let rising = Vec3::new(0.0, up, (1.0 - up * up).sqrt());
-    // The centre pixel's own ray sits half a pixel right of and below the
-    // view direction.
+    // Each centre pixel's own ray sits half a pixel off the view direction.
     let half_pixel = 30_f32.to_radians().tan() / 64.0;
+    let rising = Vec3::new(0.0, 0.1, 1.0).normalize();
     let right = rising.cross(Vec3::Y).normalize();
     let ray = (rising + (right - right.cross(rising)) * half_pixel).normalize();
-    let haze = (255.0 * env.fog.sky_amount(ray.y)).round() as u8;
+    let fogged = |face: [u8; 3], up: f32| {
+        let a = env.fog.sky_amount(up);
+        face.map(|c| (f32::from(c) * (1.0 - a) + 255.0 * a).round() as u8)
+    };
     for (direction, expected) in [
         (Vec3::Z, [255, 255, 255]),
-        (rising, [255, haze, haze]),
-        (Vec3::Y, [255, 0, 255]),
+        (rising, fogged([255, 0, 0], ray.y)),
+        (Vec3::Y, fogged([255, 0, 255], 1.0)),
     ] {
         let mut camera = Camera::perspective(
             [0.0; 3],
@@ -443,9 +445,17 @@ fn sky_fades_into_the_world_fog_at_the_horizon() -> Result<()> {
             );
         }
     }
+    // A thin fog leaves a horizon haze and a nearly clear sky overhead.
+    let haze = env.fog.sky_amount(ray.y);
+    assert!(haze > 0.3 && haze < 0.95, "haze {haze}");
+    assert!(env.fog.sky_amount(1.0) < 0.1);
     assert_eq!(env.fog.sky_amount(0.0), 1.0);
-    assert!((env.fog.sky_amount(up) - 0.75).abs() < 1e-4);
-    assert_eq!(env.fog.sky_amount(1.0), 0.0);
+    // Geometry ends as fogged as the sky behind it, high or level.
+    for up in [0.0_f32, 0.05, 0.2, 0.6] {
+        let d = env.fog.end;
+        let offset = [0.0, up * d, (1.0 - up * up).sqrt() * d];
+        assert!((env.fog.amount_along(offset) - env.fog.sky_amount(up)).abs() < 1e-3);
+    }
     // Thick fog reaches far up the sky.
     env.fog.start = 5.0;
     env.fog.end = 90.0;

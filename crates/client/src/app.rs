@@ -10169,6 +10169,7 @@ impl PlatformApp for App {
             .effects_renderer
             .as_mut()
             .context("Effects GPU not initialized")?;
+        effects_renderer.set_fog(camera.atmosphere, camera.fog_color);
         effects_renderer.prepare(frame.queue, &effects_camera, &effects_frame)?;
         let weather_renderer = self
             .weather_renderer

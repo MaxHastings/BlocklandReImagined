@@ -870,7 +870,7 @@ fn sun_flare(along:vec3<f32>)->vec3<f32> {
     return camera.flare.rgb*camera.flare.a*(disc+0.55*glow);
 }
 fn fog_amount(position:vec3<f32>)->f32 {
-    return fog_at(length(position-camera.eye.xyz),camera.atmosphere);
+    return fog_along(position-camera.eye.xyz,camera.atmosphere);
 }
 fn fogged(display:vec3<f32>,position:vec3<f32>)->vec3<f32> {
     return output_color(mix(display,camera.fog_color.rgb,fog_amount(position)));

@@ -93,13 +93,20 @@ fn billboard_blends_and_depth_match_the_host_pass() {
         };
         let grey = Vec4::new(1., 1., 1., 1.);
         let red = Vec4::new(1., 0., 0., 0.5);
-        for (texture, tint, blend, depth_test, expected) in [
-            (0, red, BlendMode::Alpha, true, [0, 0, 255]),
-            (0, red, BlendMode::Alpha, false, [128, 0, 128]),
-            (0, red, BlendMode::Additive, false, [128, 0, 255]),
-            (0, red, BlendMode::AdditiveColor, false, [255, 0, 255]),
-            (1, grey, BlendMode::Alpha, false, [128, 128, 128]),
+        // Fog complete within a unit of the eye, green: past it, blended
+        // sprites take the fog colour and added light fades away.
+        let fog = [0., 1., 0., 1.];
+        for (texture, tint, blend, depth_test, fogged, expected) in [
+            (0, red, BlendMode::Alpha, true, false, [0, 0, 255]),
+            (0, red, BlendMode::Alpha, false, false, [128, 0, 128]),
+            (0, red, BlendMode::Additive, false, false, [128, 0, 255]),
+            (0, red, BlendMode::AdditiveColor, false, false, [255, 0, 255]),
+            (1, grey, BlendMode::Alpha, false, false, [128, 128, 128]),
+            (0, red, BlendMode::Alpha, false, true, [0, 128, 128]),
+            (0, red, BlendMode::Additive, false, true, [0, 0, 255]),
+            (0, red, BlendMode::AdditiveColor, false, true, [0, 0, 255]),
         ] {
+            renderer.set_fog(if fogged { fog } else { [0.; 4] }, [0., 1., 0., 1.]);
             let frame = FrameEffects {
                 particles: vec![ParticleInstance {
                     position: Vec3::Z * 0.5,
@@ -180,7 +187,7 @@ fn billboard_blends_and_depth_match_the_host_pass() {
             for channel in 0..3 {
                 assert!(
                     (i32::from(pixels[256 + 4 + channel]) - expected[channel]).abs() <= 1,
-                    "{blend:?} depth={depth_test}: {:?}",
+                    "{blend:?} depth={depth_test} fogged={fogged}: {:?}",
                     &pixels[260..264]
                 );
             }

@@ -20,6 +20,9 @@ struct GpuCamera {
     right: [f32; 4],
     up: [f32; 4],
     position: [f32; 4],
+    /// The scene's fog (`Camera::atmosphere` and `fog_color` of bri-render).
+    atmosphere: [f32; 4],
+    fog_color: [f32; 4],
 }
 /// Consecutive sprites that share a pipeline draw together. Every texture
 /// is a layer of one array and every blend mode is one premultiplied blend,
@@ -56,6 +59,8 @@ pub struct EffectsRenderer {
     max_instances: usize,
     /// This frame's instance data, kept to reuse its allocation.
     data: Vec<GpuParticle>,
+    /// The scene's fog: atmosphere and colour, as [`Self::set_fog`] gave them.
+    fog: [[f32; 4]; 2],
 }
 impl EffectsRenderer {
     /// Target and depth formats/sample count must match the host render pass.
@@ -78,7 +83,7 @@ impl EffectsRenderer {
             label: Some("effects camera"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -246,6 +251,7 @@ impl EffectsRenderer {
             views: vec![view],
             max_instances,
             data: Vec::new(),
+            fog: [[0.0; 4]; 2],
         })
     }
     fn view(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, capacity: usize) -> View {
@@ -277,6 +283,11 @@ impl EffectsRenderer {
             runs: Vec::new(),
             stats: RenderStats::default(),
         }
+    }
+    /// Fog sprites as the scene is fogged: bri-render's `Camera::atmosphere`
+    /// and `fog_color`. Every view prepared afterwards uses it.
+    pub fn set_fog(&mut self, atmosphere: [f32; 4], fog_color: [f32; 4]) {
+        self.fog = [atmosphere, fog_color];
     }
     /// The player's view: `camera` and the sprites it sees.
     pub fn prepare(
@@ -379,6 +390,8 @@ impl EffectsRenderer {
             right: camera.right.extend(0.).to_array(),
             up: camera.up.extend(0.).to_array(),
             position: camera.position.extend(0.).to_array(),
+            atmosphere: self.fog[0],
+            fog_color: self.fog[1],
         };
         let target = &mut self.views[view];
         queue.write_buffer(&target.camera, 0, bytemuck::bytes_of(&uniform));
