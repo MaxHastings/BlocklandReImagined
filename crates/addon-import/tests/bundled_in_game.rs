@@ -289,6 +289,26 @@ fn bundled_originals_load_their_host_rules_however_they_were_turned_on() {
                 "{name} has host rules: {rules:?}"
             );
         }
+        // In the Add-Ons screen's library each is part of its original: no
+        // switch of its own, on and off with it.
+        let library = Library::scan(&game.root).unwrap();
+        for (_, id) in &game.originals {
+            for rules in companions(&game.root, id) {
+                assert_eq!(library.companion_of(&rules), Some(id.as_str()));
+                for on in [false, true] {
+                    let plan = library.plan(&rules, on);
+                    assert!(
+                        !plan.allowed(),
+                        "{how:?}: {rules} can be turned {} by itself",
+                        if on { "on" } else { "off" }
+                    );
+                }
+                assert!(
+                    library.plan(id, false).also.contains(&rules),
+                    "{how:?}: turning {id} off leaves {rules} on"
+                );
+            }
+        }
         // The host loads every one of them.
         let host = dedicated::load(
             &game.root,

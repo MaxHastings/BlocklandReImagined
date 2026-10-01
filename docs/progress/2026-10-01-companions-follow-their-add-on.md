@@ -55,3 +55,21 @@ stand-ins.
 
 Both tests fail without the `load_root` fix: the list check fails, and the
 Hookshot never pulls. They pass 3/3 with it, at about 34 s.
+
+## Rules are part of their Add-On in the Add-Ons screen
+
+Max turned the HookShot's rules on by hand: the Add-Ons screen showed
+"(host rules)" as a row with its own switch. Now:
+- `Library::companion_of` names the Add-On a companion belongs to.
+- `Library::plan` refuses to turn a companion on or off by itself, with the
+  message "X is part of Y and turns on and off with it". It still goes on
+  and off with its Add-On, as before.
+- The Add-Ons screen (`client::add_ons::rows`) gives a companion no row of
+  its own. Its problems show on its Add-On's row, it is left out of that
+  row's "needed by", and Default skips it.
+
+Tests: `add_ons::tests::host_rules_are_part_of_their_add_ons_row` checks one
+row, rules on and off with it, a lone toggle refused, and a rules problem
+shown on the row. The guard `bundled_in_game` now also checks every bundled
+original's rules: `companion_of` names the original, a lone toggle is
+refused, and turning the original off takes them.
