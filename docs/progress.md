@@ -8794,3 +8794,14 @@ decompiled script text.
 
 Tests: `bri-net lag::tests` (three deterministic cases with explicit
 instants) and `bri-ui runtime_input::lag_icon_shows_only_while_the_host_is_quiet`.
+
+## 2026-10-01 Fill Can: originals only
+
+Max chose "originals only" for every classic Add-On. Our remade Fill Can is
+no longer bundled: its packages, generated icon and icon script are gone
+and it is off the default Add-On list. The engine seams stay (`paint_fill`,
+`Simulation::touching_region`, `grid::share_face`, image `paint_tint`) and
+are still tested through a small fill tool of the test's own in
+`crates/sim/tests/fixtures/fill-can`. Loading the player's own original
+Fill Can from their Blockland Add-Ons folder follows on the shared classic
+Add-On loader.

@@ -264,6 +264,13 @@ fn check_output(opts: &Options) -> Result<()> {
         "Output {} already exists; choose a fresh directory",
         opts.out.display()
     );
+    // A port's host rules go beside it (`ports::rules_dir`).
+    let rules = ports::rules_dir(&opts.out);
+    ensure!(
+        !rules.exists(),
+        "{} already exists; choose a fresh directory",
+        rules.display()
+    );
     let parent = opts
         .out
         .parent()
@@ -2552,7 +2559,14 @@ fn finish(
         packages_json_entry: json!({ "id": cx.ns, "version": opts.version, "side": "shared", "dir": dir }),
         files: vec![],
     };
-    if let Some(port) = ports::apply(ports, &cx.src.name, &cx.src.sha256, bodies, &cx.out) {
+    let import = ports::Import {
+        addon: &cx.src.name,
+        sha256: &cx.src.sha256,
+        namespace: &cx.ns,
+        version: &opts.version,
+        name: manifest["name"].as_str().unwrap_or(&cx.ns),
+    };
+    if let Some(port) = ports::apply(ports, &import, bodies, &cx.out) {
         for b in &mut cx.report.needs_behaviour {
             if port
                 .covers
