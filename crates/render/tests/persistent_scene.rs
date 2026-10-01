@@ -35,10 +35,25 @@ struct Gpu {
     queue: wgpu::Queue,
     adapter: String,
 }
+/// The device every test here draws on, one test at a time. The CI machine
+/// has no GPU and draws on a software adapter whose every frame keeps all
+/// its cores busy: tests drawing side by side, each on its own device,
+/// starved one another until their frames missed the wait below, and which
+/// tests failed changed from run to run. Taking turns on one device gives
+/// each frame the whole machine, as one frame of the game has.
+static GPU: std::sync::Mutex<Option<Gpu>> = std::sync::Mutex::new(None);
+/// One test's turn on the shared device; the next test waits for it.
+struct Turn(std::sync::MutexGuard<'static, Option<Gpu>>);
+impl std::ops::Deref for Turn {
+    type Target = Gpu;
+    fn deref(&self) -> &Gpu {
+        self.0.as_ref().expect("the device is made before a turn starts")
+    }
+}
 
 #[test]
 fn point_lights_update_and_clear_without_reuploading_geometry() -> Result<()> {
-    let gpu = Gpu::new()?;
+    let gpu = Gpu::turn()?;
     let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
     let mut data = triangle([1.; 4], 0.5, AlphaMode::Opaque);
     data.materials[0] = Material::vertex_lit("dark fixture", 0);
@@ -96,7 +111,7 @@ fn square(half: f32, z: f32) -> SceneData {
 /// GL's attenuation, interpolated across the face.
 #[test]
 fn point_lights_light_objects_per_vertex_with_v20_attenuation() -> Result<()> {
-    let gpu = Gpu::new()?;
+    let gpu = Gpu::turn()?;
     let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
     let camera = Camera {
         sun_color: [0.; 4],
@@ -137,7 +152,7 @@ fn point_lights_light_objects_per_vertex_with_v20_attenuation() -> Result<()> {
 
 #[test]
 fn a_full_light_budget_lights_each_pixel_with_the_lights_that_reach_it() -> Result<()> {
-    let gpu = Gpu::new()?;
+    let gpu = Gpu::turn()?;
     let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
     let mut data = triangle([1.; 4], 0.5, AlphaMode::Opaque);
     data.materials[0] = Material::vertex_lit("dark fixture", 0);
@@ -232,7 +247,7 @@ fn water_depth_mask_and_time_motion_use_one_upload() -> Result<()> {
         &[0, 0]
     );
     assert!(mask[(128 * 256 + 192) * 4] > 0);
-    let gpu = Gpu::new()?;
+    let gpu = Gpu::turn()?;
     let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
     let scene = renderer.upload(&gpu.device, &gpu.queue, &data)?;
     let mut camera = Camera::perspective(
@@ -304,7 +319,7 @@ fn sky_fixture() -> (SceneData, bri_content::environment::Environment) {
 }
 #[test]
 fn sky_orientation_translation_depth_and_distance_fog() -> Result<()> {
-    let gpu = Gpu::new()?;
+    let gpu = Gpu::turn()?;
     let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
     let (mut data, env) = sky_fixture();
     bri_render::environment_scene::append(&mut data, &env, &[1, 2, 3, 4, 5, 6], &[])?;
@@ -379,7 +394,7 @@ fn sky_orientation_translation_depth_and_distance_fog() -> Result<()> {
 #[test]
 fn cloud_wind_updates_without_geometry_upload_and_calm_stays_still() -> Result<()> {
     use bri_content::environment::{Cloud, Image};
-    let gpu = Gpu::new()?;
+    let gpu = Gpu::turn()?;
     let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
     for velocity in [[0.125, 0.0], [0.0, 0.0]] {
         let (mut data, mut env) = sky_fixture();
@@ -554,7 +569,7 @@ fn original_avatar_layers_update_one_persistent_gpu_scene() -> Result<()> {
         scene.validate()?;
         data.push(scene);
     }
-    let gpu = Gpu::new()?;
+    let gpu = Gpu::turn()?;
     let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
     let mut scene = renderer.upload(&gpu.device, &gpu.queue, &data[0])?;
     let mut low = Vec3::splat(f32::INFINITY);
@@ -634,6 +649,15 @@ fn original_avatar_layers_update_one_persistent_gpu_scene() -> Result<()> {
     Ok(())
 }
 impl Gpu {
+    /// Wait for this test's turn on the shared device, making it first.
+    fn turn() -> Result<Turn> {
+        // A test that failed on its turn leaves the device as good as ever.
+        let mut gpu = GPU.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if gpu.is_none() {
+            *gpu = Some(Self::new()?);
+        }
+        Ok(Turn(gpu))
+    }
     fn new() -> Result<Self> {
         pollster::block_on(async {
             let instance =
@@ -755,7 +779,7 @@ impl Gpu {
 
 #[test]
 fn shared_instances_match_cpu_geometry_fade_sorting_and_atomic_updates() -> Result<()> {
-    let gpu = Gpu::new()?;
+    let gpu = Gpu::turn()?;
     let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
     let mut data = triangle([1.; 4], 0., AlphaMode::Opaque);
     data.materials[0] = Material::vertex_lit("shared", 0);
@@ -886,7 +910,7 @@ fn shared_instances_match_cpu_geometry_fade_sorting_and_atomic_updates() -> Resu
 
 #[test]
 fn posed_geometry_shares_bindings_and_rejects_foreign_materials_or_pixels() -> Result<()> {
-    let gpu = Gpu::new()?;
+    let gpu = Gpu::turn()?;
     let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
     let mut data = triangle([0., 1., 0., 1.], 0.3, AlphaMode::Opaque);
     let base = renderer.upload(&gpu.device, &gpu.queue, &data)?;
@@ -932,7 +956,7 @@ fn invalid_scene_references_and_vertical_cameras() {
 
 #[test]
 fn brick_overlay_coverage_preserves_paint_opacity_and_display_space() -> Result<()> {
-    let gpu = Gpu::new()?;
+    let gpu = Gpu::turn()?;
     let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
     let camera = Camera {
         ambient: [1.0, 1.0, 1.0, 0.0],
@@ -975,7 +999,7 @@ fn brick_overlay_coverage_preserves_paint_opacity_and_display_space() -> Result<
 #[test]
 fn persistent_gpu_camera_depth_alpha_and_resize() -> Result<()> {
     // Depth is reversed (`DEPTH_CLEAR`): nearer is larger.
-    let gpu = Gpu::new()?;
+    let gpu = Gpu::turn()?;
     let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
     let red = renderer.upload(
         &gpu.device,
@@ -1026,7 +1050,7 @@ fn real_native_maps_upload_once_camera_motion() -> Result<()> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let output = root.join("artifacts/persistent-scene");
     std::fs::create_dir_all(&output)?;
-    let gpu = Gpu::new()?;
+    let gpu = Gpu::turn()?;
     let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
     let mut reports = vec![];
     let bundle_path = root.join("content/map-bundle-017");
@@ -1229,7 +1253,7 @@ fn real_native_maps_upload_once_camera_motion() -> Result<()> {
 
 #[test]
 fn display_colors_match_on_srgb_and_unorm_output_attachments() -> Result<()> {
-    let gpu = Gpu::new()?;
+    let gpu = Gpu::turn()?;
     let data = triangle([0.5, 0.25, 0.75, 1.0], 0.5, AlphaMode::Opaque);
     let mut images = Vec::new();
     for format in [
