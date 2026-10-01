@@ -57,10 +57,16 @@ const HANG: Duration = Duration::from_secs(300);
 fn until(app: &mut App, what: &str, ready: impl Fn(&App) -> bool) -> Result<()> {
     wait::until_one(app, what, HANG, step, ready).map_err(|error| {
         anyhow::anyhow!(
-            "{error:#}; screens {:?}; tools {:?}; world bricks {:?}; pending {}; ghost {:?}; dialogs {:?}",
+            "{error:#}; screens {:?}; tools {:?}; images {:?}; aim {:?} (host pose {:?}); world bricks {:?}; pending {}; ghost {:?}; dialogs {:?}",
             app.ui.stack(),
             app.network_view()
                 .and_then(|v| v.tools.get(&v.owner).cloned()),
+            app.network_view()
+                .and_then(|v| v.weapons.images.get(&v.owner).cloned()),
+            (app.controls.yaw, app.controls.pitch),
+            app.network_view()
+                .and_then(|v| v.poses.get(&v.owner))
+                .map(|p| (p.player.yaw, p.player.pitch, p.player.feet)),
             app.network_view().map(|v| v.world.bricks.len()),
             app.pending_requests(),
             app.building().and_then(|b| b.ghost()),
