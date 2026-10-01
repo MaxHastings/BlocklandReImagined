@@ -40,7 +40,7 @@ type Meshes = BTreeMap<String, bri_content::brick::Brick>;
 const FAR_PLANE: f32 = 4000.0;
 /// PlayerStandardArmor's `cameraMaxDist`, `cameraVerticalOffset` and
 /// `cameraTilt`; the stock Player_* add-ons inherit them.
-const PLAYER_CAMERA: (f32, f32, f32) = (8.0, 0.75, 0.261);
+pub(crate) const PLAYER_CAMERA: (f32, f32, f32) = (8.0, 0.75, 0.261);
 struct Prepared {
     foliage: crate::foliage::PreparedFoliage,
     map_id: String,
@@ -2240,40 +2240,24 @@ impl App {
             drawn_offset,
             passages,
         )?;
-        if passages.is_empty() {
+        if controls.observer().is_some() {
             return Ok((eye, yaw, pitch, roll));
         }
         // A chase camera whose boom went through an opening is already
         // there; otherwise the eye leading the body's middle is carried.
-        let carry = match boom {
-            Some(carry) => carry,
-            None => {
-                let middle = Vec3::from(local.feet)
-                    + Vec3::Y * bri_sim::player::nominal_middle(local.scale);
-                let (moved, carry) = passages.travel(middle, eye);
-                let Some(carry) = carry else {
-                    return Ok((eye, yaw, pitch, roll));
-                };
-                return Ok(Self::carried_look(moved, yaw, pitch, roll, &carry));
-            }
+        // The tilt a floor or ceiling opening left eases out after: the eye
+        // starts where the carry put it and comes round.
+        let middle =
+            Vec3::from(local.feet) + Vec3::Y * bri_sim::player::nominal_middle(local.scale);
+        let look = (yaw, pitch, roll);
+        let eye = if boom.is_none() && controls.camera_pos() == 0.0 {
+            middle + controls.portal_tilt() * (eye - middle)
+        } else {
+            eye
         };
-        Ok(Self::carried_look(eye, yaw, pitch, roll, &carry))
-    }
-    /// The look turned by an opening's carry (the eye already moved).
-    fn carried_look(
-        eye: Vec3,
-        yaw: f32,
-        pitch: f32,
-        roll: f32,
-        carry: &glam::Affine3A,
-    ) -> (Vec3, f32, f32, f32) {
-        let forward = carry.transform_vector3(Vec3::new(
-            yaw.sin() * pitch.cos(),
-            pitch.sin(),
-            -yaw.cos() * pitch.cos(),
-        ));
-        let (yaw, pitch) = crate::controls::angles(forward, carry.transform_vector3(Vec3::Y));
-        (eye, yaw, pitch, roll)
+        let (eye, (yaw, pitch, roll)) =
+            crate::portal_view::through(eye, look, boom, middle, passages);
+        Ok((eye, yaw, pitch, roll))
     }
     /// The view camera where the body is, and the carry of any opening the
     /// chase camera's boom went back through.
@@ -2322,6 +2306,8 @@ impl App {
                         crate::controls::angles(ride * Vec3::NEG_Z, ride * Vec3::Y);
                     (yaw, pitch, crate::controls::roll(ride))
                 }
+                // The roll a floor or ceiling opening left, easing out.
+                None if controls.observer().is_none() => (yaw, pitch, controls.portal_roll()),
                 None => (yaw, pitch, 0.0),
             };
             let (eye, boom) = camera_eye(
@@ -2396,7 +2382,13 @@ impl App {
         if let Some((distance, pivot, tilt)) = player_view {
             // `getCameraTransform` composes the tilt onto the eye's pitch, so
             // the chase camera keeps swinging over the head past vertical.
-            let pitch = pitch - tilt;
+            let (yaw, pitch, roll) =
+                crate::portal_view::leaned((yaw, pitch, controls.portal_roll()), tilt);
+            // Just out of an opening in a floor or ceiling, the pivot comes
+            // round from where the carry turned it (`Controls::portal_tilt`).
+            let middle = Vec3::from(local.feet)
+                + Vec3::Y * bri_sim::player::nominal_middle(local.scale);
+            let pivot = middle + controls.portal_tilt() * (pivot - middle);
             let (eye, boom) = camera_eye(
                 controls,
                 presented,
@@ -2405,10 +2397,10 @@ impl App {
                 building,
                 pivot,
                 look(yaw, pitch),
-                Some(distance),
+                Some((middle, distance)),
                 passages,
             )?;
-            return Ok((eye, yaw, pitch, 0.0, boom));
+            return Ok((eye, yaw, pitch, roll, boom));
         }
         // `cameraTilt` turns the vehicle chase view down without moving the camera.
         let chase = Self::chase_camera(assets, vehicles, view);
@@ -2420,7 +2412,8 @@ impl App {
             building,
             chase.map_or(first_person_eye, |(_, pivot, _)| pivot),
             look(yaw, pitch),
-            Some(
+            Some((
+                chase.map_or(first_person_eye, |(_, pivot, _)| pivot),
                 chase.map_or(
                     view.archetypes
                         .resolve(local.archetype)
@@ -2428,7 +2421,7 @@ impl App {
                         .camera_distance,
                     |(distance, ..)| distance,
                 ) * pos,
-            ),
+            )),
             passages,
         )?;
         let pitch = chase.map_or(pitch, |(_, _, tilt)| (pitch - tilt).clamp(-1.56, 1.56));
@@ -5102,7 +5095,7 @@ fn draws_third_person(controls: &Controls, alive: bool) -> bool {
 /// `stand_height` tall standing at `feet`: distance, pivot and downward tilt.
 /// The pivot is the middle of the box plus `cameraVerticalOffset` (0.75
 /// while sliding in); offset and distance scale with the body.
-fn pivot_camera(
+pub(crate) fn pivot_camera(
     stand_height: f32,
     scale: f32,
     (max_dist, offset, tilt): (f32, f32, f32),
@@ -5239,7 +5232,7 @@ fn camera_eye(
     building: &crate::building::Building,
     own_eye: Vec3,
     forward: Vec3,
-    chase: Option<f32>,
+    chase: Option<(Vec3, f32)>,
     passages: &bri_content::passage::Passages,
 ) -> Result<(Vec3, Option<glam::Affine3A>)> {
     use crate::controls::ObserverMode;
@@ -5257,7 +5250,11 @@ fn camera_eye(
             )
             .map(|eye| (eye, None)),
         None => match chase {
-            Some(distance) => building.camera_boom(own_eye, forward, distance, passages),
+            // A chase camera's boom from `own_eye`, its pivot, which rides
+            // on the body at `from`.
+            Some((from, distance)) => {
+                building.camera_boom(from, own_eye, forward, distance, passages)
+            }
             None => Ok((own_eye, None)),
         },
     }
@@ -6108,6 +6105,7 @@ impl PlatformApp for App {
         }
         self.update_held_weapon();
         self.controls.advance_zoom(elapsed.as_secs_f32());
+        self.controls.ease_roll(elapsed.as_secs_f32());
         self.controls.advance_view(elapsed.as_secs_f32());
         self.controls.advance_head(elapsed.as_secs_f32());
         if let Some(a) = self.attempt.as_ref().filter(|a| a.entered) {
@@ -6151,8 +6149,8 @@ impl PlatformApp for App {
                 a.worker.movement(newest, inputs, self.camera_view())?;
             }
             // Through an opening: the look turns as the body did.
-            if let Some((turn, _)) = self.motion.take_passed() {
-                self.controls.carry_yaw(turn);
+            if let Some(carry) = self.motion.take_passed() {
+                self.controls.carry_look(&carry);
             }
             if let Some((speed, archetype)) = self.motion.take_impact() {
                 let min = bri_sim::player_types::PlayerType::from_archetype(archetype)
@@ -6698,6 +6696,7 @@ impl PlatformApp for App {
             // Balls, projectiles, dropped items and package entities move at
             // the frame rate between the host's 20 Hz updates.
             let projectiles = &self.content.weapons.pack.projectiles;
+            let passages = self.motion.passages();
             self.ghosts.update(
                 game_elapsed.as_secs_f32(),
                 view.tick,
@@ -6720,13 +6719,17 @@ impl PlatformApp for App {
                         ),
                     })
                 },
+                // Through portals as the host flies them.
                 |from, to| {
-                    let length = (to - from).length();
-                    let hit = building.solid_segment(from, to).ok()??;
-                    Some(crate::ghosts::Hit {
-                        position: hit.position,
-                        normal: hit.normal,
-                        fraction: hit.distance / length,
+                    crate::ghosts::Hit::first(&passages, from, to, |from, to| {
+                        let length = (to - from).length();
+                        let hit = building.solid_segment(from, to).ok()??;
+                        Some(crate::ghosts::Hit {
+                            position: hit.position,
+                            normal: hit.normal,
+                            fraction: hit.distance / length,
+                            carry: None,
+                        })
                     })
                 },
             );
@@ -6998,6 +7001,11 @@ impl PlatformApp for App {
                     .bool_or("$pref::Player::renderMyItems", true),
             );
             self.weapon_effects.set_palette(&view.world.palette);
+            // Shots' trails, spray, smoke and sparks fly on through portals.
+            let passages = self.motion.passages();
+            self.weapon_effects.set_passages(&passages);
+            self.effects.world.set_passages(&passages);
+            self.actor_effects.set_passages(&passages);
             let items = self.world_items.sync(
                 weapons,
                 crate::world_items::WorldItemFrame {
