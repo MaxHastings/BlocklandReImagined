@@ -11,6 +11,9 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::Path;
 
+mod datablocks;
+pub use datablocks::{AmmoType, Magazines, Table};
+
 mod builtin {
     include!(concat!(env!("OUT_DIR"), "/ports.rs"));
 }
@@ -68,6 +71,10 @@ pub struct Port {
     /// player, and a shared Add-On cannot carry host code.
     #[serde(default)]
     pub rules: Option<Rules>,
+    /// Magazines a classic ammo system kept in item fields, given to each
+    /// gun's image (`docs/modding/porting.md`, "Magazines from item fields").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub magazines: Option<Magazines>,
 }
 
 /// The companion host-rules Add-On a port adds ([`Port::rules`]). Its id is
@@ -80,6 +87,9 @@ pub struct Rules {
     /// What the rules may do (`player`, `world.edit`, `chat`, ...), as in any
     /// Add-On's `package.json`.
     pub capabilities: Vec<String>,
+    /// Tables of datablock fields, by the `{{name}}` the rules use them as.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tables: BTreeMap<String, Table>,
 }
 
 /// The companion host-rules Add-On's id for the import `namespace`.
@@ -351,7 +361,11 @@ pub fn apply(ports: &Ports, import: &Import, bodies: &Bodies, out: &Path) -> Opt
         port: e.port.clone(),
         status: e.status.clone(),
         applied: false,
-        copy: if e.sha256.iter().any(|h| h.eq_ignore_ascii_case(import.sha256)) {
+        copy: if e
+            .sha256
+            .iter()
+            .any(|h| h.eq_ignore_ascii_case(import.sha256))
+        {
             "listed"
         } else {
             "unlisted"
@@ -411,13 +425,44 @@ fn try_apply(
             "a pattern is named `{name}`, which every port already has"
         );
     }
+    // What the port reads from the imported datablocks.
+    let mut magazines = None;
+    if port.magazines.is_some() || port.rules.as_ref().is_some_and(|r| !r.tables.is_empty()) {
+        let weapons: Value = serde_json::from_slice(
+            &std::fs::read(out.join(WEAPONS)).context("the import wrote no weapons")?,
+        )
+        .context(WEAPONS)?;
+        let mut read = BTreeMap::new();
+        if let Some(m) = &port.magazines {
+            let (patch, v) = datablocks::magazines(m, &weapons).context("magazines")?;
+            magazines = Some(patch);
+            read.extend(v);
+        }
+        if let Some(r) = &port.rules {
+            read.extend(datablocks::tables(&r.tables, &weapons)?);
+        }
+        for (name, value) in read {
+            ensure!(
+                values.insert(name.clone(), value).is_none(),
+                "`{name}` is named twice"
+            );
+        }
+    }
     let mut patches = port.patch.clone();
+    if magazines.is_some() {
+        patches
+            .entry(WEAPONS.to_owned())
+            .or_insert_with(|| Value::Object(Default::default()));
+    }
     if port.rules.is_some() {
         // The import names its rules, so they are turned on and off with it.
         let manifest = patches
             .entry("package.json".to_owned())
             .or_insert_with(|| Value::Object(Default::default()));
-        ensure!(manifest.is_object(), "the package.json patch is not an object");
+        ensure!(
+            manifest.is_object(),
+            "the package.json patch is not an object"
+        );
         manifest["companions"] = serde_json::json!(["{rules}"]);
     }
     let mut writes: Vec<(String, Vec<u8>)> = vec![];
@@ -428,8 +473,13 @@ fn try_apply(
         )
         .with_context(|| file.clone())?;
         merge(&mut doc, &fill(patch, &values)?);
+        if file == WEAPONS
+            && let Some(m) = &magazines
+        {
+            merge(&mut doc, m);
+        }
         let bytes = serde_json::to_vec_pretty(&doc)?;
-        if file == "assets/weapons.json" {
+        if file == WEAPONS {
             bri_weapons::Pack::from_json(&bytes).context("the patched weapons.json")?;
         }
         writes.push((file.clone(), bytes));
@@ -464,6 +514,8 @@ fn try_apply(
     }
     Ok(())
 }
+
+const WEAPONS: &str = "assets/weapons.json";
 
 /// A file to write: its path and bytes.
 type Written = (String, Vec<u8>);

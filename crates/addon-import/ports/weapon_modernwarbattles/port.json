@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "notes": "Bushido's Adventurer's Weapons on the hl2 ammo system: each gun's maxmag and ammotype become its image's magazine, with the original's reserve and cap per ammo type and the reload its own states play. The host rules give ammo boxes (a typed box adds twice its amount before the cap, as the original does) and multiply a projectile's damage by its headshotMultiplier on a head hit or a crouched target. Not yet ported: the hitscan guns' raycasts and crits, the melee swings' vehicle kills and the grenade's shrapnel.",
+  "magazines": {
+    "size": "maxmag",
+    "ammo": "ammotype",
+    "reload_ticks": 120,
+    "types": {
+      "Pistol": { "ammo": "pistol", "reserve": 32, "max_reserve": 64 },
+      "Revolver": { "ammo": "revolver", "reserve": 12, "max_reserve": 60 },
+      "Machine Pistol": { "ammo": "machine-pistol", "reserve": 72, "max_reserve": 320 },
+      "Light Machine Gun": { "ammo": "light-machine-gun", "reserve": 72, "max_reserve": 320 },
+      "Heavy Machine Gun": { "ammo": "heavy-machine-gun", "reserve": 144, "max_reserve": 320 },
+      "Shotgun": { "ammo": "shotgun", "reserve": 12, "max_reserve": 64 },
+      "Rifle": { "ammo": "rifle", "reserve": 16, "max_reserve": 128 },
+      "Sniper Rifle": { "ammo": "sniper-rifle", "reserve": 6, "max_reserve": 12 },
+      "Machine Rifle": { "ammo": "machine-rifle", "reserve": 64, "max_reserve": 128 },
+      "Frag Grenades": { "ammo": "frag-grenades", "reserve": 1, "max_reserve": 5 }
+    },
+    "items": {
+      "huntingShotgunItem": { "one_by_one": true }
+    }
+  },
+  "rules": {
+    "capabilities": ["player", "damage"],
+    "tables": {
+      "headshots": {
+        "class": "ProjectileData",
+        "fields": ["headshotMultiplier"],
+        "when": ["headshotMultiplier"],
+        "key": "damage_type"
+      },
+      "boxes": {
+        "class": "ItemData",
+        "fields": ["ammotype"],
+        "when": ["ammoBox"],
+        "key": "id"
+      }
+    }
+  }
+}

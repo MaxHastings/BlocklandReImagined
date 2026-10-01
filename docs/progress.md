@@ -8587,3 +8587,37 @@ Commands: `cargo test -p bri-weapons -p bri-package-runtime -p bri-sim
 -p bri-ui -p bri-net`, `cargo clippy --no-deps ... -D warnings` (the newer
 toolchain here also flags `unnecessary_sort_by` and `question_mark` in
 client and addon-import code this branch does not touch).
+
+## 2026-10-01 Adventurer's Weapons port on the magazine seam (branch `claude/adventure-pack-n3spj2`)
+
+Max's "originals only" and "bundle in download" decisions: the release zip
+carries Bushido's own pack, imported from Max's copy at release time, and
+the repository holds only our port. This branch now sits on Tier's
+magazine seam (`claude/tier-tactical-3onhik` 2717c502) and the Fill Can
+lane's host-rules companion (95c4d124, cherry-picked). The hit region
+seam now reads Tier's `combat::Hit`: `damage_player` measures the region
+from the hit point, and `damage_player_at` is gone.
+
+Port `weapon_modernwarbattles` (partial), against the Gate's notes on
+`Weapon_ModernWarbattles.zip` (sha256 `4d938fe3…92ed`):
+- Ports gain two general readers of the imported datablocks
+  (`crates/addon-import/src/ports/datablocks.rs`, `porting.md`):
+  `magazines` turns an ammo system's item fields (`maxmag`, `ammotype`)
+  into each gun image's `magazine`, with reload ticks from the image's own
+  reload states; rules `tables` hand the rules a map of datablock fields
+  (each projectile's `headshotMultiplier` by damage type, each ammo box).
+- The rules: a projectile's damage times its `headshotMultiplier` on a
+  head hit or a crouched target; ammo boxes top up carried guns' reserves
+  (ALL once, a typed box twice, capped), and are used up only when they
+  gave something.
+- Not yet: the hitscan guns (Support_RaycastingWeapons, crit ×3 with
+  `gunHeadshot` and its shove), the melee vehicle kill, the grenade's
+  shrapnel, the HUD's `<mag>/<reserve> AMMO` wording (the engine's ammo
+  display shows the same numbers). These wait on the real import report
+  and on Glass 1019, the full pack, which is the main target.
+
+Tests: `crates/addon-import/tests/adventure_port.rs` on a CC0 stand-in
+(`tests/fixtures/ports/Weapon_ModernWarbattles`): the magazines, one reload
+pass through the image's states, boxes and headshots in a hosted game.
+`cargo test -p bri-addon-import`, the touched bri-sim and bri-weapons
+suites, clippy on the touched crates.
