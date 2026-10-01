@@ -1679,6 +1679,16 @@ fn push_op(target: Dynamic, x: Dynamic, y: Dynamic, z: Dynamic, by: Dynamic) -> 
     })
 }
 fn tumble_op(player: Dynamic, x: Dynamic, y: Dynamic, z: Dynamic, by: Dynamic) -> Fallible<()> {
+    tumble_for(player, x, y, z, by, Dynamic::UNIT)
+}
+fn tumble_for(
+    player: Dynamic,
+    x: Dynamic,
+    y: Dynamic,
+    z: Dynamic,
+    by: Dynamic,
+    seconds: Dynamic,
+) -> Fallible<()> {
     let player = match object_ref(&player) {
         Ok(ObjectRef::Player(p)) => p,
         Ok(other) => return fail(format!("only players tumble, not {other}")),
@@ -1688,6 +1698,11 @@ fn tumble_op(player: Dynamic, x: Dynamic, y: Dynamic, z: Dynamic, by: Dynamic) -
         player,
         velocity: [float(&x)?, float(&y)?, float(&z)?],
         by: credit(&by)?,
+        seconds: if seconds.is_unit() {
+            None
+        } else {
+            Some(float(&seconds)?)
+        },
     })
 }
 
@@ -1758,6 +1773,7 @@ fn register_physics(engine: &mut Engine) {
         },
     );
     engine.register_fn("tumble", tumble_op);
+    engine.register_fn("tumble", tumble_for);
     engine.register_fn(
         "hold",
         |player: Dynamic, target: Dynamic, distance: Dynamic| {

@@ -273,3 +273,66 @@ fn an_on_fire_command_counts_the_shot_and_the_round_still_flies() {
         w.take_item(A, item).unwrap();
     }
 }
+
+/// A v20 shotgun's `onFire` fired its pellets, then a close blast of its
+/// own projectile: `volleys`. Each volley flies at its projectile's speed
+/// along the aim, within its own spread, after the shot's recoil.
+#[test]
+fn a_volley_fires_its_own_projectile_after_the_pellets() {
+    let json = format!(
+        r#"{{
+            "schema_version": {SCHEMA},
+            "id": "kit",
+            "items": {{ "kit:weapon/shotgun": {{ "ui_name": "Shotgun", "image": "kit:image/shotgun" }} }},
+            "images": {{
+                "kit:image/shotgun": {{
+                    "projectile": "kit:projectile/pellet",
+                    "shot": {{ "projectiles": 6, "spread": 0.004, "recoil": 3.0 }},
+                    "volleys": [ {{ "projectile": "kit:projectile/blast", "projectiles": 1, "spread": 0.0 }} ],
+                    "states": [
+                        {{ "name": "Activate", "ticks": 2, "timeout": 1 }},
+                        {{ "name": "Ready", "down": 2 }},
+                        {{ "name": "Fire", "ticks": 10, "script": "onFire", "timeout": 3 }},
+                        {{ "name": "Hold", "up": 1 }}
+                    ]
+                }}
+            }},
+            "projectiles": {{
+                "kit:projectile/pellet": {{ "speed": 100.0, "inherit": 1.0, "lifetime_ticks": 240, "fade_ticks": 240 }},
+                "kit:projectile/blast": {{ "speed": 40.0, "inherit": 1.0, "lifetime_ticks": 240, "fade_ticks": 240 }}
+            }}
+        }}"#
+    );
+    let mut w = WeaponsWorld::new(Pack::from_json(json.as_bytes()).unwrap()).unwrap();
+    w.add_actor(A, 5).unwrap();
+    let slot = w.give(A, "kit:weapon/shotgun").unwrap();
+    w.equip(A, Some(slot)).unwrap();
+    step(&mut w, 10);
+    w.trigger(A, true).unwrap();
+    let mut spawned = vec![];
+    for _ in 0..8 {
+        for e in w.step(&mut Open) {
+            if let Event::Spawned {
+                definition,
+                velocity,
+                ..
+            } = e
+            {
+                spawned.push((definition, velocity));
+            }
+        }
+    }
+    let pellets = spawned.iter().filter(|(d, _)| d == "kit:projectile/pellet").count();
+    let blasts: Vec<_> = spawned
+        .iter()
+        .filter(|(d, _)| d == "kit:projectile/blast")
+        .collect();
+    assert_eq!((pellets, blasts.len()), (6, 1));
+    // Straight along the aim at 40, less the recoil of 3 it inherits.
+    let aim = Frame::default().direction.normalize();
+    assert!((blasts[0].1 - aim * 37.0).length() < 1e-3, "{:?}", blasts[0].1);
+
+    // A volley of a projectile the pack lacks is refused.
+    let bad = json.replace("kit:projectile/blast\", \"projectiles\"", "kit:projectile/none\", \"projectiles\"");
+    assert!(Pack::from_json(bad.as_bytes()).is_err());
+}

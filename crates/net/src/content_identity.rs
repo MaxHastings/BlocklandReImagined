@@ -627,6 +627,7 @@ mod tests {
                     paint_tint: false,
                     left_image: None,
                     magazine: None,
+                    volleys: vec![],
                 },
             );
             items.insert(

@@ -31,6 +31,9 @@ pub struct VehicleSave {
     pub wheels: Vec<WheelState>,
     pub damage: f32,
     pub born_tick: u64,
+    /// A tumble given a length ends at this tick.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ends_tick: Option<u64>,
     pub destroyed_tick: Option<u64>,
     pub last_damage_owner: OwnerId,
     pub last_shot_tick: Option<u64>,
@@ -96,6 +99,7 @@ impl VehiclesWorld {
                 wheels: v.wheels.clone(),
                 damage: v.damage,
                 born_tick: v.born,
+                ends_tick: v.ends,
                 destroyed_tick: v.dead_at,
                 last_damage_owner: v.last_damage,
                 last_shot_tick: v.last_shot,
@@ -248,6 +252,7 @@ impl VehiclesWorld {
                     controls: saved.controls,
                     damage: saved.damage,
                     born: saved.born_tick,
+                    ends: saved.ends_tick,
                     dead_at: saved.destroyed_tick,
                     last_damage: saved.last_damage_owner,
                     last_shot: saved.last_shot_tick,
@@ -476,7 +481,10 @@ impl VehiclesWorld {
                 ensure!(v.charge == 0, "charge count without timer");
             }
             if d.family == Family::Tumble {
-                ensure!(c.tick - v.born_tick < 5400, "expired tumble retained");
+                match v.ends_tick {
+                    Some(ends) => ensure!(c.tick < ends, "expired tumble retained"),
+                    None => ensure!(c.tick - v.born_tick < 5400, "expired tumble retained"),
+                }
             }
         }
         for p in &c.pending_respawns {

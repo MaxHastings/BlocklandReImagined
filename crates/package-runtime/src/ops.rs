@@ -286,11 +286,14 @@ pub enum Op {
         velocity: [f32; 3],
         by: Option<u64>,
     },
-    /// Knock a player off their feet into a tumble, flying at `velocity`.
+    /// Knock a player off their feet into a tumble, flying at `velocity`;
+    /// for `seconds` (0.1 to 60) when given, else until it settles.
     Tumble {
         player: u64,
         velocity: [f32; 3],
         by: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seconds: Option<f32>,
     },
     /// Keep `target` floating `distance` ahead of `player`'s eye, where
     /// they look, until let go. The engine pulls it there every tick; heavy
@@ -729,8 +732,13 @@ impl Op {
                         .as_ref()
                         .is_none_or(|d| crate::state::check_value(d).is_ok())
             }
-            Self::Push { velocity, .. } | Self::Tumble { velocity, .. } => {
-                finite(velocity) && glam_length(velocity) <= MAX_PUSH_SPEED
+            Self::Push { velocity, .. } => finite(velocity) && glam_length(velocity) <= MAX_PUSH_SPEED,
+            Self::Tumble {
+                velocity, seconds, ..
+            } => {
+                finite(velocity)
+                    && glam_length(velocity) <= MAX_PUSH_SPEED
+                    && seconds.is_none_or(|s| (0.1..=60.0).contains(&s))
             }
             Self::Hold {
                 distance,

@@ -493,6 +493,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 paint_tint: false,
                 left_image: None,
                 magazine: None,
+                volleys: vec![],
             },
         );
     }

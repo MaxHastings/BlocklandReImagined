@@ -3018,6 +3018,9 @@ impl Session {
         info.insert("type".into(), kind.hook_type().to_string().into());
         info.insert("direct".into(), kind.direct().into());
         // The part of the body it struck, as Torque's `getDamageLocation`.
+        if let Some(projectile) = kind.projectile() {
+            info.insert("projectile".into(), projectile.into());
+        }
         if let Some(region) = region {
             info.insert("region".into(), region.into());
         }

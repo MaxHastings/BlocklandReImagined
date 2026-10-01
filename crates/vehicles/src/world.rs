@@ -338,6 +338,9 @@ struct Instance {
     controls: Vec<Controls>,
     damage: f32,
     born: u64,
+    /// A tumble body given a length (`tumble(%obj, %time)`): it ends at
+    /// this tick, however it lies, instead of when it settles.
+    ends: Option<u64>,
     dead_at: Option<u64>,
     last_damage: OwnerId,
     last_shot: Option<u64>,
@@ -634,6 +637,7 @@ impl VehiclesWorld {
                 controls: vec![Controls::default(); count],
                 damage: 0.,
                 born: self.tick,
+                ends: None,
                 dead_at: None,
                 last_shot: None,
                 charge_started: None,
@@ -958,6 +962,17 @@ impl VehiclesWorld {
             "energy outside datablock bounds"
         );
         v.energy = energy;
+        Ok(())
+    }
+    /// A tumble body lasts `ticks` (120 a second) from now, then lets its
+    /// rider up, rather than ending when it settles.
+    pub fn set_tumble_ticks(&mut self, id: VehicleId, ticks: u64) -> Result<()> {
+        let v = self.instances.get_mut(&id).context("unknown vehicle")?;
+        ensure!(
+            self.catalog[&v.spawn.definition].family == Family::Tumble,
+            "only a tumble has a length"
+        );
+        v.ends = Some(self.tick + ticks.max(1));
         Ok(())
     }
     pub fn set_velocity(
@@ -1671,6 +1686,12 @@ impl VehiclesWorld {
             }
             if d.family == Family::Tumble && !self.held.contains(id) {
                 let age = self.tick - v.born;
+                if let Some(ends) = v.ends {
+                    if self.tick >= ends {
+                        removed.push(*id);
+                    }
+                    continue;
+                }
                 if age >= 5400
                     || (age > 0
                         && age.is_multiple_of(240)

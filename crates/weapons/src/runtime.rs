@@ -323,6 +323,10 @@ pub enum Event {
         /// Which way the hurt travelled, a unit vector or zero: the shot's
         /// flight for a direct hit, from the blast centre outward for splash.
         direction: Vec3,
+        /// The projectile that did it (its definition id), as v20's
+        /// `ProjectileData::damage` knew its own datablock.
+        #[serde(default)]
+        projectile: String,
     },
     Impulse {
         source: ActorId,
@@ -2122,6 +2126,41 @@ impl WeaponsWorld {
                         p.paint = e.paint;
                     }
                 }
+                // Further volleys (a shotgun's slug after its pellets): each
+                // its own projectile and spread, along the same aim, with the
+                // recoil the shot already took.
+                let kick = -direction * shot.recoil;
+                for (v, volley) in image.volleys.iter().enumerate() {
+                    let Some(d) = self.pack.projectiles.get(&volley.projectile) else {
+                        continue;
+                    };
+                    let base = direction * d.speed + (a.frame.velocity + kick) * d.inherit;
+                    for n in 0..volley.projectiles {
+                        let turn = if volley.spread > 0.0 {
+                            let angle = |axis: u64| {
+                                let salt = (v as u64 + 1) * 1000 + u64::from(n) * 3 + axis;
+                                let r = unit_random(self.tick, id.0, salt);
+                                (r - 0.5) * 10.0 * std::f32::consts::PI * volley.spread
+                            };
+                            Quat::from_euler(glam::EulerRot::XYZ, angle(0), angle(1), angle(2))
+                        } else {
+                            Quat::IDENTITY
+                        };
+                        if let Err(error) = self.spawn(
+                            &volley.projectile,
+                            id,
+                            origin,
+                            turn * base * a.frame.scale,
+                            a.frame.scale,
+                        ) {
+                            self.events.push(Event::Diagnostic {
+                                actor: Some(id),
+                                message: error.to_string(),
+                            });
+                            return true;
+                        }
+                    }
+                }
                 if name.contains("spear") || name.contains("football") {
                     self.animation(id, "spearThrow");
                 } else if name.contains("pushbroom") {
@@ -2275,6 +2314,7 @@ impl WeaponsWorld {
                             kind: "$DamageType::CannonBallDirect".into(),
                             position: hit.position,
                             direction: p.velocity.normalize_or_zero(),
+                            projectile: p.definition.clone(),
                         });
                     } else if q.can_catch(p.source, target)
                         && let Some(image) = self.mount_ball(target, image)
@@ -2457,6 +2497,7 @@ impl WeaponsWorld {
                 kind: d.damage_type.clone(),
                 position,
                 direction: p.velocity.normalize_or_zero(),
+                projectile: p.definition.clone(),
             });
         }
         if matches!(
@@ -2608,6 +2649,7 @@ impl WeaponsWorld {
                     kind: kind.clone(),
                     position: p.position,
                     direction: (target.center - p.position).normalize_or_zero(),
+                    projectile: p.definition.clone(),
                 });
             }
             if aura.burn_seconds > 0.0 {
@@ -2672,6 +2714,7 @@ impl WeaponsWorld {
                     kind: d.radius_damage_type.clone(),
                     position: p.position,
                     direction: (target.center - p.position).normalize_or_zero(),
+                    projectile: p.definition.clone(),
                 });
                 if d.explosion.burn_seconds > 0.0 {
                     self.events.push(Event::Burn {

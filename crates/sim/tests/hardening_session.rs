@@ -169,6 +169,7 @@ fn tool_pack() -> bri_weapons::Pack {
                 paint_tint: false,
                 left_image: None,
                 magazine: None,
+                volleys: vec![],
             },
         );
         items.insert(
