@@ -277,6 +277,10 @@ fn cmd_drop(p, item) {
 fn cmd_goto(p, x, y, z) {
     teleport(p, x, y, z);
 }
+fn cmd_who(p) {
+    let me = player(p);
+    set("who", `${me.archetype}|${me.image}`);
+}
 fn cmd_mag(p) {
     let m = player(p).magazine;
     set("mag", if m == () { "none" } else {
@@ -285,7 +289,9 @@ fn cmd_mag(p) {
 }
 "#;
 
-fn catalog(root: &Path) -> Arc<Catalog> {
+/// `ns`, its rules and the probe, with other imports in `<root>/addons`
+/// enabled beside them by id.
+fn catalog(root: &Path, ns: &str, extra: &[&str]) -> Arc<Catalog> {
     let dir = root.join("addons/probe");
     std::fs::create_dir_all(&dir).unwrap();
     let manifest = json!({
@@ -303,9 +309,13 @@ fn catalog(root: &Path) -> Arc<Catalog> {
         "commands": [
             { "name": "drop", "args": ["string"] },
             { "name": "goto", "args": ["float", "float", "float"] },
-            { "name": "mag" }
+            { "name": "mag" },
+            { "name": "who" }
         ],
-        "state": { "global": { "mag": { "default": "", "visible": "everyone" } } }
+        "state": { "global": {
+            "mag": { "default": "", "visible": "everyone" },
+            "who": { "default": "", "visible": "everyone" }
+        } }
     });
     std::fs::write(dir.join("package.json"), manifest.to_string()).unwrap();
     std::fs::write(dir.join("behaviour.json"), behaviour.to_string()).unwrap();
@@ -317,25 +327,33 @@ fn catalog(root: &Path) -> Arc<Catalog> {
         dir: format!("addons/{id}"),
         role: None,
     };
+    let mut packages = vec![
+        entry(ns, Side::Shared),
+        entry(&format!("{ns}-rules"), Side::Server),
+        entry("probe", Side::Server),
+    ];
+    packages.extend(extra.iter().map(|id| entry(id, Side::Shared)));
     let set = PackageSet {
         schema_version: 1,
-        packages: vec![
-            entry(NS, Side::Shared),
-            entry(&format!("{NS}-rules"), Side::Server),
-            entry("probe", Side::Server),
-        ],
+        packages,
     };
     Arc::new(Catalog::load(root, &set, true).unwrap_or_else(|e| panic!("{e:#?}")))
 }
 
 struct Game {
     s: Session,
+    ns: String,
     seq: BTreeMap<OwnerId, u64>,
     moves: BTreeMap<OwnerId, u64>,
     looks: BTreeMap<OwnerId, MoveInput>,
 }
 impl Game {
     fn new(root: &Path, out: &Path) -> Self {
+        Self::with_add_ons(root, out, NS, &[])
+    }
+    /// `ns` imported to `out`, with other imports in `<root>/addons`
+    /// enabled beside it, by id.
+    fn with_add_ons(root: &Path, out: &Path, ns: &str, extra: &[&str]) -> Self {
         let ground = ColliderBuilder::cuboid(100.0, 0.5, 100.0)
             .translation(Vector::new(0.0, -0.5, 0.0))
             .user_data(u128::MAX);
@@ -347,15 +365,22 @@ impl Game {
             )
             .unwrap(),
         );
-        s.set_weapon_pack(pack(out)).unwrap();
+        let parts = extra
+            .iter()
+            .map(|id| (format!("addons/{id}"), pack(&root.join("addons").join(id))))
+            .collect();
+        let (merged, notes) = pack(out).merge(parts);
+        assert!(notes.is_empty(), "{notes:?}");
+        s.set_weapon_pack(merged).unwrap();
         let physics: Value =
             serde_json::from_slice(&std::fs::read(out.join("assets/item-physics.json")).unwrap())
                 .unwrap();
         s.set_item_bounds(serde_json::from_value(physics["items"].clone()).unwrap())
             .unwrap();
-        s.install_packages(catalog(root), None).unwrap();
+        s.install_packages(catalog(root, ns, extra), None).unwrap();
         Self {
             s,
+            ns: ns.into(),
             seq: BTreeMap::new(),
             moves: BTreeMap::new(),
             looks: BTreeMap::new(),
@@ -387,17 +412,27 @@ impl Game {
         );
     }
     fn drop(&mut self, owner: OwnerId, item: &str) {
-        let item = format!("{NS}:weapon/{item}");
+        let item = format!("{}:weapon/{item}", self.ns);
         self.probe(owner, "drop", vec![PackageArg::String(item)]);
         self.steps(30);
     }
     fn mag(&mut self, owner: OwnerId) -> Value {
-        self.probe(owner, "mag", vec![]);
+        self.ask(owner, "mag")
+    }
+    /// What `owner` is and holds: `<archetype>|<image>`.
+    fn who(&mut self, owner: OwnerId) -> String {
+        self.ask(owner, "who")
+            .as_str()
+            .unwrap_or_default()
+            .to_owned()
+    }
+    fn ask(&mut self, owner: OwnerId, what: &str) -> Value {
+        self.probe(owner, what, vec![]);
         self.s
             .package_state()
             .packages
             .get("probe")
-            .and_then(|ns| ns.global.get("mag").cloned())
+            .and_then(|ns| ns.global.get(what).cloned())
             .unwrap_or(Value::Null)
     }
     fn steps(&mut self, n: usize) {
@@ -419,7 +454,7 @@ impl Game {
             .unwrap()
     }
     fn equip(&mut self, owner: OwnerId, item: &str) {
-        let item = format!("{NS}:weapon/{item}");
+        let item = format!("{}:weapon/{item}", self.ns);
         let slot = self.s.tool_inventories()[&owner]
             .slots
             .iter()
@@ -556,22 +591,30 @@ fn ammo_items_bags_and_headshots_play_in_a_hosted_game() {
     assert_eq!(g.mag(a), json!("3|3|tt-shotgun|48"));
 }
 
-/// The stand-in Tier 1A imported beside the stand-in Tier 1 it requires,
-/// as the drop folder imports one pack with the others as its reference.
-fn imported_1a(name: &str) -> (Dir, PathBuf, bri_addon_import::report::Report) {
+/// The stand-in `addon` imported as `ns` with the stand-ins it requires
+/// (`refs`) as its reference, as the drop folder imports one pack with the
+/// others beside it.
+fn imported_on(
+    addon: &str,
+    ns: &str,
+    refs: &[&str],
+    name: &str,
+) -> (Dir, PathBuf, bri_addon_import::report::Report) {
     let dir =
-        Dir(std::env::temp_dir().join(format!("bri-tier1a-port-{}-{name}", std::process::id())));
+        Dir(std::env::temp_dir().join(format!("bri-tier-port-{}-{ns}-{name}", std::process::id())));
     let _ = std::fs::remove_dir_all(&dir.0);
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ports");
-    let tier1 = dir.0.join("reference/Add-Ons/Weapon_Package_Tier1");
-    std::fs::create_dir_all(&tier1).unwrap();
-    for f in std::fs::read_dir(fixtures.join("Weapon_Package_Tier1")).unwrap() {
-        let f = f.unwrap();
-        std::fs::copy(f.path(), tier1.join(f.file_name())).unwrap();
+    for r in refs {
+        let copy = dir.0.join("reference/Add-Ons").join(r);
+        std::fs::create_dir_all(&copy).unwrap();
+        for f in std::fs::read_dir(fixtures.join(r)).unwrap() {
+            let f = f.unwrap();
+            std::fs::copy(f.path(), copy.join(f.file_name())).unwrap();
+        }
     }
-    let out = dir.0.join("addons").join("weapon_package_tier1a");
+    let out = dir.0.join("addons").join(ns);
     let report = import(&Options {
-        input: fixtures.join("Weapon_Package_Tier1A"),
+        input: fixtures.join(addon),
         out: out.clone(),
         reference: Some(dir.0.join("reference")),
         core: vec![],
@@ -582,6 +625,22 @@ fn imported_1a(name: &str) -> (Dir, PathBuf, bri_addon_import::report::Report) {
     (dir, out, report)
 }
 
+/// Another stand-in imported into `<root>/addons/<ns>` with nothing beside
+/// it, to be enabled with the one under test.
+fn import_beside(root: &Path, addon: &str, ns: &str) -> bri_addon_import::report::Report {
+    import(&Options {
+        input: Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/ports")
+            .join(addon),
+        out: root.join("addons").join(ns),
+        reference: None,
+        core: vec![],
+        installed: None,
+        version: "1.0.0".into(),
+    })
+    .unwrap()
+}
+
 /// Tier 1A on Tier 1: the single shotgun shoves its shooter back as it
 /// fires its pellets and blast, its recoil shake read from Tier 1's own
 /// recoil projectile; the pepperbox casts several rays a shot; the
@@ -590,7 +649,12 @@ fn imported_1a(name: &str) -> (Dir, PathBuf, bri_addon_import::report::Report) {
 #[test]
 fn tier1a_shotgun_knocks_back_and_the_nailgun_stays_hidden() {
     const NS1A: &str = "weapon_package_tier1a";
-    let (_dir, out, report) = imported_1a("guns");
+    let (_dir, out, report) = imported_on(
+        "Weapon_Package_Tier1A",
+        NS1A,
+        &["Weapon_Package_Tier1"],
+        "guns",
+    );
     let port = &report.ports[0];
     assert!(port.applied, "{:?}", port.reason);
     assert_eq!(port.port, NS1A);
@@ -656,4 +720,238 @@ fn tier1a_shotgun_knocks_back_and_the_nailgun_stays_hidden() {
         pack.projectiles[&format!("{NS1A}:projectile/nailgunprojectile1")].slow,
         Some(Slow { divisor: 1.5 })
     );
+}
+
+const NS2: &str = "weapon_package_tier2";
+
+/// Tier 2 on Tier 1 (and Tier 1 beside it in the game, as it requires):
+/// the assault rifle's round after a pause is a truer one; the light
+/// machine gun's second pull fires a free round, its click lays its holder
+/// down slowed and its halt stands them up; the battle rifle's and machine
+/// gun's rounds slow whoever they hit; the combat shotgun's jet press
+/// mounts its blast mode, which fires two shells' worth and hands back;
+/// the scoped magnum stays hidden as the original left it out of the spawn
+/// list; and the military sniper's head hits crit while the Critical Hit
+/// Emote is on.
+#[test]
+fn tier2_guns_rest_fire_twice_slow_and_switch_modes() {
+    let (dir, out, report) = imported_on(
+        "Weapon_Package_Tier2",
+        NS2,
+        &["Weapon_Package_Tier1"],
+        "guns",
+    );
+    let port = &report.ports[0];
+    assert!(port.applied, "{:?}", port.reason);
+    assert_eq!(port.port, NS2);
+    let pack = pack(&out);
+    let image = |name: &str| pack.images[&format!("{NS2}:image/{name}")].clone();
+    let projectile = |name: &str| format!("{NS2}:projectile/{name}");
+
+    let ar = image("tassaultrifleimage").shot.unwrap();
+    let rested = ar.rested.clone().unwrap();
+    assert_eq!(rested.after_ticks, 48);
+    assert_eq!(
+        rested.projectile.as_deref(),
+        Some(&*projectile("tassaultrifleprojectile2"))
+    );
+    let lmg = image("lightmachinegunimage");
+    let second = &lmg.state_shots["onfire2"];
+    assert!(second.free, "{second:?}");
+    assert_eq!(
+        pack.projectiles[&projectile("battlerifleprojectile1")].slow,
+        Some(Slow { divisor: 3.0 })
+    );
+    assert_eq!(
+        pack.projectiles[&projectile("lightmachinegunprojectile1")].slow,
+        Some(Slow { divisor: 2.0 })
+    );
+    let alt = image("combatshotgunaltfireimage");
+    assert_eq!(alt.magazine.as_ref().unwrap().per_shot, 2);
+    assert_eq!(alt.volleys.len(), 1, "{:?}", alt.volleys);
+    assert!(pack.items[&format!("{NS2}:weapon/scopedmagnumitem")].hidden);
+    assert!(!pack.items[&format!("{NS2}:weapon/magnumitem")].hidden);
+    let sniper = image("militarysniperimage").shot.unwrap().hitscan.unwrap();
+    assert_eq!(sniper.range, 300.0);
+    assert!(sniper.from_eye);
+    // The slowed body the click lays on, host content in the companion.
+    let laid: Value = serde_json::from_slice(
+        &std::fs::read(
+            out.with_file_name(format!("{NS2}-rules"))
+                .join("archetypes/lmgarmor.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(laid["movement"]["forward"], json!(3.0));
+    assert_eq!(laid["movement"]["can_jet"], json!(false));
+
+    // Tier 1 beside it, as the game loads them together.
+    let tier1 = import_beside(&dir.0, "Weapon_Package_Tier1", NS);
+    assert!(tier1.ports[0].applied, "{:?}", tier1.ports[0].reason);
+    let (both, notes) = pack.clone().merge(vec![(
+        format!("addons/{NS}"),
+        self::pack(&dir.0.join("addons").join(NS)),
+    )]);
+    assert!(notes.is_empty(), "{notes:?}");
+    let hold = |item: &str| {
+        let mut w = WeaponsWorld::new(both.clone()).unwrap();
+        w.add_actor(A, 5).unwrap();
+        let slot = w.give(A, &format!("{NS2}:weapon/{item}")).unwrap();
+        w.equip(A, Some(slot)).unwrap();
+        steps(&mut w, 60);
+        w
+    };
+    // A pause, then the truer round; straight after, the usual one.
+    let mut w = hold("tassaultrifleitem");
+    let first = spawned(&shoot(&mut w));
+    let next = spawned(&shoot(&mut w));
+    assert_eq!(first, ["tassaultrifleprojectile2"]);
+    assert_eq!(next, ["tassaultrifleprojectile1"]);
+    // One tap of the machine gun: two rounds out, one off the magazine.
+    let mut w = hold("lightmachinegunitem");
+    let rounds = w.ammo(A).unwrap().rounds;
+    w.trigger(A, true).unwrap();
+    let mut out = steps(&mut w, 2);
+    w.trigger(A, false).unwrap();
+    out.extend(steps(&mut w, 40));
+    assert_eq!(
+        spawned(&out),
+        ["lightmachinegunprojectile1", "lightmachinegunprojectile1"]
+    );
+    assert_eq!(w.ammo(A).unwrap().rounds, rounds - 1);
+
+    // In a game, with the Critical Hit Emote's stand-in installed.
+    import_beside(&dir.0, "Emote_Critical", "emote_critical");
+    let (mut g, a, b) = tier2_duel(&dir.0, &out_dir(&dir.0), &[NS, "emote_critical"]);
+
+    // The machine gun lays A down while the trigger is held, and stands
+    // them up when it lets go (shooting at the sky, to spare B).
+    g.looks.get_mut(&a).unwrap().pitch = 1.2;
+    g.equip(a, "lightmachinegunitem");
+    assert_eq!(
+        g.who(a),
+        format!("v20.player.playerstandardarmor|{NS2}:image/lightmachinegunimage")
+    );
+    g.cmd(a, Command::WeaponTrigger { down: true });
+    g.steps(10);
+    assert_eq!(
+        g.who(a),
+        format!("{NS2}-rules:archetype/lmgarmor|{NS2}:image/lightmachinegunimage")
+    );
+    g.cmd(a, Command::WeaponTrigger { down: false });
+    g.steps(30);
+    assert_eq!(
+        g.who(a),
+        format!("v20.player.playerstandardarmor|{NS2}:image/lightmachinegunimage")
+    );
+
+    // Jet with the combat shotgun: its blast mode fires two shells' worth
+    // and hands the shotgun back.
+    g.equip(a, "combatshotgunitem");
+    assert_eq!(g.mag(a), json!("4|4|tt-shotgun|24"));
+    g.looks.get_mut(&a).unwrap().jet = true;
+    g.steps(4);
+    g.looks.get_mut(&a).unwrap().jet = false;
+    assert_eq!(
+        g.who(a).split('|').nth(1),
+        Some(&*format!("{NS2}:image/combatshotgunaltfireimage"))
+    );
+    g.steps(120);
+    assert_eq!(
+        g.who(a).split('|').nth(1),
+        Some(&*format!("{NS2}:image/combatshotgunimage"))
+    );
+    assert_eq!(g.mag(a), json!("2|4|tt-shotgun|24"));
+
+    assert_eq!(g.health(b), 100.0);
+    // The sniper: 20 to the body, a crit (×3) to the head with the
+    // emote's effects, and the crit's own kill message.
+    g.equip(a, "militarysniperitem");
+    g.shoot_at(a, b, 1.2);
+    assert!((g.health(b) - 80.0).abs() < 0.5, "{}", g.health(b));
+    g.s.take_cues();
+    g.s.take_private_notices();
+    g.shoot_at(a, b, 2.45);
+    assert!(
+        (g.health(b) - 20.0).abs() < 0.5,
+        "{} {:?}",
+        g.health(b),
+        g.s.package_diagnostics()
+    );
+    let cues = g.s.take_cues();
+    assert!(
+        cues.iter().any(|c| matches!(&c.kind,
+            bri_sim::presentation::CueKind::WeaponSound { profile }
+                if profile == "emote_critical:sound/critfiresound")),
+        "{cues:?}"
+    );
+    let notices = g.s.take_private_notices();
+    let heard = |who: OwnerId, sound: &str| {
+        notices
+            .iter()
+            .any(|(o, n)| *o == who && matches!(n, Notice::Sound(p) if p == sound))
+    };
+    assert!(
+        heard(b, "emote_critical:sound/critrecievesound"),
+        "{notices:?}"
+    );
+    assert!(heard(a, "emote_critical:sound/crithitsound"), "{notices:?}");
+    g.shoot_at(a, b, 2.45);
+    assert_eq!(g.health(b), 0.0);
+    let said: Vec<String> =
+        g.s.take_private_notices()
+            .into_iter()
+            .filter_map(|(_, n)| match n {
+                Notice::Chat(text) => Some(text),
+                _ => None,
+            })
+            .collect();
+    assert!(said.iter().any(|t| t.contains("A critted B")), "{said:?}");
+
+    // Without the emote, a head hit is a plain one.
+    let (mut g, a, b) = tier2_duel(&dir.0, &out_dir(&dir.0), &[NS]);
+    g.equip(a, "militarysniperitem");
+    g.shoot_at(a, b, 2.45);
+    assert!((g.health(b) - 80.0).abs() < 0.5, "{}", g.health(b));
+}
+
+fn out_dir(root: &Path) -> PathBuf {
+    root.join("addons").join(NS2)
+}
+
+/// A and B in a minigame with Tier 2's machine gun, combat shotgun and
+/// sniper, 6 units apart, past their spawn protection.
+fn tier2_duel(root: &Path, out: &Path, extra: &[&str]) -> (Game, OwnerId, OwnerId) {
+    let mut g = Game::with_add_ons(root, out, NS2, extra);
+    let a = g.join("A", Vec3::new(0.0, 0.05, 0.0));
+    let b = g.join("B", Vec3::new(0.0, 0.05, -6.0));
+    g.steps(2);
+    g.s.set_spawn_points(vec![g.feet(a)]).unwrap();
+    let mut loadout: [Option<String>; 5] = Default::default();
+    for (i, item) in [
+        "lightmachinegunitem",
+        "combatshotgunitem",
+        "militarysniperitem",
+    ]
+    .iter()
+    .enumerate()
+    {
+        loadout[i] = Some(format!("{NS2}:weapon/{item}"));
+    }
+    g.cmd(
+        a,
+        Command::MiniGame(MiniGameRequest::Create {
+            color: 0,
+            settings: Settings {
+                loadout,
+                ..Settings::default()
+            },
+        }),
+    );
+    let game = g.s.minigame_views()[0].id;
+    g.s.set_spawn_points(vec![g.feet(b)]).unwrap();
+    g.cmd(b, Command::MiniGame(MiniGameRequest::Join { game }));
+    g.steps(330);
+    (g, a, b)
 }

@@ -1,7 +1,8 @@
 //! Raycasting guns with Torque's loaded states, as Tier+Tactical builds
 //! them: a magazine that keeps `loaded` and `ammo` for the image's states,
 //! rounds that arrive as the image's own reload state runs, a ray that
-//! does its own damage, push, explosion and sound where it lands, a range
+//! lands its projectile with another's explosion, a sound by what it hit
+//! and a tracer round flown to it, a range
 //! and spread that shrink on the move, and a bullet that slows whoever it
 //! hits.
 //! The pack is written here; it is our own.
@@ -38,8 +39,8 @@ impl Query for World {
 }
 
 /// A 3-round pistol whose states follow `loaded` (fire, empty, the light
-/// key's reload) the way Tier+Tactical's do, and whose ray does its own
-/// damage. Its reload is three states, 30 ticks, the rounds arriving as
+/// key's reload) the way Tier+Tactical's do, and whose ray lands a
+/// projectile carrying its damage. Its reload is three states, 30 ticks, the rounds arriving as
 /// `Reloaded` (`onReloaded`) is entered.
 const GUNS: &str = r#"{
     "schema_version": 3,
@@ -50,7 +51,7 @@ const GUNS: &str = r#"{
     },
     "images": {
         "ray:image/pistol": {
-            "projectile": "ray:projectile/tracer",
+            "projectile": "ray:projectile/pistolray",
             "shot": {
                 "projectiles": 1,
                 "spread": 0.0,
@@ -59,16 +60,10 @@ const GUNS: &str = r#"{
                 "hitscan": {
                     "range": 200,
                     "moving_range": 85,
-                    "hit": {
-                        "damage": 12,
-                        "damage_type": "$DamageType::Pistol",
-                        "impulse": 100,
-                        "vertical_impulse": 50,
-                        "explosion": "SparkProjectile",
-                        "player_sound": "ray:sound/flesh",
-                        "other_sound": "ray:sound/ricochet",
-                        "tracer": true
-                    }
+                    "explosion": "SparkProjectile",
+                    "flown": "ray:projectile/tracer",
+                    "player_sound": "ray:sound/flesh",
+                    "other_sound": "ray:sound/ricochet"
                 }
             },
             "magazine": { "size": 3, "ammo": "nine", "reload_ticks": 600, "reserve": 4,
@@ -103,6 +98,9 @@ const GUNS: &str = r#"{
     },
     "projectiles": {
         "ray:projectile/tracer": { "speed": 200, "lifetime_ticks": 120 },
+        "ray:projectile/pistolray": { "speed": 200, "lifetime_ticks": 120, "damage": 12,
+                                      "damage_type": "$DamageType::Pistol", "impulse": 100,
+                                      "vertical": 50, "collide_players": true },
         "ray:projectile/bullet": { "speed": 200, "lifetime_ticks": 120, "damage": 5,
                                    "collide_players": true, "slow": { "divisor": 2 } },
         "ray:projectile/spark": { "name": "SparkProjectile", "speed": 1, "lifetime_ticks": 1,
@@ -234,7 +232,7 @@ fn the_light_key_reloads_through_not_loaded_and_an_empty_gun_without_reserve_cli
 }
 
 #[test]
-fn a_ray_hit_does_its_own_damage_push_explosion_sound_and_tracer() {
+fn a_ray_lands_its_damage_and_push_with_a_named_explosion_sound_and_tracer() {
     let mut w = world();
     let events = click(&mut w, true);
     let damage: Vec<_> = events
@@ -273,7 +271,7 @@ fn a_ray_hit_does_its_own_damage_push_explosion_sound_and_tracer() {
         .collect();
     assert!(sounds.contains(&"ray:sound/flesh"), "{sounds:?}");
     assert!(!sounds.contains(&"ray:sound/ricochet"));
-    // The image's own projectile flies from the muzzle to the hit.
+    // The tracer round flies from the muzzle to the hit.
     let tracer = events.iter().find_map(|e| match e {
         Event::Spawned {
             definition,
@@ -342,14 +340,10 @@ fn tier_slowdown_falls_from_halfway_to_its_floor() {
 }
 
 #[test]
-fn bad_ray_hits_and_slowdowns_are_refused() {
+fn bad_hitscans_and_slowdowns_are_refused() {
+    let long = format!(r#""explosion": "{}","#, "x".repeat(129));
     for (good, bad) in [
-        (r#""damage": 12,"#, r#""damage": 101,"#),
-        (r#""impulse": 100,"#, r#""impulse": -1,"#),
-        (
-            r#""vertical_impulse": 50,"#,
-            r#""vertical_impulse": 20000,"#,
-        ),
+        (r#""explosion": "SparkProjectile","#, long.as_str()),
         (r#""divisor": 2"#, r#""divisor": 0.5"#),
         (r#""moving_range": 85"#, r#""moving_range": 5000"#),
         (r#""not_loaded": 9"#, r#""not_loaded": 99"#),

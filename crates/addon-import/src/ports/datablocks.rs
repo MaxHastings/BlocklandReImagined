@@ -216,6 +216,34 @@ pub fn magazines(
         images.insert(image_id.to_owned(), json!({ "magazine": magazine }));
         items.insert(id.clone(), Value::String(ty.ammo.clone()));
     }
+    // An image another script mounts in the gun's place (a second fire
+    // mode) loads from the gun's magazine: the system keeps its rounds on
+    // the image's `item`, as the gun's own. A left hand's image (another
+    // mount point) already fires from the right gun's magazine.
+    for (image_id, image) in weapons["images"].as_object().into_iter().flatten() {
+        if images.contains_key(image_id) || image["mount_point"].as_u64().unwrap_or(0) != 0 {
+            continue;
+        }
+        let name = image["name"].as_str().unwrap_or_default();
+        let Some(item) = blocks.field(name, "item") else {
+            continue;
+        };
+        let item = crate::literal(item).trim();
+        let gun = weapons["items"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .find(|(id, i)| {
+                i["name"]
+                    .as_str()
+                    .is_some_and(|n| n.eq_ignore_ascii_case(item))
+                    && items.contains_key(*id)
+            })
+            .and_then(|(_, i)| images.get(i["image"].as_str()?));
+        if let Some(gun) = gun.cloned() {
+            images.insert(image_id.clone(), gun);
+        }
+    }
     let types = m
         .types
         .iter()
@@ -260,93 +288,6 @@ fn reload_ticks(image: &Value) -> Option<u32> {
     (1..=1200).contains(&ticks).then_some(ticks as u32)
 }
 
-/// The raycasts of a raycasting weapon system that kept them in image
-/// fields, as Tier+Tactical (`TT_raycast*`) and Space Guy's raycasting
-/// weapons (`raycast*`) did: each field names the image field holding it.
-/// Every image with `enabled` set gets a `shot` with a hitscan whose ray
-/// does its own damage, push, explosion and sounds ([`bri_weapons::RayHit`]).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Raycasts {
-    pub enabled: String,
-    pub range: String,
-    pub spread: String,
-    pub count: String,
-    pub damage: String,
-    pub damage_type: String,
-    pub impulse: String,
-    pub vertical_impulse: String,
-    /// A projectile exploded where the ray lands.
-    pub explosion: String,
-    pub player_sound: String,
-    pub other_sound: String,
-    /// A projectile flown from the muzzle to where the ray ended; it
-    /// becomes the image's projectile.
-    pub tracer: String,
-    /// Set: cast from the muzzle. Unset: from the eye.
-    pub from_muzzle: String,
-}
-
-/// The `weapons.json` patch giving each raycasting image its hitscan.
-pub fn raycasts(h: &Raycasts, weapons: &Value, code: &super::Code) -> Result<Value> {
-    let blocks = Datablocks::new(weapons, code);
-    let mut images = serde_json::Map::new();
-    for (id, image) in weapons["images"].as_object().into_iter().flatten() {
-        let name = image["name"].as_str().unwrap_or_default();
-        if !set(blocks.field(name, &h.enabled)) {
-            continue;
-        }
-        let number = |field: &str, default: f64| -> Result<f64> {
-            match blocks.field(name, field) {
-                None => Ok(default),
-                Some(v) => v
-                    .trim()
-                    .parse::<f64>()
-                    .ok()
-                    .filter(|n| n.is_finite())
-                    .with_context(|| format!("{name}: {field} `{v}` is not a number")),
-            }
-        };
-        let text = |field: &str| blocks.field(name, field).unwrap_or_default().trim();
-        let range = number(&h.range, 0.0)?;
-        ensure!(range > 0.0, "{name}: {} is not set", h.range);
-        let tracer = text(&h.tracer);
-        let tracer_id = if tracer.is_empty() {
-            None
-        } else {
-            Some(
-                id_of(weapons, "ProjectileData", tracer)
-                    .with_context(|| format!("{name}: its tracer {tracer} did not import"))?,
-            )
-        };
-        let mut patch = json!({
-            "shot": {
-                "projectiles": number(&h.count, 1.0)?.max(1.0) as u32,
-                "spread": number(&h.spread, 0.0)?,
-                "hitscan": {
-                    "range": range,
-                    "from_eye": !set(blocks.field(name, &h.from_muzzle)),
-                    "hit": {
-                        "damage": number(&h.damage, 0.0)?,
-                        "damage_type": text(&h.damage_type),
-                        "impulse": number(&h.impulse, 0.0)?,
-                        "vertical_impulse": number(&h.vertical_impulse, 0.0)?,
-                        "explosion": projectile_ref(weapons, text(&h.explosion)),
-                        "player_sound": sound_ref(weapons, text(&h.player_sound)),
-                        "other_sound": sound_ref(weapons, text(&h.other_sound)),
-                        "tracer": tracer_id.is_some(),
-                    }
-                }
-            }
-        });
-        if let Some(tracer) = tracer_id {
-            patch["projectile"] = Value::String(tracer);
-        }
-        images.insert(id.clone(), patch);
-    }
-    Ok(json!({ "images": images }))
-}
-
 /// A rule's named groups in `owner::method`'s `body`, None when it does
 /// not match; an error when it matches `required` instead.
 fn groups(
@@ -387,11 +328,13 @@ pub struct ScriptRule {
     /// Whose method: `image` (the default) or `projectile`.
     #[serde(default = "image_owner")]
     pub on: String,
-    /// The method (`onFire`, `damage`), or `*` for every state script of
-    /// an image.
+    /// The method (`onFire`, `damage`), several as `onFire|onFire2`, or
+    /// `*` for every state script of an image.
     pub method: String,
-    /// For an image: `image`, `shot`, `magazine` or `state`; for a
-    /// projectile: `projectile`. Either may go into `table`.
+    /// For an image: `image`, `shot` (the shot the method fires: `onFire`'s
+    /// is the image's `shot`, another state script's its entry in
+    /// `state_shots`), `magazine` or `state`; for a projectile:
+    /// `projectile`. Either may go into `table`.
     pub into: String,
     /// With `into: "table"`: the table's name, which the host rules use as
     /// `{{name}}`, a Rhai map from each image's or projectile's id to `set`.
@@ -436,6 +379,11 @@ pub fn scripts(rules: &[ScriptRule], weapons: &Value, code: &super::Code) -> Res
             .map(super::pattern)
             .transpose()
             .context("a script rule's required_by")?;
+        if rule.into == "table" {
+            // Every table a rule names exists, empty when nothing matched,
+            // so the rules can always read it.
+            tables.entry(rule.table.clone()).or_default();
+        }
         let image = match rule.on.as_str() {
             "image" => true,
             "projectile" => false,
@@ -471,24 +419,26 @@ pub fn scripts(rules: &[ScriptRule], weapons: &Value, code: &super::Code) -> Res
                 rule.method != "*",
                 "a projectile's script rule names its method"
             );
-            let method = rule.method.to_ascii_lowercase();
-            for (id, projectile) in weapons["projectiles"].as_object().into_iter().flatten() {
-                let name = projectile["name"].as_str().unwrap_or_default();
-                let Some(body) = bodies.get(&format!("{}::{method}", name.to_ascii_lowercase()))
-                else {
-                    continue;
-                };
-                let Some(values) = groups(&re, required.as_ref(), body, name, &method)? else {
-                    continue;
-                };
-                let set = fill(&rule.set, &values, weapons, &code.reference)
-                    .with_context(|| format!("{name}::{method}"))?;
-                let into = if rule.into == "table" {
-                    tables.entry(rule.table.clone()).or_default()
-                } else {
-                    &mut projectiles
-                };
-                super::compose(into.entry(id.clone()).or_insert_with(|| json!({})), &set);
+            for method in rule.method.split('|').map(str::to_ascii_lowercase) {
+                for (id, projectile) in weapons["projectiles"].as_object().into_iter().flatten() {
+                    let name = projectile["name"].as_str().unwrap_or_default();
+                    let Some(body) =
+                        bodies.get(&format!("{}::{method}", name.to_ascii_lowercase()))
+                    else {
+                        continue;
+                    };
+                    let Some(values) = groups(&re, required.as_ref(), body, name, &method)? else {
+                        continue;
+                    };
+                    let set = fill(&rule.set, &values, weapons, code)
+                        .with_context(|| format!("{name}::{method}"))?;
+                    let into = if rule.into == "table" {
+                        tables.entry(rule.table.clone()).or_default()
+                    } else {
+                        &mut projectiles
+                    };
+                    super::compose(into.entry(id.clone()).or_insert_with(|| json!({})), &set);
+                }
             }
             continue;
         }
@@ -509,7 +459,10 @@ pub fn scripts(rules: &[ScriptRule], weapons: &Value, code: &super::Code) -> Res
                 m.dedup();
                 m
             } else {
-                vec![rule.method.to_ascii_lowercase()]
+                rule.method
+                    .split('|')
+                    .map(str::to_ascii_lowercase)
+                    .collect()
             };
             for method in methods {
                 let Some(body) = bodies.get(&format!("{name}::{method}")) else {
@@ -519,7 +472,7 @@ pub fn scripts(rules: &[ScriptRule], weapons: &Value, code: &super::Code) -> Res
                 let Some(values) = groups(&re, required.as_ref(), body, owner, &method)? else {
                     continue;
                 };
-                let set = fill(&rule.set, &values, weapons, &code.reference)
+                let set = fill(&rule.set, &values, weapons, code)
                     .with_context(|| format!("{name}::{method}"))?;
                 if rule.into == "table" {
                     let table = tables.entry(rule.table.clone()).or_default();
@@ -529,7 +482,8 @@ pub fn scripts(rules: &[ScriptRule], weapons: &Value, code: &super::Code) -> Res
                 let entry = images.entry(id.clone()).or_insert_with(|| json!({}));
                 match rule.into.as_str() {
                     "image" => super::compose(entry, &set),
-                    "shot" => super::compose(entry, &json!({ "shot": set })),
+                    "shot" if method == "onfire" => super::compose(entry, &json!({ "shot": set })),
+                    "shot" => super::compose(entry, &json!({ "state_shots": { &method: set } })),
                     "magazine" => super::compose(entry, &json!({ "magazine": set })),
                     _ => {
                         // States are an array: patch the whole list.
@@ -578,7 +532,7 @@ fn fill(
     v: &Value,
     values: &BTreeMap<String, String>,
     weapons: &Value,
-    reference: &BTreeMap<String, Definition>,
+    code: &super::Code,
 ) -> Result<Value> {
     Ok(match v {
         Value::String(s) if s.starts_with('{') && s.ends_with('}') && !s[1..].contains('{') => {
@@ -596,10 +550,20 @@ fn fill(
                         .trim()
                         .parse()
                         .with_context(|| format!("`{s}`: `{value}` is no number"))?;
-                    json!(-n)
+                    // Never -0, which reads as a push.
+                    json!(-n + 0.0)
+                }
+                // Milliseconds (`getSimTime()` differences) as ticks, 120 a
+                // second.
+                "ticks" => {
+                    let ms: f64 = value
+                        .trim()
+                        .parse()
+                        .with_context(|| format!("`{s}`: `{value}` is no number"))?;
+                    json!((ms * 0.12).round() as i64)
                 }
                 "kick" => kick(weapons, value)
-                    .or_else(|| dependency_kick(reference, value))
+                    .or_else(|| dependency_kick(&code.reference, value))
                     .with_context(|| format!("`{value}` is no projectile with a camera shake"))?,
                 "sound" => json!(sound_ref(weapons, value)),
                 "projectile" => json!(projectile_ref(weapons, value)),
@@ -607,8 +571,18 @@ fn fill(
                     id_of(weapons, "ShapeBaseImageData", value)
                         .with_context(|| format!("`{value}` is no image of this import"))?
                 ),
+                // A player type (`pushDatablock(LMGArmor)`) as its archetype.
+                "archetype" => json!(
+                    code.archetypes
+                        .get(&value.trim().to_ascii_lowercase())
+                        .with_context(|| format!(
+                            "`{value}` is no player type of this import or one it depends on"
+                        ))?
+                ),
                 other => {
-                    bail!("`{s}`: no filter `{other}` (neg, kick, sound, projectile or image)")
+                    bail!(
+                        "`{s}`: no filter `{other}` (neg, ticks, kick, sound, projectile, image or archetype)"
+                    )
                 }
             }
         }
@@ -621,12 +595,12 @@ fn fill(
         }
         Value::Object(m) => Value::Object(
             m.iter()
-                .map(|(k, v)| Ok((k.clone(), fill(v, values, weapons, reference)?)))
+                .map(|(k, v)| Ok((k.clone(), fill(v, values, weapons, code)?)))
                 .collect::<Result<_>>()?,
         ),
         Value::Array(a) => Value::Array(
             a.iter()
-                .map(|v| fill(v, values, weapons, reference))
+                .map(|v| fill(v, values, weapons, code))
                 .collect::<Result<_>>()?,
         ),
         other => other.clone(),
@@ -693,7 +667,7 @@ fn dependency_kick(reference: &BTreeMap<String, Definition>, name: &str) -> Opti
 
 /// A sound by datablock name: the import's own id when it imported one of
 /// that name, else the name (the base game's, or another Add-On's).
-fn sound_ref(weapons: &Value, name: &str) -> String {
+pub(super) fn sound_ref(weapons: &Value, name: &str) -> String {
     let lower = name.to_ascii_lowercase();
     weapons["sounds"]
         .as_object()
@@ -707,7 +681,7 @@ fn sound_ref(weapons: &Value, name: &str) -> String {
 
 /// A projectile by datablock name: the import's own id, else the name
 /// (the runtime finds the base game's and other Add-Ons' by name).
-fn projectile_ref(weapons: &Value, name: &str) -> String {
+pub(super) fn projectile_ref(weapons: &Value, name: &str) -> String {
     id_of(weapons, "ProjectileData", name).unwrap_or_else(|| name.to_owned())
 }
 

@@ -549,6 +549,15 @@ impl std::fmt::Display for Rejection {
     }
 }
 impl std::error::Error for Rejection {}
+/// Archetypes packages laid over a player's own for a while
+/// (`push_archetype`, v20 Add-Ons' Support_AltDatablock `pushDatablock`),
+/// newest last. The player moves as the newest; `base` is the one under
+/// them, which `set_archetype` changes meanwhile.
+#[derive(Debug, Clone)]
+struct Overlays {
+    base: crate::archetype::ArchetypeId,
+    laid: Vec<crate::archetype::ArchetypeId>,
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Reply {
@@ -590,6 +599,8 @@ struct Peer {
     /// A package's choice of archetype, kept across respawns; otherwise
     /// the mini-game's player type decides.
     package_archetype: Option<crate::archetype::ArchetypeId>,
+    /// Archetypes packages laid over this life's own (`push_archetype`).
+    overlays: Option<Overlays>,
     window_tick: u64,
     actions: u32,
     chats: u32,
@@ -1158,6 +1169,7 @@ impl Session {
                 last_input_tick: self.simulation.state().tick,
                 sport_datablock: None,
                 package_archetype: None,
+                overlays: None,
                 window_tick: self.simulation.state().tick,
                 actions: 0,
                 chats: 0,
@@ -1377,6 +1389,7 @@ impl Session {
                 last_input_tick: self.simulation.state().tick,
                 sport_datablock: None,
                 package_archetype: None,
+                overlays: None,
                 window_tick: self.simulation.state().tick,
                 actions: 0,
                 chats: 0,

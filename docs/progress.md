@@ -9246,6 +9246,38 @@ hidden `???` setting, is imported hidden. Test:
 `tier_port.rs tier1a_shotgun_knocks_back_and_the_nailgun_stays_hidden`
 (the stand-in imported with the stand-in Tier 1 as its reference), and
 `tactical_seams.rs a_vertical_recoil_pushes_only_up_or_down`.
+
+Group 3, Tier 2 (`weapon_package_tier2`, partial, pinned to the Gate's
+`481f2d43…58fd`), on Adventure (80dacb74) and main, applies on Kai's real
+copy with Tier 1 as its reference (Tier 1 and 1A still apply).
+- One engine path per duplicate after the Adventure merge: one magazine
+  reader (`every`, `light_states`), one state-shot seam (`state_shots`
+  with `Shot::free` for a round that takes no ammo; the Tier-only
+  `State.fire` is gone), one hitscan reader and engine path (the separate
+  `raycasts` reader and `RayHit` are gone). A hitscan now names its hit
+  `explosion` (any pack's projectile, by id or name), a `flown` projectile
+  (Tier's tracer) and `player_sound`/`other_sound`; its damage is always
+  the ray projectile's. Adventure's guns read the same way: an empty
+  `hit_projectile` field shows nothing, as the original's did.
+- New seams: `Rested.still` and `Rested.projectile` (the assault rifle's
+  truer round after a pause); `push_archetype`/`pop_archetype` (Kai's
+  `pushDatablock`: the LMG's slowed laid-down body); an image's
+  `commands.unmount`; script rules on several methods (`onFire|onFire2`)
+  and `into: shot`.
+- Imported `PlayerData` become archetypes. They are host content, so they
+  go in the import's server companion (`<ns>-rules:archetype/<name>`),
+  which an import with player types gets even without port rules; a
+  shared import cannot carry them (`package.side.server_content`).
+- A port's `behaviour.json` now merges over the shared one, so the shared
+  Tier rules declare their state once and each pack adds its hooks and
+  commands.
+- Military Sniper crits: its `TT_isRaycastCritical` returns
+  `TT_isRaycastHeadshot`; a head hit does three times the damage under its
+  crit kill message, with Emote_Critical's burst and sounds, only while
+  Emote_Critical is on (`isObject(CritProjectile)`).
+- Test: `tier_port.rs tier2_guns_rest_fire_twice_slow_and_switch_modes`
+  (the stand-in on the stand-in Tier 1, in a hosted game with and without
+  the Emote_Critical stand-in), plus the weapons seam tests.
 ## 2026-10-01 Adventure ports: crit effects, grenade cooking, light key (branch `claude/adventure-pack-n3spj2`)
 
 Emote_Critical (the Add-On ModernWarbattles' raycast script checks for)

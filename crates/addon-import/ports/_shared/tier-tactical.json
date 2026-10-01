@@ -181,20 +181,21 @@
       }
     }
   },
-  "raycasts": {
-    "enabled": "TT_raycastEnabled",
+  "hitscans": {
+    "when": "TT_raycastEnabled",
     "range": "TT_raycastWeaponRange",
-    "spread": "TT_raycastSpreadAmt",
-    "count": "TT_raycastSpreadCount",
+    "from_muzzle": "TT_raycastFromMuzzle",
     "damage": "TT_raycastDirectDamage",
+    "damage_limit": 100.0,
     "damage_type": "TT_raycastDirectDamageType",
+    "hit_projectile": "TT_raycastExplosionProjectile",
     "impulse": "TT_raycastImpactImpulse",
-    "vertical_impulse": "TT_raycastVerticalImpulse",
-    "explosion": "TT_raycastExplosionProjectile",
+    "vertical": "TT_raycastVerticalImpulse",
+    "count": "TT_raycastSpreadCount",
+    "spread": "TT_raycastSpreadAmt",
+    "flown": "TT_raycastTracerProjectile",
     "player_sound": "TT_raycastExplosionPlayerSound",
-    "other_sound": "TT_raycastExplosionBrickSound",
-    "tracer": "TT_raycastTracerProjectile",
-    "from_muzzle": "TT_raycastFromMuzzle"
+    "other_sound": "TT_raycastExplosionBrickSound"
   },
   "scripts": [
     {
@@ -242,13 +243,78 @@
     {
       "method": "onFire",
       "into": "shot",
+      "pattern": "\\(\\s*getSimTime\\(\\s*\\)\\s*-\\s*%obj\\.lastShotTime\\s*\\)\\s*>\\s*(?P<ms>\\d+)\\s*\\)\\s*\\{\\s*%projectile\\s*=\\s*(?P<rested_projectile>\\w+)\\s*;\\s*%spread\\s*=\\s*(?P<rested>[\\d.]+)\\s*;\\s*\\}\\s*else\\s*\\{\\s*%projectile\\s*=\\s*%this\\.projectile\\s*;\\s*%spread\\s*=\\s*(?P<spread>[\\d.]+)\\s*;[\\s\\S]*%obj\\.lastShotTime\\s*=\\s*getSimTime\\(",
+      "required_by": "getSimTime\\(\\s*\\)\\s*-\\s*%obj\\.lastShotTime\\s*\\)\\s*>\\s*\\d+\\s*\\)\\s*\\{\\s*%projectile\\s*=\\s*[A-Za-z_][\\s\\S]*%obj\\.lastShotTime\\s*=\\s*getSimTime\\(",
+      "set": {
+        "spread": "{spread}",
+        "rested": {
+          "after_ticks": "{ms|ticks}",
+          "spread": "{rested}",
+          "projectile": "{rested_projectile|projectile}"
+        }
+      }
+    },
+    {
+      "method": "onFire",
+      "into": "magazine",
+      "pattern": "TT_canFire\\(\\s*%obj\\s*,\\s*(?P<n>\\d+)\\s*\\)",
+      "set": {
+        "per_shot": "{n}"
+      }
+    },
+    {
+      "method": "onFire2",
+      "into": "shot",
+      "pattern": "TT_createProjectile\\(",
+      "set": {
+        "free": true
+      }
+    },
+    {
+      "method": "onFire2",
+      "into": "shot",
+      "pattern": "%spread\\s*=\\s*(?P<s>[\\d.]+)\\s*;",
+      "set": {
+        "spread": "{s}"
+      }
+    },
+    {
+      "method": "onFire2",
+      "into": "shot",
+      "pattern": "TT_decrementAmmo\\(",
+      "set": {
+        "free": false
+      }
+    },
+    {
+      "method": "*",
+      "into": "table",
+      "table": "laid",
+      "pattern": "pushDatablock\\(\\s*(?P<a>\\w+)\\.getID\\(\\s*\\)\\s*\\)",
+      "set": {
+        "archetype": "{a|archetype}"
+      }
+    },
+    {
+      "method": "onAltTrigger",
+      "into": "table",
+      "table": "alt_images",
+      "pattern": "mountImage\\(\\s*(?P<i>\\w+)\\s*,\\s*0\\s*\\)",
+      "required_by": "mountImage\\(",
+      "set": {
+        "image": "{i|image}"
+      }
+    },
+    {
+      "method": "onFire|onFire2",
+      "into": "shot",
       "pattern": "spawnExplosion\\(\\s*(?P<p>\\w+)\\s*,",
       "set": {
         "kick": "{p|kick}"
       }
     },
     {
-      "method": "onFire",
+      "method": "onFire|onFire2",
       "into": "shot",
       "pattern": "TT_knockback\\(\\s*%obj\\s*,\\s*(?P<h>-?[\\d.]+)\\s*,\\s*-?[\\d.]+\\s*,\\s*(?P<v>-?[\\d.]+)\\s*\\)",
       "required_by": "TT_knockback\\(",
@@ -267,6 +333,20 @@
             "projectile": "{p|projectile}",
             "projectiles": "{n}",
             "spread": 0
+          }
+        ]
+      }
+    },
+    {
+      "method": "onFire",
+      "into": "image",
+      "pattern": "%projectile\\s*=\\s*(?P<p>[A-Za-z_]\\w*)\\s*;\\s*%spread\\s*=\\s*(?P<s>[\\d.]+)\\s*;\\s*%shellcount\\s*=\\s*(?P<n>\\d+)\\s*;\\s*TT_createProjectile\\(\\s*%this\\s*,\\s*%obj\\s*,\\s*%slot\\s*,\\s*%projectile\\s*,\\s*%shellCount\\s*,\\s*%spread\\s*\\)",
+      "set": {
+        "volleys": [
+          {
+            "projectile": "{p|projectile}",
+            "projectiles": "{n}",
+            "spread": "{s}"
           }
         ]
       }
@@ -366,11 +446,22 @@
       "set": {
         "multiplier": "{m}"
       }
+    },
+    {
+      "method": "TT_isRaycastCritical",
+      "into": "table",
+      "table": "crit_images",
+      "pattern": "return\\s+TT_isRaycastHeadshot\\(",
+      "required_by": "return",
+      "set": {
+        "headshot": true
+      }
     }
   ],
   "rules": {
     "capabilities": [
       "player",
+      "damage",
       "effects"
     ],
     "tables": {
@@ -409,7 +500,23 @@
           "set3"
         ],
         "key": "type"
+      },
+      "crit_types": {
+        "class": "ShapeBaseImageData",
+        "fields": [
+          "TT_raycastCritDirectDamageType"
+        ],
+        "when": [
+          "TT_raycastCritDirectDamageType"
+        ],
+        "key": "id"
       }
-    }
+    },
+    "values": {
+      "critical": "{uses:Emote_Critical}"
+    },
+    "uses": [
+      "Emote_Critical"
+    ]
   }
 }

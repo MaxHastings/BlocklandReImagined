@@ -2,5 +2,13 @@
   "schema_version": 1,
   "script": "tier.rhai",
   "on_spawn": true,
-  "on_damage": true
+  "on_damage": true,
+  "state": {
+    "player": {
+      "crit_shot": {
+        "default": -1,
+        "persist": false
+      }
+    }
+  }
 }

@@ -15,6 +15,20 @@ fn ammo_items() { {{ammo_items}} }
 fn ammo_types() { {{magazine_types}} }
 // The types this pack registers (TT_registerAmmoType), by name.
 fn registered() { {{registered}} }
+// Image id => #{ archetype } its scripts lay over the holder
+// (Support_AltDatablock's pushDatablock: a machine gun's slow walk).
+fn laid() { {{laid}} }
+// Image id => #{ image } its jet press mounts in its place
+// (Support_ImageAltTrigger's onAltTrigger: a second fire mode).
+fn alt_images() { {{alt_images}} }
+// Image id => #{ headshot } for the guns whose TT_isRaycastCritical is
+// TT_isRaycastHeadshot (Tier 2's Military Sniper).
+fn crit_images() { {{crit_images}} }
+// Image id => #{ tt_raycastcritdirectdamagetype }: a crit's kill message.
+fn crit_types() { {{crit_types}} }
+// The crit Add-On (Emote_Critical), or () for none: Support_TT_Raycasting
+// crits only while it is on, as it checked isObject(CritProjectile).
+fn critical() { {{critical}} }
 // The bag a dead player's ammo spills into (Ammo_Unified.cs).
 fn bag() { "{{namespace}}:weapon/ammodroppeditem" }
 
@@ -59,6 +73,10 @@ fn on_damage(victim, attacker, amount, info) {
     if info.kind != "weapon" || !info.contains("projectile") {
         return ();
     }
+    let crit = raycast_crit(victim, attacker, amount, info);
+    if crit != () {
+        return crit;
+    }
     let table = headshots();
     if !table.contains(info.projectile) {
         return ();
@@ -72,15 +90,56 @@ fn on_damage(victim, attacker, amount, info) {
         return ();
     }
     let me = player(victim);
-    if me == () || !info.contains("y") {
+    if me == () || !info.contains("y") || !head(me, info.y) {
         return ();
     }
+    #{ amount: amount * multiplier, type: shot.type }
+}
+
+// TT_isRaycastHeadshot's test, as the projectiles' above.
+fn head(me, y) {
     let scale = if me.scale > 0.0 { me.scale } else { 1.0 };
     let centre = if me.crouched { 2.0 } else { 5.3 };
-    if info.y - me.y > (centre - 3.3) * scale {
-        return #{ amount: amount * multiplier, type: shot.type };
+    y - me.y > (centre - 3.3) * scale
+}
+
+// TT_onRaycastDamage on a crit: three times the damage under the gun's
+// crit kill message, Emote_Critical's burst on the victim at their scale
+// and its received sound in their ears, and once a shot its fire sound
+// where the shooter stands and its hit sound in their ears. A hitscan
+// gun's ray is `<ns>:projectile/<image>ray`.
+fn raycast_crit(victim, attacker, amount, info) {
+    let ray = info.projectile;
+    if !ray.ends_with("ray") {
+        return ();
     }
-    ()
+    let image = ray.sub_string(0, ray.len() - 3);
+    image.replace(":projectile/", ":image/");
+    let critical = critical();
+    if !crit_images().contains(image) || critical == () || !enabled(critical) {
+        return ();
+    }
+    let me = player(victim);
+    if me == () || !info.contains("y") || !head(me, info.y) {
+        return ();
+    }
+    spawn_explosion(victim, `${critical}:projectile/critprojectile`, me.scale);
+    play_sound(victim, `${critical}:sound/critrecievesound`);
+    if attacker != () && player(attacker) != () && get_player(attacker, "crit_shot") != tick() {
+        set_player(attacker, "crit_shot", tick());
+        let shooter = player(attacker);
+        sound_at(`${critical}:sound/critfiresound`, shooter.cx, shooter.cy, shooter.cz);
+        play_sound(attacker, `${critical}:sound/crithitsound`);
+    }
+    let types = crit_types();
+    let kind = if types.contains(image) { types[image].tt_raycastcritdirectdamagetype } else { () };
+    if type_of(kind) == "string" {
+        kind.replace("$DamageType::", "");
+        if kind == "" {
+            kind = ();
+        }
+    }
+    #{ amount: amount * 3.0, type: kind }
 }
 
 // Item_Ammo.cs: an ammo item adds each of its lines up to the type's most,
@@ -175,4 +234,44 @@ fn on_death(victim, killer) {
 // getRandom(-8, 8), the same on every machine.
 fn side(victim, axis) {
     floor(hash3(victim, tick(), axis, 0) * 17.0) - 8.0
+}
+
+// pushDatablock: the gun in hand lays its player type over the holder's
+// as it starts firing.
+fn cmd_lay(p) {
+    let me = player(p);
+    if me == () {
+        return;
+    }
+    let table = laid();
+    if table.contains(me.image) {
+        push_archetype(p, table[me.image].archetype);
+    }
+}
+
+// popDatablock: firing stopped, the gun ran dry or left the hand. The gun
+// may already be gone, so every type this pack lays is lifted; one not
+// laid on is left alone.
+fn cmd_lift(p) {
+    for row in laid().values() {
+        pop_archetype(p, row.archetype);
+    }
+}
+
+// onAltTrigger: jet with the gun in hand mounts its second fire mode,
+// which loads from the gun's own magazine.
+fn cmd_alt_fire(p) {
+    let me = player(p);
+    if me == () {
+        return;
+    }
+    let table = alt_images();
+    if table.contains(me.image) {
+        mount_image(p, table[me.image].image);
+    }
+}
+
+// The second fire mode's onDone: the gun's own image comes back.
+fn cmd_alt_done(p) {
+    mount_image(p, ());
 }

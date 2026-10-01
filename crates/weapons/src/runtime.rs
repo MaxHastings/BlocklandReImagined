@@ -464,14 +464,14 @@ pub enum Event {
     DropRemoved {
         drop: u64,
     },
-/// Text in the middle of the holder's screen for `seconds`: a cooked
+    /// Text in the middle of the holder's screen for `seconds`: a cooked
     /// grenade's countdown.
     Print {
         actor: ActorId,
         text: String,
         seconds: f32,
     },
-        Diagnostic {
+    Diagnostic {
         actor: Option<ActorId>,
         message: String,
     },
@@ -679,7 +679,7 @@ struct Ray<'a> {
     muzzle: Vec3,
     direction: Vec3,
     range: f32,
-    hit: Option<&'a crate::RayHit>,
+    hitscan: &'a crate::Hitscan,
 }
 /// What one tick of an image's state machine asks of its holder.
 enum Advance {
@@ -1255,7 +1255,10 @@ impl WeaponsWorld {
             a.cook = None;
             return;
         };
-        let burned = self.tick.saturating_sub(cooking.lit).min(u64::from(u32::MAX)) as u32;
+        let burned = self
+            .tick
+            .saturating_sub(cooking.lit)
+            .min(u64::from(u32::MAX)) as u32;
         if burned >= cook.fuse_ticks {
             a.cook = None;
             if let Some(projectile) = &image.projectile {
@@ -1453,7 +1456,8 @@ impl WeaponsWorld {
         // The rules' image wins over a switch still waiting on the old one.
         a.next = None;
         for hand in 0..2u8 {
-            if a.images[hand as usize].take().is_some() {
+            if let Some(old) = a.images[hand as usize].take() {
+                self.put_away(id, &old);
                 self.events.push(Event::Unmounted { actor: id, hand });
             }
         }
@@ -1466,8 +1470,27 @@ impl WeaponsWorld {
         self.actors.insert(id, a);
         Ok(())
     }
+    /// An image leaves the hand: its `unmount` command runs.
+    fn put_away(&mut self, id: ActorId, old: &Equipped) {
+        if let Some(command) = self
+            .pack
+            .images
+            .get(&old.image)
+            .and_then(|i| i.commands.unmount.clone())
+        {
+            self.events.push(Event::ToolFire {
+                actor: id,
+                image: old.image.clone(),
+                hand: old.hand,
+                command: Some(command),
+            });
+        }
+    }
     fn mount(&mut self, id: ActorId, a: &mut Actor, image: &str, hand: u8) {
         if self.pack.images.contains_key(image) {
+            if let Some(old) = a.images[hand as usize].take() {
+                self.put_away(id, &old);
+            }
             // `ShapeBase::mountImage(%image, %slot, %loaded = true)` and
             // `WeaponImage::onMount`'s `setImageAmmo(%slot, 1)`: every image
             // put in the hand starts loaded and with ammo. The flags are the
@@ -1515,8 +1538,9 @@ impl WeaponsWorld {
                 locked: false,
             });
         }
-        for (hand, image) in a.images.iter_mut().enumerate() {
-            if image.take().is_some() {
+        for hand in 0..2 {
+            if let Some(old) = a.images[hand].take() {
+                self.put_away(id, &old);
                 self.events.push(Event::Unmounted {
                     actor: id,
                     hand: hand as u8,
@@ -2331,16 +2355,14 @@ impl WeaponsWorld {
                     return true;
                 };
                 // A shot on the move may fly another projectile (a weaker
-                // round), as its spread and range change.
-                let projectile = match image.shot.as_ref() {
-                    Some(shot)
-                        if a.frame.velocity.length() > shot.moving_speed
-                            && let Some(moving) = &shot.moving_projectile =>
-                    {
-                        moving
-                    }
-                    _ => projectile,
-                };
+                // round), as its spread and range change, and a rested one
+                // its own (a steadier round).
+                let idle_ticks = a.last_shot.map(|t| self.tick.saturating_sub(t));
+                let projectile = state_shot
+                    .as_ref()
+                    .or(image.shot.as_ref())
+                    .and_then(|s| s.projectile_for(a.frame.velocity.length(), idle_ticks))
+                    .unwrap_or(projectile);
                 let p = self.pack.projectiles[projectile].clone();
                 let sport = p.sport_image.is_some();
                 if sport && self.tick < a.ball_ready {
@@ -2357,7 +2379,13 @@ impl WeaponsWorld {
                 // The right gun's magazine pays for each shot, the left
                 // gun's too when it has none of its own (both pistols of a
                 // pair load from one count, as Tier+Tactical's do).
-                let pays = if e.hand == 0 {
+                let free = state_shot
+                    .as_ref()
+                    .or(image.shot.as_ref())
+                    .is_some_and(|s| s.free);
+                let pays = if free {
+                    None
+                } else if e.hand == 0 {
                     Some(e.clone())
                 } else if image.magazine.is_none() {
                     a.images[0].clone()
@@ -2377,7 +2405,6 @@ impl WeaponsWorld {
                     Some(l) => (Some(l.shot.clone()), l.volleys.as_slice()),
                     None => (image.shot.clone(), image.volleys.as_slice()),
                 };
-                let idle_ticks = a.last_shot.map(|t| self.tick.saturating_sub(t));
                 a.last_shot = Some(self.tick);
                 let mut origin = if image.melee {
                     a.frame.eye
@@ -2522,7 +2549,7 @@ impl WeaponsWorld {
                                 muzzle: origin,
                                 direction: turn * aim,
                                 range,
-                                hit: hitscan.hit.as_ref(),
+                                hitscan,
                             },
                             q,
                         );
@@ -2548,7 +2575,10 @@ impl WeaponsWorld {
                     // A cooked grenade flies with what is left of its fuse.
                     if let (Some(cook), Some(lit)) = (
                         &image.cook,
-                        a.cook.as_ref().filter(|c| c.image == image.id).map(|c| c.lit),
+                        a.cook
+                            .as_ref()
+                            .filter(|c| c.image == image.id)
+                            .map(|c| c.lit),
                     ) {
                         let burned = self.tick.saturating_sub(lit).min(u64::from(u32::MAX)) as u32;
                         self.fuses
@@ -2969,8 +2999,8 @@ impl WeaponsWorld {
     }
     /// One ray of a [`crate::Hitscan`] shot: the projectile `definition`
     /// lands where the ray first meets something, as if it had flown there,
-    /// or the ray does its own [`crate::RayHit`] there; every player draws
-    /// the tracer to that point.
+    /// with the hitscan's landing sound; every player draws the tracer to
+    /// that point, and its `flown` projectile flies there.
     fn hitscan(&mut self, id: ActorId, a: &Actor, ray: Ray, q: &mut impl Query) {
         let definition = ray.definition;
         let d = self.pack.projectiles[definition].clone();
@@ -2996,16 +3026,16 @@ impl WeaponsWorld {
             image: ray.image.into(),
             to,
         });
-        if let Some(rh) = ray.hit
-            && rh.tracer
+        if let Some(flown) = self.projectile_named(&ray.hitscan.flown)
+            && let Some(speed) = self.pack.projectiles.get(&flown).map(|f| f.speed)
         {
-            // The image's own projectile, flown from the muzzle to the end.
+            // Flown from the muzzle to the end, to be seen.
             let along = (to - ray.muzzle).normalize_or(direction);
             if let Err(error) = self.spawn(
-                definition,
+                &flown,
                 id,
                 ray.muzzle,
-                along * d.speed * a.frame.scale,
+                along * speed * a.frame.scale,
                 a.frame.scale,
             ) {
                 self.events.push(Event::Diagnostic {
@@ -3055,73 +3085,34 @@ impl WeaponsWorld {
         if matches!(q.on_contact(&contact), ContactResponse::Delete) {
             return;
         }
-        match ray.hit {
-            Some(rh) => self.ray_hit(&p, rh, hit.target, normal, q),
-            None => {
-                if q.can_affect(id, hit.target) {
-                    self.direct_hit(&p, &d, hit.target, hit.position);
-                }
-                self.explode(&p, &d, q, Some(normal));
-            }
+        if q.can_affect(id, hit.target) {
+            self.direct_hit(&p, &d, hit.target, hit.position);
         }
-    }
-    /// A [`crate::RayHit`] where a ray landed: its damage and push to a
-    /// body the rules let it hurt, its explosion, and its sound.
-    fn ray_hit(
-        &mut self,
-        p: &Projectile,
-        rh: &crate::RayHit,
-        target: TargetId,
-        normal: Vec3,
-        q: &mut impl Query,
-    ) {
-        let body = matches!(
-            target,
-            TargetId::Actor(_) | TargetId::Vehicle(_) | TargetId::Entity(_)
-        );
-        let direction = p.velocity.normalize_or_zero();
-        if body && q.can_affect(p.source, target) {
-            if rh.damage > 0.0 {
-                self.events.push(Event::Damage {
-                    source: p.source,
-                    target,
-                    amount: rh.damage * p.scale,
-                    kind: rh.damage_type.clone(),
-                    projectile: p.definition.clone(),
-                    position: p.position,
-                    direction,
-                });
-            }
-            if rh.impulse > 0.0 || rh.vertical_impulse > 0.0 {
-                self.events.push(Event::Impulse {
-                    source: p.source,
-                    target,
-                    impulse: (direction * rh.impulse + Vec3::Y * rh.vertical_impulse) * p.scale,
-                    position: p.position,
-                });
-            }
-        }
-        if let Some(definition) = self.projectile_named(&rh.explosion)
-            && let Some(d) = self.pack.projectiles.get(&definition).cloned()
+        match self
+            .projectile_named(&ray.hitscan.explosion)
+            .and_then(|e| Some((self.pack.projectiles.get(&e)?.clone(), e)))
         {
             // `%p.explode()` where the ray landed, facing out of the surface.
-            let blast = Projectile {
-                definition,
-                velocity: normal,
-                ..p.clone()
-            };
-            self.explode(&blast, &d, q, Some(normal));
+            Some((blast, definition)) => {
+                let at = Projectile {
+                    definition,
+                    velocity: normal,
+                    ..p.clone()
+                };
+                self.explode(&at, &blast, q, Some(normal));
+            }
+            None => self.explode(&p, &d, q, Some(normal)),
         }
-        let sound = if matches!(target, TargetId::Actor(_)) {
-            &rh.player_sound
+        let sound = if matches!(hit.target, TargetId::Actor(_)) {
+            &ray.hitscan.player_sound
         } else {
-            &rh.other_sound
+            &ray.hitscan.other_sound
         };
         if !sound.is_empty() {
             self.events.push(Event::Sound {
-                source: TargetId::Actor(p.source),
+                source: TargetId::Actor(id),
                 profile: sound.clone(),
-                position: p.position,
+                position: hit.position,
             });
         }
     }

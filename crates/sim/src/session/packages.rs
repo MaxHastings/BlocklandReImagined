@@ -1336,7 +1336,59 @@ impl Session {
                 if let Some(chosen) = chosen
                     && peer.combat.alive
                 {
-                    self.set_player_archetype(player, chosen)?;
+                    // Under laid-on archetypes it changes the one beneath.
+                    match &mut peer.overlays {
+                        Some(overlays) => overlays.base = chosen,
+                        None => self.set_player_archetype(player, chosen)?,
+                    }
+                }
+                Ok(())
+            }
+            Op::PushArchetype { player, archetype } => {
+                let laid = self
+                    .archetypes
+                    .find(&archetype)
+                    .with_context(|| format!("No archetype {archetype}"))?;
+                let peer = self.peers.get_mut(&player).context("No such player")?;
+                if !peer.combat.alive {
+                    return Ok(());
+                }
+                let current = peer.player.state().archetype;
+                // `pushDatablock` takes only a datablock of the same shape.
+                if self.archetypes.resolve(current).look.model
+                    != self.archetypes.resolve(laid).look.model
+                {
+                    return Ok(());
+                }
+                let overlays = peer.overlays.get_or_insert_with(|| super::Overlays {
+                    base: current,
+                    laid: Vec::new(),
+                });
+                if overlays.base == laid || overlays.laid.contains(&laid) {
+                    return Ok(());
+                }
+                overlays.laid.push(laid);
+                self.set_player_archetype(player, laid)
+            }
+            Op::PopArchetype { player, archetype } => {
+                let lifted = self
+                    .archetypes
+                    .find(&archetype)
+                    .with_context(|| format!("No archetype {archetype}"))?;
+                let peer = self.peers.get_mut(&player).context("No such player")?;
+                let Some(overlays) = peer.overlays.as_mut().filter(|_| peer.combat.alive) else {
+                    return Ok(());
+                };
+                let Some(at) = overlays.laid.iter().position(|a| *a == lifted) else {
+                    return Ok(());
+                };
+                overlays.laid.remove(at);
+                let top = overlays.laid.last().copied().unwrap_or(overlays.base);
+                if overlays.laid.is_empty() {
+                    peer.overlays = None;
+                }
+                if peer.player.state().archetype != top {
+                    self.set_player_archetype(player, top)?;
                 }
                 Ok(())
             }

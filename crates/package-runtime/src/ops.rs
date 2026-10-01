@@ -157,6 +157,22 @@ pub enum Op {
         player: u64,
         archetype: String,
     },
+    /// Lay an archetype over a living player's own for a while (Kai's
+    /// `pushDatablock`: a machine gunner walking slowly as they fire). The
+    /// player moves as the newest one laid on, keeping the damage they
+    /// have taken; `set_archetype` meanwhile changes the one underneath.
+    /// Refused quietly for a body of another model, or one already laid
+    /// on. All are lifted when the player dies.
+    PushArchetype {
+        player: u64,
+        archetype: String,
+    },
+    /// Lift an archetype [`Op::PushArchetype`] laid on (`popDatablock`);
+    /// nothing when it is not on.
+    PopArchetype {
+        player: u64,
+        archetype: String,
+    },
     /// Show a block brick in one of its block's named states (`""` for the
     /// block's own faces): a dig tool cracks it, a switch lights it.
     SetBlockState {
@@ -597,6 +613,8 @@ impl Op {
             Self::Teleport { .. }
             | Self::Respawn { .. }
             | Self::SetArchetype { .. }
+            | Self::PushArchetype { .. }
+            | Self::PopArchetype { .. }
             | Self::Control { .. }
             | Self::GiveItem { .. }
             | Self::TakeItem { .. }
@@ -677,6 +695,11 @@ impl Op {
             }
             Self::SetArchetype { archetype, .. } => {
                 archetype.len() <= 160 && !archetype.chars().any(char::is_control)
+            }
+            Self::PushArchetype { archetype, .. } | Self::PopArchetype { archetype, .. } => {
+                !archetype.is_empty()
+                    && archetype.len() <= 160
+                    && !archetype.chars().any(char::is_control)
             }
             Self::PlaceBrick {
                 shape,
@@ -977,6 +1000,8 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::Teleport { .. } => "teleport",
         Op::Respawn { .. } => "respawn",
         Op::SetArchetype { .. } => "set_archetype",
+        Op::PushArchetype { .. } => "push_archetype",
+        Op::PopArchetype { .. } => "pop_archetype",
         Op::Control { .. } => "control",
         Op::SetBlockState { .. } => "set_block_state",
         Op::Broadcast { .. } => "broadcast",

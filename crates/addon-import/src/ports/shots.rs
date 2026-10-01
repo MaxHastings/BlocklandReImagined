@@ -40,7 +40,8 @@ pub struct Last {
 }
 
 /// Hitscan guns read from their images' fields, by the names a raycasting
-/// support script gave them. Each gun whose `when` field is set gets
+/// support script gave them (Space Guy's `raycast*` and the copies of it,
+/// Tier+Tactical's `TT_raycast*`). Each gun whose `when` field is set gets
 /// `shot.hitscan`, and a projectile of its own (`<image>Ray`) that carries
 /// the image's damage, so hit rules and `on_damage` see it by id.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,8 +66,9 @@ pub struct Hitscans {
     pub damage_limit: Option<f32>,
     /// The field holding its damage type (`$DamageType::Gun`).
     pub damage_type: String,
-    /// The field naming the projectile whose look and blast a hit shows;
-    /// the image's own projectile without it.
+    /// The field naming the projectile exploded where a ray lands (its
+    /// look and blast; none when an image leaves it empty); without it,
+    /// the image's own projectile's explosion.
     #[serde(default)]
     pub hit_projectile: Option<String>,
     /// The fields holding the shove along the shot and straight up.
@@ -86,6 +88,16 @@ pub struct Hitscans {
     /// (the engine's tracer: `color`, `width`, `seconds`).
     #[serde(default)]
     pub tracer: Option<TracerField>,
+    /// The field naming a projectile flown from the muzzle to where the
+    /// ray ended (`raycastTracerProjectile`), as the script spawned it.
+    #[serde(default)]
+    pub flown: Option<String>,
+    /// The fields naming the sounds where a ray lands on a player, and on
+    /// anything else.
+    #[serde(default)]
+    pub player_sound: Option<String>,
+    #[serde(default)]
+    pub other_sound: Option<String>,
 }
 
 /// [`Hitscans::tracer`].
@@ -508,28 +520,54 @@ pub fn hitscans(h: &Hitscans, weapons: &Value, code: &super::Code) -> Result<Rea
         {
             hitscan["tracer"] = t.look.clone();
         }
+        let named = |field: &Option<String>| {
+            field
+                .as_ref()
+                .and_then(|f| blocks.field(name, f))
+                .map(|v| crate::literal(v).trim().to_owned())
+                .filter(|v| !v.is_empty())
+        };
+        if let Some(flown) = named(&h.flown) {
+            hitscan["flown"] = json!(
+                id_of(weapons, "ProjectileData", &flown)
+                    .with_context(|| format!("{name}: its tracer {flown} did not import"))?
+            );
+        }
+        for (key, field) in [
+            ("player_sound", &h.player_sound),
+            ("other_sound", &h.other_sound),
+        ] {
+            if let Some(sound) = named(field) {
+                hitscan[key] = json!(super::datablocks::sound_ref(weapons, &sound));
+            }
+        }
         let mut damage = number(name, &Some(h.damage.clone()))?.unwrap_or(0.0);
         if let Some(limit) = h.damage_limit {
             damage = damage.clamp(-limit, limit);
         }
         let damage_type = blocks.field(name, &h.damage_type).unwrap_or_default();
-        // The look and blast of a hit: the named projectile's, or the
-        // image's own.
-        let base = match h
+        // The ray is the image's own projectile carrying the image's hit.
+        // A port that names the field of a projectile exploded where it
+        // lands shows that one in place of the ray's own explosion, or
+        // nothing when an image leaves it empty, as the script then spawned
+        // nothing.
+        let base = image["projectile"]
+            .as_str()
+            .with_context(|| format!("{name}: no projectile for its hits"))?;
+        let mut ray = weapons["projectiles"][base].clone();
+        ensure!(ray.is_object(), "{name}: {base} did not import");
+        let shown = h
             .hit_projectile
             .as_ref()
-            .and_then(|f| blocks.field(name, f))
-            .filter(|v| !v.trim().is_empty())
-        {
-            Some(n) => id_of(weapons, "ProjectileData", n)
-                .with_context(|| format!("{name}: its hit shows {n}, which did not import"))?,
-            None => image["projectile"]
-                .as_str()
-                .with_context(|| format!("{name}: no projectile for its hits"))?
-                .to_owned(),
-        };
-        let mut ray = weapons["projectiles"][&base].clone();
-        ensure!(ray.is_object(), "{name}: {base} did not import");
+            .map(|f| crate::literal(blocks.field(name, f).unwrap_or_default()).trim());
+        if let Some(shown) = shown {
+            if let Some(r) = ray.as_object_mut() {
+                r.remove("explosion");
+            }
+            if !shown.is_empty() {
+                hitscan["explosion"] = json!(super::datablocks::projectile_ref(weapons, shown));
+            }
+        }
         let namespace = id.split(':').next().unwrap_or_default();
         let ray_name = format!("{name}Ray");
         let ray_id = format!("{namespace}:projectile/{}", ray_name.to_ascii_lowercase());

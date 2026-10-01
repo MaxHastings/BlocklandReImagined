@@ -237,6 +237,8 @@ fn the_spread_is_chosen_by_movement_and_rest() {
         rested: Some(Rested {
             after_ticks: 60,
             spread: 0.0,
+            still: true,
+            projectile: None,
         }),
         ..Shot::SINGLE
     };
@@ -254,6 +256,21 @@ fn the_spread_is_chosen_by_movement_and_rest() {
         0.01,
         "moving is never rested"
     );
+    // Tier+Tactical's Assault Rifle rests by time alone.
+    let any_pace = Shot {
+        rested: Some(Rested {
+            still: false,
+            projectile: Some("kit:projectile/true".into()),
+            ..still_only.rested.clone().unwrap()
+        }),
+        ..still_only
+    };
+    assert_eq!(any_pace.spread_for(5.0, None), 0.0, "rested on the run");
+    assert_eq!(
+        any_pace.projectile_for(5.0, Some(60)).map(String::as_str),
+        Some("kit:projectile/true")
+    );
+    assert_eq!(any_pace.projectile_for(5.0, Some(59)), None, "a follow-up");
 }
 
 #[test]
@@ -595,4 +612,126 @@ fn a_vertical_recoil_pushes_only_up_or_down() {
         ..Shot::SINGLE
     };
     assert_eq!(shot.recoil_velocity(aim), -aim * 4.0);
+}
+
+/// A rifle whose first round after a pause is a truer one, and a machine
+/// gun whose every pull fires a second, free and tighter round.
+const AUTOMATICS: &str = r#"{
+    "schema_version": 3,
+    "id": "kit",
+    "items": {
+        "kit:weapon/rifle": { "ui_name": "Rifle", "image": "kit:image/rifle" },
+        "kit:weapon/mg": { "ui_name": "Machine Gun", "image": "kit:image/mg" }
+    },
+    "images": {
+        "kit:image/rifle": {
+            "projectile": "kit:projectile/round",
+            "shot": { "spread": 0.01,
+                      "rested": { "after_ticks": 60, "spread": 0.0, "projectile": "kit:projectile/true" } },
+            "states": [
+                { "name": "Activate", "ticks": 4, "timeout": 1 },
+                { "name": "Ready", "down": 2 },
+                { "name": "Fire", "ticks": 6, "timeout": 3, "script": "onFire", "allow_change": false },
+                { "name": "Wait", "ticks": 2, "timeout": 1 }
+            ]
+        },
+        "kit:image/mg": {
+            "projectile": "kit:projectile/round",
+            "shot": { "spread": 0.02 },
+            "state_shots": { "onfire2": { "spread": 0.0, "free": true } },
+            "magazine": { "size": 10, "ammo": "belt", "reload_ticks": 24, "reserve": 0, "max_reserve": 100 },
+            "states": [
+                { "name": "Activate", "ticks": 4, "timeout": 1 },
+                { "name": "Ready", "down": 2 },
+                { "name": "Fire", "ticks": 6, "timeout": 3, "script": "onFire", "allow_change": false },
+                { "name": "Fire2", "ticks": 4, "timeout": 4, "script": "onFire2", "allow_change": false },
+                { "name": "Wait", "ticks": 2, "timeout": 1 }
+            ]
+        }
+    },
+    "projectiles": {
+        "kit:projectile/round": { "speed": 200, "damage": 12, "lifetime_ticks": 120 },
+        "kit:projectile/true": { "speed": 300, "damage": 12, "lifetime_ticks": 120 }
+    }
+}"#;
+
+fn spawned(events: &[Event]) -> Vec<(String, Vec3)> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            Event::Spawned {
+                definition,
+                velocity,
+                ..
+            } => Some((definition.clone(), *velocity)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn holding_automatic(item: &str) -> (WeaponsWorld, Range) {
+    let mut w = world(AUTOMATICS);
+    let slot = w.give(A, item).unwrap();
+    w.equip(A, Some(slot)).unwrap();
+    let mut q = Range::default();
+    step(&mut w, &mut q, 8, &mut Vec::new());
+    (w, q)
+}
+
+#[test]
+fn a_rested_shot_flies_its_own_round() {
+    let (mut w, mut q) = holding_automatic("kit:weapon/rifle");
+    let first = spawned(&click(&mut w, &mut q));
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].0, "kit:projectile/true", "the first round is true");
+    let second = spawned(&click(&mut w, &mut q));
+    assert_eq!(second[0].0, "kit:projectile/round", "a quick follow-up");
+    step(&mut w, &mut q, 60, &mut Vec::new());
+    q.player = Vec3::new(500.0, 0.0, 0.0);
+    let third = spawned(&click(&mut w, &mut q));
+    assert_eq!(third[0].0, "kit:projectile/true", "rested again");
+}
+
+#[test]
+fn a_firing_state_fires_a_free_second_round_straight() {
+    let (mut w, mut q) = holding_automatic("kit:weapon/mg");
+    // Every round of a few pulls: one from onFire, one from Fire2.
+    let mut rounds = Vec::new();
+    for _ in 0..3 {
+        rounds.extend(spawned(&click(&mut w, &mut q)));
+    }
+    assert_eq!(rounds.len(), 6, "{rounds:?}");
+    assert_eq!(
+        w.ammo(A).unwrap().rounds,
+        7,
+        "only onFire takes from the magazine; onFire2 is free"
+    );
+    let straight = Vec3::new(0.0, 0.0, -200.0);
+    for (n, (_, velocity)) in rounds.iter().enumerate() {
+        if n % 2 == 1 {
+            assert!(
+                velocity.distance(straight) < 1e-3,
+                "Fire2 is true: {velocity}"
+            );
+        }
+    }
+    assert!(
+        rounds
+            .iter()
+            .step_by(2)
+            .any(|(_, v)| v.distance(straight) > 0.01),
+        "onFire keeps the shot's spread"
+    );
+}
+
+#[test]
+fn a_rested_round_is_checked() {
+    let bad = AUTOMATICS.replace(
+        r#""projectile": "kit:projectile/true""#,
+        r#""projectile": "kit:projectile/none""#,
+    );
+    let error = Pack::from_json(bad.as_bytes())
+        .expect_err("an unknown rested round is refused")
+        .to_string();
+    assert!(error.contains("rested projectile"), "{error}");
 }

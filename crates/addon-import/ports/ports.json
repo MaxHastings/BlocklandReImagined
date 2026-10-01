@@ -336,6 +336,73 @@
       "tests": [
         "crates/addon-import/tests/tier_port.rs tier1a_shotgun_knocks_back_and_the_nailgun_stays_hidden"
       ]
+    },
+    {
+      "addon": "Weapon_Package_Tier2",
+      "title": "Tier+Tactical Tier 2 (Kai)",
+      "port": "weapon_package_tier2",
+      "status": "partial",
+      "sha256": [
+        "481f2d430e5581f7504ad3f7d695df5236e870e9176e9368a1ccf73c837c58fd"
+      ],
+      "covers": {
+        "TAssaultRifleImage::onFire": {
+          "rested": "%obj\\.lastShotTime\\s*=\\s*getSimTime\\(",
+          "truer_round": "%projectile\\s*=\\s*TAssaultRifleProjectile2"
+        },
+        "BattleRifleImage::onFire": {
+          "knockback": "TT_knockback\\s*\\("
+        },
+        "LightMachinegunImage::onFire2": {
+          "second_round": "TT_createProjectile\\s*\\("
+        },
+        "LightMachinegunImage::onClick": {
+          "slows": "pushDatablock\\(\\s*LMGArmor"
+        },
+        "LightMachinegunImage::onHalt": {
+          "lifts": "popDatablock\\(\\s*LMGArmor"
+        },
+        "LightMachinegunImage::onEmptyTransition": {
+          "lifts": "popDatablock\\(\\s*LMGArmor"
+        },
+        "LightMachinegunImage::onUnMount": {
+          "lifts": "popDatablock\\(\\s*LMGArmor"
+        },
+        "Player::pushDatablock": {
+          "same_shape": "shapeFile"
+        },
+        "Player::popDatablock": {
+          "restores": "setDatablock\\("
+        },
+        "Armor::onTrigger": {
+          "alt_trigger": "onAltTrigger\\s*\\("
+        },
+        "CombatShotgunImage::onAltTrigger": {
+          "mounts": "mountImage\\(\\s*combatShotgunAltfireImage\\s*,\\s*0\\s*\\)"
+        },
+        "CombatShotgunAltfireImage::onFire": {
+          "two_shells": "TT_canFire\\(\\s*%obj\\s*,\\s*2\\s*\\)",
+          "blasts": "%projectile\\s*=\\s*CombatShotgunBlastProjectile"
+        },
+        "CombatShotgunAltfireImage::onDone": {
+          "returns": "mountImage\\(\\s*CombatShotgunImage\\s*,"
+        },
+        "BattlerifleProjectile1::damage": {
+          "slow": "TT_dampenVelocity\\s*\\("
+        },
+        "LightMachinegunProjectile1::damage": {
+          "slow": "TT_dampenVelocity\\s*\\("
+        },
+        "MagnumProjectile::damage": {
+          "headshot": "TT_processHeadshotDamage\\s*\\("
+        },
+        "MilitarySniperImage::TT_isRaycastCritical": {
+          "headshot": "TT_isRaycastHeadshot\\s*\\("
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/tier_port.rs tier2_guns_rest_fire_twice_slow_and_switch_modes"
+      ]
     }
   ]
 }

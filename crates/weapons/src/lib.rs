@@ -307,7 +307,8 @@ pub struct Image {
     /// that script, lowercase: v20 guns whose fire states each ran a
     /// script of their own (`onFire2`, `onFire3`) with its own spread and
     /// recoil, as a heavy gun's fire spreads wider as it keeps firing.
-    /// Each takes rounds and fires `volleys` as `onFire`'s shot does.
+    /// Each takes rounds (unless [`Shot::free`]) and fires `volleys` as
+    /// `onFire`'s shot does.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub state_shots: BTreeMap<String, Shot>,
     /// A grenade cooked in the hand ([`Cook`]).
@@ -696,6 +697,10 @@ pub struct ImageCommands {
     /// player's ghost brick.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cancel: Option<String>,
+    /// The image leaving the hand: another tool drawn, the hand emptied,
+    /// a rule mounting another image (v20 `onUnMount`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unmount: Option<String>,
 }
 impl ImageCommands {
     pub fn is_empty(&self) -> bool {
@@ -704,14 +709,21 @@ impl ImageCommands {
             && self.light.is_none()
             && self.wheel.is_none()
             && self.cancel.is_none()
+            && self.unmount.is_none()
     }
     /// Whether the image runs `command` (`package:command`) from any of its
-    /// moments: a state, jet, light, wheel or cancel.
+    /// moments: a state, jet, light, wheel, cancel or unmount.
     pub fn runs(&self, command: &str) -> bool {
         self.states.values().any(|c| c == command)
-            || [&self.jet, &self.light, &self.wheel, &self.cancel]
-                .into_iter()
-                .any(|c| c.as_deref() == Some(command))
+            || [
+                &self.jet,
+                &self.light,
+                &self.wheel,
+                &self.cancel,
+                &self.unmount,
+            ]
+            .into_iter()
+            .any(|c| c.as_deref() == Some(command))
     }
     /// The command for entering a state with `script`, if any.
     pub fn for_script(&self, script: &str) -> Option<&String> {
@@ -765,8 +777,8 @@ pub struct Shot {
     /// of this pack or one it depends on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub moving_projectile: Option<String>,
-    /// A steadier shot when the holder stands still and has not fired for
-    /// a while: the first shot of a burst.
+    /// A steadier shot when the holder has not fired for a while (and,
+    /// with `still`, stands still): the first shot of a burst.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rested: Option<Rested>,
     /// Each projectile arrives instantly along a ray instead of flying.
@@ -782,6 +794,11 @@ pub struct Shot {
     /// damage. Their speed is the shot's.
     #[serde(default = "one_f32", skip_serializing_if = "is_one")]
     pub scale: f32,
+    /// It takes no rounds from the magazine, as a script that fired
+    /// without spending any (Tier+Tactical's light machine gun's
+    /// `onFire2`, a free second round each cycle).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub free: bool,
 }
 fn one_f32() -> f32 {
     1.0
@@ -856,6 +873,7 @@ impl Shot {
         hitscan: None,
         kick: None,
         scale: 1.0,
+        free: false,
     };
     /// The velocity the recoil adds to a shooter aiming along `direction`
     /// (a unit vector, Y up), before the projectiles inherit it.
@@ -876,25 +894,47 @@ impl Shot {
         {
             return moving;
         }
-        match self.rested {
-            Some(r)
-                if speed <= self.moving_speed
-                    && idle_ticks.is_none_or(|t| t >= u64::from(r.after_ticks)) =>
-            {
-                r.spread
-            }
-            _ => self.spread,
+        match self.rested_at(speed, idle_ticks) {
+            Some(r) => r.spread,
+            None => self.spread,
         }
+    }
+    /// The projectile a shot flies in place of the image's, if any: the
+    /// moving one while moving, else the rested one once rested.
+    pub fn projectile_for(&self, speed: f32, idle_ticks: Option<u64>) -> Option<&String> {
+        if speed > self.moving_speed
+            && let Some(moving) = &self.moving_projectile
+        {
+            return Some(moving);
+        }
+        self.rested_at(speed, idle_ticks)?.projectile.as_ref()
+    }
+    /// [`Shot::rested`] when a shot `idle_ticks` after the last, at `speed`,
+    /// is rested.
+    fn rested_at(&self, speed: f32, idle_ticks: Option<u64>) -> Option<&Rested> {
+        self.rested.as_ref().filter(|r| {
+            (!r.still || speed <= self.moving_speed)
+                && idle_ticks.is_none_or(|t| t >= u64::from(r.after_ticks))
+        })
     }
 }
 /// [`Shot::rested`].
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Rested {
     /// Ticks since the holder's last shot (120 a second), 1 to 1200.
     pub after_ticks: u32,
     /// The spread of that shot, 0 to 1.
     pub spread: f32,
+    /// Only while the holder moves no faster than the shot's
+    /// `moving_speed`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub still: bool,
+    /// The projectile that shot flies in place of the image's, of this
+    /// pack or one it depends on (Tier+Tactical's Assault Rifle fires a
+    /// truer round after a pause).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projectile: Option<String>,
 }
 /// [`Shot::hitscan`]: the image's projectile arrives at once where a ray
 /// from the muzzle (or the eye) first meets something, and does there what
@@ -909,10 +949,6 @@ pub struct Hitscan {
     /// `moving_speed` (Tier+Tactical's guns reach less on the move).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub moving_range: Option<f32>,
-    /// What the ray does where it lands, in place of landing the image's
-    /// projectile there: Space Guy's raycasting weapons and Tier+Tactical's.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub hit: Option<RayHit>,
     /// Cast from the eye along the look rather than from the muzzle, so a
     /// scope's shot lands on its crosshair.
     #[serde(default)]
@@ -920,42 +956,24 @@ pub struct Hitscan {
     /// The streak each player draws from the muzzle to where the ray ended.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracer: Option<Tracer>,
-}
-/// [`Hitscan::hit`], from a raycasting weapon's `raycast*` fields: damage
-/// and a push to a player, vehicle or creature the ray meets, an
-/// explosion's effects and a sound where it lands, and the image's own
-/// projectile flown from the muzzle to that point as its tracer.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RayHit {
-    /// Damage to what it meets, 0 to 100, times the shooter's scale
-    /// (`raycastDirectDamage`).
-    #[serde(default)]
-    pub damage: f32,
-    /// Its damage type, as a projectile's (`raycastDirectDamageType`).
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub damage_type: String,
-    /// The push along the shot and straight up, 0 to 10000
-    /// (`raycastImpactImpulse`, `raycastVerticalImpulse`).
-    #[serde(default)]
-    pub impulse: f32,
-    #[serde(default)]
-    pub vertical_impulse: f32,
     /// A projectile exploded where it lands, by id or datablock name, from
     /// this pack or any other loaded (`raycastExplosionProjectile`): its
-    /// explosion's effects and sound, and its blast.
+    /// explosion's effects and sound, and its blast, in place of the landing
+    /// projectile's own explosion.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub explosion: String,
-    /// Sounds where it lands on a player, and on anything else.
+    /// A projectile flown from the muzzle to where the ray ended, by id or
+    /// datablock name, from this pack or any other loaded: a raycasting
+    /// script's `raycastTracerProjectile`, seen by everyone, which still
+    /// pushes and knocks loose bricks as it lands.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub flown: String,
+    /// Sounds where it lands on a player, and on anything else
+    /// (`raycastExplosionPlayerSound`, `raycastExplosionBrickSound`).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub player_sound: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub other_sound: String,
-    /// The image's projectile also flies from the muzzle to where the ray
-    /// ended (`raycastTracerProjectile`): seen by everyone, and it still
-    /// pushes and knocks loose bricks as it lands.
-    #[serde(default)]
-    pub tracer: bool,
 }
 /// A hitscan shot's streak, drawn on every player's screen from their own
 /// copy of the weapons pack: the shot sends only where it ended.
@@ -1624,6 +1642,11 @@ impl Pack {
                         .commands
                         .cancel
                         .as_deref()
+                        .is_none_or(is_image_command)
+                    && image
+                        .commands
+                        .unmount
+                        .as_deref()
                         .is_none_or(is_image_command),
                 "Invalid image command {id}"
             );
@@ -1640,7 +1663,7 @@ impl Pack {
                             && (0.1..=30.0).contains(&k.frequency)
                             && (0.05..=2.0).contains(&k.seconds)
                     })
-                    && s.rested.is_none_or(|r| {
+                    && s.rested.as_ref().is_none_or(|r| {
                         (1..=1200).contains(&r.after_ticks) && (0.0..=1.0).contains(&r.spread)
                     })
             };
@@ -1703,23 +1726,24 @@ impl Pack {
                     "Invalid moving_projectile of image {id}: {moving} is no projectile of the pack"
                 );
             }
+            if let Some(rested) = image
+                .shot
+                .as_ref()
+                .and_then(|s| s.rested.as_ref()?.projectile.as_ref())
+            {
+                ensure!(
+                    self.projectiles.contains_key(rested),
+                    "Invalid rested projectile of image {id}: {rested} is no projectile of the pack"
+                );
+            }
             if let Some(h) = image.shot.as_ref().and_then(|s| s.hitscan.as_ref()) {
-                if let Some(hit) = &h.hit {
-                    ensure!(
-                        (0.0..=100.0).contains(&hit.damage)
-                            && (0.0..=10_000.0).contains(&hit.impulse)
-                            && (0.0..=10_000.0).contains(&hit.vertical_impulse)
-                            && [
-                                &hit.damage_type,
-                                &hit.explosion,
-                                &hit.player_sound,
-                                &hit.other_sound,
-                            ]
-                            .iter()
-                            .all(|t| t.len() <= 128),
-                        "Invalid hitscan hit of image {id}: damage 0 to 100, impulses 0 to 10000"
-                    );
-                }
+                ensure!(
+                    [&h.explosion, &h.flown, &h.player_sound, &h.other_sound]
+                        .iter()
+                        .all(|t| t.len() <= 128),
+                    "Invalid hitscan of image {id}: explosion, flown projectile and sounds \
+                     up to 128 bytes"
+                );
                 ensure!(
                     image.projectile.is_some()
                         && (1.0..=2000.0).contains(&h.range)

@@ -8,6 +8,7 @@
 //! the source function, as behaviour an agent must build natively.
 //! Findings: `docs/audits/spike-addon-import.md`.
 pub mod behaviour;
+mod player_types;
 pub mod porting;
 pub mod ports;
 pub mod reference;
@@ -188,6 +189,8 @@ struct Ctx<'a> {
     /// Lower virtual path to package-relative output file.
     outputs: BTreeMap<String, String>,
     provides: Vec<serde_json::Value>,
+    /// Host-only content, for the import's companion ([`ports::Host`]).
+    host: ports::Host,
 }
 
 impl Ctx<'_> {
@@ -324,6 +327,7 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
         shapes: BTreeMap::new(),
         outputs: BTreeMap::new(),
         provides: vec![],
+        host: ports::Host::default(),
     };
     metadata(&mut cx);
     let scripts = read_scripts(&mut cx);
@@ -360,6 +364,19 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
     code.calls = scripts
         .iter()
         .flat_map(|s| s.calls.iter().cloned())
+        .collect();
+    // Player types by name: this Add-On's, its dependencies' and v20's.
+    let player_types: Vec<String> = cx
+        .owned
+        .values()
+        .map(|o| &o.d)
+        .chain(cx.reference.datablocks.values().map(|o| &o.datablock))
+        .filter(|d| d.class.eq_ignore_ascii_case("PlayerData"))
+        .map(|d| d.name.clone())
+        .collect();
+    code.archetypes = player_types
+        .iter()
+        .map(|name| (name.to_ascii_lowercase(), archetype_id(&cx, name)))
         .collect();
     finish(cx, opts, ports, &code)
 }
@@ -2327,6 +2344,101 @@ type Pending = (
     usize,
 );
 
+/// A `PlayerData` as an archetype ([`player_types`]): its fields and those
+/// of its ancestors in this Add-On, over the first one outside it. It is
+/// host content, so it goes in the import's companion ([`ports::Host`]).
+fn player_type(cx: &mut Ctx, name: &str, own: &BTreeMap<String, String>, at: Location) {
+    let mut fields = own.clone();
+    let mut parent = cx
+        .owned
+        .get(&name.to_ascii_lowercase())
+        .and_then(|o| o.d.parent.clone());
+    let mut seen = BTreeSet::from([name.to_ascii_lowercase()]);
+    while let Some(p) = parent.take() {
+        let key = p.to_ascii_lowercase();
+        let Some(o) = cx.owned.get(&key).filter(|_| seen.insert(key.clone())) else {
+            parent = Some(p);
+            break;
+        };
+        for (k, v) in &o.d.fields {
+            fields.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+        parent = o.d.parent.clone();
+    }
+    let base = parent
+        .filter(|p| !p.eq_ignore_ascii_case("PlayerStandardArmor"))
+        .map(|p| archetype_id(cx, &p));
+    if let Some(base) = &base
+        && let Some((package, _)) = base.split_once(':')
+        && package != ports::rules_id(&cx.ns)
+    {
+        cx.host.dependencies.insert(package.to_owned());
+    }
+    let converted = player_types::convert(&fields, base);
+    let file = format!("archetypes/{}.json", name.to_ascii_lowercase());
+    let bytes = match serde_json::to_vec_pretty(&converted.archetype) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            cx.mark(
+                name,
+                "player_type",
+                "failed",
+                vec![],
+                Some(format!("{error:#}")),
+            );
+            return;
+        }
+    };
+    let id = archetype_id(cx, name);
+    cx.host.files.push((file.clone(), bytes));
+    cx.host
+        .provides
+        .push(json!({ "kind": "archetype", "id": id, "file": file }));
+    cx.report.ids.push(IdEntry {
+        id: id.clone(),
+        kind: "archetype".into(),
+        from: name.into(),
+        file: format!("{}/{file}", ports::rules_id(&cx.ns)),
+    });
+    if converted.left_out.is_empty() {
+        cx.mark(name, "player_type", "converted", vec![id], None);
+    } else {
+        let left = converted.left_out.join(", ");
+        cx.mark(
+            name,
+            "player_type",
+            "converted_with_gaps",
+            vec![id],
+            Some(format!("no archetype field carries {left}")),
+        );
+        cx.unsupported(
+            format!("player type {name} fields"),
+            Some(at),
+            format!("{left}: not part of an archetype; left out"),
+        );
+    }
+}
+
+/// The archetype a `PlayerData` named `name` is: this Add-On's own or that
+/// of an Add-On it depends on (in the import's companion), or else v20's
+/// (`v20.player.<datablock>`).
+fn archetype_id(cx: &Ctx, name: &str) -> String {
+    let key = name.to_ascii_lowercase();
+    if cx.is_owned(&key) {
+        return content_id(&ports::rules_id(&cx.ns), "archetype", name);
+    }
+    match cx
+        .reference
+        .datablocks
+        .get(&key)
+        .filter(|o| o.addon != "base")
+        .and_then(|o| namespace_for(&o.addon).ok())
+    {
+        Some(ns) => content_id(&ports::rules_id(&ns), "archetype", name),
+        None => format!("v20.player.{key}"),
+    }
+}
+
 fn sounds_and_rest(cx: &mut Ctx) {
     let pending: Vec<Pending> = cx
         .report
@@ -2367,8 +2479,8 @@ fn sounds_and_rest(cx: &mut Ctx) {
                     );
                 }
             }
+            "playerdata" if !fields.contains_key("isholebot") => player_type(cx, &name, &own, at),
             "playerdata" => {
-                let bot = fields.contains_key("isholebot");
                 // Bot_Hole's settings are the `h`-prefixed fields this datablock declares.
                 let ai: Vec<_> = own
                     .keys()
@@ -2377,19 +2489,15 @@ fn sounds_and_rest(cx: &mut Ctx) {
                     .collect();
                 cx.mark(
                     &name,
-                    if bot { "bot" } else { "player_type" },
+                    "bot",
                     "recognised_only",
                     vec![],
-                    Some("no native schema for Add-On player types; bots are Rust brains that join as players".into()),
+                    Some("no native schema for Add-On bots; bots are Rust brains that join as players".into()),
                 );
                 cx.unsupported(
-                    format!("{} {name}", if bot { "bot" } else { "player type" }),
+                    format!("bot {name}"),
                     Some(at),
-                    if bot {
-                        format!("Bot_Hole AI settings ({}) configure a script framework this import does not have", ai.join(", "))
-                    } else {
-                        "PlayerData movement and armour are not importable from Add-Ons".into()
-                    },
+                    format!("Bot_Hole AI settings ({}) configure a script framework this import does not have", ai.join(", ")),
                 );
             }
             "debrisdata" => cx.mark(
@@ -2571,10 +2679,10 @@ fn finish(mut cx: Ctx, opts: &Options, ports: &ports::Ports, code: &ports::Code)
     let src = &cx.report.source;
     // The per-package manifest the package runtime reads
     // (`bri_package_runtime::manifest`). Its `provides` kinds are the ones the
-    // runtime consumes (behaviour, script, world, entity, model, hud); none of
-    // an Add-On's weapons, vehicles or bricks is one of them yet, so the
-    // imported content is declared in `assets/content.json` instead.
-    let manifest = json!({
+    // runtime consumes: the weapons, vehicles and bricks packs. The rest of
+    // the imported content is declared in `assets/content.json`; host-only
+    // content goes in the companion (`ports::Host`).
+    let mut manifest = json!({
         "schema_version": 1,
         "id": cx.ns,
         "version": opts.version,
@@ -2595,6 +2703,10 @@ fn finish(mut cx: Ctx, opts: &Options, ports: &ports::Ports, code: &ports::Code)
         "capabilities": [],
         "provides": runtime_provides(&cx.out, &cx.ns),
     });
+    if !cx.host.files.is_empty() {
+        // Turned on and off with the import.
+        manifest["companions"] = json!([ports::rules_id(&cx.ns)]);
+    }
     cx.write(
         "assets/content.json",
         &serde_json::to_vec_pretty(&json!({ "schema_version": 1, "content": cx.provides }))?,
@@ -2614,6 +2726,7 @@ fn finish(mut cx: Ctx, opts: &Options, ports: &ports::Ports, code: &ports::Code)
         namespace: &cx.ns,
         version: &opts.version,
         name: manifest["name"].as_str().unwrap_or(&cx.ns),
+        host: &cx.host,
     };
     if let Some(port) = ports::apply(ports, &import, code, &cx.out) {
         for b in &mut cx.report.needs_behaviour {
@@ -2630,6 +2743,9 @@ fn finish(mut cx: Ctx, opts: &Options, ports: &ports::Ports, code: &ports::Code)
             }
         }
         cx.report.ports.push(port);
+    }
+    if !cx.host.files.is_empty() && cx.report.ports.iter().all(|p| p.rules.is_none()) {
+        cx.report.host = Some(ports::host_package(&import, &cx.out)?);
     }
     cx.report.summarise();
     let mut files = vec![];

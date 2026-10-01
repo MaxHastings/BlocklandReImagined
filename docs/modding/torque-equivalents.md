@@ -46,6 +46,7 @@ operation that needs a capability.
 | `new Projectile() { ... }` | `fire(projectile, x, y, z, vx, vy, vz, by)` | `damage` |
 | `new Explosion()`, `radiusDamage` | `explode(x, y, z, radius, damage, brick_radius[, explosion])`; `explosion` names one of the weapons pack's (`"rocketExplosion"`, an imported Add-On's own), whose particles, light, shake and sound it then shows | `damage` |
 | `%obj.mountImage(%img, 0)` | `mount_image(p, image)`, `mount_image(p, ())` | `player` |
+| `%obj.pushDatablock(%db)`, `%obj.popDatablock(%db)` (Support_AltDatablock) | `push_archetype(p, a)`, `pop_archetype(p, a)` | `player` |
 | `%obj.unMountImage(0)` | `unmount_image(p)` | `player` |
 | `%obj.setScale("s s s")` | `set_scale(p, s)` | `player`; 0.2 to 5, one number |
 | `%obj.setLookLimits(%up, %down)` | `set_look_limits(p, up, down)`, `set_look_limits(p, ())` | `player` |

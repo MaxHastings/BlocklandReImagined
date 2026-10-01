@@ -844,6 +844,8 @@ impl Session {
             peer.combat.alive = false;
             peer.combat.health = 0.0;
             peer.combat.died_tick = tick;
+            // A corpse keeps no laid-on archetypes (`pushDatablock`).
+            peer.overlays = None;
             peer.combat.corpse_cleared = false;
             peer.inputs.clear();
             peer.control = super::ControlObject::Corpse;
@@ -1357,6 +1359,7 @@ impl Session {
                 1.0,
             )?;
             peer.player.refill_energy();
+            peer.overlays = None;
             peer.combat.speed_rule = 1.0;
             peer.combat.gun_slow = None;
             peer.player.set_speed_scale(1.0)?;

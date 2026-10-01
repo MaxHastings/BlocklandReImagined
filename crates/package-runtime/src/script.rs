@@ -1142,6 +1142,18 @@ fn register_api(engine: &mut Engine) {
             archetype: archetype.into(),
         })
     });
+    engine.register_fn("push_archetype", |player: Dynamic, archetype: &str| {
+        push(Op::PushArchetype {
+            player: id(&player)?,
+            archetype: archetype.into(),
+        })
+    });
+    engine.register_fn("pop_archetype", |player: Dynamic, archetype: &str| {
+        push(Op::PopArchetype {
+            player: id(&player)?,
+            archetype: archetype.into(),
+        })
+    });
     engine.register_fn("set_block_state", |brick: Dynamic, state: &str| {
         push(Op::SetBlockState {
             brick: id(&brick)?,

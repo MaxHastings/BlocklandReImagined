@@ -22,6 +22,9 @@ pub struct Report {
     /// The listed native port for this Add-On (`crates/addon-import/ports`),
     /// whether it was applied, and why not.
     pub ports: Vec<crate::ports::Applied>,
+    /// The companion host Add-On holding the import's host-only content
+    /// (`ports::Host`), when no port's rules carried it.
+    pub host: Option<crate::ports::RulesPackage>,
     /// Structure the readers skipped or repaired, per file.
     pub diagnostics: Vec<String>,
 }

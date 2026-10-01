@@ -163,7 +163,7 @@ HUD panels can only show keys the viewer receives. `persist` (default
 | `players()`, `bots()`, `player(id)` | `get_player(p, key)`, `set_player(p, key, v)` | `remove_brick`, `place_brick`, `set_block_state(brick, state)`: `world.edit` |
 | `aim()`, `me()`, `entities()` | `add_player(p, key, amount)` | `damage(target, amount[, by[, type]])`, `explode(...)`: `damage` |
 | `noise(seed, x, z)`, `hash3(seed, x, y, z)` | `entity_get(e, key)`, `entity_set(e, key, v)` | `spawn_entity`, `remove_entity`, `steer`, `label`: `entity` |
-| `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)` | | `teleport`, `respawn`, `set_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`, `take_item(p, item)`, `drop_item(item, x, y, z[, vx, vy, vz[, data]])`: `player` |
+| `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)` | | `teleport`, `respawn`, `set_archetype`, `push_archetype`, `pop_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`, `take_item(p, item)`, `drop_item(item, x, y, z[, vx, vy, vz[, data]])`: `player` |
 | `raycast(from, dir, range[, ignore])`, `can_damage(by, target)`, `enabled(add_on)` | | `set_fov(p, fov)`, `set_speed_scale(p, scale)`, `set_image_ammo(p, ammo)`, `mount_image(p, image)`, `unmount_image(p)`, `set_scale(p, scale)`, `set_look_limits(p, up, down)`: `player` |
 | | | `give_ammo(p, ammo, rounds)`, `set_reserve(p, ammo, rounds)`, `set_rounds(p, item, rounds)`, `reload(p)`: `player` |
 | `brick_box(brick)`, `voxel(brick)`, `can_place_voxel(x, y, z)` | | `place_voxel(x, y, z, material)`: `world.edit`; `set_avatar_colors(p, colors)`: `player` |
@@ -669,14 +669,21 @@ script sets on entering its state (`"TT_onFireCheck": { "loaded": ["shot"],
 "ammo": ["reserve"] }`, each flag `true`, `false` or true when any listed
 fact holds: `shot`, `empty`, `full`, `not_full`, `reserve`, `no_reserve`),
 `on_reload` and `on_loaded` the flags as a reload starts and as its rounds
-arrive, `reload_state` the state script the rounds arrive with, and
-`reload_from` the states in which the light key starts a reload.
+arrive, and `reload_state` the state script the rounds arrive with; its
+`light_states` (below) are then also the only states a reload starts in.
 
 An image's `shot` can say more of how it fires. `hitscan` (`range`, and
-`moving_range`) lands each projectile at once along a ray; with `hit` the
-ray does its own damage, push, explosion and sounds. `moving_spread` and
-`moving_projectile` replace the spread and the projectile while the
-shooter moves faster than `moving_speed`. `recoil` pushes the shooter back along
+`moving_range`) lands each projectile at once along a ray, with its
+damage and push; `explosion` names another projectile exploded there in
+place of its own, `player_sound` and `other_sound` play there by what it
+hit, `flown` names a projectile flown from the muzzle to that point, and
+`tracer` (`color`, `width`, `seconds`) draws a streak to it.
+`moving_spread` and `moving_projectile` replace the spread and the
+projectile while the shooter moves faster than `moving_speed`; `rested`
+(`after_ticks`, `spread`, and optionally `still` and `projectile`) is
+the truer first shot after a pause. An image's `state_shots` fire on
+entering a state whose script is not `onFire` (`"onfire2": { ... }`),
+each a shot of its own; a shot with `"free": true` takes no rounds. `recoil` pushes the shooter back along
 the aim as they fire (units a second); `recoil_vertical` sets the push
 along the aim's vertical part apart, so a machine gun can push only up or
 down. `kick` shakes the holder's view
@@ -900,7 +907,11 @@ Commando's [archetype](../../packages/samples/sample-commando/commando-archetype
 is a whole new body in a dozen lines: no jet, 150 health and faster feet.
 `movement` accepts any of the motor's constants by name (`gravity`,
 `jump_speed`, `air_control`, `step_height` and the rest); `set_archetype`
-switches a player between bodies at any time.
+switches a player between bodies at any time. `push_archetype(p, a)` lays
+another body of the same model over theirs for a while (a machine gunner
+slowed as they fire; v20's `pushDatablock`), keeping their damage, and
+`pop_archetype(p, a)` lifts it; `set_archetype` meanwhile changes the body
+underneath, and death lifts them all.
 
 **Bots you write.** v20 gives the player objects a Vehicle Spawn brick
 makes no brain; the engine's bots walk, find their way round and over
