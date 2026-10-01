@@ -216,11 +216,13 @@ impl ContentParts {
         )?;
         item_assets.draw_icons(Some(icon_cache));
         let item_assets = Arc::new(item_assets);
+        let interface =
+            crate::weapon_effects::interface_textures(&weapon_pack.effects, &content.ui_pack);
         let weapon_effects = crate::weapon_effects::WeaponEffects::with_textures(
             effects_pack,
             weapon_pack.clone(),
             Default::default(),
-            |key| item_assets.texture(key),
+            |key| item_assets.texture(key).or_else(|| interface.get(key)),
         )?;
         // Bodies draw from the weapons' effects, an Add-On's own among them
         // (an image it wears in the emote slot), and vehicle trails bring
