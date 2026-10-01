@@ -8529,6 +8529,7 @@ Max: "the steel ball when it hits a player should keep going not stop".
   ground, as its tumble does, so the ball rolls on instead of plowing them
   along the ground's braking.
 - Test: `bri-sim --test showcase a_vehicle_rolls_on_through_a_player_it_hits`
-  (ball keeps over 85% of its speed through the hit in and out of
-  minigames and still rolls after 1.5 s; a 300 kg crate slows more but
+  (outside a minigame, and in one at a bump, a bowl-over and a kill — Max:
+  "IN A MINIGAME" — the ball keeps over 75% of its speed through the hit
+  and still rolls after 1.5 s; a 300 kg crate slows more but
   never bounces back). It fails without the fix (20.6 → -2.1).

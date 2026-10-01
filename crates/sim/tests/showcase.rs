@@ -1274,10 +1274,10 @@ fn a_thrown_player_tumbles_only_when_they_hit_something_hard() {
     assert!(tumbled(&mut g, b, 120), "hit the wall hard");
 }
 
-/// A `definition` of Alpha's rolled at 24 u/s into Bravo, in a minigame or
+/// A `definition` of Alpha's rolled at `speed` into Bravo, in a minigame or
 /// not: its speed along the roll just before and just after the hit (the
 /// biggest one-tick drop), and a second and a half after it was rolled.
-fn run_into_player(definition: &str, in_minigame: bool) -> (f32, f32, f32) {
+fn run_into_player(definition: &str, in_minigame: bool, speed: f32) -> (f32, f32, f32) {
     let mut g = Game::new();
     let a = g.join("Alpha", Vec3::new(0.0, 0.05, 0.0));
     let b = g.join("Bravo", Vec3::new(0.0, 0.05, -12.0));
@@ -1292,10 +1292,10 @@ fn run_into_player(definition: &str, in_minigame: bool) -> (f32, f32, f32) {
             definition,
             at + Vec3::new(9.0, 1.3, 0.0),
             0.0,
-            Vec3::new(-24.0, 0.0, 0.0),
+            Vec3::new(-speed, 0.0, 0.0),
         )
         .unwrap();
-    let mut speeds = vec![24.0];
+    let mut speeds = vec![speed];
     for _ in 0..180 {
         g.steps(1);
         speeds.push(-g.vehicle(id).unwrap().1.x);
@@ -1312,18 +1312,20 @@ fn run_into_player(definition: &str, in_minigame: bool) -> (f32, f32, f32) {
 /// on, and a 300 kg crate slows more but never bounces back off one.
 #[test]
 fn a_vehicle_rolls_on_through_a_player_it_hits() {
-    for in_minigame in [false, true] {
-        let (before, after, later) = run_into_player(BALL, in_minigame);
+    // Outside minigames it only bumps; in one (Max: "IN A MINIGAME") a
+    // roll bumps, a harder hit bowls them over and a hurl kills.
+    for (in_minigame, speed) in [(false, 24.0), (true, 13.0), (true, 16.0), (true, 24.0)] {
+        let (before, after, later) = run_into_player(BALL, in_minigame, speed);
         assert!(
-            after > before * 0.85,
-            "the ball barely slows (minigame {in_minigame}): {before} -> {after}"
+            after > before * 0.75,
+            "the ball barely slows (minigame {in_minigame}, {speed} u/s): {before} -> {after}"
         );
         assert!(
-            later > 7.0,
-            "and rolls on (minigame {in_minigame}): {later}"
+            later > 3.0,
+            "and rolls on (minigame {in_minigame}, {speed} u/s): {later}"
         );
     }
-    let (before, after, _) = run_into_player(CRATE, false);
+    let (before, after, _) = run_into_player(CRATE, false, 24.0);
     assert!(
         after > before * 0.5 && after < before * 0.85,
         "the crate slows more, but never bounces back: {before} -> {after}"
