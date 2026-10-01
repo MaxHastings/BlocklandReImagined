@@ -286,6 +286,8 @@ pub(super) enum DamageKind {
         /// Which way it was travelling as it struck (a unit vector), when a
         /// shot did it.
         direction: Option<Vec3>,
+        /// The projectile that did it, when one did.
+        projectile: Option<String>,
     },
     Fall,
     Impact,
@@ -304,6 +306,14 @@ impl DamageKind {
             name: name.into(),
             direct,
             direction: None,
+            projectile: None,
+        }
+    }
+    /// The projectile that did it, as `on_damage` hooks read it.
+    pub(super) fn projectile(&self) -> Option<&str> {
+        match self {
+            Self::Weapon { projectile, .. } => projectile.as_deref(),
+            _ => None,
         }
     }
     pub(super) fn direction(&self) -> Option<Vec3> {

@@ -287,6 +287,24 @@ pub struct Image {
     /// (Tier+Tactical's `ammo` system, the Adventure Pack's), in data.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub magazine: Option<Magazine>,
+    /// More projectiles each shot fires after the image's own, as v20
+    /// shotguns' `onFire` fired a slug or close blast after the pellets:
+    /// each volley its own projectile, count and spread, from the same
+    /// muzzle along the same aim, inheriting the shot's recoil.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub volleys: Vec<Volley>,
+}
+/// [`Image::volleys`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Volley {
+    /// A projectile of the pack (or one it depends on).
+    pub projectile: String,
+    /// 1 to 64.
+    pub projectiles: u32,
+    /// v20's `%spread`, 0 to 1, as [`Shot::spread`].
+    #[serde(default)]
+    pub spread: f32,
 }
 /// [`Image::magazine`]. Each holder has a magazine per item and a reserve
 /// per `ammo` type, shared by every gun of that type. A shot takes
@@ -1378,6 +1396,16 @@ impl Pack {
                 "Invalid image shot {id}: 1 to 64 projectiles, spreads 0 to 1, recoil 0 to 100, \
                  moving_speed 0 to 50, rested after 1 to 1200 ticks, kick amplitude 0 to 1, \
                  frequency 0.1 to 30, seconds 0.05 to 2"
+            );
+            ensure!(
+                image.volleys.len() <= 4
+                    && image.volleys.iter().all(|v| {
+                        (1..=64).contains(&v.projectiles)
+                            && (0.0..=1.0).contains(&v.spread)
+                            && self.projectiles.contains_key(&v.projectile)
+                    }),
+                "Invalid volleys of image {id}: at most 4, each a projectile of the pack, \
+                 1 to 64 projectiles, spread 0 to 1"
             );
             if let Some(h) = image.shot.as_ref().and_then(|s| s.hitscan.as_ref()) {
                 if let Some(hit) = &h.hit {

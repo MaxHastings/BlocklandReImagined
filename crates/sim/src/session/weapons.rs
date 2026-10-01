@@ -559,6 +559,7 @@ impl Session {
                     kind,
                     position,
                     direction,
+                    projectile,
                 } => {
                     let direct = self
                         .weapons
@@ -572,6 +573,7 @@ impl Session {
                             name: kind,
                             direct,
                             direction: Some(direction),
+                            projectile: (!projectile.is_empty()).then_some(projectile),
                         },
                         shooter(source),
                         Some(position),

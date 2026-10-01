@@ -503,6 +503,7 @@ impl Session {
                 player,
                 velocity,
                 by,
+                seconds,
             } => {
                 let by = by.filter(|b| self.peers.contains_key(b));
                 let target = ObjectRef::Player(player);
@@ -524,6 +525,13 @@ impl Session {
                     None => {
                         self.tumble_player(player, velocity)?;
                     }
+                }
+                if let Some(seconds) = seconds
+                    && let Some(v) = self.ridden(player)
+                    && self.vehicles.mounted_family(player) == Some(veh::Family::Tumble)
+                    && let Some(world) = &mut self.vehicles.world
+                {
+                    world.set_tumble_ticks(veh::VehicleId(v.0), (seconds * 120.0).round() as u64)?;
                 }
                 if let Some(by) = by.or(caller) {
                     self.credit(target, by);

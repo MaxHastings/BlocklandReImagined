@@ -1,8 +1,8 @@
 //! Where a shot lands, played through the authoritative session with a
 //! made-up package: a round in the head or the body reaches `on_damage` with
-//! `info.region` and its point, and its damage type by name without
-//! `$DamageType::`, so a rule can make headshots count (Torque's
-//! `getDamageLocation`).
+//! `info.region` and its point, its damage type by name without
+//! `$DamageType::` and the projectile that struck, so a rule can make
+//! headshots count (Torque's `getDamageLocation`) per gun.
 use bri_minigames::Settings;
 use bri_package::packages::{PackageEntry, PackageSet, Side};
 use bri_package_runtime::Catalog;
@@ -27,7 +27,7 @@ const GUN: &str = "kit:weapon/gun";
 /// A head hit does triple damage; every hit is noted.
 const SCRIPT: &str = r#"
 fn on_damage(victim, attacker, amount, info) {
-    set("hit", `${info.kind}|${info.type}|${info.region}|${info.y > 0.0}`);
+    set("hit", `${info.kind}|${info.type}|${info.region}|${info.y > 0.0}|${info.projectile}`);
     if info.region == "head" { amount * 3.0 } else { () }
 }
 "#;
@@ -226,10 +226,10 @@ fn a_round_tells_on_damage_where_it_struck() {
     g.steps(20);
     // The chest: the round's own damage.
     g.shoot_at(a, b, 1.7);
-    assert_eq!(g.hit(), json!("weapon|KitShot|torso|true"));
+    assert_eq!(g.hit(), json!("weapon|KitShot|torso|true|kit:projectile/round"));
     assert!((g.s.vitals()[&b].health - 80.0).abs() < 0.5);
     // The head: tripled by the rule.
     g.shoot_at(a, b, 2.45);
-    assert_eq!(g.hit(), json!("weapon|KitShot|head|true"));
+    assert_eq!(g.hit(), json!("weapon|KitShot|head|true|kit:projectile/round"));
     assert!((g.s.vitals()[&b].health - 20.0).abs() < 0.5);
 }

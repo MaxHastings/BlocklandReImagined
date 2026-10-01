@@ -3023,6 +3023,11 @@ impl Session {
         info.insert("kind".into(), kind.hook_kind().into());
         info.insert("type".into(), kind.hook_type().to_string().into());
         info.insert("direct".into(), kind.direct().into());
+        // The projectile that did it, so rules can tell shots apart when
+        // their damage types are shared.
+        if let Some(projectile) = kind.projectile() {
+            info.insert("projectile".into(), projectile.into());
+        }
         // Where a weapon hit (a shot's contact point, a blast's centre) and
         // the part of the body that is.
         if let Some((point, region)) = hit {
