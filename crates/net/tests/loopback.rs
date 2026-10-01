@@ -160,6 +160,7 @@ fn tool_pack() -> bri_weapons::Pack {
                 left_image: None,
                 magazine: None,
                 volleys: vec![],
+                last_shot: None,
             },
         );
         items.insert(

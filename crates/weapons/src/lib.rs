@@ -286,6 +286,19 @@ pub struct Image {
     /// muzzle along the same aim, inheriting the shot's recoil.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub volleys: Vec<Volley>,
+    /// What a gun's last few rounds fire instead of `shot` and `volleys`,
+    /// when its magazine holds [`Magazine::last_rounds`] or fewer: a
+    /// two-barrel gun's single barrel.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_shot: Option<LastShot>,
+}
+/// [`Image::last_shot`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LastShot {
+    pub shot: Shot,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub volleys: Vec<Volley>,
 }
 /// [`Image::volleys`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -342,15 +355,30 @@ pub struct Magazine {
     /// What the ammo display calls it; the `ammo` name when empty.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub display: String,
+    /// With this many rounds or fewer left (at least one), a pull fires the
+    /// image's `last_shot` and takes them all, even fewer than `per_shot`:
+    /// a two-barrel gun's last barrel. 0 for none.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub last_rounds: u32,
 }
 fn max_reserve() -> u32 {
     100_000
 }
 impl Magazine {
+    /// Whether `rounds` in the magazine make a shot.
+    pub fn fires(&self, rounds: u32) -> bool {
+        rounds >= self.per_shot || self.last(rounds)
+    }
+    /// Whether a shot with `rounds` in the magazine is its last
+    /// ([`Self::last_rounds`]).
+    pub fn last(&self, rounds: u32) -> bool {
+        rounds > 0 && rounds <= self.last_rounds
+    }
     pub fn validate(&self) -> Result<()> {
         ensure!(
             (1..=1000).contains(&self.size)
                 && (1..=self.size).contains(&self.per_shot)
+                && self.last_rounds <= self.size
                 && (1..=1200).contains(&self.reload_ticks)
                 && self.reserve <= 100_000
                 && (1..=100_000).contains(&self.max_reserve),
@@ -1193,33 +1221,46 @@ impl Pack {
                         .is_none_or(is_image_command),
                 "Invalid image command {id}"
             );
+            let shot_ok = |s: &Shot| {
+                (1..=64).contains(&s.projectiles)
+                    && (0.0..=1.0).contains(&s.spread)
+                    && (0.0..=100.0).contains(&s.recoil)
+                    && s.moving_spread.is_none_or(|m| (0.0..=1.0).contains(&m))
+                    && (0.0..=50.0).contains(&s.moving_speed)
+                    && s.kick.is_none_or(|k| {
+                        (0.0..=1.0).contains(&k.amplitude)
+                            && (0.1..=30.0).contains(&k.frequency)
+                            && (0.05..=2.0).contains(&k.seconds)
+                    })
+                    && s.rested.is_none_or(|r| {
+                        (1..=1200).contains(&r.after_ticks) && (0.0..=1.0).contains(&r.spread)
+                    })
+            };
+            let volleys_ok = |volleys: &[Volley]| {
+                volleys.len() <= 4
+                    && volleys.iter().all(|v| {
+                        (1..=64).contains(&v.projectiles)
+                            && (0.0..=1.0).contains(&v.spread)
+                            && self.projectiles.contains_key(&v.projectile)
+                    })
+            };
             ensure!(
-                image.shot.is_none_or(|s| {
-                    (1..=64).contains(&s.projectiles)
-                        && (0.0..=1.0).contains(&s.spread)
-                        && (0.0..=100.0).contains(&s.recoil)
-                        && s.moving_spread.is_none_or(|m| (0.0..=1.0).contains(&m))
-                        && (0.0..=50.0).contains(&s.moving_speed)
-                        && s.kick.is_none_or(|k| {
-                            (0.0..=1.0).contains(&k.amplitude)
-                                && (0.1..=30.0).contains(&k.frequency)
-                                && (0.05..=2.0).contains(&k.seconds)
-                        })
-                        && s.rested.is_none_or(|r| {
-                            (1..=1200).contains(&r.after_ticks) && (0.0..=1.0).contains(&r.spread)
-                        })
-                }),
+                image.last_shot.as_ref().is_none_or(|l| shot_ok(&l.shot)
+                    && l.shot.hitscan.is_none()
+                    && volleys_ok(&l.volleys))
+                    && image.last_shot.is_some()
+                        == image.magazine.as_ref().is_some_and(|m| m.last_rounds > 0),
+                "Invalid last shot of image {id}: a shot and volleys as its own, no hitscan, \
+                 with a magazine whose last_rounds is set"
+            );
+            ensure!(
+                image.shot.is_none_or(|s| shot_ok(&s)),
                 "Invalid image shot {id}: 1 to 64 projectiles, spreads 0 to 1, recoil 0 to 100, \
                  moving_speed 0 to 50, rested after 1 to 1200 ticks, kick amplitude 0 to 1, \
                  frequency 0.1 to 30, seconds 0.05 to 2"
             );
             ensure!(
-                image.volleys.len() <= 4
-                    && image.volleys.iter().all(|v| {
-                        (1..=64).contains(&v.projectiles)
-                            && (0.0..=1.0).contains(&v.spread)
-                            && self.projectiles.contains_key(&v.projectile)
-                    }),
+                volleys_ok(&image.volleys),
                 "Invalid volleys of image {id}: at most 4, each a projectile of the pack, \
                  1 to 64 projectiles, spread 0 to 1"
             );

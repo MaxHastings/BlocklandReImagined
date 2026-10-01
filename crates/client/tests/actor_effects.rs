@@ -168,6 +168,7 @@ fn image(name: &str, states: Vec<State>) -> (String, Image) {
             left_image: None,
             magazine: None,
             volleys: vec![],
+            last_shot: None,
         },
     )
 }

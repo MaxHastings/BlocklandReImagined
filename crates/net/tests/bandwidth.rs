@@ -77,6 +77,7 @@ fn rocket_pack() -> bri_weapons::Pack {
         left_image: None,
         magazine: None,
         volleys: vec![],
+        last_shot: None,
         states,
     };
     let item = bri_weapons::Item {

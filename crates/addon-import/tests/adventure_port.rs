@@ -607,6 +607,18 @@ fn glass_release_guns_shoot_like_their_scripts() {
         (shot.projectiles, shot.spread, shot.recoil),
         (1, 0.0002, 1.0)
     );
+    // What its onFire did by hand: the fire sound and arm move on its Fire
+    // state, the recoil blast's camera shake as the shot's kick.
+    let fire = pistol.states.iter().find(|s| s.script == "onFire").unwrap();
+    assert_eq!(
+        (fire.sound.as_str(), fire.arm.as_str()),
+        ("weapon_adventurepack:sound/standinfiresound", "shiftright")
+    );
+    let kick = shot.kick.unwrap();
+    assert_eq!(
+        (kick.amplitude, kick.frequency, kick.seconds),
+        (0.9, 3.0, 0.4)
+    );
     let paired = image("pairedshotgunimage");
     let m = paired.magazine.unwrap();
     assert_eq!(
@@ -626,6 +638,14 @@ fn glass_release_guns_shoot_like_their_scripts() {
             spread: 0.0005,
         }]
     );
+    // Its last two rounds fire the single barrel, whatever is left.
+    let last = paired.last_shot.unwrap();
+    assert_eq!(
+        (last.shot.projectiles, last.shot.spread, last.shot.recoil),
+        (4, 0.002, 2.0)
+    );
+    assert_eq!(last.volleys.len(), 1);
+    assert_eq!(m.last_rounds, 2);
     let sniper = image("sniperrifleimage2");
     let hitscan = sniper.shot.unwrap().hitscan.unwrap();
     assert_eq!((hitscan.range, hitscan.from_eye), (300.0, false));

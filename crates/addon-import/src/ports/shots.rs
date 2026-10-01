@@ -22,6 +22,21 @@ pub struct Shots {
     /// the first. An image with several and no pick stops the port.
     #[serde(default)]
     pub pick: BTreeMap<String, usize>,
+    /// For an `onFire` whose magazine's last few rounds fire another of
+    /// its shots (a two-barrel gun's single barrel), which shot and from
+    /// how many rounds left, by image datablock name.
+    #[serde(default)]
+    pub last: BTreeMap<String, Last>,
+}
+
+/// [`Shots::last`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Last {
+    /// The shot, 0 for the first.
+    pub shot: usize,
+    /// With this many rounds or fewer left.
+    pub rounds: u32,
 }
 
 /// Hitscan guns read from their images' fields, by the names a raycasting
@@ -198,32 +213,170 @@ pub fn shots(s: &Shots, weapons: &Value, bodies: &super::Bodies) -> Result<Value
                 })
                 .transpose()
         };
-        let main = shot[0];
-        let mut patch = json!({ "shot": {
-            "projectiles": main.count,
-            "spread": main.spread,
-            "recoil": main.recoil.unwrap_or(0.0),
-        }});
-        if let Some(p) = projectile(main)? {
+        // A shot and its volleys, and the projectile it fires when that
+        // is not the image's own.
+        let read = |shot: &[&Block]| -> Result<(Value, Vec<Value>, Option<String>)> {
+            let main = shot[0];
+            let mut volleys = vec![];
+            for b in &shot[1..] {
+                let p = match projectile(b)? {
+                    Some(p) => p,
+                    None => image["projectile"]
+                        .as_str()
+                        .with_context(|| format!("{name}: no projectile of its own"))?
+                        .to_owned(),
+                };
+                volleys
+                    .push(json!({ "projectile": p, "projectiles": b.count, "spread": b.spread }));
+            }
+            let fired = json!({
+                "projectiles": main.count,
+                "spread": main.spread,
+                "recoil": main.recoil.unwrap_or(0.0),
+            });
+            Ok((fired, volleys, projectile(main)?))
+        };
+        let (fired, volleys, own) = read(shot)?;
+        let mut patch = json!({ "shot": fired });
+        if let Some(p) = own {
             patch["projectile"] = json!(p);
-        }
-        let mut volleys = vec![];
-        for b in &shot[1..] {
-            let p = match projectile(b)? {
-                Some(p) => p,
-                None => image["projectile"]
-                    .as_str()
-                    .with_context(|| format!("{name}: no projectile of its own"))?
-                    .to_owned(),
-            };
-            volleys.push(json!({ "projectile": p, "projectiles": b.count, "spread": b.spread }));
         }
         if !volleys.is_empty() {
             patch["volleys"] = Value::Array(volleys);
         }
+        if let Some((_, last)) = s.last.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)) {
+            let group = shots.get(last.shot).with_context(|| {
+                format!(
+                    "{name}: last shot {}, but it fires {} ways",
+                    last.shot,
+                    shots.len()
+                )
+            })?;
+            let (fired, volleys, own) = read(group)?;
+            ensure!(
+                own.is_none(),
+                "{name}: its last shot fires another projectile than the image's"
+            );
+            patch["last_shot"] = json!({ "shot": fired, "volleys": volleys });
+            patch["magazine"] = json!({ "last_rounds": last.rounds });
+        }
         images.insert(id.clone(), patch);
     }
+    for (id, image) in weapons["images"].as_object().into_iter().flatten() {
+        let patch = scripted(image, weapons, bodies);
+        if patch.as_object().is_some_and(|p| !p.is_empty()) {
+            let entry = images.entry(id.clone()).or_insert_with(|| json!({}));
+            super::merge(entry, &patch);
+            // A kick on a gun with no shot of its own: v20's one straight.
+            if entry["shot"].is_object()
+                && entry["shot"]["projectiles"].is_null()
+                && image["shot"].is_null()
+            {
+                entry["shot"]["projectiles"] = json!(1);
+            }
+        }
+    }
     Ok(json!({ "images": images }))
+}
+
+/// What an image's state scripts did by hand that its states can say
+/// themselves: the sound each played (`serverPlay3d`), the arm move
+/// (`playThread(2, ...)`), each where the state names none; and the kick
+/// of the recoil blast `onFire` set off at the shooter (`spawnExplosion`
+/// of a projectile whose explosion shakes the camera), as the shot's
+/// `kick`.
+fn scripted(image: &Value, weapons: &Value, bodies: &super::Bodies) -> Value {
+    let name = image["name"]
+        .as_str()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let Some(states) = image["states"].as_array() else {
+        return json!({});
+    };
+    let call = |what: &str| {
+        regex::RegexBuilder::new(what)
+            .case_insensitive(true)
+            .build()
+            .expect("pattern")
+    };
+    let sound_re = call(r"serverplay3d\s*\(\s*([A-Za-z_]\w*)\s*,");
+    let arm_re = call(r"playthread\s*\(\s*2\s*,\s*([A-Za-z_]\w*)\s*\)");
+    let blast_re = call(r"spawnexplosion\s*\(\s*([A-Za-z_]\w*)\s*,");
+    let sound_id = |n: &str| {
+        let suffix = format!(":sound/{}", n.to_ascii_lowercase());
+        weapons["sounds"]
+            .as_object()?
+            .keys()
+            .find(|k| k.ends_with(&suffix))
+            .cloned()
+    };
+    let mut patch = json!({});
+    let mut changed = states.clone();
+    let mut any = false;
+    for state in changed.iter_mut() {
+        let script = state["script"]
+            .as_str()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if script.is_empty() {
+            continue;
+        }
+        let Some(body) = bodies.get(&format!("{name}::{script}")) else {
+            continue;
+        };
+        let body = uncommented(body);
+        if state["sound"].as_str().unwrap_or_default().is_empty()
+            && let Some(sound) = sound_re.captures(&body).and_then(|c| sound_id(&c[1]))
+        {
+            state["sound"] = json!(sound);
+            any = true;
+        }
+        if state["arm"].as_str().unwrap_or_default().is_empty()
+            && let Some(arm) = arm_re.captures(&body)
+        {
+            state["arm"] = json!(arm[1].to_ascii_lowercase());
+            any = true;
+        }
+        if script == "onfire"
+            && let Some(kick) = blast_re
+                .captures(&body)
+                .and_then(|c| kick_of(weapons, &c[1]))
+        {
+            patch["shot"] = json!({ "kick": kick });
+        }
+    }
+    if any {
+        patch["states"] = Value::Array(changed);
+    }
+    patch
+}
+
+/// The camera shake of a recoil blast's explosion, as a shot's `kick`.
+fn kick_of(weapons: &Value, projectile: &str) -> Option<Value> {
+    let id = id_of(weapons, "ProjectileData", projectile)?;
+    let effect = weapons["projectiles"][&id]["explosion"]["effect"].as_str()?;
+    let shake = &weapons["explosions"][&effect.to_ascii_lowercase()]["shake"];
+    let numbers = |v: &Value| -> Vec<f32> {
+        v.as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|n| n.as_f64().map(|n| n as f32))
+            .collect()
+    };
+    let amplitude = numbers(&shake["amplitude"])
+        .into_iter()
+        .fold(0.0f32, f32::max);
+    let frequency = numbers(&shake["frequency"]);
+    let seconds = shake["seconds"].as_f64()? as f32;
+    if amplitude <= 0.0 || frequency.is_empty() || seconds <= 0.0 {
+        return None;
+    }
+    let frequency = frequency.iter().sum::<f32>() / frequency.len() as f32;
+    Some(json!({
+        "amplitude": amplitude.min(1.0),
+        "frequency": frequency.clamp(0.1, 30.0),
+        "seconds": seconds.clamp(0.05, 2.0),
+    }))
 }
 
 /// The hitscan guns' shots and projectiles from their image fields.

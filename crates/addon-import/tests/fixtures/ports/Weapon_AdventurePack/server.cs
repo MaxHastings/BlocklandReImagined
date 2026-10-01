@@ -2,6 +2,30 @@
 // release's script shapes, with our own guns, names and numbers.
 AddDamageType("StandinGun", '%1 shot themselves', '%2 shot %1', 0.75, 1);
 
+datablock AudioProfile(standinFireSound)
+{
+   filename    = "./fire.wav";
+   description = AudioClose3d;
+   preload     = true;
+};
+
+datablock ExplosionData(standinKickExplosion)
+{
+   lifetimeMS       = 150;
+   shakeCamera      = true;
+   camShakeFreq     = "2 3 4";
+   camShakeAmp      = "0.5 0.9 0.7";
+   camShakeDuration = 0.4;
+   camShakeRadius   = 10;
+};
+
+datablock ProjectileData(standinKickProjectile)
+{
+   explosion      = standinKickExplosion;
+   lifetime       = 10;
+   explodeOnDeath = true;
+};
+
 datablock ProjectileData(standinBulletProjectile)
 {
    directDamage        = 10;
@@ -178,8 +202,11 @@ function standinPistolImage::onFire(%this, %obj, %slot)
    %spread = 0.0002;
    %shellcount = 1;
    %obj.setVelocity(VectorAdd(%obj.getVelocity(), VectorScale(%aimVec, "-1")));
+   %obj.spawnExplosion(standinKickProjectile, "1 1 1");
    for(%i = 0; %i < %shellcount; %i++)
       fireOne(%this, %obj, %slot, %projectile, %spread);
+   %obj.playThread(2, shiftRight);
+   serverPlay3d(standinFireSound, %obj.getHackPosition());
 }
 
 function pairedShotgunImage::onFire(%this, %obj, %slot)
@@ -201,6 +228,7 @@ function pairedShotgunImage::onFire(%this, %obj, %slot)
    }
    if(%obj.toolMag[%obj.currTool] > 1)
    {
+      %obj.toolMag[%obj.currTool] -= 2;
       %projectile = %this.projectile;
       %spread = 0.004;
       %shellcount = 8;

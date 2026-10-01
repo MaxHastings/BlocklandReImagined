@@ -973,21 +973,22 @@ impl WeaponsWorld {
         a.reserve
             .entry(magazine.ammo.clone())
             .or_insert(Reserve::Rounds(magazine.reserve.min(magazine.max_reserve)));
-        a.ammo = rounds >= magazine.per_shot && a.reload.is_none();
+        a.ammo = magazine.fires(rounds) && a.reload.is_none();
         Some(key)
     }
     /// A shot from the right hand: with a magazine it takes its rounds, or
-    /// is refused (the gun clicks, and an empty one reloads).
-    fn spend_rounds(&mut self, id: ActorId, a: &mut Actor, held: &Equipped) -> bool {
+    /// is refused (the gun clicks, and an empty one reloads). `Some(true)`
+    /// for the magazine's last shot ([`crate::Magazine::last_rounds`]).
+    fn spend_rounds(&mut self, id: ActorId, a: &mut Actor, held: &Equipped) -> Option<bool> {
         let Some((key, magazine)) = self.magazine_in(held) else {
-            return true;
+            return Some(false);
         };
         let rounds = a.rounds.get(&key).copied().unwrap_or(0);
         let reloading = a.reload.is_some();
-        if reloading && magazine.one_by_one && rounds >= magazine.per_shot {
+        if reloading && magazine.one_by_one && magazine.fires(rounds) {
             // A pull of the trigger stops loading shells one by one.
             a.reload = None;
-        } else if reloading || rounds < magazine.per_shot {
+        } else if reloading || !magazine.fires(rounds) {
             if !magazine.empty_sound.is_empty() {
                 self.events.push(Event::Sound {
                     source: TargetId::Actor(id),
@@ -997,16 +998,17 @@ impl WeaponsWorld {
             }
             a.ammo = false;
             self.begin_reload(id, a, key, &magazine);
-            return false;
+            return None;
         }
-        let left = rounds - magazine.per_shot;
+        let last = magazine.last(rounds);
+        let left = if last { 0 } else { rounds - magazine.per_shot };
         a.rounds.insert(key.clone(), left);
-        a.ammo = left >= magazine.per_shot;
+        a.ammo = magazine.fires(left);
         self.events.push(Event::Ammo { actor: id });
-        if left < magazine.per_shot {
+        if !magazine.fires(left) {
             self.begin_reload(id, a, key, &magazine);
         }
-        true
+        Some(last)
     }
     /// Start reloading the held gun's magazine, if it is not full, there is
     /// reserve to load and no reload is under way. Whether one started.
@@ -1074,7 +1076,7 @@ impl WeaponsWorld {
             .map_or(0, |r| r.take(wanted));
         let rounds = rounds + taken;
         a.rounds.insert(key.clone(), rounds);
-        a.ammo = rounds >= magazine.per_shot;
+        a.ammo = magazine.fires(rounds);
         self.events.push(Event::Ammo { actor: id });
         if magazine.one_by_one && rounds < magazine.size {
             let more = a.reserve.get(&magazine.ammo).is_some_and(|r| r.any());
@@ -1192,7 +1194,7 @@ impl WeaponsWorld {
         if let Some((key, magazine)) = self.magazine_of(&a)
             && key == item
         {
-            a.ammo = rounds.min(size) >= magazine.per_shot && a.reload.is_none();
+            a.ammo = magazine.fires(rounds.min(size)) && a.reload.is_none();
         }
         self.actors.insert(id, a);
         self.events.push(Event::Ammo { actor: id });
@@ -2007,9 +2009,19 @@ impl WeaponsWorld {
                 {
                     return true;
                 }
-                if e.hand == 0 && !self.spend_rounds(id, a, e) {
-                    return true;
-                }
+                let last = if e.hand == 0 {
+                    match self.spend_rounds(id, a, e) {
+                        Some(last) => last,
+                        None => return true,
+                    }
+                } else {
+                    false
+                };
+                // The magazine's last rounds fire the image's last shot.
+                let (shot, volleys) = match image.last_shot.as_ref().filter(|_| last) {
+                    Some(l) => (Some(l.shot), l.volleys.as_slice()),
+                    None => (image.shot, image.volleys.as_slice()),
+                };
                 let idle_ticks = a.last_shot.map(|t| self.tick.saturating_sub(t));
                 a.last_shot = Some(self.tick);
                 let mut origin = if image.melee {
@@ -2102,7 +2114,7 @@ impl WeaponsWorld {
                         }
                     }
                 }
-                let shot = image.shot.unwrap_or(Shot::SINGLE);
+                let shot = shot.unwrap_or(Shot::SINGLE);
                 let spread = shot.spread_for(a.frame.velocity.length(), idle_ticks);
                 if shot.recoil > 0.0 {
                     // Recoil lands before the projectiles, which inherit it.
@@ -2174,7 +2186,7 @@ impl WeaponsWorld {
                 // its own projectile and spread, along the same aim, with the
                 // recoil the shot already took.
                 let kick = -direction * shot.recoil;
-                for (v, volley) in image.volleys.iter().enumerate() {
+                for (v, volley) in volleys.iter().enumerate() {
                     let Some(d) = self.pack.projectiles.get(&volley.projectile) else {
                         continue;
                     };

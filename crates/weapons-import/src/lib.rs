@@ -494,6 +494,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 left_image: None,
                 magazine: None,
                 volleys: vec![],
+                last_shot: None,
             },
         );
     }

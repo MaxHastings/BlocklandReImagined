@@ -14,7 +14,7 @@ use std::path::Path;
 mod datablocks;
 mod shots;
 pub use datablocks::{AmmoType, Magazines, Table};
-pub use shots::{Hitscans, Shots, TracerField};
+pub use shots::{Hitscans, Last, Shots, TracerField};
 
 mod builtin {
     include!(concat!(env!("OUT_DIR"), "/ports.rs"));

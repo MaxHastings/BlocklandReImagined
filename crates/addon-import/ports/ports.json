@@ -104,6 +104,10 @@
           "taser_offset": "addvelocity\\s*\\(\\s*getrandom\\s*\\(\\s*\\d+\\s*\\)\\s*-\\s*(\\d+)",
           "taser_up": "spc\\s*([0-9]*\\.?[0-9]+)\\s*\\)\\s*;\\s*tumble",
           "taser_ms": "tumble\\s*\\(\\s*%col\\s*,\\s*(\\d+)\\s*\\)"
+        },
+        "pairedShotgunImage::onFire": {
+          "paired_last": "toolmag\\[%obj\\.currtool\\]\\s*<=\\s*2\\s*\\)",
+          "paired_take": "toolmag\\[%obj\\.currtool\\]\\s*-=\\s*2\\s*;"
         }
       },
       "tests": [

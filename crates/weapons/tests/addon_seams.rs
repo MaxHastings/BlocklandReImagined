@@ -336,3 +336,63 @@ fn a_volley_fires_its_own_projectile_after_the_pellets() {
     let bad = json.replace("kit:projectile/blast\", \"projectiles\"", "kit:projectile/none\", \"projectiles\"");
     assert!(Pack::from_json(bad.as_bytes()).is_err());
 }
+
+/// A two-barrel gun whose script fired both barrels while it had more than
+/// two rounds and its single barrel with whatever was left: `per_shot` 2,
+/// `last_rounds` 2 and a `last_shot`. With 5 rounds it fires 8 pellets
+/// twice (3, then 1 left), then the single barrel's 4 with the last one,
+/// then clicks.
+#[test]
+fn a_magazines_last_rounds_fire_the_last_shot() {
+    let json = format!(
+        r#"{{
+            "schema_version": {SCHEMA},
+            "id": "kit",
+            "items": {{ "kit:weapon/pair": {{ "ui_name": "Pair", "image": "kit:image/pair" }} }},
+            "images": {{
+                "kit:image/pair": {{
+                    "projectile": "kit:projectile/pellet",
+                    "shot": {{ "projectiles": 8, "spread": 0.004 }},
+                    "last_shot": {{ "shot": {{ "projectiles": 4, "spread": 0.002 }} }},
+                    "magazine": {{ "size": 5, "ammo": "shells", "per_shot": 2, "last_rounds": 2,
+                                   "reload_ticks": 600, "reserve": 0 }},
+                    "states": [
+                        {{ "name": "Activate", "ticks": 2, "timeout": 1 }},
+                        {{ "name": "Ready", "down": 2, "no_ammo": 4 }},
+                        {{ "name": "Fire", "ticks": 10, "script": "onFire", "timeout": 3 }},
+                        {{ "name": "Hold", "up": 1 }},
+                        {{ "name": "Empty", "ammo": 1 }}
+                    ]
+                }}
+            }},
+            "projectiles": {{
+                "kit:projectile/pellet": {{ "speed": 100.0, "inherit": 1.0, "lifetime_ticks": 240, "fade_ticks": 240 }}
+            }}
+        }}"#
+    );
+    let mut w = WeaponsWorld::new(Pack::from_json(json.as_bytes()).unwrap()).unwrap();
+    w.add_actor(A, 5).unwrap();
+    let slot = w.give(A, "kit:weapon/pair").unwrap();
+    w.equip(A, Some(slot)).unwrap();
+    step(&mut w, 10);
+    let mut pulls = vec![];
+    for _ in 0..4 {
+        w.trigger(A, true).unwrap();
+        let mut pellets = 0;
+        for _ in 0..20 {
+            pellets += w
+                .step(&mut Open)
+                .iter()
+                .filter(|e| matches!(e, Event::Spawned { .. }))
+                .count();
+        }
+        w.trigger(A, false).unwrap();
+        step(&mut w, 5);
+        pulls.push((pellets, w.ammo(A).unwrap().rounds));
+    }
+    assert_eq!(pulls, [(8, 3), (8, 1), (4, 0), (0, 0)]);
+
+    // A last shot needs a magazine that names its rounds.
+    let bad = json.replace(r#""per_shot": 2, "last_rounds": 2,"#, r#""per_shot": 2,"#);
+    assert!(Pack::from_json(bad.as_bytes()).is_err());
+}
