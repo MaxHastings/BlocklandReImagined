@@ -1379,8 +1379,9 @@ pub enum UiUpdate {
     SetActiveBrick(Option<usize>),
     /// `clientCmdSetScrollMode`: the host switches the inventory box shown.
     ScrollMode(crate::models::hud::ScrollMode),
-    /// The tool in hand takes the paint cans, so opening paint from it
-    /// keeps it in hand.
+    /// The tool in hand takes the paint cans, or stays out for them (a
+    /// paint picker, as the Fill Can), so opening paint from it keeps it in
+    /// hand.
     ToolTakesPaint(bool),
     /// First spawn of the session: the UI buys favorites slot 1.
     FirstSpawn,

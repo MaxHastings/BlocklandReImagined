@@ -305,15 +305,7 @@ impl Avatar {
             }
         }
         if let Some(n) = self.view.id("Avatar_Preview") {
-            let state = self.view.state(n);
-            state.external_texture = match core.avatar_preview {
-                IconRef::External(id) => Some(id),
-                _ => None,
-            };
-            state.bitmap = match &core.avatar_preview {
-                IconRef::Pack(p) => Some(p.clone()),
-                _ => None,
-            };
+            self.view.set_icon(n, &core.avatar_preview);
         }
         if let Some(n) = self.view.id("Avatar_PreviewStatus") {
             self.view

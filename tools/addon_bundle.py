@@ -35,6 +35,11 @@ release, and `upload` refuses to run until each is pinned (or
 --allow-unpinned). To pin one, run `find`, check the copy it names is the
 one to credit, and add its sha256 to the entry. To pull one from the next
 release (its author asked), add "withdrawn": "<why>" to its entry.
+
+An original whose port has host rules ships with them, laid out as Import
+leaves them for a player: the import at addons/<id>, its rules Add-On
+beside it at addons/<id>-rules, named in the import's `companions` so the
+game turns them on and off with it. Every command carries and checks both.
 """
 import argparse
 import datetime
@@ -55,7 +60,8 @@ import ci_content  # noqa: E402
 import content_packs  # noqa: E402
 
 LIST_SCHEMA = 2
-BUNDLE_SCHEMA = 1
+# 2: each original's host rules ship beside it (`companions`).
+BUNDLE_SCHEMA = 2
 TAG = 'addon-bundle'
 ASSET = 'addon-bundle.zip'
 BUNDLE = REPO / 'dist' / 'addon-bundle'
@@ -215,6 +221,11 @@ def import_copy(importer, source, out, version, v20, core, installed):
     return json.loads((out / 'import-report.json').read_text(encoding='utf-8'))
 
 
+def rules_written(report):
+    """The host-rules Add-Ons the import's ports wrote beside it."""
+    return [p['rules'] for p in report.get('ports', []) if p.get('applied') and p.get('rules')]
+
+
 def port_applied(report, port):
     return any(p.get('port') == port['port'] and p.get('applied') for p in report.get('ports', []))
 
@@ -310,15 +321,18 @@ def build(args):
         copies = available.get(original['addon'].lower(), [])
         chosen = None
         tried = []
-        for n, copy in enumerate(copies):
-            fresh = work / f".{addon['id']}-{n}"
+        # Imported where the release holds it, as Import does for a player:
+        # its port's host rules land beside it at addons/<id>-rules.
+        fresh = work / 'addons' / addon['id']
+        for copy in copies:
             report = import_copy(importer, copy, fresh, original['version'], v20, core, installed)
             sha = report['source']['sha256']
             if sha in original['sha256']:
                 chosen = (copy, fresh, report)
                 break
             tried.append(f'{copy} (sha256 {sha})')
-            shutil.rmtree(fresh)
+            for folder in [fresh] + [fresh.parent / r['dir'] for r in rules_written(report)]:
+                shutil.rmtree(folder)
         if chosen is None and not tried and args.missing_ok:
             print(f"Left out {original['addon']}: no copy on this machine.")
             unpinned.append(original['addon'])
@@ -335,18 +349,26 @@ def build(args):
             fail(f"The port {port['port']} did not apply to {copy}: {reasons}.")
         manifest_path = fresh / 'package.json'
         manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+        rules = [r['id'] for r in rules_written(report)]
+        if manifest.get('companions', []) != rules or any(
+                r['dir'] != r['id'] for r in rules_written(report)):
+            fail(f"{copy} imported with host rules {rules} beside it, but its package names "
+                 f"{manifest.get('companions', [])}.")
         manifest['name'] = original['title']
         manifest['authors'] = original['authors']
         manifest.setdefault('provenance', {})['bundled'] = (
             f"The authors' original Add-On, bundled with Blockland ReImagined with credit to them. "
             f"To have it left out, open an issue at {ISSUES}.")
         manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + '\n', encoding='utf-8')
-        fresh.rename(work / 'addons' / addon['id'])
+        bad = problems(fresh, addon)
+        if bad:
+            fail(f"{copy} imported incomplete: {'; '.join(bad)}")
         entries.append({'id': addon['id'], 'addon': original['addon'], 'title': original['title'],
                         'authors': original['authors'], 'version': original['version'],
                         'sha256': report['source']['sha256'], 'port': port['port'] if port else None,
-                        'enabled': addon.get('enabled', True)})
-        print(f"Bundled {original['addon']} from {copy}" + (f" with port {port['port']}." if port else ', no port.'))
+                        'companions': rules, 'enabled': addon.get('enabled', True)})
+        print(f"Bundled {original['addon']} from {copy}" + (f" with port {port['port']}" if port else ', no port')
+              + (f" and its host rules {', '.join(rules)}." if rules else '.'))
     commit = subprocess.run(['git', 'rev-parse', '--short=9', 'HEAD'], cwd=args.repo,
                             capture_output=True, text=True).stdout.strip()
     (work / 'bundle.json').write_text(json.dumps({
@@ -372,7 +394,8 @@ def read_bundle(bundle):
         return None
     data = json.loads(path.read_text(encoding='utf-8'))
     if data.get('schema_version') != BUNDLE_SCHEMA:
-        fail(f'Unsupported bundle schema in {path}.')
+        fail(f"{path} is bundle schema {data.get('schema_version')}, not {BUNDLE_SCHEMA}: an older build, "
+             'without the host rules. Rebuild it (python tools/addon_bundle.py build, or upload for releases).')
     return data
 
 
@@ -395,7 +418,39 @@ def problems(directory, addon):
             out.append(f"{manifest_path} is version {manifest.get('version')}, not {original['version']}")
         if manifest.get('authors') != original['authors']:
             out.append(f"{manifest_path} does not credit {', '.join(original['authors'])}")
+    for companion in manifest.get('companions', []):
+        out += companion_problems(directory.parent / companion, companion, addon['id'])
     return out
+
+
+def companions(directory):
+    """The Add-Ons the one in directory turns on with it (its port's host
+    rules), each the folder beside it named after its id, as Import leaves
+    them."""
+    manifest = json.loads((directory / 'package.json').read_text(encoding='utf-8'))
+    return [directory.parent / c for c in manifest.get('companions', [])]
+
+
+def companion_problems(directory, companion, parent):
+    """Why directory is not the whole companion `companion` of `parent`."""
+    manifest_path = directory / 'package.json'
+    if not manifest_path.is_file():
+        return [f'{parent} names its host rules {companion}, but {directory} has no package.json']
+    manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+    out = []
+    if manifest.get('id') != companion:
+        out.append(f"{manifest_path} names {manifest.get('id')!r}, not {companion!r}")
+    if parent not in (manifest.get('dependencies') or {}):
+        out.append(f'{manifest_path} does not depend on {parent}')
+    return out
+
+
+def copy_with_companions(source, target):
+    """Copy the Add-On in source to target and its companions beside it."""
+    for folder in [source] + companions(source):
+        destination = target.parent / folder.name if folder != source else target
+        shutil.rmtree(destination, ignore_errors=True)
+        shutil.copytree(folder, destination)
 
 
 def default_sources(repo, bundle, without_originals=False):
@@ -422,6 +477,10 @@ def default_sources(repo, bundle, without_originals=False):
             fail(f"Default Add-On {addon['id']} is missing or incomplete: {'; '.join(bad)}")
         out.append({'id': addon['id'], 'path': str(directory), 'enabled': addon.get('enabled', True),
                     'original': 'original' in addon})
+        # Its host rules, right after it, on and off with it.
+        for companion in companions(directory):
+            out.append({'id': companion.name, 'path': str(companion), 'enabled': addon.get('enabled', True),
+                        'original': False, 'companion_of': addon['id']})
     credits = bundle / CREDITS if any(a['original'] for a in out) else None
     if credits and not credits.is_file():
         fail(f'The Add-On bundle at {bundle} has no {CREDITS}.')
@@ -435,8 +494,9 @@ def sources(args):
 
 def verify_defaults(repo, content, credits, without_originals=False):
     """A release's content turns on every default Add-On that starts on (at
-    addons/<id>), carries the rest installed but off, each whole, and its
-    credits name every original it carries."""
+    addons/<id>), carries the rest installed but off, each whole with its
+    host rules beside it and on after it when it is on, and its credits
+    name every original it carries."""
     enabled = json.loads((content / 'packages.json').read_text(encoding='utf-8-sig'))['packages']
     text = credits.read_text(encoding='utf-8') if credits and credits.is_file() else ''
     shipped = []
@@ -452,12 +512,24 @@ def verify_defaults(repo, content, credits, without_originals=False):
         bad = problems(content / 'addons' / addon['id'], addon)
         if bad:
             fail(f"Default Add-On {addon['id']} is incomplete: {'; '.join(bad)}")
+        listed = [p.get('id') for p in enabled]
+        rules = []
+        for companion in companions(content / 'addons' / addon['id']):
+            on = [p for p in enabled if p.get('id') == companion.name]
+            if not addon.get('enabled', True):
+                if on:
+                    fail(f"The release turns on {companion.name}, the host rules of {addon['id']}, which ships turned off.")
+            elif (len(on) != 1 or on[0].get('dir') != f'addons/{companion.name}'
+                  or listed.index(companion.name) < listed.index(addon['id'])):
+                fail(f"The release does not turn on {companion.name} at addons/{companion.name} after "
+                     f"{addon['id']}: its host rules would not run.")
+            rules.append(companion.name)
         if 'original' in addon:
             original = addon['original']
             if original['title'] not in text or not all(a in text for a in original['authors']):
                 fail(f"The release's {CREDITS} does not credit {original['title']} to "
                      f"{', '.join(original['authors'])}.")
-        shipped.append(addon['id'])
+        shipped += [addon['id']] + rules
     print(f"Verified default Add-Ons: {', '.join(shipped)}.")
 
 
@@ -483,9 +555,7 @@ def install(args):
         bad = problems(source, addon)
         if bad:
             fail('; '.join(bad))
-        target = content / 'addons' / entry['id']
-        shutil.rmtree(target, ignore_errors=True)
-        shutil.copytree(source, target)
+        copy_with_companions(source, content / 'addons' / entry['id'])
         installed.append(entry['id'])
     # An original the list no longer ships (withdrawn) leaves the checkout too.
     for addon in originals(read_list(args.repo)):
@@ -493,7 +563,8 @@ def install(args):
         if addon['id'] not in shipping and (target / 'package.json').is_file():
             manifest = json.loads((target / 'package.json').read_text(encoding='utf-8'))
             if 'bundled' in (manifest.get('provenance') or {}):
-                shutil.rmtree(target)
+                for folder in companions(target) + [target]:
+                    shutil.rmtree(folder, ignore_errors=True)
                 print(f"Removed {addon['id']}, which is no longer bundled.")
     missing = [a['original']['addon'] for i, a in shipping.items() if i not in installed]
     print(f"Installed {', '.join(installed) or 'no originals'} into {content / 'addons'}."
@@ -518,6 +589,12 @@ def fetch(args):
     if stale:
         fail(f"The uploaded Add-On bundle predates this commit: it lacks {', '.join(stale)}. "
              'Rebuild and upload it on the PC with python tools/addon_bundle.py upload.')
+    for addon in read_list(args.repo):
+        if 'original' in addon and ships(addon):
+            bad = problems(out / 'addons' / addon['id'], addon)
+            if bad:
+                fail(f"The uploaded Add-On bundle has an incomplete {addon['original']['addon']}: {'; '.join(bad)}. "
+                     'Rebuild and upload it on the PC with python tools/addon_bundle.py upload.')
     print(f"Unpacked {len(bundled)} originals (built at commit {info.get('built_at_commit') or 'unknown'}).")
 
 
@@ -545,13 +622,13 @@ def from_release(args):
         bad = problems(source, addon)
         if bad:
             fail(f"The release at {root} lacks a whole {original['addon']}: {'; '.join(bad)}")
-        shutil.copytree(source, work / 'addons' / addon['id'])
+        copy_with_companions(source, work / 'addons' / addon['id'])
         manifest = json.loads((source / 'package.json').read_text(encoding='utf-8'))
         port = ports.get(original['addon'].lower())
         entries.append({'id': addon['id'], 'addon': original['addon'], 'title': original['title'],
                         'authors': original['authors'], 'version': original['version'],
                         'sha256': pinned_sha(manifest), 'port': port['port'] if port else None,
-                        'enabled': addon.get('enabled', True)})
+                        'companions': manifest.get('companions', []), 'enabled': addon.get('enabled', True)})
     if entries:
         credits = root / CREDITS
         if not credits.is_file():

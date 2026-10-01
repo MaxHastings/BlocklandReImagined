@@ -59,6 +59,7 @@ mod copy_edits;
 mod copy_jobs;
 pub use copy_jobs::DEFAULT_COPY_WORK;
 mod copy_store;
+mod crossings;
 pub use blueprints::Copied;
 pub use copy_edits::{BoxEdit, WrenchFill};
 pub use copy_store::{CopyStore, LoadedCopy, MemoryCopies, Saved, StoreDone, name_matches};
@@ -934,6 +935,8 @@ pub struct Session {
     environment: bri_content::atmosphere::Settings,
     /// Holds, pushes and Add-On vehicles (`physics` operations).
     movables: movables::Movables,
+    /// Recent trips through portals, for whatever follows things across.
+    crossings: crossings::Crossings,
 }
 impl Session {
     pub fn new(simulation: Simulation) -> Self {
@@ -959,6 +962,7 @@ impl Session {
             world_shapes: Default::default(),
             environment: Default::default(),
             movables: Default::default(),
+            crossings: Default::default(),
             specials: Default::default(),
             highlights: Default::default(),
             copy_jobs: Default::default(),
@@ -2506,6 +2510,7 @@ impl Session {
         let mut touches = Vec::new();
         let mut impacts = Vec::new();
         let mut glass_hits = Vec::new();
+        let mut crossed = Vec::new();
         let mut driving = Vec::new();
         let mut triggers = Vec::new();
         // Moves of players driving a package entity, for `step_packages`.
@@ -2622,6 +2627,9 @@ impl Session {
                             continue;
                         }
                     };
+                if let Some(carry) = motion.passed {
+                    crossed.push((owner, carry));
+                }
                 let state = peer.player.state();
                 if Vec3::from(state.velocity).length() > 0.5 {
                     peer.sitting = false;
@@ -2672,6 +2680,9 @@ impl Session {
         };
         impacts.retain(|(owner, _)| !smashers.contains(owner));
         self.fire_touches(touches);
+        for (owner, carry) in crossed {
+            self.crossed(bri_package_runtime::ops::ObjectRef::Player(owner), carry);
+        }
         for (owner, trigger, down) in triggers {
             // An Add-On tool's jet command (v20 `onTrigger` slot 4).
             if trigger == 4

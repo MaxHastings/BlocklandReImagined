@@ -26,49 +26,185 @@ fn fresh(name: &str) -> PathBuf {
     dir
 }
 
-/// Imports the stand-in `addon` with the built-in ports into a content
-/// root, and loads the import and its rules as a host does.
-fn imported(root: &Path, addon: &str, namespace: &str) -> (bri_weapons::Pack, Arc<Catalog>) {
-    let out = root.join("addons").join(namespace);
-    let report = import(&Options {
-        input: Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/ports")
-            .join(addon),
-        out: out.clone(),
+/// How an Add-On reaches the game: a player's Import Add-On, or the
+/// release's bundle of originals (`tools/addon_bundle.py build`, then
+/// `install`, as the packagers lay it out).
+#[derive(Clone, Copy)]
+enum Via {
+    Import,
+    Bundle,
+}
+
+/// Where the copies come from: our CC0 stand-ins, or, for the bundled
+/// tests, the folder `BRI_ADDON_SEARCH` names (Maxwell's real copies, on
+/// the PC).
+fn copies(via: Via) -> PathBuf {
+    match (via, std::env::var_os("BRI_ADDON_SEARCH")) {
+        (Via::Bundle, Some(dir)) => PathBuf::from(dir),
+        _ => Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ports"),
+    }
+}
+
+/// The copy of `addon` in `dir`: a folder or a zip.
+fn copy_of(dir: &Path, addon: &str) -> PathBuf {
+    let zip = dir.join(format!("{addon}.zip"));
+    if zip.is_file() { zip } else { dir.join(addon) }
+}
+
+/// Puts `addon` into the content root `root` the way `via` does, turns it
+/// on as the Add-Ons screen does (with what it turns on with it), and loads
+/// what is on as a host does.
+fn imported(
+    root: &Path,
+    addon: &str,
+    namespace: &str,
+    via: Via,
+) -> (bri_weapons::Pack, Arc<Catalog>) {
+    std::fs::write(
+        root.join("packages.json"),
+        r#"{ "schema_version": 1, "packages": [] }"#,
+    )
+    .unwrap();
+    match via {
+        Via::Import => {
+            let report = import(&Options {
+                input: copy_of(&copies(via), addon),
+                out: root.join(Library::scan(root).unwrap().import_dir(addon)),
+                ..Default::default()
+            })
+            .unwrap();
+            let port = &report.ports[0];
+            assert!(port.applied, "{:?}", port.reason);
+            assert!(
+                report.needs_behaviour.iter().all(|b| b.port.is_some()),
+                "every function is ported: {:?}",
+                report.needs_behaviour
+            );
+            // Ported, nothing is left a gap: each image state script runs
+            // the port or the engine's own.
+            for d in &report.datablocks {
+                assert_eq!(d.status, "converted", "{} {:?}", d.name, d.notes);
+            }
+            assert_eq!(
+                report.summary.verdict, "converted",
+                "{:?}",
+                report.unsupported
+            );
+        }
+        Via::Bundle => bundled(root, addon, namespace),
+    }
+    let mut library = Library::scan(root).unwrap();
+    let plan = library.plan(namespace, true);
+    library.apply(&plan).unwrap();
+    let set = PackageSet::load_root(root).unwrap();
+    assert!(
+        set.packages.iter().any(|p| p.id == format!("{namespace}-rules")),
+        "turning {namespace} on turns its rules on: {:?}",
+        set.packages.iter().map(|p| &p.id).collect::<Vec<_>>()
+    );
+    let catalog = Catalog::load(root, &set, true).unwrap_or_else(|e| panic!("{e:#?}"));
+    let pack = bri_weapons::Pack::from_json(
+        &std::fs::read(root.join("addons").join(namespace).join("assets/weapons.json")).unwrap(),
+    )
+    .unwrap();
+    (pack, Arc::new(catalog))
+}
+
+/// The release's path for an original: a stand-in checkout whose default
+/// list pins this copy, `addon_bundle.py build` from it, and `install`
+/// into `root`, where a release's content holds its Add-Ons.
+fn bundled(root: &Path, addon: &str, namespace: &str) {
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let checkout = root.with_extension("checkout");
+    let _ = std::fs::remove_dir_all(&checkout);
+    let search = copies(Via::Bundle);
+    // The hash Import Add-On records for this copy, pinned in the list.
+    let sha = import(&Options {
+        input: copy_of(&search, addon),
+        out: checkout.join("sha").join(namespace),
         ..Default::default()
     })
-    .unwrap();
-    let port = &report.ports[0];
-    assert!(port.applied, "{:?}", port.reason);
-    assert!(
-        report.needs_behaviour.iter().all(|b| b.port.is_some()),
-        "every function is ported: {:?}",
-        report.needs_behaviour
-    );
-    // Ported, nothing is left a gap: each image state script runs the port
-    // or the engine's own.
-    for d in &report.datablocks {
-        assert_eq!(d.status, "converted", "{} {:?}", d.name, d.notes);
+    .unwrap()
+    .source
+    .sha256;
+    let list = serde_json::json!({ "schema_version": 2, "addons": [{
+        "id": namespace, "enabled": false,
+        "original": { "addon": addon, "title": addon, "authors": ["Tester"],
+                      "version": "1.0.0", "sha256": [sha] } }] });
+    for (to, from) in [
+        ("crates/addon-import/ports/ports.json", Some("crates/addon-import/ports/ports.json")),
+        ("crates/package/base-packages.json", Some("crates/package/base-packages.json")),
+        ("packages/default-addons.json", None),
+        ("core.cs", None),
+        ("game/packages.json", None),
+    ] {
+        let to = checkout.join(to);
+        std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+        match (from, to.file_name().unwrap().to_str().unwrap()) {
+            (Some(from), _) => {
+                std::fs::copy(repo.join(from), &to).unwrap();
+            }
+            (None, "default-addons.json") => {
+                std::fs::write(&to, serde_json::to_vec_pretty(&list).unwrap()).unwrap()
+            }
+            (None, "core.cs") => std::fs::write(&to, "").unwrap(),
+            (None, _) => {
+                std::fs::write(&to, r#"{ "schema_version": 1, "packages": [] }"#).unwrap()
+            }
+        }
     }
-    assert_eq!(
-        report.summary.verdict, "converted",
-        "{:?}",
-        report.unsupported
-    );
-    let library = Library::scan(root).unwrap();
-    let rules = format!("{namespace}-rules");
-    let set = PackageSet {
-        schema_version: 1,
-        packages: [namespace, rules.as_str()]
-            .iter()
-            .map(|id| library.get(id).unwrap().package.clone())
-            .collect(),
-    };
-    let catalog = Catalog::load(root, &set, true).unwrap_or_else(|e| panic!("{e:#?}"));
-    let pack =
-        bri_weapons::Pack::from_json(&std::fs::read(out.join("assets/weapons.json")).unwrap())
+    std::fs::create_dir_all(checkout.join("v20/base")).unwrap();
+    std::fs::create_dir_all(checkout.join("v20/Add-Ons")).unwrap();
+    let python = ["python3", "python"]
+        .into_iter()
+        .find(|p| {
+            std::process::Command::new(p)
+                .arg("--version")
+                .output()
+                .is_ok_and(|o| o.status.success())
+        })
+        .expect("Python 3 runs tools/addon_bundle.py");
+    let run = |args: &[&str]| {
+        let out = std::process::Command::new(python)
+            .arg(repo.join("tools/addon_bundle.py"))
+            .args(args)
+            .arg("--repo")
+            .arg(&checkout)
+            .env_remove("BRI_ADDON_SEARCH")
+            .env_remove("BRI_V20")
+            .output()
             .unwrap();
-    (pack, Arc::new(catalog))
+        assert!(
+            out.status.success(),
+            "addon_bundle.py {args:?}: {}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    let path = |p: &Path| p.to_str().unwrap().to_owned();
+    run(&[
+        "build",
+        "--search",
+        &path(&search),
+        "--v20",
+        &path(&checkout.join("v20")),
+        "--core",
+        &path(&checkout.join("core.cs")),
+        "--importer",
+        env!("CARGO_BIN_EXE_bri-import-addon"),
+        "--out",
+        &path(&checkout.join("bundle")),
+        "--content-root",
+        &path(&checkout.join("game")),
+    ]);
+    run(&[
+        "install",
+        "--bundle",
+        &path(&checkout.join("bundle")),
+        "--content-root",
+        &path(root),
+    ]);
+    std::fs::remove_dir_all(&checkout).unwrap();
 }
 
 struct Game {
@@ -91,8 +227,9 @@ impl Game {
         namespace: &str,
         item: &str,
         extra: Vec<ColliderBuilder>,
+        via: Via,
     ) -> Self {
-        let (pack, catalog) = imported(root, addon, namespace);
+        let (pack, catalog) = imported(root, addon, namespace, via);
         let mut map = vec![
             ColliderBuilder::cuboid(200.0, 0.5, 200.0).translation(Vector::new(0.0, -0.5, 0.0)),
         ];
@@ -215,6 +352,7 @@ fn the_grapple_rope_hangs_its_holder_where_the_hook_strikes() {
         "tool_grapplerope",
         "tool_grapplerope:weapon/grapplerope",
         vec![ceiling],
+        Via::Import,
     );
     // The stand-in checks its line of sight 1.5 above the feet.
     let rules =
@@ -321,6 +459,7 @@ fn the_hookshot_pulls_its_shooter_to_where_it_strikes() {
         "weapon_loz_hookshot",
         "weapon_loz_hookshot:weapon/hookshotitem",
         vec![wall],
+        Via::Import,
     );
     let rules = std::fs::read_to_string(dir.join("addons/weapon_loz_hookshot-rules/hookshot.rhai"))
         .unwrap();
@@ -411,6 +550,7 @@ fn the_hookshot_follows_a_player_it_strikes() {
         "weapon_loz_hookshot",
         "weapon_loz_hookshot:weapon/hookshotitem",
         vec![],
+        Via::Import,
     );
     let target =
         g.s.join("Target".into(), Vec3::new(0.0, 0.05, -30.0), false)
@@ -466,6 +606,7 @@ fn a_rope_is_as_long_as_the_hook_reaches() {
         "tool_grapplerope",
         "tool_grapplerope:weapon/grapplerope",
         vec![ceiling],
+        Via::Import,
     );
     g.look(0.0, 1.4);
     g.trigger(true);
@@ -529,4 +670,86 @@ fn the_anywhere_setting_is_covered_for_a_checked_copy() {
             && resolution.contains("tool_grapplerope"),
         "{resolution}"
     );
+}
+
+/// The Hookshot as a release ships it (bundled, installed, turned on in
+/// the Add-Ons screen) pulls its shooter to the wall it strikes. Its
+/// numbers are whatever the copy's are: with `BRI_ADDON_SEARCH` naming
+/// Maxwell's Add-Ons folder this runs his real copy.
+#[test]
+fn a_bundled_hookshot_pulls_its_shooter_to_the_wall() {
+    let dir = fresh("bundled-hookshot");
+    let wall =
+        ColliderBuilder::cuboid(20.0, 20.0, 0.5).translation(Vector::new(0.0, 20.0, -WALL - 0.5));
+    let mut g = Game::new(
+        &dir,
+        "Weapon_Loz_Hookshot",
+        "weapon_loz_hookshot",
+        "weapon_loz_hookshot:weapon/hookshotitem",
+        vec![wall],
+        Via::Bundle,
+    );
+    let start = g.feet();
+    g.look(0.0, 0.0);
+    g.trigger(true);
+    g.trigger(false);
+    let mut fastest = 0.0f32;
+    for _ in 0..600 {
+        g.steps(1);
+        fastest = fastest.max(-g.velocity().z);
+    }
+    let end = g.feet();
+    assert!(fastest > 15.0, "pulled toward the wall: at most {fastest}");
+    assert!(
+        start.z - end.z > WALL * 0.75,
+        "carried most of the way to the wall: {start} to {end}"
+    );
+    assert!(
+        g.s.package_diagnostics().is_empty(),
+        "{:?}",
+        g.s.package_diagnostics()
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// The Grapple Rope as a release ships it ropes its holder to the ceiling
+/// the hook strikes, and the rope holds them there.
+#[test]
+fn a_bundled_grapple_rope_ropes_its_holder() {
+    let dir = fresh("bundled-rope");
+    let ceiling = ColliderBuilder::cuboid(12.0, 0.5, 12.0).translation(Vector::new(
+        0.0,
+        CEILING + 0.5,
+        -12.0,
+    ));
+    let mut g = Game::new(
+        &dir,
+        "Tool_GrappleRope",
+        "tool_grapplerope",
+        "tool_grapplerope:weapon/grapplerope",
+        vec![ceiling],
+        Via::Bundle,
+    );
+    g.look(0.0, 1.0);
+    g.trigger(true);
+    g.steps(90);
+    let rope =
+        g.s.tether_of(g.player)
+            .expect("roped where the hook struck");
+    assert!((rope.anchor[1] - CEILING).abs() < 0.1, "{rope:?}");
+    // Walking away, the rope stops them.
+    g.look(std::f32::consts::PI, 0.0);
+    g.input.forward = 1.0;
+    g.steps(240);
+    let held = g.s.tether_of(g.player).expect("still roped while held");
+    assert!(
+        (g.feet() + Vec3::Y * 2.65 * 0.85).distance(Vec3::from(held.anchor)) < held.length + 0.6,
+        "leashed"
+    );
+    assert!(
+        g.s.package_diagnostics().is_empty(),
+        "{:?}",
+        g.s.package_diagnostics()
+    );
+    std::fs::remove_dir_all(dir).unwrap();
 }

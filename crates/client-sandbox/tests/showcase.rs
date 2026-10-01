@@ -342,6 +342,73 @@ fn the_gravity_gun_effects_follow_the_guns_state() {
     assert!(snap(0.8, &mut addon).is_empty(), "and gone");
 }
 
+/// Max, v0.1.11: the gun grabs and carries through portals, so its beam
+/// goes as the player sees: into the opening and on out of its partner
+/// to what it holds, never straight across the world between them.
+#[test]
+fn the_beam_bends_through_a_portal() {
+    use bri_content::passage::{Passage, Passages};
+    use glam::{Affine3A, Vec2, Vec3};
+    // An opening across the aim 4 ahead (facing the player) that leads to
+    // its partner 40 to the right.
+    let portal = |world: &mut World| {
+        world.passages = Arc::new(Passages {
+            list: vec![Passage {
+                brick: 1,
+                centre: Vec3::new(0.0, 2.5, -4.0),
+                normal: Vec3::Z,
+                u: Vec3::X,
+                v: Vec3::Y,
+                half: Vec2::new(1.5, 2.5),
+                carry: Affine3A::from_translation(Vec3::new(40.0, 0.0, 0.0)),
+            }],
+            closed: vec![],
+        });
+    };
+    // The beam's passes: the tube the first draw (a beam's glow) uses,
+    // from params 0 to params 1.
+    let beams = |draws: &[bri_client_sandbox::host::Draw]| -> Vec<[[f32; 4]; 4]> {
+        draws
+            .iter()
+            .filter(|d| d.mesh == draws[0].mesh)
+            .filter_map(|d| d.params)
+            .collect()
+    };
+    let crosses = |draws: &[bri_client_sandbox::host::Draw]| {
+        beams(draws).iter().any(|p| (p[0][0] < 20.0) != (p[1][0] < 20.0))
+    };
+    let (_, mut addon) = start("gravity-gun-fx");
+    // Holding the crate 8 along the aim: 4 to the opening, 4 beyond.
+    let mut world = gun_world([1.0, 7.0, 1.0, 8.0], [40.0, 2.1, -8.0]);
+    portal(&mut world);
+    let held = addon.frame(frame(0.0, &Arc::new(world))).unwrap().clone();
+    let beams_held = beams(&held.draws);
+    assert_eq!(beams_held.len(), 4, "two passes on each side: {beams_held:#?}");
+    assert!(!crosses(&held.draws), "no beam cuts across: {beams_held:#?}");
+    assert!(
+        beams_held.iter().any(|p| close(&p[1][..3], &[0.0, 2.1, -4.0])),
+        "into the opening: {beams_held:#?}"
+    );
+    assert!(
+        beams_held
+            .iter()
+            .any(|p| close(&p[0][..3], &[40.0, 2.1, -4.0001]) && close(&p[1][..3], &[40.0, 2.1, -8.0])),
+        "and out of its partner to the grip, the crate's middle where the aim meets it: {beams_held:#?}"
+    );
+    assert_eq!(held.sounds[0].at, Some([40.0, 2.1, -8.0]), "the grab heard there");
+    // Reaching with nothing caught: out through it too.
+    let (_, mut addon) = start("gravity-gun-fx");
+    let mut world = gun_world([0.0, 0.0, 1.0, 8.0], [0.0, 2.0, -25.0]);
+    portal(&mut world);
+    let reaching = addon.frame(frame(0.0, &Arc::new(world))).unwrap().clone();
+    assert!(!crosses(&reaching.draws));
+    assert!(
+        beams(&reaching.draws).iter().any(|p| close(&p[1][..3], &[40.0, 2.1, -8.0])),
+        "{:#?}",
+        reaching.draws
+    );
+}
+
 /// The beam leaves the gun where the game draws it. The gun's alien skin
 /// is its look (the Gravity Gun Tool's `looks.json`), which the game draws
 /// on every copy, so the effects draw nothing over the gun itself.

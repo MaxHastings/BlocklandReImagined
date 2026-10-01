@@ -159,28 +159,22 @@ impl ToolUi {
         items: impl IntoIterator<Item = (String, String)>,
     ) -> Result<()> {
         let mut choices = Vec::new();
-        let mut aliases = BTreeMap::new();
         for (id, name) in items {
             ensure!(choices.len() < 1024, "Too many native item choices");
             ensure!(
                 !name.trim().is_empty() && name.len() <= 128 && !name.chars().any(char::is_control),
                 "Invalid native item display name"
             );
-            let key = name.trim().to_ascii_lowercase();
-            ensure!(
-                aliases.insert(key, id.clone()).is_none(),
-                "Ambiguous native item display name"
-            );
             choices.push(Choice { id, name });
         }
+        // Shared display names are fine (v20 lists them all); the first given
+        // binds saved bricks naming it, as `WeaponContent` orders them.
+        let aliases =
+            bri_world::item_aliases(choices.iter().map(|c| (c.id.as_str(), c.name.as_str())));
         let mut catalog = self.catalog.clone();
         catalog.install_items(choices.iter().map(|c| c.id.clone()))?;
-        choices.sort_by(|a, b| {
-            a.name
-                .to_lowercase()
-                .cmp(&b.name.to_lowercase())
-                .then(a.id.cmp(&b.id))
-        });
+        // Stable: items sharing a name keep the order given.
+        choices.sort_by_key(|c| c.name.trim().to_lowercase());
         self.catalog = catalog;
         self.item_aliases = aliases;
         self.datablocks.insert("ItemData".into(), choices);
@@ -1279,6 +1273,43 @@ mod tests {
             })
             .is_err()
         );
+    }
+
+    #[test]
+    fn items_sharing_a_display_name_are_all_choices_and_bind_the_first_given() {
+        let mut ui = fixture();
+        ui.install_items([
+            (
+                "zz_sniper:weapon/sniperrifleitem".into(),
+                "Sniper Rifle".into(),
+            ),
+            ("v20.weapon.gunitem".into(), "Gun".into()),
+            (
+                "aa_adventure:weapon/sniperrifleitem".into(),
+                "Sniper Rifle".into(),
+            ),
+        ])
+        .unwrap();
+        let listed: Vec<_> = ui.datablocks["ItemData"]
+            .iter()
+            .map(|c| c.id.as_str())
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                "v20.weapon.gunitem",
+                "zz_sniper:weapon/sniperrifleitem",
+                "aa_adventure:weapon/sniperrifleitem"
+            ]
+        );
+        let mut b = brick();
+        b.item_spawn.item = Some(ContentRef::unresolved("item_ui", "sniper rifle"));
+        let updates = open(&mut ui, &b, InspectMode::Wrench);
+        assert!(matches!(
+            &updates[0],
+            UiUpdate::OpenWrench { data, .. }
+                if data.item.as_deref() == Some("zz_sniper:weapon/sniperrifleitem")
+        ));
     }
 
     #[test]

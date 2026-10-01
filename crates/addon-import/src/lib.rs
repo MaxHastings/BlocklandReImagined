@@ -989,7 +989,13 @@ fn references(cx: &mut Ctx) {
                             (false, false) => "; no reference install or installed game given",
                         }
                     ),
-                    case_only.then(|| "matches a member by case only".into()),
+                    if case_only {
+                        Some("matches a member by case only".into())
+                    } else {
+                        (base == "explosionshape").then(|| {
+                            "unless an enabled Add-On provides that file, the explosion shows without a shape, as Torque found no file there".into()
+                        })
+                    },
                 );
             }
             continue;
@@ -1604,15 +1610,16 @@ fn presentation(cx: &mut Ctx, pack: &bri_weapons::Pack, weapons_sha256: &str) ->
             match own.or_else(|| cx.reference.base_texture(&m.name)) {
                 Some(t) => bindings.push(t),
                 None => {
+                    // Torque drew a material whose bitmap it could not find
+                    // untextured (white, then the image's colour shift), and
+                    // kept the rest of the model.
                     cx.report.diagnostics.push(format!(
-                        "presentation: {key} material {} has no texture",
+                        "presentation: {key} material {} has no texture; drawn plain white, as Torque drew it",
                         m.name
                     ));
+                    bindings.push(white_texture(cx, &mut textures)?);
                 }
             }
-        }
-        if bindings.len() != shape.materials.len() {
-            continue;
         }
         let native = std::fs::read(cx.out.join("assets").join(&rel))?;
         models.insert(
@@ -1635,16 +1642,11 @@ fn presentation(cx: &mut Ctx, pack: &bri_weapons::Pack, weapons_sha256: &str) ->
         .cloned()
         .collect();
     if !missing.is_empty() {
-        let (shape, white) = placeholder();
+        let (shape, _) = placeholder();
         let shape_bytes = serde_json::to_vec(&shape)?;
         let shape_rel = format!("models/{}.shape.json", &hash(&shape_bytes)[..24]);
         cx.write(&format!("assets/{shape_rel}"), &shape_bytes)?;
-        let white_rel = format!("textures/{}.png", &hash(&white)[..24]);
-        cx.write(&format!("assets/{white_rel}"), &white)?;
-        textures.insert(
-            "placeholder:white".into(),
-            json!({ "file": white_rel, "sha256": hash(&white), "width": 1, "height": 1, "source": "placeholder" }),
-        );
+        white_texture(cx, &mut textures)?;
         for key in missing {
             cx.report.ambiguous.push(Finding {
                 what: format!("model {key}"),
@@ -1734,6 +1736,23 @@ fn presentation(cx: &mut Ctx, pack: &bri_weapons::Pack, weapons_sha256: &str) ->
         &serde_json::to_vec_pretty(&manifest)?,
     )?;
     Ok(())
+}
+
+/// The plain white texture (`placeholder:white`) this package's
+/// presentation draws untextured materials and placeholder cubes with,
+/// written once.
+fn white_texture(cx: &mut Ctx, textures: &mut serde_json::Map<String, serde_json::Value>) -> Result<String> {
+    const KEY: &str = "placeholder:white";
+    if !textures.contains_key(KEY) {
+        let (_, white) = placeholder();
+        let rel = format!("textures/{}.png", &hash(&white)[..24]);
+        cx.write(&format!("assets/{rel}"), &white)?;
+        textures.insert(
+            KEY.into(),
+            json!({ "file": rel, "sha256": hash(&white), "width": 1, "height": 1, "source": "placeholder" }),
+        );
+    }
+    Ok(KEY.into())
 }
 
 /// A 0.2 unit cube with one white material, and its 1x1 white PNG.

@@ -1378,6 +1378,48 @@ impl Simulation {
     pub fn target(&self, origin: Vec3, direction: Vec3, max_distance: f32) -> Result<Option<Hit>> {
         self.target_filtered(origin, direction, max_distance, false)
     }
+    /// The shortest way `from` sees `to` by, no longer than `reach`:
+    /// straight across, or in through one opening of a linked brick and
+    /// out of its partner ([`bri_content::passage::Passages::ways`]), with
+    /// nothing that stops a targeting ray on any leg (within half a unit
+    /// of `to`, which may stand in a body).
+    pub fn sight(&self, from: Vec3, to: Vec3, reach: f32) -> Option<bri_content::passage::Way> {
+        // Nothing within `slack` of a leg's end counts.
+        let clear = |origin: Vec3, direction: Vec3, length: f32, slack: f32| {
+            length <= 1e-3
+                || self
+                    .target(origin, direction, length.min(Self::MAX_TARGET_DISTANCE))
+                    .ok()
+                    .flatten()
+                    .is_none_or(|hit| hit.distance > length - slack)
+        };
+        let passages = self.passages();
+        let across = from.distance(to);
+        if passages.list.is_empty() {
+            // No portals: straight across or not at all, without a search.
+            let seen =
+                across > 0.1 && across <= reach && clear(from, (to - from) / across, across, 0.5);
+            return seen.then_some(bri_content::passage::Way {
+                aim: to,
+                carry: None,
+                length: across,
+            });
+        }
+        let mut ways: Vec<_> = passages
+            .ways(from, to, reach)
+            .filter(|w| w.carry.is_some() || across > 0.1)
+            .collect();
+        ways.sort_by(|a, b| a.length.total_cmp(&b.length));
+        ways.into_iter().find(|way| {
+            let legs = passages.sight(from, (way.aim - from) / way.length, way.length);
+            let last = legs.len() - 1;
+            legs.iter().enumerate().all(|(i, leg)| {
+                // A leg up to an opening must reach it.
+                let slack = if i == last { 0.5 } else { 0.01 };
+                clear(leg.from, leg.direction, leg.length, slack)
+            })
+        })
+    }
     /// Stock editing tools use FxBrickAlwaysObjectType, including bricks whose
     /// ordinary raycasting flag is disabled. Map geometry still obstructs tools.
     pub fn target_bricks_always(

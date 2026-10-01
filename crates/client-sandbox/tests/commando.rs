@@ -21,9 +21,12 @@ fn start() -> (AddOnCode, AddOn) {
         Ok(None) => panic!("no client code"),
         Err(problems) => panic!("{problems:#?}"),
     };
+    // What it draws, not how fast: a loaded machine's slow software frame
+    // must not stop it. The GPU hard stop is proven with given times in
+    // sandbox.rs.
     let addon = Sandbox::new()
         .unwrap()
-        .start(&code, Budgets::default(), TrustLevel::Sandboxed)
+        .start(&code, Budgets::untimed(), TrustLevel::Sandboxed)
         .unwrap_or_else(|e| panic!("stopped: {e}"));
     (code, addon)
 }

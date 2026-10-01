@@ -146,28 +146,53 @@ pub fn is_default(id: &str) -> bool {
 /// `addon` as `packages.json` lists it when installed under `root`: its
 /// manifest at `addons/<id>` names it. None when it is not installed.
 pub fn installed_entry(root: &Path, addon: &DefaultAddOn) -> Option<PackageEntry> {
-    let dir = addon.dir();
+    installed_at(root, &addon.id).map(|(entry, _)| entry)
+}
+
+/// `addon` installed under `root`, then the companions its manifest names
+/// installed beside it: a bundled original's host rules (`addons/<id>-rules`),
+/// which Import turns on and off with it. Empty when it is not installed.
+pub fn installed_with_companions(root: &Path, addon: &DefaultAddOn) -> Vec<PackageEntry> {
+    let Some((entry, companions)) = installed_at(root, &addon.id) else {
+        return vec![];
+    };
+    let mut out = vec![entry];
+    out.extend(
+        companions
+            .iter()
+            .filter_map(|id| installed_at(root, id).map(|(entry, _)| entry)),
+    );
+    out
+}
+
+/// The package `addons/<id>` holds when its manifest names `id`, and the
+/// companions it names.
+fn installed_at(root: &Path, id: &str) -> Option<(PackageEntry, Vec<String>)> {
+    let dir = format!("{IMPORT_DIR}/{id}");
     let info = read_info(&root.join(&dir).join(MANIFEST_FILE))?;
-    if info.id != addon.id {
+    if info.id != id {
         return None;
     }
     let side = info.side()?;
-    Some(PackageEntry {
-        id: info.id,
-        version: info.version,
-        side,
-        dir,
-        role: None,
-    })
+    Some((
+        PackageEntry {
+            id: info.id,
+            version: info.version,
+            side,
+            dir,
+            role: None,
+        },
+        info.companions,
+    ))
 }
 
-/// The default Add-Ons installed under `root` that start turned on, in
-/// load order.
+/// The default Add-Ons installed under `root` that start turned on, each
+/// followed by its installed companions, in load order.
 pub fn installed(root: &Path) -> Vec<PackageEntry> {
     list()
         .iter()
         .filter(|a| a.enabled)
-        .filter_map(|a| installed_entry(root, a))
+        .flat_map(|a| installed_with_companions(root, a))
         .collect()
 }
 
@@ -272,28 +297,41 @@ fn update_lists(root: &Path) -> Result<Vec<String>> {
     let (mut on, mut off) = (false, false);
     let mut changed = Vec::new();
     for addon in list() {
-        let Some(entry) = installed_entry(root, addon) else {
-            continue;
-        };
-        let position = |set: &PackageSet| set.packages.iter().position(|p| p.id == addon.id);
-        let moved = if let Some(i) = position(&enabled) {
-            let moved = follow(&mut enabled.packages[i], &entry);
-            on |= moved;
-            moved
-        } else if let Some(i) = position(&disabled) {
-            let moved = follow(&mut disabled.packages[i], &entry);
-            off |= moved;
-            moved
-        } else if addon.enabled {
-            enabled.packages.push(entry);
-            on = true;
-            true
-        } else {
-            // Off until the player turns it on; the library finds it.
-            false
-        };
-        if moved {
-            changed.push(addon.id.clone());
+        // It, then its companions (an original's host rules), which go
+        // where it goes: on after it when it is on, off when the player
+        // turned it off.
+        let mut group_on = addon.enabled;
+        let mut after: Option<usize> = None;
+        for (n, entry) in installed_with_companions(root, addon)
+            .into_iter()
+            .enumerate()
+        {
+            let position = |set: &PackageSet| set.packages.iter().position(|p| p.id == entry.id);
+            let id = entry.id.clone();
+            let moved = if let Some(i) = position(&enabled) {
+                group_on |= n == 0;
+                after = Some(i);
+                let moved = follow(&mut enabled.packages[i], &entry);
+                on |= moved;
+                moved
+            } else if let Some(i) = position(&disabled) {
+                group_on &= n != 0;
+                let moved = follow(&mut disabled.packages[i], &entry);
+                off |= moved;
+                moved
+            } else if group_on {
+                let at = after.map_or(enabled.packages.len(), |i| i + 1);
+                enabled.packages.insert(at, entry);
+                after = Some(at);
+                on = true;
+                true
+            } else {
+                // Off until the player turns it on; the library finds it.
+                false
+            };
+            if moved {
+                changed.push(id);
+            }
         }
     }
     // The disabled list first, as the library writes them: a failure
@@ -472,6 +510,93 @@ mod tests {
             ),
         )
         .unwrap();
+    }
+
+    /// An original whose port wrote host rules, as Import leaves it and
+    /// `tools/addon_bundle.py install` copies it: the import at
+    /// `addons/<id>` naming its companion, the rules at `addons/<id>-rules`.
+    /// Stand-ins with only manifests.
+    fn install_original_with_rules(root: &Path, id: &str) {
+        install_original(root, id, "1.0.0");
+        let manifest = root.join(IMPORT_DIR).join(id).join(MANIFEST_FILE);
+        let mut info: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&manifest).unwrap()).unwrap();
+        info["companions"] = serde_json::json!([format!("{id}-rules")]);
+        std::fs::write(&manifest, serde_json::to_vec(&info).unwrap()).unwrap();
+        let rules = root.join(IMPORT_DIR).join(format!("{id}-rules"));
+        std::fs::create_dir_all(&rules).unwrap();
+        std::fs::write(
+            rules.join(MANIFEST_FILE),
+            format!(
+                r#"{{ "schema_version": 1, "id": "{id}-rules", "version": "1.0.0", "api": 1,
+                     "dependencies": {{ "{id}": "=1.0.0" }}, "capabilities": ["player"],
+                     "provides": [{{ "kind": "behaviour", "id": "{id}-rules:behaviour/behaviour", "file": "behaviour.json" }}] }}"#
+            ),
+        )
+        .unwrap();
+    }
+
+    /// A bundled original that starts on starts with its port's host rules,
+    /// right after it: without them its scripted behaviour (a hookshot's
+    /// pull, a shovel's dig) never runs. The same in a root with no list, one
+    /// whose list predates the rules, and not at all once the player turned
+    /// the original off.
+    #[test]
+    fn an_original_starts_with_its_host_rules() {
+        let root = scratch("rules");
+        install_original_with_rules(&root, "tool_duplicator");
+        let on = installed(&root);
+        assert_eq!(ids(&on), ["tool_duplicator", "tool_duplicator-rules"]);
+        assert_eq!(on[1].dir, "addons/tool_duplicator-rules");
+        assert_eq!(on[1].side, crate::packages::Side::Server);
+        let base = PackageSet::base().packages.len();
+        let set = PackageSet::load_root(&root).unwrap();
+        assert_eq!(
+            ids(&set.packages[base..]),
+            ["tool_duplicator", "tool_duplicator-rules"]
+        );
+
+        // A list written before the rules shipped gains them after it.
+        let entry = |id: &str| {
+            format!(
+                r#"{{ "id": "{id}", "version": "1.0.0", "side": "shared", "dir": "addons/{id}" }}"#
+            )
+        };
+        std::fs::write(
+            root.join(PACKAGES_FILE),
+            format!(
+                r#"{{ "schema_version": 1, "packages": [{}, {}] }}"#,
+                entry("tool_duplicator"),
+                entry("brick_mirror")
+            ),
+        )
+        .unwrap();
+        install(&root, &repo_packages()).unwrap();
+        let listed = PackageSet::load(&root.join(PACKAGES_FILE)).unwrap();
+        assert_eq!(
+            ids(&listed.packages),
+            ["tool_duplicator", "tool_duplicator-rules", "brick_mirror"]
+        );
+        assert!(install(&root, &repo_packages()).unwrap().is_empty());
+
+        // Turned off by the player: its rules stay off with it.
+        std::fs::write(
+            root.join(PACKAGES_FILE),
+            r#"{ "schema_version": 1, "packages": [] }"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join(DISABLED_FILE),
+            format!(
+                r#"{{ "schema_version": 1, "packages": [{}] }}"#,
+                entry("tool_duplicator")
+            ),
+        )
+        .unwrap();
+        install(&root, &repo_packages()).unwrap();
+        let listed = PackageSet::load(&root.join(PACKAGES_FILE)).unwrap();
+        assert_eq!(ids(&listed.packages), ["brick_mirror"]);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

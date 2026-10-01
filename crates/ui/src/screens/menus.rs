@@ -274,14 +274,7 @@ impl NativeScreen {
     }
     fn icon(&mut self, name: &str, icon: &IconRef) {
         if let Some(n) = self.view.id(name) {
-            self.view.state(n).external_texture = match icon {
-                IconRef::External(id) => Some(*id),
-                _ => None,
-            };
-            self.view.state(n).bitmap = match icon {
-                IconRef::Pack(p) => Some(p.clone()),
-                _ => None,
-            };
+            self.view.set_icon(n, icon);
         }
     }
     /// Start Game's Game Mode button, above Start in the same column.

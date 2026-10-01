@@ -123,11 +123,16 @@ fn text(out: &Output) -> String {
 
 /// The hash Import Add-On records for the synthetic shotgun.
 fn shotgun_sha() -> String {
+    fixture_sha("Weapon_Shotgun")
+}
+
+/// The hash Import Add-On records for the stand-in `fixture`.
+fn fixture_sha(fixture: &str) -> String {
     static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let out = scratch(&format!("sha-{n}")).join("weapon_shotgun");
+    let out = scratch(&format!("sha-{n}")).join("import");
     let report = bri_addon_import::import(&bri_addon_import::Options {
-        input: fixtures().join("Weapon_Shotgun"),
+        input: fixtures().join(fixture),
         out: out.clone(),
         ..Default::default()
     })
@@ -187,7 +192,7 @@ fn a_pinned_original_is_imported_with_its_port_credited_and_installed() {
         json!([{
             "id": "weapon_shotgun", "addon": "Weapon_Shotgun", "title": "Sawn-off Shotgun",
             "authors": ["Someone", "Someone Else"], "version": "1.2.0", "sha256": sha,
-            "port": "weapon_shotgun", "enabled": false
+            "port": "weapon_shotgun", "companions": [], "enabled": false
         }])
     );
     // Its package names the authors the list credits, and its port applied.
@@ -370,4 +375,173 @@ fn originals_are_imported_against_the_generated_game_content() {
     assert!(!built.status.success(), "{log}");
     assert!(log.contains("No generated game content at"), "{log}");
     assert!(!checkout.root.join("bundle/addons").exists());
+}
+
+/// An original whose port has host rules ships them beside it, laid out as
+/// Import leaves them for a player (`addons/<id>` naming its companion
+/// `addons/<id>-rules`), through every step a release takes: the bundle,
+/// the packagers' sources, a checkout's install, the release check and the
+/// Mac and Linux builds' copy. Turned on, the game turns its rules on after
+/// it and loads both. Run on the stand-in Player Throwing (CC0), whose
+/// listed port writes host rules.
+#[test]
+fn an_originals_host_rules_ship_beside_it_and_load() {
+    const ID: &str = "script_playerthrowing";
+    const RULES: &str = "script_playerthrowing-rules";
+    let checkout = Checkout::new(
+        "rules",
+        json!([{ "id": ID, "enabled": true, "original": {
+            "addon": "Script_PlayerThrowing", "title": "Player Throwing", "authors": ["Someone"],
+            "version": "1.0.0", "sha256": [fixture_sha("Script_PlayerThrowing")] } }]),
+    );
+    let built = checkout.run(&["build"]);
+    let log = text(&built);
+    assert!(built.status.success(), "{log}");
+    assert!(
+        log.contains(&format!("and its host rules {RULES}")),
+        "{log}"
+    );
+    let bundle = checkout.root.join("bundle");
+    assert_eq!(
+        read(&bundle.join("bundle.json"))["addons"][0]["companions"],
+        json!([RULES])
+    );
+    assert_eq!(
+        read(&bundle.join("addons").join(ID).join("package.json"))["companions"],
+        json!([RULES])
+    );
+    assert_eq!(
+        read(&bundle.join("addons").join(RULES).join("package.json"))["id"],
+        RULES
+    );
+    // Nothing but the two Add-Ons, and the zip carries both.
+    let mut folders: Vec<String> = std::fs::read_dir(bundle.join("addons"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    folders.sort();
+    assert_eq!(folders, [ID, RULES]);
+    let zip = zip::ZipArchive::new(std::fs::File::open(checkout.root.join("bundle.zip")).unwrap())
+        .unwrap();
+    assert!(
+        zip.file_names()
+            .any(|n| n == format!("addons/{RULES}/package.json"))
+    );
+    assert!(
+        !zip.file_names()
+            .any(|n| n.split('/').any(|p| p.starts_with('.')))
+    );
+
+    // The packagers ship the rules right after it, on with it.
+    let sources = checkout.run(&["sources", "--bundle", bundle.to_str().unwrap()]);
+    assert!(sources.status.success(), "{}", text(&sources));
+    let sources: Value = serde_json::from_slice(&sources.stdout).unwrap();
+    let shipped: Vec<(&str, bool)> = sources["addons"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| (a["id"].as_str().unwrap(), a["enabled"].as_bool().unwrap()))
+        .collect();
+    assert_eq!(shipped, [(ID, true), (RULES, true)]);
+    assert!(
+        sources["addons"][1]["path"]
+            .as_str()
+            .unwrap()
+            .ends_with(RULES)
+    );
+
+    // A checkout's install puts both where the game looks; turning the
+    // original on in the game turns its rules on after it, and both load.
+    let content = checkout.root.join("content");
+    std::fs::create_dir_all(&content).unwrap();
+    std::fs::write(
+        content.join("packages.json"),
+        r#"{ "schema_version": 1, "packages": [] }"#,
+    )
+    .unwrap();
+    let installed = checkout.run(&[
+        "install",
+        "--bundle",
+        bundle.to_str().unwrap(),
+        "--content-root",
+        content.to_str().unwrap(),
+    ]);
+    assert!(installed.status.success(), "{}", text(&installed));
+    use bri_package::library::Library;
+    let mut library = Library::scan(&content).unwrap();
+    let plan = library.plan(ID, true);
+    assert!(plan.allowed(), "{:?}", plan.refused);
+    assert_eq!(plan.also, [RULES]);
+    library.apply(&plan).unwrap();
+    let set = bri_package::packages::PackageSet::load(&content.join("packages.json")).unwrap();
+    let on: Vec<&str> = set.packages.iter().map(|p| p.id.as_str()).collect();
+    assert_eq!(on, [ID, RULES]);
+    bri_package_runtime::Catalog::load(&content, &set, true).unwrap_or_else(|e| panic!("{e:#?}"));
+
+    // That release verifies; one missing the rules, or not turning them
+    // on, does not.
+    let credits = bundle.join("CREDITS.md");
+    let verify = || {
+        checkout.run(&[
+            "verify-release",
+            content.to_str().unwrap(),
+            "--credits",
+            credits.to_str().unwrap(),
+        ])
+    };
+    let ok = verify();
+    assert!(ok.status.success(), "{}", text(&ok));
+    let listed = std::fs::read(content.join("packages.json")).unwrap();
+    let mut without = set.clone();
+    without.packages.retain(|p| p.id != RULES);
+    std::fs::write(
+        content.join("packages.json"),
+        serde_json::to_vec(&without).unwrap(),
+    )
+    .unwrap();
+    let off = verify();
+    assert!(!off.status.success());
+    assert!(
+        text(&off).contains("its host rules would not run"),
+        "{}",
+        text(&off)
+    );
+    std::fs::write(content.join("packages.json"), &listed).unwrap();
+
+    // The Mac and Linux builds take the rules out of the Windows release
+    // with the original; a release without them is refused.
+    let release = checkout
+        .root
+        .join("release/BlocklandReImagined-test-windows");
+    copy_dir(&content.join("addons"), &release.join("content/addons"));
+    std::fs::copy(&credits, release.join("CREDITS.md")).unwrap();
+    let taken = checkout.root.join("taken");
+    let out = checkout.run(&[
+        "from-release",
+        release.to_str().unwrap(),
+        "--bundle",
+        taken.to_str().unwrap(),
+    ]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(
+        read(&taken.join("addons").join(RULES).join("package.json")),
+        read(&bundle.join("addons").join(RULES).join("package.json"))
+    );
+    assert_eq!(
+        read(&taken.join("bundle.json"))["addons"][0]["companions"],
+        json!([RULES])
+    );
+    std::fs::remove_dir_all(release.join("content/addons").join(RULES)).unwrap();
+    let refused = checkout.run(&[
+        "from-release",
+        release.to_str().unwrap(),
+        "--bundle",
+        taken.to_str().unwrap(),
+    ]);
+    assert!(!refused.status.success());
+    assert!(
+        text(&refused).contains(&format!("names its host rules {RULES}")),
+        "{}",
+        text(&refused)
+    );
 }

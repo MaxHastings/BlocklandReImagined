@@ -65,6 +65,24 @@ fn native_dialog(title: &str) -> View {
     View::new(&root)
 }
 /// Stable names for serverConfigGui's unnamed `$Pref::Server::*` fields.
+/// v20's "UNKNOWN MAP" picture, which changeMapGui authors in its preview
+/// until a map is picked.
+const DEFAULT_MAP_PREVIEW: &str = "base/data/missions/default";
+/// Native name of changeMapGui's preview: the bitmap authored with
+/// [`DEFAULT_MAP_PREVIEW`].
+const MAP_PREVIEW: &str = "NativeMapPreview";
+fn name_map_preview(view: &mut View) {
+    let preview = view.walk().find(|&n| {
+        let c = &view.nodes[n].ctrl;
+        c.class.eq_ignore_ascii_case("GuiBitmapCtrl")
+            && c.bitmap
+                .as_deref()
+                .is_some_and(|b| b.eq_ignore_ascii_case(DEFAULT_MAP_PREVIEW))
+    });
+    if let Some(n) = preview {
+        view.names.insert(MAP_PREVIEW.into(), n);
+    }
+}
 fn name_option_fields(view: &mut View) {
     for n in view.walk().collect::<Vec<_>>() {
         if let Some(var) = view.nodes[n].ctrl.variable.clone()
@@ -141,6 +159,9 @@ impl AdminScreen {
         let parent = window(&view).unwrap_or(view.root);
         // Stable native names identify unnamed source buttons for internal tests.
         name_option_fields(&mut view);
+        if id == ScreenId::AdminMaps {
+            name_map_preview(&mut view);
+        }
         if id == ScreenId::Admin {
             for (name, label, y) in [
                 ("NativeEnvironment", "Environment >>", 210),
@@ -724,6 +745,16 @@ impl AdminScreen {
                     .map(|r| r.name.clone())
                     .unwrap_or_default(),
             );
+            // The picked map's own picture, from this client's content (the
+            // host lists maps by the same ids); else the authored placeholder.
+            if let Some(n) = self.view.id(MAP_PREVIEW) {
+                let preview = m
+                    .selected_map
+                    .as_ref()
+                    .and_then(|id| core.maps.iter().find(|map| map.id == *id))
+                    .map_or(crate::api::IconRef::None, |map| map.preview.clone());
+                self.view.set_icon(n, &preview);
+            }
             set(
                 &mut self.view,
                 "changeMapDescription",

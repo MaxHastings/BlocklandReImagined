@@ -1,11 +1,8 @@
 //! Linked bricks: pairing by name and walking through their openings, with
 //! a made-up doorway brick (no converted content needed).
-use bri_content::{
-    brick::{Brick as Mesh, Face, Frame, Link},
-    collision::{CollisionBody, Part},
-};
+use bri_content::collision::{CollisionBody, Part};
 use bri_sim::{
-    definitions::{Definition, Definitions},
+    definitions::Definitions,
     player::{MoveInput, Player, PlayerTuning},
     simulation::Simulation,
 };
@@ -18,114 +15,31 @@ const BIG: &str = "big_portal";
 const HUGE: &str = "huge_portal";
 const WALL: &str = "wall";
 
-/// A 1x4x5 doorway (2 wide, 3 tall, half a unit deep) opening north and
-/// south through its middle, the same stretched to 1x14x10 (7 wide, 6 tall)
-/// and 1x20x12 (10 wide, 7.2 tall) as the Portal Add-On's bigger ones are,
-/// and a 1x4x5 solid wall.
+/// The synthetic portal doorway ([`bri_sim::testing::portal`]), the same
+/// stretched to 1x14x10 (7 wide, 6 tall) and 1x20x12 (10 wide, 7.2 tall) as
+/// the Portal Add-On's bigger ones are, and a 1x4x5 solid wall.
 fn definitions() -> Definitions {
-    let mesh = |id: &str| Mesh {
-        schema_version: 1,
-        id: id.into(),
-        footprint_studs: [4, 1],
-        height_plates: 15,
-        attachment_rows: vec!["bbbb".into(); 15],
-        collision_boxes: vec![],
-        needs_external_collision: false,
-        coverage: None,
-        // Its top, for a shape that is whole.
-        quads: vec![bri_content::brick::Quad {
-            face: Face::Top,
-            surface: bri_content::brick::Surface::Top,
-            vertices: [[-1.0, 0.25], [1.0, 0.25], [1.0, -0.25], [-1.0, -0.25]].map(|[x, z]| {
-                bri_content::brick::Vertex {
-                    position: [x, 1.5, z],
-                    normal: [0.0, 1.0, 0.0],
-                    uv: [x + 1.0, z + 0.25],
-                }
-            }),
-            colors: None,
-        }],
-    };
-    let link = Link {
-        faces: vec![Face::North, Face::South],
-        depth: 0.5,
-        inset: 0.0,
-        tint: [1.0; 3],
-        idle: [0.5; 3],
-        pass: true,
-        // The stock window's: thin sides and top, a sill to step over.
-        frame: Frame {
-            sides: 0.05,
-            top: 0.05,
-            bottom: 0.2,
-        },
-        name: "Portal".into(),
-    };
-    let body = |id: &str, parts: Vec<Part>| {
-        let collision = CollisionBody {
-            id: id.into(),
-            parts,
-        };
-        let shape = bri_physics::content::collider(&collision)
-            .unwrap()
-            .build()
-            .shared_shape()
-            .clone();
-        (collision, shape)
-    };
-    let door = mesh("door");
-    let frame = |id: &str, door: &Mesh| {
-        body(
-            id,
-            link.frame_boxes(door)
-                .into_iter()
-                .map(|b| Part::Box {
-                    center: b.center,
-                    size: b.size,
-                })
-                .collect(),
-        )
-    };
-    let (portal_collision, portal_shape) = frame(PORTAL, &door);
-    let big = door.stretched("door#14x1x30", [14, 1, 30]).unwrap();
-    let (big_collision, big_shape) = frame(BIG, &big);
-    let huge = door.stretched("door#20x1x36", [20, 1, 36]).unwrap();
-    let (huge_collision, huge_shape) = frame(HUGE, &huge);
-    let (wall_collision, wall_shape) = body(
-        WALL,
-        vec![Part::Box {
+    use bri_sim::testing::portal;
+    let mut wall = portal(WALL, None);
+    wall.link = None;
+    wall.collision = CollisionBody {
+        id: WALL.into(),
+        parts: vec![Part::Box {
             center: [0.0; 3],
             size: [2.0, 3.0, 0.5],
         }],
-    );
-    let definition = |mesh, collision, shape, link| Definition {
-        mesh,
-        collision,
-        shape,
-        indestructible: false,
-        special: Default::default(),
-        reflection: None,
-        link,
-        glass: [0.0; 4],
     };
+    wall.shape = bri_physics::content::collider(&wall.collision)
+        .unwrap()
+        .build()
+        .shared_shape()
+        .clone();
     Definitions {
         entries: [
-            (
-                BIG.to_string(),
-                definition(big, big_collision, big_shape, Some(link.clone())),
-            ),
-            (
-                HUGE.to_string(),
-                definition(huge, huge_collision, huge_shape, Some(link.clone())),
-            ),
-            (
-                PORTAL.to_string(),
-                definition(door, portal_collision, portal_shape, Some(link)),
-            ),
-            (
-                WALL.to_string(),
-                definition(mesh("wall"), wall_collision, wall_shape, None),
-            ),
+            (BIG.to_string(), portal(BIG, Some([14, 1, 30]))),
+            (HUGE.to_string(), portal(HUGE, Some([20, 1, 36]))),
+            (PORTAL.to_string(), portal(PORTAL, None)),
+            (WALL.to_string(), wall),
         ]
         .into(),
     }

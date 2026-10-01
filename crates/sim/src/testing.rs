@@ -1,9 +1,10 @@
 //! Made-up brick definitions for tests and tools that run without converted
 //! v20 content: a plate, a brick, a tall column, a baseplate, water bricks,
 //! an indestructible stone, a vehicle spawn brick, the special bricks
-//! (checkpoint, teledoor, treasure chest, player spawn) and a steep ramp.
-//! Each but the ramp is a plain box with studs on top; every size is
-//! invented, none comes from Blockland's own bricks.
+//! (checkpoint, teledoor, treasure chest, player spawn), a steep ramp and a
+//! portal doorway. Each but the ramp and the portal is a plain box with
+//! studs on top; every size is invented, none comes from Blockland's own
+//! bricks.
 //!
 //! Tests read a brick's size back from its [`Definition`] rather than
 //! repeating it.
@@ -45,6 +46,10 @@ pub const SPAWN_POINT: &str = "v20/brick/brickspawnpointdata";
 /// front half a slope from the bottom front edge up to the top's middle
 /// (about 76 degrees), its back half solid. See [`ramp`].
 pub const STEEP_RAMP: &str = "test/brick/steep-ramp";
+/// A 1x4x5 doorway (2 wide, 3 tall, half a unit deep) opening north and
+/// south through its middle, linked to another of one name: a portal like
+/// the Portal Add-On's smallest. See [`portal`].
+pub const PORTAL: &str = "test/brick/portal";
 
 /// A box brick `studs` wide and long and `plates` high, studded on top and
 /// socketed below.
@@ -170,6 +175,80 @@ pub fn ramp(id: &str, studs: [u8; 2], plates: u16) -> Definition {
     d
 }
 
+/// A portal doorway ([`PORTAL`]) `size` studs wide, deep and plates high
+/// (4x1x15 when `None`), stretched as the Portal Add-On's bigger ones are:
+/// thin sides and top, a sill to step over, openings north and south.
+pub fn portal(id: &str, size: Option<[u32; 3]>) -> Definition {
+    use bri_content::brick::{Face, Frame, Link, Quad, Surface, Vertex};
+    let door = Mesh {
+        schema_version: 1,
+        id: id.into(),
+        footprint_studs: [4, 1],
+        height_plates: 15,
+        attachment_rows: vec!["bbbb".into(); 15],
+        collision_boxes: vec![],
+        needs_external_collision: false,
+        coverage: None,
+        // Its top, for a shape that is whole.
+        quads: vec![Quad {
+            face: Face::Top,
+            surface: Surface::Top,
+            vertices: [[-1.0, 0.25], [1.0, 0.25], [1.0, -0.25], [-1.0, -0.25]].map(|[x, z]| {
+                Vertex {
+                    position: [x, 1.5, z],
+                    normal: [0.0, 1.0, 0.0],
+                    uv: [x + 1.0, z + 0.25],
+                }
+            }),
+            colors: None,
+        }],
+    };
+    let mesh = match size {
+        Some(size) => door.stretched(id, size).expect("a doorway stretches"),
+        None => door,
+    };
+    let link = Link {
+        faces: vec![Face::North, Face::South],
+        depth: 0.5,
+        inset: 0.0,
+        tint: [1.0; 3],
+        idle: [0.5; 3],
+        pass: true,
+        frame: Frame {
+            sides: 0.05,
+            top: 0.05,
+            bottom: 0.2,
+        },
+        name: "Portal".into(),
+    };
+    let collision = CollisionBody {
+        id: id.into(),
+        parts: link
+            .frame_boxes(&mesh)
+            .into_iter()
+            .map(|b| Part::Box {
+                center: b.center,
+                size: b.size,
+            })
+            .collect(),
+    };
+    let shape = bri_physics::content::collider(&collision)
+        .expect("a frame collides")
+        .build()
+        .shared_shape()
+        .clone();
+    Definition {
+        mesh,
+        collision,
+        shape,
+        indestructible: false,
+        special: Special::None,
+        reflection: None,
+        link: Some(link),
+        glass: [0.0; 4],
+    }
+}
+
 /// Every brick here, keyed by id.
 pub fn definitions() -> Definitions {
     let entries = [
@@ -193,6 +272,7 @@ pub fn definitions() -> Definitions {
         ),
         definition(SPAWN_POINT, [2, 2], 1, Special::SpawnPoint, false),
         ramp(STEEP_RAMP, [2, 2], 10),
+        portal(PORTAL, None),
     ];
     Definitions {
         entries: entries
@@ -207,7 +287,7 @@ mod tests {
     #[test]
     fn every_synthetic_brick_is_a_box_of_its_footprint() {
         let definitions = super::definitions();
-        assert_eq!(definitions.entries.len(), 14);
+        assert_eq!(definitions.entries.len(), 15);
         for (id, d) in &definitions.entries {
             assert_eq!(&d.mesh.id, id);
             let rows = d.mesh.footprint_studs[1] as usize * d.mesh.height_plates as usize;

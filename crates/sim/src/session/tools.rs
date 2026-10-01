@@ -344,9 +344,18 @@ impl Session {
             .image_state(ActorId(owner), 0)
             .filter(|(held, _)| held.paint_picker)
             .map(|(held, _)| held.id.clone());
+        // A picker taken out of the tool box goes back as that tool, still
+        // selected, so the holder's tool box stays on it.
+        let slot = self
+            .weapons
+            .actor(ActorId(owner))
+            .and_then(|a| a.selected)
+            .filter(|_| picker.is_some());
         self.hold_image(owner, image, paint)?;
-        if let Some(picker) = picker {
-            self.weapons.mount_image(ActorId(owner), &picker, None)?;
+        match (slot, picker) {
+            (Some(slot), Some(_)) => self.weapons.equip(ActorId(owner), Some(slot))?,
+            (None, Some(picker)) => self.weapons.mount_image(ActorId(owner), &picker, None)?,
+            _ => {}
         }
         // `serverCmdUseSprayCan` remembers the colour; FX cans do not, but
         // which FX can came last is kept for tools that paint with it.

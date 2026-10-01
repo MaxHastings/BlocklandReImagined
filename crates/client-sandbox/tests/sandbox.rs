@@ -467,6 +467,23 @@ fn one_frame_far_over_the_gpu_budget_stops_the_addon_at_once() {
     assert!(addon.frame(frame(0.0)).is_err());
 }
 
+/// The default hard stop is 100 ms of graphics time in one frame: a frame
+/// at the limit is a spike, one past it (like a loaded software renderer's
+/// 236 ms) stops the Add-On. Times are given, so no machine can flake it.
+#[test]
+fn the_default_gpu_hard_stop_is_one_hundred_ms() {
+    let dir = draws(1, 512);
+    let mut addon = start(&load(dir.path()), budgets()).unwrap();
+    assert_eq!(Budgets::default().gpu_stop_ms, 100.0);
+    addon.report_gpu_time(100.0).unwrap();
+    match addon.report_gpu_time(236.0) {
+        Err(Stopped::Gpu(why)) => {
+            assert!(why.contains("236 ms") && why.contains("100 ms"), "{why}")
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
 #[test]
 fn the_shader_loop_cap_starts_low_and_fits_the_measured_gpu() {
     use bri_client_sandbox::gpu::{GpuSpeed, loop_limit};

@@ -511,6 +511,7 @@ name = "bri-client-sandbox"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bri-content",
  "bri-package",
  "bytemuck",
  "glam 0.33.10",

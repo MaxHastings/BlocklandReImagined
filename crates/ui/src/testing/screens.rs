@@ -1436,6 +1436,12 @@ fn change_map() -> Control {
                 "changeMapName",
             ),
             ml("changeMapDescription", Rect::new(200, 52, 190, 60)),
+            // v20 authors its "UNKNOWN MAP" picture until a map is picked.
+            crate::screens::bitmap(
+                "GuiDefaultProfile",
+                Rect::new(200, 116, 190, 136),
+                "base/data/missions/default",
+            ),
             text_button(
                 Rect::new(10, 260, 90, 28),
                 "Back",

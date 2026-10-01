@@ -1187,6 +1187,16 @@ fn register_api(engine: &mut Engine) {
                             .as_ref()
                             .map_or(Dynamic::UNIT, |o| Dynamic::from_float(o.distance as f64)),
                     ),
+                    // Where the aim met the object: beyond a portal, on
+                    // its far side, not straight out from the eye.
+                    (
+                        "object_at",
+                        a.object.as_ref().map_or(Dynamic::UNIT, |o| {
+                            Dynamic::from_array(
+                                o.position.iter().map(|c| Dynamic::from_float(*c as f64)).collect(),
+                            )
+                        }),
+                    ),
                 ])
             }))
         })

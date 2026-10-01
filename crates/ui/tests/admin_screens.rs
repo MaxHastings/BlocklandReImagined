@@ -923,3 +923,114 @@ fn the_environment_window_applies_a_draft_through_the_host() {
     ui.update(16);
     assert!(!ui.stack().contains(&ScreenId::AdminEnvironment));
 }
+
+/// Change Map shows the picked map's own picture over changeMapGui's
+/// "UNKNOWN MAP" placeholder, and the placeholder again for a map without one.
+fn change_map_shows_the_picked_maps_picture(pack: std::rc::Rc<bri_ui::pack::Pack>) {
+    use bri_ui::{
+        api::{ConnectionState, IconRef, MapInfo, Settings, UiUpdate},
+        binds::Platform,
+        input::{InputEvent, MouseButton},
+        models::admin::AdminMap,
+        screens::ScreenId,
+        ui::{Ui, UiConfig},
+    };
+    let mut ui = Ui::new(
+        pack,
+        UiConfig {
+            size: (640, 480),
+            scale: Some(1.0),
+            platform: Platform::Windows,
+        },
+        Settings {
+            binds: Some(vec![]),
+            ..Default::default()
+        },
+    );
+    ui.apply(UiUpdate::Connection(ConnectionState::InGame {
+        server_name: "Test".into(),
+        max_players: 8,
+        local: false,
+        single_player: false,
+        admin: true,
+    }));
+    ui.core
+        .admin
+        .apply(AdminUpdate::State(state(AdminRole::SuperAdmin, false)))
+        .unwrap();
+    // The host lists maps by id; this client's content has their pictures.
+    ui.core.maps = vec![
+        MapInfo {
+            id: "v20/kitchen".into(),
+            name: "Kitchen".into(),
+            description: String::new(),
+            preview: IconRef::Pack("fixture/maps/kitchen".into()),
+        },
+        MapInfo {
+            id: "v20/bare".into(),
+            name: "Bare".into(),
+            description: String::new(),
+            preview: IconRef::None,
+        },
+    ];
+    ui.core.admin.maps = ["Kitchen", "Bare"]
+        .map(|name| AdminMap {
+            id: format!("v20/{}", name.to_lowercase()),
+            name: name.into(),
+        })
+        .to_vec();
+    ui.core.push(ScreenId::AdminMaps);
+    ui.update(0);
+    let placeholder = |ui: &Ui| {
+        let v = ui.screen(ScreenId::AdminMaps).expect("Change Map").view();
+        let n = v
+            .walk()
+            .find(|&n| {
+                v.node(n).ctrl.class == "GuiBitmapCtrl"
+                    && v.node(n).ctrl.bitmap.as_deref() == Some("base/data/missions/default")
+            })
+            .expect("changeMapGui's map picture");
+        v.node(n).state.bitmap.clone()
+    };
+    // Click a row of the map list, as Max does.
+    let pick = |ui: &mut Ui, row: i32| {
+        let v = ui.screen(ScreenId::AdminMaps).unwrap().view();
+        let list = v.id("changeMapList").expect("map list");
+        let (r, h) = (v.node(list).rect, v.node(list).state.row_height.max(1));
+        let (x, y) = ((r.x + 4) as f32, (r.y + h * row + h / 2) as f32);
+        ui.handle_input(InputEvent::MouseMove { x, y });
+        ui.handle_input(InputEvent::MouseDown {
+            button: MouseButton::Left,
+            x,
+            y,
+        });
+        ui.handle_input(InputEvent::MouseUp {
+            button: MouseButton::Left,
+            x,
+            y,
+        });
+        ui.update(16);
+    };
+    assert_eq!(placeholder(&ui), None, "nothing picked: UNKNOWN MAP");
+    pick(&mut ui, 0);
+    assert_eq!(ui.core.admin.selected_map.as_deref(), Some("v20/kitchen"));
+    assert_eq!(
+        placeholder(&ui).as_deref(),
+        Some("fixture/maps/kitchen"),
+        "Kitchen's own picture"
+    );
+    pick(&mut ui, 1);
+    assert_eq!(ui.core.admin.selected_map.as_deref(), Some("v20/bare"));
+    assert_eq!(placeholder(&ui), None, "no picture: UNKNOWN MAP again");
+}
+
+#[test]
+fn change_map_shows_the_picked_maps_picture_synthetic() {
+    change_map_shows_the_picked_maps_picture(bri_ui::testing::screens_pack());
+}
+
+#[test]
+#[ignore = "requires generated v20 content"]
+fn change_map_shows_the_picked_maps_picture_content() {
+    change_map_shows_the_picked_maps_picture(bri_ui::testing::content_pack("ui-pack-004"));
+}
