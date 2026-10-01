@@ -75,6 +75,10 @@ pub struct PackageInfo {
     pub provenance: serde_json::Value,
     #[serde(default)]
     pub dependencies: BTreeMap<String, String>,
+    /// Add-Ons it works with when they are on, as `dependencies` when they
+    /// are.
+    #[serde(default)]
+    pub optional_dependencies: BTreeMap<String, String>,
     #[serde(default)]
     pub capabilities: Vec<String>,
     #[serde(default)]
@@ -875,6 +879,11 @@ fn entry(root: &Path, package: PackageEntry, enabled: bool, discovered: bool) ->
         info,
         problems,
     }
+}
+
+/// The manifest of the package in `dir`, when it reads as one.
+pub fn package_info(dir: &Path) -> Option<PackageInfo> {
+    read_info(&dir.join(MANIFEST_FILE))
 }
 
 pub(crate) fn read_info(path: &Path) -> Option<PackageInfo> {

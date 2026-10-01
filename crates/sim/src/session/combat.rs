@@ -485,11 +485,18 @@ impl DamageKind {
     }
     /// [`Self::type_name`] as hooks see it: a weapon's damage type by its
     /// name, without Torque's `$DamageType::` prefix, so a round's type and
-    /// one a script passed to `damage` read the same.
+    /// one a script passed to `damage` read the same. A type an Add-On
+    /// declared under a name another already had is kept as
+    /// `<package>:<name>` ([`bri_weapons::Pack::merge_with`]); hooks see
+    /// the name the Add-On gave it.
     pub(super) fn hook_type(&self) -> &str {
         let name = self.type_name();
-        match name.get(..13) {
+        let name = match name.get(..13) {
             Some(prefix) if prefix.eq_ignore_ascii_case("$damagetype::") => &name[13..],
+            _ => name,
+        };
+        match self {
+            Self::Weapon { .. } => name.rsplit(':').next().unwrap_or(name),
             _ => name,
         }
     }

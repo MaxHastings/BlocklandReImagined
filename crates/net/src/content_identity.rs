@@ -185,11 +185,26 @@ impl WeaponContent {
                 .map(|l| (l.id.as_str(), l.name.as_str()))
                 .collect(),
         );
-        let (mut pack, notes) = pack.merge(
+        // What each Add-On depends on, from its manifest beside `assets/`:
+        // a damage type it re-declares from one replaces that one's.
+        let depends_on = parts
+            .iter()
+            .filter_map(|(_, abs, part)| {
+                let info = bri_package::library::package_info(abs.parent()?)?;
+                let deps = info
+                    .dependencies
+                    .into_keys()
+                    .chain(info.optional_dependencies.into_keys())
+                    .collect();
+                Some((part.id.clone(), deps))
+            })
+            .collect();
+        let (mut pack, notes) = pack.merge_with(
             parts
                 .into_iter()
                 .map(|(dir, _, part)| (dir, part))
                 .collect(),
+            &depends_on,
         );
         pack.diagnostics
             .extend(notes.into_iter().map(|n| format!("merge: {n}")));

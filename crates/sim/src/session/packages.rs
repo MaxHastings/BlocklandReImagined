@@ -2602,6 +2602,30 @@ impl Session {
     }
     /// `%obj.damage` from a script, with the same scaling and hooks as a
     /// weapon's hit of that damage type.
+    /// The damage type `package` means by `name`: when two Add-Ons
+    /// declared that name differently, the merged pack keeps the later as
+    /// `<package>:<name>` ([`bri_weapons::Pack::merge_with`]), and a
+    /// package's rules mean the one of their own package or one it depends
+    /// on. Any other name is as given.
+    fn package_damage_type(&self, package: &str, name: &str) -> String {
+        let trimmed = name.trim();
+        let (prefix, bare) = match trimmed.get(..13) {
+            Some(p) if p.eq_ignore_ascii_case("$damagetype::") => (&trimmed[..13], &trimmed[13..]),
+            _ => ("", trimmed),
+        };
+        let Some(host) = self.packages.as_ref() else {
+            return name.to_owned();
+        };
+        let suffix = format!(":{}", bare.to_ascii_lowercase());
+        self.weapons
+            .pack
+            .damage_types
+            .iter()
+            .filter(|(key, _)| key.ends_with(&suffix))
+            .find(|(key, _)| host.catalog.uses(package, &key[..key.len() - suffix.len()]))
+            .map_or_else(|| name.to_owned(), |(_, t)| format!("{prefix}{}", t.name))
+    }
+
     fn package_damage_op(
         &mut self,
         package: &str,
@@ -2611,6 +2635,7 @@ impl Session {
         damage_type: Option<String>,
     ) -> Result<()> {
         let by = by.filter(|by| self.peers.contains_key(by));
+        let damage_type = damage_type.map(|name| self.package_damage_type(package, &name));
         if let Some(name) = &damage_type {
             ensure!(
                 self.weapons.pack.damage_type(name).is_some(),
@@ -4285,6 +4310,7 @@ impl Session {
             .filter(|t| !t.is_unit())
             .map(|t| t.clone().into_string().unwrap_or_default());
         drop(map);
+        let named = named.map(|t| self.package_damage_type(package, &t));
         let renamed = match named {
             Some(t) if self.weapons.pack.has_damage_type(&t) => Some(t),
             Some(t) => {
