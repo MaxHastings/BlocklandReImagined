@@ -2,7 +2,7 @@
 // pick-up-and-throw script with the function names and shapes the port
 // reads, and its own numbers (held at 0.75 scale, reach 3, throws 1 to 30,
 // a 10-notch charge, a 2.5 front check, watched from 6 units out (4 to 9),
-// turned a quarter left on the hand).
+// turned a quarter right on the hand).
 $Pref::Server::PlayerThrowing::GrabTimeout = 5;
 $Pref::Server::PlayerThrowing::EscapeTimeout = 3;
 $Pref::Server::PlayerThrowing::ChargeRate = 100;

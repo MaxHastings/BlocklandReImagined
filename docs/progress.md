@@ -8305,10 +8305,14 @@ the port verified:
   world yaw as a seat turn every tick, which spun them.
   - The port computes the turn the way Torque does for this Add-On's
     `setTransform(pos @ " 0 0 0.85 90")`: the angle is radians and the
-    axis is not normalised. QuatF(AngAxisF), its matrix's forward column,
-    and Player::setTransform's `-atan2(-x, y)` give -93.5 degrees, about a
-    quarter turn left. The arithmetic is recalled from the Torque source,
-    not measured; it is in the rule's `held_turn` with its reasoning.
+    axis is not normalised. QuatF(AngAxisF), its matrix's forward column
+    (2wz, 1 - 2z^2), and Player::setTransform's `-atan2(-x, y)` give +93.5
+    degrees, about a quarter turn right. Checked against Torque3D 1.1's MIT
+    source (mathTypes.cpp TypeTransformF, sceneObject.cpp setTransform,
+    mAngAxis.cpp, mQuat.cpp, mMath_C.cpp m_quatF_set_matF_C, player.cpp
+    Player::setTransform/setPosition); an earlier version recalled from
+    memory had the sign backwards. The reasoning is in the rule's
+    `held_turn`.
 - `orbit_camera(p, target, min, max, distance)`:
   `ControlObject::Orbit { target, min, max, distance }`. The client's wheel
   (`UiUpdate::CameraWheel`, `GameAction::CameraZoom`) zooms it a unit a

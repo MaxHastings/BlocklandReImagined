@@ -32,15 +32,17 @@ fn orbit_farthest() { parse_float("{{orbit_max}}") }
 
 // The held body's turn on the hand, in degrees clockwise seen from above:
 // what Torque makes of `setTransform(pos @ " 0 0 <axis> <angle>")` on a
-// mounted player. Its angle is radians and its axis is not normalised:
-// QuatF(AngAxisF) is (0, 0, axis sin(angle/2), cos(angle/2)), its matrix's
-// forward column is (-2wz, 1 - 2z^2), and Player::setTransform takes
+// mounted player, checked against Torque3D 1.1's source. TypeTransformF
+// (mathTypes.cpp) reads the angle as radians; AngAxisF::setMatrix
+// (mAngAxis.cpp) builds QuatF (0, 0, axis sin(angle/2), cos(angle/2))
+// without normalising the axis; m_quatF_set_matF_C (mMath_C.cpp) gives its
+// forward column (2wz, 1 - 2z^2); Player::setTransform (player.cpp) takes
 // -atan2(-forward.x, forward.y) as mRot.z.
 fn held_turn() {
     let half = parse_float("{{turn_angle}}") / 2.0;
     let z = parse_float("{{turn_axis}}") * half.sin();
     let w = half.cos();
-    (-atan(2.0 * w * z, 1.0 - 2.0 * z * z)).to_degrees()
+    atan(2.0 * w * z, 1.0 - 2.0 * z * z).to_degrees()
 }
 
 // v20 plays these on threads 0 and 1; here the body's action thread (2)

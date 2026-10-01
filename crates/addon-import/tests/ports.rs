@@ -816,21 +816,21 @@ fn ported_player_throwing_grabs_throws_and_lets_go_in_a_hosted_game() {
         }
     );
     assert!(cmd(&mut s, held, Command::ControlPlayer).is_err());
-    // Turned a quarter left on the hand (`setTransform`'s " 0 0 1 1.5708"),
+    // Turned a quarter right on the hand (`setTransform`'s " 0 0 1 1.5708"),
     // and kept so while their mouse turns the camera.
     let turn = |s: &Session| {
         let d = state(s, held).yaw - state(s, holder).yaw;
         (d + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
     };
     assert!(
-        (turn(&s) + std::f32::consts::FRAC_PI_2).abs() < 1e-3,
+        (turn(&s) - std::f32::consts::FRAC_PI_2).abs() < 1e-3,
         "{}",
         turn(&s)
     );
     inputs.get_mut(&held).unwrap().yaw = 2.0;
     steps(&mut s, &inputs, 24);
     assert!(
-        (turn(&s) + std::f32::consts::FRAC_PI_2).abs() < 1e-3,
+        (turn(&s) - std::f32::consts::FRAC_PI_2).abs() < 1e-3,
         "{}",
         turn(&s)
     );
