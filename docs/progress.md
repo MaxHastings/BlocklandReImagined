@@ -8960,3 +8960,38 @@ of theirs in the repo). Both ports are `partial`.
   datablocks. Not yet: Slayer lives/points/time, uniforms, GUI, bots; CTF's
   Drop Tool key, countdown label, flag light, brick events, locks, score
   columns, other flag models.
+
+## 2026-10-01 Slayer step 2: menus, rounds, CTF as a Slayer mode (branch `claude/project-thread-t8k5dx`)
+- Add-On settings seam (built here; the Tier branch had none): a package's
+  behaviour declares `settings` (bool, int range, list, text; game or team
+  scope; `shown_when`; admin-only) and `setting_items` (another package's
+  list gains items). Values live on the mini-game and its teams, replicate
+  in the checkpoint and `MiniGameView`, and are edited in the new Add-On
+  Settings window through `MiniGameRequest::AddOnSettings` (owner or
+  admin). Script: `setting`, `team_setting`, `set_setting`,
+  `set_team_setting`, `on_minigame` "settings" event.
+- Round seams: `hold_respawn(p, held)` (no respawn until a reset),
+  `watch(p, target)` (round-end camera on another player or one's corpse;
+  a watching body is refused movement and fire), and a shared round end
+  (`end_round(game, #{teams, players})`, "round_end" event, `round_over`,
+  one per reset). `tell_minigame` / `center_print_minigame` /
+  `bottom_print_minigame` broadcast as one op.
+- Ports: `rules.needs` gives a rules companion a dependency on another
+  port's rules (Slayer_CTF on Slayer); captured preferences become setting
+  defaults, `{{name|bool}}` for 1/0 prefs.
+- Slayer: game mode list (Free for All, Teams, plus CTF's), lives, points,
+  time limit, pre-round countdown, time between rounds, team lives, sort
+  and weight, max players, lock, win on time up; /teams join refuses locked
+  or full teams. CTF: its settings show only in its mode; a capture win
+  ends Slayer's round.
+- Protocol: `Checkpoint.addon_settings`, `MiniGameView` teams and
+  `addon_settings`, `MiniGameRequest::AddOnSettings`, `Vitals.respawn_held`.
+- Tests: `crates/minigames/tests/teams.rs`, `crates/sim/tests/script_api.rs
+  a_rule_holds_a_respawn_until_reset_and_points_a_camera_elsewhere`,
+  `crates/addon-import/tests/slayer.rs` (8, including rounds, lives, points,
+  time and the settings window), `tests/ports.rs`. Hosted tests also passed
+  on Max's real copies in the cloud (folder copies, sha "unlisted").
+- Not yet: uniforms, team loadouts/player types/scale, team respawn times,
+  friendly-fire penalties, team swaps, end-of-round report, spectating,
+  bots, capture points; CTF brick events, Drop Tool key, dropped-flag
+  countdown, flag light, locked flags, score columns.
