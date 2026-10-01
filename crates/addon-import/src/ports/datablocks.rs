@@ -7,7 +7,7 @@
 //! the script bodies for [`ScriptRule`]), so they follow each copy's own
 //! numbers and names.
 use anyhow::{Context, Result, bail, ensure};
-use bri_convert::tscript::Call;
+use bri_weapons::Definition;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -82,14 +82,16 @@ pub struct Table {
     pub key: String,
 }
 
-/// The imported datablocks, with inheritance (`datablock A(x : B)`).
+/// The imported datablocks, with inheritance (`datablock A(x : B)`), a
+/// parent the Add-On does not define read from the ones it depends on.
 pub struct Datablocks<'a> {
     doc: &'a Value,
     by_name: BTreeMap<String, &'a Value>,
+    reference: &'a BTreeMap<String, Definition>,
 }
 
 impl<'a> Datablocks<'a> {
-    pub fn new(weapons: &'a Value) -> Self {
+    pub fn new(weapons: &'a Value, code: &'a super::Code) -> Self {
         let by_name = weapons["definitions"]
             .as_array()
             .into_iter()
@@ -99,6 +101,7 @@ impl<'a> Datablocks<'a> {
         Self {
             doc: weapons,
             by_name,
+            reference: &code.reference,
         }
     }
 
@@ -106,14 +109,22 @@ impl<'a> Datablocks<'a> {
     /// written (string literals keep their quotes).
     fn raw(&self, name: &str, field: &str) -> Option<&'a str> {
         let field = field.to_ascii_lowercase();
-        let mut at = self.by_name.get(&name.to_ascii_lowercase())?;
+        let mut name = name.to_ascii_lowercase();
         for _ in 0..16 {
-            if let Some(v) = at["fields"][&field].as_str() {
-                return Some(v);
+            let (value, parent) = match self.by_name.get(&name) {
+                Some(d) => (d["fields"][&field].as_str(), d["parent"].as_str()),
+                None => {
+                    let d = self.reference.get(&name)?;
+                    (
+                        d.fields.get(&field).map(String::as_str),
+                        d.parent.as_deref(),
+                    )
+                }
+            };
+            if value.is_some() {
+                return value;
             }
-            at = self
-                .by_name
-                .get(&at["parent"].as_str()?.to_ascii_lowercase())?;
+            name = parent?.to_ascii_lowercase();
         }
         None
     }
@@ -142,8 +153,12 @@ fn set(v: Option<&str>) -> bool {
 /// The `weapons.json` patch giving each ammo-system gun's image its
 /// magazine, and the rules' values `magazine_items` (item id to engine ammo
 /// name) and `magazine_types` (the item's type name to its numbers).
-pub fn magazines(m: &Magazines, weapons: &Value) -> Result<(Value, BTreeMap<String, String>)> {
-    let blocks = Datablocks::new(weapons);
+pub fn magazines(
+    m: &Magazines,
+    weapons: &Value,
+    code: &super::Code,
+) -> Result<(Value, BTreeMap<String, String>)> {
+    let blocks = Datablocks::new(weapons, code);
     let mut images = serde_json::Map::new();
     let mut items = BTreeMap::new();
     for (id, item) in weapons["items"].as_object().into_iter().flatten() {
@@ -266,8 +281,8 @@ pub struct Hitscans {
 }
 
 /// The `weapons.json` patch giving each raycasting image its hitscan.
-pub fn hitscans(h: &Hitscans, weapons: &Value) -> Result<Value> {
-    let blocks = Datablocks::new(weapons);
+pub fn hitscans(h: &Hitscans, weapons: &Value, code: &super::Code) -> Result<Value> {
+    let blocks = Datablocks::new(weapons, code);
     let mut images = serde_json::Map::new();
     for (id, image) in weapons["images"].as_object().into_iter().flatten() {
         let name = image["name"].as_str().unwrap_or_default();
@@ -356,7 +371,8 @@ fn groups(
 /// the group's value (a number when it reads as one), `{group|kick}` the
 /// view kick of the projectile it names (its explosion's camera shake),
 /// `{group|sound}` the sound it names, `{group|projectile}` the projectile
-/// and `{group|image}` the image of this import; `{group}` inside a longer
+/// and `{group|image}` the image of this import, `{group|neg}` the number
+/// negated; `{group}` inside a longer
 /// string becomes its text.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -400,11 +416,8 @@ pub struct ScriptReads {
 
 /// [`ScriptRule`]s applied to the import's script bodies (lowercase
 /// `owner::method` to body).
-pub fn scripts(
-    rules: &[ScriptRule],
-    weapons: &Value,
-    bodies: &BTreeMap<String, String>,
-) -> Result<ScriptReads> {
+pub fn scripts(rules: &[ScriptRule], weapons: &Value, code: &super::Code) -> Result<ScriptReads> {
+    let bodies = &code.bodies;
     let mut images = serde_json::Map::new();
     let mut projectiles = serde_json::Map::new();
     let mut tables: BTreeMap<String, serde_json::Map<String, Value>> = BTreeMap::new();
@@ -461,7 +474,7 @@ pub fn scripts(
                 let Some(values) = groups(&re, required.as_ref(), body, name, &method)? else {
                     continue;
                 };
-                let set = fill(&rule.set, &values, weapons)
+                let set = fill(&rule.set, &values, weapons, &code.reference)
                     .with_context(|| format!("{name}::{method}"))?;
                 let into = if rule.into == "table" {
                     tables.entry(rule.table.clone()).or_default()
@@ -499,7 +512,7 @@ pub fn scripts(
                 let Some(values) = groups(&re, required.as_ref(), body, owner, &method)? else {
                     continue;
                 };
-                let set = fill(&rule.set, &values, weapons)
+                let set = fill(&rule.set, &values, weapons, &code.reference)
                     .with_context(|| format!("{name}::{method}"))?;
                 if rule.into == "table" {
                     let table = tables.entry(rule.table.clone()).or_default();
@@ -509,12 +522,7 @@ pub fn scripts(
                 let entry = images.entry(id.clone()).or_insert_with(|| json!({}));
                 match rule.into.as_str() {
                     "image" => super::compose(entry, &set),
-                    "shot" => {
-                        if entry.get("shot").is_none() && image.get("shot").is_none() {
-                            entry["shot"] = json!({ "projectiles": 1 });
-                        }
-                        super::compose(entry, &json!({ "shot": set }));
-                    }
+                    "shot" => super::compose(entry, &json!({ "shot": set })),
                     "magazine" => super::compose(entry, &json!({ "magazine": set })),
                     _ => {
                         // States are an array: patch the whole list.
@@ -559,7 +567,12 @@ pub fn scripts(
 }
 
 /// [`ScriptRule::set`] with its groups' values.
-fn fill(v: &Value, values: &BTreeMap<String, String>, weapons: &Value) -> Result<Value> {
+fn fill(
+    v: &Value,
+    values: &BTreeMap<String, String>,
+    weapons: &Value,
+    reference: &BTreeMap<String, Definition>,
+) -> Result<Value> {
     Ok(match v {
         Value::String(s) if s.starts_with('{') && s.ends_with('}') && !s[1..].contains('{') => {
             let inner = &s[1..s.len() - 1];
@@ -569,7 +582,17 @@ fn fill(v: &Value, values: &BTreeMap<String, String>, weapons: &Value) -> Result
                 .with_context(|| format!("`{s}`: the pattern has no group `{group}`"))?;
             match filter {
                 "" => value_of(value),
+                // A push the script wrote as negative (`TT_knockback(%obj,
+                // -4, ...)`), as the speed taken off.
+                "neg" => {
+                    let n: f64 = value
+                        .trim()
+                        .parse()
+                        .with_context(|| format!("`{s}`: `{value}` is no number"))?;
+                    json!(-n)
+                }
                 "kick" => kick(weapons, value)
+                    .or_else(|| dependency_kick(reference, value))
                     .with_context(|| format!("`{value}` is no projectile with a camera shake"))?,
                 "sound" => json!(sound_ref(weapons, value)),
                 "projectile" => json!(projectile_ref(weapons, value)),
@@ -578,7 +601,7 @@ fn fill(v: &Value, values: &BTreeMap<String, String>, weapons: &Value) -> Result
                         .with_context(|| format!("`{value}` is no image of this import"))?
                 ),
                 other => {
-                    bail!("`{s}`: no filter `{other}` (kick, sound, projectile or image)")
+                    bail!("`{s}`: no filter `{other}` (neg, kick, sound, projectile or image)")
                 }
             }
         }
@@ -591,12 +614,12 @@ fn fill(v: &Value, values: &BTreeMap<String, String>, weapons: &Value) -> Result
         }
         Value::Object(m) => Value::Object(
             m.iter()
-                .map(|(k, v)| Ok((k.clone(), fill(v, values, weapons)?)))
+                .map(|(k, v)| Ok((k.clone(), fill(v, values, weapons, reference)?)))
                 .collect::<Result<_>>()?,
         ),
         Value::Array(a) => Value::Array(
             a.iter()
-                .map(|v| fill(v, values, weapons))
+                .map(|v| fill(v, values, weapons, reference))
                 .collect::<Result<_>>()?,
         ),
         other => other.clone(),
@@ -620,7 +643,11 @@ fn value_of(text: &str) -> Value {
 fn kick(weapons: &Value, name: &str) -> Option<Value> {
     let id = id_of(weapons, "ProjectileData", name)?;
     let effect = weapons["projectiles"][&id]["explosion"]["effect"].as_str()?;
-    let shake = &weapons["explosions"][effect.to_ascii_lowercase()]["shake"];
+    let (_, explosion) = weapons["explosions"]
+        .as_object()?
+        .iter()
+        .find(|(id, _)| id.eq_ignore_ascii_case(effect))?;
+    let shake = &explosion["shake"];
     let most = |key: &str| {
         shake[key]
             .as_array()?
@@ -633,6 +660,28 @@ fn kick(weapons: &Value, name: &str) -> Option<Value> {
         "frequency": most("frequency")?.clamp(0.1, 30.0),
         "seconds": shake["seconds"].as_f64()?.clamp(0.05, 2.0),
     }))
+}
+
+/// [`kick`] of a projectile another Add-On (or the base game) defines: it,
+/// its explosion and their parents lowered as the import lowers its own.
+fn dependency_kick(reference: &BTreeMap<String, Definition>, name: &str) -> Option<Value> {
+    let mut defs: Vec<Definition> = vec![];
+    let mut want = vec![name.to_ascii_lowercase()];
+    while let Some(next) = want.pop() {
+        if defs.iter().any(|d| d.name.eq_ignore_ascii_case(&next)) {
+            continue;
+        }
+        let Some(d) = reference.get(&next) else {
+            continue;
+        };
+        want.extend(d.parent.iter().map(|p| p.to_ascii_lowercase()));
+        if let Some(e) = d.fields.get("explosion") {
+            want.push(crate::literal(e).trim().to_ascii_lowercase());
+        }
+        defs.push(d.clone());
+    }
+    let pack = bri_weapons_import::lower(defs).ok()?;
+    kick(&serde_json::to_value(pack).ok()?, name)
 }
 
 /// A sound by datablock name: the import's own id when it imported one of
@@ -659,9 +708,10 @@ fn projectile_ref(weapons: &Value, name: &str) -> String {
 pub fn tables(
     tables: &BTreeMap<String, Table>,
     weapons: &Value,
-    calls: &[Call],
+    code: &super::Code,
 ) -> Result<BTreeMap<String, String>> {
-    let blocks = Datablocks::new(weapons);
+    let blocks = Datablocks::new(weapons, code);
+    let calls = &code.calls;
     let mut out = BTreeMap::new();
     for (name, t) in tables {
         ensure!(

@@ -579,3 +579,20 @@ fn projectile_extras_are_checked() {
     assert!(Pack::from_json(bouncy.as_bytes()).is_err());
     assert!(Pack::from_json(THROWN.as_bytes()).is_ok());
 }
+
+#[test]
+fn a_vertical_recoil_pushes_only_up_or_down() {
+    // TT_knockback(%obj, 0, 0, -1): aiming up, the gunner is pushed down.
+    let shot = Shot {
+        recoil_vertical: Some(1.0),
+        ..Shot::SINGLE
+    };
+    let aim = Vec3::new(0.0, 0.6, -0.8);
+    assert_eq!(shot.recoil_velocity(aim), Vec3::new(0.0, -0.6, 0.0));
+    // TT_knockback(%obj, -4, -4, -4): straight back along the aim.
+    let shot = Shot {
+        recoil: 4.0,
+        ..Shot::SINGLE
+    };
+    assert_eq!(shot.recoil_velocity(aim), -aim * 4.0);
+}

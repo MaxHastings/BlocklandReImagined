@@ -555,3 +555,105 @@ fn ammo_items_bags_and_headshots_play_in_a_hosted_game() {
     g.equip(a, "standinpumpitem");
     assert_eq!(g.mag(a), json!("3|3|tt-shotgun|48"));
 }
+
+/// The stand-in Tier 1A imported beside the stand-in Tier 1 it requires,
+/// as the drop folder imports one pack with the others as its reference.
+fn imported_1a(name: &str) -> (Dir, PathBuf, bri_addon_import::report::Report) {
+    let dir =
+        Dir(std::env::temp_dir().join(format!("bri-tier1a-port-{}-{name}", std::process::id())));
+    let _ = std::fs::remove_dir_all(&dir.0);
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ports");
+    let tier1 = dir.0.join("reference/Add-Ons/Weapon_Package_Tier1");
+    std::fs::create_dir_all(&tier1).unwrap();
+    for f in std::fs::read_dir(fixtures.join("Weapon_Package_Tier1")).unwrap() {
+        let f = f.unwrap();
+        std::fs::copy(f.path(), tier1.join(f.file_name())).unwrap();
+    }
+    let out = dir.0.join("addons").join("weapon_package_tier1a");
+    let report = import(&Options {
+        input: fixtures.join("Weapon_Package_Tier1A"),
+        out: out.clone(),
+        reference: Some(dir.0.join("reference")),
+        core: vec![],
+        installed: None,
+        version: "1.0.0".into(),
+    })
+    .unwrap();
+    (dir, out, report)
+}
+
+/// Tier 1A on Tier 1: the single shotgun shoves its shooter back as it
+/// fires its pellets and blast, its recoil shake read from Tier 1's own
+/// recoil projectile; the pepperbox casts several rays a shot; the
+/// snubnose's headshots get their own kill message; the nailgun, an
+/// easter egg the original loads only with a hidden setting, is hidden.
+#[test]
+fn tier1a_shotgun_knocks_back_and_the_nailgun_stays_hidden() {
+    const NS1A: &str = "weapon_package_tier1a";
+    let (_dir, out, report) = imported_1a("guns");
+    let port = &report.ports[0];
+    assert!(port.applied, "{:?}", port.reason);
+    assert_eq!(port.port, NS1A);
+    let pack = pack(&out);
+    let image = |name: &str| pack.images[&format!("{NS1A}:image/{name}")].clone();
+
+    let single = image("singleshotgunimage");
+    let shot = single.shot.clone().unwrap();
+    assert_eq!((shot.projectiles, shot.spread), (6, 0.002));
+    assert_eq!((shot.recoil, shot.recoil_vertical), (3.0, Some(3.0)));
+    let kick = shot.kick.unwrap();
+    assert_eq!(
+        (kick.amplitude, kick.frequency, kick.seconds),
+        (0.4, 4.0, 0.4),
+        "Tier 1's recoil projectile's shake"
+    );
+    assert_eq!(single.volleys.len(), 1);
+    assert!(
+        single.volleys[0]
+            .projectile
+            .ends_with("singleshotgunblastprojectile")
+    );
+    let mag = single.magazine.unwrap();
+    assert_eq!((mag.size, mag.ammo.as_str()), (2, "tt-shotgun"));
+    // Fired facing -Z, the shooter is pushed back along +Z.
+    let mut w = WeaponsWorld::new(pack.clone()).unwrap();
+    w.add_actor(A, 5).unwrap();
+    let slot = w
+        .give(A, &format!("{NS1A}:weapon/singleshotgunitem"))
+        .unwrap();
+    w.equip(A, Some(slot)).unwrap();
+    steps(&mut w, 60);
+    let pushed: Vec<Vec3> = shoot(&mut w)
+        .iter()
+        .filter_map(|e| match e {
+            Event::Recoil { velocity, .. } => Some(*velocity),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(pushed, [Vec3::new(0.0, 0.0, 3.0)]);
+
+    let pepper = image("pepperpistolimage").shot.unwrap();
+    assert_eq!((pepper.projectiles, pepper.spread), (3, 0.004));
+    assert!(pepper.hitscan.is_some());
+
+    let rules = std::fs::read_to_string(
+        out.with_file_name(format!("{NS1A}-rules"))
+            .join("tier.rhai"),
+    )
+    .unwrap();
+    let headshots = rules
+        .lines()
+        .find(|l| l.starts_with("fn headshots()"))
+        .unwrap();
+    assert!(
+        headshots.contains(r#""weapon_package_tier1a:projectile/snubnoseprojectile": #{"multiplier": 2, "type": "SnubnoseHeadshot"}"#),
+        "{headshots}"
+    );
+
+    assert!(pack.items[&format!("{NS1A}:weapon/nailgunitem")].hidden);
+    assert!(!pack.items[&format!("{NS1A}:weapon/snubnoseitem")].hidden);
+    assert_eq!(
+        pack.projectiles[&format!("{NS1A}:projectile/nailgunprojectile1")].slow,
+        Some(Slow { divisor: 1.5 })
+    );
+}

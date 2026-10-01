@@ -8991,3 +8991,18 @@ and the bag picked up. Imported Kai's real copy (the Gate's upload) with
 the port: it applies, with the magazines, raycasts, pump volley, sport rifle
 moving round, akimbo left hand, SMG slow, headshot table, ammo items and
 nine registered types as above. `weapons` raycast tests cover the victim slow.
+
+Group 2, Tier 1A (`weapon_package_tier1a`, partial, pinned to the Gate's
+`c1cc5b4c…704c`), applies on Kai's real copy with Tier 1 as its reference.
+New seams: `Shot::recoil_vertical` and `Shot::recoil_velocity` for
+`TT_knockback` (one recoil path for projectiles and volleys); a script
+rule's `{group|neg}`; `{group|kick}` reads a recoil projectile from a
+dependency (lowered as the import lowers its own); every port reader
+follows datablock parents into the dependencies (the Skins packs inherit
+all their magazine fields from Tier 1); `Shot::projectiles` defaults to 1,
+so a script rule no longer resets a hitscan's ray count (the pepperbox
+lost its four rays). The nailgun, loaded by the original only with its
+hidden `???` setting, is imported hidden. Test:
+`tier_port.rs tier1a_shotgun_knocks_back_and_the_nailgun_stays_hidden`
+(the stand-in imported with the stand-in Tier 1 as its reference), and
+`tactical_seams.rs a_vertical_recoil_pushes_only_up_or_down`.

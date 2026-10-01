@@ -429,6 +429,10 @@ pub type Bodies = BTreeMap<String, String>;
 pub struct Code {
     pub bodies: Bodies,
     pub calls: Vec<bri_convert::tscript::Call>,
+    /// The weapon datablocks of the Add-Ons it depends on and the base
+    /// game, by lower-case name: what a script names from them (another
+    /// pack's recoil projectile) is read from there.
+    pub reference: BTreeMap<String, bri_weapons::Definition>,
 }
 
 /// Applies the listed port for `import`, if any, to the package in `out`.
@@ -525,21 +529,21 @@ fn try_apply(
             };
         };
         if let Some(m) = &port.magazines {
-            let (patch, v) = datablocks::magazines(m, &weapons).context("magazines")?;
+            let (patch, v) = datablocks::magazines(m, &weapons, code).context("magazines")?;
             add(patch);
             read.extend(v);
         }
         if let Some(h) = &port.hitscans {
-            add(datablocks::hitscans(h, &weapons).context("hitscans")?);
+            add(datablocks::hitscans(h, &weapons, code).context("hitscans")?);
         }
         if !port.scripts.is_empty() {
             let reads =
-                datablocks::scripts(&port.scripts, &weapons, bodies).context("script rules")?;
+                datablocks::scripts(&port.scripts, &weapons, code).context("script rules")?;
             add(reads.patch);
             read.extend(reads.tables);
         }
         if let Some(r) = &port.rules {
-            read.extend(datablocks::tables(&r.tables, &weapons, &code.calls)?);
+            read.extend(datablocks::tables(&r.tables, &weapons, code)?);
         }
         for (name, value) in read {
             ensure!(

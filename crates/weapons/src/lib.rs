@@ -571,7 +571,8 @@ pub fn is_image_command(c: &str) -> bool {
 /// random angles.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Shot {
-    /// Projectiles per shot, 1 to 64 (`%shellcount`).
+    /// Projectiles per shot, 1 to 64 (`%shellcount`); 1 when left out.
+    #[serde(default = "one_projectile")]
     pub projectiles: u32,
     /// v20's `%spread`: each projectile's velocity turns by random Euler
     /// angles of up to ±5π·spread radians about each axis.
@@ -580,6 +581,11 @@ pub struct Shot {
     /// Speed the shooter loses along their aim, in units per second.
     #[serde(default)]
     pub recoil: f32,
+    /// The speed lost along the aim's vertical part, in place of `recoil`
+    /// there, 0 to 100: Tier+Tactical's `TT_knockback(%obj, 0, 0, -1)`
+    /// pushes a machine gunner only up or down as they fire.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recoil_vertical: Option<f32>,
     /// The spread while the shooter moves faster than `moving_speed`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub moving_spread: Option<f32>,
@@ -653,12 +659,16 @@ fn default_kick_seconds() -> f32 {
 fn default_moving_speed() -> f32 {
     0.1
 }
+fn one_projectile() -> u32 {
+    1
+}
 impl Shot {
     /// One projectile straight along the aim: an image without `shot`.
     pub const SINGLE: Shot = Shot {
         projectiles: 1,
         spread: 0.0,
         recoil: 0.0,
+        recoil_vertical: None,
         moving_spread: None,
         moving_speed: 0.1,
         moving_projectile: None,
@@ -666,6 +676,16 @@ impl Shot {
         hitscan: None,
         kick: None,
     };
+    /// The velocity the recoil adds to a shooter aiming along `direction`
+    /// (a unit vector, Y up), before the projectiles inherit it.
+    pub fn recoil_velocity(&self, direction: glam::Vec3) -> glam::Vec3 {
+        let vertical = self.recoil_vertical.unwrap_or(self.recoil);
+        -glam::Vec3::new(
+            direction.x * self.recoil,
+            direction.y * vertical,
+            direction.z * self.recoil,
+        )
+    }
     /// The spread of a shot from a holder moving at `speed`, `idle_ticks`
     /// after their last shot (None for never): moving spread while moving,
     /// else the rested spread once rested, else `spread`.
@@ -1394,6 +1414,7 @@ impl Pack {
                     (1..=64).contains(&s.projectiles)
                         && (0.0..=1.0).contains(&s.spread)
                         && (0.0..=100.0).contains(&s.recoil)
+                        && s.recoil_vertical.is_none_or(|v| (0.0..=100.0).contains(&v))
                         && s.moving_spread.is_none_or(|m| (0.0..=1.0).contains(&m))
                         && (0.0..=50.0).contains(&s.moving_speed)
                         && s.kick.is_none_or(|k| {

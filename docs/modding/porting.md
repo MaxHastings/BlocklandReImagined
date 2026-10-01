@@ -214,6 +214,7 @@ page as well.
 | `Weapon_Shotgun` (Sawn-off Shotgun) | `weapon_shotgun` | verified | `shotgunImage::onFire`: the pellets, their spread and the recoil, read from the copy's own script |
 | `Weapon_ModernWarbattles` (Bushido's Adventurer's Weapons) | `weapon_modernwarbattles` | partial | the hl2 ammo system: magazines and reserves per ammo type, reloads, ammo boxes (a typed box gives twice its amount, as the original), projectile headshots. Not yet: the hitscan guns, melee and the grenade's shrapnel |
 | `Weapon_Package_Tier1` (Kai's Tier+Tactical Tier 1) | `weapon_package_tier1` on `_shared/tier-tactical` | partial | the Tier+Tactical ammo system with its default settings: magazines run by each image's check states, the T+T2 reserves, the light key's reload, ammo items and a dead player's ammo bag; raycast pistols reaching less on the move, the pump's pellets and blast loaded a shell at a time, the sport rifle's weak round on the move and its headshots under their own kill message, the submachine gun slowing whoever it hits, the akimbo pistols' left hand, recoil kick. Not yet: the ammo items' floating count, the recoil shake for players nearby |
+| `Weapon_Package_Tier1A` (Kai's Tier+Tactical Tier 1A) | `weapon_package_tier1a` on `_shared/tier-tactical` | partial | on Tier 1: the single shotgun's pellets, close blast and knockback, the pepperbox's several rays a shot, the snubnose's headshots, the nailgun's slowing nails. The nailgun is an easter egg the original loads only with its hidden `???` setting, off by default, so it is imported hidden |
 
 ## Host rules
 
@@ -393,8 +394,13 @@ bodies, in order, a later rule's fields winning:
 | `table` | with `into: "table"`: the rules' `{{name}}`, a Rhai map from each image's or projectile's id to its `set` |
 | `pattern` | a case-insensitive regex; its named groups fill `set` |
 | `required_by` | when a body matches this but not `pattern`, the port stops and names the image, so a copy that does the same some other way is not guessed |
-| `set` | a merge patch: `"{group}"` becomes the group's value (a number when it reads as one), `"{group\|projectile}"`, `"{group\|image}"` and `"{group\|sound}"` the import's datablock it names, `"{group\|kick}"` the camera shake of the explosion a projectile names; a `null` removes a field |
+| `set` | a merge patch: `"{group}"` becomes the group's value (a number when it reads as one), `"{group\|neg}"` that number negated (a push the script wrote as negative), `"{group\|projectile}"`, `"{group\|image}"` and `"{group\|sound}"` the import's datablock it names, `"{group\|kick}"` the camera shake of the explosion a projectile names (this Add-On's, or one it depends on); a `null` removes a field |
 | `keep` | with `state`: only fields the state leaves empty |
+
+Every reader here follows a datablock's parents into the Add-Ons it
+depends on, as v20 did: an item `datablock SkinPistolItem(x : PistolItem)`
+gets the magazine fields Tier 1's `PistolItem` gave it, when the import
+has the drop folder (or `--reference`) to read Tier 1 from.
 
 ## Shared parts
 

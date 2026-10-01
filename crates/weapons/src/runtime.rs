@@ -2285,9 +2285,9 @@ impl WeaponsWorld {
                 let shot = image.shot.clone().unwrap_or(Shot::SINGLE);
                 let speed = a.frame.velocity.length();
                 let spread = shot.spread_for(speed, idle_ticks);
-                if shot.recoil > 0.0 {
+                let kick = shot.recoil_velocity(direction);
+                if kick != Vec3::ZERO {
                     // Recoil lands before the projectiles, which inherit it.
-                    let kick = -direction * shot.recoil;
                     velocity += kick * p.inherit;
                     self.events.push(Event::Recoil {
                         actor: id,
@@ -2362,7 +2362,6 @@ impl WeaponsWorld {
                 // Further volleys (a shotgun's slug after its pellets): each
                 // its own projectile and spread, along the same aim, with the
                 // recoil the shot already took.
-                let kick = -direction * shot.recoil;
                 for (v, volley) in image.volleys.iter().enumerate() {
                     let Some(d) = self.pack.projectiles.get(&volley.projectile) else {
                         continue;

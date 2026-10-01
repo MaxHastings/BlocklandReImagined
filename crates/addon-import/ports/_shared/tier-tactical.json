@@ -249,6 +249,16 @@
     },
     {
       "method": "onFire",
+      "into": "shot",
+      "pattern": "TT_knockback\\(\\s*%obj\\s*,\\s*(?P<h>-?[\\d.]+)\\s*,\\s*-?[\\d.]+\\s*,\\s*(?P<v>-?[\\d.]+)\\s*\\)",
+      "required_by": "TT_knockback\\(",
+      "set": {
+        "recoil": "{h|neg}",
+        "recoil_vertical": "{v|neg}"
+      }
+    },
+    {
+      "method": "onFire",
       "into": "image",
       "pattern": "TT_createProjectile\\(\\s*%this\\s*,\\s*%obj\\s*,\\s*%slot\\s*,\\s*(?P<p>[A-Za-z_]\\w*)\\s*,\\s*(?P<n>\\d+)\\s*\\)",
       "set": {

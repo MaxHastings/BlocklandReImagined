@@ -344,6 +344,17 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
             .entry(f.qualified().to_ascii_lowercase())
             .or_insert_with(|| bri_convert::tscript::without_comments(&f.body));
     }
+    code.reference = cx
+        .reference
+        .datablocks
+        .iter()
+        .filter(|(_, o)| {
+            WEAPON_CLASSES
+                .iter()
+                .any(|w| w.eq_ignore_ascii_case(&o.datablock.class))
+        })
+        .map(|(name, o)| (name.clone(), reference_definition(o)))
+        .collect();
     code.calls = scripts
         .iter()
         .flat_map(|s| s.calls.iter().cloned())
@@ -1017,6 +1028,22 @@ fn weapon_definition(o: &Owned, fields: &BTreeMap<String, String>) -> bri_weapon
     }
 }
 
+/// A dependency's (or the base game's) datablock, as the weapons lowering
+/// reads it.
+fn reference_definition(o: &reference::Owned) -> bri_weapons::Definition {
+    bri_weapons::Definition {
+        name: o.datablock.name.clone(),
+        class: o.datablock.class.clone(),
+        parent: o.datablock.parent.clone(),
+        source: bri_weapons::Evidence {
+            path: o.path.clone(),
+            sha256: o.sha256.clone(),
+            line: o.datablock.line,
+        },
+        fields: o.datablock.fields.clone(),
+    }
+}
+
 fn weapons(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
     let is_weapon = |c: &str| WEAPON_CLASSES.iter().any(|w| w.eq_ignore_ascii_case(c));
     let mut defs: Vec<bri_weapons::Definition> = cx
@@ -1046,17 +1073,7 @@ fn weapons(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
             .filter(|r| !names.contains(*r))
             .filter_map(|r| cx.reference.datablocks.get(r))
             .filter(|o| is_weapon(&o.datablock.class))
-            .map(|o| bri_weapons::Definition {
-                name: o.datablock.name.clone(),
-                class: o.datablock.class.clone(),
-                parent: o.datablock.parent.clone(),
-                source: bri_weapons::Evidence {
-                    path: o.path.clone(),
-                    sha256: o.sha256.clone(),
-                    line: o.datablock.line,
-                },
-                fields: o.datablock.fields.clone(),
-            })
+            .map(reference_definition)
             .collect();
         if add.is_empty() {
             break;

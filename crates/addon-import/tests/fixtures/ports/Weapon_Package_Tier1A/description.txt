@@ -1,0 +1,7 @@
+Title: Stand-in Tier+Tactical Tier 1A
+Author: Blockland ReImagined tests
+Written for tests. It has the community Weapon_Package_Tier1A folder name, the
+method names its port covers and the shape of its scripts, built on the
+stand-in Tier 1 as the original is built on Tier 1, so the listed port
+applies to it. It is not the original Add-On and holds none of its files,
+and its guns and numbers are its own.

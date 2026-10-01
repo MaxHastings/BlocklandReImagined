@@ -575,7 +575,10 @@ An image's `shot` can say more of how it fires. `hitscan` (`range`, and
 `moving_range`) lands each projectile at once along a ray; with `hit` the
 ray does its own damage, push, explosion and sounds. `moving_spread` and
 `moving_projectile` replace the spread and the projectile while the
-shooter moves faster than `moving_speed`. `kick` shakes the holder's view
+shooter moves faster than `moving_speed`. `recoil` pushes the shooter back along
+the aim as they fire (units a second); `recoil_vertical` sets the push
+along the aim's vertical part apart, so a machine gun can push only up or
+down. `kick` shakes the holder's view
 with each shot (`amplitude` 0 to 1, `frequency`, `seconds`). The image's
 `volleys` fire more projectiles after its own (a shotgun's close blast),
 and `left_image` holds a second image in the left hand that shares the
