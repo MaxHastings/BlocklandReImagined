@@ -68,6 +68,10 @@ pub enum SettingScope {
     /// mini-game shows its team list for editing when any running Add-On
     /// declares one.
     Team,
+    /// One value for the whole server, kept with the host's Server Settings
+    /// (RTB's and Glass's `$Pref::Server::*` preferences). Only the host
+    /// changes it, in the Admin menu's Add-On Settings.
+    Server,
 }
 
 /// What kind of value a setting holds, and so how the menu shows it.
@@ -152,6 +156,32 @@ pub struct SettingDef {
     pub editor: SettingEditor,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shown_when: Option<ShownWhen>,
+    /// The v20 global a server-wide setting stands for
+    /// (`$Pref::Server::TT::Ammo`, an RTB preference), which rules read by
+    /// that name with `pref(name)`, whichever running Add-On declares it,
+    /// as every script read the one global.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub global: Option<String>,
+}
+
+/// Longest v20 global name a setting stands for.
+pub const MAX_GLOBAL: usize = 96;
+
+/// Whether `name` is a v20 server preference's global name:
+/// `$Pref::Server::` and then `::`-separated words.
+pub fn is_pref_global(name: &str) -> bool {
+    let Some(rest) = name
+        .get(.."$Pref::Server::".len())
+        .filter(|p| p.eq_ignore_ascii_case("$Pref::Server::"))
+        .map(|_| &name["$Pref::Server::".len()..])
+    else {
+        return false;
+    };
+    name.len() <= MAX_GLOBAL
+        && rest.split("::").all(|w| {
+            w.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+                && w.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        })
 }
 
 /// More items for another Add-On's list setting: a game mode joining
@@ -279,6 +309,13 @@ impl SettingDef {
                 .map_err(|e| format!("setting `{what}`: default: {e}"))?;
         } else if matches!(self.default, SettingValue::Bool(_)) {
             return Err(format!("setting `{what}`: a list's default is a number or text"));
+        }
+        if let Some(global) = &self.global
+            && (self.scope != SettingScope::Server || !is_pref_global(global))
+        {
+            return Err(format!(
+                "setting `{what}`: `global` is a server setting's `$Pref::Server::` name"
+            ));
         }
         if let Some(when) = &self.shown_when
             && (!is_setting_ref(&when.setting) || when.is.is_empty() || when.is.len() > MAX_ITEMS)

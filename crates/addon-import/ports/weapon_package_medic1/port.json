@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
-  "notes": "Tier+Tactical Medical (Kai), with its default settings: medics heal only players, not bots, and in a minigame only players in theirs (Slayer's team check, which comes with Slayer, is not in yet); outside minigames only on a single-player or LAN game, to players in no minigame. The Gauze Gun's needle heals whoever it hits at once and leaves them its heal over time, which a hit, an emote or flames end early as they replace it on the body. The Syringe heals its holder, then needs to recharge, saying so when it is back; jet throws it at someone close for a bigger heal. The heal cross bursts only on someone hurt by at least the heal.",
+  "notes": "Tier+Tactical Medical (Kai). Its two preferences are server settings the host changes in the Admin menu's Add-On Settings, off by default as Kai had them: Can Heal Bots, and Teams Can Heal Enemies. Medics heal players (bots too with Can Heal Bots); in a minigame only players in theirs, and with teams (Slayer's) only their own team or an allied one unless Teams Can Heal Enemies is on; outside minigames only on a single-player or LAN game, to players in no minigame, or with Can Heal Bots their own bots. The Gauze Gun's needle heals whoever it hits at once and leaves them its heal over time, which a hit, an emote or flames end early as they replace it on the body. The Syringe heals its holder, then needs to recharge, saying so when it is back; jet throws it at someone close for a bigger heal. The heal cross bursts only on someone hurt by at least the heal.",
   "handles": {
-    "TT_defaultIfUnset": "every setting is fixed at the default it gives: the host rules use Kai's defaults",
-    "call:TT_defaultIfUnset": "every setting is fixed at the default it gives: the host rules use Kai's defaults",
+    "TT_defaultIfUnset": "never runs: it is the fallback for a server without RTB, and here the copy's RTB_registerPref calls are server settings",
+    "call:TT_defaultIfUnset": "never runs: it is the fallback for a server without RTB, and here the copy's RTB_registerPref calls are server settings",
     "Armor::onTrigger": "engine image commands: jet with the Syringe in hand runs its onAltTrigger (the host rules' throws table)",
-    "TT_canHeal": "the host rules' can_heal: players only (MedicHealBots off), the healer's own minigame, or outside minigames on a single-player or LAN game (`lan()`) a player in none; with MedicHealBots off a bot is never healed, so its own-bot branch never runs",
+    "TT_canHeal": "the host rules' can_heal: players, and bots with MedicHealBots on; in a minigame the healer's own, and with teams (Slayer's) only the healer's team or an allied one (Ally Same Colour) unless MedicHealEnemy is on, a healer on no team healing anyone; outside minigames on a single-player or LAN game (`lan()`) a player in none, or with MedicHealBots on the healer's own bots",
     "TT_projectileHeal": "the host rules' on_projectile_hit: the heals table's burst, the cross on anyone hurt by at least it, both bottom prints and the heal image on the body (engine `emote`)",
     "medigunProjectile::onCollision": "the host rules' heals table (its TT_projectileHeal burst); the needle's own hit and push as any projectile's",
     "stimpackProjectile::onCollision": "the host rules' heals table (its TT_projectileHeal burst)",
@@ -113,8 +113,11 @@
         "text": "{notice_text}",
         "seconds": "{notice_seconds}",
         "sound": "{namespace}:sound/{notice_sound:lower}"
-      },
-      "heal_bots": false
+      }
+    },
+    "prefs": {
+      "$Pref::Server::TT::MedicHealBots": "medics heal bots too, and their own bots outside minigames (can_heal)",
+      "$Pref::Server::TT::MedicHealEnemy": "in a minigame with teams, medics heal other teams' players too (can_heal)"
     }
   }
 }

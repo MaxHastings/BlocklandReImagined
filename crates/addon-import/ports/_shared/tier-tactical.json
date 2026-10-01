@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "notes": "Tier+Tactical's ammo system and gun scripts (raycasts and arm moves in tier-tactical-core), shared by every pack built on it (Support_TT_Ammo.cs, Support_TT_Raycasting.cs and Support_TT_Weapons.cs in Weapon_Package_Tier1). With its default settings: the T+T2 ammo system, recoil on, bullet slowdown on, players drop their ammo.",
+  "notes": "Tier+Tactical's ammo system and gun scripts (raycasts and arm moves in tier-tactical-core), shared by every pack built on it (Support_TT_Ammo.cs, Support_TT_Raycasting.cs and Support_TT_Weapons.cs in Weapon_Package_Tier1). Its preferences the host rules read are server settings the host changes in the Admin menu's Add-On Settings: starting and most ammo of each type, bots' endless ammo, endless grenades, what dead players and bots drop, bots picking up ammo, ammo items used up when full, and the Light MG's slow walk. The others keep Kai's defaults: the T+T2 ammo system, recoil on, bullet slowdown on.",
   "handles": {
     "Player::pickup": "engine: magazines are kept per tool slot; a gun picked up brings the rounds it was thrown with, or comes full",
     "servercmdDropTool": "engine: a thrown gun takes its own slot's rounds with it",
@@ -24,8 +24,8 @@
     "TT_initAmmo": "the host rules' registered table holds each pack's ammo types",
     "call:TT_initAmmo": "the host rules' registered table holds each pack's ammo types",
     "TT_registerAmmoType": "the host rules' registered table reads each call",
-    "TT_defaultIfUnset": "every setting is fixed at the default it gives: the port's numbers are Kai's defaults",
-    "call:TT_defaultIfUnset": "every setting is fixed at the default it gives: the port's numbers are Kai's defaults",
+    "TT_defaultIfUnset": "never runs: it is the fallback for a server without RTB, and here the copy's RTB_registerPref calls are server settings",
+    "call:TT_defaultIfUnset": "never runs: it is the fallback for a server without RTB, and here the copy's RTB_registerPref calls are server settings",
     "TT_isRaycastHeadshot": "the host rules' head test (crit_images)",
     "TT_knockback": "the shot's recoil push (the port's TT_knockback script rule)",
     "Player::TT_setSpeedMultiplier": "engine: a projectile's `slow` scales the hit player's speed",
@@ -41,8 +41,8 @@
     "ItemData::TT_initAmmoPickup": "the host rules' ammo_items table: each ammo item's TT_ammoPickup lines",
     "ShapeBase::pickup": "engine: an ammo item the rules used up counts as picked up, so its spawn brick waits its respawn time",
     "bigstaticItem::onAdd": "the host rules' ammo_items table: the pile's TT_ammoPickup lines",
-    "TT_registerAmmoSet": "its weapon and grenade sets only decide which types a dead player drops: with Kai's defaults players drop every type a pack lets drop and bots none (the host rules' on_death)",
-    "call:TT_registerAmmoSet": "its weapon and grenade sets only decide which types a dead player drops: with Kai's defaults players drop every type a pack lets drop and bots none (the host rules' on_death)"
+    "TT_registerAmmoSet": "its weapon and grenade sets only decide which types a dead player drops, by the drop preferences (the host rules' on_death and grenade_types)",
+    "call:TT_registerAmmoSet": "its weapon and grenade sets only decide which types a dead player drops, by the drop preferences (the host rules' on_death and grenade_types)"
   },
   "magazines": {
     "size": "TT_maxAmmo",
@@ -362,6 +362,15 @@
       }
     },
     {
+      "method": "*",
+      "into": "table",
+      "table": "laid",
+      "pattern": "if\\s*\\(\\s*(?P<g>\\$Pref::Server::\\w+(?:::\\w+)*)\\s*\\)\\s*%obj\\.pushDatablock\\(",
+      "set": {
+        "when": "{g}"
+      }
+    },
+    {
       "method": "onAltTrigger",
       "into": "table",
       "table": "alt_images",
@@ -548,6 +557,20 @@
       "damage",
       "effects"
     ],
+    "prefs": {
+      "$Pref::Server::TT::Start*": "a new life starts with that much of the pack's ammo type (on_spawn)",
+      "$Pref::Server::TT::Max*": "ammo items and a dead player's bag fill the type up to it (on_pickup)",
+      "$Pref::Server::TT::BotInfAmmo": "bots' weapon ammo never runs out (on_spawn)",
+      "$Pref::Server::TT::PlayerInfNades": "players' grenades never run out (on_spawn)",
+      "$Pref::Server::TT::BotInfNades": "bots' grenades never run out (on_spawn)",
+      "$Pref::Server::TT::PlayerAmmoDrop": "a dead player drops their weapon ammo in a bag (on_death)",
+      "$Pref::Server::TT::BotAmmoDrop": "a dead bot drops its weapon ammo in a bag (on_death)",
+      "$Pref::Server::TT::PlayerNadeDrop": "a dead player drops their grenades in the bag (on_death)",
+      "$Pref::Server::TT::BotNadeDrop": "a dead bot drops its grenades in the bag (on_death)",
+      "$Pref::Server::TT::BotAmmoPickUp": "bots pick up ammo items and bags (on_pickup)",
+      "$Pref::Server::TT::FullAmmoPickUp": "an ammo item is used up even when it added nothing (on_pickup)",
+      "$Pref::Server::TT::LMGSlow": "the Light MG lays its slow walk on as it fires only with it on (cmd_lay, from its onClick's guard)"
+    },
     "tables": {
       "ammo_items": {
         "class": "ItemData",

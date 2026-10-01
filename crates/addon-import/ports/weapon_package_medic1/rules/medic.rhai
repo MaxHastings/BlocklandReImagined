@@ -1,6 +1,7 @@
 // Host rules for Tier+Tactical's Medical pack, written for this game from
 // what its server.cs (TT_canHeal, TT_projectileHeal), Item_GauzeGun.cs and
-// Item_Stimpack.cs did, with Kai's default settings. Filled in at import
+// Item_Stimpack.cs did; its two preferences are server settings the host
+// changes. Filled in at import
 // from the player's own copy: the tables are its datablocks' numbers and
 // its scripts' words.
 
@@ -21,8 +22,12 @@ fn throws() { {{throws}} }
 fn heal_shown() { {{heal}} }
 // stimRechargedNotice: #{ text, seconds, sound }.
 fn notice() { {{notice}} }
-// $Pref::Server::TT::MedicHealBots, Kai's default.
-fn heal_bots() { {{heal_bots}} }
+// A Medical preference ($Pref::Server::TT::<name>) as the host set it,
+// or off when no running pack registers it, as an unset global.
+fn tt(name) {
+    let v = pref("$Pref::Server::TT::" + name);
+    v != () && v
+}
 
 // A new body: no syringe used, no heal running, no notice waiting (the old
 // body's schedule went with it).
@@ -37,12 +42,13 @@ fn on_spawn(p) {
     }
 }
 
-// TT_canHeal with Kai's defaults: a player (bots only with MedicHealBots);
-// in a minigame, one in the healer's; outside minigames, on a single-player
-// or LAN game, one in none; with MedicHealBots on, the healer's own bots.
-// Slayer's team check (MedicHealEnemy off) comes with Slayer.
+// TT_canHeal: a player (bots only with MedicHealBots); in a minigame, one
+// in the healer's, and in a game with teams (Slayer's) one on the healer's
+// team or an allied one unless MedicHealEnemy is on (a healer on no team
+// heals anyone); outside minigames, on a single-player or LAN game, one in
+// none; with MedicHealBots on, the healer's own bots.
 fn can_heal(by, target) {
-    if by == () || (target.bot && !heal_bots()) {
+    if by == () || (target.bot && !tt("MedicHealBots")) {
         return false;
     }
     let healer = player(by);
@@ -50,7 +56,13 @@ fn can_heal(by, target) {
         return false;
     }
     if healer.minigame != () {
-        return healer.minigame == target.minigame;
+        if healer.minigame != target.minigame {
+            return false;
+        }
+        if tt("MedicHealEnemy") || healer.team == () {
+            return true;
+        }
+        return allied(healer.minigame, healer.team, target.team);
     }
     if lan() && target.minigame == () {
         return true;
@@ -194,4 +206,29 @@ fn on_tick() {
         }
     }
     set("notices", left);
+}
+
+// isAlliedTeam: the same team, or with Ally Same Colour teams of one
+// colour.
+fn allied(game, a, b) {
+    if b == () {
+        return false;
+    }
+    if a == b {
+        return true;
+    }
+    let g = minigame(game);
+    if g == () || !g.ally_same_color {
+        return false;
+    }
+    let ca = team_colour(g, a);
+    ca >= 0 && ca == team_colour(g, b)
+}
+fn team_colour(g, id) {
+    for t in g.teams {
+        if t.id == id {
+            return t.color;
+        }
+    }
+    -1
 }

@@ -170,6 +170,28 @@ pub struct Rules {
     /// id, as the importer names them (Slayer CTF reads Slayer's settings).
     #[serde(default)]
     pub needs: BTreeMap<String, String>,
+    /// The copy's RTB server preferences the rules read with `pref(name)`,
+    /// by their global (`$Pref::Server::TT::MedicHealBots`; a trailing `*`
+    /// matches the rest, `$Pref::Server::TT::Start*`), to how the rules
+    /// use them. Each becomes a server-wide setting of the rules
+    /// ([`crate::rtb`]); the copy's others stay unsupported.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub prefs: BTreeMap<String, String>,
+}
+
+impl Rules {
+    /// How the rules use the preference `global`, if they read it.
+    pub fn pref(&self, global: &str) -> Option<&str> {
+        let global = global.to_ascii_lowercase();
+        self.prefs.iter().find_map(|(pattern, how)| {
+            let pattern = pattern.to_ascii_lowercase();
+            let hit = match pattern.strip_suffix('*') {
+                Some(prefix) => global.starts_with(prefix),
+                None => global == pattern,
+            };
+            hit.then_some(how.as_str())
+        })
+    }
 }
 
 /// The companion host-rules Add-On's id for the import `namespace`.
@@ -514,6 +536,10 @@ pub struct Applied {
     /// What it carries out of the copy's scripts, and how.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub handled: Handled,
+    /// The copy's RTB preferences its rules read, by lower-case global, to
+    /// the server setting each became and how the rules use it.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub prefs: BTreeMap<String, String>,
 }
 
 /// A companion host-rules Add-On written beside an import.
@@ -595,6 +621,7 @@ pub fn apply(ports: &Ports, import: &Import, code: &Code, out: &Path) -> Option<
         reason: None,
         notes: String::new(),
         handled: Handled::new(),
+        prefs: BTreeMap::new(),
     };
     match try_apply(ports, e, import, code, out, &mut applied) {
         Ok(()) => applied.applied = true,
@@ -602,6 +629,7 @@ pub fn apply(ports: &Ports, import: &Import, code: &Code, out: &Path) -> Option<
             applied.reason = Some(format!("{err:#}"));
             applied.values.clear();
             applied.handled.clear();
+            applied.prefs.clear();
         }
     }
     Some(applied)
@@ -855,15 +883,38 @@ fn try_apply(
     }
     repin(out, &mut writes)?;
     let rules = match &port.rules {
-        Some(r) => Some(rules_package(
-            ports,
-            e,
-            &port.include,
-            r,
-            import,
-            &values,
-            out,
-        )?),
+        Some(r) => {
+            // The copy's RTB preferences the rules read, as their settings.
+            let mut settings: Vec<bri_package::setting::SettingDef> = vec![];
+            for (_, pref) in crate::rtb::prefs(&code.calls) {
+                let (Some(how), Ok(def)) = (r.pref(&pref.global), pref.setting) else {
+                    continue;
+                };
+                if settings.iter().any(|d| d.key == def.key) {
+                    continue;
+                }
+                applied.prefs.insert(
+                    pref.global.to_ascii_lowercase(),
+                    format!(
+                        "server setting {} (the Admin menu's Add-On Settings): {how}",
+                        def.title
+                    ),
+                );
+                settings.push(def);
+            }
+            Some(rules_package(
+                ports,
+                e,
+                &port.include,
+                r,
+                import,
+                &Fill {
+                    values: &values,
+                    settings: &settings,
+                },
+                out,
+            )?)
+        }
         None => None,
     };
     for (file, bytes) in writes {
@@ -901,6 +952,13 @@ fn add_definitions(weapons: &mut Value, definitions: &[Value]) -> Result<()> {
 /// A file to write: its path and bytes.
 type Written = (String, Vec<u8>);
 
+/// What [`rules_package`] fills in: `{{name}}` values for the rules files
+/// and the copy's preferences the rules read, as `behaviour.json` settings.
+struct Fill<'a> {
+    values: &'a BTreeMap<String, String>,
+    settings: &'a [bri_package::setting::SettingDef],
+}
+
 /// The companion host-rules Add-On for `import`: its manifest and the
 /// port's rules files, with `{{name}}` in them filled in. Checked here, so
 /// a port whose rules would not load is not applied.
@@ -910,7 +968,7 @@ fn rules_package(
     include: &[String],
     rules: &Rules,
     import: &Import,
-    values: &BTreeMap<String, String>,
+    fill: &Fill,
     out: &Path,
 ) -> Result<(RulesPackage, Vec<Written>)> {
     let dir = rules_dir(out);
@@ -924,7 +982,22 @@ fn rules_package(
     let mut provides = vec![];
     for (file, bytes) in ports.rules_files(&e.port, include, Some(rules))? {
         let text = port_text(&bytes).with_context(|| format!("rules/{file} is not UTF-8 text"))?;
-        let text = fill_text(&text, values).with_context(|| format!("rules/{file}"))?;
+        let mut text = fill_text(&text, fill.values).with_context(|| format!("rules/{file}"))?;
+        if file == RULES_BEHAVIOUR && !fill.settings.is_empty() {
+            let mut doc: Value =
+                serde_json::from_str(&text).with_context(|| format!("rules/{file}"))?;
+            let list = doc
+                .as_object_mut()
+                .context("rules/behaviour.json is not an object")?
+                .entry("settings")
+                .or_insert_with(|| Value::Array(vec![]))
+                .as_array_mut()
+                .context("rules/behaviour.json's settings is not a list")?;
+            for def in fill.settings {
+                list.push(serde_json::to_value(def)?);
+            }
+            text = serde_json::to_string_pretty(&doc)?;
+        }
         let (kind, stem) = if file == RULES_BEHAVIOUR {
             ("behaviour", "behaviour")
         } else if let Some(name) = rules_archetype(&file) {

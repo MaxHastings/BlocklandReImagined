@@ -305,6 +305,16 @@ fn cmd_worn(p) {
 fn cmd_hurt(p, amount) {
     damage(p, amount);
 }
+fn cmd_teams(p) {
+    set_teams(player(p).minigame, [#{ name: "Red", color: 0 }, #{ name: "Blue", color: 1 }]);
+}
+fn cmd_team(p, name) {
+    for t in minigame(player(p).minigame).teams {
+        if t.name == name {
+            set_team(p, t.id);
+        }
+    }
+}
 fn cmd_mag(p) {
     let m = player(p).magazine;
     set("mag", if m == () { "none" } else {
@@ -321,7 +331,7 @@ fn catalog(root: &Path, ns: &str, extra: &[&str]) -> Arc<Catalog> {
     let manifest = json!({
         "schema_version": 1, "id": "probe", "version": "1.0.0", "api": 1,
         "name": "probe", "license": "CC0-1.0",
-        "capabilities": ["player", "world.edit", "damage"],
+        "capabilities": ["player", "world.edit", "damage", "minigame"],
         "provides": [
             { "kind": "behaviour", "id": "probe:behaviour/main", "file": "behaviour.json" },
             { "kind": "script", "id": "probe:script/main", "file": "main.rhai" }
@@ -336,7 +346,9 @@ fn catalog(root: &Path, ns: &str, extra: &[&str]) -> Arc<Catalog> {
             { "name": "mag" },
             { "name": "who" },
             { "name": "worn" },
-            { "name": "hurt", "args": ["float"] }
+            { "name": "hurt", "args": ["float"] },
+            { "name": "teams" },
+            { "name": "team", "args": ["string"] }
         ],
         "state": { "global": {
             "mag": { "default": "", "visible": "everyone" },
@@ -428,6 +440,35 @@ impl Game {
         let owner = self.s.join(name.into(), at, false).unwrap();
         self.looks.insert(owner, MoveInput::default());
         owner
+    }
+    /// The player hosting the game, who changes its Server Settings.
+    fn join_host(&mut self, name: &str, at: Vec3) -> OwnerId {
+        let owner = self.s.join(name.into(), at, true).unwrap();
+        self.looks.insert(owner, MoveInput::default());
+        owner
+    }
+    /// The host sets server-wide Add-On settings, as the Admin menu's
+    /// Add-On Settings sends them with its Server Settings.
+    fn configure(
+        &mut self,
+        host: OwnerId,
+        values: &[(&str, bri_package::setting::SettingValue)],
+    ) -> anyhow::Result<()> {
+        let mut settings = self.s.server_settings().clone();
+        for (key, value) in values {
+            settings.addon_settings.insert((*key).into(), value.clone());
+        }
+        let n = self.seq.entry(host).or_default();
+        *n += 1;
+        self.s
+            .command(
+                host,
+                *n,
+                Command::Admin(bri_admin::Request::new(bri_admin::Action::HostConfigure {
+                    settings,
+                })),
+            )
+            .map(|_| ())
     }
     fn cmd(&mut self, owner: OwnerId, command: Command) {
         let n = self.seq.entry(owner).or_default();
@@ -627,6 +668,110 @@ fn ammo_items_bags_and_headshots_play_in_a_hosted_game() {
     assert_eq!(lying(&g, "ammodroppeditem"), 0, "picked up");
     g.equip(a, "standinpumpitem");
     assert_eq!(g.mag(a), json!("3|3|tt-shotgun|48"));
+}
+
+/// The copy's RTB preferences the rules read are server settings: the
+/// report says so (and keeps one no rule reads, Recoil, as a gap at its
+/// default), the host changes them in its Server Settings (a value out of
+/// range is refused), and a new life, ammo items and a death follow them.
+#[test]
+fn tier_preferences_are_server_settings_the_host_changes() {
+    use bri_package::setting::SettingValue as V;
+    let (dir, out, report) = imported("prefs");
+    assert!(report.ports[0].applied, "{:?}", report.ports[0].reason);
+    for pref in ["Start9MM", "Max9MM", "PlayerAmmoDrop"] {
+        let what = format!("RTB_registerPref $Pref::Server::TT::{pref}");
+        let row = report.ported.iter().find(|f| f.what == what);
+        assert!(
+            row.and_then(|f| f.resolution.as_deref())
+                .is_some_and(|r| r.contains("server setting")),
+            "{what}: {:?}",
+            report.ported
+        );
+    }
+    let recoil = report
+        .unsupported
+        .iter()
+        .find(|f| f.what == "RTB_registerPref $Pref::Server::TT::Recoil")
+        .expect("Recoil stays a gap");
+    assert!(recoil.detail.contains("default true"), "{}", recoil.detail);
+    let rules: Value = serde_json::from_slice(
+        &std::fs::read(dir.0.join(format!("addons/{NS}-rules/behaviour.json"))).unwrap(),
+    )
+    .unwrap();
+    let start = rules["settings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["key"] == "tt_start9mm")
+        .expect("the starting 9mm setting");
+    assert_eq!(start["scope"], "server");
+    assert_eq!(start["default"], 140);
+    assert_eq!(start["global"], "$Pref::Server::TT::Start9MM");
+
+    let mut g = Game::new(&dir.0, &out);
+    let a = g.join_host("A", Vec3::new(0.0, 0.05, 0.0));
+    let b = g.join("B", Vec3::new(0.0, 0.05, -6.0));
+    g.steps(2);
+    let start = format!("{NS}-rules:tt_start9mm");
+    let most = format!("{NS}-rules:tt_max9mm");
+    let drops = format!("{NS}-rules:tt_playerammodrop");
+    assert!(
+        g.configure(a, &[(start.as_str(), V::Int(999))]).is_err(),
+        "999 is past the setting's 280"
+    );
+    assert!(
+        g.configure(a, &[(start.as_str(), V::Bool(true))]).is_err(),
+        "a number, not on or off"
+    );
+    g.configure(
+        a,
+        &[
+            (start.as_str(), V::Int(50)),
+            (most.as_str(), V::Int(100)),
+            (drops.as_str(), V::Bool(false)),
+        ],
+    )
+    .unwrap();
+    g.s.set_spawn_points(vec![g.feet(a)]).unwrap();
+    let mut loadout: [Option<String>; 5] = Default::default();
+    loadout[0] = Some(format!("{NS}:weapon/standinsidearmitem"));
+    loadout[1] = Some(format!("{NS}:weapon/standinrifleitem"));
+    g.cmd(
+        a,
+        Command::MiniGame(MiniGameRequest::Create {
+            color: 0,
+            settings: Settings {
+                loadout,
+                ..Settings::default()
+            },
+        }),
+    );
+    let game = g.s.minigame_views()[0].id;
+    g.s.set_spawn_points(vec![g.feet(b)]).unwrap();
+    g.cmd(b, Command::MiniGame(MiniGameRequest::Join { game }));
+    g.steps(330);
+    g.equip(a, "standinsidearmitem");
+    assert_eq!(g.mag(a), json!("6|6|tt-9mm|50"), "Starting 9mm");
+    g.drop(a, "standinpileitem");
+    assert_eq!(
+        g.mag(a),
+        json!("6|6|tt-9mm|100"),
+        "a full load is the host's most"
+    );
+    // With Players Drop Ammo off, B leaves no bag.
+    g.equip(a, "standinrifleitem");
+    for _ in 0..3 {
+        g.shoot_at(a, b, 2.45);
+    }
+    g.steps(240);
+    assert!(
+        !g.s.weapon_view()
+            .drops
+            .iter()
+            .any(|d| d.item == format!("{NS}:weapon/ammodroppeditem")),
+        "no bag"
+    );
 }
 
 /// The stand-in `addon` imported as `ns` with the stand-ins it requires
@@ -1667,6 +1812,79 @@ fn medic1_heals_over_time_and_the_syringe_recharges() {
         "the thrown booster's 32 at once, then the first pass of its heal over time"
     );
     assert_eq!(g.ask(b, "worn"), json!(heal_image));
+}
+
+/// TT_canHeal's team check: in a minigame with teams a medic heals only
+/// its own team, until the host turns Teams Can Heal Enemies on in the
+/// server settings; the two preferences are settings, not gaps.
+#[test]
+fn medic1_heals_its_own_team_unless_the_host_lets_it_heal_others() {
+    use bri_package::setting::SettingValue as V;
+    let (dir, out, report) = imported_on("Weapon_Package_Medic1", NSM, &[], "medic-teams");
+    assert!(report.ports[0].applied, "{:?}", report.ports[0].reason);
+    assert!(report.unsupported.is_empty(), "{:?}", report.unsupported);
+    assert!(
+        report
+            .ambiguous
+            .iter()
+            .any(|f| f.what == "isFunction(registerPreferenceAddon)" && f.detail.contains("absent")),
+        "{:?}",
+        report.ambiguous
+    );
+    let mut g = Game::with_add_ons(&dir.0, &out, NSM, &[]);
+    let a = g.join_host("A", Vec3::new(0.0, 0.05, 0.0));
+    let b = g.join("B", Vec3::new(0.0, 0.05, -6.0));
+    g.steps(2);
+    let mut loadout: [Option<String>; 5] = Default::default();
+    loadout[0] = Some(format!("{NSM}:weapon/medigunitem"));
+    g.s.set_spawn_points(vec![g.feet(a)]).unwrap();
+    g.cmd(
+        a,
+        Command::MiniGame(MiniGameRequest::Create {
+            color: 0,
+            settings: Settings {
+                loadout,
+                ..Settings::default()
+            },
+        }),
+    );
+    let game = g.s.minigame_views()[0].id;
+    g.s.set_spawn_points(vec![g.feet(b)]).unwrap();
+    g.cmd(b, Command::MiniGame(MiniGameRequest::Join { game }));
+    g.steps(330);
+    g.probe(a, "teams", vec![]);
+    let on = |g: &mut Game, p: OwnerId, team: &str| {
+        g.probe(p, "team", vec![PackageArg::String(team.into())]);
+        g.steps(2);
+    };
+    on(&mut g, a, "Red");
+    on(&mut g, b, "Blue");
+    g.probe(b, "hurt", vec![PackageArg::Float(50.0)]);
+    g.steps(2);
+    g.equip(a, "medigunitem");
+    g.shoot_at(a, b, 1.0);
+    g.steps(120);
+    assert_eq!(g.health(b), 50.0, "B is on the other team");
+    on(&mut g, b, "Red");
+    g.shoot_at(a, b, 1.0);
+    g.steps(120);
+    assert!(g.health(b) > 50.0, "B is A's teammate now: {}", g.health(b));
+    on(&mut g, b, "Blue");
+    let hurt = g.health(b) - 50.0;
+    g.probe(b, "hurt", vec![PackageArg::Float(hurt.into())]);
+    g.steps(2);
+    g.configure(
+        a,
+        &[(&format!("{NSM}-rules:tt_medichealenemy"), V::Bool(true))],
+    )
+    .unwrap();
+    g.shoot_at(a, b, 1.0);
+    g.steps(120);
+    assert!(
+        g.health(b) > 50.0,
+        "Teams Can Heal Enemies: {}",
+        g.health(b)
+    );
 }
 
 const NSME: &str = "weapon_melee_extended";

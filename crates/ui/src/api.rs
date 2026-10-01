@@ -1146,6 +1146,10 @@ pub struct MiniGameAddOnSetting {
     pub title: String,
     /// Each team has its own value.
     pub team: bool,
+    /// One value for the whole server, which only the host changes (the
+    /// Admin menu's Add-On Settings).
+    #[serde(default)]
+    pub server: bool,
     pub kind: MiniGameSettingKind,
     pub default: MiniGameSettingValue,
     /// Only admins may change it.

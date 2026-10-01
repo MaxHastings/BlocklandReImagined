@@ -149,11 +149,14 @@ impl World for ScriptWorld<'_> {
     }
     fn setting(
         &self,
-        game: u64,
+        game: Option<u64>,
         team: Option<u64>,
         key: &str,
     ) -> Result<bri_package::setting::SettingValue, String> {
         self.session.setting_value(self.package, game, team, key)
+    }
+    fn pref(&self, name: &str) -> Option<bri_package::setting::SettingValue> {
+        self.session.pref_value(name)
     }
     fn brick_box(&self, brick: u64) -> Option<([f32; 3], [f32; 3])> {
         let (min, max) = self.session.simulation.brick_box(brick)?;

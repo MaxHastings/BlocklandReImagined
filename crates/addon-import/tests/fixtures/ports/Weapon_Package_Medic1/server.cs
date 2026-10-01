@@ -7,8 +7,21 @@ function TT_defaultIfUnset(%pref, %default, %category)
       $Pref::Server["::" @ %category @ "::" @ %pref] = %default;
 }
 
-TT_defaultIfUnset("MedicHealEnemy", 0);
-TT_defaultIfUnset("MedicHealBots", 0);
+// Its two preferences, in RTB's server control when it is there.
+if($RTB::Hooks::ServerControl)
+{
+   if(isFunction(registerPreferenceAddon))
+      %mod = "Weapon_Package_Tier1";
+   else
+      %mod = "Weapon_Package_Medic1";
+   RTB_registerPref("Heal Other Teams","Stand-in | Medical","$Pref::Server::TT::MedicHealEnemy","bool",%mod,0,0,1);
+   RTB_registerPref("Heal Bots","Stand-in | Medical","$Pref::Server::TT::MedicHealBots","bool",%mod,0,0,1);
+}
+else
+{
+   TT_defaultIfUnset("MedicHealEnemy", 0);
+   TT_defaultIfUnset("MedicHealBots", 0);
+}
 
 if(ForceRequiredAddOn("Weapon_Gun") == $Error::AddOn_NotFound)
 {

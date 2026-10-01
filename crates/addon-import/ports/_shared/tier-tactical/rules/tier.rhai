@@ -1,8 +1,10 @@
 // Host rules for the Tier+Tactical packs, written for this game from what
 // Support_TT_Ammo.cs, Item_Ammo.cs, Ammo_Unified.cs and
-// TT_processHeadshotDamage did, with their default settings. Filled in at
-// import from the player's own copy: the tables are its datablocks' numbers
-// and its TT_registerAmmoType calls. Every pack's rules hand out the ammo
+// TT_processHeadshotDamage did. Filled in at import from the player's own
+// copy: the tables are its datablocks' numbers and its TT_registerAmmoType
+// calls. Its $Pref::Server::TT:: preferences are server settings the host
+// changes (`pref`), whichever pack registers each; one no running pack
+// registers keeps the port's default. Every pack's rules hand out the ammo
 // types it registers; Tier 1's, which own Item_Ammo.cs and Ammo_Unified.cs,
 // also run ammo items and the dead player's bag for every type.
 
@@ -35,6 +37,18 @@ fn bag() { "{{namespace}}:weapon/ammodroppeditem" }
 // Types Frog's pack registers with canDrop false (its heavy cache); the
 // bag is Tier 1's, which never sees that pack's own table.
 fn kept_on_death() { ["payload", "strikerocket", "50cal"] }
+// The types the packs put in the "nades" set (Explosive 1's and Frog's
+// grenades), whose drops and infinite supply have their own preferences;
+// every other type is in "weps". Frog's Impact Grenades are in both.
+fn grenade_types() { ["fragnades", "sticknades", "molnades", "impactgrenade", "smokegrenade"] }
+fn weapon_type(name) { !grenade_types().contains(name.to_lower()) || name.to_lower() == "impactgrenade" }
+
+// A Tier+Tactical preference ($Pref::Server::TT::<name>) as the host set
+// it, or `fallback` when no running pack registers it.
+fn tt(name, fallback) {
+    let v = pref("$Pref::Server::TT::" + name);
+    if v == () { fallback } else { v }
+}
 
 // An ammo type's line by its Tier+Tactical name, whatever its case.
 fn ammo_type(name) {
@@ -54,13 +68,23 @@ fn carried(me, t) {
 }
 
 // Armor::onAdd: a new life holds the starting amount of every registered
-// type.
+// type (Start<type>). Bots with BotInfAmmo never run out of a weapon's,
+// and PlayerInfNades and BotInfNades give endless grenades.
 fn on_spawn(p) {
+    let me = player(p);
+    let bot = me != () && me.bot;
     for name in registered().keys() {
         let t = ammo_type(name);
-        if t != () {
-            set_reserve(p, t.ammo, t.reserve);
+        if t == () {
+            continue;
         }
+        let grenade = !weapon_type(name);
+        let endless = if grenade {
+            tt(if bot { "BotInfNades" } else { "PlayerInfNades" }, false)
+        } else {
+            bot && tt("BotInfAmmo", false)
+        };
+        set_reserve(p, t.ammo, if endless { () } else { tt("Start" + name, t.reserve) });
     }
 }
 
@@ -142,16 +166,16 @@ fn raycast_crit(victim, attacker, amount, info) {
     #{ amount: amount * 3.0, type: kind }
 }
 
-// Item_Ammo.cs: an ammo item adds each of its lines up to the type's most,
-// and is used up when it added any; bots leave them ($Pref BotAmmoPickUp
-// off). Ammo_Unified.cs: the bag a dead player left holds what they
-// carried.
+// Item_Ammo.cs: an ammo item adds each of its lines up to the type's most
+// (Max<type>), and is used up when it added any or FullAmmoPickUp is on;
+// bots leave them unless BotAmmoPickUp is on. Ammo_Unified.cs: the bag a
+// dead player left holds what they carried.
 fn on_pickup(p, item, info) {
     let me = player(p);
     if me == () {
         return ();
     }
-    if me.bot && (item == bag() || ammo_items().contains(item)) {
+    if me.bot && !tt("BotAmmoPickUp", false) && (item == bag() || ammo_items().contains(item)) {
         return false;
     }
     let lines = [];
@@ -193,14 +217,15 @@ fn on_pickup(p, item, info) {
         if now == () {
             continue;
         }
-        let amount = if line[1] == -1 { t.max_reserve } else { line[1] };
-        let room = t.max_reserve - now;
+        let most = tt("Max" + line[0], t.max_reserve);
+        let amount = if line[1] == -1 { most } else { line[1] };
+        let room = most - now;
         if amount > 0 && room > 0 {
             set_reserve(p, t.ammo, now + if amount < room { amount } else { room });
             took = true;
         }
     }
-    if took {
+    if took || tt("FullAmmoPickUp", false) {
         sound_at(sound, me.x, me.y, me.z);
         return "take";
     }
@@ -208,20 +233,26 @@ fn on_pickup(p, item, info) {
 }
 
 // Ammo_Unified.cs: a dead player's ammo spills out in a bag thrown up and
-// to a random side: every registered type they hold any of, but the heavy
-// cache Frog's pack keeps. Every type is in the weapon or grenade set,
-// and players drop both ($Pref PlayerAmmoDrop and PlayerNadeDrop on);
-// bots drop neither.
+// to a random side: every type they hold any of, but the heavy cache
+// Frog's pack keeps, that its set lets them drop: a weapon's with
+// PlayerAmmoDrop (BotAmmoDrop for a bot), a grenade's with PlayerNadeDrop
+// (BotNadeDrop).
 fn on_death(victim, killer) {
     let me = player(victim);
-    if me == () || me.bot {
+    if me == () {
         return;
     }
+    let weapons = tt(if me.bot { "BotAmmoDrop" } else { "PlayerAmmoDrop" }, !me.bot);
+    let grenades = tt(if me.bot { "BotNadeDrop" } else { "PlayerNadeDrop" }, !me.bot);
     let types = ammo_types();
     let held = #{};
     let any = false;
     for name in types.keys() {
         if kept_on_death().contains(name.to_lower()) {
+            continue;
+        }
+        let grenade = grenade_types().contains(name.to_lower());
+        if !((weapon_type(name) && weapons) || (grenade && grenades)) {
             continue;
         }
         let n = carried(me, types[name]);
@@ -243,15 +274,25 @@ fn side(victim, axis) {
 }
 
 // pushDatablock: the gun in hand lays its player type over the holder's
-// as it starts firing.
+// as it starts firing, when the preference guarding it is on (LMGSlow).
 fn cmd_lay(p) {
     let me = player(p);
     if me == () {
         return;
     }
     let table = laid();
-    if table.contains(me.image) && on(table[me.image].archetype) {
-        push_archetype(p, table[me.image].archetype);
+    if !table.contains(me.image) {
+        return;
+    }
+    let row = table[me.image];
+    if row.contains("when") {
+        let v = pref(row.when);
+        if v != () && !v {
+            return;
+        }
+    }
+    if on(row.archetype) {
+        push_archetype(p, row.archetype);
     }
 }
 

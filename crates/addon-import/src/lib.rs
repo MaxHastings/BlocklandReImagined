@@ -13,6 +13,7 @@ pub mod porting;
 pub mod ports;
 pub mod reference;
 pub mod report;
+pub mod rtb;
 pub mod source;
 mod vehicle_script;
 mod weapon_fx;
@@ -893,6 +894,41 @@ fn top_level(cx: &mut Ctx, scripts: &[Script]) {
                     format!("isFile({})", c.args.join(", ")),
                     at,
                     "checks at load whether a file outside this Add-On exists; read as absent, so the Add-On uses its own".into(),
+                    None,
+                );
+            } else if callee == "rtb_registerpref" && c.receiver.is_none() {
+                for (_, pref) in rtb::prefs(std::slice::from_ref(c)) {
+                    let reason = match &pref.setting {
+                        Ok(def) => format!(
+                            "an RTB server preference ({}): it becomes a server setting the host changes once a port's rules read it, and keeps its default {} until then",
+                            def.title, def.default
+                        ),
+                        Err(e) => {
+                            format!("an RTB server preference that cannot be a server setting: {e}")
+                        }
+                    };
+                    cx.unsupported(
+                        format!("RTB_registerPref {}", pref.global),
+                        at.clone(),
+                        reason,
+                    );
+                }
+            } else if callee == "isfunction" && c.receiver.is_none() && c.args.len() == 1 {
+                // `isFunction(registerPreferenceAddon)`: Blockland Glass's
+                // preference grouping, or a script's own function.
+                let name = literal(&c.args[0]).trim().to_ascii_lowercase();
+                let defined = scripts
+                    .iter()
+                    .flat_map(|s| &s.functions)
+                    .any(|f| f.qualified().eq_ignore_ascii_case(&name));
+                cx.ambiguous(
+                    format!("isFunction({})", c.args[0]),
+                    at,
+                    if defined {
+                        "checks at load whether a function exists; this Add-On defines it, so read as there".into()
+                    } else {
+                        "checks at load whether a function exists; nothing outside this Add-On defines functions here (no Blockland Glass), so read as absent".into()
+                    },
                     None,
                 );
             } else if callee.starts_with("register") && callee.contains("event") {
@@ -3586,19 +3622,29 @@ fn finish(mut cx: Ctx, opts: &Options, ports: &ports::Ports, code: &ports::Code)
                 });
             }
         }
-        // Top-level calls the port reads are carried out, not unsupported.
+        // Top-level calls the port reads are carried out, not unsupported,
+        // and so are the RTB preferences its rules read.
+        let pref = |what: &str| {
+            what.strip_prefix("RTB_registerPref ")
+                .and_then(|g| port.prefs.get(&g.to_ascii_lowercase()))
+        };
         let (ported, unsupported): (Vec<_>, Vec<_>) = std::mem::take(&mut cx.report.unsupported)
             .into_iter()
             .partition(|f| {
-                f.what.strip_prefix("top-level call ").is_some_and(|c| {
-                    port.handled
-                        .contains_key(&format!("call:{}", c.to_ascii_lowercase()))
-                })
+                pref(&f.what).is_some()
+                    || f.what.strip_prefix("top-level call ").is_some_and(|c| {
+                        port.handled
+                            .contains_key(&format!("call:{}", c.to_ascii_lowercase()))
+                    })
             });
         cx.report.unsupported = unsupported;
         cx.report.ported = ported
             .into_iter()
             .map(|mut f| {
+                if let Some(how) = pref(&f.what) {
+                    f.resolution = Some(format!("port {}: {how}", port.port));
+                    return f;
+                }
                 let call = f
                     .what
                     .trim_start_matches("top-level call ")

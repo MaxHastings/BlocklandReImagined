@@ -5,6 +5,22 @@ AddDamageType("StandinRifle", '%1 shot themselves', '%2 shot %1', 0.75, 1);
 AddDamageType("StandinRifleHeadshot", '%1 shot themselves', '%2 headshot %1', 0.75, 1);
 AddDamageType("StandinPellet", '%1 shot themselves', '%2 shot %1', 0.75, 1);
 
+// Its preferences, in RTB's server control when it is there.
+if($RTB::Hooks::ServerControl)
+{
+   RTB_registerPref("Starting 9mm","Stand-in | Starting Ammo","$Pref::Server::TT::Start9MM","int 0 280","Weapon_Package_Tier1",35*4,0,1);
+   RTB_registerPref("Most 9mm","Stand-in | Maximum Ammo","$Pref::Server::TT::Max9MM","int 1 560","Weapon_Package_Tier1",280,0,1);
+   RTB_registerPref("Players Drop Ammo","Stand-in | Ammo","$Pref::Server::TT::PlayerAmmoDrop","bool","Weapon_Package_Tier1",1,0,1);
+   RTB_registerPref("Shake on Firing","Stand-in | Miscellaneous","$Pref::Server::TT::Recoil","bool","Weapon_Package_Tier1",1,0,1);
+}
+else
+{
+   TT_defaultIfUnset("Start9MM", 35*4);
+   TT_defaultIfUnset("Max9MM", 280);
+   TT_defaultIfUnset("PlayerAmmoDrop", 1);
+   TT_defaultIfUnset("Recoil", 1);
+}
+
 // The ammo types this pack hands every player, as Kai's packs register them.
 TT_registerAmmoType("9MM", "9mm", "9mm", true, "tt", "weps", "tt_pile");
 TT_registerAmmoType("556", "5.56", "5.56 Little Rifle", true, "tt", "weps", "tt_pile");

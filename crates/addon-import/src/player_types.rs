@@ -150,7 +150,7 @@ pub fn convert(fields: &BTreeMap<String, String>, base: Option<String>) -> Conve
 
 /// A number, or a product or quotient of numbers as datablocks write them
 /// (`25 * 180`, `8.3*90`).
-fn number(v: &str) -> Option<f32> {
+pub(crate) fn number(v: &str) -> Option<f32> {
     let v = crate::literal(v);
     let mut terms = v.split(['*', '/']);
     let mut n: f32 = terms.next()?.trim().parse().ok()?;

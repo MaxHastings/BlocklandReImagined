@@ -239,17 +239,23 @@ pub trait World {
     fn hit_region(&self, _player: u64, _point: [f32; 3]) -> Option<&'static str> {
         None
     }
-    /// An Add-On setting of mini-game `game` (or of its team `team`):
-    /// `key` is the calling package's own or `namespace:key`. Its value,
-    /// or its default when nobody changed it; an error names what is
-    /// wrong (no such game, team or setting).
+    /// An Add-On setting of mini-game `game` (or of its team `team`), or
+    /// a server-wide one (no game): `key` is the calling package's own or
+    /// `namespace:key`. Its value, or its default when nobody changed it;
+    /// an error names what is wrong (no such game, team or setting).
     fn setting(
         &self,
-        _game: u64,
+        _game: Option<u64>,
         _team: Option<u64>,
         _key: &str,
     ) -> Result<bri_package::setting::SettingValue, String> {
         Err("this host has no Add-On settings".into())
+    }
+    /// The server setting standing for the v20 global `name`
+    /// (`$Pref::Server::TT::Ammo`), whichever running Add-On declares it;
+    /// `None` when none does, as an unset global.
+    fn pref(&self, _name: &str) -> Option<bri_package::setting::SettingValue> {
+        None
     }
     /// Whether the Add-On `id` is enabled in this game, so a package can
     /// use an optional dependency's content only while it is there.

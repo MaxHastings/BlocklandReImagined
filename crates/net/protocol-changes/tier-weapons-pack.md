@@ -19,3 +19,7 @@ state shots may hitscan.
 Melee Extended II: `Image::guard` (a raised shield's cover, damage and push
 scales, reflection, clang, sounds, durability and break burst) and
 `DamageType::special` (Support_SpecialKills icons). Content schema only.
+Server-wide Add-On settings (RTB preferences): `SettingScope::Server` and
+`SettingDef::global` in the Add-On settings players receive, and
+`ServerSettings::addon_settings` in the host's Server Settings (the admin
+snapshot and `HostConfigure`).
