@@ -448,6 +448,10 @@ impl ActorEffects {
     pub fn world(&self) -> &EffectsWorld {
         &self.world
     }
+    /// The world's portals: particles fly on through them.
+    pub fn set_passages(&mut self, passages: &bri_content::passage::Passages) {
+        self.world.set_passages(passages);
+    }
     pub fn image_count(&self) -> usize {
         self.images.len()
     }

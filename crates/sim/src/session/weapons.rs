@@ -299,6 +299,7 @@ impl Session {
                     scale: state.scale,
                     can_jet: peer.player.tuning().can_jet,
                     horse: self.archetypes.resolve(state.archetype).look.is_horse(),
+                    middle: Some(Vec3::from(state.feet) + Vec3::Y * peer.player.middle()),
                     ..Frame::default()
                 },
             )?;
@@ -563,18 +564,16 @@ impl Session {
                         .pack
                         .damage_type(&kind)
                         .is_some_and(|t| t.direct);
-                    self.damage_player(
+                    self.damage_player_at(
                         target.0,
                         amount,
                         combat::DamageKind::Weapon {
                             name: kind,
                             direct,
-                            hit: Some(combat::Hit {
-                                position,
-                                direction,
-                            }),
+                            direction: Some(direction),
                         },
                         shooter(source),
+                        Some(position),
                     )?;
                 }
                 WeaponEvent::Impulse {

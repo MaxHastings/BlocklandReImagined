@@ -75,6 +75,7 @@ fn floor(from: Vec3, to: Vec3) -> Option<Hit> {
             position: from.lerp(to, fraction),
             normal: Vec3::Y,
             fraction,
+            carry: None,
         }
     })
 }

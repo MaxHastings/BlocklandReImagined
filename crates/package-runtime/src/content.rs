@@ -951,6 +951,25 @@ pub struct HudPanel {
     /// Keys that send a package command, shown as hints on the panel.
     #[serde(default)]
     pub keys: Vec<HudKey>,
+    /// Show the panel only while the viewer holds one of these in hand: a
+    /// weapons package's id (any of its images) or an image id. Empty: the
+    /// panel always shows. An ammo counter lists its guns' package.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub holding: Vec<String>,
+}
+impl HudPanel {
+    /// Whether the panel shows while the viewer holds `image` (`""` for
+    /// empty hands).
+    pub fn shows_holding(&self, image: &str) -> bool {
+        self.holding.is_empty()
+            || (!image.is_empty()
+                && self.holding.iter().any(|h| {
+                    h.eq_ignore_ascii_case(image)
+                        || image
+                            .split_once(':')
+                            .is_some_and(|(package, _)| package.eq_ignore_ascii_case(h))
+                }))
+    }
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1012,6 +1031,14 @@ impl HudPanel {
             );
         }
         ensure!(self.keys.len() <= 8, "at most 8 keys");
+        ensure!(self.holding.len() <= 32, "at most 32 holding entries");
+        for h in &self.holding {
+            ensure!(
+                bri_package::id::namespace_problem(h).is_none()
+                    || bri_package::id::ContentId::parse(h).is_ok_and(|id| id.kind == "image"),
+                "holding `{h}` is neither a package id nor an image id"
+            );
+        }
         for k in &self.keys {
             ensure!(
                 k.key.len() == 1 && k.key.chars().all(|c| c.is_ascii_uppercase()),
@@ -1073,6 +1100,30 @@ mod tests {
         bytes.extend(width.to_be_bytes());
         bytes.extend(height.to_be_bytes());
         bytes
+    }
+
+    #[test]
+    fn a_panel_can_show_only_while_its_guns_are_held() {
+        let mut panel: HudPanel = serde_json::from_value(serde_json::json!({
+            "schema_version": 1, "slot": "hud.overlay", "anchor": "bottom_right",
+            "title": "AMMO", "background": [0, 0, 0, 0.5], "accent": [1, 1, 1, 1],
+            "text": [1, 1, 1, 1],
+            "rows": [{ "label": "Rounds", "bind": "guns-rules:player/ammo" }],
+            "holding": ["guns", "tools:image/scope"]
+        }))
+        .unwrap();
+        panel.validate().unwrap();
+        assert!(panel.shows_holding("guns:image/rifle"), "any image of the package");
+        assert!(panel.shows_holding("tools:image/scope"), "one named image");
+        assert!(!panel.shows_holding("tools:image/hammer"));
+        assert!(!panel.shows_holding("gunsmith:image/rifle"), "not a prefix match");
+        assert!(!panel.shows_holding(""), "empty hands");
+        panel.holding.clear();
+        assert!(panel.shows_holding(""), "no list: always shown");
+        panel.holding = vec!["Not An Id".into()];
+        assert!(panel.validate().is_err());
+        panel.holding = vec!["guns:weapon/rifle".into()];
+        assert!(panel.validate().is_err(), "an item is not an image");
     }
 
     #[test]

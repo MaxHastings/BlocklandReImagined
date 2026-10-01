@@ -8248,6 +8248,40 @@ Render: `/mnt/project-files/steel-ball/steel-ball-v2.png`. Max's in-game
 check is a Steel Ball near bricks at Mirrors Medium, in Unified+Shine and
 in Dynamic.
 
+## 2026-10-01 Adventure Pack seams: hit regions, HUD per gun, onFire with a round (branch `claude/adventure-pack-n3spj2`)
+
+Max asked for Bushido's Adventure Pack as a bundled Add-On and as a test of
+the engine's seams. A first cut built our own remake (models, sounds,
+rules). Max then chose "originals only" for every classic Add-On: the game
+loads the original files from the player's own Blockland Add-Ons folder
+and ships none of them. The remake (`packages/adventure`,
+`tools/make_adventure_pack.py`) was removed before landing. The Tier
+Tactical thread owns the classic Add-On loader and a shared `magazine`
+seam (rounds, reserves, reload, pickups, ammo display). The engine seams
+the pack needs stay; `docs/audits/adventure-pack.md` maps them.
+
+New engine seams (general, documented in `docs/modding/README.md`):
+- Hit regions: `bri_sim::player::hit_region` uses Torque's
+  `getDamageLocation` bands (head above 85% of the box, torso above 55%).
+  `on_damage` info gains `region`, `x`, `y`, `z` for shots and blasts.
+  `raycast` and `on_projectile_hit` give `region` for players, and
+  `hit_region(p, x, y, z)` is a script function. `info.type` is now the
+  damage type's name without `$DamageType::`.
+- HUD `holding`: a panel shows only while the viewer holds an image of the
+  listed Add-Ons or images.
+- An image with a projectile and an `onfire` command runs the command and
+  fires, as `Parent::onFire` did.
+- Model-drawn icons fit each stock item's pose once, however many icons
+  take it. `bri-addon-check` also checks projectiles' own models
+  (Trench Warfare's loader).
+
+Tests: `crates/sim/tests/hit_regions.rs` (a round in the chest and the
+head through `on_damage`), region tests in `script_api.rs` and
+`player.rs`, `content.rs` HUD `holding`, `addon_seams.rs` onFire. bri-weapons,
+bri-package-runtime, bri-package, the bri-client lib and the touched bri-sim
+suites pass. Suites needing generated `content/` could not run in the
+cloud. No protocol change.
+
 ## 2026-09-30 Trench Warfare game mode (branch `claude/trench-warfare-eq4lxb`)
 
 Max asked for the classic Trench Warfare mode (Glass Add-On 829). That
@@ -8553,3 +8587,234 @@ Commands: `cargo test -p bri-weapons -p bri-package-runtime -p bri-sim
 -p bri-ui -p bri-net`, `cargo clippy --no-deps ... -D warnings` (the newer
 toolchain here also flags `unnecessary_sort_by` and `question_mark` in
 client and addon-import code this branch does not touch).
+## 2026-10-01 Vehicle destruction looks (v20 audit)
+
+Max: destroyed vehicles "would turn black right away when on fire" in v20,
+ours kept their colour. Confirmed from the recovered core scripts (read on
+the PC, never run): `WheeledVehicleData::Damage` (18821) and
+`FlyingVehicleData::Damage` (18910) paint every node black at `maxDamage`
+and swap the tires for `emptyTire`; the Tank's own destroy code blackens
+its turret too. Full step-by-step table in
+`docs/audits/vehicle-destruction.md`.
+- `Definition::wreck_color`: black for every Wheeled, Flying and Ball
+  vehicle, Add-On vehicles included; PlayerData mounts keep their colour.
+- The client paints body, turret and animated parts with it while the
+  replicated `destroyed` flag is set, and draws no wheels on a wreck. No
+  wire or protocol change.
+- Accepted gap: v20 also burns in the last 1% of health; health is not
+  replicated, so ours burns from destruction.
+- Tests: `bri-client` `vehicles::tests::a_destroyed_vehicle_is_drawn_black_without_its_tires`,
+  `only_vehicle_classes_char_and_player_mounts_keep_their_colour`.
+## 2026-10-01 Portals: going through shows the same picture (branch `claude/portal-bricks-5be9t8`)
+
+Max, v0.1.10: walking through a portal felt "98% perfect" but jarred at
+the moment of going through, as if the whole camera switched over.
+
+What Valve's Portal does: the frame before going through and the frame
+after are the same picture. Nothing is smoothed except the view's roll,
+which eases back upright after a floor or ceiling portal.
+
+Measured with a new frame-by-frame test that traces every pixel through
+the portals. On 1b2747e4 the whole picture (100% of pixels) jumped at the
+crossing, in first person and from the chase camera. The causes:
+- The prediction moves the body through on the tick its middle crosses,
+  but the body is drawn up to a Torque tick behind. For about 24 ms (4
+  frames at 165 fps) the camera stood on the far side behind the exit,
+  looking back through the partner's other side at the wrong room.
+- Only the yaw was carried. Through a floor portal the pitch stayed
+  (still looking down), and the body stays upright, so the eye and the
+  chase pivot flipped to the other side of the body's middle.
+
+The fix (`crates/client/src/motion.rs`, `portal_view.rs`, `controls.rs`):
+- Motion keeps a crossing the prediction made "unshown". The body, the
+  look and the camera stay on the near side until the drawn middle
+  crosses the opening, after at most 0.1 s. Inputs during that time are
+  turned for the far side.
+- `Controls::carry_look` carries the whole look: yaw, pitch and roll.
+  The roll, and a tilt of the eye and chase pivot about the body's middle,
+  ease out over 0.5 s (smoothstep).
+- The chase camera leans in the rolled frame (`portal_view::leaned`). Its
+  boom starts from the body's middle, so a tilted pivot is carried.
+
+Tests:
+- `bri-client motion::crossing_tests`: a doorway walk and a floor-to-floor
+  fall at 1000 fps, in first person and chase. No frame may move more
+  than 5% of the picture by more than 0.5 units and 0.05 rad. The chase
+  camera is checked within 0.1 s of the crossing: later on, its boom
+  slides off the edge of the opening, as it would round a wall.
+- `bri-render --test mirrors a_portal_the_eye_is_about_to_go_through...`:
+  on the GPU, the recessed window seen from 0.6 to 0.004 units in front
+  matches the direct render from the far side within 2% of pixels.
+- With the old crossing, or the old yaw-only look, the client test fails
+  with 100% of the picture jumping.
+
+Remaining: in third person the body itself still moves across in one
+frame when its middle crosses (half of it shows on each side). Drawing a
+clone on both sides needs per-instance clip planes in the renderer.
+
+### Shooting through portals, every time
+
+Max: "sometimes i can shoot through a portal but other times i can not".
+Three causes, all reproduced by new tests that fail on 1b2747e4:
+- The shot started at the muzzle, which is ahead of the eye. Standing
+  close, the muzzle was already past the opening, so the shot started
+  behind the portal and flew off through the back of the doorway.
+- A doorway's two sides share one plane back to back. A carried shot
+  landed on the partner's plane only to within rounding; about half the
+  time the rest of the tick went in through the partner's other side and
+  was carried straight back. 1460 of 3914 shots in the sweep went wrong.
+- Each player's screen flew projectiles on with no portals at all, and
+  the trail streaked across the map between the two portals.
+
+The fix:
+- `bri_content::passage::PAST`: a carried move goes on from a hair past
+  the partner's plane (`Passages::travel`, projectile flight, and the
+  client's ghost flight).
+- `bri_weapons` fire: the shot's start is followed from the body's
+  middle (new `Frame::middle`, set by the host) to the eye to the muzzle
+  through any opening in between, and its velocity is turned with it.
+- `ghosts::Hit::first`: the client's projectile flight goes through the
+  same openings as the host's. `WeaponEffects::set_passages` makes a
+  trail carried through a portal jump (`EffectsWorld::jump_source`)
+  instead of streaking.
+- Speed, spin (velocity turns with the carry) and owner credit (`source`)
+  are kept. Hitscan in this engine is only the build tools (hammer,
+  wrench, printer, wand), which act on bricks and do not go through.
+
+Tests:
+- `bri-sim --test portals shots::every_shot_into_the_opening...`: 3914
+  shots (speeds 3 to 900, five yaws, three pitches, five edge offsets,
+  three heights, from 0.0005 to 1.7 units out, bullets and falling
+  arrows) each match free flight carried by the portal.
+- `shots::each_weapon_fires_through_from_any_distance`: gun, rocket, bow
+  and sword fired from 3 units out to the eye leading the body through.
+- `bri-client ghosts::a_ghost_flies_through_an_opening_as_the_host_does`
+  and `--test weapon_effects a_trail_carried_through_a_portal...`.
+
+Particles too (Max: spray paint lands through a portal "but the particles
+themselves should also go through"): `EffectsWorld::set_passages` makes
+every particle that flies in through a portal come out of its partner,
+position, velocity, acceleration and facing turned, in all three effects
+worlds (bricks' emitters, players and vehicles, weapons: spray, smoke,
+sparks, explosions). Drawn only, nothing sent; a world with no portals
+skips it. Test: `bri-fx-runtime particles_fly_on_out_of_a_portals_partner`
+sprays a cone at an opening; each particle matches its free flight,
+carried when it went in.
+
+## 2026-10-01 Main's Windows CI green again (branch `claude/fill-can-6wzkym`)
+
+Every main CI run since about run 180 failed three content-free targets.
+
+- `bri-sim/vehicle_prediction` loaded the generated v20 vehicle pack, which
+  the runner cannot have ("The system cannot find the path specified"). It
+  now drives the test's own vehicles, `crates/sim/tests/fixtures/
+  prediction-vehicles.json`: a flying wheeled car, skis and a horse, one of
+  each kind a client predicts, with authored numbers (no v20 data). All 5
+  tests run and pass; the car still has to lead the delayed host poses and
+  the horse still has to run.
+- `bri-render/mirrors` (4 of 5 failing) and `bri-render/persistent_scene`
+  (8 of 14) failed with "The requested Wait timed out". Cause, from run
+  36791558978's timestamps: the runner has no GPU, and each test built its
+  own device and drew at the same time as three others on the software
+  adapter. Failures came in bursts about 40 s into each binary, the tests
+  that passed were the ones that ran after the others had failed, and
+  which tests failed changed between attempts. A frame alone is fast (on
+  lavapipe here a mirror frame's GPU work is about 30 ms; building the
+  renderer's 12 pipelines is about 3.3 s of CPU). The tests now share one
+  device per binary and take turns on it, so each frame has the whole
+  machine. No test is skipped or ignored and the 30 s waits are unchanged.
+  Locally: mirrors 5 passed, persistent_scene 12 passed, 2 ignored (as
+  before, for local packs).
+### A big portal, and cars through it
+
+Max: "two different portal sizes. the one we currently have and one that
+is twice as tall and wide" so a Steel Ball, a jeep or a tank fits.
+
+- The Portal Add-On adds a **1x8x10 Portal** (4 wide, 6 tall inside the
+  frame: 3.9 by 5.75). It is the same window shape, stretched when the
+  catalog loads (`stretch: [8, 1, 30]`); no new model is committed.
+- `Brick::stretched` (content) is general: any brick can be another size
+  of its shape (`stretchSize = "w d h"` in an Add-On's server.cs). Half
+  a stud of every edge moves out unchanged and the middle stretches, so
+  the frame stays as thin, studs stay one stud each, and the attachment
+  grid and collision boxes follow. The opening, the frame collider, the
+  views and the carries already follow the brick's size.
+- Pairing is by brick kind, so a small and a big portal of one name do
+  not pair. A view costs only the screen it covers (scissored passes), so
+  a big portal costs no more per pixel than a small one.
+- Vehicles already went through by their middle (velocity and spin
+  turned, riders on their seats); the small portal's frame stops any that
+  do not fit. `carry_through_openings` is now one public function the
+  host and the tests share. The driver's chase camera now goes back
+  through a portal behind the vehicle (`portal_view::ray`), as the
+  player's does, instead of looking at the wrong room.
+
+Tests: `bri-content brick::a_stretched_window_keeps_its_frame...`;
+`bri-sim definitions` (a stretched package brick, and one with no
+collision refused); `bri-sim --test portals vehicles::*` (the Steel Ball
+as its Add-On ships and a jeep-sized box go through the big portal at
+several offsets with speed and spin turned; the small one stops both);
+`bri-client portal_view::a_camera_ray_goes_on...`; convert `stretchSize`.
+Then Max: "i wanna drive a tank through one or a stunt plane". The Stunt
+Plane is 9.0 across the wings and 7.6 long (its Add-On's bounds), so the
+Add-On also has a **1x20x12 Portal**: 10 wide and 7.2 tall, 9.9 by 6.95
+inside. Only the plane's body collides (1.8 wide, as in v20), so it
+would squeeze through a smaller portal with its wings through the frame;
+the 1x20x12 fits it whole. `vehicles::the_stunt_plane_flies_through...`
+flies it at 40 and 80 through the biggest pair, speed, spin and turn
+kept. The stock Tank's size needs the converted vehicle pack, which this
+container lacks: the Gate measures it.
+
+Portals, third-person bodies (coordinator 10-01: "half the body shows on
+each side of the portal rather than jumping"). Scene instances carry a
+**clip plane** (`bri_render::scene::ClipPlane`, instance attribute 11,
+`GpuInstances::update_clipped`); the scene and shadow shaders cut below
+it. `KEEP_ALL` cuts nothing, and `fs_main` already discarded, so bricks
+keep their early depth test; only shadow casters that are actually cut
+use the new `fs_clipped` caster pipeline (the rest stay depth only).
+`portal_view::Straddle::find` takes the opening a body's middle (the
+point the simulation carries it by) is in front of and part way
+through; the body then draws twice: itself cut at the opening, and
+carried to the partner cut the other way. Players use their nominal
+middle, vehicles their centre of mass (`ClientVehicles::straddle`), and
+riders the cut of the vehicle they ride, so nothing jumps when the body
+is carried. A body seen only through its far half is still built.
+Evidence: `bri-render --test clip_planes` (a cut square draws only its
+side; two complementary cuts match the whole within 2; a moved copy keeps
+its own cut); `bri-client portal_view::a_body_part_way_through...`.
+Held items and the first-person arms still draw on one side only.
+
+Portals, the big size settled (Max 10-01: a tank and a jeep "with some
+extra space so its not too tight", "well thought out"). The 1x8x10 (3.9
+inside) is too narrow for the Tank with its turret (about 4.7 wide, 4.4
+tall), so the big portal is now **1x14x10**: 7 wide, 6 tall, 6.9 by 5.75
+inside, the same stretched window (`stretchSize = "14 1 30"`; frame at
+its normal thickness; opening, collision, render and pairing all follow
+the size). Room: a tank about 1.1 (2.2 studs) each side and 1.35 above
+(2.7 studs); a jeep (2.8 by 2.2) about 2 each side. Evidence:
+`bri-sim --test portals vehicles::*` drives a Steel Ball, a jeep-sized
+box and a tank-sized box (4.7 by 4.4 by 6.6) through off centre (tank
+±0.8, others ±1.5), turned with speed and spin kept; the 1x4x5 stops all
+three. The 1x20x12 stays for the Stunt Plane.
+
+Big Mirror (Max 10-01: "thinking we do the same for mirror"). The Mirror
+Add-On adds a **1x14x10 Mirror**, the big portal's size, through the same
+`stretchSize` path. A stretched shape with no openings bodies pass now
+takes the base shape's own collision recipe stretched by the same map as
+its faces (`Brick::stretching`, `CollisionBody::stretched`), not only the
+mesh's BLB collision boxes, so any stretched brick is solid like its
+1x4x5 (before, one whose shape had no boxes refused to load). Evidence:
+`bri-sim definitions::tests::an_add_on_brick_reuses...` (a stretched
+plain window collides as the whole 4 by 1.2 by 0.5 brick);
+`bri-content` stretch test.
+
+Sizes checked against the converted pack's measurements (Gate, 10-01):
+Jeep hull 3.21 wide, 2.63 tall (model 4.44 tall); Tank hull 4.70 wide,
+2.71 tall, about 4.4 tall with its turret. Max wondered about 1x12x8
+(5.9 by 4.55 inside): it leaves the turret and the jeep model about 0.1
+of headroom, so the big portal stays 1x14x10 (6.9 by 5.75: tank 1.1 each
+side and 1.35 above, jeep 1.85 each side and 1.3 above its model). The
+test boxes now use these hull sizes. Sizes: 1x4x5 (players), 1x14x10
+(Steel Ball, jeep, tank), 1x20x12 (Stunt Plane); mirrors 1x4x5 and
+1x14x10. Still to confirm on the PC: where the turret's mount node puts
+it.
