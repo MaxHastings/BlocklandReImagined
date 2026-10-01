@@ -230,6 +230,21 @@ pub enum Op {
         item: String,
         equip: bool,
     },
+    /// Take one `item` out of a player's tool list (`%obj.tool[%slot] =
+    /// 0`): the held slot if it holds one, else the first that does. A held
+    /// item is put away.
+    TakeItem {
+        player: u64,
+        item: String,
+    },
+    /// Put an item of this package (or one it depends on) in the world as
+    /// a pickup at `position`, moving at `velocity`, that pops after ten
+    /// seconds like a dropped tool.
+    DropItem {
+        item: String,
+        position: [f32; 3],
+        velocity: [f32; 3],
+    },
     /// Change an object's velocity by `velocity` (units per second). `by`
     /// is the player credited when what it hits is hurt or broken.
     Push {
@@ -453,6 +468,8 @@ impl Op {
             | Self::SetArchetype { .. }
             | Self::Control { .. }
             | Self::GiveItem { .. }
+            | Self::TakeItem { .. }
+            | Self::DropItem { .. }
             | Self::SetFov { .. }
             | Self::SetImageAmmo { .. }
             | Self::MountImage { .. } => "player",
@@ -597,7 +614,17 @@ impl Op {
                 Some((min, max)) => item(tool) && span(min, max),
                 None => tool.is_empty(),
             },
-            Self::GiveItem { item: id, .. } => item(id),
+            Self::GiveItem { item: id, .. } | Self::TakeItem { item: id, .. } => item(id),
+            Self::DropItem {
+                item: id,
+                position,
+                velocity,
+            } => {
+                item(id)
+                    && finite(position)
+                    && finite(velocity)
+                    && glam_length(velocity) <= MAX_PUSH_SPEED
+            }
             Self::Push { velocity, .. } | Self::Tumble { velocity, .. } => {
                 finite(velocity) && glam_length(velocity) <= MAX_PUSH_SPEED
             }
@@ -750,6 +777,8 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::ShowBox { area: Some(_), .. } => "show_box",
         Op::ShowBox { area: None, .. } => "hide_box",
         Op::GiveItem { .. } => "give_item",
+        Op::TakeItem { .. } => "take_item",
+        Op::DropItem { .. } => "drop_item",
         Op::Push { .. } => "push",
         Op::Tumble { .. } => "tumble",
         Op::Hold { .. } => "hold",

@@ -578,6 +578,15 @@ struct FrameUniform {
     /// Target width and height in pixels.
     screen: [f32; 4],
 }
+fn frame_uniform(camera: &Camera, view_projection: Mat4, eye: Vec3, size: (u32, u32)) -> FrameUniform {
+    FrameUniform {
+        view_projection: view_projection.to_cols_array(),
+        eye: eye.extend(1.0).to_array(),
+        fog_color: camera.fog_color,
+        atmosphere: camera.atmosphere,
+        screen: [size.0 as f32, size.1 as f32, 0.0, 0.0],
+    }
+}
 /// What a slot shows and how it samples it (see the fields).
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -881,29 +890,9 @@ impl Reflections {
             queue.write_buffer(&self.slots[kept + 1 + i].buffer, 0, bytemuck::bytes_of(&echo));
         }
         renderer.set_view_count(device, 1 + live);
-        while self.frames.len() < 1 + live {
-            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("mirror frame"),
-                size: std::mem::size_of::<FrameUniform>() as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("mirror frame"),
-                layout: &self.frame_layout,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: buffer.as_entire_binding(),
-                }],
-            });
-            self.frames.push(Bound { buffer, group });
-        }
-        let frame = |view_projection: Mat4, eye: Vec3, size: (u32, u32)| FrameUniform {
-            view_projection: view_projection.to_cols_array(),
-            eye: eye.extend(1.0).to_array(),
-            fog_color: camera.fog_color,
-            atmosphere: camera.atmosphere,
-            screen: [size.0 as f32, size.1 as f32, 0.0, 0.0],
+        self.grow_frames(device, 1 + live);
+        let frame = |view_projection: Mat4, eye: Vec3, size: (u32, u32)| {
+            frame_uniform(camera, view_projection, eye, size)
         };
         queue.write_buffer(
             &self.frames[0].buffer,
@@ -1073,8 +1062,48 @@ impl Reflections {
             );
         }
     }
+    fn grow_frames(&mut self, device: &wgpu::Device, count: usize) {
+        while self.frames.len() < count {
+            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("mirror frame"),
+                size: std::mem::size_of::<FrameUniform>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("mirror frame"),
+                layout: &self.frame_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffer.as_entire_binding(),
+                }],
+            });
+            self.frames.push(Bound { buffer, group });
+        }
+    }
+    /// Mirror surfaces seen from another pass's view past the live planes
+    /// (an environment probe's face), after [`Self::prepare`]: each mirror
+    /// shows its last picture (an echo) or silver, as surfaces past the
+    /// passes do. Drawn by [`Self::draw_surfaces`] with the same `view`.
+    pub fn prepare_view(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        view: usize,
+        view_projection: Mat4,
+        eye: Vec3,
+        size: (u32, u32),
+    ) {
+        if view <= self.plan.planes.len() {
+            return;
+        }
+        self.grow_frames(device, view + 1);
+        let frame = frame_uniform(&self.camera, view_projection, eye, size);
+        queue.write_buffer(&self.frames[view].buffer, 0, bytemuck::bytes_of(&frame));
+    }
     /// Mirror surfaces as `view` sees them (0 the player's, 1 + i live
-    /// plane i's), for `WorldPass::after_opaque`.
+    /// plane i's, or a view [`Self::prepare_view`] set), for
+    /// `WorldPass::after_opaque`.
     pub fn draw_surfaces(&self, pass: &mut wgpu::RenderPass<'_>, view: usize) {
         let (Some(vertices), Some(frame)) = (&self.vertices, self.frames.get(view)) else {
             return;

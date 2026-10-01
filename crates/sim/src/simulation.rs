@@ -358,7 +358,26 @@ impl Simulation {
         colliders: std::ops::Range<usize>,
         enabled: bool,
     ) -> Result<()> {
+        for handle in self.map_handles.get(colliders.clone()).unwrap_or_default() {
+            if let Some(collider) = self.physics.colliders.get(*handle) {
+                self.chunks.note_changed(&collider.compute_aabb());
+            }
+        }
         set_enabled(&mut self.physics, &self.map_handles, colliders, enabled)
+    }
+    /// Record where fixed collision changes (bricks, map shapes) for
+    /// [`Self::take_collision_changes`], or stop.
+    pub fn track_collision_changes(&mut self, track: bool) {
+        self.chunks.track_changes(track);
+    }
+    /// Boxes (min, max) where fixed collision changed since the last take:
+    /// the shapes before and after, as chunks were rebuilt.
+    pub fn take_collision_changes(&mut self) -> Vec<(Vec3, Vec3)> {
+        self.chunks
+            .take_changed()
+            .into_iter()
+            .map(|(min, max)| (Vec3::from(min), Vec3::from(max)))
+            .collect()
     }
     /// Stream the map's terrain collision around moving bodies and `anchors`
     /// (authored spawn regions). Replaces any previously attached terrain.

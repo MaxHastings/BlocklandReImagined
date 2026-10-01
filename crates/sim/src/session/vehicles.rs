@@ -54,7 +54,7 @@ pub(super) struct Vehicles {
     tumbling: BTreeSet<OwnerId>,
     /// Player/vehicle pairs in contact last tick, so run-overs fire on contact.
     touching: BTreeSet<(OwnerId, VehicleId)>,
-    scanned: bool,
+    pub(super) scanned: bool,
 }
 /// Queue length past which a seated player's backlog drains fast (a stall).
 const SEATED_FLOOD: usize = 30;
@@ -333,7 +333,7 @@ impl Session {
                 w.definitions()
                     .filter(|d| !INTERNAL_FAMILIES.contains(&d.family))
                     .map(|d| (d.id.clone(), d.name.trim().to_string()))
-                    .chain(Self::bot_choices())
+                    .chain(self.bot_choices())
                     .collect()
             })
             .unwrap_or_default()
@@ -482,7 +482,7 @@ impl Session {
             .get(&brick_id)
             .and_then(|b| b.vehicle.as_ref())
             .is_some_and(|v| {
-                matches!(&v.vehicle, bri_world::ContentRef::Resolved(id) if super::bots::is_bot_kind(id))
+                matches!(&v.vehicle, bri_world::ContentRef::Resolved(id) if self.is_bot_kind(id))
             })
         {
             return Ok(());
@@ -651,7 +651,7 @@ impl Session {
                 });
             self.reconcile_bot_brick(brick_id, wanted.as_deref())?;
             // Bot kinds share the spawn brick's list but are not vehicles.
-            let wanted = wanted.filter(|id| !super::bots::is_bot_kind(id));
+            let wanted = wanted.filter(|id| !self.is_bot_kind(id));
             let current = self.vehicles.by_brick.get(&brick_id).copied();
             let current_definition = current.and_then(|id| {
                 self.vehicles
@@ -698,7 +698,7 @@ impl Session {
             .context("Unknown brick")?;
         ensure!(brick.vehicle.is_some(), "This brick has no vehicle");
         if let Some(kind) = brick.vehicle.as_ref().and_then(|v| match &v.vehicle {
-            bri_world::ContentRef::Resolved(id) if super::bots::is_bot_kind(id) => Some(id.clone()),
+            bri_world::ContentRef::Resolved(id) if self.is_bot_kind(id) => Some(id.clone()),
             _ => None,
         }) {
             // Bots come back fresh at their brick.
@@ -1114,7 +1114,7 @@ impl Session {
             .filter(|(_, b)| {
                 b.owner == owner
                     && b.vehicle.as_ref().is_some_and(|v| {
-                        !matches!(&v.vehicle, bri_world::ContentRef::Resolved(id) if super::bots::is_bot_kind(id))
+                        !matches!(&v.vehicle, bri_world::ContentRef::Resolved(id) if self.is_bot_kind(id))
                     })
             })
             .map(|(id, _)| *id)
@@ -1735,6 +1735,47 @@ impl Session {
     /// Spawn bricks that currently have a vehicle (`/resetVehicles`).
     pub(super) fn vehicle_spawn_bricks(&self) -> Vec<BrickId> {
         self.vehicles.by_brick.keys().copied().collect()
+    }
+    /// Player-type mounts (horses, boats, cannons, turrets) no rider
+    /// controls: v20's `/clearBots` deletes every player object no client
+    /// controls, and these are players there.
+    pub(super) fn uncontrolled_mounts(&self) -> Vec<VehicleId> {
+        let Some(world) = &self.vehicles.world else {
+            return Vec::new();
+        };
+        let mut out: Vec<VehicleId> = world
+            .ids()
+            .filter(|id| {
+                world.definition_of(*id).is_some_and(|def| {
+                    def.is_actor()
+                        && !self.vehicles.mounted.values().any(|m| {
+                            m.vehicle == *id && def.seat_role(m.seat) == SeatRole::Actor
+                        })
+                })
+            })
+            .collect();
+        out.sort_unstable();
+        out
+    }
+    /// `/clearBots` for a player-type mount: passengers get off; a spawn
+    /// brick keeps its setting, as for a bot.
+    pub(super) fn clear_mount(&mut self, id: VehicleId) -> Result<()> {
+        match self.vehicles.brick_of.get(&id).copied() {
+            Some(brick) => self.clear_brick_vehicle(brick),
+            None => {
+                let riders: Vec<OwnerId> = self
+                    .vehicles
+                    .mounted
+                    .iter()
+                    .filter(|(_, m)| m.vehicle == id)
+                    .map(|(owner, _)| *owner)
+                    .collect();
+                for owner in riders {
+                    self.eject(owner);
+                }
+                self.remove_vehicle(id)
+            }
+        }
     }
     /// `/clearVehicles`: riders get off and the brick keeps its setting
     /// without spawning again until it changes.

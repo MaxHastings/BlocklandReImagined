@@ -56,8 +56,11 @@ use std::collections::{BTreeMap, BTreeSet};
 /// 67: `Checkpoint::map_lights` and `Delta::map_lights`: Add-Ons switch,
 /// dim and recolour map lights (`set_map_lights`).
 ///     Also mirrored copies (`PlaceBlueprint::mirrored`, `Notice::MirrorCopy`) and Add-On selection boxes (`Notice::SelectionBox`).
-/// 69: `PlayerState::tether`: a rope holding a player to a point, which
-/// the owner's prediction runs as the host does (`tether`).
+/// 68: `Command::CancelBrick`: the cancel key reaches the host, for Add-On
+/// images that take it (`commands.cancel`).
+/// 69: `PlayerState::tether`: a rope holding a player to a point (moving
+/// with what it is tied to, winched by keys, pulling straight), which the
+/// owner's prediction runs as the host does (`tether`).
 pub const VERSION: u32 = 69;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;

@@ -42,6 +42,7 @@ impl ToolInventory {
 
 pub(super) fn core_runtime() -> WeaponsWorld {
     WeaponsWorld::new(Pack {
+        effects: Default::default(),
         schema_version: bri_weapons::SCHEMA,
         id: "core-tools".into(),
         items: BTreeMap::new(),
