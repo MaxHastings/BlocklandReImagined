@@ -445,7 +445,7 @@ mod tests {
     }
 
     /// Our own default Add-Ons, as `install` copies them, in load order.
-    const OURS: [&str; 16] = [
+    const OURS: [&str; 15] = [
         "brick_mirror",
         "ragdoll",
         "brick_portal",
@@ -459,7 +459,6 @@ mod tests {
         "trench-kit",
         "trench",
         "trench-hud",
-        "trench-mode",
         "fill-can-tool",
         "fill-can",
     ];

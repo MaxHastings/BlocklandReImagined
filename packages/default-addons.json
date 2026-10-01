@@ -34,7 +34,6 @@
     { "id": "trench-kit", "path": "trench-warfare/trench-kit", "enabled": false },
     { "id": "trench", "path": "trench-warfare/trench", "enabled": false },
     { "id": "trench-hud", "path": "trench-warfare/trench-hud", "enabled": false },
-    { "id": "trench-mode", "path": "trench-warfare/trench-mode", "enabled": false },
     { "id": "fill-can-tool", "path": "fill-can/fill-can-tool", "enabled": false },
     { "id": "fill-can", "path": "fill-can/fill-can", "enabled": false },
     {
@@ -126,10 +125,10 @@
       }
     },
     {
-      "id": "weapon_package_adventure",
+      "id": "weapon_adventurepack",
       "enabled": false,
       "original": {
-        "addon": "Weapon_Package_Adventure",
+        "addon": "Weapon_AdventurePack",
         "title": "Adventure Pack",
         "authors": ["Bushido", "Conan"],
         "version": "1.0.0",
@@ -137,12 +136,34 @@
       }
     },
     {
-      "id": "script_throwmod",
+      "id": "script_playerthrowing",
       "enabled": false,
       "original": {
-        "addon": "Script_Throwmod",
-        "title": "Throwmod",
-        "authors": ["Nobot"],
+        "addon": "Script_PlayerThrowing",
+        "title": "Player Throwing",
+        "authors": ["Electrk"],
+        "version": "1.0.0",
+        "sha256": []
+      }
+    },
+    {
+      "id": "gamemode_slayer",
+      "enabled": false,
+      "original": {
+        "addon": "Gamemode_Slayer",
+        "title": "Slayer",
+        "authors": ["Greek2me"],
+        "version": "4.1.5",
+        "sha256": []
+      }
+    },
+    {
+      "id": "gamemode_slayer_ctf",
+      "enabled": false,
+      "original": {
+        "addon": "Gamemode_Slayer_CTF",
+        "title": "Slayer Capture the Flag",
+        "authors": ["Greek2me"],
         "version": "1.0.0",
         "sha256": []
       }

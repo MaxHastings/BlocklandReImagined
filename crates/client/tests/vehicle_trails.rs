@@ -1,8 +1,13 @@
-//! Vehicle trails: the Stunt Plane's wing-tip contrails (its
+//! Vehicle trails: wing-tip contrails like the Stunt Plane's (its
 //! stuntplane_Contrail.cs mounts contrailImage1/2 at mount3/mount4 while
-//! `vectorLen(%obj.getVelocity()) >= minContrailSpeed`, 30). Flown in the
-//! vehicles runtime and presented as the host's driver sees it and as a
-//! guest does, after the pose crosses the wire.
+//! `vectorLen(%obj.getVelocity()) >= minContrailSpeed`, 30; the importer
+//! turns that into `trails`). Flown in the vehicles runtime and presented as
+//! the host's driver sees it and as a guest does, after the pose crosses the
+//! wire. The plane is a synthetic one of the same shape, since the original
+//! is never in the repository; `addon-import`'s tests check the original
+//! imports to these trails.
+// The synthetic plane is one large `json!`.
+#![recursion_limit = "512"]
 use anyhow::Result;
 use bri_client::actor_effects::{ActorEffects, vehicle_trails, with_vehicle_effects};
 use bri_client::vehicles::ClientVehicles;
@@ -16,20 +21,89 @@ use bri_vehicles::{VehiclesWorld, schema::Pack};
 use glam::{Mat4, Quat, Vec3};
 use std::{collections::BTreeMap, path::Path, sync::Arc};
 
-const PLANE: &str = "vehicle_stunt_plane:vehicle/stuntplanevehicle";
+const PLANE: &str = "test_plane:vehicle/contrailplane";
+const EMITTER: &str = "test_plane:emitter/contrail";
 
 fn root() -> &'static Path {
     Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
 }
-/// The bundled original (packages/default-addons.json), as a checkout's
-/// content holds it once installed (`python tools/addon_bundle.py install`).
-fn plane() -> std::path::PathBuf {
-    std::env::var_os("BRI_CONTENT")
-        .map_or_else(|| root().join("content"), std::path::PathBuf::from)
-        .join("addons/vehicle_stunt_plane")
-}
+/// A flying wheeled plane with an emitter at each wing tip, 4.5 either side,
+/// from speed 30: a particle a millisecond that lives half a second.
 fn plane_pack() -> Pack {
-    Pack::load(plane().join("assets/vehicles.json")).unwrap()
+    let wheel = |x: f32, z: f32, steering: f32, powered: bool| {
+        serde_json::json!({"position": [x, 0.2, z], "radius": 0.5, "rest_length": 0.4, "spring": 60.0,
+            "damping": 8.0, "anti_sway": 1.0, "tire": {"static_friction": 1.5, "kinetic_friction": 1.0,
+                "lateral_force": 600.0, "lateral_damping": 60.0, "lateral_relaxation": 1.0,
+                "longitudinal_force": 600.0, "longitudinal_damping": 60.0, "longitudinal_relaxation": 1.0},
+            "steering": steering, "powered": powered, "model": "test/tire.dts",
+            "model_rotation": [0.0, 0.0, 0.0, 1.0]})
+    };
+    let tip = |node: &str, x: f32| {
+        serde_json::json!({"node": node, "transform": {"position": [x, 0.6, -0.5], "rotation": [0.0, 0.0, 0.0, 1.0]},
+            "emitter": EMITTER, "min_speed": 30.0, "max_speed": null})
+    };
+    let hull: Vec<[f32; 3]> = (0..8)
+        .map(|i| {
+            [
+                if i & 1 == 0 { -1.0 } else { 1.0 },
+                if i & 2 == 0 { 0.0 } else { 1.2 },
+                if i & 4 == 0 { -2.0 } else { 2.0 },
+            ]
+        })
+        .collect();
+    let plane = serde_json::json!({
+        "id": PLANE, "datablock": "ContrailPlaneVehicle", "name": "Contrail Plane", "family": "Wheeled",
+        "energy": {"maximum": 100.0, "minimum_jet": 10.0, "drain_per_32ms": 1.0, "recharge_per_32ms": 1.0, "jet_force": 500.0},
+        "flight": null, "model": "test/plane.dts",
+        "seats": [{"node": "mount0", "transform": {"position": [0.0, 1.0, 0.0], "rotation": [0.0, 0.0, 0.0, 1.0]},
+            "pose": "sit", "controls": true, "weapon": false}],
+        "wheels": [wheel(-1.0, -1.5, 1.0, false), wheel(1.0, 1.5, 0.0, true), wheel(-1.0, 1.5, 0.0, true)],
+        "weapon": null, "attachment_model": null, "attachment_collision_hulls": [], "attachment_mount": null,
+        "attachment_fallback_seat": null, "collision_hulls": [hull],
+        "bounds_min": [-1.0, 0.0, -2.0], "bounds_max": [1.0, 1.2, 2.0],
+        "mass": 200.0, "mass_center": [0.0, 0.3, 0.0], "inertia_box": [2.0, 1.2, 4.0],
+        "density": 1.0, "drag": 0.5, "friction": 0.8, "restitution": 0.3,
+        "max_damage": 120.0, "burn_ticks": 240, "invulnerable_ticks": 60,
+        "initial_explosion": null, "final_explosion": null,
+        "initial_explosion_offset": 0.0, "final_explosion_offset": 0.0,
+        "mount_distance": 3.0, "engine_force": 4000.0, "engine_brake": 500.0, "brake_force": 2000.0,
+        "max_speed": 45.0, "reverse_speed": 10.0, "max_steering": 0.6,
+        "thrust": 3000.0, "reverse_thrust": 1000.0, "lift": 50.0,
+        "yaw_force": 500.0, "pitch_force": 500.0, "roll_force": 500.0, "angular_drag": 2.0,
+        "jump_speed": 8.0, "max_side_speed": 5.0, "run_surface_angle": 50.0,
+        "impact_threshold": 5.0, "impact_damage": 1.0, "strafe_steering": false,
+        "look_pitch": [-1.5, 1.5], "underwater_speeds": [5.0, 3.0, 3.0],
+        "camera": {"max_dist": 8.0, "offset": 2.0, "tilt": 0.1, "lag": 0.1, "decay": 0.5},
+        "look_limits": [0.0, 1.0],
+        "wheeled_flight": {"max_forward_vel": 40.0, "max_reverse_vel": 20.0,
+            "horizontal_surface_force": 100.0, "vertical_surface_force": 100.0, "stall_speed": 10.0, "sled": false},
+        "runover_speed": 5.0, "runover_damage": 20.0, "runover_push": 5.0,
+        "protect_direct": false, "protect_radius": false, "protect_burn": false,
+        "trails": [tip("mount3", 4.5), tip("mount4", -4.5)],
+        "effects": {
+            "particles": [{"id": "test_plane:particle/contrail", "texture": "base/data/particles/cloud",
+                "alpha_blend": false, "lifetime": 0.5, "lifetime_variance": 0.0, "drag": 0.0, "wind": 0.0,
+                "gravity": 0.0, "inherited_velocity": 0.0, "acceleration": 0.0, "spin_degrees": 0.0,
+                "random_spin": [0.0, 0.0],
+                "keys": [{"time": 0.0, "color": [1.0, 1.0, 1.0, 1.0], "size": 0.1},
+                         {"time": 1.0, "color": [1.0, 1.0, 1.0, 0.0], "size": 0.1}]}],
+            "emitters": [{"id": EMITTER, "name": "", "particles": ["test_plane:particle/contrail"],
+                "period": 0.001, "period_variance": 0.0, "speed": 0.0, "speed_variance": 0.0,
+                "offset": 0.0, "offset_variance": 0.0, "theta_degrees": [0.0, 180.0], "phi_rate_degrees": 0.0,
+                "phi_variance_degrees": 360.0, "lifetime": 0.0, "lifetime_variance": 0.0, "orient": false,
+                "orient_on_velocity": true, "override_advance": false, "use_emitter_colors": false,
+                "use_emitter_sizes": false, "use_placement_velocity": false, "node_time_scale": 1.0,
+                "point_node_time_scale": 1.0}]
+        },
+        "authored": {}, "adaptations": [],
+    });
+    let pack: Pack = serde_json::from_value(serde_json::json!({
+        "schema_version": bri_vehicles::schema::SCHEMA_VERSION,
+        "definitions": [plane], "assets": [], "evidence": [], "unresolved": [], "animation_aliases": {},
+    }))
+    .unwrap();
+    pack.validate().unwrap();
+    pack
 }
 
 /// An effects pack with the base game's cloud texture and nothing else.
@@ -65,8 +139,7 @@ fn actor_effects(pack: Arc<EffectsPack>, vehicles: &Pack) -> ActorEffects {
     let (pack, notes) = with_vehicle_effects(pack, vehicles).unwrap();
     assert!(notes.is_empty(), "{notes:?}");
     let weapons =
-        bri_weapons::Pack::from_json(&std::fs::read(plane().join("assets/weapons.json")).unwrap())
-            .unwrap();
+        bri_weapons::Pack::from_json(br#"{ "schema_version": 3, "id": "test_plane" }"#).unwrap();
     ActorEffects::new(pack, Arc::new(weapons), Default::default()).unwrap()
 }
 
@@ -195,8 +268,7 @@ fn pose(tick: u64, v: &bri_vehicles::world::VehicleSnapshot) -> VehiclePose {
 }
 
 #[test]
-#[ignore = "the bundled original Stunt Plane in content/addons (python tools/addon_bundle.py install)"]
-fn the_stunt_plane_streams_contrails_off_its_wing_tips_past_speed_30() -> Result<()> {
+fn a_plane_streams_contrails_off_its_wing_tips_past_speed_30() -> Result<()> {
     let pack = plane_pack();
     let d = pack.definitions.iter().find(|d| d.id == PLANE).unwrap();
     assert_eq!(d.trails.len(), 2, "{:?}", d.trails);
@@ -289,7 +361,6 @@ fn the_stunt_plane_streams_contrails_off_its_wing_tips_past_speed_30() -> Result
 }
 
 #[test]
-#[ignore = "the bundled original Stunt Plane in content/addons (python tools/addon_bundle.py install)"]
 fn trails_stop_below_their_speed_and_their_particles_drain() -> Result<()> {
     let pack = plane_pack();
     let d = pack.definitions.iter().find(|d| d.id == PLANE).unwrap();
@@ -334,17 +405,13 @@ fn trails_stop_below_their_speed_and_their_particles_drain() -> Result<()> {
 }
 
 #[test]
-#[ignore = "requires the generated effects pack and the bundled Stunt Plane"]
+#[ignore = "requires the generated effects pack"]
 fn the_base_effects_pack_draws_the_plane_contrails() -> Result<()> {
     // The contrail particle uses base/data/particles/cloud, which the base
     // game's effects pack carries; merging adds the Add-On's emitter.
     let effects = EffectsPack::load(root().join("content/effects-runtime-pack-005"))?;
     let (merged, notes) = with_vehicle_effects(effects, &plane_pack())?;
     assert!(notes.is_empty(), "{notes:?}");
-    assert!(
-        merged
-            .emitter_ids()
-            .any(|id| id == "vehicle_stunt_plane:emitter/contrailemitter")
-    );
+    assert!(merged.emitter_ids().any(|id| id == EMITTER));
     Ok(())
 }
