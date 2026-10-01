@@ -1327,6 +1327,7 @@ fn teleport_image() -> bri_weapons::Image {
         magazine: None,
         volleys: vec![],
         last_shot: None,
+        state_shots: Default::default(),
     }
 }
 

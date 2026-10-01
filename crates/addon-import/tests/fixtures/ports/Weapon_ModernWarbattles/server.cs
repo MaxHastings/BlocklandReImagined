@@ -196,6 +196,81 @@ datablock ProjectileData(shrapGrenProjectile : standinPistolProjectile)
    explodeOnDeath      = true;
 };
 
+datablock ProjectileData(heavyMachineGunProjectile : standinPistolProjectile)
+{
+   directDamage        = 12;
+};
+
+datablock ItemData(heavyMachineGunItem : standinPistolItem)
+{
+   uiName = "Stand-in Heavy Gun";
+   image = heavyMachineGunImage;
+   maxmag = 30;
+   ammotype = "Heavy Machine Gun";
+};
+
+// Held down, each shot spreads wider than the last, to the third.
+datablock ShapeBaseImageData(heavyMachineGunImage : standinPistolImage)
+{
+   item = heavyMachineGunItem;
+   projectile = heavyMachineGunProjectile;
+   stateTransitionOnTimeout[2]      = "Fire1";
+   stateTimeoutValue[2]             = 0.1;
+
+   stateName[7]                     = "Fire1";
+   stateTransitionOnTimeout[7]      = "Fire2";
+   stateTransitionOnTriggerUp[7]    = "LoadCheckA";
+   stateTransitionOnNoAmmo[7]       = "LoadCheckA";
+   stateTimeoutValue[7]             = 0.1;
+   stateFire[7]                     = true;
+   stateScript[7]                   = "onFire2";
+   stateWaitForTimeout[7]           = true;
+
+   stateName[8]                     = "Fire2";
+   stateTransitionOnTimeout[8]      = "Fire2";
+   stateTransitionOnTriggerUp[8]    = "LoadCheckA";
+   stateTransitionOnNoAmmo[8]       = "LoadCheckA";
+   stateTimeoutValue[8]             = 0.1;
+   stateFire[8]                     = true;
+   stateScript[8]                   = "onFire3";
+   stateWaitForTimeout[8]           = true;
+};
+
+function heavyMachineGunImage::onFire(%this, %obj, %slot)
+{
+   %projectile = %this.projectile;
+   %spread = 0.001;
+   %shellcount = 1;
+   %obj.setVelocity(VectorAdd(%obj.getVelocity(), VectorScale(%obj.getEyeVector(), "-1")));
+   for(%i = 0; %i < %shellcount; %i++)
+      %p = new Projectile() { dataBlock = %projectile; scale = "2 2 2"; };
+}
+
+function heavyMachineGunImage::onFire2(%this, %obj, %slot)
+{
+   %projectile = %this.projectile;
+   %spread = 0.002;
+   %shellcount = 1;
+   %obj.setVelocity(VectorAdd(%obj.getVelocity(), VectorScale(%obj.getEyeVector(), "-0.5")));
+   for(%i = 0; %i < %shellcount; %i++)
+      %p = new Projectile() { dataBlock = %projectile; scale = "2 2 2"; };
+}
+
+function heavyMachineGunImage::onFire3(%this, %obj, %slot)
+{
+   %projectile = %this.projectile;
+   %spread = 0.003;
+   %shellcount = 1;
+   %obj.setVelocity(VectorAdd(%obj.getVelocity(), VectorScale(%obj.getEyeVector(), "-0.5")));
+   for(%i = 0; %i < %shellcount; %i++)
+      %p = new Projectile() { dataBlock = %projectile; scale = "2 2 2"; };
+}
+
+function heavyMachineGunProjectile::damage(%this, %obj, %col, %fade, %pos, %normal)
+{
+   %col.damage(%obj, %pos, %this.directDamage, %this.directDamageType);
+}
+
 function standinPistolImage::onFire(%this, %obj, %slot)
 {
    %projectile = %this.projectile;

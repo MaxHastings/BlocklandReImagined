@@ -387,6 +387,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
             max_bounces: 0,
             children: Vec::new(),
             aura: None,
+            fixed_damage: false,
         };
         pack.projectiles.insert(id, p);
     }
@@ -495,6 +496,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 magazine: None,
                 volleys: vec![],
                 last_shot: None,
+                state_shots: Default::default(),
             },
         );
     }

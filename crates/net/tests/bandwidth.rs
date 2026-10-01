@@ -78,6 +78,7 @@ fn rocket_pack() -> bri_weapons::Pack {
         magazine: None,
         volleys: vec![],
         last_shot: None,
+        state_shots: Default::default(),
         states,
     };
     let item = bri_weapons::Item {
@@ -141,6 +142,7 @@ fn rocket_pack() -> bri_weapons::Pack {
         max_bounces: 0,
         children: Vec::new(),
         aura: None,
+        fixed_damage: false,
     };
     let pack = bri_weapons::Pack {
         effects: Default::default(),

@@ -1894,7 +1894,15 @@ impl WeaponsWorld {
                 return true;
             }
         }
-        match script.to_ascii_lowercase().as_str() {
+        let script = script.to_ascii_lowercase();
+        // A fire state of its own (`onFire2`): its shot fires as onFire's.
+        let state_shot = image.state_shots.get(&script).copied();
+        let script = if state_shot.is_some() {
+            "onfire"
+        } else {
+            script.as_str()
+        };
+        match script {
             "oncharge" => {
                 if name.contains("spear") || name.contains("football") {
                     self.animation(id, "spearReady");
@@ -2019,6 +2027,7 @@ impl WeaponsWorld {
                 };
                 // The magazine's last rounds fire the image's last shot.
                 let (shot, volleys) = match image.last_shot.as_ref().filter(|_| last) {
+                    _ if state_shot.is_some() => (state_shot, image.volleys.as_slice()),
                     Some(l) => (Some(l.shot), l.volleys.as_slice()),
                     None => (image.shot, image.volleys.as_slice()),
                 };
@@ -2169,7 +2178,7 @@ impl WeaponsWorld {
                         id,
                         origin,
                         turn * velocity * a.frame.scale,
-                        a.frame.scale,
+                        a.frame.scale * shot.scale,
                     ) {
                         self.events.push(Event::Diagnostic {
                             actor: Some(id),
@@ -2549,7 +2558,7 @@ impl WeaponsWorld {
             self.events.push(Event::Damage {
                 source: p.source,
                 target,
-                amount: d.damage.clamp(0.0, 100.0) * p.scale,
+                amount: d.damage.clamp(0.0, 100.0) * if d.fixed_damage { 1.0 } else { p.scale },
                 kind: d.damage_type.clone(),
                 position,
                 direction: p.velocity.normalize_or_zero(),

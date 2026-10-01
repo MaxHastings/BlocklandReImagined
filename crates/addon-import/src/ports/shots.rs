@@ -113,6 +113,8 @@ struct Block {
     count: u32,
     /// `setVelocity` recoil along the aim, when the block has one.
     recoil: Option<f32>,
+    /// The `scale` the script gave the projectiles it made.
+    scale: f32,
 }
 
 /// A body without its `//` comments.
@@ -121,6 +123,20 @@ fn uncommented(body: &str) -> String {
         .map(|l| l.find("//").map_or(l, |i| &l[..i]))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// The `scale = "x y z"` the first projectile made in `text` was given:
+/// its height, as v20 read a projectile's scale.
+fn scale_of(text: &str) -> f32 {
+    let scale =
+        regex::RegexBuilder::new(r#"\bscale\s*=\s*"\s*[0-9.]+\s+[0-9.]+\s+([0-9]*\.?[0-9]+)\s*""#)
+            .case_insensitive(true)
+            .build()
+            .expect("pattern");
+    scale
+        .captures(text)
+        .and_then(|c| c[1].parse().ok())
+        .unwrap_or(1.0)
 }
 
 /// The first `setVelocity` kick back along the aim in `text`.
@@ -159,6 +175,7 @@ fn blocks(body: &str) -> Vec<Block> {
                 spread: c[2].parse().unwrap_or(0.0),
                 count: c[3].parse().unwrap_or(1),
                 recoil: recoil_of(&body[whole.end()..end]),
+                scale: scale_of(&body[whole.end()..end]),
             }
         })
         .collect()
@@ -229,11 +246,14 @@ pub fn shots(s: &Shots, weapons: &Value, bodies: &super::Bodies) -> Result<Value
                 volleys
                     .push(json!({ "projectile": p, "projectiles": b.count, "spread": b.spread }));
             }
-            let fired = json!({
+            let mut fired = json!({
                 "projectiles": main.count,
                 "spread": main.spread,
                 "recoil": main.recoil.unwrap_or(0.0),
             });
+            if main.scale != 1.0 {
+                fired["scale"] = json!(main.scale);
+            }
             Ok((fired, volleys, projectile(main)?))
         };
         let (fired, volleys, own) = read(shot)?;
@@ -262,6 +282,61 @@ pub fn shots(s: &Shots, weapons: &Value, bodies: &super::Bodies) -> Result<Value
         }
         images.insert(id.clone(), patch);
     }
+    // Fire states with scripts of their own (`onFire2`), each one shot of
+    // the image's own projectile.
+    for (id, image) in weapons["images"].as_object().into_iter().flatten() {
+        let name = image["name"].as_str().unwrap_or_default();
+        let mut state_shots = serde_json::Map::new();
+        for state in image["states"].as_array().into_iter().flatten() {
+            let script = state["script"]
+                .as_str()
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            if script.is_empty() || script == "onfire" || state_shots.contains_key(&script) {
+                continue;
+            }
+            let Some(body) = bodies.get(&format!("{}::{script}", name.to_ascii_lowercase())) else {
+                continue;
+            };
+            let blocks = blocks(body);
+            let [b] = blocks.as_slice() else {
+                ensure!(
+                    blocks.is_empty(),
+                    "{name}: its {script} fires {} sets; a fire state's own shot is one",
+                    blocks.len()
+                );
+                continue;
+            };
+            ensure!(
+                b.projectile.is_none(),
+                "{name}: its {script} fires another projectile than the image's"
+            );
+            let mut shot = json!({
+                "projectiles": b.count,
+                "spread": b.spread,
+                "recoil": b.recoil.unwrap_or(0.0),
+            });
+            if b.scale != 1.0 {
+                shot["scale"] = json!(b.scale);
+            }
+            state_shots.insert(script, shot);
+        }
+        if !state_shots.is_empty() {
+            let entry = images.entry(id.clone()).or_insert_with(|| json!({}));
+            entry["state_shots"] = Value::Object(state_shots);
+        }
+    }
+    // Projectiles whose own `damage` dealt `directDamage` as it was, where
+    // v20's default scaled it with the projectile.
+    let mut projectiles = serde_json::Map::new();
+    for (id, p) in weapons["projectiles"].as_object().into_iter().flatten() {
+        let name = p["name"].as_str().unwrap_or_default().to_ascii_lowercase();
+        if let Some(body) = bodies.get(&format!("{name}::damage"))
+            && !uncommented(body).to_ascii_lowercase().contains("getscale")
+        {
+            projectiles.insert(id.clone(), json!({ "fixed_damage": true }));
+        }
+    }
     for (id, image) in weapons["images"].as_object().into_iter().flatten() {
         let patch = scripted(image, weapons, bodies);
         if patch.as_object().is_some_and(|p| !p.is_empty()) {
@@ -276,7 +351,11 @@ pub fn shots(s: &Shots, weapons: &Value, bodies: &super::Bodies) -> Result<Value
             }
         }
     }
-    Ok(json!({ "images": images }))
+    let mut out = json!({ "images": images });
+    if !projectiles.is_empty() {
+        out["projectiles"] = Value::Object(projectiles);
+    }
+    Ok(out)
 }
 
 /// What an image's state scripts did by hand that its states can say
@@ -337,12 +416,15 @@ fn scripted(image: &Value, weapons: &Value, bodies: &super::Bodies) -> Value {
             state["arm"] = json!(arm[1].to_ascii_lowercase());
             any = true;
         }
-        if script == "onfire"
-            && let Some(kick) = blast_re
-                .captures(&body)
-                .and_then(|c| kick_of(weapons, &c[1]))
+        if let Some(kick) = blast_re
+            .captures(&body)
+            .and_then(|c| kick_of(weapons, &c[1]))
         {
-            patch["shot"] = json!({ "kick": kick });
+            if script == "onfire" {
+                patch["shot"] = json!({ "kick": kick });
+            } else if blocks(&body).len() == 1 {
+                patch["state_shots"][&script] = json!({ "kick": kick });
+            }
         }
     }
     if any {
@@ -498,7 +580,7 @@ mod tests {
         let body = r#"
             %projectile = %this.projectile; %spread = 0.004; %shellcount = 15;
             %obj.setVelocity(VectorAdd(%obj.getVelocity(),VectorScale(%aimVec,"-2")));
-            for(...) {}
+            for(...) { %p = new Projectile() { scale = "1.5 1.5 1.5"; }; }
             %projectile = slugProjectile;
             %spread = 0.0005;
             %shellcount = 1;
@@ -511,13 +593,15 @@ mod tests {
                     projectile: None,
                     spread: 0.004,
                     count: 15,
-                    recoil: Some(2.0)
+                    recoil: Some(2.0),
+                    scale: 1.5,
                 },
                 Block {
                     projectile: Some("slugProjectile".into()),
                     spread: 0.0005,
                     count: 1,
-                    recoil: None
+                    recoil: None,
+                    scale: 1.0,
                 },
             ]
         );

@@ -291,6 +291,13 @@ pub struct Image {
     /// two-barrel gun's single barrel.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_shot: Option<LastShot>,
+    /// Shots fired on entering a state whose script is not `onFire`, by
+    /// that script, lowercase: v20 guns whose fire states each ran a
+    /// script of their own (`onFire2`, `onFire3`) with its own spread and
+    /// recoil, as a heavy gun's fire spreads wider as it keeps firing.
+    /// Each takes rounds and fires `volleys` as `onFire`'s shot does.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub state_shots: BTreeMap<String, Shot>,
 }
 /// [`Image::last_shot`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -516,6 +523,18 @@ pub struct Shot {
     /// own game, from the shot it already sees: nothing is sent for it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kick: Option<Kick>,
+    /// The projectiles' size against their holder's, 0.1 to 10, as a v20
+    /// script's `scale` on the projectiles it made: it grows their look
+    /// and blast and, unless [`ProjectileDef::fixed_damage`], their
+    /// damage. Their speed is the shot's.
+    #[serde(default = "one_f32", skip_serializing_if = "is_one")]
+    pub scale: f32,
+}
+fn one_f32() -> f32 {
+    1.0
+}
+fn is_one(n: &f32) -> bool {
+    *n == 1.0
 }
 /// [`Shot::kick`]: a Torque `CameraShake` on the shooter's own view, in
 /// its units (about 10 degrees of turn per unit of amplitude), fading out
@@ -552,6 +571,7 @@ impl Shot {
         rested: None,
         hitscan: None,
         kick: None,
+        scale: 1.0,
     };
     /// The spread of a shot from a holder moving at `speed`, `idle_ticks`
     /// after their last shot (None for never): moving spread while moving,
@@ -719,6 +739,11 @@ pub struct ProjectileDef {
     /// gas, a lingering ember).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub aura: Option<Aura>,
+    /// Its direct damage stays as authored at any scale, where v20's own
+    /// `ProjectileData::damage` scaled it with the projectile: projectiles
+    /// whose `damage` method dealt `directDamage` as it was.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub fixed_damage: bool,
 }
 fn is_zero_u32(n: &u32) -> bool {
     *n == 0
@@ -829,6 +854,7 @@ impl Default for ProjectileDef {
             max_bounces: 0,
             children: Vec::new(),
             aura: None,
+            fixed_damage: false,
         }
     }
 }
@@ -1246,6 +1272,7 @@ impl Pack {
                     && (0.0..=100.0).contains(&s.recoil)
                     && s.moving_spread.is_none_or(|m| (0.0..=1.0).contains(&m))
                     && (0.0..=50.0).contains(&s.moving_speed)
+                    && (0.1..=10.0).contains(&s.scale)
                     && s.kick.is_none_or(|k| {
                         (0.0..=1.0).contains(&k.amplitude)
                             && (0.1..=30.0).contains(&k.frequency)
@@ -1275,8 +1302,21 @@ impl Pack {
             ensure!(
                 image.shot.is_none_or(|s| shot_ok(&s)),
                 "Invalid image shot {id}: 1 to 64 projectiles, spreads 0 to 1, recoil 0 to 100, \
-                 moving_speed 0 to 50, rested after 1 to 1200 ticks, kick amplitude 0 to 1, \
+                 moving_speed 0 to 50, scale 0.1 to 10, rested after 1 to 1200 ticks, kick amplitude 0 to 1, \
                  frequency 0.1 to 30, seconds 0.05 to 2"
+            );
+            ensure!(
+                image.state_shots.len() <= 8
+                    && image.state_shots.iter().all(|(script, s)| {
+                        !script.is_empty()
+                            && script.len() <= 64
+                            && *script == script.to_ascii_lowercase()
+                            && script != "onfire"
+                            && shot_ok(s)
+                            && s.hitscan.is_none()
+                    }),
+                "Invalid state shots of image {id}: at most 8, by lowercase state script other \
+                 than onfire, each a shot as its own without hitscan"
             );
             ensure!(
                 volleys_ok(&image.volleys),

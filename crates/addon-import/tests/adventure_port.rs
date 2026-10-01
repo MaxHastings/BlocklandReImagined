@@ -157,6 +157,26 @@ fn ammo_system_guns_get_magazines_that_reload_like_their_states() {
             spread: 0.0005,
         }]
     );
+    // The heavy gun's fire states each run a script of their own, spread
+    // wider as the trigger stays down; every round is made twice the size,
+    // which its own damage method ignored.
+    let heavy = image("heavymachinegunimage");
+    let shot = heavy.shot.unwrap();
+    assert_eq!(
+        (shot.projectiles, shot.spread, shot.recoil, shot.scale),
+        (1, 0.001, 1.0, 2.0)
+    );
+    let fires: Vec<_> = heavy
+        .state_shots
+        .iter()
+        .map(|(s, shot)| (s.as_str(), shot.spread, shot.recoil, shot.scale))
+        .collect();
+    assert_eq!(
+        fires,
+        [("onfire2", 0.002, 0.5, 2.0), ("onfire3", 0.003, 0.5, 2.0)]
+    );
+    assert!(pack.projectiles[&format!("{NS}:projectile/heavymachinegunprojectile")].fixed_damage);
+    assert!(!pack.projectiles[&format!("{NS}:projectile/standinshotgunprojectile")].fixed_damage);
     // The raycast guns: hitscan with a ray projectile of their own that
     // carries the image's damage, the revolver's kick from its onFire.
     let revolver = image("revolverimage");
@@ -193,7 +213,11 @@ fn ammo_system_guns_get_magazines_that_reload_like_their_states() {
     assert_eq!(
         children,
         [
-            (format!("{NS}:projectile/shrapgrenclusterprojectile"), 4, true),
+            (
+                format!("{NS}:projectile/shrapgrenclusterprojectile"),
+                4,
+                true
+            ),
             (format!("{NS}:projectile/shrapgrentrailprojectile"), 3, true)
         ]
     );

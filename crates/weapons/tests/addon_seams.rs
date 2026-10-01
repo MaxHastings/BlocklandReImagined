@@ -252,7 +252,10 @@ fn an_on_fire_command_counts_the_shot_and_the_round_still_flies() {
     );
     let mut w = WeaponsWorld::new(Pack::from_json(json.as_bytes()).unwrap()).unwrap();
     w.add_actor(A, 5).unwrap();
-    for (item, command, rounds) in [("kit:weapon/rifle", "kit:fired", 1), ("kit:weapon/tool", "kit:use", 0)] {
+    for (item, command, rounds) in [
+        ("kit:weapon/rifle", "kit:fired", 1),
+        ("kit:weapon/tool", "kit:use", 0),
+    ] {
         let slot = w.give(A, item).unwrap();
         w.equip(A, Some(slot)).unwrap();
         step(&mut w, 10);
@@ -269,7 +272,11 @@ fn an_on_fire_command_counts_the_shot_and_the_round_still_flies() {
         w.trigger(A, false).unwrap();
         step(&mut w, 20);
         assert_eq!(commands, 1, "{item}: the command runs once a shot");
-        assert_eq!(w.projectiles().count() - before, rounds, "{item}: rounds in flight");
+        assert_eq!(
+            w.projectiles().count() - before,
+            rounds,
+            "{item}: rounds in flight"
+        );
         w.take_item(A, item).unwrap();
     }
 }
@@ -322,7 +329,10 @@ fn a_volley_fires_its_own_projectile_after_the_pellets() {
             }
         }
     }
-    let pellets = spawned.iter().filter(|(d, _)| d == "kit:projectile/pellet").count();
+    let pellets = spawned
+        .iter()
+        .filter(|(d, _)| d == "kit:projectile/pellet")
+        .count();
     let blasts: Vec<_> = spawned
         .iter()
         .filter(|(d, _)| d == "kit:projectile/blast")
@@ -330,10 +340,17 @@ fn a_volley_fires_its_own_projectile_after_the_pellets() {
     assert_eq!((pellets, blasts.len()), (6, 1));
     // Straight along the aim at 40, less the recoil of 3 it inherits.
     let aim = Frame::default().direction.normalize();
-    assert!((blasts[0].1 - aim * 37.0).length() < 1e-3, "{:?}", blasts[0].1);
+    assert!(
+        (blasts[0].1 - aim * 37.0).length() < 1e-3,
+        "{:?}",
+        blasts[0].1
+    );
 
     // A volley of a projectile the pack lacks is refused.
-    let bad = json.replace("kit:projectile/blast\", \"projectiles\"", "kit:projectile/none\", \"projectiles\"");
+    let bad = json.replace(
+        "kit:projectile/blast\", \"projectiles\"",
+        "kit:projectile/none\", \"projectiles\"",
+    );
     assert!(Pack::from_json(bad.as_bytes()).is_err());
 }
 
@@ -448,4 +465,63 @@ fn a_projectile_bursts_into_several_sets_of_children() {
     assert_eq!((shards.len(), trails.len()), (5, 3), "{spawned:?}");
     assert!(shards.iter().all(|s| (s - 20.0).abs() < 1e-3));
     assert!(trails.iter().all(|s| (s - 40.0).abs() < 1e-3));
+}
+
+/// A heavy gun's fire states each ran a script of their own (`onFire2`,
+/// `onFire3`) with its own spread and recoil, every round made larger:
+/// `state_shots` fire on entering those states, each taking its round.
+#[test]
+fn a_fire_state_of_its_own_fires_its_own_shot() {
+    let json = format!(
+        r#"{{
+            "schema_version": {SCHEMA},
+            "id": "kit",
+            "items": {{ "kit:weapon/heavy": {{ "ui_name": "Heavy", "image": "kit:image/heavy" }} }},
+            "images": {{
+                "kit:image/heavy": {{
+                    "projectile": "kit:projectile/round",
+                    "shot": {{ "projectiles": 1, "recoil": 1.0, "scale": 1.5 }},
+                    "state_shots": {{
+                        "onfire2": {{ "projectiles": 1, "spread": 0.003, "recoil": 0.5, "scale": 1.5 }},
+                        "onfire3": {{ "projectiles": 1, "spread": 0.004, "recoil": 0.25, "scale": 1.5 }}
+                    }},
+                    "magazine": {{ "size": 4, "ammo": "heavy", "reload_ticks": 600, "reserve": 0 }},
+                    "states": [
+                        {{ "name": "Activate", "ticks": 2, "timeout": 1 }},
+                        {{ "name": "Ready", "down": 2, "no_ammo": 5 }},
+                        {{ "name": "Fire", "ticks": 4, "script": "onFire", "timeout": 3 }},
+                        {{ "name": "Fire2", "ticks": 4, "script": "onFire2", "timeout": 4, "up": 1, "no_ammo": 5 }},
+                        {{ "name": "Fire3", "ticks": 4, "script": "onFire3", "timeout": 4, "up": 1, "no_ammo": 5 }},
+                        {{ "name": "Empty", "ammo": 1 }}
+                    ]
+                }}
+            }},
+            "projectiles": {{
+                "kit:projectile/round": {{ "speed": 100.0, "inherit": 1.0, "lifetime_ticks": 240, "fade_ticks": 240,
+                    "damage": 10.0, "fixed_damage": true }}
+            }}
+        }}"#
+    );
+    let mut w = WeaponsWorld::new(Pack::from_json(json.as_bytes()).unwrap()).unwrap();
+    w.add_actor(A, 5).unwrap();
+    let slot = w.give(A, "kit:weapon/heavy").unwrap();
+    w.equip(A, Some(slot)).unwrap();
+    step(&mut w, 10);
+    w.trigger(A, true).unwrap();
+    let mut recoils = vec![];
+    for _ in 0..40 {
+        for e in w.step(&mut Open) {
+            if let Event::Recoil { velocity, .. } = e {
+                recoils.push(velocity.length());
+            }
+        }
+    }
+    // onFire, onFire2, then onFire3 until the magazine is empty.
+    assert_eq!(recoils, [1.0, 0.5, 0.25, 0.25]);
+    assert_eq!(w.ammo(A).unwrap().rounds, 0);
+    assert!(w.projectiles().count() == 4 && w.projectiles().all(|p| p.scale == 1.5));
+
+    // A state shot's script is lowercase and not onfire's.
+    let bad = json.replace(r#""onfire2": {"#, r#""onfire": {"#);
+    assert!(Pack::from_json(bad.as_bytes()).is_err());
 }
