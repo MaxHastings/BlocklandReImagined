@@ -1,0 +1,173 @@
+// Every script operation, one line each, by the capability it needs. This
+// file holds only `mod` lines and the list below; git merges it with the
+// union driver (.gitattributes), so two branches that each add an
+// operation never conflict here. Adding one:
+// docs/architecture/package-runtime.md, "Adding an operation".
+
+pub mod world_edit;
+pub use world_edit::*;
+pub mod player;
+pub use player::*;
+pub mod damage;
+pub use damage::*;
+pub mod entity;
+pub use entity::*;
+pub mod chat;
+pub use chat::*;
+pub mod build;
+pub use build::*;
+pub mod effects;
+pub use effects::*;
+pub mod physics;
+pub use physics::*;
+pub mod minigame;
+pub use minigame::*;
+pub mod lighting;
+pub use lighting::*;
+pub mod environment;
+pub use environment::*;
+pub mod storage;
+pub use storage::*;
+pub mod brick_events;
+pub use brick_events::*;
+pub mod bots;
+pub use bots::*;
+
+#[macro_export]
+macro_rules! for_each_op {
+    ($callback:ident) => {
+        $callback! {
+            RemoveBrick = world_edit,
+            PlaceBrick = world_edit,
+            PlantBrick = world_edit,
+            PlaceVoxel = world_edit,
+            SetAvatarColors = player,
+            SetAvatarParts = player,
+            Explode = damage,
+            Damage = damage,
+            Teleport = player,
+            Respawn = player,
+            RemoveBody = player,
+            SetArchetype = player,
+            PushArchetype = player,
+            PopArchetype = player,
+            SetBlockState = world_edit,
+            Control = player,
+            SpawnEntity = entity,
+            RemoveEntity = entity,
+            Steer = entity,
+            Label = entity,
+            Tell = chat,
+            Broadcast = chat,
+            TellMinigame = chat,
+            TellPlayers = chat,
+            PrintMinigame = chat,
+            CopyBuild = build,
+            CopyBox = build,
+            HighlightCopy = build,
+            SaveCopy = build,
+            ListCopies = build,
+            LoadCopy = build,
+            MirrorCopy = build,
+            MirrorGhost = build,
+            MoveCopy = build,
+            DropCopy = build,
+            ShowCopy = build,
+            HideCopy = build,
+            ShiftCopy = build,
+            RotateCopy = build,
+            PlantCopy = build,
+            FloatCopy = build,
+            PlantWait = build,
+            CancelCopy = build,
+            PivotCopy = build,
+            PlantAs = build,
+            CutCopy = world_edit,
+            PaintCopy = world_edit,
+            WrenchCopy = world_edit,
+            SuperCut = world_edit,
+            FillBox = world_edit,
+            TakePaint = build,
+            SetScrollMode = player,
+            PaintFill = world_edit,
+            PaintVehicle = world_edit,
+            SetTempLook = player,
+            ShowBox = effects,
+            ShowShapes = effects,
+            GiveItem = player,
+            SetTools = player,
+            TakeItem = player,
+            DropItem = player,
+            RemoveDrop = player,
+            NameDrop = player,
+            Push = physics,
+            Tumble = physics,
+            Hold = physics,
+            HoldDistance = physics,
+            LetGo = physics,
+            Tether = physics,
+            TetherLength = physics,
+            Untether = physics,
+            Reach = physics,
+            SpawnVehicle = physics,
+            RemoveVehicle = physics,
+            Fire = damage,
+            SpawnExplosion = damage,
+            Heal = damage,
+            Print = chat,
+            PlantError = chat,
+            MessageBox = chat,
+            Ask = chat,
+            ShowReport = chat,
+            ReportColumn = minigame,
+            Sound = effects,
+            Beam = effects,
+            PlayThread = effects,
+            SetMapLights = lighting,
+            SetEnvironment = environment,
+            SetFov = player,
+            SetSpeedScale = player,
+            GiveAmmo = player,
+            SetReserve = player,
+            SetRounds = player,
+            Reload = player,
+            SetImageAmmo = player,
+            SetImageLoaded = player,
+            MountImage = player,
+            Emote = player,
+            WearImage = player,
+            SetTeams = minigame,
+            SetTeam = minigame,
+            SetScore = minigame,
+            ResetMinigame = minigame,
+            SetGameRule = minigame,
+            CreateMinigame = minigame,
+            SetHostData = storage,
+            RestoreMinigame = minigame,
+            ReviveBricks = minigame,
+            PlaceMember = minigame,
+            EndRound = minigame,
+            SetSetting = minigame,
+            SetBrickItem = world_edit,
+            SetBrickColor = world_edit,
+            SetBrickField = brick_events,
+            SetZonePeriod = minigame,
+            FireBrickInput = brick_events,
+            FireGameInput = brick_events,
+            UnmountImage = player,
+            MountObject = physics,
+            UnmountObject = physics,
+            SetScale = player,
+            SetLookLimits = player,
+            HoldRespawn = minigame,
+            SetRespawnTime = minigame,
+            AddBot = bots,
+            RemoveBot = bots,
+            RestBot = bots,
+            BotTool = bots,
+            FollowPath = player,
+            Camera = player,
+            OrbitCamera = player,
+        }
+    };
+}

@@ -4,6 +4,7 @@
 //!
 //! Tests that expose a defect are `#[ignore = "finding H2-Fn: ..."]` and fail
 //! when run with `--ignored`; the others record checks that held.
+use bri_package_runtime::ops;
 use bri_package::packages::{PackageEntry, PackageSet, Side};
 use bri_package_runtime::{
     Catalog, Diagnostic, Dynamic, PlayerKey, Store,
@@ -483,133 +484,133 @@ fn damaged_store_files_are_refused() {
 #[test]
 fn every_operation_needs_its_declared_capability() {
     let ops = [
-        Op::RemoveBrick { brick: 1 },
-        Op::Explode {
+        Op::RemoveBrick(ops::RemoveBrick { brick: 1 }),
+        Op::Explode(ops::Explode {
             position: [0.0; 3],
             radius: 4.0,
             damage: 10.0,
             brick_radius: 2.0,
             explosion: None,
-        },
-        Op::Damage {
+        }),
+        Op::Damage(ops::Damage {
             target: ObjectRef::Player(1),
             amount: 5.0,
             by: Some(2),
             damage_type: None,
-        },
-        Op::Damage {
+        }),
+        Op::Damage(ops::Damage {
             target: ObjectRef::Vehicle(3),
             amount: 5.0,
             by: None,
             damage_type: Some("gunDirect".into()),
-        },
-        Op::Beam {
+        }),
+        Op::Beam(ops::Beam {
             from: [0.0; 3],
             to: [0.0, 0.0, 100.0],
             color: [1.0; 4],
             width: 0.1,
             seconds: 0.2,
             muzzle: Some(1),
-        },
-        Op::PlayThread {
+        }),
+        Op::PlayThread(ops::PlayThread {
             player: 1,
             thread: 3,
             sequence: "activate2".into(),
             after: 0.0,
-        },
-        Op::PlayThread {
+        }),
+        Op::PlayThread(ops::PlayThread {
             player: 1,
             thread: 0,
             sequence: "plant".into(),
             after: 0.05,
-        },
-        Op::SetFov {
+        }),
+        Op::SetFov(ops::SetFov {
             player: 1,
             fov: Some(30.0),
-        },
-        Op::SetFov {
+        }),
+        Op::SetFov(ops::SetFov {
             player: 1,
             fov: None,
-        },
-        Op::SetSpeedScale {
+        }),
+        Op::SetSpeedScale(ops::SetSpeedScale {
             player: 1,
             scale: 0.0,
-        },
-        Op::SetSpeedScale {
+        }),
+        Op::SetSpeedScale(ops::SetSpeedScale {
             player: 1,
             scale: 4.0,
-        },
-        Op::GiveAmmo {
+        }),
+        Op::GiveAmmo(ops::GiveAmmo {
             player: 1,
             ammo: "9mm".into(),
             rounds: 30,
-        },
-        Op::SetReserve {
+        }),
+        Op::SetReserve(ops::SetReserve {
             player: 1,
             ammo: "9mm".into(),
             rounds: None,
-        },
-        Op::SetRounds {
+        }),
+        Op::SetRounds(ops::SetRounds {
             player: 1,
             item: "probe:weapon/rifle".into(),
             rounds: 5,
-        },
-        Op::Reload { player: 1 },
-        Op::Explode {
+        }),
+        Op::Reload(ops::Reload { player: 1 }),
+        Op::Explode(ops::Explode {
             position: [0.0; 3],
             radius: 4.0,
             damage: 10.0,
             brick_radius: 0.0,
             explosion: Some("rocketExplosion".into()),
-        },
-        Op::SetImageAmmo {
+        }),
+        Op::SetImageAmmo(ops::SetImageAmmo {
             player: 1,
             ammo: false,
-        },
-        Op::SetImageLoaded {
+        }),
+        Op::SetImageLoaded(ops::SetImageLoaded {
             player: 1,
             loaded: false,
-        },
-        Op::MountImage {
+        }),
+        Op::MountImage(ops::MountImage {
             player: 1,
             image: Some("probe:image/scope".into()),
-        },
-        Op::MountImage {
+        }),
+        Op::MountImage(ops::MountImage {
             player: 1,
             image: None,
-        },
-        Op::Teleport {
+        }),
+        Op::Teleport(ops::Teleport {
             player: 1,
             position: [1.0, 2.0, 3.0],
-        },
-        Op::Respawn { player: 1 },
-        Op::RemoveBody { player: 1 },
-        Op::SpawnEntity {
+        }),
+        Op::Respawn(ops::Respawn { player: 1 }),
+        Op::RemoveBody(ops::RemoveBody { player: 1 }),
+        Op::SpawnEntity(ops::SpawnEntity {
             kind: "probe:entity/x".into(),
             position: [0.0; 3],
             vars: Default::default(),
-        },
-        Op::RemoveEntity { entity: 1 },
-        Op::Steer {
+        }),
+        Op::RemoveEntity(ops::RemoveEntity { entity: 1 }),
+        Op::Steer(ops::Steer {
             entity: 1,
             direction: [1.0, 0.0],
             jump: false,
-        },
-        Op::Label {
+        }),
+        Op::Label(ops::Label {
             entity: 1,
             label: "a".into(),
-        },
-        Op::Tell {
+        }),
+        Op::Tell(ops::Tell {
             player: 1,
             text: "hi".into(),
-        },
-        Op::Broadcast { text: "hi".into() },
-        Op::Fire {
+        }),
+        Op::Broadcast(ops::Broadcast { text: "hi".into() }),
+        Op::Fire(ops::Fire {
             projectile: "probe:projectile/x".into(),
             position: [0.0; 3],
             velocity: [0.0, 0.0, 90.0],
             by: None,
-        },
+        }),
     ];
     for op in &ops {
         let needed = op.capability();
@@ -631,11 +632,11 @@ fn every_operation_needs_its_declared_capability() {
     }
     // Spawning another package's kind, or an unprefixed look-alike, is refused.
     for kind in ["other:entity/x", "probe-evil:entity/x", "probex:entity/x"] {
-        let op = Op::SpawnEntity {
+        let op = Op::SpawnEntity(ops::SpawnEntity {
             kind: kind.into(),
             position: [0.0; 3],
             vars: Default::default(),
-        };
+        });
         assert_eq!(
             authorize("probe", &["entity".into()], &op)
                 .unwrap_err()
@@ -651,13 +652,13 @@ fn every_operation_needs_its_declared_capability() {
 #[test]
 fn extreme_operation_parameters_are_refused() {
     let all: Vec<String> = CAPABILITIES.iter().map(|c| c.to_string()).collect();
-    let explode = |p: [f32; 3], r: f32, d: f32, b: f32| Op::Explode {
+    let explode = |p: [f32; 3], r: f32, d: f32, b: f32| Op::Explode(ops::Explode {
         position: p,
         radius: r,
         damage: d,
         brick_radius: b,
         explosion: None,
-    };
+    });
     let bad = [
         explode([f32::NAN, 0.0, 0.0], 1.0, 1.0, 1.0),
         explode([0.0; 3], f32::INFINITY, 1.0, 1.0),
@@ -667,189 +668,189 @@ fn extreme_operation_parameters_are_refused() {
         explode([0.0; 3], 1.0, 1.0, 1e9),
         explode([0.0; 3], -1.0, 1.0, 1.0),
         explode([2e6, 0.0, 0.0], 1.0, 1.0, 1.0),
-        Op::Damage {
+        Op::Damage(ops::Damage {
             target: ObjectRef::Player(1),
             amount: f32::NAN,
             by: None,
             damage_type: None,
-        },
-        Op::Damage {
+        }),
+        Op::Damage(ops::Damage {
             target: ObjectRef::Entity(1),
             amount: -5.0,
             by: None,
             damage_type: None,
-        },
-        Op::Damage {
+        }),
+        Op::Damage(ops::Damage {
             target: ObjectRef::Player(1),
             amount: 5.0,
             by: None,
             damage_type: Some("bad\ntype".into()),
-        },
-        Op::Beam {
+        }),
+        Op::Beam(ops::Beam {
             from: [0.0; 3],
             to: [0.0, 0.0, 5000.0],
             color: [1.0; 4],
             width: 0.1,
             seconds: 0.2,
             muzzle: None,
-        },
-        Op::Beam {
+        }),
+        Op::Beam(ops::Beam {
             from: [0.0; 3],
             to: [0.0, 0.0, 10.0],
             color: [2.0, 1.0, 1.0, 1.0],
             width: 0.1,
             seconds: 0.2,
             muzzle: None,
-        },
-        Op::Beam {
+        }),
+        Op::Beam(ops::Beam {
             from: [0.0; 3],
             to: [0.0, 0.0, 10.0],
             color: [1.0; 4],
             width: 0.0,
             seconds: 0.2,
             muzzle: None,
-        },
-        Op::Beam {
+        }),
+        Op::Beam(ops::Beam {
             from: [0.0; 3],
             to: [0.0, 0.0, 10.0],
             color: [1.0; 4],
             width: 0.1,
             seconds: 60.0,
             muzzle: None,
-        },
-        Op::PlayThread {
+        }),
+        Op::PlayThread(ops::PlayThread {
             player: 1,
             thread: 4,
             sequence: "activate".into(),
             after: 0.0,
-        },
-        Op::PlayThread {
+        }),
+        Op::PlayThread(ops::PlayThread {
             player: 1,
             thread: 3,
             sequence: "no spaces".into(),
             after: 0.0,
-        },
-        Op::PlayThread {
+        }),
+        Op::PlayThread(ops::PlayThread {
             player: 1,
             thread: 3,
             sequence: "activate".into(),
             after: 61.0,
-        },
-        Op::PlayThread {
+        }),
+        Op::PlayThread(ops::PlayThread {
             player: 1,
             thread: 3,
             sequence: "activate".into(),
             after: f32::NAN,
-        },
-        Op::SetFov {
+        }),
+        Op::SetFov(ops::SetFov {
             player: 1,
             fov: Some(1.0),
-        },
-        Op::SetFov {
+        }),
+        Op::SetFov(ops::SetFov {
             player: 1,
             fov: Some(f32::NAN),
-        },
-        Op::SetSpeedScale {
+        }),
+        Op::SetSpeedScale(ops::SetSpeedScale {
             player: 1,
             scale: 4.5,
-        },
-        Op::SetSpeedScale {
+        }),
+        Op::SetSpeedScale(ops::SetSpeedScale {
             player: 1,
             scale: f32::NAN,
-        },
-        Op::SetSpeedScale {
+        }),
+        Op::SetSpeedScale(ops::SetSpeedScale {
             player: 1,
             scale: -0.1,
-        },
-        Op::GiveAmmo {
+        }),
+        Op::GiveAmmo(ops::GiveAmmo {
             player: 1,
             ammo: "9mm".into(),
             rounds: 0,
-        },
-        Op::GiveAmmo {
+        }),
+        Op::GiveAmmo(ops::GiveAmmo {
             player: 1,
             ammo: "nine mm".into(),
             rounds: 1,
-        },
-        Op::SetReserve {
+        }),
+        Op::SetReserve(ops::SetReserve {
             player: 1,
             ammo: "9mm".into(),
             rounds: Some(100_001),
-        },
-        Op::SetRounds {
+        }),
+        Op::SetRounds(ops::SetRounds {
             player: 1,
             item: "not an item".into(),
             rounds: 1,
-        },
-        Op::Explode {
+        }),
+        Op::Explode(ops::Explode {
             position: [0.0; 3],
             radius: 4.0,
             damage: 10.0,
             brick_radius: 0.0,
             explosion: Some("no spaces".into()),
-        },
-        Op::MountImage {
+        }),
+        Op::MountImage(ops::MountImage {
             player: 1,
             image: Some("probe:weapon/rifle".into()),
-        },
-        Op::Teleport {
+        }),
+        Op::Teleport(ops::Teleport {
             player: 1,
             position: [f32::NAN, 0.0, 0.0],
-        },
-        Op::Fire {
+        }),
+        Op::Fire(ops::Fire {
             projectile: "probe:projectile/x".into(),
             position: [0.0; 3],
             velocity: [0.0, 0.0, 1e5],
             by: None,
-        },
-        Op::Fire {
+        }),
+        Op::Fire(ops::Fire {
             projectile: "not a projectile".into(),
             position: [0.0; 3],
             velocity: [0.0; 3],
             by: None,
-        },
-        Op::Teleport {
+        }),
+        Op::Teleport(ops::Teleport {
             player: 1,
             position: [0.0, 2e6, 0.0],
-        },
-        Op::SpawnEntity {
+        }),
+        Op::SpawnEntity(ops::SpawnEntity {
             kind: "probe:entity/x".into(),
             position: [0.0, f32::INFINITY, 0.0],
             vars: Default::default(),
-        },
-        Op::SpawnEntity {
+        }),
+        Op::SpawnEntity(ops::SpawnEntity {
             kind: format!("probe:entity/{}", "x".repeat(200)),
             position: [0.0; 3],
             vars: Default::default(),
-        },
-        Op::Steer {
+        }),
+        Op::Steer(ops::Steer {
             entity: 1,
             direction: [f32::NAN, 0.0],
             jump: false,
-        },
-        Op::Steer {
+        }),
+        Op::Steer(ops::Steer {
             entity: 1,
             direction: [1e30, 0.0],
             jump: false,
-        },
-        Op::Label {
+        }),
+        Op::Label(ops::Label {
             entity: 1,
             label: "x".repeat(33),
-        },
-        Op::Label {
+        }),
+        Op::Label(ops::Label {
             entity: 1,
             label: "a\nb".into(),
-        },
-        Op::Tell {
+        }),
+        Op::Tell(ops::Tell {
             player: 1,
             text: "x".repeat(257),
-        },
-        Op::Broadcast { text: "  ".into() },
-        Op::Broadcast {
+        }),
+        Op::Broadcast(ops::Broadcast { text: "  ".into() }),
+        Op::Broadcast(ops::Broadcast {
             text: "a\u{7}b".into(),
-        },
+        }),
     ];
-    assert!(bad.iter().any(|op| matches!(op, Op::Teleport { .. })));
+    assert!(bad.iter().any(|op| matches!(op, Op::Teleport(ops::Teleport { .. }))));
     for op in &bad {
         assert_eq!(
             authorize("probe", &all, op).unwrap_err().code,
@@ -1120,38 +1121,38 @@ fn script_calls_build_their_operations_and_world_questions_need_a_world() {
     assert_eq!(
         ops[..2],
         [
-            Op::Damage {
+            Op::Damage(ops::Damage {
                 target: ObjectRef::Vehicle(3),
                 amount: 5.0,
                 by: None,
                 damage_type: Some("gunDirect".into()),
-            },
-            Op::Damage {
+            }),
+            Op::Damage(ops::Damage {
                 target: ObjectRef::Player(2),
                 amount: 1.0,
                 by: Some(1),
                 damage_type: None,
-            },
+            }),
         ]
     );
-    assert!(matches!(ops[2], Op::Beam { width: 0.05, seconds: 0.1, muzzle: None, .. }));
+    assert!(matches!(ops[2], Op::Beam(ops::Beam { width: 0.05, seconds: 0.1, muzzle: None, .. })));
     assert_eq!(
         ops[3],
-        Op::Beam {
+        Op::Beam(ops::Beam {
             from: [0.0; 3],
             to: [1.0, 0.0, 0.0],
             color: [0.0, 1.0, 0.0, 1.0],
             width: 0.5,
             seconds: 1.0,
             muzzle: Some(1),
-        }
+        })
     );
-    assert_eq!(ops[4], Op::MountImage { player: 1, image: None });
-    assert_eq!(ops[5], Op::SetFov { player: 1, fov: Some(40.0) });
-    assert_eq!(ops[6], Op::SetFov { player: 1, fov: None });
+    assert_eq!(ops[4], Op::MountImage(ops::MountImage { player: 1, image: None }));
+    assert_eq!(ops[5], Op::SetFov(ops::SetFov { player: 1, fov: Some(40.0) }));
+    assert_eq!(ops[6], Op::SetFov(ops::SetFov { player: 1, fov: None }));
     assert_eq!(
         ops[7],
-        Op::PlayThread { player: 1, thread: 3, sequence: "root".into(), after: 0.0 }
+        Op::PlayThread(ops::PlayThread { player: 1, thread: 3, sequence: "root".into(), after: 0.0 })
     );
     for (script, message) in [
         ("fn f() { raycast([0.0, 0.0, 0.0], [0.0, 1.0, 0.0], 5.0) }", "cannot be asked"),

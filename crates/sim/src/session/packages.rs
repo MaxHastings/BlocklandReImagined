@@ -13,6 +13,7 @@
 //!   the engine inserts, streams and saves the edits (removed voxels);
 //! - **operations**, each passing `ops::authorize` (the one capability gate)
 //!   and then an ownership check here.
+use bri_package_runtime::ops;
 use super::*;
 use bri_package_runtime::{
     Catalog, Diagnostic, Dynamic, PlayerKey, Store,
@@ -1378,9 +1379,9 @@ impl Session {
             .unwrap_or_default();
         for op in &outcome.ops {
             let owned = match op {
-                Op::RemoveEntity { entity }
-                | Op::Steer { entity, .. }
-                | Op::Label { entity, .. } => host
+                Op::RemoveEntity(ops::RemoveEntity { entity })
+                | Op::Steer(ops::Steer { entity, .. })
+                | Op::Label(ops::Label { entity, .. }) => host
                     .entities
                     .get(entity)
                     .is_some_and(|e| e.package == package),
@@ -1437,45 +1438,45 @@ impl Session {
     fn apply_package_op(&mut self, package: &str, op: Op, caller: Option<OwnerId>) -> Result<()> {
         let tick = self.simulation.state().tick;
         match op {
-            Op::RemoveBrick { brick } => self.package_remove_brick(package, brick, None, caller),
-            Op::PlaceBrick {
+            Op::RemoveBrick(ops::RemoveBrick { brick }) => self.package_remove_brick(package, brick, None, caller),
+            Op::PlaceBrick(ops::PlaceBrick {
                 shape,
                 position,
                 color,
-            } => self.package_place_brick(package, &shape, position, color),
-            Op::PlantBrick {
+            }) => self.package_place_brick(package, &shape, position, color),
+            Op::PlantBrick(ops::PlantBrick {
                 kind,
                 position,
                 turns,
                 color,
                 owner,
-            } => self.package_plant_brick(package, &kind, position, turns, color, owner, caller),
-            Op::PlaceVoxel { position, material } => {
+            }) => self.package_plant_brick(package, &kind, position, turns, color, owner, caller),
+            Op::PlaceVoxel(ops::PlaceVoxel { position, material }) => {
                 self.package_place_voxel(package, position, &material)
             }
-            Op::SetAvatarColors { player, colors } => {
+            Op::SetAvatarColors(ops::SetAvatarColors { player, colors }) => {
                 let peer = self.peers.get_mut(&player).context("No such player")?;
                 peer.uniform = colors;
                 Ok(())
             }
-            Op::SetAvatarParts {
+            Op::SetAvatarParts(ops::SetAvatarParts {
                 player,
                 parts,
                 face,
                 decal,
-            } => {
+            }) => {
                 let peer = self.peers.get_mut(&player).context("No such player")?;
                 peer.uniform_parts = (!parts.is_empty() || face.is_some() || decal.is_some())
                     .then_some(UniformParts { parts, face, decal });
                 Ok(())
             }
-            Op::Explode {
+            Op::Explode(ops::Explode {
                 position,
                 radius,
                 damage,
                 brick_radius,
                 explosion,
-            } => self.explode(
+            }) => self.explode(
                 Vec3::from(position),
                 radius,
                 damage,
@@ -1484,13 +1485,13 @@ impl Session {
                 package,
                 caller,
             ),
-            Op::Damage {
+            Op::Damage(ops::Damage {
                 target,
                 amount,
                 by,
                 damage_type,
-            } => self.package_damage_op(package, target, amount, by, damage_type),
-            Op::Teleport { player, position } => {
+            }) => self.package_damage_op(package, target, amount, by, damage_type),
+            Op::Teleport(ops::Teleport { player, position }) => {
                 let peer = self.peers.get_mut(&player).context("No such player")?;
                 ensure!(peer.combat.alive, "Only living players can be moved");
                 let yaw = peer.player.state().yaw;
@@ -1499,7 +1500,7 @@ impl Session {
                 peer.inputs.clear();
                 Ok(())
             }
-            Op::SetArchetype { player, archetype } => {
+            Op::SetArchetype(ops::SetArchetype { player, archetype }) => {
                 let chosen = if archetype.is_empty() {
                     None
                 } else {
@@ -1522,7 +1523,7 @@ impl Session {
                 }
                 Ok(())
             }
-            Op::PushArchetype { player, archetype } => {
+            Op::PushArchetype(ops::PushArchetype { player, archetype }) => {
                 let laid = self
                     .archetypes
                     .find(&archetype)
@@ -1548,7 +1549,7 @@ impl Session {
                 overlays.laid.push(laid);
                 self.set_player_archetype(player, laid)
             }
-            Op::PopArchetype { player, archetype } => {
+            Op::PopArchetype(ops::PopArchetype { player, archetype }) => {
                 let lifted = self
                     .archetypes
                     .find(&archetype)
@@ -1570,7 +1571,7 @@ impl Session {
                 }
                 Ok(())
             }
-            Op::Respawn { player } => {
+            Op::Respawn(ops::Respawn { player }) => {
                 let target = self
                     .peers
                     .get(&player)
@@ -1583,11 +1584,11 @@ impl Session {
                     .map_err(|e| anyhow::anyhow!("Respawn rejected: {e}"))?;
                 self.apply_minigame_effects(effects)
             }
-            Op::RemoveBody { player } => {
+            Op::RemoveBody(ops::RemoveBody { player }) => {
                 ensure!(self.peers.contains_key(&player), "No such player");
                 self.remove_body(player)
             }
-            Op::SetBlockState { brick, state } => {
+            Op::SetBlockState(ops::SetBlockState { brick, state }) => {
                 let host = self.packages.as_ref().context("No packages are enabled")?;
                 let look = self
                     .simulation
@@ -1617,7 +1618,7 @@ impl Session {
                 }
                 Ok(())
             }
-            Op::Control { player, entity } => {
+            Op::Control(ops::Control { player, entity }) => {
                 let peer = self.peers.get(&player).context("No such player")?;
                 let Some(entity) = entity else {
                     if matches!(peer.control, ControlObject::Entity(_)) {
@@ -1654,26 +1655,26 @@ impl Session {
                     ControlObject::Entity(entity);
                 Ok(())
             }
-            Op::SpawnEntity {
+            Op::SpawnEntity(ops::SpawnEntity {
                 kind,
                 position,
                 vars,
-            } => {
+            }) => {
                 let id = self.spawn_package_entity(&kind, Vec3::from(position))?;
                 if let Some(e) = self.packages.as_mut().and_then(|h| h.entities.get_mut(&id)) {
                     e.vars = vars;
                 }
                 Ok(())
             }
-            Op::RemoveEntity { entity } => {
+            Op::RemoveEntity(ops::RemoveEntity { entity }) => {
                 self.remove_package_entity(entity);
                 Ok(())
             }
-            Op::Steer {
+            Op::Steer(ops::Steer {
                 entity,
                 direction,
                 jump,
-            } => {
+            }) => {
                 if let Some(e) = self
                     .packages
                     .as_mut()
@@ -1683,7 +1684,7 @@ impl Session {
                 }
                 Ok(())
             }
-            Op::Label { entity, label } => {
+            Op::Label(ops::Label { entity, label }) => {
                 if let Some(e) = self
                     .packages
                     .as_mut()
@@ -1693,7 +1694,7 @@ impl Session {
                 }
                 Ok(())
             }
-            Op::Tell { player, text } => {
+            Op::Tell(ops::Tell { player, text }) => {
                 ensure!(self.peers.contains_key(&player), "No player {player}");
                 if caller == Some(player) {
                     self.take_reply_line(package, player)?;
@@ -1703,13 +1704,13 @@ impl Session {
                 self.notify(player, Notice::Chat(text));
                 Ok(())
             }
-            Op::Broadcast { text } => {
+            Op::Broadcast(ops::Broadcast { text }) => {
                 let _ = tick;
                 self.take_chat_line(package, caller)?;
                 self.system_chat(text);
                 Ok(())
             }
-            Op::TellMinigame { game, text, except } => {
+            Op::TellMinigame(ops::TellMinigame { game, text, except }) => {
                 let members = self.minigame_members(game)?;
                 self.take_chat_line(package, caller)?;
                 for owner in members.into_iter().filter(|o| Some(*o) != except) {
@@ -1717,7 +1718,7 @@ impl Session {
                 }
                 Ok(())
             }
-            Op::TellPlayers { players, text } => {
+            Op::TellPlayers(ops::TellPlayers { players, text }) => {
                 self.take_chat_line(package, caller)?;
                 for owner in players {
                     if self.peers.contains_key(&owner) {
@@ -1726,12 +1727,12 @@ impl Session {
                 }
                 Ok(())
             }
-            Op::PrintMinigame {
+            Op::PrintMinigame(ops::PrintMinigame {
                 game,
                 text,
                 seconds,
                 bottom,
-            } => {
+            }) => {
                 let members = self.minigame_members(game)?;
                 self.take_cue(package)?;
                 let notice = if bottom {
@@ -1748,7 +1749,7 @@ impl Session {
                 }
                 Ok(())
             }
-            Op::CopyBuild {
+            Op::CopyBuild(ops::CopyBuild {
                 player,
                 brick,
                 limit,
@@ -1756,7 +1757,7 @@ impl Session {
                 rule,
                 tool,
                 hold,
-            } => {
+            }) => {
                 // A copy is taken with the trust of the player who asked.
                 ensure!(
                     caller == Some(player),
@@ -1772,7 +1773,7 @@ impl Session {
                 );
                 Ok(())
             }
-            Op::CopyBox {
+            Op::CopyBox(ops::CopyBox {
                 player,
                 min,
                 max,
@@ -1781,7 +1782,7 @@ impl Session {
                 rule,
                 tool,
                 hold,
-            } => {
+            }) => {
                 ensure!(
                     caller == Some(player),
                     "A build is copied only for the player whose command asked"
@@ -1797,11 +1798,11 @@ impl Session {
                 );
                 Ok(())
             }
-            Op::SaveCopy {
+            Op::SaveCopy(ops::SaveCopy {
                 player,
                 name,
                 overwrite,
-            } => {
+            }) => {
                 ensure!(
                     caller == Some(player),
                     "A copy is saved only for the player whose command asked"
@@ -1809,7 +1810,7 @@ impl Session {
                 self.save_copy(player, name, overwrite, package);
                 Ok(())
             }
-            Op::ListCopies { player, filter } => {
+            Op::ListCopies(ops::ListCopies { player, filter }) => {
                 ensure!(
                     caller == Some(player),
                     "Saved copies are listed only for the player whose command asked"
@@ -1817,8 +1818,8 @@ impl Session {
                 self.list_copies(player, filter, package);
                 Ok(())
             }
-            Op::PlantWait { player, seconds } => self.plant_wait(player, seconds),
-            Op::CancelCopy { player } => {
+            Op::PlantWait(ops::PlantWait { player, seconds }) => self.plant_wait(player, seconds),
+            Op::CancelCopy(ops::CancelCopy { player }) => {
                 // An administrator may stop anyone's (`/ClearDups`).
                 let admin = caller
                     .and_then(|c| self.peers.get(&c))
@@ -1830,18 +1831,18 @@ impl Session {
                 self.cancel_copy(player);
                 Ok(())
             }
-            Op::PivotCopy { player, whole } => {
+            Op::PivotCopy(ops::PivotCopy { player, whole }) => {
                 ensure!(
                     caller == Some(player),
                     "A copy's pivot is set only for the player whose command asked"
                 );
                 self.pivot_copy(player, whole)
             }
-            Op::PlantAs {
+            Op::PlantAs(ops::PlantAs {
                 player,
                 target,
                 admin,
-            } => {
+            }) => {
                 ensure!(
                     caller == Some(player),
                     "Copies are planted as another only for the player whose command asked"
@@ -1850,14 +1851,14 @@ impl Session {
                 self.report_copy(package, player, outcome);
                 Ok(())
             }
-            Op::LoadCopy {
+            Op::LoadCopy(ops::LoadCopy {
                 player,
                 name,
                 limit,
                 tool,
                 partial,
                 whole,
-            } => {
+            }) => {
                 ensure!(
                     caller == Some(player),
                     "A copy is loaded only for the player whose command asked"
@@ -1869,11 +1870,11 @@ impl Session {
                 self.load_copy(player, name, limit as usize, tool, partial, whole, package);
                 Ok(())
             }
-            Op::HighlightCopy {
+            Op::HighlightCopy(ops::HighlightCopy {
                 player,
                 color,
                 seconds,
-            } => {
+            }) => {
                 ensure!(
                     caller == Some(player),
                     "A copy is lit only for the player whose command asked"
@@ -1882,7 +1883,7 @@ impl Session {
                 let _ = self.highlight_copy(player, color, seconds);
                 Ok(())
             }
-            Op::MirrorCopy { player, axis } => {
+            Op::MirrorCopy(ops::MirrorCopy { player, axis }) => {
                 ensure!(
                     caller == Some(player),
                     "A copy is mirrored only for the player whose command asked"
@@ -1892,11 +1893,11 @@ impl Session {
                 }
                 Ok(())
             }
-            Op::MirrorGhost {
+            Op::MirrorGhost(ops::MirrorGhost {
                 player,
                 axis,
                 asymmetric,
-            } => {
+            }) => {
                 ensure!(
                     caller == Some(player),
                     "A ghost brick is mirrored only for the player whose command asked"
@@ -1906,11 +1907,11 @@ impl Session {
                 }
                 Ok(())
             }
-            Op::MoveCopy {
+            Op::MoveCopy(ops::MoveCopy {
                 player,
                 point,
                 normal,
-            } => {
+            }) => {
                 ensure!(
                     caller == Some(player),
                     "A copy is moved only for the player whose command asked"
@@ -1920,7 +1921,7 @@ impl Session {
                 }
                 Ok(())
             }
-            Op::DropCopy { player } => {
+            Op::DropCopy(ops::DropCopy { player }) => {
                 // An administrator may put away anyone's (`/ClearDups`).
                 let admin = caller
                     .and_then(|c| self.peers.get(&c))
@@ -1932,7 +1933,7 @@ impl Session {
                 self.drop_copy(player);
                 Ok(())
             }
-            Op::CutCopy { player, each } => {
+            Op::CutCopy(ops::CutCopy { player, each }) => {
                 // Bricks go with the trust of the player who asked.
                 ensure!(
                     caller == Some(player),
@@ -1941,11 +1942,11 @@ impl Session {
                 self.start_cut(player, package, each);
                 Ok(())
             }
-            Op::PaintCopy {
+            Op::PaintCopy(ops::PaintCopy {
                 player,
                 paint,
                 each,
-            } => {
+            }) => {
                 ensure!(
                     caller == Some(player),
                     "A copy's bricks are painted only for the player whose command asked"
@@ -1953,7 +1954,7 @@ impl Session {
                 self.start_paint(player, package, paint, each);
                 Ok(())
             }
-            Op::ShowCopy { player } => {
+            Op::ShowCopy(ops::ShowCopy { player }) => {
                 ensure!(
                     caller == Some(player),
                     "A copy is shown only for the player whose command asked"
@@ -1963,7 +1964,7 @@ impl Session {
                 }
                 Ok(())
             }
-            Op::HideCopy { player } => {
+            Op::HideCopy(ops::HideCopy { player }) => {
                 ensure!(
                     caller == Some(player),
                     "A copy is hidden only for the player whose command asked"
@@ -1971,11 +1972,11 @@ impl Session {
                 self.hide_copy(player);
                 Ok(())
             }
-            Op::ShiftCopy {
+            Op::ShiftCopy(ops::ShiftCopy {
                 player,
                 offset,
                 super_shift,
-            } => {
+            }) => {
                 ensure!(
                     caller == Some(player),
                     "A copy is moved only for the player whose command asked"
@@ -1983,7 +1984,7 @@ impl Session {
                 let _ = self.shift_copy(player, offset, super_shift);
                 Ok(())
             }
-            Op::RotateCopy { player, direction } => {
+            Op::RotateCopy(ops::RotateCopy { player, direction }) => {
                 ensure!(
                     caller == Some(player),
                     "A copy is turned only for the player whose command asked"
@@ -1991,7 +1992,7 @@ impl Session {
                 let _ = self.rotate_copy(player, direction);
                 Ok(())
             }
-            Op::PlantCopy { player, float } => {
+            Op::PlantCopy(ops::PlantCopy { player, float }) => {
                 ensure!(
                     caller == Some(player),
                     "A copy is planted only for the player whose command asked"
@@ -1999,11 +2000,11 @@ impl Session {
                 let _ = self.plant_copy(player, float);
                 Ok(())
             }
-            Op::FloatCopy {
+            Op::FloatCopy(ops::FloatCopy {
                 player,
                 float,
                 admin_only,
-            } => {
+            }) => {
                 ensure!(
                     caller == Some(player),
                     "A copy floats only for the player whose command asked"
@@ -2011,7 +2012,7 @@ impl Session {
                 let _ = self.float_copy(player, float, admin_only);
                 Ok(())
             }
-            Op::WrenchCopy { player } => {
+            Op::WrenchCopy(ops::WrenchCopy { player }) => {
                 ensure!(
                     caller == Some(player),
                     "A copy's bricks are wrenched only for the player whose command asked"
@@ -2026,7 +2027,7 @@ impl Session {
                 }
                 Ok(())
             }
-            Op::SuperCut { player, min, max } => {
+            Op::SuperCut(ops::SuperCut { player, min, max }) => {
                 ensure!(
                     caller == Some(player),
                     "Bricks are cut only for the player whose command asked"
@@ -2034,12 +2035,12 @@ impl Session {
                 self.start_super_cut(player, package, (min, max));
                 Ok(())
             }
-            Op::FillBox {
+            Op::FillBox(ops::FillBox {
                 player,
                 min,
                 max,
                 color,
-            } => {
+            }) => {
                 ensure!(
                     caller == Some(player),
                     "Bricks are filled only for the player whose command asked"
@@ -2047,17 +2048,17 @@ impl Session {
                 self.start_fill(player, package, (min, max), color);
                 Ok(())
             }
-            Op::TakePaint { player, take } => {
+            Op::TakePaint(ops::TakePaint { player, take }) => {
                 ensure!(self.peers.contains_key(&player), "No such player");
                 self.notify(player, Notice::TakePaint(take));
                 Ok(())
             }
-            Op::ScrollMode { player, mode } => {
+            Op::SetScrollMode(ops::SetScrollMode { player, mode }) => {
                 ensure!(self.peers.contains_key(&player), "No such player");
                 self.notify(player, Notice::ScrollMode(mode));
                 Ok(())
             }
-            Op::PaintFill {
+            Op::PaintFill(ops::PaintFill {
                 player,
                 brick,
                 paint,
@@ -2067,7 +2068,7 @@ impl Session {
                 limit_message,
                 refusal_seconds,
                 limit_error,
-            } => {
+            }) => {
                 ensure!(
                     caller == Some(player),
                     "Bricks are filled only for the player whose command or shot asked"
@@ -2099,13 +2100,13 @@ impl Session {
                 }
                 Ok(())
             }
-            Op::PaintVehicle {
+            Op::PaintVehicle(ops::PaintVehicle {
                 player,
                 vehicle,
                 paint,
                 riders_seconds,
                 refusal_seconds,
-            } => {
+            }) => {
                 ensure!(
                     caller == Some(player),
                     "Vehicles are painted only for the player whose command or shot asked"
@@ -2131,48 +2132,48 @@ impl Session {
                 }
                 Ok(())
             }
-            Op::TempLook {
+            Op::SetTempLook(ops::SetTempLook {
                 player,
                 look,
                 seconds,
-            } => {
+            }) => {
                 ensure!(self.peers.contains_key(&player), "No such player");
                 self.temp_look(player, look, seconds);
                 Ok(())
             }
-            Op::ShowBox { player, area, tool } => self.show_box(player, area, &tool),
-            Op::ShowShapes { owner, key, shapes } => {
+            Op::ShowBox(ops::ShowBox { player, area, tool }) => self.show_box(player, area, &tool),
+            Op::ShowShapes(ops::ShowShapes { owner, key, shapes }) => {
                 self.show_shapes(package, owner, &key, shapes)
             }
-            Op::GiveItem {
+            Op::GiveItem(ops::GiveItem {
                 player,
                 item,
                 equip,
-            } => {
+            }) => {
                 ensure!(self.peers.contains_key(&player), "No such player");
                 self.give_tool(player, &item, equip)
             }
-            Op::SetTools { player, tools } => self.package_set_tools(player, tools),
-            Op::TakeItem { player, item } => self.package_take_item(player, &item),
-            Op::DropItem {
+            Op::SetTools(ops::SetTools { player, tools }) => self.package_set_tools(player, tools),
+            Op::TakeItem(ops::TakeItem { player, item }) => self.package_take_item(player, &item),
+            Op::DropItem(ops::DropItem {
                 item,
                 position,
                 velocity,
                 paint,
                 data,
                 seconds,
-            } => self.package_drop_item(package, &item, position, velocity, paint, data, seconds),
-            Op::RemoveDrop { drop } => self.package_remove_drop(package, drop),
-            Op::NameDrop { drop, text, color } => self.package_name_drop(package, drop, text, color),
-            Op::ShowReport { player, report } => self.package_show_report(package, player, report),
-            Op::ReportColumn { game, change } => self.package_report_column(game, change),
-            Op::WearImage {
+            }) => self.package_drop_item(package, &item, position, velocity, paint, data, seconds),
+            Op::RemoveDrop(ops::RemoveDrop { drop }) => self.package_remove_drop(package, drop),
+            Op::NameDrop(ops::NameDrop { drop, text, color }) => self.package_name_drop(package, drop, text, color),
+            Op::ShowReport(ops::ShowReport { player, report }) => self.package_show_report(package, player, report),
+            Op::ReportColumn(ops::ReportColumn { game, change }) => self.package_report_column(game, change),
+            Op::WearImage(ops::WearImage {
                 player,
                 slot,
                 image,
                 paint,
                 keep,
-            } => {
+            }) => {
                 let peer = self.peers.get(&player).context("No such player")?;
                 ensure!(peer.combat.alive, "Only living players wear things");
                 let actor = bri_weapons::ActorId(player);
@@ -2204,23 +2205,23 @@ impl Session {
                 }
                 Ok(())
             }
-            op @ (Op::Push { .. }
-            | Op::Tumble { .. }
-            | Op::Hold { .. }
-            | Op::HoldDistance { .. }
-            | Op::LetGo { .. }
-            | Op::Tether { .. }
-            | Op::TetherLength { .. }
-            | Op::Untether { .. }
-            | Op::Reach { .. }
-            | Op::SpawnVehicle { .. }
-            | Op::RemoveVehicle { .. }) => self.apply_physics_op(package, op, caller),
-            Op::Fire {
+            op @ (Op::Push(ops::Push { .. })
+            | Op::Tumble(ops::Tumble { .. })
+            | Op::Hold(ops::Hold { .. })
+            | Op::HoldDistance(ops::HoldDistance { .. })
+            | Op::LetGo(ops::LetGo { .. })
+            | Op::Tether(ops::Tether { .. })
+            | Op::TetherLength(ops::TetherLength { .. })
+            | Op::Untether(ops::Untether { .. })
+            | Op::Reach(ops::Reach { .. })
+            | Op::SpawnVehicle(ops::SpawnVehicle { .. })
+            | Op::RemoveVehicle(ops::RemoveVehicle { .. })) => self.apply_physics_op(package, op, caller),
+            Op::Fire(ops::Fire {
                 projectile,
                 position,
                 velocity,
                 by,
-            } => {
+            }) => {
                 let tick = self.simulation.state().tick;
                 let host = self.packages.as_mut().context("No packages are enabled")?;
                 ensure!(
@@ -2245,11 +2246,11 @@ impl Session {
                 )?;
                 Ok(())
             }
-            Op::SpawnExplosion {
+            Op::SpawnExplosion(ops::SpawnExplosion {
                 player,
                 projectile,
                 scale,
-            } => {
+            }) => {
                 let host = self.packages.as_ref().context("No packages are enabled")?;
                 ensure!(
                     item_hooks::owns(&host.catalog, package, &projectile),
@@ -2274,7 +2275,7 @@ impl Session {
                 )?;
                 Ok(())
             }
-            Op::Heal { player, amount } => {
+            Op::Heal(ops::Heal { player, amount }) => {
                 let max = {
                     let peer = self.peers.get(&player).context("No such player")?;
                     self.archetypes
@@ -2286,22 +2287,22 @@ impl Session {
                 peer.combat.health = (peer.combat.health + amount).min(max);
                 Ok(())
             }
-            Op::MessageBox {
+            Op::MessageBox(ops::MessageBox {
                 player,
                 title,
                 text,
-            } => {
+            }) => {
                 self.take_cue(package)?;
                 ensure!(self.peers.contains_key(&player), "No such player");
                 self.notify(player, Notice::MessageBox { title, text });
                 Ok(())
             }
-            Op::Ask {
+            Op::Ask(ops::Ask {
                 player,
                 title,
                 text,
                 command,
-            } => {
+            }) => {
                 self.take_cue(package)?;
                 ensure!(self.peers.contains_key(&player), "No such player");
                 let declared = self
@@ -2326,7 +2327,7 @@ impl Session {
                 );
                 Ok(())
             }
-            Op::PlantError { player, error } => {
+            Op::PlantError(ops::PlantError { player, error }) => {
                 use crate::simulation::PlantFailure as F;
                 self.take_cue(package)?;
                 ensure!(self.peers.contains_key(&player), "No such player");
@@ -2343,13 +2344,13 @@ impl Session {
                 self.notify(player, Notice::PlantError(failure));
                 Ok(())
             }
-            Op::Print {
+            Op::Print(ops::Print {
                 player,
                 text,
                 seconds,
                 bottom,
                 hide_bar,
-            } => {
+            }) => {
                 self.take_cue(package)?;
                 let notice = if bottom {
                     Notice::Bottom {
@@ -2374,14 +2375,14 @@ impl Session {
                 }
                 Ok(())
             }
-            Op::Beam {
+            Op::Beam(ops::Beam {
                 from,
                 to,
                 color,
                 width,
                 seconds,
                 muzzle,
-            } => {
+            }) => {
                 self.take_cue(package)?;
                 self.cues.emit(
                     tick,
@@ -2396,12 +2397,12 @@ impl Session {
                 );
                 Ok(())
             }
-            Op::PlayThread {
+            Op::PlayThread(ops::PlayThread {
                 player,
                 thread,
                 sequence,
                 after,
-            } => {
+            }) => {
                 ensure!(self.peers.contains_key(&player), "No such player");
                 self.take_cue(package)?;
                 if after > 0.0 {
@@ -2415,16 +2416,16 @@ impl Session {
                     Ok(())
                 }
             }
-            Op::SetMapLights {
+            Op::SetMapLights(ops::SetMapLights {
                 position,
                 radius,
                 tint,
-            } => self.set_map_lights(MapLightRule {
+            }) => self.set_map_lights(MapLightRule {
                 position,
                 radius,
                 tint,
             }),
-            Op::SetEnvironment { changes, unset } => {
+            Op::SetEnvironment(ops::SetEnvironment { changes, unset }) => {
                 let tick = self.simulation.state().tick;
                 let host = self.packages.as_mut().context("No packages are enabled")?;
                 let origin = package.to_string();
@@ -2440,12 +2441,12 @@ impl Session {
                 }
                 self.set_environment(settings)
             }
-            Op::SetFov { player, fov } => {
+            Op::SetFov(ops::SetFov { player, fov }) => {
                 ensure!(self.peers.contains_key(&player), "No such player");
                 self.notify(player, Notice::Fov(fov));
                 Ok(())
             }
-            Op::SetSpeedScale { player, scale } => {
+            Op::SetSpeedScale(ops::SetSpeedScale { player, scale }) => {
                 ensure!(
                     scale.is_finite() && (0.0..=bri_package_runtime::ops::MAX_SPEED_SCALE).contains(&scale),
                     "Invalid speed scale"
@@ -2457,20 +2458,20 @@ impl Session {
                     .speed_rule = scale;
                 self.apply_speed(player)
             }
-            Op::GiveAmmo {
+            Op::GiveAmmo(ops::GiveAmmo {
                 player,
                 ammo,
                 rounds,
-            } => {
+            }) => {
                 ensure!(self.peers.contains_key(&player), "No such player");
                 self.weapons
                     .give_ammo(bri_weapons::ActorId(player), &ammo, rounds as u32)
             }
-            Op::SetReserve {
+            Op::SetReserve(ops::SetReserve {
                 player,
                 ammo,
                 rounds,
-            } => {
+            }) => {
                 ensure!(self.peers.contains_key(&player), "No such player");
                 let reserve = rounds.map_or(bri_weapons::Reserve::Endless, |r| {
                     bri_weapons::Reserve::Rounds(r as u32)
@@ -2478,31 +2479,31 @@ impl Session {
                 self.weapons
                     .set_reserve(bri_weapons::ActorId(player), &ammo, reserve)
             }
-            Op::SetRounds {
+            Op::SetRounds(ops::SetRounds {
                 player,
                 item,
                 rounds,
-            } => {
+            }) => {
                 ensure!(self.peers.contains_key(&player), "No such player");
                 self.weapons
                     .set_rounds(bri_weapons::ActorId(player), &item, rounds as u32)
             }
-            Op::Reload { player } => {
+            Op::Reload(ops::Reload { player }) => {
                 ensure!(self.peers.contains_key(&player), "No such player");
                 self.weapons
                     .reload(bri_weapons::ActorId(player))
                     .map(|_| ())
             }
-            Op::SetImageAmmo { player, ammo } => {
+            Op::SetImageAmmo(ops::SetImageAmmo { player, ammo }) => {
                 ensure!(self.peers.contains_key(&player), "No such player");
                 self.weapons.set_ammo(bri_weapons::ActorId(player), ammo)
             }
-            Op::SetImageLoaded { player, loaded } => {
+            Op::SetImageLoaded(ops::SetImageLoaded { player, loaded }) => {
                 ensure!(self.peers.contains_key(&player), "No such player");
                 self.weapons
                     .set_loaded(bri_weapons::ActorId(player), loaded)
             }
-            Op::MountImage { player, image } => {
+            Op::MountImage(ops::MountImage { player, image }) => {
                 let peer = self.peers.get(&player).context("No such player")?;
                 ensure!(peer.combat.alive, "Only living players hold things");
                 let actor = bri_weapons::ActorId(player);
@@ -2518,11 +2519,11 @@ impl Session {
                     None => self.weapons.swap_image(actor, None),
                 }
             }
-            Op::Emote {
+            Op::Emote(ops::Emote {
                 player,
                 image,
                 skip_spam,
-            } => {
+            }) => {
                 let peer = self.peers.get(&player).context("No such player")?;
                 ensure!(peer.combat.alive, "Only living players wear emotes");
                 let feet = peer.player.state().feet;
@@ -2562,36 +2563,36 @@ impl Session {
                 );
                 Ok(())
             }
-            Op::AddBot {
+            Op::AddBot(ops::AddBot {
                 game,
                 team,
                 kind,
                 name,
-            } => self.add_rules_bot(package, game, team, &kind, &name),
-            Op::RemoveBot { bot } => self.remove_rules_bot(package, bot),
-            Op::RestBot { bot, rest } => self.rest_rules_bot(package, bot, rest),
-            Op::BotTool { bot, slot } => self.rules_bot_tool(package, bot, slot),
-            op @ (Op::SetTeams { .. }
-            | Op::SetTeam { .. }
-            | Op::SetScore { .. }
-            | Op::ResetMinigame { .. }
-            | Op::SetGameRule { .. }
-            | Op::CreateMinigame { .. }
-            | Op::PlaceMember { .. }
-            | Op::HoldRespawn { .. }
-            | Op::EndRound { .. }) => self.apply_minigame_op(op),
-            Op::SetHostData { key, value } => self.set_host_data(package, &key, value),
-            Op::RestoreMinigame { game, snapshot } => {
+            }) => self.add_rules_bot(package, game, team, &kind, &name),
+            Op::RemoveBot(ops::RemoveBot { bot }) => self.remove_rules_bot(package, bot),
+            Op::RestBot(ops::RestBot { bot, rest }) => self.rest_rules_bot(package, bot, rest),
+            Op::BotTool(ops::BotTool { bot, slot }) => self.rules_bot_tool(package, bot, slot),
+            op @ (Op::SetTeams(ops::SetTeams { .. })
+            | Op::SetTeam(ops::SetTeam { .. })
+            | Op::SetScore(ops::SetScore { .. })
+            | Op::ResetMinigame(ops::ResetMinigame { .. })
+            | Op::SetGameRule(ops::SetGameRule { .. })
+            | Op::CreateMinigame(ops::CreateMinigame { .. })
+            | Op::PlaceMember(ops::PlaceMember { .. })
+            | Op::HoldRespawn(ops::HoldRespawn { .. })
+            | Op::EndRound(ops::EndRound { .. })) => self.apply_minigame_op(op),
+            Op::SetHostData(ops::SetHostData { key, value }) => self.set_host_data(package, &key, value),
+            Op::RestoreMinigame(ops::RestoreMinigame { game, snapshot }) => {
                 self.restore_minigame_snapshot(package, bri_minigames::GameId(game), snapshot)
             }
-            Op::ReviveBricks { game } => self.revive_game_bricks(bri_minigames::GameId(game)),
-            Op::SetSetting {
+            Op::ReviveBricks(ops::ReviveBricks { game }) => self.revive_game_bricks(bri_minigames::GameId(game)),
+            Op::SetSetting(ops::SetSetting {
                 game,
                 team,
                 key,
                 value,
-            } => self.package_set_setting(package, game, team, key, value),
-            Op::SetBrickItem { brick, item } => {
+            }) => self.package_set_setting(package, game, team, key, value),
+            Op::SetBrickItem(ops::SetBrickItem { brick, item }) => {
                 if let Some(item) = &item {
                     let host = self.packages.as_ref().context("No packages are enabled")?;
                     ensure!(
@@ -2601,18 +2602,18 @@ impl Session {
                 }
                 self.package_set_brick_item(brick, item, caller)
             }
-            Op::SetBrickColor { brick, color } => {
+            Op::SetBrickColor(ops::SetBrickColor { brick, color }) => {
                 self.package_set_brick_color(brick, color, caller)
             }
-            Op::SetBrickField { brick, key, value } => {
+            Op::SetBrickField(ops::SetBrickField { brick, key, value }) => {
                 self.package_set_brick_field(package, brick, &key, value)
             }
-            Op::FollowPath { player, knots } => self.follow_path(
+            Op::FollowPath(ops::FollowPath { player, knots }) => self.follow_path(
                 package,
                 player,
                 knots.map(|k| k.iter().map(super::camera_path::Knot::from_op).collect()),
             ),
-            Op::Camera { player, camera } => self.rules_camera(
+            Op::Camera(ops::Camera { player, camera }) => self.rules_camera(
                 player,
                 match camera {
                     bri_package_runtime::ops::CameraOp::Free => super::RulesCamera::Free,
@@ -2621,28 +2622,28 @@ impl Session {
                     }
                 },
             ),
-            Op::SetZonePeriod { zone, period_ms } => {
+            Op::SetZonePeriod(ops::SetZonePeriod { zone, period_ms }) => {
                 self.package_set_zone_period(package, zone, period_ms)
             }
-            Op::FireBrickInput {
+            Op::FireBrickInput(ops::FireBrickInput {
                 brick,
                 input,
                 player,
-            } => self.package_fire_brick_input(package, brick, &input, player),
-            Op::FireGameInput {
+            }) => self.package_fire_brick_input(package, brick, &input, player),
+            Op::FireGameInput(ops::FireGameInput {
                 game,
                 input,
                 player,
                 killer,
-            } => self.package_fire_game_input(package, game, &input, player, killer),
-            Op::UnmountImage { player } => self.put_away_hand(player),
-            Op::MountObject {
+            }) => self.package_fire_game_input(package, game, &input, player, killer),
+            Op::UnmountImage(ops::UnmountImage { player }) => self.put_away_hand(player),
+            Op::MountObject(ops::MountObject {
                 mount,
                 rider,
                 node,
                 can_dismount,
                 turn,
-            } => {
+            }) => {
                 ensure!(
                     caller.is_none_or(|c| c == mount),
                     "A player mounts others on themselves only by their own command"
@@ -2656,7 +2657,7 @@ impl Session {
                 self.turn_rider(rider, turn);
                 Ok(())
             }
-            Op::UnmountObject { rider } => {
+            Op::UnmountObject(ops::UnmountObject { rider }) => {
                 // A command's player lets themselves off, or someone they
                 // carry or may move.
                 ensure!(
@@ -2668,28 +2669,28 @@ impl Session {
                 );
                 self.unmount_object(rider)
             }
-            Op::SetScale { player, scale } => {
+            Op::SetScale(ops::SetScale { player, scale }) => {
                 ensure!(self.peers.contains_key(&player), "No such player");
                 self.set_player_scale(player, scale)?;
                 self.follow_player_mounts();
                 Ok(())
             }
-            Op::SetRespawnTime { player, ms } => {
+            Op::SetRespawnTime(ops::SetRespawnTime { player, ms }) => {
                 let peer = self.peers.get_mut(&player).context("No such player")?;
                 peer.respawn_ms = ms;
                 Ok(())
             }
-            Op::SetLookLimits { player, limits } => {
+            Op::SetLookLimits(ops::SetLookLimits { player, limits }) => {
                 let peer = self.peers.get_mut(&player).context("No such player")?;
                 peer.look_limits = limits;
                 Ok(())
             }
-            Op::OrbitCamera {
+            Op::OrbitCamera(ops::OrbitCamera {
                 player,
                 body,
                 orbit,
-            } => self.orbit_camera(player, body, orbit),
-            Op::Sound { profile, at } => {
+            }) => self.orbit_camera(player, body, orbit),
+            Op::Sound(ops::Sound { profile, at }) => {
                 self.take_cue(package)?;
                 match at {
                     bri_package_runtime::ops::SoundAt::Player(player) => {

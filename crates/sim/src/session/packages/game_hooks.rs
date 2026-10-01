@@ -7,6 +7,7 @@
 //! The engine owns the mechanisms (who is on which team, who may hurt whom,
 //! where a box is and who stands in it); the Add-On owns the policy (how
 //! many teams, what a flag does, what wins).
+use bri_package_runtime::ops;
 use super::*;
 use bri_minigames as mg;
 use bri_package_runtime::content::Behaviour;
@@ -678,12 +679,12 @@ impl Session {
             Ok(s.peers.get(&owner).context("No such player")?.combat.player)
         };
         let effects = match op {
-            Op::SetTeams {
+            Op::SetTeams(ops::SetTeams {
                 game,
                 teams,
                 friendly_fire,
                 ally_same_color,
-            } => {
+            }) => {
                 let specs = teams
                     .into_iter()
                     .map(|t| {
@@ -704,7 +705,7 @@ impl Session {
                     .map_err(|e| anyhow::anyhow!("Teams rejected: {e}"))?
                     .1
             }
-            Op::SetTeam { player, team } => {
+            Op::SetTeam(ops::SetTeam { player, team }) => {
                 let target = player_of(self, player)?;
                 let team = team
                     .map(|t| u32::try_from(t).map(mg::TeamId))
@@ -715,25 +716,25 @@ impl Session {
                     .assign_team(target, team)
                     .map_err(|e| anyhow::anyhow!("Team rejected: {e}"))?
             }
-            Op::SetScore { player, value, add } => {
+            Op::SetScore(ops::SetScore { player, value, add }) => {
                 let target = player_of(self, player)?;
                 let value = i32::try_from(value).context("Score out of range")?;
                 self.minigames
                     .event_score(target, value, add)
                     .map_err(|e| anyhow::anyhow!("Score rejected: {e}"))?
             }
-            Op::ResetMinigame { game } => self
+            Op::ResetMinigame(ops::ResetMinigame { game }) => self
                 .minigames
                 .execute(mg::Command::Reset {
                     game: mg::GameId(game),
                     authority: mg::EventAuthority::System,
                 })
                 .map_err(|e| anyhow::anyhow!("Reset rejected: {e}"))?,
-            Op::EndRound {
+            Op::EndRound(ops::EndRound {
                 game,
                 teams,
                 players,
-            } => {
+            }) => {
                 let teams = teams
                     .into_iter()
                     .map(|t| u32::try_from(t).map(mg::TeamId))
@@ -748,7 +749,7 @@ impl Session {
                     .end_round(mg::GameId(game), teams, players)
                     .map_err(|e| anyhow::anyhow!("Round end rejected: {e}"))?
             }
-            Op::SetGameRule { game, rule } => {
+            Op::SetGameRule(ops::SetGameRule { game, rule }) => {
                 let game = mg::GameId(game);
                 let rejected = |e: mg::Error| anyhow::anyhow!("Mini-game rule rejected: {e}");
                 match rule {
@@ -796,11 +797,11 @@ impl Session {
                     GameRule::End => self.minigames.host_end(game).map_err(rejected)?,
                 }
             }
-            Op::CreateMinigame {
+            Op::CreateMinigame(ops::CreateMinigame {
                 owner,
                 settings,
                 paint,
-            } => {
+            }) => {
                 let defaults = self.minigames.catalog().defaults.clone();
                 let settings = patched_settings(&defaults, &settings)?;
                 let color = *self
@@ -845,13 +846,13 @@ impl Session {
                 }
                 effects
             }
-            Op::PlaceMember { player, game } => {
+            Op::PlaceMember(ops::PlaceMember { player, game }) => {
                 let target = player_of(self, player)?;
                 self.minigames
                     .host_place(target, game.map(mg::GameId))
                     .map_err(|e| anyhow::anyhow!("Placing rejected: {e}"))?
             }
-            Op::HoldRespawn { player, held } => {
+            Op::HoldRespawn(ops::HoldRespawn { player, held }) => {
                 let target = player_of(self, player)?;
                 self.minigames
                     .hold_respawn(target, held)

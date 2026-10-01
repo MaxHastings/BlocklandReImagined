@@ -1,6 +1,7 @@
 //! Mini-games, teams and score as scripts see and change them, and the
 //! bricks a game's rules care about (team spawns, flag stands): what
 //! Slayer-style team games are built from.
+use crate::ops;
 use super::*;
 use crate::ops::{GameRule, MAX_DROP_SECONDS, MAX_SCORE, MAX_TEAMS, TeamOp};
 use crate::report::{ColumnChange, Report};
@@ -140,10 +141,10 @@ fn minigame_map(g: &MinigameView) -> Dynamic {
     ])
 }
 fn game_rule(game: &Dynamic, rule: GameRule) -> Fallible<()> {
-    push(Op::SetGameRule {
+    push(Op::SetGameRule(ops::SetGameRule {
         game: id(game)?,
         rule,
-    })
+    }))
 }
 fn flag_of(v: &Dynamic, what: &str) -> Fallible<bool> {
     v.as_bool()
@@ -225,12 +226,12 @@ fn set_teams(game: Dynamic, list: Array, options: Map) -> Fallible<()> {
             ));
         }
     }
-    push(Op::SetTeams {
+    push(Op::SetTeams(ops::SetTeams {
         game: id(&game)?,
         teams: teams(list)?,
         friendly_fire: flag("friendly_fire")?,
         ally_same_color: flag("ally_same_color")?,
-    })
+    }))
 }
 fn setting_dynamic(value: SettingValue) -> Dynamic {
     match value {
@@ -266,23 +267,23 @@ fn write_setting(game: &Dynamic, team: Option<&Dynamic>, key: &str, value: Dynam
     if !bri_package::setting::is_setting_ref(key) {
         return fail(format!("`{key}` is not a setting key"));
     }
-    push(Op::SetSetting {
+    push(Op::SetSetting(ops::SetSetting {
         game: id(game)?,
         team: team.map(id).transpose()?,
         key: key.into(),
         value: setting_value(value)?,
-    })
+    }))
 }
 fn score(player: &Dynamic, value: &Dynamic, add: bool) -> Fallible<()> {
     let value = value.as_int().map_err(|_| "a score is a whole number")?;
     if value.abs() > MAX_SCORE {
         return fail(format!("a score is at most {MAX_SCORE} either way"));
     }
-    push(Op::SetScore {
+    push(Op::SetScore(ops::SetScore {
         player: id(player)?,
         value,
         add,
-    })
+    }))
 }
 
 fn drop_map(d: &DropView) -> Dynamic {
@@ -377,7 +378,7 @@ fn drop_with(item: &str, options: Map) -> Fallible<()> {
             _ => return fail(format!("`seconds` is 1 to {MAX_DROP_SECONDS}")),
         },
     };
-    push(Op::DropItem {
+    push(Op::DropItem(ops::DropItem {
         item: item.into(),
         position: vector(at, "at")?,
         velocity: options
@@ -388,7 +389,7 @@ fn drop_with(item: &str, options: Map) -> Fallible<()> {
         paint: options.get("paint").map(palette_index).transpose()?,
         data,
         seconds,
-    })
+    }))
 }
 fn wear(
     player: Dynamic,
@@ -403,7 +404,7 @@ fn wear(
             return fail("worn image slots are 2 and 3 (0 is the hand: mount_image(player, image))");
         }
     };
-    push(Op::WearImage {
+    push(Op::WearImage(ops::WearImage {
         player: id(&player)?,
         slot,
         image: if image.is_unit() {
@@ -417,7 +418,7 @@ fn wear(
         },
         paint,
         keep,
-    })
+    }))
 }
 
 pub(super) fn register(engine: &mut Engine) {
@@ -445,10 +446,10 @@ pub(super) fn register(engine: &mut Engine) {
     });
     engine.register_fn("set_teams", set_teams);
     engine.register_fn("set_team", |player: Dynamic, team: Dynamic| {
-        push(Op::SetTeam {
+        push(Op::SetTeam(ops::SetTeam {
             player: id(&player)?,
             team: optional_id(&team)?,
-        })
+        }))
     });
     engine.register_fn("set_score", |player: Dynamic, value: Dynamic| {
         score(&player, &value, false)
@@ -487,10 +488,10 @@ pub(super) fn register(engine: &mut Engine) {
             let json: serde_json::Value = rhai::serde::from_dynamic(&value)?;
             Some(json)
         };
-        push(Op::SetHostData {
+        push(Op::SetHostData(ops::SetHostData {
             key: key.into(),
             value,
-        })
+        }))
     });
     // The lines of one of these rules' data files (`data` provides).
     engine.register_fn("data_lines", |file: &str| {
@@ -510,13 +511,13 @@ pub(super) fn register(engine: &mut Engine) {
     });
     engine.register_fn("restore_minigame", |game: Dynamic, snapshot: Dynamic| {
         let snapshot: serde_json::Value = rhai::serde::from_dynamic(&snapshot)?;
-        push(Op::RestoreMinigame {
+        push(Op::RestoreMinigame(ops::RestoreMinigame {
             game: id(&game)?,
             snapshot,
-        })
+        }))
     });
     engine.register_fn("revive_bricks", |game: Dynamic| {
-        push(Op::ReviveBricks { game: id(&game)? })
+        push(Op::ReviveBricks(ops::ReviveBricks { game: id(&game)? }))
     });
     engine.register_fn("team_setting", |game: Dynamic, team: Dynamic, key: &str| {
         read_setting(&game, Some(&team), key)
@@ -565,14 +566,14 @@ pub(super) fn register(engine: &mut Engine) {
                 return Err(format!("end_round's winners are teams and players, not `{key}`").into());
             }
         }
-        push(Op::EndRound {
+        push(Op::EndRound(ops::EndRound {
             game: id(&game)?,
             teams: ids("teams")?,
             players: ids("players")?,
-        })
+        }))
     });
     engine.register_fn("reset_minigame", |game: Dynamic| {
-        push(Op::ResetMinigame { game: id(&game)? })
+        push(Op::ResetMinigame(ops::ResetMinigame { game: id(&game)? }))
     });
     engine.register_fn("set_default_minigame", |game: Dynamic, on: Dynamic| {
         game_rule(&game, GameRule::Default(flag_of(&on, "the default")?))
@@ -640,20 +641,20 @@ pub(super) fn register(engine: &mut Engine) {
             Some(v) if v.is_unit() => None,
             Some(v) => Some(palette_index(&v)?),
         };
-        push(Op::CreateMinigame {
+        push(Op::CreateMinigame(ops::CreateMinigame {
             owner: optional_id(&owner)?,
             settings: settings_patch(settings)?,
             paint,
-        })
+        }))
     });
     engine.register_fn("place_member", |player: Dynamic, game: Dynamic| {
-        push(Op::PlaceMember {
+        push(Op::PlaceMember(ops::PlaceMember {
             player: id(&player)?,
             game: optional_id(&game)?,
-        })
+        }))
     });
     engine.register_fn("set_brick_item", |brick: Dynamic, item: Dynamic| {
-        push(Op::SetBrickItem {
+        push(Op::SetBrickItem(ops::SetBrickItem {
             brick: id(&brick)?,
             item: if item.is_unit() {
                 None
@@ -663,10 +664,10 @@ pub(super) fn register(engine: &mut Engine) {
                         .map_err(|_| "an item is a string like \"pkg:weapon/flag\", or ()")?,
                 )
             },
-        })
+        }))
     });
     let fire = |brick: Dynamic, input: &str, player: Dynamic| {
-        push(Op::FireBrickInput {
+        push(Op::FireBrickInput(ops::FireBrickInput {
             brick: id(&brick)?,
             input: input.to_owned(),
             player: if player.is_unit() {
@@ -674,7 +675,7 @@ pub(super) fn register(engine: &mut Engine) {
             } else {
                 Some(id(&player)?)
             },
-        })
+        }))
     };
     engine.register_fn("fire_brick_input", fire);
     engine.register_fn("fire_brick_input", move |brick: Dynamic, input: &str| {
@@ -688,12 +689,12 @@ pub(super) fn register(engine: &mut Engine) {
         }
     };
     let fire_game = move |game: Dynamic, input: &str, player: Dynamic, killer: Dynamic| {
-        push(Op::FireGameInput {
+        push(Op::FireGameInput(ops::FireGameInput {
             game: id(&game)?,
             input: input.to_owned(),
             player: optional(player)?,
             killer: optional(killer)?,
-        })
+        }))
     };
     engine.register_fn("fire_game_input", fire_game);
     engine.register_fn(
@@ -707,38 +708,38 @@ pub(super) fn register(engine: &mut Engine) {
     });
     engine.register_fn("drop_item", drop_with);
     engine.register_fn("remove_drop", |drop: Dynamic| {
-        push(Op::RemoveDrop { drop: id(&drop)? })
+        push(Op::RemoveDrop(ops::RemoveDrop { drop: id(&drop)? }))
     });
     // Text floating over one of this package's dropped items in a palette
     // colour (`setShapeName`), or () to take it away.
     engine.register_fn("name_drop", |drop: Dynamic, text: Dynamic, color: Dynamic| {
-        push(Op::NameDrop {
+        push(Op::NameDrop(ops::NameDrop {
             drop: id(&drop)?,
             text: if text.is_unit() { None } else { Some(text.to_string()) },
             color: palette_index(&color)?,
-        })
+        }))
     });
     engine.register_fn("name_drop", |drop: Dynamic, text: Dynamic| {
         if !text.is_unit() {
             return fail("name_drop(drop, text, colour); name_drop(drop, ()) takes the name away");
         }
-        push(Op::NameDrop { drop: id(&drop)?, text: None, color: 0 })
+        push(Op::NameDrop(ops::NameDrop { drop: id(&drop)?, text: None, color: 0 }))
     });
     // A score report in its own window (`show_report(p, #{ title, banner,
     // columns: [#{ key, title }], sections: [#{ title, rows: [#{ key,
     // name, color, cells: #{ column: value } }] }] })`), closed with
     // `hide_report(p)`.
     engine.register_fn("show_report", |player: Dynamic, report: Map| {
-        push(Op::ShowReport {
+        push(Op::ShowReport(ops::ShowReport {
             player: id(&player)?,
             report: Some(Box::new(report_from(report)?)),
-        })
+        }))
     });
     engine.register_fn("hide_report", |player: Dynamic| {
-        push(Op::ShowReport {
+        push(Op::ShowReport(ops::ShowReport {
             player: id(&player)?,
             report: None,
-        })
+        }))
     });
     // A game's report column by key: retitled and filled by row key
     // (`report_column(g, "kills", "Flag Pick-ups", #{ "player:3": 2 })`),
@@ -746,7 +747,7 @@ pub(super) fn register(engine: &mut Engine) {
     engine.register_fn(
         "report_column",
         |game: Dynamic, key: &str, title: Dynamic, cells: Map| {
-            push(Op::ReportColumn {
+            push(Op::ReportColumn(ops::ReportColumn {
                 game: id(&game)?,
                 change: ColumnChange {
                     key: key.into(),
@@ -756,21 +757,21 @@ pub(super) fn register(engine: &mut Engine) {
                         .map(|(k, v)| (k.to_string(), cell(&v)))
                         .collect(),
                 },
-            })
+            }))
         },
     );
     engine.register_fn("report_column", |game: Dynamic, key: &str, title: Dynamic| {
         if !title.is_unit() {
             return fail("report_column(game, key, title, cells); report_column(game, key, ()) takes the column out");
         }
-        push(Op::ReportColumn {
+        push(Op::ReportColumn(ops::ReportColumn {
             game: id(&game)?,
             change: ColumnChange {
                 key: key.into(),
                 title: None,
                 cells: BTreeMap::new(),
             },
-        })
+        }))
     });
     engine.register_fn("drops", || {
         with_world(|world, _| Ok(world.drops().iter().map(drop_map).collect::<Array>()))
@@ -834,7 +835,7 @@ pub(super) fn register(engine: &mut Engine) {
         })
     });
     engine.register_fn("set_brick_field", |brick: Dynamic, key: &str, value: Dynamic| {
-        push(Op::SetBrickField {
+        push(Op::SetBrickField(ops::SetBrickField {
             brick: id(&brick)?,
             key: key.into(),
             value: if value.is_unit() {
@@ -842,19 +843,19 @@ pub(super) fn register(engine: &mut Engine) {
             } else {
                 Some(to_json(&value)?)
             },
-        })
+        }))
     });
     engine.register_fn("set_brick_color", |brick: Dynamic, color: Dynamic| {
-        push(Op::SetBrickColor {
+        push(Op::SetBrickColor(ops::SetBrickColor {
             brick: id(&brick)?,
             color: palette_index(&color)?,
-        })
+        }))
     });
     engine.register_fn("set_zone_period", |zone: i64, period_ms: i64| {
-        push(Op::SetZonePeriod {
+        push(Op::SetZonePeriod(ops::SetZonePeriod {
             zone: u32::try_from(zone).map_err(|_| "a zone is its index in behaviour.json's zones")?,
             period_ms: u32::try_from(period_ms).map_err(|_| "a zone's period is 10 to 10000 ms")?,
-        })
+        }))
     });
     // The avatar pack's choices by slot, and its faces and decals, in the
     // pack's order (`$pref::Avatar::Hat` 6 is the seventh hat).

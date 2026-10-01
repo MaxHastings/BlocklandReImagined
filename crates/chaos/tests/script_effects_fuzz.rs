@@ -1,6 +1,7 @@
 //! Script effects with any arguments a rule can pass: whatever the
 //! capability gate accepts must become a cue every client accepts, so a
 //! rule can never make the host send what joiners refuse.
+use bri_package_runtime::ops;
 use bri_package_runtime::ops::{CAPABILITIES, FOV_RANGE, Op, authorize};
 use bri_sim::presentation::{Cue, CueKind};
 use proptest::{prelude::*, test_runner::RngSeed};
@@ -40,7 +41,7 @@ proptest! {
         seconds in float(),
         muzzle in proptest::option::of(0u64..4),
     ) {
-        let op = Op::Beam { from, to, color, width, seconds, muzzle };
+        let op = Op::Beam(ops::Beam { from, to, color, width, seconds, muzzle });
         if authorize("fuzz", &all(), &op).is_ok() {
             let cue = Cue {
                 id: 1,
@@ -61,7 +62,7 @@ proptest! {
             Just(String::new()),
         ],
     ) {
-        let op = Op::PlayThread { player: 1, thread, sequence: sequence.clone(), after: 0.0 };
+        let op = Op::PlayThread(ops::PlayThread { player: 1, thread, sequence: sequence.clone(), after: 0.0 });
         if authorize("fuzz", &all(), &op).is_ok() {
             let cue = Cue {
                 id: 1,
@@ -75,7 +76,7 @@ proptest! {
 
     #[test]
     fn only_camera_fovs_are_accepted(fov in proptest::option::of(float())) {
-        let accepted = authorize("fuzz", &all(), &Op::SetFov { player: 1, fov }).is_ok();
+        let accepted = authorize("fuzz", &all(), &Op::SetFov(ops::SetFov { player: 1, fov })).is_ok();
         prop_assert_eq!(accepted, fov.is_none_or(|f| FOV_RANGE.contains(&f)));
     }
 }
