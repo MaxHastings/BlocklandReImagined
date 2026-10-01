@@ -24,7 +24,7 @@
 //! or tube does (each "Light shape" line lists its lights); `BRI_BREAK=1`
 //! breaks every bulb and tube by the client's rule. Each recovered light is
 //! listed with its owning light shapes, and each light shape with the map
-//! surfaces within 40 units of it, and within 4 units of it each triangle's
+//! surfaces within 40 units of it, and within 8 units of it each triangle's
 //! lightmap, Dynamic leftover and light shares, and the facing to its
 //! lights. `BRI_DUMP_LEFT=1` saves each Dynamic sheet as `left-{image}.png`:
 //! the decomposed light beside what is left with every light off.
@@ -522,7 +522,7 @@ fn main() -> Result<()> {
                     near.len(),
                     near.iter().copied().fold(f32::INFINITY, f32::min)
                 );
-                // Within 4 units (a lamp's shade): per triangle, its
+                // Within 8 units (a lamp and its shade): per triangle, its
                 // lightmap texel, the Dynamic leftover and light shares
                 // there, and which of the shape's lights it faces.
                 let Some(sheet) = u.dynamic.iter().find(|d| d.parts_image as usize == m.images[9]) else { continue };
@@ -530,7 +530,7 @@ fn main() -> Result<()> {
                 for t in scene.indices[range].chunks_exact(3) {
                     let v: Vec<&bri_render::scene::SceneVertex> = t.iter().map(|&i| &scene.vertices[i as usize]).collect();
                     let at = v.iter().map(|v| Vec3::from(v.position)).sum::<Vec3>() / 3.0;
-                    if v.iter().all(|v| centre.distance(Vec3::from(v.position)) > 4.0) {
+                    if v.iter().all(|v| centre.distance(Vec3::from(v.position)) > 8.0) {
                         continue;
                     }
                     let normal = v.iter().map(|v| Vec3::from(v.normal)).sum::<Vec3>().normalize_or_zero();

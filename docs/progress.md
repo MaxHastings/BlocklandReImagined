@@ -9111,18 +9111,28 @@ than the light the bulb gave.
   out (the Gate's probe showed one on the wall by the window). Now a texel
   takes its whole remainder when a neighbour on the same surface plainly
   holds one of those lights (its rays see it, or a quarter of it is left
-  there). Bake format 8.
+  there).
 - `lighting_probe`: `BRI_BREAK=1` breaks every bulb and tube by the
   client's rule. Within 4 units of a light shape it prints each triangle's
   lightmap, Dynamic leftover, light shares and facing. `BRI_DUMP_LEFT=1`
   saves each sheet's decomposed light beside its leftover.
-- Open: the shade still glows after the break on the real Bedroom. The
-  probe's new lines show which of its texels keep the light; the fix
-  follows from them.
+- The shade stops glowing. The fit put the bulb's light 9 inside the
+  shade, so the shade's outside faces away from it, and a light a texel
+  faced away from never took a share. The shade's baked glow stayed in the
+  leftover after the break. The hidden lights now include those a texel
+  faces away from, taken by their falloff as the renderer gives a share
+  (`light_given` has no facing term), under the same cutoff and edge
+  rule. The Gate's probe at format 7 showed that the lamp's stem and
+  socket within 4 units hold only the compiler's ambient
+  ([102,102,77]), which rightly stays. The shade sits 6 or more units
+  out, so the probe now prints triangles within 8 units. Bake format 9.
 
 Tests: `bri-render --test unified_lighting a_switched_off_light_leaves_the_same_light_in_every_live_mode`
 (modes 1-3 identical, fails without the Unified per-texel branch);
 `--test map_lighting a_switched_off_light_leaves_no_line_along_its_shadows_edges`
 (a turned slab's filtered shadow; an edge texel keeps 9 levels without the
 neighbour rule, at most 3 with it);
+`bri-render --lib a_shade_facing_away_from_its_light_goes_dark_with_it`
+(the light given, so the fit cannot explain the shade with lights placed
+outside it; 153 levels kept without the change, at most 2 with it);
 `bri-client --lib a_broken_bulb_switches_off_its_lights_and_rules_tint_the_rest`.

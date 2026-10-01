@@ -238,7 +238,7 @@ const LEAK_STEP: i64 = 3;
 const LEAK_LEVELS: f32 = 8.0 / 255.0;
 const LEAK_SUN: f32 = 0.12;
 /// Names the fit, the bake and the stored layout; change it with either.
-const FORMAT: &[u8; 8] = b"BRIML\0\0\x08";
+const FORMAT: &[u8; 8] = b"BRIML\0\0\x09";
 
 /// A light recovered from a map's lightmaps. The map compiler's point light:
 /// full `color` out to `inner`, then falling linearly to nothing at `outer`,
@@ -813,8 +813,9 @@ impl Bake {
     /// (`authored_floor`) goes first to the lights its rays see, as far as it
     /// holds them (where the compiler had a shadow the rays miss, their share
     /// drops), and what is left over to the lights in reach the rays say are
-    /// hidden, when it is most of their light (the compiler let it through
-    /// geometry the rays hit, such as the Bedroom lamp's shade). The floor and the mission sun's
+    /// hidden or the texel faces away from, when it is most of their light
+    /// (the compiler let it through geometry the rays hit, or lit the
+    /// outside of the Bedroom lamp's shade with the light inside). The floor and the mission sun's
     /// ambient never go to a light. Switching a light off then takes away
     /// exactly the light it baked: its baked shadows vanish with it instead
     /// of turning darker than the room, and nothing it lit stays lit.
@@ -878,11 +879,24 @@ impl Bake {
                 // The authored light (a cleaned leak holds less), above the
                 // floor; the rest of the texel is the sun's ambient.
                 let held = (l.base.min(texel) - floor).max(Vec3::ZERO);
-                let shades: Vec<Vec3> = lights.iter().map(|light| light.shade(l.position, l.normal)).collect();
-                let in_reach = |k: usize| shades[k].max_element() > 0.0;
-                let seen = (0..lights.len()).filter(|&k| mask & (1 << k) != 0 && in_reach(k)).fold(0u32, |m, k| m | 1 << k);
+                // Each light as the renderer gives a share of it
+                // (`light_given`): its falloff, facing or not. The rays see
+                // only lights the texel faces; the hidden ones include those
+                // it faces away from, which the compiler could still have
+                // lit it with, as the outside of the Bedroom lamp's shade
+                // glows with the light inside it.
+                let given_by: Vec<Vec3> = lights
+                    .iter()
+                    .map(|light| {
+                        let distance = Vec3::from(light.position).distance(l.position);
+                        Vec3::from(light.color) * falloff(distance, light.inner, light.outer)
+                    })
+                    .collect();
+                let in_reach = |k: usize| given_by[k].max_element() > 0.0;
+                let faces = |k: usize| lights[k].shade(l.position, l.normal).max_element() > 0.0;
+                let seen = (0..lights.len()).filter(|&k| mask & (1 << k) != 0 && faces(k)).fold(0u32, |m, k| m | 1 << k);
                 let hidden = (0..lights.len()).filter(|&k| seen & (1 << k) == 0 && in_reach(k)).fold(0u32, |m, k| m | 1 << k);
-                let light_of = |set: u32| (0..lights.len()).filter(|&k| set & (1 << k) != 0).map(|k| shades[k]).sum::<Vec3>();
+                let light_of = |set: u32| (0..lights.len()).filter(|&k| set & (1 << k) != 0).map(|k| given_by[k]).sum::<Vec3>();
                 let seen_light = light_of(seen);
                 let s = share(held, seen_light);
                 let mut shares = vec![0.0f32; lights.len()];
@@ -1552,6 +1566,92 @@ impl MapLighting {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A quad of `scene` with its own 32x32 lightmap (decomposed, no sun)
+    /// holding `light` at each texel.
+    fn lit_quad(scene: &mut crate::scene::SceneData, corner: impl Fn(f32, f32) -> Vec3, normal: Vec3, light: impl Fn(Vec3) -> Vec3) {
+        use crate::scene::{DECOMPOSED_LIGHTMAP, Material, MeshBatch, SceneVertex};
+        const SIZE: u32 = 32;
+        let at = |t: u32| (t as f32 + 0.5) / SIZE as f32 * 2.0 - 1.0;
+        let base = image(SIZE, SIZE, |x, y| {
+            let c = light(corner(at(x), at(y))).min(Vec3::ONE) * 255.0 + 0.5;
+            [c.x as u8, c.y as u8, c.z as u8, 255]
+        });
+        let index = scene.images.len();
+        scene.images.push(base.clone());
+        let mut parts = base.clone();
+        parts.rgba.chunks_exact_mut(4).for_each(|t| t[3] = 0);
+        scene.images.push(parts);
+        scene.lightmap_bases.push((index, std::sync::Arc::new(base)));
+        let mut material = Material::surface("quad", 0, index);
+        material.images[9] = index + 1;
+        material.parameters = Some(DECOMPOSED_LIGHTMAP);
+        let first = scene.vertices.len() as u32;
+        for (a, b) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+            scene.vertices.push(SceneVertex {
+                position: corner(a, b).to_array(),
+                normal: normal.to_array(),
+                uv: [0.0; 2],
+                lightmap_uv: [(a + 1.0) * 0.5, (b + 1.0) * 0.5],
+                color: [1.0; 4],
+                fx: [0.0; 4],
+            });
+        }
+        let start = scene.indices.len() as u32;
+        scene.indices.extend([0, 1, 2, 0, 2, 3].map(|i| first + i));
+        scene.batches.push(MeshBatch {
+            indices: start..start + 6,
+            material: scene.materials.len(),
+            center: [0.0; 3],
+        });
+        scene.materials.push(material);
+    }
+
+    /// A lamp's shade: a band of panels around a light, facing out, away
+    /// from it, which the map compiler lit anyway (the Bedroom lamp's shade
+    /// glows with the bulb inside). With the light given, as the fit found
+    /// it on the Bedroom, the shade's glow is the light's, so it goes out
+    /// with it instead of glowing in a dark room.
+    #[test]
+    fn a_shade_facing_away_from_its_light_goes_dark_with_it() {
+        let light = MapLight {
+            position: [0.0, 0.0, 0.0],
+            color: [0.6, 0.5, 0.4],
+            inner: 5.0,
+            outer: 25.0,
+            channel: Some(0),
+        };
+        let given = |p: Vec3| Vec3::from(light.color) * falloff(p.length(), light.inner, light.outer);
+        let mut scene = crate::scene::SceneData {
+            sun_direction: [0.0, -1.0, 0.0],
+            ..Default::default()
+        };
+        for (axis, side) in [(0, -1.0f32), (0, 1.0), (2, -1.0), (2, 1.0)] {
+            let mut out = Vec3::ZERO;
+            out[axis] = side;
+            let corner = move |a: f32, b: f32| {
+                let mut p = Vec3::new(0.0, 0.5 * b, 0.0);
+                p[axis] = 1.5 * side;
+                p[2 - axis] = 1.5 * a;
+                p
+            };
+            lit_quad(&mut scene, corner, out, given);
+        }
+        // A dark floor far below, out of reach: the compiler's ambient, none.
+        lit_quad(&mut scene, |a, b| Vec3::new(40.0 * a, -40.0, 40.0 * b), Vec3::Y, |_| Vec3::ZERO);
+        let bake = Bake::new(&scene).expect("lightmapped shade");
+        let lights = [light];
+        let seen: Vec<u32> = bake
+            .lexels
+            .iter()
+            .map(|l| u32::from(light.shade(l.position, l.normal).max_element() > 0.0 && bake.sees(l.position, l.normal, light.position.into())))
+            .collect();
+        let sheets = bake.dynamic_sheets(&lights, &seen, &[]);
+        for sheet in &sheets[..4] {
+            let worst = sheet.left.chunks_exact(4).map(|t| t[..3].iter().copied().max().unwrap_or(0)).max().unwrap_or(0);
+            assert!(worst <= 2, "a side of the shade keeps {worst} levels with its light off");
+        }
+    }
 
     fn image(w: u32, h: u32, f: impl Fn(u32, u32) -> [u8; 4]) -> SceneImage {
         let mut rgba = Vec::new();
