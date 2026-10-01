@@ -6,9 +6,13 @@
       "original": {
         "addon": "Tool_Duplicator",
         "title": "Duplicator",
-        "authors": ["Randy", "Ephialtes"],
+        "authors": [
+          "Plornt"
+        ],
         "version": "1.0.0",
-        "sha256": []
+        "sha256": [
+          "8ea932169dcd028580c00ebf55fa8747367f5ec8e258c2776b3d5d5d96a63fde"
+        ]
       }
     },
     {
@@ -16,9 +20,14 @@
       "original": {
         "addon": "Vehicle_Stunt_Plane",
         "title": "Stunt Plane",
-        "authors": ["Kaje", "Ephialtes"],
+        "authors": [
+          "Kaje",
+          "Ephialtes"
+        ],
         "version": "1.0.0",
-        "sha256": ["e68fd1730c28f6b16ce0980336fc57f0e0d23e0c945256005c0957a84142329e"]
+        "sha256": [
+          "e68fd1730c28f6b16ce0980336fc57f0e0d23e0c945256005c0957a84142329e"
+        ]
       }
     },
     { "id": "brick_mirror", "path": "brick_mirror" },
@@ -42,9 +51,13 @@
       "original": {
         "addon": "Tool_NewDuplicator",
         "title": "New Duplicator",
-        "authors": ["Zeblote"],
+        "authors": [
+          "Zeblote"
+        ],
         "version": "1.0.0",
-        "sha256": []
+        "sha256": [
+          "b443eab7e97dfc51c1532c88411e5c93ed9a13b4a7fa0c60b7707b405fefa118"
+        ]
       }
     },
     {
@@ -53,9 +66,14 @@
       "original": {
         "addon": "Tool_Fill_Can",
         "title": "Fill Can",
-        "authors": ["Mr.Noßody"],
+        "authors": [
+          "Zor",
+          "Hit man"
+        ],
         "version": "1.0.0",
-        "sha256": []
+        "sha256": [
+          "d40fc7127fe87da3b5027baf37a928fd1f575970d9e55eab1ebf89f5ed198ef8"
+        ]
       }
     },
     {
@@ -64,9 +82,13 @@
       "original": {
         "addon": "Gamemode_TrenchDigging",
         "title": "Trench Digging",
-        "authors": ["lilboarder32"],
+        "authors": [
+          "Lilboarder"
+        ],
         "version": "1.0.0",
-        "sha256": []
+        "sha256": [
+          "0b5d9bc710a2f67720617a7c656841c0226617ec59eae19cf986046c3d82bc3c"
+        ]
       }
     },
     {
@@ -75,9 +97,15 @@
       "original": {
         "addon": "Tool_GrappleRope",
         "title": "Grapple Rope",
-        "authors": ["Demian", "SolarFlare", "Uristqwerty", "Qwertyuiopas"],
+        "authors": [
+          "Uristqwerty",
+          "SolarFlare",
+          "Demian"
+        ],
         "version": "1.0.0",
-        "sha256": []
+        "sha256": [
+          "456a082bb30c498ed08d1771edbde8697e37a036077b5a20b68c446c1395fa19"
+        ]
       }
     },
     {
@@ -86,9 +114,17 @@
       "original": {
         "addon": "Weapon_Loz_Hookshot",
         "title": "Hookshot",
-        "authors": ["Loz"],
+        "authors": [
+          "Kaje",
+          "Nitramtj",
+          "Aloshi",
+          "Loz",
+          "Polymer"
+        ],
         "version": "1.0.0",
-        "sha256": []
+        "sha256": [
+          "aa63bc56831c06a9b4b6692fdf64c53e8a3eedd589e922c9e240dd55b7b9f54e"
+        ]
       }
     },
     {
@@ -97,31 +133,46 @@
       "original": {
         "addon": "Weapon_Sniper_Rifle",
         "title": "Sniper Rifle",
-        "authors": ["Kaje", "Conan"],
+        "authors": [
+          "Kaje"
+        ],
         "version": "1.0.0",
-        "sha256": []
+        "sha256": [
+          "ddf1f4dff31764c394bf812b5b67860a51547b78fc96e364fbce44df44b9b15a"
+        ]
       }
     },
     {
-      "id": "weapon_butterfly_knife",
+      "id": "weapon_butterflyknife",
       "enabled": false,
       "original": {
-        "addon": "Weapon_Butterfly_Knife",
+        "addon": "Weapon_ButterflyKnife",
         "title": "Butterfly Knife",
-        "authors": ["Stratofortress"],
+        "authors": [
+          "Stratofortress"
+        ],
         "version": "1.0.0",
-        "sha256": []
+        "sha256": [
+          "4d8d0cc59be118094a2e6e39056b895e19447c05ed8d3a644fd7a56780a7afa4"
+        ]
       }
     },
     {
-      "id": "weapon_he_grenade",
+      "id": "weapon_hegrenade",
       "enabled": false,
       "original": {
-        "addon": "Weapon_HE_Grenade",
+        "addon": "Weapon_HEGrenade",
         "title": "HE-Grenade",
-        "authors": ["TheGeek", "Pload", "Rotondo", "Ephialtes"],
+        "authors": [
+          "TheGeek",
+          "Pload",
+          "Rotondo",
+          "Ephialtes"
+        ],
         "version": "1.0.0",
-        "sha256": []
+        "sha256": [
+          "1cae396e8616bf57e62dcfb4fda35490e93a772ee09979af45a3f7d4601dc351"
+        ]
       }
     },
     {
@@ -129,10 +180,15 @@
       "enabled": false,
       "original": {
         "addon": "Weapon_AdventurePack",
-        "title": "Adventure Pack",
-        "authors": ["Bushido", "Conan"],
+        "title": "Adventurer's Weapons",
+        "authors": [
+          "Bushido",
+          "Conan"
+        ],
         "version": "1.0.0",
-        "sha256": []
+        "sha256": [
+          "9ce429bfc491cff5e3075798f88c2109717a3ea67d91f8461d8cda672a894e49"
+        ]
       }
     },
     {
@@ -141,9 +197,13 @@
       "original": {
         "addon": "Script_PlayerThrowing",
         "title": "Player Throwing",
-        "authors": ["Electrk"],
+        "authors": [
+          "Electrk"
+        ],
         "version": "1.0.0",
-        "sha256": []
+        "sha256": [
+          "aef5a4503044f5ec690c8cb3ef693ed885f97f90c7d79d7c453704be56caf0ba"
+        ]
       }
     },
     {
@@ -152,9 +212,13 @@
       "original": {
         "addon": "Gamemode_Slayer",
         "title": "Slayer",
-        "authors": ["Greek2me"],
+        "authors": [
+          "Greek2me"
+        ],
         "version": "4.1.5",
-        "sha256": []
+        "sha256": [
+          "e199627045d2d0250226605727b9ec32f6b1909dbadcc58d23d0f059fae0c7b9"
+        ]
       }
     },
     {
@@ -162,10 +226,14 @@
       "enabled": false,
       "original": {
         "addon": "Gamemode_Slayer_CTF",
-        "title": "Slayer Capture the Flag",
-        "authors": ["Greek2me"],
+        "title": "Slayer - Capture the Flag",
+        "authors": [
+          "Greek2me"
+        ],
         "version": "1.0.0",
-        "sha256": []
+        "sha256": [
+          "d9e699b6080477d8898d8ecc70e89ef9aa8659de44fdbee18e854867bdc48106"
+        ]
       }
     }
   ]
