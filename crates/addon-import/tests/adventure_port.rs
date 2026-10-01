@@ -184,18 +184,18 @@ fn ammo_system_guns_get_magazines_that_reload_like_their_states() {
         image("batonimage").shot.unwrap().hitscan.unwrap().range,
         4.0
     );
-    // The grenade bursts into its cluster shrapnel.
-    let children = pack.projectiles[&format!("{NS}:projectile/shrapgrenprojectile")]
+    // The grenade bursts into its cluster shrapnel and its smoke trails.
+    let children: Vec<_> = pack.projectiles[&format!("{NS}:projectile/shrapgrenprojectile")]
         .children
-        .clone()
-        .unwrap();
+        .iter()
+        .map(|c| (c.projectile.clone(), c.count, c.on_explode))
+        .collect();
     assert_eq!(
-        (children.projectile, children.count, children.on_explode),
-        (
-            format!("{NS}:projectile/shrapgrenclusterprojectile"),
-            4,
-            true
-        )
+        children,
+        [
+            (format!("{NS}:projectile/shrapgrenclusterprojectile"), 4, true),
+            (format!("{NS}:projectile/shrapgrentrailprojectile"), 3, true)
+        ]
     );
     // Twelve shots empty the pistol; the image goes through its reload
     // states once, and the rounds arrive as it checks its ammo again.

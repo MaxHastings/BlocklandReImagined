@@ -385,7 +385,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
             sport_image: (!sport.is_empty()).then(|| native_id("image", &sport)),
             rest_speed: num(d, "restVelocity", 0.0),
             max_bounces: 0,
-            children: None,
+            children: Vec::new(),
             aura: None,
         };
         pack.projectiles.insert(id, p);

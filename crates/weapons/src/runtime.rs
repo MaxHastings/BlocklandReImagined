@@ -2259,12 +2259,10 @@ impl WeaponsWorld {
         {
             self.aura(p, &d, aura, q);
         }
-        if let Some(c) = &d.children
-            && c.every_ticks > 0
-            && flown > 0
-            && flown.is_multiple_of(u64::from(c.every_ticks))
-        {
-            self.children(p, c);
+        for (set, c) in d.children.iter().enumerate() {
+            if c.every_ticks > 0 && flown > 0 && flown.is_multiple_of(u64::from(c.every_ticks)) {
+                self.children(p, c, set);
+            }
         }
         if p.stuck {
             return true;
@@ -2436,8 +2434,8 @@ impl WeaponsWorld {
                 velocity: p.velocity,
             });
             self.effect(p, &d.bounce_effect, Some(normal));
-            if let Some(c) = d.children.as_ref().filter(|c| c.on_bounce) {
-                self.children(p, c);
+            for (set, c) in d.children.iter().enumerate().filter(|(_, c)| c.on_bounce) {
+                self.children(p, c, set);
             }
             if d.sport_image.is_some() && d.rest_speed > 0.0 && p.velocity.length() < d.rest_speed {
                 let item = if d.name.eq_ignore_ascii_case("footballProjectile") {
@@ -2666,8 +2664,9 @@ impl WeaponsWorld {
     }
     /// `children`: throw them out in directions from the tick and the
     /// parent, so every player computes the same ones.
-    fn children(&mut self, p: &Projectile, c: &crate::Children) {
-        for n in 0..u64::from(c.count) {
+    /// Each `set` of a projectile's children draws its own directions.
+    fn children(&mut self, p: &Projectile, c: &crate::Children, set: usize) {
+        for n in (0..u64::from(c.count)).map(|n| n + set as u64 * 16) {
             let z = unit_random(self.tick, p.id, n * 2) * 2.0 - 1.0;
             let phi = unit_random(self.tick, p.id, n * 2 + 1) * std::f32::consts::TAU;
             let r = (1.0 - z * z).max(0.0).sqrt();
@@ -2727,8 +2726,8 @@ impl WeaponsWorld {
         direction: Option<Vec3>,
     ) {
         self.effect(p, &d.explosion.effect, direction);
-        if let Some(c) = d.children.as_ref().filter(|c| c.on_explode) {
-            self.children(p, c);
+        for (set, c) in d.children.iter().enumerate().filter(|(_, c)| c.on_explode) {
+            self.children(p, c, set);
         }
         if d.brick.radius > 0.0 {
             self.events.push(Event::BrickImpact {

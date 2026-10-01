@@ -130,7 +130,7 @@ fn weapons() -> Arc<Pack> {
         sport_image: None,
         rest_speed: 0.,
         max_bounces: 0,
-        children: None,
+        children: Vec::new(),
         aura: None,
     };
     Arc::new(Pack {

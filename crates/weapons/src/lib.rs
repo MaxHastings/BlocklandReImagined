@@ -707,9 +707,14 @@ pub struct ProjectileDef {
     #[serde(skip_serializing_if = "is_zero_u32")]
     pub max_bounces: u32,
     /// Smaller projectiles it throws out as it flies, bounces or explodes
-    /// (flak sparks, a molotov's embers, a cluster bomb).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub children: Option<Children>,
+    /// (flak sparks, a molotov's embers, a cluster bomb): one set, or a
+    /// list of up to 4 (a grenade's shrapnel and its smoke trails).
+    #[serde(
+        default,
+        deserialize_with = "one_or_many",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub children: Vec<Children>,
     /// Hurts whatever stands near it every so often while it lives (fire,
     /// gas, a lingering ember).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -748,6 +753,20 @@ pub struct Children {
 }
 fn one_u32() -> u32 {
     1
+}
+/// [`ProjectileDef::children`]: one set as an object, or a list.
+fn one_or_many<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<Children>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(Children),
+        Many(Vec<Children>),
+    }
+    Ok(match Option::<OneOrMany>::deserialize(d)? {
+        None => Vec::new(),
+        Some(OneOrMany::One(c)) => vec![c],
+        Some(OneOrMany::Many(c)) => c,
+    })
 }
 /// Damage to everything within `radius` every `every_ticks` while the
 /// projectile lives, stuck or flying, under the same rules as its
@@ -808,7 +827,7 @@ impl Default for ProjectileDef {
             sport_image: None,
             rest_speed: 0.0,
             max_bounces: 0,
-            children: None,
+            children: Vec::new(),
             aura: None,
         }
     }
@@ -1372,12 +1391,16 @@ impl Pack {
                 p.max_bounces <= 64,
                 "Invalid max_bounces of projectile {id}: 0 to 64"
             );
-            if let Some(c) = &p.children {
+            ensure!(
+                p.children.len() <= 4,
+                "Projectile {id} has more than 4 sets of children"
+            );
+            for c in &p.children {
                 let child = self.projectiles.get(&c.projectile).ok_or_else(|| {
                     anyhow::anyhow!("Missing child projectile {} of {id}", c.projectile)
                 })?;
                 ensure!(
-                    child.children.is_none(),
+                    child.children.is_empty(),
                     "Child projectile {} of {id} has children of its own",
                     c.projectile
                 );

@@ -183,6 +183,12 @@ datablock ProjectileData(shrapGrenClusterProjectile : standinPistolProjectile)
    lifetime            = 500;
 };
 
+datablock ProjectileData(shrapGrenTrailProjectile : standinPistolProjectile)
+{
+   directDamage        = 0;
+   lifetime            = 400;
+};
+
 datablock ProjectileData(shrapGrenProjectile : standinPistolProjectile)
 {
    directDamage        = 0;
@@ -273,6 +279,10 @@ function shrapGrenprojectile::onExplode(%this, %obj)
    %shards = 4;
    for(%i = 0; %i < %shards; %i++)
       spawnShard(%shrapData, %obj.getPosition(), getRandom(-6,6), getRandom(-6,6), getRandom(-6,6));
+   %shrapData = ShrapGrenTrailProjectile;
+   %shards = 3;
+   for(%i = 0; %i < %shards; %i++)
+      spawnShard(%shrapData, %obj.getPosition(), getRandom(-12,12), getRandom(-12,12), getRandom(-12,12));
 }
 
 function hl2AmmoOnReload(%this, %obj, %slot)

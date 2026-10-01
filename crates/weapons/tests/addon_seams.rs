@@ -396,3 +396,56 @@ fn a_magazines_last_rounds_fire_the_last_shot() {
     let bad = json.replace(r#""per_shot": 2, "last_rounds": 2,"#, r#""per_shot": 2,"#);
     assert!(Pack::from_json(bad.as_bytes()).is_err());
 }
+
+/// A frag grenade's script threw two kinds of fragment as it burst
+/// (shrapnel and smoke trails): `children` as a list, each set its own
+/// count, speed and directions.
+#[test]
+fn a_projectile_bursts_into_several_sets_of_children() {
+    let json = format!(
+        r#"{{
+            "schema_version": {SCHEMA},
+            "id": "kit",
+            "items": {{}},
+            "images": {{}},
+            "projectiles": {{
+                "kit:projectile/frag": {{ "speed": 10.0, "lifetime_ticks": 5, "fade_ticks": 5,
+                    "explode_death": true,
+                    "children": [
+                        {{ "projectile": "kit:projectile/shard", "count": 5, "speed": 20.0, "on_explode": true }},
+                        {{ "projectile": "kit:projectile/trail", "count": 3, "speed": 40.0, "on_explode": true }}
+                    ] }},
+                "kit:projectile/shard": {{ "speed": 20.0, "lifetime_ticks": 60, "fade_ticks": 60 }},
+                "kit:projectile/trail": {{ "speed": 40.0, "lifetime_ticks": 60, "fade_ticks": 60 }}
+            }}
+        }}"#
+    );
+    let mut w = WeaponsWorld::new(Pack::from_json(json.as_bytes()).unwrap()).unwrap();
+    w.add_actor(A, 5).unwrap();
+    w.spawn("kit:projectile/frag", A, Vec3::ZERO, Vec3::X * 10.0, 1.0)
+        .unwrap();
+    let mut spawned = vec![];
+    for _ in 0..20 {
+        for e in w.step(&mut Open) {
+            if let Event::Spawned {
+                definition,
+                velocity,
+                ..
+            } = e
+            {
+                spawned.push((definition, velocity.length()));
+            }
+        }
+    }
+    let of = |name: &str| {
+        spawned
+            .iter()
+            .filter(|(d, _)| d == name)
+            .map(|(_, speed)| *speed)
+            .collect::<Vec<_>>()
+    };
+    let (shards, trails) = (of("kit:projectile/shard"), of("kit:projectile/trail"));
+    assert_eq!((shards.len(), trails.len()), (5, 3), "{spawned:?}");
+    assert!(shards.iter().all(|s| (s - 20.0).abs() < 1e-3));
+    assert!(trails.iter().all(|s| (s - 40.0).abs() < 1e-3));
+}
