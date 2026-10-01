@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "include": [
+    "tier-tactical-core",
     "tier-tactical"
   ],
   "notes": "Tier+Tactical Explosive 1 on Tier 1's ammo system: the Conc' Grenade, Stick Grenade and Molotov are counted from the holder's grenades (TT_grenade), a throw taking one; with none left the grenade leaves the hand, its tool still selected, and comes back as a Grenade Bag or a dead player's bag brings more. The Conc' Grenade goes off on its third knock with a knock sound at each; the Molotov bursts into three or four embers thrown as its script threw them, which for the ember's life sear every player within reach with flames and a sizzle only they hear. One difference: Kai played each toss sound twice at once to make it a little louder; it plays once here.",

@@ -1319,6 +1319,90 @@ pub struct Hitscan {
     pub player_sound: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub other_sound: String,
+    /// Landing sounds a script drew at random before each shot (`if
+    /// (getRandom(0, 1)) %this.TT_raycastExplosionBrickSound = A; else
+    /// ... = B;`, then `Parent::onFire`): each shot plays one pair, drawn
+    /// alike by its every ray, up to [`HitSounds::MAX`]. A side a pair
+    /// leaves out keeps `player_sound` or `other_sound`; an empty one
+    /// plays nothing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sounds: Vec<HitSounds>,
+    /// The direct damage each ray deals, -100 to 100, in place of its
+    /// projectile's: a script that set the damage field before
+    /// `Parent::onFire` (a knife's slash and its weaker stab, each a fire
+    /// state of its own).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub damage: Option<f32>,
+}
+impl Hitscan {
+    /// Within its limits; `what` names it in the error.
+    fn validate(&self, what: &str) -> Result<()> {
+        let sounds = self
+            .sounds
+            .iter()
+            .flat_map(|s| [&s.player, &s.other])
+            .flatten();
+        ensure!(
+            [
+                &self.explosion,
+                &self.flown,
+                &self.player_sound,
+                &self.other_sound
+            ]
+            .into_iter()
+            .chain(sounds)
+            .all(|t| t.len() <= 128)
+                && self.sounds.len() <= HitSounds::MAX,
+            "Invalid hitscan of {what}: explosion, flown projectile and sounds up to 128 \
+             bytes, at most {} sound pairs",
+            HitSounds::MAX
+        );
+        ensure!(
+            (1.0..=2000.0).contains(&self.range)
+                && self
+                    .moving_range
+                    .is_none_or(|r| (1.0..=2000.0).contains(&r))
+                && self.eye_within.is_none_or(|r| (0.1..=50.0).contains(&r))
+                && self.damage.is_none_or(|d| (-100.0..=100.0).contains(&d))
+                && self.tracer.is_none_or(|t| {
+                    t.color.iter().all(|c| (0.0..=1.0).contains(c))
+                        && t.width > 0.0
+                        && t.width <= 1.0
+                        && t.seconds > 0.0
+                        && t.seconds <= 2.0
+                }),
+            "Invalid hitscan of {what}: range 1 to 2000, eye_within 0.1 to 50, damage -100 \
+             to 100, tracer colour 0 to 1, width to 1, seconds to 2"
+        );
+        Ok(())
+    }
+    /// The landing sound for a ray meeting a player or anything else, with
+    /// `draw` (0 to 1) picking the shot's pair.
+    pub fn sound(&self, player: bool, draw: f32) -> &str {
+        let pair = (!self.sounds.is_empty()).then(|| {
+            let n = self.sounds.len();
+            &self.sounds[((draw * n as f32) as usize).min(n - 1)]
+        });
+        let (own, picked) = if player {
+            (&self.player_sound, pair.and_then(|p| p.player.as_ref()))
+        } else {
+            (&self.other_sound, pair.and_then(|p| p.other.as_ref()))
+        };
+        picked.unwrap_or(own)
+    }
+}
+/// One of [`Hitscan::sounds`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HitSounds {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub player: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub other: Option<String>,
+}
+impl HitSounds {
+    /// The most pairs a hitscan draws from.
+    pub const MAX: usize = 8;
 }
 /// A hitscan shot's streak, drawn on every player's screen from their own
 /// copy of the weapons pack: the shot sends only where it ended.
@@ -2149,10 +2233,9 @@ impl Pack {
                             && *script == script.to_ascii_lowercase()
                             && script != "onfire"
                             && shot_ok(s)
-                            && s.hitscan.is_none()
                     }),
                 "Invalid state shots of image {id}: at most 8, by lowercase state script other \
-                 than onfire, each a shot as its own without hitscan"
+                 than onfire, each a shot as its own"
             );
             if let Some(cook) = &image.cook {
                 cook.validate()
@@ -2166,29 +2249,17 @@ impl Pack {
                 volleys_ok(&image.volleys),
                 "Invalid volleys of image {id}: at most 4, each 1 to 64 projectiles, spread 0 to 1"
             );
-            if let Some(h) = image.shot.as_ref().and_then(|s| s.hitscan.as_ref()) {
+            let hitscans = image
+                .shot
+                .iter()
+                .chain(image.state_shots.values())
+                .filter_map(|s| s.hitscan.as_ref());
+            for h in hitscans {
                 ensure!(
-                    [&h.explosion, &h.flown, &h.player_sound, &h.other_sound]
-                        .iter()
-                        .all(|t| t.len() <= 128),
-                    "Invalid hitscan of image {id}: explosion, flown projectile and sounds \
-                     up to 128 bytes"
+                    image.projectile.is_some(),
+                    "Invalid hitscan of image {id}: it needs a projectile"
                 );
-                ensure!(
-                    image.projectile.is_some()
-                        && (1.0..=2000.0).contains(&h.range)
-                        && h.moving_range.is_none_or(|r| (1.0..=2000.0).contains(&r))
-                        && h.eye_within.is_none_or(|r| (0.1..=50.0).contains(&r))
-                        && h.tracer.is_none_or(|t| {
-                            t.color.iter().all(|c| (0.0..=1.0).contains(c))
-                                && t.width > 0.0
-                                && t.width <= 1.0
-                                && t.seconds > 0.0
-                                && t.seconds <= 2.0
-                        }),
-                    "Invalid hitscan of image {id}: it needs a projectile, range 1 to 2000, \
-                     eye_within 0.1 to 50, tracer colour 0 to 1, width to 1, seconds to 2"
-                );
+                h.validate(&format!("image {id}"))?;
             }
             ensure!(
                 image

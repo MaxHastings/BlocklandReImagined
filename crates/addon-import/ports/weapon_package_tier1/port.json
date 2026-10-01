@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "include": [
+    "tier-tactical-core",
     "tier-tactical"
   ],
   "notes": "Tier+Tactical Tier 1 (Bushido, Space Guy, Panopticon) on its own ammo system: each gun's TT_maxAmmo and TT_ammoType become its image's magazine, with the T+T2 reserves and caps, and the image's own check states (TT_onLoadCheck and the rest) decide when it fires and reloads; the light key reloads from Ready or Empty. Raycast pistols hit along a ray with their TT_raycast fields, reaching less and spreading more on the move; the Pump Shotgun fires 9 pellets and its blast, the Sport Rifle a weaker round on the move, the Submachine Gun slows whoever it hits. Recoil shakes the view. Host rules: ammo items and a dead player's ammo bag, Sport Rifle headshots with their own kill message.",

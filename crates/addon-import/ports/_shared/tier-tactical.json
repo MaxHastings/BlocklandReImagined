@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "notes": "Tier+Tactical's ammo system, raycasts and gun scripts, shared by every pack built on it (Support_TT_Ammo.cs, Support_TT_Raycasting.cs and Support_TT_Weapons.cs in Weapon_Package_Tier1). With its default settings: the T+T2 ammo system, recoil on, bullet slowdown on, players drop their ammo.",
+  "notes": "Tier+Tactical's ammo system and gun scripts (raycasts and arm moves in tier-tactical-core), shared by every pack built on it (Support_TT_Ammo.cs, Support_TT_Raycasting.cs and Support_TT_Weapons.cs in Weapon_Package_Tier1). With its default settings: the T+T2 ammo system, recoil on, bullet slowdown on, players drop their ammo.",
   "handles": {
     "Player::pickup": "engine: magazines are kept per tool slot; a gun picked up brings the rounds it was thrown with, or comes full",
     "servercmdDropTool": "engine: a thrown gun takes its own slot's rounds with it",
@@ -26,10 +26,6 @@
     "TT_registerAmmoType": "the host rules' registered table reads each call",
     "TT_defaultIfUnset": "every setting is fixed at the default it gives: the port's numbers are Kai's defaults",
     "call:TT_defaultIfUnset": "every setting is fixed at the default it gives: the port's numbers are Kai's defaults",
-    "WeaponImage::onFire": "the port's hitscans: TT_raycast guns hit along rays (engine Shot::hitscan)",
-    "WeaponImage::TT_onRaycastHit": "engine hitscan: damage where the minigame allows, the hit projectile's blast, the player or brick hit sound",
-    "WeaponImage::TT_onRaycastDamage": "engine hitscan damage, impulse and vertical push at the shooter's scale; crits in the host rules' raycast_crit",
-    "WeaponImage::TT_isRaycastCritical": "no crit by default; the guns that override it are the host rules' crit_images",
     "TT_isRaycastHeadshot": "the host rules' head test (crit_images)",
     "TT_knockback": "the shot's recoil push (the port's TT_knockback script rule)",
     "Player::TT_setSpeedMultiplier": "engine: a projectile's `slow` scales the hit player's speed",
@@ -235,22 +231,6 @@
       "field": "TT_grenade"
     }
   },
-  "hitscans": {
-    "when": "TT_raycastEnabled",
-    "range": "TT_raycastWeaponRange",
-    "from_muzzle": "TT_raycastFromMuzzle",
-    "damage": "TT_raycastDirectDamage",
-    "damage_limit": 100.0,
-    "damage_type": "TT_raycastDirectDamageType",
-    "hit_projectile": "TT_raycastExplosionProjectile",
-    "impulse": "TT_raycastImpactImpulse",
-    "vertical": "TT_raycastVerticalImpulse",
-    "count": "TT_raycastSpreadCount",
-    "spread": "TT_raycastSpreadAmt",
-    "flown": "TT_raycastTracerProjectile",
-    "player_sound": "TT_raycastExplosionPlayerSound",
-    "other_sound": "TT_raycastExplosionBrickSound"
-  },
   "scripts": [
     {
       "method": "*",
@@ -451,24 +431,6 @@
       "pattern": "TT_canFire\\([^)]*\\)\\s*\\)[\\s\\S]*\\}\\s*else[^{]*\\{\\s*serverPlay3D\\(\\s*(?P<s>\\w+)\\s*,",
       "set": {
         "empty_sound": "{s|sound}"
-      }
-    },
-    {
-      "method": "*",
-      "into": "state",
-      "keep": true,
-      "pattern": "%obj\\.playThread\\(\\s*2\\s*,\\s*(?P<a>\\w+)\\s*\\)",
-      "set": {
-        "arm": "{a}"
-      }
-    },
-    {
-      "method": "*",
-      "into": "state",
-      "keep": true,
-      "pattern": "serverPlay3D\\(\\s*(?P<s>\\w+)\\s*,",
-      "set": {
-        "sound": "{s|sound}"
       }
     },
     {

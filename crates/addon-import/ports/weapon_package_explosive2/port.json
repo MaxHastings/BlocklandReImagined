@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "include": [
+    "tier-tactical-core",
     "tier-tactical"
   ],
   "notes": "Tier+Tactical Explosive 2 on Tier 1's ammo system: the RPG (a little wild fired on the move), the Grenade Launcher, and the Calibre Cannon, whose flak round sheds sparks every PrjLoop_tickTime as it flies and bursts a few more at everything it hits or bounces off, each spark flung along Kai's PrjLoop_emitPrj angles. The Mortar is one of Kai's easter eggs, loaded only with the hidden \"???\" setting (off by default): it is imported hidden, and lobs its shell to come down about where its holder looks.",

@@ -3503,7 +3503,10 @@ impl WeaponsWorld {
     /// that point, and its `flown` projectile flies there.
     fn hitscan(&mut self, id: ActorId, a: &Actor, ray: Ray, q: &mut impl Query) {
         let definition = ray.definition;
-        let d = self.pack.projectiles[definition].clone();
+        let mut d = self.pack.projectiles[definition].clone();
+        if let Some(damage) = ray.hitscan.damage {
+            d.damage = damage;
+        }
         let from = ray.from;
         let direction = ray.direction.normalize_or(Vec3::NEG_Z);
         let reach = ray.range * a.frame.scale;
@@ -3603,15 +3606,15 @@ impl WeaponsWorld {
             }
             None => self.explode(&p, &d, q, Some(normal)),
         }
-        let sound = if matches!(hit.target, TargetId::Actor(_)) {
-            &ray.hitscan.player_sound
-        } else {
-            &ray.hitscan.other_sound
-        };
+        // One draw a shot: its every ray plays the same pair.
+        let sound = ray.hitscan.sound(
+            matches!(hit.target, TargetId::Actor(_)),
+            unit_random(self.tick, id.0, HIT_SOUND_DRAW),
+        );
         if !sound.is_empty() {
             self.events.push(Event::Sound {
                 source: TargetId::Actor(id),
-                profile: sound.clone(),
+                profile: sound.to_owned(),
                 position: hit.position,
             });
         }
@@ -3933,6 +3936,9 @@ pub fn redirected_velocity(impact: &ProjectileContact, response: ContactResponse
 }
 /// A number in [0, 1) that host and players compute alike for one shot, so
 /// spread needs no random state and nothing on the wire.
+/// [`unit_random`]'s `n` for a hitscan shot's landing sounds, apart from
+/// its rays' spreads (`3 * ray + axis`).
+const HIT_SOUND_DRAW: u64 = u64::MAX;
 fn unit_random(tick: u64, actor: u64, n: u64) -> f32 {
     let mut z = tick
         .wrapping_mul(0x9E37_79B9_7F4A_7C15)

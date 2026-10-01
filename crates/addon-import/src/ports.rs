@@ -686,7 +686,7 @@ fn try_apply(
             add(shots::shots(s, &weapons, bodies, handled).context("shots")?);
         }
         if let Some(h) = &port.hitscans {
-            let r = shots::hitscans(h, &weapons, code).context("hitscans")?;
+            let r = shots::hitscans(h, &weapons, code, handled).context("hitscans")?;
             add(r.patch);
             definitions = r.definitions;
         }
@@ -696,7 +696,10 @@ fn try_apply(
             add(reads.patch);
             read.extend(reads.tables);
         }
-        let patch = patch.unwrap_or_else(|| Value::Object(Default::default()));
+        let mut patch = patch.unwrap_or_else(|| Value::Object(Default::default()));
+        if let Some(limit) = port.hitscans.as_ref().and_then(|h| h.damage_limit) {
+            shots::limit_ray_damage(&mut patch, limit);
+        }
         merge(&mut weapons, &patch);
         add_definitions(&mut weapons, &definitions)?;
         if let Some(r) = &port.rules {

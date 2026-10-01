@@ -356,3 +356,102 @@ fn bad_hitscans_and_slowdowns_are_refused() {
         );
     }
 }
+
+/// A knife as Kai's melee packs script it: each swing draws one of its
+/// pairs of hit sounds (`getRandom(0, 1)` before `Parent::onFire`), and its
+/// stab, a fire state of its own, deals less than its slash (each set the
+/// damage field first).
+const KNIFE: &str = r#"{
+    "schema_version": 3,
+    "id": "k",
+    "items": { "k:weapon/knife": { "ui_name": "Knife", "image": "k:image/knife" } },
+    "images": {
+        "k:image/knife": {
+            "projectile": "k:projectile/ray",
+            "shot": { "projectiles": 1, "hitscan": {
+                "range": 30,
+                "player_sound": "k:sound/flesh",
+                "other_sound": "k:sound/clang",
+                "sounds": [ { "player": "k:sound/cut" }, { "other": "k:sound/scrape" } ],
+                "damage": 100
+            } },
+            "state_shots": { "onstab": { "projectiles": 1, "hitscan": {
+                "range": 30, "player_sound": "k:sound/flesh", "damage": 55
+            } } },
+            "states": [
+                { "name": "Activate", "ticks": 4, "timeout": 1 },
+                { "name": "Ready", "down": 2 },
+                { "name": "Charge", "ticks": 20, "wait": false, "timeout": 4, "up": 3 },
+                { "name": "Stab", "ticks": 6, "timeout": 1, "script": "onStab" },
+                { "name": "Armed", "up": 5 },
+                { "name": "Slash", "ticks": 6, "timeout": 1, "script": "onFire" }
+            ]
+        }
+    },
+    "projectiles": {
+        "k:projectile/ray": { "speed": 200, "lifetime_ticks": 120, "damage": 10,
+                              "collide_players": true }
+    }
+}"#;
+
+/// Each hit of a press held `hold` ticks: its damage and landing sound.
+fn swing(w: &mut WeaponsWorld, hold: usize) -> Vec<(f32, String)> {
+    w.trigger(A, true).unwrap();
+    let mut events = step(w, hold, true);
+    w.trigger(A, false).unwrap();
+    events.extend(step(w, 12, true));
+    let damage = events.iter().filter_map(|e| match e {
+        Event::Damage { amount, .. } => Some(*amount),
+        _ => None,
+    });
+    let sound = events.iter().filter_map(|e| match e {
+        Event::Sound { profile, .. } => Some(profile.clone()),
+        _ => None,
+    });
+    damage.zip(sound).collect()
+}
+
+#[test]
+fn a_swing_draws_one_pair_of_hit_sounds_and_each_fire_state_its_damage() {
+    let mut w = WeaponsWorld::new(Pack::from_json(KNIFE.as_bytes()).unwrap()).unwrap();
+    w.add_actor(A, 5).unwrap();
+    w.add_actor(B, 5).unwrap();
+    let slot = w.give(A, "k:weapon/knife").unwrap();
+    w.equip(A, Some(slot)).unwrap();
+    step(&mut w, 8, false);
+    let stab = swing(&mut w, 2);
+    assert_eq!(stab, [(55.0, "k:sound/flesh".to_string())]);
+    let mut slashes = vec![];
+    for _ in 0..24 {
+        slashes.extend(swing(&mut w, 26));
+    }
+    assert_eq!(slashes.len(), 24);
+    assert!(slashes.iter().all(|(d, _)| *d == 100.0));
+    // A pair that names only the other side keeps the player sound.
+    let heard = |s: &str| slashes.iter().filter(|(_, p)| p == s).count();
+    assert!(heard("k:sound/cut") > 0 && heard("k:sound/flesh") > 0);
+    assert_eq!(heard("k:sound/cut") + heard("k:sound/flesh"), 24);
+}
+
+#[test]
+fn hit_sound_pairs_pick_by_the_draw_and_keep_what_they_leave_out() {
+    let h: Hitscan = serde_json::from_str(
+        r#"{ "range": 4, "player_sound": "p", "other_sound": "o",
+             "sounds": [ { "other": "a" }, { "player": "b", "other": "" } ] }"#,
+    )
+    .unwrap();
+    assert_eq!((h.sound(true, 0.0), h.sound(false, 0.0)), ("p", "a"));
+    assert_eq!((h.sound(true, 0.99), h.sound(false, 0.99)), ("b", ""));
+    assert_eq!(h.sound(false, 1.0), "");
+    // At most 8 pairs, damage within ±100.
+    for bad in [
+        KNIFE.replacen(r#""damage": 100"#, r#""damage": 105"#, 1),
+        KNIFE.replacen(
+            r#"{ "other": "k:sound/scrape" }"#,
+            &vec![r#"{ "other": "k:sound/scrape" }"#; 9].join(", "),
+            1,
+        ),
+    ] {
+        assert!(Pack::from_json(bad.as_bytes()).is_err());
+    }
+}

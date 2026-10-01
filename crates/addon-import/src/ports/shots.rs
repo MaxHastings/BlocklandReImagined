@@ -582,8 +582,43 @@ fn scripted(
     patch
 }
 
+/// Holds every ray's damage a script rule set (`%this.TT_raycastDirectDamage
+/// = 105;` before `Parent::onFire`) to the raycast script's own limit, as
+/// it clamped what it dealt whatever set it (`mClampF(..., -100, 100)`).
+pub fn limit_ray_damage(patch: &mut Value, limit: f32) {
+    let clamp = |shot: &mut Value| {
+        if let Some(damage) = shot.pointer_mut("/hitscan/damage")
+            && let Some(d) = damage.as_f64()
+        {
+            *damage = json!((d as f32).clamp(-limit, limit));
+        }
+    };
+    for image in patch["images"]
+        .as_object_mut()
+        .into_iter()
+        .flat_map(|m| m.values_mut())
+    {
+        if let Some(shot) = image.get_mut("shot") {
+            clamp(shot);
+        }
+        for shot in image
+            .get_mut("state_shots")
+            .and_then(Value::as_object_mut)
+            .into_iter()
+            .flat_map(|m| m.values_mut())
+        {
+            clamp(shot);
+        }
+    }
+}
+
 /// The hitscan guns' shots and projectiles from their image fields.
-pub fn hitscans(h: &Hitscans, weapons: &Value, code: &super::Code) -> Result<Reading> {
+pub fn hitscans(
+    h: &Hitscans,
+    weapons: &Value,
+    code: &super::Code,
+    handled: &mut super::Handled,
+) -> Result<Reading> {
     let blocks = Datablocks::new(weapons, code);
     let number = |image: &str, field: &Option<String>| -> Result<Option<f32>> {
         let Some(field) = field else { return Ok(None) };
@@ -700,10 +735,42 @@ pub fn hitscans(h: &Hitscans, weapons: &Value, code: &super::Code) -> Result<Rea
             // `%spread`, whose turn is up to 5π·spread.
             spread = (spread / 2.0).to_radians() / (5.0 * std::f32::consts::PI);
         }
-        reading.patch["images"][id] = json!({
-            "projectile": ray_id,
-            "shot": { "projectiles": count, "spread": spread, "hitscan": hitscan },
-        });
+        let shot = json!({ "projectiles": count, "spread": spread, "hitscan": hitscan });
+        // A fire state of its own whose script ends in `Parent::onFire`
+        // (a knife's stab beside its slash) casts the same rays; script
+        // rules then lay on what it set first (its damage).
+        let mut state_shots = serde_json::Map::new();
+        for state in image["states"].as_array().into_iter().flatten() {
+            let script = state["script"]
+                .as_str()
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            if script.is_empty() || script == "onfire" || state_shots.contains_key(&script) {
+                continue;
+            }
+            let Some(body) = code
+                .bodies
+                .get(&format!("{}::{script}", name.to_ascii_lowercase()))
+            else {
+                continue;
+            };
+            if !uncommented(body)
+                .to_ascii_lowercase()
+                .contains("parent::onfire(")
+            {
+                continue;
+            }
+            super::handle(
+                handled,
+                &format!("{name}::{script}"),
+                "hitscans: a fire state of its own, casting the image's rays (Parent::onFire)",
+            );
+            state_shots.insert(script, shot.clone());
+        }
+        reading.patch["images"][id] = json!({ "projectile": ray_id, "shot": shot });
+        if !state_shots.is_empty() {
+            reading.patch["images"][id]["state_shots"] = Value::Object(state_shots);
+        }
         reading.patch["projectiles"][&ray_id] = ray;
         let source = weapons["definitions"]
             .as_array()
