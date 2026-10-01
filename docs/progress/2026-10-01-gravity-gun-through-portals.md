@@ -32,8 +32,19 @@ gun through the portal don't work i can't grab or carry something through".
   showcase, portals, script_api, hardening_packages and lib, bri-content
   lib and bri-package-runtime pass.
 
-## Next
+## The beam (client)
 
-- The beam effect (`gravity-gun-fx`, client WASM) still draws one curve
-  from the muzzle to the held thing; through a portal it should bend
-  through the opening. That needs the openings exposed to client code.
+- Client seam `sight(x, y, z, dx, dy, dz, length, ptr, capacity)`
+  (`world.read`, docs/architecture/client-sandbox.md): the same
+  `Passages::sight` legs over the openings the player's game has
+  (`World::passages`, filled from the client's own links), 20 f32 a leg.
+- `gravity-gun-fx` draws its beam along those legs: into the opening,
+  then on out of its partner to the grip; the grip, the reaching beam's
+  end and a ragdoll's limb are found along the sight. The snap-back on
+  letting go is skipped when the beam went through a portal (it would cut
+  straight across).
+- Guard: `crates/client-sandbox/tests/showcase.rs`
+  `the_beam_bends_through_a_portal` fails on the old module (one pass
+  across the world) and passes now. bri-client-sandbox tests all pass
+  (`the_commando_sights_render_offscreen` failed once on graphics time
+  under a loaded software renderer and passed on the rerun).

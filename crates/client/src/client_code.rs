@@ -674,6 +674,7 @@ pub fn world_view(
         std::sync::Arc<bri_client_sandbox::host::Mesh>,
     >,
     drawn: DrawnBodies,
+    passages: std::sync::Arc<bri_content::passage::Passages>,
 ) -> bri_client_sandbox::World {
     let DrawnBodies { skeletons, lives } = drawn;
     use bri_client_sandbox::world::{AddOnState, Entity, Environment, Player, Vehicle, World};
@@ -765,6 +766,7 @@ pub fn world_view(
         },
         image_meshes,
         skeletons,
+        passages,
     }
 }
 

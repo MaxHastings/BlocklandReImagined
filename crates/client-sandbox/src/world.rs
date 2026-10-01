@@ -17,8 +17,12 @@ pub const VEHICLE_RECORD: usize = 16;
 pub const ENTITY_RECORD: usize = 8;
 /// Floats `held` writes.
 pub const HELD_RECORD: usize = 20;
+/// Floats per leg `sight` writes.
+pub const LEG_RECORD: usize = 20;
 /// Floats `environment` writes.
 pub const ENVIRONMENT_RECORD: usize = 12;
+/// Longest sight `sight` follows, in units.
+pub const MAX_SIGHT: f32 = 4096.0;
 /// Most records one `players` or `vehicles` call copies.
 pub const MAX_RECORDS: usize = 1024;
 /// Vehicle definitions one Add-On may name with `vehicle_kind`.
@@ -41,6 +45,9 @@ pub struct World {
     /// Players' bodies as drawn this frame, for `avatar.pose`. Filled only
     /// when a running Add-On declares it.
     pub skeletons: BTreeMap<u64, Skeleton>,
+    /// The openings of linked bricks (portals) as the game has them, for
+    /// `sight`: what the player sees through them on their own screen.
+    pub passages: Arc<bri_content::passage::Passages>,
 }
 
 /// A model's node tree, shared by every body drawn with it.
@@ -281,6 +288,44 @@ impl World {
         }
         out[19] = f32::from(u8::from(held.muzzle.is_some()));
         Some(out)
+    }
+    /// The `sight` records of a sight from `from` along `direction` for
+    /// `length` through the openings it goes in by
+    /// ([`bri_content::passage::Passages::sight`]), up to `capacity` legs:
+    /// the leg's start xyz, its unit direction xyz, how far along the
+    /// whole sight it begins and how long it is, then the carry that took
+    /// the sight there (12: the turn's columns, then the move).
+    pub fn sight_records(
+        &self,
+        from: [f32; 3],
+        direction: [f32; 3],
+        length: f32,
+        capacity: usize,
+    ) -> Vec<f32> {
+        let (from, direction) = (glam::Vec3::from(from), glam::Vec3::from(direction));
+        let Some(direction) = direction.try_normalize() else {
+            return Vec::new();
+        };
+        if !(from.is_finite() && length.is_finite() && length > 0.0) {
+            return Vec::new();
+        }
+        let length = length.min(MAX_SIGHT);
+        let mut out = Vec::new();
+        for leg in self.passages.sight(from, direction, length).into_iter().take(capacity) {
+            let c = leg.carry;
+            out.extend(finite(
+                leg.from
+                    .to_array()
+                    .into_iter()
+                    .chain(leg.direction.to_array())
+                    .chain([leg.start, leg.length])
+                    .chain(c.matrix3.x_axis.to_array())
+                    .chain(c.matrix3.y_axis.to_array())
+                    .chain(c.matrix3.z_axis.to_array())
+                    .chain(c.translation.to_array()),
+            ));
+        }
+        out
     }
     /// The `vehicles` records: id, kind (from `kinds`, -1 when unnamed),
     /// position, rotation, velocity, radius, then padding.
