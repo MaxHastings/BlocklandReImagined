@@ -893,6 +893,9 @@ datablock ShapeBaseImageData(kitScopeImage) { shapeFile = "./gun.dts"; stateName
     assert_eq!(pack.items[&id("weapon", "kitammoitem")].image, "");
     assert_eq!(pack.items[&id("weapon", "kitammoitem")].ui_name, "Kit Ammo");
     assert_eq!(pack.items[&id("weapon", "kitgunitem")].ui_name, "Kit Gun");
+    // Its sound description is read into the sound, not left over.
+    let description = report.datablocks.iter().find(|d| d.name == "kitClose2d").unwrap();
+    assert_eq!(description.status, "consumed", "{description:?}");
     std::fs::remove_dir_all(out.parent().unwrap()).unwrap();
     std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
 }

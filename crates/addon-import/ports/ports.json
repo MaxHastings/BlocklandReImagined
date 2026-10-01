@@ -573,12 +573,44 @@
         "serverCmdDropTool": {
           "empty_hand": "currTool\\s*==\\s*-1\\s*&&\\s*%client\\.player\\.isCarryingFlag\\(\\)\\s*&&\\s*%minigame\\.CTF_manualFlagDrop",
           "drop": "\\.dropFlag\\(\\)"
+        },
+        "Slayer_CTF::onAdd": {
+          "flag_set": "%this\\.flags\\s*=\\s*new\\s+SimSet\\(\\s*\\)"
+        },
+        "Slayer_CTF::onRemove": {
+          "flag_set_gone": "%this\\.flags\\.delete\\(\\s*\\)"
+        },
+        "Slayer_CTF::onGameModeStart": {
+          "flags_home": "resetFlags\\(\\s*false\\s*\\)"
+        },
+        "Slayer_CTF::onGameModeEnd": {
+          "flags_gone": "resetFlags\\(\\s*true\\s*\\)",
+          "captures_gone": "CTF_numFlagReturns\\s*=\\s*\"\"\\s*;"
+        },
+        "Slayer_CTF::onMiniGameBrickRemoved": {
+          "zone_gone": "ctfTrigger\\.delete\\(\\s*\\)"
+        },
+        "Player::getFlagImage": {
+          "slot": "getMountedImage\\(\\s*\\$Slayer::Server::CTF::flagImageSlot\\s*\\)"
+        },
+        "Player::isCarryingFlag": {
+          "flag_image": "className\\s*\\$=\\s*\"slyrCTF_FlagImage\""
+        },
+        "Player::mountImage": {
+          "kept": "className\\s*\\$=\\s*\"SlyrCTF_FlagImage\"\\s*\\)\\s*return\\s*;"
+        },
+        "Player::unMountImage": {
+          "kept": "!\\s*%this\\.allowFlagRemoval\\s*&&[\\s\\S]*?className\\s*\\$=\\s*\"SlyrCTF_FlagImage\"\\s*\\)\\s*return\\s*;"
+        },
+        "serverCmdSetWrenchData": {
+          "stays": "slyrType\\s*\\$=\\s*\"CTF_Flag\"\\s*\\)[\\s\\S]*?%brick\\.resetFlag\\(\\s*\\)"
         }
       },
       "tests": [
         "crates/addon-import/tests/ports.rs slayer_ports_apply_with_their_rules",
         "crates/addon-import/tests/slayer.rs an_enemy_flag_rides_on_the_carriers_back_and_scores_at_home",
-        "crates/addon-import/tests/slayer.rs a_dropped_flag_falls_in_its_colour_and_its_team_recovers_it"
+        "crates/addon-import/tests/slayer.rs a_dropped_flag_falls_in_its_colour_and_its_team_recovers_it",
+        "crates/addon-import/tests/slayer.rs flags_follow_the_mode_and_stay_on_their_stands_and_backs"
       ]
     },
     {
