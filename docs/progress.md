@@ -8583,8 +8583,9 @@ Add-Ons of our own (CC0) in `crates/addon-import/tests/fixtures/ports` with
 `butterfly_knife_port_jabs_and_stabs` and
 `he_grenade_port_pulls_the_pin_then_throws_it_away`, each port's
 `checks.json` through `check-port`, and `real_steam_knife_and_grenade_ports`
-(skips unless Max's Steam Add-Ons and the v20 reference exist). That test's
-printed `sha256` belongs in each list entry once run on the PC.
+(skips unless Max's Steam Add-Ons and the v20 reference exist). The Gate
+ran it on the PC at 5576cf1: both ports applied to Max's copies (knife
+4d8d0cc5…, grenade 1cae396e…, now listed in `ports.json`).
 ## 2026-10-01 Vehicle destruction looks (v20 audit)
 
 Max: destroyed vehicles "would turn black right away when on fire" in v20,

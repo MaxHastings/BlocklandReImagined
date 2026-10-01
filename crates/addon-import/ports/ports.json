@@ -25,7 +25,9 @@
       "title": "Butterfly Knife",
       "port": "weapon_butterflyknife",
       "status": "verified",
-      "sha256": [],
+      "sha256": [
+        "4d8d0cc59be118094a2e6e39056b895e19447c05ed8d3a644fd7a56780a7afa4"
+      ],
       "covers": {
         "butterflyknifeImage::onCharge": {
           "charge_arm": "playthread\\s*\\(\\s*2\\s*,\\s*\"?(\\w+)"
@@ -46,7 +48,8 @@
       "tests": [
         "weapon_butterflyknife/checks.json",
         "crates/addon-import/tests/ports.rs butterfly_knife_port_jabs_and_stabs",
-        "crates/weapons/tests/state_attacks.rs a_click_jabs_with_the_scripts_own_projectile"
+        "crates/weapons/tests/state_attacks.rs a_click_jabs_with_the_scripts_own_projectile",
+        "crates/addon-import/tests/import.rs real_steam_knife_and_grenade_ports"
       ]
     },
     {
@@ -54,7 +57,9 @@
       "title": "HE Grenade",
       "port": "weapon_hegrenade",
       "status": "verified",
-      "sha256": [],
+      "sha256": [
+        "1cae396e8616bf57e62dcfb4fda35490e93a772ee09979af45a3f7d4601dc351"
+      ],
       "covers": {
         "hegrenadeImage::onCharge": {
           "charge_arm": "playthread\\s*\\(\\s*2\\s*,\\s*\"?(\\w+)"
@@ -82,7 +87,8 @@
       "tests": [
         "weapon_hegrenade/checks.json",
         "crates/addon-import/tests/ports.rs he_grenade_port_pulls_the_pin_then_throws_it_away",
-        "crates/weapons/tests/state_attacks.rs a_thrown_grenade_is_used_up_and_the_next_one_stays"
+        "crates/weapons/tests/state_attacks.rs a_thrown_grenade_is_used_up_and_the_next_one_stays",
+        "crates/addon-import/tests/import.rs real_steam_knife_and_grenade_ports"
       ]
     }
   ]
