@@ -8323,6 +8323,12 @@ so:
   reports are left out; a late report from the old seat is ignored.
 - Not run in the cloud (no content): `bri-sim --test vehicles` (all
   ignored there) and the app test; the gate runs them.
+- The gate pulled 29da56c: the app test failed under load with app 1 at
+  -2.0 and the turret "left" at -1.95. The test bug: "the aim to settle"
+  passed once host and guest agreed, which they briefly did after the host
+  had taken 39 of the guest's 40 look moves; the last one then turned it on
+  legitimately (still the gunner's). It now waits until the host's aim is
+  the guest's last look relative to the hull and both apps show it.
 
 ## 2026-10-01 Adventure Pack seams: hit regions, HUD per gun, onFire with a round (branch `claude/adventure-pack-n3spj2`)
 

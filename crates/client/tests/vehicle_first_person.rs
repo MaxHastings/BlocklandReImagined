@@ -769,18 +769,28 @@ fn the_tank_turret_keeps_its_aim_through_seat_changes_for_gunner_and_watcher() -
         )?;
         run_for(&mut [&mut host, &mut guest], 1.0 / 60.0)?;
     }
-    // Both copies settle on the host's aim.
+    // Both copies settle on the aim of the guest's last look: the host has
+    // taken every look move and both have its pose. Agreeing alone is not
+    // enough; under load they can agree on a look the host has not finished.
     let mut aim = [0.0; 2];
     until(&mut [&mut host, &mut guest], "the aim to settle", 10, |a| {
-        let aims: Vec<_> = a
+        let wrap = |x: f32| {
+            (x + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
+        };
+        let poses: Vec<_> = a
             .iter()
-            .filter_map(|app| {
-                let pose = app.network_view()?.vehicle_poses.values().next()?;
-                Some(pose.turret_aim)
-            })
+            .filter_map(|app| app.network_view()?.vehicle_poses.values().next().cloned())
             .collect();
-        aim = aims[0];
-        Ok(aims.len() == 2 && aims.iter().all(|x| (x[0] - aim[0]).abs() < 1e-3))
+        let [host_pose, _] = poses.as_slice() else {
+            return Ok(false);
+        };
+        let forward = Quat::from_array(host_pose.rotation) * Vec3::NEG_Z;
+        let looked = wrap(forward.x.atan2(-forward.z) - a[1].controls.yaw);
+        aim = host_pose.turret_aim;
+        Ok(wrap(aim[0] - looked).abs() < 1e-3
+            && poses
+                .iter()
+                .all(|p| wrap(p.turret_aim[0] - aim[0]).abs() < 1e-3))
     })?;
     ensure!(aim[0].abs() > 1.0, "the turret never turned: {aim:?}");
     // To the driver's seat and back to the gun, through the passenger's.
