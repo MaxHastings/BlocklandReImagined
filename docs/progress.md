@@ -8930,3 +8930,36 @@ v0.1.10".
   and tank shell exploding on the ground 2.5 units beside the ball, in and
   out of minigames, roll it more than 6 units in two seconds; 3.75 without
   the scale).
+
+## 2026-10-01 Duplicator: the original, ported
+
+Max wants the original Duplicator (Plornt's Duplorcator, `Tool_Duplicator`)
+on by default and Zeblote's New Duplicator as the advanced one, off by
+default, both shipped as the player's own originals in the release zip.
+The Duplorcator now has a port (`crates/addon-import/ports/tool_duplicator`):
+its host rules give the wand on `/dup`, `/duplorcator` and `/duplicator`,
+and its swing selects through the engine as `getStack` did (up from the
+clicked brick, every way from the rest; full trust; public bricks refused;
+admin 5000 and player 500 bricks; 1 s and 3 s between selections), lights
+the selection cyan for the copy's own time, and plants brick by brick with
+its "X/Y bricks duplicated successfully". Saving and loading duplications is
+not ported.
+
+The engine gained the mechanisms the originals need, with the policy left
+to scripts: `Simulation::select_stack` and `select_box` (truncate at the
+limit and report it), `plant_each` for partial plants, copy rules
+(`trust`, `public_bricks`, `admin`, `partial`, `limited`) on `copy_build` and
+`copy_box`, `highlight_copy`, and the `on_copy`/`on_place` hooks. The
+highlight store moved to `session/highlight.rs`, shared with Highlight Brick
+Group. Seam tests run on stand-in fixtures in
+`crates/sim/tests/fixtures/duplicators`, so the remakes in `packages/` can
+go when the bundle lane swaps in the originals.
+
+- Tests: `bri-addon-import --test ports
+  duplorcator_port_copies_lights_and_plants_brick_by_brick` (a CC0
+  stand-in `server.cs` with its own reach and highlight time, imported,
+  hosted, swung, planted half-blocked and undone); `bri-sim --test duplicator`
+  and `--test advanced_duplicator`.
+- Next: the New Duplicator port (box select, mirror, cut, fill colour,
+  larger limits), which also needs a command precedence when both
+  duplicators are on.
