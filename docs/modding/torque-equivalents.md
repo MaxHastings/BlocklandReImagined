@@ -141,3 +141,22 @@ The same modder's second write-up (September 2026), judged the same way:
 | Capping `stateEmitterTime` at 300 s | Left out | v20 does not cap it and the effects runtime already limits live particles. |
 | A sound that is not 3D | Heard by its holder only | A sound with no position has no place for other players to hear it from, so it stays with the player who fired. |
 
+## Image state scripts as data
+
+A v20 image's states name script functions (`stateScript[2] = "onCharge"`)
+and the Add-On's `Image::onCharge` did the work. Here an image's `scripts`
+lists, by lower-case script name, what each one does, so a melee or thrown
+weapon needs no rule. Entering a state whose script is listed does that
+instead of the game's built-in handling of the name. The
+[Butterfly Knife and HE Grenade ports](../../crates/addon-import/ports) are
+written this way.
+
+| TorqueScript in the function | `scripts` entry field | Notes |
+|---|---|---|
+| `%obj.playThread(2, spearReady)` (`spearThrow`, `armattack`, `root`) | `arm` | The holder's arm animation (thread 2), started first. Letters, digits and `_`, up to 64. |
+| `Parent::onFire(%this, %obj, %slot)` | `fire: true` | Launches the image's projectile as a plain `onFire` does: from the muzzle along the aim, with the image's `shot`, after the arm. |
+| A second `ProjectileData` spawned in the function (`%p = new Projectile() { dataBlock = jabProjectile; ... }`) | `projectile`, with `fire: true` | Launched instead of the image's. It must be in the pack (or a merged one); an image whose script projectile nobody provides is dropped like one missing its own. |
+| `%obj.tool[%slot] = 0; serverCmdUnUseTool(%client)` after a throw | `use_up: true` | The held item leaves the holder's tools and the hand empties once the function has run. |
+
+Up to 16 entries per image. A state with no listed script keeps the
+built-in handling (`onAbortCharge` and `onStopFire` lower the arm).

@@ -325,10 +325,9 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
     behaviours(&mut cx, &scripts);
     dependencies(&mut cx, &scripts);
     let mut bodies = ports::Bodies::new();
+    // Torque keeps the last definition of a function (names ignore case).
     for f in scripts.iter().flat_map(|s| &s.functions) {
-        bodies
-            .entry(f.qualified().to_ascii_lowercase())
-            .or_insert_with(|| f.body.clone());
+        bodies.insert(f.qualified().to_ascii_lowercase(), f.body.clone());
     }
     finish(cx, opts, ports, &bodies)
 }
