@@ -1980,3 +1980,27 @@ fn skins_are_their_hosts_guns_under_their_own_names() {
         }
     }
 }
+
+/// Kai's Impact Rifle on Tier 1: its spread holds while its holder stands
+/// still, as its check reads (still, and a pause since a last shot only
+/// Tier 2's guns note), and changes on the move.
+#[test]
+fn the_impact_rifle_spreads_by_whether_its_holder_stands_still() {
+    let (_dir, out, report) = imported_on(
+        "Weapon_Impact_Rifle",
+        "weapon_impact_rifle",
+        &["Weapon_Package_Tier1"],
+        "impact",
+    );
+    let port = &report.ports[0];
+    assert!(port.applied, "{:?}", port.reason);
+    assert!(report.needs_behaviour.iter().all(|b| b.port.is_some()));
+    let pack = pack(&out);
+    let image = &pack.images["weapon_impact_rifle:image/impactrifleimage"];
+    let shot = image.shot.as_ref().unwrap();
+    assert_eq!(
+        (shot.spread, shot.moving_spread, shot.moving_speed),
+        (0.0007, Some(0.0003), 0.5)
+    );
+    assert_eq!(image.magazine.as_ref().unwrap().size, 3);
+}

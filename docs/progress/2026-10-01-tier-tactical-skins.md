@@ -39,3 +39,27 @@ Checks:
 
 - `cargo test -p bri-addon-import --test tier_port skins_are_their_hosts_guns_under_their_own_names`
 - the wider addon-import run, and clippy.
+
+## On the real copies
+
+The Gate's real copies (pinned now) left LMG 16/20, Rifles T2 26/32 and
+SMG 15/25. Their reference also holds Weapon_ModernWarbattles, which
+declares `SubmachineGunImage`, `LightMachinegunImage` and the battle
+rifle under the same names as Tier 1 and 2. The reference kept the first
+declaration it read (Modern Warbattles, by name order), whose states
+name no `onReloadWait` or `onReloaded`. In v20 the declaration that holds
+is the last one to load before the Add-On. Add-Ons load in name order,
+each after the ones it requires, and declaring a name again sets its
+fields on the same datablock. `Reference::settle_for` now settles each
+shared name that way for the Add-On being imported (later fields win,
+the rest stay), so the skins inherit their required pack's states.
+Guarded by `import a_name_two_add_ons_declare_is_the_one_loaded_last_before_this_one`.
+
+## Impact Rifle
+
+Kai's Impact Rifle gets `weapon_impact_rifle`. Its spread check is
+`still && (getSimTime() - %obj.lastShotTime) > 500`. Only Tier 2's
+Assault Rifle and Light MG set `lastShotTime`, so the port reads it as
+spreading 0.0002 when still and 0 on the move. A pack rule reads this
+shape. CC0 stand-in and
+`tier_port the_impact_rifle_spreads_by_whether_its_holder_stands_still`.

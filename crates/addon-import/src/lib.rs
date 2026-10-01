@@ -330,6 +330,15 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
     if let Some(content) = &opts.installed {
         reference.add_installed(content)?;
     }
+    // The reference as it stood when this Add-On loaded, after the ones
+    // it requires.
+    let required: Vec<String> = src
+        .files
+        .iter()
+        .filter(|(key, _)| key.ends_with(".cs"))
+        .flat_map(|(_, f)| reference::required_addons(&String::from_utf8_lossy(&f.bytes)))
+        .collect();
+    reference.settle_for(&src.name, &required);
     let ns = namespace_for(&src.name)?;
     std::fs::create_dir_all(&opts.out)?;
     let mut cx = Ctx {

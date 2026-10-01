@@ -1271,3 +1271,82 @@ fn a_required_community_add_on_becomes_a_dependency_on_its_import() {
     );
     std::fs::remove_dir_all(&root).unwrap();
 }
+
+/// Two Add-Ons in the reference declare the same gun image. In v20 the one
+/// that loaded last before this Add-On holds: Add-Ons load in name order,
+/// each after the ones it requires, and a later declaration sets its
+/// fields on the same datablock. So a skin built on its required pack's gun
+/// gets that pack's states (`onReload` here), merged over an earlier
+/// pack's (`Ready`'s sound is kept), and never a pack that loads after it.
+#[test]
+fn a_name_two_add_ons_declare_is_the_one_loaded_last_before_this_one() {
+    let root = fresh("shared-name");
+    let reference = root.with_file_name("reference");
+    let gun = |dir: &str, states: &str| {
+        let d = reference.join("Add-Ons").join(dir);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(
+            d.join("server.cs"),
+            format!(
+                "datablock ItemData(sharedGunItem) {{ uiName = \"{dir}\"; image = sharedGunImage; }};\n\
+                 datablock ShapeBaseImageData(sharedGunImage)\n{{\n   item = sharedGunItem;\n{states}}};\n"
+            ),
+        )
+        .unwrap();
+    };
+    // Loads first by name, with its own Ready sound and a third state.
+    gun(
+        "Weapon_Aaa_Other",
+        "   stateName[0] = \"Ready\"; stateSound[0] = otherSound;\n   stateName[2] = \"Extra\";\n",
+    );
+    // The pack the skin requires: its reload state names a script.
+    gun(
+        "Weapon_Mmm_Host",
+        "   stateName[0] = \"Ready\"; stateTransitionOnTriggerDown[0] = \"Reload\";\n   stateName[1] = \"Reload\"; stateScript[1] = \"onReload\";\n",
+    );
+    // Loads after the skin and is not required: never seen by it.
+    gun(
+        "Weapon_Zzz_Later",
+        "   stateName[1] = \"Reload\"; stateScript[1] = \"onLater\";\n",
+    );
+    std::fs::create_dir_all(reference.join("base")).unwrap();
+    let source = root.with_file_name("Weapon_Nnn_Skin");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(source.join("description.txt"), "Title: Skin\nAuthor: tests").unwrap();
+    std::fs::write(
+        source.join("server.cs"),
+        r#"
+ForceRequiredAddOn("Weapon_Mmm_Host");
+datablock ItemData(skinGunItem : sharedGunItem) { uiName = "Skin"; image = skinGunImage; };
+datablock ShapeBaseImageData(skinGunImage : sharedGunImage) { item = skinGunItem; };
+function skinGunImage::onReload(%this, %obj, %slot)
+{
+   %obj.playThread(2, shiftUp);
+}
+"#,
+    )
+    .unwrap();
+    let out = fresh("shared-name-out");
+    let report = import(&Options {
+        input: source.clone(),
+        out: out.clone(),
+        reference: Some(reference.clone()),
+        ..Default::default()
+    })
+    .unwrap();
+    let reload = report
+        .needs_behaviour
+        .iter()
+        .find(|b| b.function == "skinGunImage::onReload")
+        .unwrap();
+    assert_eq!(reload.hook.kind, "image_state_script", "{:?}", reload.hook);
+    let pack = Pack::from_json(&std::fs::read(out.join("assets/weapons.json")).unwrap()).unwrap();
+    let image = &pack.images["weapon_nnn_skin:image/skingunimage"];
+    let names: Vec<&str> = image.states.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, ["Ready", "Reload", "Extra"]);
+    assert_eq!(image.states[1].script, "onReload");
+    std::fs::remove_dir_all(out.parent().unwrap()).unwrap();
+    std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
+    let _ = std::fs::remove_dir_all(&reference);
+    let _ = std::fs::remove_dir_all(&source);
+}

@@ -1,0 +1,7 @@
+Title: Stand-in Impact Rifle
+Author: Blockland ReImagined tests
+Written for tests. It has the community Weapon_Impact_Rifle folder name and
+the datablock and method names its port covers, built on the stand-in Tier 1
+as the original is built on Tier 1, so the listed port applies to it. It is
+not the original Add-On and holds none of its files; its names shown to
+players, models and numbers are its own.
