@@ -266,8 +266,24 @@ impl Game {
             .position(|s| s.as_deref() == Some(item))
             .unwrap();
         g.cmd(Command::EquipTool { slot: Some(slot) });
-        g.steps(30);
-        g
+        // Its image raises (the copy's own Activate time) before a click
+        // fires it, as a player waits for it to come up.
+        for _ in 0..1200 {
+            g.steps(1);
+            if g.held_state().eq_ignore_ascii_case("ready") {
+                return g;
+            }
+        }
+        panic!("{item} never came up ready: {}", g.held_state());
+    }
+    fn held_state(&self) -> String {
+        self.s
+            .weapon_view()
+            .images
+            .get(&self.player)
+            .and_then(|i| i.first())
+            .map(|i| i.state.clone())
+            .unwrap_or_default()
     }
     fn cmd(&mut self, command: Command) {
         self.seq += 1;
