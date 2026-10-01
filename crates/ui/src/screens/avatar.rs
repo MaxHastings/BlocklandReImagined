@@ -1504,11 +1504,10 @@ mod tests {
         );
     }
 
-    #[test]
-    #[ignore = "requires locally converted original UI content; run after content setup"]
-    fn authored_avatar_pack_and_palette_render_check() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let pack = Rc::new(Pack::load(&root.join("content/ui-pack-001")).unwrap());
+    /// Opens the avatar screen on `pack` with its stock prefs, draws every
+    /// part picker and the palette editor and renders them offscreen.
+    /// Returns the face and decal counts.
+    fn avatar_pack_and_palette_render_check(pack: Rc<Pack>) -> (usize, usize) {
         let mut ui = fixture();
         ui.core.pack = pack.clone();
         ui.core.logical = (1024, 768);
@@ -1522,7 +1521,8 @@ mod tests {
             "v20 part positions are named"
         );
         let mut s = Avatar::new(&ui.core);
-        assert!(s.data.faces.len() >= 27 && s.data.decals.len() >= 28);
+        assert!(!s.data.faces.is_empty() && !s.data.decals.is_empty());
+        let counts = (s.data.faces.len(), s.data.decals.len());
         let mut dl = DrawList::new(Rect::new(0, 0, 1024, 768));
         s.draw(&pack, &mut dl, &ui.core);
         for part in PARTS {
@@ -1549,5 +1549,30 @@ mod tests {
             assert_eq!(rgba.len(), 1024 * 768 * 4);
             assert!(renderer.missing_textures().next().is_none());
         }
+        counts
+    }
+
+    #[test]
+    fn avatar_pack_and_palette_render_check_synthetic() {
+        let mut data = fixture().core.pack.data.clone();
+        // Stock prefs store part positions; the screen names them.
+        for key in crate::api::AVATAR_PART_KEYS {
+            data.data
+                .prefs
+                .insert(format!("$pref::Avatar::{key}"), "1".into());
+        }
+        data.data
+            .prefs
+            .insert("$pref::Avatar::HeadColor".into(), "1 0.8 0.2 1".into());
+        avatar_pack_and_palette_render_check(crate::testing::pack(data));
+    }
+
+    #[test]
+    #[ignore = "requires generated v20 content"]
+    fn authored_avatar_pack_and_palette_render_check() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let pack = Rc::new(Pack::load(&root.join("content/ui-pack-001")).unwrap());
+        let (faces, decals) = avatar_pack_and_palette_render_check(pack);
+        assert!(faces >= 27 && decals >= 28);
     }
 }

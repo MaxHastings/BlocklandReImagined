@@ -69,6 +69,26 @@ pub enum Item {
     HorseRay,
     /// The rocket launcher of the default minigame loadout.
     Rocket,
+    /// Two guns: the right fires on press, the left on release.
+    Akimbo,
+    /// The sports balls (Item_Sports).
+    Basketball,
+    Dodgeball,
+    Football,
+    SoccerBall,
+}
+
+/// A brick by the part it plays in a test.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BrickRole {
+    Checkpoint,
+    Teledoor,
+    TreasureChest,
+    TreasureChestOpen,
+    /// A water brick taller than a player.
+    DeepWater,
+    /// The player spawn brick.
+    SpawnPoint,
 }
 
 impl Fixture {
@@ -93,6 +113,10 @@ impl Fixture {
             bricks: Default::default(),
             vehicles: Default::default(),
         }
+    }
+    /// Whether this is the generated native content (the gate's variant).
+    pub fn is_native(&self) -> bool {
+        self.native
     }
     /// The event catalog for tests about particular native events: the
     /// generated one on the real content, else the small made-up one.
@@ -144,6 +168,21 @@ impl Fixture {
             .find(|d| d.id == id)
             .unwrap_or_else(|| panic!("no vehicle {id}"))
     }
+    /// A brick's id in [`Fixture::bricks`].
+    pub fn brick(&self, role: BrickRole) -> &'static str {
+        use bri_sim::testing as t;
+        match (self.native, role) {
+            (false, BrickRole::Checkpoint) => t::CHECKPOINT,
+            (false, BrickRole::Teledoor) => t::TELEDOOR,
+            (_, BrickRole::TreasureChest) => t::TREASURE_CHEST,
+            (_, BrickRole::TreasureChestOpen) => t::TREASURE_CHEST_OPEN,
+            (false, BrickRole::DeepWater) => t::DEEP_WATER,
+            (_, BrickRole::SpawnPoint) => t::SPAWN_POINT,
+            (true, BrickRole::Checkpoint) => "v20/brick/brickcheckpointdata",
+            (true, BrickRole::Teledoor) => "v20/brick/brickteledoordata",
+            (true, BrickRole::DeepWater) => "v20/brick/brick8xwaterdata",
+        }
+    }
     /// The brick that holds a vehicle.
     pub fn vehicle_spawn_brick(&self) -> &'static str {
         if self.native {
@@ -188,6 +227,14 @@ impl Fixture {
             (true, Item::HorseRay) => "v20.weapon.horserayitem",
             (false, Item::Rocket) => t::ROCKET_ITEM,
             (true, Item::Rocket) => "v20.weapon.rocketlauncheritem",
+            (false, Item::Akimbo) => t::AKIMBO_ITEM,
+            (true, Item::Akimbo) => "v20.weapon.akimbogunitem",
+            (false, Item::Basketball) => t::BASKETBALL_ITEM,
+            (false, Item::Dodgeball) => t::DODGEBALL_ITEM,
+            (_, Item::Football) => t::FOOTBALL_ITEM,
+            (_, Item::SoccerBall) => t::SOCCER_ITEM,
+            (true, Item::Basketball) => "v20.weapon.basketballitem",
+            (true, Item::Dodgeball) => "v20.weapon.dodgeballitem",
         }
     }
     /// The default minigame settings, their loadout's rocket launcher the

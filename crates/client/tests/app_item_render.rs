@@ -1,10 +1,20 @@
 //! Bounded normal-App render probe for original held tools.
-//! Run with: cargo test -p bri-client --test app_item_render --release -- --ignored --nocapture
-//! Requires converted v20 content, loopback QUIC and an offscreen GPU; never opens a window.
+//! Runs on the made-up content root; the ignored variants run on the
+//! generated v20 content (`-- --ignored`). Loopback QUIC and an offscreen
+//! GPU; never opens a window.
 use anyhow::{Context, Result, ensure};
 use bri_client::{app::App, platform::{PlatformApp, RenderContext}};
 use bri_ui::{api::*, gpu::{Headless, UiRenderer}};
-use std::{path::Path, thread, time::{Duration, Instant, SystemTime, UNIX_EPOCH}};
+use std::{path::Path, thread, time::{Duration, Instant}};
+
+#[macro_use]
+mod support;
+use support::content_root::ContentRoot;
+
+synthetic_and_content!(
+    ContentRoot: native_core_tools_render_from_eye_and_original_mounts,
+    bricks_in_hand_render_the_grey_brick_in_first_and_third_person,
+);
 
 const SIZE: (u32, u32) = (640, 480);
 const BEDROOM: &str = "v20/add-ons/map_bedroom/bedroom.mis";
@@ -77,15 +87,10 @@ fn write_diff(path: &Path, a: &[u8], b: &[u8]) -> Result<()> {
     save(path, &diff)
 }
 
-#[test]
-#[ignore = "requires converted native v20 content, loopback QUIC and offscreen GPU; no window/audio device"]
-fn native_core_tools_render_from_eye_and_original_mounts() -> Result<()> {
-    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let artifact = workspace.join("artifacts/native-world-items");
-    std::fs::create_dir_all(&artifact)?;
-    let state = artifact.join(format!("state-{}-{}", std::process::id(), SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()));
-    std::fs::create_dir_all(&state)?;
-    let mut app = App::load(&workspace.join("content"), &state, SIZE)?;
+fn native_core_tools_render_from_eye_and_original_mounts(f: &ContentRoot) -> Result<()> {
+    let artifact = f.out("native-world-items")?;
+    let state = f.state()?;
+    let mut app = App::load(&f.root, state.path(), SIZE)?;
     app.ui.core.pop(bri_ui::screens::ScreenId::DefaultControls);
     app.ui.core.request(UiAction::HostGame { map: BEDROOM.into(), mode: ServerMode::SinglePlayer, game_mode: None,
         max_players: 1, server_name: "Native held item render".into(), password: String::new(),
@@ -99,7 +104,7 @@ fn native_core_tools_render_from_eye_and_original_mounts() -> Result<()> {
         p.grounded && glam::Vec3::from(p.velocity).length() < 0.001
     }))?;
     for _ in 0..30 { step(&mut app, Duration::from_millis(16))?; }
-    let gpu = Headless::new().context("offscreen native held-item renderer")?;
+    let gpu = support::gpu::turn().context("offscreen native held-item renderer")?;
     let mut renderer = UiRenderer::new(&gpu.device, &gpu.queue);
     app.gpu_ready(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm)?;
 
@@ -183,15 +188,10 @@ fn holds_brick(app: &App) -> Option<bool> {
     }))
 }
 
-#[test]
-#[ignore = "requires converted native v20 content, loopback QUIC and offscreen GPU; no window/audio device"]
-fn bricks_in_hand_render_the_grey_brick_in_first_and_third_person() -> Result<()> {
-    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let artifact = workspace.join("artifacts/native-held-brick");
-    std::fs::create_dir_all(&artifact)?;
-    let state = artifact.join(format!("state-{}-{}", std::process::id(), SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()));
-    std::fs::create_dir_all(&state)?;
-    let mut app = App::load(&workspace.join("content"), &state, SIZE)?;
+fn bricks_in_hand_render_the_grey_brick_in_first_and_third_person(f: &ContentRoot) -> Result<()> {
+    let artifact = f.out("native-held-brick")?;
+    let state = f.state()?;
+    let mut app = App::load(&f.root, state.path(), SIZE)?;
     app.ui.core.pop(bri_ui::screens::ScreenId::DefaultControls);
     app.ui.core.request(UiAction::HostGame { map: BEDROOM.into(), mode: ServerMode::SinglePlayer, game_mode: None,
         max_players: 1, server_name: "Native held brick render".into(), password: String::new(),
@@ -203,7 +203,7 @@ fn bricks_in_hand_render_the_grey_brick_in_first_and_third_person() -> Result<()
         p.grounded && glam::Vec3::from(p.velocity).length() < 0.001
     }))?;
     for _ in 0..30 { step(&mut app, Duration::from_millis(16))?; }
-    let gpu = Headless::new().context("offscreen native held-brick renderer")?;
+    let gpu = support::gpu::turn().context("offscreen native held-brick renderer")?;
     let mut renderer = UiRenderer::new(&gpu.device, &gpu.queue);
     app.gpu_ready(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm)?;
     let (current_yaw, current_pitch) = app.controls.view_angles();
@@ -216,7 +216,7 @@ fn bricks_in_hand_render_the_grey_brick_in_first_and_third_person() -> Result<()
         until(app, "empty hands", |a| holds_brick(a) == Some(false))?;
         for _ in 0..40 { step(app, Duration::from_millis(16))?; }
         let baseline = capture(app, &gpu, &mut renderer)?;
-        app.ui.core.request(UiAction::InstantUseBrick { brick: "v20/brick/brick2x2data".into() }); pump(app)?;
+        app.ui.core.request(UiAction::InstantUseBrick { brick: f.brick.clone() }); pump(app)?;
         until(app, "brick in hand", |a| holds_brick(a) == Some(true))?;
         // Let the armReady blend settle.
         for _ in 0..40 { step(app, Duration::from_millis(16))?; }

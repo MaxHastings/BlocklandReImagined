@@ -175,31 +175,24 @@ fn stale_state_cannot_replace_authoritative_roles_and_secrets_redact_debug() {
     assert!(!format!("{secret:?}").contains("do-not-log"));
 }
 
+/// Opens every admin dialog over a populated admin model and renders it
+/// offscreen; screenshots go to `out` when given.
 #[cfg(feature = "gpu")]
-#[test]
-#[ignore = "explicit offscreen source-skin inspection; requires content/ui-pack-004 and a headless GPU adapter"]
-fn source_admin_screens_render_offscreen() -> anyhow::Result<()> {
+fn admin_screens_render_offscreen(
+    pack: std::rc::Rc<bri_ui::pack::Pack>,
+    out: Option<&std::path::Path>,
+) -> anyhow::Result<()> {
     use bri_ui::{
         api::Settings,
         binds::Platform,
         gpu::{Headless, UiRenderer},
         models::admin::{AdminBrickGroup, AdminConfirmation, AdminMap},
-        pack::Pack,
         screens::ScreenId,
         ui::{Ui, UiConfig},
     };
-    use std::{path::PathBuf, rc::Rc};
 
-    let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let pack_dir = workspace.join("content/ui-pack-004");
-    if !pack_dir.join("ui-pack.json").exists() {
-        return Ok(());
-    }
-    let pack = Rc::new(Pack::load(&pack_dir)?);
     let gpu = Headless::new()?;
     let mut renderer = UiRenderer::new(&gpu.device, &gpu.queue);
-    let out = workspace.join("artifacts/native-admin-ui");
-    std::fs::create_dir_all(&out)?;
 
     for (name, id) in [
         ("menu", ScreenId::Admin),
@@ -286,15 +279,42 @@ fn source_admin_screens_render_offscreen() -> anyhow::Result<()> {
             1.0,
             [0.12, 0.16, 0.22, 1.0],
         )?;
-        image::save_buffer(
-            out.join(format!("{name}.png")),
-            &pixels,
-            1024,
-            768,
-            image::ColorType::Rgba8,
-        )?;
+        assert!(!draw.cmds.is_empty(), "{name} draws nothing");
+        assert_eq!(pixels.len(), 1024 * 768 * 4);
+        if let Some(out) = out {
+            image::save_buffer(
+                out.join(format!("{name}.png")),
+                &pixels,
+                1024,
+                768,
+                image::ColorType::Rgba8,
+            )?;
+        }
     }
     Ok(())
+}
+
+#[cfg(feature = "gpu")]
+#[test]
+fn admin_screens_render_offscreen_synthetic() -> anyhow::Result<()> {
+    let mut data = bri_ui::schema::UiPack::default();
+    bri_ui::testing::add_dialogs(&mut data);
+    admin_screens_render_offscreen(bri_ui::testing::pack(data), None)
+}
+
+/// Explicit offscreen source-skin inspection: writes the dialogs to
+/// `artifacts/native-admin-ui`.
+#[cfg(feature = "gpu")]
+#[test]
+#[ignore = "requires generated v20 content"]
+fn source_admin_screens_render_offscreen() -> anyhow::Result<()> {
+    let workspace = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let pack = std::rc::Rc::new(bri_ui::pack::Pack::load(
+        &workspace.join("content/ui-pack-004"),
+    )?);
+    let out = workspace.join("artifacts/native-admin-ui");
+    std::fs::create_dir_all(&out)?;
+    admin_screens_render_offscreen(pack, Some(&out))
 }
 
 #[test]
@@ -524,7 +544,11 @@ fn picking_the_destructo_wand_closes_the_admin_and_escape_menus() {
         );
     }
     let mut admin = ctrl("GuiControl", "GuiDefaultProfile", Rect::new(0, 0, 640, 480));
-    let mut wand = ctrl("GuiButtonCtrl", "GuiButtonProfile", Rect::new(100, 100, 140, 30));
+    let mut wand = ctrl(
+        "GuiButtonCtrl",
+        "GuiButtonProfile",
+        Rect::new(100, 100, 140, 30),
+    );
     wand.text = Some("Destructo Wand".into());
     wand.command = Some("AdminGui_Wand();".into());
     admin.children.push(wand);
@@ -745,13 +769,20 @@ fn the_admin_menu_rank_buttons_confirm_before_asking_the_host() {
     });
     assert_eq!(ui.top_id(), ScreenId::AdminConfirm);
     assert_eq!(
-        ui.core.admin.confirmation.as_ref().map(|c| c.action.clone()),
+        ui.core
+            .admin
+            .confirmation
+            .as_ref()
+            .map(|c| c.action.clone()),
         Some(AdminAction::SetRole {
             target: 7,
             role: AdminRole::SuperAdmin
         })
     );
-    assert!(ui.core.admin.pending.is_empty(), "nothing is sent unconfirmed");
+    assert!(
+        ui.core.admin.pending.is_empty(),
+        "nothing is sent unconfirmed"
+    );
 }
 
 #[test]
@@ -770,7 +801,13 @@ fn the_environment_window_applies_a_draft_through_the_host() {
     };
     use std::{path::PathBuf, rc::Rc};
     let mut pack = UiPack::default();
-    for name in ["MainMenuGui", "PlayGui", "LoadingGui", "escapeMenu", "adminGui"] {
+    for name in [
+        "MainMenuGui",
+        "PlayGui",
+        "LoadingGui",
+        "escapeMenu",
+        "adminGui",
+    ] {
         pack.layouts.insert(
             name.into(),
             ctrl("GuiControl", "GuiDefaultProfile", Rect::new(0, 0, 640, 480)),
@@ -846,7 +883,14 @@ fn the_environment_window_applies_a_draft_through_the_host() {
     // Advanced: the sun azimuth slider's middle is 180 degrees.
     click(&mut ui, ScreenId::AdminEnvironment, "EnvTabAdvanced");
     click(&mut ui, ScreenId::AdminEnvironment, "EnvA_SunAzimuth");
-    let azimuth = ui.core.environment.draft.as_ref().unwrap().sun_azimuth.unwrap();
+    let azimuth = ui
+        .core
+        .environment
+        .draft
+        .as_ref()
+        .unwrap()
+        .sun_azimuth
+        .unwrap();
     assert!((azimuth - 180.0).abs() <= 3.0, "{azimuth}");
     // The direct light's picker: Done puts its colour in the draft.
     click(&mut ui, ScreenId::AdminEnvironment, "Env_DirectLight");
@@ -854,7 +898,14 @@ fn the_environment_window_applies_a_draft_through_the_host() {
     click(&mut ui, ScreenId::AdminColorPicker, "EnvPick0");
     click(&mut ui, ScreenId::AdminColorPicker, "EnvPickDone");
     assert_eq!(ui.top_id(), ScreenId::AdminEnvironment);
-    let sun = ui.core.environment.draft.as_ref().unwrap().direct_light.unwrap();
+    let sun = ui
+        .core
+        .environment
+        .draft
+        .as_ref()
+        .unwrap()
+        .direct_light
+        .unwrap();
     assert!((sun[0] - 0.5).abs() < 0.03 && sun[1] == 0.6, "{sun:?}");
     click(&mut ui, ScreenId::AdminEnvironment, "EnvApply");
     let sent = ui.core.admin.pending.values().find_map(|a| match a {

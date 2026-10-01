@@ -17,6 +17,7 @@ pub mod reach;
 pub mod replica;
 pub mod server;
 pub mod stream;
+pub mod testing;
 pub mod traffic;
 pub mod upnp;
 pub mod wire;

@@ -223,22 +223,12 @@ fn overlays_draw_above_every_screen_and_nothing_when_hidden() {
     assert_eq!(u.draw().cmds.len(), base);
 }
 
-/// Offscreen look check with the converted v20 UI pack: writes PNGs of both
-/// overlays over a black frame to `artifacts/perf-overlay/` (git-ignored).
-/// `BRI_UI_PACK` names the pack when it is not in this checkout.
+/// Both overlays, filled with samples, rendered offscreen at three sizes;
+/// PNGs go to `out` when given.
 #[cfg(feature = "gpu")]
-#[test]
-#[ignore = "needs converted original content and a GPU"]
-fn overlays_render_offscreen() {
+fn overlays_render_offscreen(pack: Rc<Pack>, out: Option<&std::path::Path>) {
     use bri_ui::gpu::{Headless, UiRenderer};
     use bri_ui::models::perf::{PerfStats, ServerStats};
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let dir = std::env::var_os("BRI_UI_PACK")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| root.join("content/ui-pack-004"));
-    let pack = Rc::new(Pack::load(&dir).unwrap());
-    let out = root.join("artifacts/perf-overlay");
-    std::fs::create_dir_all(&out).unwrap();
     let gpu = Headless::new().unwrap();
     let mut r = UiRenderer::new(&gpu.device, &gpu.queue);
     for (pw, ph, scale) in [
@@ -314,13 +304,39 @@ fn overlays_render_offscreen() {
         let px = gpu
             .render_rgba(&mut r, &pack, &dl, (pw, ph), scale, [0.2, 0.25, 0.3, 1.0])
             .unwrap();
-        image::save_buffer(
-            out.join(format!("overlays_{pw}x{ph}.png")),
-            &px,
-            pw,
-            ph,
-            image::ColorType::Rgba8,
-        )
-        .unwrap();
+        assert_eq!(px.len(), (pw * ph * 4) as usize);
+        assert!(dl.glyph_count() > 0, "the overlays print their numbers");
+        if let Some(out) = out {
+            image::save_buffer(
+                out.join(format!("overlays_{pw}x{ph}.png")),
+                &px,
+                pw,
+                ph,
+                image::ColorType::Rgba8,
+            )
+            .unwrap();
+        }
     }
+}
+
+#[cfg(feature = "gpu")]
+#[test]
+fn overlays_render_offscreen_synthetic() {
+    overlays_render_offscreen(bri_ui::testing::pack(UiPack::default()), None);
+}
+
+/// Offscreen look check with the converted v20 UI pack: writes PNGs of both
+/// overlays over a black frame to `artifacts/perf-overlay/` (git-ignored).
+/// `BRI_UI_PACK` names the pack when it is not in this checkout.
+#[cfg(feature = "gpu")]
+#[test]
+#[ignore = "requires generated v20 content"]
+fn overlays_render_offscreen_content() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let dir = std::env::var_os("BRI_UI_PACK")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| root.join("content/ui-pack-004"));
+    let out = root.join("artifacts/perf-overlay");
+    std::fs::create_dir_all(&out).unwrap();
+    overlays_render_offscreen(Rc::new(Pack::load(&dir).unwrap()), Some(&out));
 }

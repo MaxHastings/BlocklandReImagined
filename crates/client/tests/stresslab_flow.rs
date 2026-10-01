@@ -1,7 +1,10 @@
 //! Stress Lab through the real client, offscreen: host the package world from
 //! Start Game, see the miner HUD, mine with its key, meet a creeper, save.
-//! Never creates a window, audio device or OS input.
-//! Run: cargo test -p bri-client --test stresslab_flow --release -- --ignored --nocapture
+//! Runs with the repo's Stress Lab packages over the made-up content root;
+//! the ignored variant runs over the generated v20 content (`--release --
+//! --ignored`, BRI_CONTENT or content/, or BRI_STRESSLAB_CONTENT for a
+//! packaged release's root). Never creates a window, audio device or OS
+//! input.
 use anyhow::{Context, Result, bail, ensure};
 use bri_client::{
     app::App,
@@ -15,8 +18,14 @@ use bri_ui::{
 use std::{
     path::Path,
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
+
+#[macro_use]
+mod support;
+use support::content_root::ContentRoot;
+
+synthetic_and_content!(ContentRoot: stress_lab_hosts_shows_the_miner_hud_mines_and_meets_a_creeper);
 
 const SIZE: (u32, u32) = (960, 720);
 const WORLD: &str = "stresslab-world:world/strata";
@@ -220,23 +229,18 @@ fn own(app: &App, key: &str) -> Option<i64> {
         .as_i64()
 }
 
-#[test]
-#[ignore = "converted native content, loopback QUIC and an offscreen GPU; no window"]
-fn stress_lab_hosts_shows_the_miner_hud_mines_and_meets_a_creeper() -> Result<()> {
+fn stress_lab_hosts_shows_the_miner_hud_mines_and_meets_a_creeper(f: &ContentRoot) -> Result<()> {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let artifact = workspace.join("artifacts/stresslab-client");
-    let stamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-    let state = artifact.join(format!("state-{stamp}"));
-    std::fs::create_dir_all(&state)?;
+    let artifact = f.out("stresslab-client")?;
+    let state_dir = f.state()?;
+    let state = state_dir.path();
     // BRI_STRESSLAB_CONTENT checks a packaged release's content root, whose
     // packages.json enables the Stress Lab; otherwise this checkout's
-    // packages are enabled over its content.
-    let packaged = std::env::var_os("BRI_STRESSLAB_CONTENT").map(std::path::PathBuf::from);
-    let mut app = App::load(
-        packaged.as_deref().unwrap_or(&workspace.join("content")),
-        &state,
-        SIZE,
-    )?;
+    // packages are enabled over the content root.
+    let packaged = std::env::var_os("BRI_STRESSLAB_CONTENT")
+        .filter(|_| f.content)
+        .map(std::path::PathBuf::from);
+    let mut app = App::load(packaged.as_deref().unwrap_or(&f.root), state, SIZE)?;
     app.ui.core.pop(ScreenId::DefaultControls);
     if packaged.is_none() {
         app.enable_packages(&workspace.join("packages/stresslab"), &package_set())?;
@@ -245,7 +249,7 @@ fn stress_lab_hosts_shows_the_miner_hud_mines_and_meets_a_creeper() -> Result<()
         app.content.maps.iter().any(|m| m.id == WORLD),
         "Start Game lists the package world"
     );
-    let gpu = Headless::new()?;
+    let gpu = support::gpu::turn()?;
     let mut ui_renderer = UiRenderer::new(&gpu.device, &gpu.queue);
     app.gpu_ready(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm)?;
     action(

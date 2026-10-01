@@ -1,12 +1,8 @@
 //! A plate planted on the floor under each stock map's spawn rests on it:
 //! every map's spawn floor lies on the brick plate lattice.
 use anyhow::{Context, Result};
-use bri_content::{
-    brick::Brick as Mesh,
-    collision::{CollisionBody, Part},
-};
 use bri_sim::{
-    definitions::{Definition, Definitions},
+    definitions::{Definitions, Special},
     map::NativeMap,
     simulation::{Builder, PlantFailure, Simulation},
 };
@@ -25,48 +21,17 @@ fn content() -> PathBuf {
 
 /// A 1x1 plate.
 fn plate() -> Result<Definitions> {
-    let mesh = Mesh {
-        schema_version: 1,
-        id: "plate".into(),
-        footprint_studs: [1, 1],
-        height_plates: 1,
-        attachment_rows: vec!["b".into()],
-        collision_boxes: vec![],
-        needs_external_collision: false,
-        coverage: None,
-        quads: vec![],
-    };
-    let collision = CollisionBody {
-        id: "plate".into(),
-        parts: vec![Part::Box {
-            center: [0.0; 3],
-            size: [0.5, 0.2, 0.5],
-        }],
-    };
-    let shape = bri_physics::content::collider(&collision)?
-        .build()
-        .shared_shape()
-        .clone();
     Ok(Definitions {
         entries: [(
             "plate".into(),
-            Definition {
-                mesh,
-                collision,
-                shape,
-                indestructible: false,
-                special: Default::default(),
-                reflection: None,
-                link: None,
-                glass: [0.0; 4],
-            },
+            bri_sim::testing::definition("plate", [1, 1], 1, Special::None, false),
         )]
         .into(),
     })
 }
 
 #[test]
-#[ignore = "needs generated content (map-bundle-017); set BRI_CONTENT"]
+#[ignore = "requires generated v20 content (map-bundle-017, or BRI_CONTENT)"]
 fn a_plate_on_each_stock_spawn_floor_rests_flush() -> Result<()> {
     let root = content().join(BUNDLE);
     let bundle: serde_json::Value =

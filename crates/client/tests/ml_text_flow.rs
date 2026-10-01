@@ -1,40 +1,39 @@
 //! Host and guest over loopback: player chat stays literal in v20's chat
 //! format on both HUDs, and both render a server center print through the
-//! shared ML renderer. No window or OS input.
-//! Run: cargo test -p bri-client --test ml_text_flow -- --ignored --nocapture
+//! shared ML renderer. Runs on the made-up content root; the ignored variant
+//! runs on the generated v20 content (`-- --ignored`, BRI_CONTENT or
+//! content/). No window or OS input.
 use anyhow::{Result, bail, ensure};
 use bri_client::{app::App, platform::PlatformApp};
-use bri_ui::{
-    api::*,
-    gpu::{Headless, UiRenderer},
-};
+use bri_ui::{api::*, gpu::UiRenderer};
 use std::{
-    path::Path,
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-/// A free port for this binary's hosts, so a game already hosting on 28000
-/// (the player's own, say) does not break the test. Shared by every test
-/// here, as the fixed port was.
+#[macro_use]
+mod support;
+use support::content_root::ContentRoot;
+
+synthetic_and_content!(ContentRoot: host_and_guest_chat_markup_and_player_text);
+
+/// A free port for this test's host, so a game already hosting on 28000
+/// (the player's own, say) does not break the test. Set under the GPU
+/// turn, which every test here holding a port takes first.
 fn test_port() -> u16 {
-    static PORT: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
-    *PORT.get_or_init(|| {
-        let port = std::net::UdpSocket::bind("127.0.0.1:0")
-            .and_then(|s| s.local_addr())
-            .map(|a| a.port())
-            .expect("a free UDP port");
-        // SAFETY: set once, before any host or join in this binary starts.
-        unsafe {
-            std::env::set_var("BRI_TEST_HOST_PORT", port.to_string());
-            std::env::set_var("BRI_TEST_DISCOVERY_PORT", "0");
-        }
-        port
-    })
+    let port = std::net::UdpSocket::bind("127.0.0.1:0")
+        .and_then(|s| s.local_addr())
+        .map(|a| a.port())
+        .expect("a free UDP port");
+    // SAFETY: set before this test's host or join starts.
+    unsafe {
+        std::env::set_var("BRI_TEST_HOST_PORT", port.to_string());
+        std::env::set_var("BRI_TEST_DISCOVERY_PORT", "0");
+    }
+    port
 }
 
 const SIZE: (u32, u32) = (960, 720);
-const BEDROOM: &str = "v20/add-ons/map_bedroom/bedroom.mis";
 
 fn step(app: &mut App, elapsed: Duration) -> Result<()> {
     app.tick(elapsed)?;
@@ -90,22 +89,17 @@ fn chat_lines(app: &App) -> Vec<String> {
         .collect()
 }
 
-#[test]
-#[ignore = "requires converted native content, loopback QUIC and an offscreen GPU; no window"]
-fn host_and_guest_chat_markup_and_player_text() -> Result<()> {
+fn host_and_guest_chat_markup_and_player_text(f: &ContentRoot) -> Result<()> {
+    let gpu = support::gpu::turn()?;
     let port = test_port();
-    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let out = workspace.join("artifacts/ml-text/flow");
+    let out = f.out("ml-text/flow")?;
     let run_id = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-    let host_state = out.join(format!("host-{run_id}"));
-    let guest_state = out.join(format!("guest-{run_id}"));
-    std::fs::create_dir_all(&host_state)?;
-    std::fs::create_dir_all(&guest_state)?;
-    let mut host = App::load(&workspace.join("content"), &host_state, SIZE)?;
-    let mut guest = App::load(&workspace.join("content"), &guest_state, SIZE)?;
+    let (host_state, guest_state) = (f.state()?, f.state()?);
+    let mut host = App::load(&f.root, host_state.path(), SIZE)?;
+    let mut guest = App::load(&f.root, guest_state.path(), SIZE)?;
 
     host.ui.core.request(UiAction::HostGame {
-        map: BEDROOM.into(),
+        map: f.map.0.clone(),
         mode: ServerMode::Lan,
         game_mode: None,
         max_players: 4,
@@ -155,7 +149,6 @@ fn host_and_guest_chat_markup_and_player_text() -> Result<()> {
 
     // Render both HUDs offscreen with a center and bottom print from the
     // same client path (`GameConnection::CenterPrint` text).
-    let gpu = Headless::new()?;
     let mut renderer = UiRenderer::new(&gpu.device, &gpu.queue);
     for (name, app) in [("host", &mut host), ("guest", &mut guest)] {
         app.ui.apply(UiUpdate::CenterPrint {

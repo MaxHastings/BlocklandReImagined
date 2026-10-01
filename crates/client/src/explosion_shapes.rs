@@ -277,18 +277,43 @@ mod tests {
         assert_eq!(sample1(&[1.0, 0.0], 0.5), Some(0.5));
         assert_eq!(sample1(&[], 0.5), None);
     }
-    #[test]
-    #[ignore = "requires generated native weapons-pack-009; CPU only"]
-    fn rocket_explosion_sphere_expands_and_fades() -> Result<()> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/weapons-pack-009");
+    /// A weapons pack with an explosion shape, and that explosion's name:
+    /// made up (`crate::testing::explosions`), or the converted v20 pack's
+    /// rocket explosion.
+    struct Blast {
+        root: std::path::PathBuf,
+        explosion: String,
+        _scratch: Option<crate::testing::ScratchDir>,
+    }
+    impl Blast {
+        fn synthetic() -> Result<Self> {
+            let scratch = crate::testing::ScratchDir::new("explosions")?;
+            crate::testing::explosions::write_pack(scratch.path())?;
+            Ok(Self {
+                root: scratch.path().to_path_buf(),
+                explosion: crate::testing::explosions::EXPLOSION.into(),
+                _scratch: Some(scratch),
+            })
+        }
+        fn content() -> Result<Self> {
+            Ok(Self {
+                root: Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/weapons-pack-009"),
+                explosion: "rocketExplosion".into(),
+                _scratch: None,
+            })
+        }
+    }
+    crate::testing::synthetic_and_content!(Blast: rocket_explosion_sphere_expands_and_fades);
+    fn rocket_explosion_sphere_expands_and_fades(fx: &Blast) -> Result<()> {
+        let root = &fx.root;
         let pack = bri_weapons::Pack::from_json(&std::fs::read(root.join("weapons.json"))?)?;
-        let mut shapes = ExplosionShapes::load(&pack, &root)?;
+        let mut shapes = ExplosionShapes::load(&pack, root)?;
         shapes.cue(&Cue {
             id: 1,
             tick: 1,
             kind: CueKind::WeaponEffect {
                 source: bri_weapons::TargetId::Map(0),
-                definition: "rocketExplosion".into(),
+                definition: fx.explosion.clone(),
                 node: String::new(),
                 seconds: 0.0,
                 image: None,
@@ -299,10 +324,11 @@ mod tests {
             position: [1.0, 2.0, 3.0],
         });
         shapes.advance(0.05);
-        let model = &shapes.models["rocketexplosion"];
+        let key = fx.explosion.to_ascii_lowercase();
+        let model = &shapes.models[&key];
         let first = model.transforms[0];
         shapes.advance(0.1);
-        let model = &shapes.models["rocketexplosion"];
+        let model = &shapes.models[&key];
         let later = &model.transforms[0];
         assert!(
             later.transform.x_axis.x > first.transform.x_axis.x,

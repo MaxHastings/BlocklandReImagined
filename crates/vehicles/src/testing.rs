@@ -42,6 +42,11 @@ pub const BALL: &str = "test:vehicle/ball";
 /// The body a wrecked skier tumbles in: a seat with no controls.
 pub const TUMBLE: &str = "v20.vehicle.deathvehicle";
 
+/// The `tireEmitter` (an emitter datablock name) every wheeled vehicle
+/// here sprays from its tyres, and the skis' one.
+pub const TIRE_EMITTER: &str = "testTireEmitter";
+pub const SKI_EMITTER: &str = "testSkiEmitter";
+
 /// Every vehicle here, in catalog order.
 pub const ALL: [&str; 11] = [
     CAR, TANK, FLYING_CAR, SKIS, CARPET, HORSE, ROWBOAT, CANNON, TURRET, BALL, TUMBLE,
@@ -291,7 +296,11 @@ fn wheeled(id: &str, name: &str, size: [f32; 3], bottom: f32) -> Definition {
         runover_speed: 4.,
         runover_damage: 6.,
         runover_push: 1.5,
-        authored: impact_sounds("test:sound/hard-impact", 20., 10.),
+        authored: {
+            let mut authored = impact_sounds("test:sound/hard-impact", 20., 10.);
+            authored.insert("tireemitter".into(), TIRE_EMITTER.into());
+            authored
+        },
         ..base(id, name, Family::Wheeled)
     }
 }
@@ -304,9 +313,9 @@ pub fn car() -> Definition {
             seat("mount2", [-0.5, 1.2, 1.2], false, false),
             seat("mount3", [0.5, 1.2, 1.2], false, false),
         ],
-        wheels: four_wheels(1., 0.4, 1.6, 0.),
-        mass: 200.,
-        engine_force: 3000.,
+        wheels: gripping(four_wheels(1., 0.4, 1.6, 0.), 20000.),
+        mass: 150.,
+        engine_force: 10000.,
         engine_brake: 500.,
         brake_force: 2000.,
         max_speed: 30.,
@@ -314,6 +323,20 @@ pub fn car() -> Definition {
         strafe_steering: true,
         ..wheeled(CAR, "Test Car", [2.4, 1.2, 4.8], 0.4)
     }
+}
+
+/// Every wheel's tyre with this much sideways grip.
+fn gripping(wheels: Vec<Wheel>, lateral_force: f32) -> Vec<Wheel> {
+    wheels
+        .into_iter()
+        .map(|w| Wheel {
+            tire: Tire {
+                lateral_force,
+                ..w.tire
+            },
+            ..w
+        })
+        .collect()
 }
 
 /// Every wheel with this spring and damper.
@@ -434,6 +457,7 @@ pub fn skis() -> Definition {
         ("hardimpactspeed".into(), "10".into()),
         ("softimpactspeed".into(), "5".into()),
         ("minimpactspeed".into(), "10".into()),
+        ("tireemitter".into(), SKI_EMITTER.into()),
     ]);
     Definition {
         seats: vec![seat("mount0", [0., 0.4, 0.], true, false)],

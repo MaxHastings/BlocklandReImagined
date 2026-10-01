@@ -54,6 +54,7 @@ pub mod servers;
 pub mod settings;
 pub mod tool_ui;
 pub mod trust_list;
+pub mod testing;
 pub mod tutorial_targets;
 pub mod updates;
 pub mod vehicle_camera;

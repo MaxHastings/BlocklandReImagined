@@ -275,11 +275,35 @@ impl WorldEffects {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    #[ignore = "requires native effects pack, never opens a window or audio device"]
-    fn replicated_effect_lifecycle_late_join_and_capacity() -> Result<()> {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let pack = EffectsPack::load(root.join("content/effects-runtime-pack-001"))?;
+    /// An effects pack and an emitter and a light it has: made up
+    /// (`bri_fx_runtime::testing`), or the converted v20 pack.
+    struct Effects {
+        pack: Arc<EffectsPack>,
+        emitter: String,
+        light: String,
+    }
+    impl Effects {
+        fn synthetic() -> Result<Self> {
+            Ok(Self {
+                pack: bri_fx_runtime::testing::pack(|_| {}),
+                emitter: "emitter".into(),
+                light: "light".into(),
+            })
+        }
+        fn content() -> Result<Self> {
+            let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+            Ok(Self {
+                pack: EffectsPack::load(root.join("content/effects-runtime-pack-001"))?,
+                emitter: "v20/emitter/playerjetemitter".into(),
+                light: "v20/light/redlight".into(),
+            })
+        }
+    }
+    crate::testing::synthetic_and_content!(
+        Effects: replicated_effect_lifecycle_late_join_and_capacity
+    );
+    fn replicated_effect_lifecycle_late_join_and_capacity(fx: &Effects) -> Result<()> {
+        let pack = fx.pack.clone();
         let mesh = bri_content::brick::Brick {
             schema_version: 1,
             id: "plate".into(),
@@ -296,11 +320,11 @@ mod tests {
             bri_world::Brick::new(ContentRef::Resolved("plate".into()), [0.5, 1.1, 0.25], 1);
         brick.visible = false;
         brick.emitter = Some(Box::new(bri_world::Emitter {
-            asset: Some(ContentRef::Resolved("v20/emitter/playerjetemitter".into())),
+            asset: Some(ContentRef::Resolved(fx.emitter.clone())),
             direction: 0,
         }));
         brick.light = Some(Box::new(bri_world::Light {
-            asset: ContentRef::Resolved("v20/light/redlight".into()),
+            asset: ContentRef::Resolved(fx.light.clone()),
             enabled: true,
         }));
         let mut replica = PublicWorld {

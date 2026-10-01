@@ -1,24 +1,24 @@
 //! Offscreen Start Game mission list with the actual client UI. No window or input.
-//! Set BRI_CONTENT_ROOT to a packaged build's content directory to check a package.
+//! Runs on the made-up content root; the ignored variant runs on the
+//! generated content (set BRI_CONTENT to a packaged build's content
+//! directory to check a package).
 use anyhow::{Context, Result, ensure};
 use bri_client::app::App;
-use bri_ui::{
-    gpu::{Headless, UiRenderer},
-    screens::ScreenId,
-};
-use std::{path::PathBuf, time::Duration};
+use bri_ui::{gpu::UiRenderer, screens::ScreenId};
+use std::time::Duration;
+
+#[macro_use]
+mod support;
+use support::content_root::ContentRoot;
 
 const SIZE: (u32, u32) = (960, 720);
 
-#[test]
-#[ignore = "requires converted native content and an offscreen GPU; no window"]
-fn start_game_lists_and_draws_every_loadable_map() -> Result<()> {
-    let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let content = std::env::var_os("BRI_CONTENT_ROOT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| workspace.join("content"));
-    let state = std::env::temp_dir().join(format!("bri-start-list-{}", std::process::id()));
-    let mut app = App::load(&content, &state, SIZE)?;
+synthetic_and_content!(ContentRoot: start_game_lists_and_draws_every_loadable_map);
+
+fn start_game_lists_and_draws_every_loadable_map(f: &ContentRoot) -> Result<()> {
+    let content = &f.root;
+    let state = f.state()?;
+    let mut app = App::load(content, state.path(), SIZE)?;
     app.ui.core.push(ScreenId::StartMission);
     app.ui.update(0);
     let screen = app
@@ -44,7 +44,7 @@ fn start_game_lists_and_draws_every_loadable_map() -> Result<()> {
         names.len()
     );
 
-    let gpu = Headless::new()?;
+    let gpu = support::gpu::turn()?;
     let mut renderer = UiRenderer::new(&gpu.device, &gpu.queue);
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let extent = wgpu::Extent3d {
@@ -115,8 +115,7 @@ fn start_game_lists_and_draws_every_loadable_map() -> Result<()> {
     }
     drop(mapped);
     readback.unmap();
-    let output = workspace.join("artifacts/start-game-list");
-    std::fs::create_dir_all(&output)?;
+    let output = f.out("start-game-list")?;
     image::save_buffer(
         output.join("start-game.png"),
         &pixels,
@@ -133,6 +132,5 @@ fn start_game_lists_and_draws_every_loadable_map() -> Result<()> {
             "row_height": view.node(list).state.row_height,
         }))?,
     )?;
-    let _ = std::fs::remove_dir_all(&state);
     Ok(())
 }

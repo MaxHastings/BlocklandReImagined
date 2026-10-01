@@ -15,6 +15,7 @@ pub mod scene;
 pub mod shape;
 pub mod terrain_field;
 pub mod terrain_mesh;
+pub mod testing;
 pub mod tutorial;
 pub mod water;
 

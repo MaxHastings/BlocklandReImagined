@@ -1286,39 +1286,27 @@ mod tests {
         assert_eq!(print_shortcut("unmapped tile"), None);
     }
 
-    #[test]
-    #[ignore = "requires locally converted original content; run explicitly after content setup"]
-    fn authored_selector_pack_draw_check() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let pack = Rc::new(Pack::load(&root.join("content/ui-pack-001")).unwrap());
-        let catalog: serde_json::Value = serde_json::from_slice(
-            &std::fs::read(root.join("content/stock-catalog-004/stock-catalog.json")).unwrap(),
-        )
-        .unwrap();
+    /// Draws every brick tab and the print selector's letters on `pack`
+    /// at 1024x768 and renders them offscreen. `letters` is the image id
+    /// prefix of the letter prints. Returns the window and letter count.
+    fn selector_pack_draw_check(
+        pack: Rc<Pack>,
+        bricks: Vec<BrickInfo>,
+        letters: &str,
+    ) -> (Rect, usize) {
         let mut ui = fixture();
         ui.core.pack = pack.clone();
         ui.core.logical = (1024, 768);
-        ui.core.bricks = catalog["bricks"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|b| b["display_name"].as_str().is_some_and(|n| !n.is_empty()))
-            .map(|b| BrickInfo {
-                id: b["id"].as_str().unwrap().into(),
-                ui_name: b["display_name"].as_str().unwrap().into(),
-                category: b["category"].as_str().unwrap().into(),
-                subcategory: b["subcategory"].as_str().unwrap().into(),
-                icon: b["icon_source"]
-                    .as_str()
-                    .filter(|p| pack.has_image(&p.to_ascii_lowercase()))
-                    .map_or(IconRef::None, |p| IconRef::Pack(p.to_ascii_lowercase())),
-            })
-            .collect();
-        assert!(ui.core.bricks.len() >= 166);
+        ui.core.bricks = bricks;
+        assert!(!ui.core.bricks.is_empty());
         let mut bricks = BrickSelector::new(&ui.core);
         bricks.on_wake(&mut ui.core);
         let window = bricks.view.node(bricks.view.id("BSD_Window").unwrap()).rect;
-        assert_eq!(window, Rect::new(192, 144, 640, 480));
+        assert_eq!(
+            (window.x, window.y),
+            ((1024 - window.w) / 2, (768 - window.h) / 2),
+            "the selector window is centred"
+        );
         let tile = bricks.view.node(bricks.view.id("BSD_Brick0").unwrap()).rect;
         assert_eq!((tile.w, tile.h), (96, 96));
         let mut dl = DrawList::new(Rect::new(0, 0, 1024, 768));
@@ -1334,7 +1322,7 @@ mod tests {
             pack.data
                 .images
                 .keys()
-                .filter(|p| p.starts_with("add-ons/print_letters_default/icons/"))
+                .filter(|p| p.starts_with(letters))
                 .map(|p| PrintInfo {
                     id: p.clone(),
                     name: p.rsplit('/').next().unwrap().into(),
@@ -1343,7 +1331,8 @@ mod tests {
                 .collect(),
         );
         let prints = PrintSelector::new(&ui.core);
-        assert!(prints.letters.len() >= 26);
+        assert!(!prints.letters.is_empty());
+        let letter_count = prints.letters.len();
         prints.draw(&pack, &mut dl, &ui.core);
         for cmd in &dl.cmds {
             if let crate::draw::DrawCmd::Image {
@@ -1371,5 +1360,81 @@ mod tests {
             assert_eq!(rgba.len(), 1024 * 768 * 4);
             assert!(renderer.missing_textures().next().is_none());
         }
+        (window, letter_count)
+    }
+
+    #[test]
+    fn selector_pack_draw_check_synthetic() {
+        let mut data = fixture().core.pack.data.clone();
+        if let Some(window) = data
+            .layouts
+            .get_mut("BrickSelectorDlg")
+            .and_then(|l| l.children.first_mut())
+        {
+            window.h_sizing = crate::schema::HSizing::Center;
+            window.v_sizing = crate::schema::VSizing::Center;
+        }
+        let mut bricks = vec![];
+        for (i, (category, subcategory)) in [
+            ("Bricks", "1x"),
+            ("Bricks", "2x"),
+            ("Plates", "1x"),
+            ("Special", "Doors"),
+        ]
+        .into_iter()
+        .cycle()
+        .take(14)
+        .enumerate()
+        {
+            let icon = format!("fixture/bricks/icon{i}");
+            crate::testing::add_image(&mut data, &icon, 96, 96);
+            bricks.push(BrickInfo {
+                id: format!("fixture.brick.{i}"),
+                ui_name: format!("Brick {i}"),
+                category: category.into(),
+                subcategory: subcategory.into(),
+                icon: IconRef::Pack(icon),
+            });
+        }
+        for c in 'a'..='z' {
+            crate::testing::add_image(&mut data, &format!("fixture/prints/letters/{c}"), 64, 64);
+        }
+        selector_pack_draw_check(
+            crate::testing::pack(data),
+            bricks,
+            "fixture/prints/letters/",
+        );
+    }
+
+    #[test]
+    #[ignore = "requires generated v20 content"]
+    fn authored_selector_pack_draw_check() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let pack = Rc::new(Pack::load(&root.join("content/ui-pack-001")).unwrap());
+        let catalog: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(root.join("content/stock-catalog-004/stock-catalog.json")).unwrap(),
+        )
+        .unwrap();
+        let bricks: Vec<BrickInfo> = catalog["bricks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|b| b["display_name"].as_str().is_some_and(|n| !n.is_empty()))
+            .map(|b| BrickInfo {
+                id: b["id"].as_str().unwrap().into(),
+                ui_name: b["display_name"].as_str().unwrap().into(),
+                category: b["category"].as_str().unwrap().into(),
+                subcategory: b["subcategory"].as_str().unwrap().into(),
+                icon: b["icon_source"]
+                    .as_str()
+                    .filter(|p| pack.has_image(&p.to_ascii_lowercase()))
+                    .map_or(IconRef::None, |p| IconRef::Pack(p.to_ascii_lowercase())),
+            })
+            .collect();
+        assert!(bricks.len() >= 166);
+        let (window, letters) =
+            selector_pack_draw_check(pack, bricks, "add-ons/print_letters_default/icons/");
+        assert_eq!(window, Rect::new(192, 144, 640, 480));
+        assert!(letters >= 26);
     }
 }

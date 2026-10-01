@@ -3,7 +3,9 @@
 //! and checked for controls cut off by the window, children spilling out of
 //! their parents and text wider than its control.
 //!
-//! Run: cargo test -p bri-ui --test screen_sweep -- --ignored --nocapture
+//! The synthetic variant runs on made-up assets (`bri_ui::testing`). The
+//! content variant runs on the converted pack and saves screenshots:
+//! cargo test -p bri-ui --test screen_sweep -- --ignored --nocapture
 //! PNGs go to `BRI_SWEEP_OUT` (default `target/screen-sweep`); they contain
 //! original artwork, so keep them out of git.
 use bri_ui::{
@@ -126,7 +128,10 @@ fn problems(pack: &Pack, v: &View, screen: Rect) -> Vec<String> {
             && !scrolled(v, n)
             && !inside(v.node(p).rect, r)
         {
-            out.push(format!("{label}: spills out of its parent {:?} at {r:?}", v.node(p).rect));
+            out.push(format!(
+                "{label}: spills out of its parent {:?} at {r:?}",
+                v.node(p).rect
+            ));
         }
         let class = node.ctrl.class.to_ascii_lowercase();
         if (class == "guitextctrl" || class.contains("button"))
@@ -148,18 +153,13 @@ fn problems(pack: &Pack, v: &View, screen: Rect) -> Vec<String> {
     out
 }
 
-#[test]
-#[ignore = "requires the converted ui-pack-004 and an offscreen GPU adapter"]
-fn every_screen_fits_a_short_wide_window_720p_and_1440p() -> anyhow::Result<()> {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let pack = Rc::new(Pack::load(&root.join("content/ui-pack-004"))?);
-    let out = std::env::var_os("BRI_SWEEP_OUT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| root.join("target/screen-sweep"));
-    std::fs::create_dir_all(&out)?;
+/// Opens every screen at each size, renders it offscreen and reports
+/// problems; screenshots and the report go to `out` when given.
+fn every_screen_fits(pack: Rc<Pack>, out: Option<&std::path::Path>) -> anyhow::Result<()> {
     let gpu = Headless::new()?;
     let mut renderer = UiRenderer::new(&gpu.device, &gpu.queue);
     let mut report = Vec::new();
+    let mut windows_checked = 0;
     for size in SIZES {
         for (id, file) in screens() {
             let mut ui = Ui::new(
@@ -183,24 +183,48 @@ fn every_screen_fits_a_short_wide_window_720p_and_1440p() -> anyhow::Result<()> 
                 report.push(format!("{file} {}x{}: did not open", size.0, size.1));
                 continue;
             };
+            if s.view()
+                .walk()
+                .any(|n| s.view().node(n).ctrl.class == "GuiWindowCtrl")
+            {
+                windows_checked += 1;
+            }
             for p in problems(&pack, s.view(), screen) {
-                report.push(format!("{file} {}x{} (logical {w}x{h}): {p}", size.0, size.1));
+                report.push(format!(
+                    "{file} {}x{} (logical {w}x{h}): {p}",
+                    size.0, size.1
+                ));
             }
             let dl: DrawList = ui.draw();
-            let pixels =
-                gpu.render_rgba(&mut renderer, &pack, &dl, size, ui.scale(), [0., 0., 0., 1.])?;
-            image::save_buffer(
-                out.join(format!("{file}-{}x{}.png", size.0, size.1)),
-                &pixels,
-                size.0,
-                size.1,
-                image::ColorType::Rgba8,
+            let pixels = gpu.render_rgba(
+                &mut renderer,
+                &pack,
+                &dl,
+                size,
+                ui.scale(),
+                [0., 0., 0., 1.],
             )?;
+            assert_eq!(pixels.len(), (size.0 * size.1 * 4) as usize);
+            if let Some(out) = out {
+                image::save_buffer(
+                    out.join(format!("{file}-{}x{}.png", size.0, size.1)),
+                    &pixels,
+                    size.0,
+                    size.1,
+                    image::ColorType::Rgba8,
+                )?;
+            }
         }
     }
-    std::fs::write(out.join("report.txt"), report.join("\n") + "\n")?;
     println!("{}", report.join("\n"));
-    println!("{} findings; screenshots in {}", report.len(), out.display());
+    if let Some(out) = out {
+        std::fs::write(out.join("report.txt"), report.join("\n") + "\n")?;
+        println!(
+            "{} findings; screenshots in {}",
+            report.len(),
+            out.display()
+        );
+    }
     // A dialog's own window must always fit: its title bar and buttons
     // are what the player needs.
     let windows: Vec<_> = report
@@ -208,5 +232,25 @@ fn every_screen_fits_a_short_wide_window_720p_and_1440p() -> anyhow::Result<()> 
         .filter(|l| l.contains("GuiWindowCtrl") && l.contains("cut off"))
         .collect();
     assert!(windows.is_empty(), "{windows:#?}");
+    assert!(windows_checked > 0, "no screen had a window to check");
     Ok(())
+}
+
+#[test]
+fn every_screen_fits_a_short_wide_window_720p_and_1440p_synthetic() -> anyhow::Result<()> {
+    let mut data = bri_ui::schema::UiPack::default();
+    bri_ui::testing::add_dialogs(&mut data);
+    every_screen_fits(bri_ui::testing::pack(data), None)
+}
+
+#[test]
+#[ignore = "requires generated v20 content"]
+fn every_screen_fits_a_short_wide_window_720p_and_1440p() -> anyhow::Result<()> {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let pack = Rc::new(Pack::load(&root.join("content/ui-pack-004"))?);
+    let out = std::env::var_os("BRI_SWEEP_OUT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| root.join("target/screen-sweep"));
+    std::fs::create_dir_all(&out)?;
+    every_screen_fits(pack, Some(&out))
 }

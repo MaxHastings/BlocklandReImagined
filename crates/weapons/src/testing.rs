@@ -24,9 +24,14 @@ pub const PRINTER_IMAGE: &str = "v20.image.printgunimage";
 pub const WAND_IMAGE: &str = "v20.image.wandimage";
 /// `serverCmdMagicWand`'s image; no inventory item holds it.
 pub const ADMIN_WAND_IMAGE: &str = "v20.image.adminwandimage";
-/// The ghost brick's images, which the tutorial checks are in hand.
+/// The ghost brick's images, which the tutorial checks are in hand. A
+/// click swings them ([`BRICK_FIRE_SEQUENCE`], trailing
+/// [`BRICK_TRAIL_EMITTER`]) and throws [`BRICK_DEPLOY_PROJECTILE`].
 pub const BRICK_IMAGE: &str = "v20.image.brickimage";
 pub const HORSE_BRICK_IMAGE: &str = "v20.image.horsebrickimage";
+/// The brick images' Fire state: its image sequence and its emitter.
+pub const BRICK_FIRE_SEQUENCE: &str = "testBrickThrow";
+pub const BRICK_TRAIL_EMITTER: &str = "testBrickTrailEmitter";
 
 // --- Guns. ---
 /// Semi-automatic: one shot per click, ejecting a casing. Its Ready state
@@ -288,6 +293,10 @@ impl S {
         self.0.sound = sound.into();
         self
     }
+    fn sequence(mut self, sequence: &str) -> Self {
+        self.0.sequence = sequence.into();
+        self
+    }
     fn eject_shell(mut self) -> Self {
         self.0.eject_shell = true;
         self
@@ -356,6 +365,15 @@ fn swing(activate: u32, prefire: u32, fire: u32, recover: u32) -> Vec<State> {
             .timeout(1)
             .0,
     ]
+}
+
+/// The hammer's and wands' [`swing`]. PreFire starts the arm's `armattack`
+/// and CheckFire's `onStopFire` returns the arm to `root`, so Fire is long
+/// enough (with PreFire, 32 ticks) for an avatar's swing to reach its peak
+/// before it is stopped, however a client's frames fall: a shorter one cut
+/// the swing at a different point each time.
+fn tool_swing() -> Vec<State> {
+    swing(1, 2, 30, 10)
 }
 
 /// A click: one swing per press, then it waits for the button to come up
@@ -490,10 +508,22 @@ pub fn pack() -> Pack {
     // The hammer and wands swing while held; the wrench and printer open a
     // dialog, so they act once per click; the printer has no wind-up.
     for (item_id, image_id, name, ui, states) in [
-        (HAMMER, HAMMER_IMAGE, "hammerImage", "Hammer", swing(1, 2, 6, 10)),
-        (WRENCH, WRENCH_IMAGE, "wrenchImage", "Wrench", click(1, 2, 6)),
-        (PRINTER, PRINTER_IMAGE, "printGunImage", "Printer", instant_click(6)),
-        (WAND, WAND_IMAGE, "wandImage", "Wand", swing(1, 2, 6, 10)),
+        (HAMMER, HAMMER_IMAGE, "hammerImage", "Hammer", tool_swing()),
+        (
+            WRENCH,
+            WRENCH_IMAGE,
+            "wrenchImage",
+            "Wrench",
+            click(1, 2, 6),
+        ),
+        (
+            PRINTER,
+            PRINTER_IMAGE,
+            "printGunImage",
+            "Printer",
+            instant_click(6),
+        ),
+        (WAND, WAND_IMAGE, "wandImage", "Wand", tool_swing()),
     ] {
         add_item(item(item_id, &format!("{ui}Item"), ui, image_id));
         add_image(image(image_id, name, None, states));
@@ -502,18 +532,31 @@ pub fn pack() -> Pack {
         ADMIN_WAND_IMAGE,
         "adminWandImage",
         None,
-        swing(1, 2, 6, 10),
+        tool_swing(),
     ));
     for (id, name) in [
         (BRICK_IMAGE, "brickImage"),
         (HORSE_BRICK_IMAGE, "horseBrickImage"),
     ] {
-        add_image(image(
-            id,
-            name,
-            None,
-            vec![S::new("Activate", 4).timeout(1).0, S::new("Ready", 0).0],
-        ));
+        add_image(Image {
+            color_shift: true,
+            ..image(
+                id,
+                name,
+                Some(BRICK_DEPLOY_PROJECTILE),
+                vec![
+                    S::new("Activate", 4).timeout(1).0,
+                    S::new("Ready", 0).down(2).0,
+                    S::new("Fire", 6)
+                        .script("onFire")
+                        .sequence(BRICK_FIRE_SEQUENCE)
+                        .emitter(BRICK_TRAIL_EMITTER, 0.1)
+                        .timeout(3)
+                        .0,
+                    S::new("WaitForRelease", 0).up(1).0,
+                ],
+            )
+        });
     }
 
     // Guns.
@@ -548,21 +591,23 @@ pub fn pack() -> Pack {
     // Released: the right gun pulses the left one's trigger.
     right[4] = S::new("WaitForRelease", 0).up(6).0;
     right.push(S::new("FireAkimbo", 8).script("onFireAkimbo").timeout(1).0);
-    add_image(image(
-        AKIMBO_IMAGE,
-        "akimboGunImage",
-        Some(GUN_PROJECTILE),
-        right,
-    ));
+    // Both guns throw the gun's casing, as each fires.
+    add_image(Image {
+        casing: GUN_CASING.into(),
+        ..image(AKIMBO_IMAGE, "akimboGunImage", Some(GUN_PROJECTILE), right)
+    });
     let mut left = semi_automatic(10, 8, 12);
     // The left gun sees only one-tick pulses: back to Ready after Smoke.
     left[3] = S::new("Smoke", 12).timeout(1).0;
-    add_image(image(
-        LEFT_GUN_IMAGE,
-        "leftHandedGunImage",
-        Some(GUN_PROJECTILE),
-        left,
-    ));
+    add_image(Image {
+        casing: GUN_CASING.into(),
+        ..image(
+            LEFT_GUN_IMAGE,
+            "leftHandedGunImage",
+            Some(GUN_PROJECTILE),
+            left,
+        )
+    });
     add_item(item(
         SHOTGUN_ITEM,
         "shotgunItem",

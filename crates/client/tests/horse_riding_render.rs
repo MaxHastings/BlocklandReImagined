@@ -1,6 +1,7 @@
-//! Bounded normal-App render probe for riding a spawned horse.
-//! Run with: cargo test -p bri-client --test horse_riding_render --release -- --ignored --nocapture
-//! Requires converted v20 content, loopback QUIC and an offscreen GPU; never opens a window.
+//! Bounded normal-App render probe for riding a spawned horse. Runs on the
+//! made-up content root (its horse rig); the ignored variant runs on the
+//! generated v20 content (`--release -- --ignored`, BRI_CONTENT or
+//! content/). Loopback QUIC and an offscreen GPU; never opens a window.
 use anyhow::{Context, Result, ensure};
 use bri_client::{
     app::App,
@@ -13,11 +14,16 @@ use bri_ui::{
 use std::{
     path::Path,
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 
+#[macro_use]
+mod support;
+use support::content_root::ContentRoot;
+
+synthetic_and_content!(ContentRoot: riding_a_horse_holds_the_rider_still_on_its_animated_back);
+
 const SIZE: (u32, u32) = (640, 480);
-const BEDROOM: &str = "v20/add-ons/map_bedroom/bedroom.mis";
 
 fn pump(app: &mut App) -> Result<()> {
     ensure!(
@@ -219,22 +225,14 @@ fn held(app: &mut App, control: HeldControl, down: bool) -> Result<()> {
     pump(app)
 }
 
-#[test]
-#[ignore = "requires converted native v20 content, loopback QUIC and offscreen GPU; no window/audio device"]
-fn riding_a_horse_holds_the_rider_still_on_its_animated_back() -> Result<()> {
-    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let artifact = workspace.join("artifacts/horse-riding");
-    std::fs::create_dir_all(&artifact)?;
-    let state = artifact.join(format!(
-        "state-{}-{}",
-        std::process::id(),
-        SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
-    ));
-    std::fs::create_dir_all(&state)?;
-    let mut app = App::load(&workspace.join("content"), &state, SIZE)?;
+fn riding_a_horse_holds_the_rider_still_on_its_animated_back(f: &ContentRoot) -> Result<()> {
+    let artifact = f.out("horse-riding")?;
+    let state_dir = f.state()?;
+    let state = state_dir.path();
+    let mut app = App::load(&f.root, state, SIZE)?;
     app.ui.core.pop(bri_ui::screens::ScreenId::DefaultControls);
     app.ui.core.request(UiAction::HostGame {
-        map: BEDROOM.into(),
+        map: f.map.0.clone(),
         mode: ServerMode::SinglePlayer,
         game_mode: None,
         max_players: 1,
@@ -244,7 +242,7 @@ fn riding_a_horse_holds_the_rider_still_on_its_animated_back() -> Result<()> {
         super_admin_password: String::new(),
     });
     pump(&mut app)?;
-    until(&mut app, "Bedroom host/player", |a| {
+    until(&mut app, "host/player", |a| {
         matches!(a.ui.core.conn, ConnectionState::InGame { .. })
             && a.network_view()
                 .is_some_and(|v| v.poses.contains_key(&v.owner))
@@ -263,7 +261,7 @@ fn riding_a_horse_holds_the_rider_still_on_its_animated_back() -> Result<()> {
     let mut world =
         bri_world::World::new("Horse".into(), map_id.clone(), view.world.palette.clone());
     let mut brick = bri_world::Brick::new(
-        bri_world::ContentRef::Resolved("v20/brick/brickvehiclespawndata".into()),
+        bri_world::ContentRef::Resolved(f.vehicle_spawn.clone()),
         [
             (spot.x * 2.0).round() / 2.0,
             (feet.y / 0.2).ceil() * 0.2 + 0.1,
@@ -272,7 +270,7 @@ fn riding_a_horse_holds_the_rider_still_on_its_animated_back() -> Result<()> {
         view.owner,
     );
     brick.vehicle = Some(Box::new(bri_world::VehicleSpawn {
-        vehicle: bri_world::ContentRef::Resolved("v20.vehicle.horsearmor".into()),
+        vehicle: bri_world::ContentRef::Resolved(bri_vehicles::testing::HORSE.into()),
         recolor: false,
     }));
     world.bricks.insert(1, brick);
@@ -286,7 +284,7 @@ fn riding_a_horse_holds_the_rider_still_on_its_animated_back() -> Result<()> {
     std::fs::write(folder.join("horse.world.json"), serde_json::to_vec(&build)?)?;
     app.ui.core.request(UiAction::LoadBricks {
         // The save list names maps by their display name.
-        map: "Bedroom".into(),
+        map: f.map.1.clone(),
         name: "horse.world.json".into(),
         ownership: true,
     });
@@ -314,7 +312,7 @@ fn riding_a_horse_holds_the_rider_still_on_its_animated_back() -> Result<()> {
     }
     held(&mut app, HeldControl::Forward, false)?;
     ensure!(mounted, "never boarded the horse");
-    let gpu = Headless::new().context("offscreen horse renderer")?;
+    let gpu = support::gpu::turn().context("offscreen horse renderer")?;
     let mut renderer = UiRenderer::new(&gpu.device, &gpu.queue);
     app.gpu_ready(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm)?;
     app.ui

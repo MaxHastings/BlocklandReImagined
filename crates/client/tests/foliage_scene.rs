@@ -1,4 +1,6 @@
-//! Native map plus the actual client foliage adapter, offscreen only.
+//! Native map plus the actual client foliage adapter, offscreen only: the
+//! made-up root's open room under a made-up grass pack, and (ignored) v20's
+//! Bedroom terrain under its converted grass (BRI_CONTENT or content/).
 use anyhow::{Result, ensure};
 use bri_client::{
     building::Building,
@@ -10,19 +12,61 @@ use bri_render::{
     scene_loader::load_map_bundle,
     terrain_scene::GpuTerrain,
 };
-use bri_ui::gpu::{Headless, UiRenderer};
+use bri_ui::gpu::UiRenderer;
 use glam::{Mat4, Vec3};
-use std::{collections::BTreeMap, path::Path, time::Duration};
+use std::{collections::BTreeMap, path::PathBuf, time::Duration};
 
-#[test]
-#[ignore = "native Bedroom, foliage pack and offscreen GPU; no window or input"]
-fn original_grass_composes_over_actual_bedroom_terrain() -> Result<()> {
-    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let root = workspace.join("content");
-    let artifact = workspace.join("artifacts/native-client-foliage");
-    std::fs::create_dir_all(&artifact)?;
-    let map = "v20/add-ons/map_bedroom/bedroom.mis";
-    let native = bri_sim::map::NativeMap::load(&root.join("map-bundle-017"), map)?;
+#[macro_use]
+mod support;
+use support::content_root::ContentRoot;
+
+synthetic_and_content!(ContentRoot: original_grass_composes_over_actual_bedroom_terrain);
+
+/// The map the grass grows on and the foliage pack's folder: v20's Bedroom
+/// and its converted pack, or the made-up root's open room (the sky above
+/// its floor) and `bri_foliage::testing`'s grass and shrub retargeted onto
+/// that floor (an interior) around its spawn.
+fn foliage(
+    f: &ContentRoot,
+    scratch: &bri_client::testing::ScratchDir,
+) -> Result<(String, PathBuf)> {
+    if f.content {
+        return Ok((f.map.0.clone(), f.root.join("foliage-pack-003")));
+    }
+    let map = f.open_map.0.clone();
+    let room = bri_content::testing::map_bundle::rooms_for(bri_client::content::LOADABLE_MAPS)
+        .into_iter()
+        .find(|r| r.id == map)
+        .expect("the open map is a fixture room");
+    let mut pack = bri_foliage::testing::pack();
+    for d in &mut pack.definitions {
+        d.scene = map.clone();
+        d.allow_interior = true;
+        d.origin = room.spawn_position().to_array();
+        d.outer = [room.half * 0.3; 2];
+        // Sparse enough on a room's floor to see the floor between plants.
+        d.count = d.count.min(300) / 10;
+    }
+    let dir = scratch.path().to_path_buf();
+    std::fs::create_dir_all(dir.join("textures"))?;
+    for (i, t) in pack.textures.iter().enumerate() {
+        std::fs::write(dir.join(&t.path), bri_foliage::testing::png(i))?;
+    }
+    std::fs::write(dir.join("foliage.json"), serde_json::to_vec_pretty(&pack)?)?;
+    Ok((map, dir))
+}
+
+fn original_grass_composes_over_actual_bedroom_terrain(f: &ContentRoot) -> Result<()> {
+    let artifact = f.out("native-client-foliage")?;
+    let scratch = f.state()?;
+    let (map, foliage_dir) = foliage(f, &scratch)?;
+    let map = map.as_str();
+    let bundle = f.root.join(
+        &bri_package::packages::PackageSet::load_root(&f.root)?
+            .role("map_bundle")?
+            .dir,
+    );
+    let native = bri_sim::map::NativeMap::load(&bundle, map)?;
     let mut building = Building::new(
         bri_sim::definitions::Definitions {
             entries: BTreeMap::new(),
@@ -30,21 +74,16 @@ fn original_grass_composes_over_actual_bedroom_terrain() -> Result<()> {
         native.colliders,
     )?;
     building.attach_terrain(native.terrain);
-    let prepared = PreparedFoliage::load(
-        &root.join("foliage-pack-003"),
-        map,
-        &building,
-        &native.waters,
-    )?;
+    let prepared = PreparedFoliage::load(&foliage_dir, map, &building, &native.waters)?;
     let target_point = prepared.fields[0].plants()[0].position + Vec3::Y;
     let eye = target_point + Vec3::new(0., 3., 10.);
     let placement = prepared.placement.clone();
     let load_ms = prepared.elapsed_ms;
-    let mut foliage = ClientFoliage::load(&root.join("foliage-pack-003"))?;
+    let mut foliage = ClientFoliage::load(&foliage_dir)?;
     foliage.set_map(prepared);
-    let map_scene = load_map_bundle(&root.join("map-bundle-017"), map)?;
+    let map_scene = load_map_bundle(&bundle, map)?;
     let scene = map_scene.scene;
-    let gpu = Headless::new()?;
+    let gpu = support::gpu::turn()?;
     let format = wgpu::TextureFormat::Rgba8UnormSrgb;
     let size = (768, 512);
     let extent = wgpu::Extent3d {

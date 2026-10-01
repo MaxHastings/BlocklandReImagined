@@ -23,9 +23,46 @@ fn row(input: &str, output: &str, delay_ms: u32, params: Vec<EventValue>) -> Eve
     }
 }
 
+/// The packs a loop runs on: the weapons and event catalog, the projectile
+/// the loop spawns as an explosion and the explosion effect it shows.
+struct Packs {
+    weapons: bri_weapons::Pack,
+    catalog: bri_events::Catalog,
+    projectile: String,
+    /// Part of every live projectile id the loop can leave behind.
+    family: String,
+    explosion: String,
+}
+impl Packs {
+    /// The made-up weapons pack (its rocket) and event catalog.
+    fn synthetic() -> Self {
+        use bri_weapons::testing::{ROCKET_EXPLOSION, ROCKET_PROJECTILE};
+        Self {
+            weapons: bri_weapons::testing::pack(),
+            catalog: bri_events::testing::catalog_extended(),
+            projectile: ROCKET_PROJECTILE.into(),
+            family: ROCKET_PROJECTILE.into(),
+            explosion: ROCKET_EXPLOSION.into(),
+        }
+    }
+    /// The converted v20 packs (the rocket launcher's projectile).
+    fn content() -> Result<Self> {
+        let content = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
+        Ok(Self {
+            weapons: bri_weapons::Pack::from_json(&std::fs::read(
+                content.join("weapons-pack-009/weapons.json"),
+            )?)?,
+            catalog: bri_events::Catalog::load(content.join("events-pack-002/catalog.json"))?,
+            projectile: "v20.projectile.rocketlauncherprojectile".into(),
+            family: "rocketlauncher".into(),
+            explosion: "rocketExplosion".into(),
+        })
+    }
+}
+
 /// `onActivate -> fireRelay`, then `onRelay -> spawnExplosion` and
 /// `onRelay -> fireRelay`, relaying after `delay_ms`: an endless loop.
-fn explosion_loop(delay_ms: u32) -> Vec<EventRow> {
+fn explosion_loop(delay_ms: u32, projectile: &str) -> Vec<EventRow> {
     vec![
         row("onActivate", "fireRelay", delay_ms, vec![]),
         row(
@@ -33,7 +70,7 @@ fn explosion_loop(delay_ms: u32) -> Vec<EventRow> {
             "spawnExplosion",
             0,
             vec![
-                EventValue::Datablock(Some("v20.projectile.rocketlauncherprojectile".into())),
+                EventValue::Datablock(Some(projectile.into())),
                 EventValue::Float(1.0),
             ],
         ),
@@ -48,21 +85,15 @@ const STALL: Duration = Duration::from_secs(300);
 
 /// Ten seconds of host time with the loop running: (explosions the player
 /// saw, most live loop rockets it saw, the host's report).
-async fn run_loop(delay_ms: u32) -> Result<(usize, usize, server::ServerReport)> {
-    let content = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
+async fn run_loop(packs: Packs, delay_ms: u32) -> Result<(usize, usize, server::ServerReport)> {
     let mut world = World::new("Storm".into(), "fixture".into(), vec![[1.0; 4]]);
     let mut brick = Brick::new(ContentRef::Resolved("plate".into()), [0.5, 0.1, -3.25], 1);
-    brick.events = explosion_loop(delay_ms);
+    brick.events = explosion_loop(delay_ms, &packs.projectile);
     world.bricks.insert(1, brick);
     world.next_brick_id = 2;
     let mut game = common::session_with(world);
-    game.set_weapon_pack(bri_weapons::Pack::from_json(&std::fs::read(
-        content.join("weapons-pack-009/weapons.json"),
-    )?)?)?;
-    game.set_event_catalog(
-        bri_events::Catalog::load(content.join("events-pack-002/catalog.json"))?,
-        Vec::<String>::new(),
-    )?;
+    game.set_weapon_pack(packs.weapons)?;
+    game.set_event_catalog(packs.catalog, Vec::<String>::new())?;
     game.fire_brick_input(1, "onActivate", None);
     let server = server::start(game, common::options())?;
     let mut player = Client::connect(
@@ -88,7 +119,7 @@ async fn run_loop(delay_ms: u32) -> Result<(usize, usize, server::ServerReport)>
         let fresh = player.replica.take_cues();
         explosions += fresh
             .iter()
-            .filter(|c| matches!(&c.kind, CueKind::WeaponEffect { definition, .. } if definition == "rocketExplosion"))
+            .filter(|c| matches!(&c.kind, CueKind::WeaponEffect { definition, .. } if *definition == packs.explosion))
             .count();
         // The player's own join `spawnProjectile` is not the loop's.
         let rockets = player
@@ -96,7 +127,7 @@ async fn run_loop(delay_ms: u32) -> Result<(usize, usize, server::ServerReport)>
             .weapons
             .projectiles
             .iter()
-            .filter(|p| p.definition.contains("rocketlauncher"))
+            .filter(|p| p.definition.contains(&packs.family))
             .count();
         most_projectiles = most_projectiles.max(rockets);
     }
@@ -104,10 +135,8 @@ async fn run_loop(delay_ms: u32) -> Result<(usize, usize, server::ServerReport)>
     Ok((explosions, most_projectiles, server.stop().await?))
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires the native events and weapons packs; headless QUIC only"]
-async fn zero_delay_explosion_loop_is_capped_and_never_stops_the_host() -> Result<()> {
-    let (explosions, projectiles, report) = run_loop(0).await?;
+async fn zero_delay_explosion_loop_is_capped_and_never_stops_the_host(packs: Packs) -> Result<()> {
+    let (explosions, projectiles, report) = run_loop(packs, 0).await?;
     eprintln!(
         "zero delay: {explosions} explosions, {projectiles} projectiles, {} step errors, {} dropped ticks",
         report.step_errors, report.dropped_ticks
@@ -122,10 +151,8 @@ async fn zero_delay_explosion_loop_is_capped_and_never_stops_the_host() -> Resul
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires the native events and weapons packs; headless QUIC only"]
-async fn relay_loop_at_v20s_33_ms_explodes_thirty_times_a_second() -> Result<()> {
-    let (explosions, projectiles, report) = run_loop(33).await?;
+async fn relay_loop_at_v20s_33_ms_explodes_thirty_times_a_second(packs: Packs) -> Result<()> {
+    let (explosions, projectiles, report) = run_loop(packs, 33).await?;
     eprintln!("33 ms: {explosions} explosions, {projectiles} projectiles");
     assert_eq!(report.step_errors, 0);
     assert_eq!(projectiles, 0);
@@ -135,4 +162,26 @@ async fn relay_loop_at_v20s_33_ms_explodes_thirty_times_a_second() -> Result<()>
         "ten seconds at 33 ms: {explosions}"
     );
     Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zero_delay_explosion_loop_is_capped_synthetic() -> Result<()> {
+    zero_delay_explosion_loop_is_capped_and_never_stops_the_host(Packs::synthetic()).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires generated v20 content"]
+async fn zero_delay_explosion_loop_is_capped_content() -> Result<()> {
+    zero_delay_explosion_loop_is_capped_and_never_stops_the_host(Packs::content()?).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn relay_loop_at_33_ms_synthetic() -> Result<()> {
+    relay_loop_at_v20s_33_ms_explodes_thirty_times_a_second(Packs::synthetic()).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires generated v20 content"]
+async fn relay_loop_at_33_ms_content() -> Result<()> {
+    relay_loop_at_v20s_33_ms_explodes_thirty_times_a_second(Packs::content()?).await
 }

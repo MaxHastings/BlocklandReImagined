@@ -5,7 +5,7 @@ use crate::api::*;
 use crate::binds::{BindMap, DEFAULT_KEYBOARD, DEFAULT_MOUSE};
 use crate::models::chat::{ChatSend, chat_send};
 use crate::ui::{Callback, MessageBox};
-use crate::view::EventKind;
+use crate::view::{EventKind, message_answer};
 
 const SERVER_TYPE: &str = "$Pref::Net::ServerType";
 const MAX_PLAYERS: &str = "$Pref::Server::MaxPlayers";
@@ -964,12 +964,9 @@ impl MessageScreen {
         }
         if let Some([yes, no]) = &message.buttons {
             for n in view.walk().collect::<Vec<_>>() {
-                let command = view.node(n).ctrl.command.clone().unwrap_or_default();
-                if command.contains("yesCallback") {
-                    view.set_text(n, yes);
-                    widen_to_label(&mut view, &core.pack, n);
-                } else if command.contains("noCallback") {
-                    view.set_text(n, no);
+                let answer = view.node(n).ctrl.command.as_deref().and_then(message_answer);
+                if let Some(answer) = answer {
+                    view.set_text(n, if answer { yes } else { no });
                     widen_to_label(&mut view, &core.pack, n);
                 }
             }
@@ -1089,7 +1086,7 @@ impl Screen for MessageScreen {
     fn on_event(&mut self, ev: &ViewEvent, core: &mut Core) {
         if ev.kind == EventKind::Click {
             let c = command_of(&self.view, ev.node);
-            self.answer(!c.contains("noCallback"), core);
+            self.answer(message_answer(&c) != Some(false), core);
         }
     }
 }

@@ -140,9 +140,8 @@ fn the_sample_draws_a_cube_with_its_own_shader() {
     assert!(second.log.is_empty());
 }
 
-/// Needs a GPU: renders the sample and checks the cube is there and moves.
+/// Needs a GPU adapter (software is fine): renders the sample and checks the cube is there and moves.
 #[test]
-#[ignore = "needs a GPU adapter"]
 fn the_sample_renders_offscreen_and_animates() {
     let code = load(&sample_dir());
     // What it draws, not how fast: a loaded machine's slow frame must not
@@ -784,14 +783,13 @@ fn a_sandboxed_grant_never_covers_elevated_code() {
     assert_eq!(prompt.level, TrustLevel::Elevated);
 }
 
-/// Needs a GPU: a fragment shader that loops forever, drawn over the whole
+/// Needs a GPU adapter (software is fine): a fragment shader that loops forever, drawn over the whole
 /// screen, finishes because the loop is bounded, and runs exactly the cap
 /// the renderer fitted. The GPU's speed is given rather than measured, so
 /// the cap is the same on a loaded machine; fitting caps to measured
 /// speeds and slow frames is checked without a GPU
 /// (`the_shader_loop_cap_starts_low_and_fits_the_measured_gpu`).
 #[test]
-#[ignore = "needs a GPU adapter"]
 fn an_endless_shader_loop_finishes_on_the_gpu() {
     use bri_client_sandbox::gpu::{GpuSpeed, loop_limit, render_offscreen_at_speed};
     let endless = "
@@ -845,10 +843,9 @@ fn an_endless_shader_loop_finishes_on_the_gpu() {
     assert_ne!(low[0].pixels, high[0].pixels);
 }
 
-/// Needs a GPU: calibration measures a speed (and, as a benchmark, takes
+/// Needs a GPU adapter (software is fine): calibration measures a speed (and, as a benchmark, takes
 /// well under a second).
 #[test]
-#[ignore = "needs a GPU adapter"]
 fn calibration_measures_the_gpu_quickly() {
     let (adapter, device, queue) = bri_client_sandbox::gpu::headless_device().unwrap();
     let started = std::time::Instant::now();

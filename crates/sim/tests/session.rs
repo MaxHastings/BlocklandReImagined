@@ -1,16 +1,15 @@
-use bri_content::{
-    brick::Brick as Mesh,
-    collision::{CollisionBody, Part},
-};
 use bri_sim::{
-    definitions::{Definition, Definitions},
+    definitions::{Definitions, Special},
     player::MoveInput,
     session::{Command, Reply, Session, Snapshot},
     simulation::Simulation,
 };
+use bri_weapons::testing::{BRICK_IMAGE, GUN_IMAGE, HAMMER_IMAGE, HORSE_BRICK_IMAGE};
 use bri_world::{EventRow, EventTarget, EventValue, World, authority::Edit};
 use glam::Vec3;
 use rapier3d::prelude::*;
+mod common;
+use common::{Fixture, Item};
 fn session() -> Session {
     session_on("test")
 }
@@ -22,42 +21,10 @@ fn session_on(map_id: &str) -> Session {
     ))
 }
 fn session_with(world: World) -> Session {
-    let mesh = Mesh {
-        schema_version: 1,
-        id: "plate".into(),
-        footprint_studs: [2, 1],
-        height_plates: 1,
-        attachment_rows: vec!["bb".into()],
-        collision_boxes: vec![],
-        needs_external_collision: false,
-        coverage: None,
-        quads: vec![],
-    };
-    let collision = CollisionBody {
-        id: "plate".into(),
-        parts: vec![Part::Box {
-            center: [0.0; 3],
-            size: [1.0, 0.2, 0.5],
-        }],
-    };
-    let shape = bri_physics::content::collider(&collision)
-        .unwrap()
-        .build()
-        .shared_shape()
-        .clone();
     let defs = Definitions {
         entries: [(
             "plate".into(),
-            Definition {
-                mesh,
-                collision,
-                shape,
-                indestructible: false,
-                special: Default::default(),
-                reflection: None,
-                link: None,
-                glass: [0.0; 4],
-            },
+            bri_sim::testing::definition("plate", [2, 1], 1, Special::None, false),
         )]
         .into(),
     };
@@ -284,14 +251,10 @@ fn release_after_core_switch_is_idempotent_but_cannot_start_a_weapon() {
     assert!(s.weapon_view().projectiles.is_empty());
 }
 
-#[test]
-#[ignore = "requires converted native weapons pack; host only"]
-fn full_trigger_queue_always_accepts_release_and_cancels_pending_fire_observably() {
+on_both! {
+fn full_trigger_queue_always_accepts_release_and_cancels_pending_fire_observably(f: &Fixture) {
     let mut s = session();
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../content/weapons-pack-009/weapons.json");
-    s.set_weapon_pack(bri_weapons::Pack::from_json(&std::fs::read(path).unwrap()).unwrap())
-        .unwrap();
+    s.set_weapon_pack(f.weapons.clone()).unwrap();
     let owner = s.join("Player".into(), Vec3::Y, false).unwrap();
     s.give_item(owner, "v20.weapon.gunitem").unwrap();
     s.command(owner, 1, Command::EquipTool { slot: Some(3) })
@@ -314,16 +277,14 @@ fn full_trigger_queue_always_accepts_release_and_cancels_pending_fire_observably
         s.step().unwrap();
     }
     assert!(s.weapon_view().projectiles.is_empty());
-    assert!(!s.take_cues().iter().any(|c| matches!(&c.kind,bri_sim::presentation::CueKind::WeaponSound {profile} if profile.eq_ignore_ascii_case("gunShot1Sound"))));
+    assert!(!s.take_cues().iter().any(|c| matches!(&c.kind,bri_sim::presentation::CueKind::WeaponSound {profile} if profile.eq_ignore_ascii_case(&gun_sound(f)))));
+}
 }
 
-#[test]
-#[ignore = "uses converted native weapons pack; headless server only"]
-fn native_gun_quick_trigger_edges_use_host_tick_pose_and_reliable_sound() {
+on_both! {
+fn native_gun_quick_trigger_edges_use_host_tick_pose_and_reliable_sound(f: &Fixture) {
     use bri_sim::{presentation::CueKind, session::ActionAim};
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../content/weapons-pack-009/weapons.json");
-    let pack = bri_weapons::Pack::from_json(&std::fs::read(path).unwrap()).unwrap();
+    let pack = f.weapons.clone();
     let mut s = session();
     s.set_weapon_pack(pack).unwrap();
     let actor = s
@@ -349,8 +310,10 @@ fn native_gun_quick_trigger_edges_use_host_tick_pose_and_reliable_sound() {
     assert_eq!(s.weapon_view().projectiles.len(), 1);
     let projectile = s.weapon_view().projectiles.remove(0);
     assert_eq!(projectile.source.0, actor);
-    assert!(projectile.velocity.x > 80. && projectile.velocity.z.abs() < 0.01);
-    assert!(s.take_cues().iter().any(|c| matches!(&c.kind, CueKind::WeaponSound { profile } if profile.eq_ignore_ascii_case("gunShot1Sound"))));
+    let gun = f.weapons.images[GUN_IMAGE].projectile.as_ref().unwrap();
+    let speed = f.weapons.projectiles[gun].speed;
+    assert!(projectile.velocity.x > 0.8 * speed && projectile.velocity.z.abs() < 0.01);
+    assert!(s.take_cues().iter().any(|c| matches!(&c.kind, CueKind::WeaponSound { profile } if profile.eq_ignore_ascii_case(&gun_sound(f)))));
     s.step().unwrap();
     for _ in 0..12 {
         s.step().unwrap();
@@ -359,6 +322,7 @@ fn native_gun_quick_trigger_edges_use_host_tick_pose_and_reliable_sound() {
     assert_eq!(s.weapon_view().projectiles[0].id, projectile.id);
     s.disconnect(actor).unwrap();
     assert!(s.weapon_view().projectiles.is_empty());
+}
 }
 
 #[test]
@@ -1196,17 +1160,12 @@ fn tutorial_keeps_the_wand_and_cans_for_their_rooms() {
     }
 }
 
-#[test]
-#[ignore = "uses converted native weapons pack; headless server only"]
-fn bricks_in_hand_mount_the_grey_brick_image_in_the_right_hand() {
+on_both! {
+fn bricks_in_hand_mount_the_grey_brick_image_in_the_right_hand(f: &Fixture) {
     use bri_sim::session::BrickHand;
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../content/weapons-pack-009/weapons.json");
-    let pack = bri_weapons::Pack::from_json(&std::fs::read(path).unwrap()).unwrap();
-    let image = &pack.images["v20.image.brickimage"];
+    let pack = f.weapons.clone();
+    let image = &pack.images[BRICK_IMAGE];
     assert!(image.arm_ready && image.color_shift);
-    assert_eq!(image.color, [0.647, 0.647, 0.647, 1.0]);
-    assert_eq!(image.model, "base/data/shapes/brickWeapon.dts");
     let mut s = session();
     s.set_weapon_pack(pack).unwrap();
     let a = s.join("Builder".into(), Vec3::Y, false).unwrap();
@@ -1222,7 +1181,7 @@ fn bricks_in_hand_mount_the_grey_brick_image_in_the_right_hand() {
             })
             .unwrap_or_default()
     };
-    let brick = vec![("v20.image.brickimage".to_owned(), 0)];
+    let brick = vec![(BRICK_IMAGE.to_owned(), 0)];
     let hand = |equipped| {
         Command::BrickHand(BrickHand {
             stocked: true,
@@ -1237,14 +1196,14 @@ fn bricks_in_hand_mount_the_grey_brick_image_in_the_right_hand() {
     // A tool replaces it, and putting bricks away then leaves the tool alone.
     s.command(a, 3, Command::EquipTool { slot: Some(0) }).unwrap();
     s.command(a, 4, hand(false)).unwrap();
-    assert_eq!(held(&s)[0].0, "v20.image.hammerimage");
+    assert_eq!(held(&s)[0].0, HAMMER_IMAGE);
     s.command(a, 5, Command::EquipTool { slot: None }).unwrap();
     s.command(a, 6, hand(true)).unwrap();
     assert_eq!(held(&s), brick);
     // `Armor::onNewDataBlock` swaps in HorseArmor's `horseBrickImage` and back.
     let horse = bri_minigames::Settings {
         player_type: bri_sim::player_types::PlayerType::Horse.id().into(),
-        ..Default::default()
+        ..f.minigame_settings()
     };
     let create = bri_sim::session::MiniGameRequest::Create {
         color: 0,
@@ -1252,13 +1211,14 @@ fn bricks_in_hand_mount_the_grey_brick_image_in_the_right_hand() {
     };
     s.command(a, 7, Command::MiniGame(create)).unwrap();
     s.step().unwrap();
-    assert_eq!(held(&s), [("v20.image.horsebrickimage".to_owned(), 0)]);
+    assert_eq!(held(&s), [(HORSE_BRICK_IMAGE.to_owned(), 0)]);
     let leave = bri_sim::session::MiniGameRequest::Leave;
     s.command(a, 8, Command::MiniGame(leave)).unwrap();
     s.step().unwrap();
     assert_eq!(held(&s), brick);
     s.command(a, 9, hand(false)).unwrap();
     assert!(held(&s).is_empty());
+}
 }
 
 #[test]
@@ -1510,18 +1470,15 @@ fn trust_invites_uploads_demotion_and_lan_follow_v20() {
     assert!(notices(&mut s).iter().any(|(o, n)| *o == a && *n == Notice::Chat("\u{E001}Bob has left the game.".into())));
 }
 
-#[test]
-#[ignore = "uses converted native weapons pack; headless server only"]
-fn native_akimbo_fires_two_bullets_per_click_over_seconds() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../content/weapons-pack-009/weapons.json");
-    let pack = bri_weapons::Pack::from_json(&std::fs::read(path).unwrap()).unwrap();
+on_both! {
+fn native_akimbo_fires_two_bullets_per_click_over_seconds(f: &Fixture) {
+    let pack = f.weapons.clone();
     let mut s = session();
     s.set_weapon_pack(pack).unwrap();
     let actor = s
         .join("Akimbo".into(), Vec3::new(0., 0.05, 0.), false)
         .unwrap();
-    let slot = s.give_item(actor, "v20.weapon.akimbogunitem").unwrap();
+    let slot = s.give_item(actor, f.item(Item::Akimbo)).unwrap();
     let mut sequence = 1;
     s.command(actor, sequence, Command::EquipTool { slot: Some(slot) })
         .unwrap();
@@ -1552,6 +1509,7 @@ fn native_akimbo_fires_two_bullets_per_click_over_seconds() {
     assert_eq!(drive(&mut s, 240, &|_| false), 2);
     // Four clicks a second for five seconds: exactly two bullets per click.
     assert_eq!(drive(&mut s, 600, &|t| t % 30 < 15), 42);
+}
 }
 
 #[test]
@@ -1814,13 +1772,10 @@ fn join_admin_team_chat_and_emote_lines_use_v20_colors() {
     let _ = cat;
 }
 
-#[test]
-#[ignore = "uses converted native weapons pack; headless server only"]
-fn deploying_a_brick_swings_the_brick_image_and_puffs_where_it_lands() {
+on_both! {
+fn deploying_a_brick_swings_the_brick_image_and_puffs_where_it_lands(f: &Fixture) {
     use bri_sim::{presentation::CueKind, session::BrickHand};
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../content/weapons-pack-009/weapons.json");
-    let pack = bri_weapons::Pack::from_json(&std::fs::read(path).unwrap()).unwrap();
+    let pack = f.weapons.clone();
     let mut s = session();
     s.set_weapon_pack(pack).unwrap();
     let a = s.join("Builder".into(), Vec3::Y, false).unwrap();
@@ -1878,9 +1833,11 @@ fn deploying_a_brick_swings_the_brick_image_and_puffs_where_it_lands() {
         })
         .collect();
 
-    assert!(effects.contains(&"brickdeployexplosion".into()), "{effects:?}");
-    assert!(effects.contains(&"bricktrailemitter".into()), "{effects:?}");
-    assert!(sequences.contains(&"fire".into()), "{sequences:?}");
+    let thrown = brick_throw(f);
+    assert!(effects.contains(&thrown.explosion), "{effects:?}");
+    assert!(effects.contains(&thrown.trail), "{effects:?}");
+    assert!(sequences.contains(&thrown.sequence), "{sequences:?}");
+}
 }
 
 #[test]
@@ -2052,18 +2009,15 @@ fn clan_tags_are_cleaned_and_carried_on_chat_lines() {
     assert!(!s.clans().contains_key(&guest));
 }
 
+on_both! {
 /// The client's own click: an aimed trigger, the ghost report that follows
 /// it, and the release, all before the next tick.
-#[test]
-#[ignore = "uses converted native weapons pack; headless server only"]
-fn an_aimed_click_with_a_ghost_report_still_fires_the_brick_image() {
+fn an_aimed_click_with_a_ghost_report_still_fires_the_brick_image(f: &Fixture) {
     use bri_sim::{
         presentation::CueKind,
         session::{ActionAim, BrickHand, GhostBrick},
     };
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../content/weapons-pack-009/weapons.json");
-    let pack = bri_weapons::Pack::from_json(&std::fs::read(path).unwrap()).unwrap();
+    let pack = f.weapons.clone();
     let mut s = session();
     s.set_weapon_pack(pack).unwrap();
     let a = s.join("Builder".into(), Vec3::Y, false).unwrap();
@@ -2123,8 +2077,10 @@ fn an_aimed_click_with_a_ghost_report_still_fires_the_brick_image() {
         })
         .collect();
     println!("effects {effects:?}\nnotices {:?}", s.take_notices());
-    assert!(effects.contains(&"bricktrailemitter".into()), "{effects:?}");
-    assert!(effects.contains(&"brickdeployexplosion".into()), "{effects:?}");
+    let thrown = brick_throw(f);
+    assert!(effects.contains(&thrown.trail), "{effects:?}");
+    assert!(effects.contains(&thrown.explosion), "{effects:?}");
+}
 }
 #[test]
 fn admins_set_the_environment_and_a_changed_day_restarts_from_now() {
@@ -2173,4 +2129,47 @@ fn admins_set_the_environment_and_a_changed_day_restarts_from_now() {
     assert!(s.command(admin, 3, set(bad)).is_err());
     s.command(admin, 4, set(Settings::default())).unwrap();
     assert!(s.environment().is_empty());
+}
+
+/// The sound the gun's shot plays: its firing state's.
+fn gun_sound(f: &Fixture) -> String {
+    f.weapons.images[GUN_IMAGE]
+        .states
+        .iter()
+        .find(|s| s.script.eq_ignore_ascii_case("onFire"))
+        .map(|s| s.sound.clone())
+        .unwrap()
+}
+
+/// What a brick image's click shows, lower case as the tests compare it:
+/// its Fire state's sequence and emitter, and its projectile's explosion.
+struct BrickThrow {
+    sequence: String,
+    trail: String,
+    explosion: String,
+}
+
+fn brick_throw(f: &Fixture) -> BrickThrow {
+    let image = &f.weapons.images[BRICK_IMAGE];
+    let fire = image
+        .states
+        .iter()
+        .find(|s| s.name.eq_ignore_ascii_case("Fire"))
+        .unwrap();
+    let projectile = &f.weapons.projectiles[image.projectile.as_ref().unwrap()];
+    BrickThrow {
+        sequence: fire.sequence.to_ascii_lowercase(),
+        trail: fire.emitter.to_ascii_lowercase(),
+        explosion: projectile.explosion.effect.to_ascii_lowercase(),
+    }
+}
+
+/// The real brick image is the grey 2x2 brick model.
+#[test]
+#[ignore = "requires generated v20 content"]
+fn the_native_brick_image_is_the_grey_brick_weapon_model() {
+    let pack = Fixture::content().weapons;
+    let image = &pack.images[BRICK_IMAGE];
+    assert_eq!(image.color, [0.647, 0.647, 0.647, 1.0]);
+    assert_eq!(image.model, "base/data/shapes/brickWeapon.dts");
 }

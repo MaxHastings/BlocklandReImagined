@@ -14,6 +14,7 @@ pub mod scene_loader;
 pub mod shadow;
 pub mod shape_scene;
 pub mod terrain_scene;
+pub mod testing;
 pub mod textured;
 pub mod timing;
 pub mod vignette;

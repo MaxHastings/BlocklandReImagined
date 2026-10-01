@@ -1,7 +1,6 @@
-//! Checkpoints, teledoors, treasure chests and water bricks with the
-//! converted stock brick definitions.
+//! Checkpoints, teledoors, treasure chests and water bricks, with made-up
+//! bricks and with the converted stock brick definitions.
 use bri_sim::{
-    definitions::Definitions,
     player::MoveInput,
     session::{Command, Notice, Reply, Session},
     simulation::Simulation,
@@ -9,14 +8,8 @@ use bri_sim::{
 use bri_world::World;
 use glam::Vec3;
 use rapier3d::prelude::*;
-use std::path::Path;
-
-const CHECKPOINT: &str = "v20/brick/brickcheckpointdata";
-const TELEDOOR: &str = "v20/brick/brickteledoordata";
-const CHEST: &str = "v20/brick/bricktreasurechestdata";
-const CHEST_OPEN: &str = "v20/brick/bricktreasurechestopendata";
-const WATER: &str = "v20/brick/brick8xwaterdata";
-const SPAWN: &str = "v20/brick/brickspawnpointdata";
+mod common;
+use common::{BrickRole, Fixture};
 
 struct Harness {
     s: Session,
@@ -24,12 +17,8 @@ struct Harness {
     sequence: u64,
 }
 impl Harness {
-    fn new() -> anyhow::Result<Self> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let definitions = Definitions::load(
-            &root.join("content/stock-catalog-004"),
-            &root.join("content/maps-pass-008"),
-        )?;
+    fn new(f: &Fixture) -> anyhow::Result<Self> {
+        let definitions = f.bricks();
         let world = World::new("Special".into(), "test".into(), vec![[1.0; 4]]);
         let mut s = Session::new(Simulation::new(
             world,
@@ -115,12 +104,11 @@ impl Harness {
     }
 }
 
-#[test]
-#[ignore = "requires the converted native brick catalog"]
-fn checkpoint_sets_the_respawn_point() -> anyhow::Result<()> {
-    let mut h = Harness::new()?;
+on_both! {
+fn checkpoint_sets_the_respawn_point(f: &Fixture) -> anyhow::Result<()> {
+    let mut h = Harness::new(f)?;
     // Checkpoint two studs ahead (-Z is forward at yaw 0).
-    let checkpoint = h.plant(CHECKPOINT, 0, -6, 0)?;
+    let checkpoint = h.plant(f.brick(BrickRole::Checkpoint), 0, -6, 0)?;
     h.walk(0.0, 120)?;
     let prints = h.bottom_prints();
     assert!(
@@ -146,12 +134,12 @@ fn checkpoint_sets_the_respawn_point() -> anyhow::Result<()> {
     assert!(h.feet().distance(Vec3::new(0.25, 0.05, 0.25)) < 1.0);
     Ok(())
 }
+}
 
-#[test]
-#[ignore = "requires the converted native brick catalog"]
-fn returning_players_appear_where_a_respawn_would_put_them() -> anyhow::Result<()> {
-    let mut h = Harness::new()?;
-    let spawn = h.plant(SPAWN, 10, 10, 0)?;
+on_both! {
+fn returning_players_appear_where_a_respawn_would_put_them(f: &Fixture) -> anyhow::Result<()> {
+    let mut h = Harness::new(f)?;
+    let spawn = h.plant(f.brick(BrickRole::SpawnPoint), 10, 10, 0)?;
     let center = Vec3::from(h.s.simulation().state().bricks[&spawn].position);
     // Rejoining offers the map drop point; the player's own spawn brick
     // wins, exactly as it does for a respawn.
@@ -165,13 +153,13 @@ fn returning_players_appear_where_a_respawn_would_put_them() -> anyhow::Result<(
     );
     Ok(())
 }
+}
 
-#[test]
-#[ignore = "requires the converted native brick catalog"]
-fn consecutive_teledoors_pair_and_carry_players_through() -> anyhow::Result<()> {
-    let mut h = Harness::new()?;
-    let a = h.plant(TELEDOOR, 0, -8, 0)?;
-    let b = h.plant(TELEDOOR, 40, 0, 0)?;
+on_both! {
+fn consecutive_teledoors_pair_and_carry_players_through(f: &Fixture) -> anyhow::Result<()> {
+    let mut h = Harness::new(f)?;
+    let a = h.plant(f.brick(BrickRole::Teledoor), 0, -8, 0)?;
+    let b = h.plant(f.brick(BrickRole::Teledoor), 40, 0, 0)?;
     let bricks = &h.s.simulation().state().bricks;
     assert!(bricks[&a].name.is_some());
     assert_eq!(bricks[&a].name, bricks[&b].name, "planted doors pair up");
@@ -187,19 +175,19 @@ fn consecutive_teledoors_pair_and_carry_players_through() -> anyhow::Result<()> 
     }
     assert!(through, "ended at {} (exit door {exit})", h.feet());
     // A third door starts a new pair.
-    let c = h.plant(TELEDOOR, -20, 0, 0)?;
+    let c = h.plant(f.brick(BrickRole::Teledoor), -20, 0, 0)?;
     assert_ne!(
         h.s.simulation().state().bricks[&c].name,
         h.s.simulation().state().bricks[&a].name
     );
     Ok(())
 }
+}
 
-#[test]
-#[ignore = "requires the converted native brick catalog"]
-fn treasure_chest_opens_once_per_player_and_closes() -> anyhow::Result<()> {
-    let mut h = Harness::new()?;
-    let chest = h.plant(CHEST, 0, -4, 0)?;
+on_both! {
+fn treasure_chest_opens_once_per_player_and_closes(f: &Fixture) -> anyhow::Result<()> {
+    let mut h = Harness::new(f)?;
+    let chest = h.plant(f.brick(BrickRole::TreasureChest), 0, -4, 0)?;
     let definition = |h: &Harness| match &h.s.simulation().state().bricks[&chest].definition {
         bri_world::ContentRef::Resolved(id) => id.clone(),
         _ => String::new(),
@@ -218,14 +206,14 @@ fn treasure_chest_opens_once_per_player_and_closes() -> anyhow::Result<()> {
             pitch: d.y.asin(),
         }),
     )?;
-    assert_eq!(definition(&h), CHEST_OPEN);
+    assert_eq!(definition(&h), f.brick(BrickRole::TreasureChestOpen));
     assert!(
         h.bottom_prints()
             .iter()
             .any(|p| p.contains("found the treasure chest"))
     );
     h.run(MoveInput::default(), 250)?;
-    assert_eq!(definition(&h), CHEST, "closes after two seconds");
+    assert_eq!(definition(&h), f.brick(BrickRole::TreasureChest), "closes after two seconds");
     h.sequence += 1;
     h.s.command_with_aim(
         h.owner,
@@ -236,7 +224,7 @@ fn treasure_chest_opens_once_per_player_and_closes() -> anyhow::Result<()> {
             pitch: d.y.asin(),
         }),
     )?;
-    assert_eq!(definition(&h), CHEST, "a found chest stays closed");
+    assert_eq!(definition(&h), f.brick(BrickRole::TreasureChest), "a found chest stays closed");
     assert!(
         h.bottom_prints()
             .iter()
@@ -244,12 +232,12 @@ fn treasure_chest_opens_once_per_player_and_closes() -> anyhow::Result<()> {
     );
     Ok(())
 }
+}
 
-#[test]
-#[ignore = "requires the converted native brick catalog"]
-fn water_bricks_are_swimmable_not_solid() -> anyhow::Result<()> {
-    let mut h = Harness::new()?;
-    let water = h.plant(WATER, -4, -20, 0)?;
+on_both! {
+fn water_bricks_are_swimmable_not_solid(f: &Fixture) -> anyhow::Result<()> {
+    let mut h = Harness::new(f)?;
+    let water = h.plant(f.brick(BrickRole::DeepWater), -4, -20, 0)?;
     let (min, max) = h.s.simulation().brick_box(water).unwrap();
     // `createWaterZone`'s box sits 0.15 below the brick and 0.05 under its top.
     assert!(h.s.simulation().liquids().iter().any(|w| {
@@ -283,4 +271,5 @@ fn water_bricks_are_swimmable_not_solid() -> anyhow::Result<()> {
         .collect();
     assert!(splashes.is_empty(), "{splashes:?}");
     Ok(())
+}
 }

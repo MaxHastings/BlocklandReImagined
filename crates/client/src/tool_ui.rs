@@ -1305,33 +1305,71 @@ mod tests {
         assert!(!b.item_spawn.resolve_item(&aliases).unwrap());
     }
 
-    #[test]
-    #[ignore = "requires converted weapons-pack-009 native JSON; no window or original reads"]
-    fn native_weapon_pack_and_core_tools_expose_all_21_item_choices() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../content/weapons-pack-009/weapons.json");
-        let bytes = std::fs::read(root).unwrap();
-        let pack: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(pack["schema_version"], bri_weapons::SCHEMA);
-        let rows: Vec<(String, String)> = pack["items"]
-            .as_object()
-            .unwrap()
-            .iter()
-            .map(|(id, item)| {
-                assert_eq!(item["id"].as_str(), Some(id.as_str()));
-                (id.clone(), item["ui_name"].as_str().unwrap().to_owned())
+    /// A weapons pack's item list, (id, uiName): `bri_weapons::testing`'s,
+    /// or the converted v20 pack's, read from its JSON.
+    struct ItemRows {
+        rows: Vec<(String, String)>,
+    }
+    impl ItemRows {
+        fn synthetic() -> anyhow::Result<Self> {
+            let pack = serde_json::to_value(bri_weapons::testing::pack())?;
+            Ok(Self {
+                rows: Self::rows(&pack),
             })
-            .collect();
-        // The pack carries the four core tools with their v20 uiNames.
+        }
+        fn content() -> anyhow::Result<Self> {
+            let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../content/weapons-pack-009/weapons.json");
+            let pack: serde_json::Value = serde_json::from_slice(&std::fs::read(root)?)?;
+            assert_eq!(pack["schema_version"], bri_weapons::SCHEMA);
+            Ok(Self {
+                rows: Self::rows(&pack),
+            })
+        }
+        fn rows(pack: &serde_json::Value) -> Vec<(String, String)> {
+            pack["items"]
+                .as_object()
+                .unwrap()
+                .iter()
+                .map(|(id, item)| {
+                    assert_eq!(item["id"].as_str(), Some(id.as_str()));
+                    (id.clone(), item["ui_name"].as_str().unwrap().to_owned())
+                })
+                .collect()
+        }
+    }
+    /// The real pack: 21 items, the core tools with their v20 uiNames.
+    #[test]
+    #[ignore = "requires generated v20 content"]
+    fn native_weapon_pack_has_21_items_and_the_core_tools_v20_names() -> anyhow::Result<()> {
+        let rows = ItemRows::content()?.rows;
         assert_eq!(rows.len(), 21);
         assert!(rows.contains(&("v20.weapon.hammeritem".into(), "Hammer ".into())));
         assert!(rows.contains(&("v20.weapon.wrenchitem".into(), "wrench".into())));
         assert!(rows.contains(&("v20.weapon.printgun".into(), "Printer".into())));
         assert!(rows.contains(&("v20.weapon.wanditem".into(), "Wand".into())));
+        Ok(())
+    }
+    crate::testing::synthetic_and_content!(
+        ItemRows: native_weapon_pack_and_core_tools_expose_all_21_item_choices
+    );
+    fn native_weapon_pack_and_core_tools_expose_all_21_item_choices(
+        fx: &ItemRows,
+    ) -> anyhow::Result<()> {
+        let rows = fx.rows.clone();
+        // The pack carries the four core tools.
+        for tool in [
+            bri_weapons::runtime::HAMMER,
+            bri_weapons::runtime::WRENCH,
+            bri_weapons::runtime::PRINTER,
+            bri_weapons::runtime::WAND,
+        ] {
+            assert!(rows.iter().any(|(id, _)| id == tool), "{tool}");
+        }
         let mut ui = fixture();
         ui.install_items(rows.clone()).unwrap();
-        assert_eq!(ui.datablocks["ItemData"].len(), 21);
-        assert_eq!(ui.server_catalog().items.len(), 21);
+        assert_eq!(ui.datablocks["ItemData"].len(), rows.len());
+        assert_eq!(ui.server_catalog().items.len(), rows.len());
         for (id, _) in rows {
             let mut b = brick();
             b.item_spawn.item = Some(ContentRef::Resolved(id.clone()));
@@ -1351,6 +1389,7 @@ mod tests {
             };
             assert_eq!(properties.item_spawn.item, Some(ContentRef::Resolved(id)));
         }
+        Ok(())
     }
     #[test]
     fn event_rows_roundtrip_through_dialog_lines_without_coercion() {

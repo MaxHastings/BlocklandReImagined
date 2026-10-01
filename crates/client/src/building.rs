@@ -1908,7 +1908,11 @@ mod tests {
         let mut id = 1;
         for i in 0..60 {
             let t = i as f32 * 1.5;
-            let brick = Brick::new(ContentRef::Resolved("plate".into()), [t + 3.5, 1.1, t + 0.25], 1);
+            let brick = Brick::new(
+                ContentRef::Resolved("plate".into()),
+                [t + 3.5, 1.1, t + 0.25],
+                1,
+            );
             world.bricks.insert(id, brick);
             id += 1;
         }
@@ -1916,7 +1920,10 @@ mod tests {
         let eye = Vec3::new(0.5, 1.15, 0.25);
         let target = Vec3::new(80.5, 1.15, 80.25);
         assert!(building.effect_visible(BrickId::MAX, eye, target).unwrap());
-        world.bricks.insert(id, Brick::new(ContentRef::Resolved("plate".into()), [60.5, 1.1, 60.25], 1));
+        world.bricks.insert(
+            id,
+            Brick::new(ContentRef::Resolved("plate".into()), [60.5, 1.1, 60.25], 1),
+        );
         building.sync_world(&world).unwrap();
         assert!(!building.effect_visible(BrickId::MAX, eye, target).unwrap());
         assert!(building.effect_visible(id, eye, target).unwrap());
@@ -2543,15 +2550,39 @@ mod tests {
         }
     }
 
-    #[test]
-    #[ignore = "requires converted stock-catalog-004; native camera shape coverage, no window"]
-    fn original_stock_camera_shapes_all_orientations() -> Result<()> {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let definitions = Definitions::load(
-            &root.join("content/stock-catalog-004"),
-            &root.join("content/maps-pass-008"),
-        )?;
-        let mut b = Building::new(definitions, vec![])?;
+    /// A brick catalog: `bri_sim::testing`'s made-up bricks, or the
+    /// converted stock catalog.
+    struct Catalog {
+        definitions: Definitions,
+        /// Definitions the catalog has.
+        count: usize,
+        /// Where the evidence goes (the converted catalog's only).
+        evidence: Option<std::path::PathBuf>,
+    }
+    impl Catalog {
+        fn synthetic() -> Result<Self> {
+            let definitions = bri_sim::testing::definitions();
+            Ok(Self {
+                count: definitions.entries.len(),
+                definitions,
+                evidence: None,
+            })
+        }
+        fn content() -> Result<Self> {
+            let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+            Ok(Self {
+                definitions: Definitions::load(
+                    &root.join("content/stock-catalog-004"),
+                    &root.join("content/maps-pass-008"),
+                )?,
+                count: 170,
+                evidence: Some(root.join("artifacts/native-camera")),
+            })
+        }
+    }
+    crate::testing::synthetic_and_content!(Catalog: original_stock_camera_shapes_all_orientations);
+    fn original_stock_camera_shapes_all_orientations(fx: &Catalog) -> Result<()> {
+        let mut b = Building::new(fx.definitions.clone(), vec![])?;
         let ids: Vec<_> = b.definitions.entries.keys().cloned().collect();
         let mut records = vec![];
         let mut total_hits = 0;
@@ -2606,11 +2637,13 @@ mod tests {
             records.push(serde_json::json!({"id":id,"sweeps":24,"hits":hits}));
         }
         ensure!(
-            ids.len() == 170 && total_hits > 170,
+            ids.len() == fx.count && total_hits > fx.count,
             "Unexpected stock camera coverage"
         );
-        let out = root.join("artifacts/native-camera");
-        std::fs::create_dir_all(&out)?;
+        let Some(out) = &fx.evidence else {
+            return Ok(());
+        };
+        std::fs::create_dir_all(out)?;
         std::fs::write(
             out.join("stock-shapes.json"),
             serde_json::to_vec_pretty(
@@ -2649,7 +2682,10 @@ mod tests {
         let (camera, carry) = b
             .camera_boom(eye, eye, Vec3::NEG_Z, 8.0, &passages(2.0))
             .unwrap();
-        assert!(camera.abs_diff_eq(Vec3::new(20.5, 2.1, 8.25), 1e-4), "{camera}");
+        assert!(
+            camera.abs_diff_eq(Vec3::new(20.5, 2.1, 8.25), 1e-4),
+            "{camera}"
+        );
         assert_eq!(carry, Some(opening(2.0).carry));
         // A wall before the opening stops the boom as it always did.
         let (camera, carry) = b

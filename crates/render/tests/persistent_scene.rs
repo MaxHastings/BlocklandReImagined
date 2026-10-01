@@ -47,7 +47,9 @@ struct Turn(std::sync::MutexGuard<'static, Option<Gpu>>);
 impl std::ops::Deref for Turn {
     type Target = Gpu;
     fn deref(&self) -> &Gpu {
-        self.0.as_ref().expect("the device is made before a turn starts")
+        self.0
+            .as_ref()
+            .expect("the device is made before a turn starts")
     }
 }
 
@@ -238,9 +240,14 @@ fn water_depth_mask_and_time_motion_use_one_upload() -> Result<()> {
         rgba: vec![255, 50, 20, 255, 20, 50, 255, 255],
         srgb: true,
     });
-    bri_render::water_scene::append(&mut data, &water, [1, 1, 0], ([1.0; 4], 6.0), true, |x, _| {
-        Some(if x < 0. { 2. } else { -4. })
-    })?;
+    bri_render::water_scene::append(
+        &mut data,
+        &water,
+        [1, 1, 0],
+        ([1.0; 4], 6.0),
+        true,
+        |x, _| Some(if x < 0. { 2. } else { -4. }),
+    )?;
     let mask = &data.images.last().unwrap().rgba;
     assert_eq!(
         &mask[(128 * 256 + 64) * 4..(128 * 256 + 64) * 4 + 2],
@@ -450,19 +457,53 @@ fn cloud_wind_updates_without_geometry_upload_and_calm_stays_still() -> Result<(
     Ok(())
 }
 
+/// An avatar rig to pose and draw: the made-up one of
+/// `bri_content::testing::avatar`, or the converted original.
+struct AvatarRig {
+    rig: bri_content::avatar::Rig,
+    /// Where the frames and a report are kept for review (the converted
+    /// rig only; the made-up one keeps nothing).
+    artifacts: Option<std::path::PathBuf>,
+}
+impl AvatarRig {
+    fn synthetic() -> Result<Self> {
+        let rig = bri_content::testing::avatar::rig();
+        rig.validate()?;
+        Ok(Self {
+            rig,
+            artifacts: None,
+        })
+    }
+    fn content() -> Result<Self> {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let rig: bri_content::avatar::Rig = serde_json::from_slice(&std::fs::read(
+            root.join("content/avatar-rig-001/rig.json"),
+        )?)?;
+        rig.validate()?;
+        Ok(Self {
+            rig,
+            artifacts: Some(root.join("artifacts/native-avatar")),
+        })
+    }
+}
+
 #[test]
-#[ignore = "requires local avatar rig and offscreen GPU"]
+fn avatar_layers_update_one_persistent_gpu_scene() -> Result<()> {
+    avatar_layers_update_one_persistent_gpu_scene_on(&AvatarRig::synthetic()?)
+}
+
+#[test]
+#[ignore = "requires generated v20 content"]
 fn original_avatar_layers_update_one_persistent_gpu_scene() -> Result<()> {
-    use bri_content::{
-        animation::{Layer, sample, sample_layers, triangles},
-        avatar::Rig,
-    };
-    use bri_render::shape_scene::ShapeInstance;
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let rig: Rig = serde_json::from_slice(&std::fs::read(
-        root.join("content/avatar-rig-001/rig.json"),
-    )?)?;
-    rig.validate()?;
+    avatar_layers_update_one_persistent_gpu_scene_on(&AvatarRig::content()?)
+}
+
+/// The converted rig's own catalog: its sequence count and the aliases
+/// that share one clip's tracks.
+#[test]
+#[ignore = "requires generated v20 content"]
+fn original_avatar_rig_sequence_catalog() -> Result<()> {
+    let rig = AvatarRig::content()?.rig;
     assert_eq!(rig.sequences.len(), 39);
     assert_eq!(
         rig.sequence("run").unwrap().nodes.len(),
@@ -472,6 +513,13 @@ fn original_avatar_layers_update_one_persistent_gpu_scene() -> Result<()> {
         rig.sequence("jump").unwrap().frames,
         rig.sequence("standjump").unwrap().frames
     );
+    Ok(())
+}
+
+fn avatar_layers_update_one_persistent_gpu_scene_on(fixture: &AvatarRig) -> Result<()> {
+    use bri_content::animation::{Layer, sample, sample_layers, triangles};
+    use bri_render::shape_scene::ShapeInstance;
+    let rig = &fixture.rig;
     let detail = rig.shape.details.iter().position(|d| !d.collision).unwrap();
     let selected = [
         "headskin", "chest", "pants", "rarm", "larm", "rhand", "lhand", "rshoe", "lshoe",
@@ -520,16 +568,20 @@ fn original_avatar_layers_update_one_persistent_gpu_scene() -> Result<()> {
             .zip(&held.nodes)
             .any(|(a, b)| !a.abs_diff_eq(*b, 1e-5))
     );
-    // Holding a tool must not replace the running pose on the legs.
-    for object in rig
+    // Holding a tool must not replace the running pose on the legs (a
+    // skinned part has no node of its own; its bones are the legs').
+    let mut legs = 0;
+    for node in rig
         .shape
         .objects
         .iter()
         .filter(|o| ["rshoe", "lshoe", "pants"].contains(&o.name.to_ascii_lowercase().as_str()))
+        .filter_map(|o| o.node)
     {
-        let node = object.node.unwrap();
         assert!(base.nodes[node].abs_diff_eq(held.nodes[node], 1e-5));
+        legs += 1;
     }
+    assert!(legs >= 2, "the rig has no leg parts to check");
     let mut data = Vec::new();
     for count in 1..=3 {
         let pose = sample_layers(&rig.shape, &layers[..count])?;
@@ -588,8 +640,9 @@ fn original_avatar_layers_update_one_persistent_gpu_scene() -> Result<()> {
         0.01,
         extent * 10.0,
     );
-    let output = root.join("artifacts/native-avatar");
-    std::fs::create_dir_all(&output)?;
+    if let Some(output) = &fixture.artifacts {
+        std::fs::create_dir_all(output)?;
+    }
     let mut frames = Vec::new();
     for (i, data) in data.iter().enumerate() {
         assert_eq!(
@@ -609,13 +662,15 @@ fn original_avatar_layers_update_one_persistent_gpu_scene() -> Result<()> {
                 .count()
                 > 1000
         );
-        image::save_buffer(
-            output.join(format!("layers-{i}.png")),
-            &frame,
-            512,
-            512,
-            image::ColorType::Rgba8,
-        )?;
+        if let Some(output) = &fixture.artifacts {
+            image::save_buffer(
+                output.join(format!("layers-{i}.png")),
+                &frame,
+                512,
+                512,
+                image::ColorType::Rgba8,
+            )?;
+        }
         frames.push(frame);
     }
     assert_ne!(frames[0], frames[1]);
@@ -637,10 +692,13 @@ fn original_avatar_layers_update_one_persistent_gpu_scene() -> Result<()> {
         after, frames[2],
         "Rejected dynamic update changed the GPU scene"
     );
+    let Some(output) = &fixture.artifacts else {
+        return Ok(());
+    };
     std::fs::write(
         output.join("report.json"),
         serde_json::to_vec_pretty(&serde_json::json!({
-            "sequences":39,"single_clip_samples":sampled,"combined_frames":3,"gpu_uploads":1,"vertices":scene.vertex_count,
+            "sequences":rig.sequences.len(),"single_clip_samples":sampled,"combined_frames":3,"gpu_uploads":1,"vertices":scene.vertex_count,
             "adapter":gpu.adapter,"window_launched":false,"os_input_used":false,
             "lower_body_preserved_by_tool_pose":true,"rejected_update_preserves_frame":true,
             "omissions":["Diagnostic paint only; original textures/face/decal are not bound", "No App/network avatar integration or gameplay animation selection yet"]
@@ -652,7 +710,9 @@ impl Gpu {
     /// Wait for this test's turn on the shared device, making it first.
     fn turn() -> Result<Turn> {
         // A test that failed on its turn leaves the device as good as ever.
-        let mut gpu = GPU.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut gpu = GPU
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if gpu.is_none() {
             *gpu = Some(Self::new()?);
         }
@@ -1045,7 +1105,7 @@ fn persistent_gpu_camera_depth_alpha_and_resize() -> Result<()> {
 }
 
 #[test]
-#[ignore = "requires locally converted map-bundle-017; produces offscreen evidence only"]
+#[ignore = "requires generated v20 content"]
 fn real_native_maps_upload_once_camera_motion() -> Result<()> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let output = root.join("artifacts/persistent-scene");

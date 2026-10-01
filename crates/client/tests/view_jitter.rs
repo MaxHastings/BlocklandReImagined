@@ -1,9 +1,10 @@
 //! Headless probe: while the view turns, the local body and the held item
 //! must hold still relative to the camera, whatever the frame timing and
-//! wherever mouse motion lands between a frame's tick and its render.
-//! Run: cargo test -p bri-client --test view_jitter --release -- --ignored --nocapture
-//! Requires converted v20 content, loopback QUIC and an offscreen GPU; never
-//! opens a window or moves the mouse.
+//! wherever mouse motion lands between a frame's tick and its render. Runs
+//! on the made-up content root; the ignored variant runs on the generated
+//! v20 content (`--release -- --ignored`, BRI_CONTENT or content/).
+//! Loopback QUIC and an offscreen GPU; never opens a window or moves the
+//! mouse.
 use anyhow::{Context, Result, ensure};
 use bri_client::{
     app::App,
@@ -15,13 +16,17 @@ use bri_ui::{
 };
 use glam::{Quat, Vec3};
 use std::{
-    path::Path,
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 
+#[macro_use]
+mod support;
+use support::content_root::ContentRoot;
+
+synthetic_and_content!(ContentRoot: body_and_held_item_hold_still_against_a_turning_camera);
+
 const SIZE: (u32, u32) = (640, 480);
-const BEDROOM: &str = "v20/add-ons/map_bedroom/bedroom.mis";
 /// A steady mouse turn, in radians per second.
 const TURN: f32 = 2.5;
 const FRAMES: usize = 300;
@@ -248,22 +253,14 @@ fn turn(
     Ok(stats)
 }
 
-#[test]
-#[ignore = "requires converted native v20 content, loopback QUIC and offscreen GPU; no window/audio device"]
-fn body_and_held_item_hold_still_against_a_turning_camera() -> Result<()> {
-    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let artifact = workspace.join("artifacts/view-jitter");
-    std::fs::create_dir_all(&artifact)?;
-    let state = artifact.join(format!(
-        "state-{}-{}",
-        std::process::id(),
-        SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
-    ));
-    std::fs::create_dir_all(&state)?;
-    let mut app = App::load(&workspace.join("content"), &state, SIZE)?;
+fn body_and_held_item_hold_still_against_a_turning_camera(f: &ContentRoot) -> Result<()> {
+    let artifact = f.out("view-jitter")?;
+    let state_dir = f.state()?;
+    let state = state_dir.path();
+    let mut app = App::load(&f.root, state, SIZE)?;
     app.ui.core.pop(bri_ui::screens::ScreenId::DefaultControls);
     app.ui.core.request(UiAction::HostGame {
-        map: BEDROOM.into(),
+        map: f.map.0.clone(),
         mode: ServerMode::SinglePlayer,
         game_mode: None,
         max_players: 1,
@@ -273,7 +270,7 @@ fn body_and_held_item_hold_still_against_a_turning_camera() -> Result<()> {
         super_admin_password: String::new(),
     });
     pump(&mut app)?;
-    until(&mut app, "Bedroom host/player", |a| {
+    until(&mut app, "host/player", |a| {
         matches!(a.ui.core.conn, ConnectionState::InGame { .. })
             && a.network_view()
                 .is_some_and(|v| v.poses.contains_key(&v.owner))
@@ -289,7 +286,7 @@ fn body_and_held_item_hold_still_against_a_turning_camera() -> Result<()> {
             .is_some_and(|v| v.tools[&v.owner].selected == Some(0))
             && a.held_image_transform(0).is_some()
     })?;
-    let gpu = Headless::new().context("offscreen renderer")?;
+    let gpu = support::gpu::turn().context("offscreen renderer")?;
     let mut renderer = UiRenderer::new(&gpu.device, &gpu.queue);
     app.gpu_ready(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm)?;
     let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
@@ -308,7 +305,7 @@ fn body_and_held_item_hold_still_against_a_turning_camera() -> Result<()> {
     });
     let target = texture.create_view(&Default::default());
     let mut rng = Lcg(0x5eed);
-    let mut report = serde_json::json!({"adapter": gpu.adapter_info.name, "map": BEDROOM,
+    let mut report = serde_json::json!({"adapter": gpu.adapter_info.name, "map": f.map.0,
         "turn_rad_per_s": TURN, "cases": {}});
     let mut cases = Vec::new();
     for (name, third, walk) in [
@@ -385,6 +382,5 @@ fn body_and_held_item_hold_still_against_a_turning_camera() -> Result<()> {
             );
         }
     }
-    let _ = std::fs::remove_dir_all(&state);
     Ok(())
 }
