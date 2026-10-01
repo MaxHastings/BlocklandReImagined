@@ -549,6 +549,10 @@ pub struct Code {
     /// The archetype each player type (`PlayerData`) this import or one it
     /// depends on declares became, by lower-case name.
     pub archetypes: BTreeMap<String, String>,
+    /// This import's sounds of a base game file, by lower-case name, to the
+    /// base sound playing that file (`block_movebrick_sound` to
+    /// `clickMoveSound`).
+    pub sounds: BTreeMap<String, String>,
 }
 
 /// Applies the listed port for `import`, if any, to the package in `out`.

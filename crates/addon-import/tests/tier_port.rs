@@ -1329,3 +1329,51 @@ fn explosive1_grenades_count_down_and_the_molotov_burns() {
     assert!(!heard(a));
     assert_eq!(g.mag(a), json!("1|1|tt-molnades|1"));
 }
+
+/// Tier 1 uses a sound pack when the player has one and otherwise defines
+/// its reload click from the base game's file. The check reads as absent,
+/// so the pack is no missing dependency, and the click plays the base
+/// game's own sound of that file.
+#[test]
+fn tier1_click_is_the_base_games_when_no_sound_pack_is_there() {
+    let dir =
+        Dir(std::env::temp_dir().join(format!("bri-tier-port-{}-click", std::process::id())));
+    let _ = std::fs::remove_dir_all(&dir.0);
+    // The base game's sound of that file, as recovered core scripts name it.
+    let core = dir.0.join("core/sounds.cs");
+    std::fs::create_dir_all(core.parent().unwrap()).unwrap();
+    std::fs::write(
+        &core,
+        "datablock AudioProfile(clickMoveSound)\n{\n   filename = \"~/data/sound/clickMove.wav\";\n   description = AudioClosest3d;\n};\n",
+    )
+    .unwrap();
+    let out = dir.0.join("addons").join(NS);
+    let report = import(&Options {
+        input: Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/ports/Weapon_Package_Tier1"),
+        out: out.clone(),
+        reference: None,
+        core: vec![core],
+        installed: None,
+        version: "1.0.0".into(),
+    })
+    .unwrap();
+    assert!(report.ports[0].applied, "{:?}", report.ports[0].reason);
+    let pack_dep = report
+        .dependencies
+        .iter()
+        .find(|d| d.addon == "Sound_Standin")
+        .unwrap();
+    assert_eq!(pack_dep.status, "if_present");
+    assert_eq!(report.summary.dependencies_missing, 0);
+    let click = report
+        .datablocks
+        .iter()
+        .find(|d| d.name == "Block_MoveBrick_Sound")
+        .unwrap();
+    assert_eq!(click.status, "consumed", "{:?}", click.notes);
+    let pack = pack(&out);
+    let sidearm = &pack.images[&format!("{NS}:image/standinsidearmimage")];
+    let wait = sidearm.states.iter().find(|s| s.name == "ReloadWait").unwrap();
+    assert_eq!(wait.sound, "clickMoveSound");
+}

@@ -21,6 +21,21 @@ datablock AudioProfile(standinJamSound : standinClickSound) { filename = "./jam.
 datablock AudioProfile(standinMoveSound : standinClickSound) { filename = "./move.wav"; };
 datablock AudioProfile(ammoGetSound : standinClickSound) { filename = "./ammoget.wav"; };
 
+// A sound pack used when the player has it, else the base game's click.
+if(isFile("Add-Ons/Sound_Standin/server.cs"))
+{
+   ForceRequiredAddOn("Sound_Standin");
+}
+else
+{
+   datablock AudioProfile(Block_MoveBrick_Sound)
+   {
+      filename = "base/data/sound/clickMove.wav";
+      description = AudioClosest3d;
+      preload = false;
+   };
+}
+
 datablock ExplosionData(standinKickExplosion)
 {
    lifeTimeMS = 150;
@@ -224,7 +239,7 @@ function standinSidearmImage::onFire(%this,%obj,%slot)
 function standinSidearmImage::onReloadWait(%this,%obj,%slot)
 {
    %obj.playThread(2, shiftUp);
-   serverPlay3D(standinMoveSound,%obj.getPosition());
+   serverPlay3D(block_MoveBrick_Sound,%obj.getPosition());
 }
 
 function standinSidearmImage::onReloadStart(%this,%obj,%slot)
