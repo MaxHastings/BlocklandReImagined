@@ -238,7 +238,7 @@ const LEAK_STEP: i64 = 3;
 const LEAK_LEVELS: f32 = 8.0 / 255.0;
 const LEAK_SUN: f32 = 0.12;
 /// Names the fit, the bake and the stored layout; change it with either.
-const FORMAT: &[u8; 8] = b"BRIML\0\0\x09";
+const FORMAT: &[u8; 8] = b"BRIML\0\0\x0a";
 
 /// A light recovered from a map's lightmaps. The map compiler's point light:
 /// full `color` out to `inner`, then falling linearly to nothing at `outer`,
@@ -871,9 +871,40 @@ impl Bake {
                 hidden_light: Vec3,
                 raw: f32,
             }
+            let (w, h) = (parts.width as i64, parts.height as i64);
+            let same_surface = |a: &Lexel, b: &Lexel| {
+                let apart = b.position - a.position;
+                b.normal.dot(a.normal) > 0.95 && apart.dot(a.normal).abs() <= 0.1 * apart.length() + 1e-3
+            };
+            let mut lexel_at: Vec<Option<(&Lexel, u32)>> = vec![None; (w * h).max(0) as usize];
+            for &(l, mask) in &by_sheet[sheet] {
+                if let Some(at) = lexel_at.get_mut(l.index as usize) {
+                    *at = Some((l, mask));
+                }
+            }
+            // A ray shadow a texel wide, with the light seen on both sides of
+            // it on the same surface, is thinner than the map compiler's
+            // filtered lightmap can hold (a thin rod or a grazing edge it
+            // never shadowed): the light reached that texel too. Left
+            // hidden, the texel would hand the fit's error to whatever light
+            // the rays hide, and draw a line of it when a light goes out.
+            let closed = |l: &Lexel, mask: u32| {
+                let (x, y) = (l.index as i64 % w.max(1), l.index as i64 / w.max(1));
+                let neighbour = |dx: i64, dy: i64| {
+                    let (nx, ny) = (x + dx, y + dy);
+                    if nx < 0 || ny < 0 || nx >= w || ny >= h {
+                        return 0;
+                    }
+                    lexel_at[(ny * w + nx) as usize].filter(|(n, _)| same_surface(l, n)).map_or(0, |(_, m)| m)
+                };
+                [(1, 0), (0, 1), (1, 1), (1, -1)]
+                    .iter()
+                    .fold(mask, |m, &(dx, dy)| m | (neighbour(dx, dy) & neighbour(-dx, -dy)))
+            };
             let mut splits: Vec<Split> = Vec::new();
             let mut split_at: Vec<Option<usize>> = vec![None; (parts.width * parts.height) as usize];
             for &(l, mask) in &by_sheet[sheet] {
+                let mask = closed(l, mask);
                 let i = l.index as usize;
                 let Some(texel) = texel_of(i) else { continue };
                 // The authored light (a cleaned leak holds less), above the
@@ -929,7 +960,6 @@ impl Bake {
             // shadow's edge, where the rays from the fitted light and the map
             // compiler's filtered shadow disagree by a texel or two, and
             // keeping it would leave a line of the light after it goes out.
-            let (w, h) = (parts.width as i64, parts.height as i64);
             let edge_of_lit = |t: &Split| {
                 let (x, y) = (t.index as i64 % w.max(1), t.index as i64 / w.max(1));
                 (-1..=1).flat_map(|dy| (-1..=1).map(move |dx| (x + dx, y + dy))).any(|(nx, ny)| {
@@ -938,9 +968,9 @@ impl Bake {
                     }
                     let Some(n) = split_at[(ny * w + nx) as usize].map(|k| &splits[k]) else { return false };
                     let apart = n.position - t.position;
-                    let same_surface =
+                    let on_surface =
                         n.normal.dot(t.normal) > 0.95 && apart.dot(t.normal).abs() <= 0.1 * apart.length() + 1e-3;
-                    same_surface && (n.seen & t.hidden != 0 || (n.raw >= 0.25 && n.hidden & t.hidden != 0))
+                    on_surface && (n.seen & t.hidden != 0 || (n.raw >= 0.25 && n.hidden & t.hidden != 0))
                 })
             };
             // Per texel: its index, its leftover light and each light's share.
@@ -1605,6 +1635,102 @@ mod tests {
             center: [0.0; 3],
         });
         scene.materials.push(material);
+    }
+
+    /// A wall the fit explains all but a little of (the leftover), a light
+    /// behind it, and a thin rod the map compiler never shadowed, whose rays
+    /// hide the wall's lights from a dashed line of texels across it. The leftover stays
+    /// even across that line: no light there takes the fit's error, which
+    /// would draw the line once a light goes out (the Bedroom wall by the
+    /// window).
+    #[test]
+    fn a_thin_ray_shadow_leaves_no_line_in_the_leftover() {
+        let lights = [
+            MapLight {
+                position: [0.0, 0.0, 8.0],
+                color: [0.5, 0.5, 0.4],
+                inner: 5.0,
+                outer: 25.0,
+                channel: Some(0),
+            },
+            // Far and faint, reaching everywhere, as the Bedroom's.
+            MapLight {
+                position: [30.0, 20.0, 40.0],
+                color: [0.1, 0.1, 0.1],
+                inner: 80.0,
+                outer: 430.0,
+                channel: Some(1),
+            },
+            // Behind the wall, in reach but never on it.
+            MapLight {
+                position: [0.0, 0.0, -6.0],
+                color: [0.5, 0.5, 0.5],
+                inner: 5.0,
+                outer: 25.0,
+                channel: Some(2),
+            },
+        ];
+        let error = Vec3::splat(15.0 / 255.0);
+        let given = |p: Vec3| {
+            lights[..2].iter().map(|l| Vec3::from(l.color) * falloff(Vec3::from(l.position).distance(p), l.inner, l.outer)).sum::<Vec3>()
+                + error
+        };
+        let mut scene = crate::scene::SceneData {
+            sun_direction: [0.0, -1.0, 0.0],
+            ..Default::default()
+        };
+        lit_quad(&mut scene, |a, b| Vec3::new(10.0 * a, 10.0 * b, 0.0), Vec3::Z, given);
+        lit_quad(&mut scene, |a, b| Vec3::new(500.0 * a, -500.0, 500.0 * b), Vec3::Y, |_| Vec3::ZERO);
+        // The rod: a strip 0.06 wide across the wall, 4 units out.
+        let first = scene.vertices.len() as u32;
+        let across = Vec3::new(1.0, 0.8, 0.0).normalize();
+        let side = Vec3::new(-across.y, across.x, 0.0) * 0.03;
+        for p in [-across * 20.0 - side, across * 20.0 - side, across * 20.0 + side, -across * 20.0 + side] {
+            scene.vertices.push(crate::scene::SceneVertex {
+                position: (p + Vec3::new(0.0, 0.0, 4.0)).to_array(),
+                normal: [0.0, 0.0, 1.0],
+                uv: [0.0; 2],
+                lightmap_uv: [0.0; 2],
+                color: [1.0; 4],
+                fx: [0.0; 4],
+            });
+        }
+        let start = scene.indices.len() as u32;
+        scene.indices.extend([0, 1, 2, 0, 2, 3].map(|i| first + i));
+        scene.batches.push(crate::scene::MeshBatch {
+            indices: start..start + 6,
+            material: scene.materials.len(),
+            center: [0.0; 3],
+        });
+        scene.materials.push(crate::scene::Material::surface("rod", 0, 0));
+        let bake = Bake::new(&scene).expect("lightmapped wall");
+        let seen: Vec<u32> = bake
+            .lexels
+            .iter()
+            .map(|l| {
+                lights.iter().enumerate().fold(0u32, |m, (k, light)| {
+                    let lit = light.shade(l.position, l.normal).max_element() > 0.0
+                        && bake.sees(l.position, l.normal, light.position.into());
+                    m | u32::from(lit) << k
+                })
+            })
+            .collect();
+        assert!(seen.iter().any(|&m| m & 3 != 3), "the rod hides the lights from some texels");
+        let sheets = bake.dynamic_sheets(&lights, &seen, &[]);
+        let wall = &sheets[0];
+        // Inside the wall's chart, away from its rim, the leftover changes
+        // smoothly: no texel stands out from its four neighbours.
+        let left = |x: usize, y: usize| f32::from(wall.left[(y * 32 + x) * 4]);
+        let mut worst = (0.0f32, 0, 0);
+        for y in 2..30 {
+            for x in 2..30 {
+                let around = (left(x - 1, y) + left(x + 1, y) + left(x, y - 1) + left(x, y + 1)) / 4.0;
+                if (left(x, y) - around).abs() > worst.0 {
+                    worst = ((left(x, y) - around).abs(), x, y);
+                }
+            }
+        }
+        assert!(worst.0 <= 2.0, "texel ({}, {}) stands {} levels out of the leftover around it", worst.1, worst.2, worst.0);
     }
 
     /// A lamp's shade: a band of panels around a light, facing out, away

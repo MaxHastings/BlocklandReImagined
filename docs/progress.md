@@ -9108,10 +9108,20 @@ than the light the bulb gave.
   differ by a texel or two. Texels there hold a small part of a light the
   rays call hidden, below the tenth-to-a-quarter cutoff that keeps fit
   error in the leftover, so a dashed line of the light stayed after it went
-  out (the Gate's probe showed one on the wall by the window). Now a texel
-  takes its whole remainder when a neighbour on the same surface plainly
-  holds one of those lights (its rays see it, or a quarter of it is left
-  there).
+  out. Now a texel takes its whole remainder when a neighbour on the same
+  surface plainly holds one of those lights (its rays see it, or a quarter
+  of it is left there).
+- The dashed line on the wall by the window had a different cause, found in
+  the Gate's leftover dumps (format 8). The compiler's lightmap there is a
+  smooth gradient with no shadow, yet the leftover had 1-texel diagonal
+  lines at the ambient between areas 6 to 17 levels above it. Thin
+  geometry the compiler never shadowed hides a faint far light from a
+  dashed line of texels by rays. There, that light joined the hidden lights
+  (including ones behind the wall, in reach by falloff) and took the fit's
+  error, which its neighbours keep. After the break the line stood out.
+  Now a light seen by rays on both sides of a texel (on any of four axes,
+  same surface) counts as seen there too: a 1-texel ray shadow is thinner
+  than the compiler's filtered lightmap can hold.
 - `lighting_probe`: `BRI_BREAK=1` breaks every bulb and tube by the
   client's rule. Within 4 units of a light shape it prints each triangle's
   lightmap, Dynamic leftover, light shares and facing. `BRI_DUMP_LEFT=1`
@@ -9125,14 +9135,17 @@ than the light the bulb gave.
   rule. The Gate's probe at format 7 showed that the lamp's stem and
   socket within 4 units hold only the compiler's ambient
   ([102,102,77]), which rightly stays. The shade sits 6 or more units
-  out, so the probe now prints triangles within 8 units. Bake format 9.
+  out, so the probe now prints triangles within 8 units. Bake format 10.
 
 Tests: `bri-render --test unified_lighting a_switched_off_light_leaves_the_same_light_in_every_live_mode`
 (modes 1-3 identical, fails without the Unified per-texel branch);
 `--test map_lighting a_switched_off_light_leaves_no_line_along_its_shadows_edges`
 (a turned slab's filtered shadow; an edge texel keeps 9 levels without the
 neighbour rule, at most 3 with it);
-`bri-render --lib a_shade_facing_away_from_its_light_goes_dark_with_it`
+`bri-render --lib a_thin_ray_shadow_leaves_no_line_in_the_leftover`
+(a rod the lightmap never saw, a faint far light and a light behind the
+wall; a line texel stands 7 levels out without the rule, at most 2 with
+it); `bri-render --lib a_shade_facing_away_from_its_light_goes_dark_with_it`
 (the light given, so the fit cannot explain the shade with lights placed
 outside it; 153 levels kept without the change, at most 2 with it);
 `bri-client --lib a_broken_bulb_switches_off_its_lights_and_rules_tint_the_rest`.
