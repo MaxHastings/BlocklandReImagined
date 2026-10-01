@@ -970,7 +970,10 @@ datablock ParticleEmitterData(spareEmitter) { ejectionPeriodMS = 35; particles =
         .collect();
     assert_eq!(
         names,
-        [("emote_synthetic_glow:emitter/glowemitter", "Emote - Synthetic Glow")]
+        [(
+            "emote_synthetic_glow:emitter/glowemitter",
+            "Emote - Synthetic Glow"
+        )]
     );
     let status = |name: &str| {
         report
@@ -982,6 +985,89 @@ datablock ParticleEmitterData(spareEmitter) { ejectionPeriodMS = 35; particles =
     };
     assert_eq!(status("glowEmitter"), "converted");
     assert_eq!(status("spareEmitter"), "consumed");
+    std::fs::remove_dir_all(out.parent().unwrap()).unwrap();
+    std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
+}
+
+/// Torque's load rules on a synthetic Add-On: a sound whose path its script
+/// built at load (`%path @ "x.wav"`, the other Add-On's folder only when
+/// `isFile` finds it) plays the Add-On's own file; a particle only an unused
+/// emitter names was never drawn; a subfolder's description is not game data.
+#[test]
+fn built_paths_idle_particles_and_folder_descriptions() {
+    let root = fresh("load-rules-source");
+    let source = root.with_file_name("Weapon_Synthetic_Club");
+    std::fs::create_dir_all(source.join("sounds")).unwrap();
+    std::fs::create_dir_all(source.join("extra")).unwrap();
+    std::fs::write(
+        source.join("description.txt"),
+        "Title: Synthetic Club\nAuthor: tests",
+    )
+    .unwrap();
+    std::fs::write(source.join("extra/Description.txt"), "Title: an older part").unwrap();
+    std::fs::write(source.join("sounds/swing.wav"), wav()).unwrap();
+    std::fs::write(
+        source.join("server.cs"),
+        r#"
+if(isFile("Add-Ons/Weapon_Other_Club/description.txt"))
+   %path = "Add-Ons/Weapon_Other_Club/";
+else
+   %path = "./sounds/";
+datablock AudioProfile(clubSwingSound) { filename = %path @ "swing.wav"; description = AudioClosest3d; preload = true; };
+datablock ParticleData(smokeParticle) { textureName = "base/data/particles/cloud"; lifetimeMS = 500; };
+datablock ParticleEmitterData(smokeEmitter) { ejectionPeriodMS = 35; particles = "smokeParticle"; };
+datablock ProjectileData(clubProjectile) { directDamage = 5; muzzleVelocity = 50; lifetime = 100; };
+datablock ItemData(clubItem) { shapeFile = "./club.dts"; uiName = "Club"; image = clubImage; };
+datablock ShapeBaseImageData(clubImage)
+{
+   shapeFile = "./club.dts"; item = clubItem; projectile = clubProjectile;
+   stateName[0] = "Activate"; stateTimeoutValue[0] = 0.1; stateTransitionOnTimeout[0] = "Ready";
+   stateName[1] = "Ready"; stateTransitionOnTriggerDown[1] = "Fire";
+   stateName[2] = "Fire"; stateFire[2] = true; stateSound[2] = clubSwingSound;
+   stateTimeoutValue[2] = 0.2; stateTransitionOnTimeout[2] = "Ready";
+};
+"#,
+    )
+    .unwrap();
+    let out = fresh("load-rules");
+    let report = import(&Options {
+        input: source.clone(),
+        out: out.clone(),
+        ..Default::default()
+    })
+    .unwrap();
+    let status = |name: &str| {
+        report
+            .datablocks
+            .iter()
+            .find(|d| d.name == name)
+            .map(|d| d.status.clone())
+            .unwrap()
+    };
+    assert_ne!(status("clubSwingSound"), "recognised_only");
+    let pack = Pack::from_json(&std::fs::read(out.join("assets/weapons.json")).unwrap()).unwrap();
+    assert!(
+        pack.sounds
+            .contains_key("weapon_synthetic_club:sound/clubswingsound"),
+        "{:?}",
+        pack.sounds.keys().collect::<Vec<_>>()
+    );
+    assert_eq!(status("smokeEmitter"), "consumed");
+    assert_eq!(status("smokeParticle"), "consumed");
+    let folder = report
+        .assets
+        .iter()
+        .find(|a| a.source.ends_with("extra/Description.txt"))
+        .unwrap();
+    assert_eq!(folder.status, "skipped");
+    assert!(
+        !report
+            .unsupported
+            .iter()
+            .any(|u| u.what.to_ascii_lowercase().contains("description")),
+        "{:?}",
+        report.unsupported
+    );
     std::fs::remove_dir_all(out.parent().unwrap()).unwrap();
     std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
 }

@@ -423,7 +423,7 @@ fn sounds(cx: &mut Ctx, pack: &mut bri_weapons::Pack) {
             let f = o
                 .fields
                 .get("filename")
-                .map(|f| source::resolve(&o.path, literal(f)))?;
+                .map(|f| crate::file_named(cx.src, &cx.outputs, &o.path, f))?;
             let rel = cx.outputs.get(&f.to_ascii_lowercase())?.clone();
             let description = o
                 .fields
