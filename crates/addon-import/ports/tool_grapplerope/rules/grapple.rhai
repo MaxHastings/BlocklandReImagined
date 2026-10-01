@@ -20,8 +20,8 @@
 fn num(x) { if type_of(x) == "f64" { x } else { x.to_float() } }
 // The line of sight is checked from this high above the feet.
 fn lift() { num({{lift}}) }
-// Longest rope the engine holds.
-fn longest() { 200.0 }
+// Longest rope the engine holds (past the original hook's reach).
+fn longest() { 1000.0 }
 
 fn hook() { "{{namespace}}:projectile/grappleropeprojectile" }
 fn image() { "{{namespace}}:image/grappleropeimage" }

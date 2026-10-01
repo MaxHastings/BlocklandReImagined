@@ -102,8 +102,9 @@ pub struct PlayerState {
     #[serde(default)]
     pub tether: Option<Tether>,
 }
-/// Longest a tether's rope may be, units.
-pub const MAX_TETHER_LENGTH: f32 = 200.0;
+/// Longest a tether's rope may be, units: a bound on state a host or
+/// player sends, past any v20 rope (the Grapple Rope's hook flies 800).
+pub const MAX_TETHER_LENGTH: f32 = 1000.0;
 /// Shortest a tether's rope may be reeled in to.
 pub const MIN_TETHER_LENGTH: f32 = 1.0;
 /// Fastest a tether may reel, units a second.

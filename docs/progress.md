@@ -8704,11 +8704,13 @@ far 16, fast 50, every 100 ms. Both copies' hashes are listed.
   holder hangs from that spot on a rope as long as the distance then, for
   as long as they hold the click (`Fire`/`Hold`), and flies off with all
   their speed on letting go (`onRelease`). The rope stays on the spot even
-  if what it struck goes, as in the original. Pivots, said plainly: the
-  engine's rope replaces `GrappleRope`'s 10 ms velocity correction (it
-  looked one second ahead, so the original pulled a little early), the
-  rope is at most 200 long (the engine's limit; the hook can fly 800), and
-  the movement keys do not pump it (`swing: 0`). A hook that lands after
+  if what it struck goes, as in the original. The movement keys steer
+  only by the player's ordinary air control, as in v20 (`swing: 0`: the
+  original added no push of its own). The engine's longest rope went from
+  200 to 1000, so the hook's full reach (200 a second for 4 s, 800) holds.
+  One pivot, said plainly: the engine's rope replaces `GrappleRope`'s 10 ms
+  velocity correction (it looked one second ahead, so the original pulled
+  a little early). A hook that lands after
   the click is let go holds nothing (the original kept it for the next
   click, a bug).
 - New image field `rope` (engine seam): while the holder is roped, every

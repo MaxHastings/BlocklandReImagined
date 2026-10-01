@@ -18,7 +18,7 @@ pub const PLAYER_MASS: f32 = 90.0;
 pub const MAX_HOLD_DISTANCE: f32 = 64.0;
 /// Longest a tether's rope may be, and shortest, units (the player
 /// motor's own limits).
-pub const MAX_TETHER_LENGTH: f32 = 200.0;
+pub const MAX_TETHER_LENGTH: f32 = 1000.0;
 pub const MIN_TETHER_LENGTH: f32 = 1.0;
 /// Fastest a tether reels, units a second.
 pub const MAX_TETHER_REEL: f32 = 80.0;

@@ -442,3 +442,33 @@ fn the_hookshot_follows_a_player_it_strikes() {
     );
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// The rope is as long as the hook flew: a ceiling 250 up, within the
+/// stand-in hook's reach (150 a second for 2 s), holds the holder on a
+/// rope that long.
+#[test]
+fn a_rope_is_as_long_as_the_hook_reaches() {
+    let dir = fresh("long");
+    let high = 250.0;
+    let ceiling =
+        ColliderBuilder::cuboid(60.0, 0.5, 60.0).translation(Vector::new(0.0, high + 0.5, -20.0));
+    let mut g = Game::new(
+        &dir,
+        "Tool_GrappleRope",
+        "tool_grapplerope",
+        "tool_grapplerope:weapon/grapplerope",
+        vec![ceiling],
+    );
+    g.look(0.0, 1.4);
+    g.trigger(true);
+    g.steps(240);
+    let rope = g.s.tether_of(g.player).expect("roped to the far ceiling");
+    assert!((rope.anchor[1] - high).abs() < 0.1, "{rope:?}");
+    assert!(rope.length > 240.0, "{rope:?}");
+    assert!(
+        g.s.package_diagnostics().is_empty(),
+        "{:?}",
+        g.s.package_diagnostics()
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}

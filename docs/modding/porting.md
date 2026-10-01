@@ -212,7 +212,7 @@ page as well.
 | Add-On | Port | Status | What it covers |
 |---|---|---|---|
 | `Weapon_Shotgun` (Sawn-off Shotgun) | `weapon_shotgun` | verified | `shotgunImage::onFire`: the pellets, their spread and the recoil, read from the copy's own script |
-| `Tool_GrappleRope` (Grapple Rope) | `tool_grapplerope` | verified | host rules: where the hook strikes with a clear line of sight from `lift` above the feet, the holder hangs on a rope (`tether`) as long as the distance then while the click is held, and flies off with their speed on letting go; the image draws the rope with the chain projectile's trail (`rope`). The engine's rope stands in for `GrappleRope`'s 10 ms velocity correction, and the rope is at most 200 long |
+| `Tool_GrappleRope` (Grapple Rope) | `tool_grapplerope` | verified | host rules: where the hook strikes with a clear line of sight from `lift` above the feet, the holder hangs on a rope (`tether`) as long as the distance then while the click is held, and flies off with their speed on letting go; the image draws the rope with the chain projectile's trail (`rope`). The engine's rope stands in for `GrappleRope`'s 10 ms velocity correction; the movement keys steer only by the player's air control, as in v20 |
 | `Weapon_Loz_Hookshot` (Hookshot) | `weapon_loz_hookshot` | verified | host rules: where the spearhead strikes, the shooter's speed is set straight at the spot every `every` ms, `fast` beyond `far` and `slow` within `near`, until within `stop`; a struck player or vehicle is followed; a seated shooter pulls their vehicle only toward a player or vehicle; `/degrapple` stops it. All numbers read from the copy |
 
 ## Host rules
