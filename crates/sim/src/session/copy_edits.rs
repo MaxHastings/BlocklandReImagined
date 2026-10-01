@@ -159,7 +159,7 @@ impl WrenchFill {
 
 /// The wrench settings `brick` has, as the wrench would send them; what
 /// is unresolved here reads as none.
-fn wrench_properties(brick: &Brick) -> WrenchProperties {
+pub(super) fn wrench_properties(brick: &Brick) -> WrenchProperties {
     let resolved = |r: &ContentRef| match r {
         ContentRef::Resolved(id) => Some(id.clone()),
         _ => None,

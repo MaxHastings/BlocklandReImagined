@@ -88,6 +88,10 @@ pub struct AdminOptions {
     pub too_far_distance: f32,
     pub per_player: AdminQuotas,
     pub lan: AdminQuotas,
+    /// Running Add-Ons' server-wide settings changed from their defaults,
+    /// by `namespace:key` (the Admin menu's Add-On Settings).
+    #[serde(default)]
+    pub addon_settings: BTreeMap<String, crate::api::MiniGameSettingValue>,
 }
 /// v20's `$Pref::Server::*` defaults, as `bri_admin::ServerSettings::default`.
 impl Default for AdminOptions {
@@ -124,6 +128,7 @@ impl Default for AdminOptions {
                 players: 64,
                 vehicles: 20,
             },
+            addon_settings: BTreeMap::new(),
         }
     }
 }
@@ -256,12 +261,64 @@ pub fn options_from_prefs(prefs: &crate::prefs::Prefs) -> AdminOptions {
             }
         }
     }
+    for name in prefs.keys() {
+        if let Some((key, value)) = addon_pref(&name).zip(prefs.get(&name))
+            && let Some(value) = addon_pref_value(value)
+        {
+            o.addon_settings.insert(key, value);
+        }
+    }
     o
 }
 /// Save the settings as `$Pref::Server::*`, as v20's serverConfigGui did.
+/// Add-On settings save as `$Pref::Server::AddOn::<namespace>::<key>`.
 pub fn options_to_prefs(o: &AdminOptions, prefs: &mut crate::prefs::Prefs) {
     for (key, value) in option_pairs(o) {
         prefs.set(&format!("$Pref::Server::{key}"), value);
+    }
+    for name in prefs.keys() {
+        if addon_pref(&name).is_some() {
+            prefs.reset(&name);
+        }
+    }
+    for (key, value) in &o.addon_settings {
+        let Some((namespace, key)) = key.split_once(':') else {
+            continue;
+        };
+        use crate::api::MiniGameSettingValue as V;
+        let value = match value {
+            V::Bool(b) => serde_json::Value::Bool(*b),
+            V::Int(n) => serde_json::Value::from(*n),
+            V::Text(t) => serde_json::Value::String(t.clone()),
+        };
+        prefs.set(
+            &format!("{ADDON_PREF}{namespace}::{key}"),
+            value.to_string(),
+        );
+    }
+}
+const ADDON_PREF: &str = "$Pref::Server::AddOn::";
+/// `namespace:key` of an Add-On setting's pref name.
+fn addon_pref(name: &str) -> Option<String> {
+    let rest = name
+        .get(..ADDON_PREF.len())
+        .filter(|p| p.eq_ignore_ascii_case(ADDON_PREF))
+        .map(|_| &name[ADDON_PREF.len()..])?;
+    let (namespace, key) = rest.split_once("::")?;
+    Some(format!(
+        "{}:{}",
+        namespace.to_ascii_lowercase(),
+        key.to_ascii_lowercase()
+    ))
+}
+/// A saved Add-On setting value: `true`, `35` or a quoted text.
+fn addon_pref_value(value: &str) -> Option<crate::api::MiniGameSettingValue> {
+    use crate::api::MiniGameSettingValue as V;
+    match serde_json::from_str(value).ok()? {
+        serde_json::Value::Bool(b) => Some(V::Bool(b)),
+        serde_json::Value::Number(n) => n.as_i64().map(V::Int),
+        serde_json::Value::String(t) => Some(V::Text(t)),
+        _ => None,
     }
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -738,5 +795,30 @@ mod tests {
         prefs.set("$Pref::Server::MaxChatLen", "lots");
         let back = options_from_prefs(&prefs);
         assert_eq!((back.port, back.max_chat_length), (28000, 120));
+    }
+
+    #[test]
+    fn addon_server_settings_save_as_prefs_and_drop_when_reset() {
+        use crate::api::MiniGameSettingValue as V;
+        let mut prefs = Prefs::default();
+        let mut o = AdminOptions::default();
+        o.addon_settings.insert("tier:tt_ammo".into(), V::Int(2));
+        o.addon_settings
+            .insert("tier:tt_display".into(), V::Bool(false));
+        o.addon_settings
+            .insert("tier:tt_name".into(), V::Text("1 \"two\"".into()));
+        options_to_prefs(&o, &mut prefs);
+        assert_eq!(prefs.get("$Pref::Server::AddOn::tier::tt_ammo"), Some("2"));
+        assert_eq!(options_from_prefs(&prefs), o);
+        o.addon_settings.remove("tier:tt_ammo");
+        options_to_prefs(&o, &mut prefs);
+        assert_eq!(prefs.get("$Pref::Server::AddOn::tier::tt_ammo"), None);
+        assert_eq!(options_from_prefs(&prefs), o);
+        prefs.set("$Pref::Server::AddOn::tier::tt_bad", "not json");
+        assert_eq!(
+            options_from_prefs(&prefs),
+            o,
+            "an unreadable value is left out"
+        );
     }
 }

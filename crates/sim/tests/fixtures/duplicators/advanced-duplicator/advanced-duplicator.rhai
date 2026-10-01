@@ -81,6 +81,17 @@ fn cmd_cuteach(player) {
     cut_copy(player, #{ each: true });
 }
 
+// The player's ghost brick mirrored east to west, or upside down.
+fn cmd_mirghostx(player) {
+    if player(player).ghost {
+        mirror_ghost(player, "x", "That brick has no mirror image");
+    }
+}
+
+fn cmd_mirghosty(player) {
+    mirror_ghost(player, "y", "That brick has no image upside down");
+}
+
 // Plants of the copy float, while its player is an administrator.
 fn cmd_floatadmin(player) {
     float_copy(player, true, #{ admin_only: true });

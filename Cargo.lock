@@ -384,6 +384,7 @@ name = "bri-admin"
 version = "0.1.0"
 dependencies = [
  "bri-content",
+ "bri-package",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
