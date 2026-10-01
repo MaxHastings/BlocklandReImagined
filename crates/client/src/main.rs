@@ -125,6 +125,12 @@ fn game() -> Result<()> {
             app.content.maps.len(),
             app.content.catalog.bricks.len()
         );
+        // The release gate reads the full list from logs/add-on-health.json.
+        let health = app.add_on_health();
+        println!(
+            "Add-On health: {}",
+            health.summary().unwrap_or_else(|| "no problems".into())
+        );
         return Ok(());
     }
     bri_crash::enable_dialogs();

@@ -66,6 +66,25 @@ pub fn view(root: &Path, discovery: &Discovery) -> AddOnsView {
     }
 }
 
+/// List under each row the problems [`crate::add_on_health`] found with
+/// that Add-On when the game last loaded, and sum them up in the notice.
+pub fn with_health(view: &mut AddOnsView, health: &crate::add_on_health::AddOnHealth) {
+    for row in &mut view.rows {
+        for line in health.lines_for(&row.id, &row.name) {
+            if !row.problems.contains(&line) {
+                row.problems.push(line);
+            }
+        }
+    }
+    if let Some(summary) = health.summary() {
+        view.notice = if view.notice.is_empty() {
+            summary
+        } else {
+            format!("{summary} {}", view.notice)
+        };
+    }
+}
+
 /// The Can't Join rows for a join refused over differing add-ons, named as
 /// the player's own list names them. `None` for any other failure.
 pub fn mismatch(root: &Path, reason: &str) -> Option<bri_ui::api::AddOnMismatch> {

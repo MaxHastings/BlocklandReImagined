@@ -651,9 +651,9 @@ fn imported_weapon_packs_merge_into_one_runtime_pack() {
     );
     // Explosions and damage types are still keyed by bare Torque name.
     assert!(
-        notes
-            .iter()
-            .any(|n| n.contains("explosion blasterexplosion is already declared")),
+        notes.iter().any(|n| n.add_on == "second"
+            && n.kind == bri_package::health::Kind::Explosion
+            && n.reference == "blasterexplosion"),
         "{notes:?}"
     );
     assert!(
@@ -717,9 +717,9 @@ fn imported_weapon_packs_merge_into_one_runtime_pack() {
             .contains_key("weapon_second_blaster:weapon/blasteritem")
     );
     assert!(
-        notes
-            .iter()
-            .any(|n| n.contains("image orphan:image/blasterimage dropped")),
+        notes.iter().any(|n| n.add_on == "orphan"
+            && n.kind == bri_package::health::Kind::Projectile
+            && n.used_by == "image orphan:image/blasterimage"),
         "{notes:?}"
     );
     std::fs::remove_dir_all(first.parent().unwrap()).unwrap();
