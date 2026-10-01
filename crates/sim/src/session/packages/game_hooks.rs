@@ -651,6 +651,23 @@ impl Session {
         self.dirty.insert(brick);
         Ok(())
     }
+    /// `set_brick_shown`: whether a brick draws, collides and stops rays,
+    /// as v20's `setRendering`, `setColliding` and `setRayCasting`.
+    pub(in crate::session) fn package_set_brick_shown(
+        &mut self,
+        brick: BrickId,
+        [rendering, colliding, raycasting]: [bool; 3],
+        caller: Option<OwnerId>,
+    ) -> Result<()> {
+        self.package_may_edit(brick, caller)?;
+        self.simulation.mutate(brick, |b| {
+            b.visible = rendering;
+            b.colliding = colliding;
+            b.raycast = raycasting;
+        })?;
+        self.dirty.insert(brick);
+        Ok(())
+    }
     /// `set_brick_item`: the item a brick holds out, as v20's
     /// `fxDTSBrick::setItem`. The brick must be the world's or one the
     /// calling player has full trust on.

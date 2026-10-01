@@ -854,6 +854,17 @@ pub(super) fn register(engine: &mut Engine) {
             color: palette_index(&color)?,
         })
     });
+    engine.register_fn(
+        "set_brick_shown",
+        |brick: Dynamic, rendering: bool, colliding: bool, raycasting: bool| {
+            push(Op::SetBrickShown {
+                brick: id(&brick)?,
+                rendering,
+                colliding,
+                raycasting,
+            })
+        },
+    );
     engine.register_fn("set_zone_period", |zone: i64, period_ms: i64| {
         push(Op::SetZonePeriod {
             zone: u32::try_from(zone).map_err(|_| "a zone is its index in behaviour.json's zones")?,

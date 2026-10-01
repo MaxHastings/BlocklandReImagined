@@ -1138,6 +1138,16 @@ pub enum Op {
         brick: u64,
         color: u8,
     },
+    /// Whether a brick draws, collides and stops rays
+    /// (`setRendering`, `setColliding`, `setRayCasting` from a game's
+    /// script: Slayer's path nodes hiding as they are planted). The same
+    /// bricks as [`Op::SetBrickColor`].
+    SetBrickShown {
+        brick: u64,
+        rendering: bool,
+        colliding: bool,
+        raycasting: bool,
+    },
     /// Keep `value` on a brick as this package's `key`, or clear it with
     /// `None`: a v20 script's dynamic field on a brick (Slayer's
     /// `isLocked[color]`). Every package reads it with `brick_field`; it
@@ -1691,7 +1701,9 @@ impl Op {
             | Self::RemoveBot { .. }
             | Self::RestBot { .. }
             | Self::BotTool { .. } => "bots",
-            Self::SetBrickItem { .. } | Self::SetBrickColor { .. } => "world.edit",
+            Self::SetBrickItem { .. } | Self::SetBrickColor { .. } | Self::SetBrickShown { .. } => {
+                "world.edit"
+            }
             Self::FireBrickInput { .. }
             | Self::FireGameInput { .. }
             | Self::SetBrickField { .. } => "brick_events",
@@ -2203,7 +2215,7 @@ impl Op {
             }
             Self::SetScore { value, .. } => value.abs() <= MAX_SCORE,
             Self::SetBrickItem { item: id, .. } => id.as_deref().is_none_or(item),
-            Self::SetBrickColor { .. } => true,
+            Self::SetBrickColor { .. } | Self::SetBrickShown { .. } => true,
             Self::SetBrickField { key, .. } => is_brick_field_key(key),
             Self::NameDrop { text, .. } => text.as_deref().is_none_or(|t| {
                 t.chars().count() <= bri_weapons::MAX_DROP_NAME && !t.chars().any(char::is_control)
@@ -2390,6 +2402,7 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::SetSetting { team: Some(_), .. } => "set_team_setting",
         Op::SetBrickItem { .. } => "set_brick_item",
         Op::SetBrickColor { .. } => "set_brick_color",
+        Op::SetBrickShown { .. } => "set_brick_shown",
         Op::SetBrickField { .. } => "set_brick_field",
         Op::NameDrop { .. } => "name_drop",
         Op::SetZonePeriod { .. } => "set_zone_period",

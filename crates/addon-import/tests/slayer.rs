@@ -54,6 +54,7 @@ const CAPTURE_POINTS: i64 = 25;
 const CP: &str = "gamemode_slayer:brick/brickslyrcpdata";
 const CP_TICK: usize = 12;
 const REGION: &str = "gamemode_slayer:brick/brickslyrregionboundarydata";
+const PATH_NODE: &str = "gamemode_slayer:brick/brickslyrbotpathnodedata";
 const CP_POINTS: i64 = 7;
 const RECOVERY_POINTS: i64 = 5;
 
@@ -202,6 +203,7 @@ fn definitions() -> Definitions {
             plate(TEAM_SPAWN, Special::SpawnPoint),
             plate(CP, Special::None),
             plate(REGION, Special::None),
+            plate(PATH_NODE, Special::None),
         ]
         .into(),
     }
@@ -2477,6 +2479,12 @@ fn slayer_bricks_say_whose_they_are_and_follow_paint_and_names() {
     g.plant(owner, REGION, 10.0, 10.0, 0);
     // Past the chat share the last reset's lines used.
     g.steps(600);
+
+    // A path node planted by hand goes out of sight and out of the way.
+    let node = g.plant(owner, PATH_NODE, 4.0, -4.0, 0);
+    g.steps(2);
+    let b = &g.s.simulation().state().bricks[&node];
+    assert!(!b.visible && !b.colliding && !b.raycast);
 
     // `/slayer reset` names who reset it; the game's own resets say it was.
     g.run(

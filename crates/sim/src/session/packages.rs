@@ -2604,6 +2604,12 @@ impl Session {
             Op::SetBrickColor { brick, color } => {
                 self.package_set_brick_color(brick, color, caller)
             }
+            Op::SetBrickShown {
+                brick,
+                rendering,
+                colliding,
+                raycasting,
+            } => self.package_set_brick_shown(brick, [rendering, colliding, raycasting], caller),
             Op::SetBrickField { brick, key, value } => {
                 self.package_set_brick_field(package, brick, &key, value)
             }
