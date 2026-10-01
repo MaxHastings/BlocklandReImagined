@@ -893,8 +893,9 @@ decides who goes through.
 | `linkPass` | Whether things pass through; the brick's collision becomes a frame around each opening | 0 |
 | `linkFrame` | Width of that frame, in world units: one number for every edge, or `"sides top bottom"` (the bottom is a sill bodies step over) | 0 |
 
-Each size of portal is its own kind, so a 1x4x5 never pairs with a
-1x8x10 of the same name. A big one costs no more to draw than a small one
+The Add-On also has a 1x8x10 (a Steel Ball or a jeep fits) and a
+1x20x12 (a tank, or the Stunt Plane wings and all). Each size of portal
+is its own kind, so a 1x4x5 never pairs with a 1x8x10 of the same name. A big one costs no more to draw than a small one
 the same size on screen: each view is drawn only over the part of the
 screen its opening covers.
 

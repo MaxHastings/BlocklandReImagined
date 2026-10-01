@@ -8373,5 +8373,12 @@ collision refused); `bri-sim --test portals vehicles::*` (the Steel Ball
 as its Add-On ships and a jeep-sized box go through the big portal at
 several offsets with speed and spin turned; the small one stops both);
 `bri-client portal_view::a_camera_ray_goes_on...`; convert `stretchSize`.
-Not checked here: whether the stock Tank fits 3.9 wide (needs the
-converted vehicle pack).
+Then Max: "i wanna drive a tank through one or a stunt plane". The Stunt
+Plane is 9.0 across the wings and 7.6 long (its Add-On's bounds), so the
+Add-On also has a **1x20x12 Portal**: 10 wide and 7.2 tall, 9.9 by 6.95
+inside. Only the plane's body collides (1.8 wide, as in v20), so it
+would squeeze through a smaller portal with its wings through the frame;
+the 1x20x12 fits it whole. `vehicles::the_stunt_plane_flies_through...`
+flies it at 40 and 80 through the biggest pair, speed, spin and turn
+kept. The stock Tank's size needs the converted vehicle pack, which this
+container lacks: the Gate measures it.

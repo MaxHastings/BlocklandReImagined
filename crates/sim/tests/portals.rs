@@ -15,11 +15,13 @@ use rapier3d::prelude::*;
 
 const PORTAL: &str = "portal";
 const BIG: &str = "big_portal";
+const HUGE: &str = "huge_portal";
 const WALL: &str = "wall";
 
 /// A 1x4x5 doorway (2 wide, 3 tall, half a unit deep) opening north and
 /// south through its middle, the same stretched to 1x8x10 (4 wide, 6 tall)
-/// as the Portal Add-On's big one is, and a 1x4x5 solid wall.
+/// and 1x20x12 (10 wide, 7.2 tall) as the Portal Add-On's bigger ones are,
+/// and a 1x4x5 solid wall.
 fn definitions() -> Definitions {
     let mesh = |id: &str| Mesh {
         schema_version: 1,
@@ -87,6 +89,8 @@ fn definitions() -> Definitions {
     let (portal_collision, portal_shape) = frame(PORTAL, &door);
     let big = door.stretched("door#8x1x30", [8, 1, 30]).unwrap();
     let (big_collision, big_shape) = frame(BIG, &big);
+    let huge = door.stretched("door#20x1x36", [20, 1, 36]).unwrap();
+    let (huge_collision, huge_shape) = frame(HUGE, &huge);
     let (wall_collision, wall_shape) = body(
         WALL,
         vec![Part::Box {
@@ -109,6 +113,10 @@ fn definitions() -> Definitions {
             (
                 BIG.to_string(),
                 definition(big, big_collision, big_shape, Some(link.clone())),
+            ),
+            (
+                HUGE.to_string(),
+                definition(huge, huge_collision, huge_shape, Some(link.clone())),
             ),
             (
                 PORTAL.to_string(),
@@ -553,6 +561,7 @@ mod vehicles {
     use std::collections::BTreeMap;
 
     const BALL: &str = "steel-ball-kit:vehicle/steelball";
+    const PLANE: &str = "vehicle_stunt_plane:vehicle/stuntplanevehicle";
     const JEEP: &str = "steel-ball-kit:vehicle/jeepbox";
 
     /// The Steel Ball as its Add-On ships it, and a jeep-sized box (2.8
@@ -585,20 +594,35 @@ mod vehicles {
         pack
     }
 
+    /// The Stunt Plane Add-On's plane: 9 across the wings, though only
+    /// its body (1.8 wide) collides, as in v20.
+    fn planes() -> Pack {
+        Pack::load(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../packages/imported/vehicle_stunt_plane/assets/vehicles.json"
+        ))
+        .unwrap()
+    }
+
     /// Two big portals and two small ones, all of one name: each size
-    /// pairs only with its own.
+    /// pairs only with its own. Two of the biggest stand in the air at
+    /// x = 60 and 100, the second turned.
     fn portals() -> Simulation {
         simulation(vec![
             brick(BIG, [0.0, 3.0, -4.25], 0, Some("Portal_a")),
             brick(BIG, [20.25, 3.0, -4.0], 1, Some("Portal_a")),
             brick(PORTAL, [-20.0, 1.5, -4.25], 0, Some("Portal_a")),
             brick(PORTAL, [-40.25, 1.5, -4.0], 1, Some("Portal_a")),
+            brick(HUGE, [60.0, 13.6, -4.25], 0, Some("Portal_a")),
+            brick(HUGE, [100.25, 13.6, -4.0], 1, Some("Portal_a")),
         ])
     }
 
+    type Motion = (Vec3, Vec3, glam::Quat);
     struct Run {
-        /// The carry made, with the motion just before and just after it.
-        carried: Option<(glam::Affine3A, [Vec3; 2], [Vec3; 2])>,
+        /// The carry made, with the motion (velocity, spin and turn) just
+        /// before and just after it.
+        carried: Option<(glam::Affine3A, Motion, Motion)>,
         centre: Vec3,
         velocity: Vec3,
     }
@@ -606,9 +630,9 @@ mod vehicles {
     /// `definition` sent at `velocity` from `at` for `ticks`, the host's
     /// order each tick: vehicles before, the world, vehicles after, then
     /// through any opening.
-    fn run(definition: &str, at: Vec3, velocity: Vec3, ticks: usize) -> Run {
+    fn run(pack: Pack, definition: &str, at: Vec3, velocity: Vec3, ticks: usize) -> Run {
         let mut sim = portals();
-        let mut world = VehiclesWorld::new(pack()).unwrap();
+        let mut world = VehiclesWorld::new(pack).unwrap();
         let id = VehicleId(1);
         world
             .spawn(
@@ -630,7 +654,11 @@ mod vehicles {
         world.set_velocity(&mut sim.physics, id, velocity.to_array()).unwrap();
         let motion = |world: &VehiclesWorld, sim: &Simulation| {
             let s = world.vehicle_snapshot(&sim.physics, id).unwrap();
-            [Vec3::from(s.velocity), Vec3::from(s.angular_velocity)]
+            (
+                Vec3::from(s.velocity),
+                Vec3::from(s.angular_velocity),
+                glam::Quat::from_array(s.transform.rotation),
+            )
         };
         let mut carried = None;
         for _ in 0..ticks {
@@ -650,11 +678,52 @@ mod vehicles {
             }
             world.drain_intents();
         }
-        let [velocity, _] = motion(&world, &sim);
+        let (velocity, _, _) = motion(&world, &sim);
         Run {
             carried,
             centre: world.centre(&sim.physics, id).unwrap(),
             velocity,
+        }
+    }
+
+    /// The run was carried, keeping its speed, spin and turn as the
+    /// portal turns them.
+    fn kept(run: &Run, definition: &str) {
+        let Some((carry, before, after)) = run.carried else {
+            panic!(
+                "{definition}: not carried, at {} going {}",
+                run.centre, run.velocity
+            );
+        };
+        let (_, turn, _) = carry.to_scale_rotation_translation();
+        assert!(after.0.distance(turn * before.0) < 1e-3, "{definition}: {before:?} {after:?}");
+        assert!(after.1.distance(turn * before.1) < 1e-3, "{definition}: {before:?} {after:?}");
+        assert!(after.2.dot(turn * before.2).abs() > 1.0 - 1e-5, "{definition}: turned wrong");
+    }
+
+    #[test]
+    fn the_stunt_plane_flies_through_the_biggest_portal_wings_and_all() {
+        let span = {
+            let p = planes();
+            let d = p.definitions.iter().find(|d| d.id == PLANE).unwrap();
+            d.bounds_max[0] - d.bounds_min[0]
+        };
+        // 9 across the wings; the opening is 9.9 wide inside its frame.
+        assert!((span - 9.0).abs() < 0.01, "{span}");
+        for across in [-0.3f32, 0.0, 0.4] {
+            for speed in [40.0f32, 80.0] {
+                // Flying level at the opening's middle height, nose first.
+                let at = Vec3::new(60.0 + across, 13.0, -4.25 + 6.0);
+                let run = run(planes(), PLANE, at, Vec3::new(0.0, 0.0, -speed), 60);
+                kept(&run, PLANE);
+                // Out of the partner at x = 100.25, flying +x.
+                assert!(
+                    run.centre.x > 103.0 && run.velocity.x > speed * 0.8,
+                    "{speed} at {across}: at {} going {}",
+                    run.centre,
+                    run.velocity
+                );
+            }
         }
     }
 
@@ -670,18 +739,8 @@ mod vehicles {
         for (definition, rest, speed, offsets) in cases {
             for across in offsets {
                 let at = Vec3::new(across, rest, -4.25 + 3.5);
-                let run = run(definition, at, Vec3::new(0.0, 0.0, -speed), 120);
-                let Some((carry, before, after)) = run.carried else {
-                    panic!(
-                        "{definition} at {across}: not carried, at {} going {}",
-                        run.centre, run.velocity
-                    );
-                };
-                let (_, turn, _) = carry.to_scale_rotation_translation();
-                // Speed and spin, turned by the portal.
-                for (b, a) in before.iter().zip(after) {
-                    assert!(a.distance(turn * *b) < 1e-3, "{definition}: {b} became {a}");
-                }
+                let run = run(pack(), definition, at, Vec3::new(0.0, 0.0, -speed), 120);
+                kept(&run, definition);
                 // Out of the north side of the partner at x = 20.25,
                 // going +x.
                 assert!(
@@ -698,7 +757,7 @@ mod vehicles {
     fn the_small_portal_stops_what_does_not_fit() {
         for (definition, rest, speed) in [(BALL, 1.26f32, 15.0f32), (JEEP, 1.7, 30.0)] {
             let at = Vec3::new(-20.0, rest, -4.25 + 3.5);
-            let run = run(definition, at, Vec3::new(0.0, 0.0, -speed), 120);
+            let run = run(pack(), definition, at, Vec3::new(0.0, 0.0, -speed), 120);
             assert!(run.carried.is_none(), "{definition} went through");
             assert!(run.centre.z > -4.25, "{definition}: at {}", run.centre);
         }
