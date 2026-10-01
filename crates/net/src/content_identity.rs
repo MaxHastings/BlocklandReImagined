@@ -647,10 +647,7 @@ mod tests {
                     ui_name: ui_name.into(),
                     image,
                     model: "source.dts".into(),
-                    icon: String::new(),
-                    can_drop: true,
-                    sport: false,
-                    hidden: false,
+                    ..Default::default()
                 },
             );
         }

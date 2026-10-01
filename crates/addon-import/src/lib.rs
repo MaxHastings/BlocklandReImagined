@@ -2806,7 +2806,24 @@ fn finish(mut cx: Ctx, opts: &Options, ports: &ports::Ports, code: &ports::Code)
         host: &cx.host,
         dependencies: &cx.dependency_projectiles,
     };
-    if let Some(port) = ports::apply(ports, &import, code, &cx.out) {
+    if let Some(mut port) = ports::apply(ports, &import, code, &cx.out) {
+        // A port reads what the Add-Ons it requires declare; say which
+        // were not beside it, as that is the usual cause.
+        let missing: Vec<&str> = cx
+            .report
+            .dependencies
+            .iter()
+            .filter(|d| d.status == "missing" && d.how.to_ascii_lowercase().contains("required"))
+            .map(|d| d.addon.as_str())
+            .collect();
+        if let Some(reason) = &mut port.reason
+            && !missing.is_empty()
+        {
+            reason.push_str(&format!(
+                " ({} it requires was not found: put it in the Add-Ons folder beside it, or give --reference a folder whose Add-Ons/ holds it)",
+                missing.join(", ")
+            ));
+        }
         for b in &mut cx.report.needs_behaviour {
             if port
                 .covers

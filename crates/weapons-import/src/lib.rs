@@ -507,6 +507,7 @@ fn item(d: &Definition, image: String) -> Item {
         can_drop: flag(d, "canDrop", true),
         sport: flag(d, "isSportBall", false),
         hidden: field(d, "uiName").trim().is_empty(),
+        ..Item::default()
     }
 }
 /// An `ItemData` with no `image`: picked up, held by nobody (an ammo box).

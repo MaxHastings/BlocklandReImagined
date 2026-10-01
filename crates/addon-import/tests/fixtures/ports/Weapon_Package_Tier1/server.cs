@@ -564,6 +564,13 @@ datablock ItemData(standinNineItem)
    TT_ammoPickup[0] = "9mm 30";
 };
 
+function standinNineItem::onAdd(%this, %obj)
+{
+   %obj.rotate = true;
+   %obj.setShapeName(getWord(%obj.TT_ammoPickup[0], 1));
+   Parent::onAdd(%this, %obj);
+}
+
 datablock ItemData(standinPileItem : standinNineItem)
 {
    uiName = "Stand-in Pile";

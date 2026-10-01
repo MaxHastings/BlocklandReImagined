@@ -1108,9 +1108,11 @@ impl App {
             }
         }
     }
-    /// `shot.kick`: shake this player's own view when they shoot, seen from
-    /// the shot itself (their hitscan tracer, or a new projectile of theirs),
-    /// so the kick costs nothing on the wire. One kick per hand per frame.
+    /// `shot.kick`: shake this player's own view when they shoot, and the
+    /// view of anyone within a kick's `radius` of another player's shot,
+    /// seen from the shot itself (a hitscan tracer, or a new projectile), so
+    /// the kick costs nothing on the wire. One kick per hand per frame.
+    #[allow(clippy::too_many_arguments)]
     fn view_kick(
         shot_kicks: &mut Vec<(u64, u8)>,
         kick_seen: &mut Option<u64>,
@@ -1118,23 +1120,25 @@ impl App {
         pack: &bri_weapons::Pack,
         weapons: &bri_sim::session::WeaponView,
         owner: bri_world::OwnerId,
+        muzzle: impl Fn(u64, u8) -> Option<Vec3>,
         seed: u64,
     ) {
-        let hands = crate::actor_effects::own_shots(
-            &std::mem::take(shot_kicks),
-            kick_seen,
-            weapons,
-            owner,
-        );
-        let Some(images) = weapons.images.get(&owner) else {
-            return;
-        };
-        for m in images {
-            if hands.get(usize::from(m.hand)) != Some(&true) {
+        let shots =
+            crate::actor_effects::new_shots(&std::mem::take(shot_kicks), kick_seen, weapons);
+        for shot in shots {
+            let Some(kick) = weapons
+                .images
+                .get(&shot.actor)
+                .and_then(|images| images.iter().find(|m| m.hand == shot.hand))
+                .and_then(|m| pack.images.get(&m.image)?.shot.as_ref()?.kick)
+            else {
                 continue;
-            }
-            if let Some(kick) = pack.images.get(&m.image).and_then(|i| i.shot.as_ref()?.kick) {
-                actor_effects.kick(kick, seed ^ u64::from(m.hand));
+            };
+            let seed = seed ^ shot.actor.rotate_left(8) ^ u64::from(shot.hand);
+            if shot.actor == owner {
+                actor_effects.kick(kick, seed);
+            } else if let Some(at) = shot.from.or_else(|| muzzle(shot.actor, shot.hand)) {
+                actor_effects.kick_near(kick, at, seed);
             }
         }
     }
@@ -5358,11 +5362,14 @@ pub fn name_opacity(distance: f32, fog_distance: f32, visible_distance: f32) -> 
 /// eye point (`verticalOffset` 0.85), hidden behind the map and raycasting
 /// bricks ([`crate::building::Building::name_visible`]), faded by
 /// [`name_opacity`] and drawn in the mini-game colour a member's player is
-/// given at spawn (`GameConnection::createPlayer`), white otherwise.
+/// given at spawn (`GameConnection::createPlayer`), white otherwise. Items
+/// with a `label` (v20's `setShapeName` on an item: an ammo box's count)
+/// show it the same way, in white, above where they lie.
 #[allow(clippy::too_many_arguments)]
 fn name_tags(
     view: &network::View,
     presented: &BTreeMap<bri_world::OwnerId, bri_sim::player::PlayerState>,
+    pack: &bri_weapons::Pack,
     building: Option<&crate::building::Building>,
     view_projection: glam::Mat4,
     camera: Vec3,
@@ -5373,6 +5380,30 @@ fn name_tags(
 ) -> Vec<bri_ui::api::NameTag> {
     const VERTICAL_OFFSET: f32 = 0.85;
     let mut tags = Vec::new();
+    let mut tag = |target: Vec3, text: String, color: [u8; 3]| {
+        let Some(opacity) = name_opacity(target.distance(camera), fog_distance, visible_distance)
+        else {
+            return;
+        };
+        if building.is_some_and(|b| !b.name_visible(camera, target).unwrap_or(true)) {
+            return;
+        }
+        let clip = view_projection * (target + Vec3::Y * VERTICAL_OFFSET).extend(1.0);
+        if clip.w <= 0.0 {
+            return;
+        }
+        let ndc = clip.truncate() / clip.w;
+        if ndc.x.abs() > 1.0 || ndc.y.abs() > 1.0 {
+            return;
+        }
+        tags.push(bri_ui::api::NameTag {
+            x: (ndc.x + 1.0) * 0.5 * size.0 / scale,
+            y: (1.0 - ndc.y) * 0.5 * size.1 / scale,
+            text,
+            opacity,
+            color,
+        });
+    };
     for (owner, name) in &view.names {
         if (*owner == view.owner && controlling_body)
             || !view.vitals.get(owner).is_some_and(|v| v.alive)
@@ -5382,35 +5413,26 @@ fn name_tags(
         let Some(state) = presented.get(owner) else {
             continue;
         };
-        let target = view.archetypes.eye(state);
-        let Some(opacity) = name_opacity(target.distance(camera), fog_distance, visible_distance)
-        else {
-            continue;
-        };
-        if building.is_some_and(|b| !b.name_visible(camera, target).unwrap_or(true)) {
-            continue;
-        }
-        let clip = view_projection * (target + Vec3::Y * VERTICAL_OFFSET).extend(1.0);
-        if clip.w <= 0.0 {
-            continue;
-        }
-        let ndc = clip.truncate() / clip.w;
-        if ndc.x.abs() > 1.0 || ndc.y.abs() > 1.0 {
-            continue;
-        }
         let color = view
             .minigames
             .iter()
             .find(|m| m.members.contains(owner))
             .and_then(|m| crate::minigame_ui::color_rgb(m.color))
             .unwrap_or([255; 3]);
-        tags.push(bri_ui::api::NameTag {
-            x: (ndc.x + 1.0) * 0.5 * size.0 / scale,
-            y: (1.0 - ndc.y) * 0.5 * size.1 / scale,
-            text: plain_chat(name),
-            opacity,
-            color,
-        });
+        tag(view.archetypes.eye(state), plain_chat(name), color);
+    }
+    let lying = view
+        .weapons
+        .static_items
+        .iter()
+        .map(|i| (i.item.as_str(), Vec3::from(i.position)))
+        .chain(view.weapons.drops.iter().map(|d| (d.item.as_str(), d.position)));
+    for (item, at) in lying {
+        if let Some(label) = pack.items.get(item).map(|i| &i.label)
+            && !label.is_empty()
+        {
+            tag(at, label.clone(), [255; 3]);
+        }
     }
     tags
 }
@@ -6391,6 +6413,7 @@ impl PlatformApp for App {
                     &self.content.weapons.pack,
                     &view.weapons,
                     view.owner,
+                    |actor, hand| self.world_items.held_muzzle(actor, hand),
                     self.animation_time.to_bits(),
                 );
             }
@@ -9421,6 +9444,7 @@ impl PlatformApp for App {
         self.ui.core.name_tags = name_tags(
             view,
             self.motion.presented(),
+            &self.content.weapons.pack,
             self.building.as_ref(),
             glam::Mat4::from_cols_array(&camera.view_projection),
             eye,

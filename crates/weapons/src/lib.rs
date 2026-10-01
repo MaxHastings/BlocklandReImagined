@@ -1008,7 +1008,8 @@ impl Slow {
 }
 /// [`Shot::kick`]: a Torque `CameraShake` on the shooter's own view, in
 /// its units (about 10 degrees of turn per unit of amplitude), fading out
-/// over `seconds`.
+/// over `seconds`. With a `radius`, players within it feel it too, weaker
+/// with distance as an explosion's shake (a v20 gun's recoil blast).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Kick {
@@ -1020,6 +1021,13 @@ pub struct Kick {
     /// 0.05 to 2.
     #[serde(default = "default_kick_seconds")]
     pub seconds: f32,
+    /// How far other players feel it, 0 to 100 units; 0 (the default)
+    /// shakes only the shooter.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub radius: f32,
+}
+fn is_zero_f32(n: &f32) -> bool {
+    *n == 0.0
 }
 fn default_kick_frequency() -> f32 {
     2.0
@@ -1191,6 +1199,11 @@ pub struct Item {
     /// or `/give` offers it, and it needs no `ui_name`.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub hidden: bool,
+    /// A name everyone sees above the item where it lies, as v20's
+    /// `setShapeName` on an item (an ammo box's round count): up to 32
+    /// characters.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub label: String,
 }
 impl Default for Item {
     fn default() -> Self {
@@ -1204,6 +1217,7 @@ impl Default for Item {
             can_drop: true,
             sport: false,
             hidden: false,
+            label: String::new(),
         }
     }
 }
@@ -1787,6 +1801,10 @@ impl Pack {
             );
         }
         for (id, item) in &self.items {
+            ensure!(
+                item.label.chars().count() <= 32 && !item.label.chars().any(char::is_control),
+                "Invalid label of item {id}: up to 32 characters"
+            );
             // An item with no image is picked up but held by nobody (an
             // ammo box, a health pack): equipping it mounts nothing.
             ensure!(
@@ -1861,6 +1879,7 @@ impl Pack {
                         (0.0..=1.0).contains(&k.amplitude)
                             && (0.1..=30.0).contains(&k.frequency)
                             && (0.05..=2.0).contains(&k.seconds)
+                            && (0.0..=100.0).contains(&k.radius)
                     })
                     && s.rested.as_ref().is_none_or(|r| {
                         (1..=1200).contains(&r.after_ticks) && (0.0..=1.0).contains(&r.spread)
@@ -1885,7 +1904,7 @@ impl Pack {
                 image.shot.as_ref().is_none_or(shot_ok),
                 "Invalid image shot {id}: 1 to 64 projectiles, spreads 0 to 1, recoil 0 to 100, \
                  moving_speed 0 to 50, scale 0.1 to 10, rested after 1 to 1200 ticks, kick amplitude 0 to 1, \
-                 frequency 0.1 to 30, seconds 0.05 to 2"
+                 frequency 0.1 to 30, seconds 0.05 to 2, radius 0 to 100"
             );
             ensure!(
                 image.state_shots.len() <= 8

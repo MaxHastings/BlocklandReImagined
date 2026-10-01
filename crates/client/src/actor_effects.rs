@@ -348,31 +348,56 @@ fn liquid_options(color: [f32; 4]) -> SourceOptions {
     }
 }
 
-/// Which of `owner`'s hands shot since the last frame, from what this
-/// client already sees: their hitscan `tracers` (actor, hand) and any
-/// projectile of theirs newer than `seen`, the newest id looked at (None
-/// before the first view, so whatever is already flying on joining is
-/// not a shot).
-pub fn own_shots(
+/// A shot this client saw fired since the last frame ([`new_shots`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SeenShot {
+    pub actor: u64,
+    pub hand: u8,
+    /// Where it left, for a projectile; a hitscan shot leaves the hand's
+    /// muzzle, which the caller draws.
+    pub from: Option<Vec3>,
+}
+
+/// Every hand that shot since the last frame, once each, from what this
+/// client already sees: hitscan `tracers` (actor, hand) and any projectile
+/// newer than `seen`, the newest id looked at (None before the first view,
+/// so whatever is already flying on joining is not a shot). A projectile is
+/// the first hand's shot.
+pub fn new_shots(
     tracers: &[(u64, u8)],
     seen: &mut Option<u64>,
     weapons: &bri_sim::session::WeaponView,
-    owner: u64,
-) -> [bool; 2] {
-    let mut hands = [false; 2];
-    for &(actor, hand) in tracers {
-        if actor == owner && usize::from(hand) < 2 {
-            hands[usize::from(hand)] = true;
+) -> Vec<SeenShot> {
+    let mut shots: Vec<SeenShot> = vec![];
+    let mut add = |shot: SeenShot| {
+        if shot.hand < 2
+            && shots.len() < 64
+            && !shots
+                .iter()
+                .any(|s| s.actor == shot.actor && s.hand == shot.hand)
+        {
+            shots.push(shot);
         }
+    };
+    for &(actor, hand) in tracers {
+        add(SeenShot {
+            actor,
+            hand,
+            from: None,
+        });
     }
-    if let Some(last) = *seen
-        && weapons.fired().any(|p| p.id > last && p.source.0 == owner)
-    {
-        hands[0] = true;
+    if let Some(last) = *seen {
+        for p in weapons.fired().filter(|p| p.id > last) {
+            add(SeenShot {
+                actor: p.source.0,
+                hand: 0,
+                from: Some(p.origin),
+            });
+        }
     }
     let newest = weapons.fired().map(|p| p.id).max().unwrap_or(0);
     *seen = Some(seen.unwrap_or(0).max(newest));
-    hands
+    shots
 }
 /// An explosion's `CameraShake`, amplitude fixed on first sight of the camera.
 struct Shake {
@@ -727,10 +752,11 @@ impl ActorEffects {
         for t in trails {
             match self.trails.get(&(t.vehicle, t.trail)) {
                 Some(&h) => self.world.update_source(h, t.transform)?,
-                None => match self
-                    .world
-                    .start_emitter(&t.emitter, t.transform, SourceOptions::default())
-                {
+                None => match self.world.start_emitter(
+                    &t.emitter,
+                    t.transform,
+                    SourceOptions::default(),
+                ) {
                     Ok(h) => {
                         self.trails.insert((t.vehicle, t.trail), h);
                     }
@@ -1019,6 +1045,24 @@ impl ActorEffects {
 
     /// A gun's `shot.kick` on the holder's own view: no distance falloff.
     pub fn kick(&mut self, kick: bri_weapons::Kick, seed: u64) {
+        let full = Some(Vec3::splat(kick.amplitude));
+        self.push_kick(kick, Vec3::ZERO, f32::INFINITY, full, seed);
+    }
+    /// Another player's `kick` with a radius, felt from `at` as an
+    /// explosion's shake there would be.
+    pub fn kick_near(&mut self, kick: bri_weapons::Kick, at: Vec3, seed: u64) {
+        if kick.radius > 0.0 {
+            self.push_kick(kick, at, kick.radius, None, seed);
+        }
+    }
+    fn push_kick(
+        &mut self,
+        kick: bri_weapons::Kick,
+        position: Vec3,
+        radius: f32,
+        amplitude: Option<Vec3>,
+        seed: u64,
+    ) {
         if self.shakes.len() >= 32 {
             return;
         }
@@ -1029,13 +1073,13 @@ impl ActorEffects {
                 frequency: [kick.frequency; 3],
                 amplitude: [kick.amplitude; 3],
                 seconds: kick.seconds,
-                radius: f32::INFINITY,
+                radius,
                 falloff: 10.0,
             },
-            position: Vec3::ZERO,
+            position,
             elapsed: 0.0,
             phase: Vec3::new(0.0, unit(16), unit(32)),
-            amplitude: Some(Vec3::splat(kick.amplitude)),
+            amplitude,
         });
     }
     /// The summed explosion shake for a camera at `eye`, in its own frame

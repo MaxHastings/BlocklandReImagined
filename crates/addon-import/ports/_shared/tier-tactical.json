@@ -478,6 +478,16 @@
       "set": {
         "headshot": true
       }
+    },
+    {
+      "on": "item",
+      "method": "onAdd",
+      "into": "item",
+      "pattern": "setShapeName\\(\\s*getWord\\(\\s*(?P<f>%obj\\.TT_ammoPickup\\[0\\])\\s*,\\s*1\\s*\\)\\s*\\)",
+      "set": {
+        "label": "{f|field|word1|text}"
+      },
+      "required_by": "setShapeName\\("
     }
   ],
   "rules": {

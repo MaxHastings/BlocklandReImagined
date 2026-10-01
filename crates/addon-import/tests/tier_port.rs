@@ -251,6 +251,16 @@ fn tier1_guns_get_magazines_hitscans_and_volleys() {
     // drop it, and no spawn list shows it.
     assert!(pack.items[&format!("{NS}:weapon/ammodroppeditem")].hidden);
     assert!(!pack.items[&format!("{NS}:weapon/standinnineitem")].hidden);
+    // `setShapeName(getWord(%obj.TT_ammoPickup[0], 1))`: the box shows
+    // its rounds; the pile names none.
+    assert_eq!(
+        pack.items[&format!("{NS}:weapon/standinnineitem")].label,
+        "30"
+    );
+    assert_eq!(
+        pack.items[&format!("{NS}:weapon/standinpileitem")].label,
+        ""
+    );
 
     // The pair fires both hands from one magazine of 4.
     let pair = image("standinpairimage");
@@ -704,9 +714,9 @@ fn tier1a_shotgun_knocks_back_and_the_nailgun_stays_hidden() {
     assert_eq!((shot.recoil, shot.recoil_vertical), (3.0, Some(3.0)));
     let kick = shot.kick.unwrap();
     assert_eq!(
-        (kick.amplitude, kick.frequency, kick.seconds),
-        (0.4, 4.0, 0.4),
-        "Tier 1's recoil projectile's shake"
+        (kick.amplitude, kick.frequency, kick.seconds, kick.radius),
+        (0.4, 4.0, 0.4, 10.0),
+        "Tier 1's recoil projectile's shake, felt within its radius"
     );
     assert_eq!(single.volleys.len(), 1);
     assert!(

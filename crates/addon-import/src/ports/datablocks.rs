@@ -320,12 +320,15 @@ fn groups(
 /// view kick of the projectile it names (its explosion's camera shake),
 /// `{group|sound}` the sound it names, `{group|projectile}` the projectile
 /// and `{group|image}` the image of this import, `{group|neg}` the number
-/// negated; `{group}` inside a longer
-/// string becomes its text.
+/// negated; before any of those, `field` reads the datablock's field the
+/// group names (`%obj.TT_ammoPickup[0]`'s value) and `word<N>` takes its
+/// Nth word, from 0 (`getWord`): `{f|field|word1}`; `text` keeps a value
+/// that reads as a number a string. `{group}` inside a
+/// longer string becomes its text.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ScriptRule {
-    /// Whose method: `image` (the default) or `projectile`.
+    /// Whose method: `image` (the default), `projectile` or `item`.
     #[serde(default = "image_owner")]
     pub on: String,
     /// The method (`onFire`, `damage`), several as `onFire|onFire2`; `*`
@@ -335,7 +338,8 @@ pub struct ScriptRule {
     /// is the image's `shot`, another state script's its entry in
     /// `state_shots`), `magazine`, `check` (the magazine's check for the
     /// state script: a gun's own `TT_onLoadCheck` or burst check) or
-    /// `state`; for a projectile: `projectile`. Either may go into `table`.
+    /// `state`; for a projectile: `projectile`; for an item: `item`. Any
+    /// may go into `table`.
     pub into: String,
     /// With `into: "table"`: the table's name, which the host rules use as
     /// `{{name}}`, a Rhai map from each image's or projectile's id to `set`.
@@ -369,8 +373,15 @@ pub struct ScriptReads {
 /// `owner::method` to body).
 pub fn scripts(rules: &[ScriptRule], weapons: &Value, code: &super::Code) -> Result<ScriptReads> {
     let bodies = &code.bodies;
+    let blocks = Datablocks::new(weapons, code);
+    let cx = |owner| Fill {
+        weapons,
+        code,
+        blocks: &blocks,
+        owner,
+    };
     let mut images = serde_json::Map::new();
-    let mut projectiles = serde_json::Map::new();
+    let mut sections: BTreeMap<&str, serde_json::Map<String, Value>> = BTreeMap::new();
     let mut tables: BTreeMap<String, serde_json::Map<String, Value>> = BTreeMap::new();
     for rule in rules {
         let re = super::pattern(&rule.pattern).context("a script rule's pattern")?;
@@ -385,15 +396,17 @@ pub fn scripts(rules: &[ScriptRule], weapons: &Value, code: &super::Code) -> Res
             // so the rules can always read it.
             tables.entry(rule.table.clone()).or_default();
         }
-        let image = match rule.on.as_str() {
-            "image" => true,
-            "projectile" => false,
-            other => bail!("a script rule is on `{other}`, not image or projectile"),
+        // The pack section of a projectile's or an item's methods.
+        let section = match rule.on.as_str() {
+            "image" => None,
+            "projectile" => Some("projectiles"),
+            "item" => Some("items"),
+            other => bail!("a script rule is on `{other}`, not image, projectile or item"),
         };
-        let targets: &[&str] = if image {
+        let targets: &[&str] = if section.is_none() {
             &["image", "shot", "magazine", "check", "state", "table"]
         } else {
-            &["projectile", "table"]
+            &[rule.on.as_str(), "table"]
         };
         ensure!(
             targets.contains(&rule.into.as_str()),
@@ -415,14 +428,15 @@ pub fn scripts(rules: &[ScriptRule], weapons: &Value, code: &super::Code) -> Res
             "a script rule's table `{}` is not a plain name",
             rule.table
         );
-        if !image {
+        if let Some(section) = section {
             ensure!(
                 !rule.method.split('|').any(|m| m == "*"),
-                "a projectile's script rule names its method"
+                "a {}'s script rule names its method",
+                rule.on
             );
             for method in rule.method.split('|').map(str::to_ascii_lowercase) {
-                for (id, projectile) in weapons["projectiles"].as_object().into_iter().flatten() {
-                    let name = projectile["name"].as_str().unwrap_or_default();
+                for (id, datablock) in weapons[section].as_object().into_iter().flatten() {
+                    let name = datablock["name"].as_str().unwrap_or_default();
                     let Some(body) =
                         bodies.get(&format!("{}::{method}", name.to_ascii_lowercase()))
                     else {
@@ -431,12 +445,12 @@ pub fn scripts(rules: &[ScriptRule], weapons: &Value, code: &super::Code) -> Res
                     let Some(values) = groups(&re, required.as_ref(), body, name, &method)? else {
                         continue;
                     };
-                    let set = fill(&rule.set, &values, weapons, code)
+                    let set = fill(&rule.set, &values, &cx(name))
                         .with_context(|| format!("{name}::{method}"))?;
                     let into = if rule.into == "table" {
                         tables.entry(rule.table.clone()).or_default()
                     } else {
-                        &mut projectiles
+                        sections.entry(section).or_default()
                     };
                     super::compose(into.entry(id.clone()).or_insert_with(|| json!({})), &set);
                 }
@@ -473,7 +487,7 @@ pub fn scripts(rules: &[ScriptRule], weapons: &Value, code: &super::Code) -> Res
                 let Some(values) = groups(&re, required.as_ref(), body, owner, &method)? else {
                     continue;
                 };
-                let set = fill(&rule.set, &values, weapons, code)
+                let set = fill(&rule.set, &values, &cx(owner))
                     .with_context(|| format!("{name}::{method}"))?;
                 if rule.into == "table" {
                     // A row with a field that names nothing is left out.
@@ -537,8 +551,8 @@ pub fn scripts(rules: &[ScriptRule], weapons: &Value, code: &super::Code) -> Res
         }
     }
     let mut patch = json!({ "images": images });
-    if !projectiles.is_empty() {
-        patch["projectiles"] = Value::Object(projectiles);
+    for (section, rows) in sections {
+        patch[section] = Value::Object(rows);
     }
     Ok(ScriptReads {
         patch,
@@ -550,21 +564,54 @@ pub fn scripts(rules: &[ScriptRule], weapons: &Value, code: &super::Code) -> Res
 }
 
 /// [`ScriptRule::set`] with its groups' values.
-fn fill(
-    v: &Value,
-    values: &BTreeMap<String, String>,
-    weapons: &Value,
-    code: &super::Code,
-) -> Result<Value> {
+/// What [`fill`] reads besides the groups: the pack, the code, and the
+/// datablock whose method matched, for `field`.
+struct Fill<'a> {
+    weapons: &'a Value,
+    code: &'a super::Code,
+    blocks: &'a Datablocks<'a>,
+    owner: &'a str,
+}
+
+fn fill(v: &Value, values: &BTreeMap<String, String>, cx: &Fill) -> Result<Value> {
+    let (weapons, code) = (cx.weapons, cx.code);
     Ok(match v {
         Value::String(s) if s.starts_with('{') && s.ends_with('}') && !s[1..].contains('{') => {
             let inner = &s[1..s.len() - 1];
-            let (group, filter) = inner.split_once('|').unwrap_or((inner, ""));
-            let value = values
+            let mut filters = inner.split('|');
+            let group = filters.next().unwrap_or_default();
+            let mut value = values
                 .get(group)
-                .with_context(|| format!("`{s}`: the pattern has no group `{group}`"))?;
+                .with_context(|| format!("`{s}`: the pattern has no group `{group}`"))?
+                .clone();
+            let mut filter = "";
+            for f in filters {
+                ensure!(filter.is_empty(), "`{s}`: `{filter}` comes last");
+                if f == "field" {
+                    // `%obj.TT_ammoPickup[0]`: the field the object has
+                    // from its datablock.
+                    let name = value.trim();
+                    let name = name.rsplit_once('.').map_or(name, |(_, f)| f);
+                    value = cx
+                        .blocks
+                        .field(cx.owner, name)
+                        .with_context(|| format!("`{s}`: {} has no `{name}`", cx.owner))?
+                        .to_owned();
+                } else if let Some(n) = f.strip_prefix("word").and_then(|n| n.parse().ok()) {
+                    value = value
+                        .split_whitespace()
+                        .nth(n)
+                        .with_context(|| format!("`{s}`: `{value}` has no word {n}"))?
+                        .to_owned();
+                } else {
+                    filter = f;
+                }
+            }
+            let value = &value;
             match filter {
                 "" => value_of(value),
+                // As text even when it reads as a number (a label).
+                "text" => json!(value),
                 // A push the script wrote as negative (`TT_knockback(%obj,
                 // -4, ...)`), as the speed taken off.
                 "neg" => {
@@ -603,7 +650,7 @@ fn fill(
                     .map_or(Value::Null, |id| json!(id)),
                 other => {
                     bail!(
-                        "`{s}`: no filter `{other}` (neg, ticks, kick, sound, projectile, image or archetype)"
+                        "`{s}`: no filter `{other}` (field, word<N>, text, neg, ticks, kick, sound, projectile, image or archetype)"
                     )
                 }
             }
@@ -617,12 +664,12 @@ fn fill(
         }
         Value::Object(m) => Value::Object(
             m.iter()
-                .map(|(k, v)| Ok((k.clone(), fill(v, values, weapons, code)?)))
+                .map(|(k, v)| Ok((k.clone(), fill(v, values, cx)?)))
                 .collect::<Result<_>>()?,
         ),
         Value::Array(a) => Value::Array(
             a.iter()
-                .map(|v| fill(v, values, weapons, code))
+                .map(|v| fill(v, values, cx))
                 .collect::<Result<_>>()?,
         ),
         other => other.clone(),
@@ -641,9 +688,11 @@ fn value_of(text: &str) -> Value {
     }
 }
 
-/// The view kick of the projectile `name`'s explosion: its camera shake,
-/// the largest of its amplitudes and frequencies.
-fn kick(weapons: &Value, name: &str) -> Option<Value> {
+/// The view kick of the projectile `name`'s explosion (a recoil blast):
+/// its camera shake, the largest of its amplitudes and frequencies, and
+/// its radius, within which other players feel it too. None when it does
+/// not shake.
+pub(super) fn kick(weapons: &Value, name: &str) -> Option<Value> {
     let id = id_of(weapons, "ProjectileData", name)?;
     let effect = weapons["projectiles"][&id]["explosion"]["effect"].as_str()?;
     let (_, explosion) = weapons["explosions"]
@@ -658,10 +707,16 @@ fn kick(weapons: &Value, name: &str) -> Option<Value> {
             .filter_map(Value::as_f64)
             .reduce(f64::max)
     };
+    let amplitude = most("amplitude")?;
+    let seconds = shake["seconds"].as_f64()?;
+    if amplitude <= 0.0 || seconds <= 0.0 {
+        return None;
+    }
     Some(json!({
-        "amplitude": most("amplitude")?.clamp(0.0, 1.0),
+        "amplitude": amplitude.min(1.0),
         "frequency": most("frequency")?.clamp(0.1, 30.0),
-        "seconds": shake["seconds"].as_f64()?.clamp(0.05, 2.0),
+        "seconds": seconds.clamp(0.05, 2.0),
+        "radius": shake["radius"].as_f64().unwrap_or(0.0).clamp(0.0, 100.0),
     }))
 }
 

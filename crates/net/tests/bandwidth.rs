@@ -95,6 +95,8 @@ fn rocket_pack() -> bri_weapons::Pack {
         can_drop: true,
         sport: false,
         hidden: false,
+
+        label: String::new(),
     };
     let projectile = bri_weapons::ProjectileDef {
         id: ROCKET_PROJECTILE.into(),

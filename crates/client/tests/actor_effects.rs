@@ -657,6 +657,7 @@ fn a_guns_kick_shakes_the_holders_view_and_fades() -> Result<()> {
         amplitude: 0.5,
         frequency: 2.0,
         seconds: 0.5,
+        radius: 0.0,
     };
     fx.kick(kick, 7);
     let head = |_: Anchor| Some(Mat4::IDENTITY);
@@ -677,9 +678,45 @@ fn a_guns_kick_shakes_the_holders_view_and_fades() -> Result<()> {
     Ok(())
 }
 
+/// Another player's recoil blast shakes a view within its radius, less
+/// the farther it is, and not at all beyond it or without a radius.
 #[test]
-fn only_this_players_own_new_shots_kick() {
-    use bri_client::actor_effects::own_shots;
+fn a_kick_with_a_radius_shakes_nearby_views() -> Result<()> {
+    let kick = bri_weapons::Kick {
+        amplitude: 0.5,
+        frequency: 2.0,
+        seconds: 0.5,
+        radius: 10.0,
+    };
+    let felt = |kick: bri_weapons::Kick, eye: Vec3| -> Result<f32> {
+        let mut fx = ActorEffects::new(effects(), weapons(), Default::default())?;
+        fx.kick_near(kick, Vec3::new(0.0, 0.0, 0.0), 7);
+        fx.advance(0.05, |_: Anchor| Some(Mat4::IDENTITY), &[], &[], &[])?;
+        Ok(fx.camera_shake(eye).length())
+    };
+    let close = felt(kick, Vec3::new(1.0, 0.0, 0.0))?;
+    let farther = felt(kick, Vec3::new(5.0, 0.0, 0.0))?;
+    assert!(close > farther && farther > 0.0, "{close} {farther}");
+    assert_eq!(
+        felt(kick, Vec3::new(10.5, 0.0, 0.0))?,
+        0.0,
+        "beyond its radius"
+    );
+    let own = bri_weapons::Kick {
+        radius: 0.0,
+        ..kick
+    };
+    assert_eq!(
+        felt(own, Vec3::new(1.0, 0.0, 0.0))?,
+        0.0,
+        "the shooter's alone"
+    );
+    Ok(())
+}
+
+#[test]
+fn each_hand_that_shot_kicks_once() {
+    use bri_client::actor_effects::{SeenShot, new_shots};
     let shot = |id: u64, source: u64| bri_weapons::Projectile {
         id,
         definition: "bullet".into(),
@@ -702,28 +739,31 @@ fn only_this_players_own_new_shots_kick() {
         ..Default::default()
     };
     let mut seen = None;
-    assert_eq!(
-        own_shots(&[], &mut seen, &view(vec![shot(5, 1)]), 1),
-        [false; 2],
+    let hands = |shots: Vec<SeenShot>| -> Vec<(u64, u8)> {
+        shots.iter().map(|s| (s.actor, s.hand)).collect()
+    };
+    assert!(
+        new_shots(&[], &mut seen, &view(vec![shot(5, 1)])).is_empty(),
         "already flying when this client joined"
     );
+    assert!(new_shots(&[], &mut seen, &view(vec![shot(5, 1)])).is_empty());
     assert_eq!(
-        own_shots(&[], &mut seen, &view(vec![shot(5, 1)]), 1),
-        [false; 2]
-    );
-    assert_eq!(
-        own_shots(&[], &mut seen, &view(vec![shot(5, 1), shot(6, 2)]), 1),
-        [false; 2],
+        hands(new_shots(
+            &[],
+            &mut seen,
+            &view(vec![shot(5, 1), shot(6, 2)])
+        )),
+        [(2, 0)],
         "someone else's shot"
     );
+    let pellets = new_shots(&[], &mut seen, &view(vec![shot(7, 1), shot(8, 1)]));
+    assert_eq!(hands(pellets.clone()), [(1, 0)], "two pellets, one kick");
+    assert_eq!(pellets[0].from, Some(Vec3::ZERO), "from where it left");
+    let rays = new_shots(&[(1, 1), (2, 0), (1, 1)], &mut seen, &view(vec![]));
     assert_eq!(
-        own_shots(&[], &mut seen, &view(vec![shot(7, 1), shot(8, 1)]), 1),
-        [true, false],
-        "two pellets, one kick"
-    );
-    assert_eq!(
-        own_shots(&[(1, 1), (2, 0)], &mut seen, &view(vec![]), 1),
-        [false, true],
+        hands(rays.clone()),
+        [(1, 1), (2, 0)],
         "the left gun's hitscan"
     );
+    assert_eq!(rays[0].from, None, "a ray leaves the muzzle");
 }

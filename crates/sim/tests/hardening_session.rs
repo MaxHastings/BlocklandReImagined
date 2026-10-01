@@ -185,11 +185,7 @@ fn tool_pack() -> bri_weapons::Pack {
                 name: format!("{stem}Item"),
                 ui_name: stem.into(),
                 image,
-                model: String::new(),
-                icon: String::new(),
-                can_drop: true,
-                sport: false,
-                hidden: false,
+                ..Default::default()
             },
         );
     }

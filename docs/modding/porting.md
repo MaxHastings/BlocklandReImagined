@@ -398,13 +398,13 @@ bodies, in order, a later rule's fields winning:
 
 | Field | Meaning |
 |---|---|
-| `on` | `image` (the default) or `projectile`: whose methods |
+| `on` | `image` (the default), `projectile` or `item`: whose methods |
 | `method` | the method (`onFire`, `damage`), several as `onFire\|onFire2`, or `*` for every state script of an image, also with others (`*\|onMount` for a method no state runs) |
-| `into` | for an image: `image`, `shot` (the shot the method fires: `onFire`'s is the image's `shot`, another state script's is its `state_shots` entry), `magazine`, `check` (the magazine's `checks` entry for that script, as the states spell it: a check that `spend`s a round as it loads, or `keeps_reload`) or `state` (each state running the method); for a projectile: `projectile`. Either can fill a `table` instead |
+| `into` | for an image: `image`, `shot` (the shot the method fires: `onFire`'s is the image's `shot`, another state script's is its `state_shots` entry), `magazine`, `check` (the magazine's `checks` entry for that script, as the states spell it: a check that `spend`s a round as it loads, or `keeps_reload`) or `state` (each state running the method); for a projectile: `projectile`; for an item: `item` (an ammo box's `label`). Any can fill a `table` instead |
 | `table` | with `into: "table"`: the rules' `{{name}}`, a Rhai map from each image's or projectile's id to its `set` |
 | `pattern` | a case-insensitive regex; its named groups fill `set` |
 | `required_by` | when a body matches this but not `pattern`, the port stops and names the image, so a copy that does the same some other way is not guessed |
-| `set` | a merge patch: `"{group}"` becomes the group's value (a number when it reads as one), `"{group\|neg}"` that number negated (a push the script wrote as negative), `"{group\|projectile}"`, `"{group\|image}"` and `"{group\|sound}"` the import's datablock it names, `"{group\|kick}"` the camera shake of the explosion a projectile names (this Add-On's, or one it depends on); a `null` removes a field |
+| `set` | a merge patch: `"{group}"` becomes the group's value (a number when it reads as one; `"{group\|text}"` keeps it text), `"{group\|field}"` the value of the datablock field the group names (`%obj.TT_ammoPickup[0]`), `"{group\|word1}"` its second word (`getWord`), filters in that order, `"{group\|neg}"` that number negated (a push the script wrote as negative), `"{group\|projectile}"`, `"{group\|image}"` and `"{group\|sound}"` the import's datablock it names, `"{group\|kick}"` the camera shake of the explosion a projectile names (this Add-On's, or one it depends on); a `null` removes a field |
 | `keep` | with `state`: only fields the state leaves empty |
 
 Every reader here follows a datablock's parents into the Add-Ons it

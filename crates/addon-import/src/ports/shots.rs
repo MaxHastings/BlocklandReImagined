@@ -437,7 +437,7 @@ fn scripted(image: &Value, weapons: &Value, bodies: &super::Bodies) -> Value {
         }
         if let Some(kick) = blast_re
             .captures(&body)
-            .and_then(|c| kick_of(weapons, &c[1]))
+            .and_then(|c| super::datablocks::kick(weapons, &c[1]))
         {
             if script == "onfire" {
                 patch["shot"] = json!({ "kick": kick });
@@ -450,34 +450,6 @@ fn scripted(image: &Value, weapons: &Value, bodies: &super::Bodies) -> Value {
         patch["states"] = Value::Array(changed);
     }
     patch
-}
-
-/// The camera shake of a recoil blast's explosion, as a shot's `kick`.
-fn kick_of(weapons: &Value, projectile: &str) -> Option<Value> {
-    let id = id_of(weapons, "ProjectileData", projectile)?;
-    let effect = weapons["projectiles"][&id]["explosion"]["effect"].as_str()?;
-    let shake = &weapons["explosions"][&effect.to_ascii_lowercase()]["shake"];
-    let numbers = |v: &Value| -> Vec<f32> {
-        v.as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|n| n.as_f64().map(|n| n as f32))
-            .collect()
-    };
-    let amplitude = numbers(&shake["amplitude"])
-        .into_iter()
-        .fold(0.0f32, f32::max);
-    let frequency = numbers(&shake["frequency"]);
-    let seconds = shake["seconds"].as_f64()? as f32;
-    if amplitude <= 0.0 || frequency.is_empty() || seconds <= 0.0 {
-        return None;
-    }
-    let frequency = frequency.iter().sum::<f32>() / frequency.len() as f32;
-    Some(json!({
-        "amplitude": amplitude.min(1.0),
-        "frequency": frequency.clamp(0.1, 30.0),
-        "seconds": seconds.clamp(0.05, 2.0),
-    }))
 }
 
 /// The hitscan guns' shots and projectiles from their image fields.

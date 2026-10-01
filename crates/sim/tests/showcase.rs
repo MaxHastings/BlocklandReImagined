@@ -1452,11 +1452,7 @@ fn add_launcher(
         name: "rocketLauncherItem".into(),
         ui_name: "Rocket L.".into(),
         image: image_id.clone(),
-        model: String::new(),
-        icon: String::new(),
-        can_drop: true,
-        sport: false,
-        hidden: false,
+        ..Default::default()
     };
     let projectile = bri_weapons::ProjectileDef {
         id: projectile_id.clone(),
