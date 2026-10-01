@@ -1072,11 +1072,22 @@ impl App {
             })
             .collect();
         actor_effects.update_jet_dust(&dust)?;
+        // A wreck burns with its own damage emitters, from the replicated
+        // destroyed state alone.
         let burning: Vec<_> = view
             .vehicles
             .values()
             .filter(|info| info.destroyed)
-            .filter_map(|info| Some((info.id, body(info.id)?)))
+            .filter_map(|info| {
+                let at = body(info.id)?;
+                let d = vehicle_assets.definition(&info.definition)?;
+                Some(
+                    d.wreck_emitters()
+                        .into_iter()
+                        .map(move |e| (info.id, e, at)),
+                )
+            })
+            .flatten()
             .collect();
         let pose = |anchor| match anchor {
             crate::actor_effects::Anchor::Actor { actor, mount } => avatars

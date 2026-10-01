@@ -1211,11 +1211,8 @@ impl VehiclesWorld {
             if let Some(damage) = &mut v.turret_damage {
                 *damage = 250.;
             }
-            self.intents.push(Intent::Effect {
-                vehicle: id,
-                id: "VehicleBurnEmitter".into(),
-                active: true,
-            });
+            // The wreck's fire is drawn from the replicated destroyed state
+            // (`Definition::wreck_emitters`); no cue is sent for it.
             self.intents.push(Intent::Animation {
                 vehicle: id,
                 id: "death1".into(),

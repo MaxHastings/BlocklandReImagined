@@ -8282,6 +8282,27 @@ bri-package-runtime, bri-package, the bri-client lib and the touched bri-sim
 suites pass. Suites needing generated `content/` could not run in the
 cloud. No protocol change.
 
+Max: destroyed vehicles "would turn black right away when on fire" in v20,
+ours kept their colour. Confirmed from the recovered core scripts (read on
+the PC, never run): `WheeledVehicleData::Damage` (18821) and
+`FlyingVehicleData::Damage` (18910) paint every node black at `maxDamage`
+and swap the tires for `emptyTire`; the Tank's own destroy code blackens
+its turret too. Full step-by-step table in
+`docs/audits/vehicle-destruction.md`.
+- `Definition::wreck_color`: black for every Wheeled, Flying and Ball
+  vehicle, Add-On vehicles included; PlayerData mounts keep their colour.
+- The client paints body, turret and animated parts with it while the
+  replicated `destroyed` flag is set, and draws no wheels on a wreck. No
+  wire or protocol change.
+- Accepted gap: v20 also burns in the last 1% of health; health is not
+  replicated, so ours burns from destruction.
+- Wreck fire has one source: the replicated `destroyed` flag plus each
+  definition's `damageEmitter`s (`Definition::wreck_emitters`). The host's
+  burn cue at destruction is gone (one less cue on the wire); actor mounts
+  without damage emitters no longer burn; Add-On damage emitters import.
+- Tests: `bri-client` `vehicles::tests::a_destroyed_vehicle_is_drawn_black_without_its_tires`,
+  `only_vehicle_classes_char_and_player_mounts_keep_their_colour`,
+  `a_wreck_burns_with_its_own_damage_emitters`, `--test actor_effects`.
 ## 2026-09-30 Trench Warfare game mode (branch `claude/trench-warfare-eq4lxb`)
 
 Max asked for the classic Trench Warfare mode (Glass Add-On 829). That
