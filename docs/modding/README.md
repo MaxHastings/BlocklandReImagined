@@ -448,8 +448,8 @@ Add-On that depends on the rule, as `sample-points-hud` depends on
 - Colors are RGBA from 0 to 1.
 - `holding` (optional, up to 32) shows the panel only while the viewer
   holds one of these: an Add-On id (any of its images) or an image id.
-  The Adventure Pack's ammo panel lists `["adventure-pack"]`, so it
-  appears with one of its guns out and nowhere else.
+  An ammo panel listing `["my-guns"]` appears with one of that Add-On's
+  guns out and nowhere else.
 
 ## 5. Weapons
 
@@ -476,9 +476,7 @@ holds it. A `detail9999` detail is what the holder sees in first person
 and the lower details what everyone else sees, so an image state's
 `sequence` (the pick's `"fire"`) can swing the first-person copy alone.
 Its box is its bounds for dropping. `tools/make_trench_assets.py` writes the
-pick's and `tools/make_adventure_pack.py` the Adventure Pack's 33 (boxes
-and cylinders on one palette texture); `bri-addon-check` names a model or
-texture it cannot find.
+pick's; `bri-addon-check` names a model or texture it cannot find.
 
 An icon can instead be drawn from the item's own model on each player's
 machine, so it matches the stock icons without shipping a picture of

@@ -410,10 +410,7 @@ mod tests {
                 "trench-hud",
                 "trench-mode",
                 "fill-can-tool",
-                "fill-can",
-                "adventure-pack",
-                "adventure-pack-rules",
-                "adventure-pack-hud"
+                "fill-can"
             ]
         );
         let mut available: Vec<(String, String)> = PackageSet::base()
@@ -520,10 +517,7 @@ mod tests {
                 "trench-hud",
                 "trench-mode",
                 "fill-can-tool",
-                "fill-can",
-                "adventure-pack",
-                "adventure-pack-rules",
-                "adventure-pack-hud"
+                "fill-can"
             ]
         );
         assert!(done.listed.is_empty());

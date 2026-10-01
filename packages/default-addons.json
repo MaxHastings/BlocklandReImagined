@@ -38,9 +38,6 @@
     { "id": "trench-hud", "path": "trench-warfare/trench-hud", "enabled": false },
     { "id": "trench-mode", "path": "trench-warfare/trench-mode", "enabled": false },
     { "id": "fill-can-tool", "path": "fill-can/fill-can-tool", "enabled": false },
-    { "id": "fill-can", "path": "fill-can/fill-can", "enabled": false },
-    { "id": "adventure-pack", "path": "adventure/adventure-pack", "enabled": false },
-    { "id": "adventure-pack-rules", "path": "adventure/adventure-pack-rules", "enabled": false },
-    { "id": "adventure-pack-hud", "path": "adventure/adventure-pack-hud", "enabled": false }
+    { "id": "fill-can", "path": "fill-can/fill-can", "enabled": false }
   ]
 }

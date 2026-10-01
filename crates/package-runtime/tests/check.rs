@@ -218,18 +218,6 @@ fn stale_or_missing_item_presentation_warns_without_failing() {
     );
 }
 
-/// The Adventure Pack draws only its own models, so it checks without the
-/// borrowed-art warning, and its rules and ammo panel check with it.
-#[test]
-fn the_adventure_pack_checks_clean() {
-    let adventure = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/adventure");
-    for name in ["adventure-pack", "adventure-pack-rules", "adventure-pack-hud"] {
-        let report = check(&adventure.join(name));
-        assert!(report.ok, "{report}");
-        assert!(report.diagnostics.is_empty(), "{report}");
-    }
-}
-
 #[test]
 fn an_items_own_model_checks_and_a_missing_texture_is_named() {
     let kit = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

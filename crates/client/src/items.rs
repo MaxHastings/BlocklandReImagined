@@ -1554,32 +1554,6 @@ mod add_on_icon_tests {
         assert_eq!((item.as_str(), file.as_str()), ("gravity-gun-tool:weapon/gravitygun", "icons/gravity_gun.render.json"));
         assert_eq!(spec.pose_like, bri_weapons::runtime::PRINTER);
     }
-    /// A hand-written Add-On (the Adventure Pack) ships its own models
-    /// beside its weapons: `models/<name>.shape.json` and its palette
-    /// texture. Nothing is borrowed from the base game and nothing faults.
-    #[test]
-    fn a_hand_written_add_on_draws_its_own_models() {
-        let abs = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../packages/adventure/adventure-pack/assets")
-            .canonicalize()
-            .unwrap();
-        let weapons = std::fs::read(abs.join("weapons.json")).unwrap();
-        let pack = bri_weapons::Pack::from_json(&weapons).unwrap();
-        let mut manifest = empty();
-        let (mut added, mut faults) = (Added::default(), Vec::new());
-        let mut physics = ItemPhysicsCatalog { schema_version: 1, items: BTreeMap::new() };
-        present_gaps("Adventure Pack", &abs, &weapons, &pack, &mut manifest, &mut physics, &mut added, &mut faults);
-        assert!(!faults.iter().any(|f| f.contains("model")), "{faults:?}");
-        let item = &manifest.items["adventure-pack:weapon/revolver"];
-        let model = &manifest.models[&item.model];
-        assert!(added.origin.contains_key(&format!("model:{}", item.model)), "{:?}", added.origin.keys());
-        assert!(model.textures.iter().any(|t| manifest.textures.contains_key(t)), "{:?}", model.textures);
-        // Its image and round draw from its own files too.
-        assert!(manifest.images.contains_key("adventure-pack:image/revolver"));
-        let round = &manifest.projectiles["adventure-pack:projectile/servicepistol"];
-        assert!(manifest.models.contains_key(round.model.as_deref().unwrap()));
-    }
-
     /// The Trench Pick is a model of its own, not a borrowed one: a native
     /// model beside its `weapons.json` whose materials name the PNGs beside
     /// it, presented under the Add-On with its box as its bounds. Its icon
