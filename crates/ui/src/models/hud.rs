@@ -550,16 +550,25 @@ impl HudModel {
         true
     }
 
-    /// `useBricks` (key 1).
+    /// `useBricks` (key 1): the first brick in the bar, like 2-0 pick theirs.
+    ///
+    /// Deliberate change from v20 (`useBricks`@c:4380), which re-selected
+    /// the *current* slot: once another slot had been used, 1 never reached
+    /// the first brick and pressing it while holding a brick put the brick
+    /// away. The HUD hint "Press 1 or 2 3 ... 0 to use bricks" groups 1 with
+    /// the slot keys, so 1 now selects the first filled slot (an empty
+    /// first slot is skipped) and, like the other slot keys, a second press
+    /// deselects it. The wheel still returns to any other slot.
     pub fn use_bricks(&mut self, open_bsd_key: &str, out: &mut Outbox) {
         if self.building_disabled {
             out.center_prints
                 .push(("\u{E005}Building is currently disabled.".into(), 2.0));
-        } else if let Some(c) = self.cur_brick.filter(|c| self.has_brick(*c)) {
-            self.direct_select_inv(c, open_bsd_key, out);
-        } else {
-            self.direct_select_inv(0, open_bsd_key, out);
+            return;
         }
+        let first = (0..NUM_BRICK_SLOTS)
+            .find(|&i| self.has_brick(i))
+            .unwrap_or(0);
+        self.direct_select_inv(first, open_bsd_key, out);
     }
 
     /// `scrollBricks` (c:4542).
@@ -940,6 +949,48 @@ mod tests {
         assert_eq!(h.mode, ScrollMode::None);
         assert!(!h.brick_active);
         assert_eq!(o.actions, vec![UiAction::UnUseTool]);
+    }
+
+    #[test]
+    fn use_bricks_always_selects_the_first_brick() {
+        // v20 re-selected the current slot, so after using slot 4 key 1
+        // never returned to the first brick (and a second press put the
+        // brick away instead).
+        let mut h = model();
+        let mut o = Outbox::default();
+        h.direct_select_inv(3, "B", &mut o);
+        o = Outbox::default();
+        h.use_bricks("B", &mut o);
+        assert_eq!(h.cur_brick, Some(0));
+        assert_eq!(h.mode, ScrollMode::Bricks);
+        assert_eq!(h.brick_name, "2x4");
+        assert_eq!(o.actions, vec![UiAction::UseBrickSlot { slot: 0 }]);
+
+        // From tool mode with slot 4 remembered, 1 still means slot 1.
+        h.direct_select_inv(3, "B", &mut o);
+        h.use_tools(&mut o);
+        o = Outbox::default();
+        h.use_bricks("B", &mut o);
+        assert_eq!(h.cur_brick, Some(0));
+        assert!(o.actions.contains(&UiAction::UseBrickSlot { slot: 0 }));
+
+        // Pressing it again deselects, like the other slot keys.
+        o = Outbox::default();
+        h.use_bricks("B", &mut o);
+        assert_eq!(h.mode, ScrollMode::None);
+        assert_eq!(o.actions, vec![UiAction::UnUseTool]);
+
+        // An empty first slot is skipped: the first brick in the bar wins,
+        // not the slot after the remembered one.
+        let mut b = vec![None; 10];
+        b[2] = brick("1x2");
+        b[6] = brick("1x6");
+        h.set_bricks(b);
+        h.direct_select_inv(6, "B", &mut Outbox::default());
+        o = Outbox::default();
+        h.use_bricks("B", &mut o);
+        assert_eq!(h.cur_brick, Some(2));
+        assert_eq!(o.actions, vec![UiAction::UseBrickSlot { slot: 2 }]);
     }
 
     #[test]
