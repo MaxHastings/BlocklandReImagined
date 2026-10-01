@@ -193,15 +193,14 @@
       "enabled": false,
       "original": {
         "addon": "Emote_Critical",
-        "title": "Critical",
+        "title": "Critical Hit Emote",
         "authors": [
-          "unread"
+          "Space Guy"
         ],
         "version": "1.0.0",
         "sha256": [
           "503b3d0d9744ed767ab3f536d54a2aef91825ffef9d939f2cc297f2fae7c1ec6"
-        ],
-        "withdrawn": "Held until its credit is read from the zip's description.txt"
+        ]
       }
     },
     {
