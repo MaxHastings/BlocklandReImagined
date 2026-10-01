@@ -8303,6 +8303,69 @@ its turret too. Full step-by-step table in
 - Tests: `bri-client` `vehicles::tests::a_destroyed_vehicle_is_drawn_black_without_its_tires`,
   `only_vehicle_classes_char_and_player_mounts_keep_their_colour`,
   `a_wreck_burns_with_its_own_damage_emitters`, `--test actor_effects`.
+## 2026-10-01 Riding seams for classic throw Add-Ons (branch `claude/project-thread-n5mlwe`, protocol 70, for v0.1.11)
+
+A modder (lpsroo) ported Nobot's Script_Nobotthrowmod and sent notes on the
+engine changes his port needed. Max: "The mounting part most imporant". His
+code was read as diagnosis only; the seams are built as general functions.
+
+Engine and script API:
+- `mount_object(mount, rider, node, can_dismount)` and
+  `unmount_object(rider)` (`physics`). A player rides another player on any
+  `mount<N>` node of the body model. The Blockhead's mount points come from
+  its model at host start (`shape_mount_points`, `set_body_mount_points`,
+  client and dedicated server), not from copied numbers. They are filled
+  into bodies drawn with `v20.shape.m` that declare none. `rideable` stays
+  false, so landing on a Blockhead still seats nobody.
+  - `can_dismount` false: jump does not get them off (v20 `canDismount`);
+    turning stays free.
+  - Riders stay seated through either body's archetype change or rescale.
+  - In-place unmount carries the mount's velocity.
+  - A command's player seats only on themselves, and only someone they may
+    move (`may_move`, as hold and push).
+- `on_activate(player)`: the empty-hand click (`Player::activateStuff`).
+  Returning true takes the click; else the stock activate runs.
+- `set_scale(p, s)` (0.2 to 5), `unmount_image(p)`, `set_look_limits(p, up,
+  down)` / `set_look_limits(p, ())` (`player`). Look limits replicate in
+  `Vitals::look_limits` (protocol 70) and reset on respawn.
+- Bots for rules: `bots()`, `player(bot)`, and `bot`, `bot_owner`, `riding`,
+  `seat` in player maps.
+- Bot fixes lpsroo reported, checked on main first:
+  - `player(bot)` returned `()`; now it reads the bot.
+  - A new bot got `on_join`/`on_loadout`/`on_spawn` before it was registered
+    as a bot. Bots now get no player hooks.
+  - A bot from your own brick may be moved by you inside a minigame too (it
+    already could outside). A held bot's brain rests.
+
+Client:
+- A thread-2 action started with empty hands (`armReadyBoth`) keeps
+  playing until the hand changes.
+- Absolute action clips (`armReadyBoth`, `death1`) are layered by priority
+  over locomotion instead of being refused as non-additive. Images that
+  follow the arm still sample the pose without actions (`unacted_nodes`).
+- A rule's look limits bound the arms and head when not on a vehicle.
+
+No bundled throw Add-On: Max picked "originals only" for classic Add-Ons,
+and Electrk's Player Throwing (Script_PlayerThrowing) as the one to port
+("Electrk's is fine"). Players import their own copy (Import Add-On) and a
+port in `crates/addon-import/ports` adds its behaviour on these seams. A
+rule using them lives only as a sim test fixture
+(`crates/sim/tests/fixtures/carry`): an empty-hand click lifts a player
+onto your left hand (mount 1) at 0.6 scale, limp, and the next throws them.
+
+Tests (content-free): `cargo test -p bri-sim --test carry_rules`.
+- Mount points from a synthetic model, with the gap rule.
+- Lift, locked jump, carry, throw ahead with velocity, size and body back.
+- Nobody lifted outside minigames; a dying holder drops the held player.
+- The builder lifts their own bot and a stranger cannot.
+- A new bot reaches no player hook. Mutation-checked: with the old join
+  path it sees `join:2 loadout:2 spawn:2`.
+- `bri-client` avatar test `absolute_actions_take_over_the_nodes_they_animate`
+  (needs the avatar pack, runs in the Gate).
+
+Not done: `mode.json` minigame block (Trench Warfare's is not on main yet).
+Only-Max check: once the Player Throwing port lands, import the original
+and lift and throw a friend or your own bot in a minigame.
 ## 2026-09-30 Trench Warfare game mode (branch `claude/trench-warfare-eq4lxb`)
 
 Max asked for the classic Trench Warfare mode (Glass Add-On 829). That
