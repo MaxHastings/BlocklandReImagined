@@ -430,6 +430,10 @@ pub struct App {
     /// The held tool's `wheel` command: while its trigger is held, it takes
     /// the mouse wheel (`UiUpdate::ToolWheel`).
     tool_wheel: Option<String>,
+    /// The aim takes the mouse wheel (`Controls::aim_takes_wheel`).
+    aim_wheel: bool,
+    /// The scope overlay shown (`ItemUi::scope_overlay`).
+    scope_overlay: Option<(u64, f32)>,
     cpu_terrain: Vec<Arc<bri_render::terrain_scene::TerrainScene>>,
     renderer: Option<crate::gpu_build::Building<SceneRenderer>>,
     effects: crate::effects::WorldEffects,
@@ -1041,7 +1045,6 @@ impl App {
         view: &network::View,
         presented: &BTreeMap<bri_world::OwnerId, bri_sim::player::PlayerState>,
         elapsed: f32,
-        hide_jets_of: Option<bri_world::OwnerId>,
         flare_visible: impl Fn(Vec3) -> Result<bool>,
         ground: impl Fn(Vec3, Vec3, f32) -> Option<(f32, Vec3)>,
     ) -> Result<()> {
@@ -1054,7 +1057,6 @@ impl App {
             .iter()
             .filter(|(owner, player)| {
                 player.jetting
-                    && hide_jets_of != Some(**owner)
                     && view
                         .vitals
                         .get(owner)
@@ -1716,6 +1718,8 @@ impl App {
             steering_sent: None,
             crosshair_hidden: false,
             tool_wheel: None,
+            aim_wheel: false,
+            scope_overlay: None,
             cpu_terrain: Vec::new(),
             renderer: None,
             effects,
@@ -2260,11 +2264,6 @@ impl App {
         passages: &bri_content::passage::Passages,
         drawn_offset: Option<Vec3>,
     ) -> Result<(Vec3, f32, f32, f32)> {
-        let passages = if controls.observer().is_some() {
-            &bri_content::passage::Passages::default()
-        } else {
-            passages
-        };
         let (eye, yaw, pitch, roll, boom) = Self::view_camera_here(
             controls,
             presented,
@@ -2277,7 +2276,13 @@ impl App {
             drawn_offset,
             passages,
         )?;
+        // A free camera flies through openings itself (`Controls::fly`); an
+        // orbit camera's boom went back through one, which turns its look.
         if controls.observer().is_some() {
+            let (yaw, pitch, roll) = match boom {
+                Some(carry) => crate::portal_view::carried_look((yaw, pitch, roll), &carry),
+                None => (yaw, pitch, roll),
+            };
             return Ok((eye, yaw, pitch, roll));
         }
         // A chase camera whose boom went through an opening is already
@@ -2699,7 +2704,7 @@ impl App {
             let mounted = mounted.iter().find(|m| m.hand == 0)?;
             pack.images.get(&mounted.image)
         });
-        self.controls.set_aim(image.and_then(|i| i.zoom));
+        self.controls.set_aim(image.and_then(|i| i.zoom.clone()));
         let hidden = image.is_some_and(|i| !i.crosshair) || self.controls.aim_hides_crosshair();
         if hidden != self.crosshair_hidden {
             self.crosshair_hidden = hidden;
@@ -2712,6 +2717,22 @@ impl App {
             .and_then(|i| i.commands.wheel.clone())
             .filter(|_| self.controls.observer().is_none() && !self.local_weapon_seat());
         claim_wheel(&mut self.ui, &mut self.tool_wheel, wheel);
+        // Aiming a scope with steps, the wheel zooms instead (`Zoom::levels`).
+        let aim_wheel = self.controls.aim_takes_wheel();
+        if aim_wheel != self.aim_wheel {
+            self.aim_wheel = aim_wheel;
+            self.ui.apply(UiUpdate::AimWheel(aim_wheel));
+        }
+        // A scope's picture while aiming from the eye (`Zoom::overlay`);
+        // the weapon itself is not drawn behind it.
+        let overlay = image
+            .filter(|_| self.controls.scope_overlay().is_some())
+            .and_then(|i| self.item_ui.scope_overlay(&i.id));
+        if overlay != self.scope_overlay {
+            self.scope_overlay = overlay;
+            self.world_items.set_scoped(overlay.is_some());
+            self.ui.apply(UiUpdate::ScopeOverlay(overlay));
+        }
     }
     /// Dead players watch their corpse from the orbit camera.
     fn third_person_view(&self) -> bool {
@@ -4740,6 +4761,10 @@ impl App {
                 view.world_revision,
                 &self.mirror_shapes,
             );
+            // One set of openings: the windows show where bodies go.
+            if let Some(collision) = self.motion.collision() {
+                self.mirror_index.link(collision.links(), &self.mirror_shapes);
+            }
         }
         if let Some(job) = &mut self.world_job
             && let Ok((source, revision, log, result)) = job.receiver.try_recv()
@@ -5323,16 +5348,15 @@ fn camera_eye(
     match controls.observer().map(|o| o.mode) {
         Some(ObserverMode::Free(position)) => Ok((position, None)),
         // `setOrbitMode(target, ..., 0, 8, 8)` from `Observer::setMode("Corpse")`.
-        Some(ObserverMode::Orbit(_) | ObserverMode::Drive(_)) => building
-            .camera_position(
-                controls
-                    .orbit_focus(presented, building.archetypes(), entities)
-                    .map(|focus| focus + drawn_offset.unwrap_or(Vec3::ZERO))
-                    .unwrap_or(own_eye),
-                forward,
-                8.0,
-            )
-            .map(|eye| (eye, None)),
+        // Its boom goes back through a portal behind the focus, as a chase
+        // camera's does.
+        Some(ObserverMode::Orbit(_) | ObserverMode::Drive(_)) => {
+            let focus = controls
+                .orbit_focus(presented, building.archetypes(), entities)
+                .map(|focus| focus + drawn_offset.unwrap_or(Vec3::ZERO))
+                .unwrap_or(own_eye);
+            building.camera_boom(focus, focus, forward, 8.0, passages)
+        }
         None => match chase {
             // A chase camera's boom from `own_eye`, its pivot, which rides
             // on the body at `from`.
@@ -6044,14 +6068,17 @@ impl LightVolumeState {
 }
 
 /// One frame of sprites from the three effect worlds, farthest first. Each
-/// world's snapshot is already sorted from `eye`, so they merge in one pass;
-/// equally distant sprites keep world order, as a stable sort of the three
-/// lists end to end would.
-fn combine_effect_frames(
+/// world's snapshot is already sorted from `eyes[0]`, so they merge in one
+/// pass; equally distant sprites keep world order, as a stable sort of the
+/// three lists end to end would. The lights every view shares are the ones
+/// nearest any of `eyes` ([`crate::views::eyes`]), so a mirror or portal
+/// keeps the lights beside what it shows.
+pub(crate) fn combine_effect_frames(
     mut world: bri_fx_runtime::FrameEffects,
     others: [bri_fx_runtime::FrameEffects; 2],
-    eye: Vec3,
+    eyes: &[Vec3],
 ) -> (bri_fx_runtime::FrameEffects, usize) {
+    let eye = eyes.first().copied().unwrap_or_default();
     let [weapon, actor] = others;
     let lists = [
         std::mem::take(&mut world.particles),
@@ -6079,10 +6106,14 @@ fn combine_effect_frames(
     world.particles = merged;
     world.lights.extend(weapon.lights);
     world.lights.extend(actor.lights);
-    world.lights.sort_by(|a, b| {
-        eye.distance_squared(a.position)
-            .total_cmp(&eye.distance_squared(b.position))
-    });
+    let nearest = |at: Vec3| {
+        eyes.iter()
+            .map(|e| e.distance_squared(at))
+            .fold(f32::INFINITY, f32::min)
+    };
+    world
+        .lights
+        .sort_by(|a, b| nearest(a.position).total_cmp(&nearest(b.position)));
     let deferred = world
         .lights
         .len()
@@ -6180,7 +6211,8 @@ impl PlatformApp for App {
         }
         let alive = self.local_alive();
         self.follow_control();
-        self.controls.fly(elapsed.as_secs_f32());
+        self.controls
+            .fly(elapsed.as_secs_f32(), &self.motion.passages());
         let prefs = &self.ui.core.prefs;
         self.controls.set_fov_prefs(
             bri_ui::screens::options::default_fov(prefs),
@@ -6201,6 +6233,7 @@ impl PlatformApp for App {
             });
         }
         self.update_held_weapon();
+        self.controls.advance_sway(elapsed.as_secs_f32());
         self.controls.advance_zoom(elapsed.as_secs_f32());
         self.controls.ease_roll(elapsed.as_secs_f32());
         self.controls.advance_view(elapsed.as_secs_f32());
@@ -6923,19 +6956,27 @@ impl PlatformApp for App {
                     self.avatar_action_images.remove(owner);
                 }
                 let mut ready_hands = Vec::new();
+                let mut hidden_nodes = Vec::new();
                 if let Some(images) = view.weapons.images.get(owner) {
                     for mounted in images {
+                        let image = self.content.weapons.pack.images.get(&mounted.image);
+                        if let Some(image) = image {
+                            hidden_nodes.extend(image.hide_nodes.iter().cloned());
+                        }
                         if let Some((right, left)) =
                             bri_weapons::scripted_arm_pose(&mounted.image, &mounted.state)
                         {
                             ready_hands.extend([(0, right), (1, left)]);
-                        } else if let Some(image) =
-                            self.content.weapons.pack.images.get(&mounted.image)
-                        {
-                            ready_hands.push((mounted.hand, image.arm_ready));
+                        } else if let Some(image) = image {
+                            if image.both_arms {
+                                ready_hands.extend([(0, true), (1, true)]);
+                            } else {
+                                ready_hands.push((mounted.hand, image.arm_ready));
+                            }
                         }
                     }
                 }
+                self.avatars.get_mut(owner).unwrap().set_hidden_nodes(hidden_nodes);
                 // `Player::startSkiing` shows the LSki/RSki nodes in the
                 // skier's paint colour, carried by the ski vehicle.
                 let skis = view
@@ -7169,6 +7210,17 @@ impl PlatformApp for App {
                 .actor_effects
                 .update_debris_trails(&self.explosion_debris.trails());
             self.cosmetic_faults.absorb("explosion debris", trails);
+            // Show Jets in First Person (`$pref::Player::renderMyJets`, off
+            // in v20): one's own jets stay out of one's own eye in first
+            // person, but mirrors and portals still show them.
+            let own_jets_hidden = !third_person
+                && !self
+                    .ui
+                    .core
+                    .prefs
+                    .bool_or("$pref::Player::renderMyJets", false);
+            self.actor_effects
+                .set_own_eye(own_jets_hidden.then_some(view.owner));
             let actors = Self::update_actor_effects(
                 &mut self.actor_effects,
                 &self.avatar_assets,
@@ -7178,15 +7230,6 @@ impl PlatformApp for App {
                 view,
                 presented,
                 game_elapsed.as_secs_f32(),
-                // Show Jets in First Person (`$pref::Player::renderMyJets`,
-                // off in v20): one's own jets only show in third person.
-                (!third_person
-                    && !self
-                        .ui
-                        .core
-                        .prefs
-                        .bool_or("$pref::Player::renderMyJets", false))
-                .then_some(view.owner),
                 // `fxLight::TestLOS` casts from the camera to the flare,
                 // ignoring the player carrying it.
                 |at| {
@@ -7800,6 +7843,9 @@ impl PlatformApp for App {
                     result
                 }
                 UiAction::Game(GameAction::ToolWheel { notches }) => {
+                    if self.controls.aim_wheel(notches) {
+                        continue;
+                    }
                     // The image's `wheel` command names "package:command".
                     let Some((package, command)) = self
                         .tool_wheel
@@ -8503,20 +8549,22 @@ impl PlatformApp for App {
         );
         let mut hidden = self.combat.hidden_bodies(&view.vitals);
         // Players whose archetype looks like a package model draw as it, in
-        // place of the Blockhead (not the local player in first person).
+        // place of the Blockhead; the local player's in first person only
+        // in other views (mirrors, portals), as the Blockhead does.
         let package_catalog = packages_for(&self.package_catalog, view);
         let mut package_placements: Vec<_> =
             crate::packages::entity_placements(self.ghosts.entities_at(view.tick, &view.entities))
                 .collect();
+        let mut own_package_body = None;
         if let Some(catalog) = package_catalog {
             for (owner, placement) in
                 crate::packages::body_placements(catalog, &view.archetypes, self.motion.presented())
             {
                 hidden.insert(owner);
-                if let Some(placement) = placement
-                    && (owner != view.owner || third_person)
-                {
-                    package_placements.push(placement);
+                match placement {
+                    Some(p) if owner == view.owner && !third_person => own_package_body = Some(p),
+                    Some(p) => package_placements.push(p),
+                    None => {}
                 }
             }
         }
@@ -8874,6 +8922,7 @@ impl PlatformApp for App {
             self.package_models.upload(
                 package_catalog,
                 package_placements,
+                own_package_body,
                 renderer,
                 frame.device,
                 frame.queue,
@@ -9188,6 +9237,31 @@ impl PlatformApp for App {
                 [frame.size.0, frame.size.1],
             );
         }
+        // Every other view this frame (mirror and portal planes, the
+        // environment probe's faces) and the eyes they all see from: the
+        // terrain tiles and effect lights every view shares cover them all.
+        let planes = self
+            .reflections
+            .as_ref()
+            .map(|r| r.plan().planes.clone())
+            .unwrap_or_default();
+        let probe_views = self
+            .environment_probe
+            .as_ref()
+            .map(|p| p.face_views())
+            .unwrap_or_default();
+        let weather_camera = self.weather.world.camera();
+        let other_views = crate::views::other_views(
+            &planes,
+            &probe_views,
+            &crate::views::PlayerCamera {
+                forward: weather_camera.forward,
+                right,
+                up,
+                velocity: weather_camera.velocity,
+            },
+        );
+        let eyes = crate::views::eyes(eye, &other_views);
         let rgb = |v: [f32; 4]| [v[0], v[1], v[2]];
         self.item_skins.prepare(
             frame.device,
@@ -9214,14 +9288,14 @@ impl PlatformApp for App {
             .snapshot_in_view(&effects_camera);
         let actor_frame = self.actor_effects.world().snapshot_in_view(&effects_camera);
         let (effects_frame, deferred_lights) =
-            combine_effect_frames(world_frame, [weapon_frame, actor_frame], eye);
+            combine_effect_frames(world_frame, [weapon_frame, actor_frame], &eyes);
         let (fog_start, fog_end) = if camera.atmosphere[3] > 0. {
             (camera.atmosphere[0], camera.atmosphere[1])
         } else {
             (cap, cap + 1.)
         };
         for terrain in &mut self.gpu_terrain {
-            terrain.update(frame.queue, eye, fog_end.max(1.))?;
+            terrain.update(frame.device, frame.queue, &eyes, fog_end.max(1.))?;
         }
         self.ui.core.name_tags = name_tags(
             view,
@@ -9276,139 +9350,30 @@ impl PlatformApp for App {
             effects_camera.view_projection,
             &self.weather.world.snapshot(),
         )?;
-        // Each live mirror sees the sprites, plants and weather from its
-        // reflected eye: its own culling and far-to-near order, and
-        // billboards turned to face it.
-        let planes = self
-            .reflections
-            .as_ref()
-            .map(|r| r.plan().planes.clone())
-            .unwrap_or_default();
-        let weather_camera = self.weather.world.camera();
-        for (i, plane) in planes.iter().enumerate() {
-            let view = 1 + i;
-            let turn = |v: Vec3| plane.reflect_direction(v);
-            let mirrored = bri_fx_runtime::Camera {
-                view_projection: plane.view_projection,
-                position: plane.eye,
-                right: turn(right),
-                up: turn(up),
-            };
-            let world_frame = self.effects.world.snapshot_in_view(&mirrored);
-            let weapon_frame = self.weapon_effects.world().snapshot_in_view(&mirrored);
-            let actor_frame = self.actor_effects.world().snapshot_in_view(&mirrored);
-            let (sprites, _) =
-                combine_effect_frames(world_frame, [weapon_frame, actor_frame], plane.eye);
-            effects_renderer.prepare_view(frame.device, frame.queue, view, &mirrored, &sprites)?;
-            self.foliage.prepare_view(
-                frame,
-                view,
-                &bri_foliage::Camera {
-                    position: plane.eye,
-                    right: turn(right),
-                    view_projection: plane.view_projection,
-                    visible_distance: fog_end.max(1.),
-                },
-                fog_start,
-                fog_end.max(fog_start + 0.001),
-            )?;
-            let drops = self
-                .weather
-                .world
-                .snapshot_from(&bri_weather::CameraState {
-                    position: plane.eye,
-                    forward: turn(weather_camera.forward),
-                    right: turn(weather_camera.right),
-                    up: turn(weather_camera.up),
-                    velocity: turn(weather_camera.velocity),
-                });
-            weather_renderer.prepare_view(
-                frame.device,
-                frame.queue,
-                view,
-                plane.view_projection,
-                &drops,
-            )?;
-            self.client_code.prepare_view(
-                frame.device,
-                frame.queue,
-                view,
-                plane.view_projection,
-                plane.eye,
-            );
-            self.item_skins.prepare_view(
-                frame.device,
-                frame.queue,
-                view,
-                plane.view_projection,
-                plane.eye,
-            );
+        // Each other view sees the sprites, plants, weather and Add-On
+        // layers from its own eye: its own culling and far-to-near order,
+        // and billboards turned to face it. The probe's faces also see the
+        // mirrors in them, so metal reflects the world the player sees.
+        let mut layers = crate::views::Layers {
+            effects: [
+                &self.effects.world,
+                self.weapon_effects.world(),
+                self.actor_effects.world(),
+            ],
+            sprites: &mut *effects_renderer,
+            foliage: &mut self.foliage,
+            weather: &self.weather.world,
+            drops: &mut *weather_renderer,
+            client_code: &mut self.client_code,
+            item_skins: &mut self.item_skins,
+            fog: (fog_start, fog_end),
+        };
+        for v in &other_views {
+            layers.prepare(frame, v)?;
         }
-        // The environment probe's faces see them too, and the mirrors in
-        // them, so metal reflects the world the player sees.
-        let probe_views = self
-            .environment_probe
-            .as_ref()
-            .map(|p| p.face_views())
-            .unwrap_or_default();
-        for face in &probe_views {
-            let camera = bri_fx_runtime::Camera {
-                view_projection: face.view_projection,
-                position: face.eye,
-                right: face.right,
-                up: face.up,
-            };
-            let world_frame = self.effects.world.snapshot_in_view(&camera);
-            let weapon_frame = self.weapon_effects.world().snapshot_in_view(&camera);
-            let actor_frame = self.actor_effects.world().snapshot_in_view(&camera);
-            let (sprites, _) =
-                combine_effect_frames(world_frame, [weapon_frame, actor_frame], face.eye);
-            effects_renderer.prepare_view(frame.device, frame.queue, face.view, &camera, &sprites)?;
-            self.foliage.prepare_view(
-                frame,
-                face.view,
-                &bri_foliage::Camera {
-                    position: face.eye,
-                    right: face.right,
-                    view_projection: face.view_projection,
-                    visible_distance: fog_end.max(1.),
-                },
-                fog_start,
-                fog_end.max(fog_start + 0.001),
-            )?;
-            let drops = self
-                .weather
-                .world
-                .snapshot_from(&bri_weather::CameraState {
-                    position: face.eye,
-                    forward: face.forward,
-                    right: face.right,
-                    up: face.up,
-                    velocity: Vec3::ZERO,
-                });
-            weather_renderer.prepare_view(
-                frame.device,
-                frame.queue,
-                face.view,
-                face.view_projection,
-                &drops,
-            )?;
-            self.client_code.prepare_view(
-                frame.device,
-                frame.queue,
-                face.view,
-                face.view_projection,
-                face.eye,
-            );
-            self.item_skins.prepare_view(
-                frame.device,
-                frame.queue,
-                face.view,
-                face.view_projection,
-                face.eye,
-            );
-            if let Some(reflections) = &mut self.reflections {
-                let size = bri_render::environment_probe::PROBE_SIZE;
+        if let Some(reflections) = &mut self.reflections {
+            let size = bri_render::environment_probe::PROBE_SIZE;
+            for face in &probe_views {
                 reflections.prepare_view(
                     frame.device,
                     frame.queue,
@@ -9531,6 +9496,7 @@ impl PlatformApp for App {
                 blocking.extend(self.debris_models.draws());
             }
             models.extend(self.package_models.draws());
+            models.extend(self.package_models.own_draws());
             // In the Unified modes the map's own walls shade objects from
             // the sun too (the map layer), so they are sunlit exactly where
             // the walls beside them are.
@@ -9559,6 +9525,7 @@ impl PlatformApp for App {
             let mut mirrored = self.world_items.reflection_draws();
             mirrored.extend(avatar_draws.iter().map(|(_, draw)| *draw));
             mirrored.extend(shared_draws.iter().copied());
+            mirrored.extend(self.package_models.own_draws());
             let (foliage, sprites, drops) = (&self.foliage, &*effects_renderer, &*weather_renderer);
             let (layers, skins) = (&self.client_code, &self.item_skins);
             // As the player's view draws them after the world.
@@ -9577,6 +9544,7 @@ impl PlatformApp for App {
             let mut around = self.world_items.reflection_draws();
             around.extend(avatar_draws.iter().map(|(_, draw)| *draw));
             around.extend(shared_draws.iter().copied());
+            around.extend(self.package_models.own_draws());
             let (foliage, sprites, drops) = (&self.foliage, &*effects_renderer, &*weather_renderer);
             let (layers, skins) = (&self.client_code, &self.item_skins);
             let late = |pass: &mut wgpu::RenderPass<'_>, view: usize| {
@@ -10623,12 +10591,22 @@ mod tests {
             particles: vec![],
             lights: vec![],
         };
-        let (combined, deferred) = super::combine_effect_frames(world, [weapon, actor], Vec3::ZERO);
+        let others = [weapon.clone(), actor.clone()];
+        let (combined, deferred) =
+            super::combine_effect_frames(world.clone(), others, &[Vec3::ZERO]);
         assert_eq!(combined.particles[0].texture, 2);
         assert_eq!(combined.particles[1].texture, 7);
         assert_eq!(combined.lights.len(), bri_render::scene::MAX_POINT_LIGHTS);
         assert_eq!(combined.lights[0].handle.0, 9000);
         assert_eq!(deferred, 1);
+        // A mirror's eye far down the row keeps the lights beside it: the
+        // farthest from the player is kept, the next nearest dropped.
+        let mirror = Vec3::new(1000. + bri_render::scene::MAX_POINT_LIGHTS as f32, 0., 0.);
+        let (combined, _) =
+            super::combine_effect_frames(world, [weapon, actor], &[Vec3::ZERO, mirror]);
+        let kept = |id: u64| combined.lights.iter().any(|l| l.handle.0 == id);
+        assert!(kept(9000) && kept(bri_render::scene::MAX_POINT_LIGHTS as u64 - 1));
+        assert!(!kept(0), "the light nearest neither eye goes");
     }
     #[test]
     fn remote_chat_cannot_inject_color_stack_or_markup() {

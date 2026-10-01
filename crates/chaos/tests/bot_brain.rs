@@ -121,9 +121,9 @@ fn bots(s: &Session) -> Vec<OwnerId> {
     s.names().keys().copied().filter(|o| s.is_bot(*o)).collect()
 }
 
-const HORSE: &str = "v20.vehicle.chaoshorse";
-const CANNON: &str = "v20.vehicle.chaoscannon";
-const JEEP: &str = "v20.vehicle.chaoswheeled";
+const HORSE: &str = bri_vehicles::testing::HORSE;
+const CANNON: &str = bri_vehicles::testing::CANNON;
+const JEEP: &str = bri_vehicles::testing::CAR;
 const TOOLS_ONLY: [Option<String>; 5] = [None, None, None, None, None];
 
 #[test]
@@ -181,7 +181,13 @@ fn an_armed_bot_takes_a_moment_to_react_then_hits_its_enemy() {
     minigame(
         &mut s,
         human,
-        [Some("chaos:weapon/gun".into()), None, None, None, None],
+        [
+            Some(bri_weapons::testing::GUN_ITEM.into()),
+            None,
+            None,
+            None,
+            None,
+        ],
     );
     steps(&mut s, &[human], 60, &mut sequence);
     // Spawn protection lasts 2.5 s; the bot needs its reaction time too.
@@ -210,7 +216,13 @@ fn an_armed_bot_takes_a_moment_to_react_then_hits_its_enemy() {
     minigame(
         &mut again,
         human2,
-        [Some("chaos:weapon/gun".into()), None, None, None, None],
+        [
+            Some(bri_weapons::testing::GUN_ITEM.into()),
+            None,
+            None,
+            None,
+            None,
+        ],
     );
     steps(&mut again, &[human2], 60, &mut sequence2);
     steps(&mut again, &[human2], hit_after, &mut sequence2);
@@ -242,7 +254,13 @@ fn bots_of_one_builder_are_on_one_side() {
     minigame(
         &mut s,
         human,
-        [Some("chaos:weapon/gun".into()), None, None, None, None],
+        [
+            Some(bri_weapons::testing::GUN_ITEM.into()),
+            None,
+            None,
+            None,
+            None,
+        ],
     );
     steps(&mut s, &[human], 120 * 12, &mut sequence);
     let bots = bots(&s);
@@ -372,7 +390,8 @@ fn a_bot_over_the_server_limit_tells_its_builder() {
         })
         .collect();
     assert!(
-        told.iter().any(|t| t.ends_with("Server is limited to 16 bots")),
+        told.iter()
+            .any(|t| t.ends_with("Server is limited to 16 bots")),
         "{told:?}"
     );
 }

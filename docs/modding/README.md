@@ -610,11 +610,46 @@ The fields you are most likely to change:
 | image state | `ticks` | how long a state (`Fire` is the reload time) lasts |
 | image | `shot` | several projectiles per shot, their spread and the recoil ([porting.md](porting.md#the-image-shot-field)) |
 | item | `ui_name` | the name players see |
-| image | `zoom` | `{ "fov": 20, "on_jet": true, "crosshair": false, "first_person": true }`: aim with the zoom key (and the right mouse button with `on_jet`), hide the crosshair, force first person while aiming |
+| image | `zoom` | `{ "fov": 20, "on_jet": true, "crosshair": false, "first_person": true }`: aim with the zoom key (and the right mouse button with `on_jet`), hide the crosshair, force first person while aiming. More under "Scopes" below |
 | image | `eye_offset`, `eye_rotation` | where the weapon sits in first person: exactly there, relative to the camera, as Torque places it, so a scope whose sight is on the eye line stays centred at any zoom |
+| image | `hide_nodes` | the holder's body nodes hidden while the image is held, shown again when it goes: `["lhand", "rhand", "lhook", "rhook"]` for a model that draws its own hands (v20's `hideNode` in `onMount`). Up to 16 |
+| image | `both_arms` | `true` holds it up with both arms (`armReadyBoth`), not the mount hand's arm alone |
 | image | `scripts` | what each state `script` does, by lower-case name: `{ "onfire": { "arm": "spearThrow", "fire": true, "use_up": true } }` swings the arm, launches the image's projectile (or the entry's own `projectile`) and uses the item up, as a thrown grenade ([torque-equivalents.md](torque-equivalents.md#image-state-scripts-as-data)) |
 | image | `follow_arm` | `true` also moves a first-person `eye_offset` image with the arm's actions (shift, plant, swing), as the base game's brick, hammer and spray cans do; off by default |
 | pack | `sounds` | `{ "your-id:shot": { "file": "sounds/shot.wav", "volume": 0.8 } }`: your own `.wav`/`.ogg` files, named by a state's `sound` and by rules; `local` for sounds only the holder hears, `looping` for a state-long hum |
+
+**Scopes.** `zoom` takes more for a proper scope:
+
+```json
+"zoom": { "fov": 22, "on_jet": true, "jets": false, "crosshair": false,
+          "first_person": true, "levels": [10],
+          "overlay": "scope/scope",
+          "sway": { "degrees": 0.35, "seconds": 4.5, "crouched": 0.3, "moving": 2.5 } }
+```
+
+| Field | Meaning | Limits |
+|---|---|---|
+| `jets` | `false`: with `on_jet`, the right mouse button only aims and the player does not jet while holding it | default `true` |
+| `levels` | further fields of view the mouse wheel steps through while aiming (back on rolling the other way); each narrower than the last. The step resets when the aim ends | up to 8, 5 to 85 degrees |
+| `sensitivity` | look speed while aimed, on top of the usual slowing with the field of view | 0.1 to 4, default 1 |
+| `overlay` | your own PNG (named without `.png`, relative to `assets/`) drawn over the whole view while aimed in first person, fitted to the screen's height with black either side, under the HUD. Its transparent middle is the lens; the held model is hidden meanwhile | up to 2048 px a side and 4 MB |
+| `sway` | the aim drifts on a figure of eight, `degrees` to each side, once every `seconds`; `crouched` and `moving` scale it. Only on foot, only on the holder's screen, and the mouse turns freely under it; it eases in and out | 0 to 5 degrees, 0.5 to 30 seconds, crouched 0 to 1, moving 1 to 4 |
+
+Sway changes only where the holder looks, so other players see nothing
+new and it costs no bandwidth.
+
+**Your own model.** A weapons pack may bring its models and textures in
+`assets/presentation.json` (beside `weapons.json`, the same format the
+base game's item presentation uses: `models` and `textures` keyed by your
+own ids, each with its file and sha256) and `assets/item-physics.json`
+(each item's box). An item's or image's `model` in `weapons.json` then
+names one of those keys, such as `your-add-on:model/rifle`, and a
+particle's `texture` may name a texture key. Leave `items`, `images` and
+`projectiles` empty in it: the game presents them from `weapons.json`.
+Models are the native `shape.json` format (nodes, meshes, materials,
+animations); name a `mountPoint` node where the hand holds it and a
+`muzzlePoint` where shots leave, and an image state's `sequence` plays one
+of its animations (a rifle's `Bolt`).
 
 The engine has no idea of clips, magazines or reloads: a rule builds them
 from a player state key, `set_image_ammo` and image commands (section 3,

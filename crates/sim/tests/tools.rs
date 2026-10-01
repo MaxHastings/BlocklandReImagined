@@ -19,10 +19,10 @@ use rapier3d::prelude::*;
 mod common;
 use common::*;
 
-fn session(bricks: Vec<Brick>, wall: bool) -> Session {
-    session_on(bricks, wall, "test")
+fn session(f: &Fixture, bricks: Vec<Brick>, wall: bool) -> Session {
+    session_on(f, bricks, wall, "test")
 }
-fn session_on(bricks: Vec<Brick>, wall: bool, map_id: &str) -> Session {
+fn session_on(f: &Fixture, bricks: Vec<Brick>, wall: bool, map_id: &str) -> Session {
     let mesh = Mesh {
         schema_version: 1,
         id: "plate".into(),
@@ -94,7 +94,7 @@ fn session_on(bricks: Vec<Brick>, wall: bool, map_id: &str) -> Session {
         );
     }
     let mut s = Session::new(Simulation::new(world, definitions, colliders).unwrap());
-    s.set_weapon_pack(weapon_pack()).unwrap();
+    s.set_weapon_pack(f.weapons.clone()).unwrap();
     s.set_event_catalog(bri_events::testing::catalog(), Vec::new())
         .unwrap();
     s
@@ -130,9 +130,9 @@ fn catalog() -> ToolCatalog {
     }
 }
 
-#[test]
-fn tools_swing_only_when_held_and_switching_or_dropping_revokes_the_dialog() {
-    let mut s = session(vec![], false);
+on_both! {
+fn tools_swing_only_when_held_and_switching_or_dropping_revokes_the_dialog(f: &Fixture) {
+    let mut s = session(f, vec![], false);
     s.set_tool_catalog(catalog()).unwrap();
     s.set_item_bounds(
         bri_weapons::CORE_TOOLS
@@ -203,11 +203,12 @@ fn tools_swing_only_when_held_and_switching_or_dropping_revokes_the_dialog() {
     swing(&mut s, owner, 11, 0).unwrap();
     assert!(!s.simulation().state().bricks.contains_key(&id));
 }
+}
 
-#[test]
-fn swings_use_the_current_aim_and_respect_brick_trust() {
+on_both! {
+fn swings_use_the_current_aim_and_respect_brick_trust(f: &Fixture) {
     use bri_sim::session::ActionAim;
-    let mut s = session(vec![], false);
+    let mut s = session(f, vec![], false);
     let owner = s
         .join("Builder".into(), Vec3::new(0.5, 0.05, 0.0), false)
         .unwrap();
@@ -264,17 +265,18 @@ fn swings_use_the_current_aim_and_respect_brick_trust() {
     swing(&mut s, owner, 6, 0).unwrap();
     assert!(!s.simulation().state().bricks.contains_key(&front));
 }
+}
 
+on_both! {
 /// A click carries its own aim (the turn and the click leave the client
 /// together, as in v20's move that carries the trigger). The wrench swings
 /// two ticks after the click (wrenchImage's PreFire), before the movement
 /// that turned the body has arrived: the swing still lands where the click
 /// aimed. Found by the screen harness: a guest who turned and clicked at
 /// once wrenched thin air along their old facing.
-#[test]
-fn a_click_lands_its_delayed_swing_where_it_aimed() {
+fn a_click_lands_its_delayed_swing_where_it_aimed(f: &Fixture) {
     use bri_sim::session::ActionAim;
-    let mut s = session(vec![], false);
+    let mut s = session(f, vec![], false);
     let owner = s
         .join("Builder".into(), Vec3::new(0.5, 0.05, 0.0), false)
         .unwrap();
@@ -322,11 +324,12 @@ fn a_click_lands_its_delayed_swing_where_it_aimed() {
     }
     assert!(opened(&mut s, owner).is_none(), "the aimless click used an old click's aim");
 }
+}
 
-#[test]
-fn swinging_at_nothing_or_the_ground_is_not_an_error_and_plays_v20_effects() {
+on_both! {
+fn swinging_at_nothing_or_the_ground_is_not_an_error_and_plays_v20_effects(f: &Fixture) {
     use bri_sim::presentation::CueKind;
-    let mut s = session(vec![], false);
+    let mut s = session(f, vec![], false);
     let owner = s
         .join("Builder".into(), Vec3::new(0.5, 0.05, 0.0), false)
         .unwrap();
@@ -371,10 +374,11 @@ fn swinging_at_nothing_or_the_ground_is_not_an_error_and_plays_v20_effects() {
     }
     assert!(opened(&mut s, owner).is_none());
 }
+}
 
-#[test]
-fn spray_cans_mount_in_hand_and_paint_by_projectile() {
-    let (mut s, owner, id) = setup();
+on_both! {
+fn spray_cans_mount_in_hand_and_paint_by_projectile(f: &Fixture) {
+    let (mut s, owner, id) = setup(f);
     let guest = s
         .join("Guest".into(), Vec3::new(3.0, 0.05, 0.0), false)
         .unwrap();
@@ -442,12 +446,13 @@ fn spray_cans_mount_in_hand_and_paint_by_projectile() {
         .unwrap();
     assert!(!s.weapon_view().images.contains_key(&owner));
 }
+}
 
-#[test]
-fn scrolling_the_spray_can_while_holding_fire_keeps_spraying() {
+on_both! {
+fn scrolling_the_spray_can_while_holding_fire_keeps_spraying(f: &Fixture) {
     // v20: hold the mouse and scroll colours; each new colour can mounts
     // under the held trigger and sprays at once.
-    let (mut s, owner, id) = setup();
+    let (mut s, owner, id) = setup(f);
     let spray = |s: &mut Session| {
         hold_still(s, owner);
         for _ in 0..40 {
@@ -477,12 +482,13 @@ fn scrolling_the_spray_can_while_holding_fire_keeps_spraying() {
         .unwrap();
     assert_eq!(spray(&mut s), 1, "released");
 }
+}
 
-#[test]
-fn switching_paint_columns_while_holding_fire_keeps_spraying() {
+on_both! {
+fn switching_paint_columns_while_holding_fire_keeps_spraying(f: &Fixture) {
     // E (`shiftPaintColumn`) moves to the next column: another colour, or
     // the FX column's can (`useFXCan`), then back round. Held, each sprays.
-    let (mut s, owner, id) = setup();
+    let (mut s, owner, id) = setup(f);
     let spray = |s: &mut Session| {
         hold_still(s, owner);
         for _ in 0..40 {
@@ -501,13 +507,14 @@ fn switching_paint_columns_while_holding_fire_keeps_spraying() {
         .unwrap();
     assert_eq!(spray(&mut s).color, 0);
 }
+}
 
-#[test]
-fn a_press_whose_release_was_lost_is_a_fresh_click() {
+on_both! {
+fn a_press_whose_release_was_lost_is_a_fresh_click(f: &Fixture) {
     // A dialog can take the mouse-up, so the host can see two presses with
     // no release between them. A mouse cannot do that: the second press is
     // a new click, so the wrench (which waits for a release) swings again.
-    let (mut s, owner, id) = setup();
+    let (mut s, owner, id) = setup(f);
     s.equip_tool(owner, Some(1)).unwrap();
     hold_still(&mut s, owner);
     s.command(owner, 2, Command::WeaponTrigger { down: true })
@@ -544,6 +551,7 @@ fn a_press_whose_release_was_lost_is_a_fresh_click() {
         s.step().unwrap();
     }
     assert_eq!(opened(&mut s, owner).unwrap().2, InspectMode::Printer);
+}
 }
 
 fn plant(s: &mut Session, owner: u64, seq: u64, position: [f32; 3]) -> u64 {
@@ -641,8 +649,8 @@ fn properties() -> WrenchProperties {
         ..Default::default()
     }
 }
-fn setup() -> (Session, u64, u64) {
-    let mut s = session(vec![], false);
+fn setup(f: &Fixture) -> (Session, u64, u64) {
+    let mut s = session(f, vec![], false);
     s.set_tool_catalog(catalog()).unwrap();
     let owner = s
         .join("Builder".into(), Vec3::new(0.0, 0.05, 0.0), false)
@@ -652,9 +660,9 @@ fn setup() -> (Session, u64, u64) {
     (s, owner, id)
 }
 
-#[test]
-fn wrench_changes_are_atomic_and_nonraycasting_bricks_remain_editable() {
-    let (mut s, owner, id) = setup();
+on_both! {
+fn wrench_changes_are_atomic_and_nonraycasting_bricks_remain_editable(f: &Fixture) {
+    let (mut s, owner, id) = setup(f);
     let original = inspect(&mut s, owner, 2, InspectMode::Wrench);
     let before = s.snapshot().world;
     let mut invalid = properties();
@@ -756,10 +764,11 @@ fn wrench_changes_are_atomic_and_nonraycasting_bricks_remain_editable() {
     );
     assert_eq!(s.snapshot().world, before);
 }
+}
 
-#[test]
-fn wrench_item_catalog_ranges_and_clear_are_authoritative_and_atomic() {
-    let (mut s, owner, id) = setup();
+on_both! {
+fn wrench_item_catalog_ranges_and_clear_are_authoritative_and_atomic(f: &Fixture) {
+    let (mut s, owner, id) = setup(f);
     inspect(&mut s, owner, 2, InspectMode::Wrench);
     let before = s.snapshot().world;
     for (offset, item_spawn) in [
@@ -847,13 +856,14 @@ fn wrench_item_catalog_ranges_and_clear_are_authoritative_and_atomic() {
     let old: WrenchProperties = serde_json::from_value(legacy.into()).unwrap();
     assert_eq!(old.item_spawn, bri_world::ItemSpawn::default());
 }
+}
 
+on_both! {
 /// `Item::Respawn` fades a picked-up brick item out until its respawn time,
 /// but the wrench's Send always runs `fxDTSBrick::setItem`, which replaces
 /// the faded Item with a fresh one.
-#[test]
-fn a_wrench_send_replaces_a_faded_item_with_a_fresh_one() {
-    let mut s = session(vec![], false);
+fn a_wrench_send_replaces_a_faded_item_with_a_fresh_one(f: &Fixture) {
+    let mut s = session(f, vec![], false);
     s.set_tool_catalog(catalog()).unwrap();
     s.set_item_bounds(core_tool_bounds()).unwrap();
     let owner = s
@@ -906,9 +916,10 @@ fn a_wrench_send_replaces_a_faded_item_with_a_fresh_one() {
     set(&mut s, 5);
     assert!(s.weapon_view().static_items[0].available_at <= s.simulation().state().tick);
 }
+}
 
-#[test]
-fn native_item_allowlist_installation_is_atomic_and_bounded() {
+on_both! {
+fn native_item_allowlist_installation_is_atomic_and_bounded(f: &Fixture) {
     let mut c = catalog();
     let before = c.clone();
     assert!(c.install_items(["a".into(), "a".into()]).is_err());
@@ -923,10 +934,11 @@ fn native_item_allowlist_installation_is_atomic_and_bounded() {
     c.install_items(["v20.weapon.printgun".into()]).unwrap();
     assert_eq!(c.items, ["v20.weapon.printgun".into()].into());
 }
+}
 
-#[test]
-fn printing_uses_catalog_aspect_letters_default_and_inspection_identity() {
-    let (mut s, owner, id) = setup();
+on_both! {
+fn printing_uses_catalog_aspect_letters_default_and_inspection_identity(f: &Fixture) {
+    let (mut s, owner, id) = setup(f);
     assert_eq!(
         s.simulation().state().bricks[&id].print,
         Some(ContentRef::Resolved("print/A".into()))
@@ -1012,10 +1024,11 @@ fn printing_uses_catalog_aspect_letters_default_and_inspection_identity() {
     swing(&mut s, owner, 12, 2).unwrap();
     assert!(opened(&mut s, owner).is_none());
 }
+}
 
-#[test]
-fn next_brick_of_the_aspect_takes_the_players_last_print_like_v20() {
-    let (mut s, owner, id) = setup();
+on_both! {
+fn next_brick_of_the_aspect_takes_the_players_last_print_like_v20(f: &Fixture) {
+    let (mut s, owner, id) = setup(f);
     inspect(&mut s, owner, 2, InspectMode::Printer);
     tool(
         &mut s,
@@ -1042,9 +1055,10 @@ fn next_brick_of_the_aspect_takes_the_players_last_print_like_v20() {
         Some(ContentRef::Resolved("print/A".into()))
     );
 }
+}
 
-#[test]
-fn event_binding_checks_cannot_be_bypassed_and_opaque_source_is_preserved() {
+on_both! {
+fn event_binding_checks_cannot_be_bypassed_and_opaque_source_is_preserved(f: &Fixture) {
     let mut brick = Brick::new(ContentRef::Resolved("plate".into()), [0.5, 0.1, -3.25], 7);
     brick.source_records.push(SourceRecord {
         line: 12,
@@ -1052,7 +1066,7 @@ fn event_binding_checks_cannot_be_bypassed_and_opaque_source_is_preserved() {
         diagnostic: Some("native adapter required".into()),
     });
     let source = brick.source_records.clone();
-    let mut s = session(vec![brick], false);
+    let mut s = session(f, vec![brick], false);
     s.set_tool_catalog(catalog()).unwrap();
     let owner = s
         .join("Admin".into(), Vec3::new(0.0, 0.05, 0.0), true)
@@ -1124,9 +1138,10 @@ fn event_binding_checks_cannot_be_bypassed_and_opaque_source_is_preserved() {
         .is_err()
     );
 }
+}
 
-#[test]
-fn hammer_ranges_and_map_occlusion_are_authoritative() {
+on_both! {
+fn hammer_ranges_and_map_occlusion_are_authoritative(f: &Fixture) {
     // `hammerImage::onFire` casts from `getEyePoint()` (the m.dts Eye node,
     // 2.156 above the feet) 5 units, or 5.5 looking steeply down. Straight
     // down onto a plate (top 0.2) reaches from feet up to about 3.54. The
@@ -1140,7 +1155,7 @@ fn hammer_ranges_and_map_occlusion_are_authoritative() {
     ] {
         let mut brick = Brick::new(ContentRef::Resolved("plate".into()), position, 0);
         brick.raycast = false;
-        let mut s = session(vec![brick], false);
+        let mut s = session(f, vec![brick], false);
         let owner = s.join("Admin".into(), spawn, true).unwrap();
         aim(&mut s, owner, 1, position);
         swing(&mut s, owner, 1, 0).unwrap();
@@ -1151,7 +1166,7 @@ fn hammer_ranges_and_map_occlusion_are_authoritative() {
         );
     }
     let position = [0.5, 2.5, -4.25];
-    let mut s = session(
+    let mut s = session(f,
         vec![Brick::new(
             ContentRef::Resolved("plate".into()),
             position,
@@ -1169,10 +1184,11 @@ fn hammer_ranges_and_map_occlusion_are_authoritative() {
     swing(&mut s, owner, 2, 1).unwrap();
     assert!(opened(&mut s, owner).is_none());
 }
+}
 
-#[test]
-fn undo_is_owner_scoped_lifo_spends_removed_bricks_and_survives_authenticated_resume() {
-    let (mut s, owner, first) = setup();
+on_both! {
+fn undo_is_owner_scoped_lifo_spends_removed_bricks_and_survives_authenticated_resume(f: &Fixture) {
+    let (mut s, owner, first) = setup(f);
     let second = plant(&mut s, owner, 2, [1.5, 0.1, -3.25]);
     let third = plant(&mut s, owner, 3, [2.5, 0.1, -3.25]);
     aim(&mut s, owner, 2, [2.5, 0.1, -3.25]);
@@ -1196,10 +1212,11 @@ fn undo_is_owner_scoped_lifo_spends_removed_bricks_and_survives_authenticated_re
     }
     assert!(s.simulation().state().bricks.is_empty());
 }
+}
 
-#[test]
-fn undo_retains_only_the_511_entries_of_a_512_slot_queue() {
-    let mut s = session(vec![], false);
+on_both! {
+fn undo_retains_only_the_511_entries_of_a_512_slot_queue(f: &Fixture) {
+    let mut s = session(f, vec![], false);
     // Fifty plants a second: above v20's default plant rate.
     s.set_server_settings(bri_admin::ServerSettings {
         bricks_per_second: 1000,
@@ -1254,13 +1271,14 @@ fn undo_retains_only_the_511_entries_of_a_512_slot_queue() {
         vec![first]
     );
 }
+}
 
+on_both! {
 /// `serverCmdUndoBrick` walks one mixed stack: prints, shape FX, colour FX,
 /// spray paint, then the plant, which breaks like a hammered brick.
-#[test]
-fn undo_reverts_paint_and_print_then_breaks_the_plant() {
+fn undo_reverts_paint_and_print_then_breaks_the_plant(f: &Fixture) {
     use bri_sim::presentation::CueKind;
-    let (mut s, owner, id) = setup();
+    let (mut s, owner, id) = setup(f);
     let spray = |s: &mut Session, seq: u64, command: Command| {
         s.command(owner, seq, command).unwrap();
         hold_still(s, owner);
@@ -1323,11 +1341,12 @@ fn undo_reverts_paint_and_print_then_breaks_the_plant() {
         Reply::Undone(None)
     );
 }
+}
 
-#[test]
-fn nested_events_return_to_wrench_without_overwriting_concurrent_properties() {
+on_both! {
+fn nested_events_return_to_wrench_without_overwriting_concurrent_properties(f: &Fixture) {
     for concurrent_change in [false, true] {
-        let (mut s, owner, id) = setup();
+        let (mut s, owner, id) = setup(f);
         inspect(&mut s, owner, 2, InspectMode::Wrench);
         if concurrent_change {
             s.edit_brick(owner, id, Edit::Name(Some("other editor".into())))
@@ -1370,7 +1389,7 @@ fn nested_events_return_to_wrench_without_overwriting_concurrent_properties() {
         }
     }
     // Cancelling Events emits no network edit and still leaves Wrench usable.
-    let (mut s, owner, id) = setup();
+    let (mut s, owner, id) = setup(f);
     inspect(&mut s, owner, 2, InspectMode::Wrench);
     inspect(&mut s, owner, 3, InspectMode::Events);
     tool(
@@ -1384,10 +1403,11 @@ fn nested_events_return_to_wrench_without_overwriting_concurrent_properties() {
     )
     .unwrap();
 }
+}
 
-#[test]
-fn spray_paint_temporarily_recolours_the_body_band_it_hits() {
-    let mut s = session(vec![], false);
+on_both! {
+fn spray_paint_temporarily_recolours_the_body_band_it_hits(f: &Fixture) {
+    let mut s = session(f, vec![], false);
     s.set_tool_catalog(catalog()).unwrap();
     s.set_avatar_catalog(
         serde_json::from_value(serde_json::json!({
@@ -1458,17 +1478,12 @@ fn spray_paint_temporarily_recolours_the_body_band_it_hits() {
         bri_sim::presentation::CueKind::WeaponEffect { definition, scale, .. }
             if definition == "color1PaintExplosion" && *scale == 2.0)));
 }
+}
 
-#[test]
-#[ignore = "requires the converted native event catalog"]
-fn hammering_a_brick_fires_its_on_tool_break_events() {
-    let mut s = session(vec![], false);
-    let catalog = bri_events::Catalog::load(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../content/events-pack-002/catalog.json"),
-    )
-    .unwrap();
-    s.set_event_catalog(catalog, Vec::new()).unwrap();
+on_both! {
+fn hammering_a_brick_fires_its_on_tool_break_events(f: &Fixture) {
+    let mut s = session(f, vec![], false);
+    s.set_event_catalog(f.events(), Vec::new()).unwrap();
     let owner = s
         .join("Builder".into(), Vec3::new(0.5, 0.05, 0.), false)
         .unwrap();
@@ -1492,17 +1507,12 @@ fn hammering_a_brick_fires_its_on_tool_break_events() {
     assert!(!s.simulation().state().bricks.contains_key(&id));
     assert_eq!(center_prints(&mut s, owner), ["Broken"]);
 }
+}
 
-#[test]
-#[ignore = "requires the converted native event catalog"]
-fn player_datablock_and_scale_events_reshape_the_player() {
-    let mut s = session(vec![], false);
-    let catalog = bri_events::Catalog::load(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../content/events-pack-002/catalog.json"),
-    )
-    .unwrap();
-    s.set_event_catalog(catalog, Vec::new()).unwrap();
+on_both! {
+fn player_datablock_and_scale_events_reshape_the_player(f: &Fixture) {
+    let mut s = session(f, vec![], false);
+    s.set_event_catalog(f.events(), Vec::new()).unwrap();
     let owner = s
         .join("Builder".into(), Vec3::new(0.5, 0.05, 0.), false)
         .unwrap();
@@ -1544,11 +1554,12 @@ fn player_datablock_and_scale_events_reshape_the_player() {
     );
     assert_eq!(player.scale, 1.5);
 }
+}
 
-#[test]
-fn tutorial_layout_swaps_keep_their_item_spawns_between_publishes() {
+on_both! {
+fn tutorial_layout_swaps_keep_their_item_spawns_between_publishes(f: &Fixture) {
     use bri_sim::tutorial::{MAP_ID, TutorialMap, Zone, ZoneKind};
-    let mut s = session_on(vec![], false, MAP_ID);
+    let mut s = session_on(f, vec![], false, MAP_ID);
     s.set_tool_catalog(catalog()).unwrap();
     s.set_item_bounds(core_tool_bounds()).unwrap();
     // Part 1 carries the break room's hammer on a brick (`+-ITEM Hammer`).
@@ -1594,11 +1605,12 @@ fn tutorial_layout_swaps_keep_their_item_spawns_between_publishes() {
         .collect();
     assert_eq!(items, [bri_weapons::CORE_TOOLS[0]]);
 }
+}
 
-#[test]
-fn admin_destructo_wand_breaks_bricks_from_afar() {
+on_both! {
+fn admin_destructo_wand_breaks_bricks_from_afar(f: &Fixture) {
     use bri_admin::{Action, Request};
-    let mut s = session(vec![], false);
+    let mut s = session(f, vec![], false);
     s.set_tool_catalog(catalog()).unwrap();
     let admin = s
         .join("Admin".into(), Vec3::new(0.5, 0.05, 0.0), true)
@@ -1623,14 +1635,15 @@ fn admin_destructo_wand_breaks_bricks_from_afar() {
     }
     assert!(!s.simulation().state().bricks.contains_key(&id));
 }
+}
 
 fn bricks(s: &Session) -> Vec<u64> {
     s.simulation().state().bricks.keys().copied().collect()
 }
 
-#[test]
-fn hammer_only_breaks_bricks_that_hold_nothing_up() {
-    let mut s = session(vec![], false);
+on_both! {
+fn hammer_only_breaks_bricks_that_hold_nothing_up(f: &Fixture) {
+    let mut s = session(f, vec![], false);
     let owner = s
         .join("Builder".into(), Vec3::new(0.5, 0.05, 0.0), false)
         .unwrap();
@@ -1651,10 +1664,11 @@ fn hammer_only_breaks_bricks_that_hold_nothing_up() {
     swing(&mut s, owner, 8, 0).unwrap();
     assert!(bricks(&s).is_empty());
 }
+}
 
-#[test]
-fn hammer_breaks_a_brick_whose_load_is_still_held_up_elsewhere() {
-    let mut s = session(vec![], false);
+on_both! {
+fn hammer_breaks_a_brick_whose_load_is_still_held_up_elsewhere(f: &Fixture) {
+    let mut s = session(f, vec![], false);
     let owner = s
         .join("Builder".into(), Vec3::new(1.0, 0.05, 0.0), false)
         .unwrap();
@@ -1670,10 +1684,11 @@ fn hammer_breaks_a_brick_whose_load_is_still_held_up_elsewhere() {
     swing(&mut s, owner, 7, 0).unwrap();
     assert_eq!(bricks(&s), vec![right, bridge]);
 }
+}
 
-#[test]
-fn wand_breaks_anywhere_and_the_stranded_bricks_above_die_with_it() {
-    let mut s = session(vec![], false);
+on_both! {
+fn wand_breaks_anywhere_and_the_stranded_bricks_above_die_with_it(f: &Fixture) {
+    let mut s = session(f, vec![], false);
     let owner = s
         .join("Builder".into(), Vec3::new(0.5, 0.05, 0.0), false)
         .unwrap();
@@ -1693,10 +1708,11 @@ fn wand_breaks_anywhere_and_the_stranded_bricks_above_die_with_it() {
     }
     assert!(bricks(&s).is_empty());
 }
+}
 
-#[test]
-fn undoing_a_plant_that_holds_up_untrusting_bricks_is_refused() {
-    let mut s = session(vec![], false);
+on_both! {
+fn undoing_a_plant_that_holds_up_untrusting_bricks_is_refused(f: &Fixture) {
+    let mut s = session(f, vec![], false);
     let owner = s
         .join("Builder".into(), Vec3::new(0.5, 0.05, 0.0), false)
         .unwrap();
@@ -1714,13 +1730,14 @@ fn undoing_a_plant_that_holds_up_untrusting_bricks_is_refused() {
         vec!["Guest does not trust you enough to do that.".to_string()]
     );
 }
+}
 
+on_both! {
 /// v20's `indestructable` (spawn points, vehicle spawns) only keeps
 /// explosions off a brick: a builder who is not an administrator hammers or
 /// undoes their own like any other (playtest a20).
-#[test]
-fn builders_hammer_and_undo_their_own_indestructible_bricks() {
-    let mut s = session(vec![], false);
+fn builders_hammer_and_undo_their_own_indestructible_bricks(f: &Fixture) {
+    let mut s = session(f, vec![], false);
     let owner = s
         .join("Builder".into(), Vec3::new(0.5, 0.05, 0.0), false)
         .unwrap();
@@ -1753,10 +1770,11 @@ fn builders_hammer_and_undo_their_own_indestructible_bricks() {
     );
     assert_eq!(bricks(&s), Vec::<u64>::new());
 }
+}
 
-#[test]
-fn random_brick_color_paints_each_plant_from_v20s_six() {
-    let mut s = session(vec![], false);
+on_both! {
+fn random_brick_color_paints_each_plant_from_v20s_six(f: &Fixture) {
+    let mut s = session(f, vec![], false);
     s.set_server_settings(bri_admin::ServerSettings {
         random_brick_color: true,
         bricks_per_second: 1000,
@@ -1786,11 +1804,12 @@ fn random_brick_color_paints_each_plant_from_v20s_six() {
     assert!(colors.is_subset(&[0, 1, 3, 4, 5, 7].into()), "{colors:?}");
     assert!(colors.len() > 1, "{colors:?}");
 }
+}
 
-#[test]
-fn an_input_past_its_owners_schedule_quota_runs_nothing_and_says_why() {
+on_both! {
+fn an_input_past_its_owners_schedule_quota_runs_nothing_and_says_why(f: &Fixture) {
     let brick = Brick::new(ContentRef::Resolved("plate".into()), [0.5, 0.1, -3.25], 7);
-    let mut s = session(vec![brick], false);
+    let mut s = session(f, vec![brick], false);
     s.set_tool_catalog(catalog()).unwrap();
     let mut settings = bri_admin::ServerSettings::default();
     settings.per_player.schedules = 10;
@@ -1837,10 +1856,11 @@ fn an_input_past_its_owners_schedule_quota_runs_nothing_and_says_why() {
     }
     assert_eq!(s.simulation().state().bricks[&1].color, 1);
 }
+}
 
-#[test]
-fn a_full_environment_quota_leaves_a_new_light_and_emitter_off() {
-    let (mut s, owner, id) = setup();
+on_both! {
+fn a_full_environment_quota_leaves_a_new_light_and_emitter_off(f: &Fixture) {
+    let (mut s, owner, id) = setup(f);
     // v20 clamps the quota to at least 20: ten other bricks fill it.
     let mut settings = bri_admin::ServerSettings::default();
     settings.per_player.environment = 0;
@@ -1888,6 +1908,7 @@ fn a_full_environment_quota_leaves_a_new_light_and_emitter_off() {
     .unwrap();
     assert!(s.simulation().state().bricks[&id].light.is_some());
 }
+}
 
 /// The sounds and effects of one brick-breaking hit, in order: v20's hammer
 /// plays `hammerHitSound`, the Destructo Wand its explosion's `wandHitSound`,
@@ -1898,19 +1919,21 @@ fn hit_cues(s: &mut Session) -> Vec<String> {
         .into_iter()
         .filter_map(|c| match c.kind {
             CueKind::WeaponSound { profile } => Some(format!("sound {profile}")),
-            CueKind::WeaponEffect { definition, image: None, .. } => {
-                Some(format!("explosion {definition}"))
-            }
+            CueKind::WeaponEffect {
+                definition,
+                image: None,
+                ..
+            } => Some(format!("explosion {definition}")),
             CueKind::BrickKill { brick, .. } => Some(format!("kill {brick}")),
             _ => None,
         })
         .collect()
 }
 
-#[test]
-fn destructo_wand_breaks_a_brick_like_the_hammer_with_its_own_hit_sound() {
+on_both! {
+fn destructo_wand_breaks_a_brick_like_the_hammer_with_its_own_hit_sound(f: &Fixture) {
     use bri_admin::{Action, Request};
-    let mut s = session(vec![], false);
+    let mut s = session(f, vec![], false);
     s.set_tool_catalog(catalog()).unwrap();
     let admin = s
         .join("Admin".into(), Vec3::new(0.5, 0.05, 0.0), true)
@@ -1951,10 +1974,11 @@ fn destructo_wand_breaks_a_brick_like_the_hammer_with_its_own_hit_sound() {
         ]
     );
 }
+}
 
-#[test]
-fn a_joining_player_learns_the_music_the_host_offers() {
-    let mut s = session(vec![], false);
+on_both! {
+fn a_joining_player_learns_the_music_the_host_offers(f: &Fixture) {
+    let mut s = session(f, vec![], false);
     let owner = s
         .join("Builder".into(), Vec3::new(0.0, 0.05, 0.0), false)
         .unwrap();
@@ -1963,4 +1987,5 @@ fn a_joining_player_learns_the_music_the_host_offers() {
             .iter()
             .any(|(to, n)| *to == owner && matches!(n, bri_sim::session::Notice::MusicTracks(_)))
     );
+}
 }
