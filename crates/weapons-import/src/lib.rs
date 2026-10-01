@@ -114,48 +114,9 @@ pub fn image_placement(fields: &BTreeMap<String, String>) -> Option<([f32; 3], [
     };
     Some((axis(vec(&get("offset"), [0.0; 3])), degrees))
 }
-/// Removes comments while respecting quoted strings; retains newlines for evidence.
-fn uncomment(s: &str) -> String {
-    let mut out = String::new();
-    let mut it = s.chars().peekable();
-    let mut quoted = false;
-    while let Some(c) = it.next() {
-        if c == '"' {
-            quoted = !quoted;
-            out.push(c);
-        } else if c == '\\' && quoted {
-            out.push(c);
-            if let Some(n) = it.next() {
-                out.push(n);
-            }
-        } else if c == '/' && !quoted && it.peek() == Some(&'/') {
-            it.next();
-            for n in it.by_ref() {
-                if n == '\n' {
-                    out.push(n);
-                    break;
-                }
-            }
-        } else if c == '/' && !quoted && it.peek() == Some(&'*') {
-            it.next();
-            while let Some(n) = it.next() {
-                if n == '\n' {
-                    out.push(n);
-                }
-                if n == '*' && it.peek() == Some(&'/') {
-                    it.next();
-                    break;
-                }
-            }
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}
 pub fn parse(text: &str, path: &str) -> Result<Vec<Definition>> {
     ensure!(text.len() <= 8 * 1024 * 1024, "Script too large");
-    let text_clean = uncomment(text);
+    let text_clean = bri_convert::tscript::without_comments(text);
     let re = Regex::new(
         r"(?is)datablock\s+(\w+)\s*\(\s*(\w+)\s*(?::\s*(\w+)\s*)?\)\s*\{([^{}]*)\}\s*;",
     )?;
@@ -201,7 +162,7 @@ pub fn damage_types(text: &str) -> Result<Vec<DamageType>> {
     let call = Regex::new(
         r#"(?i)AddDamageType\s*\(\s*"(\w+)"\s*,\s*(?:'([^']*)'|"([^"]*)")\s*,\s*(?:'([^']*)'|"([^"]*)")\s*,\s*([^,()]*),\s*([^,()]*)\)"#,
     )?;
-    let text = uncomment(text);
+    let text = bri_convert::tscript::without_comments(text);
     Ok(call
         .captures_iter(&text)
         .map(|c| {
@@ -216,6 +177,35 @@ pub fn damage_types(text: &str) -> Result<Vec<DamageType>> {
                 murder_message: text(4, 5),
                 vehicle_scale: c[6].trim().parse().unwrap_or(1.0),
                 direct: matches!(c[7].trim(), "1" | "true"),
+                special: false,
+            }
+        })
+        .collect())
+}
+/// `addSpecialDamageMsg(name, murderMessage, suicideMessage)` (Space Guy's
+/// Support_SpecialKills): kill messages laid over the killing type's when a
+/// script calls the kill special ([`DamageType::special`]).
+pub fn special_kills(text: &str) -> Result<Vec<DamageType>> {
+    ensure!(text.len() <= 8 * 1024 * 1024, "Script too large");
+    let call = Regex::new(
+        r#"(?i)addSpecialDamageMsg\s*\(\s*"(\w+)"\s*,\s*(?:'([^']*)'|"([^"]*)")\s*,\s*(?:'([^']*)'|"([^"]*)")\s*\)"#,
+    )?;
+    let text = bri_convert::tscript::without_comments(text);
+    Ok(call
+        .captures_iter(&text)
+        .map(|c| {
+            let text = |a: usize, b: usize| {
+                c.get(a)
+                    .or_else(|| c.get(b))
+                    .map_or(String::new(), |m| m.as_str().to_owned())
+            };
+            DamageType {
+                name: c[1].to_owned(),
+                murder_message: text(2, 3),
+                suicide_message: text(4, 5),
+                vehicle_scale: 1.0,
+                direct: false,
+                special: true,
             }
         })
         .collect())
@@ -271,12 +261,14 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
         items: BTreeMap::new(),
         images: BTreeMap::new(),
         projectiles: BTreeMap::new(),
+        external_projectiles: Default::default(),
         damage_types: BTreeMap::new(),
         explosions: BTreeMap::new(),
         sounds: BTreeMap::new(),
         definitions,
         resources: vec![],
         diagnostics: vec![],
+        bindings: vec![],
     };
     for d in resolved.values_mut() {
         if d.name.eq_ignore_ascii_case("pushBroomItem")
@@ -384,6 +376,11 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
             light_color: vec(&field(d, "lightColor"), [1.0; 3]),
             sport_image: (!sport.is_empty()).then(|| native_id("image", &sport)),
             rest_speed: num(d, "restVelocity", 0.0),
+            max_bounces: 0,
+            children: Vec::new(),
+            aura: None,
+            slow: None,
+            fixed_damage: false,
         };
         pack.projectiles.insert(id, p);
     }
@@ -451,16 +448,23 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 eject_shell: flag(d, &format!("stateEjectShell[{n}]"), false),
                 // v20 swings arms from script by image name, never from state data.
                 arm: String::new(),
+                arm_once: false,
+                gesture: String::new(),
+                cues: vec![],
             });
         }
         let p = field(d, "projectile");
-        let projectile = (!p.trim().is_empty()).then(|| native_id("projectile", &p));
+        let mut projectile = (!p.trim().is_empty()).then(|| native_id("projectile", &p));
         if let Some(p) = &projectile
             && !pack.projectiles.contains_key(p)
         {
-            pack.diagnostics
-                .push(format!("{} missing {p}; image excluded", d.name));
-            continue;
+            // Torque left a field naming no datablock empty: the image fires
+            // nothing of its own (a raycasting gun's script fires instead).
+            pack.diagnostics.push(format!(
+                "{} names {p}, which nothing declares; it fires no projectile, as in v20",
+                d.name
+            ));
+            projectile = None;
         }
         let rotation = source_rotation(&field(d, "rotation"));
         if rotation.is_none() {
@@ -540,6 +544,13 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 hide_nodes: Vec::new(),
                 both_arms: false,
                 paint_tint: false,
+                left_image: None,
+                magazine: None,
+                volleys: vec![],
+                last_shot: None,
+                state_shots: Default::default(),
+                cook: None,
+                guard: None,
                 rope: None,
                 paint_picker: false,
                 // v20's own scripts run by image name (`runtime::callback`).
@@ -581,16 +592,16 @@ fn item(d: &Definition, image: String) -> Item {
         icon: resource(d, "iconName"),
         can_drop: flag(d, "canDrop", true),
         sport: flag(d, "isSportBall", false),
-        ..Default::default()
+        hidden: field(d, "uiName").trim().is_empty(),
+        ..Item::default()
     }
 }
-/// An `ItemData` with a `uiName` but no `image`: picked up, held by nobody
-/// (an ammo box). `None` for any other item.
+/// An `ItemData` with no `image`: picked up, held by nobody (an ammo box).
+/// One with no `uiName` either is hidden: only scripts put it in the world
+/// (a dead player's ammo bag). `None` for any other item.
 pub fn pickup_item(d: &Definition) -> Option<Item> {
-    (d.class.eq_ignore_ascii_case("ItemData")
-        && field(d, "image").is_empty()
-        && !field(d, "uiName").trim().is_empty())
-    .then(|| item(d, String::new()))
+    (d.class.eq_ignore_ascii_case("ItemData") && field(d, "image").is_empty())
+        .then(|| item(d, String::new()))
 }
 fn check_output(root: &Path, out: &Path) -> Result<()> {
     let reference = root.canonicalize()?;
@@ -900,6 +911,27 @@ mod tests {
             "2"
         );
         assert_eq!(ticks(0.14), 17);
+    }
+    #[test]
+    fn special_kills_lay_their_icon_before_the_killing_types() {
+        let special = special_kills(
+            "addSpecialDamageMsg(\"Reflected\",\"%2 <bitmap:Add-Ons/x/ci_reflect>%3%1\",\"<bitmap:Add-Ons/x/ci_reflect> %3%1\");",
+        )
+        .unwrap();
+        assert_eq!(special.len(), 1);
+        assert!(special[0].special);
+        let gun = &damage_types(
+            "AddDamageType(\"Gun\", '<bitmap:base/ci/gun> %1', '%2 <bitmap:base/ci/gun> %1', 1, 1);",
+        )
+        .unwrap()[0];
+        assert_eq!(
+            special[0].special_message(Some(gun), "Bo", Some("Al")),
+            "Al <bitmap:Add-Ons/x/ci_reflect> <bitmap:base/ci/gun> Bo"
+        );
+        assert_eq!(
+            special[0].special_message(Some(gun), "Bo", None),
+            "<bitmap:Add-Ons/x/ci_reflect> <bitmap:base/ci/gun> Bo"
+        );
     }
     #[test]
     fn damage_types_keep_literal_messages_in_order() {

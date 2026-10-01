@@ -312,7 +312,7 @@ impl Session {
             return Ok(Reply::Undone(None));
         };
         let tick = self.simulation.state().tick;
-        self.play_thread_three(tick, owner, "undo");
+        self.play_thread(tick, owner, 3, "undo");
         let actor = self
             .peers
             .get(&owner)
@@ -384,7 +384,7 @@ impl Session {
         by: Option<String>,
     ) -> Result<Reply> {
         let tick = self.simulation.state().tick;
-        self.play_thread_three(tick, owner, "undo");
+        self.play_thread(tick, owner, 3, "undo");
         let work = jobs::UndoGroup::new(self, owner, ids, group, by.clone())?;
         Ok(match self.begin_copy_job(owner, by, work)? {
             Some(work) => work.complete(),
@@ -401,7 +401,7 @@ impl Session {
         by: Option<String>,
     ) -> Result<Reply> {
         let tick = self.simulation.state().tick;
-        self.play_thread_three(tick, owner, "undo");
+        self.play_thread(tick, owner, 3, "undo");
         let work = jobs::UndoCut::new(bricks, by.clone());
         Ok(match self.begin_copy_job(owner, by, work)? {
             Some(work) => work.complete(self, owner),
@@ -419,7 +419,7 @@ impl Session {
     ) -> Result<Reply> {
         use bri_package_runtime::ops::FillPaint as P;
         let tick = self.simulation.state().tick;
-        self.play_thread_three(tick, owner, "undo");
+        self.play_thread(tick, owner, 3, "undo");
         let mut first = None;
         for (id, old) in bricks.into_iter().rev() {
             let Some(brick) = self.simulation.state().bricks.get(&id) else {
@@ -456,7 +456,7 @@ impl Session {
         brick: Option<(BrickId, u8, u8)>,
     ) -> Result<Reply> {
         let tick = self.simulation.state().tick;
-        self.play_thread_three(tick, owner, "undo");
+        self.play_thread(tick, owner, 3, "undo");
         if let Some(c) = self.vehicles.colors.get_mut(&vehicle)
             && *c == Some(color)
         {
@@ -485,7 +485,7 @@ impl Session {
         by: Option<String>,
     ) -> Result<Reply> {
         let tick = self.simulation.state().tick;
-        self.play_thread_three(tick, owner, "undo");
+        self.play_thread(tick, owner, 3, "undo");
         let work = jobs::UndoCut::replaced(removed, placed, by.clone());
         Ok(match self.begin_copy_job(owner, by, work)? {
             Some(work) => work.complete(self, owner),
@@ -497,7 +497,7 @@ impl Session {
     /// undoer may change gets its old paint or settings back.
     fn undo_edits(&mut self, owner: OwnerId, edits: jobs::Edits, by: Option<String>) -> Result<Reply> {
         let tick = self.simulation.state().tick;
-        self.play_thread_three(tick, owner, "undo");
+        self.play_thread(tick, owner, 3, "undo");
         let work = jobs::UndoEdits::new(self, owner, edits, by.clone())?;
         Ok(match self.begin_copy_job(owner, by, work)? {
             Some(work) => work.complete(),

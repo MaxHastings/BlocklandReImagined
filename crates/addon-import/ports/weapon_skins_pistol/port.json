@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "include": [
+    "tier-tactical-core",
+    "tier-tactical"
+  ],
+  "notes": "Tier+Tactical Pistol skins on Tier 1's pistol and ammo system: each keeps Tier 1's raycast pistol, reaching less and spreading more on the move, with its own model, damage and kill icon. Kai left the Covert Pistol's file out of the Add-On's server.cs, so it is not loaded."
+}

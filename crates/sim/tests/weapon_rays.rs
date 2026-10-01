@@ -87,6 +87,7 @@ fn shot_hits(sim: &Simulation, brick: u64) -> bool {
         simulation: sim,
         affect: &never,
         affect_radius: &never,
+        ally: &never,
         catch: &never_catch,
         responses: &responses,
         truncated_targets: 0,

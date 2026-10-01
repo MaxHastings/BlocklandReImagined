@@ -36,6 +36,34 @@ use std::{
 };
 
 type Meshes = BTreeMap<String, bri_content::brick::Brick>;
+/// One player's script-thread animations by thread number (`playThread`).
+type AvatarThreads = [Option<crate::avatar::ActionAnimation>; 4];
+
+/// Threads 0, 1 and 3 are not tied to a mounted image (an image's own
+/// thread 0 names its hand): each holds until the next animation on it
+/// replaces it, or `root` stops it. False for any other animation.
+fn play_free_thread(
+    threads: &mut BTreeMap<u64, AvatarThreads>,
+    actor: u64,
+    thread: u8,
+    sequence: &str,
+    image_hand: Option<u8>,
+    started_at: f64,
+) -> bool {
+    if !matches!(thread, 0 | 1 | 3) || image_hand.is_some() {
+        return false;
+    }
+    let playing = threads.entry(actor).or_default();
+    playing[usize::from(thread)] =
+        (!sequence.eq_ignore_ascii_case("root")).then(|| crate::avatar::ActionAnimation {
+            sequence: sequence.into(),
+            started_at,
+        });
+    if playing.iter().all(Option::is_none) {
+        threads.remove(&actor);
+    }
+    true
+}
 /// World camera far plane; also the farthest terrain tiles are ever drawn.
 const FAR_PLANE: f32 = 4000.0;
 /// PlayerStandardArmor's `cameraMaxDist`, `cameraVerticalOffset` and
@@ -180,17 +208,6 @@ impl ContentParts {
         let explosion_shapes =
             crate::explosion_shapes::ExplosionShapes::load(&weapon_pack, &content.paths.weapons)?;
         let explosion_debris = crate::explosion_debris::ExplosionDebris::new(&weapon_pack);
-        // Vehicle trails bring their Add-On's own particles and emitters.
-        let (actor_pack, notes) =
-            crate::actor_effects::with_vehicle_effects(effects_pack.clone(), &content.vehicles)?;
-        for note in notes {
-            bri_console::warn(format!("Vehicle effects: {note}"));
-        }
-        let actor_effects = crate::actor_effects::ActorEffects::new(
-            actor_pack,
-            weapon_pack.clone(),
-            Default::default(),
-        )?;
         // Items first: an Add-On's particle textures are among theirs.
         let mut item_assets = crate::items::ItemAssets::load_with(
             &content.paths.item_presentation,
@@ -201,10 +218,22 @@ impl ContentParts {
         let item_assets = Arc::new(item_assets);
         let weapon_effects = crate::weapon_effects::WeaponEffects::with_textures(
             effects_pack,
-            weapon_pack,
+            weapon_pack.clone(),
             Default::default(),
             |key| item_assets.texture(key),
         )?;
+        // Bodies draw from the weapons' effects, an Add-On's own among them
+        // (an image it wears in the emote slot), and vehicle trails bring
+        // their Add-On's particles and emitters.
+        let (actor_pack, notes) = crate::actor_effects::with_vehicle_effects(
+            weapon_effects.world().pack().clone(),
+            &content.vehicles,
+        )?;
+        for note in notes {
+            bri_console::warn(format!("Vehicle effects: {note}"));
+        }
+        let actor_effects =
+            crate::actor_effects::ActorEffects::new(actor_pack, weapon_pack, Default::default())?;
         let material_path = content.paths.brick_materials.join("brick-materials.json");
         ensure!(
             std::fs::metadata(&material_path)?.len() <= 8 * 1024 * 1024,
@@ -220,6 +249,10 @@ impl ContentParts {
             &content.ui_pack,
         )?;
         tool_ui.install_items(content.weapons.item_choices.clone())?;
+        tool_ui.install_effects(
+            content.weapons.emitter_choices.clone(),
+            content.weapons.light_choices.clone(),
+        )?;
         tool_ui.install_special(
             content.music.clone(),
             content
@@ -472,6 +505,11 @@ pub struct App {
     weapon_animation_cues: VecDeque<(bri_sim::presentation::Cue, f32, f64)>,
     weapon_animation_drops: u64,
     weapon_animation_cursor: u64,
+    /// View kick: hitscan shots seen this frame (actor, hand), and the
+    /// newest projectile id the kick has looked at (None before the first
+    /// view, so a join does not kick).
+    shot_kicks: Vec<(u64, u8)>,
+    kick_seen: Option<u64>,
     effects_renderer: Option<bri_fx_runtime::gpu::EffectsRenderer>,
     gpu_scene: Option<GpuScene>,
     light_volume: LightVolumeState,
@@ -546,8 +584,10 @@ pub struct App {
     /// horse players.
     mount_meshes: BTreeMap<u64, crate::avatar::AvatarMesh>,
     avatar_actions: BTreeMap<u64, crate::avatar::ActionAnimation>,
-    /// Thread-3 builder and chat animations by player.
-    avatar_gestures: BTreeMap<u64, crate::avatar::ActionAnimation>,
+    /// The script threads not tied to a mounted image, by player and thread
+    /// number: 0 and 1 a package's body animations, 3 the builder and chat
+    /// gestures. Thread 2 is `avatar_actions`.
+    avatar_threads: BTreeMap<u64, AvatarThreads>,
     avatar_action_images: BTreeMap<u64, String>,
     animation_time: f64,
     avatar_preview: Option<crate::gpu_build::Building<crate::avatar::Preview>>,
@@ -631,7 +671,8 @@ pub struct App {
     reconnects: u8,
     lan_query: Option<mpsc::Receiver<JoinList>>,
     /// Add-On import in progress: request, row id and the worker's answer.
-    add_on_import: Option<(RequestId, String, mpsc::Receiver<Result<String>>)>,
+    /// Converting the Add-Ons folder (`add_ons::start_sync`).
+    add_on_sync: Option<mpsc::Receiver<crate::add_ons::SyncNote>>,
     /// The Add-On list last asked for, the list that loaded without the
     /// Add-Ons that broke it, and why each was left out.
     left_out_add_ons: Option<(
@@ -796,6 +837,18 @@ impl App {
     }
     /// The Add-Ons screen changed which Add-Ons are on: the next game uses
     /// the new list, with no restart.
+    /// Convert what is new or changed in the Add-Ons folder, and remove
+    /// what was taken out, unless that is already under way.
+    fn sync_add_ons(&mut self) -> Result<()> {
+        if self.add_on_sync.is_none() {
+            let importer = crate::add_ons::importer()?;
+            self.add_on_sync = Some(crate::add_ons::start_sync(
+                &self.content.paths.root,
+                &importer,
+            )?);
+        }
+        Ok(())
+    }
     fn add_ons_changed(&mut self, mut view: AddOnsView) {
         self.packages_from_tools = false;
         let root = self.content.paths.root.clone();
@@ -1075,6 +1128,32 @@ impl App {
             self.beams
                 .add(from, Vec3::from(*to), *color, *width, *seconds);
         }
+        if let bri_sim::presentation::CueKind::Tracer { actor, hand } = &cue.kind
+            && self.shot_kicks.len() < 64
+        {
+            self.shot_kicks.push((*actor, *hand));
+        }
+        // A hitscan shot's streak, in the style of this client's copy of
+        // the image, from where this client draws that hand's muzzle.
+        if let bri_sim::presentation::CueKind::Tracer { actor, hand } = &cue.kind
+            && let Some(image) = self.world_items.held_image(*actor, *hand)
+            && let Some(tracer) = self
+                .content
+                .weapons
+                .pack
+                .images
+                .get(image)
+                .and_then(|i| i.shot.as_ref()?.hitscan.as_ref()?.tracer)
+            && let Some(from) = self.world_items.held_muzzle(*actor, *hand)
+        {
+            self.beams.add(
+                from,
+                Vec3::from(cue.position),
+                tracer.color,
+                tracer.width,
+                tracer.seconds,
+            );
+        }
         self.actor_effects.cue(&cue);
         self.explosion_shapes.cue(&cue);
         self.explosion_debris.cue(&cue);
@@ -1093,6 +1172,40 @@ impl App {
                 self.weapon_cues.push_back((cue, 0.));
             } else {
                 self.weapon_cue_drops = self.weapon_cue_drops.saturating_add(1);
+            }
+        }
+    }
+    /// `shot.kick`: shake this player's own view when they shoot, and the
+    /// view of anyone within a kick's `radius` of another player's shot,
+    /// seen from the shot itself (a hitscan tracer, or a new projectile), so
+    /// the kick costs nothing on the wire. One kick per hand per frame.
+    #[allow(clippy::too_many_arguments)]
+    fn view_kick(
+        shot_kicks: &mut Vec<(u64, u8)>,
+        kick_seen: &mut Option<u64>,
+        actor_effects: &mut crate::actor_effects::ActorEffects,
+        pack: &bri_weapons::Pack,
+        weapons: &bri_sim::session::WeaponView,
+        owner: bri_world::OwnerId,
+        muzzle: impl Fn(u64, u8) -> Option<Vec3>,
+        seed: u64,
+    ) {
+        let shots =
+            crate::actor_effects::new_shots(&std::mem::take(shot_kicks), kick_seen, weapons);
+        for shot in shots {
+            let Some(kick) = weapons
+                .images
+                .get(&shot.actor)
+                .and_then(|images| images.iter().find(|m| m.hand == shot.hand))
+                .and_then(|m| pack.images.get(&m.image)?.shot.as_ref()?.kick)
+            else {
+                continue;
+            };
+            let seed = seed ^ shot.actor.rotate_left(8) ^ u64::from(shot.hand);
+            if shot.actor == owner {
+                actor_effects.kick(kick, seed);
+            } else if let Some(at) = shot.from.or_else(|| muzzle(shot.actor, shot.hand)) {
+                actor_effects.kick_near(kick, at, seed);
             }
         }
     }
@@ -1324,7 +1437,7 @@ impl App {
     }
     fn update_avatar_animation_inputs(
         avatar_actions: &mut BTreeMap<u64, crate::avatar::ActionAnimation>,
-        avatar_gestures: &mut BTreeMap<u64, crate::avatar::ActionAnimation>,
+        avatar_threads: &mut BTreeMap<u64, AvatarThreads>,
         avatar_action_images: &mut BTreeMap<u64, String>,
         weapon_animation_cues: &mut VecDeque<(bri_sim::presentation::Cue, f32, f64)>,
         weapon_animation_drops: &mut u64,
@@ -1332,7 +1445,7 @@ impl App {
         elapsed: f32,
     ) {
         avatar_actions.retain(|owner, _| view.poses.contains_key(owner));
-        avatar_gestures.retain(|owner, _| view.poses.contains_key(owner));
+        avatar_threads.retain(|owner, _| view.poses.contains_key(owner));
         avatar_action_images.retain(|owner, _| view.poses.contains_key(owner));
         // The images in a player's hands; empty when they hold nothing.
         let identity = |owner: &u64| -> String {
@@ -1375,20 +1488,7 @@ impl App {
             else {
                 continue;
             };
-            // Thread 3 is not tied to a mounted image: it is replaced by the
-            // next builder or chat animation, or stopped by `root`.
-            if *thread == 3 {
-                if sequence.eq_ignore_ascii_case("root") {
-                    avatar_gestures.remove(actor);
-                } else {
-                    avatar_gestures.insert(
-                        *actor,
-                        crate::avatar::ActionAnimation {
-                            sequence: sequence.clone(),
-                            started_at,
-                        },
-                    );
-                }
+            if play_free_thread(avatar_threads, *actor, *thread, sequence, *image_hand, started_at) {
                 continue;
             }
             if *thread != 2 || sequence.eq_ignore_ascii_case("root") {
@@ -1861,6 +1961,8 @@ impl App {
             weapon_animation_cues: VecDeque::new(),
             weapon_animation_drops: 0,
             weapon_animation_cursor: 0,
+            shot_kicks: Vec::new(),
+            kick_seen: None,
             effects_renderer: None,
             gpu_scene: None,
             light_volume: LightVolumeState::default(),
@@ -1907,7 +2009,7 @@ impl App {
             avatars: BTreeMap::new(),
             mount_meshes: BTreeMap::new(),
             avatar_actions: BTreeMap::new(),
-            avatar_gestures: BTreeMap::new(),
+            avatar_threads: BTreeMap::new(),
             avatar_action_images: BTreeMap::new(),
             animation_time: 0.0,
             avatar_preview: None,
@@ -1948,7 +2050,7 @@ impl App {
             lan_hosts: BTreeMap::new(),
             reconnects: 0,
             lan_query: None,
-            add_on_import: None,
+            add_on_sync: None,
             left_out_add_ons: None,
             content_problems,
             add_on_health: Default::default(),
@@ -2073,7 +2175,7 @@ impl App {
         self.avatars.clear();
         self.mount_meshes.clear();
         self.avatar_actions.clear();
-        self.avatar_gestures.clear();
+        self.avatar_threads.clear();
         self.avatar_action_images.clear();
         self.controls = Controls::default();
         self.cpu_scene = None;
@@ -2677,6 +2779,7 @@ impl App {
                 archetype: bri_sim::player_types::PlayerType::Horse.archetype(),
                 scale: 1.0,
                 energy: 0.0,
+                speed_scale: 1.0,
                 tick: Default::default(),
                 tether: None,
             };
@@ -5599,11 +5702,14 @@ pub fn name_opacity(
 /// bricks ([`crate::building::Building::name_visible`]), faded by
 /// [`name_opacity`] and drawn in the mini-game colour a member's player is
 /// given at spawn (`GameConnection::createPlayer`), or their team's (Slayer's
-/// `setShapeNameColor`), white otherwise.
+/// `setShapeNameColor`), white otherwise. Items with a `label` (v20's
+/// `setShapeName` on an item: an ammo box's count) show it the same way, in
+/// white, above where they lie.
 #[allow(clippy::too_many_arguments)]
 fn name_tags(
     view: &network::View,
     presented: &BTreeMap<bri_world::OwnerId, bri_sim::player::PlayerState>,
+    pack: &bri_weapons::Pack,
     building: Option<&crate::building::Building>,
     view_projection: glam::Mat4,
     camera: Vec3,
@@ -5673,6 +5779,34 @@ fn name_tags(
             text: plain_chat(name),
             opacity,
             color,
+        });
+    }
+    // An item with a `label` (v20's `setShapeName` on an item: an ammo
+    // box's count) shows it in white above where it lies.
+    let lying = view
+        .weapons
+        .static_items
+        .iter()
+        .map(|i| (i.item.as_str(), Vec3::from(i.position)))
+        .chain(view.weapons.drops.iter().map(|d| (d.item.as_str(), d.position)));
+    for (item, at) in lying {
+        let Some(label) = pack
+            .items
+            .get(item)
+            .map(|i| &i.label)
+            .filter(|l| !l.is_empty())
+        else {
+            continue;
+        };
+        let Some((x, y, opacity)) = place(at, 8192.0) else {
+            continue;
+        };
+        tags.push(bri_ui::api::NameTag {
+            x,
+            y,
+            text: label.clone(),
+            opacity,
+            color: [255; 3],
         });
     }
     // Add-On world shapes' labels, over each shape's top centre in its
@@ -6611,6 +6745,32 @@ impl PlatformApp for App {
             }));
             self.disconnect();
         }
+        // The server's settings decide some weapon fields: play the pack
+        // they make, and the authored one outside a game.
+        let values = self.attempt.as_ref().and_then(|a| a.view.as_ref());
+        let values = values
+            .map(|v| v.weapon_settings.clone())
+            .unwrap_or_default();
+        match self.content.weapons.apply_settings(&values) {
+            Ok(false) => {}
+            // Items a setting shows or hides: the lists offer what the
+            // server does.
+            Ok(true) => {
+                let choices = self.content.weapons.item_choices.clone();
+                let rebuilt = self.tool_ui.install_items(choices.clone()).and_then(|()| {
+                    self.item_ui = crate::item_ui::ItemUi::new(
+                        &self.item_assets,
+                        &choices,
+                        &self.content.ui_pack,
+                    )?;
+                    Ok(())
+                });
+                if let Err(error) = rebuilt {
+                    bri_console::warn(format!("The server's items: {error:#}"));
+                }
+            }
+            Err(error) => bri_console::warn(format!("The server's weapon settings: {error:#}")),
+        }
         self.poll_files();
         if let Some((map, name)) = self.save_previews.poll() {
             self.ui.apply(UiUpdate::SavePreview {
@@ -6715,6 +6875,18 @@ impl PlatformApp for App {
                     .ground_impact(speed, min, self.animation_time.to_bits());
             }
             if let Some(view) = &a.view {
+                Self::view_kick(
+                    &mut self.shot_kicks,
+                    &mut self.kick_seen,
+                    &mut self.actor_effects,
+                    &self.content.weapons.pack,
+                    &view.weapons,
+                    view.owner,
+                    |actor, hand| self.world_items.held_muzzle(actor, hand),
+                    self.animation_time.to_bits(),
+                );
+            }
+            if let Some(view) = &a.view {
                 let vitals = view.vitals.get(&view.owner);
                 let mounted = vitals.and_then(|v| v.mounted);
                 // Driving a package entity parks the avatar like a seat does.
@@ -6725,7 +6897,12 @@ impl PlatformApp for App {
                 let ride = vitals.and_then(|v| v.ride);
                 self.motion
                     .set_mounted(mounted.is_some() || ride.is_some() || driving);
-                self.controls.set_mounted(mounted.is_some() || ride.is_some());
+                self.controls
+                    .set_mounted(mounted.is_some() || ride.is_some());
+                let first_person_only = self
+                    .presented_local()
+                    .is_some_and(|p| view.archetypes.resolve(p.archetype).look.first_person_only);
+                self.controls.set_first_person_only(first_person_only);
                 let head_yaw = self.controls.movement().head_yaw;
                 self.motion
                     .present(view, self.controls.yaw, self.controls.body_pitch(), head_yaw);
@@ -7132,22 +7309,36 @@ impl PlatformApp for App {
         self.update_combat_presentation();
         self.update_perf();
         self.update_lag();
-        if let Some((request, _, receiver)) = &self.add_on_import
-            && let Some(result) = finished(receiver, "Add-On import")
-        {
-            let result = result.and_then(|imported| imported);
-            let request = *request;
-            self.add_on_import = None;
-            let mut view = crate::add_ons::view(&self.content.paths.root, crate::add_ons::machine());
-            match result {
-                Ok(notice) => {
-                    view.notice = notice;
-                    self.show_add_ons(view);
-                    self.answer(request, Ok(()));
+        if let Some(receiver) = &self.add_on_sync {
+            let mut notes = vec![];
+            let mut done = false;
+            loop {
+                match receiver.try_recv() {
+                    Ok(note) => {
+                        done |= note.finished;
+                        notes.push(note);
+                    }
+                    Err(mpsc::TryRecvError::Empty) => break,
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        done = true;
+                        break;
+                    }
                 }
-                Err(error) => {
+            }
+            if done {
+                self.add_on_sync = None;
+            }
+            if !notes.is_empty() || done {
+                let mut view = crate::add_ons::view(&self.content.paths.root);
+                let last = notes.iter().rev().find(|n| !n.notice.is_empty());
+                if let Some(note) = last {
+                    view.notice = note.notice.clone();
+                }
+                if last.is_some_and(|n| n.finished) {
+                    // A conversion that was on, replaced or removed.
+                    self.add_ons_changed(view);
+                } else {
                     self.show_add_ons(view);
-                    self.answer(request, Err(error));
                 }
             }
         }
@@ -7368,7 +7559,7 @@ impl PlatformApp for App {
             // Visible geometry and attached items consume these same original nodes.
             Self::update_avatar_animation_inputs(
                 &mut self.avatar_actions,
-                &mut self.avatar_gestures,
+                &mut self.avatar_threads,
                 &mut self.avatar_action_images,
                 &mut self.weapon_animation_cues,
                 &mut self.weapon_animation_drops,
@@ -7427,7 +7618,7 @@ impl PlatformApp for App {
                     .is_some_and(|body| mesh.set_body(body))
                 {
                     self.avatar_actions.remove(owner);
-                    self.avatar_gestures.remove(owner);
+                    self.avatar_threads.remove(owner);
                     self.avatar_action_images.remove(owner);
                 }
                 let mut ready_hands = Vec::new();
@@ -7494,6 +7685,12 @@ impl PlatformApp for App {
                     // A rule's `setLookLimits` for the body.
                     .or_else(|| view.vitals.get(owner).and_then(|v| v.look_limits));
                 let held = crate::avatar::HeldToolPose::from_mounted_images(ready_hands);
+                let threads = self
+                    .avatar_threads
+                    .get(owner)
+                    .filter(|_| !dead)
+                    .cloned()
+                    .unwrap_or_default();
                 let input = crate::avatar::AvatarAnimationInput {
                     look_limits,
                     mount_rotation: self.rider_rotations.get(owner).copied(),
@@ -7504,7 +7701,8 @@ impl PlatformApp for App {
                         self.combat.hug_pose(*owner, held)
                     },
                     action: self.avatar_actions.get(owner).cloned().filter(|_| !dead),
-                    gesture: self.avatar_gestures.get(owner).cloned().filter(|_| !dead),
+                    gesture: threads[3].clone(),
+                    body: [threads[0].clone(), threads[1].clone()],
                     dead,
                     sitting: !dead
                         && (view.vitals.get(owner).is_some_and(|v| v.sitting)
@@ -8743,43 +8941,38 @@ impl PlatformApp for App {
                     Ok(())
                 }
                 UiAction::RequestAddOns => {
-                    let view = crate::add_ons::view(&self.content.paths.root, crate::add_ons::machine());
+                    let mut view = crate::add_ons::view(&self.content.paths.root);
+                    if let Err(error) = self.sync_add_ons() {
+                        view.notice = format!("{error:#}");
+                    }
                     self.show_add_ons(view);
                     Ok(())
                 }
                 UiAction::SetAddOnEnabled { ref id, enabled } => {
-                    crate::add_ons::set_enabled(
-                        &self.content.paths.root,
-                        crate::add_ons::machine(),
-                        id,
-                        enabled,
-                    )
+                    crate::add_ons::set_enabled(&self.content.paths.root, id, enabled)
                         .map(|view| self.add_ons_changed(view))
                 }
-                UiAction::DefaultAddOns => crate::add_ons::defaults(&self.content.paths.root, crate::add_ons::machine())
+                UiAction::DefaultAddOns => crate::add_ons::defaults(&self.content.paths.root)
                     .map(|view| self.add_ons_changed(view)),
                 UiAction::ImportAddOn { id: ref row } => {
                     let root = self.content.paths.root.clone();
-                    let started = if self.add_on_import.is_some() {
-                        Err(anyhow::anyhow!(
-                            "Another add-on is importing; wait for it to finish."
-                        ))
-                    } else {
-                        crate::add_ons::importer().and_then(|importer| {
-                            crate::add_ons::start_import(&root, crate::add_ons::machine(), row, &importer)
+                    crate::add_ons::retry(&root, row).and_then(|()| {
+                        self.sync_add_ons()?;
+                        let mut view = crate::add_ons::view(&root);
+                        view.notice = "Converting... the game keeps running meanwhile.".into();
+                        self.show_add_ons(view);
+                        Ok(())
+                    })
+                }
+                UiAction::OpenAddOnsFolder => {
+                    let folder = bri_package::classic::folder(&self.content.paths.root);
+                    std::fs::create_dir_all(&folder)
+                        .with_context(|| format!("Could not create {}", folder.display()))
+                        .map(|()| {
+                            if !bri_crash::open(&folder.to_string_lossy()) {
+                                bri_console::warn(format!("Could not open {}", folder.display()));
+                            }
                         })
-                    };
-                    match started {
-                        Ok(receiver) => {
-                            let mut view = crate::add_ons::view(&root, crate::add_ons::machine());
-                            crate::add_ons::mark_importing(&mut view, row);
-                            view.notice = "Importing... the game keeps running meanwhile.".into();
-                            self.show_add_ons(view);
-                            self.add_on_import = Some((id, row.clone(), receiver));
-                            continue;
-                        }
-                        Err(error) => Err(error),
-                    }
                 }
                 UiAction::ToggleFavorite { ref address } => {
                     let path = self.state_dir.join("servers.json");
@@ -9931,6 +10124,7 @@ impl PlatformApp for App {
         self.ui.core.name_tags = name_tags(
             view,
             self.motion.presented(),
+            &self.content.weapons.pack,
             self.building.as_ref(),
             glam::Mat4::from_cols_array(&camera.view_projection),
             eye,
@@ -10382,6 +10576,36 @@ fn update_small_json<T: serde::de::DeserializeOwned + serde::Serialize + Default
 const MAX_RECONNECTS: u8 = 3;
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn body_threads_hold_until_replaced_or_root() {
+        let mut threads = std::collections::BTreeMap::new();
+        // An image's own thread 0 and the image-bound thread 2 are not body
+        // threads.
+        assert!(!super::play_free_thread(&mut threads, 7, 0, "fire", Some(0), 1.0));
+        assert!(!super::play_free_thread(&mut threads, 7, 2, "plant", None, 1.0));
+        assert!(threads.is_empty());
+        assert!(super::play_free_thread(&mut threads, 7, 0, "jump", None, 1.0));
+        assert!(super::play_free_thread(&mut threads, 7, 3, "talk", None, 1.5));
+        assert!(super::play_free_thread(&mut threads, 7, 0, "plant", None, 2.0));
+        let sequences = |threads: &std::collections::BTreeMap<u64, super::AvatarThreads>| {
+            threads[&7]
+                .iter()
+                .map(|t| t.as_ref().map(|t| (t.sequence.clone(), t.started_at)))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            sequences(&threads),
+            vec![
+                Some(("plant".into(), 2.0)),
+                None,
+                None,
+                Some(("talk".into(), 1.5)),
+            ]
+        );
+        assert!(super::play_free_thread(&mut threads, 7, 0, "Root", None, 3.0));
+        assert!(super::play_free_thread(&mut threads, 7, 3, "root", None, 3.0));
+        assert!(threads.is_empty());
+    }
     /// A host's report reaches the Report window as plain text, a cell for
     /// every column in order and team names in their paint.
     #[test]
@@ -10744,6 +10968,8 @@ mod tests {
         view.projectiles.push(bri_weapons::Projectile {
             paint: None,
             heading: None,
+            bounces: 0,
+            spawned: 0,
             id: 1,
             definition: trail.id.clone(),
             source: bri_weapons::ActorId(1),

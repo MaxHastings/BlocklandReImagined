@@ -708,13 +708,9 @@ impl Session {
     /// Whether `definition` is `package`'s own or an Add-On's it depends on.
     fn owns_kind(&self, package: &str, definition: &str) -> bool {
         let namespace = definition.split(':').next().unwrap_or_default();
-        namespace == package
-            || self.packages.as_ref().is_some_and(|host| {
-                host.catalog
-                    .packages
-                    .get(package)
-                    .is_some_and(|p| p.manifest.dependencies.contains_key(namespace))
-            })
+        self.packages
+            .as_ref()
+            .is_some_and(|host| host.catalog.uses(package, namespace))
     }
     pub(super) fn apply_physics_op(
         &mut self,
@@ -739,7 +735,15 @@ impl Session {
                 by,
             } => {
                 let by = by.filter(|b| self.peers.contains_key(b));
-                allowed(self, target, by)?;
+                // Anyone living may shove themselves, as v20's setVelocity
+                // on a shot's own shooter did (a round turned back on them).
+                let own = caller.or(by).is_some_and(|mover| {
+                    target == ObjectRef::Player(mover)
+                        && self.peers.get(&mover).is_some_and(|p| p.combat.alive)
+                });
+                if !own {
+                    allowed(self, target, by)?;
+                }
                 let velocity = Vec3::from(velocity);
                 self.push_object(target, velocity)?;
                 if let Some(by) = by.or(caller) {
@@ -751,6 +755,7 @@ impl Session {
                 player,
                 velocity,
                 by,
+                seconds,
             } => {
                 let by = by.filter(|b| self.peers.contains_key(b));
                 let target = ObjectRef::Player(player);
@@ -772,6 +777,13 @@ impl Session {
                     None => {
                         self.tumble_player(player, velocity)?;
                     }
+                }
+                if let Some(seconds) = seconds
+                    && let Some(v) = self.ridden(player)
+                    && self.vehicles.mounted_family(player) == Some(veh::Family::Tumble)
+                    && let Some(world) = &mut self.vehicles.world
+                {
+                    world.set_tumble_ticks(veh::VehicleId(v.0), (seconds * 120.0).round() as u64)?;
                 }
                 if let Some(by) = by.or(caller) {
                     self.credit(target, by);
@@ -1682,7 +1694,14 @@ impl Session {
         else {
             return Ok(());
         };
-        self.damage_vehicle(target, health * share, source, "Smash", point)
+        self.damage_vehicle(
+            target,
+            health * share,
+            source,
+            "Smash",
+            point,
+            super::vehicles::VehicleHarm::Smash,
+        )
     }
 
     /// A rider about to be seated (`mountObject`): no one holds them in a

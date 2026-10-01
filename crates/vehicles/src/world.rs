@@ -323,6 +323,8 @@ pub enum VehiclePart {
     Chassis,
     Turret,
 }
+/// An attached turret's own damage pool, v20's `TankTurretVehicle`'s.
+pub const TURRET_MAX_DAMAGE: f32 = 250.;
 #[derive(Clone, Copy, Debug)]
 pub enum DamageKind {
     Direct,
@@ -341,6 +343,9 @@ struct Instance {
     controls: Vec<Controls>,
     damage: f32,
     born: u64,
+    /// A tumble body given a length (`tumble(%obj, %time)`): it ends at
+    /// this tick, however it lies, instead of when it settles.
+    ends: Option<u64>,
     dead_at: Option<u64>,
     last_damage: OwnerId,
     last_shot: Option<u64>,
@@ -492,7 +497,8 @@ fn idle_controls(d: &Definition, v: &Instance, seat: usize) -> Controls {
 }
 fn effective_seat_pose(b: &RigidBody, d: &Definition, v: &Instance, index: usize) -> Transform {
     if index == 2
-        && v.turret_damage.is_some_and(|damage| damage >= 250.)
+        && v.turret_damage
+            .is_some_and(|damage| damage >= TURRET_MAX_DAMAGE)
         && let Some(t) = &d.attachment_fallback_seat
     {
         return transform(&(b.position() * local_pose(t, v.spawn.scale)));
@@ -695,6 +701,7 @@ impl VehiclesWorld {
                 controls: vec![Controls::default(); count],
                 damage: 0.,
                 born: self.tick,
+                ends: None,
                 dead_at: None,
                 last_shot: None,
                 charge_started: None,
@@ -1021,6 +1028,17 @@ impl VehiclesWorld {
         v.energy = energy;
         Ok(())
     }
+    /// A tumble body lasts `ticks` (120 a second) from now, then lets its
+    /// rider up, rather than ending when it settles.
+    pub fn set_tumble_ticks(&mut self, id: VehicleId, ticks: u64) -> Result<()> {
+        let v = self.instances.get_mut(&id).context("unknown vehicle")?;
+        ensure!(
+            self.catalog[&v.spawn.definition].family == Family::Tumble,
+            "only a tumble has a length"
+        );
+        v.ends = Some(self.tick + ticks.max(1));
+        Ok(())
+    }
     pub fn set_velocity(
         &mut self,
         world: &mut PhysicsWorld,
@@ -1194,7 +1212,10 @@ impl VehiclesWorld {
             v.charge_started = None;
             v.wheels.clear();
             self.intents.push(Intent::Destroyed { vehicle: id, by });
-            let initial = if v.turret_damage.is_some_and(|damage| damage < 250.) {
+            let initial = if v
+                .turret_damage
+                .is_some_and(|damage| damage < TURRET_MAX_DAMAGE)
+            {
                 Some("v20.projectile.tankturretexplosionprojectile")
             } else {
                 d.initial_explosion.as_deref()
@@ -1209,7 +1230,7 @@ impl VehiclesWorld {
                 )));
             }
             if let Some(damage) = &mut v.turret_damage {
-                *damage = 250.;
+                *damage = TURRET_MAX_DAMAGE;
             }
             // The wreck's fire is drawn from the replicated destroyed state
             // (`Definition::wreck_emitters`); no cue is sent for it.
@@ -1235,11 +1256,11 @@ impl VehiclesWorld {
             .turret_damage
             .as_mut()
             .context("vehicle has no attached turret")?;
-        if *damage >= 250. || v.dead_at.is_some() {
+        if *damage >= TURRET_MAX_DAMAGE || v.dead_at.is_some() {
             return Ok(());
         }
-        *damage = (*damage + amount).min(250.);
-        if *damage >= 250. {
+        *damage = (*damage + amount).min(TURRET_MAX_DAMAGE);
+        if *damage >= TURRET_MAX_DAMAGE {
             if let Some(collider) = v.turret_collider.take() {
                 world.remove_collider(collider);
             }
@@ -1332,6 +1353,15 @@ impl VehiclesWorld {
             velocity: (velocity * authored(d.runover_push, 1.2)).to_array(),
         });
         Ok(())
+    }
+    /// The damage a part of a live vehicle takes to be destroyed: its
+    /// definition's `max_damage`, or an attached turret's own pool.
+    pub fn max_damage(&self, id: VehicleId, part: VehiclePart) -> Option<f32> {
+        let v = self.instances.get(&id).filter(|v| v.dead_at.is_none())?;
+        Some(match part {
+            VehiclePart::Chassis => self.catalog[&v.spawn.definition].max_damage,
+            VehiclePart::Turret => TURRET_MAX_DAMAGE,
+        })
     }
     /// Which part of a vehicle a hit at `point` struck: its attached turret
     /// when that is the nearer collider.
@@ -1695,7 +1725,8 @@ impl VehiclesWorld {
                     FIXED_DT,
                 );
             }
-            if v.turret_damage.is_some_and(|damage| damage >= 250.)
+            if v.turret_damage
+                .is_some_and(|damage| damage >= TURRET_MAX_DAMAGE)
                 && let Some(collider) = v.turret_collider.take()
             {
                 world.remove_collider(collider);
@@ -1729,6 +1760,12 @@ impl VehiclesWorld {
             }
             if d.family == Family::Tumble && !self.held.contains(id) {
                 let age = self.tick - v.born;
+                if let Some(ends) = v.ends {
+                    if self.tick >= ends {
+                        removed.push(*id);
+                    }
+                    continue;
+                }
                 if age >= 5400
                     || (age > 0
                         && age.is_multiple_of(240)
@@ -2007,7 +2044,10 @@ impl VehiclesWorld {
             turret_transform: d
                 .attachment_mount
                 .as_ref()
-                .filter(|_| v.turret_damage.is_none_or(|damage| damage < 250.))
+                .filter(|_| {
+                    v.turret_damage
+                        .is_none_or(|damage| damage < TURRET_MAX_DAMAGE)
+                })
                 .map(|t| transform(&(b.position() * local_pose(t, v.spawn.scale)))),
         }
     }
@@ -2108,7 +2148,9 @@ fn weapon_step(
     world: &mut PhysicsWorld,
     intents: &mut Vec<Intent>,
 ) {
-    if v.turret_damage.is_some_and(|damage| damage >= 250.) {
+    if v.turret_damage
+        .is_some_and(|damage| damage >= TURRET_MAX_DAMAGE)
+    {
         return;
     }
     let Some(weapon) = &d.weapon else { return };

@@ -353,6 +353,7 @@ impl Session {
             self.bots
                 .brains
                 .insert(bot, Brain::new(Some(brick_id), kind, home, bot, crossed));
+            self.weapons.set_bot(bri_weapons::ActorId(bot), true)?;
         }
         Ok(())
     }
@@ -404,9 +405,8 @@ impl Session {
         self.bots
             .brains
             .insert(bot, Brain::new(None, kind, drop, bot, crossed));
-        self.bots
-            .by_rules
-            .insert(bot, (package.to_owned(), game.0));
+        self.weapons.set_bot(bri_weapons::ActorId(bot), true)?;
+        self.bots.by_rules.insert(bot, (package.to_owned(), game.0));
         let placed = (|| -> Result<()> {
             let player = self.peers[&bot].combat.player;
             let effects = self

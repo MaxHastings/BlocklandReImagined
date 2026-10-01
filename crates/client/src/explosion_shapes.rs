@@ -359,6 +359,8 @@ mod tests {
                 package: None,
             }],
             diagnostics: Vec::new(),
+            external_projectiles: Default::default(),
+            bindings: Vec::new(),
         };
         let root = tempfile::tempdir()?;
         let shapes = ExplosionShapes::load(&pack, root.path())?;

@@ -167,6 +167,13 @@ fn image(name: &str, states: Vec<State>) -> (String, Image) {
             hide_nodes: Vec::new(),
             both_arms: false,
             paint_tint: false,
+            left_image: None,
+            magazine: None,
+            volleys: vec![],
+            last_shot: None,
+            state_shots: Default::default(),
+            cook: None,
+            guard: None,
             rope: None,
             light: None,
             paint_picker: false,
@@ -180,6 +187,7 @@ fn weapons() -> Arc<Pack> {
         effects: Default::default(),
         schema_version: bri_weapons::SCHEMA,
         id: "test".into(),
+        external_projectiles: Default::default(),
         items: BTreeMap::new(),
         images: BTreeMap::from([
             image(
@@ -206,6 +214,7 @@ fn weapons() -> Arc<Pack> {
         definitions: vec![],
         resources: vec![],
         diagnostics: vec![],
+        bindings: vec![],
     })
 }
 fn cue(id: u64, kind: CueKind) -> Cue {
@@ -644,4 +653,122 @@ fn hard_landings_shake_the_camera_by_speed_past_ten() -> Result<()> {
     assert!(peak(40.0, 250.0)? < standard * 0.2);
     // Not an explosion: the shake follows the camera wherever it is.
     Ok(())
+}
+
+#[test]
+fn a_guns_kick_shakes_the_holders_view_and_fades() -> Result<()> {
+    let mut fx = ActorEffects::new(effects(), weapons(), Default::default())?;
+    let kick = bri_weapons::Kick {
+        amplitude: 0.5,
+        frequency: 2.0,
+        seconds: 0.5,
+        radius: 0.0,
+    };
+    fx.kick(kick, 7);
+    let head = |_: Anchor| Some(Mat4::IDENTITY);
+    fx.advance(0.05, head, &[], &[], &[])?;
+    let near = fx.camera_shake(Vec3::ZERO);
+    let far = fx.camera_shake(Vec3::splat(10_000.));
+    assert!(near.length() > 0.0, "{near}");
+    assert_eq!(near, far, "a kick has no distance falloff");
+    assert!(near.abs().max_element() <= 0.5);
+    // Frames are at most 0.25 s each.
+    fx.advance(0.25, head, &[], &[], &[])?;
+    fx.advance(0.25, head, &[], &[], &[])?;
+    assert_eq!(
+        fx.camera_shake(Vec3::ZERO),
+        Vec3::ZERO,
+        "gone after its seconds"
+    );
+    Ok(())
+}
+
+/// Another player's recoil blast shakes a view within its radius, less
+/// the farther it is, and not at all beyond it or without a radius.
+#[test]
+fn a_kick_with_a_radius_shakes_nearby_views() -> Result<()> {
+    let kick = bri_weapons::Kick {
+        amplitude: 0.5,
+        frequency: 2.0,
+        seconds: 0.5,
+        radius: 10.0,
+    };
+    let felt = |kick: bri_weapons::Kick, eye: Vec3| -> Result<f32> {
+        let mut fx = ActorEffects::new(effects(), weapons(), Default::default())?;
+        fx.kick_near(kick, Vec3::new(0.0, 0.0, 0.0), 7);
+        fx.advance(0.05, |_: Anchor| Some(Mat4::IDENTITY), &[], &[], &[])?;
+        Ok(fx.camera_shake(eye).length())
+    };
+    let close = felt(kick, Vec3::new(1.0, 0.0, 0.0))?;
+    let farther = felt(kick, Vec3::new(5.0, 0.0, 0.0))?;
+    assert!(close > farther && farther > 0.0, "{close} {farther}");
+    assert_eq!(
+        felt(kick, Vec3::new(10.5, 0.0, 0.0))?,
+        0.0,
+        "beyond its radius"
+    );
+    let own = bri_weapons::Kick {
+        radius: 0.0,
+        ..kick
+    };
+    assert_eq!(
+        felt(own, Vec3::new(1.0, 0.0, 0.0))?,
+        0.0,
+        "the shooter's alone"
+    );
+    Ok(())
+}
+
+#[test]
+fn each_hand_that_shot_kicks_once() {
+    use bri_client::actor_effects::{SeenShot, new_shots};
+    let shot = |id: u64, source: u64| bri_weapons::Projectile {
+        id,
+        definition: "bullet".into(),
+        source: bri_weapons::ActorId(source),
+        position: Vec3::ZERO,
+        velocity: Vec3::NEG_Z,
+        scale: 1.,
+        age: 0,
+        bounced: false,
+        stuck: false,
+        origin: Vec3::ZERO,
+        was_thrown: false,
+        paint: None,
+        heading: None,
+        bounces: 0,
+        spawned: 0,
+    };
+    let view = |shots: Vec<bri_weapons::Projectile>| bri_sim::session::WeaponView {
+        projectiles: shots,
+        ..Default::default()
+    };
+    let mut seen = None;
+    let hands = |shots: Vec<SeenShot>| -> Vec<(u64, u8)> {
+        shots.iter().map(|s| (s.actor, s.hand)).collect()
+    };
+    assert!(
+        new_shots(&[], &mut seen, &view(vec![shot(5, 1)])).is_empty(),
+        "already flying when this client joined"
+    );
+    assert!(new_shots(&[], &mut seen, &view(vec![shot(5, 1)])).is_empty());
+    assert_eq!(
+        hands(new_shots(
+            &[],
+            &mut seen,
+            &view(vec![shot(5, 1), shot(6, 2)])
+        )),
+        [(2, 0)],
+        "someone else's shot"
+    );
+    let pellets = new_shots(&[], &mut seen, &view(vec![shot(7, 1), shot(8, 1)]));
+    assert_eq!(hands(pellets.clone()), [(1, 0)], "two pellets, one kick");
+    assert_eq!(pellets[0].from, Some(Vec3::ZERO), "from where it left");
+    let rays = new_shots(&[(1, 1), (2, 0), (1, 1)], &mut seen, &view(vec![]));
+    assert_eq!(
+        hands(rays.clone()),
+        [(1, 1), (2, 0)],
+        "the left gun's hitscan"
+    );
+    assert_eq!(rays[0].from, None, "a ray leaves the muzzle");
 }

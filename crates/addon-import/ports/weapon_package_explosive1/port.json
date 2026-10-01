@@ -1,0 +1,118 @@
+{
+  "schema_version": 1,
+  "include": [
+    "tier-tactical-core",
+    "tier-tactical"
+  ],
+  "rules": {
+    "settings": {
+      "$Pref::Server::TT::DisableExplosive1": {
+        "how": "on, Explosive 1's items are left out of every item list from the next start, as the original did not load them; items already placed in a build stay",
+        "fields": [
+          {
+            "path": ["items", "*", "hidden"],
+            "values": {
+              "true": true
+            },
+            "existing": false
+          }
+        ]
+      },
+      "$Pref::Server::TT::DisableNadePickups": {
+        "how": "on, the grenade bag pickup is left out of every item list from the next start, as the original did not load it; ones already placed in a build stay",
+        "fields": [
+          {
+            "path": ["items", "*", "hidden"],
+            "values": {
+              "true": true
+            },
+            "only": {
+              "datablock": "GrenadeBagItem"
+            },
+            "existing": false
+          }
+        ]
+      }
+    }
+  },
+  "notes": "Tier+Tactical Explosive 1 on Tier 1's ammo system: the Conc' Grenade, Stick Grenade and Molotov are counted from the holder's grenades (TT_grenade), a throw taking one; with none left the grenade leaves the hand, its tool still selected, and comes back as a Grenade Bag or a dead player's bag brings more. The Conc' Grenade goes off on its third knock with a knock sound at each; the Molotov bursts into three or four embers thrown as its script threw them, which for the ember's life sear every player within reach with flames and a sizzle only they hear. One difference: Kai played each toss sound twice at once to make it a little louder; it plays once here.",
+  "handles": {
+    "Projectile::PrjLoop_tick": "engine aura: it pulses every PrjLoop_tickTime, PrjLoop_maxTicks times at most (the ember's aura, read from PrjLoop_onTick)",
+    "PrjLoop_emitPrj": "nothing in Explosive 1 calls it"
+  },
+  "scripts": [
+    {
+      "method": "onArmed",
+      "into": "state",
+      "pattern": "if\\s*\\(\\s*%obj\\.getImageAmmo\\(\\s*0\\s*\\)\\s*\\)\\s*\\{\\s*%obj\\.playthread\\(\\s*2\\s*,\\s*\\w+\\s*\\)\\s*;[^}]*\\}\\s*%obj\\.setImageAmmo\\(\\s*0\\s*,\\s*0\\s*\\)",
+      "set": {
+        "arm_once": true
+      }
+    },
+    {
+      "on": "projectile",
+      "method": "onExplode",
+      "into": "projectile",
+      "pattern": "Parent::onExplode\\([^;]*;\\s*%shrapData\\s*=\\s*(?P<p>\\w+)\\s*;\\s*%shards\\s*=\\s*getRandom\\(\\s*(?P<lo>\\d+)\\s*,\\s*(?P<hi>\\d+)\\s*\\)\\s*;[\\s\\S]*?%x\\s*=\\s*\\(\\s*getRandom\\(\\s*(?P<xl>-?\\d+)\\s*,\\s*(?P<xh>-?\\d+)\\s*\\)\\s*-\\s*(?P<xo>[\\d.]+)\\s*\\)\\s*\\*\\s*(?P<xs>[\\d.]+)\\s*;\\s*%y\\s*=\\s*\\(\\s*getRandom\\(\\s*(?P<yl>-?\\d+)\\s*,\\s*(?P<yh>-?\\d+)\\s*\\)\\s*-\\s*(?P<yo>[\\d.]+)\\s*\\)\\s*\\*\\s*(?P<ys>[\\d.]+)\\s*;\\s*%z\\s*=\\s*\\(\\s*getRandom\\(\\s*(?P<zl>-?\\d+)\\s*,\\s*(?P<zh>-?\\d+)\\s*\\)\\s*-\\s*(?P<zo>[\\d.]+)\\s*\\)\\s*\\*\\s*(?P<zs>[\\d.]+)\\s*;\\s*%velocity\\s*=\\s*%x\\s+SPC\\s+%y\\s+SPC\\s+%z\\s*;[\\s\\S]*?dataBlock\\s*=\\s*%shrapData\\s*;\\s*initialVelocity\\s*=\\s*%velocity\\s*;\\s*initialPosition\\s*=\\s*%pos\\s*;",
+      "required_by": "%shrapData",
+      "set": {
+        "children": [
+          {
+            "projectile": "{p|projectile}",
+            "count": "{lo}",
+            "max_count": "{hi}",
+            "on_explode": true,
+            "steps": {
+              "low": ["{xl}", "{zl}", "{yl}"],
+              "high": ["{xh}", "{zh}", "{yh}"],
+              "offset": ["{xo|neg}", "{zo|neg}", "{yo|neg}"],
+              "step": ["{xs}", "{zs}", "{ys|neg}"]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "on": "projectile",
+      "method": "PrjLoop_onTick",
+      "into": "projectile",
+      "pattern": "initContainerRadiusSearch\\(\\s*%obj\\.getPosition\\(\\s*\\)\\s*,\\s*(?P<r>[\\d.]+)\\s*,\\s*\\$TypeMasks::PlayerObjectType\\s*\\)[\\s\\S]*?%dmg\\s*=\\s*(?P<d>[\\d.]+)\\s*;[\\s\\S]*?spawnExplosion\\(\\s*(?P<fx>\\w+)\\s*,[\\s\\S]*?play2D\\(\\s*(?P<snd>\\w+)\\s*\\)[\\s\\S]*?%target\\.damage\\([^;]*\\$DamageType::(?P<t>\\w+)\\s*\\)",
+      "required_by": "initContainerRadiusSearch",
+      "set": {
+        "aura": {
+          "radius": "{r}",
+          "damage": "{d}",
+          "every_ticks": "{=PrjLoop_tickTime|field|ticks}",
+          "max_pulses": "{=PrjLoop_maxTicks|field}",
+          "damage_type": "$DamageType::{t}",
+          "players_only": true,
+          "effect": "{fx|explosion}",
+          "target_sound": "{snd|sound}"
+        }
+      }
+    }
+  ],
+  "patch": {
+    "assets/weapons.json": {
+      "projectiles": {
+        "{namespace}:projectile/tierfraggrenadeprojectile": {
+          "bounce_effect": "tierFragPortBounce",
+          "max_bounces": "{pops}"
+        }
+      },
+      "explosions": {
+        "tierfragportbounce": {
+          "name": "tierFragPortBounce",
+          "sound": "{namespace}:sound/{bounce_sound:lower}",
+          "shake": null,
+          "shape": "",
+          "seconds": 0.0,
+          "play_speed": 1.0,
+          "face_viewer": false,
+          "scale": [1.0, 1.0, 1.0],
+          "sizes": []
+        }
+      }
+    }
+  }
+}

@@ -33,10 +33,10 @@ mod quotas;
 use quotas::Quota;
 mod admin_players;
 mod admin_world;
+mod environment;
 mod highlight;
 mod inventory;
 mod map_change;
-mod environment;
 mod map_lights;
 mod world_shapes;
 mod special;
@@ -52,6 +52,7 @@ pub use vehicles::{
     carry_through_openings, driver_controls, rider,
 };
 mod items;
+mod weapon_settings;
 mod weapons;
 pub use weapons::{MountedImage, WeaponView};
 mod blueprints;
@@ -666,6 +667,15 @@ impl std::fmt::Display for Rejection {
     }
 }
 impl std::error::Error for Rejection {}
+/// Archetypes packages laid over a player's own for a while
+/// (`push_archetype`, v20 Add-Ons' Support_AltDatablock `pushDatablock`),
+/// newest last. The player moves as the newest; `base` is the one under
+/// them, which `set_archetype` changes meanwhile.
+#[derive(Debug, Clone)]
+struct Overlays {
+    base: crate::archetype::ArchetypeId,
+    laid: Vec<crate::archetype::ArchetypeId>,
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Reply {
@@ -753,6 +763,8 @@ struct Peer {
     /// A package's choice of archetype, kept across respawns; otherwise
     /// the mini-game's player type decides.
     package_archetype: Option<crate::archetype::ArchetypeId>,
+    /// Archetypes packages laid over this life's own (`push_archetype`).
+    overlays: Option<Overlays>,
     window_tick: u64,
     actions: u32,
     chats: u32,
@@ -811,9 +823,11 @@ struct Peer {
     /// `lastActivateTime` and `activateLevel` for the activate swing.
     last_activate: Option<u64>,
     activate_level: u32,
-    /// Ticks of pending `schedule(strlen(%text) * 50, playThread, 3, root)`
-    /// calls from chat, one per message.
-    talk_stops: VecDeque<u64>,
+    /// Pending `%player.schedule(ms, "playThread", thread, sequence)` calls
+    /// (chat's `root` after 50 ms a character, packages' `play_thread` with
+    /// `after`), in the order they fire. They go with the body, as a
+    /// schedule on the old `Player` object did.
+    thread_timers: Vec<ThreadTimer>,
     /// v20's splash arming and `inLiquid` exit-sound state.
     water: crate::water::SplashState,
     /// A rule's `setLookLimits` for this body: `[down, up]` look
@@ -827,6 +841,15 @@ struct Peer {
 const ACTIVATE_REPEAT_TICKS: u64 = 38;
 /// Chat talks for 50 ms per character: 6 ticks at 120 ticks per second.
 const TALK_TICKS_PER_CHAR: u64 = 6;
+/// Most `playThread` schedules one player's body holds at once.
+const MAX_THREAD_TIMERS: usize = 64;
+/// One scheduled `playThread` on a player's body.
+#[derive(Clone, Debug)]
+struct ThreadTimer {
+    due: u64,
+    thread: u8,
+    sequence: String,
+}
 pub struct Session {
     events: events::Events,
     specials: special::Specials,
@@ -851,12 +874,19 @@ pub struct Session {
     item_spawners: crate::item_spawners::ItemSpawners,
     spawn_loadout: ToolInventory,
     weapons: bri_weapons::WeaponsWorld,
+    /// The weapons pack as authored; `weapons` plays it with the server
+    /// settings its bindings read applied ([`weapon_settings`]).
+    authored_weapons: Arc<bri_weapons::Pack>,
     /// Server settings the game reads only as it starts, as they were then.
     started_settings: BTreeMap<String, bri_package::setting::SettingValue>,
+    /// The values of the settings the weapons play with, by binding name.
+    weapon_values: BTreeMap<String, String>,
     weapon_triggers: BTreeMap<OwnerId, weapons::Triggers>,
     weapon_gaps: BTreeMap<String, u64>,
     /// `$Pref::Server::FootballRecord`, in feet, for this server run.
     football_record: u32,
+    /// Players whose ammo display is up, so it clears when they put the gun away.
+    ammo_shown: BTreeSet<OwnerId>,
     cues: crate::presentation::Cues,
     simulation: Simulation,
     peers: BTreeMap<OwnerId, Peer>,
@@ -986,10 +1016,13 @@ impl Session {
             last_membership: BTreeMap::new(),
             item_spawners: Default::default(),
             spawn_loadout: ToolInventory::default(),
+            authored_weapons: weapons.pack.clone(),
             started_settings: BTreeMap::new(),
+            weapon_values: BTreeMap::new(),
             weapon_triggers: BTreeMap::new(),
             weapon_gaps: BTreeMap::new(),
             football_record: 0,
+            ammo_shown: BTreeSet::new(),
             weapons,
             cues: Default::default(),
             simulation,
@@ -1152,7 +1185,7 @@ impl Session {
     pub fn set_server_settings(&mut self, settings: bri_admin::ServerSettings) -> Result<()> {
         settings.validate()?;
         self.admin.settings = settings;
-        self.start_settings();
+        self.start_weapon_settings();
         Ok(())
     }
     /// The host's current Server Settings.
@@ -1368,6 +1401,7 @@ impl Session {
                 last_input_tick: self.simulation.state().tick,
                 sport_datablock: None,
                 package_archetype: None,
+                overlays: None,
                 window_tick: self.simulation.state().tick,
                 actions: 0,
                 chats: 0,
@@ -1379,7 +1413,7 @@ impl Session {
                 inspection: None,
                 last_activate: None,
                 activate_level: 0,
-                talk_stops: VecDeque::new(),
+                thread_timers: Vec::new(),
                 water: Default::default(),
                 look_limits: None,
                 respawn_ms: None,
@@ -1474,6 +1508,7 @@ impl Session {
         self.weapons.remove_actor(bri_weapons::ActorId(owner));
         self.weapon_triggers.remove(&owner);
         self.last_prints.remove(&owner);
+        self.ammo_shown.remove(&owner);
         self.abandoned_at
             .insert(owner, self.simulation.state().tick);
         self.forget_copy_job(owner);
@@ -1598,6 +1633,7 @@ impl Session {
                 last_input_tick: self.simulation.state().tick,
                 sport_datablock: None,
                 package_archetype: None,
+                overlays: None,
                 window_tick: self.simulation.state().tick,
                 actions: 0,
                 chats: 0,
@@ -1609,7 +1645,7 @@ impl Session {
                 inspection: None,
                 last_activate: None,
                 activate_level: 0,
-                talk_stops: VecDeque::new(),
+                thread_timers: Vec::new(),
                 water: Default::default(),
                 look_limits: None,
                 respawn_ms: None,
@@ -1704,10 +1740,10 @@ impl Session {
             .remove(&owner)
             .unwrap_or_else(|| "You were removed from the server.".into())
     }
-    /// `owner` is resolved from the established connection, not deserialized here.
-    /// `%player.playThread(3, ...)`: a builder or chat animation every
-    /// client sees, carried as an avatar animation cue.
-    fn play_thread_three(&mut self, tick: u64, owner: OwnerId, sequence: &str) {
+    /// `%player.playThread(thread, sequence)`: an animation on one of the
+    /// body's four script threads every client sees, carried as an avatar
+    /// animation cue (thread 3 the builder and chat gestures).
+    fn play_thread(&mut self, tick: u64, owner: OwnerId, thread: u8, sequence: &str) {
         let Some(peer) = self.peers.get(&owner) else {
             return;
         };
@@ -1716,41 +1752,53 @@ impl Session {
             tick,
             crate::presentation::CueKind::WeaponAnimation {
                 actor: owner,
-                thread: 3,
+                thread,
                 sequence: sequence.into(),
                 image_hand: None,
             },
             position,
         );
     }
-    /// `serverCmdMessageSent` and `serverCmdTeamMessageSent`: talk, then
-    /// return thread 3 to root after 50 ms per character of the message.
-    fn start_talking(&mut self, tick: u64, owner: OwnerId, text_len: usize) {
-        self.play_thread_three(tick, owner, "talk");
-        if let Some(peer) = self.peers.get_mut(&owner) {
-            let chars = u64::try_from(text_len).unwrap_or(u64::MAX);
-            peer.talk_stops
-                .push_back(tick.saturating_add(chars.saturating_mul(TALK_TICKS_PER_CHAR)));
+    /// `%player.schedule(ms, "playThread", thread, sequence)`: plays at
+    /// `due`, after any schedule already due by then.
+    fn schedule_thread(&mut self, owner: OwnerId, due: u64, thread: u8, sequence: &str) -> Result<()> {
+        let peer = self.peers.get_mut(&owner).context("No such player")?;
+        ensure!(
+            peer.thread_timers.len() < MAX_THREAD_TIMERS,
+            "Dropped: {MAX_THREAD_TIMERS} animations already wait on this player"
+        );
+        let at = peer.thread_timers.partition_point(|timer| timer.due <= due);
+        peer.thread_timers.insert(
+            at,
+            ThreadTimer {
+                due,
+                thread,
+                sequence: sequence.into(),
+            },
+        );
+        Ok(())
+    }
+    /// Plays every scheduled `playThread` due by `tick`.
+    fn fire_thread_timers(&mut self, tick: u64) {
+        let mut due = Vec::new();
+        for (&owner, peer) in &mut self.peers {
+            let ready = peer.thread_timers.partition_point(|timer| timer.due <= tick);
+            due.extend(peer.thread_timers.drain(..ready).map(|timer| (owner, timer)));
+        }
+        for (owner, timer) in due {
+            self.play_thread(tick, owner, timer.thread, &timer.sequence);
         }
     }
-    /// Fires due chat `root` schedules. Each message stops thread 3 on its own
-    /// timer, whatever plays on it by then, as the original schedules do.
-    fn stop_talking(&mut self, tick: u64) {
-        let due: Vec<_> = self
-            .peers
-            .iter_mut()
-            .flat_map(|(owner, peer)| {
-                let mut stops = 0;
-                while peer.talk_stops.front().is_some_and(|stop| *stop <= tick) {
-                    peer.talk_stops.pop_front();
-                    stops += 1;
-                }
-                std::iter::repeat_n(*owner, stops)
-            })
-            .collect();
-        for owner in due {
-            self.play_thread_three(tick, owner, "root");
-        }
+    /// `serverCmdMessageSent` and `serverCmdTeamMessageSent`: talk, then
+    /// return thread 3 to root after 50 ms per character of the message,
+    /// on its own timer whatever plays on it by then.
+    fn start_talking(&mut self, tick: u64, owner: OwnerId, text_len: usize) {
+        self.play_thread(tick, owner, 3, "talk");
+        let chars = u64::try_from(text_len).unwrap_or(u64::MAX);
+        let due = tick.saturating_add(chars.saturating_mul(TALK_TICKS_PER_CHAR));
+        // A body already holding the most schedules keeps talking until one
+        // of the earlier messages stops it.
+        let _ = self.schedule_thread(owner, due, 3, "root");
     }
     pub fn command(&mut self, owner: OwnerId, sequence: u64, command: Command) -> Result<Reply> {
         self.command_with_aim(owner, sequence, command, None)
@@ -1998,6 +2046,12 @@ impl Session {
                     self.addon_tool_fire(owner, &command);
                     return Ok(Reply::Accepted);
                 }
+                // A gun with a magazine reloads on the light key, as tactical
+                // packs packaged `serverCmdLight` to do; some leave the key
+                // to the light when they cannot reload.
+                if self.weapons.light_key(bri_weapons::ActorId(owner))? {
+                    return Ok(Reply::Accepted);
+                }
                 self.package_policy("light", owner)?;
                 self.toggle_light(owner)?;
                 Ok(Reply::Accepted)
@@ -2027,6 +2081,9 @@ impl Session {
                 }
                 if name == "sit" {
                     peer.sitting = true;
+                } else if !peer.combat.emote_allowed(self.simulation.state().tick) {
+                    // The others are `Player::emote`, with its spam check.
+                    return Ok(Reply::Accepted);
                 }
                 let feet = peer.player.state().feet;
                 let eye = if peer.player.state().crouched {
@@ -2064,7 +2121,7 @@ impl Session {
                     ),
                     _ => {}
                 }
-                self.cues.emit(
+                self.emote_cue(
                     tick,
                     crate::presentation::CueKind::Emote { actor: owner, name },
                     feet,
@@ -2177,7 +2234,7 @@ impl Session {
             }
             Command::BuildGesture(gesture) => {
                 ensure!(peer.combat.alive, "Dead players cannot build");
-                self.play_thread_three(tick, owner, gesture.sequence());
+                self.play_thread(tick, owner, 3, gesture.sequence());
                 Ok(Reply::Accepted)
             }
             Command::SwitchSeat(step) => {
@@ -2336,7 +2393,7 @@ impl Session {
                 self.push_undo(owner, undo::UndoEntry::Plant(id));
                 self.cues
                     .emit(tick, crate::presentation::CueKind::Plant, position);
-                self.play_thread_three(tick, owner, "plant");
+                self.play_thread(tick, owner, 3, "plant");
                 Ok(Reply::Planted(id))
             }
             Command::UseSprayCan { color } => {
@@ -2381,7 +2438,7 @@ impl Session {
                     "activate"
                 };
                 let eye = peer.player.eye();
-                self.play_thread_three(tick, owner, swing);
+                self.play_thread(tick, owner, 3, swing);
                 if self.teleport_lockout(owner, admin_players::TELEPORT_PICKUP_LOCK_MS, true) {
                     return Ok(Reply::Activated(None));
                 }
@@ -2514,7 +2571,7 @@ impl Session {
         if self.admin.settings.public_domain_timeout_minutes > 0 && tick.is_multiple_of(60 * 120) {
             self.refresh_trust();
         }
-        self.stop_talking(tick);
+        self.fire_thread_timers(tick);
         // Each system contains its own failure: the rest of the tick still
         // runs and every failure is reported together at the end.
         let mut failures = Vec::new();

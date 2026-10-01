@@ -45,6 +45,24 @@ pub struct Reference {
     /// (`base/data/shapes/black50.png`): an imported model may draw with
     /// them by that key, as its players' games already have them.
     pub item_textures: BTreeSet<String>,
+    /// Every definition of a lower-case datablock name, base first, then
+    /// Add-Ons in load order: several Add-Ons may declare one name.
+    pub declared: BTreeMap<String, Vec<Owned>>,
+    /// Lower-case Add-On name to the Add-Ons it loads first
+    /// (`ForceRequiredAddOn`, `LoadRequiredAddOn`), lower-case.
+    pub requires: BTreeMap<String, Vec<String>>,
+}
+
+/// The Add-Ons a script loads before its own datablocks
+/// (`ForceRequiredAddOn("Weapon_Package_Tier1")`), lower-case.
+pub fn required_addons(text: &str) -> Vec<String> {
+    static CALL: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r#"(?i)\b(?:force|load)requiredaddon\s*\(\s*"([^"]+)"\s*\)"#)
+            .expect("pattern")
+    });
+    CALL.captures_iter(&tscript::without_comments(text))
+        .map(|c| c[1].to_ascii_lowercase())
+        .collect()
 }
 
 /// The Add-Ons v20 shipped with (`docs/vanilla-reference-inventory.json`).
@@ -157,18 +175,19 @@ impl Reference {
             return;
         };
         for d in &script.datablocks {
+            let mut datablock = d.clone();
+            crate::resolve_file_fields(&mut datablock, path);
+            let owned = Owned {
+                addon: addon.into(),
+                path: path.into(),
+                sha256: script.sha256.clone(),
+                datablock,
+            };
+            let key = d.name.to_ascii_lowercase();
             self.datablocks
-                .entry(d.name.to_ascii_lowercase())
-                .or_insert_with(|| {
-                    let mut datablock = d.clone();
-                    crate::resolve_file_fields(&mut datablock, path);
-                    Owned {
-                        addon: addon.into(),
-                        path: path.into(),
-                        sha256: script.sha256.clone(),
-                        datablock,
-                    }
-                });
+                .entry(key.clone())
+                .or_insert_with(|| owned.clone());
+            self.declared.entry(key).or_default().push(owned);
         }
         for f in &script.functions {
             self.functions
@@ -177,6 +196,80 @@ impl Reference {
         if let Ok(types) = bri_weapons_import::damage_types(text) {
             self.damage_types
                 .extend(types.into_iter().map(|t| t.name.to_ascii_lowercase()));
+        }
+    }
+
+    /// Each datablock name several Add-Ons declare, as it stood when
+    /// `addon` loaded: Add-Ons load in name order, each after the ones it
+    /// requires, and only those before `addon` or required by it
+    /// (`required`) have run. Declaring a name again sets its fields on
+    /// the one datablock, so later fields win and the rest stay. A name
+    /// none of those declare keeps its first declaration.
+    pub fn settle_for(&mut self, addon: &str, required: &[String]) {
+        let me = addon.to_ascii_lowercase();
+        let mut order: Vec<String> = vec!["base".into()];
+        fn visit(
+            a: &str,
+            requires: &BTreeMap<String, Vec<String>>,
+            order: &mut Vec<String>,
+            depth: u32,
+        ) {
+            if depth > 32 || order.iter().any(|o| o == a) {
+                return;
+            }
+            for d in requires.get(a).into_iter().flatten() {
+                visit(d, requires, order, depth + 1);
+            }
+            if !order.iter().any(|o| o == a) {
+                order.push(a.to_owned());
+            }
+        }
+        for a in self.addons.keys().filter(|a| **a < me) {
+            visit(a, &self.requires, &mut order, 0);
+        }
+        for d in required {
+            visit(&d.to_ascii_lowercase(), &self.requires, &mut order, 0);
+        }
+        for (name, all) in &self.declared {
+            if all.len() < 2 {
+                continue;
+            }
+            let mut loaded: Vec<(usize, &Owned)> = all
+                .iter()
+                .filter_map(|o| {
+                    let at = order
+                        .iter()
+                        .position(|a| a.eq_ignore_ascii_case(&o.addon))?;
+                    Some((at, o))
+                })
+                .collect();
+            loaded.sort_by_key(|(at, _)| *at);
+            let Some(((_, first), rest)) = loaded.split_first() else {
+                continue;
+            };
+            let mut settled = (*first).clone();
+            for (_, o) in rest {
+                if !o
+                    .datablock
+                    .class
+                    .eq_ignore_ascii_case(&settled.datablock.class)
+                {
+                    continue;
+                }
+                settled.datablock.fields.extend(
+                    o.datablock
+                        .fields
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone())),
+                );
+                if o.datablock.parent.is_some() {
+                    settled.datablock.parent = o.datablock.parent.clone();
+                }
+                settled.addon = o.addon.clone();
+                settled.path = o.path.clone();
+                settled.sha256 = o.sha256.clone();
+            }
+            self.datablocks.insert(name.clone(), settled);
         }
     }
 
@@ -249,25 +342,89 @@ impl Reference {
             .collect();
         addons.sort();
         for path in addons {
-            let is_zip = path
-                .extension()
-                .is_some_and(|e| e.eq_ignore_ascii_case("zip"));
-            if !is_zip && !path.is_dir() {
-                continue;
-            }
-            let Ok(src) = source::read(&path) else {
-                continue;
-            };
-            r.addons
-                .insert(src.name.to_ascii_lowercase(), src.name.clone());
-            for (key, file) in &src.files {
-                r.files.insert(key.clone());
-                if key.ends_with(".cs") {
-                    r.add_script(&src.name, &String::from_utf8_lossy(&file.bytes), &file.path);
-                }
-            }
+            r.add_addon(&path);
         }
         Ok(r)
+    }
+
+    /// Reads the Add-On at `path` (a folder or zip) into the reference, as
+    /// one of its install's Add-Ons. False when it is neither or unreadable.
+    pub fn add_addon(&mut self, path: &Path) -> bool {
+        let is_zip = path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("zip"));
+        if !is_zip && !path.is_dir() {
+            return false;
+        }
+        let Ok(src) = source::read(path) else {
+            return false;
+        };
+        self.addons
+            .insert(src.name.to_ascii_lowercase(), src.name.clone());
+        for (key, file) in &src.files {
+            self.files.insert(key.clone());
+            if key.ends_with(".cs") {
+                let text = String::from_utf8_lossy(&file.bytes);
+                self.requires
+                    .entry(src.name.to_ascii_lowercase())
+                    .or_default()
+                    .extend(required_addons(&text));
+                self.add_script(&src.name, &text, &file.path);
+            }
+        }
+        true
+    }
+
+    /// Adds the Add-Ons `required` names, and the ones they require in
+    /// turn, from `folder` (the one the imported copy is in, as v20's
+    /// Add-Ons folder held them side by side) where the reference lacks
+    /// them.
+    pub fn add_beside(&mut self, folder: &Path, required: &[String]) {
+        let Ok(entries) = std::fs::read_dir(folder) else {
+            return;
+        };
+        let near: Vec<std::path::PathBuf> = entries.flatten().map(|e| e.path()).collect();
+        let mut wanted: Vec<String> = required.iter().map(|a| a.to_ascii_lowercase()).collect();
+        let mut tried = std::collections::BTreeSet::new();
+        while let Some(a) = wanted.pop() {
+            if self.addons.contains_key(&a) || !tried.insert(a.clone()) {
+                continue;
+            }
+            let found = near.iter().find(|p| {
+                let name = p
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_ascii_lowercase());
+                name.as_deref() == Some(a.as_str()) || name == Some(format!("{a}.zip"))
+            });
+            if let Some(path) = found
+                && self.add_addon(path)
+            {
+                wanted.extend(
+                    self.requires
+                        .get(&a)
+                        .into_iter()
+                        .flatten()
+                        .map(|r| r.to_ascii_lowercase()),
+                );
+            }
+        }
+    }
+
+    /// The base game's sound that plays `file` (`base/data/sound/clickMove.wav`
+    /// is `clickMoveSound`): an Add-On's own profile of a base file plays
+    /// the same sound, which the game already has by that name.
+    pub fn base_sound(&self, file: &str) -> Option<&str> {
+        self.datablocks
+            .values()
+            .filter(|o| o.addon == "base")
+            .map(|o| &o.datablock)
+            .filter(|d| d.class.eq_ignore_ascii_case("AudioProfile"))
+            .find(|d| {
+                d.fields
+                    .get("filename")
+                    .is_some_and(|f| crate::literal(f).eq_ignore_ascii_case(file))
+            })
+            .map(|d| d.name.as_str())
     }
 
     /// Finds a file with Torque's implicit extensions (`iconName`, textures).
@@ -403,14 +560,14 @@ impl Reference {
                 let (Some(name), Some(addon)) = (s["name"].as_str(), s["package"].as_str()) else {
                     continue;
                 };
-                self.installed_datablock(
-                    addon,
-                    "",
-                    "AudioProfile".into(),
-                    name,
-                    None,
-                    BTreeMap::new(),
-                );
+                // Its clip's id carries the file it plays
+                // (`v20/clip/base/data/sound/clickMove.wav`).
+                let fields = s["clip"]
+                    .as_str()
+                    .and_then(|c| c.strip_prefix("v20/clip/"))
+                    .map(|file| BTreeMap::from([("filename".to_owned(), quoted(file))]))
+                    .unwrap_or_default();
+                self.installed_datablock(addon, "", "AudioProfile".into(), name, None, fields);
             }
         }
         if let Some(dir) = dir("effects") {

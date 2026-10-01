@@ -348,6 +348,57 @@ fn liquid_options(color: [f32; 4]) -> SourceOptions {
     }
 }
 
+/// A shot this client saw fired since the last frame ([`new_shots`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SeenShot {
+    pub actor: u64,
+    pub hand: u8,
+    /// Where it left, for a projectile; a hitscan shot leaves the hand's
+    /// muzzle, which the caller draws.
+    pub from: Option<Vec3>,
+}
+
+/// Every hand that shot since the last frame, once each, from what this
+/// client already sees: hitscan `tracers` (actor, hand) and any projectile
+/// newer than `seen`, the newest id looked at (None before the first view,
+/// so whatever is already flying on joining is not a shot). A projectile is
+/// the first hand's shot.
+pub fn new_shots(
+    tracers: &[(u64, u8)],
+    seen: &mut Option<u64>,
+    weapons: &bri_sim::session::WeaponView,
+) -> Vec<SeenShot> {
+    let mut shots: Vec<SeenShot> = vec![];
+    let mut add = |shot: SeenShot| {
+        if shot.hand < 2
+            && shots.len() < 64
+            && !shots
+                .iter()
+                .any(|s| s.actor == shot.actor && s.hand == shot.hand)
+        {
+            shots.push(shot);
+        }
+    };
+    for &(actor, hand) in tracers {
+        add(SeenShot {
+            actor,
+            hand,
+            from: None,
+        });
+    }
+    if let Some(last) = *seen {
+        for p in weapons.fired().filter(|p| p.id > last) {
+            add(SeenShot {
+                actor: p.source.0,
+                hand: 0,
+                from: Some(p.origin),
+            });
+        }
+    }
+    let newest = weapons.fired().map(|p| p.id).max().unwrap_or(0);
+    *seen = Some(seen.unwrap_or(0).max(newest));
+    shots
+}
 /// An explosion's `CameraShake`, amplitude fixed on first sight of the camera.
 struct Shake {
     spec: bri_weapons::CameraShake,
@@ -488,26 +539,24 @@ impl ActorEffects {
         }
         self.cursor = cue.id;
         match &cue.kind {
+            // `unMountImage(3)`: what the emote slot wore comes off.
+            CueKind::Emote { actor, name } if name.is_empty() => {
+                if let Some(old) = self.images.remove(&Slot::Player(*actor)) {
+                    self.release(old);
+                }
+            }
+            // An Add-On's image on the body, by its id.
+            CueKind::Emote { actor, name } if name.contains(':') => {
+                self.mount_player(*actor, name, None);
+            }
             // `serverCmdLove`, `serverCmdHate`, `serverCmdConfusion`.
             CueKind::Emote { actor, name } => {
-                let image = match name.as_str() {
-                    "love" => "LoveImage",
-                    "hate" => "HateImage",
-                    "confusion" => "WtfImage",
-                    _ => return,
-                };
-                self.mount_player(*actor, image, None);
+                if let Some(image) = bri_sim::presentation::emote_image(name) {
+                    self.mount_player(*actor, image, None);
+                }
             }
-            // `Armor::damage`: PainHigh at 40, PainMid at 25, else PainLow.
             CueKind::Pain { actor, level, .. } => {
-                let image = if *level >= 40.0 {
-                    "PainHighImage"
-                } else if *level >= 25.0 {
-                    "PainMidImage"
-                } else {
-                    "PainLowImage"
-                };
-                self.mount_player(*actor, image, None);
+                self.mount_player(*actor, bri_sim::presentation::pain_image(*level), None);
             }
             CueKind::Burn { actor, seconds } => {
                 self.mount_player(*actor, "PlayerBurnImage", Some(*seconds));
@@ -701,10 +750,11 @@ impl ActorEffects {
         for t in trails {
             match self.trails.get(&(t.vehicle, t.trail)) {
                 Some(&h) => self.world.update_source(h, t.transform)?,
-                None => match self
-                    .world
-                    .start_emitter(&t.emitter, t.transform, SourceOptions::default())
-                {
+                None => match self.world.start_emitter(
+                    &t.emitter,
+                    t.transform,
+                    SourceOptions::default(),
+                ) {
                     Ok(h) => {
                         self.trails.insert((t.vehicle, t.trail), h);
                     }
@@ -808,12 +858,14 @@ impl ActorEffects {
         Ok(())
     }
 
+    /// A base image by its datablock name, or an Add-On's by its id.
     fn image(&mut self, name: &str) -> Option<bri_weapons::Image> {
-        let image = self
-            .weapons
-            .images
-            .get(&bri_weapons::native_id("image", name))
-            .cloned();
+        let id = if name.contains(':') {
+            name.to_owned()
+        } else {
+            bri_weapons::native_id("image", name)
+        };
+        let image = self.weapons.images.get(&id).cloned();
         if image.is_none() {
             self.note(format!("Missing image {name}"));
         }
@@ -898,7 +950,12 @@ impl ActorEffects {
         if s.emitter.is_empty() || s.emitter_seconds <= 0.0 {
             return;
         }
-        let emitter = format!("v20/emitter/{}", s.emitter.to_ascii_lowercase());
+        // An Add-On image names its own emitters by id.
+        let emitter = if s.emitter.contains(':') {
+            s.emitter.clone()
+        } else {
+            format!("v20/emitter/{}", s.emitter.to_ascii_lowercase())
+        };
         let seconds = s.emitter_seconds;
         let expires = playback.clock + seconds;
         let world = &mut self.world;
@@ -991,6 +1048,45 @@ impl ActorEffects {
         });
     }
 
+    /// A gun's `shot.kick` on the holder's own view: no distance falloff.
+    pub fn kick(&mut self, kick: bri_weapons::Kick, seed: u64) {
+        let full = Some(Vec3::splat(kick.amplitude));
+        self.push_kick(kick, Vec3::ZERO, f32::INFINITY, full, seed);
+    }
+    /// Another player's `kick` with a radius, felt from `at` as an
+    /// explosion's shake there would be.
+    pub fn kick_near(&mut self, kick: bri_weapons::Kick, at: Vec3, seed: u64) {
+        if kick.radius > 0.0 {
+            self.push_kick(kick, at, kick.radius, None, seed);
+        }
+    }
+    fn push_kick(
+        &mut self,
+        kick: bri_weapons::Kick,
+        position: Vec3,
+        radius: f32,
+        amplitude: Option<Vec3>,
+        seed: u64,
+    ) {
+        if self.shakes.len() >= 32 {
+            return;
+        }
+        let seed = seed.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+        let unit = |shift: u32| ((seed >> shift) & 0xffff) as f32 / 65536.0;
+        self.shakes.push(Shake {
+            spec: bri_weapons::CameraShake {
+                frequency: [kick.frequency; 3],
+                amplitude: [kick.amplitude; 3],
+                seconds: kick.seconds,
+                radius,
+                falloff: 10.0,
+            },
+            position,
+            elapsed: 0.0,
+            phase: Vec3::new(0.0, unit(16), unit(32)),
+            amplitude,
+        });
+    }
     /// The summed explosion shake for a camera at `eye`, in its own frame
     /// (x right, y forward, z up). Distance falloff as in `Explosion::explode`.
     pub fn camera_shake(&mut self, eye: Vec3) -> Vec3 {
@@ -1299,6 +1395,13 @@ fn teleport_image() -> bri_weapons::Image {
         hide_nodes: Vec::new(),
         both_arms: false,
         paint_tint: false,
+        left_image: None,
+        magazine: None,
+        volleys: vec![],
+        last_shot: None,
+        state_shots: Default::default(),
+        cook: None,
+        guard: None,
         rope: None,
         light: None,
         paint_picker: false,

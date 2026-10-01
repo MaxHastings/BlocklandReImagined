@@ -728,6 +728,9 @@ pub enum UiAction {
     /// Show the saves folder, where old `.bls` saves can be dropped, in
     /// the file browser.
     OpenSavesFolder,
+    /// Show the Add-Ons folder, where classic Blockland Add-On zips can be
+    /// dropped, in the file browser.
+    OpenAddOnsFolder,
     // ---- in game
     Chat {
         channel: ChatChannel,
@@ -927,8 +930,9 @@ pub enum UiAction {
     },
     /// Turn off every package that is not part of the base game.
     DefaultAddOns,
-    /// Convert an old Blockland add-on waiting in the drop folder into a
-    /// package (a row with `importable`). Answered when the import finishes.
+    /// Convert again a classic Add-On in the Add-Ons folder that could not
+    /// be converted (a row with `importable`). Answered once it is under way;
+    /// [`UiUpdate::AddOns`] follows as it goes.
     ImportAddOn {
         id: String,
     },

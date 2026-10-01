@@ -87,6 +87,28 @@ impl ToolCatalog {
         self.items = allowed;
         Ok(())
     }
+    /// Add the emitters and lights Add-Ons name to the ones a brick may
+    /// take (the base game's stay).
+    pub fn install_effects(
+        &mut self,
+        emitters: impl IntoIterator<Item = String>,
+        lights: impl IntoIterator<Item = String>,
+    ) -> Result<()> {
+        let mut added = (self.emitters.clone(), self.lights.clone());
+        for (set, ids) in [
+            (&mut added.0, emitters.into_iter().collect::<Vec<_>>()),
+            (&mut added.1, lights.into_iter().collect()),
+        ] {
+            ensure!(ids.len() <= 1024, "Too many Add-On effect choices");
+            for id in ids {
+                ContentRef::Resolved(id.clone()).validate()?;
+                ensure!(!id.chars().any(char::is_control), "Invalid effect ID");
+                set.insert(id);
+            }
+        }
+        (self.emitters, self.lights) = added;
+        Ok(())
+    }
     fn validate(&self, simulation: &Simulation) -> Result<()> {
         ensure!(
             self.lights.len() <= 100_000
@@ -465,10 +487,7 @@ impl Session {
                             self.damage_player(
                                 target.0,
                                 10.0,
-                                combat::DamageKind::Weapon {
-                                    name: "$DamageType::HammerDirect".into(),
-                                    direct: true,
-                                },
+                                combat::DamageKind::weapon("$DamageType::HammerDirect", true),
                                 Some(owner),
                             )?;
                         }

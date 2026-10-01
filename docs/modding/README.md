@@ -119,10 +119,11 @@ refused. The engine calls:
 | `on_loadout(player)` | a player's items were set afresh (spawn, respawn, joining or leaving a minigame), when `"on_loadout": true`: the place to hand out your Add-On's items |
 | `on_spawn(player)` | a player comes to life (joining, respawning), after `on_loadout`, when `"on_spawn": true` |
 | `on_leave(player)` | a player leaves, while their state can still be read, when `"on_leave": true` |
-| `on_damage(victim, attacker, amount, info)` | before a player is hurt, when `"on_damage": true`: return the amount to take (0 prevents it) or `()` to leave it. `info` is `#{ kind, type, direct }`, `kind` being `weapon`, `fall`, `package` and so on, `type` the damage type's name without `$DamageType::`. A shot or blast also gives `region` (`"head"`, `"torso"` or `"legs"`, where it struck) and its point `x`, `y`, `z` |
+| `on_damage(victim, attacker, amount, info)` | before a player is hurt, when `"on_damage": true`: return the amount to take (0 prevents it), `()` to leave it, or `#{ amount, type }` to change either and the damage type (a weapons pack's `$DamageType::<name>`, whose kill message a death shows: a crit's own). `info` is `#{ kind, type, direct }`, `kind` being `weapon`, `fall`, `package` and so on, `type` the damage type's name without `$DamageType::`. A shot or blast also gives `region` (`"head"`, `"torso"` or `"legs"`, where it struck) and its point `x`, `y`, `z`, and a weapon's hit `dx, dy, dz` (the unit direction it travelled, outward from the centre for a blast), so a shield can block hits from the front. A projectile's hit also gives `projectile`, its definition id (`"ns:projectile/name"`), so rules can tell shots apart when guns share a damage type, and `bounces`, the turns a ricocheting ray made before it (0 for a straight hit) |
 | `on_entity_damage(entity, attacker, amount, info)` | before one of your creatures is hurt by a shot, a blast or `explode`, when `"on_entity_damage": true`: answered like `on_damage` |
+| `on_vehicle_damage(vehicle, attacker, amount, info)` | before a vehicle is hurt by a shot, a blast, a smashing vehicle or a package's `damage`, when `"on_vehicle_damage": true`: answered like `on_damage`. `info` is `#{ kind, type, part, max_health, x, y, z }` plus `projectile` for a shot; `kind` is `weapon`, `package` or `smash`, `part` is `chassis` or an attached `turret`, and `max_health` is what that part takes to be destroyed |
 | `on_entity_death(entity, killer, info)` | one of your creatures ran out of health, just before it is removed, when `"on_entity_death": true` |
-| `on_pickup(player, item, info)` | a living player touches an item of your Add-On (or one it depends on) lying in the world, before they pick it up, whether or not they have room, when `"on_pickup": true`: return `false` to leave it, `"take"` to use it up without giving it (a spawn brick's item then starts its respawn), or `()` for the usual pickup. `info` is `#{ drop, spawner, data }`: the dropped item's id or the spawn brick's, and what `on_drop` kept with it. Called as it happens, so keep it quick |
+| `on_pickup(player, item, info)` | a living player touches an item of your Add-On (or one it depends on) lying in the world, before they pick it up, whether or not they have room, when `"on_pickup": true`: return `false` to leave it, `"take"` to use it up without giving it (a spawn brick's item then starts its respawn), `()` for the usual pickup, or `#{ rounds }` to set what a dropped gun's magazine holds and then pick it up as usual (it keeps that count if they have no room). `info` is `#{ drop, spawner, data, rounds }`: the dropped item's id or the spawn brick's, what `on_drop` kept with it, and the rounds in a dropped gun's magazine (`()` for one that has none). Called as it happens, so keep it quick |
 | `on_drop(player, item, slot)` | a player drops a tool of your Add-On (or one it depends on), when `"on_drop": true`. What it returns (a number, a map such as `#{ rounds: 7 }`) is kept with the dropped item and handed to `on_pickup` as `info.data` |
 | `on_projectile_hit(hit)` | a projectile of your weapons (or a dependency's) struck something, delivered at the start of the next tick, when `"on_projectile_hit": true`. `hit` is `#{ projectile, by, kind, id, ref, x, y, z, nx, ny, nz, vx, vy, vz }`: `kind` is `player`, `vehicle`, `entity`, `brick` or `map`, `by` the shooter or `()`; a player hit also has `region` |
 | `on_activate(player)` | a living player clicks with nothing in their hand (v20's `Player::activateStuff`), when `"on_activate": true`: return `true` to take the click, or anything else to pass it on. Add-Ons are asked in load order, and a click nobody takes does the usual thing (opens doors, presses buttons, flips vehicles) |
@@ -189,20 +190,19 @@ run are left out. Your rules remove a game's entry when it ends.
 | `players()`, `bots()`, `player(id)` | `get_player(p, key)`, `set_player(p, key, v)` | `remove_brick`, `place_brick`, `set_block_state(brick, state)`: `world.edit` |
 | `aim()`, `me()`, `entities()` | `add_player(p, key, amount)` | `damage(target, amount[, by[, type]])`, `explode(...)`: `damage` |
 | `noise(seed, x, z)`, `hash3(seed, x, y, z)` | `entity_get(e, key)`, `entity_set(e, key, v)` | `spawn_entity`, `remove_entity`, `steer`, `label`: `entity` |
-| `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)`, `tethered(p)` | | `teleport`, `respawn`, `set_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`, `take_item(p, item)`, `drop_item(item, x, y, z[, vx, vy, vz])`, `drop_item(item, #{ ... })`, `remove_drop(id)`, `name_drop(id, text, c)`: `player` |
-| `raycast(from, dir, range[, ignore])`, `can_damage(by, target)` | | `set_fov(p, fov)`, `set_image_ammo(p, ammo)`, `set_image_loaded(p, loaded)`, `mount_image(p, image)`, `mount_image(p, image, slot[, paint or #{ paint, keep }])`, `unmount_image(p)`, `set_scale(p, scale)`, `set_look_limits(p, up, down)`, `orbit_camera(p, target[, nearest, farthest], distance[, body])`: `player` |
+| `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)`, `tethered(p)` | | `teleport`, `respawn`, `set_archetype`, `push_archetype`, `pop_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`, `take_item(p, item)`, `drop_item(item, x, y, z[, vx, vy, vz[, data]])`, `drop_item(item, #{ ... })`, `remove_drop(id)`, `name_drop(id, text, c)`: `player` |
+| `raycast(from, dir, range[, ignore])`, `can_damage(by, target)`, `enabled(add_on)`, `lan()` | | `set_fov(p, fov)`, `set_speed_scale(p, scale)`, `set_image_ammo(p, ammo)`, `set_image_loaded(p, loaded)`, `mount_image(p, image)`, `mount_image(p, image, slot[, paint or #{ paint, keep }])`, `unmount_image(p)`, `emote(p, image[, skip_spam])`, `set_scale(p, scale)`, `set_look_limits(p, up, down)`, `orbit_camera(p, target[, nearest, farthest], distance[, body])`: `player` |
+| | | `give_ammo(p, ammo, rounds)`, `set_reserve(p, ammo, rounds)`, `set_rounds(p, item, rounds)`, `reload(p)`: `player` |
 | `minigames()`, `minigame(id)`, `setting(game, key)`, `team_setting(game, team, key)`, `server_setting(key)`, `pref(global)`, `bricks(kind)`, `brick(id)`, `palette()`, `drops()` | | `set_teams(game, teams, options)`, `set_team(p, team)`, `set_score(p, n)`, `add_score(p, n)`, `reset_minigame(game)`, `set_setting(game, key, v)`, `set_team_setting(game, team, key, v)`, `hold_respawn(p, held)`, `end_round(game, winners)`, `report_column(game, key, title, cells)`: `minigame`; `show_report(p, report)`, `hide_report(p)`: `chat`; `watch(p, target)`, `follow_path(p, knots)`, `free_camera(p)`, `orbit_point(p, at, distance)`: `player`; `set_brick_item(brick, item)`, `set_brick_color(brick, c)`: `world.edit`; `fire_brick_input(brick, input, p)`, `fire_game_input(game, input, p, killer)`, `set_brick_field(brick, key, v)`: `brick_events`; `brick_field(brick, key)` reads |
 | `brick_box(brick)`, `voxel(brick)`, `can_place_voxel(x, y, z)` | | `place_voxel(x, y, z, material)`: `world.edit`; `set_avatar_colors(p, colors)`, `temp_look(p, look, seconds)`: `player` |
 | `brick(id)`, `bricks_in(min, max)`, `can_plant(kind, [x, y, z], turns)`, `can_edit(brick)` | | `plant_brick(kind, [x, y, z], turns, color, owner)`: `world.edit` |
 | | | `copy_build(p, brick, limit, way, tool[, options])`, `copy_box(p, min, max, limit, tool[, options])`, `mirror_copy(p, axis)`, `mirror_ghost(p, axis, asymmetric)`, `highlight_copy(p, rgba, seconds)`, `save_copy(p, name[, options])`, `load_copy(p, name, limit, tool[, options])`, `list_copies(p, filter)`, `plant_wait(p, seconds)`, `pivot_copy(p, pivot)`, `plant_as(p, target, admin)`: `build` |
 | | | `cut_copy(p)`, `paint_copy(p, color)`, `paint_copy(p, paint)`, `wrench_copy(p)`, `super_cut(p, min, max)`, `fill_box(p, min, max, color)`, `paint_fill(p, brick, paint, options)`, `paint_vehicle(p, vehicle, paint, options)`: `world.edit` |
 | | | `push`, `tumble`, `hold`, `reach`, `hold_distance`, `let_go`, `tether`, `tether_length`, `untether`, `spawn_vehicle`, `remove_vehicle`, `mount_object(mount, rider, node, can_dismount[, turn])`, `unmount_object(rider)`: `physics` |
-| | | `heal(p, amount)`, `fire(...)`: `damage` |
-| | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds[, hide_bar])` (`()` for everyone), `tell_minigame(game, text[, except])`, `center_print_minigame(game, text, seconds)`, `bottom_print_minigame(game, text, seconds)` (a mini-game's members, counted once), `ask(p, title, text, command)` (a yes/no box; yes sends the package's own argument-less `command` as if typed, as v20's `MessageBoxYesNo` did), `plant_error(p, error)`: `chat` |
-| | | `play_sound(p, sound)` at a player's ears, `sound_at(sound, x, y, z)`, `beam(from, to[, options])`, `play_thread(p, thread, sequence)`, `show_box(p, min, max, tool)`, `hide_box(p)`, `show_shapes(owner, key, shapes)`, `hide_shapes(owner, key)`: `effects` |
-| | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds[, hide_bar])` (`()` for everyone), `tell_minigame(game, text[, except])`, `center_print_minigame(game, text, seconds)`, `bottom_print_minigame(game, text, seconds)` (a mini-game's members, counted once), `ask(p, title, text, command)` (a yes/no box; yes sends the package's own argument-less `command` as if typed, as v20's `MessageBoxYesNo` did), `message_box(p, title, text)` (an OK box, v20's `MessageBoxOK`): `chat` |
+| | | `heal(p, amount)`, `fire(...)`, `spawn_explosion(p, projectile, scale)`: `damage` |
+| | | `play_sound(p, sound)` at a player's ears, `sound_at(sound, x, y, z)`, `beam(from, to[, options])`, `play_thread(p, thread, sequence[, after])`, `show_box(p, min, max, tool)`, `hide_box(p)`, `show_shapes(owner, key, shapes)`, `hide_shapes(owner, key)`: `effects` |
+| | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds[, hide_bar])` (`()` for everyone), `tell_minigame(game, text[, except])`, `center_print_minigame(game, text, seconds)`, `bottom_print_minigame(game, text, seconds)` (a mini-game's members, counted once), `ask(p, title, text, command)` (a yes/no box; yes sends the package's own argument-less `command` as if typed, as v20's `MessageBoxYesNo` did), `plant_error(p, error)`, `message_box(p, title, text)` (an OK box, v20's `MessageBoxOK`): `chat` |
 | `bot_kinds()` (each `#{ id, name, first_names }`), `bot_limit()` | | `add_bot(game, #{ kind, name[, team] })`, `remove_bot(bot)`, `rest_bot(bot, rest)`, `bot_tool(bot, slot or ())`: `bots` |
-| | | `play_sound(p, sound)` at a player's ears, `sound_at(sound, x, y, z)`, `beam(from, to[, options])`, `play_thread(p, thread, sequence)`, `show_box(p, min, max, tool)`, `hide_box(p)`: `effects` |
 | | | `set_map_lights([x, y, z], radius, options)`: `lighting` |
 | `environment()` | | `set_environment(#{ ... })`, `reset_environment()`: `environment` |
 
@@ -214,6 +214,15 @@ or named never does.
 
 Coming from TorqueScript? [torque-equivalents.md](torque-equivalents.md)
 lists what each v20 call you know became here, and what is not here yet.
+
+**Another Add-On's content.** A rule fires projectiles, mounts images and
+spawns vehicles of its own package and of each Add-On in its
+`dependencies`. One it uses only when that Add-On happens to be on, as a
+v20 script tested `isObject(critProjectile)` for a datablock another
+Add-On made, goes in `optional_dependencies` instead
+(`"optional_dependencies": { "emote_critical": "*" }`): the game runs
+without it, an enabled one must meet the requirement, and
+`enabled("emote_critical")` says whether it is on in this game.
 
 A value from `players()` is a map with `id`, `name`, `x`, `y`, `z` (the
 feet), `alive`, `admin`, `ex`, `ey`, `ez` (the eye), `lx`, `ly`, `lz` (the
@@ -230,11 +239,19 @@ minigame lets them paint, `enablePainting`), `mx`, `my`, `mz` (where the host fi
 the held image's shots from, `getMuzzlePoint`; the eye when nothing is
 held), `tools` (each tool slot's item id, `""` for an empty slot, as
 `%obj.tool[%i]`), `team` (their team's id in their mini-game, or `()`),
-`score` (their mini-game score), `riding` and `seat` (the player this one rides and on
-which mount point, or `()`), `bot` (`true` for a bot), `bot_owner` (for a
-bot from a bot brick, the brick owner's id, as `%bot.spawnBrick.getGroup()
-.bl_id`; else `()`) and `spawner` (for a bot a package added with
-`add_bot`, that package's id; else `()`).
+`score` (their mini-game score), `magazine`: for a gun with a magazine in
+hand, a map with `item`, `rounds`, `size`, `ammo` (its ammo type),
+`reserve` (rounds of that ammo left to load, `()` when it never runs out)
+and `reloading`; `()` otherwise; `reserves`, a map of every ammo type they
+hold a reserve of (they drew a gun of it, or a rule set it) to its rounds
+(`()` when it never runs out; a type missing from it gets its starting
+reserve with the first gun of it they draw); `riding` and `seat` (the
+player this one rides and on which mount point, or `()`), `bot` (`true`
+for a bot) and `bot_owner` (for a bot from a bot brick, the brick owner's
+id, as `%bot.spawnBrick.getGroup().bl_id`; else `()`), `spawner` (for a bot
+a package added with `add_bot`, that package's id; else `()`) and `emote` (the
+image worn in the emote slot, `""` for none). `lan()` says whether this is
+a single-player or LAN game (`$Server::LAN`).
 
 **Bots** are players without a connection. `players()` lists only people;
 `bots()` lists the bots, as the same maps, and `player(id)` reads either.
@@ -276,7 +293,12 @@ name, a player id or an object, whatever the rules say, so ask first when
 a player's shot should obey them. Give `damage` a type from your weapons
 pack (`"CommandoRifle"` or `"$DamageType::CommandoRifle"`) to use its kill
 message, vehicle scale and whether it is a direct hit, as a projectile of that
-type would; without one the damage is your Add-On's own.
+type would; without one the damage is your Add-On's own. `explode(x, y, z, radius, damage,
+brick_radius)` hurts everyone within `radius` and knocks out bricks within
+`brick_radius`, with the rocket's blast; a seventh argument names another
+explosion of the weapons pack (`"rocketExplosion"`, or an imported
+Add-On's own datablock name), whose particles, light, camera shake and
+sound it then shows.
 
 **Where a hit lands.** `hit_region(player, x, y, z)` names the part of a
 living player's body at a point: the top 15% of their box is the `"head"`,
@@ -291,13 +313,20 @@ weapons (or a dependency's) in the player's hand and keeps their tool
 slot: a scope over a rifle, a second fire mode. `mount_image(p, ())` puts
 the selected tool's own image back. `set_image_ammo(p, false)` tells the
 held image it is out of ammo, so its states' `no_ammo` transitions run;
-`true` gives it back. A magazine is then a player state key your rule
-counts down. `set_image_loaded(p, false)` unloads the held image
-(`setImageLoaded`), so its states' `not_loaded` transitions run, and
-`true` runs their `loaded` ones; putting an image in hand loads it. A
-state's `spin` (`stop`, `spin_up`, `spin_down`, `full_speed`, v20's
-`stateSpinThread`) turns the image's `spin` sequence while it is in that
-state: the New Duplicator spins while a job runs this way. `set_fov(p, fov)` sets the player's field of view (5 to 120
+`true` gives it back. A gun's magazine is image data (section 5); rules
+change it with `give_ammo(p, ammo, rounds)` (an ammo box, up to the most a
+magazine of that ammo carries), `set_reserve(p, ammo, rounds)` (`()` for
+ammo that never runs out), `set_rounds(p, item, rounds)` (the one in hand, else the first they
+carry) and `reload(p)`.
+`set_image_loaded(p, false)` unloads the held image (`setImageLoaded`),
+so its states' `not_loaded` transitions run, and `true` runs their
+`loaded` ones; putting an image in hand loads it. A state's `spin`
+(`stop`, `spin_up`, `spin_down`, `full_speed`, v20's `stateSpinThread`)
+turns the image's `spin` sequence while it is in that state: the New
+Duplicator spins while a job runs this way.
+`set_speed_scale(p, scale)` moves a player at that share of their running,
+crouching and swimming speeds (0 to 4) until they respawn: a heavy gun's
+slowdown. `set_fov(p, fov)` sets the player's field of view (5 to 120
 degrees), and `set_fov(p, ())` hands it back to their own setting; aiming
 and the zoom key still work on top of it. `unmount_image(p)` empties the
 player's hand (`unMountImage(0)`): a tool, a spray can or bricks, which the
@@ -379,8 +408,7 @@ mini-game and its teams.
 default when unset), `server_setting(key)` a server-wide one, and
 `pref("$Pref::Server::TT::Ammo")` the server setting standing for that
 global whichever running Add-On declares it, or `()` when none does (an
-unset global), as every script read the one global; `set_setting(game, key,
-value)` and
+unset global), as every script read the one global; `set_setting(game, key, value)` and
 `set_team_setting(game, team, key, value)` change it, `()` putting the
 default back (`minigame` capability). `on_minigame` gets `kind ==
 "settings"` with the changed `keys` when anyone changes them.
@@ -570,6 +598,20 @@ colour `c`, as `setShapeName` with `setShapeNameColor` did, and
 this: `on_pickup` answers `false` and decides what touching it means, and
 the seconds until it goes home count down over it.
 
+**The emote slot.** `emote(p, image)` puts an image of your weapons (or a
+dependency's) on a living player's body in the emote slot, as v20's
+`%obj.emote(%image)` mounted it in image slot 3: every client plays its
+states' emitters there, and it replaces whatever the slot wore, so an
+emote, pain from a hit, flames or a teleport replace it in turn.
+`emote(p, ())` takes it off. Its states follow their timeouts on the host,
+and a state whose script has a command in the image's `commands.states`
+runs that command for the wearer: a heal over time is an image whose
+`onHeal` state heals a little each pass and, after enough passes, calls
+`emote(p, ())`. Dying takes off an image that runs commands. Like v20's,
+emotes are spam-checked: one under a second after the last counts, ten
+quiet seconds forgive them, and past five counted an emote is dropped.
+`emote(p, image, true)` skips the check (`%skipSpam`, as pain does).
+
 **Bodies.** `set_scale(p, scale)` resizes a player's body, from 0.2 to 5
 (`setScale`); a respawn puts it back to 1. `set_tools(p, [item, (), ...])`
 fills a living player's tool slots in order (`forceEquip`, Slayer's team
@@ -633,11 +675,16 @@ laser, a bolt. Options go in a map, `beam(from, to, #{ color: [1.0, 0.8,
 or `[r, g, b, a]` from 0 to 1, `width` up to 16 units, `seconds` up to 10,
 and `muzzle` starts it at that player's gun muzzle as each player draws it.
 The beam thins and fades out over its life. `play_thread(p, thread,
-sequence)` plays one of the body's animations: thread 3 a gesture any time
-(`"activate2"`, `"root"` to stop), thread 2 the arms with what they hold.
-An arm pose started with empty hands (`"armreadyboth"`) keeps playing until
-the hand changes, and whole-body sequences such as `"death1"` play over the
-walk and look as in v20.
+sequence)` plays an animation on one of the body's four threads, as
+`playThread` did: 0 and 1 the body (a hit's flinch, `"jump"`), 2 the arms
+with what they hold, 3 a gesture (`"activate2"`). Each holds until the next
+animation on its thread, and `"root"` stops it. An arm pose started with
+empty hands (`"armreadyboth"`) keeps playing until the hand changes, and
+whole-body sequences such as `"death1"` play over the walk and look as in
+v20. `play_thread(p, thread, sequence, after)` plays it `after` seconds
+later (up to 60), on the first tick at or past that time, as
+`%player.schedule(ms, "playThread", ...)` did; a new body (a respawn) drops
+what was still waiting, and one player holds at most 64 waiting.
 Prints, sounds, beams and animations share one allowance of 64 a second
 per Add-On.
 
@@ -731,8 +778,8 @@ object on its side, and one carried through a portal stays held.
 
 | Operation | Does |
 |---|---|
-| `push(ref, vx, vy, vz)`, `push(ref, vx, vy, vz, by)` | Adds to its velocity (units a second, at most 200). |
-| `tumble(player, vx, vy, vz, by)` | Knocks a player off their feet into a tumble, flying at that velocity. |
+| `push(ref, vx, vy, vz)`, `push(ref, vx, vy, vz, by)` | Adds to its velocity (units a second, at most 200). A living player may always be pushed by themselves (a shot turned back on its shooter). |
+| `tumble(player, vx, vy, vz, by)`, `tumble(player, vx, vy, vz, by, seconds)` | Knocks a player off their feet into a tumble, flying at that velocity; for `seconds` (0.1 to 60) when given, else until it settles. |
 | `hold(player, ref, distance)`, `hold(player, ref, distance, #{at, force, turn})` | Keeps `ref` floating `distance` (0.5 to 64) ahead of the player's eye, where they look, every tick until let go, carried at the velocity the aim point moves so it keeps up as they turn and walk. `at` (`[x, y, z]`, default its middle) is the spot on it that is held there, as a physics gun grabs where it points. `force` (default 36000, at most 10,000,000) is how hard it may pull: things up to `force / 450` in mass answer at once, heavier ones swing in slower and very heavy ones can only be dragged. With `turn`, it keeps the angle it had to the player as they turn. A living player held goes limp until let go and landed; a corpse (a player who died) can be held too. One hold per player; taking something another player holds ends their hold. |
 | `hold_distance(player, distance)` | Moves what they hold nearer or farther (0.5 to 64): a reel. |
 | `reach(player, distance, #{near, force, turn})` | While they hold nothing, the engine looks where they look every tick, up to `distance`, and holds the first thing they may move, by the spot it met, at least `near` off (`force`, `turn` as `hold`). Ends once it holds something, on `let_go`, or when they die. A trigger held at something out of range catches it when it comes in range. |
@@ -767,7 +814,9 @@ else the first slot that does, putting it away if it is in hand (a thrown
 axe leaves the thrower's tools). `drop_item(item, x, y, z)` puts an item in
 the world as a pickup anyone may take at once, popping after ten seconds
 like a dropped tool; add `vx, vy, vz` (at most 200 units a second) to throw
-it. An Add-On has at most 64 of these lying about at once. With
+it, and an eighth argument, `data` (a map or number, as `on_drop` keeps),
+to hand `on_pickup` as `info.data`: a dead player's bag holding their
+ammo. An Add-On has at most 64 of these lying about at once. With
 `on_pickup` and `on_drop` they make ammo boxes, magazines that stay with a
 dropped gun, and thrown weapons that land as pickups.
 `copy_build(p, brick, limit, way, tool)` copies the stack at `brick` for
@@ -1175,7 +1224,18 @@ The fields you are most likely to change:
 | projectile | `damage`, `impulse`, `vertical` | hurt, and how hard it shoves |
 | projectile | `ballistic`, `elasticity` | bounces, and how much |
 | image state | `ticks` | how long a state (`Fire` is the reload time) lasts |
-| image | `shot` | several projectiles per shot, their spread and the recoil ([porting.md](porting.md#the-image-shot-field)) |
+| image | `shot` | several projectiles per shot, their spread and the recoil ([porting.md](porting.md#the-image-shot-field)); `scale` sizes the projectiles against their holder (0.1 to 10) |
+| image | `volleys` | up to 4 more sets each shot fires after its own: `[{ "projectile": "...", "projectiles": 1, "spread": 0.0005 }]`, a shotgun's slug after its pellets |
+| image | `last_shot` | `{ "shot": {...}, "volleys": [...] }`: what the magazine's last `last_rounds` rounds fire instead (a two-barrel gun's single barrel) |
+| image | `state_shots` | `{ "onfire2": {...} }`: a shot fired on entering a state with that script, as onFire's is, so a gun can spread wider as it keeps firing |
+| image state | `arm`, `gesture` | the holder's animation on entering it: `arm` on thread 2 (`shiftright`), `gesture` on thread 3, the other hand; `"arm_once": true` does not play `arm` again as the state times out into itself (an arm raised while a throw waits) |
+| image state | `cues` | up to 16 things a while after it is entered, as scripts scheduled them: `[{ "after_ms": 450, "thread": 2, "sequence": "plant", "sound": "your-id:sound/pump" }]`, each played even if the state has moved on |
+| projectile | `children` | smaller projectiles it throws out as it flies, bounces or explodes: one set or a list of up to 4, each its own `projectile`, `count`, `speed`; `fuse_ticks: [0, 48]` sets each child off after a random time in that range, as cluster bomblets; `max_count` throws a random number from `count` to it; `steps` (`low`, `high`, `offset`, `step`, each `[x, up, back]`) sets each axis of a child's velocity to a whole number from `low` to `high`, plus `offset`, times `step`, as a script that threw embers with `getRandom`; `on_hit` throws them at each thing it hits, bouncing or bursting, never as it dies in the air; `angles` flings each along `(cos a, cos b, sin a)` at `speed`, `a` and `b` whole degrees at random (Tier+Tactical's `PrjLoop_emitPrj`); `redraw` draws the count's limit again before each child past `count`, as a `for(%i = 0; %i < getRandom(3, 5); %i++)` loop; `max_times` stops `every_ticks` after so many |
+| projectile | `aura` | hurts what is within `radius` every `every_ticks` as it flies: `damage`, `players_only` to pass vehicles by, `effect` played on each one hurt at its scale, `target_sound` heard by that player alone, `max_pulses` to stop after so many (it flies on), `max_targets` to hurt only the first so many each pulse, `ally_damage` (0 to 100) dealt instead to a teammate or ally of its thrower in a mini-game with weapon damage on, friendly fire or not |
+| image | `shot.lob` | `{ "speed": 18.25, "range": 300, "otherwise": 100, "distance_divisor": 3.75, "jitter_steps": [3, 3], "jitter_divisor": [6, 6] }`: lobbed to come down about where the holder looks, as Tier+Tactical's mortar: `speed` along the aim, plus upward the distance from their feet to where the look lands (`otherwise` past `range` times their scale) over `distance_divisor`, plus a little along the world's x and -z |
+| image | `cook` | a grenade whose fuse burns from a state in the hand (below) |
+| image | `guard` | a shield raised in some states (below) |
+| projectile | `fixed_damage` | its direct damage stays as authored at any scale |
 | item | `ui_name` | the name players see |
 | image | `zoom` | `{ "fov": 20, "on_jet": true, "crosshair": false, "first_person": true }`: aim with the zoom key (and the right mouse button with `on_jet`), hide the crosshair, force first person while aiming. More under "Scopes" below |
 | image | `eye_offset`, `eye_rotation` | where the weapon sits in first person: exactly there, relative to the camera, as Torque places it, so a scope whose sight is on the eye line stays centred at any zoom |
@@ -1219,11 +1279,198 @@ animations); name a `mountPoint` node where the hand holds it and a
 `muzzlePoint` where shots leave, and an image state's `sequence` plays one
 of its animations (a rifle's `Bolt`).
 
-The engine has no idea of clips, magazines or reloads: a rule builds them
-from a player state key, `set_image_ammo` and image commands (section 3,
-"Held images"), and the light key can reload (below). The
+**Magazines.** An image's `magazine` gives it rounds, a reload and a
+reserve, with nothing in a rule:
+
+```json
+"magazine": { "size": 30, "ammo": "rifle", "reload_ticks": 240, "reserve": 90,
+              "max_reserve": 180, "reload_sequence": "shiftDown",
+              "reload_sound": "mag:reload", "empty_sound": "mag:click",
+              "display": "Rifle Rounds" }
+```
+
+Each shot takes `per_shot` rounds (1 when left out); a shot without them
+clicks with `empty_sound` and reloads. The last round, the light key and
+`reload(p)` start a reload that lasts `reload_ticks` (120 a second, up to
+1200) and fills the magazine from the holder's reserve of its `ammo`.
+Every gun loading the same `ammo` shares that reserve; each gun keeps its
+own rounds, by the tool slot it sits in (two of one gun each keep theirs),
+also when thrown and picked up by someone else. `one_by_one`
+loads a round per `reload_ticks` (`per_load` rounds with a two-barrel
+gun), as a shotgun's shells, and a pull of the
+trigger stops the loading and fires. The first gun of an ammo type a
+player draws brings `reserve` rounds, never above `max_reserve` (100000 at
+most); a new life brings full magazines and starting reserves again. The
+holder sees `display  rounds / reserve` at the bottom of their screen,
+sent to them alone and only when it changes; with `display_ticks` (up to
+7200) it stays up that long each time, and the states whose scripts
+`display_scripts` names show it again (a dry pull), as does the light key
+when there is nothing to load. A size is 1 to 1000 rounds;
+an ammo name is 1 to 32 letters, digits, `.`, `_` or `-`.
+
+A magazine with `"from_reserve": true` (size 1) has no rounds of its own:
+each throw takes `per_shot` straight from the reserve and nothing
+reloads, as Tier+Tactical's counted grenades. With none left the image
+leaves the hand while its tool stays selected; more ammo of its kind
+(a grenade bag) puts it back, or with `"clear_when_out": true` its tool
+goes too. The display shows the reserve alone, and the light key works the
+light.
+
+`"remount": true` draws the gun afresh (out of the hand and back, its
+draw states again) when the holder picks another copy of it from another
+slot; without it the gun stays up and takes that copy's rounds.
+
+A magazine's `supply` says where its rounds come from, as Tier+Tactical's
+ammo systems did: `reserve` (the default: shots take the magazine's rounds,
+a reload fills it from the reserve), `endless` (a reload fills it from
+nothing, the reserve untouched; the display shows `rounds / size`),
+`unlimited` (nothing is used, no display), `counted` (shots take the
+reserve, no reloads; the display shows the reserve) or `both` (shots take
+the magazine and the reserve, a reload fills the magazine free while there
+is reserve). `"hide_display": true` shows no display at all.
+
+**Fields from server settings.** A pack's `bindings` let a server setting
+decide any field of its items, images and projectiles, as v20 scripts read
+a `$Pref::Server::*` global where the field was used:
+
+```json
+"bindings": [
+  { "setting": "$Pref::Server::TT::Recoil",
+    "field": ["images", "mag:image/rifle", "shot", "kick"],
+    "values": { "false": null } },
+  { "setting": "tier-rules:tt_displaytime",
+    "field": ["images", "mag:image/rifle", "magazine", "display_ticks"],
+    "scale": 120 },
+  { "setting": "$Pref::Server::TT::Ammo",
+    "field": ["images", "mag:image/rifle", "magazine", "supply"],
+    "values": { "2": "endless", "3": "both" },
+    "when": { "$Pref::Server::TT::AlwaysReloadEx": "true" } }
+]
+```
+
+`setting` is `<package>:<key>` or the v20 global of a server setting
+(section 3's `scope: "server"`), whichever running Add-On declares it.
+`field` is the kind, one of the pack's own ids and the path in it (not its
+`id`, `states`, `image` or `item`). `values` maps the setting's value, as
+text, to the field's (`null` leaves an optional field out; a value not
+listed leaves the field as authored), or `scale` multiplies a number
+setting. `when` applies a binding only while other settings have those
+values; a later binding of the same field wins. The host plays the pack
+with the settings applied and derives it again when the host changes one;
+players get the values with the world and derive the same pack. The
+result is checked as any pack, so a value that takes a field out of its
+range is refused when the host sets it. A gun keeps its rounds and
+reserve across a change; new shots, reloads and spawns follow the new
+fields. A restart setting changes them at the next start. At most 8192
+bindings, 10 steps deep.
+
+A magazine can instead follow the image's own states, as Tier+Tactical's
+guns did with their check scripts: `checks` names the flags each state
+script sets on entering its state (`"TT_onFireCheck": { "loaded": ["shot"],
+"ammo": ["reserve"] }`, each flag `true`, `false` or true when any listed
+fact holds: `shot`, `empty`, `full`, `not_full`, `reserve`, `no_reserve`),
+`on_reload` and `on_loaded` the flags as a reload starts and as its rounds
+arrive, and `reload_state` the state script the rounds arrive with; its
+`light_states` (below) are then also the only states a reload starts in.
+A check with `"spend": true` also takes the shot's rounds as it loads one
+(a burst's later rounds, fired by states that do not run `onFire`), and
+one with `"keeps_reload": true` leaves a reload under way unloaded, so a
+forced reload is not cut short by the next check. A reload these states
+run stops when a tool is drawn or put away.
+
+A pack may fire projectiles of a package it depends on: list their ids in
+`external_projectiles` (`"external_projectiles": ["tier1:projectile/tracer"]`)
+and name them as usual. They are found when the game loads the packs
+together; an image whose projectile no loaded package declares is left
+out, with a note.
+
+An image's `shot` can say more of how it fires. `hitscan` (`range`, and
+`moving_range`) lands each projectile at once along a ray, with its
+damage and push; `explosion` names another projectile exploded there in
+place of its own, `player_sound` and `other_sound` play there by what it
+hit, `flown` names a projectile flown from the muzzle to that point, and
+`tracer` (`color`, `width`, `seconds`) draws a streak to it. A ray from
+the muzzle (`from_eye` false) starts at the eye instead when something
+stands within `eye_within` units in front of it, so a muzzle poking
+through a wall does not shoot past it; with `converge` it heads for the
+point the eye looks at rather than along the muzzle. `sounds` (up to 8
+pairs of `player` and `other`) has each shot draw one pair, as melee
+scripts picked one of two hit sounds per swing; a side a pair leaves out
+keeps `player_sound` or `other_sound`. `damage` (-100 to 100) is what
+each ray deals in place of its projectile's. `ricochet` (`times` 1 to 8,
+`damage`, `shooter`) turns the ray off whatever it meets, mirrored about
+the face it hit, up to `times` more landings over the range it has left:
+each landing deals `damage` (-100 to 100) more for every one before it,
+and once turned it can come back into its shooter, who takes `shooter`
+(0 to 1, default 1) of its damage. Every turn is drawn as a streak in the
+tracer's look, and `on_damage`'s `info.bounces` says how many turns came
+before the hit.
+`moving_spread` and `moving_projectile` replace the spread and the
+projectile while the shooter moves faster than `moving_speed`; `rested`
+(`after_ticks`, `spread`, and optionally `still` and `projectile`) is
+the truer first shot after a pause. An image's `state_shots` fire on
+entering a state whose script is not `onFire` (`"onfire2": { ... }`),
+each a shot of its own, hitscan or not (a knife's weaker stab beside its
+slash); a shot with `"free": true` takes no rounds. `recoil` pushes the shooter back along
+the aim as they fire (units a second); `recoil_vertical` sets the push
+along the aim's vertical part apart, so a machine gun can push only up or
+down. `kick` shakes the holder's view
+with each shot (`amplitude` 0 to 1, `frequency`, `seconds`); with a
+`radius` (up to 100) other players within it feel it too, weaker with
+distance, as a v20 recoil blast's camera shake. The image's
+`volleys` fire more projectiles after its own (a shotgun's close blast),
+and `left_image` holds a second image in the left hand that shares the
+holder's ammo; a state script `onFireAkimbo` pulls its trigger. A
+projectile's `slow` (`{ "divisor": 2 }`) slows the player it hits for a
+moment, more with each hit down to a floor. An item with `"hidden": true`
+is put in the world only by rules (`drop_item`): no spawn list, loadout or
+`/give` offers it.
+
+The light key reloads a gun with a magazine unless its image gives the key
+its own command (below). With `"light_states": ["Ready", "Empty"]` it
+reloads only from those states, and works the light as usual whenever it
+cannot reload (a full magazine, no reserve), as the hl2 ammo system did.
+
+**Cooked grenades.** An image's `cook` lights a fuse in the hand as a
+state script runs, and the shot it fires next carries what is left:
+
+```json
+"cook": { "script": "onpindrop", "fuse_ticks": 480, "burst_height": 2.0,
+          "print": "{seconds} second{s} left", "print_ticks": 12, "print_seconds": 0.15 }
+```
+
+The holder reads `print` in the middle of their screen every
+`print_ticks` while it burns (`{seconds}` the time left to a tenth, `{s}`
+an `s` unless it is exactly 1; `first_print` replaces the first). Held for
+the whole `fuse_ticks`, the image's projectile goes off `burst_height`
+above their feet and they put it away, keeping the grenade. Putting it
+away first puts the fuse out. The
 [Commando rifle](../../packages/samples/sample-commando-rifle/assets/weapons.json)
 is a plain scoped rifle: raise it, fire, let go, fire again.
+
+**Shields.** An image's `guard` protects its holder while their right
+hand's image is in one of its `states`:
+
+```json
+"guard": { "states": ["Ready"], "front": { "up": 0.7, "above": 3, "down": 0.8, "below": 4 },
+           "projectile_damage": 0.1, "damage": 0.25, "push": 0.5,
+           "reflect": true, "reflect_kill": "Reflected", "hit_explosion": "ns:explosion/clang",
+           "sounds": ["ns:sound/bing"], "durability": 20, "break_explosion": "ns:projectile/pieces" }
+```
+
+It covers what strikes the side the holder faces. With `front`, looking up
+past `up` it covers hits landing higher than `above` (times their scale)
+below the middle of their body, and looking down past `down` those lower
+than `below`. A projectile it stops does `projectile_damage` of its damage
+and `push` of its push, plays `hit_explosion` and one of up to 8 `sounds`
+at the holder, and with `reflect` flies back the way they look as theirs
+(a kill by it reads as the damage type `reflect_kill` when the pack has
+one). A ray it stops does `projectile_damage` and is not sent back; any
+other harm it covers does `damage`. After `durability` stops the shield
+breaks: `break_explosion` goes off and the item leaves their tools; with
+`"bots_keep": true` a bot's never wears out. With `fall_damage` (0 to 1),
+a fall or crash the holder meets looking the way they were going (down,
+for a fall) does that share, with `hit_explosion` at twice their scale.
 
 Shots hit players, vehicles, bricks and Add-On creatures. A creature's
 own rule decides what the hit does (`on_entity_damage`).
@@ -1266,8 +1513,11 @@ tool in hand, as v20's `onTrigger` slot 4 did; players who can jet still
 jet. `wheel` runs while the trigger is held with the mouse wheel's notches
 as its one `int` argument (positive rolled forward, away from you), and
 the wheel then does not change tools; declare `"args": ["int"]` on that
-command. The Gravity Gun's `gravity-gun-tool` uses `states` and `wheel`:
-hold left click to grab, roll to reel, let go to drop or fling.
+command. `mount` runs as the image goes into the holder's hand and
+`unmount` as it leaves (v20's `onMount` and `onUnMount`), so a scope that
+slows its holder can push a slower player type and pop it again. The
+Gravity Gun's `gravity-gun-tool` uses `states` and `wheel`: hold left
+click to grab, roll to reel, let go to drop or fling.
 
 `light` and `cancel` take those keys. `shift`, `rotate` and `plant` take
 the brick keys whenever the player has no ghost brick out and holds no
@@ -1283,7 +1533,11 @@ player's facing, plates up, and whether it was the super shift),
 `unmount` command `while_dead`.
 
 An item with no `image` is picked up but held by nobody: an ammo box or a
-health pack whose `on_pickup` answers `"take"`. Every item needs a
+health pack whose `on_pickup` answers `"take"`. An item's `label` (up to
+32 characters) shows above it where it lies, as v20's `setShapeName` on an
+item: an ammo box's round count. One with `"rotate": true` turns slowly
+where it lies, once every three seconds, as a v20 item whose `onAdd` set
+`%obj.rotate`. Every item needs a
 `ui_name`, the name players pick it by.
 
 `effects` holds the pack's own particles, emitters and lights in the base
@@ -1298,54 +1552,43 @@ name an emitter by id; an explosion's effect is found by its explosion's
 name (`boom`), as the base game's are. Import Add-On writes these from a
 v20 Add-On's datablocks.
 
-**Worked example: a magazine rifle.** Two Add-Ons, as the Commando sample
-splits them: `mag` provides the weapons pack (the rifle `mag:weapon/rifle`,
-whose image fires `mag:projectile/round`, an ammo box `mag:weapon/ammo`
-with no `image`, and a sound `mag:ping`), and `mag-rules` provides the rule,
-lists `mag` in its `dependencies` (so the item hooks hear `mag`'s items and
+**Worked example: a rifle with a burst mode.** Two Add-Ons, as the
+Commando sample splits them: `mag` provides the weapons pack (the rifle
+`mag:weapon/rifle`, whose image has a `magazine` of `"ammo": "rifle"` and
+fires `mag:projectile/round`, an ammo box `mag:weapon/ammo` with no
+`image`, and a sound `mag:ping`), and `mag-rules` provides the rule, lists
+`mag` in its `dependencies` (so the item hooks hear `mag`'s items and
 rounds) and asks for the `player`, `damage`, `chat` and `effects`
-capabilities. Its `behaviour.json`:
+capabilities. The magazine counts, reloads and shows its rounds itself;
+the rule adds what it does not. Its `behaviour.json`:
 
 ```json
 {
   "schema_version": 1,
   "script": "mag.rhai",
   "on_pickup": true,
-  "on_drop": true,
   "on_projectile_hit": true,
   "commands": [
     { "name": "fired", "tool_only": true },
-    { "name": "reload", "tool_only": true },
     { "name": "mode", "tool_only": true }
   ],
-  "state": { "player": {
-    "mag": { "default": 30 }, "spare": { "default": 60 }, "burst": { "default": false }
-  } }
+  "state": { "player": { "burst": { "default": false } } }
 }
 ```
 
 The rifle's image sends its moments to the rule: `"commands": { "states":
-{ "onfire": "mag-rules:fired" }, "light": "mag-rules:reload", "cancel":
-"mag-rules:mode" }`.
+{ "onfire": "mag-rules:fired" }, "cancel": "mag-rules:mode" }`.
 
 ```rhai
 fn cmd_fired(p) {                      // the image fired one round
-    let left = get_player(p, "mag") - 1;
-    if get_player(p, "burst") && left > 0 {
-        // A second round from the muzzle (the eye with empty hands).
-        let me = player(p);
+    let me = player(p);
+    let m = me.magazine;
+    if get_player(p, "burst") && m != () && m.rounds > 0 {
+        // A second round from the muzzle, out of the same magazine.
         fire("mag:projectile/round", me.mx, me.my, me.mz,
              me.lx * 200.0, me.ly * 200.0, me.lz * 200.0, p);
-        left -= 1;
+        set_rounds(p, m.item, m.rounds - 1);
     }
-    set_player(p, "mag", left);
-    if left <= 0 { set_image_ammo(p, false); }
-}
-fn cmd_reload(p) {                     // the light key
-    let take = min(30 - get_player(p, "mag"), get_player(p, "spare"));
-    set_player(p, "mag", get_player(p, "mag") + take);
-    set_player(p, "spare", get_player(p, "spare") - take);
-    set_image_ammo(p, get_player(p, "mag") > 0);
 }
 fn cmd_mode(p) {                       // the cancel key
     set_player(p, "burst", !get_player(p, "burst"));
@@ -1353,16 +1596,10 @@ fn cmd_mode(p) {                       // the cancel key
 }
 fn on_pickup(p, item, info) {
     if item == "mag:weapon/ammo" {     // used up, never held
-        set_player(p, "spare", get_player(p, "spare") + 30);
+        give_ammo(p, "rifle", 30);
         return "take";
     }
-    if item == "mag:weapon/rifle" && info.data != () {
-        set_player(p, "mag", info.data.rounds);   // the magazine came with it
-    }
     ()
-}
-fn on_drop(p, item, slot) {
-    if item == "mag:weapon/rifle" { #{ rounds: get_player(p, "mag") } } else { () }
 }
 fn on_projectile_hit(hit) {
     if hit.kind == "brick" { sound_at("mag:ping", hit.x, hit.y, hit.z); }
@@ -1372,11 +1609,20 @@ fn on_projectile_hit(hit) {
 `take_item(p, "mag:weapon/rifle")` takes the rifle back (a thrown weapon),
 `drop_item("mag:weapon/ammo", x, y, z)` leaves a box in the world, and
 `player(p).tools` lists what someone carries by slot, for a rule that
-refuses a second rifle. Typing `/reload` in chat is refused because the
+refuses a second rifle. Typing `/mode` in chat is refused because the
 commands are `tool_only`; the image still runs them.
 
 Keys of `damage_types` and `explosions` are their `name` in lowercase, and
-a projectile names its damage type as `$DamageType::<name>`. Everyone in a
+a projectile names its damage type as `$DamageType::<name>`. A damage type
+with `"special": true` is a special kill (Support_SpecialKills): its
+message's `%3` is replaced by the killing weapon's icon, so `"%2 [sent
+back]%3%1"` shows both. Two Add-Ons may declare the same name: each
+keeps its own. The pack loaded later has its declaration kept as
+`<its id>:<Name>`, and its own projectiles, images and rules that name the
+bare `<Name>` (`damage`, an `on_damage` answer) get that one. The earlier
+one is replaced for everyone only when the later Add-On depends on its
+package, as v20's re-declaration did; the same declaration twice is one.
+Everyone in a
 game needs the same weapons, so give the Add-On to the people you play
 with.
 
@@ -1471,7 +1717,14 @@ Commando's [archetype](../../packages/samples/sample-commando/commando-archetype
 is a whole new body in a dozen lines: no jet, 150 health and faster feet.
 `movement` accepts any of the motor's constants by name (`gravity`,
 `jump_speed`, `air_control`, `step_height` and the rest); `set_archetype`
-switches a player between bodies at any time.
+switches a player between bodies at any time. `push_archetype(p, a)` lays
+another body of the same model over theirs for a while (a machine gunner
+slowed as they fire; v20's `pushDatablock`), keeping their damage, and
+`pop_archetype(p, a)` lifts it; `set_archetype` meanwhile changes the body
+underneath, and death lifts them all. An archetype with
+`"first_person_only": true` keeps its player's view in the eye whatever
+their camera toggle says (v20's `firstPersonOnly`: Tier 2's slowed
+machine gunner), and the toggle takes over again once the body changes.
 
 An archetype with `"adjusts": "v20.player.<datablock>"` (and no `base` or
 `name`) is no new body: it changes the constants it names on one of v20's
@@ -1679,7 +1932,9 @@ description is not 3D is heard by its holder alone), and its `DebrisData`
 with its model, so its casings and explosion debris are its own. v20 datablocks the engine
 would have corrected on load (an emitter's period or angles) are corrected
 the same way and noted. An `ItemData` with no `uiName` is hidden in v20,
-so it is left out and its image kept for rules to mount; one with a
+so it is left out and its image kept for rules to mount; a
+`ParticleEmitterData` with a `uiName` is offered in the wrench's emitter
+list, as v20 listed it, and so is a named light; one with a
 `uiName` and no image becomes a pickup nobody holds. A kill icon the
 Add-On forgot to ship is left out of its messages. Its particles may draw
 its own textures; players load at most 64 of them from all Add-Ons, and

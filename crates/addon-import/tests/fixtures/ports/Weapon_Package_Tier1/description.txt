@@ -1,0 +1,8 @@
+Title: Stand-in Tier+Tactical Tier 1
+Author: Blockland ReImagined tests
+Written for tests. It has the community Weapon_Package_Tier1 folder name and
+the shape of the Tier+Tactical scripts its port reads (TT_maxAmmo and
+TT_ammoType items, TT_raycast images, the TT_ check state scripts and the
+onFire, onReloaded and damage methods), so the listed port applies to it. It
+is not the original Add-On and holds none of its files, and its guns, names
+and numbers are its own.

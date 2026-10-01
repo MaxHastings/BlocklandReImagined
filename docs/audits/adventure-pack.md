@@ -4,11 +4,12 @@ Date: 2026-10-01. Branch `claude/adventure-pack-n3spj2`.
 
 Max's ask (2026-09-30): Bushido's Adventure Pack should be another Add-On
 that comes with the game, and a test that the engine has every seam such a
-pack needs. Max's later decision for every classic Add-On: originals only.
-The game loads the original files from the player's own Blockland
-`Add-Ons` folder, and ships none of them. A player without the files does
-not get the Add-On. The Tier Tactical thread owns that loader and the
-shared `magazine` seam.
+pack needs. Max's later decisions for every classic Add-On: originals only,
+and bundled in the download. The release zip carries the original pack,
+imported from Max's copy and credited to Bushido; this repository holds
+only our port (`crates/addon-import/ports/weapon_modernwarbattles`), which
+Import Add-On applies to the player's copy. The Tier Tactical thread owns
+the shared `magazine` seam.
 
 An earlier cut of this branch built our own remake (models, sounds and a
 rules script). It was removed before landing. What stays is the engine
@@ -16,47 +17,74 @@ seams it showed were missing.
 
 ## What the pack is
 
-A set of modern guns for v20 minigames: rifles, pistols, shotguns, sniper
-rifles and a taser. It has magazines and reloads, ammo reserves fed by ammo
-boxes and spare guns, headshots, casings, muzzle flashes and an ammo
-counter.
+Adventurer's Weapons (`Weapon_ModernWarbattles`): 9 guns, a baton, a
+machete and a frag grenade, on Jack's hl2 ammo system (a magazine per gun,
+a reserve per ammo type, 11 ammo boxes), with projectile headshots and
+hitscan crits. The Glass 1019 release (`Weapon_AdventurePack`, Conan's)
+is the bundled one: the same ammo system with its own reserves, a Paired
+Shotgun, a taser and its own raycast support script, without crits. Both
+ports share one rules script (`weapon_modernwarbattles/rules`), each with
+its own values.
 
 ## Seams, piece by piece
-
-The middle column is how a v20 weapon Add-On usually does each job. It was
-not checked against the pack's own files, which the cloud could not
-download. Check it when the Tier loader first reads the real pack.
 
 | Piece | Usually done in v20 with | Here | Status |
 |---|---|---|---|
 | Guns, rounds, damage types, kill messages | datablocks | Import Add-On to `weapons.json` | present |
-| Shotgun spreads | `onFire` loops of `new Projectile` | image `shot` | present |
-| Magazines, reserves, reload, ammo display | client fields, `setImageAmmo`, `bottomPrint` | Tier's shared `magazine` seam | Tier thread |
-| A shot that fires and counts | `onFire` calling `Parent::onFire` | an image with a projectile and an `onfire` command does both | **new** |
-| Reload key | packaged `serverCmdLight` | image `commands.light` | present |
-| Ammo boxes, spare guns as ammo | `onPickup` | `on_pickup` answering `"take"` or `false` | present |
-| A dropped gun keeps its rounds | item fields | `on_drop` data, or Tier's `magazine` | present |
-| Headshots | `getDamageLocation` in `Damage` | `info.region` in `on_damage`, `region` on rays and `on_projectile_hit`, `hit_region()` | **new** |
-| Damage type names in hooks | `%damageType` | `info.type` is the type's name without `$DamageType::` | **new** |
-| Hitscan guns | `containerRayCast` | `raycast`, `beam`, `damage` with a type | present |
-| Taser stun | knocking the player over | `tumble` (`physics`) | present |
-| Casings, muzzle flash | `stateEjectShell`, emitters | image state `eject_shell`, `emitter` | present |
-| Ammo panel only while a gun is out | `bottomPrint` cleared on unmount | HUD panel `holding` | **new** |
-| Icons in the stock style | PNGs | the original PNGs, or drawn from the model (`render.json`, a stock pose fitted once for all icons) | present |
-| Scopes | `zoom`, overlays | image `zoom`; overlays, levels and sway are the Sniper Rifle thread's | elsewhere |
+| Spread shots and their volleys | `onFire` loops of `new Projectile` | image `shot`, `volleys`, read by the `shots` reader | **ported** |
+| A gun whose fire states each run their own script | `onFire2`, `onFire3` with wider spreads | image `state_shots` | **new** |
+| Bigger rounds | `scale = "1.5 1.5 1.5"` on the projectile | shot `scale`; projectile `fixed_damage` where the pack's own `damage` ignored scale | **new** |
+| A magazine's last rounds fire another shot | `if(toolMag <= 2)` branch | image `last_shot`, magazine `last_rounds` | **new** |
+| Magazines, reserves, reload, ammo display | hl2 ammo system: `maxmag`, `ammotype`, `toolMag`, `toolAmmo` | the port's `magazines` to Tier's `magazine`; `one_by_one` from `onReloadSingle` | **ported** |
+| Ammo boxes, spare guns | packaged `Armor::onCollision` | rules `on_pickup`, `give_ammo`; a dropped gun's rounds in `info.rounds`, `#{ rounds }` answer | **ported** |
+| Picking up a second of a gun | per-slot `toolMag` | the holder keeps their magazine | **new** |
+| State sounds, arm moves, both hands | `serverPlay3d`, `playThread(2/3, ...)` in state scripts | state `sound`, `arm`, `gesture` | **new** (`gesture`) |
+| Camera kick | `spawnExplosion` of a shaking recoil blast | shot `kick` | ported |
+| Headshots | `getHitbox`, crouched counts as head, `headshotMultiplier` | `info.region`, rules | **ported** |
+| Hitscan guns | Support_RaycastingWeapons image fields | `shot.hitscan`, a ray projectile per gun, the `hitscans` reader | **ported** |
+| Crits and their kill message | `isRaycastCritical`, ×3, `raycastCritDirectDamageType`, only `if(isObject(CritProjectile))` | rules, `on_damage` answers `#{ amount, type }`; port rules `loads` (ModernWarbattles' server.cs exec'd Emote_Critical when it was there, so an installed one turns on with it), script `enabled` | **ported** |
+| Melee swings kill players and vehicles | `onRaycastDamage`: twice `maxDamage`, own type | rules `on_damage`, new `on_vehicle_damage` | **ported** |
+| Swing hit sounds | random pair set in `onFire` | rules `on_projectile_hit`, `sound_at` | **ported** |
+| Grenade shrapnel and trails | `onExplode` loops | projectile `children` as a list | **ported** |
+| Taser tumble | `tumble(%col, ms)` | `tumble(..., seconds)` | **ported** |
+| Crit effects (explosion, crit sounds) | `Emote_Critical`'s `critProjectile` and sounds, `spawnExplosion`, `play2d`, `serverPlay3d` | script `spawn_explosion`, `play_sound`, `sound_at`; Emote_Critical imports whole (no scripts) | **ported** |
+| Grenade cooking and countdown | `onPinDrop` `burnSched`, `sendCenterNade`, `burnedIt`, thrown fuse `4000 - chargeTime` | image `cook`, projectile fuses | **new** |
+| Bomblet fuses | `projectile::onAdd` `400 - getRandom(...)` | children `fuse_ticks` | **new** |
+| Light key reloads | hl2 `serverCmdLight` | magazine `light_states` | **new** |
+| Head-hit flinch | hitbox `playThread(0/2, jump)`, `schedule(50, playThread, 0/2, plant)` | `play_thread` on threads 0 to 3 with `after` | **new** (threads 0 and 1, delay) |
+| Hitmarker | `commandToClient('hitmarker')` | nothing in either pack draws it | none in the original |
+| Timed arm moves and sounds in a state | `%obj.schedule(450, playThread, 2, plant)`, `schedule(650, 0, serverPlay3D, ...)` | state `cues` | **new** |
+| Truer first shot after a pause | `getSimTime() - lastFire` spread | shot `rested` | **new** |
+| Two shells a load | Paired Shotgun's `onReloadSingle` | magazine `per_load` | **new** |
+| Muzzle through a wall | `checkForObstruction`: from the eye within 4.5 units | hitscan `eye_within` | **new** |
+| Sniper aims where the eye looks | `getLOSPoint` | hitscan `converge` | **new** |
+| Rifle beams | `drawRaylineRifleTracer`, `createTracer`, deleted after a while | hitscan `tracer`, read by a script rule | **ported** |
+| Bullet hit sounds | `raycastExplosionPlayerSound`, `raycastExplosionBrickSound` | hitscan `player_sound`, `other_sound` | **ported** |
+| Grenade bounce sound | `shrapGrenProjectile::onCollision` `serverPlay3D` | projectile `bounce_effect` | **ported** |
+| Named emitters (Critical Hit glow) | a `ParticleEmitterData` with a `uiName` shows in the wrench | Add-On emitters and lights join the wrench lists | **new** |
+| Everything else the scripts define | ammo system calls, pickups, death drops, hitbox helpers | each in the port's `handles` (the shared ones in `_shared/bushido-hl2.json`), listed in the report as carried out by the port | **accounted** |
 
-## Left out on purpose
+## Approximations
 
-- **Per-shot recoil animation and camera kick.** Cues are budgeted at 64 a
-  second per Add-On, and an automatic gun would spend it. Camera kick is
-  a weapon-format change (Tier plans an image state `shake`).
+- Shrapnel directions are uniform; the script's random throw leaned
+  upward. Each set's speed is the script's mean.
+- The engine keeps one magazine per gun per holder, where v20 kept one per
+  tool slot: two of the same gun share theirs.
+- The 1019 Sniper Rifle's beam is drawn white and 0.1 wide: its script
+  sets the node colour to white and its comment gives the model's width;
+  the model itself is not read.
+- The hitbox head hit's `goremodHitProjectile` and `gamedamage2Sound` are
+  defined nowhere, so the original never showed them; the port has none.
 
 ## Tests
 
-- `crates/sim/tests/hit_regions.rs`: a round in the chest and in the head
-  reaches `on_damage` with its region, point and damage type, and a rule
-  triples the headshot.
-- `crates/sim/tests/script_api.rs`: `region` on rays, `hit_region`.
-- `crates/sim/src/player.rs`: the Torque bands.
-- `crates/package-runtime/src/content.rs`: HUD `holding`.
-- `crates/weapons/tests/addon_seams.rs`: an `onfire` command and the round.
+- `crates/addon-import/tests/adventure_port.rs`: both ports on CC0
+  stand-ins: magazines and reloads, shots, volleys, last shot, state shots
+  and both hands' moves, hitscans and shrapnel from the scripts; boxes,
+  headshots, crits with their kill message only beside Emote_Critical's stand-in and
+  its effects and sounds, grenade cooking and bomblet fuses, melee kills with their own
+  message and hit sound, vehicle wrecks, dropped spare guns and the taser
+  in hosted games.
+- `crates/weapons/tests/addon_seams.rs`: volleys, the last shot, state
+  shots with their gestures, children lists, an `onfire` command.
+- `crates/sim/tests/hit_regions.rs`, `script_api.rs`: hit regions.

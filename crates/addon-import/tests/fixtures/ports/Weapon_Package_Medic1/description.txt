@@ -1,0 +1,7 @@
+Title: Stand-in Tier+Tactical Medical
+Author: Blockland ReImagined tests
+Written for tests. It has the community Weapon_Package_Medic1 folder name,
+the datablock and function names its port covers and the shape of its
+scripts, so the listed port applies to it. It is not the original Add-On
+and holds none of its files, and its tools, words, sounds and numbers are
+its own.

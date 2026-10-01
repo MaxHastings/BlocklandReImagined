@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "include": [
+    "tier-tactical-core",
+    "tier-tactical"
+  ],
+  "rules": {
+    "settings": {
+      "$Pref::Server::TT::DisableTier1": {
+        "how": "on, Tier 1's items are left out of every item list from the next start, as the original did not load them; items already placed in a build stay",
+        "fields": [
+          {
+            "path": ["items", "*", "hidden"],
+            "values": {
+              "true": true
+            },
+            "existing": false
+          }
+        ]
+      },
+      "$Pref::Server::TT::DisableAmmoItems": {
+        "how": "on, the ammo pickups (the `*staticItem` boxes) are left out of every item list from the next start, as the original did not load them; ones already placed in a build stay",
+        "fields": [
+          {
+            "path": ["items", "*", "hidden"],
+            "values": {
+              "true": true
+            },
+            "only": {
+              "datablock": "*staticItem"
+            },
+            "existing": false
+          }
+        ]
+      }
+    }
+  },
+  "notes": "Tier+Tactical Tier 1 (Bushido, Space Guy, Panopticon) on its own ammo system: each gun's TT_maxAmmo and TT_ammoType become its image's magazine, with the T+T2 reserves and caps, and the image's own check states (TT_onLoadCheck and the rest) decide when it fires and reloads; the light key reloads from Ready or Empty. Raycast pistols hit along a ray with their TT_raycast fields, reaching less and spreading more on the move; the Pump Shotgun fires 9 pellets and its blast, the Sport Rifle a weaker round on the move, the Submachine Gun slows whoever it hits. Recoil shakes the view. Host rules: ammo items and a dead player's ammo bag, Sport Rifle headshots with their own kill message.",
+  "handles": {
+    "AkimboPistolImage::onUnMount": "engine: the left gun (its left_image) leaves the hand with the right one",
+    "AkimboPistolImage::onFireAkimbo": "engine: the onFireAkimbo state pulls the left gun's trigger for one tick; the ammo shows as it changes",
+    "pref:$Pref::Server::TT::DeathStopFiring": "always on, with no setting: at death the engine lets go of the trigger and puts the tools away, so a dead player's gun never fires; off only let it keep firing, a bug not brought back",
+    "pref:$Pref::Server::TT::DeathStopAnims": "always on, with no setting: at death the engine puts the tools away, so no reload goes on playing its sounds and arm moves; off only let them play on, a bug not brought back",
+    "pref:$Pref::Server::TT::SetInvBugfix": "always on, with no setting: a gun a loadout or event newly puts in a slot comes with a full magazine (each slot's magazine is kept by the gun in it); off only let it keep the slot's old gun's rounds, past its size, a bug not brought back",
+    "pref:$Pref::Server::TT::RemoveItemBugfix": "always on, with no setting, though Kai left it off: a gun an event takes from a slot takes its magazine with it, so one put back there later comes as any new gun does; off let it come back with the old rounds, a bug not brought back"
+  }
+}

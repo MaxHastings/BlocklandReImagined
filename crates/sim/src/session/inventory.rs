@@ -48,12 +48,14 @@ pub(super) fn core_runtime() -> WeaponsWorld {
         items: BTreeMap::new(),
         images: BTreeMap::new(),
         projectiles: BTreeMap::new(),
+        external_projectiles: Default::default(),
         damage_types: BTreeMap::new(),
         explosions: BTreeMap::new(),
         sounds: Default::default(),
         definitions: Vec::new(),
         resources: Vec::new(),
         diagnostics: Vec::new(),
+        bindings: vec![],
     })
     .expect("Static core tool definitions are valid")
 }
@@ -98,6 +100,7 @@ impl Session {
             "Cannot replace live item definitions"
         );
         let catalog = super::combat::catalog(&pack);
+        let authored = Arc::new(pack.clone());
         let mut weapons = WeaponsWorld::new(pack)?;
         ensure!(
             self.item_spawners
@@ -116,8 +119,12 @@ impl Session {
         );
         weapons.tick = self.simulation.state().tick;
         self.weapons = weapons;
+        self.authored_weapons = authored;
+        self.weapon_values.clear();
         self.minigames = super::combat::new_world(catalog, &self.archetypes);
-        self.refresh_event_bindings()
+        self.refresh_event_bindings()?;
+        self.start_weapon_settings();
+        Ok(())
     }
 
     pub(super) fn spawn_inventory(&mut self, owner: OwnerId) -> Result<()> {

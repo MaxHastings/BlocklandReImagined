@@ -512,7 +512,7 @@
           "bots": "%this\\.deleteAllBots\\(\\)"
         },
         "Slayer_TeamSO::addMember": {
-          "humans": "if\\(\\s*%class\\s*\\$=\\s*\"GameConnection\"\\s*\\)\\s*\\{\\s*//HUMAN - ANNOUNCEMENT"
+          "humans": "if\\(\\s*%class\\s*\\$=\\s*\"GameConnection\"\\s*\\)\\s*\\{"
         },
         "Slayer_TeamSO::onAddMember": {
           "fill": "%this\\.botFillLimit\\s*>\\s*0\\s*\\)\\s*%this\\.botFillTeam\\(\\)"
@@ -1654,6 +1654,1535 @@
         "crates/addon-import/tests/ports.rs new_duplicator_port_paints_wrenches_supercuts_fills_and_force_plants",
         "crates/addon-import/tests/ports.rs new_duplicator_port_pivots_plants_as_waits_and_lists",
         "crates/addon-import/tests/ports.rs new_duplicator_port_keys_and_admin_commands"
+      ]
+    },
+    {
+      "addon": "Weapon_ModernWarbattles",
+      "title": "Adventurer's Weapons (Bushido)",
+      "port": "weapon_modernwarbattles",
+      "status": "verified",
+      "sha256": [
+        "4d938fe308610289aabdfe0d74a8ac01048e2ece458545640c5737c14d7792ed"
+      ],
+      "covers": {
+        "BatonImage::onFire": {
+          "baton_sound_a": "if\\s*\\(\\s*getrandom\\s*\\(\\s*0\\s*,\\s*1\\s*\\)\\s*\\)\\s*\\{\\s*%this\\.raycastexplosionbricksound\\s*=\\s*(\\w+)\\s*;\\s*%this\\.raycastexplosionplayersound\\s*=\\s*\\w+",
+          "baton_sound_b": "else\\s*\\{\\s*%this\\.raycastexplosionbricksound\\s*=\\s*(\\w+)\\s*;\\s*%this\\.raycastexplosionplayersound\\s*=\\s*\\w+"
+        },
+        "BatonImage::onRaycastDamage": {
+          "baton_kill": "datablock\\.maxdamage\\s*\\*\\s*([0-9]*\\.?[0-9]+)",
+          "baton_shove": "getforwardvector\\s*\\(\\s*\\)\\s*,\\s*([0-9]*\\.?[0-9]+)\\s*\\)",
+          "baton_up": "getforwardvector\\s*\\(\\s*\\)\\s*,\\s*[0-9.]+\\s*\\)\\s*,\\s*\"\\s*0\\s+0\\s+([0-9]*\\.?[0-9]+)\\s*\"",
+          "baton_type": "maxdamage\\s*\\*\\s*[0-9.]+\\s*;\\s*%damagetype\\s*=\\s*\\$damagetype::(\\w+)"
+        },
+        "MacheteImage::onFire": {
+          "machete_sound_a": "if\\s*\\(\\s*getrandom\\s*\\(\\s*0\\s*,\\s*1\\s*\\)\\s*\\)\\s*\\{\\s*%this\\.raycastexplosionbricksound\\s*=\\s*(\\w+)\\s*;\\s*%this\\.raycastexplosionplayersound\\s*=\\s*\\w+",
+          "machete_sound_b": "else\\s*\\{\\s*%this\\.raycastexplosionbricksound\\s*=\\s*(\\w+)\\s*;\\s*%this\\.raycastexplosionplayersound\\s*=\\s*\\w+"
+        },
+        "MacheteImage::onRaycastDamage": {
+          "machete_kill": "datablock\\.maxdamage\\s*\\*\\s*([0-9]*\\.?[0-9]+)",
+          "machete_shove": "getforwardvector\\s*\\(\\s*\\)\\s*,\\s*([0-9]*\\.?[0-9]+)\\s*\\)",
+          "machete_up": "getforwardvector\\s*\\(\\s*\\)\\s*,\\s*[0-9.]+\\s*\\)\\s*,\\s*\"\\s*0\\s+0\\s+([0-9]*\\.?[0-9]+)\\s*\"",
+          "machete_type": "maxdamage\\s*\\*\\s*[0-9.]+\\s*;\\s*%damagetype\\s*=\\s*\\$damagetype::(\\w+)"
+        },
+        "WeaponImage::onRaycastDamage": {
+          "ray_limit": "mclampf\\s*\\(\\s*%this\\.raycastdirectdamage\\s*,\\s*-100\\s*,\\s*100\\s*\\)",
+          "ray_crit": "%directdamage\\s*\\*\\s*3\\b"
+        },
+        "battleRifleImage::isRaycastCritical": {
+          "battlerifle_shove": "getforwardvector\\s*\\(\\s*\\)\\s*,\\s*([0-9]*\\.?[0-9]+)\\s*\\)\\s*,\\s*\"[^\"]*\"\\s*\\)\\s*\\)",
+          "battlerifle_up": "getforwardvector\\s*\\(\\s*\\)\\s*,\\s*[0-9.]+\\s*\\)\\s*,\\s*\"\\s*0\\s+0\\s+([0-9]*\\.?[0-9]+)\\s*\"",
+          "battlerifle_test": "getworldboxcenter\\s*\\(\\s*\\)\\s*,\\s*2\\s*\\)\\s*-\\s*3\\.3\\s*\\*"
+        },
+        "burnedIt": {
+          "burn_height": "%posz\\s*\\+\\s*2\\b",
+          "burn_grenade": "datablock\\s*=\\s*shrapgrenprojectile\\s*;",
+          "burn_now": "%burned\\.explode\\s*\\(\\s*\\)"
+        },
+        "hl2AmmoOnReload": {
+          "magazine": "toolmag",
+          "reserve": "toolammo"
+        },
+        "projectile::onAdd": {
+          "fuse_thrown": "\"shrapgrenprojectile\"[\\s\\S]*?%oldlt\\s*=\\s*4000\\s*;[\\s\\S]*?%\\w+\\s*=\\s*%obj\\.client\\.player\\.chargetime\\s*;[\\s\\S]*?%new\\s*=\\s*%oldlt\\s*-\\s*%\\w+\\s*;[\\s\\S]*?schedule\\s*\\(\\s*%new\\s*,\\s*\"explode\"",
+          "fuse_cluster": "\"shrapgrenclusterprojectile\"[\\s\\S]*?%oldlt\\s*=\\s*400\\s*;[\\s\\S]*?%oldlt\\s*-\\s*\\(\\s*getrandom\\s*\\(\\s*0\\s*,\\s*400\\s*\\)\\s*\\)",
+          "fuse_trail": "\"shrapgrentrailprojectile\"[\\s\\S]*?%oldlt\\s*=\\s*400\\s*;[\\s\\S]*?%oldlt\\s*-\\s*\\(\\s*getrandom\\s*\\(\\s*100\\s*,\\s*400\\s*\\)\\s*\\)"
+        },
+        "revolverImage::isRaycastCritical": {
+          "revolver_shove": "getforwardvector\\s*\\(\\s*\\)\\s*,\\s*([0-9]*\\.?[0-9]+)\\s*\\)\\s*,\\s*\"[^\"]*\"\\s*\\)\\s*\\)",
+          "revolver_up": "getforwardvector\\s*\\(\\s*\\)\\s*,\\s*[0-9.]+\\s*\\)\\s*,\\s*\"\\s*0\\s+0\\s+([0-9]*\\.?[0-9]+)\\s*\"",
+          "revolver_test": "getworldboxcenter\\s*\\(\\s*\\)\\s*,\\s*2\\s*\\)\\s*-\\s*3\\.3\\s*\\*"
+        },
+        "sendCenterNade": {
+          "cook_print": "'centerprint'\\s*,\\s*\"\\\\c5\"\\s*@\\s*%client\\.player\\.warntime\\s*@\\s*\"\\\\c6 cooking time left\\.\"\\s*,\\s*0\\.15\\s*\\)",
+          "cook_step": "getword\\s*\\(\\s*%client\\.player\\.warntime\\s*,\\s*0\\s*\\)\\s*-\\s*0\\.1\\s*@\\s*\" seconds\"",
+          "cook_one": "==\\s*1\\s*\\)\\s*%client\\.player\\.warntime\\s*=\\s*\"1 second\"",
+          "cook_every": "schedule\\s*\\(\\s*100\\s*,\\s*0\\s*,\\s*sendcenternade"
+        },
+        "shrapGrenImage::onFire": {
+          "cook_out": "cancel\\s*\\(\\s*%obj\\.burnsched\\s*\\)",
+          "cook_held": "%obj\\.chargetime\\s*=\\s*%obj\\.chargeend\\s*-\\s*%obj\\.chargestart"
+        },
+        "shrapGrenImage::onPinDrop": {
+          "cook_start": "%obj\\.chargestart\\s*=\\s*getsimtime\\s*\\(\\s*\\)",
+          "cook_fuse": "schedule\\s*\\(\\s*4000\\s*,\\s*0\\s*,\\s*\"burnedit\"",
+          "cook_first": "%obj\\.warntime\\s*=\\s*\"4 seconds\"\\s*;\\s*%obj\\.warnsched\\s*=\\s*schedule\\s*\\(\\s*100\\s*,\\s*0\\s*,\\s*sendcenternade"
+        },
+        "shrapGrenprojectile::onExplode": {
+          "shrap_cluster": "%shrapdata\\s*=\\s*shrapgrenclusterprojectile",
+          "shrap_count": "%shards\\s*=\\s*(\\d+)",
+          "shrap_speed": "getrandom\\s*\\(\\s*-6\\s*,\\s*6\\s*\\)",
+          "trail_count": "%shrapdata\\s*=\\s*shrapgrentrailprojectile\\s*;[\\s\\S]*?%shards\\s*=\\s*(\\d+)",
+          "trail_speed": "getrandom\\s*\\(\\s*-12\\s*,\\s*12\\s*\\)"
+        },
+        "sniperrifleImage::isRaycastCritical": {
+          "sniperrifle_shove": "getforwardvector\\s*\\(\\s*\\)\\s*,\\s*([0-9]*\\.?[0-9]+)\\s*\\)\\s*,\\s*\"[^\"]*\"\\s*\\)\\s*\\)",
+          "sniperrifle_up": "getforwardvector\\s*\\(\\s*\\)\\s*,\\s*[0-9.]+\\s*\\)\\s*,\\s*\"\\s*0\\s+0\\s+([0-9]*\\.?[0-9]+)\\s*\"",
+          "sniperrifle_test": "getworldboxcenter\\s*\\(\\s*\\)\\s*,\\s*2\\s*\\)\\s*-\\s*3\\.3\\s*\\*"
+        },
+        "getHitbox": {
+          "flinch_first": "playthread\\s*\\(\\s*0\\s*,\\s*\"?([a-z0-9_]+)\"?\\s*\\)",
+          "flinch_arms": "playthread\\s*\\(\\s*2\\s*,\\s*\"?jump\"?\\s*\\)",
+          "flinch_ms": "schedule\\s*\\(\\s*([0-9]+)\\s*,\\s*\"playthread\"\\s*,\\s*\"0\"\\s*,\\s*\"[a-z0-9_]+\"\\s*\\)",
+          "flinch_then": "schedule\\s*\\(\\s*[0-9]+\\s*,\\s*\"playthread\"\\s*,\\s*\"0\"\\s*,\\s*\"([a-z0-9_]+)\"\\s*\\)",
+          "flinch_arms_then": "schedule\\s*\\(\\s*50\\s*,\\s*\"playthread\"\\s*,\\s*\"2\"\\s*,\\s*\"plant\"\\s*\\)"
+        },
+        "shrapGrenProjectile::onCollision": {
+          "shrap_bounce_sound": "serverplay3d\\s*\\(\\s*(\\w+)\\s*,"
+        },
+        "checkForObstruction": {
+          "obstruction_range": "vectorscale\\s*\\(\\s*%eyevector\\s*,\\s*4\\.5\\s*\\)"
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/adventure_port.rs ammo_system_guns_get_magazines_that_reload_like_their_states",
+        "crates/addon-import/tests/adventure_port.rs ammo_boxes_and_headshots_play_in_a_hosted_game",
+        "crates/addon-import/tests/adventure_port.rs hitscan_crits_and_melee_kills_play_in_a_hosted_game",
+        "crates/addon-import/tests/adventure_port.rs melee_swings_wreck_vehicles",
+        "crates/addon-import/tests/adventure_port.rs a_dropped_spare_gun_empties_its_magazine_into_the_reserve",
+        "crates/addon-import/tests/adventure_port.rs crits_play_with_the_critical_hit_emote",
+        "crates/addon-import/tests/adventure_port.rs without_the_critical_hit_emote_it_runs_with_no_crits",
+        "crates/addon-import/tests/adventure_port.rs a_grenade_cooks_in_the_hand"
+      ]
+    },
+    {
+      "addon": "Weapon_AdventurePack",
+      "title": "Adventurer's Weapons (Bushido, Glass 1019)",
+      "port": "weapon_adventurepack",
+      "status": "verified",
+      "sha256": [
+        "9ce429bfc491cff5e3075798f88c2109717a3ea67d91f8461d8cda672a894e49"
+      ],
+      "covers": {
+        "hl2AmmoOnReload": {
+          "magazine": "toolmag",
+          "reserve": "toolammo"
+        },
+        "ProjectileData::damage": {
+          "multiplier": "headshotmultiplier",
+          "hitbox": "gethitbox"
+        },
+        "WeaponImage::onFire": {
+          "raycast_switch": "raycastenabled",
+          "raycast_range": "raycastrange"
+        },
+        "WeaponImage::damage": {
+          "raycast_damage": "%this\\.directdamage"
+        },
+        "taserProjectile::damage": {
+          "taser_mounted": "getmountedobject",
+          "taser_spread": "addvelocity\\s*\\(\\s*getrandom\\s*\\(\\s*(\\d+)\\s*\\)",
+          "taser_offset": "addvelocity\\s*\\(\\s*getrandom\\s*\\(\\s*\\d+\\s*\\)\\s*-\\s*(\\d+)",
+          "taser_up": "spc\\s*([0-9]*\\.?[0-9]+)\\s*\\)\\s*;\\s*tumble",
+          "taser_ms": "tumble\\s*\\(\\s*%col\\s*,\\s*(\\d+)\\s*\\)"
+        },
+        "pairedShotgunImage::onFire": {
+          "paired_last": "toolmag\\[%obj\\.currtool\\]\\s*<=\\s*2\\s*\\)",
+          "paired_take": "toolmag\\[%obj\\.currtool\\]\\s*-=\\s*2\\s*;"
+        },
+        "getHitbox": {
+          "flinch_first": "playthread\\s*\\(\\s*0\\s*,\\s*\"?([a-z0-9_]+)\"?\\s*\\)",
+          "flinch_arms": "playthread\\s*\\(\\s*2\\s*,\\s*\"?jump\"?\\s*\\)",
+          "flinch_ms": "schedule\\s*\\(\\s*([0-9]+)\\s*,\\s*\"playthread\"\\s*,\\s*\"0\"\\s*,\\s*\"[a-z0-9_]+\"\\s*\\)",
+          "flinch_then": "schedule\\s*\\(\\s*[0-9]+\\s*,\\s*\"playthread\"\\s*,\\s*\"0\"\\s*,\\s*\"([a-z0-9_]+)\"\\s*\\)",
+          "flinch_arms_then": "schedule\\s*\\(\\s*50\\s*,\\s*\"playthread\"\\s*,\\s*\"2\"\\s*,\\s*\"plant\"\\s*\\)"
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/adventure_port.rs glass_release_guns_shoot_like_their_scripts",
+        "crates/addon-import/tests/adventure_port.rs glass_release_taser_tumbles_and_sniper_headshots"
+      ]
+    },
+    {
+      "addon": "Weapon_Package_Tier1",
+      "title": "Tier+Tactical Tier 1 (Kai)",
+      "port": "weapon_package_tier1",
+      "status": "partial",
+      "sha256": [
+        "a500fd2c5e46f90c29e167656807cde95fdee352d99144e617a1176e88dcbc22"
+      ],
+      "covers": {
+        "WeaponImage::TT_onLoadCheck": {
+          "needs": "TT_needsAmmo\\s*\\(",
+          "starts": "TT_canStartReload\\s*\\("
+        },
+        "WeaponImage::TT_onReloadCheck": {
+          "can": "TT_canReload\\s*\\(",
+          "full": "TT_toolAmmo\\[%toolNum\\]\\s*<\\s*%this\\.item\\.TT_maxAmmo"
+        },
+        "WeaponImage::TT_onFireCheck": {
+          "fires": "TT_canFire\\s*\\(",
+          "reloads": "TT_canReload\\s*\\("
+        },
+        "WeaponImage::TT_onUseLight": {
+          "ready": "\"Ready\"",
+          "empty": "\"EmptyFire\""
+        },
+        "WeaponImage::TT_reload": {
+          "loads": "setImageLoaded\\s*\\(\\s*%slot\\s*,\\s*1\\s*\\)",
+          "reserve": "%obj\\.quantity\\["
+        },
+        "WeaponImage::TT_incrementReload": {
+          "one": "%amount\\s*=\\s*1\\s*;"
+        },
+        "Armor::onAdd": {
+          "start": "\\$Pref::Server::TT::Start\\["
+        },
+        "Armor::onCollision": {
+          "lines": "TT_ammoPickup\\[%i\\]",
+          "adds": "TT_addAmmo\\s*\\(",
+          "sound": "AmmoGetSound"
+        },
+        "Armor::onDisabled": {
+          "bag": "ammoDroppedItem",
+          "drops": "canDrop",
+          "throw": "getRandom\\s*\\(\\s*-8\\s*,\\s*8\\s*\\)\\s*SPC\\s*getRandom\\s*\\(\\s*-8\\s*,\\s*8\\s*\\)\\s*SPC\\s*4"
+        },
+        "TT_addAmmo": {
+          "full": "%amount\\s*==\\s*-1",
+          "cap": "mClamp\\s*\\("
+        },
+        "TT_createProjectile": {
+          "shells": "%shell\\s*<\\s*%shellCount"
+        },
+        "TT_dampenVelocity": {
+          "divides": "vectorScale\\s*\\(\\s*%vel\\s*,\\s*1\\s*/\\s*%divisor\\s*\\)"
+        },
+        "TT_processHeadshotDamage": {
+          "head": "-\\s*3\\.3\\s*\\*\\s*%colscale",
+          "hit": "play2D\\s*\\(\\s*bulletHitSound\\s*\\)",
+          "multiplies": "%dmg\\s*\\*=\\s*%multiplier"
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/tier_port.rs tier1_guns_get_magazines_hitscans_and_volleys",
+        "crates/addon-import/tests/tier_port.rs ammo_items_bags_and_headshots_play_in_a_hosted_game"
+      ]
+    },
+    {
+      "addon": "Weapon_Package_Tier1A",
+      "title": "Tier+Tactical Tier 1A (Kai)",
+      "port": "weapon_package_tier1a",
+      "status": "partial",
+      "sha256": [
+        "c1cc5b4c98154507898f1086c6729fe3749ff936e28e34615bf8e44fec7b704c"
+      ],
+      "covers": {
+        "SingleShotgunImage::onFire": {
+          "knockback": "TT_knockback\\s*\\(",
+          "blast": "TT_createProjectile\\s*\\([^;]*SingleShotgunBlastProjectile",
+          "pellets": "%shellCount\\s*=\\s*\\d+"
+        },
+        "PepperpistolImage::onFire": {
+          "fires": "Parent::onFire\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "SnubnoseProjectile::damage": {
+          "headshot": "TT_processHeadshotDamage\\s*\\("
+        },
+        "nailgunProjectile1::damage": {
+          "slow": "TT_dampenVelocity\\s*\\("
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/tier_port.rs tier1a_shotgun_knocks_back_and_the_nailgun_stays_hidden"
+      ]
+    },
+    {
+      "addon": "Weapon_Package_Tier2",
+      "title": "Tier+Tactical Tier 2 (Kai)",
+      "port": "weapon_package_tier2",
+      "status": "partial",
+      "sha256": [
+        "481f2d430e5581f7504ad3f7d695df5236e870e9176e9368a1ccf73c837c58fd"
+      ],
+      "covers": {
+        "TAssaultRifleImage::onFire": {
+          "rested": "%obj\\.lastShotTime\\s*=\\s*getSimTime\\(",
+          "truer_round": "%projectile\\s*=\\s*TAssaultRifleProjectile2"
+        },
+        "BattleRifleImage::onFire": {
+          "knockback": "TT_knockback\\s*\\("
+        },
+        "LightMachinegunImage::onFire2": {
+          "second_round": "TT_createProjectile\\s*\\("
+        },
+        "LightMachinegunImage::onClick": {
+          "slows": "pushDatablock\\(\\s*LMGArmor"
+        },
+        "LightMachinegunImage::onHalt": {
+          "lifts": "popDatablock\\(\\s*LMGArmor"
+        },
+        "LightMachinegunImage::onEmptyTransition": {
+          "lifts": "popDatablock\\(\\s*LMGArmor"
+        },
+        "LightMachinegunImage::onUnMount": {
+          "lifts": "popDatablock\\(\\s*LMGArmor"
+        },
+        "Player::pushDatablock": {
+          "same_shape": "shapeFile"
+        },
+        "Player::popDatablock": {
+          "restores": "setDatablock\\("
+        },
+        "Armor::onTrigger": {
+          "alt_trigger": "onAltTrigger\\s*\\("
+        },
+        "CombatShotgunImage::onAltTrigger": {
+          "mounts": "mountImage\\(\\s*combatShotgunAltfireImage\\s*,\\s*0\\s*\\)"
+        },
+        "CombatShotgunAltfireImage::onFire": {
+          "two_shells": "TT_canFire\\(\\s*%obj\\s*,\\s*2\\s*\\)",
+          "blasts": "%projectile\\s*=\\s*CombatShotgunBlastProjectile"
+        },
+        "CombatShotgunAltfireImage::onDone": {
+          "returns": "mountImage\\(\\s*CombatShotgunImage\\s*,"
+        },
+        "BattlerifleProjectile1::damage": {
+          "slow": "TT_dampenVelocity\\s*\\("
+        },
+        "LightMachinegunProjectile1::damage": {
+          "slow": "TT_dampenVelocity\\s*\\("
+        },
+        "MagnumProjectile::damage": {
+          "headshot": "TT_processHeadshotDamage\\s*\\("
+        },
+        "MilitarySniperImage::TT_isRaycastCritical": {
+          "headshot": "TT_isRaycastHeadshot\\s*\\("
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/tier_port.rs tier2_guns_rest_fire_twice_slow_and_switch_modes"
+      ]
+    },
+    {
+      "addon": "Weapon_Package_Tier2A",
+      "title": "Tier+Tactical Tier 2A (Kai)",
+      "port": "weapon_package_tier2a",
+      "status": "partial",
+      "sha256": [
+        "655692d99e11eabc6a9e2ffb627965e50210f0a029a5267f12b85dbea4ab41af"
+      ],
+      "covers": {
+        "BullpupImage::onFire": {
+          "steady": "vectorLen\\(\\s*%obj\\.getVelocity\\(\\s*\\)\\s*\\)\\s*<"
+        },
+        "BullpupImage::onBurstCheck": {
+          "spends": "TT_canFire\\s*\\([\\s\\S]*setImageLoaded\\(\\s*%slot\\s*,\\s*1\\s*\\)\\s*;\\s*%this\\.TT_decrementAmmo\\s*\\("
+        },
+        "BullpupImage::onBurstFire": {
+          "fires": "TT_createProjectile\\s*\\("
+        },
+        "DualSMGsImage::onFireAkimbo": {
+          "left_fires": "setImageTrigger\\(\\s*1\\s*,\\s*1\\s*\\)"
+        },
+        "DualSMGsImage::onMount": {
+          "left_hand": "mountImage\\(\\s*DualSMGLeftImage\\s*,\\s*1\\s*\\)"
+        },
+        "DualSMGLeftImage::onFire": {
+          "fires": "TT_createProjectile\\s*\\("
+        },
+        "DualSMGsProjectile1::damage": {
+          "slow": "TT_dampenVelocity\\s*\\("
+        },
+        "MachStilImage::onFire": {
+          "moving": "vectorLen\\(\\s*%obj\\.getVelocity\\(\\s*\\)\\s*\\)\\s*>"
+        },
+        "SniperCarbineImage::onAltTrigger": {
+          "scopes": "mountImage\\(\\s*SniperCZoomedImage\\s*,\\s*0\\s*\\)"
+        },
+        "SniperCarbineImage::TT_onLoadCheck": {
+          "forced": "TT_forceToolReload\\s*\\|\\|"
+        },
+        "SniperCZoomedImage::onAltTrigger": {
+          "unscopes": "mountImage\\(\\s*SniperCarbineImage\\s*,\\s*0\\s*\\)"
+        },
+        "SniperCZoomedImage::onMount": {
+          "slows": "pushDatablock\\(\\s*LMGArmor"
+        },
+        "SniperCZoomedImage::onUnMount": {
+          "lifts": "popDatablock\\(\\s*LMGArmor"
+        },
+        "SniperCZoomedImage::onReloadStart": {
+          "hands_back": "TT_forceToolReload\\s*=\\s*1\\s*;\\s*%obj\\.mountImage\\(\\s*SniperCarbineImage\\s*,\\s*0\\s*\\)"
+        },
+        "SniperCZoomedImage::TT_isRaycastCritical": {
+          "headshot": "TT_isRaycastHeadshot\\s*\\("
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/tier_port.rs tier2a_bursts_scopes_and_the_free_left_gun"
+      ]
+    },
+    {
+      "addon": "Weapon_Package_Explosive1",
+      "title": "Tier+Tactical Explosive 1 (Kai)",
+      "port": "weapon_package_explosive1",
+      "status": "partial",
+      "sha256": [
+        "855a8cbb4aa91351ad281a0e8bd297677b9ae3319100e661a51b0ada0b90b64e"
+      ],
+      "covers": {
+        "Projectile::onAdd": {
+          "loops": "PrjLoop_enabled[\\s\\S]*schedule\\(\\s*%db\\.PrjLoop_tickTime"
+        },
+        "tierfragGrenadeImage::onArmed": {
+          "arm": "playthread\\(\\s*2\\s*,"
+        },
+        "tierfragGrenadeImage::onFire": {
+          "throws": "TT_canFire\\(\\s*%obj\\s*\\)\\s*\\)\\s*\\{\\s*%p\\s*=\\s*Parent::onFire\\(",
+          "counts": "TT_decrementAmmo\\(\\s*%obj\\s*\\)",
+          "puts_away": "TT_needsAmmo\\(\\s*%obj\\s*\\)\\s*\\)\\s*\\{\\s*%obj\\.unMountImage\\(\\s*0\\s*\\)"
+        },
+        "tierFragGrenadeImage::onReady": {
+          "puts_away": "TT_needsAmmo\\(\\s*%obj\\s*\\)\\s*\\)\\s*\\{\\s*%obj\\.unMountImage\\(\\s*0\\s*\\)"
+        },
+        "tierFragGrenadeImage::onTick": {
+          "puts_away": "TT_needsAmmo\\(\\s*%obj\\s*\\)\\s*\\)\\s*\\{\\s*%obj\\.unMountImage\\(\\s*0\\s*\\)"
+        },
+        "tierFragGrenadeImage::onCharge": {
+          "puts_away": "TT_needsAmmo\\(\\s*%obj\\s*\\)\\s*\\)\\s*\\{\\s*%obj\\.unMountImage\\(\\s*0\\s*\\)"
+        },
+        "tierfraggrenadeProjectile::onCollision": {
+          "bounce_sound": "serverPlay3D\\(\\s*(\\w+)\\s*,",
+          "pops": "explodeTicks\\s*==\\s*(\\d+)\\s*\\)\\s*\\{\\s*%obj\\.explode\\("
+        },
+        "tierstickGrenadeImage::onArmed": {
+          "arm": "playthread\\(\\s*2\\s*,"
+        },
+        "tierstickGrenadeImage::onFire": {
+          "throws": "!%this\\.TT_needsAmmo\\(\\s*%obj\\s*\\)\\s*\\)\\s*\\{\\s*%p\\s*=\\s*Parent::onFire\\(",
+          "counts": "TT_decrementAmmo\\(\\s*%obj\\s*\\)",
+          "puts_away": "TT_needsAmmo\\(\\s*%obj\\s*\\)\\s*\\)\\s*\\{\\s*%obj\\.unMountImage\\(\\s*0\\s*\\)"
+        },
+        "tierstickGrenadeImage::onReady": {
+          "puts_away": "TT_needsAmmo\\(\\s*%obj\\s*\\)\\s*\\)\\s*\\{\\s*%obj\\.unMountImage\\(\\s*0\\s*\\)"
+        },
+        "tierstickGrenadeImage::onPull": {
+          "puts_away": "TT_needsAmmo\\(\\s*%obj\\s*\\)\\s*\\)\\s*\\{\\s*%obj\\.unMountImage\\(\\s*0\\s*\\)"
+        },
+        "tierstickGrenadeImage::onCharge": {
+          "puts_away": "TT_needsAmmo\\(\\s*%obj\\s*\\)\\s*\\)\\s*\\{\\s*%obj\\.unMountImage\\(\\s*0\\s*\\)"
+        },
+        "tMolotovImage::onArmed": {
+          "once": "if\\s*\\(\\s*%obj\\.getImageAmmo\\(\\s*0\\s*\\)\\s*\\)"
+        },
+        "tMolotovImage::onFire": {
+          "throws": "!%this\\.TT_needsAmmo\\(\\s*%obj\\s*\\)\\s*\\)\\s*\\{\\s*%p\\s*=\\s*Parent::onFire\\(",
+          "counts": "TT_decrementAmmo\\(\\s*%obj\\s*\\)",
+          "puts_away": "TT_needsAmmo\\(\\s*%obj\\s*\\)\\s*\\)\\s*\\{\\s*%obj\\.unMountImage\\(\\s*0\\s*\\)"
+        },
+        "tMolotovImage::onReady": {
+          "puts_away": "TT_needsAmmo\\(\\s*%obj\\s*\\)\\s*\\)\\s*\\{\\s*%obj\\.unMountImage\\(\\s*0\\s*\\)"
+        },
+        "tMolotovImage::onCharge": {
+          "puts_away": "TT_needsAmmo\\(\\s*%obj\\s*\\)\\s*\\)\\s*\\{\\s*%obj\\.unMountImage\\(\\s*0\\s*\\)"
+        },
+        "tMolotovProjectile::onExplode": {
+          "embers": "%shrapData\\s*=\\s*\\w+\\s*;"
+        },
+        "tierFireRoastProjectile::PrjLoop_onTick": {
+          "players": "\\$TypeMasks::PlayerObjectType",
+          "every_target": "if\\s*\\(\\s*!\\$Pref::Server::TT::MolNadeTargetBugfix\\s*\\)\\s*break"
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/tier_port.rs explosive1_grenades_count_down_and_the_molotov_burns",
+        "crates/weapons/tests/thrown_grenades.rs a_grenade_counted_from_the_reserve_is_put_away_with_the_last_and_back_as_more_arrive",
+        "crates/weapons/tests/thrown_grenades.rs embers_scatter_along_each_axis_and_burn_only_the_players_near"
+      ]
+    },
+    {
+      "addon": "Weapon_Package_Explosive2",
+      "title": "Tier+Tactical Explosive 2 (Kai)",
+      "port": "weapon_package_explosive2",
+      "status": "partial",
+      "sha256": [
+        "12213bebd0fcd476c17a94e72d969842691ce442b7c6deb579fb330bcf89d869"
+      ],
+      "covers": {
+        "Projectile::onAdd": {
+          "loops": "PrjLoop_enabled[\\s\\S]*schedule\\(\\s*%db\\.PrjLoop_tickTime"
+        },
+        "Projectile::PrjLoop_tick": {
+          "limit": "%prj\\.ticks\\s*>=\\s*%db\\.PrjLoop_maxTicks"
+        },
+        "PrjLoop_emitPrj": {
+          "angles": "mcos\\(\\s*%a\\s*\\)\\s*SPC\\s*msin\\(\\s*%a\\s*\\)\\s*SPC\\s*mcos\\(\\s*%b\\s*\\)"
+        },
+        "FlakCannonProjectile::PrjLoop_onTick": {
+          "sparks": "PrjLoop_emitPrj\\(\\s*%obj\\s*,"
+        },
+        "FlakCannonProjectile::onCollision": {
+          "burst": "%i\\s*<\\s*getRandom\\(",
+          "then_hits": "Parent::onCollision\\("
+        },
+        "FlakCannonImage::onFire": {
+          "fires": "Parent::onFire\\("
+        },
+        "GrenaderImage::onFire": {
+          "fires": "Parent::onFire\\("
+        },
+        "RPGImage::onFire": {
+          "moving": "vectorLen\\(\\s*%obj\\.getVelocity\\(\\s*\\)\\s*\\)\\s*>"
+        },
+        "MortarImage::onFire": {
+          "lob": "containerRayCast\\(\\s*%start\\s*,\\s*%end\\s*,\\s*\\$TypeMasks::All"
+        },
+        "MortarImage::onMount": {
+          "both_arms": "armReadyBoth"
+        },
+        "MortarImage::onUnMount": {
+          "arms": "fixArmReady\\(\\s*%obj\\s*\\)"
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/tier_port.rs explosive2_flak_sheds_sparks_and_the_mortar_lobs",
+        "crates/weapons/tests/thrown_grenades.rs flak_sparks_fly_at_kais_angles_and_burst_on_each_hit",
+        "crates/weapons/tests/thrown_grenades.rs a_lob_comes_down_by_how_far_the_look_lands"
+      ]
+    },
+    {
+      "addon": "Weapon_Package_Medic1",
+      "title": "Tier+Tactical Medical (Kai)",
+      "port": "weapon_package_medic1",
+      "status": "partial",
+      "sha256": [
+        "1dedc7af42ce1c062f666ec35ee4626a8551434d7ddcde43be306710bc9da01c"
+      ],
+      "covers": {
+        "TT_canHeal": {
+          "players": "\\$TypeMasks::PlayerObjectType",
+          "bots_by_pref": "\\$Pref::Server::TT::MedicHealBots\\s*\\|\\|\\s*%targetObject\\.getClassName\\(\\s*\\)\\s*\\$=\\s*\"Player\"",
+          "same_minigame": "%mini\\s*==\\s*getMinigameFromObject\\(\\s*%targetObject\\s*\\)",
+          "slayer_teams": "%mini\\.isSlayerMinigame",
+          "lan": "\\$Server::LAN\\s*&&\\s*!isObject\\(\\s*getMinigameFromObject\\(\\s*%targetObject\\s*\\)\\s*\\)",
+          "own_bots": "getBL_IDFromObject\\(\\s*%client\\s*\\)"
+        },
+        "TT_projectileHeal": {
+          "can_heal": "if\\s*\\(\\s*TT_canHeal\\(\\s*%healer\\s*,\\s*%col\\s*\\)\\s*\\)",
+          "hurt_enough": "%col\\.getDamageLevel\\(\\s*\\)\\s*>=\\s*%healBurst\\s*\\)\\s*%col\\.spawnExplosion\\(",
+          "cross": "%col\\.spawnExplosion\\(\\s*(\\w+)\\s*,\\s*%col\\.getScale\\(\\s*\\)\\s*\\)",
+          "burst": "%col\\.setDamageLevel\\(\\s*%col\\.getDamageLevel\\(\\s*\\)\\s*-\\s*%healBurst\\s*\\)",
+          "healed_pre": "bottomPrint\\(\\s*%obj\\.client\\s*,\\s*\"([^\"]*)\"\\s*@\\s*%colName\\s*@",
+          "healed_post": "%colName\\s*@\\s*\"([^\"]*)\"\\s*,",
+          "print_seconds": "%colName\\s*@\\s*\"[^\"]*\"\\s*,\\s*([\\d.]+)\\s*,",
+          "print_hide_bar": "%colName\\s*@\\s*\"[^\"]*\"\\s*,\\s*[\\d.]+\\s*,\\s*(\\d)\\s*\\)",
+          "healing_pre": "bottomPrint\\(\\s*%col\\.client\\s*,\\s*\"([^\"]*)\"\\s*@\\s*%healerName\\s*@",
+          "healing_post": "%healerName\\s*@\\s*\"([^\"]*)\"\\s*,",
+          "heal_image": "%col\\.emote\\(\\s*(\\w+)\\s*\\)"
+        },
+        "stimRechargedNotice": {
+          "alive": "if\\s*\\(\\s*%obj\\.getDamagePercent\\(\\s*\\)\\s*>=\\s*1(?:\\.0)?\\s*\\)\\s*return\\s*;",
+          "notice_text": "centerprint\\(\\s*%obj\\.client\\s*,\\s*\"([^\"]*)\"",
+          "notice_seconds": "centerprint\\(\\s*%obj\\.client\\s*,\\s*\"[^\"]*\"\\s*,\\s*([\\d.]+)\\s*\\)",
+          "notice_sound": "serverPlay3D\\(\\s*(\\w+)\\s*,\\s*%obj\\.getPosition\\(\\s*\\)\\s*\\)"
+        },
+        "Armor::onTrigger": {
+          "alt_trigger": "onAltTrigger\\s*\\("
+        },
+        "medigunImage::onFire": {
+          "fires": "Parent::onFire\\("
+        },
+        "medigunHealImage::onMount": {
+          "count": "%obj\\.healing\\s*=\\s*0"
+        },
+        "medigunHealImage::onHeal": {
+          "heals": "%obj\\.setDamageLevel\\("
+        },
+        "medigunProjectile::onCollision": {
+          "heals": "TT_projectileHeal\\(",
+          "then_hits": "Parent::onCollision\\("
+        },
+        "stimpackProjectile::onCollision": {
+          "heals": "TT_projectileHeal\\(",
+          "then_hits": "Parent::onCollision\\("
+        },
+        "stimpackImage::onFire": {
+          "recharge": "%obj\\.lastStimTime\\s*\\+\\s*%this\\.minShotTime"
+        },
+        "stimpackImage::onAltTrigger": {
+          "jet": "%triggerSlot\\s*==\\s*4"
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/tier_port.rs medic1_heals_over_time_and_the_syringe_recharges",
+        "crates/weapons/tests/emote_slot.rs an_emote_image_runs_its_state_commands_until_replaced"
+      ]
+    },
+    {
+      "addon": "Weapon_Melee_Extended",
+      "title": "Tier+Tactical Melee Extended (Kai)",
+      "port": "weapon_melee_extended",
+      "status": "partial",
+      "sha256": [
+        "be6a64786cfe955c39df8e7746d222a397c62702f49ce043ea5d2bc8d6a62803"
+      ],
+      "covers": {
+        "TT_isMeleeRaycastCrit": {
+          "zombie": "%col\\.iszombie"
+        },
+        "WeaponImage::onFire": {
+          "raycasts": "TT_raycastEnabled[\\s\\S]*containerRayCast\\("
+        },
+        "WeaponImage::TT_onRaycastDamage": {
+          "clamp": "mClampF\\(\\s*%this\\.TT_raycastDirectDamage\\s*,\\s*-100\\s*,\\s*100\\s*\\)"
+        },
+        "WeaponImage::TT_onRaycastHit": {
+          "sounds": "TT_raycastExplosionPlayerSound[\\s\\S]*TT_raycastExplosionBrickSound"
+        },
+        "WeaponImage::TT_isRaycastCritical": {
+          "never": "return\\s+0\\s*;"
+        },
+        "CombatKnifeImage::onFire": {
+          "sounds": "if\\s*\\(\\s*getRandom\\(\\s*0\\s*,\\s*1\\s*\\)\\s*\\)\\s*\\{\\s*%this\\.TT_raycastExplosionBrickSound\\s*=\\s*\\w+\\s*;",
+          "damage": "%this\\.TT_raycastDirectDamage\\s*=\\s*[\\d.]+\\s*;",
+          "gesture": "%obj\\.playThread\\(\\s*%slot\\s*,\\s*spearThrow\\s*\\)",
+          "fires": "Parent::onFire\\(\\s*%this\\s*,\\s*%obj\\s*,\\s*%slot\\s*\\)"
+        },
+        "CombatKnifeImage::onStabFire": {
+          "sounds": "if\\s*\\(\\s*getRandom\\(\\s*0\\s*,\\s*1\\s*\\)\\s*\\)\\s*\\{\\s*%this\\.TT_raycastExplosionBrickSound\\s*=\\s*\\w+\\s*;",
+          "damage": "%this\\.TT_raycastDirectDamage\\s*=\\s*[\\d.]+\\s*;",
+          "gesture": "%obj\\.playThread\\(\\s*%slot\\s*,\\s*shiftDown\\s*\\)",
+          "fires": "Parent::onFire\\(\\s*%this\\s*,\\s*%obj\\s*,\\s*%slot\\s*\\)"
+        },
+        "CombatKnifeImage::onCharge": {
+          "arm": "%obj\\.playThread\\(\\s*2\\s*,\\s*plant\\s*\\)"
+        },
+        "CombatKnifeImage::TT_isRaycastCritical": {
+          "melee": "return\\s+TT_isMeleeRaycastCrit\\("
+        },
+        "iceaxeImage::onFire": {
+          "alive": "if\\s*\\(\\s*%obj\\.getDamagePercent\\(\\s*\\)\\s*>=\\s*1(?:\\.0)?\\s*\\)\\s*return\\s*;",
+          "arm": "%obj\\.playThread\\(\\s*2\\s*,\\s*shiftTo\\s*\\)",
+          "sounds": "if\\s*\\(\\s*getRandom\\(\\s*0\\s*,\\s*1\\s*\\)\\s*\\)\\s*\\{\\s*%this\\.TT_raycastExplosionBrickSound\\s*=\\s*\\w+\\s*;",
+          "fires": "Parent::onFire\\(\\s*%this\\s*,\\s*%obj\\s*,\\s*%slot\\s*\\)"
+        },
+        "iceaxeImage::onActivate": {
+          "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*plant\\s*\\)"
+        },
+        "iceaxeImage::onPreFire": {
+          "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*shiftAway\\s*\\)"
+        },
+        "iceaxeImage::TT_isRaycastCritical": {
+          "melee": "return\\s+TT_isMeleeRaycastCrit\\("
+        },
+        "L4BBatonImage::onFire": {
+          "alive": "if\\s*\\(\\s*%obj\\.getDamagePercent\\(\\s*\\)\\s*>=\\s*1(?:\\.0)?\\s*\\)\\s*return\\s*;",
+          "arm": "%obj\\.playThread\\(\\s*2\\s*,\\s*shiftTo\\s*\\)",
+          "sounds": "if\\s*\\(\\s*getRandom\\(\\s*0\\s*,\\s*1\\s*\\)\\s*\\)\\s*\\{\\s*%this\\.TT_raycastExplosionBrickSound\\s*=\\s*\\w+\\s*;",
+          "fires": "Parent::onFire\\(\\s*%this\\s*,\\s*%obj\\s*,\\s*%slot\\s*\\)"
+        },
+        "L4BBatonImage::onActivate": {
+          "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*plant\\s*\\)"
+        },
+        "L4BBatonImage::onPreFire": {
+          "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*shiftAway\\s*\\)"
+        },
+        "L4BBatonImage::TT_isRaycastCritical": {
+          "melee": "return\\s+TT_isMeleeRaycastCrit\\("
+        },
+        "L4BCrowbarImage::onFire": {
+          "alive": "if\\s*\\(\\s*%obj\\.getDamagePercent\\(\\s*\\)\\s*>=\\s*1(?:\\.0)?\\s*\\)\\s*return\\s*;",
+          "arm": "%obj\\.playThread\\(\\s*2\\s*,\\s*shiftTo\\s*\\)",
+          "sounds": "if\\s*\\(\\s*getRandom\\(\\s*0\\s*,\\s*1\\s*\\)\\s*\\)\\s*\\{\\s*%this\\.TT_raycastExplosionBrickSound\\s*=\\s*\\w+\\s*;",
+          "fires": "Parent::onFire\\(\\s*%this\\s*,\\s*%obj\\s*,\\s*%slot\\s*\\)"
+        },
+        "L4BCrowbarImage::onActivate": {
+          "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*plant\\s*\\)"
+        },
+        "L4BCrowbarImage::onPreFire": {
+          "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*shiftAway\\s*\\)"
+        },
+        "L4BCrowbarImage::TT_isRaycastCritical": {
+          "melee": "return\\s+TT_isMeleeRaycastCrit\\("
+        },
+        "l4bPanImage::onFire": {
+          "alive": "if\\s*\\(\\s*%obj\\.getDamagePercent\\(\\s*\\)\\s*>=\\s*1(?:\\.0)?\\s*\\)\\s*return\\s*;",
+          "arm": "%obj\\.playThread\\(\\s*2\\s*,\\s*shiftTo\\s*\\)",
+          "sounds": "if\\s*\\(\\s*getRandom\\(\\s*0\\s*,\\s*1\\s*\\)\\s*\\)\\s*\\{\\s*%this\\.TT_raycastExplosionBrickSound\\s*=\\s*\\w+\\s*;",
+          "fires": "Parent::onFire\\(\\s*%this\\s*,\\s*%obj\\s*,\\s*%slot\\s*\\)"
+        },
+        "l4bPanImage::onActivate": {
+          "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*plant\\s*\\)"
+        },
+        "l4bPanImage::onPreFire": {
+          "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*shiftAway\\s*\\)"
+        },
+        "l4bPanImage::TT_isRaycastCritical": {
+          "melee": "return\\s+TT_isMeleeRaycastCrit\\("
+        },
+        "l4bGuitarImage::onFire": {
+          "alive": "if\\s*\\(\\s*%obj\\.getDamagePercent\\(\\s*\\)\\s*>=\\s*1(?:\\.0)?\\s*\\)\\s*return\\s*;",
+          "arm": "%obj\\.playThread\\(\\s*2\\s*,\\s*shiftTo\\s*\\)",
+          "sounds": "if\\s*\\(\\s*getRandom\\(\\s*0\\s*,\\s*1\\s*\\)\\s*\\)\\s*\\{\\s*%this\\.TT_raycastExplosionBrickSound\\s*=\\s*\\w+\\s*;\\s*%this\\.TT_raycastExplosionPlayerSound\\s*=\\s*\\w+\\s*;",
+          "fires": "Parent::onFire\\(\\s*%this\\s*,\\s*%obj\\s*,\\s*%slot\\s*\\)"
+        },
+        "l4bGuitarImage::onActivate": {
+          "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*activate\\s*\\)"
+        },
+        "l4bGuitarImage::onPreFire": {
+          "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*shiftAway\\s*\\)"
+        },
+        "l4bGuitarImage::TT_isRaycastCritical": {
+          "melee": "return\\s+TT_isMeleeRaycastCrit\\("
+        },
+        "L4BKatanaImage::onFire": {
+          "alive": "if\\s*\\(\\s*%obj\\.getDamagePercent\\(\\s*\\)\\s*>=\\s*1(?:\\.0)?\\s*\\)\\s*return\\s*;",
+          "arm": "%obj\\.playThread\\(\\s*2\\s*,\\s*shiftTo\\s*\\)",
+          "sounds": "if\\s*\\(\\s*getRandom\\(\\s*0\\s*,\\s*1\\s*\\)\\s*\\)\\s*\\{\\s*%this\\.TT_raycastExplosionBrickSound\\s*=\\s*\\w+\\s*;",
+          "fires": "Parent::onFire\\(\\s*%this\\s*,\\s*%obj\\s*,\\s*%slot\\s*\\)",
+          "gesture": "%obj\\.playThread\\(\\s*3\\s*,\\s*shiftLeft\\s*\\)"
+        },
+        "L4BKatanaImage::onActivate": {
+          "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*plant\\s*\\)"
+        },
+        "L4BKatanaImage::onPreFire": {
+          "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*shiftAway\\s*\\)"
+        },
+        "L4BKatanaImage::TT_isRaycastCritical": {
+          "melee": "return\\s+TT_isMeleeRaycastCrit\\("
+        },
+        "l4bMacheteImage::onFire": {
+          "alive": "if\\s*\\(\\s*%obj\\.getDamagePercent\\(\\s*\\)\\s*>=\\s*1(?:\\.0)?\\s*\\)\\s*return\\s*;",
+          "arm": "%obj\\.playThread\\(\\s*2\\s*,\\s*shiftTo\\s*\\)",
+          "sounds": "if\\s*\\(\\s*getRandom\\(\\s*0\\s*,\\s*1\\s*\\)\\s*\\)\\s*\\{\\s*%this\\.TT_raycastExplosionBrickSound\\s*=\\s*\\w+\\s*;",
+          "fires": "Parent::onFire\\(\\s*%this\\s*,\\s*%obj\\s*,\\s*%slot\\s*\\)",
+          "gesture": "%obj\\.playThread\\(\\s*3\\s*,\\s*shiftLeft\\s*\\)"
+        },
+        "l4bMacheteImage::onActivate": {
+          "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*shiftDown\\s*\\)"
+        },
+        "l4bMacheteImage::onPreFire": {
+          "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*shiftAway\\s*\\)"
+        },
+        "l4bMacheteImage::TT_isRaycastCritical": {
+          "melee": "return\\s+TT_isMeleeRaycastCrit\\("
+        },
+        "L4BSpadeImage::onFire": {
+          "alive": "if\\s*\\(\\s*%obj\\.getDamagePercent\\(\\s*\\)\\s*>=\\s*1(?:\\.0)?\\s*\\)\\s*return\\s*;",
+          "arm": "%obj\\.playThread\\(\\s*2\\s*,\\s*shiftTo\\s*\\)",
+          "sounds": "if\\s*\\(\\s*getRandom\\(\\s*0\\s*,\\s*1\\s*\\)\\s*\\)\\s*\\{\\s*%this\\.TT_raycastExplosionBrickSound\\s*=\\s*\\w+\\s*;\\s*%this\\.TT_raycastExplosionPlayerSound\\s*=\\s*\\w+\\s*;",
+          "fires": "Parent::onFire\\(\\s*%this\\s*,\\s*%obj\\s*,\\s*%slot\\s*\\)"
+        },
+        "L4BSpadeImage::onActivate": {
+          "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*plant\\s*\\)"
+        },
+        "L4BSpadeImage::onPreFire": {
+          "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*shiftAway\\s*\\)"
+        },
+        "L4BSpadeImage::TT_isRaycastCritical": {
+          "melee": "return\\s+TT_isMeleeRaycastCrit\\("
+        },
+        "pipeImage::onFire": {
+          "alive": "if\\s*\\(\\s*%obj\\.getDamagePercent\\(\\s*\\)\\s*>=\\s*1(?:\\.0)?\\s*\\)\\s*return\\s*;",
+          "arm": "%obj\\.playThread\\(\\s*2\\s*,\\s*shiftTo\\s*\\)",
+          "sounds": "if\\s*\\(\\s*getRandom\\(\\s*0\\s*,\\s*1\\s*\\)\\s*\\)\\s*\\{\\s*%this\\.TT_raycastExplosionBrickSound\\s*=\\s*\\w+\\s*;\\s*%this\\.TT_raycastExplosionPlayerSound\\s*=\\s*\\w+\\s*;",
+          "fires": "Parent::onFire\\(\\s*%this\\s*,\\s*%obj\\s*,\\s*%slot\\s*\\)"
+        },
+        "pipeImage::onActivate": {
+          "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*shiftto\\s*\\)"
+        },
+        "pipeImage::onPreFire": {
+          "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*shiftAway\\s*\\)"
+        },
+        "pipeImage::TT_isRaycastCritical": {
+          "melee": "return\\s+TT_isMeleeRaycastCrit\\("
+        },
+        "sledgehammerImage::onFire": {
+          "alive": "if\\s*\\(\\s*%obj\\.getDamagePercent\\(\\s*\\)\\s*>=\\s*1(?:\\.0)?\\s*\\)\\s*return\\s*;",
+          "arm": "%obj\\.playThread\\(\\s*2\\s*,\\s*shiftTo\\s*\\)",
+          "sounds": "if\\s*\\(\\s*getRandom\\(\\s*0\\s*,\\s*1\\s*\\)\\s*\\)\\s*\\{\\s*%this\\.TT_raycastExplosionBrickSound\\s*=\\s*\\w+\\s*;",
+          "fires": "Parent::onFire\\(\\s*%this\\s*,\\s*%obj\\s*,\\s*%slot\\s*\\)"
+        },
+        "sledgehammerImage::onActivate": {
+          "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*plant\\s*\\)"
+        },
+        "sledgehammerImage::onPreFire": {
+          "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*shiftAway\\s*\\)"
+        },
+        "sledgehammerImage::TT_isRaycastCritical": {
+          "melee": "return\\s+TT_isMeleeRaycastCrit\\("
+        },
+        "l4bMacheteImage::onFireB": {
+          "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*shiftAway\\s*\\)"
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/tier_port.rs melee_extended_swings_draw_their_hit_sounds_and_the_knife_stabs",
+        "crates/weapons/tests/raycast_guns.rs a_swing_draws_one_pair_of_hit_sounds_and_each_fire_state_its_damage",
+        "crates/weapons/tests/raycast_guns.rs hit_sound_pairs_pick_by_the_draw_and_keep_what_they_leave_out"
+      ]
+    },
+    {
+      "addon": "Weapon_Melee_Extended_II",
+      "title": "Tier+Tactical Melee Extended II (Kai)",
+      "port": "weapon_melee_extended_ii",
+      "status": "partial",
+      "sha256": [
+        "cae20f116fee91f3d5b10aba44ac89a73a2c72409cb8ce590c934e9f9803c4e2"
+      ],
+      "covers": {
+        "TT_defaultIfUnset": {
+          "default": "\\$Pref::Server\\[\\s*\\\"::\\\"\\s*@\\s*%category\\s*@\\s*\\\"::\\\"\\s*@\\s*%pref\\s*\\]\\s*=\\s*%default"
+        },
+        "addSpecialDamageMsg": {
+          "messages": "\\$SpecialDamage_MurderMessage\\[%id\\]\\s*=\\s*%murderMsg\\s*;\\s*\\$SpecialDamage_SuicideMessage\\[%id\\]\\s*=\\s*%suicideMsg"
+        },
+        "GameConnection::onDeath": {
+          "between": "%curmsg\\s*=\\s*strReplace\\(\\s*%curmsg\\s*,\\s*\\\"%3\\\"\\s*,\\s*%ciString\\s*\\)",
+          "last": "%msg\\s*=\\s*strReplace\\(\\s*%curmsg\\s*,\\s*\\\"%3\\\"\\s*,\\s*%ciString\\s*\\)"
+        },
+        "L4BAxeImage::onFire": {
+          "alive": "if\\s*\\(\\s*%obj\\.getDamagePercent\\(\\s*\\)\\s*>=\\s*1(?:\\.0)?\\s*\\)\\s*return\\s*;",
+          "arm": "%obj\\.playThread\\(\\s*2\\s*,\\s*shiftTo\\s*\\)",
+          "sounds": "if\\s*\\(\\s*getRandom\\(\\s*0\\s*,\\s*1\\s*\\)\\s*\\)\\s*\\{\\s*%this\\.TT_raycastExplosionBrickSound\\s*=\\s*\\w+\\s*;",
+          "fires": "Parent::onFire\\(\\s*%this\\s*,\\s*%obj\\s*,\\s*%slot\\s*\\)"
+        },
+        "L4BAxeImage::onActivate": {
+          "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*plant\\s*\\)"
+        },
+        "L4BAxeImage::onPreFire": {
+          "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*shiftAway\\s*\\)"
+        },
+        "L4BAxeImage::TT_isRaycastCritical": {
+          "melee": "return\\s+TT_isMeleeRaycastCrit\\("
+        },
+        "L4BBigStickImage::onFire": {
+          "alive": "if\\s*\\(\\s*%obj\\.getDamagePercent\\(\\s*\\)\\s*>=\\s*1(?:\\.0)?\\s*\\)\\s*return\\s*;",
+          "arm": "%obj\\.playThread\\(\\s*2\\s*,\\s*shiftTo\\s*\\)",
+          "sounds": "if\\s*\\(\\s*getRandom\\(\\s*0\\s*,\\s*1\\s*\\)\\s*\\)\\s*\\{\\s*%this\\.TT_raycastExplosionBrickSound\\s*=\\s*\\w+\\s*;",
+          "fires": "Parent::onFire\\(\\s*%this\\s*,\\s*%obj\\s*,\\s*%slot\\s*\\)"
+        },
+        "L4BBigStickImage::onActivate": {
+          "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*plant\\s*\\)"
+        },
+        "L4BBigStickImage::onPreFire": {
+          "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*shiftAway\\s*\\)"
+        },
+        "L4BBigStickImage::TT_isRaycastCritical": {
+          "melee": "return\\s+TT_isMeleeRaycastCrit\\("
+        },
+        "L4BCookingKnifeImage::onFire": {
+          "alive": "if\\s*\\(\\s*%obj\\.getDamagePercent\\(\\s*\\)\\s*>=\\s*1(?:\\.0)?\\s*\\)\\s*return\\s*;",
+          "arm": "%obj\\.playThread\\(\\s*2\\s*,\\s*shiftTo\\s*\\)",
+          "sounds": "if\\s*\\(\\s*getRandom\\(\\s*0\\s*,\\s*1\\s*\\)\\s*\\)\\s*\\{\\s*%this\\.TT_raycastExplosionBrickSound\\s*=\\s*\\w+\\s*;",
+          "fires": "Parent::onFire\\(\\s*%this\\s*,\\s*%obj\\s*,\\s*%slot\\s*\\)"
+        },
+        "L4BCookingKnifeImage::onActivate": {
+          "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*plant\\s*\\)"
+        },
+        "L4BCookingKnifeImage::onPreFire": {
+          "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*shiftAway\\s*\\)"
+        },
+        "L4BCookingKnifeImage::TT_isRaycastCritical": {
+          "melee": "return\\s+TT_isMeleeRaycastCrit\\("
+        },
+        "L4BGaffImage::onFire": {
+          "alive": "if\\s*\\(\\s*%obj\\.getDamagePercent\\(\\s*\\)\\s*>=\\s*1(?:\\.0)?\\s*\\)\\s*return\\s*;",
+          "arm": "%obj\\.playThread\\(\\s*2\\s*,\\s*shiftTo\\s*\\)",
+          "sounds": "if\\s*\\(\\s*getRandom\\(\\s*0\\s*,\\s*1\\s*\\)\\s*\\)\\s*\\{\\s*%this\\.TT_raycastExplosionBrickSound\\s*=\\s*\\w+\\s*;\\s*%this\\.TT_raycastExplosionPlayerSound\\s*=\\s*\\w+\\s*;",
+          "fires": "Parent::onFire\\(\\s*%this\\s*,\\s*%obj\\s*,\\s*%slot\\s*\\)"
+        },
+        "L4BGaffImage::onActivate": {
+          "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*plant\\s*\\)"
+        },
+        "L4BGaffImage::onPreFire": {
+          "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*shiftAway\\s*\\)"
+        },
+        "L4BGaffImage::TT_isRaycastCritical": {
+          "melee": "return\\s+TT_isMeleeRaycastCrit\\("
+        },
+        "L4BKnifeonaStickImage::onFire": {
+          "alive": "if\\s*\\(\\s*%obj\\.getDamagePercent\\(\\s*\\)\\s*>=\\s*1(?:\\.0)?\\s*\\)\\s*return\\s*;",
+          "arm": "%obj\\.playThread\\(\\s*2\\s*,\\s*shiftTo\\s*\\)",
+          "sounds": "if\\s*\\(\\s*getRandom\\(\\s*0\\s*,\\s*1\\s*\\)\\s*\\)\\s*\\{\\s*%this\\.TT_raycastExplosionBrickSound\\s*=\\s*\\w+\\s*;",
+          "fires": "Parent::onFire\\(\\s*%this\\s*,\\s*%obj\\s*,\\s*%slot\\s*\\)"
+        },
+        "L4BKnifeonaStickImage::onActivate": {
+          "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*plant\\s*\\)"
+        },
+        "L4BKnifeonaStickImage::onPreFire": {
+          "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*shiftAway\\s*\\)"
+        },
+        "L4BKnifeonaStickImage::TT_isRaycastCritical": {
+          "melee": "return\\s+TT_isMeleeRaycastCrit\\("
+        },
+        "L4BNailbatImage::onFire": {
+          "alive": "if\\s*\\(\\s*%obj\\.getDamagePercent\\(\\s*\\)\\s*>=\\s*1(?:\\.0)?\\s*\\)\\s*return\\s*;",
+          "arm": "%obj\\.playThread\\(\\s*2\\s*,\\s*shiftTo\\s*\\)",
+          "sounds": "if\\s*\\(\\s*getRandom\\(\\s*0\\s*,\\s*1\\s*\\)\\s*\\)\\s*\\{\\s*%this\\.TT_raycastExplosionBrickSound\\s*=\\s*\\w+\\s*;",
+          "fires": "WeaponImage::onFire\\(\\s*%this\\s*,\\s*%obj\\s*,\\s*%slot\\s*\\)"
+        },
+        "L4BNailbatImage::onActivate": {
+          "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*plant\\s*\\)"
+        },
+        "L4BNailbatImage::onPreFire": {
+          "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*shiftAway\\s*\\)"
+        },
+        "L4BNailbatImage::TT_isRaycastCritical": {
+          "melee": "return\\s+TT_isMeleeRaycastCrit\\("
+        },
+        "L4BPaddleImage::onFire": {
+          "alive": "if\\s*\\(\\s*%obj\\.getDamagePercent\\(\\s*\\)\\s*>=\\s*1(?:\\.0)?\\s*\\)\\s*return\\s*;",
+          "arm": "%obj\\.playThread\\(\\s*2\\s*,\\s*shiftTo\\s*\\)",
+          "sounds": "if\\s*\\(\\s*getRandom\\(\\s*0\\s*,\\s*1\\s*\\)\\s*\\)\\s*\\{\\s*%this\\.TT_raycastExplosionBrickSound\\s*=\\s*\\w+\\s*;",
+          "fires": "Parent::onFire\\(\\s*%this\\s*,\\s*%obj\\s*,\\s*%slot\\s*\\)"
+        },
+        "L4BPaddleImage::onActivate": {
+          "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*plant\\s*\\)"
+        },
+        "L4BPaddleImage::onPreFire": {
+          "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*shiftAway\\s*\\)"
+        },
+        "L4BPaddleImage::TT_isRaycastCritical": {
+          "melee": "return\\s+TT_isMeleeRaycastCrit\\("
+        },
+        "L4BPipeWrenchImage::onFire": {
+          "alive": "if\\s*\\(\\s*%obj\\.getDamagePercent\\(\\s*\\)\\s*>=\\s*1(?:\\.0)?\\s*\\)\\s*return\\s*;",
+          "arm": "%obj\\.playThread\\(\\s*2\\s*,\\s*shiftTo\\s*\\)",
+          "sounds": "if\\s*\\(\\s*getRandom\\(\\s*0\\s*,\\s*1\\s*\\)\\s*\\)\\s*\\{\\s*%this\\.TT_raycastExplosionBrickSound\\s*=\\s*\\w+\\s*;",
+          "fires": "Parent::onFire\\(\\s*%this\\s*,\\s*%obj\\s*,\\s*%slot\\s*\\)"
+        },
+        "L4BPipeWrenchImage::onActivate": {
+          "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*shiftto\\s*\\)"
+        },
+        "L4BPipeWrenchImage::onPreFire": {
+          "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*shiftAway\\s*\\)"
+        },
+        "L4BPipeWrenchImage::TT_isRaycastCritical": {
+          "melee": "return\\s+TT_isMeleeRaycastCrit\\("
+        },
+        "L4BChainsawImage::onFire": {
+          "arm": "%obj\\.playThread\\(\\s*2\\s*,\\s*plant\\s*\\)",
+          "fires": "Parent::onFire\\(\\s*%this\\s*,\\s*%obj\\s*,\\s*%slot\\s*\\)"
+        },
+        "L4BChainsawImage::onMount": {
+          "move": "%obj\\.playThread\\(\\s*0\\s*,\\s*plant\\s*\\)",
+          "parent": "Parent::onMount\\("
+        },
+        "isSpecialKill_Reflected": {
+          "reflected": "return\\s*\\(\\s*%sourceObject\\.reflectTime\\s*>\\s*0\\s*\\)"
+        },
+        "ShieldRiotTTImage::onActivate": {
+          "arms": "%obj\\.playthread\\(\\s*1\\s*,\\s*armReadyBoth\\s*\\)"
+        },
+        "shieldRiotTTImage::onUnMount": {
+          "arms": "fixArmReady\\(\\s*%obj\\s*\\)"
+        },
+        "ShieldRiotTTImage::onPrefire": {
+          "arm": "%obj\\.playthread\\(\\s*2\\s*,\\s*shiftUp\\s*\\)"
+        },
+        "ShieldRiotTTImage::onFire": {
+          "fires": "Parent::onFire\\(\\s*%this\\s*,\\s*%obj\\s*,\\s*%slot\\s*\\)\\s*;\\s*%obj\\.playthread\\(\\s*2\\s*,\\s*shiftDown\\s*\\)"
+        },
+        "ProjectileData::damage": {
+          "shield": "%image0\\s*==\\s*shieldRiotTTImage\\.getID\\(\\)",
+          "ready": "%image0\\s*==\\s*\\w+\\.getID\\(\\)\\s*&&\\s*%state0\\s*\\$=\\s*\\\"(\\w+)\\\"",
+          "up": "if\\s*\\(\\s*%eZ\\s*>\\s*([\\d.]+)\\s*\\)\\s*%shielded\\s*=\\s*\\(\\s*getword\\(\\s*%pos\\s*,\\s*2\\s*\\)\\s*>\\s*getword\\(\\s*%col\\.getWorldBoxCenter\\(\\)\\s*,\\s*2\\s*\\)\\s*-\\s*[\\d.]+\\s*\\*\\s*%scale\\s*\\)",
+          "above": "if\\s*\\(\\s*%eZ\\s*>\\s*[\\d.]+\\s*\\)\\s*%shielded\\s*=\\s*\\(\\s*getword\\(\\s*%pos\\s*,\\s*2\\s*\\)\\s*>\\s*getword\\(\\s*%col\\.getWorldBoxCenter\\(\\)\\s*,\\s*2\\s*\\)\\s*-\\s*([\\d.]+)\\s*\\*\\s*%scale\\s*\\)",
+          "down": "else\\s+if\\s*\\(\\s*%ez\\s*<\\s*-\\s*([\\d.]+)\\s*\\)\\s*%shielded\\s*=\\s*\\(\\s*getword\\(\\s*%pos\\s*,\\s*2\\s*\\)\\s*<\\s*getword\\(\\s*%col\\.getWorldBoxCenter\\(\\)\\s*,\\s*2\\s*\\)\\s*-\\s*[\\d.]+\\s*\\*\\s*%scale\\s*\\)",
+          "below": "else\\s+if\\s*\\(\\s*%ez\\s*<\\s*-\\s*[\\d.]+\\s*\\)\\s*%shielded\\s*=\\s*\\(\\s*getword\\(\\s*%pos\\s*,\\s*2\\s*\\)\\s*<\\s*getword\\(\\s*%col\\.getWorldBoxCenter\\(\\)\\s*,\\s*2\\s*\\)\\s*-\\s*([\\d.]+)\\s*\\*\\s*%scale\\s*\\)",
+          "facing": "else\\s*%shielded\\s*=\\s*\\(\\s*vectorDot\\(\\s*vectorNormalize\\(\\s*%obj\\.getVelocity\\(\\)\\s*\\)\\s*,\\s*%aimVec\\s*\\)\\s*<\\s*0\\s*\\)",
+          "aim": "%aimVec\\s*=\\s*%fX\\s*\\*\\s*%eXY\\s+SPC\\s+%fY\\s*\\*\\s*%eXY\\s+SPC\\s+%eZ\\s*;",
+          "projectile_damage": "%damageScale\\s*=\\s*([\\d.]+)\\s*;\\s*%reflect\\s*=\\s*1\\s*;",
+          "ahead": "%reflectPoint\\s*=\\s*vectorAdd\\(\\s*%col\\.getHackPosition\\(\\)\\s*,\\s*vectorScale\\(\\s*%reflectVector\\s*,\\s*vectorLen\\(\\s*%col\\.getVelocity\\(\\)\\s*\\)\\s*/\\s*5\\s*\\+\\s*1\\s*\\)\\s*\\)",
+          "push": "%impulseScale\\s*=\\s*([\\d.]+)\\s*;\\s*if\\s*\\(\\s*%shielded\\s*\\)\\s*%col\\.spawnExplosion\\(",
+          "clang": "%impulseScale\\s*=\\s*[\\d.]+\\s*;\\s*if\\s*\\(\\s*%shielded\\s*\\)\\s*%col\\.spawnExplosion\\(\\s*(\\w+)\\s*,\\s*getWord\\(\\s*%col\\.getScale\\(\\)\\s*,\\s*2\\s*\\)\\s*\\)",
+          "lately": "if\\s*\\(\\s*getSimTime\\(\\)\\s*-\\s*%obj\\.reflectTime\\s*<\\s*500\\s*\\)\\s*%reflect\\s*=\\s*0\\s*;",
+          "durability": "%col\\.shieldHP\\s*=\\s*\\$Pref::Server::TT::ShieldDurability\\s*;",
+          "breaks": "%col\\.shieldHP--\\s*;\\s*if\\s*\\(\\s*%col\\.shieldHP\\s*<=\\s*0\\s*\\)",
+          "pieces": "if\\s*\\(\\s*%col\\.currtool\\s*==\\s*%i\\s*\\)\\s*\\{\\s*%col\\.unmountImage\\(0\\)\\s*;\\s*%col\\.spawnExplosion\\(\\s*(\\w+)\\s*,",
+          "s1": "%sound\\s*=\\s*getRandom\\(\\s*1\\s*,\\s*3\\s*\\)\\s*;\\s*switch\\s*\\(\\s*%sound\\s*\\)\\s*\\{\\s*case\\s+1\\s*:\\s*serverPlay3D\\(\\s*(\\w+)\\s*,\\s*%pos\\s*\\)\\s*;",
+          "s2": "case\\s+2\\s*:\\s*serverPlay3D\\(\\s*(\\w+)\\s*,\\s*%pos\\s*\\)\\s*;\\s*case\\s+3\\s*:",
+          "s3": "case\\s+3\\s*:\\s*serverPlay3D\\(\\s*(\\w+)\\s*,\\s*%pos\\s*\\)\\s*;\\s*default\\s*:",
+          "back": "%vec\\s*=\\s*vectorScale\\(\\s*%reflectVector\\s*,\\s*vectorLen\\(\\s*%obj\\.getVelocity\\(\\)\\s*\\)\\s*\\)\\s*;\\s*%vel\\s*=\\s*vectorAdd\\(\\s*%vec\\s*,\\s*vectorScale\\(\\s*%col\\.getVelocity\\(\\)\\s*,\\s*%obj\\.dataBlock\\.velInheritFactor\\s*\\)\\s*\\)",
+          "theirs": "sourceObject\\s*=\\s*%col\\s*;"
+        },
+        "ProjectileData::radiusDamage": {
+          "spared": "if\\s*\\(\\s*%obj\\.damageCancel\\[%col\\]\\s*\\)\\s*return\\s*;"
+        },
+        "ProjectileData::radiusImpulse": {
+          "push": "%b\\s*\\*=\\s*%obj\\.impulseScale\\[%col\\]"
+        },
+        "ProjectileData::impactImpulse": {
+          "push": "%this\\.impactImpulse\\s*\\*=\\s*%obj\\.impulseScale\\[%col\\]"
+        },
+        "ShapeBase::damage": {
+          "falls": "if\\s*\\(\\s*%shielded\\s*&&\\s*\\$Pref::Server::TT::ShieldCancelFalling\\s*\\)",
+          "facing": "%shielded\\s*=\\s*\\(\\s*vectorDot\\(\\s*%attackvec\\s*,\\s*%aimVec\\s*\\)\\s*<\\s*0\\s*\\)",
+          "never": "if\\s*\\(\\s*%directDamage\\s*>\\s*5000\\s*\\|\\|\\s*%pos\\s*\\$=\\s*\\\"\\\"\\s*\\|\\|\\s*vectorDist\\(\\s*%pos\\s*,\\s*%this\\.getPosition\\(\\)\\s*\\)\\s*<\\s*0\\.1\\s*\\)",
+          "scaled": "if\\s*\\(\\s*%shielded\\s*\\)\\s*%directDamage\\s*\\*=\\s*%damageScale\\s*;",
+          "damage": "%damageScale\\s*=\\s*([\\d.]+)\\s*;"
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/tier_port.rs melee_extended_ii_shield_stops_shots_from_in_front_and_sends_them_back",
+        "crates/weapons/tests/guard.rs a_raised_shield_stops_a_shot_from_in_front_and_sends_it_back",
+        "crates/weapons/tests/guard.rs a_shield_breaks_on_its_last_stop_and_leaves_the_holder"
+      ]
+    },
+    {
+      "addon": "Weapon_Skins_Pistol",
+      "title": "Tier+Tactical Pistol Skins (Kai)",
+      "port": "weapon_skins_pistol",
+      "status": "partial",
+      "sha256": [
+        "3eedb253809a6b985ccf8b22515503d8454a8eee6ec300b3b7ccfc0ac56c5a7e"
+      ],
+      "covers": {
+        "ClassicPistolImage::onFire": {
+          "fires": "Parent::onFire\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "ModernPistolImage::onFire": {
+          "fires": "Parent::onFire\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "SilencedPistolImage::onFire": {
+          "fires": "Parent::onFire\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "RetroPistolImage::onFire": {
+          "fires": "Parent::onFire\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/tier_port.rs skins_are_their_hosts_guns_under_their_own_names"
+      ]
+    },
+    {
+      "addon": "Weapon_Skins_Bullpup",
+      "title": "Tier+Tactical Bullpup Skins (Kai)",
+      "port": "weapon_skins_bullpup",
+      "status": "partial",
+      "sha256": [
+        "45e838b3c9c00b370150a30b18fef26245a8d070efd771ed5eccc706dd22293d"
+      ],
+      "covers": {
+        "CompactBullpupImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "CompactBullpupImage::onBurstFire": {
+          "fires_free": "TT_createProjectile\\s*\\("
+        },
+        "CompactBullpupImage::onBurstCheck": {
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "TacticalBullpupImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "TacticalBullpupImage::onBurstFire": {
+          "fires_free": "TT_createProjectile\\s*\\("
+        },
+        "TacticalBullpupImage::onBurstCheck": {
+          "spends": "TT_decrementAmmo\\s*\\("
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/tier_port.rs skins_are_their_hosts_guns_under_their_own_names"
+      ]
+    },
+    {
+      "addon": "Weapon_Skins_Dualies",
+      "title": "Tier+Tactical Dualies Skins (Kai)",
+      "port": "weapon_skins_dualies",
+      "status": "partial",
+      "sha256": [
+        "af8c753e004c53118cbdd0e9f0fa6265016361ca55e8a78f8c5c9f6fcf28b861"
+      ],
+      "covers": {
+        "AkimboClassicPistolImage::onMount": {
+          "left_hand": "mountImage\\(\\s*\\w+\\s*,\\s*1\\s*\\)"
+        },
+        "AkimboClassicPistolImage::onUnMount": {
+          "drops_left": "unMountImage\\(\\s*1\\s*\\)"
+        },
+        "AkimboClassicPistolImage::onFire": {
+          "fires": "Parent::onFire\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "AkimboClassicPistolImage::onFireAkimbo": {
+          "left_fires": "setImageTrigger\\(\\s*1\\s*,\\s*1\\s*\\)"
+        },
+        "LeftHandedClassicPistolImage::onFire": {
+          "fires": "Parent::onFire\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "AkimboModernPistolImage::onMount": {
+          "left_hand": "mountImage\\(\\s*\\w+\\s*,\\s*1\\s*\\)"
+        },
+        "AkimboModernPistolImage::onUnMount": {
+          "drops_left": "unMountImage\\(\\s*1\\s*\\)"
+        },
+        "AkimboModernPistolImage::onFire": {
+          "fires": "Parent::onFire\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "AkimboModernPistolImage::onFireAkimbo": {
+          "left_fires": "setImageTrigger\\(\\s*1\\s*,\\s*1\\s*\\)"
+        },
+        "LeftHandedModernPistolImage::onFire": {
+          "fires": "Parent::onFire\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "AkimboSilencedPistolImage::onMount": {
+          "left_hand": "mountImage\\(\\s*\\w+\\s*,\\s*1\\s*\\)"
+        },
+        "AkimboSilencedPistolImage::onUnMount": {
+          "drops_left": "unMountImage\\(\\s*1\\s*\\)"
+        },
+        "AkimboSilencedPistolImage::onFire": {
+          "fires": "Parent::onFire\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "AkimboSilencedPistolImage::onFireAkimbo": {
+          "left_fires": "setImageTrigger\\(\\s*1\\s*,\\s*1\\s*\\)"
+        },
+        "LeftHandedSilencedPistolImage::onFire": {
+          "fires": "Parent::onFire\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/tier_port.rs skins_are_their_hosts_guns_under_their_own_names"
+      ]
+    },
+    {
+      "addon": "Weapon_Skins_LMG",
+      "title": "Tier+Tactical LMG Skins (Kai)",
+      "port": "weapon_skins_lmg",
+      "status": "partial",
+      "sha256": [
+        "4875ce15f7569dc0dca40106c917ff6a4971b331faf9425c8a50b50f43f001b7"
+      ],
+      "covers": {
+        "ClassicLMGImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "ClassicLMGImage::onFire2": {
+          "fires_free": "TT_createProjectile\\s*\\("
+        },
+        "ClassicLMGImage::onClick": {
+          "lays": "pushDatablock\\s*\\("
+        },
+        "ClassicLMGImage::onHalt": {
+          "lifts": "popDatablock\\s*\\("
+        },
+        "ClassicLMGImage::onEmptyTransition": {
+          "lifts": "popDatablock\\s*\\("
+        },
+        "ClassicLMGImage::onUnMount": {
+          "lifts": "popDatablock\\s*\\("
+        },
+        "ClassicLMGProjectile1::damage": {
+          "slow": "TT_dampenVelocity\\s*\\("
+        },
+        "BlockyLMGImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\(",
+          "knockback": "TT_knockback\\s*\\("
+        },
+        "BlockyLMGImage::onFire2": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "knockback": "TT_knockback\\s*\\("
+        },
+        "BlockyLMGImage::onClick": {
+          "lays": "pushDatablock\\s*\\("
+        },
+        "BlockyLMGImage::onHalt": {
+          "lifts": "popDatablock\\s*\\("
+        },
+        "BlockyLMGImage::onEmptyTransition": {
+          "lifts": "popDatablock\\s*\\("
+        },
+        "BlockyLMGImage::onUnMount": {
+          "lifts": "popDatablock\\s*\\("
+        },
+        "BlockyLMGProjectile1::damage": {
+          "slow": "TT_dampenVelocity\\s*\\("
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/tier_port.rs skins_are_their_hosts_guns_under_their_own_names"
+      ]
+    },
+    {
+      "addon": "Weapon_Skins_MPistol",
+      "title": "Tier+Tactical Machine Pistol Skins (Kai)",
+      "port": "weapon_skins_mpistol",
+      "status": "partial",
+      "sha256": [
+        "81277e9128145918875e28a0c71bca5576c792364a6de6dd5b122c81c19edb8b"
+      ],
+      "covers": {
+        "ModernMPImage::onFire": {
+          "fires": "Parent::onFire\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "ClassicMPImage::onFire": {
+          "fires": "Parent::onFire\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/tier_port.rs skins_are_their_hosts_guns_under_their_own_names"
+      ]
+    },
+    {
+      "addon": "Weapon_Skins_Magnum",
+      "title": "Tier+Tactical Magnum Skins (Kai)",
+      "port": "weapon_skins_magnum",
+      "status": "partial",
+      "sha256": [
+        "6b610406733882b00664a4a7eb308020e7bab3ea2f434b24bac941662b121ffd"
+      ],
+      "covers": {
+        "semiMagnumImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "semiMagnumProjectile::damage": {
+          "headshot": "TT_processHeadshotDamage\\s*\\("
+        },
+        "WesternMagnumImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "WesternMagnumImage::onReloaded": {
+          "one_by_one": "TT_incrementReload\\s*\\("
+        },
+        "WesternMagnumProjectile::damage": {
+          "headshot": "TT_processHeadshotDamage\\s*\\("
+        },
+        "MavMagnumImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "MavMagnumImage::onReloaded": {
+          "one_by_one": "TT_incrementReload\\s*\\("
+        },
+        "MavMagnumProjectile::damage": {
+          "headshot": "TT_processHeadshotDamage\\s*\\("
+        },
+        "RetroMagnumImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "RetroMagnumProjectile::damage": {
+          "headshot": "TT_processHeadshotDamage\\s*\\("
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/tier_port.rs skins_are_their_hosts_guns_under_their_own_names"
+      ]
+    },
+    {
+      "addon": "Weapon_Skins_Rifles",
+      "title": "Tier+Tactical Rifle Skins (Kai)",
+      "port": "weapon_skins_rifles",
+      "status": "partial",
+      "sha256": [
+        "6a6f724114dc925ab1815d3834e4eb273c528e939fc721c2d881a4412c5dfbbd"
+      ],
+      "covers": {
+        "BoltRifleImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "BoltRifleImage::onMount": {
+          "draws": "playThread\\(\\s*[023]\\s*,"
+        },
+        "BoltRifleProjectile::damage": {
+          "headshot": "TT_processHeadshotDamage\\s*\\("
+        },
+        "BoltRifleWeakProjectile::damage": {
+          "headshot": "TT_processHeadshotDamage\\s*\\("
+        },
+        "HuntingRifleImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "HuntingRifleProjectile::damage": {
+          "headshot": "TT_processHeadshotDamage\\s*\\("
+        },
+        "HuntingRifleWeakProjectile::damage": {
+          "headshot": "TT_processHeadshotDamage\\s*\\("
+        },
+        "RetroRifleImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "RetroRifleProjectile::damage": {
+          "headshot": "TT_processHeadshotDamage\\s*\\("
+        },
+        "RetroRifleWeakProjectile::damage": {
+          "headshot": "TT_processHeadshotDamage\\s*\\("
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/tier_port.rs skins_are_their_hosts_guns_under_their_own_names"
+      ]
+    },
+    {
+      "addon": "Weapon_Skins_RiflesT2",
+      "title": "Tier+Tactical Tier 2 Rifle Skins (Kai)",
+      "port": "weapon_skins_riflest2",
+      "status": "partial",
+      "sha256": [
+        "5defdfb1907df80d33601691c3566525f8930b8b5f7f637acc948cf273e2c9ab"
+      ],
+      "covers": {
+        "ModernTAssaultRifleImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "ClassicTAssaultRifleImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "ClassicBattleRifleImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "BattlerifleProjectile1::damage": {
+          "slow": "TT_dampenVelocity\\s*\\("
+        },
+        "BrowningTAssaultRifleImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "ScoutTAssaultRifleImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "SemiBattleRifleImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "CompactTAssaultRifleImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/tier_port.rs skins_are_their_hosts_guns_under_their_own_names"
+      ]
+    },
+    {
+      "addon": "Weapon_Skins_SMG",
+      "title": "Tier+Tactical SMG Skins (Kai)",
+      "port": "weapon_skins_smg",
+      "status": "partial",
+      "sha256": [
+        "3d19beb0dd75bba4a1787e3969b9cc3033c6d14cd24b22a99b2c4bdb0c7c04e0"
+      ],
+      "covers": {
+        "NavalSMGImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "NavalSubmachinegunProjectile1::damage": {
+          "slow": "TT_dampenVelocity\\s*\\("
+        },
+        "ClassicSMGImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "ClassicSubmachinegunProjectile1::damage": {
+          "slow": "TT_dampenVelocity\\s*\\("
+        },
+        "ModernSMGImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "ModernSubmachinegunProjectile1::damage": {
+          "slow": "TT_dampenVelocity\\s*\\("
+        },
+        "SilencedSMGImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "SilencedSubmachinegunProjectile1::damage": {
+          "slow": "TT_dampenVelocity\\s*\\("
+        },
+        "MicroSMGImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "MicroSubmachinegunProjectile1::damage": {
+          "slow": "TT_dampenVelocity\\s*\\("
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/tier_port.rs skins_are_their_hosts_guns_under_their_own_names"
+      ]
+    },
+    {
+      "addon": "Weapon_Skins_Shotgun",
+      "title": "Tier+Tactical Shotgun Skins (Kai)",
+      "port": "weapon_skins_shotgun",
+      "status": "partial",
+      "sha256": [
+        "48f2a4eb911b566b9e2c4c74782437c8e053e7bffbac2a2b3db70ef6a11e855b"
+      ],
+      "covers": {
+        "SquaredShotgunImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "SquaredShotgunImage::onReloaded": {
+          "one_by_one": "TT_incrementReload\\s*\\("
+        },
+        "ScattergunImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "ScattergunImage::onReloaded": {
+          "one_by_one": "TT_incrementReload\\s*\\("
+        },
+        "classicShotgunImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "ClassicShotgunImage::onReloaded": {
+          "one_by_one": "TT_incrementReload\\s*\\("
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/tier_port.rs skins_are_their_hosts_guns_under_their_own_names"
+      ]
+    },
+    {
+      "addon": "Weapon_Skins_ShotgunT2",
+      "title": "Tier+Tactical Tier 2 Shotgun Skins (Kai)",
+      "port": "weapon_skins_shotgunt2",
+      "status": "partial",
+      "sha256": [
+        "9aff2e9ce079ca22e124a698b1f0d08d5c2692136b943ddd0684be4e45976240"
+      ],
+      "covers": {
+        "SlickShotgunImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "SlickShotgunImage::onReloaded": {
+          "one_by_one": "TT_incrementReload\\s*\\("
+        },
+        "tacticalShotgunImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "tacticalShotgunImage::onReloaded": {
+          "one_by_one": "TT_incrementReload\\s*\\("
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/tier_port.rs skins_are_their_hosts_guns_under_their_own_names"
+      ]
+    },
+    {
+      "addon": "Weapon_Skins_Sniper",
+      "title": "Tier+Tactical Sniper Skins (Kai)",
+      "port": "weapon_skins_sniper",
+      "status": "partial",
+      "sha256": [
+        "5e1edc470c296ad12e9d46b4c57285b0510c6bf7731270b745d8e25875b4fbf9"
+      ],
+      "covers": {
+        "MagnifiedSniperRifleImage::onFire": {
+          "fires": "Parent::onFire\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "MagnifiedSniperRifleImage::TT_isRaycastCritical": {
+          "head_crit": "TT_isRaycastHeadshot\\s*\\("
+        },
+        "ClassicSniperRifleImage::onFire": {
+          "fires": "Parent::onFire\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "ClassicSniperRifleImage::TT_isRaycastCritical": {
+          "head_crit": "TT_isRaycastHeadshot\\s*\\("
+        },
+        "SemiSniperRifleImage::onFire": {
+          "fires": "Parent::onFire\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\("
+        },
+        "SemiSniperRifleImage::TT_isRaycastCritical": {
+          "head_crit": "TT_isRaycastHeadshot\\s*\\("
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/tier_port.rs skins_are_their_hosts_guns_under_their_own_names"
+      ]
+    },
+    {
+      "addon": "Weapon_Impact_Rifle",
+      "title": "Kai's Impact Rifle (Tier+Tactical)",
+      "port": "weapon_impact_rifle",
+      "status": "partial",
+      "sha256": [
+        "65a1332168740664ce6389a5b057622192f19e8f5f3546c009911a8a3847e01b"
+      ],
+      "covers": {
+        "ImpactRifleImage::onFire": {
+          "fires_free": "TT_createProjectile\\s*\\(",
+          "spends": "TT_decrementAmmo\\s*\\(",
+          "still": "vectorLen\\(\\s*%obj\\.getVelocity\\(\\s*\\)\\s*\\)\\s*<\\s*[\\d.]+\\s*&&"
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/tier_port.rs the_impact_rifle_spreads_by_whether_its_holder_stands_still"
+      ]
+    },
+    {
+      "addon": "Weapon_ShortRifleKai",
+      "title": "Kai's Short Rifle (Tier+Tactical)",
+      "port": "weapon_shortriflekai",
+      "status": "partial",
+      "sha256": [
+        "a1ad64d8de4742a69bb9f78752ea54c50f0a63e6d6e8765e62e217ab4aac8f09"
+      ],
+      "covers": {
+        "ShortRifleImage::fireRaycast": {
+          "ricochets": "while\\(\\s*%hits\\s*<=\\s*%this\\.raycastRicochets\\s*\\)",
+          "mirrors": "VectorSub\\(\\s*%aimVec\\s*,\\s*VectorScale\\(\\s*%normal\\s*,\\s*VectorDot\\(\\s*%aimVec\\s*,\\s*%normal\\s*\\)\\s*\\*\\s*2\\s*\\)\\s*\\)"
+        },
+        "ShortRifleImage::onRaycastDamage": {
+          "added": "%directDamage\\s*\\+=\\s*%hits\\s*\\*",
+          "shove": "%col\\.setVelocity\\("
+        },
+        "shortRifleImage::onFire": {
+          "spends": "TT_decrementAmmo\\s*\\(",
+          "casts": "%this\\.fireRaycast\\(\\s*%obj\\s*,\\s*%slot\\s*\\)"
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/tier_port.rs the_short_rifle_ricochets_and_crits_only_after_a_turn"
       ]
     }
   ]

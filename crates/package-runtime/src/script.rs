@@ -132,6 +132,13 @@ pub struct PlayerView {
     /// Each tool slot's item id, empty for an empty slot (`%obj.tool[%i]`).
     #[serde(default)]
     pub tools: Vec<String>,
+    /// The magazine of the gun in their hand, when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub magazine: Option<MagazineView>,
+    /// Rounds in reserve of each ammo they have had, by ammo name; `None`
+    /// never runs out.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub reserves: BTreeMap<String, Option<u32>>,
     /// The team of their mini-game they play for, if it has teams.
     #[serde(default)]
     pub team: Option<u64>,
@@ -156,6 +163,10 @@ pub struct PlayerView {
     /// plant, cut, paint, wrench, undo or load; `cancel_copy` stops it).
     #[serde(default)]
     pub copy_working: bool,
+    /// The image worn in the emote slot (`getMountedImage(3)`), empty for
+    /// none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub emote: String,
     /// The copy they hold from a duplicator (`copy_build`, `load_copy`):
     /// the Add-On that took it and its bricks.
     #[serde(default)]
@@ -164,7 +175,19 @@ pub struct PlayerView {
     #[serde(default)]
     pub ghost: bool,
 }
-
+/// A held gun's magazine and the reserve that fills it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct MagazineView {
+    /// The item whose magazine it is.
+    pub item: String,
+    pub rounds: u32,
+    pub size: u32,
+    /// Its ammo type, shared by every gun that loads the same rounds.
+    pub ammo: String,
+    /// Rounds of that ammo in reserve; `None` never runs out.
+    pub reserve: Option<u32>,
+    pub reloading: bool,
+}
 /// Live questions a script may ask the engine during a call. They read the
 /// world as it is when the call runs: a call's own operations apply after it
 /// returns, so a brick it removes still stops its rays.
@@ -293,6 +316,32 @@ pub trait World {
     fn pref(&self, _name: &str) -> Option<bri_package::setting::SettingValue> {
         None
     }
+    /// Whether the Add-On `id` is enabled in this game, so a package can
+    /// use an optional dependency's content only while it is there.
+    fn enabled(&self, _id: &str) -> bool {
+        false
+    }
+    /// Whether this is a single-player or LAN game (v20 `$Server::LAN`),
+    /// whose rules some Add-Ons loosen.
+    fn lan(&self) -> bool {
+        false
+    }
+}
+/// A placed brick as a script reads it ([`World::brick`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct BrickInfo {
+    /// Its brick catalog id (`v20/brick/brick2x4data`,
+    /// `gamemode_trenchdigging:brick/brick4xcubedirtdata`).
+    pub kind: String,
+    pub position: [f32; 3],
+    /// Clockwise quarter turns seen from above.
+    pub turns: u8,
+    /// Palette index.
+    pub color: u8,
+    /// The build it belongs to (0 for the world's own bricks).
+    pub owner: u64,
+    pub min: [f32; 3],
+    pub max: [f32; 3],
 }
 /// Most bricks one `bricks_in` returns.
 pub const MAX_BRICKS_IN: usize = 1024;
@@ -723,6 +772,35 @@ fn player_map(p: &PlayerView) -> Dynamic {
             Dynamic::from_array(p.tools.iter().map(|t| t.clone().into()).collect()),
         ),
         (
+            "magazine",
+            p.magazine.as_ref().map_or(Dynamic::UNIT, |m| {
+                map([
+                    ("item", m.item.clone().into()),
+                    ("rounds", Dynamic::from_int(i64::from(m.rounds))),
+                    ("size", Dynamic::from_int(i64::from(m.size))),
+                    ("ammo", m.ammo.clone().into()),
+                    (
+                        "reserve",
+                        m.reserve
+                            .map_or(Dynamic::UNIT, |r| Dynamic::from_int(i64::from(r))),
+                    ),
+                    ("reloading", m.reloading.into()),
+                ])
+            }),
+        ),
+        (
+            "reserves",
+            Dynamic::from_map(
+                p.reserves
+                    .iter()
+                    .map(|(ammo, r)| {
+                        let r = r.map_or(Dynamic::UNIT, |r| Dynamic::from_int(i64::from(r)));
+                        (ammo.as_str().into(), r)
+                    })
+                    .collect(),
+            ),
+        ),
+        (
             "team",
             p.team.map_or(Dynamic::UNIT, |t| Dynamic::from_int(t as i64)),
         ),
@@ -747,6 +825,7 @@ fn player_map(p: &PlayerView) -> Dynamic {
             p.riding
                 .map_or(Dynamic::UNIT, |(_, s)| Dynamic::from_int(i64::from(s))),
         ),
+        ("emote", p.emote.clone().into()),
     ])
 }
 fn object_map(o: &ObjectView) -> Dynamic {
@@ -1399,6 +1478,25 @@ fn register_api(engine: &mut Engine) {
                 radius: float(&radius)?,
                 damage: float(&damage)?,
                 brick_radius: float(&brick_radius)?,
+                explosion: None,
+            })
+        },
+    );
+    engine.register_fn(
+        "explode",
+        |x: Dynamic,
+         y: Dynamic,
+         z: Dynamic,
+         radius: Dynamic,
+         damage: Dynamic,
+         brick_radius: Dynamic,
+         explosion: &str| {
+            push(Op::Explode {
+                position: [float(&x)?, float(&y)?, float(&z)?],
+                radius: float(&radius)?,
+                damage: float(&damage)?,
+                brick_radius: float(&brick_radius)?,
+                explosion: Some(explosion.into()),
             })
         },
     );
@@ -1457,6 +1555,18 @@ fn register_api(engine: &mut Engine) {
     });
     engine.register_fn("set_archetype", |player: Dynamic, archetype: &str| {
         push(Op::SetArchetype {
+            player: id(&player)?,
+            archetype: archetype.into(),
+        })
+    });
+    engine.register_fn("push_archetype", |player: Dynamic, archetype: &str| {
+        push(Op::PushArchetype {
+            player: id(&player)?,
+            archetype: archetype.into(),
+        })
+    });
+    engine.register_fn("pop_archetype", |player: Dynamic, archetype: &str| {
+        push(Op::PopArchetype {
             player: id(&player)?,
             archetype: archetype.into(),
         })
@@ -2132,12 +2242,47 @@ fn register_api(engine: &mut Engine) {
             })
         },
     );
+    // `data` (`()` for none) reaches `on_pickup` as `info.data`.
+    engine.register_fn(
+        "drop_item",
+        |item: &str,
+         x: Dynamic,
+         y: Dynamic,
+         z: Dynamic,
+         vx: Dynamic,
+         vy: Dynamic,
+         vz: Dynamic,
+         data: Dynamic| {
+            push(Op::DropItem {
+                item: item.into(),
+                position: [float(&x)?, float(&y)?, float(&z)?],
+                velocity: [float(&vx)?, float(&vy)?, float(&vz)?],
+                data: if data.is_unit() {
+                    None
+                } else {
+                    Some(to_json(&data)?)
+                },
+                paint: None,
+                seconds: None,
+            })
+        },
+    );
     engine.register_fn("heal", |player: Dynamic, amount: Dynamic| {
         push(Op::Heal {
             player: id(&player)?,
             amount: float(&amount)?,
         })
     });
+    engine.register_fn(
+        "spawn_explosion",
+        |player: Dynamic, projectile: &str, scale: Dynamic| {
+            push(Op::SpawnExplosion {
+                player: id(&player)?,
+                projectile: projectile.into(),
+                scale: float(&scale)?,
+            })
+        },
+    );
     // `()` as the player prints to everyone.
     for (name, bottom) in [("center_print", false), ("bottom_print", true)] {
         engine.register_fn(
@@ -2359,6 +2504,12 @@ fn register_queries(engine: &mut Engine) {
         let target = target(&target_value)?;
         with_world(|world, _| Ok(world.can_damage(by, target)))
     });
+    // Whether an Add-On is enabled in this game (an optional dependency).
+    engine.register_fn("enabled", |id: &str| {
+        with_world(|world, _| Ok(world.enabled(id)))
+    });
+    // Whether this is a single-player or LAN game (`$Server::LAN`).
+    engine.register_fn("lan", || with_world(|world, _| Ok(world.lan())));
     // The generated world's voxel a brick is, #{ x, y, z, material } in
     // voxel coordinates, or () for any other brick.
     engine.register_fn("voxel", |brick: Dynamic| {
@@ -2498,16 +2649,21 @@ fn register_presentation(engine: &mut Engine) {
     }
     engine.register_fn("beam", |from: Array, to: Array| beam(from, to, Map::new()));
     engine.register_fn("beam", beam);
+    // `%player.playThread(thread, sequence)`, or its `schedule(ms, ...)`
+    // `after` seconds later.
+    fn play_thread(player: Dynamic, thread: i64, sequence: &str, after: f64) -> Fallible<()> {
+        push(Op::PlayThread {
+            player: id(&player)?,
+            thread: u8::try_from(thread).map_err(|_| "thread is 0 to 3")?,
+            sequence: sequence.into(),
+            after: after as f32,
+        })
+    }
     engine.register_fn(
         "play_thread",
-        |player: Dynamic, thread: i64, sequence: &str| {
-            push(Op::PlayThread {
-                player: id(&player)?,
-                thread: u8::try_from(thread).map_err(|_| "thread is 2 or 3")?,
-                sequence: sequence.into(),
-            })
-        },
+        |player: Dynamic, thread: i64, sequence: &str| play_thread(player, thread, sequence, 0.0),
     );
+    engine.register_fn("play_thread", play_thread);
     // Every map light within `radius` of `at`: `on` (true), `color`
     // ([1.0, 1.0, 1.0], times the recovered colour) and `brightness` (1.0);
     // an empty map puts them back as the map was lit.
@@ -2684,6 +2840,51 @@ fn register_presentation(engine: &mut Engine) {
             } else {
                 Some(float(&fov)?)
             },
+        })
+    });
+    engine.register_fn("set_speed_scale", |player: Dynamic, scale: Dynamic| {
+        push(Op::SetSpeedScale {
+            player: id(&player)?,
+            scale: float(&scale)?,
+        })
+    });
+    engine.register_fn(
+        "give_ammo",
+        |player: Dynamic, ammo: &str, rounds: Dynamic| {
+            push(Op::GiveAmmo {
+                player: id(&player)?,
+                ammo: ammo.into(),
+                rounds: id(&rounds)?,
+            })
+        },
+    );
+    engine.register_fn(
+        "set_reserve",
+        |player: Dynamic, ammo: &str, rounds: Dynamic| {
+            push(Op::SetReserve {
+                player: id(&player)?,
+                ammo: ammo.into(),
+                rounds: if rounds.is_unit() {
+                    None
+                } else {
+                    Some(id(&rounds)?)
+                },
+            })
+        },
+    );
+    engine.register_fn(
+        "set_rounds",
+        |player: Dynamic, item: &str, rounds: Dynamic| {
+            push(Op::SetRounds {
+                player: id(&player)?,
+                item: item.into(),
+                rounds: id(&rounds)?,
+            })
+        },
+    );
+    engine.register_fn("reload", |player: Dynamic| {
+        push(Op::Reload {
+            player: id(&player)?,
         })
     });
     engine.register_fn("set_image_ammo", |player: Dynamic, ammo: bool| {
@@ -2901,17 +3102,37 @@ fn register_presentation(engine: &mut Engine) {
     engine.register_fn("mount_image", |player: Dynamic, image: Dynamic| {
         push(Op::MountImage {
             player: id(&player)?,
-            image: if image.is_unit() {
-                None
-            } else {
-                Some(
-                    image
-                        .into_string()
-                        .map_err(|_| "an image is a string like \"pkg:image/scope\", or ()")?,
-                )
-            },
+            image: image_or_none(image)?,
         })
     });
+    // `%player.emote(%image, %skipSpam)`: the image on their body in the
+    // emote slot; `()` takes it off.
+    engine.register_fn("emote", |player: Dynamic, image: Dynamic| {
+        push(Op::Emote {
+            player: id(&player)?,
+            image: image_or_none(image)?,
+            skip_spam: false,
+        })
+    });
+    engine.register_fn(
+        "emote",
+        |player: Dynamic, image: Dynamic, skip_spam: bool| {
+            push(Op::Emote {
+                player: id(&player)?,
+                image: image_or_none(image)?,
+                skip_spam,
+            })
+        },
+    );
+}
+
+fn image_or_none(image: Dynamic) -> Fallible<Option<String>> {
+    if image.is_unit() {
+        return Ok(None);
+    }
+    Ok(Some(image.into_string().map_err(
+        |_| "an image is a string like \"pkg:image/scope\", or ()",
+    )?))
 }
 
 fn fire_op(
@@ -2937,6 +3158,16 @@ fn push_op(target: Dynamic, x: Dynamic, y: Dynamic, z: Dynamic, by: Dynamic) -> 
     })
 }
 fn tumble_op(player: Dynamic, x: Dynamic, y: Dynamic, z: Dynamic, by: Dynamic) -> Fallible<()> {
+    tumble_for(player, x, y, z, by, Dynamic::UNIT)
+}
+fn tumble_for(
+    player: Dynamic,
+    x: Dynamic,
+    y: Dynamic,
+    z: Dynamic,
+    by: Dynamic,
+    seconds: Dynamic,
+) -> Fallible<()> {
     let player = match object_ref(&player) {
         Ok(ObjectRef::Player(p)) => p,
         Ok(other) => return fail(format!("only players tumble, not {other}")),
@@ -2946,6 +3177,11 @@ fn tumble_op(player: Dynamic, x: Dynamic, y: Dynamic, z: Dynamic, by: Dynamic) -
         player,
         velocity: [float(&x)?, float(&y)?, float(&z)?],
         by: credit(&by)?,
+        seconds: if seconds.is_unit() {
+            None
+        } else {
+            Some(float(&seconds)?)
+        },
     })
 }
 
@@ -3068,6 +3304,7 @@ fn register_physics(engine: &mut Engine) {
         },
     );
     engine.register_fn("tumble", tumble_op);
+    engine.register_fn("tumble", tumble_for);
     engine.register_fn(
         "hold",
         |player: Dynamic, target: Dynamic, distance: Dynamic| {
@@ -3500,6 +3737,9 @@ impl Runtime {
             }
             if behaviour.on_entity_damage {
                 need("on_entity_damage".into(), 4, "on_entity_damage");
+            }
+            if behaviour.on_vehicle_damage {
+                need("on_vehicle_damage".into(), 4, "on_vehicle_damage");
             }
             if behaviour.on_entity_death {
                 need("on_entity_death".into(), 3, "on_entity_death");

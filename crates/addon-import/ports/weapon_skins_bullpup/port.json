@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "include": [
+    "tier-tactical-core",
+    "tier-tactical"
+  ],
+  "notes": "Tier+Tactical Bullpup skins on Tier 2A's Bullpup and ammo system: each skin keeps the burst and its spread, with its own model, numbers and kill icon."
+}

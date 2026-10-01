@@ -1,0 +1,7 @@
+Title: Stand-in Pistol Skins
+Author: Blockland ReImagined tests
+Written for tests. It has the community Weapon_Skins_Pistol folder name and the
+datablock and method names its port covers, built on the stand-in hosts as
+the original is built on its packs, so the listed port applies to it. It is
+not the original Add-On and holds none of its files; its names shown to
+players, models and numbers are its own.

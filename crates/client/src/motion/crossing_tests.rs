@@ -293,6 +293,7 @@ fn walk(
         jump: Default::default(),
         archetype: Default::default(),
         scale: 1.0,
+        speed_scale: 1.0,
         energy: 100.0,
         tick: Default::default(),
         tether: None,

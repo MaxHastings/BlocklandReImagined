@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "notes": "Bushido's hl2 ammo system and hitbox test, shared by both releases of his Adventurer's Weapons (Support_AmmoSystem.cs and Support_Hitbox.cs in Weapon_ModernWarbattles and Glass 1019's Weapon_AdventurePack).",
+  "magazines": {
+    "calls": [
+      "hl2AmmoCheck",
+      "hl2AmmoOnReload",
+      "hl2AmmoOnReloadSingle",
+      "hl2DisplayAmmo",
+      "serverCmdLight"
+    ],
+    "scripts": [
+      "onMount",
+      "onUnMount",
+      "onAmmoCheck",
+      "onReload",
+      "onEmpty",
+      "onCheckChamber"
+    ]
+  },
+  "handles": {
+    "gameConnection::onDeath": "the ammo display: the engine hides it when its holder dies, as no gun is out",
+    "serverCmdDropTool": "a dropped gun keeps the rounds in its magazine (the weapons runtime's drops)",
+    "ItemData::onAdd": "a dropped gun keeps the rounds in its magazine (the weapons runtime's drops)",
+    "Player::pickUp": "a dropped gun gives its rounds back to whoever picks it up, and a new one comes full (the weapons runtime's drops)",
+    "Armor::onCollision": "the host rules' on_pickup: ammo boxes, and spare guns from spawn bricks, top up the reserve",
+    "matchBodyArea": "the hitbox test: the engine tells a head hit from a body hit, which the host rules' on_damage reads for headshotMultiplier and the flinch",
+    "getLastImpactPosition": "the hitbox test: the engine tells a head hit from a body hit, which the host rules' on_damage reads for headshotMultiplier and the flinch",
+    "Player::getLastImpactPosition": "the hitbox test: the engine tells a head hit from a body hit, which the host rules' on_damage reads for headshotMultiplier and the flinch",
+    "shapeBase::setNodeColor": "the hitbox test: the engine tells a head hit from a body hit, which the host rules' on_damage reads for headshotMultiplier and the flinch"
+  }
+}

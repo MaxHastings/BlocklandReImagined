@@ -11,6 +11,13 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+mod datablocks;
+mod settings;
+mod shots;
+pub use datablocks::{AmmoType, Magazines, ScriptRule, Table};
+pub use settings::{FieldSpec, WeaponSetting};
+pub use shots::{Hitscans, Last, Shots, TracerField};
+
 mod builtin {
     include!(concat!(env!("OUT_DIR"), "/ports.rs"));
 }
@@ -71,6 +78,28 @@ pub struct Port {
     /// player, and a shared Add-On cannot carry host code.
     #[serde(default)]
     pub rules: Option<Rules>,
+    /// Magazines a classic ammo system kept in item fields, given to each
+    /// gun's image (`docs/modding/porting.md`, "Magazines from item fields").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub magazines: Option<Magazines>,
+    /// Shots read from the images' `onFire` written with v20's spread code
+    /// (`docs/modding/porting.md`, "Shots from the guns' scripts").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shots: Option<Shots>,
+    /// Hitscan guns read from their image fields (`docs/modding/porting.md`,
+    /// "Hitscan guns from image fields").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hitscans: Option<Hitscans>,
+    /// What each image's own script methods did, read from their bodies
+    /// (`docs/modding/porting.md`, "Script rules").
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scripts: Vec<ScriptRule>,
+    /// Shared parts several ports use, by name: `ports/_shared/<name>.json`
+    /// holds any of this file's fields (an Add-On family's ammo system and
+    /// script rules, written once). They apply first: the port's own
+    /// fields merge over them, and its `scripts` follow theirs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub include: Vec<String>,
     /// Files the port adds to the import (`ports/<port>/files/`) that are
     /// content the import provides, to their kind (`binds.json` →
     /// `binds`). `{{name}}` in them is filled in, as in the rules.
@@ -80,7 +109,9 @@ pub struct Port {
     /// function (`WeaponImage::TT_canFire`) or a top-level call
     /// (`call:TT_registerAmmoType`) to how the game does it now (an engine
     /// seam, the port's rules). The import report counts it as ported when
-    /// the copy has it. Say only what the game really does. Other findings
+    /// the copy has it. Say only what the game really does. An RTB
+    /// preference the game carries out with no setting (a bug fix it always
+    /// makes) is `pref:$Pref::Server::TT::X`. Other findings
     /// the importer could not convert are named as the report spells them,
     /// by kind: `file:client.cs`, `new:ScriptGroup` (an object made at
     /// load), `set:MessageBoxYesNoDlg.yesCallBack` (an object changed at
@@ -125,6 +156,9 @@ pub(crate) fn handle(handled: &mut Handled, what: &str, how: &str) {
         .insert(how.to_owned());
 }
 
+/// Where [`Port::include`] files live.
+pub const SHARED_DIR: &str = "_shared";
+
 /// The companion host-rules Add-On a port adds ([`Port::rules`]). Its id is
 /// the import's with `-rules` added ([`rules_id`]), its folder the import's
 /// with `-rules` added, and the import names it in `companions`, so turning
@@ -133,8 +167,34 @@ pub(crate) fn handle(handled: &mut Handled, what: &str, how: &str) {
 #[serde(deny_unknown_fields)]
 pub struct Rules {
     /// What the rules may do (`player`, `world.edit`, `chat`, ...), as in any
-    /// Add-On's `package.json`.
+    /// Add-On's `package.json`; none for rules that only declare settings.
+    #[serde(default)]
     pub capabilities: Vec<String>,
+    /// Tables of datablock fields, by the `{{name}}` the rules use them as.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tables: BTreeMap<String, Table>,
+    /// Constants by the `{{name}}` the rules use them as, for rules shared
+    /// by Add-Ons that differ in small ways.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub values: BTreeMap<String, Value>,
+    /// Another port whose `rules/` these are, when two Add-Ons share one
+    /// ruleset (two releases of a pack); this port then has no `rules/`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    /// Other Add-Ons (by v20 folder name, `Emote_Critical`) whose content
+    /// the rules use while their imports are on too, as the scripts tested
+    /// `isObject` on their datablocks: each is an optional dependency, and
+    /// `{uses:Emote_Critical}` in a value is its import's id.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub uses: Vec<String>,
+    /// Other Add-Ons the scripts loaded themselves when they were there
+    /// (`exec("add-ons/Emote_Critical/server.cs")`): optional dependencies
+    /// the rules also name as companions, so turning the Add-On on turns
+    /// each installed one on with it, and the Add-On runs without one that
+    /// is missing, as the `exec` of a missing file did nothing. `{uses:X}`
+    /// names its id as for `uses`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub loads: Vec<String>,
     /// Other Add-Ons' host rules these rules build on, by the name rules
     /// files use for them: `{"slayer_rules": "Gamemode_Slayer"}` makes the
     /// rules depend on Gamemode_Slayer's rules and `{{slayer_rules}}` their
@@ -147,7 +207,47 @@ pub struct Rules {
     /// player's own copy at import, never shipped with the port.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub data: BTreeMap<String, String>,
+    /// The copy's RTB server preferences the rules read with `pref(name)`,
+    /// by their global (`$Pref::Server::TT::MedicHealBots`; a trailing `*`
+    /// matches the rest, `$Pref::Server::TT::Start*`), to how the rules
+    /// use them. Each becomes a server-wide setting of the rules
+    /// ([`crate::rtb`]); the copy's others stay unsupported.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub prefs: BTreeMap<String, String>,
+    /// The copy's server preferences that set weapon fields, by their
+    /// global: the import's pack binds each field to the preference
+    /// ([`bri_weapons::Binding`]), so the weapons follow it as the host
+    /// changes it (`docs/modding/porting.md`, "Weapon fields from
+    /// settings"). A preference here the copy registers is a setting of
+    /// the rules, as for `prefs`; the bindings name its global, so a pack
+    /// that leaves the preference to another (Tier 2 to Tier 1) binds its
+    /// guns to it all the same.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub settings: BTreeMap<String, WeaponSetting>,
 }
+
+impl Rules {
+    /// How the rules use the preference `global`, if they read it.
+    pub fn pref(&self, global: &str) -> Option<&str> {
+        if let Some((_, s)) = self
+            .settings
+            .iter()
+            .find(|(g, _)| g.eq_ignore_ascii_case(global))
+        {
+            return Some(&s.how);
+        }
+        let global = global.to_ascii_lowercase();
+        self.prefs.iter().find_map(|(pattern, how)| {
+            let pattern = pattern.to_ascii_lowercase();
+            let hit = match pattern.strip_suffix('*') {
+                Some(prefix) => global.starts_with(prefix),
+                None => global == pattern,
+            };
+            hit.then_some(how.as_str())
+        })
+    }
+}
+
 
 /// Whether `name` may name a rules data file.
 pub(crate) fn valid_data_id(name: &str) -> bool {
@@ -287,12 +387,54 @@ impl Ports {
         Ok(ports)
     }
 
+    /// A port.json with its [`Port::include`]s applied under it, keeping
+    /// its `null`s.
+    fn with_includes(&self, port: Value) -> Result<Value> {
+        let names: Vec<String> = match port.get("include") {
+            None => return Ok(port),
+            Some(v) => serde_json::from_value(v.clone()).context("include")?,
+        };
+        let mut out = Value::Object(Default::default());
+        let mut scripts = vec![];
+        for name in names.iter().map(String::as_str).chain([""]) {
+            let mut part = if name.is_empty() {
+                port.clone()
+            } else {
+                ensure!(
+                    !name.contains(['/', '\\', '.']),
+                    "include `{name}`: a name, not a path"
+                );
+                let bytes = self
+                    .files
+                    .get(&format!("{SHARED_DIR}/{name}.json"))
+                    .with_context(|| format!("{SHARED_DIR}/{name}.json is missing"))?;
+                serde_json::from_slice(bytes)
+                    .with_context(|| format!("{SHARED_DIR}/{name}.json"))?
+            };
+            if let Some(s) = part.as_object_mut().and_then(|m| m.remove("scripts")) {
+                scripts.extend(
+                    s.as_array()
+                        .cloned()
+                        .with_context(|| format!("`scripts` in {name}: a list"))?,
+                );
+            }
+            // A `null` in a port is a value too (an empty rules slot, or a
+            // patch removing a field), so it stays.
+            compose(&mut out, &part);
+        }
+        out["scripts"] = Value::Array(scripts);
+        Ok(out)
+    }
+
     fn port(&self, e: &Entry) -> Result<Port> {
         let bytes = self
             .files
             .get(&format!("{}/port.json", e.port))
             .with_context(|| format!("{}/port.json is missing", e.port))?;
-        let port: Port = serde_json::from_slice(bytes)?;
+        let port: Port = serde_json::from_value(self.with_includes(
+            serde_json::from_slice(bytes).with_context(|| format!("{}/port.json", e.port))?,
+        )?)
+        .with_context(|| format!("{}/port.json", e.port))?;
         ensure!(port.schema_version == 1, "port.json schema_version");
         for file in port.patch.keys() {
             safe_relative(file)?;
@@ -328,16 +470,18 @@ impl Ports {
                 "help page titles are 1 to 64 characters"
             );
         }
-        let rules = self.port_files(&e.port, "rules");
+        let rules = self.rules_files(&e.port, &port.include, port.rules.as_ref())?;
+        if port.rules.as_ref().is_some_and(|r| r.from.is_some()) {
+            ensure!(
+                self.port_files(&e.port, "rules").is_empty(),
+                "rules/ files and rules.from: the rules come from one place"
+            );
+        }
         match &port.rules {
-            Some(r) => {
+            Some(_) => {
                 ensure!(
                     rules.iter().any(|(f, _)| f == RULES_BEHAVIOUR),
                     "rules/{RULES_BEHAVIOUR} is missing"
-                );
-                ensure!(
-                    !r.capabilities.is_empty(),
-                    "rules: name the capabilities the rules use"
                 );
                 for (file, _) in &rules {
                     safe_relative(file)?;
@@ -357,6 +501,42 @@ impl Ports {
     /// Files a port adds, under `ports/<port>/files/`, by package-relative path.
     fn added_files(&self, port: &str) -> Vec<(String, &[u8])> {
         self.port_files(port, "files")
+    }
+
+    /// A port's host-rules files: each included `_shared/<name>/rules/`
+    /// in order, then its own `rules/` (or those of the port they come
+    /// `from`). A later script replaces an earlier one of the same name; a
+    /// later JSON file (`behaviour.json`) is merged over the earlier one,
+    /// so a port adds its own commands and hooks to the shared ones.
+    fn rules_files(
+        &self,
+        port: &str,
+        include: &[String],
+        rules: Option<&Rules>,
+    ) -> Result<Vec<(String, Vec<u8>)>> {
+        let from = rules.and_then(|r| r.from.as_deref()).unwrap_or(port);
+        let mut files: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+        for dir in include
+            .iter()
+            .map(|name| format!("{SHARED_DIR}/{name}"))
+            .chain([from.to_owned()])
+        {
+            for (file, bytes) in self.port_files(&dir, "rules") {
+                let layered = match files.get(&file) {
+                    Some(below) if file.ends_with(".json") => {
+                        let mut doc: Value = serde_json::from_slice(below)
+                            .with_context(|| format!("rules/{file}"))?;
+                        let over: Value = serde_json::from_slice(bytes)
+                            .with_context(|| format!("{dir}/rules/{file}"))?;
+                        merge(&mut doc, &over);
+                        serde_json::to_vec_pretty(&doc)?
+                    }
+                    _ => bytes.to_vec(),
+                };
+                files.insert(file, layered);
+            }
+        }
+        Ok(files.into_iter().collect())
     }
 
     /// The files under `ports/<port>/<folder>/`, by path inside it.
@@ -430,6 +610,11 @@ pub struct Applied {
     /// What it carries out of the copy's scripts, and how.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub handled: Handled,
+    /// The copy's RTB preferences its rules read, by lower-case global, to
+    /// the server setting each became and how the rules use it, or how the
+    /// game carries out one with no setting (`handles`' `pref:`).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub prefs: BTreeMap<String, String>,
     /// The Add-On's datablocks the port declares in their place.
     pub replaces: Vec<String>,
 }
@@ -457,22 +642,53 @@ pub struct Import<'a> {
     pub namespace: &'a str,
     pub version: &'a str,
     pub name: &'a str,
+    /// The projectiles of the Add-Ons it depends on, by their packages'
+    /// ids: the readers see them beside the import's own (a gun's tracer
+    /// from Tier 1), though the import never carries them.
+    pub dependencies: &'a BTreeMap<String, bri_weapons::ProjectileDef>,
 }
 
 /// Script function bodies by lower-case qualified name, and top-level
 /// globals' values by lower-case `$name`.
 pub type Bodies = BTreeMap<String, String>;
 
+/// What a port reads of the import's scripts: each function's body, and
+/// the calls made outside any function, in the order the scripts load.
+#[derive(Debug, Default)]
+pub struct Code {
+    pub bodies: Bodies,
+    /// The [`Code::bodies`] a datablock has only through its `className`
+    /// (lower-case `name::method`): the class's own method, judged under
+    /// the class's name.
+    pub inherited: std::collections::BTreeSet<String>,
+    pub calls: Vec<bri_convert::tscript::Call>,
+    /// The weapon datablocks of the Add-Ons it depends on and the base
+    /// game, by lower-case name: what a script names from them (another
+    /// pack's recoil projectile) is read from there.
+    pub reference: BTreeMap<String, bri_weapons::Definition>,
+    /// The archetype each player type (`PlayerData`) this import or one it
+    /// depends on declares became, by lower-case name.
+    pub archetypes: BTreeMap<String, String>,
+    /// This import's sounds of a base game file, by lower-case name, to the
+    /// base sound playing that file (`block_movebrick_sound` to
+    /// `clickMoveSound`).
+    pub sounds: BTreeMap<String, String>,
+}
+
 /// Applies the listed port for `import`, if any, to the package in `out`.
 /// All or nothing: a port that does not fit this copy changes no file.
-pub fn apply(ports: &Ports, import: &Import, bodies: &Bodies, out: &Path) -> Option<Applied> {
+pub fn apply(ports: &Ports, import: &Import, code: &Code, out: &Path) -> Option<Applied> {
     let e = ports.find(import.addon)?;
     let mut applied = Applied {
         addon: e.addon.clone(),
         port: e.port.clone(),
         status: e.status.clone(),
         applied: false,
-        copy: if e.sha256.iter().any(|h| h.eq_ignore_ascii_case(import.sha256)) {
+        copy: if e
+            .sha256
+            .iter()
+            .any(|h| h.eq_ignore_ascii_case(import.sha256))
+        {
             "listed"
         } else {
             "unlisted"
@@ -485,14 +701,16 @@ pub fn apply(ports: &Ports, import: &Import, bodies: &Bodies, out: &Path) -> Opt
         reason: None,
         notes: String::new(),
         handled: Handled::new(),
+        prefs: BTreeMap::new(),
         replaces: Vec::new(),
     };
-    match try_apply(ports, e, import, bodies, out, &mut applied) {
+    match try_apply(ports, e, import, code, out, &mut applied) {
         Ok(()) => applied.applied = true,
         Err(err) => {
             applied.reason = Some(format!("{err:#}"));
             applied.values.clear();
             applied.handled.clear();
+            applied.prefs.clear();
         }
     }
     Some(applied)
@@ -548,10 +766,11 @@ fn try_apply(
     ports: &Ports,
     e: &Entry,
     import: &Import,
-    bodies: &Bodies,
+    code: &Code,
     out: &Path,
     applied: &mut Applied,
 ) -> Result<()> {
+    let bodies = &code.bodies;
     applied.values = capture(e, bodies)?;
     let port = ports.port(e)?;
     applied.notes = port.notes.clone();
@@ -584,13 +803,121 @@ fn try_apply(
             );
         }
     }
+    for addon in port
+        .rules
+        .iter()
+        .flat_map(|r| r.uses.iter().chain(&r.loads))
+    {
+        let namespace = crate::namespace_for(addon)?;
+        ensure!(
+            namespace != import.namespace,
+            "the rules use `{addon}`, the Add-On they are for"
+        );
+        values.insert(format!("uses:{addon}"), namespace);
+    }
+    // What the port reads from the imported datablocks and scripts: a
+    // patch for weapons.json (each reader's fields over the earlier
+    // ones'), the definitions it makes, and values for the rules. Tables
+    // read the pack as patched, so they see what the readers made (a
+    // hitscan gun's projectile).
+    let reads = port.magazines.is_some()
+        || port.shots.is_some()
+        || port.hitscans.is_some()
+        || !port.scripts.is_empty()
+        || port.rules.as_ref().is_some_and(|r| !r.tables.is_empty());
+    let mut read_patch = None;
+    let mut definitions = vec![];
+    for (what, how) in &port.handles {
+        // A preference the game carries out with no setting to change it.
+        match what.strip_prefix("pref:") {
+            Some(global) => {
+                applied
+                    .prefs
+                    .insert(global.to_ascii_lowercase(), how.clone());
+            }
+            None => handle(&mut applied.handled, what, how),
+        }
+    }
+    let handled = &mut applied.handled;
+    if reads {
+        let mut weapons: Value = serde_json::from_slice(
+            &std::fs::read(out.join(WEAPONS)).context("the import wrote no weapons")?,
+        )
+        .context(WEAPONS)?;
+        // What the readers see: the import's pack with its dependencies'
+        // projectiles beside its own. Only their patch is written back.
+        if let Some(own) = weapons["projectiles"].as_object_mut() {
+            for (id, p) in import.dependencies {
+                own.entry(id.clone()).or_insert(serde_json::to_value(p)?);
+            }
+        }
+        let mut patch: Option<Value> = None;
+        let mut read = BTreeMap::new();
+        let mut add = |p: Value| match &mut patch {
+            Some(g) => compose(g, &p),
+            None => patch = Some(p),
+        };
+        if let Some(m) = &port.magazines {
+            let (p, v) = datablocks::magazines(m, &weapons, code, handled).context("magazines")?;
+            add(p);
+            read.extend(v);
+        }
+        if let Some(s) = &port.shots {
+            add(shots::shots(s, &weapons, bodies, handled).context("shots")?);
+        }
+        if let Some(h) = &port.hitscans {
+            let r = shots::hitscans(h, &weapons, code, handled).context("hitscans")?;
+            add(r.patch);
+            definitions = r.definitions;
+        }
+        if !port.scripts.is_empty() {
+            let reads = datablocks::scripts(&port.scripts, &weapons, code, handled)
+                .context("script rules")?;
+            add(reads.patch);
+            read.extend(reads.tables);
+        }
+        let mut patch = patch.unwrap_or_else(|| Value::Object(Default::default()));
+        if let Some(limit) = port.hitscans.as_ref().and_then(|h| h.damage_limit) {
+            shots::limit_ray_damage(&mut patch, limit);
+        }
+        merge(&mut weapons, &patch);
+        add_definitions(&mut weapons, &definitions)?;
+        if let Some(r) = &port.rules {
+            read.extend(datablocks::tables(&r.tables, &weapons, code, handled)?);
+            // Constants, with the values the patterns read filled in.
+            for (name, value) in &r.values {
+                let value = fill(value, &values).with_context(|| format!("rules value {name}"))?;
+                read.insert(name.clone(), datablocks::rhai(&value));
+            }
+        }
+        for (name, value) in read {
+            ensure!(
+                values.insert(name.clone(), value).is_none(),
+                "`{name}` is named twice"
+            );
+        }
+        read_patch = Some(patch);
+    }
     let mut patches = port.patch.clone();
+    let weapon_settings = port
+        .rules
+        .as_ref()
+        .map(|r| &r.settings)
+        .filter(|s| !s.is_empty());
+    if read_patch.is_some() || weapon_settings.is_some() {
+        patches
+            .entry(WEAPONS.to_owned())
+            .or_insert_with(|| Value::Object(Default::default()));
+    }
     if port.rules.is_some() {
         // The import names its rules, so they are turned on and off with it.
         let manifest = patches
             .entry("package.json".to_owned())
             .or_insert_with(|| Value::Object(Default::default()));
-        ensure!(manifest.is_object(), "the package.json patch is not an object");
+        ensure!(
+            manifest.is_object(),
+            "the package.json patch is not an object"
+        );
         manifest["companions"] = serde_json::json!(["{rules}"]);
     }
     let mut writes: Vec<(String, Vec<u8>)> = vec![];
@@ -600,9 +927,22 @@ fn try_apply(
             &std::fs::read(&path).with_context(|| format!("the import wrote no {file}"))?,
         )
         .with_context(|| file.clone())?;
+        if file == WEAPONS
+            && let Some(read) = &read_patch
+        {
+            // What the readers found first, so the port's own patch can
+            // still correct it.
+            merge(&mut doc, read);
+            add_definitions(&mut doc, &definitions)?;
+        }
         merge(&mut doc, &fill(patch, &values)?);
+        if file == WEAPONS
+            && let Some(s) = weapon_settings
+        {
+            settings::write(s, &mut doc, code).context("weapon settings")?;
+        }
         let bytes = serde_json::to_vec_pretty(&doc)?;
-        if file == "assets/weapons.json" {
+        if file == WEAPONS {
             bri_weapons::Pack::from_json(&bytes).context("the patched weapons.json")?;
         }
         writes.push((file.clone(), bytes));
@@ -691,7 +1031,39 @@ fn try_apply(
     }
     repin(out, &mut writes)?;
     let rules = match &port.rules {
-        Some(r) => Some(rules_package(ports, e, r, import, &values, bodies, out)?),
+        Some(r) => {
+            // The copy's RTB preferences the rules read, as their settings.
+            let mut settings: Vec<bri_package::setting::SettingDef> = vec![];
+            for (_, pref) in crate::rtb::prefs(&code.calls) {
+                let (Some(how), Ok(def)) = (r.pref(&pref.global), pref.setting) else {
+                    continue;
+                };
+                if settings.iter().any(|d| d.key == def.key) {
+                    continue;
+                }
+                applied.prefs.insert(
+                    pref.global.to_ascii_lowercase(),
+                    format!(
+                        "server setting {} (the Admin menu's Add-On Settings): {how}",
+                        def.title
+                    ),
+                );
+                settings.push(def);
+            }
+            Some(rules_package(
+                ports,
+                e,
+                &port.include,
+                r,
+                import,
+                &Fill {
+                    values: &values,
+                    settings: &settings,
+                    bodies,
+                },
+                out,
+            )?)
+        }
         None => None,
     };
     for (file, bytes) in writes {
@@ -712,8 +1084,31 @@ fn try_apply(
     Ok(())
 }
 
+const WEAPONS: &str = "assets/weapons.json";
+
+/// Appends the readers' `definitions` to a `weapons.json`.
+fn add_definitions(weapons: &mut Value, definitions: &[Value]) -> Result<()> {
+    if definitions.is_empty() {
+        return Ok(());
+    }
+    let list = weapons["definitions"]
+        .as_array_mut()
+        .context("weapons.json has no definitions")?;
+    list.extend(definitions.iter().cloned());
+    Ok(())
+}
+
 /// A file to write: its path and bytes.
 type Written = (String, Vec<u8>);
+
+/// What [`rules_package`] fills in: `{{name}}` values for the rules files
+/// and the copy's preferences the rules read, as `behaviour.json` settings;
+/// `bodies` holds the copy's files the rules read as data.
+struct Fill<'a> {
+    values: &'a BTreeMap<String, String>,
+    settings: &'a [bri_package::setting::SettingDef],
+    bodies: &'a Bodies,
+}
 
 /// The companion host-rules Add-On for `import`: its manifest and the
 /// port's rules files, with `{{name}}` in them filled in. Checked here, so
@@ -721,10 +1116,10 @@ type Written = (String, Vec<u8>);
 fn rules_package(
     ports: &Ports,
     e: &Entry,
+    include: &[String],
     rules: &Rules,
     import: &Import,
-    values: &BTreeMap<String, String>,
-    bodies: &Bodies,
+    fill: &Fill,
     out: &Path,
 ) -> Result<(RulesPackage, Vec<Written>)> {
     let dir = rules_dir(out);
@@ -736,9 +1131,24 @@ fn rules_package(
     let id = rules_id(import.namespace);
     let mut files: Vec<Written> = vec![];
     let mut provides = vec![];
-    for (file, bytes) in ports.port_files(&e.port, "rules") {
-        let text = port_text(bytes).with_context(|| format!("rules/{file} is not UTF-8 text"))?;
-        let text = fill_text(&text, values).with_context(|| format!("rules/{file}"))?;
+    for (file, bytes) in ports.rules_files(&e.port, include, Some(rules))? {
+        let text = port_text(&bytes).with_context(|| format!("rules/{file} is not UTF-8 text"))?;
+        let mut text = fill_text(&text, fill.values).with_context(|| format!("rules/{file}"))?;
+        if file == RULES_BEHAVIOUR && !fill.settings.is_empty() {
+            let mut doc: Value =
+                serde_json::from_str(&text).with_context(|| format!("rules/{file}"))?;
+            let list = doc
+                .as_object_mut()
+                .context("rules/behaviour.json is not an object")?
+                .entry("settings")
+                .or_insert_with(|| Value::Array(vec![]))
+                .as_array_mut()
+                .context("rules/behaviour.json's settings is not a list")?;
+            for def in fill.settings {
+                list.push(serde_json::to_value(def)?);
+            }
+            text = serde_json::to_string_pretty(&doc)?;
+        }
         let (kind, stem) = if file == RULES_BEHAVIOUR {
             ("behaviour", "behaviour")
         } else if let Some(name) = rules_archetype(&file) {
@@ -758,7 +1168,7 @@ fn rules_package(
             crate::ports::valid_data_id(name),
             "data `{name}` is not an id: lower-case letters, digits and _"
         );
-        let text = bodies
+        let text = fill.bodies
             .get(&path.to_ascii_lowercase())
             .with_context(|| format!("data `{name}`: the Add-On has no {path}"))?;
         let file = format!("data/{name}.txt");
@@ -777,7 +1187,7 @@ fn rules_package(
     for addon in rules.needs.values() {
         dependencies.insert(rules_id(&crate::namespace_for(addon)?), "*".into());
     }
-    let manifest = serde_json::json!({
+    let mut manifest = serde_json::json!({
         "schema_version": 1,
         "id": id,
         "version": import.version,
@@ -794,23 +1204,37 @@ fn rules_package(
             "notes": port_notes(ports, e),
         },
         "dependencies": dependencies,
+        "optional_dependencies": rules
+            .uses
+            .iter()
+            .chain(&rules.loads)
+            .map(|addon| Ok((crate::namespace_for(addon)?, Value::from("*"))))
+            .collect::<Result<serde_json::Map<_, _>>>()?,
         "capabilities": rules.capabilities,
         "provides": provides,
     });
+    if !rules.loads.is_empty() {
+        manifest["companions"] = rules
+            .loads
+            .iter()
+            .map(|addon| crate::namespace_for(addon).map(Value::from))
+            .collect::<Result<Value>>()?;
+    }
     let bytes = serde_json::to_vec_pretty(&manifest)?;
     files.push(("package.json".to_owned(), bytes.clone()));
     check_rules(&id, &bytes, &files)?;
+    let folder = dir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let package = RulesPackage {
         id: id.clone(),
-        dir: dir
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default(),
+        dir: folder.clone(),
         packages_json_entry: serde_json::json!({
             "id": id,
             "version": import.version,
             "side": "server",
-            "dir": dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+            "dir": folder,
         }),
         files: files.iter().map(|(f, _)| f.clone()).collect(),
     };
@@ -1096,7 +1520,14 @@ pub fn check_pins(out: &Path) -> Result<()> {
 /// keys with its text.
 fn fill(v: &Value, values: &BTreeMap<String, String>) -> Result<Value> {
     Ok(match v {
-        Value::String(s) if s.starts_with('{') && s.ends_with('}') => {
+        // A whole `{name}` takes the captured value's type; names inside
+        // other text (`{namespace}:sound/{a}`) are replaced as text.
+        Value::String(s)
+            if s.len() > 2
+                && s.starts_with('{')
+                && s.ends_with('}')
+                && !s[1..s.len() - 1].contains(['{', '}']) =>
+        {
             let name = &s[1..s.len() - 1];
             let (name, lower) = name
                 .strip_suffix(":lower")
@@ -1165,6 +1596,25 @@ fn merge(target: &mut Value, patch: &Value) {
     }
 }
 
+/// Folds `patch` into the merge patch `target`, so applying the result is
+/// applying `target` and then `patch`: unlike [`merge`], a `null` stays, to
+/// remove the field from the document the patches end up on.
+fn compose(target: &mut Value, patch: &Value) {
+    match (target, patch) {
+        (Value::Object(t), Value::Object(p)) => {
+            for (k, v) in p {
+                match t.get_mut(k) {
+                    Some(old) if old.is_object() && v.is_object() => compose(old, v),
+                    _ => {
+                        t.insert(k.clone(), v.clone());
+                    }
+                }
+            }
+        }
+        (target, patch) => *target = patch.clone(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1175,6 +1625,23 @@ mod tests {
         let mut doc = json!({"a": {"b": 1, "c": 2}, "d": [1, 2]});
         merge(&mut doc, &json!({"a": {"b": null, "e": 3}, "d": [3]}));
         assert_eq!(doc, json!({"a": {"c": 2, "e": 3}, "d": [3]}));
+    }
+
+    #[test]
+    fn composed_patches_apply_as_both_in_turn() {
+        let doc = json!({"m": {"on_loaded": {"loaded": true}, "size": 2}});
+        let (first, second) = (
+            json!({"m": {"on_loaded": {"loaded": true}, "size": 6}}),
+            json!({"m": {"on_loaded": null, "one_by_one": true}}),
+        );
+        let mut both = first.clone();
+        compose(&mut both, &second);
+        let (mut once, mut twice) = (doc.clone(), doc);
+        merge(&mut once, &both);
+        merge(&mut twice, &first);
+        merge(&mut twice, &second);
+        assert_eq!(once, twice);
+        assert_eq!(once, json!({"m": {"size": 6, "one_by_one": true}}));
     }
 
     #[test]

@@ -320,7 +320,7 @@ impl PlantWork {
         s.push_copy_undo(owner, entry, self.package);
         s.cues
             .emit(tick, crate::presentation::CueKind::Plant, self.anchor);
-        s.play_thread_three(tick, owner, "plant");
+        s.play_thread(tick, owner, 3, "plant");
         Ok(Reply::Planted(first))
     }
 }

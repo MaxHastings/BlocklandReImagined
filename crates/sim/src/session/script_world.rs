@@ -39,6 +39,7 @@ impl World for ScriptWorld<'_> {
             simulation: &session.simulation,
             affect: &never,
             affect_radius: &never,
+            ally: &never,
             catch: &never_catch,
             responses: &session.events.projectile_responses,
             truncated_targets: 0,
@@ -76,7 +77,16 @@ impl World for ScriptWorld<'_> {
             region,
         })
     }
-    fn hit_region(&self, player: u64, point: [f32; 3]) -> Option<&'static str> {
+    fn enabled(&self, id: &str) -> bool {
+        self.session
+            .packages
+            .as_ref()
+            .is_some_and(|host| host.catalog.enabled(id))
+    }
+    fn lan(&self) -> bool {
+        self.session.lan_host
+    }
+        fn hit_region(&self, player: u64, point: [f32; 3]) -> Option<&'static str> {
         self.session.region_of(player, Vec3::from(point))
     }
     fn can_damage(&self, by: u64, target: ObjectRef) -> bool {

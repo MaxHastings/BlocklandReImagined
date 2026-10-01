@@ -4,7 +4,7 @@
 //! The mechanism (lists, dependencies, refusals) is `bri_package::library`;
 //! the words and grouping here are presentation only.
 use anyhow::{Context, Result};
-use bri_package::classic::Discovery;
+use bri_package::classic::{self, Record, State, Step};
 use bri_package::defaults;
 use bri_package::diag::Severity;
 use bri_package::library::{Library, LibraryEntry};
@@ -41,17 +41,10 @@ const CATEGORIES: &[(&str, &[&str])] = &[
     ),
 ];
 
-/// Where this game looks for the player's classic Add-Ons: the machine's
-/// Steam and v20 installs, found once.
-pub fn machine() -> &'static Discovery {
-    static MACHINE: std::sync::OnceLock<Discovery> = std::sync::OnceLock::new();
-    MACHINE.get_or_init(Discovery::machine)
-}
-
-pub fn view(root: &Path, discovery: &Discovery) -> AddOnsView {
-    match Library::scan_with(root, discovery) {
+pub fn view(root: &Path) -> AddOnsView {
+    match Library::scan(root) {
         Ok(library) => AddOnsView {
-            rows: rows(&library),
+            rows: rows(&library, &State::load(root)),
             notice: library
                 .problems
                 .iter()
@@ -133,13 +126,8 @@ pub fn mismatch(root: &Path, reason: &str) -> Option<bri_ui::api::AddOnMismatch>
 }
 
 /// Turn one add-on on or off, with what it needs or what needs it.
-pub fn set_enabled(
-    root: &Path,
-    discovery: &Discovery,
-    id: &str,
-    enabled: bool,
-) -> Result<AddOnsView> {
-    let mut library = Library::scan_with(root, discovery)?;
+pub fn set_enabled(root: &Path, id: &str, enabled: bool) -> Result<AddOnsView> {
+    let mut library = Library::scan(root)?;
     anyhow::ensure!(id != BASE_ROW, "The base game stays on.");
     let plan = library.plan(id, enabled);
     if !plan.allowed() {
@@ -162,7 +150,7 @@ pub fn set_enabled(
         .map_or(id.to_string(), |e| e.name().to_string());
     library.apply(&plan)?;
     let mut out = AddOnsView {
-        rows: rows(&library),
+        rows: rows(&library, &State::load(root)),
         notice: format!("{name} is {}.", if enabled { "on" } else { "off" }),
     };
     if !also.is_empty() {
@@ -179,8 +167,8 @@ pub fn set_enabled(
 
 /// Back to the defaults (v20's "Default"): the base game and the default
 /// Add-Ons (`packages/default-addons.json`) on, every other add-on off.
-pub fn defaults(root: &Path, discovery: &Discovery) -> Result<AddOnsView> {
-    let mut library = Library::scan_with(root, discovery)?;
+pub fn defaults(root: &Path) -> Result<AddOnsView> {
+    let mut library = Library::scan(root)?;
     let (mut off, mut on) = (0, 0);
     // Dependents go with the package they need, so one pass settles it.
     // Defaults need only the base game and each other, so none goes.
@@ -220,7 +208,7 @@ pub fn defaults(root: &Path, discovery: &Discovery) -> Result<AddOnsView> {
         ),
     };
     Ok(AddOnsView {
-        rows: rows(&library),
+        rows: rows(&library, &State::load(root)),
         notice: match (off, on) {
             (0, 0) => notice,
             _ => format!("{notice} Changes apply the next time you start a game."),
@@ -228,7 +216,7 @@ pub fn defaults(root: &Path, discovery: &Discovery) -> Result<AddOnsView> {
     })
 }
 
-pub fn rows(library: &Library) -> Vec<AddOnRow> {
+pub fn rows(library: &Library, state: &State) -> Vec<AddOnRow> {
     let base: Vec<&LibraryEntry> = library.entries.iter().filter(|e| e.required).collect();
     let mut out = Vec::new();
     if !base.is_empty() {
@@ -278,30 +266,32 @@ pub fn rows(library: &Library) -> Vec<AddOnRow> {
         }
     };
     out.sort_by_key(|r| rank(&r.category));
-    // Old add-ons waiting to be imported come last.
+    // Classic Add-Ons dropped in the Add-Ons folder and not converted yet
+    // come last: converting, or why they could not be.
     for l in library.legacy.iter().filter(|l| l.imported_as.is_none()) {
+        let failed = state.failed(l);
         out.push(AddOnRow {
             id: format!("{LEGACY}{}", l.name),
             name: l.name.clone(),
-            category: LEGACY_CATEGORY.into(),
-            description: format!("An old Blockland add-on from {}. Import converts your copy into an add-on this game can load; it starts off, and players who join you download it from you. Its scripts are never run: the game's own rewrites of them come with the import, and its report lists anything still missing.", l.origin.label()),
-            importable: true,
+            category: if failed.is_some() { FAILED_CATEGORY } else { LEGACY_CATEGORY }.into(),
+            description: match failed {
+                Some(_) => "A classic Blockland Add-On in your Add-Ons folder that could not be converted. Replace it with a working copy and it converts by itself, or press Retry.".into(),
+                None => "A classic Blockland Add-On in your Add-Ons folder, being converted into an Add-On this game can load. It starts off; players who join you download it from you. Its scripts are never run: the game's own rewrites of them come with it, and its report lists anything still missing.".into(),
+            },
+            problems: failed.map(|e| vec![e.to_string()]).unwrap_or_default(),
+            broken: failed.is_some(),
+            importable: failed.is_some(),
+            importing: failed.is_none(),
             ..Default::default()
         });
     }
     out
 }
 
-/// Row ids of old add-ons waiting in the drop folder.
+/// Row ids of classic Add-Ons in the drop folder not converted yet.
 pub const LEGACY: &str = "legacy:";
-const LEGACY_CATEGORY: &str = "Not Imported Yet";
-
-/// Show `id` as being imported.
-pub fn mark_importing(view: &mut AddOnsView, id: &str) {
-    for r in view.rows.iter_mut().filter(|r| r.id == id) {
-        r.importing = true;
-    }
-}
+const LEGACY_CATEGORY: &str = "Converting";
+const FAILED_CATEGORY: &str = "Could Not Convert";
 
 /// The importer ships next to the game (`bri-import-addon`). It is a
 /// separate program so conversion tooling stays out of the game itself.
@@ -316,70 +306,208 @@ pub fn importer() -> Result<std::path::PathBuf> {
     Ok(path)
 }
 
-/// Start importing the old add-on behind row `id` on a worker thread. The
-/// receiver yields the notice to show when it finishes.
-pub fn start_import(
-    root: &Path,
-    discovery: &Discovery,
-    id: &str,
-    importer: &Path,
-) -> Result<std::sync::mpsc::Receiver<Result<String>>> {
-    let library = Library::scan_with(root, discovery)?;
-    let name = id
-        .strip_prefix(LEGACY)
-        .context("That add-on is already imported.")?;
-    let legacy = library
-        .legacy
-        .iter()
-        .find(|l| l.name == name)
-        .with_context(|| format!("{name} is no longer in the Add-Ons folder."))?;
-    anyhow::ensure!(legacy.imported_as.is_none(), "{name} is already imported.");
-    anyhow::ensure!(
-        importer.is_file(),
-        "The add-on importer is not installed ({}).",
-        importer.display()
-    );
-    let dir = library.import_dir(name);
-    let out = root.join(&dir);
-    let input = legacy.path.clone();
-    // Base bricks, sounds and the rest an Add-On builds on come from the
-    // game's own converted content.
-    let installed = root.to_path_buf();
-    let importer = importer.to_path_buf();
-    let name = name.to_string();
+/// Progress of [`start_sync`]: a notice for the Add-Ons screen, the last
+/// one with `finished`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyncNote {
+    pub notice: String,
+    pub finished: bool,
+}
+
+/// Bring the conversions in line with the Add-Ons folder on a worker
+/// thread ([`classic::plan`]): convert what was dropped or changed, remove
+/// what was taken out. The receiver yields its progress.
+pub fn start_sync(root: &Path, importer: &Path) -> Result<std::sync::mpsc::Receiver<SyncNote>> {
+    let steps = classic::plan(&Library::scan(root)?, &State::load(root));
     let (send, receive) = std::sync::mpsc::channel();
+    let (root, importer) = (root.to_path_buf(), importer.to_path_buf());
     std::thread::spawn(move || {
-        let mut command = std::process::Command::new(&importer);
-        command
-            .arg(&input)
-            .arg(&out)
-            .arg("--installed")
-            .arg(&installed)
-            .arg("--json");
-        let result = command
-            .stdin(std::process::Stdio::null())
-            .output()
-            .with_context(|| format!("Running {}", importer.display()))
-            .and_then(|o| {
-                if o.status.success() {
-                    Ok(format!(
-                        "Imported {name}. It starts off; its report is {dir}/IMPORT-REPORT.md."
-                    ))
-                } else {
-                    let err = String::from_utf8_lossy(&o.stderr);
-                    let reason = err
-                        .lines()
-                        .rev()
-                        .find(|l| !l.trim().is_empty())
-                        .unwrap_or("no details");
-                    // Leave no half-written package behind.
-                    let _ = std::fs::remove_dir_all(&out);
-                    Err(anyhow::anyhow!("{name} could not be imported: {reason}"))
-                }
-            });
-        let _ = send.send(result);
+        let run = |input: &Path, out: &Path, reference: &Path| {
+            run_importer(&importer, input, out, reference)
+        };
+        let notice = sync(&root, &run, steps, &send);
+        let _ = send.send(SyncNote {
+            notice,
+            finished: true,
+        });
     });
     Ok(receive)
+}
+
+fn run_importer(importer: &Path, input: &Path, out: &Path, reference: &Path) -> Result<()> {
+    let output = std::process::Command::new(importer)
+        .arg(input)
+        .arg(out)
+        .arg("--json")
+        // The other dropped Add-Ons, for one it requires, and the game's
+        // own content for the base bricks, sounds and the rest.
+        .arg("--reference")
+        .arg(reference)
+        .arg("--installed")
+        .arg(reference)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .with_context(|| format!("Running {}", importer.display()))?;
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        let reason = err
+            .lines()
+            .rev()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or("no details");
+        anyhow::bail!("{}", reason.trim());
+    }
+    Ok(())
+}
+
+/// Convert `name` again: forget that it failed.
+pub fn retry(root: &Path, id: &str) -> Result<()> {
+    let name = id
+        .strip_prefix(LEGACY)
+        .context("That add-on is already converted.")?;
+    let mut state = State::load(root);
+    state.forget(name);
+    state.save(root)
+}
+
+/// Runs the importer: the dropped Add-On, the package folder to make, and
+/// the folder whose `Add-Ons/` it may build on.
+type Run<'a> = dyn Fn(&Path, &Path, &Path) -> Result<()> + 'a;
+
+fn sync(
+    root: &Path,
+    run: &Run,
+    steps: Vec<Step>,
+    send: &std::sync::mpsc::Sender<SyncNote>,
+) -> String {
+    let (mut converted, mut failed, mut removed) = (vec![], vec![], vec![]);
+    let mut state = State::load(root);
+    for step in steps {
+        match step {
+            Step::Adopt { name, id, stamp } => {
+                let dir = Library::scan(root)
+                    .ok()
+                    .and_then(|l| Some(l.get(&id)?.package.dir.clone()));
+                state.set(Record {
+                    name,
+                    stamp,
+                    id: Some(id),
+                    dir,
+                    error: None,
+                });
+            }
+            Step::Remove { name, id, .. } => {
+                if !id.is_empty()
+                    && let Err(error) = Library::scan(root).and_then(|mut l| l.uninstall(&id))
+                {
+                    bri_console::warn(format!("Removing {name}'s conversion: {error:#}"));
+                    continue;
+                }
+                state.forget(&name);
+                removed.push(name);
+            }
+            Step::Import {
+                name,
+                path,
+                stamp,
+                replaces,
+            } => {
+                let _ = send.send(SyncNote {
+                    notice: format!("Converting {name}..."),
+                    finished: false,
+                });
+                let mut record = Record {
+                    name: name.clone(),
+                    stamp,
+                    id: None,
+                    dir: None,
+                    error: None,
+                };
+                match convert(root, run, &name, &path, replaces.as_deref()) {
+                    Ok((id, dir)) => {
+                        record.id = Some(id);
+                        record.dir = Some(dir);
+                        converted.push(name);
+                    }
+                    Err(error) => {
+                        record.error = Some(format!("{error:#}"));
+                        failed.push(name);
+                    }
+                }
+                state.set(record);
+            }
+        }
+        // Saved after every step, so a game closed midway redoes nothing.
+        if let Err(error) = state.save(root) {
+            bri_console::warn(format!(
+                "Saving the Add-Ons folder's conversions: {error:#}"
+            ));
+        }
+    }
+    let list = |names: &[String]| names.join(", ");
+    let mut notice = vec![];
+    match converted.len() {
+        0 => {}
+        1 => notice.push(format!("Converted {}. It starts off.", converted[0])),
+        n => notice.push(format!(
+            "Converted {n} classic Add-Ons: {}. They start off.",
+            list(&converted)
+        )),
+    }
+    if !failed.is_empty() {
+        notice.push(format!("Could not convert {}.", list(&failed)));
+    }
+    if !removed.is_empty() {
+        notice.push(format!(
+            "Removed {}, no longer in the Add-Ons folder.",
+            list(&removed)
+        ));
+    }
+    notice.join(" ")
+}
+
+/// Convert the dropped Add-On `name` at `input` with the importer, first
+/// removing `replaces`, its earlier conversion (kept on if it was on). The
+/// other Add-Ons in the folder are its reference, so one it requires
+/// (`ForceRequiredAddOn`) is found. Its id and folder.
+fn convert(
+    root: &Path,
+    run: &Run,
+    name: &str,
+    input: &Path,
+    replaces: Option<&str>,
+) -> Result<(String, String)> {
+    let mut was_on = false;
+    if let Some(old) = replaces {
+        let mut library = Library::scan(root)?;
+        was_on = library.get(old).is_some_and(|e| e.enabled);
+        library.uninstall(old)?;
+    }
+    let dir = Library::scan(root)?.import_dir(name);
+    let out = root.join(&dir);
+    if let Err(error) = run(input, &out, root) {
+        // Leave no half-written package behind.
+        let _ = std::fs::remove_dir_all(&out);
+        let mut rules = out.as_os_str().to_owned();
+        rules.push("-rules");
+        let _ = std::fs::remove_dir_all(std::path::PathBuf::from(rules));
+        return Err(error);
+    }
+    let manifest: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(out.join("package.json")).context("the conversion has no package.json")?,
+    )?;
+    let id = manifest["id"]
+        .as_str()
+        .context("the conversion's package.json has no id")?
+        .to_string();
+    if was_on {
+        let mut library = Library::scan(root)?;
+        let plan = library.plan(&id, true);
+        if plan.allowed() {
+            library.apply(&plan)?;
+        }
+    }
+    Ok((id, dir))
 }
 
 fn row(library: &Library, e: &LibraryEntry) -> AddOnRow {
@@ -510,23 +638,22 @@ mod tests {
                 .collect()
         };
         let hook = |v: &AddOnsView| v.rows.iter().find(|r| r.id == "tool_hook").unwrap().clone();
-        let discovery = Discovery::root_only();
-        let v = view(&root, &discovery);
+        let v = view(&root);
         assert_eq!(ids(&v), [("tool_hook".to_string(), false)]);
-        let v = set_enabled(&root, &discovery, "tool_hook", true).unwrap();
+        let v = set_enabled(&root, "tool_hook", true).unwrap();
         assert_eq!(ids(&v), [("tool_hook".to_string(), true)]);
         // The notice speaks of the Add-On alone; the rules are part of it.
         let library = Library::scan(&root).unwrap();
         assert!(library.get("tool_hook-rules").unwrap().enabled);
         assert!(hook(&v).needed_by.is_empty(), "{:?}", hook(&v).needed_by);
-        let refused = set_enabled(&root, &discovery, "tool_hook-rules", false).unwrap_err();
+        let refused = set_enabled(&root, "tool_hook-rules", false).unwrap_err();
         assert!(
             refused
                 .to_string()
                 .contains("is part of The tool_hook and turns on and off with it"),
             "{refused}"
         );
-        let v = set_enabled(&root, &discovery, "tool_hook", false).unwrap();
+        let v = set_enabled(&root, "tool_hook", false).unwrap();
         assert_eq!(ids(&v), [("tool_hook".to_string(), false)]);
         assert!(
             !Library::scan(&root)
@@ -544,7 +671,7 @@ mod tests {
             .to_string(),
         )
         .unwrap();
-        let v = view(&root, &discovery);
+        let v = view(&root);
         let _ = std::fs::remove_dir_all(&root);
         assert_eq!(ids(&v), [("tool_hook".to_string(), false)]);
         assert!(
@@ -591,7 +718,7 @@ mod tests {
             )
             .unwrap();
         }
-        let v = view(&root, &Discovery::root_only());
+        let v = view(&root);
         let names: Vec<_> = v
             .rows
             .iter()
@@ -616,14 +743,14 @@ mod tests {
         assert_eq!(creeper.needs, ["The lab-world ^1.0"]);
         assert!(creeper.runs.starts_with("Only on the server"));
 
-        let v = set_enabled(&root, &Discovery::root_only(), "creeper", true).unwrap();
+        let v = set_enabled(&root, "creeper", true).unwrap();
         assert_eq!(
             v.notice,
             "The creeper is on. Also turned on: The lab-world. Changes apply the next time you start a game."
         );
         assert_eq!(v.rows[1].needed_by, ["The creeper"]);
-        assert!(set_enabled(&root, &Discovery::root_only(), BASE_ROW, false).is_err());
-        let v = defaults(&root, &Discovery::root_only()).unwrap();
+        assert!(set_enabled(&root, BASE_ROW, false).is_err());
+        let v = defaults(&root).unwrap();
         assert!(v.rows.iter().all(|r| r.locked || !r.enabled), "{v:?}");
         assert!(v.notice.starts_with("Turned off 2 add-ons"), "{}", v.notice);
         // A refused join names add-ons as the player's list does.
@@ -658,29 +785,105 @@ mod tests {
             m.explanation
         );
         assert!(mismatch(&root, "Timed out").is_none());
-        // An old add-on dropped in Add-Ons is offered for import, last.
+        // A classic Add-On dropped in Add-Ons shows as converting, last.
         std::fs::create_dir_all(root.join("Add-Ons")).unwrap();
         std::fs::write(root.join("Add-Ons/Weapon_Shotgun.zip"), b"PK").unwrap();
-        let mut v = view(&root, &Discovery::root_only());
+        let v = view(&root);
         let last = v.rows.last().unwrap();
         assert_eq!(
-            (last.id.as_str(), last.category.as_str(), last.importable),
-            ("legacy:Weapon_Shotgun", "Not Imported Yet", true)
+            (last.id.as_str(), last.category.as_str(), last.importing),
+            ("legacy:Weapon_Shotgun", "Converting", true)
         );
-        mark_importing(&mut v, "legacy:Weapon_Shotgun");
-        assert!(v.rows.last().unwrap().importing);
-        let missing = start_import(
-            &root,
-            &Discovery::root_only(),
-            "legacy:Weapon_Shotgun",
-            &root.join("no-importer"),
-        )
-        .unwrap_err();
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A stand-in importer: a weapons package named for the dropped file,
+    /// or a refusal for one whose bytes say `bad`.
+    fn fake_import(input: &Path, out: &Path, reference: &Path) -> Result<()> {
         assert!(
-            format!("{missing}").contains("importer is not installed"),
-            "{missing}"
+            reference.join("Add-Ons").is_dir(),
+            "the drop folder is the reference"
         );
-        assert!(start_import(&root, &Discovery::root_only(), "creeper", &root.join("x")).is_err());
+        anyhow::ensure!(std::fs::read(input)? != b"bad", "not a zip file");
+        let name = input.file_stem().unwrap().to_string_lossy().to_string();
+        let id = name.to_ascii_lowercase();
+        std::fs::create_dir_all(out)?;
+        std::fs::write(
+            out.join("package.json"),
+            json!({ "schema_version": 1, "id": id, "version": "1.0.0", "api": 1,
+                "provides": [{ "kind": "weapons", "id": format!("{id}:weapons/w"), "file": "w.json" }],
+                "provenance": { "source": format!("Blockland Add-On {name} (zip), sha256 00") } })
+            .to_string(),
+        )?;
+        Ok(())
+    }
+
+    fn sync_now(root: &Path) -> Vec<SyncNote> {
+        let steps = classic::plan(&Library::scan(root).unwrap(), &State::load(root));
+        let (send, receive) = std::sync::mpsc::channel();
+        let notice = sync(root, &fake_import, steps, &send);
+        drop(send);
+        let mut notes: Vec<SyncNote> = receive.iter().collect();
+        notes.push(SyncNote {
+            notice,
+            finished: true,
+        });
+        notes
+    }
+
+    #[test]
+    fn the_add_ons_folder_converts_reconverts_and_removes_by_itself() {
+        let root = std::env::temp_dir().join(format!("bri-add-ons-sync-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let drop = classic::folder(&root);
+        std::fs::create_dir_all(&drop).unwrap();
+        std::fs::write(drop.join("Weapon_Gun.zip"), b"PK one").unwrap();
+        std::fs::write(drop.join("Weapon_Bad.zip"), b"bad").unwrap();
+        let notes = sync_now(&root);
+        assert_eq!(
+            notes.last().unwrap().notice,
+            "Converted Weapon_Gun. It starts off. Could not convert Weapon_Bad."
+        );
+        assert!(notes.iter().any(|n| n.notice == "Converting Weapon_Gun..."));
+        let v = view(&root);
+        let gun = v.rows.iter().find(|r| r.id == "weapon_gun").unwrap();
+        assert!(!gun.enabled);
+        let bad = v.rows.iter().find(|r| r.id == "legacy:Weapon_Bad").unwrap();
+        assert_eq!(
+            (bad.category.as_str(), bad.importable, bad.importing),
+            ("Could Not Convert", true, false)
+        );
+        assert_eq!(bad.problems, ["not a zip file"]);
+        // Nothing changed: nothing to do, and the failure is not retried.
+        assert_eq!(sync_now(&root).last().unwrap().notice, "");
+        // Retry, after fixing it.
+        std::fs::write(drop.join("Weapon_Bad.zip"), b"PK fixed").unwrap();
+        retry(&root, "legacy:Weapon_Bad").unwrap();
+        assert_eq!(
+            sync_now(&root).last().unwrap().notice,
+            "Converted Weapon_Bad. It starts off."
+        );
+        // A changed zip converts again and stays on if it was on.
+        set_enabled(&root, "weapon_gun", true).unwrap();
+        std::fs::write(drop.join("Weapon_Gun.zip"), b"PK two, longer").unwrap();
+        assert_eq!(
+            sync_now(&root).last().unwrap().notice,
+            "Converted Weapon_Gun. It starts off."
+        );
+        let library = Library::scan(&root).unwrap();
+        let gun = library.get("weapon_gun").unwrap();
+        assert!(gun.enabled);
+        assert_eq!(gun.package.dir, "addons/weapon_gun");
+        // Taken out of the folder, its conversion goes.
+        std::fs::remove_file(drop.join("Weapon_Gun.zip")).unwrap();
+        assert_eq!(
+            sync_now(&root).last().unwrap().notice,
+            "Removed Weapon_Gun, no longer in the Add-Ons folder."
+        );
+        let library = Library::scan(&root).unwrap();
+        assert!(library.get("weapon_gun").is_none());
+        assert!(!root.join("addons/weapon_gun").exists());
+        assert!(library.get("weapon_bad").is_some());
         let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "include": ["tier-tactical-core", "tier-tactical"],
+  "notes": "Tier+Tactical Tier 1A on Tier 1's ammo system: the Single Shotgun's pellets, close blast and knockback, the Pepperbox's four-ray raycasts, the Snubnose's headshots with their own kill message. The Nailgun is one of Kai's easter eggs, loaded only with the hidden \"???\" setting (off by default): it is imported hidden, so no spawn list offers it.",
+  "patch": {
+    "assets/weapons.json": {
+      "items": {
+        "weapon_package_tier1a:weapon/nailgunitem": { "hidden": true }
+      }
+    }
+  }
+}

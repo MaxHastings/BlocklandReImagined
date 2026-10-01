@@ -14,6 +14,9 @@ pub struct WeaponQuery<'a> {
     pub affect: &'a dyn Fn(ActorId, TargetId) -> bool,
     /// Explosion splash policy (adds the minigame's `selfDamage`).
     pub affect_radius: &'a dyn Fn(ActorId, TargetId) -> bool,
+    /// Whether the target is the source's teammate or ally in a mini-game
+    /// with weapon damage on ([`Query::is_ally`]).
+    pub ally: &'a dyn Fn(ActorId, TargetId) -> bool,
     pub catch: &'a dyn Fn(ActorId, ActorId) -> bool,
     /// Zero-delay `onProjectileHit -> Projectile` event rows by brick.
     pub responses: &'a BTreeMap<u64, ContactResponse>,
@@ -404,5 +407,8 @@ impl Query for WeaponQuery<'_> {
     }
     fn can_catch(&self, source: ActorId, target: ActorId) -> bool {
         (self.catch)(source, target)
+    }
+    fn is_ally(&self, source: ActorId, target: TargetId) -> bool {
+        (self.ally)(source, target)
     }
 }

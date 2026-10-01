@@ -275,7 +275,7 @@ impl ExplosionDebris {
             for (i, emitter) in spec.emitters.iter().enumerate().take(2) {
                 out.push(Trail {
                     key: (p.id, i as u8),
-                    emitter: format!("v20/emitter/{}", emitter.to_ascii_lowercase()),
+                    emitter: emitter.clone(),
                     transform: SourceTransform {
                         position: p.position,
                         rotation: Quat::from_rotation_arc(Vec3::Y, axis),
@@ -319,7 +319,7 @@ mod tests {
         DebrisSpec {
             name: name.into(),
             model: "Add-Ons/Vehicle_Jeep/jeepTire.dts".into(),
-            emitters: vec!["JeepTireDebrisTrailEmitter".into()],
+            emitters: vec!["v20/emitter/jeeptiredebristrailemitter".into()],
             count: 4,
             count_variance: 0,
             theta: [40.0, 85.0],

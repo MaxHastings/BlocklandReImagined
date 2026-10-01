@@ -355,6 +355,7 @@ name = "bri-addon-import"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bri-admin",
  "bri-content",
  "bri-convert",
  "bri-minigames",

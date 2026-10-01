@@ -35,6 +35,9 @@ pub struct Replica {
     pub map_lights: Vec<bri_sim::session::MapLightRule>,
     /// The live environment over the map's own.
     pub environment: bri_content::atmosphere::Settings,
+    /// The server settings the weapons pack's bindings read
+    /// ([`bri_weapons::Pack::with_settings`]).
+    pub weapon_settings: BTreeMap<String, String>,
     /// The host's player archetypes; poses name them by index.
     pub archetypes: std::sync::Arc<bri_sim::archetype::Archetypes>,
     /// The running Add-Ons' settings (fixed for the session).
@@ -176,6 +179,17 @@ fn validate_minigames(games: &[bri_sim::session::MiniGameView]) -> Result<()> {
     );
     Ok(())
 }
+fn validate_weapon_settings(values: &BTreeMap<String, String>) -> Result<()> {
+    ensure!(
+        values.len() <= bri_sim::session::MAX_ADDON_SETTINGS
+            && values
+                .iter()
+                .all(|(k, v)| k.len() <= 128 && v.len() <= 256),
+        "Invalid weapon settings"
+    );
+    Ok(())
+}
+
 fn validate_addon_settings(list: &[bri_sim::session::AddOnSetting]) -> Result<()> {
     ensure!(
         list.len() <= bri_sim::session::MAX_ADDON_SETTINGS,
@@ -237,6 +251,7 @@ impl Replica {
         validate_map_lights(&checkpoint.map_lights)?;
         validate_world_shapes(&checkpoint.world_shapes)?;
         checkpoint.environment.validate()?;
+        validate_weapon_settings(&checkpoint.weapon_settings)?;
         validate_entities(&checkpoint.entities)?;
         checkpoint.package_state.validate()?;
         for pose in &checkpoint.vehicle_poses {
@@ -276,6 +291,7 @@ impl Replica {
             targets: checkpoint.targets,
             map_lights: checkpoint.map_lights,
             environment: checkpoint.environment,
+            weapon_settings: checkpoint.weapon_settings,
             archetypes: checkpoint.archetypes.into(),
             addon_settings: checkpoint.addon_settings.into(),
             addon_teams_shown_when: checkpoint.addon_teams_shown_when,
@@ -381,6 +397,9 @@ impl Replica {
         if let Some(environment) = &delta.environment {
             environment.validate()?;
         }
+        if let Some(settings) = &delta.weapon_settings {
+            validate_weapon_settings(settings)?;
+        }
         let entities = match &delta.entities {
             Some(changes) => {
                 let mut entities = self.entities.clone();
@@ -465,6 +484,9 @@ impl Replica {
         }
         if let Some(environment) = delta.environment {
             self.environment = environment;
+        }
+        if let Some(settings) = delta.weapon_settings {
+            self.weapon_settings = settings;
         }
         if let Some(entities) = entities {
             self.entities = entities;

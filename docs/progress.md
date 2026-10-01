@@ -9218,6 +9218,48 @@ Tests: `add_on_join::bot_kinds_come_from_the_blockhead_bot_add_on_the_host_runs`
 (generated content: hosts with the Add-On on and off, loads a saved spawn
 brick, counts players). Not run here: the second needs generated content.
 
+## 2026-10-01: Weapon seams for tactical packs, magazines, Add-On explosions (branch `claude/tier-tactical-3onhik`)
+
+Max chose originals only for Tier+Tactical (Bushido, Space Guy, Jaydee,
+Tingalz, Panopticon/Kai, Frog, Heedicalking): players import the original
+Add-Ons, and our ports add behaviour on top. The look-alike kits written
+earlier were removed before this branch was rebuilt on main 01ea23eb. What
+stays is general engine seams, each with limits, docs and deterministic
+tests on our own synthetic packs:
+
+- Loader (224b925d, no protocol change): `classic::folders` finds the
+  player's Steam v21 libraries (`libraryfolders.vdf`, or `BRI_STEAM`), the
+  remembered v20 install and up to 16 added folders. Import Add-On passes
+  `--reference <install>`. A `ForceRequiredAddOn` of a community Add-On
+  found there becomes a dependency on its import, and only the 79 v20
+  Add-Ons map to v20 packages (`reference::VANILLA`).
+- Shots: `shot.hitscan` (range to 2000, optional tracer), `moving_spread`,
+  `rested`, `kick`; image `left_image`; projectile `max_bounces`,
+  `children` and `aura` (`tactical_seams.rs`).
+- Rules: `set_speed_scale(p, 0..4)` until respawn; `on_damage` info carries
+  `x, y, z, dx, dy, dz` for facing shields; `drop_item(..., data)` reaches
+  `on_pickup`.
+- Magazines (`magazines.rs`, `script_api.rs`): image `magazine` with size,
+  ammo type, per-shot rounds, reload ticks, one-by-one loading, reserve and
+  its cap, sounds and a display name. Rounds are kept per item and the
+  reserve per ammo type, shared by every gun of that ammo. The light key
+  reloads. A thrown gun keeps its rounds. A new life refills. The holder
+  gets a private bottom print that changes only when the numbers do. Rules
+  use `give_ammo`, `set_reserve` (`()` endless), `set_rounds`, `reload` and
+  `player(p).magazine`. Adventure and Sniper use the same seam; the shape
+  is in `/mnt/project-files/ports/magazine-seam.md`. A bottom print with
+  empty text now clears the line.
+- Explosions: `explode(..., explosion)` names a weapons-pack explosion, and
+  sends the same effect and sound cues a projectile's blast does. Imported
+  originals show their own particles, light, shake and sound, not the
+  rocket's. No new cue.
+
+Protocol: `CueKind::Tracer` and `PlayerState.speed_scale` change the wire
+format; the Gate numbers the bump.
+Commands: `cargo test -p bri-weapons -p bri-package-runtime -p bri-sim
+-p bri-ui -p bri-net`, `cargo clippy --no-deps ... -D warnings` (the newer
+toolchain here also flags `unnecessary_sort_by` and `question_mark` in
+client and addon-import code this branch does not touch).
 ## 2026-10-01 Bundled original Add-Ons
 
 Max chose to ship the original classic Add-Ons in our releases, credited to
@@ -9301,6 +9343,63 @@ sandbags, rounds, `/teams`, `/newround`, HUD panel).
   textured-icon tests in `bri-client` `items` and `package-runtime` check.
 - Next: the Trench Digging port (ports/ + host rules companion) once the
   Gate's import report of Max's copy arrives.
+
+## 2026-10-01 Adventurer's Weapons port on the magazine seam (branch `claude/adventure-pack-n3spj2`)
+
+Max's "originals only" and "bundle in download" decisions: the release zip
+carries Bushido's own pack, imported from Max's copy at release time, and
+the repository holds only our port. This branch now sits on Tier's
+magazine seam (`claude/tier-tactical-3onhik` 2717c502) and the Fill Can
+lane's host-rules companion (95c4d124, cherry-picked). The hit region
+seam now reads Tier's `combat::Hit`: `damage_player` measures the region
+from the hit point, and `damage_player_at` is gone.
+
+Port `weapon_modernwarbattles` (partial), against the Gate's notes on
+`Weapon_ModernWarbattles.zip` (sha256 `4d938fe3…92ed`):
+- Ports gain two general readers of the imported datablocks
+  (`crates/addon-import/src/ports/datablocks.rs`, `porting.md`):
+  `magazines` turns an ammo system's item fields (`maxmag`, `ammotype`)
+  into each gun image's `magazine`, with reload ticks from the image's own
+  reload states; rules `tables` hand the rules a map of datablock fields
+  (each projectile's `headshotMultiplier` by damage type, each ammo box).
+- The rules: a projectile's damage times its `headshotMultiplier` on a
+  head hit or a crouched target; ammo boxes top up carried guns' reserves
+  (ALL once, a typed box twice, capped), and are used up only when they
+  gave something.
+- Not yet: the hitscan guns (Support_RaycastingWeapons, crit ×3 with
+  `gunHeadshot` and its shove), the melee vehicle kill, the grenade's
+  shrapnel, the HUD's `<mag>/<reserve> AMMO` wording (the engine's ammo
+  display shows the same numbers). These wait on the real import report
+  and on Glass 1019, the full pack, which is the main target.
+
+Tests: `crates/addon-import/tests/adventure_port.rs` on a CC0 stand-in
+(`tests/fixtures/ports/Weapon_ModernWarbattles`): the magazines, one reload
+pass through the image's states, boxes and headshots in a hosted game.
+`cargo test -p bri-addon-import`, the touched bri-sim and bri-weapons
+suites, clippy on the touched crates.
+## 2026-10-01 Adventure ports: no gaps against the originals (branch `claude/adventure-pack-n3spj2`)
+
+Max: v0.1.11 waits until both ModernWarbattles and the Glass 1019 pack are
+fully ported. Both ports now read every gun from the copy's own scripts
+and fields (`docs/audits/adventure-pack.md` lists each piece). New
+generic seams, each with tests:
+- Weapons: image `state_shots` (a fire state's own shot), shot `scale`,
+  projectile `fixed_damage`, image `last_shot` and magazine
+  `last_rounds`, image `volleys`, projectile `children` as a list, state
+  `gesture` (thread 3); picking up a second of a gun keeps the holder's
+  magazine; `WeaponsWorld::set_drop_rounds`.
+- Hooks: `on_vehicle_damage` (with `World::max_damage`, the turret pool as
+  `TURRET_MAX_DAMAGE`); `on_damage` may answer `#{ amount, type }`;
+  `on_pickup` gets `info.rounds` and may answer `#{ rounds }`;
+  `tumble(..., seconds)`; `player(p).reserves`; `info.projectile`.
+- Port readers: `shots` (spread blocks, picks, last shots, state shots,
+  state sounds, arm moves, kicks), `hitscans`, rules `from` and `values`.
+Open: the crit effects belong to `Emote_Critical`, a separate Add-On the
+pack runs; it needs Max's copy before it can be imported and bundled.
+Tests: `cargo test -p bri-addon-import`, `-p bri-weapons --test
+addon_seams`, clippy on the touched crates; the bri-sim, bri-vehicles and
+bri-weapons suites that need `content/` were not runnable in the cloud.
+
 ## 2026-10-01 Butterfly Knife and HE Grenade ports (branch `claude/butterfly-knife-q2j2lu`)
 
 Max asked for the Butterfly Knife and HE Grenade from his Steam Blockland,
@@ -9733,6 +9832,176 @@ test boxes now use these hull sizes. Sizes: 1x4x5 (players), 1x14x10
 1x14x10. Still to confirm on the PC: where the turret's mount node puts
 it.
 
+## 2026-10-01 Classic Add-Ons from one drop folder (branch `claude/tier-tactical-3onhik`)
+
+Max did not want the game looking for players' Blockland folders, so the
+classic loader now works like the `.bls` saves: the only place it reads is
+`content/Add-Ons/`. Steam, registry, Flatpak/Snap, remembered-v20 and
+player-added folder discovery are gone (replacing c0b6faf2 and the discovery
+half of 29bbc4ab). Opening Add-Ons plans against `content/classic-imports.json`
+(`bri_package::classic::plan`): new or changed zips and folders convert (a
+changed one replaces its old conversion and stays on if it was on), removed ones
+take their conversion and companion rules with them, failures keep their reason
+until the file changes or Retry is pressed, and conversions made before records
+existed are adopted. Only packages the game converted under `addons/` are ever
+deleted (`Library::uninstall`). The importer gets the content root as
+`--reference`, so `ForceRequiredAddOn` finds other zips in the same folder. The
+screen has an Add-Ons Folder button and a status line saying what the folder is
+for. Dev tooling (`bri-import-addon --reference`, the bundle's `find`) still
+takes explicit paths.
+
+Evidence: `cargo test -p bri-package --lib classic` (5 tests: plan, failures and
+adoption, folder stamps, unreadable state, uninstall), `cargo test -p bri-client
+--lib add_ons` (the worker with a stand-in importer converts, retries,
+re-converts keeping it on, and removes), `cargo test -p bri-ui addons` (Retry,
+the folder button and hint); clippy `-D warnings` on package, ui and client.
+
+## 2026-10-01 Tier+Tactical ports, group 1: Tier 1 (branch `claude/tier-tactical-3onhik`)
+
+Max's "originals only": players import Kai's packs, and the repository holds
+our ports. Port `weapon_package_tier1` (partial), pinned to the copy the Gate
+uploaded (sha256 `a500fd2c…bc22`), is built on a shared fragment
+(`ports/_shared/tier-tactical.json` and `_shared/tier-tactical/rules/`) that
+the other 25 packs will include, read with the ammo system's default
+settings (T+T2 ammo, recoil on, bullet slowdown on, players drop ammo).
+
+Engine seams found missing and added, each general:
+- A projectile's `slow` slows the player it hits (was the shooter's shot).
+- `Shot::moving_projectile`: the sport rifle's weak round on the move.
+- `on_damage` may answer `#{ amount, type }`: the hit is renamed (a
+  headshot's own kill message); the type is validated.
+- `player.reserves` in rules; an `Item::hidden` (no `uiName`) that only
+  scripts drop, left out of spawn lists, loadouts and `/give`.
+- A left image without its own magazine pays from the right hand's; a
+  state's `arm` animation wins over the image-name heuristic.
+- Ports: script rules read projectile methods too (`on`), fill tables for
+  the rules (`into: "table"`), and stop on `required_by`; `include` and
+  `_shared/` for families; patches from several rules compose (a `null`
+  now removes a field, as the pump's one-at-a-time load needs); rules
+  tables can read top-level calls (`"call": "TT_registerAmmoType"`).
+- Ports read script bodies without comments (`tscript::without_comments`,
+  now also weapons-import's): Kai's pump keeps a commented-out flash
+  volley that stopped the port on his real copy.
+
+Rules: every pack's rules hand a new life the starting amount of the
+types its copy registers (Armor::onAdd), so the bag and the boxes see only
+the types of the packs a server runs; ammo items (each `TT_ammoPickup` line up to the type's most, used up
+only when it added any), the dead player's ammo bag thrown up and aside,
+sport-rifle headshots (TT_processHeadshotDamage's box test, head the top
+0.65 standing and all of a crouched body), the shooter's hit sound.
+Not yet: the ammo items' floating count (`setShapeName`), the bag's 12 s
+life (drops last 10 s), recoil shaking nearby players' views.
+
+Tests: `crates/addon-import/tests/tier_port.rs` on a CC0 stand-in
+(`tests/fixtures/ports/Weapon_Package_Tier1`): magazines and their reload
+through the image's own states, hitscan reach still and moving, the pump's
+pellets and blast loaded a shell at a time, the rifle's weak round, the
+SMG's slow, the pair's two hands from one magazine; in a hosted game, ammo
+items, a full type refusing a box, the 2.5× headshot and its kill message,
+and the bag picked up. Imported Kai's real copy (the Gate's upload) with
+the port: it applies, with the magazines, raycasts, pump volley, sport rifle
+moving round, akimbo left hand, SMG slow, headshot table, ammo items and
+nine registered types as above. `weapons` raycast tests cover the victim slow.
+
+Group 2, Tier 1A (`weapon_package_tier1a`, partial, pinned to the Gate's
+`c1cc5b4c…704c`), applies on Kai's real copy with Tier 1 as its reference.
+New seams: `Shot::recoil_vertical` and `Shot::recoil_velocity` for
+`TT_knockback` (one recoil path for projectiles and volleys); a script
+rule's `{group|neg}`; `{group|kick}` reads a recoil projectile from a
+dependency (lowered as the import lowers its own); every port reader
+follows datablock parents into the dependencies (the Skins packs inherit
+all their magazine fields from Tier 1); `Shot::projectiles` defaults to 1,
+so a script rule no longer resets a hitscan's ray count (the pepperbox
+lost its four rays). The nailgun, loaded by the original only with its
+hidden `???` setting, is imported hidden. Test:
+`tier_port.rs tier1a_shotgun_knocks_back_and_the_nailgun_stays_hidden`
+(the stand-in imported with the stand-in Tier 1 as its reference), and
+`tactical_seams.rs a_vertical_recoil_pushes_only_up_or_down`.
+
+Group 3, Tier 2 (`weapon_package_tier2`, partial, pinned to the Gate's
+`481f2d43…58fd`), on Adventure (80dacb74) and main, applies on Kai's real
+copy with Tier 1 as its reference (Tier 1 and 1A still apply).
+- One engine path per duplicate after the Adventure merge: one magazine
+  reader (`every`, `light_states`), one state-shot seam (`state_shots`
+  with `Shot::free` for a round that takes no ammo; the Tier-only
+  `State.fire` is gone), one hitscan reader and engine path (the separate
+  `raycasts` reader and `RayHit` are gone). A hitscan now names its hit
+  `explosion` (any pack's projectile, by id or name), a `flown` projectile
+  (Tier's tracer) and `player_sound`/`other_sound`; its damage is always
+  the ray projectile's. Adventure's guns read the same way: an empty
+  `hit_projectile` field shows nothing, as the original's did.
+- New seams: `Rested.still` and `Rested.projectile` (the assault rifle's
+  truer round after a pause); `push_archetype`/`pop_archetype` (Kai's
+  `pushDatablock`: the LMG's slowed laid-down body); an image's
+  `commands.unmount`; script rules on several methods (`onFire|onFire2`)
+  and `into: shot`.
+- Imported `PlayerData` become archetypes. They are host content, so they
+  go in the import's server companion (`<ns>-rules:archetype/<name>`),
+  which an import with player types gets even without port rules; a
+  shared import cannot carry them (`package.side.server_content`).
+- A port's `behaviour.json` now merges over the shared one, so the shared
+  Tier rules declare their state once and each pack adds its hooks and
+  commands.
+- Military Sniper crits: its `TT_isRaycastCritical` returns
+  `TT_isRaycastHeadshot`; a head hit does three times the damage under its
+  crit kill message, with Emote_Critical's burst and sounds, only while
+  Emote_Critical is on (`isObject(CritProjectile)`).
+- Test: `tier_port.rs tier2_guns_rest_fire_twice_slow_and_switch_modes`
+  (the stand-in on the stand-in Tier 1, in a hosted game with and without
+  the Emote_Critical stand-in), plus the weapons seam tests.
+## 2026-10-01 Adventure ports: crit effects, grenade cooking, light key (branch `claude/adventure-pack-n3spj2`)
+
+Emote_Critical (the Add-On ModernWarbattles' raycast script checks for)
+holds only datablocks, so the importer converts it whole; the bundle pins
+its sha256 (503b3d0d...1ec6). The importer now resolves an emitter's
+`emitterNode` by name (falling back to a time multiple of 1 with a
+diagnostic) instead of dropping the emitter. New seams: manifest
+`optional_dependencies` (an Add-On's rules may use another's content when
+it is on; `Catalog::uses`, script `enabled(id)`), op and script
+`spawn_explosion(player, projectile, scale)` (capability damage, same
+point as the events' SpawnExplosion), port rules `uses`, magazine
+`light_states` (the light key reloads in those states, hl2
+`serverCmdLight`), magazines-port `every`, image `cook` (pin pulled lights
+a fuse that prints a countdown, carries into the thrown shot and bursts in
+the hand when it runs out; saved with the world), children `fuse_ticks`
+(random per-bomblet fuse). ModernWarbattles crits and shoves only while
+Emote_Critical is on, with its explosion and four sounds as the original
+played them; 1019 never crits. Remaining gap: the hitbox head-hit flinch
+(needs client body thread 0 and a timer); the head hit's goremod
+projectile and second sound were defined nowhere and never ran.
+
+Tests: `adventure_port.rs` `crits_play_with_the_critical_hit_emote`,
+`a_grenade_cooks_in_the_hand`, light-key checks in the ammo test, and the
+hitscan test now expects no crit or shove without Emote_Critical.
+
+Follow-up: ModernWarbattles' own server.cs `exec`s Emote_Critical's, so
+its port now lists it in the new port-rules `loads` (an optional
+dependency and a companion of the rules package): turning
+ModernWarbattles on turns an installed Emote_Critical on with it, and
+without one ModernWarbattles still turns on and runs with no crits, as
+the `exec` of a missing file did nothing; 1019 has no crits. The tests
+check the library's enable plan both ways.
+
+## 2026-10-01 Body threads and scheduled animations: the Adventure head-hit flinch (branch `claude/adventure-pack-n3spj2`)
+
+`play_thread(p, thread, sequence[, after])` now covers all four of
+`playThread`'s script threads (0 and 1 were refused before) and takes an
+optional delay in seconds, Torque's `%player.schedule(ms, "playThread",
+...)`: whole milliseconds, fired on the first 120 Hz tick at or past them,
+at most 64 waiting per player, dropped with the body on respawn. Chat's
+talk stop (`schedule(strlen * 50, playThread, 3, root)`) now runs on the
+same per-player timers instead of its own queue. The client keeps threads
+0, 1 and 3 per player (`play_free_thread`) and layers 0 and 1 under the
+arm and gesture threads. Both Adventure ports pin the original
+`getHitbox` flinch (threads 0 and 2 jump, plant 50 ms later) and play it
+on a head or crouched hit by a headshot projectile, so both ports are now
+`verified` with no behaviour missing.
+
+Tests: `adventure_port.rs` headshot and Glass sniper tests check the cue
+sequence and its 6-tick gap (a body hit flinches nothing);
+`app::tests::body_threads_hold_until_replaced_or_root`;
+`hardening_sandbox` accepts thread 0 with a delay and refuses thread 4,
+a 61 s delay and a NaN one.
 ## 2026-10-01 Import Add-On: models draw with the base game's stock textures
 
 Loz's Hookshot imported as a placeholder cube: its gun's materials `blank`

@@ -76,6 +76,13 @@ fn rocket_pack() -> bri_weapons::Pack {
         hide_nodes: Vec::new(),
         both_arms: false,
         paint_tint: false,
+        left_image: None,
+        magazine: None,
+        volleys: vec![],
+        last_shot: None,
+        state_shots: Default::default(),
+        cook: None,
+        guard: None,
         rope: None,
         light: None,
         paint_picker: false,
@@ -91,6 +98,9 @@ fn rocket_pack() -> bri_weapons::Pack {
         icon: String::new(),
         can_drop: true,
         sport: false,
+        hidden: false,
+        label: String::new(),
+        rotate: false,
         ..Default::default()
     };
     let projectile = bri_weapons::ProjectileDef {
@@ -141,6 +151,11 @@ fn rocket_pack() -> bri_weapons::Pack {
         light_color: [0.; 3],
         sport_image: None,
         rest_speed: 0.,
+        max_bounces: 0,
+        children: Vec::new(),
+        aura: None,
+        slow: None,
+        fixed_damage: false,
     };
     let pack = bri_weapons::Pack {
         effects: Default::default(),
@@ -149,12 +164,14 @@ fn rocket_pack() -> bri_weapons::Pack {
         items: [(ROCKET.to_string(), item)].into(),
         images: [(ROCKET_IMAGE.to_string(), image)].into(),
         projectiles: [(ROCKET_PROJECTILE.to_string(), projectile)].into(),
+        external_projectiles: Default::default(),
         damage_types: Default::default(),
         explosions: Default::default(),
         sounds: Default::default(),
         definitions: vec![],
         resources: vec![],
         diagnostics: vec![],
+        bindings: vec![],
     };
     pack.validate().unwrap();
     pack

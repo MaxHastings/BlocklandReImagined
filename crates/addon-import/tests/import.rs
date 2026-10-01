@@ -113,11 +113,16 @@ fn synthetic_addon_imports_with_report() {
     assert_eq!(status("blasterChargeSound").1, "recognised_only");
     assert_eq!(status("blasterExplosion").1, "converted_with_gaps");
 
-    // The dependency is named even without a reference install.
+    // The dependency is named even without a reference install: an
+    // Add-On v20 shipped is the game's own base package.
     let dep = &report.dependencies[0];
     assert_eq!(
-        (dep.addon.as_str(), dep.status.as_str()),
-        ("Weapon_Gun", "missing")
+        (
+            dep.addon.as_str(),
+            dep.status.as_str(),
+            dep.package.as_deref()
+        ),
+        ("Weapon_Gun", "base", Some("v20-weapons"))
     );
     assert_eq!(dep.source.as_ref().unwrap().line, 4);
 
@@ -235,7 +240,6 @@ fn refuses_to_overwrite_or_write_inside_the_source() {
     std::fs::remove_dir_all(existing.parent().unwrap()).unwrap();
 }
 
-const ARCHIVE: &str = "C:/Users/Maxwell/Documents/_Blockland_Maxwell_1588_Archive/Addons";
 const REFERENCE: &str = "E:/Downloads/B4v21Launcher/versions/Blockland v20";
 
 /// Maxwell's Steam copy of Blockland, whose Add-Ons folder holds the
@@ -262,8 +266,6 @@ fn real_steam_knife_and_grenade_ports() {
             input: Path::new(&addons).join(format!("{name}.zip")),
             out: out.clone(),
             reference: Some(reference.clone().into()),
-            core: vec![],
-            version: "1.0.0".into(),
             ..Default::default()
         })
         .unwrap();
@@ -293,10 +295,18 @@ fn real_steam_knife_and_grenade_ports() {
 
 #[test]
 fn real_community_samples() {
-    let archive = std::env::var("BRI_ADDON_ARCHIVE").unwrap_or(ARCHIVE.into());
-    let reference = std::env::var("BRI_V20_REFERENCE").unwrap_or(REFERENCE.into());
+    // Only folders named for this run: the test reads nothing of the
+    // machine's on its own. `required_framework_stays_missing` covers the
+    // bot case without them.
+    let (Ok(archive), Ok(reference)) = (
+        std::env::var("BRI_ADDON_ARCHIVE"),
+        std::env::var("BRI_V20_REFERENCE"),
+    ) else {
+        eprintln!("skipped: set BRI_ADDON_ARCHIVE and BRI_V20_REFERENCE to run it");
+        return;
+    };
     if !Path::new(&archive).is_dir() || !Path::new(&reference).is_dir() {
-        eprintln!("skipped: community archive or v20 reference install not on this machine");
+        eprintln!("skipped: {archive} or {reference} is not a folder");
         return;
     }
     let run = |name: &str| {
@@ -395,7 +405,8 @@ fn real_community_samples() {
     // limits; they become the plane's trails instead, and the weapons stay.
     let unsupported: Vec<_> = plane.unsupported.iter().map(|u| u.what.as_str()).collect();
     assert!(
-        !unsupported.iter().any(|u| u.contains("ontrail")) && !unsupported.contains(&"weapon lowering"),
+        !unsupported.iter().any(|u| u.contains("ontrail"))
+            && !unsupported.contains(&"weapon lowering"),
         "{unsupported:?}"
     );
     let status = |name: &str| {
@@ -429,7 +440,14 @@ fn real_community_samples() {
     let trails: Vec<_> = d
         .trails
         .iter()
-        .map(|t| (t.node.as_str(), t.emitter.as_str(), t.min_speed, t.max_speed))
+        .map(|t| {
+            (
+                t.node.as_str(),
+                t.emitter.as_str(),
+                t.min_speed,
+                t.max_speed,
+            )
+        })
         .collect();
     let emitter = "vehicle_stunt_plane:emitter/contrailemitter";
     assert_eq!(
@@ -441,7 +459,10 @@ fn real_community_samples() {
     );
     // At the wing tips, 4.5 either side.
     let x: Vec<f32> = d.trails.iter().map(|t| t.transform.position[0]).collect();
-    assert!((x[0] - 4.5).abs() < 0.01 && (x[1] + 4.5).abs() < 0.01, "{x:?}");
+    assert!(
+        (x[0] - 4.5).abs() < 0.01 && (x[1] + 4.5).abs() < 0.01,
+        "{x:?}"
+    );
     let e = &d.effects.emitters[0];
     assert_eq!(
         (e.id.as_str(), e.period, e.speed, e.particles.as_slice()),
@@ -499,6 +520,52 @@ fn real_community_samples() {
             .any(|d| d.recognised_as == "bot" && d.status == "recognised_only")
     );
     std::fs::remove_dir_all(out.parent().unwrap()).unwrap();
+}
+
+/// A bot that runs on another Add-On's AI framework (`Bot_Zombie` on
+/// `Bot_Hole`), with that one absent from the reference install: it names
+/// none of its datablocks, but calls its functions, so it is still missing,
+/// not unused. Synthetic files in a temp folder only.
+#[test]
+fn required_framework_stays_missing() {
+    let root = fresh("framework-source");
+    let reference = root.with_file_name("reference");
+    std::fs::create_dir_all(reference.join("Add-Ons")).unwrap();
+    std::fs::create_dir_all(reference.join("base")).unwrap();
+    let source = root.with_file_name("Bot_Synthetic_Zombie");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(
+        source.join("description.txt"),
+        "Title: Synthetic Zombie\nAuthor: tests",
+    )
+    .unwrap();
+    std::fs::write(
+        source.join("server.cs"),
+        r#"
+ForceRequiredAddOn("Bot_Synthetic_Hole");
+function ZombieArmor::onBotLoop(%this, %obj)
+{
+   holeSyntheticWander(%obj);
+}
+"#,
+    )
+    .unwrap();
+    let out = fresh("framework");
+    let report = import(&Options {
+        input: source,
+        out: out.clone(),
+        reference: Some(reference),
+        ..Default::default()
+    })
+    .unwrap();
+    let hole = report
+        .dependencies
+        .iter()
+        .find(|d| d.addon == "Bot_Synthetic_Hole")
+        .unwrap();
+    assert_eq!(hole.status, "missing");
+    std::fs::remove_dir_all(out.parent().unwrap()).unwrap();
+    std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
 }
 
 /// Spawns the imported car in the vehicles runtime on a flat floor, seats a
@@ -649,11 +716,20 @@ fn imported_weapon_packs_merge_into_one_runtime_pack() {
             .items
             .contains_key("weapon_second_blaster:weapon/blasteritem")
     );
-    // Explosions and damage types are still keyed by bare Torque name.
+    // Explosions and damage types are keyed by bare Torque name. The same
+    // explosion twice is one; the second copy's damage type, which names
+    // its own icon, is kept beside the first's under its package's name.
     assert!(
         notes.iter().any(|n| n.add_on == "second"
-            && n.kind == bri_package::health::Kind::Explosion
-            && n.reference == "blasterexplosion"),
+            && n.kind == bri_package::health::Kind::DamageType
+            && n.reference == "syntheticblaster"
+            && n.effect.contains("weapon_second_blaster's is kept as weapon_second_blaster:SyntheticBlaster")),
+        "{notes:?}"
+    );
+    assert!(
+        !notes
+            .iter()
+            .any(|n| n.kind == bri_package::health::Kind::Explosion),
         "{notes:?}"
     );
     assert!(
@@ -779,11 +855,15 @@ datablock ParticleEmitterData(kitFlashEmitter)
 };
 datablock ParticleData(kitGlowParticle) { textureName = "./spark"; lifetimeMS = 300; };
 datablock ParticleEmitterData(kitGlowEmitter) { ejectionPeriodMS = 10; particles = "kitGlowParticle"; };
-datablock DebrisData(kitShellDebris) { shapeFile = "./shell.dts"; lifetime = 2; numBounces = 3; };
+datablock ParticleData(kitTrailParticle) { textureName = "base/data/particles/cloud"; lifetimeMS = 400; };
+datablock ParticleEmitterData(kitTrailEmitter) { ejectionPeriodMS = 20; particles = "kitTrailParticle"; };
+datablock ParticleData(kitStrayParticle) { textureName = "base/data/particles/cloud"; lifetimeMS = 400; };
+datablock ParticleEmitterData(kitStrayEmitter) { ejectionPeriodMS = 20; particles = "kitStrayParticle"; };
+datablock DebrisData(kitShellDebris) { shapeFile = "./shell.dts"; lifetime = 2; numBounces = 3; emitters = "kitTrailEmitter"; };
 datablock ExplosionData(kitBoomExplosion)
 {
    lifetimeMS = 300; soundProfile = kitFireSound;
-   emitter[0] = kitFlashEmitter; emitter[1] = kitGlowEmitter;
+   emitter[0] = kitFlashEmitter; emitter[1] = kitGlowEmitter; emitter[4] = kitStrayEmitter;
    particleEmitter = kitFlashEmitter; particleDensity = 12; particleRadius = 0.5;
    lightStartRadius = 3; lightEndRadius = 0; lightStartColor = "1 0.5 0";
    debris = kitShellDebris; debrisNum = 2;
@@ -818,16 +898,20 @@ datablock ShapeBaseImageData(kitScopeImage) { shapeFile = "./gun.dts"; stateName
         ..Default::default()
     })
     .unwrap();
-    let pack =
-        Pack::from_json(&std::fs::read(out.join("assets/weapons.json")).unwrap()).unwrap();
+    let pack = Pack::from_json(&std::fs::read(out.join("assets/weapons.json")).unwrap()).unwrap();
     let ns = "weapon_synthetic_kit";
     let id = |kind: &str, name: &str| format!("{ns}:{kind}/{name}");
 
     // Its sound plays: the state names it by id, its description's volume,
     // and not being 3D makes it the holder's alone.
     let fire = id("sound", "kitfiresound");
-    let sound = pack.sound(&fire).expect("the Add-On's sound is in its pack");
-    assert_eq!((sound.volume, sound.local, sound.looping), (0.5, true, false));
+    let sound = pack
+        .sound(&fire)
+        .expect("the Add-On's sound is in its pack");
+    assert_eq!(
+        (sound.volume, sound.local, sound.looping),
+        (0.5, true, false)
+    );
     assert!(out.join("assets").join(&sound.file).is_file());
     let gun = &pack.images[&id("image", "kitgunimage")];
     assert_eq!(gun.states[2].sound, fire);
@@ -836,12 +920,23 @@ datablock ShapeBaseImageData(kitScopeImage) { shapeFile = "./gun.dts"; stateName
     // Its emitter, corrected as the engine's onAdd would, drawn by the
     // state and trailing the round.
     let flash = id("emitter", "kitflashemitter");
-    let emitter = pack.effects.emitters.iter().find(|e| e.id == flash).unwrap();
+    let emitter = pack
+        .effects
+        .emitters
+        .iter()
+        .find(|e| e.id == flash)
+        .unwrap();
     assert!(emitter.period_variance < emitter.period);
     assert_eq!(emitter.theta_degrees, [0.0, 180.0]);
-    assert_eq!(pack.effects.particles[0].id, id("particle", "kitsparkparticle"));
+    assert_eq!(
+        pack.effects.particles[0].id,
+        id("particle", "kitsparkparticle")
+    );
     assert_eq!(gun.states[2].emitter, flash);
-    assert_eq!(pack.projectiles[&id("projectile", "kitroundprojectile")].trail, flash);
+    assert_eq!(
+        pack.projectiles[&id("projectile", "kitroundprojectile")].trail,
+        flash
+    );
     // Its explosion: emitter, burst and fading light, found by its name.
     let boom = &pack.effects.explosions[0];
     assert_eq!(boom.id, id("explosion", "kitboomexplosion"));
@@ -860,7 +955,8 @@ datablock ShapeBaseImageData(kitScopeImage) { shapeFile = "./gun.dts"; stateName
         .find(|p| p.id == id("particle", "kitglowparticle"))
         .unwrap();
     assert!(
-        glow_particle.texture.ends_with("/spark.png") && !glow_particle.texture.starts_with("base/"),
+        glow_particle.texture.ends_with("/spark.png")
+            && !glow_particle.texture.starts_with("base/"),
         "{}",
         glow_particle.texture
     );
@@ -877,11 +973,34 @@ datablock ShapeBaseImageData(kitScopeImage) { shapeFile = "./gun.dts"; stateName
     // And its debris.
     let debris = bri_weapons::debris::explosion_debris(&pack);
     assert!(debris.contains_key("kitboomexplosion"), "{debris:?}");
+    // Its pieces trail the Add-On's own emitter, converted for them.
+    let trail = id("emitter", "kittrailemitter");
+    assert_eq!(debris["kitboomexplosion"].emitters, vec![trail.clone()]);
+    assert!(pack.effects.emitters.iter().any(|e| e.id == trail));
+    let status = |name: &str| {
+        report
+            .datablocks
+            .iter()
+            .find(|d| d.name == name)
+            .map(|d| d.status.clone())
+            .unwrap_or_default()
+    };
+    assert_eq!(status("kitTrailEmitter"), "converted");
+    // An emitter only in a fifth explosion slot was refused as v20 loaded
+    // it, and so was its particle.
+    assert!(!boom.emitters.iter().any(|e| e.contains("kitstray")));
+    assert_eq!(
+        (status("kitStrayEmitter"), status("kitStrayParticle")),
+        ("consumed".to_owned(), "consumed".to_owned())
+    );
 
     // The kill icon it forgot to ship leaves its messages, not its kills.
     let round = &pack.damage_types["kitround"];
     assert_eq!(
-        (round.suicide_message.as_str(), round.murder_message.as_str()),
+        (
+            round.suicide_message.as_str(),
+            round.murder_message.as_str()
+        ),
         ("%1", "%2 %1")
     );
 
@@ -889,13 +1008,163 @@ datablock ShapeBaseImageData(kitScopeImage) { shapeFile = "./gun.dts"; stateName
     // nobody holds.
     assert!(!pack.items.contains_key(&id("weapon", "kithiddenitem")));
     assert!(pack.images.contains_key(&id("image", "kitscopeimage")));
-    assert!(report.ambiguous.iter().any(|f| f.what == "item kitHiddenItem"));
+    assert!(
+        report
+            .ambiguous
+            .iter()
+            .any(|f| f.what == "item kitHiddenItem")
+    );
     assert_eq!(pack.items[&id("weapon", "kitammoitem")].image, "");
     assert_eq!(pack.items[&id("weapon", "kitammoitem")].ui_name, "Kit Ammo");
     assert_eq!(pack.items[&id("weapon", "kitgunitem")].ui_name, "Kit Gun");
     // Its sound description is read into the sound, not left over.
     let description = report.datablocks.iter().find(|d| d.name == "kitClose2d").unwrap();
     assert_eq!(description.status, "consumed", "{description:?}");
+    std::fs::remove_dir_all(out.parent().unwrap()).unwrap();
+    std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
+}
+
+/// An emitter Add-On written here: an emitter with a `uiName` is one
+/// players put on bricks, so it is converted with its name though nothing
+/// else uses it; one without a name that nothing uses is left out, as v20
+/// never drew it.
+#[test]
+fn a_named_emitter_is_offered_for_bricks() {
+    let root = fresh("glow-source");
+    let source = root.with_file_name("Emote_Synthetic_Glow");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(
+        source.join("description.txt"),
+        "Title: Synthetic Glow\nAuthor: Blockland ReImagined tests\nWritten for the importer tests.",
+    )
+    .unwrap();
+    std::fs::write(
+        source.join("server.cs"),
+        r#"
+datablock ParticleData(glowParticle) { textureName = "base/data/particles/cloud"; lifetimeMS = 500; };
+datablock ParticleEmitterData(glowEmitter)
+{
+   ejectionPeriodMS = 35; ejectionOffset = 1.8; particles = "glowParticle";
+   uiName = "Emote - Synthetic Glow";
+};
+datablock ParticleEmitterData(spareEmitter) { ejectionPeriodMS = 35; particles = "glowParticle"; };
+"#,
+    )
+    .unwrap();
+    let out = fresh("glow");
+    let report = import(&Options {
+        input: source.clone(),
+        out: out.clone(),
+        ..Default::default()
+    })
+    .unwrap();
+    let pack = Pack::from_json(&std::fs::read(out.join("assets/weapons.json")).unwrap()).unwrap();
+    let names: Vec<_> = pack
+        .effects
+        .emitters
+        .iter()
+        .map(|e| (e.id.as_str(), e.name.as_str()))
+        .collect();
+    assert_eq!(
+        names,
+        [(
+            "emote_synthetic_glow:emitter/glowemitter",
+            "Emote - Synthetic Glow"
+        )]
+    );
+    let status = |name: &str| {
+        report
+            .datablocks
+            .iter()
+            .find(|d| d.name == name)
+            .map(|d| d.status.clone())
+            .unwrap()
+    };
+    assert_eq!(status("glowEmitter"), "converted");
+    assert_eq!(status("spareEmitter"), "consumed");
+    std::fs::remove_dir_all(out.parent().unwrap()).unwrap();
+    std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
+}
+
+/// Torque's load rules on a synthetic Add-On: a sound whose path its script
+/// built at load (`%path @ "x.wav"`, the other Add-On's folder only when
+/// `isFile` finds it) plays the Add-On's own file; a particle only an unused
+/// emitter names was never drawn; a subfolder's description is not game data.
+#[test]
+fn built_paths_idle_particles_and_folder_descriptions() {
+    let root = fresh("load-rules-source");
+    let source = root.with_file_name("Weapon_Synthetic_Club");
+    std::fs::create_dir_all(source.join("sounds")).unwrap();
+    std::fs::create_dir_all(source.join("extra")).unwrap();
+    std::fs::write(
+        source.join("description.txt"),
+        "Title: Synthetic Club\nAuthor: tests",
+    )
+    .unwrap();
+    std::fs::write(source.join("extra/Description.txt"), "Title: an older part").unwrap();
+    std::fs::write(source.join("sounds/swing.wav"), wav()).unwrap();
+    std::fs::write(
+        source.join("server.cs"),
+        r#"
+if(isFile("Add-Ons/Weapon_Other_Club/description.txt"))
+   %path = "Add-Ons/Weapon_Other_Club/";
+else
+   %path = "./sounds/";
+datablock AudioProfile(clubSwingSound) { filename = %path @ "swing.wav"; description = AudioClosest3d; preload = true; };
+datablock ParticleData(smokeParticle) { textureName = "base/data/particles/cloud"; lifetimeMS = 500; };
+datablock ParticleEmitterData(smokeEmitter) { ejectionPeriodMS = 35; particles = "smokeParticle"; };
+datablock ProjectileData(clubProjectile) { directDamage = 5; muzzleVelocity = 50; lifetime = 100; };
+datablock ItemData(clubItem) { shapeFile = "./club.dts"; uiName = "Club"; image = clubImage; };
+datablock ShapeBaseImageData(clubImage)
+{
+   shapeFile = "./club.dts"; item = clubItem; projectile = clubProjectile;
+   stateName[0] = "Activate"; stateTimeoutValue[0] = 0.1; stateTransitionOnTimeout[0] = "Ready";
+   stateName[1] = "Ready"; stateTransitionOnTriggerDown[1] = "Fire";
+   stateName[2] = "Fire"; stateFire[2] = true; stateSound[2] = clubSwingSound;
+   stateTimeoutValue[2] = 0.2; stateTransitionOnTimeout[2] = "Ready";
+};
+"#,
+    )
+    .unwrap();
+    let out = fresh("load-rules");
+    let report = import(&Options {
+        input: source.clone(),
+        out: out.clone(),
+        ..Default::default()
+    })
+    .unwrap();
+    let status = |name: &str| {
+        report
+            .datablocks
+            .iter()
+            .find(|d| d.name == name)
+            .map(|d| d.status.clone())
+            .unwrap()
+    };
+    assert_ne!(status("clubSwingSound"), "recognised_only");
+    let pack = Pack::from_json(&std::fs::read(out.join("assets/weapons.json")).unwrap()).unwrap();
+    assert!(
+        pack.sounds
+            .contains_key("weapon_synthetic_club:sound/clubswingsound"),
+        "{:?}",
+        pack.sounds.keys().collect::<Vec<_>>()
+    );
+    assert_eq!(status("smokeEmitter"), "consumed");
+    assert_eq!(status("smokeParticle"), "consumed");
+    let folder = report
+        .assets
+        .iter()
+        .find(|a| a.source.ends_with("extra/Description.txt"))
+        .unwrap();
+    assert_eq!(folder.status, "skipped");
+    assert!(
+        !report
+            .unsupported
+            .iter()
+            .any(|u| u.what.to_ascii_lowercase().contains("description")),
+        "{:?}",
+        report.unsupported
+    );
     std::fs::remove_dir_all(out.parent().unwrap()).unwrap();
     std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
 }
@@ -1005,13 +1274,96 @@ fn a_required_community_add_on_becomes_a_dependency_on_its_import() {
         deps,
         [
             ("Weapon_Core_Kit", "reference", Some("weapon_core_kit")),
-            ("Weapon_Gun", "missing", None),
+            // Not installed and nothing of it named: v20 ran the same.
+            ("Weapon_Gun", "unused", None),
         ]
     );
     let manifest: serde_json::Value =
         serde_json::from_slice(&std::fs::read(root.join("package/package.json")).unwrap()).unwrap();
-    assert_eq!(manifest["dependencies"], serde_json::json!({ "weapon_core_kit": "*" }));
+    assert_eq!(
+        manifest["dependencies"],
+        serde_json::json!({ "weapon_core_kit": "*" })
+    );
     std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// Two Add-Ons in the reference declare the same gun image. In v20 the one
+/// that loaded last before this Add-On holds: Add-Ons load in name order,
+/// each after the ones it requires, and a later declaration sets its
+/// fields on the same datablock. So a skin built on its required pack's gun
+/// gets that pack's states (`onReload` here), merged over an earlier
+/// pack's (`Ready`'s sound is kept), and never a pack that loads after it.
+#[test]
+fn a_name_two_add_ons_declare_is_the_one_loaded_last_before_this_one() {
+    let root = fresh("shared-name");
+    let reference = root.with_file_name("reference");
+    let gun = |dir: &str, states: &str| {
+        let d = reference.join("Add-Ons").join(dir);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(
+            d.join("server.cs"),
+            format!(
+                "datablock ItemData(sharedGunItem) {{ uiName = \"{dir}\"; image = sharedGunImage; }};\n\
+                 datablock ShapeBaseImageData(sharedGunImage)\n{{\n   item = sharedGunItem;\n{states}}};\n"
+            ),
+        )
+        .unwrap();
+    };
+    // Loads first by name, with its own Ready sound and a third state.
+    gun(
+        "Weapon_Aaa_Other",
+        "   stateName[0] = \"Ready\"; stateSound[0] = otherSound;\n   stateName[2] = \"Extra\";\n",
+    );
+    // The pack the skin requires: its reload state names a script.
+    gun(
+        "Weapon_Mmm_Host",
+        "   stateName[0] = \"Ready\"; stateTransitionOnTriggerDown[0] = \"Reload\";\n   stateName[1] = \"Reload\"; stateScript[1] = \"onReload\";\n",
+    );
+    // Loads after the skin and is not required: never seen by it.
+    gun(
+        "Weapon_Zzz_Later",
+        "   stateName[1] = \"Reload\"; stateScript[1] = \"onLater\";\n",
+    );
+    std::fs::create_dir_all(reference.join("base")).unwrap();
+    let source = root.with_file_name("Weapon_Nnn_Skin");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(source.join("description.txt"), "Title: Skin\nAuthor: tests").unwrap();
+    std::fs::write(
+        source.join("server.cs"),
+        r#"
+ForceRequiredAddOn("Weapon_Mmm_Host");
+datablock ItemData(skinGunItem : sharedGunItem) { uiName = "Skin"; image = skinGunImage; };
+datablock ShapeBaseImageData(skinGunImage : sharedGunImage) { item = skinGunItem; };
+function skinGunImage::onReload(%this, %obj, %slot)
+{
+   %obj.playThread(2, shiftUp);
+}
+"#,
+    )
+    .unwrap();
+    let out = fresh("shared-name-out");
+    let report = import(&Options {
+        input: source.clone(),
+        out: out.clone(),
+        reference: Some(reference.clone()),
+        ..Default::default()
+    })
+    .unwrap();
+    let reload = report
+        .needs_behaviour
+        .iter()
+        .find(|b| b.function == "skinGunImage::onReload")
+        .unwrap();
+    assert_eq!(reload.hook.kind, "image_state_script", "{:?}", reload.hook);
+    let pack = Pack::from_json(&std::fs::read(out.join("assets/weapons.json")).unwrap()).unwrap();
+    let image = &pack.images["weapon_nnn_skin:image/skingunimage"];
+    let names: Vec<&str> = image.states.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, ["Ready", "Reload", "Extra"]);
+    assert_eq!(image.states[1].script, "onReload");
+    std::fs::remove_dir_all(out.parent().unwrap()).unwrap();
+    std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
+    let _ = std::fs::remove_dir_all(&reference);
+    let _ = std::fs::remove_dir_all(&source);
 }
 
 /// A sound an Add-On downloads from a website when it runs is not in the

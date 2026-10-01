@@ -101,12 +101,14 @@ fn sounds_merge_with_their_package_and_bad_states_are_refused() {
         items: Default::default(),
         images: Default::default(),
         projectiles: Default::default(),
+        external_projectiles: Default::default(),
         damage_types: Default::default(),
         explosions: Default::default(),
         sounds: Default::default(),
         definitions: vec![],
         resources: vec![],
         diagnostics: vec![],
+        bindings: vec![],
     };
     let (merged, notes) = base.merge(vec![("sample-commando-rifle/assets".into(), rifle_pack())]);
     assert!(notes.is_empty(), "{notes:?}");

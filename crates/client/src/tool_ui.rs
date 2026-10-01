@@ -170,6 +170,34 @@ impl ToolUi {
         self.invalidate();
         Ok(())
     }
+    /// Offer the emitters and lights Add-Ons name in the wrench, after the
+    /// base game's; one whose name the base game already uses is left out,
+    /// as its effect is bound by id alone.
+    pub fn install_effects(
+        &mut self,
+        emitters: Vec<(String, String)>,
+        lights: Vec<(String, String)>,
+    ) -> Result<()> {
+        let mut catalog = self.catalog.clone();
+        catalog.install_effects(
+            emitters.iter().map(|(id, _)| id.clone()),
+            lights.iter().map(|(id, _)| id.clone()),
+        )?;
+        for (class, added) in [("ParticleEmitterData", emitters), ("FxLightData", lights)] {
+            let choices = self.datablocks.entry(class.into()).or_default();
+            for (id, name) in added {
+                if !choices
+                    .iter()
+                    .any(|c| c.id == id || c.name.eq_ignore_ascii_case(&name))
+                {
+                    choices.push(Choice { id, name });
+                }
+            }
+        }
+        self.catalog = catalog;
+        self.invalidate();
+        Ok(())
+    }
     /// Install the music loops and vehicles for sound and vehicle spawn
     /// bricks (wrench "Music" and "Vehicle" lists).
     pub fn install_special(
@@ -946,6 +974,37 @@ mod tests {
             package_events: Default::default(),
             music: Vec::new(),
         }
+    }
+    #[test]
+    fn add_on_emitters_and_lights_join_the_wrench_lists() {
+        let mut ui = fixture();
+        ui.datablocks.insert(
+            "ParticleEmitterData".into(),
+            vec![Choice {
+                id: "emitter/smoke".into(),
+                name: "Smoke".into(),
+            }],
+        );
+        ui.install_effects(
+            vec![
+                ("crit:emitter/critemitter".into(), "Emote - Critical Hit".into()),
+                ("other:emitter/smoke".into(), "smoke".into()),
+            ],
+            vec![("crit:light/glow".into(), "Glow".into())],
+        )
+        .unwrap();
+        let names = |class: &str| -> Vec<String> {
+            ui.datablocks[class].iter().map(|c| c.name.clone()).collect()
+        };
+        assert_eq!(names("ParticleEmitterData"), ["Smoke", "Emote - Critical Hit"]);
+        assert_eq!(names("FxLightData"), ["Glow"]);
+        assert!(ui.catalog.emitters.contains("crit:emitter/critemitter"));
+        assert!(ui.catalog.emitters.contains("emitter/smoke"), "the base game's stay");
+        assert!(ui.catalog.lights.contains("crit:light/glow"));
+        assert!(
+            ui.install_effects(vec![("bad\nid".into(), "Bad".into())], vec![])
+                .is_err()
+        );
     }
     #[test]
     fn the_wrench_lists_the_servers_add_on_inputs_targets_and_outputs() {

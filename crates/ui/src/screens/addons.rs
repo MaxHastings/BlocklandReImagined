@@ -20,6 +20,10 @@ const STATUS: &str = "AO_Status";
 const DEFAULTS: &str = "AO_Defaults";
 const DONE: &str = "AO_Done";
 const FORGET_TRUST: &str = "AO_ForgetTrust";
+const OPEN_FOLDER: &str = "AO_OpenFolder";
+/// The status line while nothing else needs saying.
+const DROP_HINT: &str =
+    "Drop classic Blockland Add-On zips in the Add-Ons folder; they convert by themselves.";
 /// List rows that are group headings, not packages.
 const HEADING: i64 = -1;
 
@@ -101,7 +105,7 @@ impl AddOns {
                 "BlockButtonProfile",
                 Rect::new(256, 350, 98, 28),
                 "base/client/ui/button1",
-                "Import",
+                "Retry",
                 IMPORT,
             ),
             IMPORT,
@@ -128,6 +132,16 @@ impl AddOns {
                 FORGET_TRUST,
             ),
             FORGET_TRUST,
+        ));
+        win.children.push(named(
+            button(
+                "BlockButtonProfile",
+                Rect::new(246, 404, 130, 28),
+                "base/client/ui/button1",
+                "Add-Ons Folder",
+                OPEN_FOLDER,
+            ),
+            OPEN_FOLDER,
         ));
         win.children.push(named(
             button(
@@ -190,7 +204,7 @@ impl AddOns {
                 let mark = if r.importing {
                     "..."
                 } else if r.importable {
-                    "New"
+                    "!"
                 } else if r.broken && r.enabled {
                     "!!"
                 } else if r.locked {
@@ -226,7 +240,11 @@ impl AddOns {
             self.view.state(n).items = items;
             self.view.select(n, selected_item);
         }
-        let status = core.add_ons.notice.clone();
+        let status = if core.add_ons.notice.is_empty() {
+            DROP_HINT.to_string()
+        } else {
+            core.add_ons.notice.clone()
+        };
         if let Some(n) = self.view.id(STATUS) {
             self.view.set_text(n, status);
         }
@@ -254,7 +272,7 @@ impl AddOns {
             self.view
                 .set_active(n, row.as_ref().is_some_and(|r| !r.locked));
             self.view
-                .set_visible(n, row.as_ref().is_some_and(|r| !r.importable));
+                .set_visible(n, row.as_ref().is_some_and(|r| !r.importable && !r.importing));
         }
         if let Some(n) = self.view.id(IMPORT) {
             self.view
@@ -280,6 +298,9 @@ impl AddOns {
         };
         if row.importable {
             self.import(core);
+            return;
+        }
+        if row.importing {
             return;
         }
         if row.locked {
@@ -324,7 +345,9 @@ pub fn details(r: &AddOnRow) -> String {
         subtitle.push("Part of the base game".to_string());
     }
     if r.importable {
-        subtitle.push("Old Blockland add-on, not imported yet".to_string());
+        subtitle.push("Classic Blockland Add-On, not converted".to_string());
+    } else if r.importing {
+        subtitle.push("Classic Blockland Add-On, converting".to_string());
     }
     out.push_str(&subtitle.join(" - "));
     out.push('\n');
@@ -443,6 +466,9 @@ impl Screen for AddOns {
                 }
             }
             (IMPORT, EventKind::Click) => self.import(core),
+            (OPEN_FOLDER, EventKind::Click) => {
+                core.request(UiAction::OpenAddOnsFolder);
+            }
             (ENABLED, EventKind::Click) => {
                 self.toggle(core);
                 // The box shows the host's answer, not the click.
@@ -976,10 +1002,10 @@ mod tests {
     }
 
     #[test]
-    fn old_add_ons_offer_import_instead_of_enabled() {
+    fn classic_add_ons_that_failed_offer_retry_instead_of_enabled() {
         let mut ui = ui();
         let mut v = view();
-        let mut old = row("legacy:Weapon_Shotgun", "Not Imported Yet", false);
+        let mut old = row("legacy:Weapon_Shotgun", "Could Not Convert", false);
         old.version = String::new();
         old.importable = true;
         v.rows.push(old);
@@ -992,7 +1018,7 @@ mod tests {
         assert!(!s.view.node(s.view.id(ENABLED).unwrap()).state.visible);
         let text = s.view.text_of(s.view.id(DETAILS).unwrap());
         assert!(
-            text.contains("Old Blockland add-on, not imported yet"),
+            text.contains("Classic Blockland Add-On, not converted"),
             "{text}"
         );
         s.on_event(
@@ -1024,6 +1050,33 @@ mod tests {
                 .iter()
                 .any(|(t, _)| t == "...\tThe legacy:Weapon_Shotgun")
         );
+        // Converting, it has neither Retry nor Enabled.
+        let mut v = ui.core.add_ons.clone();
+        v.rows.last_mut().unwrap().importable = false;
+        ui.apply(UiUpdate::AddOns(v));
+        s.on_update(&mut ui.core);
+        assert!(!s.view.node(import).state.visible);
+        assert!(!s.view.node(s.view.id(ENABLED).unwrap()).state.visible);
+    }
+
+    #[test]
+    fn the_add_ons_folder_button_opens_it_and_the_status_says_what_it_is_for() {
+        let mut ui = ui();
+        let mut v = view();
+        v.notice.clear();
+        ui.apply(UiUpdate::AddOns(v));
+        let mut s = AddOns::new(&ui.core);
+        ui.drain_actions();
+        assert_eq!(s.view.text_of(s.view.id(STATUS).unwrap()), DROP_HINT);
+        s.on_event(
+            &ViewEvent {
+                node: s.view.id(OPEN_FOLDER).unwrap(),
+                kind: EventKind::Click,
+            },
+            &mut ui.core,
+        );
+        let actions: Vec<_> = ui.drain_actions().into_iter().map(|(_, a)| a).collect();
+        assert_eq!(actions, [UiAction::OpenAddOnsFolder]);
     }
 
     #[test]

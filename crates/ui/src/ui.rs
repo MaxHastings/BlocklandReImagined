@@ -1869,8 +1869,9 @@ impl Ui {
                 seconds,
                 hide_bar,
             } => {
+                // An empty print clears the line (`clearBottomPrint`).
                 let until = (seconds > 0.0).then(|| c.time_ms + (seconds * 1000.0) as u64);
-                c.bottom_print = Some((text, until, hide_bar));
+                c.bottom_print = (!text.is_empty()).then_some((text, until, hide_bar));
             }
             UiUpdate::ClearPrints => {
                 c.center_print = None;

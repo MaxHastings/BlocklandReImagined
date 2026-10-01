@@ -70,6 +70,8 @@ impl MoveInput {
         Ok(())
     }
 }
+/// The most [`PlayerState::speed_scale`] may be.
+pub const MAX_SPEED_SCALE: f32 = 4.0;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlayerState {
     pub owner: OwnerId,
@@ -95,6 +97,11 @@ pub struct PlayerState {
     /// Jet energy (`mEnergy`), up to the datablock's `maxEnergy`.
     #[serde(default = "full_energy")]
     pub energy: f32,
+    /// Share of the body's running, crouching and swimming speeds it moves
+    /// at now, 0 to 4: an Add-On's `set_speed_scale` (slowed by a hit, a
+    /// heavy gun). 1 leaves the body as its archetype made it.
+    #[serde(default = "unit")]
+    pub speed_scale: f32,
     /// Where the motor is between v20's 32 ms ticks.
     #[serde(default)]
     pub tick: TorqueTick,
@@ -804,6 +811,7 @@ impl Player {
                 archetype: Default::default(),
                 scale: 1.0,
                 energy: tuning.max_energy,
+                speed_scale: 1.0,
                 tick: TorqueTick::default(),
                 tether: None,
             },
@@ -845,6 +853,7 @@ impl Player {
                 archetype: Default::default(),
                 scale: 1.0,
                 energy: tuning.max_energy,
+                speed_scale: 1.0,
                 tick: TorqueTick::default(),
                 tether: None,
             },
@@ -920,6 +929,16 @@ impl Player {
     /// A new body starts with a full energy bar.
     pub fn refill_energy(&mut self) {
         self.state.energy = self.tuning.max_energy;
+    }
+    /// The share of its speeds the body moves at ([`PlayerState::speed_scale`]),
+    /// 0 to 4.
+    pub fn set_speed_scale(&mut self, scale: f32) -> Result<()> {
+        ensure!(
+            scale.is_finite() && (0.0..=MAX_SPEED_SCALE).contains(&scale),
+            "Invalid speed scale: 0 to {MAX_SPEED_SCALE}"
+        );
+        self.state.speed_scale = scale;
+        Ok(())
     }
     /// `setDataBlock`/`setScale`: new motor constants and body. Growing the
     /// body may overlap geometry; like Torque, the motor resolves it by moving.
@@ -1277,7 +1296,8 @@ impl Player {
         } else {
             bs * -input.forward
         }
-        .max(ss * input.right.abs());
+        .max(ss * input.right.abs())
+            * self.state.speed_scale;
         // Torque's convex working list: every solid polygon this tick can reach,
         // including a jump, a step and the contact slab under the feet.
         let half = t.width * 0.5;

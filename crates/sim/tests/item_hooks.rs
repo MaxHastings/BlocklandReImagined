@@ -26,7 +26,8 @@ const SCRIPT: &str = r#"
 fn on_pickup(p, item, info) {
     set("touches", get("touches") + 1);
     if item == "kit:weapon/ammo" {
-        set("rounds", get("rounds") + 10);
+        // A bag left by `drop_item` carries its own count.
+        set("rounds", get("rounds") + if info.data != () { info.data.rounds } else { 10 });
         return "take";
     }
     if item == "kit:weapon/mine" { return false; }
@@ -39,6 +40,7 @@ fn on_projectile_hit(hit) {
 }
 fn cmd_shoot(p) { fire("kit:projectile/round", 30.0, 5.0, 30.0, 0.0, -60.0, 0.0, p); }
 fn cmd_toss(p, item, x, z) { drop_item(item, x, 0.2, z); }
+fn cmd_bag(p, x, z) { drop_item("kit:weapon/ammo", x, 0.2, z, 0.0, 0.0, 0.0, #{ rounds: 25 }); }
 fn cmd_take(p, item) { take_item(p, item); }
 fn cmd_give(p, item) { give_item(p, item, true); }
 fn cmd_facts(p) {
@@ -63,6 +65,7 @@ fn behaviour() -> Value {
         "commands": [
             command("shoot", &[]),
             command("toss", &["string", "float", "float"]),
+            command("bag", &["float", "float"]),
             command("take", &["string"]),
             command("give", &["string"]),
             command("facts", &[]),
@@ -253,6 +256,23 @@ fn on_pickup_uses_up_an_ammo_box_and_leaves_a_mine() {
     assert_eq!(g.drops("kit:weapon/mine").len(), 1);
     assert!(!g.holds(a, "kit:weapon/mine"));
     assert!(g.value("touches").as_i64().unwrap() > touches);
+    assert!(g.diagnostics().is_empty(), "{:?}", g.diagnostics());
+}
+
+#[test]
+fn an_item_a_rule_drops_carries_its_data_to_whoever_picks_it_up() {
+    let mut g = Game::new();
+    let a = g.join(Vec3::new(0.0, 0.05, 0.0));
+    g.steps(2);
+    g.run(
+        a,
+        "bag",
+        vec![PackageArg::Float(0.0), PackageArg::Float(0.0)],
+    )
+    .unwrap();
+    g.steps(4);
+    assert_eq!(g.value("rounds"), json!(25));
+    assert!(g.drops("kit:weapon/ammo").is_empty());
     assert!(g.diagnostics().is_empty(), "{:?}", g.diagnostics());
 }
 

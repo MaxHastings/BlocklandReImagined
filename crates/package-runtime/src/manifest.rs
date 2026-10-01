@@ -35,13 +35,20 @@ pub struct Manifest {
     pub provenance: serde_json::Value,
     #[serde(default)]
     pub dependencies: BTreeMap<String, String>,
+    /// Add-Ons this one uses only when they are enabled too, as a v20
+    /// script tested `isObject` on another Add-On's datablock: their
+    /// content is this one's to use while they are on, a missing one is
+    /// fine, and an enabled one must meet the requirement.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub optional_dependencies: BTreeMap<String, String>,
     #[serde(default)]
     pub capabilities: Vec<String>,
     #[serde(default)]
     pub provides: Vec<Provide>,
-    /// Add-Ons turned on and off with this one, such as the host rules an
-    /// imported Add-On's port adds beside it (`docs/modding/porting.md`).
-    /// Each depends on this one; a missing one is skipped.
+    /// Add-Ons turned on with this one, a missing one skipped: the host
+    /// rules an imported Add-On's port adds beside it, which depend on it
+    /// and so also turn off with it, or an Add-On its scripts loaded
+    /// themselves when it was there (`docs/modding/porting.md`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub companions: Vec<String>,
     /// Sandboxed client code (`docs/architecture/client-sandbox.md`), read
@@ -177,6 +184,26 @@ impl Manifest {
                 out.push(
                     Diagnostic::error("manifest.dependency", format!("`{dependency}`: {problem}"))
                         .at(format!("{at}#/dependencies")),
+                );
+            }
+        }
+        for (dependency, requirement) in &manifest.optional_dependencies {
+            let problem = if let Err(problem) = Requirement::parse(requirement) {
+                Some(problem.to_string())
+            } else if manifest.dependencies.contains_key(dependency) {
+                Some("is also a dependency".to_owned())
+            } else if *dependency == manifest.id {
+                Some("is this package".to_owned())
+            } else {
+                None
+            };
+            if let Some(problem) = problem {
+                out.push(
+                    Diagnostic::error(
+                        "manifest.optional_dependency",
+                        format!("`{dependency}`: {problem}"),
+                    )
+                    .at(format!("{at}#/optional_dependencies")),
                 );
             }
         }

@@ -69,6 +69,23 @@ impl DamagePolicy<'_> {
         };
         decision == Decision::Allow
     }
+    /// Whether living `target` is `source`'s teammate or ally in a
+    /// mini-game with weapon damage on, friendly fire or not.
+    pub(super) fn ally(&self, source: OwnerId, target: OwnerId) -> bool {
+        let (Some(s), Some(t)) = (self.peers.get(&source), self.peers.get(&target)) else {
+            return false;
+        };
+        source != target
+            && t.combat.alive
+            && self.minigames.allied(s.combat.player, t.combat.player)
+            && self
+                .minigames
+                .player(s.combat.player)
+                .ok()
+                .and_then(|p| p.game)
+                .and_then(|g| self.minigames.game(g).ok())
+                .is_some_and(|g| g.settings.weapon_damage)
+    }
     /// `WheeledVehicle::damage`: vehicles outside minigames can be damaged;
     /// inside, the minigame's vehicle damage rule applies. `owner` is the
     /// vehicle's owner, `None` when there is no such vehicle.
@@ -100,6 +117,11 @@ const INVULNERABLE_TICKS: u64 = 300;
 const CORPSE_TICKS: u64 = 600;
 /// `Armor::damage` sums hits less than 300 ms apart into one pain level.
 const PAIN_TICKS: u64 = 36;
+/// `Player::emote`: emotes under 1000 ms apart count, 10000 ms forgive,
+/// and more than five counted are dropped.
+const VOICE_QUICK_TICKS: u64 = 120;
+const VOICE_FORGIVE_TICKS: u64 = 1200;
+const VOICE_MAX: u32 = 5;
 /// `speedDamageScale` (every stock player type sets 3.8).
 const SPEED_DAMAGE_SCALE: f32 = 3.8;
 /// `mass` of the standard player: impulses divide by it.
@@ -128,6 +150,36 @@ pub(super) struct Combat {
     pub corpse_cleared: bool,
     pub pain_level: f32,
     pub pain_tick: u64,
+    /// The share of their speeds an Add-On's `set_speed_scale` gives.
+    pub speed_rule: f32,
+    /// A gun's slowdown on top ([`bri_weapons::Slow`]): the share kept and
+    /// the tick it ends.
+    pub gun_slow: Option<(f32, u64)>,
+    /// `Player::emote`'s spam check (`lastVoiceTime`, `voiceCount`): the
+    /// tick of the last emote let through and the quick ones counted.
+    pub voice: Option<u64>,
+    pub voice_count: u32,
+}
+
+impl Combat {
+    /// `Player::emote` without `%skipSpam`: an emote within a second of the
+    /// last counts, ten quiet seconds forgive them, and past five counted
+    /// the emote does nothing (and does not move the last time on).
+    pub fn emote_allowed(&mut self, tick: u64) -> bool {
+        let since = self
+            .voice
+            .map_or(u64::MAX, |last| tick.saturating_sub(last));
+        if since < VOICE_QUICK_TICKS {
+            self.voice_count += 1;
+        } else if since > VOICE_FORGIVE_TICKS {
+            self.voice_count = 0;
+        }
+        if self.voice_count > VOICE_MAX {
+            return false;
+        }
+        self.voice = Some(tick);
+        true
+    }
 }
 
 /// Replicated per-player status. Health drives the damage flash; the rest
@@ -422,6 +474,16 @@ pub(super) enum DamageKind {
     Weapon {
         name: String,
         direct: bool,
+        /// Which way it was travelling as it struck (a unit vector), when a
+        /// shot did it.
+        direction: Option<Vec3>,
+        /// The projectile that did it, when one did.
+        projectile: Option<String>,
+        /// The special kill it makes ([`bri_weapons::DamageType::special`]):
+        /// a shot a guard sent back.
+        special: Option<String>,
+        /// The landings of a ricocheting shot before this one.
+        bounces: u32,
     },
     Fall,
     Impact,
@@ -434,6 +496,42 @@ pub(super) enum DamageKind {
     },
 }
 impl DamageKind {
+    /// A weapon's damage with no hit point (vehicles, the hammer).
+    pub(super) fn weapon(name: impl Into<String>, direct: bool) -> Self {
+        Self::Weapon {
+            name: name.into(),
+            direct,
+            direction: None,
+            projectile: None,
+            special: None,
+            bounces: 0,
+        }
+    }
+    /// The projectile that did it, as `on_damage` hooks read it.
+    pub(super) fn projectile(&self) -> Option<&str> {
+        match self {
+            Self::Weapon { projectile, .. } => projectile.as_deref(),
+            _ => None,
+        }
+    }
+    pub(super) fn direction(&self) -> Option<Vec3> {
+        match self {
+            Self::Weapon { direction, .. } => *direction,
+            _ => None,
+        }
+    }
+    pub(super) fn bounces(&self) -> u32 {
+        match self {
+            Self::Weapon { bounces, .. } => *bounces,
+            _ => 0,
+        }
+    }
+    pub(super) fn special(&self) -> Option<&str> {
+        match self {
+            Self::Weapon { special, .. } => special.as_deref(),
+            _ => None,
+        }
+    }
     pub(super) fn direct(&self) -> bool {
         matches!(self, Self::Weapon { direct: true, .. })
     }
@@ -460,11 +558,18 @@ impl DamageKind {
     }
     /// [`Self::type_name`] as hooks see it: a weapon's damage type by its
     /// name, without Torque's `$DamageType::` prefix, so a round's type and
-    /// one a script passed to `damage` read the same.
+    /// one a script passed to `damage` read the same. A type an Add-On
+    /// declared under a name another already had is kept as
+    /// `<package>:<name>` ([`bri_weapons::Pack::merge_with`]); hooks see
+    /// the name the Add-On gave it.
     pub(super) fn hook_type(&self) -> &str {
         let name = self.type_name();
-        match name.get(..13) {
+        let name = match name.get(..13) {
             Some(prefix) if prefix.eq_ignore_ascii_case("$damagetype::") => &name[13..],
+            _ => name,
+        };
+        match self {
+            Self::Weapon { .. } => name.rsplit(':').next().unwrap_or(name),
             _ => name,
         }
     }
@@ -499,7 +604,7 @@ pub(super) fn catalog(pack: &bri_weapons::Pack) -> mg::Catalog {
         .iter()
         .map(|id| ((*id).to_string(), None))
         .collect();
-    for (id, item) in &pack.items {
+    for (id, item) in pack.items.iter().filter(|(_, i)| !i.hidden) {
         items.insert(id.clone(), item.sport.then(|| item.image.clone()));
     }
     mg::Catalog {
@@ -682,6 +787,10 @@ impl Session {
             corpse_cleared: false,
             pain_level: 0.0,
             pain_tick: 0,
+            speed_rule: 1.0,
+            gun_slow: None,
+            voice: None,
+            voice_count: 0,
         })
     }
     pub(super) fn combat_disconnect(&mut self, player: mg::PlayerId) {
@@ -920,17 +1029,36 @@ impl Session {
         // Where it struck, measured before any hook moves the body.
         let hit = at.map(|point| (point, crate::player::hit_region(&peer.player, point.to_array())));
         // Add-Ons have the last word on how much it hurts.
-        let amount = self.package_damage(target, source, amount, &kind, hit);
+        let (amount, renamed) = self.package_damage(target, source, amount, &kind, hit);
         if amount <= 0.0 {
             return Ok(());
         }
+        // A hook may name another damage type (a crit's kill message).
+        let kind = match renamed {
+            Some(name) => DamageKind::Weapon {
+                direct: self
+                    .weapons
+                    .pack
+                    .damage_type(&name)
+                    .is_some_and(|t| t.direct),
+                direction: kind.direction(),
+                projectile: kind.projectile().map(str::to_owned),
+                special: kind.special().map(str::to_owned),
+                bounces: kind.bounces(),
+                name,
+            },
+            None => kind,
+        };
         let Some(peer) = self.peers.get_mut(&target) else {
             return Ok(());
         };
         if !peer.combat.alive {
             return Ok(());
         }
-        if let DamageKind::Weapon { name, direct: true } = &kind {
+        if let DamageKind::Weapon {
+            name, direct: true, ..
+        } = &kind
+        {
             peer.combat.last_direct = Some((name.clone(), tick));
         }
         peer.combat.health = (peer.combat.health - amount).max(0.0);
@@ -944,7 +1072,7 @@ impl Session {
         let level = peer.combat.pain_level;
         self.bots.note_hurt(target, source, tick);
         let feet = peer.player.state().feet;
-        self.cues.emit(
+        self.emote_cue(
             tick,
             crate::presentation::CueKind::Pain {
                 actor: target,
@@ -990,14 +1118,21 @@ impl Session {
             .map_err(|e| anyhow::anyhow!("Death rejected: {e}"))?;
         // Radius deaths within 0.1 s of a direct hit report the direct type.
         let kind = match (&kind, &peer.combat.last_direct) {
-            (DamageKind::Weapon { direct: false, .. }, Some((name, at)))
-                if tick.saturating_sub(*at) < 12 =>
-            {
+            (
                 DamageKind::Weapon {
-                    name: name.clone(),
-                    direct: true,
-                }
-            }
+                    direct: false,
+                    special,
+                    ..
+                },
+                Some((name, at)),
+            ) if tick.saturating_sub(*at) < 12 => DamageKind::Weapon {
+                name: name.clone(),
+                direct: true,
+                direction: None,
+                projectile: None,
+                special: special.clone(),
+                bounces: 0,
+            },
             _ => kind,
         };
         // Packages see every death and who caused it; their own policy
@@ -1011,6 +1146,8 @@ impl Session {
             peer.combat.alive = false;
             peer.combat.health = 0.0;
             peer.combat.died_tick = tick;
+            // A corpse keeps no laid-on archetypes (`pushDatablock`).
+            peer.overlays = None;
             peer.combat.corpse_cleared = false;
             peer.inputs.clear();
             peer.control = super::ControlObject::Corpse;
@@ -1020,6 +1157,32 @@ impl Session {
         // `armor::onDisabled` drops a held ball before the body goes limp.
         let _ = self.weapons.drop_ball(ActorId(victim));
         let _ = self.weapons.equip(ActorId(victim), None);
+        // A corpse's emote slot runs nothing more. An image whose states
+        // run commands comes off, as `medigunHealImage::onHeal` unmounted
+        // itself from a dead wearer; an emote or pain plays out.
+        let scripted = self
+            .weapons
+            .emote_state(ActorId(victim))
+            .is_some_and(|(image, _)| {
+                self.weapons
+                    .pack
+                    .images
+                    .get(image)
+                    .is_some_and(|i| !i.commands.is_empty())
+            });
+        if scripted {
+            let feet = self.peers[&victim].player.state().feet;
+            self.emote_cue(
+                tick,
+                crate::presentation::CueKind::Emote {
+                    actor: victim,
+                    name: String::new(),
+                },
+                feet,
+            );
+        } else {
+            let _ = self.weapons.emote(ActorId(victim), None);
+        }
         // What an Add-On hung on the body (a carried flag) goes with it; the
         // Add-On's `on_death` decides what becomes of it.
         self.weapons.clear_worn(ActorId(victim));
@@ -1036,10 +1199,21 @@ impl Session {
             .filter(|k| *k != victim)
             // A killer who has left since the shot counts as no killer.
             .and_then(|k| self.peers.get(&k).map(|p| p.name.clone()));
-        let damage_type = self.weapons.pack.damage_type(kind.type_name()).cloned();
-        let line = |victim_name: &str, killer_name: Option<&str>| match &damage_type {
-            Some(t) => t.message(victim_name, killer_name),
-            None => killer_name.map_or_else(
+        let pack = &self.weapons.pack;
+        let base = pack.damage_type(kind.type_name()).cloned();
+        // A special kill (Support_SpecialKills) lays its message over the
+        // killing type's.
+        let special = kind
+            .special()
+            .and_then(|name| pack.damage_types.get(&name.to_ascii_lowercase()))
+            .filter(|t| t.special)
+            .cloned();
+        // The line for these names: an Add-On's death message may rename
+        // the victim or killer, or hide the killer.
+        let line = |victim_name: &str, killer_name: Option<&str>| match (&special, &base) {
+            (Some(s), base) => s.special_message(base.as_ref(), victim_name, killer_name),
+            (None, Some(t)) => t.message(victim_name, killer_name),
+            (None, None) => killer_name.map_or_else(
                 || victim_name.to_owned(),
                 |k| format!("{k} killed {victim_name}"),
             ),
@@ -1934,6 +2108,10 @@ impl Session {
                 1.0,
             )?;
             peer.player.refill_energy();
+            peer.overlays = None;
+            peer.combat.speed_rule = 1.0;
+            peer.combat.gun_slow = None;
+            peer.player.set_speed_scale(1.0)?;
             peer.player.set_solid(&mut self.simulation.physics, true);
             peer.combat.health = kind.max_health;
             peer.combat.alive = true;
@@ -1941,10 +2119,18 @@ impl Session {
             peer.look_limits = None;
             peer.combat.shot_once = false;
             peer.combat.last_direct = None;
+            // `lastVoiceTime` and `voiceCount` were on the old `Player`.
+            peer.combat.voice = None;
+            peer.combat.voice_count = 0;
+            // A new life starts with full magazines and starting reserves.
+            let _ = self.weapons.reset_ammo(ActorId(owner));
+            let _ = self.weapons.respawned(ActorId(owner));
             peer.combat.corpse_cleared = false;
             // `serverCmdLight` mounts its fxLight on the player object, which
             // stays with the corpse: a new body starts dark.
             peer.combat.light = false;
+            // Schedules on the old `Player` object went with it.
+            peer.thread_timers.clear();
             // The new body wears the client's own colours (`ApplyBodyColors`).
             peer.temp_color = None;
             peer.temp_look = None;
@@ -2174,13 +2360,57 @@ impl Session {
                 } else {
                     DamageKind::Impact
                 };
-                self.damage_player(owner, speed * SPEED_DAMAGE_SCALE, kind, None)?;
+                // A guard faced the way they fell takes some of it.
+                let amount = self.weapons.guard_fall(
+                    ActorId(owner),
+                    speed * SPEED_DAMAGE_SCALE,
+                    impact.normalize_or_zero(),
+                );
+                self.damage_player(owner, amount, kind, None)?;
             }
         }
         Ok(())
     }
 
     /// Weapon knockback: `Player::AddVelocity(impulse / mass)`.
+    /// A player's speeds: an Add-On's scale times any gun's slowdown.
+    pub(super) fn apply_speed(&mut self, target: OwnerId) -> Result<()> {
+        if let Some(peer) = self.peers.get_mut(&target) {
+            let slow = peer.combat.gun_slow.map_or(1.0, |(m, _)| m);
+            peer.player.set_speed_scale(peer.combat.speed_rule * slow)?;
+        }
+        Ok(())
+    }
+    /// A bullet slows the player it hit ([`bri_weapons::Slow`]): their velocity
+    /// divided, their speeds lowered until a moment after the last shot.
+    pub(super) fn slow_player(&mut self, target: OwnerId, slow: bri_weapons::Slow) -> Result<()> {
+        let tick = self.simulation.state().tick;
+        let Some(peer) = self.peers.get_mut(&target).filter(|p| p.combat.alive) else {
+            return Ok(());
+        };
+        let velocity = Vec3::from(peer.player.state().velocity);
+        peer.player.push(-velocity * (1.0 - 1.0 / slow.divisor));
+        let kept = slow.after_hit(peer.combat.gun_slow.map(|(m, _)| m));
+        peer.combat.gun_slow = Some((kept, tick + bri_weapons::Slow::TICKS));
+        self.apply_speed(target)
+    }
+    /// Gun slowdowns whose time is up end.
+    pub(super) fn end_gun_slows(&mut self) -> Result<()> {
+        let tick = self.simulation.state().tick;
+        let ended: Vec<OwnerId> = self
+            .peers
+            .iter_mut()
+            .filter(|(_, p)| p.combat.gun_slow.is_some_and(|(_, until)| tick >= until))
+            .map(|(owner, p)| {
+                p.combat.gun_slow = None;
+                *owner
+            })
+            .collect();
+        for owner in ended {
+            self.apply_speed(owner)?;
+        }
+        Ok(())
+    }
     pub(super) fn push_player(&mut self, target: OwnerId, impulse: Vec3) {
         if let Some(peer) = self.peers.get_mut(&target)
             && peer.combat.alive

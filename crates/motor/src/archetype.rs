@@ -83,6 +83,10 @@ pub struct Look {
     pub model: String,
     /// Third-person camera distance behind the eye.
     pub camera_distance: f32,
+    /// The view stays first person whatever the camera toggle says, as
+    /// v20's `PlayerData::firstPersonOnly` (Tier 2's Light MG gunner).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub first_person_only: bool,
     /// `thirdPersonOnly`: the camera stays behind the body.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub third_person_only: bool,
@@ -145,6 +149,7 @@ impl Archetype {
                     "v20.shape.m".into()
                 },
                 camera_distance: 8.0,
+                first_person_only: false,
                 third_person_only: false,
             },
             uses_items: true,

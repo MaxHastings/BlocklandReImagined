@@ -152,7 +152,7 @@ impl Session {
                     actions: 0,
                     chats: 0,
                     inspection: None,
-                    talk_stops: VecDeque::new(),
+                    thread_timers: Vec::new(),
                     ..peer
                 },
             );
@@ -162,7 +162,7 @@ impl Session {
         self.system_chat(format!("\u{E003}{name} \u{E000}changed the map to {map}"));
         self.refresh_trust();
         // A map load is a start: settings read only then take the host's.
-        self.start_settings();
+        self.start_weapon_settings();
         Ok(())
     }
 }

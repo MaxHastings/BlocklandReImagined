@@ -614,6 +614,31 @@ impl Catalog {
                     );
                 }
             }
+            // An optional dependency need not be on; one that is must meet
+            // the requirement.
+            for (dependency, requirement) in &p.manifest.optional_dependencies {
+                let (Ok(requirement), Some(entry)) = (
+                    Requirement::parse(requirement),
+                    listed.get(dependency.as_str()),
+                ) else {
+                    continue;
+                };
+                if broken(dependency) || (!server && entry.side == Side::Server) {
+                    continue;
+                }
+                if !Version::parse(&entry.version).is_ok_and(|v| requirement.matches(v)) {
+                    out.push(
+                        Diagnostic::error(
+                            "set.dependency.version",
+                            format!(
+                                "`{id}` uses `{dependency}` {requirement:?} but {} is enabled",
+                                entry.version
+                            ),
+                        )
+                        .at(at.clone()),
+                    );
+                }
+            }
             if server {
                 for kind in p.entities.values() {
                     let model = &kind.model;
@@ -862,7 +887,13 @@ impl Catalog {
                 continue;
             };
             if out.insert(id.as_str()) {
-                queue.extend(p.manifest.dependencies.keys().map(String::as_str));
+                queue.extend(
+                    p.manifest
+                        .dependencies
+                        .keys()
+                        .chain(p.manifest.optional_dependencies.keys())
+                        .map(String::as_str),
+                );
             }
         }
         out
@@ -960,6 +991,20 @@ impl Catalog {
                     .all(|dep| self.packages[*dep].worlds.keys().all(|w| w == world))
             })
             .collect()
+    }
+    /// Whether `package` may use content of the namespace `namespace`: its
+    /// own, a dependency's, or an enabled optional dependency's.
+    pub fn uses(&self, package: &str, namespace: &str) -> bool {
+        namespace == package
+            || self.packages.get(package).is_some_and(|p| {
+                p.manifest.dependencies.contains_key(namespace)
+                    || (p.manifest.optional_dependencies.contains_key(namespace)
+                        && self.packages.contains_key(namespace))
+            })
+    }
+    /// Whether the package `id` is enabled.
+    pub fn enabled(&self, id: &str) -> bool {
+        self.packages.contains_key(id)
     }
     pub fn world(&self) -> Option<(&Package, &String, &content::ChunkWorld)> {
         self.packages

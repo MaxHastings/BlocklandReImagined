@@ -1,9 +1,12 @@
 //! Host-authoritative fixed-tick gameplay. Coordinates: X-right, Y-up, -Z-forward.
 use crate::*;
 use anyhow::{Result, ensure};
-use glam::{Quat, Vec3};
-use std::{collections::BTreeMap, sync::Arc};
 use bri_content::passage::{MAX_CARRIES, PAST};
+use glam::{Quat, Vec3};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 pub const MAX_ACTORS: usize = 128;
 pub const MAX_PROJECTILES: usize = 1024;
 pub const MAX_DROPS: usize = 1024;
@@ -221,6 +224,11 @@ pub trait Query {
         self.can_affect(source, target)
     }
     fn can_catch(&self, source: ActorId, target: ActorId) -> bool;
+    /// Whether `target` is `source`'s teammate or ally in a mini-game with
+    /// weapon damage on, whatever its friendly fire ([`crate::Aura::ally_damage`]).
+    fn is_ally(&self, _source: ActorId, _target: TargetId) -> bool {
+        false
+    }
     /// The liquid covering most of the axis-aligned box standing on `bottom`
     /// and `height` tall, if any.
     fn liquid(&mut self, _bottom: Vec3, _height: f32) -> Option<Liquid> {
@@ -293,6 +301,11 @@ pub enum Event {
         actor: ActorId,
         velocity: Vec3,
     },
+    /// A hit slows the player it hit ([`crate::ProjectileDef::slow`]).
+    Slow {
+        actor: ActorId,
+        slow: crate::Slow,
+    },
     ImageState {
         actor: ActorId,
         image: String,
@@ -327,6 +340,22 @@ pub enum Event {
         image: String,
         hand: u8,
     },
+    /// A [`crate::Hitscan`] ray of `image` in `hand` ended at `to`: each
+    /// player draws its tracer from their own copy of the image.
+    Tracer {
+        actor: ActorId,
+        hand: u8,
+        image: String,
+        to: Vec3,
+    },
+    /// A ricocheting hitscan ray went on from `from` to `to`
+    /// ([`crate::Ricochet`]): drawn in the image's tracer style.
+    Ricochet {
+        actor: ActorId,
+        image: String,
+        from: Vec3,
+        to: Vec3,
+    },
     Spawned {
         projectile: u64,
         definition: String,
@@ -348,6 +377,21 @@ pub enum Event {
         amount: f32,
         kind: String,
         position: Vec3,
+        /// Which way the hurt travelled, a unit vector or zero: the shot's
+        /// flight for a direct hit, from the blast centre outward for splash.
+        direction: Vec3,
+        /// The projectile that did it (its definition id), as v20's
+        /// `ProjectileData::damage` knew its own datablock.
+        #[serde(default)]
+        projectile: String,
+        /// A special kill this hurt makes ([`crate::DamageType::special`]):
+        /// a shot a guard sent back ([`crate::Guard::reflect_kill`]).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        special: Option<String>,
+        /// The landings of a ricocheting ray before this one
+        /// ([`crate::Ricochet`]); 0 for anything else.
+        #[serde(default)]
+        bounces: u32,
     },
     Impulse {
         source: ActorId,
@@ -431,6 +475,11 @@ pub enum Event {
         item: String,
         position: Vec3,
     },
+    /// The holder's magazine or reserve changed (a shot, a reload, a gun
+    /// drawn): the ammo display shows [`WeaponsWorld::ammo`].
+    Ammo {
+        actor: ActorId,
+    },
     Dropped {
         drop: u64,
         item: String,
@@ -439,6 +488,19 @@ pub enum Event {
     },
     DropRemoved {
         drop: u64,
+    },
+    /// A sound `actor` alone hears, at their ears (`play2D`): a burning
+    /// player's sizzle.
+    Heard {
+        actor: ActorId,
+        profile: String,
+    },
+    /// Text in the middle of the holder's screen for `seconds`: a cooked
+    /// grenade's countdown.
+    Print {
+        actor: ActorId,
+        text: String,
+        seconds: f32,
     },
     Diagnostic {
         actor: Option<ActorId>,
@@ -465,6 +527,13 @@ pub struct Projectile {
     /// its model keeps pointing that way (v20 keeps the last transform).
     #[serde(default)]
     pub heading: Option<Vec3>,
+    /// Bounces so far, for `max_bounces`. Host bookkeeping, not replicated.
+    #[serde(skip)]
+    pub bounces: u32,
+    /// The runtime tick it was made on; `children` and `aura` count from it.
+    /// Host bookkeeping, not replicated.
+    #[serde(skip)]
+    pub spawned: u64,
 }
 /// Vertical speed a projectile loses each tick of flight (`gravityMod`);
 /// none unless it is ballistic.
@@ -499,6 +568,9 @@ pub struct Drop {
     pub source: ActorId,
     pub pickup_after: u64,
     pub expires: u64,
+    /// The rounds in a thrown gun's magazine, for whoever picks it up.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rounds: Option<u32>,
     /// A palette colour tinting it instead of its image's own colour: the
     /// colour a `paint_tint` item was held in when dropped (its holder's
     /// spray colour), or one an Add-On gave it (a team's flag).
@@ -558,6 +630,9 @@ struct Equipped {
     /// Palette index for the derived colour spray can image.
     #[serde(default)]
     paint: Option<u8>,
+    /// The key its magazine's rounds are kept under, fixed as it mounts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    magazine: Option<String>,
 }
 /// Torque's `nextImage`: a right-hand image asked for while the held one's
 /// state forbids image changes. It mounts on the next state that allows one.
@@ -596,12 +671,188 @@ pub struct Actor {
     ball_ready: u64,
     spawn_tick: u64,
     tackle_until: u64,
+    /// Rounds in each carried gun's magazine ([`crate::Magazine`]), by
+    /// [`slot_key`]: two of one gun each keep their own, as the tactical
+    /// packs' `%obj.toolAmmo[%slot]` does. A gun a rule mounted with no tool
+    /// selected keeps its rounds under its image id.
+    #[serde(default)]
+    rounds: BTreeMap<String, u32>,
+    /// Reserve ammo by type.
+    #[serde(default)]
+    reserve: BTreeMap<String, Reserve>,
+    #[serde(default)]
+    reload: Option<Reload>,
+    /// The grenade whose fuse is burning in the hand ([`crate::Cook`]).
+    #[serde(default)]
+    cook: Option<Cooking>,
+    /// Image states' timed cues still to play ([`crate::State::cues`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    cues: Vec<PendingCue>,
+    /// The image in slot [`EMOTE_SLOT`] (`Player::emote`): an emote, pain,
+    /// flames or an Add-On's effect on the body ([`WeaponsWorld::emote`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    emote: Option<Equipped>,
+    /// Projectiles the guard in hand ([`crate::Guard::durability`]) stops
+    /// before it breaks, counted from its first stop: Kai's `shieldHP`,
+    /// which lasts until the holder dies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    guard_left: Option<u32>,
+    /// A bot, not a player ([`WeaponsWorld::set_bot`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    bot: bool,
+}
+/// Torque's image slot 3, which `Player::emote` and `Player::burn` mount
+/// into: a new emote replaces the one there. Its image runs its states on
+/// their timeouts, and a state script with a command runs it for the
+/// wearer, as `medigunHealImage::onHeal` healed whoever wore it.
+pub const EMOTE_SLOT: u8 = 3;
+/// A [`crate::Cue`] waiting for its tick, with where the holder was as its
+/// state began (v20 scheduled `serverPlay3D` with the position then).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct PendingCue {
+    due: u64,
+    cue: crate::Cue,
+    position: Vec3,
+}
+/// The most cues one holder has waiting.
+const MAX_PENDING_CUES: usize = 64;
+/// [`Actor::cook`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct Cooking {
+    image: String,
+    /// The tick the fuse was lit.
+    lit: u64,
+}
+/// A holder's reserve of one ammo type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Reserve {
+    Rounds(u32),
+    /// Reloads never run out (an Add-On's endless-ammo rule).
+    Endless,
+}
+impl Reserve {
+    fn take(&mut self, wanted: u32) -> u32 {
+        match self {
+            Self::Endless => wanted,
+            Self::Rounds(n) => {
+                let taken = wanted.min(*n);
+                *n -= taken;
+                taken
+            }
+        }
+    }
+    fn any(self) -> bool {
+        self != Self::Rounds(0)
+    }
+}
+/// A reload under way: `item`'s magazine fills at tick `done`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct Reload {
+    item: String,
+    done: u64,
+}
+/// What a holder's held gun has to shoot, for the ammo display and rules.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AmmoView {
+    pub item: String,
+    pub rounds: u32,
+    pub size: u32,
+    pub ammo: String,
+    pub name: String,
+    pub reserve: Reserve,
+    pub reloading: bool,
+    /// How long the display stays up ([`crate::Magazine::display_ticks`]).
+    pub display_ticks: u32,
+    /// Counted from the reserve ([`crate::Magazine::from_reserve`]):
+    /// `rounds` is the reserve, and there is no magazine to show.
+    pub counted: bool,
+    /// Where its rounds come from ([`crate::Magazine::supply`]).
+    pub supply: crate::Supply,
+    /// Whether it has a display at all ([`crate::Magazine::displayed`]).
+    pub shown: bool,
+}
+/// The key the rounds of the gun `item` in tool `slot` are kept under.
+fn slot_key(item: &str, slot: usize) -> String {
+    format!("{item}#{slot}")
+}
+/// The item (or image) a magazine key belongs to.
+fn key_item(key: &str) -> &str {
+    key.rsplit_once('#').map_or(key, |(item, _)| item)
+}
+/// The rounds `key`'s magazine holds: one counted from its reserve
+/// ([`crate::Magazine::from_reserve`]) holds what the reserve does.
+fn rounds_in(a: &Actor, key: &str, magazine: &crate::Magazine) -> u32 {
+    if magazine.counts_reserve() {
+        match a.reserve.get(&magazine.ammo) {
+            Some(Reserve::Endless) => u32::MAX,
+            Some(Reserve::Rounds(n)) => *n,
+            None => 0,
+        }
+    } else if magazine.supply == crate::Supply::Unlimited {
+        // Never used: always full.
+        magazine.size
+    } else {
+        a.rounds.get(key).copied().unwrap_or(0)
+    }
+}
+/// Whether a reload of `magazine` has something to fill it from: reserve,
+/// or nothing at all ([`crate::Supply::Endless`]).
+fn can_fill(a: &Actor, magazine: &crate::Magazine) -> bool {
+    match magazine.supply {
+        crate::Supply::Endless | crate::Supply::Unlimited => true,
+        _ => a.reserve.get(&magazine.ammo).is_some_and(|r| r.any()),
+    }
+}
+/// Whether `key`'s magazine has a shot: its rounds, and under
+/// [`crate::Supply::Both`] as many in the reserve too.
+fn has_shot(a: &Actor, key: &str, magazine: &crate::Magazine) -> bool {
+    magazine.fires(rounds_in(a, key, magazine))
+        && (magazine.supply != crate::Supply::Both
+            || a.reserve.get(&magazine.ammo).is_some_and(|r| match r {
+                Reserve::Endless => true,
+                Reserve::Rounds(n) => *n >= magazine.per_shot,
+            }))
+}
+/// A shot's rounds out of `key`'s magazine and, by its supply, the
+/// reserve. Whether it was the magazine's last shot.
+fn take_shot(a: &mut Actor, key: &str, magazine: &crate::Magazine) -> bool {
+    use crate::Supply;
+    let rounds = rounds_in(a, key, magazine);
+    let last = magazine.last(rounds);
+    if matches!(
+        magazine.supply,
+        Supply::Reserve | Supply::Endless | Supply::Both
+    ) && !magazine.from_reserve
+    {
+        let left = if last { 0 } else { rounds - magazine.per_shot };
+        a.rounds.insert(key.to_owned(), left);
+    }
+    if (magazine.counts_reserve() || magazine.supply == Supply::Both)
+        && let Some(reserve) = a.reserve.get_mut(&magazine.ammo)
+    {
+        reserve.take(magazine.per_shot);
+    }
+    last
 }
 impl Actor {
     /// Whether the fire button is held, whatever is (or is not) in hand.
     pub fn trigger_held(&self) -> bool {
         self.trigger
     }
+}
+/// One ray of a hitscan shot ([`WeaponsWorld::hitscan`]).
+struct Ray<'a> {
+    hand: u8,
+    image: &'a str,
+    /// The image's projectile.
+    definition: &'a str,
+    from: Vec3,
+    /// Where the image's projectile leaves the barrel.
+    muzzle: Vec3,
+    direction: Vec3,
+    range: f32,
+    hitscan: &'a crate::Hitscan,
 }
 /// What one tick of an image's state machine asks of its holder.
 enum Advance {
@@ -628,10 +879,28 @@ pub struct WeaponsWorld {
     events: Vec<Event>,
     /// Explosions queued for the next tick; they never fly.
     explosions: Vec<Projectile>,
+    /// Projectiles that go off at this age, before their lifetime: a cooked
+    /// grenade's fuse, a cluster's bomblets ([`crate::Children::fuse_ticks`]).
+    fuses: BTreeMap<u64, u32>,
+    /// Projectiles a guard sent back ([`crate::Guard::reflect`]): the tick
+    /// it did, and the special kill they make.
+    reflected: BTreeMap<u64, (u64, Option<String>)>,
+    /// This tick's projectiles a guard stopped: who stopped each, and the
+    /// share of push left. Their blasts spare that holder.
+    stopped: Vec<(u64, ActorId, f32)>,
 }
 impl WeaponsWorld {
     pub fn new(pack: Pack) -> Result<Self> {
         pack.validate()?;
+        anyhow::ensure!(
+            pack.external_projectiles.is_empty(),
+            "The pack fires projectiles of packages it depends on ({}); merge them first",
+            pack.external_projectiles
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
         Ok(Self {
             pack: Arc::new(pack),
             tick: 0,
@@ -642,7 +911,31 @@ impl WeaponsWorld {
             next_id: 1,
             events: vec![],
             explosions: vec![],
+            fuses: BTreeMap::new(),
+            reflected: BTreeMap::new(),
+            stopped: vec![],
         })
+    }
+    /// Plays `pack` from now on in place of the pack it plays: the same
+    /// definitions with some fields changed ([`Pack::with_settings`]), so
+    /// everything held, flying and lying keeps going. Each field takes
+    /// effect where the game next reads it: the next shot, reload or spawn.
+    pub fn retune(&mut self, pack: Pack) -> Result<()> {
+        pack.validate()?;
+        anyhow::ensure!(
+            self.pack.items.keys().eq(pack.items.keys())
+                && self.pack.projectiles.keys().eq(pack.projectiles.keys())
+                && self.pack.images.len() == pack.images.len()
+                && self
+                    .pack
+                    .images
+                    .iter()
+                    .zip(&pack.images)
+                    .all(|((a, x), (b, y))| a == b && x.states.len() == y.states.len()),
+            "A retuned pack has the same definitions"
+        );
+        self.pack = Arc::new(pack);
+        Ok(())
     }
     /// The id of the image `id` holds in `hand`.
     pub fn image_id(&self, id: ActorId, hand: u8) -> Option<&str> {
@@ -714,9 +1007,40 @@ impl WeaponsWorld {
                 ball_ready: 0,
                 spawn_tick: self.tick,
                 tackle_until: 0,
+                rounds: BTreeMap::new(),
+                reserve: BTreeMap::new(),
+                reload: None,
+                cook: None,
+                cues: Vec::new(),
+                emote: None,
+                guard_left: None,
+                bot: false,
             },
         );
         Ok(())
+    }
+    /// Whether `id` is a bot, which some rules treat apart
+    /// ([`crate::Guard::bots_keep`]).
+    pub fn set_bot(&mut self, id: ActorId, bot: bool) -> Result<()> {
+        self.actors.get_mut(&id).context("Unknown actor")?.bot = bot;
+        Ok(())
+    }
+    /// A fall or crash's `amount` of hurt to `id`, moving along `toward`
+    /// as it struck: the share a guard they hold and face it with lets
+    /// through ([`crate::Guard::fall_damage`]), with its clang.
+    pub fn guard_fall(&mut self, id: ActorId, amount: f32, toward: Vec3) -> f32 {
+        let Some((guard, _, a)) = guard_held(&self.actors, &self.pack, id) else {
+            return amount;
+        };
+        let Some(share) = guard.fall_damage else {
+            return amount;
+        };
+        if a.frame.direction.dot(toward) <= 0.0 {
+            return amount;
+        }
+        let (explosion, middle, scale) = (guard.hit_explosion.clone(), body(a), a.frame.scale);
+        self.burst(&explosion, id, middle, scale * 2.0);
+        amount * share
     }
     /// Remove one live projectile without exploding it (`killObjects`).
     pub fn remove_projectile(&mut self, projectile: u64) -> bool {
@@ -775,6 +1099,8 @@ impl WeaponsWorld {
         let place = a.inventory.get_mut(slot).context("Invalid item slot")?;
         ensure!(place.is_none(), "Occupied item slot");
         *place = Some(item.into());
+        // A gun new to the slot comes with a full magazine.
+        a.rounds.remove(&slot_key(item, slot));
         Ok(())
     }
     /// Trusted respawn/loadout replacement: unmount held images, clear the
@@ -795,6 +1121,14 @@ impl WeaponsWorld {
         self.unmount(id, &mut a);
         a.selected = None;
         a.inventory = items.to_vec();
+        // Each slot's magazine stays with the gun still in it.
+        let kept: BTreeSet<String> = a
+            .inventory
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, item)| Some(slot_key(item.as_ref()?, slot)))
+            .collect();
+        a.rounds.retain(|key, _| kept.contains(key));
         a.spawn_tick = self.tick;
         self.actors.insert(id, a);
         Ok(())
@@ -836,6 +1170,30 @@ impl WeaponsWorld {
             None
         };
         let mut a = self.actors.remove(&id).unwrap();
+        // A reload its image's states run stops as a tool is drawn or put
+        // away, as the states do (Tier+Tactical's `onUse` clearing
+        // `TT_forceToolReload`); drawn again, the gun checks its rounds
+        // afresh.
+        if self.magazine_of(&a).is_some_and(|(_, m)| m.scripted()) {
+            a.reload = None;
+        }
+        // Another copy of the gun in hand drawn from another slot comes out
+        // afresh when its magazine says so (Tier's Remount Duplicate
+        // Items: `serverCmdUnUseTool`, then `serverCmdUseTool`); else the
+        // image stays mid-state with that slot's rounds.
+        let remount = slot != a.selected
+            && image.as_ref().is_some_and(|image| {
+                a.images[0].as_ref().is_some_and(|h| &h.image == image)
+                    && self.pack.images[image]
+                        .magazine
+                        .as_ref()
+                        .is_some_and(|m| m.remount)
+            });
+        if remount {
+            self.unmount(id, &mut a);
+        }
+        // Selected first, so the image mounting knows whose magazine it is.
+        a.selected = slot;
         match image {
             Some(image) => {
                 let paint = self
@@ -849,6 +1207,7 @@ impl WeaponsWorld {
             None => self.unmount(id, &mut a),
         }
         a.selected = slot;
+        self.switch_magazine(id, &mut a);
         self.actors.insert(id, a);
         Ok(())
     }
@@ -907,9 +1266,708 @@ impl WeaponsWorld {
         if let Some(e) = &mut a.images[0] {
             e.paint = next.paint;
         }
-        if next.image == native_id("image", "AkimboGunImage") {
-            self.mount(id, a, &native_id("image", "LeftHandedGunImage"), 1);
+        if let Some(left) = self.left_image(&next.image) {
+            self.mount(id, a, &left, 1);
         }
+    }
+    /// The image an image brings into the left hand: its `left_image`, or
+    /// for v20's akimbo gun the one `AkimboGunImage::onMount` mounts.
+    fn left_image(&self, image: &str) -> Option<String> {
+        self.pack
+            .images
+            .get(image)
+            .and_then(|i| i.left_image.clone())
+            .or_else(|| {
+                (image == native_id("image", "AkimboGunImage"))
+                    .then(|| native_id("image", "LeftHandedGunImage"))
+            })
+    }
+    /// The magazine of the gun in the right hand and the key its rounds
+    /// are kept under: the tool slot it was drawn from ([`slot_key`]), or
+    /// the image itself when a rule mounted it with no tool selected.
+    fn magazine_of(&self, a: &Actor) -> Option<(String, crate::Magazine)> {
+        self.magazine_in(a.images[0].as_ref()?)
+    }
+    /// With nothing in the right hand, the selected tool's magazine if it
+    /// is counted from the reserve: a grenade put away when the last was
+    /// thrown, which comes back as reserve arrives.
+    fn stowed(&self, a: &Actor) -> Option<(String, crate::Magazine)> {
+        if a.images[0].is_some() {
+            return None;
+        }
+        let slot = a.selected?;
+        let item = a.inventory.get(slot)?.as_ref()?;
+        let image = &self.pack.items.get(item)?.image;
+        let magazine = self.pack.images.get(image)?.magazine.clone()?;
+        magazine
+            .from_reserve
+            .then(|| (slot_key(item, slot), magazine))
+    }
+    /// The magazine of `held`, which a running state has out of the hand.
+    fn magazine_in(&self, held: &Equipped) -> Option<(String, crate::Magazine)> {
+        let magazine = self.pack.images.get(&held.image)?.magazine.clone()?;
+        Some((held.magazine.clone()?, magazine))
+    }
+    /// A gun with a magazine comes into the right hand: a new one is full,
+    /// a first gun of its ammo brings the starting reserve, a reload of
+    /// another gun stops, and the hand has ammo while there is a shot.
+    fn load_magazine(&mut self, a: &mut Actor, image: &str) -> Option<String> {
+        let Some(magazine) = self.pack.images.get(image).and_then(|i| i.magazine.clone()) else {
+            a.reload = None;
+            return None;
+        };
+        let key = a
+            .selected
+            .and_then(|slot| Some(slot_key(a.inventory.get(slot)?.as_ref()?, slot)))
+            .unwrap_or_else(|| image.to_string());
+        if a.reload.as_ref().is_some_and(|r| r.item != key) {
+            a.reload = None;
+        }
+        if !magazine.from_reserve {
+            a.rounds.entry(key.clone()).or_insert(magazine.size);
+        }
+        a.reserve
+            .entry(magazine.ammo.clone())
+            .or_insert(Reserve::Rounds(magazine.reserve.min(magazine.max_reserve)));
+        self.magazine_flags(a, image, &key, &magazine);
+        Some(key)
+    }
+    /// Another copy of the gun already in hand was selected: the image
+    /// stays mounted, mid-state, but its rounds are now that slot's (the
+    /// tactical packs' `Weapon::onUse` for duplicates, with its own
+    /// `TT_toolAmmo[%toolNum]`).
+    fn switch_magazine(&mut self, id: ActorId, a: &mut Actor) {
+        let Some(slot) = a.selected else { return };
+        let Some(item) = a.inventory.get(slot).cloned().flatten() else {
+            return;
+        };
+        let key = slot_key(&item, slot);
+        let Some(held) = a.images[0].as_mut() else {
+            return;
+        };
+        if held.magazine.is_none() || held.magazine.as_ref() == Some(&key) {
+            return;
+        }
+        held.magazine = Some(key.clone());
+        let image = held.image.clone();
+        let Some(magazine) = self.pack.images[&image].magazine.clone() else {
+            return;
+        };
+        if a.reload.as_ref().is_some_and(|r| r.item != key) {
+            a.reload = None;
+        }
+        if !magazine.from_reserve {
+            a.rounds.entry(key.clone()).or_insert(magazine.size);
+        }
+        self.magazine_flags(a, &image, &key, &magazine);
+        self.events.push(Event::Ammo { actor: id });
+    }
+    /// A shot from the right hand: with a magazine it takes its rounds, or
+    /// is refused (the gun clicks, and an empty one reloads). `Some(true)`
+    /// for the magazine's last shot ([`crate::Magazine::last_rounds`]).
+    fn spend_rounds(&mut self, id: ActorId, a: &mut Actor, held: &Equipped) -> Option<bool> {
+        let Some((key, magazine)) = self.magazine_in(held) else {
+            return Some(false);
+        };
+        let shot = has_shot(a, &key, &magazine);
+        if !magazine.reloads() {
+            // Counted from the reserve (a grenade's throw, an Arena gun's
+            // shot takes it there), or never used at all.
+            if !shot {
+                self.empty_click(id, a, &magazine);
+                return None;
+            }
+            take_shot(a, &key, &magazine);
+            self.magazine_flags(a, &held.image, &key, &magazine);
+            self.events.push(Event::Ammo { actor: id });
+            return Some(false);
+        }
+        if magazine.scripted() {
+            // The image's states decide when it fires and reloads; a shot
+            // ends a reload under way, as a pump's trigger stops its shells.
+            if !shot {
+                self.empty_click(id, a, &magazine);
+                return None;
+            }
+            a.reload = None;
+            let last = take_shot(a, &key, &magazine);
+            self.events.push(Event::Ammo { actor: id });
+            return Some(last);
+        }
+        let reloading = a.reload.is_some();
+        if reloading && magazine.one_by_one && shot {
+            // A pull of the trigger stops loading shells one by one.
+            a.reload = None;
+        } else if reloading || !shot {
+            self.empty_click(id, a, &magazine);
+            if !self.begin_reload(id, a, key.clone(), &magazine) {
+                self.magazine_flags(a, &held.image, &key, &magazine);
+            }
+            return None;
+        }
+        let last = take_shot(a, &key, &magazine);
+        self.magazine_flags(a, &held.image, &key, &magazine);
+        self.events.push(Event::Ammo { actor: id });
+        if !magazine.fires(rounds_in(a, &key, &magazine)) {
+            self.begin_reload(id, a, key, &magazine);
+        }
+        Some(last)
+    }
+    fn empty_click(&mut self, id: ActorId, a: &Actor, magazine: &crate::Magazine) {
+        if !magazine.empty_sound.is_empty() {
+            self.events.push(Event::Sound {
+                source: TargetId::Actor(id),
+                profile: magazine.empty_sound.clone(),
+                position: a.frame.position,
+            });
+        }
+    }
+    /// Start reloading the held gun's magazine, if it is not full, there is
+    /// reserve to load and no reload is under way. Whether one started.
+    fn start_reload(&mut self, id: ActorId, a: &mut Actor) -> bool {
+        let Some((key, magazine)) = self.magazine_of(a) else {
+            return false;
+        };
+        self.begin_reload(id, a, key, &magazine)
+    }
+    /// Start reloading `key`'s magazine if it is not full, there is reserve
+    /// to load and no reload is under way.
+    fn begin_reload(
+        &mut self,
+        id: ActorId,
+        a: &mut Actor,
+        key: String,
+        magazine: &crate::Magazine,
+    ) -> bool {
+        let rounds = a.rounds.get(&key).copied().unwrap_or(0);
+        if a.reload.is_some()
+            || !magazine.reloads()
+            || rounds >= magazine.size
+            || !can_fill(a, magazine)
+        {
+            return false;
+        }
+        let scripted = magazine.scripted();
+        if scripted
+            && !magazine.light_states.is_empty()
+            && !a.images[0]
+                .as_ref()
+                .and_then(|e| self.pack.images.get(&e.image)?.states.get(e.state))
+                .is_some_and(|s| {
+                    magazine
+                        .light_states
+                        .iter()
+                        .any(|n| n.eq_ignore_ascii_case(&s.name))
+                })
+        {
+            return false;
+        }
+        a.reload = Some(Reload {
+            item: key.clone(),
+            // A scripted magazine's rounds wait for its reload state.
+            done: if scripted {
+                u64::MAX
+            } else {
+                self.tick + u64::from(magazine.reload_ticks)
+            },
+        });
+        if let Some(image) = a.images[0].as_ref().map(|e| e.image.clone()) {
+            self.magazine_flags(a, &image, &key, magazine);
+        }
+        if let Some(check) = &magazine.on_reload {
+            Self::apply_check(a, &key, magazine, check);
+        }
+        if !magazine.reload_sequence.is_empty() {
+            self.animation(id, &magazine.reload_sequence);
+        }
+        if !magazine.reload_sound.is_empty() {
+            self.events.push(Event::Sound {
+                source: TargetId::Actor(id),
+                profile: magazine.reload_sound.clone(),
+                position: a.frame.position,
+            });
+        }
+        self.events.push(Event::Ammo { actor: id });
+        true
+    }
+    /// A reload whose time is up moves its rounds: all it can, or one and
+    /// the next one's wait.
+    fn finish_reload(&mut self, id: ActorId, a: &mut Actor) {
+        let Some(reload) = a.reload.clone().filter(|r| self.tick >= r.done) else {
+            return;
+        };
+        a.reload = None;
+        let Some((key, magazine)) = self.magazine_of(a).filter(|(k, _)| *k == reload.item) else {
+            return;
+        };
+        let rounds = a.rounds.get(&key).copied().unwrap_or(0);
+        // A load of several rounds into a magazine with less room loses the
+        // rest, as the Paired Shotgun's chamber check threw its second
+        // shell away.
+        let wanted = if magazine.one_by_one {
+            magazine.per_load
+        } else {
+            magazine.size.saturating_sub(rounds)
+        };
+        let taken = match magazine.supply {
+            // Filled from nothing: the reserve only says it may reload.
+            crate::Supply::Endless | crate::Supply::Both => wanted,
+            _ => a
+                .reserve
+                .get_mut(&magazine.ammo)
+                .map_or(0, |r| r.take(wanted)),
+        };
+        let rounds = (rounds + taken).min(magazine.size);
+        a.rounds.insert(key.clone(), rounds);
+        self.events.push(Event::Ammo { actor: id });
+        if magazine.one_by_one && rounds < magazine.size && !magazine.scripted() {
+            let more = can_fill(a, &magazine);
+            if more {
+                a.reload = Some(Reload {
+                    item: key.clone(),
+                    done: self.tick + u64::from(magazine.reload_ticks),
+                });
+                if !magazine.reload_sound.is_empty() {
+                    self.events.push(Event::Sound {
+                        source: TargetId::Actor(id),
+                        profile: magazine.reload_sound.clone(),
+                        position: a.frame.position,
+                    });
+                }
+            }
+        }
+        if let Some(image) = a.images[0].as_ref().map(|e| e.image.clone()) {
+            self.magazine_flags(a, &image, &key, &magazine);
+        }
+        if let Some(check) = &magazine.on_loaded {
+            Self::apply_check(a, &key, &magazine, check);
+        }
+    }
+    /// The right hand's flags from its magazine ([`crate::Magazine`]): for
+    /// an image whose states use `loaded`, loaded while there is a shot and
+    /// no reload, with ammo while there is reserve to reload from (as
+    /// Tier+Tactical's `TT_onLoadCheck` set them); for any other, ammo
+    /// while there is a shot and no reload.
+    fn magazine_flags(&self, a: &mut Actor, image: &str, key: &str, magazine: &crate::Magazine) {
+        if !magazine.checks.is_empty() {
+            // Its state scripts set the flags (`apply_check`).
+            return;
+        }
+        let shot = has_shot(a, key, magazine) && a.reload.is_none();
+        let uses_loaded = self.pack.images.get(image).is_some_and(|i| {
+            i.states
+                .iter()
+                .any(|s| s.loaded.is_some() || s.not_loaded.is_some())
+        });
+        if uses_loaded {
+            a.loaded = shot;
+            a.ammo = can_fill(a, magazine);
+        } else {
+            a.ammo = shot;
+        }
+    }
+    /// A [`crate::Check`] on the right hand's flags, from `key`'s magazine.
+    /// Whether it took a shot's rounds ([`crate::Check::spend`]).
+    fn apply_check(
+        a: &mut Actor,
+        key: &str,
+        magazine: &crate::Magazine,
+        check: &crate::Check,
+    ) -> bool {
+        // Under Both a shot needs its rounds in the reserve as well: short
+        // of them, the magazine reads as empty.
+        let mut rounds = rounds_in(a, key, magazine);
+        if magazine.fires(rounds) && !has_shot(a, key, magazine) {
+            rounds = 0;
+        }
+        let reserve = can_fill(a, magazine);
+        if let Some(c) = &check.loaded {
+            a.loaded = c.holds(magazine, rounds, reserve);
+        }
+        if let Some(c) = &check.ammo {
+            a.ammo = c.holds(magazine, rounds, reserve);
+        }
+        if check.keeps_reload && a.reload.as_ref().is_some_and(|r| r.item == key) {
+            a.loaded = false;
+        }
+        if check.spend && a.loaded && magazine.fires(rounds) {
+            take_shot(a, key, magazine);
+            return true;
+        }
+        false
+    }
+    /// The light key: reload the held gun if it has a magazine that is
+    /// not full and reserve to fill it. Whether a reload started.
+    pub fn reload(&mut self, id: ActorId) -> Result<bool> {
+        ensure!(self.events.len() < 8192, "Command event budget");
+        let mut a = self.actors.remove(&id).context("Unknown actor")?;
+        let started = self.start_reload(id, &mut a);
+        self.actors.insert(id, a);
+        Ok(started)
+    }
+    /// A fuse burning in the hand ([`crate::Cook`]): its countdown, and
+    /// going off when it runs out. Put out when the grenade is put away.
+    fn burn_fuse(&mut self, id: ActorId, a: &mut Actor) {
+        let Some(cooking) = a.cook.clone() else {
+            return;
+        };
+        let held = a.images[0].as_ref().map(|e| e.image.as_str());
+        let Some((image, cook)) = self
+            .pack
+            .images
+            .get(&cooking.image)
+            .and_then(|i| Some((i.clone(), i.cook.clone()?)))
+            .filter(|_| held == Some(cooking.image.as_str()))
+        else {
+            a.cook = None;
+            return;
+        };
+        let burned = self
+            .tick
+            .saturating_sub(cooking.lit)
+            .min(u64::from(u32::MAX)) as u32;
+        if burned >= cook.fuse_ticks {
+            a.cook = None;
+            if let Some(projectile) = &image.projectile {
+                let at = a.frame.position + Vec3::Y * cook.burst_height;
+                if let Err(error) = self.spawn_explosion(projectile, id, at, 1.0) {
+                    self.events.push(Event::Diagnostic {
+                        actor: Some(id),
+                        message: format!("Cooked {}: {error}", image.id),
+                    });
+                }
+            }
+            self.unmount(id, a);
+            return;
+        }
+        if let Some(text) = cook.print_at(burned) {
+            self.events.push(Event::Print {
+                actor: id,
+                text,
+                seconds: cook.print_seconds,
+            });
+        }
+    }
+    /// The light key with a gun in hand: whether the gun took it. A gun
+    /// with a magazine reloads; one whose magazine names `light_states`
+    /// leaves the key to the light outside those states or when no reload
+    /// starts ([`crate::Magazine::light_states`]).
+    pub fn light_key(&mut self, id: ActorId) -> Result<bool> {
+        let Some(magazine) = self
+            .actors
+            .get(&id)
+            .and_then(|a| self.magazine_of(a))
+            .map(|(_, m)| m)
+        else {
+            return Ok(false);
+        };
+        // A grenade, or a gun that never reloads, has nothing to reload:
+        // the key works the light.
+        if !magazine.reloads() {
+            return Ok(false);
+        }
+        if magazine.light_states.is_empty() {
+            self.reload(id)?;
+            return Ok(true);
+        }
+        let in_state = self.image_state(id, 0).is_some_and(|(_, state)| {
+            magazine
+                .light_states
+                .iter()
+                .any(|s| s.eq_ignore_ascii_case(&state.name))
+        });
+        let reloads = in_state && self.reload(id)?;
+        // A gun short of rounds with nothing to load shows what it has
+        // (`TT_onUseLight` with no reserve), and the key works the light.
+        // (Tier's display is up for a time, or until put away when that
+        // time is 0; its dry pulls show it again.)
+        if !reloads
+            && magazine.displayed()
+            && (magazine.display_ticks > 0 || !magazine.display_scripts.is_empty())
+            && let Some(view) = self.ammo(id)
+            && view.rounds < view.size
+            && !self.actors.get(&id).is_some_and(|a| can_fill(a, &magazine))
+        {
+            self.events.push(Event::Ammo { actor: id });
+        }
+        Ok(reloads)
+    }
+    /// The held gun's magazine and reserve, when it has one, or the
+    /// selected grenade's that left the hand for want of reserve.
+    pub fn ammo(&self, id: ActorId) -> Option<AmmoView> {
+        let a = self.actors.get(&id)?;
+        let (item, magazine) = self.magazine_of(a).or_else(|| self.stowed(a))?;
+        Some(AmmoView {
+            rounds: rounds_in(a, &item, &magazine).min(100_000),
+            counted: magazine.counts_reserve(),
+            supply: magazine.supply,
+            shown: magazine.displayed(),
+            item: key_item(&item).to_string(),
+            size: magazine.size,
+            name: magazine.name().to_string(),
+            reserve: a
+                .reserve
+                .get(&magazine.ammo)
+                .copied()
+                .unwrap_or(Reserve::Rounds(0)),
+            ammo: magazine.ammo,
+            reloading: a.reload.is_some(),
+            display_ticks: magazine.display_ticks,
+        })
+    }
+    /// Every reserve a holder has, by ammo name.
+    pub fn reserves(&self, id: ActorId) -> Option<&BTreeMap<String, Reserve>> {
+        Some(&self.actors.get(&id)?.reserve)
+    }
+    /// A holder's reserve of `ammo`.
+    pub fn reserve(&self, id: ActorId, ammo: &str) -> Option<Reserve> {
+        self.actors.get(&id)?.reserve.get(ammo).copied()
+    }
+    /// Set a holder's reserve of `ammo` (an ammo box, an endless-ammo
+    /// rule), capped at 100000 rounds.
+    pub fn set_reserve(&mut self, id: ActorId, ammo: &str, reserve: Reserve) -> Result<()> {
+        ensure!(
+            (1..=32).contains(&ammo.len())
+                && ammo
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b)),
+            "Invalid ammo name"
+        );
+        let a = self.actors.get_mut(&id).context("Unknown actor")?;
+        ensure!(
+            a.reserve.len() < 64 || a.reserve.contains_key(ammo),
+            "Too many ammo types"
+        );
+        let reserve = match reserve {
+            Reserve::Rounds(n) => Reserve::Rounds(n.min(100_000)),
+            Reserve::Endless => Reserve::Endless,
+        };
+        a.reserve.insert(ammo.to_string(), reserve);
+        let mut a = self.actors.remove(&id).expect("checked");
+        // A grenade put away for want of reserve comes back into the hand.
+        if let Some((key, magazine)) = self.stowed(&a)
+            && magazine.ammo == ammo
+            && magazine.fires(rounds_in(&a, &key, &magazine))
+            && let Some(image) = self.pack.items.get(key_item(&key)).map(|i| i.image.clone())
+        {
+            self.swap_images(id, &mut a, NextImage { image, paint: None });
+        }
+        // An empty gun waiting on reserve reloads as soon as it has some.
+        if let Some((key, magazine)) = self.magazine_of(&a) {
+            if a.rounds.get(&key).copied().unwrap_or(0) < magazine.per_shot {
+                self.start_reload(id, &mut a);
+            }
+            if let Some(image) = a.images[0].as_ref().map(|e| e.image.clone()) {
+                self.magazine_flags(&mut a, &image, &key, &magazine);
+            }
+        }
+        self.actors.insert(id, a);
+        self.events.push(Event::Ammo { actor: id });
+        Ok(())
+    }
+    /// Add `rounds` to a holder's reserve of `ammo` (an ammo pickup), up to
+    /// the most any magazine of that ammo carries. An endless reserve stays
+    /// endless.
+    pub fn give_ammo(&mut self, id: ActorId, ammo: &str, rounds: u32) -> Result<()> {
+        let cap = self
+            .pack
+            .images
+            .values()
+            .filter_map(|i| i.magazine.as_ref())
+            .filter(|m| m.ammo == ammo)
+            .map(|m| m.max_reserve)
+            .max()
+            .unwrap_or(100_000);
+        let reserve = match self.reserve(id, ammo).unwrap_or(Reserve::Rounds(0)) {
+            Reserve::Rounds(n) => Reserve::Rounds(n.saturating_add(rounds).min(cap)),
+            Reserve::Endless => Reserve::Endless,
+        };
+        self.set_reserve(id, ammo, reserve)
+    }
+    /// Set the rounds in a holder's magazine of `item`, up to its size: the
+    /// one in hand if they hold it, else the first they carry.
+    pub fn set_rounds(&mut self, id: ActorId, item: &str, rounds: u32) -> Result<()> {
+        let a = self.actors.get(&id).context("Unknown actor")?;
+        let holds = |slot: usize| a.inventory.get(slot).and_then(Option::as_deref) == Some(item);
+        let slot = a
+            .selected
+            .filter(|s| holds(*s))
+            .or_else(|| (0..a.inventory.len()).find(|s| holds(*s)))
+            .context("They carry no such item")?;
+        self.set_slot_rounds(id, slot, rounds)
+    }
+    /// Set the rounds in the magazine of the gun in tool `slot`.
+    fn set_slot_rounds(&mut self, id: ActorId, slot: usize, rounds: u32) -> Result<()> {
+        let a = self.actors.get(&id).context("Unknown actor")?;
+        let item = a
+            .inventory
+            .get(slot)
+            .and_then(Option::as_ref)
+            .context("Empty slot")?;
+        let size = self
+            .pack
+            .items
+            .get(item)
+            .and_then(|i| self.pack.images.get(&i.image)?.magazine.as_ref())
+            .filter(|m| !m.from_reserve)
+            .map(|m| m.size)
+            .context("That item has no magazine")?;
+        let item = slot_key(item, slot);
+        let mut a = self.actors.remove(&id).context("Unknown actor")?;
+        a.rounds.insert(item.clone(), rounds.min(size));
+        if let Some((key, magazine)) = self.magazine_of(&a)
+            && key == item
+            && let Some(image) = a.images[0].as_ref().map(|e| e.image.clone())
+        {
+            self.magazine_flags(&mut a, &image, &key, &magazine);
+        }
+        self.actors.insert(id, a);
+        self.events.push(Event::Ammo { actor: id });
+        Ok(())
+    }
+    /// Set the rounds in a dropped gun's magazine, for whoever picks it up
+    /// (v20 Add-Ons' `%item.mag`), up to its magazine's size.
+    pub fn set_drop_rounds(&mut self, drop: u64, rounds: u32) -> Result<()> {
+        let d = self.drops.get_mut(&drop).context("Unknown drop")?;
+        let size = self
+            .pack
+            .items
+            .get(&d.item)
+            .and_then(|i| self.pack.images.get(&i.image)?.magazine.as_ref())
+            .filter(|m| !m.from_reserve)
+            .map(|m| m.size)
+            .context("That item has no magazine")?;
+        d.rounds = Some(rounds.min(size));
+        Ok(())
+    }
+    /// A fresh life: magazines full again and reserves back to each gun's
+    /// starting amount when next drawn.
+    /// A new body for the holder: animations its states scheduled on the
+    /// old one are gone with it (their sounds still play, as v20's global
+    /// `schedule` did).
+    pub fn respawned(&mut self, id: ActorId) -> Result<()> {
+        let a = self.actors.get_mut(&id).context("Unknown actor")?;
+        // The new body wears nothing in its emote slot, and a guard it
+        // takes up starts whole.
+        a.emote = None;
+        a.guard_left = None;
+        a.cues.retain(|c| !c.cue.sound.is_empty());
+        for c in &mut a.cues {
+            c.cue.thread = None;
+            c.cue.sequence.clear();
+        }
+        Ok(())
+    }
+    /// `Player::emote(%image)`: mount `image` in [`EMOTE_SLOT`], replacing
+    /// the one there, whose `unmount` command runs; `None`, or an image this
+    /// pack lacks, empties the slot (`unMountImage(3)`). The image's `mount`
+    /// command runs as it goes on.
+    pub fn emote(&mut self, id: ActorId, image: Option<&str>) -> Result<()> {
+        ensure!(
+            self.events.len() < 8192,
+            "Command event budget; advance/drain before retry"
+        );
+        let a = self.actors.get_mut(&id).context("Unknown actor")?;
+        let old = a.emote.take();
+        if let Some(old) = old {
+            self.put_away(id, &old);
+        }
+        let Some(image) = image.filter(|i| self.pack.images.contains_key(*i)) else {
+            return Ok(());
+        };
+        let a = self.actors.get_mut(&id).expect("checked");
+        a.emote = Some(Equipped {
+            image: image.into(),
+            state: 0,
+            remaining: 0,
+            entered: false,
+            trigger: false,
+            hand: EMOTE_SLOT,
+            paint: None,
+            magazine: None,
+        });
+        if let Some(command) = self.pack.images[image].commands.mount.clone() {
+            self.events.push(Event::ToolFire {
+                actor: id,
+                image: image.into(),
+                hand: EMOTE_SLOT,
+                command: Some(command),
+            });
+        }
+        Ok(())
+    }
+    /// The image in a holder's [`EMOTE_SLOT`] and the name of its state.
+    pub fn emote_state(&self, id: ActorId) -> Option<(&str, &str)> {
+        let e = self.actors.get(&id)?.emote.as_ref()?;
+        let image = self.pack.images.get(&e.image)?;
+        Some((&image.id, &image.states.get(e.state)?.name))
+    }
+    /// The [`EMOTE_SLOT`] image's states, one tick: they follow their
+    /// timeouts, as slot 3 has no trigger and an image mounts loaded and
+    /// without ammo. A state script with a command runs it for the wearer.
+    /// The slot shows nothing itself: clients play the image from the cue
+    /// that mounted it. False when the image is gone.
+    fn advance_emote(&mut self, id: ActorId, e: &mut Equipped) -> bool {
+        let pack = self.pack.clone();
+        let Some(image) = pack.images.get(&e.image) else {
+            return false;
+        };
+        if image.states.is_empty() {
+            return true;
+        }
+        if e.entered && e.remaining > 0 {
+            e.remaining -= 1;
+        }
+        for _ in 0..16 {
+            let state = &image.states[e.state];
+            if !e.entered {
+                e.entered = true;
+                e.remaining = state.ticks;
+                if let Some(command) = image.commands.for_script(&state.script) {
+                    self.events.push(Event::ToolFire {
+                        actor: id,
+                        image: image.id.clone(),
+                        hand: EMOTE_SLOT,
+                        command: Some(command.clone()),
+                    });
+                }
+            }
+            if e.remaining > 0 && state.wait {
+                return true;
+            }
+            let next = state
+                .loaded
+                .or(state.no_ammo)
+                .or(state.up)
+                .or(if e.remaining == 0 {
+                    state.timeout
+                } else {
+                    None
+                });
+            match next {
+                // A zero-time state that leads to itself waits a tick.
+                Some(next) if next != e.state || state.ticks > 0 => {
+                    e.state = next;
+                    e.entered = false;
+                }
+                _ => return true,
+            }
+        }
+        self.events.push(Event::Diagnostic {
+            actor: Some(id),
+            message: format!(
+                "Image instantaneous transition budget exceeded: {}",
+                e.image
+            ),
+        });
+        false
+    }
+    pub fn reset_ammo(&mut self, id: ActorId) -> Result<()> {
+        let a = self.actors.get_mut(&id).context("Unknown actor")?;
+        a.rounds.clear();
+        a.reserve.clear();
+        a.reload = None;
+        Ok(())
     }
     /// `Player::mountImage(%image, 0)` from an Add-On's rules: put `image`
     /// in the right hand (a scope, a second fire mode) and keep the selected
@@ -936,14 +1994,37 @@ impl WeaponsWorld {
         let mut a = self.actors.remove(&id).expect("checked");
         // The rules' image wins over a switch still waiting on the old one.
         a.next = None;
-        if a.images[0].take().is_some() {
-            self.events.push(Event::Unmounted { actor: id, hand: 0 });
+        for hand in 0..2u8 {
+            if a.images[hand as usize].take().is_some() {
+                self.events.push(Event::Unmounted { actor: id, hand });
+            }
         }
         if let Some(image) = image {
             self.mount(id, &mut a, &image, 0);
+            if let Some(left) = self.left_image(&image) {
+                self.mount(id, &mut a, &left, 1);
+            }
         }
         self.actors.insert(id, a);
         Ok(())
+    }
+    /// An image leaves the emote slot: its `unmount` command runs. The
+    /// hands' `mount` and `unmount` commands run from the host, which sees
+    /// the right hand's image change from tick to tick.
+    fn put_away(&mut self, id: ActorId, old: &Equipped) {
+        if let Some(command) = self
+            .pack
+            .images
+            .get(&old.image)
+            .and_then(|i| i.commands.unmount.clone())
+        {
+            self.events.push(Event::ToolFire {
+                actor: id,
+                image: old.image.clone(),
+                hand: old.hand,
+                command: Some(command),
+            });
+        }
     }
     fn mount(&mut self, id: ActorId, a: &mut Actor, image: &str, hand: u8) {
         if self.pack.images.contains_key(image) {
@@ -955,6 +2036,12 @@ impl WeaponsWorld {
                 a.ammo = true;
                 a.loaded = true;
             }
+            let magazine = if hand == 0 {
+                self.load_magazine(a, image)
+            } else {
+                None
+            };
+            let shown = magazine.is_some();
             a.images[hand as usize] = Some(Equipped {
                 image: image.into(),
                 state: 0,
@@ -963,6 +2050,7 @@ impl WeaponsWorld {
                 trigger: hand == 0 && a.trigger,
                 hand,
                 paint: None,
+                magazine,
             });
             if image.to_ascii_lowercase().contains("basketballshoot") {
                 self.events.push(Event::SportMovement {
@@ -975,6 +2063,9 @@ impl WeaponsWorld {
                 image: image.into(),
                 hand,
             });
+            if shown {
+                self.events.push(Event::Ammo { actor: id });
+            }
         }
     }
     /// `Player::mountImage(%image, %slot)` for a worn slot (2 or 3) from an
@@ -1001,7 +2092,10 @@ impl WeaponsWorld {
         }
         let mut a = self.actors.remove(&id).context("Unknown actor")?;
         if a.images[usize::from(slot)].take().is_some() {
-            self.events.push(Event::Unmounted { actor: id, hand: slot });
+            self.events.push(Event::Unmounted {
+                actor: id,
+                hand: slot,
+            });
         }
         if let Some(image) = image {
             self.mount(id, &mut a, image, slot);
@@ -1046,6 +2140,7 @@ impl WeaponsWorld {
         }
         a.next = None;
         a.selected = None;
+        a.cook = None;
     }
     /// The held fire button. It is the player's, so it holds across image
     /// changes, colour cans, empty hands and mid-fire switches, as v20's
@@ -1123,7 +2218,11 @@ impl WeaponsWorld {
         if a.selected == Some(slot) {
             self.equip(id, None)?;
         }
-        self.actors.get_mut(&id).unwrap().inventory[slot] = None;
+        let a = self.actors.get_mut(&id).unwrap();
+        a.inventory[slot] = None;
+        // The magazine goes with the gun (`servercmdDropTool` handing
+        // `TT_toolAmmo[%slot]` to the item); another of it keeps its own.
+        let rounds = a.rounds.remove(&slot_key(&item, slot));
         let drop = self.next_id;
         self.next_id += 1;
         self.drops.insert(
@@ -1139,6 +2238,7 @@ impl WeaponsWorld {
                 // Engine-family evidence:15 engine ticks at32ms. Round UP at120Hz.
                 pickup_after: self.tick + 58,
                 expires: self.tick + 1200,
+                rounds,
                 paint,
                 name: None,
             },
@@ -1193,6 +2293,7 @@ impl WeaponsWorld {
                 source: ActorId(0),
                 pickup_after: self.tick,
                 expires: self.tick + look.lifetime,
+                rounds: None,
                 paint: look.paint,
                 name: None,
             },
@@ -1250,7 +2351,9 @@ impl WeaponsWorld {
         if a.selected == Some(slot) {
             self.equip(id, None)?;
         }
-        self.actors.get_mut(&id).expect("checked").inventory[slot] = None;
+        let a = self.actors.get_mut(&id).expect("checked");
+        a.inventory[slot] = None;
+        a.rounds.remove(&slot_key(item, slot));
         Ok(Some(slot))
     }
     /// Host validates contact and minigame permission. Thrower exclusion applies only to its source.
@@ -1262,7 +2365,13 @@ impl WeaponsWorld {
             "Pickup cooldown"
         );
         let item = d.item.clone();
+        let rounds = d.rounds;
         let slot = self.give(id, &item)?;
+        // Its own magazine comes with it, into the slot it lands in; one
+        // thrown with none comes full (`Player::pickup`).
+        if let Some(rounds) = rounds {
+            self.set_slot_rounds(id, slot, rounds)?;
+        }
         self.drops.remove(&drop);
         self.events.push(Event::DropRemoved { drop });
         Ok(slot)
@@ -1310,6 +2419,8 @@ impl WeaponsWorld {
                 was_thrown: false,
                 paint: None,
                 heading: None,
+                bounces: 0,
+                spawned: self.tick,
             },
         );
         self.events.push(Event::Spawned {
@@ -1363,6 +2474,8 @@ impl WeaponsWorld {
             was_thrown: false,
             paint: None,
             heading: None,
+            bounces: 0,
+            spawned: self.tick,
         });
         Ok(())
     }
@@ -1377,6 +2490,9 @@ impl WeaponsWorld {
         let ids: Vec<_> = self.actors.keys().copied().collect();
         for id in ids {
             let mut a = self.actors.remove(&id).unwrap();
+            self.finish_reload(id, &mut a);
+            self.burn_fuse(id, &mut a);
+            self.play_cues(id, &mut a);
             // v20 `Player::updateMove` sets image slot 1's trigger from move
             // trigger 1, which Blockland never sends, before the images run.
             // `AkimboGunImage::onFireAkimbo`'s setImageTrigger(1, 1) is
@@ -1408,6 +2524,11 @@ impl WeaponsWorld {
                     break;
                 }
             }
+            if let Some(mut e) = a.emote.take()
+                && self.advance_emote(id, &mut e)
+            {
+                a.emote = Some(e);
+            }
             self.actors.insert(id, a);
         }
         let ids: Vec<_> = self.projectiles.keys().copied().collect();
@@ -1419,6 +2540,16 @@ impl WeaponsWorld {
                 self.events.push(Event::Removed { projectile: id });
             }
         }
+        if !self.fuses.is_empty() {
+            let live = &self.projectiles;
+            self.fuses.retain(|id, _| live.contains_key(id));
+        }
+        if !self.reflected.is_empty() {
+            let live = &self.projectiles;
+            self.reflected.retain(|id, _| live.contains_key(id));
+        }
+        self.stopped.clear();
+        self.guard_hurt();
         // v20 `Item::updatePos`: the item's box falls under gravity 20 and
         // rests on its lowest face, bouncing with elasticity 0.2, friction 0.6.
         for d in self.drops.values_mut() {
@@ -1516,6 +2647,8 @@ impl WeaponsWorld {
         if e.entered && e.remaining > 0 {
             e.remaining -= 1;
         }
+        // The state the image just left, for `arm_once`.
+        let mut left = None;
         for _ in 0..16 {
             let state = &image.states[e.state];
             // A zero-timeout state that times out into itself (the wands'
@@ -1540,6 +2673,52 @@ impl WeaponsWorld {
                     state: state.name.clone(),
                     hand: e.hand,
                 });
+                // A state script that checks the magazine sets the flags.
+                if e.hand == 0
+                    && let Some(magazine) = &image.magazine
+                    && let Some(key) = e.magazine.as_deref()
+                    && let Some((_, check)) = magazine
+                        .checks
+                        .iter()
+                        .find(|(s, _)| s.eq_ignore_ascii_case(&state.script))
+                    // It spent a round: any reload is off.
+                    && Self::apply_check(a, key, magazine, check)
+                {
+                    a.reload = None;
+                    self.events.push(Event::Ammo { actor: id });
+                }
+                // A state that shows the ammo display again.
+                if e.hand == 0
+                    && let Some(magazine) = &image.magazine
+                    && magazine
+                        .display_scripts
+                        .iter()
+                        .any(|s| s.eq_ignore_ascii_case(&state.script))
+                {
+                    self.events.push(Event::Ammo { actor: id });
+                }
+                // The magazine's own reload state: its rounds are due now.
+                if e.hand == 0
+                    && let Some(magazine) = &image.magazine
+                    && !magazine.reload_state.is_empty()
+                    && state.script.eq_ignore_ascii_case(&magazine.reload_state)
+                    && let Some(key) = e.magazine.as_deref()
+                {
+                    match a.reload.as_mut() {
+                        Some(reload) if reload.item == key => {
+                            reload.done = reload.done.min(self.tick);
+                        }
+                        // A scripted magazine reloads whenever its states
+                        // get here, as `onReloaded` ran `TT_reload`.
+                        None if magazine.scripted() => {
+                            a.reload = Some(Reload {
+                                item: key.to_string(),
+                                done: self.tick,
+                            });
+                        }
+                        _ => {}
+                    }
+                }
                 if !state.sequence.is_empty() {
                     self.events.push(Event::Animation {
                         actor: id,
@@ -1548,8 +2727,16 @@ impl WeaponsWorld {
                         image_hand: Some(e.hand),
                     });
                 }
-                if !state.arm.is_empty() {
+                if !state.arm.is_empty() && (!state.arm_once || left != Some(e.state)) {
                     self.animation(id, &state.arm);
+                }
+                if !state.gesture.is_empty() {
+                    self.events.push(Event::Animation {
+                        actor: id,
+                        thread: 3,
+                        sequence: state.gesture.clone(),
+                        image_hand: None,
+                    });
                 }
                 if !state.sound.is_empty() {
                     self.events.push(Event::Sound {
@@ -1557,6 +2744,18 @@ impl WeaponsWorld {
                         profile: state.sound.clone(),
                         position: a.frame.muzzle[e.hand as usize],
                     });
+                }
+                for cue in &state.cues {
+                    let pending = PendingCue {
+                        due: self.tick + cue.ticks(),
+                        cue: cue.clone(),
+                        position: a.frame.position,
+                    };
+                    if cue.ticks() == 0 {
+                        self.play_cue(id, pending);
+                    } else if a.cues.len() < MAX_PENDING_CUES {
+                        a.cues.push(pending);
+                    }
                 }
                 if !state.emitter.is_empty() {
                     self.events.push(Event::Effect {
@@ -1598,22 +2797,47 @@ impl WeaponsWorld {
                     }
                     return Advance::Drop;
                 }
+                // A grenade counted from the reserve, with none left, leaves
+                // the hand; its tool stays selected for the reserve to come.
+                if e.hand == 0
+                    && let Some(magazine) = &image.magazine
+                    && magazine.from_reserve
+                    && !magazine.fires(rounds_in(a, "", magazine))
+                {
+                    let selected = a.selected;
+                    self.unmount(id, a);
+                    a.selected = selected;
+                    // Or its tool goes too (Tier's Clear Unusable Grenades).
+                    if magazine.clear_when_out
+                        && let Some(slot) = selected
+                        && let Some(tool) = a.inventory.get_mut(slot)
+                    {
+                        *tool = None;
+                        a.selected = None;
+                    }
+                    self.events.push(Event::Unmounted { actor: id, hand: 0 });
+                    self.events.push(Event::Ammo { actor: id });
+                    return Advance::Drop;
+                }
             }
             if e.remaining > 0 && state.wait && !self_loop {
                 return Advance::Keep;
             }
-            let next = if a.loaded {
+            // Torque checks loaded, then ammo, then the trigger, then the
+            // timeout. Only the right hand's image keeps these flags.
+            let loaded = e.hand != 0 || a.loaded;
+            let next = if loaded {
                 state.loaded
             } else {
                 state.not_loaded
             }
             .or(if !a.ammo { state.no_ammo } else { state.ammo })
-                .or(if e.trigger { state.down } else { state.up })
-                .or(if e.remaining == 0 {
-                    state.timeout
-                } else {
-                    None
-                });
+            .or(if e.trigger { state.down } else { state.up })
+            .or(if e.remaining == 0 {
+                state.timeout
+            } else {
+                None
+            });
             let Some(next) = next else {
                 return Advance::Keep;
             };
@@ -1621,6 +2845,7 @@ impl WeaponsWorld {
                 e.entered = false;
                 return Advance::Keep;
             }
+            left = Some(e.state);
             e.state = next;
             e.entered = false;
         }
@@ -1632,6 +2857,38 @@ impl WeaponsWorld {
             ),
         });
         Advance::Drop
+    }
+    /// Play each of the holder's state cues whose time has come.
+    fn play_cues(&mut self, id: ActorId, a: &mut Actor) {
+        if a.cues.is_empty() {
+            return;
+        }
+        let (due, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut a.cues)
+            .into_iter()
+            .partition(|c| c.due <= self.tick);
+        a.cues = waiting;
+        for c in due {
+            self.play_cue(id, c);
+        }
+    }
+    fn play_cue(&mut self, id: ActorId, c: PendingCue) {
+        if let Some(thread) = c.cue.thread
+            && !c.cue.sequence.is_empty()
+        {
+            self.events.push(Event::Animation {
+                actor: id,
+                thread,
+                sequence: c.cue.sequence,
+                image_hand: None,
+            });
+        }
+        if !c.cue.sound.is_empty() {
+            self.events.push(Event::Sound {
+                source: TargetId::Actor(id),
+                profile: c.cue.sound,
+                position: c.position,
+            });
+        }
     }
     fn animation(&mut self, id: ActorId, sequence: &str) {
         self.events.push(Event::Animation {
@@ -1680,8 +2937,19 @@ impl WeaponsWorld {
                 return true;
             }
         }
+        let script = script.to_ascii_lowercase();
+        if let Some(cook) = &image.cook
+            && cook.script == script
+            && e.hand == 0
+            && a.cook.is_none()
+        {
+            a.cook = Some(Cooking {
+                image: image.id.clone(),
+                lit: self.tick,
+            });
+        }
         // A script the image describes as data replaces the built-in one.
-        let ported = image.scripts.get(&script.to_ascii_lowercase());
+        let ported = image.scripts.get(&script);
         if let Some(s) = ported {
             if !s.arm.is_empty() {
                 self.animation(id, &s.arm);
@@ -1690,8 +2958,14 @@ impl WeaponsWorld {
                 return true;
             }
         }
-        let script = if ported.is_some() { "onfire" } else { script };
-        match script.to_ascii_lowercase().as_str() {
+        // A fire state of its own (`onFire2`): its shot fires as onFire's.
+        let state_shot = image.state_shots.get(&script).cloned();
+        let script = if ported.is_some() || state_shot.is_some() {
+            "onfire"
+        } else {
+            script.as_str()
+        };
+        match script {
             "oncharge" => {
                 if name.contains("spear") || name.contains("football") {
                     self.animation(id, "spearReady");
@@ -1799,6 +3073,15 @@ impl WeaponsWorld {
                 else {
                     return true;
                 };
+                // A shot on the move may fly another projectile (a weaker
+                // round), as its spread and range change, and a rested one
+                // its own (a steadier round).
+                let idle_ticks = a.last_shot.map(|t| self.tick.saturating_sub(t));
+                let projectile = state_shot
+                    .as_ref()
+                    .or(image.shot.as_ref())
+                    .and_then(|s| s.projectile_for(a.frame.velocity.length(), idle_ticks))
+                    .unwrap_or(projectile);
                 let p = self.pack.projectiles[projectile].clone();
                 let sport = p.sport_image.is_some();
                 if sport && self.tick < a.ball_ready {
@@ -1812,6 +3095,35 @@ impl WeaponsWorld {
                 {
                     return true;
                 }
+                // The right gun's magazine pays for each shot, the left
+                // gun's too when it has none of its own (both pistols of a
+                // pair load from one count, as Tier+Tactical's do).
+                let free = state_shot
+                    .as_ref()
+                    .or(image.shot.as_ref())
+                    .is_some_and(|s| s.free);
+                let pays = if free {
+                    None
+                } else if e.hand == 0 {
+                    Some(e.clone())
+                } else if image.magazine.is_none() {
+                    a.images[0].clone()
+                } else {
+                    None
+                };
+                let last = match pays {
+                    Some(pays) => match self.spend_rounds(id, a, &pays) {
+                        Some(last) => last,
+                        None => return true,
+                    },
+                    None => false,
+                };
+                // The magazine's last rounds fire the image's last shot.
+                let (shot, volleys) = match image.last_shot.as_ref().filter(|_| last) {
+                    _ if state_shot.is_some() => (state_shot.clone(), image.volleys.as_slice()),
+                    Some(l) => (Some(l.shot.clone()), l.volleys.as_slice()),
+                    None => (image.shot.clone(), image.volleys.as_slice()),
+                };
                 a.last_shot = Some(self.tick);
                 let mut origin = if image.melee {
                     a.frame.eye
@@ -1903,14 +3215,39 @@ impl WeaponsWorld {
                         }
                     }
                 }
-                let shot = image.shot.unwrap_or(Shot {
-                    projectiles: 1,
-                    spread: 0.0,
-                    recoil: 0.0,
-                });
-                if shot.recoil > 0.0 {
+                let shot = shot.unwrap_or(Shot::SINGLE);
+                if let Some(lob) = shot.lob {
+                    // Up by how far off the look lands, from the feet.
+                    let reach = lob.range * a.frame.scale;
+                    let distance = q
+                        .sweep(
+                            a.frame.eye,
+                            a.frame.eye + direction * reach,
+                            Filter {
+                                projectile_age_ticks: None,
+                                source: id,
+                                players: true,
+                                world_only: false,
+                            },
+                        )
+                        .map_or(lob.otherwise, |hit| a.frame.position.distance(hit.position));
+                    let jitter = |axis: usize| {
+                        let r = unit_random(self.tick, id.0, 5000 + axis as u64);
+                        let steps = lob.jitter_steps[axis];
+                        let whole = ((steps + 1) as f32 * r) as u32;
+                        whole.min(steps) as f32 / lob.jitter_divisor[axis]
+                    };
+                    // v20's x and y are the world's x and -z; the spawn
+                    // below scales by the holder, which the script did not.
+                    let up = distance / lob.distance_divisor;
+                    velocity = (direction * lob.speed + Vec3::new(jitter(0), up, -jitter(1)))
+                        / a.frame.scale.max(0.01);
+                }
+                let pace = a.frame.velocity.length();
+                let spread = shot.spread_for(pace, idle_ticks);
+                let kick = shot.recoil_velocity(direction);
+                if kick != Vec3::ZERO {
                     // Recoil lands before the projectiles, which inherit it.
-                    let kick = -direction * shot.recoil;
                     velocity += kick * p.inherit;
                     self.events.push(Event::Recoil {
                         actor: id,
@@ -1922,22 +3259,90 @@ impl WeaponsWorld {
                 let body = a.frame.middle.unwrap_or(a.frame.eye);
                 let (origin, through) = follow(q, &[body, a.frame.eye, origin]);
                 let velocity = through.map_or(velocity, |c| carried(&c, Vec3::ZERO, velocity).1);
+                // A muzzle shot with something right before the eye starts
+                // at the eye, so it cannot leave through a wall the gun is
+                // pressed into.
+                let eye_first = shot.hitscan.as_ref().is_some_and(|h| {
+                    !h.from_eye
+                        && h.eye_within.is_some_and(|within| {
+                            q.sweep(
+                                a.frame.eye,
+                                a.frame.eye + direction * within,
+                                Filter {
+                                    projectile_age_ticks: None,
+                                    source: id,
+                                    players: p.collide_players,
+                                    world_only: false,
+                                },
+                            )
+                            .is_some()
+                        })
+                });
+                // Where the look meets something, for a muzzle shot that
+                // converges on it.
+                let look_point = shot
+                    .hitscan
+                    .as_ref()
+                    .filter(|h| h.converge && !h.from_eye && !eye_first)
+                    .map(|h| {
+                        let end = a.frame.eye + direction * h.range;
+                        q.sweep(
+                            a.frame.eye,
+                            end,
+                            Filter {
+                                projectile_age_ticks: None,
+                                source: id,
+                                players: p.collide_players,
+                                world_only: false,
+                            },
+                        )
+                        .map_or(end, |hit| hit.position)
+                    });
                 for n in 0..shot.projectiles {
-                    let turn = if shot.spread > 0.0 {
+                    let turn = if spread > 0.0 {
                         let angle = |axis: u64| {
                             let r = unit_random(self.tick, id.0, u64::from(n) * 3 + axis);
-                            (r - 0.5) * 10.0 * std::f32::consts::PI * shot.spread
+                            (r - 0.5) * 10.0 * std::f32::consts::PI * spread
                         };
                         Quat::from_euler(glam::EulerRot::XYZ, angle(0), angle(1), angle(2))
                     } else {
                         Quat::IDENTITY
                     };
+                    if let Some(hitscan) = &shot.hitscan {
+                        let range = match hitscan.moving_range {
+                            Some(moving) if pace > shot.moving_speed => moving,
+                            _ => hitscan.range,
+                        };
+                        let from_eye = hitscan.from_eye || eye_first;
+                        let from = if from_eye { a.frame.eye } else { origin };
+                        let aim = match look_point {
+                            _ if from_eye => direction,
+                            Some(point) => (point - origin).normalize_or(direction),
+                            None => velocity.normalize_or(direction),
+                        };
+                        self.hitscan(
+                            id,
+                            a,
+                            Ray {
+                                hand: e.hand,
+                                image: &image.id,
+                                definition: projectile,
+                                from,
+                                muzzle: origin,
+                                direction: turn * aim,
+                                range,
+                                hitscan,
+                            },
+                            q,
+                        );
+                        continue;
+                    }
                     if let Err(error) = self.spawn(
                         projectile,
                         id,
                         origin,
                         turn * velocity * a.frame.scale,
-                        a.frame.scale,
+                        a.frame.scale * shot.scale,
                     ) {
                         self.events.push(Event::Diagnostic {
                             actor: Some(id),
@@ -1949,6 +3354,55 @@ impl WeaponsWorld {
                         p.was_thrown = name.contains("football");
                         p.paint = e.paint;
                     }
+                    // A cooked grenade flies with what is left of its fuse.
+                    if let (Some(cook), Some(lit)) = (
+                        &image.cook,
+                        a.cook
+                            .as_ref()
+                            .filter(|c| c.image == image.id)
+                            .map(|c| c.lit),
+                    ) {
+                        let burned = self.tick.saturating_sub(lit).min(u64::from(u32::MAX)) as u32;
+                        self.fuses
+                            .insert(self.next_id - 1, cook.fuse_ticks.saturating_sub(burned));
+                    }
+                }
+                if a.cook.as_ref().is_some_and(|c| c.image == image.id) {
+                    a.cook = None;
+                }
+                // Further volleys (a shotgun's slug after its pellets): each
+                // its own projectile and spread, along the same aim, with the
+                // recoil the shot already took.
+                for (v, volley) in volleys.iter().enumerate() {
+                    let Some(d) = self.pack.projectiles.get(&volley.projectile) else {
+                        continue;
+                    };
+                    let base = direction * d.speed + (a.frame.velocity + kick) * d.inherit;
+                    for n in 0..volley.projectiles {
+                        let turn = if volley.spread > 0.0 {
+                            let angle = |axis: u64| {
+                                let salt = (v as u64 + 1) * 1000 + u64::from(n) * 3 + axis;
+                                let r = unit_random(self.tick, id.0, salt);
+                                (r - 0.5) * 10.0 * std::f32::consts::PI * volley.spread
+                            };
+                            Quat::from_euler(glam::EulerRot::XYZ, angle(0), angle(1), angle(2))
+                        } else {
+                            Quat::IDENTITY
+                        };
+                        if let Err(error) = self.spawn(
+                            &volley.projectile,
+                            id,
+                            origin,
+                            turn * base * a.frame.scale,
+                            a.frame.scale,
+                        ) {
+                            self.events.push(Event::Diagnostic {
+                                actor: Some(id),
+                                message: error.to_string(),
+                            });
+                            return true;
+                        }
+                    }
                 }
                 if ported.is_some() {
                     // The port played its own arm animation.
@@ -1956,6 +3410,8 @@ impl WeaponsWorld {
                     self.animation(id, "spearThrow");
                 } else if name.contains("pushbroom") {
                     self.animation(id, "rotCW");
+                } else if image.states.get(e.state).is_some_and(|s| !s.arm.is_empty()) {
+                    // The state played the arm's own animation already.
                 } else if e.hand == 1 {
                     self.animation(id, "leftrecoil");
                 } else if name.contains("gun") || name.contains("horseray") {
@@ -1963,8 +3419,10 @@ impl WeaponsWorld {
                 }
                 if sport {
                     a.ball_ready = self.tick + 36;
-                    if let Some(slot) = a.selected {
-                        a.inventory[slot] = None;
+                    if let Some(slot) = a.selected
+                        && let Some(item) = a.inventory[slot].take()
+                    {
+                        a.rounds.remove(&slot_key(&item, slot));
                     }
                     self.unmount(id, a);
                     self.animation(id, "root");
@@ -1980,11 +3438,36 @@ impl WeaponsWorld {
     fn projectile_step(&mut self, p: &mut Projectile, q: &mut impl Query) -> bool {
         let d = self.pack.projectiles[&p.definition].clone();
         p.age += 1;
+        if let Some(fuse) = self.fuses.get(&p.id).copied()
+            && p.age >= fuse
+        {
+            self.explode(p, &d, q, None);
+            return false;
+        }
         if p.age >= d.lifetime_ticks {
             if d.explode_death {
                 self.explode(p, &d, q, None);
             }
             return false;
+        }
+        // Age restarts on a redirect, so pulses count from the spawn.
+        let flown = self.tick.saturating_sub(p.spawned);
+        if let Some(aura) = &d.aura
+            && flown > 0
+            && flown.is_multiple_of(u64::from(aura.every_ticks))
+            && (aura.max_pulses == 0
+                || flown / u64::from(aura.every_ticks) <= u64::from(aura.max_pulses))
+        {
+            self.aura(p, &d, aura, q);
+        }
+        for (set, c) in d.children.iter().enumerate() {
+            if c.every_ticks > 0
+                && flown > 0
+                && flown.is_multiple_of(u64::from(c.every_ticks))
+                && (c.max_times == 0 || flown / u64::from(c.every_ticks) <= u64::from(c.max_times))
+            {
+                self.children(p, c, set);
+            }
         }
         if p.stuck {
             return true;
@@ -2072,6 +3555,7 @@ impl WeaponsWorld {
                 },
             }
             let allowed = q.can_affect(p.source, hit.target);
+            let mut stopped = false;
             if let Some(image) = &d.sport_image {
                 if let TargetId::Brick(brick) = hit.target
                     && allowed
@@ -2091,6 +3575,10 @@ impl WeaponsWorld {
                             amount: 50000.0,
                             kind: "$DamageType::CannonBallDirect".into(),
                             position: hit.position,
+                            direction: p.velocity.normalize_or_zero(),
+                            projectile: p.definition.clone(),
+                            special: self.special_of(p.id),
+                            bounces: 0,
                         });
                     } else if q.can_catch(p.source, target)
                         && let Some(image) = self.mount_ball(target, image)
@@ -2115,58 +3603,21 @@ impl WeaponsWorld {
                     }
                 }
             } else if allowed {
-                if d.name.eq_ignore_ascii_case("horseRayProjectile") {
-                    if let TargetId::Actor(target) = hit.target {
-                        self.events.push(Event::HorseTransform {
-                            source: p.source,
-                            target,
-                            player_type: "v20.player.horsearmor".into(),
-                            dismount: true,
-                            reapply_colors: true,
-                        });
-                    }
-                } else if d.damage > 0.0
-                    && matches!(
-                        hit.target,
-                        TargetId::Actor(_) | TargetId::Vehicle(_) | TargetId::Entity(_)
-                    )
-                {
-                    self.events.push(Event::Damage {
-                        source: p.source,
-                        target: hit.target,
-                        amount: d.damage.clamp(0.0, 100.0) * p.scale,
-                        kind: d.damage_type.clone(),
-                        position: hit.position,
-                    });
-                }
-                if matches!(
-                    hit.target,
-                    TargetId::Actor(_) | TargetId::Vehicle(_) | TargetId::Entity(_)
-                ) && (d.impulse > 0.0 || d.vertical > 0.0)
-                {
-                    self.events.push(Event::Impulse {
-                        source: p.source,
-                        target: hit.target,
-                        impulse: (p.velocity.normalize_or_zero() * d.impulse
-                            + Vec3::Y * d.vertical)
-                            * p.scale,
-                        position: hit.position,
-                    });
-                }
-                if d.brick.direct && matches!(hit.target, TargetId::Brick(_)) {
-                    self.events.push(Event::BrickImpact {
-                        source: p.source,
-                        target: Some(hit.target),
-                        position: hit.position,
-                        parameters: d.brick.clone(),
-                    });
-                }
+                stopped = self.direct_hit(p, &d, hit.target, hit.position, false);
+            }
+            for (set, c) in d.children.iter().enumerate().filter(|(_, c)| c.on_hit) {
+                self.children(p, c, set);
             }
             if p.age >= d.arm_ticks
                 || (d.explode_player && matches!(hit.target, TargetId::Actor(_)))
                 || !d.ballistic
             {
                 self.explode(p, &d, q, Some(normal));
+                return false;
+            }
+            // Kai's shield deleted a projectile it stopped (`%obj.schedule(10,
+            // delete)`): one that would bounce or stick is gone unexploded.
+            if stopped {
                 return false;
             }
             if d.min_stick_speed > 0.0 && p.velocity.length() >= d.min_stick_speed {
@@ -2188,12 +3639,20 @@ impl WeaponsWorld {
                 * d.elasticity;
             p.position += normal * 0.001;
             p.bounced = true;
+            p.bounces += 1;
+            if d.max_bounces > 0 && p.bounces >= d.max_bounces {
+                self.explode(p, &d, q, Some(normal));
+                return false;
+            }
             self.events.push(Event::Bounced {
                 projectile: p.id,
                 position: p.position,
                 velocity: p.velocity,
             });
             self.effect(p, &d.bounce_effect, Some(normal));
+            for (set, c) in d.children.iter().enumerate().filter(|(_, c)| c.on_bounce) {
+                self.children(p, c, set);
+            }
             if d.sport_image.is_some() && d.rest_speed > 0.0 && p.velocity.length() < d.rest_speed {
                 let item = if d.name.eq_ignore_ascii_case("footballProjectile") {
                     "footballItem"
@@ -2228,6 +3687,7 @@ impl WeaponsWorld {
                             source: p.source,
                             pickup_after: self.tick,
                             expires: self.tick + 1200,
+                            rounds: None,
                             paint: None,
                             name: None,
                         },
@@ -2284,6 +3744,601 @@ impl WeaponsWorld {
             });
         }
     }
+    /// What a projectile does to what it hits, when the rules allow it:
+    /// damage, a shove, a brick knocked loose. A hitscan shot (`ray`) does
+    /// the same where its ray lands. Returns whether a guard stopped it.
+    fn direct_hit(
+        &mut self,
+        p: &Projectile,
+        d: &ProjectileDef,
+        target: TargetId,
+        position: Vec3,
+        ray: bool,
+    ) -> bool {
+        // `ProjectileData::damage` under Kai's `Shield` package: a flying
+        // projectile (not a ray, which hurts through `ShapeBase::damage`)
+        // that strikes a guard from in front.
+        let stop = match target {
+            TargetId::Actor(holder) if !ray => guard_held(&self.actors, &self.pack, holder)
+                .and_then(|(guard, _, a)| {
+                    let (look, middle) = (a.frame.direction.normalize_or_zero(), body(a));
+                    guard
+                        .covers(look, middle, a.frame.scale, position, p.velocity)
+                        .then(|| (holder, guard.clone()))
+                }),
+            _ => None,
+        };
+        let (hurt, push) = stop
+            .as_ref()
+            .map_or((1.0, 1.0), |(_, g)| (g.projectile_damage, g.push));
+        if d.name.eq_ignore_ascii_case("horseRayProjectile") {
+            if let TargetId::Actor(actor) = target {
+                self.events.push(Event::HorseTransform {
+                    source: p.source,
+                    target: actor,
+                    player_type: "v20.player.horsearmor".into(),
+                    dismount: true,
+                    reapply_colors: true,
+                });
+            }
+        } else if d.damage > 0.0
+            && hurt > 0.0
+            && matches!(
+                target,
+                TargetId::Actor(_) | TargetId::Vehicle(_) | TargetId::Entity(_)
+            )
+        {
+            self.events.push(Event::Damage {
+                source: p.source,
+                target,
+                amount: d.damage.clamp(0.0, 100.0)
+                    * if d.fixed_damage { 1.0 } else { p.scale }
+                    * hurt,
+                kind: d.damage_type.clone(),
+                position,
+                direction: p.velocity.normalize_or_zero(),
+                projectile: p.definition.clone(),
+                special: self.special_of(p.id),
+                bounces: p.bounces,
+            });
+        }
+        if matches!(
+            target,
+            TargetId::Actor(_) | TargetId::Vehicle(_) | TargetId::Entity(_)
+        ) && (d.impulse > 0.0 || d.vertical > 0.0)
+        {
+            self.events.push(Event::Impulse {
+                source: p.source,
+                target,
+                impulse: (p.velocity.normalize_or_zero() * d.impulse + Vec3::Y * d.vertical)
+                    * p.scale
+                    * push,
+                position,
+            });
+        }
+        if let (Some(slow), TargetId::Actor(actor)) = (d.slow, target) {
+            self.events.push(Event::Slow { actor, slow });
+        }
+        if d.brick.direct && matches!(target, TargetId::Brick(_)) {
+            self.events.push(Event::BrickImpact {
+                source: p.source,
+                target: Some(target),
+                position,
+                parameters: d.brick.clone(),
+            });
+        }
+        match stop {
+            Some((holder, guard)) => {
+                self.stop(p, d, holder, position, &guard);
+                true
+            }
+            None => false,
+        }
+    }
+    /// A guard stopped `p` where it struck, `at`: the clang at the holder,
+    /// one of its sounds, a stop off what it has left (breaking it at the
+    /// last), its blast told to spare the holder, and the shot sent back.
+    fn stop(
+        &mut self,
+        p: &Projectile,
+        d: &ProjectileDef,
+        holder: ActorId,
+        at: Vec3,
+        guard: &crate::Guard,
+    ) {
+        let Some(a) = self.actors.get(&holder) else {
+            return;
+        };
+        let (look, middle, scale, velocity, bot) = (
+            a.frame.direction.normalize_or_zero(),
+            body(a),
+            a.frame.scale,
+            a.frame.velocity,
+            a.bot,
+        );
+        self.burst(&guard.hit_explosion, holder, middle, scale);
+        if let Some(durability) = guard.durability
+            && !(guard.bots_keep && bot)
+        {
+            let a = self.actors.get_mut(&holder).expect("checked");
+            let left = a.guard_left.unwrap_or(durability).saturating_sub(1);
+            a.guard_left = Some(left);
+            if left == 0 {
+                a.guard_left = None;
+                self.break_guard(holder, guard, middle, scale);
+            }
+        }
+        self.stopped.push((p.id, holder, guard.push));
+        if !guard.sounds.is_empty() {
+            let n = guard.sounds.len();
+            let pick = (unit_random(self.tick, p.id, GUARD_SOUND_DRAW) * n as f32) as usize;
+            self.events.push(Event::Sound {
+                source: TargetId::Actor(holder),
+                profile: guard.sounds[pick.min(n - 1)].clone(),
+                position: at,
+            });
+        }
+        let lately = self
+            .reflected
+            .get(&p.id)
+            .is_some_and(|(tick, _)| self.tick.saturating_sub(*tick) < REFLECT_TICKS);
+        if guard.reflect && !lately && look != Vec3::ZERO {
+            // From in front of the holder, the way they look, as fast as it
+            // came, with their own motion as the projectile inherits it.
+            let from = middle + look * (velocity.length() / 5.0 + 1.0);
+            let speed = p.velocity.length();
+            match self.spawn(
+                &p.definition,
+                holder,
+                from,
+                look * speed + velocity * d.inherit,
+                p.scale,
+            ) {
+                Ok(id) => {
+                    self.reflected
+                        .insert(id, (self.tick, guard.reflect_kill.clone()));
+                }
+                Err(error) => self.events.push(Event::Diagnostic {
+                    actor: Some(holder),
+                    message: format!("A guard could not send a shot back: {error}"),
+                }),
+            }
+        }
+    }
+    /// The guard in `holder`'s hand breaks: the first of their tools whose
+    /// image it is leaves them, and if that is the one in hand, or none
+    /// is, their hand empties and `break_explosion` goes off, as Kai's
+    /// shield did when its `shieldHP` ran out.
+    fn break_guard(&mut self, holder: ActorId, guard: &crate::Guard, middle: Vec3, scale: f32) {
+        let Some(a) = self.actors.get(&holder) else {
+            return;
+        };
+        let Some(held) = a.images[0].as_ref().map(|e| e.image.clone()) else {
+            return;
+        };
+        let slot = a.inventory.iter().position(|item| {
+            item.as_ref()
+                .and_then(|i| self.pack.items.get(i))
+                .is_some_and(|i| i.image == held)
+        });
+        let in_hand = slot.is_none_or(|s| a.selected == Some(s));
+        if let Some(slot) = slot {
+            let a = self.actors.get_mut(&holder).expect("checked");
+            if let Some(item) = a.inventory[slot].take() {
+                a.rounds.remove(&slot_key(&item, slot));
+            }
+        }
+        if in_hand {
+            let emptied = if slot.is_some() {
+                self.equip(holder, None)
+            } else {
+                self.swap_image(holder, None)
+            };
+            if let Err(error) = emptied {
+                self.events.push(Event::Diagnostic {
+                    actor: Some(holder),
+                    message: format!("A broken guard stayed in hand: {error}"),
+                });
+            }
+            self.burst(&guard.break_explosion, holder, middle, scale);
+        }
+    }
+    /// `ShapeBase::spawnExplosion`: the projectile `name` (an id, or a
+    /// datablock name in any loaded pack) goes off at `at`.
+    fn burst(&mut self, name: &str, source: ActorId, at: Vec3, scale: f32) {
+        let Some(definition) = self.projectile_named(name) else {
+            return;
+        };
+        if let Err(error) = self.spawn_explosion(&definition, source, at, scale) {
+            self.events.push(Event::Diagnostic {
+                actor: Some(source),
+                message: error.to_string(),
+            });
+        }
+    }
+    /// The special kill a projectile makes: one a guard sent back.
+    fn special_of(&self, projectile: u64) -> Option<String> {
+        self.reflected
+            .get(&projectile)
+            .and_then(|(_, kill)| kill.clone())
+    }
+    /// `ShapeBase::damage` under Kai's `Shield` package: hurt that strikes
+    /// a held guard from in front keeps only the guard's share, with its
+    /// clang at the holder. Hurt above 5000 (an instant kill) or struck at
+    /// the holder's feet is not stopped.
+    fn guard_hurt(&mut self) {
+        let mut clangs = vec![];
+        for e in &mut self.events {
+            let Event::Damage {
+                target: TargetId::Actor(holder),
+                amount,
+                position,
+                ..
+            } = e
+            else {
+                continue;
+            };
+            let Some((guard, _, a)) = guard_held(&self.actors, &self.pack, *holder) else {
+                continue;
+            };
+            if *amount > 5000.0 || position.distance(a.frame.position) < 0.1 {
+                continue;
+            }
+            let middle = body(a);
+            let look = a.frame.direction.normalize_or_zero();
+            if guard.covers(look, middle, a.frame.scale, *position, middle - *position) {
+                *amount *= guard.damage;
+                clangs.push((guard.hit_explosion.clone(), *holder, middle, a.frame.scale));
+            }
+        }
+        for (explosion, holder, middle, scale) in clangs {
+            self.burst(&explosion, holder, middle, scale);
+        }
+    }
+    /// One ray of a [`crate::Hitscan`] shot: the projectile `definition`
+    /// lands where the ray first meets something, as if it had flown there,
+    /// with the hitscan's landing sound; every player draws the tracer to
+    /// that point, and its `flown` projectile flies there. A ricocheting
+    /// ray ([`crate::Ricochet`]) then turns off what it met and lands again.
+    fn hitscan(&mut self, id: ActorId, a: &Actor, ray: Ray, q: &mut impl Query) {
+        let definition = ray.definition;
+        let mut d = self.pack.projectiles[definition].clone();
+        if let Some(damage) = ray.hitscan.damage {
+            d.damage = damage;
+        }
+        let base = d.damage;
+        let ricochet = ray.hitscan.ricochet;
+        let turns = ricochet.map_or(0, |r| r.times);
+        let mut from = ray.from;
+        let mut direction = ray.direction.normalize_or(Vec3::NEG_Z);
+        let mut reach = ray.range * a.frame.scale;
+        // One draw a shot: its every ray and landing plays the same pair.
+        let draw = unit_random(self.tick, id.0, HIT_SOUND_DRAW);
+        for landing in 0..=turns {
+            let hit = q.sweep(
+                from,
+                from + direction * reach,
+                Filter {
+                    // Once it has turned it is a shot coming back, which
+                    // can meet its shooter (`%ignore` is then only what it
+                    // last hit, which it leaves from just off the face).
+                    projectile_age_ticks: (landing > 0).then_some(u32::MAX),
+                    source: id,
+                    players: d.collide_players,
+                    world_only: false,
+                },
+            );
+            let to = hit
+                .as_ref()
+                .map_or(from + direction * reach, |h| h.position);
+            if landing == 0 {
+                self.events.push(Event::Tracer {
+                    actor: id,
+                    hand: ray.hand,
+                    image: ray.image.into(),
+                    to,
+                });
+                if let Some(flown) = self.projectile_named(&ray.hitscan.flown)
+                    && let Some(speed) = self.pack.projectiles.get(&flown).map(|f| f.speed)
+                {
+                    // Flown from the muzzle to the end, to be seen.
+                    let along = (to - ray.muzzle).normalize_or(direction);
+                    if let Err(error) = self.spawn(
+                        &flown,
+                        id,
+                        ray.muzzle,
+                        along * speed * a.frame.scale,
+                        a.frame.scale,
+                    ) {
+                        self.events.push(Event::Diagnostic {
+                            actor: Some(id),
+                            message: error.to_string(),
+                        });
+                    }
+                }
+            } else {
+                self.events.push(Event::Ricochet {
+                    actor: id,
+                    image: ray.image.into(),
+                    from,
+                    to,
+                });
+            }
+            let Some(hit) = hit.filter(|h| h.position.is_finite() && h.normal.is_finite()) else {
+                return;
+            };
+            // ShortRifleKai's `onRaycastDamage`: more for each landing
+            // before, its own share on the shooter.
+            if let Some(r) = ricochet {
+                d.damage = if hit.target == TargetId::Actor(id) {
+                    base * r.shooter
+                } else {
+                    (base + landing as f32 * r.damage).clamp(-100.0, 100.0)
+                };
+            }
+            let normal = hit.normal.normalize_or(-direction);
+            if !self.hitscan_land(
+                id,
+                a,
+                definition,
+                &d,
+                ray.hitscan,
+                landing,
+                from,
+                direction,
+                &hit,
+                normal,
+                draw,
+                q,
+            ) {
+                return;
+            }
+            reach -= hit.position.distance(from);
+            if reach <= 0.0 {
+                return;
+            }
+            // Mirrored about the face it met, from just off it.
+            direction = (direction - normal * 2.0 * direction.dot(normal)).normalize_or(normal);
+            from = hit.position + normal * 0.01;
+        }
+    }
+    /// A hitscan ray's `landing` (0 the first) at `hit`: its contact,
+    /// damage, explosion and sound. False when the contact deleted it.
+    #[allow(clippy::too_many_arguments)]
+    fn hitscan_land(
+        &mut self,
+        id: ActorId,
+        a: &Actor,
+        definition: &str,
+        d: &ProjectileDef,
+        hitscan: &crate::Hitscan,
+        landing: u32,
+        from: Vec3,
+        direction: Vec3,
+        hit: &Hit,
+        normal: Vec3,
+        draw: f32,
+        q: &mut impl Query,
+    ) -> bool {
+        let projectile = self.next_id;
+        self.next_id += 1;
+        let p = Projectile {
+            id: projectile,
+            definition: definition.into(),
+            source: id,
+            position: hit.position,
+            // Never zero, so a still projectile still knows which way it hit.
+            velocity: direction * d.speed.max(1.0),
+            scale: a.frame.scale,
+            age: d.arm_ticks,
+            bounced: landing > 0,
+            stuck: false,
+            origin: from,
+            was_thrown: false,
+            paint: None,
+            heading: None,
+            bounces: landing,
+            spawned: self.tick,
+        };
+        let contact = ProjectileContact {
+            projectile,
+            definition: definition.into(),
+            source: id,
+            target: hit.target,
+            position: hit.position,
+            velocity: p.velocity,
+            normal,
+            scale: p.scale,
+            paint: None,
+        };
+        self.events.push(Event::Contact {
+            impact: contact.clone(),
+        });
+        if matches!(q.on_contact(&contact), ContactResponse::Delete) {
+            return false;
+        }
+        if q.can_affect(id, hit.target) {
+            self.direct_hit(&p, d, hit.target, hit.position, true);
+        }
+        match self
+            .projectile_named(&hitscan.explosion)
+            .and_then(|e| Some((self.pack.projectiles.get(&e)?.clone(), e)))
+        {
+            // `%p.explode()` where the ray landed, facing out of the surface.
+            Some((blast, definition)) => {
+                let at = Projectile {
+                    definition,
+                    velocity: normal,
+                    ..p.clone()
+                };
+                self.explode(&at, &blast, q, Some(normal));
+            }
+            None => self.explode(&p, d, q, Some(normal)),
+        }
+        let sound = hitscan.sound(matches!(hit.target, TargetId::Actor(_)), draw);
+        if !sound.is_empty() {
+            self.events.push(Event::Sound {
+                source: TargetId::Actor(id),
+                profile: sound.to_owned(),
+                position: hit.position,
+            });
+        }
+        true
+    }
+    /// A projectile by id, or by its datablock name in any loaded pack.
+    fn projectile_named(&self, name: &str) -> Option<String> {
+        if name.is_empty() {
+            return None;
+        }
+        if self.pack.projectiles.contains_key(name) {
+            return Some(name.to_owned());
+        }
+        self.pack
+            .projectiles
+            .iter()
+            .find(|(_, d)| d.name.eq_ignore_ascii_case(name))
+            .map(|(id, _)| id.clone())
+    }
+    /// `children`: throw them out in directions from the tick and the
+    /// parent, so every player computes the same ones.
+    /// Each `set` of a projectile's children draws its own directions.
+    fn children(&mut self, p: &Projectile, c: &crate::Children, set: usize) {
+        let draw = |salt: u64| {
+            let r = unit_random(self.tick, p.id, salt);
+            (c.count + ((c.max_count - c.count + 1) as f32 * r) as u32).min(c.max_count)
+        };
+        let count = if c.max_count <= c.count {
+            c.count
+        } else if c.redraw {
+            // Past `count`, each further child only while a fresh draw
+            // is above the number thrown so far.
+            (c.count..c.max_count)
+                .find(|&n| draw(2100 + set as u64 * 16 + u64::from(n)) <= n)
+                .unwrap_or(c.max_count)
+        } else {
+            draw(2000 + set as u64)
+        };
+        for n in (0..u64::from(count)).map(|n| n + set as u64 * 16) {
+            let z = unit_random(self.tick, p.id, n * 2) * 2.0 - 1.0;
+            let phi = unit_random(self.tick, p.id, n * 2 + 1) * std::f32::consts::TAU;
+            let r = (1.0 - z * z).max(0.0).sqrt();
+            let mut direction = Vec3::new(r * phi.cos(), z, r * phi.sin());
+            let mut own = direction * c.speed;
+            if c.angles {
+                let degrees = |salt: u64| {
+                    let r = unit_random(self.tick, p.id, salt);
+                    ((361.0 * r) as u32).min(360) as f32 / 360.0 * std::f32::consts::TAU
+                };
+                let (a, b) = (degrees(4000 + n * 2), degrees(4000 + n * 2 + 1));
+                own = Vec3::new(a.cos(), b.cos(), a.sin()) * c.speed;
+                direction = own.normalize_or_zero();
+            }
+            if let Some(steps) = &c.steps {
+                own = Vec3::from_array(std::array::from_fn(|axis| {
+                    let (low, high) = (steps.low[axis], steps.high[axis]);
+                    let r = unit_random(self.tick, p.id, 3000 + n * 3 + axis as u64);
+                    let whole = (low + ((high - low + 1) as f32 * r) as i32).min(high);
+                    (whole as f32 + steps.offset[axis]) * steps.step[axis]
+                }));
+                direction = own.normalize_or_zero();
+            }
+            let velocity = (own + p.velocity * c.inherit) * p.scale;
+            let at = p.position + direction * 0.05 * p.scale;
+            match self.spawn(&c.projectile, p.source, at, velocity, p.scale) {
+                Ok(child) => {
+                    if let Some([low, high]) = c.fuse_ticks {
+                        let r = unit_random(self.tick, p.id, 1000 + n);
+                        let fuse = low + ((high - low + 1) as f32 * r) as u32;
+                        self.fuses.insert(child, fuse.min(high));
+                    }
+                }
+                Err(error) => {
+                    self.events.push(Event::Diagnostic {
+                        actor: Some(p.source),
+                        message: format!("Children of projectile {}: {error}", p.id),
+                    });
+                    return;
+                }
+            }
+        }
+    }
+    /// `aura`: one pulse of damage to everything in reach, by the splash
+    /// rules, at full strength throughout the radius.
+    fn aura(&mut self, p: &Projectile, d: &ProjectileDef, aura: &crate::Aura, q: &mut impl Query) {
+        let kind = if aura.damage_type.is_empty() {
+            d.radius_damage_type.clone()
+        } else {
+            aura.damage_type.clone()
+        };
+        let mut hurt = 0;
+        for target in q
+            .radius(p.position, aura.radius * p.scale, MAX_QUERY_TARGETS)
+            .into_iter()
+            .take(MAX_QUERY_TARGETS)
+        {
+            if aura.max_targets > 0 && hurt >= aura.max_targets {
+                break;
+            }
+            // An ally takes the aura's ally damage instead, friendly fire
+            // or not.
+            let ally = aura.ally_damage.filter(|_| {
+                target.target != TargetId::Actor(p.source) && q.is_ally(p.source, target.target)
+            });
+            if !target.center.is_finite()
+                || aura.players_only && matches!(target.target, TargetId::Vehicle(_))
+                || ally.is_none() && !q.can_affect_radius(p.source, target.target)
+            {
+                continue;
+            }
+            if !aura.effect.is_empty() {
+                let scale = match target.target {
+                    TargetId::Actor(t) => self.actors.get(&t).map_or(1.0, |a| a.frame.scale),
+                    _ => 1.0,
+                };
+                self.events.push(Event::Effect {
+                    source: target.target,
+                    definition: aura.effect.clone(),
+                    position: target.center,
+                    node: String::new(),
+                    seconds: 0.0,
+                    image: None,
+                    hand: None,
+                    direction: None,
+                    scale,
+                });
+            }
+            if !aura.target_sound.is_empty()
+                && let TargetId::Actor(actor) = target.target
+            {
+                self.events.push(Event::Heard {
+                    actor,
+                    profile: aura.target_sound.clone(),
+                });
+            }
+            let damage = ally.unwrap_or(aura.damage);
+            if damage > 0.0 {
+                self.events.push(Event::Damage {
+                    source: p.source,
+                    target: target.target,
+                    amount: damage * p.scale,
+                    kind: kind.clone(),
+                    position: p.position,
+                    direction: (target.center - p.position).normalize_or_zero(),
+                    projectile: p.definition.clone(),
+                    special: self.special_of(p.id),
+                    bounces: 0,
+                });
+            }
+            if aura.burn_seconds > 0.0 {
+                self.events.push(Event::Burn {
+                    source: p.source,
+                    target: target.target,
+                    seconds: aura.burn_seconds,
+                });
+            }
+            hurt += 1;
+        }
+    }
     fn explode(
         &mut self,
         p: &Projectile,
@@ -2292,6 +4347,9 @@ impl WeaponsWorld {
         direction: Option<Vec3>,
     ) {
         self.effect(p, &d.explosion.effect, direction);
+        for (set, c) in d.children.iter().enumerate().filter(|(_, c)| c.on_explode) {
+            self.children(p, c, set);
+        }
         if d.brick.radius > 0.0 {
             self.events.push(Event::BrickImpact {
                 source: p.source,
@@ -2325,14 +4383,25 @@ impl WeaponsWorld {
                 continue;
             }
             let distance = target.center.distance(p.position);
+            // A guard that stopped this projectile spares its holder the
+            // blast and keeps its share of the push (`damageCancel`).
+            let spared = self
+                .stopped
+                .iter()
+                .find(|(id, holder, _)| *id == p.id && target.target == TargetId::Actor(*holder))
+                .map(|(.., push)| *push);
             let damage_factor = falloff(distance, d.explosion.radius * p.scale);
-            if damage_factor > 0.0 && d.explosion.damage > 0.0 {
+            if damage_factor > 0.0 && d.explosion.damage > 0.0 && spared.is_none() {
                 self.events.push(Event::Damage {
                     source: p.source,
                     target: target.target,
                     amount: d.explosion.damage * p.scale * damage_factor,
                     kind: d.radius_damage_type.clone(),
                     position: p.position,
+                    direction: (target.center - p.position).normalize_or_zero(),
+                    projectile: p.definition.clone(),
+                    special: self.special_of(p.id),
+                    bounces: 0,
                 });
                 if d.explosion.burn_seconds > 0.0 {
                     self.events.push(Event::Burn {
@@ -2370,7 +4439,8 @@ impl WeaponsWorld {
                     impulse: (push.normalize_or_zero() * d.explosion.impulse
                         + Vec3::Y * d.explosion.impulse_vertical)
                         * p.scale
-                        * impulse_factor,
+                        * impulse_factor
+                        * spared.unwrap_or(1.0),
                     position: p.position,
                 });
             }
@@ -2450,6 +4520,33 @@ pub fn redirected_velocity(impact: &ProjectileContact, response: ContactResponse
 }
 /// A number in [0, 1) that host and players compute alike for one shot, so
 /// spread needs no random state and nothing on the wire.
+/// [`unit_random`]'s `n` for a hitscan shot's landing sounds, apart from
+/// its rays' spreads (`3 * ray + axis`).
+const HIT_SOUND_DRAW: u64 = u64::MAX;
+/// [`unit_random`]'s draw of a stopped projectile's guard sound.
+const GUARD_SOUND_DRAW: u64 = u64::MAX - 1;
+/// How long a projectile a guard sent back cannot be sent back again: Kai's
+/// 500 ms.
+const REFLECT_TICKS: u64 = 60;
+/// The guard `actor` holds up: their right hand's image's, while that image
+/// is in one of its guarding states, with the image's id and the holder.
+fn guard_held<'a>(
+    actors: &'a BTreeMap<ActorId, Actor>,
+    pack: &'a Pack,
+    actor: ActorId,
+) -> Option<(&'a crate::Guard, &'a str, &'a Actor)> {
+    let a = actors.get(&actor)?;
+    let held = a.images[0].as_ref()?;
+    let image = pack.images.get(&held.image)?;
+    let guard = image.guard.as_ref()?;
+    guard
+        .guards_in(&image.states.get(held.state)?.name)
+        .then_some((guard, held.image.as_str(), a))
+}
+/// The middle of a holder's body (Torque's hack position).
+fn body(a: &Actor) -> Vec3 {
+    a.frame.middle.unwrap_or(a.frame.eye)
+}
 fn unit_random(tick: u64, actor: u64, n: u64) -> f32 {
     let mut z = tick
         .wrapping_mul(0x9E37_79B9_7F4A_7C15)

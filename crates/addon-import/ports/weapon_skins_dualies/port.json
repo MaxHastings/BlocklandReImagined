@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "include": [
+    "tier-tactical-core",
+    "tier-tactical"
+  ],
+  "notes": "Tier+Tactical Dualies skins: Akimbo versions of the Pistol skins on Tier 1's Akimbo Pistol. Each holds twice its pistol's magazine (Kai's `TT_maxAmmo*2`), and the onFireAkimbo state pulls the left gun's trigger. Kai left the Covert dualies' file out of the Add-On's server.cs, so they are not loaded.",
+  "handles": {
+    "AkimboClassicPistolImage::onUnMount": "engine: the left gun (its left_image) leaves the hand with the right one",
+    "AkimboModernPistolImage::onUnMount": "engine: the left gun (its left_image) leaves the hand with the right one",
+    "AkimboSilencedPistolImage::onUnMount": "engine: the left gun (its left_image) leaves the hand with the right one",
+    "AkimboSilencedPistolImage::onLoadCheck": "never runs: the Akimbo Pistol's states it inherits name TT_onLoadCheck, not onLoadCheck, so v20 never called it"
+  }
+}

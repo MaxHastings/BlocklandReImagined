@@ -468,6 +468,7 @@ fn damage_type(name: &str, verb: &str) -> (String, DamageType) {
             murder_message: format!("%2 {verb} %1"),
             vehicle_scale: 0.5,
             direct: true,
+            special: false,
         },
     )
 }
@@ -619,6 +620,7 @@ pub fn pack() -> Pack {
             projectiles: 6,
             spread: 0.02,
             recoil: 5.0,
+            ..Shot::SINGLE
         }),
         ..image(
             SHOTGUN_IMAGE,
@@ -1155,6 +1157,7 @@ pub fn pack() -> Pack {
         items,
         images,
         projectiles,
+        external_projectiles: Default::default(),
         damage_types: BTreeMap::new(),
         explosions: BTreeMap::new(),
         sounds: BTreeMap::new(),
@@ -1162,6 +1165,7 @@ pub fn pack() -> Pack {
         definitions,
         resources: vec![],
         diagnostics: vec![],
+        bindings: vec![],
     };
     // The Bubble Blaster sample, as it ships.
     let bubble = Pack::from_json(BUBBLE_PACK.as_bytes()).expect("Bubble Blaster sample pack");

@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "include": [
+    "tier-tactical-core",
+    "tier-tactical"
+  ],
+  "notes": "Tier+Tactical Tier 2A on Tier 1's ammo system. The Bullpup fires three-round bursts, each burst check taking its round as Kai's onBurstCheck did. The PDW's left gun fires free beside the right one, which pays. Jet with the Sniper Carbine in hand scopes in, slowing its holder as Tier 2's LMGArmor does when Tier 2 is on too, and jet again scopes out; a reload begun scoped hands the gun back to the unscoped image, which then reloads (Kai's TT_forceToolReload). The scoped carbine's head hits crit while Emote_Critical is on. The Crossbow and Machine Pistol fire as their scripts say. The Match Pistol is one of Kai's easter eggs, loaded only with the hidden \"???\" setting (off by default): it is imported hidden.",
+  "handles": {
+    "DualSMGsImage::onUnMount": "engine: the left gun (its left_image) leaves the hand with the right one",
+    "SniperCarbineImage::onMount": "the magazine check's keeps_reload: a reload begun scoped carries on in the unscoped image",
+    "SniperCarbineItem::onUse": "engine: a reload its states run stops as the gun is drawn or put away"
+  },
+  "patch": {
+    "assets/weapons.json": {
+      "items": {
+        "{namespace}:weapon/matchpistolitem": {
+          "hidden": true
+        }
+      },
+      "images": {
+        "{namespace}:image/snipercarbineimage": {
+          "commands": {
+            "jet": "{rules}:alt_fire"
+          }
+        },
+        "{namespace}:image/sniperczoomedimage": {
+          "commands": {
+            "jet": "{rules}:alt_fire",
+            "mount": "{rules}:lay",
+            "unmount": "{rules}:lift",
+            "states": {
+              "onreloadstart": "{rules}:alt_done"
+            }
+          }
+        }
+      }
+    }
+  }
+}

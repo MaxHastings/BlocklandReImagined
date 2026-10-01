@@ -124,6 +124,8 @@ mod tests {
             was_thrown: false,
             paint: None,
             heading: None,
+            bounces: 0,
+            spawned: 0,
         }
     }
     fn view(projectiles: Vec<Projectile>) -> WeaponView {

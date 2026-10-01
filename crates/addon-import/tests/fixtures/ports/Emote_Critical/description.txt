@@ -1,0 +1,8 @@
+Title: Stand-in Critical Hit Emote
+Author: Blockland ReImagined tests
+Written for tests. It has the community Critical Hit Emote's folder name and
+the datablock names the Adventurer's Weapons test for (CritProjectile and its
+burst, the crit sounds), so the crits port works with it. It is not the
+original Add-On and holds none of its files, and its numbers are its own.
+The sounds are generated moments of silence and critical.png a generated
+square, so the importer has files to convert.

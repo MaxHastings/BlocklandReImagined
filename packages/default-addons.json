@@ -245,6 +245,351 @@
           "d9e699b6080477d8898d8ecc70e89ef9aa8659de44fdbee18e854867bdc48106"
         ]
       }
+    },
+    {
+      "id": "weapon_package_tier1",
+      "enabled": false,
+      "original": {
+        "addon": "Weapon_Package_Tier1",
+        "title": "Tier+Tactical Tier 1",
+        "authors": [
+          "Kai"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "a500fd2c5e46f90c29e167656807cde95fdee352d99144e617a1176e88dcbc22"
+        ]
+      }
+    },
+    {
+      "id": "weapon_package_tier1a",
+      "enabled": false,
+      "original": {
+        "addon": "Weapon_Package_Tier1A",
+        "title": "Tier+Tactical Tier 1A",
+        "authors": [
+          "Kai"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "c1cc5b4c98154507898f1086c6729fe3749ff936e28e34615bf8e44fec7b704c"
+        ]
+      }
+    },
+    {
+      "id": "weapon_package_tier2",
+      "enabled": false,
+      "original": {
+        "addon": "Weapon_Package_Tier2",
+        "title": "Tier+Tactical Tier 2",
+        "authors": [
+          "Kai"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "481f2d430e5581f7504ad3f7d695df5236e870e9176e9368a1ccf73c837c58fd"
+        ]
+      }
+    },
+    {
+      "id": "weapon_package_tier2a",
+      "enabled": false,
+      "original": {
+        "addon": "Weapon_Package_Tier2A",
+        "title": "Tier+Tactical Tier 2A",
+        "authors": [
+          "Kai"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "655692d99e11eabc6a9e2ffb627965e50210f0a029a5267f12b85dbea4ab41af"
+        ]
+      }
+    },
+    {
+      "id": "weapon_package_explosive1",
+      "enabled": false,
+      "original": {
+        "addon": "Weapon_Package_Explosive1",
+        "title": "Tier+Tactical Explosive 1",
+        "authors": [
+          "Kai"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "855a8cbb4aa91351ad281a0e8bd297677b9ae3319100e661a51b0ada0b90b64e"
+        ]
+      }
+    },
+    {
+      "id": "weapon_package_explosive2",
+      "enabled": false,
+      "original": {
+        "addon": "Weapon_Package_Explosive2",
+        "title": "Tier+Tactical Explosive 2",
+        "authors": [
+          "Kai"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "12213bebd0fcd476c17a94e72d969842691ce442b7c6deb579fb330bcf89d869"
+        ]
+      }
+    },
+    {
+      "id": "weapon_package_medic1",
+      "enabled": false,
+      "original": {
+        "addon": "Weapon_Package_Medic1",
+        "title": "Tier+Tactical Medical",
+        "authors": [
+          "Kai"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "1dedc7af42ce1c062f666ec35ee4626a8551434d7ddcde43be306710bc9da01c"
+        ]
+      }
+    },
+    {
+      "id": "weapon_melee_extended",
+      "enabled": false,
+      "original": {
+        "addon": "Weapon_Melee_Extended",
+        "title": "Tier+Tactical Melee Extended",
+        "authors": [
+          "Kai"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "be6a64786cfe955c39df8e7746d222a397c62702f49ce043ea5d2bc8d6a62803"
+        ]
+      }
+    },
+    {
+      "id": "weapon_melee_extended_ii",
+      "enabled": false,
+      "original": {
+        "addon": "Weapon_Melee_Extended_II",
+        "title": "Tier+Tactical Melee Extended II",
+        "authors": [
+          "Kai"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "cae20f116fee91f3d5b10aba44ac89a73a2c72409cb8ce590c934e9f9803c4e2"
+        ]
+      }
+    },
+    {
+      "id": "weapon_skins_pistol",
+      "enabled": false,
+      "original": {
+        "addon": "Weapon_Skins_Pistol",
+        "title": "Tier+Tactical Pistol Skins",
+        "authors": [
+          "Kai"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "3eedb253809a6b985ccf8b22515503d8454a8eee6ec300b3b7ccfc0ac56c5a7e"
+        ]
+      }
+    },
+    {
+      "id": "weapon_skins_bullpup",
+      "enabled": false,
+      "original": {
+        "addon": "Weapon_Skins_Bullpup",
+        "title": "Tier+Tactical Bullpup Skins",
+        "authors": [
+          "Kai"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "45e838b3c9c00b370150a30b18fef26245a8d070efd771ed5eccc706dd22293d"
+        ]
+      }
+    },
+    {
+      "id": "weapon_skins_dualies",
+      "enabled": false,
+      "original": {
+        "addon": "Weapon_Skins_Dualies",
+        "title": "Tier+Tactical Dualies Skins",
+        "authors": [
+          "Kai"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "af8c753e004c53118cbdd0e9f0fa6265016361ca55e8a78f8c5c9f6fcf28b861"
+        ]
+      }
+    },
+    {
+      "id": "weapon_skins_lmg",
+      "enabled": false,
+      "original": {
+        "addon": "Weapon_Skins_LMG",
+        "title": "Tier+Tactical LMG Skins",
+        "authors": [
+          "Kai"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "4875ce15f7569dc0dca40106c917ff6a4971b331faf9425c8a50b50f43f001b7"
+        ]
+      }
+    },
+    {
+      "id": "weapon_skins_mpistol",
+      "enabled": false,
+      "original": {
+        "addon": "Weapon_Skins_MPistol",
+        "title": "Tier+Tactical Machine Pistol Skins",
+        "authors": [
+          "Kai"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "81277e9128145918875e28a0c71bca5576c792364a6de6dd5b122c81c19edb8b"
+        ]
+      }
+    },
+    {
+      "id": "weapon_skins_magnum",
+      "enabled": false,
+      "original": {
+        "addon": "Weapon_Skins_Magnum",
+        "title": "Tier+Tactical Magnum Skins",
+        "authors": [
+          "Kai"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "6b610406733882b00664a4a7eb308020e7bab3ea2f434b24bac941662b121ffd"
+        ]
+      }
+    },
+    {
+      "id": "weapon_skins_rifles",
+      "enabled": false,
+      "original": {
+        "addon": "Weapon_Skins_Rifles",
+        "title": "Tier+Tactical Rifle Skins",
+        "authors": [
+          "Kai"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "6a6f724114dc925ab1815d3834e4eb273c528e939fc721c2d881a4412c5dfbbd"
+        ]
+      }
+    },
+    {
+      "id": "weapon_skins_riflest2",
+      "enabled": false,
+      "original": {
+        "addon": "Weapon_Skins_RiflesT2",
+        "title": "Tier+Tactical Tier 2 Rifle Skins",
+        "authors": [
+          "Kai"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "5defdfb1907df80d33601691c3566525f8930b8b5f7f637acc948cf273e2c9ab"
+        ]
+      }
+    },
+    {
+      "id": "weapon_skins_smg",
+      "enabled": false,
+      "original": {
+        "addon": "Weapon_Skins_SMG",
+        "title": "Tier+Tactical SMG Skins",
+        "authors": [
+          "Kai"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "3d19beb0dd75bba4a1787e3969b9cc3033c6d14cd24b22a99b2c4bdb0c7c04e0"
+        ]
+      }
+    },
+    {
+      "id": "weapon_skins_shotgun",
+      "enabled": false,
+      "original": {
+        "addon": "Weapon_Skins_Shotgun",
+        "title": "Tier+Tactical Shotgun Skins",
+        "authors": [
+          "Kai"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "48f2a4eb911b566b9e2c4c74782437c8e053e7bffbac2a2b3db70ef6a11e855b"
+        ]
+      }
+    },
+    {
+      "id": "weapon_skins_shotgunt2",
+      "enabled": false,
+      "original": {
+        "addon": "Weapon_Skins_ShotgunT2",
+        "title": "Tier+Tactical Tier 2 Shotgun Skins",
+        "authors": [
+          "Kai"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "9aff2e9ce079ca22e124a698b1f0d08d5c2692136b943ddd0684be4e45976240"
+        ]
+      }
+    },
+    {
+      "id": "weapon_skins_sniper",
+      "enabled": false,
+      "original": {
+        "addon": "Weapon_Skins_Sniper",
+        "title": "Tier+Tactical Sniper Skins",
+        "authors": [
+          "Kai"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "5e1edc470c296ad12e9d46b4c57285b0510c6bf7731270b745d8e25875b4fbf9"
+        ]
+      }
+    },
+    {
+      "id": "weapon_impact_rifle",
+      "enabled": false,
+      "original": {
+        "addon": "Weapon_Impact_Rifle",
+        "title": "Tier+Tactical Impact Rifle",
+        "authors": [
+          "Kai"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "65a1332168740664ce6389a5b057622192f19e8f5f3546c009911a8a3847e01b"
+        ]
+      }
+    },
+    {
+      "id": "weapon_shortriflekai",
+      "enabled": false,
+      "original": {
+        "addon": "Weapon_ShortRifleKai",
+        "title": "Tier+Tactical Short Rifle",
+        "authors": [
+          "Kai"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "a1ad64d8de4742a69bb9f78752ea54c50f0a63e6d6e8765e62e217ab4aac8f09"
+        ]
+      }
     }
   ]
 }

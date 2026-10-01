@@ -244,6 +244,8 @@ pub const MAX_LOOSE: usize = 512;
 pub const RESPAWN_GHOST_ALPHA: f32 = 0.25;
 
 /// `setSprayCanColor`: a translucent palette colour uses the clear can.
+/// Torque `Item`'s `sRotationSpeed`: seconds a turning item takes per turn.
+const ITEM_TURN_SECONDS: f64 = 3.0;
 const TRANSLUCENT_SPRAY_CAN: &str = "base/data/shapes/transspraycan.dts";
 
 impl WorldItems {
@@ -414,7 +416,7 @@ impl WorldItems {
                 pose,
                 transform: SceneTransform {
                     transform: Mat4::from_rotation_translation(
-                        item.rotation(),
+                        item.rotation() * self.spin(&item.item, frame.seconds),
                         Vec3::from(item.position),
                     ),
                     tint: [1., 1., 1., if ghost { RESPAWN_GHOST_ALPHA } else { 1. }],
@@ -441,7 +443,7 @@ impl WorldItems {
                 transform: SceneTransform {
                     transform: Mat4::from_scale_rotation_translation(
                         Vec3::splat(drop.scale),
-                        drop.rotation,
+                        drop.rotation * self.spin(&drop.item, frame.seconds),
                         drop.position,
                     ),
                     tint: [1., 1., 1., alpha],
@@ -727,6 +729,16 @@ impl WorldItems {
     /// An item in the world looks as it does in the hand
     /// (`ItemAssets::item_appearance`). `faded` items (`schedulePop`,
     /// `Item::fadeOut`) leave their alpha to the instance.
+    /// How far an item that turns where it lies ([`bri_weapons::Item::rotate`])
+    /// has turned by `seconds`: Torque's `Item` turns once every three
+    /// seconds about its up axis.
+    fn spin(&self, item: &str, seconds: f64) -> Quat {
+        if !self.weapons.items.get(item).is_some_and(|i| i.rotate) {
+            return Quat::IDENTITY;
+        }
+        let turns = (seconds / ITEM_TURN_SECONDS).fract() as f32;
+        Quat::from_rotation_y(-turns * std::f32::consts::TAU)
+    }
     fn item_key(
         &mut self,
         id: &str,
@@ -1188,6 +1200,10 @@ impl WorldItems {
         self.assets
             .node_transform(&mounted.model, &pose, mounted.transform, node)
     }
+    /// The image `owner` holds in `hand`, as the last sync drew it.
+    pub fn held_image(&self, owner: u64, hand: u8) -> Option<&str> {
+        self.mounted.get(&(owner, hand)).map(|m| m.image.as_str())
+    }
     /// Where the image in `owner`'s `hand` fires from, as drawn now: its
     /// `muzzlePoint`, or `None` when nothing with one is held.
     pub fn held_muzzle(&self, owner: u64, hand: u8) -> Option<Vec3> {
@@ -1198,10 +1214,6 @@ impl WorldItems {
             .w_axis
             .truncate();
         point.is_finite().then_some(point)
-    }
-    /// The image `owner` holds in `hand`, as the last sync drew it.
-    pub fn held_image(&self, owner: u64, hand: u8) -> Option<&str> {
-        Some(self.mounted.get(&(owner, hand))?.image.as_str())
     }
     /// Every weapon image `owner` holds, as the last sync drew it: hand,
     /// model matrix and muzzle.

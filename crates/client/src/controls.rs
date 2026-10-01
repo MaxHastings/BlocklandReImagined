@@ -18,6 +18,8 @@ pub struct Controls {
     /// Held free look turns the head, not the body (`mHead.z`).
     free_yaw: f32,
     pub third_person: bool,
+    /// [`Self::set_first_person_only`].
+    first_person_only: bool,
     /// `$pref::Player::defaultFov`; `None` is v20's 90.
     normal_fov: Option<f32>,
     /// The host's `setControlCameraFov` (an Add-On's rules), in place of
@@ -976,8 +978,14 @@ impl Controls {
     /// Third person as the view shows it: aiming a `first_person` aim
     /// looks from the eye whatever the toggle says.
     pub fn third_person_view(&self) -> bool {
-        self.third_person_only
-            || (self.third_person && !self.aim_while_aiming().is_some_and(|a| a.first_person))
+        !self.first_person_only
+            && (self.third_person_only
+                || (self.third_person && !self.aim_while_aiming().is_some_and(|a| a.first_person)))
+    }
+    /// The player's type keeps the view first person (`firstPersonOnly`);
+    /// the toggle is kept for when it lifts.
+    pub fn set_first_person_only(&mut self, on: bool) {
+        self.first_person_only = on;
     }
     /// `thirdPersonOnly`: while the body's archetype says so, the camera
     /// stays out behind it whatever the view toggle says.
@@ -1280,6 +1288,21 @@ mod tests {
         assert!(c.at_eye(), "in the eye once the fifth of a second is up");
     }
     #[test]
+    fn a_first_person_only_player_type_holds_the_view_in_the_eye() {
+        let mut c = Controls::default();
+        c.action(&GameAction::ToggleFirstPerson { fast: false });
+        c.advance_view(0.5);
+        assert_eq!(c.camera_pos(), 1.0);
+        // The Light MG gunner's LMGArmor (`firstPersonOnly`).
+        c.set_first_person_only(true);
+        assert!(!c.third_person_view());
+        c.advance_view(0.5);
+        assert!(c.at_eye());
+        // Lifted, the toggle the player left in third person takes over.
+        c.set_first_person_only(false);
+        assert!(c.third_person_view());
+    }
+    #[test]
     fn camera_control_leaves_the_body_still_and_unturned() {
         let mut c = Controls::default();
         c.action(&GameAction::Look {
@@ -1487,6 +1510,7 @@ mod tests {
             archetype: Default::default(),
             scale: 1.0,
             energy: 100.0,
+            speed_scale: 1.0,
             tick: Default::default(),
             tether: None,
         };

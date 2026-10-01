@@ -3,6 +3,8 @@
 //! Sawn-off Shotgun's folder name and onFire shape, so the listed port
 //! applies to it. The real Add-On runs in `import.rs` `real_community_samples`
 //! where Maxwell's archive exists.
+mod common;
+
 use bri_addon_import::{Options, import, import_with, porting, ports::Ports};
 use bri_weapons::*;
 use glam::Vec3;
@@ -340,6 +342,7 @@ fn port_rules_become_a_host_only_companion_turned_on_with_the_import() {
         packages: ["weapon_synthetic_blaster", "weapon_synthetic_blaster-rules"]
             .iter()
             .map(|id| library.get(id).unwrap().package.clone())
+            .chain(common::base_entries(&out))
             .collect(),
     };
     bri_package_runtime::Catalog::load(&root, &set, true).unwrap_or_else(|e| panic!("{e:#?}"));
@@ -503,7 +506,14 @@ fn port_command_drafts_a_spread_weapon_and_check_port_verifies_it() {
 fn hand_ports_start_from_stubs_and_check_as_partial() {
     let dir = fresh("hand");
     let work = dir.join("work");
-    let s = porting::scaffold(&fixture("Weapon_Synthetic_Blaster"), &work, None, vec![], None).unwrap();
+    let s = porting::scaffold(
+        &fixture("Weapon_Synthetic_Blaster"),
+        &work,
+        None,
+        vec![],
+        None,
+    )
+    .unwrap();
     assert!(s.drafted.is_empty());
     assert!(s.to_port.iter().any(|f| f == "blasterImage::onFire"));
     let stubs = std::fs::read_to_string(work.join("stubs.rhai")).unwrap();

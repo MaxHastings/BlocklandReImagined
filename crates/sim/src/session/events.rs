@@ -1518,8 +1518,8 @@ impl EventHost<'_> {
             }
             PlayerOp::SpawnExplosion { projectile, scale } => {
                 if let Some(projectile) = projectile {
-                    let feet = Vec3::from(self.session.peers[&owner].player.state().feet);
-                    self.spawn_explosion(d, projectile, feet + Vec3::Y, *scale);
+                    let at = self.session.explosion_point(owner)?;
+                    self.spawn_explosion(d, projectile, at, *scale);
                 }
             }
             // `Player::ChangeDataBlock`: unknown datablocks are ignored.
@@ -1549,7 +1549,7 @@ impl EventHost<'_> {
     fn burn(&mut self, owner: OwnerId, seconds: f32) {
         let tick = self.session.simulation.state().tick;
         let feet = self.session.peers[&owner].player.state().feet;
-        self.session.cues.emit(
+        self.session.emote_cue(
             tick,
             crate::presentation::CueKind::Burn {
                 actor: owner,

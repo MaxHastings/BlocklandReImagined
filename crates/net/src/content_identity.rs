@@ -17,9 +17,20 @@ const WEAPON_TOTAL_LIMIT: u64 = 512 * 1024 * 1024;
 /// Source resource hashes describe originals, not converted native bytes.
 #[derive(Clone)]
 pub struct WeaponContent {
+    /// The pack played: as authored, or with the server settings its
+    /// bindings read applied ([`Self::apply_settings`]).
     pub pack: bri_weapons::Pack,
+    /// The pack as authored, when bindings make the played one depend on
+    /// server settings, and the values it was last played with.
+    authored: Option<(std::sync::Arc<bri_weapons::Pack>, BTreeMap<String, String>)>,
+    /// Each item's load rank, which orders items sharing a name.
+    load_order: BTreeMap<String, usize>,
     /// (id, display name) by name; items sharing a name in load order.
     pub item_choices: Vec<(String, String)>,
+    /// The emitters and lights Add-Ons give a name (`uiName`), as
+    /// (id, name): a brick's wrench offers them beside the base game's.
+    pub emitter_choices: Vec<(String, String)>,
+    pub light_choices: Vec<(String, String)>,
     aliases: BTreeMap<String, String>,
     fingerprint: String,
     manifest_sha256: String,
@@ -181,11 +192,47 @@ impl WeaponContent {
                 load_order.entry(id.clone()).or_insert(rank);
             }
         }
-        let (mut pack, notes) = pack.merge(
+                // What the Add-Ons name of their effects, for the wrench.
+        let named = |list: Vec<(&str, &str)>| -> Vec<(String, String)> {
+            list.into_iter()
+                .filter(|(_, name)| !name.trim().is_empty())
+                .map(|(id, name)| (id.to_owned(), name.trim().to_owned()))
+                .collect()
+        };
+        let mut emitter_choices = named(
+            parts
+                .iter()
+                .flat_map(|(_, _, part)| &part.effects.emitters)
+                .map(|e| (e.id.as_str(), e.name.as_str()))
+                .collect(),
+        );
+        let mut light_choices = named(
+            parts
+                .iter()
+                .flat_map(|(_, _, part)| &part.effects.lights)
+                .map(|l| (l.id.as_str(), l.name.as_str()))
+                .collect(),
+        );
+        // What each Add-On depends on, from its manifest beside `assets/`:
+        // a damage type it re-declares from one replaces that one's.
+        let depends_on = parts
+            .iter()
+            .filter_map(|(_, abs, part)| {
+                let info = bri_package::library::package_info(abs.parent()?)?;
+                let deps = info
+                    .dependencies
+                    .into_keys()
+                    .chain(info.optional_dependencies.into_keys())
+                    .collect();
+                Some((part.id.clone(), deps))
+            })
+            .collect();
+        let (mut pack, notes) = pack.merge_with(
             parts
                 .into_iter()
                 .map(|(dir, _, part)| (dir, part))
                 .collect(),
+            &depends_on,
         );
         pack.diagnostics
             .extend(notes.iter().map(|n| format!("merge: {n}")));
@@ -199,48 +246,83 @@ impl WeaponContent {
             WEAPON_RESOURCE_LIMIT,
             WEAPON_TOTAL_LIMIT,
         )?;
-        let mut item_choices: Vec<_> = pack
-            .items
-            .values()
-            .map(|item| (item.id.clone(), item.ui_name.trim().to_string()))
-            .collect();
-        ensure!(
-            item_choices.len() <= 1024,
-            "Weapon item catalog budget exceeded"
-        );
-        let mut ids = std::collections::BTreeSet::new();
-        for (id, name) in &item_choices {
-            bri_world::ContentRef::Resolved(id.clone()).validate()?;
-            ensure!(!id.chars().any(char::is_control), "Invalid weapon item ID");
-            ensure!(ids.insert(id.clone()), "Duplicate weapon item ID: {id}");
-            ensure!(
-                !name.trim().is_empty() && name.len() <= 128 && !name.chars().any(char::is_control),
-                "Invalid weapon item name"
-            );
+        let (item_choices, aliases) = item_choices(&pack, &load_order)?;
+        // Only what the merge kept, each id once and no name twice.
+        for (choices, kept) in [
+            (
+                &mut emitter_choices,
+                pack.effects.emitters.iter().map(|e| &e.id).collect::<std::collections::BTreeSet<_>>(),
+            ),
+            (
+                &mut light_choices,
+                pack.effects.lights.iter().map(|l| &l.id).collect(),
+            ),
+        ] {
+            let mut names = std::collections::BTreeSet::new();
+            choices.retain(|(id, name)| {
+                kept.contains(id)
+                    && name.len() <= 128
+                    && !name.chars().any(char::is_control)
+                    && bri_world::ContentRef::Resolved(id.clone()).validate().is_ok()
+                    && names.insert(name.to_ascii_lowercase())
+            });
+            ensure!(choices.len() <= 1024, "Add-On effect choice budget exceeded");
+            choices.sort_by(|a, b| {
+                a.1.to_ascii_lowercase()
+                    .cmp(&b.1.to_ascii_lowercase())
+                    .then(a.0.cmp(&b.0))
+            });
         }
-        // Items that share a display name all stay, as in v20; among them the
-        // first loaded comes first, and saved bricks naming one bind to it.
-        let rank = |id: &str| load_order.get(id).copied().unwrap_or(usize::MAX);
-        item_choices.sort_by(|a, b| {
-            a.1.to_ascii_lowercase()
-                .cmp(&b.1.to_ascii_lowercase())
-                .then(rank(&a.0).cmp(&rank(&b.0)))
-                .then(a.0.cmp(&b.0))
-        });
-        let aliases = bri_world::item_aliases(
-            item_choices
-                .iter()
-                .map(|(id, name)| (id.as_str(), name.as_str())),
-        );
+        let authored = (!pack.bindings.is_empty())
+            .then(|| (std::sync::Arc::new(pack.clone()), BTreeMap::new()));
         Ok(Self {
             pack,
+            authored,
+            load_order,
             item_choices,
+            emitter_choices,
+            light_choices,
             aliases,
             fingerprint,
             manifest_sha256: format!("{:x}", Sha256::digest(&bytes)),
             base_items,
             problems: notes,
         })
+    }
+
+    /// The pack as its Add-Ons author it, which a host plays with its own
+    /// settings.
+    pub fn authored(&self) -> &bri_weapons::Pack {
+        self.authored.as_ref().map_or(&self.pack, |(a, _)| a)
+    }
+
+    /// Plays the pack the server settings `values` make of the authored
+    /// one (by the name each binding uses, as a server sends them); no
+    /// values play it as authored.
+    /// Plays the pack the server's `values` make of the authored one
+    /// ([`bri_weapons::Binding`]); `Ok(true)` when the items players pick
+    /// from changed with it (a setting showing or hiding some), so lists
+    /// built from [`Self::item_choices`] are built again.
+    pub fn apply_settings(&mut self, values: &BTreeMap<String, String>) -> Result<bool> {
+        let Some((authored, applied)) = &mut self.authored else {
+            return Ok(false);
+        };
+        if applied == values {
+            return Ok(false);
+        }
+        applied.clone_from(values);
+        // Values it cannot take play it as authored, once.
+        let played = authored.with_settings(|name| values.get(name).cloned());
+        let failed = played.as_ref().err().map(|e| anyhow::anyhow!("{e:#}"));
+        self.pack = played.unwrap_or_else(|_| (**authored).clone());
+        let (choices, aliases) = item_choices(&self.pack, &self.load_order)?;
+        let changed = choices != self.item_choices;
+        self.item_choices = choices;
+        self.aliases = aliases;
+        match failed {
+            Some(error) => Err(error),
+            None => Ok(changed),
+        }
     }
 
     /// Catalogs are immutable during an App lifetime. Reloading requires restart
@@ -603,6 +685,54 @@ fn hash_files_bounded(
     Ok(format!("{:x}", hash.finalize()))
 }
 
+/// The items players pick, by id and name, and their names in lower case
+/// to their ids ([`item_choices`]).
+type ItemChoices = (Vec<(String, String)>, BTreeMap<String, String>);
+
+/// The items players pick from a pack, by name, and their names in lower
+/// case to their ids. Hidden items are put in the world by scripts only:
+/// no one picks them from a list. Items that share a display name all
+/// stay, as in v20; among them the first loaded (`load_order`) comes
+/// first, and saved bricks naming one bind to it.
+fn item_choices(
+    pack: &bri_weapons::Pack,
+    load_order: &BTreeMap<String, usize>,
+) -> Result<ItemChoices> {
+    let mut item_choices: Vec<_> = pack
+        .items
+        .values()
+        .filter(|item| !item.hidden)
+        .map(|item| (item.id.clone(), item.ui_name.trim().to_string()))
+        .collect();
+    ensure!(
+        item_choices.len() <= 1024,
+        "Weapon item catalog budget exceeded"
+    );
+    let mut ids = std::collections::BTreeSet::new();
+    for (id, name) in &item_choices {
+        bri_world::ContentRef::Resolved(id.clone()).validate()?;
+        ensure!(!id.chars().any(char::is_control), "Invalid weapon item ID");
+        ensure!(ids.insert(id.clone()), "Duplicate weapon item ID: {id}");
+        ensure!(
+            !name.trim().is_empty() && name.len() <= 128 && !name.chars().any(char::is_control),
+            "Invalid weapon item name"
+        );
+    }
+    let rank = |id: &str| load_order.get(id).copied().unwrap_or(usize::MAX);
+    item_choices.sort_by(|a, b| {
+        a.1.to_ascii_lowercase()
+            .cmp(&b.1.to_ascii_lowercase())
+            .then(rank(&a.0).cmp(&rank(&b.0)))
+            .then(a.0.cmp(&b.0))
+    });
+    let aliases = bri_world::item_aliases(
+        item_choices
+            .iter()
+            .map(|(id, name)| (id.as_str(), name.as_str())),
+    );
+    Ok((item_choices, aliases))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -651,6 +781,13 @@ mod tests {
                     hide_nodes: Vec::new(),
                     both_arms: false,
                     paint_tint: false,
+                    left_image: None,
+                    magazine: None,
+                    volleys: vec![],
+                    last_shot: None,
+                    state_shots: Default::default(),
+                    cook: None,
+                    guard: None,
                     rope: None,
                     light: None,
                     paint_picker: false,
@@ -685,6 +822,7 @@ mod tests {
             items,
             images,
             projectiles: BTreeMap::new(),
+            external_projectiles: Default::default(),
             damage_types: BTreeMap::new(),
             explosions: BTreeMap::new(),
             sounds: Default::default(),
@@ -697,6 +835,7 @@ mod tests {
                 package: None,
             }],
             diagnostics: vec![],
+            bindings: vec![],
         };
         std::fs::write(root.join("shape.json"), b"native shape bytes").unwrap();
         write_weapons(&root, &pack);
@@ -704,6 +843,110 @@ mod tests {
     }
     fn write_weapons(root: &Path, pack: &bri_weapons::Pack) {
         std::fs::write(root.join("weapons.json"), serde_json::to_vec(pack).unwrap()).unwrap();
+    }
+    #[test]
+    fn add_on_effects_with_names_are_offered_once_each() {
+        let (root, _) = weapon_fixture();
+        let part_root = root.parent().unwrap().join("crit");
+        std::fs::create_dir(&part_root).unwrap();
+        let emitter = |id: &str, name: &str| bri_content::effects::Emitter {
+            id: id.into(),
+            name: name.into(),
+            particles: vec!["crit:particle/critparticle".into()],
+            period: 0.035,
+            period_variance: 0.0,
+            speed: 0.0,
+            speed_variance: 0.0,
+            offset: 1.8,
+            offset_variance: 0.0,
+            theta_degrees: [0.0, 0.0],
+            phi_rate_degrees: 0.0,
+            phi_variance_degrees: 0.0,
+            lifetime: 0.1,
+            lifetime_variance: 0.0,
+            orient: false,
+            orient_on_velocity: false,
+            override_advance: false,
+            use_emitter_colors: false,
+            use_emitter_sizes: false,
+            use_placement_velocity: false,
+            node_time_scale: 1.0,
+            point_node_time_scale: 1.0,
+        };
+        let part = bri_weapons::Pack {
+            schema_version: bri_weapons::SCHEMA,
+            id: "crit".into(),
+            items: BTreeMap::new(),
+            images: BTreeMap::new(),
+            projectiles: BTreeMap::new(),
+            external_projectiles: Default::default(),
+            damage_types: BTreeMap::new(),
+            explosions: BTreeMap::new(),
+            sounds: Default::default(),
+            definitions: vec![],
+            resources: vec![],
+            diagnostics: vec![],
+            effects: bri_weapons::PackEffects {
+                particles: vec![bri_content::effects::Particle {
+                    id: "crit:particle/critparticle".into(),
+                    texture: "base/data/particles/dot".into(),
+                    alpha_blend: false,
+                    lifetime: 0.5,
+                    lifetime_variance: 0.0,
+                    drag: 5.0,
+                    wind: 0.0,
+                    gravity: 0.0,
+                    inherited_velocity: 0.0,
+                    acceleration: 0.0,
+                    spin_degrees: 0.0,
+                    random_spin: [0.0, 0.0],
+                    keys: [0.0, 1.0]
+                        .map(|time| bri_content::effects::ParticleKey {
+                            time,
+                            color: [0.0, 1.0, 0.0, 1.0],
+                            size: 1.5,
+                        })
+                        .into(),
+                }],
+                emitters: vec![
+                    emitter("crit:emitter/critemitter", " Emote - Critical Hit "),
+                    emitter("crit:emitter/unnamed", ""),
+                    emitter("crit:emitter/again", "emote - critical hit"),
+                ],
+                lights: vec![bri_content::effects::Light {
+                    id: "crit:light/glow".into(),
+                    name: "Glow".into(),
+                    enabled: true,
+                    color: [1.0, 1.0, 1.0],
+                    brightness: 1.0,
+                    radius: 4.0,
+                    color_curves: None,
+                    brightness_curve: None,
+                    radius_curve: None,
+                    flare: None,
+                }],
+                explosions: vec![],
+            },
+            bindings: vec![],
+        };
+        write_weapons(&part_root, &part);
+        let content =
+            WeaponContent::load_with(&root, &[("crit/assets".into(), part_root)]).unwrap();
+        assert_eq!(
+            content.emitter_choices,
+            [(
+                "crit:emitter/critemitter".to_string(),
+                "Emote - Critical Hit".to_string()
+            )]
+        );
+        assert_eq!(
+            content.light_choices,
+            [("crit:light/glow".to_string(), "Glow".to_string())]
+        );
+        assert!(
+            WeaponContent::load(&root).unwrap().emitter_choices.is_empty(),
+            "the base pack's own are the native library's"
+        );
     }
     #[test]
     fn weapons_identity_hashes_native_bytes_and_rejects_catalog_replacement() {

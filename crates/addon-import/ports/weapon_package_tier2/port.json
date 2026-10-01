@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "include": ["tier-tactical-core", "tier-tactical"],
+  "notes": "Tier+Tactical Tier 2 on Tier 1's ammo system. The Assault Rifle's first round after half a second's pause is its truer one, as Kai's lastShotTime check picks; the Battle Rifle and Magnum check a lastShotTime they never set, so in Kai's code they always fire their steady round, and do here. The Light MG fires a second, free and tighter round each cycle (onFire2) and slows its gunner to LMGArmor while firing (Support_AltDatablock), which lifts as it stops, runs dry or leaves the hand. Jet with the Combat Shotgun in hand fires its double blast (Support_ImageAltTrigger): two shells, 16 pellets and 4 blasts, then the shotgun comes back. Battle Rifle and LMG rounds slow whoever they hit; Magnum headshots. The Military Sniper's hitscan head hits crit (three times the damage, its own kill message, Emote_Critical's burst and sounds) only while Emote_Critical is on, as Support_TT_Raycasting checked isObject(CritProjectile). The LMG's slowed body is a player type in the host rules. The Scoped Magnum is one of Kai's easter eggs, loaded only with the hidden \"???\" setting (off by default): it is imported hidden.",
+  "patch": {
+    "assets/weapons.json": {
+      "items": {
+        "{namespace}:weapon/scopedmagnumitem": { "hidden": true }
+      },
+      "images": {
+        "{namespace}:image/lightmachinegunimage": {
+          "commands": {
+            "states": {
+              "onclick": "{rules}:lay",
+              "onhalt": "{rules}:lift",
+              "onemptytransition": "{rules}:lift"
+            },
+            "unmount": "{rules}:lift"
+          }
+        },
+        "{namespace}:image/combatshotgunimage": {
+          "commands": { "jet": "{rules}:alt_fire" }
+        },
+        "{namespace}:image/combatshotgunaltfireimage": {
+          "commands": { "states": { "ondone": "{rules}:alt_done" } }
+        }
+      }
+    }
+  }
+}

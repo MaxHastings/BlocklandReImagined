@@ -65,7 +65,7 @@ impl Session {
         self.teleport_cue(owner, at, scale, false);
     }
     fn teleport_cue(&mut self, owner: OwnerId, at: Vec3, scale: f32, player: bool) {
-        self.cues.emit(
+        self.emote_cue(
             self.simulation.state().tick,
             crate::presentation::CueKind::Teleport {
                 actor: owner,

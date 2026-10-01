@@ -1,0 +1,190 @@
+{
+  "schema_version": 1,
+  "notes": "Bushido's Adventurer's Weapons, Conan's re-release (Blockland Glass 1019), on the hl2 ammo system: each gun's maxmag and ammotype become its image's magazine with this release's reserve and cap per ammo type, shell-at-a-time guns reload a round per loop of their reload states, and each onFire's spread code becomes its shot (the shotguns' slug or blast as a second volley; the Paired Shotgun's two-barrel shot, two rounds a pull, and its single barrel for the last two), with the fire and reload sounds, arm moves and recoil shake the scripts played by hand. The Sniper Rifle is hitscan from its raycast fields. The host rules, shared with Weapon_ModernWarbattles, give ammo boxes and spare spawned guns their ammo, multiply a projectile's damage by its headshotMultiplier on a head hit or a crouched target, and make the Taser knock a player into a tumble, and flinch a body hit in the head (or crouched) by a projectile or the Sniper Rifle as the hitbox test did: threads 0 and 2 play jump, then plant 50 ms later. Its guns never crit (the 1019 release has no crit code), and the light key reloads while a gun's Ready or Empty state is up and toggles the light otherwise. The Sniper Rifle shoots from its muzzle toward the point its holder's eye looks at (getLOSPoint), draws its beam white, 0.1 wide and gone after 0.1 s (createTracer's node colour and the beam model's width; both read from the script, not the model), and plays the hit sounds its fields name.",
+  "patch": {
+    "assets/weapons.json": {
+      "projectiles": {
+        "{namespace}:projectile/taserprojectile": {
+          "damage": 0
+        }
+      }
+    }
+  },
+  "magazines": {
+    "size": "maxmag",
+    "ammo": "ammotype",
+    "reload_ticks": 120,
+    "one_by_one": "onReloadSingle",
+    "types": {
+      "Pistol": {
+        "ammo": "pistol",
+        "reserve": 24,
+        "max_reserve": 120
+      },
+      "Revolver": {
+        "ammo": "revolver",
+        "reserve": 12,
+        "max_reserve": 60
+      },
+      "Machine Pistol": {
+        "ammo": "machine-pistol",
+        "reserve": 24,
+        "max_reserve": 240
+      },
+      "Shotgun": {
+        "ammo": "shotgun",
+        "reserve": 6,
+        "max_reserve": 30
+      },
+      "Rifle": {
+        "ammo": "rifle",
+        "reserve": 8,
+        "max_reserve": 40
+      },
+      "Sniper Rifle": {
+        "ammo": "sniper-rifle",
+        "reserve": 4,
+        "max_reserve": 16
+      },
+      "Machine Rifle": {
+        "ammo": "machine-rifle",
+        "reserve": 24,
+        "max_reserve": 240
+      },
+      "Taser": {
+        "ammo": "taser",
+        "reserve": 3,
+        "max_reserve": 12
+      }
+    },
+    "items": {
+      "pairedShotgunItem": {
+        "per_shot": 2
+      }
+    },
+    "every": {
+      "light_states": [
+        "Ready",
+        "Empty"
+      ]
+    }
+  },
+  "shots": {
+    "pick": {
+      "pairedShotgunImage": 1
+    },
+    "last": {
+      "pairedShotgunImage": {
+        "shot": 0,
+        "rounds": 2
+      }
+    }
+  },
+  "hitscans": {
+    "when": "raycastEnabled",
+    "range": "raycastRange",
+    "from_eye": "raycastFromEye",
+    "damage": "directDamage",
+    "damage_type": "directDamageType",
+    "hit_projectile": "raycastHitExplosion",
+    "count": "raycastCount",
+    "spread": "raycastSpread",
+    "spread_degrees": true,
+    "tracer": {
+      "field": "raycastTracer",
+      "look": {
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "width": 0.1,
+        "seconds": 0.1
+      }
+    },
+    "converge": true
+  },
+  "scripts": [
+    {
+      "method": "onReloadSingle",
+      "into": "magazine",
+      "pattern": "hl2AmmoOnReloadSingle\\s*\\(\\s*%this\\s*,\\s*%obj\\s*,\\s*%slot\\s*\\)\\s*;\\s*hl2AmmoOnReloadSingle\\s*\\(\\s*%this\\s*,\\s*%obj\\s*,\\s*%slot\\s*\\)\\s*;",
+      "set": {
+        "per_load": 2
+      }
+    }
+  ],
+  "rules": {
+    "from": "weapon_modernwarbattles",
+    "capabilities": [
+      "player",
+      "damage",
+      "physics",
+      "effects"
+    ],
+    "tables": {
+      "headshots": {
+        "class": "ProjectileData",
+        "fields": [
+          "headshotMultiplier"
+        ],
+        "when": [
+          "headshotMultiplier"
+        ],
+        "key": "id"
+      },
+      "boxes": {
+        "class": "ItemData",
+        "fields": [
+          "ammotype"
+        ],
+        "when": [
+          "ammoBox"
+        ],
+        "key": "id"
+      },
+      "crit_types": {
+        "class": "ProjectileData",
+        "fields": [
+          "raycastCritDirectDamageType"
+        ],
+        "when": [
+          "raycastCritDirectDamageType"
+        ],
+        "key": "id"
+      }
+    },
+    "values": {
+      "each_gun": false,
+      "rays": {},
+      "tasers": {
+        "{namespace}:projectile/taserprojectile": {
+          "spread": "{taser_spread}",
+          "offset": "{taser_offset}",
+          "up": "{taser_up}",
+          "ms": "{taser_ms}"
+        }
+      },
+      "critical": null,
+      "flinch": {
+        "first": "{flinch_first}",
+        "then": "{flinch_then}",
+        "after_ms": "{flinch_ms}"
+      }
+    }
+  },
+  "include": [
+    "bushido-hl2"
+  ],
+  "handles": {
+    "getRandomScalar": "hitscans: the Sniper Rifle's spread, in degrees across (raycastSpread)",
+    "WeaponImage::getRaycastSpread": "hitscans: the Sniper Rifle's spread, in degrees across (raycastSpread)",
+    "WeaponImage::onRaycastCollision": "hitscans: the hit's explosion (raycastHitExplosion), and its damage to a player or vehicle under the minigame's rules",
+    "Player::getLOSPoint": "hitscans: a shot from the muzzle aims where the eye looks (converge)",
+    "Player::getSize": "hitscans: the hit's damage grows with the shooter's size, as the ray's projectile's does",
+    "createTracer": "hitscans: the beam the image names (raycastTracer), drawn as the tracer: white, as wide as the beam model and as long-lived as its tracerTime",
+    "SimObject::hasMethod": "a query with no effect of its own, and nothing in the Add-On calls it",
+    "sniperRifleImage2::onRaycastCollision": "the host rules' on_damage: a head hit multiplies the ray's damage by headshotMultiplier"
+  }
+}

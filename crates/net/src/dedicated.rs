@@ -117,6 +117,10 @@ pub fn load_packages(
     let effects = serde_json::from_slice(&std::fs::read(effects_dir.join("effects.json"))?)?;
     let mut tools = ToolCatalog::from_native(&catalog, &effects, &materials)?;
     tools.install_items(weapons.item_choices.iter().map(|(id, _)| id.clone()))?;
+    tools.install_effects(
+        weapons.emitter_choices.iter().map(|(id, _)| id.clone()),
+        weapons.light_choices.iter().map(|(id, _)| id.clone()),
+    )?;
     let tool_summary = serde_json::json!({"items":tools.items.len(),"prints":tools.prints.len(),"printable_definitions":tools.brick_print_aspects.len(),"lights":tools.lights.len(),"emitters":tools.emitters.len(),"default_print":tools.default_print});
     let unresolved_items = weapons.resolve_world_items(&mut world)?;
     let map = NativeMap::load(&map_bundle_dir, &world.map_id)?;

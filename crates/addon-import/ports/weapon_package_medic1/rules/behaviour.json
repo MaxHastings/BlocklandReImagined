@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "script": "medic.rhai",
+  "on_spawn": true,
+  "on_projectile_hit": true,
+  "tick_interval": 4,
+  "state": {
+    "player": {
+      "stim_at": { "default": -1, "persist": false },
+      "healing": { "default": 0, "persist": false }
+    },
+    "global": {
+      "notices": { "default": {}, "persist": false }
+    }
+  },
+  "commands": [
+    { "name": "stim", "tool_only": true },
+    { "name": "stim_throw", "tool_only": true },
+    { "name": "heal_tick", "tool_only": true }
+  ]
+}

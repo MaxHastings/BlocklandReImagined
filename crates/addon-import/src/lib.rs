@@ -9,10 +9,12 @@
 //! Findings: `docs/audits/spike-addon-import.md`.
 pub mod behaviour;
 mod help;
+mod player_types;
 pub mod porting;
 pub mod ports;
 pub mod reference;
 pub mod report;
+pub mod rtb;
 pub mod source;
 mod vehicle_script;
 mod weapon_fx;
@@ -205,6 +207,9 @@ struct Ctx<'a> {
     /// Lower virtual path to package-relative output file.
     outputs: BTreeMap<String, String>,
     provides: Vec<serde_json::Value>,
+    /// The projectiles of the Add-Ons this one depends on, by the ids their
+    /// packages give them, as ports read them ([`ports::Import::dependencies`]).
+    dependency_projectiles: BTreeMap<String, bri_weapons::ProjectileDef>,
     /// Scripts a port declares (`datablocks.cs`), by lower virtual path:
     /// read beside the Add-On's own, but not among its files.
     ported: BTreeMap<String, String>,
@@ -337,6 +342,25 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
     if let Some(content) = &opts.installed {
         reference.add_installed(content)?;
     }
+    // The reference as it stood when this Add-On loaded, after the ones
+    // it requires.
+    let required: Vec<String> = src
+        .files
+        .iter()
+        .filter(|(key, _)| key.ends_with(".cs"))
+        .flat_map(|(_, f)| reference::required_addons(&String::from_utf8_lossy(&f.bytes)))
+        .collect();
+    // One it requires that the reference lacks is looked for beside it.
+    if let Some(folder) = opts.input.parent() {
+        let here = Path::new(".");
+        let folder = if folder.as_os_str().is_empty() {
+            here
+        } else {
+            folder
+        };
+        reference.add_beside(folder, &required);
+    }
+    reference.settle_for(&src.name, &required);
     let ns = namespace_for(&src.name)?;
     std::fs::create_dir_all(&opts.out)?;
     let mut cx = Ctx {
@@ -353,25 +377,35 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
         shapes: BTreeMap::new(),
         outputs: BTreeMap::new(),
         provides: vec![],
+        dependency_projectiles: BTreeMap::new(),
         ported: BTreeMap::new(),
     };
     metadata(&mut cx);
     let mut scripts = read_scripts(&mut cx);
-    // What a port's patterns read: every function's body, and each script
-    // file's whole text by its path in the Add-On (`server.cs`), for values
-    // set outside any function.
-    let mut bodies = ports::Bodies::new();
+    if let Some(reached) = inventory(&mut cx, &scripts) {
+        // v20 runs server.cs and what it execs; a file nothing execs never
+        // ran (a gun left out by a commented-out exec).
+        scripts.retain(|s| reached.contains(&s.path.to_ascii_lowercase()));
+    }
+    // What a port's patterns read: every function's body (without its
+    // comments), and each script file's whole text by its path in the
+    // Add-On (`server.cs`), for values set outside any function.
+    let mut code = ports::Code::default();
+    let bodies = &mut code.bodies;
     // Torque keeps the last definition of a function (names ignore case).
     // A packaged one only wraps it (`Parent::`), so ports read the plain
     // definition, and a packaged body only where there is none.
     let functions = || scripts.iter().flat_map(|s| &s.functions);
     for f in functions().filter(|f| f.package.is_none()) {
-        bodies.insert(f.qualified().to_ascii_lowercase(), f.body.clone());
+        bodies.insert(
+            f.qualified().to_ascii_lowercase(),
+            tscript::without_comments(&f.body),
+        );
     }
     for f in functions().filter(|f| f.package.is_some()) {
         bodies
             .entry(f.qualified().to_ascii_lowercase())
-            .or_insert_with(|| f.body.clone());
+            .or_insert_with(|| tscript::without_comments(&f.body));
     }
     // Top-level globals too, by `$name` (`$ND::Version`): their value's
     // source, the last one set.
@@ -389,8 +423,7 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
             );
         }
     }
-    port_datablocks(&mut cx, ports, &bodies, &mut scripts);
-    inventory(&mut cx, &scripts);
+    port_datablocks(&mut cx, ports, &code.bodies, &mut scripts);
     top_level(&mut cx, &scripts);
     datablocks(&mut cx, &scripts);
     references(&mut cx);
@@ -401,7 +434,89 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
     sounds_and_rest(&mut cx);
     behaviours(&mut cx, &scripts);
     dependencies(&mut cx, &scripts);
-    finish(cx, opts, ports, &bodies)
+    // Torque links a datablock's namespace to its `className`'s: a method
+    // the datablock lacks runs the class's (`BatonImage::onPreFire` is
+    // `TF2MeleeWeaponImage::onPreFire`). The readers see it by both names.
+    let mut linked = vec![];
+    for o in cx.owned.values() {
+        let Some(class) = o
+            .fields
+            .get("classname")
+            .map(|c| literal(c).trim().to_ascii_lowercase())
+            .filter(|c| !c.is_empty())
+        else {
+            continue;
+        };
+        let name = o.d.name.to_ascii_lowercase();
+        let prefix = format!("{class}::");
+        for (function, body) in &code.bodies {
+            if let Some(method) = function.strip_prefix(&prefix) {
+                let own = format!("{name}::{method}");
+                if !code.bodies.contains_key(&own) {
+                    linked.push((own, body.clone()));
+                }
+            }
+        }
+    }
+    code.inherited.extend(linked.iter().map(|(own, _)| own.clone()));
+    code.bodies.extend(linked);
+    code.reference = cx
+        .reference
+        .datablocks
+        .iter()
+        .filter(|(_, o)| {
+            WEAPON_CLASSES
+                .iter()
+                .any(|w| w.eq_ignore_ascii_case(&o.datablock.class))
+        })
+        .map(|(name, o)| (name.clone(), reference_definition(o)))
+        .collect();
+    code.calls = scripts
+        .iter()
+        .flat_map(|s| s.calls.iter().cloned())
+        .collect();
+    // Player types by name: this Add-On's, its dependencies' and v20's.
+    let player_types: Vec<String> = cx
+        .owned
+        .values()
+        .map(|o| &o.d)
+        .chain(cx.reference.datablocks.values().map(|o| &o.datablock))
+        .filter(|d| d.class.eq_ignore_ascii_case("PlayerData"))
+        .map(|d| d.name.clone())
+        .collect();
+    // Sounds of a base game file, this Add-On's and those of the Add-Ons it
+    // builds on (Tier 1's clicks, which Explosive 2's reloads play): the
+    // base sound by name.
+    let own = cx
+        .owned
+        .values()
+        .map(|o| (&o.d, o.fields.get("filename"), o.path.as_str()));
+    let others = cx
+        .reference
+        .datablocks
+        .values()
+        .filter(|o| o.addon != "base")
+        .map(|o| {
+            (
+                &o.datablock,
+                o.datablock.fields.get("filename"),
+                o.path.as_str(),
+            )
+        });
+    code.sounds = others
+        .chain(own)
+        .filter(|(d, ..)| d.class.eq_ignore_ascii_case("AudioProfile"))
+        .filter_map(|(d, file, path)| {
+            let file = source::resolve(path, literal(file?));
+            let sound = cx.reference.base_sound(&file)?;
+            Some((d.name.to_ascii_lowercase(), sound.to_owned()))
+        })
+        .collect();
+    code.archetypes = player_types
+        .iter()
+        .map(|name| (name.to_ascii_lowercase(), archetype_id(&cx, name)))
+        .collect();
+    finish(cx, opts, ports, &code)
 }
 
 /// A listed port's `datablocks.cs`: datablocks the Add-On makes at run time,
@@ -570,9 +685,14 @@ fn kind_of(path: &str) -> &'static str {
     }
 }
 
-fn inventory(cx: &mut Ctx, scripts: &[Script]) {
+/// Lists the Add-On's files in the report. The scripts server.cs and
+/// client.cs reach through their execs, when every exec in the Add-On is
+/// one this can follow (a literal path outside any function); otherwise
+/// `None`, and every script is read.
+fn inventory(cx: &mut Ctx, scripts: &[Script]) -> Option<BTreeSet<String>> {
     // Scripts reachable from server.cs / client.cs through literal exec calls.
     let mut reachable = BTreeSet::new();
+    let mut followed = 0;
     let mut queue: Vec<String> = ["server.cs", "client.cs"]
         .iter()
         .map(|m| format!("{}/{m}", cx.src.dir()).to_ascii_lowercase())
@@ -589,10 +709,34 @@ fn inventory(cx: &mut Ctx, scripts: &[Script]) {
             {
                 if let Some(a) = c.args.first() {
                     queue.push(source::resolve(&s.path, literal(a)).to_ascii_lowercase());
+                    if is_plain_string(a) {
+                        followed += 1;
+                    }
                 }
             }
         }
     }
+    // Every exec in the reached scripts' text is one followed above; any
+    // other (a built path, one inside a function) could reach any file.
+    let written: usize = cx
+        .src
+        .files
+        .values()
+        .filter(|f| reachable.contains(&f.path.to_ascii_lowercase()))
+        .map(|f| {
+            let text =
+                tscript::without_comments(&String::from_utf8_lossy(&f.bytes)).to_ascii_lowercase();
+            regex::Regex::new(r"\bexec\s*\(")
+                .expect("pattern")
+                .find_iter(&text)
+                .count()
+        })
+        .sum();
+    let has_server = scripts.iter().any(|s| {
+        s.path
+            .eq_ignore_ascii_case(&format!("{}/server.cs", cx.src.dir()))
+    });
+    let follows = has_server && written == followed;
     // What an Add-On says about itself, for people: read, not imported.
     let metadata = [
         "description.txt",
@@ -602,6 +746,16 @@ fn inventory(cx: &mut Ctx, scripts: &[Script]) {
         "licence.txt",
         "readme.txt",
     ];
+    // What the scripts could open by name: a file of a kind the game only
+    // read when a script named it, that no script names, never loaded.
+    let script_text: String = cx
+        .src
+        .files
+        .values()
+        .filter(|f| kind_of(&f.path) == "script")
+        .map(|f| tscript::without_comments(&String::from_utf8_lossy(&f.bytes)).to_ascii_lowercase())
+        .collect::<Vec<_>>()
+        .join("\n");
     for f in cx.src.files.values() {
         let member = cx.src.member(f).to_ascii_lowercase();
         let kind = kind_of(&f.path);
@@ -624,6 +778,8 @@ fn inventory(cx: &mut Ctx, scripts: &[Script]) {
                 "consumed",
                 if reachable.contains(&f.path.to_ascii_lowercase()) {
                     vec!["read for datablocks, functions and calls; not executed".into()]
+                } else if follows {
+                    vec!["no exec from server.cs reaches it, so v20 never ran it; left out".into()]
                 } else {
                     vec!["not reached by a literal exec from server.cs; read anyway".into()]
                 },
@@ -633,7 +789,31 @@ fn inventory(cx: &mut Ctx, scripts: &[Script]) {
                 vec!["compiled DSO bytecode; only source .cs is read".into()],
             ),
             "text" if metadata.contains(&member.as_str()) => ("consumed", vec!["metadata".into()]),
+            // A folder's own description (`grenade/Description.txt`, left
+            // from an Add-On merged into this one): Blockland reads only the
+            // root's.
+            "text"
+                if member
+                    .rsplit_once('/')
+                    .is_some_and(|(_, file)| metadata.contains(&file)) =>
+            {
+                (
+                    "skipped",
+                    vec!["a subfolder's description; Blockland reads only the Add-On's own, so it is not game data".into()],
+                )
+            }
             "shape" | "texture" | "sound" | "brick_geometry" => ("pending", vec![]),
+            "text" | "other"
+                if !script_text.contains(member.rsplit('/').next().unwrap_or(&member)) =>
+            {
+                (
+                    "skipped",
+                    vec![
+                        "no script names it, so the game never loaded it (an editor file or a copy's leftover)"
+                            .into(),
+                    ],
+                )
+            }
             _ => (
                 "unsupported",
                 vec![format!("no native importer for {kind} files")],
@@ -665,6 +845,25 @@ fn inventory(cx: &mut Ctx, scripts: &[Script]) {
             resolution: None,
         });
     }
+    follows.then_some(reachable)
+}
+
+/// A script argument that is one quoted string, with nothing joined on.
+fn is_plain_string(arg: &str) -> bool {
+    let a = arg.trim();
+    a.len() >= 2 && a.starts_with('"') && a.ends_with('"') && !a[1..a.len() - 1].contains('"')
+}
+
+/// Whether a script's quoted path is a file of an Add-On the base game
+/// ships (`"add-ons/weapon_rocket_launcher/server.cs"`).
+fn ships_with_game(arg: &str) -> bool {
+    if !is_plain_string(arg) {
+        return false;
+    }
+    let path = literal(arg).to_ascii_lowercase();
+    path.strip_prefix("add-ons/")
+        .and_then(|rest| rest.split_once('/'))
+        .is_some_and(|(addon, _)| reference::base_package(addon).is_some())
 }
 
 const KNOWN_TOP_LEVEL: &[&str] = &[
@@ -672,6 +871,8 @@ const KNOWN_TOP_LEVEL: &[&str] = &[
     "forcerequiredaddon",
     "loadrequiredaddon",
     "adddamagetype",
+    // Support_SpecialKills' messages, read as special kills.
+    "addspecialdamagemsg",
     "activatepackage",
     "error",
     "echo",
@@ -697,6 +898,53 @@ fn top_level(cx: &mut Ctx, scripts: &[Script]) {
                         None,
                     );
                 }
+            } else if callee == "isfile" && c.args.len() == 1 && ships_with_game(&c.args[0]) {
+                // `isFile("add-ons/weapon_rocket_launcher/server.cs")`: a
+                // check for an Add-On the base game ships, always there.
+            } else if callee == "isfile" {
+                // A query with no effect of its own: a top-level `if` choosing
+                // between another Add-On's files and the Add-On's own.
+                cx.ambiguous(
+                    format!("isFile({})", c.args.join(", ")),
+                    at,
+                    "checks at load whether a file outside this Add-On exists; read as absent, so the Add-On uses its own".into(),
+                    None,
+                );
+            } else if callee == "rtb_registerpref" && c.receiver.is_none() {
+                for (_, pref) in rtb::prefs(std::slice::from_ref(c)) {
+                    let reason = match &pref.setting {
+                        Ok(def) => format!(
+                            "an RTB server preference ({}): it becomes a server setting the host changes once a port's rules read it, and keeps its default {} until then",
+                            def.title, def.default
+                        ),
+                        Err(e) => {
+                            format!("an RTB server preference that cannot be a server setting: {e}")
+                        }
+                    };
+                    cx.unsupported(
+                        format!("RTB_registerPref {}", pref.global),
+                        at.clone(),
+                        reason,
+                    );
+                }
+            } else if callee == "isfunction" && c.receiver.is_none() && c.args.len() == 1 {
+                // `isFunction(registerPreferenceAddon)`: Blockland Glass's
+                // preference grouping, or a script's own function.
+                let name = literal(&c.args[0]).trim().to_ascii_lowercase();
+                let defined = scripts
+                    .iter()
+                    .flat_map(|s| &s.functions)
+                    .any(|f| f.qualified().eq_ignore_ascii_case(&name));
+                cx.ambiguous(
+                    format!("isFunction({})", c.args[0]),
+                    at,
+                    if defined {
+                        "checks at load whether a function exists; this Add-On defines it, so read as there".into()
+                    } else {
+                        "checks at load whether a function exists; nothing outside this Add-On defines functions here (no Blockland Glass), so read as absent".into()
+                    },
+                    None,
+                );
             } else if callee.starts_with("register") && callee.contains("event") {
                 cx.unsupported(
                     format!("{}({})", c.callee, c.args.join(", ")),
@@ -1193,6 +1441,22 @@ fn weapon_definition(o: &Owned, fields: &BTreeMap<String, String>) -> bri_weapon
     }
 }
 
+/// A dependency's (or the base game's) datablock, as the weapons lowering
+/// reads it.
+fn reference_definition(o: &reference::Owned) -> bri_weapons::Definition {
+    bri_weapons::Definition {
+        name: o.datablock.name.clone(),
+        class: o.datablock.class.clone(),
+        parent: o.datablock.parent.clone(),
+        source: bri_weapons::Evidence {
+            path: o.path.clone(),
+            sha256: o.sha256.clone(),
+            line: o.datablock.line,
+        },
+        fields: o.datablock.fields.clone(),
+    }
+}
+
 fn weapons(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
     let is_weapon = |c: &str| WEAPON_CLASSES.iter().any(|w| w.eq_ignore_ascii_case(c));
     let mut defs: Vec<bri_weapons::Definition> = cx
@@ -1201,6 +1465,13 @@ fn weapons(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
         .filter(|o| is_weapon(&o.d.class))
         .map(|o| weapon_definition(o, &o.d.fields))
         .collect();
+    // Emitters players put on bricks travel in the weapons pack's effects.
+    let brick_emitters = cx.owned.values().any(|o| {
+        o.d.class.eq_ignore_ascii_case("ParticleEmitterData")
+            && o.fields
+                .get("uiname")
+                .is_some_and(|n| !literal(n).trim().is_empty())
+    });
     // A field naming a global the game or the Add-On sets to a constant at
     // load (`mountPoint = $BackSlot;`) reads as its value.
     let globals = load_globals(cx, scripts);
@@ -1223,7 +1494,7 @@ fn weapons(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
                 cx.outputs.contains_key(&file.to_ascii_lowercase())
             })
     });
-    if defs.is_empty() && !has_sounds {
+    if defs.is_empty() && !has_sounds && !brick_emitters {
         return Ok(());
     }
     // Pull in the dependency datablocks these name, so `lower` can resolve
@@ -1244,17 +1515,7 @@ fn weapons(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
             .filter(|r| !names.contains(*r))
             .filter_map(|r| cx.reference.datablocks.get(r))
             .filter(|o| is_weapon(&o.datablock.class))
-            .map(|o| bri_weapons::Definition {
-                name: o.datablock.name.clone(),
-                class: o.datablock.class.clone(),
-                parent: o.datablock.parent.clone(),
-                source: bri_weapons::Evidence {
-                    path: o.path.clone(),
-                    sha256: o.sha256.clone(),
-                    line: o.datablock.line,
-                },
-                fields: o.datablock.fields.clone(),
-            })
+            .map(reference_definition)
             .collect();
         if add.is_empty() {
             break;
@@ -1302,7 +1563,7 @@ fn weapons(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
         if cx.owned.contains_key(&n) {
             content_id(&cx.ns, kind, &n)
         } else {
-            content_id("v20", kind, &n)
+            dependency_id(cx, kind, &n)
         }
     };
     let mut items = BTreeMap::new();
@@ -1354,30 +1615,27 @@ fn weapons(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
         images.insert(im.id.clone(), im);
     }
     let mut projectiles = BTreeMap::new();
+    let mut external = BTreeSet::new();
     for (old, mut p) in std::mem::take(&mut pack.projectiles) {
-        let own = owned(&p.name);
-        if !own && !needed_projectiles.contains(&old) {
+        if !owned(&p.name) {
+            // The package the dependency becomes provides it; the packs
+            // resolve it when merged.
+            p.id = dependency_id(cx, "projectile", &p.name);
+            if needed_projectiles.contains(&old) {
+                external.insert(p.id.clone());
+            }
+            cx.dependency_projectiles.insert(p.id.clone(), p);
             continue;
         }
         p.sport_image = p.sport_image.map(|s| remap(cx, "image", &s));
-        if own {
-            p.id = cx.id("projectile", &p.name, &p.name, file);
-            cx.mark(
-                &p.name.clone(),
-                "projectile",
-                "converted",
-                vec![p.id.clone()],
-                None,
-            );
-        } else {
-            p.id = content_id("v20", "projectile", &p.name);
-            cx.ambiguous(
-                format!("projectile {}", p.name),
-                None,
-                "a dependency's projectile is copied into this pack: the weapons pack format cannot reference another package's projectile".into(),
-                Some(p.id.clone()),
-            );
-        }
+        p.id = cx.id("projectile", &p.name, &p.name, file);
+        cx.mark(
+            &p.name.clone(),
+            "projectile",
+            "converted",
+            vec![p.id.clone()],
+            None,
+        );
         projectiles.insert(p.id.clone(), p);
     }
     let explosions: BTreeMap<_, _> = std::mem::take(&mut pack.explosions)
@@ -1453,6 +1711,7 @@ fn weapons(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
     pack.items = items;
     pack.images = images;
     pack.projectiles = projectiles;
+    pack.external_projectiles = external;
     pack.explosions = explosions;
     pack.id = cx.ns.clone();
     pack.definitions.retain(|d| owned(&d.name));
@@ -1468,10 +1727,14 @@ fn weapons(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
         .iter()
         .filter_map(|s| cx.script_text(&s.path))
         .collect();
-    for t in texts
-        .iter()
-        .flat_map(|t| bri_weapons_import::damage_types(t).unwrap_or_default())
-    {
+    // Special kills (Support_SpecialKills' `addSpecialDamageMsg`) are laid
+    // over them when a rule calls a kill special.
+    for t in texts.iter().flat_map(|t| {
+        bri_weapons_import::damage_types(t)
+            .unwrap_or_default()
+            .into_iter()
+            .chain(bri_weapons_import::special_kills(t).unwrap_or_default())
+    }) {
         let missing: Vec<_> = t
             .icons()
             .filter(|i| {
@@ -1610,8 +1873,13 @@ fn presentation(cx: &mut Ctx, pack: &bri_weapons::Pack, weapons_sha256: &str) ->
         let folder = f.path.rsplit_once('/').map_or("", |(d, _)| d).to_owned();
         let mut bindings = vec![];
         for m in &shape.materials {
-            let own = texture(cx, &mut textures, &format!("{folder}/{}", m.name));
-            match own.or_else(|| cx.reference.base_texture(&m.name)) {
+            // Torque looks for a material's texture beside the shape, then
+            // in each folder above it; a material it finds nowhere is drawn
+            // untextured (white, under the item's colour shift).
+            let found = texture_folders(&folder)
+                .find_map(|dir| texture(cx, &mut textures, &format!("{dir}/{}", m.name)))
+                .or_else(|| cx.reference.base_texture(&m.name));
+            match found {
                 Some(t) => bindings.push(t),
                 None => {
                     // Torque drew a material whose bitmap it could not find
@@ -1751,6 +2019,12 @@ enum Flat {
     White,
     /// Clear white: a material with no texture, showing the tint.
     Clear,
+}
+
+/// Where Torque looked for a shape's material texture: the shape's folder,
+/// then each folder above it.
+fn texture_folders(folder: &str) -> impl Iterator<Item = &str> {
+    std::iter::successors(Some(folder), |d| d.rsplit_once('/').map(|(up, _)| up))
 }
 
 fn flat_texture(
@@ -2564,10 +2838,11 @@ type Pending = (
     usize,
 );
 
-/// An Add-On's `PlayerData` as a package archetype: the v20 player type it
-/// inherits from as its base, and the fields its own datablocks set, in the
-/// motor's units (per second, not per 32 ms tick; forces over the 90 mass
-/// of v20's players). Returns the fields with no native equivalent.
+/// An Add-On's `PlayerData` as a package archetype ([`player_types`]): its
+/// fields and those of its ancestors in this Add-On (the nearest wins),
+/// over the archetype of the first one outside it, an Add-On's it depends
+/// on or one of v20's player types. Returns the fields it set that no
+/// archetype field carries.
 fn player_archetype(cx: &Ctx, name: &str) -> Result<(serde_json::Value, Vec<String>)> {
     // v20's selectable player datablocks (`bri_motor::player_types`), which
     // every archetype table starts with.
@@ -2580,116 +2855,54 @@ fn player_archetype(cx: &Ctx, name: &str) -> Result<(serde_json::Value, Vec<Stri
         "playerquakearmor",
         "horsearmor",
     ];
-    // The Add-On's own chain, child last wins.
-    let mut chain = Vec::new();
+    let mut fields = BTreeMap::new();
     let mut at = name.to_ascii_lowercase();
+    let mut depth = 0;
     let base = loop {
         let Some(o) = cx.owned.get(&at) else {
+            let base = archetype_id(cx, &at);
             ensure!(
-                V20_PLAYERS.contains(&at.as_str()),
+                !base.starts_with("v20.") || V20_PLAYERS.contains(&at.as_str()),
                 "inherits from {at}, which is not one of v20's player types"
             );
-            break at;
+            break base;
         };
-        ensure!(chain.len() < 16, "{name}'s datablock parents loop");
-        chain.push(&o.d.fields);
+        depth += 1;
+        ensure!(depth <= 16, "{name}'s datablock parents loop");
+        for (k, v) in &o.d.fields {
+            fields
+                .entry(k.to_ascii_lowercase())
+                .or_insert_with(|| v.clone());
+        }
         match &o.d.parent {
             Some(parent) => at = parent.to_ascii_lowercase(),
-            None => break V20_PLAYERS[0].to_owned(),
+            None => break format!("v20.player.{}", V20_PLAYERS[0]),
         }
     };
-    let mut set = BTreeMap::new();
-    for fields in chain.iter().rev() {
-        for (k, v) in fields.iter() {
-            set.insert(k.to_ascii_lowercase(), literal(v).trim().to_owned());
-        }
-    }
-    // `a * b` products, as v20 writes forces (`12 * 90`).
-    let number = |v: &str| -> Option<f32> {
-        v.split('*')
-            .map(|t| t.trim().parse::<f32>().ok())
-            .try_fold(1.0, |acc, t| t.map(|t| acc * t))
-            .filter(|n| n.is_finite())
-    };
-    let flag = |v: &str| v == "1" || v.eq_ignore_ascii_case("true");
-    // v20's 32 ms tick (`bri_motor::player::TORQUE_TICK`).
-    const TICK: f32 = 0.032;
-    let mass = set.get("mass").and_then(|v| number(v)).filter(|m| *m > 0.0).unwrap_or(90.0);
-    let mut movement = serde_json::Map::new();
-    let mut def = serde_json::Map::new();
-    def.insert("schema_version".into(), 1.into());
-    def.insert("base".into(), format!("v20.player.{base}").into());
-    let mut gaps = Vec::new();
-    for (k, v) in &set {
-        let n = number(v);
-        let mut put = |key: &str, value: Option<f32>| match value {
-            Some(x) => {
-                movement.insert(key.into(), serde_json::json!(x));
-            }
-            None => gaps.push(k.clone()),
-        };
-        match k.as_str() {
-            "maxforwardspeed" => put("forward", n),
-            "maxbackwardspeed" => put("backward", n),
-            "maxsidespeed" => put("sideways", n),
-            "maxforwardcrouchspeed" => put("crouch_forward", n),
-            "maxbackwardcrouchspeed" => put("crouch_backward", n),
-            "maxsidecrouchspeed" => put("crouch_sideways", n),
-            "maxunderwaterforwardspeed" => put("underwater_forward", n),
-            "maxunderwaterbackwardspeed" => put("underwater_backward", n),
-            "maxunderwatersidespeed" => put("underwater_sideways", n),
-            "runforce" => put("acceleration", n.map(|f| f / mass)),
-            "jumpforce" => put("jump_speed", n.map(|f| f / mass)),
-            "aircontrol" => put("air_control", n),
-            "runsurfaceangle" => put("slope_degrees", n),
-            "jumpsurfaceangle" => put("jump_surface_degrees", n),
-            "maxenergy" => put("max_energy", n),
-            "rechargerate" => put("recharge", n.map(|r| r / TICK)),
-            "minjetenergy" => put("min_jet_energy", n),
-            "jetenergydrain" => put("jet_drain", n.map(|r| r / TICK)),
-            "jumpdelay" => put("jump_delay_ticks", n.map(|t| (t * 4.0).clamp(0.0, 255.0))),
-            "canjet" => {
-                movement.insert("can_jet".into(), flag(v).into());
-            }
-            "maxdamage" => match n {
-                Some(x) => {
-                    def.insert("max_health".into(), serde_json::json!(x));
-                }
-                None => gaps.push(k.clone()),
-            },
-            "uiname" => {
-                def.insert("name".into(), v.clone().into());
-            }
-            "showenergybar" => {
-                def.insert("energy_bar".into(), flag(v).into());
-            }
-            "thirdpersononly" => {
-                def.insert("third_person_only".into(), flag(v).into());
-            }
-            "rideable" => {
-                def.insert("rideable".into(), flag(v).into());
-            }
-            "canride" => {
-                def.insert("can_ride".into(), flag(v).into());
-            }
-            "cameramaxdist" => match n {
-                Some(x) => {
-                    def.insert("camera_distance".into(), serde_json::json!(x));
-                }
-                None => gaps.push(k.clone()),
-            },
-            // Jump and jet energy costs the motor does not charge, and the
-            // mass already folded into the forces.
-            "mass" | "jumpenergydrain" | "minjumpenergy" => {}
-            _ => gaps.push(k.clone()),
-        }
-    }
-    def.insert("movement".into(), movement.into());
-    let value = serde_json::Value::Object(def);
+    let converted = player_types::convert(&fields, Some(base));
     let parsed: bri_package_runtime::content::ArchetypeDef =
-        serde_json::from_value(value.clone()).context("archetype")?;
+        serde_json::from_value(converted.archetype.clone()).context("archetype")?;
     parsed.validate()?;
-    Ok((value, gaps))
+    Ok((converted.archetype, converted.left_out))
+}
+
+/// The archetype a `PlayerData` named `name` is: this Add-On's own or that
+/// of an Add-On it depends on, or else v20's (`v20.player.<datablock>`).
+fn archetype_id(cx: &Ctx, name: &str) -> String {
+    let key = name.to_ascii_lowercase();
+    if cx.is_owned(&key) {
+        return content_id(&cx.ns, "archetype", name);
+    }
+    match cx
+        .reference
+        .datablocks
+        .get(&key)
+        .filter(|o| o.addon != "base")
+        .and_then(|o| namespace_for(&o.addon).ok())
+    {
+        Some(ns) => content_id(&ns, "archetype", name),
+        None => format!("v20.player.{key}"),
+    }
 }
 
 /// Whether `script` downloads `file` from a website at run time: it names
@@ -2725,17 +2938,120 @@ fn sounds_and_rest(cx: &mut Ctx) {
             })
         })
         .collect();
+    // How often each name is written in the Add-On's scripts: a datablock
+    // written only where it is declared is one nothing uses.
+    let script_text: String = cx
+        .src
+        .files
+        .values()
+        .filter(|f| kind_of(&f.path) == "script")
+        .map(|f| tscript::without_comments(&String::from_utf8_lossy(&f.bytes)).to_ascii_lowercase())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mentions = |name: &str| {
+        regex::Regex::new(&format!(
+            r"\b{}\b",
+            regex::escape(&name.to_ascii_lowercase())
+        ))
+        .map_or(usize::MAX, |re| re.find_iter(&script_text).count())
+    };
+    // An emitter written into an array slot past the engine's (an
+    // `ExplosionData`'s 4 `emitter`s, a `DebrisData`'s 2 `emitters`) was
+    // refused when the datablock loaded, so that mention draws nothing.
+    let mut past_slots: BTreeMap<String, usize> = BTreeMap::new();
+    for o in cx.owned.values() {
+        let (field, slots) = match o.d.class.to_ascii_lowercase().as_str() {
+            "explosiondata" => ("emitter[", 4),
+            "debrisdata" => ("emitters[", 2),
+            _ => continue,
+        };
+        for (key, value) in &o.fields {
+            if key
+                .strip_prefix(field)
+                .and_then(|r| r.strip_suffix(']'))
+                .and_then(|i| i.trim().parse::<usize>().ok())
+                .is_some_and(|i| i >= slots)
+            {
+                *past_slots
+                    .entry(literal(value).trim().to_ascii_lowercase())
+                    .or_default() += 1;
+            }
+        }
+    }
+    let past = |name: &str| {
+        past_slots
+            .get(&name.to_ascii_lowercase())
+            .copied()
+            .unwrap_or(0)
+    };
+    let used = |name: &str| mentions(name).saturating_sub(past(name)) > 1;
+    // The particles each emitter nothing uses names: those mentions draw
+    // nothing either.
+    let mut idle_mentions = past_slots.clone();
+    for (name, class, fields, ..) in &pending {
+        if class == "particleemitterdata" && !used(name) && !fields.contains_key("uiname") {
+            for particle in fields
+                .get("particles")
+                .map(|p| literal(p).to_ascii_lowercase())
+                .unwrap_or_default()
+                .split_whitespace()
+            {
+                *idle_mentions.entry(particle.to_owned()).or_default() += 1;
+            }
+        }
+    }
+    let used = |name: &str| {
+        let idle = if mentions(name) == usize::MAX {
+            0
+        } else {
+            idle_mentions
+                .get(&name.to_ascii_lowercase())
+                .copied()
+                .unwrap_or(0)
+        };
+        mentions(name).saturating_sub(idle) > 1
+    };
     for (name, class, fields, own, path, line) in pending {
         let at = Location::new(&path, line);
         match class.as_str() {
             "audioprofile" => {
                 let file = fields
                     .get("filename")
-                    .map(|f| source::resolve(&path, literal(f)))
+                    .map(|f| file_named(cx.src, &cx.outputs, &path, f))
                     .unwrap_or_default();
                 if let Some(rel) = cx.outputs.get(&file.to_ascii_lowercase()).cloned() {
                     let id = cx.id("sound", &name, &name, &format!("assets/{rel}"));
                     cx.mark(&name, "sound", "converted_with_gaps", vec![id], Some("the audio system reads one fixed pack (role audio); this sound is packaged but nothing plays it by id yet".into()));
+                } else if let Some(sound) = cx.reference.base_sound(&file) {
+                    // Tier 1's `Block_MoveBrick_Sound` of the base click.
+                    let note = format!("plays the base game's {sound}, the same file");
+                    cx.mark(&name, "sound", "consumed", vec![], Some(note));
+                } else if let Some(base) = fields
+                    .get("filename")
+                    .and_then(|f| f.rsplit_once('"').and_then(|(head, _)| head.rsplit_once('"')))
+                    .map(|(_, tail)| tail.rsplit('/').next().unwrap_or(tail).to_ascii_lowercase())
+                    .filter(|b| !b.is_empty())
+                    .filter(|_| {
+                        fields.get("filename").is_some_and(|f| f.trim_start().starts_with('%'))
+                    })
+                    .filter(|b| {
+                        !cx.src
+                            .files
+                            .values()
+                            .any(|f| f.path.to_ascii_lowercase().ends_with(&format!("/{b}")))
+                    })
+                {
+                    // A path built at load (`%path @ "x.wav"`) whose file the
+                    // Add-On has nowhere: v20 found nothing to play either.
+                    cx.mark(
+                        &name,
+                        "sound",
+                        "consumed",
+                        vec![],
+                        Some(format!(
+                            "it names {base} by a path built at load, and the Add-On has no file of that name, so v20 played nothing"
+                        )),
+                    );
                 } else if cx
                     .script_text(&path)
                     .is_some_and(|text| downloads(&text, &file))
@@ -2759,6 +3075,32 @@ fn sounds_and_rest(cx: &mut Ctx) {
                         vec![],
                         Some(format!("sound file {file} is not in this Add-On")),
                     );
+                }
+            }
+            "audiodescription" => {
+                // Its volume, looping and 3D flag are read into each sound
+                // that names it (`weapon_fx::sounds`).
+                let users: Vec<String> = cx
+                    .report
+                    .datablocks
+                    .iter()
+                    .filter(|e| e.class.eq_ignore_ascii_case("AudioProfile"))
+                    .filter(|e| {
+                        cx.owned
+                            .get(&e.name.to_ascii_lowercase())
+                            .and_then(|o| o.fields.get("description"))
+                            .is_some_and(|d| literal(d).trim().eq_ignore_ascii_case(&name))
+                    })
+                    .flat_map(|e| e.ids.clone())
+                    .collect();
+                let note = if users.is_empty() {
+                    "no sound of this Add-On names it, so it changed nothing".to_owned()
+                } else {
+                    "its volume, looping and 3D flag are read into the sounds that name it".to_owned()
+                };
+                cx.mark(&name, "sound_description", "consumed", vec![], Some(note));
+                if let Some(e) = cx.entry(&name) {
+                    e.notes.extend(users.into_iter().map(|id| format!("used by {id}")));
                 }
             }
             "playerdata" if !fields.contains_key("isholebot") => {
@@ -2794,7 +3136,6 @@ fn sounds_and_rest(cx: &mut Ctx) {
                 }
             }
             "playerdata" => {
-                let bot = fields.contains_key("isholebot");
                 // Bot_Hole's settings are the `h`-prefixed fields this datablock declares.
                 let ai: Vec<_> = own
                     .keys()
@@ -2803,31 +3144,51 @@ fn sounds_and_rest(cx: &mut Ctx) {
                     .collect();
                 cx.mark(
                     &name,
-                    if bot { "bot" } else { "player_type" },
+                    "bot",
                     "recognised_only",
                     vec![],
-                    Some("no native schema for Add-On player types; bots are Rust brains that join as players".into()),
+                    Some("no native schema for Add-On bots; bots are Rust brains that join as players".into()),
                 );
                 cx.unsupported(
-                    format!("{} {name}", if bot { "bot" } else { "player type" }),
+                    format!("bot {name}"),
                     Some(at),
-                    if bot {
-                        format!("Bot_Hole AI settings ({}) configure a script framework this import does not have", ai.join(", "))
-                    } else {
-                        "PlayerData movement and armour are not importable from Add-Ons".into()
-                    },
+                    format!("Bot_Hole AI settings ({}) configure a script framework this import does not have", ai.join(", ")),
                 );
             }
+            // Images' casings and explosions' debris throw it
+            // (`bri_weapons::debris`), drawn with its model.
+            "debrisdata" if used(&name) => cx.mark(
+                &name,
+                "debris",
+                "converted",
+                vec![],
+                Some("thrown by the images and explosions that name it".into()),
+            ),
             "debrisdata" => cx.mark(
                 &name,
                 "debris",
-                "recognised_only",
+                "consumed",
                 vec![],
-                Some("the weapon debris importer is a fixed vanilla pipeline".into()),
+                Some("nothing throws it, so v20 never did".into()),
             ),
             // A vehicle trail converted the ones it uses.
             "particledata" | "particleemitterdata"
                 if cx.entry(&name).is_some_and(|e| e.status == "converted") => {}
+            "particledata" | "particleemitterdata" | "particleemitternodedata"
+                if !used(&name) && !fields.contains_key("uiname") =>
+            {
+                cx.mark(
+                    &name,
+                    if class == "particledata" {
+                        "particle"
+                    } else {
+                        "emitter"
+                    },
+                    "consumed",
+                    vec![],
+                    Some("nothing uses it (or only an emitter nothing uses, or an array slot past the engine's) and it has no uiName, so v20 never drew it".into()),
+                )
+            }
             "particledata" | "particleemitterdata" | "particleemitternodedata" => cx.mark(
                 &name,
                 if class == "particledata" {
@@ -2845,14 +3206,6 @@ fn sounds_and_rest(cx: &mut Ctx) {
                 "recognised_only",
                 vec![],
                 Some("not used by an imported vehicle".into()),
-            ),
-            // A sound's settings, read into each sound that names it.
-            "audiodescription" => cx.mark(
-                &name,
-                "sound_description",
-                "consumed",
-                vec![],
-                Some("its volume, looping and 3D are read into each sound that names it".into()),
             ),
             "fxdtsbrickdata" | "itemdata" | "shapebaseimagedata" | "projectiledata"
             | "explosiondata" => {}
@@ -2962,6 +3315,23 @@ fn settle_notes(e: &mut report::DatablockEntry, settle: impl Fn(&str) -> Option<
     }
 }
 
+/// The id a datablock this Add-On takes from another has where that one's
+/// package declares it: the base game's (`v20.projectile.gunprojectile`)
+/// for a vanilla Add-On or the core scripts, else the namespace importing
+/// that Add-On makes (`weapon_package_tier1:projectile/...`).
+fn dependency_id(cx: &Ctx, kind: &str, name: &str) -> String {
+    let addon = cx
+        .reference
+        .datablocks
+        .get(&name.to_ascii_lowercase())
+        .map(|o| o.addon.as_str())
+        .filter(|a| *a != "base" && reference::base_package(a).is_none());
+    match addon.and_then(|a| namespace_for(a).ok()) {
+        Some(ns) => content_id(&ns, kind, name),
+        None => bri_weapons::native_id(kind, name),
+    }
+}
+
 /// The package an Add-On this one requires by name
 /// (`ForceRequiredAddOn`) becomes: the base game's for a vanilla one, else
 /// the package importing it makes (its namespace), which the player
@@ -2970,6 +3340,111 @@ fn dependency_package(addon: &str) -> Option<String> {
     reference::base_package(addon)
         .map(str::to_owned)
         .or_else(|| namespace_for(addon).ok())
+}
+
+/// A file named by a path its script built at load (`filename = %path @
+/// "x.wav"` after `%path = "./sounds/";`): the first value the script gives
+/// `%path` under which this Add-On has the file. A branch for another
+/// Add-On's folder (`if(isFile("Add-Ons/Other/..."))`) finds nothing here,
+/// as `isFile` did in v20 without that Add-On, so the Add-On's own folder is
+/// the one used.
+/// The file a datablock's file field names, as its script `script` loads
+/// it: a path built at load ([`load_path`]) or a literal one.
+pub(crate) fn file_named(
+    src: &source::Source,
+    outputs: &BTreeMap<String, String>,
+    script: &str,
+    field: &str,
+) -> String {
+    load_path(src, outputs, script, field)
+        .unwrap_or_else(|| source::resolve(script, literal(field)))
+}
+
+fn load_path(
+    src: &source::Source,
+    outputs: &BTreeMap<String, String>,
+    script: &str,
+    field: &str,
+) -> Option<String> {
+    static BUILT: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r#"^\s*%(\w+)\s*@\s*"([^"]*)"\s*$"#).expect("pattern")
+    });
+    let c = BUILT.captures(field)?;
+    let text = src
+        .files
+        .values()
+        .find(|f| f.path.eq_ignore_ascii_case(script))
+        .map(|f| tscript::without_comments(&String::from_utf8_lossy(&f.bytes)))?;
+    let assigned =
+        regex::RegexBuilder::new(&format!(r#"%{}\s*=\s*"([^"]*)"\s*;"#, regex::escape(&c[1])))
+            .case_insensitive(true)
+            .build()
+            .ok()?;
+    let has = |file: &str| {
+        let lower = file.to_ascii_lowercase();
+        outputs.contains_key(&lower)
+            || src
+                .files
+                .values()
+                .any(|f| f.path.eq_ignore_ascii_case(file))
+    };
+    assigned
+        .captures_iter(&text)
+        .map(|a| source::resolve(script, &format!("{}{}", &a[1], &c[2])))
+        .find(|file| has(file))
+}
+
+/// Whether the call to `callee` on 1-based `line` of `text` sits in a
+/// block or statement whose `if` checks for a file of `addon`
+/// (`if(isFile("Add-Ons/<addon>/server.cs"))`), so it runs only where that
+/// Add-On is present.
+fn required_if_present(text: &str, line: usize, callee: &str, addon: &str) -> bool {
+    let text = tscript::without_comments(text);
+    let start: usize = text
+        .split_inclusive('\n')
+        .take(line.saturating_sub(1))
+        .map(str::len)
+        .sum();
+    // Up to the call itself, so a check earlier on its line counts.
+    let at = text[start..]
+        .lines()
+        .next()
+        .and_then(|l| l.to_ascii_lowercase().find(&callee.to_ascii_lowercase()))
+        .map_or(start, |i| start + i);
+    let before = &text.as_bytes()[..at];
+    let wanted = format!("isfile(\"add-ons/{}/", addon.to_ascii_lowercase());
+    let guards = |header: &[u8]| {
+        let header: String = String::from_utf8_lossy(header)
+            .to_ascii_lowercase()
+            .split_whitespace()
+            .collect();
+        header.starts_with("if(") && header.contains(&wanted)
+    };
+    let statement = |end: usize| {
+        before[..end]
+            .iter()
+            .rposition(|b| matches!(b, b';' | b'{' | b'}'))
+            .map_or(0, |p| p + 1)
+    };
+    // `if(isFile(...)) ForceRequiredAddOn(...);` with no block.
+    if guards(&before[statement(before.len())..]) {
+        return true;
+    }
+    let mut depth = 0usize;
+    for (i, b) in before.iter().enumerate().rev() {
+        match b {
+            b'}' => depth += 1,
+            b'{' if depth > 0 => depth -= 1,
+            b'{' => {
+                // The header of a block the call is in.
+                if guards(&before[statement(i)..i]) {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 fn dependencies(cx: &mut Ctx, scripts: &[Script]) {
@@ -2982,11 +3457,38 @@ fn dependencies(cx: &mut Ctx, scripts: &[Script]) {
             }
             let Some(a) = c.args.first() else { continue };
             let addon = literal(a).to_owned();
+            if cx.src.get(&s.path).is_some_and(|f| {
+                required_if_present(
+                    &String::from_utf8_lossy(&f.bytes),
+                    c.line,
+                    &c.callee,
+                    &addon,
+                )
+            }) {
+                // `if(isFile("Add-Ons/Sound_Blockland/server.cs"))
+                // ForceRequiredAddOn("Sound_Blockland");`: required only
+                // where the player has it. `isFile` reads as absent, so the
+                // Add-On takes its own branch and does not need it.
+                deps.entry(addon.to_ascii_lowercase())
+                    .or_insert(Dependency {
+                        addon: addon.clone(),
+                        how: c.callee.clone(),
+                        source: Some(Location::new(&s.path, c.line)),
+                        status: "if_present".into(),
+                        package: None,
+                        uses: vec![],
+                    });
+                continue;
+            }
             let found = cx
                 .reference
                 .addons
                 .get(&addon.to_ascii_lowercase())
                 .cloned();
+            // An Add-On v20 shipped (`Weapon_Gun`) is the game's own: its
+            // content is a base package, there with or without a v20
+            // folder to read.
+            let base = reference::base_package(&addon);
             deps.entry(addon.to_ascii_lowercase())
                 .or_insert(Dependency {
                     addon: found.clone().unwrap_or(addon.clone()),
@@ -2994,11 +3496,16 @@ fn dependencies(cx: &mut Ctx, scripts: &[Script]) {
                     source: Some(Location::new(&s.path, c.line)),
                     status: if found.is_some() {
                         "reference"
+                    } else if base.is_some() {
+                        "base"
                     } else {
                         "missing"
                     }
                     .into(),
-                    package: found.as_deref().and_then(dependency_package),
+                    package: found
+                        .as_deref()
+                        .and_then(dependency_package)
+                        .or(base.map(str::to_owned)),
                     uses: vec![],
                 });
         }
@@ -3018,6 +3525,33 @@ fn dependencies(cx: &mut Ctx, scripts: &[Script]) {
                 uses: vec![],
             });
         d.uses.extend(uses);
+    }
+    let own = cx.src.name.to_ascii_lowercase();
+    // A function the scripts call that neither they, the engine nor the
+    // reference install define may be the missing Add-On's (Bot_Zombie
+    // calls Bot_Hole's AI framework), so such an Add-On is not unused.
+    let calls_unknown = cx
+        .report
+        .needs_behaviour
+        .iter()
+        .any(|b| !b.unknown_calls.is_empty() || b.hook.kind == "framework_callback");
+    for (key, d) in &mut deps {
+        if *key == own {
+            // Requiring itself does nothing: it is already loading.
+            d.status = "self".into();
+        } else if matches!(d.status.as_str(), "missing" | "base")
+            && d.uses.is_empty()
+            && cx.reference.root.is_some()
+            && !(d.status == "missing" && calls_unknown)
+        {
+            // `forceRequiredAddOn` of a missing Add-On only printed an
+            // error; with none of its content named (every name the
+            // Add-On uses resolved against the install, or is reported as
+            // declared nowhere), v20 ran the same. A base Add-On none of
+            // whose content is named needs no base package either.
+            d.status = "unused".into();
+            d.package = None;
+        }
     }
     cx.report.dependencies = deps.into_values().collect();
 }
@@ -3061,12 +3595,7 @@ fn archetype_provides(out: &Path, namespace: &str) -> Vec<serde_json::Value> {
         .collect()
 }
 
-fn finish(
-    mut cx: Ctx,
-    opts: &Options,
-    ports: &ports::Ports,
-    bodies: &ports::Bodies,
-) -> Result<Report> {
+fn finish(mut cx: Ctx, opts: &Options, ports: &ports::Ports, code: &ports::Code) -> Result<Report> {
     for a in cx
         .report
         .assets
@@ -3143,8 +3672,26 @@ fn finish(
         namespace: &cx.ns,
         version: &opts.version,
         name: manifest["name"].as_str().unwrap_or(&cx.ns),
+        dependencies: &cx.dependency_projectiles,
     };
-    if let Some(port) = ports::apply(ports, &import, bodies, &cx.out) {
+    if let Some(mut port) = ports::apply(ports, &import, code, &cx.out) {
+        // A port reads what the Add-Ons it requires declare; say which
+        // were not beside it, as that is the usual cause.
+        let missing: Vec<&str> = cx
+            .report
+            .dependencies
+            .iter()
+            .filter(|d| d.status == "missing" && d.how.to_ascii_lowercase().contains("required"))
+            .map(|d| d.addon.as_str())
+            .collect();
+        if let Some(reason) = &mut port.reason
+            && !missing.is_empty()
+        {
+            reason.push_str(&format!(
+                " ({} it requires was not found: put it in the Add-Ons folder beside it, or give --reference a folder whose Add-Ons/ holds it)",
+                missing.join(", ")
+            ));
+        }
         for b in &mut cx.report.needs_behaviour {
             let how: Vec<String> = port
                 .handled
@@ -3166,7 +3713,8 @@ fn finish(
             }
         }
         // What the port carries out is not unsupported: top-level calls,
-        // files and objects made or changed at load, by their `handles` key.
+        // files and objects made or changed at load, by their `handles` key,
+        // and the RTB preferences its rules read or the game carries out.
         let how_of = |key: &str| {
             port.handled.get(key).map(|h| {
                 format!(
@@ -3176,10 +3724,16 @@ fn finish(
                 )
             })
         };
+        let pref = |what: &str| {
+            what.strip_prefix("RTB_registerPref ")
+                .and_then(|g| port.prefs.get(&g.to_ascii_lowercase()))
+                .map(|how| format!("port {}: {how}", port.port))
+        };
         let (ported, unsupported): (Vec<_>, Vec<_>) = std::mem::take(&mut cx.report.unsupported)
             .into_iter()
             .map(|mut f| {
-                f.resolution = handles_key(&f.what).and_then(|k| how_of(&k));
+                f.resolution =
+                    pref(&f.what).or_else(|| handles_key(&f.what).and_then(|k| how_of(&k)));
                 f
             })
             .partition(|f| f.resolution.is_some());
@@ -3213,6 +3767,27 @@ fn finish(
                         .push(format!("port {}: its callbacks are host rules now", port.port));
                 }
             }
+            // One the port carries out as an engine feature
+            // (`datablock:<name>` in its handles): a raycasting gun's line
+            // shape, drawn as the engine's tracer.
+            for d in cx
+                .report
+                .datablocks
+                .iter_mut()
+                .filter(|d| matches!(d.status.as_str(), "recognised_only" | "unsupported"))
+            {
+                if let Some(how) = port
+                    .handled
+                    .get(&format!("datablock:{}", d.name.to_ascii_lowercase()))
+                {
+                    d.status = "consumed".into();
+                    d.notes.push(format!(
+                        "port {}: {}",
+                        port.port,
+                        how.iter().cloned().collect::<Vec<_>>().join("; ")
+                    ));
+                }
+            }
             // One the Add-On makes at run time, which the port declares.
             for d in cx.report.datablocks.iter_mut().filter(|d| {
                 port.replaces.iter().any(|r| r.eq_ignore_ascii_case(&d.name))
@@ -3240,7 +3815,7 @@ fn finish(
                 };
                 if a.resolution.is_none()
                     && let Some(f) = port.covers.iter().find(|f| {
-                        bodies
+                        code.bodies
                             .get(&f.to_ascii_lowercase())
                             .is_some_and(|b| b.to_ascii_lowercase().contains(&global))
                     })
@@ -3295,4 +3870,33 @@ fn finish(
     )?;
     cx.write("IMPORT-REPORT.md", cx.report.markdown().as_bytes())?;
     Ok(cx.report)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn material_textures_are_looked_for_up_the_folders() {
+        assert_eq!(
+            super::texture_folders("add-ons/weapon_x/shapes/items").collect::<Vec<_>>(),
+            [
+                "add-ons/weapon_x/shapes/items",
+                "add-ons/weapon_x/shapes",
+                "add-ons/weapon_x",
+                "add-ons"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_require_inside_a_check_for_that_add_on_runs_only_where_it_is() {
+        let text = "if(isFile(\"Add-Ons/Sound_X/server.cs\"))\n{\n   // the pack\n   ForceRequiredAddOn(\"Sound_X\");\n}\nelse\n{\n   ForceRequiredAddOn(\"Sound_X\");\n}\nif (isFile(\"add-ons/sound_x/a.wav\"))\n   forceRequiredAddOn(\"Sound_X\");\nForceRequiredAddOn(\"Sound_X\");\nif(isFile(\"Add-Ons/Other/server.cs\")) { ForceRequiredAddOn(\"Sound_X\"); }\nif(isFile(\"Add-Ons/Sound_X/b.cs\")) ForceRequiredAddOn(\"Sound_X\");\n";
+        let guarded =
+            |line| super::required_if_present(text, line, "ForceRequiredAddOn", "Sound_X");
+        assert!(guarded(4), "in the check's block");
+        assert!(!guarded(8), "in its else");
+        assert!(guarded(11), "the check's one statement, with no block");
+        assert!(!guarded(12), "after it");
+        assert!(!guarded(13), "a check for another Add-On");
+        assert!(guarded(14), "a check on the call's own line");
+    }
 }

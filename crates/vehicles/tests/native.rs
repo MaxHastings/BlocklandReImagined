@@ -692,6 +692,34 @@ fn tumble_blocks_controls_and_releases_on_water_at_two_seconds(f: &Fixture) {
 }
 }
 
+on_both! {
+/// A tumble given a length (a taser's ten-second knockdown) lets its rider
+/// up when the time is up, still or not, and not before, even at rest; a
+/// checkpoint keeps the deadline.
+fn a_tumble_with_a_length_ends_on_time(f: &Fixture) {
+    let (mut v, mut w) = setup(f);
+    spawn(&mut v, &mut w, f.tumble, 2.);
+    mount(&mut v, &w, 0);
+    v.set_tumble_ticks(VehicleId(1), 600).unwrap();
+    // At rest past the two-second check: still down.
+    step(&mut v, &mut w, 300, Some(10.));
+    assert_eq!(v.snapshot(&w).vehicles.len(), 1);
+    let cp = save(&mut v, &w);
+    let (mut b, mut bw) = setup(f);
+    b.restore_checkpoint(&mut bw, cp, |_, _, _| true).unwrap();
+    for (v, w) in [(&mut v, &mut w), (&mut b, &mut bw)] {
+        step(v, w, 299, None);
+        assert_eq!(v.snapshot(w).vehicles.len(), 1, "not yet");
+        step(v, w, 1, None);
+        assert!(v.snapshot(w).vehicles.is_empty(), "up after ten seconds of 600 ticks");
+    }
+    // Only a tumble has a length.
+    spawn(&mut v, &mut w, f.car, 3.);
+    let car = v.snapshot(&w).vehicles[0].id;
+    assert!(v.set_tumble_ticks(car, 10).is_err());
+}
+}
+
 fn save(v: &mut VehiclesWorld, w: &PhysicsWorld) -> Checkpoint {
     v.drain_intents();
     let c = v.checkpoint(w).unwrap();

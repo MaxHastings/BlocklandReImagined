@@ -1529,6 +1529,13 @@ fn add_launcher(
         crosshair: true,
         follow_arm: false,
         paint_tint: false,
+        left_image: None,
+        magazine: None,
+        volleys: vec![],
+        last_shot: None,
+        state_shots: Default::default(),
+        cook: None,
+        guard: None,
         rope: None,
         light: None,
         paint_picker: false,
@@ -1596,6 +1603,11 @@ fn add_launcher(
         light_color: [0.; 3],
         sport_image: None,
         rest_speed: 0.,
+        max_bounces: 0,
+        children: Vec::new(),
+        aura: None,
+        fixed_damage: false,
+        slow: None,
     };
     pack.items.insert(item_id, item);
     pack.images.insert(image_id, image);

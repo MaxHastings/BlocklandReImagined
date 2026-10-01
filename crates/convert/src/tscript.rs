@@ -106,6 +106,52 @@ impl Tok {
     }
 }
 
+/// `source` with its `//` and `/* */` comments removed, as the reader skips
+/// them, keeping strings and every line break, so patterns read only code
+/// (a commented-out call is not a call) and lines still count.
+pub fn without_comments(source: &str) -> String {
+    let bytes = source.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c == b'/' && bytes.get(i + 1) == Some(&b'/') {
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+        } else if c == b'/' && bytes.get(i + 1) == Some(&b'*') {
+            i += 2;
+            while i < bytes.len() && !(bytes[i] == b'*' && bytes.get(i + 1) == Some(&b'/')) {
+                if bytes[i] == b'\n' {
+                    out.push(b'\n');
+                }
+                i += 1;
+            }
+            i = (i + 2).min(bytes.len());
+        } else if c == b'"' || c == b'\'' {
+            out.push(c);
+            i += 1;
+            while i < bytes.len() && bytes[i] != c {
+                if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                    out.push(bytes[i]);
+                    i += 1;
+                }
+                out.push(bytes[i]);
+                i += 1;
+            }
+            if i < bytes.len() {
+                out.push(c);
+                i += 1;
+            }
+        } else {
+            out.push(c);
+            i += 1;
+        }
+    }
+    // Only whole ASCII comments and strings were cut, so this stays UTF-8.
+    String::from_utf8(out).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
+}
+
 fn lex(source: &str) -> Result<Vec<Tok>> {
     let bytes = source.as_bytes();
     let mut i = 0;
@@ -550,6 +596,12 @@ pub fn literal(value: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn comments_go_and_strings_stay() {
+        let src = "a(); // b();\n/* c();\n d(); */ e(\"//x\", '/*y');\n";
+        assert_eq!(without_comments(src), "a(); \n\n e(\"//x\", '/*y');\n");
+    }
 
     const SAMPLE: &str = r#"
 %error = ForceRequiredAddOn("Weapon_Gun");

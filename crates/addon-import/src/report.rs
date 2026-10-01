@@ -152,7 +152,11 @@ pub struct Dependency {
     /// datablock or file of another Add-On is used.
     pub how: String,
     pub source: Option<Location>,
-    /// `reference` (found in the v20 reference install), `missing`.
+    /// `reference` (found in the v20 reference install), `base` (an Add-On
+    /// v20 shipped, whose content is the game's own `package`), `missing`,
+    /// `unused` (missing, with none of its content named), `self`, or
+    /// `if_present` (required only inside an `isFile` check for it, which
+    /// reads as absent, so the Add-On's own branch runs).
     pub status: String,
     /// The package that provides it, when known (`v20-weapons`).
     pub package: Option<String>,

@@ -10,6 +10,17 @@ use bri_vehicles::{self as veh, Intent, OccupantId, SpawnId, VehicleId, schema::
 use bri_weapons::ActorId;
 use rapier3d::prelude::*;
 
+/// What hurt a vehicle, as `on_vehicle_damage` names it.
+#[derive(Clone, Copy)]
+pub(super) enum VehicleHarm<'a> {
+    /// A shot or blast, and the projectile when one did it.
+    Weapon { projectile: Option<&'a str> },
+    /// A package's `damage`.
+    Package,
+    /// A smashing vehicle.
+    Smash,
+}
+
 /// `$Game::MinMountTime`: a player cannot remount right after leaving.
 const MIN_MOUNT_TICKS: u64 = 120;
 /// `WheeledVehicleData::onCollision`/`Armor::onCollision`: a player mounts
@@ -870,27 +881,52 @@ impl Session {
         by: OwnerId,
         kind: &str,
         position: Vec3,
+        cause: VehicleHarm<'_>,
     ) -> Result<()> {
         let scale = self
             .weapons
             .pack
             .damage_type(kind)
             .map_or(1.0, |t| t.vehicle_scale);
+        let id = VehicleId(vehicle);
+        let Some((part, max_health)) = self.vehicles.world.as_ref().and_then(|world| {
+            let part = world.hit_part(&self.simulation.physics, id, position.to_array());
+            Some((part, world.max_damage(id, part)?))
+        }) else {
+            return Ok(());
+        };
+        // Packages decide what the hit does first (`on_vehicle_damage`).
+        let (hook_kind, projectile) = match cause {
+            VehicleHarm::Weapon { projectile } => ("weapon", projectile),
+            VehicleHarm::Package => ("package", None),
+            VehicleHarm::Smash => ("smash", None),
+        };
+        let attacker = (by != packages::PACKAGE_SHOOTER).then_some(by);
+        let amount = self.package_vehicle_damage(
+            vehicle,
+            attacker,
+            amount * scale,
+            hook_kind,
+            kind,
+            projectile,
+            part,
+            max_health,
+            position,
+        );
+        if amount <= 0.0 {
+            return Ok(());
+        }
         if let Some(world) = &mut self.vehicles.world {
-            let id = VehicleId(vehicle);
-            match world.hit_part(&self.simulation.physics, id, position.to_array()) {
+            match part {
                 veh::VehiclePart::Turret => world.damage_turret(
                     &mut self.simulation.physics,
                     id,
-                    amount * scale,
+                    amount,
                     veh::OwnerId(by),
                 )?,
-                veh::VehiclePart::Chassis => world.damage(
-                    &self.simulation.physics,
-                    id,
-                    amount * scale,
-                    veh::OwnerId(by),
-                )?,
+                veh::VehiclePart::Chassis => {
+                    world.damage(&self.simulation.physics, id, amount, veh::OwnerId(by))?
+                }
             }
             let intents = world.drain_intents();
             self.apply_vehicle_intents(intents)?;
@@ -1762,10 +1798,7 @@ impl Session {
                         self.damage_player(
                             victim,
                             damage,
-                            combat::DamageKind::Weapon {
-                                name: "Vehicle".into(),
-                                direct: false,
-                            },
+                            combat::DamageKind::weapon("Vehicle", false),
                             Some(owner),
                         )?;
                     }

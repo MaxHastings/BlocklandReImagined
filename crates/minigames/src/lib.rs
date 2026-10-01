@@ -47,6 +47,13 @@ impl MinigamesWorld {
     pub fn catalog(&self) -> &Catalog {
         &self.catalog
     }
+    /// What loadouts may offer from now on (an Add-On's items shown or
+    /// hidden by a server setting). Games keep the loadouts they have.
+    pub fn set_catalog(&mut self, catalog: Catalog) -> Result<(), Error> {
+        catalog.validate()?;
+        self.catalog = catalog;
+        Ok(())
+    }
     pub fn player(&self, id: PlayerId) -> Result<&PlayerState, Error> {
         self.players.get(&id).ok_or(Error::StalePlayer)
     }

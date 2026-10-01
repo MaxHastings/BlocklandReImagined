@@ -500,6 +500,7 @@ mod tests {
             archetype,
             scale: 1.0,
             energy: 100.0,
+            speed_scale: 1.0,
             tick: Default::default(),
             tether: None,
         };
@@ -541,6 +542,7 @@ mod tests {
             archetype: id,
             scale: 1.0,
             energy: 100.0,
+            speed_scale: 1.0,
             tick: Default::default(),
             tether: None,
         };

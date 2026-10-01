@@ -51,10 +51,14 @@ operation that needs a capability.
 | `%obj.damage(%src, %pos, %amt, %type)` | `damage(target, amount, by, type)` | `damage` |
 | `%obj.addHealth(%amt)` | `heal(p, amount)` | `damage` |
 | `new Projectile() { ... }` | `fire(projectile, x, y, z, vx, vy, vz, by)` | `damage` |
-| `new Explosion()`, `radiusDamage` | `explode(x, y, z, radius, damage, brick_radius)` | `damage` |
+| `new Explosion()`, `radiusDamage` | `explode(x, y, z, radius, damage, brick_radius[, explosion])`; `explosion` names one of the weapons pack's (`"rocketExplosion"`, an imported Add-On's own), whose particles, light, shake and sound it then shows | `damage` |
 | `%obj.mountImage(%img, 0)` | `mount_image(p, image)`, `mount_image(p, ())` | `player` |
+| `%obj.pushDatablock(%db)`, `%obj.popDatablock(%db)` (Support_AltDatablock) | `push_archetype(p, a)`, `pop_archetype(p, a)` | `player` |
 | `package { function Player::mountImage / unMountImage ... }` guarding an image in a slot | `mount_image(p, image, slot, #{ keep: true })` | `player`; only its Add-On changes it while worn |
 | `%obj.unMountImage(0)` | `unmount_image(p)`: tools, cans and bricks in hand | `player` |
+| `%obj.emote(%image, %skipSpam)`, `%obj.unMountImage(3)` | `emote(p, image[, skip_spam])`, `emote(p, ())` | `player`; the image's state scripts run its `commands.states` for the wearer; spam-checked as v20 unless skipped |
+| `bottomPrint(%client, %text, %time, %hideBar)` | `bottom_print(p, text, seconds, hide_bar)` | `chat` |
+| `$Server::LAN` | `lan()` | |
 | `%client.camera.setOrbitMode(%target, ...)`, `setControlObject(%client.camera)`, back with `setControlObject(%player)` | `orbit_camera(p, target, distance)`, `orbit_camera(p, target, min, max, distance)` (the wheel zooms between), `orbit_camera(p, ())` | `player` |
 | `%obj.setScale("s s s")` | `set_scale(p, s)` | `player`; 0.2 to 5, one number |
 | `%obj.setLookLimits(%up, %down)` | `set_look_limits(p, up, down)`, `set_look_limits(p, ())` | `player` |
@@ -65,13 +69,15 @@ operation that needs a capability.
 | `%rider.setTransform(...)` after `mountObject`, to turn them on the mount | `mount_object(mount, rider, node, can_dismount, turn)`, `turn` in degrees clockwise from above | `physics`; Torque's angle is radians |
 | `%rider.unMountObject()`, `dismount()` | `unmount_object(rider)` | `physics`; keeps the mount's velocity |
 | `%obj.setImageAmmo(0, %x)` | `set_image_ammo(p, ammo)` | `player` |
+| A tactical pack's `%obj.toolAmmo[%slot]`, `%client.quantity["9MMrounds"]`, `serverCmdLight` reload | the image's `magazine`, `give_ammo(p, ammo, rounds)`, `set_reserve(p, ammo, rounds)`, `set_rounds(p, item, rounds)`, `reload(p)`, `player(p).magazine` | `player` |
+| `%obj.setMaxForwardSpeed(...)` and its kin for a slowdown | `set_speed_scale(p, scale)` | `player` |
 | `%client.setControlCameraFov(%fov)` | `set_fov(p, fov)`, `set_fov(p, ())` | `player` |
 | `%obj.setTransform`, `%client.spawnPlayer()` | `teleport(p, x, y, z)`, `respawn(p)` | `player` |
 | `%obj.setVelocity`, `addVelocity` | `push(ref, vx, vy, vz, by)` | `physics` |
 | A rope or grappling hook scripted from a schedule that re-aims `setVelocity` toward a point each tick | `tether(p, point, length, #{brick, object, reel, swing, keys, straight})`, `tether_length`, `untether` | `physics` |
 | `%player.tool[%i] = ...` | `give_item(p, item, equip)` | `player` |
 | `%player.tool[%i] = 0`, `serverCmdDropTool` | `take_item(p, item)` | `player` |
-| `new Item() { ... }` at a point | `drop_item(item, x, y, z)`, `drop_item(item, x, y, z, vx, vy, vz)` | `player` |
+| `new Item() { ... }` at a point, with dynamic fields | `drop_item(item, x, y, z)`, `drop_item(item, x, y, z, vx, vy, vz[, data])` | `player` |
 | `centerPrint`, `bottomPrint` | `center_print(p, text, s)`, `bottom_print(p, text, s)` | `chat` |
 | `commandToClient(%c, 'MessageBoxOK', %title, %text)` | `message_box(p, title, text)` | `chat` |
 | Slayer's `exportMinigamePreferences` / `importMinigamePreferences` (`.mgame.csv`, `.teams.csv`, `.pathcam`) | a build keeps its mini-game; `per_minigame` state keys travel with it; `on_minigame` hears `loaded` | Saved with the build, not as a file of its own. |
@@ -79,7 +85,10 @@ operation that needs a capability.
 | `%mini.messageAll`, `messageAllExcept`, `centerPrintAll`, `bottomPrintAll` | `tell_minigame(game, text[, except])`, `center_print_minigame(game, text, s)`, `bottom_print_minigame(game, text, s)` | `chat`; one line of the share for the whole game |
 | Slayer's `%mini.endRound(%winner)` | `end_round(game, #{ teams, players })`, then `on_minigame` `round_end` | `minigame` |
 | `serverPlay3D(%profile, %pos)`, `%client.play2D` | `sound_at(profile, x, y, z)`, `play_sound(p, profile)` | `effects` |
+| `%player.spawnExplosion(%projectile, %scale)` | `spawn_explosion(p, projectile, scale)` | `damage` |
+| `isObject(SomeDatablock)` of another Add-On | `optional_dependencies` and `enabled(add_on)` | |
 | `%obj.playThread(%slot, %seq)` | `play_thread(p, thread, sequence)` | `effects`; whole-body sequences (`death1`) override by priority, empty-hand arm poses (`armReadyBoth`) hold |
+| `%obj.schedule(%ms, "playThread", %slot, %seq)` | `play_thread(p, thread, sequence, ms / 1000.0)` | `effects` |
 | A stretched `StaticShape` tracer | `beam(from, to, #{ color, width, seconds, muzzle })` | `effects` |
 | Mission lights baked into the map (v20 scripts could not change them) | `set_map_lights([x, y, z], radius, #{ on, color, brightness })` | `lighting` |
 | The mission `Sun`'s `azimuth`, `elevation`, `color`, `ambient` and the `Sky`'s `fogColor`, `fogDistance`, `visibleDistance` (fixed in v20; changed live here) | `set_environment(#{ sun_azimuth, direct_light, fog_color, visible_distance, day_length, ... })`, `environment()` | `environment` |
@@ -156,9 +165,9 @@ request was kept only as a general building block; how each was judged:
 | `damage` for vehicles, with a type | Kept, widened to entities | The same call hurts anything an object reference names. |
 | Player facts `crouched` | Already here | |
 | Player facts `mounted`, `scale`, `cx`/`cy`/`cz`, `slot`, `image`, `image_state` | Kept | Plain reads with no cost to anything else. The body centre accounts for crouching and scale. |
-| `mount_image`, `set_image_ammo` | Kept | They are v20's image seams, which total-conversion.md already named as the way to build magazines and scopes without magazine code in the engine. |
+| `mount_image`, `set_image_ammo` | Kept | They are v20's image seams, still the way to build scopes and ammo a magazine does not cover. Magazines themselves became image data (October 2026): Tier+Tactical and the Adventure Pack each built the same rounds, reserve, reload and display in script, so it is one shared piece now. |
 | `set_fov` | Kept | Scopes, cameras in cutscenes, sprint effects. |
-| `play_thread` | Kept, threads 2 and 3 | Those are the threads the body animates. |
+| `play_thread` | Kept, all four threads, with an optional delay | Threads 0 and 1 joined 2 and 3 (October 2026) for the Adventure Pack's head-hit flinch; the delay is the one `schedule` Add-Ons used on animations, and chat's talk stop runs on the same timers. |
 | Light key on images | Kept | The same kind of key hook as `jet`. |
 | `beam` drawing one Add-On's tracer model | Changed: a coloured beam | A colour, width and fade covers tracers, lasers and bolts with no model to ship or convert. A model-drawn beam can come later if someone needs one. The beam starts at the shooter's muzzle as each player draws it, and costs one cue. |
 | A `sound` capability and a new `effects` capability | Merged into `effects` | Sounds, beams and animations are all presentation; players read one line. |
@@ -189,6 +198,8 @@ The same modder's second write-up (September 2026), judged the same way:
 | Custom casing and debris models | Kept | An image's `casing` `DebrisData` flies as its fields and the image's `shellExit*` fields say and draws its own model; explosion debris draws the Add-On's model too. The base game's `gunShellDebris` still throws the stock brass. At most 256 casing kinds and 512 loose models drawn at once. |
 | Capping `stateEmitterTime` at 300 s | Left out | v20 does not cap it and the effects runtime already limits live particles. |
 | A sound that is not 3D | Heard by its holder only | A sound with no position has no place for other players to hear it from, so it stays with the player who fired. |
+| A shield's `ShapeBase::damage` and `ProjectileData::onCollision` overrides (Tier+Tactical riot shield) | Kept as an image's `guard` | The engine scales covered harm, stops and reflects shots, counts durability and breaks the shield, so no script hooks every hit. |
+| `addSpecialDamageMsg` (Support_SpecialKills) | Kept as a damage type's `special` | The kill names the special type with the killing weapon's icon in `%3`. |
 
 ## Image state scripts as data
 

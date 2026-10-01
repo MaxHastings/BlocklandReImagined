@@ -94,6 +94,11 @@ pub const MAX_RAYS_PER_CALL: usize = 64;
 /// The field of view `set_fov` may give, degrees (Torque's player camera
 /// `cameraMinFov` and `cameraMaxFov`).
 pub const FOV_RANGE: std::ops::RangeInclusive<f32> = 5.0..=120.0;
+/// The most `set_speed_scale` may ask for (the motor's own limit).
+pub const MAX_SPEED_SCALE: f32 = 4.0;
+/// The most rounds `give_ammo`, `set_reserve` or `set_rounds` may name (a
+/// magazine's own reserve limit).
+pub const MAX_AMMO_ROUNDS: u64 = 100_000;
 /// Longest side of a box `copy_box` copies or `show_box` outlines, units
 /// (2048 studs: the New Duplicator's largest admin box). What a box holds
 /// is bounded by brick counts, not its size.
@@ -112,6 +117,9 @@ pub const MAX_TEMP_LOOK_SECONDS: f32 = 60.0;
 /// Widest `beam`, units, and longest it lasts, seconds.
 pub const MAX_BEAM_WIDTH: f32 = 16.0;
 pub const MAX_BEAM_SECONDS: f32 = 10.0;
+/// Longest a `play_thread` may wait before it plays, seconds
+/// (`%player.schedule(ms, "playThread", ...)`).
+pub const MAX_THREAD_DELAY: f32 = 60.0;
 /// Widest sphere `set_map_lights` covers, units, and brightest it makes a
 /// light (times its recovered colour).
 pub const MAX_LIGHT_RADIUS: f32 = 2000.0;
@@ -269,6 +277,11 @@ pub enum Op {
         radius: f32,
         damage: f32,
         brick_radius: f32,
+        /// How it looks and sounds: an explosion of the weapons pack by
+        /// name (`rocketExplosion`, an imported Add-On's own); the rocket's
+        /// when `None`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        explosion: Option<String>,
     },
     /// Damage a player, vehicle or entity (`%obj.damage`). `by` is the
     /// player credited; `damage_type` names a weapons pack damage type (its
@@ -300,6 +313,22 @@ pub enum Op {
     /// `v20.player.<datablock>`), now and at every respawn. An empty id
     /// hands the choice back to the mini-game's player type.
     SetArchetype {
+        player: u64,
+        archetype: String,
+    },
+    /// Lay an archetype over a living player's own for a while (Kai's
+    /// `pushDatablock`: a machine gunner walking slowly as they fire). The
+    /// player moves as the newest one laid on, keeping the damage they
+    /// have taken; `set_archetype` meanwhile changes the one underneath.
+    /// Refused quietly for a body of another model, or one already laid
+    /// on. All are lifted when the player dies.
+    PushArchetype {
+        player: u64,
+        archetype: String,
+    },
+    /// Lift an archetype [`Op::PushArchetype`] laid on (`popDatablock`);
+    /// nothing when it is not on.
+    PopArchetype {
         player: u64,
         archetype: String,
     },
@@ -672,7 +701,9 @@ pub enum Op {
     },
     /// Put an item of this package (or one it depends on) in the world as
     /// a pickup at `position`, moving at `velocity`, that pops after ten
-    /// seconds like a dropped tool.
+    /// seconds like a dropped tool. `data` travels with it to `on_pickup`
+    /// as `info.data`, as what `on_drop` keeps does (a dead player's
+    /// ammo in the bag they leave).
     DropItem {
         item: String,
         position: [f32; 3],
@@ -707,11 +738,14 @@ pub enum Op {
         velocity: [f32; 3],
         by: Option<u64>,
     },
-    /// Knock a player off their feet into a tumble, flying at `velocity`.
+    /// Knock a player off their feet into a tumble, flying at `velocity`;
+    /// for `seconds` (0.1 to 60) when given, else until it settles.
     Tumble {
         player: u64,
         velocity: [f32; 3],
         by: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seconds: Option<f32>,
     },
     /// Keep `target` floating `distance` ahead of `player`'s eye, where
     /// they look, until let go. The engine pulls it there every tick; heavy
@@ -818,6 +852,14 @@ pub enum Op {
         velocity: [f32; 3],
         by: Option<u64>,
     },
+    /// A projectile's explosion on a living player (`%obj.spawnExplosion`),
+    /// `scale` times its size (0.1 to 10): an emote, a crit's burst. It
+    /// hurts and pushes as the explosion would.
+    SpawnExplosion {
+        player: u64,
+        projectile: String,
+        scale: f32,
+    },
     /// Give a living player health, up to their archetype's most.
     Heal {
         player: u64,
@@ -891,12 +933,15 @@ pub enum Op {
         seconds: f32,
         muzzle: Option<u64>,
     },
-    /// Play an animation on a player's body (`playThread`): thread 2 the
-    /// arms with what they hold, thread 3 a gesture; `root` stops it.
+    /// Play an animation on one of a player's four script threads
+    /// (`playThread`): 0 and 1 the body, 2 the arms with what they hold, 3 a
+    /// gesture; `root` stops it. `after` seconds later when above 0, as
+    /// `%player.schedule(ms, "playThread", ...)` did.
     PlayThread {
         player: u64,
         thread: u8,
         sequence: String,
+        after: f32,
     },
     /// Every map light within `radius` of `position` shines at `tint` times
     /// its recovered colour (0 switches it off, 1 is as the map was lit),
@@ -920,6 +965,36 @@ pub enum Op {
         player: u64,
         fov: Option<f32>,
     },
+    /// Move a player's body at this share of its running, crouching and
+    /// swimming speeds (0 to 4; 1 is its archetype's own) until changed or
+    /// they respawn.
+    SetSpeedScale {
+        player: u64,
+        scale: f32,
+    },
+    /// Add rounds of `ammo` to a player's reserve (an ammo box), up to the
+    /// most its magazines carry.
+    GiveAmmo {
+        player: u64,
+        ammo: String,
+        rounds: u64,
+    },
+    /// Set a player's reserve of `ammo`; `None` never runs out.
+    SetReserve {
+        player: u64,
+        ammo: String,
+        rounds: Option<u64>,
+    },
+    /// Set the rounds in a player's magazine of `item`, up to its size.
+    SetRounds {
+        player: u64,
+        item: String,
+        rounds: u64,
+    },
+    /// Start reloading the gun in a player's hand, as the light key does.
+    Reload {
+        player: u64,
+    },
     /// Whether the image in a player's hand has ammo (`setImageAmmo`), which
     /// its states' `ammo` transitions read.
     SetImageAmmo {
@@ -939,6 +1014,19 @@ pub enum Op {
     MountImage {
         player: u64,
         image: Option<String>,
+    },
+    /// Mount an image on a player's body in the emote slot
+    /// (`%player.emote(%image)`), replacing the emote, pain or flames there:
+    /// every client plays it, and its states run their commands for the
+    /// wearer (a heal over time). `None` empties the slot.
+    Emote {
+        player: u64,
+        image: Option<String>,
+        /// `%skipSpam`: without it an image counts toward the player's
+        /// emote spam check (more than five quick emotes are dropped), as
+        /// the stock emotes do.
+        #[serde(default)]
+        skip_spam: bool,
     },
     /// Put an image in a worn slot (2 or 3) of a player, tinted with a
     /// palette colour (`mountImage(%image, 3)`: a flag on the back), or
@@ -1538,7 +1626,10 @@ impl Op {
             Self::Explode { .. }
             | Self::Damage { .. }
             | Self::Heal { .. }
-            | Self::Fire { .. } => "damage",
+            | Self::Fire { .. }
+            | Self::SpawnExplosion { .. } => {
+                "damage"
+            }
             Self::SpawnEntity { .. }
             | Self::RemoveEntity { .. }
             | Self::Steer { .. }
@@ -1609,6 +1700,8 @@ impl Op {
             | Self::Respawn { .. }
             | Self::RemoveBody { .. }
             | Self::SetArchetype { .. }
+            | Self::PushArchetype { .. }
+            | Self::PopArchetype { .. }
             | Self::Control { .. }
             | Self::GiveItem { .. }
             | Self::SetTools { .. }
@@ -1618,9 +1711,15 @@ impl Op {
             | Self::NameDrop { .. }
             | Self::WearImage { .. }
             | Self::SetFov { .. }
+            | Self::SetSpeedScale { .. }
+            | Self::GiveAmmo { .. }
+            | Self::SetReserve { .. }
+            | Self::SetRounds { .. }
+            | Self::Reload { .. }
             | Self::SetImageAmmo { .. }
             | Self::SetImageLoaded { .. }
             | Self::MountImage { .. }
+            | Self::Emote { .. }
             | Self::UnmountImage { .. }
             | Self::SetScale { .. }
             | Self::SetLookLimits { .. }
@@ -1650,6 +1749,12 @@ impl Op {
         let chat =
             |t: &str| !t.trim().is_empty() && t.len() <= 256 && !t.chars().any(char::is_control);
         let item = |t: &str| bri_package::id::is_content_ref(t, Some("weapon"));
+        // A magazine's ammo type: 1 to 32 letters, digits, `.`, `_` or `-`.
+        let ammo_name = |t: &str| {
+            (1..=32).contains(&t.len())
+                && t.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+        };
         // A box from `min` to `max`, each side at most `MAX_BOX_SPAN`.
         let span = |min: &[f32; 3], max: &[f32; 3]| {
             finite(min)
@@ -1806,6 +1911,11 @@ impl Op {
             Self::SetArchetype { archetype, .. } => {
                 archetype.len() <= 160 && !archetype.chars().any(char::is_control)
             }
+            Self::PushArchetype { archetype, .. } | Self::PopArchetype { archetype, .. } => {
+                !archetype.is_empty()
+                    && archetype.len() <= 160
+                    && !archetype.chars().any(char::is_control)
+            }
             Self::PlaceBrick {
                 shape,
                 position,
@@ -1821,8 +1931,12 @@ impl Op {
                 radius,
                 damage,
                 brick_radius,
+                explosion,
             } => {
-                finite(position)
+                explosion.as_deref().is_none_or(|e| {
+                    (1..=64).contains(&e.len())
+                        && e.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                }) && finite(position)
                     && (0.0..=32.0).contains(radius)
                     && (0.0..=1000.0).contains(damage)
                     && (0.0..=16.0).contains(brick_radius)
@@ -1859,9 +1973,14 @@ impl Op {
                     && *seconds <= MAX_BEAM_SECONDS
             }
             Self::PlayThread {
-                thread, sequence, ..
+                thread,
+                sequence,
+                after,
+                ..
             } => {
-                (2..=3).contains(thread)
+                *thread <= 3
+                    && after.is_finite()
+                    && (0.0..=MAX_THREAD_DELAY).contains(after)
                     && !sequence.is_empty()
                     && sequence.len() <= 64
                     && sequence
@@ -1869,6 +1988,19 @@ impl Op {
                         .all(|b| b.is_ascii_alphanumeric() || b == b'_')
             }
             Self::SetFov { fov, .. } => fov.is_none_or(|f| FOV_RANGE.contains(&f)),
+            Self::SetSpeedScale { scale, .. } => {
+                scale.is_finite() && (0.0..=MAX_SPEED_SCALE).contains(scale)
+            }
+            Self::GiveAmmo { ammo, rounds, .. } => {
+                ammo_name(ammo) && (1..=MAX_AMMO_ROUNDS).contains(rounds)
+            }
+            Self::SetReserve { ammo, rounds, .. } => {
+                ammo_name(ammo) && rounds.is_none_or(|r| r <= MAX_AMMO_ROUNDS)
+            }
+            Self::SetRounds {
+                item: id, rounds, ..
+            } => item(id) && *rounds <= MAX_AMMO_ROUNDS,
+            Self::Reload { .. } => true,
             Self::SetMapLights {
                 position,
                 radius,
@@ -1886,7 +2018,7 @@ impl Op {
                         .iter()
                         .all(|k| bri_content::atmosphere::KEYS.contains(&k.as_str()))
             }
-            Self::MountImage { image, .. } => image
+            Self::MountImage { image, .. } | Self::Emote { image, .. } => image
                 .as_deref()
                 .is_none_or(|i| bri_package::id::is_content_ref(i, Some("image"))),
             Self::WearImage { slot, image, .. } => {
@@ -1966,9 +2098,17 @@ impl Op {
                     && finite(position)
                     && finite(velocity)
                     && glam_length(velocity) <= MAX_PUSH_SPEED
+                    && data
+                        .as_ref()
+                        .is_none_or(|d| crate::state::check_value(d).is_ok())
             }
-            Self::Push { velocity, .. } | Self::Tumble { velocity, .. } => {
-                finite(velocity) && glam_length(velocity) <= MAX_PUSH_SPEED
+            Self::Push { velocity, .. } => finite(velocity) && glam_length(velocity) <= MAX_PUSH_SPEED,
+            Self::Tumble {
+                velocity, seconds, ..
+            } => {
+                finite(velocity)
+                    && glam_length(velocity) <= MAX_PUSH_SPEED
+                    && seconds.is_none_or(|s| (0.1..=60.0).contains(&s))
             }
             Self::Hold {
                 distance,
@@ -2101,6 +2241,12 @@ impl Op {
                     && finite(velocity)
                     && glam_length(velocity) <= MAX_FIRE_SPEED
             }
+            Self::SpawnExplosion {
+                projectile, scale, ..
+            } => {
+                bri_package::id::is_content_ref(projectile, Some("projectile"))
+                    && (0.1..=10.0).contains(scale)
+            }
             Self::Heal { amount, .. } => amount.is_finite() && (0.0..=100_000.0).contains(amount),
             Self::MessageBox { title, text, .. } => {
                 title.chars().count() <= 64
@@ -2207,11 +2353,17 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::Beam { .. } => "beam",
         Op::PlayThread { .. } => "play_thread",
         Op::SetFov { .. } => "set_fov",
+        Op::SetSpeedScale { .. } => "set_speed_scale",
+        Op::GiveAmmo { .. } => "give_ammo",
+        Op::SetReserve { .. } => "set_reserve",
+        Op::SetRounds { .. } => "set_rounds",
+        Op::Reload { .. } => "reload",
         Op::SetMapLights { .. } => "set_map_lights",
         Op::SetEnvironment { .. } => "set_environment",
         Op::SetImageAmmo { .. } => "set_image_ammo",
         Op::SetImageLoaded { .. } => "set_image_loaded",
         Op::MountImage { .. } => "mount_image",
+        Op::Emote { .. } => "emote",
         Op::SetTeams { .. } => "set_teams",
         Op::SetTeam { .. } => "set_team",
         Op::SetScore { add: false, .. } => "set_score",
@@ -2275,6 +2427,8 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::Respawn { .. } => "respawn",
         Op::RemoveBody { .. } => "remove_body",
         Op::SetArchetype { .. } => "set_archetype",
+        Op::PushArchetype { .. } => "push_archetype",
+        Op::PopArchetype { .. } => "pop_archetype",
         Op::Control { .. } => "control",
         Op::SetBlockState { .. } => "set_block_state",
         Op::Broadcast { .. } => "broadcast",
@@ -2331,6 +2485,7 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::SpawnVehicle { .. } => "spawn_vehicle",
         Op::RemoveVehicle { .. } => "remove_vehicle",
         Op::Fire { .. } => "fire",
+        Op::SpawnExplosion { .. } => "spawn_explosion",
         Op::Heal { .. } => "heal",
         Op::ShowReport { report: Some(_), .. } => "show_report",
         Op::ShowReport { report: None, .. } => "hide_report",

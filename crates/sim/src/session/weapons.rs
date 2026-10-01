@@ -155,6 +155,42 @@ impl Session {
             drops: self.weapons.drops().cloned().collect(),
         }
     }
+    /// A cue for an image in the emote slot (an emote, pain, flames, the
+    /// teleport sparkle or an Add-On's image), and the host wearing it there:
+    /// each replaces the last, as `Player::emote` and `Player::burn` mount
+    /// into one slot, so a hit or an emote ends a heal over time. Cues that
+    /// mount nothing (`/alarm`, `/sit`) leave the slot alone.
+    pub(super) fn emote_cue(
+        &mut self,
+        tick: u64,
+        kind: crate::presentation::CueKind,
+        at: [f32; 3],
+    ) {
+        use crate::presentation::{CueKind, emote_image, pain_image};
+        let native = |name: &str| Some(bri_weapons::native_id("image", name));
+        let worn = match &kind {
+            CueKind::Emote { actor, name } if name.contains(':') => {
+                Some((*actor, Some(name.clone())))
+            }
+            CueKind::Emote { actor, name } if name.is_empty() => Some((*actor, None)),
+            CueKind::Emote { actor, name } => emote_image(name).map(|i| (*actor, native(i))),
+            CueKind::Pain { actor, level, .. } => Some((*actor, native(pain_image(*level)))),
+            CueKind::Burn { actor, seconds } => Some((
+                *actor,
+                (*seconds > 0.0).then(|| bri_weapons::native_id("image", "PlayerBurnImage")),
+            )),
+            CueKind::Teleport {
+                actor,
+                player: true,
+                ..
+            } => Some((*actor, native("PlayerTeleportImage"))),
+            _ => None,
+        };
+        if let Some((actor, image)) = worn {
+            let _ = self.weapons.emote(ActorId(actor), image.as_deref());
+        }
+        self.cues.emit(tick, kind, at);
+    }
     /// How fast each falling projectile definition drops, so clients can
     /// coast projectiles between the host's corrections.
     pub fn projectile_falls(&self) -> BTreeMap<String, f32> {
@@ -232,6 +268,7 @@ impl Session {
     }
 
     pub(super) fn step_weapons(&mut self) -> Result<()> {
+        self.end_gun_slows()?;
         let tick = self.simulation.state().tick;
         for (owner, peer) in &self.peers {
             let actor = ActorId(*owner);
@@ -360,6 +397,10 @@ impl Session {
             TargetId::Actor(target) => policy.player(source.0, target.0, true),
             other => affect(source, other),
         };
+        let ally = |source: ActorId, target| match target {
+            TargetId::Actor(target) => policy.ally(source.0, target.0),
+            _ => false,
+        };
         // `passBallCheck`: a living player catches a ball thrown from the
         // same minigame, or when neither is in one (`sportIsInSameMinigame`).
         let games: BTreeMap<OwnerId, Option<bri_minigames::GameId>> = self
@@ -383,6 +424,7 @@ impl Session {
             simulation: &self.simulation,
             affect: &affect,
             affect_radius: &affect_radius,
+            ally: &ally,
             catch: &catch,
             responses: &self.events.projectile_responses,
             truncated_targets: 0,
@@ -393,8 +435,14 @@ impl Session {
         if truncated > 0 {
             self.note_weapon_gap("radius targets truncated", truncated as u64);
         }
+        let mut ammo = std::collections::BTreeSet::new();
         for event in events {
             match event {
+                WeaponEvent::Ammo { actor }
+                | WeaponEvent::Mounted { actor, hand: 0, .. }
+                | WeaponEvent::Unmounted { actor, hand: 0 } => {
+                    ammo.insert(actor.0);
+                }
                 // An Add-On's `local` sound is for its holder's ears only.
                 WeaponEvent::Sound {
                     profile,
@@ -432,12 +480,34 @@ impl Session {
                     was_thrown,
                 } => self.football_catch(source.0, catcher.0, distance_feet, was_thrown),
                 WeaponEvent::DropRemoved { drop } => self.forget_drop(drop),
+                WeaponEvent::Heard { actor, profile } => {
+                    if self.peers.contains_key(&actor.0) {
+                        self.notify(actor.0, Notice::Sound(profile));
+                    }
+                }
+                WeaponEvent::Print {
+                    actor,
+                    text,
+                    seconds,
+                } => {
+                    if self.peers.contains_key(&actor.0) {
+                        self.notify(actor.0, Notice::Center { text, seconds });
+                    }
+                }
                 WeaponEvent::Diagnostic { message, .. } => {
                     if self.notices.len() == 64 {
                         self.notices.pop_front();
                     }
                     self.notices.push_back(format!("Weapon runtime: {message}"));
                 }
+                // A state of the image in the emote slot: its command runs
+                // for the wearer, leaving the click aim to the hand's tool.
+                WeaponEvent::ToolFire {
+                    actor,
+                    command: Some(command),
+                    hand: bri_weapons::EMOTE_SLOT,
+                    ..
+                } => self.addon_tool_fire(actor.0, &command),
                 WeaponEvent::ToolFire {
                     actor,
                     command: Some(command),
@@ -513,6 +583,41 @@ impl Session {
                         position,
                     );
                 }
+                WeaponEvent::Tracer {
+                    actor, hand, to, ..
+                } => self.cues.emit(
+                    tick,
+                    crate::presentation::CueKind::Tracer {
+                        actor: actor.0,
+                        hand,
+                    },
+                    to.to_array(),
+                ),
+                // A ricochet's further streak, in the image's tracer style,
+                // as a beam: it starts where the ray turned, not a muzzle.
+                WeaponEvent::Ricochet {
+                    image, from, to, ..
+                } => {
+                    if let Some(tracer) = self
+                        .weapons
+                        .pack
+                        .images
+                        .get(&image)
+                        .and_then(|i| i.shot.as_ref()?.hitscan.as_ref()?.tracer)
+                    {
+                        self.cues.emit(
+                            tick,
+                            crate::presentation::CueKind::Beam {
+                                to: to.to_array(),
+                                color: tracer.color,
+                                width: tracer.width,
+                                seconds: tracer.seconds,
+                                muzzle: None,
+                            },
+                            from.to_array(),
+                        );
+                    }
+                }
                 WeaponEvent::Shell { actor, image, hand } => {
                     let position = self
                         .weapons
@@ -546,6 +651,10 @@ impl Session {
                     amount,
                     kind,
                     position,
+                    direction,
+                    projectile,
+                    special,
+                    bounces,
                 } => {
                     let direct = self
                         .weapons
@@ -555,7 +664,14 @@ impl Session {
                     self.damage_player_at(
                         target.0,
                         amount,
-                        combat::DamageKind::Weapon { name: kind, direct },
+                        combat::DamageKind::Weapon {
+                            name: kind,
+                            direct,
+                            direction: Some(direction),
+                            projectile: (!projectile.is_empty()).then_some(projectile),
+                            special,
+                            bounces,
+                        },
                         shooter(source),
                         Some(position),
                     )?;
@@ -568,6 +684,7 @@ impl Session {
                 WeaponEvent::Recoil { actor, velocity } => {
                     self.push_player(actor.0, velocity * combat::PLAYER_MASS)
                 }
+                WeaponEvent::Slow { actor, slow } => self.slow_player(actor.0, slow)?,
                 WeaponEvent::Damage {
                     source,
                     target: TargetId::Entity(entity),
@@ -592,7 +709,18 @@ impl Session {
                     amount,
                     kind,
                     position,
-                } => self.damage_vehicle(vehicle, amount, source.0, &kind, position)?,
+                    projectile,
+                    ..
+                } => self.damage_vehicle(
+                    vehicle,
+                    amount,
+                    source.0,
+                    &kind,
+                    position,
+                    super::vehicles::VehicleHarm::Weapon {
+                        projectile: (!projectile.is_empty()).then_some(projectile.as_str()),
+                    },
+                )?,
                 WeaponEvent::Impulse {
                     target: TargetId::Vehicle(vehicle),
                     impulse,
@@ -627,7 +755,7 @@ impl Session {
                     {
                         let feet = peer.player.state().feet;
                         self.burn_player(target.0, seconds);
-                        self.cues.emit(
+                        self.emote_cue(
                             tick,
                             crate::presentation::CueKind::Burn {
                                 actor: target.0,
@@ -673,7 +801,44 @@ impl Session {
                 _ => self.note_weapon_gap("player/vehicle/minigame weapon adapter", 1),
             }
         }
+        for owner in ammo {
+            self.show_ammo(owner);
+        }
         Ok(())
+    }
+    /// The ammo display: the held gun's magazine and reserve as a bottom
+    /// print to its holder alone, shown again as it changes for as long as
+    /// the magazine's `display_ticks` (until the next change when 0), and
+    /// cleared when the hand no longer holds a gun with a magazine.
+    fn show_ammo(&mut self, owner: OwnerId) {
+        // A magazine without a display (Display Ammo off, nothing used)
+        // shows nothing, as no gun.
+        let view = self
+            .weapons
+            .ammo(bri_weapons::ActorId(owner))
+            .filter(|v| v.shown);
+        let Some(view) = view else {
+            if self.ammo_shown.remove(&owner) {
+                self.notify(
+                    owner,
+                    Notice::Bottom {
+                        text: String::new(),
+                        seconds: 0.0,
+                        hide_bar: true,
+                    },
+                );
+            }
+            return;
+        };
+        self.ammo_shown.insert(owner);
+        self.notify(
+            owner,
+            Notice::Bottom {
+                text: ammo_text(&view),
+                seconds: view.display_ticks as f32 / 120.0,
+                hide_bar: true,
+            },
+        );
     }
     /// `CatchFootballMessage`: bottom prints for the passer and receiver, and
     /// a server-wide announcement when a thrown pass sets the record.
@@ -752,4 +917,46 @@ impl Session {
 /// The player a projectile's hit is credited to: none for a package's own.
 fn shooter(source: ActorId) -> Option<OwnerId> {
     (source.0 != packages::PACKAGE_SHOOTER).then_some(source.0)
+}
+
+/// The ammo display's line: `name  rounds / reserve`, right-aligned, with
+/// "Reloading" while a reload runs.
+pub(crate) fn ammo_text(view: &bri_weapons::runtime::AmmoView) -> String {
+    let reserve = match view.reserve {
+        bri_weapons::runtime::Reserve::Rounds(n) => n.to_string(),
+        bri_weapons::runtime::Reserve::Endless => "inf".to_string(),
+    };
+    let state = if view.reloading {
+        " <color:ff8000>Reloading"
+    } else {
+        ""
+    };
+    let name = plain_name(&view.name);
+    // A grenade counted from the reserve shows only how many are left,
+    // `--` when they never run out (`TT_displayAmmo` for a `TT_grenade`),
+    // and so does an Arena gun's reserve.
+    if view.counted || view.supply == bri_weapons::Supply::Both {
+        let count = match view.reserve {
+            bri_weapons::runtime::Reserve::Rounds(n) => n.to_string(),
+            bri_weapons::runtime::Reserve::Endless => "--".to_string(),
+        };
+        return format!(
+            "<just:right><font:impact:24><color:fff000>{name} <font:impact:34><color:ffffff> {count} "
+        );
+    }
+    // Filled from nothing, the magazine is out of its size (T+T1).
+    let reserve = if view.supply == bri_weapons::Supply::Endless {
+        view.size.to_string()
+    } else {
+        reserve
+    };
+    format!(
+        "<just:right><font:impact:24><color:fff000>{name} <font:impact:34><color:ffffff>{} \
+         <font:impact:24>/ {reserve}{state} ",
+        view.rounds
+    )
+}
+/// A name from a pack, kept from opening markup tags in the display.
+fn plain_name(name: &str) -> String {
+    name.replace('<', "")
 }

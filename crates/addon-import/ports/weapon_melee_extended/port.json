@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "include": ["tier-tactical-core", "tier-tactical-melee"],
+  "notes": "Tier+Tactical Melee Extended (Kai): eleven melee weapons that hit along a short ray from the eye with their TT_raycast fields, each swing drawing one of its pair of hit sounds as its onFire did, its arm and other-arm moves played by the states that ran them. The Combat Knife stabs on a quick click and slashes once charged, the slash dealing 100 (Kai set 105, which the raycast script held to 100) and the stab 55. A hit never crits: TT_isMeleeRaycastCrit crits only on a zombie, and no player in this game is one. The Machete's horizontal swing (Weapon_L4BMachete_HorizontalSwing.cs) is never loaded by the Add-On.",
+  "handles": {
+    "CombatKnifeImage::TT_isRaycastCritical": "TT_isMeleeRaycastCrit: never crits",
+    "iceaxeImage::TT_isRaycastCritical": "TT_isMeleeRaycastCrit: never crits",
+    "L4BBatonImage::TT_isRaycastCritical": "TT_isMeleeRaycastCrit: never crits",
+    "L4BCrowbarImage::TT_isRaycastCritical": "TT_isMeleeRaycastCrit: never crits",
+    "l4bPanImage::TT_isRaycastCritical": "TT_isMeleeRaycastCrit: never crits",
+    "l4bGuitarImage::TT_isRaycastCritical": "TT_isMeleeRaycastCrit: never crits",
+    "L4BKatanaImage::TT_isRaycastCritical": "TT_isMeleeRaycastCrit: never crits",
+    "l4bMacheteImage::TT_isRaycastCritical": "TT_isMeleeRaycastCrit: never crits",
+    "L4BSpadeImage::TT_isRaycastCritical": "TT_isMeleeRaycastCrit: never crits",
+    "pipeImage::TT_isRaycastCritical": "TT_isMeleeRaycastCrit: never crits",
+    "sledgehammerImage::TT_isRaycastCritical": "TT_isMeleeRaycastCrit: never crits"
+  }
+}

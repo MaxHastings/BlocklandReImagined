@@ -678,6 +678,10 @@ pub struct AvatarAnimationInput {
     /// A seated rider's full mount rotation, in place of the upright yaw,
     /// so they sit flush with a tilted seat.
     pub mount_rotation: Option<Quat>,
+    /// Script threads 0 and 1 (`playThread(0 or 1, ...)`): body animations
+    /// a package plays, such as a hit's flinch. Each holds until replaced
+    /// or stopped by `root`.
+    pub body: [Option<ActionAnimation>; 2],
     /// Current thread-2 action from the authoritative animation cue stream.
     /// Clear this on the corresponding vanilla stop/root cue or image switch.
     pub action: Option<ActionAnimation>,
@@ -1062,8 +1066,10 @@ impl AvatarMesh {
         let assets = assets.for_mesh(self);
         ensure!(
             time.is_finite()
-                && [&animation_input.action, &animation_input.gesture]
-                    .into_iter()
+                && animation_input
+                    .body
+                    .iter()
+                    .chain([&animation_input.action, &animation_input.gesture])
                     .flatten()
                     .all(|action| action.started_at.is_finite() && !action.sequence.is_empty())
                 && player
@@ -1177,8 +1183,11 @@ impl AvatarMesh {
         // last frame once played. Additive ones add on top of everything.
         let mut absolute_actions = Vec::new();
         let mut additive_actions = Vec::new();
-        for action in [&animation_input.action, &animation_input.gesture]
-            .into_iter()
+        // Script threads in order: 0 and 1 the body, 2 the arms, 3 gestures.
+        for action in animation_input
+            .body
+            .iter()
+            .chain([&animation_input.action, &animation_input.gesture])
             .flatten()
         {
             let name = action.sequence.to_ascii_lowercase();
@@ -1558,6 +1567,7 @@ impl Preview {
                 archetype: Default::default(),
                 scale: 1.0,
                 energy: 100.0,
+                speed_scale: 1.0,
                 tick: Default::default(),
                 tether: None,
             },
@@ -1780,6 +1790,7 @@ mod tests {
             archetype: Default::default(),
             scale: 1.0,
             energy: 100.0,
+            speed_scale: 1.0,
             tick: Default::default(),
             tether: None,
         }

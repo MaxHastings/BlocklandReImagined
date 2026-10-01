@@ -29,6 +29,20 @@ impl Fields {
         ensure!(n.is_finite(), "Nonfinite field {key}");
         Ok(n)
     }
+    /// A number that may be written as a literal ratio, as the base game's
+    /// emitter nodes give `timeMultiple = 1/10;`. Only `a/b` of two
+    /// literals: no other expression is evaluated.
+    pub fn ratio(&mut self, key: &str, default: f32) -> Result<f32> {
+        let Some(v) = self.values.remove(key) else {
+            return Ok(default);
+        };
+        let n = match v.split_once('/') {
+            Some((a, b)) => a.trim().parse::<f32>()? / b.trim().parse::<f32>()?,
+            None => v.trim().parse::<f32>()?,
+        };
+        ensure!(n.is_finite() && n > 0.0, "Invalid ratio {key} `{v}`");
+        Ok(n)
+    }
     pub fn boolean(&mut self, key: &str, default: bool) -> Result<bool> {
         match self.values.remove(key).map(|v| v.to_lowercase()).as_deref() {
             None => Ok(default),
@@ -429,6 +443,22 @@ mod tests {
         assert_eq!(library.particles[0].sample(0.0).0[3], 2.0);
         library.particles[0].keys[0].time = f32::NAN;
         assert!(library.validate().is_err());
+    }
+
+    #[test]
+    fn emitter_node_time_multiples_read_as_literal_ratios() {
+        let node = |v: &str| Declaration {
+            class: "ParticleEmitterNodeData".into(),
+            name: "TenthEmitterNode".into(),
+            fields: BTreeMap::from([("timemultiple".into(), v.into())]),
+            source: "base/core.cs".into(),
+        };
+        for (v, n) in [("1/10", 0.1), ("1 / 20", 0.05), ("2", 2.0)] {
+            assert_eq!(Fields::new(&node(v)).ratio("timemultiple", 1.0).unwrap(), n);
+        }
+        for bad in ["1/0", "0", "a/b", "1/2/3"] {
+            assert!(Fields::new(&node(bad)).ratio("timemultiple", 1.0).is_err(), "{bad}");
+        }
     }
 
     #[test]

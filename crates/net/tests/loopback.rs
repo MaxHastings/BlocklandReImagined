@@ -159,6 +159,13 @@ fn tool_pack() -> bri_weapons::Pack {
                 hide_nodes: Vec::new(),
                 both_arms: false,
                 paint_tint: false,
+                left_image: None,
+                magazine: None,
+                volleys: vec![],
+                last_shot: None,
+                state_shots: Default::default(),
+                cook: None,
+                guard: None,
                 rope: None,
                 light: None,
                 paint_picker: false,
@@ -176,6 +183,9 @@ fn tool_pack() -> bri_weapons::Pack {
                 icon: String::new(),
                 can_drop: true,
                 sport: false,
+                hidden: false,
+                label: String::new(),
+                rotate: false,
                 ..Default::default()
             },
         );
@@ -187,12 +197,14 @@ fn tool_pack() -> bri_weapons::Pack {
         items,
         images,
         projectiles: Default::default(),
+        external_projectiles: Default::default(),
         damage_types: Default::default(),
         explosions: Default::default(),
         sounds: Default::default(),
         definitions: vec![],
         resources: vec![],
         diagnostics: vec![],
+        bindings: vec![],
     };
     pack.validate().unwrap();
     pack
@@ -1569,10 +1581,7 @@ async fn avatar_changes_replicate_late_join_reject_invalid_and_resume_with(
         .colors
         .insert("torso".into(), [0.2, 0.6, 0.8, 1.0]);
     a.command(Command::Avatar(appearance.clone())).await?;
-    wait(&mut b, |c| {
-        c.replica.avatars.get(&owner) == Some(&appearance)
-    })
-    .await?;
+    wait(&mut b, |c| c.replica.avatars.get(&owner) == Some(&appearance)).await?;
     assert_eq!(b.replica.avatars[&b.owner], package.defaults);
     let late = Client::connect(
         server.address,
