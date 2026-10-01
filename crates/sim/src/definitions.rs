@@ -41,6 +41,48 @@ pub struct Definition {
     pub glass: [f32; 4],
 }
 /// World-space box of a placed brick's logical grid volume.
+/// Every brick's catalog entry the game knows: the base game's in
+/// `catalog_dir` and each Add-On's in `extras`, the same set
+/// [`Definitions::load_with`] loads. Tool menus, the wrench and the host's
+/// tool allowlist read it, so an Add-On brick is wrenched, named and
+/// printed like a base one.
+pub fn catalog_with(
+    catalog_dir: &Path,
+    extras: &[(String, std::path::PathBuf)],
+) -> Result<Catalog> {
+    let mut catalog: Catalog =
+        serde_json::from_slice(&std::fs::read(catalog_dir.join("stock-catalog.json"))?)?;
+    extend_catalog(&mut catalog, extras)?;
+    Ok(catalog)
+}
+/// Add each Add-On's catalog entries in `extras` to `catalog` (see
+/// [`catalog_with`]); brick ids are namespaced, so a duplicate is an error
+/// naming the package.
+pub fn extend_catalog(
+    catalog: &mut Catalog,
+    extras: &[(String, std::path::PathBuf)],
+) -> Result<()> {
+    let mut ids: std::collections::BTreeSet<String> =
+        catalog.bricks.iter().map(|b| b.id.clone()).collect();
+    for (dir, path) in extras {
+        let extra: Catalog =
+            serde_json::from_slice(&std::fs::read(path.join("stock-catalog.json"))?)
+                .with_context(|| format!("{dir}: brick catalog"))?;
+        ensure!(
+            extra.schema_version == 1,
+            "{dir}: unsupported brick catalog schema"
+        );
+        for entry in extra.bricks {
+            ensure!(
+                ids.insert(entry.id.clone()),
+                "{dir}: brick {} is already defined",
+                entry.id
+            );
+            catalog.bricks.push(entry);
+        }
+    }
+    Ok(())
+}
 pub fn brick_box(brick: &Placed, mesh: &Brick) -> (glam::Vec3, glam::Vec3) {
     let (x, z) = if brick.quarter_turns % 2 == 1 {
         (mesh.footprint_studs[1], mesh.footprint_studs[0])
@@ -412,6 +454,26 @@ mod tests {
             "indestructible": false, "special_kind": null, "other_properties": {},
             "reflection": reflection
         })
+    }
+
+    /// The host's tool allowlist and the wrench read the Add-Ons' bricks
+    /// too: the Portal brick's Name pairs it, so it must be wrenchable.
+    #[test]
+    fn the_full_catalog_holds_add_on_bricks_once() {
+        let base = std::env::temp_dir().join(format!("bri-catalog-with-{}", std::process::id()));
+        catalog(&base, &[entry("plate", "plate", None)], &[], &[]);
+        let portal = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../packages/brick_portal/assets/brick-catalog");
+        let full = catalog_with(&base, &[("brick_portal".into(), portal.clone())]).unwrap();
+        let twice = catalog_with(
+            &base,
+            &[("a".into(), portal.clone()), ("b".into(), portal)],
+        );
+        std::fs::remove_dir_all(&base).unwrap();
+        let ids: Vec<_> = full.bricks.iter().map(|b| b.id.as_str()).collect();
+        assert_eq!(ids[0], "plate");
+        assert!(ids.contains(&"brick_portal:brick/brickportal1x14x10data"));
+        assert!(twice.unwrap_err().to_string().contains("already defined"));
     }
 
     #[test]
