@@ -200,9 +200,75 @@ impl Straddle {
     }
 }
 
+/// Everywhere something at `target` shows to an eye at `eye`, as its body
+/// does: straight on, unless an opening's view covers it there, and in
+/// each opening whose view shows it, with the points the sight goes into
+/// that opening and out of its partner. Empty when the openings hide it.
+pub fn seen_at(passages: &Passages, eye: Vec3, target: Vec3) -> Vec<SeenAt> {
+    let direct = passages.first(eye, target).is_none().then_some(SeenAt {
+        at: target,
+        through: None,
+    });
+    let through = passages.list.iter().filter_map(|p| {
+        let at = p.carry.inverse().transform_point3(target);
+        let (first, t) = passages.first(eye, at)?;
+        let near = eye.lerp(at, t);
+        let far = p.carry.transform_point3(near);
+        // Seen through this opening, no other in the way beyond it.
+        (first.brick == p.brick && passages.first(far, target).is_none()).then_some(SeenAt {
+            at,
+            through: Some((near, far)),
+        })
+    });
+    direct.into_iter().chain(through).collect()
+}
+/// See [`seen_at`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SeenAt {
+    pub at: Vec3,
+    /// Where the sight enters the opening, and leaves its partner.
+    pub through: Option<(Vec3, Vec3)>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_name_shows_where_the_portal_shows_its_body() {
+        use bri_content::passage::Passage;
+        // An opening facing the eye at z = -5 leads to one 40 along x,
+        // facing back; a body 3 behind that partner shows 3 past the near one.
+        let carry = Affine3A::from_translation(Vec3::new(40., 0., -5.))
+            * Affine3A::from_rotation_y(PI)
+            * Affine3A::from_translation(Vec3::new(0., 0., 5.));
+        let opening = |brick, centre: Vec3, normal: Vec3, carry| Passage {
+            brick,
+            centre,
+            normal,
+            u: Vec3::X,
+            v: Vec3::Y,
+            half: glam::Vec2::new(2., 2.),
+            carry,
+        };
+        let passages = Passages {
+            list: vec![
+                opening(1, Vec3::new(0., 0., -5.), Vec3::Z, carry),
+                opening(2, Vec3::new(40., 0., -5.), Vec3::Z, carry.inverse()),
+            ],
+            closed: vec![],
+        };
+        // Straight behind the near opening: hidden by its view.
+        assert_eq!(seen_at(&passages, Vec3::ZERO, Vec3::new(0., 0., -9.)), vec![]);
+        // In the open: where it stands.
+        let open = Vec3::new(10., 0., -9.);
+        let at = |target| seen_at(&passages, Vec3::ZERO, target).iter().map(|s| s.at).collect();
+        assert_eq!(at(open), vec![open]);
+        // Out of the partner: where it stands, and past the near opening.
+        let seen: Vec<Vec3> = at(Vec3::new(40., 0., -2.));
+        assert_eq!(seen.len(), 2);
+        assert!(seen[1].distance(Vec3::new(0., 0., -8.)) < 1e-4, "{seen:?}");
+    }
     use std::f32::consts::{FRAC_PI_2, PI};
 
     fn same(a: Quat, b: Quat) -> bool {

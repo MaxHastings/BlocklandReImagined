@@ -98,7 +98,8 @@ pub struct ReflectionSettings {
     /// reflection is upscaled and its textures read a coarser mip, so it
     /// looks soft and greyer than the room; only Low trades that for speed.
     pub scale: f32,
-    /// Mirrors further than this from the eye stay silver.
+    /// Mirrors further than this from the eye stay silver (windows go live
+    /// at any distance).
     pub distance: f32,
 }
 impl ReflectionSettings {
@@ -183,7 +184,15 @@ pub struct Plan {
     pub group_planes: Vec<Vec4>,
     /// The mirrors drawn at all (the nearest `MAX_MIRRORS`), in order.
     pub drawn: Vec<usize>,
+    /// Each group's identity from frame to frame: its plane, rounded, and
+    /// what it shows.
+    pub group_keys: Vec<GroupKey>,
+    /// Groups whose picture from the frame before is kept, by key, with the
+    /// reflection target that holds it ([`Shows::Last`]).
+    pub last: Vec<(GroupKey, usize)>,
 }
+/// See [`Plan::group_keys`].
+pub type GroupKey = ([i32; 4], Vec<i64>);
 /// What a mirror surface shows in one view.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Shows {
@@ -193,6 +202,11 @@ pub enum Shows {
     /// the passes reach shows what the same mirror showed nearer the
     /// player, a frame late, so facing mirrors repeat into the distance.
     Echo(usize),
+    /// The frame before's picture of this group, kept in target i: what a
+    /// surface shows where no live pass draws it this frame (a window in
+    /// sight of its own partner, deeper than the passes), as Valve's Portal
+    /// does past its recursion limit, instead of a flat colour.
+    Last(usize),
     Silver,
 }
 impl Plan {
@@ -228,6 +242,13 @@ impl Plan {
                 if matches!(slot, Some(Shows::Live(j) | Shows::Echo(j)) if *j == i) {
                     *slot = Some(Shows::Silver);
                 }
+            }
+        }
+        for (slot, key) in out.iter_mut().zip(&self.group_keys) {
+            if *slot == Some(Shows::Silver)
+                && let Some((_, k)) = self.last.iter().find(|(last, _)| last == key)
+            {
+                *slot = Some(Shows::Last(*k));
             }
         }
         out
@@ -353,7 +374,13 @@ fn seen(
         .flat_map(|&i| mirrors[i].corners)
         .map(|p| p.distance(view.eye))
         .fold(f32::INFINITY, f32::min);
-    if near > settings.distance {
+    // A mirror shows its surroundings, so past the setting's distance it
+    // stays silver. A window shows somewhere else, which no flat colour
+    // stands in for (Max, v0.1.11: far portals turned light blue), so it
+    // goes live at any distance: its view is fitted to the little screen
+    // it covers, so it draws only what lies in that narrow cone, and it
+    // still competes for the setting's passes by the screen it fills.
+    if near > settings.distance && !matches!(mirrors[members[0]].looks, Looks::Through(_)) {
         return None;
     }
     let mut rect: Option<[f32; 4]> = None;
@@ -437,7 +464,8 @@ pub fn plan(
                 .map(|v| (v * 200.0).round() as i64)
                 .collect(),
         };
-        let group = *by_plane.entry((key.to_array(), looks)).or_insert_with(|| {
+        let group = *by_plane.entry((key.to_array(), looks.clone())).or_insert_with(|| {
+            out.group_keys.push((key.to_array(), looks));
             planes.push(plane);
             transfers.push(mirror.transfer(plane));
             out.groups.push(Vec::new());
@@ -612,6 +640,11 @@ struct Target {
     /// Multisampled colour when the world pass is; it resolves into `picture`.
     color: Option<wgpu::TextureView>,
     picture: wgpu::TextureView,
+    picture_texture: wgpu::Texture,
+    /// The picture from the frame before, copied before this frame's
+    /// passes draw over it ([`Shows::Last`]).
+    previous: wgpu::TextureView,
+    previous_texture: wgpu::Texture,
     depth: wgpu::TextureView,
 }
 struct Bound {
@@ -638,6 +671,11 @@ pub struct Reflections {
     /// One per live plane, then the silver one every other mirror shows.
     slots: Vec<Bound>,
     silver: wgpu::TextureView,
+    /// Per target, the echo sampling of the picture it drew last frame
+    /// (its group's key with it), to show it a frame later.
+    held: Vec<Option<(GroupKey, SlotUniform)>>,
+    /// This frame's echo sampling per live plane.
+    echoes: Vec<SlotUniform>,
     vertices: Option<wgpu::Buffer>,
     /// Vertex ranges per pipeline, by coplanar group.
     ranges: [Vec<Range<u32>>; 2],
@@ -782,6 +820,8 @@ impl Reflections {
             frames: Vec::new(),
             slots: Vec::new(),
             silver,
+            held: Vec::new(),
+            echoes: Vec::new(),
             vertices: None,
             ranges: Default::default(),
             plan: Plan::default(),
@@ -834,6 +874,13 @@ impl Reflections {
             self.targets.clear();
             self.slots.clear();
         }
+        // What each kept target drew last frame, shown a frame late.
+        self.held = (0..self.targets.len())
+            .map(|i| {
+                let plane = self.plan.planes.get(i)?;
+                Some((self.plan.group_keys[plane.group].clone(), *self.echoes.get(i)?))
+            })
+            .collect();
         let eye = Vec4::from(camera.eye).truncate();
         self.plan = plan(
             mirrors,
@@ -843,22 +890,31 @@ impl Reflections {
             self.size,
         );
         self.camera = *camera;
+        self.plan.last = self
+            .held
+            .iter()
+            .enumerate()
+            .filter_map(|(k, h)| Some((h.as_ref()?.0.clone(), k)))
+            .collect();
         let live = self.plan.planes.len();
         // Textures only once a mirror is live, then kept for the setting.
         while self.targets.len() < live {
             self.targets.push(self.target(device));
             self.slots.clear();
         }
-        // Each target shows live, then silver, then each target echoed.
+        // Each target shows live, then silver, then each target echoed,
+        // then each target's last picture.
         let kept = self.targets.len();
-        if self.slots.len() != 2 * kept + 1 {
+        if self.slots.len() != 3 * kept + 1 {
             let pictures = || self.targets.iter().map(|t| &t.picture);
             self.slots = pictures()
                 .chain(std::iter::once(&self.silver))
                 .chain(pictures())
+                .chain(self.targets.iter().map(|t| &t.previous))
                 .map(|view| self.bound_slot(device, view))
                 .collect();
         }
+        self.echoes.clear();
         let target = [self.size.0 as f32, self.size.1 as f32, 0.0, 0.0];
         for i in 0..kept {
             let (live, echo) = match self.plan.planes.get(i) {
@@ -888,6 +944,14 @@ impl Reflections {
             };
             queue.write_buffer(&self.slots[i].buffer, 0, bytemuck::bytes_of(&live));
             queue.write_buffer(&self.slots[kept + 1 + i].buffer, 0, bytemuck::bytes_of(&echo));
+            if i < self.plan.planes.len() {
+                self.echoes.push(echo);
+            }
+            let last = match self.held.get(i) {
+                Some(Some((_, held))) => *held,
+                _ => SlotUniform::silver(),
+            };
+            queue.write_buffer(&self.slots[2 * kept + 1 + i].buffer, 0, bytemuck::bytes_of(&last));
         }
         renderer.set_view_count(device, 1 + live);
         self.grow_frames(device, 1 + live);
@@ -965,36 +1029,46 @@ impl Reflections {
         Ok(())
     }
     fn target(&self, device: &wgpu::Device) -> Target {
-        let texture = |label, samples, format, usage| {
-            device
-                .create_texture(&wgpu::TextureDescriptor {
-                    label: Some(label),
-                    size: wgpu::Extent3d {
-                        width: self.size.0,
-                        height: self.size.1,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: samples,
-                    dimension: wgpu::TextureDimension::D2,
-                    format,
-                    usage,
-                    view_formats: &[],
-                })
-                .create_view(&Default::default())
+        let make = |label, samples, format, usage| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d {
+                    width: self.size.0,
+                    height: self.size.1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: samples,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage,
+                view_formats: &[],
+            })
         };
+        let view = |t: &wgpu::Texture| t.create_view(&Default::default());
         let attachment = wgpu::TextureUsages::RENDER_ATTACHMENT;
+        let sampled = wgpu::TextureUsages::TEXTURE_BINDING;
+        let picture = make(
+            "mirror reflection",
+            1,
+            self.format,
+            attachment | sampled | wgpu::TextureUsages::COPY_SRC,
+        );
+        let previous = make(
+            "mirror reflection, frame before",
+            1,
+            self.format,
+            sampled | wgpu::TextureUsages::COPY_DST,
+        );
         Target {
             color: (self.samples > 1).then(|| {
-                texture("mirror reflection samples", self.samples, self.format, attachment)
+                view(&make("mirror reflection samples", self.samples, self.format, attachment))
             }),
-            picture: texture(
-                "mirror reflection",
-                1,
-                self.format,
-                attachment | wgpu::TextureUsages::TEXTURE_BINDING,
-            ),
-            depth: texture("mirror reflection depth", self.samples, DEPTH_FORMAT, attachment),
+            picture: view(&picture),
+            picture_texture: picture,
+            previous: view(&previous),
+            previous_texture: previous,
+            depth: view(&make("mirror reflection depth", self.samples, DEPTH_FORMAT, attachment)),
         }
     }
     fn bound_slot(&self, device: &wgpu::Device, picture: &wgpu::TextureView) -> Bound {
@@ -1038,6 +1112,16 @@ impl Reflections {
         clear: wgpu::Color,
         after: &dyn Fn(&mut wgpu::RenderPass<'_>, usize),
     ) {
+        // Keep last frame's pictures before this frame draws over them.
+        for (target, held) in self.targets.iter().zip(&self.held) {
+            if held.is_some() {
+                encoder.copy_texture_to_texture(
+                    target.picture_texture.as_image_copy(),
+                    target.previous_texture.as_image_copy(),
+                    target.picture_texture.size(),
+                );
+            }
+        }
         // A plane is planned after the view it is seen in: deepest first.
         for (i, plane) in self.plan.planes.iter().enumerate().rev() {
             let Some(target) = self.targets.get(i) else {
@@ -1127,6 +1211,7 @@ impl Reflections {
                         Shows::Live(i) => i,
                         Shows::Silver => kept,
                         Shows::Echo(i) => kept + 1 + i,
+                        Shows::Last(i) => 2 * kept + 1 + i,
                     })
                 {
                     pass.set_bind_group(1, &bound.group, &[]);
@@ -1228,6 +1313,12 @@ mod tests {
             fallback: [0.2; 3],
             ..wall(0.0)
         };
+        // Far past the mirrors' distance it still shows, not its colour.
+        let far = ReflectionSettings {
+            distance: 1.0,
+            ..ReflectionSettings::LOW
+        };
+        assert_eq!(plan(&[window], main, eye, &far, (960, 540)).planes.len(), 1);
         let plan = plan(&[window], main, eye, &ReflectionSettings::LOW, (960, 540));
         let plane = plan.planes[0];
         assert!(!plane.flipped);
@@ -1471,6 +1562,13 @@ mod tests {
         let low = plan(&mirrors, main, eye, &ReflectionSettings::LOW, (960, 540));
         assert_eq!(low.planes.len(), 1);
         assert_eq!(low.slots(1), vec![None, Some(Shows::Silver)]);
+        // Past the passes it shows its picture from the frame before, when
+        // a target kept one (Max, v0.1.11: a portal in another's view was
+        // a flat light blue), never one being drawn this frame.
+        let mut low = low;
+        low.last = vec![(low.group_keys[1].clone(), 0)];
+        assert_eq!(low.slots(1), vec![None, Some(Shows::Last(0))]);
+        assert_eq!(low.slots(0), vec![Some(Shows::Live(0)), Some(Shows::Last(0))]);
     }
 
     #[test]

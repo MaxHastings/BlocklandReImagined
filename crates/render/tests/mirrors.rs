@@ -207,8 +207,19 @@ impl Gpu {
             a: 1.0,
         };
         let mut encoder = device.create_command_encoder(&Default::default());
-        // The same frame again: a later frame's echoes show an earlier one's.
-        for _ in 0..frames {
+        // The same frame again: a later frame's echoes show an earlier one's,
+        // and it keeps the earlier pictures (`Shows::Last`).
+        for frame in 0..frames {
+            if frame > 0 {
+                reflections.prepare(
+                    device,
+                    &self.queue,
+                    &mut renderer,
+                    &camera,
+                    (SIZE, SIZE),
+                    mirrors,
+                )?;
+            }
             reflections.render(&renderer, &mut encoder, &[&scene], &[], clear, &|_, _| {});
             let surfaces = |pass: &mut wgpu::RenderPass<'_>| reflections.draw_surfaces(pass, 0);
             renderer.render_world(
