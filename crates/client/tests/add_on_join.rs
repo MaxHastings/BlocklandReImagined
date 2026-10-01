@@ -733,10 +733,7 @@ fn a_guest_without_a_vehicle_add_on_downloads_it_and_can_spawn_it() -> Result<()
     guest
         .apply_packages(&without)
         .context("the guest turns the plane off")?;
-    ensure!(
-        !spawnable(&guest),
-        "the guest has the plane before joining"
-    );
+    ensure!(!spawnable(&guest), "the guest has the plane before joining");
     host(&mut host_app, port)?;
     until(&mut [&mut host_app], "host in game", 180, |a| in_game(a[0]))?;
     ensure!(

@@ -83,7 +83,9 @@ impl Checkout {
     /// The bundled originals where bootstrap installs them (`addons/<id>`),
     /// each the stand-in plane under its id.
     fn install_originals(&self) -> Result<()> {
-        let stand_in = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(STAND_IN);
+        let stand_in = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join(STAND_IN);
         for addon in defaults::list().iter().filter(|a| a.original.is_some()) {
             stand_in_as(&stand_in, &self.content().join(addon.dir()), &addon.id)?;
         }

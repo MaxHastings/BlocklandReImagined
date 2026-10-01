@@ -274,7 +274,9 @@ fn a_pinned_original_is_imported_with_its_port_credited_and_installed() {
     // The Mac and Linux builds take the same originals and credits back out
     // of the Windows release: an unpacked one holding them gives a bundle
     // the packagers accept, credits and all.
-    let release = checkout.root.join("release/BlocklandReImagined-test-windows");
+    let release = checkout
+        .root
+        .join("release/BlocklandReImagined-test-windows");
     copy_dir(&content.join("addons"), &release.join("content/addons"));
     std::fs::copy(&credits_path, release.join("CREDITS.md")).unwrap();
     let taken = checkout.root.join("taken");
@@ -304,7 +306,11 @@ fn a_pinned_original_is_imported_with_its_port_credited_and_installed() {
         taken.to_str().unwrap(),
     ]);
     assert!(!refused.status.success());
-    assert!(text(&refused).contains("no CREDITS.md"), "{}", text(&refused));
+    assert!(
+        text(&refused).contains("no CREDITS.md"),
+        "{}",
+        text(&refused)
+    );
 }
 
 fn copy_dir(from: &Path, to: &Path) {
