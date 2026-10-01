@@ -811,21 +811,38 @@ impl Client {
     }
     /// Sequential convenience helper for scripts/probes; interactive clients use
     /// request + receive so awaiting an edit cannot stall movement updates.
+    ///
+    /// It waits on the host's progress, not the wall clock: it fails when
+    /// the host runs [`COMMAND_TICKS`] ticks past the request without the
+    /// reply, or sends nothing at all for [`COMMAND_STALL`]. A busy machine
+    /// slows the host's ticks with it, and a reply queued behind the rest of
+    /// a joined world waits for those chunks, which keep arriving.
     pub async fn command(&mut self, command: Command) -> Result<Reply> {
         let sequence = self.request(command).await?;
-        tokio::time::timeout(Duration::from_secs(10), async {
-            loop {
-                if let ClientEvent::Reply {
-                    sequence: reply,
-                    result,
-                } = self.receive().await?
-                {
-                    ensure!(reply == sequence, "Unexpected reply sequence");
-                    return result.map_err(anyhow::Error::msg);
-                }
+        let sent = self.replica.tick;
+        loop {
+            let event = tokio::time::timeout(COMMAND_STALL, self.receive())
+                .await
+                .map_err(|_| {
+                    anyhow::anyhow!(
+                        "The server sent nothing for {} s while command {sequence} waited",
+                        COMMAND_STALL.as_secs()
+                    )
+                })??;
+            if let ClientEvent::Reply {
+                sequence: reply,
+                result,
+            } = event
+            {
+                ensure!(reply == sequence, "Unexpected reply sequence");
+                return result.map_err(anyhow::Error::msg);
             }
-        })
-        .await?
+            let ran = self.replica.tick.saturating_sub(sent);
+            ensure!(
+                ran <= COMMAND_TICKS,
+                "The server ran {ran} ticks without answering command {sequence}"
+            );
+        }
     }
     /// Current QUIC round-trip estimate.
     pub fn rtt(&self) -> Duration {
@@ -1098,4 +1115,9 @@ impl quinn::rustls::client::danger::ServerCertVerifier for Pinned {
 /// The close reason when the network dropped (no answer, reset), as
 /// opposed to the server ending the connection on purpose. A client may
 /// rejoin after this one.
+/// Host ticks [`Client::command`] lets pass without its reply: ten seconds
+/// of game time, the wall-clock wait it replaces on an idle machine.
+pub const COMMAND_TICKS: u64 = 1200;
+/// How long [`Client::command`] waits with nothing at all from the host.
+pub const COMMAND_STALL: Duration = Duration::from_secs(60);
 pub const CONNECTION_LOST: &str = "Lost the connection to the server";

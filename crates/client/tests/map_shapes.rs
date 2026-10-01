@@ -13,14 +13,11 @@ use bri_ui::{
     gpu::{Headless, UiRenderer},
     screens::ScreenId,
 };
-use std::{
-    thread,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 #[macro_use]
 mod support;
-use support::content_root::ContentRoot;
+use support::{content_root::ContentRoot, wait};
 
 synthetic_and_content!(ContentRoot: kitchen_palms_render_for_host_and_guest);
 
@@ -56,21 +53,9 @@ fn step(apps: &mut [&mut App], elapsed: Duration) -> Result<()> {
 }
 
 fn until(apps: &mut [&mut App], what: &str, ready: impl Fn(&[&mut App]) -> bool) -> Result<()> {
-    let start = Instant::now();
-    let mut previous = start;
-    loop {
-        let now = Instant::now();
-        step(apps, now.duration_since(previous))?;
-        previous = now;
-        if ready(apps) {
-            return Ok(());
-        }
-        ensure!(
-            start.elapsed() < Duration::from_secs(120),
-            "Timed out waiting for {what}"
-        );
-        thread::sleep(Duration::from_millis(10));
-    }
+    wait::until(apps, what, Duration::from_secs(120), step, |apps| {
+        Ok(ready(apps))
+    })
 }
 
 fn entered(app: &App) -> bool {

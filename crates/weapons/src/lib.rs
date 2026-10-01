@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 pub mod debris;
 mod merge;
+mod references;
+pub use references::{Reference, add_on_of};
 pub mod rotation;
 pub mod testing;
 pub use merge::{resource_root, sound_root};
@@ -393,6 +395,12 @@ pub struct SoundDef {
     /// when packs are merged; None is this pack's own directory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub package: Option<String>,
+    /// `file` is a file of the installed game, by its v20 path
+    /// (`base/data/sound/vehicleExplosion.wav`), as an Add-On's
+    /// `AudioProfile` may name one: it plays the game's own copy, so the
+    /// Add-On ships none.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stock: bool,
 }
 fn full_volume() -> f32 {
     1.0
@@ -1111,13 +1119,8 @@ impl Pack {
     /// The type named by a `$DamageType::<name>` reference; unknown names
     /// fall back to `Default` as an unset Torque global indexes type 0.
     pub fn damage_type(&self, reference: &str) -> Option<&DamageType> {
-        let name = reference.trim();
-        let name = match name.get(..13) {
-            Some(prefix) if prefix.eq_ignore_ascii_case("$damagetype::") => &name[13..],
-            _ => name,
-        };
         self.damage_types
-            .get(&name.to_ascii_lowercase())
+            .get(&references::damage_type_key(reference))
             .or_else(|| self.damage_types.get("default"))
     }
     pub fn validate(&self) -> Result<()> {
@@ -1376,6 +1379,10 @@ impl Pack {
                     && (0.0..=1.0).contains(&sound.volume)
                     && (lower.ends_with(".wav") || lower.ends_with(".ogg")),
                 "Invalid sound {key}: keys are lower case, volume 0 to 1, file .wav or .ogg"
+            );
+            ensure!(
+                !(sound.stock && sound.package.is_some()),
+                "Invalid sound {key}: the game's own sound belongs to no package"
             );
         }
         let sound_paths = self

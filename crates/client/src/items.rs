@@ -425,7 +425,12 @@ pub fn native_shape_scene(
                 scene.materials.push(material);
                 continue;
             }
-            let overlay = source.blend == "opaque" || (node_color && source.blend == "alpha");
+            // v20 lays a colour-shifted model's texture over its shift colour
+            // (`GL_DECAL`) only when the texture has a translucent texel; a
+            // texture with none is the texture times the light, untinted.
+            let decal = translucent_texel(texture);
+            let overlay =
+                decal && (source.blend == "opaque" || (node_color && source.blend == "alpha"));
             let key = (texture.label.clone(), overlay);
             let image = *image_bindings.entry(key).or_insert_with(|| {
                 let mut image = (*texture).clone();
@@ -439,6 +444,7 @@ pub fn native_shape_scene(
             } else {
                 Material::vertex_lit(format!("item/{model}/{}", source.name), image)
             };
+            material.untinted = !decal && source.blend == "opaque";
             if source.unlit {
                 material.kind = if overlay {
                     MaterialKind::UnlitOverlay
@@ -498,6 +504,24 @@ pub fn native_shape_scene(
         }
         scene.validate()?;
         Ok(scene)
+}
+
+/// Whether v20 counts `image` as having a translucent texel, as its texture
+/// manager does when it loads one (0x509d79-0x509dc2): every 16th texel
+/// along each row and column, both walks bounded by the width, any alpha
+/// under 255. Only such a texture is laid over a model's colour shift
+/// (`GL_DECAL`, `TSMesh` 0x63ac1a); any other is the texture times the
+/// light (`GL_MODULATE`, 0x63ac97).
+pub(crate) fn translucent_texel(image: &SceneImage) -> bool {
+    let (width, height) = (image.width as usize, image.height as usize);
+    (0..width).step_by(16).any(|x| {
+        (0..width.min(height)).step_by(16).any(|y| {
+            image
+                .rgba
+                .get((y * width + x) * 4 + 3)
+                .is_some_and(|a| *a < 255)
+        })
+    })
 }
 
 fn validate_transform(transform: Mat4) -> Result<()> {
@@ -1014,11 +1038,13 @@ impl ItemAssets {
                         Ok(image) => {
                             let _ = slot.set(image);
                         }
-                        Err(error) => bri_console::warn(crate::cosmetic::add_on_fault(
-                            &dir,
-                            &file,
-                            format!("the icon of {item} could not be drawn from its model, so it keeps its picture: {error:#}"),
-                        )),
+                        Err(error) => {
+                            crate::cosmetic::add_on_fault(
+                                &dir,
+                                &file,
+                                format!("the icon of {item} could not be drawn from its model, so it keeps its picture: {error:#}"),
+                            );
+                        }
                     }
                 }
             });
@@ -2872,5 +2898,64 @@ pub(crate) mod fixture {
         pub fn assets(&self) -> Result<ItemAssets> {
             ItemAssets::load(&self.presentation, &self.weapons)
         }
+    }
+}
+
+#[cfg(test)]
+mod texture_rule_tests {
+    use super::*;
+    use crate::testing::{material, plain, rigid_shape};
+
+    fn image(alpha_at: impl Fn(u32, u32) -> u8) -> SceneImage {
+        let (width, height) = (32, 32);
+        SceneImage {
+            label: "texture".into(),
+            width,
+            height,
+            rgba: (0..height)
+                .flat_map(|y| (0..width).map(move |x| (x, y)))
+                .flat_map(|(x, y)| [30, 130, 60, alpha_at(x, y)])
+                .collect(),
+            srgb: true,
+        }
+    }
+
+    /// v20 lays a colour-shifted model's texture over the shift colour
+    /// only when the texture has a translucent texel among those it
+    /// samples (every 16th along each axis); any other texture is the
+    /// texture times the light, untinted. The HE Grenade's opaque green
+    /// drew flat and unlit when every opaque material was laid over.
+    #[test]
+    fn only_a_texture_with_a_translucent_texel_is_laid_over_the_colour() -> Result<()> {
+        let shape = rigid_shape(
+            "test/texture.dts",
+            &[("root", None, [0.0; 3])],
+            &[(0, [0.0; 3], [0.2; 3], plain(0))],
+            vec![material("skin", "opaque")],
+        );
+        let pose = bri_content::animation::sample(&shape, None, 0.0)?;
+        let scene = |texture: &SceneImage| -> Result<Material> {
+            let scene = native_shape_scene(
+                "test",
+                &shape,
+                &[texture],
+                [0.4, 0.2, 0.0, 1.0],
+                true,
+                Mat4::IDENTITY,
+                &pose,
+            )?;
+            Ok(scene.materials[0].clone())
+        };
+        let solid = scene(&image(|_, _| 255))?;
+        assert_eq!(solid.kind, MaterialKind::VertexLit, "lit");
+        assert!(solid.untinted, "and not tinted");
+        // A translucent texel v20 samples makes it a cover over the colour.
+        let sampled = scene(&image(|x, y| if (x, y) == (16, 16) { 0 } else { 255 }))?;
+        assert_eq!(sampled.kind, MaterialKind::BrickOverlay);
+        assert!(!sampled.untinted);
+        // One it does not sample leaves it a plain texture.
+        let unsampled = scene(&image(|x, y| if (x, y) == (3, 5) { 0 } else { 255 }))?;
+        assert_eq!(unsampled.kind, MaterialKind::VertexLit);
+        Ok(())
     }
 }

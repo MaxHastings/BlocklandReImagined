@@ -1121,6 +1121,49 @@ fn a_stack_owner_copies_and_cuts_what_others_built_on_their_stack() {
         .all(|(id, _)| sim.stack_owner(*id) == Some(ann)));
 }
 
+/// v20's four trust limits a copy may ask: `None` takes anyone's bricks,
+/// `Build` and `Full` the trust given, `Self` only the player's own.
+#[test]
+fn a_copy_asks_no_trust_build_trust_or_only_its_own_bricks() {
+    use bri_package_runtime::ops::CopyTrust;
+    let mut g = Game::new();
+    let verified = |g: &mut Game, name: &str, x: f32, key: u8| {
+        g.s.join_verified(
+            name.into(),
+            Vec3::new(x, 0.05, 3.0),
+            false,
+            Some(bri_admin::Principal([key; 32])),
+        )
+        .unwrap()
+    };
+    let ann = verified(&mut g, "Ann", 0.0, 1);
+    let bob = verified(&mut g, "Bob", 2.0, 2);
+    let hers = g.plant(ann, [0.5, 0.1, 0.25]);
+    let his = g.plant(bob, [3.5, 0.1, 0.25]);
+    let up = StackReach {
+        up: true,
+        limited: true,
+    };
+    let copies = |g: &mut Game, brick, trust| {
+        let rule = CopyRule {
+            trust,
+            admin: false,
+            ..CopyRule::default()
+        };
+        g.s.copy_build(ann, brick, 100, up, rule, TOOL, "advanced-duplicator")
+            .selection
+            .bricks
+            .len()
+    };
+    assert_eq!(copies(&mut g, his, CopyTrust::Build), 0, "no trust given");
+    assert_eq!(copies(&mut g, his, CopyTrust::None), 1, "none asked");
+    g.cmd(bob, Command::TrustInvite { target: ann, level: 2 }).unwrap();
+    g.cmd(ann, Command::AcceptTrust { from: bob }).unwrap();
+    assert_eq!(copies(&mut g, his, CopyTrust::Full), 1);
+    assert_eq!(copies(&mut g, his, CopyTrust::Own), 0, "full trust is not her own");
+    assert_eq!(copies(&mut g, hers, CopyTrust::Own), 1);
+}
+
 /// `mirror_ghost` turns a player's ghost brick into its mirror image where
 /// it stands, as a mirrored copy places the same brick: a wedge becomes
 /// its twin, mirroring again brings it back, and a brick with no image in

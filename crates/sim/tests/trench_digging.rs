@@ -446,7 +446,16 @@ impl Game {
             .into_iter()
             .filter(|(o, _)| *o == owner)
             .filter_map(|(_, n)| match n {
-                Notice::Center { text, .. } | Notice::Bottom { text, .. } => Some(text),
+                // The colour codes the rules' `\cN` became, read back as
+                // the original wrote them.
+                Notice::Center { text, .. } | Notice::Bottom { text, .. } => Some(
+                    text.chars()
+                        .map(|c| match c as u32 {
+                            n @ 0xE000..=0xE009 => format!("\\c{}", n - 0xE000),
+                            _ => c.to_string(),
+                        })
+                        .collect(),
+                ),
                 _ => None,
             })
             .collect()

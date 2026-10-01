@@ -516,6 +516,9 @@ pub struct App {
     world_job: Option<WorldJob>,
     graphics: crate::graphics::Graphics,
     load_limit: Arc<tokio::sync::Semaphore>,
+    /// Host on a port the system picks instead of `$Pref::Server::Port`
+    /// ([`App::host_on_any_port`]).
+    host_any_port: bool,
     /// Rebuild GPU renderers before the next frame (the map changed).
     gpu_restart: bool,
     /// Map of the installed scene.
@@ -636,6 +639,10 @@ pub struct App {
         bri_package::packages::PackageSet,
         Vec<String>,
     )>,
+    /// Add-On problems reported while the content last loaded.
+    content_problems: Vec<bri_package::health::Problem>,
+    /// What the enabled Add-Ons name that could not be found or used.
+    add_on_health: crate::add_on_health::AddOnHealth,
     /// The invite for the game this player hosts (`/invite` copies it).
     invite: Option<String>,
     /// The elevated firewall helper's outcome.
@@ -754,6 +761,7 @@ impl App {
         set: &bri_package::packages::PackageSet,
     ) -> Result<()> {
         let (client, problems) = crate::packages::load_set(root, set, false);
+        let problems: Vec<String> = problems.iter().map(ToString::to_string).collect();
         ensure!(
             problems.is_empty(),
             "{}",
@@ -763,6 +771,7 @@ impl App {
             )
         );
         let (server, problems) = crate::packages::load_set(root, set, true);
+        let problems: Vec<String> = problems.iter().map(ToString::to_string).collect();
         ensure!(
             problems.is_empty(),
             "{}",
@@ -796,7 +805,7 @@ impl App {
             bri_console::warn(format!("Add-On change not applied: {error:#}"));
             view.notice = format!("{} It could not be loaded: {error:#}", view.notice);
         }
-        self.ui.apply(UiUpdate::AddOns(view));
+        self.show_add_ons(view);
     }
     /// Run with the Add-Ons `set` lists, loading again what depends on them:
     /// HUD panels, rules, game modes and worlds, and (when the list differs
@@ -817,7 +826,10 @@ impl App {
                 requested == set && *loaded == self.content.paths.packages
             });
         if *set != self.content.paths.packages && !known {
-            let (content, left_out) = ClientContent::load_leaving_out_broken(&root, set)?;
+            let (loaded, mut collected) = crate::add_on_health::collecting(|| {
+                ClientContent::load_leaving_out_broken(&root, set)
+            });
+            let (content, left_out) = loaded?;
             self.left_out_add_ons = if left_out.is_empty() {
                 None
             } else {
@@ -825,7 +837,11 @@ impl App {
                 Some((set.clone(), content.paths.packages.clone(), left_out))
             };
             let effects_pack = bri_fx_runtime::EffectsPack::load(&content.paths.effects_runtime)?;
-            let parts = ContentParts::build(&content, effects_pack, &self.state_dir.join(ITEM_ICONS))?;
+            let (parts, more) = crate::add_on_health::collecting(|| {
+                ContentParts::build(&content, effects_pack, &self.state_dir.join(ITEM_ICONS))
+            });
+            collected.extend(more);
+            let parts = parts?;
             self.weapon_effects = parts.weapon_effects;
             self.actor_effects = parts.actor_effects;
             self.explosion_shapes = parts.explosion_shapes;
@@ -836,12 +852,11 @@ impl App {
             self.vehicle_assets = parts.vehicle_assets;
             self.world_items = parts.world_items;
             let world_items = &self.world_items;
-            for note in self
-                .weapon_shells
-                .set_casings(&content.weapons.pack, |m| world_items.has_model(m))
-            {
-                bri_console::warn(format!("Gun casings: {note}"));
-            }
+            collected.extend(
+                self.weapon_shells
+                    .set_casings(&content.weapons.pack, |m| world_items.has_model(m)),
+            );
+            self.content_problems = collected;
             self.ui.core.pack = content.ui_pack.clone();
             self.audio
                 .set_pack_sounds(&content.weapons.pack, &content.paths.weapons);
@@ -849,11 +864,9 @@ impl App {
         }
         // What actually loaded, less any Add-On left out above.
         let set = &self.content.paths.packages.clone();
-        let (client, problems) = crate::packages::load_set(&root, set, false);
+        let (client, mut problems) = crate::packages::load_set(&root, set, false);
         let (server, more) = crate::packages::load_set(&root, set, true);
-        for problem in problems.iter().chain(&more) {
-            bri_console::warn(format!("Add-On problem: {problem}"));
-        }
+        problems.extend(more);
         self.content.maps.retain(|m| !m.id.contains(':'));
         if let Some(catalog) = &server {
             let worlds = crate::packages::world_maps(catalog, &self.content.maps);
@@ -873,7 +886,54 @@ impl App {
         self.server_packages = server;
         self.client_code = crate::client_code::ClientCode::load(&root, set);
         self.packages_from_tools = true;
+        self.check_add_ons(&problems);
         Ok(())
+    }
+    /// Gather what the enabled Add-Ons name that this computer could not
+    /// find or use ([`crate::add_on_health`]): what loading reported, the
+    /// Add-Ons left out, `rules` (their rules, HUD and modes left out), the
+    /// companions and dependencies each needs, and every weapon reference
+    /// checked against what loaded. Logs each problem once and writes
+    /// `logs/add-on-health.json`.
+    fn check_add_ons(&mut self, rules: &[bri_package::diag::Diagnostic]) {
+        let root = self.content.paths.root.clone();
+        let (requested, left_out) = match &self.left_out_add_ons {
+            Some((requested, _, left_out)) => (requested.clone(), left_out.clone()),
+            None => (self.content.paths.packages.clone(), Vec::new()),
+        };
+        let mut problems = self.content_problems.clone();
+        problems.extend(left_out.iter().map(|l| crate::add_on_health::left_out_problem(l)));
+        problems.extend(rules.iter().map(crate::add_on_health::rules_problem));
+        problems.extend(bri_package::health::check_set(&root, &requested));
+        problems.extend(crate::add_on_health::check_references(
+            &crate::add_on_health::Loaded {
+                weapons: &self.content.weapons.pack,
+                effects: &self.weapon_effects,
+                items: &self.item_assets,
+                audio: Some(&self.audio),
+            },
+        ));
+        let owners = crate::add_on_health::Owners::new(&root, &requested);
+        self.add_on_health = crate::add_on_health::AddOnHealth::new(owners, problems);
+        match self.add_on_health.write_report(&self.state_dir) {
+            Ok(path) => {
+                if let Some(summary) = self.add_on_health.summary() {
+                    bri_console::warn(format!("{summary} ({})", path.display()));
+                }
+            }
+            Err(error) => bri_console::warn(format!("Add-On health report not written: {error:#}")),
+        }
+    }
+    /// Show the Add-Ons screen's `view` with each Add-On's problems from
+    /// the last load listed under it.
+    fn show_add_ons(&mut self, mut view: AddOnsView) {
+        crate::add_ons::with_health(&mut view, &self.add_on_health);
+        self.ui.apply(UiUpdate::AddOns(view));
+    }
+    /// What the enabled Add-Ons name that this computer could not find
+    /// or use, as of the last load.
+    pub fn add_on_health(&self) -> &crate::add_on_health::AddOnHealth {
+        &self.add_on_health
     }
     /// Tell the player which Add-Ons were left out and why: the game runs
     /// without them rather than not at all.
@@ -1535,6 +1595,25 @@ impl App {
         let state = self.motion.presented().get(&view.owner)?.clone();
         Some((state, self.local_eye()))
     }
+    /// How far the current host or join attempt has got: a number that
+    /// grows with every step of its loading, and None with no attempt. Waits
+    /// in tests watch it to tell a slow load from a stopped one.
+    /// Host the next games on a port the system picks, free when it is
+    /// bound, instead of `$Pref::Server::Port`; [`App::hosted_port`] says
+    /// which. For tests and tools that host side by side: a port picked
+    /// first and bound later can be taken in between.
+    pub fn host_on_any_port(&mut self) {
+        self.host_any_port = true;
+    }
+    /// The port this game's own server listens on, once it is connected.
+    pub fn hosted_port(&self) -> Option<u16> {
+        self.attempt.as_ref()?.worker.probes.get()?.host_port
+    }
+    pub fn loading_revision(&self) -> Option<u64> {
+        self.attempt
+            .as_ref()
+            .map(|a| a.progress.snapshot().revision)
+    }
     pub fn network_view(&self) -> Option<&network::View> {
         self.attempt
             .as_ref()
@@ -1585,17 +1664,18 @@ impl App {
         let absolute_state_dir = std::path::absolute(state_dir)?;
         let state_dir = absolute_state_dir.as_path();
         let requested = bri_package::packages::PackageSet::load_root(content_root)?;
-        let (mut content, left_out) =
-            ClientContent::load_leaving_out_broken(content_root, &requested)?;
+        let (loaded, mut content_problems) = crate::add_on_health::collecting(|| {
+            ClientContent::load_leaving_out_broken(content_root, &requested)
+        });
+        let (mut content, left_out) = loaded?;
         let old_saves = crate::old_saves::OldSaves::new(
             state_dir.join("saves"),
             state_dir.join("converted-saves"),
         );
+        let mut rule_problems = Vec::new();
         let package_catalog = {
             let (catalog, problems) = crate::packages::load(&content.paths.root);
-            for problem in problems {
-                eprintln!("Package problem: {problem}");
-            }
+            rule_problems.extend(problems);
             catalog
         };
         let client_code = crate::client_code::ClientCode::load(
@@ -1606,9 +1686,7 @@ impl App {
         // Worlds that packages provide are hosted like maps.
         let server_packages = {
             let (catalog, problems) = crate::packages::load_server(&content.paths.root);
-            for problem in problems {
-                eprintln!("Package problem (hosting): {problem}");
-            }
+            rule_problems.extend(problems);
             catalog
         };
         if let Some(catalog) = &server_packages {
@@ -1639,10 +1717,16 @@ impl App {
             item_ui,
             vehicle_assets,
             world_items,
-        } = ContentParts::build(&content, effects_pack, &state_dir.join(ITEM_ICONS))?;
-        for note in weapon_shells.set_casings(&content.weapons.pack, |m| world_items.has_model(m)) {
-            bri_console::warn(format!("Gun casings: {note}"));
-        }
+        } = {
+            let (parts, more) = crate::add_on_health::collecting(|| {
+                ContentParts::build(&content, effects_pack, &state_dir.join(ITEM_ICONS))
+            });
+            content_problems.extend(more);
+            parts?
+        };
+        content_problems.extend(
+            weapon_shells.set_casings(&content.weapons.pack, |m| world_items.has_model(m)),
+        );
         let mut avatar_assets = crate::avatar::AvatarAssets::load(&content.paths.avatar)?;
         avatar_assets.load_horse(&content.paths.vehicles)?;
         let avatar_assets = Arc::new(avatar_assets);
@@ -1805,6 +1889,7 @@ impl App {
             world_job: None,
             graphics,
             load_limit: Arc::new(tokio::sync::Semaphore::new(2)),
+            host_any_port: false,
             gpu_restart: false,
             scene_map: None,
             materials: None,
@@ -1865,6 +1950,8 @@ impl App {
             lan_query: None,
             add_on_import: None,
             left_out_add_ons: None,
+            content_problems,
+            add_on_health: Default::default(),
             invite: None,
             firewall_fix: None,
             frame_limit,
@@ -1879,8 +1966,11 @@ impl App {
             app.left_out_add_ons = Some((requested.clone(), loaded, left_out.clone()));
             if let Err(error) = app.apply_packages(&requested) {
                 bri_console::warn(format!("Add-Ons not applied: {error:#}"));
+                app.check_add_ons(&rule_problems);
             }
             app.notify_left_out_add_ons(&left_out);
+        } else {
+            app.check_add_ons(&rule_problems);
         }
         Ok(app)
     }
@@ -3142,6 +3232,7 @@ impl App {
             .ok()
             .filter(|p| *p != 0)
             .unwrap_or(bri_net::invite::DEFAULT_PORT);
+        let port = if self.host_any_port { 0 } else { port };
         self.disconnect();
         self.ui.apply_session(
             id,
@@ -5165,6 +5256,12 @@ impl App {
             for text in std::mem::take(&mut self.join_notices) {
                 self.ui.apply_session(a.id, UiUpdate::Chat { text });
             }
+            // Admins hear once per game what this computer's Add-Ons lack.
+            if a.view.as_ref().is_some_and(|v| v.administrator)
+                && let Some(text) = self.add_on_health.summary()
+            {
+                self.ui.apply_session(a.id, UiUpdate::Chat { text });
+            }
             // A game this player hosts runs their own Add-Ons' code; someone
             // else's server runs only code the player trusted for its host
             // key (never its address, which another host can take over).
@@ -7045,11 +7142,11 @@ impl PlatformApp for App {
             match result {
                 Ok(notice) => {
                     view.notice = notice;
-                    self.ui.apply(UiUpdate::AddOns(view));
+                    self.show_add_ons(view);
                     self.answer(request, Ok(()));
                 }
                 Err(error) => {
-                    self.ui.apply(UiUpdate::AddOns(view));
+                    self.show_add_ons(view);
                     self.answer(request, Err(error));
                 }
             }
@@ -8647,7 +8744,7 @@ impl PlatformApp for App {
                 }
                 UiAction::RequestAddOns => {
                     let view = crate::add_ons::view(&self.content.paths.root, crate::add_ons::machine());
-                    self.ui.apply(UiUpdate::AddOns(view));
+                    self.show_add_ons(view);
                     Ok(())
                 }
                 UiAction::SetAddOnEnabled { ref id, enabled } => {
@@ -8677,7 +8774,7 @@ impl PlatformApp for App {
                             let mut view = crate::add_ons::view(&root, crate::add_ons::machine());
                             crate::add_ons::mark_importing(&mut view, row);
                             view.notice = "Importing... the game keeps running meanwhile.".into();
-                            self.ui.apply(UiUpdate::AddOns(view));
+                            self.show_add_ons(view);
                             self.add_on_import = Some((id, row.clone(), receiver));
                             continue;
                         }
@@ -10802,35 +10899,18 @@ mod tests {
             admin_password: "headless-admin-fixture".into(),
             super_admin_password: "headless-super-fixture".into(),
         });
-        let start = Instant::now();
-        let mut previous = start;
-        loop {
-            let now = Instant::now();
-            app.tick(now.duration_since(previous))?;
-            app.ui
-                .update(now.duration_since(previous).as_millis() as u64);
-            previous = now;
-            ensure!(app.pump()?.is_empty(), "Unexpected native window command");
-            if let ConnectionState::Failed { reason } = &app.ui.core.conn {
-                anyhow::bail!("Headless startup failed: {reason}");
-            }
-            if let Some(view) = app.network_view()
-                && let Some(inventory) = view.tools.get(&view.owner)
-            {
-                for (slot, expected) in bri_weapons::CORE_TOOLS[..3].iter().enumerate() {
-                    assert_eq!(inventory.slots[slot].as_deref(), Some(*expected));
-                }
-                break;
-            }
-            ensure!(
-                start.elapsed() < Duration::from_secs(90),
-                "Headless host timed out"
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        fn until(app: &mut App, ready: impl Fn(&App) -> bool) -> anyhow::Result<()> {
-            let start = Instant::now();
-            let mut previous = start;
+        // Waits follow the game, not the wall clock: one fails when the
+        // server has run ten seconds of game time without `ready`, or when
+        // neither loading nor the server has moved for two minutes (a stopped
+        // game, not a machine busy building something else).
+        fn until(app: &mut App, what: &str, ready: impl Fn(&App) -> bool) -> anyhow::Result<()> {
+            const TICKS: u64 = 1200;
+            const STALL: Duration = Duration::from_secs(120);
+            let moved = |app: &App| (app.loading_revision(), app.network_view().map(|v| v.tick));
+            let mut previous = Instant::now();
+            let mut seen = moved(app);
+            let mut since = previous;
+            let mut first_tick = None;
             loop {
                 let now = Instant::now();
                 app.tick(now.duration_since(previous))?;
@@ -10838,18 +10918,47 @@ mod tests {
                     .update(now.duration_since(previous).as_millis() as u64);
                 previous = now;
                 ensure!(app.pump()?.is_empty(), "Unexpected native window command");
+                if let ConnectionState::Failed { reason } = &app.ui.core.conn {
+                    anyhow::bail!("{what} failed: {reason}");
+                }
                 if ready(app) {
                     return Ok(());
                 }
+                let now_seen = moved(app);
+                if now_seen != seen {
+                    seen = now_seen;
+                    since = now;
+                }
+                let tick = seen.1;
+                first_tick = first_tick.or(tick);
                 ensure!(
-                    start.elapsed() < Duration::from_secs(10),
-                    "Inventory action timed out: {:?}",
+                    tick.zip(first_tick).is_none_or(|(t, f)| t - f < TICKS),
+                    "{what} timed out after {TICKS} server ticks: {:?}",
+                    app.ui.core.conn
+                );
+                ensure!(
+                    since.elapsed() < STALL,
+                    "{what} stopped advancing: {:?}",
                     app.ui.core.conn
                 );
                 std::thread::sleep(Duration::from_millis(10));
             }
         }
-        until(&mut app, |a| a.ui.core.admin.snapshot.is_some())?;
+        until(&mut app, "Headless host", |app| {
+            let Some(view) = app.network_view() else {
+                return false;
+            };
+            let Some(inventory) = view.tools.get(&view.owner) else {
+                return false;
+            };
+            for (slot, expected) in bri_weapons::CORE_TOOLS[..3].iter().enumerate() {
+                assert_eq!(inventory.slots[slot].as_deref(), Some(*expected));
+            }
+            true
+        })?;
+        until(&mut app, "Inventory action", |a| {
+            a.ui.core.admin.snapshot.is_some()
+        })?;
         assert_eq!(
             app.ui.core.admin.snapshot.as_ref().unwrap().role,
             bri_ui::models::admin::AdminRole::SuperAdmin
@@ -10869,14 +10978,14 @@ mod tests {
             bri_identity::ClientIdentity::load_or_create(state.join("client.identity"))?;
         let original_public_key = *stored_identity.public_key();
         app.ui.core.request(UiAction::OpenAdmin);
-        until(&mut app, |a| {
+        until(&mut app, "Inventory action", |a| {
             !a.ui.core.admin.busy() && a.ui.stack().contains(&ScreenId::Admin)
         })?;
         app.ui
             .core
             .admin_request(bri_ui::models::admin::AdminAction::RequestBrickGroups)
             .context("Host could not request original brick management list")?;
-        until(&mut app, |a| {
+        until(&mut app, "Inventory action", |a| {
             !a.ui.core.admin.busy() && a.pending_requests() == 0
         })?;
         assert!(app.ui.core.admin.groups.is_empty());
@@ -10884,7 +10993,7 @@ mod tests {
             .core
             .admin_request(bri_ui::models::admin::AdminAction::RequestBans)
             .context("Host could not request persistent ban list")?;
-        until(&mut app, |a| {
+        until(&mut app, "Inventory action", |a| {
             !a.ui.core.admin.busy() && a.pending_requests() == 0
         })?;
         assert!(app.ui.core.admin.bans.is_empty());
@@ -10900,7 +11009,7 @@ mod tests {
                 password: bri_ui::models::admin::AdminSecret("changed-admin-fixture".into()),
             })
             .context("Host could not change administrator password")?;
-        until(&mut app, |a| {
+        until(&mut app, "Inventory action", |a| {
             !a.ui.core.admin.busy() && a.pending_requests() == 0
         })?;
         assert!(app.ui.core.admin.status.contains("accepted"));
@@ -10920,7 +11029,7 @@ mod tests {
             IconRef::External(_)
         ));
         app.ui.core.request(UiAction::UseTool { slot: 2 });
-        until(&mut app, |a| {
+        until(&mut app, "Inventory action", |a| {
             a.network_view()
                 .is_some_and(|v| v.tools[&v.owner].selected == Some(2))
                 && a.pending_requests() == 0
@@ -10929,7 +11038,7 @@ mod tests {
         let ui_name = |app: &App, id: &str| app.content.weapons.pack.items[id].ui_name.clone();
         assert_eq!(app.ui.core.hud.tool_name, ui_name(&app, bri_weapons::PRINTER));
         app.ui.core.request(UiAction::UseTool { slot: 1 });
-        until(&mut app, |a| {
+        until(&mut app, "Inventory action", |a| {
             a.network_view()
                 .is_some_and(|v| v.tools[&v.owner].selected == Some(1))
                 && a.pending_requests() == 0
@@ -11007,7 +11116,7 @@ mod tests {
         );
         assert!(animations.is_empty());
         app.ui.core.request(UiAction::Game(GameAction::DropTool));
-        until(&mut app, |a| {
+        until(&mut app, "Inventory action", |a| {
             a.network_view()
                 .is_some_and(|v| v.tools[&v.owner].slots[1].is_none())
                 && a.pending_requests() == 0

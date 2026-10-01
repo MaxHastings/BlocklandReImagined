@@ -206,6 +206,12 @@ run are left out. Your rules remove a game's entry when it ends.
 | | | `set_map_lights([x, y, z], radius, options)`: `lighting` |
 | `environment()` | | `set_environment(#{ ... })`, `reset_environment()`: `environment` |
 
+A string literal in your rules may colour its text as v20's did: `\c0`
+to `\c9` pick the profile's colours, `\cr`, `\cp` and `\co` reset, push
+and pop (`` `\c3Done \c6now` ``, or `"\\c3Done"` in double quotes).
+They become colour codes when the rules compile, so text a player typed
+or named never does.
+
 Coming from TorqueScript? [torque-equivalents.md](torque-equivalents.md)
 lists what each v20 call you know became here, and what is not here yet.
 
@@ -775,8 +781,9 @@ plants it with the plant key; planting follows the server's plant rules,
 plants all of it or none, and one Ctrl+Z takes it back.
 
 A last `options` map changes what a copy may take and how it plants:
-`trust` (`"build"`, the default, or `"full"`: the trust the player needs
-in a brick's owner), `public_bricks` (public bricks may be copied; default
+`trust` (the trust the player needs in a brick's owner: `"build"`, the
+default, `"full"`, `"none"` for anyone's bricks or `"self"` for only
+their own), `public_bricks` (public bricks may be copied; default
 true), `admin` (administrators may copy any brick; default true),
 `partial` (planting plants each brick that fits and skips the rest, as
 v20's Duplorcator did; default false), `stack` (the same trust in the

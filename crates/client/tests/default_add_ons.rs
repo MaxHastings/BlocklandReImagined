@@ -13,7 +13,7 @@
 //! stand-in plane (crates/vehicles/tests/fixtures) under its id, so the
 //! Stunt Plane's place spawns the stand-in plane.
 //! Run: cargo test -p bri-client --test default_add_ons -- --ignored --nocapture
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use bri_client::{app::App, platform::PlatformApp};
 use bri_package::{defaults, packages::PackageSet};
 use bri_ui::{api::*, screens::ScreenId};
@@ -21,9 +21,12 @@ use sha2::Digest;
 use std::{
     path::{Path, PathBuf},
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
+#[path = "support/wait.rs"]
+#[allow(dead_code)]
+mod wait;
 const SIZE: (u32, u32) = (960, 720);
 const SLATE: &str = "v20/add-ons/map_slate/slate.mis";
 /// The stand-in plane, installed as the bundled Stunt Plane.
@@ -181,31 +184,26 @@ fn in_game(app: &App) -> bool {
             .is_some_and(|v| v.poses.contains_key(&v.owner))
 }
 
+/// Step every app a fixed frame at a time until `ready`, with `secs` of
+/// game time once every app is in game ([`wait::until`]).
 fn until(
     apps: &mut [&mut App],
     what: &str,
     secs: u64,
     ready: impl Fn(&[&mut App]) -> bool,
 ) -> Result<()> {
-    let start = Instant::now();
-    loop {
-        for app in apps.iter_mut() {
-            step(app)?;
-        }
-        if ready(apps) {
-            return Ok(());
-        }
-        for app in apps.iter() {
-            if let ConnectionState::Failed { reason } = &app.ui.core.conn {
-                bail!("{what}: connection failed: {reason}");
+    wait::until(
+        apps,
+        what,
+        Duration::from_secs(secs),
+        |apps, _| {
+            for app in apps.iter_mut() {
+                step(app)?;
             }
-        }
-        ensure!(
-            start.elapsed() < Duration::from_secs(secs),
-            "Timed out waiting for {what}"
-        );
-        thread::sleep(Duration::from_millis(8));
-    }
+            Ok(())
+        },
+        |apps| Ok(ready(apps)),
+    )
 }
 
 fn app(root: &Path, state: &Path, name: &str) -> Result<App> {
@@ -217,11 +215,10 @@ fn app(root: &Path, state: &Path, name: &str) -> Result<App> {
     Ok(app)
 }
 
-fn host(app: &mut App, mode: ServerMode, port: u16) -> Result<()> {
-    app.ui
-        .core
-        .prefs
-        .set("$Pref::Server::Port", port.to_string());
+/// Host on a port the system picks as it binds, so tests running side by
+/// side never take the same one ([`App::hosted_port`] says which).
+fn host(app: &mut App, mode: ServerMode) -> Result<()> {
+    app.host_on_any_port();
     request(
         app,
         UiAction::HostGame {
@@ -235,12 +232,6 @@ fn host(app: &mut App, mode: ServerMode, port: u16) -> Result<()> {
             super_admin_password: String::new(),
         },
     )
-}
-
-fn free_port() -> Result<u16> {
-    Ok(std::net::UdpSocket::bind("127.0.0.1:0")?
-        .local_addr()?
-        .port())
 }
 
 /// The Vehicle list a vehicle spawn brick's wrench offers.
@@ -411,7 +402,7 @@ fn a_fresh_checkout_installs_its_default_add_ons_and_spawns_the_default_plane() 
 
     // 3. Single player: the default plane is on offer and spawns.
     let mut solo = app(&content, &state, "Solo")?;
-    host(&mut solo, ServerMode::SinglePlayer, free_port()?)?;
+    host(&mut solo, ServerMode::SinglePlayer)?;
     until(&mut [&mut solo], "single player in game", 180, |a| {
         in_game(a[0])
     })?;
@@ -433,11 +424,11 @@ fn a_fresh_checkout_installs_its_default_add_ons_and_spawns_the_default_plane() 
 
     // 4. A LAN game: a guest from the same checkout joins with nothing to
     //    download, and sees and is offered the default plane the host spawns.
-    let port = free_port()?;
     let mut host_app = app(&content, &state, "Host")?;
     let mut guest = app(&content, &state, "Guest")?;
-    host(&mut host_app, ServerMode::Lan, port)?;
+    host(&mut host_app, ServerMode::Lan)?;
     until(&mut [&mut host_app], "host in game", 180, |a| in_game(a[0]))?;
+    let port = host_app.hosted_port().context("the host has no server")?;
     request(
         &mut guest,
         UiAction::JoinServer {

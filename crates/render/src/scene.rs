@@ -264,6 +264,11 @@ pub struct Material {
     /// (`TSMesh::setMaterial`), so texels whose alpha is zero still show their
     /// colour: the Sharp_Trees frond stems sample such texels.
     pub ignore_texture_alpha: bool,
+    /// A `VertexLit` model texture drawn as v20 draws one with no
+    /// translucent texel: the texture times the light (`GL_MODULATE` under a
+    /// white colour, `TSMesh` 0x63ac97), so the model's colour shift does not
+    /// tint it.
+    pub untinted: bool,
     /// Kind-specific uniforms, required for water and terrain only.
     /// Water: flow/wave/opacity, distortion/depth flag, surface+shore
     /// tiling/reflection/parallax. Terrain: see `terrain_scene::parameters`.
@@ -293,6 +298,7 @@ impl Material {
             clamp_nearest: false,
             temp_brick_flash: false,
             ignore_texture_alpha: false,
+            untinted: false,
             parameters: None,
         }
     }
@@ -2747,8 +2753,12 @@ impl SceneRenderer {
                     _ => 0.0,
                 },
                 if material.clamp_nearest { 1.0 } else { 0.0 },
-                // Flags: 1 temp-brick flash, 2 ignore texture alpha.
-                f32::from(u8::from(material.temp_brick_flash) | u8::from(material.ignore_texture_alpha) << 1),
+                // Flags: 1 temp-brick flash, 2 ignore texture alpha, 4 untinted.
+                f32::from(
+                    u8::from(material.temp_brick_flash)
+                        | u8::from(material.ignore_texture_alpha) << 1
+                        | u8::from(material.untinted) << 2,
+                ),
             ]);
             if let Some(groups) = material.parameters {
                 for (i, group) in groups.iter().enumerate() {

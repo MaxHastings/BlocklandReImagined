@@ -1,0 +1,155 @@
+//! Waiting on a game in tests: on what it does, never on a wall-clock
+//! deadline. A loaded machine (the gate builds and tests at once) slows the
+//! hosted server, whose ticker skips missed ticks, and every client with it,
+//! so a fixed wait in wall time fails a slow but healthy run.
+//!
+//! A wait ends when `ready` holds. It fails when:
+//! - every app is in game and the server ticks they have all seen pass its
+//!   budget of game time without `ready` (only forward steps count, so a
+//!   rehost starting from tick 0 does not end it);
+//! - an app that is loading or in game has not moved (no loading step, no
+//!   new server tick) for [`STALL`]: it has stopped, not slowed;
+//! - no app is loading or in game and none has changed for [`STALL`];
+//! - an app's connection fails during the wait.
+use anyhow::{Result, bail};
+use bri_client::app::App;
+use bri_ui::api::ConnectionState;
+use std::{
+    thread,
+    time::{Duration, Instant},
+};
+
+/// Server ticks per second of game time.
+pub const TICK_HZ: u64 = 120;
+/// How long an app may stand still before the wait counts it as stopped:
+/// far past the longest single loading step under the gate's load.
+pub const STALL: Duration = Duration::from_secs(300);
+
+/// Server ticks in `time` of game time.
+pub fn ticks(time: Duration) -> u64 {
+    (time.as_secs_f64() * TICK_HZ as f64).ceil() as u64
+}
+
+/// Where an app has got to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Mark {
+    /// No host or join attempt.
+    Idle,
+    /// Loading, at this progress revision.
+    Loading(u64),
+    /// In game, at this server tick.
+    InGame(u64),
+}
+
+fn mark(app: &App) -> Mark {
+    match (app.network_view(), app.loading_revision()) {
+        (Some(view), _) => Mark::InGame(view.tick),
+        (None, Some(revision)) => Mark::Loading(revision),
+        (None, None) => Mark::Idle,
+    }
+}
+
+fn failed(app: &App) -> Option<&str> {
+    match &app.ui.core.conn {
+        ConnectionState::Failed { reason } => Some(reason),
+        _ => None,
+    }
+}
+
+/// Run `step` (every app, one frame of the wall time that passed) until
+/// `ready` holds, with `game` of game time to spare once all are in game.
+pub fn until(
+    apps: &mut [&mut App],
+    what: &str,
+    game: Duration,
+    mut step: impl FnMut(&mut [&mut App], Duration) -> Result<()>,
+    mut ready: impl FnMut(&mut [&mut App]) -> Result<bool>,
+) -> Result<()> {
+    let start = Instant::now();
+    let mut previous = start;
+    // A failure the wait started with is old news; a new one ends it.
+    let failed_before: Vec<bool> = apps.iter().map(|a| failed(a).is_some()).collect();
+    let mut marks: Vec<(Mark, Instant)> = apps.iter().map(|a| (mark(a), start)).collect();
+    let mut changed = start;
+    let mut tick: Option<u64> = None;
+    let mut game_ticks = 0;
+    loop {
+        let now = Instant::now();
+        step(apps, now.duration_since(previous))?;
+        previous = now;
+        if ready(apps)? {
+            return Ok(());
+        }
+        let states = || {
+            apps.iter()
+                .map(|a| format!("{:?}", a.ui.core.conn))
+                .collect::<Vec<_>>()
+                .join("; ")
+        };
+        for (app, before) in apps.iter().zip(&failed_before) {
+            if let Some(reason) = failed(app)
+                && !before
+            {
+                bail!("{what}: connection failed: {reason}");
+            }
+        }
+        for (app, (seen, since)) in apps.iter().zip(&mut marks) {
+            let latest = mark(app);
+            if latest != *seen {
+                *seen = latest;
+                *since = now;
+                changed = now;
+            }
+        }
+        let all_in_game: Option<Vec<u64>> = marks
+            .iter()
+            .map(|(m, _)| match m {
+                Mark::InGame(t) => Some(*t),
+                _ => None,
+            })
+            .collect();
+        let latest = all_in_game.and_then(|t| t.into_iter().min());
+        if let (Some(before), Some(after)) = (tick, latest) {
+            game_ticks += after.saturating_sub(before);
+        }
+        tick = latest;
+        if game_ticks >= ticks(game) {
+            bail!(
+                "Timed out waiting for {what}: {game:?} of game time passed; {}",
+                states()
+            );
+        }
+        for (i, (seen, since)) in marks.iter().enumerate() {
+            if *seen != Mark::Idle && now.duration_since(*since) >= STALL {
+                bail!(
+                    "Timed out waiting for {what}: app {i} stopped advancing ({seen:?} for {STALL:?}); {}",
+                    states()
+                );
+            }
+        }
+        if marks.iter().all(|(m, _)| *m == Mark::Idle) && now.duration_since(changed) >= STALL {
+            bail!(
+                "Timed out waiting for {what}: nothing happened for {STALL:?}; {}",
+                states()
+            );
+        }
+        thread::sleep(Duration::from_millis(8));
+    }
+}
+
+/// [`until`] for one app.
+pub fn until_one(
+    app: &mut App,
+    what: &str,
+    game: Duration,
+    mut step: impl FnMut(&mut App, Duration) -> Result<()>,
+    ready: impl Fn(&App) -> bool,
+) -> Result<()> {
+    until(
+        &mut [app],
+        what,
+        game,
+        |apps, elapsed| step(&mut *apps[0], elapsed),
+        |apps| Ok(ready(&*apps[0])),
+    )
+}

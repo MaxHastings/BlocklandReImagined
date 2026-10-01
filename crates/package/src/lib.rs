@@ -13,6 +13,7 @@ pub mod classic;
 pub mod defaults;
 pub mod diag;
 pub mod environment;
+pub mod health;
 pub mod id;
 pub mod library;
 pub mod packages;

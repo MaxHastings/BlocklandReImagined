@@ -8,13 +8,16 @@ use bri_addon_import::{Options, import};
 use bri_package::{library::Library, packages::PackageSet};
 use bri_package_runtime::Catalog;
 use bri_sim::{
-    player::MoveInput,
+    definitions::Definitions,
+    player::{MoveInput, PlayerState},
+    prediction::{CollisionMirror, Predictor},
     session::{ActionAim, Command, PackageCommand, Session},
 };
 use bri_world::OwnerId;
 use glam::Vec3;
 use rapier3d::prelude::*;
 use std::{
+    collections::VecDeque,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -216,6 +219,26 @@ struct Game {
     player: OwnerId,
     /// Other players, walking as their input says.
     others: Vec<(OwnerId, MoveInput, u64)>,
+    /// The player as their own client sees them (`Via::Bundle`): the
+    /// game's prediction, its inputs reaching the host and the host's
+    /// poses coming back a few ticks late, as over the network.
+    client: Option<Client>,
+}
+
+/// One-way delay, in ticks, between the client and the host.
+const LAG: u64 = 4;
+
+/// What the client sends the host.
+enum Send {
+    Move(u64, MoveInput),
+    Command(u64, Box<Command>, ActionAim),
+}
+
+struct Client {
+    predictor: Predictor,
+    to_host: VecDeque<(u64, Send)>,
+    to_client: VecDeque<(u64, u64, u64, PlayerState)>,
+    tick: u64,
 }
 
 impl Game {
@@ -234,6 +257,7 @@ impl Game {
             ColliderBuilder::cuboid(200.0, 0.5, 200.0).translation(Vector::new(0.0, -0.5, 0.0)),
         ];
         map.extend(extra);
+        let mirror = map.clone();
         let mut s = Session::new(
             bri_sim::simulation::Simulation::new(
                 bri_world::World::new("Grapples".into(), "grapples".into(), vec![[1.0; 4]]),
@@ -249,6 +273,24 @@ impl Game {
         s.set_weapon_pack(pack).unwrap();
         s.install_packages(catalog, None).unwrap();
         let player = s.join("Tester".into(), spawn, false).unwrap();
+        let client = matches!(via, Via::Bundle).then(|| {
+            let (state, _) = s
+                .motion_states()
+                .into_iter()
+                .find(|(p, _)| p.owner == player)
+                .unwrap();
+            Client {
+                predictor: Predictor::new(
+                    CollisionMirror::new(Definitions::default(), mirror, vec![]),
+                    state,
+                    Default::default(),
+                )
+                .unwrap(),
+                to_host: VecDeque::new(),
+                to_client: VecDeque::new(),
+                tick: 0,
+            }
+        });
         let mut g = Self {
             s,
             rules: format!("{namespace}-rules"),
@@ -257,6 +299,7 @@ impl Game {
             input: MoveInput::default(),
             player,
             others: vec![],
+            client,
         };
         g.steps(30);
         g.s.give_item(player, item).unwrap();
@@ -266,30 +309,50 @@ impl Game {
             .position(|s| s.as_deref() == Some(item))
             .unwrap();
         g.cmd(Command::EquipTool { slot: Some(slot) });
-        g.steps(30);
-        g
+        // Its image raises (the copy's own Activate time) before a click
+        // fires it, as a player waits for it to come up.
+        for _ in 0..1200 {
+            g.steps(1);
+            if g.held_state().eq_ignore_ascii_case("ready") {
+                return g;
+            }
+        }
+        panic!("{item} never came up ready: {}", g.held_state());
     }
+    fn held_state(&self) -> String {
+        self.s
+            .weapon_view()
+            .images
+            .get(&self.player)
+            .and_then(|i| i.first())
+            .map(|i| i.state.clone())
+            .unwrap_or_default()
+    }
+    /// A command, with the aim it was given at, as the game's client
+    /// sends every command.
     fn cmd(&mut self, command: Command) {
         self.seq += 1;
-        self.s.command(self.player, self.seq, command).unwrap();
+        let aim = ActionAim {
+            yaw: self.input.yaw,
+            pitch: self.input.pitch,
+        };
+        match &mut self.client {
+            Some(c) => c
+                .to_host
+                .push_back((c.tick + LAG, Send::Command(self.seq, Box::new(command), aim))),
+            None => {
+                self.s
+                    .command_with_aim(self.player, self.seq, command, Some(aim))
+                    .unwrap();
+            }
+        }
     }
     fn rule(&mut self, command: &str) {
-        self.seq += 1;
-        self.s
-            .command_with_aim(
-                self.player,
-                self.seq,
-                Command::Package(PackageCommand {
-                    package: self.rules.clone(),
-                    command: command.into(),
-                    args: vec![],
-                }),
-                Some(ActionAim {
-                    yaw: self.input.yaw,
-                    pitch: self.input.pitch,
-                }),
-            )
-            .unwrap();
+        self.cmd(Command::Package(PackageCommand {
+            package: self.rules.clone(),
+            command: command.into(),
+            args: vec![],
+        }));
     }
     fn look(&mut self, yaw: f32, pitch: f32) {
         self.input.yaw = yaw;
@@ -301,13 +364,55 @@ impl Game {
     }
     fn steps(&mut self, n: usize) {
         for _ in 0..n {
-            self.moves += 1;
-            let _ = self.s.movement(self.player, self.moves, self.input);
+            if let Some(c) = &mut self.client {
+                c.tick += 1;
+                c.predictor.step(self.input).unwrap();
+                c.to_host.push_back((
+                    c.tick + LAG,
+                    Send::Move(c.predictor.sequence(), self.input),
+                ));
+                while c.to_host.front().is_some_and(|(due, _)| *due <= c.tick) {
+                    match c.to_host.pop_front().unwrap().1 {
+                        Send::Move(sequence, input) => {
+                            let _ = self.s.movement(self.player, sequence, input);
+                        }
+                        Send::Command(sequence, command, aim) => {
+                            self.s
+                                .command_with_aim(self.player, sequence, *command, Some(aim))
+                                .unwrap();
+                        }
+                    }
+                }
+            } else {
+                self.moves += 1;
+                let _ = self.s.movement(self.player, self.moves, self.input);
+            }
             for (owner, input, n) in &mut self.others {
                 *n += 1;
                 let _ = self.s.movement(*owner, *n, *input);
             }
             self.s.step().unwrap();
+            if let Some(c) = &mut self.client {
+                let (state, ack) = self
+                    .s
+                    .motion_states()
+                    .into_iter()
+                    .find(|(p, _)| p.owner == self.player)
+                    .unwrap();
+                c.to_client.push_back((c.tick + LAG, c.tick, ack, state));
+                while c.to_client.front().is_some_and(|(due, ..)| *due <= c.tick) {
+                    let (_, tick, ack, state) = c.to_client.pop_front().unwrap();
+                    c.predictor.reconcile(tick, ack, state).unwrap();
+                }
+            }
+        }
+    }
+    /// The player as they see themselves: their client's prediction when
+    /// there is one, else the host's.
+    fn shown(&self) -> PlayerState {
+        match &self.client {
+            Some(c) => c.predictor.state().clone(),
+            None => self.me(),
         }
     }
     fn me(&self) -> bri_sim::player::PlayerState {
@@ -319,7 +424,7 @@ impl Game {
             .unwrap()
     }
     fn feet(&self) -> Vec3 {
-        self.feet_of(self.player)
+        Vec3::from(self.shown().feet)
     }
     fn feet_of(&self, owner: OwnerId) -> Vec3 {
         self.s
@@ -330,7 +435,7 @@ impl Game {
             .unwrap()
     }
     fn velocity(&self) -> Vec3 {
-        Vec3::from(self.me().velocity)
+        Vec3::from(self.shown().velocity)
     }
 }
 
@@ -737,6 +842,10 @@ fn a_bundled_grapple_rope_ropes_its_holder() {
         g.s.tether_of(g.player)
             .expect("roped where the hook struck");
     assert!((rope.anchor[1] - CEILING).abs() < 0.1, "{rope:?}");
+    assert!(
+        g.shown().tether.is_some(),
+        "the holder's own client sees the rope"
+    );
     // Walking away, the rope stops them.
     g.look(std::f32::consts::PI, 0.0);
     g.input.forward = 1.0;

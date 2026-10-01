@@ -185,6 +185,40 @@ fn stale_and_forged_corrections_are_rejected_and_history_is_bounded() {
     assert!(prediction.reconcile(9, 6, initial).unwrap().is_none());
 }
 
+/// A correction that moves the body no further than float noise keeps the
+/// local motion, but takes everything else the host decided: a rope the
+/// host tied to a player standing still reaches their own prediction (the
+/// Grapple Rope's, which the client once dropped until they moved).
+#[test]
+fn a_correction_within_noise_still_takes_the_hosts_rope() {
+    let session = {
+        let mut s = server();
+        s.join("a".into(), Vec3::new(0.0, 0.05, 0.0), false).unwrap();
+        s
+    };
+    let (initial, _) = session.motion_states().remove(0);
+    let mirror = CollisionMirror::new(Definitions::default(), map(), vec![]);
+    let mut prediction = Predictor::new(mirror, initial.clone(), Default::default()).unwrap();
+    let mut roped = initial.clone();
+    roped.tether = Some(bri_sim::player::Tether {
+        anchor: [0.0, 8.0, -4.0],
+        length: 9.0,
+        target: 9.0,
+        reel: 0.0,
+        swing: 0.0,
+        drift: [0.0; 3],
+        keys: None,
+        winding: 0,
+        straight: false,
+    });
+    assert_eq!(
+        prediction.reconcile(1, 0, roped.clone()).unwrap(),
+        Some(Vec3::ZERO),
+        "no visible correction"
+    );
+    assert_eq!(prediction.state().tether, roped.tether);
+}
+
 fn plate_definitions() -> Definitions {
     use bri_content::{
         brick::Brick as Mesh,

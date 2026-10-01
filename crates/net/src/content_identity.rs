@@ -25,6 +25,8 @@ pub struct WeaponContent {
     manifest_sha256: String,
     /// Items of the base weapons package; others come from merged packages.
     base_items: std::collections::BTreeSet<String>,
+    /// What merging the Add-Ons' weapons left out or overrode.
+    pub problems: Vec<bri_package::health::Problem>,
 }
 /// Packages beside a kind's base package that provide it too: every listed
 /// package without a role whose directory holds `assets/<file>`, in
@@ -123,12 +125,18 @@ impl WeaponContent {
             parts.push((dir.clone(), abs, part));
         }
         // Native resource files and the sound files packs ship, each
-        // relative to its own pack's folder.
+        // relative to its own pack's folder. A sound playing the game's own
+        // file ships none; the audio pack's identity covers that file.
         let native = |pack: &bri_weapons::Pack| -> Vec<String> {
             pack.resources
                 .iter()
                 .filter_map(|r| r.native_file.clone())
-                .chain(pack.sounds.values().map(|s| s.file.clone()))
+                .chain(
+                    pack.sounds
+                        .values()
+                        .filter(|s| !s.stock)
+                        .map(|s| s.file.clone()),
+                )
                 .collect()
         };
         let resources = native(&pack)
@@ -180,7 +188,7 @@ impl WeaponContent {
                 .collect(),
         );
         pack.diagnostics
-            .extend(notes.into_iter().map(|n| format!("merge: {n}")));
+            .extend(notes.iter().map(|n| format!("merge: {n}")));
         pack.validate()?;
         // The bounded reads above supplied the actual parsed definitions. Require
         // identical bytes during hashing so a replacement cannot mix snapshots.
@@ -231,6 +239,7 @@ impl WeaponContent {
             fingerprint,
             manifest_sha256: format!("{:x}", Sha256::digest(&bytes)),
             base_items,
+            problems: notes,
         })
     }
 
@@ -904,13 +913,30 @@ mod tests {
     fn test_weapons_pack_identity_and_every_choice() {
         let root = tempfile::tempdir().unwrap().keep().join("weapons");
         std::fs::create_dir(&root).unwrap();
-        let pack = bri_weapons::testing::pack();
-        // Every native file the pack names, with made-up bytes.
+        let mut pack = bri_weapons::testing::pack();
+        // A sound playing the game's own file, which the pack does not ship.
+        pack.sounds.insert(
+            "addon:sound/boom".into(),
+            bri_weapons::SoundDef {
+                file: "base/data/sound/vehicleexplosion.wav".into(),
+                volume: 1.0,
+                looping: false,
+                local: false,
+                package: None,
+                stock: true,
+            },
+        );
+        // Every native file the pack ships, with made-up bytes.
         for name in pack
             .resources
             .iter()
             .filter_map(|r| r.native_file.clone())
-            .chain(pack.sounds.values().map(|s| s.file.clone()))
+            .chain(
+                pack.sounds
+                    .values()
+                    .filter(|s| !s.stock)
+                    .map(|s| s.file.clone()),
+            )
         {
             let path = root.join(&name);
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();

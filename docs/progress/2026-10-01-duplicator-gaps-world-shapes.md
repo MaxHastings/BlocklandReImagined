@@ -258,3 +258,26 @@ fails without the rules' `set_image_loaded`), and the port's image
 state checks. The real copy's `ND_Image` imports with spin up, full
 speed and spin down states and no diagnostics. New Duplicator: 363 of
 363; its prefs (`ndRegisterPrefs`) wait for the settings seam.
+
+## New Duplicator preferences are server settings
+
+Built on the server-scope settings seam (c8bd9e58). `ndRegisterPrefs`'s
+preferences are now 19 settings in the rules' `behaviour.json`, each
+`scope: "server"` under its `$Pref::Server::ND::` global, which the host
+changes in the Admin menu's Add-On Settings: the eight admin-only
+limits, trust limit, both admin trust bypasses, public bricks, both
+brick and box limits, both timeouts and menu sounds. Their defaults are
+captured from `ndApplyDefaultPrefValues` by covers, and the rules read
+them with `pref(...)` instead of holding them. The trust limit's four
+v20 choices needed two more copy trust levels: `trust: "none"` (anyone's
+bricks, public ones too) and `"self"` (only one's own), beside `build`
+and `full`. Brick limits go down to 1, not RTB's 1000, so a host can
+limit players tightly. The box chunk, ghost brick, bricks-per-tick and
+symmetry table preferences are not offered: copy jobs are paced by time,
+the engine caps ghosts and always builds its mirror table.
+
+Test: `new_duplicator_port_follows_the_hosts_server_settings` (the 19
+settings listed with their globals and stand-in defaults; turning menu
+sounds off silences [Light]; fails on the old rules, which always
+played them). New Duplicator: 363 of 363 behaviours, nothing
+unsupported, verdict converted; the port is listed as verified.

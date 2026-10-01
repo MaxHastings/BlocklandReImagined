@@ -460,12 +460,13 @@ impl WeaponDebris {
     /// Images whose `casing` (`bri_weapons::debris::casings`) has a model
     /// of its own that `has_model` can draw throw it, with its own motion;
     /// others (the base game's `gunShellDebris`, a model that did not
-    /// convert) throw the stock shell. Returns notes on what was left out.
+    /// convert) throw the stock shell. Returns the Add-On problems of what
+    /// was left out.
     pub fn set_casings(
         &mut self,
         pack: &bri_weapons::Pack,
         has_model: impl Fn(&str) -> bool,
-    ) -> Vec<String> {
+    ) -> Vec<bri_package::health::Problem> {
         let mut notes = Vec::new();
         self.casings.clear();
         self.by_image.clear();
@@ -476,16 +477,23 @@ impl WeaponDebris {
             if model.is_empty() || model == STOCK_SHELL_MODEL {
                 continue;
             }
+            let problem = |effect: String| {
+                bri_package::health::Problem::new(
+                    bri_weapons::add_on_of(&image).unwrap_or(&image),
+                    bri_package::health::Kind::Model,
+                    &model,
+                    effect,
+                )
+                .used_by(format!("image {image} casing"))
+            };
             if !has_model(&model) {
-                notes.push(format!(
-                    "{image}: casing model {model} is not loaded; it throws the stock shell"
-                ));
+                notes.push(problem("is not loaded, so it throws the stock shell".into()));
                 continue;
             }
             if self.casings.len() == MAX_CASINGS {
-                notes.push(format!(
-                    "{image}: more than {MAX_CASINGS} casings; it throws the stock shell"
-                ));
+                notes.push(problem(format!(
+                    "more than {MAX_CASINGS} casings, so it throws the stock shell"
+                )));
                 continue;
             }
             self.casings.push(add_on_shell(&model, &casing));
@@ -1025,7 +1033,7 @@ mod tests {
         )?;
         let notes = world.set_casings(&kit(), |m| m == "add-ons/weapon_kit/shell.dts");
         assert_eq!(notes.len(), 1, "{notes:?}");
-        assert!(notes[0].contains("missing.dts"));
+        assert!(notes[0].reference.contains("missing.dts"));
         let cues = [
             shell_cue(1, "kit:image/gun"),
             shell_cue(2, "kit:image/rifle"),

@@ -151,14 +151,17 @@ pub(super) fn admits(
     brick: &Brick,
 ) -> bool {
     if brick.owner == 0 {
-        return rule.public;
+        // No trust needed takes public bricks too, as v20's "None" did.
+        return rule.public || rule.trust == CopyTrust::None;
     }
     if actor.administrator && rule.admin {
         return true;
     }
     let needed = match rule.trust {
+        CopyTrust::None => level::NONE,
         CopyTrust::Build => level::BUILD,
         CopyTrust::Full => level::FULL,
+        CopyTrust::Own => level::YOU,
     };
     actor.trust_level(brick.owner) >= needed
         || (rule.stack

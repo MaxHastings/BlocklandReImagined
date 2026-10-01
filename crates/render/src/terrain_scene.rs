@@ -380,6 +380,7 @@ mod tests {
                 clamp_nearest: false,
                 temp_brick_flash: false,
                 ignore_texture_alpha: false,
+                untinted: false,
                 parameters: Some([[0.0; 4]; 4]),
             }],
             ..Default::default()

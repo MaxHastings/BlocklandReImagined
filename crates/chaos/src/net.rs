@@ -401,13 +401,12 @@ impl NetChaos {
             .connect("Newcomer".into(), false)
             .await
             .context("The host refused a newcomer after the soak")?;
-        tokio::time::timeout(
-            Duration::from_secs(10),
-            newcomer.command(Command::Chat("still here?".into())),
-        )
-        .await
-        .context("The host did not answer a newcomer after the soak")?
-        .context("The host refused a newcomer's chat")?;
+        // The reply follows the rest of the soaked world on the newcomer's
+        // stream; `command` waits on the host's progress, not a deadline.
+        newcomer
+            .command(Command::Chat("still here?".into()))
+            .await
+            .context("The host did not answer a newcomer's chat after the soak")?;
         check_replica(&newcomer, true)?;
         newcomer.close();
         for remote in self.remotes.drain(..) {

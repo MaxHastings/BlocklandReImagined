@@ -127,6 +127,8 @@ pub struct ClientContent {
     pub ui_pack: Rc<Pack>,
     pub maps: Vec<MapInfo>,
     pub bricks: Vec<BrickInfo>,
+    /// Every brick's catalog entry, the base game's then each Add-On's
+    /// (`bri_sim::definitions::catalog_with`).
     pub catalog: Catalog,
     /// Every brick the brick menu offers, stock then Add-On, with its
     /// orientation fix: the one list hosting, joining and Change Map use.
@@ -336,15 +338,20 @@ impl ContentPaths {
         bri_net::content_identity::bot_kinds_from(&self.bot_extras)
     }
     pub fn vehicle_pack(&self) -> Result<bri_vehicles::Pack> {
+        Ok(self.merged_vehicles()?.0)
+    }
+    /// [`Self::vehicle_pack`] with what merging left out or overrode.
+    fn merged_vehicles(&self) -> Result<(bri_vehicles::Pack, Vec<bri_package::health::Problem>)> {
         let mut parts = Vec::new();
         for (dir, abs) in &self.vehicle_extras {
             let part = bri_vehicles::Pack::load(abs.join("vehicles.json"))?;
             part.verify_assets(abs)?;
             parts.push((dir.clone(), part));
         }
-        let (pack, _) = bri_vehicles::Pack::load(self.vehicles.join("vehicles.json"))?.merge(parts);
+        let (pack, problems) =
+            bri_vehicles::Pack::load(self.vehicles.join("vehicles.json"))?.merge(parts);
         pack.validate()?;
-        Ok(pack)
+        Ok((pack, problems))
     }
 
     /// Hash every package this content loads. Blocking: run it on a worker.
@@ -525,6 +532,9 @@ impl ClientContent {
     pub fn load_packages(root: &Path, packages: &PackageSet) -> Result<Self> {
         let paths = ContentPaths::resolve(root, packages)?;
         let weapons = paths.weapon_content()?;
+        for problem in &weapons.problems {
+            crate::add_on_health::report(problem.clone());
+        }
         let item_physics = paths.item_physics(&weapons)?;
         let mut schema = load_ui_schema(&paths.ui_pack)?;
         install_death_icons(&mut schema, &weapons.pack, &paths.weapons)?;
@@ -569,7 +579,7 @@ impl ClientContent {
                 "Required integrated map missing: {expected}"
             );
         }
-        let catalog = validate_catalog(&paths)?;
+        let mut catalog = validate_catalog(&paths)?;
         let mut bricks = Vec::new();
         let mut selectable: Vec<_> = catalog
             .bricks
@@ -607,6 +617,8 @@ impl ClientContent {
             )
             .with_context(|| format!("Loading bricks of {dir}"))?;
         }
+        // Add-On bricks are named, printed and wrenched like base ones.
+        bri_sim::definitions::extend_catalog(&mut catalog, &paths.brick_extras)?;
         let effects: Library = read_json(
             &file(&paths.effects, "effects.json", INDEX_LIMIT)?,
             INDEX_LIMIT,
@@ -660,7 +672,11 @@ impl ClientContent {
                 bundle.unresolved_textures.len()
             ));
         }
-        let vehicles = paths.vehicle_pack().context("Loading native vehicles")?;
+        let (vehicles, vehicle_problems) =
+            paths.merged_vehicles().context("Loading native vehicles")?;
+        vehicle_problems
+            .into_iter()
+            .for_each(crate::add_on_health::report);
         let music = music_choices(&paths.audio)?;
         let event_sounds = event_sound_choices(&paths.audio)?;
         let events = bri_events::Catalog::load(paths.events.join("catalog.json"))

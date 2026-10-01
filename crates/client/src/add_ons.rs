@@ -66,6 +66,25 @@ pub fn view(root: &Path, discovery: &Discovery) -> AddOnsView {
     }
 }
 
+/// List under each row the problems [`crate::add_on_health`] found with
+/// that Add-On when the game last loaded, and sum them up in the notice.
+pub fn with_health(view: &mut AddOnsView, health: &crate::add_on_health::AddOnHealth) {
+    for row in &mut view.rows {
+        for line in health.lines_for(&row.id, &row.name) {
+            if !row.problems.contains(&line) {
+                row.problems.push(line);
+            }
+        }
+    }
+    if let Some(summary) = health.summary() {
+        view.notice = if view.notice.is_empty() {
+            summary
+        } else {
+            format!("{summary} {}", view.notice)
+        };
+    }
+}
+
 /// The Can't Join rows for a join refused over differing add-ons, named as
 /// the player's own list names them. `None` for any other failure.
 pub fn mismatch(root: &Path, reason: &str) -> Option<bri_ui::api::AddOnMismatch> {
@@ -168,7 +187,12 @@ pub fn defaults(root: &Path, discovery: &Discovery) -> Result<AddOnsView> {
     while let Some(id) = library
         .entries
         .iter()
-        .find(|e| e.enabled && !e.required && !defaults::is_default(e.id()))
+        .find(|e| {
+            e.enabled
+                && !e.required
+                && !defaults::is_default(e.id())
+                && library.companion_of(e.id()).is_none()
+        })
         .map(|e| e.id().to_string())
     {
         let plan = library.plan(&id, false);
@@ -232,7 +256,13 @@ pub fn rows(library: &Library) -> Vec<AddOnRow> {
             ..Default::default()
         });
     }
-    for e in library.entries.iter().filter(|e| !e.required) {
+    // A companion (an import's host rules) is part of its Add-On's row,
+    // never a row of its own: it turns on and off with it.
+    for e in library
+        .entries
+        .iter()
+        .filter(|e| !e.required && library.companion_of(e.id()).is_none())
+    {
         out.push(row(library, e));
     }
     // Base first, then categories in table order, then Other; the library's
@@ -337,7 +367,11 @@ pub fn start_import(
                     ))
                 } else {
                     let err = String::from_utf8_lossy(&o.stderr);
-                    let reason = err.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("no details");
+                    let reason = err
+                        .lines()
+                        .rev()
+                        .find(|l| !l.trim().is_empty())
+                        .unwrap_or("no details");
                     // Leave no half-written package behind.
                     let _ = std::fs::remove_dir_all(&out);
                     Err(anyhow::anyhow!("{name} could not be imported: {reason}"))
@@ -399,6 +433,7 @@ fn row(library: &Library, e: &LibraryEntry) -> AddOnRow {
             library
                 .dependents(e.id())
                 .iter()
+                .filter(|i| library.companion_of(i) != Some(e.id()))
                 .map(|i| name_of(i))
                 .collect()
         } else {
@@ -409,15 +444,18 @@ fn row(library: &Library, e: &LibraryEntry) -> AddOnRow {
             .iter()
             .map(|c| bri_package::capability::describe(c).map_or(c.clone(), str::to_string))
             .collect(),
-        problems: e
-            .problems
-            .iter()
+        // Its companions' problems are its own.
+        problems: std::iter::once(e)
+            .chain(info.companions.iter().filter_map(|c| library.get(c)))
+            .flat_map(|e| &e.problems)
             .map(|d| match &d.hint {
                 Some(h) if d.severity == Severity::Error => format!("{} ({h})", d.message),
                 _ => d.message.clone(),
             })
             .collect(),
-        broken: e.has_errors(),
+        broken: std::iter::once(e)
+            .chain(info.companions.iter().filter_map(|c| library.get(c)))
+            .any(LibraryEntry::has_errors),
         importable: false,
         importing: false,
     }
@@ -427,6 +465,97 @@ fn row(library: &Library, e: &LibraryEntry) -> AddOnRow {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// An import's host rules (its companion) are part of its row: no row
+    /// or switch of their own, their problems shown on it, on and off with
+    /// it, and refused when asked for alone.
+    #[test]
+    fn host_rules_are_part_of_their_add_ons_row() {
+        let root = std::env::temp_dir().join(format!("bri-add-ons-rules-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("packages.json"),
+            json!({ "schema_version": 1, "packages": [] }).to_string(),
+        )
+        .unwrap();
+        for (id, extra) in [
+            ("tool_hook", json!({ "companions": ["tool_hook-rules"] })),
+            (
+                "tool_hook-rules",
+                json!({ "dependencies": { "tool_hook": "=1.0.0" } }),
+            ),
+        ] {
+            let dir = root.join("addons").join(id);
+            std::fs::create_dir_all(&dir).unwrap();
+            let kind = if id.ends_with("-rules") {
+                "behaviour"
+            } else {
+                "weapons"
+            };
+            let mut manifest = json!({ "schema_version": 1, "id": id, "version": "1.0.0", "api": 1,
+                "name": format!("The {id}"), "license": "CC0-1.0", "authors": ["Lab"],
+                "capabilities": [], "dependencies": {},
+                "provides": [{ "kind": kind, "id": format!("{id}:{kind}/a"), "file": "a.json" }] });
+            for (k, v) in extra.as_object().unwrap() {
+                manifest[k] = v.clone();
+            }
+            std::fs::write(dir.join("package.json"), manifest.to_string()).unwrap();
+        }
+        let ids = |v: &AddOnsView| -> Vec<(String, bool)> {
+            v.rows
+                .iter()
+                .filter(|r| r.id != BASE_ROW)
+                .map(|r| (r.id.clone(), r.enabled))
+                .collect()
+        };
+        let hook = |v: &AddOnsView| v.rows.iter().find(|r| r.id == "tool_hook").unwrap().clone();
+        let discovery = Discovery::root_only();
+        let v = view(&root, &discovery);
+        assert_eq!(ids(&v), [("tool_hook".to_string(), false)]);
+        let v = set_enabled(&root, &discovery, "tool_hook", true).unwrap();
+        assert_eq!(ids(&v), [("tool_hook".to_string(), true)]);
+        // The notice speaks of the Add-On alone; the rules are part of it.
+        let library = Library::scan(&root).unwrap();
+        assert!(library.get("tool_hook-rules").unwrap().enabled);
+        assert!(hook(&v).needed_by.is_empty(), "{:?}", hook(&v).needed_by);
+        let refused = set_enabled(&root, &discovery, "tool_hook-rules", false).unwrap_err();
+        assert!(
+            refused
+                .to_string()
+                .contains("is part of The tool_hook and turns on and off with it"),
+            "{refused}"
+        );
+        let v = set_enabled(&root, &discovery, "tool_hook", false).unwrap();
+        assert_eq!(ids(&v), [("tool_hook".to_string(), false)]);
+        assert!(
+            !Library::scan(&root)
+                .unwrap()
+                .get("tool_hook-rules")
+                .unwrap()
+                .enabled
+        );
+        // A problem with the rules shows on its Add-On's row.
+        std::fs::write(
+            root.join("addons/tool_hook-rules/package.json"),
+            json!({ "schema_version": 1, "id": "tool_hook-rules", "version": "1.0.0", "api": 1,
+                "dependencies": { "tool_hook": "=1.0.0", "not_installed": "*" }, "capabilities": [],
+                "provides": [{ "kind": "behaviour", "id": "tool_hook-rules:behaviour/a", "file": "a.json" }] })
+            .to_string(),
+        )
+        .unwrap();
+        let v = view(&root, &discovery);
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(ids(&v), [("tool_hook".to_string(), false)]);
+        assert!(
+            hook(&v)
+                .problems
+                .iter()
+                .any(|p| p.contains("not_installed")),
+            "{:?}",
+            hook(&v)
+        );
+    }
 
     #[test]
     fn rows_group_explain_and_toggle() {
@@ -540,8 +669,13 @@ mod tests {
         );
         mark_importing(&mut v, "legacy:Weapon_Shotgun");
         assert!(v.rows.last().unwrap().importing);
-        let missing =
-            start_import(&root, &Discovery::root_only(), "legacy:Weapon_Shotgun", &root.join("no-importer")).unwrap_err();
+        let missing = start_import(
+            &root,
+            &Discovery::root_only(),
+            "legacy:Weapon_Shotgun",
+            &root.join("no-importer"),
+        )
+        .unwrap_err();
         assert!(
             format!("{missing}").contains("importer is not installed"),
             "{missing}"
