@@ -37,25 +37,39 @@ impl ExplosionShapes {
         let root = root.canonicalize()?;
         let mut models = BTreeMap::new();
         for (key, explosion) in pack.explosions.iter().filter(|(_, e)| !e.shape.is_empty()) {
+            // A shape no package converted, such as a path naming a folder
+            // the game does not have (HE Grenade's `Weapon_Rocket Launcher`,
+            // with a space), means no shape: the explosion keeps its
+            // particles, lights, sounds and damage. Torque found no file
+            // there either, so the original drew none.
+            let Some((resource, file)) = pack
+                .resources
+                .iter()
+                .find(|r| {
+                    r.path.eq_ignore_ascii_case(&explosion.shape) && r.native_file.is_some()
+                })
+                .and_then(|r| Some((r, r.native_file.as_deref()?)))
+            else {
+                bri_console::warn(format!(
+                    "Explosion {}: shape {} is not provided by the game or any Add-On, so it shows without one",
+                    explosion.name, explosion.shape
+                ));
+                continue;
+            };
             // An Add-On's explosion shape that does not load is a cosmetic
             // fault (`crate::cosmetic`): the explosion keeps its particles,
             // lights and sounds and loses only the shape.
-            let owner = pack
-                .resources
-                .iter()
-                .find(|r| r.path.eq_ignore_ascii_case(&explosion.shape))
-                .and_then(|r| {
-                    let dir = r.package.as_ref()?;
-                    Some(bri_package::library::add_on_label(&bri_weapons::resource_root(&root, r), dir))
+            let owner = resource
+                .package
+                .as_ref()
+                .map(|dir| {
+                    bri_package::library::add_on_label(
+                        &bri_weapons::resource_root(&root, resource),
+                        dir,
+                    )
                 })
                 .or_else(|| key.split_once(':').map(|(package, _)| package.to_string()));
             let model = (|| -> Result<Model> {
-            let (resource, file) = pack
-                .resources
-                .iter()
-                .find(|r| r.path.eq_ignore_ascii_case(&explosion.shape))
-                .and_then(|r| Some((r, r.native_file.as_deref()?)))
-                .with_context(|| format!("Unconverted explosion shape {}", explosion.shape))?;
             let shape: Shape = serde_json::from_slice(&crate::materials::read_resource(
                 &bri_weapons::resource_root(&root, resource),
                 file,
@@ -276,6 +290,60 @@ mod tests {
         assert_eq!(sample(&keys, 2.0), Some(Vec3::splat(5.0)));
         assert_eq!(sample1(&[1.0, 0.0], 0.5), Some(0.5));
         assert_eq!(sample1(&[], 0.5), None);
+    }
+    #[test]
+    fn an_explosion_whose_shape_no_package_converted_loads_without_one() -> Result<()> {
+        // HE Grenade names `Weapon_Rocket Launcher` (a space) where the game
+        // has `Weapon_Rocket_Launcher`; another explosion names a shape whose
+        // conversion failed. Neither stops the load or the explosion.
+        let explosion = |name: &str, shape: &str| bri_weapons::ExplosionInfo {
+            name: name.into(),
+            sound: String::new(),
+            shake: None,
+            shape: shape.into(),
+            seconds: 0.5,
+            play_speed: 1.0,
+            face_viewer: true,
+            scale: [1.0; 3],
+            sizes: Vec::new(),
+        };
+        let pack = bri_weapons::Pack {
+            effects: Default::default(),
+            schema_version: bri_weapons::SCHEMA,
+            id: "test".into(),
+            items: Default::default(),
+            images: Default::default(),
+            projectiles: Default::default(),
+            damage_types: Default::default(),
+            explosions: [
+                (
+                    "hegrenadeexplosion".into(),
+                    explosion(
+                        "hegrenadeExplosion",
+                        "Add-Ons/Weapon_Rocket Launcher/explosionSphere1.dts",
+                    ),
+                ),
+                (
+                    "brokenexplosion".into(),
+                    explosion("brokenExplosion", "Add-Ons/Weapon_Broken/shape.dts"),
+                ),
+            ]
+            .into(),
+            sounds: Default::default(),
+            definitions: Vec::new(),
+            resources: vec![bri_weapons::Resource {
+                path: "Add-Ons/Weapon_Broken/shape.dts".into(),
+                sha256: "0".repeat(64),
+                native_file: None,
+                diagnostics: vec!["DTS conversion: unsupported".into()],
+                package: None,
+            }],
+            diagnostics: Vec::new(),
+        };
+        let root = tempfile::tempdir()?;
+        let shapes = ExplosionShapes::load(&pack, root.path())?;
+        assert!(shapes.models.is_empty());
+        Ok(())
     }
     #[test]
     #[ignore = "requires generated native weapons-pack-009; CPU only"]
