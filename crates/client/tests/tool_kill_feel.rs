@@ -98,6 +98,7 @@ impl Screen {
     async fn open(name: &'static str, connected: Connected) -> Result<Self> {
         let mut worker = Worker::start(
             &tokio::runtime::Handle::current(),
+            Default::default(),
             async move { Ok(connected) },
         );
         match tokio::time::timeout(Duration::from_secs(10), worker.events.recv()).await? {

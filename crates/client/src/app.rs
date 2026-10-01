@@ -3092,7 +3092,7 @@ impl App {
         progress.set_subject(&map);
         let reporting = progress.clone();
         let host_runtime = self.host_runtime.handle().clone();
-        let worker = Worker::start(self.runtime.handle(), async move {
+        let worker = Worker::start(self.runtime.handle(), progress.clone(), async move {
             let identity_file = state_dir.join("client.identity");
             let native_identity = tokio::task::spawn_blocking(move || {
                 bri_identity::ClientIdentity::load_or_create(identity_file)
@@ -3443,7 +3443,7 @@ impl App {
             .any(|s| s.invite.as_deref() == Some(address.trim()));
         let identity_changed = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let changed = identity_changed.clone();
-        let worker = Worker::start(self.runtime.handle(), async move {
+        let worker = Worker::start(self.runtime.handle(), progress.clone(), async move {
             let route = target.resolve().await?;
             let address = route.address;
             let pins = pins_file.clone();

@@ -63,4 +63,6 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_
 
 [dev-dependencies]
 tempfile = "3"
+# Paused clocks for the loading watchdog tests.
+tokio = { version = "1", features = ["test-util"] }
 bri-addon-import = { path = "../addon-import" }

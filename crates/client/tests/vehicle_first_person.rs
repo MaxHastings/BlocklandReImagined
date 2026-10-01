@@ -49,7 +49,26 @@ fn step(app: &mut App, dt: Duration) -> Result<()> {
     ensure!(app.pump()?.is_empty(), "Unexpected window command");
     Ok(())
 }
-/// Run every app for `seconds`, or until `ready` (failing after `secs`).
+/// The newest server tick every app has seen; None until all are in game.
+fn seen_tick(apps: &[&mut App]) -> Option<u64> {
+    apps.iter()
+        .map(|a| a.network_view().map(|v| v.tick))
+        .collect::<Option<Vec<_>>>()?
+        .into_iter()
+        .min()
+}
+/// Server ticks in `seconds` of game time (120 a second).
+fn ticks(seconds: f32) -> u64 {
+    (f64::from(seconds) * 120.0).ceil() as u64
+}
+/// A wait that stops advancing for this many times its budget of wall time
+/// has a stopped game, not a slow one.
+const STALLED: u32 = 20;
+/// Step every app until `ready`. `secs` is game time: once every app is in
+/// game it counts the server ticks all of them have seen, so a loaded
+/// machine that slows the hosted game (its ticker skips missed ticks) and
+/// the clients (whose motion drops time past 12 ticks a frame) stretches
+/// the wait with them. Before that (loading, joining) it is wall time.
 fn until(
     apps: &mut [&mut App],
     what: &str,
@@ -58,6 +77,8 @@ fn until(
 ) -> Result<()> {
     let start = Instant::now();
     let mut previous = start;
+    let mut first_tick = None;
+    let budget = Duration::from_secs(secs);
     loop {
         let now = Instant::now();
         for app in apps.iter_mut() {
@@ -67,17 +88,26 @@ fn until(
         if ready(apps)? {
             return Ok(());
         }
+        let tick = seen_tick(apps);
+        first_tick = first_tick.or(tick);
+        let spent = match (first_tick, tick) {
+            (Some(first), Some(tick)) => tick - first >= ticks(secs as f32),
+            _ => start.elapsed() >= budget,
+        };
+        ensure!(!spent, "Timed out waiting for {what}");
         ensure!(
-            start.elapsed() < Duration::from_secs(secs),
-            "Timed out waiting for {what}"
+            start.elapsed() < budget * STALLED + Duration::from_secs(60),
+            "Timed out waiting for {what}: the game stopped advancing"
         );
         thread::sleep(Duration::from_millis(8));
     }
 }
+/// Let `seconds` of game time pass: server ticks every app has seen.
 fn run_for(apps: &mut [&mut App], seconds: f32) -> Result<()> {
-    let start = Instant::now();
-    until(apps, "time", 600, |_| {
-        Ok(start.elapsed().as_secs_f32() >= seconds)
+    let start = seen_tick(apps).context("waiting in game time out of game")?;
+    let end = start + ticks(seconds);
+    until(apps, "time", seconds.ceil() as u64 + 5, |a| {
+        Ok(seen_tick(a).is_some_and(|t| t >= end))
     })
 }
 fn in_game(app: &App) -> bool {
@@ -527,6 +557,81 @@ fn nose(app: &App) -> Option<(f32, f32)> {
     Some((forward.y.asin(), Vec3::from(pose.velocity).length()))
 }
 
+/// Looks in the push, each `PUSH_FRAME` apart.
+const PUSH_LOOKS: u64 = 30;
+/// One 60 Hz frame (a hair over, so every frame runs two 120 Hz moves).
+const PUSH_FRAME: Duration = Duration::from_nanos(16_667_000);
+/// Moves the client may send ahead of the host's newest pose.
+const MOVES_AHEAD: u64 = 4;
+/// Server ticks the host's newest move must stay put, with none being sent,
+/// for every move sent to have arrived and been run.
+const MOVES_SETTLE: u64 = 120;
+/// The host's poses of one vehicle, oldest first: the newest of the
+/// driver's moves each includes, its tick, and the nose's pitch.
+#[derive(Default)]
+struct Poses(Vec<(u64, u64, f32)>);
+impl Poses {
+    fn note(&mut self, app: &App, vehicle: u64) {
+        let Some(pose) = app
+            .network_view()
+            .and_then(|v| v.vehicle_poses.get(&vehicle))
+        else {
+            return;
+        };
+        if self.0.last().is_some_and(|p| p.1 >= pose.tick) {
+            return;
+        }
+        let forward = Quat::from_array(pose.rotation) * Vec3::NEG_Z;
+        self.0
+            .push((pose.driver_input, pose.tick, forward.y.asin()));
+    }
+    fn newest_move(&self) -> u64 {
+        self.0.last().map_or(0, |p| p.0)
+    }
+    /// The host ran no move for `MOVES_SETTLE` ticks: a seated driver's
+    /// queue runs at least one a tick, so it is empty.
+    fn moves_settled(&self) -> bool {
+        let Some(&(newest, tick, _)) = self.0.last() else {
+            return false;
+        };
+        self.0
+            .iter()
+            .find(|p| p.0 == newest)
+            .is_some_and(|p| tick - p.1 >= MOVES_SETTLE)
+    }
+}
+/// Step `app` without advancing its own time, so it sends no moves, while
+/// the host runs on, until `ready` holds for the poses seen.
+fn hold_moves(
+    app: &mut App,
+    vehicle: u64,
+    poses: &mut Poses,
+    what: &str,
+    ready: impl Fn(&Poses) -> bool,
+) -> Result<()> {
+    let apps = [app];
+    let first = seen_tick(&apps).context("held out of game")?;
+    let start = Instant::now();
+    let budget = Duration::from_secs(10);
+    loop {
+        step(apps[0], Duration::ZERO)?;
+        poses.note(apps[0], vehicle);
+        if ready(poses) {
+            return Ok(());
+        }
+        let tick = seen_tick(&apps).context("left the game")?;
+        ensure!(
+            tick - first < ticks(budget.as_secs_f32()),
+            "Timed out waiting for {what}"
+        );
+        ensure!(
+            start.elapsed() < budget * STALLED + Duration::from_secs(60),
+            "Timed out waiting for {what}: the game stopped advancing"
+        );
+        thread::sleep(Duration::from_millis(2));
+    }
+}
+
 /// Through the whole app: take off in a Flying Wheeled Jeep (mouse-steered
 /// like the Stunt Plane) in first person, push the mouse up, and return how
 /// far the host's pose and this client's predicted view pitched. `invert`
@@ -551,10 +656,10 @@ fn mouse_up_pitch(
         .prefs
         .set("$Pref::Server::Port", port.to_string());
     if let Some(invert) = invert {
-        host.ui
-            .core
-            .prefs
-            .set("$Pref::Input::VehicleMouseInvert", if invert { "1" } else { "0" });
+        host.ui.core.prefs.set(
+            "$Pref::Input::VehicleMouseInvert",
+            if invert { "1" } else { "0" },
+        );
     }
     request(
         &mut host,
@@ -573,11 +678,16 @@ fn mouse_up_pitch(
     run_for(&mut [&mut host], 1.0)?;
     load_vehicle(&mut host, &state.join("Host"), FLYING_JEEP)?;
     until(&mut [&mut host], "the jeep", 60, |a| {
-        Ok(a[0].network_view().is_some_and(|v| !v.vehicle_poses.is_empty()))
+        Ok(a[0]
+            .network_view()
+            .is_some_and(|v| !v.vehicle_poses.is_empty()))
     })?;
     run_for(&mut [&mut host], 1.0)?;
     board(&mut [&mut host], 0)?;
-    ensure!(seat(&host).is_some_and(|(_, s)| s == 0), "not in the driver's seat");
+    ensure!(
+        seat(&host).is_some_and(|(_, s)| s == 0),
+        "not in the driver's seat"
+    );
     if host.controls.third_person_view() {
         request(
             &mut host,
@@ -589,11 +699,27 @@ fn mouse_up_pitch(
         Ok(nose(a[0]).is_some_and(|(_, speed)| speed > 39.0))
     })?;
     run_for(&mut [&mut host], 3.0)?;
-    let (before, _) = nose(&host).context("nose")?;
+    let (vehicle, _) = seat(&host).context("seat")?;
+    // The host's poses of the jeep from here on: the newest move of the
+    // driver's each includes, the tick, and the nose.
+    let mut poses = Poses::default();
+    poses.note(&host, vehicle);
+    let started = poses.0.last().context("no jeep pose")?.0;
     render(&mut host, gpu, renderer)?;
     let view_before = host.rendered_camera().context("camera")?.2;
-    // Mouse up: the OS reports y shrinking.
-    for _ in 0..30 {
+    // Mouse up: the OS reports y shrinking. Each look is followed by one
+    // 60 Hz frame of the client's time, so the push is the same moves
+    // however slow the machine: a look in every other move. Frames wait for
+    // the host to take the moves already sent, so they never pile up.
+    for look in 0..PUSH_LOOKS {
+        let taken = started + (2 * look).saturating_sub(MOVES_AHEAD);
+        hold_moves(
+            &mut host,
+            vehicle,
+            &mut poses,
+            "the host to take the push",
+            |p| p.newest_move() >= taken,
+        )?;
         request(
             &mut host,
             UiAction::Game(GameAction::Look {
@@ -601,15 +727,35 @@ fn mouse_up_pitch(
                 pitch: -0.03,
             }),
         )?;
-        run_for(&mut [&mut host], 1.0 / 60.0)?;
+        step(&mut host, PUSH_FRAME)?;
+        poses.note(&host, vehicle);
     }
+    // The predicted view as the push ends.
+    render(&mut host, gpu, renderer)?;
+    let view_after = host.rendered_camera().context("camera")?.2;
+    // The host's nose as the push ends: from the pose with the push's last
+    // move. With no more moves sent the host runs off what is queued and
+    // then repeats the last move, as it would were they still coming.
+    hold_moves(
+        &mut host,
+        vehicle,
+        &mut poses,
+        "the host to take every move",
+        |p| p.moves_settled(),
+    )?;
+    let last = poses.newest_move();
     // Read as the push ends. At take-off speed the jeep's lift only just
     // carries it, so it skims the ground on v20's springs, which damp only
     // compression: a moment later a dipped nose can strike the ground and
     // bounce up, whichever way the mouse went.
-    let (after, _) = nose(&host).context("nose")?;
-    render(&mut host, gpu, renderer)?;
-    let view_after = host.rendered_camera().context("camera")?.2;
+    let after = poses.0.iter().find(|p| p.0 >= last).context("nose")?.2;
+    let before = poses
+        .0
+        .iter()
+        .rev()
+        .find(|p| p.0 + 2 * PUSH_LOOKS <= last)
+        .unwrap_or(&poses.0[0])
+        .2;
     request(&mut host, UiAction::Disconnect)?;
     host.gpu_stopped();
     let _ = std::fs::remove_dir_all(&state);
@@ -628,8 +774,14 @@ fn invert_mouse_in_vehicles_turns_the_nose_both_ways_through_the_app() -> Result
         let (host, view) = mouse_up_pitch(invert, &gpu, &mut renderer)?;
         println!("invert {invert:?}: host nose {host:+.3}, predicted view {view:+.3}");
         let sign = if down { -1.0 } else { 1.0 };
-        ensure!(host * sign > 0.01, "invert {invert:?}: host nose moved {host}");
-        ensure!(view * sign > 0.01, "invert {invert:?}: predicted view moved {view}");
+        ensure!(
+            host * sign > 0.01,
+            "invert {invert:?}: host nose moved {host}"
+        );
+        ensure!(
+            view * sign > 0.01,
+            "invert {invert:?}: predicted view moved {view}"
+        );
     }
     Ok(())
 }
@@ -810,8 +962,7 @@ fn the_tank_turret_keeps_its_aim_through_seat_changes_for_gunner_and_watcher() -
     let pose = view.vehicle_poses.values().next().context("no tank")?;
     let forward = Quat::from_array(pose.rotation) * Vec3::NEG_Z;
     let along = forward.x.atan2(-forward.z) - aim[0];
-    let off = (guest.controls.yaw - along + std::f32::consts::PI)
-        .rem_euclid(std::f32::consts::TAU)
+    let off = (guest.controls.yaw - along + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
         - std::f32::consts::PI;
     ensure!(off.abs() < 0.1, "the gunner looks {off} off the barrel");
     for app in [&mut guest, &mut host] {
