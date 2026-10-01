@@ -841,6 +841,17 @@ impl Session {
         }
         Ok(())
     }
+    /// A blast's or a shot's push: the vehicle's `blast_scale` times it.
+    pub(super) fn blast_vehicle(&mut self, vehicle: u64, position: Vec3, impulse: Vec3) {
+        let scale = self
+            .vehicles
+            .world
+            .as_ref()
+            .and_then(|w| w.definition_of(VehicleId(vehicle)))
+            .and_then(|d| d.blast_scale)
+            .unwrap_or(1.0);
+        self.push_vehicle(vehicle, position, impulse * scale);
+    }
     pub(super) fn push_vehicle(&mut self, vehicle: u64, position: Vec3, impulse: Vec3) {
         if let Some(world) = &mut self.vehicles.world {
             let _ = world.apply_impulse(

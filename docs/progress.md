@@ -8533,3 +8533,21 @@ Max: "the steel ball when it hits a player should keep going not stop".
   "IN A MINIGAME" — the ball keeps over 75% of its speed through the hit
   and still rolls after 1.5 s; a 300 kg crate slows more but
   never bounces back). It fails without the fix (20.6 → -2.1).
+
+## Blasts knock the Steel Ball about (v0.1.11)
+
+Max: "explosions from rockets or tank shells don't move steel ball in
+v0.1.10".
+- Blasts did reach the ball: v20's radius impulse divides by the
+  vehicle's mass, so a rocket-sized push (4000, from v20 memory, not
+  checked against content here) moved the 900 kg ball under 4 units in two
+  seconds, from a hit beside it.
+- New generic vehicle field `blast_scale` (default 1): weapon and blast
+  impulses on a vehicle (`Session::blast_vehicle`, from weapon `Impulse`
+  events and the `radiusImpulse` brick event) are scaled by it. Contacts
+  and the click flip still go by mass. The Steel Ball sets 3.
+- Test: `bri-sim --test showcase
+  rockets_and_tank_shells_knock_the_steel_ball_away` (a synthetic rocket
+  and tank shell exploding on the ground 2.5 units beside the ball, in and
+  out of minigames, roll it more than 6 units in two seconds; 3.75 without
+  the scale).
