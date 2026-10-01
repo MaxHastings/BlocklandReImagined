@@ -11,7 +11,7 @@
 //!   new server tick) for [`STALL`]: it has stopped, not slowed;
 //! - no app is loading or in game and none has changed for [`STALL`];
 //! - an app's connection fails during the wait.
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use bri_client::app::App;
 use bri_ui::api::ConnectionState;
 use std::{
@@ -152,4 +152,45 @@ pub fn until_one(
         |apps, elapsed| step(&mut *apps[0], elapsed),
         |apps| Ok(ready(&*apps[0])),
     )
+}
+
+/// The server tick every app has seen, or `None` while one is out of game.
+pub fn seen_tick(apps: &[&mut App]) -> Option<u64> {
+    apps.iter()
+        .map(|a| a.network_view().map(|v| v.tick))
+        .collect::<Option<Vec<_>>>()?
+        .into_iter()
+        .min()
+}
+
+/// Let `time` of game time pass (server ticks every app has seen), never
+/// wall time: a loaded machine slows the game, and a test that holds a key
+/// for a wall-clock while would move a slowed player less, or not at all.
+/// Fails out of game.
+pub fn run_for(
+    apps: &mut [&mut App],
+    time: Duration,
+    step: impl FnMut(&mut [&mut App], Duration) -> Result<()>,
+) -> Result<()> {
+    let start = seen_tick(apps).context("waiting in game time out of game")?;
+    let end = start + ticks(time);
+    // The budget only catches a hang: the wait ends at `time`.
+    until(
+        apps,
+        "game time to pass",
+        time + Duration::from_secs(5),
+        step,
+        |a| Ok(seen_tick(a).is_some_and(|t| t >= end)),
+    )
+}
+
+/// [`run_for`] for one app.
+pub fn run_one_for(
+    app: &mut App,
+    time: Duration,
+    mut step: impl FnMut(&mut App, Duration) -> Result<()>,
+) -> Result<()> {
+    run_for(&mut [app], time, |apps, elapsed| {
+        step(&mut *apps[0], elapsed)
+    })
 }
