@@ -272,10 +272,15 @@ pub enum Op {
     /// Tie `player` to `anchor` with a rope `length` long (`None`: exactly
     /// as long as it spans now): they move freely within it and swing on
     /// it (the player motor's `Tether`). `brick`
-    /// ties it to that brick, and the rope breaks when the brick goes.
-    /// `reel` is how fast `TetherLength` changes it and `swing` how hard
-    /// the movement keys push a hanging player (the engine's defaults
-    /// otherwise). A player has one rope; a new one replaces it.
+    /// ties it to that brick, and the rope breaks when the brick goes;
+    /// `object` ties it to that spot on a player, vehicle or entity, which
+    /// carries the anchor along as it moves and turns, and the rope breaks
+    /// when it goes. `reel` is how fast `TetherLength` changes it and
+    /// `swing` how hard the movement keys push a hanging player (the
+    /// engine's defaults otherwise). `keys` (`[shortest, longest]`) lets
+    /// the player's jump and crouch keys reel it in and out between those.
+    /// With `straight`, reeling in draws the player straight along it.
+    /// A player has one rope; a new one replaces it.
     Tether {
         player: u64,
         anchor: [f32; 3],
@@ -283,6 +288,12 @@ pub enum Op {
         brick: Option<u64>,
         reel: Option<f32>,
         swing: Option<f32>,
+        #[serde(default)]
+        object: Option<ObjectRef>,
+        #[serde(default)]
+        keys: Option<[f32; 2]>,
+        #[serde(default)]
+        straight: bool,
     },
     /// Reel `player`'s rope toward `length`.
     TetherLength {
@@ -607,14 +618,22 @@ impl Op {
             Self::Tether {
                 anchor,
                 length,
+                brick,
                 reel,
                 swing,
+                object,
+                keys,
                 ..
             } => {
+                let span = MIN_TETHER_LENGTH..=MAX_TETHER_LENGTH;
                 finite(anchor)
-                    && length.is_none_or(|l| (MIN_TETHER_LENGTH..=MAX_TETHER_LENGTH).contains(&l))
+                    && length.is_none_or(|l| span.contains(&l))
                     && reel.is_none_or(|r| (0.0..=MAX_TETHER_REEL).contains(&r))
                     && swing.is_none_or(|s| (0.0..=MAX_TETHER_SWING).contains(&s))
+                    && !(brick.is_some() && object.is_some())
+                    && keys.is_none_or(|[short, long]| {
+                        span.contains(&short) && span.contains(&long) && short <= long
+                    })
             }
             Self::TetherLength { length, .. } => {
                 (MIN_TETHER_LENGTH..=MAX_TETHER_LENGTH).contains(length)

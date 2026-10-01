@@ -435,6 +435,10 @@ mod tests {
                     target: f32::MAX,
                     reel: f32::MAX,
                     swing: f32::MAX,
+                    drift: [f32::MAX; 3],
+                    keys: Some([f32::MAX; 2]),
+                    winding: i8::MAX,
+                    straight: true,
                 }),
             },
         });

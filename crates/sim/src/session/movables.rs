@@ -118,11 +118,22 @@ pub(super) struct Movables {
     /// Players thrown by a hold: their velocity last tick, and the tick
     /// after which an impact no longer tumbles them.
     thrown: BTreeMap<OwnerId, (Vec3, u64)>,
-    /// Players on a rope (`tether`), and the brick it is tied to.
-    tethers: BTreeMap<OwnerId, Option<BrickId>>,
+    /// Players on a rope (`tether`), and what it is tied to.
+    tethers: BTreeMap<OwnerId, Tie>,
     /// A smashing vehicle's energy left after what it broke this tick, so
     /// several contacts in one tick share one hit's energy.
     smash_energy: BTreeMap<u64, (u64, f32)>,
+}
+
+/// What a rope is tied to, beyond its point in the world.
+#[derive(Clone, Copy, Debug, Default)]
+struct Tie {
+    /// A brick: the rope breaks when it goes.
+    brick: Option<BrickId>,
+    /// A player, vehicle or entity, and where on it: in its body's own
+    /// frame (`in_body`, a vehicle's physics body, so the spot turns with
+    /// it), else as an offset from its middle. The anchor follows it.
+    object: Option<(ObjectRef, Vec3, bool)>,
 }
 
 /// How fast a rope reels unless told otherwise, units a second.
@@ -222,14 +233,15 @@ impl Session {
         self.movables
             .tethers
             .iter()
-            .filter_map(|(player, brick)| {
+            .filter_map(|(player, tie)| {
                 let t = self.peers.get(player)?.player.state().tether?;
                 Some(TetherView {
                     player: *player,
                     anchor: t.anchor,
                     length: t.length,
                     target: t.target,
-                    brick: *brick,
+                    brick: tie.brick,
+                    object: tie.object.map(|(o, _, _)| o),
                 })
             })
             .collect()
@@ -245,21 +257,56 @@ impl Session {
             let _ = peer.player.set_tether(None);
         }
     }
+    /// Where the spot `at` on `target` is now and how fast it moves, as
+    /// a rope tied there sees it (`Tie::object`).
+    fn tie_point(&self, target: ObjectRef, at: Vec3, in_body: bool) -> Option<(Vec3, Vec3)> {
+        if in_body {
+            let b = self.simulation.physics.bodies.get(self.held_body(target)?)?;
+            let arm = b.position().rotation * at;
+            return Some((b.center_of_mass() + arm, b.linvel() + b.angvel().cross(arm)));
+        }
+        Some((
+            self.object_centre(target)? + at,
+            self.object_velocity(target).unwrap_or_default(),
+        ))
+    }
     /// Ropes whose player died, sat down, tumbled or left, whose brick
-    /// went, or that the motor broke, are gone.
+    /// or object went, or that the motor broke, are gone; ropes tied to
+    /// something moving follow it.
     fn step_tethers(&mut self) {
-        let tethered: Vec<(OwnerId, Option<BrickId>)> =
-            self.movables.tethers.iter().map(|(p, b)| (*p, *b)).collect();
-        for (player, brick) in tethered {
+        let tethered: Vec<(OwnerId, Tie)> =
+            self.movables.tethers.iter().map(|(p, t)| (*p, *t)).collect();
+        for (player, tie) in tethered {
+            let brick = tie.brick;
+            let moved = match tie.object {
+                None => Some(None),
+                Some((target, at, in_body)) => (self.target_alive(target)
+                    && target != ObjectRef::Player(player))
+                .then(|| self.tie_point(target, at, in_body))
+                .flatten()
+                .filter(|(point, velocity)| {
+                    point.is_finite()
+                        && velocity.length() <= crate::player::MAX_TETHER_DRIFT
+                })
+                .map(Some),
+            };
             let keep = self.peers.get(&player).is_some_and(|peer| {
                 peer.combat.alive
                     && peer.control == super::control::ControlObject::Player
                     && peer.player.state().tether.is_some()
             }) && !self.seated(player)
                 && self.ridden(player).is_none()
-                && brick.is_none_or(|b| self.simulation.state().bricks.contains_key(&b));
+                && brick.is_none_or(|b| self.simulation.state().bricks.contains_key(&b))
+                && moved.is_some();
             if !keep {
                 self.untether(player);
+            } else if let Some(Some((point, velocity))) = moved
+                && let Some(peer) = self.peers.get_mut(&player)
+                && let Some(mut tether) = peer.player.state().tether
+            {
+                tether.anchor = point.into();
+                tether.drift = velocity.into();
+                let _ = peer.player.set_tether(Some(tether));
             }
         }
     }
@@ -691,11 +738,41 @@ impl Session {
                 brick,
                 reel,
                 swing,
+                object,
+                keys,
+                straight,
             } => {
                 ensure!(
                     caller.is_none_or(|c| c == player),
                     "A player is roped only by their own command"
                 );
+                ensure!(
+                    object != Some(ObjectRef::Player(player)),
+                    "A player cannot tie a rope to themselves"
+                );
+                let tie_object = match object {
+                    None => None,
+                    Some(target) => {
+                        ensure!(
+                            self.target_alive(target),
+                            "No living {target} to tie a rope to"
+                        );
+                        let in_body = !matches!(target, ObjectRef::Player(_))
+                            && self.held_body(target).is_some();
+                        let at = if in_body {
+                            let b = &self.simulation.physics.bodies
+                                [self.held_body(target).context("No body")?];
+                            b.position().rotation.inverse()
+                                * (Vec3::from(anchor) - b.center_of_mass())
+                        } else {
+                            Vec3::from(anchor)
+                                - self
+                                    .object_centre(target)
+                                    .with_context(|| format!("No {target} to tie a rope to"))?
+                        };
+                        Some((target, at, in_body))
+                    }
+                };
                 ensure!(!self.seated(player), "A seated player cannot be roped");
                 ensure!(
                     self.ridden(player).is_none(),
@@ -725,8 +802,18 @@ impl Session {
                     target: length,
                     reel: reel.unwrap_or(TETHER_REEL),
                     swing: swing.unwrap_or(TETHER_SWING),
+                    drift: [0.0; 3],
+                    keys,
+                    winding: 0,
+                    straight,
                 }))?;
-                self.movables.tethers.insert(player, brick);
+                self.movables.tethers.insert(
+                    player,
+                    Tie {
+                        brick,
+                        object: tie_object,
+                    },
+                );
                 Ok(())
             }
             Op::TetherLength { player, length } => {
@@ -737,7 +824,10 @@ impl Session {
                 if let Some(peer) = self.peers.get_mut(&player)
                     && let Some(mut tether) = peer.player.state().tether
                 {
+                    // The script takes over from the winch keys: letting go of
+                    // one later does not stop this reel.
                     tether.target = length;
+                    tether.winding = 0;
                     peer.player.set_tether(Some(tether))?;
                 }
                 Ok(())

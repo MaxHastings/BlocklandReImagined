@@ -25,6 +25,9 @@
     { "id": "grapple-rope-tool", "path": "showcase/grapple-rope-tool", "enabled": false },
     { "id": "grapple-rope", "path": "showcase/grapple-rope", "enabled": false },
     { "id": "grapple-rope-fx", "path": "showcase/grapple-rope-fx", "enabled": false },
+    { "id": "grappling-hook-tool", "path": "showcase/grappling-hook-tool", "enabled": false },
+    { "id": "grappling-hook", "path": "showcase/grappling-hook", "enabled": false },
+    { "id": "grappling-hook-fx", "path": "showcase/grappling-hook-fx", "enabled": false },
     {
       "id": "advanced-duplicator-tool",
       "path": "advanced-duplicator/advanced-duplicator-tool",

@@ -163,6 +163,9 @@ pub struct TetherView {
     pub target: f32,
     /// The brick it is tied to, if any.
     pub brick: Option<u64>,
+    /// The player, vehicle or entity it is tied to, if any.
+    #[serde(default)]
+    pub object: Option<ObjectRef>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntityView {
@@ -1242,8 +1245,10 @@ fn tumble_op(player: Dynamic, x: Dynamic, y: Dynamic, z: Dynamic, by: Dynamic) -
 
 fn tether_op(player: Dynamic, anchor: Array, length: Dynamic, options: rhai::Map) -> Fallible<()> {
     for key in options.keys() {
-        if !matches!(key.as_str(), "brick" | "reel" | "swing") {
-            return fail(format!("tether has no option `{key}` (brick, reel, swing)"));
+        if !matches!(key.as_str(), "brick" | "object" | "reel" | "swing" | "keys" | "straight") {
+            return fail(format!(
+                "tether has no option `{key}` (brick, object, reel, swing, keys, straight)"
+            ));
         }
     }
     let a = anchor.iter().map(float).collect::<Fallible<Vec<f32>>>()?;
@@ -1254,6 +1259,20 @@ fn tether_op(player: Dynamic, anchor: Array, length: Dynamic, options: rhai::Map
     let brick = match option("brick") {
         None => None,
         Some(b) => Some(id(b)?),
+    };
+    let object = option("object").map(object_ref).transpose()?;
+    let keys = match option("keys") {
+        None => None,
+        Some(k) => {
+            let Some(k) = k.clone().try_cast::<Array>() else {
+                return fail("tether's keys are [shortest, longest]");
+            };
+            let k = k.iter().map(float).collect::<Fallible<Vec<f32>>>()?;
+            let [short, long] = k[..] else {
+                return fail("tether's keys are [shortest, longest]");
+            };
+            Some([short, long])
+        }
     };
     push(Op::Tether {
         player: id(&player)?,
@@ -1266,6 +1285,13 @@ fn tether_op(player: Dynamic, anchor: Array, length: Dynamic, options: rhai::Map
         brick,
         reel: option("reel").map(float).transpose()?,
         swing: option("swing").map(float).transpose()?,
+        object,
+        keys,
+        straight: match option("straight").map(Dynamic::as_bool) {
+            None => false,
+            Some(Ok(straight)) => straight,
+            Some(Err(_)) => return fail("tether's straight is true or false"),
+        },
     })
 }
 
@@ -1421,6 +1447,11 @@ fn register_physics(engine: &mut Engine) {
                         "brick".into(),
                         t.brick.map_or(Dynamic::UNIT, |b| Dynamic::from_int(b as i64)),
                     );
+                    map.insert(
+                        "object".into(),
+                        t.object
+                            .map_or(Dynamic::UNIT, |o| Dynamic::from(o.to_string())),
+                    );
                     Dynamic::from_map(map)
                 }))
         })
@@ -1431,7 +1462,8 @@ fn register_physics(engine: &mut Engine) {
             tether_op(player, anchor, length, rhai::Map::new())
         },
     );
-    // `tether(player, [x, y, z], length, #{ brick: id, reel: r, swing: s })`:
+    // `tether(player, [x, y, z], length, #{ brick: id, object: ref, reel: r,
+    // swing: s, keys: [shortest, longest], straight: true })`:
     // every option may be left out; a length of `()` is as long as the
     // rope spans now.
     engine.register_fn("tether", tether_op);

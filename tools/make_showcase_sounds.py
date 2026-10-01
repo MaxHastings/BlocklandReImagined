@@ -210,9 +210,74 @@ def grapple_rope():
     write(out / 'zip.wav', fade_out(mix((hiss, 0.5), (ticks, 1.0))), peak=0.6)
 
 
+def grappling_hook():
+    rng.seed(SEED + 3)
+    out = ROOT / 'grappling-hook-fx' / 'client' / 'sounds'
+    # The shot: a sharp pneumatic crack, then the cable hissing out of the
+    # drum.
+    n = int(0.45 * RATE)
+    crack = envelope(lowpass(noise(0.45), 6000), 0.0002, 0.012)
+    thump = envelope(sweep(0.45, 160, 60), 0.0005, 0.03)
+    spool = [x * math.exp(-i / (0.18 * RATE)) for i, x in enumerate(lowpass(noise(0.45), 2200))]
+    write(out / 'fire.wav', fade_out(mix((crack, 0.9), (thump, 1.0), (spool, 0.35))), peak=0.8)
+
+    # The bite: forged steel clanging into place, a bright ring over a
+    # hard knock.
+    m = int(0.6 * RATE)
+    ring = [0.0] * m
+    for ratio, gain, decay in [(1.0, 1.0, 0.18), (2.76, 0.6, 0.1), (5.4, 0.35, 0.06), (8.9, 0.2, 0.03)]:
+        f = 880.0 * ratio
+        for i in range(m):
+            t = i / RATE
+            ring[i] += gain * math.sin(2 * math.pi * f * t) * math.exp(-t / decay)
+    knock = envelope(sweep(0.6, 320, 140), 0.0005, 0.025)
+    write(out / 'clamp.wav', fade_out(mix((ring, 0.5), (knock, 0.9))), peak=0.8)
+
+    # The winch: an electric motor spinning up and pulling, with the pawl
+    # clicking over the ratchet.
+    w = int(0.8 * RATE)
+    motor = [0.0] * w
+    phase = 0.0
+    for i in range(w):
+        t = i / RATE
+        f = 90 + 160 * min(1.0, t / 0.15)
+        phase += 2 * math.pi * f / RATE
+        motor[i] = (math.sin(phase) + 0.5 * math.sin(2 * phase) + 0.25 * math.sin(3 * phase))
+        motor[i] *= min(1.0, t / 0.03) * (1.0 - max(0.0, (t - 0.55) / 0.25))
+    clicks = [0.0] * w
+    at = 0.04
+    while at < 0.7:
+        tick = envelope(lowpass(noise(0.012), 4500), 0.0003, 0.002)
+        start = int(at * RATE)
+        for i, x in enumerate(tick):
+            if start + i < w:
+                clicks[start + i] += x
+        at += 0.028
+    write(out / 'winch.wav', fade_out(mix((lowpass(motor, 1400), 0.8), (clicks, 0.4))), peak=0.6)
+
+    # Letting go: the pawl freed, the drum spinning the cable back in, a
+    # clack as the grapnel seats in the muzzle.
+    r = int(0.3 * RATE)
+    whirr = [0.0] * r
+    phase = 0.0
+    for i in range(r):
+        t = i / RATE
+        phase += 2 * math.pi * (400 + 900 * t / 0.3) / RATE
+        whirr[i] = math.sin(phase) * (1 - t / 0.3) * 0.6
+    hiss = lowpass(noise(0.3), 3500)
+    clack = [0.0] * r
+    seat = envelope(sweep(0.05, 900, 500), 0.0003, 0.01)
+    for i, x in enumerate(seat):
+        at = int(0.24 * RATE) + i
+        if at < r:
+            clack[at] += x
+    write(out / 'release.wav', fade_out(mix((whirr, 0.5), (hiss, 0.25), (clack, 1.0))), peak=0.6)
+
+
 if __name__ == '__main__':
     gravity_gun()
     steel_ball()
     grapple_rope()
+    grappling_hook()
     for path in sorted(ROOT.glob('*/client/sounds/*.wav')):
         print(path.relative_to(ROOT), path.stat().st_size)

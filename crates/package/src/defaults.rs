@@ -405,6 +405,9 @@ mod tests {
                 "grapple-rope-tool",
                 "grapple-rope",
                 "grapple-rope-fx",
+                "grappling-hook-tool",
+                "grappling-hook",
+                "grappling-hook-fx",
                 "advanced-duplicator-tool",
                 "advanced-duplicator"
             ]
@@ -508,6 +511,9 @@ mod tests {
                 "grapple-rope-tool",
                 "grapple-rope",
                 "grapple-rope-fx",
+                "grappling-hook-tool",
+                "grappling-hook",
+                "grappling-hook-fx",
                 "advanced-duplicator-tool",
                 "advanced-duplicator"
             ]

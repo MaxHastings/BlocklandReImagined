@@ -1,9 +1,9 @@
 # Showcase Add-Ons
 
 Add-Ons built only from what any Add-On maker gets: data, Rhai rules,
-WebAssembly and WGSL shaders. The Gravity Gun, the Steel Ball and the
-Grapple Rope are each three Add-Ons, split the way the platform splits
-sides:
+WebAssembly and WGSL shaders. The Gravity Gun, the Steel Ball, the
+Grapple Rope and the Grappling Hook are each three Add-Ons, split the way
+the platform splits sides:
 
 | Add-On | Side | What it is |
 |---|---|---|
@@ -16,6 +16,9 @@ sides:
 | `grapple-rope` | host | the rule: throw the hook where you aim, hang and swing from the brick or map it bites, climb and pay out with the wheel, let go to drop (`physics` operations; the engine's `tether` does the swinging) |
 | `grapple-rope-tool` | everyone | the launcher in your hand, the stock Printer by reference; its image runs the rule's commands on pressing and letting go of the trigger and on the mouse wheel |
 | `grapple-rope-fx` | each player | the Printer carved from jungle hardwood with bamboo bands and a vine, the braided hemp-and-vine rope sagging and snapping taut, the brass three-pronged hook and its sounds, drawn from the rule's public `rope` state |
+| `grappling-hook` | host | the rule: one click fires the grapnel and the winch pulls you straight to the brick, map, player or vehicle it bites; hang there (switching items too) until the next click; jump reels in, crouch lets out; an admin's /hookobjects limits it to bricks and the map (`tether` with `straight`, `keys` and `object`) |
+| `grappling-hook-tool` | everyone | the launcher in your hand, the stock Printer by reference; its image runs the rule's command on each click and on the mouse wheel |
+| `grappling-hook-fx` | each player | the Printer rebuilt as a riveted gunmetal winch gun with brass drum bands and a glowing gauge, the taut steel cable that buzzes as it takes the load, the forged four-claw grapnel springing open and riding along on players and vehicles, and its sounds, drawn from the rule's public `hook` state |
 | `ragdoll` | each player | a dead Blockhead goes floppy instead of the death animation (`physics.local`, `avatar.pose`); other Add-Ons can grab and throw the body |
 
 Every copy of the game carries them turned off (`"enabled": false` in
@@ -23,7 +26,8 @@ Every copy of the game carries them turned off (`"enabled": false` in
 Ragdoll is only on that player's screen and changes nothing in the game.
 The Grapple Rope is after the v20 Grapple Rope by Demian, SolarFlare and
 Uristqwerty (original code by Qwertyuiopas), rebuilt from scratch: none of
-its files are used.
+its files are used. The Grappling Hook is after the Grappling Hook by
+Conan, rebuilt the same way.
 
 Read them alongside [the modding guide](../../docs/modding/README.md).
 Generated files come from `tools/make_steel_ball_assets.py` (the ball's
@@ -32,7 +36,8 @@ sounds); each `client/main.wasm` is built from the `main.wat` beside it
 (`BRI_BLESS=1 cargo test -p bri-client-sandbox --test showcase`, and
 `--test ragdoll` for the Ragdoll).
 
-Tests: `cargo test -p bri-sim --test showcase` and `--test grapple_rope`
+Tests: `cargo test -p bri-sim --test showcase`, `--test grapple_rope` and
+`--test grappling_hook`
 (gameplay; `--test tether` for the engine's rope),
 `cargo test -p bri-net --test showcase` (a second player sees a lift and drop),
 `cargo test -p bri-client-sandbox --test showcase -- --include-ignored`

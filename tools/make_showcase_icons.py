@@ -12,6 +12,10 @@ Outputs 128x128 RGBA PNG:
     the Grapple Rope the same way: a carved wooden launcher bound with
     bamboo bands and vine, a brass muzzle, and the three-pronged hook
     sitting in it, as the launcher looks in play.
+  packages/showcase/grappling-hook-tool/assets/icons/grappling_hook.png
+    the Grappling Hook the same way: a gunmetal winch gun with a brass
+    drum wound with steel cable, and the four-claw grapnel with its red
+    band seated in the muzzle.
 
 Each model is a few rounded boxes, capsules and rings, ray marched with a
 key light, a fill and a highlight. Run it again after changing the model below; the output is the
@@ -231,26 +235,48 @@ BRASS = (0.86, 0.62, 0.24)
 VINE = (0.2, 0.5, 0.16)
 
 
-def grapple_shade(px, py):
+def march(px, py, scene):
+    """The point and normal where the ray through pixel (px, py) meets
+    `scene`, framed as the showcase launchers are; None on a miss."""
     scale = 2.35 / SIZE
     origin = to_object(((px - SIZE / 2) * scale + 0.24, (SIZE / 2 - py) * scale + 0.16, 4.0))
     ray = to_object((0.0, 0.0, -1.0))
     t = 0.0
     for _ in range(128):
         p = tuple(origin[i] + ray[i] * t for i in range(3))
-        d = grapple_scene(p)
+        d = scene(p)
         if d < 1e-3:
             break
         t += d * 0.8
         if t > 8.0:
-            return (0.0, 0.0, 0.0, 0.0)
+            return None
     else:
-        return (0.0, 0.0, 0.0, 0.0)
+        return None
     e = 1e-3
     n = norm(tuple(
-        grapple_scene(tuple(p[j] + (e if j == i else 0.0) for j in range(3)))
-        - grapple_scene(tuple(p[j] - (e if j == i else 0.0) for j in range(3)))
+        scene(tuple(p[j] + (e if j == i else 0.0) for j in range(3)))
+        - scene(tuple(p[j] - (e if j == i else 0.0) for j in range(3)))
         for i in range(3)))
+    return p, n
+
+
+def lit(n, base, gloss, power=20):
+    """`base` lit by the key, fill and highlight, facing `n`."""
+    nc = to_camera(n)
+    key = max(0.0, sum(nc[i] * KEY[i] for i in range(3)))
+    fill = max(0.0, sum(nc[i] * FILL[i] for i in range(3)))
+    half = norm((KEY[0], KEY[1], KEY[2] + 1.0))
+    spec = max(0.0, sum(nc[i] * half[i] for i in range(3))) ** power * gloss
+    light = 0.45 + 0.95 * key + 0.3 * fill
+    colour = tuple(base[i] * light + spec * 0.6 for i in range(3))
+    return (*colour, 1.0)
+
+
+def grapple_shade(px, py):
+    hit = march(px, py, grapple_scene)
+    if hit is None:
+        return (0.0, 0.0, 0.0, 0.0)
+    p, n = hit
     wood, bands, brass, vine = grapple_parts(p)
     nearest = min(wood, bands, brass, vine)
     if nearest == brass:
@@ -263,14 +289,70 @@ def grapple_shade(px, py):
         # Grain running along the barrel, darker in its streaks.
         grain = 0.5 + 0.5 * math.sin(p[1] * 38.0 + math.sin(p[0] * 6.0) * 2.0 + p[2] * 11.0)
         base, gloss = mix(WOOD_DARK, WOOD, 0.35 + 0.65 * grain), 0.25
-    nc = to_camera(n)
-    key = max(0.0, sum(nc[i] * KEY[i] for i in range(3)))
-    fill = max(0.0, sum(nc[i] * FILL[i] for i in range(3)))
-    half = norm((KEY[0], KEY[1], KEY[2] + 1.0))
-    spec = max(0.0, sum(nc[i] * half[i] for i in range(3))) ** 20 * gloss
-    light = 0.45 + 0.95 * key + 0.3 * fill
-    colour = tuple(base[i] * light + spec * 0.6 for i in range(3))
-    return (*colour, 1.0)
+    return lit(n, base, gloss)
+
+
+# ---- The Grappling Hook ----
+
+def hook_parts(p):
+    """Gunmetal (barrel, body, grip), brass (the winch drum's cheeks),
+    steel cable (wound on the drum), bright steel (the grapnel's claws)
+    and red (the band on its shank)."""
+    x, y, z = p
+    barrel = cyl_x((x, y - 0.25, z), -0.5, 0.9, 0.15)
+    body = rbox(p, (-0.62, 0.2, 0.0), (0.32, 0.2, 0.15), 0.07)
+    g = rot_z((x + 0.45, y, z), -GRIP)
+    grip = rbox(g, (0.0, -0.3, 0.0), (0.12, 0.36, 0.13), 0.06)
+    metal = smin(smin(barrel, body, 0.08), grip, 0.08)
+    # The winch drum under the barrel: brass cheeks with cable between.
+    drum_y = y - 0.02
+    cheeks = min(ring_x((x, drum_y, z), -0.05, 0.13, 0.05), ring_x((x, drum_y, z), 0.35, 0.13, 0.05))
+    coil = cyl_x((x, drum_y, z), -0.03, 0.33, 0.14, 0.02)
+    muzzle = cyl_x((x, y - 0.25, z), 0.84, 1.0, 0.19, 0.04)
+    brass = min(cheeks, muzzle)
+    # The grapnel seated in the muzzle: a shank and four claws hooked back.
+    tip = (1.38, 0.25, 0.0)
+    shank = capsule(p, (1.0, 0.25, 0.0), tip, 0.05)
+    band = capsule(p, (1.08, 0.25, 0.0), (1.16, 0.25, 0.0), 0.058)
+    claws = shank
+    for a in (0.4, 0.4 + 1.571, 0.4 + 3.142, 0.4 + 4.712):
+        c, s_ = math.cos(a), math.sin(a)
+        out = (1.3, 0.25 + 0.24 * c, 0.24 * s_)
+        back = (1.14, 0.25 + 0.28 * c, 0.28 * s_)
+        claws = min(claws, capsule(p, tip, out, 0.045), capsule(p, out, back, 0.03))
+    return metal, brass, coil, claws, band
+
+
+def hook_scene(p):
+    return min(hook_parts(p))
+
+
+GUNMETAL = (0.26, 0.28, 0.3)
+CABLE = (0.66, 0.68, 0.7)
+STEEL = (0.8, 0.82, 0.86)
+RED = (0.7, 0.1, 0.06)
+
+
+def hook_shade(px, py):
+    hit = march(px, py, hook_scene)
+    if hit is None:
+        return (0.0, 0.0, 0.0, 0.0)
+    p, n = hit
+    metal, brass, coil, claws, band = hook_parts(p)
+    nearest = min(metal, brass, coil, claws, band)
+    if nearest == brass:
+        return lit(n, BRASS, 1.0)
+    if nearest == band:
+        return lit(n, RED, 0.4)
+    if nearest == claws:
+        return lit(n, STEEL, 1.0, 30)
+    if nearest == coil:
+        # Turns of cable round the drum.
+        turns = 0.6 + 0.4 * abs(math.sin(p[0] * 70.0))
+        return lit(n, tuple(c * turns for c in CABLE), 0.8)
+    # Brushed gunmetal with a row of rivets along the body.
+    rivet = 1.0 if (abs(p[1] - 0.33) < 0.035 and (p[0] * 8.0) % 1.0 < 0.28 and p[0] < -0.35) else 0.0
+    return lit(n, mix(GUNMETAL, (0.5, 0.5, 0.52), rivet), 0.6)
 
 
 def render(model=None):
@@ -308,4 +390,7 @@ if __name__ == '__main__':
     print(out.relative_to(ROOT), out.stat().st_size)
     out = ROOT / 'grapple-rope-tool' / 'assets' / 'icons' / 'grapple_rope.png'
     out.write_bytes(png(render(grapple_shade)))
+    print(out.relative_to(ROOT), out.stat().st_size)
+    out = ROOT / 'grappling-hook-tool' / 'assets' / 'icons' / 'grappling_hook.png'
+    out.write_bytes(png(render(hook_shade)))
     print(out.relative_to(ROOT), out.stat().st_size)

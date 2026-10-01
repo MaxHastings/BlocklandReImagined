@@ -1,0 +1,138 @@
+{
+  "schema_version": 3,
+  "id": "grappling-hook-tool",
+  "items": {
+    "grappling-hook-tool:weapon/grapplinghook": {
+      "id": "grappling-hook-tool:weapon/grapplinghook",
+      "name": "GrapplingHookItem",
+      "ui_name": "Grappling Hook",
+      "image": "grappling-hook-tool:image/grapplinghook",
+      "model": "base/data/shapes/printGun.dts",
+      "icon": "icons/grappling_hook",
+      "can_drop": true,
+      "sport": false
+    }
+  },
+  "images": {
+    "grappling-hook-tool:image/grapplinghook": {
+      "id": "grappling-hook-tool:image/grapplinghook",
+      "name": "GrapplingHookImage",
+      "model": "base/data/shapes/printGun.dts",
+      "projectile": null,
+      "mount_point": 0,
+      "offset": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "eye_offset": [
+        0.7,
+        -0.55,
+        -1.2
+      ],
+      "source_rotation_degrees": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "correct_muzzle": false,
+      "melee": false,
+      "color": [
+        0.3,
+        0.32,
+        0.3,
+        1.0
+      ],
+      "color_shift": true,
+      "arm_ready": true,
+      "casing": "",
+      "min_shot_ticks": 0,
+      "states": [
+        {
+          "name": "Activate",
+          "ticks": 12,
+          "wait": true,
+          "allow_change": true,
+          "timeout": 1,
+          "down": null,
+          "up": null,
+          "ammo": null,
+          "no_ammo": null,
+          "script": "",
+          "sequence": "",
+          "sound": "weaponSwitchSound",
+          "emitter": "",
+          "emitter_node": "",
+          "emitter_seconds": 0.0,
+          "eject_shell": false
+        },
+        {
+          "name": "Ready",
+          "ticks": 0,
+          "wait": true,
+          "allow_change": true,
+          "timeout": null,
+          "down": 2,
+          "up": null,
+          "ammo": null,
+          "no_ammo": null,
+          "script": "",
+          "sequence": "",
+          "sound": "",
+          "emitter": "",
+          "emitter_node": "",
+          "emitter_seconds": 0.0,
+          "eject_shell": false
+        },
+        {
+          "name": "Fire",
+          "ticks": 0,
+          "wait": true,
+          "allow_change": true,
+          "timeout": null,
+          "down": null,
+          "up": 3,
+          "ammo": null,
+          "no_ammo": null,
+          "script": "onFire",
+          "sequence": "",
+          "sound": "",
+          "emitter": "",
+          "emitter_node": "",
+          "emitter_seconds": 0.0,
+          "eject_shell": false
+        },
+        {
+          "name": "Release",
+          "ticks": 2,
+          "wait": true,
+          "allow_change": true,
+          "timeout": 1,
+          "down": null,
+          "up": null,
+          "ammo": null,
+          "no_ammo": null,
+          "script": "",
+          "sequence": "",
+          "sound": "",
+          "emitter": "",
+          "emitter_node": "",
+          "emitter_seconds": 0.0,
+          "eject_shell": false
+        }
+      ],
+      "commands": {
+        "states": {
+          "onfire": "grappling-hook:fire"
+        },
+        "wheel": "grappling-hook:reel"
+      }
+    }
+  },
+  "projectiles": {},
+  "damage_types": {},
+  "explosions": {},
+  "definitions": [],
+  "resources": [],
+  "diagnostics": []
+}

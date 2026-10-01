@@ -710,3 +710,207 @@ fn the_grapple_rope_renders_offscreen() {
     assert!(lit(1) > lit(0), "the rope pays out as the hook flies");
     assert_ne!(images[2].pixels, images[3].pixels, "slack sags, taut is straight");
 }
+
+// ---- Grappling Hook Effects ----
+
+const WINCH: &str = "grappling-hook-tool:image/grapplinghook";
+
+/// Player 1 at `feet` looking along -z (eye 2.1 up), their hook as given:
+/// [phase, x, y, z, distance, kind, id].
+fn hook_world(feet: [f32; 3], hook: [f64; 7]) -> World {
+    let mut world = World {
+        local: 1,
+        players: vec![player(1, feet, [0.0, 0.0, -1.0])],
+        ..Default::default()
+    };
+    world
+        .state
+        .entry("grappling-hook".into())
+        .or_default()
+        .players
+        .insert(1, [("hook".to_string(), serde_json::json!(hook))].into());
+    world
+}
+
+/// The winch gun drawn in player 1's hand, as `holding_the_launcher`.
+fn holding_the_winch(world: &mut World) -> [f32; 3] {
+    let muzzle = holding_the_launcher(world);
+    world.players[0].image = WINCH.into();
+    world.image_meshes.insert(WINCH.into(), Arc::new(stand_in_gun()));
+    muzzle
+}
+
+#[test]
+fn the_grappling_hook_module_is_built_from_its_source() {
+    built_from_source("grappling-hook-fx");
+}
+
+#[test]
+fn the_grappling_hook_fires_bites_winches_and_zips_back() {
+    let (code, mut addon) = start("grappling-hook-fx");
+    assert_eq!(code.name, "Grappling Hook Effects");
+    let run = |addon: &mut AddOn, t: f32, world: World| {
+        addon.frame(frame(t, &Arc::new(world))).unwrap().clone()
+    };
+    let at = [0.0, 20.0, -16.0];
+    let anchor = glam::Vec3::from(at);
+    let idle = run(&mut addon, 0.0, hook_world([0.0; 3], [0.0; 7]));
+    assert!(idle.draws.is_empty() && idle.sounds.is_empty());
+    // Fired at a spot 25 away: a crack at the hands (nothing in them),
+    // the grapnel's five parts leaving, then the cable paying out.
+    let fired = [1.0, 0.0, 20.0, -16.0, 25.0, 0.0, 0.0];
+    let out = run(&mut addon, 0.1, hook_world([0.0; 3], fired));
+    assert_eq!(names(&out), ["client/sounds/fire.wav"]);
+    assert_eq!(out.sounds[0].at, Some([0.0, 2.25, 0.0]), "from the hands");
+    assert_eq!(out.draws.len(), 5, "{:#?}", out.draws);
+    let later = run(&mut addon, 0.16, hook_world([0.0; 3], fired));
+    assert_eq!(later.draws.len(), 6);
+    let crown = glam::Vec3::from_slice(&later.draws[1].params.unwrap()[0][..3]);
+    let flown = crown.distance(glam::Vec3::new(0.0, 2.25, 0.0));
+    assert!(flown > 9.0 && flown < 15.0, "12 units out after 0.06 s: {crown}");
+    for part in 0..5 {
+        assert_eq!(later.draws[1 + part].params.unwrap()[1][3], part as f32);
+    }
+    // It bites with a clang at the spot.
+    let bitten = run(&mut addon, 0.3, hook_world([0.0; 3], fired));
+    assert_eq!(names(&bitten), ["client/sounds/clamp.wav"]);
+    assert_eq!(bitten.sounds[0].at, Some(at));
+    // Hooked: the winch whirs, the claws spring open, the cable is taut
+    // and buzzes, then settles.
+    let hooked = [2.0, 0.0, 20.0, -16.0, 25.0, 0.0, 0.0];
+    let winching = run(&mut addon, 0.35, hook_world([0.0; 3], hooked));
+    assert_eq!(names(&winching), ["client/sounds/winch.wav"]);
+    let open = |out: &bri_client_sandbox::host::Frame| out.draws[1].params.unwrap()[3][3];
+    let opened = run(&mut addon, 0.5, hook_world([0.0, 4.0, -3.0], hooked));
+    assert_eq!(open(&opened), 1.0);
+    let cable = opened.draws[0].params.unwrap();
+    assert!(cable[1][3] < 0.1, "taut: sag {}", cable[1][3]);
+    let tie = glam::Vec3::from_slice(&cable[1][..3]);
+    assert!((tie.distance(anchor) - 0.6).abs() < 0.01, "tied behind the crown");
+    let buzz = |out: &bri_client_sandbox::host::Frame| out.draws[0].params.unwrap()[2][3].abs();
+    let buzzing = (1..8)
+        .map(|k| buzz(&run(&mut addon, 0.35 + k as f32 * 0.02, hook_world([0.0, 4.0, -3.0], hooked))))
+        .fold(0.0_f32, f32::max);
+    assert!(buzzing > 0.03, "it buzzes: {buzzing}");
+    // Pulled in, the strands run along as the cable shortens.
+    let before = run(&mut addon, 1.2, hook_world([0.0, 4.0, -3.0], hooked));
+    assert_eq!(buzz(&before), 0.0, "and settles");
+    let pulled = run(&mut addon, 1.25, hook_world([0.0, 12.0, -10.0], hooked));
+    let ran = pulled.draws[0].params.unwrap()[3][3] - before.draws[0].params.unwrap()[3][3];
+    assert!(ran < -5.0, "{ran}");
+    // Let go: a whirr, the grapnel folding back in, then nothing.
+    let let_go = run(&mut addon, 2.0, hook_world([0.0, 12.0, -10.0], [0.0; 7]));
+    assert_eq!(names(&let_go), ["client/sounds/release.wav"]);
+    assert_eq!(let_go.draws.len(), 6);
+    assert!(run(&mut addon, 2.3, hook_world([0.0; 3], [0.0; 7])).draws.is_empty());
+    // A miss: out and back.
+    let missed = [3.0, 0.0, 2.0, -80.0, 80.0, 0.0, 0.0];
+    let out = run(&mut addon, 3.0, hook_world([0.0; 3], missed));
+    assert_eq!(names(&out), ["client/sounds/fire.wav"]);
+    assert_eq!(run(&mut addon, 3.3, hook_world([0.0; 3], missed)).draws.len(), 6);
+    assert!(run(&mut addon, 3.9, hook_world([0.0; 3], missed)).draws.is_empty());
+}
+
+#[test]
+fn a_grapnel_in_a_vehicle_or_player_rides_along_with_it() {
+    let (_, mut addon) = start("grappling-hook-fx");
+    let crown = |out: &bri_client_sandbox::host::Frame| {
+        glam::Vec3::from_slice(&out.draws[1].params.unwrap()[0][..3])
+    };
+    // Bitten into a vehicle 2 units right of its middle.
+    let truck = |x: f32, turn: f32| Vehicle {
+        id: 7,
+        definition: "v20.vehicle.jeep".into(),
+        position: [x, 1.0, -10.0],
+        rotation: glam::Quat::from_rotation_y(turn).to_array(),
+        velocity: [0.0; 3],
+        radius: 3.0,
+    };
+    let hooked = [2.0, 2.0, 1.0, -10.0, 10.0, 2.0, 7.0];
+    let world = |x: f32, turn: f32| {
+        let mut w = hook_world([0.0; 3], hooked);
+        w.vehicles = vec![truck(x, turn)];
+        w
+    };
+    let first = addon.frame(frame(0.0, &Arc::new(world(0.0, 0.0)))).unwrap().clone();
+    assert!(crown(&first).distance(glam::Vec3::new(2.0, 1.0, -10.0)) < 0.01);
+    // It drives 5 on and turns a quarter: the grapnel is on the same spot.
+    let moved = addon
+        .frame(frame(0.1, &Arc::new(world(5.0, std::f32::consts::FRAC_PI_2))))
+        .unwrap()
+        .clone();
+    let spot = glam::Vec3::new(5.0, 1.0, -10.0)
+        + glam::Quat::from_rotation_y(std::f32::consts::FRAC_PI_2) * glam::Vec3::new(2.0, 0.0, 0.0);
+    assert!(crown(&moved).distance(spot) < 0.01, "{} vs {spot}", crown(&moved));
+    // Bitten into player 2's chest: it follows them.
+    let (_, mut addon) = start("grappling-hook-fx");
+    let hooked = [2.0, 0.0, 1.5, -8.0, 8.0, 1.0, 2.0];
+    let world = |z: f32| {
+        let mut w = hook_world([0.0; 3], hooked);
+        w.players.push(player(2, [0.0, 0.0, z], [0.0, 0.0, 1.0]));
+        w
+    };
+    addon.frame(frame(0.0, &Arc::new(world(-8.0)))).unwrap();
+    let ran = addon.frame(frame(0.1, &Arc::new(world(-14.0)))).unwrap().clone();
+    assert!(crown(&ran).distance(glam::Vec3::new(0.0, 1.5, -14.0)) < 0.01, "{}", crown(&ran));
+}
+
+#[test]
+fn the_cable_comes_out_of_the_winch_guns_muzzle_and_the_gun_wears_its_skin() {
+    let (_, mut addon) = start("grappling-hook-fx");
+    let mut world = hook_world([0.0; 3], [2.0, 0.0, 20.0, -16.0, 25.0, 0.0, 0.0]);
+    let muzzle = holding_the_winch(&mut world);
+    let drawn = addon.frame(frame(0.0, &Arc::new(world))).unwrap().clone();
+    assert_eq!(drawn.draws.len(), 7, "the skin, then the cable and the grapnel");
+    assert_eq!(drawn.draws[0].params.unwrap()[0][0], 1.0, "its gauge glows while the grapnel is out");
+    assert_eq!(&drawn.draws[1].params.unwrap()[0][..3], &muzzle, "from the muzzle");
+    // Holding the Grapple Rope's launcher instead: no winch skin, and the
+    // cable comes from the hands.
+    let mut world = hook_world([0.0; 3], [2.0, 0.0, 20.0, -16.0, 25.0, 0.0, 0.0]);
+    holding_the_launcher(&mut world);
+    let other = addon.frame(frame(0.1, &Arc::new(world))).unwrap().clone();
+    assert_eq!(other.draws.len(), 6);
+    assert_eq!(&other.draws[0].params.unwrap()[0][..3], &[0.0, 2.25, 0.0]);
+}
+
+/// Needs a GPU: renders a shot, the grapnel biting, the hang and the
+/// winch gun up close to PNGs.
+#[test]
+#[ignore = "needs a GPU adapter"]
+fn the_grappling_hook_renders_offscreen() {
+    let (_, mut addon) = start("grappling-hook-fx");
+    let world = |t: f32| {
+        let (feet, hook) = if t < 0.5 {
+            ([0.0, 0.0, 0.0], [1.0, 0.0, 9.0, -8.0, 12.0, 0.0, 0.0])
+        } else {
+            ([0.0, 3.0, -4.0], [2.0, 0.0, 9.0, -8.0, 12.0, 0.0, 0.0])
+        };
+        let mut world = hook_world(feet, hook);
+        holding_the_winch(&mut world);
+        Arc::new(world)
+    };
+    let (adapter, images) = bri_client_sandbox::gpu::render_offscreen_scene(
+        &mut addon,
+        640,
+        384,
+        &[0.0, 0.04, 1.0, 2.0],
+        glam::Vec3::new(5.0, 4.0, 3.0),
+        glam::Vec3::new(0.0, 4.0, -4.0),
+        world,
+    )
+    .unwrap();
+    save("grappling-hook", &images);
+    let background = images[0].pixels[0..4].to_vec();
+    let lit = |i: usize| {
+        images[i]
+            .pixels
+            .chunks_exact(4)
+            .filter(|p| *p != background.as_slice())
+            .count()
+    };
+    println!(
+        "lit pixels per frame on {adapter}: {:?}",
+        (0..images.len()).map(lit).collect::<Vec<_>>()
+    );
+    assert!(lit(1) > lit(0), "the cable pays out as the grapnel flies");
+}

@@ -8142,3 +8142,44 @@ Tests:
 Render: `/mnt/project-files/steel-ball/steel-ball-v2.png`. Max's in-game
 check is a Steel Ball near bricks at Mirrors Medium, in Unified+Shine and
 in Dynamic.
+
+Grappling Hook Add-On (2026-10-01, Max: "Grappling Hook took you straight
+to the point iirc while Grapling rope was more swinging behavior ... lets
+just add both to the game", "they both become TWo seperate Addons that
+just come with the release"). Three more showcase Add-Ons, installed but
+off: `grappling-hook`, `grappling-hook-tool`, `grappling-hook-fx`. After
+the Grappling Hook by Conan (Blockland Glass add-on 860), read for
+behaviour only; nothing of it is used. One click fires (80 reach, 200 u/s)
+and the winch pulls you straight to the brick, map, player or vehicle it
+bites; you hang there, may switch items, and the next click lets go; jump
+reels in, crouch lets out, the wheel too. `/hookobjects` (declared admin
+command) limits it to bricks and the map; default on, as Conan's prefs.
+
+Engine additions to the rope, all predicted by the owner's client:
+`drift` (a moving anchor: the host re-ties the rope to the object's spot
+each step, in its physics body's frame for vehicles, and the motor carries
+the anchor on between updates), `keys` (jump/crouch winch, braking to a
+stop when let go, `TETHER_HALT`), `straight` (reeling in draws the body
+along the rope at the winch's speed: without it the pull turned into a
+32 u/s swing into the test wall and killed the player), a winch that
+brakes at `TETHER_STOP` (40 u/s²) over both the rope's and the body's
+remaining way in (replacing the first ease), and a winch that stalls
+rather than out-running a body held back by something in its way. A
+script setting the length takes over from the keys (a key let go a tick
+later had cancelled a wheel reel).
+
+Effects: a riveted gunmetal winch gun with brass drum bands wound with
+cable and an amber gauge, a six-strand steel cable that buzzes as it takes
+the load, a forged four-claw grapnel with a red band whose claws spring
+open on biting; it follows players and vehicles from their drawn records
+(the spot is learned when the bite is first seen; a late joiner sees the
+stored bite point offset by however far the target moved since). Sounds:
+fire, clamp, winch, release.
+
+Tests: `bri-sim --test tether` (11, adding winch keys, moving anchor, hard
+pull braking, straight pull), `--test grappling_hook` (4: pulled to the
+wall and hangs, switching items keeps the rope, click lets go; keys and
+wheel; a hook in a player carries you and /hookobjects turns it off;
+loadout), `bri-client-sandbox --test showcase` (fire, bite, winch, buzz,
+release, miss; rides a turning vehicle and a running player; muzzle and
+skin; offscreen render on lavapipe).

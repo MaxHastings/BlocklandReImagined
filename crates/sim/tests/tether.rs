@@ -37,6 +37,10 @@ fn rope(anchor: Vec3, length: f32) -> Tether {
         target: length,
         reel: 24.0,
         swing: 7.0,
+        drift: [0.0; 3],
+        keys: None,
+        winding: 0,
+        straight: false,
     }
 }
 fn grip(p: &Player) -> Vec3 {
@@ -226,4 +230,118 @@ fn a_restored_swing_replays_exactly_as_the_host_ran_it() {
     }
     assert_eq!(host.state(), client.state());
     assert!(host.state().tether.is_some());
+}
+
+#[test]
+fn the_winch_keys_reel_in_and_out_and_stop_when_let_go() {
+    let mut world = open_air();
+    let tuning = PlayerTuning::default();
+    let mut p = Player::spawn(&mut world, 1, Vec3::new(0.0, 0.0, 0.0), tuning).unwrap();
+    let anchor = grip(&p) + Vec3::Y * 10.0;
+    let mut tether = rope(anchor, 10.0);
+    tether.keys = Some([2.0, 30.0]);
+    p.set_tether(Some(tether)).unwrap();
+    step(&mut p, &mut world, MoveInput::default(), 240);
+    let length = |p: &Player| p.state().tether.unwrap().length;
+    assert_eq!(length(&p), 10.0, "neither key: it holds");
+    let jump = MoveInput {
+        jump: true,
+        ..Default::default()
+    };
+    step(&mut p, &mut world, jump, 24);
+    step(&mut p, &mut world, MoveInput::default(), 12);
+    let reeled = length(&p);
+    assert!(reeled < 6.0, "jump reels in: {reeled}");
+    step(&mut p, &mut world, MoveInput::default(), 120);
+    assert!((length(&p) - reeled).abs() < 0.5, "let go, it stops: {} vs {reeled}", length(&p));
+    assert!(stretch(&p).abs() < 0.3, "hanging on it: {}", stretch(&p));
+    let crouch = MoveInput {
+        crouch: true,
+        ..Default::default()
+    };
+    step(&mut p, &mut world, crouch, 60);
+    step(&mut p, &mut world, MoveInput::default(), 12);
+    let paid = length(&p);
+    assert!(paid > reeled + 8.0, "crouch lets out: {paid}");
+    step(&mut p, &mut world, MoveInput::default(), 120);
+    assert!((length(&p) - paid).abs() < 0.5, "and stops: {} vs {paid}", length(&p));
+    // Held all the way, the keys stop at their ends.
+    step(&mut p, &mut world, crouch, 600);
+    assert_eq!(length(&p), 30.0);
+    step(&mut p, &mut world, jump, 600);
+    assert_eq!(length(&p), 2.0);
+}
+
+#[test]
+fn a_rope_tied_to_something_moving_carries_its_player_along() {
+    let mut world = open_air();
+    let tuning = PlayerTuning::default();
+    let mut p = Player::spawn(&mut world, 1, Vec3::new(0.0, 0.0, 0.0), tuning).unwrap();
+    let anchor = grip(&p) + Vec3::Y * 5.0;
+    let mut tether = rope(anchor, 5.0);
+    tether.drift = [6.0, 0.0, 0.0];
+    p.set_tether(Some(tether)).unwrap();
+    step(&mut p, &mut world, MoveInput::default(), 360);
+    let moved = Vec3::from(p.state().tether.unwrap().anchor);
+    assert!((moved.x - anchor.x - 18.0).abs() < 0.5, "the anchor drifts on: {moved}");
+    assert!(grip(&p).distance(moved) < 5.3, "and the player comes along");
+    assert!(p.state().feet[0] > 10.0, "{:?}", p.state().feet);
+}
+
+#[test]
+fn a_hard_pull_arrives_gently_instead_of_flinging_its_player_on() {
+    let mut world = open_air();
+    let tuning = PlayerTuning::default();
+    let mut p = Player::spawn(&mut world, 1, Vec3::new(0.0, 0.0, 0.0), tuning).unwrap();
+    // A rope straight up, winched in at full speed.
+    let anchor = grip(&p) + Vec3::new(0.0, 40.0, 0.0);
+    let mut tether = rope(anchor, 40.0);
+    tether.reel = 80.0;
+    tether.target = 2.0;
+    p.set_tether(Some(tether)).unwrap();
+    let (mut fastest, mut nearest, mut arriving) = (0.0_f32, f32::MAX, 0.0_f32);
+    for _ in 0..480 {
+        step(&mut p, &mut world, MoveInput::default(), 1);
+        let speed = Vec3::from(p.state().velocity).length();
+        let d = grip(&p).distance(anchor);
+        fastest = fastest.max(speed);
+        nearest = nearest.min(d);
+        if d < 2.5 {
+            arriving = arriving.max(speed);
+        }
+    }
+    assert!(fastest > 25.0, "a hard pull: {fastest}");
+    assert!(arriving < 15.0, "slowing into the last units: {arriving}");
+    assert!(nearest > 1.0, "never flung past the end of the rope: {nearest}");
+    assert!((grip(&p).distance(anchor) - 2.0).abs() < 0.5);
+}
+
+#[test]
+fn a_straight_rope_draws_its_player_along_the_line_not_into_a_swing() {
+    let mut world = open_air();
+    let tuning = PlayerTuning::default();
+    let mut p = Player::spawn(&mut world, 1, Vec3::new(0.0, 0.0, 0.0), tuning).unwrap();
+    // Out sideways: a swinging rope would drop them under the anchor;
+    // a straight one draws them along the line, as a grappling hook.
+    let start = grip(&p);
+    let anchor = start + Vec3::new(30.0, 6.0, 0.0);
+    let mut tether = rope(anchor, start.distance(anchor));
+    tether.reel = 48.0;
+    tether.target = 2.5;
+    tether.straight = true;
+    p.set_tether(Some(tether)).unwrap();
+    let (mut off_line, mut arriving) = (0.0_f32, 0.0_f32);
+    let line = (anchor - start).normalize();
+    for _ in 0..360 {
+        step(&mut p, &mut world, MoveInput::default(), 1);
+        let at = grip(&p) - start;
+        if grip(&p).distance(anchor) > 3.0 {
+            off_line = off_line.max((at - line * at.dot(line)).length());
+        } else {
+            arriving = arriving.max(Vec3::from(p.state().velocity).length());
+        }
+    }
+    assert!(off_line < 0.5, "along the line: {off_line} off it");
+    assert!(arriving < 12.0, "arriving gently: {arriving}");
+    assert!((grip(&p).distance(anchor) - 2.5).abs() < 0.3);
 }
