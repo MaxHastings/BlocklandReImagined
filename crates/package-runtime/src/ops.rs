@@ -37,8 +37,13 @@ pub const FOV_RANGE: std::ops::RangeInclusive<f32> = 5.0..=120.0;
 /// Longest side of a box `copy_box` copies or `show_box` outlines, units
 /// (512 studs).
 pub const MAX_BOX_SPAN: f32 = 256.0;
-/// Most bricks one `paint_fill` may paint.
-pub const MAX_FILL_BRICKS: usize = 10_000;
+/// Most bricks one `paint_fill` may paint: v20's Fill Can lets
+/// administrators fill 128000.
+pub const MAX_FILL_BRICKS: usize = 128_000;
+/// Widest gap `paint_fill`'s `reach` may jump, units.
+pub const MAX_FILL_REACH: f32 = 4.0;
+/// Longest a `temp_look` lasts, seconds.
+pub const MAX_TEMP_LOOK_SECONDS: f32 = 60.0;
 /// Widest `beam`, units, and longest it lasts, seconds.
 pub const MAX_BEAM_WIDTH: f32 = 16.0;
 pub const MAX_BEAM_SECONDS: f32 = 10.0;
@@ -84,6 +89,44 @@ impl std::fmt::Display for ObjectRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}:{}", self.kind(), self.id())
     }
+}
+
+/// What a `paint_fill` paints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FillPaint {
+    /// A palette colour (the colour spray cans).
+    Color(u8),
+    /// A colour effect, as the colour FX cans number them from 0 (none,
+    /// pearl, chrome, glow, blink, swirl, rainbow).
+    ColorEffect(u8),
+    /// A shape effect, as the shape FX cans number them from 0 (none,
+    /// jello).
+    ShapeEffect(u8),
+}
+
+/// What a `paint_vehicle` paints.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum VehiclePaint {
+    /// A palette colour (the colour spray cans). A vehicle its spawn brick
+    /// recolours takes it through the brick, which is painted too.
+    Color(u8),
+    /// Any colour, red, green and blue from 0 to 1, on the vehicle alone.
+    Rgb([f32; 3]),
+}
+
+/// How `temp_look` changes a player for a while.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct TempLook {
+    /// Every colour slot this colour, and no decal (`SetTempColor` with
+    /// no position).
+    pub color: Option<[f32; 4]>,
+    /// The same with a palette colour, by index (`getColorIDTable`).
+    pub paint: Option<u8>,
+    /// This face (a face decal's name, `setFaceName`).
+    pub face: Option<String>,
+    /// These slots keep their colour at this opacity, where the player
+    /// wears that part (`setNodeColor` on a visor).
+    pub alpha: BTreeMap<String, f32>,
 }
 
 /// Every capability a manifest may declare (with plain-language words in
@@ -248,16 +291,46 @@ pub enum Op {
         player: u64,
         color: u8,
     },
-    /// Paint `brick` and every brick of its colour joined to it through
-    /// shared faces in palette colour `color`, as `player`'s spray can
-    /// would paint each one (their full trust; a fill flows around bricks
-    /// it may not paint), as one step Ctrl+Z takes back. More than `limit`
-    /// bricks is refused.
+    /// Paint `brick` and every brick of its colour joined to it as
+    /// `player`'s spray cans would paint each one (their full trust; a fill
+    /// flows around bricks it may not paint), as one step Ctrl+Z takes
+    /// back. Bricks join through shared faces, or with `reach` through any
+    /// overlap of a brick's box grown by `reach` (sideways, up and down),
+    /// as v20's `containerBoxSearch` fills found them.
     PaintFill {
         player: u64,
         brick: u64,
-        color: u8,
+        paint: FillPaint,
         limit: u32,
+        reach: Option<[f32; 2]>,
+        /// More than `limit` bricks: paint the first `limit` and stop, as
+        /// v20 did, instead of refusing the fill.
+        stop_at_limit: bool,
+        /// Centre-printed, for these seconds, when the limit stops a fill.
+        limit_message: Option<(String, f32)>,
+        /// How long a refusal ("does not trust you enough") shows, seconds.
+        refusal_seconds: Option<f32>,
+        /// When the limit stops a fill, the player's plant-limit error
+        /// (`MsgPlantError_Limit`) shows too.
+        limit_error: bool,
+    },
+    /// Paint a vehicle as `player` (their full trust from its spawn
+    /// brick's build, the minigame's paint rule), as one step Ctrl+Z takes
+    /// back. Its riders take the colour for `riders_seconds`.
+    PaintVehicle {
+        player: u64,
+        vehicle: u64,
+        paint: VehiclePaint,
+        riders_seconds: Option<f32>,
+        /// How long a refusal ("does not trust you enough") shows, seconds.
+        refusal_seconds: Option<f32>,
+    },
+    /// For `seconds`, a player looks different (`SetTempColor`,
+    /// `setFaceName`, `setNodeColor`), then as they were.
+    TempLook {
+        player: u64,
+        look: TempLook,
+        seconds: f32,
     },
     /// Outline a box for one player while `tool` is in their hand (a
     /// selection, a zone being marked); `None` takes it away.
@@ -576,7 +649,9 @@ impl Op {
             | Self::SetBlockState { .. }
             | Self::CutCopy { .. }
             | Self::PaintCopy { .. }
-            | Self::PaintFill { .. } => "world.edit",
+            | Self::PaintFill { .. }
+            | Self::PaintVehicle { .. } => "world.edit",
+            Self::TempLook { .. } => "player",
             Self::Explode { .. }
             | Self::Damage { .. }
             | Self::Heal { .. }
@@ -650,7 +725,52 @@ impl Op {
             Self::SetScale { scale, .. } => scale.is_finite() && SCALE_RANGE.contains(scale),
             Self::SetLookLimits { limits, .. } => limits
                 .is_none_or(|[down, up]| (0.0..=1.0).contains(&down) && (0.0..=1.0).contains(&up)),
-            Self::PaintFill { limit, .. } => (1..=MAX_FILL_BRICKS as u32).contains(limit),
+            Self::PaintFill {
+                paint,
+                limit,
+                reach,
+                limit_message,
+                refusal_seconds,
+                ..
+            } => {
+                (1..=MAX_FILL_BRICKS as u32).contains(limit)
+                    && refusal_seconds.is_none_or(|s| (0.0..=30.0).contains(&s))
+                    && match paint {
+                        FillPaint::Color(_) => true,
+                        FillPaint::ColorEffect(fx) => *fx < 7,
+                        FillPaint::ShapeEffect(fx) => *fx < 3,
+                    }
+                    && reach.is_none_or(|r| r.iter().all(|v| (0.0..=MAX_FILL_REACH).contains(v)))
+                    && limit_message.as_ref().is_none_or(|(text, seconds)| {
+                        text.chars().count() <= MAX_PRINT_CHARS && (0.0..=30.0).contains(seconds)
+                    })
+            }
+            Self::PaintVehicle {
+                paint,
+                riders_seconds,
+                refusal_seconds,
+                ..
+            } => {
+                refusal_seconds.is_none_or(|s| (0.0..=30.0).contains(&s))
+                    && riders_seconds.is_none_or(|s| (0.0..=MAX_TEMP_LOOK_SECONDS).contains(&s))
+                    && match paint {
+                        VehiclePaint::Color(_) => true,
+                        VehiclePaint::Rgb(c) => c.iter().all(|v| (0.0..=1.0).contains(v)),
+                    }
+            }
+            Self::TempLook { look, seconds, .. } => {
+                (0.0..=MAX_TEMP_LOOK_SECONDS).contains(seconds)
+                    && look
+                        .color
+                        .is_none_or(|c| c.iter().all(|v| (0.0..=1.0).contains(v)))
+                    && look.face.as_ref().is_none_or(|f| {
+                        !f.is_empty() && f.len() <= 64 && f.chars().all(|c| c.is_ascii_graphic())
+                    })
+                    && look.alpha.len() <= AVATAR_SLOTS.len()
+                    && look.alpha.iter().all(|(slot, a)| {
+                        AVATAR_SLOTS.contains(&slot.as_str()) && (0.0..=1.0).contains(a)
+                    })
+            }
             Self::Teleport { position, .. } => finite(position),
             Self::PlantBrick {
                 kind,
@@ -972,6 +1092,8 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::CutCopy { .. } => "cut_copy",
         Op::PaintCopy { .. } => "paint_copy",
         Op::PaintFill { .. } => "paint_fill",
+        Op::PaintVehicle { .. } => "paint_vehicle",
+        Op::TempLook { .. } => "temp_look",
         Op::ShowBox { area: Some(_), .. } => "show_box",
         Op::ShowBox { area: None, .. } => "hide_box",
         Op::GiveItem { .. } => "give_item",

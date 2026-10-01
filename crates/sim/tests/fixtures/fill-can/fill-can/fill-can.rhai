@@ -39,6 +39,6 @@ fn cmd_fill(player) {
     }
     let me = player(player);
     if me != () {
-        paint_fill(player, hit.brick, me.paint, limit());
+        paint_fill(player, hit.brick, #{ color: me.paint }, #{ limit: limit() });
     }
 }

@@ -1,0 +1,6 @@
+Title: Stand-in Fill Can
+Author: Blockland ReImagined tests
+Written for tests. It has the community Fill Can's folder name and the
+shapes of its functions that the listed port reads, with its own numbers
+(administrators fill 3 bricks), so the listed port applies to it. It is
+not the original Add-On and holds none of its files.

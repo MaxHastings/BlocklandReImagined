@@ -1300,6 +1300,7 @@ fn teleport_image() -> bri_weapons::Image {
         both_arms: false,
         paint_tint: false,
         rope: None,
+        paint_picker: false,
         scripts: Default::default(),
     }
 }
