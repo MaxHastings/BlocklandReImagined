@@ -544,7 +544,6 @@ pub struct App {
     /// The camera the last rendered frame was drawn from (eye, yaw, pitch).
     rendered_camera: Option<(Vec3, f32, f32)>,
     /// Which driven vehicle is predicted, and one whose prediction failed.
-    drive_state: DriveState,
     /// The rendered camera's roll about its forward axis (a rider's
     /// first-person view tilting with the seat), radians.
     rendered_roll: f32,
@@ -1739,7 +1738,6 @@ impl App {
             rider_eye: None,
             observer_eye: None,
             rendered_camera: None,
-            drive_state: DriveState::default(),
             rendered_roll: 0.0,
             drawn_controls: None,
             tumble: None,
@@ -1993,7 +1991,6 @@ impl App {
         assets: &crate::vehicles::VehicleAssets,
         prefs: &bri_ui::prefs::Prefs,
         faults: &mut crate::cosmetic::CosmeticFaults,
-        state: &mut DriveState,
         view: &network::View,
         driven: Option<u64>,
     ) {
@@ -2005,7 +2002,7 @@ impl App {
             let pose = view.vehicle_poses.get(&id)?;
             let d = assets.definition(&info.definition)?;
             let target = drive_target(info, d, pose.driver_steering.0)?;
-            (state.refused.as_ref() != Some(&target)).then_some(())?;
+            (motion.drive_state.refused.as_ref() != Some(&target)).then_some(())?;
             Some((target, info, pose))
         });
         let steering = steering_in_use(wanted.as_ref().map(|(_, _, pose)| *pose), prefs);
@@ -2013,8 +2010,8 @@ impl App {
         // A new vehicle, a respawn under a new id, a changed definition or
         // scale, or leaving the seat: start again or stop.
         let target = wanted.as_ref().map(|(t, ..)| t.clone());
-        if target != state.target {
-            state.target = target;
+        if target != motion.drive_state.target {
+            motion.drive_state.target = target;
             let request = wanted.as_ref().map(|(target, info, pose)| {
                 let owner = view.owner;
                 (
@@ -2046,7 +2043,7 @@ impl App {
                 .is_none()
             {
                 // Show the host's poses for this vehicle instead.
-                state.refused = state.target.take();
+                motion.drive_state.refused = motion.drive_state.target.take();
                 let _ = motion.drive(None);
             }
         }
@@ -2057,12 +2054,12 @@ impl App {
                 .absorb("vehicle prediction", corrected)
                 .is_none()
             {
-                state.refused = state.target.take();
+                motion.drive_state.refused = motion.drive_state.target.take();
                 let _ = motion.drive(None);
             }
         }
         if driven.is_none() {
-            state.refused = None;
+            motion.drive_state.refused = None;
         }
         vehicles.set_predicted(motion.driven_frame());
     }
@@ -5547,21 +5544,7 @@ fn rider_input(
         abilities.apply(input)
     }
 }
-/// The vehicle a client predicts: which one, from which definition, at
-/// which scale. Any change starts its prediction again.
-#[derive(Clone, Debug, PartialEq)]
-struct DriveTarget {
-    id: u64,
-    definition: String,
-    scale_bits: u32,
-}
-#[derive(Default)]
-struct DriveState {
-    target: Option<DriveTarget>,
-    /// A target whose prediction failed: the host's poses are shown until
-    /// the player leaves it.
-    refused: Option<DriveTarget>,
-}
+use crate::motion::DriveTarget;
 /// What the local player, in `info`'s first seat, predicts: a live vehicle
 /// they steer or a player-type mount they control (horse, rowboat, cannon,
 /// turret), as v20 predicts the object a client controls. Destroyed
@@ -6094,7 +6077,6 @@ impl PlatformApp for App {
                     &self.vehicle_assets,
                     &self.ui.core.prefs,
                     &mut self.cosmetic_faults,
-                    &mut self.drive_state,
                     view,
                     driven,
                 );

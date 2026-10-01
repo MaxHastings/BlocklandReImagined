@@ -54,8 +54,27 @@ const CLOCK_SNAP: f64 = 60.0;
 /// hitch never leaves remotes lagging for long.
 const CLOCK_CATCH_UP: f64 = 2.0;
 
+/// The vehicle a client predicts: which one, from which definition, at
+/// which scale. Any change starts its prediction again.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct DriveTarget {
+    pub id: u64,
+    pub definition: String,
+    pub scale_bits: u32,
+}
+/// Which vehicle prediction follows. It lives with the prediction it
+/// chooses, so whatever resets one (a map change, leaving the game) resets
+/// the other.
+#[derive(Default)]
+pub(crate) struct DriveState {
+    pub target: Option<DriveTarget>,
+    /// A target whose prediction failed: the host's poses are shown until
+    /// the player leaves it.
+    pub refused: Option<DriveTarget>,
+}
 #[derive(Default)]
 pub struct Motion {
+    pub(crate) drive_state: DriveState,
     mirror: Option<CollisionMirror>,
     predictor: Option<Predictor>,
     /// The replica world the collision mirror matches, with its change log
