@@ -382,7 +382,8 @@ pub enum Op {
     /// Light the bricks `player`'s copy was taken from in the palette
     /// colour nearest `color` (RGBA), glowing, for `seconds`, then give
     /// them their own colours back, as v20's duplicators showed a
-    /// selection. Everyone sees it.
+    /// selection. Everyone sees it. A negative `seconds` keeps them lit
+    /// until the copy is let go or lit again; 0 puts them out now.
     HighlightCopy {
         player: u64,
         /// `None` lights them in their own colours (only the glow, as the
@@ -1804,7 +1805,7 @@ impl Op {
                     .iter()
                     .flatten()
                     .all(|c| (0.0..=1.0).contains(c))
-                    && (0.0..=60.0).contains(seconds)
+                    && *seconds <= 60.0
             }
             Self::ShowBox { area, tool, .. } => match area {
                 Some((min, max)) => item(tool) && span(min, max),

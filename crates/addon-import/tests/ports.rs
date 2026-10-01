@@ -3507,7 +3507,7 @@ fn new_duplicator_port_shows_progress_and_cancels_a_big_plant() {
     assert!(!s.copy_working(host));
     let prints = told(&mut s);
     assert!(
-        prints.iter().any(|t| t.contains(r"Planting... (\c350%\c6)")
+        prints.iter().any(|t| t.contains(r"Planting... (\c350%\c6, \c30\c6 failed)")
             && t.contains("[Cancel Brick]: Cancel planting")),
         "{prints:?}"
     );
