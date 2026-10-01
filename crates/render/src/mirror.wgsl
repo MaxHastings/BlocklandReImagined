@@ -36,9 +36,7 @@ struct VertexOut {
     return out;
 }
 fn fog_amount(position:vec3<f32>)->f32 {
-    let distance=length(position-frame.eye.xyz);
-    let t=clamp((distance-frame.atmosphere.x)/max(frame.atmosphere.y-frame.atmosphere.x,0.001),0.0,1.0);
-    return (1.0-(1.0-t)*(1.0-t))*frame.atmosphere.w;
+    return fog_along(position-frame.eye.xyz,frame.atmosphere);
 }
 // Where the echoed plane's picture holds this point, held to the part it
 // drew (the edge stretches over what that view did not see), or a

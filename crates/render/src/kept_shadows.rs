@@ -11,7 +11,10 @@
 //! Turning the camera moves a cascade inside its kept layer, so nothing is
 //! drawn again; the layer is drawn again around the eye only when the
 //! cascade would leave it (after walking a fair way) or the sun turns, one
-//! layer a frame (the others draw directly meanwhile, as before). A brick
+//! layer a frame (the others draw directly meanwhile, as before). While the
+//! sun keeps turning (a day/night cycle turns it every frame) no layer
+//! could be used twice, so every cascade draws directly and nothing is
+//! redrawn into a layer until the sun holds still. A brick
 //! placed or removed redraws only its part of each kept layer, the same
 //! frame; a large change (a build streaming in) redraws the layer.
 use crate::scene::GpuScene;
@@ -140,6 +143,8 @@ struct State {
     placements: Vec<Option<Placement>>,
     /// The static casters as last planned: identity and bounds.
     casters: HashMap<u64, (Vec3, Vec3)>,
+    /// The sun as last planned.
+    sun: Option<Vec3>,
 }
 
 impl KeptShadows {
@@ -274,6 +279,7 @@ impl KeptShadows {
             state: RefCell::new(State {
                 placements: vec![None; cascades as usize],
                 casters: HashMap::new(),
+                sun: None,
             }),
             keep_from: std::cell::Cell::new(KEEP_TRIANGLES),
         })
@@ -314,6 +320,10 @@ impl KeptShadows {
             .collect();
         state.casters = now;
         state.placements.resize(cascades.len(), None);
+        if state.sun.replace(sun).is_some_and(|last| last != sun) {
+            state.placements.fill(None);
+            return cascades.iter().map(|_| Use::Direct).collect();
+        }
         let mut full_redraw_left = true;
         let mut uses = Vec::with_capacity(cascades.len());
         for (index, cascade) in cascades.iter().enumerate() {

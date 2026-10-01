@@ -13,9 +13,13 @@ pub const WGSL: &str = concat!(
     "\n"
 );
 
-/// Prepend the shared colour functions to a shader's own source.
+/// Prepend the shared colour and fog functions to a shader's own source.
 pub fn shader_source(own: &str) -> String {
-    format!("{WGSL}{own}")
+    use bri_content::environment::{FOG_DEPTH, FOG_HEIGHT};
+    let fog = include_str!("fog.wgsl");
+    format!(
+        "{WGSL}const FOG_DEPTH:f32={FOG_DEPTH:?};\nconst FOG_HEIGHT:f32={FOG_HEIGHT:?};\n{fog}\n{own}"
+    )
 }
 
 /// The colour-vision assistance renderers are built with (`COLOR_VISION`):

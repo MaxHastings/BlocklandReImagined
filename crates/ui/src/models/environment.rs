@@ -227,7 +227,7 @@ impl EnvironmentModel {
     pub fn number(&self, field: NumberField) -> f32 {
         let s = self.settings();
         let a = self.authored();
-        let live = atmosphere::resolve(&a, &Settings { day_cycle: None, ..s.clone() }, 0);
+        let live = atmosphere::resolve(&a, &Settings { day_cycle: None, ..s.clone() }, 0.0);
         let (azimuth, elevation) = atmosphere::angles(a.sun_direction);
         match field {
             NumberField::DayLength => s
@@ -235,7 +235,7 @@ impl EnvironmentModel {
                 .map_or(atmosphere::DEFAULT_DAY_LENGTH, |d| d.length_seconds),
             NumberField::TimeOfDay => s
                 .day_cycle
-                .map_or(12.0, |d| d.time_at(self.tick()) as f32 * 24.0),
+                .map_or(12.0, |d| d.time_at(self.tick() as f64) as f32 * 24.0),
             NumberField::SunAzimuth => s.sun_azimuth.unwrap_or(azimuth),
             NumberField::SunElevation => s.sun_elevation.unwrap_or(elevation),
             NumberField::FlareSize => s.sun_flare.map_or(1.0, |f| f.size),
@@ -268,7 +268,7 @@ impl EnvironmentModel {
             NumberField::DayLength => {
                 if let Some(d) = &mut s.day_cycle {
                     // Keep the time of day where it is now.
-                    let time = d.time_at(tick) as f32;
+                    let time = d.time_at(tick as f64) as f32;
                     *d = DayCycle {
                         length_seconds: v,
                         time,
