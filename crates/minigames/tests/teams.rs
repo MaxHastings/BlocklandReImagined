@@ -72,8 +72,16 @@ fn friendly_fire_off_spares_teammates_only() {
     w.set_teams(
         game,
         vec![
-            TeamSpec { id: Some(red), name: "Red".into(), color: 0 },
-            TeamSpec { id: Some(blue), name: "Blue".into(), color: 3 },
+            TeamSpec {
+                id: Some(red),
+                name: "Red".into(),
+                color: 0,
+            },
+            TeamSpec {
+                id: Some(blue),
+                name: "Blue".into(),
+                color: 3,
+            },
         ],
         true,
         false,
@@ -92,8 +100,16 @@ fn same_colour_allies_and_removed_teams_free_their_members() {
         .set_teams(
             game,
             vec![
-                TeamSpec { id: Some(red), name: "Red".into(), color: 0 },
-                TeamSpec { id: Some(blue), name: "Blue".into(), color: 3 },
+                TeamSpec {
+                    id: Some(red),
+                    name: "Red".into(),
+                    color: 0,
+                },
+                TeamSpec {
+                    id: Some(blue),
+                    name: "Blue".into(),
+                    color: 3,
+                },
                 spec("Crimson", 0),
             ],
             false,
@@ -110,13 +126,25 @@ fn same_colour_allies_and_removed_teams_free_their_members() {
     let (_, out) = w
         .set_teams(
             game,
-            vec![TeamSpec { id: Some(red), name: "Reds".into(), color: 0 }],
+            vec![TeamSpec {
+                id: Some(red),
+                name: "Reds".into(),
+                color: 0,
+            }],
             false,
             false,
         )
         .unwrap();
-    assert!(out.contains(&Effect::TeamChanged { player: c, game, team: None }));
-    assert!(out.contains(&Effect::TeamChanged { player: b, game, team: None }));
+    assert!(out.contains(&Effect::TeamChanged {
+        player: c,
+        game,
+        team: None
+    }));
+    assert!(out.contains(&Effect::TeamChanged {
+        player: b,
+        game,
+        team: None
+    }));
     assert_eq!(w.team_of(a), Some(red));
     assert_eq!(w.game(game).unwrap().teams.get(red).unwrap().name, "Reds");
     assert_eq!(w.assign_team(c, Some(blue)), Err(Error::StaleTeam));
@@ -129,12 +157,20 @@ fn leaving_or_ending_the_game_drops_the_team() {
     w.assign_team(b, Some(blue)).unwrap();
     w.assign_team(c, Some(blue)).unwrap();
     let out = w.execute(Command::Leave { actor: b }).unwrap();
-    assert!(out.contains(&Effect::TeamChanged { player: b, game, team: None }));
+    assert!(out.contains(&Effect::TeamChanged {
+        player: b,
+        game,
+        team: None
+    }));
     assert_eq!(w.team_of(b), None);
     // Outside a game nobody can be put on a team.
     assert_eq!(w.assign_team(b, Some(blue)), Err(Error::NotMember));
     let out = w.execute(Command::End { actor: a }).unwrap();
-    assert!(out.contains(&Effect::TeamChanged { player: c, game, team: None }));
+    assert!(out.contains(&Effect::TeamChanged {
+        player: c,
+        game,
+        team: None
+    }));
     assert_eq!(w.team_of(a), None);
 }
 
@@ -142,25 +178,44 @@ fn leaving_or_ending_the_game_drops_the_team() {
 fn teams_are_checked_and_survive_a_save() {
     let (mut w, game, [a, _, c], [red, blue]) = red_blue();
     assert_eq!(
-        w.set_teams(game, vec![spec("", 1)], false, false).map(|_| ()),
-        Err(Error::InvalidSettings)
-    );
-    assert_eq!(
-        w.set_teams(game, vec![spec(&"x".repeat(MAX_TEAM_NAME + 1), 1)], false, false)
+        w.set_teams(game, vec![spec("", 1)], false, false)
             .map(|_| ()),
         Err(Error::InvalidSettings)
     );
     assert_eq!(
-        w.set_teams(game, (0..=MAX_TEAMS).map(|i| spec(&format!("T{i}"), 0)).collect(), false, false)
-            .map(|_| ()),
+        w.set_teams(
+            game,
+            vec![spec(&"x".repeat(MAX_TEAM_NAME + 1), 1)],
+            false,
+            false
+        )
+        .map(|_| ()),
+        Err(Error::InvalidSettings)
+    );
+    assert_eq!(
+        w.set_teams(
+            game,
+            (0..=MAX_TEAMS).map(|i| spec(&format!("T{i}"), 0)).collect(),
+            false,
+            false
+        )
+        .map(|_| ()),
         Err(Error::Capacity)
     );
     assert_eq!(
         w.set_teams(
             game,
             vec![
-                TeamSpec { id: Some(red), name: "A".into(), color: 0 },
-                TeamSpec { id: Some(red), name: "B".into(), color: 0 },
+                TeamSpec {
+                    id: Some(red),
+                    name: "A".into(),
+                    color: 0
+                },
+                TeamSpec {
+                    id: Some(red),
+                    name: "B".into(),
+                    color: 0
+                },
             ],
             false,
             false

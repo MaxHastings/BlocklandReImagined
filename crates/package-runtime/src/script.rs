@@ -109,6 +109,16 @@ pub struct PlayerView {
     /// Their mini-game score (0 outside mini-games).
     #[serde(default)]
     pub score: i64,
+    /// A bot (an `AIPlayer`), not a connected player.
+    #[serde(default)]
+    pub bot: bool,
+    /// A bot's spawn brick's owner (`%bot.spawnBrick.client`), if any.
+    #[serde(default)]
+    pub bot_owner: Option<u64>,
+    /// The player this one rides (`getObjectMount`), and on which of its
+    /// mount points.
+    #[serde(default)]
+    pub riding: Option<(u64, u8)>,
 }
 /// Live questions a script may ask the engine during a call. They read the
 /// world as it is when the call runs: a call's own operations apply after it
@@ -146,6 +156,12 @@ pub trait World {
     fn drops(&self) -> Vec<DropView> {
         Vec::new()
     }
+    /// Which part of player `player` a hit at `point` strikes
+    /// (`getDamageLocation`): `"head"`, `"torso"` or `"legs"`, or `None`
+    /// for no living player.
+    fn hit_region(&self, _player: u64, _point: [f32; 3]) -> Option<&'static str> {
+        None
+    }
 }
 /// What a ray met.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -161,6 +177,9 @@ pub struct RayHit {
     pub position: [f32; 3],
     pub normal: [f32; 3],
     pub distance: f32,
+    /// The part of a player the ray struck (`"head"`, `"torso"` or
+    /// `"legs"`), `None` for anything else.
+    pub region: Option<&'static str>,
 }
 /// A loose physics body or other movable thing, as scripts see it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -230,6 +249,9 @@ pub struct Snapshot {
     /// The live environment settings (`environment()`).
     pub environment: bri_content::atmosphere::Settings,
     pub players: Vec<PlayerView>,
+    /// Bots: player bodies without a connection. [`player`](Self::player)
+    /// finds them; `players()` leaves them out.
+    pub bots: Vec<PlayerView>,
     pub entities: Vec<EntityView>,
     /// Vehicles and other loose physics bodies, and bots (players without
     /// a connection, `object: player`, `definition` their kind, `owner`
@@ -241,6 +263,10 @@ pub struct Snapshot {
     pub minigames: Vec<MinigameView>,
 }
 impl Snapshot {
+    /// A connected player or a bot.
+    pub fn player(&self, id: u64) -> Option<&PlayerView> {
+        self.players.iter().chain(&self.bots).find(|p| p.id == id)
+    }
     /// Any movable object by reference, players and entities included.
     pub fn object(&self, object: ObjectRef) -> Option<ObjectView> {
         match object {
@@ -475,6 +501,22 @@ fn player_map(p: &PlayerView) -> Dynamic {
             p.team.map_or(Dynamic::UNIT, |t| Dynamic::from_int(t as i64)),
         ),
         ("score", Dynamic::from_int(p.score)),
+        ("bot", p.bot.into()),
+        (
+            "bot_owner",
+            p.bot_owner
+                .map_or(Dynamic::UNIT, |o| Dynamic::from_int(o as i64)),
+        ),
+        (
+            "riding",
+            p.riding
+                .map_or(Dynamic::UNIT, |(m, _)| Dynamic::from_int(m as i64)),
+        ),
+        (
+            "seat",
+            p.riding
+                .map_or(Dynamic::UNIT, |(_, s)| Dynamic::from_int(i64::from(s))),
+        ),
     ])
 }
 fn object_map(o: &ObjectView) -> Dynamic {
@@ -729,7 +771,7 @@ fn ray_map(hit: &RayHit) -> Dynamic {
         RayTarget::Brick(b) => ("brick", Dynamic::from_int(b as i64), Dynamic::UNIT),
         RayTarget::Map => ("map", Dynamic::UNIT, Dynamic::UNIT),
     };
-    map([
+    let mut entries = vec![
         ("kind", kind.into()),
         ("id", id),
         ("ref", reference),
@@ -740,7 +782,11 @@ fn ray_map(hit: &RayHit) -> Dynamic {
         float_entry("ny", hit.normal[1]),
         float_entry("nz", hit.normal[2]),
         float_entry("distance", hit.distance),
-    ])
+    ];
+    if let Some(region) = hit.region {
+        entries.push(("region", region.into()));
+    }
+    map(entries)
 }
 fn credit(value: &Dynamic) -> Fallible<Option<u64>> {
     if value.is_unit() {
@@ -788,12 +834,11 @@ fn register_api(engine: &mut Engine) {
     engine.register_fn("player", |player: Dynamic| {
         with(|i| {
             let player = id(&player)?;
-            Ok(i.snapshot
-                .players
-                .iter()
-                .find(|p| p.id == player)
-                .map_or(Dynamic::UNIT, player_map))
+            Ok(i.snapshot.player(player).map_or(Dynamic::UNIT, player_map))
         })
+    });
+    engine.register_fn("bots", || {
+        with(|i| Ok(i.snapshot.bots.iter().map(player_map).collect::<Array>()))
     });
     engine.register_fn("entities", || {
         with(|i| {
@@ -1360,6 +1405,20 @@ fn register_queries(engine: &mut Engine) {
     engine.register_fn("can_place_voxel", |x: i64, y: i64, z: i64| {
         with_world(|world, _| Ok(world.can_place_voxel([x, y, z])))
     });
+    // The part of a player a hit at a point strikes, "head", "torso" or
+    // "legs" (`getDamageLocation`), or () for no living player.
+    engine.register_fn(
+        "hit_region",
+        |player: Dynamic, x: Dynamic, y: Dynamic, z: Dynamic| {
+            let player = id(&player)?;
+            let point = [float(&x)?, float(&y)?, float(&z)?];
+            with_world(|world, _| {
+                Ok(world
+                    .hit_region(player, point)
+                    .map_or(Dynamic::UNIT, Dynamic::from))
+            })
+        },
+    );
     // The box a brick fills, #{ min: [x, y, z], max: [x, y, z] } in world
     // units, or () when there is no such brick.
     engine.register_fn("brick_box", |brick: Dynamic| {
@@ -1524,6 +1583,32 @@ fn register_presentation(engine: &mut Engine) {
         push(Op::SetImageAmmo {
             player: id(&player)?,
             ammo,
+        })
+    });
+    engine.register_fn("unmount_image", |player: Dynamic| {
+        push(Op::UnmountImage {
+            player: id(&player)?,
+        })
+    });
+    engine.register_fn("set_scale", |player: Dynamic, scale: Dynamic| {
+        push(Op::SetScale {
+            player: id(&player)?,
+            scale: float(&scale)?,
+        })
+    });
+    engine.register_fn(
+        "set_look_limits",
+        |player: Dynamic, up: Dynamic, down: Dynamic| {
+            push(Op::SetLookLimits {
+                player: id(&player)?,
+                limits: Some([float(&down)?, float(&up)?]),
+            })
+        },
+    );
+    engine.register_fn("set_look_limits", |player: Dynamic, _: ()| {
+        push(Op::SetLookLimits {
+            player: id(&player)?,
+            limits: None,
         })
     });
     engine.register_fn("mount_image", |player: Dynamic, image: Dynamic| {
@@ -1709,6 +1794,23 @@ fn register_physics(engine: &mut Engine) {
         push(Op::LetGo {
             player: id(&player)?,
         })
+    });
+    engine.register_fn(
+        "mount_object",
+        |mount: Dynamic, rider: Dynamic, node: i64, can_dismount: bool| {
+            push(Op::MountObject {
+                mount: id(&mount)?,
+                rider: id(&rider)?,
+                node: u8::try_from(node)
+                    .ok()
+                    .filter(|n| usize::from(*n) < crate::ops::MAX_MOUNT_POINTS)
+                    .ok_or("a mount point is 0 to 7")?,
+                can_dismount,
+            })
+        },
+    );
+    engine.register_fn("unmount_object", |rider: Dynamic| {
+        push(Op::UnmountObject { rider: id(&rider)? })
     });
     engine.register_fn(
         "spawn_vehicle",
@@ -1909,6 +2011,9 @@ impl Runtime {
             }
             if !behaviour.zones.is_empty() {
                 need("on_zone".into(), 3, "zones");
+            }
+            if behaviour.on_activate {
+                need("on_activate".into(), 1, "on_activate");
             }
             for policy in &behaviour.policies {
                 need(format!("allow_{policy}"), 1, &format!("policy `{policy}`"));

@@ -102,7 +102,7 @@ match.
 | `port` | The folder under `ports/` holding the port. |
 | `status` | `verified`: tests show it behaves like v20 for everything the Add-On's scripts do. `partial`: it covers some functions and the rest are still missing. |
 | `sha256` | `source.sha256` from the import report of each copy the port was checked against. The report calls a copy `listed` or `unlisted`; both get the port if they match. |
-| `covers` | Each function the port replaces, with named patterns (regular expressions, case-insensitive) its body must match. The first group of each is a value the port can use. |
+| `covers` | Each function the port replaces, with named patterns (regular expressions, case-insensitive) its body must match. The first group of each is a value the port can use. A key that is one of the Add-On's script files (`server.cs`, `server/core/Slayer_MiniGameSO.cs`) matches that file's whole text instead, for values it sets outside any function, such as a table of globals or a preferences file. |
 | `tests` | the port's own checks (`<port>/checks.json`, which `check-port` runs) and any `path test_name` in the repository. The list's own test checks that they exist. |
 
 Patterns do two jobs. They prove the copy is the shape the port was written
@@ -201,6 +201,30 @@ add when you work in a checkout.
 7. **List it** in `ports.json` with its status and tests, then run
    `cargo test -p bri-addon-import`.
 
+### Datablocks made at run time
+
+Some Add-Ons make datablocks in a function or a loop (Slayer CTF's
+`createSlayerCTFDatablocks` makes a flag item and image for each of ten
+paint colours), so the importer, which reads scripts without running them,
+finds none. The port declares them in `ports/<port>/datablocks.cs`, written
+the way the Add-On would have:
+
+```
+datablock ItemData(slyrCTF_FlagItem)
+{
+	shapeFile = "{{flag_shape}}";
+	uiName = "{{flag_name}}";
+	image = slyrCTF_FlagImage;
+};
+```
+
+The importer reads it beside the Add-On's own scripts, in its folder, before
+converting anything, so its paths, parents and globals resolve as the
+Add-On's do (`mountPoint = $BackSlot` reads the base game's value).
+`{{name}}` takes the values the `covers` patterns captured, and
+`{{namespace}}`. The report notes how many datablocks it declared. The
+declarations are the port's own text, never the Add-On's.
+
 ## Handing it to an agent
 
 `AGENT.md` in the work folder holds the prompt, filled in for the Add-On.
@@ -212,6 +236,8 @@ page as well.
 | Add-On | Port | Status | What it covers |
 |---|---|---|---|
 | `Weapon_Shotgun` (Sawn-off Shotgun) | `weapon_shotgun` | verified | `shotgunImage::onFire`: the pellets, their spread and the recoil, read from the copy's own script |
+| `Gamemode_Slayer` (Slayer 4.1.5) | `gamemode_slayer` | partial | Teams: sorting and balancing players onto a mini-game's teams, team spawn bricks, `/teams` and its short forms (`/joinTeam` and the rest), friendly fire (the engine's) and team chat. Not yet: other game modes, lives, points and time limits, uniforms, bots, the GUI |
+| `Gamemode_Slayer_CTF` (Slayer CTF) | `gamemode_slayer_ctf` | partial | Capture the Flag: flags on Flag Spawns in their brick's colour, pickup, carrying on the back, capture, recovery, dropping (death, leaving, `/dropFlag`), respawn timers, captures to win, the CTF preferences (`/ctf`). Not yet: the Drop Tool key, the countdown over a dropped flag, the flag's light, brick events, locked flags, score list columns, bots, the other flag models |
 
 ## Host rules
 

@@ -982,18 +982,26 @@ impl SceneTransform {
         );
         Ok(())
     }
-    fn record(&self) -> InstanceRecord {
+    fn record(&self, clip: ClipPlane) -> InstanceRecord {
         InstanceRecord {
             transform: self.transform.to_cols_array_2d(),
             tint: self.tint,
+            clip,
         }
     }
 }
+/// A world plane `[x, y, z, w]` cutting one instance: it draws only where
+/// `x*px + y*py + z*pz + w >= 0`. A body part way through a portal draws
+/// twice, each copy cut at the opening, so half shows on either side.
+pub type ClipPlane = [f32; 4];
+/// Cuts nothing.
+pub const KEEP_ALL: ClipPlane = [0., 0., 0., 1.];
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct InstanceRecord {
     transform: [[f32; 4]; 4],
     tint: [f32; 4],
+    clip: ClipPlane,
 }
 
 /// One bounded persistent instance buffer per shared model group. Update at most
@@ -1001,6 +1009,8 @@ struct InstanceRecord {
 pub struct GpuInstances {
     buffer: wgpu::Buffer,
     transforms: Vec<SceneTransform>,
+    /// Per instance, or empty when none is cut.
+    clips: Vec<ClipPlane>,
     capacity: usize,
 }
 impl GpuInstances {
@@ -1022,6 +1032,7 @@ impl GpuInstances {
                 mapped_at_creation: false,
             }),
             transforms: Vec::new(),
+            clips: Vec::new(),
             capacity,
         })
     }
@@ -1037,22 +1048,54 @@ impl GpuInstances {
     /// Validate everything before changing CPU/GPU state. Returns false when
     /// unchanged, allowing static world items to incur no per-frame upload.
     pub fn update(&mut self, queue: &wgpu::Queue, transforms: &[SceneTransform]) -> Result<bool> {
+        self.update_clipped(queue, transforms, &[])
+    }
+    /// `update`, with each instance cut by its plane in `clips` (one per
+    /// transform, or none).
+    pub fn update_clipped(
+        &mut self,
+        queue: &wgpu::Queue,
+        transforms: &[SceneTransform],
+        clips: &[ClipPlane],
+    ) -> Result<bool> {
         ensure!(
             transforms.len() <= self.capacity,
             "Scene instance capacity exceeded"
         );
+        ensure!(
+            clips.is_empty() || clips.len() == transforms.len(),
+            "One clip plane per scene instance"
+        );
         for transform in transforms {
             transform.validate()?;
         }
-        if self.transforms == transforms {
+        ensure!(
+            clips.iter().flatten().all(|v| v.is_finite()),
+            "Invalid scene instance clip plane"
+        );
+        let clips = if clips.iter().all(|c| *c == KEEP_ALL) {
+            &[]
+        } else {
+            clips
+        };
+        if self.transforms == transforms && self.clips == clips {
             return Ok(false);
         }
         if !transforms.is_empty() {
-            let records: Vec<_> = transforms.iter().map(SceneTransform::record).collect();
+            let records: Vec<_> = transforms
+                .iter()
+                .enumerate()
+                .map(|(i, t)| t.record(clips.get(i).copied().unwrap_or(KEEP_ALL)))
+                .collect();
             queue.write_buffer(&self.buffer, 0, bytemuck::cast_slice(&records));
         }
         self.transforms = transforms.to_vec();
+        self.clips = clips.to_vec();
         Ok(true)
+    }
+    /// Whether some instance is cut by a clip plane.
+    pub fn clipped(&self) -> bool {
+        !self.clips.is_empty()
     }
 }
 
@@ -1560,9 +1603,10 @@ impl TextureFiltering {
     }
 }
 const VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x3,2=>Float32x2,3=>Float32x2,4=>Float32x4,10=>Float32x4];
-const INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 5] =
-    wgpu::vertex_attr_array![5=>Float32x4,6=>Float32x4,7=>Float32x4,8=>Float32x4,9=>Float32x4];
-/// Scene vertices plus per-instance model matrix and tint.
+const INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![
+    5=>Float32x4,6=>Float32x4,7=>Float32x4,8=>Float32x4,9=>Float32x4,11=>Float32x4
+];
+/// Scene vertices plus per-instance model matrix, tint and clip plane.
 fn vertex_layouts() -> [Option<wgpu::VertexBufferLayout<'static>>; 2] {
     [
         Some(wgpu::VertexBufferLayout {
@@ -2419,7 +2463,7 @@ impl SceneRenderer {
         let mut renderer = Self {
             identity_instance: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("identity scene instance"),
-                contents: bytemuck::bytes_of(&SceneTransform::default().record()),
+                contents: bytemuck::bytes_of(&SceneTransform::default().record(KEEP_ALL)),
                 usage: wgpu::BufferUsages::VERTEX,
             }),
             light_buffer,
@@ -3186,7 +3230,7 @@ impl SceneRenderer {
             Mat4,
             ShadowCasters<'b>,
             &'b wgpu::BindGroup,
-            &'b [wgpu::RenderPipeline; 2],
+            &'b [wgpu::RenderPipeline; 3],
             u32,
             bool,
             bool,
@@ -3511,19 +3555,23 @@ impl SceneRenderer {
                 }
                 // Everything this cascade draws, then recorded with repeated
                 // binds skipped.
-                let mut items: Vec<(&GpuScene, &wgpu::Buffer, Range<u32>)> = Vec::new();
+                // Instances cut by a clip plane draw opaque batches through
+                // the cut pipeline; the rest stay depth only.
+                let mut items: Vec<(&GpuScene, &wgpu::Buffer, Range<u32>, bool)> = Vec::new();
                 for &scene in casters.scenes {
-                    items.push((scene, &self.identity_instance, 0..1));
+                    items.push((scene, &self.identity_instance, 0..1, false));
                 }
                 for &(scene, instances) in casters.instances {
                     // Fading copies stop casting once they turn translucent.
                     let solid = instances.transforms.iter().all(|t| t.tint[3] == 1.);
+                    let cut = instances.clipped();
                     if !instances.is_empty() && solid {
-                        items.push((scene, &instances.buffer, 0..instances.len() as u32));
+                        items.push((scene, &instances.buffer, 0..instances.len() as u32, cut));
                     } else {
                         for (i, transform) in instances.transforms.iter().enumerate() {
                             if transform.tint[3] == 1. {
-                                items.push((scene, &instances.buffer, i as u32..i as u32 + 1));
+                                let range = i as u32..i as u32 + 1;
+                                items.push((scene, &instances.buffer, range, cut));
                             }
                         }
                     }
@@ -3534,7 +3582,7 @@ impl SceneRenderer {
                 // indirect multi-draw after the rest.
                 let mut pooled: Vec<(&wgpu::Buffer, &wgpu::Buffer, wgpu::util::DrawIndexedIndirectArgs)> =
                     Vec::new();
-                for (scene, buffer, range) in items {
+                for (scene, buffer, range, cut) in items {
                     // A pose can hide every object (the spear's `fire`
                     // sequence while it is thrown); wgpu panics on slicing
                     // the empty buffers.
@@ -3547,7 +3595,7 @@ impl SceneRenderer {
                     {
                         continue;
                     }
-                    let indirect = scene.slot.is_some() && range == (0..1);
+                    let indirect = scene.slot.is_some() && range == (0..1) && !cut;
                     // Adjacent opaque batches (a chunk's coalesced materials)
                     // share one draw; masked batches bind their material.
                     let mut run: Option<Range<u32>> = None;
@@ -3568,7 +3616,7 @@ impl SceneRenderer {
                                     ));
                                 } else {
                                     bound.geometry(&mut pass, &scene.vertices, buffer, &scene.indices);
-                                    bound.pipeline(&mut pass, &pipelines[0]);
+                                    bound.pipeline(&mut pass, &pipelines[if cut { 2 } else { 0 }]);
                                     triangles += u64::from(indices.end - indices.start) / 3
                                         * u64::from(range.end - range.start);
                                     pass.draw_indexed(scene.index_range(&indices), scene.base_vertex, range.clone());

@@ -72,7 +72,7 @@ lineage instead of the v20 binary, the row says "inherited".
 | 9 | Hard landing camera shake | `Player::updatePos` (inherited): past `groundImpactMinSpeed` 10, shake frequency 4, amplitude 1 × (speed − 10) / `minImpactSpeed`, 0.8 s, falloff 10, controlling client only | None | **Fixed** 04390b0 |
 | 10 | Falling damage threshold | Engine calls `Armor::onImpact` past the datablock's `minImpactSpeed` (Horse 250, others 30). The script also wants `minImpactSpeed` × height scale and spares a player holding the admin wand | 30 for every type, no scale, no wand rule. Horses took falling damage | **Fixed** 3429f0b |
 | 11 | Vehicle tire spray, impact sounds, crash damage | See `skis-v20.md` rows 10, 20 and 21 | Landed before this audit | Pass |
-| 12 | Vehicle burning | `damageEmitter` past `damageLevelTolerance` 0.99: only a destroyed vehicle burns | Burns while destroyed | Pass |
+| 12 | Vehicle burning | `damageEmitter` past `damageLevelTolerance` 0.99: the last 1% of health and the wreck burn | Burns while destroyed | Pass (the 1% band is an accepted gap, `vehicle-destruction.md`) |
 | 13 | Vehicle water splash | `splash = vehicleSplash`, `splashEmitter` | Drawn (`actor_effects` `VEHICLE_SPLASH`) | Pass |
 | 14 | Tank gun | 140 × scale, 2.5 s cooldown, `TankshotSound`, `TankSmokeImage`, hull impulse −(look + up) × mass × 5 | Same (`vehicles-import` weapon, `world.rs` `weapon_step`) | Pass |
 | 15 | Cannon gun | Power 1–10 at 200 ms steps, speed 5.5 × power × scale, `CannonSmokeImage`, fuse image while charging | Same | Pass |

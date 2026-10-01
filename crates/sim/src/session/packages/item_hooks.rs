@@ -28,7 +28,8 @@ pub(in crate::session) enum Pickup {
 /// Add-On state a session keeps for these hooks.
 #[derive(Default)]
 pub(in crate::session) struct ItemHooks {
-    hits: VecDeque<ProjectileContact>,
+    /// Each with the part of the player it struck, measured as it struck.
+    hits: VecDeque<(ProjectileContact, Option<&'static str>)>,
     /// What `on_drop` returned, by drop id.
     drop_data: BTreeMap<u64, serde_json::Value>,
     /// The package that put each `drop_item` pickup in the world.
@@ -200,7 +201,12 @@ impl Session {
             );
             return;
         }
-        host.item_hooks.hits.push_back(impact.clone());
+        let region = match impact.target {
+            TargetId::Actor(a) => self.region_of(a.0, impact.position),
+            _ => None,
+        };
+        let host = self.packages.as_mut().expect("hooked packages run");
+        host.item_hooks.hits.push_back((impact.clone(), region));
     }
 
     /// `on_projectile_hit(hit)` for each hit since the last tick, in order.
@@ -210,8 +216,8 @@ impl Session {
             return;
         };
         let hits = std::mem::take(&mut host.item_hooks.hits);
-        for hit in hits {
-            let map = self.hit_map(&hit);
+        for (hit, region) in hits {
+            let map = self.hit_map(&hit, region);
             for package in self.hooked(|b| b.on_projectile_hit, &hit.definition) {
                 let _ = self.run_package(
                     &package,
@@ -227,7 +233,7 @@ impl Session {
         }
     }
 
-    fn hit_map(&self, hit: &ProjectileContact) -> Dynamic {
+    fn hit_map(&self, hit: &ProjectileContact, region: Option<&'static str>) -> Dynamic {
         let int = |v: u64| Dynamic::from_int(v as i64);
         let (kind, id, object) = match hit.target {
             TargetId::Actor(a) => ("player", int(a.0), Some(ObjectRef::Player(a.0))),
@@ -242,6 +248,9 @@ impl Session {
         m.insert("by".into(), by.map_or(Dynamic::UNIT, int));
         m.insert("kind".into(), kind.into());
         m.insert("id".into(), id);
+        if let Some(region) = region {
+            m.insert("region".into(), region.into());
+        }
         m.insert(
             "ref".into(),
             object.map_or(Dynamic::UNIT, |o| o.to_string().into()),

@@ -191,13 +191,15 @@ impl Session {
                     .into_array()
                     .ok()?
                     .iter()
-                    .map(|v| v.as_float().ok().or_else(|| v.as_int().ok().map(|i| i as f64)))
+                    .map(|v| {
+                        v.as_float()
+                            .ok()
+                            .or_else(|| v.as_int().ok().map(|i| i as f64))
+                    })
                     .collect()
             });
             match point.as_deref() {
-                Some(&[x, y, z])
-                    if [x, y, z].iter().all(|v| v.is_finite() && v.abs() < 1e6) =>
-                {
+                Some(&[x, y, z]) if [x, y, z].iter().all(|v| v.is_finite() && v.abs() < 1e6) => {
                     return Some((Vec3::new(x as f32, y as f32, z as f32), 0.0));
                 }
                 _ => self.hook_warning(

@@ -40,7 +40,7 @@ type Meshes = BTreeMap<String, bri_content::brick::Brick>;
 const FAR_PLANE: f32 = 4000.0;
 /// PlayerStandardArmor's `cameraMaxDist`, `cameraVerticalOffset` and
 /// `cameraTilt`; the stock Player_* add-ons inherit them.
-const PLAYER_CAMERA: (f32, f32, f32) = (8.0, 0.75, 0.261);
+pub(crate) const PLAYER_CAMERA: (f32, f32, f32) = (8.0, 0.75, 0.261);
 struct Prepared {
     foliage: crate::foliage::PreparedFoliage,
     map_id: String,
@@ -358,12 +358,16 @@ struct HostSetup {
     weapon_pack: bri_weapons::Pack,
     item_bounds: BTreeMap<String, bri_weapons::ItemBounds>,
     avatar_catalog: bri_content::avatar::Package,
+    /// The Blockhead's mount points, from its rig.
+    body_mounts: Vec<bri_sim::archetype::MountPoint>,
     vehicle_pack: bri_vehicles::Pack,
     bot_kinds: Vec<bri_sim::bot_kind::BotKind>,
     event_catalog: bri_events::Catalog,
     event_sounds: Vec<String>,
     maps: Vec<bri_sim::session::MapListing>,
 }
+/// The Blockhead's model id (`m.dts`).
+const BLOCKHEAD_MODEL: &str = "v20.shape.m";
 impl HostSetup {
     fn session(&self, loaded: crate::content::LoadedMap) -> Result<Session> {
         let mut session = Session::new(loaded.simulation);
@@ -372,6 +376,7 @@ impl HostSetup {
         session.set_weapon_pack(self.weapon_pack.clone())?;
         session.set_item_bounds(self.item_bounds.clone())?;
         session.set_avatar_catalog(self.avatar_catalog.clone())?;
+        session.set_body_mount_points(BLOCKHEAD_MODEL, self.body_mounts.clone())?;
         session.set_vehicle_pack(self.vehicle_pack.clone(), self.bot_kinds.clone())?;
         session.set_event_catalog(self.event_catalog.clone(), self.event_sounds.clone())?;
         session.set_spawn_points(loaded.spawn_points)?;
@@ -605,6 +610,8 @@ pub struct App {
     music_world: Option<Arc<bri_net::protocol::PublicWorld>>,
     /// Connection samples for the net graph and the expanded overlay.
     net_sampler: crate::perf::NetSampler,
+    /// Whether a joined host has gone quiet, for the lag icon.
+    lag_watch: bri_net::lag::LagWatch,
     /// When the performance overlay's slower figures are next refreshed.
     perf_stats_due: std::time::Instant,
     gpu_name: String,
@@ -905,8 +912,14 @@ impl App {
             return;
         };
         let binds = &self.ui.core.binds;
+        let held = view
+            .weapons
+            .images
+            .get(&view.owner)
+            .and_then(|images| images.iter().find(|i| i.hand == 0))
+            .map_or("", |i| i.image.as_str());
         let (panels, keys) =
-            crate::packages::panels(catalog, &view.package_state, view.owner, |letter| {
+            crate::packages::panels(catalog, &view.package_state, view.owner, held, |letter| {
                 binds
                     .command_for_key(
                         bri_ui::input::Key::Letter(letter),
@@ -1064,11 +1077,22 @@ impl App {
             })
             .collect();
         actor_effects.update_jet_dust(&dust)?;
+        // A wreck burns with its own damage emitters, from the replicated
+        // destroyed state alone.
         let burning: Vec<_> = view
             .vehicles
             .values()
             .filter(|info| info.destroyed)
-            .filter_map(|info| Some((info.id, body(info.id)?)))
+            .filter_map(|info| {
+                let at = body(info.id)?;
+                let d = vehicle_assets.definition(&info.definition)?;
+                Some(
+                    d.wreck_emitters()
+                        .into_iter()
+                        .map(move |e| (info.id, e, at)),
+                )
+            })
+            .flatten()
             .collect();
         let pose = |anchor| match anchor {
             crate::actor_effects::Anchor::Actor { actor, mount } => avatars
@@ -1232,7 +1256,8 @@ impl App {
         avatar_actions.retain(|owner, _| view.poses.contains_key(owner));
         avatar_gestures.retain(|owner, _| view.poses.contains_key(owner));
         avatar_action_images.retain(|owner, _| view.poses.contains_key(owner));
-        let identity = |owner: &u64| -> Option<String> {
+        // The images in a player's hands; empty when they hold nothing.
+        let identity = |owner: &u64| -> String {
             let mut parts = Vec::new();
             if let Some(images) = view.weapons.images.get(owner) {
                 let mut images: Vec<_> = images.iter().collect();
@@ -1243,18 +1268,18 @@ impl App {
                         .map(|image| format!("{}:{}", image.hand, image.image)),
                 );
             }
-            (!parts.is_empty()).then(|| parts.join("|"))
+            parts.join("|")
         };
+        // An action belongs to the hands it started with: a tool's swing
+        // ends when the tool changes or is put away. One a rule started
+        // with empty hands (`playThread(2, armReadyBoth)`, `death1`) plays
+        // on, as v20's thread 2 does, until a tool is taken out.
         for owner in view.poses.keys() {
             let current = identity(owner);
             if avatar_action_images
                 .get(owner)
-                .is_some_and(|old| current.as_ref() != Some(old))
+                .is_some_and(|old| current != *old)
             {
-                avatar_actions.remove(owner);
-                avatar_action_images.remove(owner);
-            }
-            if current.is_none() {
                 avatar_actions.remove(owner);
                 avatar_action_images.remove(owner);
             }
@@ -1296,13 +1321,15 @@ impl App {
                 continue;
             }
             let current = identity(actor);
+            // An image's own animation waits for that image to arrive; a
+            // rule's (`image_hand: None`) plays with whatever is in hand.
             let hand_matches = image_hand.is_none_or(|hand| {
                 view.weapons
                     .images
                     .get(actor)
                     .is_some_and(|images| images.iter().any(|image| image.hand == hand))
             });
-            if current.is_none() || !hand_matches {
+            if !hand_matches {
                 if age >= 0.5 {
                     *weapon_animation_drops = weapon_animation_drops.saturating_add(1);
                     continue;
@@ -1315,7 +1342,7 @@ impl App {
                 started_at,
             };
             avatar_actions.insert(*actor, action);
-            avatar_action_images.insert(*actor, current.unwrap());
+            avatar_action_images.insert(*actor, current);
         }
     }
     pub fn item_assets(&self) -> &Arc<crate::items::ItemAssets> {
@@ -1791,6 +1818,7 @@ impl App {
             tumble: None,
             music_world: None,
             net_sampler: Default::default(),
+            lag_watch: Default::default(),
             perf_stats_due: std::time::Instant::now(),
             gpu_name: String::new(),
             gpu_passes: Vec::new(),
@@ -2240,40 +2268,24 @@ impl App {
             drawn_offset,
             passages,
         )?;
-        if passages.is_empty() {
+        if controls.observer().is_some() {
             return Ok((eye, yaw, pitch, roll));
         }
         // A chase camera whose boom went through an opening is already
         // there; otherwise the eye leading the body's middle is carried.
-        let carry = match boom {
-            Some(carry) => carry,
-            None => {
-                let middle = Vec3::from(local.feet)
-                    + Vec3::Y * bri_sim::player::nominal_middle(local.scale);
-                let (moved, carry) = passages.travel(middle, eye);
-                let Some(carry) = carry else {
-                    return Ok((eye, yaw, pitch, roll));
-                };
-                return Ok(Self::carried_look(moved, yaw, pitch, roll, &carry));
-            }
+        // The tilt a floor or ceiling opening left eases out after: the eye
+        // starts where the carry put it and comes round.
+        let middle =
+            Vec3::from(local.feet) + Vec3::Y * bri_sim::player::nominal_middle(local.scale);
+        let look = (yaw, pitch, roll);
+        let eye = if boom.is_none() && controls.camera_pos() == 0.0 {
+            middle + controls.portal_tilt() * (eye - middle)
+        } else {
+            eye
         };
-        Ok(Self::carried_look(eye, yaw, pitch, roll, &carry))
-    }
-    /// The look turned by an opening's carry (the eye already moved).
-    fn carried_look(
-        eye: Vec3,
-        yaw: f32,
-        pitch: f32,
-        roll: f32,
-        carry: &glam::Affine3A,
-    ) -> (Vec3, f32, f32, f32) {
-        let forward = carry.transform_vector3(Vec3::new(
-            yaw.sin() * pitch.cos(),
-            pitch.sin(),
-            -yaw.cos() * pitch.cos(),
-        ));
-        let (yaw, pitch) = crate::controls::angles(forward, carry.transform_vector3(Vec3::Y));
-        (eye, yaw, pitch, roll)
+        let (eye, (yaw, pitch, roll)) =
+            crate::portal_view::through(eye, look, boom, middle, passages);
+        Ok((eye, yaw, pitch, roll))
     }
     /// The view camera where the body is, and the carry of any opening the
     /// chase camera's boom went back through.
@@ -2322,6 +2334,8 @@ impl App {
                         crate::controls::angles(ride * Vec3::NEG_Z, ride * Vec3::Y);
                     (yaw, pitch, crate::controls::roll(ride))
                 }
+                // The roll a floor or ceiling opening left, easing out.
+                None if controls.observer().is_none() => (yaw, pitch, controls.portal_roll()),
                 None => (yaw, pitch, 0.0),
             };
             let (eye, boom) = camera_eye(
@@ -2355,7 +2369,10 @@ impl App {
                 ) =>
             {
                 let center = (Vec3::from(d.bounds_min) + Vec3::from(d.bounds_max)) * 0.5;
-                return crate::vehicle_camera::driver_view(
+                // The boom goes back through any portal behind the vehicle,
+                // as a player's chase camera's does.
+                let mut boom = None;
+                let (eye, yaw, pitch) = crate::vehicle_camera::driver_view(
                     frame.position,
                     frame.rotation,
                     center,
@@ -2363,12 +2380,24 @@ impl App {
                     controls.driver_head_yaw(),
                     pos,
                     |from, to| {
-                        Ok(building
-                            .solid_segment(from, to)?
-                            .map(|hit| (hit.distance, hit.normal)))
+                        let (hit, through) =
+                            crate::portal_view::ray(from, to, passages, |from, to| {
+                                Ok(building
+                                    .solid_segment(from, to)?
+                                    .map(|hit| (hit.distance, hit.normal)))
+                            })?;
+                        boom = Some((from, through));
+                        Ok(hit)
                     },
-                )
-                .map(|(eye, yaw, pitch)| (eye, yaw, pitch, 0.0, None));
+                )?;
+                // The eye carried; `view_camera` turns the look with it.
+                let (eye, carry) = match boom {
+                    Some((from, through)) => {
+                        crate::portal_view::along(&through, from.distance(eye), eye)
+                    }
+                    None => (eye, None),
+                };
+                return Ok((eye, yaw, pitch, 0.0, carry));
             }
             Some((_, d, seat, frame)) if d.seat_role(seat) == SeatRole::Actor => {
                 Some(mount_camera(d, frame.position, pos))
@@ -2396,7 +2425,13 @@ impl App {
         if let Some((distance, pivot, tilt)) = player_view {
             // `getCameraTransform` composes the tilt onto the eye's pitch, so
             // the chase camera keeps swinging over the head past vertical.
-            let pitch = pitch - tilt;
+            let (yaw, pitch, roll) =
+                crate::portal_view::leaned((yaw, pitch, controls.portal_roll()), tilt);
+            // Just out of an opening in a floor or ceiling, the pivot comes
+            // round from where the carry turned it (`Controls::portal_tilt`).
+            let middle = Vec3::from(local.feet)
+                + Vec3::Y * bri_sim::player::nominal_middle(local.scale);
+            let pivot = middle + controls.portal_tilt() * (pivot - middle);
             let (eye, boom) = camera_eye(
                 controls,
                 presented,
@@ -2405,10 +2440,10 @@ impl App {
                 building,
                 pivot,
                 look(yaw, pitch),
-                Some(distance),
+                Some((middle, distance)),
                 passages,
             )?;
-            return Ok((eye, yaw, pitch, 0.0, boom));
+            return Ok((eye, yaw, pitch, roll, boom));
         }
         // `cameraTilt` turns the vehicle chase view down without moving the camera.
         let chase = Self::chase_camera(assets, vehicles, view);
@@ -2420,7 +2455,8 @@ impl App {
             building,
             chase.map_or(first_person_eye, |(_, pivot, _)| pivot),
             look(yaw, pitch),
-            Some(
+            Some((
+                chase.map_or(first_person_eye, |(_, pivot, _)| pivot),
                 chase.map_or(
                     view.archetypes
                         .resolve(local.archetype)
@@ -2428,7 +2464,7 @@ impl App {
                         .camera_distance,
                     |(distance, ..)| distance,
                 ) * pos,
-            ),
+            )),
             passages,
         )?;
         let pitch = chase.map_or(pitch, |(_, _, tilt)| (pitch - tilt).clamp(-1.56, 1.56));
@@ -2499,6 +2535,36 @@ impl App {
                 .pose_with_animation(avatar_assets, &state, animation_time, &input)?;
         }
         Ok(())
+    }
+    /// v20's lag icon (`GameConnection::setLagIcon`): shown while a joined
+    /// host has sent nothing for `$Pref::Net::LagThreshold` ms. Never for the
+    /// game this process hosts, which v20 skips as a "local" connection.
+    fn update_lag(&mut self) {
+        let joined = self
+            .attempt
+            .as_ref()
+            .filter(|a| a.entered)
+            .and_then(|a| Some((a.id, a.worker.probes.get()?)))
+            .filter(|(_, p)| p.host.is_none());
+        let Some((id, probes)) = joined else {
+            if self.lag_watch.lagging() {
+                self.ui.apply(UiUpdate::Lagging(false));
+            }
+            self.lag_watch.reset();
+            return;
+        };
+        let default = bri_net::lag::DEFAULT_LAG_THRESHOLD.as_millis() as i64;
+        let threshold = self
+            .ui
+            .core
+            .prefs
+            .i64_or("$Pref::Net::LagThreshold", default)
+            .clamp(1, 60_000);
+        self.lag_watch.set_threshold(Duration::from_millis(threshold as u64));
+        let received = probes.link.received();
+        if let Some(lagging) = self.lag_watch.observe(std::time::Instant::now(), received) {
+            self.ui.apply_session(id, UiUpdate::Lagging(lagging));
+        }
     }
     /// Feed the net graph and performance overlay while they show; nothing
     /// is sampled while both are hidden.
@@ -2876,6 +2942,7 @@ impl App {
         let physics_snapshot = self.content.item_physics.clone();
         let selected = self.content.selectable.clone();
         let avatar_catalog = self.avatar_assets.package.clone();
+        let body_mounts = bri_sim::session::shape_mount_points(&self.avatar_assets.rig.shape);
         let mut catalog = self.tool_ui.server_catalog();
         // Start Game's Music Files: the loops this game's music bricks offer.
         let prefs = &self.ui.core.prefs;
@@ -3074,6 +3141,7 @@ impl App {
                 weapon_pack,
                 item_bounds,
                 avatar_catalog,
+                body_mounts,
                 vehicle_pack,
                 bot_kinds,
                 event_catalog,
@@ -5102,7 +5170,7 @@ fn draws_third_person(controls: &Controls, alive: bool) -> bool {
 /// `stand_height` tall standing at `feet`: distance, pivot and downward tilt.
 /// The pivot is the middle of the box plus `cameraVerticalOffset` (0.75
 /// while sliding in); offset and distance scale with the body.
-fn pivot_camera(
+pub(crate) fn pivot_camera(
     stand_height: f32,
     scale: f32,
     (max_dist, offset, tilt): (f32, f32, f32),
@@ -5239,7 +5307,7 @@ fn camera_eye(
     building: &crate::building::Building,
     own_eye: Vec3,
     forward: Vec3,
-    chase: Option<f32>,
+    chase: Option<(Vec3, f32)>,
     passages: &bri_content::passage::Passages,
 ) -> Result<(Vec3, Option<glam::Affine3A>)> {
     use crate::controls::ObserverMode;
@@ -5257,7 +5325,11 @@ fn camera_eye(
             )
             .map(|eye| (eye, None)),
         None => match chase {
-            Some(distance) => building.camera_boom(own_eye, forward, distance, passages),
+            // A chase camera's boom from `own_eye`, its pivot, which rides
+            // on the body at `from`.
+            Some((from, distance)) => {
+                building.camera_boom(from, own_eye, forward, distance, passages)
+            }
             None => Ok((own_eye, None)),
         },
     }
@@ -6108,6 +6180,7 @@ impl PlatformApp for App {
         }
         self.update_held_weapon();
         self.controls.advance_zoom(elapsed.as_secs_f32());
+        self.controls.ease_roll(elapsed.as_secs_f32());
         self.controls.advance_view(elapsed.as_secs_f32());
         self.controls.advance_head(elapsed.as_secs_f32());
         if let Some(a) = self.attempt.as_ref().filter(|a| a.entered) {
@@ -6151,8 +6224,8 @@ impl PlatformApp for App {
                 a.worker.movement(newest, inputs, self.camera_view())?;
             }
             // Through an opening: the look turns as the body did.
-            if let Some((turn, _)) = self.motion.take_passed() {
-                self.controls.carry_yaw(turn);
+            if let Some(carry) = self.motion.take_passed() {
+                self.controls.carry_look(&carry);
             }
             if let Some((speed, archetype)) = self.motion.take_impact() {
                 let min = bri_sim::player_types::PlayerType::from_archetype(archetype)
@@ -6489,6 +6562,7 @@ impl PlatformApp for App {
                         *owner == view.owner,
                     );
                 }
+                self.vehicles.set_passages(&self.motion.passages());
                 self.vehicles.prepare(
                     &mut self.vehicle_assets,
                     &view.vehicles,
@@ -6553,13 +6627,14 @@ impl PlatformApp for App {
         }
         self.update_combat_presentation();
         self.update_perf();
+        self.update_lag();
         if let Some((request, _, receiver)) = &self.add_on_import
             && let Some(result) = finished(receiver, "Add-On import")
         {
             let result = result.and_then(|imported| imported);
             let request = *request;
             self.add_on_import = None;
-            let mut view = crate::add_ons::view(&self.content.paths.root);
+            let mut view = crate::add_ons::view(&self.content.paths.root, crate::add_ons::machine());
             match result {
                 Ok(notice) => {
                     view.notice = notice;
@@ -6698,6 +6773,7 @@ impl PlatformApp for App {
             // Balls, projectiles, dropped items and package entities move at
             // the frame rate between the host's 20 Hz updates.
             let projectiles = &self.content.weapons.pack.projectiles;
+            let passages = self.motion.passages();
             self.ghosts.update(
                 game_elapsed.as_secs_f32(),
                 view.tick,
@@ -6720,13 +6796,17 @@ impl PlatformApp for App {
                         ),
                     })
                 },
+                // Through portals as the host flies them.
                 |from, to| {
-                    let length = (to - from).length();
-                    let hit = building.solid_segment(from, to).ok()??;
-                    Some(crate::ghosts::Hit {
-                        position: hit.position,
-                        normal: hit.normal,
-                        fraction: hit.distance / length,
+                    crate::ghosts::Hit::first(&passages, from, to, |from, to| {
+                        let length = (to - from).length();
+                        let hit = building.solid_segment(from, to).ok()??;
+                        Some(crate::ghosts::Hit {
+                            position: hit.position,
+                            normal: hit.normal,
+                            fraction: hit.distance / length,
+                            carry: None,
+                        })
                     })
                 },
             );
@@ -6857,23 +6937,25 @@ impl PlatformApp for App {
                 self.avatars.get_mut(owner).unwrap().set_dead(dead);
                 // `Armor::onMount` applies the mount's look limits; the Tank's
                 // gunner rides TankTurretPlayer, so it takes that datablock's.
-                let look_limits =
-                    view.vitals
-                        .get(owner)
-                        .and_then(|v| v.mounted)
-                        .and_then(|(vehicle, seat)| {
-                            let info = view.vehicles.get(&vehicle)?;
-                            let d = self.vehicle_assets.definition(&info.definition)?;
-                            if d.seat_role(usize::from(seat)) == SeatRole::Gunner
-                                && d.attachment_mount.is_some()
-                            {
-                                return self
-                                    .vehicle_assets
-                                    .definition("v20.vehicle.tankturretplayer")
-                                    .map(|t| t.look_limits);
-                            }
-                            Some(d.look_limits)
-                        });
+                let look_limits = view
+                    .vitals
+                    .get(owner)
+                    .and_then(|v| v.mounted)
+                    .and_then(|(vehicle, seat)| {
+                        let info = view.vehicles.get(&vehicle)?;
+                        let d = self.vehicle_assets.definition(&info.definition)?;
+                        if d.seat_role(usize::from(seat)) == SeatRole::Gunner
+                            && d.attachment_mount.is_some()
+                        {
+                            return self
+                                .vehicle_assets
+                                .definition("v20.vehicle.tankturretplayer")
+                                .map(|t| t.look_limits);
+                        }
+                        Some(d.look_limits)
+                    })
+                    // A rule's `setLookLimits` for the body.
+                    .or_else(|| view.vitals.get(owner).and_then(|v| v.look_limits));
                 let held = crate::avatar::HeldToolPose::from_mounted_images(ready_hands);
                 let input = crate::avatar::AvatarAnimationInput {
                     look_limits,
@@ -6998,6 +7080,11 @@ impl PlatformApp for App {
                     .bool_or("$pref::Player::renderMyItems", true),
             );
             self.weapon_effects.set_palette(&view.world.palette);
+            // Shots' trails, spray, smoke and sparks fly on through portals.
+            let passages = self.motion.passages();
+            self.weapon_effects.set_passages(&passages);
+            self.effects.world.set_passages(&passages);
+            self.actor_effects.set_passages(&passages);
             let items = self.world_items.sync(
                 weapons,
                 crate::world_items::WorldItemFrame {
@@ -8044,15 +8131,20 @@ impl PlatformApp for App {
                     Ok(())
                 }
                 UiAction::RequestAddOns => {
-                    let view = crate::add_ons::view(&self.content.paths.root);
+                    let view = crate::add_ons::view(&self.content.paths.root, crate::add_ons::machine());
                     self.ui.apply(UiUpdate::AddOns(view));
                     Ok(())
                 }
                 UiAction::SetAddOnEnabled { ref id, enabled } => {
-                    crate::add_ons::set_enabled(&self.content.paths.root, id, enabled)
+                    crate::add_ons::set_enabled(
+                        &self.content.paths.root,
+                        crate::add_ons::machine(),
+                        id,
+                        enabled,
+                    )
                         .map(|view| self.add_ons_changed(view))
                 }
-                UiAction::DefaultAddOns => crate::add_ons::defaults(&self.content.paths.root)
+                UiAction::DefaultAddOns => crate::add_ons::defaults(&self.content.paths.root, crate::add_ons::machine())
                     .map(|view| self.add_ons_changed(view)),
                 UiAction::ImportAddOn { id: ref row } => {
                     let root = self.content.paths.root.clone();
@@ -8062,12 +8154,12 @@ impl PlatformApp for App {
                         ))
                     } else {
                         crate::add_ons::importer().and_then(|importer| {
-                            crate::add_ons::start_import(&root, row, &importer)
+                            crate::add_ons::start_import(&root, crate::add_ons::machine(), row, &importer)
                         })
                     };
                     match started {
                         Ok(receiver) => {
-                            let mut view = crate::add_ons::view(&root);
+                            let mut view = crate::add_ons::view(&root, crate::add_ons::machine());
                             crate::add_ons::mark_importing(&mut view, row);
                             view.notice = "Importing... the game keeps running meanwhile.".into();
                             self.ui.apply(UiUpdate::AddOns(view));
@@ -8998,10 +9090,28 @@ impl PlatformApp for App {
             .is_some_and(|p| !p.faces().is_empty());
         let anywhere = casts || reflecting || probing;
         let mut bodies_drawn = BTreeSet::new();
+        let passages = self.motion.passages();
+        // Riders are cut where their vehicle is.
+        let ridden: BTreeMap<_, u64> = view
+            .vehicles
+            .iter()
+            .flat_map(|(id, info)| info.occupants.iter().flatten().map(move |o| (*o, *id)))
+            .collect();
         for (owner, avatar) in &mut self.avatars {
             if (*owner != view.owner || third_person || anywhere) && !hidden.contains(owner) {
                 let (center, radius) = avatar.bounding_sphere();
-                if !anywhere && !in_view.sees_sphere(center, radius) {
+                // A body part way through an opening draws on both sides.
+                avatar.straddle = match ridden.get(owner) {
+                    Some(vehicle) => self.vehicles.straddle(*vehicle).copied(),
+                    None => crate::portal_view::Straddle::find(&passages, avatar.middle(), radius),
+                };
+                let seen = |c: Vec3| in_view.sees_sphere(c, radius);
+                if !anywhere
+                    && !seen(center)
+                    && avatar
+                        .straddle
+                        .is_none_or(|s| !seen(s.carry.transform_point3(center)))
+                {
                     continue;
                 }
                 avatar.build_pending(&self.avatar_assets)?;

@@ -120,12 +120,16 @@ refused. The engine calls:
 | `on_loadout(player)` | a player's items were set afresh (spawn, respawn, joining or leaving a minigame), when `"on_loadout": true`: the place to hand out your Add-On's items |
 | `on_spawn(player)` | a player comes to life (joining, respawning), after `on_loadout`, when `"on_spawn": true` |
 | `on_leave(player)` | a player leaves, while their state can still be read, when `"on_leave": true` |
-| `on_damage(victim, attacker, amount, info)` | before a player is hurt, when `"on_damage": true`: return the amount to take (0 prevents it) or `()` to leave it. `info` is `#{ kind, type, direct }`, `kind` being `weapon`, `fall`, `package` and so on |
+| `on_damage(victim, attacker, amount, info)` | before a player is hurt, when `"on_damage": true`: return the amount to take (0 prevents it) or `()` to leave it. `info` is `#{ kind, type, direct }`, `kind` being `weapon`, `fall`, `package` and so on, `type` the damage type's name without `$DamageType::`. A shot or blast also gives `region` (`"head"`, `"torso"` or `"legs"`, where it struck) and its point `x`, `y`, `z` |
 | `on_entity_damage(entity, attacker, amount, info)` | before one of your creatures is hurt by a shot, a blast or `explode`, when `"on_entity_damage": true`: answered like `on_damage` |
 | `on_entity_death(entity, killer, info)` | one of your creatures ran out of health, just before it is removed, when `"on_entity_death": true` |
 | `on_pickup(player, item, info)` | a living player touches an item of your Add-On (or one it depends on) lying in the world, before they pick it up, whether or not they have room, when `"on_pickup": true`: return `false` to leave it, `"take"` to use it up without giving it (a spawn brick's item then starts its respawn), or `()` for the usual pickup. `info` is `#{ drop, spawner, data }`: the dropped item's id or the spawn brick's, and what `on_drop` kept with it. Called as it happens, so keep it quick |
 | `on_drop(player, item, slot)` | a player drops a tool of your Add-On (or one it depends on), when `"on_drop": true`. What it returns (a number, a map such as `#{ rounds: 7 }`) is kept with the dropped item and handed to `on_pickup` as `info.data` |
-| `on_projectile_hit(hit)` | a projectile of your weapons (or a dependency's) struck something, delivered at the start of the next tick, when `"on_projectile_hit": true`. `hit` is `#{ projectile, by, kind, id, ref, x, y, z, nx, ny, nz, vx, vy, vz }`: `kind` is `player`, `vehicle`, `entity`, `brick` or `map`, `by` the shooter or `()` |
+| `on_projectile_hit(hit)` | a projectile of your weapons (or a dependency's) struck something, delivered at the start of the next tick, when `"on_projectile_hit": true`. `hit` is `#{ projectile, by, kind, id, ref, x, y, z, nx, ny, nz, vx, vy, vz }`: `kind` is `player`, `vehicle`, `entity`, `brick` or `map`, `by` the shooter or `()`; a player hit also has `region` |
+| `on_activate(player)` | a living player clicks with nothing in their hand (v20's `Player::activateStuff`), when `"on_activate": true`: return `true` to take the click, or anything else to pass it on. Add-Ons are asked in load order, and a click nobody takes does the usual thing (opens doors, presses buttons, flips vehicles) |
+| `on_minigame(event)` | something happened to a mini-game, delivered at the start of the next tick, when `"on_minigame": true`. `event` is `#{ kind, game, player, team }`: `kind` is `created`, `configured`, `reset`, `ended`, `joined`, `left`, `team` (`player`'s team changed to `team`, or `()`) or `teams` (the game's team list changed) |
+| `on_pick_spawn(player)` | a player is about to spawn or respawn, when `"on_pick_spawn": true`: return a brick id to appear on that brick, `[x, y, z]` to appear there, or `()` to leave it to the engine (spawn bricks, then the map). The first Add-On to answer decides. Called as it happens, so keep it quick |
+| `on_zone(player, brick, event)` | a living player enters (`"enter"`), stays in (`"tick"`, with `"ticks": true`) or leaves (`"leave"`) the space over a brick of a kind listed in `zones` (a Torque trigger made with `createTrigger`) |
 | `cmd_<name>(player, args...)` | a player sends a command listed in `commands` |
 
 `player` is the player's id: pass it straight to `tell`, `get_player` and
@@ -158,15 +162,16 @@ HUD panels can only show keys the viewer receives. `persist` (default
 | Read | Change state | Act on the world (needs capability) |
 |---|---|---|
 | `tick()`, `seed()`, `caller()` | `get(key)`, `set(key, value)` | `tell(player, text)`, `broadcast(text)`: `chat` |
-| `players()`, `player(id)` | `get_player(p, key)`, `set_player(p, key, v)` | `remove_brick`, `place_brick`, `set_block_state(brick, state)`: `world.edit` |
+| `players()`, `bots()`, `player(id)` | `get_player(p, key)`, `set_player(p, key, v)` | `remove_brick`, `place_brick`, `set_block_state(brick, state)`: `world.edit` |
 | `aim()`, `me()`, `entities()` | `add_player(p, key, amount)` | `damage(target, amount[, by[, type]])`, `explode(...)`: `damage` |
 | `noise(seed, x, z)`, `hash3(seed, x, y, z)` | `entity_get(e, key)`, `entity_set(e, key, v)` | `spawn_entity`, `remove_entity`, `steer`, `label`: `entity` |
-| `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)` | | `teleport`, `respawn`, `set_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`, `take_item(p, item)`, `drop_item(item, x, y, z[, vx, vy, vz])`: `player` |
-| `raycast(from, dir, range[, ignore])`, `can_damage(by, target)` | | `set_fov(p, fov)`, `set_image_ammo(p, ammo)`, `mount_image(p, image)`: `player` |
+| `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)` | | `teleport`, `respawn`, `set_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`, `take_item(p, item)`, `drop_item(item, x, y, z[, vx, vy, vz])`, `drop_item(item, #{ ... })`, `remove_drop(id)`: `player` |
+| `raycast(from, dir, range[, ignore])`, `can_damage(by, target)` | | `set_fov(p, fov)`, `set_image_ammo(p, ammo)`, `mount_image(p, image)`, `mount_image(p, image, slot[, paint])`, `unmount_image(p)`, `set_scale(p, scale)`, `set_look_limits(p, up, down)`: `player` |
+| `minigames()`, `minigame(id)`, `bricks(kind)`, `brick(id)`, `drops()` | | `set_teams(game, teams, options)`, `set_team(p, team)`, `set_score(p, n)`, `add_score(p, n)`, `reset_minigame(game)`: `minigame`; `set_brick_item(brick, item)`: `world.edit` |
 | `brick_box(brick)`, `voxel(brick)`, `can_place_voxel(x, y, z)` | | `place_voxel(x, y, z, material)`: `world.edit`; `set_avatar_colors(p, colors)`: `player` |
 | | | `copy_build(p, brick, limit, above_only, tool)`, `copy_box(p, min, max, limit, tool)`, `mirror_copy(p, axis)`: `build` |
 | | | `cut_copy(p)`, `paint_copy(p, color)`, `paint_fill(p, brick, color, limit)`: `world.edit` |
-| | | `push`, `tumble`, `hold`, `hold_distance`, `let_go`, `spawn_vehicle`, `remove_vehicle`: `physics` |
+| | | `push`, `tumble`, `hold`, `hold_distance`, `let_go`, `spawn_vehicle`, `remove_vehicle`, `mount_object(mount, rider, node, can_dismount)`, `unmount_object(rider)`: `physics` |
 | | | `heal(p, amount)`, `fire(...)`: `damage` |
 | | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds)` (`()` for everyone): `chat` |
 | | | `play_sound(p, sound)` at a player's ears, `sound_at(sound, x, y, z)`, `beam(from, to[, options])`, `play_thread(p, thread, sequence)`, `show_box(p, min, max, tool)`, `hide_box(p)`: `effects` |
@@ -187,15 +192,25 @@ body, `getWorldBoxCenter`), `slot` (the selected tool slot from 0, or
 name of that image's state, such as `"Ready"`), `paint` (the palette
 index their spray can last picked), `mx`, `my`, `mz` (where the host fires
 the held image's shots from, `getMuzzlePoint`; the eye when nothing is
-held) and `tools` (each tool slot's item id, `""` for an empty slot, as
-`%obj.tool[%i]`).
+held), `tools` (each tool slot's item id, `""` for an empty slot, as
+`%obj.tool[%i]`), `team` (their team's id in their mini-game, or `()`),
+`score` (their mini-game score), `riding` and `seat` (the player this one rides and on
+which mount point, or `()`), `bot` (`true` for a bot) and `bot_owner` (for a
+bot from a bot brick, the brick owner's id, as `%bot.spawnBrick.getGroup()
+.bl_id`; else `()`).
+
+**Bots** are players without a connection. `players()` lists only people;
+`bots()` lists the bots, as the same maps, and `player(id)` reads either.
+Player hooks (`on_join`, `on_loadout`, `on_spawn`, `on_leave`) and player
+state keys are for people only.
 
 **Rays and damage.** `raycast([x, y, z], [dx, dy, dz], range)` returns the
 first thing a ray meets, now, as the script runs: a map with `kind`
 (`"player"`, `"vehicle"`, `"entity"`, `"brick"` or `"map"`), `id` (`()` for
 the map), `ref` (an object like `"player:3"`, for players, vehicles and
 entities), `x`, `y`, `z`, the surface normal `nx`, `ny`, `nz`, and
-`distance`; or `()` when it meets nothing. Rays reach up to 2000 units and
+`distance`, and for a player `region` (`"head"`, `"torso"` or `"legs"`);
+or `()` when it meets nothing. Rays reach up to 2000 units and
 a call casts at most 64. A fourth argument names a player whose body the
 ray passes through, usually the shooter: `raycast(eye, look, 200.0, p.id)`.
 Rays see the world as it was when the call began: a brick the same call
@@ -208,6 +223,14 @@ pack (`"CommandoRifle"` or `"$DamageType::CommandoRifle"`) to use its kill
 message, vehicle scale and whether it is a direct hit, as a projectile of that
 type would; without one the damage is your Add-On's own.
 
+**Where a hit lands.** `hit_region(player, x, y, z)` names the part of a
+living player's body at a point: the top 15% of their box is the `"head"`,
+the next 30% the `"torso"`, the rest the `"legs"` (Torque's
+`getDamageLocation` with the player defaults v20 never changed); `()` for
+anyone else. The engine measures the same for `raycast`, `on_damage` and
+`on_projectile_hit`, so a headshot rule reads `info.region == "head"`
+instead of working it out.
+
 **Held images.** `mount_image(p, image)` puts another image of your
 weapons (or a dependency's) in the player's hand and keeps their tool
 slot: a scope over a rifle, a second fire mode. `mount_image(p, ())` puts
@@ -216,7 +239,77 @@ held image it is out of ammo, so its states' `no_ammo` transitions run;
 `true` gives it back. A magazine is then a player state key your rule
 counts down. `set_fov(p, fov)` sets the player's field of view (5 to 120
 degrees), and `set_fov(p, ())` hands it back to their own setting; aiming
-and the zoom key still work on top of it.
+and the zoom key still work on top of it. `unmount_image(p)` empties the
+player's hand (`unMountImage(0)`).
+
+**Worn images.** `mount_image(p, image, slot)` puts an image in one of a
+player's two worn slots, `2` or `3` (`mountImage(%image, 3)`), beside
+whatever they hold: a flag on the back, a hat. A fourth argument tints it
+with a palette colour, for an image whose `paint_tint` is set, so one image
+serves every team. `mount_image(p, (), slot)` takes it off; dying takes
+every worn image off.
+
+**Mini-games and teams.** `minigames()` lists the mini-games and
+`minigame(id)` reads one: `#{ id, title, owner, members, round, teams,
+friendly_fire, ally_same_color }`, each team `#{ id, name, color }`.
+`set_teams(game, teams, #{ friendly_fire, ally_same_color })` sets a game's
+teams: a team map with an `id` keeps that team and its members, one
+without is new, and a team left out is removed. `set_team(p, team)` puts a
+member on a team (or `()` for none), `set_score` and `add_score` change
+their score, and `reset_minigame(game)` resets the game. The engine keeps
+teammates from hurting each other while `friendly_fire` is off, sends team
+chat to the team, and tells `on_minigame` about every change. These need
+the `minigame` capability. A rule set like Slayer's sorts players with
+`on_minigame` and spawns them on their team's bricks with `on_pick_spawn`.
+
+**Bricks.** `bricks(kind)` lists the bricks of one kind
+(`"pkg:brick/flagstand"`, `"v20/brick/brickspawnpointdata"`), and
+`brick(id)` reads one: `#{ id, kind, x, y, z, color, owner, game, name,
+item }`, `game` being the mini-game whose bricks it is (its owner's, as
+v20's `minigameCanUse`), or `()`. `set_brick_item(brick, item)` sets the
+item a brick holds out (`setItem`), or `()` for none: the world's bricks,
+a mini-game's, or ones the calling player may build on. An item whose image
+has `paint_tint` shows in its brick's colour.
+
+**Zones** are spaces over bricks that notice players, as Torque's triggers:
+
+```json
+"zones": [ { "bricks": ["pkg:brick/flagstand"], "above": 0.2, "period_ms": 150 } ]
+```
+
+Every `period_ms` (10 to 10000, default 100) the engine checks each living
+player against the box of every brick of those kinds, raised by `above`,
+and calls `on_zone(player, brick, "enter")` or `"leave"` as they come and
+go (and `"tick"` while they stay, with `"ticks": true`).
+
+**Dropped items with data.** `drop_item(item, #{ at, velocity, paint, data,
+seconds })` drops an item at `at` (`[x, y, z]`), thrown with `velocity`,
+tinted with `paint`, carrying `data` (any value, up to 1 KB, handed to
+`on_pickup` as `info.data`) and gone after `seconds` (at most 600).
+`drops()` lists your Add-On's drops still lying in the world (`#{ id, item,
+x, y, z, data }`) and `remove_drop(id)` takes one away. A flag dropped where
+its carrier died is this: `on_pickup` answers `false` and decides what
+touching it means.
+
+**Bodies.** `set_scale(p, scale)` resizes a player's body, from 0.2 to 5
+(`setScale`); a respawn puts it back to 1. `set_look_limits(p, up, down)`
+bounds how far their arms and head follow their look, each from 0 (looking
+straight up) to 1 (straight down), as v20's `setLookLimits`: `(0.5, 0.5)`
+holds them level. `set_look_limits(p, ())` lifts it; a respawn does too.
+
+**Riding players.** `mount_object(mount, rider, node, can_dismount)` seats
+player `rider` on player `mount` at mount point `node` (`mountObject`).
+Mount points are the body model's `mount0` to `mount7` nodes; on the
+Blockhead `1` is the left hand. The rider rides along, turns with their own
+mouse and drops what the gravity gun or a hold had of them; with
+`can_dismount` `false` jumping does not get them off. They stay seated if
+either body changes archetype or size. Both must be alive and not seated,
+the mount carrying no rider on that point. A command's player may seat
+someone only on themselves, and only someone they may move (the same rules
+as `hold` and `push`). `unmount_object(rider)` lets them off in place,
+moving as the mount was, so a throw is `unmount_object(t)` then
+`push("player:" + t, ...)`. Landing on a Blockhead still does not seat you:
+only rideable bodies, such as the horse, take riders by touch.
 
 **Effects** (`effects`) change nothing in the game and are sent once, like
 a sound. `beam(from, to)` draws a straight beam for a moment: a tracer, a
@@ -227,6 +320,9 @@ and `muzzle` starts it at that player's gun muzzle as each player draws it.
 The beam thins and fades out over its life. `play_thread(p, thread,
 sequence)` plays one of the body's animations: thread 3 a gesture any time
 (`"activate2"`, `"root"` to stop), thread 2 the arms with what they hold.
+An arm pose started with empty hands (`"armreadyboth"`) keeps playing until
+the hand changes, and whole-body sequences such as `"death1"` play over the
+walk and look as in v20.
 Prints, sounds, beams and animations share one allowance of 64 a second
 per Add-On.
 
@@ -438,6 +534,10 @@ Add-On that depends on the rule, as `sample-points-hud` depends on
   rule's command (`package` is the rule's id) with no arguments. The game
   refuses letters it already uses.
 - Colors are RGBA from 0 to 1.
+- `holding` (optional, up to 32) shows the panel only while the viewer
+  holds one of these: an Add-On id (any of its images) or an image id.
+  An ammo panel listing `["my-guns"]` appears with one of that Add-On's
+  guns out and nowhere else.
 
 ## 5. Weapons
 
@@ -453,10 +553,11 @@ PNG (up to 512 pixels a side), named without `.png` relative to
 `assets/icons/gravity_gun.png`. With neither, the item shows its first
 letter.
 
-An item or image `model` may also be your own model: a native model file
-(`*.shape.json`, the format of `bri_content::shape`: x right, y up, -z
-forward) relative to `assets/`, like the Trench Pick's
-`"model": "models/trench_pick.shape.json"`. Each material names a PNG
+An item, image or projectile `model` may also be your own model: a native
+model file (`*.shape.json`, the format of `bri_content::shape`: x right, y
+up, -z forward) relative to `assets/`, like the Trench Pick's
+`"model": "models/trench_pick.shape.json"`. Nodes `muzzlePoint` and
+`ejectPoint` say where a gun fires and throws its casings. Each material names a PNG
 beside the model (`pick_wood` draws `pick_wood.png`, up to 1,024 pixels a
 side), as a vehicle model's do. A node called `mountPoint` is where the hand
 holds it. A `detail9999` detail is what the holder sees in first person
@@ -512,6 +613,10 @@ is a plain scoped rifle: raise it, fire, let go, fire again.
 
 Shots hit players, vehicles, bricks and Add-On creatures. A creature's
 own rule decides what the hit does (`on_entity_damage`).
+
+An image with a projectile and an `onfire` command (in `commands.states`)
+does both: the round flies and the command runs, as a v20 gun's `onFire`
+that called `Parent::onFire` did. That is how a rule counts a magazine.
 
 A tool rather than a gun: give its image `"command": "your-rule:command"`
 and no projectile. Its `onFire` state then runs that command of your rule
@@ -760,6 +865,10 @@ no seats cannot be mounted. Three fields exist for Add-Ons:
 - `"per_player": 3` lets each player have at most that many of this
   vehicle at once, on top of the server's vehicle limits. A spawn brick
   past it tells its builder "You already have 3 Steel Balls".
+- `"blast_scale": 3.0` makes rockets, tank shells and other blasts and
+  shots push it that many times as hard as v20's rule (the impulse over
+  its mass) would. The Steel Ball weighs 900 and sets 3, so a rocket
+  still knocks it about. Contacts and a click's flip go by its mass alone.
 
 Every vehicle can be placed from a vehicle spawn brick and spawned by a
 rule (`spawn_vehicle`).
@@ -942,7 +1051,18 @@ server.cs         datablock fxDTSBrickData(brickMirror1x4x5Data : brick4x1x5wind
                       reflectionFaces = "north south";
                       reflectionDepth = 0.5;
                   };
+                  datablock fxDTSBrickData(brickMirror1x14x10Data : brickMirror1x4x5Data)
+                  {
+                      uiName = "1x14x10 Mirror";
+                      stretchSize = "14 1 30";
+                  };
 ```
+
+`stretchSize = "width depth height"` (studs, studs, plates) makes another
+size of the shape, as a nine-slice picture stretches: the frame, sill and
+stud edges keep their size and the middle grows. Its mirror, collision,
+portal openings and pairing all follow the new size, so a 1x14x10 Mirror
+is the same window brick, big.
 
 The mirror spans the whole side and the window's frame, drawn in front of
 it, hides its edges; the window's see-through glass is not drawn.
@@ -986,6 +1106,11 @@ server.cs         datablock fxDTSBrickData(brickPortal1x4x5Data : brick4x1x5wind
                       linkPass = 1;
                       linkFrame = "0.05 0.05 0.2";
                   };
+                  datablock fxDTSBrickData(brickPortal1x14x10Data : brickPortal1x4x5Data)
+                  {
+                      uiName = "1x14x10 Portal";
+                      stretchSize = "14 1 30";
+                  };
 ```
 
 Two bricks of one kind, placed by one player, with the same brick **Name**
@@ -1009,6 +1134,22 @@ decides who goes through.
 | `linkIdle` | Colour a linked side shows when its view is not drawn live | `"0.35 0.42 0.55"` |
 | `linkPass` | Whether things pass through; the brick's collision becomes a frame around each opening | 0 |
 | `linkFrame` | Width of that frame, in world units: one number for every edge, or `"sides top bottom"` (the bottom is a sill bodies step over) | 0 |
+
+The Add-On also has a 1x14x10 (6.9 by 5.75 inside: a tank or a jeep
+drives through with room to spare) and a 1x20x12 (the Stunt Plane, wings
+and all). Each size of portal is its own kind, so a 1x4x5 never pairs
+with a 1x14x10 of the same name. A big one costs no more to draw than a small one
+the same size on screen: each view is drawn only over the part of the
+screen its opening covers.
+
+**Another size of a brick (`stretchSize`).** Any brick can be its
+`brickFile`'s shape at another size, `"width depth height"` in studs,
+studs and plates. Half a stud of every edge keeps its size and moves out
+with the edge while the middle stretches, as a nine-slice picture does:
+a window's frame stays as thin round a bigger pane, studs on top stay one
+stud each (there are more of them), and the brick's attachment grid and
+collision boxes grow to match. A shape with no collision boxes of its
+own (and no `linkPass` frame) needs the Add-On to give it collision.
 
 Views share the mirrors' **Options > Graphics > Mirrors** budget, and a
 portal seen through a portal repeats what it last showed, like facing

@@ -188,10 +188,8 @@ impl Drop for Root {
 
 impl Game {
     fn new(name: &str) -> Self {
-        let root = Root(std::env::temp_dir().join(format!(
-            "bri-slayer-{}-{name}",
-            std::process::id()
-        )));
+        let root =
+            Root(std::env::temp_dir().join(format!("bri-slayer-{}-{name}", std::process::id())));
         let _ = std::fs::remove_dir_all(&root.0);
         let (catalog, pack) = content(&root.0);
         let ground = ColliderBuilder::cuboid(100.0, 0.5, 100.0)
@@ -202,14 +200,19 @@ impl Game {
                 World::new(
                     "CTF".into(),
                     "ctf".into(),
-                    vec![[0.9, 0.1, 0.1, 1.0], [0.2, 0.4, 1.0, 1.0], [0.1, 0.8, 0.1, 1.0]],
+                    vec![
+                        [0.9, 0.1, 0.1, 1.0],
+                        [0.2, 0.4, 1.0, 1.0],
+                        [0.1, 0.8, 0.1, 1.0],
+                    ],
                 ),
                 definitions(),
                 vec![ground],
             )
             .unwrap(),
         );
-        s.set_spawn_points(vec![Vec3::new(0.0, 0.05, 20.0)]).unwrap();
+        s.set_spawn_points(vec![Vec3::new(0.0, 0.05, 20.0)])
+            .unwrap();
         s.set_weapon_pack(pack).unwrap();
         s.set_item_bounds(BTreeMap::new()).unwrap();
         s.install_packages(catalog, None).unwrap();
@@ -236,7 +239,12 @@ impl Game {
         .unwrap_or_else(|e| panic!("/{command}: {e:#}"));
     }
     fn teams(&mut self, owner: OwnerId, line: &str) {
-        self.run(owner, SLAYER, "teams", vec![PackageArg::String(line.into())]);
+        self.run(
+            owner,
+            SLAYER,
+            "teams",
+            vec![PackageArg::String(line.into())],
+        );
         // Past the command's cooldown.
         self.steps(13);
     }
@@ -334,8 +342,12 @@ impl Game {
 /// Two players in Alpha's mini-game, sorted onto Red and Blue by Slayer's
 /// rules: (red player, blue player).
 fn two_teams(g: &mut Game) -> (OwnerId, OwnerId) {
-    let a = g.s.join("Alpha".into(), Vec3::new(-2.0, 0.05, 20.0), false).unwrap();
-    let b = g.s.join("Bravo".into(), Vec3::new(2.0, 0.05, 20.0), false).unwrap();
+    let a =
+        g.s.join("Alpha".into(), Vec3::new(-2.0, 0.05, 20.0), false)
+            .unwrap();
+    let b =
+        g.s.join("Bravo".into(), Vec3::new(2.0, 0.05, 20.0), false)
+            .unwrap();
     g.cmd(
         a,
         Command::MiniGame(MiniGameRequest::Create {
@@ -349,7 +361,8 @@ fn two_teams(g: &mut Game) -> (OwnerId, OwnerId) {
     )
     .unwrap();
     let game = g.s.minigame_views()[0].id;
-    g.cmd(b, Command::MiniGame(MiniGameRequest::Join { game })).unwrap();
+    g.cmd(b, Command::MiniGame(MiniGameRequest::Join { game }))
+        .unwrap();
     g.steps(2);
     g.teams(a, "add 0 Red");
     g.teams(a, "add 1 Blue");
@@ -384,7 +397,12 @@ fn teams_sort_and_spawn_on_their_own_team_spawns() {
     g.run(red, SLAYER, "teamcount", vec![]);
     g.steps(1);
     assert!(g.heard("(1) Red"));
-    g.run(blue, SLAYER, "jointeam", vec![PackageArg::String("Blue".into())]);
+    g.run(
+        blue,
+        SLAYER,
+        "jointeam",
+        vec![PackageArg::String("Blue".into())],
+    );
     g.steps(1);
     assert!(g.heard("You're already on"));
     g.quiet();
@@ -410,17 +428,23 @@ fn an_enemy_flag_rides_on_the_carriers_back_and_scores_at_home() {
     assert_eq!(g.flag_on(red_flag), None);
     assert!(g.heard("picked up the"));
     // A flag never goes into the tools.
-    assert!(!g.s.tool_inventories()[&blue]
-        .slots
-        .iter()
-        .any(|s| s.as_deref() == Some(FLAG_ITEM)));
+    assert!(
+        !g.s.tool_inventories()[&blue]
+            .slots
+            .iter()
+            .any(|s| s.as_deref() == Some(FLAG_ITEM))
+    );
 
     // Home to Blue's own flag: a capture.
     g.goto(blue, Vec3::new(8.5, 0.25, 0.25));
     g.steps(30);
     assert_eq!(g.score(blue), CAPTURE_POINTS);
     assert_eq!(g.carried(blue), None);
-    assert_eq!(g.flag_on(red_flag), Some(Some(RED)), "the red flag went home");
+    assert_eq!(
+        g.flag_on(red_flag),
+        Some(Some(RED)),
+        "the red flag went home"
+    );
     assert!(g.heard("returned the"));
     assert_eq!(g.score(red), 0);
     g.quiet();
@@ -444,13 +468,12 @@ fn a_dropped_flag_falls_in_its_colour_and_its_team_recovers_it() {
     g.cmd(blue, Command::Suicide).unwrap();
     g.steps(2);
     assert_eq!(g.carried(blue), None);
-    let drops: Vec<_> = g
-        .s
-        .weapon_view()
-        .drops
-        .into_iter()
-        .filter(|d| d.item == FLAG_ITEM)
-        .collect();
+    let drops: Vec<_> =
+        g.s.weapon_view()
+            .drops
+            .into_iter()
+            .filter(|d| d.item == FLAG_ITEM)
+            .collect();
     let [dropped] = &drops[..] else {
         panic!("one dropped flag: {drops:?}");
     };
@@ -460,14 +483,13 @@ fn a_dropped_flag_falls_in_its_colour_and_its_team_recovers_it() {
 
     // Red walks onto it: recovered, home, and points for Red.
     g.steps(120);
-    let at = g
-        .s
-        .weapon_view()
-        .drops
-        .iter()
-        .find(|d| d.item == FLAG_ITEM)
-        .expect("still lying there")
-        .position;
+    let at =
+        g.s.weapon_view()
+            .drops
+            .iter()
+            .find(|d| d.item == FLAG_ITEM)
+            .expect("still lying there")
+            .position;
     g.goto(red, at + Vec3::new(0.0, 0.1, 0.0));
     g.settle();
     assert!(g.s.weapon_view().drops.iter().all(|d| d.item != FLAG_ITEM));

@@ -64,12 +64,20 @@ impl World for ScriptWorld<'_> {
             TargetId::Brick(brick) => RayTarget::Brick(brick),
             TargetId::Map(_) | TargetId::Shape(_) => RayTarget::Map,
         };
+        let region = match hit.target {
+            TargetId::Actor(actor) => session.region_of(actor.0, hit.position),
+            _ => None,
+        };
         Some(RayHit {
             target,
             position: hit.position.to_array(),
             normal: hit.normal.to_array(),
             distance: hit.fraction * range,
+            region,
         })
+    }
+    fn hit_region(&self, player: u64, point: [f32; 3]) -> Option<&'static str> {
+        self.session.region_of(player, Vec3::from(point))
     }
     fn can_damage(&self, by: u64, target: ObjectRef) -> bool {
         let session = self.session;

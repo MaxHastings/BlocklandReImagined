@@ -71,7 +71,8 @@ fn minigame_map(g: &MinigameView) -> Dynamic {
         ("title", g.title.clone().into()),
         (
             "owner",
-            g.owner.map_or(Dynamic::UNIT, |o| Dynamic::from_int(o as i64)),
+            g.owner
+                .map_or(Dynamic::UNIT, |o| Dynamic::from_int(o as i64)),
         ),
         (
             "members",
@@ -103,7 +104,8 @@ pub(super) fn brick_map(b: &BrickView) -> Dynamic {
         ("owner", Dynamic::from_int(b.owner as i64)),
         (
             "game",
-            b.game.map_or(Dynamic::UNIT, |g| Dynamic::from_int(g as i64)),
+            b.game
+                .map_or(Dynamic::UNIT, |g| Dynamic::from_int(g as i64)),
         ),
         ("name", b.name.clone().into()),
         ("item", b.item.clone().into()),
@@ -243,7 +245,9 @@ fn drop_with(item: &str, options: Map) -> Fallible<()> {
 fn wear(player: Dynamic, image: Dynamic, slot: Dynamic, paint: Option<u8>) -> Fallible<()> {
     let slot = match slot.as_int() {
         Ok(s @ 2..=3) => s as u8,
-        _ => return fail("worn image slots are 2 and 3 (0 is the hand: mount_image(player, image))"),
+        _ => {
+            return fail("worn image slots are 2 and 3 (0 is the hand: mount_image(player, image))");
+        }
     };
     push(Op::WearImage {
         player: id(&player)?,
@@ -320,9 +324,10 @@ pub(super) fn register(engine: &mut Engine) {
     engine.register_fn("drops", || {
         with_world(|world, _| Ok(world.drops().iter().map(drop_map).collect::<Array>()))
     });
-    engine.register_fn("mount_image", |p: Dynamic, image: Dynamic, slot: Dynamic| {
-        wear(p, image, slot, None)
-    });
+    engine.register_fn(
+        "mount_image",
+        |p: Dynamic, image: Dynamic, slot: Dynamic| wear(p, image, slot, None),
+    );
     engine.register_fn(
         "mount_image",
         |p: Dynamic, image: Dynamic, slot: Dynamic, paint: Dynamic| {
