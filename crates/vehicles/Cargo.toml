@@ -5,12 +5,12 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 [dependencies]
-anyhow = "1.0"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-glam = { version = "0.33", features = ["serde"] }
-rapier3d = { version = "=0.36.0", features = ["enhanced-determinism"] }
-sha2 = "0.10"
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+glam = { workspace = true, features = ["serde"] }
+rapier3d.workspace = true
+sha2.workspace = true
 bri-content = { path = "../content" }
 bri-motor = { path = "../motor" }
 bri-package = { path = "../package" }

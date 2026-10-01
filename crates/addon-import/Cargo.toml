@@ -21,11 +21,11 @@ bri-weapons = { path = "../weapons" }
 bri-weapons-import = { path = "../weapons-import" }
 bri-vehicles = { path = "../vehicles" }
 bri-vehicles-import = { path = "../vehicles-import" }
-regex = "1.12"
-glam = "0.33"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-sha2 = "0.10"
-zip = { version = "=6.0.0", default-features = false, features = ["deflate"] }
+regex.workspace = true
+glam.workspace = true
+image = { workspace = true, features = ["jpeg"] }
+sha2.workspace = true
+zip.workspace = true
 
 [dev-dependencies]
 bri-admin = { path = "../admin" }
@@ -34,5 +34,5 @@ bri-net = { path = "../net" }
 bri-sim = { path = "../sim" }
 bri-world = { path = "../world" }
 bri-physics = { path = "../physics" }
-rapier3d = { version = "=0.36.0", features = ["enhanced-determinism"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+rapier3d.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }

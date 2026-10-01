@@ -7,8 +7,8 @@ publish = false
 [dependencies]
 bri-weapons = { path = "../weapons", version = "0.1.0" }
 bri-convert = { path = "../convert", version = "0.1.0" }
-anyhow = "1.0"
-serde_json = "1.0"
-regex = "1.11"
-sha2 = "0.10"
-zip = { version = "=6.0.0", default-features = false, features = ["deflate"] }
+anyhow.workspace = true
+serde_json.workspace = true
+regex.workspace = true
+sha2.workspace = true
+zip.workspace = true

@@ -5,17 +5,17 @@ edition = "2024"
 rust-version = "1.93"
 publish = false
 [dependencies]
-anyhow = "1"
+anyhow.workspace = true
 bri-render = { path = "../render" }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-sha2 = "0.10"
-glam = { version = "0.33", features = ["serde"] }
-bytemuck = { version = "1.25", features = ["derive"] }
-image = { version = "0.25", default-features = false, features = ["png"] }
-wgpu = { version = "=30.0.1", default-features = false, features = ["std","parking_lot","dx12","vulkan","metal","wgsl"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+glam = { workspace = true, features = ["serde"] }
+bytemuck.workspace = true
+image.workspace = true
+wgpu.workspace = true
 [dev-dependencies]
 bri-content = { path = "../content" }
-pollster = "0.4"
+pollster.workspace = true
 bri-physics = { path = "../physics" }
-rapier3d = { version = "=0.36.0", features = ["enhanced-determinism"] }
+rapier3d.workspace = true

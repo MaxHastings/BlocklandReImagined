@@ -9,10 +9,14 @@ bri-files.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["float_roundtrip"] }
-glam = "0.33"
+glam.workspace = true
 bri-events = { path = "../events" }
-imbl = { version = "7", features = ["serde"] }
-serde_bytes = "0.11"
-rmp-serde = "1"
-zstd = "0.13"
+imbl = { workspace = true, features = ["serde"] }
+serde_bytes.workspace = true
+rmp-serde.workspace = true
+zstd.workspace = true
 
+
+[package.metadata.cargo-machete]
+# Used only through `#[serde(with = "serde_bytes")]`, which machete cannot see.
+ignored = ["serde_bytes"]

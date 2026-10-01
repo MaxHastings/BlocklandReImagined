@@ -9,5 +9,5 @@ description = "Packages: namespaced content ids, the package list a peer loads, 
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-sha2 = "0.10"
+sha2.workspace = true
 bri-files = { path = "../files" }

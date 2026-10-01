@@ -8,16 +8,16 @@ publish = false
 
 [dependencies]
 bri-render = { path = "../render" }
-anyhow = "1.0"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-sha2 = "0.10"
-glam = "0.33"
-bytemuck = { version = "1.25", features = ["derive"] }
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-wgpu = { version = "=30.0.1", default-features = false, features = ["std", "parking_lot", "dx12", "metal", "vulkan", "wgsl"] }
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+glam.workspace = true
+bytemuck.workspace = true
+image = { workspace = true, features = ["jpeg"] }
+wgpu.workspace = true
 bri-content = { path = "../content" }
 rayon = "1.12"
 
 [dev-dependencies]
-pollster = "0.4"
+pollster.workspace = true

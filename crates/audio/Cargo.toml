@@ -12,9 +12,9 @@ default = []
 cpal-output = ["dep:cpal"]
 
 [dependencies]
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-sha2 = "0.10"
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
 rtrb = "0.3"
 symphonia = { version = "0.6", default-features = false, features = ["wav", "pcm", "ogg", "vorbis"] }
 cpal = { version = "0.18", optional = true }
