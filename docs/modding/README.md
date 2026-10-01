@@ -300,7 +300,7 @@ front of the brick it hit: `aim().object`, `aim().object_distance` and
 | `hold_distance(player, distance)` | Moves what they hold nearer or farther (0.5 to 64): a reel. |
 | `let_go(player)`, `held(player)` | Ends the hold; what they hold, or `()`. |
 | `spawn_vehicle(def, x, y, z, yaw, [vx, vy, vz], owner)` | A vehicle of this Add-On or one it depends on, belonging to `owner` (or `()`). Counts toward the server's vehicle limits; at most 64 per Add-On. |
-| `remove_vehicle(ref)` | Removes a vehicle this Add-On spawned. |
+| `remove_vehicle(ref)` | Removes a vehicle this Add-On spawned, or, when a player's command asks, one of this Add-On's (or a dependency's) kinds that the player owns (an administrator: anyone's). A spawn-brick vehicle removed this way stays away until the brick's wrench asks again. |
 
 The engine, not the script, decides who may move what: a player may move
 another player when their minigame lets them hurt that player, or,
@@ -757,6 +757,9 @@ no seats cannot be mounted. Three fields exist for Add-Ons:
 - `"harms_only_in_minigames": true` keeps all of that inside minigames:
   outside one the vehicle breaks nothing, damages nothing and pushes
   players aside as any vehicle does, and it never harms its own owner.
+- `"per_player": 3` lets each player have at most that many of this
+  vehicle at once, on top of the server's vehicle limits. A spawn brick
+  past it tells its builder "You already have 3 Steel Balls".
 
 Every vehicle can be placed from a vehicle spawn brick and spawned by a
 rule (`spawn_vehicle`).

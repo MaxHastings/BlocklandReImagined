@@ -595,6 +595,21 @@ impl Session {
                 format!("\u{E000}Server is limited to {limit} {noun}s")
             });
         }
+        // The vehicle's own cap per player (`Definition::per_player`).
+        if let Some(cap) = def.per_player
+            && same_kind
+                .iter()
+                .filter(|v| v.owner == veh::OwnerId(owner) && v.definition == def.id)
+                .count()
+                >= cap as usize
+        {
+            let name = def.name.trim();
+            return Err(if cap == 1 {
+                format!("\u{E000}You already have a {name}")
+            } else {
+                format!("\u{E000}You already have {cap} {name}s")
+            });
+        }
         Ok(())
     }
     fn tag_vehicle(&mut self, id: VehicleId) {

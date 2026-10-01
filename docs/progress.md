@@ -8450,3 +8450,24 @@ default Add-On lists in `bri-package` and `bri-client`. Max's in-game check:
 the can's look in hand and the spray hiss/mist (stock `sprayActivateSound`,
 `sprayFireSound`, `bluePaintEmitter` at `muzzlePoint`, not verifiable
 without v20 content here).
+## Steel Ball from spawn bricks only (v0.1.11)
+
+Max: "why do i have a steel ball in my hand that spawns them? Steel Balls
+imo should only be spawnable from a vehicle plate".
+- The hand-held ball (`steel-ball-kit` weapons.json), /steelball, the roll
+  and hurl commands, the loadout hand-out and the cleanup tick are gone.
+  The ball is picked on a vehicle spawn brick's wrench like any vehicle.
+- New generic vehicle field `per_player` (engine-side, `vehicle_room`):
+  at most that many of one vehicle per player on top of the server's
+  limits. The ball sets 3; a fourth spawn brick shows its builder "You
+  already have 3 Steel Balls" and spawns nothing.
+- /clearballs stays. `remove_vehicle` now also removes, at a player's
+  command, a vehicle of the Add-On's own (or a dependency's) kind that the
+  player owns (administrators: anyone's), so the rule removes spawn-brick
+  balls. A removed spawn-brick ball stays away until the brick's wrench
+  respawns it. `steel-ball` needs only `physics` now.
+- Test: `bri-sim --test showcase
+  steel_balls_come_from_spawn_bricks_three_per_player` (three bricks give
+  three balls, the fourth is refused with the notice, another player's
+  brick still spawns, /clearballs clears only the caller's and they stay
+  away). The per-builder quota test now uses spawn bricks too.
