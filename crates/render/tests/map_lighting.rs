@@ -503,3 +503,74 @@ fn a_switched_off_light_leaves_only_ambient_where_rays_and_lightmap_disagree() {
     let share = floor.visibility[channel / 4][texel * 4 + channel % 4];
     assert!(share > 40, "{share}");
 }
+
+/// A slab's shadow on the floor, its edge texels half lit as the map
+/// compiler filtered them while a ray from each texel's centre says lit or
+/// not. Switching the light off leaves no line of light along the edge.
+#[test]
+fn a_switched_off_light_leaves_no_line_along_its_shadows_edges() {
+    let truth = MapLight {
+        position: [3.0, 4.0, -2.0],
+        color: [0.6, 0.5, 0.4],
+        inner: 5.0,
+        outer: 25.0,
+        channel: None,
+    };
+    let mut scene = lit_room(truth);
+    let light = Vec3::from(truth.position);
+    // The slab at y = 0, x and z from -2 to 2; the floor (material 2, y =
+    // -10) lit by the share of each texel's 4x4 samples that pass it.
+    let floor_image = scene.materials[2].images[8];
+    for ty in 0..64u32 {
+        for tx in 0..64u32 {
+            let mut open = 0;
+            for s in 0..16u32 {
+                let z = ((tx as f32 + (s % 4) as f32 / 4.0 + 0.125) / 64.0 * 2.0 - 1.0) * 10.0;
+                let x = ((ty as f32 + (s / 4) as f32 / 4.0 + 0.125) / 64.0 * 2.0 - 1.0) * 10.0;
+                let p = Vec3::new(x, -10.0, z);
+                let hit = p + (light - p) * (10.0 / (light.y + 10.0));
+                open += u32::from(hit.x.abs() > 2.0 || hit.z.abs() > 2.0);
+            }
+            let i = ((ty * 64 + tx) * 4) as usize;
+            for c in &mut scene.images[floor_image].rgba[i..i + 3] {
+                *c = (f32::from(*c) * open as f32 / 16.0 + 0.5) as u8;
+            }
+        }
+    }
+    scene.lightmap_bases[2].1 = Arc::new(scene.images[floor_image].clone());
+    for m in 0..scene.materials.len() {
+        let mut parts = scene.images[scene.materials[m].images[8]].clone();
+        parts.rgba.chunks_exact_mut(4).for_each(|t| t[3] = 0);
+        scene.images.push(parts);
+        scene.materials[m].images[9] = scene.images.len() - 1;
+    }
+    let first = scene.vertices.len() as u32;
+    for (x, z) in [(-2.0, -2.0), (2.0, -2.0), (2.0, 2.0), (-2.0, 2.0)] {
+        scene.vertices.push(SceneVertex {
+            position: [x, 0.0, z],
+            normal: [0.0, -1.0, 0.0],
+            uv: [0.0; 2],
+            lightmap_uv: [0.0; 2],
+            color: [1.0; 4],
+            fx: [0.0; 4],
+        });
+    }
+    let start = scene.indices.len() as u32;
+    scene.indices.extend([0, 1, 2, 0, 2, 3].map(|i| first + i));
+    scene.batches.push(MeshBatch {
+        indices: start..start + 6,
+        material: scene.materials.len(),
+        center: [0.0; 3],
+    });
+    scene.materials.push(Material::surface("slab", 0, 0));
+    let lit = Bake::new(&scene).expect("lightmapped room").bake(1.0, 50_000, 1.0, 50_000);
+    let floor = lit.dynamic.iter().find(|s| s.parts_image as usize == scene.materials[2].images[9]).expect("the floor's sheet");
+    let worst = floor
+        .left
+        .chunks_exact(4)
+        .enumerate()
+        .map(|(i, t)| (t[..3].iter().copied().max().unwrap_or(0), i))
+        .max()
+        .unwrap_or_default();
+    assert!(worst.0 <= 8, "the floor keeps {} levels at texel {} with the light off", worst.0, worst.1);
+}

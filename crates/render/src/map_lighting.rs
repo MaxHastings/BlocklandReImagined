@@ -238,7 +238,7 @@ const LEAK_STEP: i64 = 3;
 const LEAK_LEVELS: f32 = 8.0 / 255.0;
 const LEAK_SUN: f32 = 0.12;
 /// Names the fit, the bake and the stored layout; change it with either.
-const FORMAT: &[u8; 8] = b"BRIML\0\0\x06";
+const FORMAT: &[u8; 8] = b"BRIML\0\0\x07";
 
 /// A light recovered from a map's lightmaps. The map compiler's point light:
 /// full `color` out to `inner`, then falling linearly to nothing at `outer`,
@@ -855,10 +855,40 @@ impl Bake {
             let texel_of = |i: usize| {
                 parts.rgba.get(i * 4..i * 4 + 3).map(|t| Vec3::new(t[0] as f32, t[1] as f32, t[2] as f32) / 255.0)
             };
+            // A ray samples a texel's centre, the lightmap its whole area: a
+            // texel takes the lights its neighbours on the same surface see,
+            // so a shadow's edge, half lit, gives its light back with it
+            // instead of keeping a line of it.
+            let (w, h) = (parts.width as i64, parts.height as i64);
+            let mut grid: Vec<Option<(u32, Vec3, Vec3)>> = vec![None; (w * h).max(0) as usize];
+            for &(l, mask) in &by_sheet[sheet] {
+                if let Some(g) = grid.get_mut(l.index as usize) {
+                    *g = Some((mask, l.position, l.normal));
+                }
+            }
+            let dilated = |l: &Lexel, mask: u32| {
+                let (x, y) = (l.index as i64 % w.max(1), l.index as i64 / w.max(1));
+                let mut out = mask;
+                for (dx, dy) in (-1..=1).flat_map(|dy| (-1..=1).map(move |dx| (dx, dy))) {
+                    let (nx, ny) = (x + dx, y + dy);
+                    if (dx, dy) == (0, 0) || nx < 0 || ny < 0 || nx >= w || ny >= h {
+                        continue;
+                    }
+                    if let Some((m, position, normal)) = grid[(ny * w + nx) as usize] {
+                        let apart = position - l.position;
+                        let same_surface = normal.dot(l.normal) > 0.95 && apart.dot(l.normal).abs() <= 0.1 * apart.length() + 1e-3;
+                        if same_surface {
+                            out |= m;
+                        }
+                    }
+                }
+                out
+            };
             // Per texel: its index, its leftover light and each light's share.
             let mut shared: Vec<(usize, Vec3, Vec<f32>)> = Vec::new();
             let mut reach = 0u32;
             for &(l, mask) in &by_sheet[sheet] {
+                let mask = dilated(l, mask);
                 let i = l.index as usize;
                 let Some(texel) = texel_of(i) else { continue };
                 // The authored light (a cleaned leak holds less), above the

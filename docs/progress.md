@@ -9084,3 +9084,37 @@ folders; classic files come in through drop folders in our own folders.
 - Tests: `bri-client --lib old_saves` (temp folders; an install beside the
   saves folder is never read, and an earlier index's install entries and
   copies are dropped).
+## 2026-10-01 A broken bulb switches its light the same in every live mode (for v0.1.11)
+Max broke the Bedroom lamp's bulb and none of the lighting modes looked
+right: the shade kept glowing and, in Unified, the room went much darker
+than the light the bulb gave.
+- v20's own data: breaking a `Glass` shape hides it and plays its
+  explosion, and nothing touches the mission's lighting. Classic keeps
+  that rule (the light stays). Unified, Shine and Dynamic put the lamp's
+  light out, as Max asked on 09-30.
+- Unified and Shine now take the same per-texel light shares as Dynamic
+  (`decomposed_lightmap`, when the material carries the bake's
+  `DynamicSheet` shares), so a switched-off light leaves exactly the light
+  it baked in all three. The client and `lighting_probe` equip the shares
+  in Unified modes on a map with bulbs, tubes or Add-On light rules, and
+  in Dynamic always. Every map light is uploaded (object lights first) with
+  a slot table from map light index to uniform slot.
+- Which lights a bulb owns is one rule, `map_lighting::fixture_owners`
+  (24 units, shared within 1.5x of the nearest shape), used by the client
+  and the probe.
+- The bake gives a texel the lights its neighbours on the same surface see
+  by rays. A ray samples a texel's centre and the lightmap its whole area,
+  so a shadow edge's texels kept a dashed line of the light after it went
+  out (the Gate's probe showed one on the wall by the window). Bake format 7.
+- `lighting_probe`: `BRI_BREAK=1` breaks every bulb and tube by the
+  client's rule. Within 4 units of a light shape it prints each triangle's
+  lightmap, Dynamic leftover, light shares and facing. `BRI_DUMP_LEFT=1`
+  saves each sheet's decomposed light beside its leftover.
+- Open: the shade still glows after the break on the real Bedroom. The
+  probe's new lines show which of its texels keep the light; the fix
+  follows from them.
+
+Tests: `bri-render --test unified_lighting a_switched_off_light_leaves_the_same_light_in_every_live_mode`
+(modes 1-3 identical, fails without the Unified per-texel branch);
+`--test map_lighting a_switched_off_light_leaves_no_line_along_its_shadows_edges`;
+`bri-client --lib a_broken_bulb_switches_off_its_lights_and_rules_tint_the_rest`.

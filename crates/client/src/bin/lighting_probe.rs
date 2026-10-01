@@ -24,7 +24,10 @@
 //! or tube does (each "Light shape" line lists its lights); `BRI_BREAK=1`
 //! breaks every bulb and tube by the client's rule. Each recovered light is
 //! listed with its owning light shapes, and each light shape with the map
-//! surfaces within 40 units of it.
+//! surfaces within 40 units of it, and within 4 units of it each triangle's
+//! lightmap, Dynamic leftover and light shares, and the facing to its
+//! lights. `BRI_DUMP_LEFT=1` saves each Dynamic sheet as `left-{image}.png`:
+//! the decomposed light beside what is left with every light off.
 //! `BRI_MAP=<map-substring>` draws the build on another map sharing its
 //! interior (a Kitchen save on KitchenDark). `BRI_BRICK_LIGHTS=1` adds the
 //! build's brick lights (the nearest 256 to each view, as the client).
@@ -485,6 +488,11 @@ fn main() -> Result<()> {
                 owners.iter().map(|(n, _)| *n).collect::<Vec<_>>()
             );
         }
+        let owned: Vec<(usize, Vec<u32>)> = bri_render::map_lighting::fixture_owners(&u.lights, &light_shapes)
+            .into_iter()
+            .map(|o| o.into_iter().map(|(n, _)| n).collect())
+            .enumerate()
+            .collect();
         for &(node, centre) in &light_shapes {
             for (index, batch) in scene.batches.iter().enumerate() {
                 let range = batch.indices.start as usize..batch.indices.end as usize;
@@ -514,6 +522,72 @@ fn main() -> Result<()> {
                     near.len(),
                     near.iter().copied().fold(f32::INFINITY, f32::min)
                 );
+                // Within 4 units (a lamp's shade): per triangle, its
+                // lightmap texel, the Dynamic leftover and light shares
+                // there, and which of the shape's lights it faces.
+                let Some(sheet) = u.dynamic.iter().find(|d| d.parts_image as usize == m.images[9]) else { continue };
+                let range = batch.indices.start as usize..batch.indices.end as usize;
+                for t in scene.indices[range].chunks_exact(3) {
+                    let v: Vec<&bri_render::scene::SceneVertex> = t.iter().map(|&i| &scene.vertices[i as usize]).collect();
+                    let at = v.iter().map(|v| Vec3::from(v.position)).sum::<Vec3>() / 3.0;
+                    if v.iter().all(|v| centre.distance(Vec3::from(v.position)) > 4.0) {
+                        continue;
+                    }
+                    let normal = v.iter().map(|v| Vec3::from(v.normal)).sum::<Vec3>().normalize_or_zero();
+                    let uv = v.iter().fold([0.0f32; 2], |a, v| [a[0] + v.lightmap_uv[0] / 3.0, a[1] + v.lightmap_uv[1] / 3.0]);
+                    let texel = |w: u32, h: u32| {
+                        let x = ((uv[0] * w as f32) as u32).min(w - 1);
+                        let y = ((uv[1] * h as f32) as u32).min(h - 1);
+                        (y * w + x) as usize
+                    };
+                    let i = texel(lightmap.width, lightmap.height);
+                    let j = texel(sheet.width, sheet.height);
+                    let shares: Vec<String> = sheet
+                        .lights
+                        .iter()
+                        .enumerate()
+                        .map(|(c, &k)| (k, sheet.visibility[c / 4][j * 4 + c % 4]))
+                        .filter(|&(_, s)| s > 0)
+                        .map(|(k, s)| format!("{k}:{s}"))
+                        .collect();
+                    let facing: Vec<String> = owned
+                        .iter()
+                        .filter(|(_, o)| o.contains(&node))
+                        .map(|&(k, _)| {
+                            let l = &u.lights[k];
+                            let delta = Vec3::from(l.position) - at;
+                            format!("{k}:{}{:.1}", if normal.dot(delta) > 0.0 { "faces " } else { "away " }, delta.length())
+                        })
+                        .collect();
+                    println!(
+                        "    tri at {:.1?} normal {:.2?}: lightmap {:?} left {:?} shares [{}] owned lights [{}]",
+                        at.to_array(),
+                        normal.to_array(),
+                        &lightmap.rgba[i * 4..i * 4 + 3],
+                        &sheet.left[j * 4..j * 4 + 4],
+                        shares.join(" "),
+                        facing.join(" ")
+                    );
+                }
+            }
+        }
+        // BRI_DUMP_LEFT=1: each Dynamic sheet as `left-{image}.png`, its
+        // decomposed light beside what stays with every light off.
+        if std::env::var("BRI_DUMP_LEFT").is_ok_and(|v| v == "1") {
+            for d in &u.dynamic {
+                let parts = &scene.images[d.parts_image as usize];
+                let (w, h) = (d.width, d.height);
+                let mut pixels = vec![255u8; (w * 2 * h * 4) as usize];
+                for y in 0..h {
+                    for x in 0..w {
+                        let i = ((y * w + x) * 4) as usize;
+                        let row = (y * w * 2) as usize;
+                        let (a, b) = ((row + x as usize) * 4, (row + (w + x) as usize) * 4);
+                        pixels[a..a + 3].copy_from_slice(parts.rgba.get(i..i + 3).unwrap_or(&[0; 3]));
+                        pixels[b..b + 3].copy_from_slice(&d.left[i..i + 3]);
+                    }
+                }
+                image::save_buffer(out.join(format!("left-{}.png", d.parts_image)), &pixels, w * 2, h, image::ColorType::Rgba8)?;
             }
         }
         // BRI_LIGHT_AT=x,y,z[;x,y,z...]: what each recovered light gives a
