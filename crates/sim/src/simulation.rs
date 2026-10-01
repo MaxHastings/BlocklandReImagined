@@ -11,7 +11,7 @@ use glam::Vec3;
 use rapier3d::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
 mod scan;
-pub use scan::{BoxScan, StackScan, spend, work};
+pub use scan::{BoxScan, StackScan, center_copy, spend, work};
 // Brick IDs occupy u64; zero remains available for untagged dynamic bodies.
 pub const MAP_TAG: u128 = u128::MAX;
 /// How far a brick may dip into an upward-facing map floor. Map floors need

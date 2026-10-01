@@ -59,11 +59,46 @@ copy job, and prints each job's ticks, total, first and worst tick against
 the 2.5 ms copy budget (10,000 units), then the same as one JSON line.
 `COPY_TIMING_SIDE=200` runs a smaller grid.
 
-Linux container results vary with two allocator stalls outside the copy
-code: transparent huge page compaction (THP set to madvise and mimalloc's
-`allow_thp`; 9 ms ticks, gone with `PR_SET_THP_DISABLE`) and mimalloc's
-purge on large frees (8 to 35 ms). Windows has no THP. Both are
-allocator settings for the whole engine, not changed here.
+It fails (exit code 1) when any job's worst tick, the starting command
+included, passes 8 ms: a quarter of the 32 ms server tick, leaving the
+rest to physics, events and replication while a million-brick edit runs.
+The copy work itself is 2.5 ms; the bound covers the parts one slice
+cannot split (a bucket of bricks, a chunk rebuilt). A selection's copy
+is reserved once (`CopyBuilder::reserve`), not doubled and copied a tick
+at a time.
 
-A selection's copy is now reserved once (`Blueprint::reserve`), not
-doubled and copied a tick at a time.
+## Per-tick outliers (Windows, c674fd44b)
+
+The Gate's Windows run of c674fd44b had worst ticks of 4.6 ms (select),
+40 ms (cut), 42 ms (plant), 49 ms (undo plant), 24 ms (undo cut),
+17 ms (supercut) and 74 ms (undo supercut). Causes and fixes:
+
+- **The allocator's purge.** An allocation spy (every alloc or free over
+  0.5 ms, with its caller) found single 4 KB frees of the world's brick
+  map nodes (`imbl` B-tree leaves dropped in `Authority::remove`) taking
+  5 to 20 ms. mimalloc 3 decommits freed memory a second after it is
+  freed, inside whichever later `free` or `malloc` notices, so a tick
+  after a big cut or undo paid for decommitting hundreds of megabytes.
+  `bri_net::allocator::tune()` turns purging off (`purge_delay = -1`)
+  at the start of the game, the dedicated server and the probes. Freed
+  pages stay committed and are reused; the process keeps its peak working
+  set instead of returning memory between big edits.
+- **A box selection's last layer joined in one tick.** A layer of
+  buckets is gathered by rows, then joined to the selection; a floor of
+  a million plates is one row, copied in one go (6 ms). Rows are now kept
+  in runs of 16,384 (never one big growing vector) and join the selection
+  a slice at a time, charged to the copy budget (`work::MOVED_PER_UNIT`,
+  32 ids a unit). The selection is reserved once at the scan's start.
+- **A copy's pivot move at the end.** `CopyBuilder::finish` moved every
+  brick round the pivot at once (4 ms for a million); selection and load
+  jobs now do it a slice at a time (`CopyBuilder::center`,
+  `center_copy`) before finishing.
+- **The finished selection's ids copied for the report.** The job's end
+  reports counts only; the ids stay with the held copy (3 ms saved).
+
+Linux container after the fixes (`MIMALLOC_ALLOW_THP=0`; the container's
+transparent huge pages add their own compaction stalls): worst ticks
+select 2.2 to 3.4 ms, cut 1.6 to 2.0, plant 2.6 to 3.6, undo plant 2.3 to
+3.0, undo cut 2.4 to 3.2, supercut 1.8 to 2.6, undo supercut 2.0 to 2.8.
+One run in four had one stray tick (5 to 18 ms) at a different point
+each time with no page faults in it: the virtual machine, not the copy.

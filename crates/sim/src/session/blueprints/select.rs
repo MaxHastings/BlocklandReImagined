@@ -3,7 +3,8 @@
 use super::*;
 use crate::blueprint::CopyBuilder;
 use crate::session::copy_jobs::{CopyWork, Ending, Progress};
-use crate::simulation::{BoxScan, Selection, StackScan, spend, work};
+use crate::session::copy_store::CopyOutcome;
+use crate::simulation::{BoxScan, Selection, StackScan, center_copy, spend, work};
 
 /// A brick taken into a copy: read under its highlight and stored small.
 const CAPTURE: u32 = work::EDIT * 2;
@@ -194,29 +195,41 @@ impl SelectWork {
 
     /// The copy taken, held by `owner`; or why there is none.
     pub fn complete(self, s: &mut Session, owner: OwnerId) -> Copied {
-        let failed = |error| Copied {
-            selection: Default::default(),
-            error: Some(error),
-        };
-        if let Some(refusal) = self.refusal {
-            return failed(refusal);
+        match self.hold(s, owner) {
+            Ok((selection, sources)) => Copied {
+                selection: Selection {
+                    bricks: sources.to_vec(),
+                    ..selection
+                },
+                error: None,
+            },
+            Err(error) => Copied {
+                selection: Default::default(),
+                error: Some(error),
+            },
         }
-        let blueprint = match self.builder.finish() {
-            Ok(blueprint) => blueprint,
-            Err(error) => return failed(("invalid", format!("{error:#}"))),
-        };
+    }
+
+    /// The copy taken, held by `owner`, with the selection's counts and
+    /// the bricks it came from; or why there is none.
+    fn hold(
+        self,
+        s: &mut Session,
+        owner: OwnerId,
+    ) -> std::result::Result<(Selection, Arc<Vec<BrickId>>), Refusal> {
+        if let Some(refusal) = self.refusal {
+            return Err(refusal);
+        }
+        let blueprint = self
+            .builder
+            .finish()
+            .map_err(|error| ("invalid", format!("{error:#}")))?;
         let mut held = HeldCopy::new(self.sources, &self.package, self.rule.partial);
         held.shown = !self.hold.hidden;
         held.area = self.area;
-        let selection = Selection {
-            bricks: held.sources.to_vec(),
-            ..self.selection
-        };
+        let sources = held.sources.clone();
         s.hold_blueprint(owner, Arc::new(blueprint), held);
-        Copied {
-            selection,
-            error: None,
-        }
+        Ok((self.selection, sources))
     }
 }
 
@@ -291,23 +304,29 @@ impl CopyWork for SelectWork {
             });
             self.sources.push(id);
         }
-        Ok(true)
+        // All in: moved round the copy's pivot, a slice at a time too.
+        Ok(self.builder.is_empty() || center_copy(&mut self.builder, budget))
     }
 
     fn finish(self: Box<Self>, s: &mut Session, owner: OwnerId, ending: Ending) {
         let package = self.package.clone();
-        let copied = match ending {
-            Ending::Done => self.complete(s, owner),
+        // Told by count: the bricks' ids stay with the held copy.
+        let none = Selection::default();
+        let outcome = match ending {
+            Ending::Done => match self.hold(s, owner) {
+                Ok((selection, sources)) => CopyOutcome::selected(sources.len(), &selection, None),
+                Err(error) => CopyOutcome::selected(0, &none, Some(error)),
+            },
             Ending::Left => return,
-            Ending::Canceled => Copied {
-                selection: Default::default(),
-                error: Some(("canceled", "Selection canceled!".to_string())),
-            },
-            Ending::Failed(error) => Copied {
-                selection: Default::default(),
-                error: Some(("invalid", format!("{error:#}"))),
-            },
+            Ending::Canceled => CopyOutcome::selected(
+                0,
+                &none,
+                Some(("canceled", "Selection canceled!".to_string())),
+            ),
+            Ending::Failed(error) => {
+                CopyOutcome::selected(0, &none, Some(("invalid", format!("{error:#}"))))
+            }
         };
-        s.report_copy(&package, owner, copied);
+        s.report_copy(&package, owner, outcome);
     }
 }

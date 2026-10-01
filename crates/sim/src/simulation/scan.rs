@@ -13,6 +13,10 @@ use crate::grid::{BUCKET, bucket_span};
 pub mod work {
     /// One brick a box scan looks at.
     pub const SCAN: u32 = 1;
+    /// Bricks or ids moved in memory for one unit: a box scan's layer
+    /// joining its selection, a copy's bricks moved round its pivot (a
+    /// million of either took 4 to 6 ms at once).
+    pub const MOVED_PER_UNIT: usize = 32;
     /// One brick read or repainted (a capture, a trust check, paint).
     pub const EDIT: u32 = 2;
     /// One brick removed.
@@ -32,6 +36,14 @@ pub mod work {
     /// One brick of a chunk built again because a brick beside it changed
     /// ([`super::Simulation::charge_rebuilds`]).
     pub const REBUILD: u32 = 3;
+}
+
+/// Move what of `builder` `budget` allows round its pivot
+/// ([`work::MOVED_PER_UNIT`]); true once it is all moved.
+pub fn center_copy(builder: &mut crate::blueprint::CopyBuilder, budget: &mut u32) -> bool {
+    let moved = builder.center(*budget as usize * work::MOVED_PER_UNIT);
+    *budget -= moved.div_ceil(work::MOVED_PER_UNIT) as u32;
+    builder.is_centered()
 }
 
 /// Take `cost` from `budget`, or say there is not enough left.
@@ -136,12 +148,15 @@ impl StackScan {
     }
 }
 
+/// Bricks in one run of a box scan's row.
+const RUN: usize = 16 * 1024;
+
 /// A box selection ([`Simulation::select_box`]) worked a slice at a time:
 /// the occupied buckets of the box from the bottom up, each brick taken
 /// from the bucket holding its lowest corner within the box. A layer of
 /// buckets is complete before its bricks join the selection, lowest plate
 /// first, so the selection stays lowest first and a limit keeps the
-/// lowest bricks.
+/// lowest bricks. Joining is work like the rest, a slice at a time.
 pub struct BoxScan {
     area: Bounds,
     limited: bool,
@@ -151,8 +166,13 @@ pub struct BoxScan {
     next: usize,
     /// The layer of buckets being looked through.
     layer: Option<i32>,
-    /// This layer's bricks by their lowest plate.
-    rows: BTreeMap<i32, Vec<BrickId>>,
+    /// This layer's bricks by their lowest plate, in runs of at most
+    /// [`RUN`]: a row of a million never grows (and is copied) at once.
+    rows: BTreeMap<i32, Vec<Vec<BrickId>>>,
+    /// Finished layers' rows still joining the selection, lowest first,
+    /// and how many of the first have joined.
+    joining: std::collections::VecDeque<Vec<BrickId>>,
+    joined: usize,
     pub selection: Selection,
     done: bool,
 }
@@ -179,6 +199,15 @@ impl BoxScan {
             sim.index.occupied_keys().filter(within).collect()
         };
         keys.sort_unstable_by_key(|&(x, y, z)| (y, x, z));
+        // Reserved once here (at most the limit), not doubled and copied
+        // mid-scan, where one grow of a big selection took a whole tick.
+        // Untouched until bricks join it.
+        let found: usize = keys
+            .iter()
+            .map(|&key| sim.index.bucket_bounds(key).len())
+            .sum();
+        let mut selection = Selection::default();
+        selection.bricks.reserve(found.min(limit));
         Self {
             area,
             limited,
@@ -187,7 +216,9 @@ impl BoxScan {
             next: 0,
             layer: None,
             rows: BTreeMap::new(),
-            selection: Selection::default(),
+            joining: Default::default(),
+            joined: 0,
+            selection,
             done: false,
         }
     }
@@ -214,16 +245,20 @@ impl BoxScan {
             )
         };
         while !self.done {
-            let Some(&key) = self.keys.get(self.next) else {
-                self.flush_layer();
-                self.done = true;
+            if !self.join(budget) || self.done {
                 break;
+            }
+            let Some(&key) = self.keys.get(self.next) else {
+                if self.rows.is_empty() {
+                    self.done = true;
+                } else {
+                    self.finish_layer();
+                }
+                continue;
             };
             if self.layer.is_some_and(|y| y != key.1) {
-                self.flush_layer();
-                if self.done {
-                    break;
-                }
+                self.finish_layer();
+                continue;
             }
             // A whole bucket at a time: at most a few thousand bricks.
             if *budget == 0 {
@@ -247,21 +282,130 @@ impl BoxScan {
                     self.selection.refused += 1;
                     continue;
                 }
-                self.rows.entry(b.min[1]).or_default().push(id);
+                let runs = self.rows.entry(b.min[1]).or_default();
+                match runs.last_mut() {
+                    Some(run) if run.len() < RUN => run.push(id),
+                    _ => runs.push(vec![id]),
+                }
             }
         }
         self.done
     }
-    /// The finished layer's bricks into the selection, lowest first; past
-    /// the limit, the selection is complete.
-    fn flush_layer(&mut self) {
-        for (_, ids) in std::mem::take(&mut self.rows) {
-            self.selection.bricks.extend(ids);
+    /// The layer looked through: its rows wait to join, lowest first.
+    fn finish_layer(&mut self) {
+        self.joining
+            .extend(std::mem::take(&mut self.rows).into_values().flatten());
+        self.layer = None;
+    }
+    /// Finished rows into the selection as far as `budget` allows
+    /// ([`work::MOVED_PER_UNIT`]); true once none wait. Past the limit,
+    /// the selection is complete.
+    fn join(&mut self, budget: &mut u32) -> bool {
+        while let Some(row) = self.joining.front() {
+            let room = *budget as usize * work::MOVED_PER_UNIT;
+            if room == 0 {
+                return false;
+            }
+            let rest = &row[self.joined..];
+            let taking = rest.len().min(room);
+            self.selection.bricks.extend_from_slice(&rest[..taking]);
+            *budget -= taking.div_ceil(work::MOVED_PER_UNIT) as u32;
+            self.joined += taking;
+            if self.joined == row.len() {
+                self.joining.pop_front();
+                self.joined = 0;
+            }
+            if self.selection.bricks.len() > self.limit {
+                self.selection.bricks.truncate(self.limit);
+                self.selection.limit_reached = true;
+                self.joining.clear();
+                self.done = true;
+                return true;
+            }
         }
-        if self.selection.bricks.len() > self.limit {
-            self.selection.bricks.truncate(self.limit);
-            self.selection.limit_reached = true;
-            self.done = true;
+        true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testing;
+    use bri_world::ContentRef;
+
+    /// A floor of `side` by `side` plates, one row of bricks.
+    fn floor(side: usize) -> Simulation {
+        let mut world = World::new("Floor".into(), "floor".into(), vec![[1.0; 4]]);
+        for x in 0..side {
+            for z in 0..side {
+                let position = [0.25 + x as f32 * 0.5, 0.1, 0.25 + z as f32 * 0.5];
+                let brick = Brick::new(ContentRef::Resolved(testing::PLATE.into()), position, 0);
+                world.bricks.insert(world.next_brick_id, brick);
+                world.next_brick_id += 1;
+            }
         }
+        Simulation::new(world, testing::definitions(), vec![]).unwrap()
+    }
+
+    #[test]
+    fn a_box_scan_joins_a_big_row_a_slice_at_a_time() {
+        let sim = floor(200);
+        let area = Bounds {
+            min: [-10, -10, -10],
+            size: [1000, 100, 1000],
+        };
+        let mut scan = BoxScan::new(&sim, area, false, usize::MAX);
+        let budget = 100;
+        let mut steps = 0;
+        loop {
+            let before = scan.selection.bricks.len();
+            let mut left = budget;
+            let done = scan.step(&sim, &mut left, |_| true);
+            // A slice: never the 40,000-plate row at once.
+            let joined = scan.selection.bricks.len() - before;
+            assert!(joined <= budget as usize * work::MOVED_PER_UNIT, "{joined}");
+            steps += 1;
+            if done {
+                break;
+            }
+        }
+        assert_eq!(scan.selection.bricks.len(), 200 * 200);
+        assert!(steps > 40_000 / (100 * work::MOVED_PER_UNIT));
+        // The same bricks in the same order as all at once.
+        let all = sim.select_box(area, false, usize::MAX, |_| true);
+        assert_eq!(scan.selection.bricks, all.bricks);
+        // Cut short at a limit inside a row.
+        let limited = sim.select_box(area, false, 12_345, |_| true);
+        assert_eq!(limited.bricks[..], all.bricks[..12_345]);
+        assert!(limited.limit_reached);
+    }
+
+    #[test]
+    fn a_copy_is_centered_a_slice_at_a_time() {
+        let sim = floor(10);
+        let mut builder = crate::blueprint::CopyBuilder::new("weapon/x");
+        let mut whole = crate::blueprint::CopyBuilder::new("weapon/x");
+        for brick in sim.state().bricks.values() {
+            builder.push(brick, &sim.definitions).unwrap();
+            whole.push(brick, &sim.definitions).unwrap();
+        }
+        let mut steps = 0;
+        loop {
+            let mut budget = 1;
+            steps += 1;
+            if center_copy(&mut builder, &mut budget) {
+                break;
+            }
+            assert_eq!(budget, 0);
+            let late = builder.push(&sim.state().bricks[&1], &sim.definitions);
+            assert!(late.is_err());
+        }
+        assert_eq!(steps, 100usize.div_ceil(work::MOVED_PER_UNIT));
+        let (sliced, whole) = (builder.finish().unwrap(), whole.finish().unwrap());
+        assert_eq!(sliced.origin, whole.origin);
+        assert_eq!(
+            sliced.bricks.iter().map(|b| b.position).collect::<Vec<_>>(),
+            whole.bricks.iter().map(|b| b.position).collect::<Vec<_>>()
+        );
     }
 }

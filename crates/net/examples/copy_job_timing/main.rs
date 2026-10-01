@@ -7,6 +7,9 @@
 //! against the tick's copy work (`DEFAULT_COPY_WORK`, 10,000 units of a
 //! quarter microsecond: 2.5 ms). The last line is the same as JSON.
 //!
+//! It fails when any job's worst tick, the command that starts it
+//! included, passes [`MAX_TICK`].
+//!
 //! cargo run --release -p bri-net --example copy_job_timing
 use anyhow::{Context, Result, bail};
 use bri_package::packages::{PackageEntry, PackageSet, Side};
@@ -37,6 +40,12 @@ fn side() -> usize {
         .filter(|&n| (1..=1000).contains(&n))
         .unwrap_or(1000)
 }
+/// The most one tick of a copy job may take: a quarter of the 32 ms
+/// server tick, so physics, events and replication keep the other three
+/// quarters on a host with a million-brick edit running. The copy work
+/// itself is 2.5 ms; the rest is what one slice can't be split below (a
+/// bucket of bricks, a chunk rebuilt, a selection grown).
+const MAX_TICK: Duration = Duration::from_millis(8);
 /// A quarter microsecond: one unit of copy work.
 const UNIT: Duration = Duration::from_nanos(250);
 
@@ -162,6 +171,7 @@ fn copy_dir(from: &Path, to: &Path) -> Result<()> {
 }
 
 fn main() -> Result<()> {
+    bri_net::allocator::tune();
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let sim = manifest.join("../sim");
     let here = manifest.join("examples/copy_job_timing");
@@ -247,6 +257,7 @@ fn run(side: usize, sim: &Path, here: &Path, root: &Path) -> Result<()> {
         "copy_budget_ms": ms(budget),
         "worst_tick_ms": ms(worst),
         "worst_over_budget": worst.as_secs_f64() / budget.as_secs_f64(),
+        "max_tick_ms": ms(MAX_TICK),
         "jobs": timings.iter().map(|t| serde_json::json!({
             "job": t.job,
             "ticks": t.ticks,
@@ -256,5 +267,17 @@ fn run(side: usize, sim: &Path, here: &Path, root: &Path) -> Result<()> {
         })).collect::<Vec<_>>(),
     });
     println!("{json}");
+    let over: Vec<String> = timings
+        .iter()
+        .filter(|t| t.worst > MAX_TICK)
+        .map(|t| format!("{} {:.2} ms", t.job, ms(t.worst)))
+        .collect();
+    if !over.is_empty() {
+        bail!(
+            "a copy job's tick went over {:.0} ms: {}",
+            ms(MAX_TICK),
+            over.join(", ")
+        );
+    }
     Ok(())
 }

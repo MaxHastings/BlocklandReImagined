@@ -120,7 +120,8 @@ impl Outline {
 }
 
 /// A copy taken a brick at a time ([`Blueprint::capture`] in slices): each
-/// brick as it stands in the world, then the pivot once all are in.
+/// brick as it stands in the world, then the pivot once all are in, the
+/// bricks moved round it in slices too ([`CopyBuilder::center`]).
 pub struct CopyBuilder {
     tool: String,
     kinds: Vec<String>,
@@ -130,6 +131,9 @@ pub struct CopyBuilder {
     bricks: Vec<CopyBrick>,
     min: [i32; 3],
     max: [i32; 3],
+    /// The pivot, once centering began, and the bricks moved round it.
+    pivot: Option<[f32; 3]>,
+    centered: usize,
 }
 impl CopyBuilder {
     pub fn new(tool: &str) -> Self {
@@ -142,6 +146,8 @@ impl CopyBuilder {
             bricks: Vec::new(),
             min: [i32::MAX; 3],
             max: [i32::MIN; 3],
+            pivot: None,
+            centered: 0,
         }
     }
     pub fn len(&self) -> usize {
@@ -173,6 +179,7 @@ impl CopyBuilder {
             self.bricks.len() < MAX_BLUEPRINT_BRICKS,
             "A copy holds 1 to {MAX_BLUEPRINT_BRICKS} bricks"
         );
+        ensure!(self.pivot.is_none(), "The copy is being centered");
         let position: [f32; 3] = std::array::from_fn(|a| brick.position[a] + shift[a]);
         let bounds = Bounds::at(position, brick.quarter_turns, &definitions.get(brick)?.mesh)?;
         let ContentRef::Resolved(id) = &brick.definition else {
@@ -215,30 +222,43 @@ impl CopyBuilder {
         });
         Ok(())
     }
-    /// The copy, its pivot the stud corner nearest the middle at its
-    /// bottom plate.
-    pub fn finish(self) -> Result<Blueprint> {
+    /// Move up to `count` more bricks round the pivot (the stud corner
+    /// nearest the middle at the bottom plate): how many it moved. Every
+    /// brick is in by the first call; a copy job spreads this over ticks.
+    pub fn center(&mut self, count: usize) -> usize {
+        let (min, max) = (self.min, self.max);
+        let pivot = *self.pivot.get_or_insert([
+            (min[0] + max[0]).div_euclid(2) as f32 * 0.5,
+            min[1] as f32 * 0.2,
+            (min[2] + max[2]).div_euclid(2) as f32 * 0.5,
+        ]);
+        let end = self.bricks.len().min(self.centered.saturating_add(count));
+        for brick in &mut self.bricks[self.centered..end] {
+            brick.position = std::array::from_fn(|a| brick.position[a] - pivot[a]);
+        }
+        let moved = end - self.centered;
+        self.centered = end;
+        moved
+    }
+    /// Every brick moved round the pivot.
+    pub fn is_centered(&self) -> bool {
+        self.pivot.is_some() && self.centered == self.bricks.len()
+    }
+    /// The copy, centered on its pivot ([`Self::center`]).
+    pub fn finish(mut self) -> Result<Blueprint> {
         ensure!(
             !self.bricks.is_empty(),
             "A copy holds 1 to {MAX_BLUEPRINT_BRICKS} bricks"
         );
+        self.center(usize::MAX);
         let (min, max) = (self.min, self.max);
-        let pivot = [
-            (min[0] + max[0]).div_euclid(2) as f32 * 0.5,
-            min[1] as f32 * 0.2,
-            (min[2] + max[2]).div_euclid(2) as f32 * 0.5,
-        ];
-        let mut bricks = self.bricks;
-        for brick in &mut bricks {
-            brick.position = std::array::from_fn(|a| brick.position[a] - pivot[a]);
-        }
         Ok(Blueprint {
             tool: self.tool,
-            origin: pivot,
+            origin: self.pivot.expect("centered"),
             size: std::array::from_fn(|a| max[a] - min[a]),
             kinds: self.kinds,
             prints: self.prints,
-            bricks,
+            bricks: self.bricks,
         })
     }
 }
