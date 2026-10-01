@@ -87,17 +87,22 @@ pub fn reflections(p: &Prefs) -> i64 {
     p.i64_or(REFLECTIONS, 2).clamp(0, 3)
 }
 /// Not a v20 setting: how maps and what stands on them are lit. 0 Classic
-/// (v20: baked maps, sun-lit bricks), 1 Unified (bricks share the map's
-/// recovered lights, sun and shadows), 2 Unified with highlights, the
-/// default, 3 Dynamic (2, with the map's own surfaces lit live by those
-/// lights instead of its baked lightmaps). The client's graphics settings
-/// read it.
+/// (v20: baked maps, sun-lit bricks), 2 Unified, the default (bricks share
+/// the map's recovered lights, sun and shadows, with highlights), 3 Dynamic
+/// (2, with the map's own surfaces lit live by those lights instead of its
+/// baked lightmaps). 1, once Unified without highlights, reads as 2. The
+/// client's graphics settings read it.
 pub const LIGHTING: &str = "$pref::Video::Lighting";
 const LIGHTING_MENU: &str = "OptGraphicsLightingMenu";
-const LIGHTING_CHOICES: [&str; 4] = ["Classic", "Unified", "Unified+Shine", "Dynamic"];
+/// The menu's modes and the `$pref::Video::Lighting` value each saves.
+const LIGHTING_CHOICES: [(&str, i64); 3] = [("Classic", 0), ("Unified", 2), ("Dynamic", 3)];
 /// The lighting mode `$pref::Video::Lighting` asks for.
 pub fn lighting(p: &Prefs) -> i64 {
-    p.i64_or(LIGHTING, 2).clamp(0, LIGHTING_CHOICES.len() as i64 - 1)
+    match p.i64_or(LIGHTING, 2) {
+        ..=0 => 0,
+        1 | 2 => 2,
+        _ => 3,
+    }
 }
 /// Not a v20 setting: music bricks' volume (v20 only had Play Music).
 pub const MUSIC_VOLUME: &str = "$pref::Audio::musicVolume";
@@ -1101,11 +1106,7 @@ impl Options {
             .collect();
         s.menu(UI_SCALE_MENU, scale_items, scale);
         s.set_reflections(reflections(&core.prefs));
-        let items = LIGHTING_CHOICES
-            .iter()
-            .enumerate()
-            .map(|(i, t)| (t.to_string(), i as i64))
-            .collect();
+        let items = LIGHTING_CHOICES.iter().map(|&(t, mode)| (t.to_string(), mode)).collect();
         s.menu(LIGHTING_MENU, items, lighting(&core.prefs));
         s.refresh_quality();
         s.refresh_readouts();
@@ -1621,7 +1622,8 @@ impl Options {
             .id(LIGHTING_MENU)
             .and_then(|n| self.view.selected(n))
         {
-            self.draft.set(LIGHTING, mode.clamp(0, LIGHTING_CHOICES.len() as i64 - 1).to_string());
+            let mode = LIGHTING_CHOICES.iter().map(|&(_, m)| m).find(|&m| m == mode).unwrap_or(2);
+            self.draft.set(LIGHTING, mode.to_string());
         }
         if let Some(scale) = self
             .view
@@ -2650,11 +2652,13 @@ mod tests {
     }
 
     #[test]
-    fn lighting_defaults_to_unified_with_highlights_and_saves_a_choice() {
+    fn lighting_defaults_to_unified_and_saves_a_choice() {
         let mut ui = fixture();
         let mut s = Options::new(&ui.core);
         let menu = s.view.id(LIGHTING_MENU).unwrap();
-        assert_eq!(s.view.selected_text(menu).as_deref(), Some("Unified+Shine"));
+        assert_eq!(s.view.selected_text(menu).as_deref(), Some("Unified"));
+        let items: Vec<&str> = s.view.node(menu).state.items.iter().map(|(t, _)| t.as_str()).collect();
+        assert_eq!(items, ["Classic", "Unified", "Dynamic"]);
         // The row fits inside its section, below Mirrors.
         let parent = s.view.walk().find(|&n| s.view.node(n).children.contains(&menu)).unwrap();
         let (row, section) = (&s.view.node(menu).ctrl, &s.view.node(parent).ctrl);
@@ -2676,6 +2680,20 @@ mod tests {
         let s = Options::new(&ui.core);
         let menu = s.view.id(LIGHTING_MENU).unwrap();
         assert_eq!(s.view.selected_text(menu).as_deref(), Some("Dynamic"));
+    }
+
+    /// Unified and Unified+Shine are one mode: a saved Unified (1) or
+    /// Unified+Shine (2) both open as Unified and save as 2.
+    #[test]
+    fn saved_unified_and_unified_shine_both_open_as_unified() {
+        for old in ["1", "2"] {
+            let mut ui = fixture();
+            ui.core.prefs.set(LIGHTING, old);
+            let s = Options::new(&ui.core);
+            let menu = s.view.id(LIGHTING_MENU).unwrap();
+            assert_eq!(s.view.selected_text(menu).as_deref(), Some("Unified"), "saved {old}");
+            assert_eq!(lighting(&ui.core.prefs), 2, "saved {old}");
+        }
     }
 
     #[test]

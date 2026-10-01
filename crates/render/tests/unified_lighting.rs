@@ -1,4 +1,4 @@
-//! Unified lighting (`$pref::Video::Lighting` 1 and 2): a live shadow takes
+//! Unified lighting (`$pref::Video::Lighting` 2): a live shadow takes
 //! away only the sun a lightmap texel actually had, so baked shade is never
 //! darkened twice, while Classic keeps v20's fixed darkening.
 use anyhow::Result;
@@ -296,16 +296,12 @@ fn live_shadows_remove_only_baked_sun() -> Result<()> {
         let pixels = render(&device, &queue, &mut renderer, &target, &[&map, &slab], &[&slab], &[])?;
         Ok(points.map(|p| at(&pixels, p)))
     };
-    let [lit_under, lit_open, dark_under, dark_open] = run(1.0)?;
+    let [lit_under, lit_open, dark_under, dark_open] = run(2.0)?;
     // Unified: baked shade stays as baked; baked sun under the slab goes
     // down to the static light, the same as the baked shade.
     assert!((dark_under - dark_open).abs() <= 2, "{dark_under} {dark_open}");
     assert!(lit_open > dark_open + 60, "{lit_open} {dark_open}");
     assert!((lit_under - dark_open).abs() <= 3, "{lit_under} {dark_open}");
-    // Unified with highlights draws the same diffuse light here (a matte
-    // floor seen from above away from the sun's reflection).
-    let shine = run(2.0)?;
-    assert!(shine[2] >= dark_under && shine[3] >= dark_open);
     // Classic keeps v20's fixed share: it darkens the baked shade again.
     let [_, _, classic_under, classic_open] = run(0.0)?;
     assert_eq!(classic_open, dark_open);
@@ -408,15 +404,15 @@ fn map_lamps_cast_live_shadows_in_unified_modes_by_shadow_quality() -> Result<()
         Ok(kept)
     };
     // Unified at Best: the slab shades the floor the lamp lights.
-    let [shaded, open_floor] = run(ShadowSettings::BEST, 1.0)?;
+    let [shaded, open_floor] = run(ShadowSettings::BEST, 2.0)?;
     assert!(open_floor > 60, "{open_floor}");
     assert!(shaded < open_floor - 40, "{shaded} {open_floor}");
     // Medium casts from one lamp too.
-    let [medium, _] = run(ShadowSettings::MEDIUM, 1.0)?;
+    let [medium, _] = run(ShadowSettings::MEDIUM, 2.0)?;
     assert!(medium < open_floor - 40, "{medium} {open_floor}");
     // Low quality has no lamp shadows; the floor there, nearer the lamp, is
     // lit at least as brightly as the open floor.
-    let [low, low_open] = run(ShadowSettings::LOW, 1.0)?;
+    let [low, low_open] = run(ShadowSettings::LOW, 2.0)?;
     assert!(low >= low_open, "{low} {low_open}");
     // Classic never draws map lights or lamp shadows.
     let [classic, classic_open] = run(ShadowSettings::BEST, 0.0)?;
@@ -489,7 +485,7 @@ fn map_walls_shade_objects_from_the_sun_with_a_filtered_edge() -> Result<()> {
     let mut camera = Camera::perspective([0., 22., 0.1], [0., 0., 0.], 1.0, 1.4, 0.05, 400.0);
     camera.sun_direction = [0.0, -1.0, 0.0, 0.0];
     camera.sun_color = [0.6, 0.6, 0.6, 0.];
-    camera.ambient = [0.2, 0.2, 0.2, 1.0];
+    camera.ambient = [0.2, 0.2, 0.2, 2.0];
     let target = color_target(&device, format, width, height);
     let view_projection = Mat4::from_cols_array(&camera.view_projection);
     let at = |pixels: &[u8], point: Vec3| {
@@ -513,16 +509,19 @@ fn map_walls_shade_objects_from_the_sun_with_a_filtered_edge() -> Result<()> {
     }
     assert_eq!(frames[0], frames[1]);
     let [open, inside, outside, roofed] = frames[0];
-    // Sunlit (0.2 + 0.6) through the opening, ambient alone under the roof,
-    // and the edge turns within under a unit, not a 4-unit volume cell.
-    assert!((open - 204).abs() <= 4, "{open}");
+    // Sunlit (0.2 + 0.6, and the sun's highlight 0.6 x 0.3 with the sun and
+    // eye straight above) through the opening, ambient alone under the
+    // roof, and the edge turns within under a unit, not a 4-unit volume cell.
+    assert!((open - 250).abs() <= 4, "{open}");
     assert!((inside - open).abs() <= 4, "{inside} {open}");
     assert!((roofed - 51).abs() <= 4, "{roofed}");
     assert!((outside - roofed).abs() <= 4, "{outside} {roofed}");
-    // Without the map layer the volume's sun stands in: sunlit everywhere.
+    // Without the map layer the volume's sun stands in: sunlit everywhere
+    // (with less of the highlight away from straight below the eye).
     renderer.update_camera(&queue, &camera);
     let pixels = render(&device, &queue, &mut renderer, &target, &[&floor], &[], &[])?;
-    assert!((at(&pixels, points[3]) - open).abs() <= 4);
+    let unroofed = at(&pixels, points[3]);
+    assert!(unroofed >= 200 && unroofed <= open + 4, "{unroofed} {open}");
     Ok(())
 }
 
@@ -543,7 +542,7 @@ fn lamp_shadows_on_the_map_take_only_the_lamps_share() -> Result<()> {
     let mut camera = Camera::perspective([0., 22., 0.1], [0., 0., 0.], 1.0, 1.4, 0.05, 400.0);
     camera.sun_direction = sun.extend(0.0).to_array();
     camera.sun_color = [0.0; 4];
-    camera.ambient = [0.1, 0.1, 0.1, 1.0];
+    camera.ambient = [0.1, 0.1, 0.1, 2.0];
     let target = color_target(&device, format, width, height);
     let view_projection = Mat4::from_cols_array(&camera.view_projection);
     let at = |pixels: &[u8], point: Vec3| {
@@ -584,7 +583,7 @@ fn an_instanced_model_casts_a_lamp_shadow_on_the_map() -> Result<()> {
     let mut camera = Camera::perspective([0., 22., 0.1], [0., 0., 0.], 1.0, 1.4, 0.05, 400.0);
     camera.sun_direction = sun.extend(0.0).to_array();
     camera.sun_color = [0.0; 4];
-    camera.ambient = [0.1, 0.1, 0.1, 1.0];
+    camera.ambient = [0.1, 0.1, 0.1, 2.0];
     let target = color_target(&device, format, width, height);
     let view = target.create_view(&Default::default());
     let depth = create_depth(&device, width, height).create_view(&Default::default());
@@ -661,7 +660,7 @@ fn shadowed_lamps_reach_past_the_map_walls_not_the_coarse_volume() -> Result<()>
     let mut camera = Camera::perspective([0., 22., 0.1], [0., 0., 0.], 1.0, 1.4, 0.05, 400.0);
     camera.sun_direction = sun.extend(0.0).to_array();
     camera.sun_color = [0.0; 4];
-    camera.ambient = [0.1, 0.1, 0.1, 1.0];
+    camera.ambient = [0.1, 0.1, 0.1, 2.0];
     let target = color_target(&device, format, width, height);
     let view_projection = Mat4::from_cols_array(&camera.view_projection);
     let at = |pixels: &[u8], point: Vec3| {
@@ -714,7 +713,7 @@ fn patched_lightmaps_draw_without_a_new_upload() -> Result<()> {
     camera.ambient = [0.1, 0.1, 0.1, 0.0];
     let target = color_target(&device, format, width, height);
     let centre = |pixels: &[u8]| i32::from(pixels[((height / 2 * width + width / 2) * 4 + 1) as usize]);
-    for mode in [0.0, 1.0] {
+    for mode in [0.0, 2.0] {
         camera.ambient[3] = mode;
         renderer.update_camera(&queue, &camera);
         let before = centre(&render(&device, &queue, &mut renderer, &target, &[&map], &[], &[])?);
@@ -732,7 +731,7 @@ fn patched_lightmaps_draw_without_a_new_upload() -> Result<()> {
     let changed = TexelFix::apply(&fixes, &mut data.images);
     assert_eq!(changed, vec![1, 2]);
     map.patch_images(&queue, &data.images, &changed)?;
-    for mode in [0.0, 1.0] {
+    for mode in [0.0, 2.0] {
         camera.ambient[3] = mode;
         renderer.update_camera(&queue, &camera);
         let after = centre(&render(&device, &queue, &mut renderer, &target, &[&map], &[], &[])?);
@@ -763,7 +762,7 @@ fn placed_and_removed_bricks_change_lamp_shadows_the_same_frame() -> Result<()> 
     let mut camera = Camera::perspective([0., 22., 0.1], [0., 0., 0.], 1.0, 1.4, 0.05, 400.0);
     camera.sun_direction = [0.0, -1.0, 0.3, 0.0];
     camera.sun_color = [0.0; 4];
-    camera.ambient = [0.1, 0.1, 0.1, 1.0];
+    camera.ambient = [0.1, 0.1, 0.1, 2.0];
     let target = color_target(&device, format, width, height);
     let view_projection = Mat4::from_cols_array(&camera.view_projection);
     let at = |pixels: &[u8], point: Vec3| {
@@ -812,7 +811,7 @@ fn switched_off_and_recoloured_map_lights_leave_the_map_and_objects() -> Result<
     let mut camera = Camera::perspective([0., 22., 0.1], [0., 0., 0.], 1.0, 1.4, 0.05, 400.0);
     camera.sun_direction = sun.extend(0.0).to_array();
     camera.sun_color = [0.0; 4];
-    camera.ambient = [0.1, 0.1, 0.1, 1.0];
+    camera.ambient = [0.1, 0.1, 0.1, 2.0];
     let target = color_target(&device, format, width, height);
     let view_projection = Mat4::from_cols_array(&camera.view_projection);
     let at = |pixels: &[u8], point: Vec3, channel: usize| {
@@ -1058,7 +1057,7 @@ fn a_switched_off_light_leaves_the_same_light_in_every_live_mode() -> Result<()>
         channel: None,
     }];
     let target = color_target(&device, format, width, height);
-    for mode in [1.0, 2.0, 3.0] {
+    for mode in [2.0, 3.0] {
         let mut renderer = SceneRenderer::with_settings(&device, format, 1, Some(ShadowSettings::BEST));
         renderer.set_map_lighting(&device, &queue, Some(&lighting), mode == 3.0)?;
         let floor = renderer.upload(&device, &queue, &floor_data)?;
@@ -1095,7 +1094,7 @@ fn a_changed_environment_relights_the_maps_lightmaps() -> Result<()> {
     let mut camera = Camera::perspective([0., 22., 0.1], [0., 0., 0.], 1.0, 1.4, 0.05, 400.0);
     camera.sun_direction = sun.extend(0.).to_array();
     camera.sun_color = [0.6, 0.6, 0.6, 1.];
-    camera.ambient = [0.3, 0.3, 0.3, 1.];
+    camera.ambient = [0.3, 0.3, 0.3, 2.0];
     let target = color_target(&device, format, width, height);
     let view_projection = Mat4::from_cols_array(&camera.view_projection);
     let at = |pixels: &[u8], point: Vec3| {
