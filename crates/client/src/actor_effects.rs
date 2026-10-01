@@ -383,6 +383,9 @@ pub struct ActorEffects {
     orbs: BTreeMap<u64, EffectHandle>,
     /// Other admins' free-camera eyes, set by `set_orbs` for the next advance.
     orb_eyes: Vec<(u64, Vec3)>,
+    /// The first-person player whose jets stay out of their own eye but
+    /// show in mirrors and portals (`set_own_eye`).
+    own_eye: Option<u64>,
     cursor: u64,
     pub diagnostics: Diagnostics,
 }
@@ -415,6 +418,7 @@ impl ActorEffects {
             waters: std::sync::Arc::from(Vec::new()),
             orbs: BTreeMap::new(),
             orb_eyes: Vec::new(),
+            own_eye: None,
             cursor: 0,
             diagnostics: Diagnostics::default(),
         })
@@ -711,6 +715,13 @@ impl ActorEffects {
         Ok(())
     }
 
+    /// The player looking out of their own eyes in first person: their jets
+    /// and jet dust are left out of that view
+    /// ([`EffectsWorld::snapshot_in_view`]) and drawn in every other.
+    pub fn set_own_eye(&mut self, actor: Option<u64>) {
+        self.own_eye = actor;
+    }
+
     /// Runs [`jet_dust`] sources; a foot without one drains its dust.
     pub fn update_jet_dust(&mut self, dust: &[JetDust]) -> Result<()> {
         let world = &mut self.world;
@@ -729,6 +740,7 @@ impl ActorEffects {
             };
             let options = SourceOptions {
                 time_scale: d.rate.clamp(0.001, 1.0),
+                hidden_from_own_eye: self.own_eye == Some(d.actor),
                 ..Default::default()
             };
             match self.jet_dust.get(&(d.actor, d.foot)) {
@@ -1105,7 +1117,12 @@ impl ActorEffects {
                 })
             })
             .collect();
-        sync_sources(world, &mut self.jets, &wanted, JET_EMITTER)?;
+        let own = self.own_eye;
+        let options = |(actor, _): (u64, u8)| SourceOptions {
+            hidden_from_own_eye: own == Some(actor),
+            ..Default::default()
+        };
+        sync_sources(world, &mut self.jets, &wanted, JET_EMITTER, options)?;
         // `damageEmitter` fire on a destroyed vehicle until it is removed.
         let wanted: BTreeMap<u64, SourceTransform> = burning
             .iter()
@@ -1117,7 +1134,8 @@ impl ActorEffects {
                 (*vehicle, t)
             })
             .collect();
-        sync_sources(world, &mut self.burning, &wanted, VEHICLE_BURN_EMITTER)?;
+        let plain = |_| SourceOptions::default();
+        sync_sources(world, &mut self.burning, &wanted, VEHICLE_BURN_EMITTER, plain)?;
         // `serverCmdLight` deletes the fxLight outright: no drain.
         self.lights.retain(|actor, handle| {
             let keep = lights.iter().any(|l| l.actor == *actor) && world.is_active(*handle);
@@ -1168,7 +1186,8 @@ impl ActorEffects {
                 (*owner, t)
             })
             .collect();
-        sync_sources(world, &mut self.orbs, &wanted, CAMERA_EMITTER)?;
+        let plain = |_| SourceOptions::default();
+        sync_sources(world, &mut self.orbs, &wanted, CAMERA_EMITTER, plain)?;
         world.advance(dt, Vec3::ZERO)?;
         Ok(())
     }
@@ -1279,12 +1298,14 @@ fn teleport_image() -> bri_weapons::Image {
     }
 }
 
-/// Keep one continuous emitter per key; removed keys drain.
+/// Keep one continuous emitter per key, with `options(key)`; removed keys
+/// drain.
 fn sync_sources<K: Ord + Copy>(
     world: &mut EffectsWorld,
     live: &mut BTreeMap<K, EffectHandle>,
     wanted: &BTreeMap<K, SourceTransform>,
     emitter: &str,
+    options: impl Fn(K) -> SourceOptions,
 ) -> Result<()> {
     live.retain(|key, handle| {
         let keep = wanted.contains_key(key) && world.is_active(*handle);
@@ -1296,9 +1317,8 @@ fn sync_sources<K: Ord + Copy>(
     for (key, transform) in wanted {
         if let Some(handle) = live.get(key) {
             world.update_source(*handle, *transform)?;
-        } else if let Ok(handle) =
-            world.start_emitter(emitter, *transform, SourceOptions::default())
-        {
+            world.update_options(*handle, options(*key))?;
+        } else if let Ok(handle) = world.start_emitter(emitter, *transform, options(*key)) {
             live.insert(*key, handle);
         }
     }

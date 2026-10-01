@@ -8715,3 +8715,26 @@ camera flies through an opening as a body does, its look turned with it
 goes back through a portal behind its focus (`camera_boom`), its look
 turned by the boom's carry, as the player's chase camera does. Test:
 `bri-client controls::a_free_camera_flies_through_a_portal`.
+
+View paths, step 3: every other view (mirror and portal planes, the
+environment probe's faces) goes through one shared path,
+`crate::views`: one list of views, one per-view prepare of sprites,
+plants, weather and Add-On layers (replacing the separate mirror and
+probe copies in `render_scene`). What all views draw from shared buffers
+is chosen around every view's eye: terrain tiles
+(`GpuTerrain::update` takes all eyes, growing its instance lists when
+eyes far apart need more copies) and the effect lights (nearest any eye,
+`combine_effect_frames`). Only the player's own eye leaves out what a
+first-person player hides: their own jets and jet dust are flagged
+`SourceOptions::hidden_from_own_eye` (`ActorEffects::set_own_eye`) and
+other views snapshot with `snapshot_in_other_view`; a package-archetype
+own body is its own instance list (`PackageModels::own_draws`) drawn in
+mirrors, portals, the probe and shadows, not the player's view. Limits
+kept: shadow cascades and flare occlusion are still fitted to the
+player's eye (a portal view far from the player shows baked lighting
+without dynamic shadows there, and flares fade as the player sees them);
+per-view cascades would cost a shadow pass per view. Tests:
+`bri-fx-runtime own_jets_stay_out_of_the_own_eye_but_show_in_mirrors`,
+`bri-render terrain_scene::copies_cover_every_eye_once`, `bri-client
+views::every_eye_once_the_players_first` and the far-mirror case in
+`world_and_weapon_effects_share_depth_order_and_nearest_light_budget`.
