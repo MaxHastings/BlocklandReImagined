@@ -526,6 +526,7 @@ fn item(d: &Definition, image: String) -> Item {
         icon: resource(d, "iconName"),
         can_drop: flag(d, "canDrop", true),
         sport: flag(d, "isSportBall", false),
+        ..Default::default()
     }
 }
 /// An `ItemData` with a `uiName` but no `image`: picked up, held by nobody

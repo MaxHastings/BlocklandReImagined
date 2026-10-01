@@ -375,10 +375,11 @@ impl WorldItems {
             let Some((key, skin)) = self.item_key(&item.item, item.paint, ghost) else {
                 continue;
             };
+            let pose = self.idle_pose(&item.item, &key.model, frame.seconds);
             candidates.push(Candidate {
                 identity: ItemIdentity::Static(item.brick),
                 model: key,
-                pose: PoseKey::default(),
+                pose,
                 transform: SceneTransform {
                     transform: Mat4::from_rotation_translation(
                         item.rotation(),
@@ -400,10 +401,11 @@ impl WorldItems {
             let Some((key, skin)) = self.item_key(&drop.item, drop.paint, fading) else {
                 continue;
             };
+            let pose = self.idle_pose(&drop.item, &key.model, frame.seconds);
             candidates.push(Candidate {
                 identity: ItemIdentity::Drop(drop.id),
                 model: key,
-                pose: PoseKey::default(),
+                pose,
                 transform: SceneTransform {
                     transform: Mat4::from_scale_rotation_translation(
                         Vec3::splat(drop.scale),
@@ -728,6 +730,24 @@ impl WorldItems {
             look.skin = None;
         }
         look
+    }
+    /// A lying item's pose: its `idle` sequence (`bri_weapons::Item::idle`)
+    /// on the world clock, so every copy of a model shares one pose.
+    fn idle_pose(&mut self, item: &str, model: &str, seconds: f64) -> PoseKey {
+        let Some(idle) = self.weapons.items.get(item).map(|i| &i.idle).filter(|s| !s.is_empty())
+        else {
+            return PoseKey::default();
+        };
+        let clip = self.assets.shape(model).ok().and_then(|shape| {
+            shape.animations.iter().find(|a| a.name.eq_ignore_ascii_case(idle))
+        });
+        match clip {
+            Some(clip) => normalized_pose(clip, seconds),
+            None => {
+                self.diagnostics.missing_sequences += 1;
+                PoseKey::default()
+            }
+        }
     }
     fn projectile_pose(&self, model: &str, age: f64) -> Result<PoseKey> {
         let shape = self.assets.shape(model)?;

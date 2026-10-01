@@ -689,6 +689,8 @@ fn slayer_ports_apply_with_their_rules() {
     assert_eq!(item.ui_name, "Stand-in Flag");
     assert_eq!(item.image, "gamemode_slayer_ctf:image/slyrctf_flagimage");
     assert!(!item.can_drop);
+    // `slyrCTF_FlagItem::onAdd` plays the flag model's idle thread.
+    assert_eq!(item.idle, "wave");
     let content = std::fs::read_to_string(ctf.join("assets/content.json")).unwrap();
     for brick in ["brickslyrctfflagdata", "brickslyrctfflagreturndata"] {
         assert!(

@@ -132,6 +132,12 @@ function Player::dropFlag(%this)
 	%item.setVelocity(vectorAdd(%item.getVelocity(),vectorScale(%eyeVect,4)));
 }
 
+function slyrCTF_FlagItem::onAdd(%this,%obj)
+{
+	if($Slayer::Server::CTF::flagIdleAnimation[$Slayer::Server::CTF::flagModel] !$= "")
+		%obj.playThread(0,$Slayer::Server::CTF::flagIdleAnimation[$Slayer::Server::CTF::flagModel]);
+}
+
 function slyrCTF_FlagItem::onPickUp(%this,%flag,%player,%a)
 {
 	if(getSimTime() - %flag.spawnTime < 250)

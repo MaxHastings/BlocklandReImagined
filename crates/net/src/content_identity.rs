@@ -639,6 +639,7 @@ mod tests {
                     icon: String::new(),
                     can_drop: true,
                     sport: false,
+                    ..Default::default()
                 },
             );
         }

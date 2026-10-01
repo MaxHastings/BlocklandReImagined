@@ -11,6 +11,7 @@ $Slayer::Server::CTF::flagShapeFile[$Slayer::Server::CTF::numFlags] = "./flag.dt
 $Slayer::Server::CTF::flagMountPoint[$Slayer::Server::CTF::numFlags] = $BackSlot;
 $Slayer::Server::CTF::flagRotation[$Slayer::Server::CTF::numFlags] = eulerToMatrix("10 0 90");
 $Slayer::Server::CTF::flagOffset[$Slayer::Server::CTF::numFlags] = "0.1 -0.2 -0.3";
+$Slayer::Server::CTF::flagIdleAnimation[$Slayer::Server::CTF::numFlags] = "wave";
 $Slayer::Server::CTF::numFlags ++;
 
 exec("./game-mode.cs");

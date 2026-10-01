@@ -189,7 +189,11 @@
           "flag_shape": "flagShapeFile\\[\\$Slayer::Server::CTF::numFlags\\]\\s*=\\s*\"([^\"]+)\"",
           "flag_mount": "flagMountPoint\\[\\$Slayer::Server::CTF::numFlags\\]\\s*=\\s*(\\$\\w+)",
           "flag_rotation": "flagRotation\\[\\$Slayer::Server::CTF::numFlags\\]\\s*=\\s*eulerToMatrix\\(\\s*\"([^\"]+)\"",
-          "flag_offset": "flagOffset\\[\\$Slayer::Server::CTF::numFlags\\]\\s*=\\s*\"([^\"]+)\""
+          "flag_offset": "flagOffset\\[\\$Slayer::Server::CTF::numFlags\\]\\s*=\\s*\"([^\"]+)\"",
+          "flag_idle": "flagIdleAnimation\\[\\$Slayer::Server::CTF::numFlags\\]\\s*=\\s*\"(\\w+)\""
+        },
+        "slyrCTF_FlagItem::onAdd": {
+          "idle_thread": "%obj\\.playThread\\(\\s*0\\s*,\\s*\\$Slayer::Server::CTF::flagIdleAnimation\\["
         },
         "createSlayerCTFDatablocks": {
           "flag_parent": "brickSlyrCTFFlagData\\s*:\\s*(\\w+)",

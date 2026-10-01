@@ -9154,6 +9154,13 @@ of theirs in the repo). Both ports are `partial`.
   type at GO, as `changeDatablock` did; `set_archetype(p, "")` restores
   the mini-game's player type. Protocol: the archetype table carries the
   two new fields.
+- Step 6, item idle threads: `bri_weapons::Item::idle` names a sequence an
+  item's model loops while it lies in the world or is dropped, as
+  `%obj.playThread(0, seq)` in `ItemData::onAdd` did; the client poses it
+  on the world clock, so every copy shares one pose. Slayer CTF's port
+  sets it from `flagIdleAnimation` (pinned with `onAdd`), so standing
+  flags wave. Test: `crates/client/tests/world_items.rs`
+  (`a_lying_item_loops_its_idle_sequence_on_the_world_clock`, content).
 - Not yet: uniforms, team loadouts/player types/scale, team respawn times,
   friendly-fire penalties, team swaps, end-of-round report, spectating,
   bots, capture points, Slayer's own events (onTeamCheck, onCP*, team

@@ -1448,6 +1448,7 @@ fn add_launcher(
         icon: String::new(),
         can_drop: true,
         sport: false,
+        ..Default::default()
     };
     let projectile = bri_weapons::ProjectileDef {
         id: projectile_id.clone(),

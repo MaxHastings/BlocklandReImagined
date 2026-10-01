@@ -304,7 +304,7 @@ pub struct Script {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub use_up: bool,
 }
-/// An arm animation name: letters, digits and `_`, up to 64 bytes.
+/// A sequence name (an arm animation, an idle loop): letters, digits and `_`, up to 64 bytes.
 fn is_sequence_name(name: &str) -> bool {
     name.len() <= 64 && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
 }
@@ -404,6 +404,11 @@ pub struct Item {
     pub icon: String,
     pub can_drop: bool,
     pub sport: bool,
+    /// The sequence the item's shape loops while it lies in the world, as
+    /// a script's `%obj.playThread(0, <sequence>)` in `ItemData::onAdd`
+    /// did (Slayer CTF's waving flag). Empty: it lies still.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub idle: String,
 }
 impl Default for Item {
     fn default() -> Self {
@@ -416,6 +421,7 @@ impl Default for Item {
             icon: String::new(),
             can_drop: true,
             sport: false,
+            idle: String::new(),
         }
     }
 }
@@ -883,6 +889,10 @@ impl Pack {
                     && item.ui_name.len() <= 128
                     && !item.ui_name.chars().any(char::is_control),
                 "Item {id} needs a ui_name: the name players pick it by"
+            );
+            ensure!(
+                item.idle.is_empty() || is_sequence_name(&item.idle),
+                "Item {id}'s idle sequence must be a sequence name"
             );
         }
         for (id, image) in &self.images {
