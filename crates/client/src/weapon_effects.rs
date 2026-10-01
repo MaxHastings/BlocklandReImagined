@@ -51,7 +51,8 @@ struct Attached {
 }
 /// A held image's rope being drawn: which end its sweep finished at.
 struct RopeSweep {
-    attached: Attached,
+    resource: String,
+    handle: EffectHandle,
     at_anchor: bool,
 }
 
@@ -443,10 +444,10 @@ impl WeaponEffects {
         self.ropes.retain(|owner, sweep| {
             let keep = desired
                 .get(owner)
-                .is_some_and(|(id, _, _)| *id == sweep.attached.resource)
-                && world.is_active(sweep.attached.handle);
+                .is_some_and(|(id, _, _)| *id == sweep.resource)
+                && world.is_active(sweep.handle);
             if !keep {
-                world.stop(sweep.attached.handle, StopMode::Drain);
+                world.stop(sweep.handle, StopMode::Drain);
             }
             keep
         });
@@ -466,8 +467,8 @@ impl WeaponEffects {
                     sweep.at_anchor = !sweep.at_anchor;
                     let end = if sweep.at_anchor { r.to } else { r.from };
                     self.world
-                        .update_source(sweep.attached.handle, place(end))?;
-                    self.world.update_options(sweep.attached.handle, options)?;
+                        .update_source(sweep.handle, place(end))?;
+                    self.world.update_options(sweep.handle, options)?;
                 }
                 None => match self.world.start_emitter(&resource, place(r.from), options) {
                     Ok(handle) => {
@@ -475,7 +476,8 @@ impl WeaponEffects {
                         self.ropes.insert(
                             owner,
                             RopeSweep {
-                                attached: Attached { resource, handle },
+                                resource,
+                                handle,
                                 at_anchor: true,
                             },
                         );

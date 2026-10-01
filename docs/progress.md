@@ -9012,3 +9012,19 @@ test boxes now use these hull sizes. Sizes: 1x4x5 (players), 1x14x10
 (Steel Ball, jeep, tank), 1x20x12 (Stunt Plane); mirrors 1x4x5 and
 1x14x10. Still to confirm on the PC: where the turret's mount node puts
 it.
+
+## 2026-10-01 Import Add-On: models draw with the base game's stock textures
+
+Loz's Hookshot imported as a placeholder cube: its gun's materials `blank`
+and `black50` are not in the zip. They are v20's stock material textures
+in `base/data/shapes` (with `black`, `gray75`, `white` and the rest), which
+Add-On models use when they ship no copy. With the installed game given
+(`--installed`, as the Add-Ons screen's Import passes it), the importer now
+reads the installed item presentation's texture keys, and a material the
+Add-On lacks binds to `base/data/shapes/<name>` by that key. Players' games
+already load those textures with the base game, so nothing of v20 is copied
+into an import. Any Add-On gets this; nothing is Hookshot-specific.
+Inferred, not measured: that v20 drew these materials from
+`base/data/shapes` (the Hookshot ships its own `gray75.png` but not these
+two, and draws in v20). Test: `crates/addon-import/tests/installed.rs
+a_missing_material_draws_with_the_installed_games_texture`.

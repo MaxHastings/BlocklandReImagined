@@ -35,9 +35,7 @@ fn imported(root: &Path, addon: &str, namespace: &str) -> (bri_weapons::Pack, Ar
             .join("tests/fixtures/ports")
             .join(addon),
         out: out.clone(),
-        reference: None,
-        core: vec![],
-        version: "1.0.0".into(),
+        ..Default::default()
     })
     .unwrap();
     let port = &report.ports[0];

@@ -1425,7 +1425,8 @@ fn presentation(cx: &mut Ctx, pack: &bri_weapons::Pack, weapons_sha256: &str) ->
         let folder = f.path.rsplit_once('/').map_or("", |(d, _)| d).to_owned();
         let mut bindings = vec![];
         for m in &shape.materials {
-            match texture(cx, &mut textures, &format!("{folder}/{}", m.name)) {
+            let own = texture(cx, &mut textures, &format!("{folder}/{}", m.name));
+            match own.or_else(|| cx.reference.base_texture(&m.name)) {
                 Some(t) => bindings.push(t),
                 None => {
                     cx.report.diagnostics.push(format!(
