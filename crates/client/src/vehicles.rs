@@ -746,7 +746,6 @@ impl ClientVehicles {
         &mut self,
         assets: &mut VehicleAssets,
         infos: &BTreeMap<u64, VehicleInfo>,
-        palette: &[[f32; 4]],
     ) {
         let VehicleAssets {
             pack,
@@ -770,7 +769,7 @@ impl ClientVehicles {
             if d.family == bri_vehicles::Family::Horse {
                 continue;
             }
-            let tint = body_tint(d, info, palette);
+            let tint = body_tint(d, info);
             let body = to_transform(frame.position, frame.rotation);
             let pitch = frame.turret_aim[1];
             // Openings carry a vehicle by its centre of mass, as the host
@@ -979,20 +978,18 @@ fn sample(
     frame
 }
 
-/// A vehicle's body, attachment and moving parts are drawn in its spawn
-/// brick's colour, or its class's wreck colour once destroyed (v20 paints a
-/// wreck black until the final explosion removes it). Driven by the
-/// replicated `destroyed` flag, so late joiners see it and it costs nothing
-/// on the wire.
-pub fn body_tint(d: &Definition, info: &VehicleInfo, palette: &[[f32; 4]]) -> [f32; 4] {
+/// A vehicle's body, attachment and moving parts are drawn in its colour
+/// (its spawn brick's, or what painted it), or its class's wreck colour
+/// once destroyed (v20 paints a wreck black until the final explosion
+/// removes it). Driven by the replicated `destroyed` flag, so late joiners
+/// see it and it costs nothing on the wire.
+pub fn body_tint(d: &Definition, info: &VehicleInfo) -> [f32; 4] {
     if info.destroyed
         && let Some(wreck) = d.wreck_color()
     {
         return wreck;
     }
-    info.color
-        .and_then(|c| palette.get(usize::from(c)))
-        .map_or([1.0; 4], |c| [c[0], c[1], c[2], 1.0])
+    info.color.map_or([1.0; 4], |[r, g, b, _]| [r, g, b, 1.0])
 }
 
 #[cfg(test)]
@@ -1208,14 +1205,13 @@ mod tests {
         let mut assets = VehicleAssets::load(&root)?;
         let d = assets.pack.definitions[0].clone();
         ensure!(d.family == bri_vehicles::Family::Wheeled && d.wheels.len() == 3);
-        let palette = [[0.9, 0.1, 0.1, 1.0]];
         let draw = |assets: &mut VehicleAssets, destroyed: bool| {
             let infos = BTreeMap::from([(
                 1,
                 VehicleInfo {
                     id: 1,
                     definition: d.id.clone(),
-                    color: Some(0),
+                    color: Some([0.9, 0.1, 0.1, 1.0]),
                     occupants: vec![],
                     destroyed,
                     scale: 1.0,
@@ -1229,7 +1225,7 @@ mod tests {
                 None,
                 &Default::default(),
             );
-            vehicles.prepare(assets, &infos, &palette);
+            vehicles.prepare(assets, &infos);
             let body: Vec<_> = assets.models[&d.model]
                 .transforms
                 .iter()
@@ -1267,34 +1263,21 @@ mod tests {
         let info = |destroyed| VehicleInfo {
             id: 1,
             definition: d.id.clone(),
-            color: Some(1),
+            color: Some([0.2, 0.4, 0.6, 1.0]),
             occupants: vec![],
             destroyed,
             scale: 1.0,
         };
         let (live, dead) = (info(false), info(true));
-        let palette = [[1.0; 4], [0.2, 0.4, 0.6, 1.0]];
         use bri_vehicles::Family::*;
         for family in [Wheeled, Flying, Ball] {
             d.family = family;
-            assert_eq!(
-                body_tint(&d, &live, &palette),
-                [0.2, 0.4, 0.6, 1.0],
-                "{family:?}"
-            );
-            assert_eq!(
-                body_tint(&d, &dead, &palette),
-                [0.0, 0.0, 0.0, 1.0],
-                "{family:?}"
-            );
+            assert_eq!(body_tint(&d, &live), [0.2, 0.4, 0.6, 1.0], "{family:?}");
+            assert_eq!(body_tint(&d, &dead), [0.0, 0.0, 0.0, 1.0], "{family:?}");
         }
         for family in [Horse, Rowboat, Cannon, Turret, Skis, Tumble] {
             d.family = family;
-            assert_eq!(
-                body_tint(&d, &dead, &palette),
-                [0.2, 0.4, 0.6, 1.0],
-                "{family:?}"
-            );
+            assert_eq!(body_tint(&d, &dead), [0.2, 0.4, 0.6, 1.0], "{family:?}");
         }
         // Unpainted, a live vehicle shows its own texture.
         d.family = Wheeled;
@@ -1302,7 +1285,7 @@ mod tests {
             color: None,
             ..live.clone()
         };
-        assert_eq!(body_tint(&d, &plain, &palette), [1.0; 4]);
+        assert_eq!(body_tint(&d, &plain), [1.0; 4]);
     }
     /// A wreck burns with its own `damageEmitter`s, each once: the stunt
     /// plane names `VehicleBurnEmitter` twice; an Add-On's own emitter
