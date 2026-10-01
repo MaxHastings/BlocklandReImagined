@@ -21,7 +21,7 @@ tests pinned Classic lighting (repro:
   `lamp_slot` is a single read of that table. This is also cheaper on every
   GPU: there is no slot search per light per pixel. There is no driver
   special case, and the lighting is the same.
-- The six tests (`held_items_render`, `distant_render`, `mirror_render`,
+- The six tests (`held_items_render`, `distant_render` (since deleted), `mirror_render`,
   `player_types_render`, `vehicle_first_person`, `view_jitter`) run their
   synthetic variants on Unified again. `support::gpu::pin_classic_lighting`
   is removed. Before the fix, `held_items_render` died with SIGSEGV here on
