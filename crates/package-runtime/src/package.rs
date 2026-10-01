@@ -109,6 +109,11 @@ impl Package {
             };
             match (kind.side(), entry.side) {
                 (Side::Server, Side::Server) | (Side::Client, Side::Client | Side::Shared) => {}
+                // A player type is data, not code: a shared Add-On (an
+                // imported one with weapons and player types) may carry
+                // it. Only the host's table counts; clients receive that
+                // with the checkpoint and ignore the file.
+                (Side::Server, Side::Shared) if kind == Kind::Archetype => {}
                 (Side::Server, _) => {
                     out.push(
                         Diagnostic::error(

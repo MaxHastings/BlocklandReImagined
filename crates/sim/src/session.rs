@@ -1654,6 +1654,19 @@ impl Session {
             !(watching && matches!(command, Command::WeaponTrigger { down: true })),
             "You cannot fire while watching"
         );
+        // A body whose archetype uses no items (`PlayerData::onTrigger` doing
+        // nothing, `serverCmdUseTool` refused) neither fires, clicks nor
+        // takes out a tool.
+        if matches!(
+            command,
+            Command::WeaponTrigger { down: true } | Command::Activate | Command::EquipTool { slot: Some(_) }
+        ) {
+            let archetype = peer.player.state().archetype;
+            ensure!(
+                self.archetypes.resolve(archetype).uses_items,
+                "You cannot use items right now"
+            );
+        }
         match command {
             Command::Admin(_) => unreachable!("handled by the authenticated admin branch above"),
             Command::DropTool { slot } => {

@@ -53,6 +53,16 @@ function Slayer_MiniGameSO::preRoundCountdownTick(%this, %ticks)
 	%this.play2dAll(Slayer_Begin_Sound);
 	%this.centerPrintAll("GO!", 2);
 	%sound = "Slayer_" @ %remain @ "_Seconds_Sound";
+	%cl.player.changeDatablock(PlayerFrozenArmor);
+}
+
+function Slayer_MiniGameSO::startRound(%this)
+{
+	if(%cl.player.getDatablock().getID() == PlayerFrozenArmor.getID())
+	{
+		%db = %this.playerDatablock;
+		%cl.player.changeDatablock(%db);
+	}
 }
 
 function Slayer_MiniGameSO::endRound(%this, %winner, %resetTime)

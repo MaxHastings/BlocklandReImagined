@@ -549,6 +549,12 @@ fn archetype(
     if let Some(v) = def.camera_distance {
         archetype.look.camera_distance = v;
     }
+    if let Some(v) = def.third_person_only {
+        archetype.look.third_person_only = v;
+    }
+    if let Some(v) = def.uses_items {
+        archetype.uses_items = v;
+    }
     archetype.validate()?;
     Ok(archetype)
 }
@@ -1330,10 +1336,12 @@ impl Session {
                 };
                 let peer = self.peers.get_mut(&player).context("No such player")?;
                 peer.package_archetype = chosen;
-                if let Some(chosen) = chosen
-                    && peer.combat.alive
-                {
-                    self.set_player_archetype(player, chosen)?;
+                if peer.combat.alive {
+                    // `""` gives a living body back what it would spawn as:
+                    // its mini-game's player type, else the standard player
+                    // (Slayer thawing a frozen player at the round start).
+                    let body = chosen.unwrap_or_else(|| self.spawn_archetype(player));
+                    self.set_player_archetype(player, body)?;
                 }
                 Ok(())
             }

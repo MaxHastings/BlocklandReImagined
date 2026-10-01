@@ -43,6 +43,7 @@ const TEAM_MODE: &str = "Slayer_TeamDeathmatch";
 const CTF_MODE: &str = "Slayer_CTF";
 /// The stand-in's time between rounds, seconds.
 const BETWEEN_ROUNDS: usize = 6;
+const FROZEN: &str = "gamemode_slayer:archetype/playerfrozenarmor";
 const RED: u8 = 0;
 const BLUE: u8 = 1;
 /// The stand-in's own numbers (`tests/fixtures/ports/Gamemode_Slayer_CTF`).
@@ -303,6 +304,16 @@ impl Game {
     }
     fn score(&self, owner: OwnerId) -> i64 {
         self.s.vitals()[&owner].score
+    }
+    /// The archetype id `owner`'s body is.
+    fn body(&self, owner: OwnerId) -> String {
+        let (state, _) = self
+            .s
+            .motion_states()
+            .into_iter()
+            .find(|(p, _)| p.owner == owner)
+            .unwrap();
+        self.s.archetypes().resolve(state.archetype).id.clone()
     }
     fn feet(&self, owner: OwnerId) -> Vec3 {
         self.s
@@ -637,12 +648,22 @@ fn a_team_out_of_lives_loses_and_the_next_round_counts_down() {
     g.steps(BETWEEN_ROUNDS * 120 - 600);
     assert!(g.s.vitals()[&red].alive);
     assert!(!g.round_over());
-    assert_eq!(g.s.control(red), Some(ControlObject::Corpse));
+    // Frozen (`PlayerFrozenArmor`): no moving, no tools, the camera behind.
+    let frozen = g.s.archetypes().resolve(g.s.archetypes().find(FROZEN).unwrap()).clone();
+    assert_eq!(g.body(red), FROZEN);
+    assert!(!frozen.uses_items && frozen.look.third_person_only);
+    assert_eq!((frozen.movement.forward, frozen.movement.jump_speed, frozen.movement.can_jet), (0.0, 0.0, false));
+    let refused = |g: &mut Game| match g.cmd(red, Command::EquipTool { slot: Some(0) }) {
+        Err(e) => e.to_string().contains("cannot use items"),
+        Ok(_) => false,
+    };
+    assert!(refused(&mut g));
     assert!(g.heard("1 life - The last team standing wins."));
     g.steps(2 * 120 + 13);
     for p in [red, blue] {
-        assert_eq!(g.s.control(p), Some(ControlObject::Player));
+        assert_eq!(g.body(p), "v20.player.playerstandardarmor", "thawed at GO");
     }
+    assert!(!refused(&mut g), "tools come back at GO");
     // A voice for each second, then the buzzer, for each player.
     let sounds: Vec<_> = g
         .s

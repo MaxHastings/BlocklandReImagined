@@ -6225,6 +6225,13 @@ impl PlatformApp for App {
         self.update_held_weapon();
         self.controls.advance_zoom(elapsed.as_secs_f32());
         self.controls.ease_roll(elapsed.as_secs_f32());
+        let third_person_only = self.attempt.as_ref().filter(|a| a.entered).and_then(|a| {
+            let view = a.view.as_ref()?;
+            let body = self.motion.presented().get(&view.owner)?;
+            Some(view.archetypes.resolve(body.archetype).look.third_person_only)
+        });
+        self.controls
+            .set_third_person_only(third_person_only.unwrap_or(false));
         self.controls.advance_view(elapsed.as_secs_f32());
         self.controls.advance_head(elapsed.as_secs_f32());
         if let Some(a) = self.attempt.as_ref().filter(|a| a.entered) {

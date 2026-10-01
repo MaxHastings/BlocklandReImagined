@@ -9143,6 +9143,17 @@ of theirs in the repo). Both ports are `partial`.
   `MaxCountDown = 10`) and plays them and the GO buzzer to every member.
   DTS files with up to 16 stray bytes after the material list convert
   (Torque never reads them), for Slayer's cube.dts.
+- Step 5, PlayerFrozenArmor as a real player type: the importer converts an
+  Add-On's PlayerData into `assets/archetypes/<name>.json` (speeds, forces
+  over mass, energy per second, ui name, third-person-only) and provides
+  it; a shared Add-On may carry archetypes (data, not code). Archetypes
+  gain `uses_items` (false refuses fire, activate and tool slots) and
+  `look.third_person_only` (the client keeps the camera behind). The
+  motor accepts zero running force and surface angles. Slayer's countdown
+  swaps members onto the frozen body and back to the mini-game's player
+  type at GO, as `changeDatablock` did; `set_archetype(p, "")` restores
+  the mini-game's player type. Protocol: the archetype table carries the
+  two new fields.
 - Not yet: uniforms, team loadouts/player types/scale, team respawn times,
   friendly-fire penalties, team swaps, end-of-round report, spectating,
   bots, capture points, Slayer's own events (onTeamCheck, onCP*, team

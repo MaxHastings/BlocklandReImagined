@@ -42,6 +42,17 @@ pub struct Archetype {
     #[serde(default)]
     pub mount_points: Vec<MountPoint>,
     pub look: Look,
+    /// It fires, switches and uses items (`PlayerData::onTrigger` and
+    /// `serverCmdUseTool` running as usual). A frozen pre-round body
+    /// (Slayer's `PlayerFrozenArmor`) does not.
+    #[serde(default = "yes", skip_serializing_if = "is_yes")]
+    pub uses_items: bool,
+}
+fn yes() -> bool {
+    true
+}
+fn is_yes(v: &bool) -> bool {
+    *v
 }
 /// One rider's seat on a rideable archetype.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -72,6 +83,9 @@ pub struct Look {
     pub model: String,
     /// Third-person camera distance behind the eye.
     pub camera_distance: f32,
+    /// `thirdPersonOnly`: the camera stays behind the body.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub third_person_only: bool,
 }
 /// v20's horse (`horse.dts`): players and entities with this look draw
 /// and carry items as a horse.
@@ -131,7 +145,9 @@ impl Archetype {
                     "v20.shape.m".into()
                 },
                 camera_distance: 8.0,
+                third_person_only: false,
             },
+            uses_items: true,
         }
     }
 }

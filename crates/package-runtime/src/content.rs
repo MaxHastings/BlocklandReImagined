@@ -25,7 +25,8 @@ pub enum Kind {
     Hud,
     /// A player archetype: movement, collision body, health and look
     /// (JSON). Server side: clients receive the host's archetype table with
-    /// the checkpoint and predict from it.
+    /// the checkpoint and predict from it. Being data, a shared package may
+    /// carry it too (an imported Add-On's player types).
     Archetype,
     /// A PNG image drawn on block faces. Client side: downloaded with the
     /// package like any file.
@@ -891,6 +892,13 @@ pub struct ArchetypeDef {
     pub model: Option<String>,
     #[serde(default)]
     pub camera_distance: Option<f32>,
+    /// `thirdPersonOnly`.
+    #[serde(default)]
+    pub third_person_only: Option<bool>,
+    /// Whether it fires and uses items; `false` for a body that only
+    /// waits (`PlayerData::onTrigger` doing nothing).
+    #[serde(default)]
+    pub uses_items: Option<bool>,
 }
 /// One rider seat: the model node riders follow, its rest position from
 /// the feet (facing -Z, at scale 1) and the rider's action (`root`, `sit`).

@@ -1,6 +1,7 @@
 // Stand-in for the Gamemode_Slayer port tests (CC0).
 exec("./server/core/resources/datablocks.cs");
 exec("./server/core/resources/sounds/Sounds.cs");
+exec("./server/core/resources/playertypes/Player_Frozen.cs");
 exec("./server/defaults/preferences.cs");
 exec("./server/defaults/team-preferences.cs");
 exec("./server/defaults/game-modes.cs");

@@ -2407,6 +2407,134 @@ type Pending = (
     usize,
 );
 
+/// An Add-On's `PlayerData` as a package archetype: the v20 player type it
+/// inherits from as its base, and the fields its own datablocks set, in the
+/// motor's units (per second, not per 32 ms tick; forces over the 90 mass
+/// of v20's players). Returns the fields with no native equivalent.
+fn player_archetype(cx: &Ctx, name: &str) -> Result<(serde_json::Value, Vec<String>)> {
+    // v20's selectable player datablocks (`bri_motor::player_types`), which
+    // every archetype table starts with.
+    const V20_PLAYERS: [&str; 7] = [
+        "playerstandardarmor",
+        "playernojet",
+        "playerfueljet",
+        "playerjumpjet",
+        "playerleapjet",
+        "playerquakearmor",
+        "horsearmor",
+    ];
+    // The Add-On's own chain, child last wins.
+    let mut chain = Vec::new();
+    let mut at = name.to_ascii_lowercase();
+    let base = loop {
+        let Some(o) = cx.owned.get(&at) else {
+            ensure!(
+                V20_PLAYERS.contains(&at.as_str()),
+                "inherits from {at}, which is not one of v20's player types"
+            );
+            break at;
+        };
+        ensure!(chain.len() < 16, "{name}'s datablock parents loop");
+        chain.push(&o.d.fields);
+        match &o.d.parent {
+            Some(parent) => at = parent.to_ascii_lowercase(),
+            None => break V20_PLAYERS[0].to_owned(),
+        }
+    };
+    let mut set = BTreeMap::new();
+    for fields in chain.iter().rev() {
+        for (k, v) in fields.iter() {
+            set.insert(k.to_ascii_lowercase(), literal(v).trim().to_owned());
+        }
+    }
+    // `a * b` products, as v20 writes forces (`12 * 90`).
+    let number = |v: &str| -> Option<f32> {
+        v.split('*')
+            .map(|t| t.trim().parse::<f32>().ok())
+            .try_fold(1.0, |acc, t| t.map(|t| acc * t))
+            .filter(|n| n.is_finite())
+    };
+    let flag = |v: &str| v == "1" || v.eq_ignore_ascii_case("true");
+    // v20's 32 ms tick (`bri_motor::player::TORQUE_TICK`).
+    const TICK: f32 = 0.032;
+    let mass = set.get("mass").and_then(|v| number(v)).filter(|m| *m > 0.0).unwrap_or(90.0);
+    let mut movement = serde_json::Map::new();
+    let mut def = serde_json::Map::new();
+    def.insert("schema_version".into(), 1.into());
+    def.insert("base".into(), format!("v20.player.{base}").into());
+    let mut gaps = Vec::new();
+    for (k, v) in &set {
+        let n = number(v);
+        let mut put = |key: &str, value: Option<f32>| match value {
+            Some(x) => {
+                movement.insert(key.into(), serde_json::json!(x));
+            }
+            None => gaps.push(k.clone()),
+        };
+        match k.as_str() {
+            "maxforwardspeed" => put("forward", n),
+            "maxbackwardspeed" => put("backward", n),
+            "maxsidespeed" => put("sideways", n),
+            "maxforwardcrouchspeed" => put("crouch_forward", n),
+            "maxbackwardcrouchspeed" => put("crouch_backward", n),
+            "maxsidecrouchspeed" => put("crouch_sideways", n),
+            "maxunderwaterforwardspeed" => put("underwater_forward", n),
+            "maxunderwaterbackwardspeed" => put("underwater_backward", n),
+            "maxunderwatersidespeed" => put("underwater_sideways", n),
+            "runforce" => put("acceleration", n.map(|f| f / mass)),
+            "jumpforce" => put("jump_speed", n.map(|f| f / mass)),
+            "aircontrol" => put("air_control", n),
+            "runsurfaceangle" => put("slope_degrees", n),
+            "jumpsurfaceangle" => put("jump_surface_degrees", n),
+            "maxenergy" => put("max_energy", n),
+            "rechargerate" => put("recharge", n.map(|r| r / TICK)),
+            "minjetenergy" => put("min_jet_energy", n),
+            "jetenergydrain" => put("jet_drain", n.map(|r| r / TICK)),
+            "jumpdelay" => put("jump_delay_ticks", n.map(|t| (t * 4.0).clamp(0.0, 255.0))),
+            "canjet" => {
+                movement.insert("can_jet".into(), flag(v).into());
+            }
+            "maxdamage" => match n {
+                Some(x) => {
+                    def.insert("max_health".into(), serde_json::json!(x));
+                }
+                None => gaps.push(k.clone()),
+            },
+            "uiname" => {
+                def.insert("name".into(), v.clone().into());
+            }
+            "showenergybar" => {
+                def.insert("energy_bar".into(), flag(v).into());
+            }
+            "thirdpersononly" => {
+                def.insert("third_person_only".into(), flag(v).into());
+            }
+            "rideable" => {
+                def.insert("rideable".into(), flag(v).into());
+            }
+            "canride" => {
+                def.insert("can_ride".into(), flag(v).into());
+            }
+            "cameramaxdist" => match n {
+                Some(x) => {
+                    def.insert("camera_distance".into(), serde_json::json!(x));
+                }
+                None => gaps.push(k.clone()),
+            },
+            // Jump and jet energy costs the motor does not charge, and the
+            // mass already folded into the forces.
+            "mass" | "jumpenergydrain" | "minjumpenergy" => {}
+            _ => gaps.push(k.clone()),
+        }
+    }
+    def.insert("movement".into(), movement.into());
+    let value = serde_json::Value::Object(def);
+    let parsed: bri_package_runtime::content::ArchetypeDef =
+        serde_json::from_value(value.clone()).context("archetype")?;
+    parsed.validate()?;
+    Ok((value, gaps))
+}
+
 fn sounds_and_rest(cx: &mut Ctx) {
     let pending: Vec<Pending> = cx
         .report
@@ -2445,6 +2573,38 @@ fn sounds_and_rest(cx: &mut Ctx) {
                         vec![],
                         Some(format!("sound file {file} is not in this Add-On")),
                     );
+                }
+            }
+            "playerdata" if !fields.contains_key("isholebot") => {
+                match player_archetype(cx, &name) {
+                    Ok((def, gaps)) => {
+                        let file = format!("assets/archetypes/{}.json", name.to_ascii_lowercase());
+                        match serde_json::to_vec_pretty(&def) {
+                            Ok(bytes) if cx.write(&file, &bytes).is_ok() => {
+                                let id = cx.id("archetype", &name, &name, &file);
+                                if gaps.is_empty() {
+                                    cx.mark(&name, "player_type", "converted", vec![id], None);
+                                } else {
+                                    cx.mark(
+                                        &name,
+                                        "player_type",
+                                        "converted_with_gaps",
+                                        vec![id],
+                                        Some(format!("fields without a native equivalent: {}", gaps.join(", "))),
+                                    );
+                                }
+                            }
+                            _ => cx.unsupported(
+                                format!("player type {name}"),
+                                Some(at),
+                                "its archetype could not be written".into(),
+                            ),
+                        }
+                    }
+                    Err(e) => {
+                        cx.mark(&name, "player_type", "recognised_only", vec![], Some(format!("{e:#}")));
+                        cx.unsupported(format!("player type {name}"), Some(at), format!("{e:#}"));
+                    }
                 }
             }
             "playerdata" => {
@@ -2624,7 +2784,32 @@ fn runtime_provides(out: &Path, namespace: &str) -> Vec<serde_json::Value> {
     .into_iter()
     .filter(|(_, file)| out.join(file).is_file())
     .map(|(kind, file)| json!({ "kind": kind, "id": format!("{namespace}:{kind}/main"), "file": file }))
+    .chain(archetype_provides(out, namespace))
     .collect()
+}
+
+/// Each converted player type (`assets/archetypes/<name>.json`), declared so
+/// the package runtime adds it to the host's archetype table.
+fn archetype_provides(out: &Path, namespace: &str) -> Vec<serde_json::Value> {
+    let Ok(dir) = std::fs::read_dir(out.join("assets/archetypes")) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = dir
+        .filter_map(|e| e.ok())
+        .filter_map(|e| e.file_name().to_str().map(str::to_owned))
+        .filter_map(|n| n.strip_suffix(".json").map(str::to_owned))
+        .collect();
+    names.sort();
+    names
+        .into_iter()
+        .map(|n| {
+            json!({
+                "kind": "archetype",
+                "id": format!("{namespace}:archetype/{n}"),
+                "file": format!("assets/archetypes/{n}.json"),
+            })
+        })
+        .collect()
 }
 
 fn finish(
@@ -2655,10 +2840,9 @@ fn finish(
         .collect();
     let src = &cx.report.source;
     // The per-package manifest the package runtime reads
-    // (`bri_package_runtime::manifest`). Its `provides` kinds are the ones the
-    // runtime consumes (behaviour, script, world, entity, model, hud); none of
-    // an Add-On's weapons, vehicles or bricks is one of them yet, so the
-    // imported content is declared in `assets/content.json` instead.
+    // (`bri_package_runtime::manifest`): the weapons, vehicles and bricks
+    // packs and each converted player type. Every converted asset is also
+    // listed in `assets/content.json`.
     let manifest = json!({
         "schema_version": 1,
         "id": cx.ns,

@@ -431,7 +431,7 @@ fn start_round(g) {
         r.countdown = tick() + countdown * 120;
         r.counted = ();
         for m in g.members {
-            watch(m, m);
+            freeze(m);
         }
     } else {
         r.countdown = ();
@@ -454,7 +454,7 @@ fn count_down(g, r) {
         r.told = ();
         for m in g.members {
             if !get_player(m, "out") {
-                watch(m, ());
+                thaw(m);
             }
         }
         play_all(g, "{{namespace}}:sound/slayer_begin_sound");
@@ -470,6 +470,12 @@ fn count_down(g, r) {
     }
     r
 }
+
+// `changeDatablock(PlayerFrozenArmor)` through the countdown: no moving,
+// jumping or using items, the camera behind the body.
+fn freeze(p) { set_archetype(p, "{{namespace}}:archetype/playerfrozenarmor"); }
+// `startRound`: back to the mini-game's player type.
+fn thaw(p) { set_archetype(p, ""); }
 
 // `Slayer_MiniGameSO::play2dAll`: a sound every member hears.
 fn play_all(g, sound) {
@@ -608,7 +614,7 @@ fn on_spawn(p) {
     }
     let r = round_of(me.minigame);
     if r.countdown != () {
-        watch(p, p);
+        freeze(p);
     }
     let lives = get_player(p, "lives");
     if lives > 0 && r.reset_at == () {

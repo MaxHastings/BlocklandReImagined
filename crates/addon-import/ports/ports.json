@@ -130,7 +130,21 @@
           "remain": "%this\\.preRoundSeconds\\s*-\\s*%ticks",
           "go": "GO!",
           "begin_sound": "play2dAll\\(\\s*Slayer_Begin_Sound\\s*\\)",
-          "voice": "\"Slayer_\"\\s*@\\s*%remain\\s*@\\s*\"_Seconds_Sound\""
+          "voice": "\"Slayer_\"\\s*@\\s*%remain\\s*@\\s*\"_Seconds_Sound\"",
+          "freeze": "changeDatablock\\(\\s*PlayerFrozenArmor\\s*\\)"
+        },
+        "Slayer_MiniGameSO::startRound": {
+          "thaw": "getID\\(\\)\\s*==\\s*PlayerFrozenArmor\\.getID\\(\\)[\\s\\S]*?playerDatablock[\\s\\S]*?changeDatablock\\(\\s*%db\\s*\\)"
+        },
+        "PlayerFrozenArmor::onTrigger": {
+          "nothing": "^\\s*return\\s*;\\s*$"
+        },
+        "serverCmdUseTool": {
+          "frozen": "getID\\(\\)\\s*!=\\s*PlayerFrozenArmor\\.getID\\(\\)"
+        },
+        "server/core/resources/playertypes/Player_Frozen.cs": {
+          "frozen": "datablock\\s+PlayerData\\s*\\(\\s*PlayerFrozenArmor\\s*:\\s*PlayerStandardArmor\\s*\\)",
+          "third_person": "thirdPersonOnly\\s*=\\s*1\\s*;"
         },
         "Slayer_MiniGameSO::endRound": {
           "dead": "setDead\\(\\s*true\\s*\\)",

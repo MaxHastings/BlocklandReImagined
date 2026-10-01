@@ -23,6 +23,8 @@ pub struct Controls {
     /// The host's `setControlCameraFov` (an Add-On's rules), in place of
     /// `normal_fov` until the host hands it back.
     server_fov: Option<f32>,
+    /// The body's archetype is `thirdPersonOnly`.
+    third_person_only: bool,
     /// Target zoom FOV (`$Pref::player::CurrentFOV`); the wheel steps it.
     zoom_fov: Option<f32>,
     /// The FOV shown (`$cameraFov`), ramping toward the normal or zoom FOV.
@@ -786,7 +788,13 @@ impl Controls {
     /// Third person as the view shows it: aiming a `first_person` aim
     /// looks from the eye whatever the toggle says.
     pub fn third_person_view(&self) -> bool {
-        self.third_person && !(self.aiming() && self.aim.is_some_and(|a| a.first_person))
+        self.third_person_only
+            || (self.third_person && !(self.aiming() && self.aim.is_some_and(|a| a.first_person)))
+    }
+    /// `thirdPersonOnly`: while the body's archetype says so, the camera
+    /// stays out behind it whatever the view toggle says.
+    pub fn set_third_person_only(&mut self, only: bool) {
+        self.third_person_only = only;
     }
     fn target_fov(&self) -> f32 {
         if let Some(aim) = self.aim.filter(|_| self.aiming()) {

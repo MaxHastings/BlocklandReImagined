@@ -1664,6 +1664,17 @@ impl Session {
         &self.archetypes
     }
     /// `Player::setDataBlock`, keeping the player's scale and damage taken.
+    /// What `owner` spawns as without an Add-On's choice: their mini-game's
+    /// player type, else the standard player.
+    pub(super) fn spawn_archetype(&self, owner: OwnerId) -> crate::archetype::ArchetypeId {
+        self.game_of(owner)
+            .and_then(|g| self.minigames.game(g).ok())
+            .and_then(|g| {
+                let equipment = g.settings.equipment(self.minigames.catalog());
+                self.archetypes.find(&equipment.player_type)
+            })
+            .unwrap_or_default()
+    }
     pub(super) fn set_player_archetype(
         &mut self,
         owner: OwnerId,
