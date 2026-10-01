@@ -8805,3 +8805,44 @@ are still tested through a small fill tool of the test's own in
 `crates/sim/tests/fixtures/fill-can`. Loading the player's own original
 Fill Can from their Blockland Add-Ons folder follows on the shared classic
 Add-On loader.
+
+## A vehicle rolls on through a player it hits (v0.1.11)
+
+Max: "the steel ball when it hits a player should keep going not stop".
+- Root cause: a walking player is a kinematic body, which Rapier's contact
+  solver treats as infinitely heavy, so a Steel Ball (or any vehicle) that
+  hit one bounced back off it as off a wall (about 20 u/s to -2).
+- Fix (`VehiclesWorld::share_contacts`, called from `vehicle_post_step`
+  before impacts are judged): last step's side contact impulses between a
+  vehicle and a player on foot (corpses too) are shared as between two free
+  bodies, the player weighing `PLAYER_MASS` (90). Of the impulse J the
+  vehicle keeps J·M/(m+M), and the player takes -J/(m+M) of velocity, so
+  a 900 kg ball barely slows for a player and a player barely moves it.
+  Contacts from above or below (|normal.y| ≥ 0.7) are left alone so
+  standing on a vehicle is unchanged.
+- A `shove` vehicle's run-over push also lifts the player 4 u/s off the
+  ground, as its tumble does, so the ball rolls on instead of plowing them
+  along the ground's braking.
+- Test: `bri-sim --test showcase a_vehicle_rolls_on_through_a_player_it_hits`
+  (outside a minigame, and in one at a bump, a bowl-over and a kill — Max:
+  "IN A MINIGAME" — the ball keeps over 75% of its speed through the hit
+  and still rolls after 1.5 s; a 300 kg crate slows more but
+  never bounces back). It fails without the fix (20.6 → -2.1).
+
+## Blasts knock the Steel Ball about (v0.1.11)
+
+Max: "explosions from rockets or tank shells don't move steel ball in
+v0.1.10".
+- Blasts did reach the ball: v20's radius impulse divides by the
+  vehicle's mass, so a rocket-sized push (4000 within 6,
+  confirmed against content on the PC; the tank shell's is 5000 within 15)
+  moved the 900 kg ball under 4 units in two seconds, from a hit beside it.
+- New generic vehicle field `blast_scale` (default 1): weapon and blast
+  impulses on a vehicle (`Session::blast_vehicle`, from weapon `Impulse`
+  events and the `radiusImpulse` brick event) are scaled by it. Contacts
+  and the click flip still go by mass. The Steel Ball sets 3.
+- Test: `bri-sim --test showcase
+  rockets_and_tank_shells_knock_the_steel_ball_away` (a synthetic rocket
+  and tank shell exploding on the ground 2.5 units beside the ball, in and
+  out of minigames, roll it more than 6 units in two seconds; 3.75 without
+  the scale).

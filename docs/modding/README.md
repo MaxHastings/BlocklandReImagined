@@ -778,6 +778,10 @@ no seats cannot be mounted. Three fields exist for Add-Ons:
 - `"per_player": 3` lets each player have at most that many of this
   vehicle at once, on top of the server's vehicle limits. A spawn brick
   past it tells its builder "You already have 3 Steel Balls".
+- `"blast_scale": 3.0` makes rockets, tank shells and other blasts and
+  shots push it that many times as hard as v20's rule (the impulse over
+  its mass) would. The Steel Ball weighs 900 and sets 3, so a rocket
+  still knocks it about. Contacts and a click's flip go by its mass alone.
 
 Every vehicle can be placed from a vehicle spawn brick and spawned by a
 rule (`spawn_vehicle`).

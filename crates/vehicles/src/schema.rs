@@ -444,6 +444,12 @@ pub struct Definition {
     /// they already have that many.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub per_player: Option<u32>,
+    /// How hard blasts push it, as a multiple of v20's rule (the impulse
+    /// divided by its mass): a heavy toy that should still be knocked about
+    /// by rockets sets more than 1. Only explosions and shots; contacts and
+    /// a click's flip go by its mass alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blast_scale: Option<f32>,
     /// Emitters the vehicle runs at its nodes while its speed is in range.
     /// Cosmetic: each client draws them from the vehicle's presented motion.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -584,6 +590,11 @@ impl Pack {
                 "duplicate/invalid vehicle identity"
             );
             ensure!(d.per_player != Some(0), "a per-player cap of 0 allows none");
+            ensure!(
+                d.blast_scale
+                    .is_none_or(|s| s.is_finite() && s > 0. && s <= 100.),
+                "blast_scale must be above 0 and at most 100"
+            );
             ensure!(
                 d.mass.is_finite() && d.mass > 0. && d.max_damage.is_finite() && d.max_damage > 0.,
                 "invalid vehicle mass/damage"

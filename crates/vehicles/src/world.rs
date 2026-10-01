@@ -71,6 +71,9 @@ const WHEELED_SPEED_CAP: f32 = 200.;
 /// 120 Hz ticks in one of v20's 32 ms moves, rounded up: a driver's move
 /// steers without auto-return until this long has passed without a turn.
 const AUTO_RETURN_QUIET: u8 = 4;
+/// Contacts whose normal is closer to level than this (|y| of the unit
+/// normal, about 45 degrees) are hits from the side.
+const SIDE_HIT: f32 = 0.7;
 fn bite(f: &WheeledFlightSettings, speed: f32) -> f32 {
     if f.max_forward_vel > 0. {
         ((speed - f.stall_speed) / f.max_forward_vel).clamp(0., 1.)
@@ -569,6 +572,64 @@ impl VehiclesWorld {
             .get(&id)
             .map(|v| world.bodies[v.body].colliders().to_vec())
             .unwrap_or_default()
+    }
+    /// The contact solver treats a kinematic body (a walking player) as
+    /// immovable, so a vehicle that ran into one stopped dead or bounced
+    /// back as off a wall. This shares last step's contact impulses between
+    /// each vehicle touching `collider` and that body as between two free
+    /// bodies, with the body weighing `mass`: of the impulse J the solver
+    /// gave the vehicle (masses m and M) it keeps J * M / (m + M), and the
+    /// body takes the rest, -J / (m + M) of velocity. A heavy ball barely
+    /// slows for a player; a player can barely move it. Returns the body's
+    /// change of velocity.
+    pub fn share_contacts(
+        &self,
+        world: &mut PhysicsWorld,
+        collider: ColliderHandle,
+        mass: f32,
+    ) -> Vec3 {
+        if mass.is_nan() || mass <= 0. {
+            return Vec3::ZERO;
+        }
+        let mut kicks = Vec::new();
+        for pair in world.contact_pairs_with(collider) {
+            let (other, sign) = if pair.collider1 == collider {
+                (pair.collider2, 1.)
+            } else {
+                (pair.collider1, -1.)
+            };
+            let Some(body) = world.colliders.get(other).and_then(|c| c.parent()) else {
+                continue;
+            };
+            let Some(v) = self.instances.values().find(|v| v.body == body) else {
+                continue;
+            };
+            if v.actor.is_some() || !world.bodies[body].is_dynamic() {
+                continue;
+            }
+            // Each manifold's normal points from collider1 to collider2:
+            // what collider2's body was pushed along. Only hits from the
+            // side: a body standing on a vehicle, or under one, keeps
+            // holding it up as the ground does.
+            let impulse: Vec3 = pair
+                .manifolds()
+                .iter()
+                .filter(|m| m.data.normal.y.abs() < SIDE_HIT)
+                .map(|m| m.data.normal * m.points.iter().map(|p| p.data.impulse).sum::<f32>())
+                .sum::<Vec3>()
+                * sign;
+            if impulse.is_finite() && impulse.length_squared() > 0. {
+                kicks.push((body, impulse));
+            }
+        }
+        let mut change = Vec3::ZERO;
+        for (body, impulse) in kicks {
+            let b = &mut world.bodies[body];
+            let total = b.mass() + mass;
+            b.apply_impulse(-impulse * (b.mass() / total), true);
+            change -= impulse / total;
+        }
+        change
     }
     /// Where an occupant sits, if mounted.
     pub fn occupant(&self, occupant: OccupantId) -> Option<(VehicleId, usize)> {
