@@ -19,8 +19,9 @@ use bri_net::{
 use bri_package::{library::Library, packages::PackageSet};
 use bri_sim::{
     player::{MoveInput, PlayerState, PlayerTuning},
-    session::{Command, PackageCommand, Reply, ToolInventory},
+    session::{Command, InspectMode, Notice, PackageCommand, Reply, ToolAction, ToolInventory},
 };
+use bri_world::{ContentRef, authority::WrenchProperties};
 use glam::Vec3;
 use serde_json::{Value, json};
 use std::f32::consts::PI;
@@ -33,6 +34,8 @@ const MAP: &str = bri_net::testing::MAP;
 const HOOKSHOT: &str = "weapon_loz_hookshot";
 const ROPE: &str = "tool_grapplerope";
 const FILL_CAN: &str = "tool_fill_can";
+const WRENCH: &str = "v20.weapon.wrenchitem";
+const WRENCH_SLOT: usize = 2;
 
 fn repo() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -361,6 +364,7 @@ async fn played(game: Game) -> Result<()> {
     for (slot, id) in [HOOKSHOT, ROPE].into_iter().enumerate() {
         loadout.slots[slot] = Some(item_of(root, id));
     }
+    loadout.slots[WRENCH_SLOT] = Some(WRENCH.into());
     session.set_spawn_loadout(loadout)?;
     let shelf = bri_net::packages::PackageShelf::new(root, &set, &host.environment)?;
     let server = server::start(
@@ -382,7 +386,10 @@ async fn played(game: Game) -> Result<()> {
         None,
     )
     .await?;
-    let result = play(&mut client).await;
+    let mut result = play(&mut client).await;
+    if result.is_ok() {
+        result = wrench_an_add_on_brick(&mut client, root, &set).await;
+    }
     client.close();
     server.stop().await?;
     result
@@ -611,4 +618,134 @@ async fn play(client: &mut Client) -> Result<()> {
     })
     .await?;
     Ok(())
+}
+
+/// The first brick an installed original adds to the brick menu, and the
+/// brick catalog the player's game reads: the base game's, then each
+/// Add-On's, as the wrench window does.
+fn add_on_brick(
+    root: &Path,
+    set: &PackageSet,
+) -> Result<(
+    String,
+    bri_content::brick::Brick,
+    bri_content::brick::Catalog,
+)> {
+    let extras = bri_net::content_identity::brick_catalog_providers(root, set)?;
+    let base = set.role_dir(root, "brick_catalog")?;
+    let catalog = bri_sim::definitions::catalog_with(&base, &extras)?;
+    let mut ids = Vec::new();
+    for (_, dir) in &extras {
+        let own: bri_content::brick::Catalog =
+            serde_json::from_value(read(&dir.join("stock-catalog.json")))?;
+        ids.extend(
+            own.bricks
+                .into_iter()
+                .filter(|b| b.selectable())
+                .map(|b| b.id),
+        );
+    }
+    let id = ids
+        .into_iter()
+        .next()
+        .context("no bundled original adds a brick to test the wrench on")?;
+    let definitions = bri_sim::definitions::Definitions::load_with(
+        &base,
+        &set.role_dir(root, "geometry")?,
+        &extras,
+    )?;
+    let mesh = definitions.entries[&id].mesh.clone();
+    Ok((id, mesh, catalog))
+}
+
+/// Max, b5d99c948: the wrench said "Inspected brick definition is
+/// unavailable" on every Add-On brick (Portals, Trench dirt), so none could
+/// be named or set up. Here a player plants an original's brick, swings the
+/// wrench at it, and the brick it opens is one the wrench window knows;
+/// naming it there reaches every player.
+async fn wrench_an_add_on_brick(client: &mut Client, root: &Path, set: &PackageSet) -> Result<()> {
+    let (definition, mesh, catalog) = add_on_brick(root, set)?;
+    let mut p = Player {
+        client,
+        moves: 1000,
+    };
+    p.until("standing", |p| p.me().is_some_and(|m| m.grounded))
+        .await?;
+    let feet = p.feet();
+    // Its lowest corner on the stud and plate grid, at the floor.
+    let [w, d] = mesh.footprint_studs.map(|v| v as f32);
+    let at = Vec3::new(
+        ((feet.x + 3.0) * 2.0).round() / 2.0 + w * 0.25,
+        (feet.y / 0.2).floor() * 0.2 + mesh.height_plates as f32 * 0.1,
+        ((feet.z + 3.0) * 2.0).round() / 2.0 + d * 0.25,
+    );
+    let brick = match p
+        .command(Command::Plant {
+            definition: definition.clone(),
+            position: at.to_array(),
+            quarter_turns: 0,
+            color: 0,
+        })
+        .await?
+    {
+        Reply::Planted(id) => id,
+        other => bail!("expected a plant of {definition}, got {other:?}"),
+    };
+    p.equip(WRENCH_SLOT).await?;
+    let me = p.me().unwrap();
+    let flat = at - Vec3::from(me.feet);
+    let yaw = flat.x.atan2(-flat.z);
+    let eye = PlayerState { yaw, ..me }.eye(&PlayerTuning::default());
+    let d = at - eye;
+    p.look(yaw, d.y.atan2(Vec3::new(d.x, 0.0, d.z).length()))
+        .await?;
+    p.click().await?;
+    let opened = tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            if let ClientEvent::Notice(Notice::Inspected {
+                brick_id,
+                brick,
+                mode: InspectMode::Wrench,
+            }) = p.client.receive().await?
+            {
+                return Result::<_>::Ok((brick_id, brick));
+            }
+        }
+    })
+    .await
+    .context("timed out waiting for the wrench to open the brick")??;
+    anyhow::ensure!(
+        opened.0 == brick,
+        "the wrench opened {} not {brick}",
+        opened.0
+    );
+    let ContentRef::Resolved(opened_definition) = &opened.1.definition else {
+        bail!("the wrench opened an unresolved brick")
+    };
+    anyhow::ensure!(
+        catalog.bricks.iter().any(|b| &b.id == opened_definition),
+        "the wrench window does not know {opened_definition}"
+    );
+    let reply = p
+        .command(Command::Tool(ToolAction::SetWrench {
+            brick,
+            properties: WrenchProperties {
+                name: Some("paired".into()),
+                raycast: true,
+                colliding: true,
+                visible: true,
+                ..Default::default()
+            },
+        }))
+        .await?;
+    anyhow::ensure!(reply == Reply::Accepted, "wrench: {reply:?}");
+    p.until("the wrenched name", |p| {
+        p.client
+            .replica
+            .world
+            .bricks
+            .get(&brick)
+            .is_some_and(|b| b.name.as_deref() == Some("paired"))
+    })
+    .await
 }
