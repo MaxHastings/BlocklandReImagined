@@ -433,11 +433,50 @@ list their globals in `rules.prefs`, to how the rules use them (a trailing
 `pref("$Pref::Server::TT::Start9MM")`, which finds it whichever running
 Add-On registered it (Tier 1's ammo bag reads Explosive 1's grenade drop
 preference). The report counts them as ported; the copy's other preferences
-stay unsupported, saying the default they keep, and one that needs a
-restart (read while the Add-On loads) says so. The game plays the copy's
+stay unsupported, saying the default they keep. One that needs a restart
+(read while the Add-On loads) becomes a restart setting: the host's change
+applies when the server starts again or loads a map. The game plays the copy's
 RTB branch, so a `TT_defaultIfUnset`-style fallback for servers without
 RTB never runs, and `isFunction(registerPreferenceAddon)` (Blockland Glass)
 reads as absent.
+
+**Weapon fields from settings.** A preference that changed what a weapon
+does where its scripts read it (Tier's Recoil around the recoil blast, its
+Ammo System in every ammo function) goes in `rules.settings` instead, by its
+global, with the fields it sets: the importer writes them into the import's
+pack as `bindings` ([Making Add-Ons](README.md) section 5, "Fields from
+server settings"), so the weapons follow the host's setting.
+
+```json
+"settings": {
+  "$Pref::Server::TT::Recoil": {
+    "how": "off, the guns lose their recoil kick",
+    "fields": [{ "path": ["images", "*", "shot", "kick"], "values": { "false": null } }]
+  },
+  "$Pref::Server::TT::Ammo": {
+    "how": "the guns' magazines follow it",
+    "fields": [
+      { "path": ["images", "*", "magazine", "supply"], "existing": false,
+        "only": { "item.TT_reloads": true },
+        "values": { "0": "reserve", "1": "endless", "2": "unlimited", "3": "counted" } },
+      { "path": ["images", "*", "magazine", "supply"], "existing": false,
+        "only": { "item.TT_alwaysReloadPref": "Ex" },
+        "when": { "$Pref::Server::TT::AlwaysReloadEx": "true" },
+        "values": { "2": "endless", "3": "both" } }
+    ]
+  }
+}
+```
+
+`*` is every id of that kind the import declares (or every key there).
+The field must already be in the pack unless `"existing": false` (a field
+left at its default); every step before it must be. `only` keeps the
+definitions whose datablock has those fields (`true` set, `false` unset, or
+a value; `item.<field>` reads an image's item). `values`, `scale` and `when`
+are the binding's. The bindings name the global, so a pack whose copy does
+not register the preference (Tier 2) binds its guns to the one another
+Add-On registers (Tier 1). The report counts the preference as ported with
+its `how`.
 
 **Reaching the rules.** In the patch, `{namespace}`, `{rules}` and
 `{version}` work like captured values, in keys too. Point the image's

@@ -378,7 +378,10 @@ colour in the same window, which also adds and removes teams.
 menu's Add-On Settings, and it is kept with the host's Server Settings
 (saved as `$Pref::Server::AddOn::<namespace>::<key>`, and kept for an
 Add-On that is off until it runs again). A server setting may name the v20
-global it stands for (`"global": "$Pref::Server::TT::Ammo"`).
+global it stands for (`"global": "$Pref::Server::TT::Ammo"`). One with
+`"restart": true` is read only as the server starts or loads a map (RTB's
+needsRestart): it keeps the value it had then, and a host's change waits
+for the next start, marked in the window.
 `editor: "admin"` lets only an admin change it. `shown_when` hides a
 setting unless another (`key`, or `ns:key` of an Add-On this one depends on)
 holds one of the listed values. A dependent Add-On adds its own items to a
@@ -1250,6 +1253,50 @@ reloads, as Tier+Tactical's counted grenades. With none left the image
 leaves the hand while its tool stays selected; more ammo of its kind
 (a grenade bag) puts it back. The display shows the reserve alone, and
 the light key works the light.
+
+A magazine's `supply` says where its rounds come from, as Tier+Tactical's
+ammo systems did: `reserve` (the default: shots take the magazine's rounds,
+a reload fills it from the reserve), `endless` (a reload fills it from
+nothing, the reserve untouched; the display shows `rounds / size`),
+`unlimited` (nothing is used, no display), `counted` (shots take the
+reserve, no reloads; the display shows the reserve) or `both` (shots take
+the magazine and the reserve, a reload fills the magazine free while there
+is reserve). `"hide_display": true` shows no display at all.
+
+**Fields from server settings.** A pack's `bindings` let a server setting
+decide any field of its items, images and projectiles, as v20 scripts read
+a `$Pref::Server::*` global where the field was used:
+
+```json
+"bindings": [
+  { "setting": "$Pref::Server::TT::Recoil",
+    "field": ["images", "mag:image/rifle", "shot", "kick"],
+    "values": { "false": null } },
+  { "setting": "tier-rules:tt_displaytime",
+    "field": ["images", "mag:image/rifle", "magazine", "display_ticks"],
+    "scale": 120 },
+  { "setting": "$Pref::Server::TT::Ammo",
+    "field": ["images", "mag:image/rifle", "magazine", "supply"],
+    "values": { "2": "endless", "3": "both" },
+    "when": { "$Pref::Server::TT::AlwaysReloadEx": "true" } }
+]
+```
+
+`setting` is `<package>:<key>` or the v20 global of a server setting
+(section 3's `scope: "server"`), whichever running Add-On declares it.
+`field` is the kind, one of the pack's own ids and the path in it (not its
+`id`, `states`, `image` or `item`). `values` maps the setting's value, as
+text, to the field's (`null` leaves an optional field out; a value not
+listed leaves the field as authored), or `scale` multiplies a number
+setting. `when` applies a binding only while other settings have those
+values; a later binding of the same field wins. The host plays the pack
+with the settings applied and derives it again when the host changes one;
+players get the values with the world and derive the same pack. The
+result is checked as any pack, so a value that takes a field out of its
+range is refused when the host sets it. A gun keeps its rounds and
+reserve across a change; new shots, reloads and spawns follow the new
+fields. A restart setting changes them at the next start. At most 8192
+bindings, 10 steps deep.
 
 A magazine can instead follow the image's own states, as Tier+Tactical's
 guns did with their check scripts: `checks` names the flags each state
