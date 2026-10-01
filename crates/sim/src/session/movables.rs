@@ -349,6 +349,11 @@ impl Session {
                 if p == mover {
                     return false;
                 }
+                // A bot from the mover's own spawn brick is theirs to move,
+                // as v20's throw mod let its brick owner carry it.
+                if self.bots.is_bot(p) && self.bot_brick_owner(p) == Some(mover) {
+                    return victim.combat.alive || self.game_of(mover) == self.game_of(p);
+                }
                 // A corpse can no longer be hurt: it may be moved by
                 // players of its minigame, or outside minigames by those
                 // it trusted, as it could have been alive.
@@ -1326,6 +1331,14 @@ impl Session {
         self.damage_vehicle(target, health * share, source, "Smash", point)
     }
 
+    /// A rider about to be seated (`mountObject`): no one holds them in a
+    /// physics grip any more, and they let go of what they held.
+    pub(super) fn release_holds_on(&mut self, rider: OwnerId) {
+        self.movables.holds.remove(&rider);
+        self.movables
+            .holds
+            .retain(|_, h| h.target != ObjectRef::Player(rider));
+    }
     /// A player left: they hold nothing, and nothing they threw counts as
     /// theirs any more.
     pub(super) fn forget_mover(&mut self, owner: OwnerId) {

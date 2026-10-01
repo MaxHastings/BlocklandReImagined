@@ -365,12 +365,16 @@ struct HostSetup {
     weapon_pack: bri_weapons::Pack,
     item_bounds: BTreeMap<String, bri_weapons::ItemBounds>,
     avatar_catalog: bri_content::avatar::Package,
+    /// The Blockhead's mount points, from its rig.
+    body_mounts: Vec<bri_sim::archetype::MountPoint>,
     vehicle_pack: bri_vehicles::Pack,
     bot_kinds: Vec<bri_sim::bot_kind::BotKind>,
     event_catalog: bri_events::Catalog,
     event_sounds: Vec<String>,
     maps: Vec<bri_sim::session::MapListing>,
 }
+/// The Blockhead's model id (`m.dts`).
+const BLOCKHEAD_MODEL: &str = "v20.shape.m";
 impl HostSetup {
     fn session(&self, loaded: crate::content::LoadedMap) -> Result<Session> {
         let mut session = Session::new(loaded.simulation);
@@ -379,6 +383,7 @@ impl HostSetup {
         session.set_weapon_pack(self.weapon_pack.clone())?;
         session.set_item_bounds(self.item_bounds.clone())?;
         session.set_avatar_catalog(self.avatar_catalog.clone())?;
+        session.set_body_mount_points(BLOCKHEAD_MODEL, self.body_mounts.clone())?;
         session.set_vehicle_pack(self.vehicle_pack.clone(), self.bot_kinds.clone())?;
         session.set_event_catalog(self.event_catalog.clone(), self.event_sounds.clone())?;
         session.set_spawn_points(loaded.spawn_points)?;
@@ -614,6 +619,8 @@ pub struct App {
     music_world: Option<Arc<bri_net::protocol::PublicWorld>>,
     /// Connection samples for the net graph and the expanded overlay.
     net_sampler: crate::perf::NetSampler,
+    /// Whether a joined host has gone quiet, for the lag icon.
+    lag_watch: bri_net::lag::LagWatch,
     /// When the performance overlay's slower figures are next refreshed.
     perf_stats_due: std::time::Instant,
     gpu_name: String,
@@ -1079,11 +1086,22 @@ impl App {
             })
             .collect();
         actor_effects.update_jet_dust(&dust)?;
+        // A wreck burns with its own damage emitters, from the replicated
+        // destroyed state alone.
         let burning: Vec<_> = view
             .vehicles
             .values()
             .filter(|info| info.destroyed)
-            .filter_map(|info| Some((info.id, body(info.id)?)))
+            .filter_map(|info| {
+                let at = body(info.id)?;
+                let d = vehicle_assets.definition(&info.definition)?;
+                Some(
+                    d.wreck_emitters()
+                        .into_iter()
+                        .map(move |e| (info.id, e, at)),
+                )
+            })
+            .flatten()
             .collect();
         let pose = |anchor| match anchor {
             crate::actor_effects::Anchor::Actor { actor, mount } => avatars
@@ -1247,7 +1265,8 @@ impl App {
         avatar_actions.retain(|owner, _| view.poses.contains_key(owner));
         avatar_gestures.retain(|owner, _| view.poses.contains_key(owner));
         avatar_action_images.retain(|owner, _| view.poses.contains_key(owner));
-        let identity = |owner: &u64| -> Option<String> {
+        // The images in a player's hands; empty when they hold nothing.
+        let identity = |owner: &u64| -> String {
             let mut parts = Vec::new();
             if let Some(images) = view.weapons.images.get(owner) {
                 let mut images: Vec<_> = images.iter().collect();
@@ -1258,18 +1277,18 @@ impl App {
                         .map(|image| format!("{}:{}", image.hand, image.image)),
                 );
             }
-            (!parts.is_empty()).then(|| parts.join("|"))
+            parts.join("|")
         };
+        // An action belongs to the hands it started with: a tool's swing
+        // ends when the tool changes or is put away. One a rule started
+        // with empty hands (`playThread(2, armReadyBoth)`, `death1`) plays
+        // on, as v20's thread 2 does, until a tool is taken out.
         for owner in view.poses.keys() {
             let current = identity(owner);
             if avatar_action_images
                 .get(owner)
-                .is_some_and(|old| current.as_ref() != Some(old))
+                .is_some_and(|old| current != *old)
             {
-                avatar_actions.remove(owner);
-                avatar_action_images.remove(owner);
-            }
-            if current.is_none() {
                 avatar_actions.remove(owner);
                 avatar_action_images.remove(owner);
             }
@@ -1311,13 +1330,15 @@ impl App {
                 continue;
             }
             let current = identity(actor);
+            // An image's own animation waits for that image to arrive; a
+            // rule's (`image_hand: None`) plays with whatever is in hand.
             let hand_matches = image_hand.is_none_or(|hand| {
                 view.weapons
                     .images
                     .get(actor)
                     .is_some_and(|images| images.iter().any(|image| image.hand == hand))
             });
-            if current.is_none() || !hand_matches {
+            if !hand_matches {
                 if age >= 0.5 {
                     *weapon_animation_drops = weapon_animation_drops.saturating_add(1);
                     continue;
@@ -1330,7 +1351,7 @@ impl App {
                 started_at,
             };
             avatar_actions.insert(*actor, action);
-            avatar_action_images.insert(*actor, current.unwrap());
+            avatar_action_images.insert(*actor, current);
         }
     }
     pub fn item_assets(&self) -> &Arc<crate::items::ItemAssets> {
@@ -1807,6 +1828,7 @@ impl App {
             tumble: None,
             music_world: None,
             net_sampler: Default::default(),
+            lag_watch: Default::default(),
             perf_stats_due: std::time::Instant::now(),
             gpu_name: String::new(),
             gpu_passes: Vec::new(),
@@ -2524,6 +2546,36 @@ impl App {
         }
         Ok(())
     }
+    /// v20's lag icon (`GameConnection::setLagIcon`): shown while a joined
+    /// host has sent nothing for `$Pref::Net::LagThreshold` ms. Never for the
+    /// game this process hosts, which v20 skips as a "local" connection.
+    fn update_lag(&mut self) {
+        let joined = self
+            .attempt
+            .as_ref()
+            .filter(|a| a.entered)
+            .and_then(|a| Some((a.id, a.worker.probes.get()?)))
+            .filter(|(_, p)| p.host.is_none());
+        let Some((id, probes)) = joined else {
+            if self.lag_watch.lagging() {
+                self.ui.apply(UiUpdate::Lagging(false));
+            }
+            self.lag_watch.reset();
+            return;
+        };
+        let default = bri_net::lag::DEFAULT_LAG_THRESHOLD.as_millis() as i64;
+        let threshold = self
+            .ui
+            .core
+            .prefs
+            .i64_or("$Pref::Net::LagThreshold", default)
+            .clamp(1, 60_000);
+        self.lag_watch.set_threshold(Duration::from_millis(threshold as u64));
+        let received = probes.link.received();
+        if let Some(lagging) = self.lag_watch.observe(std::time::Instant::now(), received) {
+            self.ui.apply_session(id, UiUpdate::Lagging(lagging));
+        }
+    }
     /// Feed the net graph and performance overlay while they show; nothing
     /// is sampled while both are hidden.
     fn update_perf(&mut self) {
@@ -2900,6 +2952,7 @@ impl App {
         let physics_snapshot = self.content.item_physics.clone();
         let selected = self.content.selectable.clone();
         let avatar_catalog = self.avatar_assets.package.clone();
+        let body_mounts = bri_sim::session::shape_mount_points(&self.avatar_assets.rig.shape);
         let mut catalog = self.tool_ui.server_catalog();
         // Start Game's Music Files: the loops this game's music bricks offer.
         let prefs = &self.ui.core.prefs;
@@ -3098,6 +3151,7 @@ impl App {
                 weapon_pack,
                 item_bounds,
                 avatar_catalog,
+                body_mounts,
                 vehicle_pack,
                 bot_kinds,
                 event_catalog,
@@ -6584,13 +6638,14 @@ impl PlatformApp for App {
         }
         self.update_combat_presentation();
         self.update_perf();
+        self.update_lag();
         if let Some((request, _, receiver)) = &self.add_on_import
             && let Some(result) = finished(receiver, "Add-On import")
         {
             let result = result.and_then(|imported| imported);
             let request = *request;
             self.add_on_import = None;
-            let mut view = crate::add_ons::view(&self.content.paths.root);
+            let mut view = crate::add_ons::view(&self.content.paths.root, crate::add_ons::machine());
             match result {
                 Ok(notice) => {
                     view.notice = notice;
@@ -6893,23 +6948,25 @@ impl PlatformApp for App {
                 self.avatars.get_mut(owner).unwrap().set_dead(dead);
                 // `Armor::onMount` applies the mount's look limits; the Tank's
                 // gunner rides TankTurretPlayer, so it takes that datablock's.
-                let look_limits =
-                    view.vitals
-                        .get(owner)
-                        .and_then(|v| v.mounted)
-                        .and_then(|(vehicle, seat)| {
-                            let info = view.vehicles.get(&vehicle)?;
-                            let d = self.vehicle_assets.definition(&info.definition)?;
-                            if d.seat_role(usize::from(seat)) == SeatRole::Gunner
-                                && d.attachment_mount.is_some()
-                            {
-                                return self
-                                    .vehicle_assets
-                                    .definition("v20.vehicle.tankturretplayer")
-                                    .map(|t| t.look_limits);
-                            }
-                            Some(d.look_limits)
-                        });
+                let look_limits = view
+                    .vitals
+                    .get(owner)
+                    .and_then(|v| v.mounted)
+                    .and_then(|(vehicle, seat)| {
+                        let info = view.vehicles.get(&vehicle)?;
+                        let d = self.vehicle_assets.definition(&info.definition)?;
+                        if d.seat_role(usize::from(seat)) == SeatRole::Gunner
+                            && d.attachment_mount.is_some()
+                        {
+                            return self
+                                .vehicle_assets
+                                .definition("v20.vehicle.tankturretplayer")
+                                .map(|t| t.look_limits);
+                        }
+                        Some(d.look_limits)
+                    })
+                    // A rule's `setLookLimits` for the body.
+                    .or_else(|| view.vitals.get(owner).and_then(|v| v.look_limits));
                 let held = crate::avatar::HeldToolPose::from_mounted_images(ready_hands);
                 let input = crate::avatar::AvatarAnimationInput {
                     look_limits,
@@ -8076,15 +8133,20 @@ impl PlatformApp for App {
                     Ok(())
                 }
                 UiAction::RequestAddOns => {
-                    let view = crate::add_ons::view(&self.content.paths.root);
+                    let view = crate::add_ons::view(&self.content.paths.root, crate::add_ons::machine());
                     self.ui.apply(UiUpdate::AddOns(view));
                     Ok(())
                 }
                 UiAction::SetAddOnEnabled { ref id, enabled } => {
-                    crate::add_ons::set_enabled(&self.content.paths.root, id, enabled)
+                    crate::add_ons::set_enabled(
+                        &self.content.paths.root,
+                        crate::add_ons::machine(),
+                        id,
+                        enabled,
+                    )
                         .map(|view| self.add_ons_changed(view))
                 }
-                UiAction::DefaultAddOns => crate::add_ons::defaults(&self.content.paths.root)
+                UiAction::DefaultAddOns => crate::add_ons::defaults(&self.content.paths.root, crate::add_ons::machine())
                     .map(|view| self.add_ons_changed(view)),
                 UiAction::ImportAddOn { id: ref row } => {
                     let root = self.content.paths.root.clone();
@@ -8094,12 +8156,12 @@ impl PlatformApp for App {
                         ))
                     } else {
                         crate::add_ons::importer().and_then(|importer| {
-                            crate::add_ons::start_import(&root, row, &importer)
+                            crate::add_ons::start_import(&root, crate::add_ons::machine(), row, &importer)
                         })
                     };
                     match started {
                         Ok(receiver) => {
-                            let mut view = crate::add_ons::view(&root);
+                            let mut view = crate::add_ons::view(&root, crate::add_ons::machine());
                             crate::add_ons::mark_importing(&mut view, row);
                             view.notice = "Importing... the game keeps running meanwhile.".into();
                             self.ui.apply(UiUpdate::AddOns(view));

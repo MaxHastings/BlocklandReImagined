@@ -14,6 +14,9 @@ operation that needs a capability.
 | TorqueScript | Here | Notes |
 |---|---|---|
 | `ClientGroup` loop, `%client.player` | `players()`, `player(id)` | A player map, below. |
+| `AIPlayer`s in `MissionCleanup`, `%bot.spawnBrick.getGroup().bl_id` | `bots()`, `player(id)`, `p.bot`, `p.bot_owner` | A bot reads like a player. |
+| `%obj.getObjectMount()`, `getMountNodeObject` | `p.riding`, `p.seat`, `p.mounted` | |
+| `%obj.getScale()` | `p.scale` | |
 | `%obj.getPosition()`, `getTransform()` | `p.x`, `p.y`, `p.z` | The feet. |
 | `%obj.getWorldBoxCenter()` | `p.cx`, `p.cy`, `p.cz` | The middle of the body, crouch and scale included. |
 | `%obj.getEyePoint()`, `getEyeVector()` | `p.ex`..`p.ez`, `p.lx`..`p.lz` | The look is a unit vector. |
@@ -43,6 +46,11 @@ operation that needs a capability.
 | `new Projectile() { ... }` | `fire(projectile, x, y, z, vx, vy, vz, by)` | `damage` |
 | `new Explosion()`, `radiusDamage` | `explode(x, y, z, radius, damage, brick_radius)` | `damage` |
 | `%obj.mountImage(%img, 0)` | `mount_image(p, image)`, `mount_image(p, ())` | `player` |
+| `%obj.unMountImage(0)` | `unmount_image(p)` | `player` |
+| `%obj.setScale("s s s")` | `set_scale(p, s)` | `player`; 0.2 to 5, one number |
+| `%obj.setLookLimits(%up, %down)` | `set_look_limits(p, up, down)`, `set_look_limits(p, ())` | `player` |
+| `%obj.mountObject(%rider, %node)`, `%rider.canDismount = 0` | `mount_object(mount, rider, node, can_dismount)` | `physics`; node is a `mount<N>` of the body model |
+| `%rider.unMountObject()`, `dismount()` | `unmount_object(rider)` | `physics`; keeps the mount's velocity |
 | `%obj.setImageAmmo(0, %x)` | `set_image_ammo(p, ammo)` | `player` |
 | `%client.setControlCameraFov(%fov)` | `set_fov(p, fov)`, `set_fov(p, ())` | `player` |
 | `%obj.setTransform`, `%client.spawnPlayer()` | `teleport(p, x, y, z)`, `respawn(p)` | `player` |
@@ -53,7 +61,7 @@ operation that needs a capability.
 | `centerPrint`, `bottomPrint` | `center_print(p, text, s)`, `bottom_print(p, text, s)` | `chat` |
 | `messageClient`, `messageAll` | `tell(p, text)`, `broadcast(text)` | `chat` |
 | `serverPlay3D(%profile, %pos)`, `%client.play2D` | `sound_at(profile, x, y, z)`, `play_sound(p, profile)` | `effects` |
-| `%obj.playThread(%slot, %seq)` | `play_thread(p, thread, sequence)` | `effects` |
+| `%obj.playThread(%slot, %seq)` | `play_thread(p, thread, sequence)` | `effects`; whole-body sequences (`death1`) override by priority, empty-hand arm poses (`armReadyBoth`) hold |
 | A stretched `StaticShape` tracer | `beam(from, to, #{ color, width, seconds, muzzle })` | `effects` |
 | Mission lights baked into the map (v20 scripts could not change them) | `set_map_lights([x, y, z], radius, #{ on, color, brightness })` | `lighting` |
 | The mission `Sun`'s `azimuth`, `elevation`, `color`, `ambient` and the `Sky`'s `fogColor`, `fogDistance`, `visibleDistance` (fixed in v20; changed live here) | `set_environment(#{ sun_azimuth, direct_light, fog_color, visible_distance, day_length, ... })`, `environment()` | `environment` |
@@ -79,6 +87,7 @@ operation that needs a capability.
 | `ItemData::onPickup` | `on_pickup(p, item, info)`: answer `false` to leave it, `"take"` to use it up |
 | `ItemData::onDrop`, dynamic fields on the dropped `Item` | `on_drop(p, item, slot)`: the value it returns rides the drop to whoever picks it up |
 | `ProjectileData::onCollision` | `on_projectile_hit(hit)` |
+| `Player::activateStuff` packaged (an empty-hand click) | `on_activate(p)`: answer `true` to take the click |
 
 ## Not here yet
 

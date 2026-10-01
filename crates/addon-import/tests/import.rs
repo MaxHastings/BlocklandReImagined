@@ -849,3 +849,51 @@ datablock ShapeBaseImageData(kitScopeImage) { shapeFile = "./gun.dts"; stateName
     std::fs::remove_dir_all(out.parent().unwrap()).unwrap();
     std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
 }
+
+/// An Add-On that requires another community Add-On by name (Tier 2 needs
+/// Tier 1) depends on the package importing that one makes; one requiring
+/// a vanilla Add-On depends on the base game's package.
+#[test]
+fn a_required_community_add_on_becomes_a_dependency_on_its_import() {
+    let root = fresh("requires").parent().unwrap().to_path_buf();
+    let install = root.join("Blockland");
+    let core = install.join("Add-Ons/Weapon_Core_Kit");
+    std::fs::create_dir_all(&core).unwrap();
+    std::fs::write(
+        core.join("server.cs"),
+        "datablock ProjectileData(coreRound) { muzzleVelocity = 90; };\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(install.join("base")).unwrap();
+    let addon = root.join("Weapon_Core_Extra");
+    std::fs::create_dir_all(&addon).unwrap();
+    std::fs::write(
+        addon.join("server.cs"),
+        "ForceRequiredAddOn(\"Weapon_Core_Kit\");\nForceRequiredAddOn(\"Weapon_Gun\");\n",
+    )
+    .unwrap();
+    let report = import(&Options {
+        input: addon,
+        out: root.join("package"),
+        reference: Some(install),
+        core: vec![],
+        version: "1.0.0".into(),
+    })
+    .unwrap();
+    let deps: Vec<_> = report
+        .dependencies
+        .iter()
+        .map(|d| (d.addon.as_str(), d.status.as_str(), d.package.as_deref()))
+        .collect();
+    assert_eq!(
+        deps,
+        [
+            ("Weapon_Core_Kit", "reference", Some("weapon_core_kit")),
+            ("Weapon_Gun", "missing", None),
+        ]
+    );
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(root.join("package/package.json")).unwrap()).unwrap();
+    assert_eq!(manifest["dependencies"], serde_json::json!({ "weapon_core_kit": "*" }));
+    std::fs::remove_dir_all(&root).unwrap();
+}
