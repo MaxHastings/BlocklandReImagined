@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "api": 1,
   "name": "HookShot",
-  "description": "Point and click: a spring-loaded spearhead shoots out on its chain, and if it bites, you fly straight to the spot and land there. It bites bricks, the map, players and vehicles. Click again mid-flight to let go. Type /hookshot for one. Based on the Hookshot by Loz.",
+  "description": "Point and click: a spring-loaded spearhead shoots out on its chain and hauls you straight to what it bites: bricks, the map, players and vehicles. Tap to fly there and land; hold to hang there, reeling in with jump and out with crouch, until you click again. Type /hookshot for one. Based on the Hookshot by Loz and the Grappling Hook by Conan.",
   "authors": ["Blockland ReImagined"],
   "license": "CC0-1.0",
   "provenance": { "source": "original" },

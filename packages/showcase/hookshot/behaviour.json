@@ -3,15 +3,20 @@
   "script": "hookshot.rhai",
   "commands": [
     { "name": "hookshot", "cooldown_ticks": 60 },
-    { "name": "fire", "cooldown_ticks": 6 }
+    { "name": "hookobjects", "admin": true, "cooldown_ticks": 0 },
+    { "name": "fire", "cooldown_ticks": 6 },
+    { "name": "release", "cooldown_ticks": 0 },
+    { "name": "reel", "args": ["int"], "cooldown_ticks": 0 }
   ],
   "state": {
     "player": {
       "hook": { "default": [0, 0.0, 0.0, 0.0, 0.0, 0, 0], "visible": "everyone", "persist": false },
-      "flight": { "default": [0, -1, "", 0.0, 0.0, 0.0], "persist": false }
+      "flight": { "default": [0, -1, "", 0.0, 0.0, 0.0], "persist": false },
+      "grip": { "default": [0, 0, false], "persist": false }
     },
     "global": {
-      "tool": { "default": "hookshot-tool:weapon/hookshot", "persist": false }
+      "tool": { "default": "hookshot-tool:weapon/hookshot", "persist": false },
+      "objects": { "default": true }
     }
   },
   "on_loadout": true,

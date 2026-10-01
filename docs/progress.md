@@ -8368,3 +8368,17 @@ flies to another player, misses into open sky; loadout),
 `bri-client-sandbox --test showcase` (shoot, bite, haul, links running,
 whip back, miss out and back; rides a turning vehicle; muzzle and relic
 skin; offscreen render on lavapipe).
+
+Grappling Hook and HookShot merged (2026-10-01, Max asked whether all
+three grapples were different enough and picked merging): two grapple
+Add-Ons ship, the Grapple Rope (swing) and the HookShot. The HookShot now
+does both: tap the click to fly there and land (Loz's Hookshot); hold it a
+quarter second or more and you hang there until the next click, jump
+reeling in, crouch letting out, the wheel too, keeping the chain when you
+switch items (Conan's Grappling Hook). `/hookobjects` (admin) moved over.
+The tool's image now runs a command on letting go of the trigger, and the
+rule decides tap or hold from how long it was down (`grip` state). The
+HookShot's temple-relic look won over the gunmetal winch; the
+`grappling-hook*` Add-Ons, their sounds and icon are gone. Engine seams
+unchanged. Tests: `bri-sim --test hookshot` 7 (adds hold-to-hang and let
+go, winch keys and wheel, carried by a player and /hookobjects).
