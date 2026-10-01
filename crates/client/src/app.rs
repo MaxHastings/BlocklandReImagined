@@ -1526,6 +1526,12 @@ impl App {
         let state = self.motion.presented().get(&view.owner)?.clone();
         Some((state, self.local_eye()))
     }
+    /// How far the current host or join attempt has got: a number that
+    /// grows with every step of its loading, and None with no attempt. Waits
+    /// in tests watch it to tell a slow load from a stopped one.
+    pub fn loading_revision(&self) -> Option<u64> {
+        self.attempt.as_ref().map(|a| a.progress.snapshot().revision)
+    }
     pub fn network_view(&self) -> Option<&network::View> {
         self.attempt
             .as_ref()
@@ -10731,12 +10737,7 @@ mod tests {
         fn until(app: &mut App, what: &str, ready: impl Fn(&App) -> bool) -> anyhow::Result<()> {
             const TICKS: u64 = 1200;
             const STALL: Duration = Duration::from_secs(120);
-            let moved = |app: &App| {
-                (
-                    app.attempt.as_ref().map(|a| a.progress.snapshot().revision),
-                    app.network_view().map(|v| v.tick),
-                )
-            };
+            let moved = |app: &App| (app.loading_revision(), app.network_view().map(|v| v.tick));
             let mut previous = Instant::now();
             let mut seen = moved(app);
             let mut since = previous;

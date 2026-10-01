@@ -5,11 +5,11 @@
 use anyhow::{Context, Result, ensure};
 use bri_client::{app::App, platform::{PlatformApp, RenderContext}};
 use bri_ui::{api::*, gpu::{Headless, UiRenderer}};
-use std::{path::Path, thread, time::{Duration, Instant}};
+use std::{path::Path, time::Duration};
 
 #[macro_use]
 mod support;
-use support::content_root::ContentRoot;
+use support::{content_root::ContentRoot, wait};
 
 synthetic_and_content!(
     ContentRoot: native_core_tools_render_from_eye_and_original_mounts,
@@ -29,16 +29,7 @@ fn step(app: &mut App, dt: Duration) -> Result<()> {
     pump(app)
 }
 fn until(app: &mut App, what: &str, ready: impl Fn(&App) -> bool) -> Result<()> {
-    let start = Instant::now();
-    let mut previous = start;
-    loop {
-        let now = Instant::now();
-        step(app, now.duration_since(previous))?;
-        previous = now;
-        if ready(app) { return Ok(()); }
-        ensure!(start.elapsed() < Duration::from_secs(45), "Timed out waiting for {what}: {:?}", app.ui.core.conn);
-        thread::sleep(Duration::from_millis(10));
-    }
+    wait::until_one(app, what, Duration::from_secs(45), step, ready)
 }
 fn capture(app: &mut App, gpu: &Headless, renderer: &mut UiRenderer) -> Result<Vec<u8>> {
     let format = wgpu::TextureFormat::Rgba8Unorm;

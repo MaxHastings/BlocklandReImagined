@@ -36,7 +36,7 @@ use std::{
 
 #[macro_use]
 mod support;
-use support::content_root::ContentRoot;
+use support::{content_root::ContentRoot, wait};
 
 synthetic_and_content!(
     ContentRoot: every_tank_seat_sees_from_the_riders_eye_for_host_and_guest,
@@ -95,46 +95,26 @@ fn seen_tick(apps: &[&mut App]) -> Option<u64> {
 fn ticks(seconds: f32) -> u64 {
     (f64::from(seconds) * 120.0).ceil() as u64
 }
-/// A wait that stops advancing for this many times its budget of wall time
-/// has a stopped game, not a slow one.
-const STALLED: u32 = 20;
-/// Step every app until `ready`. `secs` is game time: once every app is in
-/// game it counts the server ticks all of them have seen, so a loaded
-/// machine that slows the hosted game (its ticker skips missed ticks) and
-/// the clients (whose motion drops time past 12 ticks a frame) stretches
-/// the wait with them. Before that (loading, joining) it is wall time.
+/// Step every app until `ready`, with `secs` of game time once every app is
+/// in game ([`wait::until`]).
 fn until(
     apps: &mut [&mut App],
     what: &str,
     secs: u64,
-    mut ready: impl FnMut(&mut [&mut App]) -> Result<bool>,
+    ready: impl FnMut(&mut [&mut App]) -> Result<bool>,
 ) -> Result<()> {
-    let start = Instant::now();
-    let mut previous = start;
-    let mut first_tick = None;
-    let budget = Duration::from_secs(secs);
-    loop {
-        let now = Instant::now();
-        for app in apps.iter_mut() {
-            step(app, now.duration_since(previous))?;
-        }
-        previous = now;
-        if ready(apps)? {
-            return Ok(());
-        }
-        let tick = seen_tick(apps);
-        first_tick = first_tick.or(tick);
-        let spent = match (first_tick, tick) {
-            (Some(first), Some(tick)) => tick - first >= ticks(secs as f32),
-            _ => start.elapsed() >= budget,
-        };
-        ensure!(!spent, "Timed out waiting for {what}");
-        ensure!(
-            start.elapsed() < budget * STALLED + Duration::from_secs(60),
-            "Timed out waiting for {what}: the game stopped advancing"
-        );
-        thread::sleep(Duration::from_millis(8));
-    }
+    wait::until(
+        apps,
+        what,
+        Duration::from_secs(secs),
+        |apps, elapsed| {
+            for app in apps.iter_mut() {
+                step(app, elapsed)?;
+            }
+            Ok(())
+        },
+        ready,
+    )
 }
 /// Let `seconds` of game time pass: server ticks every app has seen.
 fn run_for(apps: &mut [&mut App], seconds: f32) -> Result<()> {
@@ -647,7 +627,7 @@ fn hold_moves(
             "Timed out waiting for {what}"
         );
         ensure!(
-            start.elapsed() < budget * STALLED + Duration::from_secs(60),
+            start.elapsed() < budget * 20 + Duration::from_secs(60),
             "Timed out waiting for {what}: the game stopped advancing"
         );
         thread::sleep(Duration::from_millis(2));

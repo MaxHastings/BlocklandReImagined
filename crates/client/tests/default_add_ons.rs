@@ -13,7 +13,7 @@
 //! stand-in plane (crates/vehicles/tests/fixtures) under its id, so the
 //! Stunt Plane's place spawns the stand-in plane.
 //! Run: cargo test -p bri-client --test default_add_ons -- --ignored --nocapture
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use bri_client::{app::App, platform::PlatformApp};
 use bri_package::{defaults, packages::PackageSet};
 use bri_ui::{api::*, screens::ScreenId};
@@ -21,9 +21,12 @@ use sha2::Digest;
 use std::{
     path::{Path, PathBuf},
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
+#[path = "support/wait.rs"]
+#[allow(dead_code)]
+mod wait;
 const SIZE: (u32, u32) = (960, 720);
 const SLATE: &str = "v20/add-ons/map_slate/slate.mis";
 /// The stand-in plane, installed as the bundled Stunt Plane.
@@ -181,31 +184,26 @@ fn in_game(app: &App) -> bool {
             .is_some_and(|v| v.poses.contains_key(&v.owner))
 }
 
+/// Step every app a fixed frame at a time until `ready`, with `secs` of
+/// game time once every app is in game ([`wait::until`]).
 fn until(
     apps: &mut [&mut App],
     what: &str,
     secs: u64,
     ready: impl Fn(&[&mut App]) -> bool,
 ) -> Result<()> {
-    let start = Instant::now();
-    loop {
-        for app in apps.iter_mut() {
-            step(app)?;
-        }
-        if ready(apps) {
-            return Ok(());
-        }
-        for app in apps.iter() {
-            if let ConnectionState::Failed { reason } = &app.ui.core.conn {
-                bail!("{what}: connection failed: {reason}");
+    wait::until(
+        apps,
+        what,
+        Duration::from_secs(secs),
+        |apps, _| {
+            for app in apps.iter_mut() {
+                step(app)?;
             }
-        }
-        ensure!(
-            start.elapsed() < Duration::from_secs(secs),
-            "Timed out waiting for {what}"
-        );
-        thread::sleep(Duration::from_millis(8));
-    }
+            Ok(())
+        },
+        |apps| Ok(ready(apps)),
+    )
 }
 
 fn app(root: &Path, state: &Path, name: &str) -> Result<App> {

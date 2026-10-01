@@ -7,18 +7,17 @@
 //! free loopback port, and stages the repository's Add-Ons it needs in a
 //! hidden folder of that root for its length. Host and guest load their
 //! Add-On lists without writing the root's.
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use bri_client::{app::App, platform::PlatformApp};
 use bri_ui::{api::*, screens::ScreenId};
 use std::{
     path::{Path, PathBuf},
-    thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 #[macro_use]
 mod support;
-use support::content_root::ContentRoot;
+use support::{content_root::ContentRoot, wait};
 
 synthetic_and_content!(
     ContentRoot: add_ons_the_host_turns_off_are_not_required_and_ones_it_runs_download,
@@ -68,57 +67,31 @@ fn seen_tick(apps: &[&mut App]) -> Option<u64> {
         .min()
 }
 
-/// Server ticks in `secs` of game time (120 a second).
+/// Server ticks in `secs` of game time.
 fn ticks(secs: u64) -> u64 {
-    secs * 120
+    wait::ticks(Duration::from_secs(secs))
 }
 
-/// A wait that stops advancing for this many times its budget of wall time
-/// has a stopped game, not a slow one.
-const STALLED: u32 = 20;
-
-/// Step every app, by the wall time each frame took, until `ready`. `secs`
-/// is game time once every app is in game: the server ticks all of them
-/// have seen, so a loaded machine that slows the hosted game (its ticker
-/// skips missed ticks) stretches the wait with it. Before that (loading,
-/// downloading, joining) it is wall time.
+/// Step every app, by the wall time each frame took, until `ready`, with
+/// `secs` of game time once every app is in game ([`wait::until`]).
 fn until(
     apps: &mut [&mut App],
     what: &str,
     secs: u64,
     ready: impl Fn(&[&mut App]) -> bool,
 ) -> Result<()> {
-    let start = Instant::now();
-    let mut previous = start;
-    let mut first_tick = None;
-    let budget = Duration::from_secs(secs);
-    loop {
-        let now = Instant::now();
-        for app in apps.iter_mut() {
-            step(app, now.duration_since(previous))?;
-        }
-        previous = now;
-        if ready(apps) {
-            return Ok(());
-        }
-        for app in apps.iter() {
-            if let ConnectionState::Failed { reason } = &app.ui.core.conn {
-                bail!("{what}: connection failed: {reason}");
+    wait::until(
+        apps,
+        what,
+        Duration::from_secs(secs),
+        |apps, elapsed| {
+            for app in apps.iter_mut() {
+                step(app, elapsed)?;
             }
-        }
-        let tick = seen_tick(apps);
-        first_tick = first_tick.or(tick);
-        let spent = match (first_tick, tick) {
-            (Some(first), Some(tick)) => tick - first >= ticks(secs),
-            _ => start.elapsed() >= budget,
-        };
-        ensure!(!spent, "Timed out waiting for {what}");
-        ensure!(
-            start.elapsed() < budget * STALLED + Duration::from_secs(60),
-            "Timed out waiting for {what}: the game stopped advancing"
-        );
-        thread::sleep(Duration::from_millis(8));
-    }
+            Ok(())
+        },
+        |apps| Ok(ready(apps)),
+    )
 }
 
 /// A free loopback UDP port for one hosted game.
@@ -719,23 +692,18 @@ fn a_guest_joins_a_host_running_every_repository_add_on(f: &ContentRoot) -> Resu
     join(&mut guest, port)?;
     // Nothing asks about the download; the guest agrees to the samples'
     // client code, the one question a join may ask.
-    let start = Instant::now();
-    let mut previous = start;
-    while !in_game(&guest) {
-        let now = Instant::now();
-        step(&mut host_app, now.duration_since(previous))?;
-        step(&mut guest, now.duration_since(previous))?;
-        previous = now;
-        if let ConnectionState::Failed { reason } = &guest.ui.core.conn {
-            bail!("the guest could not join: {reason}");
-        }
-        request(&mut guest, UiAction::TrustAddOnCode)?;
-        ensure!(
-            start.elapsed() < Duration::from_secs(300),
-            "the guest never joined"
-        );
-        thread::sleep(Duration::from_millis(8));
-    }
+    wait::until(
+        &mut [&mut host_app, &mut guest],
+        "the guest to join",
+        Duration::from_secs(300),
+        |apps, elapsed| {
+            for app in apps.iter_mut() {
+                step(app, elapsed)?;
+            }
+            request(apps[1], UiAction::TrustAddOnCode)
+        },
+        |a| Ok(in_game(a[1])),
+    )?;
     let cache = guest_cache_ids(&guest);
     ensure!(
         cache.iter().any(|id| id == downloaded),
