@@ -957,7 +957,7 @@ fn main() -> Result<()> {
         let mut views_out = serde_json::Map::new();
         for (name, eye, look) in &views {
             for t in &mut terrain {
-                t.update(&queue, *eye, 4000.0)?;
+                t.update(&device, &queue, &[*eye], 4000.0)?;
             }
             let terrain_draws: Vec<_> =
                 terrain.iter().flat_map(GpuTerrain::draws).chain(models.iter().copied()).collect();

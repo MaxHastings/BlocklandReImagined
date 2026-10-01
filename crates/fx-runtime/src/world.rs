@@ -63,6 +63,10 @@ pub struct SourceOptions {
     pub visible: bool,
     /// Suppress third-person-only flares on the local first-person owner.
     pub first_person_owner: bool,
+    /// Drawn in every view but the owner's own eye
+    /// ([`EffectsWorld::snapshot_in_view`]): a first-person player's own
+    /// jets, which mirrors and portals still show.
+    pub hidden_from_own_eye: bool,
     /// Host-computed occlusion fraction; fades over authored flare fade time.
     pub flare_visibility: f32,
 }
@@ -79,6 +83,7 @@ impl Default for SourceOptions {
             emitting: true,
             visible: true,
             first_person_owner: false,
+            hidden_from_own_eye: false,
             flare_visibility: 1.,
         }
     }
@@ -200,7 +205,7 @@ impl From<LightSnapshot> for GpuLight {
         }
     }
 }
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct FrameEffects {
     pub particles: Vec<ParticleInstance>,
     pub lights: Vec<LightSnapshot>,
@@ -253,6 +258,7 @@ struct Particle {
     sizes: Option<[f32; 4]>,
     rgb: Option<[f32; 3]>,
     visible: bool,
+    hidden_from_own_eye: bool,
 }
 pub struct EffectsWorld {
     pack: Arc<EffectsPack>,
@@ -607,6 +613,7 @@ impl EffectsWorld {
                 if let Some(source) = self.sources.get(&p.owner) {
                     p.wind = source.options.wind;
                     p.visible = source.options.visible;
+                    p.hidden_from_own_eye = source.options.hidden_from_own_eye;
                     let e = &self.pack.library.emitters[source.definition];
                     if e.use_emitter_colors {
                         p.colors = source.options.colors;
@@ -749,6 +756,7 @@ impl EffectsWorld {
                 .map(|r| r.rgb)
                 .or(s.options.paint.filter(|_| e.use_emitter_colors)),
             visible: s.options.visible,
+            hidden_from_own_eye: s.options.hidden_from_own_eye,
         };
         Self::integrate(&self.pack, &self.passages, &mut particle, pre_age, wind);
         if particle.age >= particle.lifetime {
@@ -794,7 +802,7 @@ impl EffectsWorld {
     }
     /// This frame's particles, farthest from the camera first, and lights.
     pub fn snapshot(&self, camera: &Camera) -> FrameEffects {
-        self.snapshot_culled(camera, None)
+        self.snapshot_culled(camera, None, true)
     }
     /// [`EffectsWorld::snapshot`] without the sprites wholly outside the
     /// camera's view, which would draw nothing: what a renderer needs.
@@ -804,9 +812,10 @@ impl EffectsWorld {
         &self,
         p: &Particle,
         camera: &Camera,
+        own_eye: bool,
         sees: &impl Fn(Vec3, f32) -> bool,
     ) -> Option<(f32, ParticleInstance)> {
-        if !p.visible {
+        if !p.visible || (own_eye && p.hidden_from_own_eye) {
             return None;
         }
         // Out of view at its largest authored size: skip sampling it (the
@@ -870,10 +879,23 @@ impl EffectsWorld {
             },
         ))
     }
+    /// What the player's own eye sees: without what its first-person owner
+    /// hides (`SourceOptions::hidden_from_own_eye`, third-person flares).
     pub fn snapshot_in_view(&self, camera: &Camera) -> FrameEffects {
-        self.snapshot_culled(camera, Some(Frustum::new(camera.view_projection)))
+        self.snapshot_culled(camera, Some(Frustum::new(camera.view_projection)), true)
     }
-    fn snapshot_culled(&self, camera: &Camera, frustum: Option<Frustum>) -> FrameEffects {
+    /// [`Self::snapshot_in_view`] for another view of the world (a mirror,
+    /// a portal, the environment probe), which sees the player from
+    /// outside: their own jets and third-person flares included.
+    pub fn snapshot_in_other_view(&self, camera: &Camera) -> FrameEffects {
+        self.snapshot_culled(camera, Some(Frustum::new(camera.view_projection)), false)
+    }
+    fn snapshot_culled(
+        &self,
+        camera: &Camera,
+        frustum: Option<Frustum>,
+        own_eye: bool,
+    ) -> FrameEffects {
         let sees = |center, size| frustum.as_ref().is_none_or(|f| f.sees(center, size));
         // Each sprite's squared distance, computed once for the sort. A
         // large crowd of particles is sampled on the worker threads, in
@@ -882,7 +904,7 @@ impl EffectsWorld {
         let sample = |particles: &[Particle]| -> Vec<(f32, ParticleInstance)> {
             particles
                 .iter()
-                .filter_map(|p| self.particle_instance(p, camera, &sees))
+                .filter_map(|p| self.particle_instance(p, camera, own_eye, &sees))
                 .collect()
         };
         let mut drawn: Vec<(f32, ParticleInstance)> = if self.particles.len() > part {
@@ -914,7 +936,9 @@ impl EffectsWorld {
                 radius,
             });
             if let (Some(f), Some(texture)) = (&def.flare, self.flare_texture[s.definition]) {
-                if f.third_person && s.options.first_person_owner {
+                let own = (f.third_person && s.options.first_person_owner)
+                    || s.options.hidden_from_own_eye;
+                if own_eye && own {
                     continue;
                 }
                 let distance = camera.position.distance(s.transform.position);
@@ -1265,13 +1289,40 @@ mod tests {
             let one: Vec<_> = world
                 .particles
                 .iter()
-                .filter_map(|p| world.particle_instance(p, &camera, &sees))
+                .filter_map(|p| world.particle_instance(p, &camera, true, &sees))
                 .collect();
             let order = far_first(one.iter().map(|(d, _)| *d));
             let expected: Vec<_> = order.into_iter().map(|i| one[i as usize].1).collect();
             let threaded = world.snapshot_in_view(&camera).particles;
             assert_eq!(threaded.len(), expected.len());
             assert_eq!(format!("{threaded:?}"), format!("{expected:?}"));
+        }
+
+        #[test]
+        fn own_jets_stay_out_of_the_own_eye_but_show_in_mirrors() {
+            let mut world =
+                EffectsWorld::new(fixture(|_| {}), EffectsLimits::default(), 7).unwrap();
+            let own = SourceOptions {
+                hidden_from_own_eye: true,
+                ..Default::default()
+            };
+            for (x, options) in [(-2., own), (2., SourceOptions::default())] {
+                let at = SourceTransform {
+                    position: Vec3::new(x, 0., -20.),
+                    ..Default::default()
+                };
+                world.burst("emitter", at, options, 10).unwrap();
+            }
+            world.advance(0.1, Vec3::ZERO).unwrap();
+            let camera = Camera {
+                view_projection: glam::camera::rh::proj::directx::perspective(1.2, 1.5, 0.1, 100.),
+                position: Vec3::ZERO,
+                right: Vec3::X,
+                up: Vec3::Y,
+            };
+            let own_eye = world.snapshot_in_view(&camera).particles.len();
+            let other = world.snapshot_in_other_view(&camera).particles.len();
+            assert_eq!((own_eye, other), (10, 20));
         }
 
         #[test]

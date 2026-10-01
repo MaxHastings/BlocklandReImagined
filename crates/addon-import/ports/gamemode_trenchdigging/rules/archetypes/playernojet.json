@@ -1,0 +1,5 @@
+{
+  "schema_version": 1,
+  "adjusts": "v20.player.playernojet",
+  "movement": { "step_height": 1.2 }
+}

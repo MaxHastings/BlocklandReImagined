@@ -1,0 +1,7 @@
+[toolchain]
+# The toolchain CI and the PC gate use (`rust-version` in Cargo.toml), so
+# clippy and builds agree everywhere; newer compilers flag lints in code
+# nobody touched.
+channel = "1.93.1"
+components = ["clippy", "rustfmt"]
+profile = "minimal"

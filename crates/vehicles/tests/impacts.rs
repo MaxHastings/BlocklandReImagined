@@ -1,24 +1,16 @@
 //! Vehicle impacts against v20 (blocklandv20.exe `Vehicle::updatePos`
 //! 0x56ecb1): a body collision plays the datablock's impact sound and
 //! raises `onImpact`, and does no damage; see docs/audits/skis-v20.md.
+#[macro_use]
+mod common;
 use bri_vehicles::*;
+use common::Fixture;
 use glam::Vec3;
 use rapier3d::prelude::*;
 
-fn world() -> (VehiclesWorld, PhysicsWorld) {
-    let v = VehiclesWorld::new(
-        Pack::load(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../content/vehicles-pack-012/vehicles.json"
-        ))
-        .unwrap(),
-    )
-    .unwrap();
-    let mut w = bri_physics::new_world();
-    w.insert(
-        RigidBodyBuilder::fixed().translation(Vec3::new(0., -0.5, 0.)),
-        ColliderBuilder::cuboid(500., 0.5, 500.),
-    );
+fn world(f: &Fixture) -> (VehiclesWorld, PhysicsWorld) {
+    let v = f.vehicles();
+    let mut w = common::floor(500.);
     // A wall across the way, 20 ahead.
     w.insert(
         RigidBodyBuilder::fixed().translation(Vec3::new(0., 5., -20.)),
@@ -33,7 +25,7 @@ fn spawn(v: &mut VehiclesWorld, w: &mut PhysicsWorld, name: &str, y: f32) {
             scale: 1.,
             id: VehicleId(1),
             owner: OwnerId(10),
-            definition: format!("v20.vehicle.{name}"),
+            definition: name.into(),
             transform: Transform {
                 position: [0., y, 0.],
                 ..Default::default()
@@ -56,20 +48,20 @@ fn step(v: &mut VehiclesWorld, w: &mut PhysicsWorld, n: usize) -> Vec<Intent> {
     intents
 }
 
-#[test]
-fn stock_vehicles_hitting_a_wall_play_their_impact_sound_and_take_no_damage() {
-    // (vehicle, the sound v20 plays for a hit this hard)
-    let cases = [
-        ("jeepvehicle", Some("fastImpactSound")),
-        ("tankvehicle", Some("fastImpactSound")),
-        ("flyingwheeledjeepvehicle", Some("fastImpactSound")),
-        ("ballvehicle", Some("fastImpactSound")),
-        ("skivehicle", Some("Impact1BSound")),
-        // The Magic Carpet sets no impact sounds.
-        ("magiccarpetvehicle", None),
-    ];
-    for (name, sound) in cases {
-        let (mut v, mut w) = world();
+on_both! {
+fn stock_vehicles_hitting_a_wall_play_their_impact_sound_and_take_no_damage(f: &Fixture) {
+    // Each plays its datablock's hard impact sound for a hit this hard; the
+    // carpet sets no impact sounds and plays none.
+    let cases = [f.car, f.tank, f.flying_car, f.ball, f.skis, f.carpet];
+    for name in cases {
+        let d = f.definition(name);
+        let sound = d.authored.get("hardimpactsound").map(String::as_str);
+        assert_eq!(
+            sound.is_none(),
+            name == f.carpet,
+            "{name}: only the carpet is silent"
+        );
+        let (mut v, mut w) = world(f);
         spawn(&mut v, &mut w, name, 3.);
         step(&mut v, &mut w, 180);
         // Thrown at the wall: an empty vehicle's wheels are not turning,
@@ -96,16 +88,12 @@ fn stock_vehicles_hitting_a_wall_play_their_impact_sound_and_take_no_damage() {
         }
     }
 }
+}
 
-#[test]
-fn wheel_contact_follows_the_ground() {
-    for name in [
-        "jeepvehicle",
-        "tankvehicle",
-        "flyingwheeledjeepvehicle",
-        "skivehicle",
-    ] {
-        let (mut v, mut w) = world();
+on_both! {
+fn wheel_contact_follows_the_ground(f: &Fixture) {
+    for name in [f.car, f.tank, f.flying_car, f.skis] {
+        let (mut v, mut w) = world(f);
         spawn(&mut v, &mut w, name, 3.);
         step(&mut v, &mut w, 180);
         let s = &v.snapshot(&w).vehicles[0];
@@ -114,7 +102,7 @@ fn wheel_contact_follows_the_ground() {
             "{name} on the ground: {:?}",
             s.wheel_contact
         );
-        let (mut v, mut w) = world();
+        let (mut v, mut w) = world(f);
         spawn(&mut v, &mut w, name, 200.);
         step(&mut v, &mut w, 2);
         let s = &v.snapshot(&w).vehicles[0];
@@ -124,4 +112,5 @@ fn wheel_contact_follows_the_ground() {
             s.wheel_contact
         );
     }
+}
 }

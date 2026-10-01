@@ -405,10 +405,6 @@ mod tests {
                 "advanced-duplicator-tool",
                 "advanced-duplicator",
                 "blockhead_bot",
-                "trench-kit",
-                "trench",
-                "trench-hud",
-                "trench-mode"
             ]
         );
         let mut available: Vec<(String, String)> = PackageSet::base()
@@ -510,10 +506,6 @@ mod tests {
                 "advanced-duplicator-tool",
                 "advanced-duplicator",
                 "blockhead_bot",
-                "trench-kit",
-                "trench",
-                "trench-hud",
-                "trench-mode"
             ]
         );
         assert!(done.listed.is_empty());

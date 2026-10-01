@@ -182,6 +182,20 @@ impl TerrainScene {
         }
         out
     }
+    /// [`Self::visible`] around each of `eyes`, every copy once.
+    pub fn visible_from(&self, eyes: &[Vec3], radius: f32) -> Vec<Vec<Mat4>> {
+        let mut out = vec![Vec::new(); self.variants.len()];
+        for eye in eyes {
+            for (all, near) in out.iter_mut().zip(self.visible(*eye, radius)) {
+                for copy in near {
+                    if !all.contains(&copy) {
+                        all.push(copy);
+                    }
+                }
+            }
+        }
+        out
+    }
     fn has_holed(&self, tile: [i32; 2]) -> bool {
         self.variants.iter().any(|v| v.tile == tile && v.holed)
     }
@@ -274,9 +288,17 @@ impl GpuTerrain {
         })
     }
     /// Select the tile copies within `radius` (clamped to the uploaded
-    /// maximum) of the camera. Call once per submission, before drawing.
-    pub fn update(&mut self, queue: &wgpu::Queue, eye: Vec3, radius: f32) -> Result<()> {
-        let visible = self.scene.visible(eye, radius.min(self.radius));
+    /// maximum) of any of `eyes`: the player's and every mirror's, portal's
+    /// and probe's, which all draw these same tiles. Call once per
+    /// submission, before drawing.
+    pub fn update(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        eyes: &[Vec3],
+        radius: f32,
+    ) -> Result<()> {
+        let visible = self.scene.visible_from(eyes, radius.min(self.radius));
         for ((_, instances), transforms) in self.tiles.iter_mut().zip(visible) {
             let transforms: Vec<_> = transforms
                 .into_iter()
@@ -285,6 +307,11 @@ impl GpuTerrain {
                     ..Default::default()
                 })
                 .collect();
+            // Eyes far apart (a portal's far side) can need more copies
+            // than one eye's reach; the list grows to them.
+            if transforms.len() > instances.capacity() {
+                *instances = GpuInstances::new(device, transforms.len().next_power_of_two())?;
+            }
             instances.update(queue, &transforms)?;
         }
         Ok(())
@@ -358,6 +385,19 @@ mod tests {
             ..Default::default()
         };
         TerrainScene::build(field, data).unwrap()
+    }
+
+    #[test]
+    fn copies_cover_every_eye_once() {
+        let s = scene(true, vec![]);
+        let period = s.period();
+        let origin = s.field.origin;
+        let here = Vec3::new(origin.x + 0.5 * period, 20.0, origin.z - 0.5 * period);
+        let there = here + Vec3::new(5.0 * period, 0.0, 0.0);
+        let count = |v: &[Vec<Mat4>]| v.iter().map(Vec::len).sum::<usize>();
+        let (a, b) = (s.visible(here, 300.0), s.visible(there, 300.0));
+        assert_eq!(count(&s.visible_from(&[here, there], 300.0)), count(&a) + count(&b));
+        assert_eq!(count(&s.visible_from(&[here, here], 300.0)), count(&a));
     }
 
     #[test]
