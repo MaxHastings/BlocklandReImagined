@@ -214,7 +214,7 @@ impl Ctx<'_> {
     /// one its port declares.
     fn script_text(&self, path: &str) -> Option<String> {
         match self.src.get(path) {
-            Some(f) => Some(String::from_utf8_lossy(&f.bytes).into_owned()),
+            Some(f) => Some(script_text(&f.bytes)),
             None => self.ported.get(&path.to_ascii_lowercase()).cloned(),
         }
     }
@@ -376,7 +376,7 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
         if f.path.to_ascii_lowercase().ends_with(".cs") {
             bodies.insert(
                 src.member(f).to_ascii_lowercase(),
-                String::from_utf8_lossy(&f.bytes).replace('\r', ""),
+                script_text(&f.bytes),
             );
         }
     }
@@ -429,7 +429,7 @@ fn metadata(cx: &mut Ctx) {
     let src = cx.src;
     let text = |name: &str| {
         src.get(&format!("{}/{name}", src.dir()))
-            .map(|f| String::from_utf8_lossy(&f.bytes).replace('\r', ""))
+            .map(|f| script_text(&f.bytes))
     };
     let mut info = SourceInfo {
         name: src.name.clone(),
@@ -502,12 +502,24 @@ fn metadata(cx: &mut Ctx) {
     cx.report.source = info;
 }
 
+/// A script or text file as the importer reads it: UTF-8 (lossily) with
+/// Unix line endings, so a copy saved on Windows, or checked out there with
+/// `core.autocrlf`, imports exactly as it does elsewhere.
+pub(crate) fn script_text(bytes: &[u8]) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    if text.contains('\r') {
+        text.replace("\r\n", "\n").replace('\r', "\n")
+    } else {
+        text.into_owned()
+    }
+}
+
 fn read_scripts(cx: &mut Ctx) -> Vec<Script> {
     let mut scripts = vec![];
     for f in cx.src.files.values() {
         let lower = f.path.to_ascii_lowercase();
         if lower.ends_with(".cs") {
-            match tscript::read(&String::from_utf8_lossy(&f.bytes), &f.path) {
+            match tscript::read(&script_text(&f.bytes), &f.path) {
                 Ok(s) => {
                     cx.report
                         .diagnostics
@@ -921,7 +933,7 @@ fn references(cx: &mut Ctx) {
         .values()
         .filter(|f| f.path.to_ascii_lowercase().ends_with(".cs"))
         .flat_map(|f| {
-            bri_weapons_import::damage_types(&String::from_utf8_lossy(&f.bytes)).unwrap_or_default()
+            bri_weapons_import::damage_types(&script_text(&f.bytes)).unwrap_or_default()
         })
         .map(|t| t.name.to_ascii_lowercase())
         .collect();

@@ -427,7 +427,8 @@ pub fn datablocks(
     let e = ports.find(addon)?;
     let bytes = ports.files.get(&format!("{}/{DATABLOCKS}", e.port))?;
     Some((|| {
-        let text = std::str::from_utf8(bytes).context("datablocks.cs is not UTF-8 text")?;
+        let text = port_text(bytes).context("datablocks.cs is not UTF-8 text")?;
+        let text = text.as_str();
         let mut values = capture(e, bodies)?;
         values.insert("namespace".to_owned(), namespace.to_owned());
         fill_text(text, &values).context(DATABLOCKS)
@@ -548,9 +549,8 @@ fn rules_package(
     let mut files: Vec<Written> = vec![];
     let mut provides = vec![];
     for (file, bytes) in ports.port_files(&e.port, "rules") {
-        let text = std::str::from_utf8(bytes)
-            .with_context(|| format!("rules/{file} is not UTF-8 text"))?;
-        let text = fill_text(text, values).with_context(|| format!("rules/{file}"))?;
+        let text = port_text(bytes).with_context(|| format!("rules/{file} is not UTF-8 text"))?;
+        let text = fill_text(&text, values).with_context(|| format!("rules/{file}"))?;
         let (kind, stem) = if file == RULES_BEHAVIOUR {
             ("behaviour", "behaviour")
         } else if let Some(name) = rules_archetype(&file) {
@@ -666,6 +666,12 @@ fn check_rules(id: &str, manifest: &[u8], files: &[Written]) -> Result<()> {
 /// name (`v20.weapon.{{equip|lower}}`). A
 /// `{{word}}` that names no value is an error, so a misspelt name is
 /// caught, as is a value its filter cannot read.
+/// A port's text file with Unix line endings, however it was checked out
+/// (`core.autocrlf` on Windows), so its rules come out the same everywhere.
+fn port_text(bytes: &[u8]) -> Result<String> {
+    Ok(crate::script_text(std::str::from_utf8(bytes)?.as_bytes()))
+}
+
 fn fill_text(text: &str, values: &BTreeMap<String, String>) -> Result<String> {
     let re = regex::Regex::new(r"\{\{([A-Za-z_][A-Za-z0-9_]*)(\|bool|\|event_params|\|lower)?\}\}")?;
     let mut problem = None;

@@ -592,6 +592,52 @@ fn port_and_check_port_run_from_the_executable() {
 /// CC0), CTF's run-time flag datablocks import from the port's
 /// `datablocks.cs` with this copy's numbers, and both host-rules companions
 /// load as the game loads them.
+/// A copy of `from` with every text file's lines ended `\r\n`, as a
+/// Windows checkout with `core.autocrlf` (or a copy saved on Windows) has.
+fn crlf_copy(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for e in std::fs::read_dir(from).unwrap().flatten() {
+        let path = e.path();
+        let dest = to.join(e.file_name());
+        if path.is_dir() {
+            crlf_copy(&path, &dest);
+            continue;
+        }
+        let bytes = std::fs::read(&path).unwrap();
+        let text = ["cs", "rhai", "json"]
+            .iter()
+            .any(|x| path.extension().is_some_and(|e| e == *x));
+        let bytes = match String::from_utf8(bytes) {
+            Ok(t) if text => t.replace("\r\n", "\n").replace('\n', "\r\n").into_bytes(),
+            Ok(t) => t.into_bytes(),
+            Err(e) => e.into_bytes(),
+        };
+        std::fs::write(dest, bytes).unwrap();
+    }
+}
+
+#[test]
+fn a_copy_and_ports_with_windows_line_endings_import_as_with_unix_ones() {
+    let dir = fresh("crlf");
+    let ports_dir = dir.join("ports");
+    crlf_copy(&Path::new(env!("CARGO_MANIFEST_DIR")).join("ports"), &ports_dir);
+    let crlf_ports = Ports::from_dir(&ports_dir).unwrap();
+    let copy = dir.join("Gamemode_Slayer");
+    crlf_copy(&fixture("ports/Gamemode_Slayer"), &copy);
+    let lf = dir.join("lf/gamemode_slayer");
+    let crlf = dir.join("crlf/gamemode_slayer");
+    let report = import_with(&options(fixture("ports/Gamemode_Slayer"), lf.clone()), &Ports::builtin()).unwrap();
+    assert!(report.ports[0].applied, "{:?}", report.ports[0].reason);
+    let report = import_with(&options(copy, crlf.clone()), &crlf_ports).unwrap();
+    assert!(report.ports[0].applied, "{:?}", report.ports[0].reason);
+    for file in ["slayer.rhai", "behaviour.json"] {
+        let read = |out: &Path| std::fs::read_to_string(out.with_file_name("gamemode_slayer-rules").join(file)).unwrap();
+        let (lf, crlf) = (read(&lf), read(&crlf));
+        assert!(!crlf.contains('\r'), "{file} keeps Windows line endings");
+        assert_eq!(lf, crlf, "{file}");
+    }
+}
+
 #[test]
 fn slayer_ports_apply_with_their_rules() {
     let dir = fresh("slayer");

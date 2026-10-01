@@ -766,7 +766,8 @@ fn the_brick_trail_streams_from_the_held_brick_without_a_muzzle_point() -> Resul
 fn a_lying_item_loops_its_idle_sequence_on_the_world_clock() -> Result<()> {
     // `bri_weapons::Item::idle`, as Slayer CTF's flag played its `root`
     // thread in `ItemData::onAdd`. Any stock item whose model has a timed
-    // sequence stands in for the flag.
+    // cyclic sequence stands in for the flag: a sequence that plays once
+    // holds its last frame, so it would not show the loop.
     let (assets, weapons) = packs()?;
     let (item, sequence) = weapons
         .items
@@ -774,10 +775,10 @@ fn a_lying_item_loops_its_idle_sequence_on_the_world_clock() -> Result<()> {
         .find_map(|id| {
             let model = assets.item_appearance(id)?.model;
             let shape = assets.shape(&model).ok()?;
-            let clip = shape.animations.iter().find(|a| a.duration > 0.1)?;
+            let clip = shape.animations.iter().find(|a| a.looping && a.duration > 0.1)?;
             Some((id.clone(), clip.name.clone()))
         })
-        .expect("a stock item model with a timed sequence");
+        .expect("a stock item model with a timed cyclic sequence");
     let mut pack = (*weapons).clone();
     pack.items.get_mut(&item).unwrap().idle = sequence;
     let mut adapter = WorldItems::new(assets.clone(), Arc::new(pack.clone()), WorldItemLimits::default())?;

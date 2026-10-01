@@ -1310,3 +1310,40 @@ pub fn projectile_opacity(age: u32, fade: u32, lifetime: u32) -> f32 {
         (1. - age.saturating_sub(fade) as f32 / lifetime.max(1) as f32).clamp(0., 1.)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::normalized_pose;
+
+    fn clip(looping: bool) -> bri_content::shape::Animation {
+        bri_content::shape::Animation {
+            name: "root".into(),
+            frames: 10,
+            duration: 0.5,
+            looping,
+            additive: false,
+            priority: 0,
+            nodes: vec![],
+            objects: vec![],
+            ground_translations: vec![],
+            ground_rotations: vec![],
+            triggers: vec![],
+        }
+    }
+
+    /// A cyclic idle sequence keeps moving on the world clock; one that
+    /// plays once holds its last frame (`playThread` on a non-cyclic
+    /// sequence).
+    #[test]
+    fn a_cyclic_idle_loops_and_a_one_shot_holds_its_end() {
+        let looped = clip(true);
+        assert_ne!(normalized_pose(&looped, 1.0), normalized_pose(&looped, 1.05));
+        assert_eq!(
+            f32::from_bits(normalized_pose(&looped, 1.2).seconds),
+            (1.2f64.rem_euclid(0.5)) as f32
+        );
+        let once = clip(false);
+        assert_eq!(normalized_pose(&once, 1.0), normalized_pose(&once, 1.05));
+        assert_eq!(f32::from_bits(normalized_pose(&once, 1.0).seconds), 0.5);
+    }
+}
