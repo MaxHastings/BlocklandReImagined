@@ -188,6 +188,7 @@ fn tool_pack() -> bri_weapons::Pack {
         items,
         images,
         projectiles: Default::default(),
+        external_projectiles: Default::default(),
         damage_types: Default::default(),
         explosions: Default::default(),
         sounds: Default::default(),

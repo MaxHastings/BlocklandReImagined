@@ -475,6 +475,10 @@ pub struct Import<'a> {
     pub name: &'a str,
     /// Its host-only content, which goes in the companion.
     pub host: &'a Host,
+    /// The projectiles of the Add-Ons it depends on, by their packages'
+    /// ids: the readers see them beside the import's own (a gun's tracer
+    /// from Tier 1), though the import never carries them.
+    pub dependencies: &'a BTreeMap<String, bri_weapons::ProjectileDef>,
 }
 
 /// An import's host-only content, which players' games never load: its
@@ -613,6 +617,13 @@ fn try_apply(
             &std::fs::read(out.join(WEAPONS)).context("the import wrote no weapons")?,
         )
         .context(WEAPONS)?;
+        // What the readers see: the import's pack with its dependencies'
+        // projectiles beside its own. Only their patch is written back.
+        if let Some(own) = weapons["projectiles"].as_object_mut() {
+            for (id, p) in import.dependencies {
+                own.entry(id.clone()).or_insert(serde_json::to_value(p)?);
+            }
+        }
         let mut patch: Option<Value> = None;
         let mut read = BTreeMap::new();
         let mut add = |p: Value| match &mut patch {

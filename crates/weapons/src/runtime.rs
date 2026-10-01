@@ -707,6 +707,15 @@ pub struct WeaponsWorld {
 impl WeaponsWorld {
     pub fn new(pack: Pack) -> Result<Self> {
         pack.validate()?;
+        anyhow::ensure!(
+            pack.external_projectiles.is_empty(),
+            "The pack fires projectiles of packages it depends on ({}); merge them first",
+            pack.external_projectiles
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
         Ok(Self {
             pack: Arc::new(pack),
             tick: 0,
@@ -1219,7 +1228,13 @@ impl WeaponsWorld {
         }
     }
     /// A [`crate::Check`] on the right hand's flags, from `key`'s magazine.
-    fn apply_check(a: &mut Actor, key: &str, magazine: &crate::Magazine, check: &crate::Check) {
+    /// Whether it took a shot's rounds ([`crate::Check::spend`]).
+    fn apply_check(
+        a: &mut Actor,
+        key: &str,
+        magazine: &crate::Magazine,
+        check: &crate::Check,
+    ) -> bool {
         let rounds = a.rounds.get(key).copied().unwrap_or(0);
         let reserve = a.reserve.get(&magazine.ammo).is_some_and(|r| r.any());
         if let Some(c) = &check.loaded {
@@ -1228,6 +1243,19 @@ impl WeaponsWorld {
         if let Some(c) = &check.ammo {
             a.ammo = c.holds(magazine, rounds, reserve);
         }
+        if check.keeps_reload && a.reload.as_ref().is_some_and(|r| r.item == key) {
+            a.loaded = false;
+        }
+        if check.spend && a.loaded && magazine.fires(rounds) {
+            let left = if magazine.last(rounds) {
+                0
+            } else {
+                rounds - magazine.per_shot
+            };
+            a.rounds.insert(key.to_owned(), left);
+            return true;
+        }
+        false
     }
     /// The light key: reload the held gun if it has a magazine that is
     /// not full and reserve to fill it. Whether a reload started.
@@ -1526,6 +1554,20 @@ impl WeaponsWorld {
                 image: image.into(),
                 hand,
             });
+            // `onMount`: its command, after the one put away's.
+            if let Some(command) = self
+                .pack
+                .images
+                .get(image)
+                .and_then(|i| i.commands.mount.clone())
+            {
+                self.events.push(Event::ToolFire {
+                    actor: id,
+                    image: image.into(),
+                    hand,
+                    command: Some(command),
+                });
+            }
             if shown {
                 self.events.push(Event::Ammo { actor: id });
             }
@@ -2053,8 +2095,11 @@ impl WeaponsWorld {
                         .checks
                         .iter()
                         .find(|(s, _)| s.eq_ignore_ascii_case(&state.script))
+                    // It spent a round: any reload is off.
+                    && Self::apply_check(a, key, magazine, check)
                 {
-                    Self::apply_check(a, key, magazine, check);
+                    a.reload = None;
+                    self.events.push(Event::Ammo { actor: id });
                 }
                 // The magazine's own reload state: its rounds are due now.
                 if e.hand == 0

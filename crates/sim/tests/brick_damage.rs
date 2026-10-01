@@ -718,6 +718,7 @@ fn synthetic_rocket_pack() -> bri_weapons::Pack {
         items: [(SYNTHETIC_ROCKET.to_string(), item)].into(),
         images: [(SYNTHETIC_IMAGE.to_string(), image)].into(),
         projectiles: [(SYNTHETIC_PROJECTILE.to_string(), projectile)].into(),
+        external_projectiles: Default::default(),
         damage_types: Default::default(),
         explosions: Default::default(),
         sounds: Default::default(),

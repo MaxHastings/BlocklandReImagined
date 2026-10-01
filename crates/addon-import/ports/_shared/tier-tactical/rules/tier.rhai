@@ -244,9 +244,17 @@ fn cmd_lay(p) {
         return;
     }
     let table = laid();
-    if table.contains(me.image) {
+    if table.contains(me.image) && on(table[me.image].archetype) {
         push_archetype(p, table[me.image].archetype);
     }
+}
+
+// Whether the Add-On an archetype comes from is on: a gun may lay one of
+// another pack's (Tier 2A's scope, Tier 2's LMGArmor), which does nothing
+// without it, as LMGArmor.getID() found nothing.
+fn on(archetype) {
+    let at = archetype.index_of(':');
+    at > 0 && enabled(archetype.sub_string(0, at))
 }
 
 // popDatablock: firing stopped, the gun ran dry or left the hand. The gun
@@ -254,7 +262,9 @@ fn cmd_lay(p) {
 // laid on is left alone.
 fn cmd_lift(p) {
     for row in laid().values() {
-        pop_archetype(p, row.archetype);
+        if on(row.archetype) {
+            pop_archetype(p, row.archetype);
+        }
     }
 }
 

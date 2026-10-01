@@ -229,12 +229,9 @@ fn speed_spans(s: &str, fields: &BTreeMap<String, String>) -> Vec<Span> {
         let cond = &s[i + 3..cond_end - 1];
         let Some(range) = speeds.iter().find_map(|v| {
             let rest = cond.strip_prefix(v)?;
-            let (below, n) = if let Some(n) = rest.strip_prefix("<=").or(rest.strip_prefix('<')) {
-                (true, n)
-            } else if let Some(n) = rest.strip_prefix(">=").or(rest.strip_prefix('>')) {
-                (false, n)
-            } else {
-                return None;
+            let (below, n) = match rest.strip_prefix("<=").or(rest.strip_prefix('<')) {
+                Some(n) => (true, n),
+                None => (false, rest.strip_prefix(">=").or(rest.strip_prefix('>'))?),
             };
             Some((threshold(n)?, below))
         }) else {

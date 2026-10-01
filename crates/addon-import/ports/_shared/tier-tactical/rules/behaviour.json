@@ -10,5 +10,23 @@
         "persist": false
       }
     }
-  }
+  },
+  "commands": [
+    {
+      "name": "lay",
+      "tool_only": true
+    },
+    {
+      "name": "lift",
+      "tool_only": true
+    },
+    {
+      "name": "alt_fire",
+      "tool_only": true
+    },
+    {
+      "name": "alt_done",
+      "tool_only": true
+    }
+  ]
 }

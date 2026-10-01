@@ -86,6 +86,7 @@ impl Pack {
                 .collect();
             // Keyed by bare profile name, like damage types.
             add(&mut self.sounds, sounds, "sound", &dir, &mut notes);
+            self.external_projectiles.extend(part.external_projectiles);
             merge_effects(&mut self.effects, part.effects, &dir, &mut notes);
             self.definitions.extend(part.definitions);
             self.resources
@@ -98,13 +99,14 @@ impl Pack {
             self.id = format!("{}+{}", self.id, part.id);
         }
         // Drop what a missing package would have provided, innermost first.
-        let projectiles: Vec<String> = self.projectiles.keys().cloned().collect();
+        // A projectile a part took from a package it depends on is now
+        // either here or missing.
+        self.external_projectiles.clear();
+        let projectiles = &self.projectiles;
         self.images.retain(|id, image| {
             let missing = image
-                .projectile
-                .iter()
-                .chain(image.scripts.values().filter_map(|s| s.projectile.as_ref()))
-                .find(|p| !projectiles.contains(p));
+                .projectile_refs()
+                .find(|p| !projectiles.contains_key(*p));
             if let Some(p) = missing {
                 notes.push(format!(
                     "image {id} dropped: projectile {p} is not provided"

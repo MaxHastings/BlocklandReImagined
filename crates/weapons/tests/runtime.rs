@@ -85,6 +85,7 @@ fn empty() -> Pack {
         items: BTreeMap::new(),
         images: BTreeMap::new(),
         projectiles: BTreeMap::new(),
+        external_projectiles: Default::default(),
         damage_types: BTreeMap::new(),
         explosions: BTreeMap::new(),
         sounds: Default::default(),

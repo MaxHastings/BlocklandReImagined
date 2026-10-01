@@ -199,7 +199,7 @@
   },
   "scripts": [
     {
-      "method": "onFire",
+      "method": "*",
       "into": "shot",
       "pattern": "%spread\\s*=\\s*(?P<spread>[\\d.]+)\\s*;",
       "set": {
@@ -207,7 +207,7 @@
       }
     },
     {
-      "method": "onFire",
+      "method": "*",
       "into": "shot",
       "pattern": "%shellCount\\s*=\\s*(?P<n>\\d+)\\s*;",
       "set": {
@@ -215,7 +215,17 @@
       }
     },
     {
-      "method": "onFire",
+      "method": "*",
+      "into": "shot",
+      "pattern": "vectorLen\\(\\s*%obj\\.getVelocity\\(\\s*\\)\\s*\\)\\s*<\\s*(?P<speed>[\\d.]+)\\s*\\)\\s*\\{\\s*%spread\\s*=\\s*(?P<still>[\\d.]+)\\s*;\\s*\\}\\s*else\\s*\\{\\s*%spread\\s*=\\s*(?P<moving>[\\d.]+)\\s*;",
+      "set": {
+        "spread": "{still}",
+        "moving_spread": "{moving}",
+        "moving_speed": "{speed}"
+      }
+    },
+    {
+      "method": "*",
       "into": "shot",
       "pattern": "vectorLen\\(\\s*%obj\\.getVelocity\\(\\s*\\)\\s*\\)\\s*>\\s*(?P<speed>[\\d.]+)\\s*\\)\\s*\\{\\s*%this\\.TT_raycastSpreadAmt\\s*=\\s*(?P<moving>[\\d.]+)\\s*;\\s*%this\\.TT_raycastWeaponRange\\s*=\\s*(?P<moving_range>[\\d.]+)\\s*;\\s*\\}\\s*else\\s*\\{\\s*%this\\.TT_raycastSpreadAmt\\s*=\\s*(?P<still>[\\d.]+)\\s*;\\s*%this\\.TT_raycastWeaponRange\\s*=\\s*(?P<range>[\\d.]+)\\s*;",
       "required_by": "%this\\.TT_raycastSpreadAmt\\s*=",
@@ -230,7 +240,7 @@
       }
     },
     {
-      "method": "onFire",
+      "method": "*",
       "into": "shot",
       "pattern": "vectorLen\\(\\s*%obj\\.getVelocity\\(\\s*\\)\\s*\\)\\s*<\\s*(?P<speed>[\\d.]+)[^{]*\\{\\s*%projectile\\s*=\\s*%this\\.projectile\\s*;\\s*%spread\\s*=\\s*(?P<still>[\\d.]+)\\s*;\\s*\\}\\s*else\\s*\\{\\s*%projectile\\s*=\\s*(?P<weak>\\w+)\\s*;\\s*%spread\\s*=\\s*(?P<moving>[\\d.]+)\\s*;",
       "set": {
@@ -241,7 +251,7 @@
       }
     },
     {
-      "method": "onFire",
+      "method": "*",
       "into": "shot",
       "pattern": "\\(\\s*getSimTime\\(\\s*\\)\\s*-\\s*%obj\\.lastShotTime\\s*\\)\\s*>\\s*(?P<ms>\\d+)\\s*\\)\\s*\\{\\s*%projectile\\s*=\\s*(?P<rested_projectile>\\w+)\\s*;\\s*%spread\\s*=\\s*(?P<rested>[\\d.]+)\\s*;\\s*\\}\\s*else\\s*\\{\\s*%projectile\\s*=\\s*%this\\.projectile\\s*;\\s*%spread\\s*=\\s*(?P<spread>[\\d.]+)\\s*;[\\s\\S]*%obj\\.lastShotTime\\s*=\\s*getSimTime\\(",
       "required_by": "getSimTime\\(\\s*\\)\\s*-\\s*%obj\\.lastShotTime\\s*\\)\\s*>\\s*\\d+\\s*\\)\\s*\\{\\s*%projectile\\s*=\\s*[A-Za-z_][\\s\\S]*%obj\\.lastShotTime\\s*=\\s*getSimTime\\(",
@@ -263,7 +273,7 @@
       }
     },
     {
-      "method": "onFire2",
+      "method": "*",
       "into": "shot",
       "pattern": "TT_createProjectile\\(",
       "set": {
@@ -271,23 +281,35 @@
       }
     },
     {
-      "method": "onFire2",
+      "method": "*",
       "into": "shot",
-      "pattern": "%spread\\s*=\\s*(?P<s>[\\d.]+)\\s*;",
-      "set": {
-        "spread": "{s}"
-      }
-    },
-    {
-      "method": "onFire2",
-      "into": "shot",
-      "pattern": "TT_decrementAmmo\\(",
+      "pattern": "(?s)TT_createProjectile\\(.*TT_decrementAmmo\\(|TT_decrementAmmo\\(.*TT_createProjectile\\(",
       "set": {
         "free": false
       }
     },
     {
       "method": "*",
+      "into": "check",
+      "pattern": "TT_canFire\\(\\s*%obj\\s*\\)\\s*\\)\\s*\\{\\s*%obj\\.setImageLoaded\\(\\s*%slot\\s*,\\s*1\\s*\\)\\s*;\\s*%this\\.TT_decrementAmmo\\(",
+      "set": {
+        "loaded": [
+          "shot"
+        ],
+        "spend": true
+      }
+    },
+    {
+      "method": "TT_onLoadCheck",
+      "into": "check",
+      "pattern": "if\\s*\\(\\s*%obj\\.TT_forceToolReload\\s*\\|\\|\\s*%this\\.TT_needsAmmo\\(\\s*%obj\\s*\\)\\s*\\)\\s*%obj\\.setImageLoaded\\(\\s*%slot\\s*,\\s*0\\s*\\)",
+      "required_by": "TT_forceToolReload",
+      "set": {
+        "keeps_reload": true
+      }
+    },
+    {
+      "method": "*|onMount",
       "into": "table",
       "table": "laid",
       "pattern": "pushDatablock\\(\\s*(?P<a>\\w+)\\.getID\\(\\s*\\)\\s*\\)",
@@ -306,7 +328,7 @@
       }
     },
     {
-      "method": "onFire|onFire2",
+      "method": "*",
       "into": "shot",
       "pattern": "spawnExplosion\\(\\s*(?P<p>\\w+)\\s*,",
       "set": {
@@ -314,7 +336,7 @@
       }
     },
     {
-      "method": "onFire|onFire2",
+      "method": "*",
       "into": "shot",
       "pattern": "TT_knockback\\(\\s*%obj\\s*,\\s*(?P<h>-?[\\d.]+)\\s*,\\s*-?[\\d.]+\\s*,\\s*(?P<v>-?[\\d.]+)\\s*\\)",
       "required_by": "TT_knockback\\(",

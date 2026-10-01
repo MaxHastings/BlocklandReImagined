@@ -155,6 +155,7 @@ fn rocket_pack() -> bri_weapons::Pack {
         items: [(ROCKET.to_string(), item)].into(),
         images: [(ROCKET_IMAGE.to_string(), image)].into(),
         projectiles: [(ROCKET_PROJECTILE.to_string(), projectile)].into(),
+        external_projectiles: Default::default(),
         damage_types: Default::default(),
         explosions: Default::default(),
         sounds: Default::default(),

@@ -1,7 +1,7 @@
 //! Versioned native weapon content. No legacy parser is linked into this crate.
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 pub mod debris;
 mod merge;
 pub mod rotation;
@@ -322,6 +322,26 @@ pub struct Image {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub scripts: BTreeMap<String, Script>,
 }
+impl Image {
+    /// Every projectile the image can launch: its own, its shots' moving
+    /// and rested ones, its volleys' and its scripts'.
+    pub fn projectile_refs(&self) -> impl Iterator<Item = &String> {
+        let shots = self
+            .shot
+            .iter()
+            .chain(self.last_shot.iter().map(|l| &l.shot))
+            .chain(self.state_shots.values());
+        let volleys = self
+            .volleys
+            .iter()
+            .chain(self.last_shot.iter().flat_map(|l| &l.volleys));
+        self.projectile
+            .iter()
+            .chain(shots.flat_map(Shot::projectile_refs))
+            .chain(volleys.map(|v| &v.projectile))
+            .chain(self.scripts.values().filter_map(|s| s.projectile.as_ref()))
+    }
+}
 /// [`Image::cook`]: a fuse that starts burning in the hand, as v20 grenade
 /// scripts timed one (`getSimTime` as the pin drops, a schedule to go off
 /// in the hand). The image's next shot carries what is left of it and goes
@@ -516,6 +536,18 @@ pub struct Check {
     pub loaded: Option<Cond>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ammo: Option<Cond>,
+    /// When it leaves the hand loaded, it takes a shot's rounds itself, so
+    /// the shot its states fire next is [`Shot::free`] (Tier+Tactical's
+    /// burst check: `TT_canFire`, then `TT_decrementAmmo`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub spend: bool,
+    /// While a reload of the magazine is under way the hand is not loaded,
+    /// whatever `loaded` says, so a reload begun under another image of
+    /// the same gun carries on in this one (Tier+Tactical's
+    /// `TT_forceToolReload`: a scope handing its reload to the unscoped
+    /// image).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub keeps_reload: bool,
 }
 /// A flag's value in a [`Check`]: `true`, `false`, or true when any of the
 /// listed facts about the holder's magazine holds.
@@ -701,6 +733,10 @@ pub struct ImageCommands {
     /// a rule mounting another image (v20 `onUnMount`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unmount: Option<String>,
+    /// The image coming into the hand: drawn, or mounted by a rule (v20
+    /// `onMount`). It runs after the one leaving's `unmount`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mount: Option<String>,
 }
 impl ImageCommands {
     pub fn is_empty(&self) -> bool {
@@ -710,9 +746,10 @@ impl ImageCommands {
             && self.wheel.is_none()
             && self.cancel.is_none()
             && self.unmount.is_none()
+            && self.mount.is_none()
     }
     /// Whether the image runs `command` (`package:command`) from any of its
-    /// moments: a state, jet, light, wheel, cancel or unmount.
+    /// moments: a state, jet, light, wheel, cancel, unmount or mount.
     pub fn runs(&self, command: &str) -> bool {
         self.states.values().any(|c| c == command)
             || [
@@ -721,6 +758,7 @@ impl ImageCommands {
                 &self.wheel,
                 &self.cancel,
                 &self.unmount,
+                &self.mount,
             ]
             .into_iter()
             .any(|c| c.as_deref() == Some(command))
@@ -860,6 +898,12 @@ fn one_projectile() -> u32 {
     1
 }
 impl Shot {
+    /// The projectiles the shot flies in place of the image's.
+    pub fn projectile_refs(&self) -> impl Iterator<Item = &String> {
+        self.moving_projectile
+            .iter()
+            .chain(self.rested.as_ref().and_then(|r| r.projectile.as_ref()))
+    }
     /// One projectile straight along the aim: an image without `shot`.
     pub const SINGLE: Shot = Shot {
         projectiles: 1,
@@ -1466,6 +1510,13 @@ pub struct Pack {
     pub images: BTreeMap<String, Image>,
     #[serde(default)]
     pub projectiles: BTreeMap<String, ProjectileDef>,
+    /// Projectiles this pack's images launch that a package it depends on
+    /// declares: Tier 2's guns fire Tier 1's `weapon_package_tier1:projectile/...`,
+    /// an Add-On gun the base game's `v20.projectile.gunprojectile`.
+    /// They resolve when the packs are merged ([`Pack::merge`]): an image
+    /// whose projectile no merged package provides is dropped there.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub external_projectiles: BTreeSet<String>,
     /// Keyed by lower-case damage type name (`$DamageType::<name>`).
     #[serde(default)]
     pub damage_types: BTreeMap<String, DamageType>,
@@ -1547,6 +1598,17 @@ impl Pack {
                 && self.damage_types.len() <= 1024
                 && self.explosions.len() <= 4096,
             "Definition budget exceeded"
+        );
+        ensure!(
+            self.external_projectiles.len() <= 4096
+                && self.external_projectiles.iter().all(|p| {
+                    !p.is_empty()
+                        && p.len() <= 128
+                        && !p.chars().any(char::is_control)
+                        && !self.projectiles.contains_key(p)
+                }),
+            "Invalid external_projectiles: at most 4096 ids of up to 128 characters \
+             this pack does not declare itself"
         );
         for (key, t) in &self.damage_types {
             ensure!(
@@ -1647,7 +1709,8 @@ impl Pack {
                         .commands
                         .unmount
                         .as_deref()
-                        .is_none_or(is_image_command),
+                        .is_none_or(is_image_command)
+                    && image.commands.mount.as_deref().is_none_or(is_image_command),
                 "Invalid image command {id}"
             );
             let shot_ok = |s: &Shot| {
@@ -1670,9 +1733,7 @@ impl Pack {
             let volleys_ok = |volleys: &[Volley]| {
                 volleys.len() <= 4
                     && volleys.iter().all(|v| {
-                        (1..=64).contains(&v.projectiles)
-                            && (0.0..=1.0).contains(&v.spread)
-                            && self.projectiles.contains_key(&v.projectile)
+                        (1..=64).contains(&v.projectiles) && (0.0..=1.0).contains(&v.spread)
                     })
             };
             ensure!(
@@ -1713,29 +1774,8 @@ impl Pack {
             }
             ensure!(
                 volleys_ok(&image.volleys),
-                "Invalid volleys of image {id}: at most 4, each a projectile of the pack, \
-                 1 to 64 projectiles, spread 0 to 1"
+                "Invalid volleys of image {id}: at most 4, each 1 to 64 projectiles, spread 0 to 1"
             );
-            if let Some(moving) = image
-                .shot
-                .as_ref()
-                .and_then(|s| s.moving_projectile.as_ref())
-            {
-                ensure!(
-                    self.projectiles.contains_key(moving),
-                    "Invalid moving_projectile of image {id}: {moving} is no projectile of the pack"
-                );
-            }
-            if let Some(rested) = image
-                .shot
-                .as_ref()
-                .and_then(|s| s.rested.as_ref()?.projectile.as_ref())
-            {
-                ensure!(
-                    self.projectiles.contains_key(rested),
-                    "Invalid rested projectile of image {id}: {rested} is no projectile of the pack"
-                );
-            }
             if let Some(h) = image.shot.as_ref().and_then(|s| s.hitscan.as_ref()) {
                 ensure!(
                     [&h.explosion, &h.flown, &h.player_sound, &h.other_sound]
@@ -1794,8 +1834,12 @@ impl Pack {
                     ensure!(index < image.states.len(), "Invalid state target");
                 }
             }
-            if let Some(p) = &image.projectile {
-                ensure!(self.projectiles.contains_key(p), "Missing projectile {p}");
+            for p in image.projectile_refs() {
+                ensure!(
+                    self.projectiles.contains_key(p) || self.external_projectiles.contains(p),
+                    "Missing projectile {p} of image {id}: neither this pack's nor \
+                     listed in external_projectiles"
+                );
             }
             if let Some(magazine) = &image.magazine {
                 magazine
@@ -1825,12 +1869,6 @@ impl Pack {
                     }),
                 "Invalid image scripts {id}: up to 16, lower-case names, arm letters, digits and _, projectile only with fire"
             );
-            for p in image.scripts.values().filter_map(|s| s.projectile.as_ref()) {
-                ensure!(
-                    self.projectiles.contains_key(p),
-                    "Missing projectile {p} of image {id}"
-                );
-            }
         }
         for (id, p) in &self.projectiles {
             ensure!(
@@ -1863,7 +1901,7 @@ impl Pack {
                 ]
                 .iter()
                 .all(|n| n.is_finite() && *n >= 0.0 && *n <= 100000.0),
-                "Invalid projectile scalar"
+                "Invalid projectile scalar {id}"
             );
             ensure!(
                 p.elasticity <= 1.0 && p.friction <= 1.0 && p.speed <= 10000.0,

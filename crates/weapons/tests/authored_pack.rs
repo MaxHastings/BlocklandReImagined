@@ -101,6 +101,7 @@ fn sounds_merge_with_their_package_and_bad_states_are_refused() {
         items: Default::default(),
         images: Default::default(),
         projectiles: Default::default(),
+        external_projectiles: Default::default(),
         damage_types: Default::default(),
         explosions: Default::default(),
         sounds: Default::default(),

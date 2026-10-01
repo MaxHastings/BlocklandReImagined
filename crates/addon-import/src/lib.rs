@@ -191,6 +191,9 @@ struct Ctx<'a> {
     provides: Vec<serde_json::Value>,
     /// Host-only content, for the import's companion ([`ports::Host`]).
     host: ports::Host,
+    /// The projectiles of the Add-Ons this one depends on, by the ids their
+    /// packages give them, as ports read them ([`ports::Import::dependencies`]).
+    dependency_projectiles: BTreeMap<String, bri_weapons::ProjectileDef>,
 }
 
 impl Ctx<'_> {
@@ -328,10 +331,15 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
         outputs: BTreeMap::new(),
         provides: vec![],
         host: ports::Host::default(),
+        dependency_projectiles: BTreeMap::new(),
     };
     metadata(&mut cx);
-    let scripts = read_scripts(&mut cx);
-    inventory(&mut cx, &scripts);
+    let mut scripts = read_scripts(&mut cx);
+    if let Some(reached) = inventory(&mut cx, &scripts) {
+        // v20 runs server.cs and what it execs; a file nothing execs never
+        // ran (a gun left out by a commented-out exec).
+        scripts.retain(|s| reached.contains(&s.path.to_ascii_lowercase()));
+    }
     top_level(&mut cx, &scripts);
     datablocks(&mut cx, &scripts);
     references(&mut cx);
@@ -505,9 +513,14 @@ fn kind_of(path: &str) -> &'static str {
     }
 }
 
-fn inventory(cx: &mut Ctx, scripts: &[Script]) {
+/// Lists the Add-On's files in the report. The scripts server.cs and
+/// client.cs reach through their execs, when every exec in the Add-On is
+/// one this can follow (a literal path outside any function); otherwise
+/// `None`, and every script is read.
+fn inventory(cx: &mut Ctx, scripts: &[Script]) -> Option<BTreeSet<String>> {
     // Scripts reachable from server.cs / client.cs through literal exec calls.
     let mut reachable = BTreeSet::new();
+    let mut followed = 0;
     let mut queue: Vec<String> = ["server.cs", "client.cs"]
         .iter()
         .map(|m| format!("{}/{m}", cx.src.dir()).to_ascii_lowercase())
@@ -524,10 +537,34 @@ fn inventory(cx: &mut Ctx, scripts: &[Script]) {
             {
                 if let Some(a) = c.args.first() {
                     queue.push(source::resolve(&s.path, literal(a)).to_ascii_lowercase());
+                    if is_plain_string(a) {
+                        followed += 1;
+                    }
                 }
             }
         }
     }
+    // Every exec in the reached scripts' text is one followed above; any
+    // other (a built path, one inside a function) could reach any file.
+    let written: usize = cx
+        .src
+        .files
+        .values()
+        .filter(|f| reachable.contains(&f.path.to_ascii_lowercase()))
+        .map(|f| {
+            let text =
+                tscript::without_comments(&String::from_utf8_lossy(&f.bytes)).to_ascii_lowercase();
+            regex::Regex::new(r"\bexec\s*\(")
+                .expect("pattern")
+                .find_iter(&text)
+                .count()
+        })
+        .sum();
+    let has_server = scripts.iter().any(|s| {
+        s.path
+            .eq_ignore_ascii_case(&format!("{}/server.cs", cx.src.dir()))
+    });
+    let follows = has_server && written == followed;
     let metadata = ["description.txt", "rtbinfo.txt", "namecheck.txt"];
     for f in cx.src.files.values() {
         let member = cx.src.member(f).to_ascii_lowercase();
@@ -551,6 +588,8 @@ fn inventory(cx: &mut Ctx, scripts: &[Script]) {
                 "consumed",
                 if reachable.contains(&f.path.to_ascii_lowercase()) {
                     vec!["read for datablocks, functions and calls; not executed".into()]
+                } else if follows {
+                    vec!["no exec from server.cs reaches it, so v20 never ran it; left out".into()]
                 } else {
                     vec!["not reached by a literal exec from server.cs; read anyway".into()]
                 },
@@ -592,6 +631,13 @@ fn inventory(cx: &mut Ctx, scripts: &[Script]) {
             resolution: None,
         });
     }
+    follows.then_some(reachable)
+}
+
+/// A script argument that is one quoted string, with nothing joined on.
+fn is_plain_string(arg: &str) -> bool {
+    let a = arg.trim();
+    a.len() >= 2 && a.starts_with('"') && a.ends_with('"') && !a[1..a.len() - 1].contains('"')
 }
 
 const KNOWN_TOP_LEVEL: &[&str] = &[
@@ -1140,7 +1186,7 @@ fn weapons(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
         if cx.owned.contains_key(&n) {
             content_id(&cx.ns, kind, &n)
         } else {
-            content_id("v20", kind, &n)
+            dependency_id(cx, kind, &n)
         }
     };
     let mut items = BTreeMap::new();
@@ -1192,30 +1238,27 @@ fn weapons(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
         images.insert(im.id.clone(), im);
     }
     let mut projectiles = BTreeMap::new();
+    let mut external = BTreeSet::new();
     for (old, mut p) in std::mem::take(&mut pack.projectiles) {
-        let own = owned(&p.name);
-        if !own && !needed_projectiles.contains(&old) {
+        if !owned(&p.name) {
+            // The package the dependency becomes provides it; the packs
+            // resolve it when merged.
+            p.id = dependency_id(cx, "projectile", &p.name);
+            if needed_projectiles.contains(&old) {
+                external.insert(p.id.clone());
+            }
+            cx.dependency_projectiles.insert(p.id.clone(), p);
             continue;
         }
         p.sport_image = p.sport_image.map(|s| remap(cx, "image", &s));
-        if own {
-            p.id = cx.id("projectile", &p.name, &p.name, file);
-            cx.mark(
-                &p.name.clone(),
-                "projectile",
-                "converted",
-                vec![p.id.clone()],
-                None,
-            );
-        } else {
-            p.id = content_id("v20", "projectile", &p.name);
-            cx.ambiguous(
-                format!("projectile {}", p.name),
-                None,
-                "a dependency's projectile is copied into this pack: the weapons pack format cannot reference another package's projectile".into(),
-                Some(p.id.clone()),
-            );
-        }
+        p.id = cx.id("projectile", &p.name, &p.name, file);
+        cx.mark(
+            &p.name.clone(),
+            "projectile",
+            "converted",
+            vec![p.id.clone()],
+            None,
+        );
         projectiles.insert(p.id.clone(), p);
     }
     let explosions: BTreeMap<_, _> = std::mem::take(&mut pack.explosions)
@@ -1291,6 +1334,7 @@ fn weapons(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
     pack.items = items;
     pack.images = images;
     pack.projectiles = projectiles;
+    pack.external_projectiles = external;
     pack.explosions = explosions;
     pack.id = cx.ns.clone();
     pack.definitions.retain(|d| owned(&d.name));
@@ -2581,6 +2625,23 @@ fn behaviours(cx: &mut Ctx, scripts: &[Script]) {
     }
 }
 
+/// The id a datablock this Add-On takes from another has where that one's
+/// package declares it: the base game's (`v20.projectile.gunprojectile`)
+/// for a vanilla Add-On or the core scripts, else the namespace importing
+/// that Add-On makes (`weapon_package_tier1:projectile/...`).
+fn dependency_id(cx: &Ctx, kind: &str, name: &str) -> String {
+    let addon = cx
+        .reference
+        .datablocks
+        .get(&name.to_ascii_lowercase())
+        .map(|o| o.addon.as_str())
+        .filter(|a| *a != "base" && reference::base_package(a).is_none());
+    match addon.and_then(|a| namespace_for(a).ok()) {
+        Some(ns) => content_id(&ns, kind, name),
+        None => bri_weapons::native_id(kind, name),
+    }
+}
+
 /// The package an Add-On this one requires by name
 /// (`ForceRequiredAddOn`) becomes: the base game's for a vanilla one, else
 /// the package importing it makes (its namespace), which the player
@@ -2727,6 +2788,7 @@ fn finish(mut cx: Ctx, opts: &Options, ports: &ports::Ports, code: &ports::Code)
         version: &opts.version,
         name: manifest["name"].as_str().unwrap_or(&cx.ns),
         host: &cx.host,
+        dependencies: &cx.dependency_projectiles,
     };
     if let Some(port) = ports::apply(ports, &import, code, &cx.out) {
         for b in &mut cx.report.needs_behaviour {

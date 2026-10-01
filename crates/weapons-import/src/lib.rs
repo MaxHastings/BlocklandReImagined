@@ -232,6 +232,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
         items: BTreeMap::new(),
         images: BTreeMap::new(),
         projectiles: BTreeMap::new(),
+        external_projectiles: Default::default(),
         damage_types: BTreeMap::new(),
         explosions: BTreeMap::new(),
         sounds: BTreeMap::new(),

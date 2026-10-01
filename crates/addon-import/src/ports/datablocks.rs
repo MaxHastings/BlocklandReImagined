@@ -328,13 +328,14 @@ pub struct ScriptRule {
     /// Whose method: `image` (the default) or `projectile`.
     #[serde(default = "image_owner")]
     pub on: String,
-    /// The method (`onFire`, `damage`), several as `onFire|onFire2`, or
-    /// `*` for every state script of an image.
+    /// The method (`onFire`, `damage`), several as `onFire|onFire2`; `*`
+    /// is every state script of an image (`*|onMount` those and onMount).
     pub method: String,
     /// For an image: `image`, `shot` (the shot the method fires: `onFire`'s
     /// is the image's `shot`, another state script's its entry in
-    /// `state_shots`), `magazine` or `state`; for a projectile:
-    /// `projectile`. Either may go into `table`.
+    /// `state_shots`), `magazine`, `check` (the magazine's check for the
+    /// state script: a gun's own `TT_onLoadCheck` or burst check) or
+    /// `state`; for a projectile: `projectile`. Either may go into `table`.
     pub into: String,
     /// With `into: "table"`: the table's name, which the host rules use as
     /// `{{name}}`, a Rhai map from each image's or projectile's id to `set`.
@@ -390,7 +391,7 @@ pub fn scripts(rules: &[ScriptRule], weapons: &Value, code: &super::Code) -> Res
             other => bail!("a script rule is on `{other}`, not image or projectile"),
         };
         let targets: &[&str] = if image {
-            &["image", "shot", "magazine", "state", "table"]
+            &["image", "shot", "magazine", "check", "state", "table"]
         } else {
             &["projectile", "table"]
         };
@@ -416,7 +417,7 @@ pub fn scripts(rules: &[ScriptRule], weapons: &Value, code: &super::Code) -> Res
         );
         if !image {
             ensure!(
-                rule.method != "*",
+                !rule.method.split('|').any(|m| m == "*"),
                 "a projectile's script rule names its method"
             );
             for method in rule.method.split('|').map(str::to_ascii_lowercase) {
@@ -448,22 +449,22 @@ pub fn scripts(rules: &[ScriptRule], weapons: &Value, code: &super::Code) -> Res
                 .unwrap_or_default()
                 .to_ascii_lowercase();
             let states = image["states"].as_array().cloned().unwrap_or_default();
-            let methods: Vec<String> = if rule.method == "*" {
-                let mut m: Vec<String> = states
-                    .iter()
-                    .filter_map(|s| s["script"].as_str())
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_ascii_lowercase)
-                    .collect();
-                m.sort();
-                m.dedup();
-                m
-            } else {
-                rule.method
-                    .split('|')
-                    .map(str::to_ascii_lowercase)
-                    .collect()
-            };
+            let mut methods: Vec<String> = vec![];
+            for part in rule.method.split('|') {
+                if part == "*" {
+                    methods.extend(
+                        states
+                            .iter()
+                            .filter_map(|s| s["script"].as_str())
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_ascii_lowercase),
+                    );
+                } else {
+                    methods.push(part.to_ascii_lowercase());
+                }
+            }
+            methods.sort();
+            methods.dedup();
             for method in methods {
                 let Some(body) = bodies.get(&format!("{name}::{method}")) else {
                     continue;
@@ -475,6 +476,13 @@ pub fn scripts(rules: &[ScriptRule], weapons: &Value, code: &super::Code) -> Res
                 let set = fill(&rule.set, &values, weapons, code)
                     .with_context(|| format!("{name}::{method}"))?;
                 if rule.into == "table" {
+                    // A row with a field that names nothing is left out.
+                    if set
+                        .as_object()
+                        .is_some_and(|m| m.values().any(Value::is_null))
+                    {
+                        continue;
+                    }
                     let table = tables.entry(rule.table.clone()).or_default();
                     super::merge(table.entry(id.clone()).or_insert_with(|| json!({})), &set);
                     continue;
@@ -485,6 +493,20 @@ pub fn scripts(rules: &[ScriptRule], weapons: &Value, code: &super::Code) -> Res
                     "shot" if method == "onfire" => super::compose(entry, &json!({ "shot": set })),
                     "shot" => super::compose(entry, &json!({ "state_shots": { &method: set } })),
                     "magazine" => super::compose(entry, &json!({ "magazine": set })),
+                    "check" => {
+                        // Keyed by the script as the states spell it, so it
+                        // merges with a shared check of that name.
+                        let script = states
+                            .iter()
+                            .filter_map(|s| s["script"].as_str())
+                            .find(|s| s.eq_ignore_ascii_case(&method))
+                            .unwrap_or(&method)
+                            .to_owned();
+                        super::compose(
+                            entry,
+                            &json!({ "magazine": { "checks": { script: set } } }),
+                        );
+                    }
                     _ => {
                         // States are an array: patch the whole list.
                         if entry.get("states").is_none() {
@@ -571,14 +593,14 @@ fn fill(
                     id_of(weapons, "ShapeBaseImageData", value)
                         .with_context(|| format!("`{value}` is no image of this import"))?
                 ),
-                // A player type (`pushDatablock(LMGArmor)`) as its archetype.
-                "archetype" => json!(
-                    code.archetypes
-                        .get(&value.trim().to_ascii_lowercase())
-                        .with_context(|| format!(
-                            "`{value}` is no player type of this import or one it depends on"
-                        ))?
-                ),
+                // A player type (`pushDatablock(LMGArmor)`) as its archetype;
+                // null when it is none of this import's, its dependencies'
+                // or another reference Add-On's, as `LMGArmor.getID()` then
+                // found nothing (a table leaves that row out).
+                "archetype" => code
+                    .archetypes
+                    .get(&value.trim().to_ascii_lowercase())
+                    .map_or(Value::Null, |id| json!(id)),
                 other => {
                     bail!(
                         "`{s}`: no filter `{other}` (neg, ticks, kick, sound, projectile, image or archetype)"
