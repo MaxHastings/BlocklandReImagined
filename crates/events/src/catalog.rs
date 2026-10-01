@@ -7,7 +7,7 @@ use std::{
     io::Read,
     path::Path,
 };
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Param {
     Int {
@@ -42,7 +42,7 @@ pub enum Param {
         items: Vec<(String, i64)>,
     },
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InputDef {
     pub id: String,
     pub class_name: String,
@@ -51,7 +51,7 @@ pub struct InputDef {
     pub source: String,
     pub source_line: u32,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct OutputDef {
     pub id: String,
     pub class_name: String,
@@ -65,11 +65,47 @@ pub struct OutputDef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub package: Option<String>,
 }
+/// A target an Add-On adds to the inputs (v20's `registerEventTarget`):
+/// Slayer's `Team(Client)` stands for the triggering client's team. Every
+/// input that has the slot `from` (`Self` for the source brick) lists it
+/// as `(name, class_name)`, and a row aimed at it runs the Add-On outputs
+/// of `class_name` on that slot's entity, whose rules find what the target
+/// stands for.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TargetDef {
+    pub id: String,
+    pub name: String,
+    pub class_name: String,
+    pub from: String,
+    pub package: String,
+    pub source: String,
+    pub source_line: u32,
+}
+/// What the running Add-Ons add to the event catalog: their inputs,
+/// targets and outputs. The host sends it to players so their wrench lists
+/// them too.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Extension {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inputs: Vec<InputDef>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub targets: Vec<TargetDef>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outputs: Vec<OutputDef>,
+}
+impl Extension {
+    pub fn is_empty(&self) -> bool {
+        self.inputs.is_empty() && self.targets.is_empty() && self.outputs.is_empty()
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Catalog {
     pub schema_version: u32,
     pub inputs: Vec<InputDef>,
     pub outputs: Vec<OutputDef>,
+    /// Targets Add-Ons add to the inputs (`with_targets`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub targets: Vec<TargetDef>,
     pub sources: Vec<serde_json::Value>,
     pub scope: serde_json::Value,
 }
@@ -105,6 +141,17 @@ impl Catalog {
             Sha256::digest(serde_json::to_vec(self).expect("validated catalog"))
         )
     }
+    /// This catalog with what Add-Ons add: their inputs, then their
+    /// targets (listed on every input so far, theirs included), then their
+    /// outputs.
+    pub fn extended(&self, extra: &Extension) -> Result<Self> {
+        self.with_inputs(&extra.inputs)
+            .context("The Add-Ons' wrench event inputs")?
+            .with_targets(&extra.targets)
+            .context("The Add-Ons' wrench event targets")?
+            .with_outputs(&extra.outputs)
+            .context("The Add-Ons' wrench event outputs")
+    }
     /// This catalog with inputs Add-Ons declare (`registerInputEvent`)
     /// added after its own. A name already taken, here or among `extra`,
     /// is refused, as is going over the catalog's limits.
@@ -126,14 +173,21 @@ impl Catalog {
     pub fn with_outputs(&self, extra: &[OutputDef]) -> Result<Self> {
         let mut out = self.clone();
         for output in extra {
-            let class = Class::parse(&output.class_name).context("Unknown event output class")?;
             ensure!(
                 output.package.is_some(),
                 "Event output `{}` names no package",
                 output.name
             );
             ensure!(
-                out.output(class, &output.name).is_none(),
+                Class::parse(&output.class_name).is_some() || out.target_class(&output.class_name),
+                "Unknown event output class `{}`",
+                output.class_name
+            );
+            ensure!(
+                !out.outputs.iter().any(|o| {
+                    same_class(&o.class_name, &output.class_name)
+                        && (o.name.eq_ignore_ascii_case(&output.name) || o.id == output.id)
+                }),
                 "Event output `{}` is already taken",
                 output.name
             );
@@ -141,6 +195,108 @@ impl Catalog {
         }
         out.validate()?;
         Ok(out)
+    }
+    /// This catalog with targets Add-Ons declare (`registerEventTarget`),
+    /// each listed on every input that has its `from` slot and no target
+    /// of that name yet, as v20 adds them to the inputs registered so far.
+    pub fn with_targets(&self, extra: &[TargetDef]) -> Result<Self> {
+        let mut out = self.clone();
+        for target in extra {
+            ensure!(
+                out.target(&target.name).is_none() && Slot::parse(&target.name).is_none(),
+                "Event target `{}` is already taken",
+                target.name
+            );
+            for input in &mut out.inputs {
+                let has_base = target.from.eq_ignore_ascii_case("Self")
+                    || input
+                        .targets
+                        .iter()
+                        .any(|(slot, _)| slot.eq_ignore_ascii_case(&target.from));
+                let taken = input
+                    .targets
+                    .iter()
+                    .any(|(name, _)| name.eq_ignore_ascii_case(&target.name));
+                if has_base && !taken {
+                    input
+                        .targets
+                        .push((target.name.clone(), target.class_name.clone()));
+                }
+            }
+            out.targets.push(target.clone());
+        }
+        out.validate()?;
+        Ok(out)
+    }
+    /// The Add-On target called `name`.
+    pub fn target(&self, name: &str) -> Option<&TargetDef> {
+        self.targets
+            .iter()
+            .find(|t| t.name.eq_ignore_ascii_case(name))
+    }
+    /// Whether an Add-On target stands for objects of `class_name`.
+    fn target_class(&self, class_name: &str) -> bool {
+        self.targets
+            .iter()
+            .any(|t| same_class(&t.class_name, class_name))
+    }
+    /// The class of the entity a row aimed at `target` from `input` acts
+    /// on, and its output called `output`. An Add-On target acts on its
+    /// base slot's entity with the Add-On's outputs of the target's class.
+    pub fn row_output(
+        &self,
+        input: &str,
+        target: &Target,
+        output: &str,
+    ) -> Result<(Class, &OutputDef)> {
+        let input = self.input(input).context("Unknown event input")?;
+        let slot_class = |slot: Slot| {
+            input
+                .targets
+                .iter()
+                .find(|(s, _)| Slot::parse(s) == Some(slot))
+                .and_then(|(_, class)| Class::parse(class))
+                .context("Target unavailable for event input")
+        };
+        match target {
+            Target::Named(_) => Ok((
+                Class::Brick,
+                self.output(Class::Brick, output)
+                    .context("Unknown event output/target class")?,
+            )),
+            Target::Slot(slot) => {
+                let class = slot_class(*slot)?;
+                Ok((
+                    class,
+                    self.output(class, output)
+                        .context("Unknown event output/target class")?,
+                ))
+            }
+            Target::Derived(name) => {
+                let (_, class_name) = input
+                    .targets
+                    .iter()
+                    .find(|(t, _)| t.eq_ignore_ascii_case(name))
+                    .context("Target unavailable for event input")?;
+                let def = self.target(name).context("Unknown event target")?;
+                let base = Slot::parse(&def.from).context("Unknown event target base")?;
+                let class = if base == Slot::SelfBrick {
+                    Class::Brick
+                } else {
+                    slot_class(base)?
+                };
+                let output = self
+                    .outputs
+                    .iter()
+                    .find(|o| {
+                        o.package.is_some()
+                            && same_class(&o.class_name, class_name)
+                            && (o.name.eq_ignore_ascii_case(output) || o.id == output)
+                    })
+                    .context("Unknown event output/target class")?;
+                Ok((class, output))
+            }
+        }
     }
     pub fn input(&self, name: &str) -> Option<&InputDef> {
         self.inputs
@@ -158,10 +314,37 @@ impl Catalog {
             self.schema_version == 1
                 && self.inputs.len() <= 64
                 && self.outputs.len() <= 128
+                && self.targets.len() <= 32
                 && self.sources.len() <= 128,
             "Unsupported event catalog"
         );
         let mut ids = BTreeSet::new();
+        let mut names = BTreeSet::new();
+        for t in &self.targets {
+            let from = Slot::parse(&t.from);
+            ensure!(
+                ids.insert(&t.id)
+                    && names.insert(t.name.to_ascii_lowercase())
+                    && !t.id.is_empty()
+                    && t.id.len() <= 256
+                    && !t.name.is_empty()
+                    && t.name.len() <= 64
+                    && !t.name.chars().any(|c| c.is_control() || c.is_whitespace())
+                    && Slot::parse(&t.name).is_none()
+                    && !t.class_name.is_empty()
+                    && t.class_name.len() <= 128
+                    && !t
+                        .class_name
+                        .chars()
+                        .any(|c| c.is_control() || c.is_whitespace())
+                    && Class::parse(&t.class_name).is_none()
+                    && from.is_some()
+                    && !t.package.is_empty()
+                    && t.package.len() <= 128,
+                "Invalid event target `{}`",
+                t.name
+            );
+        }
         for i in &self.inputs {
             ensure!(
                 ids.insert(&i.id)
@@ -171,12 +354,19 @@ impl Catalog {
                     && i.name.len() <= 128
                     && i.class_name == "fxDTSBrick"
                     && !i.targets.is_empty()
-                    && i.targets.len() <= 8,
+                    && i.targets.len() <= 12,
                 "Invalid event input"
             );
             for (t, c) in &i.targets {
+                let derived = self.target(t).is_some_and(|d| {
+                    same_class(&d.class_name, c)
+                        && (Slot::parse(&d.from) == Some(Slot::SelfBrick)
+                            || i.targets
+                                .iter()
+                                .any(|(s, _)| s.eq_ignore_ascii_case(&d.from)))
+                });
                 ensure!(
-                    Slot::parse(t).is_some() && Class::parse(c).is_some(),
+                    derived || (Slot::parse(t).is_some() && Class::parse(c).is_some()),
                     "Unknown event target"
                 );
             }
@@ -189,7 +379,8 @@ impl Catalog {
                     && !o.name.is_empty()
                     && o.name.len() <= 128
                     && o.params.len() <= 4
-                    && Class::parse(&o.class_name).is_some(),
+                    && (Class::parse(&o.class_name).is_some()
+                        || (o.package.is_some() && self.target_class(&o.class_name))),
                 "Invalid event output"
             );
             for p in &o.params {
@@ -236,7 +427,9 @@ impl Catalog {
                 );
             }
             let values: Vec<_> = o.params.iter().map(Param::default_value).collect();
-            compile(Class::parse(&o.class_name).unwrap(), o, &values)?;
+            if let Some(class) = Class::parse(&o.class_name) {
+                compile(class, o, &values)?;
+            }
         }
         Ok(())
     }
@@ -258,27 +451,13 @@ impl Catalog {
             row.delay_ms <= 300_000,
             "Native event delay exceeds 300000ms compatibility bound"
         );
-        let input = self.input(&row.input).context("Unknown event input")?;
-        let class = match &row.target {
-            Target::Named(name) => {
-                ensure!(
-                    !name.is_empty() && name.len() <= 128 && !name.contains(['\0', '\n', '\r']),
-                    "Invalid named brick target"
-                );
-                Class::Brick
-            }
-            Target::Slot(slot) => {
-                let (_, class) = input
-                    .targets
-                    .iter()
-                    .find(|(s, _)| Slot::parse(s) == Some(*slot))
-                    .context("Target unavailable for event input")?;
-                Class::parse(class).unwrap()
-            }
-        };
-        let output = self
-            .output(class, &row.output)
-            .context("Unknown event output/target class")?;
+        if let Target::Named(name) = &row.target {
+            ensure!(
+                !name.is_empty() && name.len() <= 128 && !name.contains(['\0', '\n', '\r']),
+                "Invalid named brick target"
+            );
+        }
+        let (class, output) = self.row_output(&row.input, &row.target, &row.output)?;
         ensure!(
             row.params.len() == output.params.len(),
             "Wrong event parameter count"
@@ -334,6 +513,10 @@ impl Param {
         ensure!(ok, "Invalid typed event parameter {v:?}");
         Ok(())
     }
+}
+/// Whether two Torque class names are the same class (case-insensitive).
+fn same_class(a: &str, b: &str) -> bool {
+    a.eq_ignore_ascii_case(b)
 }
 fn bad() -> anyhow::Error {
     anyhow::anyhow!("Event implementation parameter mismatch")

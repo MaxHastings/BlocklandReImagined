@@ -76,6 +76,9 @@ impl Slot {
 pub enum Target {
     Slot(Slot),
     Named(String),
+    /// A target an Add-On added to the input (`Catalog::targets`, v20's
+    /// `registerEventTarget`), by name: Slayer's `Team(Client)`.
+    Derived(String),
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Value {
@@ -327,6 +330,9 @@ pub struct Dispatch {
     pub input: String,
     pub row: u16,
     pub output: String,
+    /// The Add-On target the row aims at (`Target::Derived`), whose rules
+    /// find what it stands for from `target`, the entity it is based on.
+    pub derived: Option<String>,
     pub scheduled_us: u64,
     pub now_us: u64,
     pub intent: Intent,

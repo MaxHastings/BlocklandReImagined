@@ -174,11 +174,7 @@ impl Session {
             palette_len: self.simulation.state().palette.len(),
             datablocks,
         };
-        let merged = catalog
-            .with_inputs(&self.package_brick_inputs())
-            .context("The Add-Ons' wrench event inputs")?
-            .with_outputs(&self.package_brick_outputs())
-            .context("The Add-Ons' wrench event outputs")?;
+        let merged = catalog.extended(&self.package_brick_events())?;
         let world = EventWorld::new(merged, bindings.clone(), event_limits())?;
         self.events = Events {
             world: Some(world),

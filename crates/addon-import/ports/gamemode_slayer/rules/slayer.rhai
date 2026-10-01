@@ -99,9 +99,17 @@ fn members(g, team) {
     }
     out
 }
-// `Slayer_TeamSO::getScore`: its members' scores together.
+// `Slayer_TeamSO::getArtificialScore`: points the team scored itself
+// (`IncScore`), apart from its members'.
+fn team_points(game, team) {
+    let all = get("team_points");
+    let key = `${game}:${team}`;
+    if key in all { all[key] } else { 0 }
+}
+// `Slayer_TeamSO::getScore`: its own points and its members' scores
+// together.
 fn team_score(g, team) {
-    let score = 0;
+    let score = team_points(g.id, team);
     for m in members(g, team) {
         score += m.score;
     }
@@ -430,6 +438,15 @@ fn start_round(g) {
     r.extra = 0;
     r.custom = ();
     r.lives = setting(g.id, "lives");
+    // `Slayer_TeamSO::onMinigameReset`: teams' own points start again, as
+    // members' scores do.
+    let points = get("team_points");
+    for key in points.keys() {
+        if key.starts_with(`${g.id}:`) {
+            points.remove(key);
+        }
+    }
+    set("team_points", points);
     for p in players() {
         if p.minigame == g.id {
             set_player(p.id, "out", false);
@@ -1189,8 +1206,81 @@ fn on_brick_output(output, target, params, info) {
         "checkTeam" => return check_team(info.brick, params[0], params[1], params[2], info.client),
         "checkTeamCount" => return check_team_count(info.brick, params[0], params[1], params[2], params[3]),
         "StartFlyThrough" => fly_by_event(target, info.owner),
+        "BottomPrintAll" | "CenterPrintAll" | "ChatMsgAll" | "RespawnAll" | "IncScore" =>
+            team_event(output, target, params, info),
     }
     ()
+}
+// The teams a row aimed at `Team(Client)` or `Team(Brick)` stands for:
+// whoever set it off's team (`%client.slyrTeam`), or every team of the
+// colour holding the brick (`getTeamControlList`).
+fn event_teams(target, info) {
+    if info.target == "Team(Client)" {
+        let me = player(target);
+        if me == () || me.minigame == () || me.team == () {
+            return [];
+        }
+        let g = minigame(me.minigame);
+        let t = if g == () { () } else { team_by_id(g, me.team) };
+        return if t == () { [] } else { [#{ g: g, t: t }] };
+    }
+    let b = brick(target);
+    if b == () || b.game == () {
+        return [];
+    }
+    let g = minigame(b.game);
+    if g == () {
+        return [];
+    }
+    let color = control_of(b);
+    let out = [];
+    for t in g.teams {
+        if t.color == color {
+            out.push(#{ g: g, t: t });
+        }
+    }
+    out
+}
+// Slayer_TeamSO's outputs, for each team the row stands for, with `%1` in
+// a message as the name of whoever set it off.
+fn team_event(output, target, params, info) {
+    let text = if params.is_empty() || type_of(params[0]) != "string" { "" } else { params[0] };
+    if info.client != () {
+        let me = player(info.client);
+        if me != () {
+            text.replace("%1", me.name);
+        }
+    }
+    for one in event_teams(target, info) {
+        let g = one.g;
+        let t = one.t;
+        switch output {
+            "BottomPrintAll" => {
+                for m in members(g, t.id) { bottom_print(m.id, text, params[1], params[2]); }
+            }
+            "CenterPrintAll" => {
+                for m in members(g, t.id) { center_print(m.id, text, params[1]); }
+            }
+            "ChatMsgAll" => {
+                for m in members(g, t.id) { tell(m.id, text); }
+            }
+            "RespawnAll" => {
+                for m in members(g, t.id) { respawn(m.id); }
+            }
+            "IncScore" => add_team_points(g, t.id, params[0]),
+        }
+    }
+}
+// `Slayer_TeamSO::incScore`: the team's own points
+// (`setArtificialScore`), then whether they reach the points to win.
+fn add_team_points(g, team, n) {
+    let all = get("team_points");
+    let key = `${g.id}:${team}`;
+    all[key] = team_points(g.id, team) + n;
+    set("team_points", all);
+    if running(g.id) {
+        check_points(minigame(g.id));
+    }
 }
 // `minigameCanUse(client, brick)`: the brick is of the client's game.
 fn can_use(p, b) {

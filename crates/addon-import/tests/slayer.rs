@@ -1063,6 +1063,15 @@ fn event(input: &str, slot: &str, output: &str, params: Vec<EventValue>) -> Even
     }
 }
 
+/// A wrench row on `input` aiming at one of Slayer's own targets,
+/// `Team(Client)` or `Team(Brick)`.
+fn team_event(input: &str, target: &str, output: &str, params: Vec<EventValue>) -> EventRow {
+    EventRow {
+        target: EventTarget::Derived(target.into()),
+        ..event(input, "SelfBrick", output, params)
+    }
+}
+
 /// Wrench events on: the host's own catalog is empty here, so the
 /// Add-Ons' inputs and outputs are all there is.
 fn with_events(g: &mut Game) {
@@ -1182,5 +1191,84 @@ fn the_drop_flag_event_drops_the_flag_and_fires_its_input() {
     assert_eq!(g.carried(blue), None);
     assert!(g.heard("dropped the"));
     assert_eq!(stat(&g, blue, "kills"), 1);
+    g.quiet();
+}
+
+#[test]
+fn team_events_message_respawn_and_score_a_whole_team() {
+    let mut g = Game::new("team-events");
+    with_events(&mut g);
+    let (red, blue) = two_teams(&mut g);
+    let owner = g.s.minigame_views()[0].owner;
+    g.set(owner, &[(&key(SLAYER, "points"), Value::Int(10))]);
+    let text = |t: &str| EventValue::Text(t.into());
+    let catalog = g.s.event_catalog().unwrap();
+    let targets = &catalog.input("onTeamCheckTrue").unwrap().targets;
+    for name in ["Team(Client)", "Team(Brick)"] {
+        assert!(
+            targets.contains(&(name.into(), "Slayer_TeamSO".into())),
+            "{targets:?}"
+        );
+    }
+    assert!(
+        !catalog
+            .input("onCPReset")
+            .unwrap()
+            .targets
+            .iter()
+            .any(|(t, _)| t == "Team(Client)"),
+        "onCPReset has no client"
+    );
+
+    // `Team(Client)`: whoever set it off's team hears it, with `%1` as
+    // their name; `Team(Brick)`: the teams of the brick's colour.
+    let board = g.plant(owner, TEAM_SPAWN, 10.0, 0.0, RED);
+    let rows = vec![
+        team_event("onPoke", "Team(Client)", "ChatMsgAll", vec![text("%1 rallies the team")]),
+        team_event(
+            "onPoke",
+            "Team(Brick)",
+            "BottomPrintAll",
+            vec![text("Red holds the board"), EventValue::Int(3), EventValue::Bool(true)],
+        ),
+    ];
+    g.s.edit_brick(owner, board, Edit::Events(rows)).unwrap();
+    g.s.take_private_notices();
+    poke(&mut g, blue, board);
+    let notices = g.s.take_private_notices();
+    let blue_name = g.s.names()[&blue].clone();
+    let chat = format!("{blue_name} rallies the team");
+    let heard = |who: OwnerId, f: &dyn Fn(&Notice) -> bool| notices.iter().any(|(o, n)| *o == who && f(n));
+    let rallied = |n: &Notice| matches!(n, Notice::Chat(t) if *t == chat);
+    let board_print = |n: &Notice| {
+        matches!(n, Notice::Bottom { text, seconds, hide_bar }
+            if text == "Red holds the board" && *seconds == 3.0 && *hide_bar)
+    };
+    assert!(heard(blue, &rallied), "{notices:?}");
+    assert!(!heard(red, &rallied), "{notices:?}");
+    assert!(heard(red, &board_print), "{notices:?}");
+    assert!(!heard(blue, &board_print), "{notices:?}");
+
+    // `RespawnAll`: Blue's team comes back, wherever it was.
+    let blue_board = g.plant(owner, TEAM_SPAWN, 12.0, 4.0, BLUE);
+    let rows = vec![team_event("onPoke", "Team(Brick)", "RespawnAll", vec![])];
+    g.s.edit_brick(owner, blue_board, Edit::Events(rows)).unwrap();
+    g.cmd(blue, Command::Suicide).unwrap();
+    g.steps(2);
+    assert!(!g.s.vitals()[&blue].alive);
+    poke(&mut g, red, blue_board);
+    assert!(g.s.vitals()[&blue].alive, "respawned");
+
+    // `IncScore`: the team's own points count toward the points to win.
+    let rows = vec![team_event("onPoke", "Team(Client)", "IncScore", vec![EventValue::Int(4)])];
+    g.s.edit_brick(owner, board, Edit::Events(rows)).unwrap();
+    g.s.take_private_notices();
+    poke(&mut g, blue, board);
+    poke(&mut g, blue, board);
+    assert!(!g.round_over(), "8 points");
+    poke(&mut g, blue, board);
+    g.steps(2);
+    assert!(g.heard("Blue"), "Blue won");
+    assert!(g.round_over());
     g.quiet();
 }

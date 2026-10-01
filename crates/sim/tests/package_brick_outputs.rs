@@ -2,6 +2,9 @@
 //! `registerOutputEvent`): builders' rows run them through the rules'
 //! `on_brick_output`, which can answer with one of its own inputs to run
 //! next on the brick (Slayer's `checkTeam`), limited to a range of rows.
+//! Its own targets (`brick_targets`, v20's `registerEventTarget`, Slayer's
+//! `Team(Client)`) join the inputs with their base slot and run its outputs
+//! on the base entity.
 use bri_content::{
     brick::Brick as Mesh,
     collision::{CollisionBody, Part},
@@ -23,6 +26,12 @@ use std::{path::PathBuf, sync::Arc};
 const SCRIPT: &str = r#"
 fn cmd_ping(p, brick) { fire_brick_input(brick, "onPing", p); }
 fn on_brick_output(output, target, params, info) {
+    if output == "greet" {
+        let log = get("log");
+        log.push(`${output}:${target}:${params[0]}:${info.class}:${info.target}:${info.base}`);
+        set("log", log);
+        return;
+    }
     if output == "relay" {
         fire_brick_input(target, "onNo", info.client);
         return;
@@ -71,7 +80,13 @@ fn add_ons(name: &str, capabilities: serde_json::Value) -> (Root, Arc<Catalog>) 
             { "name": "tally", "class": "GameConnection",
               "params": [{ "type": "int", "min": 0, "max": 9, "default": 1 }] },
             { "name": "check", "class": "fxDTSBrick", "params": [{ "type": "bool" }] },
-            { "name": "relay", "class": "fxDTSBrick" }
+            { "name": "relay", "class": "fxDTSBrick" },
+            { "name": "greet", "class": "Probe_Pal",
+              "params": [{ "type": "int", "min": 0, "max": 9, "default": 1 }] }
+        ],
+        "brick_targets": [
+            { "name": "Pal(Client)", "class": "Probe_Pal", "from": "Client" },
+            { "name": "Pal(Brick)", "class": "Probe_Pal", "from": "Self" }
         ],
         "commands": [{ "name": "ping", "args": ["int"] }],
         "state": { "global": { "log": { "default": [], "visible": "everyone" } } }
@@ -196,7 +211,7 @@ fn an_add_ons_outputs_run_its_rules_and_chain_its_own_inputs() {
         .expect("listed");
     assert_eq!(check.package.as_deref(), Some("probe"));
     assert!(catalog.output(bri_events::Class::Client, "tally").is_some());
-    assert_eq!(s.package_brick_outputs().len(), 3, "sent to players");
+    assert_eq!(s.package_brick_outputs().len(), 4, "sent to players");
     let yes = catalog.input("onYes").unwrap();
     assert!(yes.targets.iter().any(|(slot, _)| slot == "OwnerClient"));
 
@@ -332,4 +347,85 @@ fn an_input_the_rules_fire_from_an_output_runs_after_the_phase() {
         s.package_diagnostics()
     );
     assert_eq!(s.simulation().state().bricks[&brick].color, 1, "onNo ran");
+}
+
+#[test]
+fn an_add_ons_targets_run_its_outputs_on_their_base() {
+    use bri_events::Slot;
+    let (_root, add_ons) = add_ons("targets", json!(["brick_events"]));
+    let mut s = session();
+    s.set_event_catalog(bri_events::testing::catalog(), Vec::new())
+        .unwrap();
+    s.install_packages(add_ons, None).unwrap();
+    let catalog = s.event_catalog().unwrap();
+    let targets = |input: &str| catalog.input(input).unwrap().targets.clone();
+    let pal = ("Pal(Client)".to_string(), "Probe_Pal".to_string());
+    assert!(targets("onActivate").contains(&pal), "a native input");
+    assert!(targets("onPing").contains(&pal), "an Add-On's input");
+    assert!(!targets("onRelay").contains(&pal), "onRelay has no client");
+    assert!(
+        targets("onRelay").contains(&("Pal(Brick)".into(), "Probe_Pal".into())),
+        "every input has the brick"
+    );
+    assert_eq!(s.package_brick_events().targets.len(), 2, "sent to players");
+
+    let builder = s
+        .join("Builder".into(), Vec3::new(5.0, 0.05, 0.0), false)
+        .unwrap();
+    let visitor = s
+        .join("Visitor".into(), Vec3::new(-5.0, 0.05, 0.0), false)
+        .unwrap();
+    steps(&mut s, &[builder, visitor], 10);
+    let Reply::Planted(brick) = s
+        .command(
+            builder,
+            1,
+            Command::Plant {
+                definition: "plate".into(),
+                position: [5.0, 0.3, -3.0],
+                quarter_turns: 0,
+                color: 0,
+            },
+        )
+        .unwrap()
+    else {
+        panic!("expected a plant")
+    };
+    let derived = |input: &str, target: &str, output: &str, n: i64| EventRow {
+        target: EventTarget::Derived(target.into()),
+        ..row(input, Slot::SelfBrick, output, vec![EventValue::Int(n)])
+    };
+    // Only the target's own class's outputs, and only where it is offered.
+    for refused in [
+        derived("onPing", "Pal(Client)", "tally", 1),
+        derived("onRelay", "Pal(Client)", "greet", 1),
+        derived("onPing", "Pal(Nobody)", "greet", 1),
+    ] {
+        assert!(
+            s.edit_brick(builder, brick, Edit::Events(vec![refused.clone()]))
+                .is_err(),
+            "{refused:?}"
+        );
+    }
+    let rows = vec![
+        derived("onPing", "Pal(Client)", "greet", 4),
+        derived("onPing", "Pal(Brick)", "greet", 5),
+    ];
+    s.edit_brick(builder, brick, Edit::Events(rows)).unwrap();
+    run(&mut s, visitor, 2, "ping", brick).unwrap();
+    steps(&mut s, &[builder, visitor], 2);
+    assert!(
+        s.package_diagnostics().is_empty(),
+        "{:?}",
+        s.package_diagnostics()
+    );
+    let log: Vec<String> =
+        serde_json::from_value(s.package_state().packages["probe"].global["log"].clone()).unwrap();
+    assert_eq!(
+        log,
+        [
+            format!("greet:{visitor}:4:Probe_Pal:Pal(Client):GameConnection"),
+            format!("greet:{brick}:5:Probe_Pal:Pal(Brick):fxDTSBrick"),
+        ]
+    );
 }

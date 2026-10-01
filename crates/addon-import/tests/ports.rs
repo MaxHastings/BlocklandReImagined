@@ -688,7 +688,23 @@ fn slayer_ports_apply_with_their_rules() {
             .unwrap_or_else(|| panic!("no {name} output"))
             .clone()
     };
-    assert_eq!(behaviour["brick_outputs"].as_array().unwrap().len(), 15);
+    assert_eq!(behaviour["brick_outputs"].as_array().unwrap().len(), 20);
+    assert_eq!(
+        output("BottomPrintAll")["params"],
+        serde_json::json!([
+            { "type": "string", "max_length": 150, "width": 120 },
+            { "type": "int", "min": 1, "max": 8, "default": 2 },
+            { "type": "bool" }
+        ])
+    );
+    assert_eq!(output("IncScore")["class"], "Slayer_TeamSO");
+    assert_eq!(
+        behaviour["brick_targets"],
+        serde_json::json!([
+            { "name": "Team(Client)", "class": "Slayer_TeamSO", "from": "Client" },
+            { "name": "Team(Brick)", "class": "Slayer_TeamSO", "from": "Self" }
+        ])
+    );
     assert_eq!(
         output("setTeamControlLocked")["params"],
         serde_json::json!([

@@ -106,5 +106,12 @@ package Slayer_FxDtsBrick
 		registerOutputEvent(Minigame, "Win", "list Me 0 MyTeam 1 Player 2 Team 3 Text 4 Nobody 5" TAB "string 60 90", 1);
 		registerOutputEvent("fxDTSBrick", "checkTeam", "list In 0 NotIn 1 Ally 2" TAB "string 40 70" TAB "string 6 20", 1);
 		registerOutputEvent("fxDTSBrick", "checkTeamCount", "string 40 70" TAB "list >= 0 <= 1 == 2 != 3" TAB "string 6 20" TAB "string 6 20", 1);
+		registerEventTarget("Team(Client) Slayer_TeamSO", "GameConnection", "%client.slyrTeam");
+		registerEventTarget("Team(Brick) Slayer_TeamSO", "FxDtsBrick", "%this.getTeamControlList()");
+		registerOutputEvent(Slayer_TeamSO, "BottomPrintAll", "string 150 120" TAB "int 1 8 2" TAB "bool 0", 1);
+		registerOutputEvent(Slayer_TeamSO, "CenterPrintAll", "string 150 120" TAB "int 1 8 2", 1);
+		registerOutputEvent(Slayer_TeamSO, "ChatMsgAll", "string 150 130", 1);
+		registerOutputEvent(Slayer_TeamSO, "RespawnAll", "", 1);
+		registerOutputEvent(Slayer_TeamSO, "IncScore", "int -9999 9999 2", 1);
 	}
 };

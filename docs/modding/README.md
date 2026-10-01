@@ -177,7 +177,7 @@ HUD panels can only show keys the viewer receives. `persist` (default
 | | | `cut_copy(p)`, `paint_copy(p, color)`, `paint_fill(p, brick, paint, options)`, `paint_vehicle(p, vehicle, paint, options)`: `world.edit` |
 | | | `push`, `tumble`, `hold`, `reach`, `hold_distance`, `let_go`, `spawn_vehicle`, `remove_vehicle`, `mount_object(mount, rider, node, can_dismount)`, `unmount_object(rider)`: `physics` |
 | | | `heal(p, amount)`, `fire(...)`: `damage` |
-| | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds)` (`()` for everyone), `tell_minigame(game, text[, except])`, `center_print_minigame(game, text, seconds)`, `bottom_print_minigame(game, text, seconds)` (a mini-game's members, counted once): `chat` |
+| | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds[, hide_bar])` (`()` for everyone), `tell_minigame(game, text[, except])`, `center_print_minigame(game, text, seconds)`, `bottom_print_minigame(game, text, seconds)` (a mini-game's members, counted once): `chat` |
 | | | `play_sound(p, sound)` at a player's ears, `sound_at(sound, x, y, z)`, `beam(from, to[, options])`, `play_thread(p, thread, sequence)`, `show_box(p, min, max, tool)`, `hide_box(p)`: `effects` |
 | | | `set_map_lights([x, y, z], radius, options)`: `lighting` |
 | `environment()` | | `set_environment(#{ ... })`, `reset_environment()`: `environment` |
@@ -390,11 +390,30 @@ from the original's own text with `{{name|event_params}}`, which reads a
 that runs one calls `on_brick_output(output, target, params, info)`:
 `target` is the brick's id, the player's or the mini-game's,
 `params` the row's values, and `info` is `#{ brick, owner, client, class,
-input, row }`, `client` being whoever set the row off, or `()`. Return
+target, base, input, row }`, `client` being whoever set the row off, or
+`()`, and `target` the row's own target (below), or `()`. Return
 `()`, or one of the package's own inputs to run next on the brick, as
 `"onTeamCheckTrue"` or `#{ input: "onTeamCheckTrue", rows: [1, 4] }` to
 run only rows 1 to 4 (Slayer's `checkTeam`). Its targets are filled from
 whoever set the row off.
+
+Rules may add targets as well (`registerEventTarget`; capability
+`brick_events`), up to 8, each standing for something only the rules
+know, found from one of an input's targets:
+
+```json
+"brick_targets": [ { "name": "Team(Client)", "class": "Slayer_TeamSO", "from": "Client" } ]
+```
+
+Every input with the `from` target (`Self`, the brick, or `Player`,
+`Client`, `MiniGame`, `OwnerPlayer`, `OwnerClient`) lists it, the engine's
+inputs and every Add-On's alike. Its `class` is the package's own, not one
+of the engine's, and the package's `brick_outputs` of that class are its
+outputs. A row aimed at it calls `on_brick_output` with `target` the
+`from` entity (the client, the brick), `info.target` the target's name,
+`info.class` its class and `info.base` the class of what `target` is; the
+rules find what it stands for (Slayer: the client's team, or every team
+of the brick's colour).
 
 **Zones** are spaces over bricks that notice players, as Torque's triggers:
 

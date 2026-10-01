@@ -1782,13 +1782,14 @@ impl Session {
                 text,
                 seconds,
                 bottom,
+                hide_bar,
             } => {
                 self.take_cue(package)?;
                 let notice = if bottom {
                     Notice::Bottom {
                         text,
                         seconds,
-                        hide_bar: false,
+                        hide_bar,
                     }
                 } else {
                     Notice::Center { text, seconds }

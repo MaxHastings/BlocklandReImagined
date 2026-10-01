@@ -4678,7 +4678,7 @@ impl App {
         if let Some(view) = &a.view
             && let Some(update) = self
                 .tool_ui
-                .offer_events(&view.brick_inputs, &view.brick_outputs)
+                .offer_events(&view.brick_events)
             && a.entered
         {
             self.ui.apply_session(a.id, update);

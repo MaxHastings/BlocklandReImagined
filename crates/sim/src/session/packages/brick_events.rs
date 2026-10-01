@@ -12,8 +12,17 @@ use bri_events as ev;
 use bri_package_runtime::content::BRICK_INPUT_TARGETS;
 
 impl Session {
-    /// The running Add-Ons' inputs, as the event catalog lists them. Sent
-    /// to players so their wrench offers them too.
+    /// What the running Add-Ons add to the event catalog. Sent to players
+    /// so their wrench offers it too.
+    pub fn package_brick_events(&self) -> ev::Extension {
+        ev::Extension {
+            inputs: self.package_brick_inputs(),
+            targets: self.package_brick_targets(),
+            outputs: self.package_brick_outputs(),
+        }
+    }
+
+    /// The running Add-Ons' inputs, as the event catalog lists them.
     pub fn package_brick_inputs(&self) -> Vec<ev::InputDef> {
         let Some(host) = self.packages.as_ref() else {
             return Vec::new();
@@ -74,8 +83,29 @@ impl Session {
         Ok(())
     }
 
-    /// The running Add-Ons' outputs, as the event catalog lists them. Sent
-    /// to players so their wrench offers them too.
+    /// The running Add-Ons' targets, as the event catalog lists them.
+    pub fn package_brick_targets(&self) -> Vec<ev::TargetDef> {
+        let Some(host) = self.packages.as_ref() else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for (package, behaviour) in host.catalog.behaviours() {
+            for target in &behaviour.brick_targets {
+                out.push(ev::TargetDef {
+                    id: format!("{package}:{}", target.name),
+                    name: target.name.clone(),
+                    class_name: target.class.clone(),
+                    from: target.from.clone(),
+                    package: package.clone(),
+                    source: package.clone(),
+                    source_line: 0,
+                });
+            }
+        }
+        out
+    }
+
+    /// The running Add-Ons' outputs, as the event catalog lists them.
     pub fn package_brick_outputs(&self) -> Vec<ev::OutputDef> {
         let Some(host) = self.packages.as_ref() else {
             return Vec::new();
@@ -110,7 +140,11 @@ impl Session {
     /// `on_brick_output(output, target, params, info)` carries it out.
     /// `target` is the brick, player or minigame the row aims at (players
     /// by their player number); `info` is `#{ brick, owner, client, class,
-    /// input, row }`, `client` being whoever set the row off, or `()`. The
+    /// target, base, input, row }`, `client` being whoever set the row off,
+    /// or `()`. A row aimed at one of the Add-On's `brick_targets` gets the
+    /// target's base entity, `info.target` its name, `info.class` its class
+    /// and `info.base` the base entity's class; otherwise `info.target` is
+    /// `()` and `info.class` and `info.base` are the target's class. The
     /// rules may answer with one of their own inputs, `"onTeamCheckTrue"`
     /// or `#{ input, rows: [first, last] }`, and the brick's rows that
     /// listen to it run next (only rows `first..=last` with `rows`).
@@ -134,6 +168,24 @@ impl Session {
             ev::Class::MiniGame => "MiniGame",
             _ => return ev::Apply::Rejected("not a target Add-On outputs act on".into()),
         };
+        // An Add-On target's rows act on its base entity; the rules find
+        // what the target stands for.
+        let derived = match &dispatch.derived {
+            Some(name) => match declared
+                .brick_targets
+                .iter()
+                .find(|t| t.name.eq_ignore_ascii_case(name))
+            {
+                Some(target) => Some(target),
+                None => {
+                    return ev::Apply::Rejected(format!(
+                        "`{name}` is not one of `{}`'s brick_targets",
+                        call.package
+                    ));
+                }
+            },
+            None => None,
+        };
         let source = dispatch.source.index;
         let owner = self
             .simulation
@@ -155,7 +207,18 @@ impl Session {
             "client".into(),
             client.map_or(Dynamic::UNIT, |c| Dynamic::from_int(c as i64)),
         );
-        info.insert("class".into(), class.into());
+        match derived {
+            Some(target) => {
+                info.insert("class".into(), target.class.clone().into());
+                info.insert("target".into(), target.name.clone().into());
+                info.insert("base".into(), class.into());
+            }
+            None => {
+                info.insert("class".into(), class.into());
+                info.insert("target".into(), Dynamic::UNIT);
+                info.insert("base".into(), class.into());
+            }
+        }
         info.insert("input".into(), dispatch.input.clone().into());
         info.insert("row".into(), Dynamic::from_int(i64::from(dispatch.row)));
         let params: bri_package_runtime::rhai::Array = call

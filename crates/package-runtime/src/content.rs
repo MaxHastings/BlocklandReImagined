@@ -279,6 +279,13 @@ pub struct Behaviour {
     /// `brick_events` capability.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub brick_outputs: Vec<BrickOutputDef>,
+    /// Wrench event targets these rules resolve (`registerEventTarget`;
+    /// Slayer's `Team(Client)`): every input with the target's `from` slot
+    /// offers it, and its rows run this behaviour's `brick_outputs` of the
+    /// target's class, `on_brick_output` getting the `from` entity and the
+    /// target's name in `info.target`. Needs the `brick_events` capability.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub brick_targets: Vec<BrickTargetDef>,
 }
 /// Most wrench event inputs one behaviour declares.
 pub const MAX_BRICK_INPUTS: usize = 16;
@@ -329,6 +336,70 @@ impl BrickInputDef {
         Ok(())
     }
 }
+/// Most wrench event targets one behaviour declares.
+pub const MAX_BRICK_TARGETS: usize = 8;
+/// Classes of the engine's own targets, which an Add-On target's class is
+/// not.
+const NATIVE_CLASSES: [&str; 6] = [
+    "fxDTSBrick",
+    "Player",
+    "GameConnection",
+    "MiniGame",
+    "Projectile",
+    "Vehicle",
+];
+/// A wrench event target an Add-On adds to the inputs: its name as
+/// builders pick it (`Team(Client)`), the class of thing it stands for
+/// (`Slayer_TeamSO`), which only this behaviour's outputs act on, and the
+/// slot it is found from: `Self`, the brick, or one of
+/// [`BRICK_INPUT_TARGETS`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrickTargetDef {
+    pub name: String,
+    pub class: String,
+    pub from: String,
+}
+impl BrickTargetDef {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            (1..=64).contains(&self.name.len())
+                && self
+                    .name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "_()".contains(c))
+                && self.name != "Self"
+                && !BRICK_INPUT_TARGETS
+                    .iter()
+                    .chain(&[("Projectile", ""), ("Bot", ""), ("Driver", ""), ("Ball", "")])
+                    .any(|(slot, _)| slot.eq_ignore_ascii_case(&self.name)),
+            "brick target `{}`: a name like Team(Client), 1 to 64 letters, digits, _ or (), \
+             not one of the engine's own",
+            self.name
+        );
+        ensure!(
+            (1..=64).contains(&self.class.len())
+                && self
+                    .class
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_')
+                && !NATIVE_CLASSES
+                    .iter()
+                    .any(|c| c.eq_ignore_ascii_case(&self.class)),
+            "brick target `{}`: class `{}` must be the Add-On's own, like Slayer_TeamSO",
+            self.name,
+            self.class
+        );
+        ensure!(
+            self.from == "Self" || BRICK_INPUT_TARGETS.iter().any(|(slot, _)| *slot == self.from),
+            "brick target `{}`: from `{}` is not Self or one of {}",
+            self.name,
+            self.from,
+            BRICK_INPUT_TARGETS.map(|(s, _)| s).join(", ")
+        );
+        Ok(())
+    }
+}
 /// Most wrench event outputs one behaviour declares, and parameters one
 /// output takes (the wrench's four).
 pub const MAX_BRICK_OUTPUTS: usize = 32;
@@ -341,7 +412,8 @@ pub const BRICK_OUTPUT_CLASSES: [&str; 4] = ["fxDTSBrick", "Player", "GameConnec
 #[serde(deny_unknown_fields)]
 pub struct BrickOutputDef {
     pub name: String,
-    /// One of [`BRICK_OUTPUT_CLASSES`].
+    /// One of [`BRICK_OUTPUT_CLASSES`], or the class of one of the
+    /// behaviour's `brick_targets`.
     pub class: String,
     #[serde(default)]
     pub params: Vec<OutputParam>,
@@ -401,7 +473,9 @@ impl OutputParam {
     }
 }
 impl BrickOutputDef {
-    pub fn validate(&self) -> Result<()> {
+    /// Checks the output; `classes` are the behaviour's own target classes
+    /// it may act on besides [`BRICK_OUTPUT_CLASSES`].
+    pub fn validate(&self, classes: &[&str]) -> Result<()> {
         ensure!(
             (1..=64).contains(&self.name.len())
                 && self.name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
@@ -409,8 +483,9 @@ impl BrickOutputDef {
             self.name
         );
         ensure!(
-            BRICK_OUTPUT_CLASSES.contains(&self.class.as_str()),
-            "brick output `{}`: class `{}` is not one of {}",
+            BRICK_OUTPUT_CLASSES.contains(&self.class.as_str())
+                || classes.contains(&self.class.as_str()),
+            "brick output `{}`: class `{}` is not one of {} or a brick_targets class",
             self.name,
             self.class,
             BRICK_OUTPUT_CLASSES.join(", ")
@@ -662,8 +737,23 @@ impl Behaviour {
             self.brick_outputs.len() <= MAX_BRICK_OUTPUTS,
             "at most {MAX_BRICK_OUTPUTS} brick_outputs"
         );
+        ensure!(
+            self.brick_targets.len() <= MAX_BRICK_TARGETS,
+            "at most {MAX_BRICK_TARGETS} brick_targets"
+        );
+        for (i, target) in self.brick_targets.iter().enumerate() {
+            target.validate()?;
+            ensure!(
+                !self.brick_targets[..i]
+                    .iter()
+                    .any(|o| o.name.eq_ignore_ascii_case(&target.name)),
+                "brick target `{}` declared twice",
+                target.name
+            );
+        }
+        let classes: Vec<&str> = self.brick_targets.iter().map(|t| t.class.as_str()).collect();
         for (i, output) in self.brick_outputs.iter().enumerate() {
-            output.validate()?;
+            output.validate(&classes)?;
             ensure!(
                 !self.brick_outputs[..i].iter().any(|o| o.class == output.class
                     && o.name.eq_ignore_ascii_case(&output.name)),
@@ -1519,5 +1609,29 @@ mod tests {
         assert!(
             block(serde_json::json!({ "all": { "frames": ["a:texture/x"], "fps": 900 } })).is_err()
         );
+    }
+    #[test]
+    fn a_brick_target_is_the_add_ons_own_and_found_from_a_slot() {
+        let target = |name: &str, class: &str, from: &str| {
+            BrickTargetDef {
+                name: name.into(),
+                class: class.into(),
+                from: from.into(),
+            }
+            .validate()
+        };
+        assert!(target("Team(Client)", "Slayer_TeamSO", "Client").is_ok());
+        assert!(target("Team(Brick)", "Slayer_TeamSO", "Self").is_ok());
+        assert!(target("Client", "Slayer_TeamSO", "Self").is_err(), "a slot's name");
+        assert!(target("Team(Client)", "GameConnection", "Client").is_err(), "a native class");
+        assert!(target("Team(Client)", "Slayer_TeamSO", "Driver").is_err(), "not a base");
+        assert!(target("Team Client", "Slayer_TeamSO", "Client").is_err());
+        let output = BrickOutputDef {
+            name: "IncScore".into(),
+            class: "Slayer_TeamSO".into(),
+            params: vec![],
+        };
+        assert!(output.validate(&["Slayer_TeamSO"]).is_ok());
+        assert!(output.validate(&[]).is_err(), "only a class of its own targets");
     }
 }

@@ -376,7 +376,9 @@ impl EventWorld {
                 if row.preserved.is_some() {
                     return Ok(None);
                 }
-                let output = self.catalog.output(class, &row.output).unwrap();
+                let (_, output) = self
+                    .catalog
+                    .row_output(&row.input, &row.target, &row.output)?;
                 let action = compile(class, output, &row.params)?;
                 let cost = serde_json::to_vec(row)?.len()
                     + serde_json::to_vec(&action)?.len()
@@ -539,6 +541,15 @@ impl EventWorld {
             }
             Target::Slot(Slot::SelfBrick) => Ok(vec![Entity::brick(source.id)]),
             Target::Slot(slot) => Ok(t.targets.get(slot).copied().into_iter().collect()),
+            // An Add-On target acts on its base slot's entity.
+            Target::Derived(name) => {
+                let from = self
+                    .catalog
+                    .target(name)
+                    .and_then(|d| Slot::parse(&d.from))
+                    .context("Unknown event target")?;
+                self.targets(source, t, &Target::Slot(from))
+            }
         }
     }
     fn validate_context(&self, t: &Trigger) -> Result<()> {
@@ -790,8 +801,7 @@ impl EventWorld {
                             ensure!(n <= self.limits.named_targets, "Named fanout exceeds bound");
                             n
                         }
-                        Target::Slot(Slot::SelfBrick) => 1,
-                        Target::Slot(_) => 1,
+                        Target::Slot(_) | Target::Derived(_) => 1,
                     };
                     ensure!(
                         count <= self.limits.pending,
@@ -1188,6 +1198,10 @@ impl EventWorld {
             input: self.catalog.input(&j.context.input).unwrap().name.clone(),
             row: j.row,
             output: j.output.to_string(),
+            derived: match &j.row_snapshot.target {
+                Target::Derived(name) => Some(name.clone()),
+                _ => None,
+            },
             scheduled_us: j.due,
             now_us: self.now,
             intent,
@@ -1339,11 +1353,12 @@ impl EventWorld {
                 class == j.target.class && j.row < 4096,
                 "Checkpoint row/target mismatch"
             );
-            let expected = compile(
-                class,
-                w.catalog.output(class, &j.row_snapshot.output).unwrap(),
-                &j.row_snapshot.params,
+            let (_, output) = w.catalog.row_output(
+                &j.row_snapshot.input,
+                &j.row_snapshot.target,
+                &j.row_snapshot.output,
             )?;
+            let expected = compile(class, output, &j.row_snapshot.params)?;
             let expected_cancel = j.row_snapshot.delay_ms > 0
                 && (!w
                     .catalog
@@ -1375,11 +1390,7 @@ impl EventWorld {
                     "Invalid reappear schedule"
                 ),
                 _ => ensure!(
-                    expected == *j.action
-                        && w.catalog
-                            .output(class, &j.output)
-                            .is_some_and(|o| o.name.eq_ignore_ascii_case(&j.row_snapshot.output)
-                                || o.id == j.row_snapshot.output),
+                    expected == *j.action && output.name.eq_ignore_ascii_case(&j.output),
                     "Checkpoint action differs from typed row"
                 ),
             }

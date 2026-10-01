@@ -548,13 +548,10 @@ pub struct Checkpoint {
     /// Settings; mini-games carry their values.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub addon_settings: Vec<bri_sim::session::AddOnSetting>,
-    /// The running Add-Ons' wrench event inputs, which players' wrench
-    /// adds to their own catalog.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub brick_inputs: Vec<bri_events::InputDef>,
-    /// The running Add-Ons' wrench event outputs, likewise.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub brick_outputs: Vec<bri_events::OutputDef>,
+    /// The running Add-Ons' wrench event inputs, targets and outputs,
+    /// which players' wrench adds to their own catalog.
+    #[serde(default, skip_serializing_if = "bri_events::Extension::is_empty")]
+    pub brick_events: bri_events::Extension,
     /// Entities of enabled packages.
     pub entities: Vec<bri_sim::session::EntityInfo>,
     /// Enabled packages' state as this client sees it: keys visible to
@@ -599,8 +596,7 @@ impl Checkpoint {
             environment: session.environment(),
             archetypes: session.archetypes().clone(),
             addon_settings: session.addon_settings(),
-            brick_inputs: session.package_brick_inputs(),
-            brick_outputs: session.package_brick_outputs(),
+            brick_events: session.package_brick_events(),
             world_bricks: world.bricks.len() as u64,
             world_chunks: 0,
             world_near_chunks: 0,

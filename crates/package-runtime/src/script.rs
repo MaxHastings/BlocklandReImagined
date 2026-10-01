@@ -1567,10 +1567,27 @@ fn register_api(engine: &mut Engine) {
                     text: text.into(),
                     seconds: float(&seconds)?,
                     bottom,
+                    hide_bar: false,
                 })
             },
         );
     }
+    engine.register_fn(
+        "bottom_print",
+        |player: Dynamic, text: &str, seconds: Dynamic, hide_bar: bool| {
+            push(Op::Print {
+                player: if player.is_unit() {
+                    None
+                } else {
+                    Some(id(&player)?)
+                },
+                text: text.into(),
+                seconds: float(&seconds)?,
+                bottom: true,
+                hide_bar,
+            })
+        },
+    );
     // Every member of a mini-game, counted once.
     engine.register_fn("tell_minigame", |game: Dynamic, text: &str| {
         push(Op::TellMinigame {
@@ -2518,13 +2535,14 @@ impl Runtime {
             for e in package.entities.values() {
                 need(e.think.clone(), 1, &format!("entity `{}`", e.name));
             }
-            if !behaviour.brick_outputs.is_empty()
-                && !package.manifest.capabilities.iter().any(|c| c == "brick_events")
+            let adds_events =
+                !behaviour.brick_outputs.is_empty() || !behaviour.brick_targets.is_empty();
+            if adds_events && !package.manifest.capabilities.iter().any(|c| c == "brick_events")
             {
                 problems.push(
                     Diagnostic::error(
                         "behaviour.brick_outputs",
-                        "brick_outputs need the `brick_events` capability",
+                        "brick_outputs and brick_targets need the `brick_events` capability",
                     )
                     .at(location(id, &behaviour.script))
                     .hint("add \"brick_events\" to the manifest's capabilities"),

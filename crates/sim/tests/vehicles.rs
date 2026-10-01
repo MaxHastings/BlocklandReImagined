@@ -1188,6 +1188,7 @@ fn recover_vehicle_leaves_a_ridden_vehicle_alone(f: &Fixture) -> anyhow::Result<
                 source_line: 17122,
             }],
             outputs: vec![output],
+            targets: vec![],
             sources: vec![],
             scope: serde_json::Value::Null,
         },

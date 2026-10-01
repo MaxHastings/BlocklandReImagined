@@ -120,6 +120,7 @@ pub fn catalog() -> Catalog {
                 ],
             ),
         ],
+        targets: vec![],
         sources: vec![],
         scope: serde_json::Value::Null,
     }

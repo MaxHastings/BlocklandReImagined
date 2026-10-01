@@ -114,6 +114,7 @@ fn catalog() -> Catalog {
             output("Player", "Kill", vec![]),
             output("MiniGame", "Reset", vec![]),
         ],
+        targets: vec![],
         sources: vec![],
         scope: serde_json::Value::Null,
     }

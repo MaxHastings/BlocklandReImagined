@@ -471,11 +471,15 @@ pub enum Op {
     /// Text in the middle of the screen (`centerPrint`), or above the
     /// bottom edge (`bottomPrint`), for `seconds`: one player's, or
     /// everyone's when `player` is `None`. Empty text clears it.
+    /// `hide_bar` hides the bottom print's bar (`bottomPrint`'s third
+    /// argument).
     Print {
         player: Option<u64>,
         text: String,
         seconds: f32,
         bottom: bool,
+        #[serde(default)]
+        hide_bar: bool,
     },
     /// Play a sound profile (an Add-On weapons pack's `sounds`, or v20's):
     /// at `position` for everyone near, or at one player's ears.

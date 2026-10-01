@@ -262,7 +262,14 @@
           "out_win": "registerOutputEvent\\(\\s*\"?(?i:Minigame)\"?\\s*,\\s*\"Win\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
           "out_check_team": "registerOutputEvent\\(\\s*\"?(?i:FxDtsBrick)\"?\\s*,\\s*\"checkTeam\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
           "out_check_team_count": "registerOutputEvent\\(\\s*\"?(?i:FxDtsBrick)\"?\\s*,\\s*\"checkTeamCount\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
-          "check_team_outcomes": "registerInputEvent\\(\\s*\"?(?i:fxDTSBrick)\"?\\s*,\\s*\"onTeamCheckTrue\"\\s*,\\s*\"Self fxDTSBrick\"\\s*TAB\\s*\"Player Player\"\\s*TAB\\s*\"Client GameConnection\"\\s*TAB\\s*\"MiniGame MiniGame\"\\s*TAB\\s*\"OwnerPlayer Player\"\\s*TAB\\s*\"OwnerClient GameConnection\""
+          "check_team_outcomes": "registerInputEvent\\(\\s*\"?(?i:fxDTSBrick)\"?\\s*,\\s*\"onTeamCheckTrue\"\\s*,\\s*\"Self fxDTSBrick\"\\s*TAB\\s*\"Player Player\"\\s*TAB\\s*\"Client GameConnection\"\\s*TAB\\s*\"MiniGame MiniGame\"\\s*TAB\\s*\"OwnerPlayer Player\"\\s*TAB\\s*\"OwnerClient GameConnection\"",
+          "team_client_target": "registerEventTarget\\(\\s*\"Team\\(Client\\) Slayer_TeamSO\"\\s*,\\s*\"GameConnection\"\\s*,\\s*\"%client\\.slyrTeam\"\\s*\\)",
+          "team_brick_target": "registerEventTarget\\(\\s*\"Team\\(Brick\\) Slayer_TeamSO\"\\s*,\\s*\"FxDtsBrick\"\\s*,\\s*\"%this\\.getTeamControlList\\(\\)\"\\s*\\)",
+          "out_team_bottom_print": "registerOutputEvent\\(\\s*\"?(?i:Slayer_TeamSO)\"?\\s*,\\s*\"BottomPrintAll\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
+          "out_team_center_print": "registerOutputEvent\\(\\s*\"?(?i:Slayer_TeamSO)\"?\\s*,\\s*\"CenterPrintAll\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
+          "out_team_chat": "registerOutputEvent\\(\\s*\"?(?i:Slayer_TeamSO)\"?\\s*,\\s*\"ChatMsgAll\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
+          "out_team_respawn": "registerOutputEvent\\(\\s*\"?(?i:Slayer_TeamSO)\"?\\s*,\\s*\"RespawnAll\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
+          "out_team_inc_score": "registerOutputEvent\\(\\s*\"?(?i:Slayer_TeamSO)\"?\\s*,\\s*\"IncScore\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)"
         },
         "FxDtsBrick::setTeamControl": {
           "spawn_control": "case\\s+\"TeamSpawn\"\\s+or\\s+\"TeamVehicle\"\\s*:\\s*%this\\.controlColor\\s*=\\s*%color\\s*;",
@@ -290,6 +297,21 @@
         },
         "GameConnection::joinTeam": {
           "join_named": "%team\\.addMember\\(\\s*%this\\s*,\\s*%reason\\s*,\\s*%noRespawn\\s*,\\s*%noRespawn\\s*\\)"
+        },
+        "Slayer_TeamSO::chatMsgAll": {
+          "team_name_sub": "strReplace\\(\\s*%msg\\s*,\\s*\"%1\"\\s*,\\s*%client\\.getPlayerName\\(\\)\\s*\\)"
+        },
+        "Slayer_TeamSO::respawnAll": {
+          "team_respawn_all": "\\.member\\[%i\\]\\.spawnPlayer\\(\\)"
+        },
+        "Slayer_TeamSO::setArtificialScore": {
+          "team_points_win": "%winner\\s*=\\s*%mini\\.victoryCheck_Points\\(\\)"
+        },
+        "Slayer_TeamSO::onMinigameReset": {
+          "team_points_reset": "points\\s*>\\s*0\\s*\\)\\s*%this\\.setArtificialScore\\(\\s*0\\s*\\)"
+        },
+        "Slayer_TeamSO::getScore": {
+          "team_score_own": "%score\\s*=\\s*%this\\.getArtificialScore\\(\\)"
         }
       },
       "tests": [

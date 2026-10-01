@@ -448,6 +448,7 @@ mod tests {
                     package: None,
                 },
             ],
+            targets: vec![],
             sources: vec![],
             scope: serde_json::Value::Null,
         }

@@ -28,7 +28,16 @@
     { "name": "Win", "class": "MiniGame", "params": {{out_win|event_params}} },
     { "name": "checkTeam", "class": "fxDTSBrick", "params": {{out_check_team|event_params}} },
     { "name": "checkTeamCount", "class": "fxDTSBrick", "params": {{out_check_team_count|event_params}} },
-    { "name": "StartFlyThrough", "class": "MiniGame", "params": {{out_fly_through|event_params}} }
+    { "name": "StartFlyThrough", "class": "MiniGame", "params": {{out_fly_through|event_params}} },
+    { "name": "BottomPrintAll", "class": "Slayer_TeamSO", "params": {{out_team_bottom_print|event_params}} },
+    { "name": "CenterPrintAll", "class": "Slayer_TeamSO", "params": {{out_team_center_print|event_params}} },
+    { "name": "ChatMsgAll", "class": "Slayer_TeamSO", "params": {{out_team_chat|event_params}} },
+    { "name": "RespawnAll", "class": "Slayer_TeamSO", "params": {{out_team_respawn|event_params}} },
+    { "name": "IncScore", "class": "Slayer_TeamSO", "params": {{out_team_inc_score|event_params}} }
+  ],
+  "brick_targets": [
+    { "name": "Team(Client)", "class": "Slayer_TeamSO", "from": "Client" },
+    { "name": "Team(Brick)", "class": "Slayer_TeamSO", "from": "Self" }
   ],
   "commands": [
     {
@@ -381,6 +390,10 @@
         "persist": false
       },
       "controls": {
+        "default": {},
+        "persist": false
+      },
+      "team_points": {
         "default": {},
         "persist": false
       }
