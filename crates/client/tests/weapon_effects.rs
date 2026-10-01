@@ -622,3 +622,57 @@ fn an_add_on_particle_draws_its_own_texture() -> Result<()> {
     assert_eq!(texture.rgba.len(), (side * 150 * 4) as usize);
     Ok(())
 }
+
+/// A held image's rope (`Image::rope`) is drawn by its projectile's trail
+/// swept along the whole rope each frame, as densely as that projectile
+/// flying it would lay it, and stops when the rope goes.
+#[test]
+fn held_ropes_lay_their_trail_along_the_rope() -> Result<()> {
+    use bri_client::weapon_effects::HeldRope;
+    let mut pack = (*weapons()).clone();
+    pack.images.insert(
+        "rope-image".into(),
+        bri_weapons::Image {
+            id: "rope-image".into(),
+            rope: Some(bri_weapons::Rope {
+                projectile: "projectile".into(),
+                speed: 10.,
+            }),
+            ..Default::default()
+        },
+    );
+    let mut fx = WeaponEffects::new(fixture(false), Arc::new(pack), EffectsLimits::default())?;
+    let rope = HeldRope {
+        owner: 1,
+        image: "rope-image".into(),
+        from: Vec3::ZERO,
+        to: Vec3::X * 10.,
+    };
+    // A frame of 0.1 s: the projectile at 10 a second would cross the
+    // 10-long rope in 1 s, emitting every 0.01 s: 100 particles along it.
+    fx.sync_ropes(std::slice::from_ref(&rope), 0.1)?;
+    fx.advance(0.1, Vec3::ZERO, |_| None)?;
+    let particles = fx.world().snapshot(&camera()).particles;
+    assert!((90..=110).contains(&particles.len()), "{}", particles.len());
+    let xs: Vec<f32> = particles.iter().map(|p| p.position.x).collect();
+    assert!(xs.iter().any(|x| *x < 1.) && xs.iter().any(|x| *x > 9.));
+    assert!(
+        particles.iter().all(|p| p.position.y.abs() < 0.01
+            && p.position.z.abs() < 0.01
+            && p.position.x > -0.01
+            && p.position.x < 10.01),
+        "on the rope"
+    );
+    // The next frame sweeps back along it.
+    fx.sync_ropes(std::slice::from_ref(&rope), 0.1)?;
+    fx.advance(0.1, Vec3::ZERO, |_| None)?;
+    assert!(fx.world().snapshot(&camera()).particles.len() > 150);
+    // An image without a rope, or no rope: nothing more is laid.
+    let plain = HeldRope {
+        image: "other".into(),
+        ..rope
+    };
+    fx.sync_ropes(&[plain], 0.1)?;
+    assert_eq!(fx.world().source_count(), 0);
+    Ok(())
+}

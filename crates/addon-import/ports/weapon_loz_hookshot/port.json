@@ -1,0 +1,5 @@
+{
+  "schema_version": 1,
+  "notes": "Hookshot: the spearhead pulls its shooter to where it strikes, following a player or vehicle it strikes, with the copy's own distances, speeds and schedule; /degrapple stops it.",
+  "rules": { "capabilities": ["physics", "player"] }
+}

@@ -625,6 +625,7 @@ mod tests {
                     crosshair: true,
                     follow_arm: false,
                     paint_tint: false,
+                    rope: None,
                 },
             );
             items.insert(

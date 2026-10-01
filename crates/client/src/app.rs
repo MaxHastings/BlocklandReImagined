@@ -7058,6 +7058,24 @@ impl PlatformApp for App {
                 },
             );
             self.cosmetic_faults.absorb("held and dropped items", items);
+            // Ropes the held image draws (`Image::rope`), from its muzzle
+            // to where the rope is tied.
+            let ropes: Vec<_> = presented
+                .iter()
+                .filter_map(|(owner, player)| {
+                    let tether = player.tether.as_ref()?;
+                    Some(crate::weapon_effects::HeldRope {
+                        owner: *owner,
+                        image: self.world_items.held_image(*owner, 0)?.to_owned(),
+                        from: self.world_items.held_muzzle(*owner, 0)?,
+                        to: Vec3::from(tether.anchor),
+                    })
+                })
+                .collect();
+            let ropes = self
+                .weapon_effects
+                .sync_ropes(&ropes, game_elapsed.as_secs_f32());
+            self.cosmetic_faults.absorb("held ropes", ropes);
             let parts = Self::update_weapon_effect_parts(
                 &mut self.weapon_effects,
                 &mut self.weapon_cues,

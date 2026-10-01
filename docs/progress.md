@@ -8680,3 +8680,57 @@ are still tested through a small fill tool of the test's own in
 `crates/sim/tests/fixtures/fill-can`. Loading the player's own original
 Fill Can from their Blockland Add-Ons folder follows on the shared classic
 Add-On loader.
+
+## 2026-10-01 Grapple Rope and Hookshot: ports of the originals
+
+Max's final pick: the Grapple Rope (Uristqwerty, SolarFlare and Demian;
+code by Qwertyuiopas) and Loz's Hookshot, each exactly as the original
+works; no Grappling Hook. The game imports the player's own copies, so
+both are now ports (`crates/addon-import/ports/tool_grapplerope`,
+`weapon_loz_hookshot`) on the Fill Can lane's host-rules companion. Our
+stand-in rule packages, and their tests in `crates/sim/tests`, are gone.
+The engine rope seams stay (`tether`, winch, moving anchors,
+`untether(p, #{keep})`, prediction), tested in `crates/sim/tests/tether.rs`.
+
+Evidence: the Gate imported both originals on Maxwell's PC (with `--core`)
+and handed over their import reports and scripts, read here only and not
+committed. Every `covers` pattern was checked against the real scripts:
+Grapple Rope lift 1 and chain speed 160; Hookshot stop 5, near 15, slow 30,
+far 16, fast 50, every 100 ms. Both copies' hashes are listed.
+
+- Grapple Rope: the launcher fires its own hook projectile. Where it
+  strikes (anything, as `$Pref::Server::GrappleRopeAnywhere` is on), if no
+  brick or map stands between it and a point `lift` above the feet, the
+  holder hangs from that spot on a rope as long as the distance then, for
+  as long as they hold the click (`Fire`/`Hold`), and flies off with all
+  their speed on letting go (`onRelease`). The rope stays on the spot even
+  if what it struck goes, as in the original. Pivots, said plainly: the
+  engine's rope replaces `GrappleRope`'s 10 ms velocity correction (it
+  looked one second ahead, so the original pulled a little early), the
+  rope is at most 200 long (the engine's limit; the hook can fly 800), and
+  the movement keys do not pump it (`swing: 0`). A hook that lands after
+  the click is let go holds nothing (the original kept it for the next
+  click, a bug).
+- New image field `rope` (engine seam): while the holder is roped, every
+  player's game draws the rope with a projectile's trail swept from the
+  muzzle to the rope's end each frame, as densely as that projectile
+  flying it would lay it. The original fired a chain projectile every
+  10 ms to draw it; this costs nothing on the wire. The port points it at
+  the copy's own `ChainProjectile` and speed.
+- Hookshot: where the spearhead strikes, every `every` ms the shooter's
+  speed is set straight at the spot, `fast` beyond `far`, `slow` within
+  `near` (1 in between, as the original's arithmetic gives), until within
+  `stop`, where it ends with the last speed kept. A struck player or
+  vehicle is followed (a vehicle's middle stands in for its origin plus the
+  original's 1 or 2 up). Seated, a hit on a player or vehicle pulls the
+  vehicle (this reads `riding`, the Throwmod lane's field, so it works once
+  that lands); a hit on anything else pulls nothing (the original's typo).
+  `/degrapple` stops the shooter's own pull. The spearhead's 100 direct
+  damage comes from the imported projectile.
+
+Tests: `crates/addon-import/tests/grapples.rs` (3, hosted with the
+companion rules), `crates/client/tests/weapon_effects.rs
+held_ropes_lay_their_trail_along_the_rope`, and the ports list test. The
+importer report for the Hookshot still shows its gun as a placeholder cube
+(materials `blank` and `black50` have no texture): an importer issue, not
+the port's.
