@@ -587,6 +587,301 @@ fn port_and_check_port_run_from_the_executable() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// Slayer and its Capture the Flag mode: both ports apply to stand-ins with
+/// the originals' folder names and function shapes (`tests/fixtures/ports`,
+/// CC0), CTF's run-time flag datablocks import from the port's
+/// `datablocks.cs` with this copy's numbers, and both host-rules companions
+/// load as the game loads them.
+/// A copy of `from` with every text file's lines ended `\r\n`, as a
+/// Windows checkout with `core.autocrlf` (or a copy saved on Windows) has.
+fn crlf_copy(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for e in std::fs::read_dir(from).unwrap().flatten() {
+        let path = e.path();
+        let dest = to.join(e.file_name());
+        if path.is_dir() {
+            crlf_copy(&path, &dest);
+            continue;
+        }
+        let bytes = std::fs::read(&path).unwrap();
+        let text = ["cs", "rhai", "json"]
+            .iter()
+            .any(|x| path.extension().is_some_and(|e| e == *x));
+        let bytes = match String::from_utf8(bytes) {
+            Ok(t) if text => t.replace("\r\n", "\n").replace('\n', "\r\n").into_bytes(),
+            Ok(t) => t.into_bytes(),
+            Err(e) => e.into_bytes(),
+        };
+        std::fs::write(dest, bytes).unwrap();
+    }
+}
+
+#[test]
+fn a_copy_and_ports_with_windows_line_endings_import_as_with_unix_ones() {
+    let dir = fresh("crlf");
+    let ports_dir = dir.join("ports");
+    crlf_copy(&Path::new(env!("CARGO_MANIFEST_DIR")).join("ports"), &ports_dir);
+    let crlf_ports = Ports::from_dir(&ports_dir).unwrap();
+    let copy = dir.join("Gamemode_Slayer");
+    crlf_copy(&fixture("ports/Gamemode_Slayer"), &copy);
+    let lf = dir.join("lf/gamemode_slayer");
+    let crlf = dir.join("crlf/gamemode_slayer");
+    let report = import_with(&options(fixture("ports/Gamemode_Slayer"), lf.clone()), &Ports::builtin()).unwrap();
+    assert!(report.ports[0].applied, "{:?}", report.ports[0].reason);
+    let report = import_with(&options(copy, crlf.clone()), &crlf_ports).unwrap();
+    assert!(report.ports[0].applied, "{:?}", report.ports[0].reason);
+    for file in ["slayer.rhai", "behaviour.json"] {
+        let read = |out: &Path| std::fs::read_to_string(out.with_file_name("gamemode_slayer-rules").join(file)).unwrap();
+        let (lf, crlf) = (read(&lf), read(&crlf));
+        assert!(!crlf.contains('\r'), "{file} keeps Windows line endings");
+        assert_eq!(lf, crlf, "{file}");
+    }
+}
+
+#[test]
+fn slayer_ports_apply_with_their_rules() {
+    let dir = fresh("slayer");
+    let root = dir.join("content");
+    let ports = Ports::builtin();
+    let mut ids = vec![];
+    for (addon, ns) in [
+        ("Gamemode_Slayer", "gamemode_slayer"),
+        ("Gamemode_Slayer_CTF", "gamemode_slayer_ctf"),
+    ] {
+        let out = root.join("addons").join(ns);
+        let report = import_with(&options(fixture(&format!("ports/{addon}")), out), &ports).unwrap();
+        let applied = &report.ports[0];
+        assert!(applied.applied, "{addon}: {:?}", applied.reason);
+        assert_eq!(applied.status, "partial");
+        if ns == "gamemode_slayer" {
+            // The capture point trigger's callbacks are the rules' zone.
+            let trigger = report.datablocks.iter().find(|d| d.name == "Slayer_CPTriggerData").unwrap();
+            assert_eq!(trigger.status, "consumed", "{trigger:?}");
+            // So are the path cameras': the fly-through and the spectators'
+            // auto camera are `follow_path` in the rules.
+            for name in ["Slayer_PathCamData", "Slayer_SpectatePathCamData"] {
+                let camera = report.datablocks.iter().find(|d| d.name == name).unwrap();
+                assert_eq!(camera.status, "consumed", "{camera:?}");
+            }
+        }
+        ids.push(ns.to_owned());
+        ids.push(applied.rules.as_ref().expect("rules").id.clone());
+    }
+    let slayer = std::fs::read_to_string(root.join("addons/gamemode_slayer-rules/slayer.rhai")).unwrap();
+    // Its countdown voices and buzzer, made at run time in the original,
+    // are declared by the port and play by id; a voice whose file this copy
+    // lacks stays out.
+    let sounds = Pack::from_json(&std::fs::read(root.join("addons/gamemode_slayer/assets/weapons.json")).unwrap())
+        .unwrap()
+        .sounds;
+    for id in ["slayer_begin_sound", "slayer_1_seconds_sound"] {
+        assert!(sounds.contains_key(&format!("gamemode_slayer:sound/{id}")), "{id}: {:?}", sounds.keys());
+    }
+    assert!(!sounds.contains_key("gamemode_slayer:sound/slayer_2_seconds_sound"));
+    assert!(slayer.contains("`gamemode_slayer:sound/slayer_${left}_seconds_sound`"));
+    assert!(slayer.contains("\"gamemode_slayer:brick/brickslyrspawnpointdata\""));
+    // Capture points: the bricks convert, their bars are this copy's
+    // lengths, and their trigger is a zone ticking at its preference.
+    let content = std::fs::read_to_string(root.join("addons/gamemode_slayer/assets/content.json")).unwrap();
+    for brick in ["brickslyrcpdata", "brickslyrlrgcpdata"] {
+        assert!(content.contains(&format!("gamemode_slayer:brick/{brick}")), "no {brick}");
+    }
+    assert!(slayer.contains("{\n        3\n    }") && slayer.contains("{\n        5\n    }"));
+    let rules: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("addons/gamemode_slayer-rules/behaviour.json")).unwrap(),
+    )
+    .unwrap();
+    let zone = &rules["zones"][0];
+    assert_eq!((zone["period_ms"].as_u64(), zone["ticks"].as_bool()), (Some(100), Some(true)));
+    // Settings at this copy's defaults, its game modes in the mode list.
+    let read = |path: &str| -> serde_json::Value {
+        serde_json::from_slice(&std::fs::read(root.join(path)).unwrap()).unwrap()
+    };
+    let setting = |b: &serde_json::Value, key: &str| -> serde_json::Value {
+        b["settings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["key"] == key)
+            .unwrap_or_else(|| panic!("no setting {key}"))
+            .clone()
+    };
+    let behaviour = read("addons/gamemode_slayer-rules/behaviour.json");
+    assert_eq!(setting(&behaviour, "time_between_rounds")["default"], 6);
+    // The fly-through and spectating, at this copy's numbers.
+    assert_eq!(setting(&behaviour, "fly_play_on_reset")["default"], true);
+    assert_eq!(setting(&behaviour, "fly_during_countdown")["default"], false);
+    assert_eq!(setting(&behaviour, "spectate_auto_cam")["default"], true);
+    assert_eq!(setting(&behaviour, "team_only_dead_cam")["default"], false);
+    for line in [
+        "fn fly_max_knots() { 6 }",
+        "fn fly_default_speed() { 9 }",
+        "ms_ticks(3000)",
+        "ms_ticks(500)",
+        "orbit_point(p, [b.x, b.y + 1.5, b.z], 6)",
+        "set_fov(p, 100.to_float())",
+        "ms_ticks(2000)",
+    ] {
+        assert!(slayer.contains(line), "slayer.rhai lacks `{line}`");
+    }
+    // The wrench outputs, with this copy's parameters and words.
+    let output = |name: &str| {
+        behaviour["brick_outputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|o| o["name"] == name)
+            .unwrap_or_else(|| panic!("no {name} output"))
+            .clone()
+    };
+    assert_eq!(behaviour["brick_outputs"].as_array().unwrap().len(), 20);
+    assert_eq!(
+        output("BottomPrintAll")["params"],
+        serde_json::json!([
+            { "type": "string", "max_length": 150, "width": 120 },
+            { "type": "int", "min": 1, "max": 8, "default": 2 },
+            { "type": "bool" }
+        ])
+    );
+    assert_eq!(output("IncScore")["class"], "Slayer_TeamSO");
+    assert_eq!(
+        behaviour["brick_targets"],
+        serde_json::json!([
+            { "name": "Team(Client)", "class": "Slayer_TeamSO", "from": "Client" },
+            { "name": "Team(Brick)", "class": "Slayer_TeamSO", "from": "Self" }
+        ])
+    );
+    assert_eq!(
+        output("setTeamControlLocked")["params"],
+        serde_json::json!([
+            { "type": "list", "items": [["Mine", 0], ["Colour", 1], ["Every", 2]] },
+            { "type": "paint_color", "default": 1 },
+            { "type": "bool" }
+        ])
+    );
+    assert_eq!(
+        output("addLives")["params"],
+        serde_json::json!([{ "type": "int", "min": 0, "max": 50, "default": 2 }])
+    );
+    assert_eq!(output("StartFlyThrough")["params"], serde_json::json!([]));
+    // The team inputs follow the engine's, the mini-game inputs run on every
+    // brick of the game, and Restrict Output Events at this copy's levels.
+    let inputs = behaviour["brick_inputs"].as_array().unwrap();
+    assert_eq!(inputs.len(), 10 + 12 + 5);
+    let input = |name: &str| inputs.iter().find(|i| i["name"] == name).unwrap_or_else(|| panic!("no {name}"));
+    assert_eq!(input("onActivate(Team6)")["follows"], "onActivate");
+    assert_eq!(input("onPlayerTouch(Team1)")["follows"], "onPlayerTouch");
+    assert_eq!(
+        input("onMinigameDeath")["targets"],
+        serde_json::json!(["Client", "Player(Killer)", "Client(Killer)", "MiniGame"])
+    );
+    assert_eq!(behaviour["on_event_row"], true);
+    assert_eq!(setting(&behaviour, "restrict_output_events")["default"], false);
+    for line in [
+        "\"minigame:bottomprintall\": 2,",
+        "\"minigame:win\": -1,",
+        "\"minigame:startflythrough\": 3,",
+    ] {
+        assert!(slayer.contains(line), "slayer.rhai lacks `{line}`");
+    }
+    assert_eq!(setting(&behaviour, "clear_stats")["default"], false);
+    for line in ["Locked for now.", "\"Extended by\"", "\"Time now\""] {
+        assert!(slayer.contains(line), "slayer.rhai lacks `{line}`");
+    }
+    assert_eq!(setting(&behaviour, "auto_sort")["default"], true);
+    assert_eq!(setting(&behaviour, "team_lives")["default"], -1);
+    // The team kit and uniform, from the copy's team preferences.
+    assert_eq!(setting(&behaviour, "team_uniform")["default"], 3);
+    assert_eq!(setting(&behaviour, "team_equip_0")["default"], "v20.weapon.hammeritem");
+    assert_eq!(setting(&behaviour, "team_equip_3")["default"], "");
+    assert_eq!(setting(&behaviour, "team_player_type")["default"], "v20.player.playerstandardarmor");
+    assert_eq!(setting(&behaviour, "uni_hat")["default"], 1);
+    assert_eq!(setting(&behaviour, "uni_head_color")["default"], "0.5 0.25 0 1");
+    assert_eq!(setting(&behaviour, "allow_custom_faces")["default"], false);
+    assert!(slayer.contains(r#"let skins = ["0.9 0.8 0.6 1", "0.9 0.8 0.6 1", "0.4 0.3 0.2 1""#));
+    let mode = setting(&behaviour, "mode");
+    assert_eq!(mode["default"], "Slayer_Deathmatch");
+    assert_eq!(
+        mode["items"],
+        serde_json::json!([
+            { "value": "Slayer_Deathmatch", "name": "Free for All" },
+            { "value": "Slayer_TeamDeathmatch", "name": "Teams" }
+        ])
+    );
+
+    // This copy's numbers, read from its scripts.
+    let ctf = root.join("addons/gamemode_slayer_ctf");
+    let rules = std::fs::read_to_string(root.join("addons/gamemode_slayer_ctf-rules/ctf.rhai")).unwrap();
+    for line in [
+        "fn flag_slot() { 2 }",
+        "fn pickup_guard_ticks() { (250 * 120 + 999) / 1000 }",
+        "let ahead = 1.5;",
+        "let fling = 4;",
+        "setting(game, \"gamemode_slayer-rules:mode\") == ctf_mode()",
+    ] {
+        assert!(rules.contains(line), "ctf.rhai lacks `{line}`");
+    }
+    let behaviour = read("addons/gamemode_slayer_ctf-rules/behaviour.json");
+    assert_eq!(behaviour["zones"][0]["period_ms"], 100);
+    assert_eq!(setting(&behaviour, "flag_returns_to_win")["default"], 3);
+    assert_eq!(setting(&behaviour, "points_flag")["default"], 25);
+    assert_eq!(setting(&behaviour, "dropped_flag_respawn")["default"], 7);
+    assert_eq!(setting(&behaviour, "manual_flag_drop")["default"], true);
+    // Capture the Flag joins Slayer's modes, so its rules need Slayer's.
+    assert_eq!(
+        behaviour["setting_items"],
+        serde_json::json!([{ "setting": "gamemode_slayer-rules:mode",
+                             "items": [{ "value": "Slayer_CTF", "name": "Flag Game" }] }])
+    );
+    let manifest = read("addons/gamemode_slayer_ctf-rules/package.json");
+    assert_eq!(manifest["dependencies"]["gamemode_slayer-rules"], "*");
+
+    // The flag item and image the original makes at run time, one of each,
+    // taking the colour of their brick or carrier.
+    let pack = Pack::from_json(&std::fs::read(ctf.join("assets/weapons.json")).unwrap()).unwrap();
+    let image = &pack.images["gamemode_slayer_ctf:image/slyrctf_flagimage"];
+    assert!(image.paint_tint);
+    assert_eq!(image.mount_point, 4);
+    // "0.1 -0.2 -0.3" in Torque's Z-up axes.
+    assert_eq!(image.offset, [0.1, -0.3, 0.2]);
+    // The flag's light (`flagHasLight`, `flagLightRadius`), white so it
+    // takes the carrier's team colour as the flag does.
+    assert_eq!(
+        image.light,
+        Some(bri_weapons::ImageLight { radius: 12.0, color: [1.0; 3] })
+    );
+    let item = &pack.items["gamemode_slayer_ctf:weapon/slyrctf_flagitem"];
+    assert_eq!(item.ui_name, "Stand-in Flag");
+    assert_eq!(item.image, "gamemode_slayer_ctf:image/slyrctf_flagimage");
+    assert!(!item.can_drop);
+    // `slyrCTF_FlagItem::onAdd` plays the flag model's idle thread.
+    assert_eq!(item.idle, "wave");
+    let content = std::fs::read_to_string(ctf.join("assets/content.json")).unwrap();
+    for brick in ["brickslyrctfflagdata", "brickslyrctfflagreturndata"] {
+        assert!(
+            content.contains(&format!("gamemode_slayer_ctf:brick/{brick}")),
+            "no {brick}"
+        );
+    }
+
+    // Both companions load as the game loads any host Add-On.
+    use bri_package::library::Library;
+    let library = Library::scan(&root).unwrap();
+    let set = bri_package::packages::PackageSet {
+        schema_version: 1,
+        packages: ids
+            .iter()
+            .map(|id| {
+                let e = library.get(id).unwrap_or_else(|| panic!("{id} not found"));
+                assert!(!e.has_errors(), "{id}: {:?}", e.problems);
+                e.package.clone()
+            })
+            .collect(),
+    };
+    bri_package_runtime::Catalog::load(&root, &set, true).unwrap_or_else(|e| panic!("{e:#?}"));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// The stand-in Player Throwing (`tests/fixtures/ports/Script_PlayerThrowing`,
 /// CC0) imported into `root/addons`, its host rules beside it, both turned
 /// on: the packages a host loads.
@@ -812,7 +1107,8 @@ fn ported_player_throwing_grabs_throws_and_lets_go_in_a_hosted_game() {
             target: holder,
             min: 4,
             max: 9,
-            distance: 6
+            distance: 6,
+            body: bri_sim::session::OrbitBody::Acts,
         }
     );
     assert!(cmd(&mut s, held, Command::ControlPlayer).is_err());
@@ -1015,8 +1311,8 @@ fn fill_can_port_rules_fill_what_v20_filled() {
     }
     const RED: u8 = 2;
     const BLUE: u8 = 1;
-    // A spawn brick, of a build no one here owns, whose committed stunt
-    // plane takes its colour.
+    // A spawn brick, of a build no one here owns, whose stand-in plane
+    // (crates/vehicles/tests/fixtures) takes its colour.
     let mut world = bri_world::World::new(
         "Fill".into(),
         "fill".into(),
@@ -1030,7 +1326,7 @@ fn fill_can_port_rules_fill_what_v20_filled() {
     pad.color = RED;
     pad.vehicle = Some(Box::new(bri_world::VehicleSpawn {
         vehicle: bri_world::ContentRef::Resolved(
-            "vehicle_stunt_plane:vehicle/stuntplanevehicle".into(),
+            "test_plane:vehicle/standinplane".into(),
         ),
         recolor: true,
     }));
@@ -1050,7 +1346,7 @@ fn fill_can_port_rules_fill_what_v20_filled() {
     s.set_spawn_points(vec![spawn]).unwrap();
     s.set_weapon_pack(pack).unwrap();
     let plane = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../packages/imported/vehicle_stunt_plane/assets/vehicles.json");
+        .join("../vehicles/tests/fixtures/stand-in-plane/assets/vehicles.json");
     s.set_vehicle_pack(bri_vehicles::Pack::load(plane).unwrap(), Vec::new())
         .unwrap();
     s.install_packages(catalog, None).unwrap();
@@ -1227,7 +1523,7 @@ fn fill_can_port_rules_fill_what_v20_filled() {
     spray_at(&mut s, admin, at);
     assert_ne!(paint(&s), Some([r, g, b, 1.0]));
     assert_eq!(s.snapshot().world.bricks[&1].color, BLUE);
-    std::fs::remove_dir_all(dir).unwrap();
+   std::fs::remove_dir_all(dir).unwrap();
 }
 
 /// Kaje's Sniper Rifle: `onFire` kicks the arm with `shiftAway` (read from

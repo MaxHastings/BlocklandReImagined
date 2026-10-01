@@ -29,6 +29,21 @@ impl Session {
             bounds.entry(id.to_owned()).or_insert(ItemBounds::FALLBACK);
         }
         let mut spawners = crate::item_spawners::ItemSpawners::new(bounds.clone());
+        // An item whose image takes paint shows its brick's colour.
+        spawners.painted = self
+            .weapons
+            .pack
+            .items
+            .iter()
+            .filter(|(_, item)| {
+                self.weapons
+                    .pack
+                    .images
+                    .get(&item.image)
+                    .is_some_and(|image| image.paint_tint)
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
         for (&id, brick) in &self.simulation.state().bricks {
             spawners.reconcile(
                 id,

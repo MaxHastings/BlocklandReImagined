@@ -435,6 +435,7 @@ mod tests {
                     append_client: false,
                     source: "fixture".into(),
                     source_line: 1,
+                    package: None,
                 },
                 OutputDef {
                     id: "out/velocity".into(),
@@ -444,8 +445,10 @@ mod tests {
                     append_client: false,
                     source: "fixture".into(),
                     source_line: 1,
+                    package: None,
                 },
             ],
+            targets: vec![],
             sources: vec![],
             scope: serde_json::Value::Null,
         }

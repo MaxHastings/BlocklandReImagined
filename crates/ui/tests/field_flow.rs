@@ -1310,6 +1310,8 @@ fn scenarios() -> Vec<Scenario> {
                     member_count: 1,
                     invite_only: false,
                     rules: MiniGameRules::default(),
+                    teams: Vec::new(),
+                    addon_settings: Default::default(),
                 };
                 state.games = vec![game(3, "Castle Wars", "Guesty"), game(5, "Race", "Walker")];
                 state.revision += 1;

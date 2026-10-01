@@ -259,7 +259,18 @@ fn models() -> Vec<Model> {
             nodes: vec![("root", None, [0.; 3])],
             parts: vec![part(0, [0., 0., 0.], [0.05, 0.01, 0.4], 0)],
             materials: vec![("ski", "opaque")],
-            animations: still(),
+            // A cyclic sequence, as a waving flag's: what an item's `idle`
+            // loops while it lies in the world.
+            animations: json!([{
+                "name": "wave", "frames": 3, "duration": 0.6, "looping": true,
+                "additive": false, "priority": 0,
+                "nodes": [{
+                    "node": "root",
+                    "rotations": [[0., 0., 0., 1.], [0., 0.2, 0., 0.98], [0., 0., 0., 1.]],
+                    "translations": [], "scales": [], "scale_rotations": [],
+                }],
+                "objects": [], "ground_translations": [], "ground_rotations": [], "triggers": [],
+            }]),
         },
         Model {
             name: "bullet",

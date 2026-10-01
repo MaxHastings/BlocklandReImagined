@@ -23,6 +23,8 @@ pub struct Controls {
     /// The host's `setControlCameraFov` (an Add-On's rules), in place of
     /// `normal_fov` until the host hands it back.
     server_fov: Option<f32>,
+    /// The body's archetype is `thirdPersonOnly`.
+    third_person_only: bool,
     /// Target zoom FOV (`$Pref::player::CurrentFOV`); the wheel steps it.
     zoom_fov: Option<f32>,
     /// The FOV shown (`$cameraFov`), ramping toward the normal or zoom FOV.
@@ -215,6 +217,12 @@ pub enum ObserverMode {
     /// Orbit a package entity the player drives (`ControlObject::Entity`):
     /// the moves go to the entity, steered by this camera's yaw.
     Drive(u64),
+    /// A rule's path camera (`ControlObject::Path`), at this point of its
+    /// path; [`Controls::fly_path`] moves and turns it each frame.
+    Path(glam::Vec3),
+    /// A rule's orbit around a point (`ControlObject::Point`), this far out;
+    /// [`Controls::orbit_point`] keeps it on the replicated point.
+    Point(glam::Vec3, f32),
 }
 /// `setFov` only sets a target; each frame `$cameraFov` moves toward it by
 /// elapsed ms / zoomSpeed * 90 degrees (blocklandv20.exe 0x58ee10).
@@ -585,7 +593,7 @@ impl Controls {
                 }
                 return;
             }
-            ControlObject::Camera => match self.observer {
+            ControlObject::Camera | ControlObject::Observer => match self.observer {
                 Some(Observer {
                     mode: ObserverMode::Free(_),
                     ..
@@ -599,6 +607,20 @@ impl Controls {
             ControlObject::Orbit { target, .. } => ObserverMode::Orbit(target),
             ControlObject::Corpse => ObserverMode::Orbit(owner),
             ControlObject::Entity(entity) => ObserverMode::Drive(entity),
+            ControlObject::Path => match self.observer {
+                Some(Observer {
+                    mode: ObserverMode::Path(_),
+                    ..
+                }) => return,
+                _ => ObserverMode::Path(eye.unwrap_or_default()),
+            },
+            ControlObject::Point => match self.observer {
+                Some(Observer {
+                    mode: ObserverMode::Point(..),
+                    ..
+                }) => return,
+                _ => ObserverMode::Point(eye.unwrap_or_default(), 8.0),
+            },
         };
         let (distance, zoom) = match control {
             ControlObject::Orbit {
@@ -660,7 +682,10 @@ impl Controls {
     pub fn free_camera(&self) -> Option<glam::Vec3> {
         match self.observer?.mode {
             ObserverMode::Free(position) => Some(position),
-            ObserverMode::Orbit(_) | ObserverMode::Drive(_) => None,
+            ObserverMode::Orbit(_)
+            | ObserverMode::Drive(_)
+            | ObserverMode::Path(_)
+            | ObserverMode::Point(..) => None,
         }
     }
     /// The orbited player's presented eye, or the driven entity's head,
@@ -676,7 +701,41 @@ impl Controls {
             ObserverMode::Drive(entity) => entities
                 .get(&entity)
                 .map(|e| glam::Vec3::from(e.position) + glam::Vec3::Y * 1.5),
-            ObserverMode::Free(_) => None,
+            ObserverMode::Point(at, _) => Some(at),
+            ObserverMode::Free(_) | ObserverMode::Path(_) => None,
+        }
+    }
+    /// How far the orbit camera sits from its focus: a rule's point camera
+    /// says, as an Add-On's orbit does (zoomed by the wheel);
+    /// `Observer::setMode("Corpse")` orbits 8 units out.
+    pub fn orbit_distance(&self) -> f32 {
+        match self.observer {
+            Some(Observer {
+                mode: ObserverMode::Point(_, distance),
+                ..
+            }) => distance,
+            Some(observer) => observer.distance,
+            None => CORPSE_ORBIT_DISTANCE,
+        }
+    }
+    /// Keep a rule's point camera on its replicated point.
+    pub fn orbit_point(&mut self, point: bri_sim::session::OrbitPoint) {
+        if let Some(observer) = &mut self.observer
+            && let ObserverMode::Point(at, distance) = &mut observer.mode
+        {
+            *at = glam::Vec3::from(point.at);
+            *distance = point.distance;
+        }
+    }
+    /// Put the path camera where its path is now: the look keys do not turn
+    /// it, as a `PathCamera` in control ignores the mouse.
+    pub fn fly_path(&mut self, view: bri_sim::session::CameraView) {
+        if let Some(observer) = &mut self.observer
+            && let ObserverMode::Path(position) = &mut observer.mode
+        {
+            *position = view.eye();
+            observer.yaw = view.yaw;
+            observer.pitch = view.pitch;
         }
     }
     /// Fly the free camera with the movement keys, through any opening of
@@ -917,7 +976,13 @@ impl Controls {
     /// Third person as the view shows it: aiming a `first_person` aim
     /// looks from the eye whatever the toggle says.
     pub fn third_person_view(&self) -> bool {
-        self.third_person && !self.aim_while_aiming().is_some_and(|a| a.first_person)
+        self.third_person_only
+            || (self.third_person && !self.aim_while_aiming().is_some_and(|a| a.first_person))
+    }
+    /// `thirdPersonOnly`: while the body's archetype says so, the camera
+    /// stays out behind it whatever the view toggle says.
+    pub fn set_third_person_only(&mut self, only: bool) {
+        self.third_person_only = only;
     }
     /// Move a swaying aim along its figure of eight (`Zoom::sway`), easing
     /// in while aiming on foot and out after. Crouching steadies it and
@@ -1354,6 +1419,7 @@ mod tests {
             min: 5,
             max: 10,
             distance: 5,
+            body: bri_sim::session::OrbitBody::Acts,
         };
         c.follow(orbit, 1, None);
         let observer = c.observer().unwrap();
@@ -1375,6 +1441,34 @@ mod tests {
         assert_eq!(c.observer().unwrap().distance, CORPSE_ORBIT_DISTANCE);
         c.follow(ControlObject::Player, 1, None);
         assert_eq!(c.observer(), None);
+    }
+    #[test]
+    fn rules_cameras_fly_freely_or_circle_their_point() {
+        let mut c = Controls::default();
+        // A spectator's free camera flies like the admin's.
+        c.follow(ControlObject::Observer, 1, Some(glam::Vec3::ZERO));
+        held(&mut c, HeldControl::Forward, true);
+        c.fly(0.05, &Default::default());
+        assert!(c.free_camera().is_some_and(|p| p != glam::Vec3::ZERO));
+        held(&mut c, HeldControl::Forward, false);
+        // A point camera circles the replicated point at its distance,
+        // turned by the mouse, and never flies.
+        c.follow(ControlObject::Point, 1, Some(glam::Vec3::ZERO));
+        c.orbit_point(bri_sim::session::OrbitPoint {
+            at: [3.0, 1.0, 4.0],
+            distance: 4.5,
+        });
+        assert_eq!(
+            c.orbit_focus(&BTreeMap::new(), &Default::default(), &Default::default()),
+            Some(glam::Vec3::new(3.0, 1.0, 4.0))
+        );
+        assert_eq!(c.orbit_distance(), 4.5);
+        c.action(&GameAction::Look {
+            yaw: 0.3,
+            pitch: 0.0,
+        });
+        assert!((c.camera_angles().0 - 0.3).abs() < 1e-6);
+        assert_eq!(c.free_camera(), None);
     }
     #[test]
     fn spy_orbit_follows_its_target() {

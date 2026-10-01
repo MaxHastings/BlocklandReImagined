@@ -67,6 +67,14 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
 
+      # The original classic Add-Ons the release bundles, with credit
+      # (tools/addon_bundle.py). Fails here when the Gate has not uploaded
+      # a bundle that has every pinned original.
+      - name: Fetch the Add-On bundle
+        run: python tools/addon_bundle.py fetch
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
       - uses: dtolnay/rust-toolchain@1.93
       - uses: Swatinem/rust-cache@v2
         with:

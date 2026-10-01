@@ -323,12 +323,12 @@ mod tests {
         assert!(eye.is_finite() && yaw.is_finite() && pitch.is_finite());
     }
 
-    /// Every seat of the stock vehicles and the default Stunt Plane, seen
+    /// Every seat of the stock vehicles and the stand-in plane, seen
     /// from the rider's posed `eye` node as v20 places it, next to the old
     /// fixed 1.6 above the seat. Run with `--ignored --nocapture` for the table.
     /// Riders and what they ride: the made-up avatar and vehicles
     /// (`crate::testing::avatar`, `bri_vehicles::testing`), or the
-    /// converted v20 packs with the default Stunt Plane.
+    /// converted v20 packs with the stand-in plane.
     struct Riders {
         assets: crate::avatar::AvatarAssets,
         definitions: Vec<bri_vehicles::schema::Definition>,
@@ -351,7 +351,7 @@ mod tests {
                 Pack::load(root.join("content/vehicles-pack-012/vehicles.json"))?.definitions;
             definitions.extend(
                 Pack::load(
-                    root.join("packages/imported/vehicle_stunt_plane/assets/vehicles.json"),
+                    root.join("crates/vehicles/tests/fixtures/stand-in-plane/assets/vehicles.json"),
                 )?
                 .definitions,
             );

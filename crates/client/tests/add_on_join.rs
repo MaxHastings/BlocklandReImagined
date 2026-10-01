@@ -23,7 +23,7 @@ use support::content_root::ContentRoot;
 synthetic_and_content!(
     ContentRoot: add_ons_the_host_turns_off_are_not_required_and_ones_it_runs_download,
     a_guest_joins_a_host_running_every_repository_add_on,
-    a_guest_without_the_stunt_plane_downloads_it_and_can_spawn_it,
+    a_guest_without_a_vehicle_add_on_downloads_it_and_can_spawn_it,
     a_host_with_the_blockhead_bot_on_spawns_bots_and_one_without_offers_none,
 );
 
@@ -403,8 +403,13 @@ fn walk(dir: &Path) -> Vec<String> {
 }
 
 /// Every Add-On in the repository (`packages/`: the default Add-Ons, the
-/// samples, the showcase and the Stress Lab), copied into a hidden folder
-/// of the content root for the test's length, in dependency order.
+/// samples, the showcase and the Stress Lab) and the test stand-ins
+/// ([`STAND_INS`]), copied into a hidden folder of the content root for
+/// the test's length, in dependency order.
+/// Test-only Add-Ons the repository keeps beside the tests that use them,
+/// standing in for third-party originals it never holds.
+const STAND_INS: &[&str] = &["crates/vehicles/tests/fixtures/stand-in-plane"];
+
 struct RepoAddOns {
     dir: PathBuf,
     entries: Vec<bri_package::packages::PackageEntry>,
@@ -416,7 +421,11 @@ impl RepoAddOns {
         let dir = content.join(&folder);
         let _ = std::fs::remove_dir_all(&dir);
         let mut found = Vec::new();
-        for source in manifests(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages")) {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let sources = manifests(&repo.join("packages"))
+            .into_iter()
+            .chain(STAND_INS.iter().map(|dir| repo.join(dir)));
+        for source in sources {
             let info: bri_package::library::PackageInfo =
                 serde_json::from_slice(&std::fs::read(source.join("package.json"))?)?;
             copy_dir(&source, &dir.join(&info.id))?;
@@ -648,7 +657,7 @@ fn a_guest_joins_a_host_running_every_repository_add_on(f: &ContentRoot) -> Resu
         .filter(|e| !set.packages.iter().any(|listed| listed.id == e.id))
         .cloned()
         .collect();
-    let downloaded = ["duplicator-tool", "sample-bubble-blaster"]
+    let downloaded = ["sample-bubble-blaster"]
         .into_iter()
         .find(|id| added.iter().any(|e| e.id == *id))
         .context("every repository weapon Add-On is already listed")?;
@@ -691,36 +700,20 @@ fn a_guest_joins_a_host_running_every_repository_add_on(f: &ContentRoot) -> Resu
     Ok(())
 }
 
-/// The Stunt Plane, a default Add-On (packages/default-addons.json): a host
-/// that runs it lists it among its spawnable vehicles, and a guest who has
-/// it turned off downloads it, joins and can pick it too. Runs on a
-/// release's content, which ships it on, and on a checkout's, whether or
-/// not the game has installed it there yet.
-fn a_guest_without_the_stunt_plane_downloads_it_and_can_spawn_it(f: &ContentRoot) -> Result<()> {
-    const PLANE: &str = "vehicle_stunt_plane";
-    const VEHICLE: &str = "vehicle_stunt_plane:vehicle/stuntplanevehicle";
+/// A vehicle Add-On (the stand-in plane, in place of the bundled Stunt
+/// Plane a release ships on): a host that runs it lists it among its
+/// spawnable vehicles, and a guest who has it off downloads it, joins and
+/// can pick it too.
+fn a_guest_without_a_vehicle_add_on_downloads_it_and_can_spawn_it(f: &ContentRoot) -> Result<()> {
+    const PLANE: &str = "test_plane";
+    const VEHICLE: &str = "test_plane:vehicle/standinplane";
     let content = f.root.clone();
     let listed = bri_package::packages::PackageSet::load_root(&content)?;
-    // The host runs the content's own copy when it has one on; otherwise
-    // the repository's, staged in the content root for the test's length.
+    let staged = RepoAddOns::install(&content)?;
     let mut set = listed.clone();
-    let _staged = if set.packages.iter().any(|p| p.id == PLANE) {
-        None
-    } else {
-        let staged = RepoAddOns::install(&content)?;
-        set.packages.push(
-            staged
-                .entries
-                .iter()
-                .find(|e| e.id == PLANE)
-                .context("the repository has no Stunt Plane")?
-                .clone(),
-        );
-        Some(staged)
-    };
+    set.packages.extend(staged.with(&[PLANE])?);
     // The guest has it off, as after turning it off in the Add-Ons screen.
-    let mut without = listed;
-    without.packages.retain(|p| p.id != PLANE);
+    let without = listed;
     let spawnable = |app: &App| {
         app.ui
             .core
@@ -734,15 +727,12 @@ fn a_guest_without_the_stunt_plane_downloads_it_and_can_spawn_it(f: &ContentRoot
     let mut host_app = app(&content, "PlaneHost")?;
     host_app
         .apply_packages(&set)
-        .context("the host loads the Stunt Plane")?;
+        .context("the host loads the plane")?;
     let mut guest = app(&content, "PlaneGuest")?;
     guest
         .apply_packages(&without)
-        .context("the guest turns the Stunt Plane off")?;
-    ensure!(
-        !spawnable(&guest),
-        "the guest has the Stunt Plane before joining"
-    );
+        .context("the guest turns the plane off")?;
+    ensure!(!spawnable(&guest), "the guest has the plane before joining");
     host(&mut host_app, port)?;
     until(&mut [&mut host_app], "host in game", 180, |a| in_game(a[0]))?;
     ensure!(

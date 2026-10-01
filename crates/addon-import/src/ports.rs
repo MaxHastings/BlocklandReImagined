@@ -43,8 +43,10 @@ pub struct Entry {
     pub sha256: Vec<String>,
     /// Each script function the port replaces (or top-level `$global`,
     /// read as its value), with named patterns its body must match
-    /// (case-insensitive). A pattern's first group, when it has
-    /// one, is the value the port's patches use as `{name}`.
+    /// (case-insensitive). A pattern's first group, when it has one, is the
+    /// value the port's patches use as `{name}`. A key that is a script's
+    /// path in the Add-On (`server.cs`) matches that file's whole text, for
+    /// values it sets outside any function.
     pub covers: BTreeMap<String, BTreeMap<String, String>>,
     /// Tests that prove the port, `path name`.
     #[serde(default)]
@@ -86,6 +88,12 @@ pub struct Rules {
     /// What the rules may do (`player`, `world.edit`, `chat`, ...), as in any
     /// Add-On's `package.json`.
     pub capabilities: Vec<String>,
+    /// Other Add-Ons' host rules these rules build on, by the name rules
+    /// files use for them: `{"slayer_rules": "Gamemode_Slayer"}` makes the
+    /// rules depend on Gamemode_Slayer's rules and `{{slayer_rules}}` their
+    /// id, as the importer names them (Slayer CTF reads Slayer's settings).
+    #[serde(default)]
+    pub needs: BTreeMap<String, String>,
 }
 
 /// The companion host-rules Add-On's id for the import `namespace`.
@@ -403,14 +411,10 @@ pub fn apply(ports: &Ports, import: &Import, bodies: &Bodies, out: &Path) -> Opt
     Some(applied)
 }
 
-fn try_apply(
-    ports: &Ports,
-    e: &Entry,
-    import: &Import,
-    bodies: &Bodies,
-    out: &Path,
-    applied: &mut Applied,
-) -> Result<()> {
+/// The values `e`'s patterns read from this copy's scripts. Fails when a
+/// covered function is missing or does not match.
+fn capture(e: &Entry, bodies: &Bodies) -> Result<BTreeMap<String, String>> {
+    let mut values = BTreeMap::new();
     for (function, patterns) in &e.covers {
         let Some(body) = bodies.get(&function.to_ascii_lowercase()) else {
             bail!("this copy has no `{function}`");
@@ -420,12 +424,48 @@ fn try_apply(
                 .captures(body)
                 .with_context(|| format!("`{function}` does not match the port's `{name}`"))?;
             if let Some(value) = caps.get(1) {
-                applied
-                    .values
-                    .insert(name.clone(), value.as_str().to_owned());
+                values.insert(name.clone(), value.as_str().to_owned());
             }
         }
     }
+    Ok(values)
+}
+
+/// The port's `datablocks.cs` for the Add-On `addon`, with `{{name}}`
+/// filled in from this copy's scripts and `{{namespace}}`: datablocks the
+/// Add-On makes at run time (in a function or a loop, as Slayer CTF makes
+/// its flags), declared as the importer reads them. The importer reads it
+/// beside the Add-On's own scripts, in its folder, before converting.
+/// `None` when no port is listed or it has no datablocks.
+pub fn datablocks(
+    ports: &Ports,
+    addon: &str,
+    namespace: &str,
+    bodies: &Bodies,
+) -> Option<Result<String>> {
+    let e = ports.find(addon)?;
+    let bytes = ports.files.get(&format!("{}/{DATABLOCKS}", e.port))?;
+    Some((|| {
+        let text = port_text(bytes).context("datablocks.cs is not UTF-8 text")?;
+        let text = text.as_str();
+        let mut values = capture(e, bodies)?;
+        values.insert("namespace".to_owned(), namespace.to_owned());
+        fill_text(text, &values).context(DATABLOCKS)
+    })())
+}
+
+/// A port's declarations of datablocks its Add-On makes at run time.
+pub const DATABLOCKS: &str = "datablocks.cs";
+
+fn try_apply(
+    ports: &Ports,
+    e: &Entry,
+    import: &Import,
+    bodies: &Bodies,
+    out: &Path,
+    applied: &mut Applied,
+) -> Result<()> {
+    applied.values = capture(e, bodies)?;
     let port = ports.port(e)?;
     applied.notes = port.notes.clone();
     // What every port may use besides the values its patterns read.
@@ -439,6 +479,16 @@ fn try_apply(
             values.insert(name.to_owned(), value).is_none(),
             "a pattern is named `{name}`, which every port already has"
         );
+    }
+    if let Some(rules) = &port.rules {
+        for (name, addon) in &rules.needs {
+            ensure!(
+                values
+                    .insert(name.clone(), rules_id(&crate::namespace_for(addon)?))
+                    .is_none(),
+                "the rules need `{name}`, which is already a value"
+            );
+        }
     }
     let mut patches = port.patch.clone();
     if port.rules.is_some() {
@@ -550,9 +600,8 @@ fn rules_package(
     let mut files: Vec<Written> = vec![];
     let mut provides = vec![];
     for (file, bytes) in ports.port_files(&e.port, "rules") {
-        let text = std::str::from_utf8(bytes)
-            .with_context(|| format!("rules/{file} is not UTF-8 text"))?;
-        let text = fill_text(text, values).with_context(|| format!("rules/{file}"))?;
+        let text = port_text(bytes).with_context(|| format!("rules/{file} is not UTF-8 text"))?;
+        let text = fill_text(&text, values).with_context(|| format!("rules/{file}"))?;
         let (kind, stem) = if file == RULES_BEHAVIOUR {
             ("behaviour", "behaviour")
         } else if let Some(name) = rules_archetype(&file) {
@@ -566,6 +615,14 @@ fn rules_package(
             "file": file,
         }));
         files.push((file, text.into_bytes()));
+    }
+    let mut dependencies = serde_json::Map::new();
+    dependencies.insert(
+        import.namespace.to_owned(),
+        format!("={}", import.version).into(),
+    );
+    for addon in rules.needs.values() {
+        dependencies.insert(rules_id(&crate::namespace_for(addon)?), "*".into());
     }
     let manifest = serde_json::json!({
         "schema_version": 1,
@@ -583,7 +640,7 @@ fn rules_package(
             "source": format!("Port {} of Blockland Add-On {}", e.port, e.addon),
             "notes": port_notes(ports, e),
         },
-        "dependencies": { import.namespace: format!("={}", import.version) },
+        "dependencies": dependencies,
         "capabilities": rules.capabilities,
         "provides": provides,
     });
@@ -636,6 +693,10 @@ fn check_rules(id: &str, manifest: &[u8], files: &[Written]) -> Result<()> {
         behaviour.script
     );
     for (file, bytes) in files {
+        if file.ends_with(".rhai") {
+            bri_package_runtime::script::check_syntax(&String::from_utf8_lossy(bytes))
+                .map_err(|e| anyhow::anyhow!("rules/{file}: {e}"))?;
+        }
         if rules_archetype(file).is_some() {
             let archetype: bri_package_runtime::content::ArchetypeDef =
                 serde_json::from_slice(bytes).with_context(|| format!("rules/{file}"))?;
@@ -647,22 +708,124 @@ fn check_rules(id: &str, manifest: &[u8], files: &[Written]) -> Result<()> {
     Ok(())
 }
 
-/// `{{name}}` in a rules file becomes that value's text. A `{{word}}` that
-/// names no value is an error, so a misspelt name is caught.
+/// `{{name}}` in a rules file becomes that value's text,
+/// `{{name|bool}}` `true` or `false` for a TorqueScript truth value (`1`,
+/// `0`, `true`, `false`), as a JSON setting's default needs, and
+/// `{{name|event_params}}` the JSON parameter list of a
+/// `registerOutputEvent` parameter string (see [`event_params`]), and
+/// `{{name|lower}}` the text in lower case, as content ids spell a Torque
+/// name (`v20.weapon.{{equip|lower}}`). A
+/// `{{word}}` that names no value is an error, so a misspelt name is
+/// caught, as is a value its filter cannot read.
+/// A port's text file with Unix line endings, however it was checked out
+/// (`core.autocrlf` on Windows), so its rules come out the same everywhere.
+fn port_text(bytes: &[u8]) -> Result<String> {
+    Ok(crate::script_text(std::str::from_utf8(bytes)?.as_bytes()))
+}
+
 fn fill_text(text: &str, values: &BTreeMap<String, String>) -> Result<String> {
-    let re = regex::Regex::new(r"\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}")?;
-    let mut missing = None;
-    let filled = re.replace_all(text, |c: &regex::Captures| match values.get(&c[1]) {
-        Some(v) => v.clone(),
-        None => {
-            missing.get_or_insert_with(|| c[1].to_owned());
-            String::new()
+    let re = regex::Regex::new(r"\{\{([A-Za-z_][A-Za-z0-9_]*)(\|bool|\|event_params|\|lower)?\}\}")?;
+    let mut problem = None;
+    let filled = re.replace_all(text, |c: &regex::Captures| {
+        let Some(v) = values.get(&c[1]) else {
+            problem.get_or_insert_with(|| format!("uses `{}`, which no pattern captures", &c[0]));
+            return String::new();
+        };
+        match c.get(2).map(|m| m.as_str()) {
+            None => v.clone(),
+            Some("|lower") => v.to_ascii_lowercase(),
+            Some("|event_params") => event_params(v).unwrap_or_else(|e| {
+                problem.get_or_insert_with(|| format!("`{}`: {e:#}", &c[0]));
+                String::new()
+            }),
+            Some(_) => match v.trim().to_ascii_lowercase().as_str() {
+                "1" | "true" => "true".to_owned(),
+                "0" | "false" => "false".to_owned(),
+                _ => {
+                    problem.get_or_insert_with(|| {
+                        format!("`{}` is `{v}`, not 1, 0, true or false", &c[0])
+                    });
+                    String::new()
+                }
+            },
         }
     });
-    if let Some(name) = missing {
-        bail!("uses `{{{{{name}}}}}`, which no pattern captures");
+    if let Some(problem) = problem {
+        bail!("{problem}");
     }
     Ok(filled.into_owned())
+}
+
+/// The parameters of `registerOutputEvent(class, name, params)` as
+/// `behaviour.json` `brick_outputs` writes them. `source` is the params
+/// argument as the script spells it: quoted strings joined by `TAB` (or
+/// holding `\t`), each field a v20 parameter (`int min max default`,
+/// `float min max step default`, `bool`, `string length width`,
+/// `paintColor default`, `list name value ...`).
+fn event_params(source: &str) -> Result<String> {
+    let token = regex::Regex::new(r#"^\s*(?:"((?:[^"\\]|\\.)*)"|(TAB))"#)?;
+    let mut text = String::new();
+    let mut rest = source.trim();
+    let mut want_string = true;
+    while !rest.is_empty() {
+        let c = token
+            .captures(rest)
+            .with_context(|| format!("cannot read `{rest}` as parameter text"))?;
+        if let Some(quoted) = c.get(1) {
+            ensure!(want_string, "two strings in a row in `{source}`");
+            text.push_str(&quoted.as_str().replace("\\t", "\t"));
+        } else {
+            ensure!(!want_string, "TAB without a string before it in `{source}`");
+            text.push('\t');
+        }
+        want_string = !want_string;
+        rest = rest[c.get(0).unwrap().end()..].trim_start();
+    }
+    let number = |w: Option<&&str>, what: &str| -> Result<f64> {
+        w.with_context(|| format!("{what} is missing"))?
+            .parse::<f64>()
+            .with_context(|| format!("{what} is not a number"))
+    };
+    let mut params = Vec::new();
+    for field in text.split('\t').filter(|f| !f.trim().is_empty()) {
+        let w: Vec<&str> = field.split_whitespace().collect();
+        let kind = w[0].to_ascii_lowercase();
+        params.push(match kind.as_str() {
+            "int" => serde_json::json!({
+                "type": "int",
+                "min": number(w.get(1), "int min")? as i64,
+                "max": number(w.get(2), "int max")? as i64,
+                "default": number(w.get(3), "int default")? as i64,
+            }),
+            "float" => serde_json::json!({
+                "type": "float",
+                "min": number(w.get(1), "float min")?,
+                "max": number(w.get(2), "float max")?,
+                "step": number(w.get(3), "float step")?,
+                "default": number(w.get(4), "float default")?,
+            }),
+            "bool" => serde_json::json!({ "type": "bool" }),
+            "string" => serde_json::json!({
+                "type": "string",
+                "max_length": number(w.get(1), "string length")? as u32,
+                "width": number(w.get(2), "string width")? as i32,
+            }),
+            "paintcolor" => serde_json::json!({
+                "type": "paint_color",
+                "default": number(w.get(1), "paintColor default")? as u8,
+            }),
+            "list" => {
+                ensure!(w.len() >= 3 && w.len() % 2 == 1, "list `{field}` is not name value pairs");
+                let items = w[1..]
+                    .chunks(2)
+                    .map(|p| Ok(serde_json::json!([p[0], number(p.get(1), "list value")? as i64])))
+                    .collect::<Result<Vec<_>>>()?;
+                serde_json::json!({ "type": "list", "items": items })
+            }
+            other => bail!("parameter type `{other}` is not one an Add-On output can take"),
+        });
+    }
+    Ok(serde_json::to_string(&params)?)
 }
 
 /// The item presentation the importer writes pins the exact bytes of the
@@ -821,6 +984,26 @@ mod tests {
     }
 
     #[test]
+    fn event_params_read_registeroutputevent_text() {
+        let read = |t: &str| serde_json::from_str::<Value>(&event_params(t).unwrap()).unwrap();
+        assert_eq!(
+            read(r#""list TriggerTeam 0 TeamColor 1 ALL 2" TAB "paintColor 0" TAB "bool""#),
+            json!([
+                {"type": "list", "items": [["TriggerTeam", 0], ["TeamColor", 1], ["ALL", 2]]},
+                {"type": "paint_color", "default": 0},
+                {"type": "bool"}
+            ])
+        );
+        assert_eq!(
+            read(r#""int -999 999 1\tbool 1""#),
+            json!([{"type": "int", "min": -999, "max": 999, "default": 1}, {"type": "bool"}])
+        );
+        assert_eq!(read(r#""""#), json!([]));
+        assert!(event_params(r#""datablock ItemData""#).is_err());
+        assert!(event_params(r#""int 0 1 0" "bool""#).is_err());
+    }
+
+    #[test]
     fn fill_lowers_names_for_ids() {
         let values = BTreeMap::from([("p".to_string(), "knifeProjectile".to_string())]);
         assert_eq!(
@@ -836,5 +1019,9 @@ mod tests {
             ])
         );
         assert!(fill(&json!("kit:{missing:lower}"), &values).is_err());
+        assert_eq!(
+            fill_text("v20.weapon.{{p|lower}} {{p}}", &values).unwrap(),
+            "v20.weapon.knifeprojectile knifeProjectile"
+        );
     }
 }

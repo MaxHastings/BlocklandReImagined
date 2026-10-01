@@ -40,6 +40,10 @@ impl Dirty {
     pub fn contains(&self, id: &BrickId) -> bool {
         self.set.contains(id)
     }
+    /// What `contains` holds, in id order.
+    pub fn iter(&self) -> impl Iterator<Item = BrickId> + '_ {
+        self.set.iter().copied()
+    }
     /// Replication's view: everything changed since its last take.
     pub fn take(&mut self) -> BTreeSet<BrickId> {
         std::mem::take(&mut self.set)

@@ -83,6 +83,9 @@ pub struct WeaponEffects {
     weapons: Arc<bri_weapons::Pack>,
     bindings: BTreeMap<String, Binding>,
     trails: BTreeMap<(u64, bool), Attached>,
+    /// Mounted images' lights by holder and slot: the image and paint each
+    /// was started for.
+    image_lights: BTreeMap<(u64, u8), (String, Option<u8>, EffectHandle)>,
     ropes: BTreeMap<u64, RopeSweep>,
     timed: Vec<Timed>,
     pending: VecDeque<HostRequest>,
@@ -125,6 +128,23 @@ impl WeaponEffects {
                 color: p.light_color,
                 brightness: 1.,
                 radius: p.light_radius,
+                color_curves: None,
+                brightness_curve: None,
+                radius_curve: None,
+                flare: None,
+            });
+        }
+        for i in weapons.images.values() {
+            let Some(light) = i.light else {
+                continue;
+            };
+            library.lights.push(bri_content::effects::Light {
+                id: image_light(&i.id),
+                name: String::new(),
+                enabled: true,
+                color: light.color,
+                brightness: 1.,
+                radius: light.radius,
                 color_curves: None,
                 brightness_curve: None,
                 radius_curve: None,
@@ -199,6 +219,7 @@ impl WeaponEffects {
             weapons,
             bindings,
             trails: BTreeMap::new(),
+            image_lights: BTreeMap::new(),
             ropes: BTreeMap::new(),
             timed: Vec::new(),
             pending: VecDeque::new(),
@@ -282,6 +303,7 @@ impl WeaponEffects {
     pub fn reset(&mut self, checkpoint_cursor: u64) {
         self.world.teardown();
         self.trails.clear();
+        self.image_lights.clear();
         self.ropes.clear();
         self.timed.clear();
         self.pending.clear();
@@ -394,6 +416,64 @@ impl WeaponEffects {
                 }
                 Err(_) => {
                     self.diagnostics.deferred_attachments += 1;
+                    self.diagnostics.capacity_rejections =
+                        self.diagnostics.capacity_rejections.saturating_add(1);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Light up the images players wear or hold that give off light
+    /// (`Image::light`), each at the image as drawn (`at(holder, slot)`),
+    /// in the colour it is worn in when painted. One gone or changed goes
+    /// out at once, as v20's image light does with its image.
+    pub fn sync_image_lights(
+        &mut self,
+        view: &WeaponView,
+        at: impl Fn(u64, u8) -> Option<Vec3>,
+    ) -> Result<()> {
+        let mut desired = BTreeMap::new();
+        for (owner, images) in &view.images {
+            for m in images {
+                if self.weapons.images.get(&m.image).is_some_and(|i| i.light.is_some())
+                    && let Some(position) = at(*owner, m.hand).filter(|p| p.is_finite())
+                {
+                    desired.insert((*owner, m.hand), (m.image.clone(), m.paint, position));
+                }
+            }
+        }
+        let world = &mut self.world;
+        self.image_lights.retain(|key, (image, paint, handle)| {
+            let keep = desired
+                .get(key)
+                .is_some_and(|(i, p, _)| i == image && p == paint)
+                && world.is_active(*handle);
+            if !keep {
+                world.stop(*handle, StopMode::Immediate);
+            }
+            keep
+        });
+        for (key, (image, paint, position)) in desired {
+            let transform = SourceTransform {
+                position,
+                ..Default::default()
+            };
+            if let Some((_, _, handle)) = self.image_lights.get(&key) {
+                self.world.update_source(*handle, transform)?;
+                continue;
+            }
+            let options = SourceOptions {
+                paint: paint
+                    .and_then(|p| self.palette.get(usize::from(p)))
+                    .map(|c| [c[0], c[1], c[2]].map(|v| v.clamp(0., 1.))),
+                ..Default::default()
+            };
+            match self.world.start_light(&image_light(&image), transform, options) {
+                Ok(handle) => {
+                    self.image_lights.insert(key, (image, paint, handle));
+                }
+                Err(_) => {
                     self.diagnostics.capacity_rejections =
                         self.diagnostics.capacity_rejections.saturating_add(1);
                 }
@@ -678,6 +758,9 @@ fn paint_recolor(color: [f32; 4], explosion: bool) -> Recolor {
 }
 fn projectile_light(id: &str) -> String {
     format!("weapon/projectile-light/{id}")
+}
+fn image_light(id: &str) -> String {
+    format!("weapon/image-light/{id}")
 }
 fn valid_transform(t: SourceTransform) -> bool {
     t.position.is_finite()

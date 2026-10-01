@@ -9218,6 +9218,21 @@ Tests: `add_on_join::bot_kinds_come_from_the_blockhead_bot_add_on_the_host_runs`
 (generated content: hosts with the Add-On on and off, loads a saved spawn
 brick, counts players). Not run here: the second needs generated content.
 
+## 2026-10-01 Bundled original Add-Ons
+
+Max chose to ship the original classic Add-Ons in our releases, credited to
+their authors, and never to commit them. `packages/default-addons.json`
+(schema 2) now lists our own Add-Ons and the originals (name, title,
+authors, version, pinned sha256s, `withdrawn`). `tools/addon_bundle.py`
+finds, imports (with the listed port), credits and packs them into the
+private `addon-bundle` draft release; all three release workflows fetch it
+and the packagers ship `CREDITS.md` (docs/release-builds.md). The committed
+Stunt Plane conversion and the Duplicator and Advanced Duplicator remakes
+were removed. Only the Stunt Plane is pinned so far; the rest are pinned
+from the PC's `find` output. Tests: `cargo test -p bri-package`,
+`-p bri-addon-import --test bundle` (synthetic shotgun), and
+`tools/tests/Test-PlaytestPackaging.ps1` (pwsh, synthetic bundle) pass.
+The Stunt Plane trail tests now need the bundle installed in content/.
 ## 2026-10-01: Code health pass: one host setup, gun-seat fire, drive state
 
 Max asked whether technical debt was piling up. The worst pattern was the
@@ -9881,6 +9896,121 @@ v0.1.10".
   out of minigames, roll it more than 6 units in two seconds; 3.75 without
   the scale).
 
+## 2026-10-01 Slayer and Capture the Flag from the originals (branch `claude/project-thread-t8k5dx`)
+Max asked for a Capture the Flag mod to pair with trench building; the pick
+is Greek2me's Slayer 4.1.5 plus Slayer_CTF, ported (originals only, nothing
+of theirs in the repo). Both ports are `partial`.
+- Engine seams: mini-game teams (`bri-minigames` teams, friendly fire off by
+  default, team chat to allies), hooks `on_minigame`, `on_pick_spawn` and
+  brick `zones`/`on_zone`, script fns `minigames`/`minigame`/`set_teams`/
+  `set_team`/`set_score`/`add_score`/`reset_minigame` (new `minigame`
+  capability), `bricks`/`brick`/`set_brick_item`, `drop_item` options
+  (paint, data, lifetime) with `drops`/`remove_drop`, worn image slots 2-3
+  (`mount_image(p, image, slot, paint)`, cleared at death), paint-tinted
+  brick items. Protocol: `StaticItem.paint`, `Drop.paint`, four image slots,
+  weapon animation cues for worn slots.
+- Importer: a port's `datablocks.cs` declares datablocks the Add-On makes at
+  run time (CTF's flags); `covers` keys may be script files; the base game's
+  globals resolve (`$BackSlot`); a brick may inherit from the Add-On's bricks
+  in another script; rules that do not compile are refused.
+- Every covers pattern was checked against Max's copies' text (sha256
+  e1996270… and d9e699b6…) in the cloud; the stand-ins in
+  `crates/addon-import/tests/fixtures/ports` (CC0) carry the same shapes.
+- Tests: `crates/addon-import/tests/ports.rs slayer_ports_apply_with_their_rules`,
+  `crates/addon-import/tests/slayer.rs` (hosted: team sorting and spawns,
+  capture, drop and recovery).
+- Deviations, said plainly: CTF plays in any team mini-game with Flag Spawns
+  (no Slayer mode picker); teams are set up with `/teams add <colour> <name>`
+  until a settings screen exists; one tinted flag replaces ten per-colour
+  datablocks. Not yet: Slayer lives/points/time, uniforms, GUI, bots; CTF's
+  Drop Tool key, countdown label, flag light, brick events, locks, score
+  columns, other flag models.
+
+## 2026-10-01 Slayer step 2: menus, rounds, CTF as a Slayer mode (branch `claude/project-thread-t8k5dx`)
+- Add-On settings seam (built here; the Tier branch had none): a package's
+  behaviour declares `settings` (bool, int range, list, text; game or team
+  scope; `shown_when`; admin-only) and `setting_items` (another package's
+  list gains items). Values live on the mini-game and its teams, replicate
+  in the checkpoint and `MiniGameView`, and are edited in the new Add-On
+  Settings window through `MiniGameRequest::AddOnSettings` (owner or
+  admin). Script: `setting`, `team_setting`, `set_setting`,
+  `set_team_setting`, `on_minigame` "settings" event.
+- Round seams: `hold_respawn(p, held)` (no respawn until a reset),
+  `watch(p, target)` (round-end camera on another player or one's corpse;
+  a watching body is refused movement and fire), and a shared round end
+  (`end_round(game, #{teams, players})`, "round_end" event, `round_over`,
+  one per reset). `tell_minigame` / `center_print_minigame` /
+  `bottom_print_minigame` broadcast as one op.
+- Ports: `rules.needs` gives a rules companion a dependency on another
+  port's rules (Slayer_CTF on Slayer); captured preferences become setting
+  defaults, `{{name|bool}}` for 1/0 prefs.
+- Slayer: game mode list (Free for All, Teams, plus CTF's), lives, points,
+  time limit, pre-round countdown, time between rounds, team lives, sort
+  and weight, max players, lock, win on time up; /teams join refuses locked
+  or full teams. CTF: its settings show only in its mode; a capture win
+  ends Slayer's round.
+- Protocol: `Checkpoint.addon_settings`, `MiniGameView` teams and
+  `addon_settings`, `MiniGameRequest::AddOnSettings`, `Vitals.respawn_held`.
+- Tests: `crates/minigames/tests/teams.rs`, `crates/sim/tests/script_api.rs
+  a_rule_holds_a_respawn_until_reset_and_points_a_camera_elsewhere`,
+  `crates/addon-import/tests/slayer.rs` (8, including rounds, lives, points,
+  time and the settings window), `tests/ports.rs`. Hosted tests also passed
+  on Max's real copies in the cloud (folder copies, sha "unlisted").
+- Brick events seam (step 3): behaviour `brick_inputs` adds wrench event
+  inputs (`registerInputEvent`) to the host's catalog, whichever is set up
+  first; `fire_brick_input(brick, input, p)` (new `brick_events`
+  capability) runs the rows builders wired, as theirs. A package fires
+  only its own; a taken name is refused at start. Players' wrench merges
+  them from `Checkpoint.brick_inputs` (protocol). Slayer_CTF fires
+  onFlagPickedUp, onFlagDropped, onFlagReturned and onFlagRecovered where
+  the original does. Test: `crates/sim/tests/package_brick_inputs.rs`.
+- Step 4, from the Gate's real-copy reports: Slayer's port had stopped
+  applying (main's "last definition wins" read FlyThroughCam's packaged
+  wrapper of `preRoundCountdownTick`). Ports now read a function's plain
+  definition, the last one; a packaged override only where there is none
+  (it calls `Parent::`). An Add-On with sounds but no weapons now gets a
+  sounds-only weapons pack, so its rules play them by id; Slayer's port
+  declares its run-time countdown voices (`datablocks.cs`, pinned to
+  `MaxCountDown = 10`) and plays them and the GO buzzer to every member.
+  DTS files with up to 16 stray bytes after the material list convert
+  (Torque never reads them), for Slayer's cube.dts.
+- Step 5, PlayerFrozenArmor as a real player type: the importer converts an
+  Add-On's PlayerData into `assets/archetypes/<name>.json` (speeds, forces
+  over mass, energy per second, ui name, third-person-only) and provides
+  it; a shared Add-On may carry archetypes (data, not code). Archetypes
+  gain `uses_items` (false refuses fire, activate and tool slots) and
+  `look.third_person_only` (the client keeps the camera behind). The
+  motor accepts zero running force and surface angles. Slayer's countdown
+  swaps members onto the frozen body and back to the body they had at GO,
+  as `changeDatablock` did (Step 8 keeps `set_archetype(p, "")` as main's
+  "drop the choice, keep the body", so the rules remember the body).
+  Protocol: the archetype table carries the
+  two new fields.
+- Step 6, item idle threads: `bri_weapons::Item::idle` names a sequence an
+  item's model loops while it lies in the world or is dropped, as
+  `%obj.playThread(0, seq)` in `ItemData::onAdd` did; the client poses it
+  on the world clock, so every copy shares one pose. Slayer CTF's port
+  sets it from `flagIdleAnimation` (pinned with `onAdd`), so standing
+  flags wave. Test: `crates/client/tests/world_items.rs`
+  (`a_lying_item_loops_its_idle_sequence_on_the_world_clock`, content).
+- Step 7, capture points on trigger zones: Slayer's 8x8 and 16x16 Capture
+  Points are a rules zone (`ticks`), so `Slayer_CPTriggerData`'s
+  onTickTrigger and decreaseCapture are the rules': a bar per team fills
+  each tick (bottom print in team colours), eases back a second after the
+  team leaves, tints the point toward the attacker (Use Transitional
+  Colors), and a full bar captures it (CP Capture points, onCPCapture,
+  onCPCapture(TeamN) brick events); a reset or the game's end gives points
+  their built colour back (onCPReset). New generic seams:
+  `set_brick_color` / `palette()` (`world.edit`) and `set_zone_period`
+  (`minigame`, the Tick Time setting, as `tickPeriodMS = %1`). A datablock
+  whose callbacks a port covers counts as consumed in the import report.
+  Test: `slayer.rs` `standing_on_a_capture_point_fills_its_bar_and_captures_it`.
+- Not yet: uniforms, team loadouts/player types/scale, team respawn times,
+  friendly-fire penalties, team swaps, end-of-round report, spectating,
+  bots, locking capture points (setTeamControlLocked), Slayer's own events (onTeamCheck, onCP*, team
+  outputs like joinTeam/addLives, which need package outputs); CTF's
+  DropFlag output, Drop Tool key, dropped-flag countdown, flag light,
+  locked flags, score columns.
 ## 2026-10-01 Duplicator: the original, ported
 
 Max wants the original Duplicator (Plornt's Duplorcator, `Tool_Duplicator`)

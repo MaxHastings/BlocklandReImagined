@@ -15,6 +15,8 @@ pub const CAPABILITIES: &[&str] = &[
     "effects",
     "lighting",
     "environment",
+    "minigame",
+    "brick_events",
 ];
 
 /// The plain-language line a player reads for `name`, completing
@@ -50,6 +52,13 @@ pub fn describe(name: &str) -> Option<&'static str> {
         // The sun, light, fog, sky and time of day, for everyone, until
         // the map changes.
         "environment" => "change the sun, sky, fog and time of day",
+        // Teams, scores and round resets in mini-games (Slayer's team
+        // games, Capture the Flag).
+        "minigame" => "set up teams in mini-games, keep score and reset rounds",
+        // Its own wrench event inputs and outputs (Capture the Flag's
+        // onFlagPickedUp, Slayer's setTeamControl): the rows builders wired
+        // to them run as those builders' own.
+        "brick_events" => "add its own wrench events and run the rows builders wire to them",
         _ => return None,
     })
 }

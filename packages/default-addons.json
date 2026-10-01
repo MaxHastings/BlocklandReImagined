@@ -1,16 +1,33 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "addons": [
-    { "id": "duplicator", "path": "duplicator/duplicator" },
-    { "id": "duplicator-tool", "path": "duplicator/duplicator-tool" },
+    {
+      "id": "tool_duplicator",
+      "original": {
+        "addon": "Tool_Duplicator",
+        "title": "Duplicator",
+        "authors": [
+          "Plornt"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "8ea932169dcd028580c00ebf55fa8747367f5ec8e258c2776b3d5d5d96a63fde"
+        ]
+      }
+    },
     {
       "id": "vehicle_stunt_plane",
-      "path": "imported/vehicle_stunt_plane",
-      "import": {
-        "archive": "Vehicle_Stunt_Plane.zip",
-        "archive_sha256": "e68fd1730c28f6b16ce0980336fc57f0e0d23e0c945256005c0957a84142329e",
+      "original": {
+        "addon": "Vehicle_Stunt_Plane",
+        "title": "Stunt Plane",
+        "authors": [
+          "Kaje",
+          "Ephialtes"
+        ],
         "version": "1.0.0",
-        "vehicles": ["vehicle_stunt_plane:vehicle/stuntplanevehicle"]
+        "sha256": [
+          "e68fd1730c28f6b16ce0980336fc57f0e0d23e0c945256005c0957a84142329e"
+        ]
       }
     },
     { "id": "brick_mirror", "path": "brick_mirror" },
@@ -22,16 +39,212 @@
     { "id": "steel-ball-kit", "path": "showcase/steel-ball-kit", "enabled": false },
     { "id": "steel-ball", "path": "showcase/steel-ball", "enabled": false },
     { "id": "steel-ball-fx", "path": "showcase/steel-ball-fx", "enabled": false },
+    { "id": "blockhead_bot", "path": "blockhead_bot", "enabled": false },
     {
-      "id": "advanced-duplicator-tool",
-      "path": "advanced-duplicator/advanced-duplicator-tool",
-      "enabled": false
+      "id": "tool_newduplicator",
+      "enabled": false,
+      "original": {
+        "addon": "Tool_NewDuplicator",
+        "title": "New Duplicator",
+        "authors": [
+          "Zeblote"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "b443eab7e97dfc51c1532c88411e5c93ed9a13b4a7fa0c60b7707b405fefa118"
+        ]
+      }
     },
     {
-      "id": "advanced-duplicator",
-      "path": "advanced-duplicator/advanced-duplicator",
-      "enabled": false
+      "id": "tool_fill_can",
+      "enabled": false,
+      "original": {
+        "addon": "Tool_Fill_Can",
+        "title": "Fill Can",
+        "authors": [
+          "Zor",
+          "Hit man"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "d40fc7127fe87da3b5027baf37a928fd1f575970d9e55eab1ebf89f5ed198ef8"
+        ]
+      }
     },
-    { "id": "blockhead_bot", "path": "blockhead_bot", "enabled": false }
+    {
+      "id": "gamemode_trenchdigging",
+      "enabled": false,
+      "original": {
+        "addon": "Gamemode_TrenchDigging",
+        "title": "Trench Digging",
+        "authors": [
+          "Lilboarder"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "0b5d9bc710a2f67720617a7c656841c0226617ec59eae19cf986046c3d82bc3c"
+        ]
+      }
+    },
+    {
+      "id": "tool_grapplerope",
+      "enabled": false,
+      "original": {
+        "addon": "Tool_GrappleRope",
+        "title": "Grapple Rope",
+        "authors": [
+          "Uristqwerty",
+          "SolarFlare",
+          "Demian"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "456a082bb30c498ed08d1771edbde8697e37a036077b5a20b68c446c1395fa19"
+        ]
+      }
+    },
+    {
+      "id": "weapon_loz_hookshot",
+      "enabled": false,
+      "original": {
+        "addon": "Weapon_Loz_Hookshot",
+        "title": "Hookshot",
+        "authors": [
+          "Kaje",
+          "Nitramtj",
+          "Aloshi",
+          "Loz",
+          "Polymer"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "aa63bc56831c06a9b4b6692fdf64c53e8a3eedd589e922c9e240dd55b7b9f54e"
+        ]
+      }
+    },
+    {
+      "id": "weapon_sniper_rifle",
+      "enabled": false,
+      "original": {
+        "addon": "Weapon_Sniper_Rifle",
+        "title": "Sniper Rifle",
+        "authors": [
+          "Kaje"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "ddf1f4dff31764c394bf812b5b67860a51547b78fc96e364fbce44df44b9b15a"
+        ]
+      }
+    },
+    {
+      "id": "weapon_butterflyknife",
+      "enabled": false,
+      "original": {
+        "addon": "Weapon_ButterflyKnife",
+        "title": "Butterfly Knife",
+        "authors": [
+          "Stratofortress"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "4d8d0cc59be118094a2e6e39056b895e19447c05ed8d3a644fd7a56780a7afa4"
+        ]
+      }
+    },
+    {
+      "id": "weapon_hegrenade",
+      "enabled": false,
+      "original": {
+        "addon": "Weapon_HEGrenade",
+        "title": "HE-Grenade",
+        "authors": [
+          "TheGeek",
+          "Pload",
+          "Rotondo",
+          "Ephialtes"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "1cae396e8616bf57e62dcfb4fda35490e93a772ee09979af45a3f7d4601dc351"
+        ]
+      }
+    },
+    {
+      "id": "weapon_adventurepack",
+      "enabled": false,
+      "original": {
+        "addon": "Weapon_AdventurePack",
+        "title": "Adventurer's Weapons",
+        "authors": [
+          "Bushido",
+          "Conan"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "9ce429bfc491cff5e3075798f88c2109717a3ea67d91f8461d8cda672a894e49"
+        ]
+      }
+    },
+    {
+      "id": "emote_critical",
+      "enabled": false,
+      "original": {
+        "addon": "Emote_Critical",
+        "title": "Critical Hit Emote",
+        "authors": [
+          "Space Guy"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "503b3d0d9744ed767ab3f536d54a2aef91825ffef9d939f2cc297f2fae7c1ec6"
+        ]
+      }
+    },
+    {
+      "id": "script_playerthrowing",
+      "enabled": false,
+      "original": {
+        "addon": "Script_PlayerThrowing",
+        "title": "Player Throwing",
+        "authors": [
+          "Electrk"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "aef5a4503044f5ec690c8cb3ef693ed885f97f90c7d79d7c453704be56caf0ba"
+        ]
+      }
+    },
+    {
+      "id": "gamemode_slayer",
+      "enabled": false,
+      "original": {
+        "addon": "Gamemode_Slayer",
+        "title": "Slayer",
+        "authors": [
+          "Greek2me"
+        ],
+        "version": "4.1.5",
+        "sha256": [
+          "e199627045d2d0250226605727b9ec32f6b1909dbadcc58d23d0f059fae0c7b9"
+        ]
+      }
+    },
+    {
+      "id": "gamemode_slayer_ctf",
+      "enabled": false,
+      "original": {
+        "addon": "Gamemode_Slayer_CTF",
+        "title": "Slayer - Capture the Flag",
+        "authors": [
+          "Greek2me"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "d9e699b6080477d8898d8ecc70e89ef9aa8659de44fdbee18e854867bdc48106"
+        ]
+      }
+    }
   ]
 }

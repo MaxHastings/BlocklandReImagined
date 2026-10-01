@@ -1227,12 +1227,12 @@ mod tests {
     }
     /// Max, v0.1.10: a destroyed jeep, tank or plane kept its paint while it
     /// burned. v20 paints the wreck black and its tires are gone until the
-    /// final explosion; PlayerData mounts keep their colour. Uses the
-    /// committed stunt plane Add-On, a `WheeledVehicleData` with three wheels.
+    /// final explosion; PlayerData mounts keep their colour. Uses a
+    /// synthetic stand-in plane, a `WheeledVehicleData` with three wheels.
     #[test]
     fn a_destroyed_vehicle_is_drawn_black_without_its_tires() -> Result<()> {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../packages/imported/vehicle_stunt_plane/assets");
+            .join("../vehicles/tests/fixtures/stand-in-plane/assets");
         let mut assets = VehicleAssets::load(&root)?;
         let d = assets.pack.definitions[0].clone();
         ensure!(d.family == bri_vehicles::Family::Wheeled && d.wheels.len() == 3);
@@ -1287,7 +1287,7 @@ mod tests {
     #[test]
     fn only_vehicle_classes_char_and_player_mounts_keep_their_colour() {
         let plane: Pack = serde_json::from_slice(include_bytes!(
-            "../../../packages/imported/vehicle_stunt_plane/assets/vehicles.json"
+            "../../vehicles/tests/fixtures/stand-in-plane/assets/vehicles.json"
         ))
         .unwrap();
         let mut d = plane.definitions[0].clone();
@@ -1318,24 +1318,24 @@ mod tests {
         };
         assert_eq!(body_tint(&d, &plain), [1.0; 4]);
     }
-    /// A wreck burns with its own `damageEmitter`s, each once: the stunt
-    /// plane names `VehicleBurnEmitter` twice; an Add-On's own emitter
+    /// A wreck burns with its own `damageEmitter`s, each once: the stand-in
+    /// plane names `StandInWreckEmitter` (a base-game name to it) twice; an Add-On's own emitter
     /// resolves to its id; a mount without any (a horse) does not burn.
     #[test]
     fn a_wreck_burns_with_its_own_damage_emitters() {
         let plane: Pack = serde_json::from_slice(include_bytes!(
-            "../../../packages/imported/vehicle_stunt_plane/assets/vehicles.json"
+            "../../vehicles/tests/fixtures/stand-in-plane/assets/vehicles.json"
         ))
         .unwrap();
         let mut d = plane.definitions[0].clone();
-        assert_eq!(d.wreck_emitters(), ["v20/emitter/vehicleburnemitter"]);
+        assert_eq!(d.wreck_emitters(), ["v20/emitter/standinwreckemitter"]);
         let own = d.effects.emitters[0].id.clone();
         let (_, name) = own.rsplit_once(":emitter/").unwrap();
         d.authored
             .insert("damageemitter[2]".into(), name.to_ascii_uppercase());
         assert_eq!(
             d.wreck_emitters(),
-            ["v20/emitter/vehicleburnemitter".to_string(), own]
+            ["v20/emitter/standinwreckemitter".to_string(), own]
         );
         d.authored.retain(|k, _| !k.starts_with("damageemitter"));
         assert!(d.wreck_emitters().is_empty());

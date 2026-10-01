@@ -291,6 +291,8 @@ pub struct Core {
     pub name_asked: bool,
     /// The page `getHelp` asked HelpDlg to open on.
     pub help_page: Option<String>,
+    /// The report the host last showed (the Report window's).
+    pub report: Option<crate::api::ReportView>,
     pub print_letters_visible: bool,
     // catalogs
     pub maps: Vec<MapInfo>,
@@ -339,6 +341,8 @@ pub struct Core {
     /// The host's environment and the Environment window's draft.
     pub environment: crate::models::environment::EnvironmentModel,
     pub minigames: MiniGameUiState,
+    /// The mini-game whose Add-On Settings window is open (or opening).
+    pub minigame_addons: Option<MiniGameId>,
     /// Open `TrustInviteGui` invitation.
     /// Open trust invitations, newest last, one per sender, like mini-game
     /// invitations: the dialog shows the newest and Escape leaves them open.
@@ -496,6 +500,7 @@ impl Core {
         self.wrench = WrenchState::default();
         self.players.clear();
         self.minigames = MiniGameUiState::default();
+        self.report = None;
         self.admin = Default::default();
         self.environment = Default::default();
         self.server_name.clear();
@@ -587,6 +592,7 @@ impl Core {
             MiniGameOperation::Reset => Op::Reset,
             MiniGameOperation::RespawnAll => Op::RespawnAll,
             MiniGameOperation::End => Op::End,
+            MiniGameOperation::AddOnSettings => Op::AddOnSettings,
         });
         if !allowed {
             self.minigames.status =
@@ -1283,6 +1289,7 @@ impl Ui {
             help_open: false,
             name_asked: false,
             help_page: None,
+            report: None,
             print_letters_visible: false,
             maps: Vec::new(),
             game_modes: Vec::new(),
@@ -1317,6 +1324,7 @@ impl Ui {
             admin: Default::default(),
             environment: Default::default(),
             minigames: MiniGameUiState::default(),
+            minigame_addons: None,
             trust_invites: Vec::new(),
             name_tags: Vec::new(),
             package_panels: Vec::new(),
@@ -1862,6 +1870,19 @@ impl Ui {
                 c.trust_invites.push(invitation);
                 c.pop(ScreenId::TrustInvitation);
                 c.push(ScreenId::TrustInvitation);
+            }
+            UiUpdate::Report(report) => {
+                // A new report opens a window sized to its columns, unless
+                // the player hides them (Slayer's "Disable End of Round
+                // Report").
+                let hidden = c
+                    .prefs
+                    .bool_or(crate::screens::options::HIDE_REPORTS, false);
+                c.pop(ScreenId::Report);
+                if report.is_some() && !hidden {
+                    c.push(ScreenId::Report);
+                }
+                c.report = report;
             }
             UiUpdate::MiniGameInvite(invitation) => {
                 c.minigames
@@ -2786,6 +2807,32 @@ mod sound_tests {
         ui.handle_input(InputEvent::FocusLost);
         hover(&mut ui, ScreenId::MainMenu, "MM_StartButton");
         assert_eq!(ui.drain_sounds().len(), 1);
+    }
+
+    /// A score report opens its window and a closing one shuts it; with
+    /// "Hide end of round reports" (Slayer's client preference) it never
+    /// opens.
+    #[test]
+    fn a_report_opens_its_window_unless_the_player_hides_reports() {
+        let report = || {
+            UiUpdate::Report(Some(crate::api::ReportView {
+                title: "End of Round Report".into(),
+                ..Default::default()
+            }))
+        };
+        let mut ui = fixture();
+        ui.apply(report());
+        ui.flush();
+        assert!(ui.is_open(ScreenId::Report));
+        ui.apply(UiUpdate::Report(None));
+        ui.flush();
+        assert!(!ui.is_open(ScreenId::Report));
+        ui.core
+            .prefs
+            .set_bool(crate::screens::options::HIDE_REPORTS, true);
+        ui.apply(report());
+        ui.flush();
+        assert!(!ui.is_open(ScreenId::Report));
     }
 
     #[test]

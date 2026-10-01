@@ -23,7 +23,7 @@ pub(super) fn id(index: u64) -> Id {
         generation: 1,
     }
 }
-fn entity(class: Class, index: u64) -> Entity {
+pub(super) fn entity(class: Class, index: u64) -> Entity {
     Entity {
         class,
         id: id(index),
@@ -33,6 +33,8 @@ fn entity(class: Class, index: u64) -> Entity {
 #[derive(Default)]
 pub(super) struct Events {
     pub(super) world: Option<EventWorld>,
+    /// The host's own catalog, before Add-Ons' inputs are added.
+    base: Option<ev::Catalog>,
     bindings: ev::Bindings,
     sounds: BTreeSet<String>,
     installed: BTreeSet<BrickId>,
@@ -57,7 +59,26 @@ pub(super) struct Events {
     /// Explosions and projectiles refused for being over the per-tick limits
     /// since the host last asked.
     pub(super) over_limit: u64,
+    /// Whether the event phase is running rows now, and the inputs Add-On
+    /// rules fired from inside one (an output that drops a flag fires
+    /// `onFlagDropped`): they run once the phase is done
+    /// (`fire_package_input`).
+    advancing: bool,
+    deferred: Vec<(BrickId, String, Option<OwnerId>, InputExtra)>,
+    /// Add-On inputs that follow one of the engine's (`follows`), asked
+    /// about when a player sets that one off.
+    pub(super) follows: Vec<super::packages::Follower>,
 }
+/// Targets only some inputs have, for `fire_input_with`.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct InputExtra {
+    /// The mini-game the input is about (`onMinigameRoundStart`).
+    pub(super) game: Option<mg::GameId>,
+    /// Whoever killed the player it is about (`onMinigameDeath`).
+    pub(super) killer: Option<OwnerId>,
+}
+/// Most inputs rules may fire from inside one event phase.
+const MAX_DEFERRED_INPUTS: usize = 256;
 
 /// Event work per host tick, in the engine's cost units (a row plus each job
 /// it expands into): everyone's rows together, and any one owner's, so an
@@ -135,7 +156,7 @@ impl Session {
     }
     /// Rebind datablocks after the server's content catalogs change.
     pub(super) fn refresh_event_bindings(&mut self) -> Result<()> {
-        match self.events.world.as_ref().map(|w| w.catalog().clone()) {
+        match self.events.base.clone() {
             Some(catalog) => self.install_event_world(catalog),
             None => Ok(()),
         }
@@ -164,11 +185,15 @@ impl Session {
             palette_len: self.simulation.state().palette.len(),
             datablocks,
         };
-        let world = EventWorld::new(catalog, bindings.clone(), event_limits())?;
+        let merged = catalog.extended(&self.package_brick_events())?;
+        let follows = self.package_followers(&catalog);
+        let world = EventWorld::new(merged, bindings.clone(), event_limits())?;
         self.events = Events {
             world: Some(world),
+            base: Some(catalog),
             bindings,
             sounds: std::mem::take(&mut self.events.sounds),
+            follows,
             ..Default::default()
         };
         Ok(())
@@ -342,7 +367,7 @@ impl Session {
         }
     }
     /// Keep engine programs in step with changed bricks.
-    fn sync_event_programs(&mut self, changed: &BTreeSet<BrickId>) {
+    pub(in crate::session) fn sync_event_programs(&mut self, changed: &BTreeSet<BrickId>) {
         if self.events.world.is_none() {
             return;
         }
@@ -360,6 +385,17 @@ impl Session {
     /// Fire an input on a brick. `player` supplies the Player/Bot, Client
     /// and MiniGame targets the input exposes.
     pub(super) fn fire_input(&mut self, brick: BrickId, input: &str, player: Option<OwnerId>) {
+        self.fire_input_with(brick, input, player, InputExtra::default());
+    }
+    /// `fire_input` with the targets only some inputs have: the mini-game
+    /// it is about, when no player gives one, and a killer.
+    pub(super) fn fire_input_with(
+        &mut self,
+        brick: BrickId,
+        input: &str,
+        player: Option<OwnerId>,
+        extra: InputExtra,
+    ) {
         // Bricks edited since the last event phase run their new program.
         self.follow_palette();
         if self.dirty.contains(&brick) || !self.events.scanned {
@@ -425,31 +461,25 @@ impl Session {
             };
             trigger.client = Some(entity(Class::Client, client));
         } else if let Some(owner) = player.filter(|o| self.peers.contains_key(o)) {
-            if slots.contains(&Slot::Player) {
+            self.player_targets(brick, &slots, owner, &mut trigger);
+        }
+        self.owner_targets(brick, &slots, &mut trigger.targets);
+        if let Some(game) = extra.game.filter(|_| slots.contains(&Slot::MiniGame)) {
+            trigger
+                .targets
+                .entry(Slot::MiniGame)
+                .or_insert(entity(Class::MiniGame, game.0));
+        }
+        if let Some(killer) = extra.killer.filter(|k| self.peers.contains_key(k)) {
+            if slots.contains(&Slot::KillerPlayer) && self.is_alive(killer) {
                 trigger
                     .targets
-                    .insert(Slot::Player, entity(Class::Player, owner));
+                    .insert(Slot::KillerPlayer, entity(Class::Player, killer));
             }
-            if slots.contains(&Slot::Client) {
+            if slots.contains(&Slot::KillerClient) && !self.is_bot(killer) {
                 trigger
                     .targets
-                    .insert(Slot::Client, entity(Class::Client, owner));
-                trigger.client = Some(entity(Class::Client, owner));
-            }
-            let brick_owner = self.simulation.state().bricks.get(&brick).map(|b| b.owner);
-            // v20 onActivate and the other inputs: on single-player and LAN
-            // servers ($Server::LAN) the MiniGame target is the activator's
-            // game; elsewhere only a game the brick shares with them.
-            let client_game = self.game_of(owner);
-            let game = ev::semantics::minigame_target(
-                self.lan_host,
-                brick_owner
-                    .and_then(|o| self.game_of(self.brick_group_owner_for(o, client_game)))
-                    .map(|g| entity(Class::MiniGame, g.0)),
-                client_game.map(|g| entity(Class::MiniGame, g.0)),
-            );
-            if let Some(game) = game.filter(|_| slots.contains(&Slot::MiniGame)) {
-                trigger.targets.insert(Slot::MiniGame, game);
+                    .insert(Slot::KillerClient, entity(Class::Client, killer));
             }
         }
         let world = self.events.world.as_mut().unwrap();
@@ -458,6 +488,69 @@ impl Session {
                 &mut self.events.diagnostics,
                 format!("Brick {brick} {input}: {error:#}"),
             );
+        }
+        if let Some(owner) = player.filter(|o| !self.is_bot(*o)) {
+            self.follow_input(brick, input, owner);
+        }
+    }
+    /// The targets an input set off by `owner` offers: their player and
+    /// client, and the minigame v20 picks for the brick and them.
+    pub(in crate::session) fn player_targets(
+        &self,
+        brick: BrickId,
+        slots: &BTreeSet<Slot>,
+        owner: OwnerId,
+        trigger: &mut Trigger,
+    ) {
+        if slots.contains(&Slot::Player) {
+            trigger
+                .targets
+                .insert(Slot::Player, entity(Class::Player, owner));
+        }
+        if slots.contains(&Slot::Client) {
+            trigger
+                .targets
+                .insert(Slot::Client, entity(Class::Client, owner));
+            trigger.client = Some(entity(Class::Client, owner));
+        }
+        let brick_owner = self.simulation.state().bricks.get(&brick).map(|b| b.owner);
+        // v20 onActivate and the other inputs: on single-player and LAN
+        // servers ($Server::LAN) the MiniGame target is the activator's
+        // game; elsewhere only a game the brick shares with them.
+        let client_game = self.game_of(owner);
+        let game = ev::semantics::minigame_target(
+            self.lan_host,
+            brick_owner
+                .and_then(|o| self.game_of(self.brick_group_owner_for(o, client_game)))
+                .map(|g| entity(Class::MiniGame, g.0)),
+            client_game.map(|g| entity(Class::MiniGame, g.0)),
+        );
+        if let Some(game) = game.filter(|_| slots.contains(&Slot::MiniGame)) {
+            trigger.targets.insert(Slot::MiniGame, game);
+        }
+    }
+    /// The brick owner's player and client, for inputs that offer them
+    /// (Slayer's `onTeamCheckTrue`), while the owner is on the server.
+    pub(in crate::session) fn owner_targets(
+        &self,
+        brick: BrickId,
+        slots: &BTreeSet<Slot>,
+        targets: &mut BTreeMap<Slot, ev::Entity>,
+    ) {
+        let owner = self
+            .simulation
+            .state()
+            .bricks
+            .get(&brick)
+            .map(|b| b.owner)
+            .filter(|o| self.peers.contains_key(o) && !self.is_bot(*o));
+        if let Some(owner) = owner {
+            if slots.contains(&Slot::OwnerPlayer) {
+                targets.insert(Slot::OwnerPlayer, entity(Class::Player, owner));
+            }
+            if slots.contains(&Slot::OwnerClient) {
+                targets.insert(Slot::OwnerClient, entity(Class::Client, owner));
+            }
         }
     }
     /// Inputs gameplay fires during `tick` (touches, projectile hits) start
@@ -487,8 +580,10 @@ impl Session {
             return Ok(());
         };
         let started = std::time::Instant::now();
+        self.events.advancing = true;
         let report = ev::migration::world_tick_to_us(tick)
             .and_then(|now| world.advance(now, &mut EventHost { session: self }));
+        self.events.advancing = false;
         let elapsed = started.elapsed();
         let result = report.map(|report| {
             self.events.last_work = EventWork {
@@ -543,6 +638,9 @@ impl Session {
             }
         });
         self.events.world = Some(world);
+        for (brick, input, player, extra) in std::mem::take(&mut self.events.deferred) {
+            self.fire_input_with(brick, &input, player, extra);
+        }
         result
     }
     /// Bring knocked-out bricks back, all at once: a rocket's worth of
@@ -564,6 +662,28 @@ impl Session {
             self.fire_input(brick, "onRespawn", None);
         }
         Ok(())
+    }
+    /// An Add-On's input its rules fired: now, or once the event phase is
+    /// done when an output of theirs fired it from inside one.
+    pub(super) fn fire_package_input(
+        &mut self,
+        brick: BrickId,
+        input: &str,
+        player: Option<OwnerId>,
+        extra: InputExtra,
+    ) {
+        if !self.events.advancing {
+            self.fire_input_with(brick, input, player, extra);
+        } else if self.events.deferred.len() < MAX_DEFERRED_INPUTS {
+            self.events
+                .deferred
+                .push((brick, input.to_owned(), player, extra));
+        } else {
+            note(
+                &mut self.events.diagnostics,
+                format!("Brick {brick} {input}: too many inputs fired in one event phase"),
+            );
+        }
     }
     /// Fire a brick input from host tooling (admin commands, probes).
     pub fn fire_brick_input(&mut self, brick: BrickId, input: &str, player: Option<OwnerId>) {
@@ -1572,6 +1692,7 @@ impl ev::Host for EventHost<'_> {
             Intent::Projectile(_) => Ok(Apply::Rejected(
                 "projectile outputs are not available yet".into(),
             )),
+            Intent::Package(call) => Ok(self.session.package_output(dispatch, call)),
         };
         result.unwrap_or_else(|error| Apply::Rejected(format!("{error:#}")))
     }

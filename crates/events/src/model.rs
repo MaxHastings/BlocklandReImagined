@@ -51,6 +51,13 @@ pub enum Slot {
     Driver,
     MiniGame,
     Ball,
+    /// The brick owner's player and client (Slayer's `onTeamCheckTrue`).
+    OwnerPlayer,
+    OwnerClient,
+    /// Whoever killed the player an input is about (Slayer's
+    /// `onMinigameDeath`): `Player(Killer)` and `Client(Killer)`.
+    KillerPlayer,
+    KillerClient,
 }
 impl Slot {
     pub fn parse(s: &str) -> Option<Self> {
@@ -63,6 +70,10 @@ impl Slot {
             "driver" => Some(Self::Driver),
             "minigame" => Some(Self::MiniGame),
             "ball" => Some(Self::Ball),
+            "ownerplayer" => Some(Self::OwnerPlayer),
+            "ownerclient" => Some(Self::OwnerClient),
+            "player(killer)" => Some(Self::KillerPlayer),
+            "client(killer)" => Some(Self::KillerClient),
             _ => None,
         }
     }
@@ -71,6 +82,9 @@ impl Slot {
 pub enum Target {
     Slot(Slot),
     Named(String),
+    /// A target an Add-On added to the input (`Catalog::targets`, v20's
+    /// `registerEventTarget`), by name: Slayer's `Team(Client)`.
+    Derived(String),
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Value {
@@ -116,7 +130,7 @@ pub struct BrickProgram {
     pub print_count: u8,
     pub implicit_cancel_relays: bool,
 }
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Trigger {
     pub source: Id,
@@ -124,6 +138,10 @@ pub struct Trigger {
     pub origin: u64,
     pub client: Option<Entity>,
     pub targets: BTreeMap<Slot, Entity>,
+    /// Only the source's rows numbered `first..=last` that listen to this
+    /// input run (Slayer's `checkTeam` row range); every row when `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rows: Option<(u16, u16)>,
 }
 impl Trigger {
     pub fn new(source: Id, input: impl Into<String>, origin: u64) -> Self {
@@ -133,6 +151,7 @@ impl Trigger {
             origin,
             client: None,
             targets: BTreeMap::new(),
+            rows: None,
         }
     }
 }
@@ -288,6 +307,15 @@ pub enum Intent {
     Client(ClientOp),
     MiniGame(MiniGameOp),
     Projectile(ProjectileOp),
+    /// An output an Add-On declared: its rules run it.
+    Package(PackageCall),
+}
+/// A row's call of an Add-On's output, with the row's parameters.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PackageCall {
+    pub package: String,
+    pub output: String,
+    pub params: Vec<Value>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) enum Action {
@@ -308,6 +336,9 @@ pub struct Dispatch {
     pub input: String,
     pub row: u16,
     pub output: String,
+    /// The Add-On target the row aims at (`Target::Derived`), whose rules
+    /// find what it stands for from `target`, the entity it is based on.
+    pub derived: Option<String>,
     pub scheduled_us: u64,
     pub now_us: u64,
     pub intent: Intent,
@@ -318,6 +349,11 @@ pub enum Apply {
     Applied,
     Deferred(String),
     Rejected(String),
+    /// Applied, and the source brick's rows listening to `input` run next,
+    /// as a relay's do (an Add-On output that tests something and fires
+    /// its own true or false input). Its targets and row range are the
+    /// trigger's; its source and origin are the row's.
+    Chain(Trigger),
 }
 /// Trusted server-internal adapter, not a public mod or network API.
 pub trait Host {

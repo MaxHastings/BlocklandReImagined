@@ -57,11 +57,11 @@ fn bool_ctl(variable:&str,value:bool)->Control{let mut c=ctl("GuiCheckBoxCtrl",N
 fn game_state()->MiniGameUiState{
     let rules=MiniGameRules::default();
     MiniGameUiState{ready:true,revision:1,capabilities:MiniGameCapabilities{list:true,create:true,configure:true,join:true,leave:true,invite:true,respond_invite:true,remove_member:true,reset:true,respawn_all:true,end:true,scoreboard:true},
-        games:vec![MiniGameSummary{id:MiniGameId(42),title:"Alpha Round".into(),owner:MiniGamePlayerId(900),owner_name:"Owner".into(),color:0,member_count:2,invite_only:false,rules}],
+        games:vec![MiniGameSummary{id:MiniGameId(42),title:"Alpha Round".into(),owner:MiniGamePlayerId(900),owner_name:"Owner".into(),color:0,member_count:2,invite_only:false,rules,teams:vec![],addon_settings:Default::default()}],
         colors:vec![MiniGameColor{index:0,name:"Red".into(),rgb:[255,0,0]}],
         active_game:None,owns_active_game:false,local_player:Some(MiniGamePlayerId(7)),members:vec![],invitations:vec![],
         player_types:vec![MiniGameChoice{id:"v20.player.playerstandardarmor".into(),name:"Standard Player".into()}],
-        items:vec!["hammeritem","wrenchitem","printgun","gunitem","rocketlauncheritem"].into_iter().map(|s|MiniGameChoice{id:format!("v20.weapon.{s}"),name:s.into()}).collect(),status:String::new()}
+        items:vec!["hammeritem","wrenchitem","printgun","gunitem","rocketlauncheritem"].into_iter().map(|s|MiniGameChoice{id:format!("v20.weapon.{s}"),name:s.into()}).collect(),status:String::new(),addon_settings:vec![],addon_editable:vec![],palette:vec![]}
 }
 fn click(ui:&mut Ui,screen:ScreenId,command:&str){
     let node=ui.screen(screen).unwrap().view().by_command(command).unwrap();
@@ -174,4 +174,140 @@ fn set_favs_saves_the_form_to_a_slot_and_the_slot_fills_it_again(){
     title(&mut ui,Some("Something Else"));
     click(&mut ui,ScreenId::MiniGameSettings,"CreateMiniGameGui.clickFav(3);");
     assert_eq!(title(&mut ui,None),"Rocket Arena");
+}
+
+/// Slayer-like settings: a mode picker, lives, a CTF setting shown only in
+/// Capture the Flag, and a team setting.
+fn addon_state() -> MiniGameUiState {
+    let mut state = game_state();
+    state.active_game = Some(MiniGameId(42));
+    state.addon_editable = vec![MiniGameId(42)];
+    state.palette = vec![[255, 0, 0], [0, 0, 255], [0, 255, 0]];
+    let text = |s: &str| MiniGameSettingValue::Text(s.into());
+    let setting = |key: &str, title: &str, team: bool, kind, default| MiniGameAddOnSetting {
+        key: key.into(),
+        add_on: "Slayer".into(),
+        category: "Victory Method".into(),
+        title: title.into(),
+        team,
+        kind,
+        default,
+        admin_only: false,
+        shown_when: None,
+    };
+    state.addon_settings = vec![
+        setting(
+            "slayer:mode",
+            "Game Mode",
+            false,
+            MiniGameSettingKind::List {
+                items: vec![(text("dm"), "Deathmatch".into()), (text("ctf"), "Capture the Flag".into())],
+            },
+            text("dm"),
+        ),
+        setting("slayer:lives", "Lives", false, MiniGameSettingKind::Int { min: 0, max: 99 }, MiniGameSettingValue::Int(0)),
+        MiniGameAddOnSetting {
+            shown_when: Some(("slayer:mode".into(), vec![text("ctf")])),
+            ..setting("ctf:capturepoints", "Capture Points", false, MiniGameSettingKind::Int { min: 0, max: 99 }, MiniGameSettingValue::Int(1))
+        },
+        setting("slayer:teamlives", "Team Lives", true, MiniGameSettingKind::Int { min: -1, max: 99 }, MiniGameSettingValue::Int(-1)),
+    ];
+    state.games[0].teams = vec![MiniGameTeam {
+        id: 1,
+        name: "Red".into(),
+        color: 0,
+        settings: Default::default(),
+    }];
+    state
+}
+fn addon_view(ui: &mut Ui) -> &mut bri_ui::view::View {
+    let i = ui.dialogs.iter().rposition(|s| s.id() == ScreenId::MiniGameAddOns).unwrap();
+    ui.dialogs[i].view_mut()
+}
+fn addon_event(ui: &mut Ui, name: &str, kind: EventKind) {
+    let node = addon_view(ui).id(name).unwrap();
+    let ev = ViewEvent { node, kind };
+    let i = ui.dialogs.iter().rposition(|s| s.id() == ScreenId::MiniGameAddOns).unwrap();
+    let (dialogs, core) = (&mut ui.dialogs, &mut ui.core);
+    dialogs[i].on_event(&ev, core);
+}
+
+#[test]
+fn addon_settings_window_edits_settings_and_teams_and_sends_only_changes() {
+    let mut ui = test_ui();
+    ui.apply(UiUpdate::MiniGames(addon_state()));
+    ui.core.push(ScreenId::MiniGameSettings);
+    ui.update(0);
+    // The editor offers the window for the game being edited.
+    click(&mut ui, ScreenId::MiniGameSettings, "NativeMiniGameAddOns");
+    ui.update(0);
+    assert!(ui.is_open(ScreenId::MiniGameAddOns));
+    // CTF's setting hides until Capture the Flag is picked.
+    assert!(addon_view(&mut ui).id("AOS_S2").is_none());
+    let mode = addon_view(&mut ui).id("AOS_S0").unwrap();
+    addon_view(&mut ui).select(mode, Some(1));
+    addon_event(&mut ui, "AOS_S0", EventKind::Changed);
+    assert!(addon_view(&mut ui).id("AOS_S2").is_some(), "shown in CTF");
+    let lives = addon_view(&mut ui).id("AOS_S1").unwrap();
+    addon_view(&mut ui).set_text(lives, "3");
+    // A second team, with its own lives.
+    addon_event(&mut ui, "AOS_AddTeam", EventKind::Click);
+    let name = addon_view(&mut ui).id("AOS_T1_Name").unwrap();
+    addon_view(&mut ui).set_text(name, "Blue");
+    let team_lives = addon_view(&mut ui).id("AOS_T1_S3").unwrap();
+    addon_view(&mut ui).set_text(team_lives, "5");
+    addon_event(&mut ui, "AOS_Apply", EventKind::Click);
+    let (_, action) = ui
+        .drain_actions()
+        .into_iter()
+        .find(|(_, a)| matches!(a, UiAction::EditMiniGameAddOns { .. }))
+        .expect("Apply sends the changes");
+    let UiAction::EditMiniGameAddOns { game, settings, teams } = action else {
+        unreachable!()
+    };
+    assert_eq!(game, MiniGameId(42));
+    assert_eq!(
+        settings,
+        vec![
+            ("slayer:lives".to_string(), Some(MiniGameSettingValue::Int(3))),
+            ("slayer:mode".to_string(), Some(MiniGameSettingValue::Text("ctf".into()))),
+        ],
+        "unchanged settings (Capture Points at its default) are not sent"
+    );
+    let teams = teams.expect("the team list changed");
+    assert_eq!(teams.len(), 2);
+    assert_eq!((teams[0].id, teams[0].name.as_str()), (Some(1), "Red"));
+    assert!(teams[0].settings.is_empty());
+    assert_eq!((teams[1].id, teams[1].name.as_str(), teams[1].color), (None, "Blue", 1));
+    assert_eq!(
+        teams[1].settings,
+        vec![("slayer:teamlives".to_string(), Some(MiniGameSettingValue::Int(5)))]
+    );
+}
+
+#[test]
+fn addon_settings_window_refuses_bad_numbers_and_is_read_only_for_others() {
+    let mut ui = test_ui();
+    let mut state = addon_state();
+    ui.apply(UiUpdate::MiniGames(state.clone()));
+    ui.core.minigame_addons = Some(MiniGameId(42));
+    ui.core.push(ScreenId::MiniGameAddOns);
+    ui.update(0);
+    let lives = addon_view(&mut ui).id("AOS_S1").unwrap();
+    addon_view(&mut ui).set_text(lives, "100");
+    addon_event(&mut ui, "AOS_Apply", EventKind::Click);
+    assert!(ui.drain_actions().is_empty(), "100 lives is out of range");
+    ui.core.pop(ScreenId::MiniGameAddOns);
+    state.addon_editable.clear();
+    state.revision += 1;
+    ui.apply(UiUpdate::MiniGames(state));
+    ui.core.minigame_addons = Some(MiniGameId(42));
+    ui.core.push(ScreenId::MiniGameAddOns);
+    ui.update(0);
+    let v = addon_view(&mut ui);
+    let lives = v.id("AOS_S1").unwrap();
+    assert!(!v.node(lives).state.active);
+    assert!(v.id("AOS_AddTeam").is_none());
+    let apply = v.id("AOS_Apply").unwrap();
+    assert!(!v.node(apply).state.visible);
 }

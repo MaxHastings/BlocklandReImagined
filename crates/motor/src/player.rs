@@ -614,8 +614,6 @@ impl PlayerTuning {
             self.swim_acceleration,
             self.swim_rise,
             self.dive_acceleration,
-            self.acceleration,
-            self.air_control,
             self.drag,
             self.gravity,
             self.jet_acceleration,
@@ -626,8 +624,6 @@ impl PlayerTuning {
             self.up_max_speed,
             self.up_resist_speed,
             self.up_resist_factor,
-            self.slope_degrees,
-            self.jump_surface_degrees,
         ];
         ensure!(
             values
@@ -637,8 +633,14 @@ impl PlayerTuning {
                 && [self.max_energy, self.recharge, self.min_jet_energy, self.jet_drain]
                     .iter()
                     .all(|n| n.is_finite() && (0.0..=10000.0).contains(n))
-                // Speeds and the step may be zero (`BallShootPlayer`).
+                // Speeds and the step may be zero (`BallShootPlayer`), and
+                // so may running, steering and the surfaces a body can run
+                // or jump on (Slayer's frozen countdown body).
                 && [
+                    self.acceleration,
+                    self.air_control,
+                    self.slope_degrees,
+                    self.jump_surface_degrees,
                     self.forward,
                     self.backward,
                     self.sideways,

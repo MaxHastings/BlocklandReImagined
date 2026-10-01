@@ -191,7 +191,7 @@ pub fn definitions() -> Definitions {
             Special::TreasureChestOpen,
             false,
         ),
-        definition(SPAWN_POINT, [2, 2], 1, Special::None, false),
+        definition(SPAWN_POINT, [2, 2], 1, Special::SpawnPoint, false),
         ramp(STEEP_RAMP, [2, 2], 10),
     ];
     Definitions {

@@ -628,6 +628,7 @@ mod tests {
                     both_arms: false,
                     paint_tint: false,
                     rope: None,
+                    light: None,
                     paint_picker: false,
                     scripts: Default::default(),
                 },
@@ -643,6 +644,7 @@ mod tests {
                     icon: String::new(),
                     can_drop: true,
                     sport: false,
+                    ..Default::default()
                 },
             );
         }

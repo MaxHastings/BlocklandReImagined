@@ -41,11 +41,14 @@ impl WeaponView {
         let text = |s: &str| !s.is_empty() && s.len() <= 128 && !s.chars().any(char::is_control);
         let vector = |v: Vec3| v.is_finite() && v.abs().max_element() < 1e7;
         for images in self.images.values() {
-            ensure!(images.len() <= 2, "Too many mounted images");
+            ensure!(
+                images.len() <= bri_weapons::IMAGE_SLOTS,
+                "Too many mounted images"
+            );
             let mut hands = BTreeSet::new();
             for image in images {
                 ensure!(
-                    image.hand < 2
+                    usize::from(image.hand) < bri_weapons::IMAGE_SLOTS
                         && hands.insert(image.hand)
                         && text(&image.image)
                         && text(&image.state),
@@ -133,7 +136,7 @@ impl Session {
                 .peers
                 .keys()
                 .filter_map(|owner| {
-                    let images: Vec<_> = (0..2)
+                    let images: Vec<_> = (0..bri_weapons::IMAGE_SLOTS as u8)
                         .filter_map(|hand| {
                             self.weapons
                                 .image_state(ActorId(*owner), hand)

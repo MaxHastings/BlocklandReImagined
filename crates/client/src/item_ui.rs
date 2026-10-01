@@ -50,7 +50,16 @@ impl ItemUi {
                 IconRef::External(key)
             } else if pending.is_some() {
                 // Nothing to show until it is drawn.
-                icons.insert(key, SceneImage { label: id.clone(), width: 1, height: 1, rgba: vec![0; 4], srgb: false });
+                icons.insert(
+                    key,
+                    SceneImage {
+                        label: id.clone(),
+                        width: 1,
+                        height: 1,
+                        rgba: vec![0; 4],
+                        srgb: false,
+                    },
+                );
                 IconRef::External(key)
             } else {
                 // Vanilla handleItemPickup falls back to the item's first-letter print.
@@ -195,7 +204,13 @@ mod tests {
     /// and the icons are uploaded again.
     #[test]
     fn a_drawn_icon_replaces_its_stand_in() {
-        let blank = SceneImage { label: "x".into(), width: 1, height: 1, rgba: vec![0; 4], srgb: false };
+        let blank = SceneImage {
+            label: "x".into(),
+            width: 1,
+            height: 1,
+            rgba: vec![0; 4],
+            srgb: false,
+        };
         let slot = crate::items::DrawnIcon::default();
         let mut ui = ItemUi {
             catalog: BTreeMap::new(),
@@ -206,7 +221,13 @@ mod tests {
         };
         assert!(!ui.take_drawn(), "not drawn yet");
         assert!(ui.uploaded);
-        let drawn = SceneImage { label: "x".into(), width: 2, height: 1, rgba: vec![9; 8], srgb: false };
+        let drawn = SceneImage {
+            label: "x".into(),
+            width: 2,
+            height: 1,
+            rgba: vec![9; 8],
+            srgb: false,
+        };
         slot.set(drawn.clone()).unwrap();
         assert!(ui.take_drawn());
         assert_eq!(ui.icons[&ICON_BASE].rgba, drawn.rgba);
@@ -321,16 +342,10 @@ mod tests {
     }
     fn add_on_weapons_without_presentation_reuse_stock_icons(fx: &Hud) -> Result<()> {
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let extras = vec![
-            (
-                "addons/duplicator-tool/assets".to_string(),
-                manifest.join("../../packages/duplicator/duplicator-tool/assets"),
-            ),
-            (
-                "addons/sample-bubble-blaster/assets".to_string(),
-                manifest.join("../../packages/samples/sample-bubble-blaster/assets"),
-            ),
-        ];
+        let extras = vec![(
+            "addons/sample-bubble-blaster/assets".to_string(),
+            manifest.join("../../packages/samples/sample-bubble-blaster/assets"),
+        )];
         let base: Vec<String> = fx
             .weapons()?
             .item_choices
@@ -345,11 +360,8 @@ mod tests {
             &extras,
         )?;
         let ui = ItemUi::new(&assets, &weapons.item_choices, &fx.ui)?;
-        // The two Add-Ons each add one item (unless the base game has it).
-        let added = [
-            "duplicator-tool:weapon/duplicator",
-            "sample-bubble-blaster:weapon/bubble_blaster",
-        ];
+        // The Add-On adds one item (unless the base game has it).
+        let added = ["sample-bubble-blaster:weapon/bubble_blaster"];
         let new = added
             .iter()
             .filter(|id| !base.iter().any(|b| b == *id))
@@ -362,15 +374,6 @@ mod tests {
         assert_eq!(
             ui.icons[&gun].rgba,
             assets.icon("v20.weapon.gunitem")?.unwrap().rgba
-        );
-        let tool = "duplicator-tool:weapon/duplicator";
-        assert_eq!(ui.catalog[tool].name, "Duplicator");
-        let IconRef::External(key) = ui.catalog[tool].icon else {
-            panic!("the Duplicator should show the wand icon");
-        };
-        assert_eq!(
-            ui.icons[&key].rgba,
-            assets.icon("v20.weapon.wanditem")?.unwrap().rgba
         );
         Ok(())
     }

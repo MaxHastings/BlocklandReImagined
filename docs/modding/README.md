@@ -16,7 +16,6 @@ asked to trust when your Add-On runs code on their PC (section 8).
 | A game rule: points, rounds, commands | [`sample-survival-points`](../../packages/samples/sample-survival-points) | a `behaviour` file and a Rhai script, run by the host |
 | A HUD panel for a rule | [`sample-points-hud`](../../packages/samples/sample-points-hud) | a JSON panel each player draws |
 | A weapon | [`sample-bubble-blaster`](../../packages/samples/sample-bubble-blaster) | an `assets/weapons.json` file |
-| A tool that acts where it is clicked | [`duplicator`](../../packages/duplicator) | a weapon whose image runs a rule's command (section 5) |
 | A tool that grabs, holds and throws players and vehicles | [`gravity-gun`](../../packages/showcase/gravity-gun) | a rule using the `physics` operations (section 3), its tool, and client effects |
 | A new vehicle or loose physics object | [`steel-ball-kit`](../../packages/showcase/steel-ball-kit) | an `assets/vehicles.json` you write (section 6) |
 | A bot for the Vehicle Spawn brick | [`blockhead_bot`](../../packages/blockhead_bot) | an `assets/bots.json` you write (section 6) |
@@ -127,7 +126,16 @@ refused. The engine calls:
 | `on_drop(player, item, slot)` | a player drops a tool of your Add-On (or one it depends on), when `"on_drop": true`. What it returns (a number, a map such as `#{ rounds: 7 }`) is kept with the dropped item and handed to `on_pickup` as `info.data` |
 | `on_projectile_hit(hit)` | a projectile of your weapons (or a dependency's) struck something, delivered at the start of the next tick, when `"on_projectile_hit": true`. `hit` is `#{ projectile, by, kind, id, ref, x, y, z, nx, ny, nz, vx, vy, vz }`: `kind` is `player`, `vehicle`, `entity`, `brick` or `map`, `by` the shooter or `()`; a player hit also has `region` |
 | `on_activate(player)` | a living player clicks with nothing in their hand (v20's `Player::activateStuff`), when `"on_activate": true`: return `true` to take the click, or anything else to pass it on. Add-Ons are asked in load order, and a click nobody takes does the usual thing (opens doors, presses buttons, flips vehicles) |
+| `on_path_node(player, knot)` | a camera path the rules gave (`follow_path`) reaches knot `knot`, from 0, when `"on_path_node": true` |
+| `on_observer(player, button)` | a spectator (dead with their respawn held, or under a rules camera) presses `"fire"`, `"jump"`, `"jet"` or `"light"`, when `"on_observer": true`: return `true` to take it |
+| `on_minigame(event)` | something happened to a mini-game, delivered at the start of the next tick, when `"on_minigame": true`. `event` is `#{ kind, game, player, team }`: `kind` is `created`, `configured`, `reset`, `ended`, `joined`, `left`, `team` (`player`'s team changed to `team`, or `()`) or `teams` (the game's team list changed) |
+| `on_pick_spawn(player)` | a player is about to spawn or respawn, when `"on_pick_spawn": true`: return a brick id to appear on that brick, `[x, y, z]` to appear there, or `()` to leave it to the engine (spawn bricks, then the map). The first Add-On to answer decides. Called as it happens, so keep it quick |
+| `on_brick_output(output, target, params, info)` | a builder's wrench row ran one of the outputs in `brick_outputs` (see **Brick events**) |
+| `on_brick_input(input, brick, player)` | a player set off an engine input that some of your `brick_inputs` follow, on a brick with rows on one of them: return the name of one to run it too, or `()` (see **Brick events**) |
+| `on_event_row(player, brick, row)` | a player sends a row of wrench events for a brick, before it is saved, when `"on_event_row": true`: return `false` or a reason to leave it out (see **Brick events**) |
+| `on_zone(player, brick, event)` | a living player enters (`"enter"`), stays in (`"tick"`, with `"ticks": true`) or leaves (`"leave"`) the space over a brick of a kind listed in `zones` (a Torque trigger made with `createTrigger`) |
 | `on_trigger(player, trigger, down)` | a living player with nothing in their hand presses (`down` true) or lets go of a trigger (v20's `Armor::onTrigger`), when `"on_trigger": true`. Trigger `0` is fire: the empty-hand click, whose press comes before `on_activate`. Return `true` to take it, anything else to pass it on: Add-Ons are asked in load order, presses and releases alike, and a press nobody takes goes on to `on_activate` and the usual click. A charged throw starts on the press and lets fly on the release |
+| `on_drop_key(player)` | a living player with nothing in their hand presses the Drop Tool key (v20's `serverCmdDropTool` while `currTool` is -1), when `"on_drop_key": true`. Return `true` to take it; Add-Ons are asked in load order. Capture the Flag drops a carried flag this way |
 | `cmd_<name>(player, args...)` | a player sends a command listed in `commands` |
 
 `player` is the player's id: pass it straight to `tell`, `get_player` and
@@ -173,15 +181,16 @@ HUD panels can only show keys the viewer receives. `persist` (default
 | `players()`, `bots()`, `player(id)` | `get_player(p, key)`, `set_player(p, key, v)` | `remove_brick`, `place_brick`, `set_block_state(brick, state)`: `world.edit` |
 | `aim()`, `me()`, `entities()` | `add_player(p, key, amount)` | `damage(target, amount[, by[, type]])`, `explode(...)`: `damage` |
 | `noise(seed, x, z)`, `hash3(seed, x, y, z)` | `entity_get(e, key)`, `entity_set(e, key, v)` | `spawn_entity`, `remove_entity`, `steer`, `label`: `entity` |
-| `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)`, `tethered(p)` | | `teleport`, `respawn`, `set_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`, `take_item(p, item)`, `drop_item(item, x, y, z[, vx, vy, vz])`: `player` |
-| `raycast(from, dir, range[, ignore])`, `can_damage(by, target)` | | `set_fov(p, fov)`, `set_image_ammo(p, ammo)`, `mount_image(p, image)`, `unmount_image(p)`, `set_scale(p, scale)`, `set_look_limits(p, up, down)`, `orbit_camera(p, target[, nearest, farthest], distance)`: `player` |
+| `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)`, `tethered(p)` | | `teleport`, `respawn`, `set_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`, `take_item(p, item)`, `drop_item(item, x, y, z[, vx, vy, vz])`, `drop_item(item, #{ ... })`, `remove_drop(id)`, `name_drop(id, text, c)`: `player` |
+| `raycast(from, dir, range[, ignore])`, `can_damage(by, target)` | | `set_fov(p, fov)`, `set_image_ammo(p, ammo)`, `mount_image(p, image)`, `mount_image(p, image, slot[, paint])`, `unmount_image(p)`, `set_scale(p, scale)`, `set_look_limits(p, up, down)`, `orbit_camera(p, target[, nearest, farthest], distance[, body])`: `player` |
+| `minigames()`, `minigame(id)`, `setting(game, key)`, `team_setting(game, team, key)`, `bricks(kind)`, `brick(id)`, `palette()`, `drops()` | | `set_teams(game, teams, options)`, `set_team(p, team)`, `set_score(p, n)`, `add_score(p, n)`, `reset_minigame(game)`, `set_setting(game, key, v)`, `set_team_setting(game, team, key, v)`, `hold_respawn(p, held)`, `end_round(game, winners)`, `report_column(game, key, title, cells)`: `minigame`; `show_report(p, report)`, `hide_report(p)`: `chat`; `watch(p, target)`, `follow_path(p, knots)`, `free_camera(p)`, `orbit_point(p, at, distance)`: `player`; `set_brick_item(brick, item)`, `set_brick_color(brick, c)`: `world.edit`; `fire_brick_input(brick, input, p)`, `fire_game_input(game, input, p, killer)`, `set_brick_field(brick, key, v)`: `brick_events`; `brick_field(brick, key)` reads |
 | `brick_box(brick)`, `voxel(brick)`, `can_place_voxel(x, y, z)` | | `place_voxel(x, y, z, material)`: `world.edit`; `set_avatar_colors(p, colors)`, `temp_look(p, look, seconds)`: `player` |
 | `brick(id)`, `bricks_in(min, max)`, `can_plant(kind, [x, y, z], turns)`, `can_edit(brick)` | | `plant_brick(kind, [x, y, z], turns, color, owner)`: `world.edit` |
 | | | `copy_build(p, brick, limit, way, tool[, options])`, `copy_box(p, min, max, limit, tool[, options])`, `mirror_copy(p, axis)`, `highlight_copy(p, rgba, seconds)`, `save_copy(p, name[, options])`, `load_copy(p, name, limit, tool[, options])`, `list_copies(p, filter)`, `plant_wait(p, seconds)`, `pivot_copy(p, pivot)`, `plant_as(p, target, admin)`: `build` |
 | | | `cut_copy(p)`, `paint_copy(p, color)`, `paint_copy(p, paint)`, `wrench_copy(p)`, `super_cut(p, min, max)`, `fill_box(p, min, max, color)`, `paint_fill(p, brick, paint, options)`, `paint_vehicle(p, vehicle, paint, options)`: `world.edit` |
 | | | `push`, `tumble`, `hold`, `reach`, `hold_distance`, `let_go`, `tether`, `tether_length`, `untether`, `spawn_vehicle`, `remove_vehicle`, `mount_object(mount, rider, node, can_dismount[, turn])`, `unmount_object(rider)`: `physics` |
 | | | `heal(p, amount)`, `fire(...)`: `damage` |
-| | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds)` (`()` for everyone), `ask(p, title, text, command)` (a yes/no box; yes sends the package's own argument-less `command` as if typed, as v20's `MessageBoxYesNo` did): `chat` |
+| | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds[, hide_bar])` (`()` for everyone), `tell_minigame(game, text[, except])`, `center_print_minigame(game, text, seconds)`, `bottom_print_minigame(game, text, seconds)` (a mini-game's members, counted once), `ask(p, title, text, command)` (a yes/no box; yes sends the package's own argument-less `command` as if typed, as v20's `MessageBoxYesNo` did): `chat` |
 | | | `play_sound(p, sound)` at a player's ears, `sound_at(sound, x, y, z)`, `beam(from, to[, options])`, `play_thread(p, thread, sequence)`, `show_box(p, min, max, tool)`, `hide_box(p)`: `effects` |
 | | | `set_map_lights([x, y, z], radius, options)`: `lighting` |
 | `environment()` | | `set_environment(#{ ... })`, `reset_environment()`: `environment` |
@@ -203,7 +212,8 @@ index their spray can last picked), `fx_can` (the FX can picked since, as
 minigame lets them paint, `enablePainting`), `mx`, `my`, `mz` (where the host fires
 the held image's shots from, `getMuzzlePoint`; the eye when nothing is
 held), `tools` (each tool slot's item id, `""` for an empty slot, as
-`%obj.tool[%i]`), `riding` and `seat` (the player this one rides and on
+`%obj.tool[%i]`), `team` (their team's id in their mini-game, or `()`),
+`score` (their mini-game score), `riding` and `seat` (the player this one rides and on
 which mount point, or `()`), `bot` (`true` for a bot) and `bot_owner` (for a
 bot from a bot brick, the brick owner's id, as `%bot.spawnBrick.getGroup()
 .bl_id`; else `()`).
@@ -252,8 +262,263 @@ and the zoom key still work on top of it. `unmount_image(p)` empties the
 player's hand (`unMountImage(0)`): a tool, a spray can or bricks, which the
 player's client puts away too.
 
+**Worn images.** `mount_image(p, image, slot)` puts an image in one of a
+player's two worn slots, `2` or `3` (`mountImage(%image, 3)`), beside
+whatever they hold: a flag on the back, a hat. A fourth argument tints it
+with a palette colour, for an image whose `paint_tint` is set, so one image
+serves every team. `mount_image(p, (), slot)` takes it off; dying takes
+every worn image off.
+
+**Mini-games and teams.** `minigames()` lists the mini-games and
+`minigame(id)` reads one: `#{ id, title, owner, members, round, teams,
+friendly_fire, ally_same_color, round_over, player_type, loadout }`, each
+team `#{ id, name, color }`; `player_type` and `loadout` (five item ids,
+`""` for an empty slot) are the game's own (`playerDatablock`,
+`startEquip`).
+`set_teams(game, teams, #{ friendly_fire, ally_same_color })` sets a game's
+teams: a team map with an `id` keeps that team and its members, one
+without is new, and a team left out is removed. `set_team(p, team)` puts a
+member on a team (or `()` for none), `set_score` and `add_score` change
+their score, and `reset_minigame(game)` resets the game. The engine keeps
+teammates from hurting each other while `friendly_fire` is off, sends team
+chat to the team, and tells `on_minigame` about every change. These need
+the `minigame` capability. A rule set like Slayer's sorts players with
+`on_minigame` and spawns them on their team's bricks with `on_pick_spawn`.
+
+**Add-On settings.** A rule declares the settings a mini-game's owner picks
+in its behaviour's `settings`, and the host shows them in the Mini-Game
+window's Add-On Settings, grouped by Add-On and `category`:
+
+```json
+"settings": [
+  { "key": "mode", "title": "Game Mode", "category": "Minigame", "type": "list",
+    "default": "dm", "items": [ { "value": "dm", "name": "Deathmatch" } ] },
+  { "key": "lives", "title": "Lives", "category": "Victory Method",
+    "type": "int", "default": 0, "min": 0, "max": 99 },
+  { "key": "team_lives", "title": "Lives", "scope": "team",
+    "type": "int", "default": -1, "min": -1, "max": 999 },
+  { "key": "rule", "title": "Custom Rule", "type": "text", "default": "",
+    "max_length": 150, "editor": "admin",
+    "shown_when": { "setting": "mode", "is": ["dm"] } }
+]
+```
+
+`type` is `bool`, `int` (with `min` and `max`), `list` (a pick from
+`items`), `text` (up to `max_length`, at most 256), `item` (one of the
+server's items, by id, or `""` for none, as Slayer's team start tools) or
+`player_type` (one of the server's player types, by id, or `""`); the
+window lists the server's choices for those two, and an id the server
+lacks reads as `""`. `scope: "team"` gives
+every team of the game its own value, edited beside the team's name and
+colour in the same window, which also adds and removes teams.
+`editor: "admin"` lets only an admin change it. `shown_when` hides a
+setting unless another (`key`, or `ns:key` of an Add-On this one depends on)
+holds one of the listed values. A dependent Add-On adds its own items to a
+list setting with `setting_items` (`[{ "setting": "slayer:mode", "items":
+[...] }]`), as Slayer's game modes do. The host checks every change against
+the declaration and keeps only values that differ from the default, on the
+mini-game and its teams.
+
+`setting(game, key)` and `team_setting(game, team, key)` read a value (the
+default when unset); `set_setting(game, key, value)` and
+`set_team_setting(game, team, key, value)` change it, `()` putting the
+default back (`minigame` capability). `on_minigame` gets `kind ==
+"settings"` with the changed `keys` when anyone changes them.
+
+**Rounds.** `end_round(game, #{ teams: [...], players: [...] })` ends a
+mini-game's round, won by those teams and players (or by nobody, with
+neither): the game's `round_over` is `true` until its next reset, and every
+rule hears `on_minigame` with `kind == "round_end"` and the winners'
+`teams` and `players`. Slayer announces the winner and resets after its
+time between rounds; a mode built on it (Capture the Flag) only calls
+`end_round` (`minigame` capability). `hold_respawn(p, true)` keeps a dead mini-game member from
+respawning (out of lives, the round over; v20 Slayer's `setDead`): their
+client shows no respawn prompt, and a reset of the game or
+`hold_respawn(p, false)` lets them go (`minigame` capability).
+`watch(p, other)` turns `p`'s camera to orbit `other`'s body, `watch(p, p)`
+their own body or corpse, and `watch(p, ())` hands control back, as a
+respawn also does (`player` capability). It is the frozen kind of
+`orbit_camera` below, 8 units out: a watching body does not fire, use
+tools or click, and its keys go to `on_observer`. An admin's free camera
+and a rule's `control` are left alone.
+
+**Cameras.** `player(p).camera` is where `p`'s camera is and looks
+(`getControlObject().getTransform()`): `#{ at: [x, y, z], yaw, pitch }`.
+`follow_path(p, knots)` flies it along a path, as Torque's `PathCamera`,
+while the body stands still: each knot is `#{ at, yaw, pitch, speed, type,
+path, jump }`, `speed` units a second to the next knot (default 7),
+`type` `"normal"`, `"kink"` or `"position"` (the next knot's view), `path`
+`"spline"` or `"linear"`, and `jump: true` cutting straight to it. Up to 20
+knots. With `"on_path_node": true` the rules hear `on_path_node(p, knot)`
+as it reaches each one, from 0 (`PathCameraData::onNode`).
+`follow_path(p, ())` hands control back. `free_camera(p)` lets a spectator
+fly freely from where their camera is (`Camera::setMode("Observer")`, no
+orb, no drop), and `orbit_point(p, [x, y, z], distance)` circles a point
+0.5 to 100 units out (`setOrbitPointMode`); `watch(p, ())` ends either. All
+are `player` capability and take only the body or another rules camera.
+With `"on_observer": true`, `on_observer(p, button)` hears the keys of a
+spectator, a dead player whose respawn a rule holds or one under a rules
+camera: `"fire"`, `"jump"`, `"jet"` (`Observer::onTrigger`'s triggers 0, 2
+and 4) or `"light"`. Return `true` to take the key; the next Add-On is
+asked otherwise. Slayer's spectating and fly-through camera are these.
+
+**Bricks.** `bricks(kind)` lists the bricks of one kind
+(`"pkg:brick/flagstand"`, `"v20/brick/brickspawnpointdata"`), and
+`brick(id)` reads one: `#{ id, kind, x, y, z, turns, min, max, color,
+owner, game, name, item }`, `game` being the mini-game whose bricks it is (its owner's, as
+v20's `minigameCanUse`), or `()`. `set_brick_item(brick, item)` sets the
+item a brick holds out (`setItem`), or `()` for none: the world's bricks,
+a mini-game's, or ones the calling player may build on. An item whose image
+has `paint_tint` shows in its brick's colour. `set_brick_color(brick, c)`
+repaints one of those bricks in palette colour `c` (`setColor`), and
+`palette()` lists the palette as `[r, g, b, a]` from 0 to 1
+(`getColorIDTable`). `set_brick_field(brick, key, v)` keeps a value on a
+brick as your Add-On's `key` (letters, digits and `_`, up to 32), as a v20
+script kept a dynamic field on a brick object, and `()` clears it; any
+Add-On reads it with `brick_field(brick, key)` (your own key) or
+`brick_field(brick, "namespace:key")` (another's). A value is at most 256
+bytes and goes with its brick. Slayer keeps a brick's locked team colours
+(`setTeamControlLocked`) as `locked`, and Capture the Flag refuses a locked
+flag from it.
+
+**Score reports.** `show_report(p, #{ title, banner, columns, sections })`
+opens a window of its own for player `p` with a score table, as Slayer's End
+of Round Report did: `banner` is large text over it ("VICTORY") or `()`,
+`columns` is `[#{ key, title }]` after each row's name, and `sections` is
+`[#{ title, rows: [#{ key, name, color, cells: #{ column: value } }] }]`,
+names in palette colour `color` or `()` for the window's own. Cells are
+written as text, `()` blank. `hide_report(p)` closes it. Another Add-On
+changes a game's report with `report_column(game, key, title, cells)`: the
+column `key` is retitled and filled by row `key` (`team:<id>`,
+`player:<id>` by convention), or added at the end when the report has no
+such column; `report_column(game, key, ())` takes it out. Changes hold for
+the game until changed again, at most 8, and are put in when the report is
+sent at the end of the tick, so the order Add-Ons' hooks run in does not
+matter (Slayer's modes did this with `scoreListInit` and `scoreListAdd`).
+Up to 11 columns, 4 sections, 256 rows and 64 characters a text.
+
+**Brick events.** Rules may add inputs to the wrench's event list
+(`registerInputEvent`), which builders wire to outputs like the engine's
+own:
+
+```json
+"brick_inputs": [ { "name": "onFlagPickedUp", "targets": ["Player", "Client", "MiniGame"] } ]
+```
+
+Every input targets its brick (`Self`); `targets` adds any of `Player`,
+`Client`, `MiniGame`, `OwnerPlayer` and `OwnerClient` (the brick
+owner's, while they are on), and `Player(Killer)` and `Client(Killer)`. `fire_brick_input(brick, "onFlagPickedUp", p)`
+(`processInputEvent`; capability `brick_events`) runs the rows on `brick`
+wired to it, with `p` filling those targets (or leave `p` out). The rows
+run as the brick owner's, under the same budgets and trust as any other.
+A package fires only its own inputs, and a name the engine or another
+Add-On already uses is refused when the Add-Ons start. Up to 32 per
+package. Fired from inside `on_brick_output`, an input's rows run once
+the tick's event rows are done.
+
+`fire_game_input(game, "onMinigameDeath", p, killer)`
+(`processMultiSourceInputEvent`) runs an input on every brick of the
+mini-game `game` with rows on it, `MiniGame` being that game, `p` filling
+`Player` and `Client` and `killer` filling `Player(Killer)` and
+`Client(Killer)` (both may be left out).
+
+An input may follow one of the engine's (an `onPlayerTouch` or
+`onActivate` override, as Slayer's `onActivate(Team2)`):
+
+```json
+"brick_inputs": [ { "name": "onActivate(Team1)", "targets": ["Player", "Client"], "follows": "onActivate" } ]
+```
+
+When a player sets `onActivate` off on a brick with rows on any input
+that follows it, the rules' `on_brick_input("onActivate", brick, p)` may
+answer with one of them, which runs too, set off by the same player.
+
+With `"on_event_row": true`, `on_event_row(p, brick, row)` reviews each
+row a player sends from the wrench (`serverCmdAddEvent`), `row` being
+`#{ index, input, target, class, output, package }` (`class` the
+target's, as `MiniGame`). Return `false` (they hear "You may not use the
+… event.") or a reason to tell them, and the row is left out; anything
+else keeps it.
+
+Rules may add outputs too (`registerOutputEvent`; capability
+`brick_events`), up to 32, each acting on a `fxDTSBrick`, `Player`,
+`GameConnection` or `MiniGame` with up to four parameters the wrench
+shows:
+
+```json
+"brick_outputs": [ { "name": "setTeamControl", "class": "fxDTSBrick",
+                     "params": [ { "type": "paint_color", "default": 0 } ] } ]
+```
+
+A parameter is `int` (`min`, `max`, `default`), `float` (`min`, `max`,
+`step`, `default`), `bool`, `string` (`max_length`, `width`),
+`paint_color` (`default`), `list` (`items`: `[name, number]` pairs, the
+rules getting the number) or `vector` (`max_length`). A port writes them
+from the original's own text with `{{name|event_params}}`, which reads a
+`registerOutputEvent` parameter string (`"int 0 200 1" TAB "bool"`). A row
+that runs one calls `on_brick_output(output, target, params, info)`:
+`target` is the brick's id, the player's or the mini-game's,
+`params` the row's values, and `info` is `#{ brick, owner, client, class,
+target, base, input, row }`, `client` being whoever set the row off, or
+`()`, and `target` the row's own target (below), or `()`. Return
+`()`, or one of the package's own inputs to run next on the brick, as
+`"onTeamCheckTrue"` or `#{ input: "onTeamCheckTrue", rows: [1, 4] }` to
+run only rows 1 to 4 (Slayer's `checkTeam`). Its targets are filled from
+whoever set the row off.
+
+Rules may add targets as well (`registerEventTarget`; capability
+`brick_events`), up to 8, each standing for something only the rules
+know, found from one of an input's targets:
+
+```json
+"brick_targets": [ { "name": "Team(Client)", "class": "Slayer_TeamSO", "from": "Client" } ]
+```
+
+Every input with the `from` target (`Self`, the brick, or `Player`,
+`Client`, `MiniGame`, `OwnerPlayer`, `OwnerClient`) lists it, the engine's
+inputs and every Add-On's alike. Its `class` is the package's own, not one
+of the engine's, and the package's `brick_outputs` of that class are its
+outputs. A row aimed at it calls `on_brick_output` with `target` the
+`from` entity (the client, the brick), `info.target` the target's name,
+`info.class` its class and `info.base` the class of what `target` is; the
+rules find what it stands for (Slayer: the client's team, or every team
+of the brick's colour).
+
+**Zones** are spaces over bricks that notice players, as Torque's triggers:
+
+```json
+"zones": [ { "bricks": ["pkg:brick/flagstand"], "above": 0.2, "period_ms": 150 } ]
+```
+
+Every `period_ms` (10 to 10000, default 100) the engine checks each living
+player against the box of every brick of those kinds, raised by `above`,
+and calls `on_zone(player, brick, "enter")` or `"leave"` as they come and
+go (and `"tick"` while they stay, with `"ticks": true`).
+`set_zone_period(zone, ms)` (`minigame`) changes how often zone `zone` (its
+index in `zones`) is checked, as a script setting the trigger datablock's
+`tickPeriodMS` did.
+
+**Dropped items with data.** `drop_item(item, #{ at, velocity, paint, data,
+seconds })` drops an item at `at` (`[x, y, z]`), thrown with `velocity`,
+tinted with `paint`, carrying `data` (any value, up to 1 KB, handed to
+`on_pickup` as `info.data`) and gone after `seconds` (at most 600).
+`drops()` lists your Add-On's drops still lying in the world (`#{ id, item,
+x, y, z, data }`) and `remove_drop(id)` takes one away. `name_drop(id,
+text, c)` floats `text` (up to 32 characters) over one of them in palette
+colour `c`, as `setShapeName` with `setShapeNameColor` did, and
+`name_drop(id, ())` takes it away. A flag dropped where its carrier died is
+this: `on_pickup` answers `false` and decides what touching it means, and
+the seconds until it goes home count down over it.
+
 **Bodies.** `set_scale(p, scale)` resizes a player's body, from 0.2 to 5
-(`setScale`); a respawn puts it back to 1. `set_look_limits(p, up, down)`
+(`setScale`); a respawn puts it back to 1. `set_tools(p, [item, (), ...])`
+fills a living player's tool slots in order (`forceEquip`, Slayer's team
+start tools): an id per slot, `()` or `""` for an empty one, slots past the
+list emptied, and items the server lacks left out (`player`, as
+`give_item`). `set_respawn_time(p, ms)` makes their next deaths wait `ms`
+(at most 999999) before they may respawn, over the mini-game's own
+(`setRespawnTime`); `set_respawn_time(p, ())` and leaving the mini-game
+give the game's back (`minigame`). `set_look_limits(p, up, down)`
 bounds how far their arms and head follow their look, each from 0 (looking
 straight up) to 1 (straight down), as v20's `setLookLimits`: `(0.5, 0.5)`
 holds them level. `set_look_limits(p, ())` lifts it; a respawn does too.
@@ -271,6 +536,15 @@ trigger (`on_trigger`, then `on_activate`), so a held player clicks to
 struggle. `orbit_camera(p, ())` gives the body back; so does the target
 leaving, and death and respawn as always. A player flying an admin camera
 or driving an entity keeps it.
+A last argument says what the body does: `"acts"`, the default above, or
+`"frozen"` (`orbit_camera(p, target, nearest, farthest, distance,
+"frozen")`), v20's plain `setControlObject(%client.camera)`: the body
+takes no actions, every key, the click too, goes to the rules'
+`on_observer` as a spectator's does, and it may circle the player
+themselves or be given to the dead, from the body or any rules camera.
+That is `watch`. `orbit_camera(p, (), "frozen")` ends any rules camera, as
+`watch(p, ())` does; `orbit_camera(p, ())` ends only the acting kind, so
+neither Add-On takes the other's camera.
 
 **Riding players.** `mount_object(mount, rider, node, can_dismount)` seats
 player `rider` on player `mount` at mount point `node` (`mountObject`).
@@ -356,7 +630,8 @@ and credits nobody. Start it clear of the shooter's body. 240 a second per
 Add-On. The Commando's sentry does this from its think.
 
 **Bricks by kind** (`world.edit`). `brick(id)` reads a placed brick:
-`#{ id, kind, x, y, z, turns, color, owner, min, max }`, `kind` being its
+`#{ id, kind, x, y, z, turns, min, max, color, owner, game, name, item }`
+(the same map `bricks(kind)` lists), `kind` being its
 brick catalog id (`v20/brick/brick2x4data`, or an imported Add-On's
 `<ns>:brick/<datablock>`), `x, y, z` its centre, `turns` its clockwise
 quarter turns, `color` its palette index and `owner` the build it is in (0
@@ -529,9 +804,8 @@ bricks is held the first time: `on_copy` hears `action` `"undo"` with the
 `bricks` it would change, and the next Ctrl+Z goes ahead (any other undo
 between starts over), as the New Duplicator asked before a big undo. `show_box(p, min, max, tool)` outlines a box on that
 player's screen while `tool` is in their hand (a selection, a zone being
-marked) and `hide_box(p)` takes it away. The Advanced Duplicator
-([`packages/advanced-duplicator`](../../packages/advanced-duplicator)) uses
-them all.
+marked) and `hide_box(p)` takes it away. The port of the New Duplicator
+uses them all.
 
 Big copy work goes on over several ticks, a slice each tick, so a copy
 of up to 1,000,000 bricks (the most any `limit` may be) never holds the
@@ -605,6 +879,17 @@ gives them back their own. The parts are `head`, `torso`, `hat`,
 `accent`, `pack`, `secondpack`, `hip`, `rarm`, `larm`, `rhand`, `lhand`,
 `rleg` and `lleg`; colours are 0 to 1, with an optional alpha. Everyone
 sees the change with the player's look: it costs nothing beyond it.
+`set_avatar_parts(p, #{ hat: "copHat", pack: "none", face: "smiley",
+decal: "AAA-None" })` dresses them in parts too (`hideAllNodes` and
+`unHideNode`, a full team uniform), per part slot (`hat`, `accent`, `pack`,
+`secondpack`, `chest`, `hip`, `rarm`, `larm`, `rhand`, `lhand`, `rleg`,
+`lleg`) with a face and decal; a part the server's avatar pack lacks stays
+theirs, and an accent their hat cannot wear comes off.
+`set_avatar_parts(p, ())` gives them their own. `avatar_choices()` lists
+the pack's choices in v20's order, a slot's list (`hat`, `face`, `decal`)
+and each hat's accents (`accents.helmet`), so a rule reading v20's list
+positions (`$pref::Avatar::Hat` 6) finds the part. Both last across
+respawns until the rule changes them.
 
 **Filling.** `paint_fill(p, brick, color, limit)` paints `brick` and every
 brick of the same colour joined to it through shared faces (side by side,
@@ -767,6 +1052,13 @@ request, so later runs show it at once.
 An image with `"paint_tint": true` is held in its holder's spray colour,
 the palette colour they last picked with the paint keys, as a colour spray
 can is: a tool that paints with that colour shows it.
+
+An image with `"light": { "radius": 20, "color": [1, 1, 1] }` lights the
+world around it while a player holds or wears it, as a v20 image's
+`hasLight` with `lightType = ConstantLight` did; the importer reads those
+fields (`lightRadius` up to 100, `lightColor`). Worn in a paint colour it
+lights in that colour: Capture the Flag's flag glows in its team's colour on
+the carrier's back. Other light types are noted, not drawn yet.
 
 The fields you are most likely to change:
 

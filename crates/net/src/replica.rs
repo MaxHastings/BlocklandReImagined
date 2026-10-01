@@ -37,6 +37,11 @@ pub struct Replica {
     pub environment: bri_content::atmosphere::Settings,
     /// The host's player archetypes; poses name them by index.
     pub archetypes: std::sync::Arc<bri_sim::archetype::Archetypes>,
+    /// The running Add-Ons' settings (fixed for the session).
+    pub addon_settings: std::sync::Arc<Vec<bri_sim::session::AddOnSetting>>,
+    /// The running Add-Ons' wrench event inputs, targets and outputs
+    /// (fixed for the session).
+    pub brick_events: std::sync::Arc<bri_events::Extension>,
     pub entities: BTreeMap<u64, bri_sim::session::EntityInfo>,
     pub package_state: bri_sim::session::PackageStateView,
     /// Per-tick drop of falling projectiles, by definition.
@@ -144,17 +149,29 @@ fn validate_vitals(
     for ghost in vitals.values().filter_map(|v| v.ghost.as_ref()) {
         ghost.validate()?;
     }
+    for path in vitals.values().filter_map(|v| v.camera_path.as_ref()) {
+        path.validate()?;
+    }
+    for point in vitals.values().filter_map(|v| v.camera_point.as_ref()) {
+        point.validate()?;
+    }
     Ok(())
 }
 fn validate_minigames(games: &[bri_sim::session::MiniGameView]) -> Result<()> {
     ensure!(
-        games.len() <= 64
-            && games.iter().all(|g| g.members.len() <= 64
-                && g.color < 10
-                && g.settings.title.len() <= 256
-                && !g.settings.title.chars().any(char::is_control)),
+        games.len() <= 64 && games.iter().all(|g| g.is_valid()),
         "Invalid minigame listing"
     );
+    Ok(())
+}
+fn validate_addon_settings(list: &[bri_sim::session::AddOnSetting]) -> Result<()> {
+    ensure!(
+        list.len() <= bri_sim::session::MAX_ADDON_SETTINGS,
+        "Too many Add-On settings"
+    );
+    for s in list {
+        s.validate().map_err(anyhow::Error::msg)?;
+    }
     Ok(())
 }
 impl Replica {
@@ -187,6 +204,14 @@ impl Replica {
             &checkpoint.archetypes,
         )?;
         validate_minigames(&checkpoint.minigames)?;
+        validate_addon_settings(&checkpoint.addon_settings)?;
+        // The wrench checks each input fully when it adds them.
+        ensure!(
+            checkpoint.brick_events.inputs.len() <= 128
+                && checkpoint.brick_events.targets.len() <= 32
+                && checkpoint.brick_events.outputs.len() <= 128,
+            "Too many Add-On events"
+        );
         validate_vehicles(&checkpoint.vehicles)?;
         validate_time_scale(checkpoint.time_scale)?;
         validate_broken_shapes(&checkpoint.broken_shapes)?;
@@ -233,6 +258,8 @@ impl Replica {
             map_lights: checkpoint.map_lights,
             environment: checkpoint.environment,
             archetypes: checkpoint.archetypes.into(),
+            addon_settings: checkpoint.addon_settings.into(),
+            brick_events: checkpoint.brick_events.into(),
             entities: checkpoint.entities.into_iter().map(|e| (e.id, e)).collect(),
             package_state: checkpoint.package_state,
             projectile_falls: checkpoint.projectile_falls,

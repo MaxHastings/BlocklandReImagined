@@ -19,7 +19,9 @@ mod build_load;
 pub use build_load::LoadPace;
 mod combat;
 mod control;
-pub use control::{CameraView, ControlObject, SeatSince};
+pub use control::{CameraView, ControlObject, OrbitBody, OrbitPoint, RulesCamera, SeatSince};
+pub mod camera_path;
+pub use camera_path::CameraPath;
 mod debris;
 mod dirty;
 mod events;
@@ -77,7 +79,7 @@ pub use combat::{
 };
 pub use inventory::{TOOL_SLOTS, ToolInventory};
 pub use packages::{
-    ENTITY_TAG, EntityInfo, NamespaceView, PACKAGE_SAVE_SCHEMA, PackageArg, PackageCommand,
+    AddOnSetting, MAX_ADDON_SETTINGS, SettingEdit, TeamEdit, ENTITY_TAG, EntityInfo, NamespaceView, PACKAGE_SAVE_SCHEMA, PackageArg, PackageCommand,
     PackageSave, PackageStateView, PackageStats, WorldSave,
 };
 /// Stock emotes: the `Emote_*` add-ons (`/alarm`, `/love`, `/hate`,
@@ -255,6 +257,26 @@ impl ActionAim {
     }
 }
 
+/// The keys a spectator presses: Torque's triggers 0 (fire), 2 (jump) and 4
+/// (jet), and the light key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ObserverButton {
+    Fire,
+    Jump,
+    Jet,
+    Light,
+}
+impl ObserverButton {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Fire => "fire",
+            Self::Jump => "jump",
+            Self::Jet => "jet",
+            Self::Light => "light",
+        }
+    }
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(
     tag = "kind",
@@ -300,6 +322,10 @@ pub enum Command {
     DropTool {
         slot: usize,
     },
+    /// The Drop Tool key with nothing in hand (v20's `serverCmdDropTool`
+    /// while `currTool` is -1), for Add-Ons' `on_drop_key` (Capture the
+    /// Flag drops a carried flag).
+    DropKey,
     WeaponTrigger {
         down: bool,
     },
@@ -323,6 +349,10 @@ pub enum Command {
     Respawn,
     /// `serverCmdLight`.
     ToggleLight,
+    /// A key pressed by a spectator: dead with their respawn held by a rule,
+    /// or under a rules camera (`Observer::onTrigger`, and `serverCmdLight`
+    /// for a spectator). The rules hear it (`on_observer`).
+    ObserverButton(ObserverButton),
     /// `serverCmdCancelBrick`: the cancel key. The client clears its own
     /// ghost brick; the host runs the held image's cancel command, if any.
     CancelBrick,
@@ -431,6 +461,7 @@ impl Command {
             | Command::Admin(_)
             | Command::Tool(_)
             | Command::DropTool { .. }
+            | Command::DropKey
             | Command::WeaponTrigger { .. }
             | Command::ActivateRelease
             | Command::Avatar(_)
@@ -439,6 +470,7 @@ impl Command {
             | Command::Chat(_)
             | Command::Suicide
             | Command::Respawn
+            | Command::ObserverButton(_)
             | Command::MiniGame(_)
             | Command::SwitchSeat(_)
             | Command::TeamChat(_)
@@ -622,6 +654,46 @@ pub enum Reply {
     },
     Admin(Box<AdminReply>),
 }
+/// What `set_avatar_parts` dresses a player in over their own avatar.
+#[derive(Debug, Clone, PartialEq)]
+struct UniformParts {
+    parts: BTreeMap<String, String>,
+    face: Option<String>,
+    decal: Option<String>,
+}
+impl UniformParts {
+    /// `avatar` in these parts, face and decal, each only where the
+    /// server's avatar `pack` has it (any without a pack); the rest stays
+    /// the player's own, and an accent its new hat cannot wear comes off.
+    fn dress(
+        &self,
+        avatar: &mut bri_content::avatar::Appearance,
+        pack: Option<&bri_content::avatar::Package>,
+    ) {
+        // The pack's own spelling of `name`, or `name` itself without a pack.
+        let pick = |list: Option<&Vec<String>>, name: &str| match pack {
+            None => Some(name.to_owned()),
+            Some(_) => list?.iter().find(|c| c.eq_ignore_ascii_case(name)).cloned(),
+        };
+        for (slot, name) in &self.parts {
+            let found = pick(pack.and_then(|p| p.parts.get(slot)), name);
+            let found = found.or_else(|| (slot == "accent").then(|| name.to_ascii_lowercase()));
+            if let Some(found) = found {
+                avatar.parts.insert(slot.clone(), found);
+            }
+        }
+        if let Some(face) = self.face.as_deref().and_then(|f| pick(pack.map(|p| &p.faces), f)) {
+            avatar.face = face;
+        }
+        if let Some(decal) = self.decal.as_deref().and_then(|d| pick(pack.map(|p| &p.decals), d)) {
+            avatar.decal = decal;
+        }
+        if let Some(pack) = pack {
+            *avatar = pack.repaired(avatar).0;
+        }
+    }
+}
+
 struct Peer {
     player: Player,
     actor: Actor,
@@ -676,6 +748,9 @@ struct Peer {
     /// Colours an Add-On puts over the avatar's own (`set_avatar_colors`):
     /// a team's uniform. Spray paint and burns still show over it.
     uniform: BTreeMap<String, [f32; 4]>,
+    /// Parts, face and decal an Add-On dresses the avatar in over the
+    /// player's own (`set_avatar_parts`): a team's full uniform.
+    uniform_parts: Option<UniformParts>,
     /// `%client.currentColor`: the palette index of the last colour spray
     /// can picked (index 0 until one is).
     current_color: u8,
@@ -687,6 +762,12 @@ struct Peer {
     control: ControlObject,
     /// `%client.Camera`'s last transform; `None` until a camera is used.
     camera: Option<CameraView>,
+    /// The camera path a rule has this player's camera fly
+    /// (`ControlObject::Path`).
+    path: Option<camera_path::Following>,
+    /// The point a rule has this player's camera circle
+    /// (`ControlObject::Point`).
+    orbit: Option<control::OrbitPoint>,
     /// `%client.lastF8Time`: when an admin teleport last moved this player.
     last_drop_tick: Option<u64>,
     tutorial: tutorial::Progress,
@@ -708,6 +789,9 @@ struct Peer {
     /// A rule's `setLookLimits` for this body: `[down, up]` look
     /// positions its arms and head follow.
     look_limits: Option<[f32; 2]>,
+    /// A rule's respawn time for this player in ms (`setRespawnTime`), in
+    /// place of their mini-game's, until they leave it.
+    respawn_ms: Option<u32>,
 }
 /// `serverCmdActivateStuff`'s 320 ms repeat window at 120 ticks per second.
 const ACTIVATE_REPEAT_TICKS: u64 = 38;
@@ -951,6 +1035,9 @@ impl Session {
             .iter()
             .filter_map(|(id, p)| {
                 let mut avatar = p.avatar.clone()?;
+                if let Some(uniform) = &p.uniform_parts {
+                    uniform.dress(&mut avatar, self.avatar_catalog.as_ref());
+                }
                 for (slot, color) in &p.uniform {
                     avatar.colors.insert(slot.clone(), *color);
                 }
@@ -1218,6 +1305,7 @@ impl Session {
                 temp_color: None,
                 temp_look: None,
                 uniform: BTreeMap::new(),
+                uniform_parts: None,
                 current_color: 0,
                 fx_can: None,
                 talking: false,
@@ -1250,6 +1338,9 @@ impl Session {
                 talk_stops: VecDeque::new(),
                 water: Default::default(),
                 look_limits: None,
+                respawn_ms: None,
+                path: None,
+                orbit: None,
                 avatar: self.avatar_catalog.as_ref().map(|c| c.defaults.clone()),
             },
         );
@@ -1443,6 +1534,7 @@ impl Session {
                 temp_color: None,
                 temp_look: None,
                 uniform: BTreeMap::new(),
+                uniform_parts: None,
                 current_color: 0,
                 fx_can: None,
                 talking: false,
@@ -1475,6 +1567,9 @@ impl Session {
                 talk_stops: VecDeque::new(),
                 water: Default::default(),
                 look_limits: None,
+                respawn_ms: None,
+                path: None,
+                orbit: None,
                 avatar,
             },
         );
@@ -1687,6 +1782,11 @@ impl Session {
         };
         let needs = command.preconditions();
         ensure!(alive || !needs.alive, "Dead players cannot do that");
+        let watching = self.watching(owner);
+        ensure!(
+            !watching || !needs.alive,
+            "You cannot do that while watching"
+        );
         if let Some(action) = needs.build {
             ensure!(
                 !matches!(
@@ -1704,6 +1804,12 @@ impl Session {
                 bri_world::MAX_EVENTS_PER_BRICK
             );
             self.validate_event_rows(rows)?;
+        }
+        if let Command::Tool(ToolAction::SetEvents { brick, events: rows }) = &mut command {
+            let refused = self.review_event_rows(owner, *brick, rows);
+            for reason in refused {
+                self.notify(owner, Notice::Chat(reason));
+            }
         }
         if !self.is_administrator(owner)
             && let Command::Tool(ToolAction::SetEvents { events: rows, .. }) = &mut command
@@ -1749,10 +1855,34 @@ impl Session {
             peer.saves += 1;
             self.save_requests += 1;
         }
+        // A watching body does not fire; letting go of a trigger still counts.
+        ensure!(
+            !(watching && matches!(command, Command::WeaponTrigger { down: true })),
+            "You cannot fire while watching"
+        );
+        // A body whose archetype uses no items (`PlayerData::onTrigger` doing
+        // nothing, `serverCmdUseTool` refused) neither fires, clicks nor
+        // takes out a tool.
+        if matches!(
+            command,
+            Command::WeaponTrigger { down: true } | Command::Activate | Command::EquipTool { slot: Some(_) }
+        ) {
+            let archetype = peer.player.state().archetype;
+            ensure!(
+                self.archetypes.resolve(archetype).uses_items,
+                "You cannot use items right now"
+            );
+        }
         match command {
             Command::Admin(_) => unreachable!("handled by the authenticated admin branch above"),
             Command::DropTool { slot } => {
                 self.drop_tool(owner, slot, direction)?;
+                Ok(Reply::Accepted)
+            }
+            Command::DropKey => {
+                if peer.combat.alive {
+                    self.package_drop_key(owner);
+                }
                 Ok(Reply::Accepted)
             }
             // Riders fire their own tools (`Player::processTick` hands fire
@@ -1801,6 +1931,15 @@ impl Session {
             }
             Command::Respawn => {
                 self.request_respawn(owner)?;
+                Ok(Reply::Accepted)
+            }
+            Command::ObserverButton(button) => {
+                let peer = self.peers.get(&owner).context("Unknown connection")?;
+                ensure!(
+                    !peer.combat.alive || peer.control.rules_camera(),
+                    "You are not watching anything"
+                );
+                self.package_observer(owner, button);
                 Ok(Reply::Accepted)
             }
             Command::ToggleLight => {
@@ -1913,10 +2052,19 @@ impl Session {
                 Ok(Reply::Accepted)
             }
             Command::ControlPlayer => {
-                // An Add-On's orbit camera is the Add-On's to end.
+                // A rule's own cameras (an Add-On's orbit too) are the rule's to
+                // hand back.
                 ensure!(
-                    !matches!(peer.control, ControlObject::Orbit { .. }),
-                    "An Add-On holds your camera"
+                    !matches!(
+                        self.control(owner),
+                        Some(
+                            ControlObject::Path
+                                | ControlObject::Observer
+                                | ControlObject::Point
+                                | ControlObject::Orbit { .. }
+                        )
+                    ),
+                    "The game has your camera"
                 );
                 self.return_to_body(owner)?;
                 Ok(Reply::Accepted)

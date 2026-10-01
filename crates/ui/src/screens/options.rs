@@ -197,6 +197,9 @@ const FOV_SLIDER: &str = "SliderFOV";
 /// Not a v20 setting: look for a newer release once per start (on unless
 /// turned off). The client's update check reads it.
 pub const CHECK_FOR_UPDATES: &str = "$pref::Net::CheckForUpdates";
+/// Slayer's client preference "Disable End of Round Report": score reports
+/// a game opens (`Notice::Report`) stay closed.
+pub const HIDE_REPORTS: &str = "$pref::HUD::HideReports";
 /// Controls' "Invert Mouse In Vehicles"; the client reads it while driving
 /// a mouse-steered vehicle. On by default, as stock v20's
 /// `client/defaults.cs` ships it: moving the mouse up dips a plane's nose.
@@ -226,6 +229,7 @@ const DEFAULT_ON: &[&str] = &[
 ];
 /// Checkbox preferences the native game honours.
 const CHECKBOX_PREFS: &[&str] = &[
+    HIDE_REPORTS,
     FULLSCREEN,
     NO_VSYNC,
     PRECIPITATION,
@@ -1139,7 +1143,8 @@ impl Options {
             slider.fields.insert("snap".into(), "0".into());
             v.add(section, slider);
         }
-        // "Check for new versions" has no v20 control; it ends Gui Options.
+        // "Hide end of round reports" and "Check for new versions" have no
+        // v20 control; they end Gui Options.
         if let Some(section) = find_section(v, "Gui Options") {
             let checks: Vec<NodeId> = v
                 .node(section)
@@ -1155,17 +1160,25 @@ impl Options {
                 .iter()
                 .map(|&k| v.node(k).ctrl.position[1] + v.node(k).ctrl.extent[1])
                 .max();
-            if let (Some(last), Some(bottom)) = (last, bottom) {
-                let mut c = v.node(last).ctrl.clone();
-                c.name = Some("OptCheckForUpdatesToggle".into());
-                c.variable = Some(CHECK_FOR_UPDATES.into());
-                c.text = Some("Check for new versions".into());
-                c.command = None;
-                c.position[1] = bottom + 2;
-                c.extent[0] = c.extent[0].max(170);
-                let grow = c.extent[1] + 2;
-                v.add(section, c);
-                v.nodes[section].ctrl.extent[1] += grow;
+            if let (Some(last), Some(mut bottom)) = (last, bottom) {
+                // Slayer's client preference "Disable End of Round Report"
+                // before it: score reports a game opens stay closed.
+                for (name, variable, text) in [
+                    ("OptHideReportsToggle", HIDE_REPORTS, "Hide end of round reports"),
+                    ("OptCheckForUpdatesToggle", CHECK_FOR_UPDATES, "Check for new versions"),
+                ] {
+                    let mut c = v.node(last).ctrl.clone();
+                    c.name = Some(name.into());
+                    c.variable = Some(variable.into());
+                    c.text = Some(text.into());
+                    c.command = None;
+                    c.position[1] = bottom + 2;
+                    c.extent[0] = c.extent[0].max(170);
+                    let grow = c.extent[1] + 2;
+                    bottom += grow;
+                    v.add(section, c);
+                    v.nodes[section].ctrl.extent[1] += grow;
+                }
             }
         }
         let sections: Vec<NodeId> = v.walk().filter(|&n| is_section(v, n)).collect();
@@ -2352,7 +2365,7 @@ mod tests {
     }
 
     #[test]
-    fn gui_options_ends_with_a_check_for_new_versions_toggle() {
+    fn gui_options_end_with_hide_reports_and_check_for_new_versions_toggles() {
         let mut data = UiPack::default();
         let mut layout = ctrl("GuiControl", "GuiDefaultProfile", Rect::new(0, 0, 640, 480));
         let mut section = ctrl("GuiSwatchCtrl", "GuiDefaultProfile", Rect::new(0, 0, 300, 60));
@@ -2386,7 +2399,19 @@ mod tests {
         );
         let mut options = Options::new(&ui.core);
         let toggle = options.view.id("OptCheckForUpdatesToggle").expect("added");
+        let hide = options.view.id("OptHideReportsToggle").expect("added");
         let tips = audio_node(&options, "$pref::HUD::showToolTips");
+        {
+            let (t, h, c) = (
+                &options.view.node(tips).ctrl,
+                &options.view.node(hide).ctrl,
+                &options.view.node(toggle).ctrl,
+            );
+            assert!(h.position[1] >= t.position[1] + t.extent[1], "below the last row");
+            assert!(c.position[1] >= h.position[1] + h.extent[1], "updates last");
+        }
+        assert!(!options.view.bool_value(hide), "reports show unless hidden");
+        toggle_audio(&mut options, &mut ui, HIDE_REPORTS, true);
         let (t, c) = (&options.view.node(tips).ctrl, &options.view.node(toggle).ctrl);
         assert!(c.position[1] >= t.position[1] + t.extent[1], "below the last row");
         assert_eq!(c.position[0], t.position[0]);
@@ -2401,6 +2426,7 @@ mod tests {
         let saved = saved.expect("Done saves");
         let prefs = Prefs::new(&Default::default(), &saved.prefs);
         assert!(!prefs.bool_or(CHECK_FOR_UPDATES, true));
+        assert!(prefs.bool_or(HIDE_REPORTS, false));
     }
 
     #[test]

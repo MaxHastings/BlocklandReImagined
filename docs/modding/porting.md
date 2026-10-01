@@ -113,7 +113,7 @@ gap: turning a package on turns what it needs on with it.
 | `port` | The folder under `ports/` holding the port. |
 | `status` | `verified`: tests show it behaves like v20 for everything the Add-On's scripts do. `partial`: it covers some functions and the rest are still missing. |
 | `sha256` | `source.sha256` from the import report of each copy the port was checked against. The report calls a copy `listed` or `unlisted`; both get the port if they match. |
-| `covers` | Each function the port replaces, with named patterns (regular expressions, case-insensitive) its body must match. The first group of each is a value the port can use. |
+| `covers` | Each function the port replaces, with named patterns (regular expressions, case-insensitive) its body must match. The first group of each is a value the port can use. A key that is one of the Add-On's script files (`server.cs`, `server/core/Slayer_MiniGameSO.cs`) matches that file's whole text instead, for values it sets outside any function, such as a table of globals or a preferences file. |
 | `tests` | the port's own checks (`<port>/checks.json`, which `check-port` runs) and any `path test_name` in the repository. The list's own test checks that they exist. |
 
 Patterns do two jobs. They prove the copy is the shape the port was written
@@ -216,6 +216,40 @@ add when you work in a checkout.
 7. **List it** in `ports.json` with its status and tests, then run
    `cargo test -p bri-addon-import`.
 
+### Datablocks made at run time
+
+Some Add-Ons make datablocks in a function or a loop (Slayer CTF's
+`createSlayerCTFDatablocks` makes a flag item and image for each of ten
+paint colours), so the importer, which reads scripts without running them,
+finds none. The port declares them in `ports/<port>/datablocks.cs`, written
+the way the Add-On would have:
+
+```
+datablock ItemData(slyrCTF_FlagItem)
+{
+	shapeFile = "{{flag_shape}}";
+	uiName = "{{flag_name}}";
+	image = slyrCTF_FlagImage;
+};
+```
+
+The importer reads it beside the Add-On's own scripts, in its folder, before
+converting anything, so its paths, parents and globals resolve as the
+Add-On's do (`mountPoint = $BackSlot` reads the base game's value).
+`{{name}}` takes the values the `covers` patterns captured, and
+`{{namespace}}`. The report notes how many datablocks it declared. The
+declarations are the port's own text, never the Add-On's.
+
+Sounds declared this way (Slayer's countdown voices, made in a loop) play
+by id from the rules, `play_sound(p, "<namespace>:sound/<name>")`: every
+converted `AudioProfile` goes into the Add-On's weapons pack, which an
+Add-On with no weapons gets just for its sounds.
+
+A `covers` pattern reads a function's plain definition, the last one if
+the Add-On defines it twice, as Torque keeps. A definition inside a
+`package` wraps that one (it calls `Parent::`), so it is read only when
+there is no plain one.
+
 ## Handing it to an agent
 
 `AGENT.md` in the work folder holds the prompt, filled in for the Add-On.
@@ -227,6 +261,8 @@ page as well.
 | Add-On | Port | Status | What it covers |
 |---|---|---|---|
 | `Weapon_Shotgun` (Sawn-off Shotgun) | `weapon_shotgun` | verified | `shotgunImage::onFire`: the pellets, their spread and the recoil, read from the copy's own script |
+| `Gamemode_Slayer` (Slayer 4.1.5) | `gamemode_slayer` | partial | Game modes (Deathmatch, Team Deathmatch and modes other Add-Ons add), lives, points and time to win, rounds and resets, the pre-round countdown on `PlayerFrozenArmor`, teams that sort, balance and spawn on team spawns, `/teams` and its short forms, friendly fire and team chat, capture points (trigger zones, brick events), spectating out of lives (orbit, free and auto cameras), the fly-through camera (`/createFlyCam`, `/setKnot`, `/setJump`, `/testFlyCam`) and Slayer's event outputs (`setTeamControl`, `setTeamControlLocked`, lives, kills and deaths, `joinTeam`, round time, `Win`, `checkTeam`, `checkTeamCount`, `StartFlyThrough`) with the `Team(Client)` and `Team(Brick)` targets and their outputs (`ChatMsgAll`, `CenterPrintAll`, `BottomPrintAll`, `RespawnAll`, `IncScore`), the `onPlayerTouch(TeamN)`, `onActivate(TeamN)` and `onMinigame` inputs, and Restrict Output Events, all as host rules. Not yet: uniforms, team loadouts and player types, bots, saved fly-through paths |
+| `Gamemode_Slayer_CTF` (Slayer CTF) | `gamemode_slayer_ctf` | partial | Capture the Flag: flags on Flag Spawns in their brick's colour, pickup, carrying on the back, capture, recovery, dropping (death, leaving, `/dropFlag`, the `DropFlag` event output), respawn timers, captures to win, the CTF preferences (`/ctf`), its brick event inputs. Not yet: the Drop Tool key, the countdown over a dropped flag, the flag's light, locked flags, score list columns, bots, the other flag models |
 | `Tool_GrappleRope` (Grapple Rope) | `tool_grapplerope` | verified | host rules: where the hook strikes with a clear line of sight from `lift` above the feet, the holder hangs on a rope (`tether`) as long as the distance then while the click is held, and flies off with their speed on letting go; the image draws the rope with the chain projectile's trail (`rope`). The engine's rope stands in for `GrappleRope`'s 10 ms velocity correction; the movement keys steer only by the player's air control, as in v20 |
 | `Weapon_Loz_Hookshot` (Hookshot) | `weapon_loz_hookshot` | verified | host rules: where the spearhead strikes, the shooter's speed is set straight at the spot every `every` ms, `fast` beyond `far` and `slow` within `near`, until within `stop`; a struck player or vehicle is followed; a seated shooter pulls their vehicle only toward a player or vehicle; `/degrapple` stops it. All numbers read from the copy |
 | `Tool_Duplicator` (Plornt's Duplorcator) | `tool_duplicator` | partial | `/dup`, `/duplorcator`, `/duplicator`; `DuplorcatorImage::onFire` (reach, full trust, no public bricks, selection wait); `getStack` (up from the clicked brick, every way from the rest; the cyan highlight and how long it lasts); planting brick by brick with its count, one undo; `/saveDup` and `/loadDup` (v20 duplication files load too). Not ported: uploading a duplication from the player's computer |
@@ -308,7 +344,31 @@ rules under `ports[].rules`.
 `{{version}}`, or anything a `covers` pattern captured. A `{{word}}` that
 names nothing is an error. The importer's ids are
 `<ns>:<kind>/<datablock name in lower case>`, so a rule gives out the
-imported item as `"{{namespace}}:weapon/fillcanitem"`.
+imported item as `"{{namespace}}:weapon/fillcanitem"`. `{{name|bool}}`
+writes a captured TorqueScript truth value (`1`, `0`, `true`, `false`) as
+`true` or `false`, for a setting's `default` in `behaviour.json`, and
+`{{name|lower}}` writes it in lower case, as content ids spell a Torque
+name (`"v20.weapon.{{team_equip_0|lower}}"` for a captured `hammerItem`):
+
+```json
+{ "key": "auto_sort", "title": "Auto Sort", "type": "bool", "default": {{pref_auto_sort|bool}} }
+```
+
+**Rules that build on another Add-On's rules.** An Add-On written for
+another (a Slayer game mode) reads that one's settings or adds to its lists.
+`"needs": { "slayer_rules": "Gamemode_Slayer" }` in `rules` makes the rules
+depend on that Add-On's rules and gives their id as `{{slayer_rules}}`, as
+the importer names them from the Add-On's folder name: Slayer CTF reads
+`setting(game, "{{slayer_rules}}:mode")` and adds Capture the Flag to the
+mode list with `setting_items`.
+
+**Preferences become settings.** A preference the original's GUI edited
+(Slayer's `Slayer_PrefSO`, `$Pref::` values an Add-On menu changed) is a
+`settings` entry in the rules' `behaviour.json`, its default captured from
+the original by a `covers` pattern, so the host edits it in the Mini-Game
+window's Add-On Settings and the rule reads it with `setting(game, key)`.
+Preferences that duplicate the vanilla mini-game dialog (damage, building,
+points per kill, respawn times, starting equipment) stay in that dialog.
 
 **Reaching the rules.** In the patch, `{namespace}`, `{rules}` and
 `{version}` work like captured values, in keys too. Point the image's

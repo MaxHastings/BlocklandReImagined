@@ -27,6 +27,12 @@ operation that needs a capability.
 | `%obj.getScale()` | `p.scale` | |
 | `%client.currTool`, `getMountedImage(0)`, `getImageState(0)` | `p.slot`, `p.image`, `p.image_state` | `image_state` is the state's name, like `"Ready"`. |
 | `%client.minigame` | `p.minigame` | |
+| `registerInputEvent(fxDTSBrick, "onX", targets)`, `%brick.processInputEvent("onX", %client)` | `brick_inputs` in behaviour.json, `fire_brick_input(brick, "onX", p)` | `$InputTarget_[...]` is filled from `p`: Player, Client and MiniGame; OwnerPlayer and OwnerClient are the brick owner's. |
+| `registerEventTarget("Name Class", "BaseClass", "%client.findCode")` | `brick_targets` in behaviour.json: `{ "name", "class", "from" }`, with `brick_outputs` of that class | `from` names the slot the find code starts from (`Client` for `%client`, `Self` for `%this`); the rules find what the target stands for in `on_brick_output` from `target` and `info.target`. |
+| `registerMultiSourceInputEvent(fxDTSBrick, "onX", targets)`, `processMultiSourceInputEvent("onX", %client, %mini)` | `brick_inputs` in behaviour.json, `fire_game_input(game, "onX", p, killer)` | Runs on every brick of the mini-game with rows on it. `$InputTarget_["Player(Killer)"]` and `["Client(Killer)"]` are filled from `killer`. |
+| A package of `FxDtsBrick::onPlayerTouch` or `onActivate` that calls `processInputEvent("onX(...)")` | a `brick_inputs` entry with `"follows": "onPlayerTouch"`, and `on_brick_input(input, brick, p)` answering its name | Asked only for bricks with rows on an input that follows it. |
+| A package of `serverCmdAddEvent` that refuses rows | `"on_event_row": true` and `on_event_row(p, brick, row)` returning `false` or a reason | The refused row is left out and the player told why. |
+| `registerOutputEvent(Class, "doX", params)`, `function Class::doX(%this, ..., %client)` | `brick_outputs` in behaviour.json, `on_brick_output(output, target, params, info)` | `info.client` is the appended `%client`. An output that fires its brick's own input (`%this.onX(%client)`) returns it instead, with a row range if it limits the rows. |
 | `%obj.getMuzzlePoint(0)` | `p.mx`, `p.my`, `p.mz` | The held image's muzzle, or the eye with empty hands. |
 | `%obj.tool[%i]` | `p.tools` | Item ids by slot, `""` for an empty one. |
 | `%client.currentColor` | `p.paint` | The palette colour last picked with the paint keys. |
@@ -50,6 +56,9 @@ operation that needs a capability.
 | `%client.camera.setOrbitMode(%target, ...)`, `setControlObject(%client.camera)`, back with `setControlObject(%player)` | `orbit_camera(p, target, distance)`, `orbit_camera(p, target, min, max, distance)` (the wheel zooms between), `orbit_camera(p, ())` | `player` |
 | `%obj.setScale("s s s")` | `set_scale(p, s)` | `player`; 0.2 to 5, one number |
 | `%obj.setLookLimits(%up, %down)` | `set_look_limits(p, up, down)`, `set_look_limits(p, ())` | `player` |
+| `%client.setControlObject(%client.camera)`, `%camera.setOrbitMode(%target, ...)` | `watch(p, target)`, `watch(p, ())`; or `orbit_camera(p, target, min, max, distance, "frozen")` | `player`; orbits a body, the body takes no actions, keys go to `on_observer` |
+| Slayer's `%client.setDead(1)` (no respawn) | `hold_respawn(p, true)` | `minigame`; a reset lets go |
+| `$Pref::Server::...` prefs a game mode's GUI edits (Slayer's `Slayer_PrefSO`) | `settings` in the behaviour; `setting(game, key)`, `set_setting(game, key, v)` | `minigame` to change |
 | `%obj.mountObject(%rider, %node)`, `%rider.canDismount = 0` | `mount_object(mount, rider, node, can_dismount)` | `physics`; node is a `mount<N>` of the body model |
 | `%rider.setTransform(...)` after `mountObject`, to turn them on the mount | `mount_object(mount, rider, node, can_dismount, turn)`, `turn` in degrees clockwise from above | `physics`; Torque's angle is radians |
 | `%rider.unMountObject()`, `dismount()` | `unmount_object(rider)` | `physics`; keeps the mount's velocity |
@@ -63,6 +72,8 @@ operation that needs a capability.
 | `new Item() { ... }` at a point | `drop_item(item, x, y, z)`, `drop_item(item, x, y, z, vx, vy, vz)` | `player` |
 | `centerPrint`, `bottomPrint` | `center_print(p, text, s)`, `bottom_print(p, text, s)` | `chat` |
 | `messageClient`, `messageAll` | `tell(p, text)`, `broadcast(text)` | `chat` |
+| `%mini.messageAll`, `messageAllExcept`, `centerPrintAll`, `bottomPrintAll` | `tell_minigame(game, text[, except])`, `center_print_minigame(game, text, s)`, `bottom_print_minigame(game, text, s)` | `chat`; one line of the share for the whole game |
+| Slayer's `%mini.endRound(%winner)` | `end_round(game, #{ teams, players })`, then `on_minigame` `round_end` | `minigame` |
 | `serverPlay3D(%profile, %pos)`, `%client.play2D` | `sound_at(profile, x, y, z)`, `play_sound(p, profile)` | `effects` |
 | `%obj.playThread(%slot, %seq)` | `play_thread(p, thread, sequence)` | `effects`; whole-body sequences (`death1`) override by priority, empty-hand arm poses (`armReadyBoth`) hold |
 | A stretched `StaticShape` tracer | `beam(from, to, #{ color, width, seconds, muzzle })` | `effects` |
@@ -71,6 +82,11 @@ operation that needs a capability.
 | `%brick.setColor(%c)` over a hand-written search of touching bricks | `paint_fill(p, brick, color, limit)` | `world.edit` |
 | `%client.score`, dynamic fields | `get_player`/`set_player` on declared state | none |
 | `%player.setNodeColor(%node, %color)` for team uniforms | `set_avatar_colors(p, #{ torso: [r, g, b] })`, `set_avatar_colors(p, ())` | `player` |
+| `hideAllNodes(%player)`, `%player.unHideNode(%node)`, `setFaceName`, `setDecalName` for team uniforms | `set_avatar_parts(p, #{ hat: "copHat", face: "smiley" })`, `set_avatar_parts(p, ())`; `avatar_choices()` for `$hat[%i]`, `$accentsAllowed[%hat]` | `player` |
+| `%client.forceEquip(%slot, %item)` for every slot | `set_tools(p, [item, (), ...])` | `player` |
+| `%client.setRespawnTime(%ms)`, `resetRespawnTime()` | `set_respawn_time(p, ms)`, `set_respawn_time(p, ())` | `minigame` |
+| `%mini.playerDatablock`, `%mini.startEquip[%i]` | `minigame(game).player_type`, `.loadout` | none |
+| A pref of `type = "object"` (`object_class = "ItemData"` or `"PlayerData"`) | a setting of `type` `item` or `player_type` | none |
 | Digging a terrain of bricks: `%brick.delete()`, `new fxDTSBrick()` of a dirt cube | `remove_brick(id)`, `place_voxel(x, y, z, material)`, with `voxel(brick)` and `can_place_voxel(x, y, z)` to read | `world.edit` |
 
 ## Hooks
@@ -89,6 +105,12 @@ operation that needs a capability.
 | `serverCmdCancelBrick` packaged for a gun | `commands.cancel` |
 | `ItemData::onPickup` | `on_pickup(p, item, info)`: answer `false` to leave it, `"take"` to use it up |
 | `ItemData::onDrop`, dynamic fields on the dropped `Item` | `on_drop(p, item, slot)`: the value it returns rides the drop to whoever picks it up |
+| `%brick.isLocked[%color] = 1` and other dynamic fields on a brick | `set_brick_field(brick, key, v)`; any Add-On reads it with `brick_field(brick, "namespace:key")` |
+| `%item.setShapeName(%text)` with `setShapeNameColor` on a dropped item | `name_drop(id, text, c)` |
+| `commandToClient(%cl, 'Slayer_ctrDisplayAdd', ...)` lines of an ML score list, `Slayer_ForceGUI` | `show_report(p, report)`, `hide_report(p)` |
+| A Slayer mode's `scoreListInit` / `scoreListAdd` replacing columns | `report_column(game, key, title, cells)` |
+| `serverCmdDropTool` packaged for empty hands (`currTool == -1`) | `on_drop_key(p)` |
+| `hasLight`, `lightType = ConstantLight`, `lightRadius`, `lightColor` on a `ShapeBaseImageData` | The image's `light` (the importer reads them) |
 | `ProjectileData::onCollision` | `on_projectile_hit(hit)` |
 | A flood fill over `InitContainerBoxSearch` with `setColor`, `setColorFX` or `setShapeFX`, pushed as one undo | `paint_fill(p, brick, paint, #{ limit, reach, stop_at_limit })` |
 | `Player::SetTempColor(%color, %ms)` with no position; `setFaceName` with a reset `schedule` | `temp_look(p, #{ color \| paint, face, alpha }, seconds)` |

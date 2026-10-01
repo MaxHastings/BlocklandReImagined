@@ -325,6 +325,19 @@ impl WorldItems {
         self.models.values().map(|m| &m.mesh.data)
     }
 
+    /// Where a dropped item's name floats from: the middle of its model's
+    /// box (`ShapeBase::getBoxCenter`), or its origin for a model with no
+    /// box.
+    pub fn drop_center(&self, drop: &bri_weapons::Drop) -> Vec3 {
+        let center = self
+            .assets
+            .item_appearance(&drop.item)
+            .and_then(|look| self.assets.presentation.models.get(&look.model))
+            .map_or(Vec3::ZERO, |m| {
+                (Vec3::from(m.bounds_min) + Vec3::from(m.bounds_max)) * 0.5
+            });
+        drop.position + drop.rotation * (center * drop.scale)
+    }
     /// Whether the item presentation has this model (an Add-On's casing or
     /// debris converted beside its weapons).
     pub fn has_model(&self, key: &str) -> bool {
@@ -379,13 +392,14 @@ impl WorldItems {
             if ghost {
                 self.diagnostics.cooling_down += 1;
             }
-            let Some((key, skin)) = self.item_key(&item.item, None, ghost) else {
+            let Some((key, skin)) = self.item_key(&item.item, item.paint, ghost) else {
                 continue;
             };
+            let pose = self.idle_pose(&item.item, &key.model, frame.seconds);
             candidates.push(Candidate {
                 identity: ItemIdentity::Static(item.brick),
                 model: key,
-                pose: PoseKey::default(),
+                pose,
                 transform: SceneTransform {
                     transform: Mat4::from_rotation_translation(
                         item.rotation(),
@@ -407,10 +421,11 @@ impl WorldItems {
             let Some((key, skin)) = self.item_key(&drop.item, drop.paint, fading) else {
                 continue;
             };
+            let pose = self.idle_pose(&drop.item, &key.model, frame.seconds);
             candidates.push(Candidate {
                 identity: ItemIdentity::Drop(drop.id),
                 model: key,
-                pose: PoseKey::default(),
+                pose,
                 transform: SceneTransform {
                     transform: Mat4::from_scale_rotation_translation(
                         Vec3::splat(drop.scale),
@@ -539,7 +554,8 @@ impl WorldItems {
                 self.diagnostics.model_less += 1;
                 continue;
             };
-            let look = self.painted(look, *paint);
+            // Only the hands hold spray cans; a worn image keeps its model.
+            let look = self.painted(look, *paint, usize::from(hand) < bri_weapons::HAND_SLOTS);
             (image.model, image.tint) = (look.model, look.tint);
             let skin = look.skin.map(|id| {
                 let energized = self
@@ -713,7 +729,7 @@ impl WorldItems {
             self.diagnostics.model_less += 1;
             return None;
         };
-        let look = self.painted(look, paint);
+        let look = self.painted(look, paint, false);
         let mut tint = look.tint;
         if faded {
             tint[3] = 1.;
@@ -721,18 +737,37 @@ impl WorldItems {
         Some((ModelKey::new(&look.model, tint), look.skin))
     }
     /// `look` in palette colour `paint` (a colour spray can, or a
-    /// `paint_tint` tool held or dropped in its holder's colour).
-    fn painted(&self, mut look: Appearance, paint: Option<u8>) -> Appearance {
+    /// `paint_tint` tool held or dropped in its holder's colour). In a hand,
+    /// a translucent colour is the clear spray can.
+    fn painted(&self, mut look: Appearance, paint: Option<u8>, hand: bool) -> Appearance {
         if let Some(color) = paint.and_then(|p| self.palette.get(usize::from(p))) {
             // The derived `color<N>SprayCanImage`: palette colour shift,
             // alpha at least 10/255, clear can for translucent colours.
             look.tint = [color[0], color[1], color[2], color[3].max(10. / 255.)];
-            if color[3] <= 0.99 {
+            if hand && color[3] <= 0.99 {
                 look.model = TRANSLUCENT_SPRAY_CAN.into();
             }
             look.skin = None;
         }
         look
+    }
+    /// A lying item's pose: its `idle` sequence (`bri_weapons::Item::idle`)
+    /// on the world clock, so every copy of a model shares one pose.
+    fn idle_pose(&mut self, item: &str, model: &str, seconds: f64) -> PoseKey {
+        let Some(idle) = self.weapons.items.get(item).map(|i| &i.idle).filter(|s| !s.is_empty())
+        else {
+            return PoseKey::default();
+        };
+        let clip = self.assets.shape(model).ok().and_then(|shape| {
+            shape.animations.iter().find(|a| a.name.eq_ignore_ascii_case(idle))
+        });
+        match clip {
+            Some(clip) => normalized_pose(clip, seconds),
+            None => {
+                self.diagnostics.missing_sequences += 1;
+                PoseKey::default()
+            }
+        }
     }
     fn projectile_pose(&self, model: &str, age: f64) -> Result<PoseKey> {
         let shape = self.assets.shape(model)?;
@@ -1273,5 +1308,42 @@ pub fn projectile_opacity(age: u32, fade: u32, lifetime: u32) -> f32 {
         0.
     } else {
         (1. - age.saturating_sub(fade) as f32 / lifetime.max(1) as f32).clamp(0., 1.)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalized_pose;
+
+    fn clip(looping: bool) -> bri_content::shape::Animation {
+        bri_content::shape::Animation {
+            name: "root".into(),
+            frames: 10,
+            duration: 0.5,
+            looping,
+            additive: false,
+            priority: 0,
+            nodes: vec![],
+            objects: vec![],
+            ground_translations: vec![],
+            ground_rotations: vec![],
+            triggers: vec![],
+        }
+    }
+
+    /// A cyclic idle sequence keeps moving on the world clock; one that
+    /// plays once holds its last frame (`playThread` on a non-cyclic
+    /// sequence).
+    #[test]
+    fn a_cyclic_idle_loops_and_a_one_shot_holds_its_end() {
+        let looped = clip(true);
+        assert_ne!(normalized_pose(&looped, 1.0), normalized_pose(&looped, 1.05));
+        assert_eq!(
+            f32::from_bits(normalized_pose(&looped, 1.2).seconds),
+            (1.2f64.rem_euclid(0.5)) as f32
+        );
+        let once = clip(false);
+        assert_eq!(normalized_pose(&once, 1.0), normalized_pose(&once, 1.05));
+        assert_eq!(f32::from_bits(normalized_pose(&once, 1.0).seconds), 0.5);
     }
 }
