@@ -269,6 +269,20 @@ enum HeldInput {
     Mouse(MouseButton),
 }
 
+/// A look edited in the avatar editor for another screen ([`Core::avatar_value`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct AvatarValue {
+    /// The window's title (`Edit Uniform: Red Team`).
+    pub title: String,
+    pub look: crate::api::AvatarPrefs,
+    /// What Reset To Default puts back.
+    pub default: crate::api::AvatarPrefs,
+    /// Which of the asking screen's looks it is.
+    pub key: String,
+    /// The look as Done left it, for the asking screen to take.
+    pub done: Option<crate::api::AvatarPrefs>,
+}
+
 /// Everything screens can read and change. Owned by [`Ui`].
 pub struct Core {
     pub pack: Rc<Pack>,
@@ -291,6 +305,11 @@ pub struct Core {
     pub name_asked: bool,
     /// The page `getHelp` asked HelpDlg to open on.
     pub help_page: Option<String>,
+    /// A look the avatar editor edits for another screen instead of the
+    /// player's own (a team uniform in Add-On Settings).
+    pub avatar_value: Option<AvatarValue>,
+    /// The splash the Splash screen shows.
+    pub splash: Option<crate::api::SplashView>,
     /// Help pages of the server's running Add-Ons, listed after the
     /// game's own.
     pub addon_help: Vec<crate::api::AddOnHelpPage>,
@@ -1323,6 +1342,8 @@ impl Ui {
             name_asked: false,
             help_page: None,
             addon_help: Vec::new(),
+            avatar_value: None,
+            splash: None,
             report: None,
             print_letters_visible: false,
             maps: Vec::new(),
@@ -1997,6 +2018,10 @@ impl Ui {
                 c.save_preview = Some((map, name, preview))
             }
             UiUpdate::AvatarPreview(i) => c.avatar_preview = i,
+            UiUpdate::Splash(s) => {
+                c.splash = Some(s);
+                c.push(ScreenId::Splash);
+            }
             UiUpdate::AddOns(view) => c.add_ons = view,
             UiUpdate::AddOnMismatch(m) => c.add_on_mismatch = Some(m),
             UiUpdate::Question(q) => c.ask(q),

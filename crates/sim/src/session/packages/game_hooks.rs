@@ -750,8 +750,7 @@ impl Session {
                             (false, Some(g)) if g == game => None,
                             (false, other) => other,
                         };
-                        let effects = self.minigames.set_default_game(next).map_err(rejected)?;
-                        effects
+                        self.minigames.set_default_game(next).map_err(rejected)?
                     }
                     GameRule::PaintColor(paint) => {
                         self.minigames.set_paint_color(game, paint).map_err(rejected)?

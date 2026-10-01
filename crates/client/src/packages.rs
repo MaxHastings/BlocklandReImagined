@@ -104,8 +104,14 @@ pub fn binds(catalog: &Catalog, state: &PackageStateView, mac: bool) -> Vec<Pack
     let mut out: Vec<PackageBind> = Vec::new();
     for (_, binds) in catalog.binds() {
         for bind in &binds.binds {
-            // Only a package the server runs takes the command.
-            if !state.packages.contains_key(&bind.package) {
+            // Only a package the server runs takes the command; a screen
+            // bind needs only its package loaded here.
+            let running = if bind.screen.is_some() {
+                catalog.packages.contains_key(&bind.package)
+            } else {
+                state.packages.contains_key(&bind.package)
+            };
+            if !running {
                 continue;
             }
             // A screen bind goes by its screen, as no command of the

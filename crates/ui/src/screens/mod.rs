@@ -22,6 +22,7 @@ pub mod players;
 pub mod report;
 pub mod saveload;
 pub mod selector;
+pub mod splash;
 pub mod trust;
 pub mod wrench;
 
@@ -103,6 +104,8 @@ pub enum ScreenId {
     LoadBricksColor,
     /// A score report the host showed (Slayer's End of Round Report).
     Report,
+    /// An Add-On's splash over the main menu (Slayer's Happy Holidays).
+    Splash,
 }
 
 pub trait Screen {
@@ -208,6 +211,7 @@ pub fn make(id: ScreenId, core: &mut Core) -> Box<dyn Screen> {
         ScreenId::MusicFiles => return Box::new(music::MusicFiles::new(core)),
         ScreenId::LoadBricksColor => return Box::new(colorwarn::ColorWarning::new(core)),
         ScreenId::Report => return Box::new(report::Report::new(core)),
+        ScreenId::Splash => return Box::new(splash::Splash::new(core)),
         ScreenId::Options => return Box::new(options::Options::new(core)),
         ScreenId::Remap => return Box::new(options::Remap::new(core)),
         ScreenId::BrickSelector => return Box::new(selector::BrickSelector::new(core)),

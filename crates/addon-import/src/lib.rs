@@ -3093,7 +3093,18 @@ fn finish(
         packages_json_entry: json!({ "id": cx.ns, "version": opts.version, "side": "shared", "dir": dir }),
         files: vec![],
     };
+    let pictures: BTreeMap<String, Vec<u8>> = cx
+        .src
+        .files
+        .values()
+        .filter(|f| {
+            let lower = f.path.to_ascii_lowercase();
+            lower.ends_with(".png") || lower.ends_with(".jpg") || lower.ends_with(".jpeg")
+        })
+        .map(|f| (cx.src.member(f).to_ascii_lowercase(), f.bytes.clone()))
+        .collect();
     let import = ports::Import {
+        pictures: &pictures,
         addon: &cx.src.name,
         sha256: &cx.src.sha256,
         namespace: &cx.ns,

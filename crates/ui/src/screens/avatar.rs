@@ -140,13 +140,19 @@ pub struct Avatar {
     random: u64,
     rotation: [f32; 3],
     last_mouse: Option<(i32, i32)>,
+    /// Editing a look for another screen ([`Core::avatar_value`]), not the
+    /// player's own.
+    value: bool,
 }
 
 impl Avatar {
     pub fn new(core: &Core) -> Self {
         let mut s = Self {
             view: layout_view(core, "AvatarGui"),
-            draft: core.settings.avatar.clone(),
+            draft: core
+                .avatar_value
+                .as_ref()
+                .map_or_else(|| core.settings.avatar.clone(), |v| v.look.clone()),
             data: core.pack.data.data.avatar.clone(),
             palette: if core.settings.avatar_colors.is_empty() {
                 core.pack.data.data.avatar_colors.clone()
@@ -160,6 +166,7 @@ impl Avatar {
             random: core.time_ms.wrapping_add(0x9e3779b97f4a7c15),
             rotation: [0.3, 0.6, 2.52],
             last_mouse: None,
+            value: core.avatar_value.is_some(),
         };
         s.resolve_material_indices();
         s.build(core);
@@ -239,11 +246,51 @@ impl Avatar {
             siblings.insert(position, orbit);
             siblings.insert(position + 1, status);
         }
+        if let Some(value) = core.avatar_value.as_ref().filter(|_| self.value) {
+            self.value_mode(&value.title.clone());
+        }
         self.refresh(core);
         if let Some((part, color)) = self.picker.clone() {
             self.build_picker(&part, color, core);
         }
         self.view.layout(core.logical.0, core.logical.1);
+    }
+    /// Editing another screen's look (Slayer's Edit Uniform): no name or
+    /// clan, the window named for it, and Reset To Default.
+    fn value_mode(&mut self, title: &str) {
+        for name in ["Avatar_Prefix", "Avatar_Suffix", "Avatar_Name"] {
+            if let Some(n) = self.view.id(name) {
+                self.view.set_visible(n, false);
+            }
+        }
+        let labels: Vec<_> = self
+            .view
+            .walk()
+            .filter(|&n| {
+                let t = self.view.text_of(n);
+                matches!(t.trim(), "Name:" | "LAN Name:" | "Clan Prefix:" | "Clan Suffix:" | "Prefix:" | "Suffix:")
+            })
+            .collect();
+        for n in labels {
+            self.view.set_visible(n, false);
+        }
+        let window = self
+            .view
+            .walk()
+            .find(|&n| self.view.node(n).ctrl.class == "GuiWindowCtrl");
+        if let Some(w) = window {
+            self.view.set_text(w, title);
+            let [width, height] = self.view.nodes[w].ctrl.extent;
+            let mut c = button(
+                "BlockButtonProfile",
+                Rect::new(width - 150, height - 34, 130, 26),
+                "base/client/ui/button1",
+                "Reset To Default",
+                "NativeAvatarReset();",
+            );
+            c.name = Some("NativeAvatarReset".into());
+            self.view.add(w, c);
+        }
     }
     /// Typed text lives in the edit value, not the control's label text.
     fn read_fields(&mut self) {
@@ -618,6 +665,13 @@ impl Avatar {
         if self.request.is_some() {
             return;
         }
+        if self.value {
+            if let Some(v) = core.avatar_value.as_mut() {
+                v.done = Some(self.draft.clone());
+            }
+            core.pop(self.id());
+            return;
+        }
         self.read_fields();
         self.request =
             Some(core.request_pending(UiAction::SetAvatar(self.draft.clone()), Pending::Avatar));
@@ -728,6 +782,14 @@ impl Screen for Avatar {
             return;
         }
         match lower.as_str() {
+            "nativeavatarreset();" => {
+                if let Some(v) = core.avatar_value.as_ref() {
+                    self.draft = v.default.clone();
+                    self.picker = None;
+                    self.build(core);
+                    self.preview(core);
+                }
+            }
             "avatargui.clickx();" => core.pop(self.id()),
             "avatar_done();" => self.done(core),
             "avatar_randomize();" => self.randomize(core),

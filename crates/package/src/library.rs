@@ -47,6 +47,7 @@ pub const SERVER_KINDS: &[&str] = &[
     "entity",
     "archetype",
     "mode",
+    "data",
 ];
 /// Content kinds only clients draw. A discovered package that provides
 /// nothing else defaults to `client`; any other package to `shared`.

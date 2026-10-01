@@ -187,7 +187,22 @@ pub struct SettingDef {
     /// A longer explanation the menu shows beside it (Slayer's help).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub help: String,
+    /// The part of a look it holds ([`AVATAR_KEYS`]: `Hat` as its place in
+    /// v20's list, `HatColor` as `"r g b a"`, `FaceName`, ...): the menu
+    /// edits a category of these together in the avatar editor (Slayer's
+    /// Edit Uniform) instead of row by row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar: Option<String>,
 }
+
+/// What a look's setting may hold ([`SettingDef::avatar`]): v20's
+/// `$pref::Avatar::*` names.
+pub const AVATAR_KEYS: [&str; 27] = [
+    "Hat", "Accent", "Pack", "SecondPack", "Chest", "Hip", "LArm", "RArm", "LHand", "RHand",
+    "LLeg", "RLeg", "HatColor", "AccentColor", "PackColor", "SecondPackColor", "HeadColor",
+    "TorsoColor", "HipColor", "LArmColor", "RArmColor", "LHandColor", "RHandColor", "LLegColor",
+    "RLegColor", "FaceName", "DecalName",
+];
 
 /// More items for another Add-On's list setting: a game mode joining
 /// Slayer's mode picker.
@@ -327,6 +342,19 @@ impl SettingDef {
         }
         if self.help.len() > MAX_HELP || self.help.chars().any(|c| c.is_control() && c != '\n') {
             return Err(format!("setting `{what}`: help is at most {MAX_HELP} bytes"));
+        }
+        if let Some(part) = &self.avatar {
+            let fits = match part.as_str() {
+                p if !AVATAR_KEYS.contains(&p) => false,
+                p if p.ends_with("Color") || p.ends_with("Name") => self.kind == SettingType::Text,
+                _ => self.kind == SettingType::Int,
+            };
+            if !fits {
+                return Err(format!(
+                    "setting `{what}`: avatar is one of {} (a part a number, a colour or name text)",
+                    AVATAR_KEYS.join(", ")
+                ));
+            }
         }
         if let Some(when) = &self.shown_when
             && (!is_setting_ref(&when.setting) || when.is.is_empty() || when.is.len() > MAX_ITEMS)

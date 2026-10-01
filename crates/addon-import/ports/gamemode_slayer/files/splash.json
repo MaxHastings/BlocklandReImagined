@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "from": [12, 20],
+  "to": [12, 31],
+  "layers": [
+    { "image": "images/holiday_background.jpg", "fade_in_ms": 5000 },
+    { "image": "images/holiday_banner.png", "rect": [268, 68, 344, 76], "fade_in_ms": 5000 },
+    { "image": "images/holiday_signature.png", "rect": [388, 144, 162, 48], "fade_in_ms": 5000 }
+  ],
+  "falling": {
+    "images": ["images/snowflake0.png", "images/snowflake1.png", "images/snowflake2.png"],
+    "size": 64,
+    "chance": 11,
+    "speed": [2, 5],
+    "step_ms": 60,
+    "closing_speed": 6
+  },
+  "tip": {
+    "text": "<just:center><color:943634><font:Arial Bold:18><shadow:1:1>Click anywhere to continue",
+    "rect": [212, 454, 216, 18],
+    "after_ms": 10000
+  },
+  "close_after_ms": 8000,
+  "fade_out_ms": 5000
+}

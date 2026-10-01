@@ -1,0 +1,132 @@
+//! Add-Ons' splashes over the main menu (`splash.json`, Slayer's Happy
+//! Holidays): on a day between `from` and `to`, once a year, the first
+//! enabled Add-On's splash shows when the game starts. The date is the
+//! UTC calendar day.
+use crate::save_picture::Picture;
+use bri_package_runtime::{Catalog, content::Kind};
+use bri_ui::api::{SplashFallingView, SplashView};
+
+/// UI texture ids splash pictures take (a range of their own).
+const FIRST_ID: u64 = 0x425249_53504c00;
+
+/// Today's (year, month, day), UTC.
+pub fn today() -> (i64, u8, u8) {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
+    civil(secs.div_euclid(86_400))
+}
+
+/// Days since 1970-01-01 as a calendar date (Howard Hinnant's
+/// `civil_from_days`).
+fn civil(days: i64) -> (i64, u8, u8) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u8;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u8;
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+/// Whether `[month, day]` falls between `from` and `to` (across the new
+/// year when `to` is earlier).
+fn within(day: [u8; 2], from: [u8; 2], to: [u8; 2]) -> bool {
+    if from <= to {
+        from <= day && day <= to
+    } else {
+        day >= from || day <= to
+    }
+}
+
+/// A splash to show: its pref key, the view and the pictures to upload.
+pub type DueSplash = (String, SplashView, Vec<(u64, Picture)>);
+
+/// The splash due today that has not shown this year. `shown(key)` gives the year a splash
+/// last showed.
+pub fn due(
+    catalog: &Catalog,
+    today: (i64, u8, u8),
+    shown: impl Fn(&str) -> Option<i64>,
+) -> Option<DueSplash> {
+    let (year, month, day) = today;
+    for (id, package) in &catalog.packages {
+        for (asset, splash) in &package.splashes {
+            let key = format!("$Pref::Splash::{asset}");
+            if !within([month, day], splash.from, splash.to) || shown(&key) == Some(year) {
+                continue;
+            }
+            let mut pictures: Vec<(String, u64, Picture)> = Vec::new();
+            let mut texture = |file: &str| -> Option<u64> {
+                if let Some((_, id, _)) = pictures.iter().find(|(f, _, _)| f == file) {
+                    return Some(*id);
+                }
+                let bytes = &package
+                    .assets
+                    .iter()
+                    .find(|a| a.kind == Kind::Image && a.file == file)?
+                    .bytes;
+                let image = image::load_from_memory(bytes).ok()?.to_rgba8();
+                let id = FIRST_ID + pictures.len() as u64;
+                pictures.push((
+                    file.to_owned(),
+                    id,
+                    Picture {
+                        width: image.width(),
+                        height: image.height(),
+                        rgba: image.into_raw(),
+                    },
+                ));
+                Some(id)
+            };
+            let layers: Option<Vec<_>> = splash
+                .layers
+                .iter()
+                .map(|l| Some((texture(&l.image)?, l.rect, l.fade_in_ms)))
+                .collect();
+            let Some(layers) = layers else {
+                eprintln!("{id}: a splash picture is missing or unreadable");
+                continue;
+            };
+            let falling = splash.falling.as_ref().map(|f| SplashFallingView {
+                textures: f.images.iter().filter_map(|i| texture(i)).collect(),
+                size: f.size,
+                chance: f.chance,
+                speed: f.speed,
+                step_ms: f.step_ms,
+                closing_speed: f.closing_speed,
+            });
+            let view = SplashView {
+                layers,
+                falling,
+                tip: splash.tip.as_ref().map(|t| (t.text.clone(), t.rect, t.after_ms)),
+                close_after_ms: splash.close_after_ms,
+                fade_out_ms: splash.fade_out_ms,
+            };
+            return Some((key, view, pictures.into_iter().map(|(_, id, p)| (id, p)).collect()));
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn calendar_days_and_windows() {
+        assert_eq!(civil(0), (1970, 1, 1));
+        assert_eq!(civil(20_442), (2025, 12, 20));
+        assert_eq!(civil(11_016), (2000, 2, 29));
+        assert!(within([12, 20], [12, 20], [12, 31]));
+        assert!(within([12, 31], [12, 20], [12, 31]));
+        assert!(!within([12, 19], [12, 20], [12, 31]));
+        assert!(!within([1, 1], [12, 20], [12, 31]));
+        // Across the new year.
+        assert!(within([1, 2], [12, 20], [1, 5]));
+        assert!(!within([6, 1], [12, 20], [1, 5]));
+    }
+}

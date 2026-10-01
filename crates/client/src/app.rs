@@ -545,6 +545,8 @@ pub struct App {
     /// Each listed save's own file, whose picture Load Bricks previews.
     save_sources: HashMap<crate::save_picture::Key, PathBuf>,
     save_previews: crate::save_picture::Previews,
+    /// Whether today's Add-On splash has been looked for (once a run).
+    splash_checked: bool,
     /// The save picture to take with the next scene drawn.
     save_picture: Option<PathBuf>,
     /// Save pictures being read back and written.
@@ -1815,6 +1817,7 @@ impl App {
             preview_dirty: false,
             save_sources: HashMap::new(),
             save_previews: Default::default(),
+            splash_checked: false,
             save_picture: None,
             save_shots: Default::default(),
             motion: Default::default(),
@@ -8867,6 +8870,28 @@ impl PlatformApp for App {
                 crate::avatar::Preview::ID,
             )));
             self.preview_dirty = false;
+        }
+        // An enabled Add-On's splash over the main menu, once a run.
+        if !self.splash_checked
+            && self.attempt.is_none()
+            && self.ui.stack().first() == Some(&bri_ui::screens::ScreenId::MainMenu)
+        {
+            self.splash_checked = true;
+            let prefs = &self.ui.core.prefs;
+            let due = self.package_catalog.as_deref().and_then(|catalog| {
+                crate::splash::due(catalog, crate::splash::today(), |key| {
+                    prefs.get(key).and_then(|v| v.parse().ok())
+                })
+            });
+            if let Some((key, view, pictures)) = due {
+                for (id, picture) in &pictures {
+                    crate::save_picture::upload_as(frame, *id, picture);
+                }
+                let year = crate::splash::today().0;
+                self.ui.core.prefs.set(&key, year.to_string());
+                self.ui.core.save_settings();
+                self.ui.apply(UiUpdate::Splash(view));
+            }
         }
         if let Some(((map, name), picture)) = self.save_previews.ready.take() {
             crate::save_picture::upload(frame, &picture);

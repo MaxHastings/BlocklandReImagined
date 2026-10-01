@@ -31,6 +31,7 @@ pub struct Package {
     pub huds: BTreeMap<String, content::HudPanel>,
     pub binds: BTreeMap<String, content::Binds>,
     pub help: BTreeMap<String, content::HelpPages>,
+    pub splashes: BTreeMap<String, content::Splash>,
     pub archetypes: BTreeMap<String, content::ArchetypeDef>,
     pub textures: BTreeMap<String, content::Texture>,
     pub blocks: BTreeMap<String, content::BlockDef>,
@@ -188,6 +189,7 @@ impl Package {
             huds: BTreeMap::new(),
             binds: BTreeMap::new(),
             help: BTreeMap::new(),
+            splashes: BTreeMap::new(),
             archetypes: BTreeMap::new(),
             textures: BTreeMap::new(),
             blocks: BTreeMap::new(),
@@ -301,6 +303,13 @@ impl Package {
                         self.binds.insert(asset.id.clone(), b);
                     }
                 }
+                Kind::Splash => {
+                    if let Some(s) = parse::<content::Splash>(asset, &id, |s| s.validate(), out) {
+                        self.splashes.insert(asset.id.clone(), s);
+                    }
+                }
+                // Decoded by the client that draws it.
+                Kind::Image => {}
                 Kind::Help => {
                     if let Some(h) = parse::<content::HelpPages>(asset, &id, |h| h.validate(), out) {
                         self.help.insert(asset.id.clone(), h);

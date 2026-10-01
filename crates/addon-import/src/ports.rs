@@ -100,6 +100,12 @@ pub struct Port {
     /// no page.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub help: BTreeMap<String, String>,
+    /// Pictures of the Add-On the import carries for players (a splash's,
+    /// kind `image`): the file in the import to its path in the Add-On.
+    /// Copied from the player's copy at import, never shipped with the
+    /// port; a copy without one is not changed by the port.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub images: BTreeMap<String, String>,
     /// The help page (by title) opened by itself the first time a player
     /// joins a server running the Add-On (Slayer's start page).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -443,6 +449,9 @@ pub struct RulesPackage {
 /// import's id), `{rules}` (its rules' id) and `{version}`.
 #[derive(Debug, Clone)]
 pub struct Import<'a> {
+    /// The copy's pictures (`.png`, `.jpg`) by lower-case path, for a
+    /// port's [`Port::images`].
+    pub pictures: &'a BTreeMap<String, Vec<u8>>,
     pub addon: &'a str,
     pub sha256: &'a str,
     pub namespace: &'a str,
@@ -616,6 +625,21 @@ fn try_apply(
             "file": file,
         }));
         writes.push((file, text.into_bytes()));
+    }
+    // Pictures from the copy.
+    for (file, path) in &port.images {
+        safe_relative(file)?;
+        let bytes = import
+            .pictures
+            .get(&path.to_ascii_lowercase())
+            .with_context(|| format!("image {file}: the Add-On has no {path}"))?;
+        ensure!(!out.join(file).exists(), "{file} would replace an imported file");
+        provided.push(serde_json::json!({
+            "kind": "image",
+            "id": crate::content_id(import.namespace, "image", file.rsplit('/').next().unwrap_or(file).split('.').next().unwrap_or(file)),
+            "file": file,
+        }));
+        writes.push((file.clone(), bytes.clone()));
     }
     // Help pages from the copy's own help files.
     let pages: Vec<serde_json::Value> = port

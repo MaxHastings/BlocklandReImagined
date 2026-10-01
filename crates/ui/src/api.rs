@@ -328,6 +328,32 @@ impl AvatarPrefs {
             .unwrap_or_else(|| k.to_string());
         self.values.insert(key, v.into());
     }
+    /// Each part as its place in the pack's lists (`helmet` -> `Hat` 1), as
+    /// v20's prefs and Slayer's uniforms keep them; [`Self::name_parts`]
+    /// the other way. A part the lists lack is left out.
+    pub fn part_positions(&self, data: &crate::schema::AvatarData) -> BTreeMap<String, usize> {
+        let mut out = BTreeMap::new();
+        for key in AVATAR_PART_KEYS {
+            let name = self.part(key).to_ascii_lowercase();
+            let list = if key == "Accent" {
+                data.accents_allowed.get(&self.part("Hat").to_ascii_lowercase())
+            } else {
+                data.parts.get(&key.to_ascii_lowercase())
+            };
+            let at = list.and_then(|l| l.iter().position(|p| p.eq_ignore_ascii_case(&name)));
+            match at {
+                Some(i) => {
+                    out.insert(key.to_owned(), i);
+                }
+                // No accent (or `none` not listed) is the first place.
+                None if key == "Accent" => {
+                    out.insert(key.to_owned(), 0);
+                }
+                None => {}
+            }
+        }
+        out
+    }
     /// The chosen part's name for `k` (`Hat` -> `helmet`), empty when unset.
     pub fn part(&self, k: &str) -> &str {
         self.get(k).unwrap_or_default()
@@ -575,6 +601,28 @@ impl PackageBind {
     pub fn bind_command(&self) -> String {
         format!("package:{}:{}", self.package, self.command)
     }
+}
+/// A splash over the main menu (an Add-On's `splash.json`), its pictures
+/// already in UI textures.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SplashView {
+    /// Back to front: texture, rect on a 640x480 screen (none: the whole
+    /// screen) and fade-in.
+    pub layers: Vec<(u64, Option<[i32; 4]>, u32)>,
+    pub falling: Option<SplashFallingView>,
+    /// ML text, rect on a 640x480 screen, shown after this many ms.
+    pub tip: Option<(String, [i32; 4], u32)>,
+    pub close_after_ms: u32,
+    pub fade_out_ms: u32,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SplashFallingView {
+    pub textures: Vec<u64>,
+    pub size: u32,
+    pub chance: u32,
+    pub speed: [u32; 2],
+    pub step_ms: u32,
+    pub closing_speed: u32,
 }
 /// A help page a running Add-On adds to the Help dialog.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1198,6 +1246,10 @@ pub struct MiniGameAddOnSetting {
     /// What the '?' beside it explains.
     #[serde(default)]
     pub help: String,
+    /// The part of a look it holds (`Hat`, `HatColor`, `FaceName`, ...):
+    /// edited with the others of its category in the avatar editor.
+    #[serde(default)]
+    pub avatar: Option<String>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MiniGameTeam {
@@ -1384,6 +1436,8 @@ pub struct DisplayModes {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum UiUpdate {
+    /// Show a splash over the main menu.
+    Splash(SplashView),
     Admin(crate::models::admin::AdminUpdate),
     /// The host's environment over the map's own (the Environment window).
     Environment(crate::models::environment::EnvironmentView),

@@ -70,6 +70,11 @@ pub fn read(path: &Path) -> Result<Option<Picture>> {
 
 /// Put `picture` in the UI texture [`ID`] draws from.
 pub fn upload(frame: &mut crate::platform::RenderContext<'_>, picture: &Picture) {
+    upload_as(frame, ID, picture);
+}
+
+/// Put `picture` in UI texture `id`.
+pub fn upload_as(frame: &mut crate::platform::RenderContext<'_>, id: u64, picture: &Picture) {
     let size = wgpu::Extent3d {
         width: picture.width,
         height: picture.height,
@@ -101,7 +106,7 @@ pub fn upload(frame: &mut crate::platform::RenderContext<'_>, picture: &Picture)
         size,
     );
     frame.ui_renderer.set_external(
-        ID,
+        id,
         texture.create_view(&Default::default()),
         (picture.width, picture.height),
     );

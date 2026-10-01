@@ -193,6 +193,7 @@ fn addon_state() -> MiniGameUiState {
         kind,
         default,
         help: String::new(),
+        avatar: None,
         shown_when: None,
     };
     state.addon_settings = vec![

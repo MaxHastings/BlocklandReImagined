@@ -883,6 +883,25 @@ fn slayer_ports_apply_with_their_rules() {
             .collect(),
     };
     bri_package_runtime::Catalog::load(&root, &set, true).unwrap_or_else(|e| panic!("{e:#?}"));
+    // The player's side: Slayer's keys open screens, its help pages come
+    // from the copy's own `.hfl` (the stand-in's), the first one welcoming,
+    // and its holiday splash shows its pictures, each an image of the copy.
+    let client = bri_package_runtime::Catalog::load(&root, &set, false).unwrap_or_else(|e| panic!("{e:#?}"));
+    let slayer = &client.packages["gamemode_slayer"];
+    let binds: Vec<_> = slayer.binds.values().flat_map(|b| &b.binds).collect();
+    let screens: Vec<_> = binds.iter().filter_map(|b| b.screen.as_deref()).collect();
+    assert_eq!(screens, ["minigame_addons", "help"]);
+    let pages: Vec<_> = slayer.help.values().flat_map(|h| &h.pages).collect();
+    assert_eq!(pages.iter().map(|p| p.title.as_str()).collect::<Vec<_>>(), ["Slayer", "Slayer Guide"]);
+    assert!(pages[0].welcome && !pages[1].welcome);
+    assert!(pages[1].text.contains("<font:arial bold:24>Stand-in Guide"), "{}", pages[1].text);
+    let splash = slayer.splashes.values().next().expect("splash");
+    assert_eq!((splash.from, splash.to), ([12, 20], [12, 31]));
+    for file in splash.layers.iter().map(|l| &l.image).chain(&splash.falling.as_ref().unwrap().images) {
+        let asset = slayer.assets.iter().find(|a| &a.file == file).unwrap_or_else(|| panic!("no {file}"));
+        assert_eq!(asset.kind, bri_package_runtime::content::Kind::Image);
+        assert!(!asset.bytes.is_empty(), "{file}");
+    }
     std::fs::remove_dir_all(dir).unwrap();
 }
 

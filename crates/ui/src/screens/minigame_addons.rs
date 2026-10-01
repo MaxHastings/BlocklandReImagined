@@ -284,6 +284,74 @@ impl AddOnSettings {
             _ => false,
         }
     }
+    /// Categories of team settings that hold a look's parts.
+    fn look_categories(core: &Core) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for s in core.minigames.addon_settings.iter().filter(|s| s.team && s.avatar.is_some()) {
+            if !out.contains(&s.category) {
+                out.push(s.category.clone());
+            }
+        }
+        out
+    }
+    /// A team's look in `category` as the avatar editor takes it, from
+    /// `values` (the draft, or the defaults).
+    fn look(
+        core: &Core,
+        category: &str,
+        values: &dyn Fn(&MiniGameAddOnSetting) -> MiniGameSettingValue,
+    ) -> AvatarPrefs {
+        let mut look = AvatarPrefs::default();
+        for s in core.minigames.addon_settings.iter().filter(|s| s.team && s.category == category) {
+            let Some(part) = &s.avatar else { continue };
+            look.set(part, value_text(&values(s)));
+        }
+        look.name_parts(&core.pack.data.data.avatar);
+        look
+    }
+    /// Open the avatar editor on team `t`'s look in `category`.
+    fn edit_look(&mut self, core: &mut Core, t: usize, category: &str) {
+        let _ = self.read_fields(core);
+        let Some(team) = self.teams.get(t) else { return };
+        let look = Self::look(core, category, &|s| {
+            team.settings.get(&s.key).cloned().unwrap_or_else(|| s.default.clone())
+        });
+        let default = Self::look(core, category, &|s| s.default.clone());
+        core.avatar_value = Some(crate::ui::AvatarValue {
+            title: format!("Edit {category}: {}", team.name),
+            look,
+            default,
+            key: format!("{t}:{category}"),
+            done: None,
+        });
+        core.push(ScreenId::Avatar);
+    }
+    /// Take the look the avatar editor left, if it was one of ours.
+    fn take_look(&mut self, core: &mut Core) {
+        let Some(value) = core.avatar_value.as_ref() else { return };
+        let Some(look) = value.done.clone() else { return };
+        let key = value.key.clone();
+        core.avatar_value = None;
+        let Some((t, category)) = key.split_once(':') else { return };
+        let Some(t) = t.parse::<usize>().ok().filter(|t| *t < self.teams.len()) else { return };
+        let positions = look.part_positions(&core.pack.data.data.avatar);
+        for s in core.minigames.addon_settings.iter().filter(|s| s.team && s.category == category) {
+            let Some(part) = &s.avatar else { continue };
+            let value = match &s.kind {
+                MiniGameSettingKind::Int { min, max } => match positions.get(part.as_str()) {
+                    Some(&i) => MiniGameSettingValue::Int((i as i64).clamp(*min, *max)),
+                    None => continue,
+                },
+                MiniGameSettingKind::Text { max_length } => {
+                    let Some(text) = look.get(part) else { continue };
+                    MiniGameSettingValue::Text(text.chars().take(*max_length as usize).collect())
+                }
+                _ => continue,
+            };
+            self.teams[t].settings.insert(s.key.clone(), value);
+        }
+        self.build(core);
+    }
     /// Whether the local player lacks the level `key` needs in this game.
     fn locked(&self, core: &Core, key: &str) -> bool {
         self.game.is_some_and(|g| {
@@ -403,7 +471,7 @@ impl AddOnSettings {
         let settings = core.minigames.addon_settings.clone();
         let mut last_group = (String::new(), String::new());
         for (i, s) in settings.iter().enumerate() {
-            if s.team || self.summary(core).is_none() || !self.shown(core, s, None) {
+            if s.team || s.avatar.is_some() || self.summary(core).is_none() || !self.shown(core, s, None) {
                 continue;
             }
             if last_group.0 != s.add_on {
@@ -462,11 +530,27 @@ impl AddOnSettings {
                 }
                 y += ROW;
                 for (i, s) in settings.iter().enumerate() {
-                    if !s.team || !self.shown(core, s, Some(t)) {
+                    if !s.team || s.avatar.is_some() || !self.shown(core, s, Some(t)) {
                         continue;
                     }
                     let value = team.settings.get(&s.key).cloned().unwrap_or_else(|| s.default.clone());
                     self.row(Target::Team(t, i), s, &value, 36, y, editable, core);
+                    y += ROW;
+                }
+                // A look's parts open together in the avatar editor.
+                for category in Self::look_categories(core) {
+                    let shown = settings.iter().any(|s| {
+                        s.team && s.avatar.is_some() && s.category == category && self.shown(core, s, Some(t))
+                    });
+                    if !shown {
+                        continue;
+                    }
+                    let name = format!("AOS_T{t}_Look_{category}");
+                    let n = self.view.add(
+                        rows,
+                        push_button(Rect::new(36, y - 2, 150, 24), &format!("Edit {category}"), &name),
+                    );
+                    self.view.set_active(n, editable);
                     y += ROW;
                 }
                 y += 6;
@@ -846,7 +930,11 @@ impl Screen for AddOnSettings {
             core.pending.remove(&id);
         }
     }
+    fn on_wake(&mut self, core: &mut Core) {
+        self.take_look(core);
+    }
     fn on_update(&mut self, core: &mut Core) {
+        self.take_look(core);
         // The host's values changed (someone else applied, or ours landed):
         // start again from them, unless the player is mid-edit.
         if self.seen != Some(core.minigames.revision) {
@@ -1037,7 +1125,13 @@ impl Screen for AddOnSettings {
                 self.build(core);
             }
             _ => {
-                if let Some(i) = command.strip_prefix("AOS_H").and_then(|i| i.parse::<usize>().ok()) {
+                if let Some((t, category)) = command
+                    .strip_prefix("AOS_T")
+                    .and_then(|r| r.split_once("_Look_"))
+                    .and_then(|(t, c)| Some((t.parse::<usize>().ok()?, c.to_owned())))
+                {
+                    self.edit_look(core, t, &category);
+                } else if let Some(i) = command.strip_prefix("AOS_H").and_then(|i| i.parse::<usize>().ok()) {
                     if let Some(s) = core.minigames.addon_settings.get(i) {
                         let (title, help) = (s.title.clone(), s.help.clone());
                         core.message_ok(&title, &help);

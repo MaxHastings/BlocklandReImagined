@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "division": "Slayer",
+  "binds": [
+    {
+      "name": "Edit Minigame",
+      "package": "{{namespace}}",
+      "screen": "minigame_addons"
+    },
+    {
+      "name": "Options",
+      "package": "{{namespace}}",
+      "screen": "help"
+    }
+  ]
+}

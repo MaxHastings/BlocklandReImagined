@@ -345,6 +345,7 @@ pub fn with_addon_settings(
             },
             default: ui_value(&s.def.default),
             help: s.def.help.clone(),
+            avatar: s.def.avatar.clone(),
             shown_when: s.def.shown_when.as_ref().map(|w| {
                 // The host names a same-Add-On setting by its bare key.
                 let key = if w.setting.contains(':') {

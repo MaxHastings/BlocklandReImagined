@@ -47,6 +47,7 @@ pub mod platform;
 pub mod portal_view;
 pub mod save_host;
 pub mod save_picture;
+pub mod splash;
 pub mod playback;
 pub mod quality;
 pub mod saves;

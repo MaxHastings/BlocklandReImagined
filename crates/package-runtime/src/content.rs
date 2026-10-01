@@ -58,9 +58,14 @@ pub enum Kind {
     /// Pages the Help dialog (F1) lists for players (`help.json`, Slayer's
     /// guide). Client side.
     Help,
+    /// A picture (PNG or JPEG) a splash draws. Client side.
+    Image,
+    /// A screen shown over the main menu on some days of the year
+    /// (`splash.json`, Slayer's Happy Holidays). Client side.
+    Splash,
 }
 impl Kind {
-    pub const NAMES: [&str; 17] = [
+    pub const NAMES: [&str; 19] = [
         "behaviour",
         "script",
         "world",
@@ -78,6 +83,8 @@ impl Kind {
         "binds",
         "data",
         "help",
+        "image",
+        "splash",
     ];
     pub fn parse(text: &str) -> Option<Self> {
         Some(match text {
@@ -98,6 +105,8 @@ impl Kind {
             "binds" => Self::Binds,
             "data" => Self::Data,
             "help" => Self::Help,
+            "image" => Self::Image,
+            "splash" => Self::Splash,
             _ => return None,
         })
     }
@@ -120,7 +129,9 @@ impl Kind {
             | Self::Bricks
             | Self::Bots
             | Self::Binds
-            | Self::Help => Side::Client,
+            | Self::Help
+            | Self::Image
+            | Self::Splash => Side::Client,
         }
     }
     /// Largest accepted file of this kind.
@@ -128,6 +139,7 @@ impl Kind {
         match self {
             Self::Script => 256 * 1024,
             Self::Data => 1024 * 1024,
+            Self::Image => 4 * 1024 * 1024,
             Self::Weapons | Self::Vehicles | Self::Bricks => 32 * 1024 * 1024,
             _ => 128 * 1024,
         }
@@ -1819,6 +1831,106 @@ impl HelpPages {
                 page.title
             );
         }
+        Ok(())
+    }
+}
+/// A screen over the main menu on some days of the year (`splash.json`):
+/// pictures fading in, pictures falling, a line of text, all fading out
+/// at a click (Slayer's Happy Holidays from 20 December).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Splash {
+    pub schema_version: u32,
+    /// First and last day shown, as `[month, day]`.
+    pub from: [u8; 2],
+    pub to: [u8; 2],
+    /// Pictures from the back, each over the 640x480 screen it was laid
+    /// out on.
+    pub layers: Vec<SplashLayer>,
+    /// Pictures falling from the top (snowflakes).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub falling: Option<SplashFalling>,
+    /// A line shown after a while (`click anywhere to continue`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tip: Option<SplashTip>,
+    /// No click closes it before this.
+    #[serde(default)]
+    pub close_after_ms: u32,
+    /// How long it fades out after the click.
+    #[serde(default)]
+    pub fade_out_ms: u32,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SplashLayer {
+    /// An `image` the package provides, by its file.
+    pub image: String,
+    /// `[x, y, width, height]` on a 640x480 screen; the whole screen when
+    /// left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rect: Option<[i32; 4]>,
+    #[serde(default)]
+    pub fade_in_ms: u32,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SplashFalling {
+    /// `image` files, one picked at random for each.
+    pub images: Vec<String>,
+    /// Square size in pixels of a 640x480 screen.
+    pub size: u32,
+    /// One starts on a step with a 1 in `chance` roll.
+    pub chance: u32,
+    /// Pixels a step, lowest and highest.
+    pub speed: [u32; 2],
+    pub step_ms: u32,
+    /// Added to each speed once it closes.
+    #[serde(default)]
+    pub closing_speed: u32,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SplashTip {
+    /// ML text.
+    pub text: String,
+    pub rect: [i32; 4],
+    pub after_ms: u32,
+}
+impl Splash {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(self.schema_version == 1, "splash schema_version must be 1");
+        let day = |[m, d]: [u8; 2]| (1..=12).contains(&m) && (1..=31).contains(&d);
+        ensure!(day(self.from) && day(self.to), "from and to are [month, day]");
+        ensure!(
+            !self.layers.is_empty() && self.layers.len() <= 8,
+            "1 to 8 layers"
+        );
+        let file = |f: &str| !f.is_empty() && f.len() <= 128 && !f.contains("..");
+        ensure!(self.layers.iter().all(|l| file(&l.image)), "layer images are package files");
+        if let Some(f) = &self.falling {
+            ensure!(
+                !f.images.is_empty()
+                    && f.images.len() <= 8
+                    && f.images.iter().all(|i| file(i))
+                    && (1..=256).contains(&f.size)
+                    && f.chance >= 1
+                    && f.speed[0] <= f.speed[1]
+                    && f.speed[1] <= 64
+                    && (16..=1000).contains(&f.step_ms),
+                "falling: 1 to 8 images, size 1 to 256, speed up to 64, step 16 to 1000 ms"
+            );
+        }
+        if let Some(t) = &self.tip {
+            ensure!(t.text.len() <= 1024, "tip text is at most 1024 bytes");
+        }
+        let ms = 60_000;
+        ensure!(
+            self.close_after_ms <= ms
+                && self.fade_out_ms <= ms
+                && self.layers.iter().all(|l| l.fade_in_ms <= ms)
+                && self.tip.as_ref().is_none_or(|t| t.after_ms <= ms),
+            "times are at most a minute"
+        );
         Ok(())
     }
 }
