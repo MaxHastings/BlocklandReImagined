@@ -84,7 +84,31 @@ struct Gpu {
     device: wgpu::Device,
     queue: wgpu::Queue,
 }
+/// The device every test here draws on, one test at a time. The CI machine
+/// has no GPU and draws on a software adapter whose every frame keeps all
+/// its cores busy: tests drawing side by side, each on its own device,
+/// starved one another until their frames missed the wait below, and which
+/// tests failed changed from run to run. Taking turns on one device gives
+/// each frame the whole machine, as one frame of the game has.
+static GPU: std::sync::Mutex<Option<Gpu>> = std::sync::Mutex::new(None);
+/// One test's turn on the shared device; the next test waits for it.
+struct Turn(std::sync::MutexGuard<'static, Option<Gpu>>);
+impl std::ops::Deref for Turn {
+    type Target = Gpu;
+    fn deref(&self) -> &Gpu {
+        self.0.as_ref().expect("the device is made before a turn starts")
+    }
+}
 impl Gpu {
+    /// Wait for this test's turn on the shared device, making it first.
+    fn turn() -> Result<Turn> {
+        // A test that failed on its turn leaves the device as good as ever.
+        let mut gpu = GPU.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if gpu.is_none() {
+            *gpu = Some(Self::new()?);
+        }
+        Ok(Turn(gpu))
+    }
     fn new() -> Result<Self> {
         pollster::block_on(async {
             let instance =
@@ -246,7 +270,7 @@ fn halves(pixels: &[u8], channel: usize) -> [usize; 2] {
 
 #[test]
 fn a_mirror_shows_what_faces_it_on_the_same_side_and_hides_what_is_behind() -> Result<()> {
-    let gpu = Gpu::new()?;
+    let gpu = Gpu::turn()?;
     for samples in [1, 4] {
         let (pixels, stats) = gpu.frame(samples, ReflectionSettings::MEDIUM)?;
         assert_eq!(stats.reflection_passes, 1);
@@ -261,7 +285,7 @@ fn a_mirror_shows_what_faces_it_on_the_same_side_and_hides_what_is_behind() -> R
 
 #[test]
 fn with_reflections_off_a_mirror_is_plain_silver() -> Result<()> {
-    let gpu = Gpu::new()?;
+    let gpu = Gpu::turn()?;
     let (pixels, stats) = gpu.frame(1, ReflectionSettings::OFF)?;
     assert_eq!(stats.reflection_passes, 0);
     assert_eq!(halves(&pixels, 0), [0, 0]);
@@ -280,7 +304,7 @@ fn with_reflections_off_a_mirror_is_plain_silver() -> Result<()> {
 fn a_live_mirror_is_as_sharp_and_true_as_the_room() -> Result<()> {
     // Each pixel of the reflection is the card's paint or the clear colour
     // exactly: no upscaling blur between them and no shift in colour.
-    let gpu = Gpu::new()?;
+    let gpu = Gpu::turn()?;
     for settings in [ReflectionSettings::MEDIUM, ReflectionSettings::HIGH] {
         let (pixels, _) = gpu.frame(1, settings)?;
         let card = [0xcc, 0x66, 0x33];
@@ -320,7 +344,7 @@ fn facing_mirrors_show_what_only_the_one_behind_the_viewer_sees() -> Result<()> 
     );
     let mut behind = mirror();
     behind.corners = [0, 3, 2, 1].map(|i| mirror().corners[i] + Vec3::new(0.0, 0.0, 6.0));
-    let gpu = Gpu::new()?;
+    let gpu = Gpu::turn()?;
     let (pixels, stats) =
         gpu.frame_of(1, ReflectionSettings::MEDIUM, &data, &[mirror(), behind], 1)?;
     assert_eq!(stats.reflection_passes, 2);
@@ -356,7 +380,7 @@ fn beyond_the_passes_facing_mirrors_repeat_what_the_nearer_mirror_showed() -> Re
     );
     let mut behind = mirror();
     behind.corners = [0, 3, 2, 1].map(|i| mirror().corners[i] + Vec3::new(0.0, 0.0, 2.0));
-    let gpu = Gpu::new()?;
+    let gpu = Gpu::turn()?;
     let orange = |frames| -> Result<usize> {
         let (pixels, stats) = gpu.frame_from(
             [0.0, 0.0, 1.5],
