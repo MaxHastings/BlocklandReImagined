@@ -5,9 +5,15 @@ use bri_ui::api::{IconRef, ToolInfo};
 use std::collections::BTreeMap;
 
 const ICON_BASE: u64 = 0x4954_0000;
+/// Scope overlays' texture keys (`bri_weapons::Zoom::overlay`).
+const OVERLAY_BASE: u64 = 0x5343_0000;
 pub struct ItemUi {
     catalog: BTreeMap<String, ToolInfo>,
+    /// HUD icons and scope overlays, by texture key.
     icons: BTreeMap<u64, SceneImage>,
+    /// Each image with a scope overlay: its texture key and aspect ratio
+    /// (width over height).
+    overlays: BTreeMap<String, (u64, f32)>,
     uploaded: bool,
 }
 impl ItemUi {
@@ -66,11 +72,36 @@ impl ItemUi {
                 },
             );
         }
+        // Scope overlays by image, keyed in the stable order of their
+        // image ids; the same picture shared by two images is uploaded once.
+        let mut overlays = BTreeMap::new();
+        let mut by_texture = BTreeMap::new();
+        for (image, presented) in &assets.presentation.images {
+            let Some(texture) = presented.overlay.as_ref() else {
+                continue;
+            };
+            let Some(picture) = assets.texture(texture) else {
+                continue;
+            };
+            let next = OVERLAY_BASE + by_texture.len() as u64;
+            let key = *by_texture.entry(texture.clone()).or_insert(next);
+            icons.entry(key).or_insert_with(|| picture.clone());
+            overlays.insert(
+                image.clone(),
+                (key, picture.width as f32 / picture.height as f32),
+            );
+        }
         Ok(Self {
             catalog,
             icons,
+            overlays,
             uploaded: false,
         })
+    }
+    /// The scope overlay drawn while aiming `image`, if it has one: its
+    /// texture key and aspect ratio.
+    pub fn scope_overlay(&self, image: &str) -> Option<(u64, f32)> {
+        self.overlays.get(image).copied()
     }
     pub fn catalog(&self) -> BTreeMap<String, ToolInfo> {
         self.catalog.clone()

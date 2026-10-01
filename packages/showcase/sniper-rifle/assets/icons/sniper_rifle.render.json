@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "pose_like": "v20.weapon.rocketlauncheritem",
+  "look": {
+    "base": [
+      0.3,
+      0.3,
+      0.32
+    ]
+  }
+}

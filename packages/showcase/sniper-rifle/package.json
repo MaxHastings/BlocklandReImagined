@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "id": "sniper-rifle",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Sniper Rifle",
+  "description": "A bolt-action sniper rifle: one heavy, dead-straight round a pull that drops a Blockhead in one hit, a blue ring trail, muzzle smoke and a bolt to work between shots. Right-click (or the zoom key) to look through its scope; the mouse wheel zooms further, and crouching steadies the aim. Our own take on Kaje's Sniper Rifle and Conan's Sniper Rifle Updated.",
+  "authors": [
+    "Blockland ReImagined",
+    "design by Kaje (Sniper Rifle) and Conan (Sniper Rifle Updated)"
+  ],
+  "license": "CC0-1.0",
+  "provenance": {
+    "source": "original"
+  },
+  "provides": [
+    {
+      "kind": "weapons",
+      "id": "sniper-rifle:weapons/main",
+      "file": "assets/weapons.json"
+    }
+  ]
+}

@@ -8164,3 +8164,58 @@ Tests:
 Render: `/mnt/project-files/steel-ball/steel-ball-v2.png`. Max's in-game
 check is a Steel Ball near bricks at Mirrors Medium, in Unified+Shine and
 in Dynamic.
+
+## 2026-10-01 Sniper Rifle Add-On, after Kaje's (branch `claude/sniper-rifle-u9z1bd`, for v0.1.11)
+
+Max asked for Kaje's Sniper Rifle (Blockland Glass 343). It is bundled as
+`packages/showcase/sniper-rifle`, installed and off, built from our own code
+and assets only. Kaje is credited for the design and Conan for his update.
+
+How the originals play, read from Max's v21 Add-Ons folder on his PC
+(copied read-only to `.research/sniper`, never committed):
+- Kaje's fires one round at 2000 units a second with no drop, for 150
+  damage. It then smokes for 2 s, and the trigger must be let go before
+  the next shot. It has no scope, sway, ammo or headshots.
+- Conan's update fires 10x slower, cycles in about 1.8 s with a bolt, and
+  has its own sounds. It also has no scope.
+
+Ours keeps Kaje's ballistics with a 1.5 s cycle. The bolt is worked by hand
+(an animation, a sound and a thrown case). Right click looks down a scope at
+22 degrees, and the wheel steps to 10. The aim sways a little, less when
+crouched, and the player does not jet while aiming.
+
+New engine seams. They are general, have limits, and are documented in
+modding section 5 under "Scopes" and "Your own model":
+- `Zoom.levels`, `sensitivity`, `overlay`, `sway` and `jets`, all
+  validated, with `Zoom::validate`.
+- `Image.fire_animation` names the arm animation a shot plays. The v20 name
+  rule stays the default.
+- The scope picture is an Add-On PNG of up to 2048 px and 4 MB. ItemUi
+  registers it as an External texture. The play screen draws it fitted to
+  the screen height with black bars, under the HUD, and hides the held
+  model while it shows.
+- Sway is applied only to the holder's own view, so it is deterministic per
+  frame step and has no wire cost. There is no protocol change.
+
+Assets: `tools/make_sniper_rifle_assets.py` (standard library only,
+deterministic) writes the model with its Bolt animation, textures, scope
+picture, icon (also drawn from the model, posed like the stock rocket
+launcher), sounds, weapons.json, presentation.json and item-physics.json.
+
+Tests (all content-free and deterministic):
+- `bri-weapons --test sniper_rifle`: the pack, one round a pull then the
+  bolt, the cycle time, the field limits, the sway path, and the
+  `fire_animation` override.
+- `bri-client --test sniper_rifle`: the model, the bolt pose, the muzzle,
+  the icon and the scope picture all load with no stand-ins.
+- `bri-client` controls: wheel steps, look speed, no jet, the picture waits
+  for the eye, sway and settling, and no sway while seated.
+- `bri-ui --test scope_overlay`.
+
+Clippy on the changed crates is clean apart from the newer toolchain's
+lints in untouched code.
+
+Left for later:
+- Headshots, which belong to the Adventure Pack lane's hit regions.
+- A kill icon. Kills show the "sniped" message.
+- Max's feel check: the scope, the sway, the bolt's rhythm and the icon.

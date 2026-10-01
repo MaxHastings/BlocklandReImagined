@@ -1683,7 +1683,11 @@ impl WeaponsWorld {
                         p.paint = e.paint;
                     }
                 }
-                if name.contains("spear") || name.contains("football") {
+                if let Some(sequence) = &image.fire_animation {
+                    if !sequence.is_empty() {
+                        self.animation(id, sequence);
+                    }
+                } else if name.contains("spear") || name.contains("football") {
                     self.animation(id, "spearThrow");
                 } else if name.contains("pushbroom") {
                     self.animation(id, "rotCW");

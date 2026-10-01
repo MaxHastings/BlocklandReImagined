@@ -602,6 +602,7 @@ mod tests {
                     zoom: None,
                     crosshair: true,
                     follow_arm: false,
+                    fire_animation: None,
                 },
             );
             items.insert(

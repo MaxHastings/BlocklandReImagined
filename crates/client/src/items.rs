@@ -69,6 +69,11 @@ pub struct ImagePresentation {
     /// an Add-On's image does only when it asks.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub follow_arm: bool,
+    /// The texture key of the scope picture drawn over the screen while
+    /// aiming this image (`bri_weapons::Zoom::overlay`), found beside its
+    /// weapons.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overlay: Option<String>,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ProjectilePresentation {
@@ -594,6 +599,7 @@ impl ItemAssets {
                 &mut added,
                 &mut faults,
             );
+            scope_overlays(dir, &abs, &part_pack, &mut manifest, &mut added, &mut faults);
         }
         let file_root = |kind: &str, id: &str| added.origin.get(&format!("{kind}:{id}")).unwrap_or(&root).clone();
         let mut textures = BTreeMap::new();
@@ -722,6 +728,14 @@ impl ItemAssets {
         for (_, image) in manifest.images.iter_mut().filter(|(id, _)| added.images.contains(*id)) {
             if !shapes.contains_key(&image.model) {
                 image.model.clear();
+            }
+            // A scope picture that did not load leaves the plain zoom.
+            if image
+                .overlay
+                .as_ref()
+                .is_some_and(|o| !textures.contains_key(o) || blanks.contains(o))
+            {
+                image.overlay = None;
             }
             if !valid_tint(image.tint) {
                 image.tint = [1.; 4];
@@ -1165,6 +1179,7 @@ fn present_gaps(
                 tint: image.color,
                 evidence: evidence(),
                 follow_arm: image.follow_arm,
+                overlay: None,
             },
         );
     }
@@ -1305,6 +1320,52 @@ fn own_icon(
     added: &mut Added,
     faults: &mut Vec<String>,
 ) -> Option<String> {
+    own_picture(dir, abs, name, ("icon", ICON_BYTES, ICON_SIDE), manifest, added, faults)
+}
+/// Each of this Add-On's images with a scope picture (`Zoom::overlay`)
+/// gets it as a texture of its own; one that does not read is logged and
+/// the image aims with the plain zoom.
+fn scope_overlays(
+    dir: &str,
+    abs: &Path,
+    pack: &bri_weapons::Pack,
+    manifest: &mut Presentation,
+    added: &mut Added,
+    faults: &mut Vec<String>,
+) {
+    for (id, image) in &pack.images {
+        let Some(name) = image.zoom.as_ref().and_then(|z| z.overlay.as_deref()) else {
+            continue;
+        };
+        if !added.images.contains(id) {
+            continue;
+        }
+        let key = own_picture(dir, abs, name, ("scope overlay", OVERLAY_BYTES, OVERLAY_SIDE), manifest, added, faults);
+        if key.is_none() && !abs.join(format!("{name}.png")).is_file() {
+            faults.push(crate::cosmetic::add_on_fault(
+                dir,
+                "weapons.json",
+                format!("scope overlay {name}.png of {id} is not in the Add-On, so it aims without one"),
+            ));
+        }
+        if let Some(presented) = manifest.images.get_mut(id) {
+            presented.overlay = key;
+        }
+    }
+}
+/// An Add-On's own PNG, `<name>.png` in `abs`, of at most `limits`' bytes
+/// and side, added to the textures under a key of its own
+/// (`<dir>/<name>.png`, so two Add-Ons' pictures never collide). None when
+/// there is no such file; a file that cannot be read is logged.
+fn own_picture(
+    dir: &str,
+    abs: &Path,
+    name: &str,
+    (what, max_bytes, max_side): (&str, u64, u32),
+    manifest: &mut Presentation,
+    added: &mut Added,
+    faults: &mut Vec<String>,
+) -> Option<String> {
     let file = format!("{}.png", name.replace('\\', "/"));
     if name.is_empty()
         || !bri_content::brick_materials::safe_relative(&file)
@@ -1313,13 +1374,13 @@ fn own_icon(
         return None;
     }
     let read = || -> Result<TextureResource> {
-        let bytes = crate::materials::read_resource(abs, &file, ICON_BYTES)?;
+        let bytes = crate::materials::read_resource(abs, &file, max_bytes)?;
         let (width, height) = image::ImageReader::new(std::io::Cursor::new(&bytes))
             .with_guessed_format()?
             .into_dimensions()?;
         ensure!(
-            (1..=ICON_SIDE).contains(&width) && (1..=ICON_SIDE).contains(&height),
-            "icon {file} is {width}x{height}; at most {ICON_SIDE} a side"
+            (1..=max_side).contains(&width) && (1..=max_side).contains(&height),
+            "{what} {file} is {width}x{height}; at most {max_side} a side"
         );
         Ok(TextureResource {
             file: file.clone(),
@@ -1347,6 +1408,9 @@ fn own_icon(
 /// Largest Add-On icon file, and side.
 const ICON_BYTES: u64 = 1024 * 1024;
 const ICON_SIDE: u32 = 512;
+/// Largest scope overlay file, and side: sharp on a 4K screen's height.
+const OVERLAY_BYTES: u64 = 4 * 1024 * 1024;
+const OVERLAY_SIDE: u32 = 2048;
 /// Images whose `rotation` or `eyeRotation` is `eulerToMatrix(...)` turn by
 /// the transpose of the stored Euler matrix (`bri_weapons::rotation`).
 fn euler_to_matrix_images(
@@ -1729,6 +1793,7 @@ mod placement_tests {
                 line: 0,
             },
             follow_arm,
+            overlay: None,
         }
     }
     fn close(a: Mat4, b: Mat4) -> bool {

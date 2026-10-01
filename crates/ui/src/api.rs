@@ -1270,8 +1270,13 @@ pub enum UiUpdate {
     /// aiming, draws the aim instead).
     HideCrosshair(bool),
     /// The held tool takes the mouse wheel (its trigger is held and its
-    /// image has a `wheel` command) instead of the inventory.
+    /// image has a `wheel` command, or it is aimed through a scope with
+    /// steps) instead of the inventory.
     ToolWheel(bool),
+    /// A scope's picture over the whole screen while aiming
+    /// (`Zoom::overlay`): the host's texture key and its width over its
+    /// height; `None` takes it away.
+    ScopeOverlay(Option<(u64, f32)>),
     /// A net graph sample (`NetGraph::updateStats`); dropped while hidden.
     NetSample(crate::models::perf::NetSample),
     /// A presented frame's timing; dropped while the overlay is hidden.

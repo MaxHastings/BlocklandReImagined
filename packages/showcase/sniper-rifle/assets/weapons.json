@@ -1,0 +1,294 @@
+{
+  "schema_version": 3,
+  "id": "sniper-rifle",
+  "items": {
+    "sniper-rifle:weapon/sniperrifle": {
+      "ui_name": "Sniper Rifle",
+      "image": "sniper-rifle:image/sniperrifle",
+      "model": "sniper-rifle:model/rifle",
+      "icon": "icons/sniper_rifle",
+      "can_drop": true
+    }
+  },
+  "images": {
+    "sniper-rifle:image/sniperrifle": {
+      "name": "SniperRifleImage",
+      "model": "sniper-rifle:model/rifle",
+      "projectile": "sniper-rifle:projectile/round",
+      "mount_point": 0,
+      "eye_offset": [
+        0.42,
+        -0.45,
+        -1.0
+      ],
+      "correct_muzzle": true,
+      "color": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "arm_ready": true,
+      "casing": "GunShellDebris",
+      "min_shot_ticks": 180,
+      "fire_animation": "shiftAway",
+      "zoom": {
+        "fov": 22.0,
+        "on_jet": true,
+        "jets": false,
+        "crosshair": false,
+        "first_person": true,
+        "levels": [
+          10.0
+        ],
+        "overlay": "scope/scope",
+        "sway": {
+          "degrees": 0.35,
+          "seconds": 4.5,
+          "crouched": 0.3,
+          "moving": 2.5
+        }
+      },
+      "states": [
+        {
+          "name": "Activate",
+          "ticks": 18,
+          "timeout": 1,
+          "sound": "weaponSwitchSound"
+        },
+        {
+          "name": "Ready",
+          "down": 2
+        },
+        {
+          "name": "Fire",
+          "ticks": 17,
+          "timeout": 3,
+          "allow_change": false,
+          "script": "onFire",
+          "sound": "sniper-rifle:shot",
+          "emitter": "GunFlashEmitter",
+          "emitter_node": "muzzlePoint",
+          "emitter_seconds": 0.05
+        },
+        {
+          "name": "Smoke",
+          "ticks": 42,
+          "timeout": 4,
+          "allow_change": false,
+          "emitter": "sniper-rifle:emitter/smoke",
+          "emitter_node": "muzzlePoint",
+          "emitter_seconds": 1.6
+        },
+        {
+          "name": "Bolt",
+          "ticks": 120,
+          "timeout": 5,
+          "allow_change": false,
+          "sequence": "Bolt",
+          "sound": "sniper-rifle:bolt",
+          "eject_shell": true
+        },
+        {
+          "name": "Reload",
+          "up": 1
+        }
+      ]
+    }
+  },
+  "projectiles": {
+    "sniper-rifle:projectile/round": {
+      "name": "SniperRifleProjectile",
+      "speed": 2000.0,
+      "inherit": 1.0,
+      "gravity": 0.0,
+      "lifetime_ticks": 480,
+      "fade_ticks": 420,
+      "damage": 150.0,
+      "damage_type": "$DamageType::SniperRifle",
+      "radius_damage_type": "$DamageType::SniperRifle",
+      "impulse": 1200.0,
+      "vertical": 1400.0,
+      "elasticity": 0.5,
+      "friction": 0.2,
+      "explosion": {
+        "effect": "gunExplosion",
+        "damage": 0.0,
+        "radius": 0.0,
+        "impulse": 0.0,
+        "impulse_radius": 0.0,
+        "impulse_vertical": 0.0,
+        "burn_seconds": 0.0
+      },
+      "brick": {
+        "radius": 0.0,
+        "direct": true,
+        "force": 25.0,
+        "max_volume": 200.0,
+        "max_floating_volume": 200.0
+      },
+      "trail": "sniper-rifle:emitter/trail"
+    }
+  },
+  "damage_types": {
+    "sniperrifle": {
+      "name": "SniperRifle",
+      "suicide_message": "%1 shot themselves with a sniper rifle",
+      "murder_message": "%2 sniped %1",
+      "vehicle_scale": 0.5,
+      "direct": true
+    }
+  },
+  "sounds": {
+    "sniper-rifle:shot": {
+      "file": "sounds/shot.wav",
+      "volume": 1.0
+    },
+    "sniper-rifle:bolt": {
+      "file": "sounds/bolt.wav",
+      "volume": 0.7
+    }
+  },
+  "effects": {
+    "particles": [
+      {
+        "id": "sniper-rifle:particle/trail",
+        "texture": "base/data/particles/thinRing",
+        "alpha_blend": false,
+        "lifetime": 0.625,
+        "lifetime_variance": 0.055,
+        "drag": 3.0,
+        "wind": 0.0,
+        "gravity": 0.0,
+        "inherited_velocity": 0.0,
+        "acceleration": 0.0,
+        "spin_degrees": 10.0,
+        "random_spin": [
+          -500.0,
+          500.0
+        ],
+        "keys": [
+          {
+            "time": 0.0,
+            "color": [
+              0.3,
+              0.3,
+              0.9,
+              0.4
+            ],
+            "size": 0.15
+          },
+          {
+            "time": 1.0,
+            "color": [
+              0.5,
+              0.5,
+              0.5,
+              0.0
+            ],
+            "size": 0.25
+          }
+        ]
+      },
+      {
+        "id": "sniper-rifle:particle/smoke",
+        "texture": "base/data/particles/cloud",
+        "alpha_blend": false,
+        "lifetime": 1.525,
+        "lifetime_variance": 0.055,
+        "drag": 3.0,
+        "wind": 0.0,
+        "gravity": -0.5,
+        "inherited_velocity": 0.2,
+        "acceleration": 0.0,
+        "spin_degrees": 10.0,
+        "random_spin": [
+          -500.0,
+          500.0
+        ],
+        "keys": [
+          {
+            "time": 0.0,
+            "color": [
+              0.5,
+              0.5,
+              0.5,
+              0.9
+            ],
+            "size": 0.15
+          },
+          {
+            "time": 1.0,
+            "color": [
+              0.5,
+              0.5,
+              0.5,
+              0.0
+            ],
+            "size": 0.25
+          }
+        ]
+      }
+    ],
+    "emitters": [
+      {
+        "id": "sniper-rifle:emitter/trail",
+        "name": "",
+        "particles": [
+          "sniper-rifle:particle/trail"
+        ],
+        "period": 0.001,
+        "period_variance": 0.0,
+        "speed": 0.0,
+        "speed_variance": 0.0,
+        "offset": 0.0,
+        "offset_variance": 0.0,
+        "theta_degrees": [
+          0.0,
+          90.0
+        ],
+        "phi_rate_degrees": 0.0,
+        "phi_variance_degrees": 360.0,
+        "lifetime": 0.0,
+        "lifetime_variance": 0.0,
+        "orient": false,
+        "orient_on_velocity": true,
+        "override_advance": false,
+        "use_emitter_colors": false,
+        "use_emitter_sizes": false,
+        "use_placement_velocity": false,
+        "node_time_scale": 1.0,
+        "point_node_time_scale": 1.0
+      },
+      {
+        "id": "sniper-rifle:emitter/smoke",
+        "name": "",
+        "particles": [
+          "sniper-rifle:particle/smoke"
+        ],
+        "period": 0.01,
+        "period_variance": 0.0,
+        "speed": 1.0,
+        "speed_variance": 1.0,
+        "offset": 0.0,
+        "offset_variance": 0.0,
+        "theta_degrees": [
+          0.0,
+          90.0
+        ],
+        "phi_rate_degrees": 0.0,
+        "phi_variance_degrees": 360.0,
+        "lifetime": 0.0,
+        "lifetime_variance": 0.0,
+        "orient": false,
+        "orient_on_velocity": true,
+        "override_advance": false,
+        "use_emitter_colors": false,
+        "use_emitter_sizes": false,
+        "use_placement_velocity": false,
+        "node_time_scale": 1.0,
+        "point_node_time_scale": 1.0
+      }
+    ]
+  }
+}

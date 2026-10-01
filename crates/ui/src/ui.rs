@@ -377,6 +377,8 @@ pub struct Core {
     /// The held tool takes the mouse wheel while its trigger is held (an
     /// image's `wheel` command): the wheel goes to it, not the inventory.
     pub wheel_tool: bool,
+    /// The scope picture drawn over the screen while aiming, if any.
+    pub scope_overlay: Option<(u64, f32)>,
     pub cursor_forced: bool,
     /// Open print selector aspect ratio and last print per aspect.
     pub print_aspect: Option<String>,
@@ -498,6 +500,7 @@ impl Core {
         self.super_shift = false;
         self.zoom_on = false;
         self.wheel_tool = false;
+        self.scope_overlay = None;
         self.cursor_forced = false;
         self.print_aspect = None;
         self.last_print.clear();
@@ -1297,6 +1300,7 @@ impl Ui {
             super_shift_time: 0,
             zoom_on: false,
             wheel_tool: false,
+            scope_overlay: None,
             cursor_forced: false,
             print_aspect: None,
             last_print: BTreeMap::new(),
@@ -1758,6 +1762,9 @@ impl Ui {
             UiUpdate::FirstPerson(on) => c.first_person = on,
             UiUpdate::HideCrosshair(on) => c.hide_crosshair = on,
             UiUpdate::ToolWheel(on) => c.wheel_tool = on,
+            UiUpdate::ScopeOverlay(overlay) => {
+                c.scope_overlay = overlay.filter(|(_, aspect)| aspect.is_finite() && *aspect > 0.0)
+            }
             UiUpdate::Whiteout(amount) => {
                 if amount.is_finite() {
                     c.whiteout = c.whiteout.max(amount.clamp(0.0, 1.0));

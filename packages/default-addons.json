@@ -31,6 +31,7 @@
       "id": "advanced-duplicator",
       "path": "advanced-duplicator/advanced-duplicator",
       "enabled": false
-    }
+    },
+    { "id": "sniper-rifle", "path": "showcase/sniper-rifle", "enabled": false }
   ]
 }
