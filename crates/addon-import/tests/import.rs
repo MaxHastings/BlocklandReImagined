@@ -1032,7 +1032,8 @@ fn a_required_community_add_on_becomes_a_dependency_on_its_import() {
         deps,
         [
             ("Weapon_Core_Kit", "reference", Some("weapon_core_kit")),
-            ("Weapon_Gun", "missing", None),
+            // Not installed and nothing of it named: v20 ran the same.
+            ("Weapon_Gun", "unused", None),
         ]
     );
     let manifest: serde_json::Value =

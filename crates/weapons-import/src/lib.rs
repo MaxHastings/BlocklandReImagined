@@ -407,16 +407,21 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 // v20 swings arms from script by image name, never from state data.
                 arm: String::new(),
                 gesture: String::new(),
+                cues: vec![],
             });
         }
         let p = field(d, "projectile");
-        let projectile = (!p.trim().is_empty()).then(|| native_id("projectile", &p));
+        let mut projectile = (!p.trim().is_empty()).then(|| native_id("projectile", &p));
         if let Some(p) = &projectile
             && !pack.projectiles.contains_key(p)
         {
-            pack.diagnostics
-                .push(format!("{} missing {p}; image excluded", d.name));
-            continue;
+            // Torque left a field naming no datablock empty: the image fires
+            // nothing of its own (a raycasting gun's script fires instead).
+            pack.diagnostics.push(format!(
+                "{} names {p}, which nothing declares; it fires no projectile, as in v20",
+                d.name
+            ));
+            projectile = None;
         }
         let rotation = source_rotation(&field(d, "rotation"));
         if rotation.is_none() {

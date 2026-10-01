@@ -163,6 +163,50 @@ pub struct State {
     pub emitter_node: String,
     pub emitter_seconds: f32,
     pub eject_shell: bool,
+    /// What happens a while after the state is entered, as v20 scripts
+    /// scheduled it by hand (`%obj.schedule(450, "playThread", 2, plant)`,
+    /// `schedule(650, 0, serverPlay3D, ...)`): up to 16, each played even
+    /// if the state has moved on, as a scheduled call was.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub cues: Vec<Cue>,
+}
+/// One of a [`State`]'s timed cues: an animation on one of the holder's
+/// threads, a sound where the holder was as the state began, or both.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Cue {
+    /// Milliseconds after the state is entered, up to 10000.
+    #[serde(default)]
+    pub after_ms: u32,
+    /// The holder's animation thread, 0 to 3, playing `sequence`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread: Option<u8>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub sequence: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub sound: String,
+}
+impl Cue {
+    /// The most cues a state has.
+    pub const MAX: usize = 16;
+    /// The longest wait, in milliseconds.
+    pub const MAX_AFTER_MS: u32 = 10_000;
+    fn validate(&self) -> Result<()> {
+        ensure!(
+            self.after_ms <= Self::MAX_AFTER_MS
+                && self.thread.is_none_or(|t| t <= 3)
+                && self.thread.is_some() == !self.sequence.is_empty()
+                && is_sequence_name(&self.sequence)
+                && (self.thread.is_some() || !self.sound.is_empty()),
+            "Invalid state cue: up to {} ms, thread 0 to 3 with a sequence, or a sound",
+            Self::MAX_AFTER_MS
+        );
+        Ok(())
+    }
+    /// Ticks (120 a second) from the state's start, rounded up.
+    pub fn ticks(&self) -> u64 {
+        (u64::from(self.after_ms) * 120).div_ceil(1000)
+    }
 }
 impl State {
     /// What a field left out of `weapons.json` means: v20's
@@ -627,6 +671,10 @@ pub struct Magazine {
     /// Reload one round at a time.
     #[serde(default)]
     pub one_by_one: bool,
+    /// With `one_by_one`, the rounds each load brings, 1 to `size`: the
+    /// Paired Shotgun's script loaded two shells a pass.
+    #[serde(default = "one_u32", skip_serializing_if = "is_one_u32")]
+    pub per_load: u32,
     /// The reserve a holder starts with for this ammo, 0 to 100000.
     #[serde(default)]
     pub reserve: u32,
@@ -767,6 +815,7 @@ impl Magazine {
         ensure!(
             (1..=1000).contains(&self.size)
                 && (1..=self.size).contains(&self.per_shot)
+                && (1..=self.size).contains(&self.per_load)
                 && self.last_rounds <= self.size
                 && (1..=1200).contains(&self.reload_ticks)
                 && self.reserve <= 100_000
@@ -1372,6 +1421,9 @@ pub struct Children {
     /// bomblets bursting one after another); 0 to 36000.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fuse_ticks: Option<[u32; 2]>,
+}
+fn is_one_u32(n: &u32) -> bool {
+    *n == 1
 }
 fn one_u32() -> u32 {
     1
@@ -2012,6 +2064,10 @@ impl Pack {
                         && (0.0..=300.0).contains(&state.emitter_seconds),
                     "Invalid state duration"
                 );
+                ensure!(state.cues.len() <= Cue::MAX, "Too many state cues");
+                for cue in &state.cues {
+                    cue.validate()?;
+                }
                 for index in [
                     state.timeout,
                     state.down,

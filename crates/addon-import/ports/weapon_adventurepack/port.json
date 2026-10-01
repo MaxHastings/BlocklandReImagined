@@ -104,6 +104,16 @@
       }
     }
   },
+  "scripts": [
+    {
+      "method": "onReloadSingle",
+      "into": "magazine",
+      "pattern": "hl2AmmoOnReloadSingle\\s*\\(\\s*%this\\s*,\\s*%obj\\s*,\\s*%slot\\s*\\)\\s*;\\s*hl2AmmoOnReloadSingle\\s*\\(\\s*%this\\s*,\\s*%obj\\s*,\\s*%slot\\s*\\)\\s*;",
+      "set": {
+        "per_load": 2
+      }
+    }
+  ],
   "rules": {
     "from": "weapon_modernwarbattles",
     "capabilities": [

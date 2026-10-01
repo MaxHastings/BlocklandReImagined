@@ -46,6 +46,19 @@ pub(crate) fn own_texture(cx: &Ctx, reference: &str) -> Option<String> {
     })
 }
 
+/// A datablock v20 itself refused to load, so the import leaving it out
+/// is faithful.
+#[derive(Debug)]
+pub(crate) struct NeverLoaded(pub String);
+
+impl std::fmt::Display for NeverLoaded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for NeverLoaded {}
+
 /// Convert the Add-On's emitter `name` and the particles it uses into its
 /// namespace, for the pack written to `file`. A base game particle it uses
 /// is copied in. Particles must draw base game textures.
@@ -72,7 +85,7 @@ pub(crate) fn convert_emitter(
         }
         let multiple = match declaration(cx, node) {
             Some((n, _)) if n.class.eq_ignore_ascii_case("ParticleEmitterNodeData") => {
-                effects::Fields::new(&n).number("timemultiple", 1.0)?
+                effects::Fields::new(&n).ratio("timemultiple", 1.0)?
             }
             _ => {
                 cx.report.diagnostics.push(format!(
@@ -87,6 +100,24 @@ pub(crate) fn convert_emitter(
     let (mut emitter, notes) =
         effects::emitter(&d, &nodes).with_context(|| format!("emitter {}", d.name))?;
     let emitter_name = d.name.clone();
+    // Torque's `ParticleEmitterData::onAdd` skips a particle name nothing
+    // declares, and refuses an emitter left with none: it never existed.
+    let named = std::mem::take(&mut emitter.particles);
+    for p in named {
+        let particle = p.strip_prefix("v20/particle/").unwrap_or(&p);
+        if declaration(cx, particle).is_some() {
+            emitter.particles.push(p);
+        } else {
+            cx.report.diagnostics.push(format!(
+                "emitter {emitter_name}: particle {particle} is declared nowhere; Torque skipped it too"
+            ));
+        }
+    }
+    if emitter.particles.is_empty() {
+        return Err(anyhow::Error::new(NeverLoaded(format!(
+            "emitter {emitter_name} names no particle anything declares, so v20 refused it when it loaded and nothing ever drew it"
+        ))));
+    }
     emitter.id = cx.id("emitter", name, &emitter_name, file);
     let mut particles = vec![];
     for p in &emitter.particles {
@@ -100,14 +131,27 @@ pub(crate) fn convert_emitter(
         // own is named by its converted file's key, which its item
         // presentation lists and the client loads.
         if !converted.texture.starts_with("base/") {
-            let texture = own_texture(cx, &converted.texture)
-                .filter(|_| own)
-                .with_context(|| {
-                    format!(
-                        "particle {} draws {}, which this Add-On does not have",
-                        pd.name, converted.texture
-                    )
-                })?;
+            let Some(texture) = own_texture(cx, &converted.texture).filter(|_| own) else {
+                // A texture missing from the Add-On itself was missing in
+                // v20 too: the particle never drew.
+                ensure!(
+                    own,
+                    "particle {} draws {}, which this Add-On does not have",
+                    pd.name,
+                    converted.texture
+                );
+                cx.mark(
+                    &particle,
+                    "particle",
+                    "consumed",
+                    vec![],
+                    Some(format!(
+                        "it draws {}, which the Add-On does not have, so v20 could not draw it either",
+                        converted.texture
+                    )),
+                );
+                continue;
+            };
             converted.texture = texture;
         }
         converted.id = if own {
@@ -130,6 +174,11 @@ pub(crate) fn convert_emitter(
             );
         }
         particles.push(converted);
+    }
+    if particles.is_empty() {
+        return Err(anyhow::Error::new(NeverLoaded(format!(
+            "emitter {emitter_name} draws only particles whose textures the Add-On does not have, so v20 drew nothing"
+        ))));
     }
     for note in notes {
         cx.report
@@ -169,6 +218,10 @@ pub(crate) fn weapon_effects(cx: &mut Ctx, pack: &mut bri_weapons::Pack) {
                 let id = e.id.clone();
                 pack.effects.emitters.push(e);
                 Some(id)
+            }
+            Err(error) if error.downcast_ref::<NeverLoaded>().is_some() => {
+                cx.mark(name, "emitter", "consumed", vec![], Some(format!("{error}")));
+                None
             }
             Err(error) => {
                 cx.unsupported(
@@ -244,21 +297,47 @@ pub(crate) fn weapon_effects(cx: &mut Ctx, pack: &mut bri_weapons::Pack) {
             light: None,
             burst: None,
         };
+        // Whether every emitter it names was drawn, or was one v20 itself
+        // never loaded.
+        let mut complete = true;
+        let mut settle = |cx: &mut Ctx, v: &str, id: &Option<String>| {
+            complete &= id.is_some()
+                || cx
+                    .report
+                    .datablocks
+                    .iter()
+                    .any(|e| e.name.eq_ignore_ascii_case(v) && e.status == "consumed");
+        };
         for i in 0..4 {
             if let Some(v) = d
                 .fields
                 .get(&format!("emitter[{i}]"))
                 .filter(|v| !v.is_empty())
-                && let Some(id) = named(cx, pack, &v.clone())
+                .cloned()
             {
-                effect.emitters.push(id);
+                let id = named(cx, pack, &v);
+                settle(cx, &v, &id);
+                effect.emitters.extend(id);
             }
         }
-        if let Some(v) = d.fields.get("particleemitter").filter(|v| !v.is_empty())
-            && let Some(id) = named(cx, pack, &v.clone())
+        if let Some(v) = d
+            .fields
+            .get("particleemitter")
+            .filter(|v| !v.is_empty())
+            .cloned()
         {
-            let count = number("particledensity", 10.0).clamp(0.0, 32768.0) as u32;
-            effect.burst = Some((id, count, number("particleradius", 1.0).max(0.0)));
+            let id = named(cx, pack, &v);
+            settle(cx, &v, &id);
+            if let Some(id) = id {
+                let count = number("particledensity", 10.0).clamp(0.0, 32768.0) as u32;
+                effect.burst = Some((id, count, number("particleradius", 1.0).max(0.0)));
+            }
+        }
+        if complete && let Some(e) = cx.entry(&d.name) {
+            // Its emitters, burst, light, sound and debris all have their
+            // native parts.
+            e.status = "converted".into();
+            e.notes.retain(|n| !n.starts_with("debris and particle parts"));
         }
         let (start, end) = (
             number("lightstartradius", 0.0).max(0.0),

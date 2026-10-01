@@ -201,12 +201,35 @@ function standinPistolImage::onFire(%this, %obj, %slot)
    %projectile = %this.projectile;
    %spread = 0.0002;
    %shellcount = 1;
+   if (getSimTime() - %obj.lastFired > 500)
+      %spread /= 2;
+   %obj.lastFired = getSimTime();
    %obj.setVelocity(VectorAdd(%obj.getVelocity(), VectorScale(%aimVec, "-1")));
    %obj.spawnExplosion(standinKickProjectile, "1 1 1");
    for(%i = 0; %i < %shellcount; %i++)
       fireOne(%this, %obj, %slot, %projectile, %spread);
    %obj.playThread(2, shiftRight);
    serverPlay3d(standinFireSound, %obj.getHackPosition());
+}
+
+// The reload's moves and sounds, timed by hand.
+function standinPistolImage::onReload(%this, %obj, %slot)
+{
+   %obj.playThread(2, shiftUp);
+   %obj.schedule(450, "playThread", "2", "plant");
+   schedule(650, 0, serverPlay3D, standinFireSound, %obj.getHackPosition());
+   hl2AmmoOnReload(%this, %obj, %slot);
+}
+
+// Two shells a pass, and a second tap a quarter second on.
+function pairedShotgunImage::onReloadSingle(%this, %obj, %slot)
+{
+   %obj.playThread(2, shiftRight);
+   serverPlay3d(standinFireSound, %obj.getHackPosition());
+   hl2AmmoOnReloadSingle(%this, %obj, %slot);
+   hl2AmmoOnReloadSingle(%this, %obj, %slot);
+   %obj.schedule(250, "playThread", "2", "plant");
+   schedule(250, 0, serverPlay3D, standinFireSound, %obj.getHackPosition());
 }
 
 function pairedShotgunImage::onFire(%this, %obj, %slot)

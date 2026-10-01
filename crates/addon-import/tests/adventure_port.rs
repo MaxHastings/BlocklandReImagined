@@ -962,11 +962,58 @@ fn glass_release_guns_shoot_like_their_scripts() {
         (kick.amplitude, kick.frequency, kick.seconds),
         (0.9, 3.0, 0.4)
     );
+    // A shot after half a second's pause is twice as true.
+    let rested = shot.rested.unwrap();
+    assert_eq!((rested.after_ticks, rested.spread), (60, 0.0001));
+    // The reload's arm move, and the moves and sounds it timed by hand.
+    let sound = "weapon_adventurepack:sound/standinfiresound";
+    let reload = pistol.states.iter().find(|s| s.script == "onReload").unwrap();
+    assert_eq!(reload.arm, "shiftup");
+    assert_eq!(
+        reload.cues,
+        [
+            bri_weapons::Cue {
+                after_ms: 450,
+                thread: Some(2),
+                sequence: "plant".into(),
+                ..Default::default()
+            },
+            bri_weapons::Cue {
+                after_ms: 650,
+                sound: sound.into(),
+                ..Default::default()
+            }
+        ]
+    );
     let paired = image("pairedshotgunimage");
     let m = paired.magazine.unwrap();
     assert_eq!(
         (m.size, m.per_shot, m.one_by_one, m.reload_ticks),
         (6, 2, true, 60 + 30)
+    );
+    // Two shells each pass, each pass with a second arm move and tap.
+    assert_eq!(m.per_load, 2);
+    let load = paired
+        .states
+        .iter()
+        .find(|s| s.script == "onReloadSingle")
+        .unwrap();
+    assert_eq!((load.arm.as_str(), load.sound.as_str()), ("shiftright", sound));
+    assert_eq!(
+        load.cues,
+        [
+            bri_weapons::Cue {
+                after_ms: 250,
+                thread: Some(2),
+                sequence: "plant".into(),
+                ..Default::default()
+            },
+            bri_weapons::Cue {
+                after_ms: 250,
+                sound: sound.into(),
+                ..Default::default()
+            }
+        ]
     );
     let shot = paired.shot.unwrap();
     assert_eq!(
