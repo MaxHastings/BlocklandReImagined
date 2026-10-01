@@ -318,33 +318,25 @@ fn the_gravity_gun_effects_follow_the_guns_state() {
     assert!(snap(0.8, &mut addon).is_empty(), "and gone");
 }
 
+/// The beam leaves the gun where the game draws it. The gun's alien skin
+/// is its look (the Gravity Gun Tool's `looks.json`), which the game draws
+/// on every copy, so the effects draw nothing over the gun itself.
 #[test]
-fn the_beam_comes_out_of_the_drawn_guns_muzzle_and_the_gun_wears_its_skin() {
+fn the_beam_comes_out_of_the_drawn_guns_muzzle() {
     let (_, mut addon) = start("gravity-gun-fx");
     let muzzle = [0.4, 1.75, -1.1];
     let mut world = gun_world([1.0, 7.0, 1.0, 5.0], [0.0, 2.1, -5.0]);
-    let transform = holding_the_gun(&mut world, muzzle);
+    holding_the_gun(&mut world, muzzle);
     let drawn = addon.frame(frame(0.0, &Arc::new(world))).unwrap().clone();
-    assert_eq!(drawn.draws.len(), 8, "the skin, then the beam and the rest");
-    let skin = drawn.draws[0];
-    assert_eq!(skin.model, transform, "drawn where the game draws the gun");
-    assert_eq!(skin.params.unwrap()[0][3], 1.0, "its veins flare while the beam is on");
-    let beam_params = drawn.draws[1].params.unwrap();
+    assert_eq!(drawn.draws.len(), 7, "the beam and the rest");
+    let beam_params = drawn.draws[0].params.unwrap();
     assert_eq!(&beam_params[0][..3], &muzzle, "from the muzzle");
-    // At rest, once the beam has snapped back, the skin stays, its veins
-    // dimmed; nothing else is drawn.
+    // At rest, once the beam has snapped back, nothing is drawn.
     let mut world = gun_world([0.0; 4], [0.0, 2.1, -5.0]);
     holding_the_gun(&mut world, muzzle);
     let world = Arc::new(world);
     addon.frame(frame(0.1, &world)).unwrap();
-    let drawn = addon.frame(frame(0.5, &world)).unwrap().clone();
-    assert_eq!(drawn.draws.len(), 1);
-    assert_eq!(drawn.draws[0].params.unwrap()[0][3], 0.0);
-    // Someone holding another weapon: no skin.
-    let mut world = gun_world([0.0; 4], [0.0, 2.1, -5.0]);
-    holding_the_gun(&mut world, muzzle);
-    world.players[0].image = "other:image/rifle".into();
-    assert!(addon.frame(frame(0.6, &Arc::new(world))).unwrap().draws.is_empty());
+    assert!(addon.frame(frame(0.5, &world)).unwrap().draws.is_empty());
 }
 
 /// Needs a GPU: renders reaching, holding, a swing and letting go to PNGs.

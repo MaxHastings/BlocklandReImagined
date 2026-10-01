@@ -150,7 +150,7 @@ mod tests {
     #[test]
     fn a_copy_saved_loads_back_by_any_case_and_a_missing_one_is_none() {
         let dir = tempfile::tempdir().unwrap();
-        let old = OldSaves::new(dir.path().join("saves"), dir.path().join("cache"), vec![]);
+        let old = OldSaves::new(dir.path().join("saves"), dir.path().join("cache"));
         let files = CopyFiles::new(old);
         let mut brick = Brick::new(ContentRef::Resolved("plate".into()), [0.5, 0.1, 0.25], 0);
         brick.color = 2;
@@ -187,7 +187,7 @@ mod tests {
         let folder = dir.path().join("saves").join(FOLDER);
         std::fs::create_dir_all(&folder).unwrap();
         std::fs::write(folder.join("Old.bls"), "Duplorcation save file\t0\n").unwrap();
-        let old = OldSaves::new(dir.path().join("saves"), dir.path().join("cache"), vec![]);
+        let old = OldSaves::new(dir.path().join("saves"), dir.path().join("cache"));
         let files = CopyFiles::new(old);
         files.load(1, "old");
         assert!(matches!(wait(&files), StoreDone::Loaded(Err(_))));
@@ -216,11 +216,7 @@ mod tests {
             std::fs::create_dir_all(install.join(elsewhere)).unwrap();
             std::fs::write(install.join(elsewhere).join("Away.bls"), &plornt).unwrap();
         }
-        let old = OldSaves::new(
-            dir.path().join("saves"),
-            dir.path().join("cache"),
-            vec![install.join("saves")],
-        );
+        let old = OldSaves::new(dir.path().join("saves"), dir.path().join("cache"));
         old.set_converter(crate::old_saves::Converter::bricks_only(
             serde_json::from_value(serde_json::json!({"schema_version": 1, "bricks": []}))
                 .unwrap(),

@@ -90,7 +90,7 @@ fn run(corpus: &Corpus, root: &Path, saves: &Path, state: &Path) -> Result<()> {
     );
     let started = std::time::Instant::now();
     let content = ClientContent::load(root)?;
-    let old = OldSaves::new(folder.clone(), state.join("converted-saves"), vec![]);
+    let old = OldSaves::new(folder.clone(), state.join("converted-saves"));
     old.set_converter(Converter::new(&content)?);
     old.start();
     while old.busy() {

@@ -109,7 +109,9 @@ Patterns do two jobs. They prove the copy is the shape the port was written
 for, and they read the numbers from that copy's script, so a port never
 hard-codes one copy's values. In a patch, a string that is exactly
 `"{projectiles}"` becomes the captured value (a number when it reads as one).
-`{name}` inside a longer string becomes its text.
+`{name}` inside a longer string becomes its text, and `{name:lower}` its
+text in lower case, for ids: Torque ignores the case of names
+(`"weapon_example:projectile/{jab:lower}"`).
 
 ### A port
 
@@ -166,6 +168,8 @@ add when you work in a checkout.
    | An image's `onFire` using v20's spread code (`%shellcount`, `%spread`, a `setVelocity` recoil) | the image's `shot` data (below) |
    | A fire-rate check on `%obj.lastFireTime` and `minShotTime` | nothing: the image's `min_shot_ticks` already does it, from the datablock |
    | Anything a field in [Making Add-Ons](README.md) section 5 or 6 expresses | a patch setting that field |
+   | An image's state script (`onCharge`, `onFire`, a custom `stateScript` such as `onFiretwo`) that plays an arm animation, calls `Parent::onFire`, spawns a second projectile or uses the item up | an entry in the image's `scripts` ([torque-equivalents.md](torque-equivalents.md#image-state-scripts-as-data)) |
+   | Something the game already does the same way | nothing: cover the function with patterns and say so in `notes` |
    | A `serverCmd` in an Add-On with no weapons, vehicles or bricks | a rule (section 3 of the guide): `behaviour.json` and a script under `files/`, and a `package.json` patch adding them to `provides` and their `capabilities` |
    | An image's `onFire` (or charge, release, jet, light, wheel or cancel) or a `serverCmd` that does host work in an Add-On with weapons, vehicles or bricks | host rules (below): `rules/` in the port, and a patch pointing the image at their commands |
    | Anything whose `runtime_hook` is null or that needs a missing capability | not portable yet: port the rest, mark the entry `partial`, and say what is missing in `notes` |
@@ -213,7 +217,7 @@ page as well.
 |---|---|---|---|
 | `Weapon_Shotgun` (Sawn-off Shotgun) | `weapon_shotgun` | verified | `shotgunImage::onFire`: the pellets, their spread and the recoil, read from the copy's own script |
 | `Tool_Duplicator` (Plornt's Duplorcator) | `tool_duplicator` | partial | `/dup`, `/duplorcator`, `/duplicator`; `DuplorcatorImage::onFire` (reach, full trust, no public bricks, selection wait); `getStack` (up from the clicked brick, every way from the rest; the cyan highlight and how long it lasts); planting brick by brick with its count, one undo; `/saveDup` and `/loadDup` (v20 duplication files load too). Not ported: uploading a duplication from the player's computer |
-| `Tool_NewDuplicator` (Zeblote's New Duplicator) | `tool_newduplicator` | partial | its preference defaults; `/newduplicator` and `/duplicator` down to `/d`; stack and box selection (direction, limited, box corners and size limit, select wait); the mode images and their mount handling; plant mode with its planted, blocked, floating and missing-trust counts; clicking to move a selection; `/MirrorX`, `/MirrorY`, `/Cut`, `/SaveDup`, `/LoadDup`, `/DupHelp`; `ndFormatMessage`. Not ported: multi-select, force plant, plant as, fill colour, fill wrench, supercut, fill bricks, mirroring up and down, `/AllDups` |
+| `Tool_NewDuplicator` (Zeblote's New Duplicator) | `tool_newduplicator` | partial | its preference defaults; `/newduplicator` and `/duplicator` down to `/d`; stack and box selection (direction, limited, box corners and size limit, select wait); the mode images and their mount handling; plant mode with its planted, blocked, floating and missing-trust counts; clicking to move a selection; `/MirrorX`, `/MirrorY`, `/MirrorZ` (up and down), `/Cut`, `/SaveDup`, `/LoadDup`, `/DupHelp`; multi-select (crouch), force plant and `/ForcePlant`, fill colour (spray and FX cans on a selection), `/FillWrench`, `/SuperCut` and `/FillBricks` with their confirm questions, the selection box from a selection; `ndFormatMessage`. Not ported: pivot toggle, plant as, `/AllDups`, `/DupVersion`, `/DupClients`, `/MirErrors`, the overwrite warning, the plant wait, the big-plant undo confirmation, selections over 10,000 bricks |
 
 ## Host rules
 

@@ -62,11 +62,13 @@ use std::collections::{BTreeMap, BTreeSet};
 /// environment (Admin Menu Environment, `set_environment`).
 /// 70: `Vitals::look_limits`: a rule's `set_look_limits` bounds how far a
 /// body's arms and head follow its look.
-/// 71: `Notice::Question`: an Add-On's yes/no question (`ask`), and a
+/// 71: `Drop::paint`: a dropped paint-tinted tool keeps the colour it was
+/// held in.
+/// 72: `Notice::Question`: an Add-On's yes/no question (`ask`), and a
 /// duplicator's copy notices (`Notice::MoveCopy`, `ShiftCopy`, `RotateCopy`,
 /// `PlantCopy`, `FlipCopy`, `WrenchCopy`, `TakePaint`, `ScrollMode`),
 /// `PlaceBlueprint::flipped`, `Command::WrenchCopy` and `Image::paint`.
-pub const VERSION: u32 = 71;
+pub const VERSION: u32 = 72;
 /// Inputs repeated in every movement datagram so isolated losses cost nothing.
 pub const MOVEMENT_REDUNDANCY: usize = 6;
 /// Most inputs one frame may hand the transport (split across datagrams).

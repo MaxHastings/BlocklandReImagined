@@ -269,6 +269,42 @@ pub struct Image {
     /// with that colour shows it.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub paint_tint: bool,
+    /// What the image's own state scripts do, by script name in lower case
+    /// (`oncharge`, `onfire`, `onfiretwo`): entering a state whose `script`
+    /// is listed does this instead of the game's built-in handling of that
+    /// name. A port writes here what a v20 Add-On's `Image::on...` function
+    /// did.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub scripts: BTreeMap<String, Script>,
+}
+/// One image state script as data: what a v20 `Image::onCharge`,
+/// `onFire` or a custom `stateScript` function did to its holder.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Script {
+    /// The holder's arm animation (thread 2) started first, as
+    /// `%obj.playThread(2, ...)`: `spearReady` while charging,
+    /// `spearThrow` or `armattack` on the swing, `root` to lower the arm.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub arm: String,
+    /// Launch a projectile as `Parent::onFire` does: aimed and spread like
+    /// the image's own shots, after the arm animation.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub fire: bool,
+    /// The projectile `fire` launches instead of the image's own: a second
+    /// attack of one weapon, as a script that spawned its own
+    /// `ProjectileData` (a knife's quick jab beside its charged stab).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projectile: Option<String>,
+    /// The held item is used up: it leaves the holder's tools and hand, as
+    /// a thrown grenade's script cleared `%obj.tool[%slot]` and called
+    /// `serverCmdUnUseTool`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub use_up: bool,
+}
+/// An arm animation name: letters, digits and `_`, up to 64 bytes.
+fn is_sequence_name(name: &str) -> bool {
+    name.len() <= 64 && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
 }
 /// Add-On commands (`package:command`) an image runs for its holder, aimed
 /// where they look, beyond `command` (which is `onFire`'s): v20 Add-Ons
@@ -999,6 +1035,25 @@ impl Pack {
             }
             if let Some(p) = &image.projectile {
                 ensure!(self.projectiles.contains_key(p), "Missing projectile {p}");
+            }
+            ensure!(
+                image.scripts.len() <= 16
+                    && image.scripts.iter().all(|(script, s)| {
+                        !script.is_empty()
+                            && script.len() <= 64
+                            && script
+                                .bytes()
+                                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+                            && is_sequence_name(&s.arm)
+                            && (s.fire || s.projectile.is_none())
+                    }),
+                "Invalid image scripts {id}: up to 16, lower-case names, arm letters, digits and _, projectile only with fire"
+            );
+            for p in image.scripts.values().filter_map(|s| s.projectile.as_ref()) {
+                ensure!(
+                    self.projectiles.contains_key(p),
+                    "Missing projectile {p} of image {id}"
+                );
             }
         }
         for (id, p) in &self.projectiles {
