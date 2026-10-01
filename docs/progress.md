@@ -8628,6 +8628,48 @@ Tests: `add_on_join::bot_kinds_come_from_the_blockhead_bot_add_on_the_host_runs`
 `add_on_join::a_host_with_the_blockhead_bot_on_spawns_bots_and_one_without_offers_none`
 (generated content: hosts with the Add-On on and off, loads a saved spawn
 brick, counts players). Not run here: the second needs generated content.
+
+## 2026-10-01 Butterfly Knife and HE Grenade ports (branch `claude/butterfly-knife-q2j2lu`)
+
+Max asked for the Butterfly Knife and HE Grenade from his Steam Blockland,
+then chose "originals only": players import their own copies (Start Game >
+Add-Ons > Import) and the game ships only the behaviour. His knife is
+Stratofortress's `Weapon_ButterflyKnife` (RTB 1707), not the "TF2 Butterfly
+Knife" he linked (RTB 327); his grenade is `Weapon_HEGrenade` by TheGeek,
+Pload, Rotondo and Ephialtes. Both were read on his PC, read-only, into
+`.research/butterfly-knife` (never committed). The first version, with
+models and sounds of our own (553df19), was dropped before it shipped.
+
+Engine seam: an image's `scripts` describes, by lower-case state script
+name, what an `Image::on...` function did: `arm` (thread 2 animation),
+`fire` (`Parent::onFire`), `projectile` (a second `ProjectileData` the
+function spawned) and `use_up` (`%obj.tool[%slot] = 0` with
+`serverCmdUnUseTool`). It replaces the built-in name-matched handling for
+that script. Ports may also write `{name:lower}` for ids. The importer now
+keeps the last definition of a function, as Torque does; the knife defines
+`onFiretwo` twice and the later one spawns the jab.
+
+Ports (`crates/addon-import/ports/weapon_butterflyknife`,
+`weapon_hegrenade`), both `verified` against v20's scripts:
+- Knife: a click jabs with `butterflyknifeprojectile` (30 in the original)
+  and swings no arm, as in v20 (its `armattack` version of `onFiretwo` is
+  replaced by the later one). Held 0.7 s and let go it stabs with the
+  image's projectile (100) after `spearThrow`. `backstab = 180` is not a
+  projectile field and does nothing in v20 either.
+- Grenade: a click pulls the pin (it flies off as the casing); held 0.7 s
+  and let go it is thrown and used up, and another grenade in the tools
+  stays. It bounces with its own sound and goes off on its 2.5 s fuse.
+  Its `Armor::onCollision` package (pick up while holding one) needs
+  nothing: the game has no duplicate check.
+
+Tests: `crates/weapons/tests/state_attacks.rs` (the seam), stand-in
+Add-Ons of our own (CC0) in `crates/addon-import/tests/fixtures/ports` with
+`butterfly_knife_port_jabs_and_stabs` and
+`he_grenade_port_pulls_the_pin_then_throws_it_away`, each port's
+`checks.json` through `check-port`, and `real_steam_knife_and_grenade_ports`
+(skips unless Max's Steam Add-Ons and the v20 reference exist). The Gate
+ran it on the PC at 5576cf1: both ports applied to Max's copies (knife
+4d8d0cc5…, grenade 1cae396e…, now listed in `ports.json`).
 ## 2026-10-01 Vehicle destruction looks (v20 audit)
 
 Max: destroyed vehicles "would turn black right away when on fire" in v20,

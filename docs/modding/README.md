@@ -548,6 +548,7 @@ The fields you are most likely to change:
 | item | `ui_name` | the name players see |
 | image | `zoom` | `{ "fov": 20, "on_jet": true, "crosshair": false, "first_person": true }`: aim with the zoom key (and the right mouse button with `on_jet`), hide the crosshair, force first person while aiming |
 | image | `eye_offset`, `eye_rotation` | where the weapon sits in first person: exactly there, relative to the camera, as Torque places it, so a scope whose sight is on the eye line stays centred at any zoom |
+| image | `scripts` | what each state `script` does, by lower-case name: `{ "onfire": { "arm": "spearThrow", "fire": true, "use_up": true } }` swings the arm, launches the image's projectile (or the entry's own `projectile`) and uses the item up, as a thrown grenade ([torque-equivalents.md](torque-equivalents.md#image-state-scripts-as-data)) |
 | image | `follow_arm` | `true` also moves a first-person `eye_offset` image with the arm's actions (shift, plant, swing), as the base game's brick, hammer and spray cans do; off by default |
 | pack | `sounds` | `{ "your-id:shot": { "file": "sounds/shot.wav", "volume": 0.8 } }`: your own `.wav`/`.ogg` files, named by a state's `sound` and by rules; `local` for sounds only the holder hears, `looping` for a state-long hum |
 
