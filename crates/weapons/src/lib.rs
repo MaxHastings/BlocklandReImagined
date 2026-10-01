@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 pub mod debris;
 mod merge;
 pub mod rotation;
+pub mod testing;
 pub use merge::{resource_root, sound_root};
 pub mod runtime;
 pub use runtime::*;
