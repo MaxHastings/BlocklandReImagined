@@ -33,6 +33,11 @@
       "enabled": false
     },
     { "id": "blockhead_bot", "path": "blockhead_bot", "enabled": false },
-    { "id": "sniper-rifle", "path": "showcase/sniper-rifle", "enabled": false }
+    { "id": "trench-kit", "path": "trench-warfare/trench-kit", "enabled": false },
+    { "id": "trench", "path": "trench-warfare/trench", "enabled": false },
+    { "id": "trench-hud", "path": "trench-warfare/trench-hud", "enabled": false },
+    { "id": "trench-mode", "path": "trench-warfare/trench-mode", "enabled": false },
+    { "id": "fill-can-tool", "path": "fill-can/fill-can-tool", "enabled": false },
+    { "id": "fill-can", "path": "fill-can/fill-can", "enabled": false }
   ]
 }
