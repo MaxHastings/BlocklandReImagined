@@ -554,17 +554,13 @@ fn allow_equip(who) { !player(who).mounted }"#,
         ),
     );
     g.s.set_vehicle_pack(
-        bri_vehicles::Pack::load(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("tests/fixtures/prediction-vehicles.json"),
-        )
-        .unwrap(),
+        bri_vehicles::testing::pack(),
         Vec::new(),
     )
     .unwrap();
     g.s.spawn_vehicle_at(
         0,
-        "test:vehicle/horse",
+        bri_vehicles::testing::HORSE,
         Vec3::new(0.0, 0.5, 0.0),
         0.0,
         Vec3::ZERO,
