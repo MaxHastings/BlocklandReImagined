@@ -428,12 +428,14 @@ pub(crate) fn weapon_effects(cx: &mut Ctx, pack: &mut bri_weapons::Pack) {
     sounds(cx, pack);
 }
 
-/// Each of the Add-On's `AudioProfile`s whose file converted, keyed by its
-/// id; image states, projectiles and explosions naming one play it. Volume
-/// and looping come from its `AudioDescription`; a sound that is not 3D is
+/// Each of the Add-On's `AudioProfile`s whose file converted, or that names
+/// a file of the installed game (`base/data/sound/vehicleExplosion.wav`,
+/// played from the game's own copy as Torque found it), keyed by its id;
+/// image states, projectiles and explosions naming one play it. Volume and
+/// looping come from its `AudioDescription`; a sound that is not 3D is
 /// heard by its holder alone.
 fn sounds(cx: &mut Ctx, pack: &mut bri_weapons::Pack) {
-    let profiles: Vec<(String, String, String, String)> = cx
+    let profiles: Vec<(String, String, bool, String)> = cx
         .owned
         .values()
         .filter(|o| o.d.class.eq_ignore_ascii_case("AudioProfile"))
@@ -442,17 +444,20 @@ fn sounds(cx: &mut Ctx, pack: &mut bri_weapons::Pack) {
                 .fields
                 .get("filename")
                 .map(|f| crate::file_named(cx.src, &cx.outputs, &o.path, f))?;
-            let rel = cx.outputs.get(&f.to_ascii_lowercase())?.clone();
+            let (rel, stock) = match cx.outputs.get(&f.to_ascii_lowercase()) {
+                Some(rel) => (rel.clone(), false),
+                None => (cx.reference.stock_sound(&f)?, true),
+            };
             let description = o
                 .fields
                 .get("description")
                 .map(|d| literal(d).trim().to_owned())
                 .unwrap_or_default();
-            Some((o.d.name.clone(), rel, description, o.path.clone()))
+            Some((o.d.name.clone(), rel, stock, description))
         })
         .collect();
     let mut keys = BTreeMap::new();
-    for (name, rel, description, _) in profiles {
+    for (name, rel, stock, description) in profiles {
         let fields = cx
             .owned
             .get(&description.to_ascii_lowercase())
@@ -479,7 +484,12 @@ fn sounds(cx: &mut Ctx, pack: &mut bri_weapons::Pack) {
         if !(lower.ends_with(".wav") || lower.ends_with(".ogg")) {
             continue;
         }
-        let id = cx.id("sound", &name, &name, &format!("assets/{rel}"));
+        let output = if stock {
+            rel.clone()
+        } else {
+            format!("assets/{rel}")
+        };
+        let id = cx.id("sound", &name, &name, &output);
         pack.sounds.insert(
             id.clone(),
             bri_weapons::SoundDef {
@@ -488,6 +498,7 @@ fn sounds(cx: &mut Ctx, pack: &mut bri_weapons::Pack) {
                 looping: flag("islooping", false),
                 local: !flag("is3d", true),
                 package: None,
+                stock,
             },
         );
         cx.mark(&name, "sound", "converted", vec![id.clone()], None);

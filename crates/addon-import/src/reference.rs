@@ -443,6 +443,15 @@ impl Reference {
     /// the rest in `base/data/shapes`) are what Add-On models lean on when
     /// they ship no copy, as Loz's Hookshot does. The key is the one
     /// players' games already load it by, so nothing is copied.
+    /// The installed game's sound file at the v20 path `path`
+    /// (`base/data/sound/vehicleExplosion.wav`, or a default Add-On's), in
+    /// the spelling the game's sound bank finds it by: an Add-On's
+    /// `AudioProfile` may play it without shipping a copy.
+    pub fn stock_sound(&self, path: &str) -> Option<String> {
+        let key = path.trim().replace('\\', "/").to_ascii_lowercase();
+        ((key.ends_with(".wav") || key.ends_with(".ogg")) && self.files.contains(&key))
+            .then_some(key)
+    }
     pub fn base_texture(&self, material: &str) -> Option<String> {
         ["", ".png", ".jpg", ".jpeg"]
             .iter()
@@ -495,6 +504,16 @@ impl Reference {
             let manifest: serde_json::Value = serde_json::from_slice(
                 &std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?,
             )?;
+            // Its clips by the v20 paths they were read from, for Add-On
+            // profiles that name one.
+            for c in manifest["clips"].as_array().into_iter().flatten() {
+                for source in c["sources"].as_array().into_iter().flatten() {
+                    if let Some(path) = source["virtual_path"].as_str() {
+                        self.files
+                            .insert(path.replace('\\', "/").to_ascii_lowercase());
+                    }
+                }
+            }
             for s in manifest["sounds"].as_array().into_iter().flatten() {
                 let (Some(name), Some(addon)) = (s["name"].as_str(), s["package"].as_str()) else {
                     continue;

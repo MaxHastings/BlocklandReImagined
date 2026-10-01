@@ -226,3 +226,63 @@ OtherItem.uiName = "Shown";
         );
     }
 }
+
+/// An Add-On's `AudioProfile` may name a file of the game itself rather
+/// than its own (the HE Grenade's explosion sound is
+/// `base/data/sound/vehicleExplosion.wav`): Torque plays the game's file,
+/// so the import keeps the sound, naming that file, and the explosion and
+/// the image state play it by its id.
+#[test]
+fn a_sound_naming_the_games_own_file_plays_that_file() {
+    let root = temp("stock-sound-game");
+    write(
+        &root.join("packages.json"),
+        r#"{ "schema_version": 1, "packages": [
+             { "id": "v20-audio", "version": "1.0.0", "side": "shared", "dir": "audio", "role": "audio" } ] }"#,
+    );
+    write(
+        &root.join("audio/manifest.json"),
+        r#"{ "clips": [ { "id": "v20/clip/boom", "sources": [ { "virtual_path": "base/data/sound/testBoom.wav" } ] } ],
+             "sounds": [ { "name": "testBoomSound", "package": "base" } ] }"#,
+    );
+    let dir = temp("stock-sound").join("Weapon_Test_Boom");
+    write(&dir.join("server.cs"), "exec(\"./boom.cs\");\n");
+    write(
+        &dir.join("description.txt"),
+        "Title: Boom\nAuthor: Tester\nA test.\n",
+    );
+    write(
+        &dir.join("boom.cs"),
+        r#"datablock AudioProfile(boomExplosionSound) { filename = "base/data/sound/TestBoom.wav"; description = AudioDefault3d; preload = false; };
+datablock AudioProfile(boomGoneSound) { filename = "base/data/sound/notThere.wav"; description = AudioDefault3d; };
+datablock ExplosionData(boomExplosion) { lifetimeMS = 150; soundProfile = boomExplosionSound; radiusDamage = 10; damageRadius = 3; };
+datablock ProjectileData(boomProjectile) { explosion = boomExplosion; muzzleVelocity = 20; lifetime = 1000; };
+datablock ItemData(boomItem) { shapeFile = "./boom.dts"; uiName = "Boom"; image = boomImage; };
+datablock ShapeBaseImageData(boomImage)
+{
+   shapeFile = "./boom.dts"; item = boomItem; projectile = boomProjectile;
+   stateName[0] = "Ready"; stateTransitionOnTriggerDown[0] = "Fire";
+   stateName[1] = "Fire"; stateFire[1] = true; stateSound[1] = boomGoneSound;
+   stateTimeoutValue[1] = 0.2; stateTransitionOnTimeout[1] = "Ready";
+};
+"#,
+    );
+    let out = temp("stock-sound-out").join("out");
+    import(&Options {
+        input: dir,
+        out: out.clone(),
+        installed: Some(root),
+        ..Default::default()
+    })
+    .unwrap();
+    let pack =
+        bri_weapons::Pack::from_json(&std::fs::read(out.join("assets/weapons.json")).unwrap())
+            .unwrap();
+    let id = "weapon_test_boom:sound/boomexplosionsound";
+    let sound = pack.sound(id).expect("the game's file is the sound's");
+    assert!(sound.stock, "{sound:?}");
+    assert_eq!(sound.file, "base/data/sound/testboom.wav");
+    assert_eq!(pack.explosions["boomexplosion"].sound, id);
+    // A file neither the Add-On nor the game has stays unconverted.
+    assert!(pack.sound("weapon_test_boom:sound/boomgonesound").is_none());
+}

@@ -901,6 +901,7 @@ fn load_terrain(
         clamp_nearest: false,
         temp_brick_flash: false,
         ignore_texture_alpha: false,
+        untinted: false,
         parameters: Some(parameters),
     });
     out.omissions.push(format!(

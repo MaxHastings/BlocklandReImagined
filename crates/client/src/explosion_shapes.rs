@@ -12,6 +12,9 @@ use std::{collections::BTreeMap, path::Path};
 
 /// Concurrent explosions drawn per shape.
 const MAX_LIVE: usize = 64;
+/// The shape v20 draws for an explosion shape it cannot load: the rocket's
+/// expanding sphere (`blocklandv20.exe` 0x720d40).
+pub const MISSING_SHAPE: &str = "Add-Ons/Weapon_Rocket_Launcher/explosionSphere1.dts";
 
 struct Model {
     data: SceneData,
@@ -36,47 +39,19 @@ impl ExplosionShapes {
     pub fn load(pack: &bri_weapons::Pack, root: &Path) -> Result<Self> {
         let root = root.canonicalize()?;
         let mut models = BTreeMap::new();
-        for (key, explosion) in pack.explosions.iter().filter(|(_, e)| !e.shape.is_empty()) {
-            // A shape no package converted, such as a path naming a folder
-            // the game does not have (HE Grenade's `Weapon_Rocket Launcher`,
-            // with a space), means no shape: the explosion keeps its
-            // particles, lights, sounds and damage. Torque found no file
-            // there either, so the original drew none.
-            let Some((resource, file)) = pack
-                .resources
-                .iter()
-                .find(|r| {
-                    r.path.eq_ignore_ascii_case(&explosion.shape) && r.native_file.is_some()
-                })
-                .and_then(|r| Some((r, r.native_file.as_deref()?)))
-            else {
-                bri_console::warn(format!(
-                    "Explosion {}: shape {} is not provided by the game or any Add-On, so it shows without one",
-                    explosion.name, explosion.shape
-                ));
-                continue;
-            };
-            // An Add-On's explosion shape that does not load is a cosmetic
-            // fault (`crate::cosmetic`): the explosion keeps its particles,
-            // lights and sounds and loses only the shape.
-            let owner = resource
-                .package
-                .as_ref()
-                .map(|dir| {
-                    bri_package::library::add_on_label(
-                        &bri_weapons::resource_root(&root, resource),
-                        dir,
-                    )
-                })
-                .or_else(|| key.split_once(':').map(|(package, _)| package.to_string()));
-            let model = (|| -> Result<Model> {
+        // The model of the shape at `path`, as `resource` provides it.
+        let model = |explosion: &bri_weapons::ExplosionInfo,
+                     path: &str,
+                     resource: &bri_weapons::Resource,
+                     file: &str|
+         -> Result<Model> {
             let shape: Shape = serde_json::from_slice(&crate::materials::read_resource(
                 &bri_weapons::resource_root(&root, resource),
                 file,
                 32 << 20,
             )?)?;
             shape.validate()?;
-            let folder = explosion.shape.rsplit_once('/').map_or("", |(dir, _)| dir);
+            let folder = path.rsplit_once('/').map_or("", |(dir, _)| dir);
             let mut images = Vec::new();
             for material in &shape.materials {
                 let path = format!("{folder}/{}.png", material.name);
@@ -103,7 +78,7 @@ impl ExplosionShapes {
             let refs: Vec<&SceneImage> = images.iter().collect();
             let pose = bri_content::animation::sample(&shape, None, 0.0)?;
             let data = crate::items::native_shape_scene(
-                &explosion.shape,
+                path,
                 &shape,
                 &refs,
                 [1.0; 4],
@@ -132,24 +107,69 @@ impl ExplosionShapes {
                 "Invalid explosion duration"
             );
             Ok(Model {
-                    data,
-                    gpu: None,
-                    instances: None,
-                    transforms: Vec::new(),
-                    scales,
-                    visibility,
-                    duration,
-                    base_scale: Vec3::from(explosion.scale),
-                })
-            })();
-            match (model, &owner) {
-                (Ok(model), _) => {
-                    models.insert(key.clone(), model);
+                data,
+                gpu: None,
+                instances: None,
+                transforms: Vec::new(),
+                scales,
+                visibility,
+                duration,
+                base_scale: Vec3::from(explosion.scale),
+            })
+        };
+        // A shape some package converted, by its source path.
+        let provided = |path: &str| {
+            pack.resources
+                .iter()
+                .find(|r| r.path.eq_ignore_ascii_case(path) && r.native_file.is_some())
+                .and_then(|r| Some((r, r.native_file.as_deref()?)))
+        };
+        for (key, explosion) in pack.explosions.iter().filter(|(_, e)| !e.shape.is_empty()) {
+            let mut loaded = None;
+            if let Some((resource, file)) = provided(&explosion.shape) {
+                // An Add-On's explosion shape that does not load is a
+                // cosmetic fault (`crate::cosmetic`): the explosion keeps its
+                // particles, lights and sounds, and draws what v20 draws for
+                // a shape it could not load.
+                let owner = resource
+                    .package
+                    .as_ref()
+                    .map(|dir| {
+                        bri_package::library::add_on_label(
+                            &bri_weapons::resource_root(&root, resource),
+                            dir,
+                        )
+                    })
+                    .or_else(|| key.split_once(':').map(|(package, _)| package.to_string()));
+                match (model(explosion, &explosion.shape, resource, file), &owner) {
+                    (Ok(model), _) => loaded = Some(model),
+                    (Err(error), Some(dir)) => {
+                        crate::cosmetic::add_on_fault(dir, &explosion.shape, format!("{error:#}"));
+                    }
+                    (Err(error), None) => return Err(error),
                 }
-                (Err(error), Some(dir)) => {
-                    crate::cosmetic::add_on_fault(dir, &explosion.shape, format!("{error:#}"));
+            }
+            // v20 draws the rocket's sphere for an explosion shape it cannot
+            // load, a path no package provides among them (HE Grenade's
+            // `Weapon_Rocket Launcher`, with a space): `ExplosionData::preload`
+            // loads `MISSING_SHAPE` instead while `$Pref::Net::
+            // DownloadExplosions` is off, its default (0x52c555-0x52c57a).
+            if loaded.is_none() && !explosion.shape.eq_ignore_ascii_case(MISSING_SHAPE) {
+                if let Some((resource, file)) = provided(MISSING_SHAPE) {
+                    loaded = Some(model(explosion, MISSING_SHAPE, resource, file)?);
+                    bri_console::warn(format!(
+                        "Explosion {}: shape {} did not load, so it shows the rocket's sphere as v20 does",
+                        explosion.name, explosion.shape
+                    ));
+                } else {
+                    bri_console::warn(format!(
+                        "Explosion {}: shape {} is not provided by the game or any Add-On, so it shows without one",
+                        explosion.name, explosion.shape
+                    ));
                 }
-                (Err(error), None) => return Err(error),
+            }
+            if let Some(model) = loaded {
+                models.insert(key.clone(), model);
             }
         }
         Ok(Self {
@@ -344,7 +364,45 @@ mod tests {
         };
         let root = tempfile::tempdir()?;
         let shapes = ExplosionShapes::load(&pack, root.path())?;
-        assert!(shapes.models.is_empty());
+        assert!(
+            shapes.models.is_empty(),
+            "the game's own sphere is not here"
+        );
+        Ok(())
+    }
+    /// v20 draws the rocket's sphere for an explosion shape it cannot load:
+    /// HE Grenade's `Weapon_Rocket Launcher` path (with a space) shows the
+    /// sphere the game's `Weapon_Rocket_Launcher` has.
+    #[test]
+    fn a_shape_no_package_provides_shows_the_rockets_sphere() -> Result<()> {
+        let scratch = crate::testing::ScratchDir::new("missing-explosion-shape")?;
+        let mut pack = crate::testing::explosions::write_pack(scratch.path())?;
+        // The made-up sphere and its texture stand in for the game's.
+        for (from, to) in [
+            (crate::testing::explosions::SHAPE, MISSING_SHAPE),
+            (
+                "test/shapes/blastglow.png",
+                "Add-Ons/Weapon_Rocket_Launcher/blastglow.png",
+            ),
+        ] {
+            let mut r = pack
+                .resources
+                .iter()
+                .find(|r| r.path == from)
+                .context("the made-up sphere")?
+                .clone();
+            r.path = to.into();
+            pack.resources.push(r);
+        }
+        let mut grenade =
+            pack.explosions[&crate::testing::explosions::EXPLOSION.to_ascii_lowercase()].clone();
+        grenade.name = "hegrenadeExplosion".into();
+        grenade.shape = "Add-Ons/Weapon_Rocket Launcher/explosionSphere1.dts".into();
+        pack.explosions.insert("hegrenadeexplosion".into(), grenade);
+        let shapes = ExplosionShapes::load(&pack, scratch.path())?;
+        let model = &shapes.models["hegrenadeexplosion"];
+        assert!(!model.data.vertices.is_empty(), "it draws the sphere");
+        assert_eq!(model.scales.len(), 4, "and plays the sphere's ambient");
         Ok(())
     }
     /// A weapons pack with an explosion shape, and that explosion's name:
