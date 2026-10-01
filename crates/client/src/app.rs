@@ -5686,13 +5686,13 @@ struct LightVolumeState {
     map: Option<bri_render::map_lighting::MapLighting>,
     /// The bake's lightmap leak cleanup, until the map's lightmaps take it.
     leaks: Vec<bri_render::map_lighting::TexelFix>,
-    /// The bake's Dynamic-mode lightmaps and per-texel light visibility,
-    /// for the map's images once Dynamic is chosen.
+    /// The bake's per-texel lightmaps (leftover light and each light's
+    /// share), for the map's images once a mode needs them.
     dynamic: Vec<bri_render::map_lighting::DynamicSheet>,
     /// The Dynamic mode's residual volume is baked (it can follow the rest
     /// of the map bake).
     dynamic_ready: bool,
-    /// The map's images hold the Dynamic lightmaps (the scene uploaded
+    /// The map's images hold the per-texel lightmaps (the scene uploaded
     /// again with them).
     dynamic_equipped: bool,
     uploaded: bool,
@@ -8301,10 +8301,16 @@ impl PlatformApp for App {
                 gpu.patch_images(frame.queue, &scene.images, &changed)?;
             }
         }
-        // Once Dynamic is chosen, the map's lightmaps take its images (what
-        // each light leaves and where each reaches, per texel) and the scene
-        // uploads again with them, so the other modes never carry them.
-        if self.graphics.lighting == 3
+        // The map's lightmaps take the bake's per-texel images (what each
+        // light leaves and how much of it each texel holds) and the scene
+        // uploads again with them, once a mode needs them: Dynamic always;
+        // the Unified modes on a map whose lights can switch (a bulb or tube
+        // to break, an Add-On's rules), so a switched light leaves exactly
+        // the light it baked, the same as in Dynamic. Otherwise no mode
+        // carries them.
+        let rules = self.attempt.as_ref().and_then(|a| a.view.as_ref()).is_some_and(|v| !v.map_lights.is_empty());
+        let switchable = !self.light_volume.light_shapes.is_empty() || rules;
+        if (self.graphics.lighting == 3 || (self.graphics.lighting > 0 && switchable))
             && !self.light_volume.dynamic_equipped
             && self.light_volume.map.is_some()
             && let Some(scene) = self.cpu_scene.as_mut()

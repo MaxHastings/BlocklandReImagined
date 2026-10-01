@@ -1721,23 +1721,27 @@ struct MapLightBinding {
     /// lamps by what they light around the eye.
     channels: Vec<Option<u8>>,
     volume: Option<crate::map_lighting::VisibilityVolume>,
-    /// Per shaded light, its index in `MapLighting::lights` and fitted
-    /// colour, for run-time tints (`set_map_light_tints`).
+    /// Per uploaded light (in uniform order: those objects shade first, as
+    /// `lamps`, then the rest, which only map surfaces' per-texel shares
+    /// read), its index in `MapLighting::lights` and fitted colour, for
+    /// run-time tints (`set_map_light_tints`).
     shaded: Vec<(usize, Vec3)>,
-    /// Tints of the shaded lights now (1 as fitted).
+    /// Tints of the uploaded lights now (1 as fitted).
     tints: Vec<Vec3>,
 }
 /// Light cube faces drawn in one frame (the Dynamic mode), so the map's
 /// lights gain their cubes over a few frames instead of one long one.
 const CUBE_FACES_PER_FRAME: usize = 24;
 /// `MapLights` in scene.wgsl: volume origin and cell, dimensions and 1 when
-/// bound, light count, then each light's position and inner radius, colour
+/// bound, the counts of lights objects shade and of all uploaded (with the
+/// tint flag between), then each light's position and inner radius, colour
 /// and outer radius, and visibility channel (-1 for none) with its tint;
-/// then the Dynamic mode's light cubes: 1 once every cube is drawn, first layer, faces
+/// each `MapLighting::lights` index's place among them (-1 for none); then
+/// the Dynamic mode's light cubes: 1 once every cube is drawn, first layer, faces
 /// per row and a face's share of a layer; face resolution and world texel
 /// per unit of distance; and each light's six face matrices.
 const MAP_LIGHTS_BYTES: usize = MAP_LIGHT_CUBES + 32 + crate::map_lighting::MAX_LIGHTS * 6 * 64;
-const MAP_LIGHT_CUBES: usize = 48 + crate::map_lighting::MAX_LIGHTS * 48;
+const MAP_LIGHT_CUBES: usize = 48 + crate::map_lighting::MAX_LIGHTS * 48 + crate::map_lighting::MAX_LIGHTS * 4;
 impl MapLightBinding {
     /// `every_light`: shade every recovered light (the Dynamic mode, where
     /// light cubes stand in for visibility channels), not only those with a
@@ -1804,26 +1808,40 @@ impl MapLightBinding {
                 dims[2] as f32,
                 1.0,
             ];
-            let lights: Vec<_> = lighting
-                .lights
-                .iter()
-                .enumerate()
-                .filter(|(_, l)| every_light || l.channel.is_some())
-                .collect();
-            let count = lights.len().min(crate::map_lighting::MAX_LIGHTS);
-            words.extend([f32::from_bits(count as u32), 0.0, 0.0, 0.0]);
-            for &(index, l) in &lights[..count] {
+            // Objects shade the lights with a channel (every light in the
+            // Dynamic mode); the rest follow, for map surfaces' per-texel
+            // shares alone.
+            let on_objects = |l: &crate::map_lighting::MapLight| every_light || l.channel.is_some();
+            let mut lights: Vec<_> = lighting.lights.iter().enumerate().take(crate::map_lighting::MAX_LIGHTS).collect();
+            lights.sort_by_key(|(_, l)| !on_objects(l));
+            let count = lights.iter().filter(|(_, l)| on_objects(l)).count();
+            words.extend([
+                f32::from_bits(count as u32),
+                0.0,
+                f32::from_bits(lights.len() as u32),
+                0.0,
+            ]);
+            for &(index, l) in &lights {
                 shaded.push((index, Vec3::from(l.color)));
-                lamps.push(crate::shadow::LampLight {
-                    position: Vec3::from(l.position),
-                    color: Vec3::from(l.color),
-                    outer: l.outer,
-                });
+                if on_objects(l) {
+                    lamps.push(crate::shadow::LampLight {
+                        position: Vec3::from(l.position),
+                        color: Vec3::from(l.color),
+                        outer: l.outer,
+                    });
+                    channels.push(l.channel);
+                }
                 words.extend([l.position[0], l.position[1], l.position[2], l.inner]);
                 words.extend([l.color[0], l.color[1], l.color[2], l.outer]);
                 words.extend([l.channel.map_or(-1.0, f32::from), 1.0, 1.0, 1.0]);
-                channels.push(l.channel);
             }
+            // Each `MapLighting::lights` index's place in the uniform.
+            let mut slots = [-1.0f32; crate::map_lighting::MAX_LIGHTS];
+            for (slot, &(index, _)) in lights.iter().enumerate() {
+                slots[index] = slot as f32;
+            }
+            words.resize(12 + crate::map_lighting::MAX_LIGHTS * 12, 0.0);
+            words.extend(slots);
             let bytes: &[u8] = bytemuck::cast_slice(&words);
             uniform[..bytes.len()].copy_from_slice(bytes);
         }
@@ -1854,7 +1872,9 @@ impl MapLightBinding {
             return;
         }
         for (slot, (&(_, color), t)) in self.shaded.iter().zip(&tints).enumerate() {
-            self.lamps[slot].color = color * *t;
+            if let Some(lamp) = self.lamps.get_mut(slot) {
+                lamp.color = color * *t;
+            }
             // Each light is 48 bytes after the 48-byte header; its tint is
             // the last three words.
             let offset = 48 + slot * 48 + 36;

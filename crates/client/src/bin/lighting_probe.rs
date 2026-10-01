@@ -647,7 +647,9 @@ fn main() -> Result<()> {
         light_cubes: dynamic,
         ..ShadowSettings::BEST
     };
-    if let Some(u) = unified.as_ref().filter(|_| dynamic) {
+    // As the client: the per-texel lightmaps in Dynamic, and in the Unified
+    // modes on a map with bulbs or tubes.
+    if let Some(u) = unified.as_ref().filter(|_| dynamic || !light_shapes.is_empty()) {
         let equipped = bri_render::map_lighting::DynamicSheet::equip(&u.dynamic, &mut scene);
         println!("Dynamic lightmaps: {} sheets, equipped {equipped}", u.dynamic.len());
     }
