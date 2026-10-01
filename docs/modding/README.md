@@ -137,7 +137,7 @@ parameters, so a typo shows up in `bri-addon-check`, not mid-game.
 `name`, and optionally `args` (a list of `"int"`, `"float"`, `"string"` or
 `"bool"`, for example `"args": ["int"]` for `cmd_gift(player, amount)`),
 `cooldown_ticks` per player, `admin: true` to refuse non-administrators,
-`aim_reach` to have the engine resolve what the player is aiming at
+`aim_reach` (up to 1000 units) to have the engine resolve what the player is aiming at
 (read it with `aim()`), and `tool_only: true` for a command only an image
 runs (its `commands`, section 5): typed in chat or sent from a HUD it is
 refused, so nobody types a gun's `/fire` or `/reload`. Players send a
@@ -388,14 +388,17 @@ true), `admin` (administrators may copy any brick; default true),
 v20's Duplorcator did; default false) and, for a stack, `limited` (keep
 the stack on its side of the clicked brick: going up, nothing reaching
 below its bottom). `highlight_copy(p, [r, g, b, a], seconds)` then lights
-the copied bricks in the palette colour nearest that one, glowing, for
-everyone to see, and gives them their own colours back after; a copy
+the copied bricks in the palette colour nearest that one (`()` for each
+brick's own), glowing, for everyone to see, and gives them their own
+colours back after; a copy
 takes a lit brick as it is underneath. An Add-On with `on_copy` in its
 behaviour hears `on_copy(player, #{ action, name, bricks, total,
 limit_reached, refused, error, message })` instead of the player getting
 the engine's message (`action` is `"select"`, `"save"` or `"load"`), and
-with `on_place`, `on_place(player, #{ planted, bricks, error, message })`
-after the player plants its copy.
+with `on_place`, `on_place(player, #{ planted, bricks, error, message,
+failed })` after the player plants its copy (`failed` counts the bricks
+each plant error kept out, `#{ float: 2, overlap: 1 }`; a partial plant
+tries a floating brick again once the rest are in).
 
 Copies can be kept by name on the host. `save_copy(p, name)` keeps the copy
 the player holds; `load_copy(p, name, limit, tool[, #{ partial }])` gives
@@ -643,7 +646,10 @@ always), with v20's `serverCmdShiftBrick` arguments: declare `"args":
 player's facing, plates up, and whether it was the super shift),
 `["int"]` for `rotate` (1 clockwise seen from above, or -1), and none for
 `plant`. `seat` takes the next and previous seat keys on foot, with 1 or
--1 (`["int"]`). A duplicator's selection box uses them.
+-1 (`["int"]`). A duplicator's selection box uses them. `mount` and
+`unmount` run as the image comes into and leaves the holder's hand
+(v20's `onMount` and `onUnMount`), however it happens; declare the
+`unmount` command `while_dead`.
 
 An item with no `image` is picked up but held by nobody: an ammo box or a
 health pack whose `on_pickup` answers `"take"`. Every item needs a

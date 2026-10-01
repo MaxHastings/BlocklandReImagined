@@ -215,7 +215,9 @@ pub enum Op {
     /// selection. Everyone sees it.
     HighlightCopy {
         player: u64,
-        color: [f32; 4],
+        /// `None` lights them in their own colours (only the glow, as the
+        /// New Duplicator did).
+        color: Option<[f32; 4]>,
         seconds: f32,
     },
     /// Keep the copy `player` holds on the host under `name` (see
@@ -806,7 +808,11 @@ impl Op {
                     && item(tool)
             }
             Self::HighlightCopy { color, seconds, .. } => {
-                color.iter().all(|c| (0.0..=1.0).contains(c)) && (0.0..=60.0).contains(seconds)
+                color
+                    .iter()
+                    .flatten()
+                    .all(|c| (0.0..=1.0).contains(c))
+                    && (0.0..=60.0).contains(seconds)
             }
             Self::ShowBox { area, tool, .. } => match area {
                 Some((min, max)) => item(tool) && span(min, max),

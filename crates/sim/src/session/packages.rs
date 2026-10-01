@@ -2375,6 +2375,44 @@ impl Session {
         }
     }
 
+    /// Images' `unmount` and `mount` commands for every right hand whose
+    /// image changed since the last tick (v20 `onUnMount`, `onMount`).
+    fn deliver_image_mounts(&mut self) {
+        if self.packages.is_none() {
+            return;
+        }
+        let owners: Vec<OwnerId> = self.peers.keys().copied().collect();
+        self.held_images.retain(|owner, _| owners.contains(owner));
+        for owner in owners {
+            let now = self
+                .weapons
+                .image_id(bri_weapons::ActorId(owner), 0)
+                .map(str::to_string);
+            if now.as_ref() == self.held_images.get(&owner) {
+                continue;
+            }
+            let before = match &now {
+                Some(image) => self.held_images.insert(owner, image.clone()),
+                None => self.held_images.remove(&owner),
+            };
+            let command = |image: &Option<String>, unmount: bool| {
+                let image = self.weapons.pack.images.get(image.as_ref()?)?;
+                if unmount {
+                    image.commands.unmount.clone()
+                } else {
+                    image.commands.mount.clone()
+                }
+            };
+            let (left, came) = (command(&before, true), command(&now, false));
+            if let Some(command) = left {
+                self.addon_tool_command(owner, &command, Vec::new());
+            }
+            if let Some(command) = came {
+                self.addon_tool_command(owner, &command, Vec::new());
+            }
+        }
+    }
+
     /// A client asked to run a package command.
     /// A command typed in chat (`/sell stone`) names no package, like any
     /// other slash command: the host finds the package that declares it
@@ -2680,6 +2718,7 @@ impl Session {
     /// Package work for one tick: entity thinking and movement, world
     /// streaming around players, and `on_tick` hooks.
     pub(super) fn step_packages(&mut self) -> Result<()> {
+        self.deliver_image_mounts();
         self.deliver_deaths();
         self.deliver_loadouts();
         self.deliver_spawns();

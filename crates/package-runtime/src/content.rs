@@ -240,6 +240,9 @@ pub struct Behaviour {
     #[serde(default)]
     pub policies: Vec<String>,
 }
+/// Farthest a command's `aim_reach` looks: the New Duplicator selected
+/// bricks up to 1000 units away.
+pub const MAX_AIM_REACH: f32 = 1000.0;
 /// Decisions the engine owns the mechanism for and asks packages about.
 pub const POLICIES: &[&str] = &[
     // A dead player asking to come back.
@@ -255,7 +258,8 @@ pub struct CommandDef {
     #[serde(default)]
     pub args: Vec<ArgType>,
     /// When set, the engine resolves the caller's aim against bricks up to
-    /// this distance and passes the hit to the script as `aim()`.
+    /// this distance (at most [`MAX_AIM_REACH`]) and passes the hit to the
+    /// script as `aim()`.
     #[serde(default)]
     pub aim_reach: Option<f32>,
     /// Minimum ticks between two uses by one player.
@@ -343,8 +347,8 @@ impl Behaviour {
             );
             if let Some(reach) = c.aim_reach {
                 ensure!(
-                    reach.is_finite() && (0.0..=64.0).contains(&reach),
-                    "aim_reach must be 0 to 64"
+                    reach.is_finite() && (0.0..=MAX_AIM_REACH).contains(&reach),
+                    "aim_reach must be 0 to {MAX_AIM_REACH}"
                 );
             }
         }

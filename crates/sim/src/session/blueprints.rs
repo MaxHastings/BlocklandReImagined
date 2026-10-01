@@ -198,10 +198,15 @@ impl Session {
     }
 
     /// Light the bricks `owner`'s copy was taken from in the palette
-    /// colour nearest `rgba`, glowing, for `seconds`.
-    pub fn highlight_copy(&mut self, owner: OwnerId, rgba: [f32; 4], seconds: f32) -> Result<()> {
+    /// colour nearest `rgba` (or their own), glowing, for `seconds`.
+    pub fn highlight_copy(
+        &mut self,
+        owner: OwnerId,
+        rgba: Option<[f32; 4]>,
+        seconds: f32,
+    ) -> Result<()> {
         let ids = self.copy_originals(owner)?;
-        let color = self.closest_paint(rgba);
+        let color = rgba.map(|rgba| self.closest_paint(rgba));
         self.light_bricks(&ids, color, super::highlight::GLOW, seconds)
     }
 
@@ -425,17 +430,26 @@ impl Session {
             .copies
             .get(&owner)
             .map_or((None, false), |c| (Some(c.package.clone()), c.partial));
-        let planted = if partial {
+        let (planted, refused) = if partial {
             match self.simulation.plant_each(&actor, bricks) {
-                (ids, _) if !ids.is_empty() => Ok(ids),
-                (_, error) => Err(error.unwrap_or_else(|| anyhow::anyhow!("Nothing to plant"))),
+                (ids, refused) if !ids.is_empty() => (Ok(ids), refused),
+                (_, mut refused) => {
+                    let first = if refused.is_empty() {
+                        anyhow::anyhow!("Nothing to plant")
+                    } else {
+                        refused.remove(0)
+                    };
+                    (Err(first), refused)
+                }
             }
         } else {
-            self.simulation.plant_group(&actor, bricks)
+            (self.simulation.plant_group(&actor, bricks), Vec::new())
         };
         if let Some(package) = package {
             let count = planted.as_ref().map_or(0, Vec::len);
-            self.report_place(&package, owner, count, total, planted.as_ref().err());
+            let mut failures: Vec<&anyhow::Error> = planted.as_ref().err().into_iter().collect();
+            failures.extend(&refused);
+            self.report_place(&package, owner, count, total, &failures);
         }
         let ids = planted?;
         if let Some(peer) = self.peers.get_mut(&owner) {

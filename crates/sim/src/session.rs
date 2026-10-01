@@ -705,6 +705,9 @@ pub struct Session {
     copies: BTreeMap<OwnerId, blueprints::HeldCopy>,
     /// Copies being saved or loaded by name, and where they are kept.
     saved_copies: copy_store::SavedCopies,
+    /// The image each player held in their right hand last tick, for
+    /// images' `mount` and `unmount` commands.
+    held_images: BTreeMap<OwnerId, String>,
     /// Bricks' mirror images, found as mirrored copies are placed.
     mirrors: crate::mirror::Mirrors,
     /// v20 `%client.lastPrint[%ar]`: each player's last applied print per
@@ -807,6 +810,7 @@ impl Session {
             blueprints: BTreeMap::new(),
             copies: BTreeMap::new(),
             saved_copies: Default::default(),
+            held_images: BTreeMap::new(),
             mirrors: Default::default(),
             last_prints: BTreeMap::new(),
             avatar_catalog: None,

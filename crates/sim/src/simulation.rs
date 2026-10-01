@@ -590,29 +590,48 @@ impl Simulation {
     pub fn plant_group(&mut self, actor: &Actor, bricks: Vec<Brick>) -> Result<Vec<BrickId>> {
         self.place_group(actor, bricks, false)
     }
-    /// Plant bricks one at a time in order, as v20's Duplorcator planted a
+    /// Plant bricks one at a time in order, as v20's duplicators planted a
     /// copy: each passes every plant rule but reach against the world as
     /// it stands, the bricks planted before it included, and one that
-    /// does not is skipped. The planted ids, and the first refusal.
+    /// does not is skipped. A brick with nothing under it yet is tried
+    /// again after the rest, as long as more get planted, so the order of
+    /// a copy never leaves a brick floating that its own bricks hold up.
+    /// The planted ids, and why each other brick was refused.
     pub fn plant_each(
         &mut self,
         actor: &Actor,
         bricks: Vec<Brick>,
-    ) -> (Vec<BrickId>, Option<anyhow::Error>) {
+    ) -> (Vec<BrickId>, Vec<anyhow::Error>) {
         let mut ids = Vec::with_capacity(bricks.len());
-        let mut first = None;
-        for brick in bricks {
-            match self.plant_one(actor, brick) {
-                Ok(id) => ids.push(id),
-                Err(error) => {
-                    first.get_or_insert(error);
+        let mut waiting = bricks;
+        let mut refused = Vec::new();
+        loop {
+            let before = ids.len();
+            let mut floating = Vec::new();
+            let mut float_errors = Vec::new();
+            for brick in std::mem::take(&mut waiting) {
+                match self.plant_one(actor, brick.clone()) {
+                    Ok(id) => ids.push(id),
+                    Err(error) => {
+                        if matches!(error.downcast_ref(), Some(PlantFailure::Float)) {
+                            floating.push(brick);
+                            float_errors.push(error);
+                        } else {
+                            refused.push(error);
+                        }
+                    }
                 }
             }
+            if floating.is_empty() || ids.len() == before {
+                refused.extend(float_errors);
+                break;
+            }
+            waiting = floating;
         }
         if !ids.is_empty() {
             self.detect_collisions();
         }
-        (ids, first)
+        (ids, refused)
     }
     fn plant_one(&mut self, actor: &Actor, brick: Brick) -> Result<BrickId> {
         if self.state().bricks.len() >= bri_world::MAX_BRICKS {

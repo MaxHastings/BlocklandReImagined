@@ -1257,15 +1257,24 @@ fn register_api(engine: &mut Engine) {
     engine.register_fn("load_copy", load_copy);
     engine.register_fn(
         "highlight_copy",
-        |player: Dynamic, color: Array, seconds: Dynamic| {
-            let rgb = vector(&color[..color.len().min(3)].to_vec())?;
-            let alpha = match color.get(3) {
-                Some(a) => float(a)?,
-                None => 1.0,
+        |player: Dynamic, color: Dynamic, seconds: Dynamic| {
+            // `()` keeps each brick's own colour and only makes it glow.
+            let color = if color.is_unit() {
+                None
+            } else {
+                let color: Array = color
+                    .try_cast()
+                    .ok_or("highlight_copy's colour is [r, g, b(, a)] or ()")?;
+                let rgb = vector(&color[..color.len().min(3)].to_vec())?;
+                let alpha = match color.get(3) {
+                    Some(a) => float(a)?,
+                    None => 1.0,
+                };
+                Some([rgb[0], rgb[1], rgb[2], alpha])
             };
             push(Op::HighlightCopy {
                 player: id(&player)?,
-                color: [rgb[0], rgb[1], rgb[2], alpha],
+                color,
                 seconds: float(&seconds)?,
             })
         },

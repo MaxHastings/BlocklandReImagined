@@ -589,6 +589,11 @@ impl WeaponsWorld {
             explosions: vec![],
         })
     }
+    /// The id of the image `id` holds in `hand`.
+    pub fn image_id(&self, id: ActorId, hand: u8) -> Option<&str> {
+        let equipped = self.actors.get(&id)?.images.get(hand as usize)?.as_ref()?;
+        Some(&equipped.image)
+    }
     pub fn image_state(&self, id: ActorId, hand: u8) -> Option<(&Image, &State)> {
         let equipped = self.actors.get(&id)?.images.get(hand as usize)?.as_ref()?;
         let image = self.pack.images.get(&equipped.image)?;

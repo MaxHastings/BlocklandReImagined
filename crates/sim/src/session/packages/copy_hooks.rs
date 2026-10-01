@@ -125,22 +125,33 @@ impl Session {
         }
     }
 
-    /// Tell the Add-On whose copy `player` planted how it went. False when
-    /// it has no `on_place`, so the engine speaks instead.
+    /// Tell the Add-On whose copy `player` planted how it went, with why
+    /// each brick left out was refused. False when it has no `on_place`, so
+    /// the engine speaks instead.
     pub(in crate::session) fn report_place(
         &mut self,
         package: &str,
         player: OwnerId,
         planted: usize,
         bricks: usize,
-        error: Option<&anyhow::Error>,
+        failures: &[&anyhow::Error],
     ) -> bool {
         if !self.declares(package, |b| b.on_place) {
             return false;
         }
+        let error = failures.first().copied();
         let mut info = Map::new();
         info.insert("planted".into(), (planted as i64).into());
         info.insert("bricks".into(), (bricks as i64).into());
+        // How many bricks each plant error kept out.
+        let mut failed = Map::new();
+        for failure in failures {
+            let count = failed
+                .entry(plant_error(failure).into())
+                .or_insert_with(|| Dynamic::from_int(0));
+            *count = Dynamic::from_int(count.as_int().unwrap_or(0) + 1);
+        }
+        info.insert("failed".into(), failed.into());
         info.insert(
             "error".into(),
             error.map_or(Dynamic::UNIT, |e| Dynamic::from(plant_error(e).to_string())),

@@ -322,6 +322,15 @@ pub struct ImageCommands {
     /// argument.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seat: Option<String>,
+    /// The image coming into the holder's hand (v20 `onMount`), however it
+    /// got there: the tool drawn, an Add-On mounting it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mount: Option<String>,
+    /// The image leaving the holder's hand (`onUnMount`): the tool put
+    /// away, another mounted, the holder dead or gone. Declare the command
+    /// `while_dead`, since a dying holder lets go too.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unmount: Option<String>,
 }
 impl ImageCommands {
     pub fn is_empty(&self) -> bool {
@@ -334,6 +343,8 @@ impl ImageCommands {
             && self.rotate.is_none()
             && self.plant.is_none()
             && self.seat.is_none()
+            && self.mount.is_none()
+            && self.unmount.is_none()
     }
     /// The commands the client sends itself as a key is pressed with the
     /// image in hand, rather than the host's image running them.
@@ -355,6 +366,8 @@ impl ImageCommands {
                 &self.rotate,
                 &self.plant,
                 &self.seat,
+                &self.mount,
+                &self.unmount,
             ]
                 .into_iter()
                 .any(|c| c.as_deref() == Some(command))
@@ -926,6 +939,8 @@ impl Pack {
                         &image.commands.rotate,
                         &image.commands.plant,
                         &image.commands.seat,
+                        &image.commands.mount,
+                        &image.commands.unmount,
                     ]
                     .into_iter()
                     .all(|c| c.as_deref().is_none_or(is_image_command)),

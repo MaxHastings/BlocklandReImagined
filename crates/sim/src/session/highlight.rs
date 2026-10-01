@@ -31,11 +31,12 @@ pub(super) struct Highlights {
 }
 
 impl Session {
-    /// Show `ids` in palette colour `color` with `effect` for `seconds`.
+    /// Show `ids` in palette colour `color` (or each in its own) with
+    /// `effect` for `seconds`.
     pub(super) fn light_bricks(
         &mut self,
         ids: &[BrickId],
-        color: u8,
+        color: Option<u8>,
         effect: u8,
         seconds: f32,
     ) -> Result<()> {
@@ -45,6 +46,11 @@ impl Session {
                 continue;
             };
             let own = (brick.color, brick.color_effect);
+            let color = color.unwrap_or(match self.highlights.bricks.get(&id) {
+                // Lit already: its colour underneath.
+                Some(lit) if brick.color == lit.shown.0 => lit.color,
+                _ => brick.color,
+            });
             let lit = self.highlights.bricks.entry(id).or_insert(Lit {
                 color: own.0,
                 effect: own.1,
@@ -125,7 +131,7 @@ impl Session {
             n if n > 2000 => 1.5,
             _ => 1.0,
         };
-        self.light_bricks(&bricks, color, GLOW, seconds)?;
+        self.light_bricks(&bricks, Some(color), GLOW, seconds)?;
         let until = self.simulation.state().tick + (seconds * SECOND as f32) as u64;
         self.highlights.groups.insert(group, until);
         Ok(())
