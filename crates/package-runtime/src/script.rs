@@ -19,7 +19,9 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+mod bots;
 mod games;
+pub use bots::BotKindView;
 pub use games::{BrickView, DropView, MAX_BRICKS_LISTED, MinigameView, TeamView};
 
 /// Operation budgets per kind of call.
@@ -132,6 +134,10 @@ pub struct PlayerView {
     /// A bot's spawn brick's owner (`%bot.spawnBrick.client`), if any.
     #[serde(default)]
     pub bot_owner: Option<u64>,
+    /// The package whose rules added this bot (`add_bot`), if a rule did
+    /// rather than a spawn brick.
+    #[serde(default)]
+    pub spawner: Option<String>,
     /// The player this one rides (`getObjectMount`), and on which of its
     /// mount points.
     #[serde(default)]
@@ -343,6 +349,8 @@ pub struct Snapshot {
     /// Bots: player bodies without a connection. [`player`](Self::player)
     /// finds them; `players()` leaves them out.
     pub bots: Vec<PlayerView>,
+    /// The bot kinds enabled Add-Ons provide (`bot_kinds()`).
+    pub bot_kinds: Vec<bots::BotKindView>,
     pub entities: Vec<EntityView>,
     /// Vehicles and other loose physics bodies, and bots (players without
     /// a connection, `object: player`, `definition` their kind, `owner`
@@ -661,6 +669,10 @@ fn player_map(p: &PlayerView) -> Dynamic {
             "bot_owner",
             p.bot_owner
                 .map_or(Dynamic::UNIT, |o| Dynamic::from_int(o as i64)),
+        ),
+        (
+            "spawner",
+            p.spawner.clone().map_or(Dynamic::UNIT, Dynamic::from),
         ),
         (
             "riding",
@@ -1063,10 +1075,10 @@ pub fn entity_map(e: &EntityView) -> Dynamic {
 }
 fn player_key(i: &Invocation, player: &Dynamic) -> Fallible<PlayerKey> {
     let player = id(player)?;
+    // Bots keep state too while they play (a mini-game's rules track
+    // their members alike).
     i.snapshot
-        .players
-        .iter()
-        .find(|p| p.id == player)
+        .player(player)
         .map(|p| p.key.clone())
         .ok_or_else(|| format!("no player {player}").into())
 }
@@ -2098,6 +2110,13 @@ fn register_api(engine: &mut Engine) {
             },
         );
     }
+    engine.register_fn("message_box", |player: Dynamic, title: &str, text: &str| {
+        push(Op::MessageBox {
+            player: id(&player)?,
+            title: title.into(),
+            text: text.into(),
+        })
+    });
     engine.register_fn(
         "ask",
         |player: Dynamic, title: &str, text: &str, command: &str| {
@@ -2134,6 +2153,7 @@ fn register_api(engine: &mut Engine) {
     register_queries(engine);
     register_presentation(engine);
     games::register(engine);
+    bots::register(engine);
 }
 
 /// A copy's options map: `trust` ("build" or "full"), `public_bricks`, `admin`,

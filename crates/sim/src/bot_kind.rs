@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 pub const SCHEMA_VERSION: u32 = 1;
 /// Bot kinds one server knows, over every Add-On.
 pub const MAX_KINDS: usize = 64;
+/// Most first names one kind lists.
+pub const MAX_FIRST_NAMES: usize = 256;
 
 /// One bot kind: its spawn list entry and how its brain plays.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -37,6 +39,9 @@ pub struct BotKind {
     pub memory_seconds: f32,
     /// Whether it fights bots on the other side as well as players.
     pub fights_bots: bool,
+    /// First names rules may call its bots by (Slayer names its bots
+    /// "Bot " and a random first name).
+    pub first_names: Vec<String>,
 }
 impl Default for BotKind {
     fn default() -> Self {
@@ -51,6 +56,7 @@ impl Default for BotKind {
             aim_error_degrees: 5.0,
             memory_seconds: 8.0,
             fights_bots: true,
+            first_names: Vec::new(),
         }
     }
 }
@@ -71,6 +77,16 @@ impl BotKind {
                 && self.name.chars().count() <= 32
                 && !self.name.chars().any(char::is_control),
             "Bot `{}` needs a name of 1-32 characters",
+            self.id
+        );
+        ensure!(
+            self.first_names.len() <= MAX_FIRST_NAMES
+                && self.first_names.iter().all(|n| {
+                    !n.trim().is_empty()
+                        && n.chars().count() <= 16
+                        && !n.chars().any(char::is_control)
+                }),
+            "Bot `{}`: first_names are at most {MAX_FIRST_NAMES} names of 1-16 characters",
             self.id
         );
         let ranges = [

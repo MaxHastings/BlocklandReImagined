@@ -2656,6 +2656,20 @@ fn player_archetype(cx: &Ctx, name: &str) -> Result<(serde_json::Value, Vec<Stri
     Ok((value, gaps))
 }
 
+/// Whether `script` downloads `file` from a website at run time: it names
+/// the file and fetches something over HTTP (`connectToUrl`, an
+/// `HTTPObject` or `TCPObject` get), as Slayer's holiday greeting fetches
+/// its music into `config/client/temp`.
+fn downloads(script: &str, file: &str) -> bool {
+    let script = script.to_ascii_lowercase();
+    let file = file.to_ascii_lowercase();
+    !file.is_empty()
+        && script.contains(&format!("\"{file}\""))
+        && ["connecttourl(", "httpobject", "tcpobject"]
+            .iter()
+            .any(|call| script.contains(call))
+}
+
 fn sounds_and_rest(cx: &mut Ctx) {
     let pending: Vec<Pending> = cx
         .report
@@ -2686,6 +2700,21 @@ fn sounds_and_rest(cx: &mut Ctx) {
                 if let Some(rel) = cx.outputs.get(&file.to_ascii_lowercase()).cloned() {
                     let id = cx.id("sound", &name, &name, &format!("assets/{rel}"));
                     cx.mark(&name, "sound", "converted_with_gaps", vec![id], Some("the audio system reads one fixed pack (role audio); this sound is packaged but nothing plays it by id yet".into()));
+                } else if cx
+                    .script_text(&path)
+                    .is_some_and(|text| downloads(&text, &file))
+                {
+                    // Fetched from a website when the Add-On runs: not a
+                    // gap in the port, and the game downloads nothing.
+                    cx.mark(
+                        &name,
+                        "sound",
+                        "external",
+                        vec![],
+                        Some(format!(
+                            "needs a resource downloaded from an external site, not in the copy ({file})"
+                        )),
+                    );
                 } else {
                     cx.mark(
                         &name,
@@ -2780,6 +2809,14 @@ fn sounds_and_rest(cx: &mut Ctx) {
                 "recognised_only",
                 vec![],
                 Some("not used by an imported vehicle".into()),
+            ),
+            // A sound's settings, read into each sound that names it.
+            "audiodescription" => cx.mark(
+                &name,
+                "sound_description",
+                "consumed",
+                vec![],
+                Some("its volume, looping and 3D are read into each sound that names it".into()),
             ),
             "fxdtsbrickdata" | "itemdata" | "shapebaseimagedata" | "projectiledata"
             | "explosiondata" => {}
@@ -3128,6 +3165,18 @@ fn finish(
                     d.notes
                         .push(format!("port {}: its callbacks are host rules now", port.port));
                 }
+            }
+            // One the Add-On makes at run time, which the port declares.
+            for d in cx.report.datablocks.iter_mut().filter(|d| {
+                port.replaces.iter().any(|r| r.eq_ignore_ascii_case(&d.name))
+                    && matches!(d.status.as_str(), "recognised_only" | "unsupported")
+            }) {
+                d.status = "consumed".into();
+                d.notes.push(format!(
+                    "port {}: its {} declares what this makes at run time",
+                    port.port,
+                    ports::DATABLOCKS
+                ));
             }
         }
         // A global the copy sets at load and a ported function reads: the

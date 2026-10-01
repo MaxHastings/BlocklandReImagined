@@ -893,6 +893,9 @@ datablock ShapeBaseImageData(kitScopeImage) { shapeFile = "./gun.dts"; stateName
     assert_eq!(pack.items[&id("weapon", "kitammoitem")].image, "");
     assert_eq!(pack.items[&id("weapon", "kitammoitem")].ui_name, "Kit Ammo");
     assert_eq!(pack.items[&id("weapon", "kitgunitem")].ui_name, "Kit Gun");
+    // Its sound description is read into the sound, not left over.
+    let description = report.datablocks.iter().find(|d| d.name == "kitClose2d").unwrap();
+    assert_eq!(description.status, "consumed", "{description:?}");
     std::fs::remove_dir_all(out.parent().unwrap()).unwrap();
     std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
 }
@@ -1009,4 +1012,46 @@ fn a_required_community_add_on_becomes_a_dependency_on_its_import() {
         serde_json::from_slice(&std::fs::read(root.join("package/package.json")).unwrap()).unwrap();
     assert_eq!(manifest["dependencies"], serde_json::json!({ "weapon_core_kit": "*" }));
     std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// A sound an Add-On downloads from a website when it runs is not in the
+/// copy and not a gap in its port: the report says it needs that download,
+/// apart from a sound file the copy simply lacks.
+#[test]
+fn a_sound_the_add_on_downloads_is_reported_as_external() {
+    let root = fresh("jingle-source");
+    let source = root.with_file_name("Script_Synthetic_Jingle");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(source.join("server.cs"), "exec(\"./jingle.cs\");\n").unwrap();
+    std::fs::write(
+        source.join("jingle.cs"),
+        r#"
+%music = "config/client/temp/jingle.ogg";
+if(!isFile(%music))
+    connectToUrl("http://example.invalid/jingle.ogg", "GET", %music);
+datablock AudioProfile(JingleMusic) { fileName = "config/client/temp/jingle.ogg"; description = AudioClosest3d; preload = true; };
+datablock AudioProfile(JingleBell) { fileName = "./bell.wav"; description = AudioClosest3d; preload = true; };
+"#,
+    )
+    .unwrap();
+    let out = fresh("jingle");
+    let report = import(&Options {
+        input: source.clone(),
+        out: out.clone(),
+        ..Default::default()
+    })
+    .unwrap();
+    let status = |name: &str| {
+        let d = report.datablocks.iter().find(|d| d.name == name).unwrap();
+        (d.status.clone(), d.notes.join("; "))
+    };
+    let (music, notes) = status("JingleMusic");
+    assert_eq!(music, "external", "{notes}");
+    assert!(notes.contains("downloaded from an external site, not in the copy"), "{notes}");
+    assert_eq!(status("JingleBell").0, "recognised_only");
+    assert_eq!(report.summary.datablocks_external, 1);
+    assert_eq!(report.summary.datablocks_recognised_only, 1);
+    assert!(report.markdown().contains("Datablocks needing a download (not in the copy) | 1"));
+    std::fs::remove_dir_all(out.parent().unwrap()).unwrap();
+    std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
 }

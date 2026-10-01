@@ -820,6 +820,13 @@ pub enum Op {
         player: u64,
         error: String,
     },
+    /// Tell one player something in a message box they close with OK
+    /// (v20's `MessageBoxOK` from the server).
+    MessageBox {
+        player: u64,
+        title: String,
+        text: String,
+    },
     /// Ask one player a yes or no question (v20's `MessageBoxYesNo` from
     /// the server): yes sends the package's own `command`, which takes no
     /// arguments, as if they had typed it; no does nothing.
@@ -904,12 +911,17 @@ pub enum Op {
     },
     /// Put an image in a worn slot (2 or 3) of a player, tinted with a
     /// palette colour (`mountImage(%image, 3)`: a flag on the back), or
-    /// take it off with `None`.
+    /// take it off with `None`. With `keep`, no other package replaces or
+    /// takes off that image while it is worn (Slayer CTF's
+    /// `Player::mountImage` and `unMountImage` overrides, which guard the
+    /// flag).
     WearImage {
         player: u64,
         slot: u8,
         image: Option<String>,
         paint: Option<u8>,
+        #[serde(default)]
+        keep: bool,
     },
     /// Set a mini-game's teams and team rules, as Slayer's team list does:
     /// a team with an `id` keeps it and its members, one without is new,
@@ -1057,6 +1069,38 @@ pub enum Op {
     SetRespawnTime {
         player: u64,
         ms: Option<u32>,
+    },
+    /// Put a bot in a mini-game (Slayer's `addBotToGame`): a player body
+    /// without a connection, of a bot `kind` an enabled Add-On provides
+    /// (`bot_kinds()`), playing with the engine's bot brain. It joins
+    /// `game`, and `team` when given, and spawns as a member does; the
+    /// rules hear it join as any member. It is this package's until
+    /// `RemoveBot` or its game ends, and counts toward the server's bot
+    /// limit.
+    AddBot {
+        game: u64,
+        team: Option<u64>,
+        kind: String,
+        name: String,
+    },
+    /// Take away a bot this package added.
+    RemoveBot {
+        bot: u64,
+    },
+    /// Stop or restart the brain of a bot this package added (Slayer's
+    /// `stopHoleLoop` and `resetHoleLoop`): a resting bot stands still and
+    /// holds its fire.
+    RestBot {
+        bot: u64,
+        rest: bool,
+    },
+    /// Put a tool slot in the hand of a bot this package added, or put its
+    /// tools away with `None` (`AiPlayer::setWeapon`, Slayer's
+    /// `useRandomTool`). Its brain fights with what it holds, arming
+    /// itself only when its hand holds no weapon.
+    BotTool {
+        bot: u64,
+        slot: Option<u8>,
     },
     /// Fly a player's camera along knots (`setControlObject(pathCamera)`),
     /// their body standing still, or with `None` hand control back. The
@@ -1295,6 +1339,10 @@ pub enum SoundAt {
 pub const MAX_TOOL_SLOTS: usize = 10;
 /// The longest respawn time `set_respawn_time` sets (Slayer's 999 s).
 pub const MAX_RESPAWN_MS: u32 = 999_999;
+/// Longest bot name, in characters (a player name's limit).
+pub const MAX_BOT_NAME_CHARS: usize = 23;
+/// Bots one server runs at once, from spawn bricks and rules together.
+pub const MAX_BOTS: usize = 16;
 /// Mount points a body may have (`mountObject`'s node).
 pub const MAX_MOUNT_POINTS: usize = 8;
 /// Body scales `set_scale` allows.
@@ -1377,7 +1425,8 @@ impl Op {
             | Self::ShowReport { .. }
             | Self::TellMinigame { .. }
             | Self::PrintMinigame { .. }
-            | Self::Ask { .. } => "chat",
+            | Self::Ask { .. }
+            | Self::MessageBox { .. } => "chat",
             Self::Sound { .. }
             | Self::Beam { .. }
             | Self::PlayThread { .. }
@@ -1414,6 +1463,10 @@ impl Op {
             | Self::SetSetting { .. }
             | Self::SetZonePeriod { .. }
             | Self::ReportColumn { .. } => "minigame",
+            Self::AddBot { .. }
+            | Self::RemoveBot { .. }
+            | Self::RestBot { .. }
+            | Self::BotTool { .. } => "bots",
             Self::SetBrickItem { .. } | Self::SetBrickColor { .. } => "world.edit",
             Self::FireBrickInput { .. }
             | Self::FireGameInput { .. }
@@ -1488,7 +1541,18 @@ impl Op {
             | Self::WrenchCopy { .. }
             | Self::UnmountImage { .. }
             | Self::HoldRespawn { .. }
+            | Self::RemoveBot { .. }
+            | Self::RestBot { .. }
             | Self::UnmountObject { .. } => true,
+            Self::BotTool { slot, .. } => slot.is_none_or(|s| usize::from(s) < MAX_TOOL_SLOTS),
+            Self::AddBot { kind, name, .. } => {
+                !kind.is_empty()
+                    && kind.len() <= 96
+                    && kind.chars().all(|c| c.is_ascii_alphanumeric() || "._:/-".contains(c))
+                    && !name.trim().is_empty()
+                    && name.chars().count() <= MAX_BOT_NAME_CHARS
+                    && !name.chars().any(char::is_control)
+            }
             Self::MountObject {
                 mount,
                 rider,
@@ -1874,6 +1938,11 @@ impl Op {
                     && glam_length(velocity) <= MAX_FIRE_SPEED
             }
             Self::Heal { amount, .. } => amount.is_finite() && (0.0..=100_000.0).contains(amount),
+            Self::MessageBox { title, text, .. } => {
+                title.chars().count() <= 64
+                    && text.chars().count() <= MAX_PRINT_CHARS
+                    && ![title, text].iter().any(|t| t.chars().any(|c| c.is_control() && c != '\n'))
+            }
             Self::Ask {
                 title,
                 text,
@@ -2001,6 +2070,10 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::HoldRespawn { .. } => "hold_respawn",
         Op::SetTools { .. } => "set_tools",
         Op::SetRespawnTime { .. } => "set_respawn_time",
+        Op::AddBot { .. } => "add_bot",
+        Op::RemoveBot { .. } => "remove_bot",
+        Op::RestBot { .. } => "rest_bot",
+        Op::BotTool { .. } => "bot_tool",
         Op::FollowPath { .. } => "follow_path",
         Op::Camera {
             camera: CameraOp::Free,
@@ -2084,6 +2157,7 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::ShowShapes { shapes, .. } if shapes.is_empty() => "hide_shapes",
         Op::ShowShapes { .. } => "show_shapes",
         Op::Ask { .. } => "ask",
+        Op::MessageBox { .. } => "message_box",
         Op::Sound {
             at: SoundAt::Position(_),
             ..

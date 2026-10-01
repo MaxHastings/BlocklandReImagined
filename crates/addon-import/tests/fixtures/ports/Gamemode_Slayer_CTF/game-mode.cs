@@ -213,3 +213,57 @@ function serverCmdDropFlag(%client)
 		return;
 	%client.player.dropFlag();
 }
+
+function Slayer_CTF::onAdd(%this)
+{
+	%this.flags = new SimSet();
+}
+
+function Slayer_CTF::onRemove(%this)
+{
+	%this.flags.delete();
+}
+
+function Slayer_CTF::onGameModeStart(%this)
+{
+	%this.resetFlags(false);
+}
+
+function Slayer_CTF::onGameModeEnd(%this)
+{
+	%this.resetFlags(true);
+	%team.CTF_numFlagReturns = "";
+}
+
+function Slayer_CTF::onMiniGameBrickRemoved(%this, %brick, %type)
+{
+	%brick.ctfTrigger.delete();
+}
+
+function Player::getFlagImage(%this)
+{
+	return %this.getMountedImage($Slayer::Server::CTF::flagImageSlot);
+}
+
+function Player::isCarryingFlag(%this)
+{
+	return %this.getMountedImage($Slayer::Server::CTF::flagImageSlot).className $= "slyrCTF_FlagImage";
+}
+
+function Player::mountImage(%this,%image,%slot,%a,%b)
+{
+	if(%this.getMountedImage(%slot).className $= "SlyrCTF_FlagImage")
+		return;
+}
+
+function Player::unMountImage(%this,%slot)
+{
+	if(!%this.allowFlagRemoval && %this.getMountedImage(%slot).className $= "SlyrCTF_FlagImage")
+		return;
+}
+
+function serverCmdSetWrenchData(%client,%info)
+{
+	if(%brick.getDatablock().slyrType $= "CTF_Flag")
+		%brick.resetFlag();
+}

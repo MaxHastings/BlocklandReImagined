@@ -708,6 +708,13 @@ pub struct StateKey {
     /// Saved by the host and restored after a restart.
     #[serde(default = "yes")]
     pub persist: bool,
+    /// A server-wide map from mini-game id (as text) to that game's value:
+    /// a game's entry saves with a build saved by whoever runs it and comes
+    /// back under the game the build loads into (Slayer's fly-through path,
+    /// kept beside its saved mini-game config). The rules remove a game's
+    /// entry when it ends, as they keep it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub per_minigame: bool,
 }
 fn yes() -> bool {
     true
@@ -845,6 +852,16 @@ impl Behaviour {
             ensure!(
                 def.visible != Visible::Owner,
                 "server-wide key `{key}` has no owner; use \"everyone\" or \"server\""
+            );
+            ensure!(
+                !def.per_minigame || def.default.as_object().is_some_and(|m| m.is_empty()),
+                "per-mini-game key `{key}` is a map by mini-game id: its default is {{}}"
+            );
+        }
+        for (key, def) in &self.state.player {
+            ensure!(
+                !def.per_minigame,
+                "player key `{key}` cannot be per mini-game; make it server-wide"
             );
         }
         ensure!(

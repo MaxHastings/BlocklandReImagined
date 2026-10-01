@@ -68,3 +68,30 @@ activatePackage(Slayer_Stand_In_Module);
 
 registerOutputEvent("Minigame", "StartFlyThrough", "", 0);
 $Slayer::Server::Events::RestrictedEvent__["Minigame", "startFlyThrough"] = 3;
+
+function serverCmdDeleteFlyCam(%client)
+{
+	%mini = getMinigameFromObject(%client);
+	%mini.flyCam.delete();
+	%file = %mini.configFile @ ".pathcam";
+	fileDelete(%file);
+}
+
+package Slayer_Stand_In_Path_Files
+{
+	function Slayer_PrefHandlerSG::importMinigamePreferences(%this, %path, %mini)
+	{
+		%file = %path @ ".pathcam";
+		%cam = %mini.createPathCamera(%file);
+		Slayer_PathCamData.addNode(%cam);
+		return parent::importMinigamePreferences(%this, %path, %mini);
+	}
+
+	function Slayer_PrefHandlerSG::exportMinigamePreferences(%this, %path, %mini)
+	{
+		%file = %path @ ".pathcam";
+		%line = %mini.flyCam.nodeJump[0];
+		return parent::exportMinigamePreferences(%this, %path, %mini);
+	}
+};
+activatePackage(Slayer_Stand_In_Path_Files);

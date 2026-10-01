@@ -41,6 +41,11 @@ fn explosion_loop(delay_ms: u32) -> Vec<EventRow> {
     ]
 }
 
+/// Longest the host may go without sending the player anything. Only a
+/// hang guard: a debug build under a heavily loaded gate was measured going
+/// 16 s between messages, so this is far from any working host.
+const STALL: Duration = Duration::from_secs(300);
+
 /// Ten seconds of host time with the loop running: (explosions the player
 /// saw, most live loop rockets it saw, the host's report).
 async fn run_loop(delay_ms: u32) -> Result<(usize, usize, server::ServerReport)> {
@@ -71,28 +76,30 @@ async fn run_loop(delay_ms: u32) -> Result<(usize, usize, server::ServerReport)>
     let mut explosions = 0;
     let mut most_projectiles = 0;
     let start = player.replica.tick;
-    tokio::time::timeout(Duration::from_secs(120), async {
-        while player.replica.tick < start + 1200 {
-            player.receive().await.context("player connection failed")?;
-            let fresh = player.replica.take_cues();
-            explosions += fresh
-                .iter()
-                .filter(|c| matches!(&c.kind, CueKind::WeaponEffect { definition, .. } if definition == "rocketExplosion"))
-                .count();
-            // The player's own join `spawnProjectile` is not the loop's.
-            let rockets = player
-                .replica
-                .weapons
-                .projectiles
-                .iter()
-                .filter(|p| p.definition.contains("rocketlauncher"))
-                .count();
-            most_projectiles = most_projectiles.max(rockets);
-        }
-        Result::<()>::Ok(())
-    })
-    .await
-    .context("the host stopped sending updates")??;
+    // Run for 1200 host ticks, however long a busy machine takes to simulate
+    // them: a debug build under the gate's parallel load needs minutes. Only
+    // a host that stops sending altogether fails here; it sends at least a
+    // heartbeat every few ticks, so minutes without a message are a stall.
+    while player.replica.tick < start + 1200 {
+        tokio::time::timeout(STALL, player.receive())
+            .await
+            .context("the host stopped sending updates")?
+            .context("player connection failed")?;
+        let fresh = player.replica.take_cues();
+        explosions += fresh
+            .iter()
+            .filter(|c| matches!(&c.kind, CueKind::WeaponEffect { definition, .. } if definition == "rocketExplosion"))
+            .count();
+        // The player's own join `spawnProjectile` is not the loop's.
+        let rockets = player
+            .replica
+            .weapons
+            .projectiles
+            .iter()
+            .filter(|p| p.definition.contains("rocketlauncher"))
+            .count();
+        most_projectiles = most_projectiles.max(rockets);
+    }
     player.close();
     Ok((explosions, most_projectiles, server.stop().await?))
 }

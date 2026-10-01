@@ -663,6 +663,10 @@ fn slayer_ports_apply_with_their_rules() {
                 let camera = report.datablocks.iter().find(|d| d.name == name).unwrap();
                 assert_eq!(camera.status, "consumed", "{camera:?}");
             }
+            // The loop's `slayerSound`, renamed at run time, is what the
+            // port's datablocks.cs declares.
+            let voices = report.datablocks.iter().find(|d| d.name == "slayerSound").unwrap();
+            assert_eq!(voices.status, "consumed", "{voices:?}");
         }
         ids.push(ns.to_owned());
         ids.push(applied.rules.as_ref().expect("rules").id.clone());

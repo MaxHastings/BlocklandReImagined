@@ -174,6 +174,29 @@ pub struct Probes {
     /// The in-process server's performance when this game hosts.
     pub host: Option<Arc<std::sync::Mutex<bri_net::server::ServerPerf>>>,
 }
+/// How long loading may stand still while it waits on the server before it
+/// fails. A dead or unreachable server fails sooner, at QUIC's idle timeout.
+pub const PEER_STALL: Duration = Duration::from_secs(60);
+/// Resolves once `progress` has not advanced for [`PEER_STALL`] while its
+/// stage waits on the server.
+async fn stalled(progress: &bri_progress::Progress) -> anyhow::Error {
+    let mut check = tokio::time::interval(Duration::from_secs(1));
+    let mut last = progress.snapshot();
+    let mut since = tokio::time::Instant::now();
+    loop {
+        let now = check.tick().await;
+        let snapshot = progress.snapshot();
+        if snapshot.revision != last.revision || !snapshot.stage.waits_on_peer() {
+            last = snapshot;
+            since = now;
+        } else if now.duration_since(since) >= PEER_STALL {
+            return anyhow::anyhow!(
+                "The server stopped responding ({})",
+                snapshot.status()
+            );
+        }
+    }
+}
 pub struct Worker {
     pub probes: Arc<std::sync::OnceLock<Probes>>,
     requests: mpsc::Sender<Request>,
@@ -186,7 +209,16 @@ pub struct Worker {
     task: Option<tokio::task::JoinHandle<()>>,
 }
 impl Worker {
-    pub fn start<F>(runtime: &tokio::runtime::Handle, connect: F) -> Self
+    /// Run `connect`, which reports its loading into `progress`, then the
+    /// connection it opens. Loading fails only when it stops advancing while
+    /// it waits on the server ([`PEER_STALL`]); this computer's own work
+    /// (checking content, loading the map, building bricks) never times out,
+    /// however big the build or slow the machine, and the player can cancel.
+    pub fn start<F>(
+        runtime: &tokio::runtime::Handle,
+        progress: bri_progress::Progress,
+        connect: F,
+    ) -> Self
     where
         F: Future<Output = Result<Connected>> + Send + 'static,
     {
@@ -200,7 +232,8 @@ impl Worker {
         let task = runtime.spawn(async move {
             let connected=tokio::select! {
                 _=&mut stopped=>return,
-                result=tokio::time::timeout(Duration::from_secs(120),connect)=>result.context("Connection/content preparation timed out").and_then(|r|r),
+                result=connect=>result,
+                error=stalled(&progress)=>Err(error),
             };
             let result=match connected {
                 Ok(mut connection)=>{
@@ -529,6 +562,64 @@ async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// The failure a worker reports, on a paused clock that skips ahead
+    /// whenever every task waits.
+    async fn failure(worker: &mut Worker) -> String {
+        match worker.events.recv().await {
+            Some(Event::Failed(reason)) => reason,
+            _ => panic!("the worker ended without a failure"),
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_host_preparing_a_big_build_is_never_timed_out() {
+        // The old fixed 120 s limit failed a slow PC still loading its own
+        // map. Local work runs as long as it takes.
+        let progress = bri_progress::Progress::new();
+        let reporting = progress.clone();
+        let runtime = tokio::runtime::Handle::current();
+        let mut worker = Worker::start(&runtime, progress, async move {
+            reporting.begin(
+                bri_progress::Stage::LoadingMap,
+                bri_progress::Unit::Steps,
+                None,
+            );
+            tokio::time::sleep(Duration::from_secs(600)).await;
+            anyhow::bail!("loaded")
+        });
+        assert_eq!(failure(&mut worker).await, "loaded");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_server_that_stops_answering_fails_once_nothing_advances() {
+        let progress = bri_progress::Progress::new();
+        let reporting = progress.clone();
+        let start = tokio::time::Instant::now();
+        let runtime = tokio::runtime::Handle::current();
+        let mut worker = Worker::start(&runtime, progress, async move {
+            // A slow world download that keeps arriving is not a stall.
+            reporting.begin(
+                bri_progress::Stage::ReceivingWorld,
+                bri_progress::Unit::Bytes,
+                Some(1000),
+            );
+            for _ in 0..10 {
+                tokio::time::sleep(PEER_STALL / 2).await;
+                reporting.advance(10);
+            }
+            // Then nothing more arrives.
+            std::future::pending::<Result<Connected>>().await
+        });
+        let reason = failure(&mut worker).await;
+        assert!(reason.starts_with("The server stopped responding"), "{reason}");
+        // Five slow half-stalls of arrivals, then one whole stall of nothing.
+        let waited = start.elapsed();
+        let stall = PEER_STALL * 6;
+        assert!(
+            (stall..=stall + Duration::from_secs(2)).contains(&waited),
+            "failed after {waited:?}"
+        );
+    }
     #[test]
     fn a_slow_or_lost_answer_costs_its_request_not_the_connection() {
         let start = std::time::Instant::now();

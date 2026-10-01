@@ -149,3 +149,21 @@ new ScriptObject(Slayer_PrefSO : Slayer_DefaultPrefSO)
 	permissionLevel = $Slayer::PermissionLevel["Any"];
 	variable = "%mini.eorrDisplayVictory";
 };
+new ScriptObject(Slayer_PrefSO : Slayer_DefaultPrefSO)
+{
+	defaultValue = 3;
+	permissionLevel = $Slayer::PermissionLevel["Any"];
+	variable = "%mini.points_killBot";
+};
+new ScriptObject(Slayer_PrefSO : Slayer_DefaultPrefSO)
+{
+	defaultValue = 1;
+	permissionLevel = $Slayer::PermissionLevel["Any"];
+	variable = "%mini.botDamage";
+};
+new ScriptObject(Slayer_PrefSO : Slayer_DefaultPrefSO)
+{
+	defaultValue = 2;
+	permissionLevel = $Slayer::PermissionLevel["Any"];
+	variable = "%mini.respawnTime_bot";
+};
