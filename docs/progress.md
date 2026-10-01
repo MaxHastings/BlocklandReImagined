@@ -9494,6 +9494,23 @@ than the light the bulb gave.
   edge the rays miss by more than a texel. Before, a neighbour "held" any
   light its remainder covered a quarter of, which every faint far light
   passes. Bake format 12.
+- Format 12 cleared the window line, but it left a near-black blotch
+  across the middle of the lamp shade's outside after the break. The Gate's
+  probe log (batch 148, `bedroom.dif/233/110`) shows why. The outside
+  faces away from the bulb's lights 0 and 9, so no ray sees them anywhere
+  on it, yet the "light the neighbours most likely hold" fallback still
+  applied: each texel's remainder went to light 0 alone, light 9 alone, or
+  both. Where it went to both, both took a full share and the leftover
+  fell to about [13,13,13]; elsewhere it stayed near [130,130,130]. Now
+  the fallback only counts a neighbour's held light where the rays see
+  that light within two texels of that neighbour, which is a real patch
+  edge (one texel was too few for the slab-shadow edge test).
+  The shade's outside goes back to sharing its remainder over every hidden
+  light, evenly. The window's edge texels sit beside texels that see light
+  0, so they keep the format 12 rule. New test: `a_shade_lit_by_two_lights_inside_goes_evenly_dark_with_them`
+  (two lights inside a shade, one near each end, plus a faint room light;
+  with the lamp out the outside keeps just the room light within 3
+  levels). It fails on format 12. Bake format 13.
 - `lighting_probe`: `BRI_BREAK=1` breaks every bulb and tube by the
   client's rule. Within 4 units of a light shape it prints each triangle's
   lightmap, Dynamic leftover, light shares and facing. `BRI_DUMP_LEFT=1`

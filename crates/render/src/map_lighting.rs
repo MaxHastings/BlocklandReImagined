@@ -238,7 +238,7 @@ const LEAK_STEP: i64 = 3;
 const LEAK_LEVELS: f32 = 8.0 / 255.0;
 const LEAK_SUN: f32 = 0.12;
 /// Names the fit, the bake and the stored layout; change it with either.
-const FORMAT: &[u8; 8] = b"BRIML\0\0\x0c";
+const FORMAT: &[u8; 8] = b"BRIML\0\0\x0d";
 
 /// A light recovered from a map's lightmaps. The map compiler's point light:
 /// full `color` out to `inner`, then falling linearly to nothing at `outer`,
@@ -1027,6 +1027,26 @@ impl Bake {
                     held,
                 });
             }
+            // Each texel's neighbours on its surface, and the lights the rays
+            // see within two texels of it there: where a light's patch ends.
+            let on_surface = |t: &Split, n: &Split| {
+                let apart = n.position - t.position;
+                n.normal.dot(t.normal) > 0.95 && apart.dot(t.normal).abs() <= 0.1 * apart.length() + 1e-3
+            };
+            let around = |t: &Split| -> Vec<usize> {
+                let (x, y) = (t.index as i64 % w.max(1), t.index as i64 / w.max(1));
+                (-1..=1)
+                    .flat_map(|dy| (-1..=1).map(move |dx| (x + dx, y + dy)))
+                    .filter(|&(nx, ny)| nx >= 0 && ny >= 0 && nx < w && ny < h && (nx, ny) != (x, y))
+                    .filter_map(|(nx, ny)| split_at[(ny * w + nx) as usize])
+                    .filter(|&k| on_surface(t, &splits[k]))
+                    .collect()
+            };
+            let neighbours: Vec<Vec<usize>> = splits.iter().map(around).collect();
+            let spread = |near: &[u32]| -> Vec<u32> {
+                neighbours.iter().enumerate().map(|(i, n)| n.iter().fold(near[i], |m, &k| m | near[k])).collect()
+            };
+            let seen_near = spread(&spread(&splits.iter().map(|t| t.seen).collect::<Vec<_>>()));
             // Where a neighbour on the same surface sees one of the texel's
             // hidden lights by rays, the texel is on the edge of that light's
             // patch: the rays from the fitted light and the compiler's
@@ -1042,34 +1062,28 @@ impl Bake {
             // so a strong light behind a wall does not stop a dim one the
             // compiler let through from taking its light back. The hidden
             // lights the neighbours see by rays, or else the ones they most
-            // likely hold (a patch edge the rays miss by more than a texel),
-            // per texel:
-            let held_around = |t: &Split| {
-                let (x, y) = (t.index as i64 % w.max(1), t.index as i64 / w.max(1));
-                let (seen, held) = (-1..=1).flat_map(|dy| (-1..=1).map(move |dx| (x + dx, y + dy))).fold(
-                    (0u32, 0u32),
-                    |(seen, held), (nx, ny)| {
-                        if nx < 0 || ny < 0 || nx >= w || ny >= h || (nx, ny) == (x, y) {
-                            return (seen, held);
-                        }
-                        let Some(n) = split_at[(ny * w + nx) as usize].map(|k| &splits[k]) else {
-                            return (seen, held);
-                        };
-                        let apart = n.position - t.position;
-                        let on_surface =
-                            n.normal.dot(t.normal) > 0.95 && apart.dot(t.normal).abs() <= 0.1 * apart.length() + 1e-3;
-                        if on_surface { (seen | (n.seen & t.hidden_set), held | (n.held & t.hidden_set)) } else { (seen, held) }
-                    },
-                );
+            // likely hold where the rays see them a texel or two further on (a
+            // patch edge the rays miss by more than a texel), per texel. Only
+            // there: a surface no ray lights from them at all (the outside of
+            // the Bedroom lamp's shade, facing away from the bulb's lights) is
+            // no patch edge, and handing each texel's remainder to whichever
+            // of its lights the neighbours hold most would split it between
+            // them unevenly, a blotch when they go out.
+            let held_around = |i: usize| {
+                let t = &splits[i];
+                let (seen, held) = neighbours[i].iter().fold((0u32, 0u32), |(seen, held), &k| {
+                    let n = &splits[k];
+                    (seen | (n.seen & t.hidden_set), held | (n.held & seen_near[k] & t.hidden_set))
+                });
                 if seen != 0 { seen } else { held }
             };
             // Per texel: its index, its leftover light and each light's share.
             let mut shared: Vec<(usize, Vec3, Vec<f32>)> = Vec::with_capacity(splits.len());
             let mut reach = 0u32;
-            for t in &splits {
+            for (i, t) in splits.iter().enumerate() {
                 let mut shares = t.shares.clone();
                 let mut given = t.given;
-                let around = held_around(t);
+                let around = held_around(i);
                 // Each hidden light's weight: how surely the remainder is
                 // its light. The remainder goes as surely as the surest of
                 // them (all of it at a quarter or more of its light), shared
@@ -2085,6 +2099,82 @@ mod tests {
         for sheet in &sheets[..4] {
             let worst = sheet.left.chunks_exact(4).map(|t| t[..3].iter().copied().max().unwrap_or(0)).max().unwrap_or(0);
             assert!(worst <= 2, "a side of the shade keeps {worst} levels with its light off");
+        }
+    }
+
+    /// The Bedroom lamp's shade: two lights inside it, one near each end,
+    /// and a faint room light, all lighting its outside though it faces
+    /// away from them (no ray sees any). With the lamp's two lights out the
+    /// outside keeps just the room light, evenly: none of it is a patch
+    /// edge, so no texel hands its remainder to whichever lamp light its
+    /// neighbours hold most (one light here, both at the line between,
+    /// leaving a blotch).
+    #[test]
+    fn a_shade_lit_by_two_lights_inside_goes_evenly_dark_with_them() {
+        let lamp = |y: f32, color: [f32; 3], channel: u8| MapLight {
+            position: [0.0, y, 0.0],
+            color,
+            inner: 0.0,
+            outer: 8.0,
+            channel: Some(channel),
+        };
+        let lights = [
+            lamp(1.5, [0.35, 0.3, 0.25], 0),
+            lamp(-1.5, [0.3, 0.3, 0.3], 1),
+            MapLight {
+                position: [0.0, 0.0, 0.0],
+                color: [0.1, 0.1, 0.1],
+                inner: 80.0,
+                outer: 430.0,
+                channel: Some(2),
+            },
+        ];
+        let given = |light: &MapLight, p: Vec3| Vec3::from(light.color) * falloff(Vec3::from(light.position).distance(p), light.inner, light.outer);
+        let mut scene = crate::scene::SceneData {
+            sun_direction: [0.0, -1.0, 0.0],
+            ..Default::default()
+        };
+        let mut panels = Vec::new();
+        for (axis, side) in [(0, -1.0f32), (0, 1.0), (2, -1.0), (2, 1.0)] {
+            let mut out = Vec3::ZERO;
+            out[axis] = side;
+            let corner = move |a: f32, b: f32| {
+                let mut p = Vec3::new(0.0, 2.0 * b, 0.0);
+                p[axis] = 1.5 * side;
+                p[2 - axis] = 1.5 * a;
+                p
+            };
+            lit_quad(&mut scene, corner, out, |p| lights.iter().map(|l| given(l, p)).sum());
+            panels.push(corner);
+        }
+        lit_quad(&mut scene, |a, b| Vec3::new(40.0 * a, -40.0, 40.0 * b), Vec3::Y, |_| Vec3::ZERO);
+        let bake = Bake::new(&scene).expect("lightmapped shade");
+        let seen: Vec<u32> = bake
+            .lexels
+            .iter()
+            .map(|l| {
+                lights.iter().enumerate().fold(0u32, |m, (k, light)| {
+                    let lit = light.shade(l.position, l.normal).max_element() > 0.0 && bake.sees(l.position, l.normal, light.position.into());
+                    m | (u32::from(lit) << k)
+                })
+            })
+            .collect();
+        assert!(bake.lexels.iter().zip(&seen).all(|(l, &s)| l.normal != Vec3::Y && s == 0 || l.normal == Vec3::Y), "no ray lights the shade");
+        let sheets = bake.dynamic_sheets(&lights, &seen, &[]);
+        let at = |t: u32| (t as f32 + 0.5) / 32.0 * 2.0 - 1.0;
+        for (sheet, corner) in sheets[..4].iter().zip(&panels) {
+            let mut worst = 0.0f32;
+            for i in 0..(sheet.width * sheet.height) as usize {
+                let p = corner(at(i as u32 % sheet.width), at(i as u32 / sheet.width));
+                let share = |k: u8| {
+                    sheet.lights.iter().position(|&c| c == k).map_or(0.0, |c| sheet.visibility[c / 4][i * 4 + c % 4] as f32 / 255.0)
+                };
+                let left = Vec3::new(sheet.left[i * 4] as f32, sheet.left[i * 4 + 1] as f32, sheet.left[i * 4 + 2] as f32) / 255.0;
+                // The lamp's lights out, the room light on.
+                let drawn = left + given(&lights[2], p) * share(2);
+                worst = worst.max((drawn - given(&lights[2], p)).abs().max_element() * 255.0);
+            }
+            assert!(worst <= 3.0, "a side of the shade is {worst:.0} levels off the room light with the lamp out");
         }
     }
 
