@@ -253,6 +253,7 @@ pub fn check(folder: &Path) -> Report {
             .values()
             .map(|i| i.model.as_str())
             .chain(pack.images.values().map(|i| i.model.as_str()))
+            .chain(pack.projectiles.values().map(|p| p.model.as_str()))
             .collect();
         let own = |m: &str| m.to_ascii_lowercase().ends_with(".shape.json");
         for model in models.iter().filter(|m| own(m)) {
