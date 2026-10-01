@@ -394,10 +394,11 @@ fn groups(
 /// view kick of the projectile it names (its explosion's camera shake),
 /// `{group|sound}` the sound it names, `{group|projectile}` the projectile
 /// and `{group|image}` the image of this import, `{group|neg}` the number
-/// negated; before any of those, `field` reads the datablock's field the
-/// group names (`%obj.TT_ammoPickup[0]`'s value) and `word<N>` takes its
-/// Nth word, from 0 (`getWord`): `{f|field|word1}`; `text` keeps a value
-/// that reads as a number a string. `{group}` inside a
+/// negated, `{group|seconds}` milliseconds as seconds; before any of those,
+/// `field` reads the datablock's field the group names
+/// (`%obj.TT_ammoPickup[0]`'s value) and `word<N>` takes its Nth word, from
+/// 0 (`getWord`): `{f|field|word1}`; `text` keeps a value that reads as a
+/// number a string. `{group}` inside a
 /// longer string becomes its text.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -726,6 +727,14 @@ fn fill(v: &Value, values: &BTreeMap<String, String>, cx: &Fill) -> Result<Value
                         .parse()
                         .with_context(|| format!("`{s}`: `{value}` is no number"))?;
                     json!((ms * 0.12).round() as i64)
+                }
+                // Milliseconds (a `schedule` delay) as seconds.
+                "seconds" => {
+                    let ms: f64 = value
+                        .trim()
+                        .parse()
+                        .with_context(|| format!("`{s}`: `{value}` is no number"))?;
+                    json!(ms / 1000.0)
                 }
                 "kick" => kick(weapons, value)
                     .or_else(|| dependency_kick(&code.reference, value))

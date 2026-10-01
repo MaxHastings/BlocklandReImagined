@@ -1216,6 +1216,12 @@ pub struct Hitscan {
     /// scope's shot lands on its crosshair.
     #[serde(default)]
     pub from_eye: bool,
+    /// A muzzle shot is cast from the eye instead when something stands
+    /// within this many units of the eye along the look, so a gun held
+    /// against a wall cannot shoot through it (Bushido's raycasting
+    /// guns' `checkForObstruction`): 0.1 to 50.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eye_within: Option<f32>,
     /// The streak each player draws from the muzzle to where the ray ended.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracer: Option<Tracer>,
@@ -2027,6 +2033,7 @@ impl Pack {
                     image.projectile.is_some()
                         && (1.0..=2000.0).contains(&h.range)
                         && h.moving_range.is_none_or(|r| (1.0..=2000.0).contains(&r))
+                        && h.eye_within.is_none_or(|r| (0.1..=50.0).contains(&r))
                         && h.tracer.is_none_or(|t| {
                             t.color.iter().all(|c| (0.0..=1.0).contains(c))
                                 && t.width > 0.0
@@ -2035,7 +2042,7 @@ impl Pack {
                                 && t.seconds <= 2.0
                         }),
                     "Invalid hitscan of image {id}: it needs a projectile, range 1 to 2000, \
-                     tracer colour 0 to 1, width to 1, seconds to 2"
+                     eye_within 0.1 to 50, tracer colour 0 to 1, width to 1, seconds to 2"
                 );
             }
             ensure!(

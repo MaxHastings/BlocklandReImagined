@@ -2729,6 +2729,25 @@ impl WeaponsWorld {
                 let body = a.frame.middle.unwrap_or(a.frame.eye);
                 let (origin, through) = follow(q, &[body, a.frame.eye, origin]);
                 let velocity = through.map_or(velocity, |c| carried(&c, Vec3::ZERO, velocity).1);
+                // A muzzle shot with something right before the eye starts
+                // at the eye, so it cannot leave through a wall the gun is
+                // pressed into.
+                let eye_first = shot.hitscan.as_ref().is_some_and(|h| {
+                    !h.from_eye
+                        && h.eye_within.is_some_and(|within| {
+                            q.sweep(
+                                a.frame.eye,
+                                a.frame.eye + direction * within,
+                                Filter {
+                                    projectile_age_ticks: None,
+                                    source: id,
+                                    players: p.collide_players,
+                                    world_only: false,
+                                },
+                            )
+                            .is_some()
+                        })
+                });
                 for n in 0..shot.projectiles {
                     let turn = if spread > 0.0 {
                         let angle = |axis: u64| {
@@ -2744,12 +2763,9 @@ impl WeaponsWorld {
                             Some(moving) if pace > shot.moving_speed => moving,
                             _ => hitscan.range,
                         };
-                        let from = if hitscan.from_eye {
-                            a.frame.eye
-                        } else {
-                            origin
-                        };
-                        let aim = if hitscan.from_eye {
+                        let from_eye = hitscan.from_eye || eye_first;
+                        let from = if from_eye { a.frame.eye } else { origin };
+                        let aim = if from_eye {
                             direction
                         } else {
                             velocity.normalize_or(direction)
