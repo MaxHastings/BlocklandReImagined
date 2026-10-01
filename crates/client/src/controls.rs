@@ -604,8 +604,9 @@ impl Controls {
             ObserverMode::Free(_) => None,
         }
     }
-    /// Fly the free camera with the movement keys.
-    pub fn fly(&mut self, seconds: f32) {
+    /// Fly the free camera with the movement keys, through any opening of
+    /// `passages` it flies into as a body goes (turned with it, level).
+    pub fn fly(&mut self, seconds: f32, passages: &bri_content::passage::Passages) {
         let Some(Observer {
             mode: ObserverMode::Free(mut position),
             yaw,
@@ -634,9 +635,20 @@ impl Controls {
         let direction = (forward * self.axis(HeldControl::Forward, HeldControl::Backward)
             + right * self.axis(HeldControl::Right, HeldControl::Left))
             * walk;
+        let from = position;
         position += direction * self.fly_speed() * seconds.clamp(0.0, 0.1);
+        let (position, carry) = match passages.is_empty() {
+            true => (position, None),
+            false => passages.travel(from, position),
+        };
         if let Some(observer) = &mut self.observer {
             observer.mode = ObserverMode::Free(position);
+            if let Some(carry) = carry {
+                let (yaw, pitch, _) =
+                    crate::portal_view::carried_look((observer.yaw, observer.pitch, 0.0), &carry);
+                observer.yaw = yaw;
+                observer.pitch = pitch.clamp(-OBSERVER_PITCH, OBSERVER_PITCH);
+            }
         }
     }
     /// Free-camera speed in units per second (`Camera::processTick` fly
@@ -1053,7 +1065,7 @@ mod tests {
         );
         assert_eq!(c.view_angles(), (body.yaw, body.pitch));
         assert_ne!(c.camera_angles().0, body.yaw);
-        c.fly(0.05);
+        c.fly(0.05, &Default::default());
         let flown = c.free_camera().unwrap();
         assert!(flown.y > 2.0, "looking up flies the camera up");
         // A repeated grant keeps the camera where it was flown.
@@ -1062,6 +1074,39 @@ mod tests {
         c.follow(ControlObject::Player, 1, None);
         assert_eq!(c.movement().forward, 1.0);
         assert_eq!(c.movement().yaw, body.yaw);
+    }
+    /// A free camera flown into a portal comes out of its partner, turned
+    /// as a body is.
+    #[test]
+    fn a_free_camera_flies_through_a_portal() {
+        use bri_content::passage::{Passage, Passages};
+        // In through z = 0 going -z, out at x = 10 turned a quarter.
+        let carry = glam::Affine3A::from_translation(glam::Vec3::X * 10.0)
+            * glam::Affine3A::from_rotation_y(-std::f32::consts::FRAC_PI_2);
+        let passages = Passages {
+            list: vec![Passage {
+                brick: 1,
+                centre: glam::Vec3::Y,
+                normal: glam::Vec3::Z,
+                u: glam::Vec3::X,
+                v: glam::Vec3::Y,
+                half: glam::Vec2::new(1.0, 1.0),
+                carry,
+            }],
+            closed: vec![],
+        };
+        let mut c = Controls::default();
+        c.follow(ControlObject::Camera, 1, Some(glam::Vec3::new(0.0, 1.0, 0.5)));
+        held(&mut c, HeldControl::Forward, true);
+        let before = c.observer().unwrap();
+        let forward = glam::Vec3::new(before.yaw.sin(), 0.0, -before.yaw.cos());
+        c.fly(0.05, &passages);
+        let at = c.free_camera().unwrap();
+        let moved = glam::Vec3::new(0.0, 1.0, 0.5) + forward * CAMERA_MOVEMENT_SPEED * 0.05;
+        assert!(at.abs_diff_eq(carry.transform_point3(moved), 1e-3), "{at}");
+        let after = c.observer().unwrap();
+        let turned = glam::Vec3::new(after.yaw.sin(), 0.0, -after.yaw.cos());
+        assert!(turned.abs_diff_eq(carry.transform_vector3(forward), 1e-4), "{turned}");
     }
     /// v20's fly mode: 40 units/s, doubled while fire is held, quartered
     /// while crouching, walk scaling each axis by 0.4, no vertical keys.
@@ -1073,7 +1118,7 @@ mod tests {
             for &key in keys {
                 held(&mut c, key, true);
             }
-            c.fly(0.1);
+            c.fly(0.1, &Default::default());
             c.free_camera().unwrap()
         };
         let close = |a: glam::Vec3, b: glam::Vec3| (a - b).length() < 1e-4;
@@ -1109,7 +1154,7 @@ mod tests {
         let mut c = Controls::default();
         c.follow(ControlObject::Spy(7), 1, None);
         held(&mut c, HeldControl::Forward, true);
-        c.fly(0.05);
+        c.fly(0.05, &Default::default());
         assert_eq!(c.free_camera(), None);
         c.action(&GameAction::Look {
             yaw: 0.3,

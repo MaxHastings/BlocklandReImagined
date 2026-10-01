@@ -7,9 +7,15 @@
 //!
 //! Linked bricks (`link`, portals) are windows drawn the same way: each open
 //! side shows the view out of its partner, or plain glass when unlinked.
+//! Their sides come from the one [`Links`] the local copy of the world
+//! keeps (`Motion::collision`), the same openings bodies pass through, so a
+//! window shows exactly where a body would go.
 use bri_net::protocol::PublicWorld;
 use bri_render::reflection::{Looks, Mirror};
-use bri_sim::{definitions::Definitions, links::Links};
+use bri_sim::{
+    definitions::Definitions,
+    links::{Links, Side},
+};
 use glam::{Mat4, Vec3};
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -136,8 +142,9 @@ pub struct MirrorIndex {
     source: Option<Arc<PublicWorld>>,
     log: Option<(Arc<crate::network::WorldLog>, u64)>,
     mirrors: BTreeMap<u64, Vec<Mirror>>,
-    links: Links,
-    /// The linked bricks' windows, rebuilt when the links change.
+    /// The linked bricks' sides the windows were built from.
+    sides: Vec<Side>,
+    /// The linked bricks' windows, rebuilt when the sides change.
     windows: Vec<(u64, Mirror, bri_content::passage::Passage)>,
 }
 impl MirrorIndex {
@@ -170,32 +177,35 @@ impl MirrorIndex {
         known: Option<&crate::network::WorldChanges>,
         shapes: &MirrorShapes,
     ) {
-        if shapes.is_empty() {
+        if shapes.mirrors.is_empty() {
             self.mirrors.clear();
-            self.links = Links::default();
-            self.windows.clear();
         } else if let (Some(_), Some(known)) = (&self.source, known) {
             for id in &known.bricks {
                 self.place(*id, world.bricks.get(id), shapes);
-                if self
-                    .links
-                    .may_link(*id, world.bricks.get(id), &shapes.links)
-                {
-                    self.links.touch(*id);
-                }
-            }
-            if self.links.flush(&world.bricks, &shapes.links) {
-                self.windows = windows(&self.links, world, shapes);
             }
         } else {
             self.mirrors.clear();
             for (id, brick) in &world.bricks {
                 self.place(*id, Some(brick), shapes);
             }
-            self.links.reset(&world.bricks, &shapes.links);
-            self.windows = windows(&self.links, world, shapes);
+        }
+        // A side's brick may have been shown or hidden.
+        if !self.sides.is_empty() {
+            self.windows = windows(&self.sides, world, shapes);
         }
         self.source = Some(world.clone());
+    }
+    /// Take the linked bricks' sides from `links` (the local world's, which
+    /// bodies pass through), rebuilding the windows when they changed.
+    pub fn link(&mut self, links: &Links, shapes: &MirrorShapes) {
+        if links.sides() == self.sides.as_slice() {
+            return;
+        }
+        self.sides = links.sides().to_vec();
+        self.windows = match &self.source {
+            Some(world) => windows(&self.sides, world, shapes),
+            None => Vec::new(),
+        };
     }
     fn place(&mut self, id: u64, brick: Option<&bri_world::Brick>, shapes: &MirrorShapes) {
         let shape = brick.filter(|b| b.visible).and_then(|brick| {
@@ -260,23 +270,26 @@ impl MirrorIndex {
         self.source = None;
         self.log = None;
         self.mirrors.clear();
-        self.links = Links::default();
+        self.sides.clear();
         self.windows.clear();
     }
 }
 
-/// Each side of every shown linked brick as a window: the view out of its
-/// partner, or the brick's own glass when it leads nowhere.
+/// Each side of every linked brick as a window: the view out of its
+/// partner, or the brick's own glass when it leads nowhere. A linked side
+/// shows its view even on a brick not drawn (`visible` off): what lies
+/// through it is the partner's side of the world, and bodies still pass,
+/// so the opening is a seamless hole. Unlinked glass is the brick's own
+/// look, drawn only when the brick is.
 fn windows(
-    links: &Links,
+    sides: &[Side],
     world: &PublicWorld,
     shapes: &MirrorShapes,
 ) -> Vec<(u64, Mirror, bri_content::passage::Passage)> {
-    links
-        .sides()
+    sides
         .iter()
         .filter_map(|side| {
-            let brick = world.bricks.get(&side.brick).filter(|b| b.visible)?;
+            let brick = world.bricks.get(&side.brick)?;
             let definition = shapes.links.get(brick).ok()?;
             let link = definition.link.as_ref()?;
             let glass = definition.glass;
@@ -290,7 +303,7 @@ fn windows(
                     fallback: link.idle,
                     recess: 0.0,
                 }
-            } else {
+            } else if brick.visible {
                 Mirror {
                     corners: side.view,
                     tint: [1.0; 3],
@@ -299,6 +312,8 @@ fn windows(
                     fallback: [glass[0], glass[1], glass[2]],
                     recess: 0.0,
                 }
+            } else {
+                return None;
             };
             Some((side.brick, mirror, side.passage))
         })
@@ -501,6 +516,108 @@ mod tests {
             .map(|m| m.corners[0].x)
             .fold(f32::NEG_INFINITY, f32::max);
         assert!(far < MAX_DEBRIS_MIRRORS as f32 + 1.0, "{far}");
+    }
+
+    /// Portals' windows come from the openings bodies pass through: a
+    /// linked brick not drawn still shows the view its opening leads to,
+    /// and only drawn unlinked bricks show glass.
+    #[test]
+    fn windows_follow_the_openings_bodies_pass_through() {
+        use bri_content::brick::{Frame, Link};
+        let mut mesh = crate::world_chunks::tests::meshes()
+            .remove("definition/a")
+            .unwrap();
+        mesh.footprint_studs = [4, 1];
+        mesh.height_plates = 15;
+        let link = Link {
+            faces: vec![Face::North, Face::South],
+            depth: 0.5,
+            inset: 0.0,
+            tint: [1.0; 3],
+            idle: [0.5; 3],
+            pass: true,
+            frame: Frame {
+                sides: 0.05,
+                top: 0.05,
+                bottom: 0.2,
+            },
+            name: "Portal".into(),
+        };
+        let collision = bri_content::collision::CollisionBody {
+            id: "definition/a".into(),
+            parts: vec![bri_content::collision::Part::Box {
+                center: [0.0; 3],
+                size: [2.0, 3.0, 0.5],
+            }],
+        };
+        let shape = bri_physics::content::collider(&collision)
+            .unwrap()
+            .build()
+            .shared_shape()
+            .clone();
+        let definitions = Definitions {
+            entries: BTreeMap::from([(
+                "definition/a".to_string(),
+                bri_sim::definitions::Definition {
+                    mesh,
+                    collision,
+                    shape,
+                    indestructible: false,
+                    special: Default::default(),
+                    reflection: None,
+                    link: Some(link),
+                    glass: [0.6, 0.7, 0.8, 0.5],
+                },
+            )]),
+        };
+        let shapes = super::shapes(&definitions);
+        let named = |x: f32, name: Option<&str>, visible: bool| {
+            let mut b = brick([x, 1.5, 0.0], 0);
+            b.name = name.map(Into::into);
+            b.visible = visible;
+            b
+        };
+        // A pair, one of them not drawn; and two unpaired, one not drawn.
+        let world = world(vec![
+            (1, named(0.0, Some("a"), true)),
+            (2, named(10.0, Some("a"), false)),
+            (3, named(20.0, None, true)),
+            (4, named(30.0, None, false)),
+        ]);
+        let mut links = Links::default();
+        links.reset(&world.bricks, &definitions);
+        let mut index = MirrorIndex::default();
+        index.sync(&world, None, &shapes);
+        index.link(&links, &shapes);
+        let windows = index.mirrors(|_| false, Vec3::new(0.0, 1.5, 50.0));
+        let through = windows
+            .iter()
+            .filter(|m| matches!(m.looks, Looks::Through(_)))
+            .count();
+        let glass = windows.iter().filter(|m| m.looks == Looks::Plain).count();
+        // Both sides of both portals of the pair look through; only the
+        // drawn unpaired one shows glass.
+        assert_eq!((through, glass), (4, 2), "{windows:?}");
+        // Each looking side is an opening bodies pass through.
+        assert_eq!(links.passages().list.len(), 4);
+        // Drawn again, the unpaired one shows its glass too.
+        let mut shown = (*world).clone();
+        shown.bricks.get_mut(&4).unwrap().visible = true;
+        let shown = Arc::new(shown);
+        index.sync(
+            &shown,
+            Some(&crate::network::WorldChanges {
+                bricks: [4].into(),
+                palette: false,
+            }),
+            &shapes,
+        );
+        let glass = index
+            .mirrors(|_| false, Vec3::new(0.0, 1.5, 50.0))
+            .iter()
+            .filter(|m| m.looks == Looks::Plain)
+            .count();
+        assert_eq!(glass, 4);
     }
 
     fn shapes_of(mirrors: BTreeMap<String, MirrorShape>) -> MirrorShapes {
