@@ -65,6 +65,11 @@ pub(in crate::session) struct GameHooks {
     /// An `on_pick_spawn` hook is running: a spawn its operations cause
     /// (a reset) takes the engine's choice, so a hook never recurses.
     picking: bool,
+    /// The player whose action a running `on_minigame` event answers (the
+    /// editor, joiner or leaver): its chat lines come from their share, as
+    /// v20's messages follow each player's own action, not from one
+    /// server-wide share every join and edit would exhaust.
+    pub(in crate::session) chat_payer: Option<OwnerId>,
 }
 
 impl Session {
@@ -101,7 +106,16 @@ impl Session {
             mg::Effect::Configured { game } => out.push(event("configured", *game)),
             mg::Effect::Ended { game } => out.push(event("ended", *game)),
             mg::Effect::Reset { game, .. } => out.push(event("reset", *game)),
-            mg::Effect::TeamsConfigured { game } => out.push(event("teams", *game)),
+            mg::Effect::TeamsConfigured { game } => {
+                // The Add-On Settings window's teams: who changed them, and
+                // whether the game's players are told.
+                let edit = host.game_hooks.editing.clone().unwrap_or_default();
+                out.push(GameEvent {
+                    by: edit.by,
+                    quiet: edit.quiet,
+                    ..event("teams", *game)
+                })
+            }
             mg::Effect::RoundEnded {
                 game,
                 teams,
@@ -265,6 +279,9 @@ impl Session {
                 map.insert("teams".into(), ids(&e.teams));
                 map.insert("players".into(), ids(&e.players));
             }
+            if e.kind == "teams" {
+                map.insert("quiet".into(), e.quiet.into());
+            }
             if e.kind == "settings" {
                 map.insert(
                     "keys".into(),
@@ -286,6 +303,9 @@ impl Session {
                     ),
                 );
             }
+            if let Some(host) = self.packages.as_mut() {
+                host.game_hooks.chat_payer = e.by.or(e.player);
+            }
             for package in &hooks {
                 let _ = self.run_package(
                     package,
@@ -298,12 +318,16 @@ impl Session {
                 );
                 self.charge_work(package);
             }
+            if let Some(host) = self.packages.as_mut() {
+                host.game_hooks.chat_payer = None;
+            }
         }
     }
 
     /// `on_pick_spawn(player)`: where an Add-On's rules want `owner` to
     /// appear, if any does. A brick id appears on that brick as on a spawn
-    /// brick; `[x, y, z]` appears there.
+    /// brick; `[x, y, z]` appears there; `"map"` at one of the map's own
+    /// drop points, past every spawn brick.
     pub(in crate::session) fn package_pick_spawn(&mut self, owner: OwnerId) -> Option<(Vec3, f32)> {
         let host = self.packages.as_ref()?;
         if self.bots.is_brick_bot(owner) || host.game_hooks.picking {
@@ -337,6 +361,9 @@ impl Session {
             };
             if answer.is_unit() {
                 continue;
+            }
+            if answer.clone().try_cast::<ImmutableString>().is_some_and(|s| s == "map") {
+                return Some(self.map_spawn());
             }
             if let Ok(brick) = answer.as_int() {
                 match self.simulation.state().bricks.get(&(brick as u64)) {
@@ -373,7 +400,7 @@ impl Session {
                 _ => self.hook_warning(
                     &package,
                     format!(
-                        "on_pick_spawn must return (), a brick id or [x, y, z], not {}",
+                        "on_pick_spawn must return (), a brick id, [x, y, z] or \"map\", not {}",
                         answer.type_name()
                     ),
                 ),

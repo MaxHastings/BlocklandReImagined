@@ -255,13 +255,19 @@ pub struct Behaviour {
     /// `on_minigame(event)` after something happens to a mini-game:
     /// `event` is `#{ kind, game, player, team }`, `kind` being `created`,
     /// `configured`, `reset`, `ended`, `joined`, `left`, `team` (a member's
-    /// team changed; `team` is the new one or `()`) or `teams` (the game's
-    /// team list changed). Delivered at the start of the next tick.
+    /// team changed; `team` is the new one or `()`), `teams` (the game's
+    /// team list changed; `by` who changed it in the Add-On Settings window
+    /// and `quiet` when they asked not to tell the players), `round_end`
+    /// (`teams`, `players`), `kicked` (`by`), `rejected` (`ignored`),
+    /// `loaded` or `settings` (`by`, `quiet`, `keys` and `changes`, each
+    /// `#{ key, team }`). Delivered at the start of the next tick.
     #[serde(default)]
     pub on_minigame: bool,
     /// `on_pick_spawn(player)` as a player is about to (re)spawn: return a
-    /// brick id to appear on that brick, `[x, y, z]` to appear there, or
-    /// `()` to leave the choice to the engine (spawn bricks, then the map).
+    /// brick id to appear on that brick, `[x, y, z]` to appear there,
+    /// `"map"` for one of the map's own drop points (past every spawn
+    /// brick), or `()` to leave the choice to the engine (spawn bricks,
+    /// then the map).
     /// The first package answering decides. Called as it happens, so it
     /// must be quick (Slayer's team spawns).
     #[serde(default)]

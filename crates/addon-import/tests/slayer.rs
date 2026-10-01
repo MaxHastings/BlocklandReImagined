@@ -1999,7 +1999,7 @@ fn a_teams_preferred_player_count_fills_it_with_bots() {
     let names = g.s.names();
     for (o, _) in g.s.vitals() {
         if g.s.is_bot(o) {
-            assert!(names[&o].starts_with("Bot "), "{}", names[&o]);
+            assert!(["Quill", "Marrow", "Tansy", "Orrin", "Willet"].iter().any(|n| names[&o].starts_with(&format!("Bot {n}"))), "{}", names[&o]);
             assert!(g.s.vitals()[&o].alive);
         }
     }
@@ -2324,5 +2324,52 @@ fn slayers_rights_decide_who_invites_creates_and_suicides() {
     g.steps(2);
     assert_eq!(g.s.minigame_views().len(), 1);
     assert!(lines(&mut g).iter().any(|(p, t)| *p == other && t == "You don't have permission to do that."));
+    g.quiet();
+}
+
+#[test]
+fn slayers_game_settings_reach_the_engine_and_late_joiners_wait() {
+    let mut g = Game::new("game-settings");
+    let (red, blue) = two_teams_as(&mut g, true);
+    let owner = g.s.minigame_views()[0].owner;
+    g.steps(2);
+    lines(&mut g);
+    // One edit of several settings: who updated the game and each change
+    // that is not quiet, every line heard.
+    g.set(owner, &[
+        (&key(SLAYER, "default_minigame"), Value::Bool(true)),
+        (&key(SLAYER, "color"), Value::Int(3)),
+        (&key(SLAYER, "name_distance"), Value::Int(50)),
+        (&key(SLAYER, "late_join_time"), Value::Int(0)),
+    ]);
+    g.steps(2);
+    let heard = lines(&mut g);
+    let other = if owner == red { blue } else { red };
+    for line in [
+        "Alpha updated the",
+        " + [Minigame|Default Minigame] is now True",
+        " + [Player|Name Distance] is now 50",
+        " + [Minigame|Late Join Time] is now 0",
+    ] {
+        assert!(heard.iter().any(|(p, t)| *p == other && t.starts_with(line)), "{line}: {heard:?}");
+    }
+    // Color is quiet.
+    assert!(!heard.iter().any(|(_, t)| t.contains("|Color]")), "{heard:?}");
+    let view = g.s.minigame_views()[0].clone();
+    assert!(view.default);
+    assert_eq!(view.paint_color, Some(3));
+    assert_eq!(view.name_distance, Some(50));
+
+    // The default game takes a player who joins the server, and Late Join
+    // Time 0 has them watch until the next round: their body gone, not
+    // killed, and nobody scores it.
+    let scores = (g.score(red), g.score(blue));
+    let carol = g.s.join("Carol".into(), Vec3::new(0.0, 0.05, 24.0), false).unwrap();
+    g.steps(4);
+    assert!(g.s.minigame_views()[0].members.contains(&carol));
+    assert!(lines(&mut g).iter().any(|(p, t)| *p == carol && t == "You will spawn when the next round starts."));
+    assert!(!g.s.vitals()[&carol].alive);
+    assert_eq!((g.score(red), g.score(blue)), scores);
+    assert!(g.cmd(carol, Command::Respawn).is_err());
     g.quiet();
 }

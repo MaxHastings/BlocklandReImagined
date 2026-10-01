@@ -2014,6 +2014,12 @@ impl Session {
         if let Some(choice) = self.spawn_choice(owner) {
             return choice;
         }
+        self.map_spawn()
+    }
+
+    /// One of the map's own drop points (`pickSpawnPoint()`), ignoring
+    /// spawn bricks.
+    pub(super) fn map_spawn(&mut self) -> (Vec3, f32) {
         let word = self.next_spawn_word();
         let points = &self.spawn_points;
         if points.is_empty() {

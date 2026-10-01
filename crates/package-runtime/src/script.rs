@@ -259,6 +259,13 @@ pub trait World {
     fn setting_text(&self, _game: u64, _team: Option<u64>, _key: &str) -> Result<String, String> {
         Err("this host has no Add-On settings".into())
     }
+    /// How an Add-On setting is declared (`key` as [`World::setting`]):
+    /// its title, category, scope, kind, and whether changing it is
+    /// announced (`quiet`) or resets the game (`resets`). `None` when no
+    /// setting has that key.
+    fn setting_info(&self, _key: &str) -> Option<serde_json::Value> {
+        None
+    }
     /// Mini-game `game` as a build saves it (settings, Add-On settings,
     /// teams, per-game state), for `restore_minigame`.
     fn minigame_snapshot(&self, _game: u64) -> Option<serde_json::Value> {

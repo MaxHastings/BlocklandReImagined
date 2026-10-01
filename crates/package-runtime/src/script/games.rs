@@ -478,6 +478,11 @@ pub(super) fn register(engine: &mut Engine) {
         let (game, team) = (id(&game)?, id(&team)?);
         with_world(|world, _| world.setting_text(game, Some(team), key).map_err(Into::into))
     });
+    // How a setting is declared (its title and category for an
+    // announcement, whether it is quiet), or ().
+    engine.register_fn("setting_info", |key: &str| {
+        with_world(|world, _| Ok(world.setting_info(key).map_or(Dynamic::UNIT, |v| to_dynamic(&v))))
+    });
     // What the host keeps for these rules between games and restarts.
     engine.register_fn("host_data", |key: &str| {
         with_world(|world, _| Ok(world.host_data(key).map_or(Dynamic::UNIT, |v| to_dynamic(&v))))

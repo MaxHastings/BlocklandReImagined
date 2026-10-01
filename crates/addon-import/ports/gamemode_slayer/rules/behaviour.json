@@ -1549,6 +1549,18 @@
       "known_teams": {
         "default": {},
         "persist": false
+      },
+      "paused": {
+        "default": [],
+        "persist": false
+      },
+      "auto_started": {
+        "default": false,
+        "persist": false
+      },
+      "auto_restore": {
+        "default": false,
+        "persist": false
       }
     },
     "player": {

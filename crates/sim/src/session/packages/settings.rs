@@ -353,6 +353,21 @@ impl Session {
         })
     }
 
+    /// How setting `key` (the package's own or `namespace:key`) is
+    /// declared, for its rules: title, category, scope, kind, quiet and
+    /// resets.
+    pub(in crate::session) fn setting_info(&self, package: &str, key: &str) -> Option<serde_json::Value> {
+        let s = self.packages.as_ref()?.settings.get(&full_key(package, key))?;
+        Some(serde_json::json!({
+            "title": s.def.title,
+            "category": s.def.category,
+            "scope": s.def.scope,
+            "type": s.def.kind,
+            "quiet": s.def.quiet,
+            "resets": s.def.resets,
+        }))
+    }
+
     /// Whether an item or player type setting's `value` names one this
     /// server has (none, `""`, always does). Other kinds always do.
     pub(super) fn has_content(&self, kind: SettingType, value: &SettingValue) -> bool {

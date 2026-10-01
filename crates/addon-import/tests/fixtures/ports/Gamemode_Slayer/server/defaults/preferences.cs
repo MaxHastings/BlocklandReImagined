@@ -196,7 +196,7 @@ new ScriptObject(Slayer_PrefSO : Slayer_DefaultPrefSO)
 };
 new ScriptObject(Slayer_PrefSO : Slayer_DefaultPrefSO)
 {
-	defaultValue = true;
+	defaultValue = false;
 	permissionLevel = $Slayer::PermissionLevel["Any"];
 	variable = "%mini.disableSlayerMessages";
 };
@@ -208,7 +208,7 @@ new ScriptObject(Slayer_PrefSO : Slayer_DefaultPrefSO)
 };
 new ScriptObject(Slayer_PrefSO : Slayer_DefaultPrefSO)
 {
-	defaultValue = 0;
+	defaultValue = 1;
 	permissionLevel = $Slayer::PermissionLevel["Any"];
 	variable = "%mini.clearScores";
 };
@@ -220,7 +220,7 @@ new ScriptObject(Slayer_PrefSO : Slayer_DefaultPrefSO)
 };
 new ScriptObject(Slayer_PrefSO : Slayer_DefaultPrefSO)
 {
-	defaultValue = 1;
+	defaultValue = 0;
 	permissionLevel = $Slayer::PermissionLevel["Any"];
 	variable = "%mini.isDefaultMinigame";
 };

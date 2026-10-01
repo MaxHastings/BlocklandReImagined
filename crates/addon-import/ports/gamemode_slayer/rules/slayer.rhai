@@ -825,8 +825,10 @@ fn bot_kind_view() {
     ()
 }
 // "Bot " and a random first name (`"Bot" SPC getRandomFirstName()`).
+// `getRandomFirstName` draws from Slayer's own first-names.txt
+// (Module_Names).
 fn bot_name(kind, n) {
-    let names = kind.first_names;
+    let names = data_lines("first_names").filter(|line| line != "");
     if names.is_empty() {
         return "Bot";
     }
@@ -1119,15 +1121,17 @@ fn start_round(g) {
     r.extra = 0;
     r.custom = ();
     r.lives = setting(g.id, "lives");
-    // `Slayer_TeamSO::onMinigameReset`: teams' own points start again, as
-    // members' scores do.
-    let points = get("team_points");
-    for key in points.keys() {
-        if key.starts_with(`${g.id}:`) {
-            points.remove(key);
+    // `Slayer_TeamSO::onMinigameReset`: teams' own points start again with
+    // Clear Scores or a points limit, as members' scores do.
+    if setting(g.id, "clear_scores") || setting(g.id, "points") > 0 {
+        let points = get("team_points");
+        for key in points.keys() {
+            if key.starts_with(`${g.id}:`) {
+                points.remove(key);
+            }
         }
+        set("team_points", points);
     }
-    set("team_points", points);
     for p in everyone() {
         if p.minigame == g.id {
             set_player(p.id, "out", false);
@@ -1158,9 +1162,29 @@ fn start_round(g) {
             start_fly_through(g, false);
         }
     }
-    // `serverCmdSlayer(rules)` for everyone, at the game's lives.
-    for line in rules(g, ()) {
-        tell_game(g, line);
+    // `serverCmdSlayer(rules)` for each member, at their team's lives,
+    // unless Slayer's messages are off.
+    // Members who read the same rules get them as one line each.
+    if !setting(g.id, "disable_messages") {
+        let groups = #{};
+        for m in g.members {
+            let me = player(m);
+            if me == () || me.bot {
+                continue;
+            }
+            let key = `${lives_for(g, me.team)}`;
+            if key in groups {
+                groups[key].players.push(m);
+            } else {
+                groups[key] = #{ team: me.team, players: [m] };
+            }
+        }
+        for key in groups.keys() {
+            let group = groups[key];
+            for line in rules(g, group.team) {
+                tell(group.players, line);
+            }
+        }
     }
 }
 
@@ -1953,6 +1977,7 @@ fn reset_cps(game) {
 }
 
 fn on_tick() {
+    auto_start();
     ease_cps();
     expire_swaps();
     step_spectators();
@@ -2082,7 +2107,8 @@ fn on_damage(victim, attacker, amount, info) {
 // countdown.
 fn on_spawn(p) {
     let me = player(p);
-    if me == () || me.minigame == () {
+    // A late joiner's body was taken back before this ran: they watch.
+    if me == () || me.minigame == () || !me.alive {
         return;
     }
     // `createPlayer`: out of spectate mode, the team's kit and look; a new
@@ -2280,8 +2306,17 @@ fn balance_new(g) {
     }
     known[key] = ids;
     set("known_teams", known);
-    if had == () || !uses_teams(g.id) || !setting(g.id, "balance_new_teams") {
-        return;
+    if had == () {
+        return 0;
+    }
+    let added = 0;
+    for t in g.teams {
+        if !had.contains(t.id) {
+            added += 1;
+        }
+    }
+    if !uses_teams(g.id) || !setting(g.id, "balance_new_teams") {
+        return added;
     }
     for t in g.teams {
         if had.contains(t.id) {
@@ -2304,9 +2339,102 @@ fn balance_new(g) {
             }
         }
     }
+    added
+}
+
+// The game rules Slayer's settings stand for, on the engine's side:
+// the mini-game's colour (`updateColor`), whether it is the default game
+// (`updateDefaultMinigame`), how far names show (`updateNameDistance`),
+// and whether scores carry over a reset (`setScore` while resetting,
+// unless Clear Scores or a points limit). Slayer keeps a leaver's event
+// objects and vehicles (`removeMember`), and a game using every player's
+// bricks claims those of builders in no game (`getMinigameFromBLID`).
+fn apply_game_rules(g) {
+    set_minigame_color(g.id, setting(g.id, "color"));
+    set_default_minigame(g.id, setting(g.id, "default_minigame"));
+    set_name_distance(g.id, setting(g.id, "name_distance"));
+    set_keep_scores(g.id, !setting(g.id, "clear_scores") && setting(g.id, "points") <= 0);
+    set_cleanup_on_leave(g.id, false);
+    set_claims_bricks(g.id, true);
+}
+
+// `serverCmdSlayer_getPrefs_Start` and `_Tick`: who updated the game, and
+// each setting that changed unless it is quiet or the editor asked not to
+// tell the players (`notifyPlayersOnChange`, `notifyOnChange`).
+fn announce_changes(g, event) {
+    if event.by == () || event.changes.is_empty() {
+        return;
+    }
+    let who = player(event.by);
+    let name = if who == () { "" } else { who.name };
+    tell_game(g, `${c3()}${name} ${c5()}updated the ${c3()}${g.title} ${c5()}minigame.`);
+    if event.quiet {
+        return;
+    }
+    for c in event.changes {
+        let info = setting_info(c.key);
+        if info == () || info.quiet || info.scope == "server" {
+            continue;
+        }
+        let text = if c.team == () { setting_text(g.id, c.key) } else { team_setting_text(g.id, c.team, c.key) };
+        let plus = if c.team == () { " + " } else { " + + " };
+        tell_game(g, `${c3()}${plus}${c5()}[${c3()}${info.category}${c5()}|${c3()}${info.title}${c5()}] is now ${c3()}${text}`);
+    }
+}
+// `serverCmdSlayer_getPrefs_End`: the teams the editor added.
+fn announce_new_teams(g, added, event) {
+    if added <= 0 || event.by == () || event.quiet {
+        return;
+    }
+    tell_game(g, `${c3()} + ${c5()}Added${c3()} ${added} ${c5()}new ${plural(added, "team", "teams")}.`);
+    tell_game(g, `${c3()} + + ${c5()}Type ${c3()}/listTeams ${c5()}to view a list of teams and ${c3()}/joinTeam [Team Name] ${c5()}to join a team.`);
+    if setting(g.id, "balance_new_teams") {
+        tell_game(g, `${c3()} + + ${c5()}Teams have been ${c3()}balanced${c5()}.`);
+    }
+}
+// Save Settings on Update (`$Pref::Slayer::Server::SavePrefsOnUpdate`):
+// the host's game, kept as the one Auto Start brings back.
+fn save_last(g, event) {
+    if event.by == () || !server_setting("save_on_update") {
+        return;
+    }
+    let owner = if g.owner == () { () } else { player(g.owner) };
+    if (owner == () && g.owner == ()) || (owner != () && owner.host) {
+        let snap = minigame_snapshot(g.id);
+        if snap != () {
+            set_host_data("last", snap);
+        }
+    }
+}
+// Auto Start With Server (`onMissionLoaded`): the last saved game, once,
+// as the server's own.
+fn auto_start() {
+    if get("auto_started") {
+        return;
+    }
+    set("auto_started", true);
+    if !server_setting("auto_start") || !minigames().is_empty() {
+        return;
+    }
+    let last = host_data("last");
+    if last == () {
+        return;
+    }
+    set("auto_restore", true);
+    create_minigame((), #{});
 }
 
 fn mg_restart(g, event) {
+    if event.kind == "created" {
+        apply_game_rules(g);
+        if get("auto_restore") {
+            set("auto_restore", false);
+            let last = host_data("last");
+            if last != () {
+                restore_minigame(g.id, last);
+            }
+        }
+    }
     reset_cps(g.id);
     note_kits(g);
     note_team_lives(g);
@@ -2372,6 +2500,20 @@ fn mg_rejected(g, event) {
 }
 
 fn mg_settings(g, event) {
+    announce_changes(g, event);
+    save_last(g, event);
+    if is_key(event.keys, "color") {
+        set_minigame_color(g.id, setting(g.id, "color"));
+    }
+    if is_key(event.keys, "default_minigame") {
+        set_default_minigame(g.id, setting(g.id, "default_minigame"));
+    }
+    if is_key(event.keys, "name_distance") {
+        set_name_distance(g.id, setting(g.id, "name_distance"));
+    }
+    if is_key(event.keys, "clear_scores") || is_key(event.keys, "points") {
+        set_keep_scores(g.id, !setting(g.id, "clear_scores") && setting(g.id, "points") <= 0);
+    }
     if is_key(event.keys, "friendly_fire") || is_key(event.keys, "ally_same_colors") {
         sync_team_rules(g);
     }
@@ -2438,8 +2580,40 @@ fn mg_joined(g, event) {
         set_player(event.player, "deaths", 0);
         return;
     }
+    // Reset When Empty: the first player back starts a paused game afresh.
+    if setting(g.id, "reset_when_empty") && get("paused").contains(g.id) {
+        set("paused", get("paused").filter(|id| id != g.id));
+        reset_minigame(g.id);
+    }
+    if !setting(g.id, "disable_messages") {
+        for line in rules(g, ()) {
+            tell(event.player, line);
+        }
+        if uses_teams(g.id) && !setting(g.id, "lock_teams") {
+            tell(event.player, `${c5()} + Type ${c3()}/joinTeam [Team Name] ${c5()}to join a team. Type ${c3()}/listTeams ${c5()}to view a list of teams.`);
+        }
+    }
     if uses_teams(g.id) && !g.teams.is_empty() && setting(g.id, "auto_sort") {
         auto_sort(g, [event.player]);
+    }
+    // Late Join Time: more than one other player alive and the round older
+    // than its minutes, and they watch until the next round.
+    let late = setting(g.id, "late_join_time");
+    let alive = 0;
+    for m in g.members {
+        if m != event.player && !get_player(m, "out") {
+            alive += 1;
+        }
+    }
+    let r = round_of(g.id);
+    if alive > 1 && late >= 0 && r.countdown == () && (tick() - r.clock) > late * 60 * 120 {
+        knock_out(event.player);
+        spectate_init(event.player);
+        tell(event.player, `${c5()}You will spawn when the next round starts.`);
+        center_print(event.player, `${c5()}You will spawn when the next round starts.`, 6.0);
+        if me != () && me.alive {
+            remove_body(event.player);
+        }
     }
     fire_game_input(g.id, "onMinigameJoin", event.player);
 }
@@ -2461,6 +2635,29 @@ fn mg_left(g, event) {
     set_player(event.player, "out", false);
     spectate_end(event.player);
     undress(event.player);
+    // Reset When Empty: the last player gone pauses the game, its bots
+    // gone from the field, until someone joins.
+    let humans = 0;
+    for m in g.members {
+        let p = player(m);
+        if m != event.player && p != () && !own_bot(p) {
+            humans += 1;
+        }
+    }
+    if setting(g.id, "reset_when_empty") && humans < 1 {
+        for b in game_bots(g) {
+            if b.alive {
+                remove_body(b.id);
+            }
+        }
+        let paused = get("paused");
+        if !paused.contains(g.id) {
+            paused.push(g.id);
+            set("paused", paused);
+        }
+        end_round(g.id, #{ teams: [], players: [] });
+        return;
+    }
     check_lives(g);
     // `Slayer_TeamSO::removeMember`: their team takes a bot back.
     fill_bots(g);
@@ -2507,7 +2704,8 @@ fn mg_teams(g, event) {
     // settings, so the kits noted are still the old ones.)
     dress_game(g);
     note_team_lives(g);
-    balance_new(g);
+    announce_new_teams(g, balance_new(g), event);
+    save_last(g, event);
     // A team gone takes its bots with it; a new one gets its own.
     fill_bots(g);
 }
@@ -2698,29 +2896,35 @@ fn on_event_row(p, brick, row) {
 // team's colour, else a plain spawn brick of the game's; open ones first.
 fn on_pick_spawn(p) {
     let me = player(p);
-    if me == () || me.minigame == () || me.team == () {
+    if me == () || me.minigame == () {
         return ();
     }
     let g = minigame(me.minigame);
-    let team = team_by_id(g, me.team);
-    if team == () {
-        return ();
+    // `Slayer_MiniGameSO::pickSpawnPoint`: the map's spawns unless the game
+    // uses spawn bricks; a team's own spawns, else plain spawn bricks (of
+    // the Spawn Brick Color, when set), else the map's.
+    if !g.settings.use_spawn_bricks {
+        return "map";
     }
+    let team = if me.team == () { () } else { team_by_id(g, me.team) };
     let spawns = [];
-    for b in bricks(team_spawn()) {
-        if b.game == g.id && control_of(b) == team.color {
-            spawns.push(b);
-        }
-    }
-    if spawns.is_empty() {
-        for b in bricks(plain_spawn()) {
-            if b.game == g.id {
+    if team != () {
+        for b in bricks(team_spawn()) {
+            if b.game == g.id && control_of(b) == team.color {
                 spawns.push(b);
             }
         }
     }
     if spawns.is_empty() {
-        return ();
+        let color = setting(g.id, "spawn_brick_color");
+        for b in bricks(plain_spawn()) {
+            if b.game == g.id && (color < 0 || b.color == color) {
+                spawns.push(b);
+            }
+        }
+    }
+    if spawns.is_empty() {
+        return "map";
     }
     let open = [];
     for b in spawns {

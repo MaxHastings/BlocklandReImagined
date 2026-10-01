@@ -149,6 +149,9 @@ impl World for ScriptWorld<'_> {
     fn setting_text(&self, game: u64, team: Option<u64>, key: &str) -> Result<String, String> {
         self.session.setting_text(self.package, game, team, key)
     }
+    fn setting_info(&self, key: &str) -> Option<serde_json::Value> {
+        self.session.setting_info(self.package, key)
+    }
     fn minigame_snapshot(&self, game: u64) -> Option<serde_json::Value> {
         self.session.minigame_snapshot(bri_minigames::GameId(game))
     }

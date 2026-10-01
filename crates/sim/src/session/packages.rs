@@ -398,8 +398,12 @@ const PLAYER_COMMAND_WORK: i64 = 400_000;
 /// Bricks one package may place or destroy in a burst; refills every second.
 const PACKAGE_WORLD_EDITS: i64 = 2048;
 /// Chat lines (broadcasts and tells) per package and calling player in a
-/// burst; refills every second, like player chat.
+/// second, like player chat.
 const PACKAGE_CHAT_LINES: i64 = 8;
+/// The burst behind [`PACKAGE_CHAT_LINES`]: one action may say more at
+/// once (a mini-game edit announces each changed setting), as long as the
+/// lines a second stay within it.
+const PACKAGE_CHAT_BURST: i64 = 32;
 /// Chat lines a package tells the player whose own command it answers
 /// (a help page, a list of saves), per package and player in a burst;
 /// refills every second. Only that player reads them, and their command
@@ -493,7 +497,7 @@ impl Shares {
             work: Allowance::new(Budget::Tick.operations() as i64, share, 1),
             commands: Allowance::new(PLAYER_COMMAND_BURST, PLAYER_COMMAND_WORK, SECOND),
             edits: Allowance::new(PACKAGE_WORLD_EDITS, PACKAGE_WORLD_EDITS, SECOND),
-            chat: Allowance::new(PACKAGE_CHAT_LINES, PACKAGE_CHAT_LINES, SECOND),
+            chat: Allowance::new(PACKAGE_CHAT_BURST, PACKAGE_CHAT_LINES, SECOND),
             replies: Allowance::new(PACKAGE_REPLY_LINES, PACKAGE_REPLY_LINES, SECOND),
             cues: Allowance::new(PACKAGE_CUES, PACKAGE_CUES, SECOND),
             shots: Allowance::new(PACKAGE_SHOTS, PACKAGE_SHOTS, SECOND),
@@ -2527,7 +2531,8 @@ impl Session {
     /// One chat line from `package` on behalf of `caller`, within their share.
     fn take_chat_line(&mut self, package: &str, caller: Option<OwnerId>) -> Result<()> {
         let tick = self.simulation.state().tick;
-        let origin = (package.to_string(), caller.map(|c| self.player_key(c)));
+        let payer = caller.or_else(|| self.packages.as_ref()?.game_hooks.chat_payer);
+        let origin = (package.to_string(), payer.map(|c| self.player_key(c)));
         let host = self.packages.as_mut().context("No packages are enabled")?;
         ensure!(
             host.shares.chat.available(&origin, tick) >= 1,
