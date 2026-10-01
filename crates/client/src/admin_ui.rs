@@ -127,6 +127,11 @@ fn options(s: &bri_admin::ServerSettings) -> ui::AdminOptions {
         too_far_distance: s.too_far_distance,
         per_player: quotas(&s.per_player),
         lan: quotas(&s.lan),
+        addon_settings: s
+            .addon_settings
+            .iter()
+            .map(|(k, v)| (k.clone(), crate::minigame_ui::ui_value(v)))
+            .collect(),
     }
 }
 /// A new host's Server Settings: the saved Advanced Config (`$Pref::Server::*`)
@@ -150,6 +155,14 @@ pub fn host_settings(
         },
         &base,
     );
+    if saved.validate().is_ok() {
+        return saved;
+    }
+    // Saved Add-On settings the host would refuse are left out first.
+    let saved = bri_admin::ServerSettings {
+        addon_settings: Default::default(),
+        ..saved
+    };
     if saved.validate().is_ok() {
         saved
     } else {
@@ -175,6 +188,11 @@ fn settings(o: &ui::AdminOptions, current: &bri_admin::ServerSettings) -> bri_ad
         too_far_distance: o.too_far_distance,
         per_player: server_quotas(&o.per_player),
         lan: server_quotas(&o.lan),
+        addon_settings: o
+            .addon_settings
+            .iter()
+            .map(|(k, v)| (k.clone(), crate::minigame_ui::host_value(v)))
+            .collect(),
         ..current.clone()
     }
 }

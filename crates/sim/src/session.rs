@@ -850,6 +850,8 @@ pub struct Session {
     item_spawners: crate::item_spawners::ItemSpawners,
     spawn_loadout: ToolInventory,
     weapons: bri_weapons::WeaponsWorld,
+    /// Server settings the game reads only as it starts, as they were then.
+    started_settings: BTreeMap<String, bri_package::setting::SettingValue>,
     weapon_triggers: BTreeMap<OwnerId, weapons::Triggers>,
     weapon_gaps: BTreeMap<String, u64>,
     /// `$Pref::Server::FootballRecord`, in feet, for this server run.
@@ -977,6 +979,7 @@ impl Session {
             last_membership: BTreeMap::new(),
             item_spawners: Default::default(),
             spawn_loadout: ToolInventory::default(),
+            started_settings: BTreeMap::new(),
             weapon_triggers: BTreeMap::new(),
             weapon_gaps: BTreeMap::new(),
             football_record: 0,
@@ -1141,6 +1144,7 @@ impl Session {
     pub fn set_server_settings(&mut self, settings: bri_admin::ServerSettings) -> Result<()> {
         settings.validate()?;
         self.admin.settings = settings;
+        self.start_settings();
         Ok(())
     }
     /// The host's current Server Settings.

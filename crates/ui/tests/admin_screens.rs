@@ -38,6 +38,7 @@ fn options() -> AdminOptions {
             players: 1,
             vehicles: 1,
         },
+        addon_settings: Default::default(),
     }
 }
 
