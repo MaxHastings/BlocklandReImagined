@@ -21,8 +21,16 @@ pub(super) enum UndoEntry {
     /// Bricks cut away (`cut_copy`), with the ids they had, as they were:
     /// one Ctrl+Z puts them all back.
     Cut(Vec<(BrickId, Brick)>),
-    /// Bricks painted together (`paint_copy`), with the colour each had.
-    Colors(Vec<(BrickId, u8)>),
+    /// Bricks painted together (`paint_copy`), with the paint each had.
+    Looks(Vec<(BrickId, copy_edits::Look)>),
+    /// Bricks wrenched together (`wrench_copy`), as each was.
+    Wrenched(Vec<(BrickId, Brick)>),
+    /// A supercut: the bricks cut, as they were, and the plain bricks put
+    /// back over what stuck out of the box.
+    Replaced {
+        removed: Vec<(BrickId, Brick)>,
+        placed: Vec<BrickId>,
+    },
     /// `COLOR`, from the colour spray cans.
     Color(BrickId, u8),
     /// `COLORFX`, from the colour FX cans.
@@ -36,7 +44,9 @@ impl UndoEntry {
     fn brick(&self) -> BrickId {
         match *self {
             Self::Group(ref ids) => ids[0],
-            Self::Cut(_) | Self::Colors(_) => unreachable!("undone as a whole"),
+            Self::Cut(_) | Self::Looks(_) | Self::Wrenched(_) | Self::Replaced { .. } => {
+                unreachable!("undone as a whole")
+            }
             Self::Plant(id)
             | Self::Color(id, _)
             | Self::ColorEffect(id, _)
@@ -58,7 +68,12 @@ impl UndoEntry {
             | Self::Print(id, _) => follow(id),
             Self::Group(ids) => ids.iter_mut().for_each(follow),
             Self::Cut(bricks) => bricks.iter_mut().for_each(|(id, _)| follow(id)),
-            Self::Colors(colors) => colors.iter_mut().for_each(|(id, _)| follow(id)),
+            Self::Looks(looks) => looks.iter_mut().for_each(|(id, _)| follow(id)),
+            Self::Wrenched(bricks) => bricks.iter_mut().for_each(|(id, _)| follow(id)),
+            Self::Replaced { removed, placed } => {
+                removed.iter_mut().for_each(|(id, _)| follow(id));
+                placed.iter_mut().for_each(follow);
+            }
         }
     }
 }
@@ -93,7 +108,11 @@ impl Session {
         match entry {
             UndoEntry::Group(ids) => return self.undo_group(owner, ids),
             UndoEntry::Cut(bricks) => return self.undo_cut(owner, bricks),
-            UndoEntry::Colors(colors) => return self.undo_colors(owner, colors),
+            UndoEntry::Looks(looks) => return self.undo_looks(owner, looks),
+            UndoEntry::Wrenched(bricks) => return self.undo_wrenched(owner, bricks),
+            UndoEntry::Replaced { removed, placed } => {
+                return self.undo_replaced(owner, removed, placed);
+            }
             _ => {}
         }
         let id = entry.brick();
@@ -109,7 +128,11 @@ impl Session {
             .actor
             .clone();
         let edit = match entry {
-            UndoEntry::Group(_) | UndoEntry::Cut(_) | UndoEntry::Colors(_) => {
+            UndoEntry::Group(_)
+            | UndoEntry::Cut(_)
+            | UndoEntry::Looks(_)
+            | UndoEntry::Wrenched(_)
+            | UndoEntry::Replaced { .. } => {
                 unreachable!("undone above")
             }
             UndoEntry::Plant(_) => {
@@ -216,23 +239,12 @@ impl Session {
         match self.simulation.restore_group(restored) {
             Ok(ids) => {
                 self.dirty.extend(ids.iter().copied());
-                // The bricks came back under new ids: this player's earlier
-                // steps and copy name them by those now.
                 let renamed: BTreeMap<BrickId, BrickId> = bricks
                     .iter()
                     .map(|(old, _)| *old)
                     .zip(ids.iter().copied())
                     .collect();
-                if let Some(stack) = self.undo.get_mut(&owner) {
-                    for entry in &mut stack.0 {
-                        entry.rename(&renamed);
-                    }
-                }
-                if let Some(copy) = self.copies.get_mut(&owner) {
-                    for id in &mut copy.sources {
-                        *id = renamed.get(id).copied().unwrap_or(*id);
-                    }
-                }
+                self.follow_renamed(owner, &renamed);
                 Ok(Reply::Undone(ids.first().copied()))
             }
             Err(error) => {
@@ -246,31 +258,21 @@ impl Session {
             }
         }
     }
+}
 
-    /// Undo painting a copy's bricks: each still standing that the undoer
-    /// may paint takes its old colour back.
-    fn undo_colors(&mut self, owner: OwnerId, colors: Vec<(BrickId, u8)>) -> Result<Reply> {
-        let tick = self.simulation.state().tick;
-        self.play_thread_three(tick, owner, "undo");
-        let actor = self
-            .peers
-            .get(&owner)
-            .context("Unknown connection")?
-            .actor
-            .clone();
-        let palette = self.simulation.state().palette.len();
-        let mut first = None;
-        for (id, color) in colors {
-            let Some(brick) = self.simulation.state().bricks.get(&id) else {
-                continue;
-            };
-            if !actor.trusted(brick.owner, level::FULL) || usize::from(color) >= palette {
-                continue;
+impl Session {
+    /// Bricks that came back under new ids: `owner`'s earlier steps and
+    /// copy name them by those now.
+    pub(super) fn follow_renamed(&mut self, owner: OwnerId, renamed: &BTreeMap<BrickId, BrickId>) {
+        if let Some(stack) = self.undo.get_mut(&owner) {
+            for entry in &mut stack.0 {
+                entry.rename(renamed);
             }
-            self.simulation.mutate(id, |b| b.color = color)?;
-            self.dirty.insert(id);
-            first.get_or_insert(id);
         }
-        Ok(Reply::Undone(first))
+        if let Some(copy) = self.copies.get_mut(&owner) {
+            for id in &mut copy.sources {
+                *id = renamed.get(id).copied().unwrap_or(*id);
+            }
+        }
     }
 }

@@ -51,8 +51,10 @@ mod items;
 mod weapons;
 pub use weapons::{MountedImage, WeaponView};
 mod blueprints;
+mod copy_edits;
 mod copy_store;
 pub use blueprints::Copied;
+pub use copy_edits::{BoxEdit, MAX_BOX_EDIT, WrenchFill};
 pub use copy_store::{CopyStore, LoadedCopy, MemoryCopies, StoreDone};
 mod movables;
 mod packages;
@@ -233,12 +235,19 @@ pub enum Command {
     Tool(ToolAction),
     /// Place the copied build this player holds (`Session::copy_build`)
     /// with its pivot at `position`, turned `quarter_turns`, and with
-    /// `mirrored` seen in a mirror across its x axis before it is turned.
+    /// `mirrored` seen in a mirror across its x axis and `flipped` upside
+    /// down before it is turned.
     PlaceBlueprint {
         position: [f32; 3],
         quarter_turns: u8,
         mirrored: bool,
+        #[serde(default)]
+        flipped: bool,
     },
+    /// The settings ticked in the fill wrench a duplicator opened
+    /// (`Session::open_copy_wrench`), for every brick its copy was taken
+    /// from.
+    WrenchCopy(WrenchFill),
     /// `serverCmdUseSprayCan`: hold the colour can for a palette index.
     UseSprayCan {
         color: u8,
@@ -364,7 +373,7 @@ impl Command {
     pub fn preconditions(&self) -> Preconditions {
         use bri_minigames::BuildAction;
         let (alive, build) = match self {
-            Command::Plant { .. } | Command::PlaceBlueprint { .. } => {
+            Command::Plant { .. } | Command::PlaceBlueprint { .. } | Command::WrenchCopy(_) => {
                 (true, Some(BuildAction::Build))
             }
             Command::UseSprayCan { .. }
@@ -2068,7 +2077,12 @@ impl Session {
                 position,
                 quarter_turns,
                 mirrored,
-            } => self.place_blueprint(owner, position, quarter_turns, mirrored),
+                flipped,
+            } => self.place_blueprint(owner, position, quarter_turns, (mirrored, flipped)),
+            Command::WrenchCopy(fill) => {
+                self.wrench_copy(owner, &fill)?;
+                Ok(Reply::Accepted)
+            }
             Command::Package(request) => self.package_command(owner, request, direction),
             Command::Chat(text) => {
                 peer.chats = peer.chats.saturating_add(1);

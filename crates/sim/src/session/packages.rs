@@ -1453,6 +1453,7 @@ impl Session {
                 reach,
                 rule,
                 tool,
+                hold,
             } => {
                 // A copy is taken with the trust of the player who asked.
                 ensure!(
@@ -1461,8 +1462,16 @@ impl Session {
                 );
                 // The player or the Add-On hears why a copy failed;
                 // nothing went wrong with the Add-On.
-                let copied =
-                    self.copy_build(player, brick, limit as usize, reach, rule, &tool, package);
+                let copied = self.copy_build_held(
+                    player,
+                    brick,
+                    limit as usize,
+                    reach,
+                    rule,
+                    &tool,
+                    package,
+                    hold,
+                );
                 self.report_copy(package, player, copied);
                 Ok(())
             }
@@ -1474,20 +1483,21 @@ impl Session {
                 limit,
                 rule,
                 tool,
+                hold,
             } => {
                 ensure!(
                     caller == Some(player),
                     "A build is copied only for the player whose command asked"
                 );
-                let copied = self.copy_box(
+                let copied = self.copy_box_held(
                     player,
-                    min,
-                    max,
+                    (min, max),
                     limited,
                     limit as usize,
                     rule,
                     &tool,
                     package,
+                    hold,
                 );
                 self.report_copy(package, player, copied);
                 Ok(())
@@ -1582,6 +1592,7 @@ impl Session {
                     name: None,
                     bricks,
                     total: bricks,
+                    placed: 0,
                     limit_reached: false,
                     refused: 0,
                     error,
@@ -1589,15 +1600,143 @@ impl Session {
                 self.report_copy(package, player, outcome);
                 Ok(())
             }
-            Op::PaintCopy { player, color } => {
+            Op::PaintCopy {
+                player,
+                paint,
+                each,
+            } => {
                 ensure!(
                     caller == Some(player),
                     "A copy's bricks are painted only for the player whose command asked"
                 );
-                match self.paint_copy(player, color) {
-                    Ok(count) => self.bottom_count(player, "Painted", count),
-                    Err(error) => self.center_print(player, format!("{error:#}")),
+                let result = self.paint_copy_with(player, paint, each);
+                if !each {
+                    match result {
+                        Ok((count, _)) => self.bottom_count(player, "Painted", count),
+                        Err(error) => self.center_print(player, format!("{error:#}")),
+                    }
+                    return Ok(());
                 }
+                let outcome = match result {
+                    Ok((bricks, refused)) => crate::session::copy_store::CopyOutcome {
+                        action: "paint",
+                        name: None,
+                        bricks,
+                        total: bricks + refused,
+                        placed: 0,
+                        limit_reached: false,
+                        refused,
+                        error: None,
+                    },
+                    Err(error) => crate::session::copy_store::CopyOutcome::failed(
+                        "paint",
+                        self.blueprints.contains_key(&player),
+                        error,
+                    ),
+                };
+                self.report_copy(package, player, outcome);
+                Ok(())
+            }
+            Op::ShowCopy { player } => {
+                ensure!(
+                    caller == Some(player),
+                    "A copy is shown only for the player whose command asked"
+                );
+                if let Err(error) = self.show_copy(player) {
+                    self.center_print(player, format!("{error:#}"));
+                }
+                Ok(())
+            }
+            Op::HideCopy { player } => {
+                ensure!(
+                    caller == Some(player),
+                    "A copy is hidden only for the player whose command asked"
+                );
+                self.hide_copy(player);
+                Ok(())
+            }
+            Op::ShiftCopy {
+                player,
+                offset,
+                super_shift,
+            } => {
+                ensure!(
+                    caller == Some(player),
+                    "A copy is moved only for the player whose command asked"
+                );
+                let _ = self.shift_copy(player, offset, super_shift);
+                Ok(())
+            }
+            Op::RotateCopy { player, direction } => {
+                ensure!(
+                    caller == Some(player),
+                    "A copy is turned only for the player whose command asked"
+                );
+                let _ = self.rotate_copy(player, direction);
+                Ok(())
+            }
+            Op::PlantCopy { player, float } => {
+                ensure!(
+                    caller == Some(player),
+                    "A copy is planted only for the player whose command asked"
+                );
+                let _ = self.plant_copy(player, float);
+                Ok(())
+            }
+            Op::FloatCopy { player, float } => {
+                ensure!(
+                    caller == Some(player),
+                    "A copy floats only for the player whose command asked"
+                );
+                let _ = self.float_copy(player, float);
+                Ok(())
+            }
+            Op::WrenchCopy { player } => {
+                ensure!(
+                    caller == Some(player),
+                    "A copy's bricks are wrenched only for the player whose command asked"
+                );
+                if let Err(error) = self.open_copy_wrench(player) {
+                    let outcome = crate::session::copy_store::CopyOutcome::failed(
+                        "wrench",
+                        self.blueprints.contains_key(&player),
+                        error,
+                    );
+                    self.report_copy(package, player, outcome);
+                }
+                Ok(())
+            }
+            Op::SuperCut { player, min, max } => {
+                ensure!(
+                    caller == Some(player),
+                    "Bricks are cut only for the player whose command asked"
+                );
+                let result = self.super_cut(player, min, max);
+                self.report_box_edit(package, player, "supercut", result);
+                Ok(())
+            }
+            Op::FillBox {
+                player,
+                min,
+                max,
+                color,
+            } => {
+                ensure!(
+                    caller == Some(player),
+                    "Bricks are filled only for the player whose command asked"
+                );
+                let result = self.fill_box(player, min, max, color);
+                self.report_box_edit(package, player, "fill", result);
+                Ok(())
+            }
+            Op::TakePaint { player, take } => {
+                ensure!(self.peers.contains_key(&player), "No such player");
+                self.notify(player, Notice::TakePaint(take));
+                Ok(())
+            }
+            Op::ScrollMode { player, mode } => {
+                ensure!(self.peers.contains_key(&player), "No such player");
+                self.notify(player, Notice::ScrollMode(mode));
                 Ok(())
             }
             Op::PaintFill {

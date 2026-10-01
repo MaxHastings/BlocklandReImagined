@@ -78,6 +78,11 @@ function ndApplyDefaultPrefValues()
    $Pref::Server::ND::MaxBoxSizeAdmin    = 2000;
    $Pref::Server::ND::MaxBoxSizePlayer   = 8;
    $Pref::Server::ND::SelectTimeoutMS    = 250;
+   $Pref::Server::ND::PaintAdminOnly      = false;
+   $Pref::Server::ND::PaintFxAdminOnly    = false;
+   $Pref::Server::ND::WrenchAdminOnly     = false;
+   $Pref::Server::ND::FloatAdminOnly      = false;
+   $Pref::Server::ND::FillBricksAdminOnly = false;
 }
 
 function serverCmdNewDuplicator(%client)
@@ -141,7 +146,10 @@ function NDM_StackSelect::onSelectObject(%this, %client, %obj)
 {
    if(%client.ndLastSelectTime + $Pref::Server::ND::SelectTimeoutMS / 1000 > $Sim::Time)
       return;
-   %client.ndSelection.startStackSelection(%obj, %client.ndDirection, %client.ndLimited);
+   if(%client.ndMultiSelect)
+      %client.ndSelection.startStackSelectionAdditive(%obj, %client.ndDirection, %client.ndLimited);
+   else
+      %client.ndSelection.startStackSelection(%obj, %client.ndDirection, %client.ndLimited);
 }
 
 function NDM_StackSelect::onLight(%this, %client) { %client.ndSetMode(NDM_BoxSelect); }
@@ -154,9 +162,11 @@ function NDM_StackSelect::getBottomPrint(%this, %client)
    return ndFormatMessage("Selection Mode", "Direction: Up", "");
 }
 
-function NDM_BoxSelect::onSelectObject(%this, %client, %obj)
+function NDM_BoxSelect::onSelectObject(%this, %client, %obj, %pos, %normal)
 {
    %box = %obj.getWorldBox();
+   if(%client.ndMultiSelect)
+      %box = ndGetPlateBoxFromRayCast(%pos, %normal);
    %client.ndSelectionBox.setSizeAligned(getWords(%box, 0, 2), getWords(%box, 3, 5), %client.player);
 }
 
@@ -278,4 +288,86 @@ function ND_Selection::finishLoading(%this)
 function serverCmdDupHelp(%client)
 {
    messageClient(%client, '', "You can use the following commands:");
+}
+
+function serverCmdNdMultiSelect(%client, %bool) { %client.ndMultiSelect = !!%bool; }
+function NDM_StackSelect::onShiftBrick(%this, %client, %x, %y, %z) { %client.ndSetMode(NDM_PlantCopy); }
+function NDM_StackSelect::onPlantBrick(%this, %client) { %client.ndSetMode(NDM_PlantCopy); }
+
+function NDM_BoxSelect::onStartMode(%this, %client, %lastMode)
+{
+   %min = %client.ndSelection.minSize;
+   %max = %client.ndSelection.maxSize;
+   %client.ndSelectionBox.setSizeAligned(%min, %max, %client.player);
+}
+
+function ND_SelectionBox::shift(%this, %offset)
+{
+   %this.point1 = vectorAdd(%this.point1, %offset);
+   %this.point2 = vectorAdd(%this.point2, %offset);
+}
+
+function ND_SelectionBox::rotate(%this, %direction)
+{
+   %this.point1 = ndRotateVector(%this.point1, %direction);
+}
+
+function serverCmdMirrorZ(%client) { %client.ndMirror(2); }
+
+function serverCmdForcePlant(%client)
+{
+   if($Pref::Server::ND::FloatAdminOnly && !%client.isAdmin)
+      return;
+   NDM_PlantCopy.conditionalPlant(%client, true);
+}
+
+function serverCmdToggleForcePlant(%client) { %client.ndForcePlant = !%client.ndForcePlant; }
+
+package NewDuplicator_Stand_In_Paint
+{
+   function serverCmdUseSprayCan(%client, %index) { %client.ndSetMode(NDM_FillColor); }
+   function serverCmdUseFxCan(%client, %index) { %client.ndSetMode(NDM_FillColor); }
+};
+activatePackage(NewDuplicator_Stand_In_Paint);
+
+function NDM_FillColor::onPlantBrick(%this, %client)
+{
+   if($Pref::Server::ND::PaintAdminOnly || $Pref::Server::ND::PaintFxAdminOnly)
+      return;
+   %client.ndSelection.startFillColor(0, %client.currentColor);
+}
+
+function NDM_FillColor::onChangeMode(%this, %client) { commandToClient(%client, 'setScrollMode', 2); }
+function ND_Selection::finishFillColor(%this) { commandToClient(%this.client, 'centerPrint', "Painted", 8); }
+
+function serverCmdFillWrench(%client)
+{
+   if($Pref::Server::ND::WrenchAdminOnly && !%client.isAdmin)
+      return;
+   commandToClient(%client, 'ndOpenWrenchGui');
+}
+
+function ND_Selection::finishFillWrench(%this) { commandToClient(%this.client, 'centerPrint', "Applied changes to", 8); }
+function serverCmdSuperCut(%client) { commandToClient(%client, 'messageBoxOkCancel', "Supercut", "Sure?", 'ndConfirmSuperCut'); }
+function serverCmdNdConfirmSuperCut(%client) { %client.ndMode.onSuperCut(%client); }
+
+function ND_Selection::finishSuperCut(%this)
+{
+   commandToClient(%this.client, 'centerPrint', "Deleted, placed a new one", 12);
+   %this.client.doFillBricks();
+}
+
+function serverCmdFillBricks(%client)
+{
+   if($Pref::Server::ND::FillBricksAdminOnly && !%client.isAdmin)
+      return;
+   commandToClient(%client, 'messageBoxOkCancel', "Fill", "Sure?", 'ndConfirmFillBricks');
+}
+
+function serverCmdNdConfirmFillBricks(%client) { %client.fillBricksAfterSuperCut = true; }
+
+function GameConnection::doFillBricks(%this)
+{
+   $ND::FillBrickColorID = %this.currentColor;
+   messageClient(%this, '', "Filled in");
 }

@@ -6,7 +6,9 @@ use crate::api::{EventCatalog, EventRow, WrenchData, WrenchVariant};
 use crate::models::events::EventsModel;
 use std::collections::{BTreeMap, BTreeSet};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub enum WrenchField {
     Name,
     Light,
@@ -63,6 +65,9 @@ pub struct OpenWrench {
     pub owner: String,
     pub admin_override: bool,
     pub events_allowed: bool,
+    /// A fill wrench (a duplicator's) on this many bricks: the ticked
+    /// settings go on every one of them.
+    pub fill: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -74,6 +79,9 @@ pub struct WrenchState {
     pub events: Option<EventsModel>,
     /// Copy checkbox survives dialog closure. Only editable rows may cross bricks.
     pub events_copy: Option<EventsModel>,
+    /// The fill wrench's ticked settings: its Copy boxes say which settings
+    /// to put on every brick.
+    pub fill_ticks: BTreeSet<WrenchField>,
 }
 
 fn vkey(v: WrenchVariant) -> u8 {
@@ -175,7 +183,46 @@ impl WrenchState {
             owner,
             admin_override,
             events_allowed,
+            fill: None,
         });
+    }
+
+    /// A duplicator opened the fill wrench on `bricks` bricks: the dialog
+    /// keeps the values last set, nothing ticked.
+    pub fn open_fill(&mut self, bricks: u32) {
+        self.fill_ticks.clear();
+        self.open = Some(OpenWrench {
+            brick: 0,
+            variant: WrenchVariant::Normal,
+            owner: String::new(),
+            admin_override: false,
+            events_allowed: false,
+            fill: Some(bricks),
+        });
+    }
+
+    /// The fill wrench is open.
+    pub fn filling(&self) -> bool {
+        self.open.as_ref().is_some_and(|o| o.fill.is_some())
+    }
+
+    /// Whether `field`'s Copy box is ticked: on a fill wrench, whether the
+    /// setting goes on every brick.
+    pub fn ticked(&self, v: WrenchVariant, f: WrenchField) -> bool {
+        if self.filling() {
+            self.fill_ticks.contains(&f)
+        } else {
+            self.locked(v, f)
+        }
+    }
+    pub fn set_ticked(&mut self, v: WrenchVariant, f: WrenchField, on: bool) {
+        if !self.filling() {
+            self.set_lock(v, f, on);
+        } else if on {
+            self.fill_ticks.insert(f);
+        } else {
+            self.fill_ticks.remove(&f);
+        }
     }
 
     pub fn close(&mut self) {

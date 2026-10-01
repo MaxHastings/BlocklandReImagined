@@ -196,6 +196,7 @@ pub enum Op {
         reach: StackReach,
         rule: CopyRule,
         tool: String,
+        hold: CopyHold,
     },
     /// Copy every brick lying wholly inside the box from `min` to `max`
     /// (world units, grown out to the stud and plate grid; not `limited`,
@@ -209,6 +210,7 @@ pub enum Op {
         limit: u32,
         rule: CopyRule,
         tool: String,
+        hold: CopyHold,
     },
     /// Light the bricks `player`'s copy was taken from in the palette
     /// colour nearest `color` (RGBA), glowing, for `seconds`, then give
@@ -262,16 +264,91 @@ pub enum Op {
     DropCopy {
         player: u64,
     },
+    /// Give `player` the copy they hold as a selection
+    /// ([`CopyHold::hidden`]) to place, where it was taken.
+    ShowCopy {
+        player: u64,
+    },
+    /// Keep the copy `player` holds as a selection only: the ghost they
+    /// place it with goes, the copy and the bricks it came from stay.
+    HideCopy {
+        player: u64,
+    },
+    /// Move the copy `player` places as their brick shift keys would:
+    /// `offset` is studs away from and to the left of their facing and
+    /// plates up, `super_shift` moves by the copy's own size.
+    ShiftCopy {
+        player: u64,
+        offset: [i32; 3],
+        super_shift: bool,
+    },
+    /// Turn the copy `player` places a quarter turn as their rotate keys
+    /// would: 1 clockwise seen from above, -1 the other way.
+    RotateCopy {
+        player: u64,
+        direction: i8,
+    },
+    /// Plant the copy `player` places where it stands, as their plant key
+    /// would; with `float`, bricks with nothing under them plant this once
+    /// as if they stood on the ground (v20's force plant).
+    PlantCopy {
+        player: u64,
+        float: bool,
+    },
+    /// Let every plant of the copy `player` holds float, or not.
+    FloatCopy {
+        player: u64,
+        float: bool,
+    },
     /// Remove the bricks `player`'s copy was taken from, as their hammer
     /// would (their full trust), as one step Ctrl+Z puts back as it was.
     CutCopy {
         player: u64,
     },
-    /// Paint the bricks `player`'s copy was taken from in palette colour
-    /// `color`, as their spray can would, as one step Ctrl+Z takes back.
+    /// Paint the bricks `player`'s copy was taken from with `paint`, as
+    /// their spray or FX can would, as one step Ctrl+Z takes back. With
+    /// `each`, every brick they may paint is painted and the rest are
+    /// counted (`on_copy`, `action` `"paint"`); else all or none.
     PaintCopy {
         player: u64,
+        paint: CopyPaint,
+        each: bool,
+    },
+    /// Open `player`'s wrench on every brick their copy was taken from: the
+    /// settings they tick apply to each brick they may change, as one step
+    /// Ctrl+Z takes back (`on_copy`, `action` `"wrench"`).
+    WrenchCopy {
+        player: u64,
+    },
+    /// Remove every brick reaching into the box from `min` to `max` that
+    /// `player` may hammer, and put plain bricks back over the parts that
+    /// stuck out of it (v20's New Duplicator's supercut), as one step
+    /// Ctrl+Z takes back (`on_copy`, `action` `"supercut"`).
+    SuperCut {
+        player: u64,
+        min: [f32; 3],
+        max: [f32; 3],
+    },
+    /// Fill the empty room in the box from `min` to `max` with the fewest
+    /// plain bricks of palette colour `color`, as `player`'s own, as one
+    /// step Ctrl+Z takes back (`on_copy`, `action` `"fill"`).
+    FillBox {
+        player: u64,
+        min: [f32; 3],
+        max: [f32; 3],
         color: u8,
+    },
+    /// Let the held image take `player`'s paint and FX cans (its
+    /// `commands.paint`) instead of the can coming out, or stop.
+    TakePaint {
+        player: u64,
+        take: bool,
+    },
+    /// Switch what `player`'s mouse wheel and number keys pick
+    /// (`clientCmdSetScrollMode`), without changing what is in hand.
+    ScrollMode {
+        player: u64,
+        mode: ScrollMode,
     },
     /// Paint `brick` and every brick of its colour joined to it through
     /// shared faces in palette colour `color`, as `player`'s spray can
@@ -554,6 +631,45 @@ impl Default for CopyRule {
         }
     }
 }
+/// How a copy ([`Op::CopyBuild`], [`Op::CopyBox`]) is held.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct CopyHold {
+    /// Held as a selection, not yet shown to place ([`Op::ShowCopy`]).
+    pub hidden: bool,
+    /// Added to the copy the player holds from this package, rather than
+    /// replacing it (a duplicator's multi-select).
+    pub add: bool,
+}
+/// What [`Op::PaintCopy`] puts on bricks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CopyPaint {
+    /// A palette colour (the spray cans).
+    Color(u8),
+    /// A colour effect, 0 to 6: none, pearl, chrome, glow, blink, swirl,
+    /// rainbow (the colour FX cans).
+    ColorEffect(u8),
+    /// A shape effect, 0 to 2: none, undulo, water (the shape FX cans).
+    ShapeEffect(u8),
+}
+/// What a player's mouse wheel picks ([`Op::ScrollMode`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ScrollMode {
+    None,
+    Bricks,
+    Paint,
+    Tools,
+}
+impl ScrollMode {
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "none" => Some(Self::None),
+            "bricks" => Some(Self::Bricks),
+            "paint" => Some(Self::Paint),
+            "tools" => Some(Self::Tools),
+            _ => None,
+        }
+    }
+}
 /// The mirror [`Op::MirrorCopy`] stands in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MirrorAxis {
@@ -563,6 +679,8 @@ pub enum MirrorAxis {
     Z,
     /// Left and right as the player faces swap.
     View,
+    /// Up and down: the copy turns upside down where it stands.
+    Y,
 }
 impl MirrorAxis {
     pub fn parse(text: &str) -> Option<Self> {
@@ -570,6 +688,7 @@ impl MirrorAxis {
             "x" => Some(Self::X),
             "z" => Some(Self::Z),
             "view" => Some(Self::View),
+            "y" => Some(Self::Y),
             _ => None,
         }
     }
@@ -613,6 +732,9 @@ impl Op {
             | Self::SetBlockState { .. }
             | Self::CutCopy { .. }
             | Self::PaintCopy { .. }
+            | Self::WrenchCopy { .. }
+            | Self::SuperCut { .. }
+            | Self::FillBox { .. }
             | Self::PaintFill { .. } => "world.edit",
             Self::Explode { .. }
             | Self::Damage { .. }
@@ -636,6 +758,13 @@ impl Op {
             | Self::MirrorCopy { .. }
             | Self::MoveCopy { .. }
             | Self::DropCopy { .. }
+            | Self::ShowCopy { .. }
+            | Self::HideCopy { .. }
+            | Self::ShiftCopy { .. }
+            | Self::RotateCopy { .. }
+            | Self::PlantCopy { .. }
+            | Self::FloatCopy { .. }
+            | Self::TakePaint { .. }
             | Self::HighlightCopy { .. } => "build",
             Self::SetMapLights { .. } => "lighting",
             Self::SetEnvironment { .. } => "environment",
@@ -652,7 +781,8 @@ impl Op {
             | Self::UnmountImage { .. }
             | Self::SetScale { .. }
             | Self::SetLookLimits { .. }
-            | Self::SetAvatarColors { .. } => "player",
+            | Self::SetAvatarColors { .. }
+            | Self::ScrollMode { .. } => "player",
             Self::MountObject { .. } | Self::UnmountObject { .. } => "physics",
             Self::Push { .. }
             | Self::Tumble { .. }
@@ -683,8 +813,14 @@ impl Op {
             | Self::SetImageAmmo { .. }
             | Self::MirrorCopy { .. }
             | Self::DropCopy { .. }
+            | Self::ShowCopy { .. }
+            | Self::HideCopy { .. }
+            | Self::PlantCopy { .. }
+            | Self::FloatCopy { .. }
+            | Self::TakePaint { .. }
+            | Self::ScrollMode { .. }
             | Self::CutCopy { .. }
-            | Self::PaintCopy { .. }
+            | Self::WrenchCopy { .. }
             | Self::UnmountImage { .. }
             | Self::UnmountObject { .. } => true,
             Self::MountObject {
@@ -694,6 +830,18 @@ impl Op {
             Self::SetLookLimits { limits, .. } => limits
                 .is_none_or(|[down, up]| (0.0..=1.0).contains(&down) && (0.0..=1.0).contains(&up)),
             Self::PaintFill { limit, .. } => (1..=MAX_FILL_BRICKS as u32).contains(limit),
+            Self::PaintCopy { paint, .. } => match paint {
+                CopyPaint::Color(_) => true,
+                CopyPaint::ColorEffect(fx) => *fx <= 6,
+                CopyPaint::ShapeEffect(fx) => *fx <= 2,
+            },
+            Self::ShiftCopy { offset, .. } => {
+                (-1..=1).contains(&offset[0])
+                    && (-1..=1).contains(&offset[1])
+                    && (-3..=3).contains(&offset[2])
+            }
+            Self::RotateCopy { direction, .. } => matches!(direction, -1 | 1),
+            Self::SuperCut { min, max, .. } | Self::FillBox { min, max, .. } => span(min, max),
             Self::Teleport { position, .. } => finite(position),
             Self::PlaceVoxel { position, material } => {
                 position.iter().all(|c| c.abs() <= 1_000_000)
@@ -996,6 +1144,17 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::MirrorCopy { .. } => "mirror_copy",
         Op::MoveCopy { .. } => "move_copy",
         Op::DropCopy { .. } => "drop_copy",
+        Op::ShowCopy { .. } => "show_copy",
+        Op::HideCopy { .. } => "hide_copy",
+        Op::ShiftCopy { .. } => "shift_copy",
+        Op::RotateCopy { .. } => "rotate_copy",
+        Op::PlantCopy { .. } => "plant_copy",
+        Op::FloatCopy { .. } => "float_copy",
+        Op::WrenchCopy { .. } => "wrench_copy",
+        Op::SuperCut { .. } => "super_cut",
+        Op::FillBox { .. } => "fill_box",
+        Op::TakePaint { .. } => "take_paint",
+        Op::ScrollMode { .. } => "scroll_mode",
         Op::CutCopy { .. } => "cut_copy",
         Op::PaintCopy { .. } => "paint_copy",
         Op::PaintFill { .. } => "paint_fill",

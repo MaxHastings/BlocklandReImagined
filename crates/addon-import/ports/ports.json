@@ -99,7 +99,12 @@
           "max_bricks_player": "\\$pref::server::nd::maxbricksplayer\\s*=\\s*(\\d+)\\s*;",
           "max_box_admin": "\\$pref::server::nd::maxboxsizeadmin\\s*=\\s*(\\d+)\\s*;",
           "max_box_player": "\\$pref::server::nd::maxboxsizeplayer\\s*=\\s*(\\d+)\\s*;",
-          "select_timeout_ms": "\\$pref::server::nd::selecttimeoutms\\s*=\\s*(\\d+)\\s*;"
+          "select_timeout_ms": "\\$pref::server::nd::selecttimeoutms\\s*=\\s*(\\d+)\\s*;",
+          "paint_admin_only": "\\$pref::server::nd::paintadminonly\\s*=\\s*(true|false)\\s*;",
+          "paint_fx_admin_only": "\\$pref::server::nd::paintfxadminonly\\s*=\\s*(true|false)\\s*;",
+          "wrench_admin_only": "\\$pref::server::nd::wrenchadminonly\\s*=\\s*(true|false)\\s*;",
+          "float_admin_only": "\\$pref::server::nd::floatadminonly\\s*=\\s*(true|false)\\s*;",
+          "fill_bricks_admin_only": "\\$pref::server::nd::fillbricksadminonly\\s*=\\s*(true|false)\\s*;"
         },
         "Player::ndFired": {
           "reach": "%len\\[2\\]\\s*=\\s*(\\d+)\\s*;",
@@ -129,7 +134,8 @@
         },
         "NDM_StackSelect::onSelectObject": {
           "timeout": "selecttimeoutms",
-          "selects": "startstackselection\\s*\\(\\s*%obj\\s*,\\s*%client\\.nddirection\\s*,\\s*%client\\.ndlimited\\s*\\)"
+          "selects": "startstackselection\\s*\\(\\s*%obj\\s*,\\s*%client\\.nddirection\\s*,\\s*%client\\.ndlimited\\s*\\)",
+          "additive": "startstackselectionadditive\\s*\\(\\s*%obj"
         },
         "NDM_StackSelect::onLight": {
           "box": "ndsetmode\\s*\\(\\s*ndm_boxselect\\s*\\)"
@@ -152,7 +158,8 @@
         },
         "NDM_BoxSelect::onSelectObject": {
           "box": "%obj\\.getworldbox\\s*\\(\\s*\\)",
-          "aligned": "setsizealigned"
+          "aligned": "setsizealigned",
+          "multi": "ndgetplateboxfromraycast\\s*\\(\\s*%pos\\s*,\\s*%normal\\s*\\)"
         },
         "NDM_BoxSelect::onLight": {
           "stack": "ndsetmode\\s*\\(\\s*ndm_stackselect\\s*\\)"
@@ -263,6 +270,80 @@
         },
         "serverCmdCancelBrick": {
           "cancel": "%client\\.ndmode\\.oncancelbrick\\s*\\(\\s*%client\\s*\\)"
+        },
+        "serverCmdNdMultiSelect": {
+          "multi": "%client\\.ndmultiselect\\s*=\\s*!!\\s*%bool"
+        },
+        "NDM_StackSelect::onShiftBrick": {
+          "plant": "ndsetmode\\s*\\(\\s*ndm_plantcopy\\s*\\)"
+        },
+        "NDM_StackSelect::onPlantBrick": {
+          "plant": "ndsetmode\\s*\\(\\s*ndm_plantcopy\\s*\\)"
+        },
+        "NDM_BoxSelect::onStartMode": {
+          "from_selection": "setsizealigned\\s*\\(\\s*%min\\s*,\\s*%max"
+        },
+        "ND_SelectionBox::shift": {
+          "moves": "%this\\.point1\\s*=\\s*vectoradd\\s*\\(\\s*%this\\.point1\\s*,\\s*%offset\\s*\\)"
+        },
+        "ND_SelectionBox::rotate": {
+          "turns": "ndrotatevector"
+        },
+        "serverCmdMirrorZ": {
+          "mirrors": "ndmirror\\s*\\(\\s*2\\s*\\)"
+        },
+        "serverCmdForcePlant": {
+          "admin": "floatadminonly",
+          "plants": "conditionalplant\\s*\\(\\s*%client\\s*,\\s*true\\s*\\)"
+        },
+        "serverCmdToggleForcePlant": {
+          "toggles": "%client\\.ndforceplant\\s*=\\s*!\\s*%client\\.ndforceplant"
+        },
+        "serverCmdUseSprayCan": {
+          "fill": "ndsetmode\\s*\\(\\s*ndm_fillcolor\\s*\\)"
+        },
+        "serverCmdUseFxCan": {
+          "fill": "ndsetmode\\s*\\(\\s*ndm_fillcolor\\s*\\)"
+        },
+        "NDM_FillColor::onPlantBrick": {
+          "admin": "paintadminonly",
+          "fx_admin": "paintfxadminonly",
+          "paints": "startfillcolor"
+        },
+        "NDM_FillColor::onChangeMode": {
+          "scroll": "setscrollmode"
+        },
+        "ND_Selection::finishFillColor": {
+          "painted": "painted"
+        },
+        "serverCmdFillWrench": {
+          "admin": "wrenchadminonly",
+          "opens": "ndopenwrenchgui"
+        },
+        "ND_Selection::finishFillWrench": {
+          "applied": "applied changes to"
+        },
+        "serverCmdSuperCut": {
+          "asks": "ndconfirmsupercut"
+        },
+        "serverCmdNdConfirmSuperCut": {
+          "cuts": "onsupercut\\s*\\(\\s*%client\\s*\\)"
+        },
+        "ND_Selection::finishSuperCut": {
+          "deleted": "deleted",
+          "placed": "new one",
+          "fills": "dofillbricks\\s*\\(\\s*\\)"
+        },
+        "serverCmdFillBricks": {
+          "admin": "fillbricksadminonly",
+          "asks": "ndconfirmfillbricks"
+        },
+        "serverCmdNdConfirmFillBricks": {
+          "fills": "fillbricksaftersupercut\\s*=\\s*true"
+        },
+        "GameConnection::doFillBricks": {
+          "color": "%this\\.currentcolor",
+          "filled": "filled in"
         }
       },
       "tests": [

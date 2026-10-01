@@ -250,6 +250,7 @@ impl Game {
                 position,
                 quarter_turns: turns,
                 mirrored,
+                flipped: false,
             },
         )
     }

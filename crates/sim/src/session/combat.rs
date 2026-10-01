@@ -255,6 +255,27 @@ pub enum Notice {
     /// facing out along `normal`, as a ghost brick is put where it is
     /// aimed.
     MoveCopy { point: [f32; 3], normal: [f32; 3] },
+    /// Turn the copy this player holds upside down where it stands, as
+    /// they see and place it.
+    FlipCopy,
+    /// Move the copy this player holds as their brick shift keys would.
+    ShiftCopy {
+        offset: [i32; 3],
+        super_shift: bool,
+    },
+    /// Turn the copy this player holds as their rotate keys would.
+    RotateCopy { direction: i8 },
+    /// Plant the copy this player holds where it stands, as their plant
+    /// key would.
+    PlantCopy,
+    /// Open the wrench for every brick of this player's copy: what they
+    /// tick comes back as `Command::WrenchCopy`.
+    WrenchCopy { bricks: u32 },
+    /// Whether the image in this player's hand takes their paint and FX
+    /// cans (its `commands.paint`) rather than the can coming out.
+    TakePaint(bool),
+    /// `clientCmdSetScrollMode`: what this player's mouse wheel picks.
+    ScrollMode(bri_package_runtime::ops::ScrollMode),
     /// Outline a box for this player while its tool is in their hand (an
     /// Add-On's selection); `None` takes it away.
     SelectionBox(Option<Box<crate::blueprint::Outline>>),

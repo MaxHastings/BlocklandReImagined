@@ -116,11 +116,14 @@ pub(super) struct SavedCopies {
 /// How a copy, save or load went, for the Add-On's `on_copy` or else the
 /// player.
 pub(super) struct CopyOutcome {
-    /// `select`, `save`, `load` or `cut`.
+    /// `select`, `save`, `load`, `cut`, `paint`, `wrench`, `supercut` or
+    /// `fill`.
     pub action: &'static str,
     pub name: Option<String>,
-    /// Bricks now held (or saved).
+    /// Bricks now held (or saved; or changed, cut or filled in).
     pub bricks: usize,
+    /// Bricks put in (a supercut's bricks over what stuck out of its box).
+    pub placed: usize,
     /// Bricks there were to take: more than `bricks` when the limit cut
     /// the copy short or some could not be had.
     pub total: usize,
@@ -131,6 +134,26 @@ pub(super) struct CopyOutcome {
     /// words for it.
     pub error: Option<(&'static str, String)>,
 }
+impl CopyOutcome {
+    /// `action` refused: with no copy held (`held` false), for that.
+    pub fn failed(action: &'static str, held: bool, error: anyhow::Error) -> Self {
+        let error = if held {
+            ("refused", format!("{error:#}"))
+        } else {
+            ("empty", "Copy a build first.".to_string())
+        };
+        Self {
+            action,
+            name: None,
+            bricks: 0,
+            placed: 0,
+            total: 0,
+            limit_reached: false,
+            refused: 0,
+            error: Some(error),
+        }
+    }
+}
 impl From<blueprints::Copied> for CopyOutcome {
     fn from(copied: blueprints::Copied) -> Self {
         let bricks = copied.selection.bricks.len();
@@ -138,6 +161,7 @@ impl From<blueprints::Copied> for CopyOutcome {
             action: "select",
             name: None,
             bricks,
+            placed: 0,
             total: bricks + copied.selection.refused,
             limit_reached: copied.selection.limit_reached,
             refused: copied.selection.refused,
@@ -162,6 +186,7 @@ impl Session {
             name: Some(request.name.clone()),
             bricks: 0,
             total: 0,
+            placed: 0,
             limit_reached: false,
             refused: 0,
             error: Some((code, message.to_string())),
@@ -196,6 +221,7 @@ impl Session {
                 name: Some(name),
                 bricks: 0,
                 total: 0,
+                placed: 0,
                 limit_reached: false,
                 refused: 0,
                 error: Some(("empty", "Copy a build first.".into())),
@@ -266,6 +292,7 @@ impl Session {
                     name: Some(request.name.clone()),
                     bricks,
                     total: bricks,
+                    placed: 0,
                     limit_reached: false,
                     refused: 0,
                     error: result
@@ -313,6 +340,7 @@ impl Session {
             name: Some(name.into()),
             bricks: 0,
             total: 0,
+            placed: 0,
             limit_reached: false,
             refused: 0,
             error: None,
@@ -373,11 +401,7 @@ impl Session {
             Ok((blueprint, left_out)) => {
                 outcome.bricks = blueprint.bricks.len();
                 outcome.refused = left_out;
-                let held = blueprints::HeldCopy {
-                    sources: vec![],
-                    package: package.into(),
-                    partial,
-                };
+                let held = blueprints::HeldCopy::new(vec![], package, partial);
                 self.hold_blueprint(owner, blueprint, held);
             }
             Err(error) => {

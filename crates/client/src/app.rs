@@ -426,6 +426,8 @@ pub struct App {
     /// The held tool's `wheel` command: while its trigger is held, it takes
     /// the mouse wheel (`UiUpdate::ToolWheel`).
     tool_wheel: Option<String>,
+    /// The HUD was told the tool in hand takes the paint cans.
+    tool_takes_paint: bool,
     cpu_terrain: Vec<Arc<bri_render::terrain_scene::TerrainScene>>,
     renderer: Option<crate::gpu_build::Building<SceneRenderer>>,
     effects: crate::effects::WorldEffects,
@@ -1711,6 +1713,7 @@ impl App {
             steering_sent: None,
             crosshair_hidden: false,
             tool_wheel: None,
+            tool_takes_paint: false,
             cpu_terrain: Vec::new(),
             renderer: None,
             effects,
@@ -2710,9 +2713,15 @@ impl App {
             shift: i.commands.shift.clone(),
             rotate: i.commands.rotate.clone(),
             plant: i.commands.plant.clone(),
+            paint: i.commands.paint.clone(),
         });
         if let Some(building) = self.building.as_mut() {
             building.set_image_keys(keys);
+            let takes = building.takes_paint();
+            if takes != self.tool_takes_paint {
+                self.tool_takes_paint = takes;
+                self.ui.apply(UiUpdate::ToolTakesPaint(takes));
+            }
         }
     }
     /// Dead players watch their corpse from the orbit camera.
@@ -4500,6 +4509,55 @@ impl App {
                             }
                             continue;
                         }
+                        bri_sim::session::Notice::FlipCopy => {
+                            if let Some(building) = self.building.as_mut() {
+                                building.flip_copy();
+                            }
+                            continue;
+                        }
+                        // The host's Add-On pressed a brick key for the
+                        // player: it goes through as theirs would, moving
+                        // the copy they now hold.
+                        bri_sim::session::Notice::ShiftCopy {
+                            offset: [x, y, z],
+                            super_shift,
+                        } => {
+                            self.ui.core.request(UiAction::Game(if super_shift {
+                                GameAction::SuperShiftBrick { x, y, z }
+                            } else {
+                                GameAction::ShiftBrick { x, y, z }
+                            }));
+                            continue;
+                        }
+                        bri_sim::session::Notice::RotateCopy { direction } => {
+                            self.ui.core.request(UiAction::Game(GameAction::RotateBrick {
+                                dir: i32::from(direction),
+                            }));
+                            continue;
+                        }
+                        bri_sim::session::Notice::PlantCopy => {
+                            self.ui.core.request(UiAction::Game(GameAction::PlantBrick));
+                            continue;
+                        }
+                        bri_sim::session::Notice::WrenchCopy { bricks } => {
+                            UiUpdate::OpenFillWrench { bricks }
+                        }
+                        bri_sim::session::Notice::TakePaint(take) => {
+                            if let Some(building) = self.building.as_mut() {
+                                building.set_paint_taken(take);
+                            }
+                            continue;
+                        }
+                        bri_sim::session::Notice::ScrollMode(mode) => {
+                            use bri_package_runtime::ops::ScrollMode as Host;
+                            use bri_ui::models::hud::ScrollMode as Hud;
+                            UiUpdate::ScrollMode(match mode {
+                                Host::None => Hud::None,
+                                Host::Bricks => Hud::Bricks,
+                                Host::Paint => Hud::Paint,
+                                Host::Tools => Hud::Tools,
+                            })
+                        }
                         bri_sim::session::Notice::SelectionBox(outline) => {
                             if let Some(building) = self.building.as_mut()
                                 && let Err(error) = building.set_outline(outline.map(|o| *o))
@@ -5686,6 +5744,7 @@ fn building_action(action: &UiAction) -> bool {
             | UiAction::SetPrint { .. }
             | UiAction::ClosePrintSelector
             | UiAction::SendWrench { .. }
+            | UiAction::SendFillWrench { .. }
             | UiAction::RequestEvents { .. }
             | UiAction::SendEvents { .. }
             | UiAction::CancelWrench { .. }

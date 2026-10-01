@@ -147,6 +147,28 @@ impl Session {
             .filter(|(_, lit)| lit.until <= tick)
             .map(|(id, _)| *id)
             .collect();
+        self.end_highlights(done)
+    }
+
+    /// Give those of `ids` that are lit their own colours back now (a
+    /// duplicator's selection taken to be placed, painted or wrenched).
+    pub(super) fn unlight_bricks(&mut self, ids: &[BrickId]) -> Result<()> {
+        let lit: Vec<BrickId> = ids
+            .iter()
+            .copied()
+            .filter(|id| self.highlights.bricks.contains_key(id))
+            .collect();
+        self.end_highlights(lit)
+    }
+
+    /// Stop tracking `ids` as lit, as they are about to go.
+    pub(super) fn highlights_forget(&mut self, ids: &[BrickId]) {
+        for id in ids {
+            self.highlights.bricks.remove(id);
+        }
+    }
+
+    fn end_highlights(&mut self, done: Vec<BrickId>) -> Result<()> {
         for id in done {
             let lit = self.highlights.bricks.remove(&id).expect("listed above");
             let Some(brick) = self.simulation.state().bricks.get(&id) else {

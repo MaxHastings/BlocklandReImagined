@@ -331,6 +331,13 @@ pub struct ImageCommands {
     /// `while_dead`, since a dying holder lets go too.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unmount: Option<String>,
+    /// The paint and FX cans while the image is in hand and its Add-On
+    /// takes them (`take_paint`; v20 Add-Ons packaged
+    /// `serverCmdUseSprayCan` and `serverCmdUseFXCan`): the can stays out
+    /// of hand and the command runs with `(fx, index)`, `fx` false and a
+    /// palette index, or true and the FX can, 0 to 8 as v20 numbers them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paint: Option<String>,
 }
 impl ImageCommands {
     pub fn is_empty(&self) -> bool {
@@ -345,16 +352,17 @@ impl ImageCommands {
             && self.seat.is_none()
             && self.mount.is_none()
             && self.unmount.is_none()
+            && self.paint.is_none()
     }
     /// The commands the client sends itself as a key is pressed with the
     /// image in hand, rather than the host's image running them.
     pub fn sent_by_client(&self, command: &str) -> bool {
-        [&self.wheel, &self.shift, &self.rotate, &self.plant]
+        [&self.wheel, &self.shift, &self.rotate, &self.plant, &self.paint]
             .into_iter()
             .any(|c| c.as_deref() == Some(command))
     }
     /// Whether the image runs `command` (`package:command`) from any of its
-    /// moments: a state, jet, light, wheel, cancel or brick key.
+    /// moments: a state, jet, light, wheel, cancel, brick key or paint can.
     pub fn runs(&self, command: &str) -> bool {
         self.states.values().any(|c| c == command)
             || [
@@ -368,6 +376,7 @@ impl ImageCommands {
                 &self.seat,
                 &self.mount,
                 &self.unmount,
+                &self.paint,
             ]
                 .into_iter()
                 .any(|c| c.as_deref() == Some(command))
@@ -941,6 +950,7 @@ impl Pack {
                         &image.commands.seat,
                         &image.commands.mount,
                         &image.commands.unmount,
+                        &image.commands.paint,
                     ]
                     .into_iter()
                     .all(|c| c.as_deref().is_none_or(is_image_command)),

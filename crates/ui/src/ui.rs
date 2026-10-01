@@ -1707,6 +1707,8 @@ impl Ui {
             }
             UiUpdate::Tools(t) => c.hud.set_tools(t),
             UiUpdate::SetActiveTool(slot) => c.hud.apply_active_tool(slot),
+            UiUpdate::ScrollMode(mode) => c.hud.apply_scroll_mode(mode),
+            UiUpdate::ToolTakesPaint(takes) => c.hud.tool_takes_paint = takes,
             UiUpdate::SetActiveBrick(slot) => c.hud.apply_active_brick(slot),
             UiUpdate::FirstSpawn => {
                 // BSD_ClickFav(1) + buy, only when favorites slot 1 exists.
@@ -1840,6 +1842,18 @@ impl Ui {
                     c.pop(id);
                 }
                 c.push(ScreenId::Wrench(variant));
+            }
+            UiUpdate::OpenFillWrench { bricks } => {
+                c.pop(ScreenId::WrenchEvents);
+                c.wrench.open_fill(bricks);
+                for id in [
+                    ScreenId::Wrench(WrenchVariant::Normal),
+                    ScreenId::Wrench(WrenchVariant::Sound),
+                    ScreenId::Wrench(WrenchVariant::VehicleSpawn),
+                ] {
+                    c.pop(id);
+                }
+                c.push(ScreenId::Wrench(WrenchVariant::Normal));
             }
             UiUpdate::OpenEvents {
                 brick,

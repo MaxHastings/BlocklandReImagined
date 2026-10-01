@@ -688,6 +688,12 @@ pub enum UiAction {
         variant: WrenchVariant,
         data: WrenchData,
     },
+    /// The fill wrench's settings, with `fields` the ones ticked to put on
+    /// every brick.
+    SendFillWrench {
+        data: WrenchData,
+        fields: Vec<crate::models::wrench::WrenchField>,
+    },
     /// Vehicle spawn wrench `< Respawn >`.
     RespawnVehicle {
         brick: u64,
@@ -1235,6 +1241,11 @@ pub enum UiUpdate {
     /// first; empty/out-of-range selections safely clear selection.
     SetActiveTool(Option<usize>),
     SetActiveBrick(Option<usize>),
+    /// `clientCmdSetScrollMode`: the host switches the inventory box shown.
+    ScrollMode(crate::models::hud::ScrollMode),
+    /// The tool in hand takes the paint cans, so opening paint from it
+    /// keeps it in hand.
+    ToolTakesPaint(bool),
     /// First spawn of the session: the UI buys favorites slot 1.
     FirstSpawn,
     Chat {
@@ -1303,6 +1314,10 @@ pub enum UiUpdate {
     /// `clientCmdTrustInvite`.
     TrustInvite(TrustInvitation),
     Lagging(bool),
+    /// A duplicator opened the fill wrench on `bricks` bricks.
+    OpenFillWrench {
+        bricks: u32,
+    },
     /// Open the wrench for a brick the server says we may edit.
     OpenWrench {
         brick: u64,

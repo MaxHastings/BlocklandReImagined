@@ -4,15 +4,22 @@
 //   /newduplicator (/duplicator, /dup, /d and the rest) puts it in your hand.
 //   Stack mode: clicking a brick selects it and everything built on it, up
 //   or down from it ([Next Seat]), limited to its side or not
-//   ([Prev Seat]), lights the selection up and holds it as a ghost.
-//   [Light] switches to box mode: clicking a brick puts a box around it,
-//   the brick keys move its corner ([Rotate Brick] picks the other corner),
-//   and [Plant Brick] selects what is in it.
-//   The brick keys move a selection; clicking puts it against what you
-//   click; [Plant Brick] plants it brick by brick and says what did not
-//   fit. [Cancel Brick] drops the selection, then the box.
-//   /MirrorX and /MirrorY mirror it, /Cut cuts the originals away,
-//   /SaveDup and /LoadDup keep and load selections by name.
+//   ([Prev Seat]), and lights the selection up; holding Ctrl (crouch) adds
+//   to the selection. [Light] switches to box mode (turning a selection
+//   into a box round it): clicking a brick puts a box around it, the brick
+//   keys move its corner ([Rotate Brick] picks the other corner), and
+//   [Plant Brick] selects what is in it; with Ctrl held a click grows the
+//   box to the plate clicked, and the keys move and turn the whole box.
+//   With a selection, the brick keys take it up as a ghost (plant mode):
+//   they move it, clicking puts it against what you click, [Plant Brick]
+//   plants it brick by brick and says what did not fit. [Cancel Brick]
+//   drops the selection, then the box.
+//   With a selection, a paint can is fill colour: [Plant Brick] paints it.
+//   /FillWrench wrenches it all, /SuperCut cuts the box out and puts plain
+//   bricks back over what stuck out, /FillBricks then fills the box,
+//   /ForcePlant plants a ghost that floats, /MirrorX, /MirrorY and
+//   /MirrorZ mirror it, /Cut cuts the originals away, /SaveDup and
+//   /LoadDup keep and load selections by name.
 
 // Its preferences, as `ndApplyDefaultPrefValues` set them.
 fn admin_only() {
@@ -57,6 +64,22 @@ fn glow_seconds() {
 fn name_length() {
     {{name_length}}
 }
+// Admin-only features.
+fn paint_admin_only() {
+    {{paint_admin_only}}
+}
+fn paint_fx_admin_only() {
+    {{paint_fx_admin_only}}
+}
+fn wrench_admin_only() {
+    {{wrench_admin_only}}
+}
+fn float_admin_only() {
+    {{float_admin_only}}
+}
+fn fill_bricks_admin_only() {
+    {{fill_bricks_admin_only}}
+}
 
 // Simulation ticks per second.
 fn second() {
@@ -68,11 +91,12 @@ fn tool() {
 }
 
 // The duplicator's look in each mode: gold to select, the spinning box
-// for a box, blue to plant.
+// for a box, blue to plant; fill colour keeps the one in hand.
 fn image_of(mode) {
     switch mode {
         "box" => "{{namespace}}:image/nd_image_box",
         "plant" => "{{namespace}}:image/nd_image_blue",
+        "fillcolor" => (),
         _ => "{{namespace}}:image/nd_image",
     }
 }
@@ -156,11 +180,12 @@ fn bottom(p) {
             let r1 = "";
             if count > 0 {
                 title = `Selection Mode (\c3${count}\c6 Brick` + if count > 1 { "s)" } else { ")" };
-                r0 = "";
+                r0 = "Ctrl-Click Brick: Multiselect";
                 r1 = "[Plant Brick]: Duplicate";
             }
+            let multi = if player(p).crouched { "Multi-" } else { "" };
             format_message(title, [
-                [`Type: \c3Stack \c6[Light]`, r0],
+                [`Type: \c3${multi}Stack \c6[Light]`, r0],
                 [limited_text(p), r1],
                 [`Direction: \c3${way} \c6[Next Seat]`, ""],
             ])
@@ -194,6 +219,20 @@ fn bottom(p) {
                 [l2, ""],
             ])
         }
+        "fillcolor" => {
+            let count = get_player(p, "selected");
+            let title = `Paint Mode (\c3${count}\c6 Brick` + if count > 1 { "s)" } else { ")" };
+            let fill = get_player(p, "fill");
+            let color = if fill[0] {
+                `\c3Fx - ` + ["None", "Pearl", "Chrome", "Glow", "Blink", "Swirl", "Rainbow", "Stable", "Undulo"][fill[1]]
+            } else {
+                `\c3Colour ${fill[1] + 1}`
+            };
+            format_message(title, [
+                ["Select paint can to chose color", "[Plant Brick]: Paint bricks"],
+                ["Color: " + color, "[Cancel Brick]: Exit mode"],
+            ])
+        }
         "plant" => {
             let count = get_player(p, "selected");
             let title = `Plant Mode (\c3${count}\c6 Brick` + if count == 1 { ")" } else { "s)" };
@@ -225,7 +264,7 @@ fn oops(p, text, seconds) {
 // not the duplicator coming out or going away (`ndIgnoreNextMount`).
 fn show_image(p, mode) {
     let image = image_of(mode);
-    if player(p).image != image {
+    if image != () && player(p).image != image {
         set_player(p, "swapping", true);
         mount_image(p, image);
     }
@@ -243,27 +282,82 @@ fn set_mode(p, mode) {
         set_player(p, "box", []);
         hide_box(p);
     }
+    if old == "fillcolor" {
+        // The paint box goes, the duplicator's tools come back.
+        scroll_mode(p, "tools");
+    }
+    if old == "plant" && (mode == "stack" || mode == "box") {
+        // Leaving plant mode lets the selection go.
+        set_player(p, "selected", 0);
+        drop_copy(p);
+    }
+    if (old == "stack" || old == "box") && mode == "plant" {
+        // Taken up as a ghost where it was selected.
+        show_copy(p);
+        float_copy(p, get_player(p, "force_plant"));
+    }
     if mode == "stack" || mode == "box" {
         set_player(p, "last_select", mode);
-        set_player(p, "box_selected", false);
-        if old != "" {
+        if old == "stack" || old == "box" {
+            set_player(p, "box_selected", false);
+            if mode == "box" {
+                box_from_selection(p);
+            }
             // A selection made in the other mode is let go.
             set_player(p, "selected", 0);
             drop_copy(p);
         }
     }
     show_image(p, mode);
+    take_paints(p);
     bottom(p);
+}
+
+// While a selection is held in a selection mode, the paint cans pick its
+// fill colour instead of coming out (`serverCmdUseSprayCan`).
+fn take_paints(p) {
+    let mode = get_player(p, "mode");
+    let take = (mode == "stack" || mode == "box" || mode == "fillcolor")
+        && get_player(p, "selected") > 0;
+    if take != get_player(p, "paints") {
+        set_player(p, "paints", take);
+        take_paint(p, take);
+    }
+}
+
+// `NDM_BoxSelect::onStartMode` from stack mode: a box round the selection,
+// if the box may be that big.
+fn box_from_selection(p) {
+    let area = get_player(p, "selection_box");
+    if get_player(p, "selected") == 0 || area.len() != 6 {
+        return;
+    }
+    let me = player(p);
+    let limit = max_box(me.admin);
+    let low = [area[0], area[1], area[2]];
+    let high = [area[3], area[4], area[5]];
+    if high[0] - low[0] <= limit && high[1] - low[1] <= limit && high[2] - low[2] <= limit {
+        set_player(p, "box", aligned(me, low, high));
+        set_player(p, "corner", true);
+        show_box(p, low, high, tool());
+    } else {
+        let studs = (limit * 2.0).floor().to_int();
+        center_print(p, `<font:Verdana:20>\c6Oops!` + "\n<font:Verdana:17>" + `\c6Your selection box is limited to \c3${studs} \c6studs.`, 5);
+    }
 }
 
 // `ndKillMode`: the duplicator put away.
 fn kill_mode(p) {
+    if get_player(p, "mode") == "fillcolor" {
+        scroll_mode(p, "tools");
+    }
     set_player(p, "mode", "");
     set_player(p, "selected", 0);
     set_player(p, "box", []);
     set_player(p, "box_selected", false);
     hide_box(p);
     drop_copy(p);
+    take_paints(p);
     bottom_print(p, "", 0);
 }
 
@@ -361,6 +455,12 @@ fn waited(p, me) {
     true
 }
 
+// Ctrl, held: the original's multiselect key, which shares Ctrl with
+// crouching.
+fn multi(me) {
+    me.crouched
+}
+
 fn copy_rule(p, me) {
     #{
         trust: trust(),
@@ -368,6 +468,9 @@ fn copy_rule(p, me) {
         admin: admin_bypass(),
         partial: true,
         limited: get_player(p, "limited"),
+        // Held as a selection until a brick key takes it up.
+        hidden: true,
+        add: get_player(p, "mode") == "stack" && multi(me),
     }
 }
 
@@ -404,6 +507,9 @@ fn cmd_fire(p) {
         return;
     }
     let me = player(p);
+    if mode == "fillcolor" {
+        return;
+    }
     if mode == "plant" {
         // Put the selection against what was clicked.
         let hit = raycast([me.ex, me.ey, me.ez], [me.lx, me.ly, me.lz], {{reach}} * 1.0, p);
@@ -436,16 +542,55 @@ fn cmd_fire(p) {
         set_player(p, "box_selected", false);
         set_player(p, "selected", 0);
         drop_copy(p);
+        take_paints(p);
     }
     let b = brick_box(hit.brick);
     if b == () {
         return;
+    }
+    let corners = get_player(p, "box");
+    if multi(me) {
+        // Grown to take in the plate clicked (`ndGetPlateBoxFromRayCast`).
+        b = plate_box(hit);
+        if corners.len() == 6 {
+            let low = box_min(corners);
+            let high = box_max(corners);
+            for a in 0..3 {
+                b.min[a] = lower(b.min[a], low[a]);
+                b.max[a] = upper(b.max[a], high[a]);
+            }
+        }
     }
     set_player(p, "box", aligned(me, b.min, b.max));
     set_player(p, "corner", true);
     let corners = get_player(p, "box");
     show_box(p, box_min(corners), box_max(corners), tool());
     bottom(p);
+}
+
+// The plate the ray hit, one step into what it hit.
+fn plate_box(hit) {
+    let at = [hit.x, hit.y, hit.z];
+    let normal = [hit.nx, hit.ny, hit.nz];
+    let cell = [0.5, 0.2, 0.5];
+    let min = [0.0, 0.0, 0.0];
+    let max = [0.0, 0.0, 0.0];
+    for a in 0..3 {
+        let v = at[a] - cell[a] * 0.5 * normal[a].round();
+        min[a] = (v / cell[a]).floor() * cell[a];
+        max[a] = (v / cell[a]).ceiling() * cell[a];
+        if max[a] - min[a] < 0.01 {
+            max[a] = min[a] + cell[a];
+        }
+    }
+    #{ min: min, max: max }
+}
+
+// A step along the floor turned as the player faces.
+fn turned_step(me, x, y) {
+    let f = facing(me);
+    let left = [f[2], 0.0, -f[0]];
+    [(f[0] * x + left[0] * y) * 0.5, (f[2] * x + left[2] * y) * 0.5]
 }
 
 // [Light]: stack and box mode.
@@ -478,9 +623,21 @@ fn cmd_seat(p, step) {
     play_sound(p, if on { "lightOnSound" } else { "lightOffSound" });
 }
 
-// [Shift Brick] and [Super Shift Brick] on the box: move its corner.
-// (With a selection held the keys move the selection instead.)
+// A selection held in stack or box mode, taken up by a brick key.
+fn selection_held(p) {
+    let mode = get_player(p, "mode");
+    (mode == "stack" || mode == "box") && get_player(p, "selected") > 0
+        && (mode == "stack" || get_player(p, "box_selected"))
+}
+
+// [Shift Brick] and [Super Shift Brick]: with a selection, take it up and
+// move it; on the box, move its corner (or, Ctrl held, the whole box).
 fn cmd_shift(p, x, y, z, super_shift) {
+    if selection_held(p) {
+        set_mode(p, "plant");
+        shift_copy(p, x, y, z, super_shift);
+        return;
+    }
     if get_player(p, "mode") != "box" || get_player(p, "box_selected") {
         return;
     }
@@ -495,13 +652,20 @@ fn cmd_shift(p, x, y, z, super_shift) {
         z *= {{super_plates}};
     }
     // Studs away and to the left as the player faces, plates up.
-    let f = facing(me);
-    let left = [f[2], 0.0, -f[0]];
-    let offset = [
-        (f[0] * x + left[0] * y) * 0.5,
-        z.to_float() * 0.2,
-        (f[2] * x + left[2] * y) * 0.5,
-    ];
+    let step = turned_step(me, x, y);
+    let offset = [step[0], z.to_float() * 0.2, step[1]];
+    if multi(me) {
+        // `ND_SelectionBox::shift`: the whole box moves.
+        let moved = b;
+        for a in 0..3 {
+            moved[a] += offset[a];
+            moved[a + 3] += offset[a];
+        }
+        play_sound(p, "brickMoveSound");
+        set_player(p, "box", moved);
+        show_box(p, box_min(moved), box_max(moved), tool());
+        return;
+    }
     let limit = max_box(me.admin);
     let reached = false;
     let moved = b;
@@ -533,20 +697,63 @@ fn cmd_shift(p, x, y, z, super_shift) {
     bottom(p);
 }
 
-// [Rotate Brick] on the box: the other corner.
+// [Rotate Brick]: with a selection, take it up and turn it; on the box,
+// the other corner (or, Ctrl held, the whole box turned).
 fn cmd_rotate(p, dir) {
+    if selection_held(p) {
+        set_mode(p, "plant");
+        rotate_copy(p, dir);
+        return;
+    }
     if get_player(p, "mode") != "box" || get_player(p, "box_selected") {
         return;
     }
-    if get_player(p, "box").len() != 6 {
+    let b = get_player(p, "box");
+    if b.len() != 6 {
+        return;
+    }
+    if multi(player(p)) {
+        let turned = rotate_box(b, dir);
+        play_sound(p, "brickRotateSound");
+        set_player(p, "box", turned);
+        show_box(p, box_min(turned), box_max(turned), tool());
+        bottom(p);
         return;
     }
     set_player(p, "corner", !get_player(p, "corner"));
     play_sound(p, "brickRotateSound");
 }
 
-// [Plant Brick] on the box: select what is in it.
+// `ND_SelectionBox::rotate`: the box turned a quarter about its middle,
+// kept on the stud grid.
+fn rotate_box(b, dir) {
+    let mid = [(b[0] + b[3]) * 0.5, (b[2] + b[5]) * 0.5];
+    let sx = ((b[3] - b[0]) * 2.0).abs().round().to_int();
+    let sz = ((b[5] - b[2]) * 2.0).abs().round().to_int();
+    let correct = if sx % 2 == sz % 2 { 0.0 } else if sx % 2 == 1 { -0.25 } else { 0.25 };
+    let out = b;
+    for c in [0, 3] {
+        let dx = b[c] - mid[0];
+        let dz = b[c + 2] - mid[1];
+        // A quarter turn clockwise seen from above, or back.
+        let turned = if dir > 0 { [-dz, dx] } else { [dz, -dx] };
+        out[c] = mid[0] + turned[0] + correct;
+        out[c + 2] = mid[1] + turned[1] + correct;
+    }
+    out
+}
+
+// [Plant Brick]: with a selection, take it up as a ghost; on the box,
+// select what is in it; in fill colour, paint the selection.
 fn cmd_plant(p) {
+    if selection_held(p) {
+        set_mode(p, "plant");
+        return;
+    }
+    if get_player(p, "mode") == "fillcolor" {
+        fill_color(p);
+        return;
+    }
     if get_player(p, "mode") != "box" || get_player(p, "box_selected") {
         return;
     }
@@ -567,7 +774,11 @@ fn cmd_cancel(p) {
         "stack" => {
             set_player(p, "selected", 0);
             drop_copy(p);
+            take_paints(p);
             bottom(p);
+        }
+        "fillcolor" => {
+            set_mode(p, get_player(p, "last_select"));
         }
         "box" => {
             if get_player(p, "box").len() != 6 {
@@ -582,10 +793,10 @@ fn cmd_cancel(p) {
             }
             set_player(p, "selected", 0);
             drop_copy(p);
+            take_paints(p);
             bottom(p);
         }
         "plant" => {
-            drop_copy(p);
             set_mode(p, get_player(p, "last_select"));
         }
     }
@@ -595,26 +806,26 @@ fn holds_selection(p) {
     get_player(p, "mode") == "plant" || get_player(p, "selected") > 0
 }
 
-// `/MirrorX`: left and right as the player sees it.
-fn cmd_mirrorx(p) {
-    if !holds_selection(p) {
+// `GameConnection::ndMirror`: only a ghost in plant mode mirrors.
+fn mirror(p, axis) {
+    if get_player(p, "mode") != "plant" {
         tell(p, `\c6The mirror command can only be used in plant mode or with a ghost brick.`);
         return;
     }
-    mirror_copy(p, "view");
+    mirror_copy(p, axis);
+}
+// `/MirrorX`: left and right as the player sees it.
+fn cmd_mirrorx(p) {
+    mirror(p, "view");
 }
 // `/MirrorY`: front and back as the player sees it.
 fn cmd_mirrory(p) {
-    if !holds_selection(p) {
-        tell(p, `\c6The mirror command can only be used in plant mode or with a ghost brick.`);
-        return;
-    }
     let f = facing(player(p));
-    mirror_copy(p, if f[0] != 0.0 { "x" } else { "z" });
+    mirror(p, if f[0] != 0.0 { "x" } else { "z" });
 }
-// `/MirrorZ`: up and down, which bricks cannot be mirrored in here.
+// `/MirrorZ`: up and down.
 fn cmd_mirrorz(p) {
-    tell(p, `\c6Mirroring up and down is not available on this server.`);
+    mirror(p, "y");
 }
 fn cmd_mx(p) {
     cmd_mirrorx(p);
@@ -624,6 +835,190 @@ fn cmd_my(p) {
 }
 fn cmd_mz(p) {
     cmd_mirrorz(p);
+}
+
+// A paint or FX can picked while the selection takes them
+// (`serverCmdUseSprayCan`, `serverCmdUseFxCan`): fill colour mode with it.
+fn cmd_paint(p, fx, index) {
+    let mode = get_player(p, "mode");
+    if !(mode == "stack" || mode == "box" || mode == "fillcolor") || get_player(p, "selected") == 0 {
+        return;
+    }
+    set_player(p, "fill", [fx, index]);
+    if mode == "fillcolor" {
+        bottom(p);
+    } else {
+        set_mode(p, "fillcolor");
+    }
+}
+
+// `NDM_FillColor::onPlantBrick`: paint the selection.
+fn fill_color(p) {
+    let me = player(p);
+    if paint_admin_only() && !me.admin {
+        tell(p, `\c6Paint Mode is admin only. Ask an admin for help.`);
+        return;
+    }
+    let fill = get_player(p, "fill");
+    if !fill[0] {
+        paint_copy(p, #{ color: fill[1] });
+        return;
+    }
+    if paint_fx_admin_only() && !me.admin {
+        tell(p, `\c6Paint Fx Mode is admin only. Ask an admin for help.`);
+        return;
+    }
+    if fill[1] < 7 {
+        paint_copy(p, #{ fx: fill[1] });
+    } else {
+        paint_copy(p, #{ shape: fill[1] - 7 });
+    }
+}
+
+// `/FillWrench` (`/FW`): the wrench on every selected brick.
+fn cmd_fillwrench(p) {
+    if wrench_admin_only() && !player(p).admin {
+        tell(p, `\c6Fill Wrench is admin only. Ask an admin for help.`);
+        return;
+    }
+    let mode = get_player(p, "mode");
+    if mode != "stack" && mode != "box" {
+        tell(p, `\c6Fill Wrench can only be used in Selection Mode.`);
+        return;
+    }
+    if get_player(p, "selected") == 0 {
+        tell(p, `\c6Fill Wrench can only be used with a selection.`);
+        return;
+    }
+    wrench_copy(p);
+}
+fn cmd_fw(p) {
+    cmd_fillwrench(p);
+}
+
+// Why the box may not be supercut or filled now, or ().
+fn box_refusal(p, what) {
+    if get_player(p, "box").len() != 6 {
+        return `\c6${what} can only be used with a selection box.`;
+    }
+    if get_player(p, "box_selected") {
+        return `\c6${what} can not be used with any bricks selected.`;
+    }
+    ()
+}
+
+// `/SuperCut` (`/SC`): asks first.
+fn cmd_supercut(p) {
+    if get_player(p, "mode") != "box" {
+        tell(p, `\c6Supercut can only be used on box selection mode.`);
+        return;
+    }
+    let refused = box_refusal(p, "Supercut");
+    if refused != () {
+        tell(p, refused);
+        return;
+    }
+    ask(p, "New Duplicator | Supercut", "Supercut deletes every brick reaching into the box\nand puts plain bricks back over what stuck out.\n\nPlease make sure the box is correct,\nthen press OK below.", "ndconfirmsupercut");
+}
+fn cmd_sc(p) {
+    cmd_supercut(p);
+}
+fn cmd_ndconfirmsupercut(p) {
+    if get_player(p, "mode") != "box" {
+        tell(p, `\c6Supercut can only be used on box selection mode.`);
+        return;
+    }
+    let refused = box_refusal(p, "Supercut");
+    if refused != () {
+        tell(p, refused);
+        return;
+    }
+    set_player(p, "fill_after_cut", false);
+    super_cut_box(p);
+}
+
+fn super_cut_box(p) {
+    let b = get_player(p, "box");
+    super_cut(p, box_min(b), box_max(b));
+}
+
+// `/FillBricks` (`/FB`): a supercut, then the box filled with plain bricks
+// in the player's paint colour. Asks first.
+fn fill_bricks_refusal(p) {
+    if fill_bricks_admin_only() && !player(p).admin {
+        return `\c6Fill Bricks is admin only. Ask an admin for help.`;
+    }
+    if get_player(p, "mode") != "box" {
+        return `\c6The fillBricks command can only be used with a selection box.`;
+    }
+    let refused = box_refusal(p, "The fillBricks command");
+    if refused != () {
+        return refused;
+    }
+    let b = get_player(p, "box");
+    for a in 0..3 {
+        if (b[a + 3] - b[a]).abs() < 0.05 {
+            return `\c6The fillBricks command can only be used with a selection box that has a volume.`;
+        }
+    }
+    ()
+}
+fn cmd_fillbricks(p) {
+    let refused = fill_bricks_refusal(p);
+    if refused != () {
+        tell(p, refused);
+        return;
+    }
+    ask(p, "New Duplicator | /FillBricks", "/FillBricks will first do a Supercut\nbefore placing bricks, to fix overlap.\n\nPlease make sure the box is correct,\nthen press OK below to continue.", "ndconfirmfillbricks");
+}
+fn cmd_fb(p) {
+    cmd_fillbricks(p);
+}
+fn cmd_ndconfirmfillbricks(p) {
+    let refused = fill_bricks_refusal(p);
+    if refused != () {
+        tell(p, refused);
+        return;
+    }
+    set_player(p, "fill_after_cut", true);
+    super_cut_box(p);
+}
+
+// `/ForcePlant` (`/FP`): plant the ghost once, floating bricks and all.
+fn cmd_forceplant(p) {
+    if get_player(p, "mode") != "plant" {
+        tell(p, `\c6Force Plant can only be used in Plant Mode.`);
+        return;
+    }
+    if float_admin_only() && !player(p).admin {
+        tell(p, `\c6Force Plant is admin only. Ask an admin for help.`);
+        return;
+    }
+    plant_copy(p, #{ float: true });
+}
+fn cmd_fp(p) {
+    cmd_forceplant(p);
+}
+
+// `/ToggleForcePlant` (`/TFP`): every plant floats until toggled back.
+fn cmd_toggleforceplant(p) {
+    if float_admin_only() && !player(p).admin {
+        tell(p, `\c6Force Plant is admin only. Ask an admin for help.`);
+        return;
+    }
+    let on = !get_player(p, "force_plant");
+    set_player(p, "force_plant", on);
+    if get_player(p, "mode") == "plant" {
+        float_copy(p, on);
+    }
+    if on {
+        tell(p, `\c6Force Plant has been enabled. Use \c3/toggleForcePlant\c6 to disable it.`);
+    } else {
+        tell(p, `\c6Force Plant has been disabled. Use \c3/toggleForcePlant\c6 to enable it again.`);
+    }
+}
+fn cmd_tfp(p) {
+    cmd_toggleforceplant(p);
 }
 
 // `/Cut` (`/NdCut`, Ctrl+X): the selected bricks cut away, held to plant.
@@ -723,20 +1118,80 @@ fn cmd_ld(p, typed) {
 fn cmd_duphelp(p) {
     tell(p, `\c6You can use the following commands with your new duplicator:`);
     tell(p, `\c3/Duplicator\c6 Equip a new duplicator!`);
-    tell(p, `\c3/MirrorX\c6 Mirror your ghost selection left/right on screen.`);
-    tell(p, `\c3/MirrorY\c6 Mirror your ghost selection front/back on screen.`);
-    tell(p, `\c3/Cut\c6 Cut your selection away, to plant it somewhere else.`);
-    tell(p, `\c3/SaveDup\c6 [\c3name\c6] Save your current selection to a file.`);
-    tell(p, `\c3/LoadDup\c6 [\c3name\c6] Load a selection from a file. Your current selection will be deleted.`);
+    tell(p, `\c3/ForcePlant\c6 Plant a selection in mid air; bricks can float. \c3/ToggleForcePlant\c6 keeps it on.`);
+    tell(p, `\c3/FillWrench\c6 Change settings on all selected bricks.`);
+    tell(p, `\c3/MirrorX\c6, \c3/MirrorY\c6, \c3/MirrorZ\c6 Mirror your ghost selection left/right, front/back, up/down.`);
+    tell(p, `\c3/SuperCut\c6 Delete everything in your selection box. \c3/FillBricks\c6 Then fill it with few bricks.`);
+    tell(p, `\c3/Cut\c6 Cut your selection away. \c3/SaveDup\c6 and \c3/LoadDup\c6 [\c3name\c6] Save and load selections.`);
     tell(p, `\c6All of the commands can be shortened by just typing a \c3/\c6 and the capital letters!`);
 }
 fn cmd_dh(p) {
     cmd_duphelp(p);
 }
 
-// A selection, cut, save or load finished.
+// A selection, cut, save, load, paint, wrench, supercut or fill finished.
 fn on_copy(p, info) {
     switch info.action {
+        "paint" => {
+            if info.error != () {
+                oops(p, info.message, 5);
+                return;
+            }
+            let msg = `<font:Verdana:20>\c6Painted \c3${info.bricks}\c6 Brick${s(info.bricks)}!`;
+            if info.refused > 0 {
+                msg += line(`\c3${info.refused}\c6 missing trust.`);
+            }
+            center_print(p, msg, 8);
+            bottom(p);
+            return;
+        }
+        "wrench" => {
+            if info.error != () {
+                tell(p, `\c6Fill Wrench can only be used with a selection.`);
+                return;
+            }
+            let msg = `<font:Verdana:20>\c6Applied changes to \c3${info.bricks}\c6 Brick${s(info.bricks)}!`;
+            if info.refused > 0 {
+                msg += line(`\c3${info.refused}\c6 missing trust.`);
+            }
+            center_print(p, msg, 8);
+            bottom(p);
+            return;
+        }
+        "supercut" => {
+            if info.error != () {
+                set_player(p, "fill_after_cut", false);
+                oops(p, info.message, 5);
+                return;
+            }
+            let msg = `<font:Verdana:20>\c6Deleted \c3${info.bricks}\c6 Brick${s(info.bricks)}!`;
+            if info.placed > 0 {
+                msg += line(`\c6Placed \c3${info.placed}\c6 new one${s(info.placed)}.`);
+            }
+            if info.refused > 0 {
+                msg += line(`\c3${info.refused}\c6 missing trust.`);
+            }
+            center_print(p, msg, 12);
+            if get_player(p, "fill_after_cut") {
+                set_player(p, "fill_after_cut", false);
+                if info.refused > 0 {
+                    tell(p, `\c6Cannot run fill bricks, you do not have enough trust bricks already in the area.`);
+                } else if get_player(p, "box").len() == 6 {
+                    let b = get_player(p, "box");
+                    fill_box(p, box_min(b), box_max(b), player(p).paint);
+                }
+            }
+            bottom(p);
+            return;
+        }
+        "fill" => {
+            if info.error != () {
+                oops(p, info.message, 5);
+                return;
+            }
+            tell(p, `\c6Filled in \c3${info.bricks}\c6 brick${s(info.bricks)}`);
+            return;
+        }
         "save" => {
             if info.error == () {
                 tell(p, `\c6Finished saving selection, wrote \c3${info.bricks}\c6 Brick${s(info.bricks)}!`);
@@ -797,6 +1252,8 @@ fn on_copy(p, info) {
     center_print(p, msg, if mode == "box" { 8 } else { 5 });
     set_player(p, "selected", info.bricks);
     set_player(p, "size", if info.size == () { [] } else { info.size });
+    set_player(p, "selection_box", if info.box == () { [] } else { info.box.min + info.box.max });
+    take_paints(p);
     if info.bricks > 0 {
         highlight_copy(p, (), glow_seconds());
         if mode == "box" {

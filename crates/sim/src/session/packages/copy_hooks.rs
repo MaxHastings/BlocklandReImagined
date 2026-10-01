@@ -90,6 +90,7 @@ impl Session {
                 outcome.name.clone().map_or(Dynamic::UNIT, Dynamic::from),
             );
             info.insert("bricks".into(), (outcome.bricks as i64).into());
+            info.insert("placed".into(), (outcome.placed as i64).into());
             info.insert("total".into(), (outcome.total as i64).into());
             info.insert("limit_reached".into(), outcome.limit_reached.into());
             info.insert("refused".into(), (outcome.refused as i64).into());
@@ -107,6 +108,27 @@ impl Session {
                 _ => Dynamic::UNIT,
             };
             info.insert("size".into(), size);
+            // Where the bricks a selection took stand: the box round them
+            // all, for a duplicator to turn into a selection box.
+            let area = match (&outcome.error, self.copies.get(&player)) {
+                (None, Some(held)) if outcome.action == "select" => {
+                    let boxes = held.sources.iter().filter_map(|id| self.simulation.brick_box(*id));
+                    boxes.reduce(|(a0, a1), (b0, b1)| (a0.min(b0), a1.max(b1)))
+                }
+                _ => None,
+            };
+            let point = |p: glam::Vec3| {
+                Dynamic::from_array(p.to_array().map(|v| Dynamic::from_float(f64::from(v))).to_vec())
+            };
+            info.insert(
+                "box".into(),
+                area.map_or(Dynamic::UNIT, |(min, max)| {
+                    let mut corners = Map::new();
+                    corners.insert("min".into(), point(min));
+                    corners.insert("max".into(), point(max));
+                    corners.into()
+                }),
+            );
             self.queue_report(package, "on_copy", player, info);
             return;
         }
@@ -117,7 +139,10 @@ impl Session {
         let name = outcome.name.unwrap_or_default();
         match outcome.action {
             "save" => self.center_print(player, format!("Saved the copy as '{name}'.")),
-            "cut" => self.bottom_count(player, "Cut", outcome.bricks),
+            "cut" | "supercut" => self.bottom_count(player, "Cut", outcome.bricks),
+            "paint" => self.bottom_count(player, "Painted", outcome.bricks),
+            "wrench" => self.bottom_count(player, "Wrenched", outcome.bricks),
+            "fill" => self.bottom_count(player, "Filled in", outcome.bricks),
             _ => {
                 let verb = if outcome.action == "load" { "Loaded" } else { "Copied" };
                 self.bottom_count(player, verb, outcome.bricks);

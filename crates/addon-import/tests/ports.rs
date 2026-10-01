@@ -636,7 +636,11 @@ fn duplicator_game(
         footprint_studs: [2, 1],
         height_plates: 1,
         attachment_rows: vec!["bb".into()],
-        collision_boxes: vec![],
+        // A plain brick, as v20's `BRICK` geometry is.
+        collision_boxes: vec![bri_content::brick::CollisionBox {
+            center: [0.0; 3],
+            size: [1.0, 0.2, 0.5],
+        }],
         needs_external_collision: false,
         coverage: None,
         quads: vec![],
@@ -812,6 +816,7 @@ fn duplorcator_port_copies_lights_and_plants_brick_by_brick() {
             position: [2.5, 0.0, 0.0],
             quarter_turns: 0,
             mirrored: false,
+            flipped: false,
         },
     );
     assert!(matches!(reply, Ok(Reply::Planted(_))), "{reply:?}");
@@ -1226,6 +1231,22 @@ fn new_duplicator_port_selects_stacks_and_boxes_and_plants() {
         "{prints:?}"
     );
 
+    // Held as a selection: no ghost until a brick key takes it up.
+    assert!(
+        !s.take_private_notices()
+            .into_iter()
+            .any(|(_, n)| matches!(n, Notice::Blueprint(Some(_)))),
+        "the selection is not a ghost yet"
+    );
+    send(&mut s, host, &seq, nd_key("plant", vec![])).unwrap();
+    s.step().unwrap();
+    assert!(
+        s.take_private_notices()
+            .into_iter()
+            .any(|(_, n)| matches!(n, Notice::Blueprint(Some(_)))),
+        "[Plant Brick] takes the selection up as a ghost"
+    );
+
     // Planted over the lone plate: the bottom plate is blocked, the top
     // one plants on it.
     let before = s.snapshot().world.bricks.len();
@@ -1237,6 +1258,7 @@ fn new_duplicator_port_selects_stacks_and_boxes_and_plants() {
             position: [2.5, 0.0, 0.0],
             quarter_turns: 0,
             mirrored: false,
+            flipped: false,
         },
     );
     assert!(matches!(reply, Ok(Reply::Planted(_))), "{reply:?}");
@@ -1349,10 +1371,10 @@ fn new_duplicator_port_selects_stacks_and_boxes_and_plants() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-/// The New Duplicator's port: /MirrorX mirrors a selection, /MirrorZ says
-/// it cannot, /Cut cuts the originals away and goes to plant mode, a click
-/// puts the selection against what it hits, and /SaveDup and /LoadDup keep
-/// it by name.
+/// The New Duplicator's port: /Cut cuts the originals away and goes to
+/// plant mode, where /MirrorX mirrors the ghost and /MirrorZ turns it
+/// upside down, a click puts the selection against what it hits, and
+/// /SaveDup and /LoadDup keep it by name.
 #[test]
 fn new_duplicator_port_mirrors_cuts_saves_and_loads() {
     use bri_sim::session::{Command, MemoryCopies, Notice};
@@ -1365,16 +1387,14 @@ fn new_duplicator_port_mirrors_cuts_saves_and_loads() {
     assert_eq!(s.blueprint(host).map(|b| b.bricks.len()), Some(2));
     told(&mut s);
 
+    // Mirrors only a ghost in plant mode.
     send(&mut s, host, &seq, typed("mx", &[])).unwrap();
     s.step().unwrap();
     assert!(
-        s.take_private_notices()
-            .into_iter()
-            .any(|(_, n)| matches!(n, Notice::MirrorCopy { .. }))
+        told(&mut s)
+            .iter()
+            .any(|t| t.contains("can only be used in plant mode"))
     );
-    send(&mut s, host, &seq, typed("mirrorz", &[])).unwrap();
-    s.step().unwrap();
-    assert!(told(&mut s).iter().any(|t| t.contains("not available")));
 
     // /Cut: the stack is gone, the selection stays to plant.
     let before = s.snapshot().world.bricks.len();
@@ -1390,6 +1410,16 @@ fn new_duplicator_port_mirrors_cuts_saves_and_loads() {
         "{prints:?}"
     );
     assert!(prints.iter().any(|t| t.contains("Plant Mode")), "{prints:?}");
+    send(&mut s, host, &seq, typed("mx", &[])).unwrap();
+    send(&mut s, host, &seq, typed("mz", &[])).unwrap();
+    s.step().unwrap();
+    let notices = s.take_private_notices();
+    assert!(
+        notices
+            .iter()
+            .any(|(_, n)| matches!(n, Notice::MirrorCopy { .. }))
+    );
+    assert!(notices.iter().any(|(_, n)| matches!(n, Notice::FlipCopy)));
 
     // In plant mode a click puts the selection against what it hits.
     swing(&mut s, host, &seq);
@@ -1443,6 +1473,277 @@ fn new_duplicator_port_mirrors_cuts_saves_and_loads() {
     );
     assert!(prints.iter().any(|t| t.contains("Plant Mode")), "{prints:?}");
     assert_eq!(s.blueprint(host).map(|b| b.bricks.len()), Some(2));
+    let diagnostics = s.package_diagnostics();
+    assert!(diagnostics.is_empty(), "{diagnostics:#?}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// [`swing`], crouched (the original's Ctrl, its multiselect key).
+fn swing_crouched(s: &mut bri_sim::session::Session, host: u64, seq: &std::cell::Cell<u64>) {
+    use bri_sim::session::Command;
+    let mut step = |s: &mut bri_sim::session::Session| {
+        let sequence = s.snapshot().world.tick + 1000;
+        s.movement(
+            host,
+            sequence,
+            bri_sim::player::MoveInput {
+                yaw: 0.142,
+                pitch: -0.85,
+                crouch: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        s.step().unwrap();
+    };
+    for _ in 0..20 {
+        step(s);
+    }
+    for down in [true, false] {
+        send(s, host, seq, Command::WeaponTrigger { down }).unwrap();
+        step(s);
+    }
+    for _ in 0..30 {
+        step(s);
+    }
+}
+
+/// The answer to the New Duplicator's question, as the player's OK sends it.
+fn answer(
+    s: &mut bri_sim::session::Session,
+    host: u64,
+    seq: &std::cell::Cell<u64>,
+    asked: &str,
+) {
+    use bri_sim::session::Notice;
+    let question = s.take_private_notices().into_iter().find_map(|(_, n)| match n {
+        Notice::Question { package, command, .. } => Some((package, command)),
+        _ => None,
+    });
+    let (package, command) = question.expect("the port asked first");
+    assert_eq!(command, asked);
+    send(
+        s,
+        host,
+        seq,
+        bri_sim::session::Command::Package(bri_sim::session::PackageCommand {
+            package,
+            command,
+            args: vec![],
+        }),
+    )
+    .unwrap();
+    for _ in 0..3 {
+        s.step().unwrap();
+    }
+}
+
+/// The New Duplicator's port closes its gaps: Ctrl adds to a selection; a
+/// paint can then paints it (one Ctrl+Z puts it back); /FillWrench sets
+/// every brick's settings; /ForcePlant plants a ghost in mid air; box mode
+/// from a selection boxes it, Ctrl grows and moves the box, and /SuperCut
+/// and /FillBricks, each asked first, cut the box out and fill it.
+#[test]
+fn new_duplicator_port_paints_wrenches_supercuts_fills_and_force_plants() {
+    use bri_sim::session::{Command, Notice, PackageArg, Reply, ToolAction, WrenchFill};
+
+    let (dir, mut s, host, seq, base) = new_duplicator_game("new-duplicator-gaps");
+    swing(&mut s, host, &seq);
+    assert_eq!(s.blueprint(host).map(|b| b.bricks.len()), Some(2));
+    assert!(
+        s.take_private_notices()
+            .into_iter()
+            .any(|(_, n)| matches!(n, Notice::TakePaint(true))),
+        "with a selection the paint cans pick its fill colour"
+    );
+
+    // Down from the bottom plate is that plate alone; Ctrl adds it to the
+    // selection, which keeps both.
+    send(&mut s, host, &seq, Command::SwitchSeat(1)).unwrap();
+    swing_crouched(&mut s, host, &seq);
+    assert_eq!(s.blueprint(host).map(|b| b.bricks.len()), Some(2));
+    swing(&mut s, host, &seq);
+    assert_eq!(s.blueprint(host).map(|b| b.bricks.len()), Some(1), "without Ctrl it is replaced");
+    send(&mut s, host, &seq, Command::SwitchSeat(1)).unwrap();
+    swing(&mut s, host, &seq);
+    assert_eq!(s.blueprint(host).map(|b| b.bricks.len()), Some(2));
+    told(&mut s);
+
+    // A colour can: fill colour mode, and [Plant Brick] paints.
+    send(
+        &mut s,
+        host,
+        &seq,
+        nd_key("paint", vec![PackageArg::Bool(false), PackageArg::Int(2)]),
+    )
+    .unwrap();
+    s.step().unwrap();
+    assert!(told(&mut s).iter().any(|t| t.contains("Paint Mode")));
+    send(&mut s, host, &seq, nd_key("plant", vec![])).unwrap();
+    for _ in 0..3 {
+        s.step().unwrap();
+    }
+    let world = s.snapshot().world;
+    assert_eq!(
+        (world.bricks[&base].color, world.bricks[&base].color_effect),
+        (2, 0),
+        "painted, and no longer glowing"
+    );
+    assert!(told(&mut s).iter().any(|t| t.contains(r"Painted \c32\c6 Bricks!")));
+    send(&mut s, host, &seq, Command::Tool(ToolAction::UndoBrick)).unwrap();
+    assert_eq!(s.snapshot().world.bricks[&base].color, 1);
+    // An FX can: the Undulo shape effect.
+    send(
+        &mut s,
+        host,
+        &seq,
+        nd_key("paint", vec![PackageArg::Bool(true), PackageArg::Int(8)]),
+    )
+    .unwrap();
+    send(&mut s, host, &seq, nd_key("plant", vec![])).unwrap();
+    for _ in 0..3 {
+        s.step().unwrap();
+    }
+    assert_eq!(s.snapshot().world.bricks[&base].shape_effect, 1);
+    // Cancel goes back to selecting, the tools box back.
+    send(&mut s, host, &seq, Command::CancelBrick).unwrap();
+    s.step().unwrap();
+    assert!(
+        s.take_private_notices()
+            .into_iter()
+            .any(|(_, n)| matches!(n, Notice::ScrollMode(_)))
+    );
+    assert_eq!(s.blueprint(host).map(|b| b.bricks.len()), Some(2));
+
+    // /FillWrench opens the wrench on the selection; what is ticked goes
+    // on every brick.
+    send(&mut s, host, &seq, typed("fw", &[])).unwrap();
+    s.step().unwrap();
+    assert!(
+        s.take_private_notices()
+            .into_iter()
+            .any(|(_, n)| matches!(n, Notice::WrenchCopy { bricks: 2 }))
+    );
+    let fill = WrenchFill {
+        name: Some(Some("tower".into())),
+        raycast: Some(false),
+        ..Default::default()
+    };
+    send(&mut s, host, &seq, Command::WrenchCopy(fill)).unwrap();
+    for _ in 0..3 {
+        s.step().unwrap();
+    }
+    let world = s.snapshot().world;
+    assert_eq!(world.bricks[&base].name.as_deref(), Some("tower"));
+    assert!(!world.bricks[&base].raycast);
+    assert!(told(&mut s).iter().any(|t| t.contains(r"Applied changes to \c32\c6 Bricks!")));
+    send(&mut s, host, &seq, Command::Tool(ToolAction::UndoBrick)).unwrap();
+    assert_eq!(s.snapshot().world.bricks[&base].name, None);
+
+    // Plant mode; /ForcePlant plants the ghost where it floats.
+    send(&mut s, host, &seq, nd_key("plant", vec![])).unwrap();
+    send(&mut s, host, &seq, typed("fp", &[])).unwrap();
+    s.step().unwrap();
+    assert!(
+        s.take_private_notices()
+            .into_iter()
+            .any(|(_, n)| matches!(n, Notice::PlantCopy))
+    );
+    let before = s.snapshot().world.bricks.len();
+    let reply = send(
+        &mut s,
+        host,
+        &seq,
+        Command::PlaceBlueprint {
+            position: [5.0, 2.0, 5.0],
+            quarter_turns: 0,
+            mirrored: false,
+            flipped: true,
+        },
+    );
+    assert!(matches!(reply, Ok(Reply::Planted(_))), "{reply:?}");
+    assert_eq!(s.snapshot().world.bricks.len(), before + 2);
+    send(&mut s, host, &seq, Command::Tool(ToolAction::UndoBrick)).unwrap();
+    assert_eq!(s.snapshot().world.bricks.len(), before);
+    send(&mut s, host, &seq, typed("tfp", &[])).unwrap();
+    s.step().unwrap();
+    assert!(told(&mut s).iter().any(|t| t.contains("Force Plant has been enabled")));
+
+    // Back to selecting, the stack again, then box mode boxes it.
+    send(&mut s, host, &seq, Command::CancelBrick).unwrap();
+    s.step().unwrap();
+    swing(&mut s, host, &seq);
+    send(&mut s, host, &seq, Command::ToggleLight).unwrap();
+    for _ in 0..3 {
+        s.step().unwrap();
+    }
+    let boxed = s.take_private_notices().into_iter().find_map(|(_, n)| match n {
+        Notice::SelectionBox(Some(o)) => Some(*o),
+        _ => None,
+    });
+    let boxed = boxed.expect("a box round the selection");
+    assert_eq!((boxed.min, boxed.max), ([0.0, 0.0, 0.0], [1.5, 0.4, 0.5]));
+    assert!(s.blueprint(host).is_none(), "the selection became the box");
+    // /SuperCut, asked first, cuts everything reaching into the box.
+    let before = s.snapshot().world.bricks.len();
+    send(&mut s, host, &seq, typed("sc", &[])).unwrap();
+    s.step().unwrap();
+    answer(&mut s, host, &seq, "ndconfirmsupercut");
+    assert_eq!(s.snapshot().world.bricks.len(), before - 2);
+    assert!(told(&mut s).iter().any(|t| t.contains(r"Deleted \c32\c6 Bricks!")));
+    send(&mut s, host, &seq, Command::Tool(ToolAction::UndoBrick)).unwrap();
+    assert_eq!(s.snapshot().world.bricks.len(), before);
+    // /FillBricks: a supercut, then the box filled with plain plates.
+    send(&mut s, host, &seq, typed("fb", &[])).unwrap();
+    s.step().unwrap();
+    answer(&mut s, host, &seq, "ndconfirmfillbricks");
+    for _ in 0..3 {
+        s.step().unwrap();
+    }
+    let prints = told(&mut s);
+    assert!(prints.iter().any(|t| t.contains(r"Filled in \c32\c6 bricks")), "{prints:?}");
+    // The box is 3 studs by 2 plates: two 2x1 plates fill it, the stud
+    // left over takes no plate this catalog has.
+    assert_eq!(s.snapshot().world.bricks.len(), before - 2 + 2);
+    // Ctrl held, the brick keys move the whole box.
+    told(&mut s);
+    for _ in 0..5 {
+        let sequence = s.snapshot().world.tick + 1000;
+        s.movement(
+            host,
+            sequence,
+            bri_sim::player::MoveInput {
+                yaw: 0.142,
+                pitch: -0.85,
+                crouch: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        s.step().unwrap();
+    }
+    send(
+        &mut s,
+        host,
+        &seq,
+        nd_key(
+            "shift",
+            vec![
+                PackageArg::Int(0),
+                PackageArg::Int(0),
+                PackageArg::Int(1),
+                PackageArg::Bool(false),
+            ],
+        ),
+    )
+    .unwrap();
+    s.step().unwrap();
+    let moved = s.take_private_notices().into_iter().find_map(|(_, n)| match n {
+        Notice::SelectionBox(Some(o)) => Some(*o),
+        _ => None,
+    });
+    let moved = moved.expect("the box moved");
+    assert!((moved.min[1] - 0.2).abs() < 1e-4 && (moved.max[1] - 0.6).abs() < 1e-4, "{moved:?}");
     let diagnostics = s.package_diagnostics();
     assert!(diagnostics.is_empty(), "{diagnostics:#?}");
     std::fs::remove_dir_all(dir).unwrap();

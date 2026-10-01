@@ -7,7 +7,11 @@
 //! The pivot sits on a stud corner (x and z multiples of 0.5) at the
 //! bottom of the copy, so a quarter turn about it keeps every brick on the
 //! grid, and a copy placed at a grid point stays on the grid.
-use crate::{definitions::Definitions, grid::Bounds, mirror::MirrorImage};
+use crate::{
+    definitions::Definitions,
+    grid::Bounds,
+    mirror::{MirrorImage, Reflection},
+};
 use anyhow::{Context, Result, ensure};
 use bri_world::{Brick, ContentRef};
 use glam::Vec3;
@@ -182,6 +186,64 @@ impl Blueprint {
             },
             inexact,
         )
+    }
+
+    /// The copy upside down: each brick moves to the other side of the
+    /// copy's middle plate and becomes its image top to bottom (itself, or
+    /// its twin; see [`crate::mirror`]). The pivot and the size stay, so it
+    /// stands where it stood. Returns the copy and how many bricks had no
+    /// exact image.
+    pub fn flipped(&self, mut image: impl FnMut(&str) -> MirrorImage) -> (Self, usize) {
+        let height = self.size[1] as f32 * 0.2;
+        let mut inexact = 0;
+        let bricks = self
+            .bricks
+            .iter()
+            .map(|b| {
+                let mut brick = b.clone();
+                brick.position[1] = height - brick.position[1];
+                if let ContentRef::Resolved(id) = &b.definition {
+                    let found = image(id);
+                    inexact += usize::from(!found.exact);
+                    // Top to bottom commutes with a quarter turn.
+                    brick.quarter_turns = (found.turns + b.quarter_turns) % 4;
+                    brick.definition = ContentRef::Resolved(found.definition);
+                }
+                brick
+            })
+            .collect();
+        (
+            Self {
+                tool: self.tool.clone(),
+                origin: self.origin,
+                size: self.size,
+                bricks,
+            },
+            inexact,
+        )
+    }
+
+    /// The copy as the player set it to be placed: upside down if
+    /// `flipped`, then mirrored across its x axis if `mirrored` (the two
+    /// commute). Host and player both place copies through this, so the
+    /// ghost is what plants. Returns the copy and how many bricks had no
+    /// exact image.
+    pub fn seen(
+        &self,
+        flipped: bool,
+        mirrored: bool,
+        mut image: impl FnMut(&str, Reflection) -> MirrorImage,
+    ) -> (Self, usize) {
+        let (mut copy, mut inexact) = (self.clone(), 0);
+        if flipped {
+            let (turned, missed) = copy.flipped(|id| image(id, Reflection::UpsideDown));
+            (copy, inexact) = (turned, inexact + missed);
+        }
+        if mirrored {
+            let (turned, missed) = copy.mirrored(|id| image(id, Reflection::Side));
+            (copy, inexact) = (turned, inexact + missed);
+        }
+        (copy, inexact)
     }
 
     /// Grid size turned `turns` quarter turns: studs along x, plates,

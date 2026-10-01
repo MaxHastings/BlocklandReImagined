@@ -69,10 +69,14 @@ impl Session {
         let Some(region) = region else {
             anyhow::bail!("More than {limit} bricks of that colour touch here.");
         };
-        let before: Vec<(BrickId, u8)> = region.iter().map(|&id| (id, from)).collect();
+        let world = self.simulation.state();
+        let before: Vec<(BrickId, copy_edits::Look)> = region
+            .iter()
+            .map(|&id| (id, copy_edits::Look::of(&world.bricks[&id])))
+            .collect();
         self.simulation.mutate_many(&region, |b| b.color = color)?;
         self.dirty.extend(region.iter().copied());
-        self.push_undo(owner, undo::UndoEntry::Colors(before));
+        self.push_undo(owner, undo::UndoEntry::Looks(before));
         Ok(Fill {
             painted: region.len(),
             refused,

@@ -176,6 +176,7 @@ impl Game {
                 position,
                 quarter_turns: turns,
                 mirrored: false,
+                flipped: false,
             },
         )
     }

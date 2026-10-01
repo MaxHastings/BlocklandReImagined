@@ -1152,7 +1152,7 @@ fn register_api(engine: &mut Engine) {
         tool: &str,
         options: Map,
     ) -> Result<(), Box<EvalAltResult>> {
-        let (rule, limited) = copy_rule(&options)?;
+        let (rule, limited, hold) = copy_rule(&options)?;
         let limited = limited.unwrap_or(false);
         push(Op::CopyBuild {
             player: id(&player)?,
@@ -1168,6 +1168,7 @@ fn register_api(engine: &mut Engine) {
             },
             rule,
             tool: tool.into(),
+            hold,
         })
     }
     engine.register_fn(
@@ -1185,7 +1186,7 @@ fn register_api(engine: &mut Engine) {
         tool: &str,
         options: Map,
     ) -> Result<(), Box<EvalAltResult>> {
-        let (rule, limited) = copy_rule(&options)?;
+        let (rule, limited, hold) = copy_rule(&options)?;
         push(Op::CopyBox {
             player: id(&player)?,
             min: vector(&min)?,
@@ -1195,6 +1196,7 @@ fn register_api(engine: &mut Engine) {
             limit: u32::try_from(limit).map_err(|_| "limit must be 1 to 10000")?,
             rule,
             tool: tool.into(),
+            hold,
         })
     }
     engine.register_fn(
@@ -1283,7 +1285,7 @@ fn register_api(engine: &mut Engine) {
         push(Op::MirrorCopy {
             player: id(&player)?,
             axis: crate::ops::MirrorAxis::parse(axis)
-                .ok_or("mirror_copy's axis is \"x\", \"z\" or \"view\"")?,
+                .ok_or("mirror_copy's axis is \"x\", \"z\", \"view\" or \"y\"")?,
         })
     });
     engine.register_fn(
@@ -1301,6 +1303,94 @@ fn register_api(engine: &mut Engine) {
             player: id(&player)?,
         })
     });
+    for (name, show) in [("show_copy", true), ("hide_copy", false)] {
+        engine.register_fn(name, move |player: Dynamic| {
+            let player = id(&player)?;
+            push(if show {
+                Op::ShowCopy { player }
+            } else {
+                Op::HideCopy { player }
+            })
+        });
+    }
+    engine.register_fn(
+        "shift_copy",
+        |player: Dynamic, x: i64, y: i64, z: i64, super_shift: bool| {
+            let step = |v: i64| i32::try_from(v).map_err(|_| "a shift is a few studs or plates");
+            push(Op::ShiftCopy {
+                player: id(&player)?,
+                offset: [step(x)?, step(y)?, step(z)?],
+                super_shift,
+            })
+        },
+    );
+    engine.register_fn("rotate_copy", |player: Dynamic, direction: i64| {
+        push(Op::RotateCopy {
+            player: id(&player)?,
+            direction: if direction < 0 { -1 } else { 1 },
+        })
+    });
+    fn plant_copy(player: Dynamic, options: Map) -> Result<(), Box<EvalAltResult>> {
+        let mut float = false;
+        for (key, value) in &options {
+            match key.as_str() {
+                "float" => {
+                    float = value
+                        .as_bool()
+                        .map_err(|_| "plant option `float` is true or false")?
+                }
+                other => return Err(format!("unknown plant option `{other}`").into()),
+            }
+        }
+        push(Op::PlantCopy {
+            player: id(&player)?,
+            float,
+        })
+    }
+    engine.register_fn("plant_copy", |player: Dynamic| plant_copy(player, Map::new()));
+    engine.register_fn("plant_copy", plant_copy);
+    engine.register_fn("float_copy", |player: Dynamic, float: bool| {
+        push(Op::FloatCopy {
+            player: id(&player)?,
+            float,
+        })
+    });
+    engine.register_fn("wrench_copy", |player: Dynamic| {
+        push(Op::WrenchCopy {
+            player: id(&player)?,
+        })
+    });
+    engine.register_fn("super_cut", |player: Dynamic, min: Array, max: Array| {
+        push(Op::SuperCut {
+            player: id(&player)?,
+            min: vector(&min)?,
+            max: vector(&max)?,
+        })
+    });
+    engine.register_fn(
+        "fill_box",
+        |player: Dynamic, min: Array, max: Array, color: i64| {
+            push(Op::FillBox {
+                player: id(&player)?,
+                min: vector(&min)?,
+                max: vector(&max)?,
+                color: u8::try_from(color).map_err(|_| "color is a palette index, 0 to 255")?,
+            })
+        },
+    );
+    engine.register_fn("take_paint", |player: Dynamic, take: bool| {
+        push(Op::TakePaint {
+            player: id(&player)?,
+            take,
+        })
+    });
+    engine.register_fn("scroll_mode", |player: Dynamic, mode: &str| {
+        push(Op::ScrollMode {
+            player: id(&player)?,
+            mode: crate::ops::ScrollMode::parse(mode)
+                .ok_or("scroll_mode is \"none\", \"bricks\", \"paint\" or \"tools\"")?,
+        })
+    });
     engine.register_fn("cut_copy", |player: Dynamic| {
         push(Op::CutCopy {
             player: id(&player)?,
@@ -1309,7 +1399,33 @@ fn register_api(engine: &mut Engine) {
     engine.register_fn("paint_copy", |player: Dynamic, color: i64| {
         push(Op::PaintCopy {
             player: id(&player)?,
-            color: u8::try_from(color).map_err(|_| "color is a palette index, 0 to 255")?,
+            paint: crate::ops::CopyPaint::Color(
+                u8::try_from(color).map_err(|_| "color is a palette index, 0 to 255")?,
+            ),
+            each: false,
+        })
+    });
+    // paint_copy(player, #{ color | fx | shape: n }): each brick the player
+    // may paint, the rest counted for `on_copy`.
+    engine.register_fn("paint_copy", |player: Dynamic, paint: Map| {
+        let [(key, value)] = paint.iter().collect::<Vec<_>>()[..] else {
+            return Err("paint_copy takes #{ color: n }, #{ fx: n } or #{ shape: n }".into());
+        };
+        let value = value
+            .as_int()
+            .ok()
+            .and_then(|v| u8::try_from(v).ok())
+            .ok_or("a paint is a number, 0 to 255")?;
+        let paint = match key.as_str() {
+            "color" => crate::ops::CopyPaint::Color(value),
+            "fx" => crate::ops::CopyPaint::ColorEffect(value),
+            "shape" => crate::ops::CopyPaint::ShapeEffect(value),
+            other => return Err(format!("unknown paint `{other}`").into()),
+        };
+        push(Op::PaintCopy {
+            player: id(&player)?,
+            paint,
+            each: true,
         })
     });
     engine.register_fn(
@@ -1433,11 +1549,11 @@ fn register_api(engine: &mut Engine) {
 /// keeps to its side of the clicked brick (default false); a box takes only
 /// what lies wholly inside it (default true). Unnamed options keep their
 /// defaults.
-fn copy_rule(
-    options: &Map,
-) -> Result<(crate::ops::CopyRule, Option<bool>), Box<EvalAltResult>> {
+type CopyOptions = (crate::ops::CopyRule, Option<bool>, crate::ops::CopyHold);
+fn copy_rule(options: &Map) -> Result<CopyOptions, Box<EvalAltResult>> {
     let mut rule = crate::ops::CopyRule::default();
     let mut limited = None;
+    let mut hold = crate::ops::CopyHold::default();
     for (key, value) in options {
         let flag = || {
             value
@@ -1456,10 +1572,12 @@ fn copy_rule(
             "admin" => rule.admin = flag()?,
             "partial" => rule.partial = flag()?,
             "limited" => limited = Some(flag()?),
+            "hidden" => hold.hidden = flag()?,
+            "add" => hold.add = flag()?,
             other => return Err(format!("unknown copy option `{other}`").into()),
         }
     }
-    Ok((rule, limited))
+    Ok((rule, limited, hold))
 }
 
 fn damage_op(

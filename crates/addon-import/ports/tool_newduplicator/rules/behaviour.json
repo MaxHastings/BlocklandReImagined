@@ -53,6 +53,50 @@
       "while_dead": true
     },
     {
+      "name": "paint",
+      "tool_only": true,
+      "args": [
+        "bool",
+        "int"
+      ]
+    },
+    {
+      "name": "fillwrench"
+    },
+    {
+      "name": "fw"
+    },
+    {
+      "name": "supercut"
+    },
+    {
+      "name": "sc"
+    },
+    {
+      "name": "ndconfirmsupercut"
+    },
+    {
+      "name": "fillbricks"
+    },
+    {
+      "name": "fb"
+    },
+    {
+      "name": "ndconfirmfillbricks"
+    },
+    {
+      "name": "forceplant"
+    },
+    {
+      "name": "fp"
+    },
+    {
+      "name": "toggleforceplant"
+    },
+    {
+      "name": "tfp"
+    },
+    {
       "name": "newduplicator"
     },
     {
@@ -193,6 +237,29 @@
         "persist": false
       },
       "swapping": {
+        "default": false,
+        "persist": false
+      },
+      "paints": {
+        "default": false,
+        "persist": false
+      },
+      "fill": {
+        "default": [
+          false,
+          0
+        ],
+        "persist": false
+      },
+      "selection_box": {
+        "default": [],
+        "persist": false
+      },
+      "force_plant": {
+        "default": false,
+        "persist": false
+      },
+      "fill_after_cut": {
         "default": false,
         "persist": false
       }

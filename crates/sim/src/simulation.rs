@@ -147,6 +147,16 @@ pub struct StackReach {
     pub up: bool,
     pub limited: bool,
 }
+/// What [`Simulation::plant_each`] does with a brick nothing holds up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Support {
+    /// It is refused (`PlantFailure::Float`).
+    Required,
+    /// It becomes a baseplate.
+    Float,
+    /// It plants as it is.
+    Free,
+}
 /// The bricks a selection took, in order, and what it left out.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Selection {
@@ -588,7 +598,37 @@ impl Simulation {
     /// all are planted or none is. The caller checks reach, rate and the
     /// brick limit, as for a single plant.
     pub fn plant_group(&mut self, actor: &Actor, bricks: Vec<Brick>) -> Result<Vec<BrickId>> {
-        self.place_group(actor, bricks, false)
+        self.place_group(actor, bricks, false, true)
+    }
+    /// [`Self::plant_group`] where nothing need hold the bricks up: with
+    /// none resting on anything, the lowest one becomes a baseplate, ground
+    /// to the bricks joined to it (v20's force plant set `isBaseplate`).
+    pub fn plant_group_floating(
+        &mut self,
+        actor: &Actor,
+        mut bricks: Vec<Brick>,
+    ) -> Result<Vec<BrickId>> {
+        ensure!(!bricks.is_empty(), "Nothing to plant");
+        let mut supported = false;
+        for brick in &bricks {
+            supported |= check_placement(
+                self.authority.state(),
+                &self.definitions,
+                &self.index,
+                &self.physics,
+                self.terrain.as_ref(),
+                actor,
+                brick,
+            )?;
+        }
+        if !supported
+            && let Some(lowest) = bricks
+                .iter_mut()
+                .min_by(|a, b| a.position[1].total_cmp(&b.position[1]))
+        {
+            lowest.base_plate = true;
+        }
+        self.place_group(actor, bricks, false, false)
     }
     /// Plant bricks one at a time in order, as v20's duplicators planted a
     /// copy: each passes every plant rule but reach against the world as
@@ -597,10 +637,16 @@ impl Simulation {
     /// again after the rest, as long as more get planted, so the order of
     /// a copy never leaves a brick floating that its own bricks hold up.
     /// The planted ids, and why each other brick was refused.
+    ///
+    /// `support` says what a brick with nothing under it does: waits and is
+    /// refused, becomes a baseplate (v20's force plant: ground to what is
+    /// built on it, tried only once nothing else of the copy holds it up),
+    /// or plants as it is (`Free`: bricks put back where a build stood).
     pub fn plant_each(
         &mut self,
         actor: &Actor,
         bricks: Vec<Brick>,
+        support: Support,
     ) -> (Vec<BrickId>, Vec<anyhow::Error>) {
         let mut ids = Vec::with_capacity(bricks.len());
         let mut waiting = bricks;
@@ -610,7 +656,7 @@ impl Simulation {
             let mut floating = Vec::new();
             let mut float_errors = Vec::new();
             for brick in std::mem::take(&mut waiting) {
-                match self.plant_one(actor, brick.clone()) {
+                match self.plant_one(actor, brick.clone(), support == Support::Free) {
                     Ok(id) => ids.push(id),
                     Err(error) => {
                         if matches!(error.downcast_ref(), Some(PlantFailure::Float)) {
@@ -622,9 +668,26 @@ impl Simulation {
                     }
                 }
             }
-            if floating.is_empty() || ids.len() == before {
-                refused.extend(float_errors);
+            if floating.is_empty() {
                 break;
+            }
+            if ids.len() == before {
+                if support != Support::Float {
+                    refused.extend(float_errors);
+                    break;
+                }
+                // Nothing of the copy holds the rest up: the lowest becomes
+                // ground for whatever stands on it, and the rest try again.
+                let lowest = (0..floating.len())
+                    .min_by(|&a, &b| floating[a].position[1].total_cmp(&floating[b].position[1]))
+                    .expect("not empty");
+                let mut base = floating.swap_remove(lowest);
+                float_errors.swap_remove(lowest);
+                base.base_plate = true;
+                match self.plant_one(actor, base, true) {
+                    Ok(id) => ids.push(id),
+                    Err(error) => refused.push(error),
+                }
             }
             waiting = floating;
         }
@@ -633,7 +696,7 @@ impl Simulation {
         }
         (ids, refused)
     }
-    fn plant_one(&mut self, actor: &Actor, brick: Brick) -> Result<BrickId> {
+    fn plant_one(&mut self, actor: &Actor, brick: Brick, free: bool) -> Result<BrickId> {
         if self.state().bricks.len() >= bri_world::MAX_BRICKS {
             return Err(PlantFailure::Limit.into());
         }
@@ -648,7 +711,7 @@ impl Simulation {
             actor,
             &brick,
         )?;
-        if !supported {
+        if !supported && !free {
             return Err(PlantFailure::Float.into());
         }
         let id = self.authority.plant(actor, brick, |_, _| Ok(()))?;
@@ -689,13 +752,14 @@ impl Simulation {
             administrator: true,
             ..Default::default()
         };
-        self.place_group(&engine, bricks, true)
+        self.place_group(&engine, bricks, true, false)
     }
     fn place_group(
         &mut self,
         actor: &Actor,
         bricks: Vec<Brick>,
         restore: bool,
+        needs_support: bool,
     ) -> Result<Vec<BrickId>> {
         ensure!(!bricks.is_empty(), "Nothing to plant");
         if self.state().bricks.len() + bricks.len() > bri_world::MAX_BRICKS {
@@ -716,7 +780,7 @@ impl Simulation {
             )?;
             prepared.push(Bounds::new(brick, &definition.mesh)?);
         }
-        if !supported && !restore {
+        if !supported && needs_support {
             return Err(PlantFailure::Float.into());
         }
         let mut ids = Vec::with_capacity(bricks.len());
@@ -978,6 +1042,31 @@ impl Simulation {
         }
         Ok(())
     }
+    /// [`Self::mutate_many`] with each brick's own change: every brick in
+    /// `bricks` takes the given state (it keeps its place, shape and
+    /// owner), collisions refreshed once at the end.
+    pub fn replace_many(&mut self, bricks: Vec<(BrickId, Brick)>) -> Result<()> {
+        let mut changed = false;
+        for (id, next) in bricks {
+            self.authority.mutate(id, |b| {
+                let (definition, position, turns, owner) =
+                    (b.definition.clone(), b.position, b.quarter_turns, b.owner);
+                *b = next;
+                (b.definition, b.position, b.quarter_turns, b.owner) =
+                    (definition, position, turns, owner);
+            })?;
+            self.note_link(id);
+            changed |= self.sync_flags(id);
+        }
+        if changed {
+            self.detect_collisions();
+        }
+        Ok(())
+    }
+    /// The grid cells brick `id` fills. Panics on an unknown brick.
+    pub fn index_bounds(&self, id: BrickId) -> Bounds {
+        self.index.bounds(id)
+    }
     /// Continue an earlier world's clock (the host changed maps).
     pub fn set_tick(&mut self, tick: u64) {
         self.authority.set_tick(tick);
@@ -1065,8 +1154,12 @@ impl Simulation {
         }
         Ok(out)
     }
-    /// The chain-kill root test: a brick resting on the map is ground.
+    /// The chain-kill root test: a brick resting on the map is ground, and
+    /// so is a baseplate (v20's `isBaseplate`, which force plant sets).
     fn grounded_root(&self, id: BrickId) -> Result<bool> {
+        if self.state().bricks.get(&id).is_some_and(|b| b.base_plate) {
+            return Ok(true);
+        }
         Ok(on_ground(
             &self.physics,
             self.terrain.as_ref(),
