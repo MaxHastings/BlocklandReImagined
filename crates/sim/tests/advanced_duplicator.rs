@@ -1120,3 +1120,86 @@ fn a_stack_owner_copies_and_cuts_what_others_built_on_their_stack() {
         .filter(|(_, brick)| brick.owner == bob && brick.position[0] < 1.0)
         .all(|(id, _)| sim.stack_owner(*id) == Some(ann)));
 }
+
+/// `mirror_ghost` turns a player's ghost brick into its mirror image where
+/// it stands, as a mirrored copy places the same brick: a wedge becomes
+/// its twin, mirroring again brings it back, and a brick with no image in
+/// that mirror stays as it is with the Add-On's line.
+#[test]
+fn a_ghost_brick_mirrors_into_its_twin_where_it_stands() {
+    use bri_sim::session::{BrickHand, GhostBrick};
+    let mut g = Game::new();
+    let host = host(&mut g);
+    g.cmd(
+        host,
+        Command::BrickHand(BrickHand {
+            stocked: true,
+            equipped: true,
+            ghost: true,
+        }),
+    )
+    .unwrap();
+    let ghost = |definition: &str, quarter_turns: u8| GhostBrick {
+        definition: definition.into(),
+        position: [0.25, 0.3, 0.5],
+        quarter_turns,
+        color: 0,
+        print: None,
+    };
+    g.cmd(host, Command::GhostBrick(Some(ghost("wedge-right", 1)))).unwrap();
+    g.notices(host);
+    g.typed(host, "mirghostx");
+    let mirrored = g.notices(host).into_iter().find_map(|n| match n {
+        Notice::MirrorGhost {
+            definition,
+            quarter_turns,
+        } => Some((definition, quarter_turns)),
+        _ => None,
+    });
+    // The same brick copied and placed mirrored across x.
+    let wedge = Brick::new(ContentRef::Resolved("wedge-right".into()), [0.25, 0.3, 0.5], host);
+    let mut turned = wedge.clone();
+    turned.quarter_turns = 1;
+    let defs = definitions();
+    let copy = bri_sim::blueprint::Blueprint::capture(TOOL, &[turned], &defs).unwrap();
+    let mut mirrors = bri_sim::mirror::Mirrors::default();
+    let (seen, inexact) = copy.seen(false, true, |id, r| mirrors.image_in(&defs, id, r));
+    assert!(inexact.side.is_empty());
+    let expected = seen.brick(0);
+    let ContentRef::Resolved(kind) = &expected.definition else {
+        unreachable!()
+    };
+    assert_eq!(kind, "wedge-left");
+    assert_eq!(mirrored, Some((kind.clone(), expected.quarter_turns)));
+    // Mirrored again, it is the wedge it was.
+    g.typed(host, "mirghostx");
+    let back = g.notices(host).into_iter().find_map(|n| match n {
+        Notice::MirrorGhost {
+            definition,
+            quarter_turns,
+        } => Some((definition, quarter_turns)),
+        _ => None,
+    });
+    assert_eq!(back, Some(("wedge-right".to_string(), 1)));
+    // A wedge has no image upside down.
+    g.typed(host, "mirghosty");
+    let told = g.notices(host);
+    assert!(!told.iter().any(|n| matches!(n, Notice::MirrorGhost { .. })));
+    assert!(
+        told.iter().any(|n| matches!(n, Notice::Chat(t) if t == "That brick has no image upside down")),
+        "{told:?}"
+    );
+    // With no ghost out, nothing is mirrored.
+    g.cmd(
+        host,
+        Command::BrickHand(BrickHand {
+            stocked: true,
+            equipped: false,
+            ghost: false,
+        }),
+    )
+    .unwrap();
+    g.notices(host);
+    g.typed(host, "mirghostx");
+    assert!(!g.notices(host).iter().any(|n| matches!(n, Notice::MirrorGhost { .. })));
+}

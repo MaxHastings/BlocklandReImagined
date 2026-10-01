@@ -428,6 +428,15 @@ pub enum Op {
         player: u64,
         axis: MirrorAxis,
     },
+    /// Mirror `player`'s ghost brick (the brick in their hand, where it
+    /// would plant) across `axis` where it stands: it becomes its mirror
+    /// image, itself turned or its twin. A brick with no exact image in
+    /// that mirror stays as it is and the player is told `asymmetric`.
+    MirrorGhost {
+        player: u64,
+        axis: MirrorAxis,
+        asymmetric: String,
+    },
     /// Move the copy `player` holds against the surface at `point` whose
     /// outward `normal` is given, as a ghost brick is put where it is
     /// aimed: its box's middle sits half its size out along the normal,
@@ -1445,6 +1454,7 @@ impl Op {
             | Self::SaveCopy { .. }
             | Self::LoadCopy { .. }
             | Self::MirrorCopy { .. }
+            | Self::MirrorGhost { .. }
             | Self::MoveCopy { .. }
             | Self::DropCopy { .. }
             | Self::ShowCopy { .. }
@@ -1552,6 +1562,7 @@ impl Op {
             | Self::RemoveBot { .. }
             | Self::RestBot { .. }
             | Self::UnmountObject { .. } => true,
+            Self::MirrorGhost { asymmetric, .. } => chat(asymmetric),
             Self::BotTool { slot, .. } => slot.is_none_or(|s| usize::from(s) < MAX_TOOL_SLOTS),
             Self::AddBot { kind, name, .. } => {
                 !kind.is_empty()
@@ -2110,6 +2121,7 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::CopyBuild { .. } => "copy_build",
         Op::CopyBox { .. } => "copy_box",
         Op::MirrorCopy { .. } => "mirror_copy",
+        Op::MirrorGhost { .. } => "mirror_ghost",
         Op::MoveCopy { .. } => "move_copy",
         Op::DropCopy { .. } => "drop_copy",
         Op::ShowCopy { .. } => "show_copy",

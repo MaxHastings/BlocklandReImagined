@@ -150,6 +150,9 @@ pub struct PlayerView {
     /// the Add-On that took it and its bricks.
     #[serde(default)]
     pub copy: Option<(String, u64)>,
+    /// They hold bricks with a ghost brick out, where it would plant.
+    #[serde(default)]
+    pub ghost: bool,
 }
 /// Live questions a script may ask the engine during a call. They read the
 /// world as it is when the call runs: a call's own operations apply after it
@@ -595,6 +598,7 @@ fn player_map(p: &PlayerView) -> Dynamic {
         ("alive", p.alive.into()),
         ("admin", p.admin.into()),
         ("copy_working", p.copy_working.into()),
+        ("ghost", p.ghost.into()),
         (
             "copy",
             p.copy.as_ref().map_or(Dynamic::UNIT, |(package, bricks)| {
@@ -1636,6 +1640,17 @@ fn register_api(engine: &mut Engine) {
             player: id(&player)?,
             axis: crate::ops::MirrorAxis::parse(axis)
                 .ok_or("mirror_copy's axis is \"x\", \"z\", \"view\" or \"y\"")?,
+        })
+    });
+    // mirror_ghost(player, axis, asymmetric): the player's ghost brick
+    // mirrored where it stands; `asymmetric` is what they are told when it
+    // has no exact mirror image.
+    engine.register_fn("mirror_ghost", |player: Dynamic, axis: &str, asymmetric: &str| {
+        push(Op::MirrorGhost {
+            player: id(&player)?,
+            axis: crate::ops::MirrorAxis::parse(axis)
+                .ok_or("mirror_ghost's axis is \"x\", \"z\", \"view\" or \"y\"")?,
+            asymmetric: asymmetric.into(),
         })
     });
     engine.register_fn(

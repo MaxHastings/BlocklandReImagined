@@ -174,3 +174,24 @@ totals as before.
 Tests: `a_stack_owner_copies_and_cuts_what_others_built_on_their_stack`
 (bri-sim), `new_duplicator_port_refuses_a_box_corner_without_trust`
 (ports; fails without the rules' check). New Duplicator: 345 of 363.
+
+## Mirroring a ghost brick
+
+`FxDtsBrick::ndMirrorGhost`: outside plant mode, the New Duplicator's
+`/MirX`, `/MirY` and `/MirZ` mirror the player's own ghost brick. The
+engine's `mirror_ghost(p, axis, asymmetric)` finds its image the way a
+mirrored copy places each brick (`Mirrors::mirror_brick`: the image's
+turn less the brick's across x, half way round across z, the image's
+turn added upside down) and sends `Notice::MirrorGhost` (wire change,
+`protocol-changes/mirror-ghost.md`); the client swaps its ghost where it
+stands. A brick with no exact image stays and the player is told the
+Add-On's line (the original's "asymmetric" and "not vertically
+symmetric"). `player(p).ghost` says whether a ghost is out. After a
+mirrored plant with inexact bricks, the port now says the original's
+"Some bricks were probably mirrored incorrectly" line.
+
+Tests: `a_ghost_brick_mirrors_into_its_twin_where_it_stands` (bri-sim:
+the wedge's twin and turn match a mirrored copy of the same brick; twice
+is the original; upside down has no image), the client's
+`a_mirrored_ghost_takes_its_image_where_it_stands_and_plants_it`, and
+`new_duplicator_port_mirrors_a_ghost_brick`.

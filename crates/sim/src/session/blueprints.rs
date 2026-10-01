@@ -471,6 +471,50 @@ impl Session {
         Ok(())
     }
 
+    /// Mirror `owner`'s ghost brick across `axis` where it stands: it
+    /// becomes its mirror image, itself turned or its twin, on their screen
+    /// and for the others. One with no exact image stays as it is, and they
+    /// are told `asymmetric`.
+    pub fn mirror_ghost(&mut self, owner: OwnerId, axis: MirrorAxis, asymmetric: &str) -> Result<()> {
+        let ghost = self.ghost_brick(owner).context("Hold a ghost brick to mirror it")?;
+        let peer = self.peers.get(&owner).context("Unknown connection")?;
+        let across = match axis {
+            MirrorAxis::Y => crate::mirror::Across::UpsideDown,
+            MirrorAxis::X => crate::mirror::Across::X,
+            MirrorAxis::Z => crate::mirror::Across::Z,
+            MirrorAxis::View => {
+                let facing = crate::ghost::cardinal(peer.player.state().forward());
+                if facing.x.abs() > facing.z.abs() {
+                    crate::mirror::Across::Z
+                } else {
+                    crate::mirror::Across::X
+                }
+            }
+        };
+        let image = self.mirrors.mirror_brick(
+            &self.simulation.definitions,
+            &ghost.definition,
+            ghost.quarter_turns,
+            across,
+        );
+        if !image.exact {
+            self.notify(owner, Notice::Chat(asymmetric.into()));
+            return Ok(());
+        }
+        if let Some(shown) = self.peers.get_mut(&owner).and_then(|p| p.ghost.as_mut()) {
+            shown.definition = image.definition.clone();
+            shown.quarter_turns = image.turns;
+        }
+        self.notify(
+            owner,
+            Notice::MirrorGhost {
+                definition: image.definition,
+                quarter_turns: image.turns,
+            },
+        );
+        Ok(())
+    }
+
     /// Move the copy `owner` holds against the surface at `point` facing
     /// out along `normal`. Where the copy stands is the player's to choose,
     /// like its turn, so the host only tells them.

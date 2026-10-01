@@ -586,6 +586,19 @@ impl Building {
         copy.keep_root(root);
         self.ghost_generation = self.ghost_generation.wrapping_add(1);
     }
+    /// The ghost brick becomes its mirror image `definition` turned
+    /// `quarter_turns` where it stands (`Notice::MirrorGhost`), until the
+    /// next click puts the brick in hand out again.
+    pub fn mirror_ghost(&mut self, definition: &str, quarter_turns: u8) {
+        let (Some(entry), Some(ghost)) = (self.definitions.entries.get(definition), self.ghost.as_mut())
+        else {
+            return;
+        };
+        ghost.definition = ContentRef::Resolved(definition.into());
+        ghost.quarter_turns = quarter_turns % 4;
+        snap(ghost, &entry.mesh);
+        self.ghost_generation = self.ghost_generation.wrapping_add(1);
+    }
     /// Turn the copy upside down where it stands (`Notice::FlipCopy`), or
     /// back. Like its mirror, it is part of how the copy is placed.
     pub fn flip_copy(&mut self) {
@@ -2024,6 +2037,34 @@ mod tests {
             .unwrap();
         b.ui_action(&fire(), &player()).unwrap();
         assert_eq!(b.ghost().map(|g| g.color), Some(0));
+    }
+
+    #[test]
+    fn a_mirrored_ghost_takes_its_image_where_it_stands_and_plants_it() {
+        let mut b = controller();
+        assert!(b.ghost().is_none());
+        b.mirror_ghost("plate", 1);
+        assert!(b.ghost().is_none(), "no ghost, nothing to mirror");
+        let mut ghost = Brick::new(ContentRef::Resolved("plate".into()), [0.5, 0.1, 0.25], 1);
+        ghost.color = 0;
+        b.ghost = Some(ghost);
+        let generation = b.ghost_generation();
+        b.mirror_ghost("plate", 1);
+        let mirrored = b.ghost().unwrap();
+        assert_eq!(mirrored.quarter_turns, 1);
+        assert!((mirrored.position[1] - 0.1).abs() < 0.001, "where it stood");
+        assert_ne!(b.ghost_generation(), generation, "redrawn");
+        // Unknown bricks are not taken.
+        b.mirror_ghost("nothing", 2);
+        assert_eq!(b.ghost().unwrap().quarter_turns, 1);
+        let plant = b
+            .ui_action(&UiAction::Game(GameAction::PlantBrick), &player())
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            &plant.commands[..],
+            [Command::Plant { quarter_turns: 1, .. }]
+        ));
     }
 
     #[test]

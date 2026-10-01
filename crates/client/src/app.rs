@@ -4585,6 +4585,15 @@ impl App {
                             }
                             continue;
                         }
+                        bri_sim::session::Notice::MirrorGhost {
+                            definition,
+                            quarter_turns,
+                        } => {
+                            if let Some(building) = self.building.as_mut() {
+                                building.mirror_ghost(&definition, quarter_turns);
+                            }
+                            continue;
+                        }
                         bri_sim::session::Notice::MoveCopy { point, normal } => {
                             if let Some(building) = self.building.as_mut() {
                                 building.move_copy(point, normal);

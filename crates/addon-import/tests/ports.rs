@@ -3241,6 +3241,7 @@ fn new_duplicator_port_pivots_plants_as_waits_and_lists() {
         prints.iter().any(|t| t.contains(r"Planted \c33\c6 / \c33\c6 Bricks!")),
         "{prints:?}"
     );
+    assert!(!prints.iter().any(|t| t.contains("probably mirrored incorrectly")));
     // A plain plate mirrors exactly.
     send(&mut s, host, &seq, typed("me", &[])).unwrap();
     s.step().unwrap();
@@ -3824,6 +3825,60 @@ fn new_duplicator_port_refuses_a_box_corner_without_trust() {
     );
     assert!(sounds.iter().any(|x| x == "errorSound"), "{sounds:?}");
     assert!(nd_box(&s, guest).is_none(), "no box");
+    let diagnostics = s.package_diagnostics();
+    assert!(diagnostics.is_empty(), "{diagnostics:#?}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// The New Duplicator's port mirrors the player's own ghost brick outside
+/// plant mode (`FxDtsBrick::ndMirrorGhost`), and says the original's line
+/// with no ghost out.
+#[test]
+fn new_duplicator_port_mirrors_a_ghost_brick() {
+    use bri_sim::session::{BrickHand, Command, GhostBrick, Notice};
+
+    let (dir, mut s, host, seq, _) = new_duplicator_game("new-duplicator-ghost-mirror");
+    let hand = |ghost| {
+        Command::BrickHand(BrickHand {
+            stocked: true,
+            equipped: ghost,
+            ghost,
+        })
+    };
+    // Bricks in hand put the duplicator away; no ghost yet.
+    send(&mut s, host, &seq, hand(false)).unwrap();
+    s.step().unwrap();
+    s.take_private_notices();
+    send(&mut s, host, &seq, typed("mx", &[])).unwrap();
+    s.step().unwrap();
+    let prints = told(&mut s);
+    assert!(
+        prints.iter().any(|t| t.contains("The mirror command can only be used in plant mode or with a ghost brick.")),
+        "{prints:?}"
+    );
+    send(&mut s, host, &seq, hand(true)).unwrap();
+    let ghost = GhostBrick {
+        definition: "plate".into(),
+        position: [4.5, 0.1, 4.25],
+        quarter_turns: 0,
+        color: 0,
+        print: None,
+    };
+    send(&mut s, host, &seq, Command::GhostBrick(Some(ghost))).unwrap();
+    s.step().unwrap();
+    s.take_private_notices();
+    send(&mut s, host, &seq, typed("mx", &[])).unwrap();
+    s.step().unwrap();
+    let notices: Vec<Notice> = s
+        .take_private_notices()
+        .into_iter()
+        .filter(|(o, _)| *o == host)
+        .map(|(_, n)| n)
+        .collect();
+    assert!(
+        notices.iter().any(|n| matches!(n, Notice::MirrorGhost { definition, .. } if definition == "plate")),
+        "{notices:?}"
+    );
     let diagnostics = s.package_diagnostics();
     assert!(diagnostics.is_empty(), "{diagnostics:#?}");
     std::fs::remove_dir_all(dir).unwrap();

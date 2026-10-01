@@ -1085,13 +1085,23 @@ fn holds_selection(p) {
     get_player(p, "mode") == "plant" || get_player(p, "selected") > 0
 }
 
-// `GameConnection::ndMirror`: only a ghost in plant mode mirrors.
+// `GameConnection::ndMirror`: the selection in plant mode, else the
+// player's ghost brick (`FxDtsBrick::ndMirrorGhost`).
 fn mirror(p, axis) {
-    if get_player(p, "mode") != "plant" {
-        tell(p, `\c6The mirror command can only be used in plant mode or with a ghost brick.`);
+    if get_player(p, "mode") == "plant" {
+        mirror_copy(p, axis);
         return;
     }
-    mirror_copy(p, axis);
+    if player(p).ghost {
+        let asymmetric = if axis == "y" {
+            `\c6Sorry, your ghost brick is not vertically symmetric and cannot be mirrored.`
+        } else {
+            `\c6Sorry, your ghost brick is asymmetric and cannot be mirrored.`
+        };
+        mirror_ghost(p, axis, asymmetric);
+        return;
+    }
+    tell(p, `\c6The mirror command can only be used in plant mode or with a ghost brick.`);
 }
 // `/MirrorX`: left and right as the player sees it.
 fn cmd_mirrorx(p) {
@@ -1896,8 +1906,12 @@ fn on_place(p, info) {
         tell(p, `\c6You need build trust with \c3${get_player(p, "plant_as")}\c6 to plant bricks in their group.`);
         return;
     }
-    // Kept for `/MirErrors`.
+    // Kept for `/MirErrors`, and said once the plant is done
+    // (`ND_Selection::finishPlant`).
     set_player(p, "mirror_errors", [info.mirror_errors.side, info.mirror_errors.upside_down]);
+    if info.mirror_errors.side.len() + info.mirror_errors.upside_down.len() > 0 {
+        tell(p, `\c6Some bricks were probably mirrored incorrectly. Say \c3/mirErrors\c6 to find out more.`);
+    }
     let failed = info.failed;
     if tally(failed, "too_far") == info.bricks && info.bricks > 0 {
         oops(p, "You can't plant so far away!", 5);
