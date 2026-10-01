@@ -661,6 +661,19 @@ fn inventory(cx: &mut Ctx, scripts: &[Script]) -> Option<BTreeSet<String>> {
                 vec!["compiled DSO bytecode; only source .cs is read".into()],
             ),
             "text" if metadata.contains(&member.as_str()) => ("consumed", vec!["metadata".into()]),
+            // A folder's own description (`grenade/Description.txt`, left
+            // from an Add-On merged into this one): Blockland reads only the
+            // root's.
+            "text"
+                if member
+                    .rsplit_once('/')
+                    .is_some_and(|(_, file)| metadata.contains(&file)) =>
+            {
+                (
+                    "skipped",
+                    vec!["a subfolder's description; Blockland reads only the Add-On's own, so it is not game data".into()],
+                )
+            }
             "shape" | "texture" | "sound" | "brick_geometry" => ("pending", vec![]),
             "text" | "other"
                 if !script_text.contains(member.rsplit('/').next().unwrap_or(&member)) =>
@@ -2639,9 +2652,39 @@ fn sounds_and_rest(cx: &mut Ctx) {
         .map(|f| tscript::without_comments(&String::from_utf8_lossy(&f.bytes)).to_ascii_lowercase())
         .collect::<Vec<_>>()
         .join("\n");
+    let mentions = |name: &str| {
+        regex::Regex::new(&format!(
+            r"\b{}\b",
+            regex::escape(&name.to_ascii_lowercase())
+        ))
+        .map_or(usize::MAX, |re| re.find_iter(&script_text).count())
+    };
+    let used = |name: &str| mentions(name) > 1;
+    // The particles each emitter nothing uses names: those mentions draw
+    // nothing either.
+    let mut idle_mentions: BTreeMap<String, usize> = BTreeMap::new();
+    for (name, class, fields, ..) in &pending {
+        if class == "particleemitterdata" && !used(name) && !fields.contains_key("uiname") {
+            for particle in fields
+                .get("particles")
+                .map(|p| literal(p).to_ascii_lowercase())
+                .unwrap_or_default()
+                .split_whitespace()
+            {
+                *idle_mentions.entry(particle.to_owned()).or_default() += 1;
+            }
+        }
+    }
     let used = |name: &str| {
-        regex::Regex::new(&format!(r"\b{}\b", regex::escape(&name.to_ascii_lowercase())))
-            .map_or(true, |re| re.find_iter(&script_text).count() > 1)
+        let idle = if mentions(name) == usize::MAX {
+            0
+        } else {
+            idle_mentions
+                .get(&name.to_ascii_lowercase())
+                .copied()
+                .unwrap_or(0)
+        };
+        mentions(name).saturating_sub(idle) > 1
     };
     for (name, class, fields, own, path, line) in pending {
         let at = Location::new(&path, line);
@@ -2649,7 +2692,7 @@ fn sounds_and_rest(cx: &mut Ctx) {
             "audioprofile" => {
                 let file = fields
                     .get("filename")
-                    .map(|f| source::resolve(&path, literal(f)))
+                    .map(|f| file_named(cx.src, &cx.outputs, &path, f))
                     .unwrap_or_default();
                 if let Some(rel) = cx.outputs.get(&file.to_ascii_lowercase()).cloned() {
                     let id = cx.id("sound", &name, &name, &format!("assets/{rel}"));
@@ -2772,7 +2815,7 @@ fn sounds_and_rest(cx: &mut Ctx) {
                     },
                     "consumed",
                     vec![],
-                    Some("nothing uses it and it has no uiName, so v20 never drew it".into()),
+                    Some("nothing uses it (or only an emitter nothing uses) and it has no uiName, so v20 never drew it".into()),
                 )
             }
             "particledata" | "particleemitterdata" | "particleemitternodedata" => cx.mark(
@@ -2871,6 +2914,58 @@ fn dependency_package(addon: &str) -> Option<String> {
     reference::base_package(addon)
         .map(str::to_owned)
         .or_else(|| namespace_for(addon).ok())
+}
+
+/// A file named by a path its script built at load (`filename = %path @
+/// "x.wav"` after `%path = "./sounds/";`): the first value the script gives
+/// `%path` under which this Add-On has the file. A branch for another
+/// Add-On's folder (`if(isFile("Add-Ons/Other/..."))`) finds nothing here,
+/// as `isFile` did in v20 without that Add-On, so the Add-On's own folder is
+/// the one used.
+/// The file a datablock's file field names, as its script `script` loads
+/// it: a path built at load ([`load_path`]) or a literal one.
+pub(crate) fn file_named(
+    src: &source::Source,
+    outputs: &BTreeMap<String, String>,
+    script: &str,
+    field: &str,
+) -> String {
+    load_path(src, outputs, script, field)
+        .unwrap_or_else(|| source::resolve(script, literal(field)))
+}
+
+fn load_path(
+    src: &source::Source,
+    outputs: &BTreeMap<String, String>,
+    script: &str,
+    field: &str,
+) -> Option<String> {
+    static BUILT: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r#"^\s*%(\w+)\s*@\s*"([^"]*)"\s*$"#).expect("pattern")
+    });
+    let c = BUILT.captures(field)?;
+    let text = src
+        .files
+        .values()
+        .find(|f| f.path.eq_ignore_ascii_case(script))
+        .map(|f| tscript::without_comments(&String::from_utf8_lossy(&f.bytes)))?;
+    let assigned =
+        regex::RegexBuilder::new(&format!(r#"%{}\s*=\s*"([^"]*)"\s*;"#, regex::escape(&c[1])))
+            .case_insensitive(true)
+            .build()
+            .ok()?;
+    let has = |file: &str| {
+        let lower = file.to_ascii_lowercase();
+        outputs.contains_key(&lower)
+            || src
+                .files
+                .values()
+                .any(|f| f.path.eq_ignore_ascii_case(file))
+    };
+    assigned
+        .captures_iter(&text)
+        .map(|a| source::resolve(script, &format!("{}{}", &a[1], &c[2])))
+        .find(|file| has(file))
 }
 
 /// Whether the call to `callee` on 1-based `line` of `text` sits in a

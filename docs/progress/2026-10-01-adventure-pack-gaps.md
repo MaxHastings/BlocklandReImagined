@@ -57,3 +57,24 @@ never used it, so the gun worked; our hitscan reader refused the port. An
 image with no projectile now gets a bare ray projectile carrying its damage
 (test: the stand-in battle rifle in `adventure_port.rs`). Its unused
 `onSmoke` is named in `handles` as never run.
+
+## Verdicts: converted
+
+The Gate's real-copy check on 1e987af3 (adventure-port-reports-1e98.zip)
+showed MWB refused over the Battle Rifle (fixed above) and both verdicts at
+converted_with_gaps. The importer now follows three more Torque load rules:
+
+- A sound file named by a path built at load (`filename = %path @ "x.wav"`
+  after `if(isFile("Add-Ons/Weapon_TF2BasicMelee/..."))` / `else %path =
+  "./sounds/";`) resolves to the value under which the Add-On has the file.
+  MWB's baton and machete swing sounds (tf2MeleeSwingSound) were silent
+  before; they play now.
+- A particle named only by emitters nothing uses is consumed, as the
+  emitter is (v20 never drew it).
+- A subfolder's `description.txt` is skipped, not unsupported: Blockland
+  reads only the Add-On's own.
+
+On the real scripts (stand-in sounds and reference, /tmp only) both MWB
+and 1019 now read `converted`: 0 unsupported, 0 recognised-only, every
+behaviour ported. Test: `built_paths_idle_particles_and_folder_descriptions`
+in `crates/addon-import/tests/import.rs`.
