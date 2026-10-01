@@ -40,10 +40,14 @@ Branch `claude/project-thread-t8k5dx` (Slayer/CTF).
   blank for none, as `scoreListInit` / `scoreListAdd`. Changing to another
   mode takes its columns out.
 
-## Not ported
+## Player option
 
-- Slayer's client preference "Disable End of Round Report": a player
-  option; the server's Display End of Round Report covers it for now.
+- Slayer's client preference "Disable End of Round Report" is Options >
+  Gui Options > "Hide end of round reports" (`$pref::HUD::HideReports`,
+  off by default): the client keeps a report it is sent but never opens
+  its window. It is the player's own choice, so nothing goes over the
+  wire. Tests `a_report_opens_its_window_unless_the_player_hides_reports`
+  and `gui_options_end_with_hide_reports_and_check_for_new_versions_toggles`.
 
 ## Evidence
 

@@ -1872,9 +1872,14 @@ impl Ui {
                 c.push(ScreenId::TrustInvitation);
             }
             UiUpdate::Report(report) => {
-                // A new report opens a window sized to its columns.
+                // A new report opens a window sized to its columns, unless
+                // the player hides them (Slayer's "Disable End of Round
+                // Report").
+                let hidden = c
+                    .prefs
+                    .bool_or(crate::screens::options::HIDE_REPORTS, false);
                 c.pop(ScreenId::Report);
-                if report.is_some() {
+                if report.is_some() && !hidden {
                     c.push(ScreenId::Report);
                 }
                 c.report = report;
@@ -2802,6 +2807,32 @@ mod sound_tests {
         ui.handle_input(InputEvent::FocusLost);
         hover(&mut ui, ScreenId::MainMenu, "MM_StartButton");
         assert_eq!(ui.drain_sounds().len(), 1);
+    }
+
+    /// A score report opens its window and a closing one shuts it; with
+    /// "Hide end of round reports" (Slayer's client preference) it never
+    /// opens.
+    #[test]
+    fn a_report_opens_its_window_unless_the_player_hides_reports() {
+        let report = || {
+            UiUpdate::Report(Some(crate::api::ReportView {
+                title: "End of Round Report".into(),
+                ..Default::default()
+            }))
+        };
+        let mut ui = fixture();
+        ui.apply(report());
+        ui.flush();
+        assert!(ui.is_open(ScreenId::Report));
+        ui.apply(UiUpdate::Report(None));
+        ui.flush();
+        assert!(!ui.is_open(ScreenId::Report));
+        ui.core
+            .prefs
+            .set_bool(crate::screens::options::HIDE_REPORTS, true);
+        ui.apply(report());
+        ui.flush();
+        assert!(!ui.is_open(ScreenId::Report));
     }
 
     #[test]
