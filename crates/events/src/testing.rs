@@ -38,6 +38,7 @@ pub fn catalog() -> Catalog {
             input("onPlayerTouch", &player),
             input("onRelay", &[("Self", "fxDTSBrick")]),
             input("onRespawn", &[("Self", "fxDTSBrick")]),
+            input("onToolBreak", &player),
         ],
         outputs: vec![
             output(
@@ -84,6 +85,38 @@ pub fn catalog() -> Catalog {
                 "Player",
                 "addVelocity",
                 vec![Param::Vector { max_length: 200.0 }],
+            ),
+            output(
+                "Player",
+                "setPlayerScale",
+                vec![Param::Float {
+                    min: 0.25,
+                    max: 4.0,
+                    step: 0.25,
+                    default: 1.0,
+                }],
+            ),
+            output(
+                "Player",
+                "ChangeDatablock",
+                vec![Param::Datablock {
+                    class_name: "PlayerData".into(),
+                }],
+            ),
+            output(
+                "GameConnection",
+                "CenterPrint",
+                vec![
+                    Param::String {
+                        max_length: 200,
+                        width: 150,
+                    },
+                    Param::Int {
+                        min: 0,
+                        max: 30,
+                        default: 3,
+                    },
+                ],
             ),
         ],
         sources: vec![],
