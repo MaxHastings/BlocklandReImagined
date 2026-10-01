@@ -360,10 +360,10 @@ pub fn shots(s: &Shots, weapons: &Value, bodies: &super::Bodies) -> Result<Value
 
 /// What an image's state scripts did by hand that its states can say
 /// themselves: the sound each played (`serverPlay3d`), the arm move
-/// (`playThread(2, ...)`), each where the state names none; and the kick
-/// of the recoil blast `onFire` set off at the shooter (`spawnExplosion`
-/// of a projectile whose explosion shakes the camera), as the shot's
-/// `kick`.
+/// (`playThread(2, ...)`) and gesture (`playThread(3, ...)`), each where
+/// the state names none; and the kick of the recoil blast `onFire` set off
+/// at the shooter (`spawnExplosion` of a projectile whose explosion shakes
+/// the camera), as the shot's `kick`.
 fn scripted(image: &Value, weapons: &Value, bodies: &super::Bodies) -> Value {
     let name = image["name"]
         .as_str()
@@ -380,6 +380,7 @@ fn scripted(image: &Value, weapons: &Value, bodies: &super::Bodies) -> Value {
     };
     let sound_re = call(r"serverplay3d\s*\(\s*([A-Za-z_]\w*)\s*,");
     let arm_re = call(r"playthread\s*\(\s*2\s*,\s*([A-Za-z_]\w*)\s*\)");
+    let gesture_re = call(r"playthread\s*\(\s*3\s*,\s*([A-Za-z_]\w*)\s*\)");
     let blast_re = call(r"spawnexplosion\s*\(\s*([A-Za-z_]\w*)\s*,");
     let sound_id = |n: &str| {
         let suffix = format!(":sound/{}", n.to_ascii_lowercase());
@@ -414,6 +415,12 @@ fn scripted(image: &Value, weapons: &Value, bodies: &super::Bodies) -> Value {
             && let Some(arm) = arm_re.captures(&body)
         {
             state["arm"] = json!(arm[1].to_ascii_lowercase());
+            any = true;
+        }
+        if state["gesture"].as_str().unwrap_or_default().is_empty()
+            && let Some(gesture) = gesture_re.captures(&body)
+        {
+            state["gesture"] = json!(gesture[1].to_ascii_lowercase());
             any = true;
         }
         if let Some(kick) = blast_re

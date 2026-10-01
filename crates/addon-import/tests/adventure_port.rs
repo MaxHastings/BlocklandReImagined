@@ -176,6 +176,12 @@ fn ammo_system_guns_get_magazines_that_reload_like_their_states() {
         [("onfire2", 0.002, 0.5, 2.0), ("onfire3", 0.003, 0.5, 2.0)]
     );
     assert!(pack.projectiles[&format!("{NS}:projectile/heavymachinegunprojectile")].fixed_damage);
+    // Each fire state's own arm moves, both hands.
+    let fire2 = heavy.states.iter().find(|s| s.script == "onFire2").unwrap();
+    assert_eq!(
+        (fire2.arm.as_str(), fire2.gesture.as_str()),
+        ("shiftright", "shiftleft")
+    );
     assert!(!pack.projectiles[&format!("{NS}:projectile/standinshotgunprojectile")].fixed_damage);
     // The raycast guns: hitscan with a ray projectile of their own that
     // carries the image's damage, the revolver's kick from its onFire.

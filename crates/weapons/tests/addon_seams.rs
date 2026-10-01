@@ -490,7 +490,8 @@ fn a_fire_state_of_its_own_fires_its_own_shot() {
                         {{ "name": "Activate", "ticks": 2, "timeout": 1 }},
                         {{ "name": "Ready", "down": 2, "no_ammo": 5 }},
                         {{ "name": "Fire", "ticks": 4, "script": "onFire", "timeout": 3 }},
-                        {{ "name": "Fire2", "ticks": 4, "script": "onFire2", "timeout": 4, "up": 1, "no_ammo": 5 }},
+                        {{ "name": "Fire2", "ticks": 4, "script": "onFire2", "timeout": 4, "up": 1, "no_ammo": 5,
+                           "arm": "shiftright", "gesture": "shiftleft" }},
                         {{ "name": "Fire3", "ticks": 4, "script": "onFire3", "timeout": 4, "up": 1, "no_ammo": 5 }},
                         {{ "name": "Empty", "ammo": 1 }}
                     ]
@@ -509,13 +510,23 @@ fn a_fire_state_of_its_own_fires_its_own_shot() {
     step(&mut w, 10);
     w.trigger(A, true).unwrap();
     let mut recoils = vec![];
+    let mut moves = vec![];
     for _ in 0..40 {
         for e in w.step(&mut Open) {
-            if let Event::Recoil { velocity, .. } = e {
-                recoils.push(velocity.length());
+            match e {
+                Event::Recoil { velocity, .. } => recoils.push(velocity.length()),
+                Event::Animation {
+                    thread, sequence, ..
+                } if thread >= 2 => moves.push((thread, sequence)),
+                _ => {}
             }
         }
     }
+    // Fire2's arm move and the other hand's, on thread 3.
+    assert_eq!(
+        moves,
+        [(2, "shiftright".to_string()), (3, "shiftleft".to_string())]
+    );
     // onFire, onFire2, then onFire3 until the magazine is empty.
     assert_eq!(recoils, [1.0, 0.5, 0.25, 0.25]);
     assert_eq!(w.ammo(A).unwrap().rounds, 0);

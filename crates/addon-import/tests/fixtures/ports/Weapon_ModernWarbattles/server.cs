@@ -262,6 +262,8 @@ function heavyMachineGunImage::onFire(%this, %obj, %slot)
 
 function heavyMachineGunImage::onFire2(%this, %obj, %slot)
 {
+   %obj.playThread(2, shiftRight);
+   %obj.playThread(3, shiftLeft);
    %projectile = %this.projectile;
    %spread = 0.002;
    %shellcount = 1;
@@ -272,6 +274,8 @@ function heavyMachineGunImage::onFire2(%this, %obj, %slot)
 
 function heavyMachineGunImage::onFire3(%this, %obj, %slot)
 {
+   %obj.playThread(2, shiftRight);
+   %obj.playThread(3, shiftLeft);
    %projectile = %this.projectile;
    %spread = 0.003;
    %shellcount = 1;

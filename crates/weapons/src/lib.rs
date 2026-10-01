@@ -145,6 +145,11 @@ pub struct State {
     /// `armattack` for a swing, `root` to stop.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub arm: String,
+    /// The holder's thread-3 animation played on entering the state, as
+    /// v20 scripts' `playThread(3, shiftLeft)`: the other arm's move, a
+    /// gesture over whatever thread 2 plays; `root` stops it.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub gesture: String,
     pub sound: String,
     pub emitter: String,
     pub emitter_node: String,

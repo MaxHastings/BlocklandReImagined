@@ -1812,6 +1812,14 @@ impl WeaponsWorld {
                 if !state.arm.is_empty() {
                     self.animation(id, &state.arm);
                 }
+                if !state.gesture.is_empty() {
+                    self.events.push(Event::Animation {
+                        actor: id,
+                        thread: 3,
+                        sequence: state.gesture.clone(),
+                        image_hand: None,
+                    });
+                }
                 if !state.sound.is_empty() {
                     self.events.push(Event::Sound {
                         source: TargetId::Actor(id),

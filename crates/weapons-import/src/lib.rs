@@ -439,6 +439,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 eject_shell: flag(d, &format!("stateEjectShell[{n}]"), false),
                 // v20 swings arms from script by image name, never from state data.
                 arm: String::new(),
+                gesture: String::new(),
             });
         }
         let p = field(d, "projectile");
