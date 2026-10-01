@@ -21,8 +21,8 @@
 //!
 //! - A release gets them when it is packaged; its `packages.json` lists them.
 //! - A source checkout's `content/` is generated, never committed, so the
-//!   game and the dedicated server install our own when they start
-//!   ([`install_from_checkout`]): missing copies are copied in and copies
+//!   game installs our own when it starts ([`install_from_checkout`];
+//!   `bri-client --check` and `bri-server` only with [`INSTALL_ENV`]=1): missing copies are copied in and copies
 //!   that differ from the checkout's are replaced. The originals come from
 //!   the bundle (`python tools/addon_bundle.py install`, which bootstrap
 //!   runs when it finds them).
@@ -226,6 +226,21 @@ impl Installed {
             .map(|a| a.id.as_str())
             .filter(|id| self.copied.iter().chain(&self.listed).any(|c| c == id))
             .collect()
+    }
+}
+
+/// Set to 1, [`install_when_asked`] installs a checkout's default Add-Ons.
+pub const INSTALL_ENV: &str = "BRI_INSTALL_DEFAULT_ADD_ONS";
+
+/// [`install_from_checkout`] only when [`INSTALL_ENV`] is 1: what
+/// `bri-client --check` and `bri-server` do, so validating or serving the
+/// shared main checkout's content never writes to it. A release's content
+/// already has its default Add-Ons (it is packaged with them).
+pub fn install_when_asked(content_root: &Path) -> Result<Option<Installed>> {
+    if std::env::var_os(INSTALL_ENV).is_some_and(|v| v == "1") {
+        install_from_checkout(content_root)
+    } else {
+        Ok(None)
     }
 }
 

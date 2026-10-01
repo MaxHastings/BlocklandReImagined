@@ -116,9 +116,7 @@ fn game() -> Result<()> {
     if mode == "--check" {
         // Validation leaves the content as it is (the push gate checks the
         // shared main checkout's); a fresh checkout's own check can opt in.
-        if std::env::var_os(INSTALL_ON_CHECK).is_some_and(|v| v == "1") {
-            install_default_add_ons(&content)?;
-        }
+        report_installed(bri_package::defaults::install_when_asked(&content)?);
         let app = App::load(&content, &state, (1280, 720))?;
         println!(
             "Startup validation passed: {} maps, {} brick definitions. No window or audio device opened.",
@@ -156,14 +154,16 @@ fn game() -> Result<()> {
     }
     result
 }
-/// Set to 1, `--check` installs the default Add-Ons first, as a run does.
-const INSTALL_ON_CHECK: &str = "BRI_INSTALL_DEFAULT_ADD_ONS";
 /// Running the game from a source checkout gives its generated content the
 /// default Add-Ons (packages/default-addons.json) the first time, as a
 /// release has them, and keeps them in step with the checkout. A release's
 /// content is left alone.
 fn install_default_add_ons(content: &std::path::Path) -> Result<()> {
-    if let Some(done) = bri_package::defaults::install_from_checkout(content)?
+    report_installed(bri_package::defaults::install_from_checkout(content)?);
+    Ok(())
+}
+fn report_installed(done: Option<bri_package::defaults::Installed>) {
+    if let Some(done) = done
         && !done.is_empty()
     {
         bri_console::echo(format!(
@@ -171,7 +171,6 @@ fn install_default_add_ons(content: &std::path::Path) -> Result<()> {
             done.ids().join(", ")
         ));
     }
-    Ok(())
 }
 fn run(content: &std::path::Path, state: &std::path::Path) -> Result<()> {
     // The GPU opens while the content loads.

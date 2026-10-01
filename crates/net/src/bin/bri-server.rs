@@ -29,9 +29,9 @@ async fn main() -> Result<()> {
          The content root's packages.json lists the packages to load (the base game's list and the default Add-Ons when absent)."
     );
     let content_root = PathBuf::from(&args[0]);
-    // A source checkout's generated content gets the default Add-Ons, as
-    // the game does when it starts.
-    if let Some(done) = bri_package::defaults::install_from_checkout(&content_root)?
+    // A release's content has its default Add-Ons; a source checkout's is
+    // left as it is unless BRI_INSTALL_DEFAULT_ADD_ONS=1 asks.
+    if let Some(done) = bri_package::defaults::install_when_asked(&content_root)?
         && !done.is_empty()
     {
         println!("Installed the default Add-Ons {}.", done.ids().join(", "));
