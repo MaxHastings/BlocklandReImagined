@@ -11228,16 +11228,13 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    #[ignore = "requires generated native content; no window, GPU or audio device"]
-    fn leaving_a_game_forgets_its_seat_eyes_and_liquids() -> anyhow::Result<()> {
+    crate::testing::synthetic_and_content!(
+        ContentRoot: leaving_a_game_forgets_its_seat_eyes_and_liquids
+    );
+    fn leaving_a_game_forgets_its_seat_eyes_and_liquids(f: &ContentRoot) -> anyhow::Result<()> {
         use super::*;
-        let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)?
-            .as_nanos();
-        let state = workspace.join("target").join(format!("leave-game-{stamp}"));
-        let mut app = App::load(&workspace.join("content"), &state, (320, 240))?;
+        let scratch = f.state()?;
+        let mut app = App::load(&f.root, scratch.path(), (320, 240))?;
         // What a game in progress leaves behind: a seat, a rider's eye, a
         // tumble, eyes the camera drew from and the map's liquids.
         app.seated_on = Some((7, 1));
@@ -11270,7 +11267,6 @@ mod tests {
         assert_eq!(app.rendered_roll, 0.0);
         assert!(app.drawn_controls.is_none());
         assert!(app.liquid_cache.is_none());
-        let _ = std::fs::remove_dir_all(&state);
         Ok(())
     }
 }
