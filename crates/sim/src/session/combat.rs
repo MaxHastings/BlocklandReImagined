@@ -159,6 +159,8 @@ pub struct Vitals {
     pub mounted: Option<(u64, u8)>,
     /// The player this one rides, and the seat.
     pub ride: Option<super::Ride>,
+    /// A rule's look limits for this body (`setLookLimits`), `[down, up]`.
+    pub look_limits: Option<[f32; 2]>,
     /// What this player's moves steer.
     pub control: super::ControlObject,
     /// Typing in the chat box (`MsgStartTalking`).
@@ -564,6 +566,7 @@ impl Session {
                         light: peer.combat.light,
                         mounted: self.mounted(*owner),
                         ride: self.ride(*owner),
+                        look_limits: peer.look_limits,
                         control: peer.control,
                         talking: peer.talking,
                         sitting: peer.sitting,
@@ -735,16 +738,25 @@ impl Session {
         }
         // Where it struck, measured before any hook moves the body.
         let hit = at.map(|point| (point, crate::player::hit_region(&peer.player, point.to_array())));
-        // Add-Ons have the last word on how much it hurts, and may name it
-        // anew (a headshot).
+        // Add-Ons have the last word on how much it hurts.
         let (amount, renamed) = self.package_damage(target, source, amount, &kind, hit);
-        let mut kind = kind;
-        if let (Some(renamed), DamageKind::Weapon { name, .. }) = (renamed, &mut kind) {
-            *name = format!("$DamageType::{renamed}");
-        }
         if amount <= 0.0 {
             return Ok(());
         }
+        // A hook may name another damage type (a crit's kill message).
+        let kind = match renamed {
+            Some(name) => DamageKind::Weapon {
+                direct: self
+                    .weapons
+                    .pack
+                    .damage_type(&name)
+                    .is_some_and(|t| t.direct),
+                direction: kind.direction(),
+                projectile: kind.projectile().map(str::to_owned),
+                name,
+            },
+            None => kind,
+        };
         let Some(peer) = self.peers.get_mut(&target) else {
             return Ok(());
         };
@@ -1352,6 +1364,7 @@ impl Session {
             peer.combat.health = kind.max_health;
             peer.combat.alive = true;
             peer.combat.spawn_tick = tick;
+            peer.look_limits = None;
             peer.combat.shot_once = false;
             peer.combat.last_direct = None;
             // A new life starts with full magazines and starting reserves.
@@ -1360,6 +1373,8 @@ impl Session {
             // `serverCmdLight` mounts its fxLight on the player object, which
             // stays with the corpse: a new body starts dark.
             peer.combat.light = false;
+            // Schedules on the old `Player` object went with it.
+            peer.thread_timers.clear();
             // The new body wears the client's own colours (`ApplyBodyColors`).
             peer.temp_color = None;
             peer.inputs.clear();

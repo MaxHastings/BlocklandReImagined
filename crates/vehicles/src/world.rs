@@ -71,6 +71,9 @@ const WHEELED_SPEED_CAP: f32 = 200.;
 /// 120 Hz ticks in one of v20's 32 ms moves, rounded up: a driver's move
 /// steers without auto-return until this long has passed without a turn.
 const AUTO_RETURN_QUIET: u8 = 4;
+/// Contacts whose normal is closer to level than this (|y| of the unit
+/// normal, about 45 degrees) are hits from the side.
+const SIDE_HIT: f32 = 0.7;
 fn bite(f: &WheeledFlightSettings, speed: f32) -> f32 {
     if f.max_forward_vel > 0. {
         ((speed - f.stall_speed) / f.max_forward_vel).clamp(0., 1.)
@@ -320,6 +323,8 @@ pub enum VehiclePart {
     Chassis,
     Turret,
 }
+/// An attached turret's own damage pool, v20's `TankTurretVehicle`'s.
+pub const TURRET_MAX_DAMAGE: f32 = 250.;
 #[derive(Clone, Copy, Debug)]
 pub enum DamageKind {
     Direct,
@@ -492,7 +497,8 @@ fn idle_controls(d: &Definition, v: &Instance, seat: usize) -> Controls {
 }
 fn effective_seat_pose(b: &RigidBody, d: &Definition, v: &Instance, index: usize) -> Transform {
     if index == 2
-        && v.turret_damage.is_some_and(|damage| damage >= 250.)
+        && v.turret_damage
+            .is_some_and(|damage| damage >= TURRET_MAX_DAMAGE)
         && let Some(t) = &d.attachment_fallback_seat
     {
         return transform(&(b.position() * local_pose(t, v.spawn.scale)));
@@ -572,6 +578,64 @@ impl VehiclesWorld {
             .get(&id)
             .map(|v| world.bodies[v.body].colliders().to_vec())
             .unwrap_or_default()
+    }
+    /// The contact solver treats a kinematic body (a walking player) as
+    /// immovable, so a vehicle that ran into one stopped dead or bounced
+    /// back as off a wall. This shares last step's contact impulses between
+    /// each vehicle touching `collider` and that body as between two free
+    /// bodies, with the body weighing `mass`: of the impulse J the solver
+    /// gave the vehicle (masses m and M) it keeps J * M / (m + M), and the
+    /// body takes the rest, -J / (m + M) of velocity. A heavy ball barely
+    /// slows for a player; a player can barely move it. Returns the body's
+    /// change of velocity.
+    pub fn share_contacts(
+        &self,
+        world: &mut PhysicsWorld,
+        collider: ColliderHandle,
+        mass: f32,
+    ) -> Vec3 {
+        if mass.is_nan() || mass <= 0. {
+            return Vec3::ZERO;
+        }
+        let mut kicks = Vec::new();
+        for pair in world.contact_pairs_with(collider) {
+            let (other, sign) = if pair.collider1 == collider {
+                (pair.collider2, 1.)
+            } else {
+                (pair.collider1, -1.)
+            };
+            let Some(body) = world.colliders.get(other).and_then(|c| c.parent()) else {
+                continue;
+            };
+            let Some(v) = self.instances.values().find(|v| v.body == body) else {
+                continue;
+            };
+            if v.actor.is_some() || !world.bodies[body].is_dynamic() {
+                continue;
+            }
+            // Each manifold's normal points from collider1 to collider2:
+            // what collider2's body was pushed along. Only hits from the
+            // side: a body standing on a vehicle, or under one, keeps
+            // holding it up as the ground does.
+            let impulse: Vec3 = pair
+                .manifolds()
+                .iter()
+                .filter(|m| m.data.normal.y.abs() < SIDE_HIT)
+                .map(|m| m.data.normal * m.points.iter().map(|p| p.data.impulse).sum::<f32>())
+                .sum::<Vec3>()
+                * sign;
+            if impulse.is_finite() && impulse.length_squared() > 0. {
+                kicks.push((body, impulse));
+            }
+        }
+        let mut change = Vec3::ZERO;
+        for (body, impulse) in kicks {
+            let b = &mut world.bodies[body];
+            let total = b.mass() + mass;
+            b.apply_impulse(-impulse * (b.mass() / total), true);
+            change -= impulse / total;
+        }
+        change
     }
     /// Where an occupant sits, if mounted.
     pub fn occupant(&self, occupant: OccupantId) -> Option<(VehicleId, usize)> {
@@ -1148,7 +1212,10 @@ impl VehiclesWorld {
             v.charge_started = None;
             v.wheels.clear();
             self.intents.push(Intent::Destroyed { vehicle: id, by });
-            let initial = if v.turret_damage.is_some_and(|damage| damage < 250.) {
+            let initial = if v
+                .turret_damage
+                .is_some_and(|damage| damage < TURRET_MAX_DAMAGE)
+            {
                 Some("v20.projectile.tankturretexplosionprojectile")
             } else {
                 d.initial_explosion.as_deref()
@@ -1163,13 +1230,10 @@ impl VehiclesWorld {
                 )));
             }
             if let Some(damage) = &mut v.turret_damage {
-                *damage = 250.;
+                *damage = TURRET_MAX_DAMAGE;
             }
-            self.intents.push(Intent::Effect {
-                vehicle: id,
-                id: "VehicleBurnEmitter".into(),
-                active: true,
-            });
+            // The wreck's fire is drawn from the replicated destroyed state
+            // (`Definition::wreck_emitters`); no cue is sent for it.
             self.intents.push(Intent::Animation {
                 vehicle: id,
                 id: "death1".into(),
@@ -1192,11 +1256,11 @@ impl VehiclesWorld {
             .turret_damage
             .as_mut()
             .context("vehicle has no attached turret")?;
-        if *damage >= 250. || v.dead_at.is_some() {
+        if *damage >= TURRET_MAX_DAMAGE || v.dead_at.is_some() {
             return Ok(());
         }
-        *damage = (*damage + amount).min(250.);
-        if *damage >= 250. {
+        *damage = (*damage + amount).min(TURRET_MAX_DAMAGE);
+        if *damage >= TURRET_MAX_DAMAGE {
             if let Some(collider) = v.turret_collider.take() {
                 world.remove_collider(collider);
             }
@@ -1289,6 +1353,15 @@ impl VehiclesWorld {
             velocity: (velocity * authored(d.runover_push, 1.2)).to_array(),
         });
         Ok(())
+    }
+    /// The damage a part of a live vehicle takes to be destroyed: its
+    /// definition's `max_damage`, or an attached turret's own pool.
+    pub fn max_damage(&self, id: VehicleId, part: VehiclePart) -> Option<f32> {
+        let v = self.instances.get(&id).filter(|v| v.dead_at.is_none())?;
+        Some(match part {
+            VehiclePart::Chassis => self.catalog[&v.spawn.definition].max_damage,
+            VehiclePart::Turret => TURRET_MAX_DAMAGE,
+        })
     }
     /// Which part of a vehicle a hit at `point` struck: its attached turret
     /// when that is the nearer collider.
@@ -1652,7 +1725,8 @@ impl VehiclesWorld {
                     FIXED_DT,
                 );
             }
-            if v.turret_damage.is_some_and(|damage| damage >= 250.)
+            if v.turret_damage
+                .is_some_and(|damage| damage >= TURRET_MAX_DAMAGE)
                 && let Some(collider) = v.turret_collider.take()
             {
                 world.remove_collider(collider);
@@ -1970,7 +2044,10 @@ impl VehiclesWorld {
             turret_transform: d
                 .attachment_mount
                 .as_ref()
-                .filter(|_| v.turret_damage.is_none_or(|damage| damage < 250.))
+                .filter(|_| {
+                    v.turret_damage
+                        .is_none_or(|damage| damage < TURRET_MAX_DAMAGE)
+                })
                 .map(|t| transform(&(b.position() * local_pose(t, v.spawn.scale)))),
         }
     }
@@ -2071,7 +2148,9 @@ fn weapon_step(
     world: &mut PhysicsWorld,
     intents: &mut Vec<Intent>,
 ) {
-    if v.turret_damage.is_some_and(|damage| damage >= 250.) {
+    if v.turret_damage
+        .is_some_and(|damage| damage >= TURRET_MAX_DAMAGE)
+    {
         return;
     }
     let Some(weapon) = &d.weapon else { return };

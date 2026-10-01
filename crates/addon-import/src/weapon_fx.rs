@@ -61,8 +61,31 @@ pub(crate) fn convert_emitter(
         d.name,
         d.class
     );
+    // The emitter nodes it names (`GenericEmitterNode`, the base game's)
+    // only time it when it is placed on a brick.
+    let mut nodes = BTreeMap::new();
+    for (key, node) in &d.fields {
+        if !["emitternode", "pointemitternode"].contains(&key.to_ascii_lowercase().as_str())
+            || node.is_empty()
+        {
+            continue;
+        }
+        let multiple = match declaration(cx, node) {
+            Some((n, _)) if n.class.eq_ignore_ascii_case("ParticleEmitterNodeData") => {
+                effects::Fields::new(&n).number("timemultiple", 1.0)?
+            }
+            _ => {
+                cx.report.diagnostics.push(format!(
+                    "emitter {}: emitter node {node} is not declared, so on a brick it runs at its own pace",
+                    d.name
+                ));
+                1.0
+            }
+        };
+        nodes.insert(node.to_lowercase(), multiple);
+    }
     let (mut emitter, notes) =
-        effects::emitter(&d, &BTreeMap::new()).with_context(|| format!("emitter {}", d.name))?;
+        effects::emitter(&d, &nodes).with_context(|| format!("emitter {}", d.name))?;
     let emitter_name = d.name.clone();
     emitter.id = cx.id("emitter", name, &emitter_name, file);
     let mut particles = vec![];

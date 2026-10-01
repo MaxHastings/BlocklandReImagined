@@ -24,19 +24,221 @@
       "addon": "Weapon_ModernWarbattles",
       "title": "Adventurer's Weapons (Bushido)",
       "port": "weapon_modernwarbattles",
-      "status": "partial",
+      "status": "verified",
       "sha256": [
         "4d938fe308610289aabdfe0d74a8ac01048e2ece458545640c5737c14d7792ed"
+      ],
+      "covers": {
+        "BatonImage::onFire": {
+          "baton_sound_a": "if\\s*\\(\\s*getrandom\\s*\\(\\s*0\\s*,\\s*1\\s*\\)\\s*\\)\\s*\\{\\s*%this\\.raycastexplosionbricksound\\s*=\\s*(\\w+)\\s*;\\s*%this\\.raycastexplosionplayersound\\s*=\\s*\\w+",
+          "baton_sound_b": "else\\s*\\{\\s*%this\\.raycastexplosionbricksound\\s*=\\s*(\\w+)\\s*;\\s*%this\\.raycastexplosionplayersound\\s*=\\s*\\w+"
+        },
+        "BatonImage::onRaycastDamage": {
+          "baton_kill": "datablock\\.maxdamage\\s*\\*\\s*([0-9]*\\.?[0-9]+)",
+          "baton_shove": "getforwardvector\\s*\\(\\s*\\)\\s*,\\s*([0-9]*\\.?[0-9]+)\\s*\\)",
+          "baton_up": "getforwardvector\\s*\\(\\s*\\)\\s*,\\s*[0-9.]+\\s*\\)\\s*,\\s*\"\\s*0\\s+0\\s+([0-9]*\\.?[0-9]+)\\s*\"",
+          "baton_type": "maxdamage\\s*\\*\\s*[0-9.]+\\s*;\\s*%damagetype\\s*=\\s*\\$damagetype::(\\w+)"
+        },
+        "MacheteImage::onFire": {
+          "machete_sound_a": "if\\s*\\(\\s*getrandom\\s*\\(\\s*0\\s*,\\s*1\\s*\\)\\s*\\)\\s*\\{\\s*%this\\.raycastexplosionbricksound\\s*=\\s*(\\w+)\\s*;\\s*%this\\.raycastexplosionplayersound\\s*=\\s*\\w+",
+          "machete_sound_b": "else\\s*\\{\\s*%this\\.raycastexplosionbricksound\\s*=\\s*(\\w+)\\s*;\\s*%this\\.raycastexplosionplayersound\\s*=\\s*\\w+"
+        },
+        "MacheteImage::onRaycastDamage": {
+          "machete_kill": "datablock\\.maxdamage\\s*\\*\\s*([0-9]*\\.?[0-9]+)",
+          "machete_shove": "getforwardvector\\s*\\(\\s*\\)\\s*,\\s*([0-9]*\\.?[0-9]+)\\s*\\)",
+          "machete_up": "getforwardvector\\s*\\(\\s*\\)\\s*,\\s*[0-9.]+\\s*\\)\\s*,\\s*\"\\s*0\\s+0\\s+([0-9]*\\.?[0-9]+)\\s*\"",
+          "machete_type": "maxdamage\\s*\\*\\s*[0-9.]+\\s*;\\s*%damagetype\\s*=\\s*\\$damagetype::(\\w+)"
+        },
+        "WeaponImage::onRaycastDamage": {
+          "ray_limit": "mclampf\\s*\\(\\s*%this\\.raycastdirectdamage\\s*,\\s*-100\\s*,\\s*100\\s*\\)",
+          "ray_crit": "%directdamage\\s*\\*\\s*3\\b"
+        },
+        "battleRifleImage::isRaycastCritical": {
+          "battlerifle_shove": "getforwardvector\\s*\\(\\s*\\)\\s*,\\s*([0-9]*\\.?[0-9]+)\\s*\\)\\s*,\\s*\"[^\"]*\"\\s*\\)\\s*\\)",
+          "battlerifle_up": "getforwardvector\\s*\\(\\s*\\)\\s*,\\s*[0-9.]+\\s*\\)\\s*,\\s*\"\\s*0\\s+0\\s+([0-9]*\\.?[0-9]+)\\s*\"",
+          "battlerifle_test": "getworldboxcenter\\s*\\(\\s*\\)\\s*,\\s*2\\s*\\)\\s*-\\s*3\\.3\\s*\\*"
+        },
+        "burnedIt": {
+          "burn_height": "%posz\\s*\\+\\s*2\\b",
+          "burn_grenade": "datablock\\s*=\\s*shrapgrenprojectile\\s*;",
+          "burn_now": "%burned\\.explode\\s*\\(\\s*\\)"
+        },
+        "hl2AmmoOnReload": {
+          "magazine": "toolmag",
+          "reserve": "toolammo"
+        },
+        "projectile::onAdd": {
+          "fuse_thrown": "\"shrapgrenprojectile\"[\\s\\S]*?%oldlt\\s*=\\s*4000\\s*;[\\s\\S]*?%\\w+\\s*=\\s*%obj\\.client\\.player\\.chargetime\\s*;[\\s\\S]*?%new\\s*=\\s*%oldlt\\s*-\\s*%\\w+\\s*;[\\s\\S]*?schedule\\s*\\(\\s*%new\\s*,\\s*\"explode\"",
+          "fuse_cluster": "\"shrapgrenclusterprojectile\"[\\s\\S]*?%oldlt\\s*=\\s*400\\s*;[\\s\\S]*?%oldlt\\s*-\\s*\\(\\s*getrandom\\s*\\(\\s*0\\s*,\\s*400\\s*\\)\\s*\\)",
+          "fuse_trail": "\"shrapgrentrailprojectile\"[\\s\\S]*?%oldlt\\s*=\\s*400\\s*;[\\s\\S]*?%oldlt\\s*-\\s*\\(\\s*getrandom\\s*\\(\\s*100\\s*,\\s*400\\s*\\)\\s*\\)"
+        },
+        "revolverImage::isRaycastCritical": {
+          "revolver_shove": "getforwardvector\\s*\\(\\s*\\)\\s*,\\s*([0-9]*\\.?[0-9]+)\\s*\\)\\s*,\\s*\"[^\"]*\"\\s*\\)\\s*\\)",
+          "revolver_up": "getforwardvector\\s*\\(\\s*\\)\\s*,\\s*[0-9.]+\\s*\\)\\s*,\\s*\"\\s*0\\s+0\\s+([0-9]*\\.?[0-9]+)\\s*\"",
+          "revolver_test": "getworldboxcenter\\s*\\(\\s*\\)\\s*,\\s*2\\s*\\)\\s*-\\s*3\\.3\\s*\\*"
+        },
+        "sendCenterNade": {
+          "cook_print": "'centerprint'\\s*,\\s*\"\\\\c5\"\\s*@\\s*%client\\.player\\.warntime\\s*@\\s*\"\\\\c6 cooking time left\\.\"\\s*,\\s*0\\.15\\s*\\)",
+          "cook_step": "getword\\s*\\(\\s*%client\\.player\\.warntime\\s*,\\s*0\\s*\\)\\s*-\\s*0\\.1\\s*@\\s*\" seconds\"",
+          "cook_one": "==\\s*1\\s*\\)\\s*%client\\.player\\.warntime\\s*=\\s*\"1 second\"",
+          "cook_every": "schedule\\s*\\(\\s*100\\s*,\\s*0\\s*,\\s*sendcenternade"
+        },
+        "shrapGrenImage::onFire": {
+          "cook_out": "cancel\\s*\\(\\s*%obj\\.burnsched\\s*\\)",
+          "cook_held": "%obj\\.chargetime\\s*=\\s*%obj\\.chargeend\\s*-\\s*%obj\\.chargestart"
+        },
+        "shrapGrenImage::onPinDrop": {
+          "cook_start": "%obj\\.chargestart\\s*=\\s*getsimtime\\s*\\(\\s*\\)",
+          "cook_fuse": "schedule\\s*\\(\\s*4000\\s*,\\s*0\\s*,\\s*\"burnedit\"",
+          "cook_first": "%obj\\.warntime\\s*=\\s*\"4 seconds\"\\s*;\\s*%obj\\.warnsched\\s*=\\s*schedule\\s*\\(\\s*100\\s*,\\s*0\\s*,\\s*sendcenternade"
+        },
+        "shrapGrenprojectile::onExplode": {
+          "shrap_cluster": "%shrapdata\\s*=\\s*shrapgrenclusterprojectile",
+          "shrap_count": "%shards\\s*=\\s*(\\d+)",
+          "shrap_speed": "getrandom\\s*\\(\\s*-6\\s*,\\s*6\\s*\\)",
+          "trail_count": "%shrapdata\\s*=\\s*shrapgrentrailprojectile\\s*;[\\s\\S]*?%shards\\s*=\\s*(\\d+)",
+          "trail_speed": "getrandom\\s*\\(\\s*-12\\s*,\\s*12\\s*\\)"
+        },
+        "sniperrifleImage::isRaycastCritical": {
+          "sniperrifle_shove": "getforwardvector\\s*\\(\\s*\\)\\s*,\\s*([0-9]*\\.?[0-9]+)\\s*\\)\\s*,\\s*\"[^\"]*\"\\s*\\)\\s*\\)",
+          "sniperrifle_up": "getforwardvector\\s*\\(\\s*\\)\\s*,\\s*[0-9.]+\\s*\\)\\s*,\\s*\"\\s*0\\s+0\\s+([0-9]*\\.?[0-9]+)\\s*\"",
+          "sniperrifle_test": "getworldboxcenter\\s*\\(\\s*\\)\\s*,\\s*2\\s*\\)\\s*-\\s*3\\.3\\s*\\*"
+        },
+        "getHitbox": {
+          "flinch_first": "playthread\\s*\\(\\s*0\\s*,\\s*\"?([a-z0-9_]+)\"?\\s*\\)",
+          "flinch_arms": "playthread\\s*\\(\\s*2\\s*,\\s*\"?jump\"?\\s*\\)",
+          "flinch_ms": "schedule\\s*\\(\\s*([0-9]+)\\s*,\\s*\"playthread\"\\s*,\\s*\"0\"\\s*,\\s*\"[a-z0-9_]+\"\\s*\\)",
+          "flinch_then": "schedule\\s*\\(\\s*[0-9]+\\s*,\\s*\"playthread\"\\s*,\\s*\"0\"\\s*,\\s*\"([a-z0-9_]+)\"\\s*\\)",
+          "flinch_arms_then": "schedule\\s*\\(\\s*50\\s*,\\s*\"playthread\"\\s*,\\s*\"2\"\\s*,\\s*\"plant\"\\s*\\)"
+        }
+      },
+      "tests": [
+        "crates/addon-import/tests/adventure_port.rs ammo_system_guns_get_magazines_that_reload_like_their_states",
+        "crates/addon-import/tests/adventure_port.rs ammo_boxes_and_headshots_play_in_a_hosted_game",
+        "crates/addon-import/tests/adventure_port.rs hitscan_crits_and_melee_kills_play_in_a_hosted_game",
+        "crates/addon-import/tests/adventure_port.rs melee_swings_wreck_vehicles",
+        "crates/addon-import/tests/adventure_port.rs a_dropped_spare_gun_empties_its_magazine_into_the_reserve",
+        "crates/addon-import/tests/adventure_port.rs crits_play_with_the_critical_hit_emote",
+        "crates/addon-import/tests/adventure_port.rs a_grenade_cooks_in_the_hand"
+      ]
+    },
+    {
+      "addon": "Weapon_AdventurePack",
+      "title": "Adventurer's Weapons (Bushido, Glass 1019)",
+      "port": "weapon_adventurepack",
+      "status": "verified",
+      "sha256": [
+        "9ce429bfc491cff5e3075798f88c2109717a3ea67d91f8461d8cda672a894e49"
       ],
       "covers": {
         "hl2AmmoOnReload": {
           "magazine": "toolmag",
           "reserve": "toolammo"
+        },
+        "ProjectileData::damage": {
+          "multiplier": "headshotmultiplier",
+          "hitbox": "gethitbox"
+        },
+        "WeaponImage::onFire": {
+          "raycast_switch": "raycastenabled",
+          "raycast_range": "raycastrange"
+        },
+        "WeaponImage::damage": {
+          "raycast_damage": "%this\\.directdamage"
+        },
+        "taserProjectile::damage": {
+          "taser_mounted": "getmountedobject",
+          "taser_spread": "addvelocity\\s*\\(\\s*getrandom\\s*\\(\\s*(\\d+)\\s*\\)",
+          "taser_offset": "addvelocity\\s*\\(\\s*getrandom\\s*\\(\\s*\\d+\\s*\\)\\s*-\\s*(\\d+)",
+          "taser_up": "spc\\s*([0-9]*\\.?[0-9]+)\\s*\\)\\s*;\\s*tumble",
+          "taser_ms": "tumble\\s*\\(\\s*%col\\s*,\\s*(\\d+)\\s*\\)"
+        },
+        "pairedShotgunImage::onFire": {
+          "paired_last": "toolmag\\[%obj\\.currtool\\]\\s*<=\\s*2\\s*\\)",
+          "paired_take": "toolmag\\[%obj\\.currtool\\]\\s*-=\\s*2\\s*;"
+        },
+        "getHitbox": {
+          "flinch_first": "playthread\\s*\\(\\s*0\\s*,\\s*\"?([a-z0-9_]+)\"?\\s*\\)",
+          "flinch_arms": "playthread\\s*\\(\\s*2\\s*,\\s*\"?jump\"?\\s*\\)",
+          "flinch_ms": "schedule\\s*\\(\\s*([0-9]+)\\s*,\\s*\"playthread\"\\s*,\\s*\"0\"\\s*,\\s*\"[a-z0-9_]+\"\\s*\\)",
+          "flinch_then": "schedule\\s*\\(\\s*[0-9]+\\s*,\\s*\"playthread\"\\s*,\\s*\"0\"\\s*,\\s*\"([a-z0-9_]+)\"\\s*\\)",
+          "flinch_arms_then": "schedule\\s*\\(\\s*50\\s*,\\s*\"playthread\"\\s*,\\s*\"2\"\\s*,\\s*\"plant\"\\s*\\)"
         }
       },
       "tests": [
-        "crates/addon-import/tests/adventure_port.rs ammo_system_guns_get_magazines_that_reload_like_their_states",
-        "crates/addon-import/tests/adventure_port.rs ammo_boxes_and_headshots_play_in_a_hosted_game"
+        "crates/addon-import/tests/adventure_port.rs glass_release_guns_shoot_like_their_scripts",
+        "crates/addon-import/tests/adventure_port.rs glass_release_taser_tumbles_and_sniper_headshots"
+      ]
+    },
+    {
+      "addon": "Weapon_ButterflyKnife",
+      "title": "Butterfly Knife",
+      "port": "weapon_butterflyknife",
+      "status": "verified",
+      "sha256": [
+        "4d8d0cc59be118094a2e6e39056b895e19447c05ed8d3a644fd7a56780a7afa4"
+      ],
+      "covers": {
+        "butterflyknifeImage::onCharge": {
+          "charge_arm": "playthread\\s*\\(\\s*2\\s*,\\s*\"?(\\w+)"
+        },
+        "butterflyknifeImage::onStopFire": {
+          "stop_arm": "playthread\\s*\\(\\s*2\\s*,\\s*\"?(\\w+)"
+        },
+        "butterflyknifeImage::onFire": {
+          "stab_arm": "playthread\\s*\\(\\s*2\\s*,\\s*\"?(\\w+)",
+          "parent": "parent::onfire\\s*\\("
+        },
+        "butterflyknifeImage::onFiretwo": {
+          "jab": "%projectile\\s*=\\s*(\\w+)\\s*;",
+          "one": "%shellcount\\s*=\\s*1\\s*;",
+          "spawns": "new\\s*\\(\\s*%this\\.projectiletype\\s*\\)"
+        }
+      },
+      "tests": [
+        "weapon_butterflyknife/checks.json",
+        "crates/addon-import/tests/ports.rs butterfly_knife_port_jabs_and_stabs",
+        "crates/weapons/tests/state_attacks.rs a_click_jabs_with_the_scripts_own_projectile",
+        "crates/addon-import/tests/import.rs real_steam_knife_and_grenade_ports"
+      ]
+    },
+    {
+      "addon": "Weapon_HEGrenade",
+      "title": "HE Grenade",
+      "port": "weapon_hegrenade",
+      "status": "verified",
+      "sha256": [
+        "1cae396e8616bf57e62dcfb4fda35490e93a772ee09979af45a3f7d4601dc351"
+      ],
+      "covers": {
+        "hegrenadeImage::onCharge": {
+          "charge_arm": "playthread\\s*\\(\\s*2\\s*,\\s*\"?(\\w+)"
+        },
+        "hegrenadeImage::onAbortCharge": {
+          "abort_arm": "playthread\\s*\\(\\s*2\\s*,\\s*\"?(\\w+)"
+        },
+        "hegrenadeImage::onFire": {
+          "throw_arm": "playthread\\s*\\(\\s*2\\s*,\\s*\"?(\\w+)",
+          "parent": "parent::onfire\\s*\\(",
+          "clears_tool": "%obj\\.tool\\[[^\\]]*\\]\\s*=\\s*0\\s*;",
+          "unuse": "servercmdunusetool\\s*\\("
+        },
+        "hegrenadeImage::onDone": {
+          "unmount": "unmountimage\\s*\\(\\s*%slot\\s*\\)"
+        },
+        "hegrenadeProjectile::onCollision": {
+          "bounce_sound": "serverplay3d\\s*\\(\\s*(\\w+)\\s*,"
+        },
+        "Armor::onCollision": {
+          "item": "hegrenadeitem",
+          "pickup": "%obj\\.pickup\\s*\\(\\s*%col\\s*\\)"
+        }
+      },
+      "tests": [
+        "weapon_hegrenade/checks.json",
+        "crates/addon-import/tests/ports.rs he_grenade_port_pulls_the_pin_then_throws_it_away",
+        "crates/weapons/tests/state_attacks.rs a_thrown_grenade_is_used_up_and_the_next_one_stays",
+        "crates/addon-import/tests/import.rs real_steam_knife_and_grenade_ports"
       ]
     },
     {

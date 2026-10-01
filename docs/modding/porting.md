@@ -109,7 +109,9 @@ Patterns do two jobs. They prove the copy is the shape the port was written
 for, and they read the numbers from that copy's script, so a port never
 hard-codes one copy's values. In a patch, a string that is exactly
 `"{projectiles}"` becomes the captured value (a number when it reads as one).
-`{name}` inside a longer string becomes its text.
+`{name}` inside a longer string becomes its text, and `{name:lower}` its
+text in lower case, for ids: Torque ignores the case of names
+(`"weapon_example:projectile/{jab:lower}"`).
 
 ### A port
 
@@ -166,6 +168,8 @@ add when you work in a checkout.
    | An image's `onFire` using v20's spread code (`%shellcount`, `%spread`, a `setVelocity` recoil) | the image's `shot` data (below) |
    | A fire-rate check on `%obj.lastFireTime` and `minShotTime` | nothing: the image's `min_shot_ticks` already does it, from the datablock |
    | Anything a field in [Making Add-Ons](README.md) section 5 or 6 expresses | a patch setting that field |
+   | An image's state script (`onCharge`, `onFire`, a custom `stateScript` such as `onFiretwo`) that plays an arm animation, calls `Parent::onFire`, spawns a second projectile or uses the item up | an entry in the image's `scripts` ([torque-equivalents.md](torque-equivalents.md#image-state-scripts-as-data)) |
+   | Something the game already does the same way | nothing: cover the function with patterns and say so in `notes` |
    | A `serverCmd` in an Add-On with no weapons, vehicles or bricks | a rule (section 3 of the guide): `behaviour.json` and a script under `files/`, and a `package.json` patch adding them to `provides` and their `capabilities` |
    | An image's `onFire` (or charge, release, jet, light, wheel or cancel) or a `serverCmd` that does host work in an Add-On with weapons, vehicles or bricks | host rules (below): `rules/` in the port, and a patch pointing the image at their commands |
    | Anything whose `runtime_hook` is null or that needs a missing capability | not portable yet: port the rest, mark the entry `partial`, and say what is missing in `notes` |
@@ -212,7 +216,8 @@ page as well.
 | Add-On | Port | Status | What it covers |
 |---|---|---|---|
 | `Weapon_Shotgun` (Sawn-off Shotgun) | `weapon_shotgun` | verified | `shotgunImage::onFire`: the pellets, their spread and the recoil, read from the copy's own script |
-| `Weapon_ModernWarbattles` (Bushido's Adventurer's Weapons) | `weapon_modernwarbattles` | partial | the hl2 ammo system: magazines and reserves per ammo type, reloads, ammo boxes (a typed box gives twice its amount, as the original), projectile headshots. Not yet: the hitscan guns, melee and the grenade's shrapnel |
+| `Weapon_ModernWarbattles` (Bushido's Adventurer's Weapons) | `weapon_modernwarbattles` | verified | the hl2 ammo system (magazines, reserves, reloads, ammo boxes, spare guns), every gun's shot from its own `onFire` (the Heavy Machine Gun's three fire states), the light key falling through to the light, the hitscan guns, their crits and shoves while `Emote_Critical` is on (its burst and sounds), the melee swings (players and vehicles, kill messages, hit sounds), headshots, the frag grenade's cooking, countdown and shrapnel, and a head hit's flinch |
+| `Weapon_AdventurePack` (the Glass 1019 release) | `weapon_adventurepack` | verified | the same ammo system with its own reserves, its shots (the Paired Shotgun's single barrel), hitscan guns, headshots and the taser's tumble, sharing the rules above |
 | `Weapon_Package_Tier1` (Kai's Tier+Tactical Tier 1) | `weapon_package_tier1` on `_shared/tier-tactical` | partial | the Tier+Tactical ammo system with its default settings: magazines run by each image's check states, the T+T2 reserves, the light key's reload, ammo items and a dead player's ammo bag; raycast pistols reaching less on the move, the pump's pellets and blast loaded a shell at a time, the sport rifle's weak round on the move and its headshots under their own kill message, the submachine gun slowing whoever it hits, the akimbo pistols' left hand, recoil kick. Not yet: the ammo items' floating count, the recoil shake for players nearby |
 | `Weapon_Package_Tier1A` (Kai's Tier+Tactical Tier 1A) | `weapon_package_tier1a` on `_shared/tier-tactical` | partial | on Tier 1: the single shotgun's pellets, close blast and knockback, the pepperbox's several rays a shot, the snubnose's headshots, the nailgun's slowing nails. The nailgun is an easter egg the original loads only with its hidden `???` setting, off by default, so it is imported hidden |
 
@@ -312,6 +317,8 @@ copy's own items:
 | `size`, `ammo` | the item fields holding the magazine size and the ammo type's name (inherited fields count) |
 | `types` | each ammo type by the name the items give it: the engine's `ammo` name, the starting `reserve` and the `max_reserve`. An item naming a type not listed stops the port, so a copy with other ammo is named in the report rather than guessed |
 | `reload_ticks` | the reload's length when the image's states do not show it |
+| `one_by_one` | the state script that loads one round (`onReloadSingle`): images with a state running it reload a round at a time, each round lasting from that state back to it |
+| `every` | magazine fields for every gun (`"light_states": ["Ready", "Empty"]`), before `items` |
 | `items` | extra magazine fields for one item, by datablock name |
 
 The reload lasts as long as the image's own reload states: from the state
@@ -360,7 +367,7 @@ rules can then hand out exactly the ammo types its copy registers.
 
 Space Guy's raycasting weapons, and Tier+Tactical's after them, keep a
 gun's ray in image fields (`raycastEnabled`, `raycastWeaponRange`,
-`raycastDirectDamage` and so on). `"hitscans"` names those fields once,
+`raycastDirectDamage` and so on). `"raycasts"` names those fields once,
 and every image with the `enabled` field set gets a `shot` whose
 [`hitscan`](README.md) ray does the same damage, push, explosion and
 sounds: `enabled`, `range`, `spread`, `count`, `damage`, `damage_type`,
@@ -411,3 +418,64 @@ first. The port's own fields merge over it and its `scripts` follow the
 shared ones. Host rules too: `ports/_shared/<name>/rules/` comes before
 the port's own `rules/`, a file of the port's replacing the shared one of
 the same name.
+
+## Shots read from the scripts
+
+`"shots": {}` reads every image's `onFire` written with the spread code
+(`%projectile = ...; %spread = ...; %shellcount = ...;` and its loop) and
+gives the image its `shot`. Each block is a set of projectiles; one with a
+`setVelocity` recoil starts a shot, and the blocks after it are its
+`volleys` (a shotgun's slug after its pellets). A `scale = "x y z"` on the
+projectiles it makes becomes the shot's `scale`.
+
+| Field | Meaning |
+|---|---|
+| `pick` | for an `onFire` that fires one of several shots (a branch per magazine count), which to port, by image name: 0 for the first. Several and no pick stops the port |
+| `last` | `{ "<image>": { "shot": 1, "rounds": 2 } }`: which of its shots the magazine's last few rounds fire (a two-barrel gun's single barrel), as the image's `last_shot` |
+
+The reader also takes from each state's own script what a state can say:
+the sound it played (`serverPlay3d`), its arm move (`playThread(2, ...)`,
+the state's `arm`) and the other hand's (`playThread(3, ...)`, its
+`gesture`), and the camera shake of a recoil blast it set off at the
+shooter (`spawnExplosion` of a projectile whose explosion shakes), as the
+shot's `kick`. A fire state whose script is not `onFire` (`onFire2`) and
+has the spread code becomes one of the image's `state_shots`. A
+projectile whose own `damage` method dealt `directDamage` without reading
+its scale gets `fixed_damage`.
+
+## Hitscan guns from image fields
+
+Raycasting support scripts gave each image fields for its ray. `"hitscans"`
+names them, and each image whose `when` field is set gets `shot.hitscan`
+and a projectile of its own (`<ns>:projectile/<image>ray`) carrying the
+image's damage, so `on_damage` and tables see the ray by id (the ray is a
+definition whose parent is the image, so a table of `ProjectileData` reads
+the image's fields on it).
+
+| Field | Meaning |
+|---|---|
+| `when`, `range` | the field that makes the image hitscan (or its range when there is no switch), and the range in units |
+| `from_eye` or `from_muzzle` | the field that casts from the eye, or from the muzzle when set |
+| `damage`, `damage_limit`, `damage_type` | the damage field, the script's own clamp, and the damage type field |
+| `hit_projectile` | the field naming the projectile whose look and blast a hit shows |
+| `impulse`, `vertical` | the shove along the shot and straight up |
+| `count`, `spread`, `spread_degrees` | rays per shot and their spread (in degrees across with `spread_degrees`) |
+| `tracer` | `{ "field": ..., "look": { "color", "width", "seconds" } }`: a streak for images where the field is set |
+
+## Rules shared between ports, and their values
+
+Two releases of one Add-On can share a rules script: `"rules": { "from":
+"<port>" }` uses that port's `rules/` folder. What differs between them
+goes in `"values"`: each becomes `{{name}}` in the script as a Rhai
+literal, after `{capture}`s in it are filled, so a value can be built from
+what the patterns read (`"{namespace}:sound/{baton_sound_a}"`).
+
+When the scripts used another Add-On's datablocks only if it was there
+(`if(isObject(CritProjectile))`), list it in the rules' `"uses"` by its v20
+folder name (`["Emote_Critical"]`). The rules then name it in
+`optional_dependencies`, `{uses:Emote_Critical}` in a value is its import's
+id, and the script asks `enabled(...)` before using its content. When the
+Add-On loaded the other one itself (`exec("add-ons/Emote_Critical/
+server.cs")`, as ModernWarbattles did), list it in `"requires"` instead:
+the rules then name it in `dependencies`, so turning the Add-On on turns
+its import on too, and `{uses:...}` names it the same way.

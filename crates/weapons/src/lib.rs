@@ -152,6 +152,11 @@ pub struct State {
     /// `armattack` for a swing, `root` to stop.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub arm: String,
+    /// The holder's thread-3 animation played on entering the state, as
+    /// v20 scripts' `playThread(3, shiftLeft)`: the other arm's move, a
+    /// gesture over whatever thread 2 plays; `root` stops it.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub gesture: String,
     pub sound: String,
     pub emitter: String,
     pub emitter_node: String,
@@ -293,6 +298,115 @@ pub struct Image {
     /// muzzle along the same aim, inheriting the shot's recoil.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub volleys: Vec<Volley>,
+    /// What a gun's last few rounds fire instead of `shot` and `volleys`,
+    /// when its magazine holds [`Magazine::last_rounds`] or fewer: a
+    /// two-barrel gun's single barrel.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_shot: Option<LastShot>,
+    /// Shots fired on entering a state whose script is not `onFire`, by
+    /// that script, lowercase: v20 guns whose fire states each ran a
+    /// script of their own (`onFire2`, `onFire3`) with its own spread and
+    /// recoil, as a heavy gun's fire spreads wider as it keeps firing.
+    /// Each takes rounds and fires `volleys` as `onFire`'s shot does.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub state_shots: BTreeMap<String, Shot>,
+    /// A grenade cooked in the hand ([`Cook`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cook: Option<Cook>,
+    /// What the image's own state scripts do, by script name in lower case
+    /// (`oncharge`, `onfire`, `onfiretwo`): entering a state whose `script`
+    /// is listed does this instead of the game's built-in handling of that
+    /// name. A port writes here what a v20 Add-On's `Image::on...` function
+    /// did.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub scripts: BTreeMap<String, Script>,
+}
+/// [`Image::cook`]: a fuse that starts burning in the hand, as v20 grenade
+/// scripts timed one (`getSimTime` as the pin drops, a schedule to go off
+/// in the hand). The image's next shot carries what is left of it and goes
+/// off when it runs out; held that long, it goes off in the hand instead:
+/// the image's projectile explodes above the holder, who puts it away and
+/// keeps the grenade. Putting it away first puts the fuse out.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Cook {
+    /// The state script that lights the fuse (`onPinDrop`), lowercase.
+    pub script: String,
+    /// How long the fuse burns, in ticks (120 a second), 1 to 36000.
+    pub fuse_ticks: u32,
+    /// Where it goes off in the hand, in units above the holder's feet.
+    #[serde(default)]
+    pub burst_height: f32,
+    /// Shown in the middle of the holder's screen while it burns, every
+    /// `print_ticks` from the first, for `print_seconds`: `{seconds}` is
+    /// the time left to a tenth (`3.9`, `1`) and `{s}` an `s` unless that is
+    /// exactly 1. `first_print` replaces the first. Empty for none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub print: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub first_print: String,
+    /// 1 to 1200.
+    #[serde(default = "twelve")]
+    pub print_ticks: u32,
+    /// 0 to 10.
+    #[serde(default)]
+    pub print_seconds: f32,
+}
+fn twelve() -> u32 {
+    12
+}
+impl Cook {
+    /// What the holder reads `burned` ticks after the fuse was lit, if
+    /// it is a print tick: the first at `print_ticks`, showing it whole.
+    pub fn print_at(&self, burned: u32) -> Option<String> {
+        if self.print.is_empty() || burned == 0 || !burned.is_multiple_of(self.print_ticks) {
+            return None;
+        }
+        if burned == self.print_ticks && !self.first_print.is_empty() {
+            return Some(self.first_print.clone());
+        }
+        // Counted down a step at a time from the whole fuse, as the
+        // scripts' own text was.
+        let left = self
+            .fuse_ticks
+            .checked_sub(burned - self.print_ticks)
+            .filter(|l| *l > 0)?;
+        let tenths = (left as f32 / 12.0).round() as u32;
+        let seconds = if tenths.is_multiple_of(10) {
+            format!("{}", tenths / 10)
+        } else {
+            format!("{}.{}", tenths / 10, tenths % 10)
+        };
+        Some(
+            self.print
+                .replace("{seconds}", &seconds)
+                .replace("{s}", if tenths == 10 { "" } else { "s" }),
+        )
+    }
+    fn validate(&self) -> Result<()> {
+        ensure!(
+            !self.script.is_empty()
+                && self.script.len() <= 64
+                && self.script == self.script.to_ascii_lowercase()
+                && (1..=36_000).contains(&self.fuse_ticks)
+                && self.burst_height.is_finite()
+                && (-10.0..=10.0).contains(&self.burst_height)
+                && (1..=1200).contains(&self.print_ticks)
+                && (0.0..=10.0).contains(&self.print_seconds)
+                && self.print.len() <= 255
+                && self.first_print.len() <= 255,
+            "Invalid cook"
+        );
+        Ok(())
+    }
+}
+/// [`Image::last_shot`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LastShot {
+    pub shot: Shot,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub volleys: Vec<Volley>,
 }
 /// [`Image::volleys`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -377,11 +491,20 @@ pub struct Magazine {
     pub on_reload: Option<Check>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_loaded: Option<Check>,
-    /// With `checks`: the states, by name, in which the light key starts a
-    /// reload (Tier+Tactical's `Ready`, `Empty`, `EmptyFire`); any when
-    /// empty. Up to 8.
+    /// With this many rounds or fewer left (at least one), a pull fires the
+    /// image's `last_shot` and takes them all, even fewer than `per_shot`:
+    /// a two-barrel gun's last barrel. 0 for none.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub last_rounds: u32,
+    /// The image states (by name, any case) the light key reloads in. In
+    /// any other state, or when no reload can start (a full magazine, no
+    /// reserve, one already under way), the key works the light as usual,
+    /// as the hl2 ammo system's packaged `serverCmdLight` did and
+    /// Tier+Tactical's (`Ready`, `Empty`, `EmptyFire`). With `checks`, no
+    /// reload starts outside them either. Empty: the key reloads in any
+    /// state and never works the light. At most 8.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub reload_from: Vec<String>,
+    pub light_states: Vec<String>,
 }
 /// [`Magazine::checks`]: the flags a script sets, each left as it was when
 /// absent.
@@ -421,8 +544,8 @@ impl Cond {
         match self {
             Cond::Is(v) => *v,
             Cond::Any(facts) => facts.iter().any(|f| match f {
-                Fact::Shot => rounds >= magazine.per_shot,
-                Fact::Empty => rounds < magazine.per_shot,
+                Fact::Shot => magazine.fires(rounds),
+                Fact::Empty => !magazine.fires(rounds),
                 Fact::Full => rounds >= magazine.size,
                 Fact::NotFull => rounds < magazine.size,
                 Fact::Reserve => reserve,
@@ -435,6 +558,15 @@ fn max_reserve() -> u32 {
     100_000
 }
 impl Magazine {
+    /// Whether `rounds` in the magazine make a shot.
+    pub fn fires(&self, rounds: u32) -> bool {
+        rounds >= self.per_shot || self.last(rounds)
+    }
+    /// Whether a shot with `rounds` in the magazine is its last
+    /// ([`Self::last_rounds`]).
+    pub fn last(&self, rounds: u32) -> bool {
+        rounds > 0 && rounds <= self.last_rounds
+    }
     /// Whether the image's states run it ([`Magazine::checks`]).
     pub fn scripted(&self) -> bool {
         !self.checks.is_empty()
@@ -443,6 +575,7 @@ impl Magazine {
         ensure!(
             (1..=1000).contains(&self.size)
                 && (1..=self.size).contains(&self.per_shot)
+                && self.last_rounds <= self.size
                 && (1..=1200).contains(&self.reload_ticks)
                 && self.reserve <= 100_000
                 && (1..=100_000).contains(&self.max_reserve),
@@ -472,8 +605,6 @@ impl Magazine {
         ensure!(
             self.checks.len() <= 16
                 && (self.checks.is_empty() || !self.reload_state.is_empty())
-                && self.reload_from.len() <= 8
-                && self.reload_from.iter().all(|s| (1..=64).contains(&s.len()))
                 && self.checks.keys().all(|k| (1..=64).contains(&k.len()))
                 && self
                     .checks
@@ -485,6 +616,14 @@ impl Magazine {
                     .all(|c| !matches!(c, Cond::Any(f) if f.is_empty() || f.len() > 6)),
             "Invalid magazine checks"
         );
+        ensure!(
+            self.light_states.len() <= 8
+                && self
+                    .light_states
+                    .iter()
+                    .all(|s| (1..=64).contains(&s.len())),
+            "Invalid magazine light states"
+        );
         Ok(())
     }
     /// What the ammo display calls it.
@@ -495,6 +634,35 @@ impl Magazine {
             &self.display
         }
     }
+}
+/// One image state script as data: what a v20 `Image::onCharge`,
+/// `onFire` or a custom `stateScript` function did to its holder.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Script {
+    /// The holder's arm animation (thread 2) started first, as
+    /// `%obj.playThread(2, ...)`: `spearReady` while charging,
+    /// `spearThrow` or `armattack` on the swing, `root` to lower the arm.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub arm: String,
+    /// Launch a projectile as `Parent::onFire` does: aimed and spread like
+    /// the image's own shots, after the arm animation.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub fire: bool,
+    /// The projectile `fire` launches instead of the image's own: a second
+    /// attack of one weapon, as a script that spawned its own
+    /// `ProjectileData` (a knife's quick jab beside its charged stab).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projectile: Option<String>,
+    /// The held item is used up: it leaves the holder's tools and hand, as
+    /// a thrown grenade's script cleared `%obj.tool[%slot]` and called
+    /// `serverCmdUnUseTool`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub use_up: bool,
+}
+/// An arm animation name: letters, digits and `_`, up to 64 bytes.
+fn is_sequence_name(name: &str) -> bool {
+    name.len() <= 64 && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
 }
 /// Add-On commands (`package:command`) an image runs for its holder, aimed
 /// where they look, beyond `command` (which is `onFire`'s): v20 Add-Ons
@@ -608,6 +776,18 @@ pub struct Shot {
     /// own game, from the shot it already sees: nothing is sent for it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kick: Option<Kick>,
+    /// The projectiles' size against their holder's, 0.1 to 10, as a v20
+    /// script's `scale` on the projectiles it made: it grows their look
+    /// and blast and, unless [`ProjectileDef::fixed_damage`], their
+    /// damage. Their speed is the shot's.
+    #[serde(default = "one_f32", skip_serializing_if = "is_one")]
+    pub scale: f32,
+}
+fn one_f32() -> f32 {
+    1.0
+}
+fn is_one(n: &f32) -> bool {
+    *n == 1.0
 }
 /// [`ProjectileDef::slow`], Tier+Tactical's `TT_dampenVelocity(%col,
 /// divisor)` in a bullet's `damage`: each hit divides the player's velocity
@@ -675,6 +855,7 @@ impl Shot {
         rested: None,
         hitscan: None,
         kick: None,
+        scale: 1.0,
     };
     /// The velocity the recoil adds to a shooter aiming along `direction`
     /// (a unit vector, Y up), before the projectiles inherit it.
@@ -890,9 +1071,14 @@ pub struct ProjectileDef {
     #[serde(skip_serializing_if = "is_zero_u32")]
     pub max_bounces: u32,
     /// Smaller projectiles it throws out as it flies, bounces or explodes
-    /// (flak sparks, a molotov's embers, a cluster bomb).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub children: Option<Children>,
+    /// (flak sparks, a molotov's embers, a cluster bomb): one set, or a
+    /// list of up to 4 (a grenade's shrapnel and its smoke trails).
+    #[serde(
+        default,
+        deserialize_with = "one_or_many",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub children: Vec<Children>,
     /// Hurts whatever stands near it every so often while it lives (fire,
     /// gas, a lingering ember).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -901,6 +1087,11 @@ pub struct ProjectileDef {
     /// and machine gun bullets do.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub slow: Option<Slow>,
+    /// Its direct damage stays as authored at any scale, where v20's own
+    /// `ProjectileData::damage` scaled it with the projectile: projectiles
+    /// whose `damage` method dealt `directDamage` as it was.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub fixed_damage: bool,
 }
 fn is_zero_u32(n: &u32) -> bool {
     *n == 0
@@ -932,9 +1123,28 @@ pub struct Children {
     /// When it explodes.
     #[serde(default)]
     pub on_explode: bool,
+    /// Each child goes off after a random number of ticks in this range,
+    /// inclusive, as scripts scheduled each one's `explode` (cluster
+    /// bomblets bursting one after another); 0 to 36000.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fuse_ticks: Option<[u32; 2]>,
 }
 fn one_u32() -> u32 {
     1
+}
+/// [`ProjectileDef::children`]: one set as an object, or a list.
+fn one_or_many<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<Children>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(Children),
+        Many(Vec<Children>),
+    }
+    Ok(match Option::<OneOrMany>::deserialize(d)? {
+        None => Vec::new(),
+        Some(OneOrMany::One(c)) => vec![c],
+        Some(OneOrMany::Many(c)) => c,
+    })
 }
 /// Damage to everything within `radius` every `every_ticks` while the
 /// projectile lives, stuck or flying, under the same rules as its
@@ -995,9 +1205,10 @@ impl Default for ProjectileDef {
             sport_image: None,
             rest_speed: 0.0,
             max_bounces: 0,
-            children: None,
+            children: Vec::new(),
             aura: None,
             slow: None,
+            fixed_damage: false,
         }
     }
 }
@@ -1293,14 +1504,21 @@ impl Pack {
     /// The type named by a `$DamageType::<name>` reference; unknown names
     /// fall back to `Default` as an unset Torque global indexes type 0.
     pub fn damage_type(&self, reference: &str) -> Option<&DamageType> {
+        self.named_damage_type(reference)
+            .or_else(|| self.damage_types.get("default"))
+    }
+    /// Whether the pack has the damage type `reference` names itself,
+    /// not only the `default` [`Pack::damage_type`] falls back to.
+    pub fn has_damage_type(&self, reference: &str) -> bool {
+        self.named_damage_type(reference).is_some()
+    }
+    fn named_damage_type(&self, reference: &str) -> Option<&DamageType> {
         let name = reference.trim();
         let name = match name.get(..13) {
             Some(prefix) if prefix.eq_ignore_ascii_case("$damagetype::") => &name[13..],
             _ => name,
         };
-        self.damage_types
-            .get(&name.to_ascii_lowercase())
-            .or_else(|| self.damage_types.get("default"))
+        self.damage_types.get(&name.to_ascii_lowercase())
     }
     pub fn validate(&self) -> Result<()> {
         ensure!(self.schema_version == SCHEMA, "Unknown weapon schema");
@@ -1409,34 +1627,69 @@ impl Pack {
                         .is_none_or(is_image_command),
                 "Invalid image command {id}"
             );
-            ensure!(
-                image.shot.as_ref().is_none_or(|s| {
-                    (1..=64).contains(&s.projectiles)
-                        && (0.0..=1.0).contains(&s.spread)
-                        && (0.0..=100.0).contains(&s.recoil)
-                        && s.recoil_vertical.is_none_or(|v| (0.0..=100.0).contains(&v))
-                        && s.moving_spread.is_none_or(|m| (0.0..=1.0).contains(&m))
-                        && (0.0..=50.0).contains(&s.moving_speed)
-                        && s.kick.is_none_or(|k| {
-                            (0.0..=1.0).contains(&k.amplitude)
-                                && (0.1..=30.0).contains(&k.frequency)
-                                && (0.05..=2.0).contains(&k.seconds)
-                        })
-                        && s.rested.is_none_or(|r| {
-                            (1..=1200).contains(&r.after_ticks) && (0.0..=1.0).contains(&r.spread)
-                        })
-                }),
-                "Invalid image shot {id}: 1 to 64 projectiles, spreads 0 to 1, recoil 0 to 100, \
-                 moving_speed 0 to 50, rested after 1 to 1200 ticks, kick amplitude 0 to 1, \
-                 frequency 0.1 to 30, seconds 0.05 to 2"
-            );
-            ensure!(
-                image.volleys.len() <= 4
-                    && image.volleys.iter().all(|v| {
+            let shot_ok = |s: &Shot| {
+                (1..=64).contains(&s.projectiles)
+                    && (0.0..=1.0).contains(&s.spread)
+                    && (0.0..=100.0).contains(&s.recoil)
+                    && s.recoil_vertical.is_none_or(|v| (0.0..=100.0).contains(&v))
+                    && s.moving_spread.is_none_or(|m| (0.0..=1.0).contains(&m))
+                    && (0.0..=50.0).contains(&s.moving_speed)
+                    && (0.1..=10.0).contains(&s.scale)
+                    && s.kick.is_none_or(|k| {
+                        (0.0..=1.0).contains(&k.amplitude)
+                            && (0.1..=30.0).contains(&k.frequency)
+                            && (0.05..=2.0).contains(&k.seconds)
+                    })
+                    && s.rested.is_none_or(|r| {
+                        (1..=1200).contains(&r.after_ticks) && (0.0..=1.0).contains(&r.spread)
+                    })
+            };
+            let volleys_ok = |volleys: &[Volley]| {
+                volleys.len() <= 4
+                    && volleys.iter().all(|v| {
                         (1..=64).contains(&v.projectiles)
                             && (0.0..=1.0).contains(&v.spread)
                             && self.projectiles.contains_key(&v.projectile)
+                    })
+            };
+            ensure!(
+                image.last_shot.as_ref().is_none_or(|l| shot_ok(&l.shot)
+                    && l.shot.hitscan.is_none()
+                    && volleys_ok(&l.volleys))
+                    && image.last_shot.is_some()
+                        == image.magazine.as_ref().is_some_and(|m| m.last_rounds > 0),
+                "Invalid last shot of image {id}: a shot and volleys as its own, no hitscan, \
+                 with a magazine whose last_rounds is set"
+            );
+            ensure!(
+                image.shot.as_ref().is_none_or(shot_ok),
+                "Invalid image shot {id}: 1 to 64 projectiles, spreads 0 to 1, recoil 0 to 100, \
+                 moving_speed 0 to 50, scale 0.1 to 10, rested after 1 to 1200 ticks, kick amplitude 0 to 1, \
+                 frequency 0.1 to 30, seconds 0.05 to 2"
+            );
+            ensure!(
+                image.state_shots.len() <= 8
+                    && image.state_shots.iter().all(|(script, s)| {
+                        !script.is_empty()
+                            && script.len() <= 64
+                            && *script == script.to_ascii_lowercase()
+                            && script != "onfire"
+                            && shot_ok(s)
+                            && s.hitscan.is_none()
                     }),
+                "Invalid state shots of image {id}: at most 8, by lowercase state script other \
+                 than onfire, each a shot as its own without hitscan"
+            );
+            if let Some(cook) = &image.cook {
+                cook.validate()
+                    .with_context(|| format!("image {id}: fuse_ticks 1 to 36000, burst_height -10 to 10, print_ticks 1 to 1200, print_seconds 0 to 10, a lowercase script"))?;
+                ensure!(
+                    image.projectile.is_some(),
+                    "Image {id} cooks but has no projectile to go off"
+                );
+            }
+            ensure!(
+                volleys_ok(&image.volleys),
                 "Invalid volleys of image {id}: at most 4, each a projectile of the pack, \
                  1 to 64 projectiles, spread 0 to 1"
             );
@@ -1535,6 +1788,25 @@ impl Pack {
                     "left_image {left} of image {id} has a left_image of its own"
                 );
             }
+            ensure!(
+                image.scripts.len() <= 16
+                    && image.scripts.iter().all(|(script, s)| {
+                        !script.is_empty()
+                            && script.len() <= 64
+                            && script
+                                .bytes()
+                                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+                            && is_sequence_name(&s.arm)
+                            && (s.fire || s.projectile.is_none())
+                    }),
+                "Invalid image scripts {id}: up to 16, lower-case names, arm letters, digits and _, projectile only with fire"
+            );
+            for p in image.scripts.values().filter_map(|s| s.projectile.as_ref()) {
+                ensure!(
+                    self.projectiles.contains_key(p),
+                    "Missing projectile {p} of image {id}"
+                );
+            }
         }
         for (id, p) in &self.projectiles {
             ensure!(
@@ -1577,12 +1849,16 @@ impl Pack {
                 p.max_bounces <= 64,
                 "Invalid max_bounces of projectile {id}: 0 to 64"
             );
-            if let Some(c) = &p.children {
+            ensure!(
+                p.children.len() <= 4,
+                "Projectile {id} has more than 4 sets of children"
+            );
+            for c in &p.children {
                 let child = self.projectiles.get(&c.projectile).ok_or_else(|| {
                     anyhow::anyhow!("Missing child projectile {} of {id}", c.projectile)
                 })?;
                 ensure!(
-                    child.children.is_none(),
+                    child.children.is_empty(),
                     "Child projectile {} of {id} has children of its own",
                     c.projectile
                 );
@@ -1591,9 +1867,11 @@ impl Pack {
                         && (0.0..=500.0).contains(&c.speed)
                         && (0.0..=1.0).contains(&c.inherit)
                         && (c.every_ticks == 0 || c.every_ticks >= 4)
-                        && (c.every_ticks > 0 || c.on_bounce || c.on_explode),
+                        && (c.every_ticks > 0 || c.on_bounce || c.on_explode)
+                        && c.fuse_ticks.is_none_or(|[a, b]| a <= b && b <= 36_000),
                     "Invalid children of projectile {id}: count 1 to 16, speed 0 to 500, \
-                     inherit 0 to 1, every_ticks 0 or at least 4, and some moment to throw them"
+                     inherit 0 to 1, every_ticks 0 or at least 4, some moment to throw them, \
+                     fuse_ticks rising and at most 36000"
                 );
             }
             if let Some(a) = &p.aura {

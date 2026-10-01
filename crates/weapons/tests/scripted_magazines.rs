@@ -49,7 +49,7 @@ const GUNS: &str = r#"{
                     "CheckAlive": { "ammo": true }
                 },
                 "on_reload": { "loaded": false, "ammo": ["empty"] },
-                "reload_from": ["Ready", "Empty"]
+                "light_states": ["Ready", "Empty"]
             },
             "states": [
                 { "name": "Activate", "ticks": 4, "timeout": 5 },
@@ -79,7 +79,7 @@ const GUNS: &str = r#"{
                 },
                 "on_reload": { "loaded": false, "ammo": ["empty"] },
                 "on_loaded": { "loaded": true },
-                "reload_from": ["Ready", "Empty"]
+                "light_states": ["Ready", "Empty"]
             },
             "states": [
                 { "name": "Activate", "ticks": 4, "timeout": 7 },

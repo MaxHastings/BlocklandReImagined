@@ -404,9 +404,7 @@ mod tests {
                 "steel-ball-fx",
                 "advanced-duplicator-tool",
                 "advanced-duplicator",
-                "blockhead_bot",
-                "fill-can-tool",
-                "fill-can"
+                "blockhead_bot"
             ]
         );
         let mut available: Vec<(String, String)> = PackageSet::base()
@@ -507,9 +505,7 @@ mod tests {
                 "steel-ball-fx",
                 "advanced-duplicator-tool",
                 "advanced-duplicator",
-                "blockhead_bot",
-                "fill-can-tool",
-                "fill-can"
+                "blockhead_bot"
             ]
         );
         assert!(done.listed.is_empty());

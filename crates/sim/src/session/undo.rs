@@ -101,7 +101,7 @@ impl Session {
             return Ok(Reply::Undone(None));
         };
         let tick = self.simulation.state().tick;
-        self.play_thread_three(tick, owner, "undo");
+        self.play_thread(tick, owner, 3, "undo");
         let actor = self
             .peers
             .get(&owner)
@@ -160,7 +160,7 @@ impl Session {
     /// `undoTrustCheck`); the rest simply break, since the copy goes too.
     fn undo_group(&mut self, owner: OwnerId, ids: Vec<BrickId>) -> Result<Reply> {
         let tick = self.simulation.state().tick;
-        self.play_thread_three(tick, owner, "undo");
+        self.play_thread(tick, owner, 3, "undo");
         let actor = self
             .peers
             .get(&owner)
@@ -211,7 +211,7 @@ impl Session {
     /// something stands in the way, and the step stays to try again.
     fn undo_cut(&mut self, owner: OwnerId, bricks: Vec<(BrickId, Brick)>) -> Result<Reply> {
         let tick = self.simulation.state().tick;
-        self.play_thread_three(tick, owner, "undo");
+        self.play_thread(tick, owner, 3, "undo");
         let restored = bricks.iter().map(|(_, b)| b.clone()).collect();
         match self.simulation.restore_group(restored) {
             Ok(ids) => {
@@ -251,7 +251,7 @@ impl Session {
     /// may paint takes its old colour back.
     fn undo_colors(&mut self, owner: OwnerId, colors: Vec<(BrickId, u8)>) -> Result<Reply> {
         let tick = self.simulation.state().tick;
-        self.play_thread_three(tick, owner, "undo");
+        self.play_thread(tick, owner, 3, "undo");
         let actor = self
             .peers
             .get(&owner)

@@ -346,9 +346,10 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
             sport_image: (!sport.is_empty()).then(|| native_id("image", &sport)),
             rest_speed: num(d, "restVelocity", 0.0),
             max_bounces: 0,
-            children: None,
+            children: Vec::new(),
             aura: None,
             slow: None,
+            fixed_damage: false,
         };
         pack.projectiles.insert(id, p);
     }
@@ -404,6 +405,7 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 eject_shell: flag(d, &format!("stateEjectShell[{n}]"), false),
                 // v20 swings arms from script by image name, never from state data.
                 arm: String::new(),
+                gesture: String::new(),
             });
         }
         let p = field(d, "projectile");
@@ -460,6 +462,11 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 left_image: None,
                 magazine: None,
                 volleys: vec![],
+                last_shot: None,
+                state_shots: Default::default(),
+                cook: None,
+                // v20's own scripts run by image name (`runtime::callback`).
+                scripts: Default::default(),
             },
         );
     }

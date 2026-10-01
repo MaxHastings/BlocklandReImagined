@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "notes": "The image's scripts as data. onCharge raises the arm, onFire swings it and stabs with the image's projectile, and onFiretwo (the later of its two definitions, which Torque keeps) jabs with its own projectile. onStopFire lowers the arm. Every animation and projectile name comes from this copy's own script.",
+  "patch": {
+    "assets/weapons.json": {
+      "images": {
+        "weapon_butterflyknife:image/butterflyknifeimage": {
+          "scripts": {
+            "oncharge": { "arm": "{charge_arm}" },
+            "onstopfire": { "arm": "{stop_arm}" },
+            "onfire": { "arm": "{stab_arm}", "fire": true },
+            "onfiretwo": { "fire": true, "projectile": "weapon_butterflyknife:projectile/{jab:lower}" }
+          }
+        }
+      }
+    }
+  }
+}

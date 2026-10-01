@@ -363,7 +363,10 @@ fn a_volley_fires_its_own_projectile_after_the_pellets() {
             }
         }
     }
-    let pellets = spawned.iter().filter(|(d, _)| d == "kit:projectile/pellet").count();
+    let pellets = spawned
+        .iter()
+        .filter(|(d, _)| d == "kit:projectile/pellet")
+        .count();
     let blasts: Vec<_> = spawned
         .iter()
         .filter(|(d, _)| d == "kit:projectile/blast")
@@ -371,9 +374,199 @@ fn a_volley_fires_its_own_projectile_after_the_pellets() {
     assert_eq!((pellets, blasts.len()), (6, 1));
     // Straight along the aim at 40, less the recoil of 3 it inherits.
     let aim = Frame::default().direction.normalize();
-    assert!((blasts[0].1 - aim * 37.0).length() < 1e-3, "{:?}", blasts[0].1);
+    assert!(
+        (blasts[0].1 - aim * 37.0).length() < 1e-3,
+        "{:?}",
+        blasts[0].1
+    );
 
     // A volley of a projectile the pack lacks is refused.
-    let bad = json.replace("kit:projectile/blast\", \"projectiles\"", "kit:projectile/none\", \"projectiles\"");
+    let bad = json.replace(
+        "kit:projectile/blast\", \"projectiles\"",
+        "kit:projectile/none\", \"projectiles\"",
+    );
+    assert!(Pack::from_json(bad.as_bytes()).is_err());
+}
+
+/// A two-barrel gun whose script fired both barrels while it had more than
+/// two rounds and its single barrel with whatever was left: `per_shot` 2,
+/// `last_rounds` 2 and a `last_shot`. With 5 rounds it fires 8 pellets
+/// twice (3, then 1 left), then the single barrel's 4 with the last one,
+/// then clicks.
+#[test]
+fn a_magazines_last_rounds_fire_the_last_shot() {
+    let json = format!(
+        r#"{{
+            "schema_version": {SCHEMA},
+            "id": "kit",
+            "items": {{ "kit:weapon/pair": {{ "ui_name": "Pair", "image": "kit:image/pair" }} }},
+            "images": {{
+                "kit:image/pair": {{
+                    "projectile": "kit:projectile/pellet",
+                    "shot": {{ "projectiles": 8, "spread": 0.004 }},
+                    "last_shot": {{ "shot": {{ "projectiles": 4, "spread": 0.002 }} }},
+                    "magazine": {{ "size": 5, "ammo": "shells", "per_shot": 2, "last_rounds": 2,
+                                   "reload_ticks": 600, "reserve": 0 }},
+                    "states": [
+                        {{ "name": "Activate", "ticks": 2, "timeout": 1 }},
+                        {{ "name": "Ready", "down": 2, "no_ammo": 4 }},
+                        {{ "name": "Fire", "ticks": 10, "script": "onFire", "timeout": 3 }},
+                        {{ "name": "Hold", "up": 1 }},
+                        {{ "name": "Empty", "ammo": 1 }}
+                    ]
+                }}
+            }},
+            "projectiles": {{
+                "kit:projectile/pellet": {{ "speed": 100.0, "inherit": 1.0, "lifetime_ticks": 240, "fade_ticks": 240 }}
+            }}
+        }}"#
+    );
+    let mut w = WeaponsWorld::new(Pack::from_json(json.as_bytes()).unwrap()).unwrap();
+    w.add_actor(A, 5).unwrap();
+    let slot = w.give(A, "kit:weapon/pair").unwrap();
+    w.equip(A, Some(slot)).unwrap();
+    step(&mut w, 10);
+    let mut pulls = vec![];
+    for _ in 0..4 {
+        w.trigger(A, true).unwrap();
+        let mut pellets = 0;
+        for _ in 0..20 {
+            pellets += w
+                .step(&mut Open)
+                .iter()
+                .filter(|e| matches!(e, Event::Spawned { .. }))
+                .count();
+        }
+        w.trigger(A, false).unwrap();
+        step(&mut w, 5);
+        pulls.push((pellets, w.ammo(A).unwrap().rounds));
+    }
+    assert_eq!(pulls, [(8, 3), (8, 1), (4, 0), (0, 0)]);
+
+    // A last shot needs a magazine that names its rounds.
+    let bad = json.replace(r#""per_shot": 2, "last_rounds": 2,"#, r#""per_shot": 2,"#);
+    assert!(Pack::from_json(bad.as_bytes()).is_err());
+}
+
+/// A frag grenade's script threw two kinds of fragment as it burst
+/// (shrapnel and smoke trails): `children` as a list, each set its own
+/// count, speed and directions.
+#[test]
+fn a_projectile_bursts_into_several_sets_of_children() {
+    let json = format!(
+        r#"{{
+            "schema_version": {SCHEMA},
+            "id": "kit",
+            "items": {{}},
+            "images": {{}},
+            "projectiles": {{
+                "kit:projectile/frag": {{ "speed": 10.0, "lifetime_ticks": 5, "fade_ticks": 5,
+                    "explode_death": true,
+                    "children": [
+                        {{ "projectile": "kit:projectile/shard", "count": 5, "speed": 20.0, "on_explode": true }},
+                        {{ "projectile": "kit:projectile/trail", "count": 3, "speed": 40.0, "on_explode": true }}
+                    ] }},
+                "kit:projectile/shard": {{ "speed": 20.0, "lifetime_ticks": 60, "fade_ticks": 60 }},
+                "kit:projectile/trail": {{ "speed": 40.0, "lifetime_ticks": 60, "fade_ticks": 60 }}
+            }}
+        }}"#
+    );
+    let mut w = WeaponsWorld::new(Pack::from_json(json.as_bytes()).unwrap()).unwrap();
+    w.add_actor(A, 5).unwrap();
+    w.spawn("kit:projectile/frag", A, Vec3::ZERO, Vec3::X * 10.0, 1.0)
+        .unwrap();
+    let mut spawned = vec![];
+    for _ in 0..20 {
+        for e in w.step(&mut Open) {
+            if let Event::Spawned {
+                definition,
+                velocity,
+                ..
+            } = e
+            {
+                spawned.push((definition, velocity.length()));
+            }
+        }
+    }
+    let of = |name: &str| {
+        spawned
+            .iter()
+            .filter(|(d, _)| d == name)
+            .map(|(_, speed)| *speed)
+            .collect::<Vec<_>>()
+    };
+    let (shards, trails) = (of("kit:projectile/shard"), of("kit:projectile/trail"));
+    assert_eq!((shards.len(), trails.len()), (5, 3), "{spawned:?}");
+    assert!(shards.iter().all(|s| (s - 20.0).abs() < 1e-3));
+    assert!(trails.iter().all(|s| (s - 40.0).abs() < 1e-3));
+}
+
+/// A heavy gun's fire states each ran a script of their own (`onFire2`,
+/// `onFire3`) with its own spread and recoil, every round made larger:
+/// `state_shots` fire on entering those states, each taking its round.
+#[test]
+fn a_fire_state_of_its_own_fires_its_own_shot() {
+    let json = format!(
+        r#"{{
+            "schema_version": {SCHEMA},
+            "id": "kit",
+            "items": {{ "kit:weapon/heavy": {{ "ui_name": "Heavy", "image": "kit:image/heavy" }} }},
+            "images": {{
+                "kit:image/heavy": {{
+                    "projectile": "kit:projectile/round",
+                    "shot": {{ "projectiles": 1, "recoil": 1.0, "scale": 1.5 }},
+                    "state_shots": {{
+                        "onfire2": {{ "projectiles": 1, "spread": 0.003, "recoil": 0.5, "scale": 1.5 }},
+                        "onfire3": {{ "projectiles": 1, "spread": 0.004, "recoil": 0.25, "scale": 1.5 }}
+                    }},
+                    "magazine": {{ "size": 4, "ammo": "heavy", "reload_ticks": 600, "reserve": 0 }},
+                    "states": [
+                        {{ "name": "Activate", "ticks": 2, "timeout": 1 }},
+                        {{ "name": "Ready", "down": 2, "no_ammo": 5 }},
+                        {{ "name": "Fire", "ticks": 4, "script": "onFire", "timeout": 3 }},
+                        {{ "name": "Fire2", "ticks": 4, "script": "onFire2", "timeout": 4, "up": 1, "no_ammo": 5,
+                           "arm": "shiftright", "gesture": "shiftleft" }},
+                        {{ "name": "Fire3", "ticks": 4, "script": "onFire3", "timeout": 4, "up": 1, "no_ammo": 5 }},
+                        {{ "name": "Empty", "ammo": 1 }}
+                    ]
+                }}
+            }},
+            "projectiles": {{
+                "kit:projectile/round": {{ "speed": 100.0, "inherit": 1.0, "lifetime_ticks": 240, "fade_ticks": 240,
+                    "damage": 10.0, "fixed_damage": true }}
+            }}
+        }}"#
+    );
+    let mut w = WeaponsWorld::new(Pack::from_json(json.as_bytes()).unwrap()).unwrap();
+    w.add_actor(A, 5).unwrap();
+    let slot = w.give(A, "kit:weapon/heavy").unwrap();
+    w.equip(A, Some(slot)).unwrap();
+    step(&mut w, 10);
+    w.trigger(A, true).unwrap();
+    let mut recoils = vec![];
+    let mut moves = vec![];
+    for _ in 0..40 {
+        for e in w.step(&mut Open) {
+            match e {
+                Event::Recoil { velocity, .. } => recoils.push(velocity.length()),
+                Event::Animation {
+                    thread, sequence, ..
+                } if thread >= 2 => moves.push((thread, sequence)),
+                _ => {}
+            }
+        }
+    }
+    // Fire2's arm move and the other hand's, on thread 3.
+    assert_eq!(
+        moves,
+        [(2, "shiftright".to_string()), (3, "shiftleft".to_string())]
+    );
+    // onFire, onFire2, then onFire3 until the magazine is empty.
+    assert_eq!(recoils, [1.0, 0.5, 0.25, 0.25]);
+    assert_eq!(w.ammo(A).unwrap().rounds, 0);
+    assert!(w.projectiles().count() == 4 && w.projectiles().all(|p| p.scale == 1.5));
+
+    // A state shot's script is lowercase and not onfire's.
+    let bad = json.replace(r#""onfire2": {"#, r#""onfire": {"#);
     assert!(Pack::from_json(bad.as_bytes()).is_err());
 }

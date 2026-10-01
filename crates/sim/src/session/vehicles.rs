@@ -10,6 +10,17 @@ use bri_vehicles::{self as veh, Intent, OccupantId, SpawnId, VehicleId, schema::
 use bri_weapons::ActorId;
 use rapier3d::prelude::*;
 
+/// What hurt a vehicle, as `on_vehicle_damage` names it.
+#[derive(Clone, Copy)]
+pub(super) enum VehicleHarm<'a> {
+    /// A shot or blast, and the projectile when one did it.
+    Weapon { projectile: Option<&'a str> },
+    /// A package's `damage`.
+    Package,
+    /// A smashing vehicle.
+    Smash,
+}
+
 /// `$Game::MinMountTime`: a player cannot remount right after leaving.
 const MIN_MOUNT_TICKS: u64 = 120;
 /// Families that are not placed on spawn bricks (item/state vehicles).
@@ -838,32 +849,68 @@ impl Session {
         by: OwnerId,
         kind: &str,
         position: Vec3,
+        cause: VehicleHarm<'_>,
     ) -> Result<()> {
         let scale = self
             .weapons
             .pack
             .damage_type(kind)
             .map_or(1.0, |t| t.vehicle_scale);
+        let id = VehicleId(vehicle);
+        let Some((part, max_health)) = self.vehicles.world.as_ref().and_then(|world| {
+            let part = world.hit_part(&self.simulation.physics, id, position.to_array());
+            Some((part, world.max_damage(id, part)?))
+        }) else {
+            return Ok(());
+        };
+        // Packages decide what the hit does first (`on_vehicle_damage`).
+        let (hook_kind, projectile) = match cause {
+            VehicleHarm::Weapon { projectile } => ("weapon", projectile),
+            VehicleHarm::Package => ("package", None),
+            VehicleHarm::Smash => ("smash", None),
+        };
+        let attacker = (by != packages::PACKAGE_SHOOTER).then_some(by);
+        let amount = self.package_vehicle_damage(
+            vehicle,
+            attacker,
+            amount * scale,
+            hook_kind,
+            kind,
+            projectile,
+            part,
+            max_health,
+            position,
+        );
+        if amount <= 0.0 {
+            return Ok(());
+        }
         if let Some(world) = &mut self.vehicles.world {
-            let id = VehicleId(vehicle);
-            match world.hit_part(&self.simulation.physics, id, position.to_array()) {
+            match part {
                 veh::VehiclePart::Turret => world.damage_turret(
                     &mut self.simulation.physics,
                     id,
-                    amount * scale,
+                    amount,
                     veh::OwnerId(by),
                 )?,
-                veh::VehiclePart::Chassis => world.damage(
-                    &self.simulation.physics,
-                    id,
-                    amount * scale,
-                    veh::OwnerId(by),
-                )?,
+                veh::VehiclePart::Chassis => {
+                    world.damage(&self.simulation.physics, id, amount, veh::OwnerId(by))?
+                }
             }
             let intents = world.drain_intents();
             self.apply_vehicle_intents(intents)?;
         }
         Ok(())
+    }
+    /// A blast's or a shot's push: the vehicle's `blast_scale` times it.
+    pub(super) fn blast_vehicle(&mut self, vehicle: u64, position: Vec3, impulse: Vec3) {
+        let scale = self
+            .vehicles
+            .world
+            .as_ref()
+            .and_then(|w| w.definition_of(VehicleId(vehicle)))
+            .and_then(|d| d.blast_scale)
+            .unwrap_or(1.0);
+        self.push_vehicle(vehicle, position, impulse * scale);
     }
     pub(super) fn push_vehicle(&mut self, vehicle: u64, position: Vec3, impulse: Vec3) {
         if let Some(world) = &mut self.vehicles.world {
@@ -1247,9 +1294,29 @@ impl Session {
         Ok(())
     }
     pub(super) fn vehicle_post_step(&mut self) -> Result<()> {
-        let Some(world) = &mut self.vehicles.world else {
+        if self.vehicles.world.is_none() {
             return Ok(());
-        };
+        }
+        // A vehicle that ran into a player standing or lying on foot (a
+        // corpse too) shares the hit with them as with any body of a
+        // player's mass, instead of stopping against them as against a
+        // wall, before its impacts are judged.
+        let walking: Vec<_> = self
+            .peers
+            .iter()
+            .filter(|(owner, _)| !self.vehicles.is_mounted(**owner))
+            .map(|(owner, peer)| (*owner, peer.player.collider()))
+            .collect();
+        let world = self.vehicles.world.as_mut().context("No vehicle world")?;
+        for (owner, collider) in walking {
+            let kick =
+                world.share_contacts(&mut self.simulation.physics, collider, combat::PLAYER_MASS);
+            if kick != Vec3::ZERO
+                && let Some(peer) = self.peers.get_mut(&owner)
+            {
+                peer.player.push(kick);
+            }
+        }
         world.post_step(&mut self.simulation.physics)?;
         // Through the openings of linked bricks their middles crossed.
         if !self.vehicles.centres.is_empty() {
@@ -1687,7 +1754,11 @@ impl Session {
                     // setVelocity: the push replaces the player's velocity.
                     if let Some(peer) = self.peers.get_mut(&victim) {
                         let current = Vec3::from(peer.player.state().velocity);
-                        peer.player.push(Vec3::from(velocity) - current);
+                        // A heavy shoving vehicle (the Steel Ball) bumps them
+                        // off their feet a little, as a tumble would, so it
+                        // rolls on instead of plowing them along the ground.
+                        let pop = if shoves { Vec3::Y * 4.0 } else { Vec3::ZERO };
+                        peer.player.push(Vec3::from(velocity) + pop - current);
                     }
                 }
                 Intent::TumbleRequested {

@@ -120,12 +120,14 @@ refused. The engine calls:
 | `on_loadout(player)` | a player's items were set afresh (spawn, respawn, joining or leaving a minigame), when `"on_loadout": true`: the place to hand out your Add-On's items |
 | `on_spawn(player)` | a player comes to life (joining, respawning), after `on_loadout`, when `"on_spawn": true` |
 | `on_leave(player)` | a player leaves, while their state can still be read, when `"on_leave": true` |
-| `on_damage(victim, attacker, amount, info)` | before a player is hurt, when `"on_damage": true`: return the amount to take (0 prevents it) or `()` to leave it. `info` is `#{ kind, type, direct }`, `kind` being `weapon`, `fall`, `package` and so on, `type` the damage type's name without `$DamageType::`. A shot or blast also gives `region` (`"head"`, `"torso"` or `"legs"`, where it struck) and its point `x`, `y`, `z`, and a weapon's hit `dx, dy, dz` (the unit direction it travelled, outward from the centre for a blast), so a shield can block hits from the front. A projectile's hit also gives `projectile`, its definition id (`"ns:projectile/name"`), so rules can tell shots apart when guns share a damage type. A weapon hit may also be renamed: return `#{ amount, type }` and the death message is that damage type's (a headshot's own line); `type` is 1 to 64 letters, digits or `_` |
+| `on_damage(victim, attacker, amount, info)` | before a player is hurt, when `"on_damage": true`: return the amount to take (0 prevents it), `()` to leave it, or `#{ amount, type }` to change either and the damage type (a weapons pack's `$DamageType::<name>`, whose kill message a death shows: a crit's own). `info` is `#{ kind, type, direct }`, `kind` being `weapon`, `fall`, `package` and so on, `type` the damage type's name without `$DamageType::`. A shot or blast also gives `region` (`"head"`, `"torso"` or `"legs"`, where it struck) and its point `x`, `y`, `z`, and a weapon's hit `dx, dy, dz` (the unit direction it travelled, outward from the centre for a blast), so a shield can block hits from the front. A projectile's hit also gives `projectile`, its definition id (`"ns:projectile/name"`), so rules can tell shots apart when guns share a damage type |
 | `on_entity_damage(entity, attacker, amount, info)` | before one of your creatures is hurt by a shot, a blast or `explode`, when `"on_entity_damage": true`: answered like `on_damage` |
+| `on_vehicle_damage(vehicle, attacker, amount, info)` | before a vehicle is hurt by a shot, a blast, a smashing vehicle or a package's `damage`, when `"on_vehicle_damage": true`: answered like `on_damage`. `info` is `#{ kind, type, part, max_health, x, y, z }` plus `projectile` for a shot; `kind` is `weapon`, `package` or `smash`, `part` is `chassis` or an attached `turret`, and `max_health` is what that part takes to be destroyed |
 | `on_entity_death(entity, killer, info)` | one of your creatures ran out of health, just before it is removed, when `"on_entity_death": true` |
-| `on_pickup(player, item, info)` | a living player touches an item of your Add-On (or one it depends on) lying in the world, before they pick it up, whether or not they have room, when `"on_pickup": true`: return `false` to leave it, `"take"` to use it up without giving it (a spawn brick's item then starts its respawn), or `()` for the usual pickup. `info` is `#{ drop, spawner, data }`: the dropped item's id or the spawn brick's, and what `on_drop` kept with it. Called as it happens, so keep it quick |
+| `on_pickup(player, item, info)` | a living player touches an item of your Add-On (or one it depends on) lying in the world, before they pick it up, whether or not they have room, when `"on_pickup": true`: return `false` to leave it, `"take"` to use it up without giving it (a spawn brick's item then starts its respawn), `()` for the usual pickup, or `#{ rounds }` to set what a dropped gun's magazine holds and then pick it up as usual (it keeps that count if they have no room). `info` is `#{ drop, spawner, data, rounds }`: the dropped item's id or the spawn brick's, what `on_drop` kept with it, and the rounds in a dropped gun's magazine (`()` for one that has none). Called as it happens, so keep it quick |
 | `on_drop(player, item, slot)` | a player drops a tool of your Add-On (or one it depends on), when `"on_drop": true`. What it returns (a number, a map such as `#{ rounds: 7 }`) is kept with the dropped item and handed to `on_pickup` as `info.data` |
 | `on_projectile_hit(hit)` | a projectile of your weapons (or a dependency's) struck something, delivered at the start of the next tick, when `"on_projectile_hit": true`. `hit` is `#{ projectile, by, kind, id, ref, x, y, z, nx, ny, nz, vx, vy, vz }`: `kind` is `player`, `vehicle`, `entity`, `brick` or `map`, `by` the shooter or `()`; a player hit also has `region` |
+| `on_activate(player)` | a living player clicks with nothing in their hand (v20's `Player::activateStuff`), when `"on_activate": true`: return `true` to take the click, or anything else to pass it on. Add-Ons are asked in load order, and a click nobody takes does the usual thing (opens doors, presses buttons, flips vehicles) |
 | `cmd_<name>(player, args...)` | a player sends a command listed in `commands` |
 
 `player` is the player's id: pass it straight to `tell`, `get_player` and
@@ -158,24 +160,33 @@ HUD panels can only show keys the viewer receives. `persist` (default
 | Read | Change state | Act on the world (needs capability) |
 |---|---|---|
 | `tick()`, `seed()`, `caller()` | `get(key)`, `set(key, value)` | `tell(player, text)`, `broadcast(text)`: `chat` |
-| `players()`, `player(id)` | `get_player(p, key)`, `set_player(p, key, v)` | `remove_brick`, `place_brick`, `set_block_state(brick, state)`: `world.edit` |
+| `players()`, `bots()`, `player(id)` | `get_player(p, key)`, `set_player(p, key, v)` | `remove_brick`, `place_brick`, `set_block_state(brick, state)`: `world.edit` |
 | `aim()`, `me()`, `entities()` | `add_player(p, key, amount)` | `damage(target, amount[, by[, type]])`, `explode(...)`: `damage` |
 | `noise(seed, x, z)`, `hash3(seed, x, y, z)` | `entity_get(e, key)`, `entity_set(e, key, v)` | `spawn_entity`, `remove_entity`, `steer`, `label`: `entity` |
 | `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)` | | `teleport`, `respawn`, `set_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`, `take_item(p, item)`, `drop_item(item, x, y, z[, vx, vy, vz[, data]])`: `player` |
-| `raycast(from, dir, range[, ignore])`, `can_damage(by, target)` | | `set_fov(p, fov)`, `set_speed_scale(p, scale)`, `set_image_ammo(p, ammo)`, `mount_image(p, image)`: `player` |
+| `raycast(from, dir, range[, ignore])`, `can_damage(by, target)`, `enabled(add_on)` | | `set_fov(p, fov)`, `set_speed_scale(p, scale)`, `set_image_ammo(p, ammo)`, `mount_image(p, image)`, `unmount_image(p)`, `set_scale(p, scale)`, `set_look_limits(p, up, down)`: `player` |
 | | | `give_ammo(p, ammo, rounds)`, `set_reserve(p, ammo, rounds)`, `set_rounds(p, item, rounds)`, `reload(p)`: `player` |
 | `brick_box(brick)`, `voxel(brick)`, `can_place_voxel(x, y, z)` | | `place_voxel(x, y, z, material)`: `world.edit`; `set_avatar_colors(p, colors)`: `player` |
 | | | `copy_build(p, brick, limit, above_only, tool)`, `copy_box(p, min, max, limit, tool)`, `mirror_copy(p, axis)`: `build` |
 | | | `cut_copy(p)`, `paint_copy(p, color)`, `paint_fill(p, brick, color, limit)`: `world.edit` |
-| | | `push`, `tumble`, `hold`, `hold_distance`, `let_go`, `spawn_vehicle`, `remove_vehicle`: `physics` |
-| | | `heal(p, amount)`, `fire(...)`: `damage` |
+| | | `push`, `tumble`, `hold`, `reach`, `hold_distance`, `let_go`, `spawn_vehicle`, `remove_vehicle`, `mount_object(mount, rider, node, can_dismount)`, `unmount_object(rider)`: `physics` |
+| | | `heal(p, amount)`, `fire(...)`, `spawn_explosion(p, projectile, scale)`: `damage` |
 | | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds)` (`()` for everyone): `chat` |
-| | | `play_sound(p, sound)` at a player's ears, `sound_at(sound, x, y, z)`, `beam(from, to[, options])`, `play_thread(p, thread, sequence)`, `show_box(p, min, max, tool)`, `hide_box(p)`: `effects` |
+| | | `play_sound(p, sound)` at a player's ears, `sound_at(sound, x, y, z)`, `beam(from, to[, options])`, `play_thread(p, thread, sequence[, after])`, `show_box(p, min, max, tool)`, `hide_box(p)`: `effects` |
 | | | `set_map_lights([x, y, z], radius, options)`: `lighting` |
 | `environment()` | | `set_environment(#{ ... })`, `reset_environment()`: `environment` |
 
 Coming from TorqueScript? [torque-equivalents.md](torque-equivalents.md)
 lists what each v20 call you know became here, and what is not here yet.
+
+**Another Add-On's content.** A rule fires projectiles, mounts images and
+spawns vehicles of its own package and of each Add-On in its
+`dependencies`. One it uses only when that Add-On happens to be on, as a
+v20 script tested `isObject(critProjectile)` for a datablock another
+Add-On made, goes in `optional_dependencies` instead
+(`"optional_dependencies": { "emote_critical": "*" }`): the game runs
+without it, an enabled one must meet the requirement, and
+`enabled("emote_critical")` says whether it is on in this game.
 
 A value from `players()` is a map with `id`, `name`, `x`, `y`, `z` (the
 feet), `alive`, `admin`, `ex`, `ey`, `ez` (the eye), `lx`, `ly`, `lz` (the
@@ -189,13 +200,21 @@ name of that image's state, such as `"Ready"`), `paint` (the palette
 index their spray can last picked), `mx`, `my`, `mz` (where the host fires
 the held image's shots from, `getMuzzlePoint`; the eye when nothing is
 held), `tools` (each tool slot's item id, `""` for an empty slot, as
-`%obj.tool[%i]`) and `magazine`: for a gun with a magazine in hand, a map
+`%obj.tool[%i]`), `magazine`: for a gun with a magazine in hand, a map
 with `item`, `rounds`, `size`, `ammo` (its ammo type), `reserve` (rounds
 of that ammo left to load, `()` when it never runs out) and `reloading`;
-`()` otherwise. `reserves` maps each ammo type the player holds a reserve
-of (they drew a gun of it, or a rule set it) to that reserve (`()` when it
-never runs out); a type missing from it gets its starting reserve with
-the first gun of it they draw.
+`()` otherwise; `reserves`, a map of every ammo type they hold a
+reserve of (they drew a gun of it, or a rule set it) to its rounds (`()`
+when it never runs out; a type missing from it gets its starting reserve
+with the first gun of it they draw); `riding` and `seat` (the player this one rides
+and on which mount point, or `()`), `bot` (`true` for a bot) and
+`bot_owner` (for a bot from a bot brick, the brick owner's id, as
+`%bot.spawnBrick.getGroup().bl_id`; else `()`).
+
+**Bots** are players without a connection. `players()` lists only people;
+`bots()` lists the bots, as the same maps, and `player(id)` reads either.
+Player hooks (`on_join`, `on_loadout`, `on_spawn`, `on_leave`) and player
+state keys are for people only.
 
 **Rays and damage.** `raycast([x, y, z], [dx, dy, dz], range)` returns the
 first thing a ray meets, now, as the script runs: a map with `kind`
@@ -242,7 +261,28 @@ ammo that never runs out), `set_rounds(p, item, rounds)` and `reload(p)`.
 crouching and swimming speeds (0 to 4) until they respawn: a heavy gun's
 slowdown. `set_fov(p, fov)` sets the player's field of view (5 to 120
 degrees), and `set_fov(p, ())` hands it back to their own setting; aiming
-and the zoom key still work on top of it.
+and the zoom key still work on top of it. `unmount_image(p)` empties the
+player's hand (`unMountImage(0)`).
+
+**Bodies.** `set_scale(p, scale)` resizes a player's body, from 0.2 to 5
+(`setScale`); a respawn puts it back to 1. `set_look_limits(p, up, down)`
+bounds how far their arms and head follow their look, each from 0 (looking
+straight up) to 1 (straight down), as v20's `setLookLimits`: `(0.5, 0.5)`
+holds them level. `set_look_limits(p, ())` lifts it; a respawn does too.
+
+**Riding players.** `mount_object(mount, rider, node, can_dismount)` seats
+player `rider` on player `mount` at mount point `node` (`mountObject`).
+Mount points are the body model's `mount0` to `mount7` nodes; on the
+Blockhead `1` is the left hand. The rider rides along, turns with their own
+mouse and drops what the gravity gun or a hold had of them; with
+`can_dismount` `false` jumping does not get them off. They stay seated if
+either body changes archetype or size. Both must be alive and not seated,
+the mount carrying no rider on that point. A command's player may seat
+someone only on themselves, and only someone they may move (the same rules
+as `hold` and `push`). `unmount_object(rider)` lets them off in place,
+moving as the mount was, so a throw is `unmount_object(t)` then
+`push("player:" + t, ...)`. Landing on a Blockhead still does not seat you:
+only rideable bodies, such as the horse, take riders by touch.
 
 **Effects** (`effects`) change nothing in the game and are sent once, like
 a sound. `beam(from, to)` draws a straight beam for a moment: a tracer, a
@@ -251,8 +291,16 @@ laser, a bolt. Options go in a map, `beam(from, to, #{ color: [1.0, 0.8,
 or `[r, g, b, a]` from 0 to 1, `width` up to 16 units, `seconds` up to 10,
 and `muzzle` starts it at that player's gun muzzle as each player draws it.
 The beam thins and fades out over its life. `play_thread(p, thread,
-sequence)` plays one of the body's animations: thread 3 a gesture any time
-(`"activate2"`, `"root"` to stop), thread 2 the arms with what they hold.
+sequence)` plays an animation on one of the body's four threads, as
+`playThread` did: 0 and 1 the body (a hit's flinch, `"jump"`), 2 the arms
+with what they hold, 3 a gesture (`"activate2"`). Each holds until the next
+animation on its thread, and `"root"` stops it. An arm pose started with
+empty hands (`"armreadyboth"`) keeps playing until the hand changes, and
+whole-body sequences such as `"death1"` play over the walk and look as in
+v20. `play_thread(p, thread, sequence, after)` plays it `after` seconds
+later (up to 60), on the first tick at or past that time, as
+`%player.schedule(ms, "playThread", ...)` did; a new body (a respawn) drops
+what was still waiting, and one player holds at most 64 waiting.
 Prints, sounds, beams and animations share one allowance of 64 a second
 per Add-On.
 
@@ -321,10 +369,11 @@ front of the brick it hit: `aim().object`, `aim().object_distance` and
 | Operation | Does |
 |---|---|
 | `push(ref, vx, vy, vz)`, `push(ref, vx, vy, vz, by)` | Adds to its velocity (units a second, at most 200). |
-| `tumble(player, vx, vy, vz, by)` | Knocks a player off their feet into a tumble, flying at that velocity. |
+| `tumble(player, vx, vy, vz, by)`, `tumble(player, vx, vy, vz, by, seconds)` | Knocks a player off their feet into a tumble, flying at that velocity; for `seconds` (0.1 to 60) when given, else until it settles. |
 | `hold(player, ref, distance)`, `hold(player, ref, distance, #{at, force, turn})` | Keeps `ref` floating `distance` (0.5 to 64) ahead of the player's eye, where they look, every tick until let go, carried at the velocity the aim point moves so it keeps up as they turn and walk. `at` (`[x, y, z]`, default its middle) is the spot on it that is held there, as a physics gun grabs where it points. `force` (default 36000, at most 10,000,000) is how hard it may pull: things up to `force / 450` in mass answer at once, heavier ones swing in slower and very heavy ones can only be dragged. With `turn`, it keeps the angle it had to the player as they turn. A living player held goes limp until let go and landed; a corpse (a player who died) can be held too. One hold per player; taking something another player holds ends their hold. |
 | `hold_distance(player, distance)` | Moves what they hold nearer or farther (0.5 to 64): a reel. |
-| `let_go(player)`, `held(player)` | Ends the hold; what they hold, or `()`. |
+| `reach(player, distance, #{near, force, turn})` | While they hold nothing, the engine looks where they look every tick, up to `distance`, and holds the first thing they may move, by the spot it met, at least `near` off (`force`, `turn` as `hold`). Ends once it holds something, on `let_go`, or when they die. A trigger held at something out of range catches it when it comes in range. |
+| `let_go(player)`, `held(player)`, `held_distance(player)` | Ends the hold and any reach; what they hold, or `()`; how far off it is carried, or `()`. |
 | `spawn_vehicle(def, x, y, z, yaw, [vx, vy, vz], owner)` | A vehicle of this Add-On or one it depends on, belonging to `owner` (or `()`). Counts toward the server's vehicle limits; at most 64 per Add-On. |
 | `remove_vehicle(ref)` | Removes a vehicle this Add-On spawned, or, when a player's command asks, one of this Add-On's (or a dependency's) kinds that the player owns (an administrator: anyone's). A spawn-brick vehicle removed this way stays away until the brick's wrench asks again. |
 
@@ -414,8 +463,9 @@ trust on `brick`; beyond it the fill flows around bricks they may not paint
 and never through them. More than `limit` bricks (at most 10000) is refused
 rather than cut short, so a fill never stops half way across a wall. The
 player sees how many bricks turned, and how many touching ones were not
-theirs to paint. The Fill Can
-([`packages/fill-can`](../../packages/fill-can)) is one command around it.
+theirs to paint. A fill tool is one command around it; the test's own
+([`crates/sim/tests/fixtures/fill-can`](../../crates/sim/tests/fixtures/fill-can))
+shows one.
 
 **Capabilities** in `package.json` are the only permission gate. If your
 script calls `tell` without `"chat"` in `capabilities`, the call is refused
@@ -498,30 +548,73 @@ Its box is its bounds for dropping; `bri-addon-check` names a model or
 texture it cannot find. `bri-client`'s `own_model_tool` test fixture writes a
 small example.
 
+An item has one look wherever it is: in a hand (first or third person),
+dropped, on a spawn brick, in a mirror and as its icon. The look is its
+image's: the image's `model`, its `color` when `color_shift` is on, and
+its skin. An item whose image has no model draws the item's own `model`.
+
+A skin is your own shader drawn over every copy of one of your images,
+puffed over its model. Put `looks.json` in `assets/`:
+
+```json
+{ "schema_version": 1,
+  "images": { "gravity-gun-tool:image/gravitygun":
+    { "skin": { "shader": "skins/alien.wgsl", "color": [0.3, 0.95, 1.0],
+                "energy_states": ["Grab"] } } } }
+```
+
+The shader is a WGSL file in your Add-On, written and limited like an
+Add-On's own client shaders (see
+[client-sandbox.md](../architecture/client-sandbox.md)): the game
+draws it in world space with your image's model at rest, and gives each
+copy `params[0]` = `color` and its energy (1 while its holder's image is
+in one of `energy_states`, else 0), `params[1]` = the direction sunlight
+travels and a seed for that copy, `params[2]` = the sun's colour and
+`params[3]` = the ambient light. Skins share an Add-On's GPU budget; one
+that runs far over it stops, and items draw their plain models. A skin
+that names an image that is not yours, a colour outside 0 to 1, or a
+shader that is missing or does not compile is logged, and the item draws
+without it. A skin is WGSL, so it is held to the same trust as Add-On code
+(section 8): a server's skins draw on a joiner's screen only once they
+trust that server's code, and the item draws plain until then.
+`skins/alien.wgsl` in `gravity-gun-tool` is the Gravity Gun's.
+
+A tool whose image has `"paint_tint": true` (below) is dropped in the
+colour it was held in.
+
 An icon can instead be drawn from the item's own model on each player's
 machine, so it matches the stock icons without shipping a picture of
 base game art. Put `<icon>.render.json` beside it:
 
 ```json
 { "schema_version": 1, "pose_like": "v20.weapon.printgun",
-  "look": { "base": [0.35, 1.0, 0.8],
-            "skin": { "shell": [0.035, 0.025, 0.05], "veins": [0.3, 0.95, 1.0] } } }
+  "look": { "skin": {} } }
 ```
 
 `pose_like` names a stock item: its model is fitted to its own icon's
-outline to find the angle it was drawn at. Your model is drawn at that
-angle, sized to its own bounds to fill the box the stock drawing fills,
-with a clear border on every side, on a clear background. `look.base` is the model's colour (its image's tint);
-`"textured": true` draws the model's own textures and colours instead
-(times `base`), so a tool of wood and iron shows both. The
-optional `skin` is the Gravity Gun's alien shell: a dark sheen with glowing
-veins, puffed out by `puff` (default 0.012) as it is in play. If the icon
+outline to find the side profile it was drawn in (which way its nose
+points across the picture, and how far it is tipped and turned). Your model
+is drawn in that profile on its own axes: forward is +Y and up is +Z, as
+item models are held, or from `mountPoint` towards `muzzlePoint` when it has
+both. So its nose and grip point the way the stock item's do. It is sized
+to its own bounds to fill the box the stock drawing fills, with a clear
+border on every side, on a clear background. The model is the item's in
+play. `look.base` is its colour, by default the item's colour in play
+(its image's tint); `"textured": true` draws the model's own
+textures and colours instead (times `base`), so a tool of wood and iron
+shows both. The
+optional `skin` is the Gravity Gun's alien shell: a dark `shell` with glowing
+`veins` (by default the colour of the item's skin in `looks.json`), puffed
+out by `puff` (default 0.012) as it is in play. If the icon
 cannot be drawn, the item keeps its PNG or letter and the log says why.
+The icon is drawn once on a background thread while the game loads (the
+PNG or letter shows until it is ready) and kept in the client state folder
+under `item-icons/`, named by a hash of the models, the stock icon and the
+request, so later runs show it at once.
 
 An image with `"paint_tint": true` is held in its holder's spray colour,
 the palette colour they last picked with the paint keys, as a colour spray
-can is: a tool that paints with that colour shows it. The Fill Can's
-`fill-can-tool` does this.
+can is: a tool that paints with that colour shows it.
 
 The fields you are most likely to change:
 
@@ -531,10 +624,18 @@ The fields you are most likely to change:
 | projectile | `damage`, `impulse`, `vertical` | hurt, and how hard it shoves |
 | projectile | `ballistic`, `elasticity` | bounces, and how much |
 | image state | `ticks` | how long a state (`Fire` is the reload time) lasts |
-| image | `shot` | several projectiles per shot, their spread and the recoil ([porting.md](porting.md#the-image-shot-field)) |
+| image | `shot` | several projectiles per shot, their spread and the recoil ([porting.md](porting.md#the-image-shot-field)); `scale` sizes the projectiles against their holder (0.1 to 10) |
+| image | `volleys` | up to 4 more sets each shot fires after its own: `[{ "projectile": "...", "projectiles": 1, "spread": 0.0005 }]`, a shotgun's slug after its pellets |
+| image | `last_shot` | `{ "shot": {...}, "volleys": [...] }`: what the magazine's last `last_rounds` rounds fire instead (a two-barrel gun's single barrel) |
+| image | `state_shots` | `{ "onfire2": {...} }`: a shot fired on entering a state with that script, as onFire's is, so a gun can spread wider as it keeps firing |
+| image state | `arm`, `gesture` | the holder's animation on entering it: `arm` on thread 2 (`shiftright`), `gesture` on thread 3, the other hand |
+| projectile | `children` | smaller projectiles it throws out as it flies, bounces or explodes: one set or a list of up to 4, each its own `projectile`, `count`, `speed`; `fuse_ticks: [0, 48]` sets each child off after a random time in that range, as cluster bomblets |
+| image | `cook` | a grenade whose fuse burns from a state in the hand (below) |
+| projectile | `fixed_damage` | its direct damage stays as authored at any scale |
 | item | `ui_name` | the name players see |
 | image | `zoom` | `{ "fov": 20, "on_jet": true, "crosshair": false, "first_person": true }`: aim with the zoom key (and the right mouse button with `on_jet`), hide the crosshair, force first person while aiming |
 | image | `eye_offset`, `eye_rotation` | where the weapon sits in first person: exactly there, relative to the camera, as Torque places it, so a scope whose sight is on the eye line stays centred at any zoom |
+| image | `scripts` | what each state `script` does, by lower-case name: `{ "onfire": { "arm": "spearThrow", "fire": true, "use_up": true } }` swings the arm, launches the image's projectile (or the entry's own `projectile`) and uses the item up, as a thrown grenade ([torque-equivalents.md](torque-equivalents.md#image-state-scripts-as-data)) |
 | image | `follow_arm` | `true` also moves a first-person `eye_offset` image with the arm's actions (shift, plant, swing), as the base game's brick, hammer and spray cans do; off by default |
 | pack | `sounds` | `{ "your-id:shot": { "file": "sounds/shot.wav", "volume": 0.8 } }`: your own `.wav`/`.ogg` files, named by a state's `sound` and by rules; `local` for sounds only the holder hears, `looping` for a state-long hum |
 
@@ -589,7 +690,24 @@ is put in the world only by rules (`drop_item`): no spawn list, loadout or
 `/give` offers it.
 
 The light key reloads a gun with a magazine unless its image gives the key
-its own command (below). The
+its own command (below). With `"light_states": ["Ready", "Empty"]` it
+reloads only from those states, and works the light as usual whenever it
+cannot reload (a full magazine, no reserve), as the hl2 ammo system did.
+
+**Cooked grenades.** An image's `cook` lights a fuse in the hand as a
+state script runs, and the shot it fires next carries what is left:
+
+```json
+"cook": { "script": "onpindrop", "fuse_ticks": 480, "burst_height": 2.0,
+          "print": "{seconds} second{s} left", "print_ticks": 12, "print_seconds": 0.15 }
+```
+
+The holder reads `print` in the middle of their screen every
+`print_ticks` while it burns (`{seconds}` the time left to a tenth, `{s}`
+an `s` unless it is exactly 1; `first_print` replaces the first). Held for
+the whole `fuse_ticks`, the image's projectile goes off `burst_height`
+above their feet and they put it away, keeping the grenade. Putting it
+away first puts the fuse out. The
 [Commando rifle](../../packages/samples/sample-commando-rifle/assets/weapons.json)
 is a plain scoped rifle: raise it, fire, let go, fire again.
 
@@ -830,6 +948,10 @@ no seats cannot be mounted. Three fields exist for Add-Ons:
 - `"per_player": 3` lets each player have at most that many of this
   vehicle at once, on top of the server's vehicle limits. A spawn brick
   past it tells its builder "You already have 3 Steel Balls".
+- `"blast_scale": 3.0` makes rockets, tank shells and other blasts and
+  shots push it that many times as hard as v20's rule (the impulse over
+  its mass) would. The Steel Ball weighs 900 and sets 3, so a rocket
+  still knocks it about. Contacts and a click's flip go by its mass alone.
 
 Every vehicle can be placed from a vehicle spawn brick and spawned by a
 rule (`spawn_vehicle`).
@@ -1131,7 +1253,7 @@ depends on the most powerful thing an Add-On does:
 | Tier | What the Add-On has | What the player sees |
 |---|---|---|
 | Data | rules, HUD panels, weapons, bricks, models, sounds | nothing: it downloads and runs |
-| Sandboxed code | a `client` section: WebAssembly and WGSL run in the sandbox | "Trust and join" or "Leave", once per server, and again when the code changes; nothing when the player installed the same code themselves |
+| Sandboxed code | a `client` section, or skins in `looks.json`: WebAssembly and WGSL run in the sandbox | "Trust and join" or "Leave", once per server, and again when the code changes; nothing when the player installed the same code themselves |
 | Elevated code | `net.http` or `files.addon_folder` | a separate, stronger prompt per Add-On (not offered to joiners yet, see section 9) |
 
 Rules always run on the host, never on players' PCs, so they need no

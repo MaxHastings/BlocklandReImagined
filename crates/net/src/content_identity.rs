@@ -631,6 +631,10 @@ mod tests {
                     left_image: None,
                     magazine: None,
                     volleys: vec![],
+                    last_shot: None,
+                    state_shots: Default::default(),
+                    cook: None,
+                    scripts: Default::default(),
                 },
             );
             items.insert(

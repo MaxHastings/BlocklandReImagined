@@ -9,6 +9,9 @@ pub struct WeaponsSave {
     pub actors: Vec<(ActorId, Actor)>,
     pub projectiles: Vec<Projectile>,
     pub drops: Vec<Drop>,
+    /// [`WeaponsWorld::fuses`], by projectile id.
+    #[serde(default)]
+    pub fuses: Vec<(u64, u32)>,
 }
 impl WeaponsWorld {
     pub fn save(&self) -> WeaponsSave {
@@ -20,6 +23,7 @@ impl WeaponsWorld {
             actors: self.actors.iter().map(|(id, a)| (*id, a.clone())).collect(),
             projectiles: self.projectiles.values().cloned().collect(),
             drops: self.drops.values().cloned().collect(),
+            fuses: self.fuses.iter().map(|(id, f)| (*id, *f)).collect(),
         }
     }
     pub fn restore(pack: Pack, bytes: &[u8]) -> Result<Self> {
@@ -117,6 +121,12 @@ impl WeaponsWorld {
                 "Save drop input"
             );
             ensure!(w.drops.insert(d.id, d).is_none(), "Duplicate saved drop");
+        }
+        ensure!(save.fuses.len() <= MAX_PROJECTILES, "Save object budget");
+        for (id, fuse) in save.fuses {
+            if w.projectiles.contains_key(&id) {
+                w.fuses.insert(id, fuse);
+            }
         }
         Ok(w)
     }

@@ -61,7 +61,7 @@ proptest! {
             Just(String::new()),
         ],
     ) {
-        let op = Op::PlayThread { player: 1, thread, sequence: sequence.clone() };
+        let op = Op::PlayThread { player: 1, thread, sequence: sequence.clone(), after: 0.0 };
         if authorize("fuzz", &all(), &op).is_ok() {
             let cue = Cue {
                 id: 1,

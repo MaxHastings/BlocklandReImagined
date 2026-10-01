@@ -77,6 +77,10 @@ fn rocket_pack() -> bri_weapons::Pack {
         left_image: None,
         magazine: None,
         volleys: vec![],
+        last_shot: None,
+        state_shots: Default::default(),
+        cook: None,
+        scripts: Default::default(),
         states,
     };
     let item = bri_weapons::Item {
@@ -139,9 +143,10 @@ fn rocket_pack() -> bri_weapons::Pack {
         sport_image: None,
         rest_speed: 0.,
         max_bounces: 0,
-        children: None,
+        children: Vec::new(),
         aura: None,
         slow: None,
+        fixed_damage: false,
     };
     let pack = bri_weapons::Pack {
         effects: Default::default(),

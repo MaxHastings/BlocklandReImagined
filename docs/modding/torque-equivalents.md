@@ -14,6 +14,9 @@ operation that needs a capability.
 | TorqueScript | Here | Notes |
 |---|---|---|
 | `ClientGroup` loop, `%client.player` | `players()`, `player(id)` | A player map, below. |
+| `AIPlayer`s in `MissionCleanup`, `%bot.spawnBrick.getGroup().bl_id` | `bots()`, `player(id)`, `p.bot`, `p.bot_owner` | A bot reads like a player. |
+| `%obj.getObjectMount()`, `getMountNodeObject` | `p.riding`, `p.seat`, `p.mounted` | |
+| `%obj.getScale()` | `p.scale` | |
 | `%obj.getPosition()`, `getTransform()` | `p.x`, `p.y`, `p.z` | The feet. |
 | `%obj.getWorldBoxCenter()` | `p.cx`, `p.cy`, `p.cz` | The middle of the body, crouch and scale included. |
 | `%obj.getEyePoint()`, `getEyeVector()` | `p.ex`..`p.ez`, `p.lx`..`p.lz` | The look is a unit vector. |
@@ -43,6 +46,11 @@ operation that needs a capability.
 | `new Projectile() { ... }` | `fire(projectile, x, y, z, vx, vy, vz, by)` | `damage` |
 | `new Explosion()`, `radiusDamage` | `explode(x, y, z, radius, damage, brick_radius[, explosion])`; `explosion` names one of the weapons pack's (`"rocketExplosion"`, an imported Add-On's own), whose particles, light, shake and sound it then shows | `damage` |
 | `%obj.mountImage(%img, 0)` | `mount_image(p, image)`, `mount_image(p, ())` | `player` |
+| `%obj.unMountImage(0)` | `unmount_image(p)` | `player` |
+| `%obj.setScale("s s s")` | `set_scale(p, s)` | `player`; 0.2 to 5, one number |
+| `%obj.setLookLimits(%up, %down)` | `set_look_limits(p, up, down)`, `set_look_limits(p, ())` | `player` |
+| `%obj.mountObject(%rider, %node)`, `%rider.canDismount = 0` | `mount_object(mount, rider, node, can_dismount)` | `physics`; node is a `mount<N>` of the body model |
+| `%rider.unMountObject()`, `dismount()` | `unmount_object(rider)` | `physics`; keeps the mount's velocity |
 | `%obj.setImageAmmo(0, %x)` | `set_image_ammo(p, ammo)` | `player` |
 | A tactical pack's `%obj.toolAmmo[%slot]`, `%client.quantity["9MMrounds"]`, `serverCmdLight` reload | the image's `magazine`, `give_ammo(p, ammo, rounds)`, `set_reserve(p, ammo, rounds)`, `set_rounds(p, item, rounds)`, `reload(p)`, `player(p).magazine` | `player` |
 | `%obj.setMaxForwardSpeed(...)` and its kin for a slowdown | `set_speed_scale(p, scale)` | `player` |
@@ -55,7 +63,10 @@ operation that needs a capability.
 | `centerPrint`, `bottomPrint` | `center_print(p, text, s)`, `bottom_print(p, text, s)` | `chat` |
 | `messageClient`, `messageAll` | `tell(p, text)`, `broadcast(text)` | `chat` |
 | `serverPlay3D(%profile, %pos)`, `%client.play2D` | `sound_at(profile, x, y, z)`, `play_sound(p, profile)` | `effects` |
-| `%obj.playThread(%slot, %seq)` | `play_thread(p, thread, sequence)` | `effects` |
+| `%player.spawnExplosion(%projectile, %scale)` | `spawn_explosion(p, projectile, scale)` | `damage` |
+| `isObject(SomeDatablock)` of another Add-On | `optional_dependencies` and `enabled(add_on)` | |
+| `%obj.playThread(%slot, %seq)` | `play_thread(p, thread, sequence)` | `effects`; whole-body sequences (`death1`) override by priority, empty-hand arm poses (`armReadyBoth`) hold |
+| `%obj.schedule(%ms, "playThread", %slot, %seq)` | `play_thread(p, thread, sequence, ms / 1000.0)` | `effects` |
 | A stretched `StaticShape` tracer | `beam(from, to, #{ color, width, seconds, muzzle })` | `effects` |
 | Mission lights baked into the map (v20 scripts could not change them) | `set_map_lights([x, y, z], radius, #{ on, color, brightness })` | `lighting` |
 | The mission `Sun`'s `azimuth`, `elevation`, `color`, `ambient` and the `Sky`'s `fogColor`, `fogDistance`, `visibleDistance` (fixed in v20; changed live here) | `set_environment(#{ sun_azimuth, direct_light, fog_color, visible_distance, day_length, ... })`, `environment()` | `environment` |
@@ -81,6 +92,7 @@ operation that needs a capability.
 | `ItemData::onPickup` | `on_pickup(p, item, info)`: answer `false` to leave it, `"take"` to use it up |
 | `ItemData::onDrop`, dynamic fields on the dropped `Item` | `on_drop(p, item, slot)`: the value it returns rides the drop to whoever picks it up |
 | `ProjectileData::onCollision` | `on_projectile_hit(hit)` |
+| `Player::activateStuff` packaged (an empty-hand click) | `on_activate(p)`: answer `true` to take the click |
 
 ## Not here yet
 
@@ -112,7 +124,7 @@ request was kept only as a general building block; how each was judged:
 | Player facts `mounted`, `scale`, `cx`/`cy`/`cz`, `slot`, `image`, `image_state` | Kept | Plain reads with no cost to anything else. The body centre accounts for crouching and scale. |
 | `mount_image`, `set_image_ammo` | Kept | They are v20's image seams, still the way to build scopes and ammo a magazine does not cover. Magazines themselves became image data (October 2026): Tier+Tactical and the Adventure Pack each built the same rounds, reserve, reload and display in script, so it is one shared piece now. |
 | `set_fov` | Kept | Scopes, cameras in cutscenes, sprint effects. |
-| `play_thread` | Kept, threads 2 and 3 | Those are the threads the body animates. |
+| `play_thread` | Kept, all four threads, with an optional delay | Threads 0 and 1 joined 2 and 3 (October 2026) for the Adventure Pack's head-hit flinch; the delay is the one `schedule` Add-Ons used on animations, and chat's talk stop runs on the same timers. |
 | Light key on images | Kept | The same kind of key hook as `jet`. |
 | `beam` drawing one Add-On's tracer model | Changed: a coloured beam | A colour, width and fade covers tracers, lasers and bolts with no model to ship or convert. A model-drawn beam can come later if someone needs one. The beam starts at the shooter's muzzle as each player draws it, and costs one cue. |
 | A `sound` capability and a new `effects` capability | Merged into `effects` | Sounds, beams and animations are all presentation; players read one line. |
@@ -144,3 +156,22 @@ The same modder's second write-up (September 2026), judged the same way:
 | Capping `stateEmitterTime` at 300 s | Left out | v20 does not cap it and the effects runtime already limits live particles. |
 | A sound that is not 3D | Heard by its holder only | A sound with no position has no place for other players to hear it from, so it stays with the player who fired. |
 
+## Image state scripts as data
+
+A v20 image's states name script functions (`stateScript[2] = "onCharge"`)
+and the Add-On's `Image::onCharge` did the work. Here an image's `scripts`
+lists, by lower-case script name, what each one does, so a melee or thrown
+weapon needs no rule. Entering a state whose script is listed does that
+instead of the game's built-in handling of the name. The
+[Butterfly Knife and HE Grenade ports](../../crates/addon-import/ports) are
+written this way.
+
+| TorqueScript in the function | `scripts` entry field | Notes |
+|---|---|---|
+| `%obj.playThread(2, spearReady)` (`spearThrow`, `armattack`, `root`) | `arm` | The holder's arm animation (thread 2), started first. Letters, digits and `_`, up to 64. |
+| `Parent::onFire(%this, %obj, %slot)` | `fire: true` | Launches the image's projectile as a plain `onFire` does: from the muzzle along the aim, with the image's `shot`, after the arm. |
+| A second `ProjectileData` spawned in the function (`%p = new Projectile() { dataBlock = jabProjectile; ... }`) | `projectile`, with `fire: true` | Launched instead of the image's. It must be in the pack (or a merged one); an image whose script projectile nobody provides is dropped like one missing its own. |
+| `%obj.tool[%slot] = 0; serverCmdUnUseTool(%client)` after a throw | `use_up: true` | The held item leaves the holder's tools and the hand empties once the function has run. |
+
+Up to 16 entries per image. A state with no listed script keeps the
+built-in handling (`onAbortCharge` and `onStopFire` lower the arm).

@@ -1,41 +1,239 @@
 {
   "schema_version": 1,
-  "notes": "Bushido's Adventurer's Weapons on the hl2 ammo system: each gun's maxmag and ammotype become its image's magazine, with the original's reserve and cap per ammo type and the reload its own states play. The host rules give ammo boxes (a typed box adds twice its amount before the cap, as the original does) and multiply a projectile's damage by its headshotMultiplier on a head hit or a crouched target. Not yet ported: the hitscan guns' raycasts and crits, the melee swings' vehicle kills and the grenade's shrapnel.",
+  "notes": "Bushido's Adventurer's Weapons on the hl2 ammo system: each gun's maxmag and ammotype become its image's magazine, with the original's reserve and cap per ammo type and the reload its own states play (a shell at a time for the guns that load one). Each onFire's spread code becomes its shot (the Hunting Shotgun's blast as a second volley; the Heavy Machine Gun's second and third fire states their own wider shots, its rounds one and a half times the size, their damage unscaled as its own damage method dealt it), and the Revolver, Battle Rifle, Sniper Rifle, Baton and Machete are hitscan from their raycast fields. The frag grenade throws its cluster shrapnel and its smoke trails as it explodes, each set as fast on average as the script's random throw (its shrapnel hurts by the cluster's own blast; the script's ShrapProjectile damage belongs to no datablock, so it never ran). The host rules, shared with the Glass 1019 release, give ammo boxes (a typed box adds twice its amount for each gun of its type, as the original does) and spare guns their ammo (a spawned one a box's worth, a dropped one its magazine, picked up as usual with what is left), multiply a projectile's damage by its headshotMultiplier on a head hit or a crouched target, give the hitscan guns their crits (×3) and shoves from the separate Emote_Critical Add-On, which the original's server.cs loaded itself, so turning this on turns Emote_Critical on with it (its raycast script checked for CritProjectile: without it there are no crits and no shove), play that Add-On's crit explosion on the victim at their scale, its received sound to the victim and its fire and hit sounds to the shooter once per shot, and make the melee swings kill outright, players and vehicles alike (twice what the part struck can take), each with its kill message and one of its pair of hit sounds; a crit shows the gun's crit kill message. The frag grenade cooks in the hand once its pin is pulled: a countdown prints as the original's did, a throw keeps what is left of the four-second fuse, and one held too long bursts two units above the thrower's feet and empties the hand while the item stays, as lastFragSlot was never set. The cluster and trail bomblets each burst at their own random time within the script's window. The light key reloads (hl2 serverCmdLight) while the gun's Ready or Empty state is up and toggles the light otherwise. A head hit (or any hit on a crouched target) by a projectile flinches the body as the hitbox test did: threads 0 and 2 play jump, then plant 50 ms later (the goremod hit projectile and second damage sound it also names were defined nowhere and never ran).",
+  "patch": {
+    "assets/weapons.json": {
+      "projectiles": {
+        "{namespace}:projectile/shrapgrenprojectile": {
+          "children": [
+            {
+              "projectile": "{namespace}:projectile/shrapgrenclusterprojectile",
+              "count": "{shrap_count}",
+              "speed": 20.5,
+              "on_explode": true,
+              "fuse_ticks": [
+                0,
+                48
+              ]
+            },
+            {
+              "projectile": "{namespace}:projectile/shrapgrentrailprojectile",
+              "count": "{trail_count}",
+              "speed": 39.3,
+              "on_explode": true,
+              "fuse_ticks": [
+                0,
+                36
+              ]
+            }
+          ]
+        }
+      },
+      "images": {
+        "{namespace}:image/shrapgrenimage": {
+          "cook": {
+            "script": "onpindrop",
+            "fuse_ticks": 480,
+            "burst_height": 2.0,
+            "print": "\ue005{seconds} second{s}\ue006 cooking time left.",
+            "first_print": "\ue0054 Seconds\ue006 cooking time left.",
+            "print_ticks": 12,
+            "print_seconds": 0.15
+          }
+        }
+      }
+    }
+  },
   "magazines": {
     "size": "maxmag",
     "ammo": "ammotype",
     "reload_ticks": 120,
+    "one_by_one": "onReloadSingle",
     "types": {
-      "Pistol": { "ammo": "pistol", "reserve": 32, "max_reserve": 64 },
-      "Revolver": { "ammo": "revolver", "reserve": 12, "max_reserve": 60 },
-      "Machine Pistol": { "ammo": "machine-pistol", "reserve": 72, "max_reserve": 320 },
-      "Light Machine Gun": { "ammo": "light-machine-gun", "reserve": 72, "max_reserve": 320 },
-      "Heavy Machine Gun": { "ammo": "heavy-machine-gun", "reserve": 144, "max_reserve": 320 },
-      "Shotgun": { "ammo": "shotgun", "reserve": 12, "max_reserve": 64 },
-      "Rifle": { "ammo": "rifle", "reserve": 16, "max_reserve": 128 },
-      "Sniper Rifle": { "ammo": "sniper-rifle", "reserve": 6, "max_reserve": 12 },
-      "Machine Rifle": { "ammo": "machine-rifle", "reserve": 64, "max_reserve": 128 },
-      "Frag Grenades": { "ammo": "frag-grenades", "reserve": 1, "max_reserve": 5 }
+      "Pistol": {
+        "ammo": "pistol",
+        "reserve": 32,
+        "max_reserve": 64
+      },
+      "Revolver": {
+        "ammo": "revolver",
+        "reserve": 12,
+        "max_reserve": 60
+      },
+      "Machine Pistol": {
+        "ammo": "machine-pistol",
+        "reserve": 72,
+        "max_reserve": 320
+      },
+      "Light Machine Gun": {
+        "ammo": "light-machine-gun",
+        "reserve": 72,
+        "max_reserve": 320
+      },
+      "Heavy Machine Gun": {
+        "ammo": "heavy-machine-gun",
+        "reserve": 144,
+        "max_reserve": 320
+      },
+      "Shotgun": {
+        "ammo": "shotgun",
+        "reserve": 12,
+        "max_reserve": 64
+      },
+      "Rifle": {
+        "ammo": "rifle",
+        "reserve": 16,
+        "max_reserve": 128
+      },
+      "Sniper Rifle": {
+        "ammo": "sniper-rifle",
+        "reserve": 6,
+        "max_reserve": 12
+      },
+      "Machine Rifle": {
+        "ammo": "machine-rifle",
+        "reserve": 64,
+        "max_reserve": 128
+      },
+      "Frag Grenades": {
+        "ammo": "frag-grenades",
+        "reserve": 1,
+        "max_reserve": 5
+      }
     },
-    "items": {
-      "huntingShotgunItem": { "one_by_one": true }
+    "every": {
+      "light_states": [
+        "Ready",
+        "Empty"
+      ]
+    }
+  },
+  "shots": {},
+  "hitscans": {
+    "when": "raycastWeaponRange",
+    "range": "raycastWeaponRange",
+    "from_muzzle": "raycastFromMuzzle",
+    "damage": "raycastDirectDamage",
+    "damage_limit": 100.0,
+    "damage_type": "raycastDirectDamageType",
+    "hit_projectile": "raycastExplosionProjectile",
+    "impulse": "raycastImpactImpulse",
+    "vertical": "raycastVerticalImpulse",
+    "count": "raycastSpreadCount",
+    "spread": "raycastSpreadAmt",
+    "tracer": {
+      "field": "raycastTracerProjectile",
+      "look": {
+        "color": [
+          1.0,
+          0.95,
+          0.75,
+          0.7
+        ],
+        "width": 0.04,
+        "seconds": 0.08
+      }
     }
   },
   "rules": {
-    "capabilities": ["player", "damage"],
+    "capabilities": [
+      "player",
+      "damage",
+      "physics",
+      "effects"
+    ],
     "tables": {
       "headshots": {
         "class": "ProjectileData",
-        "fields": ["headshotMultiplier"],
-        "when": ["headshotMultiplier"],
-        "key": "damage_type"
+        "fields": [
+          "headshotMultiplier"
+        ],
+        "when": [
+          "headshotMultiplier"
+        ],
+        "key": "id"
       },
       "boxes": {
         "class": "ItemData",
-        "fields": ["ammotype"],
-        "when": ["ammoBox"],
+        "fields": [
+          "ammotype"
+        ],
+        "when": [
+          "ammoBox"
+        ],
+        "key": "id"
+      },
+      "crit_types": {
+        "class": "ProjectileData",
+        "fields": [
+          "raycastCritDirectDamageType"
+        ],
+        "when": [
+          "raycastCritDirectDamageType"
+        ],
         "key": "id"
       }
-    }
+    },
+    "values": {
+      "each_gun": true,
+      "rays": {
+        "{namespace}:projectile/revolverimageray": {
+          "crit": true,
+          "kill": null,
+          "shove": "{revolver_shove}",
+          "up": "{revolver_up}",
+          "kill_type": null,
+          "sounds": []
+        },
+        "{namespace}:projectile/battlerifleimageray": {
+          "crit": true,
+          "kill": null,
+          "shove": "{battlerifle_shove}",
+          "up": "{battlerifle_up}",
+          "kill_type": null,
+          "sounds": []
+        },
+        "{namespace}:projectile/sniperrifleimageray": {
+          "crit": true,
+          "kill": null,
+          "shove": "{sniperrifle_shove}",
+          "up": "{sniperrifle_up}",
+          "kill_type": null,
+          "sounds": []
+        },
+        "{namespace}:projectile/batonimageray": {
+          "crit": false,
+          "kill": "{baton_kill}",
+          "shove": "{baton_shove}",
+          "up": "{baton_up}",
+          "kill_type": "{baton_type}",
+          "sounds": [
+            "{namespace}:sound/{baton_sound_a}",
+            "{namespace}:sound/{baton_sound_b}"
+          ]
+        },
+        "{namespace}:projectile/macheteimageray": {
+          "crit": false,
+          "kill": "{machete_kill}",
+          "shove": "{machete_shove}",
+          "up": "{machete_up}",
+          "kill_type": "{machete_type}",
+          "sounds": [
+            "{namespace}:sound/{machete_sound_a}",
+            "{namespace}:sound/{machete_sound_b}"
+          ]
+        }
+      },
+      "tasers": {},
+      "critical": "{uses:Emote_Critical}",
+      "flinch": {
+        "first": "{flinch_first}",
+        "then": "{flinch_then}",
+        "after_ms": "{flinch_ms}"
+      }
+    },
+    "requires": [
+      "Emote_Critical"
+    ]
   }
 }

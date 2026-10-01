@@ -565,6 +565,7 @@ impl Session {
             archetypes.add(archetype)?;
         }
         self.archetypes = archetypes;
+        self.fill_body_mount_points()?;
         self.minigames = combat::new_world(self.minigames.catalog().clone(), &self.archetypes);
         if let Some((id, mode)) = catalog.running_mode()
             && let Some(minigame) = &mode.minigame
@@ -875,6 +876,100 @@ impl Session {
             vars: vars.into_iter().map(|(k, v)| (k, Arc::new(v))).collect(),
         }
     }
+    /// What scripts read of a player or bot.
+    fn player_view(&self, owner: OwnerId, p: &Peer) -> PlayerView {
+        let actor = self.weapons.actor(bri_weapons::ActorId(owner));
+        let item = actor
+            .and_then(|a| a.inventory.get(a.selected?)?.clone())
+            .unwrap_or_default();
+        let (image, image_state) = self
+            .weapons
+            .image_state(bri_weapons::ActorId(owner), 0)
+            .map(|(image, state)| (image.id.clone(), state.name.clone()))
+            .unwrap_or_default();
+        let state = p.player.state();
+        let tuning = p.player.tuning();
+        let height = if state.crouched {
+            tuning.crouch_height
+        } else {
+            tuning.stand_height
+        };
+        PlayerView {
+            id: owner,
+            key: self.player_key(owner),
+            name: p.name.clone(),
+            position: p.player.state().feet,
+            alive: p.combat.alive,
+            admin: p.actor.administrator,
+            eye: p.player.eye().to_array(),
+            look: p.player.state().forward().to_array(),
+            velocity: p.player.state().velocity,
+            item,
+            minigame: self
+                .minigames
+                .player(p.combat.player)
+                .ok()
+                .and_then(|m| m.game)
+                .map(|g| g.0),
+            health: p.combat.health,
+            max_health: self
+                .archetypes
+                .resolve(p.player.state().archetype)
+                .max_health,
+            archetype: self
+                .archetypes
+                .resolve(p.player.state().archetype)
+                .id
+                .clone(),
+            crouched: state.crouched,
+            mounted: self.seated(owner),
+            scale: state.scale,
+            center: [state.feet[0], state.feet[1] + height * 0.5, state.feet[2]],
+            slot: actor.and_then(|a| a.selected).map(|s| s as u64),
+            muzzle: actor
+                .filter(|_| !image.is_empty())
+                .map_or(p.player.eye(), |a| a.frame.muzzle[0])
+                .to_array(),
+            tools: actor.map_or_else(Vec::new, |a| {
+                a.inventory
+                    .iter()
+                    .map(|t| t.clone().unwrap_or_default())
+                    .collect()
+            }),
+            image,
+            image_state,
+            paint: p.current_color,
+            bot: self.bots.is_bot(owner),
+            bot_owner: self.bot_brick_owner(owner),
+            riding: self.riding_seat(owner),
+            magazine: self.weapons.ammo(bri_weapons::ActorId(owner)).map(|m| {
+                bri_package_runtime::script::MagazineView {
+                    item: m.item,
+                    rounds: m.rounds,
+                    size: m.size,
+                    ammo: m.ammo,
+                    reserve: match m.reserve {
+                        bri_weapons::Reserve::Rounds(n) => Some(n),
+                        bri_weapons::Reserve::Endless => None,
+                    },
+                    reloading: m.reloading,
+                }
+            }),
+            reserves: self
+                .weapons
+                .reserves(bri_weapons::ActorId(owner))
+                .into_iter()
+                .flatten()
+                .map(|(ammo, r)| {
+                    let r = match r {
+                        bri_weapons::Reserve::Rounds(n) => Some(*n),
+                        bri_weapons::Reserve::Endless => None,
+                    };
+                    (ammo.clone(), r)
+                })
+                .collect(),
+        }
+    }
     fn package_snapshot(&self) -> Snapshot {
         let host = self.packages.as_ref();
         Snapshot {
@@ -885,100 +980,13 @@ impl Session {
                 .peers
                 .iter()
                 .filter(|(o, _)| !self.bots.is_bot(**o))
-                .map(|(owner, p)| {
-                    let actor = self.weapons.actor(bri_weapons::ActorId(*owner));
-                    let item = actor
-                        .and_then(|a| a.inventory.get(a.selected?)?.clone())
-                        .unwrap_or_default();
-                    let (image, image_state) = self
-                        .weapons
-                        .image_state(bri_weapons::ActorId(*owner), 0)
-                        .map(|(image, state)| (image.id.clone(), state.name.clone()))
-                        .unwrap_or_default();
-                    let state = p.player.state();
-                    let tuning = p.player.tuning();
-                    let height = if state.crouched {
-                        tuning.crouch_height
-                    } else {
-                        tuning.stand_height
-                    };
-                    PlayerView {
-                        id: *owner,
-                        key: self.player_key(*owner),
-                        name: p.name.clone(),
-                        position: p.player.state().feet,
-                        alive: p.combat.alive,
-                        admin: p.actor.administrator,
-                        eye: p.player.eye().to_array(),
-                        look: p.player.state().forward().to_array(),
-                        velocity: p.player.state().velocity,
-                        item,
-                        minigame: self
-                            .minigames
-                            .player(p.combat.player)
-                            .ok()
-                            .and_then(|m| m.game)
-                            .map(|g| g.0),
-                        health: p.combat.health,
-                        max_health: self
-                            .archetypes
-                            .resolve(p.player.state().archetype)
-                            .max_health,
-                        archetype: self
-                            .archetypes
-                            .resolve(p.player.state().archetype)
-                            .id
-                            .clone(),
-                        crouched: state.crouched,
-                        mounted: self.seated(*owner),
-                        scale: state.scale,
-                        center: [
-                            state.feet[0],
-                            state.feet[1] + height * 0.5,
-                            state.feet[2],
-                        ],
-                        slot: actor.and_then(|a| a.selected).map(|s| s as u64),
-                        muzzle: actor
-                            .filter(|_| !image.is_empty())
-                            .map_or(p.player.eye(), |a| a.frame.muzzle[0])
-                            .to_array(),
-                        tools: actor.map_or_else(Vec::new, |a| {
-                            a.inventory
-                                .iter()
-                                .map(|t| t.clone().unwrap_or_default())
-                                .collect()
-                        }),
-                        image,
-                        image_state,
-                        paint: p.current_color,
-                        magazine: self.weapons.ammo(bri_weapons::ActorId(*owner)).map(|m| {
-                            bri_package_runtime::script::MagazineView {
-                                item: m.item,
-                                rounds: m.rounds,
-                                size: m.size,
-                                ammo: m.ammo,
-                                reserve: match m.reserve {
-                                    bri_weapons::Reserve::Rounds(n) => Some(n),
-                                    bri_weapons::Reserve::Endless => None,
-                                },
-                                reloading: m.reloading,
-                            }
-                        }),
-                        reserves: self
-                            .weapons
-                            .reserves(bri_weapons::ActorId(*owner))
-                            .map(|(ammo, r)| {
-                                (
-                                    ammo.to_string(),
-                                    match r {
-                                        bri_weapons::Reserve::Rounds(n) => Some(n),
-                                        bri_weapons::Reserve::Endless => None,
-                                    },
-                                )
-                            })
-                            .collect(),
-                    }
-                })
+                .map(|(owner, p)| self.player_view(*owner, p))
+                .collect(),
+            bots: self
+                .peers
+                .iter()
+                .filter(|(o, _)| self.bots.is_bot(**o))
+                .map(|(owner, p)| self.player_view(*owner, p))
                 .collect(),
             entities: host
                 .map(|h| {
@@ -1570,6 +1578,7 @@ impl Session {
             | Op::Hold { .. }
             | Op::HoldDistance { .. }
             | Op::LetGo { .. }
+            | Op::Reach { .. }
             | Op::SpawnVehicle { .. }
             | Op::RemoveVehicle { .. }) => self.apply_physics_op(package, op, caller),
             Op::Fire {
@@ -1599,6 +1608,35 @@ impl Session {
                     Vec3::from(position),
                     Vec3::from(velocity),
                     1.0,
+                )?;
+                Ok(())
+            }
+            Op::SpawnExplosion {
+                player,
+                projectile,
+                scale,
+            } => {
+                let host = self.packages.as_ref().context("No packages are enabled")?;
+                ensure!(
+                    item_hooks::owns(&host.catalog, package, &projectile),
+                    "`{projectile}` is not a projectile of `{package}` or an Add-On it depends on"
+                );
+                let peer = self.peers.get(&player).context("No such player")?;
+                ensure!(peer.combat.alive, "Only living players");
+                let at = self.explosion_point(player)?;
+                let origin = package.to_string();
+                let tick = self.simulation.state().tick;
+                let host = self.packages.as_mut().context("No packages are enabled")?;
+                ensure!(
+                    host.shares.shots.available(&origin, tick) >= 1,
+                    "Dropped: more than {PACKAGE_SHOTS} projectiles a second"
+                );
+                host.shares.shots.spend(&origin, tick, 1);
+                self.weapons.spawn_explosion(
+                    &projectile,
+                    bri_weapons::ActorId(PACKAGE_SHOOTER),
+                    at,
+                    scale,
                 )?;
                 Ok(())
             }
@@ -1670,26 +1708,20 @@ impl Session {
                 player,
                 thread,
                 sequence,
+                after,
             } => {
-                let feet = self
-                    .peers
-                    .get(&player)
-                    .context("No such player")?
-                    .player
-                    .state()
-                    .feet;
+                ensure!(self.peers.contains_key(&player), "No such player");
                 self.take_cue(package)?;
-                self.cues.emit(
-                    tick,
-                    crate::presentation::CueKind::WeaponAnimation {
-                        actor: player,
-                        thread,
-                        sequence,
-                        image_hand: None,
-                    },
-                    feet,
-                );
-                Ok(())
+                if after > 0.0 {
+                    // A schedule is in whole milliseconds and fires on the
+                    // first tick at or past its time.
+                    let ms = (f64::from(after) * 1000.0).round() as u64;
+                    let ticks = (ms * bri_world::TICKS_PER_SECOND).div_ceil(1000);
+                    self.schedule_thread(player, tick + ticks, thread, &sequence)
+                } else {
+                    self.play_thread(tick, player, thread, &sequence);
+                    Ok(())
+                }
             }
             Op::SetMapLights {
                 position,
@@ -1780,20 +1812,47 @@ impl Session {
                 match image {
                     Some(image) => {
                         let host = self.packages.as_ref().context("No packages are enabled")?;
-                        let namespace = image.split(':').next().unwrap_or_default();
-                        let depends = host
-                            .catalog
-                            .packages
-                            .get(package)
-                            .is_some_and(|p| p.manifest.dependencies.contains_key(namespace));
                         ensure!(
-                            namespace == package || depends,
+                            item_hooks::owns(&host.catalog, package, &image),
                             "`{image}` is not an image of `{package}` or an Add-On it depends on"
                         );
                         self.weapons.swap_image(actor, Some(&image))
                     }
                     None => self.weapons.swap_image(actor, None),
                 }
+            }
+            Op::UnmountImage { player } => {
+                ensure!(self.peers.contains_key(&player), "No such player");
+                self.equip_tool(player, None)
+            }
+            Op::MountObject {
+                mount,
+                rider,
+                node,
+                can_dismount,
+            } => {
+                ensure!(
+                    caller.is_none_or(|c| c == mount),
+                    "A player mounts others on themselves only by their own command"
+                );
+                // Carrying someone moves them: the same rules as `hold`.
+                ensure!(
+                    self.may_move(mount, ObjectRef::Player(rider)),
+                    "Player {mount} may not move {rider} under the minigame and trust rules"
+                );
+                self.mount_player(mount, rider, node, can_dismount)
+            }
+            Op::UnmountObject { rider } => self.unmount_player(rider),
+            Op::SetScale { player, scale } => {
+                ensure!(self.peers.contains_key(&player), "No such player");
+                self.set_player_scale(player, scale)?;
+                self.follow_player_mounts();
+                Ok(())
+            }
+            Op::SetLookLimits { player, limits } => {
+                let peer = self.peers.get_mut(&player).context("No such player")?;
+                peer.look_limits = limits;
+                Ok(())
             }
             Op::Sound { profile, at } => {
                 self.take_cue(package)?;
@@ -1864,6 +1923,7 @@ impl Session {
                     by.unwrap_or(PACKAGE_SHOOTER),
                     damage_type.as_deref().unwrap_or(package),
                     Vec3::from(centre),
+                    super::vehicles::VehicleHarm::Package,
                 )
             }
             ObjectRef::Entity(entity) => {
@@ -2096,6 +2156,12 @@ impl Session {
             world.added.remove(&voxel.position);
             world.removed.insert(voxel.position);
         }
+    }
+    /// Where `%player.spawnExplosion` sets off an explosion: a unit above
+    /// their feet.
+    pub(super) fn explosion_point(&self, player: OwnerId) -> Result<Vec3> {
+        let peer = self.peers.get(&player).context("No such player")?;
+        Ok(Vec3::from(peer.player.state().feet) + Vec3::Y)
     }
     /// The one explosion operation: damage players within `radius` (full at
     /// the centre, none at the edge) whom the caller may hurt, damage package
@@ -2998,6 +3064,35 @@ impl Session {
         let owners = std::mem::take(&mut host.spawns);
         self.deliver_player_hook(owners, |b| b.on_spawn, "on_spawn");
     }
+    /// `on_activate(player)` of every package that declares it, in load
+    /// order, until one takes the click (returns `true`).
+    pub(super) fn package_activate(&mut self, owner: OwnerId) -> bool {
+        let Some(host) = self.packages.as_ref() else {
+            return false;
+        };
+        let hooks: Vec<String> = host
+            .catalog
+            .behaviours()
+            .filter(|(_, b)| b.on_activate)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for package in hooks {
+            let reply = self.run_package(
+                &package,
+                "on_activate",
+                vec![Dynamic::from_int(owner as i64)],
+                Budget::Command,
+                Some(owner),
+                None,
+                None,
+            );
+            self.charge_work(&package);
+            if matches!(reply, Ok(v) if v.as_bool() == Ok(true)) {
+                return true;
+            }
+        }
+        false
+    }
     /// `on_leave(player)` as `owner` leaves, while they are still readable.
     pub(super) fn package_leave(&mut self, owner: OwnerId) {
         if self.bots.is_bot(owner) {
@@ -3007,9 +3102,8 @@ impl Session {
     }
     /// `on_damage(victim, attacker, amount, info)` from every package that
     /// declares it, in order, each seeing the amount the one before
-    /// returned. A failed call leaves the amount as it was. A hook may also
-    /// rename the damage type (`#{ amount, type }`), as a headshot's kill
-    /// message differs from the body shot's; the last rename wins.
+    /// returned. A failed call leaves the amount as it was. Also the damage
+    /// type a hook renamed it to, if one did.
     pub(super) fn package_damage(
         &mut self,
         victim: OwnerId,
@@ -3057,14 +3151,82 @@ impl Session {
                 info.insert(key.into(), Dynamic::from_float(f64::from(value)));
             }
         }
+        self.damage_hooks(hooks, "on_damage", victim as i64, attacker, amount, info)
+    }
+    /// `on_vehicle_damage(vehicle, attacker, amount, info)` from every
+    /// package that declares it, as `on_damage`. `info` names the part
+    /// struck and the damage that destroys it.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn package_vehicle_damage(
+        &mut self,
+        vehicle: u64,
+        attacker: Option<OwnerId>,
+        amount: f32,
+        kind: &str,
+        name: &str,
+        projectile: Option<&str>,
+        part: bri_vehicles::VehiclePart,
+        max_health: f32,
+        point: Vec3,
+    ) -> f32 {
+        let Some(host) = self.packages.as_mut() else {
+            return amount;
+        };
+        if host.in_damage_hook {
+            return amount;
+        }
+        let hooks: Vec<String> = host
+            .catalog
+            .behaviours()
+            .filter(|(_, b)| b.on_vehicle_damage)
+            .map(|(id, _)| id.clone())
+            .collect();
+        if hooks.is_empty() {
+            return amount;
+        }
+        host.in_damage_hook = true;
+        let mut info = bri_package_runtime::rhai::Map::new();
+        info.insert("kind".into(), kind.into());
+        info.insert("type".into(), name.into());
+        if let Some(projectile) = projectile {
+            info.insert("projectile".into(), projectile.into());
+        }
+        let part = match part {
+            bri_vehicles::VehiclePart::Chassis => "chassis",
+            bri_vehicles::VehiclePart::Turret => "turret",
+        };
+        info.insert("part".into(), part.into());
+        info.insert(
+            "max_health".into(),
+            Dynamic::from_float(f64::from(max_health)),
+        );
+        for (key, value) in ["x", "y", "z"].into_iter().zip(point.to_array()) {
+            info.insert(key.into(), Dynamic::from_float(f64::from(value)));
+        }
+        let id = i64::try_from(vehicle).unwrap_or(i64::MAX);
+        self.damage_hooks(hooks, "on_vehicle_damage", id, attacker, amount, info)
+            .0
+    }
+    /// Run a damage hook in each of `packages` in order, each seeing the
+    /// amount the one before returned, with `in_damage_hook` set; a failed
+    /// call leaves the amount as it was.
+    fn damage_hooks(
+        &mut self,
+        packages: Vec<String>,
+        hook: &str,
+        target: i64,
+        attacker: Option<OwnerId>,
+        amount: f32,
+        info: bri_package_runtime::rhai::Map,
+    ) -> (f32, Option<String>) {
         let mut amount = amount;
         let mut renamed = None;
-        for package in hooks {
+        for package in packages {
             let answer = self.run_package(
                 &package,
-                "on_damage",
+                hook,
                 vec![
-                    Dynamic::from_int(victim as i64),
+                    Dynamic::from_int(target),
                     attacker.map_or(Dynamic::UNIT, |a| Dynamic::from_int(a as i64)),
                     Dynamic::from_float(f64::from(amount)),
                     Dynamic::from_map(info.clone()),
@@ -3076,24 +3238,9 @@ impl Session {
             );
             self.charge_work(&package);
             if let Ok(answer) = answer {
-                let answer = match answer.clone().try_cast::<bri_package_runtime::rhai::Map>() {
-                    Some(map) => {
-                        if let Some(t) = map.get("type").filter(|t| !t.is_unit()) {
-                            match t.clone().into_string().ok().filter(|t| is_damage_type(t)) {
-                                Some(t) => renamed = Some(t),
-                                None => self.hook_warning(
-                                    &package,
-                                    "on_damage's type must be a damage type's name \
-                                     (1 to 64 letters, digits or _)"
-                                        .into(),
-                                ),
-                            }
-                        }
-                        map.get("amount").cloned().unwrap_or(Dynamic::UNIT)
-                    }
-                    None => answer,
-                };
-                amount = self.hook_amount(&package, "on_damage", &answer, amount);
+                let (a, t) = self.hook_answer(&package, hook, &answer, amount);
+                amount = a;
+                renamed = t.or(renamed);
             }
         }
         if let Some(host) = self.packages.as_mut() {
@@ -3102,33 +3249,71 @@ impl Session {
         (amount, renamed)
     }
     /// A damage hook's answer: a number replaces `amount` (clamped to 0 to
-    /// 100000), `()` keeps it, anything else keeps it with a warning.
-    fn hook_amount(&mut self, package: &str, hook: &str, answer: &Dynamic, amount: f32) -> f32 {
-        let number = answer
-            .as_float()
-            .ok()
-            .or_else(|| answer.as_int().ok().map(|i| i as f64));
-        match number {
-            Some(n) if n.is_finite() => (n as f32).clamp(0.0, 100_000.0),
-            Some(_) => amount,
-            None if answer.is_unit() => amount,
-            None => {
-                if let Some(host) = self.packages.as_mut() {
-                    note(
-                        host,
-                        Diagnostic::warning(
-                            "hook.answer",
-                            format!(
-                                "{hook} must return a number or (), not {}",
-                                answer.type_name()
-                            ),
-                        )
-                        .at(package.to_string()),
-                    );
-                }
+    /// 100000), `()` keeps it, and a map `#{ amount, type }` may do either
+    /// and rename the damage type (`$DamageType::<name>` of the weapons
+    /// pack: the kill message a death shows). Anything else keeps it with
+    /// a warning.
+    fn hook_answer(
+        &mut self,
+        package: &str,
+        hook: &str,
+        answer: &Dynamic,
+        amount: f32,
+    ) -> (f32, Option<String>) {
+        let number = |d: &Dynamic| {
+            d.as_float()
+                .ok()
+                .or_else(|| d.as_int().ok().map(|i| i as f64))
+        };
+        let clamped = |n: f64| {
+            if n.is_finite() {
+                (n as f32).clamp(0.0, 100_000.0)
+            } else {
                 amount
             }
+        };
+        let warn = |session: &mut Self, message: String| {
+            if let Some(host) = session.packages.as_mut() {
+                note(
+                    host,
+                    Diagnostic::warning("hook.answer", message).at(package.to_string()),
+                );
+            }
+        };
+        if let Some(n) = number(answer) {
+            return (clamped(n), None);
         }
+        if answer.is_unit() {
+            return (amount, None);
+        }
+        let Some(map) = answer.read_lock::<bri_package_runtime::rhai::Map>() else {
+            warn(
+                self,
+                format!(
+                    "{hook} must return a number, #{{ amount, type }} or (), not {}",
+                    answer.type_name()
+                ),
+            );
+            return (amount, None);
+        };
+        let new_amount = map.get("amount").and_then(number).map_or(amount, clamped);
+        let named = map
+            .get("type")
+            .filter(|t| !t.is_unit())
+            .map(|t| t.clone().into_string().unwrap_or_default());
+        drop(map);
+        let renamed = match named {
+            Some(t) if self.weapons.pack.has_damage_type(&t) => Some(t),
+            Some(t) => {
+                warn(
+                    self,
+                    format!("{hook}: no damage type `{t}` in the weapons pack"),
+                );
+                None
+            }
+            None => None,
+        };
+        (new_amount, renamed)
     }
     /// Hurt a package entity: a shot, a blast or a package's `explode`.
     /// Its own package decides first (`on_entity_damage`), and hears of its
@@ -3184,7 +3369,9 @@ impl Session {
             );
             self.charge_work(&package);
             if let Ok(answer) = answer {
-                amount = self.hook_amount(&package, "on_entity_damage", &answer, amount);
+                amount = self
+                    .hook_answer(&package, "on_entity_damage", &answer, amount)
+                    .0;
             }
             if let Some(host) = self.packages.as_mut() {
                 host.in_damage_hook = false;
@@ -3247,7 +3434,9 @@ impl Session {
             return;
         }
         for owner in owners {
-            if !self.peers.contains_key(&owner) {
+            // Player hooks are for connected players. A bot queued while it
+            // joined, before it was registered as one, is left out here.
+            if !self.peers.contains_key(&owner) || self.bots.is_bot(owner) {
                 continue;
             }
             for package in &hooks {
@@ -3464,10 +3653,4 @@ pub struct PackageStats {
     pub voxels: usize,
     pub removed_voxels: usize,
     pub diagnostics: usize,
-}
-
-/// A damage type's name as hooks give it (`SportRifleHeadshot`, without
-/// `$DamageType::`).
-fn is_damage_type(name: &str) -> bool {
-    (1..=64).contains(&name.len()) && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
 }

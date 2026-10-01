@@ -163,8 +163,10 @@ pub struct Behaviour {
     #[serde(default)]
     pub on_leave: bool,
     /// `on_damage(victim, attacker, amount, info)` before a player takes
-    /// damage: return the amount to take instead (0 prevents it), or `()`
-    /// to leave it. `attacker` is the player responsible, or `()`; `info`
+    /// damage: return the amount to take instead (0 prevents it), `()` to
+    /// leave it, or `#{ amount, type }` to change either and the damage
+    /// type (`$DamageType::<name>` of the weapons pack, whose kill message
+    /// a death shows). `attacker` is the player responsible, or `()`; `info`
     /// is `#{ kind, type, direct }`, plus for a shot or blast `x, y, z`
     /// (where it struck) and `dx, dy, dz` (the unit direction it was
     /// travelling, outward from the centre for a blast). Called as the damage happens, so it
@@ -178,6 +180,15 @@ pub struct Behaviour {
     /// `weapon` or `package`.
     #[serde(default)]
     pub on_entity_damage: bool,
+    /// `on_vehicle_damage(vehicle, attacker, amount, info)` before a
+    /// vehicle is hurt by a shot, a blast, a smashing vehicle or a
+    /// package's `damage`: answered like `on_damage`, by every package that declares
+    /// it. `info` is `#{ kind, type, part, max_health, x, y, z }`, plus
+    /// `projectile` for a shot: `kind` is `weapon`, `package` or `smash`,
+    /// `part` the `chassis` or an attached `turret` it struck, and
+    /// `max_health` the damage that part takes to be destroyed.
+    #[serde(default)]
+    pub on_vehicle_damage: bool,
     /// `on_entity_death(entity, killer, info)` as one of this package's
     /// entities runs out of health, while it can still be read; it is
     /// removed right after. `killer` is the player responsible, or `()`.
@@ -187,9 +198,11 @@ pub struct Behaviour {
     /// of this package (or one it depends on) lying in the world, before
     /// they pick it up, whether or not they have room: `false` leaves it,
     /// `"take"` uses it up without giving it (a spawn brick's item starts
-    /// its respawn), `()` or `true` picks it up as usual. `info` is
-    /// `#{ drop, spawner, data }`: the dropped item's id or the spawn
-    /// brick's, and what `on_drop` kept with it. Called as it happens, so
+    /// its respawn), `()` or `true` picks it up as usual, and `#{ rounds }`
+    /// sets what a dropped gun's magazine holds, then picks it up as usual.
+    /// `info` is `#{ drop, spawner, data, rounds }`: the dropped item's id
+    /// or the spawn brick's, what `on_drop` kept with it, and a dropped
+    /// gun's magazine rounds (`()` without one). Called as it happens, so
     /// it must be quick.
     #[serde(default)]
     pub on_pickup: bool,
@@ -207,6 +220,16 @@ pub struct Behaviour {
     /// tick.
     #[serde(default)]
     pub on_projectile_hit: bool,
+    /// `on_activate(player)` as a living player clicks with nothing to
+    /// fire (`serverCmdActivateStuff`, which v20 Add-Ons packaged as
+    /// `Player::activateStuff`), before the engine's own activation: the
+    /// arm's swing, flipping a vehicle, a brick's `onActivate`. Return
+    /// `true` to take the click, so the engine does nothing more; anything
+    /// else lets it carry on. Every package that declares it is asked, in
+    /// load order, until one takes the click. Called as it happens, so it
+    /// must be quick.
+    #[serde(default)]
+    pub on_activate: bool,
     /// `on_tick()` every `tick_interval` ticks, when set.
     #[serde(default)]
     pub tick_interval: Option<u32>,

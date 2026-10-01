@@ -26,7 +26,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 /// The download cache under the content root, where a server's Add-Ons go.
-const DOWNLOADS: &str = ".downloads/";
+pub(crate) const DOWNLOADS: &str = ".downloads/";
 
 struct Running {
     addon: AddOn,
@@ -83,6 +83,9 @@ pub struct ClientCode {
     origin: Vec<Origin>,
     running: Vec<Running>,
     started: bool,
+    /// Whether this game's sandboxed shaders may run: the player's own
+    /// game, or a server whose code they trusted.
+    trusted: bool,
     time: f32,
     last: Option<f64>,
     messages: Vec<String>,
@@ -176,10 +179,18 @@ impl ClientCode {
         self.started
     }
 
+    /// Whether the server's sandboxed shaders may run here: the player
+    /// hosts, or trusted the server's code (an item's skin, `looks.json`,
+    /// is WGSL like an Add-On's code and is held to the same trust).
+    pub fn trusts_server(&self) -> bool {
+        self.started && self.trusted
+    }
+
     /// Start the code the player trusts, when a game is entered.
     pub fn start(&mut self, host: Host<'_>, state_dir: &Path) {
         self.stop();
         self.started = true;
+        self.trusted = matches!(host, Host::Local);
         self.time = 0.0;
         self.last = None;
         if self.code.is_empty() {
@@ -212,7 +223,9 @@ impl ClientCode {
                 _ if self.runs_unasked(slot) => Some(TrustLevel::Sandboxed),
                 (Host::Remote(""), _) => None,
                 (Host::Remote(server), Some(store)) => {
-                    store.granted(server, &CodeSummary::from(code))
+                    let granted = store.granted(server, &CodeSummary::from(code));
+                    self.trusted |= granted.is_some();
+                    granted
                 }
                 (Host::Remote(_), None) => None,
             };
@@ -280,6 +293,7 @@ impl ClientCode {
         self.sounds.clear();
         self.poses.clear();
         self.started = false;
+        self.trusted = false;
         self.asking = None;
     }
 

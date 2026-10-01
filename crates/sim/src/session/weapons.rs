@@ -434,6 +434,15 @@ impl Session {
                     was_thrown,
                 } => self.football_catch(source.0, catcher.0, distance_feet, was_thrown),
                 WeaponEvent::DropRemoved { drop } => self.forget_drop(drop),
+                WeaponEvent::Print {
+                    actor,
+                    text,
+                    seconds,
+                } => {
+                    if self.peers.contains_key(&actor.0) {
+                        self.notify(actor.0, Notice::Center { text, seconds });
+                    }
+                }
                 WeaponEvent::Diagnostic { message, .. } => {
                     if self.notices.len() == 64 {
                         self.notices.pop_front();
@@ -612,14 +621,24 @@ impl Session {
                     amount,
                     kind,
                     position,
+                    projectile,
                     ..
-                } => self.damage_vehicle(vehicle, amount, source.0, &kind, position)?,
+                } => self.damage_vehicle(
+                    vehicle,
+                    amount,
+                    source.0,
+                    &kind,
+                    position,
+                    super::vehicles::VehicleHarm::Weapon {
+                        projectile: (!projectile.is_empty()).then_some(projectile.as_str()),
+                    },
+                )?,
                 WeaponEvent::Impulse {
                     target: TargetId::Vehicle(vehicle),
                     impulse,
                     position,
                     ..
-                } => self.push_vehicle(vehicle, position, impulse),
+                } => self.blast_vehicle(vehicle, position, impulse),
                 WeaponEvent::Key {
                     actor,
                     brick,

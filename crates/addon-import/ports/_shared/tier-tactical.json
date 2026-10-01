@@ -133,9 +133,9 @@
         "display": ".50 Caliber"
       }
     },
-    "common": {
+    "every": {
       "reload_state": "onReloaded",
-      "reload_from": [
+      "light_states": [
         "Ready",
         "Empty",
         "EmptyFire"
@@ -181,7 +181,7 @@
       }
     }
   },
-  "hitscans": {
+  "raycasts": {
     "enabled": "TT_raycastEnabled",
     "range": "TT_raycastWeaponRange",
     "spread": "TT_raycastSpreadAmt",

@@ -1198,3 +1198,34 @@ fn a_thrown_item_goes_through_a_portal_and_keeps_its_speed_turned() {
         drop.velocity
     );
 }
+
+/// A tool held in its holder's spray colour (`paint_tint`, the Fill Can)
+/// lies where it is dropped in that colour, as it was held; other tools
+/// carry no paint.
+#[test]
+fn a_dropped_paint_tinted_tool_keeps_the_colour_it_was_held_in() {
+    // A can held in its holder's spray colour, like the Fill Can's.
+    let (item, image) = ("test:weapon/can", "test:image/can");
+    let mut pack = empty();
+    pack.images.insert(
+        image.into(),
+        Image { id: image.into(), name: "CanImage".into(), paint_tint: true, ..Default::default() },
+    );
+    pack.items.insert(
+        item.into(),
+        Item { id: item.into(), name: "CanItem".into(), ui_name: "Can".into(), image: image.into(), ..Default::default() },
+    );
+    let mut w = WeaponsWorld::new(pack).unwrap();
+    let actor = ActorId(3);
+    w.add_actor(actor, 5).unwrap();
+    w.set_spray_color(actor, 4).unwrap();
+    let slot = w.give(actor, item).unwrap();
+    w.give(actor, CORE_TOOLS[0]).unwrap();
+    w.drop_item(actor, slot).unwrap();
+    w.drop_item(actor, slot + 1).unwrap();
+    let paints: Vec<_> = w.drops().map(|d| (d.item.as_str(), d.paint)).collect();
+    assert_eq!(
+        paints,
+        [(item, Some(4)), (CORE_TOOLS[0], None)]
+    );
+}

@@ -152,7 +152,7 @@ impl Session {
                     actions: 0,
                     chats: 0,
                     inspection: None,
-                    talk_stops: VecDeque::new(),
+                    thread_timers: Vec::new(),
                     ..peer
                 },
             );
