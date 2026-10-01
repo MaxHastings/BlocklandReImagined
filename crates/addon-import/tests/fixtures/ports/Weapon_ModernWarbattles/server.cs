@@ -174,6 +174,21 @@ datablock ShapeBaseImageData(revolverImage : standinPistolImage)
    raycastExplosionPlayerSound = standinClubSoundB;
 };
 
+// Its projectile names a datablock nothing declares, as the original's
+// does: the raycast script never used it.
+datablock ItemData(battleRifleItem : standinPistolItem)
+{
+   uiName = "Stand-in Battle Rifle";
+   image = battleRifleImage;
+};
+
+datablock ShapeBaseImageData(battleRifleImage : revolverImage)
+{
+   item = battleRifleItem;
+   projectile = standinMissingProjectile;
+   raycastDirectDamage = 12;
+};
+
 datablock ItemData(BatonItem)
 {
    category = "Weapon";

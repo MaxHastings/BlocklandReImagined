@@ -658,12 +658,17 @@ pub fn hitscans(h: &Hitscans, weapons: &Value, code: &super::Code) -> Result<Rea
         // A port that names the field of a projectile exploded where it
         // lands shows that one in place of the ray's own explosion, or
         // nothing when an image leaves it empty, as the script then spawned
-        // nothing.
-        let base = image["projectile"]
-            .as_str()
-            .with_context(|| format!("{name}: no projectile for its hits"))?;
-        let mut ray = weapons["projectiles"][base].clone();
-        ensure!(ray.is_object(), "{name}: {base} did not import");
+        // nothing. An image whose projectile names nothing still cast its
+        // rays in v20 (the raycast script never used it): its ray is a
+        // bare projectile with no explosion of its own.
+        let mut ray = match image["projectile"].as_str() {
+            Some(base) => {
+                let ray = weapons["projectiles"][base].clone();
+                ensure!(ray.is_object(), "{name}: {base} did not import");
+                ray
+            }
+            None => serde_json::to_value(bri_weapons::ProjectileDef::default())?,
+        };
         let shown = h
             .hit_projectile
             .as_ref()

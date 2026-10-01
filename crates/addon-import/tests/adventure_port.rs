@@ -739,6 +739,12 @@ fn hitscan_crits_and_melee_kills_play_in_a_hosted_game() {
     };
     let shot = ray("revolverimage");
     assert_eq!(shot.eye_within, Some(4.5));
+    // The battle rifle's projectile names nothing, yet it still shoots: its
+    // ray is a bare projectile carrying its own damage.
+    let rifle = &pack.images[&format!("{NS}:image/battlerifleimage")];
+    let rifle_ray = &pack.projectiles[rifle.projectile.as_deref().unwrap()];
+    assert_eq!(rifle_ray.damage, 12.0);
+    assert_eq!(ray("battlerifleimage").range, 200.0);
     let tracer = shot.tracer.unwrap();
     assert_eq!((tracer.width, tracer.seconds), (0.3, 0.15));
     let club = format!("{NS}:sound/standinclubsoundb");

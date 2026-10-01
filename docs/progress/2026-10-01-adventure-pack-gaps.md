@@ -42,3 +42,18 @@ Assumed, not read: the 1019 beam's width (0.1, from MWB's comment on the
 model) and colour (white, from `setNodeColor("1 1 1 1")`).
 
 Next: the Gate re-imports the real copies to confirm the reports.
+
+## Counts on the real scripts, and the Battle Rifle
+
+Imported Max's real MWB and 1019 scripts (the Gate's
+adventure-mwb-scripts.zip) with silent stand-in sounds and a stand-in
+reference for Weapon_Gun and Weapon_Hammer, in /tmp only. Needs-behaviour
+ported: MWB 132/132, 1019 199/199. Emote_Critical: 0 unsupported, 0
+needs-behaviour.
+
+That showed a real gap: MWB's Battle Rifle names `battleRifleProjectile`,
+which nothing declares. v20 left the field empty and the raycast script
+never used it, so the gun worked; our hitscan reader refused the port. An
+image with no projectile now gets a bare ray projectile carrying its damage
+(test: the stand-in battle rifle in `adventure_port.rs`). Its unused
+`onSmoke` is named in `handles` as never run.
