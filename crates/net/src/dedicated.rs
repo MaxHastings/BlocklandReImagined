@@ -221,3 +221,184 @@ pub fn load_packages(
         merge_notes,
     })
 }
+
+impl Dedicated {
+    /// Applies the owner's `server.json` before anyone joins: the admin
+    /// passwords and Start Game's Advanced Config.
+    pub fn configure(&mut self, config: &ServerConfig) -> Result<()> {
+        self.session.set_server_settings(config.settings.clone())?;
+        self.session.set_admin_passwords(
+            config.admin_password.clone(),
+            config.super_admin_password.clone(),
+        )?;
+        let setup = std::sync::Arc::get_mut(&mut self.setup)
+            .context("The server's setup is already shared")?;
+        setup.settings = Some(config.settings.clone());
+        setup.passwords = Some((
+            config.admin_password.clone(),
+            config.super_admin_password.clone(),
+        ));
+        Ok(())
+    }
+}
+
+/// A dedicated server's own settings, `server.json` in its state directory:
+/// v20's `$Pref::Server::AdminPassword`, `SuperAdminPassword` and the rest
+/// of Start Game's Advanced Config. An empty password turns that login off.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServerConfig {
+    pub schema_version: u32,
+    pub admin_password: bri_admin::Secret,
+    pub super_admin_password: bri_admin::Secret,
+    pub settings: bri_admin::ServerSettings,
+}
+
+impl Default for ServerConfig {
+    fn default() -> Self {
+        Self {
+            schema_version: 1,
+            admin_password: bri_admin::Secret::new(String::new()).expect("empty password"),
+            super_admin_password: bri_admin::Secret::new(String::new()).expect("empty password"),
+            settings: bri_admin::ServerSettings::default(),
+        }
+    }
+}
+
+impl ServerConfig {
+    pub const FILE: &str = "server.json";
+
+    /// Reads `state_dir/server.json`, first writing the defaults there when
+    /// it is missing so the owner has a file to edit.
+    pub fn load_or_create(state_dir: &Path) -> Result<Self> {
+        let path = state_dir.join(Self::FILE);
+        if !path.exists() {
+            std::fs::create_dir_all(state_dir)?;
+            std::fs::write(&path, serde_json::to_vec_pretty(&Self::default())?)?;
+        }
+        let bytes = std::fs::read(&path)?;
+        anyhow::ensure!(bytes.len() <= 1 << 20, "{} is too large", path.display());
+        let config: Self = serde_json::from_slice(&bytes)
+            .with_context(|| format!("Reading {}", path.display()))?;
+        anyhow::ensure!(
+            config.schema_version == 1,
+            "Unsupported {} schema",
+            path.display()
+        );
+        config.admin_password.validate()?;
+        config.super_admin_password.validate()?;
+        config.settings.validate()?;
+        Ok(config)
+    }
+}
+
+/// A new empty world on the base map `name`: its full map id or the map's
+/// short name (`slate`, `bedroom`, `slatedesert`), with the game's default
+/// paint palette, like choosing a map in Start Game.
+pub fn blank_world(content_root: &Path, name: &str) -> Result<bri_world::World> {
+    let packages = PackageSet::load_root(content_root)?;
+    blank_world_in(
+        &packages.role_dir(content_root, "map_bundle")?,
+        &packages.role_dir(content_root, "ui_pack")?,
+        name,
+    )
+}
+
+fn blank_world_in(map_bundle: &Path, ui_pack: &Path, name: &str) -> Result<bri_world::World> {
+    let bundle: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(map_bundle.join("bundle.json"))?)?;
+    let ids: Vec<&str> = bundle["maps"]
+        .as_array()
+        .context("Missing native map index")?
+        .iter()
+        .filter_map(|m| m["id"].as_str())
+        .collect();
+    let short = |id: &str| {
+        let file = id.rsplit('/').next().unwrap_or(id);
+        file.strip_suffix(".mis")
+            .unwrap_or(file)
+            .to_ascii_lowercase()
+    };
+    let wanted = name.to_ascii_lowercase().replace(['_', ' '], "");
+    let map_id = ids
+        .iter()
+        .find(|id| id.eq_ignore_ascii_case(name) || short(id) == wanted)
+        .with_context(|| {
+            let mut names: Vec<_> = ids.iter().map(|id| short(id)).collect();
+            names.sort();
+            format!("Unknown map `{name}`. Maps: {}", names.join(", "))
+        })?;
+    let ui: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(ui_pack.join("ui-pack.json"))?)?;
+    let palette: Vec<[f32; 4]> = ui["data"]["brick_colorset"]
+        .as_array()
+        .context("Missing default paint palette")?
+        .iter()
+        .map(|division| serde_json::from_value::<Vec<[f32; 4]>>(division["colors"].clone()))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .flatten()
+        .collect();
+    let world = bri_world::World::new(short(map_id), map_id.to_string(), palette);
+    world.validate()?;
+    Ok(world)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_map_name_starts_an_empty_world_with_the_default_palette() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let (maps, ui) = (dir.path().join("maps"), dir.path().join("ui"));
+        std::fs::create_dir_all(&maps)?;
+        std::fs::create_dir_all(&ui)?;
+        std::fs::write(
+            maps.join("bundle.json"),
+            r#"{"maps":[{"id":"v20/add-ons/map_slate/slate.mis"},{"id":"v20/add-ons/map_slate_desert/slatedesert.mis"}]}"#,
+        )?;
+        std::fs::write(
+            ui.join("ui-pack.json"),
+            r#"{"data":{"brick_colorset":[{"name":"A","colors":[[1,0,0,1],[0,1,0,1]]},{"name":"B","colors":[[0,0,1,1]]}]}}"#,
+        )?;
+        let world = blank_world_in(&maps, &ui, "Slate")?;
+        assert_eq!(world.map_id, "v20/add-ons/map_slate/slate.mis");
+        assert!(world.bricks.is_empty());
+        assert_eq!(world.palette.len(), 3);
+        let desert = blank_world_in(&maps, &ui, "slate_desert")?;
+        assert_eq!(
+            desert.map_id,
+            "v20/add-ons/map_slate_desert/slatedesert.mis"
+        );
+        let unknown = blank_world_in(&maps, &ui, "moon").unwrap_err().to_string();
+        assert!(unknown.contains("slate, slatedesert"), "{unknown}");
+        Ok(())
+    }
+
+    #[test]
+    fn server_json_is_written_with_defaults_then_read_back() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let first = ServerConfig::load_or_create(dir.path())?;
+        assert!(dir.path().join(ServerConfig::FILE).is_file());
+        assert_eq!(first.settings, bri_admin::ServerSettings::default());
+        assert_eq!(first.super_admin_password.expose(), "");
+        let mut edited = first.clone();
+        edited.super_admin_password = bri_admin::Secret::new("hunter2".into())?;
+        edited.settings.name = "Friend's VPS".into();
+        edited.settings.max_players = 16;
+        std::fs::write(
+            dir.path().join(ServerConfig::FILE),
+            serde_json::to_vec(&edited)?,
+        )?;
+        let read = ServerConfig::load_or_create(dir.path())?;
+        assert_eq!(read.super_admin_password.expose(), "hunter2");
+        assert_eq!(read.settings.max_players, 16);
+        std::fs::write(
+            dir.path().join(ServerConfig::FILE),
+            br#"{"schema_version":1}"#,
+        )?;
+        assert!(ServerConfig::load_or_create(dir.path()).is_err());
+        Ok(())
+    }
+}

@@ -21,8 +21,11 @@ async fn main() -> Result<()> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     ensure!(
         args.len() == 4 || args.len() == 5,
-        "Usage: bri-server <content-root> <world.json | resume> <state-dir> <listen-address> [run-seconds]
+        "Usage: bri-server <content-root> <map | world.json | resume> <state-dir> <listen-address> [run-seconds]
+         <map> starts an empty world on a base map by name (slate, bedroom, kitchen, slopes, ...).
          `resume` continues from the newest world this server saved in <state-dir> when it last stopped.
+         <state-dir>/server.json holds the admin passwords and server settings (written with defaults on first start).
+         <listen-address> is usually 0.0.0.0:28000 (UDP).
          The content root's packages.json lists the packages to load (the base game's list and the default Add-Ons when absent)."
     );
     let content_root = PathBuf::from(&args[0]);
@@ -34,14 +37,17 @@ async fn main() -> Result<()> {
         println!("Installed the default Add-Ons {}.", done.ids().join(", "));
     }
     let state_dir = PathBuf::from(&args[2]);
-    let world_path = if args[1] == "resume" {
+    let start = args[1].to_string_lossy();
+    let world_path = if start == "resume" {
         let newest = bri_world::persistence::newest_world(&state_dir)
             .with_context(|| format!("Reading {}", state_dir.display()))?
             .with_context(|| format!("No saved world to resume in {}", state_dir.display()))?;
         println!("Resuming {}", newest.display());
-        newest
+        Some(newest)
+    } else if start.ends_with(".json") {
+        Some(PathBuf::from(&args[1]))
     } else {
-        PathBuf::from(&args[1])
+        None
     };
     // Session log and crash reports beside the server binary (or in its state).
     if let Err(error) = bri_crash::install("bri-server", &bri_crash::default_directories(&state_dir)) {
@@ -58,7 +64,26 @@ async fn main() -> Result<()> {
     } else {
         None
     };
-    let world = bri_world::persistence::load_startup(&world_path)?;
+    let world = match &world_path {
+        Some(path) => bri_world::persistence::load_startup(path)?,
+        None => dedicated::blank_world(&content_root, &start)?,
+    };
+    let config = dedicated::ServerConfig::load_or_create(&state_dir)?;
+    let map_name = world
+        .map_id
+        .rsplit('/')
+        .next()
+        .and_then(|file| file.strip_suffix(".mis"))
+        .unwrap_or(&world.map_id)
+        .to_string();
+    let mut host = dedicated::load(&content_root, world)?;
+    host.configure(&config)?;
+    println!(
+        "{}: up to {} players; settings and admin passwords in {}",
+        config.settings.name,
+        config.settings.max_players,
+        state_dir.join(dedicated::ServerConfig::FILE).display()
+    );
     let dedicated::Dedicated {
         session,
         setup,
@@ -68,7 +93,7 @@ async fn main() -> Result<()> {
         unresolved_items,
         pending_objects,
         merge_notes,
-    } = dedicated::load(&content_root, world)?;
+    } = host;
     for note in &merge_notes {
         eprintln!("{note}");
     }
@@ -90,9 +115,22 @@ async fn main() -> Result<()> {
                 &environment,
             )?)),
         },
-        64,
+        usize::from(config.settings.max_players),
         state_dir.join("administration.json"),
     )?;
+    // Connect to IP and the LAN list show the server's name and map.
+    if seconds.is_none()
+        && let Err(error) = server
+            .advertise(
+                config.settings.name.clone(),
+                map_name,
+                u32::from(config.settings.max_players),
+                content_id.clone(),
+            )
+            .await
+    {
+        eprintln!("Not listed on the LAN: {error:#}");
+    }
     std::fs::create_dir_all(&state_dir)?;
     std::fs::write(state_dir.join("server-cert.der"), &server.certificate)?;
     std::fs::write(

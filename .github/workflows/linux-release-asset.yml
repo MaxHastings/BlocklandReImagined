@@ -73,7 +73,7 @@ jobs:
           shared-key: release-linux
 
       - name: Build the game and Add-On importer
-        run: cargo build --release --locked -p bri-client --bin bri-client -p bri-addon-import --bin bri-import-addon
+        run: cargo build --release --locked -p bri-client --bin bri-client -p bri-addon-import --bin bri-import-addon -p bri-net --bin bri-server
 
       - name: Startup check against the content
         run: |
