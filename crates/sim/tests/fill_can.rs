@@ -507,8 +507,9 @@ fn the_fill_can_shows_and_paints_the_colour_last_picked() {
     );
 }
 
-/// The committed stunt plane, as the vehicle a spawn brick makes.
-const PLANE: &str = "vehicle_stunt_plane:vehicle/stuntplanevehicle";
+/// The stand-in plane (crates/vehicles/tests/fixtures), as the vehicle a
+/// spawn brick makes.
+const PLANE: &str = "test_plane:vehicle/standinplane";
 
 /// `paint_vehicle`: a vehicle its spawn brick recolours is painted through
 /// the brick, any other on its own; one undo step puts it back, and the
@@ -536,7 +537,7 @@ fn a_vehicle_is_painted_through_its_recolouring_brick_or_alone_and_undone() {
         w.next_brick_id = 3;
     });
     let pack = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../packages/imported/vehicle_stunt_plane/assets/vehicles.json");
+        .join("../vehicles/tests/fixtures/stand-in-plane/vehicles.json");
     g.s.set_vehicle_pack(bri_vehicles::Pack::load(pack).unwrap(), Vec::new())
         .unwrap();
     let admin = player(&mut g, "Admin", true);
