@@ -398,6 +398,7 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
             }
         }
     }
+    code.inherited.extend(linked.iter().map(|(own, _)| own.clone()));
     code.bodies.extend(linked);
     code.reference = cx
         .reference
