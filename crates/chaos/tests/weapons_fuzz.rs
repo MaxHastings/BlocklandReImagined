@@ -378,9 +378,7 @@ proptest! {
         let imported = import(&Options {
             input: source,
             out: out.clone(),
-            reference: None,
-            core: vec![],
-            version: "1.0.0".into(),
+            ..Default::default()
         });
         if imported.is_ok()
             && let Ok(bytes) = std::fs::read(out.join("assets/weapons.json"))
@@ -409,9 +407,7 @@ fn the_undamaged_blaster_imports_and_fires() {
     import(&Options {
         input: blaster(),
         out: out.clone(),
-        reference: None,
-        core: vec![],
-        version: "1.0.0".into(),
+        ..Default::default()
     })
     .unwrap();
     let bytes = std::fs::read(out.join("assets/weapons.json")).unwrap();

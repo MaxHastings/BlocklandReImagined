@@ -154,12 +154,23 @@ pub fn world_maps(catalog: &Catalog, maps: &[bri_ui::api::MapInfo]) -> Vec<bri_u
 }
 
 /// HUD panels and keys for `viewer`, values read from replicated state.
-/// `taken` says whether the base game already binds a letter; such keys
-/// are dropped (the base game's binds win).
-pub fn panels(catalog: &Catalog, state: &PackageStateView, viewer: OwnerId, taken: impl Fn(char) -> bool) -> (Vec<PackagePanel>, Vec<PackageKey>) {
+/// `held` is the image in the viewer's hand (`""` for none), for panels
+/// that show only while holding something. `taken` says whether the base
+/// game already binds a letter; such keys are dropped (the base game's
+/// binds win).
+pub fn panels(
+    catalog: &Catalog,
+    state: &PackageStateView,
+    viewer: OwnerId,
+    held: &str,
+    taken: impl Fn(char) -> bool,
+) -> (Vec<PackagePanel>, Vec<PackageKey>) {
     let mut panels = Vec::new();
     let mut keys = Vec::new();
     for (_, hud) in catalog.huds() {
+        if !hud.shows_holding(held) {
+            continue;
+        }
         // A panel shows the state and commands of server packages; a server
         // not running one of them (another map, the Add-On turned off) has
         // nothing for it, so the panel stays hidden. The server names every
@@ -391,7 +402,7 @@ mod tests {
         ns.players.insert(4, [("bits".to_string(), serde_json::json!(125)), ("copper".to_string(), serde_json::json!(3))].into());
         ns.players.insert(5, [("bits".to_string(), serde_json::json!(9))].into());
         state.packages.entry("stresslab-creeper".into()).or_default();
-        let (panels, keys) = panels(&catalog, &state, 4, |c| c == 'g');
+        let (panels, keys) = panels(&catalog, &state, 4, "", |c| c == 'g');
         assert_eq!(panels.len(), 1);
         let p = &panels[0];
         assert_eq!(p.title, "STRESS LAB MINER");
@@ -407,7 +418,7 @@ mod tests {
     fn miner_panel_hides_where_the_server_does_not_run_its_packages() {
         let catalog = catalog();
         // Slate with the base game: the server runs no package at all.
-        let (panels, keys) = panels(&catalog, &PackageStateView::default(), 4, |_| false);
+        let (panels, keys) = panels(&catalog, &PackageStateView::default(), 4, "", |_| false);
         assert!(panels.is_empty() && keys.is_empty());
         // The economy runs but the creeper Add-On (the J key) is off.
         let mut state = PackageStateView::default();
@@ -417,7 +428,7 @@ mod tests {
         assert_eq!(panels_of(&catalog, &state).len(), 1);
     }
     fn panels_of(catalog: &Catalog, state: &PackageStateView) -> Vec<PackagePanel> {
-        panels(catalog, state, 4, |_| false).0
+        panels(catalog, state, 4, "", |_| false).0
     }
 
     #[test]

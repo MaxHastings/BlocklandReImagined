@@ -28,6 +28,13 @@ fn cmd_ray(p, x, y, z, dx, dy, dz, ignore) {
               else { raycast([x, y, z], [dx, dy, dz], 50.0) };
     note("hit", if hit == () { "none" } else { `${hit.kind}:${hit.id}` });
     note("distance", if hit == () { -1.0 } else { hit.distance });
+    note("region", if hit == () || hit.region == () { "" } else { hit.region });
+}
+fn cmd_region(p, other, y) {
+    let at = player(other);
+    let region = if at == () { hit_region(other, 0.0, y, 0.0) }
+                 else { hit_region(other, at.x, at.y + y, at.z) };
+    note("region", if region == () { "none" } else { region });
 }
 fn cmd_many_rays(p) {
     for i in 0..65 { raycast([0.0, 5.0, 0.0], [0.0, -1.0, 0.0], 10.0); }
@@ -86,6 +93,7 @@ fn behaviour() -> Value {
             command("reload", &[]),
             command("lamp", &["float", "float", "bool"]),
             command("lamp_reset", &["float", "float"]),
+            command("region", &["int", "float"]),
             command("env_set", &[]),
             command("env_read", &[]),
             command("env_unset", &[]),
@@ -95,6 +103,7 @@ fn behaviour() -> Value {
         "state": { "global": {
             "hit": { "default": "", "visible": "everyone" },
             "distance": { "default": 0.0, "visible": "everyone" },
+            "region": { "default": "", "visible": "everyone" },
             "can": { "default": "", "visible": "everyone" },
             "facts": { "default": "", "visible": "everyone" },
             "center": { "default": 0.0, "visible": "everyone" },
@@ -258,15 +267,38 @@ fn raycast_answers_during_the_call_and_passes_through_the_ignored_player() {
     assert_eq!(g.text("hit"), format!("player:{b}"));
     let distance = g.value("distance").as_f64().unwrap();
     assert!((8.0..10.0).contains(&distance), "{distance}");
+    // A player hit says where: 1.3 up a 2.65 tall blockhead is the legs.
+    assert_eq!(g.text("region"), "legs");
+    g.run(a, "ray", ray([0.0, 2.5, 0.0], [0.0, 0.0, 1.0], true));
+    assert_eq!(g.text("region"), "head");
     // Without `ignore`, the ray starts inside the caster's own body.
     g.run(a, "ray", ray([0.0, 1.3, 0.0], [0.0, 0.0, 1.0], false));
     assert_eq!(g.text("hit"), format!("player:{a}"));
     // Down onto the map, and up into nothing.
     g.run(a, "ray", ray([30.0, 5.0, 30.0], [0.0, -2.0, 0.0], true));
     assert_eq!(g.text("hit"), "map:");
+    assert_eq!(g.text("region"), "");
     assert!((g.value("distance").as_f64().unwrap() - 5.0).abs() < 0.01);
     g.run(a, "ray", ray([30.0, 5.0, 30.0], [0.0, 1.0, 0.0], true));
     assert_eq!(g.text("hit"), "none");
+    assert!(g.diagnostics().is_empty(), "{:?}", g.diagnostics());
+}
+
+/// `hit_region` names the part of a player's body at a height, by the
+/// bands of Torque's `getDamageLocation`: the top 15% head, the next 30%
+/// torso, the rest legs; () for someone who is not a living player.
+#[test]
+fn hit_region_names_the_part_of_the_body_at_a_point() {
+    let mut g = Game::new();
+    let a = g.join(Vec3::new(0.0, 0.05, 0.0));
+    let b = g.join(Vec3::new(0.0, 0.05, 10.0));
+    g.steps(2);
+    for (y, region) in [(0.4, "legs"), (1.6, "torso"), (2.4, "head")] {
+        g.run(a, "region", vec![PackageArg::Int(b as i64), PackageArg::Float(y)]);
+        assert_eq!(g.text("region"), region, "{y}");
+    }
+    g.run(a, "region", vec![PackageArg::Int(999), PackageArg::Float(1.0)]);
+    assert_eq!(g.text("region"), "none");
     assert!(g.diagnostics().is_empty(), "{:?}", g.diagnostics());
 }
 

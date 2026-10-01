@@ -125,6 +125,12 @@ pub trait World {
     /// Whether a voxel could be placed at voxel coordinates `position`
     /// now: inside the world, its chunk generated, and nothing in the way.
     fn can_place_voxel(&self, position: [i64; 3]) -> bool;
+    /// Which part of player `player` a hit at `point` strikes
+    /// (`getDamageLocation`): `"head"`, `"torso"` or `"legs"`, or `None`
+    /// for no living player.
+    fn hit_region(&self, _player: u64, _point: [f32; 3]) -> Option<&'static str> {
+        None
+    }
 }
 /// What a ray met.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -140,6 +146,9 @@ pub struct RayHit {
     pub position: [f32; 3],
     pub normal: [f32; 3],
     pub distance: f32,
+    /// The part of a player the ray struck (`"head"`, `"torso"` or
+    /// `"legs"`), `None` for anything else.
+    pub region: Option<&'static str>,
 }
 /// A loose physics body or other movable thing, as scripts see it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -716,7 +725,7 @@ fn ray_map(hit: &RayHit) -> Dynamic {
         RayTarget::Brick(b) => ("brick", Dynamic::from_int(b as i64), Dynamic::UNIT),
         RayTarget::Map => ("map", Dynamic::UNIT, Dynamic::UNIT),
     };
-    map([
+    let mut entries = vec![
         ("kind", kind.into()),
         ("id", id),
         ("ref", reference),
@@ -727,7 +736,11 @@ fn ray_map(hit: &RayHit) -> Dynamic {
         float_entry("ny", hit.normal[1]),
         float_entry("nz", hit.normal[2]),
         float_entry("distance", hit.distance),
-    ])
+    ];
+    if let Some(region) = hit.region {
+        entries.push(("region", region.into()));
+    }
+    map(entries)
 }
 fn credit(value: &Dynamic) -> Fallible<Option<u64>> {
     if value.is_unit() {
@@ -1340,6 +1353,20 @@ fn register_queries(engine: &mut Engine) {
     engine.register_fn("can_place_voxel", |x: i64, y: i64, z: i64| {
         with_world(|world, _| Ok(world.can_place_voxel([x, y, z])))
     });
+    // The part of a player a hit at a point strikes, "head", "torso" or
+    // "legs" (`getDamageLocation`), or () for no living player.
+    engine.register_fn(
+        "hit_region",
+        |player: Dynamic, x: Dynamic, y: Dynamic, z: Dynamic| {
+            let player = id(&player)?;
+            let point = [float(&x)?, float(&y)?, float(&z)?];
+            with_world(|world, _| {
+                Ok(world
+                    .hit_region(player, point)
+                    .map_or(Dynamic::UNIT, Dynamic::from))
+            })
+        },
+    );
     // The box a brick fills, #{ min: [x, y, z], max: [x, y, z] } in world
     // units, or () when there is no such brick.
     engine.register_fn("brick_box", |brick: Dynamic| {

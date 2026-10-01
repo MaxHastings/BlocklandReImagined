@@ -676,3 +676,37 @@ fn held_ropes_lay_their_trail_along_the_rope() -> Result<()> {
     assert_eq!(fx.world().source_count(), 0);
     Ok(())
 }
+
+#[test]
+fn a_trail_carried_through_a_portal_does_not_streak_between_the_two() -> Result<()> {
+    use bri_content::passage::{Passage, Passages};
+    // In through x = 0.5 going +x, out twenty units on.
+    let passages = Passages {
+        list: vec![Passage {
+            brick: 1,
+            centre: Vec3::new(0.5, 0.0, 0.0),
+            normal: Vec3::NEG_X,
+            u: Vec3::Z,
+            v: Vec3::Y,
+            half: glam::Vec2::new(1.0, 1.5),
+            carry: glam::Affine3A::from_translation(Vec3::X * 20.0),
+        }],
+        closed: vec![],
+    };
+    let mut fx = WeaponEffects::new(fixture(false), weapons(), EffectsLimits::default())?;
+    fx.set_passages(&passages);
+    let mut v = view();
+    fx.sync(&v)?;
+    fx.advance(0.05, Vec3::ZERO, pose)?;
+    v.projectiles[0].position = Vec3::X * 21.0;
+    fx.sync(&v)?;
+    fx.advance(0.05, Vec3::ZERO, pose)?;
+    let particles = fx.world().snapshot(&camera()).particles;
+    assert!(particles.iter().any(|p| p.position.x < 0.5));
+    assert!(particles.iter().any(|p| p.position.x > 20.5));
+    assert!(
+        particles.iter().all(|p| p.position.x < 1.0 || p.position.x > 20.0),
+        "streaked between the portals"
+    );
+    Ok(())
+}
