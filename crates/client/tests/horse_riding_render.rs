@@ -19,7 +19,7 @@ use std::{
 
 #[macro_use]
 mod support;
-use support::content_root::ContentRoot;
+use support::{content_root::ContentRoot, wait};
 
 synthetic_and_content!(ContentRoot: riding_a_horse_holds_the_rider_still_on_its_animated_back);
 
@@ -97,16 +97,9 @@ fn until(app: &mut App, what: &str, ready: impl Fn(&App) -> bool) -> Result<()> 
         thread::sleep(Duration::from_millis(10));
     }
 }
+/// Let `seconds` of game time pass ([`wait::run_one_for`]).
 fn run_for(app: &mut App, seconds: f32) -> Result<()> {
-    let start = Instant::now();
-    let mut previous = start;
-    while start.elapsed().as_secs_f32() < seconds {
-        thread::sleep(Duration::from_millis(10));
-        let now = Instant::now();
-        step(app, now.duration_since(previous))?;
-        previous = now;
-    }
-    Ok(())
+    wait::run_one_for(app, Duration::from_secs_f32(seconds), step)
 }
 fn capture(app: &mut App, gpu: &Headless, renderer: &mut UiRenderer) -> Result<Vec<u8>> {
     capture_hud(app, gpu, renderer, false)

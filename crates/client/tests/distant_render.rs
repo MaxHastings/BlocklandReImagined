@@ -30,7 +30,7 @@ use std::{
 
 #[macro_use]
 mod support;
-use support::content_root::ContentRoot;
+use support::{content_root::ContentRoot, wait};
 
 synthetic_and_content!(ContentRoot: distant_mirrors_and_riders_draw_cleanly);
 
@@ -83,7 +83,8 @@ fn until(app: &mut App, what: &str, ready: impl Fn(&App) -> bool) -> Result<()> 
             app.ui.core.conn,
             app.ui.stack(),
             app.controls.observer(),
-            app.network_view().and_then(|v| v.vitals.get(&v.owner).cloned()),
+            app.network_view()
+                .and_then(|v| v.vitals.get(&v.owner).cloned()),
         );
         ensure!(
             now.duration_since(last_progress) < STALL,
@@ -251,25 +252,34 @@ fn red(pixel: &[u8]) -> bool {
     r > 80 && r > 2 * g && r > 2 * b
 }
 
-/// Run and jump at the jeep until the player boards it.
-fn board(app: &mut App) -> Result<bool> {
-    let seated = |a: &App| {
+/// Run and jump at the jeep until the player boards it, in game time, and
+/// fail unless they then sit on it, alive, as the shots expect. Returns the
+/// seat.
+fn board(app: &mut App) -> Result<u8> {
+    let jeep = app
+        .network_view()
+        .and_then(|v| v.vehicles.keys().next().copied())
+        .context("no jeep")?;
+    // The jeep and seat the player rides, while alive.
+    let riding = |a: &App| {
         a.network_view()
-            .and_then(|v| v.vitals.get(&v.owner).and_then(|v| v.mounted))
-            .is_some()
+            .and_then(|v| v.vitals.get(&v.owner))
+            .filter(|v| v.alive)
+            .and_then(|v| v.mounted)
+            .filter(|(vehicle, _)| *vehicle == jeep)
+            .map(|(_, seat)| seat)
     };
     let held = |app: &mut App, control: HeldControl, down: bool| {
         request(app, GameAction::Held { control, down })
     };
     for attempt in 0..160 {
-        if seated(app) {
+        if riding(app).is_some() {
             break;
         }
         let view = app.network_view().context("view")?;
         let Some(target) = view
             .vehicle_poses
-            .values()
-            .next()
+            .get(&jeep)
             .map(|p| Vec3::from(p.position))
         else {
             run_for(app, 0.25)?;
@@ -294,19 +304,22 @@ fn board(app: &mut App) -> Result<bool> {
     }
     held(app, HeldControl::Forward, false)?;
     held(app, HeldControl::Jump, false)?;
+    let vitals = |a: &App| {
+        a.network_view()
+            .and_then(|v| v.vitals.get(&v.owner).cloned())
+    };
+    let seat = riding(app).with_context(|| format!("never boarded the jeep: {:?}", vitals(app)))?;
     run_for(app, 1.0)?;
-    Ok(seated(app))
+    ensure!(
+        riding(app) == Some(seat),
+        "left seat {seat} of the jeep once boarded: {:?}",
+        vitals(app)
+    );
+    Ok(seat)
 }
+/// Let `seconds` of game time pass ([`wait::run_one_for`]).
 fn run_for(app: &mut App, seconds: f32) -> Result<()> {
-    let start = Instant::now();
-    let mut previous = start;
-    while start.elapsed().as_secs_f32() < seconds {
-        thread::sleep(Duration::from_millis(8));
-        let now = Instant::now();
-        step(app, now.duration_since(previous))?;
-        previous = now;
-    }
-    Ok(())
+    wait::run_one_for(app, Duration::from_secs_f32(seconds), step)
 }
 /// Grey enough and mid-bright enough to be a mirror's silver.
 fn grey(pixel: &[u8]) -> bool {
@@ -490,7 +503,7 @@ fn probe(f: &ContentRoot, artifact: &Path) -> Result<Vec<String>> {
             a.network_view().is_some_and(|v| !v.vehicles.is_empty())
         })?;
         let rider = board(&mut app)?;
-        let mut notes = vec![format!("rider seated: {rider}")];
+        let mut notes = vec![format!("rider in seat {rider}")];
         let gpu = support::gpu::turn().context("offscreen distant renderer")?;
         let mut renderer = UiRenderer::new(&gpu.device, &gpu.queue);
         app.gpu_ready(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm)?;
@@ -564,7 +577,6 @@ fn probe(f: &ContentRoot, artifact: &Path) -> Result<Vec<String>> {
             failures.is_empty(),
             "frames fight through the glass: {failures:?}"
         );
-        ensure!(rider, "the player never boarded the jeep");
         Ok(notes)
     })();
     drop(scratch_dir);

@@ -83,14 +83,6 @@ fn step(app: &mut App, dt: Duration) -> Result<()> {
     ensure!(app.pump()?.is_empty(), "Unexpected window command");
     Ok(())
 }
-/// The newest server tick every app has seen; None until all are in game.
-fn seen_tick(apps: &[&mut App]) -> Option<u64> {
-    apps.iter()
-        .map(|a| a.network_view().map(|v| v.tick))
-        .collect::<Option<Vec<_>>>()?
-        .into_iter()
-        .min()
-}
 /// Server ticks in `seconds` of game time (120 a second).
 fn ticks(seconds: f32) -> u64 {
     (f64::from(seconds) * 120.0).ceil() as u64
@@ -103,26 +95,17 @@ fn until(
     secs: u64,
     ready: impl FnMut(&mut [&mut App]) -> Result<bool>,
 ) -> Result<()> {
-    wait::until(
-        apps,
-        what,
-        Duration::from_secs(secs),
-        |apps, elapsed| {
-            for app in apps.iter_mut() {
-                step(app, elapsed)?;
-            }
-            Ok(())
-        },
-        ready,
-    )
+    wait::until(apps, what, Duration::from_secs(secs), step_all, ready)
 }
-/// Let `seconds` of game time pass: server ticks every app has seen.
+/// Let `seconds` of game time pass ([`wait::run_for`]).
 fn run_for(apps: &mut [&mut App], seconds: f32) -> Result<()> {
-    let start = seen_tick(apps).context("waiting in game time out of game")?;
-    let end = start + ticks(seconds);
-    until(apps, "time", seconds.ceil() as u64 + 5, |a| {
-        Ok(seen_tick(a).is_some_and(|t| t >= end))
-    })
+    wait::run_for(apps, Duration::from_secs_f32(seconds), step_all)
+}
+fn step_all(apps: &mut [&mut App], elapsed: Duration) -> Result<()> {
+    for app in apps.iter_mut() {
+        step(app, elapsed)?;
+    }
+    Ok(())
 }
 fn in_game(app: &App) -> bool {
     matches!(app.ui.core.conn, ConnectionState::InGame { .. })
@@ -600,7 +583,7 @@ fn hold_moves(
     ready: impl Fn(&Poses) -> bool,
 ) -> Result<()> {
     let apps = [app];
-    let first = seen_tick(&apps).context("held out of game")?;
+    let first = wait::seen_tick(&apps).context("held out of game")?;
     let start = Instant::now();
     let budget = Duration::from_secs(10);
     loop {
@@ -609,7 +592,7 @@ fn hold_moves(
         if ready(poses) {
             return Ok(());
         }
-        let tick = seen_tick(&apps).context("left the game")?;
+        let tick = wait::seen_tick(&apps).context("left the game")?;
         ensure!(
             tick - first < ticks(budget.as_secs_f32()),
             "Timed out waiting for {what}"
