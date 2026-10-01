@@ -22,17 +22,15 @@ fn showcase() -> PathBuf {
 
 fn session() -> bri_sim::session::Session {
     let mut session = common::session();
-    let load = |dir: &str| {
-        let path = showcase().join(dir).join("assets/weapons.json");
-        bri_weapons::Pack::from_json(&std::fs::read(path).unwrap()).unwrap()
-    };
-    let (weapons, _) =
-        load("gravity-gun-tool").merge(vec![("steel-ball-kit".into(), load("steel-ball-kit"))]);
-    session.set_weapon_pack(weapons).unwrap();
+    let path = showcase().join("gravity-gun-tool/assets/weapons.json");
+    session
+        .set_weapon_pack(bri_weapons::Pack::from_json(&std::fs::read(path).unwrap()).unwrap())
+        .unwrap();
     session
         .set_vehicle_pack(
             bri_vehicles::Pack::load(showcase().join("steel-ball-kit/assets/vehicles.json"))
                 .unwrap(),
+            Vec::new(),
         )
         .unwrap();
     let packages = [

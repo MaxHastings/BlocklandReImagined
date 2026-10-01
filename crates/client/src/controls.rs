@@ -455,10 +455,13 @@ impl Controls {
     pub fn follow(&mut self, control: ControlObject, owner: OwnerId, eye: Option<glam::Vec3>) {
         let mode = match control {
             ControlObject::Player => {
-                self.observer = None;
-                // Fire held on the camera was never passed to the body, so
-                // its release may not reach here either.
-                self.held.remove(&HeldControl::Fire);
+                // Back from a camera: fire held on the camera was never
+                // passed to the body, so its release may not reach here
+                // either. This runs every frame, so only on that change:
+                // on foot, the trigger held stays held.
+                if self.observer.take().is_some() {
+                    self.held.remove(&HeldControl::Fire);
+                }
                 return;
             }
             ControlObject::Camera => match self.observer {

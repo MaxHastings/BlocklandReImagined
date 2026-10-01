@@ -257,6 +257,7 @@ def main():
                   'energy_per_volume': 600.0, 'wreck_speed': 26.0},
         'shove': True,
         'harms_only_in_minigames': True,
+        'per_player': 3,
         'authored': {'category': 'Vehicles', 'uiname': 'Steel Ball'},
         'adaptations': [],
     }

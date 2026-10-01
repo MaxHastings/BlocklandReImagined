@@ -29,6 +29,8 @@ pub struct Replica {
     pub targets: Vec<bri_sim::tutorial::TargetView>,
     /// Add-On map light rules, oldest first.
     pub map_lights: Vec<bri_sim::session::MapLightRule>,
+    /// The live environment over the map's own.
+    pub environment: bri_content::atmosphere::Settings,
     /// The host's player archetypes; poses name them by index.
     pub archetypes: std::sync::Arc<bri_sim::archetype::Archetypes>,
     pub entities: BTreeMap<u64, bri_sim::session::EntityInfo>,
@@ -179,6 +181,7 @@ impl Replica {
         validate_broken_shapes(&checkpoint.broken_shapes)?;
         validate_targets(&checkpoint.targets)?;
         validate_map_lights(&checkpoint.map_lights)?;
+        checkpoint.environment.validate()?;
         validate_entities(&checkpoint.entities)?;
         checkpoint.package_state.validate()?;
         for pose in &checkpoint.vehicle_poses {
@@ -217,6 +220,7 @@ impl Replica {
             broken_shapes: checkpoint.broken_shapes,
             targets: checkpoint.targets,
             map_lights: checkpoint.map_lights,
+            environment: checkpoint.environment,
             archetypes: checkpoint.archetypes.into(),
             entities: checkpoint.entities.into_iter().map(|e| (e.id, e)).collect(),
             package_state: checkpoint.package_state,
@@ -310,6 +314,9 @@ impl Replica {
         if let Some(rules) = &delta.map_lights {
             validate_map_lights(rules)?;
         }
+        if let Some(environment) = &delta.environment {
+            environment.validate()?;
+        }
         let entities = match &delta.entities {
             Some(changes) => {
                 let mut entities = self.entities.clone();
@@ -378,6 +385,9 @@ impl Replica {
         }
         if let Some(rules) = delta.map_lights {
             self.map_lights = rules;
+        }
+        if let Some(environment) = delta.environment {
+            self.environment = environment;
         }
         if let Some(entities) = entities {
             self.entities = entities;

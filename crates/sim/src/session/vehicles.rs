@@ -312,8 +312,15 @@ pub(super) fn combat_input_burst() -> f32 {
     48.0
 }
 impl Session {
-    /// Install native vehicle definitions before clients connect.
-    pub fn set_vehicle_pack(&mut self, pack: veh::Pack) -> Result<()> {
+    /// Install what vehicle spawn bricks spawn, before clients connect: the
+    /// vehicle definitions and the bot kinds the enabled Add-Ons provide.
+    /// They come together so no host can offer a spawn list without the
+    /// bots in it.
+    pub fn set_vehicle_pack(
+        &mut self,
+        pack: veh::Pack,
+        bots: Vec<crate::bot_kind::BotKind>,
+    ) -> Result<()> {
         ensure!(
             self.peers.is_empty() && self.departed.is_empty(),
             "Cannot replace live vehicle definitions"
@@ -322,6 +329,7 @@ impl Session {
             world: Some(veh::VehiclesWorld::new(pack)?),
             ..Default::default()
         };
+        self.set_bot_kinds(bots)?;
         self.refresh_event_bindings()
     }
     /// Vehicles a spawn brick may hold (the wrench's Vehicle list).
@@ -593,6 +601,21 @@ impl Session {
                 format!("\u{E000}Server is limited to 1 {noun}")
             } else {
                 format!("\u{E000}Server is limited to {limit} {noun}s")
+            });
+        }
+        // The vehicle's own cap per player (`Definition::per_player`).
+        if let Some(cap) = def.per_player
+            && same_kind
+                .iter()
+                .filter(|v| v.owner == veh::OwnerId(owner) && v.definition == def.id)
+                .count()
+                >= cap as usize
+        {
+            let name = def.name.trim();
+            return Err(if cap == 1 {
+                format!("\u{E000}You already have a {name}")
+            } else {
+                format!("\u{E000}You already have {cap} {name}s")
             });
         }
         Ok(())

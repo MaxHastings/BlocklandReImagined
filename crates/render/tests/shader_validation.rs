@@ -4,7 +4,16 @@ use wgpu::naga;
 
 #[test]
 fn scene_shader_validates() {
-    let src = bri_render::color::shader_source(include_str!("../src/scene.wgsl"));
+    validate(include_str!("../src/scene.wgsl"));
+}
+
+#[test]
+fn vignette_shader_validates() {
+    validate(include_str!("../src/vignette.wgsl"));
+}
+
+fn validate(own: &str) {
+    let src = bri_render::color::shader_source(own);
     let module =
         naga::front::wgsl::parse_str(&src).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&src)));
     naga::valid::Validator::new(

@@ -164,6 +164,7 @@ fn image(name: &str, states: Vec<State>) -> (String, Image) {
             zoom: None,
             crosshair: true,
             follow_arm: false,
+            paint_tint: false,
         },
     )
 }
