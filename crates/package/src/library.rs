@@ -79,6 +79,10 @@ pub struct PackageInfo {
     pub capabilities: Vec<String>,
     #[serde(default)]
     pub provides: Vec<Provided>,
+    /// Add-Ons turned on with this one, after it (an import's host rules).
+    /// They depend on it, so turning it off turns them off too.
+    #[serde(default)]
+    pub companions: Vec<String>,
     /// Client code (`client.module`), which runs on each player's screen;
     /// [`CodeOwner`] says who decides whether it runs.
     #[serde(default)]
@@ -455,7 +459,8 @@ impl Library {
         }
         let mut dir = format!("{IMPORT_DIR}/{stem}");
         let mut n = 2;
-        while self.root.join(&dir).exists() {
+        // A port's host rules go beside the import, in `<dir>-rules`.
+        while self.root.join(&dir).exists() || self.root.join(format!("{dir}-rules")).exists() {
             dir = format!("{IMPORT_DIR}/{stem}-{n}");
             n += 1;
         }
@@ -522,6 +527,22 @@ impl Library {
         let mut order = Vec::new();
         let mut visiting = BTreeSet::new();
         self.collect(id, &mut order, &mut visiting, &mut plan.refused);
+        // Then the companions of everything turning on, after it. One the
+        // player deleted is skipped: the Add-On still works without it.
+        let mut i = 0;
+        while i < order.len() {
+            let companions: Vec<String> = self
+                .get(&order[i])
+                .and_then(|e| e.info.as_ref())
+                .map(|info| info.companions.clone())
+                .unwrap_or_default();
+            for companion in companions {
+                if self.get(&companion).is_some() {
+                    self.collect(&companion, &mut order, &mut visiting, &mut plan.refused);
+                }
+            }
+            i += 1;
+        }
         let turning_on: Vec<&LibraryEntry> = order
             .iter()
             .filter_map(|i| self.get(i))
@@ -647,13 +668,25 @@ impl Library {
             .map(|e| e.package.clone())
             .collect();
         if plan.enable {
-            // Dependencies first, then the package, after everything already on.
-            for id in plan.also.iter().chain([&plan.id]) {
-                if let Some(e) = self.get(id)
-                    && !e.enabled
-                {
-                    on.push(e.package.clone());
-                }
+            // After everything already on, each package after the ones it
+            // depends on: dependencies, the package, then its companions.
+            let mut waiting: Vec<&LibraryEntry> = plan
+                .also
+                .iter()
+                .chain([&plan.id])
+                .filter_map(|id| self.get(id))
+                .filter(|e| !e.enabled)
+                .collect();
+            while !waiting.is_empty() {
+                let ready = waiting
+                    .iter()
+                    .position(|e| {
+                        !e.dependencies()
+                            .any(|(dep, _)| waiting.iter().any(|w| w.id() == dep))
+                    })
+                    // A cycle: keep the plan's order.
+                    .unwrap_or(0);
+                on.push(waiting.remove(ready).package.clone());
             }
         }
         let on_ids: BTreeSet<&str> = on.iter().map(|p| p.id.as_str()).collect();

@@ -8573,3 +8573,39 @@ Tests: `add_on_join::bot_kinds_come_from_the_blockhead_bot_add_on_the_host_runs`
 `add_on_join::a_host_with_the_blockhead_bot_on_spawns_bots_and_one_without_offers_none`
 (generated content: hosts with the Add-On on and off, loads a saved spawn
 brick, counts players). Not run here: the second needs generated content.
+
+## 2026-10-01 Main's Windows CI green again (branch `claude/fill-can-6wzkym`)
+
+Every main CI run since about run 180 failed three content-free targets.
+
+- `bri-sim/vehicle_prediction` loaded the generated v20 vehicle pack, which
+  the runner cannot have ("The system cannot find the path specified"). It
+  now drives the test's own vehicles, `crates/sim/tests/fixtures/
+  prediction-vehicles.json`: a flying wheeled car, skis and a horse, one of
+  each kind a client predicts, with authored numbers (no v20 data). All 5
+  tests run and pass; the car still has to lead the delayed host poses and
+  the horse still has to run.
+- `bri-render/mirrors` (4 of 5 failing) and `bri-render/persistent_scene`
+  (8 of 14) failed with "The requested Wait timed out". Cause, from run
+  36791558978's timestamps: the runner has no GPU, and each test built its
+  own device and drew at the same time as three others on the software
+  adapter. Failures came in bursts about 40 s into each binary, the tests
+  that passed were the ones that ran after the others had failed, and
+  which tests failed changed between attempts. A frame alone is fast (on
+  lavapipe here a mirror frame's GPU work is about 30 ms; building the
+  renderer's 12 pipelines is about 3.3 s of CPU). The tests now share one
+  device per binary and take turns on it, so each frame has the whole
+  machine. No test is skipped or ignored and the 30 s waits are unchanged.
+  Locally: mirrors 5 passed, persistent_scene 12 passed, 2 ignored (as
+  before, for local packs).
+
+## 2026-10-01 Fill Can: originals only
+
+Max chose "originals only" for every classic Add-On. Our remade Fill Can is
+no longer bundled: its packages, generated icon and icon script are gone
+and it is off the default Add-On list. The engine seams stay (`paint_fill`,
+`Simulation::touching_region`, `grid::share_face`, image `paint_tint`) and
+are still tested through a small fill tool of the test's own in
+`crates/sim/tests/fixtures/fill-can`. Loading the player's own original
+Fill Can from their Blockland Add-Ons folder follows on the shared classic
+Add-On loader.
