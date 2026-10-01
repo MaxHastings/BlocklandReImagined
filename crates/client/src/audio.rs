@@ -355,8 +355,18 @@ impl ClientAudio {
     pub fn set_pack_sounds(&mut self, pack: &bri_weapons::Pack, root: &Path) {
         self.pack_sounds.clear();
         for (profile, def) in &pack.sounds {
+            let (near, far) = PACK_SOUND_RANGE;
+            // The game's own file, played from the bank's copy.
+            let stock = def.stock.then(|| {
+                self.runtime
+                    .bank()
+                    .clip_at(&def.file)
+                    .map(|clip| SoundAsset::world(profile, clip.clone(), near, far))
+                    .ok_or_else(|| format!("the game has no sound {}", def.file))
+            });
             let dir = bri_weapons::sound_root(root, def);
-            let loaded = bri_package::path::inside(&dir, &def.file).and_then(|path| {
+            let loaded = stock.unwrap_or_else(|| {
+                bri_package::path::inside(&dir, &def.file).and_then(|path| {
                     use std::io::Read;
                     let mut bytes = Vec::new();
                     std::fs::File::open(&path)
@@ -369,9 +379,9 @@ impl ClientAudio {
                         .extension()
                         .and_then(|e| e.to_str())
                         .unwrap_or_default();
-                    let (near, far) = PACK_SOUND_RANGE;
                     SoundAsset::decoded(profile, &bytes, extension, near, far)
-                });
+                })
+            });
             match loaded {
                 Ok(mut asset) => {
                     asset.playback.looping = def.looping;
@@ -640,6 +650,66 @@ mod tests {
         assert_eq!(breaks(&audio), Some(3));
         assert!(audio.set_volume("master", f32::NAN).is_err());
         assert!(audio.set_volume("unknown", 0.5).is_err());
+        Ok(())
+    }
+
+    /// An Add-On's `AudioProfile` naming a file of the game itself (the HE
+    /// Grenade's explosion is `base/data/sound/vehicleExplosion.wav`) plays
+    /// the bank's copy of that file, at the Add-On's volume.
+    #[test]
+    fn an_add_on_sound_naming_the_games_own_file_plays_the_banks_copy() -> Result<()> {
+        let fx = Pack::synthetic()?;
+        let mut audio = ClientAudio::load(&fx.root, &mut Settings::default(), OutputKind::Offline)?;
+        let mut pack: bri_weapons::Pack =
+            serde_json::from_str(r#"{ "schema_version": 1, "id": "addon" }"#)?;
+        let def = |file: &str| bri_weapons::SoundDef {
+            file: file.into(),
+            volume: 0.5,
+            looping: false,
+            local: false,
+            package: None,
+            stock: true,
+        };
+        let boom = "addon:sound/boomsound";
+        pack.sounds.insert(
+            boom.into(),
+            def(&crate::testing::audio::TONE_PATH.to_ascii_uppercase()),
+        );
+        pack.sounds.insert(
+            "addon:sound/gone".into(),
+            def("base/data/sound/missing.wav"),
+        );
+        audio.set_pack_sounds(&pack, &fx.root);
+        let (asset, volume) = &audio.pack_sounds[boom];
+        assert_eq!(*volume, 0.5);
+        assert_eq!(
+            asset.data.sample_rate(),
+            audio
+                .runtime
+                .bank()
+                .resolve(crate::testing::audio::NOTE)?
+                .data
+                .sample_rate()
+        );
+        assert!(asset.playback.spatial.is_some(), "heard where it goes off");
+        // A file the game does not have is a warning; its sound is silent.
+        assert!(!audio.pack_sounds.contains_key("addon:sound/gone"));
+        assert!(
+            audio.warnings.iter().any(|w| w.contains("missing.wav")),
+            "{:?}",
+            audio.warnings
+        );
+        let position = [1000., 1., 0.];
+        audio.profile(boom, Placement::World(position));
+        audio.tick(
+            0.2,
+            Listener {
+                position,
+                ..Default::default()
+            },
+        );
+        assert_eq!(audio.stats().started, 1);
+        assert!(audio.take_capture().iter().any(|v| v.abs() > 0.00001));
         Ok(())
     }
 }

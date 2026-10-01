@@ -154,6 +154,29 @@ impl Axes {
 
 impl Mesh {
     pub fn from_scene(scene: &SceneData) -> Self {
+        let mut mesh = Self::from_scene_tinted(scene);
+        // An untinted texture is not multiplied by the model's colour
+        // (`bri_render::scene::Material::untinted`).
+        for batch in &scene.batches {
+            if scene
+                .materials
+                .get(batch.material)
+                .is_some_and(|m| m.untinted)
+            {
+                for &i in scene
+                    .indices
+                    .get(batch.indices.start as usize..batch.indices.end as usize)
+                    .unwrap_or(&[])
+                {
+                    if let Some(c) = mesh.colors.get_mut(i as usize) {
+                        *c = Vec3::ONE;
+                    }
+                }
+            }
+        }
+        mesh
+    }
+    fn from_scene_tinted(scene: &SceneData) -> Self {
         let mut triangle_images = vec![None; scene.indices.len() / 3];
         for batch in &scene.batches {
             let image = scene.materials.get(batch.material).map(|m| {

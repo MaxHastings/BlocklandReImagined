@@ -51,6 +51,10 @@ Add-On" finding for an `explosionShape` now says what happens at runtime.
 No guess maps the space to an underscore: v20 does not, and the fix would
 then differ from the original.
 
+Correction (2026-10-01, later): the v20 exe shows the original drew the
+rocket's sphere for a shape it could not load, so such an explosion now does
+too; see [2026-10-01-he-grenade-look-and-sound.md](2026-10-01-he-grenade-look-and-sound.md).
+
 ## Guard tests (fail on d6152ab58)
 
 - `bri_net::content_identity::tests::items_sharing_a_display_name_all_load_and_saves_bind_the_first_loaded`

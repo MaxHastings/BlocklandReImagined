@@ -1040,6 +1040,8 @@ fn slot_size(slot:u32)->vec2<f32> {
     // Opaque Torque model materials ignore texture alpha (no blend, no test).
     if (flags&2u)!=0u {alpha=v.color.a;}
     var pigment=display_color(albedo.rgb)*base_color;
+    // A model texture with no translucent texel: texture times light alone.
+    if (flags&4u)!=0u {pigment=display_color(albedo.rgb);}
     let decal=overlay;
     if decal {
         // v20 fxBrickBatcher uses GL_DECAL (0x52d120): lit paint first, then
