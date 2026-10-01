@@ -423,15 +423,32 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
         .filter(|d| d.class.eq_ignore_ascii_case("PlayerData"))
         .map(|d| d.name.clone())
         .collect();
-    // This Add-On's sounds of a base game file: the base sound by name.
-    code.sounds = cx
+    // Sounds of a base game file, this Add-On's and those of the Add-Ons it
+    // builds on (Tier 1's clicks, which Explosive 2's reloads play): the
+    // base sound by name.
+    let own = cx
         .owned
         .values()
-        .filter(|o| o.d.class.eq_ignore_ascii_case("AudioProfile"))
-        .filter_map(|o| {
-            let file = source::resolve(&o.path, literal(o.fields.get("filename")?));
+        .map(|o| (&o.d, o.fields.get("filename"), o.path.as_str()));
+    let others = cx
+        .reference
+        .datablocks
+        .values()
+        .filter(|o| o.addon != "base")
+        .map(|o| {
+            (
+                &o.datablock,
+                o.datablock.fields.get("filename"),
+                o.path.as_str(),
+            )
+        });
+    code.sounds = others
+        .chain(own)
+        .filter(|(d, ..)| d.class.eq_ignore_ascii_case("AudioProfile"))
+        .filter_map(|(d, file, path)| {
+            let file = source::resolve(path, literal(file?));
             let sound = cx.reference.base_sound(&file)?;
-            Some((o.d.name.to_ascii_lowercase(), sound.to_owned()))
+            Some((d.name.to_ascii_lowercase(), sound.to_owned()))
         })
         .collect();
     code.archetypes = player_types
@@ -3031,25 +3048,27 @@ fn dependencies(cx: &mut Ctx, scripts: &[Script]) {
             }
             let Some(a) = c.args.first() else { continue };
             let addon = literal(a).to_owned();
-            if cx
-                .src
-                .get(&s.path)
-                .is_some_and(|f| {
-                    required_if_present(&String::from_utf8_lossy(&f.bytes), c.line, &c.callee, &addon)
-                })
-            {
+            if cx.src.get(&s.path).is_some_and(|f| {
+                required_if_present(
+                    &String::from_utf8_lossy(&f.bytes),
+                    c.line,
+                    &c.callee,
+                    &addon,
+                )
+            }) {
                 // `if(isFile("Add-Ons/Sound_Blockland/server.cs"))
                 // ForceRequiredAddOn("Sound_Blockland");`: required only
                 // where the player has it. `isFile` reads as absent, so the
                 // Add-On takes its own branch and does not need it.
-                deps.entry(addon.to_ascii_lowercase()).or_insert(Dependency {
-                    addon: addon.clone(),
-                    how: c.callee.clone(),
-                    source: Some(Location::new(&s.path, c.line)),
-                    status: "if_present".into(),
-                    package: None,
-                    uses: vec![],
-                });
+                deps.entry(addon.to_ascii_lowercase())
+                    .or_insert(Dependency {
+                        addon: addon.clone(),
+                        how: c.callee.clone(),
+                        source: Some(Location::new(&s.path, c.line)),
+                        status: "if_present".into(),
+                        package: None,
+                        uses: vec![],
+                    });
                 continue;
             }
             let found = cx

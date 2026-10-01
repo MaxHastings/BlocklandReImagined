@@ -1336,8 +1336,7 @@ fn explosive1_grenades_count_down_and_the_molotov_burns() {
 /// game's own sound of that file.
 #[test]
 fn tier1_click_is_the_base_games_when_no_sound_pack_is_there() {
-    let dir =
-        Dir(std::env::temp_dir().join(format!("bri-tier-port-{}-click", std::process::id())));
+    let dir = Dir(std::env::temp_dir().join(format!("bri-tier-port-{}-click", std::process::id())));
     let _ = std::fs::remove_dir_all(&dir.0);
     // The base game's sound of that file, as recovered core scripts name it.
     let core = dir.0.join("core/sounds.cs");
@@ -1374,6 +1373,98 @@ fn tier1_click_is_the_base_games_when_no_sound_pack_is_there() {
     assert_eq!(click.status, "consumed", "{:?}", click.notes);
     let pack = pack(&out);
     let sidearm = &pack.images[&format!("{NS}:image/standinsidearmimage")];
-    let wait = sidearm.states.iter().find(|s| s.name == "ReloadWait").unwrap();
+    let wait = sidearm
+        .states
+        .iter()
+        .find(|s| s.name == "ReloadWait")
+        .unwrap();
     assert_eq!(wait.sound, "clickMoveSound");
+}
+
+const NSX: &str = "weapon_package_explosive2";
+
+/// Kai's Explosive 2 on the stand-in Tier 1: the RPG a little wild on the
+/// move, the flak round shedding sparks as it flies and bursting more at
+/// each hit, and the hidden mortar lobbed by how far its holder's look
+/// lands.
+#[test]
+fn explosive2_flak_sheds_sparks_and_the_mortar_lobs() {
+    let (_dir, out, report) = imported_on(
+        "Weapon_Package_Explosive2",
+        NSX,
+        &["Weapon_Package_Tier1"],
+        "launchers",
+    );
+    let port = &report.ports[0];
+    assert!(port.applied, "{:?}", port.reason);
+    assert_eq!(
+        report.summary.needs_behaviour_ported,
+        report.summary.needs_behaviour,
+        "{:?}",
+        report
+            .needs_behaviour
+            .iter()
+            .filter(|b| b.port.as_ref().is_none_or(|p| !p.applied))
+            .map(|b| &b.function)
+            .collect::<Vec<_>>()
+    );
+    assert!(report.unsupported.is_empty(), "{:?}", report.unsupported);
+    assert_eq!(report.summary.dependencies_missing, 0);
+    let pack = pack(&out);
+    let projectile = |name: &str| pack.projectiles[&format!("{NSX}:projectile/{name}")].clone();
+    let flak = projectile("flakcannonprojectile");
+    let spark = format!("{NSX}:projectile/flakcannonsparkprojectile");
+    let [flying, hits] = &flak.children[..] else {
+        panic!("{:?}", flak.children)
+    };
+    assert_eq!(
+        (
+            flying.projectile.as_str(),
+            flying.count,
+            flying.speed,
+            flying.angles,
+            flying.every_ticks,
+            flying.max_times
+        ),
+        (spark.as_str(), 3, 15.0, true, 30, 150),
+        "every PrjLoop_tickTime, PrjLoop_maxTicks times at most"
+    );
+    assert_eq!(
+        (
+            hits.projectile.as_str(),
+            hits.count,
+            hits.max_count,
+            hits.redraw,
+            hits.speed,
+            hits.angles,
+            hits.on_hit,
+            hits.on_bounce || hits.on_explode
+        ),
+        (spark.as_str(), 2, 4, true, 150.0, true, true, false)
+    );
+    let shot = |name: &str| {
+        pack.images[&format!("{NSX}:image/{name}")]
+            .shot
+            .clone()
+            .unwrap()
+    };
+    let rpg = shot("rpgimage");
+    assert_eq!(
+        (rpg.spread, rpg.moving_spread, rpg.moving_speed),
+        (0.0, Some(0.0002), 0.1),
+        "true standing, wild on the move"
+    );
+    assert_eq!(
+        shot("mortarimage").lob,
+        Some(Lob {
+            speed: 15.0,
+            range: 200.0,
+            otherwise: 80.0,
+            distance_divisor: 4.0,
+            jitter_steps: [2, 2],
+            jitter_divisor: [4.0, 4.0],
+        })
+    );
+    assert!(pack.items[&format!("{NSX}:weapon/mortaritem")].hidden);
+    assert!(!pack.items[&format!("{NSX}:weapon/rpgitem")].hidden);
 }

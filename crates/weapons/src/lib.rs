@@ -1078,6 +1078,52 @@ pub struct Shot {
     /// `onFire2`, a free second round each cycle).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub free: bool,
+    /// The projectile lobbed to come down about where the holder looks,
+    /// in place of flying at its speed along the aim (Tier+Tactical's
+    /// mortar).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lob: Option<Lob>,
+}
+/// [`Shot::lob`], as the mortar's `onFire` threw its shell: `speed` along
+/// the aim, plus upward the distance from the holder's feet to where the
+/// look meets something (`otherwise` when nothing within `range` times
+/// their scale) over `distance_divisor`, plus along the world's x and -z
+/// (v20's x and y) each a whole number from 0 to that axis's
+/// `jitter_steps` over its `jitter_divisor`. Neither the holder's velocity
+/// nor their scale is added, as the script made the projectile itself.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Lob {
+    /// Units a second along the aim, 0 to 200 (`18.25`).
+    pub speed: f32,
+    /// How far the look reaches, 1 to 1000 (`300`).
+    pub range: f32,
+    /// The distance taken when it meets nothing, 0 to `range` (`100`).
+    pub otherwise: f32,
+    /// 0.5 to 100 (`%dist / 3.75`).
+    pub distance_divisor: f32,
+    /// 0 to 16 each (`getRandom(0, 3)`).
+    #[serde(default)]
+    pub jitter_steps: [u32; 2],
+    /// 1 to 100 each (`/ 6`).
+    #[serde(default = "ones")]
+    pub jitter_divisor: [f32; 2],
+}
+fn ones() -> [f32; 2] {
+    [1.0; 2]
+}
+impl Lob {
+    fn valid(&self) -> bool {
+        (0.0..=200.0).contains(&self.speed)
+            && (1.0..=1000.0).contains(&self.range)
+            && (0.0..=self.range).contains(&self.otherwise)
+            && (0.5..=100.0).contains(&self.distance_divisor)
+            && self.jitter_steps.iter().all(|&n| n <= 16)
+            && self
+                .jitter_divisor
+                .iter()
+                .all(|d| (1.0..=100.0).contains(d))
+    }
 }
 /// [`ProjectileDef::slow`], Tier+Tactical's `TT_dampenVelocity(%col,
 /// divisor)` in a bullet's `damage`: each hit divides the player's velocity
@@ -1161,6 +1207,7 @@ impl Shot {
         kick: None,
         scale: 1.0,
         free: false,
+        lob: None,
     };
     /// The velocity the recoil adds to a shooter aiming along `direction`
     /// (a unit vector, Y up), before the projectiles inherit it.
@@ -1465,6 +1512,26 @@ pub struct Children {
     /// `getRandom` per axis ([`Steps`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub steps: Option<Steps>,
+    /// Each time it hits something, bouncing off or bursting on it, as a
+    /// script's `onCollision` threw them; not when it dies in the air.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub on_hit: bool,
+    /// Each child flies along `(cos a, cos b, sin a)` (x, up, back) times
+    /// `speed`, `a` and `b` whole degrees from 0 to 360 at random, as
+    /// Tier+Tactical's `PrjLoop_emitPrj` built it: not one length, up to
+    /// √2 × `speed`, and more of them flung up and down than a random
+    /// direction would. Not with `steps`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub angles: bool,
+    /// The limit is drawn again before each child past `count`, from
+    /// `count` to `max_count`, as a loop `for(%i = 0; %i < getRandom(3, 5);
+    /// %i++)` drew it, so the larger counts come up less often.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub redraw: bool,
+    /// With `every_ticks`, at most this many times, as a script loop's
+    /// `PrjLoop_maxTicks`; 0 for as long as it lives. Up to 100000.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub max_times: u32,
 }
 /// [`Children::steps`]: along each axis (x right, y up, z back), a whole
 /// number from that axis's `low` to `high` at random, plus its `offset`,
@@ -1539,6 +1606,11 @@ pub struct Aura {
     /// to 100000.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub max_pulses: u32,
+    /// At most this many hurt each pulse, the first found (a script's
+    /// search loop that `break`s after the first it damaged); 0 is all.
+    /// Up to 64.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub max_targets: u32,
 }
 /// v20's `ProjectileData` defaults, for fields an Add-On leaves out.
 impl Default for ProjectileDef {
@@ -2045,6 +2117,7 @@ impl Pack {
                     && s.rested.as_ref().is_none_or(|r| {
                         (1..=1200).contains(&r.after_ticks) && (0.0..=1.0).contains(&r.spread)
                     })
+                    && s.lob.is_none_or(|l| l.valid() && s.hitscan.is_none())
             };
             let volleys_ok = |volleys: &[Volley]| {
                 volleys.len() <= 4
@@ -2065,7 +2138,8 @@ impl Pack {
                 image.shot.as_ref().is_none_or(shot_ok),
                 "Invalid image shot {id}: 1 to 64 projectiles, spreads 0 to 1, recoil 0 to 100, \
                  moving_speed 0 to 50, scale 0.1 to 10, rested after 1 to 1200 ticks, kick amplitude 0 to 1, \
-                 frequency 0.1 to 30, seconds 0.05 to 2, radius 0 to 100"
+                 frequency 0.1 to 30, seconds 0.05 to 2, radius 0 to 100, a lob within its limits and \
+                 without hitscan"
             );
             ensure!(
                 image.state_shots.len() <= 8
@@ -2256,7 +2330,10 @@ impl Pack {
                         && (0.0..=500.0).contains(&c.speed)
                         && (0.0..=1.0).contains(&c.inherit)
                         && (c.every_ticks == 0 || c.every_ticks >= 4)
-                        && (c.every_ticks > 0 || c.on_bounce || c.on_explode)
+                        && (c.every_ticks > 0 || c.on_bounce || c.on_explode || c.on_hit)
+                        && !(c.angles && c.steps.is_some())
+                        && (!c.redraw || c.max_count > c.count)
+                        && c.max_times <= 100_000
                         && c.fuse_ticks.is_none_or(|[a, b]| a <= b && b <= 36_000)
                         && (c.max_count == 0 || (c.count..=16).contains(&c.max_count))
                         && c.steps.as_ref().is_none_or(|s| {
@@ -2271,7 +2348,8 @@ impl Pack {
                     "Invalid children of projectile {id}: count 1 to 16, speed 0 to 500, \
                      inherit 0 to 1, every_ticks 0 or at least 4, some moment to throw them, \
                      fuse_ticks rising and at most 36000, max_count from count to 16, \
-                     steps from -100 to 100, each rising"
+                     steps from -100 to 100, each rising, not with angles, redraw only \
+                     with a max_count above count, max_times to 100000"
                 );
             }
             if let Some(a) = &p.aura {
@@ -2282,9 +2360,11 @@ impl Pack {
                         && (0.0..=30.0).contains(&a.burn_seconds)
                         && a.target_sound.len() <= 128
                         && a.effect.len() <= 128
-                        && a.max_pulses <= 100_000,
+                        && a.max_pulses <= 100_000
+                        && a.max_targets <= 64,
                     "Invalid aura of projectile {id}: radius to 16, damage to 100, \
-                     every_ticks 4 to 1200, burn_seconds to 30, names to 128 bytes"
+                     every_ticks 4 to 1200, burn_seconds to 30, names to 128 bytes, \
+                     max_targets to 64"
                 );
             }
             if let Some(slow) = p.slow {

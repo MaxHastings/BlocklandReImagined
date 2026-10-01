@@ -9,3 +9,5 @@ holder's magazines are kept per tool slot. Archetype looks carry
 Explosive 1: magazine `from_reserve` (grenades counted from the reserve),
 state `arm_once`, children `max_count` and `steps`, aura `players_only`,
 `effect`, `target_sound` and `max_pulses`.
+Explosive 2: children `on_hit`, `angles`, `redraw` and `max_times`, aura
+`max_targets`, and the image shot's `lob`.

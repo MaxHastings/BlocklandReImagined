@@ -637,7 +637,17 @@ pub fn scripts(
                     } else {
                         sections.entry(section).or_default()
                     };
-                    super::compose(into.entry(id.clone()).or_insert_with(|| json!({})), &set);
+                    let entry = into.entry(id.clone()).or_insert_with(|| json!({}));
+                    // Children read from several methods (a flak round's
+                    // `PrjLoop_onTick` and `onCollision`) are sets of one
+                    // projectile, not one replacing another.
+                    let mut set = set;
+                    if let (Some(Value::Array(had)), Some(Value::Array(more))) =
+                        (entry.get("children"), set.get_mut("children"))
+                    {
+                        more.splice(0..0, had.iter().cloned());
+                    }
+                    super::compose(entry, &set);
                 }
             }
             continue;

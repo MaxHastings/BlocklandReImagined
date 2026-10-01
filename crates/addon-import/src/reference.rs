@@ -369,14 +369,7 @@ impl Reference {
                     .and_then(|c| c.strip_prefix("v20/clip/"))
                     .map(|file| BTreeMap::from([("filename".to_owned(), quoted(file))]))
                     .unwrap_or_default();
-                self.installed_datablock(
-                    addon,
-                    "",
-                    "AudioProfile".into(),
-                    name,
-                    None,
-                    fields,
-                );
+                self.installed_datablock(addon, "", "AudioProfile".into(), name, None, fields);
             }
         }
         if let Some(dir) = dir("effects") {

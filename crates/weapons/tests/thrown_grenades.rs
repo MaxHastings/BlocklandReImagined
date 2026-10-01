@@ -35,7 +35,8 @@ const KIT: &str = r#"{
     "items": {
         "nade:weapon/grenade": { "ui_name": "Grenade", "image": "nade:image/grenade" },
         "nade:weapon/pistol": { "ui_name": "Pistol", "image": "nade:image/pistol" },
-        "nade:weapon/molotov": { "ui_name": "Molotov", "image": "nade:image/molotov" }
+        "nade:weapon/molotov": { "ui_name": "Molotov", "image": "nade:image/molotov" },
+        "nade:weapon/mortar": { "ui_name": "Mortar", "image": "nade:image/mortar" }
     },
     "images": {
         "nade:image/grenade": {
@@ -58,6 +59,15 @@ const KIT: &str = r#"{
                 { "name": "Fire", "ticks": 60, "timeout": 0, "arm": "spearThrow" }
             ]
         },
+        "nade:image/mortar": {
+            "projectile": "nade:projectile/grenade",
+            "shot": { "lob": { "speed": 15, "range": 200, "otherwise": 80, "distance_divisor": 4,
+                               "jitter_steps": [2, 2], "jitter_divisor": [4, 4] } },
+            "states": [
+                { "name": "Ready", "down": 1 },
+                { "name": "Fire", "ticks": 2, "timeout": 0, "script": "onFire" }
+            ]
+        },
         "nade:image/pistol": {
             "projectile": "nade:projectile/grenade",
             "states": [ { "name": "Ready" } ]
@@ -70,6 +80,14 @@ const KIT: &str = r#"{
                           "on_explode": true,
                           "steps": { "low": [-3, -3, -2], "high": [3, 3, 4],
                                      "offset": [-0.5, -0.5, -0.5], "step": [2.5, 2.5, -2.5] } } },
+        "nade:projectile/flak": { "speed": 20, "ballistic": true, "lifetime_ticks": 300,
+            "arm_ticks": 300, "elasticity": 0.9,
+            "children": [
+                { "projectile": "nade:projectile/spark", "count": 3, "speed": 10, "angles": true,
+                  "every_ticks": 12, "max_times": 2 },
+                { "projectile": "nade:projectile/spark", "count": 2, "max_count": 4, "redraw": true,
+                  "speed": 100, "angles": true, "on_hit": true } ] },
+        "nade:projectile/spark": { "speed": 5, "lifetime_ticks": 4 },
         "nade:projectile/ember": { "speed": 5, "ballistic": true, "lifetime_ticks": 1800,
             "aura": { "radius": 4, "damage": 4, "every_ticks": 36, "players_only": true,
                       "effect": "emberFlames", "target_sound": "nade:sound/burn",
@@ -83,7 +101,7 @@ fn world() -> WeaponsWorld {
     w
 }
 
-fn step(w: &mut WeaponsWorld, q: &mut Air, ticks: usize) -> Vec<Event> {
+fn step(w: &mut WeaponsWorld, q: &mut impl Query, ticks: usize) -> Vec<Event> {
     (0..ticks).flat_map(|_| w.step(q)).collect()
 }
 
@@ -310,4 +328,232 @@ fn counted_magazines_and_scattered_children_are_checked() {
     let fast = KIT.replace("\"step\": [2.5", "\"step\": [300");
     assert!(Pack::from_json(fast.as_bytes()).is_err());
     assert!(Pack::from_json(KIT.as_bytes()).is_ok());
+}
+
+/// A floor at height 0 and nothing else.
+struct Floor;
+impl Query for Floor {
+    fn sweep(&mut self, from: Vec3, to: Vec3, _: Filter) -> Option<Hit> {
+        (from.y >= 0.0 && to.y < 0.0).then(|| {
+            let fraction = from.y / (from.y - to.y);
+            Hit {
+                target: TargetId::Map(0),
+                position: from.lerp(to, fraction),
+                normal: Vec3::Y,
+                fraction,
+                color: None,
+            }
+        })
+    }
+    fn radius(&mut self, _: Vec3, _: f32, _: usize) -> Vec<Nearby> {
+        Vec::new()
+    }
+    fn can_affect(&self, _: ActorId, _: TargetId) -> bool {
+        true
+    }
+    fn can_catch(&self, _: ActorId, _: ActorId) -> bool {
+        false
+    }
+}
+
+fn sparks(events: &[Event]) -> Vec<Vec3> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            Event::Spawned {
+                definition,
+                velocity,
+                ..
+            } if definition == "nade:projectile/spark" => Some(*velocity),
+            _ => None,
+        })
+        .collect()
+}
+
+/// `(cos a, cos b, sin a)` at `speed`, `a` a whole number of degrees.
+fn at_kais_angles(v: Vec3, speed: f32) {
+    let v = v / speed;
+    assert!((v.x * v.x + v.z * v.z - 1.0).abs() < 1e-3, "{v}");
+    assert!(v.y.abs() <= 1.0 + 1e-4, "{v}");
+    let degrees = v.z.atan2(v.x).to_degrees();
+    assert!((degrees - degrees.round()).abs() < 0.05, "{degrees}");
+}
+
+#[test]
+fn flak_sparks_fly_at_kais_angles_and_burst_on_each_hit() {
+    // In the air: three at each of its first two loops, then none, and
+    // none as it dies without hitting anything.
+    let mut w = world();
+    w.spawn(
+        "nade:projectile/flak",
+        A,
+        Vec3::new(0.0, 500.0, 0.0),
+        Vec3::ZERO,
+        1.0,
+    )
+    .unwrap();
+    let mut by_tick = Vec::new();
+    for tick in 1..=320 {
+        let n = sparks(&w.step(&mut Floor));
+        if n.is_empty() {
+            continue;
+        }
+        n.iter().for_each(|v| at_kais_angles(*v, 10.0));
+        by_tick.push((tick, n.len()));
+    }
+    assert_eq!(by_tick.len(), 2, "{by_tick:?}");
+    assert!(by_tick.iter().all(|(_, n)| *n == 3), "{by_tick:?}");
+    assert_eq!(by_tick[1].0 - by_tick[0].0, 12, "{by_tick:?}");
+
+    // At each hit: two to four, the limit drawn again past two, so four
+    // comes up least.
+    let mut counts = [0; 5];
+    let mut ups = 0;
+    for n in 0..300 {
+        let mut w = world();
+        step(&mut w, &mut Air::default(), n);
+        w.spawn(
+            "nade:projectile/flak",
+            A,
+            Vec3::new(0.0, 0.05, 0.0),
+            Vec3::new(0.0, -20.0, 0.0),
+            1.0,
+        )
+        .unwrap();
+        let burst = sparks(&w.step(&mut Floor));
+        for v in &burst {
+            at_kais_angles(*v, 100.0);
+            ups += usize::from(v.y > 0.0);
+        }
+        counts[burst.len()] += 1;
+    }
+    assert_eq!(counts[0] + counts[1], 0, "{counts:?}");
+    let [two, three, four] = [counts[2], counts[3], counts[4]];
+    assert!(four < two && two < three, "1/3, 4/9, 2/9: {counts:?}");
+    assert!(four < 84, "a fair draw would give four a third: {counts:?}");
+    assert!(ups > 0, "flung every way");
+}
+
+/// The look meets something `at`, seen from `eye`; nothing else is hit.
+struct Look {
+    eye: Vec3,
+    at: Option<Vec3>,
+}
+impl Query for Look {
+    fn sweep(&mut self, from: Vec3, to: Vec3, _: Filter) -> Option<Hit> {
+        let at = self.at?;
+        let reaches = from.distance(at) <= from.distance(to);
+        (from == self.eye && from.distance(to) > 100.0 && reaches).then(|| Hit {
+            target: TargetId::Map(0),
+            position: at,
+            normal: Vec3::Y,
+            fraction: from.distance(at) / from.distance(to),
+            color: None,
+        })
+    }
+    fn radius(&mut self, _: Vec3, _: f32, _: usize) -> Vec<Nearby> {
+        Vec::new()
+    }
+    fn can_affect(&self, _: ActorId, _: TargetId) -> bool {
+        true
+    }
+    fn can_catch(&self, _: ActorId, _: ActorId) -> bool {
+        false
+    }
+}
+
+#[test]
+fn a_lob_comes_down_by_how_far_the_look_lands() {
+    let eye = Vec3::new(0.0, 2.0, 0.0);
+    let lob = |at: Option<Vec3>, scale: f32| {
+        let mut w = world();
+        let slot = w.give(A, "nade:weapon/mortar").unwrap();
+        w.equip(A, Some(slot)).unwrap();
+        w.set_frame(
+            A,
+            Frame {
+                eye,
+                muzzle: [Vec3::new(0.3, 1.5, -0.5); 2],
+                scale,
+                ..Frame::default()
+            },
+        )
+        .unwrap();
+        let mut q = Look { eye, at };
+        step(&mut w, &mut q, 2);
+        w.trigger(A, true).unwrap();
+        let mut events = step(&mut w, &mut q, 1);
+        w.trigger(A, false).unwrap();
+        events.extend(step(&mut w, &mut q, 3));
+        let shells: Vec<Vec3> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Spawned {
+                    definition,
+                    velocity,
+                    ..
+                } if definition == "nade:projectile/grenade" => Some(*velocity),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(shells.len(), 1);
+        shells[0]
+    };
+    let jittered = |v: f32| [0.0, 0.25, 0.5].iter().any(|j| (v - j).abs() < 1e-4);
+    // 20 from the feet: up 20 / 4, ahead 15, and a quarter-step jitter
+    // along the world's x and -z.
+    let v = lob(Some(Vec3::new(0.0, 0.0, -20.0)), 1.0);
+    assert!((v.y - 5.0).abs() < 1e-4, "{v}");
+    assert!(jittered(v.x) && jittered(-v.z - 15.0), "{v}");
+    // Nothing in reach: 80.
+    let v = lob(None, 1.0);
+    assert!((v.y - 20.0).abs() < 1e-4, "{v}");
+    // A bigger holder reaches further, and throws no harder.
+    let v = lob(Some(Vec3::new(0.0, 0.0, -300.0)), 2.0);
+    assert!((v.y - 75.0).abs() < 1e-3, "{v}");
+    let v = lob(Some(Vec3::new(0.0, 0.0, -300.0)), 1.0);
+    assert!(
+        (v.y - 20.0).abs() < 1e-4,
+        "out of a smaller holder's reach: {v}"
+    );
+}
+
+#[test]
+fn an_aura_that_stops_at_its_first_target_hurts_one_a_pulse() {
+    // Kai's molotov with its targeting fix turned off breaks out of its
+    // search after the first player it burns.
+    let kit = KIT.replace("\"max_pulses\": 2", "\"max_pulses\": 2, \"max_targets\": 1");
+    let mut w = WeaponsWorld::new(Pack::from_json(kit.as_bytes()).unwrap()).unwrap();
+    w.add_actor(A, 5).unwrap();
+    let near = |target| Nearby {
+        target,
+        center: Vec3::ZERO,
+        distance: 1.0,
+    };
+    let mut q = Air {
+        near: vec![
+            near(TargetId::Vehicle(9)),
+            near(TargetId::Actor(B)),
+            near(TargetId::Actor(ActorId(3))),
+        ],
+    };
+    w.spawn("nade:projectile/ember", A, Vec3::ZERO, Vec3::ZERO, 1.0)
+        .unwrap();
+    let hurt: Vec<_> = step(&mut w, &mut q, 36)
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::Damage { target, .. } => Some(target),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        hurt,
+        [TargetId::Actor(B)],
+        "the vehicle passed by, then one"
+    );
+    let bad = KIT.replace(
+        "\"max_pulses\": 2",
+        "\"max_pulses\": 2, \"max_targets\": 65",
+    );
+    assert!(Pack::from_json(bad.as_bytes()).is_err());
 }

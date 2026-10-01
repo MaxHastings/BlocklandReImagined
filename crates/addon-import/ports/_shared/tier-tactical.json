@@ -281,6 +281,16 @@
     {
       "method": "*",
       "into": "shot",
+      "pattern": "vectorLen\\(\\s*%obj\\.getVelocity\\(\\s*\\)\\s*\\)\\s*>\\s*(?P<speed>[\\d.]+)\\s*\\)\\s*\\{\\s*%spread\\s*=\\s*(?P<moving>[\\d.]+)\\s*;\\s*\\}\\s*else\\s*\\{\\s*%spread\\s*=\\s*(?P<still>[\\d.]+)\\s*;",
+      "set": {
+        "spread": "{still}",
+        "moving_spread": "{moving}",
+        "moving_speed": "{speed}"
+      }
+    },
+    {
+      "method": "*",
+      "into": "shot",
       "pattern": "vectorLen\\(\\s*%obj\\.getVelocity\\(\\s*\\)\\s*\\)\\s*>\\s*(?P<speed>[\\d.]+)\\s*\\)\\s*\\{\\s*%this\\.TT_raycastSpreadAmt\\s*=\\s*(?P<moving>[\\d.]+)\\s*;\\s*%this\\.TT_raycastWeaponRange\\s*=\\s*(?P<moving_range>[\\d.]+)\\s*;\\s*\\}\\s*else\\s*\\{\\s*%this\\.TT_raycastSpreadAmt\\s*=\\s*(?P<still>[\\d.]+)\\s*;\\s*%this\\.TT_raycastWeaponRange\\s*=\\s*(?P<range>[\\d.]+)\\s*;",
       "required_by": "%this\\.TT_raycastSpreadAmt\\s*=",
       "set": {

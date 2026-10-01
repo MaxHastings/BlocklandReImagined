@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "include": [
+    "tier-tactical"
+  ],
+  "notes": "Tier+Tactical Explosive 2 on Tier 1's ammo system: the RPG (a little wild fired on the move), the Grenade Launcher, and the Calibre Cannon, whose flak round sheds sparks every PrjLoop_tickTime as it flies and bursts a few more at everything it hits or bounces off, each spark flung along Kai's PrjLoop_emitPrj angles. The Mortar is one of Kai's easter eggs, loaded only with the hidden \"???\" setting (off by default): it is imported hidden, and lobs its shell to come down about where its holder looks.",
+  "handles": {
+    "Projectile::PrjLoop_tick": "engine children: the flak round's sparks every PrjLoop_tickTime, PrjLoop_maxTicks times at most (read from PrjLoop_onTick)",
+    "PrjLoop_emitPrj": "engine children `angles`: each spark along (cos a, sin a, cos b) at the speed, a and b whole degrees at random",
+    "ProjectileData::PrjLoop_onTick": "an empty default: projectiles without a loop of their own do nothing",
+    "MortarImage::onUnMount": "engine: both_arms ends as the mortar leaves the hand, as fixArmReady put the arms back"
+  },
+  "scripts": [
+    {
+      "on": "projectile",
+      "method": "PrjLoop_onTick",
+      "into": "projectile",
+      "pattern": "%emittedPrj\\s*=\\s*(?P<p>\\w+)\\s*;\\s*%speed\\s*=\\s*(?P<s>[\\d.]+)\\s*;\\s*%amount\\s*=\\s*(?P<n>\\d+)\\s*;\\s*PrjLoop_emitPrj\\(\\s*%obj\\s*,\\s*%emittedPrj\\s*,\\s*%speed\\s*,\\s*%amount\\s*\\)",
+      "required_by": "PrjLoop_emitPrj",
+      "set": {
+        "children": [
+          {
+            "projectile": "{p|projectile}",
+            "count": "{n}",
+            "speed": "{s}",
+            "angles": true,
+            "every_ticks": "{=PrjLoop_tickTime|field|ticks}",
+            "max_times": "{=PrjLoop_maxTicks|field}"
+          }
+        ]
+      }
+    },
+    {
+      "on": "projectile",
+      "method": "onCollision",
+      "into": "projectile",
+      "pattern": "for\\s*\\(\\s*%i\\s*=\\s*0\\s*;\\s*%i\\s*<\\s*getRandom\\(\\s*(?P<lo>\\d+)\\s*,\\s*(?P<hi>\\d+)\\s*\\)\\s*;\\s*%i\\+\\+\\s*\\)\\s*\\{\\s*%a\\s*=\\s*getRandom\\(\\s*0\\s*,\\s*360\\s*\\)\\s*/\\s*360\\s*\\*\\s*2\\s*\\*\\s*\\$pi\\s*;\\s*%b\\s*=\\s*getRandom\\(\\s*0\\s*,\\s*360\\s*\\)\\s*/\\s*360\\s*\\*\\s*2\\s*\\*\\s*\\$pi\\s*;\\s*%vec\\s*=\\s*mcos\\(\\s*%a\\s*\\)\\s*SPC\\s*msin\\(\\s*%a\\s*\\)\\s*SPC\\s*mcos\\(\\s*%b\\s*\\)\\s*;\\s*%p\\s*=\\s*new\\s+Projectile\\(\\s*\\)\\s*\\{\\s*datablock\\s*=\\s*(?P<p>\\w+)\\s*;\\s*initialVelocity\\s*=\\s*vectorScale\\(\\s*%vec\\s*,\\s*(?P<s>[\\d.]+)\\s*\\)\\s*;\\s*initialPosition\\s*=\\s*%obj\\.getPosition\\(\\s*\\)\\s*;[^}]*\\}\\s*;\\s*MissionCleanup\\.add\\(\\s*%p\\s*\\)\\s*;\\s*\\}\\s*Parent::onCollision\\(",
+      "required_by": "new\\s+Projectile",
+      "set": {
+        "children": [
+          {
+            "projectile": "{p|projectile}",
+            "count": "{lo}",
+            "max_count": "{hi}",
+            "redraw": true,
+            "speed": "{s}",
+            "angles": true,
+            "on_hit": true
+          }
+        ]
+      }
+    },
+    {
+      "method": "onFire",
+      "into": "shot",
+      "pattern": "%dist\\s*=\\s*(?P<d>[\\d.]+)\\s*;\\s*%range\\s*=\\s*(?P<r>[\\d.]+)\\s*\\*\\s*getWord\\(\\s*%obj\\.getScale\\(\\s*\\)\\s*,\\s*2\\s*\\)\\s*;\\s*%start\\s*=\\s*%obj\\.getEyePoint\\(\\s*\\)\\s*;[\\s\\S]*?%ray\\s*=\\s*containerRayCast\\(\\s*%start\\s*,\\s*%end\\s*,\\s*\\$TypeMasks::All\\s*,\\s*%obj\\s*\\)\\s*;[\\s\\S]*?%dist\\s*=\\s*vectorDist\\(\\s*%obj\\.getPosition\\(\\s*\\)\\s*,\\s*%pos\\s*\\)\\s*;\\s*\\}\\s*%initVelocity\\s*=\\s*vectorScale\\(\\s*%obj\\.getMuzzleVector\\(\\s*%slot\\s*\\)\\s*,\\s*(?P<v>[\\d.]+)\\s*\\)\\s*;\\s*%initVelocity\\s*=\\s*vectorAdd\\(\\s*%initVelocity\\s*,\\s*getRandom\\(\\s*0\\s*,\\s*(?P<j>\\d+)\\s*\\)\\s*/\\s*(?P<jd>[\\d.]+)\\s*SPC\\s*getRandom\\(\\s*0\\s*,\\s*(?P<j2>\\d+)\\s*\\)\\s*/\\s*(?P<jd2>[\\d.]+)\\s*SPC\\s*%dist\\s*/\\s*(?P<dd>[\\d.]+)\\s*\\)",
+      "required_by": "%initVelocity",
+      "set": {
+        "lob": {
+          "speed": "{v}",
+          "range": "{r}",
+          "otherwise": "{d}",
+          "distance_divisor": "{dd}",
+          "jitter_steps": [
+            "{j}",
+            "{j2}"
+          ],
+          "jitter_divisor": [
+            "{jd}",
+            "{jd2}"
+          ]
+        }
+      }
+    }
+  ],
+  "patch": {
+    "assets/weapons.json": {
+      "items": {
+        "{namespace}:weapon/mortaritem": {
+          "hidden": true
+        }
+      }
+    }
+  }
+}

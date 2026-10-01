@@ -2802,6 +2802,33 @@ impl WeaponsWorld {
                     }
                 }
                 let shot = shot.unwrap_or(Shot::SINGLE);
+                if let Some(lob) = shot.lob {
+                    // Up by how far off the look lands, from the feet.
+                    let reach = lob.range * a.frame.scale;
+                    let distance = q
+                        .sweep(
+                            a.frame.eye,
+                            a.frame.eye + direction * reach,
+                            Filter {
+                                projectile_age_ticks: None,
+                                source: id,
+                                players: true,
+                                world_only: false,
+                            },
+                        )
+                        .map_or(lob.otherwise, |hit| a.frame.position.distance(hit.position));
+                    let jitter = |axis: usize| {
+                        let r = unit_random(self.tick, id.0, 5000 + axis as u64);
+                        let steps = lob.jitter_steps[axis];
+                        let whole = ((steps + 1) as f32 * r) as u32;
+                        whole.min(steps) as f32 / lob.jitter_divisor[axis]
+                    };
+                    // v20's x and y are the world's x and -z; the spawn
+                    // below scales by the holder, which the script did not.
+                    let up = distance / lob.distance_divisor;
+                    velocity = (direction * lob.speed + Vec3::new(jitter(0), up, -jitter(1)))
+                        / a.frame.scale.max(0.01);
+                }
                 let pace = a.frame.velocity.length();
                 let spread = shot.spread_for(pace, idle_ticks);
                 let kick = shot.recoil_velocity(direction);
@@ -3020,7 +3047,11 @@ impl WeaponsWorld {
             self.aura(p, &d, aura, q);
         }
         for (set, c) in d.children.iter().enumerate() {
-            if c.every_ticks > 0 && flown > 0 && flown.is_multiple_of(u64::from(c.every_ticks)) {
+            if c.every_ticks > 0
+                && flown > 0
+                && flown.is_multiple_of(u64::from(c.every_ticks))
+                && (c.max_times == 0 || flown / u64::from(c.every_ticks) <= u64::from(c.max_times))
+            {
                 self.children(p, c, set);
             }
         }
@@ -3156,6 +3187,9 @@ impl WeaponsWorld {
                 }
             } else if allowed {
                 self.direct_hit(p, &d, hit.target, hit.position);
+            }
+            for (set, c) in d.children.iter().enumerate().filter(|(_, c)| c.on_hit) {
+                self.children(p, c, set);
             }
             if p.age >= d.arm_ticks
                 || (d.explode_player && matches!(hit.target, TargetId::Actor(_)))
@@ -3479,11 +3513,20 @@ impl WeaponsWorld {
     /// parent, so every player computes the same ones.
     /// Each `set` of a projectile's children draws its own directions.
     fn children(&mut self, p: &Projectile, c: &crate::Children, set: usize) {
-        let count = if c.max_count > c.count {
-            let r = unit_random(self.tick, p.id, 2000 + set as u64);
+        let draw = |salt: u64| {
+            let r = unit_random(self.tick, p.id, salt);
             (c.count + ((c.max_count - c.count + 1) as f32 * r) as u32).min(c.max_count)
-        } else {
+        };
+        let count = if c.max_count <= c.count {
             c.count
+        } else if c.redraw {
+            // Past `count`, each further child only while a fresh draw
+            // is above the number thrown so far.
+            (c.count..c.max_count)
+                .find(|&n| draw(2100 + set as u64 * 16 + u64::from(n)) <= n)
+                .unwrap_or(c.max_count)
+        } else {
+            draw(2000 + set as u64)
         };
         for n in (0..u64::from(count)).map(|n| n + set as u64 * 16) {
             let z = unit_random(self.tick, p.id, n * 2) * 2.0 - 1.0;
@@ -3491,6 +3534,15 @@ impl WeaponsWorld {
             let r = (1.0 - z * z).max(0.0).sqrt();
             let mut direction = Vec3::new(r * phi.cos(), z, r * phi.sin());
             let mut own = direction * c.speed;
+            if c.angles {
+                let degrees = |salt: u64| {
+                    let r = unit_random(self.tick, p.id, salt);
+                    ((361.0 * r) as u32).min(360) as f32 / 360.0 * std::f32::consts::TAU
+                };
+                let (a, b) = (degrees(4000 + n * 2), degrees(4000 + n * 2 + 1));
+                own = Vec3::new(a.cos(), b.cos(), a.sin()) * c.speed;
+                direction = own.normalize_or_zero();
+            }
             if let Some(steps) = &c.steps {
                 own = Vec3::from_array(std::array::from_fn(|axis| {
                     let (low, high) = (steps.low[axis], steps.high[axis]);
@@ -3528,11 +3580,15 @@ impl WeaponsWorld {
         } else {
             aura.damage_type.clone()
         };
+        let mut hurt = 0;
         for target in q
             .radius(p.position, aura.radius * p.scale, MAX_QUERY_TARGETS)
             .into_iter()
             .take(MAX_QUERY_TARGETS)
         {
+            if aura.max_targets > 0 && hurt >= aura.max_targets {
+                break;
+            }
             if !target.center.is_finite()
                 || aura.players_only && matches!(target.target, TargetId::Vehicle(_))
                 || !q.can_affect_radius(p.source, target.target)
@@ -3582,6 +3638,7 @@ impl WeaponsWorld {
                     seconds: aura.burn_seconds,
                 });
             }
+            hurt += 1;
         }
     }
     fn explode(
