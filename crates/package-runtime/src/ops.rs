@@ -7,6 +7,8 @@ use std::collections::BTreeMap;
 
 /// Variables an entity may be given when it is spawned.
 pub const MAX_SPAWN_VARS: usize = 16;
+/// Most players one `tell` to a list reaches (a server's most players).
+pub const MAX_TELL_PLAYERS: usize = 256;
 /// Fastest a script may set anything moving, units per second.
 pub const MAX_PUSH_SPEED: f32 = 200.0;
 /// Fastest projectile `fire` launches, units a second (the weapons
@@ -287,6 +289,12 @@ pub enum Op {
         game: u64,
         text: String,
         except: Option<u64>,
+    },
+    /// One chat line to each of some players (Slayer's dead-only and
+    /// team-only messages): one line of the share.
+    TellPlayers {
+        players: Vec<u64>,
+        text: String,
     },
     /// A center or bottom print to every member of a mini-game
     /// (`centerPrintAll`, `bottomPrintAll`): one print of the share.
@@ -1424,6 +1432,7 @@ impl Op {
             | Self::Print { .. }
             | Self::ShowReport { .. }
             | Self::TellMinigame { .. }
+            | Self::TellPlayers { .. }
             | Self::PrintMinigame { .. }
             | Self::Ask { .. }
             | Self::MessageBox { .. } => "chat",
@@ -1778,6 +1787,7 @@ impl Op {
             Self::Tell { text, .. }
             | Self::Broadcast { text }
             | Self::TellMinigame { text, .. } => chat(text),
+            Self::TellPlayers { players, text } => players.len() <= MAX_TELL_PLAYERS && chat(text),
             Self::CopyBuild { limit, tool, .. } => (1..=MAX_COPY_BRICKS).contains(limit) && item(tool),
             Self::CopyBox {
                 min,
@@ -2139,6 +2149,7 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::SetBlockState { .. } => "set_block_state",
         Op::Broadcast { .. } => "broadcast",
         Op::TellMinigame { .. } => "tell_minigame",
+        Op::TellPlayers { .. } => "tell_players",
         Op::PrintMinigame { bottom: false, .. } => "center_print_minigame",
         Op::PrintMinigame { bottom: true, .. } => "bottom_print_minigame",
         Op::CopyBuild { .. } => "copy_build",

@@ -1611,6 +1611,15 @@ impl Session {
                 }
                 Ok(())
             }
+            Op::TellPlayers { players, text } => {
+                self.take_chat_line(package, caller)?;
+                for owner in players {
+                    if self.peers.contains_key(&owner) {
+                        self.notify(owner, Notice::Chat(text.clone()));
+                    }
+                }
+                Ok(())
+            }
             Op::PrintMinigame {
                 game,
                 text,

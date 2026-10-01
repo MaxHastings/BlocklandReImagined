@@ -1058,6 +1058,7 @@ impl Session {
             super::packages::DeathLine::Changed {
                 victim: v,
                 killer: k,
+                hide_killer,
                 suffix,
                 line: whole,
                 to,
@@ -1065,7 +1066,11 @@ impl Session {
                 let mut text = whole.unwrap_or_else(|| {
                     line(
                         v.as_deref().unwrap_or(&victim_name),
-                        k.as_deref().or(killer_name.as_deref()),
+                        if hide_killer {
+                            None
+                        } else {
+                            k.as_deref().or(killer_name.as_deref())
+                        },
                     )
                 });
                 if !suffix.is_empty() {

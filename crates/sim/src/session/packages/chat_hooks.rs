@@ -31,6 +31,9 @@ pub(in crate::session) enum DeathLine {
     Changed {
         victim: Option<String>,
         killer: Option<String>,
+        /// Shown as the victim's own death, without the killer (Slayer's
+        /// Hide Kills).
+        hide_killer: bool,
         suffix: String,
         line: Option<String>,
         to: Option<Vec<OwnerId>>,
@@ -193,6 +196,10 @@ impl Session {
                 return DeathLine::Changed {
                     victim: map.get("victim").and_then(text_of),
                     killer: map.get("killer").and_then(text_of),
+                    hide_killer: map
+                        .get("hide_killer")
+                        .and_then(|v| v.as_bool().ok())
+                        .unwrap_or(false),
                     suffix: map.get("suffix").and_then(text_of).unwrap_or_default(),
                     line: map.get("line").and_then(text_of),
                     to: self.recipients(map.get("to")),

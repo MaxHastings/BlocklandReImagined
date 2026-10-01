@@ -384,8 +384,9 @@ pub struct Behaviour {
     #[serde(default)]
     pub on_minigame_request: bool,
     /// `on_chat(player, info)` as a player sends a chat line, after the
-    /// engine's flood and mute checks: `info` is `#{ text, team }`, `team`
-    /// true for team chat. Return `()` to send it as usual, `false` or a
+    /// engine's flood and mute checks: `info` is `#{ text, plain, name,
+    /// clan_prefix, clan_suffix, team }`, `plain` and the name parts safe to
+    /// put in a line and `team` true for team chat. Return `()` to send it as usual, `false` or a
     /// reason to drop it (the reason goes to the sender), or `#{ line, to }`
     /// to send `line` as written (the sender's name included) to the players
     /// in `to` instead (Slayer's Team Display Mode and dead talking). The
@@ -394,10 +395,12 @@ pub struct Behaviour {
     #[serde(default)]
     pub on_chat: bool,
     /// `on_death_message(victim, killer, info)` as the engine is about to
-    /// tell a mini-game a player died: `info` is `#{ type, suicide, bot }`.
+    /// tell a mini-game a player died: `info` is `#{ kind, type, victim_name,
+    /// killer_name, line }`, `line` the engine's.
     /// Return `()` for the engine's line, `false` to send none, or a map of
     /// what to change: `victim` and `killer` (the names as shown, colour
-    /// codes allowed), `suffix` (text after the line, Slayer's
+    /// codes allowed), `hide_killer` (true: the line of a death without a
+    /// killer, Slayer's Hide Kills), `suffix` (text after the line, Slayer's
     /// `(Killing Spree | 5)`) and `to` (who hears it). Called as it
     /// happens, so it must be quick.
     #[serde(default)]

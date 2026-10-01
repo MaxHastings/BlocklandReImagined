@@ -1417,6 +1417,14 @@ fn register_api(engine: &mut Engine) {
             text: text.into(),
         })
     });
+    // One line to each of a list of players, as one line of the share.
+    engine.register_fn("tell", |players: Array, text: &str| {
+        let players = players.iter().map(id).collect::<Fallible<Vec<u64>>>()?;
+        push(Op::TellPlayers {
+            players,
+            text: text.into(),
+        })
+    });
     engine.register_fn("broadcast", |text: &str| {
         push(Op::Broadcast { text: text.into() })
     });
