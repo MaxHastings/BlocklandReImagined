@@ -93,6 +93,13 @@ impl MinigamesWorld {
         self.games.get_mut(&game).ok_or(Error::StaleGame)?.cleanup = cleanup;
         Ok(())
     }
+    pub fn set_name_distance(&mut self, game: GameId, distance: Option<u32>) -> Result<(), Error> {
+        if distance.is_some_and(|d| d > crate::model::MAX_NAME_DISTANCE) {
+            return Err(Error::InvalidSettings);
+        }
+        self.games.get_mut(&game).ok_or(Error::StaleGame)?.name_distance = distance;
+        Ok(())
+    }
     pub fn set_claims_bricks(&mut self, game: GameId, claims: bool) -> Result<(), Error> {
         self.games.get_mut(&game).ok_or(Error::StaleGame)?.claims_bricks = claims;
         Ok(())

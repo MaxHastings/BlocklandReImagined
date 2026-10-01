@@ -156,7 +156,7 @@ fn settings_patch(map: Map) -> Fallible<serde_json::Value> {
     }
     Ok(json)
 }
-pub(super) fn brick_map(b: &BrickView) -> Dynamic {
+pub fn brick_map(b: &BrickView) -> Dynamic {
     let [x, y, z] = position(b.position);
     map([
         ("id", Dynamic::from_int(b.id as i64)),
@@ -460,6 +460,59 @@ pub(super) fn register(engine: &mut Engine) {
     engine.register_fn("setting", |game: Dynamic, key: &str| {
         read_setting(&game, None, key)
     });
+    engine.register_fn("setting_text", |game: Dynamic, key: &str| {
+        let game = id(&game)?;
+        with_world(|world, _| world.setting_text(game, None, key).map_err(Into::into))
+    });
+    engine.register_fn("team_setting_text", |game: Dynamic, team: Dynamic, key: &str| {
+        let (game, team) = (id(&game)?, id(&team)?);
+        with_world(|world, _| world.setting_text(game, Some(team), key).map_err(Into::into))
+    });
+    // What the host keeps for these rules between games and restarts.
+    engine.register_fn("host_data", |key: &str| {
+        with_world(|world, _| Ok(world.host_data(key).map_or(Dynamic::UNIT, |v| to_dynamic(&v))))
+    });
+    engine.register_fn("set_host_data", |key: &str, value: Dynamic| {
+        if !crate::ops::valid_host_key(key) {
+            return fail(format!("`{key}` is not a key: lower-case letters, digits and _"));
+        }
+        let value = if value.is_unit() {
+            None
+        } else {
+            let json: serde_json::Value = rhai::serde::from_dynamic(&value)?;
+            Some(json)
+        };
+        push(Op::SetHostData {
+            key: key.into(),
+            value,
+        })
+    });
+    // The lines of one of these rules' data files (`data` provides).
+    engine.register_fn("data_lines", |file: &str| {
+        with_world(|world, _| {
+            Ok(world.data_lines(file).map_or(Dynamic::UNIT, |lines| {
+                Dynamic::from_array(lines.into_iter().map(Into::into).collect())
+            }))
+        })
+    });
+    engine.register_fn("minigame_snapshot", |game: Dynamic| {
+        let game = id(&game)?;
+        with_world(|world, _| {
+            Ok(world
+                .minigame_snapshot(game)
+                .map_or(Dynamic::UNIT, |v| to_dynamic(&v)))
+        })
+    });
+    engine.register_fn("restore_minigame", |game: Dynamic, snapshot: Dynamic| {
+        let snapshot: serde_json::Value = rhai::serde::from_dynamic(&snapshot)?;
+        push(Op::RestoreMinigame {
+            game: id(&game)?,
+            snapshot,
+        })
+    });
+    engine.register_fn("revive_bricks", |game: Dynamic| {
+        push(Op::ReviveBricks { game: id(&game)? })
+    });
     engine.register_fn("team_setting", |game: Dynamic, team: Dynamic, key: &str| {
         read_setting(&game, Some(&team), key)
     });
@@ -539,6 +592,21 @@ pub(super) fn register(engine: &mut Engine) {
     });
     engine.register_fn("set_claims_bricks", |game: Dynamic, on: Dynamic| {
         game_rule(&game, GameRule::ClaimsBricks(flag_of(&on, "claiming bricks")?))
+    });
+    engine.register_fn("set_name_distance", |game: Dynamic, distance: Dynamic| {
+        let distance = if distance.is_unit() {
+            None
+        } else {
+            Some(
+                distance
+                    .as_int()
+                    .ok()
+                    .and_then(|d| u32::try_from(d).ok())
+                    .filter(|d| *d <= 8192)
+                    .ok_or("a name distance is a whole number from 0 to 8192, or ()")?,
+            )
+        };
+        game_rule(&game, GameRule::NameDistance(distance))
     });
     engine.register_fn("set_minigame", |game: Dynamic, settings: Map| {
         game_rule(&game, GameRule::Settings(settings_patch(settings)?))

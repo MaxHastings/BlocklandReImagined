@@ -290,6 +290,43 @@ impl Session {
         })
     }
 
+    /// A setting's value as players read it (Slayer's `getDisplayValue`).
+    pub(in crate::session) fn setting_text(
+        &self,
+        package: &str,
+        game: u64,
+        team: Option<u64>,
+        key: &str,
+    ) -> Result<String, String> {
+        let value = self.setting_value(package, game, team, key)?;
+        let full = full_key(package, key);
+        let s = self
+            .packages
+            .as_ref()
+            .and_then(|h| h.settings.get(&full))
+            .ok_or_else(|| format!("No setting `{full}`"))?;
+        Ok(match (s.def.kind, &value) {
+            (SettingType::Bool, SettingValue::Bool(b)) => (if *b { "True" } else { "False" }).into(),
+            (SettingType::List, v) => s
+                .items
+                .iter()
+                .find(|i| &i.value == v)
+                .map_or_else(|| v.to_string(), |i| i.name.clone()),
+            (SettingType::Item, SettingValue::Text(id)) if id.is_empty() => "NONE".into(),
+            (SettingType::Item, SettingValue::Text(id)) => self
+                .weapons
+                .pack
+                .items
+                .get(id)
+                .map_or_else(|| id.clone(), |i| i.ui_name.clone()),
+            (SettingType::PlayerType, SettingValue::Text(id)) => self
+                .archetypes
+                .find(id)
+                .map_or_else(|| id.clone(), |a| self.archetypes.resolve(a).name.clone()),
+            (_, v) => v.to_string(),
+        })
+    }
+
     /// Whether an item or player type setting's `value` names one this
     /// server has (none, `""`, always does). Other kinds always do.
     pub(super) fn has_content(&self, kind: SettingType, value: &SettingValue) -> bool {

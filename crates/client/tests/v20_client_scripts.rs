@@ -9,12 +9,17 @@ use bri_ui::api::{NameTag, name_outline};
 fn names_stay_solid_until_the_fog_then_fade_out_by_the_visible_distance() {
     // Blockland ignores PlayGui_ShapeNameHud's `distanceFade = 0.1`: the
     // default name distance of 8192 leaves the fog distance as the fade start.
-    assert_eq!(name_opacity(10.0, 300.0, 500.0), Some(1.0));
-    assert_eq!(name_opacity(299.0, 300.0, 500.0), Some(1.0));
-    assert_eq!(name_opacity(400.0, 300.0, 500.0), Some(0.5));
-    assert_eq!(name_opacity(500.0, 300.0, 500.0), Some(0.0));
-    assert_eq!(name_opacity(500.5, 300.0, 500.0), None);
-    assert_eq!(name_opacity(0.0, 300.0, 500.0), None);
+    assert_eq!(name_opacity(10.0, 8192.0, 300.0, 500.0), Some(1.0));
+    assert_eq!(name_opacity(299.0, 8192.0, 300.0, 500.0), Some(1.0));
+    assert_eq!(name_opacity(400.0, 8192.0, 300.0, 500.0), Some(0.5));
+    assert_eq!(name_opacity(500.0, 8192.0, 300.0, 500.0), Some(0.0));
+    assert_eq!(name_opacity(500.5, 8192.0, 300.0, 500.0), None);
+    assert_eq!(name_opacity(0.0, 8192.0, 300.0, 500.0), None);
+    // A mini-game's shorter name distance (Slayer's Name Distance 140):
+    // full to 135, fading out at 140.
+    assert_eq!(name_opacity(100.0, 140.0, 300.0, 500.0), Some(1.0));
+    assert_eq!(name_opacity(137.5, 140.0, 300.0, 500.0), Some(0.5));
+    assert_eq!(name_opacity(141.0, 140.0, 300.0, 500.0), None);
 }
 
 #[test]

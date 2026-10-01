@@ -124,6 +124,20 @@ pub struct Rules {
     /// id, as the importer names them (Slayer CTF reads Slayer's settings).
     #[serde(default)]
     pub needs: BTreeMap<String, String>,
+    /// Text files of the Add-On the rules read as data (`data_lines(id)`):
+    /// id to the file's path in the Add-On (Slayer's bot first names,
+    /// `server/modules/module_names/first-names.txt`). Copied from the
+    /// player's own copy at import, never shipped with the port.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub data: BTreeMap<String, String>,
+}
+
+/// Whether `name` may name a rules data file.
+pub(crate) fn valid_data_id(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 48
+        && name.starts_with(|c: char| c.is_ascii_lowercase())
+        && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
 /// The companion host-rules Add-On's id for the import `namespace`.
@@ -601,7 +615,7 @@ fn try_apply(
     }
     repin(out, &mut writes)?;
     let rules = match &port.rules {
-        Some(r) => Some(rules_package(ports, e, r, import, &values, out)?),
+        Some(r) => Some(rules_package(ports, e, r, import, &values, bodies, out)?),
         None => None,
     };
     for (file, bytes) in writes {
@@ -634,6 +648,7 @@ fn rules_package(
     rules: &Rules,
     import: &Import,
     values: &BTreeMap<String, String>,
+    bodies: &Bodies,
     out: &Path,
 ) -> Result<(RulesPackage, Vec<Written>)> {
     let dir = rules_dir(out);
@@ -661,6 +676,22 @@ fn rules_package(
             "file": file,
         }));
         files.push((file, text.into_bytes()));
+    }
+    for (name, path) in &rules.data {
+        ensure!(
+            crate::ports::valid_data_id(name),
+            "data `{name}` is not an id: lower-case letters, digits and _"
+        );
+        let text = bodies
+            .get(&path.to_ascii_lowercase())
+            .with_context(|| format!("data `{name}`: the Add-On has no {path}"))?;
+        let file = format!("data/{name}.txt");
+        provides.push(serde_json::json!({
+            "kind": "data",
+            "id": crate::content_id(&id, "data", name),
+            "file": file,
+        }));
+        files.push((file, text.clone().into_bytes()));
     }
     let mut dependencies = serde_json::Map::new();
     dependencies.insert(

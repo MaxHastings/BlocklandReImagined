@@ -643,6 +643,28 @@ impl Session {
         }
         result
     }
+    /// Bring back every knocked-out brick of the builders whose bricks are
+    /// `game`'s (an Add-On's reset: Slayer's `resetBricks`).
+    pub(super) fn revive_game_bricks(&mut self, game: bri_minigames::GameId) -> Result<()> {
+        let owners = self.minigames.brick_owners(game);
+        let due: Vec<BrickId> = self
+            .events
+            .respawns
+            .keys()
+            .copied()
+            .filter(|id| {
+                self.simulation
+                    .state()
+                    .bricks
+                    .get(id)
+                    .is_some_and(|b| owners.contains(&bri_minigames::AccountId(b.owner)))
+            })
+            .collect();
+        for brick in &due {
+            self.events.respawns.remove(brick);
+        }
+        self.respawn_bricks(&due)
+    }
     /// Bring knocked-out bricks back, all at once: a rocket's worth of
     /// bricks costs one collision refresh, not one per brick. Each then
     /// fires `onRespawn` in order.

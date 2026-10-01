@@ -762,6 +762,10 @@ impl Session {
                             .map_err(rejected)?;
                         Vec::new()
                     }
+                    GameRule::NameDistance(d) => {
+                        self.minigames.set_name_distance(game, d).map_err(rejected)?;
+                        Vec::new()
+                    }
                     GameRule::KeepScores(keep) => {
                         self.minigames.set_keep_scores(game, keep).map_err(rejected)?;
                         Vec::new()
@@ -1014,7 +1018,7 @@ fn patched_settings(current: &mg::Settings, patch: &serde_json::Value) -> Result
 }
 
 /// Packages whose behaviour declares a hook, in catalog order.
-fn declaring(host: &PackageHost, declares: fn(&Behaviour) -> bool) -> Vec<String> {
+pub(super) fn declaring(host: &PackageHost, declares: fn(&Behaviour) -> bool) -> Vec<String> {
     host.catalog
         .behaviours()
         .filter(|(_, b)| declares(b))

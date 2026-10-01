@@ -5395,18 +5395,25 @@ fn mount_camera(d: &bri_vehicles::schema::Definition, feet: Vec3, pos: f32) -> (
 /// spied player, the chase camera, or the player's own eye.
 /// A name's distance fade in `GuiShapeNameHud::onRender` (blocklandv20.exe
 /// 0x5278f0). Blockland replaces the control's `distanceFade` with the
-/// shape's name distance (8192 unless `setShapeNameDistance`): names show
-/// out to `min(nameDistance, visibleDistance)` and fade from
+/// shape's name distance (8192 unless `setShapeNameDistance`; a
+/// mini-game's rules set it for its members, Slayer's Name Distance): names
+/// show out to `min(nameDistance, visibleDistance)` and fade from
 /// `min(fogDistance, max(0.8 × nameDistance, nameDistance - 5))`. None past
 /// the far end.
-pub fn name_opacity(distance: f32, fog_distance: f32, visible_distance: f32) -> Option<f32> {
-    const NAME_DISTANCE: f32 = 8192.0;
-    let far = NAME_DISTANCE.min(visible_distance);
-    let fade = fog_distance.min((NAME_DISTANCE * 0.8).max(NAME_DISTANCE - 5.0));
+pub fn name_opacity(
+    distance: f32,
+    name_distance: f32,
+    fog_distance: f32,
+    visible_distance: f32,
+) -> Option<f32> {
+    let far = name_distance.min(visible_distance);
+    let fade = fog_distance
+        .min((name_distance * 0.8).max(name_distance - 5.0))
+        .min(far);
     if distance <= 0.0 || distance > far {
         return None;
     }
-    Some(if distance < fade {
+    Some(if distance < fade || far <= fade {
         1.0
     } else {
         1.0 - (distance - fade) / (far - fade)
@@ -5433,8 +5440,13 @@ fn name_tags(
 ) -> Vec<bri_ui::api::NameTag> {
     const VERTICAL_OFFSET: f32 = 0.85;
     // Where a name anchored at `target` goes on screen, and how strongly.
-    let place = |target: Vec3| -> Option<(f32, f32, f32)> {
-        let opacity = name_opacity(target.distance(camera), fog_distance, visible_distance)?;
+    let place = |target: Vec3, name_distance: f32| -> Option<(f32, f32, f32)> {
+        let opacity = name_opacity(
+            target.distance(camera),
+            name_distance,
+            fog_distance,
+            visible_distance,
+        )?;
         if building.is_some_and(|b| !b.name_visible(camera, target).unwrap_or(true)) {
             return None;
         }
@@ -5466,15 +5478,18 @@ fn name_tags(
         let Some(state) = presented.get(owner) else {
             continue;
         };
-        let Some((x, y, opacity)) = place(view.archetypes.eye(state)) else {
+        let game = view.minigames.iter().find(|m| m.members.contains(owner));
+        let name_distance = game.and_then(|m| m.name_distance).map_or(8192.0, |d| d as f32);
+        let Some((x, y, opacity)) = place(view.archetypes.eye(state), name_distance) else {
             continue;
         };
-        let game = view.minigames.iter().find(|m| m.members.contains(owner));
         // A team member's name is in their team's paint colour.
         let team = view.vitals.get(owner).and_then(|v| v.team).and_then(|team| {
             paint(game?.teams.iter().find(|t| t.id.0 == team)?.color)
         });
+        // A game's own paint colour (Slayer's Color) over its v20 one.
         let color = team
+            .or_else(|| game.and_then(|m| m.paint_color).and_then(paint))
             .or_else(|| game.and_then(|m| crate::minigame_ui::color_rgb(m.color)))
             .unwrap_or([255; 3]);
         tags.push(bri_ui::api::NameTag {
@@ -5491,7 +5506,7 @@ fn name_tags(
         let Some(name) = &drop.name else {
             continue;
         };
-        let Some((x, y, opacity)) = place(drop_center(drop)) else {
+        let Some((x, y, opacity)) = place(drop_center(drop), 8192.0) else {
             continue;
         };
         tags.push(bri_ui::api::NameTag {

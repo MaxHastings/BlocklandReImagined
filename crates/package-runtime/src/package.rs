@@ -265,7 +265,7 @@ impl Package {
                         self.behaviour = Some(b);
                     }
                 }
-                Kind::Script => {
+                Kind::Script | Kind::Data => {
                     if std::str::from_utf8(&asset.bytes).is_err() {
                         out.push(
                             Diagnostic::error("content.script.utf8", "script is not UTF-8").at(at),
@@ -345,6 +345,14 @@ impl Package {
     }
     pub fn asset(&self, file: &str) -> Option<&Asset> {
         self.assets.iter().find(|a| a.file == file)
+    }
+    /// The lines of data file `id` (`Kind::Data`).
+    pub fn data_lines(&self, id: &str) -> Option<Vec<&str>> {
+        let asset = self
+            .assets
+            .iter()
+            .find(|a| a.kind == Kind::Data && (a.id == id || a.id.rsplit('/').next() == Some(id)))?;
+        Some(std::str::from_utf8(&asset.bytes).ok()?.lines().map(str::trim_end).collect())
     }
     pub fn script_source(&self) -> Option<&str> {
         let b = self.behaviour.as_ref()?;

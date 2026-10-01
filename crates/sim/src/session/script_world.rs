@@ -146,6 +146,20 @@ impl World for ScriptWorld<'_> {
     ) -> Result<bri_package::setting::SettingValue, String> {
         self.session.setting_value(self.package, game, team, key)
     }
+    fn setting_text(&self, game: u64, team: Option<u64>, key: &str) -> Result<String, String> {
+        self.session.setting_text(self.package, game, team, key)
+    }
+    fn minigame_snapshot(&self, game: u64) -> Option<serde_json::Value> {
+        self.session.minigame_snapshot(bri_minigames::GameId(game))
+    }
+    fn host_data(&self, key: &str) -> Option<serde_json::Value> {
+        self.session.host_data(self.package, key).cloned()
+    }
+    fn data_lines(&self, id: &str) -> Option<Vec<String>> {
+        let host = self.session.packages.as_ref()?;
+        let lines = host.catalog.packages.get(self.package)?.data_lines(id)?;
+        Some(lines.into_iter().map(str::to_owned).collect())
+    }
     fn brick_box(&self, brick: u64) -> Option<([f32; 3], [f32; 3])> {
         let (min, max) = self.session.simulation.brick_box(brick)?;
         Some((min.to_array(), max.to_array()))

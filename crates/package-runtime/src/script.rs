@@ -22,7 +22,7 @@ use std::sync::Arc;
 mod bots;
 mod games;
 pub use bots::BotKindView;
-pub use games::{BrickView, DropView, MAX_BRICKS_LISTED, MinigameView, TeamView};
+pub use games::{BrickView, DropView, MAX_BRICKS_LISTED, MinigameView, TeamView, brick_map};
 
 /// Operation budgets per kind of call.
 #[derive(Debug, Clone, Copy)]
@@ -247,6 +247,25 @@ pub trait World {
         _key: &str,
     ) -> Result<bri_package::setting::SettingValue, String> {
         Err("this host has no Add-On settings".into())
+    }
+    /// An Add-On setting's value as players read it: `True`/`False`, a
+    /// list choice's name, an item's or player type's name, a number or
+    /// the text (Slayer's `getDisplayValue`).
+    fn setting_text(&self, _game: u64, _team: Option<u64>, _key: &str) -> Result<String, String> {
+        Err("this host has no Add-On settings".into())
+    }
+    /// Mini-game `game` as a build saves it (settings, Add-On settings,
+    /// teams, per-game state), for `restore_minigame`.
+    fn minigame_snapshot(&self, _game: u64) -> Option<serde_json::Value> {
+        None
+    }
+    /// What the calling package keeps on the host as `key`.
+    fn host_data(&self, _key: &str) -> Option<serde_json::Value> {
+        None
+    }
+    /// The lines of the calling package's data file `id`.
+    fn data_lines(&self, _id: &str) -> Option<Vec<String>> {
+        None
     }
 }
 /// Most bricks one `bricks_in` returns.

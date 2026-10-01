@@ -334,7 +334,13 @@ pub struct MiniGame {
     /// go as in a player's game.
     #[serde(default)]
     pub shared: bool,
+    /// How far away its members' names show over their heads
+    /// (`setShapeNameDistance`; Slayer's Name Distance), or v20's own.
+    #[serde(default)]
+    pub name_distance: Option<u32>,
 }
+/// Farthest a name may show (v20's default shape name distance).
+pub const MAX_NAME_DISTANCE: u32 = 8192;
 /// A box in world units, lowest corner first.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -395,6 +401,7 @@ impl MiniGame {
             region: None,
             claims_bricks: false,
             shared: false,
+            name_distance: None,
         }
     }
 }

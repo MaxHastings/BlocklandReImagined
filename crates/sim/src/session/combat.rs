@@ -206,6 +206,10 @@ pub struct MiniGameView {
     /// and go as in a player's game.
     #[serde(default)]
     pub shared: bool,
+    /// How far away its members' names show (Slayer's Name Distance), or
+    /// v20's own.
+    #[serde(default)]
+    pub name_distance: Option<u32>,
 }
 impl MiniGameView {
     /// Within what a host may send (a client checks what it receives).
@@ -220,6 +224,7 @@ impl MiniGameView {
         self.members.len() <= 64
             && self.color < 10
             && self.paint_color.is_none_or(|c| c < 64)
+            && self.name_distance.is_none_or(|d| d <= mg::MAX_NAME_DISTANCE)
             && self.settings.title.len() <= 256
             && !self.settings.title.chars().any(char::is_control)
             && self.teams.len() <= mg::MAX_TEAMS
@@ -761,6 +766,7 @@ impl Session {
                     default: self.minigames.default_game() == Some(game.id),
                     paint_color: game.paint_color,
                     shared: game.shared,
+                    name_distance: game.name_distance,
                 })
             })
             .collect()
@@ -1021,16 +1027,62 @@ impl Session {
             .filter(|k| *k != victim)
             // A killer who has left since the shot counts as no killer.
             .and_then(|k| self.peers.get(&k).map(|p| p.name.clone()));
-        let text = match self.weapons.pack.damage_type(kind.type_name()) {
-            Some(t) => t.message(&victim_name, killer_name.as_deref()),
+        let damage_type = self.weapons.pack.damage_type(kind.type_name()).cloned();
+        let line = |victim_name: &str, killer_name: Option<&str>| match &damage_type {
+            Some(t) => t.message(victim_name, killer_name),
             None => killer_name.map_or_else(
-                || victim_name.clone(),
+                || victim_name.to_owned(),
                 |k| format!("{k} killed {victim_name}"),
             ),
         };
+        let text = line(&victim_name, killer_name.as_deref());
         let game = self.game_of(victim);
-        self.chat_game(game, None, text);
+        let shown_killer = killer.filter(|k| *k != victim && killer_name.is_some());
+        match self.package_death_message(
+            victim,
+            shown_killer,
+            kind.hook_kind(),
+            kind.type_name(),
+            &text,
+        ) {
+            super::packages::DeathLine::Engine => self.chat_game(game, None, text),
+            super::packages::DeathLine::Hidden => {}
+            super::packages::DeathLine::Changed {
+                victim: v,
+                killer: k,
+                suffix,
+                line: whole,
+                to,
+            } => {
+                let mut text = whole.unwrap_or_else(|| {
+                    line(
+                        v.as_deref().unwrap_or(&victim_name),
+                        k.as_deref().or(killer_name.as_deref()),
+                    )
+                });
+                if !suffix.is_empty() {
+                    text.push(' ');
+                    text.push_str(&suffix);
+                }
+                match to {
+                    Some(to) => {
+                        for owner in to {
+                            self.notify(owner, Notice::Chat(text.clone()));
+                        }
+                    }
+                    None => self.chat_game(game, None, text),
+                }
+            }
+        }
         Ok(())
+    }
+
+    /// A chat line an Add-On's rules wrote: to `to`, or everyone.
+    pub(super) fn send_rules_line(&mut self, line: String, to: Option<Vec<OwnerId>>) {
+        let to = to.unwrap_or_else(|| self.peers.keys().copied().collect());
+        for owner in to {
+            self.notify(owner, Notice::Chat(line.clone()));
+        }
     }
 
     /// Minigame team chat (`serverCmdTeamMessageSent`).
@@ -1051,6 +1103,14 @@ impl Session {
             );
             return Ok(());
         };
+        match self.package_chat(owner, text, true) {
+            super::packages::ChatAnswer::Engine => {}
+            super::packages::ChatAnswer::Dropped => return Ok(()),
+            super::packages::ChatAnswer::Line { line, to } => {
+                self.send_rules_line(line, to);
+                return Ok(());
+            }
+        }
         // Private-use escapes are color codes; strip any the sender typed.
         let plain = |text: &str| -> String {
             text.chars()

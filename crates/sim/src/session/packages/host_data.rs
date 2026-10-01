@@ -7,10 +7,7 @@
 use super::*;
 use std::sync::Mutex;
 
-/// Most keys one Add-On keeps.
-pub const MAX_HOST_KEYS: usize = 64;
-/// Most bytes one kept value takes, as JSON.
-pub const MAX_HOST_VALUE: usize = 256 * 1024;
+pub use bri_package_runtime::ops::{MAX_HOST_KEYS, MAX_HOST_VALUE};
 /// The key the engine keeps an Add-On's server-wide settings under; rules'
 /// own keys are identifiers, so never this.
 pub(in crate::session) const SERVER_SETTINGS: &str = "!settings";
@@ -45,15 +42,7 @@ impl AddOnData for MemoryAddOnData {
     }
 }
 
-/// Whether `key` is one rules may keep: an identifier.
-pub(in crate::session) fn rules_key(key: &str) -> bool {
-    !key.is_empty()
-        && key.len() <= 48
-        && key.starts_with(|c: char| c.is_ascii_lowercase())
-        && key
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
-}
+pub(in crate::session) use bri_package_runtime::ops::valid_host_key as rules_key;
 
 impl Session {
     /// Where Add-Ons keep data on this host. Set before packages are

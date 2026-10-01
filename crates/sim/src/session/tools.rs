@@ -313,6 +313,7 @@ impl Session {
             .validate_edit(self.simulation.state(), id, &edit)?;
         self.simulation.edit(&actor, id, edit)?;
         self.dirty.insert(id);
+        self.note_brick_actor(owner, id);
         Ok(())
     }
 
@@ -634,6 +635,7 @@ impl Session {
         let actor = copy_actor(&self.peers[&owner].actor);
         self.simulation.edit(&actor, id, edit)?;
         self.dirty.insert(id);
+        self.note_brick_actor(owner, id);
         self.push_undo(owner, undo);
         Ok(())
     }

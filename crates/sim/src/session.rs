@@ -1930,6 +1930,7 @@ impl Session {
                 Ok(Reply::Accepted)
             }
             Command::Suicide => {
+                self.package_policy("suicide", owner)?;
                 self.suicide(owner)?;
                 Ok(Reply::Accepted)
             }
@@ -1956,6 +1957,7 @@ impl Session {
                     self.addon_tool_fire(owner, &command);
                     return Ok(Reply::Accepted);
                 }
+                self.package_policy("light", owner)?;
                 self.toggle_light(owner)?;
                 Ok(Reply::Accepted)
             }
@@ -2052,6 +2054,7 @@ impl Session {
                 Ok(Reply::Accepted)
             }
             Command::DropPlayerAtCamera(view) => {
+                self.package_policy("admin_camera", owner)?;
                 self.drop_player_at_camera(owner, view)?;
                 Ok(Reply::Accepted)
             }
@@ -2284,6 +2287,7 @@ impl Session {
                 }
                 self.special_planted(owner, id)?;
                 self.dirty.insert(id);
+                self.note_brick_actor(owner, id);
                 self.push_undo(owner, undo::UndoEntry::Plant(id));
                 self.cues
                     .emit(tick, crate::presentation::CueKind::Plant, position);
@@ -2398,6 +2402,16 @@ impl Session {
                 }
                 if self.chat_filtered(owner, &text) {
                     return Ok(Reply::Accepted);
+                }
+                match self.package_chat(owner, &text, false) {
+                    packages::ChatAnswer::Engine => {}
+                    packages::ChatAnswer::Dropped => return Ok(Reply::Accepted),
+                    packages::ChatAnswer::Line { line, to } => {
+                        let text_len = text.len();
+                        self.send_rules_line(line, to);
+                        self.start_talking(tick, owner, text_len);
+                        return Ok(Reply::Accepted);
+                    }
                 }
                 let next = self
                     .next_chat

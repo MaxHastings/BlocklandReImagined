@@ -646,6 +646,7 @@ impl AdminRuntime {
                             session.set_environment(*settings)?;
                         }
                         GameplayCommand::DropCameraAtPlayer => {
+                            session.package_policy("admin_camera", actor_owner)?;
                             session.drop_camera_at_player(actor_owner)?;
                         }
                         other => {

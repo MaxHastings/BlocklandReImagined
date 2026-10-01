@@ -26,6 +26,9 @@ use std::sync::Arc;
 
 mod brick_events;
 mod brick_fields;
+mod brick_hooks;
+mod chat_hooks;
+pub(in crate::session) use chat_hooks::{ChatAnswer, DeathLine};
 pub(in crate::session) use brick_events::Follower;
 mod game_hooks;
 mod host_data;
@@ -347,6 +350,7 @@ pub(super) struct PackageHost {
     host_data: BTreeMap<String, BTreeMap<String, serde_json::Value>>,
     /// Values rules keep on bricks (`set_brick_field`).
     brick_fields: brick_fields::BrickFields,
+    brick_watch: brick_hooks::BrickWatch,
     /// Score reports to send and the columns games changed.
     reports: reports::Reports,
     /// Worn images a package keeps (`mount_image(..., #{ keep: true })`),
@@ -699,6 +703,7 @@ impl Session {
             game_hooks: Default::default(),
             host_data: BTreeMap::new(),
             brick_fields: Default::default(),
+            brick_watch: Default::default(),
             reports: Default::default(),
             kept_worn: BTreeMap::new(),
             settings,
@@ -2304,6 +2309,11 @@ impl Session {
             | Op::PlaceMember { .. }
             | Op::HoldRespawn { .. }
             | Op::EndRound { .. }) => self.apply_minigame_op(op),
+            Op::SetHostData { key, value } => self.set_host_data(package, &key, value),
+            Op::RestoreMinigame { game, snapshot } => {
+                self.restore_minigame_snapshot(package, bri_minigames::GameId(game), snapshot)
+            }
+            Op::ReviveBricks { game } => self.revive_game_bricks(bri_minigames::GameId(game)),
             Op::SetSetting {
                 game,
                 team,
@@ -3305,7 +3315,17 @@ impl Session {
             request.package.clone(),
             request.command.clone(),
         );
-        if host.cooldowns.get(&key).is_some_and(|until| tick < *until) {
+        // The package's shared limit over all its commands (Slayer's
+        // `isSpamming`): `*` is never a command's name.
+        let shared_key = (key.0.clone(), key.1.clone(), "*".to_owned());
+        let shared = host
+            .catalog
+            .behaviours()
+            .find(|(id, _)| **id == request.package)
+            .map_or(0, |(_, b)| u64::from(b.command_cooldown_ticks));
+        if host.cooldowns.get(&key).is_some_and(|until| tick < *until)
+            || host.cooldowns.get(&shared_key).is_some_and(|until| tick < *until)
+        {
             return Err(reject(
                 "command.cooldown",
                 format!("`{}` is cooling down", request.command),
@@ -3380,13 +3400,16 @@ impl Session {
                 ),
             ));
         }
-        if cooldown > 0
-            && let Some(host) = self.packages.as_mut()
-        {
-            if host.cooldowns.len() >= MAX_COOLDOWNS {
+        if let Some(host) = self.packages.as_mut() {
+            if (cooldown > 0 || shared > 0) && host.cooldowns.len() >= MAX_COOLDOWNS {
                 host.cooldowns.retain(|_, until| *until > tick);
             }
-            host.cooldowns.insert(key, tick + cooldown);
+            if cooldown > 0 {
+                host.cooldowns.insert(key, tick + cooldown);
+            }
+            if shared > 0 {
+                host.cooldowns.insert(shared_key, tick + shared);
+            }
         }
         let result = self.run_package(
             &request.package,
@@ -3443,6 +3466,7 @@ impl Session {
         self.step_saved_copies();
         self.deliver_copy_reports();
         let changed = self.dirty.read(super::dirty::Reader::Packages);
+        self.deliver_brick_changes(&changed);
         let Some(host) = self.packages.as_ref() else {
             return Ok(());
         };

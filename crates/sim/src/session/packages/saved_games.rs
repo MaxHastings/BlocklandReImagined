@@ -44,6 +44,12 @@ impl Session {
         if !self.minigames.can_edit(player, game) {
             return None;
         }
+        self.minigame_snapshot(game)
+    }
+
+    /// `game` as a build saves it: its settings, Add-On settings, teams
+    /// and per-game Add-On state (rules' presets: `minigame_snapshot`).
+    pub(in crate::session) fn minigame_snapshot(&self, game: mg::GameId) -> Option<serde_json::Value> {
         let g = self.minigames.game(game).ok()?;
         let mut packages: BTreeMap<String, BTreeMap<String, serde_json::Value>> = BTreeMap::new();
         if let Some(host) = self.packages.as_ref() {
@@ -152,7 +158,28 @@ impl Session {
                     .context("No mini-game was made")?
             }
         };
-        self.restore_addon_settings(owner, game, &saved)?;
+        self.restore_addon_settings(Editor::Player(owner), game, &saved)?;
+        self.restore_per_minigame(game, saved.packages);
+        self.queue_game_event("loaded", game.0);
+        Ok(())
+    }
+
+    /// Put a snapshot (`minigame_snapshot`) into `game` for `package`'s
+    /// rules: Slayer loading a saved config into a running game.
+    pub(in crate::session) fn restore_minigame_snapshot(
+        &mut self,
+        package: &str,
+        game: mg::GameId,
+        saved: serde_json::Value,
+    ) -> Result<()> {
+        let saved: SavedMiniGame =
+            serde_json::from_value(saved).context("not a mini-game snapshot")?;
+        let effects = self
+            .minigames
+            .host_configure(game, saved.settings.clone())
+            .map_err(|e| anyhow::anyhow!("Settings rejected: {e}"))?;
+        self.apply_minigame_effects(effects)?;
+        self.restore_addon_settings(Editor::Rules(package), game, &saved)?;
         self.restore_per_minigame(game, saved.packages);
         self.queue_game_event("loaded", game.0);
         Ok(())
@@ -163,7 +190,7 @@ impl Session {
     /// at their defaults.
     fn restore_addon_settings(
         &mut self,
-        owner: OwnerId,
+        editor: Editor,
         game: mg::GameId,
         saved: &SavedMiniGame,
     ) -> Result<()> {
@@ -216,7 +243,7 @@ impl Session {
         if settings.is_empty() && teams.is_none() {
             return Ok(());
         }
-        self.edit_settings(Editor::Player(owner), game, settings, teams, true)
+        self.edit_settings(editor, game, settings, teams, true)
     }
 
     /// The build's `per_minigame` state, under `game`'s id now. A key no

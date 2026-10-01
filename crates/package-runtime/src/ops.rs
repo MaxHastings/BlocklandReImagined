@@ -882,6 +882,24 @@ pub enum Op {
         settings: serde_json::Value,
         paint: Option<u8>,
     },
+    /// Keep `value` on the host as the package's `key` between games and
+    /// restarts, or forget it with `None` (Slayer's configs).
+    SetHostData {
+        key: String,
+        value: Option<serde_json::Value>,
+    },
+    /// Put a snapshot (`minigame_snapshot`) into mini-game `game`: its
+    /// settings, Add-On settings, teams and per-game state (Slayer's
+    /// configs and Auto Start).
+    RestoreMinigame {
+        game: u64,
+        snapshot: serde_json::Value,
+    },
+    /// Bring back now every knocked-out brick whose builder's bricks are
+    /// mini-game `game`'s (Slayer's reset: `respawn` on fake-dead bricks).
+    ReviveBricks {
+        game: u64,
+    },
     /// Put a player in a mini-game, or in none, whatever its invitations
     /// and join wait (Slayer's `addMember` and `removeMember`).
     PlaceMember {
@@ -1157,6 +1175,8 @@ pub enum GameRule {
     /// While it uses every player's bricks, it claims those of builders in
     /// no game.
     ClaimsBricks(bool),
+    /// How far away its members' names show, or v20's own distance.
+    NameDistance(Option<u32>),
     /// Change its own settings: the fields given, over what it has.
     Settings(serde_json::Value),
     /// End the game.
@@ -1164,6 +1184,19 @@ pub enum GameRule {
 }
 /// Longest JSON a mini-game's settings change may be.
 pub const MAX_SETTINGS_JSON: usize = 4096;
+/// Most keys one package keeps on the host (`set_host_data`).
+pub const MAX_HOST_KEYS: usize = 64;
+/// Most bytes one kept value takes, as JSON.
+pub const MAX_HOST_VALUE: usize = 256 * 1024;
+/// Whether `key` is one rules may keep a value under: an identifier.
+pub fn valid_host_key(key: &str) -> bool {
+    !key.is_empty()
+        && key.len() <= 48
+        && key.starts_with(|c: char| c.is_ascii_lowercase())
+        && key
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+}
 fn settings_json_ok(v: &serde_json::Value) -> bool {
     v.is_object() && serde_json::to_string(v).is_ok_and(|t| t.len() <= MAX_SETTINGS_JSON)
 }
@@ -1426,12 +1459,15 @@ impl Op {
             | Self::SetGameRule { .. }
             | Self::CreateMinigame { .. }
             | Self::PlaceMember { .. }
+            | Self::ReviveBricks { .. }
+            | Self::RestoreMinigame { .. }
             | Self::HoldRespawn { .. }
             | Self::SetRespawnTime { .. }
             | Self::EndRound { .. }
             | Self::SetSetting { .. }
             | Self::SetZonePeriod { .. }
             | Self::ReportColumn { .. } => "minigame",
+            Self::SetHostData { .. } => "storage",
             Self::AddBot { .. }
             | Self::RemoveBot { .. }
             | Self::RestBot { .. }
@@ -1858,13 +1894,27 @@ impl Op {
                             && !t.name.chars().any(char::is_control)
                     })
             }
-            Self::SetTeam { .. } | Self::ResetMinigame { .. } | Self::PlaceMember { .. } => true,
+            Self::SetTeam { .. }
+            | Self::ResetMinigame { .. }
+            | Self::PlaceMember { .. }
+            | Self::ReviveBricks { .. } => true,
+            Self::RestoreMinigame { snapshot, .. } => {
+                snapshot.is_object()
+                    && serde_json::to_vec(snapshot).is_ok_and(|b| b.len() <= MAX_HOST_VALUE)
+            }
+            Self::SetHostData { key, value } => {
+                valid_host_key(key)
+                    && value.as_ref().is_none_or(|v| {
+                        serde_json::to_vec(v).is_ok_and(|b| b.len() <= MAX_HOST_VALUE)
+                    })
+            }
             Self::SetGameRule { rule, .. } => match rule {
                 GameRule::PaintColor(c) => c.is_none_or(|c| c < 64),
                 GameRule::Region(r) => r.is_none_or(|[lo, hi]| {
                     (0..3).all(|i| lo[i].is_finite() && hi[i].is_finite() && lo[i] <= hi[i])
                 }),
                 GameRule::Settings(v) => settings_json_ok(v),
+                GameRule::NameDistance(d) => d.is_none_or(|d| d <= 8192),
                 _ => true,
             },
             Self::CreateMinigame { settings, paint, .. } => {
@@ -2033,6 +2083,7 @@ pub fn op_name(op: &Op) -> &'static str {
             GameRule::PaintColor(_) => "set_minigame_color",
             GameRule::Region(_) => "set_minigame_region",
             GameRule::KeepScores(_) => "set_keep_scores",
+            GameRule::NameDistance(_) => "set_name_distance",
             GameRule::Cleanup { .. } => "set_cleanup_on_leave",
             GameRule::ClaimsBricks(_) => "set_claims_bricks",
             GameRule::Settings(_) => "set_minigame",
@@ -2040,6 +2091,9 @@ pub fn op_name(op: &Op) -> &'static str {
         },
         Op::CreateMinigame { .. } => "create_minigame",
         Op::PlaceMember { .. } => "place_member",
+        Op::SetHostData { .. } => "set_host_data",
+        Op::ReviveBricks { .. } => "revive_bricks",
+        Op::RestoreMinigame { .. } => "restore_minigame",
         Op::EndRound { .. } => "end_round",
         Op::SetSetting { team: None, .. } => "set_setting",
         Op::SetSetting { team: Some(_), .. } => "set_team_setting",

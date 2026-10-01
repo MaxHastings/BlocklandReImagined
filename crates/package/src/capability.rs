@@ -18,6 +18,7 @@ pub const CAPABILITIES: &[&str] = &[
     "minigame",
     "brick_events",
     "bots",
+    "storage",
 ];
 
 /// The plain-language line a player reads for `name`, completing
@@ -63,6 +64,9 @@ pub fn describe(name: &str) -> Option<&'static str> {
         // Bots of an enabled bot Add-On's kinds that play in mini-games
         // (Slayer's Preferred Player Count): added, rested and removed.
         "bots" => "add bots to mini-games and take them away again",
+        // Small values kept on the host between games and restarts
+        // (Slayer's saved configs and its server-wide settings).
+        "storage" => "keep its own settings and saved games on the host",
         _ => return None,
     })
 }

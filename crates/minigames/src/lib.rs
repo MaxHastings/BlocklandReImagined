@@ -415,11 +415,7 @@ impl MinigamesWorld {
             return Err(Error::Capacity);
         }
         let members: Vec<_> = g.members.iter().copied().collect();
-        let owners = if g.settings.use_all_players_bricks {
-            members.iter().map(|p| p.account).collect()
-        } else {
-            vec![g.owner.account]
-        };
+        let owners = self.brick_owners(game);
         let g = self.games.get_mut(&game).expect("validated game");
         g.last_reset = Some(self.tick);
         g.round += 1;
@@ -839,6 +835,18 @@ impl MinigamesWorld {
         let mut out = Vec::new();
         self.spawn(player, SpawnReason::Respawn, &mut out);
         Ok(out)
+    }
+    /// The builders whose bricks are `game`'s: every member's when it uses
+    /// all players' bricks, else its owner's.
+    pub fn brick_owners(&self, game: GameId) -> Vec<AccountId> {
+        let Some(g) = self.games.get(&game) else {
+            return Vec::new();
+        };
+        if g.settings.use_all_players_bricks {
+            g.members.iter().map(|p| p.account).collect()
+        } else {
+            vec![g.owner.account]
+        }
     }
     /// Native Client incScore/setScore event integration; host validates event ownership first.
     pub fn event_score(

@@ -52,9 +52,12 @@ pub enum Kind {
     /// Keys players can bind to packages' commands in Options → Controls
     /// (`binds.json`). Client side, like HUD panels.
     Binds,
+    /// Lines of UTF-8 text rules read with `data_lines(id)` (Slayer's bot
+    /// first names). Server side.
+    Data,
 }
 impl Kind {
-    pub const NAMES: [&str; 15] = [
+    pub const NAMES: [&str; 16] = [
         "behaviour",
         "script",
         "world",
@@ -70,6 +73,7 @@ impl Kind {
         "bots",
         "mode",
         "binds",
+        "data",
     ];
     pub fn parse(text: &str) -> Option<Self> {
         Some(match text {
@@ -88,6 +92,7 @@ impl Kind {
             "bots" => Self::Bots,
             "mode" => Self::Mode,
             "binds" => Self::Binds,
+            "data" => Self::Data,
             _ => return None,
         })
     }
@@ -98,7 +103,8 @@ impl Kind {
             | Self::World
             | Self::Entity
             | Self::Archetype
-            | Self::Mode => Side::Server,
+            | Self::Mode
+            | Self::Data => Side::Server,
             // Shared gameplay data is client-visible: clients load it too.
             Self::Model
             | Self::Hud
@@ -115,6 +121,7 @@ impl Kind {
     pub fn max_bytes(self) -> usize {
         match self {
             Self::Script => 256 * 1024,
+            Self::Data => 1024 * 1024,
             Self::Weapons | Self::Vehicles | Self::Bricks => 32 * 1024 * 1024,
             _ => 128 * 1024,
         }
@@ -374,11 +381,12 @@ pub struct Behaviour {
     pub on_death_message: bool,
     /// Brick kinds (`namespace:brick/name`, `v20/brick/<datablock>`, or
     /// `*` for every brick) whose changes these rules hear as
-    /// `on_brick(event, brick, player)`: `event` is `planted` (by a
-    /// player), `loaded` (from a build), `painted`, `named` or `removed`;
-    /// `player` who did it, or `()`. Delivered at the start of the next
-    /// tick, except `removed`, which comes while the brick can still be
-    /// read (Slayer's `slayerPrepareBrick`).
+    /// Brick kinds (or `*`) whose changes these rules hear with
+    /// `on_brick(event, brick, player, info)`: `event` is `planted` (by a
+    /// player), `loaded` (from a build, or standing when the rules start),
+    /// `painted`, `named` or `removed`; `player` who did it by hand, or
+    /// `()`; `info.brick` the brick as it is (as it was, when removed).
+    /// Heard at the next tick (Slayer's `slayerPrepareBrick`, `onRemove`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub on_brick: Vec<String>,
     /// `on_ride(player, info)` as a player is about to board a vehicle the
