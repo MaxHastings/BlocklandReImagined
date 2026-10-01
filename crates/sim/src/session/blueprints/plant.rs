@@ -73,6 +73,14 @@ pub(in crate::session) struct PlantWork {
     phase: Phase,
     ids: Vec<BrickId>,
     refused: Refusals,
+    /// Floating was asked for administrators only, and the player is not
+    /// one: this plant did not float ([`Session::float_copy`]).
+    pub float_refused: bool,
+    /// How the copy is turned, and whether upside down and mirrored: what
+    /// its bricks' settings turn by ([`crate::blueprint::CopyExtras::placed`]).
+    pub look: (u8, (bool, bool)),
+    /// The names its bricks have, lower-case.
+    names: std::collections::HashSet<String>,
 }
 
 impl PlantWork {
@@ -103,6 +111,8 @@ impl PlantWork {
         };
         Self {
             ids: Vec::with_capacity(copy.len()),
+            names: copy.names(),
+            look: (0, (false, false)),
             copy,
             placement,
             inexact,
@@ -112,6 +122,7 @@ impl PlantWork {
             support,
             phase,
             refused: Refusals::default(),
+            float_refused: false,
         }
     }
 
@@ -161,16 +172,21 @@ impl PlantWork {
                         let mut brick = self.placement.brick(&self.copy, &self.copy.bricks[i]);
                         brick.base_plate |= base == Some(i);
                         match s.simulation.plant_try(&self.actor, brick, true) {
-                            Ok(id) => {
-                                self.ids.push(id);
-                                s.special_planted(owner, id)?;
-                                s.dirty.insert(id);
-                            }
+                            Ok(id) => planted(
+                                s,
+                                owner,
+                                (i, id),
+                                &mut self.ids,
+                                (&self.copy, &self.actor),
+                                self.look,
+                                &self.names,
+                            )?,
                             Err(error) => {
                                 self.phase = Phase::Undo { error: Some(error) };
                                 break;
                             }
                         }
+                        s.simulation.charge_rebuilds(budget);
                     }
                     if matches!(self.phase, Phase::Place { .. }) {
                         return Ok(true);
@@ -190,6 +206,7 @@ impl PlantWork {
                             s.simulation.remove(&engine, id)?;
                             s.dirty.insert(id);
                         }
+                        s.simulation.charge_rebuilds(budget);
                     }
                     let error = error.take().expect("taken once");
                     self.refused = Refusals::all(error);
@@ -209,11 +226,15 @@ impl PlantWork {
                         *next += 1;
                         let brick = self.placement.brick(&self.copy, &self.copy.bricks[i as usize]);
                         match s.simulation.plant_try(&self.actor, brick, free) {
-                            Ok(id) => {
-                                self.ids.push(id);
-                                s.special_planted(owner, id)?;
-                                s.dirty.insert(id);
-                            }
+                            Ok(id) => planted(
+                                s,
+                                owner,
+                                (i as usize, id),
+                                &mut self.ids,
+                                (&self.copy, &self.actor),
+                                self.look,
+                                &self.names,
+                            )?,
                             Err(error) => {
                                 if matches!(error.downcast_ref(), Some(PlantFailure::Float)) {
                                     floating.push(i);
@@ -222,6 +243,7 @@ impl PlantWork {
                                 }
                             }
                         }
+                        s.simulation.charge_rebuilds(budget);
                     }
                     if floating.is_empty() {
                         return Ok(true);
@@ -244,13 +266,18 @@ impl PlantWork {
                         let mut base = self.placement.brick(&self.copy, &self.copy.bricks[i as usize]);
                         base.base_plate = true;
                         match s.simulation.plant_try(&self.actor, base, true) {
-                            Ok(id) => {
-                                self.ids.push(id);
-                                s.special_planted(owner, id)?;
-                                s.dirty.insert(id);
-                            }
+                            Ok(id) => planted(
+                                s,
+                                owner,
+                                (i as usize, id),
+                                &mut self.ids,
+                                (&self.copy, &self.actor),
+                                self.look,
+                                &self.names,
+                            )?,
                             Err(error) => self.refused.add(error),
                         }
+                        s.simulation.charge_rebuilds(budget);
                     }
                     *waiting = std::mem::take(floating);
                     *next = 0;
@@ -269,7 +296,7 @@ impl PlantWork {
             s.report_place(
                 package,
                 owner,
-                (self.ids.len(), self.copy.len(), canceled),
+                (self.ids.len(), self.copy.len(), canceled, self.float_refused),
                 &self.refused,
                 &self.inexact,
             );
@@ -284,9 +311,8 @@ impl PlantWork {
         if let Some(peer) = s.peers.get_mut(&owner) {
             peer.plants = peer.plants.max(rate);
         }
-        if let Some(wait) = s.plant_waits.get_mut(&owner) {
-            wait.next = tick + wait.ticks;
-        }
+        // Whatever wait is set later runs from here.
+        s.plant_waits.entry(owner).or_default().last = Some(tick);
         let entry = undo::UndoEntry::Group {
             ids: self.ids,
             group: self.actor.owner,
@@ -299,6 +325,30 @@ impl PlantWork {
     }
 }
 
+/// Brick `i` of the copy went in as `id`: with its settings, as the
+/// player's wrench would set them. Takes the plant's parts, not the plant,
+/// so a phase may call it while it holds its own.
+fn planted(
+    s: &mut Session,
+    owner: OwnerId,
+    (i, id): (usize, BrickId),
+    ids: &mut Vec<BrickId>,
+    (copy, actor): (&Blueprint, &Actor),
+    look: (u8, (bool, bool)),
+    names: &std::collections::HashSet<String>,
+) -> Result<()> {
+    ids.push(id);
+    s.special_planted(owner, id)?;
+    s.dirty.insert(id);
+    if let Some(extras) = copy.extras_of(i) {
+        let (turns, look) = look;
+        let named = |n: &str| names.contains(&n.to_ascii_lowercase());
+        let extras = extras.placed(turns, look, named, s.event_catalog());
+        s.give_copy_extras(owner, actor, id, extras);
+    }
+    Ok(())
+}
+
 impl CopyWork for PlantWork {
     fn progress(&self) -> Progress {
         let total = self.copy.len();
@@ -307,12 +357,22 @@ impl CopyWork for PlantWork {
             Phase::Place { next, .. } => (total + next) / 2,
             _ => self.ids.len() + self.refused.count,
         };
+        // A later pass looks again for bricks that now have something
+        // under them.
+        let searched = match &self.phase {
+            Phase::Each { waiting, next, .. } if waiting.len() < total => {
+                Some((next * 100).checked_div(waiting.len()).unwrap_or(100))
+            }
+            _ => None,
+        };
         Progress {
             action: "plant",
             done: done.min(total),
             total,
-            placed: 0,
-            refused: 0,
+            placed: self.ids.len(),
+            refused: self.refused.count,
+            searched,
+            ..Default::default()
         }
     }
 

@@ -2312,9 +2312,11 @@ fn slayers_rights_decide_who_invites_creates_and_suicides() {
     let e = g.cmd(owner, Command::Suicide).unwrap_err();
     assert_eq!(readable(&e.to_string()), "Suicide is disabled in this minigame.");
 
-    // Create Minigame Rights at Host: only the host may start a game.
-    let host = g.s.join("Host".into(), Vec3::new(4.0, 0.05, 24.0), true).unwrap();
-    g.set(host, &[(&key(SLAYER, "create_rights"), Value::Int(0))]);
+    // Create Minigame Rights at Host (a server setting, set in the host's
+    // Admin menu): only the host may start a game.
+    let mut settings = g.s.server_settings().clone();
+    settings.addon_settings.insert(key(SLAYER, "create_rights"), Value::Int(0));
+    g.s.set_server_settings(settings).unwrap();
     lines(&mut g);
     g.cmd(other, Command::MiniGame(MiniGameRequest::Create {
         color: 1,

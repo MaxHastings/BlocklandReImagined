@@ -248,6 +248,7 @@
   "undo_confirm_over": {{undo_confirm}},
   "on_copy": true,
   "on_place": true,
+  "on_copy_ghost": true,
   "state": {
     "player": {
       "mode": {
@@ -283,7 +284,7 @@
         "persist": false
       },
       "progress": {
-        "default": [0, 0, 0, 0],
+        "default": [0, 0, 0, 0, 0, -1],
         "persist": false
       },
       "box": {
@@ -326,6 +327,10 @@
         "persist": false
       },
       "selection_box": {
+        "default": [],
+        "persist": false
+      },
+      "ghost_box": {
         "default": [],
         "persist": false
       },

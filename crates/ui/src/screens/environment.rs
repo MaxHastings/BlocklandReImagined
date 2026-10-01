@@ -369,8 +369,16 @@ impl Screen for Environment {
             return;
         }
         let name = self.view.node(ev.node).ctrl.name.clone().unwrap_or_default();
+        // A check box flips on `Changed`, before its `Click`; it is read
+        // here, because the refresh below shows the model's value again.
         if ev.kind == EventKind::Changed {
-            if name == "EnvPresets" {
+            if matches!(name.as_str(), "EnvDayCycleSimple" | "EnvDayCycleAdvanced") {
+                let on = self.view.bool_value(ev.node);
+                core.environment.set_day_cycle(on);
+            } else if name == "EnvVignetteMultiply" {
+                let on = self.view.bool_value(ev.node);
+                core.environment.set_vignette_multiply(on);
+            } else if name == "EnvPresets" {
                 if let Some(i) = self.view.selected(ev.node) {
                     core.environment.preset(i as usize);
                 }
@@ -390,14 +398,6 @@ impl Screen for Environment {
         match command_of(&self.view, ev.node).as_str() {
             "EnvTabSimple" => self.advanced = false,
             "EnvTabAdvanced" => self.advanced = true,
-            "EnvDayCycleSimple" | "EnvDayCycleAdvanced" => {
-                let on = self.view.bool_value(ev.node);
-                core.environment.set_day_cycle(on);
-            }
-            "EnvVignetteMultiply" => {
-                let on = self.view.bool_value(ev.node);
-                core.environment.set_vignette_multiply(on);
-            }
             "EnvReset" => {
                 core.admin.status.clear();
                 core.environment.reset();

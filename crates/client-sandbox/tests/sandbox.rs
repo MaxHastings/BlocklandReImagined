@@ -140,9 +140,8 @@ fn the_sample_draws_a_cube_with_its_own_shader() {
     assert!(second.log.is_empty());
 }
 
-/// Needs a GPU: renders the sample and checks the cube is there and moves.
+/// Needs a GPU adapter (software is fine): renders the sample and checks the cube is there and moves.
 #[test]
-#[ignore = "needs a GPU adapter"]
 fn the_sample_renders_offscreen_and_animates() {
     let code = load(&sample_dir());
     // What it draws, not how fast: a loaded machine's slow frame must not
@@ -468,6 +467,23 @@ fn one_frame_far_over_the_gpu_budget_stops_the_addon_at_once() {
     assert!(addon.frame(frame(0.0)).is_err());
 }
 
+/// The default hard stop is 100 ms of graphics time in one frame: a frame
+/// at the limit is a spike, one past it (like a loaded software renderer's
+/// 236 ms) stops the Add-On. Times are given, so no machine can flake it.
+#[test]
+fn the_default_gpu_hard_stop_is_one_hundred_ms() {
+    let dir = draws(1, 512);
+    let mut addon = start(&load(dir.path()), budgets()).unwrap();
+    assert_eq!(Budgets::default().gpu_stop_ms, 100.0);
+    addon.report_gpu_time(100.0).unwrap();
+    match addon.report_gpu_time(236.0) {
+        Err(Stopped::Gpu(why)) => {
+            assert!(why.contains("236 ms") && why.contains("100 ms"), "{why}")
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
 #[test]
 fn the_shader_loop_cap_starts_low_and_fits_the_measured_gpu() {
     use bri_client_sandbox::gpu::{GpuSpeed, loop_limit};
@@ -784,14 +800,13 @@ fn a_sandboxed_grant_never_covers_elevated_code() {
     assert_eq!(prompt.level, TrustLevel::Elevated);
 }
 
-/// Needs a GPU: a fragment shader that loops forever, drawn over the whole
+/// Needs a GPU adapter (software is fine): a fragment shader that loops forever, drawn over the whole
 /// screen, finishes because the loop is bounded, and runs exactly the cap
 /// the renderer fitted. The GPU's speed is given rather than measured, so
 /// the cap is the same on a loaded machine; fitting caps to measured
 /// speeds and slow frames is checked without a GPU
 /// (`the_shader_loop_cap_starts_low_and_fits_the_measured_gpu`).
 #[test]
-#[ignore = "needs a GPU adapter"]
 fn an_endless_shader_loop_finishes_on_the_gpu() {
     use bri_client_sandbox::gpu::{GpuSpeed, loop_limit, render_offscreen_at_speed};
     let endless = "
@@ -845,10 +860,9 @@ fn an_endless_shader_loop_finishes_on_the_gpu() {
     assert_ne!(low[0].pixels, high[0].pixels);
 }
 
-/// Needs a GPU: calibration measures a speed (and, as a benchmark, takes
+/// Needs a GPU adapter (software is fine): calibration measures a speed (and, as a benchmark, takes
 /// well under a second).
 #[test]
-#[ignore = "needs a GPU adapter"]
 fn calibration_measures_the_gpu_quickly() {
     let (adapter, device, queue) = bri_client_sandbox::gpu::headless_device().unwrap();
     let started = std::time::Instant::now();

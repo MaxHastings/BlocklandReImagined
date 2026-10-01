@@ -12,10 +12,12 @@ use std::{
 /// On a 200k-brick world it cut world build 17%, wire decode 20%, JSON
 /// load 16% and collider inserts 18% against the system allocator (Linux;
 /// Windows' heap usually gains more).
+/// `bri_net::allocator::tune` keeps its purges off the tick.
 #[global_allocator]
 static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 #[tokio::main]
 async fn main() -> Result<()> {
+    bri_net::allocator::tune();
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     ensure!(
         args.len() == 4 || args.len() == 5,

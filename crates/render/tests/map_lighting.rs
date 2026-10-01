@@ -84,14 +84,29 @@ fn a_baked_point_light_is_recovered_from_its_lightmaps() {
         outer: 25.0,
         channel: None,
     };
-    let lit = Bake::new(&lit_room(truth)).expect("lightmapped room").bake(1.0, 50_000, 1.0, 50_000);
+    let lit = Bake::new(&lit_room(truth))
+        .expect("lightmapped room")
+        .bake(1.0, 50_000, 1.0, 50_000);
     let light = lit.lights.first().copied().expect("a light");
     // The falloff grid has 5 inner and 5 + 20 outer among its choices.
-    assert!(Vec3::from(light.position).distance(Vec3::from(truth.position)) < 1.0, "{light:?}");
-    assert!((Vec3::from(light.color) - Vec3::from(truth.color)).abs().max_element() < 0.08, "{light:?}");
+    assert!(
+        Vec3::from(light.position).distance(Vec3::from(truth.position)) < 1.0,
+        "{light:?}"
+    );
+    assert!(
+        (Vec3::from(light.color) - Vec3::from(truth.color))
+            .abs()
+            .max_element()
+            < 0.08,
+        "{light:?}"
+    );
     assert_eq!((light.inner, light.outer), (truth.inner, truth.outer));
     // Position steps stop at half a unit: a level or so off.
-    assert!(lit.report.mean < 2.0 && lit.report.unlit_mean > 20.0, "{:?}", lit.report);
+    assert!(
+        lit.report.mean < 2.0 && lit.report.unlit_mean > 20.0,
+        "{:?}",
+        lit.report
+    );
     let channel = light.channel.expect("the only light gets a channel");
     // Its visibility: seen across the room, the sun kept out by the ceiling.
     let v = &lit.visibility;
@@ -117,10 +132,13 @@ const MAX_CELLS: usize = 1_000_000;
 const VIS_CELL: f32 = 2.0;
 const VIS_CELLS: usize = 2_000_000;
 
-#[test]
-#[ignore = "requires locally converted map-bundle-017; fits every stock map"]
-fn stock_maps_fit_lights_that_explain_their_lightmaps() -> Result<()> {
-    let bundle = content().join("map-bundle-017");
+/// Fits lights to every map in `bundle` (or those `BRI_MAP` names), checks
+/// the stored bake round-trips and never fits worse than no lights, and
+/// hands each fit to `check`. Returns how many maps had lightmaps.
+fn maps_fit_lights_that_explain_their_lightmaps(
+    bundle: &std::path::Path,
+    check: impl Fn(&str, &bri_render::map_lighting::MapLighting),
+) -> Result<usize> {
     let index: serde_json::Value =
         serde_json::from_slice(&std::fs::read(bundle.join("bundle.json"))?)?;
     let only = std::env::var("BRI_MAP").ok();
@@ -130,7 +148,7 @@ fn stock_maps_fit_lights_that_explain_their_lightmaps() -> Result<()> {
         if only.as_deref().is_some_and(|m| !id.contains(m)) {
             continue;
         }
-        let map = load_map_bundle(&bundle, id)?;
+        let map = load_map_bundle(bundle, id)?;
         let Some(bake) = Bake::new(&map.scene) else {
             eprintln!("{id}: no interior lightmaps");
             continue;
@@ -159,24 +177,78 @@ fn stock_maps_fit_lights_that_explain_their_lightmaps() -> Result<()> {
         }
         // Stored bakes read back only under their own key.
         let bytes = lit.to_bytes(key);
-        let stored = bri_render::map_lighting::MapLighting::from_bytes(&bytes, key).context("stored bake")?;
-        assert!(stored.lights == lit.lights && stored.report == lit.report && stored.visibility == lit.visibility);
+        let stored = bri_render::map_lighting::MapLighting::from_bytes(&bytes, key)
+            .context("stored bake")?;
+        assert!(
+            stored.lights == lit.lights
+                && stored.report == lit.report
+                && stored.visibility == lit.visibility
+        );
         assert_eq!(stored.residual.texels, lit.residual.texels);
         assert!(bri_render::map_lighting::MapLighting::from_bytes(&bytes, [0; 32]).is_none());
         // Lights never make the fit worse than no lights at all.
         assert!(r.mean <= r.unlit_mean + 1e-3, "{id}");
+        check(id, &lit);
+        seen.insert(id.to_string());
+    }
+    Ok(seen.len())
+}
+
+#[test]
+fn fixture_maps_fit_lights_that_explain_their_lightmaps() -> Result<()> {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("map-lighting-{}", std::process::id()));
+    let maps = bri_render::testing::rooms();
+    bri_render::testing::write_bundle(&dir, &maps)?;
+    let fitted = maps_fit_lights_that_explain_their_lightmaps(&dir, |id, lit| {
+        // The one lamp baked into the room's lightmaps is found within two
+        // lightmap texels of where it was, in about its colour.
+        let room = maps.iter().find(|m| m.id == id).unwrap();
+        let (lamp, texel) = (
+            room.lamp,
+            2.0 * room.half / bri_render::testing::LIGHTMAP_SIZE as f32,
+        );
+        assert!(
+            lit.lights.iter().any(|l| {
+                Vec3::from(l.position).distance(Vec3::from(lamp.position)) < 2.0 * texel
+                    && (Vec3::from(l.color) - Vec3::from(lamp.color))
+                        .abs()
+                        .max_element()
+                        < 0.15
+            }),
+            "{id}: {:?} vs {lamp:?}",
+            lit.lights
+        );
+        assert!(
+            lit.report.mean < lit.report.unlit_mean,
+            "{id}: {:?}",
+            lit.report
+        );
+    });
+    let _ = std::fs::remove_dir_all(&dir);
+    if std::env::var_os("BRI_MAP").is_none() {
+        assert_eq!(fitted?, maps.len());
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires generated v20 content"]
+fn stock_maps_fit_lights_that_explain_their_lightmaps() -> Result<()> {
+    maps_fit_lights_that_explain_their_lightmaps(&content().join("map-bundle-017"), |id, lit| {
         // Kitchen's stove glows orange, dimmer than the white lights round
         // it; the fit finds it (and its error then drops below 9 levels).
         if id.ends_with("/kitchen.mis") {
             assert!(
-                lit.lights.iter().any(|l| l.color[0] > 0.4 && l.color[2] < 0.02 && l.color[0] > 1.8 * l.color[1]),
+                lit.lights.iter().any(|l| l.color[0] > 0.4
+                    && l.color[2] < 0.02
+                    && l.color[0] > 1.8 * l.color[1]),
                 "{:?}",
                 lit.lights
             );
-            assert!(r.mean < 9.0, "{}", r.mean);
+            assert!(lit.report.mean < 9.0, "{}", lit.report.mean);
         }
-        seen.insert(id.to_string());
-    }
+    })?;
     Ok(())
 }
 
@@ -246,11 +318,17 @@ fn thin_light_leaks_through_sealed_walls_are_cleaned_up() {
     };
     let mut scene = lit_room(light);
     // Under the room's floor (y = -10): dark but for a two-texel strip.
-    let under = add_floor(&mut scene, -12.0, 10.0, |_, y| if (31..33).contains(&y) { 60 } else { 0 });
+    let under = add_floor(&mut scene, -12.0, 10.0, |_, y| {
+        if (31..33).contains(&y) { 60 } else { 0 }
+    });
     // Inside the room, just over its floor, lit as the light lights it with a
     // thin line brighter still (a real bright trim).
     let inside = add_floor(&mut scene, -9.9, 8.0, |x, y| {
-        let p = Vec3::new(((x as f32 + 0.5) / 64.0 * 2.0 - 1.0) * 8.0, -9.9, ((y as f32 + 0.5) / 64.0 * 2.0 - 1.0) * 8.0);
+        let p = Vec3::new(
+            ((x as f32 + 0.5) / 64.0 * 2.0 - 1.0) * 8.0,
+            -9.9,
+            ((y as f32 + 0.5) / 64.0 * 2.0 - 1.0) * 8.0,
+        );
         let lit = light.shade(p, Vec3::Y).x * 255.0;
         (lit + if (31..33).contains(&y) { 40.0 } else { 0.0 }).min(255.0) as u8
     });
@@ -261,22 +339,36 @@ fn thin_light_leaks_through_sealed_walls_are_cleaned_up() {
         (16..48, 16..48) => 80,
         _ => 0,
     });
-    let lit = Bake::new(&scene).expect("lightmapped room").bake(1.0, 50_000, 1.0, 50_000);
-    let fixed = |image: usize| lit.leaks.iter().filter(|f| f.image as usize == image).collect::<Vec<_>>();
+    let lit = Bake::new(&scene)
+        .expect("lightmapped room")
+        .bake(1.0, 50_000, 1.0, 50_000);
+    let fixed = |image: usize| {
+        lit.leaks
+            .iter()
+            .filter(|f| f.image as usize == image)
+            .collect::<Vec<_>>()
+    };
     // The patch and its lines are light too, whatever the walls say.
     assert!(fixed(patch).is_empty(), "{}", fixed(patch).len());
     // Every strip texel under the floor goes dark, in the drawn lightmap and
     // its decomposition, and nothing else changes there.
     let under_fixes = fixed(under);
     assert_eq!(under_fixes.len(), 2 * 64, "{}", under_fixes.len());
-    assert!(under_fixes.iter().all(|f| f.rgba[..3] == [0, 0, 0] && (31..33).contains(&(f.index / 64))));
+    assert!(
+        under_fixes
+            .iter()
+            .all(|f| f.rgba[..3] == [0, 0, 0] && (31..33).contains(&(f.index / 64)))
+    );
     assert_eq!(fixed(under + 1).len(), 2 * 64);
     // The room's light reaches the trim: it stays.
     assert!(fixed(inside).is_empty(), "{:?}", fixed(inside).len());
     assert_eq!(lit.report.leak_texels, 2 * 64);
     // Applying them to the scene changes exactly those images.
     let mut images = scene.images.clone();
-    assert_eq!(bri_render::map_lighting::TexelFix::apply(&lit.leaks, &mut images), vec![under, under + 1]);
+    assert_eq!(
+        bri_render::map_lighting::TexelFix::apply(&lit.leaks, &mut images),
+        vec![under, under + 1]
+    );
 }
 
 /// Baked sun through a seam: a thin strip of sun share on a floor the
@@ -301,12 +393,30 @@ fn thin_sun_leaks_under_a_closed_room_are_cleaned_up() {
             scene.images[under + 1].rgba[i + 3] = 255;
         }
     }
-    let lit = Bake::new(&scene).expect("lightmapped room").bake(1.0, 50_000, 1.0, 50_000);
-    let drawn: Vec<_> = lit.leaks.iter().filter(|f| f.image as usize == under).collect();
-    let parts: Vec<_> = lit.leaks.iter().filter(|f| f.image as usize == under + 1).collect();
+    let lit = Bake::new(&scene)
+        .expect("lightmapped room")
+        .bake(1.0, 50_000, 1.0, 50_000);
+    let drawn: Vec<_> = lit
+        .leaks
+        .iter()
+        .filter(|f| f.image as usize == under)
+        .collect();
+    let parts: Vec<_> = lit
+        .leaks
+        .iter()
+        .filter(|f| f.image as usize == under + 1)
+        .collect();
     assert_eq!((drawn.len(), parts.len()), (2 * 64, 2 * 64));
-    assert!(drawn.iter().all(|f| f.rgba[..3] == [20; 3]), "{:?}", drawn[0]);
-    assert!(parts.iter().all(|f| f.rgba == [20, 20, 20, 0]), "{:?}", parts[0]);
+    assert!(
+        drawn.iter().all(|f| f.rgba[..3] == [20; 3]),
+        "{:?}",
+        drawn[0]
+    );
+    assert!(
+        parts.iter().all(|f| f.rgba == [20, 20, 20, 0]),
+        "{:?}",
+        parts[0]
+    );
 }
 
 /// The Dynamic mode's sheets: each decomposed sheet less every recovered
@@ -337,8 +447,13 @@ fn dynamic_sheets_keep_only_the_light_no_recovered_light_explains() {
     for y in 0..64 {
         for x in 0..64 {
             let at = |t: usize| ((t as f32 + 0.5) / 64.0 - 0.25) * 4.0 - 1.0;
-            let c = truth.shade(Vec3::new(-10.0, 10.0 * at(x), 10.0 * at(y)), Vec3::X).min(Vec3::ONE) * 255.0 + 0.5;
-            base.rgba[(y * 64 + x) * 4..(y * 64 + x) * 4 + 3].copy_from_slice(&[c.x as u8, c.y as u8, c.z as u8]);
+            let c = truth
+                .shade(Vec3::new(-10.0, 10.0 * at(x), 10.0 * at(y)), Vec3::X)
+                .min(Vec3::ONE)
+                * 255.0
+                + 0.5;
+            base.rgba[(y * 64 + x) * 4..(y * 64 + x) * 4 + 3]
+                .copy_from_slice(&[c.x as u8, c.y as u8, c.z as u8]);
         }
     }
     scene.lightmap_bases[0].1 = Arc::new(scene.images[image].clone());
@@ -361,11 +476,29 @@ fn dynamic_sheets_keep_only_the_light_no_recovered_light_explains() {
     assert_eq!(lit.dynamic.len(), 6);
     for (m, sheet) in scene.materials.iter().zip(&lit.dynamic) {
         assert_eq!(sheet.parts_image as usize, m.images[9]);
-        assert_eq!((sheet.lights.as_slice(), sheet.visibility.len()), ([0u8].as_slice(), 1));
-        let reached: Vec<usize> = (0..sheet.left.len() / 4).filter(|&i| sheet.visibility[0][i * 4] > 0).collect();
-        assert!(reached.len() >= 32 * 32, "sheet {}: {}", sheet.parts_image, reached.len());
-        let mean = reached.iter().map(|&i| sheet.left[i * 4] as f32).sum::<f32>() / reached.len() as f32;
-        assert!((mean - 26.0).abs() < 3.0, "sheet {}: {mean}", sheet.parts_image);
+        assert_eq!(
+            (sheet.lights.as_slice(), sheet.visibility.len()),
+            ([0u8].as_slice(), 1)
+        );
+        let reached: Vec<usize> = (0..sheet.left.len() / 4)
+            .filter(|&i| sheet.visibility[0][i * 4] > 0)
+            .collect();
+        assert!(
+            reached.len() >= 32 * 32,
+            "sheet {}: {}",
+            sheet.parts_image,
+            reached.len()
+        );
+        let mean = reached
+            .iter()
+            .map(|&i| sheet.left[i * 4] as f32)
+            .sum::<f32>()
+            / reached.len() as f32;
+        assert!(
+            (mean - 26.0).abs() < 3.0,
+            "sheet {}: {mean}",
+            sheet.parts_image
+        );
         assert!(sheet.left.chunks_exact(4).all(|t| t[3] == 0));
     }
     // The first wall: inside its lightmap the light arrives whole; half a
@@ -373,17 +506,27 @@ fn dynamic_sheets_keep_only_the_light_no_recovered_light_explains() {
     // not, and keeps its decomposition.
     let first = &lit.dynamic[0];
     let texel = |x: usize| 32 * 64 + x;
-    assert!(first.visibility[0][texel(24) * 4] > 240, "{}", first.visibility[0][texel(24) * 4]);
+    assert!(
+        first.share(first.lights[0], texel(24)) > 0.94,
+        "{}",
+        first.share(first.lights[0], texel(24))
+    );
     assert!(first.visibility[0][texel(15) * 4] > 0 && first.visibility[0][texel(48) * 4] > 0);
     assert_eq!(first.visibility[0][texel(13) * 4], 0);
     let parts = &scene.images[scene.materials[0].images[9]].rgba;
-    assert_eq!(first.left[texel(13) * 4..texel(13) * 4 + 4], parts[texel(13) * 4..texel(13) * 4 + 4]);
+    assert_eq!(
+        first.left[texel(13) * 4..texel(13) * 4 + 4],
+        parts[texel(13) * 4..texel(13) * 4 + 4]
+    );
     // The only light has a channel, so objects' residual is the same.
     assert_eq!(lit.residual_all, lit.residual);
     // Equipped, each material draws its sheet's leftover light and
     // visibility, and names its light.
     let mut equipped = scene.clone();
-    assert!(bri_render::map_lighting::DynamicSheet::equip(&lit.dynamic, &mut equipped));
+    assert!(bri_render::map_lighting::DynamicSheet::equip(
+        &lit.dynamic,
+        &mut equipped
+    ));
     assert_eq!(equipped.images.len(), scene.images.len() + 12);
     for (m, sheet) in equipped.materials.iter().zip(&lit.dynamic) {
         assert_eq!(equipped.images[m.images[10]].rgba, sheet.left);
@@ -391,9 +534,13 @@ fn dynamic_sheets_keep_only_the_light_no_recovered_light_explains() {
         let p = m.parameters.expect("decomposed");
         assert_eq!((p[0][0], p[0][1], p[1][0]), (1.0, 1.0, 0.0));
     }
-    let stored = bri_render::map_lighting::MapLighting::from_bytes(&lit.to_bytes(key), key).expect("stored bake");
+    let stored = bri_render::map_lighting::MapLighting::from_bytes(&lit.to_bytes(key), key)
+        .expect("stored bake");
     // (A loaded volume casts no rays.)
-    assert_eq!((&stored.lights, &stored.visibility, &stored.dynamic), (&lit.lights, &lit.visibility, &lit.dynamic));
+    assert_eq!(
+        (&stored.lights, &stored.visibility, &stored.dynamic),
+        (&lit.lights, &lit.visibility, &lit.dynamic)
+    );
     assert_eq!(stored.residual_all.texels, lit.residual_all.texels);
     assert_eq!(stored.residual.texels, lit.residual.texels);
 }
@@ -453,7 +600,10 @@ fn a_switched_off_light_leaves_only_ambient_where_rays_and_lightmap_disagree() {
         }
     }
     scene.lightmap_bases[2].1 = Arc::new(scene.images[floor_image].clone());
-    for (y, corners) in [(-5.0, [(-8.0, 2.0), (-2.0, 2.0), (-2.0, 8.0), (-8.0, 8.0)]), (-9.9, [(4.0, -8.0), (8.0, -8.0), (8.0, -4.0), (4.0, -4.0)])] {
+    for (y, corners) in [
+        (-5.0, [(-8.0, 2.0), (-2.0, 2.0), (-2.0, 8.0), (-8.0, 8.0)]),
+        (-9.9, [(4.0, -8.0), (8.0, -8.0), (8.0, -4.0), (4.0, -4.0)]),
+    ] {
         let first = scene.vertices.len() as u32;
         for (x, z) in corners {
             scene.vertices.push(SceneVertex {
@@ -474,7 +624,9 @@ fn a_switched_off_light_leaves_only_ambient_where_rays_and_lightmap_disagree() {
         });
         scene.materials.push(Material::surface("slab", 0, 0));
     }
-    let lit = Bake::new(&scene).expect("lightmapped room").bake(1.0, 50_000, 1.0, 50_000);
+    let lit = Bake::new(&scene)
+        .expect("lightmapped room")
+        .bake(1.0, 50_000, 1.0, 50_000);
     assert!(!lit.lights.is_empty());
     // With the lights off each texel draws its leftover alone: all within a
     // few levels of the ambient (the fit is not exact where it had to
@@ -482,7 +634,11 @@ fn a_switched_off_light_leaves_only_ambient_where_rays_and_lightmap_disagree() {
     let (mut close, mut total, mut worst) = (0, 0, (0, 0, 0));
     for (sheet_index, sheet) in lit.dynamic.iter().enumerate() {
         for (i, t) in sheet.left.chunks_exact(4).enumerate() {
-            let off = t[..3].iter().map(|&c| (i32::from(c) - 26).abs()).max().unwrap_or(0);
+            let off = t[..3]
+                .iter()
+                .map(|&c| (i32::from(c) - 26).abs())
+                .max()
+                .unwrap_or(0);
             total += 1;
             close += usize::from(off <= 6);
             if off > worst.0 {
@@ -490,18 +646,30 @@ fn a_switched_off_light_leaves_only_ambient_where_rays_and_lightmap_disagree() {
             }
         }
     }
-    assert!(worst.0 <= 12, "left {} levels off ambient on sheet {} texel {}", worst.0, worst.1, worst.2);
-    assert!(close * 100 >= total * 95, "{close} of {total} within 6 levels");
+    assert!(
+        worst.0 <= 12,
+        "left {} levels off ambient on sheet {} texel {}",
+        worst.0,
+        worst.1,
+        worst.2
+    );
+    assert!(
+        close * 100 >= total * 95,
+        "{close} of {total} within 6 levels"
+    );
     // Under the high slab the main light takes part of the floor's light
     // (the fit put a small light there for the rest), though the rays say it
     // cannot arrive.
     let floor = &lit.dynamic[2];
     let under = |x: usize, y: usize| y * 64 + x;
     // Floor (axis 1): lightmap u from z, v from x; slab x -8..-2, z 2..8.
-    let texel = under(((5.0 + 10.0) / 20.0 * 64.0) as usize, ((-5.0 + 10.0) / 20.0 * 64.0) as usize);
-    let channel = floor.lights.iter().position(|&l| l == 0).expect("the light reaches the floor");
-    let share = floor.visibility[channel / 4][texel * 4 + channel % 4];
-    assert!(share > 40, "{share}");
+    let texel = under(
+        ((5.0 + 10.0) / 20.0 * 64.0) as usize,
+        ((-5.0 + 10.0) / 20.0 * 64.0) as usize,
+    );
+    assert!(floor.lights.contains(&0), "the light reaches the floor");
+    let share = floor.share(0, texel);
+    assert!(share > 0.16, "{share}");
 }
 
 /// A slab's shadow on the floor, its edge texels half lit as the map

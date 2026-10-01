@@ -115,6 +115,24 @@ impl Default for ItemSpawn {
         }
     }
 }
+/// The aliases [`ItemSpawn::resolve_item`] binds by: each item's trimmed
+/// ASCII-lowercase display name to its id. Display names need not be unique,
+/// as in v20, where any number of Add-Ons may name an item "Sniper Rifle" and
+/// the item lists show them all. A name that several items share binds to the
+/// first of them in `items` order, so callers pass items in load order (the
+/// base game first, then Add-Ons in `packages.json` order).
+pub fn item_aliases<'a>(
+    items: impl IntoIterator<Item = (&'a str, &'a str)>,
+) -> BTreeMap<String, String> {
+    let mut aliases = BTreeMap::new();
+    for (id, name) in items {
+        aliases
+            .entry(name.trim().to_ascii_lowercase())
+            .or_insert_with(|| id.to_string());
+    }
+    aliases
+}
+
 impl ItemSpawn {
     /// Bind a native imported `item_ui` reference using trusted aliases keyed
     /// by trimmed ASCII-lowercase original display name. Missing names remain

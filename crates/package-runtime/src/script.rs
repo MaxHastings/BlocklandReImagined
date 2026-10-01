@@ -10,7 +10,7 @@
 //! operation budget per call; bounded strings, arrays, maps, call depth and
 //! operation count. A failing or over-budget call changes nothing.
 use crate::manifest::location;
-use crate::ops::{FillPaint, ObjectRef, Op, SoundAt, TempLook, VehiclePaint};
+use crate::ops::{FillPaint, ObjectRef, Op, SoundAt, TempLook, VehiclePaint, WorldShape};
 use crate::state::{Namespace, PlayerKey, check_value};
 use bri_package::diag::Diagnostic;
 use rhai::{AST, Array, Dynamic, Engine, EvalAltResult, Map};
@@ -156,10 +156,14 @@ pub struct PlayerView {
     /// plant, cut, paint, wrench, undo or load; `cancel_copy` stops it).
     #[serde(default)]
     pub copy_working: bool,
+    /// The copy they hold from a duplicator (`copy_build`, `load_copy`):
+    /// the Add-On that took it and its bricks.
+    #[serde(default)]
+    pub copy: Option<(String, u64)>,
+    /// They hold bricks with a ghost brick out, where it would plant.
+    #[serde(default)]
+    pub ghost: bool,
 }
-/// The game `server_setting(key)` names: none, as a server setting needs
-/// no game ([`World::setting`]).
-pub const SERVER_SETTINGS: u64 = u64::MAX;
 
 /// Live questions a script may ask the engine during a call. They read the
 /// world as it is when the call runs: a call's own operations apply after it
@@ -228,6 +232,11 @@ pub trait World {
     fn trust_level(&self, _actor: u64, _builder: u64) -> u8 {
         0
     }
+    /// Whether a copy by `player` under `rule` would take brick `brick`
+    /// (the trust a copy checks, [`crate::ops::CopyRule`]).
+    fn may_copy(&self, _player: u64, _brick: u64, _rule: crate::ops::CopyRule) -> bool {
+        false
+    }
     /// Whether a brick of `kind` turned `turns` quarter turns would fit
     /// centred at `position` now (snapped to the grid as `plant_brick`
     /// does): nothing in the way, inside the world.
@@ -240,14 +249,13 @@ pub trait World {
     fn hit_region(&self, _player: u64, _point: [f32; 3]) -> Option<&'static str> {
         None
     }
-    /// An Add-On setting of mini-game `game` (or of its team `team`):
-    /// `key` is the calling package's own or `namespace:key`. Its value,
-    /// or its default when nobody changed it; an error names what is
-    /// wrong (no such game, team or setting). A server setting's `game`
-    /// is not looked at ([`SERVER_SETTINGS`] reads one out of any game).
+    /// An Add-On setting of mini-game `game` (or of its team `team`), or
+    /// a server-wide one (no game): `key` is the calling package's own or
+    /// `namespace:key`. Its value, or its default when nobody changed it;
+    /// an error names what is wrong (no such game, team or setting).
     fn setting(
         &self,
-        _game: u64,
+        _game: Option<u64>,
         _team: Option<u64>,
         _key: &str,
     ) -> Result<bri_package::setting::SettingValue, String> {
@@ -277,6 +285,12 @@ pub trait World {
     }
     /// The lines of the calling package's data file `id`.
     fn data_lines(&self, _id: &str) -> Option<Vec<String>> {
+        None
+    }
+    /// The server setting standing for the v20 global `name`
+    /// (`$Pref::Server::TT::Ammo`), whichever running Add-On declares it;
+    /// `None` when none does, as an unset global.
+    fn pref(&self, _name: &str) -> Option<bri_package::setting::SettingValue> {
         None
     }
 }
@@ -638,6 +652,16 @@ fn player_map(p: &PlayerView) -> Dynamic {
             p.invite.map_or(Dynamic::UNIT, |g| Dynamic::from_int(g as i64)),
         ),
         ("copy_working", p.copy_working.into()),
+        ("ghost", p.ghost.into()),
+        (
+            "copy",
+            p.copy.as_ref().map_or(Dynamic::UNIT, |(package, bricks)| {
+                map([
+                    ("addon", package.clone().into()),
+                    ("bricks", Dynamic::from_int(*bricks as i64)),
+                ])
+            }),
+        ),
         float_entry("ex", p.eye[0]),
         float_entry("ey", p.eye[1]),
         float_entry("ez", p.eye[2]),
@@ -990,6 +1014,62 @@ fn vector(value: &Array) -> Fallible<[f32; 3]> {
         _ => fail("a point or direction is [x, y, z]"),
     }
 }
+/// The player a set of shapes goes with, or `()` for none.
+fn shape_owner(value: &Dynamic) -> Fallible<Option<u64>> {
+    if value.is_unit() { Ok(None) } else { id(value).map(Some) }
+}
+/// A shape map: `#{min, max, color, inside, sides, label}`, colours RGBA
+/// from 0 to 1 (all but `min` and `max` optional; `sides` is the outside
+/// colours across x, y and z).
+fn world_shape(value: Dynamic) -> Fallible<WorldShape> {
+    let Some(map) = value.try_cast::<Map>() else {
+        return fail("a shape is #{min, max, color, inside, sides, label}");
+    };
+    for key in map.keys() {
+        if !["min", "max", "color", "inside", "sides", "label"].contains(&key.as_str()) {
+            return fail(format!(
+                "a shape has no `{key}` (min, max, color, inside, sides, label)"
+            ));
+        }
+    }
+    let point = |key: &str| -> Fallible<[f32; 3]> {
+        match map.get(key).and_then(|v| v.clone().try_cast::<Array>()) {
+            Some(v) => vector(&v),
+            None => fail(format!("a shape's {key} is [x, y, z]")),
+        }
+    };
+    let byte = |v: Dynamic, what: &str| -> Fallible<[u8; 4]> {
+        let c = color::<4>(v, what)?;
+        Ok(c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8))
+    };
+    let rgba = |key: &str| -> Fallible<[u8; 4]> {
+        match map.get(key).filter(|v| !v.is_unit()) {
+            None => Ok([0; 4]),
+            Some(v) => byte(v.clone(), &format!("a shape's {key}")),
+        }
+    };
+    let sides = match map.get("sides").filter(|v| !v.is_unit()) {
+        None => None,
+        Some(v) => {
+            let what = "a shape's sides are three colours, across x, y and z";
+            let list = v.clone().into_typed_array::<Dynamic>().map_err(|_| what)?;
+            let list = list.into_iter().map(|c| byte(c, what)).collect::<Fallible<Vec<_>>>()?;
+            Some(<[[u8; 4]; 3]>::try_from(list).map_err(|_| what)?)
+        }
+    };
+    let label = match map.get("label").filter(|v| !v.is_unit()) {
+        None => String::new(),
+        Some(v) => v.clone().into_string().map_err(|_| "a shape's label is text")?,
+    };
+    Ok(WorldShape {
+        min: point("min")?,
+        max: point("max")?,
+        color: rgba("color")?,
+        inside: rgba("inside")?,
+        sides,
+        label,
+    })
+}
 /// A player by id, or an object like `"vehicle:3"`.
 fn target(value: &Dynamic) -> Fallible<ObjectRef> {
     if value.is_string() {
@@ -1154,6 +1234,16 @@ fn register_api(engine: &mut Engine) {
                         a.object
                             .as_ref()
                             .map_or(Dynamic::UNIT, |o| Dynamic::from_float(o.distance as f64)),
+                    ),
+                    // Where the aim met the object: beyond a portal, on
+                    // its far side, not straight out from the eye.
+                    (
+                        "object_at",
+                        a.object.as_ref().map_or(Dynamic::UNIT, |o| {
+                            Dynamic::from_array(
+                                o.position.iter().map(|c| Dynamic::from_float(*c as f64)).collect(),
+                            )
+                        }),
                     ),
                 ])
             }))
@@ -1629,6 +1719,17 @@ fn register_api(engine: &mut Engine) {
                 .ok_or("mirror_copy's axis is \"x\", \"z\", \"view\" or \"y\"")?,
         })
     });
+    // mirror_ghost(player, axis, asymmetric): the player's ghost brick
+    // mirrored where it stands; `asymmetric` is what they are told when it
+    // has no exact mirror image.
+    engine.register_fn("mirror_ghost", |player: Dynamic, axis: &str, asymmetric: &str| {
+        push(Op::MirrorGhost {
+            player: id(&player)?,
+            axis: crate::ops::MirrorAxis::parse(axis)
+                .ok_or("mirror_ghost's axis is \"x\", \"z\", \"view\" or \"y\"")?,
+            asymmetric: asymmetric.into(),
+        })
+    });
     engine.register_fn(
         "move_copy",
         |player: Dynamic, point: Array, normal: Array| {
@@ -1694,6 +1795,27 @@ fn register_api(engine: &mut Engine) {
         push(Op::FloatCopy {
             player: id(&player)?,
             float,
+            admin_only: false,
+        })
+    });
+    // float_copy(player, float, #{ admin_only: true }): floating only
+    // while the player is an administrator, checked at each plant.
+    engine.register_fn("float_copy", |player: Dynamic, float: bool, options: Map| {
+        let mut admin_only = false;
+        for (key, value) in &options {
+            match key.as_str() {
+                "admin_only" => {
+                    admin_only = value
+                        .as_bool()
+                        .map_err(|_| "float option `admin_only` is true or false")?
+                }
+                other => return Err(format!("unknown float option `{other}`").into()),
+            }
+        }
+        push(Op::FloatCopy {
+            player: id(&player)?,
+            float,
+            admin_only,
         })
     });
     engine.register_fn("wrench_copy", |player: Dynamic| {
@@ -1764,6 +1886,26 @@ fn register_api(engine: &mut Engine) {
     engine.register_fn("cut_copy", |player: Dynamic| {
         push(Op::CutCopy {
             player: id(&player)?,
+            each: false,
+        })
+    });
+    // cut_copy(player, #{ each: true }): each brick the player may cut,
+    // the rest counted for `on_copy`.
+    engine.register_fn("cut_copy", |player: Dynamic, options: Map| {
+        let mut each = false;
+        for (key, value) in &options {
+            match key.as_str() {
+                "each" => {
+                    each = value
+                        .as_bool()
+                        .map_err(|_| "cut option `each` is true or false")?
+                }
+                other => return Err(format!("unknown cut option `{other}`").into()),
+            }
+        }
+        push(Op::CutCopy {
+            player: id(&player)?,
+            each,
         })
     });
     engine.register_fn("paint_copy", |player: Dynamic, color: i64| {
@@ -1917,6 +2059,23 @@ fn register_api(engine: &mut Engine) {
             tool: String::new(),
         })
     });
+    engine.register_fn(
+        "show_shapes",
+        |owner: Dynamic, key: &str, shapes: Array| {
+            push(Op::ShowShapes {
+                owner: shape_owner(&owner)?,
+                key: key.into(),
+                shapes: shapes.into_iter().map(world_shape).collect::<Fallible<_>>()?,
+            })
+        },
+    );
+    engine.register_fn("hide_shapes", |owner: Dynamic, key: &str| {
+        push(Op::ShowShapes {
+            owner: shape_owner(&owner)?,
+            key: key.into(),
+            shapes: Vec::new(),
+        })
+    });
     engine.register_fn("give_item", |player: Dynamic, item: &str, equip: bool| {
         push(Op::GiveItem {
             player: id(&player)?,
@@ -2066,6 +2225,12 @@ fn register_api(engine: &mut Engine) {
             })
         },
     );
+    engine.register_fn("plant_error", |player: Dynamic, error: &str| {
+        push(Op::PlantError {
+            player: id(&player)?,
+            error: error.to_ascii_lowercase(),
+        })
+    });
     engine.register_fn("play_sound", |player: Dynamic, profile: &str| {
         push(Op::Sound {
             profile: profile.into(),
@@ -2115,6 +2280,7 @@ fn copy_rule(options: &Map) -> Result<CopyOptions, Box<EvalAltResult>> {
             "public_bricks" => rule.public = flag()?,
             "admin" => rule.admin = flag()?,
             "partial" => rule.partial = flag()?,
+            "stack" => rule.stack = flag()?,
             "limited" => limited = Some(flag()?),
             "hidden" => hold.hidden = flag()?,
             "add" => hold.add = flag()?,
@@ -2248,6 +2414,14 @@ fn register_queries(engine: &mut Engine) {
     engine.register_fn("trust", |player: Dynamic, builder: Dynamic| {
         let (player, builder) = (id(&player)?, id(&builder)?);
         with_world(|world, _| Ok(i64::from(world.trust_level(player, builder))))
+    });
+    // may_copy(player, brick, options): whether a copy by the player with
+    // these copy options (`copy_build`'s) would take the brick: the New
+    // Duplicator's `ndTrustCheckSelect` for a box corner.
+    engine.register_fn("may_copy", |player: Dynamic, brick: Dynamic, options: Map| {
+        let (player, brick) = (id(&player)?, id(&brick)?);
+        let (rule, _, _) = copy_rule(&options)?;
+        with_world(|world, _| Ok(world.may_copy(player, brick, rule)))
     });
     engine.register_fn(
         "can_plant",
@@ -2509,6 +2683,12 @@ fn register_presentation(engine: &mut Engine) {
         push(Op::SetImageAmmo {
             player: id(&player)?,
             ammo,
+        })
+    });
+    engine.register_fn("set_image_loaded", |player: Dynamic, loaded: bool| {
+        push(Op::SetImageLoaded {
+            player: id(&player)?,
+            loaded,
         })
     });
     engine.register_fn("unmount_image", |player: Dynamic| {
@@ -3302,6 +3482,9 @@ impl Runtime {
             }
             if behaviour.on_place {
                 need("on_place".into(), 2, "on_place");
+            }
+            if behaviour.on_copy_ghost {
+                need("on_copy_ghost".into(), 2, "on_copy_ghost");
             }
             if behaviour.on_activate {
                 need("on_activate".into(), 1, "on_activate");

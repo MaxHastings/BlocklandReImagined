@@ -2,10 +2,11 @@
 //! Add-Ons it has on, toggles apply to the next game without a restart, and
 //! a joiner who lacks an Add-On the host runs downloads it and joins.
 //!
-//! Every test runs on one generated content root (BRI_CONTENT, else the
-//! checkout's `content/`), hosts on a free loopback port, and stages the
-//! repository's Add-Ons it needs in a hidden folder of that root for its
-//! length. Host and guest load their Add-On lists without writing the root's.
+//! Every test runs on one content root (the made-up one; ignored, the
+//! generated one: BRI_CONTENT, else the checkout's `content/`), hosts on a
+//! free loopback port, and stages the repository's Add-Ons it needs in a
+//! hidden folder of that root for its length. Host and guest load their
+//! Add-On lists without writing the root's.
 use anyhow::{Context, Result, bail, ensure};
 use bri_client::{app::App, platform::PlatformApp};
 use bri_ui::{api::*, screens::ScreenId};
@@ -14,6 +15,17 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+
+#[macro_use]
+mod support;
+use support::content_root::ContentRoot;
+
+synthetic_and_content!(
+    ContentRoot: add_ons_the_host_turns_off_are_not_required_and_ones_it_runs_download,
+    a_guest_joins_a_host_running_every_repository_add_on,
+    a_guest_without_a_vehicle_add_on_downloads_it_and_can_spawn_it,
+    a_host_with_the_blockhead_bot_on_spawns_bots_and_one_without_offers_none,
+);
 
 const SIZE: (u32, u32) = (960, 720);
 const SLATE: &str = "v20/add-ons/map_slate/slate.mis";
@@ -208,15 +220,12 @@ fn host_panels(app: &App) -> Vec<String> {
 /// Ragdoll) runs for a guest who never turned it on, without asking, and for
 /// no one when the host has it off. Uses the repository's Add-Ons, staged
 /// in the content root for the test's length, on a free port.
-#[test]
-#[ignore = "generated content (BRI_CONTENT or content/) and loopback UDP; no window"]
-fn add_ons_the_host_turns_off_are_not_required_and_ones_it_runs_download() -> Result<()> {
+fn add_ons_the_host_turns_off_are_not_required_and_ones_it_runs_download(
+    f: &ContentRoot,
+) -> Result<()> {
     const BRICKS: &str = "brick_portal";
     const RAGDOLL: &str = "ragdoll";
-    let content = std::env::var_os("BRI_CONTENT").map_or_else(
-        || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
-        PathBuf::from,
-    );
+    let content = f.root.clone();
     let repo = RepoAddOns::install(&content)?;
     // Everyone starts from the base game with no Add-On on.
     let mut base = bri_package::packages::PackageSet::load_root(&content)?;
@@ -679,13 +688,8 @@ fn copy_dir(from: &Path, to: &Path) -> Result<()> {
 /// catalog coverage mismatch"). The gate never enabled an Add-On, so it
 /// never saw that. Here a host turns on every Add-On in the repository and
 /// a guest with only the base game downloads them, loads them and joins.
-#[test]
-#[ignore = "generated content (BRI_CONTENT or content/) and loopback UDP; no window"]
-fn a_guest_joins_a_host_running_every_repository_add_on() -> Result<()> {
-    let content = std::env::var_os("BRI_CONTENT").map_or_else(
-        || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
-        PathBuf::from,
-    );
+fn a_guest_joins_a_host_running_every_repository_add_on(f: &ContentRoot) -> Result<()> {
+    let content = f.root.clone();
     let add_ons = RepoAddOns::install(&content)?;
     let mut set = bri_package::packages::PackageSet::load_root(&content)?;
     // The content may already list Add-Ons turned on (a release's or a
@@ -745,15 +749,10 @@ fn a_guest_joins_a_host_running_every_repository_add_on() -> Result<()> {
 /// Plane a release ships on): a host that runs it lists it among its
 /// spawnable vehicles, and a guest who has it off downloads it, joins and
 /// can pick it too.
-#[test]
-#[ignore = "generated content (BRI_CONTENT or content/) and loopback UDP; no window"]
-fn a_guest_without_a_vehicle_add_on_downloads_it_and_can_spawn_it() -> Result<()> {
+fn a_guest_without_a_vehicle_add_on_downloads_it_and_can_spawn_it(f: &ContentRoot) -> Result<()> {
     const PLANE: &str = "test_plane";
     const VEHICLE: &str = "test_plane:vehicle/standinplane";
-    let content = std::env::var_os("BRI_CONTENT").map_or_else(
-        || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
-        PathBuf::from,
-    );
+    let content = f.root.clone();
     let listed = bri_package::packages::PackageSet::load_root(&content)?;
     let staged = RepoAddOns::install(&content)?;
     let mut set = listed.clone();
@@ -808,15 +807,12 @@ fn a_guest_without_a_vehicle_add_on_downloads_it_and_can_spawn_it() -> Result<()
 /// provides (only the dedicated server did). With the Add-On on, the list
 /// offers the bot and a loaded spawn brick makes one; with it off, the
 /// list does not offer it, so no choice silently does nothing.
-#[test]
-#[ignore = "generated content (BRI_CONTENT or content/) and loopback UDP; no window"]
-fn a_host_with_the_blockhead_bot_on_spawns_bots_and_one_without_offers_none() -> Result<()> {
+fn a_host_with_the_blockhead_bot_on_spawns_bots_and_one_without_offers_none(
+    f: &ContentRoot,
+) -> Result<()> {
     const BOTS: &str = "blockhead_bot";
     const BOT: &str = "bot.blockhead";
-    let content = std::env::var_os("BRI_CONTENT").map_or_else(
-        || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
-        PathBuf::from,
-    );
+    let content = f.root.clone();
     let listed = bri_package::packages::PackageSet::load_root(&content)?;
     let mut with = listed.clone();
     let _staged = if with.packages.iter().any(|p| p.id == BOTS) {
@@ -863,7 +859,7 @@ fn a_host_with_the_blockhead_bot_on_spawns_bots_and_one_without_offers_none() ->
         let mut world =
             bri_world::World::new("Bots".into(), map_id.clone(), view.world.palette.clone());
         let mut brick = bri_world::Brick::new(
-            bri_world::ContentRef::Resolved("v20/brick/brickvehiclespawndata".into()),
+            bri_world::ContentRef::Resolved(f.vehicle_spawn.clone()),
             [
                 (player.feet[0] * 2.0).round() / 2.0 + 6.0,
                 (player.feet[1] / 0.2).ceil() * 0.2 + 0.1,
@@ -888,11 +884,12 @@ fn a_host_with_the_blockhead_bot_on_spawns_bots_and_one_without_offers_none() ->
             folder.join("bot.world.json"),
             serde_json::to_vec(&bri_world::build::SavedBuild::new(world))?,
         )?;
+        // The save list names maps by their display name.
+        let map = bri_client::saves::Store::new(&state, &host_app.content, None).map_name(&map_id);
         request(
             &mut host_app,
             UiAction::LoadBricks {
-                // The save list names maps by their display name.
-                map: "Slate".into(),
+                map,
                 name: "bot.world.json".into(),
                 ownership: true,
             },

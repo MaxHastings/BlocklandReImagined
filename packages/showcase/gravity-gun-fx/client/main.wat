@@ -21,9 +21,12 @@
 ;;   beam's end, so the body dangles from it, and flies on when let go.
 ;;   The server carries the corpse itself; this is only how it hangs.
 ;;
+;; Through a portal the beam goes as the player sees: into the opening
+;; and on out of its partner to what it holds (`sight`).
+;;
 ;; Everything comes from what the game already knows (`world.read`):
 ;; where players and vehicles are drawn, where each player's gun is drawn
-;; and its muzzle (`held`), and each
+;; and its muzzle (`held`), the sight through portals (`sight`), and each
 ;; player's `beam` from the Gravity Gun Add-On's public state: [held kind,
 ;; held id, beam on, beam length]; kinds 1 vehicle, 2 player, 3 Add-On
 ;; creature. The server sends
@@ -41,12 +44,15 @@
 ;;   1280   the held record (20 f32): the gun's model matrix, its muzzle
 ;;   1408   what rigid_find found (8 f32)
 ;;   1440   a body as rigid_get gives it (16 f32)
+;;   1536   the sight's legs (20 f32 each, up to 5): start xyz, direction
+;;          xyz, how far along it begins, its length, the carry
 ;;   2048   player records, 16 f32 (64 bytes) each, up to 64
 ;;   8192   vehicle records, 16 f32 each, up to 256
 ;;   24576  per-player effect state, 128 bytes each, 64 slots:
 ;;            +0 id  +4 in use  +24 when it last caught something
 ;;            +28 when it last let go  +32 the grip last frame xyz
 ;;            +44 when the reaching whirr last started  +48 beam on last frame
+;;            +52 the beam's legs last frame (i32; more than 1 through a portal)
 ;;            +56 seen this frame  +72 what was held last frame
 ;;            +76 its id  +80 the grip, in the held thing's own frame xyz
 ;;            +96 the ragdoll limb gripped (i32, 0 none)  +100 the grip on
@@ -74,6 +80,8 @@
   (import "bri" "rigid_hold"
     (func $rigid_hold (param i32 f32 f32 f32 f32 f32 f32 f32 f32 f32 f32)))
   (import "bri" "rigid_get" (func $rigid_get (param i32 i32) (result i32)))
+  (import "bri" "sight"
+    (func $sight (param f32 f32 f32 f32 f32 f32 f32 i32 i32) (result i32)))
   (memory (export "memory") 2)
 
   (global $tube (mut i32) (i32.const 0))
@@ -98,6 +106,11 @@
   (global $rx (mut f32) (f32.const 0))
   (global $ry (mut f32) (f32.const 0))
   (global $rz (mut f32) (f32.const 0))
+  ;; What $along found: the point, and the sight's legs at 1536.
+  (global $px (mut f32) (f32.const 0))
+  (global $py (mut f32) (f32.const 0))
+  (global $pz (mut f32) (f32.const 0))
+  (global $legs (mut i32) (i32.const 1))
 
   (data (i32.const 0) "client/beam.wgsl")
   (data (i32.const 32) "client/field.wgsl")
@@ -290,6 +303,94 @@
     (call $colour (local.get $alpha))
     (call $draw (global.get $sparks) (global.get $m_spark)))
 
+  ;; The point `reach` along the aim from the eye (e, look l), through
+  ;; portals as the player sees through them: sets $px $py $pz and $legs
+  ;; (1 when it goes through none).
+  (func $along (param $ex f32) (param $ey f32) (param $ez f32)
+               (param $lx f32) (param $ly f32) (param $lz f32) (param $reach f32)
+    (local $at i32) (local $d f32)
+    (global.set $legs (call $sight (local.get $ex) (local.get $ey) (local.get $ez)
+      (local.get $lx) (local.get $ly) (local.get $lz) (local.get $reach)
+      (i32.const 1536) (i32.const 5)))
+    (if (i32.le_s (global.get $legs) (i32.const 1))
+      (then
+        (global.set $legs (i32.const 1))
+        (global.set $px (f32.add (local.get $ex) (f32.mul (local.get $lx) (local.get $reach))))
+        (global.set $py (f32.add (local.get $ey) (f32.mul (local.get $ly) (local.get $reach))))
+        (global.set $pz (f32.add (local.get $ez) (f32.mul (local.get $lz) (local.get $reach))))
+        (return)))
+    (local.set $at (i32.add (i32.const 1536)
+      (i32.mul (i32.sub (global.get $legs) (i32.const 1)) (i32.const 80))))
+    (local.set $d (f32.sub (local.get $reach) (f32.load offset=24 (local.get $at))))
+    (global.set $px (f32.add (f32.load (local.get $at))
+      (f32.mul (f32.load offset=12 (local.get $at)) (local.get $d))))
+    (global.set $py (f32.add (f32.load offset=4 (local.get $at))
+      (f32.mul (f32.load offset=16 (local.get $at)) (local.get $d))))
+    (global.set $pz (f32.add (f32.load offset=8 (local.get $at))
+      (f32.mul (f32.load offset=20 (local.get $at)) (local.get $d)))))
+
+  ;; The beam from the muzzle (m) to g along the sight $along found: into
+  ;; each portal it goes in by, straight, and on out of its partner. With
+  ;; `whip` its last stretch leaves along the sight (d, the aim when it
+  ;; goes through no portal) and bends into g, so it whips when the held
+  ;; thing lags; without, it runs straight.
+  (func $path (param $mx f32) (param $my f32) (param $mz f32)
+              (param $gx f32) (param $gy f32) (param $gz f32)
+              (param $dx f32) (param $dy f32) (param $dz f32)
+              (param $seed f32) (param $strength f32) (param $whip i32)
+    (local $i i32) (local $at i32) (local $span f32)
+    (local $sx f32) (local $sy f32) (local $sz f32)
+    (local $ex f32) (local $ey f32) (local $ez f32)
+    (local.set $sx (local.get $mx))
+    (local.set $sy (local.get $my))
+    (local.set $sz (local.get $mz))
+    (block $done
+      (loop $each
+        (br_if $done (i32.ge_s (local.get $i) (i32.sub (global.get $legs) (i32.const 1))))
+        (local.set $at (i32.add (i32.const 1536) (i32.mul (local.get $i) (i32.const 80))))
+        ;; Where this leg goes in by its opening.
+        (local.set $ex (f32.add (f32.load (local.get $at))
+          (f32.mul (f32.load offset=12 (local.get $at)) (f32.load offset=28 (local.get $at)))))
+        (local.set $ey (f32.add (f32.load offset=4 (local.get $at))
+          (f32.mul (f32.load offset=16 (local.get $at)) (f32.load offset=28 (local.get $at)))))
+        (local.set $ez (f32.add (f32.load offset=8 (local.get $at))
+          (f32.mul (f32.load offset=20 (local.get $at)) (f32.load offset=28 (local.get $at)))))
+        (call $beam (local.get $sx) (local.get $sy) (local.get $sz)
+          (f32.mul (f32.const 0.5) (f32.add (local.get $sx) (local.get $ex)))
+          (f32.mul (f32.const 0.5) (f32.add (local.get $sy) (local.get $ey)))
+          (f32.mul (f32.const 0.5) (f32.add (local.get $sz) (local.get $ez)))
+          (local.get $ex) (local.get $ey) (local.get $ez)
+          (local.get $seed) (local.get $strength))
+        ;; On out of its partner, along the next leg.
+        (local.set $at (i32.add (local.get $at) (i32.const 80)))
+        (local.set $sx (f32.load (local.get $at)))
+        (local.set $sy (f32.load offset=4 (local.get $at)))
+        (local.set $sz (f32.load offset=8 (local.get $at)))
+        (local.set $dx (f32.load offset=12 (local.get $at)))
+        (local.set $dy (f32.load offset=16 (local.get $at)))
+        (local.set $dz (f32.load offset=20 (local.get $at)))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $each)))
+    (if (local.get $whip)
+      (then
+        (local.set $span (f32.mul (f32.const 0.5) (f32.sqrt (f32.add (f32.add
+          (f32.mul (f32.sub (local.get $gx) (local.get $sx)) (f32.sub (local.get $gx) (local.get $sx)))
+          (f32.mul (f32.sub (local.get $gy) (local.get $sy)) (f32.sub (local.get $gy) (local.get $sy))))
+          (f32.mul (f32.sub (local.get $gz) (local.get $sz)) (f32.sub (local.get $gz) (local.get $sz)))))))
+        (call $beam (local.get $sx) (local.get $sy) (local.get $sz)
+          (f32.add (local.get $sx) (f32.mul (local.get $dx) (local.get $span)))
+          (f32.add (local.get $sy) (f32.mul (local.get $dy) (local.get $span)))
+          (f32.add (local.get $sz) (f32.mul (local.get $dz) (local.get $span)))
+          (local.get $gx) (local.get $gy) (local.get $gz)
+          (local.get $seed) (local.get $strength)))
+      (else
+        (call $beam (local.get $sx) (local.get $sy) (local.get $sz)
+          (f32.mul (f32.const 0.5) (f32.add (local.get $sx) (local.get $gx)))
+          (f32.mul (f32.const 0.5) (f32.add (local.get $sy) (local.get $gy)))
+          (f32.mul (f32.const 0.5) (f32.add (local.get $sz) (local.get $gz)))
+          (local.get $gx) (local.get $gy) (local.get $gz)
+          (local.get $seed) (local.get $strength)))))
+
   ;; ---- Finding things ----
 
   ;; Where the object of `kind` (1 vehicle, 2 player, 3 creature) and `id`
@@ -433,7 +534,7 @@
     (local $rx f32) (local $rz f32) (local $rl f32)
     (local $mx f32) (local $my f32) (local $mz f32)
     (local $gx f32) (local $gy f32) (local $gz f32) (local $span f32)
-    (local $body i32) (local $age f32)
+    (local $body i32) (local $age f32) (local $leg i32)
     (local $tx f32) (local $ty f32) (local $tz f32)
     (local $vx f32) (local $vy f32) (local $vz f32)
     (global.set $players_n (call $players (i32.const 2048) (i32.const 64)))
@@ -512,6 +613,10 @@
               (f32.gt (local.get $held) (f32.const 0.5))
               (call $locate (local.get $held) (local.get $held_id)))
           (then
+            ;; Where the aim is, as far off as the server holds it,
+            ;; through portals.
+            (call $along (local.get $ex) (local.get $ey) (local.get $ez)
+              (local.get $lx) (local.get $ly) (local.get $lz) (local.get $reach))
             ;; Caught: note the spot the beam took, in the thing's own
             ;; frame (where the player aimed, as far off as the server
             ;; holds it), and the beam takes hold with a rising hum.
@@ -520,9 +625,9 @@
                   (f32.ne (f32.load offset=76 (local.get $slot)) (local.get $held_id)))
               (then
                 (call $rotate
-                  (f32.sub (f32.add (local.get $ex) (f32.mul (local.get $lx) (local.get $reach))) (global.get $ox))
-                  (f32.sub (f32.add (local.get $ey) (f32.mul (local.get $ly) (local.get $reach))) (global.get $oy))
-                  (f32.sub (f32.add (local.get $ez) (f32.mul (local.get $lz) (local.get $reach))) (global.get $oz))
+                  (f32.sub (global.get $px) (global.get $ox))
+                  (f32.sub (global.get $py) (global.get $oy))
+                  (f32.sub (global.get $pz) (global.get $oz))
                   (f32.const -1))
                 ;; Never outside the thing itself.
                 (local.set $span (f32.sqrt (f32.add (f32.add
@@ -549,10 +654,22 @@
                 (f32.store offset=124 (local.get $slot) (f32.const 0))
                 (if (f32.eq (local.get $held) (f32.const 2))
                   (then
+                    ;; Along the last leg of the sight: beyond a portal,
+                    ;; from where it comes out of the partner.
+                    (local.set $leg (i32.add (i32.const 1536)
+                      (i32.mul (i32.sub (global.get $legs) (i32.const 1)) (i32.const 80))))
                     (i32.store offset=96 (local.get $slot)
-                      (call $rigid_find (local.get $ex) (local.get $ey) (local.get $ez)
-                        (local.get $lx) (local.get $ly) (local.get $lz)
-                        (f32.add (local.get $reach) (f32.const 2)) (i32.const 1408)))
+                      (if (result i32) (i32.gt_s (global.get $legs) (i32.const 1))
+                        (then
+                          (call $rigid_find (f32.load (local.get $leg)) (f32.load offset=4 (local.get $leg))
+                            (f32.load offset=8 (local.get $leg)) (f32.load offset=12 (local.get $leg))
+                            (f32.load offset=16 (local.get $leg)) (f32.load offset=20 (local.get $leg))
+                            (f32.add (f32.sub (local.get $reach) (f32.load offset=24 (local.get $leg))) (f32.const 2))
+                            (i32.const 1408)))
+                        (else
+                          (call $rigid_find (local.get $ex) (local.get $ey) (local.get $ez)
+                            (local.get $lx) (local.get $ly) (local.get $lz)
+                            (f32.add (local.get $reach) (f32.const 2)) (i32.const 1408)))))
                     (f32.store offset=100 (local.get $slot) (f32.load (i32.const 1424)))
                     (f32.store offset=104 (local.get $slot) (f32.load (i32.const 1428)))
                     (f32.store offset=108 (local.get $slot) (f32.load (i32.const 1432)))))
@@ -570,9 +687,9 @@
             (local.set $body (i32.load offset=96 (local.get $slot)))
             (if (i32.and (f32.eq (local.get $held) (f32.const 2)) (i32.gt_s (local.get $body) (i32.const 0)))
               (then
-                (local.set $tx (f32.add (local.get $ex) (f32.mul (local.get $lx) (local.get $reach))))
-                (local.set $ty (f32.add (local.get $ey) (f32.mul (local.get $ly) (local.get $reach))))
-                (local.set $tz (f32.add (local.get $ez) (f32.mul (local.get $lz) (local.get $reach))))
+                (local.set $tx (global.get $px))
+                (local.set $ty (global.get $py))
+                (local.set $tz (global.get $pz))
                 (local.set $vx (f32.const 0))
                 (local.set $vy (f32.const 0))
                 (local.set $vz (f32.const 0))
@@ -604,16 +721,11 @@
                     (local.set $gz (f32.add (f32.load (i32.const 1448)) (global.get $rz)))))))
             ;; The beam leaves the muzzle along the aim and bends into the
             ;; grip: straight while the thing keeps up, a whip when it lags.
-            (local.set $span (f32.mul (f32.const 0.5) (f32.sqrt (f32.add (f32.add
-              (f32.mul (f32.sub (local.get $gx) (local.get $mx)) (f32.sub (local.get $gx) (local.get $mx)))
-              (f32.mul (f32.sub (local.get $gy) (local.get $my)) (f32.sub (local.get $gy) (local.get $my))))
-              (f32.mul (f32.sub (local.get $gz) (local.get $mz)) (f32.sub (local.get $gz) (local.get $mz)))))))
-            (call $beam (local.get $mx) (local.get $my) (local.get $mz)
-              (f32.add (local.get $mx) (f32.mul (local.get $lx) (local.get $span)))
-              (f32.add (local.get $my) (f32.mul (local.get $ly) (local.get $span)))
-              (f32.add (local.get $mz) (f32.mul (local.get $lz) (local.get $span)))
+            (call $path (local.get $mx) (local.get $my) (local.get $mz)
               (local.get $gx) (local.get $gy) (local.get $gz)
-              (local.get $id) (f32.const 1))
+              (local.get $lx) (local.get $ly) (local.get $lz)
+              (local.get $id) (f32.const 1) (i32.const 1))
+            (i32.store offset=52 (local.get $slot) (global.get $legs))
             (f32.store offset=32 (local.get $slot) (local.get $gx))
             (f32.store offset=36 (local.get $slot) (local.get $gy))
             (f32.store offset=40 (local.get $slot) (local.get $gz))
@@ -647,15 +759,16 @@
             ;; where it points.
             (if (f32.gt (local.get $on) (f32.const 0.5))
               (then
-                (local.set $gx (f32.add (local.get $ex) (f32.mul (local.get $lx) (local.get $reach))))
-                (local.set $gy (f32.add (local.get $ey) (f32.mul (local.get $ly) (local.get $reach))))
-                (local.set $gz (f32.add (local.get $ez) (f32.mul (local.get $lz) (local.get $reach))))
-                (call $beam (local.get $mx) (local.get $my) (local.get $mz)
-                  (f32.mul (f32.const 0.5) (f32.add (local.get $mx) (local.get $gx)))
-                  (f32.mul (f32.const 0.5) (f32.add (local.get $my) (local.get $gy)))
-                  (f32.mul (f32.const 0.5) (f32.add (local.get $mz) (local.get $gz)))
+                (call $along (local.get $ex) (local.get $ey) (local.get $ez)
+                  (local.get $lx) (local.get $ly) (local.get $lz) (local.get $reach))
+                (local.set $gx (global.get $px))
+                (local.set $gy (global.get $py))
+                (local.set $gz (global.get $pz))
+                (call $path (local.get $mx) (local.get $my) (local.get $mz)
                   (local.get $gx) (local.get $gy) (local.get $gz)
-                  (local.get $id) (f32.const 0.55))
+                  (local.get $lx) (local.get $ly) (local.get $lz)
+                  (local.get $id) (f32.const 0.55) (i32.const 0))
+                (i32.store offset=52 (local.get $slot) (global.get $legs))
                 (call $orb (local.get $mx) (local.get $my) (local.get $mz) (f32.const 0.08) (f32.const 0.7))
                 ;; And it whirrs: louder as the trigger goes down, then
                 ;; again every half second (the sound's length) it keeps
@@ -673,9 +786,11 @@
                           (local.get $mx) (local.get $my) (local.get $mz))))))))))
 
         ;; Let go: for a moment the beam snaps back from where it gripped
-        ;; into the muzzle, fading as it goes.
+        ;; into the muzzle, fading as it goes (straight, so not when it
+        ;; went through a portal).
         (local.set $age (f32.div (f32.sub (local.get $t) (f32.load offset=28 (local.get $slot))) (f32.const 0.18)))
-        (if (i32.and (f32.lt (local.get $held) (f32.const 0.5))
+        (if (i32.and (i32.and (f32.lt (local.get $held) (f32.const 0.5))
+                              (i32.le_s (i32.load offset=52 (local.get $slot)) (i32.const 1)))
               (i32.and (f32.ge (local.get $age) (f32.const 0)) (f32.lt (local.get $age) (f32.const 1))))
           (then
             (local.set $gx (f32.add (f32.load offset=32 (local.get $slot))

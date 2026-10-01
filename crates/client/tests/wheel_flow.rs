@@ -1,7 +1,8 @@
 //! The mouse wheel reaches the brick bar through the real App (v20
 //! `scrollInventory`). Never creates a window or OS input.
-//! Run: cargo test -p bri-client --test wheel_flow --release -- --ignored --nocapture
-//! Content defaults to the workspace `content/`; override with BRI_CONTENT.
+//! Runs on the made-up content root, and (ignored) on the generated v20
+//! content: `--ignored`, defaulting to the workspace `content/`, override
+//! with BRI_CONTENT.
 use anyhow::{Result, bail, ensure};
 use bri_client::{app::App, platform::PlatformApp};
 use bri_ui::{
@@ -10,10 +11,13 @@ use bri_ui::{
     screens::ScreenId,
 };
 use std::{
-    path::{Path, PathBuf},
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
+
+#[macro_use]
+mod support;
+use support::content_root::ContentRoot;
 
 const BEDROOM: &str = "v20/add-ons/map_bedroom/bedroom.mis";
 
@@ -39,8 +43,11 @@ fn until(app: &mut App, what: &str, ready: impl Fn(&App) -> bool) -> Result<()> 
         }
         ensure!(
             start.elapsed() < Duration::from_secs(45),
-            "timed out waiting for {what}; screens {:?}; hud mode {:?} cur {:?} active {}",
+            "timed out waiting for {what}; connection {:?}; screens {:?}; hud bricks {}; \
+             hud mode {:?} cur {:?} active {}",
+            app.ui.core.conn,
             app.ui.stack(),
+            app.ui.core.hud.bricks.iter().flatten().count(),
             app.ui.core.hud.mode,
             app.ui.core.hud.cur_brick,
             app.ui.core.hud.brick_active,
@@ -49,17 +56,11 @@ fn until(app: &mut App, what: &str, ready: impl Fn(&App) -> bool) -> Result<()> 
     }
 }
 
-#[test]
-#[ignore = "native Bedroom map and loopback host; no window or audio device"]
-fn wheel_scrolls_the_brick_bar_in_the_real_app() -> Result<()> {
-    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let content = std::env::var_os("BRI_CONTENT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| workspace.join("content"));
-    let run_id = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-    let state = workspace.join(format!("artifacts/wheel-flow/state-{run_id}"));
-    std::fs::create_dir_all(&state)?;
-    let mut app = App::load(&content, &state, (960, 720))?;
+synthetic_and_content!(ContentRoot: wheel_scrolls_the_brick_bar_in_the_real_app);
+
+fn wheel_scrolls_the_brick_bar_in_the_real_app(f: &ContentRoot) -> Result<()> {
+    let state = f.state()?;
+    let mut app = App::load(&f.root, state.path(), (960, 720))?;
     app.ui.core.pop(ScreenId::DefaultControls);
     app.ui.update(0);
     app.ui.core.request(UiAction::HostGame {

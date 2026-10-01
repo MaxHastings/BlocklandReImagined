@@ -140,7 +140,7 @@ impl World for ScriptWorld<'_> {
     }
     fn setting(
         &self,
-        game: u64,
+        game: Option<u64>,
         team: Option<u64>,
         key: &str,
     ) -> Result<bri_package::setting::SettingValue, String> {
@@ -162,6 +162,9 @@ impl World for ScriptWorld<'_> {
         let host = self.session.packages.as_ref()?;
         let lines = host.catalog.packages.get(self.package)?.data_lines(id)?;
         Some(lines.into_iter().map(str::to_owned).collect())
+    }
+    fn pref(&self, name: &str) -> Option<bri_package::setting::SettingValue> {
+        self.session.pref_value(name)
     }
     fn brick_box(&self, brick: u64) -> Option<([f32; 3], [f32; 3])> {
         let (min, max) = self.session.simulation.brick_box(brick)?;
@@ -188,6 +191,13 @@ impl World for ScriptWorld<'_> {
             .peers
             .get(&actor)
             .map_or(0, |p| p.actor.trust_level(builder))
+    }
+    fn may_copy(&self, player: u64, brick: u64, rule: bri_package_runtime::ops::CopyRule) -> bool {
+        let sim = &self.session.simulation;
+        match (self.session.peers.get(&player), sim.state().bricks.get(&brick)) {
+            (Some(peer), Some(b)) => blueprints::admits(&peer.actor, rule, sim, brick, b),
+            _ => false,
+        }
     }
     fn can_plant(&self, kind: &str, position: [f32; 3], turns: u8) -> bool {
         self.session

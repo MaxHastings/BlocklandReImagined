@@ -221,24 +221,6 @@ impl Session {
         });
     }
 
-    /// Queue a `settings` event for changes no mini-game effect carries
-    /// (server-wide settings).
-    pub(in crate::session) fn queue_settings_event(&mut self, game: u64, edit: SettingsEdit) {
-        self.push_game_event(GameEvent {
-            kind: "settings",
-            game,
-            player: None,
-            team: None,
-            keys: edit.changes.iter().map(|(k, _)| k.clone()).collect(),
-            teams: Vec::new(),
-            players: Vec::new(),
-            by: edit.by,
-            ignored: false,
-            quiet: edit.quiet,
-            changes: edit.changes,
-        });
-    }
-
     fn push_game_event(&mut self, event: GameEvent) {
         let Some(host) = self.packages.as_mut() else {
             return;

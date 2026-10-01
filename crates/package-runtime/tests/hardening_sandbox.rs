@@ -527,6 +527,10 @@ fn every_operation_needs_its_declared_capability() {
             player: 1,
             ammo: false,
         },
+        Op::SetImageLoaded {
+            player: 1,
+            loaded: false,
+        },
         Op::MountImage {
             player: 1,
             image: Some("probe:image/scope".into()),

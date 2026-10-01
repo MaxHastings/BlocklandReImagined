@@ -65,6 +65,24 @@ fn native_dialog(title: &str) -> View {
     View::new(&root)
 }
 /// Stable names for serverConfigGui's unnamed `$Pref::Server::*` fields.
+/// v20's "UNKNOWN MAP" picture, which changeMapGui authors in its preview
+/// until a map is picked.
+const DEFAULT_MAP_PREVIEW: &str = "base/data/missions/default";
+/// Native name of changeMapGui's preview: the bitmap authored with
+/// [`DEFAULT_MAP_PREVIEW`].
+const MAP_PREVIEW: &str = "NativeMapPreview";
+fn name_map_preview(view: &mut View) {
+    let preview = view.walk().find(|&n| {
+        let c = &view.nodes[n].ctrl;
+        c.class.eq_ignore_ascii_case("GuiBitmapCtrl")
+            && c.bitmap
+                .as_deref()
+                .is_some_and(|b| b.eq_ignore_ascii_case(DEFAULT_MAP_PREVIEW))
+    });
+    if let Some(n) = preview {
+        view.names.insert(MAP_PREVIEW.into(), n);
+    }
+}
 fn name_option_fields(view: &mut View) {
     for n in view.walk().collect::<Vec<_>>() {
         if let Some(var) = view.nodes[n].ctrl.variable.clone()
@@ -141,11 +159,15 @@ impl AdminScreen {
         let parent = window(&view).unwrap_or(view.root);
         // Stable native names identify unnamed source buttons for internal tests.
         name_option_fields(&mut view);
+        if id == ScreenId::AdminMaps {
+            name_map_preview(&mut view);
+        }
         if id == ScreenId::Admin {
             for (name, label, y) in [
                 ("NativeEnvironment", "Environment >>", 210),
                 ("NativeHostOptions", "Host Options", 246),
                 ("NativeAdminCredentials", "Passwords", 282),
+                ("NativeAddOnSettings", "Add-On Settings", 318),
             ] {
                 let b = button(
                     "BlockButtonProfile",
@@ -507,6 +529,19 @@ impl AdminScreen {
                         && m.snapshot.as_ref().is_some_and(|s| s.options.is_some()),
                 );
             }
+            if let Some(n) = self.view.id("NativeAddOnSettings") {
+                // The running Add-Ons' server-wide settings, which only the
+                // host changes, as Host Options.
+                let any = core.minigames.addon_settings.iter().any(|s| s.server);
+                self.view
+                    .set_visible(n, any && m.snapshot.as_ref().is_some_and(|s| s.local_host));
+                self.view.set_active(
+                    n,
+                    !busy
+                        && m.available(AdminFeature::HostOptions)
+                        && m.snapshot.as_ref().is_some_and(|s| s.options.is_some()),
+                );
+            }
             if let Some(n) = self.view.id("NativeAdminCredentials") {
                 self.view.set_visible(
                     n,
@@ -710,6 +745,16 @@ impl AdminScreen {
                     .map(|r| r.name.clone())
                     .unwrap_or_default(),
             );
+            // The picked map's own picture, from this client's content (the
+            // host lists maps by the same ids); else the authored placeholder.
+            if let Some(n) = self.view.id(MAP_PREVIEW) {
+                let preview = m
+                    .selected_map
+                    .as_ref()
+                    .and_then(|id| core.maps.iter().find(|map| map.id == *id))
+                    .map_or(crate::api::IconRef::None, |map| map.preview.clone());
+                self.view.set_icon(n, &preview);
+            }
             set(
                 &mut self.view,
                 "changeMapDescription",
@@ -983,7 +1028,7 @@ impl Screen for AdminScreen {
         }
         let cmd = event_command(&self.view, ev).to_ascii_lowercase();
         if self.id == ScreenId::AdminConfirm {
-            if !cmd.contains("nocallback") {
+            if crate::view::message_answer(&cmd) != Some(false) {
                 accept_confirmation(core);
             } else {
                 core.admin.confirmation = None;
@@ -1158,9 +1203,24 @@ impl Screen for AdminScreen {
             }
             "nativeenvironment" => core.push(ScreenId::AdminEnvironment),
             "nativehostoptions" => core.push(ScreenId::AdminOptions),
+            "nativeaddonsettings" => {
+                core.minigame_addons = None;
+                core.server_addon_settings = true;
+                core.push(ScreenId::MiniGameAddOns);
+            }
             "nativeadmincredentials" => core.push(ScreenId::AdminCredentials),
             "canvas.popdialog(serverconfiggui);" => match self.collect_options() {
-                Ok(options) => {
+                Ok(mut options) => {
+                    // Add-On settings change in their own window: keep the
+                    // host's latest.
+                    if let Some(current) = core
+                        .admin
+                        .snapshot
+                        .as_ref()
+                        .and_then(|s| s.options.as_ref())
+                    {
+                        options.addon_settings = current.addon_settings.clone();
+                    }
                     // Only the local host changes these; they are its saved
                     // `$Pref::Server::*`, as in v20.
                     options_to_prefs(&options, &mut core.prefs);

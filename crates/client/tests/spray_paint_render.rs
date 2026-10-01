@@ -1,13 +1,89 @@
 //! The spray can's nozzle mist and paint splash take the selected palette
 //! colour (`setSprayCanColor`'s `color<N>Paint*` copies of the blue can).
+//! Runs on a made-up effects pack carrying the blue can's mist and splash
+//! and, ignored, on the generated v20 packs.
+#[macro_use]
+mod support;
+
 use anyhow::{Result, ensure};
 use bri_client::weapon_effects::WeaponEffects;
 use bri_fx_runtime::{gpu::EffectsRenderer, *};
 use bri_sim::presentation::Cue;
-use bri_ui::gpu::Headless;
 use bri_weapons::Pack;
 use glam::Vec3;
-use std::{path::Path, sync::Arc};
+use std::{path::PathBuf, sync::Arc};
+use support::{files::repo_root, gpu};
+
+/// The effects and weapons packs, and the colour the blue can's own mist
+/// is authored in.
+struct Fixture {
+    effects: Arc<EffectsPack>,
+    weapons: Arc<Pack>,
+    blue_mist: Vec3,
+    out: PathBuf,
+}
+
+impl Fixture {
+    fn content() -> Result<Self> {
+        let root = repo_root();
+        Ok(Self {
+            effects: EffectsPack::load(root.join("content/effects-runtime-pack-005"))?,
+            weapons: Arc::new(Pack::from_json(&std::fs::read(
+                root.join("content/weapons-pack-009/weapons.json"),
+            )?)?),
+            blue_mist: Vec3::new(0., 0.317, 0.745),
+            out: root.join("artifacts/spray-paint"),
+        })
+    }
+
+    /// The blue can's nozzle mist (`bluePaintEmitter`) and splash
+    /// (`bluePaintExplosion`, a burst), the names the palette copies are
+    /// made from, each a particle of one made-up colour.
+    fn synthetic() -> Result<Self> {
+        use bri_fx_runtime::testing::{emitter, particle};
+        let blue_mist = Vec3::new(0.1, 0.3, 0.8);
+        let constant = |rgb: Vec3| {
+            [0., 1.].map(|time| bri_content::effects::ParticleKey {
+                time,
+                color: rgb.extend(1.).to_array(),
+                size: 0.6,
+            })
+        };
+        let mut library = bri_fx_runtime::testing::library();
+        library
+            .particles
+            .push(particle("paint_mist", constant(blue_mist).into()));
+        library.particles.push(particle(
+            "paint_splash",
+            constant(Vec3::new(0.2, 0.4, 0.9)).into(),
+        ));
+        library.emitters.push(emitter(
+            "v20/emitter/bluepaintemitter",
+            "bluePaintEmitter",
+            &["paint_mist"],
+        ));
+        let splash = "v20/emitter/bluepaintexplosionemitter";
+        library
+            .emitters
+            .push(emitter(splash, "", &["paint_splash"]));
+        let mut manifest = bri_fx_runtime::testing::manifest();
+        manifest.composites.push(pack::Composite {
+            id: "v20/explosion/bluepaintexplosion".into(),
+            lifetime: 0.5,
+            emitters: vec![splash.into()],
+            light: None,
+            burst: Some((splash.into(), 10, 0.5)),
+        });
+        Ok(Self {
+            effects: bri_fx_runtime::testing::pack_from(library, manifest),
+            weapons: Arc::new(bri_weapons::testing::pack()),
+            blue_mist,
+            out: PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("spray-paint-synthetic"),
+        })
+    }
+}
+
+synthetic_and_content!(Fixture: spray_mist_and_splash_use_the_palette_colour_offscreen);
 
 /// v20 default colorset entries: opaque red, green, yellow and white, and
 /// the translucent blue and black.
@@ -42,26 +118,23 @@ fn camera() -> Camera {
         up: inverse.y_axis.truncate(),
     }
 }
-fn effects(root: &Path) -> Result<WeaponEffects> {
-    let pack = EffectsPack::load(root.join("content/effects-runtime-pack-005"))?;
-    let weapons = Arc::new(Pack::from_json(&std::fs::read(
-        root.join("content/weapons-pack-009/weapons.json"),
-    )?)?);
-    let mut fx = WeaponEffects::new(pack, weapons, EffectsLimits::default())?;
+fn effects(f: &Fixture) -> Result<WeaponEffects> {
+    let mut fx = WeaponEffects::new(
+        f.effects.clone(),
+        f.weapons.clone(),
+        EffectsLimits::default(),
+    )?;
     fx.set_palette(&PALETTE);
     Ok(fx)
 }
 
-#[test]
-#[ignore = "requires original converted packs and an offscreen GPU adapter"]
-fn spray_mist_and_splash_use_the_palette_colour_offscreen() -> Result<()> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+fn spray_mist_and_splash_use_the_palette_colour_offscreen(f: &Fixture) -> Result<()> {
     let mut frames = Vec::new();
     let mut pack = None;
     // Rows: nozzle mist (`bluePaintEmitter`), then the paint splash.
     for effect in ["PaintEmitter", "PaintExplosion"] {
         for (index, color) in PALETTE.iter().enumerate() {
-            let mut fx = effects(&root)?;
+            let mut fx = effects(f)?;
             let (definition, seconds) = if effect == "PaintEmitter" {
                 (format!("color{index}{effect}"), 0.3)
             } else {
@@ -102,21 +175,20 @@ fn spray_mist_and_splash_use_the_palette_colour_offscreen() -> Result<()> {
         }
     }
     // The blue can itself, unpainted, for comparison.
-    let mut fx = effects(&root)?;
+    let mut fx = effects(f)?;
     fx.cues(&[cue(1, "bluePaintEmitter", 0.3)], pose)?;
     for _ in 0..12 {
         fx.advance(0.02, Vec3::ZERO, pose)?;
     }
     let navy = fx.world().snapshot(&camera());
     ensure!(
-        navy.particles.iter().all(|p| p
-            .color
-            .truncate()
-            .abs_diff_eq(Vec3::new(0., 0.317, 0.745), 1e-3)),
+        navy.particles
+            .iter()
+            .all(|p| p.color.truncate().abs_diff_eq(f.blue_mist, 1e-3)),
         "Authored blue can mist changed"
     );
 
-    let gpu = Headless::new()?;
+    let gpu = gpu::turn()?;
     let pack = pack.unwrap();
     let mut renderer = EffectsRenderer::new(
         &gpu.device,
@@ -236,8 +308,8 @@ fn spray_mist_and_splash_use_the_palette_colour_offscreen() -> Result<()> {
     for row in mapped.chunks(stride as usize) {
         pixels.extend_from_slice(&row[..width as usize * 4]);
     }
-    let out = root.join("artifacts/spray-paint");
-    std::fs::create_dir_all(&out)?;
+    let out = &f.out;
+    std::fs::create_dir_all(out)?;
     image::save_buffer(
         out.join("spray-paint-colors.png"),
         &pixels,

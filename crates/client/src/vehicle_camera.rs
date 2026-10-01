@@ -326,22 +326,52 @@ mod tests {
     /// Every seat of the stock vehicles and the stand-in plane, seen
     /// from the rider's posed `eye` node as v20 places it, next to the old
     /// fixed 1.6 above the seat. Run with `--ignored --nocapture` for the table.
-    #[test]
-    #[ignore = "requires the converted avatar and vehicle packs"]
-    fn every_seats_first_person_eye_comes_from_the_posed_eye_node() -> Result<()> {
-        use crate::avatar::{AvatarAnimationInput, AvatarAssets};
-        use bri_vehicles::schema::{Pack, SeatRole};
-        use std::path::Path;
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let assets = AvatarAssets::load(&root.join("content/avatar-pack-002"))?;
-        let mut definitions =
-            Pack::load(root.join("content/vehicles-pack-012/vehicles.json"))?.definitions;
-        definitions.extend(
-            Pack::load(root.join("crates/vehicles/tests/fixtures/stand-in-plane/assets/vehicles.json"))?
+    /// Riders and what they ride: the made-up avatar and vehicles
+    /// (`crate::testing::avatar`, `bri_vehicles::testing`), or the
+    /// converted v20 packs with the stand-in plane.
+    struct Riders {
+        assets: crate::avatar::AvatarAssets,
+        definitions: Vec<bri_vehicles::schema::Definition>,
+        /// Seats the definitions have at least.
+        min_seats: usize,
+    }
+    impl Riders {
+        fn synthetic() -> Result<Self> {
+            let definitions = bri_vehicles::testing::definitions();
+            Ok(Self {
+                assets: crate::testing::avatar::assets()?,
+                min_seats: definitions.iter().map(|d| d.seats.len()).sum(),
+                definitions,
+            })
+        }
+        fn content() -> Result<Self> {
+            use bri_vehicles::schema::Pack;
+            let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+            let mut definitions =
+                Pack::load(root.join("content/vehicles-pack-012/vehicles.json"))?.definitions;
+            definitions.extend(
+                Pack::load(
+                    root.join("crates/vehicles/tests/fixtures/stand-in-plane/assets/vehicles.json"),
+                )?
                 .definitions,
-        );
+            );
+            Ok(Self {
+                assets: crate::avatar::AvatarAssets::load(&root.join("content/avatar-pack-002"))?,
+                definitions,
+                min_seats: 30,
+            })
+        }
+    }
+    crate::testing::synthetic_and_content!(
+        Riders: every_seats_first_person_eye_comes_from_the_posed_eye_node
+    );
+    fn every_seats_first_person_eye_comes_from_the_posed_eye_node(fx: &Riders) -> Result<()> {
+        use crate::avatar::AvatarAnimationInput;
+        use bri_vehicles::schema::SeatRole;
+        let (assets, definitions) = (&fx.assets, &fx.definitions);
+        assert!(fx.min_seats > 0, "the fixture has seats");
         let mut seats = 0;
-        for d in &definitions {
+        for d in definitions {
             for (index, seat) in d.seats.iter().enumerate() {
                 let node = Vec3::from(seat.transform.position);
                 let turn = Quat::from_array(seat.transform.rotation).normalize();
@@ -370,7 +400,7 @@ mod tests {
                 // `mountThread`: held from the first frame.
                 for time in [0.0, 1.0] {
                     body.pose_with_animation(
-                        &assets,
+                        assets,
                         &rider,
                         time,
                         &AvatarAnimationInput {
@@ -380,8 +410,8 @@ mod tests {
                         },
                     )?;
                 }
-                let eye_node = body.model_node(&assets, "Eye").expect("eye node");
-                let through_seat = body.world_node(&assets, "Eye").expect("eye node");
+                let eye_node = body.model_node(assets, "Eye").expect("eye node");
+                let through_seat = body.world_node(assets, "Eye").expect("eye node");
                 // The body sits on the mount node's full transform.
                 let expected = node + turn * eye_node.w_axis.truncate();
                 assert!(
@@ -419,7 +449,7 @@ mod tests {
                 seats += 1;
             }
         }
-        assert!(seats >= 30, "{seats} seats");
+        assert!(seats >= fx.min_seats, "{seats} seats");
         Ok(())
     }
 }

@@ -5,73 +5,36 @@
 //! with the player standing between. Each view, straight on and at an
 //! angle, is captured with Mirrors on High and Off into
 //! artifacts/mirror-render/<map>-<view>-<high|off>.png.
-//! Run with: cargo test -p bri-client --test mirror_render --release -- --ignored --nocapture
-//! Requires converted v20 content (BRI_CONTENT or content/), loopback QUIC
-//! and an offscreen GPU; never opens a window.
+//! Runs on the made-up content root (the Bedroom and Slopes there being
+//! lit rooms); the ignored variant runs on the generated v20 content
+//! (`-- --ignored`, BRI_CONTENT or content/). Loopback QUIC and an
+//! offscreen GPU; never opens a window.
 use anyhow::{Context, Result, ensure};
 use bri_client::{
     app::App,
     platform::{PlatformApp, RenderContext},
 };
-use bri_package::{defaults, packages::PackageSet};
 use bri_ui::{
     api::*,
     gpu::{Headless, UiRenderer},
 };
 use glam::Vec3;
 use std::{
-    path::{Path, PathBuf},
+    path::Path,
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
+
+#[macro_use]
+mod support;
+use support::content_root::ContentRoot;
+
+synthetic_and_content!(ContentRoot: the_mirror_shows_the_room_behind_the_camera);
 
 const SIZE: (u32, u32) = (640, 480);
 const BEDROOM: &str = "v20/add-ons/map_bedroom/bedroom.mis";
 const SLOPES: &str = "v20/add-ons/map_slopes/slopes.mis";
 const MIRROR: &str = "brick_mirror:brick/brickmirror1x4x5data";
-
-fn generated_content() -> PathBuf {
-    std::env::var_os("BRI_CONTENT").map_or_else(
-        || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content"),
-        PathBuf::from,
-    )
-}
-/// Copy a folder; `link` hard-links its files instead where it can.
-fn copy_dir(from: &Path, to: &Path, link: bool) -> Result<()> {
-    std::fs::create_dir_all(to)?;
-    for entry in std::fs::read_dir(from)? {
-        let entry = entry?;
-        let target = to.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
-            copy_dir(&entry.path(), &target, link)?;
-        } else if !link || std::fs::hard_link(entry.path(), &target).is_err() {
-            std::fs::copy(entry.path(), &target)
-                .with_context(|| format!("Copying {}", entry.path().display()))?;
-        }
-    }
-    Ok(())
-}
-/// The generated base game (hard-linked) with the default Add-Ons installed,
-/// so the shared content stays as it is.
-fn content_with_defaults(root: &Path) -> Result<PathBuf> {
-    let generated = generated_content();
-    let content = root.join("content");
-    for package in PackageSet::base().packages {
-        let from = generated.join(&package.dir);
-        ensure!(
-            from.is_dir(),
-            "{} lacks {}",
-            generated.display(),
-            package.dir
-        );
-        copy_dir(&from, &content.join(&package.dir), true)?;
-    }
-    defaults::install(
-        &content,
-        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages"),
-    )?;
-    Ok(content)
-}
 
 fn pump(app: &mut App) -> Result<()> {
     ensure!(
@@ -284,14 +247,16 @@ fn red(pixel: &[u8]) -> bool {
 /// Host `map`, build the mirror wall and what stands behind the camera,
 /// and capture each view with Mirrors on High and Off. Returns, per view,
 /// the pixels the mirrors changed and the red pixels with and without them.
-fn probe(map: &str, map_name: &str, artifact: &Path) -> Result<Vec<(String, usize, usize, usize)>> {
-    let scratch = std::env::temp_dir().join(format!(
-        "bri-mirror-render-{}-{}",
-        std::process::id(),
-        SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
-    ));
+fn probe(
+    f: &ContentRoot,
+    map: &str,
+    map_name: &str,
+    artifact: &Path,
+) -> Result<Vec<(String, usize, usize, usize)>> {
+    let scratch_dir = f.state()?;
+    let scratch = scratch_dir.path().to_path_buf();
     let result = (|| {
-        let content = content_with_defaults(&scratch)?;
+        let content = f.with_defaults(&scratch)?;
         let state = scratch.join("state");
         std::fs::create_dir_all(&state)?;
         let mut app = App::load(&content, &state, SIZE)?;
@@ -382,27 +347,19 @@ fn probe(map: &str, map_name: &str, artifact: &Path) -> Result<Vec<(String, usiz
         }
         let pillar = snap(4.0, 5.0);
         for layer in 0..8 {
-            let mut red = brick(
-                "v20/brick/brick2x2data",
-                pillar + Vec3::Y * (0.3 + 0.6 * layer as f32),
-            );
+            let mut red = brick(&f.brick, pillar + Vec3::Y * (0.3 + 0.6 * layer as f32));
             red.color = 0;
             add(red);
         }
-        let mut fire = brick("v20/brick/brick2x2data", snap(0.0, 5.0) + Vec3::Y * 0.3);
+        let mut fire = brick(&f.brick, snap(0.0, 5.0) + Vec3::Y * 0.3);
         fire.emitter = Some(Box::new(bri_world::Emitter {
-            asset: Some(bri_world::ContentRef::Resolved(
-                "v20/emitter/playerjetemitter".into(),
-            )),
+            asset: Some(bri_world::ContentRef::Resolved(f.emitter.clone())),
             direction: 0,
         }));
         add(fire);
-        let mut spawn = brick(
-            "v20/brick/brickvehiclespawndata",
-            snap(-4.0, 5.0) + Vec3::Y * 0.1,
-        );
+        let mut spawn = brick(&f.vehicle_spawn, snap(-4.0, 5.0) + Vec3::Y * 0.1);
         spawn.vehicle = Some(Box::new(bri_world::VehicleSpawn {
-            vehicle: bri_world::ContentRef::Resolved("v20.vehicle.horsearmor".into()),
+            vehicle: bri_world::ContentRef::Resolved(bri_vehicles::testing::HORSE.into()),
             recolor: false,
         }));
         add(spawn);
@@ -457,7 +414,7 @@ fn probe(map: &str, map_name: &str, artifact: &Path) -> Result<Vec<(String, usiz
         {
             eprintln!("{map_name}: WARNING the horse did not spawn");
         }
-        let gpu = Headless::new().context("offscreen mirror renderer")?;
+        let gpu = support::gpu::turn().context("offscreen mirror renderer")?;
         let mut renderer = UiRenderer::new(&gpu.device, &gpu.queue);
         app.gpu_ready(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm)?;
         // Straight on at about eye height, a little in front of the player;
@@ -501,17 +458,14 @@ fn probe(map: &str, map_name: &str, artifact: &Path) -> Result<Vec<(String, usiz
         app.gpu_stopped();
         Ok(out)
     })();
-    let _ = std::fs::remove_dir_all(&scratch);
+    drop(scratch_dir);
     result
 }
 
-#[test]
-#[ignore = "requires converted native v20 content, loopback QUIC and offscreen GPU; no window/audio device"]
-fn the_mirror_shows_the_room_behind_the_camera() -> Result<()> {
-    let artifact = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../artifacts/mirror-render");
-    std::fs::create_dir_all(&artifact)?;
+fn the_mirror_shows_the_room_behind_the_camera(f: &ContentRoot) -> Result<()> {
+    let artifact = f.out("mirror-render")?;
     for (map, name) in [(BEDROOM, "Bedroom"), (SLOPES, "Slopes")] {
-        for (view, changed, live, silver) in probe(map, name, &artifact)? {
+        for (view, changed, live, silver) in probe(f, map, name, &artifact)? {
             ensure!(
                 changed > 20_000,
                 "{name} {view}: the mirrors show nothing but silver ({changed} px differ)"

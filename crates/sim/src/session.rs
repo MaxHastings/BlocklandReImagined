@@ -38,6 +38,7 @@ mod inventory;
 mod map_change;
 mod environment;
 mod map_lights;
+mod world_shapes;
 mod special;
 mod trust;
 mod tutorial;
@@ -58,6 +59,7 @@ mod copy_edits;
 mod copy_jobs;
 pub use copy_jobs::DEFAULT_COPY_WORK;
 mod copy_store;
+mod crossings;
 pub use blueprints::Copied;
 pub use copy_edits::{BoxEdit, WrenchFill};
 pub use copy_store::{CopyStore, LoadedCopy, MemoryCopies, Saved, StoreDone, name_matches};
@@ -183,6 +185,7 @@ pub const EMOTES: [&str; 7] = ["alarm", "bsd", "confusion", "hate", "hug", "love
 /// (`%player.getEyePoint()`).
 const V20_EYE_NODE: f32 = 2.156;
 pub use map_lights::{MAX_MAP_LIGHT_RULES, MapLightRule};
+pub use world_shapes::{MAX_SHAPE_SETS, check_world_shapes};
 pub use tools::{FX_CAN_IMAGES, InspectMode, SPRAY_CAN_IMAGE, ToolAction, ToolCatalog};
 pub use trust::{MAX_TRUST_LIST, PlayerTrust, TrustEntry, TrustLevel};
 pub use undo::UNDO_QUEUE_SIZE;
@@ -404,6 +407,9 @@ pub enum Command {
     BrickHand(BrickHand),
     /// The client's unplanted ghost brick moved, or went away.
     GhostBrick(Option<GhostBrick>),
+    /// The copy the client places moved, turned, mirrored or flipped, or
+    /// went away: where it stands, for its Add-On to show the others.
+    CopyPose(Option<CopyPose>),
     /// `serverCmdWand` (`/wand`): hold the player wand.
     Wand,
     /// `serverCmdStartTalking` / `serverCmdStopTalking`: the chat box is
@@ -487,6 +493,7 @@ impl Command {
             | Command::ControlPlayer
             | Command::BrickHand(_)
             | Command::GhostBrick(_)
+            | Command::CopyPose(_)
             // v20's emote commands quietly do nothing without a body.
             | Command::Emote(_)
             | Command::Talking(_)
@@ -521,6 +528,29 @@ impl GhostBrick {
                     .all(|v| v.is_finite() && v.abs() <= 1_000_000.0)
                 && self.quarter_turns < 4,
             "Invalid ghost brick"
+        );
+        Ok(())
+    }
+}
+/// Where a player's copy stands as they place it (only they see its
+/// bricks): its pivot, its turn, and whether it is mirrored or upside
+/// down, as `Command::PlaceBlueprint` would plant it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CopyPose {
+    pub anchor: [f32; 3],
+    pub quarter_turns: u8,
+    pub mirrored: bool,
+    pub flipped: bool,
+}
+impl CopyPose {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.anchor
+                .iter()
+                .all(|v| v.is_finite() && v.abs() <= 1_000_000.0)
+                && self.quarter_turns < 4,
+            "Invalid copy pose"
         );
         Ok(())
     }
@@ -821,6 +851,8 @@ pub struct Session {
     item_spawners: crate::item_spawners::ItemSpawners,
     spawn_loadout: ToolInventory,
     weapons: bri_weapons::WeaponsWorld,
+    /// Server settings the game reads only as it starts, as they were then.
+    started_settings: BTreeMap<String, bri_package::setting::SettingValue>,
     weapon_triggers: BTreeMap<OwnerId, weapons::Triggers>,
     weapon_gaps: BTreeMap<String, u64>,
     /// `$Pref::Server::FootballRecord`, in feet, for this server run.
@@ -899,11 +931,15 @@ pub struct Session {
     breakables: breakables::Breakables,
     /// Add-On map light rules (`set_map_lights`), replicated to clients.
     map_lights: Vec<map_lights::MapLightRule>,
+    /// Add-On world shapes (`show_shapes`), replicated to clients.
+    world_shapes: world_shapes::WorldShapes,
     /// The live environment over the map's own (Admin Menu Environment,
     /// Add-Ons' `set_environment`), replicated to clients.
     environment: bri_content::atmosphere::Settings,
     /// Holds, pushes and Add-On vehicles (`physics` operations).
     movables: movables::Movables,
+    /// Recent trips through portals, for whatever follows things across.
+    crossings: crossings::Crossings,
 }
 impl Session {
     pub fn new(simulation: Simulation) -> Self {
@@ -926,8 +962,10 @@ impl Session {
             body_mounts: BTreeMap::new(),
             breakables: Default::default(),
             map_lights: Vec::new(),
+            world_shapes: Default::default(),
             environment: Default::default(),
             movables: Default::default(),
+            crossings: Default::default(),
             specials: Default::default(),
             highlights: Default::default(),
             copy_jobs: Default::default(),
@@ -948,6 +986,7 @@ impl Session {
             last_membership: BTreeMap::new(),
             item_spawners: Default::default(),
             spawn_loadout: ToolInventory::default(),
+            started_settings: BTreeMap::new(),
             weapon_triggers: BTreeMap::new(),
             weapon_gaps: BTreeMap::new(),
             football_record: 0,
@@ -1113,6 +1152,7 @@ impl Session {
     pub fn set_server_settings(&mut self, settings: bri_admin::ServerSettings) -> Result<()> {
         settings.validate()?;
         self.admin.settings = settings;
+        self.start_settings();
         Ok(())
     }
     /// The host's current Server Settings.
@@ -1439,6 +1479,7 @@ impl Session {
         self.forget_copy_job(owner);
         self.forget_blueprint(owner);
         self.plant_waits.remove(&owner);
+        self.forget_world_shapes(owner);
         self.forget_copy_requests(owner);
         self.forget_mover(owner);
         self.departed.insert(
@@ -1775,7 +1816,7 @@ impl Session {
                 peer.saves = 0;
                 peer.ghost_reports = 0;
             }
-            if matches!(command, Command::GhostBrick(_)) {
+            if matches!(command, Command::GhostBrick(_) | Command::CopyPose(_)) {
                 peer.ghost_reports = peer.ghost_reports.saturating_add(1);
                 ensure!(peer.ghost_reports <= 30, "Ghost brick report rate exceeded");
             } else {
@@ -2128,6 +2169,10 @@ impl Session {
             }
             Command::GhostBrick(ghost) => {
                 self.set_ghost_brick(owner, ghost)?;
+                Ok(Reply::Accepted)
+            }
+            Command::CopyPose(pose) => {
+                self.set_copy_pose(owner, pose)?;
                 Ok(Reply::Accepted)
             }
             Command::BuildGesture(gesture) => {
@@ -2483,6 +2528,7 @@ impl Session {
         let mut touches = Vec::new();
         let mut impacts = Vec::new();
         let mut glass_hits = Vec::new();
+        let mut crossed = Vec::new();
         let mut driving = Vec::new();
         let mut triggers = Vec::new();
         // Moves of players driving a package entity, for `step_packages`.
@@ -2599,6 +2645,9 @@ impl Session {
                             continue;
                         }
                     };
+                if let Some(carry) = motion.passed {
+                    crossed.push((owner, carry));
+                }
                 let state = peer.player.state();
                 if Vec3::from(state.velocity).length() > 0.5 {
                     peer.sitting = false;
@@ -2649,6 +2698,9 @@ impl Session {
         };
         impacts.retain(|(owner, _)| !smashers.contains(owner));
         self.fire_touches(touches);
+        for (owner, carry) in crossed {
+            self.crossed(bri_package_runtime::ops::ObjectRef::Player(owner), carry);
+        }
         for (owner, trigger, down) in triggers {
             // An Add-On tool's jet command (v20 `onTrigger` slot 4).
             if trigger == 4

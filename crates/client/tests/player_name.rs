@@ -1,7 +1,8 @@
 //! Player name from the Avatar screen to the server, over loopback.
 //! Drives the real Avatar screen (click the Name box, type, click Done), then
-//! hosts a LAN game and joins it from a second native client.
-//! Run: cargo test -p bri-client --test player_name -- --ignored --nocapture
+//! hosts a LAN game and joins it from a second native client. Runs on the
+//! made-up content root; the ignored variants run on the generated v20
+//! content (`-- --ignored`, BRI_CONTENT or content/).
 use anyhow::{Context, Result, bail, ensure};
 use bri_client::{app::App, platform::PlatformApp, settings};
 use bri_ui::{
@@ -10,33 +11,38 @@ use bri_ui::{
     screens::ScreenId,
 };
 use std::{
-    path::{Path, PathBuf},
+    path::Path,
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 
-/// A free port for this binary's hosts, so a game already hosting on 28000
-/// (the player's own, say) does not break the test. Shared by every test
-/// here, as the fixed port was.
-static HOSTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+#[macro_use]
+mod support;
+use support::content_root::ContentRoot;
+
+synthetic_and_content!(
+    ContentRoot: avatar_name_reaches_server_on_join_and_live_rename,
+    first_open_asks_for_a_name_once,
+    avatar_clan_tags_show_in_chat_as_single_player_and_guest
+);
+
+/// A free port for this test's hosts, so a game already hosting on 28000
+/// (the player's own, say) does not break the test. Set under the GPU
+/// turn, which every test here holding a port takes first.
 fn test_port() -> u16 {
-    static PORT: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
-    *PORT.get_or_init(|| {
-        let port = std::net::UdpSocket::bind("127.0.0.1:0")
-            .and_then(|s| s.local_addr())
-            .map(|a| a.port())
-            .expect("a free UDP port");
-        // SAFETY: set once, before any host or join in this binary starts.
-        unsafe {
-            std::env::set_var("BRI_TEST_HOST_PORT", port.to_string());
-            std::env::set_var("BRI_TEST_DISCOVERY_PORT", "0");
-        }
-        port
-    })
+    let port = std::net::UdpSocket::bind("127.0.0.1:0")
+        .and_then(|s| s.local_addr())
+        .map(|a| a.port())
+        .expect("a free UDP port");
+    // SAFETY: set before this test's hosts or joins start.
+    unsafe {
+        std::env::set_var("BRI_TEST_HOST_PORT", port.to_string());
+        std::env::set_var("BRI_TEST_DISCOVERY_PORT", "0");
+    }
+    port
 }
 
 const SIZE: (u32, u32) = (960, 720);
-const BEDROOM: &str = "v20/add-ons/map_bedroom/bedroom.mis";
 
 fn step(app: &mut App, elapsed: Duration) -> Result<()> {
     app.tick(elapsed)?;
@@ -69,7 +75,9 @@ fn until(
         ensure!(
             start.elapsed() < timeout,
             "Timed out waiting for {what}; states {:?}; names {:?}",
-            apps.iter().map(|a| a.ui.core.conn.clone()).collect::<Vec<_>>(),
+            apps.iter()
+                .map(|a| a.ui.core.conn.clone())
+                .collect::<Vec<_>>(),
             apps.iter()
                 .map(|a| a.network_view().map(|v| v.names.clone()))
                 .collect::<Vec<_>>()
@@ -119,7 +127,10 @@ fn edit_avatar(app: &mut App, fields: &[(&str, &str)]) -> Result<()> {
         app.ui.core.push(ScreenId::Avatar);
         app.ui.update(0);
     }
-    ensure!(app.ui.is_open(ScreenId::Avatar), "Avatar screen did not open");
+    ensure!(
+        app.ui.is_open(ScreenId::Avatar),
+        "Avatar screen did not open"
+    );
     for (control, text) in fields {
         click(app, ScreenId::Avatar, control)?;
         key(app, Key::End);
@@ -153,17 +164,11 @@ fn say(app: &mut App, text: &str) {
     });
 }
 
-fn load(workspace: &Path, state: &Path) -> Result<App> {
-    std::fs::create_dir_all(state)?;
-    let mut app = App::load(&workspace.join("content"), state, SIZE)?;
+fn load(content: &Path, state: &Path) -> Result<App> {
+    let mut app = App::load(content, state, SIZE)?;
     app.ui.core.pop(ScreenId::DefaultControls);
     app.ui.update(0);
     Ok(app)
-}
-
-fn fresh_state(root: &Path, label: &str) -> Result<PathBuf> {
-    let stamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-    Ok(root.join(format!("{label}-{}-{stamp}", std::process::id())))
 }
 
 fn names(app: &App) -> Vec<String> {
@@ -177,45 +182,53 @@ fn chat_has(app: &App, text: &str) -> bool {
         .is_some_and(|v| v.chat.iter().any(|l| format!("{l:?}").contains(text)))
 }
 
-#[test]
-#[ignore = "requires converted native content and loopback QUIC on port 28000; no window"]
-fn avatar_name_reaches_server_on_join_and_live_rename() -> Result<()> {
-    // Both hosting tests share the port: one at a time.
-    let _turn = HOSTS.lock().unwrap_or_else(|e| e.into_inner());
+fn avatar_name_reaches_server_on_join_and_live_rename(f: &ContentRoot) -> Result<()> {
+    // The hosting tests share the turn: one at a time.
+    let _turn = support::gpu::turn()?;
     let port = test_port();
-    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let root = workspace.join("artifacts/native-player-name");
-    let host_state = fresh_state(&root, "host")?;
-    let join_state = fresh_state(&root, "join")?;
+    let (host_dir, join_dir) = (f.state()?, f.state()?);
+    let (host_state, join_state) = (host_dir.path(), join_dir.path());
 
     // 1. Name chosen on the main menu's Avatar screen is saved.
-    let mut host = load(&workspace, &host_state)?;
+    let mut host = load(&f.root, host_state)?;
     rename_through_avatar(&mut host, "Hosty")?;
-    until(&mut [&mut host], "host avatar saved", Duration::from_secs(5), |a| {
-        !a[0].ui.is_open(ScreenId::Avatar) && a[0].pending_requests() == 0
-    })?;
+    until(
+        &mut [&mut host],
+        "host avatar saved",
+        Duration::from_secs(5),
+        |a| !a[0].ui.is_open(ScreenId::Avatar) && a[0].pending_requests() == 0,
+    )?;
     ensure!(
         host.ui.settings().avatar.lan_name == "Hosty",
         "Done did not keep the name: {:?}",
         host.ui.settings().avatar.lan_name
     );
     let file = host_state.join("settings.json");
-    until(&mut [&mut host], "name in settings.json", Duration::from_secs(5), |_| {
-        settings::load(&file).is_ok_and(|s| s.avatar.lan_name == "Hosty")
-    })?;
+    until(
+        &mut [&mut host],
+        "name in settings.json",
+        Duration::from_secs(5),
+        |_| settings::load(&file).is_ok_and(|s| s.avatar.lan_name == "Hosty"),
+    )?;
 
-    let mut joiner = load(&workspace, &join_state)?;
+    let mut joiner = load(&f.root, join_state)?;
     rename_through_avatar(&mut joiner, "Joiny")?;
-    until(&mut [&mut joiner], "joiner avatar saved", Duration::from_secs(5), |a| {
-        !a[0].ui.is_open(ScreenId::Avatar) && a[0].pending_requests() == 0
-    })?;
+    until(
+        &mut [&mut joiner],
+        "joiner avatar saved",
+        Duration::from_secs(5),
+        |a| !a[0].ui.is_open(ScreenId::Avatar) && a[0].pending_requests() == 0,
+    )?;
     let file = join_state.join("settings.json");
-    until(&mut [&mut joiner], "joiner name saved", Duration::from_secs(5), |_| {
-        settings::load(&file).is_ok_and(|s| s.avatar.lan_name == "Joiny")
-    })?;
+    until(
+        &mut [&mut joiner],
+        "joiner name saved",
+        Duration::from_secs(5),
+        |_| settings::load(&file).is_ok_and(|s| s.avatar.lan_name == "Joiny"),
+    )?;
     // A restart reads the saved name back.
     drop(joiner);
-    let mut joiner = load(&workspace, &join_state)?;
+    let mut joiner = load(&f.root, join_state)?;
     ensure!(
         joiner.ui.settings().avatar.lan_name == "Joiny",
         "Restart lost the name: {:?}",
@@ -224,7 +237,7 @@ fn avatar_name_reaches_server_on_join_and_live_rename() -> Result<()> {
 
     // 2. Host a LAN game and join it over loopback.
     host.ui.core.request(UiAction::HostGame {
-        map: BEDROOM.into(),
+        map: f.map.0.clone(),
         mode: ServerMode::Lan,
         game_mode: None,
         max_players: 4,
@@ -233,9 +246,12 @@ fn avatar_name_reaches_server_on_join_and_live_rename() -> Result<()> {
         admin_password: String::new(),
         super_admin_password: String::new(),
     });
-    until(&mut [&mut host], "host in game", Duration::from_secs(120), |a| {
-        a[0].ui.core.in_game()
-    })?;
+    until(
+        &mut [&mut host],
+        "host in game",
+        Duration::from_secs(120),
+        |a| a[0].ui.core.in_game(),
+    )?;
     joiner.ui.core.request(UiAction::JoinServer {
         address: format!("127.0.0.1:{port}"),
         password: String::new(),
@@ -250,7 +266,11 @@ fn avatar_name_reaches_server_on_join_and_live_rename() -> Result<()> {
                 && names(a[1]).contains(&"Hosty".to_string())
         },
     )?;
-    println!("after join: host {:?} joiner {:?}", names(&host), names(&joiner));
+    println!(
+        "after join: host {:?} joiner {:?}",
+        names(&host),
+        names(&joiner)
+    );
 
     // 3. Rename while connected, through the in-game Avatar screen.
     rename_through_avatar(&mut joiner, "Renamed Joiny")?;
@@ -273,7 +293,11 @@ fn avatar_name_reaches_server_on_join_and_live_rename() -> Result<()> {
         Duration::from_secs(10),
         |a| names(a[0]).contains(&"Hosty 2".to_string()),
     )?;
-    println!("after renames: host {:?} joiner {:?}", names(&host), names(&joiner));
+    println!(
+        "after renames: host {:?} joiner {:?}",
+        names(&host),
+        names(&joiner)
+    );
     joiner.ui.core.request(UiAction::Disconnect);
     host.ui.core.request(UiAction::Disconnect);
     let _ = step(&mut joiner, Duration::ZERO);
@@ -282,7 +306,7 @@ fn avatar_name_reaches_server_on_join_and_live_rename() -> Result<()> {
 }
 
 fn render_png(app: &App, path: &Path) -> Result<()> {
-    let gpu = bri_ui::gpu::Headless::new()?;
+    let gpu = support::gpu::turn()?;
     let mut renderer = bri_ui::gpu::UiRenderer::new(&gpu.device, &gpu.queue);
     let pixels = gpu.render_rgba(
         &mut renderer,
@@ -296,14 +320,11 @@ fn render_png(app: &App, path: &Path) -> Result<()> {
     Ok(())
 }
 
-#[test]
-#[ignore = "requires converted native content and an offscreen GPU; no window"]
-fn first_open_asks_for_a_name_once() -> Result<()> {
-    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let root = workspace.join("artifacts/native-player-name");
-    let state = fresh_state(&root, "first-open")?;
-    std::fs::create_dir_all(&state)?;
-    let mut app = App::load(&workspace.join("content"), &state, SIZE)?;
+fn first_open_asks_for_a_name_once(f: &ContentRoot) -> Result<()> {
+    let root = f.out("native-player-name")?;
+    let state_dir = f.state()?;
+    let state = state_dir.path();
+    let mut app = App::load(&f.root, state, SIZE)?;
     // A fresh install asks for the controls first, then welcomes the
     // player, and only then asks for the name: once.
     app.prompt_for_name();
@@ -364,11 +385,14 @@ fn first_open_asks_for_a_name_once() -> Result<()> {
         app.ui.stack()
     );
     let file = state.join("settings.json");
-    until(&mut [&mut app], "prompted name saved", Duration::from_secs(5), |_| {
-        settings::load(&file).is_ok_and(|s| s.avatar.lan_name == "Max")
-    })?;
+    until(
+        &mut [&mut app],
+        "prompted name saved",
+        Duration::from_secs(5),
+        |_| settings::load(&file).is_ok_and(|s| s.avatar.lan_name == "Max"),
+    )?;
     drop(app);
-    let mut app = App::load(&workspace.join("content"), &state, SIZE)?;
+    let mut app = App::load(&f.root, state, SIZE)?;
     app.prompt_for_name();
     ensure!(
         !app.ui.is_open(ScreenId::ChooseName),
@@ -381,26 +405,30 @@ fn first_open_asks_for_a_name_once() -> Result<()> {
 /// v20's `onConnectRequest`) show around the name in chat
 /// (`serverCmdMessageSent`'s `'\c7%1\c3%2\c7%3\c6: %4'`), for a single
 /// player and for a guest, and Done while connected changes them.
-#[test]
-#[ignore = "requires converted native content and loopback QUIC on port 28000; no window"]
-fn avatar_clan_tags_show_in_chat_as_single_player_and_guest() -> Result<()> {
-    // Both hosting tests share the port: one at a time.
-    let _turn = HOSTS.lock().unwrap_or_else(|e| e.into_inner());
+fn avatar_clan_tags_show_in_chat_as_single_player_and_guest(f: &ContentRoot) -> Result<()> {
+    // The hosting tests share the turn: one at a time.
+    let _turn = support::gpu::turn()?;
     let port = test_port();
-    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let root = workspace.join("artifacts/native-player-name");
 
     // 1. Single player.
-    let mut solo = load(&workspace, &fresh_state(&root, "clan-solo")?)?;
+    let solo_state = f.state()?;
+    let mut solo = load(&f.root, solo_state.path())?;
     edit_avatar(
         &mut solo,
-        &[("Avatar_Name", "Solo"), ("Avatar_Prefix", "[SP] "), ("Avatar_Suffix", " ~")],
+        &[
+            ("Avatar_Name", "Solo"),
+            ("Avatar_Prefix", "[SP] "),
+            ("Avatar_Suffix", " ~"),
+        ],
     )?;
-    until(&mut [&mut solo], "solo avatar saved", Duration::from_secs(5), |a| {
-        !a[0].ui.is_open(ScreenId::Avatar) && a[0].pending_requests() == 0
-    })?;
+    until(
+        &mut [&mut solo],
+        "solo avatar saved",
+        Duration::from_secs(5),
+        |a| !a[0].ui.is_open(ScreenId::Avatar) && a[0].pending_requests() == 0,
+    )?;
     solo.ui.core.request(UiAction::HostGame {
-        map: BEDROOM.into(),
+        map: f.map.0.clone(),
         mode: ServerMode::SinglePlayer,
         game_mode: None,
         max_players: 1,
@@ -409,35 +437,52 @@ fn avatar_clan_tags_show_in_chat_as_single_player_and_guest() -> Result<()> {
         admin_password: String::new(),
         super_admin_password: String::new(),
     });
-    until(&mut [&mut solo], "single player in game", Duration::from_secs(120), |a| {
-        a[0].ui.core.in_game()
-    })?;
+    until(
+        &mut [&mut solo],
+        "single player in game",
+        Duration::from_secs(120),
+        |a| a[0].ui.core.in_game(),
+    )?;
     say(&mut solo, "alone");
-    until(&mut [&mut solo], "single player chat tagged", Duration::from_secs(10), |a| {
-        chat_shows(a[0], "[SP]Solo~: alone")
-    })?;
+    until(
+        &mut [&mut solo],
+        "single player chat tagged",
+        Duration::from_secs(10),
+        |a| chat_shows(a[0], "[SP]Solo~: alone"),
+    )?;
     solo.ui.core.request(UiAction::Disconnect);
-    until(&mut [&mut solo], "single player left", Duration::from_secs(30), |a| {
-        !a[0].ui.core.in_game()
-    })?;
+    until(
+        &mut [&mut solo],
+        "single player left",
+        Duration::from_secs(30),
+        |a| !a[0].ui.core.in_game(),
+    )?;
     drop(solo);
 
     // 2. LAN host and a guest with default trust.
-    let mut host = load(&workspace, &fresh_state(&root, "clan-host")?)?;
+    let (host_state, guest_state) = (f.state()?, f.state()?);
+    let mut host = load(&f.root, host_state.path())?;
     rename_through_avatar(&mut host, "Hosty")?;
-    let mut guest = load(&workspace, &fresh_state(&root, "clan-guest")?)?;
+    let mut guest = load(&f.root, guest_state.path())?;
     edit_avatar(
         &mut guest,
-        &[("Avatar_Name", "Guesty"), ("Avatar_Prefix", "[G] "), ("Avatar_Suffix", "")],
+        &[
+            ("Avatar_Name", "Guesty"),
+            ("Avatar_Prefix", "[G] "),
+            ("Avatar_Suffix", ""),
+        ],
     )?;
     until(
         &mut [&mut host, &mut guest],
         "avatars saved",
         Duration::from_secs(5),
-        |a| a.iter().all(|a| !a.ui.is_open(ScreenId::Avatar) && a.pending_requests() == 0),
+        |a| {
+            a.iter()
+                .all(|a| !a.ui.is_open(ScreenId::Avatar) && a.pending_requests() == 0)
+        },
     )?;
     host.ui.core.request(UiAction::HostGame {
-        map: BEDROOM.into(),
+        map: f.map.0.clone(),
         mode: ServerMode::Lan,
         game_mode: None,
         max_players: 4,
@@ -446,16 +491,22 @@ fn avatar_clan_tags_show_in_chat_as_single_player_and_guest() -> Result<()> {
         admin_password: String::new(),
         super_admin_password: String::new(),
     });
-    until(&mut [&mut host], "host in game", Duration::from_secs(120), |a| {
-        a[0].ui.core.in_game()
-    })?;
+    until(
+        &mut [&mut host],
+        "host in game",
+        Duration::from_secs(120),
+        |a| a[0].ui.core.in_game(),
+    )?;
     guest.ui.core.request(UiAction::JoinServer {
         address: format!("127.0.0.1:{port}"),
         password: String::new(),
     });
-    until(&mut [&mut host, &mut guest], "guest in game", Duration::from_secs(120), |a| {
-        a[1].ui.core.in_game() && names(a[0]).contains(&"Guesty".to_string())
-    })?;
+    until(
+        &mut [&mut host, &mut guest],
+        "guest in game",
+        Duration::from_secs(120),
+        |a| a[1].ui.core.in_game() && names(a[0]).contains(&"Guesty".to_string()),
+    )?;
     say(&mut guest, "hello");
     until(
         &mut [&mut host, &mut guest],
@@ -464,10 +515,16 @@ fn avatar_clan_tags_show_in_chat_as_single_player_and_guest() -> Result<()> {
         |a| a.iter().all(|a| chat_shows(a, "[G]Guesty: hello")),
     )?;
     // Done in game with new tags; the next line carries them.
-    edit_avatar(&mut guest, &[("Avatar_Prefix", ""), ("Avatar_Suffix", "[NW]")])?;
-    until(&mut [&mut host, &mut guest], "tags sent", Duration::from_secs(10), |a| {
-        a[1].pending_requests() == 0
-    })?;
+    edit_avatar(
+        &mut guest,
+        &[("Avatar_Prefix", ""), ("Avatar_Suffix", "[NW]")],
+    )?;
+    until(
+        &mut [&mut host, &mut guest],
+        "tags sent",
+        Duration::from_secs(10),
+        |a| a[1].pending_requests() == 0,
+    )?;
     say(&mut guest, "again");
     until(
         &mut [&mut host, &mut guest],

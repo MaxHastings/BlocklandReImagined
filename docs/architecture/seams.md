@@ -40,7 +40,13 @@ Owners are named by thread title.
 | End-of-round report | `show_report`, `report_column`, `Notice::Report`, the client's Report window | Capture the Flag (Slayer) | in flight |
 | Kept worn images | `mount_image(..., #{ keep: true })`: only the Add-On that put a worn image on changes it | Capture the Flag (Slayer) | in flight |
 | Orbit camera | `orbit_camera` with a body that acts (Throwing) or is frozen (`watch`, spectating), `ControlObject::Orbit::body` | Capture the Flag (Slayer) | in flight |
+| World shapes | `show_shapes`/`hide_shapes`: translucent boxes and labels every player sees, replicated by key, dropped with their player | Duplicators | in flight |
 | Rules bots | `add_bot`, `remove_bot`, `rest_bot`, `bot_tool`, `bot_kinds`, `bot_limit`, a player's `spawner`; capability `bots`; the engine brain roams, fights and respawns them, sharing the 16-bot cap with spawn-brick bots | Capture the Flag (Slayer) | in flight |
 | Message box | `message_box(p, title, text)` (v20 `MessageBoxOK`), capability `chat` | Capture the Flag (Slayer) | in flight |
 | Saved mini-games | a build keeps its saver's mini-game (settings, Add-On settings, teams, `per_minigame` state keys); loading sets it up again and sends `on_minigame` `loaded` | Capture the Flag (Slayer) | in flight |
 | Copy jobs | big copy work a slice each tick (`CopyWork`, `cancel_copy`, `copy_working`), copy ghost subset, `IdMap` | Duplicators | in flight |
+| Stack ownership | `Simulation::stack_owner` (v20's `stackBL_ID`, not saved), `CopyRule::stack`, `may_copy` | Duplicators | in flight |
+| Copy pose | `Command::CopyPose` (client reports where its copy ghost stands), `Blueprint::ghost_box`, `on_copy_ghost(p, #{box})` hook | Duplicators | in flight |
+| Copy extras | `Blueprint.extras` (names, lights, emitters, items, sounds, vehicles, events), turned with the copy and planted through the wrench checks (`give_copy_extras`) | Duplicators | in flight |
+| Image loaded and spin | `State.loaded`/`not_loaded`/`spin` (v20 `stateTransitionOnLoaded`/`NotLoaded`, `stateSpinThread`), `set_image_loaded`, client spin clock in `world_items` | Duplicators | in flight |
+| Slayer game rules | `remove_body`, `setting_info`, `setting_text`, `data_lines` (rules data files), `on_pick_spawn` answering `"map"`, `teams` events with `by`/`quiet`, `on_minigame_request` `info.teams`, mini-game event chat charged to the acting player | Slayer and CTF port | in flight |

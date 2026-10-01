@@ -1260,6 +1260,14 @@ pub struct MiniGameAddOnSetting {
     pub title: String,
     /// Each team has its own value.
     pub team: bool,
+    /// One value for the whole server, which only the host changes (the
+    /// Admin menu's Add-On Settings).
+    #[serde(default)]
+    pub server: bool,
+    /// A server setting the game reads only as it starts or loads a map:
+    /// a change waits for the next start.
+    #[serde(default)]
+    pub restart: bool,
     pub kind: MiniGameSettingKind,
     pub default: MiniGameSettingValue,
     /// Shown only while that setting (`namespace:key`) holds one of some
@@ -1508,8 +1516,9 @@ pub enum UiUpdate {
     SetActiveBrick(Option<usize>),
     /// `clientCmdSetScrollMode`: the host switches the inventory box shown.
     ScrollMode(crate::models::hud::ScrollMode),
-    /// The tool in hand takes the paint cans, so opening paint from it
-    /// keeps it in hand.
+    /// The tool in hand takes the paint cans, or stays out for them (a
+    /// paint picker, as the Fill Can), so opening paint from it keeps it in
+    /// hand.
     ToolTakesPaint(bool),
     /// First spawn of the session: the UI buys favorites slot 1.
     FirstSpawn,

@@ -726,6 +726,8 @@ impl Session {
             self.refresh_event_bindings()?;
             return Err(error);
         }
+        // Settings read only as the server starts take the host's now.
+        self.start_settings();
         let Some(view) = self
             .packages
             .as_ref()
@@ -1074,6 +1076,11 @@ impl Session {
                 .player(p.combat.player)
                 .map_or(0, |m| m.score),
             copy_working: self.copy_working(owner),
+            ghost: self.ghost_brick(owner).is_some(),
+            copy: self.copies.get(&owner).map(|c| {
+                let bricks = self.blueprints.get(&owner).map_or(0, |b| b.len());
+                (c.package.clone(), bricks as u64)
+            }),
         }
     }
     fn package_snapshot(&self) -> Snapshot {
@@ -1721,8 +1728,12 @@ impl Session {
             }
             Op::PlantWait { player, seconds } => self.plant_wait(player, seconds),
             Op::CancelCopy { player } => {
+                // An administrator may stop anyone's (`/ClearDups`).
+                let admin = caller
+                    .and_then(|c| self.peers.get(&c))
+                    .is_some_and(|p| p.actor.administrator);
                 ensure!(
-                    caller == Some(player),
+                    caller == Some(player) || admin,
                     "Copy work is cancelled only for the player whose command asked"
                 );
                 self.cancel_copy(player);
@@ -1790,6 +1801,20 @@ impl Session {
                 }
                 Ok(())
             }
+            Op::MirrorGhost {
+                player,
+                axis,
+                asymmetric,
+            } => {
+                ensure!(
+                    caller == Some(player),
+                    "A ghost brick is mirrored only for the player whose command asked"
+                );
+                if let Err(error) = self.mirror_ghost(player, axis, &asymmetric) {
+                    self.center_print(player, format!("{error:#}"));
+                }
+                Ok(())
+            }
             Op::MoveCopy {
                 player,
                 point,
@@ -1816,13 +1841,13 @@ impl Session {
                 self.drop_copy(player);
                 Ok(())
             }
-            Op::CutCopy { player } => {
+            Op::CutCopy { player, each } => {
                 // Bricks go with the trust of the player who asked.
                 ensure!(
                     caller == Some(player),
                     "A copy's bricks are cut only for the player whose command asked"
                 );
-                self.start_cut(player, package);
+                self.start_cut(player, package, each);
                 Ok(())
             }
             Op::PaintCopy {
@@ -1883,12 +1908,16 @@ impl Session {
                 let _ = self.plant_copy(player, float);
                 Ok(())
             }
-            Op::FloatCopy { player, float } => {
+            Op::FloatCopy {
+                player,
+                float,
+                admin_only,
+            } => {
                 ensure!(
                     caller == Some(player),
                     "A copy floats only for the player whose command asked"
                 );
-                let _ = self.float_copy(player, float);
+                let _ = self.float_copy(player, float, admin_only);
                 Ok(())
             }
             Op::WrenchCopy { player } => {
@@ -2021,6 +2050,9 @@ impl Session {
                 Ok(())
             }
             Op::ShowBox { player, area, tool } => self.show_box(player, area, &tool),
+            Op::ShowShapes { owner, key, shapes } => {
+                self.show_shapes(package, owner, &key, shapes)
+            }
             Op::GiveItem {
                 player,
                 item,
@@ -2174,6 +2206,23 @@ impl Session {
                 );
                 Ok(())
             }
+            Op::PlantError { player, error } => {
+                use crate::simulation::PlantFailure as F;
+                self.take_cue(package)?;
+                ensure!(self.peers.contains_key(&player), "No such player");
+                let failure = match error.as_str() {
+                    "overlap" => F::Overlap,
+                    "float" => F::Float,
+                    "stuck" => F::Stuck,
+                    "buried" => F::Buried,
+                    "too_far" => F::TooFar,
+                    // Planting too soon, as the engine's own plant rate
+                    // refuses it.
+                    _ => F::Limit,
+                };
+                self.notify(player, Notice::PlantError(failure));
+                Ok(())
+            }
             Op::Print {
                 player,
                 text,
@@ -2285,6 +2334,11 @@ impl Session {
             Op::SetImageAmmo { player, ammo } => {
                 ensure!(self.peers.contains_key(&player), "No such player");
                 self.weapons.set_ammo(bri_weapons::ActorId(player), ammo)
+            }
+            Op::SetImageLoaded { player, loaded } => {
+                ensure!(self.peers.contains_key(&player), "No such player");
+                self.weapons
+                    .set_loaded(bri_weapons::ActorId(player), loaded)
             }
             Op::MountImage { player, image } => {
                 let peer = self.peers.get(&player).context("No such player")?;
@@ -3351,18 +3405,14 @@ impl Session {
         }
         let aim = match def.aim_reach {
             Some(reach) => {
-                let eye = peer.player.eye();
-                let hit = self.simulation.target(eye, direction, reach)?;
-                // Also the nearest movable object before the brick, reported
-                // beside it: a script aiming at bricks sees what it did.
-                let object = self
-                    .aim_object(
-                        owner,
-                        eye,
-                        direction,
-                        hit.as_ref().map_or(reach, |h| h.distance),
-                    )
-                    .filter(|(_, _, d)| hit.as_ref().is_none_or(|h| *d < h.distance))
+                // Where the player looks, through portals as they see
+                // through them, and the nearest movable object before the
+                // brick, reported beside it: a script aiming at bricks sees
+                // what it did.
+                let sight = self.sight(owner, peer.player.eye(), direction, reach)?;
+                let hit = sight.hit;
+                let object = sight
+                    .object
                     .map(|(object, at, distance)| script::AimObject {
                         object,
                         position: at.to_array(),
@@ -3567,10 +3617,15 @@ impl Session {
         self.packages.as_mut().expect("checked").view = None;
         let liquids = self.simulation.liquids();
         let mut fallen = Vec::new();
+        let mut crossed = Vec::new();
         if let Some(host) = self.packages.as_mut() {
             for (id, e) in host.entities.iter_mut() {
                 if let Some(input) = e.drive {
-                    let _ = self.simulation.step_body(&mut e.body, input, &liquids);
+                    if let Ok(motion) = self.simulation.step_body(&mut e.body, input, &liquids)
+                        && let Some(carry) = motion.passed
+                    {
+                        crossed.push((*id, carry));
+                    }
                     if e.body.state().feet[1] < KILL_Y {
                         fallen.push(*id);
                     }
@@ -3591,11 +3646,18 @@ impl Session {
                     jump,
                     ..Default::default()
                 };
-                let _ = self.simulation.step_body(&mut e.body, input, &liquids);
+                if let Ok(motion) = self.simulation.step_body(&mut e.body, input, &liquids)
+                    && let Some(carry) = motion.passed
+                {
+                    crossed.push((*id, carry));
+                }
                 if e.body.state().feet[1] < KILL_Y {
                     fallen.push(*id);
                 }
             }
+        }
+        for (id, carry) in crossed {
+            self.crossed(ObjectRef::Entity(id), carry);
         }
         for id in fallen {
             self.remove_package_entity(id);

@@ -190,11 +190,31 @@ mod tests {
     use super::*;
     use bri_content::tutorial::TargetLaunch;
 
-    #[test]
-    #[ignore = "requires the generated tutorial pack; CPU only"]
-    fn every_target_look_has_a_model_and_moves_along_its_lane() -> Result<()> {
-        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/tutorial-pack-003");
-        let mut targets = TutorialTargets::load(&dir)?;
+    /// A tutorial pack's targets: made up (`crate::testing::tutorial`), or
+    /// the generated v20 pack.
+    struct Pack {
+        dir: std::path::PathBuf,
+        _scratch: Option<crate::testing::ScratchDir>,
+    }
+    impl Pack {
+        fn synthetic() -> Result<Self> {
+            let scratch = crate::testing::ScratchDir::new("tutorial")?;
+            crate::testing::tutorial::write_targets(scratch.path())?;
+            Ok(Self {
+                dir: scratch.path().to_path_buf(),
+                _scratch: Some(scratch),
+            })
+        }
+        fn content() -> Result<Self> {
+            Ok(Self {
+                dir: Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/tutorial-pack-003"),
+                _scratch: None,
+            })
+        }
+    }
+    crate::testing::synthetic_and_content!(Pack: every_target_look_has_a_model_and_moves_along_its_lane);
+    fn every_target_look_has_a_model_and_moves_along_its_lane(fx: &Pack) -> Result<()> {
+        let mut targets = TutorialTargets::load(&fx.dir)?;
         // Plain and hit targets, and the marked one in each of its skins.
         assert_eq!(targets.models.len(), 2 + 2 * TARGET_SKINS.len());
         let launch = |kind: &str| TargetLaunch {
@@ -214,7 +234,10 @@ mod tests {
         assert_eq!(targets.count(), 3);
         let marked = &targets.models[&(bri_content::tutorial::TARGET_M_SHAPE, "m3")];
         let x = marked.transforms[0].transform.w_axis.x;
-        assert!((x - (-44.8628 + 2.0)).abs() < 1e-4, "{x}");
+        assert!(
+            (x - (bri_sim::tutorial::TARGET_START_X + 2.0)).abs() < 1e-4,
+            "{x}"
+        );
         assert_eq!(
             targets.models[&(bri_content::tutorial::TARGET_HIT_SHAPE, "base")]
                 .transforms

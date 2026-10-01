@@ -9,6 +9,7 @@ anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 bri-package = { path = "../package" }
+bri-content = { path = "../content" }
 sha2 = "0.10"
 wasmparser = { version = "0.248", default-features = false, features = ["std", "validate"] }
 bytemuck = { version = "1.25", features = ["derive"] }

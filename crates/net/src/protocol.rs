@@ -578,6 +578,9 @@ pub struct Checkpoint {
     /// coasting projectiles between updates.
     #[serde(default)]
     pub projectile_falls: BTreeMap<String, f32>,
+    /// Add-On world shapes (`show_shapes`), by key.
+    #[serde(default)]
+    pub world_shapes: BTreeMap<String, Vec<bri_package_runtime::ops::WorldShape>>,
 }
 impl Checkpoint {
     /// Everything but the bricks, plus an O(1) snapshot of the authoritative
@@ -621,6 +624,11 @@ impl Checkpoint {
             entities: session.package_entities(),
             package_state: session.package_state(),
             projectile_falls: session.projectile_falls(),
+            world_shapes: session
+                .world_shapes()
+                .into_iter()
+                .map(|(k, s)| (k, s.to_vec()))
+                .collect(),
         };
         (checkpoint, world.bricks.clone())
     }
@@ -916,6 +924,9 @@ pub struct Delta {
     /// Package entities that appeared, changed, moved or left.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entities: Option<EntityDelta>,
+    /// World shape sets that changed, by key; an empty one is gone.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub world_shapes: BTreeMap<String, Vec<bri_package_runtime::ops::WorldShape>>,
 }
 impl Delta {
     /// Nothing changed but the tick (and the cursor).
@@ -942,6 +953,7 @@ impl Delta {
             map_lights,
             environment,
             entities,
+            world_shapes,
         } = self;
         weapons.is_none()
             && tools.is_empty()
@@ -960,7 +972,28 @@ impl Delta {
             && map_lights.is_none()
             && environment.is_none()
             && entities.is_none()
+            && world_shapes.is_empty()
     }
+}
+/// The world shape sets that changed between `sent` and `now` (an empty
+/// set for one taken away); `sent` becomes `now`. Sets are shared, so an
+/// unchanged one compares by pointer.
+pub fn changed_world_shapes(
+    sent: &mut BTreeMap<String, std::sync::Arc<Vec<bri_package_runtime::ops::WorldShape>>>,
+    now: BTreeMap<String, std::sync::Arc<Vec<bri_package_runtime::ops::WorldShape>>>,
+) -> BTreeMap<String, Vec<bri_package_runtime::ops::WorldShape>> {
+    let mut changed: BTreeMap<_, _> = sent
+        .keys()
+        .filter(|k| !now.contains_key(*k))
+        .map(|k| (k.clone(), Vec::new()))
+        .collect();
+    for (key, set) in &now {
+        if !sent.get(key).is_some_and(|s| std::sync::Arc::ptr_eq(s, set)) {
+            changed.insert(key.clone(), set.to_vec());
+        }
+    }
+    *sent = now;
+    changed
 }
 /// What changed in the weapons view. Projectiles fly on every client by
 /// [`bri_weapons::coast`]; the host only sends the ones that appeared or

@@ -311,6 +311,13 @@ pub enum Notice {
     /// the world's z axis (north and south swap), or else across its x
     /// axis (east and west swap).
     MirrorCopy { across_z: bool },
+    /// This player's ghost brick becomes `definition` turned
+    /// `quarter_turns` where it stands: its mirror image
+    /// ([`super::Session::mirror_ghost`]).
+    MirrorGhost {
+        definition: String,
+        quarter_turns: u8,
+    },
     /// Put the copy this player holds against the surface at `point`
     /// facing out along `normal`, as a ghost brick is put where it is
     /// aimed.
@@ -745,8 +752,6 @@ impl Session {
             .collect()
     }
     pub fn minigame_views(&self) -> Vec<MiniGameView> {
-        // Server-wide Add-On settings show in every game's window.
-        let server = self.server_addon_settings();
         self.minigames
             .games()
             .filter_map(|game| {
@@ -766,11 +771,7 @@ impl Session {
                         .filter_map(|m| self.owner_of(*m))
                         .collect(),
                     teams: game.teams.list.clone(),
-                    addon_settings: {
-                        let mut all = game.addon_settings.clone();
-                        all.extend(server.iter().map(|(k, v)| (k.clone(), v.clone())));
-                        all
-                    },
+                    addon_settings: game.addon_settings.clone(),
                     default: self.minigames.default_game() == Some(game.id),
                     paint_color: game.paint_color,
                     shared: game.shared,

@@ -58,7 +58,9 @@ impl Session {
         effect: u8,
         seconds: f32,
     ) -> Result<()> {
-        let until = self.simulation.state().tick + (seconds.max(0.0) * SECOND as f32) as u64;
+        // An endless time saturates: lit until put back by hand.
+        let ticks = (seconds.max(0.0) * SECOND as f32) as u64;
+        let until = self.simulation.state().tick.saturating_add(ticks);
         self.queue_lighting(Lighting {
             ids: ids.into(),
             next: 0,
@@ -108,7 +110,10 @@ impl Session {
         lit.shown = (color, effect);
         if until > lit.until || lit.until == until {
             lit.until = until;
-            self.highlights.ends.entry(until).or_default().push(id);
+            // Lit with no end: put back only by hand.
+            if until != u64::MAX {
+                self.highlights.ends.entry(until).or_default().push(id);
+            }
         }
         if own != (color, effect) {
             self.simulation.mutate(id, |b| {

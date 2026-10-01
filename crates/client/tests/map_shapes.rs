@@ -1,6 +1,8 @@
-//! Kitchen map models (palms) through the real client, as the host player and
-//! as a guest joining over loopback. Never creates a window or OS input.
-//! Run: cargo test -p bri-client --test map_shapes -- --ignored --nocapture
+//! Kitchen map models (palms; on the made-up root, its room's plant)
+//! through the real client, as the host player and as a guest joining over
+//! loopback. The ignored variant runs on the generated v20 content
+//! (`-- --ignored`, BRI_CONTENT or content/). Never creates a window or OS
+//! input.
 use anyhow::{Result, bail, ensure};
 use bri_client::{
     app::App,
@@ -12,28 +14,30 @@ use bri_ui::{
     screens::ScreenId,
 };
 use std::{
-    path::Path,
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 
-/// A free port for this binary's hosts, so a game already hosting on 28000
-/// (the player's own, say) does not break the test. Shared by every test
-/// here, as the fixed port was.
+#[macro_use]
+mod support;
+use support::content_root::ContentRoot;
+
+synthetic_and_content!(ContentRoot: kitchen_palms_render_for_host_and_guest);
+
+/// A free port for this test's host, so a game already hosting on 28000
+/// (the player's own, say) does not break the test. Set under the GPU
+/// turn, which every test here holding a port takes first.
 fn test_port() -> u16 {
-    static PORT: std::sync::OnceLock<u16> = std::sync::OnceLock::new();
-    *PORT.get_or_init(|| {
-        let port = std::net::UdpSocket::bind("127.0.0.1:0")
-            .and_then(|s| s.local_addr())
-            .map(|a| a.port())
-            .expect("a free UDP port");
-        // SAFETY: set once, before any host or join in this binary starts.
-        unsafe {
-            std::env::set_var("BRI_TEST_HOST_PORT", port.to_string());
-            std::env::set_var("BRI_TEST_DISCOVERY_PORT", "0");
-        }
-        port
-    })
+    let port = std::net::UdpSocket::bind("127.0.0.1:0")
+        .and_then(|s| s.local_addr())
+        .map(|a| a.port())
+        .expect("a free UDP port");
+    // SAFETY: set before this test's host or join starts.
+    unsafe {
+        std::env::set_var("BRI_TEST_HOST_PORT", port.to_string());
+        std::env::set_var("BRI_TEST_DISCOVERY_PORT", "0");
+    }
+    port
 }
 
 const SIZE: (u32, u32) = (960, 720);
@@ -144,6 +148,12 @@ fn capture(app: &mut App, gpu: &Headless, renderer: &mut UiRenderer) -> Result<V
     Ok(pixels)
 }
 
+/// Green as a plant's leaves are.
+fn leafy(p: &[u8]) -> bool {
+    let [r, g, b] = [p[0], p[1], p[2]].map(i32::from);
+    g > 60 && g > r + 30 && g > b + 30
+}
+
 fn distinct_colors(pixels: &[u8]) -> usize {
     pixels
         .chunks_exact(4)
@@ -152,21 +162,14 @@ fn distinct_colors(pixels: &[u8]) -> usize {
         .len()
 }
 
-#[test]
-#[ignore = "requires converted native content, loopback QUIC on port 28000 and an offscreen GPU; no window"]
-fn kitchen_palms_render_for_host_and_guest() -> Result<()> {
-    let port = test_port();
-    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let artifact = workspace.join("artifacts/native-map-shapes");
-    let run = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-    let state = |who: &str| artifact.join(format!("state-{who}-{}-{run}", std::process::id()));
-    std::fs::create_dir_all(state("host"))?;
-    std::fs::create_dir_all(state("guest"))?;
-    let content = workspace.join("content");
-    let mut host = App::load(&content, &state("host"), SIZE)?;
-    let mut guest = App::load(&content, &state("guest"), SIZE)?;
+fn kitchen_palms_render_for_host_and_guest(f: &ContentRoot) -> Result<()> {
     // Both players own a GPU from startup, as with a real window.
-    let gpu = Headless::new()?;
+    let gpu = support::gpu::turn()?;
+    let port = test_port();
+    let artifact = f.out("native-map-shapes")?;
+    let (host_state, guest_state) = (f.state()?, f.state()?);
+    let mut host = App::load(&f.root, host_state.path(), SIZE)?;
+    let mut guest = App::load(&f.root, guest_state.path(), SIZE)?;
     let mut renderer = UiRenderer::new(&gpu.device, &gpu.queue);
     for app in [&mut host, &mut guest] {
         app.gpu_ready(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm)?;
@@ -210,8 +213,14 @@ fn kitchen_palms_render_for_host_and_guest() -> Result<()> {
             image::ColorType::Rgba8,
         )?;
         let colors = distinct_colors(&pixels);
-        println!("{who}: {colors} distinct colours");
-        ensure!(colors > 200, "{who} frame looks unrendered");
+        let leaves = pixels.chunks_exact(4).filter(|p| leafy(p)).count();
+        println!("{who}: {colors} distinct colours, {leaves} leafy pixels");
+        if f.content {
+            ensure!(colors > 200, "{who} frame looks unrendered");
+        } else {
+            // The made-up room is plain, but its plant stands in view.
+            ensure!(leaves > 500, "{who} does not see the room's plant");
+        }
     }
     guest.ui.core.request(UiAction::Disconnect);
     host.ui.core.request(UiAction::Disconnect);

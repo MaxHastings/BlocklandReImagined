@@ -7,6 +7,37 @@ use crate::session::copy_jobs::{CopyWork, Ending, Progress};
 use crate::simulation::{spend, work};
 use std::sync::Arc;
 
+/// A player changing the bricks a copy took, with the trust they had.
+struct Editor {
+    actor: Actor,
+    /// The copy's rule lets full trust in a brick's stack owner do
+    /// ([`crate::simulation::Simulation::stack_owner`], `CopyRule::stack`).
+    stack: bool,
+}
+impl Editor {
+    fn of(peer: &Peer, held: &crate::session::blueprints::HeldCopy) -> Self {
+        Self {
+            actor: peer.actor.clone(),
+            stack: held.stack,
+        }
+    }
+    /// Whether they may change `brick` (`id`): full trust in its owner,
+    /// or, as the copy's rule allows, in the owner of its stack.
+    fn may(&self, s: &Session, id: BrickId, brick: &Brick) -> bool {
+        self.actor.trusted(brick.owner, level::FULL)
+            || (self.stack
+                && s.simulation
+                    .stack_owner(id)
+                    .is_some_and(|o| o != 0 && self.actor.trust_level(o) >= level::FULL))
+    }
+}
+impl std::ops::Deref for Editor {
+    type Target = Actor;
+    fn deref(&self) -> &Actor {
+        &self.actor
+    }
+}
+
 /// Checking that every brick of a copy still standing may be changed
 /// with full trust, a slice at a time.
 #[derive(Default)]
@@ -20,7 +51,7 @@ impl TrustCheck {
     fn step(
         &mut self,
         s: &Session,
-        actor: &Actor,
+        actor: &Editor,
         ids: &[BrickId],
         budget: &mut u32,
     ) -> Result<bool> {
@@ -32,7 +63,7 @@ impl TrustCheck {
             self.next += 1;
             if let Some(brick) = world.bricks.get(id) {
                 self.standing += 1;
-                if !actor.trusted(brick.owner, level::FULL) {
+                if !actor.may(s, *id, brick) {
                     self.refused += 1;
                 }
             }
@@ -50,18 +81,21 @@ impl TrustCheck {
     }
 }
 
-/// Cutting away the bricks a copy was taken from ([`Session::cut_copy`]).
+/// Cutting away the bricks a copy was taken from ([`Session::cut_copy`]):
+/// all or none, or with `each` every brick the player may cut, the rest
+/// counted.
 pub(in crate::session) struct CutWork {
     ids: Arc<Vec<BrickId>>,
-    actor: Actor,
+    actor: Editor,
     package: Option<String>,
     check: TrustCheck,
     next: usize,
     removed: Vec<(BrickId, Brick)>,
+    refused: usize,
     sum: Vec3,
 }
 impl CutWork {
-    pub fn new(s: &Session, owner: OwnerId) -> Result<Self> {
+    pub fn new(s: &Session, owner: OwnerId, each: bool) -> Result<Self> {
         let peer = s.peers.get(&owner).context("Unknown connection")?;
         combat::ensure_may_build(
             &peer.combat,
@@ -69,14 +103,21 @@ impl CutWork {
             bri_minigames::BuildAction::Build,
         )?;
         let held = s.copies.get(&owner).context("Copy a build first")?;
+        // Cutting each that may be: no check of all first.
+        let check = TrustCheck {
+            next: if each { held.sources.len() } else { 0 },
+            standing: usize::from(each),
+            refused: 0,
+        };
         Ok(Self {
             ids: held.sources.clone(),
-            actor: peer.actor.clone(),
+            actor: Editor::of(peer, held),
             package: Some(held.package.clone()),
-            check: TrustCheck::default(),
+            check,
             next: 0,
             // Room for all of them now, not a copy of all so far as it grows.
             removed: Vec::with_capacity(held.sources.len()),
+            refused: 0,
             sum: Vec3::ZERO,
         })
     }
@@ -102,6 +143,7 @@ impl CopyWork for CutWork {
             total: self.ids.len(),
             placed: 0,
             refused: 0,
+            ..Default::default()
         }
     }
     fn step(&mut self, s: &mut Session, _: OwnerId, budget: &mut u32) -> Result<bool> {
@@ -109,21 +151,23 @@ impl CopyWork for CutWork {
             return Ok(false);
         }
         let mut slice = Vec::new();
-        let world = s.simulation.state();
         while let Some(&id) = self.ids.get(self.next) {
             if !spend(budget, work::REMOVE) {
                 break;
             }
             self.next += 1;
-            let Some(brick) = world.bricks.get(&id) else {
+            let Some(brick) = s.simulation.state().bricks.get(&id) else {
                 continue;
             };
-            if !self.actor.trusted(brick.owner, level::FULL) {
+            if !self.actor.may(s, id, brick) {
+                self.refused += 1;
                 continue;
             }
             self.sum += Vec3::from(brick.position);
             self.removed.push((id, s.unlit(id, brick)));
             slice.push(id);
+            s.simulation.mark_rebuild(id);
+            s.simulation.charge_rebuilds(budget);
         }
         if !slice.is_empty() {
             s.cut_out_unread(&slice)?;
@@ -140,11 +184,16 @@ impl CopyWork for CutWork {
                 self.complete(s, owner);
                 return;
             }
-            _ => {
+            ending => {
+                let refused = self.refused;
                 let bricks = self.complete(s, owner);
-                let mut outcome = copy_store::CopyOutcome::about("cut", None, None);
+                // What was cut before a cancel stays cut, one undo step.
+                let canceled = matches!(ending, Ending::Canceled)
+                    .then(|| ("canceled", "Cut canceled!".to_string()));
+                let mut outcome = copy_store::CopyOutcome::about("cut", None, canceled);
                 outcome.bricks = bricks;
-                outcome.total = bricks;
+                outcome.refused = refused;
+                outcome.total = bricks + refused;
                 outcome
             }
         };
@@ -155,7 +204,7 @@ impl CopyWork for CutWork {
 /// Painting the bricks a copy was taken from ([`Session::paint_copy_with`]).
 pub(in crate::session) struct PaintWork {
     ids: Arc<Vec<BrickId>>,
-    actor: Actor,
+    actor: Editor,
     package: String,
     paint: FillPaint,
     each: bool,
@@ -190,7 +239,7 @@ impl PaintWork {
         };
         Ok(Self {
             ids: held.sources.clone(),
-            actor: peer.actor.clone(),
+            actor: Editor::of(peer, held),
             package: held.package.clone(),
             paint,
             each,
@@ -225,6 +274,7 @@ impl CopyWork for PaintWork {
             total,
             placed: 0,
             refused: 0,
+            ..Default::default()
         }
     }
     fn step(&mut self, s: &mut Session, _: OwnerId, budget: &mut u32) -> Result<bool> {
@@ -240,7 +290,7 @@ impl CopyWork for PaintWork {
             let Some(brick) = s.simulation.state().bricks.get(&id) else {
                 continue;
             };
-            if !self.actor.trusted(brick.owner, level::FULL) {
+            if !self.actor.may(s, id, brick) {
                 self.refused += 1;
                 continue;
             }
@@ -271,6 +321,11 @@ impl CopyWork for PaintWork {
                 return;
             }
             Ending::Failed(error) if self.before.is_empty() => Err(error),
+            Ending::Canceled => {
+                let result = self.complete(s, owner);
+                s.report_paint_canceled(&package, owner, each, result);
+                return;
+            }
             _ => self.complete(s, owner),
         };
         s.report_paint(&package, owner, each, result);
@@ -281,7 +336,7 @@ impl CopyWork for PaintWork {
 /// ([`Session::wrench_copy`]).
 pub(in crate::session) struct WrenchWork {
     ids: Arc<Vec<BrickId>>,
-    actor: Actor,
+    actor: Editor,
     package: String,
     fill: WrenchFill,
     next: usize,
@@ -297,7 +352,7 @@ impl WrenchWork {
             std::mem::take(&mut held.wrench_open),
             "Open the fill wrench first"
         );
-        let (ids, package) = (held.sources.clone(), held.package.clone());
+        let (ids, package, stack) = (held.sources.clone(), held.package.clone(), held.stack);
         let peer = s.peers.get(&owner).context("Unknown connection")?;
         combat::ensure_may_build(
             &peer.combat,
@@ -307,7 +362,10 @@ impl WrenchWork {
         Ok(Self {
             before: Vec::with_capacity(ids.len()),
             ids,
-            actor: peer.actor.clone(),
+            actor: Editor {
+                actor: peer.actor.clone(),
+                stack,
+            },
             package,
             fill,
             next: 0,
@@ -316,15 +374,23 @@ impl WrenchWork {
         })
     }
 
-    /// One undo step that puts the old settings back, and the Add-On told.
-    pub fn complete(self, s: &mut Session, owner: OwnerId, report: bool) -> (usize, usize) {
+    /// One undo step that puts the old settings back, and the Add-On told
+    /// (that it was canceled, with `canceled`).
+    pub fn complete(
+        self,
+        s: &mut Session,
+        owner: OwnerId,
+        report: bool,
+        canceled: bool,
+    ) -> (usize, usize) {
         let (count, refused) = (self.count, self.refused);
         if !self.before.is_empty() {
             let entry = undo::UndoEntry::Wrenched(self.before);
             s.push_copy_undo(owner, entry, Some(self.package.clone()));
         }
         if report {
-            let mut outcome = copy_store::CopyOutcome::about("wrench", None, None);
+            let canceled = canceled.then(|| ("canceled", "Fill wrench canceled!".to_string()));
+            let mut outcome = copy_store::CopyOutcome::about("wrench", None, canceled);
             outcome.bricks = count;
             outcome.total = count + refused;
             outcome.refused = refused;
@@ -341,6 +407,7 @@ impl CopyWork for WrenchWork {
             total: self.ids.len(),
             placed: 0,
             refused: 0,
+            ..Default::default()
         }
     }
     fn step(&mut self, s: &mut Session, _: OwnerId, budget: &mut u32) -> Result<bool> {
@@ -355,7 +422,7 @@ impl CopyWork for WrenchWork {
             let Some(brick) = s.simulation.state().bricks.get(&id) else {
                 continue;
             };
-            if !self.actor.trusted(brick.owner, level::FULL) {
+            if !self.actor.may(s, id, brick) {
                 self.refused += 1;
                 continue;
             }
@@ -393,9 +460,14 @@ impl CopyWork for WrenchWork {
             if next.item_spawn.item.is_some() && next.item_spawn != brick.item_spawn {
                 stocked.push(id);
             }
+            let collision = next.colliding != brick.colliding;
             self.before.push((id, brick.clone()));
             changed.push((id, next));
             self.count += 1;
+            if collision {
+                s.simulation.mark_rebuild(id);
+                s.simulation.charge_rebuilds(budget);
+            }
         }
         if !changed.is_empty() {
             s.dirty.extend(changed.iter().map(|(id, _)| *id));
@@ -408,6 +480,6 @@ impl CopyWork for WrenchWork {
     }
     fn finish(self: Box<Self>, s: &mut Session, owner: OwnerId, ending: Ending) {
         let report = !matches!(ending, Ending::Left);
-        self.complete(s, owner, report);
+        self.complete(s, owner, report, matches!(ending, Ending::Canceled));
     }
 }

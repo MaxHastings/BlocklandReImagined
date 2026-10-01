@@ -383,6 +383,7 @@ name = "bri-admin"
 version = "0.1.0"
 dependencies = [
  "bri-content",
+ "bri-package",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -510,6 +511,7 @@ name = "bri-client-sandbox"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bri-content",
  "bri-package",
  "bytemuck",
  "glam 0.33.10",
@@ -536,8 +538,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "glam 0.33.10",
+ "image",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

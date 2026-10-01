@@ -70,9 +70,10 @@ pub enum SettingScope {
     /// mini-game shows its team list for editing when any running Add-On
     /// declares one.
     Team,
-    /// One value for the whole server, kept between games and restarts
-    /// (Slayer's `$Pref::Slayer::Server::*`). Every mini-game's window
-    /// shows it.
+    /// One value for the whole server, kept with the host's Server Settings
+    /// (RTB's and Glass's `$Pref::Server::*` preferences, Slayer's
+    /// `$Pref::Slayer::Server::*`). Only the host
+    /// changes it, in the Admin menu's Add-On Settings.
     Server,
 }
 
@@ -225,6 +226,37 @@ pub struct SettingDef {
     /// Edit Uniform) instead of row by row.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub avatar: Option<String>,
+    /// The v20 global a server-wide setting stands for
+    /// (`$Pref::Server::TT::Ammo`, an RTB preference), which rules read by
+    /// that name with `pref(name)`, whichever running Add-On declares it,
+    /// as every script read the one global.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub global: Option<String>,
+    /// A server-wide setting the game reads only as the server starts or
+    /// loads a map (an RTB preference marked needsRestart): a host's change
+    /// waits for the next start.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub restart: bool,
+}
+
+/// Longest v20 global name a setting stands for.
+pub const MAX_GLOBAL: usize = 96;
+
+/// Whether `name` is a v20 server preference's global name:
+/// `$Pref::Server::` and then `::`-separated words.
+pub fn is_pref_global(name: &str) -> bool {
+    let Some(rest) = name
+        .get(.."$Pref::Server::".len())
+        .filter(|p| p.eq_ignore_ascii_case("$Pref::Server::"))
+        .map(|_| &name["$Pref::Server::".len()..])
+    else {
+        return false;
+    };
+    name.len() <= MAX_GLOBAL
+        && rest.split("::").all(|w| {
+            w.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+                && w.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        })
 }
 
 /// What a look's setting may hold ([`SettingDef::avatar`]): v20's
@@ -387,6 +419,18 @@ impl SettingDef {
                     AVATAR_KEYS.join(", ")
                 ));
             }
+        }
+        if let Some(global) = &self.global
+            && (self.scope != SettingScope::Server || !is_pref_global(global))
+        {
+            return Err(format!(
+                "setting `{what}`: `global` is a server setting's `$Pref::Server::` name"
+            ));
+        }
+        if self.restart && self.scope != SettingScope::Server {
+            return Err(format!(
+                "setting `{what}`: only a server setting waits for the next start"
+            ));
         }
         if let Some(when) = &self.shown_when {
             when.validate().map_err(|e| format!("setting `{what}`: {e}"))?;

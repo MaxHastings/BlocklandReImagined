@@ -76,12 +76,6 @@ pub struct Port {
     /// `binds`). `{{name}}` in them is filled in, as in the rules.
     #[serde(default)]
     pub provides: BTreeMap<String, String>,
-    /// Datablocks of the Add-On its `datablocks.cs` declares in their
-    /// place: ones the Add-On makes at run time under a name the importer
-    /// cannot read (Slayer's countdown voices, one `slayerSound` renamed in
-    /// a loop). The report counts them as the port's.
-    #[serde(default)]
-    pub replaces: Vec<String>,
     /// What the port carries out that no reader reads from the copy: a
     /// function (`WeaponImage::TT_canFire`) or a top-level call
     /// (`call:TT_registerAmmoType`) to how the game does it now (an engine
@@ -93,6 +87,12 @@ pub struct Port {
     /// load) and `datablock:ND_SelectionBoxOuter`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub handles: BTreeMap<String, String>,
+    /// Datablocks of the Add-On its `datablocks.cs` declares in their
+    /// place: ones the Add-On makes at run time under a name the importer
+    /// cannot read (Slayer's countdown voices, one `slayerSound` renamed in
+    /// a loop). The report counts them as the port's.
+    #[serde(default)]
+    pub replaces: Vec<String>,
     /// Help pages made from the Add-On's own help files (`.hfl`), by the
     /// title the Help dialog lists them under: the file's path in the
     /// Add-On. Converted from the player's copy at import (Slayer's
@@ -427,11 +427,11 @@ pub struct Applied {
     /// Why it was not applied.
     pub reason: Option<String>,
     pub notes: String,
-    /// The Add-On's datablocks the port declares in their place.
-    pub replaces: Vec<String>,
     /// What it carries out of the copy's scripts, and how.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub handled: Handled,
+    /// The Add-On's datablocks the port declares in their place.
+    pub replaces: Vec<String>,
 }
 
 /// A companion host-rules Add-On written beside an import.
@@ -484,8 +484,8 @@ pub fn apply(ports: &Ports, import: &Import, bodies: &Bodies, out: &Path) -> Opt
         rules: None,
         reason: None,
         notes: String::new(),
-        replaces: Vec::new(),
         handled: Handled::new(),
+        replaces: Vec::new(),
     };
     match try_apply(ports, e, import, bodies, out, &mut applied) {
         Ok(()) => applied.applied = true,
@@ -555,6 +555,9 @@ fn try_apply(
     applied.values = capture(e, bodies)?;
     let port = ports.port(e)?;
     applied.notes = port.notes.clone();
+    for (what, how) in &port.handles {
+        handle(&mut applied.handled, what, how);
+    }
     applied.replaces = port.replaces.clone();
     for (what, how) in &port.handles {
         handle(&mut applied.handled, what, how);

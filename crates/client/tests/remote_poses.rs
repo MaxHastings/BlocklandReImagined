@@ -1,19 +1,25 @@
 //! Two headless clients on one host over loopback: what one player sees of
 //! the other's tool swings and look must match what the swinger draws of
-//! itself. Never creates a window or OS input.
-//! Run: cargo test -p bri-client --test remote_poses --release -- --ignored --nocapture
+//! itself. Never creates a window or OS input. Runs on the made-up content
+//! root; the ignored variant runs on the generated v20 content
+//! (`--release -- --ignored`, BRI_CONTENT or content/).
 use anyhow::{Context, Result, bail, ensure};
 use bri_client::{app::App, platform::PlatformApp};
-use bri_ui::{api::*, gpu::Headless, screens::ScreenId};
+use bri_ui::{api::*, screens::ScreenId};
 use glam::{Mat4, Quat};
 use std::{
     path::Path,
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 
+#[macro_use]
+mod support;
+use support::content_root::ContentRoot;
+
+synthetic_and_content!(ContentRoot: players_see_each_others_swings_and_look_as_the_swinger_draws_them);
+
 const SIZE: (u32, u32) = (960, 720);
-const BEDROOM: &str = "v20/add-ons/map_bedroom/bedroom.mis";
 /// Longest game time one frame may advance. A loaded machine runs slow
 /// frames; stepping them by wall time would sample the swing so sparsely
 /// that each side catches a different point near its peak. Capped, the game
@@ -80,7 +86,8 @@ fn use_test_ports() -> u16 {
         .and_then(|s| s.local_addr())
         .map(|a| a.port())
         .expect("a free UDP port");
-    // SAFETY: set before any host or join starts; this binary runs one test.
+    // SAFETY: set before any host or join starts, under the GPU turn, which
+    // every test here holding a port takes first.
     unsafe {
         std::env::set_var("BRI_TEST_HOST_PORT", port.to_string());
         std::env::set_var("BRI_TEST_DISCOVERY_PORT", "0");
@@ -100,28 +107,24 @@ fn reach(frames: &[Mat4], rest: Mat4) -> f32 {
         .fold(0.0, f32::max)
 }
 
-#[test]
-#[ignore = "converted native content, loopback UDP and an offscreen GPU; no window"]
-fn players_see_each_others_swings_and_look_as_the_swinger_draws_them() -> Result<()> {
+fn players_see_each_others_swings_and_look_as_the_swinger_draws_them(
+    f: &ContentRoot,
+) -> Result<()> {
+    let gpu = support::gpu::turn().context("offscreen adapter")?;
     let port = use_test_ports();
-    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let artifact = workspace.join("artifacts/remote-poses");
-    let stamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-    let load = |name: &str| -> Result<App> {
-        let state = artifact.join(format!("state-{name}-{stamp}"));
-        std::fs::create_dir_all(&state)?;
-        let mut app = App::load(&workspace.join("content"), &state, SIZE)?;
+    let load = |name: &str, state: &Path| -> Result<App> {
+        let mut app = App::load(&f.root, state, SIZE)?;
         app.ui.core.pop(ScreenId::DefaultControls);
         app.ui.core.settings.avatar.lan_name = name.into();
         Ok(app)
     };
-    let mut host = load("Hosty")?;
-    let mut guest = load("Guesty")?;
-    let gpu = Headless::new().context("offscreen adapter")?;
+    let (host_state, guest_state) = (f.state()?, f.state()?);
+    let mut host = load("Hosty", host_state.path())?;
+    let mut guest = load("Guesty", guest_state.path())?;
     host.gpu_ready(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm)?;
     guest.gpu_ready(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm)?;
     host.ui.core.request(UiAction::HostGame {
-        map: BEDROOM.into(),
+        map: f.map.0.clone(),
         mode: ServerMode::Internet,
         game_mode: None,
         max_players: 8,
@@ -130,9 +133,13 @@ fn players_see_each_others_swings_and_look_as_the_swinger_draws_them() -> Result
         admin_password: String::new(),
         super_admin_password: String::new(),
     });
-    until(&mut [&mut host], "host in game", Duration::from_secs(90), |_| {}, |a, _| {
-        in_game(a[0])
-    })?;
+    until(
+        &mut [&mut host],
+        "host in game",
+        Duration::from_secs(90),
+        |_| {},
+        |a, _| in_game(a[0]),
+    )?;
     request(
         &mut guest,
         UiAction::JoinServer {
@@ -145,7 +152,11 @@ fn players_see_each_others_swings_and_look_as_the_swinger_draws_them() -> Result
         "guest in game",
         Duration::from_secs(90),
         |_| {},
-        |a, _| in_game(a[1]) && a.iter().all(|app| app.network_view().unwrap().poses.len() == 2),
+        |a, _| {
+            in_game(a[1])
+                && a.iter()
+                    .all(|app| app.network_view().unwrap().poses.len() == 2)
+        },
     )?;
     let mut report = String::new();
     // Each side swings in turn while the other watches.
@@ -165,9 +176,13 @@ fn players_see_each_others_swings_and_look_as_the_swinger_draws_them() -> Result
             }),
         )?;
         let settle = |apps: &mut [&mut App]| {
-            until(apps, "settle", Duration::from_secs(120), |_| {}, |_, game| {
-                game > Duration::from_millis(1500)
-            })
+            until(
+                apps,
+                "settle",
+                Duration::from_secs(120),
+                |_| {},
+                |_, game| game > Duration::from_millis(1500),
+            )
         };
         // Every tool with a third-person swing.
         for (slot, what) in [(0, "hammer"), (1, "wrench")] {
@@ -176,7 +191,10 @@ fn players_see_each_others_swings_and_look_as_the_swinger_draws_them() -> Result
             let rest = |app: &App| app.avatar_node(id, "RightHand").context("posed right hand");
             let (own_rest, seen_rest) = (rest(swinger)?, rest(watcher)?);
             let ready = rotation(own_rest).angle_between(rotation(seen_rest));
-            ensure!(ready < 0.02, "{what}: watcher's ready pose is {ready} rad from the swinger's");
+            ensure!(
+                ready < 0.02,
+                "{what}: watcher's ready pose is {ready} rad from the swinger's"
+            );
             let (mut own, mut seen) = (Vec::new(), Vec::new());
             for (down, hold) in [(true, 700), (false, 1200)] {
                 request(

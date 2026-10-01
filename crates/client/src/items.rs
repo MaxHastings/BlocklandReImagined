@@ -271,7 +271,7 @@ impl ItemMesh {
 /// holder's first-person view reaches, and their `fire` sequences animate
 /// only that mesh. Everyone else sees the held image at its ordinary detail,
 /// which the swing leaves still (the arm's thread does the swinging).
-const FIRST_PERSON_DETAIL: f32 = 9999.0;
+pub(crate) const FIRST_PERSON_DETAIL: f32 = 9999.0;
 
 fn visible_detail(shape: &Shape, first_person: bool) -> Option<usize> {
     let visible = || {
@@ -2184,23 +2184,22 @@ mod add_on_icon_tests {
         }
         Ok(())
     }
+    use super::fixture::Items;
+    crate::testing::synthetic_and_content!(Items: the_gravity_gun_icon_is_drawn_from_its_model_like_the_printers);
     /// Max, v0.1.9: "take the 3d model + shaders + snap pic -> make
     /// transparent background -> use as the icon just like the other
     /// tools". The Gravity Gun's icon is its in-game model with its skin,
     /// drawn at the Printer icon's angle and size. It is drawn on each
     /// player's machine from their game files, so none of it is shipped.
     /// Writes the icon to `target/gravity-gun-icon.png` for a look.
-    #[test]
-    #[ignore = "requires the converted item and weapons packs; CPU only"]
-    fn the_gravity_gun_icon_is_drawn_from_its_model_like_the_printers() -> Result<()> {
+    fn the_gravity_gun_icon_is_drawn_from_its_model_like_the_printers(fx: &Items) -> Result<()> {
         let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let root = manifest.join("../../content");
         let extras = vec![(
             "addons/gravity-gun-tool/assets".to_string(),
             manifest.join("../../packages/showcase/gravity-gun-tool/assets"),
         )];
         let load = || {
-            ItemAssets::load_with(&root.join("item-presentation-pack-010"), &root.join("weapons-pack-009"), &extras)
+            ItemAssets::load_with(&fx.presentation, &fx.weapons, &extras)
         };
         let cache = tempfile::tempdir()?;
         let gun = "gravity-gun-tool:weapon/gravitygun";
@@ -2292,23 +2291,18 @@ mod add_on_icon_tests {
 
 #[cfg(test)]
 mod own_model_icon_tests {
+    use super::fixture::Items;
     use super::*;
+    crate::testing::synthetic_and_content!(Items: an_add_on_tool_icon_is_drawn_from_its_model_like_the_hammers);
     /// A tool Add-On's icon is its own model in wood and iron, drawn at the
     /// Hammer icon's angle and size so it sits in the tool slots like a
     /// stock tool (the stand-in `own_model_tool`, as the Trench Pick was).
     /// Writes it to `target/own-model-icon.png` for a look.
-    #[test]
-    #[ignore = "requires the converted item and weapons packs; CPU only"]
-    fn an_add_on_tool_icon_is_drawn_from_its_model_like_the_hammers() -> Result<()> {
+    fn an_add_on_tool_icon_is_drawn_from_its_model_like_the_hammers(fx: &Items) -> Result<()> {
         let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let root = manifest.join("../../content");
         let dir = tempfile::tempdir()?;
         let extras = vec![("addons/tool/assets".to_string(), add_on_icon_tests::own_model_tool(dir.path())?)];
-        let mut assets = ItemAssets::load_with(
-            &root.join("item-presentation-pack-010"),
-            &root.join("weapons-pack-009"),
-            &extras,
-        )?;
+        let mut assets = ItemAssets::load_with(&fx.presentation, &fx.weapons, &extras)?;
         assert!(assets.faults.is_empty(), "{:?}", assets.faults);
         let pick = "tool:weapon/pick";
         // Drawn from its model, off the load path (`ItemAssets::draw_icons`).
@@ -2317,7 +2311,7 @@ mod own_model_icon_tests {
         let slot = assets.drawn_icon(pick).expect("an icon drawn from its model");
         let icon = slot.get().expect("drawn");
         assert!(std::ptr::eq(assets.icon(pick)?.unwrap(), icon), "the drawn icon is shown");
-        let hammer = assets.icon("v20.weapon.hammeritem")?.unwrap();
+        let hammer = assets.icon(&fx.hammer_item)?.unwrap();
         assert_eq!((icon.width, icon.height), (hammer.width, hammer.height), "framed like the Hammer's");
         assert_eq!(icon.rgba[3], 0, "a clear background");
         // Two materials show: the wooden handle and the iron head.
@@ -2327,7 +2321,7 @@ mod own_model_icon_tests {
         assert!(wood > 50 && iron > 50, "wood {wood} and iron {iron}");
         // Held like the Hammer: at the grip, in the right hand.
         let image = &assets.presentation.images["tool:image/pick"];
-        assert_eq!(image.mount_point, assets.presentation.images["v20.image.hammerimage"].mount_point);
+        assert_eq!(image.mount_point, assets.presentation.images[&fx.hammer_image].mount_point);
         // Modelled as the Hammer is held: handle up out of the fist (+y)
         // and the head across its top, front to back (z), about as big.
         // Each model's box, seen from its grip.
@@ -2342,7 +2336,7 @@ mod own_model_icon_tests {
             let bounds = assets.presentation.models[model].bounds();
             Ok((Vec3::from(bounds.min) - grip, Vec3::from(bounds.max) - grip))
         };
-        let hammer = grip_box(&assets.presentation.images["v20.image.hammerimage"].model)?;
+        let hammer = grip_box(&assets.presentation.images[&fx.hammer_image].model)?;
         let ours = grip_box(&image.model)?;
         println!("from the grip, hammer {hammer:?}, tool {ours:?}");
         for (name, (lo, hi)) in [("hammer", hammer), ("tool", ours)] {
@@ -2360,18 +2354,17 @@ mod own_model_icon_tests {
 
 #[cfg(test)]
 mod bounds_tests {
+    use super::fixture::Items;
     use super::*;
-    fn root() -> std::path::PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
-    }
-    #[test]
-    #[ignore = "requires generated native item content; CPU only"]
-    fn a_sequence_that_leaves_the_drawn_detail_still_draws_the_rest_pose() -> Result<()> {
-        let root = root();
-        let assets = ItemAssets::load(
-            &root.join("content/item-presentation-pack-010"),
-            &root.join("content/weapons-pack-009"),
-        )?;
+    crate::testing::synthetic_and_content!(
+        Items: a_sequence_that_leaves_the_drawn_detail_still_draws_the_rest_pose,
+        others_see_held_tools_at_their_third_person_detail,
+        item_physics_are_the_authored_model_boxes,
+        translucent_spray_can_keeps_a_clear_colored_body_and_solid_trim,
+        native_bounds_corruption_rejects_before_geometry_loading,
+    );
+    fn a_sequence_that_leaves_the_drawn_detail_still_draws_the_rest_pose(fx: &Items) -> Result<()> {
+        let assets = fx.assets()?;
         let mut still = 0;
         for (model, shape) in &assets.shapes {
             for clip in &shape.animations {
@@ -2403,48 +2396,60 @@ mod bounds_tests {
                 }
             }
         }
-        assert!(still > 0, "no held-image sequence leaves its drawn detail still");
+        assert!(
+            still > 0,
+            "no held-image sequence leaves its drawn detail still"
+        );
         Ok(())
     }
-    #[test]
-    #[ignore = "requires generated native item content; CPU only"]
-    fn others_see_held_tools_at_their_third_person_detail() -> Result<()> {
+    fn others_see_held_tools_at_their_third_person_detail(fx: &Items) -> Result<()> {
         // The `fire` sequences swing only the first-person detail9999 mesh;
         // drawing that for other players doubled the arm's swing.
-        let root = root();
-        let assets = ItemAssets::load(
-            &root.join("content/item-presentation-pack-010"),
-            &root.join("content/weapons-pack-009"),
-        )?;
-        for image in ["v20.image.wrenchimage", "v20.image.hammerimage"] {
+        let assets = fx.assets()?;
+        assert!(!fx.swung_images.is_empty());
+        for image in &fx.swung_images {
+            let image = image.as_str();
             let model = assets.presentation.images[image].model.clone();
             let shape = assets.shape(&model)?;
             let name = |detail: Option<usize>| detail.map(|d| shape.details[d].name.clone());
-            assert_eq!(name(visible_detail(shape, true)).as_deref(), Some("detail9999"));
-            assert_eq!(name(visible_detail(shape, false)).as_deref(), Some("detail32"));
+            assert_eq!(
+                name(visible_detail(shape, true)),
+                Some(fx.held_detail.clone())
+            );
+            assert_eq!(
+                name(visible_detail(shape, false)),
+                Some(fx.world_detail.clone())
+            );
             let posed = |first_person: bool, seconds: f32| -> Result<Vec<Vec3>> {
                 let mut mesh = assets.mesh(&model, [1.; 4])?;
                 mesh.first_person = first_person;
                 mesh.pose(&assets, Mat4::IDENTITY, Some("fire"), seconds)?;
-                Ok(mesh.data.vertices.iter().map(|v| Vec3::from(v.position)).collect())
+                Ok(mesh
+                    .data
+                    .vertices
+                    .iter()
+                    .map(|v| Vec3::from(v.position))
+                    .collect())
             };
             let moved = |first_person| -> Result<f32> {
                 let (rest, swung) = (posed(first_person, 0.)?, posed(first_person, 0.15)?);
-                Ok(rest.iter().zip(&swung).map(|(a, b)| a.distance(*b)).fold(0., f32::max))
+                Ok(rest
+                    .iter()
+                    .zip(&swung)
+                    .map(|(a, b)| a.distance(*b))
+                    .fold(0., f32::max))
             };
             assert!(moved(true)? > 0.05, "{image}: first-person swing");
             assert!(moved(false)? < 1e-5, "{image}: others see the arm swing it");
         }
         Ok(())
     }
+    /// The real pistol's header box, read independently from its source
+    /// bytes, and the real catalog's size.
     #[test]
-    #[ignore = "requires generated native item content; CPU only"]
+    #[ignore = "requires generated v20 content"]
     fn original_dts_header_bounds_survive_native_float_roundtrip() -> Result<()> {
-        let root = root();
-        let assets = ItemAssets::load(
-            &root.join("content/item-presentation-pack-010"),
-            &root.join("content/weapons-pack-009"),
-        )?;
+        let assets = Items::content()?.assets()?;
         assert_eq!(assets.item_physics.items.len(), 21);
         // Independently inspected source pistol.dts bytes116..139, SHA
         // 5d197fac2d28b7141939ff223dfd312dc42ee7826c9f7e85653806b600fc2856.
@@ -2481,6 +2486,13 @@ mod bounds_tests {
             bounds,
             assets.item_physics.items["v20.weapon.akimbogunitem"]
         );
+        Ok(())
+    }
+    /// Every item's physics box is its model's authored box, which is not
+    /// overwritten by a fit of the drawn mesh.
+    fn item_physics_are_the_authored_model_boxes(fx: &Items) -> Result<()> {
+        let assets = fx.assets()?;
+        assert!(!assets.item_physics.items.is_empty());
         let mut differing = 0;
         for (id, physics) in &assets.item_physics.items {
             physics.validate()?;
@@ -2512,15 +2524,11 @@ mod bounds_tests {
         );
         Ok(())
     }
-    #[test]
-    #[ignore = "requires generated native item content; CPU only"]
-    fn translucent_spray_can_keeps_a_clear_colored_body_and_solid_trim() -> Result<()> {
-        let root = root();
-        let assets = ItemAssets::load(
-            &root.join("content/item-presentation-pack-009"),
-            &root.join("content/weapons-pack-008"),
-        )?;
-        let model = "base/data/shapes/transspraycan.dts";
+    fn translucent_spray_can_keeps_a_clear_colored_body_and_solid_trim(fx: &Items) -> Result<()> {
+        let (presentation, weapons) = &fx.spray_packs;
+        let assets = ItemAssets::load(presentation, weapons)?;
+        let (model, body, trims) = &fx.clear_can;
+        let model = model.as_str();
         let scene = assets.model_scene(model, [0.2, 0.4, 1., 0.5], Mat4::IDENTITY, None, 0.)?;
         let material = |name: &str| {
             scene
@@ -2531,34 +2539,24 @@ mod bounds_tests {
         };
         // Only `blank` is authored translucent: the colour shows under its
         // clear texture at the colour's alpha, and the trim stays solid.
-        let body = material("blank");
+        let body = material(body);
         assert_eq!(body.kind, MaterialKind::BrickOverlay);
         assert_eq!(body.alpha, AlphaMode::Blend);
-        for trim in ["spraycanLabel", "whiteCheck", "megaPhoneRidge"] {
+        for trim in trims {
             assert_eq!(material(trim).alpha, AlphaMode::Opaque, "{trim}");
         }
         Ok(())
     }
-    #[test]
-    #[ignore = "requires generated native item content; CPU only"]
-    fn native_bounds_corruption_rejects_before_geometry_loading() -> Result<()> {
-        let root = root();
-        let source = root.join("content/item-presentation-pack-010");
-        let base = root.join("artifacts/native-items");
-        std::fs::create_dir_all(&base)?;
-        let fixture = base.join(format!(
-            "bounds-test-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)?
-                .as_nanos()
-        ));
-        std::fs::create_dir(&fixture)?;
+    fn native_bounds_corruption_rejects_before_geometry_loading(fx: &Items) -> Result<()> {
+        let source = &fx.presentation;
+        let scratch = crate::testing::ScratchDir::new("item-bounds")?;
+        let fixture = scratch.path().to_path_buf();
+        let (gun, pistol) = (&fx.gun.0, fx.gun.1.as_str());
         let manifest: serde_json::Value =
             serde_json::from_slice(&std::fs::read(source.join("presentation.json"))?)?;
         let physics: serde_json::Value =
             serde_json::from_slice(&std::fs::read(source.join("item-physics.json"))?)?;
-        let weapons = root.join("content/weapons-pack-009");
+        let weapons = &fx.weapons;
         for (mode, expected) in [
             (0, "Invalid authored model bounds"),
             (1, "missing field"),
@@ -2571,19 +2569,16 @@ mod bounds_tests {
             let mut m = manifest.clone();
             let mut p = physics.clone();
             match mode {
-                0 => m["models"]["add-ons/weapon_gun/pistol.dts"]["bounds_min"][0] = 100.into(),
+                0 => m["models"][pistol]["bounds_min"][0] = 100.into(),
                 1 => {
-                    m["models"]["add-ons/weapon_gun/pistol.dts"]
+                    m["models"][pistol]
                         .as_object_mut()
                         .unwrap()
                         .remove("bounds_min");
                 }
-                2 => p["items"]["v20.weapon.gunitem"]["min"][0] = (-0.1).into(),
+                2 => p["items"][gun]["min"][0] = (-0.1).into(),
                 3 => {
-                    p["items"]
-                        .as_object_mut()
-                        .unwrap()
-                        .remove("v20.weapon.gunitem");
+                    p["items"].as_object_mut().unwrap().remove(gun);
                 }
                 4 => {}
                 5 => p["schema_version"] = 2.into(),
@@ -2598,7 +2593,7 @@ mod bounds_tests {
             .into();
             std::fs::write(fixture.join("item-physics.json"), bytes)?;
             std::fs::write(fixture.join("presentation.json"), serde_json::to_vec(&m)?)?;
-            let error = match ItemAssets::load(&fixture, &weapons) {
+            let error = match ItemAssets::load(&fixture, weapons) {
                 Ok(_) => anyhow::bail!("Accepted corrupt bounds mode{mode}"),
                 Err(e) => format!("{e:#}"),
             };
@@ -2607,7 +2602,6 @@ mod bounds_tests {
                 "Wrong failure for mode{mode}: {error}"
             );
         }
-        std::fs::remove_dir_all(fixture)?;
         Ok(())
     }
 }
@@ -2647,8 +2641,10 @@ mod placement_tests {
             Quat::from_rotation_y(0.7) * Quat::from_rotation_x(-0.3),
             Vec3::new(3., 41.6, -7.),
         );
-        let hand = Mat4::from_rotation_translation(Quat::from_rotation_z(0.4), Vec3::new(0.3, 40.9, -7.2));
-        let action = Mat4::from_rotation_translation(Quat::from_rotation_x(0.5), Vec3::new(0., -0.1, 0.2));
+        let hand =
+            Mat4::from_rotation_translation(Quat::from_rotation_z(0.4), Vec3::new(0.3, 40.9, -7.2));
+        let action =
+            Mat4::from_rotation_translation(Quat::from_rotation_x(0.5), Vec3::new(0., -0.1, 0.2));
         let correction = || Ok(Mat4::from_translation(Vec3::new(0., 0., -0.3)));
         for (offset, rotation) in [
             ([0., -0.37, -0.64], [0.; 3]),
@@ -2658,9 +2654,15 @@ mod placement_tests {
             let eye_local =
                 Mat4::from_rotation_translation(source_euler(rotation), Vec3::from(offset));
             let scope = image(offset, rotation, false);
-            let placed =
-                place_image(&scope, true, eye, correction, |_| Some(hand), |_| Some(action))
-                    .unwrap();
+            let placed = place_image(
+                &scope,
+                true,
+                eye,
+                correction,
+                |_| Some(hand),
+                |_| Some(action),
+            )
+            .unwrap();
             assert!(close(placed, eye * eye_local), "{offset:?}");
             // The sight on the eye line stays on it: straight ahead of the eye.
             let sight = placed.transform_point3(Vec3::ZERO) - eye.transform_point3(Vec3::ZERO);
@@ -2668,22 +2670,38 @@ mod placement_tests {
             assert!((local - Vec3::from(offset)).length() < 1e-4);
 
             let tool = image(offset, rotation, true);
-            let placed =
-                place_image(&tool, true, eye, correction, |_| Some(hand), |_| Some(action))
-                    .unwrap();
+            let placed = place_image(
+                &tool,
+                true,
+                eye,
+                correction,
+                |_| Some(hand),
+                |_| Some(action),
+            )
+            .unwrap();
             let in_hand = Mat4::from_rotation_translation(
                 source_euler(tool.source_rotation_degrees),
                 Vec3::from(tool.offset),
             ) * correction().unwrap();
-            assert!(close(placed, eye * eye_local * in_hand.inverse() * action * in_hand));
+            assert!(close(
+                placed,
+                eye * eye_local * in_hand.inverse() * action * in_hand
+            ));
             // No action playing: the tool is at the eye too.
-            let still = place_image(&tool, true, eye, correction, |_| Some(hand), |_| None).unwrap();
+            let still =
+                place_image(&tool, true, eye, correction, |_| Some(hand), |_| None).unwrap();
             assert!(close(still, eye * eye_local));
 
             for image in [&scope, &tool] {
-                let third =
-                    place_image(image, false, eye, correction, |_| Some(hand), |_| Some(action))
-                        .unwrap();
+                let third = place_image(
+                    image,
+                    false,
+                    eye,
+                    correction,
+                    |_| Some(hand),
+                    |_| Some(action),
+                )
+                .unwrap();
                 assert!(close(third, hand * in_hand));
             }
         }
@@ -2748,14 +2766,111 @@ mod metal_tests {
             .filter(|m| m.kind == MaterialKind::Metal)
             .collect();
         assert_eq!(metal.len(), 1, "one metal surface");
-        let (tint, detail) = (&scene.images[metal[0].images[0]], &scene.images[metal[0].images[1]]);
+        let (tint, detail) = (
+            &scene.images[metal[0].images[0]],
+            &scene.images[metal[0].images[1]],
+        );
         assert!(tint.label == "steel" && tint.srgb);
         assert!(detail.label == "steel-detail" && !detail.srgb);
         let parameters = metal[0].parameters.unwrap();
         assert!(parameters[0][0] > 0.0 && parameters[0][0] < 0.5, "polished");
-        assert!(parameters[1][..3].iter().all(|c| *c > 0.5), "steel reflects most light");
+        assert!(
+            parameters[1][..3].iter().all(|c| *c > 0.5),
+            "steel reflects most light"
+        );
         // Every triangle the ball draws is steel.
-        assert!(scene.batches.iter().all(|b| scene.materials[b.material].kind == MaterialKind::Metal));
+        assert!(
+            scene
+                .batches
+                .iter()
+                .all(|b| scene.materials[b.material].kind == MaterialKind::Metal)
+        );
         Ok(())
+    }
+}
+
+/// The item packs a test runs on: made up (`crate::testing::items`) or the
+/// generated v20 ones, with the roles the tests look up.
+#[cfg(test)]
+pub(crate) mod fixture {
+    use super::*;
+    use crate::testing::items as made_up;
+    use std::path::PathBuf;
+
+    pub(crate) struct Items {
+        /// The folders holding `presentation.json` and `weapons.json`.
+        pub presentation: PathBuf,
+        pub weapons: PathBuf,
+        /// Images whose `fire` sequence swings only the held detail, and
+        /// the names of the held and the third-person details.
+        pub swung_images: Vec<String>,
+        pub held_detail: String,
+        pub world_detail: String,
+        /// The hammer item and image.
+        pub hammer_item: String,
+        pub hammer_image: String,
+        /// The packs holding the translucent spray can: its model, the
+        /// translucent material and the solid trim.
+        pub spray_packs: (PathBuf, PathBuf),
+        pub clear_can: (String, String, Vec<String>),
+        /// The gun item and its model.
+        pub gun: (String, String),
+        _packs: Option<made_up::ItemPacks>,
+    }
+    impl Items {
+        pub fn synthetic() -> Result<Self> {
+            let packs = made_up::write_packs()?;
+            let strings = |s: &[&str]| s.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+            Ok(Self {
+                presentation: packs.presentation.clone(),
+                weapons: packs.weapons.clone(),
+                swung_images: strings(&made_up::SWUNG_IMAGES),
+                held_detail: made_up::HELD_DETAIL.into(),
+                world_detail: made_up::WORLD_DETAIL.into(),
+                hammer_item: bri_weapons::testing::HAMMER.into(),
+                hammer_image: bri_weapons::testing::HAMMER_IMAGE.into(),
+                spray_packs: (packs.presentation.clone(), packs.weapons.clone()),
+                clear_can: (
+                    made_up::CLEAR_CAN_MODEL.into(),
+                    made_up::CLEAR_CAN_BODY.into(),
+                    strings(&made_up::CLEAR_CAN_TRIM),
+                ),
+                gun: (
+                    bri_weapons::testing::GUN_ITEM.into(),
+                    made_up::GUN_MODEL.into(),
+                ),
+                _packs: Some(packs),
+            })
+        }
+        pub fn content() -> Result<Self> {
+            let content = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
+            let strings = |s: &[&str]| s.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+            Ok(Self {
+                presentation: content.join("item-presentation-pack-010"),
+                weapons: content.join("weapons-pack-009"),
+                swung_images: strings(&["v20.image.wrenchimage", "v20.image.hammerimage"]),
+                held_detail: "detail9999".into(),
+                world_detail: "detail32".into(),
+                hammer_item: "v20.weapon.hammeritem".into(),
+                hammer_image: "v20.image.hammerimage".into(),
+                spray_packs: (
+                    content.join("item-presentation-pack-009"),
+                    content.join("weapons-pack-008"),
+                ),
+                clear_can: (
+                    "base/data/shapes/transspraycan.dts".into(),
+                    "blank".into(),
+                    strings(&["spraycanLabel", "whiteCheck", "megaPhoneRidge"]),
+                ),
+                gun: (
+                    "v20.weapon.gunitem".into(),
+                    "add-ons/weapon_gun/pistol.dts".into(),
+                ),
+                _packs: None,
+            })
+        }
+        pub fn assets(&self) -> Result<ItemAssets> {
+            ItemAssets::load(&self.presentation, &self.weapons)
+        }
     }
 }

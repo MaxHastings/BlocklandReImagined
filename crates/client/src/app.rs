@@ -362,6 +362,11 @@ pub struct App {
     brick_hand: Option<bri_sim::session::BrickHand>,
     /// Last ghost brick reported to the server, and when.
     ghost_report: Option<(Option<bri_sim::session::GhostBrick>, std::time::Instant)>,
+    /// Last place of the copy in hand reported to the server, and when.
+    copy_report: Option<(
+        Option<(u64, bri_sim::session::CopyPose)>,
+        std::time::Instant,
+    )>,
     /// Other players' ghost bricks as uploaded, by owner.
     remote_ghosts: BTreeMap<bri_world::OwnerId, (bri_sim::session::GhostBrick, Option<GpuScene>)>,
     pub(crate) item_assets: Arc<crate::items::ItemAssets>,
@@ -455,6 +460,9 @@ pub struct App {
     /// last uploaded.
     selection_lines: Option<bri_render::lines::LineRenderer>,
     selection_uploaded: Option<Option<([f32; 3], [f32; 3])>>,
+    /// Add-On world shapes (`show_shapes`), and the sets last uploaded.
+    world_shapes: Option<bri_render::world_shapes::ShapeRenderer>,
+    shapes_uploaded: Option<BTreeMap<String, std::sync::Arc<Vec<bri_package_runtime::ops::WorldShape>>>>,
     hidden_uploaded: Option<bool>,
     /// `BrickFades::outlined` when the outlines were built: bricks fading
     /// in or out gain or lose theirs as they pass v20's alpha 0.1.
@@ -554,6 +562,8 @@ pub struct App {
     motion: crate::motion::Motion,
     /// Projectiles, drops and package entities smoothed between host updates.
     ghosts: crate::ghosts::Ghosts,
+    /// Shots drawn from the shooter's muzzle (`crate::shot_origins`).
+    shot_origins: crate::shot_origins::ShotOrigins,
     vehicle_assets: crate::vehicles::VehicleAssets,
     vehicles: crate::vehicles::ClientVehicles,
     /// Heading of the vehicle the local player rides, last frame.
@@ -1715,6 +1725,7 @@ impl App {
             abilities: Default::default(),
             brick_hand: None,
             ghost_report: None,
+            copy_report: None,
             remote_ghosts: BTreeMap::new(),
             cpu_scene: None,
             steering_sent: None,
@@ -1757,6 +1768,8 @@ impl App {
             environment_sent: None,
             selection_lines: None,
             selection_uploaded: None,
+            world_shapes: None,
+            shapes_uploaded: None,
             hidden_uploaded: None,
             hidden_fading: Vec::new(),
             weapon_light_deferred: 0,
@@ -1822,6 +1835,7 @@ impl App {
             save_shots: Default::default(),
             motion: Default::default(),
             ghosts: Default::default(),
+            shot_origins: Default::default(),
             vehicle_assets,
             vehicles: Default::default(),
             mount_heading: None,
@@ -1922,6 +1936,7 @@ impl App {
         self.abilities = Default::default();
         self.brick_hand = None;
         self.ghost_report = None;
+        self.copy_report = None;
         self.remote_ghosts.clear();
         self.foliage.clear();
         self.weather.clear();
@@ -1952,6 +1967,10 @@ impl App {
             lines.clear();
         }
         self.selection_uploaded = None;
+        if let Some(shapes) = &mut self.world_shapes {
+            shapes.clear();
+        }
+        self.shapes_uploaded = None;
         self.weapon_light_deferred = 0;
         self.weapon_effect_session = None;
         self.world_items.reset();
@@ -2770,10 +2789,11 @@ impl App {
             rotate: i.commands.rotate.clone(),
             plant: i.commands.plant.clone(),
             paint: i.commands.paint.clone(),
+            paint_picker: i.paint_picker,
         });
         if let Some(building) = self.building.as_mut() {
             building.set_image_keys(keys);
-            let takes = building.takes_paint();
+            let takes = building.keeps_tool_for_paint();
             if takes != self.tool_takes_paint {
                 self.tool_takes_paint = takes;
                 self.ui.apply(UiUpdate::ToolTakesPaint(takes));
@@ -4609,6 +4629,15 @@ impl App {
                             }
                             continue;
                         }
+                        bri_sim::session::Notice::MirrorGhost {
+                            definition,
+                            quarter_turns,
+                        } => {
+                            if let Some(building) = self.building.as_mut() {
+                                building.mirror_ghost(&definition, quarter_turns);
+                            }
+                            continue;
+                        }
                         bri_sim::session::Notice::MoveCopy { point, normal } => {
                             if let Some(building) = self.building.as_mut() {
                                 building.move_copy(point, normal);
@@ -4898,6 +4927,22 @@ impl App {
                     .is_ok()
             {
                 self.ghost_report = Some((ghost, std::time::Instant::now()));
+            }
+            // Where the copy in hand stands, for its Add-On to show the
+            // others; at the same pace.
+            let copy = building.copy_report();
+            let due = self.copy_report.as_ref().is_none_or(|(sent, at)| {
+                *sent != copy && (copy.is_none() || at.elapsed() >= GHOST_REPORT_INTERVAL)
+            }) && (copy.is_some() || self.copy_report.is_some());
+            if due
+                && a.worker
+                    .request(
+                        REPORT_REQUEST,
+                        Command::CopyPose(copy.map(|(_, pose)| pose)),
+                    )
+                    .is_ok()
+            {
+                self.copy_report = Some((copy, std::time::Instant::now()));
             }
         }
         if let (Some(building), Some(view)) = (&mut self.building, &a.view) {
@@ -5531,6 +5576,25 @@ fn name_tags(
             text: plain_chat(name),
             opacity,
             color,
+        });
+    }
+    // Add-On world shapes' labels, over each shape's top centre in its
+    // colour.
+    for shape in view.world_shapes.values().flat_map(|s| s.iter()) {
+        if shape.label.is_empty() {
+            continue;
+        }
+        let (min, max) = (Vec3::from(shape.min), Vec3::from(shape.max));
+        let top = Vec3::new((min.x + max.x) / 2.0, max.y, (min.z + max.z) / 2.0);
+        let Some((x, y, opacity)) = place(top, 8192.0) else {
+            continue;
+        };
+        tags.push(bri_ui::api::NameTag {
+            x,
+            y,
+            text: shape.label.clone(),
+            opacity,
+            color: [shape.color[0], shape.color[1], shape.color[2]],
         });
     }
     // Any other shape's name sits above the middle of its box
@@ -7155,7 +7219,31 @@ impl PlatformApp for App {
                     })
                 },
             );
-            let weapons = self.ghosts.weapons();
+            // Each shot drawn from its shooter's muzzle as this client draws
+            // the gun, closing on the host's path where the aim meets the
+            // world (`crate::shot_origins`).
+            let world_items = &self.world_items;
+            let shown = self.shot_origins.shown(
+                self.ghosts.weapons(),
+                |actor| {
+                    world_items
+                        .held_muzzle(actor.0, 0)
+                        .or_else(|| world_items.held_muzzle(actor.0, 1))
+                },
+                |from, direction, most| {
+                    building
+                        .solid_segment(from, from + direction * most)
+                        .ok()
+                        .flatten()
+                        .map_or(most, |hit| hit.distance)
+                },
+                |p| {
+                    projectiles.get(&p.definition).map_or(0.0, |d| {
+                        p.velocity.length() * d.lifetime_ticks as f32 / bri_weapons::TICK_HZ as f32
+                    })
+                },
+            );
+            let weapons: &bri_sim::session::WeaponView = &shown;
             // Rebuilt only when the liquids or the paint change; they were
             // cloned (textures' names and all) several times every frame.
             let (liquids, waters) = match self.motion.collision() {
@@ -8748,6 +8836,13 @@ impl PlatformApp for App {
             samples,
         ));
         self.selection_uploaded = None;
+        self.world_shapes = Some(bri_render::world_shapes::ShapeRenderer::new(
+            device,
+            format,
+            bri_render::scene::DEPTH_FORMAT,
+            samples,
+        ));
+        self.shapes_uploaded = None;
         self.hidden_uploaded = None;
         let limits = bri_fx_runtime::EffectsLimits::default();
         self.effects_renderer = Some(bri_fx_runtime::gpu::EffectsRenderer::new(
@@ -8778,6 +8873,10 @@ impl PlatformApp for App {
             lines.clear();
         }
         self.selection_uploaded = None;
+        if let Some(shapes) = &mut self.world_shapes {
+            shapes.clear();
+        }
+        self.shapes_uploaded = None;
         self.depth = None;
         Ok(())
     }
@@ -8819,6 +8918,7 @@ impl PlatformApp for App {
         self.effects_renderer = None;
         self.hidden_lines = None;
         self.selection_lines = None;
+        self.world_shapes = None;
         self.gpu_scene = None;
         self.gpu_terrain.clear();
         self.gpu_palette = None;
@@ -8838,6 +8938,10 @@ impl PlatformApp for App {
             lines.clear();
         }
         self.selection_uploaded = None;
+        if let Some(shapes) = &mut self.world_shapes {
+            shapes.clear();
+        }
+        self.shapes_uploaded = None;
         self.depth = None;
     }
     fn render_scene(&mut self, frame: &mut RenderContext<'_>) -> Result<bool> {
@@ -9216,6 +9320,28 @@ impl PlatformApp for App {
                 _ => None,
             };
             self.remote_ghosts.insert(*owner, (ghost.clone(), gpu));
+        }
+        let shapes_changed = self.shapes_uploaded.as_ref().is_none_or(|sent| {
+            sent.len() != view.world_shapes.len()
+                || sent
+                    .iter()
+                    .zip(&view.world_shapes)
+                    .any(|((a, x), (b, y))| a != b || !std::sync::Arc::ptr_eq(x, y))
+        });
+        if shapes_changed && let Some(renderer) = &mut self.world_shapes {
+            let mut vertices = vec![];
+            for shape in view.world_shapes.values().flat_map(|s| s.iter()) {
+                let rgba = |c: [u8; 4]| c.map(|v| f32::from(v) / 255.0);
+                bri_render::world_shapes::box_faces(
+                    Vec3::from(shape.min),
+                    Vec3::from(shape.max),
+                    shape.outside().map(rgba),
+                    rgba(shape.inside),
+                    &mut vertices,
+                );
+            }
+            renderer.set_faces(frame.device, &vertices)?;
+            self.shapes_uploaded = Some(view.world_shapes.clone());
         }
         if let Some(building) = &self.building
             && let (Some(meshes), Some(materials)) = (&self.meshes, &self.materials)
@@ -9612,6 +9738,7 @@ impl PlatformApp for App {
                     &self.world_items,
                     image_meshes,
                     crate::client_code::DrawnBodies { skeletons, lives },
+                    std::sync::Arc::new(passages.clone()),
                 ))
             } else {
                 Default::default()
@@ -9752,6 +9879,9 @@ impl PlatformApp for App {
         }
         if let Some(lines) = &self.selection_lines {
             lines.prepare(frame.queue, effects_camera.view_projection);
+        }
+        if let Some(shapes) = &self.world_shapes {
+            shapes.prepare(frame.queue, effects_camera.view_projection, effects_camera.position);
         }
         weather_renderer.prepare(
             frame.queue,
@@ -10023,6 +10153,9 @@ impl PlatformApp for App {
         }
         if let Some(lines) = &self.selection_lines {
             lines.render(&mut pass);
+        }
+        if let Some(shapes) = &self.world_shapes {
+            shapes.render(&mut pass);
         }
         if let Some(vignette) = &self.vignette {
             vignette.render(&mut pass);
@@ -10490,19 +10623,18 @@ mod tests {
         assert_eq!(list, ["A.example.com", "b.example.com"]);
         std::fs::remove_dir_all(&dir).unwrap();
     }
-    #[test]
-    #[ignore = "requires generated native content; no window, GPU or audio device"]
-    fn app_weapon_effect_path_consumes_cues_once_and_syncs_projectile_trails() -> anyhow::Result<()>
-    {
+    use crate::testing::content_root::ContentRoot;
+    crate::testing::synthetic_and_content!(
+        ContentRoot: app_weapon_effect_path_consumes_cues_once_and_syncs_projectile_trails,
+        native_weapon_catalog_startup_and_headless_host,
+    );
+
+    fn app_weapon_effect_path_consumes_cues_once_and_syncs_projectile_trails(
+        f: &ContentRoot,
+    ) -> anyhow::Result<()> {
         use super::*;
-        let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)?
-            .as_nanos();
-        let state = workspace
-            .join("target")
-            .join(format!("weapon-fx-app-{stamp}"));
-        let mut app = App::load(&workspace.join("content"), &state, (320, 240))?;
+        let state = f.state()?;
+        let mut app = App::load(&f.root, state.path(), (320, 240))?;
         let trail = app
             .content
             .weapons
@@ -10534,7 +10666,8 @@ mod tests {
             .library
             .emitters
             .iter()
-            .find(|emitter| emitter.lifetime > 0.)
+            // Finite, and sure to emit within the first 0.1 s step.
+            .find(|emitter| emitter.lifetime > 0. && emitter.period + emitter.period_variance <= 0.1)
             .context("Native effects pack has no finite emitter")?
             .id
             .clone();
@@ -10623,30 +10756,38 @@ mod tests {
         Ok(())
     }
 
+    /// The base game's items (ids outside any Add-On's namespace) the
+    /// root's base weapons package carries.
+    fn base_weapon_items(root: &std::path::Path) -> anyhow::Result<usize> {
+        let dir = bri_package::packages::PackageSet::load_root(root)?.role_dir(root, "weapons")?;
+        let pack = bri_weapons::Pack::from_json(&std::fs::read(dir.join("weapons.json"))?)?;
+        Ok(pack.items.keys().filter(|id| !id.contains(':')).count())
+    }
+
     #[test]
-    #[ignore = "requires generated native content and loopback QUIC; no window, GPU or audio device"]
-    fn native_weapon_catalog_startup_and_headless_host() -> anyhow::Result<()> {
+    #[ignore = "requires generated v20 content"]
+    fn the_stock_weapons_pack_has_v20s_21_items() -> anyhow::Result<()> {
+        assert_eq!(base_weapon_items(&ContentRoot::content()?.root)?, 21);
+        Ok(())
+    }
+
+    fn native_weapon_catalog_startup_and_headless_host(f: &ContentRoot) -> anyhow::Result<()> {
         use super::*;
         use std::time::Instant;
-        let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)?
-            .as_nanos();
-        let state = workspace
-            .join("target")
-            .join(format!("weapon-startup-{stamp}"));
-        let mut app = App::load(&workspace.join("content"), &state, (960, 720))?;
-        assert!(
-            app.content
-                .paths
-                .effects_runtime
-                .ends_with("effects-runtime-pack-005")
+        let state_dir = f.state()?;
+        let state = state_dir.path().to_path_buf();
+        let mut app = App::load(&f.root, &state, (960, 720))?;
+        assert_eq!(
+            app.content.paths.effects_runtime.canonicalize()?,
+            bri_package::packages::PackageSet::load_root(&f.root)?
+                .role_dir(&f.root, "effects_runtime")?
+                .canonicalize()?
         );
-        // v20's 21 items, plus any a loaded Add-On adds (the default
+        // The base pack's items, plus any a loaded Add-On adds (the default
         // Add-Ons, once a checkout's content has them installed).
         let items = &app.content.weapons.pack.items;
         let base = items.keys().filter(|id| !id.contains(':')).count();
-        assert_eq!(base, 21);
+        assert_eq!(base, base_weapon_items(&f.root)?);
         let all = items.len();
         assert_eq!(app.tool_ui.server_catalog().items.len(), all);
         assert_eq!(app.content.datablocks["ItemData"].len(), all);
@@ -10784,15 +10925,17 @@ mod tests {
                 .is_some_and(|v| v.tools[&v.owner].selected == Some(2))
                 && a.pending_requests() == 0
         })?;
-        assert_eq!(app.ui.core.hud.tool_name, "Printer");
+        // The HUD names a tool by its uiName as the pack writes it.
+        let ui_name = |app: &App, id: &str| app.content.weapons.pack.items[id].ui_name.clone();
+        assert_eq!(app.ui.core.hud.tool_name, ui_name(&app, bri_weapons::PRINTER));
         app.ui.core.request(UiAction::UseTool { slot: 1 });
         until(&mut app, |a| {
             a.network_view()
                 .is_some_and(|v| v.tools[&v.owner].selected == Some(1))
                 && a.pending_requests() == 0
         })?;
-        // v20 names it "wrench" (wrenchItem uiName), lower case.
-        assert_eq!(app.ui.core.hud.tool_name, "wrench");
+        // As written: v20 names it "wrench" (wrenchItem uiName), lower case.
+        assert_eq!(app.ui.core.hud.tool_name, ui_name(&app, bri_weapons::WRENCH));
         let owner = app.network_view().unwrap().owner;
         assert!(app.world_items.instances().any(|(identity, _)| {
             identity == crate::world_items::ItemIdentity::Mounted(owner, 0)
@@ -11115,19 +11258,73 @@ mod tests {
         assert_eq!(distance, 0.0);
         assert!(pivot.distance(feet + Vec3::Y * 1.95) < 1e-5, "{pivot}");
     }
-    /// Max, a21: riding a horse, the chase camera sat 2.3 over the horse's
-    /// feet. v20's rider looks through the horse's own player camera: the
-    /// middle of its 2.4 tall box plus `cameraVerticalOffset` 2.3, 8 back.
+    /// A vehicle pack on disk, and the roles its vehicles play.
+    struct Mounts {
+        assets: crate::vehicles::VehicleAssets,
+        /// Each vehicle, and whether the client predicts its first seat.
+        predicted: Vec<(String, bool)>,
+        car: String,
+        tank: String,
+        horse: String,
+        /// The player-type mount the tank carries as its turret.
+        tank_turret: String,
+    }
+    impl Mounts {
+        fn synthetic() -> anyhow::Result<Self> {
+            use bri_vehicles::testing as vt;
+            let scratch = crate::testing::ScratchDir::new("app-mounts")?;
+            crate::testing::vehicles::write_pack(scratch.path())?;
+            let assets = crate::vehicles::VehicleAssets::load(scratch.path())?;
+            Ok(Self {
+                assets,
+                // The ball has no seat; the tumble body's seat has no controls.
+                predicted: vt::ALL
+                    .map(|id| (id.to_string(), ![vt::BALL, vt::TUMBLE].contains(&id)))
+                    .into(),
+                car: vt::CAR.into(),
+                tank: vt::TANK.into(),
+                horse: vt::HORSE.into(),
+                tank_turret: crate::testing::vehicles::TANK_TURRET.into(),
+            })
+        }
+        fn content() -> anyhow::Result<Self> {
+            let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../content/vehicles-pack-012");
+            Ok(Self {
+                assets: crate::vehicles::VehicleAssets::load(&root)?,
+                predicted: [
+                    ("v20.vehicle.jeepvehicle", true),
+                    ("v20.vehicle.tankvehicle", true),
+                    ("v20.vehicle.flyingwheeledjeepvehicle", true),
+                    ("v20.vehicle.magiccarpetvehicle", true),
+                    ("v20.vehicle.skivehicle", true),
+                    ("v20.vehicle.horsearmor", true),
+                    ("v20.vehicle.rowboatarmor", true),
+                    ("v20.vehicle.cannonturret", true),
+                    ("v20.vehicle.tankturretplayer", true),
+                    ("v20.vehicle.deathvehicle", false),
+                ]
+                .map(|(id, p)| (id.to_string(), p))
+                .into(),
+                car: "v20.vehicle.jeepvehicle".into(),
+                tank: "v20.vehicle.tankvehicle".into(),
+                horse: "v20.vehicle.horsearmor".into(),
+                tank_turret: "v20.vehicle.tankturretplayer".into(),
+            })
+        }
+    }
+    crate::testing::synthetic_and_content!(
+        Mounts: the_client_predicts_the_live_vehicles_and_mounts_it_controls,
+        a_horse_rider_sees_the_horse_player_camera
+    );
     /// Which first seats the client predicts, and when it starts again: a
     /// live vehicle a player steers or a player-type mount they control; a
     /// respawn (new id), a new definition or scale restarts it; the tumble
     /// body (no controls) and a destroyed vehicle show the host's poses.
-    #[test]
-    #[ignore = "requires the converted native vehicle pack; CPU only"]
-    fn the_client_predicts_the_live_vehicles_and_mounts_it_controls() -> anyhow::Result<()> {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../content/vehicles-pack-012");
-        let assets = crate::vehicles::VehicleAssets::load(&root)?;
+    fn the_client_predicts_the_live_vehicles_and_mounts_it_controls(
+        fx: &Mounts,
+    ) -> anyhow::Result<()> {
+        let assets = &fx.assets;
         let info = |definition: &str| bri_sim::session::VehicleInfo {
             id: 7,
             definition: definition.into(),
@@ -11139,27 +11336,16 @@ mod tests {
         let target = |info: &bri_sim::session::VehicleInfo, strafe: bool| {
             super::drive_target(info, assets.definition(&info.definition).unwrap(), strafe)
         };
-        for (definition, predicted) in [
-            ("v20.vehicle.jeepvehicle", true),
-            ("v20.vehicle.tankvehicle", true),
-            ("v20.vehicle.flyingwheeledjeepvehicle", true),
-            ("v20.vehicle.magiccarpetvehicle", true),
-            ("v20.vehicle.skivehicle", true),
-            ("v20.vehicle.horsearmor", true),
-            ("v20.vehicle.rowboatarmor", true),
-            ("v20.vehicle.cannonturret", true),
-            ("v20.vehicle.tankturretplayer", true),
-            ("v20.vehicle.deathvehicle", false),
-        ] {
+        for (definition, predicted) in &fx.predicted {
             for strafe in [false, true] {
                 assert_eq!(
                     target(&info(definition), strafe).is_some(),
-                    predicted,
+                    *predicted,
                     "{definition}, strafe steering {strafe}"
                 );
             }
         }
-        let jeep = info("v20.vehicle.jeepvehicle");
+        let jeep = info(&fx.car);
         let base = target(&jeep, false).unwrap();
         let destroyed = bri_sim::session::VehicleInfo {
             destroyed: true,
@@ -11167,13 +11353,16 @@ mod tests {
         };
         assert_eq!(target(&destroyed, false), None, "a wreck is the host's");
         for changed in [
-            bri_sim::session::VehicleInfo { id: 8, ..jeep.clone() },
+            bri_sim::session::VehicleInfo {
+                id: 8,
+                ..jeep.clone()
+            },
             bri_sim::session::VehicleInfo {
                 scale: 2.0,
                 ..jeep.clone()
             },
             bri_sim::session::VehicleInfo {
-                definition: "v20.vehicle.tankvehicle".into(),
+                definition: fx.tank.clone(),
                 ..jeep.clone()
             },
         ] {
@@ -11181,14 +11370,23 @@ mod tests {
         }
         Ok(())
     }
-    #[test]
-    #[ignore = "requires the converted native vehicle pack; CPU only"]
-    fn a_horse_rider_sees_the_horse_player_camera() -> anyhow::Result<()> {
+    /// Max, a21: riding a horse, the chase camera sat 2.3 over the horse's
+    /// feet. v20's rider looks through the horse's own player camera: the
+    /// middle of its 2.4 tall box plus `cameraVerticalOffset` 2.3, 8 back.
+    fn a_horse_rider_sees_the_horse_player_camera(fx: &Mounts) -> anyhow::Result<()> {
         use glam::Vec3;
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../content/vehicles-pack-012");
-        let assets = crate::vehicles::VehicleAssets::load(&root)?;
-        let horse = assets.definition("v20.vehicle.horsearmor").unwrap();
+        let assets = &fx.assets;
+        // v20's camera pivot: the middle of the mount's box plus its
+        // `cameraVerticalOffset`, `cameraMaxDist` back, tilted `cameraTilt`.
+        let pivot_height = |d: &bri_vehicles::Definition| {
+            let (low, high) = d
+                .collision_hulls
+                .iter()
+                .flatten()
+                .fold((f32::MAX, f32::MIN), |(l, h), p| (l.min(p[1]), h.max(p[1])));
+            (high - low) * 0.5 + d.camera.offset
+        };
+        let horse = assets.definition(&fx.horse).unwrap();
         assert_eq!(
             horse.seat_role(0),
             bri_vehicles::schema::SeatRole::Actor,
@@ -11196,35 +11394,58 @@ mod tests {
         );
         let feet = Vec3::new(10.0, 4.0, -6.0);
         let (distance, pivot, tilt) = super::mount_camera(horse, feet, 1.0);
+        assert_eq!(distance, horse.camera.max_dist);
+        assert!(
+            pivot.distance(feet + Vec3::Y * pivot_height(horse)) < 1e-4,
+            "{pivot}"
+        );
+        assert!((tilt - horse.camera.tilt).abs() < 1e-6);
+        // The other player-type mounts use their own boxes and offsets.
+        let turret = assets.definition(&fx.tank_turret).unwrap();
+        let (_, pivot, _) = super::mount_camera(turret, feet, 1.0);
+        assert!(
+            pivot.distance(feet + Vec3::Y * pivot_height(turret)) < 1e-4,
+            "{pivot}"
+        );
+        // The Tank's gunner looks through that turret, not the Tank.
+        let tank = assets.definition(&fx.tank).unwrap();
+        assert_eq!(tank.seat_role(2), bri_vehicles::schema::SeatRole::Gunner);
+        let carried = assets.attachment_definition(tank).unwrap();
+        assert_eq!(carried.id, fx.tank_turret);
+        Ok(())
+    }
+    /// v20's own numbers: the horse's 2.4 tall box and 2.3 offset, 8 back,
+    /// tilted 0.261; the tank turret's 0.85 half height; its 8 distance.
+    #[test]
+    #[ignore = "requires generated v20 content"]
+    fn original_mount_cameras() -> anyhow::Result<()> {
+        use glam::Vec3;
+        let fx = Mounts::content()?;
+        let feet = Vec3::new(10.0, 4.0, -6.0);
+        let horse = fx.assets.definition(&fx.horse).unwrap();
+        let (distance, pivot, tilt) = super::mount_camera(horse, feet, 1.0);
         assert_eq!(distance, 8.0);
         assert!(pivot.distance(feet + Vec3::Y * 3.5) < 1e-4, "{pivot}");
         assert!((tilt - 0.261).abs() < 1e-6);
-        // The other player-type mounts use their own boxes and offsets.
-        let turret = assets.definition("v20.vehicle.tankturretplayer").unwrap();
+        let turret = fx.assets.definition(&fx.tank_turret).unwrap();
         let (_, pivot, _) = super::mount_camera(turret, feet, 1.0);
         assert!(
             pivot.distance(feet + Vec3::Y * (0.85 + 2.3)) < 1e-4,
             "{pivot}"
         );
-        // The Tank's gunner looks through that turret, not the Tank.
-        let tank = assets.definition("v20.vehicle.tankvehicle").unwrap();
-        assert_eq!(tank.seat_role(2), bri_vehicles::schema::SeatRole::Gunner);
-        let carried = assets.attachment_definition(tank).unwrap();
-        assert_eq!(carried.id, "v20.vehicle.tankturretplayer");
+        let tank = fx.assets.definition(&fx.tank).unwrap();
+        let carried = fx.assets.attachment_definition(tank).unwrap();
         assert_eq!(carried.camera.max_dist, 8.0);
         Ok(())
     }
 
-    #[test]
-    #[ignore = "requires generated native content; no window, GPU or audio device"]
-    fn leaving_a_game_forgets_its_seat_eyes_and_liquids() -> anyhow::Result<()> {
+    crate::testing::synthetic_and_content!(
+        ContentRoot: leaving_a_game_forgets_its_seat_eyes_and_liquids
+    );
+    fn leaving_a_game_forgets_its_seat_eyes_and_liquids(f: &ContentRoot) -> anyhow::Result<()> {
         use super::*;
-        let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)?
-            .as_nanos();
-        let state = workspace.join("target").join(format!("leave-game-{stamp}"));
-        let mut app = App::load(&workspace.join("content"), &state, (320, 240))?;
+        let scratch = f.state()?;
+        let mut app = App::load(&f.root, scratch.path(), (320, 240))?;
         // What a game in progress leaves behind: a seat, a rider's eye, a
         // tumble, eyes the camera drew from and the map's liquids.
         app.seated_on = Some((7, 1));
@@ -11257,7 +11478,6 @@ mod tests {
         assert_eq!(app.rendered_roll, 0.0);
         assert!(app.drawn_controls.is_none());
         assert!(app.liquid_cache.is_none());
-        let _ = std::fs::remove_dir_all(&state);
         Ok(())
     }
 }

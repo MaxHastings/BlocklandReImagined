@@ -1,15 +1,51 @@
-//! Original native content, no window or desktop input.
+//! Every print on a printable brick, and the bricks whose authored colours
+//! are literal RGB, drawn offscreen (no window or desktop input) from
+//! made-up materials and bricks (`support::brick_fixture`) and again,
+//! ignored, from the generated v20 packs.
+#[macro_use]
+mod support;
+
 use anyhow::{Context, Result, ensure};
-use bri_client::{materials::BrickMaterials, world_scene::build_world_scene_materials};
+use bri_client::world_scene::build_world_scene_materials;
 use bri_content::brick::Catalog;
 use bri_net::protocol::PublicWorld;
 use bri_render::scene::{Camera, SceneData, SceneRenderer, create_depth};
-use bri_sim::definitions::Definitions;
 use bri_ui::gpu::Headless;
 use bri_world::{Brick, ContentRef};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use support::{brick_fixture::BrickFixture, files::repo_root, gpu};
 
-fn render(gpu: &Headless, scene: &SceneData, path: &Path) -> Result<()> {
+synthetic_and_content!(BrickFixture: surfaces_all_prints_and_sentinels);
+
+#[test]
+#[ignore = "requires generated v20 content"]
+fn the_stock_materials_carry_77_prints() -> Result<()> {
+    let f = BrickFixture::content()?;
+    ensure!(
+        f.materials.bundle.prints.len() == 77,
+        "Re-audit changed print scope"
+    );
+    Ok(())
+}
+
+/// A printable brick for each print aspect: the stock catalog's selectable
+/// brick of that aspect, or the fixture's one printable brick.
+fn printable_for(f: &BrickFixture, catalog: Option<&Catalog>, aspect: &str) -> Result<String> {
+    let Some(catalog) = catalog else {
+        return Ok(f.printable.clone());
+    };
+    let aspect = if aspect == "Letters" { "2x2f" } else { aspect };
+    Ok(catalog
+        .bricks
+        .iter()
+        .find(|b| b.selectable() && b.print_aspect_ratio.as_deref() == Some(aspect))
+        .with_context(|| format!("No printable brick for {aspect}"))?
+        .id
+        .clone())
+}
+
+/// Draw `scene` framed whole and require at least `min_pixels` covered.
+fn render(gpu: &Headless, scene: &SceneData, path: &Path, min_pixels: usize) -> Result<()> {
     let size = wgpu::Extent3d {
         width: 1024,
         height: 1024,
@@ -95,7 +131,7 @@ fn render(gpu: &Headless, scene: &SceneData, path: &Path) -> Result<()> {
     let occupied = pixels.chunks_exact(4).filter(|p| *p != background).count();
     // Sparse individual bricks cover a small fraction of this diagnostic grid.
     ensure!(
-        occupied > 10_000,
+        occupied > min_pixels,
         "Empty brick gallery {}: {occupied} pixels",
         path.display()
     );
@@ -109,24 +145,16 @@ fn render(gpu: &Headless, scene: &SceneData, path: &Path) -> Result<()> {
     Ok(())
 }
 
-#[test]
-#[ignore = "requires local converted original assets; offscreen only"]
-fn original_surfaces_all_prints_and_sentinels() -> Result<()> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let content = root.join("content");
-    let materials = BrickMaterials::load(&content.join("brick-materials-002"))?;
-    let catalog: Catalog = serde_json::from_slice(&std::fs::read(
-        content.join("stock-catalog-004/stock-catalog.json"),
-    )?)?;
-    let definitions = Definitions::load(
-        &content.join("stock-catalog-004"),
-        &content.join("maps-pass-008"),
-    )?;
-    let meshes = definitions
-        .entries
-        .into_iter()
-        .map(|(id, def)| (id, def.mesh))
-        .collect();
+fn surfaces_all_prints_and_sentinels(f: &BrickFixture) -> Result<()> {
+    let materials = &f.materials;
+    let meshes = &f.meshes;
+    let catalog: Option<Catalog> = if f.content {
+        Some(serde_json::from_slice(&std::fs::read(
+            repo_root().join("content/stock-catalog-004/stock-catalog.json"),
+        )?)?)
+    } else {
+        None
+    };
     let mut world = PublicWorld {
         name: "Original prints".into(),
         map_id: "gallery".into(),
@@ -139,31 +167,20 @@ fn original_surfaces_all_prints_and_sentinels() -> Result<()> {
     };
     let mut records = vec![];
     for (index, print) in materials.bundle.prints.iter().enumerate() {
-        let aspect = if print.aspect == "Letters" {
-            "2x2f"
-        } else {
-            &print.aspect
-        };
-        let entry = catalog
-            .bricks
-            .iter()
-            .find(|b| b.selectable() && b.print_aspect_ratio.as_deref() == Some(aspect))
-            .with_context(|| format!("No printable brick for {aspect}"))?;
+        let printable = printable_for(f, catalog.as_ref(), &print.aspect)?;
         let mut brick = Brick::new(
-            ContentRef::Resolved(entry.id.clone()),
+            ContentRef::Resolved(printable.clone()),
             [(index % 11) as f32 * 2.8, 0.0, (index / 11) as f32 * 3.6],
             1,
         );
         brick.print = Some(ContentRef::Resolved(print.id.clone()));
         brick.color = (index % 3) as u8;
         world.bricks.insert(index as u64 + 1, brick);
-        records.push(serde_json::json!({"print":print.id,"brick":entry.id,"position_index":index}));
+        records
+            .push(serde_json::json!({"print":print.id,"brick":printable,"position_index":index}));
     }
-    let scene = build_world_scene_materials(&world, &meshes, 4_000_000, Some(&materials))?;
-    ensure!(
-        materials.bundle.prints.len() == 77,
-        "Re-audit changed print scope"
-    );
+    let scene = build_world_scene_materials(&world, meshes, 4_000_000, Some(materials))?;
+    ensure!(!materials.bundle.prints.is_empty(), "No prints");
     for print in &materials.bundle.prints {
         let index = scene
             .materials
@@ -176,33 +193,43 @@ fn original_surfaces_all_prints_and_sentinels() -> Result<()> {
             print.id
         );
     }
-    let out = root.join("artifacts/brick-materials-gallery");
+    let out = if f.content {
+        repo_root().join("artifacts/brick-materials-gallery")
+    } else {
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("brick-materials-gallery-synthetic")
+    };
     std::fs::create_dir_all(&out)?;
-    let gpu = Headless::new()?;
-    render(&gpu, &scene, &out.join("all-77-prints.png"))?;
+    let gpu = gpu::turn()?;
+    // The stock grid fills far more of the frame than the fixture's few
+    // bricks.
+    let min_pixels = if f.content { 10_000 } else { 1_000 };
+    render(&gpu, &scene, &out.join("all-prints.png"), min_pixels)?;
     let print_triangles = scene.indices.len() / 3;
     let print_omissions = scene.omissions;
     world.bricks.clear();
-    for (index, id) in [
-        "v20/brick/bricktreasurechestdata",
-        "v20/brick/brickgravestonedata",
-        "v20/brick/brickpumpkinbasedata",
-    ]
-    .iter()
-    .enumerate()
-    {
-        ensure!(
-            meshes.contains_key(*id),
-            "Missing special native brick {id}"
-        );
+    // Bricks whose authored colours are literal RGB, in three paints; the
+    // stock pumpkin base also carries its face.
+    let specials: Vec<String> = if f.content {
+        [
+            "v20/brick/bricktreasurechestdata",
+            "v20/brick/brickgravestonedata",
+            "v20/brick/brickpumpkinbasedata",
+        ]
+        .map(String::from)
+        .into()
+    } else {
+        vec![f.literal.clone()]
+    };
+    for (index, id) in specials.iter().enumerate() {
+        ensure!(meshes.contains_key(id), "Missing special native brick {id}");
         for color in 0..3 {
             let mut brick = Brick::new(
-                ContentRef::Resolved((*id).into()),
+                ContentRef::Resolved(id.clone()),
                 [7.0 + index as f32 * 7.0, 0.0, 5.0 + color as f32 * 7.0],
                 1,
             );
             brick.color = color;
-            if index == 2 {
+            if id == "v20/brick/brickpumpkinbasedata" {
                 let mut face = brick.clone();
                 face.definition = ContentRef::Resolved("v20/brick/brickpumpkinfacedata".into());
                 world.bricks.insert(100 + u64::from(color), face);
@@ -212,7 +239,7 @@ fn original_surfaces_all_prints_and_sentinels() -> Result<()> {
                 .insert((index * 3 + usize::from(color) + 1) as u64, brick);
         }
     }
-    let special = build_world_scene_materials(&world, &meshes, 4_000_000, Some(&materials))?;
+    let special = build_world_scene_materials(&world, meshes, 4_000_000, Some(materials))?;
     ensure!(
         special.vertices.iter().all(|v| v.color[3] >= 0.0),
         "Legacy sentinel leaked into alpha"
@@ -222,9 +249,14 @@ fn original_surfaces_all_prints_and_sentinels() -> Result<()> {
             .omissions
             .iter()
             .any(|s| s.contains("out-of-range literal input conversion remains unverified")),
-        "Unverified pumpkin RGB interpretation must remain visible"
+        "Unverified literal RGB interpretation must remain visible"
     );
-    render(&gpu, &special, &out.join("paint-offset-special-bricks.png"))?;
+    render(
+        &gpu,
+        &special,
+        &out.join("paint-offset-special-bricks.png"),
+        min_pixels,
+    )?;
     std::fs::write(
         out.join("report.json"),
         serde_json::to_vec_pretty(&serde_json::json!({

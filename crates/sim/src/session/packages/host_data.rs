@@ -1,16 +1,12 @@
 //! What an Add-On's rules keep on the host between games and restarts:
 //! Slayer's saved configs, the last game's settings for Auto Start With
-//! Server, its Bonus Kills texts, and Add-On settings of the whole server
-//! (`scope: server`, Slayer's `$Pref::Slayer::Server::*`). The host keeps
-//! one small JSON map per Add-On ([`AddOnData`]); rules read and write it
+//! Server and its Bonus Kills texts. The host keeps one small JSON map per
+//! Add-On ([`AddOnData`]); rules read and write it
 //! with `host_data` and `set_host_data`.
 use super::*;
 use std::sync::Mutex;
 
 pub use bri_package_runtime::ops::{MAX_HOST_KEYS, MAX_HOST_VALUE};
-/// The key the engine keeps an Add-On's server-wide settings under; rules'
-/// own keys are identifiers, so never this.
-pub(in crate::session) const SERVER_SETTINGS: &str = "!settings";
 
 /// Where a host keeps Add-Ons' data.
 pub trait AddOnData: Send + Sync {
@@ -63,7 +59,7 @@ impl Session {
         for id in ids {
             let mut data = store.load(&id);
             data.retain(|k, v| {
-                (rules_key(k) || k == SERVER_SETTINGS)
+                rules_key(k)
                     && serde_json::to_vec(v).is_ok_and(|b| b.len() <= MAX_HOST_VALUE)
             });
             while data.len() > MAX_HOST_KEYS {

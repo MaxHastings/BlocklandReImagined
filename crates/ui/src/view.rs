@@ -421,6 +421,14 @@ impl View {
         self.walk()
             .find(|&n| self.nodes[n].ctrl.command.as_deref() == Some(command))
     }
+    /// The yes (or no) button of a message box: the one whose command
+    /// calls the dialog's `yesCallback` (`noCallback`), however the layout
+    /// wires it ([`message_answer`]).
+    pub fn answer_button(&self, yes: bool) -> Option<NodeId> {
+        self.walk().find(|&n| {
+            self.nodes[n].ctrl.command.as_deref().and_then(message_answer) == Some(yes)
+        })
+    }
     /// Find a control by displayed/authored text within a class.
     pub fn by_text(&self, class: &str, text: &str) -> Option<NodeId> {
         self.walk()
@@ -431,6 +439,22 @@ impl View {
     }
     pub fn state(&mut self, id: NodeId) -> &mut NodeState {
         &mut self.nodes[id].state
+    }
+    /// Show `icon` in a bitmap control; [`IconRef::None`] restores the
+    /// layout's own image (its authored placeholder).
+    ///
+    /// [`IconRef::None`]: crate::api::IconRef::None
+    pub fn set_icon(&mut self, id: NodeId, icon: &crate::api::IconRef) {
+        use crate::api::IconRef;
+        let state = &mut self.nodes[id].state;
+        state.bitmap = match icon {
+            IconRef::Pack(p) => Some(p.clone()),
+            _ => None,
+        };
+        state.external_texture = match icon {
+            IconRef::External(id) => Some(*id),
+            _ => None,
+        };
     }
     pub fn text_of(&self, id: NodeId) -> String {
         let n = &self.nodes[id];
@@ -2625,6 +2649,21 @@ fn relative_uniform(a: Rect, min: [i32; 2], old: (i32, i32), new: (i32, i32)) ->
         w,
         h,
     )
+}
+
+/// The answer a message box button's command gives: v20 wires its buttons
+/// `MessageCallback(MessageBoxYesNoDlg,MessageBoxYesNoDlg.yesCallback);`,
+/// so the dialog callback it names (`yesCallback`, `noCallback`) is the
+/// answer, whatever the button says. `None` for any other command.
+pub fn message_answer(command: &str) -> Option<bool> {
+    let command = command.to_ascii_lowercase();
+    if command.contains("nocallback") {
+        Some(false)
+    } else if command.contains("yescallback") {
+        Some(true)
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]

@@ -6,7 +6,13 @@
 
 #[macro_use]
 mod variants;
+pub mod avatar_fixture;
 pub mod brick_fixture;
+pub mod content_root;
+pub mod debris_fixture;
 pub mod files;
 pub mod gpu;
+pub mod host_content;
 pub mod item_fixture;
+pub mod minigame;
+pub mod vehicle_fixture;

@@ -30,7 +30,7 @@ fn shapes(map: &str) -> Vec<(String, Option<String>, bool, usize)> {
 }
 
 #[test]
-#[ignore = "needs generated content (map-bundle-017); set BRI_CONTENT"]
+#[ignore = "requires generated v20 content (map-bundle-017, or BRI_CONTENT)"]
 fn bedroom_windows_and_bulb_break_but_kitchen_windows_do_not() {
     for map in [
         "v20/add-ons/map_bedroom/bedroom.mis",
@@ -74,7 +74,7 @@ fn bedroom_windows_and_bulb_break_but_kitchen_windows_do_not() {
 }
 
 #[test]
-#[ignore = "needs generated content (map-bundle-017); set BRI_CONTENT"]
+#[ignore = "requires generated v20 content (map-bundle-017, or BRI_CONTENT)"]
 fn a_player_thrown_at_each_bedroom_shape_hits_its_glass_hard_enough() {
     use bri_sim::{
         player::{MoveInput, Player, PlayerTuning},

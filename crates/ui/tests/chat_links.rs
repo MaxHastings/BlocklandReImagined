@@ -1,5 +1,7 @@
-//! Chat links on the real UI pack: with the cursor toggled on, clicking a
-//! link asks before opening the browser. No OS window or input is created.
+//! Chat links: with the cursor toggled on, clicking a link asks before
+//! opening the browser. Runs on the made-up screens of
+//! `bri_ui::testing::screens_pack` and again, ignored, on the converted UI
+//! pack. No OS window or input is created.
 use bri_ui::{
     api::*,
     binds::{BindMap, Platform},
@@ -11,7 +13,7 @@ use bri_ui::{
     },
     ui::{Ui, UiConfig},
 };
-use std::{path::Path, rc::Rc};
+use std::rc::Rc;
 
 fn click(ui: &mut Ui, x: f32, y: f32) {
     ui.handle_input(InputEvent::MouseMove { x, y });
@@ -28,12 +30,17 @@ fn click(ui: &mut Ui, x: f32, y: f32) {
 }
 
 #[test]
+fn clicking_a_chat_link_asks_before_opening_it_synthetic() {
+    clicking_a_chat_link_asks_before_opening_it_on(bri_ui::testing::screens_pack());
+}
+
+#[test]
+#[ignore = "requires generated v20 content"]
 fn clicking_a_chat_link_asks_before_opening_it() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/ui-pack-004");
-    let Ok(pack) = Pack::load(&dir) else {
-        return;
-    };
-    let pack = Rc::new(pack);
+    clicking_a_chat_link_asks_before_opening_it_on(bri_ui::testing::content_pack("ui-pack-004"));
+}
+
+fn clicking_a_chat_link_asks_before_opening_it_on(pack: Rc<Pack>) {
     let settings = Settings {
         binds: Some(BindMap::defaults(&pack.data.data, 2, 0, Platform::Windows).entries),
         mouse_type: 2,

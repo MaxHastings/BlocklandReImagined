@@ -78,6 +78,7 @@ impl UndoGroup {
             if outside.is_empty() {
                 quiet.push(id);
                 s.close_inspections(id);
+                s.simulation.mark_rebuild(id);
             } else {
                 *budget = budget.saturating_sub(work::CHAIN);
                 if !quiet.is_empty() {
@@ -98,6 +99,7 @@ impl UndoGroup {
                 }
                 s.tool_kill_brick(owner, id)?;
             }
+            s.simulation.charge_rebuilds(budget);
             self.first.get_or_insert(id);
         }
         if !quiet.is_empty() {
@@ -116,6 +118,7 @@ impl CopyWork for UndoGroup {
             total,
             placed: 0,
             refused: 0,
+            ..Default::default()
         }
     }
     fn step(&mut self, s: &mut Session, owner: OwnerId, budget: &mut u32) -> Result<bool> {
@@ -226,7 +229,7 @@ impl UndoCut {
             s.push_copy_undo(owner, entry, self.by);
             return Reply::Undone(None);
         }
-        crate::session::copy_jobs::drop_later(self.bricks);
+        crate::drop_later::drop_later(self.bricks);
         Reply::Undone(self.back.first().copied())
     }
 
@@ -244,6 +247,8 @@ impl UndoCut {
             if let Some(brick) = s.simulation.state().bricks.get(&id) {
                 self.taken.push(s.unlit(id, brick));
                 slice.push(id);
+                s.simulation.mark_rebuild(id);
+                s.simulation.charge_rebuilds(budget);
             }
         }
         if !slice.is_empty() {
@@ -265,6 +270,7 @@ impl UndoCut {
                 self.retaken.push(id);
                 s.dirty.insert(id);
             }
+            s.simulation.charge_rebuilds(budget);
         }
         if self.retaken.len() != before {
             s.simulation.settle();
@@ -280,6 +286,7 @@ impl CopyWork for UndoCut {
             total: self.bricks.len(),
             placed: 0,
             refused: 0,
+            ..Default::default()
         }
     }
     fn step(&mut self, s: &mut Session, owner: OwnerId, budget: &mut u32) -> Result<bool> {
@@ -316,6 +323,7 @@ impl CopyWork for UndoCut {
                         break;
                     }
                 }
+                s.simulation.charge_rebuilds(budget);
             }
             if self.back.len() != before {
                 s.simulation.settle();
@@ -343,6 +351,8 @@ impl CopyWork for UndoCut {
             self.back.pop();
             if s.simulation.state().bricks.contains_key(&id) {
                 slice.push(id);
+                s.simulation.mark_rebuild(id);
+                s.simulation.charge_rebuilds(budget);
             }
         }
         if !slice.is_empty() {
@@ -430,11 +440,11 @@ impl CopyWork for UndoEdits {
             total: self.len(),
             placed: 0,
             refused: 0,
+            ..Default::default()
         }
     }
     fn step(&mut self, s: &mut Session, _: OwnerId, budget: &mut u32) -> Result<bool> {
-        let world = s.simulation.state();
-        let palette = world.palette.len();
+        let palette = s.simulation.state().palette.len();
         let mut restored = Vec::new();
         while self.next < self.len() {
             if !spend(budget, work::EDIT) {
@@ -446,7 +456,7 @@ impl CopyWork for UndoEdits {
                 Edits::Looks(looks) => looks[i].0,
                 Edits::Wrenched(bricks) => bricks[i].0,
             };
-            let Some(now) = world.bricks.get(&id) else {
+            let Some(now) = s.simulation.state().bricks.get(&id) else {
                 continue;
             };
             if !self.actor.trusted(now.owner, level::FULL) {
@@ -463,8 +473,13 @@ impl CopyWork for UndoEdits {
                 }
                 Edits::Wrenched(bricks) => copy_edits::wrenched_as(now, &bricks[i].1),
             };
+            let collision = next.colliding != now.colliding;
             self.first.get_or_insert(id);
             restored.push((id, next));
+            if collision {
+                s.simulation.mark_rebuild(id);
+                s.simulation.charge_rebuilds(budget);
+            }
         }
         if !restored.is_empty() {
             s.dirty.extend(restored.iter().map(|(id, _)| *id));

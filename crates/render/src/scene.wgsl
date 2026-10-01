@@ -97,12 +97,12 @@ struct Shadows {
     matrices:array<mat4x4<f32>,4>, splits:vec4<f32>, texels:vec4<f32>,
     forward_count:vec4<f32>, params:vec4<f32>, depth_scale:vec4<f32>,
     origin:vec4<f32>,
-    // Lamp shadows (shadow.rs): six faces per slot; per slot the shaded
-    // map light it belongs to (-1 unused); (slots used, face resolution,
+    // Lamp shadows (shadow.rs): six faces per slot; per shaded map light
+    // its slot (-1 none); (slots used, face resolution,
     // world texel per unit of distance, fade distance); position and reach.
     // Faces are tiles of shadow_map layers: (first layer, tiles per row,
     // tile share of a layer).
-    lamp_faces:array<mat4x4<f32>,24>, lamp_lights:vec4<f32>, lamp_params:vec4<f32>,
+    lamp_faces:array<mat4x4<f32>,24>, light_slots:array<vec4<f32>,6>, lamp_params:vec4<f32>,
     // Moving casters' faces the same way, then their resolution.
     lamp_atlas:vec4<f32>, lamp_dynamic:vec4<f32>, lamp_centers:array<vec4<f32>,4>,
     // The map layer (layer cascade + 2 * count): per cascade, caster depth
@@ -378,12 +378,11 @@ fn lamp_taps(atlas:vec4<f32>,size:f32,index:u32,face_uv:vec2<f32>,depth:f32)->f3
     return lit*0.25;
 
 }
-// The shadow slot of shaded map light `light`, or -1.
+// The shadow slot of shaded map light `light` (under 24), or -1: one read
+// of the table shadow.rs fills each frame, not a search of the slots for
+// every light at every pixel.
 fn lamp_slot(light:u32)->i32 {
-    for(var s=0;s<i32(shadows.lamp_params.x);s+=1) {
-        if abs(shadows.lamp_lights[s]-f32(light))<0.5 {return s;}
-    }
-    return -1;
+    return i32(shadows.light_slots[light/4u][light%4u]);
 }
 // Like v20's projected shape shadows, a caster darkens a baked (lightmapped)
 // surface by a fixed share whatever its baked light, so players and vehicles
@@ -572,16 +571,19 @@ fn dynamic_lightmap(left:vec4<f32>,uv:vec2<f32>,position:vec3<f32>,normal:vec3<f
     let ambient=camera.ambient.rgb-baked_ambient();
     return clamp(left.rgb+ambient+light+camera.sun_color.rgb*facing*sun,vec3<f32>(0.0),vec3<f32>(1.0));
 }
+// A stored share of 1 (map_lighting::SHARE_ONE levels of 255), so a
+// lamp's bright spot can hold more than its fitted light.
+const SHARE_SCALE:f32=255.0/128.0;
 // The shares of its lights a lightmap texel holds, four channels to a
 // material slot 1..=6 (map_lighting::DynamicSheet).
 fn channel_shares(uv:vec2<f32>,count:u32)->array<vec4<f32>,6> {
     var seen=array<vec4<f32>,6>();
-    if count>0u {seen[0]=textureSampleLevel(layer1,clamped_exact,uv,0.0);}
-    if count>4u {seen[1]=textureSampleLevel(layer2,clamped_exact,uv,0.0);}
-    if count>8u {seen[2]=textureSampleLevel(layer3,clamped_exact,uv,0.0);}
-    if count>12u {seen[3]=textureSampleLevel(layer4,clamped_exact,uv,0.0);}
-    if count>16u {seen[4]=textureSampleLevel(layer5,clamped_exact,uv,0.0);}
-    if count>20u {seen[5]=textureSampleLevel(layer6,clamped_exact,uv,0.0);}
+    if count>0u {seen[0]=textureSampleLevel(layer1,clamped_exact,uv,0.0)*SHARE_SCALE;}
+    if count>4u {seen[1]=textureSampleLevel(layer2,clamped_exact,uv,0.0)*SHARE_SCALE;}
+    if count>8u {seen[2]=textureSampleLevel(layer3,clamped_exact,uv,0.0)*SHARE_SCALE;}
+    if count>12u {seen[3]=textureSampleLevel(layer4,clamped_exact,uv,0.0)*SHARE_SCALE;}
+    if count>16u {seen[4]=textureSampleLevel(layer5,clamped_exact,uv,0.0)*SHARE_SCALE;}
+    if count>20u {seen[5]=textureSampleLevel(layer6,clamped_exact,uv,0.0)*SHARE_SCALE;}
     return seen;
 }
 // A map light as the map compiler lit a surface at `position` facing it:

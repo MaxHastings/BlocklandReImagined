@@ -368,6 +368,9 @@ pub struct Core {
     pub minigames: MiniGameUiState,
     /// The mini-game whose Add-On Settings window is open (or opening).
     pub minigame_addons: Option<MiniGameId>,
+    /// The Add-On Settings window shows the server-wide settings instead
+    /// (opened from the Admin menu).
+    pub server_addon_settings: bool,
     /// Open `TrustInviteGui` invitation.
     /// Open trust invitations, newest last, one per sender, like mini-game
     /// invitations: the dialog shows the newest and Escape leaves them open.
@@ -1402,6 +1405,7 @@ impl Ui {
             environment: Default::default(),
             minigames: MiniGameUiState::default(),
             minigame_addons: None,
+            server_addon_settings: false,
             trust_invites: Vec::new(),
             name_tags: Vec::new(),
             package_panels: Vec::new(),

@@ -3,6 +3,11 @@
 //! list when an Add-On uses teams. Built natively: v20 had no such window,
 //! and Slayer brought its own GUI. The host sends each setting's kind,
 //! range and choices, checks every change again and says who may make it.
+//!
+//! Opened from the Admin menu instead, the window shows the running
+//! Add-Ons' server-wide settings (RTB's `$Pref::Server::*` preferences),
+//! which only the host changes; they are part of its Server Settings and
+//! saved with its other `$Pref::Server::*` values.
 use super::*;
 use crate::api::*;
 use crate::view::EventKind;
@@ -76,6 +81,8 @@ enum Target {
 pub struct AddOnSettings {
     view: View,
     game: Option<MiniGameId>,
+    /// Showing the server-wide settings rather than a mini-game's.
+    server: bool,
     /// Effective values (defaults filled in) of the game's own settings.
     values: BTreeMap<String, MiniGameSettingValue>,
     teams: Vec<DraftTeam>,
@@ -172,6 +179,7 @@ impl AddOnSettings {
         let mut screen = Self {
             view,
             game: core.minigame_addons,
+            server: core.server_addon_settings,
             values: BTreeMap::new(),
             teams: Vec::new(),
             base: (BTreeMap::new(), Vec::new()),
@@ -426,8 +434,42 @@ impl AddOnSettings {
             .and_then(|id| core.minigames.games.iter().find(|g| g.id == id))
     }
     fn editable(&self, core: &Core) -> bool {
+        if self.server {
+            return core
+                .admin
+                .available(crate::models::admin::AdminFeature::HostOptions)
+                && core
+                    .admin
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|s| s.local_host && s.options.is_some());
+        }
         self.game
             .is_some_and(|g| core.minigames.addon_editable.contains(&g))
+    }
+    /// Whether there is something to show: the server, or a running game.
+    fn open(&self, core: &Core) -> bool {
+        self.server || self.summary(core).is_some()
+    }
+    /// Whether the window shows `s`, by where its value lives.
+    fn mine(&self, s: &MiniGameAddOnSetting) -> bool {
+        s.server == self.server && !s.team
+    }
+    /// The host's revision of what the window shows.
+    fn revision(&self, core: &Core) -> u64 {
+        if self.server {
+            core.admin.revision
+        } else {
+            core.minigames.revision
+        }
+    }
+    /// The host's server-wide values, when it shows them to this player.
+    fn server_values(core: &Core) -> Option<&BTreeMap<String, MiniGameSettingValue>> {
+        core.admin
+            .snapshot
+            .as_ref()
+            .and_then(|s| s.options.as_ref())
+            .map(|o| &o.addon_settings)
     }
     fn setting<'a>(core: &'a Core, key: &str) -> Option<&'a MiniGameAddOnSetting> {
         core.minigames.addon_settings.iter().find(|s| s.key == key)
@@ -438,8 +480,29 @@ impl AddOnSettings {
 
     /// Take the host's values afresh.
     fn load(&mut self, core: &Core) {
-        self.seen = Some(core.minigames.revision);
+        self.seen = Some(self.revision(core));
         self.rules = None;
+        if self.server {
+            let stored = Self::server_values(core);
+            let values: BTreeMap<_, _> = core
+                .minigames
+                .addon_settings
+                .iter()
+                .filter(|s| s.server)
+                .map(|s| {
+                    let v = stored.and_then(|m| m.get(&s.key)).cloned();
+                    (s.key.clone(), v.unwrap_or_else(|| s.default.clone()))
+                })
+                .collect();
+            if let Some(n) = self.view.id("AOS_Window") {
+                self.view.set_text(n, "Add-On Settings: Server");
+            }
+            self.values = values.clone();
+            self.teams.clear();
+            self.base = (values, Vec::new());
+            self.build(core);
+            return;
+        }
         let Some(g) = self.summary(core) else {
             self.values.clear();
             self.teams.clear();
@@ -448,8 +511,17 @@ impl AddOnSettings {
             return;
         };
         let mut values = BTreeMap::new();
-        for s in core.minigames.addon_settings.iter().filter(|s| !s.team) {
-            let v = g.addon_settings.get(&s.key).cloned().unwrap_or_else(|| s.default.clone());
+        for s in core
+            .minigames
+            .addon_settings
+            .iter()
+            .filter(|s| !s.team && !s.server)
+        {
+            let v = g
+                .addon_settings
+                .get(&s.key)
+                .cloned()
+                .unwrap_or_else(|| s.default.clone());
             values.insert(s.key.clone(), v);
         }
         let teams: Vec<DraftTeam> = g
@@ -514,13 +586,13 @@ impl AddOnSettings {
             );
             *y += 24;
         };
-        if self.summary(core).is_none() {
+        if !self.open(core) {
             heading(&mut self.view, &mut y, "That mini-game has ended.");
         }
         let settings = core.minigames.addon_settings.clone();
         let mut last_group = (String::new(), String::new());
         for (i, s) in settings.iter().enumerate() {
-            if s.team || s.avatar.is_some() || self.summary(core).is_none() || !self.shown(core, s, None) {
+            if !self.mine(s) || s.avatar.is_some() || !self.open(core) || !self.shown(core, s, None) {
                 continue;
             }
             if last_group.0 != s.add_on {
@@ -539,7 +611,7 @@ impl AddOnSettings {
             self.row(Target::Game(i), s, &value, 20, y, editable, core);
             y += ROW;
         }
-        if Self::team_setup(core) && self.summary(core).is_some() && self.teams_shown(core) {
+        if Self::team_setup(core) && !self.server && self.summary(core).is_some() && self.teams_shown(core) {
             heading(&mut self.view, &mut y, "Teams");
             for t in 0..self.teams.len() {
                 let team = self.teams[t].clone();
@@ -611,8 +683,19 @@ impl AddOnSettings {
             }
             y = self.player_rows(core, y, editable);
         }
-        if settings.is_empty() {
-            heading(&mut self.view, &mut y, "No running Add-On has settings.");
+        if self.server && settings.iter().any(|s| s.server && s.restart) {
+            heading(&mut self.view, &mut y, RESTART_NOTE);
+        }
+        if !settings.iter().any(|s| s.server == self.server) {
+            heading(
+                &mut self.view,
+                &mut y,
+                if self.server {
+                    "No running Add-On has server settings."
+                } else {
+                    "No running Add-On has settings."
+                },
+            );
         }
         self.view.nodes[rows].ctrl.extent[1] = y + 4;
         self.view.relayout();
@@ -715,7 +798,11 @@ impl AddOnSettings {
         let width = W - 42;
         self.view.add(
             rows,
-            text("GuiTextProfile", Rect::new(x, y, 200 - x + 20, 20), &s.title),
+            text(
+                "GuiTextProfile",
+                Rect::new(x, y, 200 - x + 20, 20),
+                &title(s),
+            ),
         );
         let control = Rect::new(230, y, width - 266, 20);
         let n = match &s.kind {
@@ -768,7 +855,9 @@ impl AddOnSettings {
                 n
             }
         };
-        self.view.set_active(n, editable && !self.locked(core, &s.key));
+        // The host changes server settings, whoever may change a game's.
+        self.view
+            .set_active(n, editable && (self.server || !self.locked(core, &s.key)));
         if !s.help.is_empty() {
             let i = match target {
                 Target::Game(i) | Target::Team(_, i) => i,
@@ -886,6 +975,10 @@ impl AddOnSettings {
             None if !core.minigames.status.is_empty() && self.request.is_some() => {
                 core.minigames.status.clone()
             }
+            None if !core.admin.status.is_empty() && self.server && self.request.is_some() => {
+                core.admin.status.clone()
+            }
+            None if !editable && self.server => "Only the host can change these.".into(),
             None if !editable && self.summary(core).is_some() => {
                 "Only the mini-game's owner or an admin can change these.".into()
             }
@@ -895,11 +988,13 @@ impl AddOnSettings {
         if let Some(n) = self.view.id(STATUS) {
             self.view.set_text(n, text.replace(['<', '>'], ""));
         }
-        let ready = editable && self.request.is_none() && self.summary(core).is_some();
+        let ready = editable && self.request.is_none() && self.open(core);
         for button in [APPLY, APPLY_RESET, RESET, END, NOTIFY] {
             if let Some(n) = self.view.id(button) {
-                self.view.set_active(n, ready);
-                self.view.set_visible(n, editable);
+                // Server settings only apply: there is no game to reset.
+                let shown = editable && (button == APPLY || !self.server);
+                self.view.set_active(n, ready && shown);
+                self.view.set_visible(n, shown);
             }
         }
     }
@@ -909,8 +1004,16 @@ impl AddOnSettings {
             self.status(core, Some(&e));
             return;
         }
-        let Some(game) = self.game else { return };
         let (settings, teams) = self.changes(core);
+        if self.server {
+            if settings.is_empty() {
+                self.status(core, Some("Nothing has changed."));
+            } else {
+                self.apply_server(core, settings);
+            }
+            return;
+        }
+        let Some(game) = self.game else { return };
         // A favourite's vanilla rules go first, then what follows them.
         let rules = self
             .rules
@@ -977,7 +1080,34 @@ impl AddOnSettings {
         self.status(core, None);
     }
 
+    /// Server-wide changes go with the host's Server Settings, saved as
+    /// its `$Pref::Server::*` like the rest.
+    fn apply_server(
+        &mut self,
+        core: &mut Core,
+        settings: Vec<(String, Option<MiniGameSettingValue>)>,
+    ) {
+        let Some(mut options) = core.admin.snapshot.as_ref().and_then(|s| s.options.clone()) else {
+            self.status(core, Some("Host settings unavailable."));
+            return;
+        };
+        for (key, value) in settings {
+            match value {
+                Some(v) => options.addon_settings.insert(key, v),
+                None => options.addon_settings.remove(&key),
+            };
+        }
+        crate::models::admin::options_to_prefs(&options, &mut core.prefs);
+        core.save_settings();
+        self.request = core.admin_request(crate::models::admin::AdminAction::ConfigureHost {
+            options: Box::new(options),
+        });
+        let status = core.admin.status.clone();
+        self.status(core, Some(&status));
+    }
+
     fn close(core: &mut Core) {
+        core.server_addon_settings = false;
         core.minigame_addons = None;
         core.pop(ScreenId::MiniGameAddOns);
     }
@@ -1005,15 +1135,31 @@ impl Screen for AddOnSettings {
         self.take_look(core);
     }
     fn on_update(&mut self, core: &mut Core) {
+        // A server change is answered through the admin state: done once
+        // the host no longer has it pending.
+        if self.server
+            && let Some(id) = self.request
+            && !core.admin.pending.contains_key(&id)
+        {
+            self.request = None;
+            if core.admin.status.starts_with("Rejected") {
+                let status = core.admin.status.clone();
+                self.status(core, Some(&status));
+            } else {
+                self.base = (self.values.clone(), Vec::new());
+                self.status(core, Some("Applied."));
+            }
+        }
         self.take_look(core);
         // The host's values changed (someone else applied, or ours landed):
         // start again from them, unless the player is mid-edit.
-        if self.seen != Some(core.minigames.revision) {
+        let revision = self.revision(core);
+        if self.seen != Some(revision) {
             let (settings, teams) = self.changes(core);
             if self.request.is_none() && settings.is_empty() && teams.is_none() {
                 self.load(core);
             } else {
-                self.seen = Some(core.minigames.revision);
+                self.seen = Some(revision);
                 self.status(core, None);
             }
         }
@@ -1243,5 +1389,18 @@ impl Screen for AddOnSettings {
                 }
             }
         }
+    }
+}
+
+/// What marks a setting the game reads only as it starts.
+pub const RESTART_NOTE: &str = "* Takes effect when the server starts or loads a map.";
+
+/// A setting's label: its title, marked when a change waits for the next
+/// start ([`RESTART_NOTE`]).
+fn title(s: &MiniGameAddOnSetting) -> String {
+    if s.restart {
+        format!("{} *", s.title)
+    } else {
+        s.title.clone()
     }
 }

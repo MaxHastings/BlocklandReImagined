@@ -253,7 +253,7 @@ fn setting_value(value: Dynamic) -> Fallible<Option<SettingValue>> {
     }
 }
 fn read_setting(game: &Dynamic, team: Option<&Dynamic>, key: &str) -> Fallible<Dynamic> {
-    let game = id(game)?;
+    let game = Some(id(game)?);
     let team = team.map(id).transpose()?;
     with_world(|world, _| {
         world
@@ -460,16 +460,6 @@ pub(super) fn register(engine: &mut Engine) {
     engine.register_fn("setting", |game: Dynamic, key: &str| {
         read_setting(&game, None, key)
     });
-    // A server-wide setting (`scope: "server"`), in or out of any game
-    // (Slayer's Create Minigame Rights, read before there is a game).
-    engine.register_fn("server_setting", |key: &str| {
-        with_world(|world, _| {
-            world
-                .setting(SERVER_SETTINGS, None, key)
-                .map(setting_dynamic)
-                .map_err(Into::into)
-        })
-    });
     engine.register_fn("setting_text", |game: Dynamic, key: &str| {
         let game = id(&game)?;
         with_world(|world, _| world.setting_text(game, None, key).map_err(Into::into))
@@ -530,6 +520,22 @@ pub(super) fn register(engine: &mut Engine) {
     });
     engine.register_fn("team_setting", |game: Dynamic, team: Dynamic, key: &str| {
         read_setting(&game, Some(&team), key)
+    });
+    // An RTB preference by its v20 global, `()` when no running Add-On
+    // declares it.
+    engine.register_fn("pref", |name: &str| {
+        if !bri_package::setting::is_pref_global(name) {
+            return fail(format!("`{name}` is not a $Pref::Server:: name"));
+        }
+        with_world(|world, _| Ok(world.pref(name).map_or(Dynamic::UNIT, setting_dynamic)))
+    });
+    engine.register_fn("server_setting", |key: &str| {
+        with_world(|world, _| {
+            world
+                .setting(None, None, key)
+                .map(setting_dynamic)
+                .map_err(Into::into)
+        })
     });
     engine.register_fn("set_setting", |game: Dynamic, key: &str, value: Dynamic| {
         write_setting(&game, None, key, value)

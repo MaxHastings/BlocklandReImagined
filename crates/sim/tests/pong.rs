@@ -36,6 +36,115 @@ fn json(path: &Path) -> anyhow::Result<serde_json::Value> {
     Ok(serde_json::from_slice(&std::fs::read(path)?)?)
 }
 
+/// The Demo Pong save as converted.
+fn native_save() -> anyhow::Result<bri_world::World> {
+    let content = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
+    let world = bri_world::persistence::load(&content.join(PONG))?;
+    assert_eq!(world.name, "Demo Pong");
+    Ok(world)
+}
+
+/// A host's world and what it runs it with.
+struct Host {
+    world: bri_world::World,
+    definitions: Definitions,
+    catalog: bri_events::Catalog,
+    tools: ToolCatalog,
+    weapons: bri_weapons::Pack,
+}
+
+impl Host {
+    /// `world` on the generated native packs, as a dedicated host runs it.
+    fn native(world: bri_world::World) -> anyhow::Result<Self> {
+        let content = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
+        let brick_catalog =
+            serde_json::from_value(json(&content.join("stock-catalog-004/stock-catalog.json"))?)?;
+        let effects =
+            serde_json::from_value(json(&content.join("effects-pass-004/effects.json"))?)?;
+        let materials = serde_json::from_value(json(
+            &content.join("brick-materials-002/brick-materials.json"),
+        )?)?;
+        let weapons = bri_weapons::Pack::from_json(&std::fs::read(
+            content.join("weapons-pack-009/weapons.json"),
+        )?)?;
+        let mut tools = ToolCatalog::from_native(&brick_catalog, &effects, &materials)?;
+        tools.install_items(weapons.items.keys().cloned())?;
+        Ok(Self {
+            world,
+            definitions: Definitions::load(
+                &content.join("stock-catalog-004"),
+                &content.join("maps-pass-008"),
+            )?,
+            catalog: bri_events::Catalog::load(content.join("events-pack-002/catalog.json"))?,
+            tools,
+            weapons,
+        })
+    }
+    /// `world` on the made-up bricks, weapons and event catalog, with one
+    /// light and one emitter to choose.
+    fn synthetic(world: bri_world::World) -> anyhow::Result<Self> {
+        let weapons = bri_weapons::testing::pack();
+        let mut tools = ToolCatalog {
+            lights: [SYNTHETIC_LIGHT.to_string()].into(),
+            emitters: [SYNTHETIC_EMITTER.to_string()].into(),
+            ..Default::default()
+        };
+        tools.install_items(weapons.items.keys().cloned())?;
+        Ok(Self {
+            world,
+            definitions: bri_sim::testing::definitions(),
+            catalog: bri_events::testing::catalog_extended(),
+            tools,
+            weapons,
+        })
+    }
+    /// The session, and its administrator who stands at the spawn.
+    fn start(self) -> anyhow::Result<(Session, u64)> {
+        let mut s = Session::new(Simulation::new(
+            self.world,
+            self.definitions,
+            vec![
+                ColliderBuilder::cuboid(500.0, 0.5, 500.0).translation(Vector::new(0.0, -0.5, 0.0)),
+            ],
+        )?);
+        s.set_weapon_pack(self.weapons)?;
+        s.set_tool_catalog(self.tools)?;
+        s.set_event_catalog(self.catalog, Vec::<String>::new())?;
+        s.set_spawn_points(vec![Vec3::new(0.0, 0.05, 0.0)])?;
+        let owner = s.join("Tester".into(), Vec3::new(0.0, 0.05, 0.0), true)?;
+        Ok((s, owner))
+    }
+}
+
+/// The made-up light and emitter the synthetic host offers.
+const SYNTHETIC_LIGHT: &str = "test/light/lamp";
+const SYNTHETIC_EMITTER: &str = "test/emitter/smoke";
+
+/// One tick with the owner standing still, checking that no event row was
+/// refused, no weapon broke and every brick is one a client accepts.
+fn checked_step(s: &mut Session, owner: u64, sequence: &mut u64) -> anyhow::Result<()> {
+    *sequence += 1;
+    s.movement(owner, *sequence, MoveInput::default())?;
+    s.step()?;
+    let diagnostics = s.take_event_diagnostics();
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    let notices = s.take_notices();
+    assert!(
+        !notices.iter().any(|n| n.starts_with("Weapon runtime")),
+        "{notices:?}"
+    );
+    // Every brick the host keeps is one a client accepts: its paint and
+    // each event colour index the palette. Reported crash: "Invalid
+    // replicated brick 76: Event color outside palette" during Pong.
+    let state = s.simulation().state();
+    for (id, brick) in &state.bricks {
+        brick
+            .validate(state.palette.len())
+            .map_err(|e| anyhow::anyhow!("brick {id} at tick {}: {e:#}", state.tick))?;
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Side {
     A,
@@ -78,19 +187,7 @@ impl Pong {
         Self::arrive(Arrival::World, edit)
     }
     fn arrive(arrival: Arrival, edit: impl FnOnce(&mut bri_world::World)) -> anyhow::Result<Self> {
-        let content = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
-        let catalog = bri_events::Catalog::load(content.join("events-pack-002/catalog.json"))?;
-        let brick_catalog =
-            serde_json::from_value(json(&content.join("stock-catalog-004/stock-catalog.json"))?)?;
-        let effects =
-            serde_json::from_value(json(&content.join("effects-pass-004/effects.json"))?)?;
-        let materials = serde_json::from_value(json(
-            &content.join("brick-materials-002/brick-materials.json"),
-        )?)?;
-        let weapons = bri_weapons::Pack::from_json(&std::fs::read(
-            content.join("weapons-pack-009/weapons.json"),
-        )?)?;
-        let mut world = bri_world::persistence::load(&content.join(PONG))?;
+        let mut world = native_save()?;
         assert_eq!(world.name, "Demo Pong");
         edit(&mut world);
         let saved_white = world.palette[15];
@@ -107,24 +204,7 @@ impl Pong {
                 Some(build)
             }
         };
-        let definitions = Definitions::load(
-            &content.join("stock-catalog-004"),
-            &content.join("maps-pass-008"),
-        )?;
-        let mut s = Session::new(Simulation::new(
-            world,
-            definitions,
-            vec![
-                ColliderBuilder::cuboid(500.0, 0.5, 500.0).translation(Vector::new(0.0, -0.5, 0.0)),
-            ],
-        )?);
-        let mut tools = ToolCatalog::from_native(&brick_catalog, &effects, &materials)?;
-        tools.install_items(weapons.items.keys().cloned())?;
-        s.set_weapon_pack(weapons)?;
-        s.set_tool_catalog(tools)?;
-        s.set_event_catalog(catalog, Vec::<String>::new())?;
-        s.set_spawn_points(vec![Vec3::new(0.0, 0.05, 0.0)])?;
-        let owner = s.join("Tester".into(), Vec3::new(0.0, 0.05, 0.0), true)?;
+        let (mut s, owner) = Host::native(world)?.start()?;
         if let Some(build) = build {
             s.step()?;
             s.set_load_pace(bri_sim::session::LoadPace::Bricks(64));
@@ -195,27 +275,7 @@ impl Pong {
         self.s.simulation().state().tick
     }
     fn step(&mut self) -> anyhow::Result<()> {
-        self.sequence += 1;
-        self.s
-            .movement(self.owner, self.sequence, MoveInput::default())?;
-        self.s.step()?;
-        let diagnostics = self.s.take_event_diagnostics();
-        assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        let notices = self.s.take_notices();
-        assert!(
-            !notices.iter().any(|n| n.starts_with("Weapon runtime")),
-            "{notices:?}"
-        );
-        // Every brick the host keeps is one a client accepts: its paint and
-        // each event colour index the palette. Reported crash: "Invalid
-        // replicated brick 76: Event color outside palette" during Pong.
-        let state = self.s.simulation().state();
-        for (id, brick) in &state.bricks {
-            brick
-                .validate(state.palette.len())
-                .map_err(|e| anyhow::anyhow!("brick {id} at tick {}: {e:#}", state.tick))?;
-        }
-        Ok(())
+        checked_step(&mut self.s, self.owner, &mut self.sequence)
     }
     fn click(&mut self, brick: u64) {
         self.s
@@ -238,15 +298,7 @@ impl Pong {
             Side::A => "_pong_ScoreA",
             Side::B => "_pong_ScoreB",
         };
-        match &self.named(name)[0].print {
-            Some(bri_world::ContentRef::Resolved(p)) => {
-                p.strip_prefix(DIGITS).unwrap().parse().unwrap()
-            }
-            Some(bri_world::ContentRef::Unresolved(u)) => {
-                u.name.strip_prefix("Letters/").unwrap().parse().unwrap()
-            }
-            None => panic!("score brick lost its print"),
-        }
+        digit(self.named(name)[0])
     }
     fn ball(&self) -> Option<bri_weapons::Projectile> {
         let view = self.s.weapon_view();
@@ -344,7 +396,7 @@ impl Pong {
 }
 
 #[test]
-#[ignore = "requires the converted native worlds, event catalog and content packs"]
+#[ignore = "requires generated v20 content"]
 fn demo_pong_plays_like_v20() -> anyhow::Result<()> {
     let mut pong = Pong::load()?;
     // The save was made just after B won 10-4: B's counter wrapped to 0,
@@ -436,20 +488,82 @@ fn demo_pong_plays_like_v20() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The digit a counter brick shows.
+fn digit(brick: &bri_world::Brick) -> u8 {
+    match &brick.print {
+        Some(bri_world::ContentRef::Resolved(p)) => {
+            p.strip_prefix(DIGITS).unwrap().parse().unwrap()
+        }
+        Some(bri_world::ContentRef::Unresolved(u)) => {
+            u.name.strip_prefix("Letters/").unwrap().parse().unwrap()
+        }
+        None => panic!("counter brick lost its print"),
+    }
+}
+
 /// v20 `getPrintCount` reads the digit a counter shows the first time it
-/// counts, so a loaded save keeps counting from its printed score.
-#[test]
-#[ignore = "requires the converted native worlds, event catalog and content packs"]
-fn loaded_counter_counts_from_its_print() -> anyhow::Result<()> {
-    let mut pong = Pong::load()?;
-    assert_eq!(pong.score(Side::A), 4);
-    // A black B cell hit scores for A.
-    let cell = pong.cells[Side::B as usize][5];
-    pong.s
-        .fire_brick_input(cell, "onProjectileHit", Some(pong.owner));
-    pong.step()?;
-    assert_eq!(pong.score(Side::A), 5);
-    Ok(())
+/// counts, so a loaded save keeps counting from its printed score. On the
+/// native content the counter is Demo Pong's A score, which a black B
+/// paddle cell hit counts up; on the made-up content, a lone counter that
+/// counts itself up when activated.
+mod loaded_counter_counts_from_its_print {
+    use super::*;
+
+    /// Set off `input` on `trigger` and see `counter` go from `from` to
+    /// the next digit.
+    fn body(host: Host, trigger: u64, input: &str, counter: u64, from: u8) -> anyhow::Result<()> {
+        let (mut s, owner) = host.start()?;
+        let mut sequence = 1;
+        checked_step(&mut s, owner, &mut sequence)?;
+        let shown = |s: &Session| digit(&s.simulation().state().bricks[&counter]);
+        assert_eq!(shown(&s), from);
+        s.fire_brick_input(trigger, input, Some(owner));
+        checked_step(&mut s, owner, &mut sequence)?;
+        assert_eq!(shown(&s), from + 1);
+        Ok(())
+    }
+
+    #[test]
+    fn synthetic() -> anyhow::Result<()> {
+        let mut world = bri_world::World::new("Counter".into(), "test".into(), vec![[1.0; 4]]);
+        let mut counter = bri_world::Brick::new(
+            bri_world::ContentRef::Resolved(bri_sim::testing::BRICK.into()),
+            [0.0, 0.3, -6.0],
+            0,
+        );
+        counter.print = Some(bri_world::ContentRef::unresolved("print", "Letters/4"));
+        counter.events.push(
+            serde_json::from_value(json!({
+                "enabled": true,
+                "input": "onActivate",
+                "delay_ms": 0,
+                "target": { "Slot": "SelfBrick" },
+                "output": "incrementPrintCount",
+                "params": [{ "Int": 1 }],
+            }))
+            .unwrap(),
+        );
+        world.bricks.insert(1, counter);
+        world.next_brick_id = 2;
+        body(Host::synthetic(world)?, 1, "onActivate", 1, 4)
+    }
+
+    #[test]
+    #[ignore = "requires generated v20 content"]
+    fn content() -> anyhow::Result<()> {
+        let world = native_save()?;
+        let named = |name: &str| {
+            *world
+                .bricks
+                .iter()
+                .find(|(_, b)| b.name.as_deref() == Some(name))
+                .unwrap()
+                .0
+        };
+        // A black B cell hit scores for A.
+        let (cell, score) = (named("_pong_PaddleB6"), named("_pong_ScoreA"));
+        body(Host::native(world)?, cell, "onProjectileHit", score, 4)
+    }
 }
 
 /// The paddle buttons walk each paddle one cell per click and stop at the
@@ -457,7 +571,7 @@ fn loaded_counter_counts_from_its_print() -> anyhow::Result<()> {
 /// 125 ms apart: B's `+` cancels its own pending events 100 ms after a
 /// click (see `b_up_swallows_clicks_inside_100_ms`).
 #[test]
-#[ignore = "requires the converted native worlds, event catalog and content packs"]
+#[ignore = "requires generated v20 content"]
 fn paddle_buttons_move_one_cell_and_stop_at_the_ends() -> anyhow::Result<()> {
     let mut pong = Pong::load()?;
     for side in [Side::A, Side::B] {
@@ -498,7 +612,7 @@ fn paddle_buttons_move_one_cell_and_stop_at_the_ends() -> anyhow::Result<()> {
 /// row was refused. The other tests load the save as the whole world,
 /// where its colours need no renumbering.
 #[test]
-#[ignore = "requires the converted native worlds, event catalog and content packs"]
+#[ignore = "requires generated v20 content"]
 fn paddles_repaint_after_load_bricks_onto_a_map() -> anyhow::Result<()> {
     let mut pong = Pong::arrive(Arrival::LoadBricks, |_| {})?;
     assert_ne!(pong.white, 15, "the load renumbers the save's colours");
@@ -536,7 +650,7 @@ fn paddles_repaint_after_load_bricks_onto_a_map() -> anyhow::Result<()> {
 /// row on a 100 ms delay (every other button's is immediate), so a second
 /// click inside 100 ms is cancelled by the first click's late cancel.
 #[test]
-#[ignore = "requires the converted native worlds, event catalog and content packs"]
+#[ignore = "requires generated v20 content"]
 fn b_up_swallows_clicks_inside_100_ms() -> anyhow::Result<()> {
     let mut pong = Pong::load()?;
     for (side, gap, moved) in [(Side::B, 10, 1), (Side::A, 10, 2), (Side::B, 15, 2)] {
@@ -605,7 +719,7 @@ fn assert_cells_agree(pong: &Pong, context: &str) {
 /// from one queue in time order: every glow ends and each paddle stays one
 /// white cell.
 #[test]
-#[ignore = "requires the converted native worlds, event catalog and content packs"]
+#[ignore = "requires generated v20 content"]
 fn hammered_paddle_buttons_restore_every_colour() -> anyhow::Result<()> {
     let mut pong = Pong::load()?;
     let original = colours(&pong);
@@ -662,22 +776,17 @@ fn hammered_paddle_buttons_restore_every_colour() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Every brick output with a timed revert, on one plain court brick: each
-/// click switches it now and back 100 ms later, and cancels its own pending
-/// rows 100 ms later like B's `+`. However the clicks overlap, the brick
-/// ends as it started.
-#[test]
-#[ignore = "requires the converted native worlds, event catalog and content packs"]
-fn timed_reverts_of_every_brick_output_always_land() -> anyhow::Result<()> {
-    let mut target = 0;
-    let mut pong = Pong::load_with(|world| {
-        target = world
-            .bricks
-            .iter()
-            .find(|(_, b)| b.events.is_empty() && b.name.is_none() && !b.base_plate)
-            .map(|(id, _)| *id)
-            .unwrap();
-        let brick = world.bricks.get_mut(&target).unwrap();
+/// Every brick output with a timed revert, on one plain brick: each click
+/// switches it now and back 100 ms later, and cancels its own pending rows
+/// 100 ms later like B's `+` in Demo Pong. However the clicks overlap, the
+/// brick ends as it started. On the native content the brick is a plain
+/// one of the Demo Pong court; on the made-up content, a lone brick.
+mod timed_reverts_of_every_brick_output_always_land {
+    use super::*;
+
+    /// Give `brick` a timed on/off pair of rows for every brick output,
+    /// and a delayed `cancelEvents`.
+    fn add_reverts(brick: &mut bri_world::Brick, light: &str, emitter: &str) {
         let color = brick.color;
         let pairs = [
             (
@@ -703,12 +812,12 @@ fn timed_reverts_of_every_brick_output_always_land() -> anyhow::Result<()> {
             ),
             (
                 "setLight",
-                json!({ "Datablock": "v20/light/alarmlighta" }),
+                json!({ "Datablock": light }),
                 json!({ "Datablock": null }),
             ),
             (
                 "setEmitter",
-                json!({ "Datablock": "v20/emitter/burnemittera" }),
+                json!({ "Datablock": emitter }),
                 json!({ "Datablock": null }),
             ),
         ];
@@ -728,40 +837,98 @@ fn timed_reverts_of_every_brick_output_always_land() -> anyhow::Result<()> {
             brick.events.push(row(100, output, Some(off)));
         }
         brick.events.push(row(100, "cancelEvents", None));
-    })?;
-    let start = |p: &Pong| {
-        let b = p.brick(target);
-        (
-            b.color,
-            b.color_effect,
-            b.visible,
-            b.colliding,
-            b.raycast,
-            b.light.clone(),
-            b.emitter.clone(),
-        )
-    };
-    let original = start(&pong);
-    let mut seed = 0x51_7cc1_b727_220a_u64;
-    let mut random = move |n: u64| {
-        seed ^= seed << 13;
-        seed ^= seed >> 7;
-        seed ^= seed << 17;
-        seed % n
-    };
-    for round in 0..80 {
-        for _ in 0..=random(8) {
-            for _ in 0..=random(2) {
-                pong.click(target);
-            }
-            for _ in 0..=random(16) {
-                pong.step()?;
-            }
-        }
-        for _ in 0..30 {
-            pong.step()?;
-        }
-        assert_eq!(start(&pong), original, "round {round}");
     }
-    Ok(())
+
+    /// Click `target` in random bursts and check it ends as it started.
+    fn body(host: Host, target: u64) -> anyhow::Result<()> {
+        let (mut s, owner) = host.start()?;
+        let mut sequence = 1;
+        checked_step(&mut s, owner, &mut sequence)?;
+        let start = |s: &Session| {
+            let b = &s.simulation().state().bricks[&target];
+            (
+                b.color,
+                b.color_effect,
+                b.visible,
+                b.colliding,
+                b.raycast,
+                b.light.clone(),
+                b.emitter.clone(),
+            )
+        };
+        let original = start(&s);
+        // A click switches every output at once.
+        s.fire_brick_input(target, "onActivate", Some(owner));
+        checked_step(&mut s, owner, &mut sequence)?;
+        let (color, effect, visible, colliding, raycast, light, emitter) = start(&s);
+        assert!(
+            color != original.0
+                && effect != original.1
+                && !visible
+                && !colliding
+                && !raycast
+                && light.is_some()
+                && emitter.is_some(),
+            "{:?}",
+            start(&s)
+        );
+        let mut seed = 0x51_7cc1_b727_220a_u64;
+        let mut random = move |n: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % n
+        };
+        for round in 0..80 {
+            for _ in 0..=random(8) {
+                for _ in 0..=random(2) {
+                    s.fire_brick_input(target, "onActivate", Some(owner));
+                }
+                for _ in 0..=random(16) {
+                    checked_step(&mut s, owner, &mut sequence)?;
+                }
+            }
+            for _ in 0..30 {
+                checked_step(&mut s, owner, &mut sequence)?;
+            }
+            assert_eq!(start(&s), original, "round {round}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn synthetic() -> anyhow::Result<()> {
+        let palette = (0..16)
+            .map(|i| [i as f32 / 15.0, 0.5, 1.0 - i as f32 / 15.0, 1.0])
+            .collect();
+        let mut world = bri_world::World::new("Reverts".into(), "test".into(), palette);
+        let mut brick = bri_world::Brick::new(
+            bri_world::ContentRef::Resolved(bri_sim::testing::BRICK.into()),
+            [0.0, 0.3, -6.0],
+            0,
+        );
+        brick.color = 4;
+        add_reverts(&mut brick, SYNTHETIC_LIGHT, SYNTHETIC_EMITTER);
+        world.bricks.insert(1, brick);
+        world.next_brick_id = 2;
+        body(Host::synthetic(world)?, 1)
+    }
+
+    #[test]
+    #[ignore = "requires generated v20 content"]
+    fn content() -> anyhow::Result<()> {
+        let mut world = native_save()?;
+        let target = world
+            .bricks
+            .iter()
+            .find(|(_, b)| b.events.is_empty() && b.name.is_none() && !b.base_plate)
+            .map(|(id, _)| *id)
+            .unwrap();
+        add_reverts(
+            world.bricks.get_mut(&target).unwrap(),
+            "v20/light/alarmlighta",
+            "v20/emitter/burnemittera",
+        );
+        body(Host::native(world)?, target)
+    }
 }

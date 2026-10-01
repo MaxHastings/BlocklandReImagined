@@ -117,18 +117,14 @@ fn add_ons() -> Arc<Catalog> {
     )
 }
 
-/// The Fill Can's weapons, and a stand-in for the stock colour spray can
-/// (base game content) so picking a colour works.
+/// The Fill Can's weapons over the made-up pack, whose colour spray can
+/// (base game content) lets picking a colour work.
 fn tool_pack() -> bri_weapons::Pack {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/fill-can/fill-can-tool/assets/weapons.json");
-    let mut pack = bri_weapons::Pack::from_json(&std::fs::read(path).unwrap()).unwrap();
-    let mut can = pack.images[IMAGE].clone();
-    can.id = "v20.image.bluespraycanimage".into();
-    can.name = "BlueSprayCanImage".into();
-    can.command = None;
-    can.paint_tint = false;
-    pack.images.insert(can.id.clone(), can);
+    let fill = bri_weapons::Pack::from_json(&std::fs::read(path).unwrap()).unwrap();
+    let (pack, notes) = bri_weapons::testing::pack().merge(vec![("fill-can-tool".into(), fill)]);
+    assert!(notes.is_empty(), "{notes:?}");
     pack
 }
 
@@ -142,6 +138,9 @@ impl Game {
     }
     /// A game whose world starts as `build` leaves it.
     fn with(build: impl FnOnce(&mut World)) -> Self {
+        Self::with_pack(build, tool_pack())
+    }
+    fn with_pack(build: impl FnOnce(&mut World), pack: bri_weapons::Pack) -> Self {
         let mut world = World::new(
             "Fill".into(),
             "fill".into(),
@@ -161,7 +160,7 @@ impl Game {
         );
         s.set_spawn_points(vec![Vec3::new(0.0, 0.05, -6.0)])
             .unwrap();
-        s.set_weapon_pack(tool_pack()).unwrap();
+        s.set_weapon_pack(pack).unwrap();
         s.install_packages(add_ons(), None).unwrap();
         Self {
             s,
@@ -505,6 +504,44 @@ fn the_fill_can_shows_and_paints_the_colour_last_picked() {
             .any(|i| i.image == IMAGE && i.paint == Some(WHITE)),
         "{held:?}"
     );
+}
+
+/// A paint picker (`paint_picker`, the ported Fill Can's image) taken out
+/// of the tool box stays out, still that selected tool, when its holder
+/// picks a colour or FX can; a plain tool gives way to the can.
+#[test]
+fn picking_a_can_puts_a_paint_picker_back_as_the_selected_tool() {
+    let held = |g: &Game, painter: OwnerId| {
+        g.s.weapon_view().images[&painter]
+            .iter()
+            .find(|i| i.hand == 0)
+            .map(|i| i.image.clone())
+    };
+    for picker in [false, true] {
+        let mut pack = tool_pack();
+        pack.images.get_mut(IMAGE).unwrap().paint_picker = picker;
+        let mut g = Game::with_pack(|_| {}, pack);
+        let painter = player(&mut g, "Painter", true);
+        g.steps(60);
+        g.typed(painter, "fillcan");
+        let slot = g.s.tool_inventories()[&painter].selected.unwrap();
+        g.steps(30);
+        for (pick, can) in [
+            (Command::UseSprayCan { color: RED }, "v20.image.bluespraycanimage"),
+            (Command::UseFxCan { fx: 3 }, bri_sim::session::FX_CAN_IMAGES[3]),
+        ] {
+            g.cmd(painter, pick).unwrap();
+            g.steps(30);
+            if picker {
+                assert_eq!(held(&g, painter).as_deref(), Some(IMAGE));
+                assert_eq!(g.s.tool_inventories()[&painter].selected, Some(slot));
+            } else {
+                // A plain tool gives way to the can.
+                assert_eq!(held(&g, painter).as_deref(), Some(can));
+                assert_eq!(g.s.tool_inventories()[&painter].selected, None);
+            }
+        }
+    }
 }
 
 /// The stand-in plane (crates/vehicles/tests/fixtures), as the vehicle a

@@ -14,10 +14,12 @@ pub mod scene_loader;
 pub mod shadow;
 pub mod shape_scene;
 pub mod terrain_scene;
+pub mod testing;
 pub mod textured;
 pub mod timing;
 pub mod vignette;
 pub mod water_scene;
+pub mod world_shapes;
 use anyhow::{Result, ensure};
 use wgpu::util::DeviceExt;
 #[repr(C)]

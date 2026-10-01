@@ -106,7 +106,9 @@ caller's build (`Simulation::select_stack`), or a box of it, as the
 Add-On's `CopyRule` allows, into a blueprint, `crate::blueprint`, that the
 player places with `Command::PlaceBlueprint` under the plant rules, all or
 none or brick by brick as the rule asks, with one undo entry; `on_copy`
-and `on_place` tell the Add-On how it went; highlights recolour the
+and `on_place` tell the Add-On how it went, and `on_copy_ghost` where the
+copy stands as its player places it (`Command::CopyPose`, the box from
+`Blueprint::ghost_box`); highlights recolour the
 bricks for a while, as v20 did (`session::highlight`); mirroring is part of the placement, with twins found by
 `crate::mirror`; `save_copy` and `load_copy` keep blueprints by name in
 the host's `session::CopyStore`, which answers off the tick thread (the
@@ -120,8 +122,10 @@ and `bottom_print`
 (capability `chat`), `set_fov`, `set_image_ammo` and `mount_image`
 (capability `player`), and `play_sound`, `sound_at`, `beam` and
 `play_thread` (capability `effects`: presentation only, each one cue
-within the package's cue allowance), and `show_box` and `hide_box`
-(`effects` too: one player's selection outline). `damage` takes a player or any
+within the package's cue allowance), `show_box` and `hide_box`
+(`effects` too: one player's selection outline), and `show_shapes` and
+`hide_shapes` (`effects`: boxes every player sees, replicated by key as
+`Checkpoint::world_shapes` and `Delta::world_shapes`). `damage` takes a player or any
 object and an optional weapons-pack damage type. `set_block_state(brick,
 state)` (capability `world.edit`) switches a block brick to one of its
 block's declared states; the state is a field of the brick

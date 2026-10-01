@@ -117,15 +117,34 @@ pub fn closest_hit(
 mod tests {
     use super::*;
     use rapier3d::prelude::{ColliderBuilder, Vector};
-    #[test]
-    #[ignore = "reads converted Slate Sea water; no original assets or devices"]
-    fn repeated_native_water_and_roofs_choose_the_nearest_surface() -> Result<()> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/map-bundle-017");
-        let map = bri_sim::map::NativeMap::load(
-            &root,
-            "v20/add-ons/map_slate_sea_revised/slatesearevised.mis",
-        )?;
+    /// A map's waters, the first repeating: a made-up repeating sea, or
+    /// the converted Slate Sea's.
+    struct Sea {
+        waters: Vec<Water>,
+    }
+    impl Sea {
+        fn synthetic() -> Result<Self> {
+            let mut sea = Water::volume([-40.0, -12.0, -40.0], [40.0, 3.5, 40.0]);
+            sea.repeat_period = Some(96.0);
+            sea.validate()?;
+            Ok(Self { waters: vec![sea] })
+        }
+        fn content() -> Result<Self> {
+            let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content/map-bundle-017");
+            let map = bri_sim::map::NativeMap::load(
+                &root,
+                "v20/add-ons/map_slate_sea_revised/slatesearevised.mis",
+            )?;
+            Ok(Self { waters: map.waters })
+        }
+    }
+    crate::testing::synthetic_and_content!(
+        Sea: repeated_native_water_and_roofs_choose_the_nearest_surface
+    );
+    fn repeated_native_water_and_roofs_choose_the_nearest_surface(fx: &Sea) -> Result<()> {
+        let map = fx;
         let water = &map.waters[0];
+        assert!(water.repeat_period.is_some(), "the sea repeats");
         let center = (Vec3::from_array(water.min) + Vec3::from_array(water.max)) * 0.5;
         let center = Vec3::new(
             center.x + water.repeat_period.unwrap_or(0.),

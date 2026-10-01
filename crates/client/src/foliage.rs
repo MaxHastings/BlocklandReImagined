@@ -235,28 +235,77 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    #[ignore = "reads native Bedroom and foliage packs, CPU only"]
-    fn actual_client_collision_places_original_foliage_on_allowed_surfaces() -> Result<()> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
-        let map_id = "v20/add-ons/map_bedroom/bedroom.mis";
-        let map = bri_sim::map::NativeMap::load(&root.join("map-bundle-017"), map_id)?;
-        let mut building = Building::new(
-            Definitions {
-                entries: BTreeMap::new(),
-            },
-            map.colliders,
-        )?;
-        building.attach_terrain(map.terrain);
-        let prepared = PreparedFoliage::load(
-            &root.join("foliage-pack-003"),
-            map_id,
-            &building,
-            &map.waters,
-        )?;
+    /// A map's collision and its foliage pack: a made-up terrain floor
+    /// under `bri_foliage::testing`'s pack, or the converted Bedroom.
+    struct Field {
+        building: Building,
+        waters: Vec<bri_content::water::Water>,
+        pack: std::path::PathBuf,
+        map_id: String,
+        /// Plants placed in all.
+        placed: u32,
+        _scratch: Option<crate::testing::ScratchDir>,
+    }
+    impl Field {
+        fn synthetic() -> Result<Self> {
+            let scratch = crate::testing::ScratchDir::new("foliage")?;
+            let pack = bri_foliage::testing::write_pack(scratch.path())?;
+            let map_id = pack.definitions[0].scene.clone();
+            let floor = ColliderBuilder::cuboid(400., 0.5, 400.)
+                .translation(Vector::new(0., 1.5, 0.))
+                .user_data(MapSurface::Terrain as u128);
+            Ok(Self {
+                building: Building::new(
+                    Definitions {
+                        entries: BTreeMap::new(),
+                    },
+                    vec![floor],
+                )?,
+                waters: Vec::new(),
+                pack: scratch.path().to_path_buf(),
+                placed: pack
+                    .definitions
+                    .iter()
+                    .filter(|d| d.scene == map_id)
+                    .map(|d| d.count)
+                    .sum(),
+                map_id,
+                _scratch: Some(scratch),
+            })
+        }
+        fn content() -> Result<Self> {
+            let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
+            let map_id = "v20/add-ons/map_bedroom/bedroom.mis";
+            let map = bri_sim::map::NativeMap::load(&root.join("map-bundle-017"), map_id)?;
+            let mut building = Building::new(
+                Definitions {
+                    entries: BTreeMap::new(),
+                },
+                map.colliders,
+            )?;
+            building.attach_terrain(map.terrain);
+            Ok(Self {
+                building,
+                waters: map.waters,
+                pack: root.join("foliage-pack-003"),
+                map_id: map_id.into(),
+                placed: 41000,
+                _scratch: None,
+            })
+        }
+    }
+    crate::testing::synthetic_and_content!(
+        Field: actual_client_collision_places_original_foliage_on_allowed_surfaces
+    );
+    fn actual_client_collision_places_original_foliage_on_allowed_surfaces(
+        fx: &Field,
+    ) -> Result<()> {
+        let (building, map) = (&fx.building, fx);
+        let prepared = PreparedFoliage::load(&fx.pack, &fx.map_id, building, &map.waters)?;
+        assert!(!prepared.fields.is_empty());
         assert_eq!(
             prepared.placement.iter().map(|p| p.placed).sum::<u32>(),
-            41000
+            fx.placed
         );
         assert!(
             prepared
@@ -267,7 +316,7 @@ mod tests {
         for field in &prepared.fields {
             for plant in field.plants().iter().step_by(200) {
                 let hit = static_hit(
-                    &building,
+                    building,
                     &map.waters,
                     PlacementRay {
                         start: Vec3::new(plant.position.x, 2000., plant.position.z),
