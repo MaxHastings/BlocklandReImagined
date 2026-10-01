@@ -123,13 +123,16 @@ AMMO = {
 # Models: boxes and cylinders in Torque's axes (x right, y forward, z up),
 # the hand's grip at the origin, written in the game's axes (x, z, -y).
 # ---------------------------------------------------------------------------
+# Warm, light colours in the style of Blockland's own add-on guns: grey
+# metal, orange and brown wood, cream pistol slides, yellow brass.
 PALETTE = {
-    'black': (0.07, 0.07, 0.08), 'gunmetal': (0.2, 0.21, 0.23), 'steel': (0.46, 0.47, 0.5),
-    'bright': (0.7, 0.71, 0.74), 'wood': (0.42, 0.25, 0.12), 'lightwood': (0.62, 0.42, 0.22),
-    'olive': (0.3, 0.33, 0.19), 'tan': (0.6, 0.52, 0.36), 'brass': (0.78, 0.62, 0.26),
-    'yellow': (0.95, 0.78, 0.1), 'lens': (0.25, 0.45, 0.65), 'red': (0.6, 0.1, 0.08),
-    'blue': (0.2, 0.3, 0.55), 'white': (0.9, 0.9, 0.88), 'rubber': (0.12, 0.11, 0.1),
-    'green': (0.25, 0.4, 0.2),
+    'black': (0.17, 0.17, 0.18), 'gunmetal': (0.34, 0.34, 0.36), 'steel': (0.52, 0.52, 0.54),
+    'bright': (0.76, 0.76, 0.78), 'wood': (0.82, 0.44, 0.2), 'lightwood': (0.93, 0.6, 0.33),
+    'olive': (0.42, 0.45, 0.26), 'tan': (0.88, 0.83, 0.7), 'brass': (0.96, 0.8, 0.16),
+    'yellow': (0.95, 0.78, 0.1), 'lens': (0.25, 0.45, 0.65), 'red': (0.75, 0.12, 0.08),
+    'blue': (0.2, 0.3, 0.55), 'white': (0.93, 0.92, 0.88), 'rubber': (0.2, 0.18, 0.17),
+    'green': (0.25, 0.4, 0.2), 'darkwood': (0.48, 0.22, 0.09), 'card': (0.8, 0.62, 0.38),
+    'tip': (0.86, 0.86, 0.82), 'shell': (0.82, 0.16, 0.1),
 }
 PALETTE.update({f'ammo_{key}': a['look'] for key, a in AMMO.items()})
 SWATCH = 16
@@ -177,6 +180,21 @@ class Model:
                 if sign < 0:
                     corners.reverse()
                 self.quad(corners, n, colour)
+
+    def box_tilted(self, centre, size, colour, angle, hinge):
+        # `box`, turned `angle` radians about the x axis through the hinge
+        # line at (y, z) = `hinge`.
+        start = len(self.positions)
+        self.box(centre, size, colour)
+        c, s_ = math.cos(angle), math.sin(angle)
+        hy, hz = hinge
+        for i in range(start, len(self.positions)):
+            x, y, z = self.positions[i][0], -self.positions[i][2], self.positions[i][1]
+            y, z = y - hy, z - hz
+            y, z = c * y - s_ * z, s_ * y + c * z
+            self.positions[i] = native([x, y + hy, z + hz])
+            nx, ny, nz = self.normals[i][0], -self.normals[i][2], self.normals[i][1]
+            self.normals[i] = native([nx, c * ny - s_ * nz, s_ * ny + c * nz])
 
     def cylinder(self, start, length, radius, colour, sides=8, axis='y'):
         # Along +y (or +z/+x) from `start`, capped.
@@ -262,37 +280,37 @@ def native(p):
 
 
 # Pieces most guns share. `length` runs forward from the receiver's front.
-def grip(m, colour='black', rake=0.12, height=0.42):
-    m.box([0, -0.05 - rake / 2, -height / 2], [0.14, 0.16, height], colour)
+def grip(m, colour='wood', rake=0.12, height=0.42):
+    m.box([0, -0.05 - rake / 2, -height / 2], [0.15, 0.17, height], colour)
 
 
-def receiver(m, back, front, top=0.16, bottom=-0.02, colour='gunmetal', width=0.16):
+def receiver(m, back, front, top=0.17, bottom=-0.03, colour='gunmetal', width=0.18):
     m.box([0, (back + front) / 2, (top + bottom) / 2], [width, front - back, top - bottom], colour)
 
 
-def barrel(m, start, length, radius=0.035, z=0.09, colour='steel', x=0.0):
+def barrel(m, start, length, radius=0.04, z=0.09, colour='steel', x=0.0):
     m.cylinder([x, start, z], length, radius, colour)
 
 
-def stock(m, back, front, colour='wood', drop=0.12, height=0.2):
-    m.box([0, (back + front) / 2, 0.06 - drop / 2], [0.12, front - back, height], colour)
-    m.box([0, back + 0.03, 0.02 - drop / 2], [0.13, 0.06, height + 0.06], 'rubber')
+def stock(m, back, front, colour='wood', drop=0.12, height=0.22, butt='darkwood'):
+    m.box([0, (back + front) / 2, 0.06 - drop / 2], [0.14, front - back, height], colour)
+    m.box([0, back + 0.03, 0.02 - drop / 2], [0.15, 0.06, height + 0.06], butt)
 
 
-def magazine(m, y, depth=0.3, colour='black', rake=0.0, width=0.1, length=0.14):
+def magazine(m, y, depth=0.3, colour='gunmetal', rake=0.0, width=0.11, length=0.15):
     m.box([0, y + rake / 2, -depth / 2], [width, length, depth], colour)
 
 
 def scope(m, back, front, z=0.3):
-    m.cylinder([0, back, z], front - back, 0.06, 'black')
-    m.cylinder([0, back - 0.04, z], 0.04, 0.075, 'black')
-    m.cylinder([0, front, z], 0.05, 0.08, 'black')
-    m.box([0, front + 0.051, z], [0.1, 0.002, 0.1], 'lens')
-    m.box([0, (back + front) / 2, z - 0.1], [0.05, 0.2, 0.1], 'gunmetal')
+    m.cylinder([0, back, z], front - back, 0.065, 'black')
+    m.cylinder([0, back - 0.05, z], 0.05, 0.08, 'black')
+    m.cylinder([0, front, z], 0.06, 0.085, 'black')
+    m.box([0, front + 0.061, z], [0.11, 0.002, 0.11], 'lens')
+    m.box([0, (back + front) / 2, z - 0.1], [0.06, 0.22, 0.1], 'gunmetal')
 
 
 def sight(m, y, z=0.2):
-    m.box([0, y, z], [0.03, 0.03, 0.05], 'black')
+    m.box([0, y, z], [0.04, 0.04, 0.06], 'black')
 
 
 def build(look):
@@ -300,127 +318,138 @@ def build(look):
     muzzle = None
     eject = [0.1, 0.1, 0.12]
     if look in ('pistol', 'autopistol', 'machinepistol'):
-        grip(m, 'black')
-        receiver(m, -0.12, 0.55, top=0.15, bottom=0.0, colour='gunmetal' if look != 'autopistol' else 'steel')
-        m.box([0, 0.2, -0.03], [0.1, 0.35, 0.04], 'black')  # frame
-        m.box([0, 0.08, -0.09], [0.04, 0.12, 0.02], 'black')  # trigger guard
-        sight(m, 0.5, 0.18)
-        muzzle = [0, 0.58, 0.08]
+        # A cream slide over a grey frame, like a service pistol.
+        slide = {'pistol': 'tan', 'autopistol': 'tan', 'machinepistol': 'black'}[look]
+        grip(m, 'black' if look == 'machinepistol' else 'gunmetal')
+        m.box([0, -0.03, -0.2], [0.16, 0.12, 0.3], 'wood' if look == 'pistol' else 'black')  # grip panels
+        receiver(m, -0.12, 0.55, top=0.17, bottom=0.03, colour=slide)
+        m.box([0, 0.2, -0.0], [0.13, 0.4, 0.07], 'gunmetal')  # frame
+        m.box([0, 0.08, -0.08], [0.05, 0.14, 0.03], 'gunmetal')  # trigger guard
+        m.box([0, 0.08, -0.03], [0.03, 0.03, 0.08], 'black')  # trigger
+        m.box([0.091, 0.0, 0.11], [0.004, 0.18, 0.05], 'gunmetal')  # slide serrations
+        sight(m, 0.5, 0.2)
+        sight(m, -0.08, 0.2)
+        muzzle = [0, 0.58, 0.1]
         if look == 'autopistol':
-            m.box([0, -0.05, -0.43], [0.12, 0.14, 0.1], 'black')  # long magazine
-            m.box([0.085, 0.0, 0.1], [0.02, 0.08, 0.04], 'red')  # selector
+            m.box([0, -0.05, -0.45], [0.13, 0.15, 0.12], 'gunmetal')  # long magazine
+            m.box([0.095, 0.0, 0.05], [0.02, 0.08, 0.04], 'red')  # selector
         if look == 'machinepistol':
-            magazine(m, -0.05, depth=0.62, colour='black')
-            barrel(m, 0.55, 0.12, 0.04, 0.08, 'black')
-            m.box([0, 0.35, -0.12], [0.08, 0.08, 0.18], 'black')  # fore grip
-            muzzle = [0, 0.68, 0.08]
+            magazine(m, -0.05, depth=0.64, colour='gunmetal')
+            barrel(m, 0.55, 0.14, 0.045, 0.09, 'black')
+            m.box([0, 0.36, -0.13], [0.09, 0.09, 0.2], 'wood')  # fore grip
+            muzzle = [0, 0.69, 0.09]
     elif look in ('revolver', 'magnum', 'brush'):
-        m.box([0, -0.1, -0.2], [0.14, 0.16, 0.4], 'wood' if look != 'magnum' else 'rubber')
-        receiver(m, -0.12, 0.2, top=0.16, bottom=-0.03, colour='steel' if look != 'brush' else 'gunmetal')
+        m.box([0, -0.1, -0.2], [0.15, 0.17, 0.4], 'wood' if look != 'magnum' else 'darkwood')
+        receiver(m, -0.12, 0.2, top=0.17, bottom=-0.03, colour='steel' if look != 'brush' else 'gunmetal')
         if look != 'brush':
-            m.cylinder([0, 0.0, 0.07], 0.2, 0.1, 'bright' if look == 'revolver' else 'steel')  # cylinder
+            m.cylinder([0, 0.0, 0.07], 0.2, 0.11, 'bright' if look == 'revolver' else 'steel')  # cylinder
         length = {'revolver': 0.45, 'magnum': 0.65, 'brush': 0.5}[look]
         if look == 'brush':
-            barrel(m, 0.2, length, 0.045, 0.1, 'gunmetal', x=-0.04)
-            barrel(m, 0.2, length, 0.045, 0.1, 'gunmetal', x=0.04)
-            m.box([0, 0.2 + length / 2, 0.04], [0.14, length * 0.9, 0.04], 'lightwood')
+            barrel(m, 0.2, length, 0.05, 0.1, 'gunmetal', x=-0.045)
+            barrel(m, 0.2, length, 0.05, 0.1, 'gunmetal', x=0.045)
+            m.box([0, 0.2 + length / 2, 0.03], [0.15, length * 0.9, 0.05], 'lightwood')
         else:
-            barrel(m, 0.2, length, 0.04, 0.1, 'steel')
-            m.box([0, 0.2 + length / 2, 0.14], [0.03, length, 0.03], 'steel')  # rib
-        sight(m, 0.2 + length - 0.03, 0.18)
+            barrel(m, 0.2, length, 0.045, 0.1, 'steel')
+            m.box([0, 0.2 + length / 2, 0.145], [0.04, length, 0.04], 'steel')  # rib
+        sight(m, 0.2 + length - 0.03, 0.19)
         if look == 'magnum':
-            scope(m, -0.05, 0.35, z=0.28)
-        m.box([0, 0.02, -0.08], [0.04, 0.1, 0.02], 'black')
+            scope(m, -0.05, 0.35, z=0.29)
+        m.box([0, 0.02, -0.08], [0.05, 0.12, 0.03], 'gunmetal')
         muzzle = [0, 0.2 + length, 0.1]
         eject = [0.08, 0.05, 0.08]
     elif look in ('smg',):
-        grip(m, 'black')
-        receiver(m, -0.3, 0.45, top=0.16, bottom=-0.02, colour='gunmetal')
-        barrel(m, 0.45, 0.22, 0.035, 0.08, 'black')
-        magazine(m, 0.28, depth=0.5, colour='black', length=0.12)
-        m.box([0, -0.62, 0.05], [0.04, 0.02, 0.18], 'black')  # wire stock
-        m.box([0, -0.46, 0.13], [0.03, 0.34, 0.02], 'black')
-        m.box([0, -0.46, -0.02], [0.03, 0.34, 0.02], 'black')
-        sight(m, 0.4, 0.2)
-        muzzle = [0, 0.67, 0.08]
+        grip(m, 'gunmetal')
+        receiver(m, -0.3, 0.45, top=0.17, bottom=-0.03, colour='gunmetal')
+        m.box([0, 0.2, 0.0], [0.15, 0.4, 0.1], 'wood')  # wooden forend
+        barrel(m, 0.45, 0.24, 0.04, 0.08, 'black')
+        magazine(m, 0.3, depth=0.52, colour='black', length=0.12)
+        stock(m, -0.95, -0.3, colour='wood', height=0.18)
+        sight(m, 0.4, 0.21)
+        muzzle = [0, 0.69, 0.08]
     elif look in ('assault', 'battle', 'burst', 'service'):
-        colour = {'assault': 'black', 'battle': 'olive', 'burst': 'tan', 'service': 'gunmetal'}[look]
-        grip(m, 'black')
-        receiver(m, -0.25, 0.6, top=0.18, bottom=-0.02, colour=colour)
-        stock(m, -1.0, -0.25, colour='black' if look != 'service' else 'wood')
-        m.box([0, 0.85, 0.07], [0.13, 0.5, 0.14], 'black' if look != 'service' else 'wood')  # handguard
-        barrel(m, 1.1, 0.4 if look != 'service' else 0.55, 0.035, 0.08, 'steel')
+        # Grey metal with orange or brown wood furniture.
+        metal = {'assault': 'gunmetal', 'battle': 'gunmetal', 'burst': 'steel', 'service': 'gunmetal'}[look]
+        wood = {'assault': 'wood', 'battle': 'darkwood', 'burst': 'wood', 'service': 'darkwood'}[look]
+        grip(m, wood)
+        receiver(m, -0.25, 0.6, top=0.19, bottom=-0.03, colour=metal)
+        stock(m, -1.0, -0.25, colour=wood)
+        m.box([0, 0.85, 0.07], [0.15, 0.5, 0.16], wood)  # handguard
+        barrel(m, 1.1, 0.4 if look != 'service' else 0.55, 0.04, 0.08, 'steel')
         rake = 0.1 if look in ('assault', 'battle') else 0.0
-        magazine(m, 0.38, depth=0.42 if look != 'battle' else 0.32, colour='black' if look != 'burst' else 'gunmetal',
+        magazine(m, 0.38, depth=0.44 if look != 'battle' else 0.34, colour='gunmetal' if look != 'burst' else 'black',
                  rake=rake)
         if look == 'assault':
-            m.box([0, 0.1, 0.27], [0.07, 0.45, 0.06], 'black')  # carry handle
-            sight(m, 1.0, 0.24)
+            m.box([0, 0.1, 0.28], [0.08, 0.45, 0.07], 'gunmetal')  # carry handle
+            m.box([0, -0.1, 0.22], [0.08, 0.06, 0.08], 'gunmetal')
+            sight(m, 1.0, 0.25)
         elif look == 'burst':
-            m.box([0, 0.15, 0.24], [0.1, 0.25, 0.08], 'black')
-            m.box([0, 0.28, 0.24], [0.08, 0.01, 0.06], 'lens')
+            m.box([0, 0.15, 0.26], [0.11, 0.25, 0.09], 'black')
+            m.box([0, 0.28, 0.26], [0.09, 0.01, 0.07], 'lens')
         else:
-            sight(m, 1.0, 0.2)
-            sight(m, -0.1, 0.24)
+            sight(m, 1.0, 0.21)
+            sight(m, -0.1, 0.25)
         muzzle = [0, 1.5 if look != 'service' else 1.65, 0.08]
         eject = [0.1, 0.2, 0.12]
     elif look in ('field', 'leverrifle', 'hunting', 'sniper', 'repeater'):
-        wood = {'field': 'wood', 'leverrifle': 'lightwood', 'hunting': 'wood', 'sniper': 'olive',
-                'repeater': 'black'}[look]
-        m.box([0, -0.08, -0.14], [0.13, 0.16, 0.3], wood)  # wrist
-        receiver(m, -0.2, 0.45, top=0.16, bottom=0.0, colour='gunmetal' if look != 'leverrifle' else 'brass')
+        wood = {'field': 'wood', 'leverrifle': 'lightwood', 'hunting': 'darkwood', 'sniper': 'darkwood',
+                'repeater': 'wood'}[look]
+        m.box([0, -0.08, -0.14], [0.14, 0.17, 0.3], wood)  # wrist
+        receiver(m, -0.2, 0.45, top=0.17, bottom=0.0, colour='gunmetal' if look != 'leverrifle' else 'brass')
         stock(m, -1.05, -0.15, colour=wood)
-        m.box([0, 0.9, 0.04], [0.12, 0.9, 0.12], wood)  # forend
+        m.box([0, 0.9, 0.04], [0.14, 0.9, 0.13], wood)  # forend
         length = {'field': 0.85, 'leverrifle': 0.75, 'hunting': 0.95, 'sniper': 1.25, 'repeater': 1.05}[look]
-        barrel(m, 0.45, length, 0.035 if look != 'sniper' else 0.045, 0.1, 'steel' if look != 'sniper' else 'black')
+        barrel(m, 0.45, length, 0.04 if look != 'sniper' else 0.05, 0.1, 'steel' if look != 'sniper' else 'gunmetal')
         if look == 'leverrifle':
-            m.box([0, 0.02, -0.16], [0.03, 0.26, 0.03], 'steel')  # lever loop
-            m.box([0, -0.1, -0.1], [0.03, 0.03, 0.12], 'steel')
-            m.cylinder([0, 0.45, 0.02], 0.7, 0.025, 'steel')  # tube
-            sight(m, 1.15, 0.17)
+            m.box([0, 0.02, -0.16], [0.04, 0.26, 0.04], 'steel')  # lever loop
+            m.box([0, -0.1, -0.1], [0.04, 0.04, 0.12], 'steel')
+            m.cylinder([0, 0.45, 0.02], 0.7, 0.03, 'steel')  # tube
+            sight(m, 1.15, 0.18)
         else:
-            m.box([0.1, -0.02, 0.13], [0.08, 0.03, 0.03], 'steel')  # bolt handle
-            scope(m, -0.15, 0.45 if look != 'sniper' else 0.55, z=0.3)
+            m.box([0.11, -0.02, 0.13], [0.09, 0.04, 0.04], 'steel')  # bolt handle
+            scope(m, -0.15, 0.45 if look != 'sniper' else 0.55, z=0.31)
         if look in ('sniper', 'repeater'):
-            magazine(m, 0.2, depth=0.2, colour='black')
-            m.box([0.05, 1.3, -0.12], [0.02, 0.02, 0.24], 'black')  # bipod
-            m.box([-0.05, 1.3, -0.12], [0.02, 0.02, 0.24], 'black')
+            magazine(m, 0.2, depth=0.22, colour='gunmetal')
+        if look == 'sniper':
+            m.box([0.05, 1.3, -0.12], [0.03, 0.03, 0.24], 'black')  # bipod
+            m.box([-0.05, 1.3, -0.12], [0.03, 0.03, 0.24], 'black')
         muzzle = [0, 0.45 + length, 0.1]
         eject = [0.1, 0.15, 0.12]
     elif look in ('double', 'paired', 'single', 'levershotgun', 'pump', 'autoshotgun'):
-        wood = 'black' if look == 'autoshotgun' else ('lightwood' if look in ('paired', 'levershotgun') else 'wood')
-        m.box([0, -0.08, -0.14], [0.13, 0.16, 0.3], wood)
-        receiver(m, -0.2, 0.35, top=0.18, bottom=-0.02, colour='steel' if look in ('double', 'paired') else 'gunmetal')
+        wood = {'double': 'darkwood', 'paired': 'lightwood', 'single': 'wood', 'levershotgun': 'wood',
+                'pump': 'darkwood', 'autoshotgun': 'wood'}[look]
+        m.box([0, -0.08, -0.14], [0.14, 0.17, 0.3], wood)
+        receiver(m, -0.2, 0.35, top=0.19, bottom=-0.03,
+                 colour='steel' if look in ('double', 'paired') else 'gunmetal')
         stock(m, -1.0, -0.15, colour=wood)
         length = {'double': 1.0, 'paired': 0.85, 'single': 0.95, 'levershotgun': 0.9, 'pump': 1.05,
                   'autoshotgun': 0.9}[look]
         if look in ('double', 'paired'):
-            barrel(m, 0.35, length, 0.05, 0.1, 'steel', x=-0.05)
-            barrel(m, 0.35, length, 0.05, 0.1, 'steel', x=0.05)
-            m.box([0, 0.35 + 0.35, 0.02], [0.15, 0.7, 0.08], wood)
+            barrel(m, 0.35, length, 0.055, 0.1, 'steel', x=-0.055)
+            barrel(m, 0.35, length, 0.055, 0.1, 'steel', x=0.055)
+            m.box([0, 0.35 + 0.35, 0.02], [0.16, 0.7, 0.09], wood)
             if look == 'paired':
-                m.box([0, 0.3, 0.2], [0.2, 0.08, 0.04], 'brass')  # joined triggers' latch
+                m.box([0, 0.3, 0.21], [0.21, 0.08, 0.05], 'brass')  # joined triggers' latch
         else:
-            barrel(m, 0.35, length, 0.05, 0.11, 'steel' if look != 'autoshotgun' else 'black')
-            m.cylinder([0, 0.35, 0.02], length * 0.8, 0.04, 'gunmetal')  # tube
+            barrel(m, 0.35, length, 0.055, 0.11, 'steel' if look != 'autoshotgun' else 'gunmetal')
+            m.cylinder([0, 0.35, 0.02], length * 0.8, 0.045, 'gunmetal')  # tube
             if look == 'pump':
-                m.box([0, 0.75, 0.03], [0.13, 0.35, 0.12], 'wood')
+                m.box([0, 0.75, 0.03], [0.15, 0.35, 0.13], 'wood')
             if look == 'levershotgun':
-                m.box([0, 0.02, -0.16], [0.03, 0.26, 0.03], 'steel')
-                m.box([0, -0.1, -0.1], [0.03, 0.03, 0.12], 'steel')
+                m.box([0, 0.02, -0.16], [0.04, 0.26, 0.04], 'steel')
+                m.box([0, -0.1, -0.1], [0.04, 0.04, 0.12], 'steel')
             if look == 'autoshotgun':
-                magazine(m, 0.25, depth=0.34, colour='black', length=0.2, width=0.14)
-                m.box([0, 0.7, 0.03], [0.13, 0.4, 0.12], 'black')
-        sight(m, 0.35 + length - 0.04, 0.18)
+                magazine(m, 0.25, depth=0.36, colour='gunmetal', length=0.21, width=0.15)
+                m.box([0, 0.7, 0.03], [0.15, 0.4, 0.13], 'wood')
+        sight(m, 0.35 + length - 0.04, 0.19)
         muzzle = [0, 0.35 + length, 0.1]
         eject = [0.1, 0.1, 0.12]
     elif look == 'taser':
-        m.box([0, -0.05, -0.18], [0.14, 0.16, 0.36], 'black')
-        receiver(m, -0.12, 0.35, top=0.16, bottom=-0.02, colour='yellow')
-        m.box([0, 0.4, 0.07], [0.16, 0.12, 0.16], 'black')  # cartridge
-        m.box([0.05, 0.47, 0.1], [0.03, 0.02, 0.03], 'blue')
-        m.box([-0.05, 0.47, 0.1], [0.03, 0.02, 0.03], 'blue')
-        m.box([0, 0.1, 0.18], [0.1, 0.18, 0.04], 'black')
+        m.box([0, -0.05, -0.18], [0.15, 0.17, 0.36], 'black')
+        receiver(m, -0.12, 0.35, top=0.17, bottom=-0.03, colour='yellow')
+        m.box([0, 0.4, 0.07], [0.17, 0.12, 0.17], 'black')  # cartridge
+        m.box([0.05, 0.47, 0.1], [0.04, 0.02, 0.04], 'blue')
+        m.box([-0.05, 0.47, 0.1], [0.04, 0.02, 0.04], 'blue')
+        m.box([0, 0.1, 0.19], [0.11, 0.18, 0.05], 'black')
         muzzle = [0, 0.48, 0.1]
     else:
         raise ValueError(look)
@@ -434,23 +463,91 @@ def round_model(length, radius):
     # A round in flight, pointing along +y: a brass case behind a lead tip.
     m = Model()
     m.cylinder([0, -length / 2, 0], length * 0.6, radius, 'brass', sides=6)
-    m.cylinder([0, length * 0.1, 0], length * 0.4, radius * 0.7, 'gunmetal', sides=6)
+    m.cylinder([0, length * 0.1, 0], length * 0.4, radius * 0.7, 'tip', sides=6)
     m.node('mountPoint', [0, 0, 0])
     return m
 
 
+# How each kind of ammo is packed: the box, its lid, and the rounds in it
+# (length, radius, the case's colour, the tip's colour).
+PACKING = {
+    'pistol': dict(box='gunmetal', lid='gunmetal', size=(0.42, 0.26, 0.2), round=(0.12, 0.028, 'brass', 'tip')),
+    'revolver': dict(box='card', lid='card', size=(0.32, 0.24, 0.14), round=(0.13, 0.03, 'brass', 'gunmetal')),
+    'machinepistol': dict(box='olive', lid='olive', size=(0.44, 0.26, 0.22), round=(0.12, 0.028, 'brass', 'tip')),
+    'rifle': dict(box='wood', lid='lightwood', size=(0.5, 0.3, 0.2), round=(0.2, 0.03, 'brass', 'tip')),
+    'machinerifle': dict(box='gunmetal', lid='olive', size=(0.5, 0.28, 0.24), round=(0.2, 0.03, 'brass', 'brass')),
+    'shotgun': dict(box='wood', lid='wood', size=(0.46, 0.3, 0.18), round=(0.17, 0.045, 'shell', 'brass')),
+    'sniper': dict(box='darkwood', lid='darkwood', size=(0.56, 0.24, 0.18), round=(0.28, 0.034, 'brass', 'tip')),
+}
+
+
+def cartridge(m, at, length, radius, case, tip, axis='z'):
+    # Standing up (`axis` z) or lying along x/y; a shotgun shell's `tip` is
+    # its brass base, so it goes at the bottom.
+    x, y, z = at
+    if case == 'shell':
+        m.cylinder([x, y, z], length * 0.22, radius, tip, sides=6, axis=axis)
+        step = [0, 0, 0]
+        step['xyz'.index(axis)] = length * 0.22
+        m.cylinder([x + step[0], y + step[1], z + step[2]], length * 0.78, radius * 0.95, case, sides=6, axis=axis)
+        return
+    m.cylinder([x, y, z], length * 0.7, radius, case, sides=6, axis=axis)
+    step = [0, 0, 0]
+    step['xyz'.index(axis)] = length * 0.7
+    m.cylinder([x + step[0], y + step[1], z + step[2]], length * 0.3, radius * 0.7, tip, sides=6, axis=axis)
+
+
+def crate(m, kind, at=(0.0, 0.0), turn=False, lid=True):
+    # An open box of `kind`'s rounds, standing in rows, with the lid
+    # thrown back and the kind's colour on its label.
+    p = PACKING[kind]
+    w, d, h = p['size']
+    if turn:
+        w, d = d, w
+    ox, oy = at
+    t = 0.025
+    m.box([ox, oy, t / 2], [w, d, t], p['box'])
+    m.box([ox - w / 2 + t / 2, oy, h / 2], [t, d, h], p['box'])
+    m.box([ox + w / 2 - t / 2, oy, h / 2], [t, d, h], p['box'])
+    m.box([ox, oy - d / 2 + t / 2, h / 2], [w - 2 * t, t, h], p['box'])
+    m.box([ox, oy + d / 2 - t / 2, h / 2], [w - 2 * t, t, h], p['box'])
+    m.box([ox, oy - d / 2 - 0.002, h * 0.55], [w * 0.5, 0.004, h * 0.35], f'ammo_{kind}')  # label
+    length, radius, case, tip = p['round']
+    stand = min(length, h + 0.04)
+    cols = max(1, int((w - 2 * t) / (radius * 2.3)))
+    rows = max(1, int((d - 2 * t) / (radius * 2.3)))
+    for i in range(cols):
+        for j in range(rows):
+            x = ox - w / 2 + t + (i + 0.5) * (w - 2 * t) / cols
+            y = oy - d / 2 + t + (j + 0.5) * (d - 2 * t) / rows
+            cartridge(m, (x, y, t + max(0.0, h - t - stand + 0.05)), stand, radius, case, tip)
+    if lid:
+        # Hinged at the back edge, thrown back past upright.
+        m.box_tilted([ox, oy + d / 2 + 0.012, h + d / 2 - 0.02], [w, t, d], p['lid'],
+                     angle=-0.35, hinge=(oy + d / 2, h))
+
+
+def loose(m, kind, x, y, angle_axis='x'):
+    length, radius, case, tip = PACKING[kind]['round']
+    cartridge(m, (x, y, radius), length, radius, case, tip, axis=angle_axis)
+
+
 def ammo_model(key):
     m = Model()
-    colour = f'ammo_{key}'
     if key == 'pile':
-        for kind, x, y, z in [('shotgun', -0.2, -0.1, 0.12), ('rifle', 0.15, -0.05, 0.12),
-                              ('pistol', 0.0, 0.2, 0.12), ('sniper', -0.05, 0.02, 0.34)]:
-            m.box([x, y, z], [0.34, 0.24, 0.24], f'ammo_{kind}')
-            m.box([x, y, z + 0.121], [0.3, 0.2, 0.004], 'white')
+        # A heap of open boxes of every kind, with rounds spilled round it.
+        crate(m, 'rifle', (-0.22, 0.05))
+        crate(m, 'shotgun', (0.28, -0.05), turn=True)
+        crate(m, 'pistol', (0.0, -0.32), lid=False)
+        crate(m, 'sniper', (0.02, 0.36), lid=False)
+        for kind, x, y, axis in [('rifle', -0.5, -0.25, 'x'), ('shotgun', 0.52, 0.25, 'y'),
+                                 ('pistol', -0.32, -0.45, 'y'), ('sniper', 0.4, 0.42, 'x')]:
+            loose(m, kind, x, y, axis)
     else:
-        m.box([0, 0, 0.14], [0.42, 0.28, 0.28], colour)
-        m.box([0, 0, 0.281], [0.36, 0.22, 0.004], 'white')
-        m.box([0, 0.141, 0.14], [0.2, 0.004, 0.12], 'brass')
+        crate(m, key)
+        w, d, _ = PACKING[key]['size']
+        loose(m, key, w / 2 + 0.06, -d / 4, 'y')
+        loose(m, key, -w / 2 - 0.02, -d / 2 - 0.06, 'x')
     m.node('mountPoint', [0, 0, 0])
     return m
 
