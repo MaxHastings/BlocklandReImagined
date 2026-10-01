@@ -8248,13 +8248,15 @@ Render: `/mnt/project-files/steel-ball/steel-ball-v2.png`. Max's in-game
 check is a Steel Ball near bricks at Mirrors Medium, in Unified+Shine and
 in Dynamic.
 
-## 2026-10-01 Player Throwing port (branch `claude/project-thread-n5mlwe`, protocols 71 and 72, for v0.1.11)
+## 2026-10-01 Player Throwing port (branch `claude/project-thread-n5mlwe`, protocols 71 and 72, for v0.1.11; the Gate renumbers)
 
 Max picked Electrk's Player Throwing ("Electrk's is fine") as the classic
 throw Add-On, run from the player's own copy ("originals only"). Port
 `crates/addon-import/ports/script_playerthrowing`, listed in `ports.json` as
-partial, checked against the copy the Gate imported (sha256 `aef5a450...`).
+verified (partial until the follow-ups below), checked against the copy the Gate imported (sha256 `aef5a450...`).
 The original is read only to write the port; none of it is in the repo.
+It ships bundled in the download (the bundle lane imports Max's copy at
+release).
 
 The port is a host-rules companion (`script_playerthrowing-rules`, from the
 Fill Can companion work, merged here): `rules/throwing.rhai`, one function
@@ -8294,9 +8296,27 @@ general seams:
   `Observer::onTrigger`, `serverCmdUseInventory` and
   `serverCmdInstantUseBrick`.
 
-Still not as in v20 (the port stays partial): the held body's quarter turn
-on the hand (`setTransform` rotation), and the orbit's zoom range (only its
-starting distance is used).
+Second follow-up (Max: every gap against the original closed), which marks
+the port verified:
+- `mount_object(mount, rider, node, can_dismount, turn)`: the rider's body
+  turn on the mount point (`mRot.z`, as `setTransform` on a mounted player
+  sets it), until their own turn moves it. A rider whose moves a camera has
+  (an orbit, a spy) now keeps their turn instead of taking the body's
+  world yaw as a seat turn every tick, which spun them.
+  - The port computes the turn the way Torque does for this Add-On's
+    `setTransform(pos @ " 0 0 0.85 90")`: the angle is radians and the
+    axis is not normalised. QuatF(AngAxisF), its matrix's forward column,
+    and Player::setTransform's `-atan2(-x, y)` give -93.5 degrees, about a
+    quarter turn left. The arithmetic is recalled from the Torque source,
+    not measured; it is in the rule's `held_turn` with its reasoning.
+- `orbit_camera(p, target, min, max, distance)`:
+  `ControlObject::Orbit { target, min, max, distance }`. The client's wheel
+  (`UiUpdate::CameraWheel`, `GameAction::CameraZoom`) zooms it a unit a
+  notch within the range, kept until the host hands over another camera.
+  The port reads `setOrbitMode`'s 5, 10 and 5.
+
+The server preferences keep their defaults until hosts get Add-On
+settings (the Tier lane's seam); every behaviour the script has is ported.
 
 Tests (content-free; the stand-in Add-On in
 `crates/addon-import/tests/fixtures/ports/Script_PlayerThrowing` is ours,
@@ -8312,7 +8332,10 @@ CC0, with its own numbers):
   horse).
 - `cargo test -p bri-sim --test script_api`: `orbit_camera` limits, the
   target leaving, an admin camera kept; `unmount_image` puts bricks away.
-- `bri-client` `an_add_on_orbit_sits_at_its_own_distance`.
+- `bri-client` `an_add_on_orbit_sits_at_its_own_distance`: the distance,
+  the wheel's range, the zoom kept every frame.
+- The hosted port test also checks the quarter turn on the hand (the
+  stand-in's `" 0 0 1 1.5708"`) held while the held player's mouse turns.
 
 ## 2026-10-01 Adventure Pack seams: hit regions, HUD per gun, onFire with a round (branch `claude/adventure-pack-n3spj2`)
 

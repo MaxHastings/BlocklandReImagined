@@ -639,6 +639,10 @@ fn player_throwing_port_becomes_host_rules_with_this_copys_numbers() {
         "fn held_sequence() { \"death1\" }",
         "fn holder_sequence() { \"armReadyBoth\" }",
         "fn orbit_distance() { parse_float(\"6\") }",
+        "fn orbit_nearest() { parse_float(\"4\") }",
+        "fn orbit_farthest() { parse_float(\"9\") }",
+        "let half = parse_float(\"1.5708\") / 2.0;",
+        "let z = parse_float(\"1\") * half.sin();",
     ] {
         assert!(rules.contains(line), "{line} missing from\n{rules}");
     }
@@ -806,10 +810,30 @@ fn ported_player_throwing_grabs_throws_and_lets_go_in_a_hosted_game() {
         vitals[&held].control,
         ControlObject::Orbit {
             target: holder,
+            min: 4,
+            max: 9,
             distance: 6
         }
     );
     assert!(cmd(&mut s, held, Command::ControlPlayer).is_err());
+    // Turned a quarter left on the hand (`setTransform`'s " 0 0 1 1.5708"),
+    // and kept so while their mouse turns the camera.
+    let turn = |s: &Session| {
+        let d = state(s, held).yaw - state(s, holder).yaw;
+        (d + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
+    };
+    assert!(
+        (turn(&s) + std::f32::consts::FRAC_PI_2).abs() < 1e-3,
+        "{}",
+        turn(&s)
+    );
+    inputs.get_mut(&held).unwrap().yaw = 2.0;
+    steps(&mut s, &inputs, 24);
+    assert!(
+        (turn(&s) + std::f32::consts::FRAC_PI_2).abs() < 1e-3,
+        "{}",
+        turn(&s)
+    );
     // Their bricks are put away (`unmountImage(0)`).
     assert!(
         s.take_private_notices()

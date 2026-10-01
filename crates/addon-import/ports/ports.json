@@ -24,7 +24,7 @@
       "addon": "Script_PlayerThrowing",
       "title": "Player Throwing",
       "port": "script_playerthrowing",
-      "status": "partial",
+      "status": "verified",
       "sha256": [
         "aef5a4503044f5ec690c8cb3ef693ed885f97f90c7d79d7c453704be56caf0ba"
       ],
@@ -41,7 +41,11 @@
           "puts_away": "%col\\.unmountImage\\s*\\(\\s*0\\s*\\)",
           "grab_timeout": "getSimTime\\s*\\(\\s*\\)\\s*-\\s*%this\\.grabTimeout",
           "grabs_players": "containerRaycast\\s*\\([^;]*PlayerObjectType",
-          "orbit": "setOrbitMode\\s*\\(\\s*%this\\s*,\\s*[^,]+,\\s*[0-9.]+\\s*,\\s*[0-9.]+\\s*,\\s*([0-9]*\\.?[0-9]+)"
+          "orbit": "setOrbitMode\\s*\\(\\s*%this\\s*,\\s*[^,]+,\\s*[0-9.]+\\s*,\\s*[0-9.]+\\s*,\\s*([0-9]*\\.?[0-9]+)",
+          "orbit_min": "setOrbitMode\\s*\\(\\s*%this\\s*,\\s*[^,]+,\\s*([0-9]*\\.?[0-9]+)\\s*,",
+          "orbit_max": "setOrbitMode\\s*\\(\\s*%this\\s*,\\s*[^,]+,\\s*[0-9.]+\\s*,\\s*([0-9]*\\.?[0-9]+)\\s*,",
+          "turn_axis": "%col\\.setTransform\\s*\\(\\s*%col\\.getPosition\\s*\\(\\s*\\)\\s*@\\s*\"\\s*0\\s+0\\s+([0-9]*\\.?[0-9]+)\\s+-?[0-9.]+\\s*\"",
+          "turn_angle": "%col\\.setTransform\\s*\\(\\s*%col\\.getPosition\\s*\\(\\s*\\)\\s*@\\s*\"\\s*0\\s+0\\s+[0-9.]+\\s+(-?[0-9]*\\.?[0-9]+)\\s*\""
         },
         "Player::throwPlayer": {
           "min_amount": "mClamp\\s*\\(\\s*%amount\\s*,\\s*(\\d+)\\s*,",

@@ -380,6 +380,9 @@ pub struct Core {
     /// image's `wheel` command): the wheel goes to it, not the inventory.
     /// Whether the trigger is held is `held_controls`, this UI's own.
     pub wheel_tool: bool,
+    /// An Add-On's orbit camera zooms on the wheel, in place of the
+    /// inventory.
+    pub wheel_camera: bool,
     pub cursor_forced: bool,
     /// Open print selector aspect ratio and last print per aspect.
     pub print_aspect: Option<String>,
@@ -502,6 +505,7 @@ impl Core {
         self.super_shift = false;
         self.zoom_on = false;
         self.wheel_tool = false;
+        self.wheel_camera = false;
         self.cursor_forced = false;
         self.print_aspect = None;
         self.last_print.clear();
@@ -1307,6 +1311,7 @@ impl Ui {
             super_shift_time: 0,
             zoom_on: false,
             wheel_tool: false,
+            wheel_camera: false,
             cursor_forced: false,
             print_aspect: None,
             last_print: BTreeMap::new(),
@@ -1769,6 +1774,7 @@ impl Ui {
             UiUpdate::FirstPerson(on) => c.first_person = on,
             UiUpdate::HideCrosshair(on) => c.hide_crosshair = on,
             UiUpdate::ToolWheel(on) => c.wheel_tool = on,
+            UiUpdate::CameraWheel(on) => c.wheel_camera = on,
             UiUpdate::Whiteout(amount) => {
                 if amount.is_finite() {
                     c.whiteout = c.whiteout.max(amount.clamp(0.0, 1.0));
@@ -2126,6 +2132,13 @@ impl Ui {
                     let most = NUM_WHEEL_STEPS as i32;
                     let notches = (steps as i32).clamp(-most, most);
                     self.core.game(GameAction::ToolWheel { notches });
+                    self.flush();
+                    return;
+                }
+                if self.content.id() == ScreenId::Play && dialogs == 0 && self.core.wheel_camera {
+                    let most = NUM_WHEEL_STEPS as i32;
+                    let notches = (steps as i32).clamp(-most, most);
+                    self.core.game(GameAction::CameraZoom { notches });
                     self.flush();
                     return;
                 }

@@ -1732,6 +1732,7 @@ impl Session {
                 rider,
                 node,
                 can_dismount,
+                turn,
             } => {
                 ensure!(
                     caller.is_none_or(|c| c == mount),
@@ -1742,7 +1743,9 @@ impl Session {
                     self.may_move(mount, ObjectRef::Player(rider)),
                     "Player {mount} may not move {rider} under the minigame and trust rules"
                 );
-                self.mount_player(mount, rider, node, can_dismount)
+                self.mount_player(mount, rider, node, can_dismount)?;
+                self.turn_rider(rider, turn);
+                Ok(())
             }
             Op::UnmountObject { rider } => {
                 // A command's player lets themselves off, or someone they

@@ -24,12 +24,18 @@ pub enum ControlObject {
     /// respawn, so the corpse takes no more input.
     Corpse,
     /// An Add-On's orbit camera around another player (`orbit_camera`;
-    /// v20's `%client.camera.setOrbitMode(%target, ...)` then
-    /// `setControlObject(%client.camera)`), `distance` units out. The body
-    /// takes no moves, the camera does not hand control back on a click
-    /// (the click still reaches Add-Ons as an empty-hand trigger), and
-    /// only the Add-On or the target leaving ends it.
-    Orbit { target: OwnerId, distance: u8 },
+    /// v20's `%client.camera.setOrbitMode(%target, %xform, %min, %max,
+    /// %cur)` then `setControlObject(%client.camera)`): `distance` units
+    /// out, which the wheel zooms between `min` and `max`. The body takes
+    /// no moves, the camera does not hand control back on a click (the
+    /// click still reaches Add-Ons as an empty-hand trigger), and only the
+    /// Add-On or the target leaving ends it.
+    Orbit {
+        target: OwnerId,
+        min: u8,
+        max: u8,
+        distance: u8,
+    },
     /// A package entity (a kart, a drone, a second body) that a package
     /// handed this player (`control(player, entity)`). The player's moves
     /// drive that entity's body with its archetype's movement; the avatar
@@ -147,17 +153,17 @@ impl Session {
         Ok(())
     }
     /// Spies watching a departing player return to their own bodies.
-    /// An Add-On's `orbit_camera`: `owner` watches `target` from
-    /// `distance` units out, or (`None`) has their body back. Only a player
-    /// on their body or in another Add-On orbit is given one: an admin
-    /// camera or a driven entity keeps control.
+    /// An Add-On's `orbit_camera`: `owner` watches `orbit.target`, or
+    /// (`None`) has their body back. Only a player on their body or in
+    /// another Add-On orbit is given one: an admin camera or a driven
+    /// entity keeps control.
     pub(super) fn orbit_camera(
         &mut self,
         owner: OwnerId,
-        orbit: Option<(OwnerId, u8)>,
+        orbit: Option<bri_package_runtime::ops::Orbit>,
     ) -> Result<()> {
         let peer = self.peers.get(&owner).context("No such player")?;
-        let Some((target, distance)) = orbit else {
+        let Some(orbit) = orbit else {
             if matches!(peer.control, ControlObject::Orbit { .. }) {
                 self.return_to_body(owner)?;
             }
@@ -174,10 +180,16 @@ impl Session {
             ),
             "That player's camera is in other hands"
         );
+        let target = orbit.target;
+        ensure!(orbit.valid(), "Invalid orbit distances");
         ensure!(target != owner, "A player cannot orbit themselves");
         ensure!(self.peers.contains_key(&target), "No such player to orbit");
-        self.peers.get_mut(&owner).expect("checked").control =
-            ControlObject::Orbit { target, distance };
+        self.peers.get_mut(&owner).expect("checked").control = ControlObject::Orbit {
+            target,
+            min: orbit.min,
+            max: orbit.max,
+            distance: orbit.distance,
+        };
         Ok(())
     }
     /// Whoever watched `target` (an admin spy, an Add-On orbit) has their

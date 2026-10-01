@@ -250,6 +250,15 @@ impl Session {
         let Some(&(mount, seat)) = self.riding.seats.get(&rider) else {
             return Ok(());
         };
+        // A camera has their moves (an orbit, a spy's): the body on the
+        // seat keeps its turn and stays on.
+        if self
+            .peers
+            .get(&rider)
+            .is_some_and(|p| p.control != super::ControlObject::Player)
+        {
+            return Ok(());
+        }
         let was_held = self
             .riding
             .jet_held
@@ -431,6 +440,17 @@ impl Session {
         }
         self.seat_rider(rider, mount, node);
         Ok(())
+    }
+    /// A rule turns a rider's body on their mount point (`setTransform` on a
+    /// mounted player sets its `mRot.z`), until their own turn moves it.
+    pub(super) fn turn_rider(&mut self, rider: OwnerId, turn: f32) {
+        if !turn.is_finite() || !self.riding.seats.contains_key(&rider) {
+            return;
+        }
+        let turn =
+            (turn + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+        self.riding.turn.insert(rider, turn);
+        self.follow_player_mounts();
     }
     /// `unMountObject` from a rule: the rider leaves the mount where they
     /// are, moving as it moved, solid again.

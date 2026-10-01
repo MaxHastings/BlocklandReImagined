@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "notes": "Electrk's Player Throwing as a host rule: with nothing in your hand, click a player in your minigame (one your weapons may hurt) to lift them, limp, onto your hand, their bricks or tool put away and their camera circling you; hold fire to charge and let go to throw them where you look; they click to struggle free after a few seconds, and neither of you may take out a tool or bricks meanwhile. Its numbers come from this copy's script; its server preferences keep their defaults (on, minigames only, grab every 5 s, escape after 3 s, charged throws at 100 ms a notch, 2.5 times the charge). Not yet as in v20: the held body is not given its quarter turn on the hand (setTransform's rotation), and the orbit camera's zoom range is not used, only its starting distance.",
+  "notes": "Electrk's Player Throwing as a host rule: with nothing in your hand, click a player in your minigame (one your weapons may hurt) to lift them, limp, onto your hand, turned as the original turns them, their bricks or tool put away and their camera circling you (their wheel zooms it); hold fire to charge and let go to throw them where you look; they click to struggle free after a few seconds, and neither of you may take out a tool or bricks meanwhile. Its numbers come from this copy's script; its server preferences keep their defaults (on, minigames only, grab every 5 s, escape after 3 s, charged throws at 100 ms a notch, 2.5 times the charge).",
   "rules": {
     "capabilities": [
       "physics",

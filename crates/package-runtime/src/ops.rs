@@ -412,12 +412,15 @@ pub enum Op {
     /// carried with it and drawn on that node as it animates. With
     /// `can_dismount` false the rider cannot get off by jumping
     /// (`canDismount = 0`). Riders a rule seats stay on through the mount
-    /// changing body while the new one has the node.
+    /// changing body while the new one has the node. `turn` (radians,
+    /// clockwise seen from above) turns the rider's body on the mount
+    /// point, as a `setTransform` on a mounted player sets its `mRot.z`.
     MountObject {
         mount: u64,
         rider: u64,
         node: u8,
         can_dismount: bool,
+        turn: f32,
     },
     /// Take `rider` off the player they ride, where they are, moving as
     /// the mount moved (`unMountObject`).
@@ -438,13 +441,31 @@ pub enum Op {
         player: u64,
         limits: Option<[f32; 2]>,
     },
-    /// Give a player an orbit camera around another (`target`, `distance`
-    /// whole units out; v20's `setOrbitMode` and
-    /// `setControlObject(camera)`), or (`None`) their body back.
+    /// Give a player an orbit camera around another (v20's `setOrbitMode`
+    /// and `setControlObject(camera)`), or (`None`) their body back.
     OrbitCamera {
         player: u64,
-        orbit: Option<(u64, u8)>,
+        orbit: Option<Orbit>,
     },
+}
+/// An orbit camera ([`Op::OrbitCamera`]): around player `target`, starting
+/// `distance` whole units out, which the player's wheel zooms between `min`
+/// and `max` (`setOrbitMode(%target, %transform, %min, %max, %cur)`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Orbit {
+    pub target: u64,
+    pub min: u8,
+    pub max: u8,
+    pub distance: u8,
+}
+impl Orbit {
+    /// Within [`ORBIT_DISTANCE`], `min <= distance <= max`.
+    pub fn valid(&self) -> bool {
+        ORBIT_DISTANCE.contains(&self.min)
+            && ORBIT_DISTANCE.contains(&self.max)
+            && self.min <= self.distance
+            && self.distance <= self.max
+    }
 }
 /// The mirror [`Op::MirrorCopy`] stands in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -574,12 +595,16 @@ impl Op {
             | Self::UnmountImage { .. }
             | Self::UnmountObject { .. } => true,
             Self::MountObject {
-                mount, rider, node, ..
-            } => mount != rider && usize::from(*node) < MAX_MOUNT_POINTS,
+                mount,
+                rider,
+                node,
+                turn,
+                ..
+            } => mount != rider && usize::from(*node) < MAX_MOUNT_POINTS && turn.is_finite(),
             Self::SetScale { scale, .. } => scale.is_finite() && SCALE_RANGE.contains(scale),
-            Self::OrbitCamera { player, orbit } => orbit.is_none_or(|(target, distance)| {
-                target != *player && ORBIT_DISTANCE.contains(&distance)
-            }),
+            Self::OrbitCamera { player, orbit } => {
+                orbit.is_none_or(|o| o.target != *player && o.valid())
+            }
             Self::SetLookLimits { limits, .. } => limits
                 .is_none_or(|[down, up]| (0.0..=1.0).contains(&down) && (0.0..=1.0).contains(&up)),
             Self::PaintFill { limit, .. } => (1..=MAX_FILL_BRICKS as u32).contains(limit),

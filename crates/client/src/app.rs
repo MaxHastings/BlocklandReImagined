@@ -423,6 +423,8 @@ pub struct App {
     /// The held tool's `wheel` command: while its trigger is held, it takes
     /// the mouse wheel (`UiUpdate::ToolWheel`).
     tool_wheel: Option<String>,
+    /// The UI sends the wheel to an Add-On's zooming orbit camera.
+    camera_wheel: bool,
     cpu_terrain: Vec<Arc<bri_render::terrain_scene::TerrainScene>>,
     renderer: Option<crate::gpu_build::Building<SceneRenderer>>,
     effects: crate::effects::WorldEffects,
@@ -1708,6 +1710,7 @@ impl App {
             steering_sent: None,
             crosshair_hidden: false,
             tool_wheel: None,
+            camera_wheel: false,
             cpu_terrain: Vec::new(),
             renderer: None,
             effects,
@@ -2703,6 +2706,11 @@ impl App {
             .and_then(|i| i.commands.wheel.clone())
             .filter(|_| self.controls.observer().is_none() && !self.local_weapon_seat());
         claim_wheel(&mut self.ui, &mut self.tool_wheel, wheel);
+        let zooms = self.controls.orbit_zooms();
+        if zooms != self.camera_wheel {
+            self.camera_wheel = zooms;
+            self.ui.apply(UiUpdate::CameraWheel(zooms));
+        }
     }
     /// Dead players watch their corpse from the orbit camera.
     fn third_person_view(&self) -> bool {
@@ -7822,6 +7830,10 @@ impl PlatformApp for App {
                         continue;
                     }
                     result
+                }
+                UiAction::Game(GameAction::CameraZoom { notches }) => {
+                    self.controls.zoom_orbit(notches);
+                    continue;
                 }
                 UiAction::Game(GameAction::ToolWheel { notches }) => {
                     // The image's `wheel` command names "package:command".

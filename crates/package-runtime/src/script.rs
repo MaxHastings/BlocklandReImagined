@@ -1576,24 +1576,46 @@ fn register_presentation(engine: &mut Engine) {
             limits: None,
         })
     });
-    engine.register_fn(
-        "orbit_camera",
-        |player: Dynamic, target: Dynamic, distance: Dynamic| {
-            let distance = float(&distance)?;
-            let range = crate::ops::ORBIT_DISTANCE;
-            if !(f32::from(*range.start())..=f32::from(*range.end())).contains(&distance) {
+    fn orbit_camera(
+        player: Dynamic,
+        target: Dynamic,
+        min: Dynamic,
+        max: Dynamic,
+        distance: Dynamic,
+    ) -> Fallible<()> {
+        let range = crate::ops::ORBIT_DISTANCE;
+        let units = |v: &Dynamic| -> Fallible<u8> {
+            let v = float(v)?;
+            if !(f32::from(*range.start())..=f32::from(*range.end())).contains(&v) {
                 return fail(format!(
                     "an orbit camera sits {} to {} units out",
                     range.start(),
                     range.end()
                 ));
             }
-            push(Op::OrbitCamera {
-                player: id(&player)?,
-                orbit: Some((id(&target)?, distance.round() as u8)),
-            })
+            Ok(v.round() as u8)
+        };
+        let orbit = crate::ops::Orbit {
+            target: id(&target)?,
+            min: units(&min)?,
+            max: units(&max)?,
+            distance: units(&distance)?,
+        };
+        if !orbit.valid() {
+            return fail("an orbit camera starts between its nearest and farthest");
+        }
+        push(Op::OrbitCamera {
+            player: id(&player)?,
+            orbit: Some(orbit),
+        })
+    }
+    engine.register_fn(
+        "orbit_camera",
+        |player: Dynamic, target: Dynamic, distance: Dynamic| {
+            orbit_camera(player, target, distance.clone(), distance.clone(), distance)
         },
     );
+    engine.register_fn("orbit_camera", orbit_camera);
     engine.register_fn("orbit_camera", |player: Dynamic, _: ()| {
         push(Op::OrbitCamera {
             player: id(&player)?,
@@ -1784,20 +1806,31 @@ fn register_physics(engine: &mut Engine) {
             player: id(&player)?,
         })
     });
+    fn mount_object(
+        mount: Dynamic,
+        rider: Dynamic,
+        node: i64,
+        can_dismount: bool,
+        turn: Dynamic,
+    ) -> Fallible<()> {
+        push(Op::MountObject {
+            mount: id(&mount)?,
+            rider: id(&rider)?,
+            node: u8::try_from(node)
+                .ok()
+                .filter(|n| usize::from(*n) < crate::ops::MAX_MOUNT_POINTS)
+                .ok_or("a mount point is 0 to 7")?,
+            can_dismount,
+            turn: float(&turn)?.to_radians(),
+        })
+    }
     engine.register_fn(
         "mount_object",
         |mount: Dynamic, rider: Dynamic, node: i64, can_dismount: bool| {
-            push(Op::MountObject {
-                mount: id(&mount)?,
-                rider: id(&rider)?,
-                node: u8::try_from(node)
-                    .ok()
-                    .filter(|n| usize::from(*n) < crate::ops::MAX_MOUNT_POINTS)
-                    .ok_or("a mount point is 0 to 7")?,
-                can_dismount,
-            })
+            mount_object(mount, rider, node, can_dismount, Dynamic::from_float(0.0))
         },
     );
+    engine.register_fn("mount_object", mount_object);
     engine.register_fn("unmount_object", |rider: Dynamic| {
         push(Op::UnmountObject { rider: id(&rider)? })
     });

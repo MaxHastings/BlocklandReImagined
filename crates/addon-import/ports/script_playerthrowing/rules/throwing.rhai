@@ -27,6 +27,21 @@ fn ground() { parse_float("{{ground}}") }
 fn held_sequence() { "{{held_sequence}}" }
 fn holder_sequence() { "{{holder_sequence}}" }
 fn orbit_distance() { parse_float("{{orbit}}") }
+fn orbit_nearest() { parse_float("{{orbit_min}}") }
+fn orbit_farthest() { parse_float("{{orbit_max}}") }
+
+// The held body's turn on the hand, in degrees clockwise seen from above:
+// what Torque makes of `setTransform(pos @ " 0 0 <axis> <angle>")` on a
+// mounted player. Its angle is radians and its axis is not normalised:
+// QuatF(AngAxisF) is (0, 0, axis sin(angle/2), cos(angle/2)), its matrix's
+// forward column is (-2wz, 1 - 2z^2), and Player::setTransform takes
+// -atan2(-forward.x, forward.y) as mRot.z.
+fn held_turn() {
+    let half = parse_float("{{turn_angle}}") / 2.0;
+    let z = parse_float("{{turn_axis}}") * half.sin();
+    let w = half.cos();
+    (-atan(2.0 * w * z, 1.0 - 2.0 * z * z)).to_degrees()
+}
 
 // v20 plays these on threads 0 and 1; here the body's action thread (2)
 // carries them, layered by their own priority.
@@ -164,13 +179,13 @@ fn attempt_grab(who) {
     }
     set_player(t.id, "old_scale", t.scale);
     unmount_image(t.id);
-    mount_object(who, t.id, node(), false);
+    mount_object(who, t.id, node(), false, held_turn());
     set_scale(t.id, me.scale * held_scale());
     play_thread(t.id, anim_thread(), held_sequence());
     set_look_limits(t.id, look_up(), look_down());
     // The "Grabbed" camera: orbiting the holder; its click struggles
     // (Observer::onTrigger), which reaches on_activate below.
-    orbit_camera(t.id, who, orbit_distance());
+    orbit_camera(t.id, who, orbit_nearest(), orbit_farthest(), orbit_distance());
     play_thread(who, anim_thread(), holder_sequence());
     set_player(t.id, "holder", who);
     set_player(t.id, "grabbed_at", tick());
