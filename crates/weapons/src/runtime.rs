@@ -2912,7 +2912,7 @@ impl WeaponsWorld {
         script: &str,
         q: &mut impl Query,
     ) -> bool {
-        let name = image.name.to_ascii_lowercase();
+        let stock = Stock::of(image);
         // An Add-On tool's own moments run its commands, then carry on. A
         // gun's `onFire` command runs and its projectile still flies, as a
         // v20 `Image::onFire` package calling `Parent::onFire` did (a
@@ -2961,23 +2961,14 @@ impl WeaponsWorld {
         };
         match script {
             "oncharge" => {
-                if name.contains("spear") || name.contains("football") {
-                    self.animation(id, "spearReady");
+                if let Some(arm) = stock.charge_arm {
+                    self.animation(id, arm);
                 }
             }
             "onabortcharge" | "onstopfire" => self.animation(id, "root"),
             "onprefire" => {
-                if name.contains("key") {
-                    self.animation(id, "shiftLeft");
-                } else if name == "wrenchimage" {
-                    self.animation(id, "wrench");
-                } else if name.contains("sword")
-                    || matches!(
-                        name.as_str(),
-                        "hammerimage" | "wandimage" | "adminwandimage"
-                    )
-                {
-                    self.animation(id, "armattack");
+                if let Some(arm) = stock.prefire_arm {
+                    self.animation(id, arm);
                 }
             }
             "onfireakimbo" => {
@@ -2986,79 +2977,36 @@ impl WeaponsWorld {
                 }
             }
             "onfire" => {
-                if ported.is_none()
-                    && (HOST_TOOL_IMAGES.contains(&name.as_str()) || image.command.is_some())
-                {
-                    self.events.push(Event::ToolFire {
-                        actor: id,
-                        image: image.id.clone(),
-                        hand: e.hand,
-                        command: image.command.clone(),
-                    });
-                    return true;
-                }
-                if ported.is_none() && name == "skiweaponimage" {
-                    match a.frame.mount {
-                        Mount::Other => self.events.push(Event::SkisUnavailable { actor: id }),
-                        Mount::Skis => {
-                            a.skiing = false;
-                            self.events.push(Event::StopSkis { actor: id });
-                            self.events.push(Event::SkiNodes {
+                if ported.is_none() {
+                    let fire = if image.command.is_some() {
+                        StockFire::HostTool
+                    } else {
+                        stock.fire
+                    };
+                    match fire {
+                        StockFire::Projectile => {}
+                        StockFire::HostTool => {
+                            self.events.push(Event::ToolFire {
                                 actor: id,
-                                visible: false,
+                                image: image.id.clone(),
+                                hand: e.hand,
+                                command: image.command.clone(),
                             });
+                            return true;
                         }
-                        Mount::None => {
-                            if !a.skiing {
-                                a.skiing = true;
-                                self.events.push(Event::StartSkis {
-                                    actor: id,
-                                    position: a.frame.position + Vec3::Y * 0.3,
-                                    velocity: a.frame.velocity,
-                                    mount_after_ticks: 30,
-                                });
-                                self.events.push(Event::SkiNodes {
-                                    actor: id,
-                                    visible: true,
-                                });
-                                self.unmount(id, a);
-                                return false;
+                        StockFire::Skis => return self.fire_skis(id, a),
+                        StockFire::Key => {
+                            self.fire_key(id, a, image, q);
+                            return true;
+                        }
+                        StockFire::ShootBasketball => {
+                            self.mount(id, a, &native_id("image", "basketballShootImage"), 0);
+                            if let Some(new) = &mut a.images[0] {
+                                new.trigger = e.trigger;
                             }
+                            return false;
                         }
                     }
-                    return true;
-                }
-                if ported.is_none() && name.contains("keyimage") {
-                    let end = a.frame.eye + a.frame.direction.normalize() * 10.0 * a.frame.scale;
-                    if let Some(hit) = q.sweep(
-                        a.frame.eye,
-                        end,
-                        Filter {
-                            projectile_age_ticks: None,
-                            source: id,
-                            players: false,
-                            world_only: true,
-                        },
-                    ) && let (TargetId::Brick(brick), Some(color)) = (hit.target, hit.color)
-                        && q.can_affect(id, hit.target)
-                    {
-                        self.events.push(Event::Key {
-                            actor: id,
-                            brick,
-                            matched: key_matches(
-                                [image.color[0], image.color[1], image.color[2]],
-                                color,
-                            ),
-                        });
-                    }
-                    return true;
-                }
-                if ported.is_none() && name == "basketballimage" {
-                    self.mount(id, a, &native_id("image", "basketballShootImage"), 0);
-                    if let Some(new) = &mut a.images[0] {
-                        new.trigger = e.trigger;
-                    }
-                    return false;
                 }
                 // A ported script's own projectile before the image's.
                 let Some(projectile) = ported
@@ -3081,7 +3029,8 @@ impl WeaponsWorld {
                 if sport && self.tick < a.ball_ready {
                     return true;
                 }
-                if name.contains("dodgeball") && self.tick < a.spawn_tick + 120 {
+                if stock.spawn_grace_ticks > 0 && self.tick < a.spawn_tick + stock.spawn_grace_ticks
+                {
                     return true;
                 }
                 if a.last_shot
@@ -3160,17 +3109,9 @@ impl WeaponsWorld {
                 }
                 let mut velocity = direction * speed + a.frame.velocity * p.inherit;
                 if sport {
-                    let (power, up) = if name.contains("dodgeball") {
-                        (30.0, 4.0)
-                    } else if name.contains("football") {
-                        (40.0, 0.0)
-                    } else if name.contains("soccer") {
-                        (20.0, 3.0)
-                    } else {
-                        (7.0, 7.5)
-                    };
+                    let (power, up) = stock.throw;
                     velocity = direction * power + Vec3::Y * up + a.frame.velocity;
-                    if name.contains("basketball") {
+                    if stock.aimed_throw {
                         let target = q.sweep(
                             a.frame.eye,
                             a.frame.eye + direction * 20.0,
@@ -3345,7 +3286,7 @@ impl WeaponsWorld {
                         return true;
                     }
                     if let Some(p) = self.projectiles.get_mut(&(self.next_id - 1)) {
-                        p.was_thrown = name.contains("football");
+                        p.was_thrown = stock.thrown;
                         p.paint = e.paint;
                     }
                     // A cooked grenade flies with what is left of its fuse.
@@ -3400,16 +3341,14 @@ impl WeaponsWorld {
                 }
                 if ported.is_some() {
                     // The port played its own arm animation.
-                } else if name.contains("spear") || name.contains("football") {
-                    self.animation(id, "spearThrow");
-                } else if name.contains("pushbroom") {
-                    self.animation(id, "rotCW");
+                } else if let Some(arm) = stock.throw_arm {
+                    self.animation(id, arm);
                 } else if image.states.get(e.state).is_some_and(|s| !s.arm.is_empty()) {
                     // The state played the arm's own animation already.
                 } else if e.hand == 1 {
                     self.animation(id, "leftrecoil");
-                } else if name.contains("gun") || name.contains("horseray") {
-                    self.animation(id, "shiftAway");
+                } else if let Some(arm) = stock.recoil_arm {
+                    self.animation(id, arm);
                 }
                 if sport {
                     a.ball_ready = self.tick + 36;
@@ -3426,6 +3365,62 @@ impl WeaponsWorld {
             _ => {}
         }
         true
+    }
+    /// `skiWeaponImage::onFire`: on foot, put the skis on (and lower the
+    /// item, `false`); on skis, take them off. Whether the item stays held.
+    fn fire_skis(&mut self, id: ActorId, a: &mut Actor) -> bool {
+        match a.frame.mount {
+            Mount::Other => self.events.push(Event::SkisUnavailable { actor: id }),
+            Mount::Skis => {
+                a.skiing = false;
+                self.events.push(Event::StopSkis { actor: id });
+                self.events.push(Event::SkiNodes {
+                    actor: id,
+                    visible: false,
+                });
+            }
+            Mount::None => {
+                if !a.skiing {
+                    a.skiing = true;
+                    self.events.push(Event::StartSkis {
+                        actor: id,
+                        position: a.frame.position + Vec3::Y * 0.3,
+                        velocity: a.frame.velocity,
+                        mount_after_ticks: 30,
+                    });
+                    self.events.push(Event::SkiNodes {
+                        actor: id,
+                        visible: true,
+                    });
+                    self.unmount(id, a);
+                    return false;
+                }
+            }
+        }
+        true
+    }
+    /// `keyImage::onFire`: try the brick the holder points at within ten
+    /// units against the key's colour.
+    fn fire_key(&mut self, id: ActorId, a: &Actor, image: &Image, q: &mut impl Query) {
+        let end = a.frame.eye + a.frame.direction.normalize() * 10.0 * a.frame.scale;
+        if let Some(hit) = q.sweep(
+            a.frame.eye,
+            end,
+            Filter {
+                projectile_age_ticks: None,
+                source: id,
+                players: false,
+                world_only: true,
+            },
+        ) && let (TargetId::Brick(brick), Some(color)) = (hit.target, hit.color)
+            && q.can_affect(id, hit.target)
+        {
+            self.events.push(Event::Key {
+                actor: id,
+                brick,
+                matched: key_matches([image.color[0], image.color[1], image.color[2]], color),
+            });
+        }
     }
     /// One tick of a projectile's flight. [`coast`] is the same motion when
     /// it hits nothing.
@@ -4475,7 +4470,9 @@ pub fn key_matches(key: [f32; 3], brick: [f32; 3]) -> bool {
     diff <= 0.1
 }
 mod sports;
+mod stock;
 pub use sports::SportAction;
+use stock::{Stock, StockFire};
 
 mod persistence;
 pub use persistence::{SAVE_SCHEMA, WeaponsSave};
