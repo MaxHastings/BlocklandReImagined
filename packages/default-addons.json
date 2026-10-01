@@ -32,7 +32,6 @@
       "path": "advanced-duplicator/advanced-duplicator",
       "enabled": false
     },
-    { "id": "blockhead_bot", "path": "blockhead_bot", "enabled": false },
-    { "id": "throwmod", "path": "showcase/throwmod", "enabled": false }
+    { "id": "blockhead_bot", "path": "blockhead_bot", "enabled": false }
   ]
 }

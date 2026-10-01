@@ -8291,13 +8291,14 @@ Client:
   follow the arm still sample the pose without actions (`unacted_nodes`).
 - A rule's look limits bound the arms and head when not on a vehicle.
 
-Throwmod (`packages/showcase/throwmod`, installed but off, CC0, design
-credit to Nobot). With empty hands, click a player within two body
-lengths, no bigger than you, in a minigame whose weapons may hurt them (or
-the bot from your own bot brick). They shrink to 0.6, go limp (`death1`),
-lose their item and ride your left hand (mount 1). You raise your arms
-(`armReadyBoth`) and cannot jet. Click again to throw them at 50 along your
-look, credited to you. Dying, leaving or losing them puts both back.
+No bundled Throwmod: Max picked "originals only" for classic Add-Ons, so
+players run the original Throwmod from their own Blockland Add-Ons folder
+through the classic Add-On loader, and these seams are what it needs. A rule
+in its manner lives only as a test fixture (`crates/sim/tests/fixtures/
+throwmod`): with empty hands, click a player in a minigame (or the bot from
+your own brick); they shrink to 0.6, go limp (`death1`), lose their item
+and ride your left hand (mount 1) while you raise your arms
+(`armReadyBoth`) and cannot jet; click again to throw them along your look.
 
 Tests (content-free): `cargo test -p bri-sim --test throwmod`.
 - Mount points from a synthetic model, with the gap rule.
@@ -8310,5 +8311,5 @@ Tests (content-free): `cargo test -p bri-sim --test throwmod`.
   (needs the avatar pack, runs in the Gate).
 
 Not done: `mode.json` minigame block (Trench Warfare's is not on main yet).
-Only-Max check: lift and throw a friend or your own bot in a minigame; the
-held player should hang limp in the left hand in front of the chest.
+Only-Max check (once the classic loader runs the original Throwmod): lift
+and throw a friend or your own bot in a minigame.

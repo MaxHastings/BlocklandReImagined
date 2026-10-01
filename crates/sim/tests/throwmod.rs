@@ -1,10 +1,10 @@
-//! Throwmod (`packages/showcase/throwmod`), our version of Nobot's
-//! Script_Nobotthrowmod, played through the authoritative session, and the
-//! engine seams under it: an empty-hand click's `on_activate`, a rule
-//! seating one player on another's mount point (`mount_object`) that they
-//! cannot jump off, `unmount_object` carrying the mount's swing,
-//! `set_scale`, `unmount_image`, `set_look_limits`, and bots as players an
-//! Add-On can read.
+//! The engine seams Nobot's Script_Nobotthrowmod needs, played through the
+//! authoritative session with a rule in its manner (`tests/fixtures/throwmod`;
+//! a test fixture only, players load the original Add-On itself): an
+//! empty-hand click's `on_activate`, a rule seating one player on another's
+//! mount point (`mount_object`) that they cannot jump off, `unmount_object`
+//! carrying the mount's swing, `set_scale`, `unmount_image`,
+//! `set_look_limits`, and bots as players an Add-On can read.
 use bri_content::{
     brick::Brick as Mesh,
     collision::{CollisionBody, Part},
@@ -51,7 +51,10 @@ fn catalog(root: &std::path::Path, id: &str) -> Arc<Catalog> {
 }
 
 fn add_ons() -> Arc<Catalog> {
-    catalog(&showcase(), "throwmod")
+    catalog(
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures"),
+        "throwmod",
+    )
 }
 
 /// One 2x2 brick, for the bot's spawn brick.
