@@ -166,6 +166,7 @@ fn image(name: &str, states: Vec<State>) -> (String, Image) {
             follow_arm: false,
             paint_tint: false,
             paint_picker: false,
+            scripts: Default::default(),
         },
     )
 }

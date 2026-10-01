@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "images": {
+    "gravity-gun-tool:image/gravitygun": {
+      "skin": {
+        "shader": "skins/alien.wgsl",
+        "color": [0.3, 0.95, 1.0],
+        "energy_states": ["Grab"]
+      }
+    }
+  }
+}

@@ -167,7 +167,7 @@ HUD panels can only show keys the viewer receives. `persist` (default
 | `brick_box(brick)`, `voxel(brick)`, `can_place_voxel(x, y, z)` | | `place_voxel(x, y, z, material)`: `world.edit`; `set_avatar_colors(p, colors)`, `temp_look(p, look, seconds)`: `player` |
 | | | `copy_build(p, brick, limit, above_only, tool)`, `copy_box(p, min, max, limit, tool)`, `mirror_copy(p, axis)`: `build` |
 | | | `cut_copy(p)`, `paint_copy(p, color)`, `paint_fill(p, brick, paint, options)`, `paint_vehicle(p, vehicle, paint, options)`: `world.edit` |
-| | | `push`, `tumble`, `hold`, `hold_distance`, `let_go`, `spawn_vehicle`, `remove_vehicle`, `mount_object(mount, rider, node, can_dismount)`, `unmount_object(rider)`: `physics` |
+| | | `push`, `tumble`, `hold`, `reach`, `hold_distance`, `let_go`, `spawn_vehicle`, `remove_vehicle`, `mount_object(mount, rider, node, can_dismount)`, `unmount_object(rider)`: `physics` |
 | | | `heal(p, amount)`, `fire(...)`: `damage` |
 | | | `center_print(p, text, seconds)`, `bottom_print(p, text, seconds)` (`()` for everyone): `chat` |
 | | | `play_sound(p, sound)` at a player's ears, `sound_at(sound, x, y, z)`, `beam(from, to[, options])`, `play_thread(p, thread, sequence)`, `show_box(p, min, max, tool)`, `hide_box(p)`: `effects` |
@@ -342,7 +342,8 @@ front of the brick it hit: `aim().object`, `aim().object_distance` and
 | `tumble(player, vx, vy, vz, by)` | Knocks a player off their feet into a tumble, flying at that velocity. |
 | `hold(player, ref, distance)`, `hold(player, ref, distance, #{at, force, turn})` | Keeps `ref` floating `distance` (0.5 to 64) ahead of the player's eye, where they look, every tick until let go, carried at the velocity the aim point moves so it keeps up as they turn and walk. `at` (`[x, y, z]`, default its middle) is the spot on it that is held there, as a physics gun grabs where it points. `force` (default 36000, at most 10,000,000) is how hard it may pull: things up to `force / 450` in mass answer at once, heavier ones swing in slower and very heavy ones can only be dragged. With `turn`, it keeps the angle it had to the player as they turn. A living player held goes limp until let go and landed; a corpse (a player who died) can be held too. One hold per player; taking something another player holds ends their hold. |
 | `hold_distance(player, distance)` | Moves what they hold nearer or farther (0.5 to 64): a reel. |
-| `let_go(player)`, `held(player)` | Ends the hold; what they hold, or `()`. |
+| `reach(player, distance, #{near, force, turn})` | While they hold nothing, the engine looks where they look every tick, up to `distance`, and holds the first thing they may move, by the spot it met, at least `near` off (`force`, `turn` as `hold`). Ends once it holds something, on `let_go`, or when they die. A trigger held at something out of range catches it when it comes in range. |
+| `let_go(player)`, `held(player)`, `held_distance(player)` | Ends the hold and any reach; what they hold, or `()`; how far off it is carried, or `()`. |
 | `spawn_vehicle(def, x, y, z, yaw, [vx, vy, vz], owner)` | A vehicle of this Add-On or one it depends on, belonging to `owner` (or `()`). Counts toward the server's vehicle limits; at most 64 per Add-On. |
 | `remove_vehicle(ref)` | Removes a vehicle this Add-On spawned, or, when a player's command asks, one of this Add-On's (or a dependency's) kinds that the player owns (an administrator: anyone's). A spawn-brick vehicle removed this way stays away until the brick's wrench asks again. |
 
@@ -550,25 +551,69 @@ and the lower details what everyone else sees, so an image state's
 Its box is its bounds for dropping. `tools/make_trench_assets.py` writes the
 pick's; `bri-addon-check` names a model or texture it cannot find.
 
+An item has one look wherever it is: in a hand (first or third person),
+dropped, on a spawn brick, in a mirror and as its icon. The look is its
+image's: the image's `model`, its `color` when `color_shift` is on, and
+its skin. An item whose image has no model draws the item's own `model`.
+
+A skin is your own shader drawn over every copy of one of your images,
+puffed over its model. Put `looks.json` in `assets/`:
+
+```json
+{ "schema_version": 1,
+  "images": { "gravity-gun-tool:image/gravitygun":
+    { "skin": { "shader": "skins/alien.wgsl", "color": [0.3, 0.95, 1.0],
+                "energy_states": ["Grab"] } } } }
+```
+
+The shader is a WGSL file in your Add-On, written and limited like an
+Add-On's own client shaders (see
+[client-sandbox.md](../architecture/client-sandbox.md)): the game
+draws it in world space with your image's model at rest, and gives each
+copy `params[0]` = `color` and its energy (1 while its holder's image is
+in one of `energy_states`, else 0), `params[1]` = the direction sunlight
+travels and a seed for that copy, `params[2]` = the sun's colour and
+`params[3]` = the ambient light. Skins share an Add-On's GPU budget; one
+that runs far over it stops, and items draw their plain models. A skin
+that names an image that is not yours, a colour outside 0 to 1, or a
+shader that is missing or does not compile is logged, and the item draws
+without it. A skin is WGSL, so it is held to the same trust as Add-On code
+(section 8): a server's skins draw on a joiner's screen only once they
+trust that server's code, and the item draws plain until then.
+`skins/alien.wgsl` in `gravity-gun-tool` is the Gravity Gun's.
+
+A tool whose image has `"paint_tint": true` (below) is dropped in the
+colour it was held in.
+
 An icon can instead be drawn from the item's own model on each player's
 machine, so it matches the stock icons without shipping a picture of
 base game art. Put `<icon>.render.json` beside it:
 
 ```json
 { "schema_version": 1, "pose_like": "v20.weapon.printgun",
-  "look": { "base": [0.35, 1.0, 0.8],
-            "skin": { "shell": [0.035, 0.025, 0.05], "veins": [0.3, 0.95, 1.0] } } }
+  "look": { "skin": {} } }
 ```
 
 `pose_like` names a stock item: its model is fitted to its own icon's
-outline to find the angle it was drawn at. Your model is drawn at that
-angle, sized to its own bounds to fill the box the stock drawing fills,
-with a clear border on every side, on a clear background. `look.base` is the model's colour (its image's tint);
-`"textured": true` draws the model's own textures and colours instead
-(times `base`), so a tool of wood and iron shows both. The
-optional `skin` is the Gravity Gun's alien shell: a dark sheen with glowing
-veins, puffed out by `puff` (default 0.012) as it is in play. If the icon
+outline to find the side profile it was drawn in (which way its nose
+points across the picture, and how far it is tipped and turned). Your model
+is drawn in that profile on its own axes: forward is +Y and up is +Z, as
+item models are held, or from `mountPoint` towards `muzzlePoint` when it has
+both. So its nose and grip point the way the stock item's do. It is sized
+to its own bounds to fill the box the stock drawing fills, with a clear
+border on every side, on a clear background. The model is the item's in
+play. `look.base` is its colour, by default the item's colour in play
+(its image's tint); `"textured": true` draws the model's own
+textures and colours instead (times `base`), so a tool of wood and iron
+shows both. The
+optional `skin` is the Gravity Gun's alien shell: a dark `shell` with glowing
+`veins` (by default the colour of the item's skin in `looks.json`), puffed
+out by `puff` (default 0.012) as it is in play. If the icon
 cannot be drawn, the item keeps its PNG or letter and the log says why.
+The icon is drawn once on a background thread while the game loads (the
+PNG or letter shows until it is ready) and kept in the client state folder
+under `item-icons/`, named by a hash of the models, the stock icon and the
+request, so later runs show it at once.
 
 An image with `"paint_tint": true` is held in its holder's spray colour,
 the palette colour they last picked with the paint keys, as a colour spray
@@ -586,6 +631,7 @@ The fields you are most likely to change:
 | item | `ui_name` | the name players see |
 | image | `zoom` | `{ "fov": 20, "on_jet": true, "crosshair": false, "first_person": true }`: aim with the zoom key (and the right mouse button with `on_jet`), hide the crosshair, force first person while aiming |
 | image | `eye_offset`, `eye_rotation` | where the weapon sits in first person: exactly there, relative to the camera, as Torque places it, so a scope whose sight is on the eye line stays centred at any zoom |
+| image | `scripts` | what each state `script` does, by lower-case name: `{ "onfire": { "arm": "spearThrow", "fire": true, "use_up": true } }` swings the arm, launches the image's projectile (or the entry's own `projectile`) and uses the item up, as a thrown grenade ([torque-equivalents.md](torque-equivalents.md#image-state-scripts-as-data)) |
 | image | `follow_arm` | `true` also moves a first-person `eye_offset` image with the arm's actions (shift, plant, swing), as the base game's brick, hammer and spray cans do; off by default |
 | pack | `sounds` | `{ "your-id:shot": { "file": "sounds/shot.wav", "volume": 0.8 } }`: your own `.wav`/`.ogg` files, named by a state's `sound` and by rules; `local` for sounds only the holder hears, `looping` for a state-long hum |
 
@@ -1147,7 +1193,7 @@ depends on the most powerful thing an Add-On does:
 | Tier | What the Add-On has | What the player sees |
 |---|---|---|
 | Data | rules, HUD panels, weapons, bricks, models, sounds | nothing: it downloads and runs |
-| Sandboxed code | a `client` section: WebAssembly and WGSL run in the sandbox | "Trust and join" or "Leave", once per server, and again when the code changes; nothing when the player installed the same code themselves |
+| Sandboxed code | a `client` section, or skins in `looks.json`: WebAssembly and WGSL run in the sandbox | "Trust and join" or "Leave", once per server, and again when the code changes; nothing when the player installed the same code themselves |
 | Elevated code | `net.http` or `files.addon_folder` | a separate, stronger prompt per Add-On (not offered to joiners yet, see section 9) |
 
 Rules always run on the host, never on players' PCs, so they need no

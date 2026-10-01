@@ -75,6 +75,7 @@ fn rocket_pack() -> bri_weapons::Pack {
         follow_arm: false,
         paint_tint: false,
         paint_picker: false,
+        scripts: Default::default(),
         states,
     };
     let item = bri_weapons::Item {

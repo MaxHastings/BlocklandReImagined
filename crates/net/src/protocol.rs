@@ -62,8 +62,11 @@ use std::collections::{BTreeMap, BTreeSet};
 /// environment (Admin Menu Environment, `set_environment`).
 /// 70: `Vitals::look_limits`: a rule's `set_look_limits` bounds how far a
 /// body's arms and head follow its look.
-/// 71: `VehicleInfo::color` is the vehicle's own colour (red, green, blue,
-/// alpha), so Add-Ons paint vehicles any colour (`paint_vehicle`);
+/// 71: `Drop::paint`: a dropped paint-tinted tool keeps the colour it was
+/// held in.
+/// Next (the Gate numbers it): `VehicleInfo::color` is the vehicle's own
+/// colour (red, green, blue, alpha), so Add-Ons paint vehicles any colour
+/// (`paint_vehicle`);
 /// `Notice::PlantError` shows an Add-On's plant-limit error; images carry
 /// `paint_picker`.
 pub const VERSION: u32 = 71;

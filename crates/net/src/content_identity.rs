@@ -626,6 +626,7 @@ mod tests {
                     follow_arm: false,
                     paint_tint: false,
                     paint_picker: false,
+                    scripts: Default::default(),
                 },
             );
             items.insert(

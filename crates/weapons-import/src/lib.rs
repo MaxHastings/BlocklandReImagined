@@ -489,6 +489,8 @@ pub fn lower(definitions: Vec<Definition>) -> Result<Pack> {
                 follow_arm: false,
                 paint_tint: false,
                 paint_picker: false,
+                // v20's own scripts run by image name (`runtime::callback`).
+                scripts: Default::default(),
             },
         );
     }

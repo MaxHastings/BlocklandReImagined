@@ -1275,6 +1275,7 @@ fn teleport_image() -> bri_weapons::Image {
         follow_arm: false,
         paint_tint: false,
         paint_picker: false,
+        scripts: Default::default(),
     }
 }
 

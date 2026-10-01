@@ -211,9 +211,8 @@ impl Store {
             let key = |name: &str| (map.to_ascii_lowercase(), name.to_ascii_lowercase());
             // A different `.bls` already listed under this name ("House .bls"
             // beside "house.bls"; v20 kept names ending in a space) stays
-            // listed: this one gets the next free "(2)" name. The same file
-            // found again (an old install's copy of a drop-folder save) is
-            // replaced, as is the stock save it shadows.
+            // listed: this one gets the next free "(2)" name. The stock save
+            // it shadows is replaced.
             if files.get(&key(&name)).is_some_and(|e| other_file(e, &save.source)) {
                 let stem = name.trim_end_matches(".world.json").to_string();
                 name = (2..)
