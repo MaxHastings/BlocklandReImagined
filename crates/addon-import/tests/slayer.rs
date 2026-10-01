@@ -607,9 +607,21 @@ fn an_enemy_flag_rides_on_the_carriers_back_and_scores_at_home() {
         "onFlagReturned".into(),
         "onFlagRecovered".into()
     ]));
+    g.s.take_private_notices();
     let red_flag = g.plant(owner, FLAG, -8.5, 0.0, RED);
     let blue_flag = g.plant(owner, FLAG, 8.5, 0.0, BLUE);
     g.steps(31);
+    // Their builder hears whose they are.
+    let prints: Vec<String> = g
+        .s
+        .take_private_notices()
+        .into_iter()
+        .filter_map(|(_, n)| match n {
+            Notice::Bottom { text, .. } => Some(readable(&text)),
+            _ => None,
+        })
+        .collect();
+    assert!(prints.iter().any(|t| t.ends_with("set for Red.")), "{prints:?}");
     // Each Flag Spawn holds its flag, in the brick's colour.
     assert_eq!(g.flag_on(red_flag), Some(Some(RED)));
     assert_eq!(g.flag_on(blue_flag), Some(Some(BLUE)));
@@ -1757,6 +1769,16 @@ fn team_and_mini_game_inputs_run_and_restricted_outputs_need_rights() {
     let refused = g.s.review_event_rows(owner, rounds, &mut rows);
     assert_eq!(rows, [win(), time()]);
     assert_eq!(refused, ["You do not have permission to use the [MiniGame, BottomPrintAll] event."]);
+    // Capture the Flag's DropFlag is the game's editors' (its
+    // `RestrictedEvent__["Player", "DropFlag"]`).
+    let drop = || event("onPoke", "Player", "DropFlag", vec![]);
+    let mut rows = vec![drop()];
+    let refused = g.s.review_event_rows(other, rounds, &mut rows);
+    assert!(rows.is_empty());
+    assert_eq!(refused, ["You do not have permission to use the [Player, DropFlag] event."]);
+    let mut rows = vec![drop()];
+    assert!(g.s.review_event_rows(owner, rounds, &mut rows).is_empty());
+    assert_eq!(rows.len(), 1);
 
     // `onMinigameLeave` and `onMinigameJoin`, for whoever leaves or joins.
     let rows = vec![

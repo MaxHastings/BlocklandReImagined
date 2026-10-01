@@ -641,7 +641,8 @@
           "pref_returned_respawn": "(?s)defaultValue\\s*=\\s*(-?\\d+)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.CTF_flagReturnedRespawnTime\"",
           "pref_manual_drop": "(?s)defaultValue\\s*=\\s*(-?\\d+)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.CTF_manualFlagDrop\"",
           "pref_require_enemies": "(?s)defaultValue\\s*=\\s*(-?\\d+)\\s*;\\s*permissionLevel[^;]*;\\s*variable\\s*=\\s*\"%mini\\.CTF_requireEnemyPlayers\"",
-          "out_drop_flag": "registerOutputEvent\\(\\s*\"?(?i:Player)\"?\\s*,\\s*\"DropFlag\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)"
+          "out_drop_flag": "registerOutputEvent\\(\\s*\"?(?i:Player)\"?\\s*,\\s*\"DropFlag\"\\s*,\\s*((?:\"[^\"]*\"\\s*(?:TAB\\s*)?)+)",
+          "restrict_drop_flag": "RestrictedEvent__\\[\\s*\"Player\"\\s*,\\s*\"DropFlag\"\\s*\\]\\s*=\\s*(-?\\d+)\\s*;"
         },
         "Player::dropFlag": {
           "drop_reach": "vectorScale\\(\\s*%eyeVect\\s*,\\s*([\\d.]+)\\s*\\)\\s*\\)\\s*;\\s*%raycast",
