@@ -4671,6 +4671,10 @@ impl App {
                 view.world_revision,
                 &self.mirror_shapes,
             );
+            // One set of openings: the windows show where bodies go.
+            if let Some(collision) = self.motion.collision() {
+                self.mirror_index.link(collision.links(), &self.mirror_shapes);
+            }
         }
         if let Some(job) = &mut self.world_job
             && let Ok((source, revision, log, result)) = job.receiver.try_recv()

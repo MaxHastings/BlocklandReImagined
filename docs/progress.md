@@ -8698,3 +8698,13 @@ Tests: `add_on_join::bot_kinds_come_from_the_blockhead_bot_add_on_the_host_runs`
 `add_on_join::a_host_with_the_blockhead_bot_on_spawns_bots_and_one_without_offers_none`
 (generated content: hosts with the Add-On on and off, loads a saved spawn
 brick, counts players). Not run here: the second needs generated content.
+
+View paths, step 1 (Code health's second pass, coordinator 10-01): portal
+windows and crossings now come from one set of openings. `MirrorIndex`
+kept its own `Links` and skipped bricks not drawn, so an invisible linked
+portal teleported but showed no window. It now takes its sides from the
+local world's `Links` (`Motion::collision`, what prediction and the host
+pass bodies through; `MirrorIndex::link`). A linked side shows its view
+even on a brick not drawn (a seamless hole); unlinked glass is the
+brick's look and shows only when drawn. Test: `bri-client
+mirrors::windows_follow_the_openings_bodies_pass_through`.
