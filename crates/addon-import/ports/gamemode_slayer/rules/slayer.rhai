@@ -90,9 +90,34 @@ fn team_by_id(g, id) {
     }
     ()
 }
+// `Slayer_AiController`s: the bots these rules added
+// (`addBotToGame`). They are members as players are, except where Slayer
+// counts only connections (`numMembers["GameConnection"]`): sorting,
+// balancing and greetings.
+fn own_bot(p) { p.bot && p.spawner == "{{rules}}" }
+// Every member that plays: players and these rules' bots
+// (`%mini.member[%i]`).
+fn game_bots(g) {
+    let out = [];
+    for b in bots() {
+        if own_bot(b) && b.minigame == g.id {
+            out.push(b);
+        }
+    }
+    out
+}
+fn everyone() {
+    let out = players();
+    for b in bots() {
+        if own_bot(b) {
+            out.push(b);
+        }
+    }
+    out
+}
 fn members(g, team) {
     let out = [];
-    for p in players() {
+    for p in everyone() {
         if p.minigame == g.id && p.team == team {
             out.push(p);
         }
@@ -182,6 +207,94 @@ fn join(p, team) {
     let me = player(p);
     if me != () && me.alive {
         respawn(p);
+    }
+}
+
+// Bots (Slayer's Preferred Player Count, a team's Bots setting): the
+// Blockhead Bot Add-On's bots fill a team up to its count and leave as
+// players join it (`Slayer_TeamSO::botFillTeam`). Slayer made
+// `BlockheadHoleBot`s ("this should be changeable") and needed Bot_Hole and
+// Bot_Blockhead; the Blockhead Bot Add-On is ours of both.
+fn bot_kind() { "bot.blockhead" }
+fn bot_kind_view() {
+    for k in bot_kinds() {
+        if k.id == bot_kind() {
+            return k;
+        }
+    }
+    ()
+}
+// "Bot " and a random first name (`"Bot" SPC getRandomFirstName()`).
+fn bot_name(kind, n) {
+    let names = kind.first_names;
+    if names.is_empty() {
+        return "Bot";
+    }
+    let i = (hash3(seed(), tick(), n, names.len()) * names.len()).to_int();
+    `Bot ${names[i]}`
+}
+// `Slayer_TeamSO::botFillTeam`: bots go while the team has more members
+// than its count, and come while it has fewer. `room` is how many more
+// bots the server takes; what is left of it comes back.
+fn bot_fill(g, team, room) {
+    let limit = team_setting(g.id, team.id, "team_bot_fill");
+    let list = members(g, team.id);
+    let n = list.len();
+    for m in list {
+        if n <= limit {
+            break;
+        }
+        if own_bot(m) {
+            remove_bot(m.id);
+            n -= 1;
+            room += 1;
+        }
+    }
+    let kind = bot_kind_view();
+    if kind == () {
+        return room;
+    }
+    while n < limit && room > 0 {
+        add_bot(g.id, #{ kind: kind.id, team: team.id, name: bot_name(kind, n * 64 + team.id) });
+        n += 1;
+        room -= 1;
+    }
+    room
+}
+// Every team filled, and bots without a team taken away
+// (`Slayer_TeamSO::onRemove`'s `deleteAllBots`).
+fn fill_bots(g) {
+    if !uses_teams(g.id) {
+        for b in game_bots(g) {
+            remove_bot(b.id);
+        }
+        return;
+    }
+    let room = bot_limit() - bots().len();
+    for b in game_bots(g) {
+        if b.team == () || team_by_id(g, b.team) == () {
+            remove_bot(b.id);
+            room += 1;
+        }
+    }
+    for t in g.teams {
+        room = bot_fill(g, t, room);
+    }
+}
+// `AiPlayer::useRandomTool`: of the slots up to the last tool, each a
+// coin toss in turn, the last one sure.
+fn hold_random_tool(p, tools) {
+    let last = -1;
+    for i in 0..tools.len() {
+        if tools[i] != () && tools[i] != "" {
+            last = i;
+        }
+    }
+    for i in 0..(last + 1) {
+        if tools[i] != () && tools[i] != "" && (i == last || hash3(seed(), tick(), p, i) < 0.5) {
+            bot_tool(p, i);
+            return;
+        }
     }
 }
 
@@ -278,7 +391,7 @@ fn lives_winner(g) {
     let winner = #{ teams: [], players: [] };
     let winner_color = -1;
     let left = #{};
-    for p in players() {
+    for p in everyone() {
         if p.minigame == g.id && !get_player(p.id, "out") {
             left[`${p.id}`] = p;
         }
@@ -347,7 +460,7 @@ fn check_points(g) {
             }
         }
     }
-    for p in players() {
+    for p in everyone() {
         if p.minigame == g.id && (!teams || p.team == ()) && p.score >= points {
             end_round(g.id, #{ players: [p.id] });
             return;
@@ -386,7 +499,7 @@ fn time_winner(g) {
             }
         }
     }
-    for p in players() {
+    for p in everyone() {
         if p.minigame != g.id || (uses_teams(g.id) && p.team != ()) {
             continue;
         }
@@ -447,7 +560,7 @@ fn start_round(g) {
         }
     }
     set("team_points", points);
-    for p in players() {
+    for p in everyone() {
         if p.minigame == g.id {
             set_player(p.id, "out", false);
             set_player(p.id, "lives", lives_for(g, p.team));
@@ -498,6 +611,10 @@ fn begin_round(g) {
         r.countdown = ();
         r.clock = tick();
         r.told = ();
+        // `startRound`'s `resetHoleLoop`: its bots play again.
+        for b in game_bots(g) {
+            thaw(b.id);
+        }
     }
     set_round(g.id, r);
     if countdown <= 0 {
@@ -545,6 +662,11 @@ fn count_down(g, r) {
 fn frozen_body() { "{{namespace}}:archetype/playerfrozenarmor" }
 fn freeze(p) {
     let me = player(p);
+    // A bot's brain stops instead (`stopHoleLoop`).
+    if me != () && own_bot(me) {
+        rest_bot(p, true);
+        return;
+    }
     if me == () || !me.alive || me.archetype == frozen_body() {
         return;
     }
@@ -556,6 +678,11 @@ fn freeze(p) {
 // (`%t.playerDatablock`, else `%this.playerDatablock`).
 fn thaw(p) {
     let me = player(p);
+    // `resetHoleLoop`: a bot's brain runs again.
+    if me != () && own_bot(me) {
+        rest_bot(p, false);
+        return;
+    }
     if me == () || !me.alive || me.minigame == () {
         return;
     }
@@ -602,7 +729,15 @@ fn respawn_for(g, team) {
 // `GameConnection::createPlayer`: the team's player type, start tools,
 // scale and respawn time on every new body.
 fn kit(p, g, team) {
-    set_respawn_time(p, respawn_for(g, team));
+    let me = player(p);
+    if me != () && own_bot(me) {
+        // `Slayer_AiController::onDeath`: back after the game's bot
+        // respawn time, whatever its team's (-1 at once).
+        let s = setting(g.id, "respawn_time_bot");
+        set_respawn_time(p, if s < 0 { 0 } else { s * 1000 });
+    } else {
+        set_respawn_time(p, respawn_for(g, team));
+    }
     if team == () {
         return;
     }
@@ -678,7 +813,7 @@ fn update_bodies(g, keys) {
             if !m.alive {
                 continue;
             }
-            if is_key(keys, "team_respawn_time") {
+            if is_key(keys, "team_respawn_time") && !own_bot(m) {
                 set_respawn_time(m.id, respawn_for(g, t.id));
             }
             if is_key(keys, "team_scale") {
@@ -799,15 +934,28 @@ fn dress(p) {
     let g = if me == () || me.minigame == () { () } else { minigame(me.minigame) };
     let team = if g == () || me.team == () { () } else { team_by_id(g, me.team) };
     let mode = if team == () { 0 } else { team_setting(g.id, team.id, "team_uniform") };
+    // `Slayer_AiController::applyBodyColors`: a bot's head and hands in a
+    // random skin colour, whatever its uniform.
+    let bot = me != () && own_bot(me);
     if mode == 0 {
         undress(p);
+        if bot {
+            let skin = skin_color(p);
+            set_avatar_colors(p, #{ head: skin, lhand: skin, rhand: skin });
+            set_player(p, "dressed", true);
+        }
         return;
     }
     set_player(p, "dressed", true);
     let c = team_color(team);
     if mode == 1 {
         set_avatar_parts(p, ());
-        set_avatar_colors(p, #{ torso: c, pack: c });
+        if bot {
+            let skin = skin_color(p);
+            set_avatar_colors(p, #{ torso: c, pack: c, head: skin, lhand: skin, rhand: skin });
+        } else {
+            set_avatar_colors(p, #{ torso: c, pack: c });
+        }
     } else if mode == 2 {
         let skin = skin_color(p);
         set_avatar_parts(p, #{
@@ -896,8 +1044,16 @@ fn round_ended(g, teams, winners) {
     let still = !setting(g.id, "allow_move_while_resetting");
     for m in g.members {
         knock_out(m);
+        let me = player(m);
+        // `endRound`: its bots are out too, and stand still unless players
+        // may move while resetting (`stopHoleLoop`).
+        if me != () && own_bot(me) {
+            if still {
+                rest_bot(m, true);
+            }
+            continue;
+        }
         if still {
-            let me = player(m);
             if camera != () {
                 watch(m, camera);
             } else if me != () && me.alive {
@@ -981,7 +1137,7 @@ fn send_report(g, teams, winners) {
     ];
     let victory = setting(g.id, "eorr_display_victory");
     for m in g.members {
-        if player(m) == () {
+        if player(m) == () || player(m).bot {
             continue;
         }
         let banner = ();
@@ -1267,6 +1423,17 @@ fn on_death(victim, killer) {
     set_player(victim, "deaths", get_player(victim, "deaths") + 1);
     if killer != () && killer != victim {
         set_player(killer, "kills", get_player(killer, "kills") + 1);
+        // Killing a bot is worth Kill Bot, not Kill Player, whoever does
+        // it (`incScore(%mini.points_killBot)`, and the correction for
+        // double bot scoring); the engine gave the killer Kill Player.
+        let k = player(killer);
+        if own_bot(me) && k != () && k.minigame == me.minigame {
+            let g = minigame(me.minigame);
+            let extra = setting(g.id, "points_kill_bot") - g.points_kill_player;
+            if extra != 0 {
+                add_score(killer, extra);
+            }
+        }
     }
     // `onMinigameDeath` on every brick of the game: the client who died,
     // and the killer as `Player(Killer)` and `Client(Killer)`.
@@ -1289,13 +1456,33 @@ fn on_death(victim, killer) {
         center_print(victim, `${c5()}You have ${c3()}0 ${c5()}lives left.`, 3.0);
         check_lives(minigame(me.minigame));
         // `spectateStartSched`: spectating five seconds on, unless the
-        // round ended.
-        if running(me.minigame) {
+        // round ended. Bots have nobody to watch for.
+        if me.bot {
+        } else if running(me.minigame) {
             set_spec(victim, #{ init_at: tick() + ms_ticks({{spectate_delay}}), died: tick() });
         } else {
             set_spec(victim, #{ died: tick() });
         }
     }
+}
+
+// `Slayer_MiniGameSO::canDamage` for a hole bot's hit (`%classA $=
+// "AiPlayer"`, the Bot setting under Damage): with it off, bots a spawn
+// brick made hurt nobody in the game. These rules' own bots hit as
+// players do.
+fn on_damage(victim, attacker, amount, info) {
+    if attacker == () {
+        return ();
+    }
+    let a = player(attacker);
+    if a == () || !a.bot || a.spawner != () {
+        return ();
+    }
+    let me = player(victim);
+    if me == () || me.minigame == () || me.minigame != a.minigame || setting(me.minigame, "bot_damage") {
+        return ();
+    }
+    0.0
 }
 
 // `GameConnection::createPlayer`: the lives left, and still during the
@@ -1314,6 +1501,21 @@ fn on_spawn(p) {
     let r = round_of(me.minigame);
     if r.countdown != () {
         freeze(p);
+    }
+    if own_bot(me) {
+        // `Slayer_AiController::onSpawn`: a random tool in hand, earlier
+        // slots likelier (`useRandomTool`). Between rounds it stands still
+        // unless players may move.
+        let tools = if me.team != () && !team_setting(g.id, me.team, "team_sync_loadout") {
+            tools_for(g, me.team)
+        } else {
+            me.tools
+        };
+        hold_random_tool(p, tools);
+        if r.reset_at != () && !setting(g.id, "allow_move_while_resetting") {
+            freeze(p);
+        }
+        return;
     }
     let lives = get_player(p, "lives");
     if lives > 0 && r.reset_at == () {
@@ -1391,6 +1593,29 @@ fn mode_changed(g) {
             }
         }
     }
+    // Without teams its bots go (`deleteAllBots`); with them, the teams
+    // fill.
+    fill_bots(g);
+}
+
+// `Slayer_TeamSO::updateBotFillLimit`: the teams filled to their new
+// counts, unless there are no bots to fill them with; then the count goes
+// back to -1 and whoever runs the game is told.
+fn bot_fill_changed(g) {
+    if bot_kind_view() == () {
+        let refused = false;
+        for t in g.teams {
+            if team_setting(g.id, t.id, "team_bot_fill") > 0 {
+                set_team_setting(g.id, t.id, "team_bot_fill", -1);
+                refused = true;
+            }
+        }
+        if refused && g.owner != () {
+            message_box(g.owner, "Slayer | Error", "You must enable the Blockhead Bot Add-On to use the Preferred Player Count setting.");
+        }
+        return;
+    }
+    fill_bots(g);
 }
 
 fn balance_new(g) {
@@ -1446,6 +1671,20 @@ fn on_minigame(event) {
         reset_cps(g.id);
         note_kits(g);
         start_round(g);
+        // `Slayer_TeamSO::onMinigameReset`: each team filled with bots.
+        fill_bots(g);
+    } else if event.kind == "loaded" {
+        // A build's saved mini-game (`importMinigamePreferences`, its
+        // `.pathcam` read with it): the fly-through path came back with
+        // the build, untested and its rounds counted afresh, and the game
+        // resets, as `serverCmdSlayer_loadConfig` does.
+        let cam = flycam_of(g.id);
+        if cam != () {
+            cam.test = ();
+            cam.passed = 0;
+            set_flycam(g.id, cam);
+        }
+        reset_minigame(g.id);
     } else if event.kind == "round_end" {
         round_ended(g, event.teams, event.players);
     } else if event.kind == "settings" {
@@ -1454,6 +1693,9 @@ fn on_minigame(event) {
         }
         if is_key(event.keys, "mode") {
             mode_changed(g);
+        }
+        if is_key(event.keys, "team_bot_fill") {
+            bot_fill_changed(g);
         }
         if is_key(event.keys, "lives") {
             lives_changed(g);
@@ -1488,6 +1730,13 @@ fn on_minigame(event) {
         set_player(event.player, "lives", setting(g.id, "lives"));
         set_player(event.player, "out", false);
         set_player(event.player, "wins", 0);
+        // A bot comes with its team, and no greeting or `onMinigameJoin`.
+        let me = player(event.player);
+        if me != () && own_bot(me) {
+            set_player(event.player, "kills", 0);
+            set_player(event.player, "deaths", 0);
+            return;
+        }
         if uses_teams(g.id) && !g.teams.is_empty() && setting(g.id, "auto_sort") {
             auto_sort(g, [event.player]);
         }
@@ -1495,7 +1744,12 @@ fn on_minigame(event) {
     } else if event.kind == "left" {
         // `Slayer_MiniGameSO::removeMember`: `onMinigameLeave`, then maybe
         // the last one standing.
-        if player(event.player) != () {
+        let me = player(event.player);
+        if me != () && own_bot(me) {
+            check_lives(g);
+            return;
+        }
+        if me != () {
             fire_game_input(g.id, "onMinigameLeave", event.player);
             hide_report(event.player);
         } else {
@@ -1505,6 +1759,8 @@ fn on_minigame(event) {
         spectate_end(event.player);
         undress(event.player);
         check_lives(g);
+        // `Slayer_TeamSO::removeMember`: their team takes a bot back.
+        fill_bots(g);
     } else if event.kind == "teams" {
         // `Slayer_TeamSO::updateColor`: members in their team's new colour.
         // (The Mini-Game window's Apply sends its teams before their
@@ -1513,8 +1769,16 @@ fn on_minigame(event) {
         if uses_teams(g.id) && setting(g.id, "balance_new_teams") {
             balance_new(g);
         }
+        // A team gone takes its bots with it; a new one gets its own.
+        fill_bots(g);
     } else if event.kind == "team" && event.team == () {
         undress(event.player);
+        let me = player(event.player);
+        if me != () && own_bot(me) {
+            remove_bot(event.player);
+        } else {
+            fill_bots(g);
+        }
     } else if event.kind == "team" && event.team != () {
         let team = team_by_id(g, event.team);
         let me = player(event.player);
@@ -1532,11 +1796,19 @@ fn on_minigame(event) {
                 reason = ` ${c5()}(${c3()}${reason}${c5()})`;
                 set_player(event.player, "reason", "");
             }
-            tell(event.player, `${c5()}You have joined ${c3()}${team.name}${reason}`);
-            if setting(g.id, "notify_member_changes") {
-                tell_minigame(g.id, `${c3()}${me.name} ${c5()}has joined ${c3()}${team.name}${reason}`, event.player);
+            // `addMember` greets only connections, and a connection's
+            // joining sends a bot of the team away (`botFillTeam`).
+            let bot = own_bot(me);
+            if !bot {
+                tell(event.player, `${c5()}You have joined ${c3()}${team.name}${reason}`);
+                if setting(g.id, "notify_member_changes") {
+                    tell_minigame(g.id, `${c3()}${me.name} ${c5()}has joined ${c3()}${team.name}${reason}`, event.player);
+                }
             }
             dress(event.player);
+            if !bot {
+                fill_bots(g);
+            }
         }
     }
 }
@@ -2148,8 +2420,18 @@ fn cmd_teams(p, line) {
         }
         let list = members(g, team.id);
         tell(p, `${c3()}${team.name} (${list.len()})${c5()}:`);
+        // Players by name, then how many bots (shown from two up, as
+        // Slayer's `numMembers["AiController"] > 1`).
+        let bots = 0;
         for m in list {
-            tell(p, ` ${c5()}+ ${c3()}${m.name}`);
+            if own_bot(m) {
+                bots += 1;
+            } else {
+                tell(p, ` ${c5()}+ ${c3()}${m.name}`);
+            }
+        }
+        if bots > 1 {
+            tell(p, ` ${c5()}+ ${c3()}${bots} ${c5()}${plural(bots, "bot", "bots")}`);
         }
     } else if !can_edit(p, g) {
         tell(p, `${c5()}Please enter a valid command.`);

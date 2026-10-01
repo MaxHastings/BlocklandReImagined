@@ -38,9 +38,14 @@ Slayer's bots.
   (`port.json` `replaces`), and the report counts it as the port's.
 - `LetItSnowMidi`: the Christmas greeting's music, which Slayer downloads
   from greek2me.us into `config/client/temp` on the player's machine. It is
-  not in the copy, so there is nothing to convert; it stays reported as
-  recognised only. The greeting itself is a client easter egg (December
-  20 onward) and is not ported.
+  not in the copy, and the game downloads nothing from third-party sites,
+  so it is not ported. The report now says so: a sound whose file the
+  copy's script fetches over HTTP (`connectToUrl`, `HTTPObject`,
+  `TCPObject`) is `external`, "needs a resource downloaded from an
+  external site, not in the copy", counted apart from recognised-only
+  datablocks and not as a gap in the verdict (`import.rs`
+  `a_sound_the_add_on_downloads_is_reported_as_external`). The greeting
+  itself is a client easter egg (December 20 onward) and is not ported.
 
 ## Evidence
 

@@ -31,6 +31,7 @@ mod game_hooks;
 pub(super) mod copy_hooks;
 mod item_hooks;
 mod reports;
+mod saved_games;
 mod settings;
 pub use settings::{AddOnSetting, MAX_ADDON_SETTINGS, SettingEdit, TeamEdit};
 pub(in crate::session) use settings::Editor;
@@ -911,6 +912,22 @@ impl Session {
     }
 
     /// The durable key a player's package state lives under.
+    /// A bot's per-player package state goes with it: no one comes back
+    /// as that bot, so its keys would only pile up.
+    pub(super) fn forget_player_state(&mut self, bot: OwnerId) {
+        let key = PlayerKey::session(bot);
+        let Some(host) = self.packages.as_mut() else {
+            return;
+        };
+        let mut freed = 0;
+        for ns in host.store.namespaces.values_mut() {
+            freed += ns.players.remove(&key).map_or(0, |v| state::stored_size(&v));
+        }
+        if freed > 0 {
+            host.state_bytes = host.state_bytes.saturating_sub(freed);
+            self.package_revision += 1;
+        }
+    }
     fn player_key(&self, owner: OwnerId) -> PlayerKey {
         match self.peers.get(&owner).and_then(|p| p.principal) {
             Some(principal) => PlayerKey::principal(&principal.0),
@@ -1018,6 +1035,7 @@ impl Session {
             ),
             bot: self.bots.is_bot(owner),
             bot_owner: self.bot_brick_owner(owner),
+            spawner: self.bots.rules_package(owner).map(str::to_owned),
             riding: self.riding_seat(owner),
             team: self.minigames.team_of(p.combat.player).map(|t| u64::from(t.0)),
             score: self
@@ -1046,6 +1064,7 @@ impl Session {
                 .filter(|(o, _)| self.bots.is_bot(**o))
                 .map(|(owner, p)| self.player_view(*owner, p))
                 .collect(),
+            bot_kinds: self.bot_kind_views(),
             entities: host
                 .map(|h| {
                     h.entities
@@ -2071,6 +2090,16 @@ impl Session {
                 peer.combat.health = (peer.combat.health + amount).min(max);
                 Ok(())
             }
+            Op::MessageBox {
+                player,
+                title,
+                text,
+            } => {
+                self.take_cue(package)?;
+                ensure!(self.peers.contains_key(&player), "No such player");
+                self.notify(player, Notice::MessageBox { title, text });
+                Ok(())
+            }
             Op::Ask {
                 player,
                 title,
@@ -2235,6 +2264,15 @@ impl Session {
                     None => self.weapons.swap_image(actor, None),
                 }
             }
+            Op::AddBot {
+                game,
+                team,
+                kind,
+                name,
+            } => self.add_rules_bot(package, game, team, &kind, &name),
+            Op::RemoveBot { bot } => self.remove_rules_bot(package, bot),
+            Op::RestBot { bot, rest } => self.rest_rules_bot(package, bot, rest),
+            Op::BotTool { bot, slot } => self.rules_bot_tool(package, bot, slot),
             op @ (Op::SetTeams { .. }
             | Op::SetTeam { .. }
             | Op::SetScore { .. }
@@ -3654,7 +3692,7 @@ impl Session {
     /// tick.
     pub(super) fn package_loadout(&mut self, owner: OwnerId) {
         if let Some(host) = self.packages.as_mut()
-            && !self.bots.is_bot(owner)
+            && !self.bots.is_brick_bot(owner)
             && host.loadouts.len() < 1024
             && !host.loadouts.contains(&owner)
         {
@@ -3672,7 +3710,7 @@ impl Session {
     /// it next tick, after `on_loadout`.
     pub(super) fn package_spawn(&mut self, owner: OwnerId) {
         if let Some(host) = self.packages.as_mut()
-            && !self.bots.is_bot(owner)
+            && !self.bots.is_brick_bot(owner)
             && host.spawns.len() < 1024
             && !host.spawns.contains(&owner)
         {
@@ -3788,7 +3826,7 @@ impl Session {
     }
     /// `on_leave(player)` as `owner` leaves, while they are still readable.
     pub(super) fn package_leave(&mut self, owner: OwnerId) {
-        if self.bots.is_bot(owner) {
+        if self.bots.is_brick_bot(owner) {
             return;
         }
         self.deliver_player_hook([owner].into(), |b| b.on_leave, "on_leave");
@@ -4004,9 +4042,10 @@ impl Session {
             return;
         }
         for owner in owners {
-            // Player hooks are for connected players. A bot queued while it
+            // Player hooks are for connected players and the bots the rules
+            // added, who play as members. A brick's bot queued while it
             // joined, before it was registered as one, is left out here.
-            if !self.peers.contains_key(&owner) || self.bots.is_bot(owner) {
+            if !self.peers.contains_key(&owner) || self.bots.is_brick_bot(owner) {
                 continue;
             }
             for package in &hooks {
