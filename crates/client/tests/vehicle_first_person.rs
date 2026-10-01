@@ -507,12 +507,6 @@ fn every_tank_seat_sees_from_the_riders_eye_for_host_and_guest(f: &ContentRoot) 
 
     let mut renderer = UiRenderer::new(&gpu.device, &gpu.queue);
     for app in [&mut host, &mut guest] {
-        if !f.content {
-            // lavapipe crashes in the Unified lighting path here: see
-            // `support::gpu::pin_classic_lighting` (an open renderer follow-up;
-            // the content variant keeps Unified lighting).
-            support::gpu::pin_classic_lighting(app)?;
-        }
         app.gpu_ready(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm)?;
         if app.controls.third_person_view() {
             request(
@@ -687,12 +681,6 @@ fn mouse_up_pitch(
     };
     let port = free_port()?;
     let mut host = app(&content, &state, "Host")?;
-    if !f.content {
-        // lavapipe crashes in the Unified lighting path here: see
-        // `support::gpu::pin_classic_lighting` (an open renderer follow-up;
-        // the content variant keeps Unified lighting).
-        support::gpu::pin_classic_lighting(&mut host)?;
-    }
     host.gpu_ready(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm)?;
     host.ui
         .core

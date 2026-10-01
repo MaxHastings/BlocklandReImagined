@@ -32,26 +32,3 @@ pub fn turn() -> Result<Turn> {
     }
     Ok(Turn(gpu))
 }
-
-/// Switch `app` to Classic lighting (`$pref::Video::Lighting` 0) before its
-/// GPU starts. Only for synthetic variants that crash lavapipe (Mesa
-/// 25.2.8, the software adapter in CI containers) in the Unified fragment
-/// path of `bri-render`'s scene shader: an open renderer follow-up. The
-/// content variants keep the default (Unified) lighting, so it stays
-/// covered.
-pub fn pin_classic_lighting(app: &mut bri_client::app::App) -> Result<()> {
-    use bri_ui::api::{UiAction, UiUpdate};
-    app.ui.apply(UiUpdate::SetPrefs(vec![(
-        bri_ui::screens::options::LIGHTING.into(),
-        "0".into(),
-    )]));
-    let settings = app.ui.settings();
-    app.ui
-        .core
-        .request(UiAction::SaveSettings(Box::new(settings)));
-    anyhow::ensure!(
-        bri_client::platform::PlatformApp::pump(app)?.is_empty(),
-        "Unexpected native window command"
-    );
-    Ok(())
-}
