@@ -386,8 +386,9 @@ trust on `brick`; beyond it the fill flows around bricks they may not paint
 and never through them. More than `limit` bricks (at most 10000) is refused
 rather than cut short, so a fill never stops half way across a wall. The
 player sees how many bricks turned, and how many touching ones were not
-theirs to paint. The Fill Can
-([`packages/fill-can`](../../packages/fill-can)) is one command around it.
+theirs to paint. A fill tool is one command around it; the test's own
+([`crates/sim/tests/fixtures/fill-can`](../../crates/sim/tests/fixtures/fill-can))
+shows one.
 
 **Capabilities** in `package.json` are the only permission gate. If your
 script calls `tell` without `"chat"` in `capabilities`, the call is refused
@@ -486,8 +487,7 @@ cannot be drawn, the item keeps its PNG or letter and the log says why.
 
 An image with `"paint_tint": true` is held in its holder's spray colour,
 the palette colour they last picked with the paint keys, as a colour spray
-can is: a tool that paints with that colour shows it. The Fill Can's
-`fill-can-tool` does this.
+can is: a tool that paints with that colour shows it.
 
 The fields you are most likely to change:
 

@@ -1,4 +1,5 @@
-//! The Fill Can (`packages/fill-can`) and the engine seams under it:
+//! The engine seams a fill tool is built on, through a small Fill Can of
+//! the test's own (`tests/fixtures/fill-can`):
 //! flood-fill painting through shared faces (`paint_fill`,
 //! `Simulation::touching_region`) and a held tool in its holder's spray
 //! colour (an image's `paint_tint`).
@@ -83,7 +84,7 @@ fn definitions() -> Definitions {
 }
 
 fn add_ons() -> Arc<Catalog> {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages");
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     let packages = [
         ("fill-can-tool", "fill-can/fill-can-tool", Side::Shared),
         ("fill-can", "fill-can/fill-can", Side::Server),
@@ -114,7 +115,7 @@ fn add_ons() -> Arc<Catalog> {
 /// (base game content) so picking a colour works.
 fn tool_pack() -> bri_weapons::Pack {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../packages/fill-can/fill-can-tool/assets/weapons.json");
+        .join("tests/fixtures/fill-can/fill-can-tool/assets/weapons.json");
     let mut pack = bri_weapons::Pack::from_json(&std::fs::read(path).unwrap()).unwrap();
     let mut can = pack.images[IMAGE].clone();
     can.id = "v20.image.bluespraycanimage".into();

@@ -8535,3 +8535,14 @@ Every main CI run since about run 180 failed three content-free targets.
   machine. No test is skipped or ignored and the 30 s waits are unchanged.
   Locally: mirrors 5 passed, persistent_scene 12 passed, 2 ignored (as
   before, for local packs).
+
+## 2026-10-01 Fill Can: originals only
+
+Max chose "originals only" for every classic Add-On. Our remade Fill Can is
+no longer bundled: its packages, generated icon and icon script are gone
+and it is off the default Add-On list. The engine seams stay (`paint_fill`,
+`Simulation::touching_region`, `grid::share_face`, image `paint_tint`) and
+are still tested through a small fill tool of the test's own in
+`crates/sim/tests/fixtures/fill-can`. Loading the player's own original
+Fill Can from their Blockland Add-Ons folder follows on the shared classic
+Add-On loader.
