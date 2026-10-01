@@ -709,12 +709,12 @@ fn fill_can_port_rules_fill_what_v20_filled() {
         4242,
     );
     pad.color = RED;
-    pad.vehicle = Some(bri_world::VehicleSpawn {
+    pad.vehicle = Some(Box::new(bri_world::VehicleSpawn {
         vehicle: bri_world::ContentRef::Resolved(
             "vehicle_stunt_plane:vehicle/stuntplanevehicle".into(),
         ),
         recolor: true,
-    });
+    }));
     world.bricks.insert(1, pad);
     world.next_brick_id = 2;
     let mut s = Session::new(
