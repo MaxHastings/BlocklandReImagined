@@ -204,6 +204,33 @@ pub fn read_counting(
     name: &str,
     map_id: &str,
 ) -> Result<(World, Skipped)> {
+    read_with_header(bytes, catalog, name, map_id, |l| {
+        l.starts_with("This is a Blockland save file.")
+    })
+}
+/// The first lines v20 duplicators wrote their saved selections under,
+/// in the save file layout: Plornt's Duplorcator (positions relative to
+/// the first brick) and Zeblote's New Duplicator (where they stood).
+const DUPLICATION_HEADERS: [&str; 3] = [
+    "This is a Blockland save file.",
+    "Duplorcation save file",
+    "Do not modify this file at all.",
+];
+/// A v20 duplication file (`saves/Duplications/*.bls`,
+/// `config/NewDuplicator/Saves/*.bls`) or save, read as [`read_counting`]
+/// reads a save. Its bricks may stand off the grid.
+pub fn read_duplication(bytes: &[u8], catalog: &Catalog, name: &str) -> Result<(World, Skipped)> {
+    read_with_header(bytes, catalog, name, "duplication", |l| {
+        DUPLICATION_HEADERS.iter().any(|h| l.starts_with(h))
+    })
+}
+fn read_with_header(
+    bytes: &[u8],
+    catalog: &Catalog,
+    name: &str,
+    map_id: &str,
+    header: impl Fn(&str) -> bool,
+) -> Result<(World, Skipped)> {
     ensure!(bytes.len() <= 128 * 1024 * 1024, "Oversized BLS input");
     let (text, encoding) = match std::str::from_utf8(bytes) {
         Ok(text) => (std::borrow::Cow::Borrowed(text), "utf8"),
@@ -221,9 +248,7 @@ pub fn read_counting(
     let lines: Vec<_> = text.lines().collect();
     ensure!(lines.iter().all(|l| l.len() <= 65536), "Oversized BLS line");
     ensure!(
-        lines
-            .first()
-            .is_some_and(|l| l.starts_with("This is a Blockland save file.")),
+        lines.first().is_some_and(|l| header(l)),
         "Unrecognized BLS header"
     );
     let description_count: usize = lines
@@ -688,5 +713,23 @@ mod tests {
             "+-ITEM Extra\" 0 2 4000 arbitrary"
         );
         assert!(records.last().unwrap().diagnostic.is_some());
+    }
+
+    #[test]
+    fn duplication_files_of_both_v20_duplicators_read_but_are_not_saves() {
+        let body = "0.5 0.25 0 1\n".repeat(64) + "Linecount 2\n"
+            + "2x2 Brick\" 0 0 0 0 0 5  0 0 1 1 1\n"
+            + "1x2 Plate\" 0.25 0.5 0.4 1 0 2  0 0 1 1 1\n";
+        for first in [
+            "Duplorcation save file\t2\n1\nDuplication saved by Plornt\n",
+            "Do not modify this file at all. You will break it.\n1\nSaved by Zeblote (4928)\n",
+        ] {
+            let source = format!("{first}{body}");
+            let (world, skipped) =
+                read_duplication(source.as_bytes(), &stock(), "dup").unwrap();
+            assert_eq!(skipped, Skipped::default());
+            assert_eq!(world.bricks.len(), 2);
+            assert!(read_counting(source.as_bytes(), &stock(), "dup", "map/t").is_err());
+        }
     }
 }

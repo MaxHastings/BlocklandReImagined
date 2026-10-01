@@ -100,12 +100,18 @@ state; it returns a list of typed operations (`bri_package_runtime::Op`):
 `remove_brick`, `place_brick`, `explode`, `damage`, `teleport`, `respawn`,
 `set_archetype`, `control`, `set_block_state`, `spawn_entity`,
 `remove_entity`, `steer`, `label`, `tell`, `broadcast`, `give_item`
-(capability `player`) and `copy_build`, `copy_box` and `mirror_copy`
-(capability `build`: the engine copies the caller's build, or a box of it,
-into a blueprint, `crate::blueprint`, that the player places with
-`Command::PlaceBlueprint` under the plant rules, all or none, with one
-undo entry; mirroring is part of the placement, with twins found by
-`crate::mirror`), `cut_copy` and `paint_copy` (capability `world.edit`:
+(capability `player`) and `copy_build`, `copy_box`, `mirror_copy` and
+`highlight_copy` (capability `build`: the engine copies a stack of the
+caller's build (`Simulation::select_stack`), or a box of it, as the
+Add-On's `CopyRule` allows, into a blueprint, `crate::blueprint`, that the
+player places with `Command::PlaceBlueprint` under the plant rules, all or
+none or brick by brick as the rule asks, with one undo entry; `on_copy`
+and `on_place` tell the Add-On how it went; highlights recolour the
+bricks for a while, as v20 did (`session::highlight`); mirroring is part of the placement, with twins found by
+`crate::mirror`; `save_copy` and `load_copy` keep blueprints by name in
+the host's `session::CopyStore`, which answers off the tick thread (the
+client's `copies` module: files in `saves/Duplications`, and v20
+duplication files read through `bri_bls::bls::read_duplication`)), `cut_copy` and `paint_copy` (capability `world.edit`:
 the copy's originals, with the caller's full trust, each one undo entry),
 the physics operations (capability `physics`),
 `heal` and `fire` (capability `damage`: `fire` launches a projectile of

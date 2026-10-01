@@ -11,6 +11,7 @@ use bri_world::{
 use glam::Vec3;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::sync::Arc;
 mod admin;
 mod bots;
 mod breakables;
@@ -32,6 +33,7 @@ mod quotas;
 use quotas::Quota;
 mod admin_players;
 mod admin_world;
+mod highlight;
 mod inventory;
 mod map_change;
 mod environment;
@@ -52,6 +54,13 @@ mod items;
 mod weapons;
 pub use weapons::{MountedImage, WeaponView};
 mod blueprints;
+mod copy_edits;
+mod copy_jobs;
+pub use copy_jobs::DEFAULT_COPY_WORK;
+mod copy_store;
+pub use blueprints::Copied;
+pub use copy_edits::{BoxEdit, WrenchFill};
+pub use copy_store::{CopyStore, LoadedCopy, MemoryCopies, Saved, StoreDone, name_matches};
 mod movables;
 mod packages;
 mod paint_fill;
@@ -286,12 +295,19 @@ pub enum Command {
     Tool(ToolAction),
     /// Place the copied build this player holds (`Session::copy_build`)
     /// with its pivot at `position`, turned `quarter_turns`, and with
-    /// `mirrored` seen in a mirror across its x axis before it is turned.
+    /// `mirrored` seen in a mirror across its x axis and `flipped` upside
+    /// down before it is turned.
     PlaceBlueprint {
         position: [f32; 3],
         quarter_turns: u8,
         mirrored: bool,
+        #[serde(default)]
+        flipped: bool,
     },
+    /// The settings ticked in the fill wrench a duplicator opened
+    /// (`Session::open_copy_wrench`), for every brick its copy was taken
+    /// from.
+    WrenchCopy(WrenchFill),
     /// `serverCmdUseSprayCan`: hold the colour can for a palette index.
     UseSprayCan {
         color: u8,
@@ -428,7 +444,7 @@ impl Command {
     pub fn preconditions(&self) -> Preconditions {
         use bri_minigames::BuildAction;
         let (alive, build) = match self {
-            Command::Plant { .. } | Command::PlaceBlueprint { .. } => {
+            Command::Plant { .. } | Command::PlaceBlueprint { .. } | Command::WrenchCopy(_) => {
                 (true, Some(BuildAction::Build))
             }
             Command::UseSprayCan { .. }
@@ -784,7 +800,8 @@ const TALK_TICKS_PER_CHAR: u64 = 6;
 pub struct Session {
     events: events::Events,
     specials: special::Specials,
-    highlights: BTreeMap<OwnerId, admin_world::Highlight>,
+    highlights: highlight::Highlights,
+    copy_jobs: copy_jobs::CopyJobs,
     /// Installed only on the Tutorial map.
     tutorial: Option<Box<tutorial::Tutorial>>,
     bots: bots::Bots,
@@ -830,9 +847,18 @@ pub struct Session {
     tool_catalog: ToolCatalog,
     undo: BTreeMap<OwnerId, undo::UndoStack>,
     /// Each player's copied build (`copy_build`), waiting to be placed.
-    blueprints: BTreeMap<OwnerId, crate::blueprint::Blueprint>,
-    /// The bricks each held copy was taken from (`cut_copy`, `paint_copy`).
-    copy_sources: BTreeMap<OwnerId, Vec<BrickId>>,
+    blueprints: BTreeMap<OwnerId, Arc<crate::blueprint::Blueprint>>,
+    /// What each held copy was taken from, by which Add-On.
+    copies: BTreeMap<OwnerId, blueprints::HeldCopy>,
+    /// Each player's pause between copy plants (`plant_wait`).
+    plant_waits: BTreeMap<OwnerId, blueprints::PlantWait>,
+    /// Copies being saved or loaded by name, and where they are kept.
+    saved_copies: copy_store::SavedCopies,
+    /// The host's game version, for Add-Ons to show (`game_version()`).
+    game_version: String,
+    /// The image each player held in their right hand last tick, for
+    /// images' `mount` and `unmount` commands.
+    held_images: BTreeMap<OwnerId, String>,
     /// Bricks' mirror images, found as mirrored copies are placed.
     mirrors: crate::mirror::Mirrors,
     /// v20 `%client.lastPrint[%ar]`: each player's last applied print per
@@ -900,7 +926,8 @@ impl Session {
             environment: Default::default(),
             movables: Default::default(),
             specials: Default::default(),
-            highlights: BTreeMap::new(),
+            highlights: Default::default(),
+            copy_jobs: Default::default(),
             tutorial: None,
             bots: Default::default(),
             vehicles: Default::default(),
@@ -936,7 +963,11 @@ impl Session {
             tool_catalog: ToolCatalog::default(),
             undo: BTreeMap::new(),
             blueprints: BTreeMap::new(),
-            copy_sources: BTreeMap::new(),
+            copies: BTreeMap::new(),
+            plant_waits: BTreeMap::new(),
+            saved_copies: Default::default(),
+            game_version: "dev".into(),
+            held_images: BTreeMap::new(),
             mirrors: Default::default(),
             last_prints: BTreeMap::new(),
             avatar_catalog: None,
@@ -1401,7 +1432,10 @@ impl Session {
         self.last_prints.remove(&owner);
         self.abandoned_at
             .insert(owner, self.simulation.state().tick);
+        self.forget_copy_job(owner);
         self.forget_blueprint(owner);
+        self.plant_waits.remove(&owner);
+        self.forget_copy_requests(owner);
         self.forget_mover(owner);
         self.departed.insert(
             owner,
@@ -2096,6 +2130,21 @@ impl Session {
             }
             Command::SwitchSeat(step) => {
                 ensure!(step == 1 || step == -1, "Invalid seat step");
+                // On foot, an image may take the seat keys
+                // (`serverCmdNextSeat` packaged by a duplicator).
+                if let Some(command) = self
+                    .weapons
+                    .image_state(bri_weapons::ActorId(owner), 0)
+                    .filter(|_| peer.combat.alive && !self.vehicles.is_mounted(owner))
+                    .and_then(|(image, _)| image.commands.seat.clone())
+                {
+                    self.addon_tool_command(
+                        owner,
+                        &command,
+                        vec![packages::PackageArg::Int(i64::from(step))],
+                    );
+                    return Ok(Reply::Accepted);
+                }
                 self.switch_seat(owner, i32::from(step))?;
                 Ok(Reply::Accepted)
             }
@@ -2300,7 +2349,12 @@ impl Session {
                 position,
                 quarter_turns,
                 mirrored,
-            } => self.place_blueprint(owner, position, quarter_turns, mirrored),
+                flipped,
+            } => self.place_blueprint(owner, position, quarter_turns, (mirrored, flipped)),
+            Command::WrenchCopy(fill) => {
+                self.wrench_copy(owner, &fill)?;
+                Ok(Reply::Accepted)
+            }
             Command::Package(request) => self.package_command(owner, request, direction),
             Command::Chat(text) => {
                 peer.chats = peer.chats.saturating_add(1);
@@ -2612,7 +2666,7 @@ impl Session {
         contain("combat", self.step_combat(impacts));
         contain("breakables", self.step_breakables());
         contain("special bricks", self.step_specials());
-        contain("highlights", self.step_highlights());
+        contain("copy jobs", self.step_copy_jobs());
         contain("tutorial", self.step_tutorial());
         contain("build loading", self.step_build_load());
         let changed = self.dirty.read(dirty::Reader::Events);

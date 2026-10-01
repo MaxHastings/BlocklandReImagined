@@ -41,11 +41,12 @@ pub struct Entry {
     /// function it covers matches.
     #[serde(default)]
     pub sha256: Vec<String>,
-    /// Each script function the port replaces, with named patterns its body
-    /// must match (case-insensitive). A pattern's first group, when it has
-    /// one, is the value the port's patches use as `{name}`. A key that is a
-    /// script's path in the Add-On (`server.cs`) matches that file's whole
-    /// text, for values it sets outside any function.
+    /// Each script function the port replaces (or top-level `$global`,
+    /// read as its value), with named patterns its body must match
+    /// (case-insensitive). A pattern's first group, when it has one, is the
+    /// value the port's patches use as `{name}`. A key that is a script's
+    /// path in the Add-On (`server.cs`) matches that file's whole text, for
+    /// values it sets outside any function.
     pub covers: BTreeMap<String, BTreeMap<String, String>>,
     /// Tests that prove the port, `path name`.
     #[serde(default)]
@@ -70,6 +71,11 @@ pub struct Port {
     /// player, and a shared Add-On cannot carry host code.
     #[serde(default)]
     pub rules: Option<Rules>,
+    /// Files the port adds to the import (`ports/<port>/files/`) that are
+    /// content the import provides, to their kind (`binds.json` →
+    /// `binds`). `{{name}}` in them is filled in, as in the rules.
+    #[serde(default)]
+    pub provides: BTreeMap<String, String>,
 }
 
 /// The companion host-rules Add-On a port adds ([`Port::rules`]). Its id is
@@ -234,6 +240,18 @@ impl Ports {
                 "{file}: only JSON files are patched"
             );
         }
+        let files = self.added_files(&e.port);
+        for (file, kind) in &port.provides {
+            ensure!(
+                files.iter().any(|(f, _)| f == file),
+                "provides {file}, which is not under files/"
+            );
+            ensure!(
+                bri_package_runtime::content::Kind::parse(kind)
+                    .is_some_and(|k| k.side() == bri_package::packages::Side::Client),
+                "{file}: an import provides only content players load, not `{kind}`"
+            );
+        }
         let rules = self.port_files(&e.port, "rules");
         match &port.rules {
             Some(r) => {
@@ -357,7 +375,8 @@ pub struct Import<'a> {
     pub name: &'a str,
 }
 
-/// Script function bodies by lower-case qualified name.
+/// Script function bodies by lower-case qualified name, and top-level
+/// globals' values by lower-case `$name`.
 pub type Bodies = BTreeMap<String, String>;
 
 /// Applies the listed port for `import`, if any, to the package in `out`.
@@ -494,13 +513,45 @@ fn try_apply(
         }
         writes.push((file.clone(), bytes));
     }
+    let mut provided = vec![];
     for (file, bytes) in ports.added_files(&e.port) {
         safe_relative(&file)?;
         ensure!(
             !out.join(&file).exists(),
             "{file} would replace an imported file"
         );
-        writes.push((file, bytes.to_vec()));
+        let Some(kind) = port.provides.get(&file) else {
+            writes.push((file, bytes.to_vec()));
+            continue;
+        };
+        let text = std::str::from_utf8(bytes)
+            .with_context(|| format!("files/{file} is not UTF-8 text"))?;
+        let text = fill_text(text, &values).with_context(|| format!("files/{file}"))?;
+        let stem = file.rsplit('/').next().unwrap_or(&file).trim_end_matches(".json");
+        provided.push(serde_json::json!({
+            "kind": kind,
+            "id": crate::content_id(import.namespace, kind, stem),
+            "file": file,
+        }));
+        writes.push((file, text.into_bytes()));
+    }
+    if !provided.is_empty() {
+        // The import's manifest lists what the port added.
+        let at = writes.iter().position(|(f, _)| f == "package.json");
+        let bytes = match at {
+            Some(i) => writes[i].1.clone(),
+            None => std::fs::read(out.join("package.json")).context("the import wrote no package.json")?,
+        };
+        let mut manifest: Value = serde_json::from_slice(&bytes).context("package.json")?;
+        manifest["provides"]
+            .as_array_mut()
+            .context("package.json has no provides")?
+            .extend(provided);
+        let bytes = serde_json::to_vec_pretty(&manifest)?;
+        match at {
+            Some(i) => writes[i].1 = bytes,
+            None => writes.push(("package.json".into(), bytes)),
+        }
     }
     repin(out, &mut writes)?;
     let rules = match &port.rules {

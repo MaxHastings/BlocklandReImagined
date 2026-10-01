@@ -6,7 +6,7 @@ use bri_net::protocol::PublicWorld;
 use bri_package_runtime::{Catalog, content};
 use bri_render::scene::{GpuInstances, GpuScene, SceneRenderer, SceneTransform};
 use bri_sim::session::{EntityInfo, PackageStateView};
-use bri_ui::api::{PackageKey, PackagePanel, PanelAnchor};
+use bri_ui::api::{PackageBind, PackageKey, PackagePanel, PanelAnchor};
 use bri_world::{ContentRef, OwnerId};
 use glam::{Mat4, Quat, Vec3};
 use std::{collections::BTreeMap, path::Path, sync::Arc};
@@ -98,6 +98,32 @@ pub fn world_maps(catalog: &Catalog, maps: &[bri_ui::api::MapInfo]) -> Vec<bri_u
 /// that show only while holding something. `taken` says whether the base
 /// game already binds a letter; such keys are dropped (the base game's
 /// binds win).
+/// The binds of the packages this server runs, for Options → Controls,
+/// with each default key for this platform (`mac`).
+pub fn binds(catalog: &Catalog, state: &PackageStateView, mac: bool) -> Vec<PackageBind> {
+    let mut out: Vec<PackageBind> = Vec::new();
+    for (_, binds) in catalog.binds() {
+        for bind in &binds.binds {
+            // Only a package the server runs takes the command.
+            if !state.packages.contains_key(&bind.package) {
+                continue;
+            }
+            let command = format!("package:{}:{}", bind.package, bind.command);
+            if out.iter().any(|b| b.bind_command() == command) {
+                continue;
+            }
+            out.push(PackageBind {
+                division: binds.division.clone(),
+                name: bind.name.clone(),
+                package: bind.package.clone(),
+                command: bind.command.clone(),
+                key: if mac { bind.mac_key.clone().or_else(|| bind.key.clone()) } else { bind.key.clone() },
+                hold: bind.hold,
+            });
+        }
+    }
+    out
+}
 pub fn panels(
     catalog: &Catalog,
     state: &PackageStateView,

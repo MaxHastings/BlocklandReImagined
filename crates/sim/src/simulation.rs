@@ -10,6 +10,8 @@ use bri_world::{
 use glam::Vec3;
 use rapier3d::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
+mod scan;
+pub use scan::{BoxScan, StackScan, spend, work};
 // Brick IDs occupy u64; zero remains available for untagged dynamic bodies.
 pub const MAP_TAG: u128 = u128::MAX;
 /// How far a brick may dip into an upward-facing map floor. Map floors need
@@ -89,6 +91,9 @@ pub struct Simulation {
     chunks: crate::chunks::Chunks,
     /// Removed bricks' colliders (see `parking`).
     parked: crate::parking::Parking,
+    /// Removals leave collisions to [`Self::settle`] while true
+    /// ([`Self::hold_settle`]).
+    holding: bool,
     /// Map colliders in `NativeMap::colliders` order.
     map_handles: Vec<ColliderHandle>,
     terrain: Option<crate::map::TerrainStream>,
@@ -148,6 +153,32 @@ pub fn set_enabled(
     }
     bri_physics::detect_collisions(physics);
     Ok(())
+}
+/// Which way a stack selection goes from its first brick
+/// ([`Simulation::select_stack`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StackReach {
+    pub up: bool,
+    pub limited: bool,
+}
+/// What [`Simulation::plant_each`] does with a brick nothing holds up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Support {
+    /// It is refused (`PlantFailure::Float`).
+    Required,
+    /// It becomes a baseplate.
+    Float,
+    /// It plants as it is.
+    Free,
+}
+/// The bricks a selection took, in order, and what it left out.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Selection {
+    pub bricks: Vec<BrickId>,
+    /// It stopped at its limit with more to take.
+    pub limit_reached: bool,
+    /// Bricks it reached but was not allowed to take.
+    pub refused: usize,
 }
 fn may_build_on(actor: &Actor, brick: &Brick) -> bool {
     actor.trusted(brick.owner, bri_world::authority::trust::BUILD)
@@ -241,6 +272,7 @@ impl Simulation {
             handles,
             chunks,
             parked: Default::default(),
+            holding: false,
             map_handles,
             terrain: None,
             refreshes: 0,
@@ -588,7 +620,189 @@ impl Simulation {
     /// all are planted or none is. The caller checks reach, rate and the
     /// brick limit, as for a single plant.
     pub fn plant_group(&mut self, actor: &Actor, bricks: Vec<Brick>) -> Result<Vec<BrickId>> {
-        self.place_group(actor, bricks, false)
+        self.place_group(actor, bricks, false, true)
+    }
+    /// [`Self::plant_group`] where nothing need hold the bricks up: with
+    /// none resting on anything, the lowest one becomes a baseplate, ground
+    /// to the bricks joined to it (v20's force plant set `isBaseplate`).
+    pub fn plant_group_floating(
+        &mut self,
+        actor: &Actor,
+        mut bricks: Vec<Brick>,
+    ) -> Result<Vec<BrickId>> {
+        ensure!(!bricks.is_empty(), "Nothing to plant");
+        let mut supported = false;
+        for brick in &bricks {
+            supported |= check_placement(
+                self.authority.state(),
+                &self.definitions,
+                &self.index,
+                &self.physics,
+                self.terrain.as_ref(),
+                actor,
+                brick,
+            )?;
+        }
+        if !supported
+            && let Some(lowest) = bricks
+                .iter_mut()
+                .min_by(|a, b| a.position[1].total_cmp(&b.position[1]))
+        {
+            lowest.base_plate = true;
+        }
+        self.place_group(actor, bricks, false, false)
+    }
+    /// Plant bricks one at a time in order, as v20's duplicators planted a
+    /// copy: each passes every plant rule but reach against the world as
+    /// it stands, the bricks planted before it included, and one that
+    /// does not is skipped. A brick with nothing under it yet is tried
+    /// again after the rest, as long as more get planted, so the order of
+    /// a copy never leaves a brick floating that its own bricks hold up.
+    /// The planted ids, and why each other brick was refused.
+    ///
+    /// `support` says what a brick with nothing under it does: waits and is
+    /// refused, becomes a baseplate (v20's force plant: ground to what is
+    /// built on it, tried only once nothing else of the copy holds it up),
+    /// or plants as it is (`Free`: bricks put back where a build stood).
+    pub fn plant_each(
+        &mut self,
+        actor: &Actor,
+        bricks: Vec<Brick>,
+        support: Support,
+    ) -> (Vec<BrickId>, Vec<anyhow::Error>) {
+        let mut ids = Vec::with_capacity(bricks.len());
+        let mut waiting = bricks;
+        let mut refused = Vec::new();
+        loop {
+            let before = ids.len();
+            let mut floating = Vec::new();
+            let mut float_errors = Vec::new();
+            for brick in std::mem::take(&mut waiting) {
+                match self.plant_one(actor, brick.clone(), support == Support::Free) {
+                    Ok(id) => ids.push(id),
+                    Err(error) => {
+                        if matches!(error.downcast_ref(), Some(PlantFailure::Float)) {
+                            floating.push(brick);
+                            float_errors.push(error);
+                        } else {
+                            refused.push(error);
+                        }
+                    }
+                }
+            }
+            if floating.is_empty() {
+                break;
+            }
+            if ids.len() == before {
+                if support != Support::Float {
+                    refused.extend(float_errors);
+                    break;
+                }
+                // Nothing of the copy holds the rest up: the lowest becomes
+                // ground for whatever stands on it, and the rest try again.
+                let lowest = (0..floating.len())
+                    .min_by(|&a, &b| floating[a].position[1].total_cmp(&floating[b].position[1]))
+                    .expect("not empty");
+                let mut base = floating.swap_remove(lowest);
+                float_errors.swap_remove(lowest);
+                base.base_plate = true;
+                match self.plant_one(actor, base, true) {
+                    Ok(id) => ids.push(id),
+                    Err(error) => refused.push(error),
+                }
+            }
+            waiting = floating;
+        }
+        if !ids.is_empty() {
+            self.detect_collisions();
+        }
+        (ids, refused)
+    }
+    /// One brick of a copy planted a slice at a time: every plant rule
+    /// but reach against the world as it stands, and, unless `free`,
+    /// something must hold it up. Collisions are refreshed by
+    /// [`Self::settle`] once the slice is in.
+    pub fn plant_try(&mut self, actor: &Actor, brick: Brick, free: bool) -> Result<BrickId> {
+        self.plant_one(actor, brick, free)
+    }
+    /// Whether `brick` passes every plant rule but reach and support for
+    /// `actor` now, and whether something already there holds it up: a
+    /// group plant's check, a brick at a time.
+    pub fn check_plant(&self, actor: &Actor, brick: &Brick) -> Result<bool> {
+        check_placement(
+            self.authority.state(),
+            &self.definitions,
+            &self.index,
+            &self.physics,
+            self.terrain.as_ref(),
+            actor,
+            brick,
+        )
+    }
+    /// Put one brick removed earlier back exactly as it was, if it still
+    /// fits where it stood ([`Self::restore_group`] a brick at a time).
+    /// Collisions are refreshed by [`Self::settle`].
+    pub fn restore_one(&mut self, brick: Brick) -> Result<BrickId> {
+        let engine = Actor {
+            administrator: true,
+            ..Default::default()
+        };
+        if self.state().bricks.len() >= bri_world::MAX_BRICKS {
+            return Err(PlantFailure::Limit.into());
+        }
+        let definition = self.definitions.get(&brick)?;
+        let bounds = Bounds::new(&brick, &definition.mesh)?;
+        self.check_plant(&engine, &brick)?;
+        let id = self.authority.restore(&engine, brick)?;
+        self.attach(id)?;
+        let brick = &self.authority.state().bricks[&id];
+        self.index.insert(id, bounds);
+        if let Some(water) = brick_water(brick, self.definitions.get(brick)?) {
+            self.brick_waters.insert(id, water);
+            self.liquids = std::sync::OnceLock::new();
+        }
+        Ok(id)
+    }
+    /// Refresh collisions after bricks went in a slice at a time.
+    pub fn settle(&mut self) {
+        self.detect_collisions();
+    }
+    /// While `hold`, removing bricks leaves collisions to one
+    /// [`Self::settle`] for the lot (a slice of a copy job breaking bricks
+    /// one by one); letting go settles.
+    pub fn hold_settle(&mut self, hold: bool) {
+        let held = std::mem::replace(&mut self.holding, hold);
+        if held && !hold {
+            self.settle();
+        }
+    }
+    fn plant_one(&mut self, actor: &Actor, brick: Brick, free: bool) -> Result<BrickId> {
+        if self.state().bricks.len() >= bri_world::MAX_BRICKS {
+            return Err(PlantFailure::Limit.into());
+        }
+        let definition = self.definitions.get(&brick)?;
+        let bounds = Bounds::new(&brick, &definition.mesh)?;
+        let supported = check_placement(
+            self.authority.state(),
+            &self.definitions,
+            &self.index,
+            &self.physics,
+            self.terrain.as_ref(),
+            actor,
+            &brick,
+        )?;
+        if !supported && !free {
+            return Err(PlantFailure::Float.into());
+        }
+        let id = self.authority.plant(actor, brick, |_, _| Ok(()))?;
+        self.attach(id)?;
+        let brick = &self.authority.state().bricks[&id];
+        self.index.insert(id, bounds);
+        if let Some(water) = brick_water(brick, self.definitions.get(brick)?) {
+            self.brick_waters.insert(id, water);
+            self.liquids = std::sync::OnceLock::new();
+        }
+        Ok(id)
     }
     /// Whether `brick` could go into the world now, support aside: no
     /// overlap with another brick, not buried in the map, not stuck in a
@@ -618,13 +832,14 @@ impl Simulation {
             administrator: true,
             ..Default::default()
         };
-        self.place_group(&engine, bricks, true)
+        self.place_group(&engine, bricks, true, false)
     }
     fn place_group(
         &mut self,
         actor: &Actor,
         bricks: Vec<Brick>,
         restore: bool,
+        needs_support: bool,
     ) -> Result<Vec<BrickId>> {
         ensure!(!bricks.is_empty(), "Nothing to plant");
         if self.state().bricks.len() + bricks.len() > bri_world::MAX_BRICKS {
@@ -645,7 +860,7 @@ impl Simulation {
             )?;
             prepared.push(Bounds::new(brick, &definition.mesh)?);
         }
-        if !supported && !restore {
+        if !supported && needs_support {
             return Err(PlantFailure::Float.into());
         }
         let mut ids = Vec::with_capacity(bricks.len());
@@ -680,87 +895,42 @@ impl Simulation {
         self.detect_collisions();
         Ok(ids)
     }
-    /// Every brick lying wholly inside `area` that `actor` may build on,
-    /// lowest first: what a copy of the box takes. More than `limit` is
-    /// refused rather than cut short.
-    pub fn copyable_in_box(
+    /// Every brick lying wholly inside `area` (or, not `limited`, reaching
+    /// into it) that `admit` accepts, lowest first: what a copy of the box
+    /// takes, cut short at `limit`. All at once; [`BoxScan`] spreads it
+    /// over ticks.
+    pub fn select_box(
         &self,
-        actor: &Actor,
         area: Bounds,
+        limited: bool,
         limit: usize,
-    ) -> Result<Vec<BrickId>> {
-        let world = self.state();
-        let inside = |b: Bounds| {
-            let (max, outer) = (b.max(), area.max());
-            (0..3).all(|a| b.min[a] >= area.min[a] && max[a] <= outer[a])
-        };
-        let mut found: Vec<(i32, BrickId)> = Vec::new();
-        let mut refused = false;
-        for id in self.index.query(area) {
-            let bounds = self.index.bounds(id);
-            if !inside(bounds) {
-                continue;
-            }
-            if !may_build_on(actor, &world.bricks[&id]) {
-                refused = true;
-                continue;
-            }
-            ensure!(
-                found.len() < limit,
-                "That box holds more than {limit} bricks"
-            );
-            found.push((bounds.min[1], id));
-        }
-        ensure!(
-            !found.is_empty(),
-            "{}",
-            if refused {
-                "The bricks in that box belong to builds that do not trust you enough."
-            } else {
-                "There are no bricks wholly inside that box."
-            }
-        );
-        found.sort_unstable();
-        Ok(found.into_iter().map(|(_, id)| id).collect())
+        admit: impl FnMut(&Brick) -> bool,
+    ) -> Selection {
+        let mut scan = BoxScan::new(self, area, limited, limit);
+        let mut all = u32::MAX;
+        scan.step(self, &mut all, admit);
+        scan.selection
     }
-    /// The build a copy takes from `start`: it and every brick joined to it
-    /// through studs, passing only through bricks `actor` may build on and,
-    /// with `above_only`, never below `start`'s bottom. Nearest first.
-    /// More than `limit` bricks is refused rather than cut short.
-    pub fn build_from(
+    /// A stack from `start`, as v20's duplicators select one: `start`,
+    /// then breadth first every brick joined by studs to one already taken
+    /// that `admit` accepts. From `start` itself only one way, up (bricks
+    /// on top of it) or down (bricks under it); from every other brick
+    /// both ways. `limited` keeps the stack on its side of `start`: going
+    /// up, nothing reaching below `start`'s bottom; going down, nothing
+    /// reaching above its top. Cut short at `limit`. `start` is taken
+    /// whatever `admit` says; the caller checks it. All at once;
+    /// [`StackScan`] spreads it over ticks.
+    pub fn select_stack(
         &self,
-        actor: &Actor,
         start: BrickId,
+        reach: StackReach,
         limit: usize,
-        above_only: bool,
-    ) -> Result<Vec<BrickId>> {
-        let world = self.state();
-        let first = world.bricks.get(&start).context("Unknown brick")?;
-        ensure!(
-            may_build_on(actor, first),
-            "The brick's owner does not trust you enough to do that."
-        );
-        let floor = self.index.bounds(start).min[1];
-        let mut seen = BTreeSet::from([start]);
-        let mut order = vec![start];
-        let mut next = 0;
-        while let Some(&id) = order.get(next) {
-            next += 1;
-            for other in self.connected_bricks(id)? {
-                if (above_only && self.index.bounds(other).min[1] < floor)
-                    || !may_build_on(actor, &world.bricks[&other])
-                    || !seen.insert(other)
-                {
-                    continue;
-                }
-                ensure!(
-                    order.len() < limit,
-                    "That build has more than {limit} bricks"
-                );
-                order.push(other);
-            }
-        }
-        Ok(order)
+        mut admit: impl FnMut(&Brick) -> bool,
+    ) -> Result<Selection> {
+        let mut scan = StackScan::new(self, start, reach, limit)?;
+        let mut all = u32::MAX;
+        while !scan.step(self, &mut all, &mut admit)? {}
+        Ok(scan.selection)
     }
     /// The bricks sharing a face with `id` (`grid::share_face`): beside,
     /// on top of or under it, joined by studs or not. Ascending ids.
@@ -863,7 +1033,9 @@ impl Simulation {
             }
         }
         self.parked.remove(&mut self.physics, &handles);
-        self.detect_collisions();
+        if !self.holding {
+            self.detect_collisions();
+        }
         Ok(())
     }
     /// A brick that starts or stops colliding moves between its chunk and a
@@ -910,6 +1082,31 @@ impl Simulation {
             self.detect_collisions();
         }
         Ok(())
+    }
+    /// [`Self::mutate_many`] with each brick's own change: every brick in
+    /// `bricks` takes the given state (it keeps its place, shape and
+    /// owner), collisions refreshed once at the end.
+    pub fn replace_many(&mut self, bricks: Vec<(BrickId, Brick)>) -> Result<()> {
+        let mut changed = false;
+        for (id, next) in bricks {
+            self.authority.mutate(id, |b| {
+                let (definition, position, turns, owner) =
+                    (b.definition.clone(), b.position, b.quarter_turns, b.owner);
+                *b = next;
+                (b.definition, b.position, b.quarter_turns, b.owner) =
+                    (definition, position, turns, owner);
+            })?;
+            self.note_link(id);
+            changed |= self.sync_flags(id);
+        }
+        if changed {
+            self.detect_collisions();
+        }
+        Ok(())
+    }
+    /// The grid cells brick `id` fills. Panics on an unknown brick.
+    pub fn index_bounds(&self, id: BrickId) -> Bounds {
+        self.index.bounds(id)
     }
     /// Continue an earlier world's clock (the host changed maps).
     pub fn set_tick(&mut self, tick: u64) {
@@ -998,8 +1195,12 @@ impl Simulation {
         }
         Ok(out)
     }
-    /// The chain-kill root test: a brick resting on the map is ground.
+    /// The chain-kill root test: a brick resting on the map is ground, and
+    /// so is a baseplate (v20's `isBaseplate`, which force plant sets).
     fn grounded_root(&self, id: BrickId) -> Result<bool> {
+        if self.state().bricks.get(&id).is_some_and(|b| b.base_plate) {
+            return Ok(true);
+        }
         Ok(on_ground(
             &self.physics,
             self.terrain.as_ref(),

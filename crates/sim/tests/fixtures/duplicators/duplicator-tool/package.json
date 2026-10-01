@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "duplicator-tool",
+  "version": "1.0.0",
+  "api": 1,
+  "name": "Duplicator Tool",
+  "description": "The Duplicator's hand tool: a blue wand that copies the build it hits. The Duplicator Add-On gives it out and does the copying.",
+  "authors": ["Blockland ReImagined"],
+  "license": "CC0-1.0",
+  "provenance": { "source": "original" },
+  "provides": [
+    { "kind": "weapons", "id": "duplicator-tool:weapons/main", "file": "assets/weapons.json" }
+  ]
+}

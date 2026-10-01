@@ -90,12 +90,26 @@ impl Converter {
         })
     }
     #[cfg(test)]
-    fn bricks_only(catalog: Catalog, fingerprint: &str) -> Self {
+    pub(crate) fn bricks_only(catalog: Catalog, fingerprint: &str) -> Self {
         Self {
             catalog,
             bindings: None,
             fingerprint: format!("{fingerprint:0>16}"),
         }
+    }
+    /// The bricks of a v20 duplication file, in the order it holds them,
+    /// and the colours its palette indices mean. Bricks this content lacks
+    /// are left unresolved.
+    pub fn read_duplication(
+        &self,
+        bytes: &[u8],
+        name: &str,
+    ) -> Result<(Vec<bri_world::Brick>, Vec<[f32; 4]>)> {
+        let (world, skipped) = bri_bls::bls::read_duplication(bytes, &self.catalog, name)?;
+        if skipped.lines() > 0 {
+            bri_console::warn(format!("{name}: skipped brick lines: {skipped}"));
+        }
+        Ok((world.bricks.into_iter().map(|(_, b)| b).collect(), world.palette))
     }
     pub fn convert(&self, bytes: &[u8], name: &str, map_id: &str) -> Result<World> {
         let (mut world, skipped) = bri_bls::bls::read_counting(bytes, &self.catalog, name, map_id)?;
@@ -182,6 +196,13 @@ impl OldSaves {
     /// converted against other content convert again.
     pub fn set_converter(&self, converter: Converter) {
         *self.converter.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(converter));
+    }
+    /// The converter of [`Self::set_converter`], once there is one.
+    pub fn converter(&self) -> Option<Arc<Converter>> {
+        self.converter
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
     /// Convert new and changed saves on a background thread. A call while
     /// one runs makes it look again when it finishes.

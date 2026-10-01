@@ -372,6 +372,11 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
             .entry(f.qualified().to_ascii_lowercase())
             .or_insert_with(|| f.body.clone());
     }
+    // Top-level globals too, by `$name` (`$ND::Version`): their value's
+    // source, the last one set.
+    for g in scripts.iter().flat_map(|s| &s.globals) {
+        bodies.insert(g.name.to_ascii_lowercase(), g.value.clone());
+    }
     for f in src.files.values() {
         if f.path.to_ascii_lowercase().ends_with(".cs") {
             bodies.insert(

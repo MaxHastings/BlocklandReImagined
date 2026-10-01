@@ -389,6 +389,8 @@ pub struct App {
     /// The held tool's `wheel` command: while its trigger is held, it takes
     /// the mouse wheel (`UiUpdate::ToolWheel`).
     tool_wheel: Option<String>,
+    /// The HUD was told the tool in hand takes the paint cans.
+    tool_takes_paint: bool,
     /// The UI sends the wheel to an Add-On's zooming orbit camera.
     camera_wheel: bool,
     /// The aim takes the mouse wheel (`Controls::aim_takes_wheel`).
@@ -885,13 +887,18 @@ impl App {
         let Some(view) = view else {
             self.ui.core.package_panels.clear();
             self.ui.core.package_keys.clear();
+            self.ui.set_package_binds(Vec::new());
             return;
         };
         let Some(catalog) = packages_for(&self.package_catalog, view) else {
             self.ui.core.package_panels.clear();
             self.ui.core.package_keys.clear();
+            self.ui.set_package_binds(Vec::new());
             return;
         };
+        let mac = self.ui.core.platform == Platform::MacOs;
+        let binds = crate::packages::binds(catalog, &view.package_state, mac);
+        self.ui.set_package_binds(binds);
         let binds = &self.ui.core.binds;
         let held = view
             .weapons
@@ -1696,6 +1703,7 @@ impl App {
             steering_sent: None,
             crosshair_hidden: false,
             tool_wheel: None,
+            tool_takes_paint: false,
             camera_wheel: false,
             aim_wheel: false,
             scope_overlay: None,
@@ -2720,6 +2728,20 @@ impl App {
             .and_then(|i| i.commands.wheel.clone())
             .filter(|_| self.controls.observer().is_none() && !self.local_weapon_seat());
         claim_wheel(&mut self.ui, &mut self.tool_wheel, wheel);
+        let keys = image.map_or_else(Default::default, |i| crate::building::ImageKeys {
+            shift: i.commands.shift.clone(),
+            rotate: i.commands.rotate.clone(),
+            plant: i.commands.plant.clone(),
+            paint: i.commands.paint.clone(),
+        });
+        if let Some(building) = self.building.as_mut() {
+            building.set_image_keys(keys);
+            let takes = building.takes_paint();
+            if takes != self.tool_takes_paint {
+                self.tool_takes_paint = takes;
+                self.ui.apply(UiUpdate::ToolTakesPaint(takes));
+            }
+        }
         let zooms = self.controls.orbit_zooms();
         if zooms != self.camera_wheel {
             self.camera_wheel = zooms;
@@ -3033,6 +3055,7 @@ impl App {
         let (scene_tx, scene) = mpsc::sync_channel(1);
         let (router_tx, router) = mpsc::channel();
         let state_dir = self.state_dir.clone();
+        let copies = Arc::new(crate::copies::CopyFiles::new(self.old_saves.clone()));
         let load_limit = self.load_limit.clone();
         // v20's `$Pref::Server::Port`, 28000 unless the player changed it.
         let port = u16::try_from(self.ui.core.prefs.i64_or("$Pref::Server::Port", 28000))
@@ -3204,6 +3227,8 @@ impl App {
                     event_sounds,
                 },
                 maps: map_list,
+                copies: Some(copies),
+                game_version: Some(crate::updates::version()),
                 // Change Map keeps the host's Server Settings.
                 settings: Some(server_settings),
                 passwords: Some((admin, super_admin)),
@@ -4444,6 +4469,20 @@ impl App {
                                 text: plain_chat(&text),
                             }
                         }
+                        bri_sim::session::Notice::Question {
+                            title,
+                            text,
+                            package,
+                            command,
+                        } => UiUpdate::Confirm {
+                            title: plain_chat(&title),
+                            text: plain_chat(&text),
+                            action: Box::new(UiAction::Game(GameAction::Package {
+                                package,
+                                command,
+                                pressed: None,
+                            })),
+                        },
                         bri_sim::session::Notice::TrustInvite {
                             from,
                             name,
@@ -4505,6 +4544,67 @@ impl App {
                                 building.mirror_copy(across_z);
                             }
                             continue;
+                        }
+                        bri_sim::session::Notice::MoveCopy { point, normal } => {
+                            if let Some(building) = self.building.as_mut() {
+                                building.move_copy(point, normal);
+                            }
+                            continue;
+                        }
+                        bri_sim::session::Notice::FlipCopy => {
+                            if let Some(building) = self.building.as_mut() {
+                                building.flip_copy();
+                            }
+                            continue;
+                        }
+                        bri_sim::session::Notice::PivotCopy { whole } => {
+                            if let Some(building) = self.building.as_mut() {
+                                building.pivot_copy(whole);
+                            }
+                            continue;
+                        }
+                        // The host's Add-On pressed a brick key for the
+                        // player: it goes through as theirs would, moving
+                        // the copy they now hold.
+                        bri_sim::session::Notice::ShiftCopy {
+                            offset: [x, y, z],
+                            super_shift,
+                        } => {
+                            self.ui.core.request(UiAction::Game(if super_shift {
+                                GameAction::SuperShiftBrick { x, y, z }
+                            } else {
+                                GameAction::ShiftBrick { x, y, z }
+                            }));
+                            continue;
+                        }
+                        bri_sim::session::Notice::RotateCopy { direction } => {
+                            self.ui.core.request(UiAction::Game(GameAction::RotateBrick {
+                                dir: i32::from(direction),
+                            }));
+                            continue;
+                        }
+                        bri_sim::session::Notice::PlantCopy => {
+                            self.ui.core.request(UiAction::Game(GameAction::PlantBrick));
+                            continue;
+                        }
+                        bri_sim::session::Notice::WrenchCopy { bricks } => {
+                            UiUpdate::OpenFillWrench { bricks }
+                        }
+                        bri_sim::session::Notice::TakePaint(take) => {
+                            if let Some(building) = self.building.as_mut() {
+                                building.set_paint_taken(take);
+                            }
+                            continue;
+                        }
+                        bri_sim::session::Notice::ScrollMode(mode) => {
+                            use bri_package_runtime::ops::ScrollMode as Host;
+                            use bri_ui::models::hud::ScrollMode as Hud;
+                            UiUpdate::ScrollMode(match mode {
+                                Host::None => Hud::None,
+                                Host::Bricks => Hud::Bricks,
+                                Host::Paint => Hud::Paint,
+                                Host::Tools => Hud::Tools,
+                            })
                         }
                         bri_sim::session::Notice::SelectionBox(outline) => {
                             if let Some(building) = self.building.as_mut()
@@ -5751,6 +5851,7 @@ fn building_action(action: &UiAction) -> bool {
             | UiAction::SetPrint { .. }
             | UiAction::ClosePrintSelector
             | UiAction::SendWrench { .. }
+            | UiAction::SendFillWrench { .. }
             | UiAction::RequestEvents { .. }
             | UiAction::SendEvents { .. }
             | UiAction::CancelWrench { .. }
@@ -7961,11 +8062,12 @@ impl PlatformApp for App {
                 UiAction::Game(GameAction::Package {
                     ref package,
                     ref command,
+                    pressed,
                 }) => {
                     let request = Command::Package(bri_sim::session::PackageCommand {
                         package: package.clone(),
                         command: command.clone(),
-                        args: Vec::new(),
+                        args: pressed.map(bri_sim::session::PackageArg::Bool).into_iter().collect(),
                     });
                     let result = self.command(id, request, action.clone());
                     if result.is_ok() {

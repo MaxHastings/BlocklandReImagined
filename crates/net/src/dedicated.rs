@@ -195,6 +195,8 @@ pub fn load_packages(
             saves: None,
         }),
         load_map: None,
+        copies: None,
+        game_version: None,
     };
     let hosted = setup.hosted(&simulation.state().map_id)?;
     let (session, spawn_points) = setup.session(

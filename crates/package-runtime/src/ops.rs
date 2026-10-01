@@ -36,8 +36,13 @@ pub const MAX_RAYS_PER_CALL: usize = 64;
 /// `cameraMinFov` and `cameraMaxFov`).
 pub const FOV_RANGE: std::ops::RangeInclusive<f32> = 5.0..=120.0;
 /// Longest side of a box `copy_box` copies or `show_box` outlines, units
-/// (512 studs).
-pub const MAX_BOX_SPAN: f32 = 256.0;
+/// (2048 studs: the New Duplicator's largest admin box). What a box holds
+/// is bounded by brick counts, not its size.
+pub const MAX_BOX_SPAN: f32 = 1024.0;
+/// Most bricks one copy may hold (`copy_build`, `copy_box`,
+/// `load_copy`): the New Duplicator's limit for administrators. Big copies
+/// are selected, planted, cut, painted and loaded a slice each tick.
+pub const MAX_COPY_BRICKS: u32 = 1_000_000;
 /// Most bricks one `paint_fill` may paint: v20's Fill Can lets
 /// administrators fill 128000.
 pub const MAX_FILL_BRICKS: usize = 128_000;
@@ -92,7 +97,7 @@ impl std::fmt::Display for ObjectRef {
     }
 }
 
-/// What a `paint_fill` paints.
+/// What a `paint_fill` or `paint_copy` paints.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FillPaint {
     /// A palette colour (the colour spray cans).
@@ -101,8 +106,18 @@ pub enum FillPaint {
     /// pearl, chrome, glow, blink, swirl, rainbow).
     ColorEffect(u8),
     /// A shape effect, as the shape FX cans number them from 0 (none,
-    /// jello).
+    /// undulo, water).
     ShapeEffect(u8),
+}
+impl FillPaint {
+    /// Whether the effect is one the FX cans have.
+    pub fn valid(self) -> bool {
+        match self {
+            Self::Color(_) => true,
+            Self::ColorEffect(fx) => fx <= 6,
+            Self::ShapeEffect(fx) => fx <= 2,
+        }
+    }
 }
 
 /// What a `paint_vehicle` paints.
@@ -281,27 +296,73 @@ pub enum Op {
         seconds: f32,
         bottom: bool,
     },
-    /// Copy the build at `brick` for `player` to place with `tool`: the
-    /// brick and every brick joined to it that the player may build on,
-    /// with `above_only` none below the brick. More than `limit` bricks is
-    /// refused.
+    /// Copy the stack at `brick` for `player` to place with `tool`, as
+    /// v20's duplicators select one (`reach`, `rule`), cut short at
+    /// `limit` bricks.
     CopyBuild {
         player: u64,
         brick: u64,
         limit: u32,
-        above_only: bool,
+        reach: StackReach,
+        rule: CopyRule,
         tool: String,
+        hold: CopyHold,
     },
     /// Copy every brick lying wholly inside the box from `min` to `max`
-    /// (world units, grown out to the stud and plate grid) that `player`
-    /// may build on, for them to place with `tool`. More than `limit`
-    /// bricks is refused.
+    /// (world units, grown out to the stud and plate grid; not `limited`,
+    /// every brick reaching into it) that `rule` lets `player` take, for
+    /// them to place with `tool`, cut short at `limit` bricks.
     CopyBox {
         player: u64,
         min: [f32; 3],
         max: [f32; 3],
+        limited: bool,
+        limit: u32,
+        rule: CopyRule,
+        tool: String,
+        hold: CopyHold,
+    },
+    /// Light the bricks `player`'s copy was taken from in the palette
+    /// colour nearest `color` (RGBA), glowing, for `seconds`, then give
+    /// them their own colours back, as v20's duplicators showed a
+    /// selection. Everyone sees it.
+    HighlightCopy {
+        player: u64,
+        /// `None` lights them in their own colours (only the glow, as the
+        /// New Duplicator did).
+        color: Option<[f32; 4]>,
+        seconds: f32,
+    },
+    /// Keep the copy `player` holds on the host under `name` (see
+    /// [`copy_name`]). One saved under that name before is replaced, or,
+    /// without `overwrite`, kept, and the save reports `exists`. The
+    /// package's `on_copy` hears how it went (`action` `"save"`).
+    SaveCopy {
+        player: u64,
+        name: String,
+        overwrite: bool,
+    },
+    /// The names copies are saved under on the host that contain `filter`
+    /// (any case; every one when empty), in order: the package's `on_copy`
+    /// hears them (`action` `"list"`, `names`).
+    ListCopies {
+        player: u64,
+        filter: String,
+    },
+    /// Give `player` the copy saved under `name` to place with `tool`, at
+    /// most `limit` bricks of it (the first ones saved), replacing any copy
+    /// they hold (or, with `whole`, nothing when it holds more). Saved
+    /// copies are the host's: copies saved with any
+    /// duplicator, and v20 duplication files in the host's saves. The
+    /// package's `on_copy` hears how it went (`action` `"load"`).
+    LoadCopy {
+        player: u64,
+        name: String,
         limit: u32,
         tool: String,
+        partial: bool,
+        /// Take nothing, and report `limit`, when the copy holds more.
+        whole: bool,
     },
     /// Mirror the copy `player` holds across `axis`. It shows and plants
     /// mirrored; mirroring it again the same way puts it back.
@@ -309,16 +370,137 @@ pub enum Op {
         player: u64,
         axis: MirrorAxis,
     },
+    /// Move the copy `player` holds against the surface at `point` whose
+    /// outward `normal` is given, as a ghost brick is put where it is
+    /// aimed: its box's middle sits half its size out along the normal,
+    /// on the grid.
+    MoveCopy {
+        player: u64,
+        point: [f32; 3],
+        normal: [f32; 3],
+    },
+    /// Take away the copy `player` holds, as if they had never copied.
+    DropCopy {
+        player: u64,
+    },
+    /// Give `player` the copy they hold as a selection
+    /// ([`CopyHold::hidden`]) to place, where it was taken.
+    ShowCopy {
+        player: u64,
+    },
+    /// Keep the copy `player` holds as a selection only: the ghost they
+    /// place it with goes, the copy and the bricks it came from stay.
+    HideCopy {
+        player: u64,
+    },
+    /// Move the copy `player` places as their brick shift keys would:
+    /// `offset` is studs away from and to the left of their facing and
+    /// plates up, `super_shift` moves by the copy's own size.
+    ShiftCopy {
+        player: u64,
+        offset: [i32; 3],
+        super_shift: bool,
+    },
+    /// Turn the copy `player` places a quarter turn as their rotate keys
+    /// would: 1 clockwise seen from above, -1 the other way.
+    RotateCopy {
+        player: u64,
+        direction: i8,
+    },
+    /// Plant the copy `player` places where it stands, as their plant key
+    /// would; with `float`, bricks with nothing under them plant this once
+    /// as if they stood on the ground (v20's force plant).
+    PlantCopy {
+        player: u64,
+        float: bool,
+    },
+    /// Let every plant of the copy `player` holds float, or not.
+    FloatCopy {
+        player: u64,
+        float: bool,
+    },
+    /// After each plant of a copy, `player`'s next copy plant waits this
+    /// long; one sooner is refused and `on_place` hears `error` `wait`,
+    /// with the seconds left in `wait`. 0 lets them plant at once.
+    PlantWait {
+        player: u64,
+        seconds: f32,
+    },
+    /// Stop `player`'s copy work that is going on over several ticks (a big
+    /// selection, plant, cut, paint, wrench, undo or load). What it did so
+    /// far stays done, as one step of their undo; the Add-On's `on_copy`
+    /// (or `on_place`) hears it with `error` `canceled` (`canceled` true).
+    CancelCopy {
+        player: u64,
+    },
+    /// What the copy `player` places turns about and is put against a
+    /// clicked surface by: the whole copy (`whole`), else the brick it was
+    /// taken from first (the clicked brick of a stack).
+    PivotCopy {
+        player: u64,
+        whole: bool,
+    },
+    /// Plant `player`'s copies into another player's brick group: `target`
+    /// names them (a player's name or part of it, or a BL_ID); empty plants
+    /// into their own again. Each plant needs build trust with that group,
+    /// or `admin` and an administrator. The package's `on_copy` hears the
+    /// group chosen (`action` `"plant_as"`, `name`, or `error` `missing`
+    /// or `trust`).
+    PlantAs {
+        player: u64,
+        target: String,
+        admin: bool,
+    },
     /// Remove the bricks `player`'s copy was taken from, as their hammer
     /// would (their full trust), as one step Ctrl+Z puts back as it was.
     CutCopy {
         player: u64,
     },
-    /// Paint the bricks `player`'s copy was taken from in palette colour
-    /// `color`, as their spray can would, as one step Ctrl+Z takes back.
+    /// Paint the bricks `player`'s copy was taken from with `paint`, as
+    /// their spray or FX can would, as one step Ctrl+Z takes back. With
+    /// `each`, every brick they may paint is painted and the rest are
+    /// counted (`on_copy`, `action` `"paint"`); else all or none.
     PaintCopy {
         player: u64,
+        paint: FillPaint,
+        each: bool,
+    },
+    /// Open `player`'s wrench on every brick their copy was taken from: the
+    /// settings they tick apply to each brick they may change, as one step
+    /// Ctrl+Z takes back (`on_copy`, `action` `"wrench"`).
+    WrenchCopy {
+        player: u64,
+    },
+    /// Remove every brick reaching into the box from `min` to `max` that
+    /// `player` may hammer, and put plain bricks back over the parts that
+    /// stuck out of it (v20's New Duplicator's supercut), as one step
+    /// Ctrl+Z takes back (`on_copy`, `action` `"supercut"`). A copy job.
+    SuperCut {
+        player: u64,
+        min: [f32; 3],
+        max: [f32; 3],
+    },
+    /// Fill the empty room in the box from `min` to `max` with the fewest
+    /// plain bricks of palette colour `color`, as `player`'s own, as one
+    /// step Ctrl+Z takes back (`on_copy`, `action` `"fill"`). A copy job,
+    /// stopping at the server's brick limit.
+    FillBox {
+        player: u64,
+        min: [f32; 3],
+        max: [f32; 3],
         color: u8,
+    },
+    /// Let the held image take `player`'s paint and FX cans (its
+    /// `commands.paint`) instead of the can coming out, or stop.
+    TakePaint {
+        player: u64,
+        take: bool,
+    },
+    /// Switch what `player`'s mouse wheel and number keys pick
+    /// (`clientCmdSetScrollMode`), without changing what is in hand.
+    ScrollMode {
+        player: u64,
+        mode: ScrollMode,
     },
     /// Paint `brick` and every brick of its colour joined to it as
     /// `player`'s spray cans would paint each one (their full trust; a fill
@@ -555,6 +737,15 @@ pub enum Op {
         bottom: bool,
         #[serde(default)]
         hide_bar: bool,
+    },
+    /// Ask one player a yes or no question (v20's `MessageBoxYesNo` from
+    /// the server): yes sends the package's own `command`, which takes no
+    /// arguments, as if they had typed it; no does nothing.
+    Ask {
+        player: u64,
+        title: String,
+        text: String,
+        command: String,
     },
     /// Play a sound profile (an Add-On weapons pack's `sounds`, or v20's):
     /// at `position` for everyone near, or at one player's ears.
@@ -871,6 +1062,92 @@ pub const MAX_TEAMS: usize = 64;
 pub const MAX_TEAM_NAME: usize = 50;
 /// Largest score `set_score` sets or adds.
 pub const MAX_SCORE: i64 = 1_000_000_000;
+/// The name a copy is saved under, from what a player typed: the file
+/// name only (v20's `fileBase`, so a path or a `.bls` ending is dropped),
+/// 1 to 64 letters, digits, spaces and `_ - ( ) .`, not starting with a
+/// dot. `None` when nothing usable is left.
+pub fn copy_name(typed: &str) -> Option<String> {
+    let base = typed.rsplit(['/', '\\']).next().unwrap_or("").trim();
+    let base = base
+        .strip_suffix(".bls")
+        .or_else(|| base.strip_suffix(".BLS"))
+        .unwrap_or(base)
+        .trim();
+    let ok = (1..=64).contains(&base.chars().count())
+        && !base.starts_with('.')
+        && base
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || " _-().".contains(c));
+    ok.then(|| base.to_string())
+}
+
+/// Which way a stack copy ([`Op::CopyBuild`]) goes from the clicked
+/// brick: `up` takes what is built on it, else what it is built on;
+/// `limited` keeps the stack on that side of the clicked brick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StackReach {
+    pub up: bool,
+    pub limited: bool,
+}
+/// v20's trust levels a copy may ask for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CopyTrust {
+    /// Build on their bricks.
+    Build,
+    /// Also paint and hammer them (v20's duplicators asked this).
+    Full,
+}
+/// The Add-On's rules for the bricks a copy takes and how it plants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CopyRule {
+    /// The trust a player needs in a brick's owner to copy it.
+    pub trust: CopyTrust,
+    /// Public bricks (no owner) may be copied.
+    pub public: bool,
+    /// Administrators may copy any brick.
+    pub admin: bool,
+    /// Planting the copy plants each brick that fits and skips the rest,
+    /// as v20's Duplorcator did, rather than all or nothing.
+    pub partial: bool,
+}
+impl Default for CopyRule {
+    fn default() -> Self {
+        Self {
+            trust: CopyTrust::Build,
+            public: true,
+            admin: true,
+            partial: false,
+        }
+    }
+}
+/// How a copy ([`Op::CopyBuild`], [`Op::CopyBox`]) is held.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct CopyHold {
+    /// Held as a selection, not yet shown to place ([`Op::ShowCopy`]).
+    pub hidden: bool,
+    /// Added to the copy the player holds from this package, rather than
+    /// replacing it (a duplicator's multi-select).
+    pub add: bool,
+}
+/// What a player's mouse wheel picks ([`Op::ScrollMode`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ScrollMode {
+    None,
+    Bricks,
+    Paint,
+    Tools,
+}
+impl ScrollMode {
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "none" => Some(Self::None),
+            "bricks" => Some(Self::Bricks),
+            "paint" => Some(Self::Paint),
+            "tools" => Some(Self::Tools),
+            _ => None,
+        }
+    }
+}
 /// The mirror [`Op::MirrorCopy`] stands in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MirrorAxis {
@@ -880,6 +1157,8 @@ pub enum MirrorAxis {
     Z,
     /// Left and right as the player faces swap.
     View,
+    /// Up and down: the copy turns upside down where it stands.
+    Y,
 }
 impl MirrorAxis {
     pub fn parse(text: &str) -> Option<Self> {
@@ -887,6 +1166,7 @@ impl MirrorAxis {
             "x" => Some(Self::X),
             "z" => Some(Self::Z),
             "view" => Some(Self::View),
+            "y" => Some(Self::Y),
             _ => None,
         }
     }
@@ -961,6 +1241,9 @@ impl Op {
             | Self::SetBlockState { .. }
             | Self::CutCopy { .. }
             | Self::PaintCopy { .. }
+            | Self::WrenchCopy { .. }
+            | Self::SuperCut { .. }
+            | Self::FillBox { .. }
             | Self::PaintFill { .. }
             | Self::PaintVehicle { .. } => "world.edit",
             Self::TempLook { .. } => "player",
@@ -976,12 +1259,32 @@ impl Op {
             | Self::Broadcast { .. }
             | Self::Print { .. }
             | Self::TellMinigame { .. }
-            | Self::PrintMinigame { .. } => "chat",
+            | Self::PrintMinigame { .. }
+            | Self::Ask { .. } => "chat",
             Self::Sound { .. }
             | Self::Beam { .. }
             | Self::PlayThread { .. }
             | Self::ShowBox { .. } => "effects",
-            Self::CopyBuild { .. } | Self::CopyBox { .. } | Self::MirrorCopy { .. } => "build",
+            Self::CopyBuild { .. }
+            | Self::CopyBox { .. }
+            | Self::SaveCopy { .. }
+            | Self::LoadCopy { .. }
+            | Self::MirrorCopy { .. }
+            | Self::MoveCopy { .. }
+            | Self::DropCopy { .. }
+            | Self::ShowCopy { .. }
+            | Self::HideCopy { .. }
+            | Self::ShiftCopy { .. }
+            | Self::RotateCopy { .. }
+            | Self::PlantCopy { .. }
+            | Self::FloatCopy { .. }
+            | Self::PlantWait { .. }
+            | Self::CancelCopy { .. }
+            | Self::PivotCopy { .. }
+            | Self::PlantAs { .. }
+            | Self::ListCopies { .. }
+            | Self::TakePaint { .. }
+            | Self::HighlightCopy { .. } => "build",
             Self::SetMapLights { .. } => "lighting",
             Self::SetTeams { .. }
             | Self::SetTeam { .. }
@@ -1019,7 +1322,8 @@ impl Op {
             | Self::Camera { .. }
             | Self::OrbitCamera { .. }
             | Self::SetAvatarColors { .. }
-            | Self::SetAvatarParts { .. } => "player",
+            | Self::SetAvatarParts { .. }
+            | Self::ScrollMode { .. } => "player",
             Self::MountObject { .. } | Self::UnmountObject { .. } => "physics",
             Self::Push { .. }
             | Self::Tumble { .. }
@@ -1053,8 +1357,17 @@ impl Op {
             | Self::Control { .. }
             | Self::SetImageAmmo { .. }
             | Self::MirrorCopy { .. }
+            | Self::DropCopy { .. }
+            | Self::ShowCopy { .. }
+            | Self::HideCopy { .. }
+            | Self::PlantCopy { .. }
+            | Self::FloatCopy { .. }
+            | Self::PivotCopy { .. }
+            | Self::CancelCopy { .. }
+            | Self::TakePaint { .. }
+            | Self::ScrollMode { .. }
             | Self::CutCopy { .. }
-            | Self::PaintCopy { .. }
+            | Self::WrenchCopy { .. }
             | Self::UnmountImage { .. }
             | Self::HoldRespawn { .. }
             | Self::Watch { .. }
@@ -1090,11 +1403,7 @@ impl Op {
             } => {
                 (1..=MAX_FILL_BRICKS as u32).contains(limit)
                     && refusal_seconds.is_none_or(|s| (0.0..=30.0).contains(&s))
-                    && match paint {
-                        FillPaint::Color(_) => true,
-                        FillPaint::ColorEffect(fx) => *fx < 7,
-                        FillPaint::ShapeEffect(fx) => *fx < 3,
-                    }
+                    && paint.valid()
                     && reach.is_none_or(|r| r.iter().all(|v| (0.0..=MAX_FILL_REACH).contains(v)))
                     && limit_message.as_ref().is_none_or(|(text, seconds)| {
                         text.chars().count() <= MAX_PRINT_CHARS && (0.0..=30.0).contains(seconds)
@@ -1126,6 +1435,14 @@ impl Op {
                         AVATAR_SLOTS.contains(&slot.as_str()) && (0.0..=1.0).contains(a)
                     })
             }
+            Self::PaintCopy { paint, .. } => paint.valid(),
+            Self::ShiftCopy { offset, .. } => {
+                (-1..=1).contains(&offset[0])
+                    && (-1..=1).contains(&offset[1])
+                    && (-3..=3).contains(&offset[2])
+            }
+            Self::RotateCopy { direction, .. } => matches!(direction, -1 | 1),
+            Self::SuperCut { min, max, .. } | Self::FillBox { min, max, .. } => span(min, max),
             Self::Teleport { position, .. } => finite(position),
             Self::PlantBrick {
                 kind,
@@ -1272,14 +1589,39 @@ impl Op {
             Self::Tell { text, .. }
             | Self::Broadcast { text }
             | Self::TellMinigame { text, .. } => chat(text),
-            Self::CopyBuild { limit, tool, .. } => (1..=10_000).contains(limit) && item(tool),
+            Self::CopyBuild { limit, tool, .. } => (1..=MAX_COPY_BRICKS).contains(limit) && item(tool),
             Self::CopyBox {
                 min,
                 max,
                 limit,
                 tool,
                 ..
-            } => (1..=10_000).contains(limit) && item(tool) && span(min, max),
+            } => (1..=MAX_COPY_BRICKS).contains(limit) && item(tool) && span(min, max),
+            Self::SaveCopy { name, .. } => copy_name(name).as_deref() == Some(name.as_str()),
+            Self::ListCopies { filter, .. } => {
+                filter.is_empty() || copy_name(filter).as_deref() == Some(filter.as_str())
+            }
+            Self::PlantWait { seconds, .. } => (0.0..=60.0).contains(seconds),
+            Self::PlantAs { target, .. } => {
+                target.len() <= 64 && !target.chars().any(char::is_control)
+            }
+            Self::MoveCopy { point, normal, .. } => {
+                finite(point) && point.iter().all(|v| v.abs() <= 1_000_000.0) && finite(normal)
+            }
+            Self::LoadCopy {
+                name, limit, tool, ..
+            } => {
+                copy_name(name).as_deref() == Some(name.as_str())
+                    && (1..=MAX_COPY_BRICKS).contains(limit)
+                    && item(tool)
+            }
+            Self::HighlightCopy { color, seconds, .. } => {
+                color
+                    .iter()
+                    .flatten()
+                    .all(|c| (0.0..=1.0).contains(c))
+                    && (0.0..=60.0).contains(seconds)
+            }
             Self::ShowBox { area, tool, .. } => match area {
                 Some((min, max)) => item(tool) && span(min, max),
                 None => tool.is_empty(),
@@ -1412,6 +1754,19 @@ impl Op {
                     && glam_length(velocity) <= MAX_FIRE_SPEED
             }
             Self::Heal { amount, .. } => amount.is_finite() && (0.0..=100_000.0).contains(amount),
+            Self::Ask {
+                title,
+                text,
+                command,
+                ..
+            } => {
+                title.chars().count() <= 64
+                    && text.chars().count() <= MAX_PRINT_CHARS
+                    && ![title, text].iter().any(|t| t.chars().any(|c| c.is_control() && c != '\n'))
+                    && !command.is_empty()
+                    && command.len() <= 64
+                    && command.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+            }
             Self::Print { text, seconds, .. } | Self::PrintMinigame { text, seconds, .. } => {
                 text.chars().count() <= MAX_PRINT_CHARS
                     && !text.chars().any(|c| c.is_control() && c != '\n')
@@ -1545,9 +1900,30 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::CopyBuild { .. } => "copy_build",
         Op::CopyBox { .. } => "copy_box",
         Op::MirrorCopy { .. } => "mirror_copy",
+        Op::MoveCopy { .. } => "move_copy",
+        Op::DropCopy { .. } => "drop_copy",
+        Op::ShowCopy { .. } => "show_copy",
+        Op::HideCopy { .. } => "hide_copy",
+        Op::ShiftCopy { .. } => "shift_copy",
+        Op::RotateCopy { .. } => "rotate_copy",
+        Op::PlantCopy { .. } => "plant_copy",
+        Op::FloatCopy { .. } => "float_copy",
+        Op::PlantWait { .. } => "plant_wait",
+        Op::CancelCopy { .. } => "cancel_copy",
+        Op::PivotCopy { .. } => "pivot_copy",
+        Op::PlantAs { .. } => "plant_as",
+        Op::ListCopies { .. } => "list_copies",
+        Op::WrenchCopy { .. } => "wrench_copy",
+        Op::SuperCut { .. } => "super_cut",
+        Op::FillBox { .. } => "fill_box",
+        Op::TakePaint { .. } => "take_paint",
+        Op::ScrollMode { .. } => "scroll_mode",
         Op::CutCopy { .. } => "cut_copy",
         Op::PaintCopy { .. } => "paint_copy",
         Op::PaintFill { .. } => "paint_fill",
+        Op::HighlightCopy { .. } => "highlight_copy",
+        Op::SaveCopy { .. } => "save_copy",
+        Op::LoadCopy { .. } => "load_copy",
         Op::PaintVehicle { .. } => "paint_vehicle",
         Op::TempLook { .. } => "temp_look",
         Op::ShowBox { area: Some(_), .. } => "show_box",
@@ -1572,6 +1948,7 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::Heal { .. } => "heal",
         Op::Print { bottom: false, .. } => "center_print",
         Op::Print { bottom: true, .. } => "bottom_print",
+        Op::Ask { .. } => "ask",
         Op::Sound {
             at: SoundAt::Position(_),
             ..
