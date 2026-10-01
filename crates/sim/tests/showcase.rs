@@ -1395,6 +1395,7 @@ fn add_launcher(
         crosshair: true,
         follow_arm: false,
         paint_tint: false,
+        scripts: Default::default(),
         states,
     };
     let item = bri_weapons::Item {
