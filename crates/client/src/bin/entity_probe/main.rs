@@ -763,7 +763,7 @@ async fn hold_trigger(
                     _ => shooter.input,
                 };
                 sequence += 1;
-                client.movement(sequence, &[input], None)?;
+                client.movement(sequence, &[input], None, None)?;
                 // Click like a player spamming fire: press every 300 ms,
                 // release 150 ms later; the weapon's own states pace it.
                 if let Some(at) = in_place.filter(|t| t.elapsed() > Duration::from_millis(500)) {

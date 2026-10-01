@@ -258,6 +258,13 @@ impl Motion {
             .slerp(glam::Quat::from_array(current.rotation).normalize(), alpha);
         Some((id, position, rotation.normalize()))
     }
+    /// The sequence the next input will carry.
+    pub fn next_sequence(&self) -> u64 {
+        self.predictor
+            .as_ref()
+            .map_or(self.sent_sequence, |p| p.sequence())
+            + 1
+    }
     /// Estimated current server tick (for interpolating other entities).
     pub fn server_tick(&self) -> Option<f64> {
         self.shown_offset

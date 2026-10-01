@@ -957,6 +957,27 @@ impl Session {
         };
         let horse = d.family == veh::Family::Horse;
         let skis = d.family == veh::Family::Skis;
+        // Whether this move was made for the seat the rider is in: moves
+        // still in flight from the seat they just left are in that seat's
+        // terms (a mouse driver's raw turn, a passenger's turn on the seat, a
+        // gunner's look), and turn, steer or aim nothing here. A client says
+        // from which move on it knows its seat (`SeatSince`); for one that
+        // never says, a move still carrying the look the rider boarded with
+        // is the old seat's.
+        let made_here = match self.peers.get(&owner).and_then(|p| {
+            p.seat_since
+                .map(|(_, seat)| (seat, p.processed_move))
+        }) {
+            Some((seat, sequence)) => seat.is_some_and(|seat| {
+                seat.vehicle == mount.vehicle.0
+                    && usize::from(seat.seat) == mount.seat
+                    && sequence >= seat.since
+            }),
+            None => self.vehicles.mount_yaw.get(&owner) != Some(&input.yaw),
+        };
+        if made_here {
+            self.vehicles.mount_yaw.remove(&owner);
+        }
         if input.jet && !was_held {
             let left = world
                 .dismount(
@@ -993,37 +1014,37 @@ impl Session {
                 }
                 // `Player::updateMove` adds a passenger's turn to `mRot.z`
                 // (0x5aeacd); the client sends it relative to the seat.
-                let stale = self.vehicles.mount_yaw.get(&owner) == Some(&input.yaw);
-                if !stale {
-                    self.vehicles.mount_yaw.remove(&owner);
-                    if input.yaw.is_finite() {
-                        self.vehicles.passenger_turn.insert(owner, wrap(input.yaw));
-                    }
+                if made_here && input.yaw.is_finite() {
+                    self.vehicles.passenger_turn.insert(owner, wrap(input.yaw));
                 }
                 return Ok(());
             }
             // The vehicle takes the strafe keys or the mouse turn by the
             // driver's steering prefs (`VehiclesWorld` steering).
+            // A move from the old seat turns nothing.
             SeatRole::StrafeDriver | SeatRole::MouseDriver => driver_controls(
                 &input,
-                (last_yaw, last_pitch),
+                if made_here {
+                    (last_yaw, last_pitch)
+                } else {
+                    (input.yaw, input.pitch)
+                },
                 fire,
                 (strafe_off, auto_return_off),
             ),
             SeatRole::Actor => actor_controls(&input, fire, horse),
             SeatRole::Gunner => {
-                // The turret keeps pointing where it was left until the new
-                // gunner's client has turned their look onto it: inputs still
-                // carrying the look they boarded with would swing it round.
-                let boarded = self.vehicles.mount_yaw.get(&owner) == Some(&input.yaw);
-                if !boarded {
-                    self.vehicles.mount_yaw.remove(&owner);
-                }
-                let [aim_yaw, aim_pitch] = if boarded {
+                // The hand-over: a new gunner takes the turret where it
+                // points. Their client turns its look onto the barrel once it
+                // knows the seat; until its moves are made here, the turret
+                // stays put.
+                let hull = heading(v.transform.rotation);
+                let holding = !made_here;
+                let [aim_yaw, aim_pitch] = if holding {
                     v.turret_aim
                 } else {
                     // Quaternion yaw turns left; look yaw turns right.
-                    [-wrap(input.yaw - heading(v.transform.rotation)), input.pitch]
+                    [-wrap(input.yaw - hull), input.pitch]
                 };
                 veh::Controls {
                     fire,

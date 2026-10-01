@@ -8281,6 +8281,92 @@ More tests:
 Render: `/mnt/project-files/steel-ball/steel-ball-v2.png`. Max's in-game
 check is a Steel Ball near bricks at Mirrors Medium, in Unified+Shine and
 in Dynamic.
+## 2026-09-30: the Tank turret keeps its aim through seat changes
+
+Max's report on v0.1.10: switching seats into the Tank's turret reset its
+rotation. The client turned a new gunner's look onto the barrel, but earlier
+in the same frame than leaving the old seat's view: coming from the
+mouse-steered driver's seat, `Controls::set_vehicle_view(None)` then put the
+look back on the hull's heading, the gunner's moves carried that, and the
+host swung the turret to it for everyone. The look is now taken over last, in
+the gunner's own view branch (`Controls::take_turret`), and the local barrel
+is aimed after it. The host also holds a new gunner's turret still until
+their moves look along it (within 0.25 rad, at most one second), instead of
+only while the yaw equalled the boarding one, so moves in flight during the
+hand-over (a mouse still moving in the driver's seat) no longer swing it.
+
+Test: `bri-client --test vehicle_first_person
+the_tank_turret_keeps_its_aim_through_seat_changes_for_gunner_and_watcher`
+(guest aims, goes gunner to driver to passenger to gunner; every frame the
+host's and guest's replicated and drawn aim stay put; content, run on the
+gate). `bri-sim --test vehicles a_new_tank_gunner_takes_the_turret_where_it_was_left`
+updated for the hold.
+
+## 2026-10-01: turret seat changes, take two
+
+7ec124a failed on the gate with real content: its host-side hold (a new
+gunner's turret stays put until their moves look within 0.25 rad of the
+barrel, up to a second) also held a gunner whose very first look was
+elsewhere (`tank_gunner_aims_where_they_look_relative_to_the_hull`), and in
+the app test a guest's turret ended on the hull's heading. That needs a
+gunner client that never looked along the barrel: the client turned the
+look only on the exact frame the seat changed, and a frame whose seat view
+is not yet known (a vehicle's listing changing with its occupants) spent
+that one chance. Now:
+
+- The host is back to 66cce0d's rule (shipped in v0.1.10): moves still
+  carrying the look the gunner boarded with leave the turret; any other look
+  aims it.
+- The client marks a new seat as "takes the turret" and does it on the
+  first frame its gunner view is known (`App::takes_turret`), after the
+  old seat's view is cleared.
+- Content-free coverage: `bri_chaos::fixture::synthetic_tank` (the chaos
+  wheeled vehicle with the Tank's seats and an attached turret) and
+  `bri-chaos --test turret_seats`: gun, driver, passenger and gun again with
+  0, 1 and 6 ticks of the previous seat's moves in flight, the turret checked
+  every tick, and a new gunner looking away aims it at once. Fails with the
+  turret reset on seat changes.
+- The app test (`vehicle_first_person
+  the_tank_turret_keeps_its_aim_through_seat_changes_for_gunner_and_watcher`)
+  uses only `App` API that 1b2747e has and names the phase, seat, look and
+  hull heading when it fails.
+
+## 2026-10-01: turret seat changes, take three
+
+f552ba6 failed on the gate: passenger moves still in flight after a switch
+to the gun ((0, 0) with the mouse still) reset the turret to the hull's
+heading, and no look-matching rule on the host can tell them apart from a
+gunner really looking that way. Root cause: the host read every move by the
+seat it is in now, not the seat the move was made for. Now the client says
+so:
+
+- Every movement datagram carries `seat: Option<SeatSince>` (vehicle, seat,
+  and the first move sequence shaped for it). The client sets it once the
+  new seat's view is in place (a gunner on an attached turret: once it
+  looks along the barrel, which waits for the turret's pose), from the next
+  move on (`App::seat_report`, `SeatSince::follow`).
+- The host (`Session::seat_report`, `vehicle_input`) reads a move as this
+  seat's only when the report names the seat it is in and the move's
+  sequence is at or past `since`. Anything else (the old seat's moves in
+  flight) steers, turns and aims nothing; a held turret keeps its aim. A
+  report from an older datagram is ignored. Host-side riders that never
+  report keep the boarding-look rule.
+- Chaos net bots report their seats from the replica (`Replica::seat_of`).
+- `bri-chaos --test turret_seats` now sends each move with its report:
+  passes at 0, 1, 4 and 12 ticks of lag each way and fails at lag 1 when the
+  reports are left out; a late report from the old seat is ignored.
+- Not run in the cloud (no content): `bri-sim --test vehicles` (all
+  ignored there) and the app test; the gate runs them.
+- The gate pulled 29da56c: the app test failed under load with app 1 at
+  -2.0 and the turret "left" at -1.95. The test bug: "the aim to settle"
+  passed once host and guest agreed, which they briefly did after the host
+  had taken 39 of the guest's 40 look moves; the last one then turned it on
+  legitimately (still the gunner's). It now waits until the host's aim is
+  the guest's last look relative to the hull and both apps show it.
+- Wire change filed as `crates/net/protocol-changes/seat-tagged-moves.md`.
+  `turret_seats` now uses the made-up tank of `bri_vehicles::testing`
+  (`TANK`, via `fixture::synthetic_vehicles`); the chaos-only
+  `synthetic_tank` is gone with the chaos vehicles it was built from.
 
 ## 2026-10-01 Portals: going through shows the same picture (branch `claude/portal-bricks-5be9t8`)
 

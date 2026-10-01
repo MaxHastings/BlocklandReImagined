@@ -18,7 +18,7 @@ mod build_load;
 pub use build_load::LoadPace;
 mod combat;
 mod control;
-pub use control::{CameraView, ControlObject};
+pub use control::{CameraView, ControlObject, SeatSince};
 mod debris;
 mod dirty;
 mod events;
@@ -581,6 +581,11 @@ struct Peer {
     processed_move: u64,
     /// How fast the host runs this player's moves while seated.
     seated_pace: SeatedPace,
+    /// The seat the client last said its moves are made for, with the
+    /// newest move that report came with; `None` inside is on foot. The
+    /// outer `None`: this client never says (a host-side rider, a test), and
+    /// its moves are read by the seat it is in.
+    seat_since: Option<(u64, Option<SeatSince>)>,
     input_budget: f32,
     last_sequence: u64,
     last_move_sequence: u64,
@@ -1147,6 +1152,7 @@ impl Session {
                 inputs: VecDeque::new(),
                 processed_move: 0,
                 seated_pace: SeatedPace::default(),
+                seat_since: None,
                 clan: Clan::default(),
                 input_budget: INPUT_BURST,
                 last_sequence: 0,
@@ -1367,6 +1373,7 @@ impl Session {
                 inputs: VecDeque::new(),
                 processed_move: 0,
                 seated_pace: SeatedPace::default(),
+                seat_since: None,
                 clan: Clan::default(),
                 input_budget: INPUT_BURST,
                 last_sequence: 0,

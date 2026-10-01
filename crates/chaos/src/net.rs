@@ -66,6 +66,7 @@ struct Remote {
     client: Client,
     sequence: u64,
     recent: VecDeque<MoveInput>,
+    seat: Option<bri_sim::session::SeatSince>,
 }
 
 /// What a bot sees, from its client's replica.
@@ -213,6 +214,7 @@ impl NetChaos {
             client,
             sequence: 0,
             recent: VecDeque::new(),
+            seat: None,
         });
         self.report.joins += 1;
         Ok(())
@@ -231,7 +233,14 @@ impl NetChaos {
             let recent: Vec<_> = remote.recent.iter().copied().collect();
             // A hostile input is refused before it is sent; a dropped
             // connection shows up in `drain`.
-            let _ = remote.client.movement(remote.sequence, &recent, None);
+            remote.seat = bri_sim::session::SeatSince::follow(
+                remote.seat,
+                remote.client.replica.seat_of(remote.client.owner),
+                remote.sequence,
+            );
+            let _ = remote
+                .client
+                .movement(remote.sequence, &recent, None, remote.seat);
             if let Some((command, aim)) = remote.bot.command(&view, &self.catalog) {
                 let summary: String = format!("{command:?}").chars().take(160).collect();
                 let line = format!("{} {summary} aim={aim:?}", remote.client.owner);
