@@ -1090,6 +1090,48 @@ impl Session {
         Ok(())
     }
 
+    /// `player.delete()` (Slayer's `/addLives` taking a living member's
+    /// last life): the body goes without a death, so nobody scores, no
+    /// death line is printed and no rules hear of a death. The member waits
+    /// as the dead do, and the corpse is cleared at once.
+    pub(super) fn remove_body(&mut self, owner: OwnerId) -> Result<()> {
+        let tick = self.simulation.state().tick;
+        let Some(peer) = self.peers.get(&owner) else {
+            return Ok(());
+        };
+        let player = peer.combat.player;
+        let LifeState::Alive { life } = self
+            .minigames
+            .player(player)
+            .map_err(|e| anyhow::anyhow!("{e}"))?
+            .life
+        else {
+            return Ok(());
+        };
+        let effects = self
+            .minigames
+            .removed(player, life)
+            .map_err(|e| anyhow::anyhow!("Body removal rejected: {e}"))?;
+        self.eject(owner);
+        self.release_riders(owner);
+        {
+            let peer = self.peers.get_mut(&owner).unwrap();
+            peer.combat.alive = false;
+            peer.combat.health = 0.0;
+            // Past the corpse timeout: the next step clears the body.
+            peer.combat.died_tick = tick.saturating_sub(CORPSE_TICKS);
+            peer.combat.corpse_cleared = false;
+            peer.inputs.clear();
+            peer.control = super::ControlObject::Corpse;
+        }
+        self.weapons.trigger(ActorId(owner), false)?;
+        self.weapon_triggers.remove(&owner);
+        let _ = self.weapons.drop_ball(ActorId(owner));
+        let _ = self.weapons.equip(ActorId(owner), None);
+        self.weapons.clear_worn(ActorId(owner));
+        self.apply_minigame_effects(effects)
+    }
+
     /// A chat line an Add-On's rules wrote: to `to`, or everyone.
     pub(super) fn send_rules_line(&mut self, line: String, to: Option<Vec<OwnerId>>) {
         let to = to.unwrap_or_else(|| self.peers.keys().copied().collect());
@@ -1252,14 +1294,21 @@ impl Session {
             }
             MiniGameRequest::Manage { .. } => anyhow::bail!("Not a request about a mini-game"),
         };
-        // On another game, the engine's own rule: its editors (owner or
-        // admin) may.
-        let foreign = on.filter(|g| Some(*g) != own);
+        // On another game, or on their own game when they do not own it
+        // (an admin managing the game they play in), the engine's own rule:
+        // its editors (owner or admin) may.
+        let foreign = on.filter(|g| {
+            Some(*g) != own || self.minigames.game(*g).is_ok_and(|game| game.owner != player)
+        });
         let team = match &request {
             MiniGameRequest::SetTeam { team, .. } => *team,
             _ => None,
         };
-        match self.package_minigame_request(owner, action, game, target, team) {
+        let teams = match &request {
+            MiniGameRequest::AddOnSettings { teams, .. } => teams.as_ref().map(Vec::len),
+            _ => None,
+        };
+        match self.package_minigame_request(owner, action, game, target, team, teams) {
             super::packages::Answer::Engine if foreign.is_some() => {
                 let game = foreign.expect("checked");
                 ensure!(
@@ -2204,5 +2253,67 @@ impl Session {
     }
     pub fn is_alive(&self, owner: OwnerId) -> bool {
         self.peers.get(&owner).is_some_and(|p| p.combat.alive)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn session() -> Result<Session> {
+        use rapier3d::prelude::*;
+        let simulation = crate::simulation::Simulation::new(
+            bri_world::World::new("Games".into(), "test".into(), vec![[1.0; 4]]),
+            crate::definitions::Definitions::default(),
+            vec![ColliderBuilder::cuboid(100., 0.5, 100.).translation(Vector::new(0., -0.5, 0.))],
+        )?;
+        Ok(Session::new(simulation))
+    }
+
+    /// An admin playing in someone else's game manages it through the
+    /// Add-On Settings window (`Manage` naming the game they are in); a
+    /// plain member doing the same is refused.
+    #[test]
+    fn an_admin_manages_the_game_they_play_in_but_a_member_cannot() -> Result<()> {
+        let mut s = session()?;
+        let host = s.join("Host".into(), Vec3::new(0., 0.05, 0.), false)?;
+        let admin = s.join("Admin".into(), Vec3::new(2., 0.05, 0.), true)?;
+        let member = s.join("Member".into(), Vec3::new(-2., 0.05, 0.), false)?;
+        let mut seq = 0;
+        let mut send = |s: &mut Session, who, request| {
+            seq += 1;
+            s.command(who, seq, Command::MiniGame(request))
+        };
+        send(
+            &mut s,
+            host,
+            MiniGameRequest::Create {
+                color: 0,
+                settings: Default::default(),
+            },
+        )?;
+        let game = s.minigame_views()[0].id;
+        send(&mut s, admin, MiniGameRequest::Join { game })?;
+        send(&mut s, member, MiniGameRequest::Join { game })?;
+        let manage = |request| MiniGameRequest::Manage {
+            game,
+            request: Box::new(request),
+        };
+        let refused = send(
+            &mut s,
+            member,
+            manage(MiniGameRequest::Kick { target: admin }),
+        );
+        assert!(refused.is_err(), "a member may not kick");
+        assert!(s.minigame_views()[0].members.contains(&admin));
+        send(
+            &mut s,
+            admin,
+            manage(MiniGameRequest::Kick { target: member }),
+        )?;
+        assert!(!s.minigame_views()[0].members.contains(&member));
+        send(&mut s, admin, manage(MiniGameRequest::End))?;
+        assert!(s.minigame_views().is_empty());
+        Ok(())
     }
 }

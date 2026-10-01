@@ -276,6 +276,13 @@ fn ui_value(v: &SettingValue) -> MiniGameSettingValue {
         SettingValue::Text(t) => MiniGameSettingValue::Text(t.clone()),
     }
 }
+fn ui_shown_when(setting: String, w: &ShownWhen) -> MiniGameShownWhen {
+    MiniGameShownWhen {
+        setting,
+        is: w.is.iter().map(ui_value).collect(),
+        is_not: w.is_not.iter().map(ui_value).collect(),
+    }
+}
 fn host_value(v: &MiniGameSettingValue) -> SettingValue {
     match v {
         MiniGameSettingValue::Bool(b) => SettingValue::Bool(*b),
@@ -353,19 +360,17 @@ pub fn with_addon_settings(
                 } else {
                     format!("{}:{}", s.package, w.setting)
                 };
-                (key, w.is.iter().map(ui_value).collect())
+                ui_shown_when(key, w)
             }),
         })
         .collect();
-    state.addon_editable = if settings.is_empty() {
-        Vec::new()
-    } else {
-        games
-            .iter()
-            .filter(|g| admin || g.owner == local)
-            .map(|g| MiniGameId(g.id))
-            .collect()
-    };
+    // Named whether or not Add-Ons have settings: the rules, Reset, End,
+    // invites and removals of these games are the player's to manage.
+    state.addon_editable = games
+        .iter()
+        .filter(|g| admin || g.owner == local)
+        .map(|g| MiniGameId(g.id))
+        .collect();
     // A shared or game mode's game is the host's own.
     state.addon_locked = games
         .iter()
@@ -381,7 +386,7 @@ pub fn with_addon_settings(
         })
         .filter(|(_, keys)| !keys.is_empty())
         .collect();
-    state.teams_shown_when = teams_shown_when.map(|w| (w.setting.clone(), w.is.iter().map(ui_value).collect()));
+    state.teams_shown_when = teams_shown_when.map(|w| ui_shown_when(w.setting.clone(), w));
     state.palette = palette
         .iter()
         .map(|c| c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8))
@@ -391,11 +396,13 @@ pub fn with_addon_settings(
 }
 
 /// Map a dialog request to a server command. `None` for local-only actions.
-/// `own` is the local player's game: a request about another game (its
-/// editor's, from the Mini-Game list) names that game.
-pub fn command(action: &UiAction, own: Option<u64>) -> Result<Option<Command>> {
+/// `own` is the local player's game and `owner` whether they own it: a
+/// request about another game (its editor's, from the Mini-Game list), or
+/// about their own game by a player who does not own it (an admin), names
+/// that game, and the host decides whether they may.
+pub fn command(action: &UiAction, own: Option<u64>, owner: bool) -> Result<Option<Command>> {
     let manage = |game: &MiniGameId, request: MiniGameRequest| {
-        if Some(game.0) == own {
+        if Some(game.0) == own && owner {
             request
         } else {
             MiniGameRequest::Manage {
@@ -418,7 +425,13 @@ pub fn command(action: &UiAction, own: Option<u64>) -> Result<Option<Command>> {
         ),
         UiAction::JoinMiniGame { game } => MiniGameRequest::Join { game: game.0 },
         UiAction::LeaveMiniGame { .. } => MiniGameRequest::Leave,
-        UiAction::InviteMiniGame { target } => MiniGameRequest::Invite { target: target.0 },
+        UiAction::InviteMiniGame { target } => {
+            let invite = MiniGameRequest::Invite { target: target.0 };
+            match own {
+                Some(game) => manage(&MiniGameId(game), invite),
+                None => invite,
+            }
+        }
         UiAction::AcceptMiniGameInvite { game } => MiniGameRequest::Accept { game: game.0 },
         UiAction::RejectMiniGameInvite { game, ignore_owner } => MiniGameRequest::Reject {
             game: game.0,
@@ -526,6 +539,59 @@ mod tests {
         assert!(!state.owns_active_game);
         assert_eq!(state.games[0].owner_name, "Host");
         assert!(settings_invalid());
+    }
+    #[test]
+    fn a_player_managing_a_game_they_do_not_own_names_it() {
+        let reset = UiAction::ResetMiniGame { game: MiniGameId(4) };
+        let invite = UiAction::InviteMiniGame {
+            target: MiniGamePlayerId(9),
+        };
+        let kick = UiAction::RemoveMiniGameMember {
+            target: MiniGamePlayerId(9),
+            game: Some(MiniGameId(4)),
+        };
+        let named = |action: &UiAction, owner: bool| {
+            matches!(
+                command(action, Some(4), owner).unwrap(),
+                Some(Command::MiniGame(MiniGameRequest::Manage { game: 4, .. }))
+            )
+        };
+        // Its owner acts on their own game directly.
+        for action in [&reset, &invite, &kick] {
+            assert!(!named(action, true));
+        }
+        // An admin playing in it names the game, so the host checks them
+        // as its editor rather than as its owner.
+        for action in [&reset, &invite, &kick] {
+            assert!(named(action, false));
+        }
+    }
+    #[test]
+    fn games_an_admin_may_manage_are_named_without_add_on_settings() {
+        let view = MiniGameView {
+            id: 1,
+            owner: 2,
+            color: 3,
+            settings: Settings::default(),
+            members: vec![2, 3],
+            teams: Vec::new(),
+            addon_settings: Default::default(),
+            default: false,
+            paint_color: None,
+            shared: false,
+            name_distance: None,
+        };
+        let names: BTreeMap<_, _> = [(2, "Host".to_string()), (3, "Admin".to_string())].into();
+        let views = [view];
+        let base = state(3, &views, &BTreeMap::new(), &names, &[], &Default::default(), 1);
+        let admin = Rank {
+            admin: true,
+            ..Default::default()
+        };
+        let state = with_addon_settings(base.clone(), &views, &[], 3, &admin, None, &[]);
+        assert_eq!(state.addon_editable, vec![MiniGameId(1)]);
+        let plain = with_addon_settings(base, &views, &[], 3, &Rank::default(), None, &[]);
+        assert!(plain.addon_editable.is_empty());
     }
     fn settings_invalid() -> bool {
         settings(&MiniGameRules {

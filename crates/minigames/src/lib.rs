@@ -733,6 +733,20 @@ impl MinigamesWorld {
         life: LifeId,
         killer: Option<PlayerId>,
     ) -> Result<Vec<Effect>, Error> {
+        self.end_life(victim, life, killer, true)
+    }
+    /// A body removed without a death (`player.delete()`): the member
+    /// waits to respawn as the dead do, and nobody scores.
+    pub fn removed(&mut self, victim: PlayerId, life: LifeId) -> Result<Vec<Effect>, Error> {
+        self.end_life(victim, life, None, false)
+    }
+    fn end_life(
+        &mut self,
+        victim: PlayerId,
+        life: LifeId,
+        killer: Option<PlayerId>,
+        scored: bool,
+    ) -> Result<Vec<Effect>, Error> {
         let p = self.player(victim)?;
         if p.life != (LifeState::Alive { life }) {
             return Err(Error::StaleLife);
@@ -751,7 +765,7 @@ impl MinigamesWorld {
             .checked_add(manual_respawn_ticks(delay))
             .ok_or(Error::InvalidClock)?;
         let mut out = Vec::new();
-        if let Some(id) = game {
+        if let Some(id) = game.filter(|_| scored) {
             let s = self.games[&id].settings.clone();
             match killer {
                 Some(k) if k == victim => self.add_score(victim, s.points_kill_self, &mut out),

@@ -345,7 +345,9 @@ every team of the game its own value, edited beside the team's name and
 colour in the same window, which also adds and removes teams.
 `editor: "admin"` lets only an admin change it. `shown_when` hides a
 setting unless another (`key`, or `ns:key` of an Add-On this one depends on)
-holds one of the listed values. A dependent Add-On adds its own items to a
+holds one of the listed values; `"is_not": [...]` in place of `"is"` shows it
+while that setting holds none of them (exactly one of the two lists values).
+A dependent Add-On adds its own items to a
 list setting with `setting_items` (`[{ "setting": "slayer:mode", "items":
 [...] }]`), as Slayer's game modes do. The host checks every change against
 the declaration and keeps only values that differ from the default, on the

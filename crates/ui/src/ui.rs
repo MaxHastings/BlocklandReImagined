@@ -299,6 +299,9 @@ pub struct Core {
     pub remap_target: Option<usize>,
     pub remap_all: bool,
     pub options_open: bool,
+    /// Options opens on the pane holding this section (an Add-On's
+    /// Options key), once.
+    pub options_section: Option<String>,
     /// HelpDlg is open (F1 closes it again).
     pub help_open: bool,
     /// The name question was put this run (at most once).
@@ -600,7 +603,21 @@ impl Core {
         action: UiAction,
     ) -> Option<RequestId> {
         use crate::models::minigames::Operation as Op;
-        let allowed = self.minigames.can(match operation {
+        // The game a managing request acts on: the one it names, else the
+        // player's own.
+        let game = match &action {
+            UiAction::ConfigureMiniGame { game, .. }
+            | UiAction::ResetMiniGame { game }
+            | UiAction::EndMiniGame { game }
+            | UiAction::RespawnMiniGameMembers { game }
+            | UiAction::SetMiniGameTeam { game, .. }
+            | UiAction::EditMiniGameAddOns { game, .. }
+            | UiAction::RemoveMiniGameMember {
+                game: Some(game), ..
+            } => Some(*game),
+            _ => self.minigames.active_game,
+        };
+        let allowed = self.minigames.can_on(match operation {
             MiniGameOperation::List => Op::List,
             MiniGameOperation::Create => Op::Create,
             MiniGameOperation::Configure => Op::Configure,
@@ -615,7 +632,7 @@ impl Core {
             MiniGameOperation::RespawnAll => Op::RespawnAll,
             MiniGameOperation::End => Op::End,
             MiniGameOperation::AddOnSettings => Op::AddOnSettings,
-        });
+        }, game);
         if !allowed {
             self.minigames.status =
                 "This mini-game action is unavailable or no longer permitted.".into();
@@ -903,8 +920,8 @@ impl Core {
     }
 
     /// A package bind's screen: the player's own mini-game's Add-On
-    /// Settings (the Mini-Game list when they are in none), or the
-    /// package's help pages.
+    /// Settings (the Mini-Game list when they are in none), the package's
+    /// help pages, or Options where the Add-On client preferences are.
     fn open_bind_screen(&mut self, screen: &str, package: &str) {
         match screen {
             "minigame_addons" => match self.minigames.active_game {
@@ -921,6 +938,10 @@ impl Core {
                     .find(|p| p.package == package)
                     .map(|p| p.name.clone());
                 self.get_help(page);
+            }
+            "options" => {
+                self.options_section = Some(crate::screens::options::ADDON_SECTION.into());
+                self.push(ScreenId::Options);
             }
             _ => {}
         }
@@ -1338,6 +1359,7 @@ impl Ui {
             remap_target: None,
             remap_all: false,
             options_open: false,
+            options_section: None,
             help_open: false,
             name_asked: false,
             help_page: None,
@@ -2540,8 +2562,11 @@ impl Ui {
     /// (Slayer's start page on first run), once per Add-On.
     pub fn welcome_addons(&mut self) {
         let c = &mut self.core;
+        // Shown once per Add-On, or on every join with the Options toggle.
+        let always = c.prefs.bool_or(crate::screens::options::WELCOME_ALWAYS, false);
         let Some(page) = c.addon_help.iter().find(|p| {
-            p.welcome && !c.prefs.bool_or(&format!("$Pref::AddOnWelcome::{}", p.package), false)
+            p.welcome
+                && (always || !c.prefs.bool_or(&format!("$Pref::AddOnWelcome::{}", p.package), false))
         }) else {
             return;
         };

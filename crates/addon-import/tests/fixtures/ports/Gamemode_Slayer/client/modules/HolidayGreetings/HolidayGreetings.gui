@@ -1,0 +1,9 @@
+// Stand-in holiday screen (CC0): the original's layout, this stand-in's words.
+new GuiControl(HolidayGreetings) {
+   new GuiMLTextCtrl(HolidayTip) {
+      profile = "GuiMLTextProfile";
+      position = "212 454";
+      extent = "216 18";
+      text = "<just:center>Stand-in: press to go on";
+   };
+};

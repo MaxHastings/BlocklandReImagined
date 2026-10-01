@@ -259,7 +259,7 @@ impl Screen for Players {
                 if core.minigames.can(crate::models::minigames::Operation::RemoveMember)
                     && let Some(id) = self.view.id("NPL_List").and_then(|n| self.view.selected(n))
                     .and_then(|i| self.ids.get(i as usize)).copied() {
-                    core.minigame_request(MiniGameOperation::RemoveMember, UiAction::RemoveMiniGameMember { target: MiniGamePlayerId(id), game: None });
+                    core.minigame_request(MiniGameOperation::RemoveMember, UiAction::RemoveMiniGameMember { target: MiniGamePlayerId(id), game: core.minigames.active_game });
                 }
             }
             _ => {

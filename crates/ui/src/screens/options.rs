@@ -200,6 +200,12 @@ pub const CHECK_FOR_UPDATES: &str = "$pref::Net::CheckForUpdates";
 /// Slayer's client preference "Disable End of Round Report": score reports
 /// a game opens (`Notice::Report`) stay closed.
 pub const HIDE_REPORTS: &str = "$pref::HUD::HideReports";
+/// Slayer's client preference "Display on Startup": an Add-On's welcome
+/// help page opens on every join, not only the first.
+pub const WELCOME_ALWAYS: &str = "$Pref::AddOnWelcome::Always";
+/// The section an Add-On's Options key opens Options on (its client
+/// preferences joined it).
+pub const ADDON_SECTION: &str = "Gui Options";
 /// Controls' "Invert Mouse In Vehicles"; the client reads it while driving
 /// a mouse-steered vehicle. On by default, as stock v20's
 /// `client/defaults.cs` ships it: moving the mouse up dips a plane's nose.
@@ -230,6 +236,7 @@ const DEFAULT_ON: &[&str] = &[
 /// Checkbox preferences the native game honours.
 const CHECKBOX_PREFS: &[&str] = &[
     HIDE_REPORTS,
+    WELCOME_ALWAYS,
     FULLSCREEN,
     NO_VSYNC,
     PRECIPITATION,
@@ -1165,6 +1172,7 @@ impl Options {
                 // before it: score reports a game opens stay closed.
                 for (name, variable, text) in [
                     ("OptHideReportsToggle", HIDE_REPORTS, "Hide end of round reports"),
+                    ("OptWelcomeAlwaysToggle", WELCOME_ALWAYS, "Show Add-On welcome pages every time"),
                     ("OptCheckForUpdatesToggle", CHECK_FOR_UPDATES, "Check for new versions"),
                 ] {
                     let mut c = v.node(last).ctrl.clone();
@@ -1484,6 +1492,18 @@ impl Options {
             self.view.nodes[n].ctrl.style = format!("HUDChatTextEditSize{size}Profile");
         }
     }
+    /// The pane (`Graphics`, `Audio`...) whose page holds section `title`.
+    fn pane_of_section(&self, title: &str) -> Option<String> {
+        let v = &self.view;
+        let mut n = find_section(v, title)?;
+        loop {
+            let name = v.node(n).ctrl.name.as_deref().unwrap_or_default();
+            if let Some(pane) = name.strip_prefix("Opt").and_then(|p| p.strip_suffix("Pane")) {
+                return Some(pane.to_owned());
+            }
+            n = v.node(n).parent?;
+        }
+    }
     fn pane(&mut self, name: &str) {
         for p in ["Graphics", "Audio", "Controls", "AdvGraphics"] {
             if let Some(n) = self.view.id(&format!("Opt{p}Pane")) {
@@ -1771,6 +1791,12 @@ impl Screen for Options {
     }
     fn on_wake(&mut self, core: &mut Core) {
         core.options_open = true;
+        // An Add-On's Options key: the pane holding its preferences.
+        if let Some(title) = core.options_section.take()
+            && let Some(pane) = self.pane_of_section(&title)
+        {
+            self.pane(&pane);
+        }
     }
     fn on_sleep(&mut self, core: &mut Core) {
         if !self.committed {
@@ -2362,6 +2388,81 @@ mod tests {
             },
             &mut ui.core,
         );
+    }
+
+    /// Slayer's Options key opens Options on the pane holding the Add-On
+    /// client preferences, where "Show Add-On welcome pages every time"
+    /// joins them; with it on, a welcome page opens on every join.
+    #[test]
+    fn an_addon_options_key_opens_the_pane_with_the_welcome_toggle() {
+        let mut data = UiPack::default();
+        let mut layout = ctrl("GuiControl", "GuiDefaultProfile", Rect::new(0, 0, 640, 480));
+        let mut graphics = ctrl("GuiControl", "GuiDefaultProfile", Rect::new(0, 0, 640, 400));
+        graphics.name = Some("OptGraphicsPane".into());
+        let mut audio = ctrl("GuiControl", "GuiDefaultProfile", Rect::new(0, 0, 640, 400));
+        audio.name = Some("OptAudioPane".into());
+        audio.visible = false;
+        let mut section = ctrl("GuiSwatchCtrl", "GuiDefaultProfile", Rect::new(0, 0, 300, 60));
+        section
+            .children
+            .push(ctrl("GuiSwatchCtrl", "GuiDefaultProfile", Rect::new(2, 2, 296, 14)));
+        let mut title = ctrl("GuiTextCtrl", "GuiDefaultProfile", Rect::new(4, 0, 100, 14));
+        title.text = Some(ADDON_SECTION.into());
+        section.children.push(title);
+        let mut tips = ctrl("GuiCheckBoxCtrl", "GuiDefaultProfile", Rect::new(10, 20, 120, 18));
+        tips.variable = Some("$pref::HUD::showToolTips".into());
+        tips.text = Some("Show Tooltips".into());
+        section.children.push(tips);
+        audio.children.push(section);
+        layout.children.push(graphics);
+        layout.children.push(audio);
+        data.layouts.insert("optionsDlg".into(), layout);
+        let mut ui = Ui::new(
+            Rc::new(Pack::from_parts(data, Default::default())),
+            UiConfig {
+                size: (640, 480),
+                scale: Some(1.0),
+                platform: Platform::Windows,
+            },
+            Settings {
+                binds: Some(vec![]),
+                ..Default::default()
+            },
+        );
+        ui.set_package_binds(vec![crate::api::PackageBind {
+            division: "Slayer".into(),
+            name: "Options".into(),
+            package: "slayer".into(),
+            command: String::new(),
+            key: None,
+            hold: false,
+            screen: Some("options".into()),
+        }]);
+        assert!(ui.core.run_command("package:slayer:", true));
+        ui.update(0);
+        let options = ui.screen(ScreenId::Options).expect("the key opens Options");
+        let v = options.view();
+        let pane = |name: &str| v.node(v.id(name).unwrap()).state.visible;
+        assert!(pane("OptAudioPane") && !pane("OptGraphicsPane"), "on the Add-On preferences' pane");
+        let welcome = v.id("OptWelcomeAlwaysToggle").expect("added");
+        assert!(!v.bool_value(welcome), "off: a welcome page opens once");
+        assert_eq!(v.node(welcome).ctrl.variable.as_deref(), Some(WELCOME_ALWAYS));
+
+        // Once per Add-On, unless the toggle is on.
+        ui.core.addon_help = vec![crate::api::AddOnHelpPage {
+            package: "slayer".into(),
+            name: "Slayer".into(),
+            text: String::new(),
+            welcome: true,
+        }];
+        ui.welcome_addons();
+        assert_eq!(ui.core.help_page.as_deref(), Some("Slayer"));
+        ui.core.help_page = None;
+        ui.welcome_addons();
+        assert_eq!(ui.core.help_page, None, "seen already");
+        ui.core.prefs.set(WELCOME_ALWAYS, "1");
+        ui.welcome_addons();
+        assert_eq!(ui.core.help_page.as_deref(), Some("Slayer"), "every time");
     }
 
     #[test]

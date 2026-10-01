@@ -1042,6 +1042,9 @@ impl MessageScreen {
             Callback::MiniGame { game, operation } => {
                 let valid = match operation {
                     MiniGameOperation::AcceptInvite | MiniGameOperation::RejectInvite | MiniGameOperation::IgnoreInvite => core.minigames.invitations.iter().any(|i| i.game == *game),
+                    // The Add-On Settings window ends or resets the game it
+                    // edits, which may be another player's.
+                    MiniGameOperation::Reset | MiniGameOperation::End => core.minigames.active_game == Some(*game) || core.minigames.can_manage(*game),
                     _ => core.minigames.active_game == Some(*game),
                 };
                 if !valid { return; }

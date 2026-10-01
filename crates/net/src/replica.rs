@@ -208,8 +208,7 @@ impl Replica {
         validate_addon_settings(&checkpoint.addon_settings)?;
         ensure!(
             checkpoint.addon_teams_shown_when.as_ref().is_none_or(|w| {
-                bri_package::setting::is_setting_ref(&w.setting)
-                    && w.is.len() <= bri_package::setting::MAX_ITEMS
+                w.validate().is_ok()
             }),
             "Invalid Add-On team list rule"
         );

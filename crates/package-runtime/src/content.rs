@@ -337,8 +337,8 @@ pub struct Behaviour {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub setting_items: Vec<SettingItems>,
     /// Show the team list of the Add-On Settings window only while a
-    /// setting holds one of some values (Slayer's Teams tab, locked in a
-    /// mode without teams).
+    /// setting holds one of some values, or none of them (`is_not`;
+    /// Slayer's Teams tab, locked in a mode without teams).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub teams_shown_when: Option<bri_package::setting::ShownWhen>,
     /// Wrench event inputs these rules fire with `fire_brick_input`
@@ -370,10 +370,12 @@ pub struct Behaviour {
     /// `on_minigame_request(player, action, info)` before the engine acts
     /// on a player's mini-game request: `action` is `create`, `join`,
     /// `leave`, `edit` (the Mini-Game window's settings), `reset`,
-    /// `respawn_all`, `end`, `invite`, `kick` or `ignore` (ignoring an
-    /// invitation); `info` is `#{ game, target }`, `game` the game acted on
-    /// (the player's own, or the one they join) and `target` the player
-    /// invited or kicked. Return `()` to leave it to the engine (a game's
+    /// `respawn_all`, `end`, `invite`, `kick`, `team` (an editor moving a
+    /// player between teams) or `ignore` (ignoring an invitation); `info`
+    /// is `#{ game, target, team, teams }`, `game` the game acted on (the
+    /// player's own, or the one they join), `target` the player invited,
+    /// kicked or moved, `team` the team they are moved to and `teams` how
+    /// many teams an `edit` that changes them leaves. Return `()` to leave it to the engine (a game's
     /// owner runs it), `true` to let the player do it to that game though
     /// they do not own it (Slayer's Edit and Reset Rights; a join skips
     /// invite-only and the join wait), `false` or a reason to refuse, or
@@ -406,8 +408,7 @@ pub struct Behaviour {
     #[serde(default)]
     pub on_death_message: bool,
     /// Brick kinds (`namespace:brick/name`, `v20/brick/<datablock>`, or
-    /// `*` for every brick) whose changes these rules hear as
-    /// Brick kinds (or `*`) whose changes these rules hear with
+    /// `*` for every brick) whose changes these rules hear with
     /// `on_brick(event, brick, player, info)`: `event` is `planted` (by a
     /// player), `loaded` (from a build, or standing when the rules start),
     /// `painted`, `named` or `removed`; `player` who did it by hand, or
@@ -997,10 +998,9 @@ impl Behaviour {
         if let Some(when) = &self.teams_shown_when {
             ensure!(
                 bri_package::setting::is_setting_ref(&when.setting)
-                    && !when.is.is_empty()
-                    && when.is.len() <= bri_package::setting::MAX_ITEMS
+                    && when.validate().is_ok()
                     && (when.setting.contains(':') || keys.contains(&when.setting)),
-                "teams_shown_when names one of these settings and 1 to {} values",
+                "teams_shown_when names one of these settings and 1 to {} values it is or is not",
                 bri_package::setting::MAX_ITEMS
             );
         }
@@ -1938,7 +1938,7 @@ impl Splash {
     }
 }
 /// Screens a bind may open ([`BindDef::screen`]).
-pub const BIND_SCREENS: [&str; 2] = ["minigame_addons", "help"];
+pub const BIND_SCREENS: [&str; 3] = ["minigame_addons", "help", "options"];
 /// A key a player can bind to a package's command.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1952,8 +1952,9 @@ pub struct BindDef {
     pub command: String,
     /// A screen of the game it opens instead of sending a command
     /// ([`BIND_SCREENS`]): `minigame_addons` (the player's own mini-game's
-    /// Add-On Settings, Slayer's Edit Minigame key) or `help` (the
-    /// package's help pages, Slayer's Options key).
+    /// Add-On Settings, Slayer's Edit Minigame key), `help` (the package's
+    /// help pages) or `options` (the Options pane with the Add-On welcome
+    /// page toggle, Slayer's Options key).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub screen: Option<String>,
     /// Default key, as Controls writes it (`ctrl c`, `shift-ctrl x`,

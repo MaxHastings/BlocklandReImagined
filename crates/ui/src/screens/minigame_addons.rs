@@ -89,6 +89,9 @@ pub struct AddOnSettings {
     /// draft the host's.
     applying: bool,
     seen: Option<u64>,
+    /// The vanilla rules a loaded favourite brings, sent with Apply when
+    /// they differ from the game's.
+    rules: Option<MiniGameRules>,
 }
 
 fn value_text(v: &MiniGameSettingValue) -> String {
@@ -97,6 +100,18 @@ fn value_text(v: &MiniGameSettingValue) -> String {
         MiniGameSettingValue::Int(n) => n.to_string(),
         MiniGameSettingValue::Text(t) => t.clone(),
     }
+}
+
+/// Slayer's `TEAMCOLOR`: a look colour that is the team's own.
+fn is_team_color(text: &str) -> bool {
+    text.trim().eq_ignore_ascii_case("TEAMCOLOR")
+}
+
+/// Whether two `"r g b a"` colours are the same to a paint step.
+fn same_color(a: &str, b: &str) -> bool {
+    let parse = |t: &str| -> Vec<f32> { t.split_whitespace().filter_map(|v| v.parse().ok()).collect() };
+    let (a, b) = (parse(a), parse(b));
+    a.len() == b.len() && !a.is_empty() && a.iter().zip(&b).all(|(x, y)| (x - y).abs() < 0.5 / 255.0)
 }
 
 impl AddOnSettings {
@@ -164,6 +179,7 @@ impl AddOnSettings {
             request: None,
             applying: false,
             seen: None,
+            rules: None,
         };
         if let Some(n) = screen.view.id(NOTIFY) {
             let on = core.prefs.bool_or(NOTIFY_PREF, true);
@@ -205,9 +221,13 @@ impl AddOnSettings {
             return;
         }
         let slot = self.favorite_slot();
+        // The game's vanilla rules go with it (Slayer's favourites kept
+        // every preference), or the ones a loaded favourite brought.
+        let rules = self.rules.clone().or_else(|| self.summary(core).map(|g| g.rules.clone()));
         core.settings.addon_favorites.insert(
             slot,
             AddOnFavorite {
+                rules,
                 settings: self.values.clone(),
                 teams: self
                     .teams
@@ -266,6 +286,9 @@ impl AddOnSettings {
             }
             self.teams = teams;
         }
+        if fav.rules.is_some() {
+            self.rules = fav.rules;
+        }
         self.build(core);
         self.status(core, Some(&format!("Loaded slot {}. Apply to use it.", slot + 1)));
     }
@@ -294,17 +317,30 @@ impl AddOnSettings {
         }
         out
     }
+    /// The look colour (`"r g b a"`, 0 to 1) of paint colour `color`, which
+    /// a colour value `TEAMCOLOR` stands for.
+    fn team_color_text(core: &Core, color: u8) -> Option<String> {
+        let [r, g, b] = *core.minigames.palette.get(usize::from(color))?;
+        let c = |v: u8| f32::from(v) / 255.0;
+        Some(format!("{} {} {} 1", c(r), c(g), c(b)))
+    }
     /// A team's look in `category` as the avatar editor takes it, from
-    /// `values` (the draft, or the defaults).
+    /// `values` (the draft, or the defaults); a colour that is the text
+    /// `TEAMCOLOR` shows as `team_color`.
     fn look(
         core: &Core,
         category: &str,
+        team_color: Option<&str>,
         values: &dyn Fn(&MiniGameAddOnSetting) -> MiniGameSettingValue,
     ) -> AvatarPrefs {
         let mut look = AvatarPrefs::default();
         for s in core.minigames.addon_settings.iter().filter(|s| s.team && s.category == category) {
             let Some(part) = &s.avatar else { continue };
-            look.set(part, value_text(&values(s)));
+            let text = value_text(&values(s));
+            match team_color {
+                Some(color) if is_team_color(&text) => look.set(part, color),
+                _ => look.set(part, text),
+            }
         }
         look.name_parts(&core.pack.data.data.avatar);
         look
@@ -313,10 +349,11 @@ impl AddOnSettings {
     fn edit_look(&mut self, core: &mut Core, t: usize, category: &str) {
         let _ = self.read_fields(core);
         let Some(team) = self.teams.get(t) else { return };
-        let look = Self::look(core, category, &|s| {
+        let team_color = Self::team_color_text(core, team.color);
+        let look = Self::look(core, category, team_color.as_deref(), &|s| {
             team.settings.get(&s.key).cloned().unwrap_or_else(|| s.default.clone())
         });
-        let default = Self::look(core, category, &|s| s.default.clone());
+        let default = Self::look(core, category, team_color.as_deref(), &|s| s.default.clone());
         core.avatar_value = Some(crate::ui::AvatarValue {
             title: format!("Edit {category}: {}", team.name),
             look,
@@ -335,6 +372,7 @@ impl AddOnSettings {
         let Some((t, category)) = key.split_once(':') else { return };
         let Some(t) = t.parse::<usize>().ok().filter(|t| *t < self.teams.len()) else { return };
         let positions = look.part_positions(&core.pack.data.data.avatar);
+        let team_color = Self::team_color_text(core, self.teams[t].color);
         for s in core.minigames.addon_settings.iter().filter(|s| s.team && s.category == category) {
             let Some(part) = &s.avatar else { continue };
             let value = match &s.kind {
@@ -344,6 +382,14 @@ impl AddOnSettings {
                 },
                 MiniGameSettingKind::Text { max_length } => {
                     let Some(text) = look.get(part) else { continue };
+                    // Left at the team's colour: it stays `TEAMCOLOR`, so
+                    // it follows the team's colour when that changes.
+                    let before = self.teams[t].settings.get(&s.key).unwrap_or(&s.default);
+                    if matches!(before, MiniGameSettingValue::Text(b) if is_team_color(b))
+                        && team_color.as_deref().is_some_and(|c| same_color(c, text))
+                    {
+                        continue;
+                    }
                     MiniGameSettingValue::Text(text.chars().take(*max_length as usize).collect())
                 }
                 _ => continue,
@@ -363,15 +409,16 @@ impl AddOnSettings {
     }
     /// Whether the team list shows (Slayer's teams, in a mode with them).
     fn teams_shown(&self, core: &Core) -> bool {
-        let Some((key, values)) = &core.minigames.teams_shown_when else {
+        let Some(when) = &core.minigames.teams_shown_when else {
             return true;
         };
+        let key = &when.setting;
         let current = self
             .values
             .get(key)
             .cloned()
             .or_else(|| Self::setting(core, key).map(|d| d.default.clone()));
-        current.is_some_and(|v| values.contains(&v))
+        current.is_some_and(|v| when.holds(&v))
     }
 
     fn summary<'a>(&self, core: &'a Core) -> Option<&'a MiniGameSummary> {
@@ -392,6 +439,7 @@ impl AddOnSettings {
     /// Take the host's values afresh.
     fn load(&mut self, core: &Core) {
         self.seen = Some(core.minigames.revision);
+        self.rules = None;
         let Some(g) = self.summary(core) else {
             self.values.clear();
             self.teams.clear();
@@ -436,16 +484,17 @@ impl AddOnSettings {
 
     /// Whether a setting shows, given the draft's other values.
     fn shown(&self, core: &Core, s: &MiniGameAddOnSetting, team: Option<usize>) -> bool {
-        let Some((key, values)) = &s.shown_when else {
+        let Some(when) = &s.shown_when else {
             return true;
         };
+        let key = &when.setting;
         let current = self
             .values
             .get(key)
             .or_else(|| team.and_then(|t| self.teams.get(t)).and_then(|t| t.settings.get(key)))
             .cloned()
             .or_else(|| Self::setting(core, key).map(|d| d.default.clone()));
-        current.is_some_and(|v| values.contains(&v))
+        current.is_some_and(|v| when.holds(&v))
     }
 
     /// Lay the rows out again from the draft.
@@ -862,6 +911,28 @@ impl AddOnSettings {
         }
         let Some(game) = self.game else { return };
         let (settings, teams) = self.changes(core);
+        // A favourite's vanilla rules go first, then what follows them.
+        let rules = self
+            .rules
+            .clone()
+            .filter(|r| self.summary(core).is_some_and(|g| g.rules != *r));
+        if let Some(rules) = rules {
+            let action = UiAction::ConfigureMiniGame { game, rules };
+            if settings.is_empty() && teams.is_none() && !reset {
+                self.request = core.minigame_request(MiniGameOperation::Configure, action);
+                let status = core.minigames.status.clone();
+                self.status(core, Some(&status));
+                return;
+            }
+            if !core
+                .minigames
+                .can_on(crate::models::minigames::Operation::Configure, Some(game))
+            {
+                self.status(core, Some("You may not change this mini-game's rules."));
+                return;
+            }
+            core.request(action);
+        }
         if settings.is_empty() && teams.is_none() {
             if reset {
                 self.request =

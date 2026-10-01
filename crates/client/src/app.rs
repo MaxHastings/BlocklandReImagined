@@ -7854,7 +7854,12 @@ impl PlatformApp for App {
                 let own = self
                     .network_view()
                     .and_then(|v| v.vitals.get(&v.owner).and_then(|v| v.minigame));
-                let result = crate::minigame_ui::command(&action, own).and_then(|command| {
+                let owner = self.network_view().is_some_and(|v| {
+                    v.minigames
+                        .iter()
+                        .any(|g| Some(g.id) == own && g.owner == v.owner)
+                });
+                let result = crate::minigame_ui::command(&action, own, owner).and_then(|command| {
                     match command {
                         Some(command) => self.command(id, command, action.clone()).map(|()| true),
                         None => {

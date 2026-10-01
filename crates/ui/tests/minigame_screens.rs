@@ -208,7 +208,7 @@ fn addon_state() -> MiniGameUiState {
         ),
         setting("slayer:lives", "Lives", false, MiniGameSettingKind::Int { min: 0, max: 99 }, MiniGameSettingValue::Int(0)),
         MiniGameAddOnSetting {
-            shown_when: Some(("slayer:mode".into(), vec![text("ctf")])),
+            shown_when: Some(MiniGameShownWhen { setting: "slayer:mode".into(), is: vec![text("ctf")], is_not: vec![] }),
             ..setting("ctf:capturepoints", "Capture Points", false, MiniGameSettingKind::Int { min: 0, max: 99 }, MiniGameSettingValue::Int(1))
         },
         setting("slayer:teamlives", "Team Lives", true, MiniGameSettingKind::Int { min: -1, max: 99 }, MiniGameSettingValue::Int(-1)),
@@ -231,6 +231,103 @@ fn addon_event(ui: &mut Ui, name: &str, kind: EventKind) {
     let i = ui.dialogs.iter().rposition(|s| s.id() == ScreenId::MiniGameAddOns).unwrap();
     let (dialogs, core) = (&mut ui.dialogs, &mut ui.core);
     dialogs[i].on_event(&ev, core);
+}
+
+#[test]
+fn addon_setting_shown_unless_the_mode_is_one_of_some_values() {
+    let mut ui = test_ui();
+    let mut state = addon_state();
+    let base = state.addon_settings[1].clone();
+    state.addon_settings.push(MiniGameAddOnSetting {
+        key: "slayer:respawnpenalty".into(),
+        title: "Respawn Penalty".into(),
+        shown_when: Some(MiniGameShownWhen {
+            setting: "slayer:mode".into(),
+            is: vec![],
+            is_not: vec![MiniGameSettingValue::Text("dm".into())],
+        }),
+        ..base
+    });
+    ui.apply(UiUpdate::MiniGames(state));
+    ui.core.push(ScreenId::MiniGameSettings);
+    ui.update(0);
+    click(&mut ui, ScreenId::MiniGameSettings, "NativeMiniGameAddOns");
+    ui.update(0);
+    assert!(addon_view(&mut ui).id("AOS_S4").is_none(), "hidden in Deathmatch");
+    let mode = addon_view(&mut ui).id("AOS_S0").unwrap();
+    addon_view(&mut ui).select(mode, Some(1));
+    addon_event(&mut ui, "AOS_S0", EventKind::Changed);
+    assert!(addon_view(&mut ui).id("AOS_S4").is_some(), "shown in any other mode");
+}
+
+#[test]
+fn a_team_colour_look_shows_the_teams_colour_and_stays_the_teams() {
+    let mut ui = test_ui();
+    let mut state = addon_state();
+    let base = state.addon_settings[3].clone();
+    state.addon_settings.push(MiniGameAddOnSetting {
+        key: "slayer:uni_hatcolor".into(),
+        title: "Hat Color".into(),
+        category: "Uniform".into(),
+        kind: MiniGameSettingKind::Text { max_length: 32 },
+        default: MiniGameSettingValue::Text("TEAMCOLOR".into()),
+        avatar: Some("HatColor".into()),
+        ..base
+    });
+    ui.apply(UiUpdate::MiniGames(state));
+    ui.core.minigame_addons = Some(MiniGameId(42));
+    ui.core.push(ScreenId::MiniGameAddOns);
+    ui.update(0);
+    // Red is palette colour 0: the editor shows the hat red.
+    addon_event(&mut ui, "AOS_T0_Look_Uniform", EventKind::Click);
+    let value = ui.core.avatar_value.clone().expect("the avatar editor opens on the look");
+    assert_eq!(value.look.get("HatColor"), Some("1 0 0 1"));
+    assert_eq!(value.default.get("HatColor"), Some("1 0 0 1"));
+    // Done without changing it: still the team's colour, nothing to send.
+    ui.core.avatar_value.as_mut().unwrap().done = Some(value.look.clone());
+    let i = ui.dialogs.iter().rposition(|s| s.id() == ScreenId::MiniGameAddOns).unwrap();
+    let (dialogs, core) = (&mut ui.dialogs, &mut ui.core);
+    dialogs[i].on_update(core);
+    addon_event(&mut ui, "AOS_Apply", EventKind::Click);
+    assert!(
+        !ui.drain_actions().iter().any(|(_, a)| matches!(a, UiAction::EditMiniGameAddOns { .. })),
+        "TEAMCOLOR is kept"
+    );
+}
+
+#[test]
+fn an_addon_favourite_keeps_the_games_rules_and_apply_sends_them() {
+    let addon_click = |ui: &mut Ui, command: &str| {
+        let node = addon_view(ui).by_command(command).unwrap();
+        let ev = ViewEvent { node, kind: EventKind::Click };
+        let i = ui.dialogs.iter().rposition(|s| s.id() == ScreenId::MiniGameAddOns).unwrap();
+        let (dialogs, core) = (&mut ui.dialogs, &mut ui.core);
+        dialogs[i].on_event(&ev, core);
+    };
+    let mut ui = test_ui();
+    let mut state = addon_state();
+    state.games[0].rules.title = "Alpha Round".into();
+    ui.apply(UiUpdate::MiniGames(state));
+    ui.core.minigame_addons = Some(MiniGameId(42));
+    ui.core.push(ScreenId::MiniGameAddOns);
+    ui.update(0);
+    addon_click(&mut ui, "AOS_FavSave");
+    let saved = ui.core.settings.addon_favorites[&0].clone();
+    assert_eq!(saved.rules.as_ref().map(|r| r.title.as_str()), Some("Alpha Round"));
+    ui.drain_actions();
+    // A favourite from another game: its rules go with Apply.
+    let rules = MiniGameRules { title: "Favourite Arena".into(), ..Default::default() };
+    ui.core.settings.addon_favorites.insert(0, AddOnFavorite { rules: Some(rules.clone()), ..saved });
+    addon_click(&mut ui, "AOS_FavLoad");
+    addon_click(&mut ui, "AOS_Apply");
+    let sent: Vec<_> = ui.drain_actions().into_iter().map(|(_, a)| a).collect();
+    assert!(
+        sent.contains(&UiAction::ConfigureMiniGame { game: MiniGameId(42), rules }),
+        "{sent:?}"
+    );
+    // A favourite saved before rules were kept still loads.
+    let old: AddOnFavorite = serde_json::from_str(r#"{"settings":{},"teams":[]}"#).unwrap();
+    assert_eq!(old.rules, None);
 }
 
 #[test]
@@ -311,4 +408,34 @@ fn addon_settings_window_refuses_bad_numbers_and_is_read_only_for_others() {
     assert!(v.id("AOS_AddTeam").is_none());
     let apply = v.id("AOS_Apply").unwrap();
     assert!(!v.node(apply).state.visible);
+}
+
+#[test]
+fn the_list_gains_a_default_column_while_a_game_is_the_default() {
+    let mut ui = test_ui();
+    ui.core.push(ScreenId::MiniGames);
+    ui.apply(UiUpdate::MiniGames(game_state()));
+    ui.update(0);
+    let row = |ui: &Ui| {
+        let view = ui.screen(ScreenId::MiniGames).unwrap().view();
+        let list = view.id("JMG_List").unwrap();
+        let header = view.id("JMG_DefaultHeader").unwrap();
+        (
+            view.node(list).state.items[0].0.split('\t').count(),
+            view.node(list).ctrl.field("columns").map(str::to_owned),
+            view.node(header).state.visible,
+            view.node(list).state.items[0].0.clone(),
+        )
+    };
+    let (fields, _, header, _) = row(&ui);
+    assert_eq!((fields, header), (4, false), "no default game: v20's four columns");
+    let mut state = game_state();
+    state.games[0].default = true;
+    state.revision += 1;
+    ui.apply(UiUpdate::MiniGames(state));
+    ui.update(0);
+    let (fields, columns, header, line) = row(&ui);
+    assert_eq!((fields, header), (5, true));
+    assert!(line.ends_with("\tYes"), "{line}");
+    assert_eq!(columns.as_deref(), Some("0 102 165 490 450"));
 }

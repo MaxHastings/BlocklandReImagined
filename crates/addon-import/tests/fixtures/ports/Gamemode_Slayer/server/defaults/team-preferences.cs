@@ -292,3 +292,63 @@ new ScriptObject(Slayer_PrefSO : Slayer_DefaultPrefSO)
 	permissionLevel = $Slayer::PermissionLevel["Admin"];
 	variable = "botFillLimit";
 };
+new ScriptObject(Slayer_TeamPrefSO : Slayer_DefaultTeamPrefSO)
+{
+	defaultValue = nameToID(PlayerStandardArmor);
+	permissionLevel = $Slayer::PermissionLevel["Any"];
+	variable = "captain_playerDatablock";
+};
+new ScriptObject(Slayer_TeamPrefSO : Slayer_DefaultTeamPrefSO)
+{
+	defaultValue = nameToID(SwordItem);
+	permissionLevel = $Slayer::PermissionLevel["Any"];
+	variable = "captain_startEquip0";
+};
+new ScriptObject(Slayer_TeamPrefSO : Slayer_DefaultTeamPrefSO)
+{
+	defaultValue = nameToID(HammerItem);
+	permissionLevel = $Slayer::PermissionLevel["Any"];
+	variable = "captain_startEquip1";
+};
+new ScriptObject(Slayer_TeamPrefSO : Slayer_DefaultTeamPrefSO)
+{
+	defaultValue = nameToID(WrenchItem);
+	permissionLevel = $Slayer::PermissionLevel["Any"];
+	variable = "captain_startEquip2";
+};
+new ScriptObject(Slayer_TeamPrefSO : Slayer_DefaultTeamPrefSO)
+{
+	defaultValue = 0;
+	permissionLevel = $Slayer::PermissionLevel["Any"];
+	variable = "captain_startEquip3";
+};
+new ScriptObject(Slayer_TeamPrefSO : Slayer_DefaultTeamPrefSO)
+{
+	defaultValue = 0;
+	permissionLevel = $Slayer::PermissionLevel["Any"];
+	variable = "captain_startEquip4";
+};
+new ScriptObject(Slayer_TeamPrefSO : Slayer_DefaultTeamPrefSO)
+{
+	defaultValue = 0;
+	permissionLevel = $Slayer::PermissionLevel["Any"];
+	variable = "enableTeamChat";
+};
+new ScriptObject(Slayer_TeamPrefSO : Slayer_DefaultTeamPrefSO)
+{
+	defaultValue = 1;
+	permissionLevel = $Slayer::PermissionLevel["Any"];
+	variable = "hideKillMsgs";
+};
+new ScriptObject(Slayer_TeamPrefSO : Slayer_DefaultTeamPrefSO)
+{
+	defaultValue = "00ff00";
+	permissionLevel = $Slayer::PermissionLevel["Any"];
+	variable = "chatColor";
+};
+new ScriptObject(Slayer_TeamPrefSO : Slayer_DefaultTeamPrefSO)
+{
+	defaultValue = 0;
+	permissionLevel = $Slayer::PermissionLevel["Any"];
+	variable = "spectate";
+};

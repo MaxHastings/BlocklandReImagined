@@ -460,6 +460,16 @@ pub(super) fn register(engine: &mut Engine) {
     engine.register_fn("setting", |game: Dynamic, key: &str| {
         read_setting(&game, None, key)
     });
+    // A server-wide setting (`scope: "server"`), in or out of any game
+    // (Slayer's Create Minigame Rights, read before there is a game).
+    engine.register_fn("server_setting", |key: &str| {
+        with_world(|world, _| {
+            world
+                .setting(SERVER_SETTINGS, None, key)
+                .map(setting_dynamic)
+                .map_err(Into::into)
+        })
+    });
     engine.register_fn("setting_text", |game: Dynamic, key: &str| {
         let game = id(&game)?;
         with_world(|world, _| world.setting_text(game, None, key).map_err(Into::into))

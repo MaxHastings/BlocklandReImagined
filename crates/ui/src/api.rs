@@ -1112,6 +1112,27 @@ pub struct MiniGameChoice {
     pub name: String,
 }
 
+/// A setting (`namespace:key`) that shows another only while it holds one
+/// of `is`, or, when `is_not` lists values, none of those.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MiniGameShownWhen {
+    pub setting: String,
+    #[serde(default)]
+    pub is: Vec<MiniGameSettingValue>,
+    #[serde(default)]
+    pub is_not: Vec<MiniGameSettingValue>,
+}
+impl MiniGameShownWhen {
+    /// Whether that setting holding `value` shows the other.
+    pub fn holds(&self, value: &MiniGameSettingValue) -> bool {
+        if self.is_not.is_empty() {
+            self.is.contains(value)
+        } else {
+            !self.is_not.contains(value)
+        }
+    }
+}
+
 /// Stock v20 Create/Edit Mini-Game fields; lives are unlimited in v20 and have
 /// no UI field. Time fields are seconds here and are converted at the host edge.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1241,8 +1262,9 @@ pub struct MiniGameAddOnSetting {
     pub team: bool,
     pub kind: MiniGameSettingKind,
     pub default: MiniGameSettingValue,
-    /// Shown only while that setting (`namespace:key`) holds one of these.
-    pub shown_when: Option<(String, Vec<MiniGameSettingValue>)>,
+    /// Shown only while that setting (`namespace:key`) holds one of some
+    /// values, or none of them.
+    pub shown_when: Option<MiniGameShownWhen>,
     /// What the '?' beside it explains.
     #[serde(default)]
     pub help: String,
@@ -1390,8 +1412,10 @@ pub struct MiniGameUiState {
     /// The running Add-Ons' settings (the Add-On Settings window).
     #[serde(default)]
     pub addon_settings: Vec<MiniGameAddOnSetting>,
-    /// Whether the Add-On Settings window may change `game`'s settings and
-    /// teams: the host's answer (its owner, or an admin), by game.
+    /// The games the local player may manage (the Add-On Settings window,
+    /// rules, Reset, End, invites and removals) though they may not own
+    /// them: the host's answer (its owner, or an admin), by game. The host
+    /// checks every request again.
     #[serde(default)]
     pub addon_editable: Vec<MiniGameId>,
     /// The paint colours a team may take, by index.
@@ -1405,7 +1429,7 @@ pub struct MiniGameUiState {
     /// The team list shows only while that setting holds one of these
     /// (Slayer's teams, hidden in a mode without them).
     #[serde(default)]
-    pub teams_shown_when: Option<(String, Vec<MiniGameSettingValue>)>,
+    pub teams_shown_when: Option<MiniGameShownWhen>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1676,6 +1700,9 @@ pub struct Settings {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AddOnFavorite {
+    /// The game's vanilla rules, put back with the Add-On settings (none in
+    /// a favourite saved before they were kept).
+    pub rules: Option<MiniGameRules>,
     pub settings: BTreeMap<String, MiniGameSettingValue>,
     pub teams: Vec<AddOnFavoriteTeam>,
 }

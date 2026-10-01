@@ -233,6 +233,12 @@ pub enum Op {
     Respawn {
         player: u64,
     },
+    /// Take a living player's body away without a death (`player.delete()`):
+    /// nobody scores, no death line, no `on_death`. They wait to respawn as
+    /// the dead do (held, if their respawn is held).
+    RemoveBody {
+        player: u64,
+    },
     /// Make a player this archetype (a package's `archetype` id or v20's
     /// `v20.player.<datablock>`), now and at every respawn. An empty id
     /// hands the choice back to the mini-game's player type.
@@ -1488,6 +1494,7 @@ impl Op {
             Self::SetEnvironment { .. } => "environment",
             Self::Teleport { .. }
             | Self::Respawn { .. }
+            | Self::RemoveBody { .. }
             | Self::SetArchetype { .. }
             | Self::Control { .. }
             | Self::GiveItem { .. }
@@ -1539,6 +1546,7 @@ impl Op {
             Self::RemoveBrick { .. }
             | Self::RemoveEntity { .. }
             | Self::Respawn { .. }
+            | Self::RemoveBody { .. }
             | Self::Control { .. }
             | Self::SetImageAmmo { .. }
             | Self::MirrorCopy { .. }
@@ -2144,6 +2152,7 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::Tell { .. } => "tell",
         Op::Teleport { .. } => "teleport",
         Op::Respawn { .. } => "respawn",
+        Op::RemoveBody { .. } => "remove_body",
         Op::SetArchetype { .. } => "set_archetype",
         Op::Control { .. } => "control",
         Op::SetBlockState { .. } => "set_block_state",

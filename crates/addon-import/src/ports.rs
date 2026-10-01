@@ -864,7 +864,10 @@ fn check_rules(id: &str, manifest: &[u8], files: &[Written]) -> Result<()> {
 /// `{{name|event_params}}` the JSON parameter list of a
 /// `registerOutputEvent` parameter string (see [`event_params`]), and
 /// `{{name|lower}}` the text in lower case, as content ids spell a Torque
-/// name (`v20.weapon.{{equip|lower}}`). A
+/// name (`v20.weapon.{{equip|lower}}`), and `{{name|text}}` a quoted
+/// string a JSON file or the rules can hold, from the inside of a
+/// TorqueScript string (`\c3` becomes chat colour 3, see [`torque_text`]),
+/// so an Add-On's own lines come from the player's copy. A
 /// `{{word}}` that names no value is an error, so a misspelt name is
 /// caught, as is a value its filter cannot read.
 /// A port's text file with Unix line endings, however it was checked out
@@ -874,7 +877,7 @@ fn port_text(bytes: &[u8]) -> Result<String> {
 }
 
 fn fill_text(text: &str, values: &BTreeMap<String, String>) -> Result<String> {
-    let re = regex::Regex::new(r"\{\{([A-Za-z_][A-Za-z0-9_]*)(\|bool|\|event_params|\|lower)?\}\}")?;
+    let re = regex::Regex::new(r"\{\{([A-Za-z_][A-Za-z0-9_]*)(\|bool|\|event_params|\|lower|\|text)?\}\}")?;
     let mut problem = None;
     let filled = re.replace_all(text, |c: &regex::Captures| {
         let Some(v) = values.get(&c[1]) else {
@@ -884,6 +887,7 @@ fn fill_text(text: &str, values: &BTreeMap<String, String>) -> Result<String> {
         match c.get(2).map(|m| m.as_str()) {
             None => v.clone(),
             Some("|lower") => v.to_ascii_lowercase(),
+            Some("|text") => serde_json::Value::String(torque_text(v)).to_string(),
             Some("|event_params") => event_params(v).unwrap_or_else(|e| {
                 problem.get_or_insert_with(|| format!("`{}`: {e:#}", &c[0]));
                 String::new()
@@ -904,6 +908,53 @@ fn fill_text(text: &str, values: &BTreeMap<String, String>) -> Result<String> {
         bail!("{problem}");
     }
     Ok(filled.into_owned())
+}
+
+/// The text a TorqueScript string literal's inside holds: `\n`, `\t`,
+/// `\"`, `\'`, `\\` and `\xHH` as v20 reads them, and `\cN` (colour N,
+/// 0 to 9, then `\cr`, `\cp`, `\co`) as the chat colour codes chat lines
+/// carry, U+E000 plus N (as `bri_ui_import::torque::unescape` reads GUI
+/// text; the importer does not depend on that crate).
+pub(crate) fn torque_text(source: &str) -> String {
+    let mut out = String::with_capacity(source.len());
+    let mut chars = source.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some('t') => out.push('\t'),
+            Some('r') => out.push('\r'),
+            Some('c') => {
+                let code = chars.peek().and_then(|&d| match d {
+                    '0'..='9' => d.to_digit(10),
+                    'r' => Some(10),
+                    'p' => Some(11),
+                    'o' => Some(12),
+                    _ => None,
+                });
+                match code.and_then(|n| char::from_u32(0xE000 + n)) {
+                    Some(code) => {
+                        chars.next();
+                        out.push(code);
+                    }
+                    None => out.push('c'),
+                }
+            }
+            Some('x') => {
+                let hex: String = (0..2).filter_map(|_| chars.next_if(char::is_ascii_hexdigit)).collect();
+                match u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
+                    Some(c) => out.push(c),
+                    None => out.push('x'),
+                }
+            }
+            Some(other) => out.push(other),
+            None => {}
+        }
+    }
+    out
 }
 
 /// The parameters of `registerOutputEvent(class, name, params)` as
@@ -1173,5 +1224,15 @@ mod tests {
             fill_text("v20.weapon.{{p|lower}} {{p}}", &values).unwrap(),
             "v20.weapon.knifeprojectile knifeProjectile"
         );
+    }
+
+    #[test]
+    fn torque_strings_become_quoted_text() {
+        let values = BTreeMap::from([("line".to_owned(), r#"\c3(Spree | %1)\n\"hi\" \cpx\x41\q"#.to_owned())]);
+        assert_eq!(
+            fill_text("let s = {{line|text}};", &values).unwrap(),
+            "let s = \"\u{e003}(Spree | %1)\\n\\\"hi\\\" \u{e00b}xAq\";"
+        );
+        assert_eq!(torque_text(r"\c"), "c");
     }
 }

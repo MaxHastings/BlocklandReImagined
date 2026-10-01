@@ -411,6 +411,10 @@ impl Game {
     /// Changes Add-On settings of the game, as its owner in the Mini-Game
     /// window: `("ns-rules:key", value)`.
     fn set(&mut self, owner: OwnerId, settings: &[(&str, Value)]) {
+        self.try_set(owner, settings).unwrap();
+        self.steps(1);
+    }
+    fn try_set(&mut self, owner: OwnerId, settings: &[(&str, Value)]) -> anyhow::Result<()> {
         let game = self.s.minigame_views()[0].id;
         self.cmd(
             owner,
@@ -428,8 +432,7 @@ impl Game {
                 teams: None,
             }),
         )
-        .unwrap();
-        self.steps(1);
+        .map(|_| ())
     }
     /// Changes Add-On settings of the team in `color`, as the game's owner
     /// in the Mini-Game window, leaving the other teams as they are.
@@ -492,7 +495,7 @@ impl Game {
         self.s
             .take_private_notices()
             .iter()
-            .any(|(_, n)| matches!(n, Notice::Chat(t) if t.contains(text)))
+            .any(|(_, n)| matches!(n, Notice::Chat(t) if readable(t).contains(text)))
     }
     fn quiet(&self) {
         let problems: Vec<String> = self
@@ -539,6 +542,9 @@ fn two_teams_as(g: &mut Game, admin: bool) -> (OwnerId, OwnerId) {
     g.teams(a, "add 1 Blue");
     let (ca, cb) = (g.colour(a), g.colour(b));
     // One each, whichever way the draw fell.
+    if !(ca.is_some() && cb.is_some() && ca != cb) {
+        g.quiet();
+    }
     assert!(ca.is_some() && cb.is_some() && ca != cb, "{ca:?} {cb:?}");
     if ca == Some(RED) { (a, b) } else { (b, a) }
 }
@@ -966,7 +972,12 @@ fn the_mini_game_window_sets_up_teams_and_their_settings() {
             team("Blue", BLUE, vec![]),
         ]),
     };
-    assert!(g.cmd(b, Command::MiniGame(request.clone())).is_err());
+    // Slayer's Edit Rights (the stand-in's Creator) turn Bravo away.
+    g.s.take_private_notices();
+    g.cmd(b, Command::MiniGame(request.clone())).unwrap();
+    g.steps(2);
+    assert!(g.s.minigame_views()[0].teams.is_empty());
+    assert!(g.heard("You don't have permission to do that."));
     g.cmd(a, Command::MiniGame(request)).unwrap();
     g.steps(13);
     let view = g.s.minigame_views()[0].clone();
@@ -1724,7 +1735,13 @@ fn team_and_mini_game_inputs_run_and_restricted_outputs_need_rights() {
     let mut rows = vec![win(), time()];
     assert!(g.s.review_event_rows(other, rounds, &mut rows).is_empty(), "off by default here");
     assert_eq!(rows.len(), 2);
-    g.set(owner, &[(&key(SLAYER, "restrict_output_events"), Value::Bool(true))]);
+    // Only the host may switch it (Slayer's Host permission level), even
+    // in a game someone else runs.
+    let restrict_key = key(SLAYER, "restrict_output_events");
+    let restrict = [(restrict_key.as_str(), Value::Bool(true))];
+    assert!(g.try_set(owner, &restrict).is_err());
+    let host = g.s.join("Host".into(), Vec3::new(6.0, 0.05, 20.0), true).unwrap();
+    g.set(host, &restrict);
     let refused = g.s.review_event_rows(other, rounds, &mut rows);
     assert!(rows.is_empty(), "{rows:?}");
     assert_eq!(
@@ -2100,5 +2117,212 @@ fn a_saved_build_keeps_its_mini_game_and_fly_through_path() {
     assert_eq!(g.s.control(owner), Some(ControlObject::Path));
     let path = g.s.vitals()[&owner].camera_path.clone().unwrap();
     assert_eq!(path.knots.len(), 3);
+    g.quiet();
+}
+
+/// A chat line as a player reads it: without v20's colour codes or markup.
+fn readable(line: &str) -> String {
+    let mut out = String::new();
+    let mut tag = false;
+    for c in line.chars() {
+        match c {
+            '<' => tag = true,
+            '>' if tag => tag = false,
+            _ if tag || (0xE000..0xE010).contains(&(c as u32)) => {}
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Every chat line each player got since the last look, as read.
+fn lines(g: &mut Game) -> Vec<(OwnerId, String)> {
+    g.s.take_private_notices()
+        .into_iter()
+        .filter_map(|(o, n)| match n {
+            Notice::Chat(t) => Some((o, readable(&t))),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn slayer_chat_shows_teams_and_keeps_the_dead_to_the_dead() {
+    let mut g = Game::new("chat");
+    let (red, blue) = two_teams(&mut g);
+    let owner = g.s.minigame_views()[0].owner;
+    g.steps(2);
+    lines(&mut g);
+    // The stand-in's Team Display Mode is Add Name to Tag.
+    g.cmd(red, Command::Chat("hello there".into())).unwrap();
+    let heard = lines(&mut g);
+    for p in [red, blue] {
+        assert!(heard.contains(&(p, "[Red] Alpha: hello there".into())) || heard.contains(&(p, "[Red] Bravo: hello there".into())), "{heard:?}");
+    }
+    // Its Enable Team Chat is off.
+    g.cmd(red, Command::TeamChat("psst".into())).unwrap();
+    let heard = lines(&mut g);
+    assert!(heard.iter().any(|(p, t)| *p == red && t == "Team chat disabled."), "{heard:?}");
+    assert!(!heard.iter().any(|(_, t)| t.contains("psst")));
+    // Color Name puts the name in the team's colour; team chat on (the
+    // game's and each team's) reaches only the team.
+    g.set(owner, &[
+        (&key(SLAYER, "team_display_mode"), Value::Int(2)),
+        (&key(SLAYER, "enable_team_chat"), Value::Bool(true)),
+    ]);
+    for color in [RED, BLUE] {
+        g.set_team(owner, color, &[(&key(SLAYER, "team_chat"), Value::Bool(true))]);
+    }
+    lines(&mut g);
+    g.cmd(red, Command::Chat("hi".into())).unwrap();
+    let heard = lines(&mut g);
+    let line = &heard.iter().find(|(p, _)| *p == blue).unwrap().1;
+    assert!(line.ends_with(": hi") && !line.contains('['), "{line}");
+    g.cmd(red, Command::TeamChat("psst".into())).unwrap();
+    let heard = lines(&mut g);
+    assert!(heard.iter().any(|(p, t)| *p == red && t.ends_with(": psst")), "{heard:?}");
+    assert!(!heard.iter().any(|(p, _)| *p == blue), "{heard:?}");
+
+    // Allow Dead Talking Disabled: a player out of lives talks to the dead.
+    let charlie = g.s.join("Charlie".into(), Vec3::new(0.0, 0.05, 20.0), false).unwrap();
+    let game = g.s.minigame_views()[0].id;
+    g.cmd(charlie, Command::MiniGame(MiniGameRequest::Join { game })).unwrap();
+    g.steps(2);
+    g.set(owner, &[
+        (&key(SLAYER, "dead_chat_mode"), Value::Int(0)),
+        (&key(SLAYER, "lives"), Value::Int(1)),
+    ]);
+    let mates: Vec<OwnerId> = [red, blue]
+        .into_iter()
+        .filter(|p| g.colour(*p) == g.colour(charlie))
+        .collect();
+    g.cmd(charlie, Command::Suicide).unwrap();
+    g.steps(2);
+    lines(&mut g);
+    g.cmd(charlie, Command::Chat("boo".into())).unwrap();
+    let heard = lines(&mut g);
+    assert!(heard.iter().any(|(p, t)| *p == charlie && t.contains("[DEAD]") && t.ends_with(": boo")), "{heard:?}");
+    assert!(!heard.iter().any(|(p, _)| *p != charlie), "only the dead hear it: {heard:?} {mates:?}");
+    g.quiet();
+}
+
+#[test]
+fn kill_lines_follow_slayers_death_messages_bonus_kills_and_teamkills() {
+    let mut g = Game::new("kill-lines");
+    let (red, blue) = two_teams(&mut g);
+    let owner = g.s.minigame_views()[0].owner;
+    let kill = |g: &mut Game, by: OwnerId, who: OwnerId| {
+        g.run(by, "probe", "kill", vec![PackageArg::Int(who as i64)]);
+        g.steps(2);
+    };
+    // Back in after the respawn time, and past the spawn protection.
+    let respawn = |g: &mut Game, who: OwnerId| {
+        g.steps(125 * 5);
+        g.cmd(who, Command::Respawn).unwrap();
+        g.steps(310);
+    };
+    g.steps(310);
+    lines(&mut g);
+    // The stand-in's Kill Spree Start is 3, its spree line its own words,
+    // and each spree kill is worth its 2 bonus points.
+    for n in 1..=3 {
+        let before = g.score(red);
+        kill(&mut g, red, blue);
+        let heard = lines(&mut g);
+        let spree = heard.iter().any(|(_, t)| t.contains("(On a roll | 3)"));
+        assert_eq!(spree, n == 3, "kill {n}: {heard:?}");
+        let bonus = if n == 3 { 2 } else { 0 };
+        assert_eq!(g.score(red), before + 1 + bonus, "kill {n}");
+        respawn(&mut g, blue);
+    }
+    // A new body starts its spree again.
+    kill(&mut g, blue, red);
+    respawn(&mut g, red);
+    lines(&mut g);
+    kill(&mut g, red, blue);
+    assert!(!lines(&mut g).iter().any(|(_, t)| t.contains("On a roll")));
+    respawn(&mut g, blue);
+
+    // A punished teamkill: Friendly Fire points (the stand-in's -3) instead
+    // of a kill, no kill or death counted, and the killer warned.
+    // Unregulated joins: onto a team as big as their own.
+    g.set(owner, &[(&key(SLAYER, "friendly_fire"), Value::Bool(true)), (&key(SLAYER, "swap_mode"), Value::Int(1))]);
+    let mover = owner;
+    let other = if mover == red { blue } else { red };
+    let theirs = g.s.minigame_views()[0]
+        .teams
+        .iter()
+        .find(|t| Some(t.color) == g.colour(other))
+        .unwrap()
+        .name
+        .clone();
+    lines(&mut g);
+    g.teams(mover, &format!("join {theirs}"));
+    assert_eq!(g.colour(mover), g.colour(other));
+    let (score, kills, deaths) = (g.score(mover), stat(&g, mover, "kills"), stat(&g, other, "deaths"));
+    g.s.take_private_notices();
+    kill(&mut g, mover, other);
+    let notices = g.s.take_private_notices();
+    assert!(notices.iter().any(|(_, n)| matches!(n, Notice::Chat(t) if readable(t).contains("(Teamkill)"))), "{notices:?}");
+    assert!(notices.iter().any(|(p, n)| *p == mover
+        && matches!(n, Notice::Center { text, .. } if readable(text).contains("You just killed a team-mate!"))));
+    assert_eq!(g.score(mover), score - 3);
+    assert_eq!((stat(&g, mover, "kills"), stat(&g, other, "deaths")), (kills, deaths));
+
+    // Death Message Mode Do Not Display: no line at all.
+    respawn(&mut g, other);
+    g.set(owner, &[(&key(SLAYER, "death_msg_mode"), Value::Int(0))]);
+    lines(&mut g);
+    kill(&mut g, other, mover);
+    let heard = lines(&mut g);
+    assert!(!heard.iter().any(|(_, t)| t.contains("Alpha") || t.contains("Bravo")), "{heard:?}");
+    g.quiet();
+}
+
+#[test]
+fn slayers_rights_decide_who_invites_creates_and_suicides() {
+    let mut g = Game::new("rights");
+    let (red, blue) = two_teams(&mut g);
+    let owner = g.s.minigame_views()[0].owner;
+    let other = if owner == red { blue } else { red };
+    // Not an editor (the stand-in's Edit Rights are Creator): invites come
+    // back as Slayer's message box.
+    let carol = g.s.join("Carol".into(), Vec3::new(0.0, 0.05, 24.0), false).unwrap();
+    g.s.take_private_notices();
+    g.cmd(other, Command::MiniGame(MiniGameRequest::Invite { target: carol })).unwrap();
+    let notices = g.s.take_private_notices();
+    assert!(notices.iter().any(|(p, n)| *p == other && matches!(n,
+        Notice::MessageBox { title, text } if title == "Mini-Game Invite Error"
+            && text == "You do not have permission to send invites.")), "{notices:?}");
+    // The owner's second invite while the first waits.
+    g.cmd(owner, Command::MiniGame(MiniGameRequest::Invite { target: carol })).unwrap();
+    g.s.take_private_notices();
+    g.cmd(owner, Command::MiniGame(MiniGameRequest::Invite { target: carol })).unwrap();
+    let notices = g.s.take_private_notices();
+    assert!(notices.iter().any(|(_, n)| matches!(n,
+        Notice::MessageBox { text, .. } if text == "This person hasn't responded to your first invite yet.")), "{notices:?}");
+    // Kicking tells the game who did it.
+    g.cmd(owner, Command::MiniGame(MiniGameRequest::Kick { target: other })).unwrap();
+    g.steps(2);
+    let heard = lines(&mut g);
+    assert!(heard.iter().any(|(p, t)| *p == other && t.ends_with("kicked you from the minigame")), "{heard:?}");
+
+    // Enable Suicide off refuses /suicide with Slayer's words.
+    g.set(owner, &[(&key(SLAYER, "enable_suicide"), Value::Bool(false))]);
+    let e = g.cmd(owner, Command::Suicide).unwrap_err();
+    assert_eq!(readable(&e.to_string()), "Suicide is disabled in this minigame.");
+
+    // Create Minigame Rights at Host: only the host may start a game.
+    let host = g.s.join("Host".into(), Vec3::new(4.0, 0.05, 24.0), true).unwrap();
+    g.set(host, &[(&key(SLAYER, "create_rights"), Value::Int(0))]);
+    lines(&mut g);
+    g.cmd(other, Command::MiniGame(MiniGameRequest::Create {
+        color: 1,
+        settings: bri_minigames::Settings { loadout: Default::default(), ..Default::default() },
+    }))
+    .unwrap();
+    g.steps(2);
+    assert_eq!(g.s.minigame_views().len(), 1);
+    assert!(lines(&mut g).iter().any(|(p, t)| *p == other && t == "You don't have permission to do that."));
     g.quiet();
 }

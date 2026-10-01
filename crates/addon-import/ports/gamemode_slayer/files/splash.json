@@ -16,7 +16,7 @@
     "closing_speed": 6
   },
   "tip": {
-    "text": "<just:center><color:943634><font:Arial Bold:18><shadow:1:1>Click anywhere to continue",
+    "text": {{splash_tip|text}},
     "rect": [212, 454, 216, 18],
     "after_ms": 10000
   },

@@ -1481,6 +1481,10 @@ impl Session {
                     .map_err(|e| anyhow::anyhow!("Respawn rejected: {e}"))?;
                 self.apply_minigame_effects(effects)
             }
+            Op::RemoveBody { player } => {
+                ensure!(self.peers.contains_key(&player), "No such player");
+                self.remove_body(player)
+            }
             Op::SetBlockState { brick, state } => {
                 let host = self.packages.as_ref().context("No packages are enabled")?;
                 let look = self

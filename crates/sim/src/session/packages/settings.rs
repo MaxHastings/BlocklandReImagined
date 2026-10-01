@@ -151,7 +151,7 @@ impl Registry {
                 );
                 out.teams_shown_when = Some(ShownWhen {
                     setting,
-                    is: when.is.clone(),
+                    ..when.clone()
                 });
             }
             for def in &behaviour.settings {
@@ -275,21 +275,23 @@ impl Session {
             .settings
             .get(&key)
             .ok_or_else(|| format!("No setting `{key}`"))?;
-        let g = self
-            .minigames
-            .game(mg::GameId(game))
-            .map_err(|_| format!("No mini-game {game}"))?;
+        // A server setting needs no game (`server_setting(key)`).
+        let g = || {
+            self.minigames
+                .game(mg::GameId(game))
+                .map_err(|_| format!("No mini-game {game}"))
+        };
         let server = self.server_addon_settings();
         let stored = match (s.def.scope, team) {
             (SettingScope::Server, None) => server.get(&key),
             (SettingScope::Server, Some(_)) => {
                 return Err(format!("`{key}` is the server's: setting(game, key)"));
             }
-            (SettingScope::Minigame, None) => g.addon_settings.get(&key),
+            (SettingScope::Minigame, None) => g()?.addon_settings.get(&key),
             (SettingScope::Team, Some(team)) => {
                 let t = u32::try_from(team)
                     .ok()
-                    .and_then(|t| g.teams.get(mg::TeamId(t)))
+                    .and_then(|t| g().ok()?.teams.get(mg::TeamId(t)))
                     .ok_or_else(|| format!("No team {team} in mini-game {game}"))?;
                 t.addon_settings.get(&key)
             }

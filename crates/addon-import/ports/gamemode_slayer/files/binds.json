@@ -10,7 +10,7 @@
     {
       "name": "Options",
       "package": "{{namespace}}",
-      "screen": "help"
+      "screen": "options"
     }
   ]
 }

@@ -157,6 +157,10 @@ pub struct PlayerView {
     #[serde(default)]
     pub copy_working: bool,
 }
+/// The game `server_setting(key)` names: none, as a server setting needs
+/// no game ([`World::setting`]).
+pub const SERVER_SETTINGS: u64 = u64::MAX;
+
 /// Live questions a script may ask the engine during a call. They read the
 /// world as it is when the call runs: a call's own operations apply after it
 /// returns, so a brick it removes still stops its rays.
@@ -239,7 +243,8 @@ pub trait World {
     /// An Add-On setting of mini-game `game` (or of its team `team`):
     /// `key` is the calling package's own or `namespace:key`. Its value,
     /// or its default when nobody changed it; an error names what is
-    /// wrong (no such game, team or setting).
+    /// wrong (no such game, team or setting). A server setting's `game`
+    /// is not looked at ([`SERVER_SETTINGS`] reads one out of any game).
     fn setting(
         &self,
         _game: u64,
@@ -619,6 +624,12 @@ fn player_map(p: &PlayerView) -> Dynamic {
         z,
         ("alive", p.alive.into()),
         ("admin", p.admin.into()),
+        ("super_admin", p.super_admin.into()),
+        ("host", p.host.into()),
+        (
+            "invite",
+            p.invite.map_or(Dynamic::UNIT, |g| Dynamic::from_int(g as i64)),
+        ),
         ("copy_working", p.copy_working.into()),
         float_entry("ex", p.eye[0]),
         float_entry("ey", p.eye[1]),
@@ -1339,6 +1350,11 @@ fn register_api(engine: &mut Engine) {
     );
     engine.register_fn("respawn", |player: Dynamic| {
         push(Op::Respawn {
+            player: id(&player)?,
+        })
+    });
+    engine.register_fn("remove_body", |player: Dynamic| {
+        push(Op::RemoveBody {
             player: id(&player)?,
         })
     });

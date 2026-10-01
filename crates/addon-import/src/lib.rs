@@ -378,10 +378,11 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
     for g in scripts.iter().flat_map(|s| &s.globals) {
         bodies.insert(g.name.to_ascii_lowercase(), g.value.clone());
     }
-    // Text files too (Slayer's first-names.txt), for ports' `data`.
+    // Text files too (Slayer's first-names.txt), for ports' `data`, and
+    // GUI files for the text their controls show.
     for f in src.files.values() {
         let lower = f.path.to_ascii_lowercase();
-        if lower.ends_with(".cs") || lower.ends_with(".txt") || lower.ends_with(".hfl") {
+        if [".cs", ".txt", ".hfl", ".gui"].iter().any(|ext| lower.ends_with(ext)) {
             bodies.insert(
                 src.member(f).to_ascii_lowercase(),
                 script_text(&f.bytes),

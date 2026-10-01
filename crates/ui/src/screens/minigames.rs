@@ -6,8 +6,13 @@ use crate::{api::*, geom::Rect, ui::Callback, view::{EventKind, Value}};
 #[derive(Clone, Copy)]
 enum Kind { List, Rules, Invite }
 const ADDONS_BUTTON: &str = "NativeMiniGameAddOns";
+/// Slayer's Default column header (`JMG_Slayer_Default`), shown while a
+/// listed game is the server's default one.
+const DEFAULT_HEADER: &str = "JMG_DefaultHeader";
+/// `JMG_List.columns` with the Default column (Slayer's).
+const DEFAULT_COLUMNS: &str = "0 102 165 490 450";
 
-pub struct MiniGameScreen { id: ScreenId, kind: Kind, view: View, selected_game: Option<MiniGameId>, game_ids: Vec<MiniGameId>, draft: MiniGameRules, types: Vec<MiniGameChoice>, items: Vec<MiniGameChoice>, loaded_revision: Option<(bool,u64)>, request: Option<RequestId> }
+pub struct MiniGameScreen { id: ScreenId, kind: Kind, view: View, selected_game: Option<MiniGameId>, game_ids: Vec<MiniGameId>, draft: MiniGameRules, types: Vec<MiniGameChoice>, items: Vec<MiniGameChoice>, loaded_revision: Option<(bool,u64)>, request: Option<RequestId>, list_columns: Option<String> }
 impl MiniGameScreen {
     pub fn list(core: &Core) -> Self { Self::new(core, Kind::List) }
     pub fn settings(core: &Core) -> Self { Self::new(core, Kind::Rules) }
@@ -19,9 +24,17 @@ impl MiniGameScreen {
             Kind::Invite => (ScreenId::MiniGameInvitation, "MiniGameInviteGui"),
         };
         let mut s = Self { id, kind, view: layout_view(core, layout), selected_game: None, game_ids: vec![],
-            draft: core.minigames.rules_draft(), types: vec![], items: vec![], loaded_revision: None, request: None };
+            draft: core.minigames.rules_draft(), types: vec![], items: vec![], loaded_revision: None, request: None, list_columns: None };
         // The End blocker greys End out, so it must draw over the button.
         if let Some(n) = s.view.id("CMG_EndBlocker") { s.view.push_to_back(n); }
+        if let Some(n) = s.view.id("JMG_List") { s.list_columns = s.view.node(n).ctrl.field("columns").map(str::to_owned); }
+        if matches!(kind, Kind::List) {
+            let parent = window(&s.view).unwrap_or(s.view.root);
+            let mut b = button("BlockButtonProfile", Rect::new(445, 33, 57, 19), "base/client/ui/button1", "Default", "JoinMiniGameGui.sortList(3);");
+            b.name = Some(DEFAULT_HEADER.into());
+            b.visible = false;
+            s.view.add(parent, b);
+        }
         s.refresh(core);
         s
     }
@@ -86,12 +99,13 @@ impl MiniGameScreen {
         if let (Some(n),Some(color)) = (self.view.id("CMG_Swatch"), core.minigames.colors.iter().find(|c| Some(i64::from(c.index)) == self.view.id("CMG_ColorList").and_then(|v|self.view.selected(v)))) {
             self.view.nodes[n].state.tint=Some([color.rgb[0],color.rgb[1],color.rgb[2],255]);
         }
-        let owns=core.minigames.owns_active_game;
-        let mode_edit=core.minigames.active_game.is_some()&&owns;
+        // Edit the running game when the player may manage it: its owner,
+        // or an editor the host names (an admin).
+        let mode_edit=core.minigames.active_game.is_some_and(|g|core.minigames.can_manage(g));
         if let Some(n)=self.view.id("CMG_Window"){self.view.set_text(n,if mode_edit{"Edit Mini-Game"}else{"Create Mini-Game"});}
         if let Some(n)=self.view.id("CMG_CreateButton"){self.view.set_text(n,if mode_edit{"Update >>"}else{"Create >>"});}
         if let Some(n)=self.view.id("CMG_ColorBlocker"){self.view.set_visible(n,mode_edit);}
-        if let Some(n)=self.view.id("CMG_EndBlocker"){self.view.set_visible(n,!owns);}
+        if let Some(n)=self.view.id("CMG_EndBlocker"){self.view.set_visible(n,!mode_edit);}
         let can_save=if mode_edit {core.minigames.can(crate::models::minigames::Operation::Configure)} else {core.minigames.can(crate::models::minigames::Operation::Create)};
         self.set_active("CreateMiniGameGui.clickCreate();",can_save&&self.request.is_none());
         // Reset and End only act on a running mini-game you own ($RunningMiniGame).
@@ -153,7 +167,7 @@ impl MiniGameScreen {
         let items = self.items.clone();
         for i in 0..5 { self.fill_choice(&format!("CMG_StartEquip{i}"), &items, fav.rules.loadout[i].as_deref()); }
         // The colour list is locked while editing a running game.
-        let editing = core.minigames.active_game.is_some() && core.minigames.owns_active_game;
+        let editing = core.minigames.active_game.is_some_and(|g| core.minigames.can_manage(g));
         if let (Some(n), Some(name), false) = (self.view.id("CMG_ColorList"), fav.color, editing)
             && let Some(color) = core.minigames.colors.iter().find(|c| c.name == name)
         {
@@ -169,13 +183,23 @@ impl MiniGameScreen {
                 let old=self.selected_game;
                 let games=&core.minigames.games;
                 self.selected_game=core.minigames.retain_game_target(old).or_else(||games.first().map(|g|g.id));
+                // Slayer's Default column, while a listed game is the default.
+                let defaults=games.iter().any(|g|g.default);
+                if let Some(n)=self.view.id(DEFAULT_HEADER){self.view.set_visible(n,defaults);}
                 if let Some(n)=self.view.id("JMG_List"){
                     self.game_ids=games.iter().map(|g|g.id).collect();
+                    let columns=if defaults {Some(DEFAULT_COLUMNS.to_owned())} else {self.list_columns.clone()};
+                    match columns {
+                        Some(c)=>{self.view.nodes[n].ctrl.fields.insert("columns".into(),c);}
+                        None=>{self.view.nodes[n].ctrl.fields.remove("columns");}
+                    }
                     // `MiniGameSO::getLine` in the game's colour: creator, BL_ID, title, invite-only.
                     self.view.nodes[n].state.items=games.iter().enumerate().map(|(i,g)|{
                         let color=char::from_u32(crate::text::COLOR_CODE_BASE+u32::from(g.color.min(9))).unwrap_or(' ');
                         let bl_id=core.players.iter().find(|p|p.id==g.owner.0).and_then(|p|p.bl_id).map(|id|id.to_string()).unwrap_or_default();
-                        (format!("{color}{}\t{bl_id}\t{}\t{}",g.owner_name,g.title,u8::from(g.invite_only)),i as i64)
+                        let mut line=format!("{color}{}\t{bl_id}\t{}\t{}",g.owner_name,g.title,u8::from(g.invite_only));
+                        if defaults {line.push('\t'); if g.default {line.push_str("Yes");}}
+                        (line,i as i64)
                     }).collect();
                     self.view.select(n,self.selected_game.and_then(|id|self.game_ids.iter().position(|g|*g==id)).map(|i|i as i64));
                 }
@@ -304,17 +328,17 @@ impl Screen for MiniGameScreen {
                 "createminigamegui.clickcreate();"=>match self.read_rules(){
                     Err(e)=>core.minigames.status=e,
                     Ok(rules)=>{
-                        let editing=core.minigames.owns_active_game;
+                        let editing=core.minigames.active_game.is_some_and(|g|core.minigames.can_manage(g));
                         let color=self.view.id("CMG_ColorList").and_then(|n|self.view.selected(n)).and_then(|v|u8::try_from(v).ok()).unwrap_or(0);
                         let request=if editing {core.minigames.active_game.and_then(|game|core.minigame_request(MiniGameOperation::Configure,UiAction::ConfigureMiniGame{game,rules}))}
                             else{core.minigame_request(MiniGameOperation::Create,UiAction::CreateMiniGame{color,rules})};
                         self.request=request;self.refresh(core);
                     }
                 },
-                "createminigamegui.clickreset();"=>if let Some(game)=core.minigames.active_game.filter(|_|core.minigames.owns_active_game){
+                "createminigamegui.clickreset();"=>if let Some(game)=core.minigames.active_game.filter(|g|core.minigames.can_manage(*g)){
                     self.request=core.minigame_request(MiniGameOperation::Reset,UiAction::ResetMiniGame{game});
                 },
-                "createminigamegui.clickend();"=>if let Some(game)=core.minigames.active_game.filter(|_|core.minigames.owns_active_game){
+                "createminigamegui.clickend();"=>if let Some(game)=core.minigames.active_game.filter(|g|core.minigames.can_manage(*g)){
                     core.message_yes_no("End Mini-Game?","Are you sure you want to end the mini-game?",Callback::MiniGame{game,operation:MiniGameOperation::End});
                 },
                 "createminigamegui.clickcolorlist();"=>self.refresh(core),

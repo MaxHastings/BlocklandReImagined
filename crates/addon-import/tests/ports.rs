@@ -890,7 +890,7 @@ fn slayer_ports_apply_with_their_rules() {
     let slayer = &client.packages["gamemode_slayer"];
     let binds: Vec<_> = slayer.binds.values().flat_map(|b| &b.binds).collect();
     let screens: Vec<_> = binds.iter().filter_map(|b| b.screen.as_deref()).collect();
-    assert_eq!(screens, ["minigame_addons", "help"]);
+    assert_eq!(screens, ["minigame_addons", "options"]);
     let pages: Vec<_> = slayer.help.values().flat_map(|h| &h.pages).collect();
     assert_eq!(pages.iter().map(|p| p.title.as_str()).collect::<Vec<_>>(), ["Slayer", "Slayer Guide"]);
     assert!(pages[0].welcome && !pages[1].welcome);

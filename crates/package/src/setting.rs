@@ -138,14 +138,46 @@ pub struct SettingItem {
 }
 
 /// Show a setting only while another holds one of some values (a game
-/// mode's own settings, shown while that mode is picked).
+/// mode's own settings, shown while that mode is picked), or while it holds
+/// none of them (`is_not`). Exactly one of `is` and `is_not` lists values.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ShownWhen {
     /// The other setting: `key` for the same Add-On's, `namespace:key` for
     /// one of an Add-On this one depends on.
     pub setting: String,
+    /// Shown while the setting holds one of these.
+    #[serde(default)]
     pub is: Vec<SettingValue>,
+    /// Shown while the setting holds none of these.
+    #[serde(default)]
+    pub is_not: Vec<SettingValue>,
+}
+
+impl ShownWhen {
+    /// Whether the other setting holding `value` shows the setting.
+    pub fn holds(&self, value: &SettingValue) -> bool {
+        if self.is_not.is_empty() {
+            self.is.contains(value)
+        } else {
+            !self.is_not.contains(value)
+        }
+    }
+    /// It names a setting and lists 1 to [`MAX_ITEMS`] values in exactly
+    /// one of `is` and `is_not`.
+    pub fn validate(&self) -> Result<(), String> {
+        let values = match (self.is.is_empty(), self.is_not.is_empty()) {
+            (false, true) => self.is.len(),
+            (true, false) => self.is_not.len(),
+            _ => 0,
+        };
+        if !is_setting_ref(&self.setting) || values == 0 || values > MAX_ITEMS {
+            return Err(format!(
+                "shown_when names a setting and 1 to {MAX_ITEMS} values in exactly one of `is` and `is_not`"
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// One setting an Add-On declares (in its rules' `behaviour.json`).
@@ -356,12 +388,8 @@ impl SettingDef {
                 ));
             }
         }
-        if let Some(when) = &self.shown_when
-            && (!is_setting_ref(&when.setting) || when.is.is_empty() || when.is.len() > MAX_ITEMS)
-        {
-            return Err(format!(
-                "setting `{what}`: shown_when names a setting and 1 to {MAX_ITEMS} values"
-            ));
+        if let Some(when) = &self.shown_when {
+            when.validate().map_err(|e| format!("setting `{what}`: {e}"))?;
         }
         Ok(())
     }
@@ -472,6 +500,34 @@ mod tests {
         assert!(bad.validate().is_err(), "a number needs its range");
         let bad = def(r#"{ "key": "Bad", "title": "X", "type": "bool", "default": true }"#);
         assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn shown_when_shows_on_listed_values_or_on_any_but_them() {
+        let text = |t: &str| SettingValue::Text(t.into());
+        let on_ctf = def(
+            r#"{ "key": "flags", "title": "Flags", "type": "bool", "default": true,
+                 "shown_when": { "setting": "mode", "is": ["ctf"] } }"#,
+        );
+        on_ctf.validate().unwrap();
+        let when = on_ctf.shown_when.as_ref().unwrap();
+        assert!(when.holds(&text("ctf")) && !when.holds(&text("slyr")));
+        let not_slayer = def(
+            r#"{ "key": "teams", "title": "Teams", "type": "bool", "default": true,
+                 "shown_when": { "setting": "mode", "is_not": ["slyr", "ffa"] } }"#,
+        );
+        not_slayer.validate().unwrap();
+        let when = not_slayer.shown_when.as_ref().unwrap();
+        assert!(when.holds(&text("ctf")));
+        assert!(!when.holds(&text("slyr")) && !when.holds(&text("ffa")));
+        for bad in [
+            r#"{ "setting": "mode" }"#,
+            r#"{ "setting": "mode", "is": ["a"], "is_not": ["b"] }"#,
+            r#"{ "setting": "Bad Key", "is_not": ["b"] }"#,
+        ] {
+            let when: ShownWhen = serde_json::from_str(bad).unwrap();
+            assert!(when.validate().is_err(), "{bad}");
+        }
     }
 
     #[test]

@@ -921,7 +921,8 @@ pub(in crate::session) enum Answer {
 
 impl Session {
     /// Ask the rules declaring `on_minigame_request` whether `owner` may
-    /// `action` mini-game `game` (to `target`).
+    /// `action` mini-game `game` (to `target`). `teams` is how many teams an
+    /// edit leaves the game with, when it changes them.
     pub(in crate::session) fn package_minigame_request(
         &mut self,
         owner: OwnerId,
@@ -929,6 +930,7 @@ impl Session {
         game: Option<mg::GameId>,
         target: Option<OwnerId>,
         team: Option<u32>,
+        teams: Option<usize>,
     ) -> Answer {
         let Some(host) = self.packages.as_ref() else {
             return Answer::Engine;
@@ -942,6 +944,7 @@ impl Session {
         info.insert("game".into(), id(game.map(|g| g.0)));
         info.insert("target".into(), id(target));
         info.insert("team".into(), id(team.map(u64::from)));
+        info.insert("teams".into(), id(teams.map(|n| n as u64)));
         let mut answer = Answer::Engine;
         for package in hooks {
             let reply = self.run_package(

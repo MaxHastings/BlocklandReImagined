@@ -540,6 +540,7 @@ fn every_operation_needs_its_declared_capability() {
             position: [1.0, 2.0, 3.0],
         },
         Op::Respawn { player: 1 },
+        Op::RemoveBody { player: 1 },
         Op::SpawnEntity {
             kind: "probe:entity/x".into(),
             position: [0.0; 3],

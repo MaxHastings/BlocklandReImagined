@@ -8,19 +8,24 @@
 // mode, lives, points and time to win, time between rounds, the pre-round
 // countdown, the team rules, and each team's own (lives, auto sort, max
 // players, lock, win on time up). Its chat commands work too:
-//   /teams join <name>, /teams leave, /teams list, /teams count,
-//   /teams score, /teams listmembers <name>, /teams balance (owner)
+//   /teams join <name> (a swap request when the team is no smaller),
+//   /teams acceptSwap, /teams cancelSwap, /teams leave, /teams list,
+//   /teams count, /teams score, /teams living, /teams listMembers <name>,
+//   and for editors /teams balance, /teams addMember <player> <team>,
+//   /teams removeMember <player> <team>, /addLives <amount> <player>
 //   /slayer reset (owner), /slayer rules
-// and Slayer's short forms: /joinTeam <name>, /leaveTeam, /listTeams
-// (/teamList), /teamCount, /teamScore. The mini-game's owner or an admin
-// may also type /teams add <colour> <name>, /teams remove <name>,
+// and Slayer's short forms: /joinTeam, /swapTeam, /swapTeams <name>,
+// /acceptSwap, /leaveTeam, /listTeams (/teamList), /teamCount, /teamScore,
+// /teamLiving. The mini-game's owner or an admin may also type
+// /teams add <colour> <name>, /teams remove <name>,
 // /teams friendlyfire|autosort|lock on|off.
 
-// Slayer's chat colours (\c3 names, \c5 text).
-fn c3() { "" }
-fn c5() { "" }
-fn c0() { "" }
-fn c2() { "" }
+// Slayer's chat colours (\c3 names, \c5 text): v20's colour codes.
+fn c3() { "\uE003" }
+fn c5() { "\uE005" }
+fn c0() { "\uE000" }
+fn c2() { "\uE002" }
+fn c7() { "\uE007" }
 fn magenta() { "<color:ff00ff>" }
 fn yellow() { "<color:ffff00>" }
 
@@ -55,7 +60,7 @@ fn round_of(game) {
     }
     #{ clock: tick(), countdown: (), counted: (), told: (), reset_at: (),
        shown: (), lives: setting(game, "lives"), flying: (), flyers: [], extra: 0,
-       custom: () }
+       custom: (), minutes: setting(game, "time") }
 }
 fn set_round(game, r) {
     let games = get("games");
@@ -67,10 +72,42 @@ fn running(game) {
     r.reset_at == () && r.countdown == () && r.flying == () && !minigame(game).round_over
 }
 
-// `canEdit`: the mini-game's owner or an admin.
+// `getAdminLvl`: 0 the host, 1 a super admin, 2 an admin, 3 anyone.
+fn admin_level(me) {
+    if me.host { 0 } else if me.super_admin { 1 } else if me.admin { 2 } else { 3 }
+}
+// One of Slayer's rights levels (`canEdit`'s switch): 0 the host, 1 super
+// admins, 2 admins, 3 the creator (or someone they trust as themselves),
+// 4 full trust, 5 build trust with the creator, 6 everyone.
+fn has_right(me, g, level) {
+    let t = if g.owner == () { 0 } else if g.owner == me.id { 3 } else { trust(me.id, g.owner) };
+    switch level {
+        0 => me.host,
+        1 => me.super_admin,
+        2 => me.admin,
+        3 => t >= 3,
+        4 => t >= 2,
+        5 => t >= 1,
+        6 => true,
+        _ => false
+    }
+}
+// `canEdit`: the host, or whoever the game's Edit Rights allow.
 fn can_edit(p, g) {
     let me = player(p);
-    me != () && (me.admin || g.owner == p)
+    me != () && g != () && (me.host || has_right(me, g, setting(g.id, "edit_rights")))
+}
+// `canReset`: the host, the creator, or whoever Reset Rights allow.
+fn can_reset(p, g) {
+    let me = player(p);
+    me != () && g != () && (me.host || g.owner == p || has_right(me, g, setting(g.id, "reset_rights")))
+}
+// `canLeave`: anyone, but from the Default Minigame only the host, the
+// creator and whoever Leave Rights allow.
+fn can_leave(p, g) {
+    let me = player(p);
+    me != () && (g == () || !g["default"] || me.host || g.owner == p
+        || has_right(me, g, setting(g.id, "leave_rights")))
 }
 
 fn team_by_name(g, name) {
@@ -210,6 +247,569 @@ fn join(p, team) {
     }
 }
 
+// A spectator team (`spectate`): it can neither hurt nor be hurt, and no
+// round is won or reported for it.
+fn spectating(game, team) { team != () && team_setting(game, team, "team_spectate") }
+// A team's name in its colour (`Slayer_TeamSO::getColoredName`).
+fn colored(t) { `<color:${hex(t.color)}>${t.name}` }
+// How many of `list` are still in the round (`Slayer_TeamSO::getLiving`).
+fn living(list) {
+    let n = 0;
+    for m in list {
+        if !get_player(m.id, "out") {
+            n += 1;
+        }
+    }
+    n
+}
+// `findClientByName`: the first player whose name holds `name`.
+fn find_player(name) {
+    let wanted = name.to_lower();
+    if wanted == "" {
+        return ();
+    }
+    for p in players() {
+        if p.name.to_lower() == wanted {
+            return p;
+        }
+    }
+    for p in players() {
+        if p.name.to_lower().contains(wanted) {
+            return p;
+        }
+    }
+    ()
+}
+
+// `Slayer_TeamSO::addMember`: onto `team` with a reason for the greeting
+// ("Team Swap", "Team Balance", "Team Shuffle"); `quiet` keeps the game's
+// players from hearing of it (a shuffle). A living body respawns unless
+// `stay`.
+fn add_member(p, team, reason, quiet, stay) {
+    set_player(p, "reason", reason);
+    set_player(p, "quiet_join", quiet);
+    set_team(p, team.id);
+    let me = player(p);
+    if !stay && me != () && me.alive {
+        respawn(p);
+    }
+}
+
+// Team swaps (`swapPending`, `swapOffer`, `swapClient`, `swapTime`): a
+// player asking to move to a team no smaller than their own waits up to 20
+// seconds for one of its members to /acceptSwap. By game and asking team:
+// `#{ from, to, client, ends }`.
+fn swap_key(game, team) { `${game}:${team}` }
+fn swap_from(game, team) {
+    let all = get("swaps");
+    let key = swap_key(game, team);
+    if key in all { all[key] } else { () }
+}
+fn swap_to(game, team) {
+    let all = get("swaps");
+    for key in all.keys() {
+        if key.starts_with(`${game}:`) && all[key].to == team {
+            return all[key];
+        }
+    }
+    ()
+}
+fn set_swap(game, team, swap) {
+    let all = get("swaps");
+    let key = swap_key(game, team);
+    if swap == () {
+        all.remove(key);
+    } else {
+        all[key] = swap;
+    }
+    set("swaps", all);
+}
+// `Slayer_TeamHandlerSG::swapTeamMembers`.
+fn swap_members(g, a, b) {
+    let pa = player(a);
+    let pb = player(b);
+    if pa == () || pb == () || pa.team == () || pb.team == () {
+        return;
+    }
+    let ta = team_by_id(g, pa.team);
+    let tb = team_by_id(g, pb.team);
+    if ta == () || tb == () {
+        return;
+    }
+    let sa = swap_from(g.id, ta.id);
+    let sb = swap_from(g.id, tb.id);
+    if sa != () && sa.to == tb.id {
+        set_swap(g.id, ta.id, ());
+    } else if sb != () && sb.to == ta.id {
+        set_swap(g.id, tb.id, ());
+    }
+    let stay = resetting(g.id);
+    add_member(b, ta, "Team Swap", false, stay);
+    add_member(a, tb, "Team Swap", false, stay);
+}
+// `serverCmdTeams(cancelSwap)` 20 seconds on.
+fn expire_swaps() {
+    let all = get("swaps");
+    if all.is_empty() {
+        return;
+    }
+    let now = tick();
+    let kept = #{};
+    for key in all.keys() {
+        let s = all[key];
+        if now >= s.ends {
+            tell(s.client, `${c5()}No one swapped teams.`);
+        } else {
+            kept[key] = s;
+        }
+    }
+    if kept.len() != all.len() {
+        set("swaps", kept);
+    }
+}
+// `slayerTeamCmdJoin`.
+fn team_join(p, g, mine, name) {
+    let me = player(p);
+    if setting(g.id, "lock_teams") && mine != () {
+        tell(p, `${c5()}Teams are locked, you cannot change teams.`);
+        return;
+    }
+    if name == "" {
+        tell(p, `${c5()}Please enter a team to join. Type ${c3()}/joinTeam Team Name ${c5()} to join a team. Type ${c3()}/listTeams ${c5()}to view a list of teams.`);
+        return;
+    }
+    let team = team_by_name(g, name);
+    if team == () {
+        tell(p, `${c5()}Couldn't find team:${c3()} ${name}`);
+        return;
+    }
+    if (mine != () && team_setting(g.id, mine.id, "team_lock")) || team_setting(g.id, team.id, "team_lock") {
+        tell(p, `${c5()}Team is locked.`);
+        return;
+    }
+    if mine != () && mine.id == team.id {
+        tell(p, `${c5()}You're already on ${colored(team)}${c5()}.`);
+        return;
+    }
+    if mine != () && swap_from(g.id, mine.id) != () {
+        tell(p, `${c5()}Someone on your team is already trying to swap teams.`);
+        return;
+    }
+    if swap_to(g.id, team.id) != () {
+        tell(p, `${c5()}Someone is already trying to swap to that team.`);
+        return;
+    }
+    let max = team_setting(g.id, team.id, "team_max_players");
+    if max == 0 {
+        tell(p, `${c5()}That team is not accepting any new members.`);
+        return;
+    }
+    let counts = counts(g);
+    let there = counts[`${team.id}`];
+    if mine == () {
+        if max < 0 || there < max {
+            add_member(p, team, "", false, false);
+        } else {
+            tell(p, `${c5()}That team is not accepting any new members.`);
+        }
+        return;
+    }
+    let theirs = swap_from(g.id, team.id);
+    if theirs != () && theirs.to == mine.id {
+        swap_members(g, p, theirs.client);
+        return;
+    }
+    let here = counts[`${mine.id}`];
+    if setting(g.id, "swap_mode") == 1 || (here > there && (max < 0 || there < max)) {
+        add_member(p, team, "Team Swap", false, resetting(g.id));
+        return;
+    }
+    let asking = `<color:${hex(mine.color)}>${me.name} ${c5()}wants to swap with someone on <color:${hex(team.color)}>${team.name}${c5()}. Type ${c3()}/acceptSwap ${c5()}to swap teams.`;
+    for m in members(g, team.id) {
+        tell(m.id, asking);
+    }
+    tell(p, `${c5()}The members of <color:${hex(team.color)}>${team.name} ${c5()}have been asked if they want to swap with you.`);
+    set_swap(g.id, mine.id, #{ from: mine.id, to: team.id, client: p, ends: tick() + ms_ticks(20000) });
+}
+// `slayerTeamCmdAddMember` and `slayerTeamCmdRemoveMember` (an editor's).
+fn member_command(p, g, cmd, parts) {
+    let who = if parts.len() > 1 { parts[1] } else { "" };
+    if who == "" {
+        tell(p, `${c5()}Incorrect usage. Please enter a player name, then a team name.`);
+        return;
+    }
+    let victim = find_player(who);
+    if victim == () {
+        tell(p, `${c5()}Couldn't find player:${c3()} ${who}`);
+        return;
+    }
+    if victim.minigame != g.id {
+        tell(p, `${c3()}${victim.name} ${c5()}is not in the${c3()} ${g.title} ${c5()}minigame.`);
+        return;
+    }
+    let name = rest(parts, 2);
+    let team = team_by_name(g, name);
+    if team == () {
+        tell(p, `${c5()}Couldn't find team:${c3()} ${name}`);
+        return;
+    }
+    if cmd == "addmember" {
+        // Team balance stays out of it (`teams_balanceTeams = 0`).
+        set_player(victim.id, "no_balance", true);
+        add_member(victim.id, team, "", false, false);
+    } else if victim.team == team.id {
+        set_team(victim.id, ());
+        respawn(victim.id);
+    }
+}
+
+// Continuous team balance (`Slayer_TeamSO::balanceTeam`), by game and the
+// team giving a member: the team waiting for one. A team that gives one
+// hands over a balance candidate when one of them dies.
+fn balance_links(game) {
+    let all = get("balance");
+    let key = `${game}`;
+    if key in all { all[key] } else { #{} }
+}
+fn set_balance_links(game, links) {
+    let all = get("balance");
+    if links.is_empty() {
+        all.remove(`${game}`);
+    } else {
+        all[`${game}`] = links;
+    }
+    set("balance", all);
+}
+// A team's members that are players, earliest on it first.
+fn humans_by_time(g, team) {
+    let out = [];
+    for m in members(g, team) {
+        if !own_bot(m) {
+            out.push(m);
+        }
+    }
+    out.sort(|a, b| get_player(a.id, "joined_at") - get_player(b.id, "joined_at"));
+    out
+}
+// `getMemberValue`, and the members of least value (`getBalanceCandidate`;
+// `by_time` counts how long they have been on the team).
+fn member_value(m) { m.score + get_player(m.id, "kills") - get_player(m.id, "deaths") }
+fn balance_candidates(g, team, by_time) {
+    let list = humans_by_time(g, team);
+    let best = [];
+    let lowest = 0;
+    for i in 0..list.len() {
+        let v = member_value(list[i]) + (if by_time { i } else { 0 });
+        if best.is_empty() || v < lowest {
+            lowest = v;
+            best = [list[i].id];
+        } else if v == lowest {
+            best.push(list[i].id);
+        }
+    }
+    best
+}
+fn sorted_ratio(g, t, counts) {
+    let w = team_setting(g.id, t.id, "team_sort_weight");
+    counts[`${t.id}`].to_float() / w.to_float()
+}
+fn balances(g, t) {
+    team_setting(g.id, t.id, "team_sort") && team_setting(g.id, t.id, "team_sort_weight") > 0
+}
+// `Slayer_TeamSO::balanceTeam(force)`: the team most over its share gives
+// `t` a member, now when forced (or when `t` is empty of two teams and
+// joins are regulated), else at that team's next death. The giving team,
+// or ().
+fn balance_team(g, t, force, depth) {
+    let links = balance_links(g.id);
+    for key in links.keys() {
+        if links[key] == t.id {
+            links.remove(key);
+        }
+    }
+    set_balance_links(g.id, links);
+    if !balances(g, t) || depth > 8 {
+        return ();
+    }
+    let counts = counts(g);
+    let n = counts[`${t.id}`];
+    let max = team_setting(g.id, t.id, "team_max_players");
+    if max >= 0 && n >= max {
+        return ();
+    }
+    let ratio = sorted_ratio(g, t, counts);
+    let highest = 0.0;
+    let source = ();
+    let sum = 0.0;
+    let count = 0;
+    let i = g.teams.len() - 1;
+    while i >= 0 {
+        let o = g.teams[i];
+        i -= 1;
+        if !balances(g, o) || team_setting(g.id, o.id, "team_max_players") == 0 {
+            continue;
+        }
+        let r = sorted_ratio(g, o, counts);
+        sum += r;
+        count += 1;
+        if o.id != t.id && r > highest {
+            highest = r;
+            source = o;
+        }
+    }
+    if count > 1 && ratio < sum / count.to_float() {
+        // No longer a giver: the team it gave to needs another.
+        let key = `${t.id}`;
+        if key in links {
+            let taker = team_by_id(g, links[key]);
+            if taker != () {
+                balance_team(g, taker, false, depth + 1);
+            }
+        }
+    }
+    if source == () || highest - ratio <= 1.0 {
+        return ();
+    }
+    if force || (n < 1 && g.teams.len() == 2 && setting(g.id, "swap_mode") != 1) {
+        let picks = balance_candidates(g, source.id, true);
+        if !picks.is_empty() {
+            let pick = picks[(hash3(seed(), tick(), t.id, picks.len()) * picks.len()).to_int()];
+            add_member(pick, t, "Team Balance", false, false);
+        }
+    } else {
+        let links = balance_links(g.id);
+        links[`${source.id}`] = t.id;
+        set_balance_links(g.id, links);
+    }
+    source
+}
+// `Slayer_TeamSO::isTeamBalanced`.
+fn team_balanced(g, t) {
+    if !balances(g, t) {
+        return true;
+    }
+    let counts = counts(g);
+    let max = team_setting(g.id, t.id, "team_max_players");
+    if max >= 0 && counts[`${t.id}`] >= max {
+        return true;
+    }
+    let ratio = sorted_ratio(g, t, counts);
+    let highest = 0.0;
+    for o in g.teams {
+        if o.id == t.id || !balances(g, o) || team_setting(g.id, o.id, "team_max_players") == 0 {
+            continue;
+        }
+        let r = sorted_ratio(g, o, counts);
+        if r > highest {
+            highest = r;
+        }
+    }
+    highest - ratio <= 1.0
+}
+// `Slayer_TeamHandlerSG::balanceTeams(force)`: forced, players move until
+// every team is even; otherwise each short team waits for a death.
+fn balance_teams(g, force) {
+    let moves = 0;
+    let i = g.teams.len() - 1;
+    while i >= 0 {
+        let t = g.teams[i];
+        i -= 1;
+        if !balances(g, t) {
+            continue;
+        }
+        while moves < 64 && !team_balanced(minigame(g.id), t) {
+            moves += 1;
+            if balance_team(minigame(g.id), t, force, 0) == () || !force {
+                break;
+            }
+        }
+    }
+}
+// The `onDeath` half: a candidate of a giving team moves on dying.
+fn balance_on_death(g, me) {
+    if !setting(g.id, "balance_teams") || me.team == () || own_bot(me) {
+        return;
+    }
+    let links = balance_links(g.id);
+    let key = `${me.team}`;
+    if !(key in links) {
+        return;
+    }
+    let taker = team_by_id(g, links[key]);
+    if taker != () && balance_candidates(g, me.team, false).contains(me.id) {
+        add_member(me.id, taker, "Team Balance", false, true);
+    }
+}
+
+// Team shuffles between rounds (`Slayer_TeamHandlerSG::shuffleTeams`):
+// rounds counted by game.
+fn shuffle_count(game) {
+    let all = get("shuffles");
+    let key = `${game}`;
+    if key in all { all[key] } else { 0 }
+}
+fn set_shuffle_count(game, n) {
+    let all = get("shuffles");
+    all[`${game}`] = n;
+    set("shuffles", all);
+}
+fn shuffles(g, t) {
+    balances(g, t) && team_setting(g.id, t.id, "team_max_players") != 0
+}
+fn shuffle_teams(g, mode) {
+    let able = 0;
+    let open = 0;
+    let counts = counts(g);
+    for t in g.teams {
+        if shuffles(g, t) {
+            able += 1;
+        }
+        let max = team_setting(g.id, t.id, "team_max_players");
+        if (max <= 0 || counts[`${t.id}`] < max) && balances(g, t) {
+            open += 1;
+        }
+    }
+    if able < 2 {
+        return;
+    }
+    if mode == 1 && open == 0 {
+        mode = 0;
+    }
+    let humans = [];
+    for p in players() {
+        if p.minigame == g.id && p.team != () {
+            humans.push(p);
+        }
+    }
+    if mode == 0 {
+        // Off the shuffling teams, then sorted afresh.
+        let counts = counts(g);
+        let movers = [];
+        for p in humans {
+            let t = team_by_id(g, p.team);
+            if t != () && shuffles(g, t) {
+                counts[`${t.id}`] -= 1;
+                movers.push(p);
+            }
+        }
+        for p in movers {
+            let team = counts.pick_team(g, p.id);
+            if team != () {
+                add_member(p.id, team, "Team Shuffle", true, true);
+            } else {
+                set_team(p.id, ());
+            }
+        }
+    } else {
+        // Every player to another team (`pickTeam(client, 1)`).
+        let counts = counts(g);
+        for p in humans {
+            let team = counts.pick_other_team(g, p.id, p.team);
+            if team != () {
+                counts[`${p.team}`] -= 1;
+                add_member(p.id, team, "Team Shuffle", true, true);
+            }
+        }
+    }
+    balance_teams(minigame(g.id), false);
+}
+// `pickTeam(client, skipCurrentTeam)`.
+fn pick_other_team(g, p, current) {
+    let best = [];
+    let least = 999999.0;
+    for t in g.teams {
+        if t.id == current {
+            continue;
+        }
+        let n = this[`${t.id}`];
+        if !sorts_into(g, t, n) {
+            continue;
+        }
+        let r = n.to_float() / team_setting(g.id, t.id, "team_sort_weight").to_float();
+        if r < least {
+            least = r;
+            best = [t];
+        } else if r == least {
+            best.push(t);
+        }
+    }
+    if best.is_empty() {
+        return ();
+    }
+    let team = best[(hash3(seed(), tick(), p, best.len()) * best.len()).to_int()];
+    this[`${team.id}`] += 1;
+    team
+}
+
+// `serverCmdAddLives`: an editor gives (or takes) lives, -99 to 99.
+fn cmd_addlives(p, line) {
+    let me = player(p);
+    if me == () || me.minigame == () {
+        return;
+    }
+    let g = minigame(me.minigame);
+    if !can_edit(p, g) {
+        return;
+    }
+    let parts = words(line);
+    let amount = if parts.is_empty() { () } else { number(parts[0]) };
+    if amount == () {
+        tell(p, `${c5()}Please use the following format: ${c3()}/addLives Amount Player Name`);
+        return;
+    }
+    let target = find_player(rest(parts, 1));
+    if target == () || target.minigame != g.id {
+        tell(p, `${c5()}Invalid target.`);
+        return;
+    }
+    if setting(g.id, "lives") <= 0 {
+        return;
+    }
+    let amount = if amount < -99.0 { -99.0 } else if amount > 99.0 { 99.0 } else { amount };
+    let shown = if amount == amount.floor() { `${amount.to_int()}` } else { `${amount}` };
+    let lives = get_player(target.id, "lives") + amount.to_int();
+    tell_game(g, `${c3()}${me.name} ${c5()}gave${c3()} ${shown} ${c5()}lives to${c3()} ${target.name}${c5()}.`);
+    if lives < 0 {
+        lives = 0;
+    }
+    set_player(target.id, "lives", lives);
+    let out = get_player(target.id, "out");
+    if lives > 0 && out {
+        revive(target.id);
+        if !target.alive {
+            respawn(target.id);
+        }
+    }
+    if lives <= 0 && !out {
+        knock_out(target.id);
+        if target.alive {
+            remove_body(target.id);
+        }
+        bottom_print(target.id, `<just:center>${c5()}The number of lives was reduced. You are now out of lives.`, 5.0);
+    }
+}
+// `Slayer_Support::isFloat`: a typed number, or ().
+fn number(word) {
+    let sign = 1.0;
+    let w = word;
+    if w.starts_with("-") {
+        sign = -1.0;
+        w = w.sub_string(1);
+    }
+    let halves = w.split(".");
+    if w == "" || halves.len() > 2 || whole(halves[0]) < 0 && halves[0] != "" {
+        return ();
+    }
+    let n = if halves[0] == "" { 0.0 } else { whole(halves[0]).to_float() };
+    if halves.len() == 2 {
+        if halves[1] == "" || whole(halves[1]) < 0 {
+            return ();
+        }
+        n += whole(halves[1]).to_float() / (10.0 ** halves[1].len().to_float());
+    }
+    sign * n
+}
+
 // Bots (Slayer's Preferred Player Count, a team's Bots setting): the
 // Blockhead Bot Add-On's bots fill a team up to its count and leave as
 // players join it (`Slayer_TeamSO::botFillTeam`). Slayer made
@@ -309,47 +909,6 @@ fn auto_sort(g, list) {
     }
 }
 
-// `Slayer_TeamSO::balanceTeam`, until no team has more than one player
-// over another: the lowest scorer on the largest team moves to the
-// smallest. `on` is each player's team as these rules leave it.
-fn even_out(g, counts, on) {
-    let scores = #{};
-    for p in players() {
-        scores[`${p.id}`] = p.score;
-    }
-    let moves = 0;
-    while moves < 64 {
-        let small = ();
-        let big = ();
-        for t in g.teams {
-            let n = counts[`${t.id}`];
-            if (small == () || n < counts[`${small.id}`]) && sorts_into(g, t, n) {
-                small = t;
-            }
-            if big == () || n > counts[`${big.id}`] {
-                big = t;
-            }
-        }
-        if small == () || counts[`${big.id}`] - counts[`${small.id}`] <= 1 {
-            return;
-        }
-        let pick = ();
-        for key in on.keys() {
-            if on[key] == big.id && (pick == () || scores[key] < scores[pick]) {
-                pick = key;
-            }
-        }
-        if pick == () {
-            return;
-        }
-        on[pick] = small.id;
-        counts[`${big.id}`] -= 1;
-        counts[`${small.id}`] += 1;
-        join(parse_int(pick), small);
-        moves += 1;
-    }
-}
-
 // The lives a member starts a round with: their team's, when it sets
 // them, else the game's (`Slayer_MiniGameSO::reset`). 0 is no limit.
 fn lives_for(g, team) {
@@ -398,6 +957,9 @@ fn lives_winner(g) {
     }
     if teams {
         for t in g.teams {
+            if spectating(g.id, t.id) {
+                continue;
+            }
             let alive = false;
             for key in left.keys() {
                 if left[key].team == t.id {
@@ -454,6 +1016,9 @@ fn check_points(g) {
     let teams = uses_teams(g.id) && !g.teams.is_empty();
     if teams {
         for t in g.teams {
+            if spectating(g.id, t.id) {
+                continue;
+            }
             if team_score(g, t.id) >= points {
                 end_round(g.id, #{ teams: [t.id] });
                 return;
@@ -486,6 +1051,9 @@ fn time_winner(g) {
     let on_time_up = false;
     if uses_teams(g.id) && !g.teams.is_empty() {
         for t in g.teams {
+            if spectating(g.id, t.id) {
+                continue;
+            }
             let score = team_score(g, t.id);
             let wins = team_setting(g.id, t.id, "team_win_on_time_up");
             if (score > least || wins) && !on_time_up {
@@ -1098,6 +1666,9 @@ fn send_report(g, teams, winners) {
     if uses_teams(g.id) && !g.teams.is_empty() && setting(g.id, "eorr_display_team_scores") {
         let list = [];
         for t in g.teams {
+            if spectating(g.id, t.id) {
+                continue;
+            }
             let kills = 0;
             let deaths = 0;
             for m in members(g, t.id) {
@@ -1123,6 +1694,9 @@ fn send_report(g, teams, winners) {
     }
     let rows = [];
     for me in by_score(list) {
+        if spectating(g.id, me.team) {
+            continue;
+        }
         let team = if me.team == () { () } else { team_by_id(g, me.team) };
         rows.push(#{ key: `player:${me.id}`, name: me.name, color: if team == () { () } else { team.color },
                      cells: #{ score: me.score, kills: get_player(me.id, "kills"), deaths: get_player(me.id, "deaths"),
@@ -1144,7 +1718,7 @@ fn send_report(g, teams, winners) {
         if victory {
             let me = player(m);
             let won = winners.contains(m) || (me.team != () && teams.contains(me.team));
-            banner = if won { "{{eorr_victory}}" } else { "{{eorr_defeat}}" };
+            banner = if spectating(g.id, me.team) { () } else if won { "{{eorr_victory}}" } else { "{{eorr_defeat}}" };
         }
         show_report(m, #{ title: "{{eorr_title}}", banner: banner, columns: columns, sections: sections });
     }
@@ -1380,6 +1954,7 @@ fn reset_cps(game) {
 
 fn on_tick() {
     ease_cps();
+    expire_swaps();
     step_spectators();
     for g in minigames() {
         let r = round_of(g.id);
@@ -1419,9 +1994,16 @@ fn on_death(victim, killer) {
     if me == () || me.minigame == () {
         return;
     }
-    // The kills and deaths the event outputs and round report count.
-    set_player(victim, "deaths", get_player(victim, "deaths") + 1);
-    if killer != () && killer != victim {
+    // The kills and deaths the event outputs and round report count; a
+    // punished teamkill counts neither.
+    let k = if killer == () { () } else { player(killer) };
+    let g = minigame(me.minigame);
+    if g != () && is_teamkill(g, me, k) {
+        punish_teamkill(g, me, k);
+    } else {
+        set_player(victim, "deaths", get_player(victim, "deaths") + 1);
+    }
+    if killer != () && killer != victim && !(g != () && is_teamkill(g, me, k)) {
         set_player(killer, "kills", get_player(killer, "kills") + 1);
         // Killing a bot is worth Kill Bot, not Kill Player, whoever does
         // it (`incScore(%mini.points_killBot)`, and the correction for
@@ -1441,6 +2023,9 @@ fn on_death(victim, killer) {
         fire_game_input(me.minigame, "onMinigameDeath", victim, killer);
     } else {
         fire_game_input(me.minigame, "onMinigameDeath", victim);
+    }
+    if g != () {
+        balance_on_death(g, me);
     }
     if !running(me.minigame) {
         return;
@@ -1474,6 +2059,14 @@ fn on_damage(victim, attacker, amount, info) {
     if attacker == () {
         return ();
     }
+    // `Slayer_TeamHandlerSG::canDamage`: a spectator team neither hurts nor
+    // is hurt by another member.
+    let me = player(victim);
+    let them = player(attacker);
+    if me != () && them != () && attacker != victim && me.minigame != () && me.minigame == them.minigame
+        && (spectating(me.minigame, me.team) || spectating(me.minigame, them.team)) {
+        return 0.0;
+    }
     let a = player(attacker);
     if a == () || !a.bot || a.spawner != () {
         return ();
@@ -1492,8 +2085,13 @@ fn on_spawn(p) {
     if me == () || me.minigame == () {
         return;
     }
-    // `createPlayer`: out of spectate mode, the team's kit and look.
+    // `createPlayer`: out of spectate mode, the team's kit and look; a new
+    // body starts its kill spree, quick kills and teamkill penalty afresh.
     spectate_end(p);
+    set_player(p, "spree", 0);
+    set_player(p, "quick", 0);
+    set_player(p, "last_kill", -1);
+    set_player(p, "ff_extra", 0);
     let g = minigame(me.minigame);
     kit(p, g, me.team);
     set_player(p, "skin", -1);
@@ -1562,8 +2160,7 @@ fn lives_changed(g) {
         if lives <= 0 && !out {
             knock_out(p.id);
             if p.alive {
-                watch(p.id, p.id);
-                damage(p.id, 10000.0);
+                remove_body(p.id);
             }
             center_print(p.id, `${c5()}The number of lives was reduced. You are now out of lives.`, 5.0);
         } else if lives > 0 && out {
@@ -1571,6 +2168,58 @@ fn lives_changed(g) {
         }
     }
     check_lives(minigame(g.id));
+}
+
+// `Slayer_TeamSO::updateLives`: the team's members take its new lives at
+// once (the change, from a number they had); none or the game's at 0 or
+// -1. Out at none, back in when they have some.
+fn note_team_lives(g) {
+    let seen = get("team_lives");
+    for t in g.teams {
+        seen[`${g.id}:${t.id}`] = team_setting(g.id, t.id, "team_lives");
+    }
+    set("team_lives", seen);
+}
+fn team_lives_changed(g, team) {
+    let seen = get("team_lives");
+    let key = `${g.id}:${team}`;
+    let now = team_setting(g.id, team, "team_lives");
+    let old = if key in seen { seen[key] } else { -1 };
+    if old == now {
+        return;
+    }
+    seen[key] = now;
+    set("team_lives", seen);
+    let check = false;
+    for m in members(g, team) {
+        if now == 0 {
+            set_player(m.id, "lives", 0);
+            continue;
+        }
+        if now < 0 {
+            set_player(m.id, "lives", setting(g.id, "lives"));
+            continue;
+        }
+        let lives = if old < 0 { now } else { get_player(m.id, "lives") + now - old };
+        set_player(m.id, "lives", lives);
+        let out = get_player(m.id, "out");
+        if lives <= 0 && !out {
+            knock_out(m.id);
+            if m.alive {
+                remove_body(m.id);
+            }
+            center_print(m.id, `${c5()}The number of lives was reduced. You are now out of lives.`, 5.0);
+            check = true;
+        } else if lives > 0 && out {
+            revive(m.id);
+            if !m.alive {
+                respawn(m.id);
+            }
+        }
+    }
+    if check {
+        check_lives(minigame(g.id));
+    }
 }
 
 // `Slayer_MiniGameSO::setGameMode`: a mode without teams takes everyone
@@ -1618,26 +2267,325 @@ fn bot_fill_changed(g) {
     fill_bots(g);
 }
 
+// `Slayer_TeamHandlerSG::onNewTeam`, for each team the game did not have:
+// everyone without a team is sorted, then players move onto it until it
+// is balanced.
 fn balance_new(g) {
-    // `Slayer_TeamHandlerSG::onNewTeam`: everyone without a team is
-    // sorted, then teams are evened out.
-    let counts = counts(g);
-    let on = #{};
-    for p in players() {
-        if p.minigame == g.id && p.team != () && `${p.team}` in counts {
-            on[`${p.id}`] = p.team;
-        }
+    let known = get("known_teams");
+    let key = `${g.id}`;
+    let had = if key in known { known[key] } else { () };
+    let ids = [];
+    for t in g.teams {
+        ids.push(t.id);
     }
-    for p in players() {
-        if p.minigame == g.id && !(`${p.id}` in on) {
-            let team = counts.pick_team(g, p.id);
-            if team != () {
-                on[`${p.id}`] = team.id;
-                join(p.id, team);
+    known[key] = ids;
+    set("known_teams", known);
+    if had == () || !uses_teams(g.id) || !setting(g.id, "balance_new_teams") {
+        return;
+    }
+    for t in g.teams {
+        if had.contains(t.id) {
+            continue;
+        }
+        let counts = counts(g);
+        for p in players() {
+            if p.minigame == g.id && p.team == () {
+                let team = counts.pick_team(g, p.id);
+                if team != () {
+                    add_member(p.id, team, "", false, false);
+                }
+            }
+        }
+        let moves = 0;
+        while moves < 64 && !team_balanced(minigame(g.id), t) {
+            moves += 1;
+            if balance_team(minigame(g.id), t, true, 0) == () {
+                break;
             }
         }
     }
-    even_out(g, counts, on);
+}
+
+fn mg_restart(g, event) {
+    reset_cps(g.id);
+    note_kits(g);
+    note_team_lives(g);
+    // The teams it starts with are not new teams.
+    let known = get("known_teams");
+    if !(`${g.id}` in known) {
+        known[`${g.id}`] = g.teams.map(|t| t.id);
+        set("known_teams", known);
+    }
+    // `Slayer_TeamHandlerSG::onMinigameReset`: teams shuffled every so
+    // many rounds, without respawning anyone twice.
+    let shuffling = uses_teams(g.id) && setting(g.id, "shuffle_teams");
+    if shuffling && event.kind == "reset" && shuffle_count(g.id) >= setting(g.id, "rounds_between_shuffle") {
+        shuffle_teams(g, setting(g.id, "shuffle_mode"));
+        set_shuffle_count(g.id, 0);
+    }
+    start_round(minigame(g.id));
+    // `Slayer_TeamSO::onMinigameReset`: each team filled with bots, unless
+    // teams shuffle.
+    if !shuffling {
+        fill_bots(g);
+    }
+}
+
+fn mg_loaded(g, event) {
+    // A build's saved mini-game (`importMinigamePreferences`, its
+    // `.pathcam` read with it): the fly-through path came back with
+    // the build, untested and its rounds counted afresh, and the game
+    // resets, as `serverCmdSlayer_loadConfig` does.
+    let cam = flycam_of(g.id);
+    if cam != () {
+        cam.test = ();
+        cam.passed = 0;
+        set_flycam(g.id, cam);
+    }
+    reset_minigame(g.id);
+}
+
+fn mg_round_end(g, event) {
+    round_ended(g, event.teams, event.players);
+    // `Slayer_TeamHandlerSG::onMinigameRoundEnd`: rounds toward a shuffle.
+    set_shuffle_count(g.id, if setting(g.id, "shuffle_teams") { shuffle_count(g.id) + 1 } else { 0 });
+}
+
+fn mg_kicked(g, event) {
+    // `serverCmdRemoveFromMinigame`: the player kicked, and the game,
+    // told who did it.
+    let by = if event.by == () { () } else { player(event.by) };
+    let them = player(event.player);
+    if by != () && them != () {
+        tell(event.player, `${by.name} kicked you from the minigame`);
+        tell_minigame(g.id, `${by.name} kicked ${them.name} from the minigame`);
+    }
+}
+
+fn mg_rejected(g, event) {
+    // `serverCmdRejectMinigameInvite`: the creator hears who said no.
+    let them = player(event.player);
+    if g.owner != () && them != () {
+        let ignoring = if event.ignored { " (ignoring)" } else { "" };
+        tell(g.owner, `${them.name} rejected your mini-game invitation${ignoring}`);
+    }
+}
+
+fn mg_settings(g, event) {
+    if is_key(event.keys, "friendly_fire") || is_key(event.keys, "ally_same_colors") {
+        sync_team_rules(g);
+    }
+    if is_key(event.keys, "mode") {
+        mode_changed(g);
+    }
+    if is_key(event.keys, "team_bot_fill") {
+        bot_fill_changed(g);
+    }
+    if is_key(event.keys, "lives") {
+        lives_changed(g);
+    }
+    if is_key(event.keys, "cp_tick_ms") {
+        // `Slayer_CPTriggerData.tickPeriodMS = %1`: every point's.
+        set_zone_period(0, setting(g.id, "cp_tick_ms"));
+    }
+    let looks = is_key(event.keys, "team_uniform") || is_key(event.keys, "allow_custom_faces");
+    for key in event.keys {
+        looks = looks || key.starts_with(`{{rules}}:uni_`);
+    }
+    if looks {
+        dress_game(g);
+    }
+    update_bodies(g, event.keys);
+    let equips = is_key(event.keys, "team_sync_loadout");
+    for i in 0..5 {
+        equips = equips || is_key(event.keys, `team_equip_${i}`);
+    }
+    if equips {
+        update_equips(g);
+    }
+    if is_key(event.keys, "time") {
+        // `Slayer_MiniGameSO::updateTime`: a clock starts from none, and a
+        // running one keeps the time it had left.
+        let r = round_of(g.id);
+        let now = setting(g.id, "time");
+        let old = if "minutes" in r { r.minutes } else { now };
+        if now > 0 && old <= 0 {
+            r.clock = tick();
+            r.extra = 0;
+            r.told = ();
+        } else if now > 0 {
+            r.extra += (old - now) * 60 * 120;
+        }
+        r.minutes = now;
+        set_round(g.id, r);
+    }
+    for c in event.changes {
+        if c.key == `{{rules}}:team_lives` && c.team != () {
+            team_lives_changed(g, c.team);
+        }
+    }
+}
+
+fn mg_joined(g, event) {
+    // `Slayer_MiniGameSO::addMember`: the game's lives, then a team.
+    set_player(event.player, "lives", setting(g.id, "lives"));
+    set_player(event.player, "out", false);
+    set_player(event.player, "wins", 0);
+    // A bot comes with its team, and no greeting or `onMinigameJoin`.
+    let me = player(event.player);
+    if me != () && own_bot(me) {
+        set_player(event.player, "kills", 0);
+        set_player(event.player, "deaths", 0);
+        return;
+    }
+    if uses_teams(g.id) && !g.teams.is_empty() && setting(g.id, "auto_sort") {
+        auto_sort(g, [event.player]);
+    }
+    fire_game_input(g.id, "onMinigameJoin", event.player);
+}
+
+fn mg_left(g, event) {
+    // `Slayer_MiniGameSO::removeMember`: `onMinigameLeave`, then maybe
+    // the last one standing.
+    let me = player(event.player);
+    if me != () && own_bot(me) {
+        check_lives(g);
+        return;
+    }
+    if me != () {
+        fire_game_input(g.id, "onMinigameLeave", event.player);
+        hide_report(event.player);
+    } else {
+        fire_game_input(g.id, "onMinigameLeave");
+    }
+    set_player(event.player, "out", false);
+    spectate_end(event.player);
+    undress(event.player);
+    check_lives(g);
+    // `Slayer_TeamSO::removeMember`: their team takes a bot back.
+    fill_bots(g);
+}
+
+// `Slayer_TeamSO::updateName`: at most 13 words, and a name another team
+// has gets a random number after it.
+fn unique_names(g) {
+    let list = [];
+    let seen = [];
+    let changed = false;
+    for t in g.teams {
+        // `getWords(%name, 0, 12)`: thirteen, in fact.
+        let ws = words(t.name);
+        let name = if ws.len() > 13 { rest(ws.extract(0, 13), 0) } else { trim_copy(t.name) };
+        if seen.contains(name.to_lower()) {
+            name = `${name} ${(hash3(seed(), tick(), t.id, 7) * 1000000.0).to_int()}`;
+        }
+        seen.push(name.to_lower());
+        if name != t.name {
+            changed = true;
+        }
+        let copy = t;
+        copy.name = name;
+        list.push(copy);
+    }
+    if changed {
+        set_teams(g.id, list, #{ friendly_fire: g.friendly_fire, ally_same_color: g.ally_same_color });
+    }
+    changed
+}
+fn trim_copy(text) {
+    let t = text;
+    t.trim();
+    t
+}
+
+fn mg_teams(g, event) {
+    if unique_names(g) {
+        return;
+    }
+    // `Slayer_TeamSO::updateColor`: members in their team's new colour.
+    // (The Mini-Game window's Apply sends its teams before their
+    // settings, so the kits noted are still the old ones.)
+    dress_game(g);
+    note_team_lives(g);
+    balance_new(g);
+    // A team gone takes its bots with it; a new one gets its own.
+    fill_bots(g);
+}
+
+fn mg_left_team(g, event) {
+    undress(event.player);
+    let me = player(event.player);
+    let was = get_player(event.player, "team_was");
+    set_player(event.player, "team_was", -1);
+    let old = if was < 0 { () } else { team_by_id(g, was) };
+    // `Slayer_TeamSO::removeMember`: their swap request goes, and the
+    // game's lives come back unless they had more than the team's.
+    if old != () {
+        let swap = swap_from(g.id, old.id);
+        if swap != () && swap.client == event.player {
+            set_swap(g.id, old.id, ());
+        }
+        if get_player(event.player, "lives") >= team_setting(g.id, old.id, "team_lives") {
+            set_player(event.player, "lives", setting(g.id, "lives"));
+        }
+    }
+    if me != () && own_bot(me) {
+        remove_bot(event.player);
+    } else {
+        if old != () && setting(g.id, "balance_teams") {
+            balance_team(g, old, false, 0);
+        }
+        fill_bots(g);
+    }
+}
+
+fn mg_joined_team(g, event) {
+    let team = team_by_id(g, event.team);
+    let me = player(event.player);
+    if team != () && me != () {
+        // `Slayer_TeamSO::onAddMember`: the team's lives, when it sets
+        // fewer (or the player still has the game's).
+        let lives = team_setting(g.id, team.id, "team_lives");
+        let mine = get_player(event.player, "lives");
+        if lives >= 0 && (mine > lives || mine == setting(g.id, "lives")) {
+            set_player(event.player, "lives", lives);
+        }
+        // The `joinTeam` output's reason, `(reason)`.
+        let reason = get_player(event.player, "reason");
+        if reason != "" {
+            reason = `${c5()}(${c3()}${reason}${c5()})`;
+            set_player(event.player, "reason", "");
+        }
+        // `addMember` greets only connections, and a connection's
+        // joining sends a bot of the team away (`botFillTeam`).
+        let bot = own_bot(me);
+        let quiet = get_player(event.player, "quiet_join");
+        set_player(event.player, "quiet_join", false);
+        set_player(event.player, "joined_at", tick());
+        let was = get_player(event.player, "team_was");
+        set_player(event.player, "team_was", team.id);
+        if !bot {
+            tell(event.player, `${c5()}You have joined ${colored(team)} ${reason}`);
+            if setting(g.id, "notify_member_changes") && !quiet {
+                tell_minigame(g.id, `${c3()}${me.name} ${c5()}has joined ${colored(team)} ${reason}`, event.player);
+            }
+        }
+        dress(event.player);
+        if !bot {
+            // `onRemoveMember` and `onAddMember`: both teams rebalance,
+            // unless an editor placed them (`/teams addMember`).
+            let placed = get_player(event.player, "no_balance");
+            set_player(event.player, "no_balance", false);
+            if setting(g.id, "balance_teams") && !placed {
+                let old = if was < 0 { () } else { team_by_id(g, was) };
+                if old != () {
+                    balance_team(g, old, false, 0);
+                }
+                balance_team(minigame(g.id), team, false, 0);
+            }
+            fill_bots(g);
+        }
+    }
 }
 
 fn on_minigame(event) {
@@ -1667,149 +2615,17 @@ fn on_minigame(event) {
         }
         return;
     }
-    if event.kind == "created" || event.kind == "reset" {
-        reset_cps(g.id);
-        note_kits(g);
-        start_round(g);
-        // `Slayer_TeamSO::onMinigameReset`: each team filled with bots.
-        fill_bots(g);
-    } else if event.kind == "loaded" {
-        // A build's saved mini-game (`importMinigamePreferences`, its
-        // `.pathcam` read with it): the fly-through path came back with
-        // the build, untested and its rounds counted afresh, and the game
-        // resets, as `serverCmdSlayer_loadConfig` does.
-        let cam = flycam_of(g.id);
-        if cam != () {
-            cam.test = ();
-            cam.passed = 0;
-            set_flycam(g.id, cam);
-        }
-        reset_minigame(g.id);
-    } else if event.kind == "round_end" {
-        round_ended(g, event.teams, event.players);
-    } else if event.kind == "settings" {
-        if is_key(event.keys, "friendly_fire") || is_key(event.keys, "ally_same_colors") {
-            sync_team_rules(g);
-        }
-        if is_key(event.keys, "mode") {
-            mode_changed(g);
-        }
-        if is_key(event.keys, "team_bot_fill") {
-            bot_fill_changed(g);
-        }
-        if is_key(event.keys, "lives") {
-            lives_changed(g);
-        }
-        if is_key(event.keys, "cp_tick_ms") {
-            // `Slayer_CPTriggerData.tickPeriodMS = %1`: every point's.
-            set_zone_period(0, setting(g.id, "cp_tick_ms"));
-        }
-        let looks = is_key(event.keys, "team_uniform") || is_key(event.keys, "allow_custom_faces");
-        for key in event.keys {
-            looks = looks || key.starts_with(`{{rules}}:uni_`);
-        }
-        if looks {
-            dress_game(g);
-        }
-        update_bodies(g, event.keys);
-        let equips = is_key(event.keys, "team_sync_loadout");
-        for i in 0..5 {
-            equips = equips || is_key(event.keys, `team_equip_${i}`);
-        }
-        if equips {
-            update_equips(g);
-        }
-        if is_key(event.keys, "time") {
-            let r = round_of(g.id);
-            r.clock = tick();
-            r.told = ();
-            set_round(g.id, r);
-        }
-    } else if event.kind == "joined" {
-        // `Slayer_MiniGameSO::addMember`: the game's lives, then a team.
-        set_player(event.player, "lives", setting(g.id, "lives"));
-        set_player(event.player, "out", false);
-        set_player(event.player, "wins", 0);
-        // A bot comes with its team, and no greeting or `onMinigameJoin`.
-        let me = player(event.player);
-        if me != () && own_bot(me) {
-            set_player(event.player, "kills", 0);
-            set_player(event.player, "deaths", 0);
-            return;
-        }
-        if uses_teams(g.id) && !g.teams.is_empty() && setting(g.id, "auto_sort") {
-            auto_sort(g, [event.player]);
-        }
-        fire_game_input(g.id, "onMinigameJoin", event.player);
-    } else if event.kind == "left" {
-        // `Slayer_MiniGameSO::removeMember`: `onMinigameLeave`, then maybe
-        // the last one standing.
-        let me = player(event.player);
-        if me != () && own_bot(me) {
-            check_lives(g);
-            return;
-        }
-        if me != () {
-            fire_game_input(g.id, "onMinigameLeave", event.player);
-            hide_report(event.player);
-        } else {
-            fire_game_input(g.id, "onMinigameLeave");
-        }
-        set_player(event.player, "out", false);
-        spectate_end(event.player);
-        undress(event.player);
-        check_lives(g);
-        // `Slayer_TeamSO::removeMember`: their team takes a bot back.
-        fill_bots(g);
-    } else if event.kind == "teams" {
-        // `Slayer_TeamSO::updateColor`: members in their team's new colour.
-        // (The Mini-Game window's Apply sends its teams before their
-        // settings, so the kits noted are still the old ones.)
-        dress_game(g);
-        if uses_teams(g.id) && setting(g.id, "balance_new_teams") {
-            balance_new(g);
-        }
-        // A team gone takes its bots with it; a new one gets its own.
-        fill_bots(g);
-    } else if event.kind == "team" && event.team == () {
-        undress(event.player);
-        let me = player(event.player);
-        if me != () && own_bot(me) {
-            remove_bot(event.player);
-        } else {
-            fill_bots(g);
-        }
-    } else if event.kind == "team" && event.team != () {
-        let team = team_by_id(g, event.team);
-        let me = player(event.player);
-        if team != () && me != () {
-            // `Slayer_TeamSO::onAddMember`: the team's lives, when it sets
-            // fewer (or the player still has the game's).
-            let lives = team_setting(g.id, team.id, "team_lives");
-            let mine = get_player(event.player, "lives");
-            if lives >= 0 && (mine > lives || mine == setting(g.id, "lives")) {
-                set_player(event.player, "lives", lives);
-            }
-            // The `joinTeam` output's reason, `(reason)`.
-            let reason = get_player(event.player, "reason");
-            if reason != "" {
-                reason = ` ${c5()}(${c3()}${reason}${c5()})`;
-                set_player(event.player, "reason", "");
-            }
-            // `addMember` greets only connections, and a connection's
-            // joining sends a bot of the team away (`botFillTeam`).
-            let bot = own_bot(me);
-            if !bot {
-                tell(event.player, `${c5()}You have joined ${c3()}${team.name}${reason}`);
-                if setting(g.id, "notify_member_changes") {
-                    tell_minigame(g.id, `${c3()}${me.name} ${c5()}has joined ${c3()}${team.name}${reason}`, event.player);
-                }
-            }
-            dress(event.player);
-            if !bot {
-                fill_bots(g);
-            }
-        }
+    switch event.kind {
+        "created" | "reset" => mg_restart(g, event),
+        "loaded" => mg_loaded(g, event),
+        "round_end" => mg_round_end(g, event),
+        "kicked" => mg_kicked(g, event),
+        "rejected" => mg_rejected(g, event),
+        "settings" => mg_settings(g, event),
+        "joined" => mg_joined(g, event),
+        "left" => mg_left(g, event),
+        "teams" => mg_teams(g, event),
+        "team" => if event.team == () { mg_left_team(g, event) } else { mg_joined_team(g, event) },
     }
 }
 
@@ -2347,41 +3163,24 @@ fn cmd_teams(p, line) {
             tell(p, `${c5()}Set up teams in the Mini-Game window's Add-On Settings, or: /teams add <colour> <name>, remove <name>, friendlyfire on|off, autosort on|off, lock on|off.`);
         }
     } else if cmd == "join" {
-        if locked && mine != () {
-            tell(p, `${c5()}Teams are locked, you cannot change teams.`);
+        team_join(p, g, mine, name);
+    } else if cmd == "acceptswap" {
+        if mine == () {
             return;
         }
-        if name == "" {
-            tell(p, `${c5()}Please enter a team to join. Type ${c3()}/joinTeam Team Name ${c5()}to join a team. Type ${c3()}/listTeams ${c5()}to view a list of teams.`);
+        let offer = swap_to(g.id, mine.id);
+        if offer == () {
+            tell(p, `${c5()}No one is trying to swap teams right now.`);
             return;
         }
-        let team = team_by_name(g, name);
-        if team == () {
-            tell(p, `${c5()}Couldn't find team:${c3()} ${name}`);
+        swap_members(g, p, offer.client);
+    } else if cmd == "cancelswap" {
+        let swap = if mine == () { () } else { swap_from(g.id, mine.id) };
+        if swap == () || swap.client != p {
             return;
         }
-        if (mine != () && team_setting(g.id, mine.id, "team_lock")) || team_setting(g.id, team.id, "team_lock") {
-            tell(p, `${c5()}Team is locked.`);
-            return;
-        }
-        if mine != () && mine.id == team.id {
-            tell(p, `${c5()}You're already on ${c3()}${team.name}${c5()}.`);
-            return;
-        }
-        let max = team_setting(g.id, team.id, "team_max_players");
-        let counts = counts(g);
-        let there = counts[`${team.id}`];
-        if max == 0 || (max > 0 && there >= max) {
-            tell(p, `${c5()}That team is not accepting any new members.`);
-            return;
-        }
-        // Slayer's regulated join: a player on a team only moves to a
-        // smaller one.
-        if mine != () && counts[`${mine.id}`] <= there {
-            tell(p, `${c5()}You can only move to a team with fewer players.`);
-            return;
-        }
-        join(p, team);
+        tell(p, `${c5()}No one swapped teams.`);
+        set_swap(g.id, mine.id, ());
     } else if cmd == "leave" {
         if mine == () {
             tell(p, `${c5()}You aren't on a team.`);
@@ -2397,7 +3196,7 @@ fn cmd_teams(p, line) {
         }
         set_team(p, ());
         respawn(p);
-    } else if cmd == "list" || cmd == "count" || cmd == "score" {
+    } else if cmd == "list" || cmd == "count" || cmd == "score" || cmd == "living" {
         if g.teams.is_empty() {
             tell(p, `${c5()}There are no teams.`);
             return;
@@ -2408,6 +3207,8 @@ fn cmd_teams(p, line) {
                 tell(p, `${c3()}${t.name}`);
             } else if cmd == "count" {
                 tell(p, `${c3()}(${list.len()}) ${t.name}`);
+            } else if cmd == "living" {
+                tell(p, `${c3()}(${living(list)}) ${t.name}`);
             } else {
                 tell(p, `${c3()}(${team_score(g, t.id)}) ${t.name}`);
             }
@@ -2434,22 +3235,15 @@ fn cmd_teams(p, line) {
             tell(p, ` ${c5()}+ ${c3()}${bots} ${c5()}${plural(bots, "bot", "bots")}`);
         }
     } else if !can_edit(p, g) {
-        tell(p, `${c5()}Please enter a valid command.`);
+        // An editor's commands do nothing for anyone else.
+        if !["balance", "addmember", "removemember"].contains(cmd) {
+            tell(p, `${c5()}Please enter a valid command.`);
+        }
     } else if cmd == "balance" {
-        // Everyone is sorted afresh, from no teams.
-        let counts = #{};
-        for t in g.teams {
-            counts[`${t.id}`] = 0;
-        }
-        for m in players() {
-            if m.minigame == g.id {
-                let team = counts.pick_team(g, m.id);
-                if team != () && team.id != m.team {
-                    join(m.id, team);
-                }
-            }
-        }
+        balance_teams(g, true);
         tell_game(g, `${c3()}${me.name} ${c5()}balanced ${c3()}all ${c5()}teams.`);
+    } else if cmd == "addmember" || cmd == "removemember" {
+        member_command(p, g, cmd, parts);
     } else if cmd == "add" {
         let colour = if parts.len() > 1 { whole(parts[1]) } else { -1 };
         let title = rest(parts, 2);
@@ -2459,6 +3253,11 @@ fn cmd_teams(p, line) {
         }
         if team_by_name(g, title) != () {
             tell(p, `${c5()}There is already a team called ${c3()}${title}`);
+            return;
+        }
+        let most = server_setting("max_teams");
+        if g.teams.len() >= most {
+            tell(p, `${c5()}This server allows at most ${most} ${plural(most, "team", "teams")}.`);
             return;
         }
         // Teams play in a team mode: the first team turns one on.
@@ -2507,6 +3306,10 @@ fn cmd_listteams(p) { cmd_teams(p, "list") }
 fn cmd_teamlist(p) { cmd_teams(p, "list") }
 fn cmd_teamcount(p) { cmd_teams(p, "count") }
 fn cmd_teamscore(p) { cmd_teams(p, "score") }
+fn cmd_teamliving(p) { cmd_teams(p, "living") }
+fn cmd_swapteam(p, name) { cmd_teams(p, `join ${name}`) }
+fn cmd_swapteams(p, name) { cmd_teams(p, `join ${name}`) }
+fn cmd_acceptswap(p) { cmd_teams(p, "acceptswap") }
 
 // `serverCmdSlayer(rules)`: the mode and how to win it, with the lives of
 // `team` (or the game's).
@@ -3112,4 +3915,375 @@ fn step_spectators() {
             spectate_auto(q.id);
         }
     }
+}
+
+// ---------------------------------------------------------------------
+// Chat (`serverCmdMessageSent`, `serverCmdTeamMessageSent`): Team Display
+// Mode shows a player's team by colour or tag, a team's Name Color
+// replaces its colour, and Allow Dead Talking keeps the dead to the dead.
+// The engine keeps the flood and repeat checks.
+
+// `Slayer_TeamSO::getColorHex`, or the team's Name Color when it is six
+// hex digits.
+fn chat_color(g, team) {
+    let own = team_setting(g.id, team.id, "team_chat_color");
+    if own.len() == 6 {
+        let ok = true;
+        for c in own.to_chars() {
+            ok = ok && "0123456789abcdefABCDEF".contains(c);
+        }
+        if ok {
+            return `<color:${own}>`;
+        }
+    }
+    `<color:${hex(team.color)}>`
+}
+// The line's layout by Team Display Mode (%1 prefix, %2 name, %3 suffix,
+// %4 text, %5 team colour, %6 team name, %7 the tail before the text).
+fn chat_line(mode, pre, name, suf, msg, color, team_name, tail) {
+    switch mode {
+        1 => `${color}${pre}${c3()}${name}${color}${suf}${tail}: ${msg}`,
+        2 => `${c7()}${pre}${color}${name}${c7()}${suf}${tail}: ${msg}`,
+        3 => `${c7()}[${color}${team_name}${c7()}] ${pre}${c3()}${name}${c7()}${suf}${tail}: ${msg}`,
+        _ => `${c7()}${pre}${c3()}${name}${c7()}${suf}${tail}: ${msg}`
+    }
+}
+// Web addresses become links, as Slayer's chat made them.
+fn chat_links(msg) {
+    let out = [];
+    for w in msg.split(" ") {
+        let at = w.index_of("://");
+        let lower = w.to_lower();
+        if at > 0 && (lower.starts_with("http://") || lower.starts_with("https://") || lower.starts_with("ftp://")) {
+            let url = w.sub_string(at + 3);
+            if !url.contains(":") && url != "" {
+                out.push(`<sPush><a:${url}>${url}</a><sPop>`);
+                continue;
+            }
+        }
+        out.push(w);
+    }
+    out.reduce(|acc, w| if acc == () { w } else { `${acc} ${w}` })
+}
+// Members of `g` out of lives (`GameConnection::dead`).
+fn dead_members(g, teams) {
+    let out = [];
+    for q in players() {
+        if q.minigame == g.id && !q.bot && get_player(q.id, "out")
+            && (teams == () || (q.team != () && teams.contains(q.team))) {
+            out.push(q.id);
+        }
+    }
+    out
+}
+fn team_members(g, teams) {
+    let out = [];
+    for q in players() {
+        if q.minigame == g.id && !q.bot && q.team != () && teams.contains(q.team) {
+            out.push(q.id);
+        }
+    }
+    out
+}
+// The teams a team chat line reaches: the team, or every team of its
+// colour with Ally Same Colors (`messageAllByColor`).
+fn chat_teams(g, team) {
+    if !setting(g.id, "ally_same_colors") {
+        return [team.id];
+    }
+    let out = [];
+    for t in g.teams {
+        if t.color == team.color {
+            out.push(t.id);
+        }
+    }
+    out
+}
+fn on_chat(p, info) {
+    let me = player(p);
+    if me == () || me.minigame == () {
+        return ();
+    }
+    let g = minigame(me.minigame);
+    if g == () {
+        return ();
+    }
+    let team = if me.team == () || !uses_teams(g.id) { () } else { team_by_id(g, me.team) };
+    let dead = get_player(p, "out") && !resetting(g.id);
+    let mode = if team == () { 0 } else { setting(g.id, "team_display_mode") };
+    let color = if team == () { "" } else { chat_color(g, team) };
+    let team_name = if team == () { "" } else { team.name };
+    let msg = chat_links(info.plain);
+    let dead_mode = setting(g.id, "dead_chat_mode");
+    if info.team {
+        if team == () {
+            return ();
+        }
+        if !team_setting(g.id, team.id, "team_chat") || !setting(g.id, "enable_team_chat") {
+            return `${c5()}Team chat disabled.`;
+        }
+        let teams = chat_teams(g, team);
+        if dead && (dead_mode == 0 || dead_mode == 2) {
+            let tail = ` ${c7()}[DEAD]<color:00ffff>`;
+            return #{ line: chat_line(mode, info.clan_prefix, info.name, info.clan_suffix, msg, color, team_name, tail),
+                      to: dead_members(g, teams) };
+        }
+        return #{ line: chat_line(mode, info.clan_prefix, info.name, info.clan_suffix, msg, color, team_name, "<color:00ffff>"),
+                  to: team_members(g, teams) };
+    }
+    if dead && (dead_mode == 0 || dead_mode == 3) {
+        let tail = ` ${c7()}[DEAD]<color:c0c0c0>`;
+        return #{ line: chat_line(mode, info.clan_prefix, info.name, info.clan_suffix, msg, color, team_name, tail),
+                  to: dead_members(g, ()) };
+    }
+    if mode == 0 && msg == info.plain {
+        return ();
+    }
+    #{ line: chat_line(mode, info.clan_prefix, info.name, info.clan_suffix, msg, color, team_name, "<color:ffffff>") }
+}
+
+// ---------------------------------------------------------------------
+// Kill lines (`isSpecialKill_Slayer_Teams`, `isSpecialKill_Slayer_BK`):
+// Death Message Mode hides them or colours names by team, a punished
+// teamkill says so, a team's Hide Kills drops the killer, and Bonus Kills
+// adds kill sprees and quick kills.
+
+// Bonus Kills' lines from the player's copy (`$Slayer::Server::BK::*`):
+// by spree length and by quick kills in a row, the [0] line for any
+// other count.
+fn bk_spree_lines() {
+    #{ "0": {{bk_spree_0|text}}, "100": {{bk_spree_100|text}}, "200": {{bk_spree_200|text}} }
+}
+fn bk_quick_lines() {
+    #{ "0": {{bk_quick_0|text}}, "2": {{bk_quick_2|text}}, "3": {{bk_quick_3|text}},
+       "4": {{bk_quick_4|text}}, "5": {{bk_quick_5|text}}, "6": {{bk_quick_6|text}},
+       "7": {{bk_quick_7|text}}, "8": {{bk_quick_8|text}}, "9": {{bk_quick_9|text}},
+       "10": {{bk_quick_10|text}} }
+}
+fn bk_line(lines, n, killer, victim) {
+    let key = if `${n}` in lines { `${n}` } else { "0" };
+    // Rhai's `replace` changes the string in place.
+    let line = lines[key];
+    line.replace("%1", `${n}`);
+    line.replace("%2", killer);
+    line.replace("%3", victim);
+    line
+}
+// `isSpecialKill_Slayer_BK`: the killer's spree and quick kills grow (a
+// new body starts both afresh), each worth its bonus points.
+fn bonus_kills(g, me, k, info) {
+    if !setting(g.id, "bk_enable") || k == () || k.id == me.id {
+        return "";
+    }
+    if me.team != () && k.team != () && me.team == k.team {
+        return "";
+    }
+    let killer = if info.killer_name == () { k.name } else { info.killer_name };
+    let victim = if info.victim_name == () { me.name } else { info.victim_name };
+    let msg = "";
+    let spree = get_player(k.id, "spree") + 1;
+    set_player(k.id, "spree", spree);
+    if spree >= setting(g.id, "bk_spree_start") {
+        msg = bk_line(bk_spree_lines(), spree, killer, victim);
+        add_score(k.id, setting(g.id, "bk_points_spree"));
+    }
+    let now = tick();
+    let last = get_player(k.id, "last_kill");
+    let quick = get_player(k.id, "quick");
+    quick = if last < 0 || now - last <= ms_ticks({{bk_quick_ms}}) { quick + 1 } else { 0 };
+    set_player(k.id, "quick", quick);
+    set_player(k.id, "last_kill", now);
+    if quick > 1 {
+        let qk = bk_line(bk_quick_lines(), quick, killer, victim);
+        msg = if msg == "" { qk } else { `${msg} ${qk}` };
+        add_score(k.id, setting(g.id, "bk_points_multi"));
+    }
+    msg
+}
+fn on_death_message(victim, killer, info) {
+    let me = player(victim);
+    if me == () || me.minigame == () {
+        return ();
+    }
+    let g = minigame(me.minigame);
+    if g == () {
+        return ();
+    }
+    let mode = setting(g.id, "death_msg_mode");
+    if mode == 0 {
+        return false;
+    }
+    let k = if killer == () { () } else { player(killer) };
+    let out = #{};
+    if uses_teams(g.id) {
+        let colored = |team| if mode == 1 { `<color:${hex(team.color)}>` } else { "<color:ff0040>" };
+        let mine = if me.team == () { () } else { team_by_id(g, me.team) };
+        if mine != () {
+            out.victim = `${colored.call(mine)}${info.victim_name}`;
+        }
+        if k != () && k.id != me.id {
+            let theirs = if k.team == () { () } else { team_by_id(g, k.team) };
+            if theirs != () {
+                out.killer = `${colored.call(theirs)}${info.killer_name}`;
+                if mine != () && theirs.id == mine.id && setting(g.id, "punish_ff") {
+                    out.suffix = `${c3()}(Teamkill)`;
+                } else if team_setting(g.id, theirs.id, "team_hide_kills") {
+                    out.hide_killer = true;
+                }
+            } else {
+                out.killer = `<color:ff0040>${info.killer_name}`;
+            }
+        }
+    }
+    let bonus = bonus_kills(g, me, k, info);
+    if bonus != "" {
+        out.suffix = if "suffix" in out { `${out.suffix} ${bonus}` } else { bonus };
+    }
+    if out.is_empty() { () } else { out }
+}
+
+// The punishment for a teamkill with Punish Friendly Fire on
+// (`GameConnection::onDeath`): Friendly Fire points instead of Kill
+// Player, the victim's Die points back, no kill or death counted, and the
+// killer's next respawn later by the penalty (times their teamkills with
+// Progressive FF Penalty).
+fn punish_teamkill(g, me, k) {
+    add_score(k.id, setting(g.id, "points_friendly_fire") - g.points_kill_player);
+    add_score(me.id, -g.settings.points_die);
+    let count = get_player(k.id, "ff_count") + 1;
+    set_player(k.id, "ff_count", count);
+    let penalty = setting(g.id, "ff_penalty") * 1000;
+    let add = if setting(g.id, "ff_progressive") { count * penalty } else { penalty };
+    let base = respawn_for(g, k.team);
+    let now = (if base == () { g.settings.respawn_ms } else { base }) + get_player(k.id, "ff_extra") + add;
+    set_player(k.id, "ff_extra", get_player(k.id, "ff_extra") + add);
+    set_respawn_time(k.id, now);
+    if !k.bot && setting(g.id, "ff_warning") {
+        let seconds = (now + 999) / 1000;
+        center_print(k.id, `<just:center>\n${c2()}You just killed a team-mate!\n${c2()}Be more careful.\n${c2()}Your respawn time is now${c0()} ${seconds} ${c2()}seconds.\n`, 7.0);
+    }
+}
+fn is_teamkill(g, me, k) {
+    k != () && k.id != me.id && me.team != () && k.team == me.team && uses_teams(g.id)
+        && setting(g.id, "punish_ff")
+}
+
+// ---------------------------------------------------------------------
+// Who may do what to a game (`canEdit`, `canReset`, `canLeave`,
+// `canCreateMinigame` and the `serverCmd*Minigame` overrides).
+fn no_permission() { `${c5()}You don't have permission to do that.` }
+fn invite_error(text) { #{ title: "Mini-Game Invite Error", text: text } }
+fn on_minigame_request(p, action, info) {
+    let me = player(p);
+    if me == () {
+        return ();
+    }
+    let mine = if me.minigame == () { () } else { minigame(me.minigame) };
+    let g = if info.game == () { () } else { minigame(info.game) };
+    switch action {
+        "create" => {
+            if me.host {
+                return true;
+            }
+            if !can_leave(p, mine) {
+                return no_permission();
+            }
+            if admin_level(me) > server_setting("create_rights") {
+                return no_permission();
+            }
+            ()
+        }
+        "leave" => if can_leave(p, mine) { () } else { no_permission() },
+        "join" => {
+            if !can_leave(p, mine) {
+                return no_permission();
+            }
+            if g == () {
+                return ();
+            }
+            if mine != () && mine.id == g.id {
+                return "You're already in that mini-game.";
+            }
+            if g.settings.invite_only && me.invite != g.id && !can_edit(p, g) {
+                return "That mini-game is invite-only.";
+            }
+            // Slayer's join skips v20's wait between joins.
+            true
+        }
+        "reset" => {
+            if g == () {
+                return ();
+            }
+            if can_reset(p, g) {
+                if resetting(g.id) { false } else { true }
+            } else {
+                no_permission()
+            }
+        }
+        "edit" | "end" | "kick" | "team" | "respawn_all" => {
+            if g == () {
+                return ();
+            }
+            if !can_edit(p, g) {
+                return no_permission();
+            }
+            // `$Pref::Server::Slayer::Teams::maxTeams`: `addTeam` makes no
+            // more.
+            let most = server_setting("max_teams");
+            if action == "edit" && info.teams != () && info.teams > most && info.teams > g.teams.len() {
+                return `This server allows at most ${most} ${plural(most, "team", "teams")}.`;
+            }
+            true
+        }
+        "invite" => {
+            if g == () {
+                return ();
+            }
+            if !can_edit(p, g) {
+                return invite_error("You do not have permission to send invites.");
+            }
+            let them = if info.target == () { () } else { player(info.target) };
+            if them == () {
+                return false;
+            }
+            if them.invite != () {
+                return invite_error(if them.invite == g.id {
+                    "This person hasn't responded to your first invite yet."
+                } else {
+                    "This person is considering another invite right now."
+                });
+            }
+            if them.minigame == g.id {
+                return invite_error("This person is already in the mini-game.");
+            }
+            true
+        }
+        // Slayer only turned the invitation down (`serverCmdIgnoreMinigameInvite`).
+        "ignore" => false,
+        _ => ()
+    }
+}
+
+// The light key and /suicide (`serverCmdLight`, `serverCmdSuicide`), and an
+// admin's free camera while out of lives (`serverCmdDropPlayerAtCamera`).
+fn allow_light(p) {
+    let me = player(p);
+    if me == () || me.minigame == () || setting(me.minigame, "enable_lights") {
+        return true;
+    }
+    `${c5()}Lights are disabled in this minigame.`
+}
+fn allow_suicide(p) {
+    let me = player(p);
+    if me == () || me.minigame == () || setting(me.minigame, "enable_suicide") {
+        return true;
+    }
+    `${c5()}Suicide is disabled in this minigame.`
+}
+fn allow_admin_camera(p) {
+    let me = player(p);
+    if me == () || me.minigame == () || !get_player(p, "out") || can_edit(p, minigame(me.minigame)) {
+        return true;
+    }
+    `${c5()}You're out of lives! Don't cheat!`
 }

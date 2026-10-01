@@ -107,6 +107,40 @@
       "cooldown_ticks": 12
     },
     {
+      "name": "teamliving",
+      "while_dead": true,
+      "cooldown_ticks": 12
+    },
+    {
+      "name": "swapteam",
+      "args": [
+        "string"
+      ],
+      "while_dead": true,
+      "cooldown_ticks": 12
+    },
+    {
+      "name": "swapteams",
+      "args": [
+        "string"
+      ],
+      "while_dead": true,
+      "cooldown_ticks": 12
+    },
+    {
+      "name": "acceptswap",
+      "while_dead": true,
+      "cooldown_ticks": 12
+    },
+    {
+      "name": "addlives",
+      "args": [
+        "string"
+      ],
+      "while_dead": true,
+      "cooldown_ticks": 12
+    },
+    {
       "name": "createflycam",
       "while_dead": true,
       "cooldown_ticks": 12
@@ -145,6 +179,7 @@
       "category": "Minigame",
       "type": "list",
       "default": "{{dm_class}}",
+      "resets": true,
       "items": [
         {
           "value": "{{dm_class}}",
@@ -162,6 +197,7 @@
       "category": "Minigame",
       "type": "int",
       "default": {{pref_time_between_rounds}},
+      "editor": "full_trust",
       "min": 5,
       "max": 300
     },
@@ -214,7 +250,8 @@
       "title": "Restrict Output Events",
       "category": "Events",
       "type": "bool",
-      "default": {{pref_restrict_events|bool}}
+      "default": {{pref_restrict_events|bool}},
+      "editor": "host"
     },
     {
       "key": "custom_rule",
@@ -222,6 +259,7 @@
       "category": "Minigame",
       "type": "text",
       "default": "",
+      "quiet": true,
       "max_length": 150
     },
     {
@@ -314,14 +352,15 @@
       "category": "Teams",
       "type": "bool",
       "default": {{pref_balance_new|bool}},
-      "editor": "admin"
+      "editor": "host"
     },
     {
       "key": "notify_member_changes",
       "title": "Display Join/Leave Messages",
       "category": "Teams",
       "type": "bool",
-      "default": {{pref_notify|bool}}
+      "default": {{pref_notify|bool}},
+      "quiet": true
     },
     {
       "key": "friendly_fire",
@@ -377,21 +416,27 @@
       "title": "Play At Beginning of Round",
       "category": "Fly-Through Cam",
       "type": "bool",
-      "default": {{fly_play_on_reset|bool}}
+      "default": {{fly_play_on_reset|bool}},
+      "editor": "creator",
+      "quiet": true
     },
     {
       "key": "fly_during_countdown",
       "title": "Countdown During Fly-Thru",
       "category": "Fly-Through Cam",
       "type": "bool",
-      "default": {{fly_during_countdown|bool}}
+      "default": {{fly_during_countdown|bool}},
+      "editor": "creator",
+      "quiet": true
     },
     {
       "key": "fly_rounds_between",
       "title": "Rounds Between Fly-Thrus",
       "category": "Fly-Through Cam",
       "type": "bool",
-      "default": {{fly_rounds_between|bool}}
+      "default": {{fly_rounds_between|bool}},
+      "editor": "creator",
+      "quiet": true
     },
     {
       "key": "team_lives",
@@ -453,7 +498,8 @@
       "category": "Team",
       "type": "player_type",
       "default": "v20.player.{{team_player_type|lower}}",
-      "scope": "team"
+      "scope": "team",
+      "quiet": true
     },
     {
       "key": "team_equip_0",
@@ -461,7 +507,8 @@
       "category": "Team",
       "type": "item",
       "default": "v20.weapon.{{team_equip_0|lower}}",
-      "scope": "team"
+      "scope": "team",
+      "quiet": true
     },
     {
       "key": "team_equip_1",
@@ -469,7 +516,8 @@
       "category": "Team",
       "type": "item",
       "default": "v20.weapon.{{team_equip_1|lower}}",
-      "scope": "team"
+      "scope": "team",
+      "quiet": true
     },
     {
       "key": "team_equip_2",
@@ -477,7 +525,8 @@
       "category": "Team",
       "type": "item",
       "default": "v20.weapon.{{team_equip_2|lower}}",
-      "scope": "team"
+      "scope": "team",
+      "quiet": true
     },
     {
       "key": "team_equip_3",
@@ -485,7 +534,8 @@
       "category": "Team",
       "type": "item",
       "default": "",
-      "scope": "team"
+      "scope": "team",
+      "quiet": true
     },
     {
       "key": "team_equip_4",
@@ -493,7 +543,8 @@
       "category": "Team",
       "type": "item",
       "default": "",
-      "scope": "team"
+      "scope": "team",
+      "quiet": true
     },
     {
       "key": "team_sync_loadout",
@@ -501,7 +552,8 @@
       "category": "Team",
       "type": "bool",
       "default": {{team_sync_loadout|bool}},
-      "scope": "team"
+      "scope": "team",
+      "quiet": true
     },
     {
       "key": "team_scale",
@@ -550,6 +602,8 @@
       "type": "int",
       "default": {{uni_accent}},
       "scope": "team",
+      "avatar": "Accent",
+      "quiet": true,
       "min": 0,
       "max": 63,
       "shown_when": { "setting": "team_uniform", "is": [3] }
@@ -561,6 +615,8 @@
       "type": "int",
       "default": {{uni_chest}},
       "scope": "team",
+      "avatar": "Chest",
+      "quiet": true,
       "min": 0,
       "max": 63,
       "shown_when": { "setting": "team_uniform", "is": [3] }
@@ -572,6 +628,8 @@
       "type": "int",
       "default": {{uni_hat}},
       "scope": "team",
+      "avatar": "Hat",
+      "quiet": true,
       "min": 0,
       "max": 63,
       "shown_when": { "setting": "team_uniform", "is": [3] }
@@ -583,6 +641,8 @@
       "type": "int",
       "default": {{uni_hip}},
       "scope": "team",
+      "avatar": "Hip",
+      "quiet": true,
       "min": 0,
       "max": 63,
       "shown_when": { "setting": "team_uniform", "is": [3] }
@@ -594,6 +654,8 @@
       "type": "int",
       "default": {{uni_l_arm}},
       "scope": "team",
+      "avatar": "LArm",
+      "quiet": true,
       "min": 0,
       "max": 63,
       "shown_when": { "setting": "team_uniform", "is": [3] }
@@ -605,6 +667,8 @@
       "type": "int",
       "default": {{uni_l_hand}},
       "scope": "team",
+      "avatar": "LHand",
+      "quiet": true,
       "min": 0,
       "max": 63,
       "shown_when": { "setting": "team_uniform", "is": [3] }
@@ -616,6 +680,8 @@
       "type": "int",
       "default": {{uni_l_leg}},
       "scope": "team",
+      "avatar": "LLeg",
+      "quiet": true,
       "min": 0,
       "max": 63,
       "shown_when": { "setting": "team_uniform", "is": [3] }
@@ -627,6 +693,8 @@
       "type": "int",
       "default": {{uni_pack}},
       "scope": "team",
+      "avatar": "Pack",
+      "quiet": true,
       "min": 0,
       "max": 63,
       "shown_when": { "setting": "team_uniform", "is": [3] }
@@ -638,6 +706,8 @@
       "type": "int",
       "default": {{uni_r_arm}},
       "scope": "team",
+      "avatar": "RArm",
+      "quiet": true,
       "min": 0,
       "max": 63,
       "shown_when": { "setting": "team_uniform", "is": [3] }
@@ -649,6 +719,8 @@
       "type": "int",
       "default": {{uni_r_hand}},
       "scope": "team",
+      "avatar": "RHand",
+      "quiet": true,
       "min": 0,
       "max": 63,
       "shown_when": { "setting": "team_uniform", "is": [3] }
@@ -660,6 +732,8 @@
       "type": "int",
       "default": {{uni_r_leg}},
       "scope": "team",
+      "avatar": "RLeg",
+      "quiet": true,
       "min": 0,
       "max": 63,
       "shown_when": { "setting": "team_uniform", "is": [3] }
@@ -671,6 +745,8 @@
       "type": "int",
       "default": {{uni_second_pack}},
       "scope": "team",
+      "avatar": "SecondPack",
+      "quiet": true,
       "min": 0,
       "max": 63,
       "shown_when": { "setting": "team_uniform", "is": [3] }
@@ -682,6 +758,8 @@
       "type": "text",
       "default": "{{uni_accent_color}}",
       "scope": "team",
+      "avatar": "AccentColor",
+      "quiet": true,
       "max_length": 100,
       "shown_when": { "setting": "team_uniform", "is": [3] }
     },
@@ -692,6 +770,8 @@
       "type": "text",
       "default": "{{uni_hat_color}}",
       "scope": "team",
+      "avatar": "HatColor",
+      "quiet": true,
       "max_length": 100,
       "shown_when": { "setting": "team_uniform", "is": [3] }
     },
@@ -702,6 +782,8 @@
       "type": "text",
       "default": "{{uni_head_color}}",
       "scope": "team",
+      "avatar": "HeadColor",
+      "quiet": true,
       "max_length": 100,
       "shown_when": { "setting": "team_uniform", "is": [3] }
     },
@@ -712,6 +794,8 @@
       "type": "text",
       "default": "{{uni_hip_color}}",
       "scope": "team",
+      "avatar": "HipColor",
+      "quiet": true,
       "max_length": 100,
       "shown_when": { "setting": "team_uniform", "is": [3] }
     },
@@ -722,6 +806,8 @@
       "type": "text",
       "default": "{{uni_l_arm_color}}",
       "scope": "team",
+      "avatar": "LArmColor",
+      "quiet": true,
       "max_length": 100,
       "shown_when": { "setting": "team_uniform", "is": [3] }
     },
@@ -732,6 +818,8 @@
       "type": "text",
       "default": "{{uni_l_hand_color}}",
       "scope": "team",
+      "avatar": "LHandColor",
+      "quiet": true,
       "max_length": 100,
       "shown_when": { "setting": "team_uniform", "is": [3] }
     },
@@ -742,6 +830,8 @@
       "type": "text",
       "default": "{{uni_l_leg_color}}",
       "scope": "team",
+      "avatar": "LLegColor",
+      "quiet": true,
       "max_length": 100,
       "shown_when": { "setting": "team_uniform", "is": [3] }
     },
@@ -752,6 +842,8 @@
       "type": "text",
       "default": "{{uni_pack_color}}",
       "scope": "team",
+      "avatar": "PackColor",
+      "quiet": true,
       "max_length": 100,
       "shown_when": { "setting": "team_uniform", "is": [3] }
     },
@@ -762,6 +854,8 @@
       "type": "text",
       "default": "{{uni_r_arm_color}}",
       "scope": "team",
+      "avatar": "RArmColor",
+      "quiet": true,
       "max_length": 100,
       "shown_when": { "setting": "team_uniform", "is": [3] }
     },
@@ -772,6 +866,8 @@
       "type": "text",
       "default": "{{uni_r_hand_color}}",
       "scope": "team",
+      "avatar": "RHandColor",
+      "quiet": true,
       "max_length": 100,
       "shown_when": { "setting": "team_uniform", "is": [3] }
     },
@@ -782,6 +878,8 @@
       "type": "text",
       "default": "{{uni_r_leg_color}}",
       "scope": "team",
+      "avatar": "RLegColor",
+      "quiet": true,
       "max_length": 100,
       "shown_when": { "setting": "team_uniform", "is": [3] }
     },
@@ -792,6 +890,8 @@
       "type": "text",
       "default": "{{uni_second_pack_color}}",
       "scope": "team",
+      "avatar": "SecondPackColor",
+      "quiet": true,
       "max_length": 100,
       "shown_when": { "setting": "team_uniform", "is": [3] }
     },
@@ -802,6 +902,8 @@
       "type": "text",
       "default": "{{uni_torso_color}}",
       "scope": "team",
+      "avatar": "TorsoColor",
+      "quiet": true,
       "max_length": 100,
       "shown_when": { "setting": "team_uniform", "is": [3] }
     },
@@ -812,6 +914,8 @@
       "type": "text",
       "default": "{{uni_face_name}}",
       "scope": "team",
+      "avatar": "FaceName",
+      "quiet": true,
       "max_length": 100,
       "shown_when": { "setting": "team_uniform", "is": [3] }
     },
@@ -822,8 +926,577 @@
       "type": "text",
       "default": "{{uni_decal_name}}",
       "scope": "team",
+      "avatar": "DecalName",
+      "quiet": true,
       "max_length": 100,
       "shown_when": { "setting": "team_uniform", "is": [3] }
+    },
+    {
+      "key": "dead_chat_mode",
+      "title": "Allow Dead Talking",
+      "category": "Chat",
+      "type": "list",
+      "default": {{pref_dead_chat_mode}},
+      "items": [
+        {
+          "value": 0,
+          "name": "Disabled"
+        },
+        {
+          "value": 1,
+          "name": "Enabled"
+        },
+        {
+          "value": 2,
+          "name": "Enabled - Global Only"
+        },
+        {
+          "value": 3,
+          "name": "Enabled - Team Only"
+        }
+      ]
+    },
+    {
+      "key": "death_msg_mode",
+      "title": "Death Message Mode",
+      "category": "Chat",
+      "type": "list",
+      "default": {{pref_death_msg_mode}},
+      "quiet": true,
+      "items": [
+        {
+          "value": 0,
+          "name": "Do Not Display"
+        },
+        {
+          "value": 1,
+          "name": "Colored Names"
+        },
+        {
+          "value": 2,
+          "name": "Non-Colored Names"
+        }
+      ]
+    },
+    {
+      "key": "enable_team_chat",
+      "title": "Enable Team Chat",
+      "category": "Chat",
+      "type": "bool",
+      "default": {{pref_enable_team_chat|bool}},
+      "editor": "creator"
+    },
+    {
+      "key": "team_display_mode",
+      "title": "Team Display Mode",
+      "category": "Chat",
+      "type": "list",
+      "default": {{pref_team_display_mode}},
+      "items": [
+        {
+          "value": 0,
+          "name": "Disabled"
+        },
+        {
+          "value": 1,
+          "name": "Color Tag"
+        },
+        {
+          "value": 2,
+          "name": "Color Name"
+        },
+        {
+          "value": 3,
+          "name": "Add Name to Tag"
+        }
+      ]
+    },
+    {
+      "key": "disable_messages",
+      "title": "Disable All Slayer Messages",
+      "category": "Chat",
+      "type": "bool",
+      "default": {{pref_disable_messages|bool}}
+    },
+    {
+      "key": "auto_start",
+      "title": "Auto Start With Server",
+      "category": "Minigame",
+      "type": "bool",
+      "default": {{pref_auto_start|bool}},
+      "scope": "server",
+      "editor": "host",
+      "quiet": true
+    },
+    {
+      "key": "clear_scores",
+      "title": "Clear Scores on Reset",
+      "category": "Minigame",
+      "type": "bool",
+      "default": {{pref_clear_scores|bool}}
+    },
+    {
+      "key": "color",
+      "title": "Color",
+      "category": "Minigame",
+      "type": "paint_color",
+      "default": {{pref_color}},
+      "quiet": true,
+      "min": 0,
+      "max": 63
+    },
+    {
+      "key": "default_minigame",
+      "title": "Default Minigame",
+      "category": "Minigame",
+      "type": "bool",
+      "default": {{pref_default_minigame|bool}},
+      "editor": "admin"
+    },
+    {
+      "key": "host_name",
+      "title": "Host Name",
+      "category": "Minigame",
+      "type": "text",
+      "default": {{pref_host_name|text}},
+      "editor": "creator",
+      "quiet": true,
+      "max_length": 25
+    },
+    {
+      "key": "late_join_time",
+      "title": "Late Join Time",
+      "category": "Minigame",
+      "type": "int",
+      "default": {{pref_late_join_time}},
+      "min": -1,
+      "max": 5
+    },
+    {
+      "key": "reset_when_empty",
+      "title": "Reset When Empty",
+      "category": "Minigame",
+      "type": "bool",
+      "default": {{pref_reset_when_empty|bool}},
+      "editor": "creator",
+      "quiet": true
+    },
+    {
+      "key": "spawn_brick_color",
+      "title": "Spawn Brick Color",
+      "category": "Minigame",
+      "type": "int",
+      "default": {{pref_spawn_brick_color}},
+      "quiet": true,
+      "min": -1,
+      "max": 63
+    },
+    {
+      "key": "create_rights",
+      "title": "Create Minigame Rights",
+      "category": "Permissions",
+      "type": "list",
+      "default": {{pref_create_rights}},
+      "scope": "server",
+      "editor": "host",
+      "items": [
+        {
+          "value": 0,
+          "name": "Host"
+        },
+        {
+          "value": 1,
+          "name": "Super Admin"
+        },
+        {
+          "value": 2,
+          "name": "Admin"
+        },
+        {
+          "value": 3,
+          "name": "Everyone"
+        }
+      ]
+    },
+    {
+      "key": "edit_rights",
+      "title": "Edit Rights",
+      "category": "Permissions",
+      "type": "list",
+      "default": {{pref_edit_rights}},
+      "editor": "creator",
+      "items": [
+        {
+          "value": 3,
+          "name": "Creator"
+        },
+        {
+          "value": 4,
+          "name": "Full Trust"
+        },
+        {
+          "value": 5,
+          "name": "Build Trust"
+        },
+        {
+          "value": 0,
+          "name": "Host"
+        },
+        {
+          "value": 1,
+          "name": "Super Admin"
+        },
+        {
+          "value": 2,
+          "name": "Admin"
+        }
+      ]
+    },
+    {
+      "key": "leave_rights",
+      "title": "Leave Rights",
+      "category": "Permissions",
+      "type": "list",
+      "default": {{pref_leave_rights}},
+      "editor": "creator",
+      "items": [
+        {
+          "value": 3,
+          "name": "Creator"
+        },
+        {
+          "value": 4,
+          "name": "Full Trust"
+        },
+        {
+          "value": 5,
+          "name": "Build Trust"
+        },
+        {
+          "value": 0,
+          "name": "Host"
+        },
+        {
+          "value": 1,
+          "name": "Super Admin"
+        },
+        {
+          "value": 2,
+          "name": "Admin"
+        },
+        {
+          "value": 6,
+          "name": "Everyone"
+        }
+      ]
+    },
+    {
+      "key": "reset_rights",
+      "title": "Reset Rights",
+      "category": "Permissions",
+      "type": "list",
+      "default": {{pref_reset_rights}},
+      "editor": "creator",
+      "items": [
+        {
+          "value": 3,
+          "name": "Creator"
+        },
+        {
+          "value": 4,
+          "name": "Full Trust"
+        },
+        {
+          "value": 5,
+          "name": "Build Trust"
+        },
+        {
+          "value": 0,
+          "name": "Host"
+        },
+        {
+          "value": 1,
+          "name": "Super Admin"
+        },
+        {
+          "value": 2,
+          "name": "Admin"
+        }
+      ]
+    },
+    {
+      "key": "enable_lights",
+      "title": "Enable Lights",
+      "category": "Player",
+      "type": "bool",
+      "default": {{pref_enable_lights|bool}}
+    },
+    {
+      "key": "enable_suicide",
+      "title": "Enable Suicide",
+      "category": "Player",
+      "type": "bool",
+      "default": {{pref_enable_suicide|bool}}
+    },
+    {
+      "key": "name_distance",
+      "title": "Name Distance",
+      "category": "Player",
+      "type": "int",
+      "default": {{pref_name_distance}},
+      "min": 0,
+      "max": 1000
+    },
+    {
+      "key": "points_friendly_fire",
+      "title": "Friendly Fire",
+      "category": "Points",
+      "type": "int",
+      "default": {{pref_points_friendly_fire}},
+      "min": -999,
+      "max": 999
+    },
+    {
+      "key": "ff_progressive",
+      "title": "Progressive FF Penalty",
+      "category": "Respawn Time",
+      "type": "bool",
+      "default": {{pref_ff_progressive|bool}}
+    },
+    {
+      "key": "ff_penalty",
+      "title": "Friendly Fire Penalty",
+      "category": "Respawn Time",
+      "type": "int",
+      "default": {{pref_ff_penalty}},
+      "min": 0,
+      "max": 999
+    },
+    {
+      "key": "announcements",
+      "title": "Announcements",
+      "category": "Server",
+      "type": "text",
+      "default": {{pref_announcements|text}},
+      "editor": "creator",
+      "quiet": true,
+      "max_length": 256
+    },
+    {
+      "key": "save_on_update",
+      "title": "Save Settings on Update",
+      "category": "Server",
+      "type": "bool",
+      "default": {{pref_save_on_update|bool}},
+      "scope": "server",
+      "editor": "host",
+      "quiet": true
+    },
+    {
+      "key": "balance_teams",
+      "title": "Balance Teams",
+      "category": "Teams",
+      "type": "bool",
+      "default": {{pref_balance_teams|bool}}
+    },
+    {
+      "key": "punish_ff",
+      "title": "Punish Friendly Fire",
+      "category": "Teams",
+      "type": "bool",
+      "default": {{pref_punish_ff|bool}},
+      "editor": "host"
+    },
+    {
+      "key": "ff_warning",
+      "title": "Display Friendly Fire Warning",
+      "category": "Teams",
+      "type": "bool",
+      "default": {{pref_ff_warning|bool}}
+    },
+    {
+      "key": "rounds_between_shuffle",
+      "title": "Rounds Between Shuffle",
+      "category": "Teams",
+      "type": "int",
+      "default": {{pref_rounds_between_shuffle}},
+      "min": 1,
+      "max": 999
+    },
+    {
+      "key": "shuffle_teams",
+      "title": "Shuffle Teams",
+      "category": "Teams",
+      "type": "bool",
+      "default": {{pref_shuffle_teams|bool}}
+    },
+    {
+      "key": "shuffle_mode",
+      "title": "Shuffle Mode",
+      "category": "Teams",
+      "type": "list",
+      "default": {{pref_shuffle_mode}},
+      "items": [
+        {
+          "value": 0,
+          "name": "Random"
+        },
+        {
+          "value": 1,
+          "name": "New Team Every Time"
+        }
+      ]
+    },
+    {
+      "key": "swap_mode",
+      "title": "Swap/Join Mode",
+      "category": "Teams",
+      "type": "list",
+      "default": {{pref_swap_mode}},
+      "items": [
+        {
+          "value": 0,
+          "name": "Regulated"
+        },
+        {
+          "value": 1,
+          "name": "Unregulated (always join)"
+        }
+      ]
+    },
+    {
+      "key": "max_teams",
+      "title": "Max Teams",
+      "category": "Teams",
+      "type": "int",
+      "default": {{pref_max_teams}},
+      "scope": "server",
+      "editor": "host",
+      "quiet": true,
+      "min": 0,
+      "max": 1024
+    },
+    {
+      "key": "bk_enable",
+      "title": "Enable",
+      "category": "Bonus Kills",
+      "type": "bool",
+      "default": {{pref_bk_enable|bool}}
+    },
+    {
+      "key": "bk_spree_start",
+      "title": "Kill Spree Start",
+      "category": "Bonus Kills",
+      "type": "int",
+      "default": {{pref_bk_spree_start}},
+      "min": 2,
+      "max": 30
+    },
+    {
+      "key": "bk_points_spree",
+      "title": "Bonus Points per Kill Spree",
+      "category": "Bonus Kills",
+      "type": "int",
+      "default": {{pref_bk_points_spree}},
+      "min": -999,
+      "max": 999
+    },
+    {
+      "key": "bk_points_multi",
+      "title": "Bonus Points per Multi-Kill",
+      "category": "Bonus Kills",
+      "type": "int",
+      "default": {{pref_bk_points_multi}},
+      "min": -999,
+      "max": 999
+    },
+    {
+      "key": "captain_player_type",
+      "title": "Playertype",
+      "category": "Captain",
+      "type": "player_type",
+      "default": "v20.player.{{captain_player_type|lower}}",
+      "scope": "team",
+      "quiet": true
+    },
+    {
+      "key": "captain_equip_0",
+      "title": "Start Equip 0",
+      "category": "Captain",
+      "type": "item",
+      "default": "v20.weapon.{{captain_equip_0|lower}}",
+      "scope": "team",
+      "quiet": true
+    },
+    {
+      "key": "captain_equip_1",
+      "title": "Start Equip 1",
+      "category": "Captain",
+      "type": "item",
+      "default": "v20.weapon.{{captain_equip_1|lower}}",
+      "scope": "team",
+      "quiet": true
+    },
+    {
+      "key": "captain_equip_2",
+      "title": "Start Equip 2",
+      "category": "Captain",
+      "type": "item",
+      "default": "v20.weapon.{{captain_equip_2|lower}}",
+      "scope": "team",
+      "quiet": true
+    },
+    {
+      "key": "captain_equip_3",
+      "title": "Start Equip 3",
+      "category": "Captain",
+      "type": "item",
+      "default": "",
+      "scope": "team",
+      "quiet": true
+    },
+    {
+      "key": "captain_equip_4",
+      "title": "Start Equip 4",
+      "category": "Captain",
+      "type": "item",
+      "default": "",
+      "scope": "team",
+      "quiet": true
+    },
+    {
+      "key": "team_chat",
+      "title": "Enable Team Chat",
+      "category": "Chat",
+      "type": "bool",
+      "default": {{team_chat|bool}},
+      "scope": "team"
+    },
+    {
+      "key": "team_hide_kills",
+      "title": "Hide Kills",
+      "category": "Chat",
+      "type": "bool",
+      "default": {{team_hide_kills|bool}},
+      "scope": "team"
+    },
+    {
+      "key": "team_chat_color",
+      "title": "Name Color",
+      "category": "Chat",
+      "type": "text",
+      "default": {{team_chat_color|text}},
+      "scope": "team",
+      "quiet": true,
+      "max_length": 6
+    },
+    {
+      "key": "team_spectate",
+      "title": "Spectator Team",
+      "category": "Team",
+      "type": "bool",
+      "default": {{team_spectate|bool}},
+      "scope": "team"
     }
   ],
   "state": {
@@ -854,6 +1527,26 @@
         "persist": false
       },
       "kits": {
+        "default": {},
+        "persist": false
+      },
+      "swaps": {
+        "default": {},
+        "persist": false
+      },
+      "balance": {
+        "default": {},
+        "persist": false
+      },
+      "shuffles": {
+        "default": {},
+        "persist": false
+      },
+      "team_lives": {
+        "default": {},
+        "persist": false
+      },
+      "known_teams": {
         "default": {},
         "persist": false
       }
@@ -896,9 +1589,19 @@
       "reason": {
         "default": "",
         "persist": false
-      }
+      },
+      "spree": { "default": 0, "persist": false },
+      "quick": { "default": 0, "persist": false },
+      "last_kill": { "default": -1, "persist": false },
+      "ff_count": { "default": 0, "persist": false },
+      "ff_extra": { "default": 0, "persist": false },
+      "quiet_join": { "default": false, "persist": false },
+      "no_balance": { "default": false, "persist": false },
+      "joined_at": { "default": 0, "persist": false },
+      "team_was": { "default": -1, "persist": false }
     }
   },
+  "teams_shown_when": { "setting": "mode", "is_not": ["{{dm_class}}"] },
   "on_minigame": true,
   "on_pick_spawn": true,
   "on_death": true,
@@ -907,6 +1610,23 @@
   "on_path_node": true,
   "on_observer": true,
   "on_event_row": true,
+  "on_chat": true,
+  "on_death_message": true,
+  "on_minigame_request": true,
+  "policies": ["light", "suicide", "admin_camera"],
+  "minigame_settings": {
+    "title": {{mg_title|text}},
+    "title_length": 50,
+    "respawn": {{mg_respawn}},
+    "respawn_range": [1, 999],
+    "vehicle_respawn": {{mg_vehicle_respawn}},
+    "vehicle_respawn_range": [0, 999],
+    "brick_respawn": {{mg_brick_respawn}},
+    "brick_respawn_range": [0, 999],
+    "brick_never": true,
+    "enable_wand": {{mg_enable_wand|bool}},
+    "loadout": ["v20.weapon.{{mg_equip_0|lower}}", "v20.weapon.{{mg_equip_1|lower}}", "v20.weapon.{{mg_equip_2|lower}}", "", ""]
+  },
   "zones": [
     {
       "bricks": [
