@@ -62,21 +62,114 @@ fn definitions() -> Definitions {
         .shared_shape()
         .clone();
     Definitions {
-        entries: [(
-            "brick".into(),
-            Definition {
-                mesh,
-                collision,
-                shape,
-                indestructible: false,
-                special: Default::default(),
-                reflection: None,
-                link: None,
-                glass: [0.0; 4],
-            },
-        )]
+        entries: [
+            (
+                "brick".into(),
+                Definition {
+                    mesh,
+                    collision,
+                    shape,
+                    indestructible: false,
+                    special: Default::default(),
+                    reflection: None,
+                    link: None,
+                    glass: [0.0; 4],
+                },
+            ),
+            (PORTAL.into(), portal()),
+        ]
         .into(),
     }
+}
+
+/// A portal as the Portal Add-On's biggest (1x20x12): an opening 10 wide
+/// and 7.2 tall, half a unit deep, through its middle north and south, in
+/// a thin frame with a sill.
+const PORTAL: &str = "portal";
+fn portal() -> Definition {
+    use bri_content::brick::{Face, Frame, Link};
+    let door = Mesh {
+        schema_version: 1,
+        id: "door".into(),
+        footprint_studs: [4, 1],
+        height_plates: 15,
+        attachment_rows: vec!["bbbb".into(); 15],
+        collision_boxes: vec![],
+        needs_external_collision: false,
+        coverage: None,
+        // Its top, for a shape that is whole.
+        quads: vec![bri_content::brick::Quad {
+            face: Face::Top,
+            surface: bri_content::brick::Surface::Top,
+            vertices: [[-1.0, 0.25], [1.0, 0.25], [1.0, -0.25], [-1.0, -0.25]].map(|[x, z]| {
+                bri_content::brick::Vertex {
+                    position: [x, 1.5, z],
+                    normal: [0.0, 1.0, 0.0],
+                    uv: [x + 1.0, z + 0.25],
+                }
+            }),
+            colors: None,
+        }],
+    };
+    let link = Link {
+        faces: vec![Face::North, Face::South],
+        depth: 0.5,
+        inset: 0.0,
+        tint: [1.0; 3],
+        idle: [0.5; 3],
+        pass: true,
+        frame: Frame {
+            sides: 0.05,
+            top: 0.05,
+            bottom: 0.2,
+        },
+        name: "Portal".into(),
+    };
+    let mesh = door.stretched("door#20x1x36", [20, 1, 36]).unwrap();
+    let collision = CollisionBody {
+        id: PORTAL.into(),
+        parts: link
+            .frame_boxes(&mesh)
+            .into_iter()
+            .map(|b| Part::Box {
+                center: b.center,
+                size: b.size,
+            })
+            .collect(),
+    };
+    let shape = bri_physics::content::collider(&collision)
+        .unwrap()
+        .build()
+        .shared_shape()
+        .clone();
+    Definition {
+        mesh,
+        collision,
+        shape,
+        indestructible: false,
+        special: Default::default(),
+        reflection: None,
+        link: Some(link),
+        glass: [0.0; 4],
+    }
+}
+/// Two linked portals standing on the ground side by side, both facing
+/// north and south across z = -6.25: what goes north into the one at x = 0
+/// comes out of the one at x = 40, going on north, and back.
+const BEYOND: Vec3 = Vec3::new(40.0, 0.0, 0.0);
+fn portal_world() -> World {
+    let mut world = World::new("Showcase".into(), "showcase".into(), vec![[1.0; 4], [0.6; 4]]);
+    for (id, x) in [(1, 0.0), (2, BEYOND.x)] {
+        let mut brick = bri_world::Brick::new(
+            bri_world::ContentRef::Resolved(PORTAL.into()),
+            [x, 3.6, -6.25],
+            1,
+        );
+        brick.name = Some("Portal_a".into());
+        world.bricks.insert(id, brick);
+    }
+    world.next_brick_id = 3;
+    world
 }
 
 fn add_ons() -> Arc<Catalog> {
@@ -1567,4 +1660,101 @@ fn rockets_and_tank_shells_knock_the_steel_ball_away() {
             "so does a tank shell (minigame {in_minigame}): {shell}"
         );
     }
+}
+
+/// Max, v0.1.11: "using the gravity gun through the portal don't work i
+/// can't grab or carry something through". The beam looks through a
+/// portal as he does: it grabs what is beyond, holds it there, and reels
+/// it back through to him.
+#[test]
+fn the_gun_grabs_through_a_portal_and_reels_it_back_through() {
+    let mut g = Game::with(portal_world());
+    let host = g.join("Host", Vec3::new(0.0, 0.05, 0.0));
+    g.s.give_tool(host, GUN, true).unwrap();
+    // Straight ahead through the portal; nothing on this side.
+    let crate_ =
+        g.s.spawn_vehicle_at(0, CRATE, BEYOND + Vec3::new(0.0, 1.0, -14.0), 0.0, Vec3::ZERO)
+            .unwrap();
+    g.steps(60);
+    let (start, _) = g.vehicle(crate_).unwrap();
+    trigger(&mut g, host, true);
+    assert_eq!(g.s.held_by(host), Some(ObjectRef::Vehicle(crate_)), "caught through the portal");
+    g.steps(120);
+    let (at, v) = g.vehicle(crate_).unwrap();
+    assert!(
+        at.distance(start) < 0.8 && v.length() < 0.3,
+        "held where it is, beyond the portal: {start} -> {at}, {v}"
+    );
+    // Reeled all the way in: back through the portal to the holder.
+    for _ in 0..3 {
+        let n = g.seq.entry(host).or_default();
+        *n += 1;
+        g.s.command(
+            host,
+            *n,
+            Command::Package(PackageCommand {
+                package: "gravity-gun".into(),
+                command: "reel".into(),
+                args: vec![bri_sim::session::PackageArg::Int(-5)],
+            }),
+        )
+        .unwrap();
+        g.steps(120);
+    }
+    assert_eq!(g.s.held_by(host), Some(ObjectRef::Vehicle(crate_)), "still held");
+    let (at, _) = g.vehicle(crate_).unwrap();
+    let feet = g.feet(host);
+    assert!(
+        at.x.abs() < 1.0 && at.z < feet.z - 1.5 && at.z > -6.25,
+        "came back through to just before the holder: {at}"
+    );
+}
+
+/// Carrying a held thing through a portal: it goes through ahead of the
+/// holder and stays where they hold it, without a jerk, while they follow.
+#[test]
+fn a_held_thing_carried_through_a_portal_stays_held() {
+    let mut g = Game::with(portal_world());
+    let host = g.join("Host", Vec3::new(0.0, 0.05, 6.0));
+    g.s.give_tool(host, GUN, true).unwrap();
+    let crate_ =
+        g.s.spawn_vehicle_at(0, CRATE, Vec3::new(0.0, 1.0, 0.0), 0.0, Vec3::ZERO)
+            .unwrap();
+    g.steps(60);
+    trigger(&mut g, host, true);
+    assert_eq!(g.s.held_by(host), Some(ObjectRef::Vehicle(crate_)));
+    // Lifted clear of the ground, and of the portal's sill.
+    g.look(host, 0.0, 0.25);
+    g.steps(60);
+    let held = g.vehicle(crate_).unwrap().0 - g.feet(host);
+    let grip = rotation(&g, crate_);
+    // Seen from where it went in (the far side moved back by the
+    // portal's carry), its path is one smooth line.
+    let back = |p: Vec3| if p.x > BEYOND.x / 2.0 { p - BEYOND } else { p };
+    let mut last = back(g.vehicle(crate_).unwrap().0);
+    let mut worst = 0.0_f32;
+    g.looks.get_mut(&host).unwrap().forward = 1.0;
+    for _ in 0..600 {
+        g.steps(1);
+        let now = back(g.vehicle(crate_).unwrap().0);
+        worst = worst.max(now.distance(last));
+        last = now;
+        if g.feet(host).x > BEYOND.x / 2.0 && g.feet(host).z < -10.0 {
+            break;
+        }
+    }
+    g.looks.get_mut(&host).unwrap().forward = 0.0;
+    let feet = g.feet(host);
+    assert!(feet.x > BEYOND.x / 2.0, "the holder went through: {feet}");
+    assert!(worst < 0.5, "it jumped {worst} in a tick");
+    g.steps(60);
+    assert_eq!(g.s.held_by(host), Some(ObjectRef::Vehicle(crate_)), "still held");
+    let (at, _) = g.vehicle(crate_).unwrap();
+    let ahead = at - g.feet(host);
+    assert!(
+        ahead.distance(held) < 0.75,
+        "still where they held it: {held} -> {ahead}"
+    );
+    let turned = rotation(&g, crate_).angle_between(grip);
+    assert!(turned < 0.15, "at the angle they held it: turned {turned}");
 }

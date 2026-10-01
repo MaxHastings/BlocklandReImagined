@@ -111,6 +111,40 @@ impl Passages {
         }
         (b, total)
     }
+    /// A sight (a ray) from `from` along unit `direction` for `length`,
+    /// through the openings it goes in by: one straight leg per side, in
+    /// order. Where things meet it is up to the caller, leg by leg: a hit
+    /// on a leg ends the sight there.
+    pub fn sight(&self, from: Vec3, direction: Vec3, length: f32) -> Vec<Leg> {
+        let mut legs = Vec::new();
+        let (mut from, mut direction, mut start) = (from, direction, 0.0);
+        let mut carry = Affine3A::IDENTITY;
+        for _ in 0..=MAX_CARRIES {
+            let left = length - start;
+            if left <= 0.0 {
+                break;
+            }
+            let opening = self.first(from, from + direction * left);
+            let span = opening.map_or(left, |(_, t)| left * t);
+            legs.push(Leg {
+                from,
+                direction,
+                start,
+                length: span,
+                carry,
+            });
+            let Some((passage, _)) = opening else {
+                break;
+            };
+            // On from the partner's side, past its plane by a hair.
+            let end = passage.carry.transform_point3(from + direction * span);
+            direction = passage.carry.transform_vector3(direction).normalize();
+            from = end + direction * PAST;
+            start += span + PAST;
+            carry = passage.carry * carry;
+        }
+        legs
+    }
     /// How a replicated body seen at `a` and then at `b` got there: the
     /// carry of the opening it went through in between, when that is a
     /// shorter way than straight across (poses are sent a tick or more
@@ -136,6 +170,31 @@ impl Passages {
             let side = o.side(p);
             side > -1e-4 && side <= reach && o.within(p, reach)
         })
+    }
+}
+
+/// One straight stretch of a sight ([`Passages::sight`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Leg {
+    pub from: Vec3,
+    /// Unit.
+    pub direction: Vec3,
+    /// How far along the whole sight it begins, and how long it is.
+    pub start: f32,
+    pub length: f32,
+    /// Takes a point where the sight began to where this leg is: the
+    /// openings before it, composed (identity on the first).
+    pub carry: Affine3A,
+}
+impl Leg {
+    /// Where the sight is `distance` along it, when that is on this leg.
+    pub fn at(&self, distance: f32) -> Vec3 {
+        self.from + self.direction * (distance - self.start)
+    }
+    /// How far `p` is from this leg.
+    pub fn off(&self, p: Vec3) -> f32 {
+        let along = (p - self.from).dot(self.direction).clamp(0.0, self.length);
+        p.distance(self.from + self.direction * along)
     }
 }
 
@@ -190,6 +249,30 @@ mod tests {
         let yaw = carried_yaw(&carry, 0.0);
         let moved = carry.transform_vector3(Vec3::NEG_Z);
         assert!(Vec3::new(yaw.sin(), 0.0, -yaw.cos()).abs_diff_eq(moved, 1e-5));
+    }
+
+    #[test]
+    fn a_sight_through_the_opening_goes_on_from_the_partner() {
+        let carry = Affine3A::from_translation(Vec3::new(10.0, 0.0, 0.0))
+            * Affine3A::from_rotation_y(std::f32::consts::FRAC_PI_2);
+        let passages = Passages {
+            list: vec![door(carry)],
+            closed: vec![],
+        };
+        let legs = passages.sight(Vec3::new(0.2, 1.0, 4.0), Vec3::NEG_Z, 10.0);
+        assert_eq!(legs.len(), 2);
+        assert!((legs[0].length - 4.0).abs() < 1e-5 && legs[0].carry == Affine3A::IDENTITY);
+        let (far, total) = (legs[1], 4.0 + PAST);
+        assert_eq!(far.carry, carry);
+        assert!((far.start - total).abs() < 1e-5 && (far.start + far.length - 10.0).abs() < 1e-5);
+        // Each point along it is the straight sight's, carried.
+        let straight = Vec3::new(0.2, 1.0, 4.0 - 7.0);
+        assert!(far.at(7.0).abs_diff_eq(carry.transform_point3(straight), 1e-4));
+        assert!(far.off(far.at(7.0)) < 1e-4 && legs[0].off(far.at(7.0)) > 1.0);
+        // Beside the opening: one leg, straight on.
+        let legs = passages.sight(Vec3::new(1.5, 1.0, 4.0), Vec3::NEG_Z, 10.0);
+        assert_eq!(legs.len(), 1);
+        assert!((legs[0].length - 10.0).abs() < 1e-5);
     }
 
     #[test]

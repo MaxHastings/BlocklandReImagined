@@ -1336,7 +1336,11 @@ impl Session {
             let passages = self.simulation.links().passages().clone();
             let world = self.vehicles.world.as_mut().context("No vehicle world")?;
             let before = std::mem::take(&mut self.vehicles.centres);
-            carry_through_openings(world, &mut self.simulation.physics, &passages, &before)?;
+            let carried =
+                carry_through_openings(world, &mut self.simulation.physics, &passages, &before)?;
+            for (vehicle, carry) in carried {
+                self.crossed(bri_package_runtime::ops::ObjectRef::Vehicle(vehicle.0), carry);
+            }
         }
         let world = self.vehicles.world.as_mut().context("No vehicle world")?;
         let intents = world.drain_intents();

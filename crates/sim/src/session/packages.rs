@@ -3288,18 +3288,14 @@ impl Session {
         }
         let aim = match def.aim_reach {
             Some(reach) => {
-                let eye = peer.player.eye();
-                let hit = self.simulation.target(eye, direction, reach)?;
-                // Also the nearest movable object before the brick, reported
-                // beside it: a script aiming at bricks sees what it did.
-                let object = self
-                    .aim_object(
-                        owner,
-                        eye,
-                        direction,
-                        hit.as_ref().map_or(reach, |h| h.distance),
-                    )
-                    .filter(|(_, _, d)| hit.as_ref().is_none_or(|h| *d < h.distance))
+                // Where the player looks, through portals as they see
+                // through them, and the nearest movable object before the
+                // brick, reported beside it: a script aiming at bricks sees
+                // what it did.
+                let sight = self.sight(owner, peer.player.eye(), direction, reach)?;
+                let hit = sight.hit;
+                let object = sight
+                    .object
                     .map(|(object, at, distance)| script::AimObject {
                         object,
                         position: at.to_array(),
@@ -3500,10 +3496,15 @@ impl Session {
         self.packages.as_mut().expect("checked").view = None;
         let liquids = self.simulation.liquids();
         let mut fallen = Vec::new();
+        let mut crossed = Vec::new();
         if let Some(host) = self.packages.as_mut() {
             for (id, e) in host.entities.iter_mut() {
                 if let Some(input) = e.drive {
-                    let _ = self.simulation.step_body(&mut e.body, input, &liquids);
+                    if let Ok(motion) = self.simulation.step_body(&mut e.body, input, &liquids)
+                        && let Some(carry) = motion.passed
+                    {
+                        crossed.push((*id, carry));
+                    }
                     if e.body.state().feet[1] < KILL_Y {
                         fallen.push(*id);
                     }
@@ -3524,11 +3525,18 @@ impl Session {
                     jump,
                     ..Default::default()
                 };
-                let _ = self.simulation.step_body(&mut e.body, input, &liquids);
+                if let Ok(motion) = self.simulation.step_body(&mut e.body, input, &liquids)
+                    && let Some(carry) = motion.passed
+                {
+                    crossed.push((*id, carry));
+                }
                 if e.body.state().feet[1] < KILL_Y {
                     fallen.push(*id);
                 }
             }
+        }
+        for (id, carry) in crossed {
+            self.crossed(ObjectRef::Entity(id), carry);
         }
         for id in fallen {
             self.remove_package_entity(id);

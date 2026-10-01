@@ -2465,6 +2465,7 @@ impl Session {
         let mut touches = Vec::new();
         let mut impacts = Vec::new();
         let mut glass_hits = Vec::new();
+        let mut crossed = Vec::new();
         let mut driving = Vec::new();
         let mut triggers = Vec::new();
         // Moves of players driving a package entity, for `step_packages`.
@@ -2581,6 +2582,9 @@ impl Session {
                             continue;
                         }
                     };
+                if let Some(carry) = motion.passed {
+                    crossed.push((owner, carry));
+                }
                 let state = peer.player.state();
                 if Vec3::from(state.velocity).length() > 0.5 {
                     peer.sitting = false;
@@ -2631,6 +2635,9 @@ impl Session {
         };
         impacts.retain(|(owner, _)| !smashers.contains(owner));
         self.fire_touches(touches);
+        for (owner, carry) in crossed {
+            self.crossed(bri_package_runtime::ops::ObjectRef::Player(owner), carry);
+        }
         for (owner, trigger, down) in triggers {
             // An Add-On tool's jet command (v20 `onTrigger` slot 4).
             if trigger == 4

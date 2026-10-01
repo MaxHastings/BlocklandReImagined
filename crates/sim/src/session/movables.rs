@@ -23,7 +23,7 @@ use super::*;
 use bri_package_runtime::ops::{MAX_HOLD_DISTANCE, ObjectRef, PLAYER_MASS};
 use bri_package_runtime::script::{HoldView, ObjectView, TetherView};
 use bri_vehicles::{self as veh, VehicleId};
-use glam::Quat;
+use glam::{Affine3A, Quat};
 use rapier3d::parry::query::ShapeCastOptions;
 use rapier3d::prelude::*;
 
@@ -106,6 +106,24 @@ struct Hold {
     /// For a player: whether they were alive when caught. Dying or
     /// respawning ends the hold (a corpse held is a corpse let go).
     alive: bool,
+    /// Takes a point where the holder is to where the object is: the
+    /// carries of the openings between them along the holder's sight,
+    /// composed (identity with none). The hold point, out along the
+    /// holder's look, lands through them, so a thing held through a portal
+    /// stays on its side, and one carried through stays held.
+    through: Affine3A,
+    /// The last crossing (`Movables::crossed`) already in place when the
+    /// hold began.
+    since: u64,
+}
+
+/// What a player's sight meets ([`Session::sight`]).
+#[derive(Debug, Default)]
+pub(super) struct Sight {
+    pub hit: Option<crate::simulation::Hit>,
+    /// The nearest movable object before the hit: it, where the sight met
+    /// it and how far along.
+    pub object: Option<(ObjectRef, Vec3, f32)>,
 }
 
 /// A player reaching for something to hold (`Op::Reach`).
@@ -133,6 +151,10 @@ pub(super) struct Movables {
     /// A smashing vehicle's energy left after what it broke this tick, so
     /// several contacts in one tick share one hit's energy.
     smash_energy: BTreeMap<u64, (u64, f32)>,
+    /// Openings players, vehicles and entities went through since the
+    /// holds last looked: a running count, what crossed and the carry.
+    crossings: Vec<(u64, ObjectRef, Affine3A)>,
+    crossed: u64,
 }
 
 /// What a rope is tied to, beyond its point in the world.
@@ -582,6 +604,105 @@ impl Session {
         let distance = hit.time_of_impact * reach;
         Some((object, eye + direction * distance, distance))
     }
+    /// What `aimer` sees from `eye` along `direction` within `reach`: the
+    /// first brick or map surface, and the nearest movable object before
+    /// it ([`Self::aim_object`]). The sight goes on through the openings
+    /// of linked bricks (portals) as shots and views do: positions are
+    /// where things are, distances run along the sight.
+    pub(super) fn sight(
+        &self,
+        aimer: OwnerId,
+        eye: Vec3,
+        direction: Vec3,
+        reach: f32,
+    ) -> Result<Sight> {
+        let direction = direction.normalize_or_zero();
+        let legs = self.simulation.passages().sight(eye, direction, reach);
+        for leg in legs {
+            let mut hit = if leg.length > 0.0 {
+                self.simulation.target(leg.from, leg.direction, leg.length)?
+            } else {
+                None
+            };
+            let object = self
+                .aim_object(
+                    aimer,
+                    leg.from,
+                    leg.direction,
+                    hit.as_ref().map_or(leg.length, |h| h.distance),
+                )
+                .filter(|(_, _, d)| hit.as_ref().is_none_or(|h| *d < h.distance))
+                .map(|(object, at, d)| (object, at, leg.start + d));
+            if let Some(hit) = &mut hit {
+                hit.distance += leg.start;
+            }
+            if hit.is_some() || object.is_some() {
+                return Ok(Sight { hit, object });
+            }
+        }
+        Ok(Sight::default())
+    }
+    /// How a point out along `player`'s sight is carried to where `point`
+    /// is: the openings the sight goes through before it passes nearest
+    /// `point`, composed (identity when it passes none).
+    fn carried_to(&self, player: OwnerId, point: Vec3) -> Affine3A {
+        let Some((eye, look)) = self
+            .peers
+            .get(&player)
+            .map(|p| (p.player.eye(), p.player.state().forward()))
+        else {
+            return Affine3A::IDENTITY;
+        };
+        self.simulation
+            .passages()
+            .sight(eye, look.normalize_or_zero(), MAX_HOLD_DISTANCE + HOLD_BREAK)
+            .into_iter()
+            .min_by(|a, b| a.off(point).total_cmp(&b.off(point)))
+            .map_or(Affine3A::IDENTITY, |leg| leg.carry)
+    }
+    /// `object` went through an opening: holds of it, and holds by it,
+    /// follow it through.
+    pub(super) fn crossed(&mut self, object: ObjectRef, carry: Affine3A) {
+        self.movables.crossed += 1;
+        self.movables
+            .crossings
+            .push((self.movables.crossed, object, carry));
+    }
+    /// Turn every hold's `through` with the openings its holder and its
+    /// object went through since it last looked.
+    fn follow_crossings(&mut self) {
+        let crossings = std::mem::take(&mut self.movables.crossings);
+        if crossings.is_empty() {
+            return;
+        }
+        // A held player's tumble is a vehicle; its crossing is theirs.
+        let bodies: BTreeMap<OwnerId, Option<VehicleId>> = self
+            .movables
+            .holds
+            .iter()
+            .map(|(p, h)| (*p, self.held_vehicle(h.target)))
+            .collect();
+        for (player, hold) in self.movables.holds.iter_mut() {
+            for (n, object, carry) in &crossings {
+                if *n <= hold.since {
+                    continue;
+                }
+                if *object == ObjectRef::Player(*player) {
+                    hold.through *= carry.inverse();
+                    // Its look turned with it: no lurch in the hold's lead
+                    // or spin.
+                    hold.last_point = hold.last_point.map(|p| carry.transform_point3(p));
+                    hold.last_yaw = hold
+                        .last_yaw
+                        .map(|y| bri_content::passage::carried_yaw(carry, y));
+                }
+                let body = bodies[player].map(|v| ObjectRef::Vehicle(v.0));
+                if *object == hold.target || Some(*object) == body {
+                    hold.through = *carry * hold.through;
+                }
+            }
+        }
+    }
 
     /// Apply one of the `physics` operations. `caller` is the player whose
     /// command asked, who must be allowed to move what they move.
@@ -947,6 +1068,9 @@ impl Session {
         // One holder at a time: taking it from someone else ends
         // their hold.
         self.movables.holds.retain(|_, h| h.target != target);
+        let centre = self.object_centre(target).unwrap_or_default();
+        // Held through the openings the holder sees it through.
+        let through = self.carried_to(player, at.map_or(centre, Vec3::from));
         let (anchor, grip) = match self.held_body(target) {
             Some(body) => {
                 let b = &self.simulation.physics.bodies[body];
@@ -954,7 +1078,7 @@ impl Session {
                 let anchor = at.map_or(Vec3::ZERO, |at| {
                     pose.rotation.inverse() * (Vec3::from(at) - b.center_of_mass())
                 });
-                let heading = Quat::from_rotation_y(-yaw);
+                let heading = turn_of(&through) * Quat::from_rotation_y(-yaw);
                 (
                     anchor,
                     turn.then(|| (heading.inverse() * pose.rotation).normalize()),
@@ -962,11 +1086,10 @@ impl Session {
             }
             None => (Vec3::ZERO, None),
         };
-        let centre = self.object_centre(target).unwrap_or_default();
         let closest = self
             .hold_point_of(target, anchor)
             .unwrap_or(centre)
-            .distance(eye + look * distance);
+            .distance(through.transform_point3(eye + look * distance));
         self.movables.holds.insert(
             player,
             Hold {
@@ -983,6 +1106,8 @@ impl Session {
                 closest,
                 stuck: 0,
                 alive: self.target_alive(target),
+                through,
+                since: self.movables.crossed,
             },
         );
         self.credit(target, player);
@@ -1008,13 +1133,11 @@ impl Session {
             if self.movables.holds.contains_key(&player) || self.seated(player) {
                 continue;
             }
-            let wall = self
-                .simulation
-                .target(eye, look, reach.distance)
+            let Some((target, at, met)) = self
+                .sight(player, eye, look, reach.distance)
                 .ok()
-                .flatten()
-                .map_or(reach.distance, |h| h.distance);
-            let Some((target, at, met)) = self.aim_object(player, eye, look, wall) else {
+                .and_then(|sight| sight.object)
+            else {
                 continue;
             };
             if !self.may_move(player, target) {
@@ -1224,6 +1347,7 @@ impl Session {
     pub(super) fn step_holds(&mut self) {
         self.step_tethers();
         self.step_thrown();
+        self.follow_crossings();
         self.step_reaching();
         let tick = self.simulation.state().tick;
         self.movables.credits.retain(|_, (_, until)| *until >= tick);
@@ -1278,8 +1402,10 @@ impl Session {
                 hold.turning = hold.turning * 0.5 + turned / DT * 0.5;
             }
             hold.last_yaw = Some(yaw);
-            // Aim for where the point will be when this tick's step ends.
-            let offset = point + hold.lead * DT - at;
+            // Aim for where the point will be when this tick's step ends,
+            // through the openings between the holder and the object.
+            let offset = hold.through.transform_point3(point + hold.lead * DT) - at;
+            let lead = hold.through.transform_vector3(hold.lead);
             let gap = offset.length();
             if gap > HOLD_BREAK {
                 self.movables.holds.remove(&player);
@@ -1318,12 +1444,13 @@ impl Session {
                 .min((1.6 * accel * gap).sqrt())
                 .min(HOLD_SPEED);
             let wanted =
-                (hold.lead + offset.normalize_or_zero() * closing).clamp_length_max(HOLD_CARRY);
+                (lead + offset.normalize_or_zero() * closing).clamp_length_max(HOLD_CARRY);
             let current = self.object_velocity(hold.target).unwrap_or_default();
             let change = (wanted - current + Vec3::Y * GRAVITY * DT).clamp_length_max(accel * DT);
             let _ = self.push_object(hold.target, change);
             if let Some(body) = self.held_body(hold.target) {
-                let heading = Quat::from_rotation_y(-yaw);
+                let turn = turn_of(&hold.through);
+                let heading = turn * Quat::from_rotation_y(-yaw);
                 let spin_accel = accel / radius.max(0.5);
                 if let Some(b) = self.simulation.physics.bodies.get_mut(body) {
                     let spin = b.angvel();
@@ -1335,7 +1462,7 @@ impl Session {
                             }
                             let (axis, angle) = error.normalize().to_axis_angle();
                             // Turning with the holder, and back to its grip.
-                            (Vec3::NEG_Y * hold.turning + axis * angle * TURN_GAIN)
+                            (turn * Vec3::NEG_Y * hold.turning + axis * angle * TURN_GAIN)
                                 .clamp_length_max(TURN_SPEED)
                         }
                         // Held things steady instead of spinning.
@@ -1615,6 +1742,11 @@ impl Session {
 /// Where a hold floats its object: `distance` along the holder's look,
 /// but never inside the holder, so looking down sets it before their feet
 /// instead of pulling it into them.
+/// The turn a carry (a rigid move) makes.
+fn turn_of(carry: &Affine3A) -> Quat {
+    Quat::from_mat3a(&carry.matrix3).normalize()
+}
+
 fn hold_point(eye: Vec3, look: Vec3, feet: Vec3, distance: f32, radius: f32) -> Vec3 {
     let mut point = eye + look * distance;
     let clear = PLAYER_HALF_WIDTH + 0.7 * radius;
