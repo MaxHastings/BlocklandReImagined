@@ -425,6 +425,7 @@ mod tests {
             default: false,
             paint_color: None,
             shared: false,
+            name_distance: None,
         };
         let names: BTreeMap<_, _> = [(2, "Host".to_string()), (3, "Guest".to_string())].into();
         let state = state(
