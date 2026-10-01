@@ -9141,7 +9141,7 @@ than the light the bulb gave.
   prints the surface under each, then for its lightmap texel and the eight
   around it how the bake split the light (`Bake::explain`: each light's
   level, facing, rays, weight and share, the leftover) and what is drawn
-  with the bulbs whole and broken.
+  with the bulbs whole and broken, and the live sun's facing and reach.
 - The shade stops glowing. The fit put the bulb's light 9 inside the
   shade, so the shade's outside faces away from it, and a light a texel
   faced away from never took a share. The shade's baked glow stayed in the

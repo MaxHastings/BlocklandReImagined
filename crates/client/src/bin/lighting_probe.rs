@@ -723,6 +723,21 @@ fn main() -> Result<()> {
                 [a[0] + t[0] * w, a[1] + t[1] * w]
             });
             println!("Pixel {pixel}: batch {b} '{}' at {:.2?}, lightmap uv {:.4?}", m.name, at.to_array(), uv);
+            // The live sun's part: the shader adds sun colour x facing x the
+            // texel's sun share, where its shadow map lets the sun through.
+            let normal = tri
+                .iter()
+                .zip(w)
+                .map(|(&i, w)| Vec3::from(pristine.vertices[i as usize].normal) * w)
+                .sum::<Vec3>()
+                .normalize_or_zero();
+            let sun = Vec3::from(pristine.sun_direction);
+            println!(
+                "  normal {:.2?}; sun: facing {:.2}, reaches past the interiors by a ray {}",
+                normal.to_array(),
+                normal.dot(-sun.normalize_or_zero()).max(0.0),
+                bake.sun_reaches(at, normal, sun)
+            );
             if !bri_render::scene::decomposed_lightmap(m.parameters) {
                 println!("  not a decomposed lightmap");
                 continue;

@@ -810,6 +810,12 @@ impl Bake {
             .unzip()
     }
 
+    /// For the lighting probe: whether the sun, shining along `direction`,
+    /// reaches a surface at `at` facing `normal` past the interiors.
+    pub fn sun_reaches(&self, at: Vec3, normal: Vec3, direction: Vec3) -> bool {
+        normal.dot(-direction) > 0.0 && self.sees(at, normal, at - direction.normalize_or_zero() * 10_000.0)
+    }
+
     /// For the lighting probe: how `dynamic_sheets` splits each of these
     /// texels (decomposition image, texel index) between `lights`, one or
     /// more lines each.
