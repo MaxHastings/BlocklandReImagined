@@ -113,6 +113,12 @@ pub struct Rules {
     /// `{uses:Emote_Critical}` in a value is its import's id.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub uses: Vec<String>,
+    /// Other Add-Ons the scripts loaded themselves (`exec("add-ons/
+    /// Emote_Critical/server.cs")`): each is a dependency of the rules, so
+    /// turning the Add-On on turns its import on too, and `{uses:X}` names
+    /// its id as for `uses`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires: Vec<String>,
 }
 
 /// The companion host-rules Add-On's id for the import `namespace`.
@@ -461,7 +467,7 @@ fn try_apply(
             "a pattern is named `{name}`, which every port already has"
         );
     }
-    for addon in port.rules.iter().flat_map(|r| &r.uses) {
+    for addon in port.rules.iter().flat_map(|r| r.uses.iter().chain(&r.requires)) {
         let namespace = crate::namespace_for(addon)?;
         ensure!(
             namespace != import.namespace,
@@ -660,7 +666,9 @@ fn rules_package(
             "source": format!("Port {} of Blockland Add-On {}", e.port, e.addon),
             "notes": port_notes(ports, e),
         },
-        "dependencies": { import.namespace: format!("={}", import.version) },
+        "dependencies": std::iter::once(Ok((import.namespace.to_owned(), Value::from(format!("={}", import.version)))))
+            .chain(rules.requires.iter().map(|addon| Ok((crate::namespace_for(addon)?, Value::from("*")))))
+            .collect::<Result<serde_json::Map<_, _>>>()?,
         "optional_dependencies": rules
             .uses
             .iter()

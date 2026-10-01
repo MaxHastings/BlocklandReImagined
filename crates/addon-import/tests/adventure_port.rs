@@ -61,7 +61,24 @@ fn imported_as(
         version: "1.0.0".into(),
     })
     .unwrap();
+    // ModernWarbattles' server.cs loaded Emote_Critical itself; its port
+    // requires the import, so it is installed beside it.
+    if addon == "Weapon_ModernWarbattles" {
+        import_critical(&dir.0.join("addons/emote_critical"));
+    }
     (dir, out, report)
+}
+
+/// The Critical Hit Emote's stand-in imported to `out`.
+fn import_critical(out: &Path) -> bri_addon_import::report::Report {
+    import(&Options {
+        input: Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ports/Emote_Critical"),
+        out: out.to_path_buf(),
+        reference: None,
+        core: vec![],
+        version: "1.0.0".into(),
+    })
+    .unwrap()
 }
 
 fn pack(out: &Path) -> Pack {
@@ -381,7 +398,9 @@ impl Game {
         Self::with(root, out, NS)
     }
     fn with(root: &Path, out: &Path, ns: &str) -> Self {
-        Self::with_add_ons(root, out, ns, &[])
+        // ModernWarbattles turns Emote_Critical on with it.
+        let required: &[&str] = if ns == NS { &["emote_critical"] } else { &[] };
+        Self::with_add_ons(root, out, ns, required)
     }
     /// With other imports in `<root>/addons` enabled beside it, by id.
     fn with_add_ons(root: &Path, out: &Path, ns: &str, extra: &[&str]) -> Self {
@@ -727,11 +746,12 @@ fn hitscan_crits_and_melee_kills_play_in_a_hosted_game() {
     // Past the spawn protection.
     g.steps(330);
     assert_eq!(g.health(b), 100.0);
+    // The revolver crits (×3) and shoves: Emote_Critical is on with it.
     g.equip(a, &revolver);
     let before = g.feet(b);
     g.shoot_at(a, b, 1.2);
-    assert!((g.health(b) - 85.0).abs() < 0.5, "{}", g.health(b));
-    assert!((g.feet(b) - before).length() < 0.01, "{before} {}", g.feet(b));
+    assert!((g.health(b) - 55.0).abs() < 0.5, "{}", g.health(b));
+    assert!((g.feet(b) - before).length() > 0.1, "{before} {}", g.feet(b));
 }
 
 /// With the Critical Hit Emote's stand-in imported and on, the revolver's
@@ -743,14 +763,7 @@ fn hitscan_crits_and_melee_kills_play_in_a_hosted_game() {
 fn crits_play_with_the_critical_hit_emote() {
     let (dir, out, report) = imported("crits");
     assert!(report.ports[0].applied, "{:?}", report.ports[0].reason);
-    let critical = import(&Options {
-        input: Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ports/Emote_Critical"),
-        out: dir.0.join("addons/emote_critical"),
-        reference: None,
-        core: vec![],
-        version: "1.0.0".into(),
-    })
-    .unwrap();
+    let critical = import_critical(&dir.0.join("critical-check"));
     // Its burst draws its own particle, though the emitter names a base
     // game brick node this import cannot see.
     let effects: Value = serde_json::from_slice(
@@ -770,9 +783,18 @@ fn crits_play_with_the_critical_hit_emote() {
         &std::fs::read(dir.0.join(format!("addons/{NS}-rules/package.json"))).unwrap(),
     )
     .unwrap();
-    assert_eq!(rules["optional_dependencies"], json!({ "emote_critical": "*" }));
+    assert_eq!(
+        rules["dependencies"],
+        json!({ NS: "=1.0.0", "emote_critical": "*" })
+    );
+    // Turning ModernWarbattles on turns its rules and Emote_Critical on.
+    let library = bri_package::library::Library::scan(&dir.0).unwrap();
+    let plan = library.plan(NS, true);
+    assert!(plan.refused.is_empty(), "{:?}", plan.refused);
+    assert!(plan.also.iter().any(|id| id == "emote_critical"), "{:?}", plan.also);
+    assert!(plan.also.contains(&format!("{NS}-rules")), "{:?}", plan.also);
 
-    let mut g = Game::with_add_ons(&dir.0, &out, NS, &["emote_critical"]);
+    let mut g = Game::new(&dir.0, &out);
     let revolver = format!("{NS}:weapon/revolveritem");
     let (a, b) = duel(&mut g, &[&revolver], 3.0);
     g.equip(a, &revolver);
