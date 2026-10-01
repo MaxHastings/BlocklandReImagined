@@ -33,3 +33,29 @@ them on every contact, as Torque's `onCollision` on each bounce.
 Checks: `cargo test -p bri-addon-import --test tier_port` (6/6) and
 `-p bri-weapons --test thrown_grenades` (5/5). The wider crate run and
 clippy were cut short by the session's disk running out.
+
+## Tier 1's click and its optional sound pack
+
+Tier 1 requires Sound_Blockland only inside `if(isFile("Add-Ons/Sound_Blockland/server.cs"))`
+and otherwise defines `Block_MoveBrick_Sound` and two more clicks from
+`base/data/sound/clickMove.wav` and its neighbours. `Block_MoveBrick_Sound`
+is in neither v20's scripts nor our audio packs, so on a v20-style
+install the else branch is what runs.
+
+- A require inside an `isFile` check for that same Add-On (in its block,
+  or as its one statement) is dependency status `if_present`, not
+  `missing`: the check reads as absent, as the `isFile` note says.
+- `Reference::base_sound`: the base game's sound playing a file, from core
+  scripts' filenames or the installed audio pack's clip ids. An Add-On's
+  profile of a base file is `consumed` ("plays the base game's
+  clickMoveSound"), and ports' `{s|sound}` fills name that base sound
+  (`Code::sounds`), so the reload clicks play.
+- A base-game `isFile` check is now reached before the general `isFile`
+  note (the Adventure lane's branch had shadowed it).
+- `file version.txt` is already `skipped` by the Adventure lane's rule (no
+  script names it).
+
+Checks: `cargo check -p bri-addon-import --tests` is clean. The tests
+(`tier1_click_is_the_base_games_when_no_sound_pack_is_there` and the
+`required_if_present` unit test) have not run yet: there is no disk space
+to link them.

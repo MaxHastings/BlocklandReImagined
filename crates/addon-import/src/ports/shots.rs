@@ -646,7 +646,7 @@ pub fn hitscans(h: &Hitscans, weapons: &Value, code: &super::Code) -> Result<Rea
             ("other_sound", &h.other_sound),
         ] {
             if let Some(sound) = named(field) {
-                hitscan[key] = json!(super::datablocks::sound_ref(weapons, &sound));
+                hitscan[key] = json!(super::datablocks::sound_ref(weapons, code, &sound));
             }
         }
         let mut damage = number(name, &Some(h.damage.clone()))?.unwrap_or(0.0);

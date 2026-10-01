@@ -254,6 +254,23 @@ impl Reference {
         Ok(r)
     }
 
+    /// The base game's sound that plays `file` (`base/data/sound/clickMove.wav`
+    /// is `clickMoveSound`): an Add-On's own profile of a base file plays
+    /// the same sound, which the game already has by that name.
+    pub fn base_sound(&self, file: &str) -> Option<&str> {
+        self.datablocks
+            .values()
+            .filter(|o| o.addon == "base")
+            .map(|o| &o.datablock)
+            .filter(|d| d.class.eq_ignore_ascii_case("AudioProfile"))
+            .find(|d| {
+                d.fields
+                    .get("filename")
+                    .is_some_and(|f| crate::literal(f).eq_ignore_ascii_case(file))
+            })
+            .map(|d| d.name.as_str())
+    }
+
     /// Finds a file with Torque's implicit extensions (`iconName`, textures).
     pub fn has_file(&self, path: &str) -> Option<String> {
         let p = path.to_ascii_lowercase();
@@ -345,13 +362,20 @@ impl Reference {
                 let (Some(name), Some(addon)) = (s["name"].as_str(), s["package"].as_str()) else {
                     continue;
                 };
+                // Its clip's id carries the file it plays
+                // (`v20/clip/base/data/sound/clickMove.wav`).
+                let fields = s["clip"]
+                    .as_str()
+                    .and_then(|c| c.strip_prefix("v20/clip/"))
+                    .map(|file| BTreeMap::from([("filename".to_owned(), quoted(file))]))
+                    .unwrap_or_default();
                 self.installed_datablock(
                     addon,
                     "",
                     "AudioProfile".into(),
                     name,
                     None,
-                    BTreeMap::new(),
+                    fields,
                 );
             }
         }

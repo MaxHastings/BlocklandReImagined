@@ -832,7 +832,7 @@ fn fill(v: &Value, values: &BTreeMap<String, String>, cx: &Fill) -> Result<Value
                 "kick" => kick(weapons, value)
                     .or_else(|| dependency_kick(&code.reference, value))
                     .with_context(|| format!("`{value}` is no projectile with a camera shake"))?,
-                "sound" => json!(sound_ref(weapons, value)),
+                "sound" => json!(sound_ref(weapons, code, value)),
                 "projectile" => json!(projectile_ref(weapons, value)),
                 // The explosion effect of the projectile it names
                 // (`spawnExplosion(tierFirePlayerProjectile, ...)`).
@@ -959,9 +959,13 @@ fn dependency_kick(reference: &BTreeMap<String, Definition>, name: &str) -> Opti
 }
 
 /// A sound by datablock name: the import's own id when it imported one of
-/// that name, else the name (the base game's, or another Add-On's).
-pub(super) fn sound_ref(weapons: &Value, name: &str) -> String {
+/// that name, the base game's sound of the same file for one of a base
+/// file, else the name (the base game's, or another Add-On's).
+pub(super) fn sound_ref(weapons: &Value, code: &super::Code, name: &str) -> String {
     let lower = name.to_ascii_lowercase();
+    if let Some(base) = code.sounds.get(&lower) {
+        return base.clone();
+    }
     weapons["sounds"]
         .as_object()
         .and_then(|m| {

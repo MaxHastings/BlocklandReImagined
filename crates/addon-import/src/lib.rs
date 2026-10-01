@@ -423,6 +423,17 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
         .filter(|d| d.class.eq_ignore_ascii_case("PlayerData"))
         .map(|d| d.name.clone())
         .collect();
+    // This Add-On's sounds of a base game file: the base sound by name.
+    code.sounds = cx
+        .owned
+        .values()
+        .filter(|o| o.d.class.eq_ignore_ascii_case("AudioProfile"))
+        .filter_map(|o| {
+            let file = source::resolve(&o.path, literal(o.fields.get("filename")?));
+            let sound = cx.reference.base_sound(&file)?;
+            Some((o.d.name.to_ascii_lowercase(), sound.to_owned()))
+        })
+        .collect();
     code.archetypes = player_types
         .iter()
         .map(|name| (name.to_ascii_lowercase(), archetype_id(&cx, name)))
@@ -744,6 +755,9 @@ fn top_level(cx: &mut Ctx, scripts: &[Script]) {
                         None,
                     );
                 }
+            } else if callee == "isfile" && c.args.len() == 1 && ships_with_game(&c.args[0]) {
+                // `isFile("add-ons/weapon_rocket_launcher/server.cs")`: a
+                // check for an Add-On the base game ships, always there.
             } else if callee == "isfile" {
                 // A query with no effect of its own: a top-level `if` choosing
                 // between another Add-On's files and the Add-On's own.
@@ -759,9 +773,6 @@ fn top_level(cx: &mut Ctx, scripts: &[Script]) {
                     at,
                     "registers a brick event; add-on events need the event system's open output set (door-closer 7)".into(),
                 );
-            } else if callee == "isfile" && c.args.len() == 1 && ships_with_game(&c.args[0]) {
-                // `isFile("add-ons/weapon_rocket_launcher/server.cs")`: a
-                // check for an Add-On the base game ships, always there.
             } else if !KNOWN_TOP_LEVEL.contains(&callee.as_str())
                 && c.receiver.is_none()
                 && !behaviour_pure(&callee)
@@ -2643,6 +2654,10 @@ fn sounds_and_rest(cx: &mut Ctx) {
                 if let Some(rel) = cx.outputs.get(&file.to_ascii_lowercase()).cloned() {
                     let id = cx.id("sound", &name, &name, &format!("assets/{rel}"));
                     cx.mark(&name, "sound", "converted_with_gaps", vec![id], Some("the audio system reads one fixed pack (role audio); this sound is packaged but nothing plays it by id yet".into()));
+                } else if let Some(sound) = cx.reference.base_sound(&file) {
+                    // Tier 1's `Block_MoveBrick_Sound` of the base click.
+                    let note = format!("plays the base game's {sound}, the same file");
+                    cx.mark(&name, "sound", "consumed", vec![], Some(note));
                 } else if let Some(base) = fields
                     .get("filename")
                     .and_then(|f| f.rsplit_once('"').and_then(|(head, _)| head.rsplit_once('"')))
@@ -2858,6 +2873,59 @@ fn dependency_package(addon: &str) -> Option<String> {
         .or_else(|| namespace_for(addon).ok())
 }
 
+/// Whether the call to `callee` on 1-based `line` of `text` sits in a
+/// block or statement whose `if` checks for a file of `addon`
+/// (`if(isFile("Add-Ons/<addon>/server.cs"))`), so it runs only where that
+/// Add-On is present.
+fn required_if_present(text: &str, line: usize, callee: &str, addon: &str) -> bool {
+    let text = tscript::without_comments(text);
+    let start: usize = text
+        .split_inclusive('\n')
+        .take(line.saturating_sub(1))
+        .map(str::len)
+        .sum();
+    // Up to the call itself, so a check earlier on its line counts.
+    let at = text[start..]
+        .lines()
+        .next()
+        .and_then(|l| l.to_ascii_lowercase().find(&callee.to_ascii_lowercase()))
+        .map_or(start, |i| start + i);
+    let before = &text.as_bytes()[..at];
+    let wanted = format!("isfile(\"add-ons/{}/", addon.to_ascii_lowercase());
+    let guards = |header: &[u8]| {
+        let header: String = String::from_utf8_lossy(header)
+            .to_ascii_lowercase()
+            .split_whitespace()
+            .collect();
+        header.starts_with("if(") && header.contains(&wanted)
+    };
+    let statement = |end: usize| {
+        before[..end]
+            .iter()
+            .rposition(|b| matches!(b, b';' | b'{' | b'}'))
+            .map_or(0, |p| p + 1)
+    };
+    // `if(isFile(...)) ForceRequiredAddOn(...);` with no block.
+    if guards(&before[statement(before.len())..]) {
+        return true;
+    }
+    let mut depth = 0usize;
+    for (i, b) in before.iter().enumerate().rev() {
+        match b {
+            b'}' => depth += 1,
+            b'{' if depth > 0 => depth -= 1,
+            b'{' => {
+                // The header of a block the call is in.
+                if guards(&before[statement(i)..i]) {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 fn dependencies(cx: &mut Ctx, scripts: &[Script]) {
     let mut deps: BTreeMap<String, Dependency> = BTreeMap::new();
     for s in scripts {
@@ -2868,6 +2936,27 @@ fn dependencies(cx: &mut Ctx, scripts: &[Script]) {
             }
             let Some(a) = c.args.first() else { continue };
             let addon = literal(a).to_owned();
+            if cx
+                .src
+                .get(&s.path)
+                .is_some_and(|f| {
+                    required_if_present(&String::from_utf8_lossy(&f.bytes), c.line, &c.callee, &addon)
+                })
+            {
+                // `if(isFile("Add-Ons/Sound_Blockland/server.cs"))
+                // ForceRequiredAddOn("Sound_Blockland");`: required only
+                // where the player has it. `isFile` reads as absent, so the
+                // Add-On takes its own branch and does not need it.
+                deps.entry(addon.to_ascii_lowercase()).or_insert(Dependency {
+                    addon: addon.clone(),
+                    how: c.callee.clone(),
+                    source: Some(Location::new(&s.path, c.line)),
+                    status: "if_present".into(),
+                    package: None,
+                    uses: vec![],
+                });
+                continue;
+            }
             let found = cx
                 .reference
                 .addons
@@ -3116,5 +3205,18 @@ mod tests {
                 "add-ons"
             ]
         );
+    }
+
+    #[test]
+    fn a_require_inside_a_check_for_that_add_on_runs_only_where_it_is() {
+        let text = "if(isFile(\"Add-Ons/Sound_X/server.cs\"))\n{\n   // the pack\n   ForceRequiredAddOn(\"Sound_X\");\n}\nelse\n{\n   ForceRequiredAddOn(\"Sound_X\");\n}\nif (isFile(\"add-ons/sound_x/a.wav\"))\n   forceRequiredAddOn(\"Sound_X\");\nForceRequiredAddOn(\"Sound_X\");\nif(isFile(\"Add-Ons/Other/server.cs\")) { ForceRequiredAddOn(\"Sound_X\"); }\nif(isFile(\"Add-Ons/Sound_X/b.cs\")) ForceRequiredAddOn(\"Sound_X\");\n";
+        let guarded =
+            |line| super::required_if_present(text, line, "ForceRequiredAddOn", "Sound_X");
+        assert!(guarded(4), "in the check's block");
+        assert!(!guarded(8), "in its else");
+        assert!(guarded(11), "the check's one statement, with no block");
+        assert!(!guarded(12), "after it");
+        assert!(!guarded(13), "a check for another Add-On");
+        assert!(guarded(14), "a check on the call's own line");
     }
 }
