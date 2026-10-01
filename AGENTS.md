@@ -98,7 +98,9 @@ active goal incomplete until the full alpha contract and handoff are satisfied.
 ## Before you push
 A pre-push hook runs `tools/gate.py` on every push to main. It refuses the
 push unless the commit contains the latest origin/main, no pushed commit undoes
-recent main work (the stale-tree check), protocol VERSION does not go backwards,
+recent main work (the stale-tree check), protocol VERSION does not go backwards (each wire
+change adds one file to `crates/net/protocol-changes/` instead of editing the
+number; see its README),
 and build, `clippy -D warnings`, `bri-client --check` on the main checkout's
 `content` and `cargo test --workspace -- --include-ignored` pass (about 10
 minutes). Push with `python tools/gate.py --push`: with your work committed,
