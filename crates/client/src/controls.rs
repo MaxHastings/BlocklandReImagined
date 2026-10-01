@@ -63,6 +63,10 @@ pub struct Controls {
     vehicle_mouse_plain: bool,
     /// The held weapon's aim (`Image::zoom`), while one is held.
     aim: Option<bri_weapons::Zoom>,
+    /// The aim's wheel step (`Zoom::levels`), kept while it is held.
+    aim_level: usize,
+    /// The aim's sway (`Zoom::sway`), eased in while aiming and out after.
+    sway: SwayState,
     /// The roll an opening in a floor or ceiling turned the view by, and
     /// how it turned the body's eye and camera pivot about its middle
     /// (upside down, for a floor onto a floor) past the turn of its
@@ -91,6 +95,22 @@ impl PortalEase {
         glam::Quat::IDENTITY.slerp(self.tilt, self.left())
     }
 }
+/// Where a swaying aim is on its figure of eight. The drift is added to
+/// the look itself, so the shot goes where the scope shows and the host
+/// hears nothing new: it is part of the player's own aim.
+#[derive(Clone, Copy, Debug, Default)]
+struct SwayState {
+    /// The sway last aimed with, kept to ease out after the aim ends.
+    def: Option<bri_weapons::Sway>,
+    /// Rounds of the figure of eight so far.
+    phase: f64,
+    /// How much of the drift is applied, 0 to the stance's multiple.
+    gain: f32,
+    /// The drift already added to the look.
+    applied: (f32, f32),
+}
+/// Seconds a sway takes to ease fully in or out.
+const SWAY_EASE_SECONDS: f32 = 0.6;
 /// A mouse driver's `mHead.x` returning after Free Look as v20 runs it:
 /// in first person each 32 ms tick halves it (blocklandv20.exe 0x5aeb0b),
 /// and the view shows it between the last two ticks
@@ -265,8 +285,9 @@ impl Controls {
                 if !yaw.is_finite() || !pitch.is_finite() {
                     return true;
                 }
-                // `getMouseAdjustAmount`: sensitivity × `$cameraFov` / 90.
-                let scale = self.fov() / 90.0;
+                // `getMouseAdjustAmount`: sensitivity × `$cameraFov` / 90,
+                // then the aim's own `sensitivity` while aiming.
+                let scale = self.fov() / 90.0 * self.aim_sensitivity();
                 // OS mouse Y increases downwards; simulation pitch increases up.
                 self.look(yaw * scale, -pitch * scale);
             }
@@ -710,7 +731,10 @@ impl Controls {
             head_yaw: self.free_yaw,
             jump: self.held(HeldControl::Jump),
             crouch: self.held(HeldControl::Crouch),
-            jet: self.held(HeldControl::Jet),
+            // A scope on the right mouse button may take jet for itself
+            // (`Zoom::jets`).
+            jet: self.held(HeldControl::Jet)
+                && self.aim.as_ref().is_none_or(|a| !a.on_jet || a.jets),
         }
     }
     /// The pitch the body's look pose (the arms' `look` thread) shows: a
@@ -782,27 +806,125 @@ impl Controls {
     /// Jet, when the aim is `on_jet`) then aims at its FOV in place of the
     /// wheel's zoom.
     pub fn set_aim(&mut self, aim: Option<bri_weapons::Zoom>) {
-        self.aim = aim.filter(|a| a.fov.is_finite());
+        let aim = aim.filter(|a| a.validate().is_ok());
+        if aim != self.aim {
+            // Another weapon (or none) starts from its widest step.
+            self.aim_level = 0;
+            self.aim = aim;
+        }
     }
     /// Aiming down the held weapon's sights.
     pub fn aiming(&self) -> bool {
-        self.aim.is_some_and(|a| {
+        self.aim.as_ref().is_some_and(|a| {
             self.observer.is_none()
                 && (self.held(HeldControl::Zoom) || (a.on_jet && self.held(HeldControl::Jet)))
         })
     }
+    fn aim_while_aiming(&self) -> Option<&bri_weapons::Zoom> {
+        self.aim.as_ref().filter(|_| self.aiming())
+    }
     /// Aiming hides the crosshair when the aim says so.
     pub fn aim_hides_crosshair(&self) -> bool {
-        self.aiming() && self.aim.is_some_and(|a| !a.crosshair)
+        self.aim_while_aiming().is_some_and(|a| !a.crosshair)
+    }
+    /// Look speed's multiple from the aim (`Zoom::sensitivity`), 1 when
+    /// not aiming.
+    fn aim_sensitivity(&self) -> f32 {
+        self.aim_while_aiming().map_or(1.0, |a| a.sensitivity)
+    }
+    /// The mouse wheel steps the aim's magnification (`Zoom::levels`)
+    /// rather than the tools.
+    pub fn aim_takes_wheel(&self) -> bool {
+        self.aim_while_aiming()
+            .is_some_and(|a| !a.levels.is_empty())
+    }
+    /// Step the aim's magnification by `notches` (positive rolled forward,
+    /// zooming in); false when the wheel is not the aim's.
+    pub fn aim_wheel(&mut self, notches: i32) -> bool {
+        let Some(levels) = self.aim_while_aiming().map(|a| a.levels.len()) else {
+            return false;
+        };
+        if levels == 0 {
+            return false;
+        }
+        self.aim_level =
+            (self.aim_level as i64 + i64::from(notches)).clamp(0, levels as i64) as usize;
+        true
+    }
+    /// The scope picture to draw over the screen (`Zoom::overlay`): while
+    /// aiming from the eye, once the camera is all the way in.
+    pub fn scope_overlay(&self) -> Option<&str> {
+        self.aim_while_aiming()
+            .and_then(|a| a.overlay.as_deref())
+            .filter(|_| self.at_eye())
     }
     /// Third person as the view shows it: aiming a `first_person` aim
     /// looks from the eye whatever the toggle says.
     pub fn third_person_view(&self) -> bool {
-        self.third_person && !(self.aiming() && self.aim.is_some_and(|a| a.first_person))
+        self.third_person && !self.aim_while_aiming().is_some_and(|a| a.first_person)
+    }
+    /// Move a swaying aim along its figure of eight (`Zoom::sway`), easing
+    /// in while aiming on foot and out after. Crouching steadies it and
+    /// moving shakes it, as the sway says. Deterministic in the frame
+    /// times it is given.
+    pub fn advance_sway(&mut self, seconds: f32) {
+        if !seconds.is_finite() {
+            return;
+        }
+        let seconds = seconds.clamp(0.0, 0.25);
+        let on_foot = self.observer.is_none()
+            && !self.mounted
+            && self.vehicle_view.is_none()
+            && self.seat_yaw.is_none();
+        let aimed = self
+            .aim_while_aiming()
+            .and_then(|a| a.sway)
+            .filter(|_| on_foot);
+        if let Some(def) = aimed {
+            self.sway.def = Some(def);
+        }
+        let Some(def) = self.sway.def else {
+            return;
+        };
+        let target = match aimed {
+            None => 0.0,
+            Some(_) if self.held(HeldControl::Crouch) => def.crouched,
+            Some(_) => {
+                let moving = [
+                    HeldControl::Forward,
+                    HeldControl::Backward,
+                    HeldControl::Left,
+                    HeldControl::Right,
+                    HeldControl::Jump,
+                    HeldControl::Jet,
+                ]
+                .into_iter()
+                .any(|c| {
+                    self.held(c)
+                        && !(c == HeldControl::Jet && self.aim.as_ref().is_some_and(|a| a.on_jet))
+                });
+                if moving { def.moving } else { 1.0 }
+            }
+        };
+        let step = seconds / SWAY_EASE_SECONDS;
+        self.sway.gain += (target - self.sway.gain).clamp(-step, step);
+        self.sway.phase = (self.sway.phase + f64::from(seconds / def.seconds)).fract();
+        let (yaw, pitch) = def.offset(self.sway.phase);
+        let now = (yaw * self.sway.gain, pitch * self.sway.gain);
+        let (dy, dp) = (now.0 - self.sway.applied.0, now.1 - self.sway.applied.1);
+        self.sway.applied = now;
+        if on_foot {
+            self.yaw = wrap(self.yaw + dy);
+            self.pitch = (self.pitch + dp).clamp(-FRAC_PI_2, FRAC_PI_2);
+        }
+        if self.sway.gain == 0.0 {
+            self.sway = SwayState::default();
+        }
     }
     fn target_fov(&self) -> f32 {
-        if let Some(aim) = self.aim.filter(|_| self.aiming()) {
-            aim.fov.clamp(ZOOM_FOV_RANGE.0, ZOOM_FOV_RANGE.1)
+        if let Some(aim) = self.aim_while_aiming() {
+            aim.level_fov(self.aim_level)
+                .clamp(ZOOM_FOV_RANGE.0, ZOOM_FOV_RANGE.1)
         } else if self.held(HeldControl::Zoom) {
             self.zoom_fov.unwrap_or(10.0)
         } else {
@@ -1506,5 +1628,167 @@ mod tests {
         assert_eq!(steer(false, true), steer(true, true));
         assert_eq!(steer(false, false), -steer(false, true));
         assert_eq!(steer(true, false), steer(false, false));
+    }
+    fn scope() -> bri_weapons::Zoom {
+        serde_json::from_value(serde_json::json!({
+            "fov": 22, "on_jet": true, "jets": false, "crosshair": false,
+            "first_person": true, "levels": [10], "sensitivity": 0.5,
+            "overlay": "scope/scope",
+            "sway": {"degrees": 1.0, "seconds": 4.0, "crouched": 0.25, "moving": 2.0}
+        }))
+        .unwrap()
+    }
+    fn settle(c: &mut Controls) {
+        for _ in 0..120 {
+            c.advance_zoom(1.0 / 60.0);
+            c.advance_view(1.0 / 60.0);
+        }
+    }
+    /// The mouse wheel steps a scope's magnification while it is aimed,
+    /// and the tools otherwise; the step is kept while the weapon is held
+    /// and forgotten with it.
+    #[test]
+    fn a_scope_zooms_in_steps_on_the_wheel() {
+        let mut c = Controls::default();
+        c.set_aim(Some(scope()));
+        assert!(
+            !c.aim_takes_wheel() && !c.aim_wheel(1),
+            "not aiming: the tools"
+        );
+        held(&mut c, HeldControl::Jet, true);
+        settle(&mut c);
+        assert_eq!(c.fov(), 22.0);
+        assert!(c.aim_takes_wheel());
+        assert!(c.aim_wheel(1));
+        settle(&mut c);
+        assert_eq!(c.fov(), 10.0);
+        assert!(c.aim_wheel(3), "further in stays at the last step");
+        settle(&mut c);
+        assert_eq!(c.fov(), 10.0);
+        held(&mut c, HeldControl::Jet, false);
+        settle(&mut c);
+        assert_eq!(c.fov(), 90.0);
+        held(&mut c, HeldControl::Jet, true);
+        settle(&mut c);
+        assert_eq!(c.fov(), 10.0, "the step is kept while it is held");
+        assert!(c.aim_wheel(-1));
+        settle(&mut c);
+        assert_eq!(c.fov(), 22.0);
+        c.aim_wheel(1);
+        c.set_aim(None);
+        c.set_aim(Some(scope()));
+        settle(&mut c);
+        assert_eq!(c.fov(), 22.0, "put away and drawn again, it starts wide");
+    }
+    /// Looking through the scope turns at its `sensitivity` on top of the
+    /// field of view's own slowing, and its jet only aims.
+    #[test]
+    fn a_scope_sets_look_speed_and_keeps_jet() {
+        let mut c = Controls::default();
+        c.set_aim(Some(scope()));
+        held(&mut c, HeldControl::Jet, true);
+        settle(&mut c);
+        assert!(!c.movement().jet, "the right mouse button only aims");
+        assert_eq!(c.scope_overlay(), Some("scope/scope"));
+        assert!(c.aim_hides_crosshair());
+        let before = c.yaw;
+        c.action(&GameAction::Look {
+            yaw: 0.1,
+            pitch: 0.0,
+        });
+        let turned = c.yaw - before;
+        let expected = 0.1 * 22.0 / 90.0 * 0.5;
+        assert!((turned - expected).abs() < 1e-6, "{turned} {expected}");
+        // A scope that lets its holder jet, and no scope at all, jet.
+        let mut jetting = scope();
+        jetting.jets = true;
+        c.set_aim(Some(jetting));
+        assert!(c.movement().jet);
+        c.set_aim(None);
+        assert!(c.movement().jet);
+        assert_eq!(c.scope_overlay(), None);
+    }
+    /// A third-person player aiming a first-person scope sees its picture
+    /// only once the camera is in the eye.
+    #[test]
+    fn the_scope_picture_waits_for_the_eye() {
+        let mut c = Controls {
+            third_person: true,
+            ..Default::default()
+        };
+        settle(&mut c);
+        c.set_aim(Some(scope()));
+        held(&mut c, HeldControl::Jet, true);
+        assert_eq!(c.scope_overlay(), None);
+        settle(&mut c);
+        assert_eq!(c.scope_overlay(), Some("scope/scope"));
+    }
+    fn swayed(c: &mut Controls, frames: usize) -> Vec<(f32, f32)> {
+        (0..frames)
+            .map(|_| {
+                c.advance_sway(1.0 / 60.0);
+                (c.yaw, c.pitch)
+            })
+            .collect()
+    }
+    /// The aim drifts along its figure of eight while aimed, the same on
+    /// every run, steadier crouched, and comes back to where the mouse left
+    /// it once the aim ends.
+    #[test]
+    fn a_scope_sways_and_settles() {
+        let mut c = Controls::default();
+        c.set_aim(Some(scope()));
+        held(&mut c, HeldControl::Jet, true);
+        let path = swayed(&mut c, 600);
+        let widest = path.iter().map(|(y, _)| y.abs()).fold(0.0, f32::max);
+        assert!(
+            (widest - 1f32.to_radians()).abs() < 0.02f32.to_radians(),
+            "{} degrees",
+            widest.to_degrees()
+        );
+        let mut again = Controls::default();
+        again.set_aim(Some(scope()));
+        held(&mut again, HeldControl::Jet, true);
+        assert_eq!(swayed(&mut again, 600), path, "deterministic");
+        held(&mut c, HeldControl::Crouch, true);
+        let crouched = swayed(&mut c, 600)[300..]
+            .iter()
+            .map(|(y, _)| y.abs())
+            .fold(0.0, f32::max);
+        assert!(
+            (crouched - 0.25f32.to_radians()).abs() < 0.02f32.to_radians(),
+            "{} degrees crouched",
+            crouched.to_degrees()
+        );
+        held(&mut c, HeldControl::Crouch, false);
+        held(&mut c, HeldControl::Jet, false);
+        swayed(&mut c, 120);
+        assert!(
+            c.yaw.abs() < 1e-5 && c.pitch.abs() < 1e-5,
+            "{} {}",
+            c.yaw,
+            c.pitch
+        );
+        // The mouse still turns freely under it.
+        held(&mut c, HeldControl::Jet, true);
+        let turned = 0.4 * c.fov() / 90.0 * 0.5; // the view and the scope's look speed
+        c.action(&GameAction::Look {
+            yaw: 0.4,
+            pitch: 0.0,
+        });
+        swayed(&mut c, 97);
+        held(&mut c, HeldControl::Jet, false);
+        swayed(&mut c, 120);
+        assert!((c.yaw - turned).abs() < 1e-5, "{} {}", c.yaw, turned);
+    }
+    /// Seated, driving or observing, the sway leaves the view alone.
+    #[test]
+    fn a_seated_scope_does_not_sway() {
+        let mut c = Controls::default();
+        c.set_mounted(true);
+        c.set_aim(Some(scope()));
+        held(&mut c, HeldControl::Jet, true);
+        swayed(&mut c, 300);
+        assert_eq!((c.yaw, c.pitch), (0.0, 0.0));
     }
 }

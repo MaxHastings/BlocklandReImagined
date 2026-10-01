@@ -570,6 +570,7 @@ impl AvatarAssets {
             crouch: CrouchThread::default(),
             body: None,
             dead: false,
+            hidden_nodes: Vec::new(),
             posed_nodes: Vec::new(),
             animated_nodes: Vec::new(),
             node_bounds: None,
@@ -652,6 +653,9 @@ pub struct AvatarMesh {
     body: Option<u64>,
     /// Whether the drawn body lies dead (`drawn_life`), for Add-On code.
     dead: bool,
+    /// Body nodes the held images hide (`bri_weapons::Image::hide_nodes`),
+    /// lower case; the outfit keeps them for when the image goes.
+    hidden_nodes: Vec<String>,
 }
 
 /// Authored right/left hand readiness selected by mounted vanilla images.
@@ -1378,7 +1382,13 @@ impl AvatarMesh {
         let colors: Vec<_> = assets
             .object_names
             .iter()
-            .map(|name| self.outfit.nodes.get(name).copied())
+            .map(|name| {
+                self.outfit
+                    .nodes
+                    .get(name)
+                    .copied()
+                    .filter(|_| !self.hidden_nodes.contains(name))
+            })
             .collect();
         let binding = crate::avatar_mesh::Binding {
             shape: &assets.rig.shape,
@@ -1456,6 +1466,14 @@ impl AvatarMesh {
     /// Whether the drawn body lies dead ([`drawn_life`]).
     pub fn set_dead(&mut self, dead: bool) {
         self.dead = dead;
+    }
+    /// The body nodes the held images hide (`Image::hide_nodes`), shown
+    /// again as soon as no held image names them.
+    pub fn set_hidden_nodes(&mut self, nodes: impl IntoIterator<Item = String>) {
+        let mut nodes: Vec<String> = nodes.into_iter().map(|n| n.to_ascii_lowercase()).collect();
+        nodes.sort();
+        nodes.dedup();
+        self.hidden_nodes = nodes;
     }
     /// Build the mesh of a pose waiting from `defer_mesh`, if any.
     pub fn build_pending(&mut self, assets: &AvatarAssets) -> Result<()> {
@@ -1861,6 +1879,9 @@ mod tests {
             if frame == 32 {
                 mesh.outfit.nodes.insert("chest".into(), [1.0, 0.0, 0.0, 0.5]);
             }
+            // A held image that draws its own hands hides the Blockhead's.
+            let hands = (34..38).contains(&frame).then(|| ["LHand".to_string(), "rhand".to_string()]);
+            mesh.set_hidden_nodes(hands.into_iter().flatten());
             mesh.pose(&assets, &p, f64::from(frame) / 30.0)?;
             let pose = mesh.pending.take().context("A deferred pose")?;
             let mut reference = mesh.data.clone();
@@ -1877,7 +1898,10 @@ mod tests {
                     translucent_materials: Some(&mesh.translucent_materials),
                     unassigned_material: mesh.materials[0],
                 },
-                |name| mesh.outfit.nodes.get(&name.to_ascii_lowercase()).copied(),
+                |name| {
+                    let name = name.to_ascii_lowercase();
+                    mesh.outfit.nodes.get(&name).copied().filter(|_| !mesh.hidden_nodes.contains(&name))
+                },
             )?;
             mesh.restructured = false;
             mesh.build_mesh(&assets, &pose)?;
@@ -1896,9 +1920,10 @@ mod tests {
                 assert_eq!(fields(a), fields(b), "frame {frame}");
             }
         }
-        // At least the first frame, skis on and off, and the new paint lay
-        // the mesh out again; every other frame reuses the layout.
-        assert!((4..10).contains(&layouts), "{layouts} layouts");
+        // At least the first frame, skis on and off, the new paint and the
+        // hands hidden and shown lay the mesh out again; every other frame
+        // reuses the layout.
+        assert!((4..12).contains(&layouts), "{layouts} layouts");
         Ok(())
     }
 

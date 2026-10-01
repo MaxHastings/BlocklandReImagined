@@ -430,6 +430,10 @@ pub struct App {
     /// The held tool's `wheel` command: while its trigger is held, it takes
     /// the mouse wheel (`UiUpdate::ToolWheel`).
     tool_wheel: Option<String>,
+    /// The aim takes the mouse wheel (`Controls::aim_takes_wheel`).
+    aim_wheel: bool,
+    /// The scope overlay shown (`ItemUi::scope_overlay`).
+    scope_overlay: Option<(u64, f32)>,
     cpu_terrain: Vec<Arc<bri_render::terrain_scene::TerrainScene>>,
     renderer: Option<crate::gpu_build::Building<SceneRenderer>>,
     effects: crate::effects::WorldEffects,
@@ -1714,6 +1718,8 @@ impl App {
             steering_sent: None,
             crosshair_hidden: false,
             tool_wheel: None,
+            aim_wheel: false,
+            scope_overlay: None,
             cpu_terrain: Vec::new(),
             renderer: None,
             effects,
@@ -2698,7 +2704,7 @@ impl App {
             let mounted = mounted.iter().find(|m| m.hand == 0)?;
             pack.images.get(&mounted.image)
         });
-        self.controls.set_aim(image.and_then(|i| i.zoom));
+        self.controls.set_aim(image.and_then(|i| i.zoom.clone()));
         let hidden = image.is_some_and(|i| !i.crosshair) || self.controls.aim_hides_crosshair();
         if hidden != self.crosshair_hidden {
             self.crosshair_hidden = hidden;
@@ -2711,6 +2717,22 @@ impl App {
             .and_then(|i| i.commands.wheel.clone())
             .filter(|_| self.controls.observer().is_none() && !self.local_weapon_seat());
         claim_wheel(&mut self.ui, &mut self.tool_wheel, wheel);
+        // Aiming a scope with steps, the wheel zooms instead (`Zoom::levels`).
+        let aim_wheel = self.controls.aim_takes_wheel();
+        if aim_wheel != self.aim_wheel {
+            self.aim_wheel = aim_wheel;
+            self.ui.apply(UiUpdate::AimWheel(aim_wheel));
+        }
+        // A scope's picture while aiming from the eye (`Zoom::overlay`);
+        // the weapon itself is not drawn behind it.
+        let overlay = image
+            .filter(|_| self.controls.scope_overlay().is_some())
+            .and_then(|i| self.item_ui.scope_overlay(&i.id));
+        if overlay != self.scope_overlay {
+            self.scope_overlay = overlay;
+            self.world_items.set_scoped(overlay.is_some());
+            self.ui.apply(UiUpdate::ScopeOverlay(overlay));
+        }
     }
     /// Dead players watch their corpse from the orbit camera.
     fn third_person_view(&self) -> bool {
@@ -6211,6 +6233,7 @@ impl PlatformApp for App {
             });
         }
         self.update_held_weapon();
+        self.controls.advance_sway(elapsed.as_secs_f32());
         self.controls.advance_zoom(elapsed.as_secs_f32());
         self.controls.ease_roll(elapsed.as_secs_f32());
         self.controls.advance_view(elapsed.as_secs_f32());
@@ -6933,19 +6956,27 @@ impl PlatformApp for App {
                     self.avatar_action_images.remove(owner);
                 }
                 let mut ready_hands = Vec::new();
+                let mut hidden_nodes = Vec::new();
                 if let Some(images) = view.weapons.images.get(owner) {
                     for mounted in images {
+                        let image = self.content.weapons.pack.images.get(&mounted.image);
+                        if let Some(image) = image {
+                            hidden_nodes.extend(image.hide_nodes.iter().cloned());
+                        }
                         if let Some((right, left)) =
                             bri_weapons::scripted_arm_pose(&mounted.image, &mounted.state)
                         {
                             ready_hands.extend([(0, right), (1, left)]);
-                        } else if let Some(image) =
-                            self.content.weapons.pack.images.get(&mounted.image)
-                        {
-                            ready_hands.push((mounted.hand, image.arm_ready));
+                        } else if let Some(image) = image {
+                            if image.both_arms {
+                                ready_hands.extend([(0, true), (1, true)]);
+                            } else {
+                                ready_hands.push((mounted.hand, image.arm_ready));
+                            }
                         }
                     }
                 }
+                self.avatars.get_mut(owner).unwrap().set_hidden_nodes(hidden_nodes);
                 // `Player::startSkiing` shows the LSki/RSki nodes in the
                 // skier's paint colour, carried by the ski vehicle.
                 let skis = view
@@ -7812,6 +7843,9 @@ impl PlatformApp for App {
                     result
                 }
                 UiAction::Game(GameAction::ToolWheel { notches }) => {
+                    if self.controls.aim_wheel(notches) {
+                        continue;
+                    }
                     // The image's `wheel` command names "package:command".
                     let Some((package, command)) = self
                         .tool_wheel

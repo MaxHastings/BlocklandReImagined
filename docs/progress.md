@@ -8470,6 +8470,59 @@ test boxes now use these hull sizes. Sizes: 1x4x5 (players), 1x14x10
 (Steel Ball, jeep, tank), 1x20x12 (Stunt Plane); mirrors 1x4x5 and
 1x14x10. Still to confirm on the PC: where the turret's mount node puts
 it.
+## 2026-10-01 Sniper Rifle: Kaje's original through Import Add-On (branch `claude/sniper-rifle-u9z1bd`, for v0.1.11)
+
+Max asked for Kaje's Sniper Rifle (Blockland Glass 343, which is Conan's
+"Sniper Rifle Updated"). A first pass bundled our own look-alike rifle
+(`packages/showcase/sniper-rifle`: generated model, bolt animation, sounds,
+scope picture and icon). Max then chose originals only for classic
+Add-Ons, so that pack and its generator are gone. The player imports their
+own copy (Start Game > Add-Ons > Import) and the listed ports add what the
+scripts did. Nothing original is in the repo.
+
+The originals, read from Max's PC (copied read-only to `.research/sniper`):
+- Kaje's `Weapon_Sniper_Rifle` (the old RTB release, in Max's Steam
+  Add-Ons): one round at 2000 units a second with no drop, 150 damage, a
+  blue ring trail, 2 s of muzzle smoke, then the trigger must be let go.
+  Its only script is `SniperRifleImage::onFire`: `playThread(2, shiftAway)`
+  while alive, then `Parent::onFire`. No scope, sway, ammo or headshots.
+- Conan's `Weapon_Sniper_Rifle_Updated` (Glass 343): a new animated model
+  with its own hands, its own sounds, 200 units a second, a bolt `Reload`
+  sequence (about 1.8 s a shot). `onFire` plays `plant`; `onMount` hides
+  the holder's `lhand`, `rhand`, `lhook`, `rhook` and plays
+  `armReadyBoth`; `onUnMount` restores the body.
+
+Ports (`crates/addon-import/ports`, both `verified`):
+- `weapon_sniper_rifle`: `scripts.onfire` (arm from the copy's `playThread`, then fire).
+- `weapon_sniper_rifle_updated`: `scripts.onfire` (`plant`), `hide_nodes`
+  and `both_arms`, covering all three image callbacks.
+
+Engine seams (general, validated, documented in modding section 5):
+- The first pass added `Image.fire_animation`; main's Knife lane then
+  landed `Image.scripts` (state scripts as data, with `arm`), which covers
+  it, so `fire_animation` was dropped and the ports use `scripts.onfire`.
+- `Image.hide_nodes` (up to 16) and `Image.both_arms`: a held image hides
+  body nodes and raises both arms; the avatar derives both from the held
+  images, so they undo themselves when the image goes.
+- `Zoom.levels`, `sensitivity`, `overlay`, `sway` and `jets` stay as seams
+  for any weapon. Kaje's rifle has no scope, so the original aims with the
+  game's zoom key as in v20. The aim's wheel steps now have their own
+  `UiUpdate::AimWheel`, since main's tool wheel follows the trigger.
+
+Tests (content-free): `bri-addon-import --test ports`
+(`sniper_rifle_port_kicks_the_arm`,
+`sniper_rifle_updated_port_draws_its_own_hands`, on CC0 stand-ins in
+`tests/fixtures/ports`), `bri-weapons --test image_seams`,
+`bri-client --test scope_overlay`, `bri-ui --test scope_overlay`. On the PC,
+`bri-addon-import --test import real_sniper_rifles` imports the real copies
+(read only) and runs the ports' checks; the avatar's hidden hands are in the
+content test `reposed_vertices_match_a_full_shape_rebuild`.
+
+Both ports were checked on Max's real copies by the Gate
+(`real_sniper_rifles`, 2 of 2 found) and their hashes are listed.
+
+Left for later: headshots (Adventure Pack's hit regions; neither original
+has them), and Max's feel check of the imported rifle.
 ## 2026-10-01 Adventure Pack seams: hit regions, HUD per gun, onFire with a round (branch `claude/adventure-pack-n3spj2`)
 
 Max asked for Bushido's Adventure Pack as a bundled Add-On and as a test of
