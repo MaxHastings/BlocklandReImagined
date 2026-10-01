@@ -103,6 +103,16 @@ fn byte(v: f32) -> u8 {
     (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
 }
 
+/// A Dynamic sheet's light share as stored: `SHARE_ONE` levels to the
+/// light's full fitted brightness, so a texel the map compiler lit brighter
+/// than the fitted light gives (a lamp's bright spot) holds up to
+/// `SHARE_MAX` of it. The shader decodes it the same way (`SHARE_SCALE`).
+pub const SHARE_ONE: f32 = 128.0;
+pub const SHARE_MAX: f32 = 255.0 / SHARE_ONE;
+fn share_byte(share: f32) -> u8 {
+    (share.clamp(0.0, SHARE_MAX) * SHARE_ONE + 0.5) as u8
+}
+
 /// Splits a mission lightmap into RGB: its static part (the interior's
 /// authored light, plus the sun's ambient on outside-visible surfaces) and
 /// A: the share of the sun the bake let reach each texel. `base` is the
@@ -238,7 +248,7 @@ const LEAK_STEP: i64 = 3;
 const LEAK_LEVELS: f32 = 8.0 / 255.0;
 const LEAK_SUN: f32 = 0.12;
 /// Names the fit, the bake and the stored layout; change it with either.
-const FORMAT: &[u8; 8] = b"BRIML\0\0\x0e";
+const FORMAT: &[u8; 8] = b"BRIML\0\0\x0f";
 
 /// A light recovered from a map's lightmaps. The map compiler's point light:
 /// full `color` out to `inner`, then falling linearly to nothing at `outer`,
@@ -415,6 +425,17 @@ pub struct DynamicSheet {
     pub left: Vec<u8>,
     pub lights: Vec<u8>,
     pub visibility: Vec<Vec<u8>>,
+}
+impl DynamicSheet {
+    /// The share of map light `light` texel `texel` receives (0 where the
+    /// light is none of the sheet's channels).
+    pub fn share(&self, light: u8, texel: usize) -> f32 {
+        self.lights
+            .iter()
+            .position(|&k| k == light)
+            .and_then(|c| self.visibility[c / 4].get(texel * 4 + c % 4))
+            .map_or(0.0, |&b| f32::from(b) / SHARE_ONE)
+    }
 }
 /// `DynamicSheet` without its pixels, as a stored bake's header keeps it.
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -907,6 +928,8 @@ impl Bake {
                 hidden: Vec<(usize, Vec3)>,
                 hidden_set: u32,
                 seen: u32,
+                /// The light the seen lights give here in full.
+                seen_light: Vec3,
             }
             let (w, h) = (parts.width as i64, parts.height as i64);
             let same_surface = |a: &Lexel, b: &Lexel| {
@@ -1016,6 +1039,7 @@ impl Bake {
                     hidden: hidden_given,
                     hidden_set: hidden,
                     seen,
+                    seen_light,
                 });
             }
             // Each texel's neighbours on its surface, and the lights the rays
@@ -1089,6 +1113,23 @@ impl Bake {
                 let mut shares = t.shares.clone();
                 let mut given = t.given;
                 let around = held_around(i);
+                // Away from a patch edge, a texel holding more than the lights
+                // its rays see give (each taking all of its light) is brighter
+                // there than the fit's falloff says: a lamp's bright spot, as
+                // the ring the Bedroom lamp throws on the ceiling through its
+                // shade's open top. The excess is those lights', up to
+                // `SHARE_MAX` of each. Shared out to the hidden lights in reach
+                // instead (a room light behind the ceiling), the room would
+                // keep the lamp's pattern when the bulb breaks (Bedroom Dark).
+                let mut rest = t.rest;
+                if around == 0 && luminance(rest) > 0.0 && luminance(t.seen_light) > 1e-6 {
+                    let extra = (luminance(rest) / luminance(t.seen_light)).min(SHARE_MAX - 1.0);
+                    for k in (0..lights.len()).filter(|&k| t.seen & (1 << k) != 0) {
+                        shares[k] += extra;
+                    }
+                    given += t.seen_light * extra;
+                    rest = (rest - t.seen_light * extra).max(Vec3::ZERO);
+                }
                 // Each hidden light's weight: how surely the remainder is
                 // its light. The remainder goes as surely as the surest of
                 // them (all of it at a quarter or more of its light), shared
@@ -1097,7 +1138,7 @@ impl Bake {
                     .hidden
                     .iter()
                     .map(|&(k, g)| {
-                        let r = share(t.rest, g);
+                        let r = share(rest, g);
                         if around != 0 {
                             f32::from(around & (1 << k) != 0 && r > 0.0)
                         } else if r >= 0.25 {
@@ -1112,7 +1153,7 @@ impl Bake {
                 let weighed: f32 = t.hidden.iter().zip(&weights).map(|((_, g), w)| luminance(*g) * w).sum();
                 if surest > 0.0 && weighed > 1e-6 {
                     for (&(k, g), &weight) in t.hidden.iter().zip(&weights) {
-                        let taken = t.rest * surest * (luminance(g) * weight / weighed);
+                        let taken = rest * surest * (luminance(g) * weight / weighed);
                         let s = share(taken, g);
                         if s > 0.0 {
                             shares[k] = s;
@@ -1151,7 +1192,7 @@ impl Bake {
             for (i, rest, shares) in shared {
                 left[i * 4..i * 4 + 3].copy_from_slice(&[byte(rest.x), byte(rest.y), byte(rest.z)]);
                 for (c, &k) in channels.iter().enumerate() {
-                    visibility[c / 4][i * 4 + c % 4] = byte(shares[k as usize]);
+                    visibility[c / 4][i * 4 + c % 4] = share_byte(shares[k as usize]);
                 }
             }
             sheets.push(DynamicSheet {
@@ -1993,6 +2034,70 @@ mod tests {
         patch_edge_goes_dark(3.2, 0.8);
     }
 
+    /// A lamp's bright spot on the ceiling (the Bedroom ring above the shade,
+    /// lit through the shade's open top): the lightmap holds more there than
+    /// the fitted lamp light gives, and a room light behind the ceiling,
+    /// which it faces away from, is in reach. The spot is the lamp's, which
+    /// the rays see: shared out to the room light instead, the room would
+    /// keep the lamp's pattern when the bulb breaks (Bedroom Dark).
+    #[test]
+    fn a_lamps_bright_spot_goes_dark_with_it() {
+        let lights = [
+            MapLight {
+                position: [0.0, 0.0, 8.0],
+                color: [0.4, 0.4, 0.4],
+                inner: 5.0,
+                outer: 25.0,
+                channel: Some(0),
+            },
+            MapLight {
+                position: [0.0, 0.0, -6.0],
+                color: [0.3, 0.3, 0.3],
+                inner: 5.0,
+                outer: 25.0,
+                channel: Some(1),
+            },
+        ];
+        let given = |light: &MapLight, p: Vec3| Vec3::from(light.color) * falloff(Vec3::from(light.position).distance(p), light.inner, light.outer);
+        let spot = |p: Vec3| if p.truncate().length() < 4.0 { 1.6 } else { 1.0 };
+        let mut scene = crate::scene::SceneData {
+            sun_direction: [0.0, -1.0, 0.0],
+            ..Default::default()
+        };
+        lit_quad(&mut scene, |a, b| Vec3::new(10.0 * a, 10.0 * b, 0.0), Vec3::Z, |p| given(&lights[0], p) * spot(p));
+        let bake = Bake::new(&scene).expect("lightmapped ceiling");
+        let seen: Vec<u32> = bake
+            .lexels
+            .iter()
+            .map(|l| {
+                lights.iter().enumerate().fold(0u32, |m, (k, light)| {
+                    let lit = light.shade(l.position, l.normal).max_element() > 0.0
+                        && bake.sees(l.position, l.normal, light.position.into());
+                    m | u32::from(lit) << k
+                })
+            })
+            .collect();
+        let sheet = &bake.dynamic_sheets(&lights, &seen, &[])[0];
+        let (mut whole, mut out) = (0.0f32, 0.0f32);
+        for l in bake.lexels.iter().filter(|l| l.sheet == 0) {
+            let i = l.index as usize;
+            let left = f32::from(sheet.left[i * 4]);
+            let lit = |k: usize| given(&lights[k], l.position).x * 255.0 * sheet.share(k as u8, i);
+            let authored = given(&lights[0], l.position).x * spot(l.position) * 255.0;
+            whole = whole.max((left + lit(0) + lit(1) - authored).abs());
+            out = out.max(left + lit(1));
+        }
+        assert!(whole <= 2.0, "the sheet draws the authored light {whole:.0} levels off");
+        assert!(out <= 2.0, "the ceiling keeps {out:.0} levels with the lamp out");
+    }
+
+    /// The shader decodes a stored share as the bake encodes it.
+    #[test]
+    fn the_shader_decodes_shares_as_stored() {
+        let line = format!("const SHARE_SCALE:f32=255.0/{SHARE_ONE:.1};");
+        assert!(include_str!("scene.wgsl").contains(&line), "scene.wgsl lacks {line}");
+    }
+
     fn patch_edge_goes_dark(lit_to: f32, behind: f32) {
         let lights = [
             MapLight {
@@ -2066,9 +2171,9 @@ mod tests {
         for (l, mask) in bake.lexels.iter().zip(&seen).filter(|(l, _)| l.sheet == 0) {
             let i = l.index as usize;
             let mut drawn = f32::from(wall.left[i * 4]);
-            for (c, &k) in wall.lights.iter().enumerate() {
+            for &k in &wall.lights {
                 if k != 0 {
-                    drawn += given(&lights[k as usize], l.position).x * f32::from(wall.visibility[c / 4][i * 4 + c % 4]);
+                    drawn += given(&lights[k as usize], l.position).x * 255.0 * wall.share(k, i);
                 }
             }
             edge += usize::from(lit(l.position) && mask & 1 == 0);
@@ -2187,9 +2292,7 @@ mod tests {
             let mut worst = 0.0f32;
             for i in 0..(sheet.width * sheet.height) as usize {
                 let p = corner(at(i as u32 % sheet.width), at(i as u32 / sheet.width));
-                let share = |k: u8| {
-                    sheet.lights.iter().position(|&c| c == k).map_or(0.0, |c| sheet.visibility[c / 4][i * 4 + c % 4] as f32 / 255.0)
-                };
+                let share = |k: u8| sheet.share(k, i);
                 let left = Vec3::new(sheet.left[i * 4] as f32, sheet.left[i * 4 + 1] as f32, sheet.left[i * 4 + 2] as f32) / 255.0;
                 // The lamp's lights out, the room light on.
                 let drawn = left + given(&lights[2], p) * share(2);
