@@ -911,3 +911,63 @@ fn a_supercut_puts_plain_bricks_over_what_stuck_out_and_its_undo_goes_over_ticks
     expected.sort_by(|x, y| x.position.partial_cmp(&y.position).unwrap());
     assert_eq!(back, expected);
 }
+
+/// A copy planted while its player runs a mini-game saves with the build
+/// and that mini-game, and loads back brick for brick, mini-game and all,
+/// where the duplicator copies and plants it again.
+#[test]
+fn a_planted_copy_saves_and_loads_back_with_its_mini_game() {
+    use bri_sim::session::MiniGameRequest;
+    let mut g = Game::new();
+    let host = host(&mut g);
+    let settings = bri_minigames::Settings {
+        title: "Copies".into(),
+        loadout: Default::default(),
+        ..bri_minigames::Settings::default()
+    };
+    scene(&mut g, host);
+    copy_box(&mut g, host, [-1.5, 0.0, -0.5], [1.0, 0.4, 0.5], 100).unwrap();
+    g.cmd(host, Command::MiniGame(MiniGameRequest::Create { color: 3, settings: settings.clone() }))
+        .unwrap();
+    g.steps(130);
+    let Ok(Reply::Planted(_)) = g.place(host, [-4.0, 0.0, -3.0], 0, false) else {
+        panic!("the copy plants")
+    };
+    assert_eq!(g.bricks().len(), 7);
+    let build = match g.cmd(host, Command::SaveBuild { events: true, ownership: true }) {
+        Ok(Reply::Saved(build)) => build,
+        other => panic!("{other:?}"),
+    };
+    assert!(build.minigame.is_some());
+    let shape = |bricks: BTreeMap<BrickId, Brick>| {
+        let mut v: Vec<_> = bricks
+            .into_values()
+            .map(|b| (b.definition, b.position.map(f32::to_bits), b.quarter_turns, b.color))
+            .collect();
+        v.sort_by(|x, y| x.1.cmp(&y.1));
+        v
+    };
+    let saved = shape(g.bricks());
+
+    let mut h = Game::new();
+    let loader = self::host(&mut h);
+    let bytes = bri_world::build::encode(&build).unwrap();
+    let build = bri_world::build::decode(&bytes).unwrap();
+    h.cmd(loader, Command::LoadBuild { build: Box::new(build), ownership: true })
+        .unwrap();
+    while h.s.build_loading() {
+        h.steps(1);
+    }
+    h.steps(2);
+    assert_eq!(shape(h.bricks()), saved);
+    let view = h.s.minigame_views();
+    assert_eq!(view.len(), 1);
+    assert_eq!(view[0].settings, settings);
+    // The loaded build is the loader's to copy and plant again.
+    assert_eq!(copy_box(&mut h, loader, [-1.5, 0.0, -0.5], [1.0, 0.4, 0.5], 100), Ok(3));
+    h.steps(130);
+    let Ok(Reply::Planted(_)) = h.place(loader, [4.0, 0.0, 4.0], 0, false) else {
+        panic!("the loaded build copies")
+    };
+    assert_eq!(h.bricks().len(), 10);
+}
