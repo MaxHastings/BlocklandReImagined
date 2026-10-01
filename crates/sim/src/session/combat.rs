@@ -278,8 +278,9 @@ pub(super) enum DamageKind {
     Weapon {
         name: String,
         direct: bool,
-        /// Where and which way it struck, when a shot or blast did it.
-        hit: Option<Hit>,
+        /// Which way it was travelling as it struck (a unit vector), when a
+        /// shot did it.
+        direction: Option<Vec3>,
         /// The projectile that did it, when one did.
         projectile: Option<String>,
     },
@@ -293,20 +294,13 @@ pub(super) enum DamageKind {
         name: String,
     },
 }
-/// Where a weapon's damage struck and which way it was travelling (a unit
-/// vector or zero), as `on_damage` hooks read it.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) struct Hit {
-    pub position: Vec3,
-    pub direction: Vec3,
-}
 impl DamageKind {
     /// A weapon's damage with no hit point (vehicles, the hammer).
     pub(super) fn weapon(name: impl Into<String>, direct: bool) -> Self {
         Self::Weapon {
             name: name.into(),
             direct,
-            hit: None,
+            direction: None,
             projectile: None,
         }
     }
@@ -317,9 +311,9 @@ impl DamageKind {
             _ => None,
         }
     }
-    pub(super) fn hit(&self) -> Option<Hit> {
+    pub(super) fn direction(&self) -> Option<Vec3> {
         match self {
-            Self::Weapon { hit, .. } => *hit,
+            Self::Weapon { direction, .. } => *direction,
             _ => None,
         }
     }
@@ -689,6 +683,20 @@ impl Session {
         kind: DamageKind,
         source: Option<OwnerId>,
     ) -> Result<()> {
+        self.damage_player_at(target, amount, kind, source, None)
+    }
+
+    /// [`Self::damage_player`] from a hit at `at` (a shot's contact point
+    /// or a blast's centre, as Torque's `Armor::damage` gets it), which
+    /// `on_damage` hooks see with the part of the body it names.
+    pub(super) fn damage_player_at(
+        &mut self,
+        target: OwnerId,
+        amount: f32,
+        kind: DamageKind,
+        source: Option<OwnerId>,
+        at: Option<Vec3>,
+    ) -> Result<()> {
         let tick = self.simulation.state().tick;
         if !matches!(kind, DamageKind::Suicide | DamageKind::Event)
             && self.passenger_protected(
@@ -718,13 +726,10 @@ impl Session {
         if peer.player.state().crouched {
             amount *= if kind.direct() { 2.1 } else { 0.75 };
         }
-        // The part of the body a shot or blast struck (as Torque's
-        // `getDamageLocation`), measured before any hook moves the body.
-        let region = kind
-            .hit()
-            .map(|hit| crate::player::hit_region(&peer.player, hit.position.to_array()));
+        // Where it struck, measured before any hook moves the body.
+        let hit = at.map(|point| (point, crate::player::hit_region(&peer.player, point.to_array())));
         // Add-Ons have the last word on how much it hurts.
-        let amount = self.package_damage(target, source, amount, &kind, region);
+        let amount = self.package_damage(target, source, amount, &kind, hit);
         if amount <= 0.0 {
             return Ok(());
         }

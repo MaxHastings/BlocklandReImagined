@@ -120,7 +120,7 @@ refused. The engine calls:
 | `on_loadout(player)` | a player's items were set afresh (spawn, respawn, joining or leaving a minigame), when `"on_loadout": true`: the place to hand out your Add-On's items |
 | `on_spawn(player)` | a player comes to life (joining, respawning), after `on_loadout`, when `"on_spawn": true` |
 | `on_leave(player)` | a player leaves, while their state can still be read, when `"on_leave": true` |
-| `on_damage(victim, attacker, amount, info)` | before a player is hurt, when `"on_damage": true`: return the amount to take (0 prevents it) or `()` to leave it. `info` is `#{ kind, type, direct }`, `kind` being `weapon`, `fall`, `package` and so on, `type` the damage type's name without `$DamageType::`; a shot or blast adds `x, y, z` (where it struck), `dx, dy, dz` (the unit direction it travelled, outward from the centre for a blast), so a shield can block hits from the front, and `region` (`"head"`, `"torso"` or `"legs"`, the part of the body at that point) |
+| `on_damage(victim, attacker, amount, info)` | before a player is hurt, when `"on_damage": true`: return the amount to take (0 prevents it) or `()` to leave it. `info` is `#{ kind, type, direct }`, `kind` being `weapon`, `fall`, `package` and so on, `type` the damage type's name without `$DamageType::`. A shot or blast also gives `region` (`"head"`, `"torso"` or `"legs"`, where it struck) and its point `x`, `y`, `z`, and a weapon's hit `dx, dy, dz` (the unit direction it travelled, outward from the centre for a blast), so a shield can block hits from the front. A projectile's hit also gives `projectile`, its definition id (`"ns:projectile/name"`), so rules can tell shots apart when guns share a damage type |
 | `on_entity_damage(entity, attacker, amount, info)` | before one of your creatures is hurt by a shot, a blast or `explode`, when `"on_entity_damage": true`: answered like `on_damage` |
 | `on_entity_death(entity, killer, info)` | one of your creatures ran out of health, just before it is removed, when `"on_entity_death": true` |
 | `on_pickup(player, item, info)` | a living player touches an item of your Add-On (or one it depends on) lying in the world, before they pick it up, whether or not they have room, when `"on_pickup": true`: return `false` to leave it, `"take"` to use it up without giving it (a spawn brick's item then starts its respawn), or `()` for the usual pickup. `info` is `#{ drop, spawner, data }`: the dropped item's id or the spawn brick's, and what `on_drop` kept with it. Called as it happens, so keep it quick |
@@ -982,7 +982,18 @@ server.cs         datablock fxDTSBrickData(brickMirror1x4x5Data : brick4x1x5wind
                       reflectionFaces = "north south";
                       reflectionDepth = 0.5;
                   };
+                  datablock fxDTSBrickData(brickMirror1x14x10Data : brickMirror1x4x5Data)
+                  {
+                      uiName = "1x14x10 Mirror";
+                      stretchSize = "14 1 30";
+                  };
 ```
+
+`stretchSize = "width depth height"` (studs, studs, plates) makes another
+size of the shape, as a nine-slice picture stretches: the frame, sill and
+stud edges keep their size and the middle grows. Its mirror, collision,
+portal openings and pairing all follow the new size, so a 1x14x10 Mirror
+is the same window brick, big.
 
 The mirror spans the whole side and the window's frame, drawn in front of
 it, hides its edges; the window's see-through glass is not drawn.
@@ -1026,6 +1037,11 @@ server.cs         datablock fxDTSBrickData(brickPortal1x4x5Data : brick4x1x5wind
                       linkPass = 1;
                       linkFrame = "0.05 0.05 0.2";
                   };
+                  datablock fxDTSBrickData(brickPortal1x14x10Data : brickPortal1x4x5Data)
+                  {
+                      uiName = "1x14x10 Portal";
+                      stretchSize = "14 1 30";
+                  };
 ```
 
 Two bricks of one kind, placed by one player, with the same brick **Name**
@@ -1049,6 +1065,22 @@ decides who goes through.
 | `linkIdle` | Colour a linked side shows when its view is not drawn live | `"0.35 0.42 0.55"` |
 | `linkPass` | Whether things pass through; the brick's collision becomes a frame around each opening | 0 |
 | `linkFrame` | Width of that frame, in world units: one number for every edge, or `"sides top bottom"` (the bottom is a sill bodies step over) | 0 |
+
+The Add-On also has a 1x14x10 (6.9 by 5.75 inside: a tank or a jeep
+drives through with room to spare) and a 1x20x12 (the Stunt Plane, wings
+and all). Each size of portal is its own kind, so a 1x4x5 never pairs
+with a 1x14x10 of the same name. A big one costs no more to draw than a small one
+the same size on screen: each view is drawn only over the part of the
+screen its opening covers.
+
+**Another size of a brick (`stretchSize`).** Any brick can be its
+`brickFile`'s shape at another size, `"width depth height"` in studs,
+studs and plates. Half a stud of every edge keeps its size and moves out
+with the edge while the middle stretches, as a nine-slice picture does:
+a window's frame stays as thin round a bigger pane, studs on top stay one
+stud each (there are more of them), and the brick's attachment grid and
+collision boxes grow to match. A shape with no collision boxes of its
+own (and no `linkPass` frame) needs the Add-On to give it collision.
 
 Views share the mirrors' **Options > Graphics > Mirrors** budget, and a
 portal seen through a portal repeats what it last showed, like facing

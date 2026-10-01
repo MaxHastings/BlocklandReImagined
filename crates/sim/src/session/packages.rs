@@ -2995,7 +2995,7 @@ impl Session {
         attacker: Option<OwnerId>,
         amount: f32,
         kind: &combat::DamageKind,
-        region: Option<&'static str>,
+        hit: Option<(Vec3, &'static str)>,
     ) -> f32 {
         let Some(host) = self.packages.as_mut() else {
             return amount;
@@ -3017,22 +3017,22 @@ impl Session {
         info.insert("kind".into(), kind.hook_kind().into());
         info.insert("type".into(), kind.hook_type().to_string().into());
         info.insert("direct".into(), kind.direct().into());
-        // The part of the body it struck, as Torque's `getDamageLocation`.
+        // The projectile that did it, so rules can tell shots apart when
+        // their damage types are shared.
         if let Some(projectile) = kind.projectile() {
             info.insert("projectile".into(), projectile.into());
         }
-        if let Some(region) = region {
+        // Where a weapon hit (a shot's contact point, a blast's centre) and
+        // the part of the body that is.
+        if let Some((point, region)) = hit {
             info.insert("region".into(), region.into());
+            for (key, value) in ["x", "y", "z"].into_iter().zip(point.to_array()) {
+                info.insert(key.into(), Dynamic::from_float(f64::from(value)));
+            }
         }
-        if let Some(hit) = kind.hit() {
-            for (key, value) in [
-                ("x", hit.position.x),
-                ("y", hit.position.y),
-                ("z", hit.position.z),
-                ("dx", hit.direction.x),
-                ("dy", hit.direction.y),
-                ("dz", hit.direction.z),
-            ] {
+        // Which way a shot was travelling, for shields that block by facing.
+        if let Some(direction) = kind.direction() {
+            for (key, value) in ["dx", "dy", "dz"].into_iter().zip(direction.to_array()) {
                 info.insert(key.into(), Dynamic::from_float(f64::from(value)));
             }
         }

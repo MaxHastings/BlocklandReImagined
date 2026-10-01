@@ -328,7 +328,10 @@ fn port_rules_become_a_host_only_companion_turned_on_with_the_import() {
         .filter(|e| e.enabled && e.package.id.starts_with("weapon_synthetic"))
         .map(|e| e.id())
         .collect();
-    assert_eq!(on, ["weapon_synthetic_blaster", "weapon_synthetic_blaster-rules"]);
+    assert_eq!(
+        on,
+        ["weapon_synthetic_blaster", "weapon_synthetic_blaster-rules"]
+    );
     // Off again: the rules go with it.
     let plan = library.plan("weapon_synthetic_blaster", false);
     assert_eq!(plan.also, ["weapon_synthetic_blaster-rules"]);
@@ -341,8 +344,7 @@ fn port_rules_become_a_host_only_companion_turned_on_with_the_import() {
             .map(|id| library.get(id).unwrap().package.clone())
             .collect(),
     };
-    bri_package_runtime::Catalog::load(&root, &set, true)
-        .unwrap_or_else(|e| panic!("{e:#?}"));
+    bri_package_runtime::Catalog::load(&root, &set, true).unwrap_or_else(|e| panic!("{e:#?}"));
 
     // A second import may not land on the first one's rules.
     let again = import_with(
