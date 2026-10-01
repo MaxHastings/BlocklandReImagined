@@ -123,10 +123,7 @@ fn shotgun_sha() -> String {
     let report = bri_addon_import::import(&bri_addon_import::Options {
         input: fixtures().join("Weapon_Shotgun"),
         out: out.clone(),
-        reference: None,
-        core: vec![],
-        installed: None,
-        version: "1.0.0".into(),
+        ..Default::default()
     })
     .unwrap();
     let _ = std::fs::remove_dir_all(out.parent().unwrap());

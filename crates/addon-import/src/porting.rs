@@ -144,7 +144,7 @@ pub fn scaffold(
             reference: reference.clone(),
             core: core.clone(),
             installed: installed.clone(),
-            version: "1.0.0".into(),
+            ..Default::default()
         },
         &Ports::empty(),
     )?;
@@ -508,7 +508,7 @@ pub fn check(dir: &Path) -> Result<CheckOutcome> {
             reference: work.reference,
             core: work.core,
             installed: work.installed,
-            version: "1.0.0".into(),
+            ..Default::default()
         },
         &ports,
     )?;
