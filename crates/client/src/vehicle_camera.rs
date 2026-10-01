@@ -323,11 +323,11 @@ mod tests {
         assert!(eye.is_finite() && yaw.is_finite() && pitch.is_finite());
     }
 
-    /// Every seat of the stock vehicles and the default Stunt Plane, seen
+    /// Every seat of the stock vehicles and the stand-in plane, seen
     /// from the rider's posed `eye` node as v20 places it, next to the old
     /// fixed 1.6 above the seat. Run with `--ignored --nocapture` for the table.
     #[test]
-    #[ignore = "requires the converted avatar and vehicle packs and the bundled Stunt Plane"]
+    #[ignore = "requires the converted avatar and vehicle packs"]
     fn every_seats_first_person_eye_comes_from_the_posed_eye_node() -> Result<()> {
         use crate::avatar::{AvatarAnimationInput, AvatarAssets};
         use bri_vehicles::schema::{Pack, SeatRole};
@@ -337,7 +337,7 @@ mod tests {
         let mut definitions =
             Pack::load(root.join("content/vehicles-pack-012/vehicles.json"))?.definitions;
         definitions.extend(
-            Pack::load(root.join("content/addons/vehicle_stunt_plane/assets/vehicles.json"))?
+            Pack::load(root.join("crates/vehicles/tests/fixtures/stand-in-plane/assets/vehicles.json"))?
                 .definitions,
         );
         let mut seats = 0;

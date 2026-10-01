@@ -1,15 +1,17 @@
 //! A fresh source checkout has the default Add-Ons (packages/default-addons.json)
 //! with no setup step past bootstrap: starting the game installs our own
 //! into its generated content (here the startup check, opted in; a plain
-//! check changes nothing), bootstrap installs the bundled originals it
-//! finds, and the original Stunt Plane spawns, in single player and for a
-//! guest who joins a LAN game.
+//! check changes nothing), bootstrap installs the bundled originals, and
+//! the default plane spawns, in single player and for a guest who joins a
+//! LAN game.
 //!
 //! The checkout is laid out in a temporary folder: `packages/` as committed
 //! and a `content/` holding only the generated base game (hard-linked from
-//! BRI_CONTENT, else the workspace `content/`), as bootstrap leaves it, then
-//! the bundled originals from that content's `addons/`, as bootstrap's
-//! `python tools/addon_bundle.py install` leaves them.
+//! BRI_CONTENT, else the workspace `content/`), as bootstrap leaves it. The
+//! bundled originals are third-party files no checkout or test holds: each
+//! is installed where `python tools/addon_bundle.py install` puts it as the
+//! stand-in plane (crates/vehicles/tests/fixtures) under its id, so the
+//! Stunt Plane's place spawns the stand-in plane.
 //! Run: cargo test -p bri-client --test default_add_ons -- --ignored --nocapture
 use anyhow::{Context, Result, bail, ensure};
 use bri_client::{app::App, platform::PlatformApp};
@@ -24,7 +26,11 @@ use std::{
 
 const SIZE: (u32, u32) = (960, 720);
 const SLATE: &str = "v20/add-ons/map_slate/slate.mis";
-const PLANE: &str = "vehicle_stunt_plane:vehicle/stuntplanevehicle";
+/// The stand-in plane, installed as the bundled Stunt Plane.
+const PLANE: &str = "vehicle_stunt_plane:vehicle/standinplane";
+/// The CC0 stand-in each bundled original is installed as.
+const STAND_IN: &str = "crates/vehicles/tests/fixtures/stand-in-plane";
+const STAND_IN_ID: &str = "test_plane";
 const VEHICLE_SPAWN: &str = "v20/brick/brickvehiclespawndata";
 
 fn generated_content() -> PathBuf {
@@ -74,18 +80,12 @@ impl Checkout {
     fn content(&self) -> PathBuf {
         self.root.join("content")
     }
-    /// The bundled originals, as bootstrap installs them: copied from the
-    /// generated content's own `addons/`.
-    fn install_originals(&self, generated: &Path) -> Result<()> {
+    /// The bundled originals where bootstrap installs them (`addons/<id>`),
+    /// each the stand-in plane under its id.
+    fn install_originals(&self) -> Result<()> {
+        let stand_in = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(STAND_IN);
         for addon in defaults::list().iter().filter(|a| a.original.is_some()) {
-            let from = generated.join(addon.dir());
-            ensure!(
-                from.join("package.json").is_file(),
-                "{} lacks the bundled original {}: run python tools/addon_bundle.py build, then install",
-                generated.display(),
-                addon.id
-            );
-            copy_dir(&from, &self.content().join(addon.dir()), true)?;
+            stand_in_as(&stand_in, &self.content().join(addon.dir()), &addon.id)?;
         }
         Ok(())
     }
@@ -99,6 +99,26 @@ impl Drop for Checkout {
 
 /// Copy a folder; `link` hard-links its files instead where it can (the
 /// base game is large and only read).
+/// `from` (the stand-in) copied to `to` as the Add-On `id`: its manifest
+/// and vehicles name `id` where they named the stand-in's.
+fn stand_in_as(from: &Path, to: &Path, id: &str) -> Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        let name = entry.file_name();
+        if entry.file_type()?.is_dir() {
+            stand_in_as(&entry.path(), &target, id)?;
+        } else if name == "package.json" || name == "vehicles.json" {
+            let text = std::fs::read_to_string(entry.path())?;
+            std::fs::write(&target, text.replace(STAND_IN_ID, id))?;
+        } else {
+            std::fs::copy(entry.path(), &target)?;
+        }
+    }
+    Ok(())
+}
+
 fn copy_dir(from: &Path, to: &Path, link: bool) -> Result<()> {
     std::fs::create_dir_all(to)?;
     for entry in std::fs::read_dir(from)? {
@@ -236,14 +256,14 @@ fn sees_plane(app: &App) -> bool {
 }
 
 /// The host loads a saved build of one vehicle spawn brick set to the
-/// Stunt Plane, beside the host's player, and the plane spawns on it.
+/// default plane, beside the host's player, and the plane spawns on it.
 fn load_plane_spawn(app: &mut App, state: &Path) -> Result<()> {
     let view = app.network_view().context("not in a game")?;
     let player = &view.poses.get(&view.owner).context("no player")?.player;
     let feet = glam::Vec3::from(player.feet);
     let map_id = view.world.map_id.clone();
     let mut world = bri_world::World::new(
-        "Stunt Plane".into(),
+        "Default plane".into(),
         map_id.clone(),
         view.world.palette.clone(),
     );
@@ -304,9 +324,8 @@ fn leave(apps: &mut [&mut App]) -> Result<()> {
 
 #[test]
 #[ignore = "generated content (BRI_CONTENT or content/), the bri-client binary and loopback UDP; no window"]
-fn a_fresh_checkout_installs_its_default_add_ons_and_spawns_the_stunt_plane() -> Result<()> {
-    let generated = generated_content();
-    let checkout = Checkout::new(&generated)?;
+fn a_fresh_checkout_installs_its_default_add_ons_and_spawns_the_default_plane() -> Result<()> {
+    let checkout = Checkout::new(&generated_content())?;
     let content = checkout.content();
     ensure!(
         !content.join("addons").exists() && !content.join("packages.json").exists(),
@@ -342,7 +361,7 @@ fn a_fresh_checkout_installs_its_default_add_ons_and_spawns_the_stunt_plane() ->
     // 2. Bootstrap installs the bundled originals; the check opted in, as a
     //    fresh checkout's first run does, sets our own up, without writing
     //    a package list.
-    checkout.install_originals(&generated)?;
+    checkout.install_originals()?;
     let out = check(true)?;
     let text = format!(
         "{}{}",
@@ -388,7 +407,7 @@ fn a_fresh_checkout_installs_its_default_add_ons_and_spawns_the_stunt_plane() ->
     }
     println!("check: installed and on: {listed:?}");
 
-    // 3. Single player: the Stunt Plane is on offer and spawns.
+    // 3. Single player: the default plane is on offer and spawns.
     let mut solo = app(&content, &state, "Solo")?;
     host(&mut solo, ServerMode::SinglePlayer, free_port()?)?;
     until(&mut [&mut solo], "single player in game", 180, |a| {
@@ -402,16 +421,16 @@ fn a_fresh_checkout_installs_its_default_add_ons_and_spawns_the_stunt_plane() ->
     load_plane_spawn(&mut solo, &state.join("Solo"))?;
     until(
         &mut [&mut solo],
-        "the Stunt Plane in single player",
+        "the default plane in single player",
         60,
         |a| sees_plane(a[0]),
     )?;
-    println!("single player: the Stunt Plane spawned");
+    println!("single player: the default plane spawned");
     leave(&mut [&mut solo])?;
     drop(solo);
 
     // 4. A LAN game: a guest from the same checkout joins with nothing to
-    //    download, and sees and is offered the Stunt Plane the host spawns.
+    //    download, and sees and is offered the default plane the host spawns.
     let port = free_port()?;
     let mut host_app = app(&content, &state, "Host")?;
     let mut guest = app(&content, &state, "Guest")?;
@@ -437,7 +456,7 @@ fn a_fresh_checkout_installs_its_default_add_ons_and_spawns_the_stunt_plane() ->
     load_plane_spawn(&mut host_app, &state.join("Host"))?;
     until(
         &mut [&mut host_app, &mut guest],
-        "the Stunt Plane on the guest's screen",
+        "the default plane on the guest's screen",
         60,
         |a| sees_plane(a[0]) && sees_plane(a[1]),
     )?;
@@ -446,7 +465,7 @@ fn a_fresh_checkout_installs_its_default_add_ons_and_spawns_the_stunt_plane() ->
         downloaded.is_empty(),
         "the guest downloaded Add-Ons it already had: {downloaded:?}"
     );
-    println!("guest: joined, the Stunt Plane spawned");
+    println!("guest: joined, the default plane spawned");
     leave(&mut [&mut guest, &mut host_app])?;
     Ok(())
 }

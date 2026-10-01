@@ -1201,7 +1201,7 @@ mod tests {
     #[test]
     fn a_destroyed_vehicle_is_drawn_black_without_its_tires() -> Result<()> {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../vehicles/tests/fixtures/stand-in-plane");
+            .join("../vehicles/tests/fixtures/stand-in-plane/assets");
         let mut assets = VehicleAssets::load(&root)?;
         let d = assets.pack.definitions[0].clone();
         ensure!(d.family == bri_vehicles::Family::Wheeled && d.wheels.len() == 3);
@@ -1256,7 +1256,7 @@ mod tests {
     #[test]
     fn only_vehicle_classes_char_and_player_mounts_keep_their_colour() {
         let plane: Pack = serde_json::from_slice(include_bytes!(
-            "../../vehicles/tests/fixtures/stand-in-plane/vehicles.json"
+            "../../vehicles/tests/fixtures/stand-in-plane/assets/vehicles.json"
         ))
         .unwrap();
         let mut d = plane.definitions[0].clone();
@@ -1293,7 +1293,7 @@ mod tests {
     #[test]
     fn a_wreck_burns_with_its_own_damage_emitters() {
         let plane: Pack = serde_json::from_slice(include_bytes!(
-            "../../vehicles/tests/fixtures/stand-in-plane/vehicles.json"
+            "../../vehicles/tests/fixtures/stand-in-plane/assets/vehicles.json"
         ))
         .unwrap();
         let mut d = plane.definitions[0].clone();

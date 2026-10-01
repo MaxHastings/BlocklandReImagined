@@ -1,6 +1,8 @@
 *.sh text eol=lf
 # Package bytes are hashed for join agreement; keep them identical on every checkout.
 packages/** -text
+# Test fixtures are hashed and compared byte for byte too.
+crates/*/tests/fixtures/** -text
 # Importer inputs copied into shared packs: the same bytes on every checkout.
 docs/vanilla-reference-files.json text eol=lf
 crates/weather-import/atlas-adaptations.json text eol=lf

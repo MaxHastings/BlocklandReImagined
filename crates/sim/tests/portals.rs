@@ -604,7 +604,7 @@ mod vehicles {
     fn planes() -> Pack {
         Pack::load(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../vehicles/tests/fixtures/stand-in-plane/vehicles.json"
+            "/../vehicles/tests/fixtures/stand-in-plane/assets/vehicles.json"
         ))
         .unwrap()
     }

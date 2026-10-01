@@ -537,7 +537,7 @@ fn a_vehicle_is_painted_through_its_recolouring_brick_or_alone_and_undone() {
         w.next_brick_id = 3;
     });
     let pack = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../vehicles/tests/fixtures/stand-in-plane/vehicles.json");
+        .join("../vehicles/tests/fixtures/stand-in-plane/assets/vehicles.json");
     g.s.set_vehicle_pack(bri_vehicles::Pack::load(pack).unwrap(), Vec::new())
         .unwrap();
     let admin = player(&mut g, "Admin", true);

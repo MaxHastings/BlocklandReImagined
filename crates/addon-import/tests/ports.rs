@@ -1050,7 +1050,7 @@ fn fill_can_port_rules_fill_what_v20_filled() {
     s.set_spawn_points(vec![spawn]).unwrap();
     s.set_weapon_pack(pack).unwrap();
     let plane = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../vehicles/tests/fixtures/stand-in-plane/vehicles.json");
+        .join("../vehicles/tests/fixtures/stand-in-plane/assets/vehicles.json");
     s.set_vehicle_pack(bri_vehicles::Pack::load(plane).unwrap(), Vec::new())
         .unwrap();
     s.install_packages(catalog, None).unwrap();
