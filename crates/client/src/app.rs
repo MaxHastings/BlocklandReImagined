@@ -1666,6 +1666,13 @@ impl App {
     pub fn rendered_camera(&self) -> Option<(Vec3, f32, f32)> {
         self.rendered_camera
     }
+    /// Where vehicle `id` was last drawn: position, rotation and turret aim,
+    /// interpolated between the host's poses (the camera of a rider rides
+    /// this, not the newest pose).
+    pub fn drawn_vehicle(&self, id: u64) -> Option<(Vec3, glam::Quat, [f32; 2])> {
+        let frame = self.vehicles.frame(id)?;
+        Some((frame.position, frame.rotation, frame.turret_aim))
+    }
     /// The last drawn view's roll, radians (see [`crate::controls::roll`]).
     pub fn rendered_roll(&self) -> f32 {
         self.rendered_roll
