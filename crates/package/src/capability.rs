@@ -15,6 +15,7 @@ pub const CAPABILITIES: &[&str] = &[
     "effects",
     "lighting",
     "environment",
+    "minigame",
 ];
 
 /// The plain-language line a player reads for `name`, completing
@@ -50,6 +51,9 @@ pub fn describe(name: &str) -> Option<&'static str> {
         // The sun, light, fog, sky and time of day, for everyone, until
         // the map changes.
         "environment" => "change the sun, sky, fog and time of day",
+        // Teams, scores and round resets in mini-games (Slayer's team
+        // games, Capture the Flag).
+        "minigame" => "set up teams in mini-games, keep score and reset rounds",
         _ => return None,
     })
 }

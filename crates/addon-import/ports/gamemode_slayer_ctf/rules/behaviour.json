@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "script": "ctf.rhai",
+  "commands": [
+    { "name": "dropflag", "while_dead": false, "cooldown_ticks": 12 },
+    { "name": "ctf", "args": ["string"], "while_dead": true, "cooldown_ticks": 12 }
+  ],
+  "state": {
+    "global": {
+      "flags": { "default": {}, "persist": false },
+      "games": { "default": {}, "persist": false }
+    },
+    "player": {
+      "carrying": { "default": null, "persist": false }
+    }
+  },
+  "on_minigame": true,
+  "on_death": true,
+  "on_pickup": true,
+  "zones": [
+    {
+      "bricks": [
+        "{{namespace}}:brick/brickslyrctfflagdata",
+        "{{namespace}}:brick/brickslyrctfflagreturndata"
+      ],
+      "above": 0.2,
+      "period_ms": {{trigger_ms}}
+    }
+  ],
+  "tick_interval": 30
+}

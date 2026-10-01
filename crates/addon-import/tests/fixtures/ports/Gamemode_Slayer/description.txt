@@ -1,0 +1,5 @@
+Title: Stand-in Slayer
+Author: Blockland ReImagined tests
+Written for tests. It has Slayer's folder name and the shapes of the script
+functions its port covers, so the listed port applies to it. It is not the
+original Add-On and holds none of its files.

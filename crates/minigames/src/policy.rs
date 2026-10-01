@@ -2,6 +2,8 @@ use crate::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Denial {
+    /// A teammate or ally, with friendly fire off.
+    Teammate,
     DifferentGame,
     Disabled,
     NotYours,
@@ -264,6 +266,13 @@ impl MinigamesWorld {
             if t.player.is_some() && t.game != p.game {
                 return Decision::Deny(Denial::DifferentGame);
             }
+            if let Some(victim) = t.player
+                && victim != actor
+                && !self.games[&id].teams.friendly_fire
+                && self.allied(actor, victim)
+            {
+                return Decision::Deny(Denial::Teammate);
+            }
             let s = &self.games[&id].settings;
             let enabled = match t.kind {
                 ObjectKind::Vehicle | ObjectKind::Bot => s.vehicle_damage,
@@ -285,6 +294,9 @@ impl MinigamesWorld {
         let g = &self.games[&p.game.expect("same valid game")];
         let s = &g.settings;
         if let Some(victim) = t.player {
+            if victim != actor && !g.teams.friendly_fire && self.allied(actor, victim) {
+                return Decision::Deny(Denial::Teammate);
+            }
             return if s.weapon_damage && (victim != actor || s.self_damage) {
                 Decision::Allow
             } else {

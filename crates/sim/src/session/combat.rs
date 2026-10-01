@@ -106,7 +106,6 @@ const SPEED_DAMAGE_SCALE: f32 = 3.8;
 pub(super) const PLAYER_MASS: f32 = 90.0;
 /// Minimum respawn delay outside minigames (`$Game::MinRespawnTime`).
 const MIN_RESPAWN_TICKS: u64 = 120;
-const SPAWN_BRICK: &str = "v20/brick/brickspawnpointdata";
 /// `GameConnection::spawnPlayer`'s effect on every join and respawn.
 pub const SPAWN_PROJECTILE: &str = "v20.projectile.spawnprojectile";
 /// The effect a body leaves when it disappears.
@@ -478,7 +477,7 @@ impl Session {
             let _ = self.apply_minigame_effects(effects);
         }
     }
-    fn owner_of(&self, player: mg::PlayerId) -> Option<OwnerId> {
+    pub(super) fn owner_of(&self, player: mg::PlayerId) -> Option<OwnerId> {
         self.peers
             .iter()
             .find(|(_, p)| p.combat.player == player)
@@ -769,6 +768,9 @@ impl Session {
         // `armor::onDisabled` drops a held ball before the body goes limp.
         let _ = self.weapons.drop_ball(ActorId(victim));
         let _ = self.weapons.equip(ActorId(victim), None);
+        // What an Add-On hung on the body (a carried flag) goes with it; the
+        // Add-On's `on_death` decides what becomes of it.
+        self.weapons.clear_worn(ActorId(victim));
         let feet = self.peers[&victim].player.state().feet;
         self.cues.emit(
             tick,
@@ -823,9 +825,7 @@ impl Session {
                 })
                 .collect()
         };
-        self.chat_game(
-            Some(game),
-            None,
+        let line =
             // `'\c7%1\c3%2\c7%3\c4: %4'`: clan prefix, name, clan suffix.
             format!(
                 "{}{}{}{}{}{}{}: {}",
@@ -837,8 +837,25 @@ impl Session {
                 plain(&clan.suffix),
                 color_code(4),
                 plain(text)
-            ),
-        );
+            );
+        // On a team (an Add-On's teams), only teammates and allies hear it.
+        let player = self.peers[&owner].combat.player;
+        if self.minigames.team_of(player).is_some() {
+            let hearers: Vec<_> = self
+                .minigames
+                .game(game)
+                .map(|g| g.members.iter().copied().collect())
+                .unwrap_or_default();
+            for member in hearers {
+                if (member == player || self.minigames.allied(player, member))
+                    && let Some(to) = self.owner_of(member)
+                {
+                    self.notify(to, Notice::Chat(line.clone()));
+                }
+            }
+        } else {
+            self.chat_game(Some(game), None, line);
+        }
         Ok(())
     }
     /// Self-inflicted death (`serverCmdSuicide`).
@@ -1002,6 +1019,7 @@ impl Session {
     pub(super) fn apply_minigame_effects(&mut self, effects: Vec<mg::Effect>) -> Result<()> {
         let tick = self.simulation.state().tick;
         for effect in effects {
+            self.note_minigame_effect(&effect);
             match effect {
                 mg::Effect::Spawn {
                     player, equipment, ..
@@ -1199,7 +1217,9 @@ impl Session {
                 mg::Effect::Created { .. }
                 | mg::Effect::Configured { .. }
                 | mg::Effect::Score { .. }
-                | mg::Effect::Reset { .. } => {}
+                | mg::Effect::Reset { .. }
+                | mg::Effect::TeamsConfigured { .. }
+                | mg::Effect::TeamChanged { .. } => {}
                 // `updatePlayerBalls`: members with empty hands get the ball.
                 mg::Effect::StartBall { player, image, .. } => {
                     if let Some(owner) = self.owner_of(player)
@@ -1243,8 +1263,9 @@ impl Session {
     /// `GameConnection::spawnPlayer`: pick a spawn, heal, equip and relocate.
     fn respawn(&mut self, owner: OwnerId, equipment: Option<mg::Equipment>) -> Result<()> {
         let tick = self.simulation.state().tick;
-        // A new body is on no mount and carries nobody.
+        // A new body is on no mount, carries nobody and wears nothing.
         self.dismount_player(owner, true);
+        self.weapons.clear_worn(ActorId(owner));
         self.release_riders(owner);
         let (feet, yaw) = self.pick_spawn(owner);
         {
@@ -1367,15 +1388,12 @@ impl Session {
         if let Some(checkpoint) = self.checkpoint_spawn(owner) {
             return Some(checkpoint);
         }
-        let world = self.simulation.state();
-        let spawn_bricks: Vec<_> = world
-            .bricks
-            .iter()
-            .filter(|(_, b)| {
-                matches!(&b.definition, bri_world::ContentRef::Resolved(id) if id == SPAWN_BRICK)
-            })
-            .map(|(id, b)| (*id, b.owner))
-            .collect();
+        // An Add-On's rules (Slayer's team spawns) choose before the
+        // engine's spawn bricks.
+        if let Some(chosen) = self.package_pick_spawn(owner) {
+            return Some(chosen);
+        }
+        let spawn_bricks = self.spawn_bricks();
         let word = self.next_spawn_word();
         let chosen = self.peers.get(&owner).and_then(|peer| {
             if self
@@ -1410,6 +1428,22 @@ impl Session {
         Some((Vec3::from(brick.position) + Vec3::Y * 0.1, yaw))
     }
 
+    /// Every spawn point brick (the base Spawn Point and bricks inheriting
+    /// it) with its owner, from the definition index.
+    pub(super) fn spawn_bricks(&self) -> Vec<(BrickId, u64)> {
+        let world = self.simulation.state();
+        let mut out: Vec<_> = self
+            .simulation
+            .definitions
+            .entries
+            .iter()
+            .filter(|(_, d)| d.special == crate::definitions::Special::SpawnPoint)
+            .flat_map(|(id, _)| self.simulation.bricks_of(id))
+            .filter_map(|id| world.bricks.get(&id).map(|b| (id, b.owner)))
+            .collect();
+        out.sort_unstable();
+        out
+    }
     /// Per tick: rule clock, corpse timeouts and falling damage.
     pub(super) fn step_combat(&mut self, impacts: Vec<(OwnerId, Vec3)>) -> Result<()> {
         let effects = self

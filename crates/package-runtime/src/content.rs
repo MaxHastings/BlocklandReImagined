@@ -205,6 +205,26 @@ pub struct Behaviour {
     /// tick.
     #[serde(default)]
     pub on_projectile_hit: bool,
+    /// `on_minigame(event)` after something happens to a mini-game:
+    /// `event` is `#{ kind, game, player, team }`, `kind` being `created`,
+    /// `configured`, `reset`, `ended`, `joined`, `left`, `team` (a member's
+    /// team changed; `team` is the new one or `()`) or `teams` (the game's
+    /// team list changed). Delivered at the start of the next tick.
+    #[serde(default)]
+    pub on_minigame: bool,
+    /// `on_pick_spawn(player)` as a player is about to (re)spawn: return a
+    /// brick id to appear on that brick, `[x, y, z]` to appear there, or
+    /// `()` to leave the choice to the engine (spawn bricks, then the map).
+    /// The first package answering decides. Called as it happens, so it
+    /// must be quick (Slayer's team spawns).
+    #[serde(default)]
+    pub on_pick_spawn: bool,
+    /// Touch zones over bricks (Torque triggers a brick made with
+    /// `createTrigger`): `on_zone(player, brick, event)` as a living player
+    /// enters (`"enter"`), stays in (`"tick"`, when `ticks` is set) or
+    /// leaves (`"leave"`) the box over a brick of one of `bricks`.
+    #[serde(default)]
+    pub zones: Vec<ZoneDef>,
     /// `on_tick()` every `tick_interval` ticks, when set.
     #[serde(default)]
     pub tick_interval: Option<u32>,
@@ -213,6 +233,62 @@ pub struct Behaviour {
     /// allows, `false` or a reason string refuses.
     #[serde(default)]
     pub policies: Vec<String>,
+}
+/// Most touch zones one behaviour declares, and brick kinds one zone names.
+pub const MAX_ZONES: usize = 16;
+pub const MAX_ZONE_KINDS: usize = 16;
+/// A touch zone: the box over every brick of some kinds.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ZoneDef {
+    /// Brick definitions (`namespace:brick/name` of this package or one it
+    /// depends on, or `v20/brick/<datablock>`).
+    pub bricks: Vec<String>,
+    /// How far the box reaches above the brick's top, units. v20's
+    /// `createTrigger` reached 0.2 above it.
+    #[serde(default = "ZoneDef::default_above")]
+    pub above: f32,
+    /// How often the zone is checked, milliseconds: a Torque trigger's
+    /// `tickPeriodMS` (100 unless the trigger's datablock says otherwise),
+    /// 10 to 10000, rounded up to whole ticks.
+    #[serde(default = "ZoneDef::default_period")]
+    pub period_ms: u32,
+    /// Also call `on_zone(player, brick, "tick")` for players staying in.
+    #[serde(default)]
+    pub ticks: bool,
+}
+impl ZoneDef {
+    fn default_above() -> f32 {
+        0.2
+    }
+    fn default_period() -> u32 {
+        100
+    }
+    /// The check period in ticks (120 a second), at least one.
+    pub fn period_ticks(&self) -> u32 {
+        (self.period_ms * 120).div_ceil(1000).max(1)
+    }
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            !self.bricks.is_empty() && self.bricks.len() <= MAX_ZONE_KINDS,
+            "a zone names 1 to {MAX_ZONE_KINDS} brick kinds"
+        );
+        for b in &self.bricks {
+            ensure!(
+                bri_package::id::is_content_ref(b, Some("brick")) || b.starts_with("v20/brick/"),
+                "zone brick `{b}` is not a brick id"
+            );
+        }
+        ensure!(
+            self.above.is_finite() && (0.0..=64.0).contains(&self.above),
+            "a zone's `above` must be 0 to 64"
+        );
+        ensure!(
+            (10..=10_000).contains(&self.period_ms),
+            "a zone's period_ms must be 10 to 10000"
+        );
+        Ok(())
+    }
 }
 /// Decisions the engine owns the mechanism for and asks packages about.
 pub const POLICIES: &[&str] = &[
@@ -302,6 +378,10 @@ impl Behaviour {
             "behaviour schema_version must be 1"
         );
         ensure!(self.commands.len() <= 64, "at most 64 commands");
+        ensure!(self.zones.len() <= MAX_ZONES, "at most {MAX_ZONES} zones");
+        for z in &self.zones {
+            z.validate()?;
+        }
         let mut names = std::collections::BTreeSet::new();
         for c in &self.commands {
             ensure!(

@@ -266,7 +266,9 @@ pub struct Image {
     pub follow_arm: bool,
     /// Held, the image takes its holder's spray colour (the palette colour
     /// they last picked) as a colour spray can does: a tool that paints
-    /// with that colour shows it.
+    /// with that colour shows it. Its item on a brick shows the brick's
+    /// colour, and worn or dropped by an Add-On's rules it shows the colour
+    /// they give (a team's flag).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub paint_tint: bool,
 }

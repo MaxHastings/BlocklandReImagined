@@ -19,6 +19,9 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+mod games;
+pub use games::{BrickView, DropView, MAX_BRICKS_LISTED, MinigameView, TeamView};
+
 /// Operation budgets per kind of call.
 #[derive(Debug, Clone, Copy)]
 pub enum Budget {
@@ -100,6 +103,12 @@ pub struct PlayerView {
     /// Each tool slot's item id, empty for an empty slot (`%obj.tool[%i]`).
     #[serde(default)]
     pub tools: Vec<String>,
+    /// The team of their mini-game they play for, if it has teams.
+    #[serde(default)]
+    pub team: Option<u64>,
+    /// Their mini-game score (0 outside mini-games).
+    #[serde(default)]
+    pub score: i64,
 }
 /// Live questions a script may ask the engine during a call. They read the
 /// world as it is when the call runs: a call's own operations apply after it
@@ -125,6 +134,18 @@ pub trait World {
     /// Whether a voxel could be placed at voxel coordinates `position`
     /// now: inside the world, its chunk generated, and nothing in the way.
     fn can_place_voxel(&self, position: [i64; 3]) -> bool;
+    /// Up to `limit` bricks of definition `kind`, lowest id first.
+    fn bricks_of(&self, _kind: &str, _limit: usize) -> Vec<BrickView> {
+        Vec::new()
+    }
+    fn brick(&self, _brick: u64) -> Option<BrickView> {
+        None
+    }
+    /// The items the calling package put in the world with `drop_item`
+    /// that still lie there.
+    fn drops(&self) -> Vec<DropView> {
+        Vec::new()
+    }
 }
 /// What a ray met.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -216,6 +237,8 @@ pub struct Snapshot {
     /// and in [`object`](Self::object)'s answers.
     pub objects: Vec<ObjectView>,
     pub holds: Vec<HoldView>,
+    /// Every mini-game, with its members and teams.
+    pub minigames: Vec<MinigameView>,
 }
 impl Snapshot {
     /// Any movable object by reference, players and entities included.
@@ -447,6 +470,11 @@ fn player_map(p: &PlayerView) -> Dynamic {
             "tools",
             Dynamic::from_array(p.tools.iter().map(|t| t.clone().into()).collect()),
         ),
+        (
+            "team",
+            p.team.map_or(Dynamic::UNIT, |t| Dynamic::from_int(t as i64)),
+        ),
+        ("score", Dynamic::from_int(p.score)),
     ])
 }
 fn object_map(o: &ObjectView) -> Dynamic {
@@ -1186,6 +1214,9 @@ fn register_api(engine: &mut Engine) {
                 item: item.into(),
                 position: [float(&x)?, float(&y)?, float(&z)?],
                 velocity: [0.0; 3],
+                paint: None,
+                data: None,
+                seconds: None,
             })
         },
     );
@@ -1196,6 +1227,9 @@ fn register_api(engine: &mut Engine) {
                 item: item.into(),
                 position: [float(&x)?, float(&y)?, float(&z)?],
                 velocity: [float(&vx)?, float(&vy)?, float(&vz)?],
+                paint: None,
+                data: None,
+                seconds: None,
             })
         },
     );
@@ -1241,6 +1275,7 @@ fn register_api(engine: &mut Engine) {
     register_physics(engine);
     register_queries(engine);
     register_presentation(engine);
+    games::register(engine);
 }
 
 fn damage_op(
@@ -1707,6 +1742,16 @@ fn register_physics(engine: &mut Engine) {
     });
 }
 
+/// Whether `source` compiles as a package script, with the line of the
+/// first problem: for tools that write scripts (an Add-On port's rules)
+/// to refuse one the game would not load.
+pub fn check_syntax(source: &str) -> Result<(), String> {
+    sandbox().compile(source).map(drop).map_err(|e| match e.1.line() {
+        Some(line) => format!("line {line}: {}", e.0),
+        None => e.0.to_string(),
+    })
+}
+
 fn sandbox() -> Engine {
     use rhai::packages::{
         BasicArrayPackage, BasicMapPackage, BasicMathPackage, BasicStringPackage, CorePackage,
@@ -1855,6 +1900,15 @@ impl Runtime {
             }
             if behaviour.on_projectile_hit {
                 need("on_projectile_hit".into(), 1, "on_projectile_hit");
+            }
+            if behaviour.on_minigame {
+                need("on_minigame".into(), 1, "on_minigame");
+            }
+            if behaviour.on_pick_spawn {
+                need("on_pick_spawn".into(), 1, "on_pick_spawn");
+            }
+            if !behaviour.zones.is_empty() {
+                need("on_zone".into(), 3, "zones");
             }
             for policy in &behaviour.policies {
                 need(format!("allow_{policy}"), 1, &format!("policy `{policy}`"));

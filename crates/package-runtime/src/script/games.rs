@@ -1,0 +1,351 @@
+//! Mini-games, teams and score as scripts see and change them, and the
+//! bricks a game's rules care about (team spawns, flag stands): what
+//! Slayer-style team games are built from.
+use super::*;
+use crate::ops::{MAX_DROP_SECONDS, MAX_SCORE, MAX_TEAMS, TeamOp};
+
+/// One mini-game as scripts see it (`minigames()`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MinigameView {
+    pub id: u64,
+    pub title: String,
+    /// The player who runs it, or `None` for the server's own (a game
+    /// mode's).
+    pub owner: Option<u64>,
+    pub members: Vec<u64>,
+    /// Counts up by one at every reset.
+    pub round: u64,
+    pub teams: Vec<TeamView>,
+    pub friendly_fire: bool,
+    pub ally_same_color: bool,
+}
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TeamView {
+    pub id: u64,
+    pub name: String,
+    /// The team's paint palette index.
+    pub color: u8,
+}
+/// A brick as scripts see it (`bricks(kind)`, `brick(id)`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BrickView {
+    pub id: u64,
+    /// Its definition: `namespace:brick/name` or `v20/brick/<datablock>`.
+    pub kind: String,
+    /// The middle of the brick.
+    pub position: [f32; 3],
+    /// Its paint palette index.
+    pub color: u8,
+    /// The player (BL_ID) who owns it; 0 for the world's own.
+    pub owner: u64,
+    /// The mini-game whose bricks it is (its owner runs that game, or plays
+    /// in it when it uses every player's bricks): v20's `minigameCanUse`.
+    pub game: Option<u64>,
+    /// Its name (`setNTObjectName`), or empty.
+    pub name: String,
+    /// The item it holds out (`setItem`), or empty.
+    pub item: String,
+}
+/// An item a package's rules put in the world (`drops()`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DropView {
+    pub id: u64,
+    pub item: String,
+    pub position: [f32; 3],
+    /// What `drop_item` kept with it.
+    pub data: Option<serde_json::Value>,
+}
+/// Most bricks `bricks(kind)` returns.
+pub const MAX_BRICKS_LISTED: usize = 4096;
+
+fn team_map(t: &TeamView) -> Dynamic {
+    map([
+        ("id", Dynamic::from_int(t.id as i64)),
+        ("name", t.name.clone().into()),
+        ("color", Dynamic::from_int(i64::from(t.color))),
+    ])
+}
+fn minigame_map(g: &MinigameView) -> Dynamic {
+    map([
+        ("id", Dynamic::from_int(g.id as i64)),
+        ("title", g.title.clone().into()),
+        (
+            "owner",
+            g.owner.map_or(Dynamic::UNIT, |o| Dynamic::from_int(o as i64)),
+        ),
+        (
+            "members",
+            Dynamic::from_array(
+                g.members
+                    .iter()
+                    .map(|m| Dynamic::from_int(*m as i64))
+                    .collect(),
+            ),
+        ),
+        ("round", Dynamic::from_int(g.round as i64)),
+        (
+            "teams",
+            Dynamic::from_array(g.teams.iter().map(team_map).collect()),
+        ),
+        ("friendly_fire", g.friendly_fire.into()),
+        ("ally_same_color", g.ally_same_color.into()),
+    ])
+}
+pub(super) fn brick_map(b: &BrickView) -> Dynamic {
+    let [x, y, z] = position(b.position);
+    map([
+        ("id", Dynamic::from_int(b.id as i64)),
+        ("kind", b.kind.clone().into()),
+        x,
+        y,
+        z,
+        ("color", Dynamic::from_int(i64::from(b.color))),
+        ("owner", Dynamic::from_int(b.owner as i64)),
+        (
+            "game",
+            b.game.map_or(Dynamic::UNIT, |g| Dynamic::from_int(g as i64)),
+        ),
+        ("name", b.name.clone().into()),
+        ("item", b.item.clone().into()),
+    ])
+}
+fn optional_id(value: &Dynamic) -> Fallible<Option<u64>> {
+    if value.is_unit() {
+        Ok(None)
+    } else {
+        id(value).map(Some)
+    }
+}
+fn palette_index(value: &Dynamic) -> Fallible<u8> {
+    match value.as_int() {
+        Ok(c) if (0..=255).contains(&c) => Ok(c as u8),
+        _ => fail("a colour is a palette index, 0 to 255"),
+    }
+}
+fn teams(value: Array) -> Fallible<Vec<TeamOp>> {
+    if value.len() > MAX_TEAMS {
+        return fail(format!("at most {MAX_TEAMS} teams"));
+    }
+    value
+        .into_iter()
+        .map(|t| {
+            let t = t
+                .try_cast::<Map>()
+                .ok_or("a team is #{ name, color } (and its `id` to keep it)")?;
+            let name = t
+                .get("name")
+                .and_then(|n| n.clone().into_string().ok())
+                .ok_or("a team needs a `name`")?;
+            let color = palette_index(t.get("color").ok_or("a team needs a `color`")?)?;
+            let id = t.get("id").map(optional_id).transpose()?.flatten();
+            Ok(TeamOp { id, name, color })
+        })
+        .collect()
+}
+fn set_teams(game: Dynamic, list: Array, options: Map) -> Fallible<()> {
+    let flag = |key: &str| -> Fallible<bool> {
+        options.get(key).map_or(Ok(false), |v| {
+            v.as_bool()
+                .map_err(|_| format!("`{key}` is true or false").into())
+        })
+    };
+    for key in options.keys() {
+        if !["friendly_fire", "ally_same_color"].contains(&key.as_str()) {
+            return fail(format!(
+                "set_teams options are friendly_fire and ally_same_color, not `{key}`"
+            ));
+        }
+    }
+    push(Op::SetTeams {
+        game: id(&game)?,
+        teams: teams(list)?,
+        friendly_fire: flag("friendly_fire")?,
+        ally_same_color: flag("ally_same_color")?,
+    })
+}
+fn score(player: &Dynamic, value: &Dynamic, add: bool) -> Fallible<()> {
+    let value = value.as_int().map_err(|_| "a score is a whole number")?;
+    if value.abs() > MAX_SCORE {
+        return fail(format!("a score is at most {MAX_SCORE} either way"));
+    }
+    push(Op::SetScore {
+        player: id(player)?,
+        value,
+        add,
+    })
+}
+
+fn drop_map(d: &DropView) -> Dynamic {
+    let [x, y, z] = position(d.position);
+    map([
+        ("id", Dynamic::from_int(d.id as i64)),
+        ("item", d.item.clone().into()),
+        x,
+        y,
+        z,
+        (
+            "data",
+            d.data
+                .as_ref()
+                .and_then(|v| rhai::serde::to_dynamic(v).ok())
+                .unwrap_or(Dynamic::UNIT),
+        ),
+    ])
+}
+fn vector(value: &Dynamic, what: &str) -> Fallible<[f32; 3]> {
+    let parts = value
+        .clone()
+        .into_array()
+        .map_err(|_| format!("`{what}` is [x, y, z]"))?;
+    match parts.as_slice() {
+        [x, y, z] => Ok([float(x)?, float(y)?, float(z)?]),
+        _ => fail(format!("`{what}` is [x, y, z]")),
+    }
+}
+/// `drop_item(item, #{ at, velocity, paint, data, seconds })`.
+fn drop_with(item: &str, options: Map) -> Fallible<()> {
+    for key in options.keys() {
+        if !["at", "velocity", "paint", "data", "seconds"].contains(&key.as_str()) {
+            return fail(format!(
+                "drop_item options are at, velocity, paint, data and seconds, not `{key}`"
+            ));
+        }
+    }
+    let at = options.get("at").ok_or("drop_item needs `at`: [x, y, z]")?;
+    let data = match options.get("data") {
+        None => None,
+        Some(d) if d.is_unit() => None,
+        Some(d) => Some(
+            rhai::serde::from_dynamic::<serde_json::Value>(d)
+                .map_err(|_| "`data` must be plain values: numbers, text, arrays, maps")?,
+        ),
+    };
+    let seconds = match options.get("seconds") {
+        None => None,
+        Some(s) => match s.as_int() {
+            Ok(s) if (1..=i64::from(MAX_DROP_SECONDS)).contains(&s) => Some(s as u32),
+            _ => return fail(format!("`seconds` is 1 to {MAX_DROP_SECONDS}")),
+        },
+    };
+    push(Op::DropItem {
+        item: item.into(),
+        position: vector(at, "at")?,
+        velocity: options
+            .get("velocity")
+            .map(|v| vector(v, "velocity"))
+            .transpose()?
+            .unwrap_or([0.0; 3]),
+        paint: options.get("paint").map(palette_index).transpose()?,
+        data,
+        seconds,
+    })
+}
+fn wear(player: Dynamic, image: Dynamic, slot: Dynamic, paint: Option<u8>) -> Fallible<()> {
+    let slot = match slot.as_int() {
+        Ok(s @ 2..=3) => s as u8,
+        _ => return fail("worn image slots are 2 and 3 (0 is the hand: mount_image(player, image))"),
+    };
+    push(Op::WearImage {
+        player: id(&player)?,
+        slot,
+        image: if image.is_unit() {
+            None
+        } else {
+            Some(
+                image
+                    .into_string()
+                    .map_err(|_| "an image is a string like \"pkg:image/flag\", or ()")?,
+            )
+        },
+        paint,
+    })
+}
+
+pub(super) fn register(engine: &mut Engine) {
+    engine.register_fn("minigames", || {
+        with(|i| {
+            Ok(i.snapshot
+                .minigames
+                .iter()
+                .map(minigame_map)
+                .collect::<Array>())
+        })
+    });
+    engine.register_fn("minigame", |game: Dynamic| {
+        with(|i| {
+            let game = id(&game)?;
+            Ok(i.snapshot
+                .minigames
+                .iter()
+                .find(|g| g.id == game)
+                .map_or(Dynamic::UNIT, minigame_map))
+        })
+    });
+    engine.register_fn("set_teams", |game: Dynamic, list: Array| {
+        set_teams(game, list, Map::new())
+    });
+    engine.register_fn("set_teams", set_teams);
+    engine.register_fn("set_team", |player: Dynamic, team: Dynamic| {
+        push(Op::SetTeam {
+            player: id(&player)?,
+            team: optional_id(&team)?,
+        })
+    });
+    engine.register_fn("set_score", |player: Dynamic, value: Dynamic| {
+        score(&player, &value, false)
+    });
+    engine.register_fn("add_score", |player: Dynamic, value: Dynamic| {
+        score(&player, &value, true)
+    });
+    engine.register_fn("reset_minigame", |game: Dynamic| {
+        push(Op::ResetMinigame { game: id(&game)? })
+    });
+    engine.register_fn("set_brick_item", |brick: Dynamic, item: Dynamic| {
+        push(Op::SetBrickItem {
+            brick: id(&brick)?,
+            item: if item.is_unit() {
+                None
+            } else {
+                Some(
+                    item.into_string()
+                        .map_err(|_| "an item is a string like \"pkg:weapon/flag\", or ()")?,
+                )
+            },
+        })
+    });
+    engine.register_fn("drop_item", drop_with);
+    engine.register_fn("remove_drop", |drop: Dynamic| {
+        push(Op::RemoveDrop { drop: id(&drop)? })
+    });
+    engine.register_fn("drops", || {
+        with_world(|world, _| Ok(world.drops().iter().map(drop_map).collect::<Array>()))
+    });
+    engine.register_fn("mount_image", |p: Dynamic, image: Dynamic, slot: Dynamic| {
+        wear(p, image, slot, None)
+    });
+    engine.register_fn(
+        "mount_image",
+        |p: Dynamic, image: Dynamic, slot: Dynamic, paint: Dynamic| {
+            let paint = if paint.is_unit() {
+                None
+            } else {
+                Some(palette_index(&paint)?)
+            };
+            wear(p, image, slot, paint)
+        },
+    );
+    // Every brick of one kind, lowest id first, at most MAX_BRICKS_LISTED.
+    engine.register_fn("bricks", |kind: &str| {
+        with_world(|world, _| {
+            Ok(world
+                .bricks_of(kind, MAX_BRICKS_LISTED)
+                .iter()
+                .map(brick_map)
+                .collect::<Array>())
+        })
+    });
+    engine.register_fn("brick", |brick: Dynamic| {
+        let brick = id(&brick)?;
+        with_world(|world, _| Ok(world.brick(brick).as_ref().map_or(Dynamic::UNIT, brick_map)))
+    });
+}

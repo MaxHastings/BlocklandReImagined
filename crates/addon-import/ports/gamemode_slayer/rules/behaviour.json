@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "script": "slayer.rhai",
+  "commands": [
+    {
+      "name": "teams",
+      "args": [
+        "string"
+      ],
+      "while_dead": true,
+      "cooldown_ticks": 12
+    },
+    {
+      "name": "slayer",
+      "args": [
+        "string"
+      ],
+      "while_dead": true,
+      "cooldown_ticks": 12
+    },
+    {
+      "name": "jointeam",
+      "args": [
+        "string"
+      ],
+      "while_dead": true,
+      "cooldown_ticks": 12
+    },
+    {
+      "name": "leaveteam",
+      "while_dead": true,
+      "cooldown_ticks": 12
+    },
+    {
+      "name": "listteams",
+      "while_dead": true,
+      "cooldown_ticks": 12
+    },
+    {
+      "name": "teamlist",
+      "while_dead": true,
+      "cooldown_ticks": 12
+    },
+    {
+      "name": "teamcount",
+      "while_dead": true,
+      "cooldown_ticks": 12
+    },
+    {
+      "name": "teamscore",
+      "while_dead": true,
+      "cooldown_ticks": 12
+    }
+  ],
+  "state": {
+    "global": {
+      "games": {
+        "default": {},
+        "persist": false
+      }
+    }
+  },
+  "on_minigame": true,
+  "on_pick_spawn": true
+}

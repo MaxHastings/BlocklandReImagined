@@ -264,6 +264,20 @@ pub enum Op {
         item: String,
         position: [f32; 3],
         velocity: [f32; 3],
+        /// A palette colour tinting it (a team's flag).
+        #[serde(default)]
+        paint: Option<u8>,
+        /// Kept with it: `on_pickup` sees it as `info.data`, `drops()` too.
+        #[serde(default)]
+        data: Option<serde_json::Value>,
+        /// Seconds until it pops (1 to [`MAX_DROP_SECONDS`]); `None` is
+        /// v20's ten.
+        #[serde(default)]
+        seconds: Option<u32>,
+    },
+    /// Take back an item this package put in the world with `drop_item`.
+    RemoveDrop {
+        drop: u64,
     },
     /// Change an object's velocity by `velocity` (units per second). `by`
     /// is the player credited when what it hits is hurt or broken.
@@ -402,7 +416,65 @@ pub enum Op {
         player: u64,
         image: Option<String>,
     },
+    /// Put an image in a worn slot (2 or 3) of a player, tinted with a
+    /// palette colour (`mountImage(%image, 3)`: a flag on the back), or
+    /// take it off with `None`.
+    WearImage {
+        player: u64,
+        slot: u8,
+        image: Option<String>,
+        paint: Option<u8>,
+    },
+    /// Set a mini-game's teams and team rules, as Slayer's team list does:
+    /// a team with an `id` keeps it and its members, one without is new,
+    /// and teams left out are removed (their members are left on none).
+    SetTeams {
+        game: u64,
+        teams: Vec<TeamOp>,
+        friendly_fire: bool,
+        ally_same_color: bool,
+    },
+    /// Put a member of a mini-game on one of its teams, or on none.
+    SetTeam {
+        player: u64,
+        team: Option<u64>,
+    },
+    /// Set a player's mini-game score, or with `add` change it by `value`
+    /// (`incScore`).
+    SetScore {
+        player: u64,
+        value: i64,
+        add: bool,
+    },
+    /// Reset a mini-game (`MiniGameSO::reset`): every member respawns with
+    /// a score of 0 and the game's bricks come back.
+    ResetMinigame {
+        game: u64,
+    },
+    /// The item a brick holds out to be picked up (`setItem`): an item of
+    /// this package, a dependency's or v20's, or `None` for none.
+    SetBrickItem {
+        brick: u64,
+        item: Option<String>,
+    },
 }
+/// One team as [`Op::SetTeams`] asks for it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TeamOp {
+    pub id: Option<u64>,
+    pub name: String,
+    /// The team's paint palette index.
+    pub color: u8,
+}
+/// Longest a dropped item may lie, seconds.
+pub const MAX_DROP_SECONDS: u32 = 600;
+/// Largest data a dropped item carries, bytes of JSON.
+pub const MAX_DROP_DATA_BYTES: usize = 1024;
+/// Most teams one mini-game may have, and the longest team name.
+pub const MAX_TEAMS: usize = 64;
+pub const MAX_TEAM_NAME: usize = 50;
+/// Largest score `set_score` sets or adds.
+pub const MAX_SCORE: i64 = 1_000_000_000;
 /// The mirror [`Op::MirrorCopy`] stands in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MirrorAxis {
@@ -474,6 +546,11 @@ impl Op {
             | Self::ShowBox { .. } => "effects",
             Self::CopyBuild { .. } | Self::CopyBox { .. } | Self::MirrorCopy { .. } => "build",
             Self::SetMapLights { .. } => "lighting",
+            Self::SetTeams { .. }
+            | Self::SetTeam { .. }
+            | Self::SetScore { .. }
+            | Self::ResetMinigame { .. } => "minigame",
+            Self::SetBrickItem { .. } => "world.edit",
             Self::SetEnvironment { .. } => "environment",
             Self::Teleport { .. }
             | Self::Respawn { .. }
@@ -482,6 +559,8 @@ impl Op {
             | Self::GiveItem { .. }
             | Self::TakeItem { .. }
             | Self::DropItem { .. }
+            | Self::RemoveDrop { .. }
+            | Self::WearImage { .. }
             | Self::SetFov { .. }
             | Self::SetImageAmmo { .. }
             | Self::MountImage { .. }
@@ -618,6 +697,13 @@ impl Op {
             Self::MountImage { image, .. } => image
                 .as_deref()
                 .is_none_or(|i| bri_package::id::is_content_ref(i, Some("image"))),
+            Self::WearImage { slot, image, .. } => {
+                (2..=3).contains(slot)
+                    && image
+                        .as_deref()
+                        .is_none_or(|i| bri_package::id::is_content_ref(i, Some("image")))
+            }
+            Self::RemoveDrop { .. } => true,
             Self::SpawnEntity {
                 kind,
                 position,
@@ -648,8 +734,15 @@ impl Op {
                 item: id,
                 position,
                 velocity,
+                data,
+                seconds,
+                ..
             } => {
-                item(id)
+                seconds.is_none_or(|s| (1..=MAX_DROP_SECONDS).contains(&s))
+                    && data.as_ref().is_none_or(|d| {
+                        serde_json::to_vec(d).is_ok_and(|b| b.len() <= MAX_DROP_DATA_BYTES)
+                    })
+                    && item(id)
                     && finite(position)
                     && finite(velocity)
                     && glam_length(velocity) <= MAX_PUSH_SPEED
@@ -672,6 +765,17 @@ impl Op {
                 distance.is_finite() && (0.5..=MAX_HOLD_DISTANCE).contains(distance)
             }
             Self::LetGo { .. } | Self::RemoveVehicle { .. } => true,
+            Self::SetTeams { teams, .. } => {
+                teams.len() <= MAX_TEAMS
+                    && teams.iter().all(|t| {
+                        !t.name.trim().is_empty()
+                            && t.name.chars().count() <= MAX_TEAM_NAME
+                            && !t.name.chars().any(char::is_control)
+                    })
+            }
+            Self::SetTeam { .. } | Self::ResetMinigame { .. } => true,
+            Self::SetScore { value, .. } => value.abs() <= MAX_SCORE,
+            Self::SetBrickItem { item: id, .. } => id.as_deref().is_none_or(item),
             Self::Fire {
                 projectile,
                 position,
@@ -767,6 +871,12 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::SetEnvironment { .. } => "set_environment",
         Op::SetImageAmmo { .. } => "set_image_ammo",
         Op::MountImage { .. } => "mount_image",
+        Op::SetTeams { .. } => "set_teams",
+        Op::SetTeam { .. } => "set_team",
+        Op::SetScore { add: false, .. } => "set_score",
+        Op::SetScore { add: true, .. } => "add_score",
+        Op::ResetMinigame { .. } => "reset_minigame",
+        Op::SetBrickItem { .. } => "set_brick_item",
         Op::SpawnEntity { .. } => "spawn_entity",
         Op::RemoveEntity { .. } => "remove_entity",
         Op::Steer { .. } => "steer",
@@ -789,6 +899,8 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::GiveItem { .. } => "give_item",
         Op::TakeItem { .. } => "take_item",
         Op::DropItem { .. } => "drop_item",
+        Op::RemoveDrop { .. } => "remove_drop",
+        Op::WearImage { .. } => "mount_image",
         Op::Push { .. } => "push",
         Op::Tumble { .. } => "tumble",
         Op::Hold { .. } => "hold",

@@ -24,6 +24,7 @@ use bri_package_runtime::{
 use bri_world::MAX_BRICKS;
 use std::sync::Arc;
 
+mod game_hooks;
 mod item_hooks;
 pub(super) use item_hooks::Pickup;
 
@@ -325,6 +326,8 @@ pub(super) struct PackageHost {
     in_damage_hook: bool,
     /// Pending `on_projectile_hit` calls and what dropped items carry.
     item_hooks: item_hooks::ItemHooks,
+    /// Pending `on_minigame` events and who stands in each zone.
+    game_hooks: game_hooks::GameHooks,
     /// Per-origin shares of the server's package capacity (stress campaign
     /// W1): no one package, or one player's commands, can take a pool
     /// every player needs.
@@ -627,6 +630,7 @@ impl Session {
             spawns: VecDeque::new(),
             in_damage_hook: false,
             item_hooks: Default::default(),
+            game_hooks: Default::default(),
             shares: Shares::new(scripts),
             script_time: BTreeMap::new(),
             state_bytes,
@@ -951,6 +955,11 @@ impl Session {
                         image,
                         image_state,
                         paint: p.current_color,
+                        team: self.minigames.team_of(p.combat.player).map(|t| u64::from(t.0)),
+                        score: self
+                            .minigames
+                            .player(p.combat.player)
+                            .map_or(0, |m| m.score),
                     }
                 })
                 .collect(),
@@ -975,6 +984,7 @@ impl Session {
                 .unwrap_or_default(),
             objects: self.movable_views(),
             holds: self.hold_views(),
+            minigames: self.script_minigames(),
         }
     }
     /// Give a joining player every package's player defaults and run
@@ -1056,7 +1066,7 @@ impl Session {
         let input = state.clone();
         // Scripts ask the live world mid-call (`raycast`, `can_damage`), so
         // the session is only read while the script runs.
-        let world = super::script_world::ScriptWorld::new(self);
+        let world = super::script_world::ScriptWorld::new(self, package);
         let call = Call {
             function,
             args,
@@ -1535,7 +1545,29 @@ impl Session {
                 item,
                 position,
                 velocity,
-            } => self.package_drop_item(package, &item, position, velocity),
+                paint,
+                data,
+                seconds,
+            } => self.package_drop_item(package, &item, position, velocity, paint, data, seconds),
+            Op::RemoveDrop { drop } => self.package_remove_drop(package, drop),
+            Op::WearImage {
+                player,
+                slot,
+                image,
+                paint,
+            } => {
+                let peer = self.peers.get(&player).context("No such player")?;
+                ensure!(peer.combat.alive, "Only living players wear things");
+                if let Some(image) = &image {
+                    let host = self.packages.as_ref().context("No packages are enabled")?;
+                    ensure!(
+                        item_hooks::owns(&host.catalog, package, image),
+                        "`{image}` is not an image of `{package}` or an Add-On it depends on"
+                    );
+                }
+                self.weapons
+                    .wear(bri_weapons::ActorId(player), slot, image.as_deref(), paint)
+            }
             op @ (Op::Push { .. }
             | Op::Tumble { .. }
             | Op::Hold { .. }
@@ -1717,6 +1749,20 @@ impl Session {
                     }
                     None => self.weapons.swap_image(actor, None),
                 }
+            }
+            op @ (Op::SetTeams { .. }
+            | Op::SetTeam { .. }
+            | Op::SetScore { .. }
+            | Op::ResetMinigame { .. }) => self.apply_minigame_op(op),
+            Op::SetBrickItem { brick, item } => {
+                if let Some(item) = &item {
+                    let host = self.packages.as_ref().context("No packages are enabled")?;
+                    ensure!(
+                        item.starts_with("v20/") || item_hooks::owns(&host.catalog, package, item),
+                        "`{item}` is not an item of `{package}` or an Add-On it depends on"
+                    );
+                }
+                self.package_set_brick_item(brick, item, caller)
             }
             Op::Sound { profile, at } => {
                 self.take_cue(package)?;
@@ -2298,8 +2344,15 @@ impl Session {
             .collect::<Result<_>>()?;
         let mut args = Vec::with_capacity(def.args.len());
         for (i, kind) in def.args.iter().enumerate() {
-            let Some(word) = words.get(i) else { break };
             let last = i + 1 == def.args.len();
+            let Some(word) = words.get(i) else {
+                // A final `string` takes the rest of the line, which may be
+                // nothing (`/teams` alone, as v20's `serverCmdTeams`).
+                if last && *kind == ArgType::String {
+                    args.push(PackageArg::String(String::new()));
+                }
+                break;
+            };
             args.push(match kind {
                 ArgType::String if last => PackageArg::String(words[i..].join(" ")),
                 ArgType::Int => word
@@ -2575,6 +2628,8 @@ impl Session {
         self.deliver_loadouts();
         self.deliver_spawns();
         self.deliver_hits();
+        self.deliver_minigame_events();
+        self.step_zones();
         let changed = self.dirty.read(super::dirty::Reader::Packages);
         let Some(host) = self.packages.as_ref() else {
             return Ok(());

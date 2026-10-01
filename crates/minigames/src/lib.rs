@@ -2,6 +2,7 @@
 mod model;
 mod persistence;
 mod policy;
+mod teams;
 pub use model::*;
 pub use persistence::Preset;
 pub use policy::*;
@@ -99,6 +100,7 @@ impl MinigamesWorld {
                 invite: None,
                 ignored_owners: BTreeSet::new(),
                 last_join: None,
+                team: None,
             },
         );
         Ok(id)
@@ -264,6 +266,7 @@ impl MinigamesWorld {
             .expect("validated game")
             .members
             .remove(&player);
+        self.clear_team(player, id, out);
         self.players
             .get_mut(&player)
             .expect("validated player")
@@ -285,6 +288,7 @@ impl MinigamesWorld {
         let game = self.games.remove(&id).expect("validated game");
         for p in &game.members {
             let alive = matches!(self.players[p].life, LifeState::Alive { .. });
+            self.clear_team(*p, id, out);
             self.players.get_mut(p).expect("validated player").game = None;
             out.push(Effect::Membership {
                 player: *p,
@@ -360,9 +364,10 @@ impl MinigamesWorld {
                         color,
                         settings,
                         members: BTreeSet::new(),
-                        round: 1,
+                                round: 1,
                         last_reset: None,
                         ball_update_at: None,
+                        teams: Teams::default(),
                     },
                 );
                 out.push(Effect::Created { game: id });
@@ -619,6 +624,7 @@ impl MinigamesWorld {
                 round: 1,
                 last_reset: None,
                 ball_update_at: None,
+                teams: Teams::default(),
             },
         );
         Ok(id)

@@ -1,0 +1,492 @@
+//! Add-On rules for team games (Slayer and its modes): `on_minigame` hears
+//! what happens to mini-games, `on_pick_spawn` chooses where a player
+//! appears, `zones` are touch boxes over bricks (Torque's `createTrigger`),
+//! and the operations that set up teams, keep score, reset rounds and put
+//! items on bricks.
+//!
+//! The engine owns the mechanisms (who is on which team, who may hurt whom,
+//! where a box is and who stands in it); the Add-On owns the policy (how
+//! many teams, what a flag does, what wins).
+use super::*;
+use bri_minigames as mg;
+use bri_package_runtime::content::Behaviour;
+use bri_package_runtime::rhai::Map;
+use bri_package_runtime::script::{BrickView, MinigameView, TeamView};
+
+/// Mini-game events waiting for `on_minigame`, oldest first.
+const MAX_PENDING_EVENTS: usize = 1024;
+/// Most bricks one zone kind is checked over per check; more are skipped
+/// (and reported) rather than stalling a tick.
+const MAX_ZONE_BRICKS: usize = 4096;
+
+/// One thing that happened to a mini-game, for `on_minigame`.
+#[derive(Debug, Clone, PartialEq)]
+pub(in crate::session) struct GameEvent {
+    kind: &'static str,
+    game: u64,
+    player: Option<OwnerId>,
+    team: Option<u64>,
+}
+
+/// Add-On state a session keeps for these hooks.
+#[derive(Default)]
+pub(in crate::session) struct GameHooks {
+    events: VecDeque<GameEvent>,
+    /// Who stood in each zone at its last check: by package and zone, the
+    /// brick and player pairs.
+    inside: BTreeMap<(String, usize), BTreeSet<(BrickId, OwnerId)>>,
+    /// An `on_pick_spawn` hook is running: a spawn its operations cause
+    /// (a reset) takes the engine's choice, so a hook never recurses.
+    picking: bool,
+}
+
+impl Session {
+    /// Queue what a mini-game effect means to Add-On rules. Runs before the
+    /// effect is applied, so a membership change still knows the old game.
+    pub(in crate::session) fn note_minigame_effect(&mut self, effect: &mg::Effect) {
+        let Some(host) = self.packages.as_ref() else {
+            return;
+        };
+        if !host.catalog.behaviours().any(|(_, b)| b.on_minigame) {
+            return;
+        }
+        let event = |kind, game: mg::GameId| GameEvent {
+            kind,
+            game: game.0,
+            player: None,
+            team: None,
+        };
+        let mut out = Vec::new();
+        match effect {
+            mg::Effect::Created { game } => out.push(event("created", *game)),
+            mg::Effect::Configured { game } => out.push(event("configured", *game)),
+            mg::Effect::Ended { game } => out.push(event("ended", *game)),
+            mg::Effect::Reset { game, .. } => out.push(event("reset", *game)),
+            mg::Effect::TeamsConfigured { game } => out.push(event("teams", *game)),
+            mg::Effect::TeamChanged { player, game, team } => {
+                if let Some(owner) = self.owner_of(*player) {
+                    out.push(GameEvent {
+                        player: Some(owner),
+                        team: team.map(|t| u64::from(t.0)),
+                        ..event("team", *game)
+                    });
+                }
+            }
+            mg::Effect::Membership { player, game, .. } => {
+                if let Some(owner) = self.owner_of(*player) {
+                    let old = self.last_membership.get(&owner).copied().flatten();
+                    if old != *game {
+                        if let Some(old) = old {
+                            out.push(GameEvent {
+                                player: Some(owner),
+                                ..event("left", old)
+                            });
+                        }
+                        if let Some(new) = game {
+                            out.push(GameEvent {
+                                player: Some(owner),
+                                ..event("joined", *new)
+                            });
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        let host = self.packages.as_mut().expect("checked");
+        for e in out {
+            if host.game_hooks.events.len() == MAX_PENDING_EVENTS {
+                host.game_hooks.events.pop_front();
+            }
+            host.game_hooks.events.push_back(e);
+        }
+    }
+
+    pub(in crate::session) fn deliver_minigame_events(&mut self) {
+        let Some(host) = self.packages.as_mut() else {
+            return;
+        };
+        let events = std::mem::take(&mut host.game_hooks.events);
+        if events.is_empty() {
+            return;
+        }
+        let hooks = declaring(host, |b| b.on_minigame);
+        let id = |v: Option<u64>| v.map_or(Dynamic::UNIT, |v| Dynamic::from_int(v as i64));
+        for e in events {
+            let mut map = Map::new();
+            map.insert("kind".into(), e.kind.into());
+            map.insert("game".into(), Dynamic::from_int(e.game as i64));
+            map.insert("player".into(), id(e.player));
+            map.insert("team".into(), id(e.team));
+            for package in &hooks {
+                let _ = self.run_package(
+                    package,
+                    "on_minigame",
+                    vec![Dynamic::from_map(map.clone())],
+                    Budget::Command,
+                    None,
+                    None,
+                    None,
+                );
+                self.charge_work(package);
+            }
+        }
+    }
+
+    /// `on_pick_spawn(player)`: where an Add-On's rules want `owner` to
+    /// appear, if any does. A brick id appears on that brick as on a spawn
+    /// brick; `[x, y, z]` appears there.
+    pub(in crate::session) fn package_pick_spawn(&mut self, owner: OwnerId) -> Option<(Vec3, f32)> {
+        let host = self.packages.as_ref()?;
+        if self.bots.is_bot(owner) || host.game_hooks.picking {
+            return None;
+        }
+        let hooks = declaring(host, |b| b.on_pick_spawn);
+        if hooks.is_empty() {
+            return None;
+        }
+        self.packages.as_mut()?.game_hooks.picking = true;
+        let chosen = self.pick_spawn_from(owner, hooks);
+        if let Some(host) = self.packages.as_mut() {
+            host.game_hooks.picking = false;
+        }
+        chosen
+    }
+    fn pick_spawn_from(&mut self, owner: OwnerId, hooks: Vec<String>) -> Option<(Vec3, f32)> {
+        for package in hooks {
+            let answer = self.run_package(
+                &package,
+                "on_pick_spawn",
+                vec![Dynamic::from_int(owner as i64)],
+                Budget::Command,
+                None,
+                None,
+                None,
+            );
+            self.charge_work(&package);
+            let Ok(answer) = answer else {
+                continue;
+            };
+            if answer.is_unit() {
+                continue;
+            }
+            if let Ok(brick) = answer.as_int() {
+                match self.simulation.state().bricks.get(&(brick as u64)) {
+                    Some(b) => {
+                        let yaw = -f32::from(b.quarter_turns) * std::f32::consts::FRAC_PI_2;
+                        return Some((Vec3::from(b.position) + Vec3::Y * 0.1, yaw));
+                    }
+                    None => {
+                        self.hook_warning(
+                            &package,
+                            format!("on_pick_spawn returned brick {brick}, which does not exist"),
+                        );
+                        continue;
+                    }
+                }
+            }
+            let point = answer.clone().into_typed_array::<f64>().ok().or_else(|| {
+                answer
+                    .clone()
+                    .into_array()
+                    .ok()?
+                    .iter()
+                    .map(|v| v.as_float().ok().or_else(|| v.as_int().ok().map(|i| i as f64)))
+                    .collect()
+            });
+            match point.as_deref() {
+                Some(&[x, y, z])
+                    if [x, y, z].iter().all(|v| v.is_finite() && v.abs() < 1e6) =>
+                {
+                    return Some((Vec3::new(x as f32, y as f32, z as f32), 0.0));
+                }
+                _ => self.hook_warning(
+                    &package,
+                    format!(
+                        "on_pick_spawn must return (), a brick id or [x, y, z], not {}",
+                        answer.type_name()
+                    ),
+                ),
+            }
+        }
+        None
+    }
+
+    /// Check every zone that is due: who entered, stayed in or left the box
+    /// over each of its bricks since its last check.
+    pub(in crate::session) fn step_zones(&mut self) {
+        let Some(host) = self.packages.as_ref() else {
+            return;
+        };
+        let tick = self.simulation.state().tick;
+        let zones: Vec<(String, usize, bri_package_runtime::content::ZoneDef)> = host
+            .catalog
+            .behaviours()
+            .flat_map(|(package, b)| {
+                b.zones
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, z)| tick.is_multiple_of(u64::from(z.period_ticks())))
+                    .map(|(i, z)| (package.clone(), i, z.clone()))
+            })
+            .collect();
+        if zones.is_empty() {
+            return;
+        }
+        let bodies: Vec<(OwnerId, Vec3, Vec3)> = self
+            .peers
+            .iter()
+            .filter(|(o, p)| p.combat.alive && !self.bots.is_bot(**o))
+            .map(|(o, p)| {
+                let state = p.player.state();
+                let tuning = p.player.tuning();
+                let half = tuning.width * 0.5 * state.scale;
+                let height = if state.crouched {
+                    tuning.crouch_height
+                } else {
+                    tuning.stand_height
+                } * state.scale;
+                let feet = Vec3::from(state.feet);
+                (
+                    *o,
+                    feet - Vec3::new(half, 0.0, half),
+                    feet + Vec3::new(half, height, half),
+                )
+            })
+            .collect();
+        for (package, index, zone) in zones {
+            let mut now = BTreeSet::new();
+            let mut skipped = 0usize;
+            for kind in &zone.bricks {
+                for (n, brick) in self.simulation.bricks_of(kind).enumerate() {
+                    if n == MAX_ZONE_BRICKS {
+                        skipped += 1;
+                        break;
+                    }
+                    let Some((lo, mut hi)) = self.simulation.brick_box(brick) else {
+                        continue;
+                    };
+                    hi.y += zone.above;
+                    for (owner, a, b) in &bodies {
+                        if a.cmple(hi).all() && b.cmpge(lo).all() {
+                            now.insert((brick, *owner));
+                        }
+                    }
+                }
+            }
+            if skipped > 0 {
+                self.hook_warning(
+                    &package,
+                    format!("a zone covers more than {MAX_ZONE_BRICKS} bricks of one kind; the rest are not checked"),
+                );
+            }
+            let host = self.packages.as_mut().expect("checked");
+            let before = host
+                .game_hooks
+                .inside
+                .insert((package.clone(), index), now.clone())
+                .unwrap_or_default();
+            let mut calls: Vec<(BrickId, OwnerId, &str)> = Vec::new();
+            calls.extend(before.difference(&now).map(|(b, o)| (*b, *o, "leave")));
+            calls.extend(now.difference(&before).map(|(b, o)| (*b, *o, "enter")));
+            if zone.ticks {
+                calls.extend(now.intersection(&before).map(|(b, o)| (*b, *o, "tick")));
+            }
+            for (brick, owner, event) in calls {
+                let _ = self.run_package(
+                    &package,
+                    "on_zone",
+                    vec![
+                        Dynamic::from_int(owner as i64),
+                        Dynamic::from_int(brick as i64),
+                        event.into(),
+                    ],
+                    Budget::Command,
+                    None,
+                    None,
+                    None,
+                );
+                self.charge_work(&package);
+            }
+        }
+    }
+
+    /// Every mini-game as scripts see it.
+    pub(in crate::session) fn script_minigames(&self) -> Vec<MinigameView> {
+        self.minigames
+            .games()
+            .map(|g| MinigameView {
+                id: g.id.0,
+                title: g.settings.title.clone(),
+                owner: (!g.is_server()).then(|| self.owner_of(g.owner)).flatten(),
+                members: g.members.iter().filter_map(|p| self.owner_of(*p)).collect(),
+                round: g.round,
+                teams: g
+                    .teams
+                    .list
+                    .iter()
+                    .map(|t| TeamView {
+                        id: u64::from(t.id.0),
+                        name: t.name.clone(),
+                        color: t.color,
+                    })
+                    .collect(),
+                friendly_fire: g.teams.friendly_fire,
+                ally_same_color: g.teams.ally_same_color,
+            })
+            .collect()
+    }
+
+    /// The mini-game whose bricks `owner`'s bricks are: the game they run,
+    /// or the one they play in when it uses every player's bricks.
+    pub(in crate::session) fn brick_game(&self, owner: u64) -> Option<mg::GameId> {
+        let account = mg::AccountId(owner);
+        self.minigames
+            .games()
+            .find(|g| {
+                g.owner.account == account
+                    || (g.settings.use_all_players_bricks
+                        && g.members.iter().any(|m| m.account == account))
+            })
+            .map(|g| g.id)
+    }
+
+    /// A brick as scripts see it.
+    pub(in crate::session) fn brick_view(&self, id: BrickId) -> Option<BrickView> {
+        let b = self.simulation.state().bricks.get(&id)?;
+        let kind = match &b.definition {
+            bri_world::ContentRef::Resolved(kind) => kind.clone(),
+            bri_world::ContentRef::Unresolved { .. } => return None,
+        };
+        let (lo, hi) = self.simulation.brick_box(id)?;
+        let item = match &b.item_spawn.item {
+            Some(bri_world::ContentRef::Resolved(item)) => item.clone(),
+            _ => String::new(),
+        };
+        Some(BrickView {
+            id,
+            kind,
+            position: ((lo + hi) * 0.5).to_array(),
+            color: b.color,
+            owner: b.owner,
+            game: self.brick_game(b.owner).map(|g| g.0),
+            name: b.name.clone().unwrap_or_default(),
+            item,
+        })
+    }
+
+    /// `set_brick_item`: the item a brick holds out, as v20's
+    /// `fxDTSBrick::setItem`. The brick must be the world's or one the
+    /// calling player has full trust on.
+    pub(in crate::session) fn package_set_brick_item(
+        &mut self,
+        brick: BrickId,
+        item: Option<String>,
+        caller: Option<OwnerId>,
+    ) -> Result<()> {
+        let b = self
+            .simulation
+            .state()
+            .bricks
+            .get(&brick)
+            .context("No such brick")?;
+        // A game's rules may stock its own bricks (a flag stand on the
+        // field its owner built), as v20's `minigameCanUse` let them.
+        let trusted = b.owner == 0
+            || self.brick_game(b.owner).is_some()
+            || caller
+                .and_then(|c| self.peers.get(&c))
+                .is_some_and(|p| p.actor.trusted(b.owner, bri_world::authority::trust::FULL));
+        ensure!(
+            trusted,
+            "Brick {brick} is not a mini-game's and the caller has no trust on it"
+        );
+        if let Some(item) = &item {
+            ensure!(
+                self.item_spawners.bounds.contains_key(item),
+                "No item `{item}` to put on a brick"
+            );
+        }
+        let restock = item.is_some();
+        self.simulation.mutate(brick, |b| {
+            b.item_spawn.item = item.map(bri_world::ContentRef::Resolved)
+        })?;
+        self.dirty.insert(brick);
+        if restock {
+            let tick = self.simulation.state().tick;
+            self.item_spawners.restock(brick, tick);
+        }
+        Ok(())
+    }
+
+    /// Apply a mini-game operation an Add-On's rules asked for.
+    pub(in crate::session) fn apply_minigame_op(&mut self, op: Op) -> Result<()> {
+        let player_of = |s: &Self, owner: u64| -> Result<mg::PlayerId> {
+            Ok(s.peers.get(&owner).context("No such player")?.combat.player)
+        };
+        let effects = match op {
+            Op::SetTeams {
+                game,
+                teams,
+                friendly_fire,
+                ally_same_color,
+            } => {
+                let specs = teams
+                    .into_iter()
+                    .map(|t| {
+                        Ok(mg::TeamSpec {
+                            id: t
+                                .id
+                                .map(|id| u32::try_from(id).map(mg::TeamId))
+                                .transpose()
+                                .ok()
+                                .context("No such team")?,
+                            name: t.name,
+                            color: t.color,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                self.minigames
+                    .set_teams(mg::GameId(game), specs, friendly_fire, ally_same_color)
+                    .map_err(|e| anyhow::anyhow!("Teams rejected: {e}"))?
+                    .1
+            }
+            Op::SetTeam { player, team } => {
+                let target = player_of(self, player)?;
+                let team = team
+                    .map(|t| u32::try_from(t).map(mg::TeamId))
+                    .transpose()
+                    .ok()
+                    .context("No such team")?;
+                self.minigames
+                    .assign_team(target, team)
+                    .map_err(|e| anyhow::anyhow!("Team rejected: {e}"))?
+            }
+            Op::SetScore { player, value, add } => {
+                let target = player_of(self, player)?;
+                let value = i32::try_from(value).context("Score out of range")?;
+                self.minigames
+                    .event_score(target, value, add)
+                    .map_err(|e| anyhow::anyhow!("Score rejected: {e}"))?
+            }
+            Op::ResetMinigame { game } => self
+                .minigames
+                .execute(mg::Command::Reset {
+                    game: mg::GameId(game),
+                    authority: mg::EventAuthority::System,
+                })
+                .map_err(|e| anyhow::anyhow!("Reset rejected: {e}"))?,
+            _ => unreachable!("not a mini-game operation"),
+        };
+        self.apply_minigame_effects(effects)
+    }
+}
+
+/// Packages whose behaviour declares a hook, in catalog order.
+fn declaring(host: &PackageHost, declares: fn(&Behaviour) -> bool) -> Vec<String> {
+    host.catalog
+        .behaviours()
+        .filter(|(_, b)| declares(b))
+        .map(|(id, _)| id.clone())
+        .collect()
+}

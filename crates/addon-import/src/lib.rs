@@ -184,9 +184,21 @@ struct Ctx<'a> {
     /// Lower virtual path to package-relative output file.
     outputs: BTreeMap<String, String>,
     provides: Vec<serde_json::Value>,
+    /// Scripts a port declares (`datablocks.cs`), by lower virtual path:
+    /// read beside the Add-On's own, but not among its files.
+    ported: BTreeMap<String, String>,
 }
 
 impl Ctx<'_> {
+    /// The text of one of the scripts being imported: the Add-On's own or
+    /// one its port declares.
+    fn script_text(&self, path: &str) -> Option<String> {
+        match self.src.get(path) {
+            Some(f) => Some(String::from_utf8_lossy(&f.bytes).into_owned()),
+            None => self.ported.get(&path.to_ascii_lowercase()).cloned(),
+        }
+    }
+
     fn id(&mut self, kind: &str, name: &str, from: &str, file: &str) -> String {
         let id = content_id(&self.ns, kind, name);
         if !self.report.ids.iter().any(|e| e.id == id) {
@@ -317,9 +329,28 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
         shapes: BTreeMap::new(),
         outputs: BTreeMap::new(),
         provides: vec![],
+        ported: BTreeMap::new(),
     };
     metadata(&mut cx);
-    let scripts = read_scripts(&mut cx);
+    let mut scripts = read_scripts(&mut cx);
+    // What a port's patterns read: every function's body, and each script
+    // file's whole text by its path in the Add-On (`server.cs`), for values
+    // set outside any function.
+    let mut bodies = ports::Bodies::new();
+    for f in scripts.iter().flat_map(|s| &s.functions) {
+        bodies
+            .entry(f.qualified().to_ascii_lowercase())
+            .or_insert_with(|| f.body.clone());
+    }
+    for f in src.files.values() {
+        if f.path.to_ascii_lowercase().ends_with(".cs") {
+            bodies.insert(
+                src.member(f).to_ascii_lowercase(),
+                String::from_utf8_lossy(&f.bytes).replace('\r', ""),
+            );
+        }
+    }
+    port_datablocks(&mut cx, ports, &bodies, &mut scripts);
     inventory(&mut cx, &scripts);
     top_level(&mut cx, &scripts);
     datablocks(&mut cx, &scripts);
@@ -331,13 +362,37 @@ pub fn import_with(opts: &Options, ports: &ports::Ports) -> Result<Report> {
     sounds_and_rest(&mut cx);
     behaviours(&mut cx, &scripts);
     dependencies(&mut cx, &scripts);
-    let mut bodies = ports::Bodies::new();
-    for f in scripts.iter().flat_map(|s| &s.functions) {
-        bodies
-            .entry(f.qualified().to_ascii_lowercase())
-            .or_insert_with(|| f.body.clone());
-    }
     finish(cx, opts, ports, &bodies)
+}
+
+/// A listed port's `datablocks.cs`: datablocks the Add-On makes at run time,
+/// read as if it were one more of the Add-On's scripts, in its folder.
+fn port_datablocks(
+    cx: &mut Ctx,
+    ports: &ports::Ports,
+    bodies: &ports::Bodies,
+    scripts: &mut Vec<Script>,
+) {
+    let Some(text) = ports::datablocks(ports, &cx.src.name, &cx.ns, bodies) else {
+        return;
+    };
+    let path = format!("{}/port-{}", cx.src.dir(), ports::DATABLOCKS);
+    let read = text.and_then(|text| Ok((tscript::read(&text, &path)?, text)));
+    match read {
+        Ok((script, text)) => {
+            cx.ported.insert(path.to_ascii_lowercase(), text);
+            cx.report.diagnostics.push(format!(
+                "{path}: the port declares {} datablocks the Add-On makes at run time",
+                script.datablocks.len()
+            ));
+            scripts.push(script);
+        }
+        Err(e) => cx.unsupported(
+            format!("script {path}"),
+            None,
+            format!("the port's datablocks could not be read: {e:#}"),
+        ),
+    }
 }
 
 fn metadata(cx: &mut Ctx) {
@@ -618,11 +673,7 @@ fn top_level(cx: &mut Ctx, scripts: &[Script]) {
             );
         }
         // Writes into other objects' fields at load, e.g. `GunItem.uiName = "";`.
-        let text = cx
-            .src
-            .get(&s.path)
-            .map(|f| String::from_utf8_lossy(&f.bytes).into_owned())
-            .unwrap_or_default();
+        let text = cx.script_text(&s.path).unwrap_or_default();
         for (i, line) in text.lines().enumerate() {
             if let Some(c) = write.captures(line) {
                 let object = c[1].to_owned();
@@ -1013,6 +1064,19 @@ fn weapons(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
         .filter(|o| is_weapon(&o.d.class))
         .map(|o| weapon_definition(o, &o.d.fields))
         .collect();
+    // A field naming a global the game or the Add-On sets to a constant at
+    // load (`mountPoint = $BackSlot;`) reads as its value.
+    let globals = load_globals(cx, scripts);
+    for d in &mut defs {
+        for v in d.fields.values_mut() {
+            let name = v.trim().to_ascii_lowercase();
+            if name.starts_with('$')
+                && let Some(value) = globals.get(&name)
+            {
+                *v = format!("\"{value}\"");
+            }
+        }
+    }
     if defs.is_empty() {
         return Ok(());
     }
@@ -1256,8 +1320,7 @@ fn weapons(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
     // Damage types this Add-On declares.
     let texts: Vec<_> = scripts
         .iter()
-        .filter_map(|s| cx.src.get(&s.path))
-        .map(|f| String::from_utf8_lossy(&f.bytes).into_owned())
+        .filter_map(|s| cx.script_text(&s.path))
         .collect();
     for t in texts
         .iter()
@@ -2030,8 +2093,26 @@ fn vehicle_emitter(cx: &mut Ctx, d: &mut bri_vehicles::Definition, name: &str) -
     Ok(id)
 }
 
+/// Globals the Add-On sets at load to constant values (`$X::Path =
+/// filePath(expandFileName("./server.cs"))`, `$X::Category = "Special"`), in
+/// load order: a global set twice keeps the later value, as straight-line
+/// execution of a fresh install (no prefs saved yet) leaves it.
+fn load_globals(cx: &Ctx, scripts: &[Script]) -> bri_convert::catalog::Globals {
+    let mut globals = cx.reference.globals.clone();
+    for s in scripts {
+        let dir = s.path.rsplit_once('/').map_or(s.path.as_str(), |(d, _)| d);
+        for g in &s.globals {
+            if let Some(v) = bri_convert::catalog::constant_global(&g.value, dir, &globals) {
+                globals.insert(g.name.to_ascii_lowercase(), v);
+            }
+        }
+    }
+    globals
+}
+
 fn bricks(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
     let mut entries = vec![];
+    let globals = load_globals(cx, scripts);
     for s in scripts {
         if !s
             .datablocks
@@ -2041,28 +2122,42 @@ fn bricks(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
             continue;
         }
         let dir = s.path.rsplit_once('/').map_or(s.path.as_str(), |(d, _)| d);
-        let text =
-            String::from_utf8_lossy(&cx.src.get(&s.path).expect("script").bytes).into_owned();
-        // Parents declared elsewhere (base bricks), as declarations the reader can inherit from.
-        let mut parents = String::new();
-        for o in cx.reference.datablocks.values() {
-            let d = &o.datablock;
+        let text = cx.script_text(&s.path).expect("script");
+        // Parents declared elsewhere, as declarations the reader can inherit
+        // from: base bricks, and the Add-On's bricks in its other scripts
+        // (a port's `datablocks.cs` inherits from the Add-On's own).
+        let mut declared = BTreeMap::new();
+        let elsewhere = cx
+            .reference
+            .datablocks
+            .iter()
+            .map(|(k, o)| (k, &o.datablock))
+            .chain(
+                cx.owned
+                    .iter()
+                    .filter(|(_, o)| !o.path.eq_ignore_ascii_case(&s.path))
+                    .map(|(k, o)| (k, &o.d)),
+            );
+        for (key, d) in elsewhere {
             if d.class.eq_ignore_ascii_case("fxDTSBrickData") {
-                parents.push_str(&format!(
-                    "datablock fxDTSBrickData({}{}) {{ {} }};
-",
-                    d.name,
-                    d.parent
-                        .as_ref()
-                        .map_or(String::new(), |p| format!(" : {p}")),
-                    d.fields
-                        .iter()
-                        .map(|(k, v)| format!("{k} = {v};"))
-                        .collect::<String>()
-                ));
+                declared.insert(
+                    key.clone(),
+                    format!(
+                        "datablock fxDTSBrickData({}{}) {{ {} }};\n",
+                        d.name,
+                        d.parent
+                            .as_ref()
+                            .map_or(String::new(), |p| format!(" : {p}")),
+                        d.fields
+                            .iter()
+                            .map(|(k, v)| format!("{k} = {v};"))
+                            .collect::<String>()
+                    ),
+                );
             }
         }
-        match bri_convert::catalog::read_with_parents(&text, dir, &parents) {
+        let parents: String = declared.into_values().collect();
+        match bri_convert::catalog::read_with_globals(&text, dir, &parents, &globals) {
             Ok(catalog) => {
                 for mut b in catalog.bricks {
                     let key = b.id.rsplit('/').next().unwrap_or("").to_owned();

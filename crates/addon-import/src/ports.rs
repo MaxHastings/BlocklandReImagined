@@ -43,7 +43,9 @@ pub struct Entry {
     pub sha256: Vec<String>,
     /// Each script function the port replaces, with named patterns its body
     /// must match (case-insensitive). A pattern's first group, when it has
-    /// one, is the value the port's patches use as `{name}`.
+    /// one, is the value the port's patches use as `{name}`. A key that is a
+    /// script's path in the Add-On (`server.cs`) matches that file's whole
+    /// text, for values it sets outside any function.
     pub covers: BTreeMap<String, BTreeMap<String, String>>,
     /// Tests that prove the port, `path name`.
     #[serde(default)]
@@ -374,14 +376,10 @@ pub fn apply(ports: &Ports, import: &Import, bodies: &Bodies, out: &Path) -> Opt
     Some(applied)
 }
 
-fn try_apply(
-    ports: &Ports,
-    e: &Entry,
-    import: &Import,
-    bodies: &Bodies,
-    out: &Path,
-    applied: &mut Applied,
-) -> Result<()> {
+/// The values `e`'s patterns read from this copy's scripts. Fails when a
+/// covered function is missing or does not match.
+fn capture(e: &Entry, bodies: &Bodies) -> Result<BTreeMap<String, String>> {
+    let mut values = BTreeMap::new();
     for (function, patterns) in &e.covers {
         let Some(body) = bodies.get(&function.to_ascii_lowercase()) else {
             bail!("this copy has no `{function}`");
@@ -391,12 +389,47 @@ fn try_apply(
                 .captures(body)
                 .with_context(|| format!("`{function}` does not match the port's `{name}`"))?;
             if let Some(value) = caps.get(1) {
-                applied
-                    .values
-                    .insert(name.clone(), value.as_str().to_owned());
+                values.insert(name.clone(), value.as_str().to_owned());
             }
         }
     }
+    Ok(values)
+}
+
+/// The port's `datablocks.cs` for the Add-On `addon`, with `{{name}}`
+/// filled in from this copy's scripts and `{{namespace}}`: datablocks the
+/// Add-On makes at run time (in a function or a loop, as Slayer CTF makes
+/// its flags), declared as the importer reads them. The importer reads it
+/// beside the Add-On's own scripts, in its folder, before converting.
+/// `None` when no port is listed or it has no datablocks.
+pub fn datablocks(
+    ports: &Ports,
+    addon: &str,
+    namespace: &str,
+    bodies: &Bodies,
+) -> Option<Result<String>> {
+    let e = ports.find(addon)?;
+    let bytes = ports.files.get(&format!("{}/{DATABLOCKS}", e.port))?;
+    Some((|| {
+        let text = std::str::from_utf8(bytes).context("datablocks.cs is not UTF-8 text")?;
+        let mut values = capture(e, bodies)?;
+        values.insert("namespace".to_owned(), namespace.to_owned());
+        fill_text(text, &values).context(DATABLOCKS)
+    })())
+}
+
+/// A port's declarations of datablocks its Add-On makes at run time.
+pub const DATABLOCKS: &str = "datablocks.cs";
+
+fn try_apply(
+    ports: &Ports,
+    e: &Entry,
+    import: &Import,
+    bodies: &Bodies,
+    out: &Path,
+    applied: &mut Applied,
+) -> Result<()> {
+    applied.values = capture(e, bodies)?;
     let port = ports.port(e)?;
     applied.notes = port.notes.clone();
     // What every port may use besides the values its patterns read.
@@ -573,6 +606,10 @@ fn check_rules(id: &str, manifest: &[u8], files: &[Written]) -> Result<()> {
         "rules/behaviour.json runs `{}`, which the rules do not have",
         behaviour.script
     );
+    for (file, bytes) in files.iter().filter(|(f, _)| f.ends_with(".rhai")) {
+        bri_package_runtime::script::check_syntax(&String::from_utf8_lossy(bytes))
+            .map_err(|e| anyhow::anyhow!("rules/{file}: {e}"))?;
+    }
     Ok(())
 }
 

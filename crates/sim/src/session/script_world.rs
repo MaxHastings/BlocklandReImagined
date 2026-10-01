@@ -9,13 +9,16 @@ use std::cell::OnceCell;
 
 pub(super) struct ScriptWorld<'a> {
     pub(super) session: &'a Session,
+    /// The package whose call this is.
+    package: &'a str,
     /// The Tutorial's moving target shapes, gathered on the first ray.
     shapes: OnceCell<Vec<crate::weapon_query::ShapeTarget>>,
 }
 impl<'a> ScriptWorld<'a> {
-    pub(super) fn new(session: &'a Session) -> Self {
+    pub(super) fn new(session: &'a Session, package: &'a str) -> Self {
         Self {
             session,
+            package,
             shapes: OnceCell::new(),
         }
     }
@@ -94,6 +97,20 @@ impl World for ScriptWorld<'_> {
     }
     fn can_place_voxel(&self, position: [i64; 3]) -> bool {
         self.session.voxel_fits(position)
+    }
+    fn bricks_of(&self, kind: &str, limit: usize) -> Vec<bri_package_runtime::script::BrickView> {
+        self.session
+            .simulation
+            .bricks_of(kind)
+            .take(limit)
+            .filter_map(|id| self.session.brick_view(id))
+            .collect()
+    }
+    fn brick(&self, brick: u64) -> Option<bri_package_runtime::script::BrickView> {
+        self.session.brick_view(brick)
+    }
+    fn drops(&self) -> Vec<bri_package_runtime::script::DropView> {
+        self.session.package_drop_views(self.package)
     }
     fn brick_box(&self, brick: u64) -> Option<([f32; 3], [f32; 3])> {
         let (min, max) = self.session.simulation.brick_box(brick)?;

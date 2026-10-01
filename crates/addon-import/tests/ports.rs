@@ -586,3 +586,84 @@ fn port_and_check_port_run_from_the_executable() {
     assert!(text.contains("\"status\": \"verified\""), "{text}");
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// Slayer and its Capture the Flag mode: both ports apply to stand-ins with
+/// the originals' folder names and function shapes (`tests/fixtures/ports`,
+/// CC0), CTF's run-time flag datablocks import from the port's
+/// `datablocks.cs` with this copy's numbers, and both host-rules companions
+/// load as the game loads them.
+#[test]
+fn slayer_ports_apply_with_their_rules() {
+    let dir = fresh("slayer");
+    let root = dir.join("content");
+    let ports = Ports::builtin();
+    let mut ids = vec![];
+    for (addon, ns) in [
+        ("Gamemode_Slayer", "gamemode_slayer"),
+        ("Gamemode_Slayer_CTF", "gamemode_slayer_ctf"),
+    ] {
+        let out = root.join("addons").join(ns);
+        let report = import_with(&options(fixture(&format!("ports/{addon}")), out), &ports).unwrap();
+        let applied = &report.ports[0];
+        assert!(applied.applied, "{addon}: {:?}", applied.reason);
+        assert_eq!(applied.status, "partial");
+        ids.push(ns.to_owned());
+        ids.push(applied.rules.as_ref().expect("rules").id.clone());
+    }
+    let slayer = std::fs::read_to_string(root.join("addons/gamemode_slayer-rules/slayer.rhai")).unwrap();
+    assert!(slayer.contains("\"gamemode_slayer:brick/brickslyrspawnpointdata\""));
+
+    // This copy's numbers, read from its scripts.
+    let ctf = root.join("addons/gamemode_slayer_ctf");
+    let rules = std::fs::read_to_string(root.join("addons/gamemode_slayer_ctf-rules/ctf.rhai")).unwrap();
+    for line in [
+        "fn flag_slot() { 2 }",
+        "fn pickup_guard_ticks() { (250 * 120 + 999) / 1000 }",
+        "flagreturnstowin: 3,",
+        "points_flag: 25,",
+        "flagdroppedrespawntime: 7,",
+        "let ahead = 1.5;",
+        "let fling = 4;",
+    ] {
+        assert!(rules.contains(line), "ctf.rhai lacks `{line}`");
+    }
+    let behaviour = std::fs::read_to_string(root.join("addons/gamemode_slayer_ctf-rules/behaviour.json")).unwrap();
+    assert!(behaviour.contains("\"period_ms\": 100"), "{behaviour}");
+
+    // The flag item and image the original makes at run time, one of each,
+    // taking the colour of their brick or carrier.
+    let pack = Pack::from_json(&std::fs::read(ctf.join("assets/weapons.json")).unwrap()).unwrap();
+    let image = &pack.images["gamemode_slayer_ctf:image/slyrctf_flagimage"];
+    assert!(image.paint_tint);
+    assert_eq!(image.mount_point, 4);
+    // "0.1 -0.2 -0.3" in Torque's Z-up axes.
+    assert_eq!(image.offset, [0.1, -0.3, 0.2]);
+    let item = &pack.items["gamemode_slayer_ctf:weapon/slyrctf_flagitem"];
+    assert_eq!(item.ui_name, "Stand-in Flag");
+    assert_eq!(item.image, "gamemode_slayer_ctf:image/slyrctf_flagimage");
+    assert!(!item.can_drop);
+    let content = std::fs::read_to_string(ctf.join("assets/content.json")).unwrap();
+    for brick in ["brickslyrctfflagdata", "brickslyrctfflagreturndata"] {
+        assert!(
+            content.contains(&format!("gamemode_slayer_ctf:brick/{brick}")),
+            "no {brick}"
+        );
+    }
+
+    // Both companions load as the game loads any host Add-On.
+    use bri_package::library::Library;
+    let library = Library::scan(&root).unwrap();
+    let set = bri_package::packages::PackageSet {
+        schema_version: 1,
+        packages: ids
+            .iter()
+            .map(|id| {
+                let e = library.get(id).unwrap_or_else(|| panic!("{id} not found"));
+                assert!(!e.has_errors(), "{id}: {:?}", e.problems);
+                e.package.clone()
+            })
+            .collect(),
+    };
+    bri_package_runtime::Catalog::load(&root, &set, true).unwrap_or_else(|e| panic!("{e:#?}"));
+    std::fs::remove_dir_all(dir).unwrap();
+}

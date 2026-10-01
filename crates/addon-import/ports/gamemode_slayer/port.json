@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "notes": "Slayer's teams, rewritten as host rules: players join and are sorted onto a mini-game's teams, spawn on their team's spawn bricks, and the engine keeps teammates from hurting each other (friendly fire off, Slayer's default) and routes team chat. Without Slayer's GUI, the mini-game's owner or an admin sets up teams with /teams add <colour> <name>. Not ported yet: game modes other than Capture the Flag, lives, points and time limits, uniforms, bots, the GUI and its preferences.",
+  "rules": {
+    "capabilities": ["chat", "player", "minigame"]
+  },
+  "patch": {}
+}

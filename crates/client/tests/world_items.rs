@@ -42,6 +42,7 @@ fn static_item(brick: u64, position: [f32; 3]) -> StaticItem {
         position,
         direction: 2,
         available_at: 0,
+        paint: None,
     }
 }
 

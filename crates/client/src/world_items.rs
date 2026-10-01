@@ -348,7 +348,7 @@ impl WorldItems {
             if ghost {
                 self.diagnostics.cooling_down += 1;
             }
-            let Some(key) = self.item_key(&item.item, ghost) else {
+            let Some(key) = self.item_key(&item.item, ghost, item.paint) else {
                 continue;
             };
             candidates.push(Candidate {
@@ -371,7 +371,11 @@ impl WorldItems {
                 continue;
             }
             let Some(key) =
-                self.item_key(&drop.item, frame.tick.saturating_add(120) >= drop.expires)
+                self.item_key(
+                    &drop.item,
+                    frame.tick.saturating_add(120) >= drop.expires,
+                    drop.paint,
+                )
             else {
                 continue;
             };
@@ -506,7 +510,8 @@ impl WorldItems {
                 // The derived `color<N>SprayCanImage`: palette colour shift,
                 // alpha at least 10/255, clear can for translucent colours.
                 image.tint = [color[0], color[1], color[2], color[3].max(10. / 255.)];
-                if color[3] <= 0.99 {
+                // Only the hands hold spray cans; a worn image keeps its model.
+                if color[3] <= 0.99 && usize::from(hand) < bri_weapons::HAND_SLOTS {
                     image.model = TRANSLUCENT_SPRAY_CAN.into();
                 }
             }
@@ -642,8 +647,9 @@ impl WorldItems {
     }
 
     /// `faded` items (`schedulePop`, `Item::fadeOut`) take the ItemData colour
-    /// (or white) and leave their alpha to the instance.
-    fn item_key(&mut self, id: &str, faded: bool) -> Option<ModelKey> {
+    /// (or white) and leave their alpha to the instance. A `paint`ed item
+    /// (a team's flag) takes that palette colour instead of its image's.
+    fn item_key(&mut self, id: &str, faded: bool, paint: Option<u8>) -> Option<ModelKey> {
         let Some(item) = self.assets.presentation.items.get(id) else {
             self.missing(format!("Missing item presentation {id}"));
             return None;
@@ -660,6 +666,9 @@ impl WorldItems {
             && image.color_shift
         {
             tint = image.color;
+        }
+        if !faded && let Some(color) = paint.and_then(|p| self.palette.get(usize::from(p))) {
+            tint = *color;
         }
         if faded {
             tint[3] = 1.;

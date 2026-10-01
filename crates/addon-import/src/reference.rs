@@ -33,6 +33,10 @@ pub struct Reference {
     pub files: BTreeSet<String>,
     /// Lower-case Add-On name to its spelling.
     pub addons: BTreeMap<String, String>,
+    /// Globals the core scripts set to constants (`$backslot` → `4`), by
+    /// lower-case name with its `$`: Add-On fields name them
+    /// (`mountPoint = $BackSlot;`).
+    pub globals: bri_convert::catalog::Globals,
 }
 
 /// The base-game package that ships a vanilla Add-On's content
@@ -91,11 +95,17 @@ impl Reference {
             let name = core
                 .file_name()
                 .map_or(String::new(), |n| n.to_string_lossy().into_owned());
-            r.add_script(
-                "base",
-                &text,
-                &format!("base/server/scripts/{name} (recovered)"),
-            );
+            let path = format!("base/server/scripts/{name} (recovered)");
+            r.add_script("base", &text, &path);
+            if let Ok(script) = tscript::read(&text, &path) {
+                for g in &script.globals {
+                    if let Some(v) =
+                        bri_convert::catalog::constant_global(&g.value, "base/server/scripts", &r.globals)
+                    {
+                        r.globals.insert(g.name.to_ascii_lowercase(), v);
+                    }
+                }
+            }
         }
         let mut stack = vec![root.join("base")];
         while let Some(dir) = stack.pop() {

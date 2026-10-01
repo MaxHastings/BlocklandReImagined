@@ -176,6 +176,79 @@ fn declarations(tokens: &[Token]) -> Result<Vec<Declaration>> {
     Ok(declarations)
 }
 type Fields = BTreeMap<String, Vec<Token>>;
+/// The value of a constant expression: literals and known globals joined
+/// by `@`, `SPC`, `TAB` or `NL`. `None` for anything else.
+fn constant(tokens: &[Token], globals: &Globals) -> Option<String> {
+    let mut out = String::new();
+    let mut i = 0;
+    let mut joiner = Some("");
+    while i < tokens.len() {
+        let sep = joiner.take()?;
+        out.push_str(sep);
+        match &tokens[i] {
+            Token::String(v) => {
+                out.push_str(v);
+                i += 1;
+            }
+            Token::Atom(v) if v.starts_with('$') => {
+                let mut name = v.to_ascii_lowercase();
+                i += 1;
+                while tokens.get(i) == Some(&Token::Symbol(':'))
+                    && tokens.get(i + 1) == Some(&Token::Symbol(':'))
+                {
+                    let Some(Token::Atom(part)) = tokens.get(i + 2) else {
+                        return None;
+                    };
+                    name = format!("{name}::{}", part.to_ascii_lowercase());
+                    i += 3;
+                }
+                out.push_str(globals.get(&name)?);
+            }
+            Token::Atom(v) if v.parse::<f64>().is_ok() => {
+                out.push_str(v);
+                i += 1;
+            }
+            _ => return None,
+        }
+        joiner = match tokens.get(i) {
+            None => break,
+            Some(Token::Symbol('@')) => Some(""),
+            Some(t) if t.atom("SPC") => Some(" "),
+            Some(t) if t.atom("TAB") => Some("\t"),
+            Some(t) if t.atom("NL") => Some("\n"),
+            Some(_) => return None,
+        };
+        i += 1;
+    }
+    joiner.is_none().then_some(out)
+}
+/// A global's value as an Add-On sets it at load (`$X = <text>;`), when it
+/// is constant: literals, earlier globals in `globals`, `@`, `SPC`, `TAB`,
+/// `NL`, and `filePath(expandFileName("./file.cs"))`, the declaring
+/// script's folder `script_directory`.
+pub fn constant_global(text: &str, script_directory: &str, globals: &Globals) -> Option<String> {
+    let tokens = lex(text).ok()?;
+    // `filePath(expandFileName("./x"))`: the folder the script lives in.
+    let mut folded = Vec::with_capacity(tokens.len());
+    let mut i = 0;
+    while i < tokens.len() {
+        if tokens[i].atom("filePath")
+            && tokens.get(i + 1) == Some(&Token::Symbol('('))
+            && tokens.get(i + 2).is_some_and(|t| t.atom("expandFileName"))
+            && tokens.get(i + 3) == Some(&Token::Symbol('('))
+            && matches!(tokens.get(i + 4), Some(Token::String(p)) if p.starts_with("./") && !p[2..].contains('/'))
+            && tokens.get(i + 5) == Some(&Token::Symbol(')'))
+            && tokens.get(i + 6) == Some(&Token::Symbol(')'))
+        {
+            folded.push(Token::String(script_directory.to_string()));
+            i += 7;
+        } else {
+            folded.push(tokens[i].clone());
+            i += 1;
+        }
+    }
+    constant(&folded, globals)
+}
 fn resolve(
     name: &str,
     declarations: &BTreeMap<String, Declaration>,
@@ -365,6 +438,22 @@ pub fn read_at(source: &str, virtual_directory: &str) -> Result<Catalog> {
 /// another package owns (a community Add-On's brick inheriting a base brick).
 /// Only `source`'s bricks are returned.
 pub fn read_with_parents(source: &str, virtual_directory: &str, parents: &str) -> Result<Catalog> {
+    read_with_globals(source, virtual_directory, parents, &Globals::new())
+}
+/// Script globals an Add-On sets at load to constant values, by lower-case
+/// name with its `$` (`$slayer::server::path`), as [`constant_global`]
+/// evaluates them.
+pub type Globals = BTreeMap<String, String>;
+/// Like `read_with_parents`, but a field may also be a constant expression
+/// over `globals`: `category = $Slayer::Server::Bricks::Category;` or
+/// `brickFile = $Slayer::Server::Path @ "/shapes/node.blb";`. Still no
+/// interpreter: only literals, known globals and `@`, `SPC`, `TAB`, `NL`.
+pub fn read_with_globals(
+    source: &str,
+    virtual_directory: &str,
+    parents: &str,
+    globals: &Globals,
+) -> Result<Catalog> {
     let directory = path(virtual_directory.into())?;
     let source_path = |value: String| {
         path(
@@ -390,6 +479,13 @@ pub fn read_with_parents(source: &str, virtual_directory: &str, parents: &str) -
     let mut bricks = Vec::new();
     for key in order {
         let mut fields = resolve(&key, &all, &mut BTreeSet::new())?;
+        for tokens in fields.values_mut() {
+            if tokens.len() > 1
+                && let Some(value) = constant(tokens, globals)
+            {
+                *tokens = vec![Token::String(value)];
+            }
+        }
         let mesh = source_path(take(&mut fields, "brickfile")?.context("Missing brickFile")?)?;
         let display_name = take(&mut fields, "uiname")?.context("Missing uiName")?;
         let category = take(&mut fields, "category")?.unwrap_or_default();
