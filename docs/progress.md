@@ -8510,3 +8510,21 @@ Tests: `add_on_join::bot_kinds_come_from_the_blockhead_bot_add_on_the_host_runs`
 `add_on_join::a_host_with_the_blockhead_bot_on_spawns_bots_and_one_without_offers_none`
 (generated content: hosts with the Add-On on and off, loads a saved spawn
 brick, counts players). Not run here: the second needs generated content.
+## 2026-10-01 Vehicle destruction looks (v20 audit)
+
+Max: destroyed vehicles "would turn black right away when on fire" in v20,
+ours kept their colour. Confirmed from the recovered core scripts (read on
+the PC, never run): `WheeledVehicleData::Damage` (18821) and
+`FlyingVehicleData::Damage` (18910) paint every node black at `maxDamage`
+and swap the tires for `emptyTire`; the Tank's own destroy code blackens
+its turret too. Full step-by-step table in
+`docs/audits/vehicle-destruction.md`.
+- `Definition::wreck_color`: black for every Wheeled, Flying and Ball
+  vehicle, Add-On vehicles included; PlayerData mounts keep their colour.
+- The client paints body, turret and animated parts with it while the
+  replicated `destroyed` flag is set, and draws no wheels on a wreck. No
+  wire or protocol change.
+- Accepted gap: v20 also burns in the last 1% of health; health is not
+  replicated, so ours burns from destruction.
+- Tests: `bri-client` `vehicles::tests::a_destroyed_vehicle_is_drawn_black_without_its_tires`,
+  `only_vehicle_classes_char_and_player_mounts_keep_their_colour`.
