@@ -552,6 +552,8 @@ pub struct App {
     motion: crate::motion::Motion,
     /// Projectiles, drops and package entities smoothed between host updates.
     ghosts: crate::ghosts::Ghosts,
+    /// Shots drawn from the shooter's muzzle (`crate::shot_origins`).
+    shot_origins: crate::shot_origins::ShotOrigins,
     vehicle_assets: crate::vehicles::VehicleAssets,
     vehicles: crate::vehicles::ClientVehicles,
     /// Heading of the vehicle the local player rides, last frame.
@@ -1812,6 +1814,7 @@ impl App {
             save_shots: Default::default(),
             motion: Default::default(),
             ghosts: Default::default(),
+            shot_origins: Default::default(),
             vehicle_assets,
             vehicles: Default::default(),
             mount_heading: None,
@@ -7107,7 +7110,31 @@ impl PlatformApp for App {
                     })
                 },
             );
-            let weapons = self.ghosts.weapons();
+            // Each shot drawn from its shooter's muzzle as this client draws
+            // the gun, closing on the host's path where the aim meets the
+            // world (`crate::shot_origins`).
+            let world_items = &self.world_items;
+            let shown = self.shot_origins.shown(
+                self.ghosts.weapons(),
+                |actor| {
+                    world_items
+                        .held_muzzle(actor.0, 0)
+                        .or_else(|| world_items.held_muzzle(actor.0, 1))
+                },
+                |from, direction, most| {
+                    building
+                        .solid_segment(from, from + direction * most)
+                        .ok()
+                        .flatten()
+                        .map_or(most, |hit| hit.distance)
+                },
+                |p| {
+                    projectiles.get(&p.definition).map_or(0.0, |d| {
+                        p.velocity.length() * d.lifetime_ticks as f32 / bri_weapons::TICK_HZ as f32
+                    })
+                },
+            );
+            let weapons: &bri_sim::session::WeaponView = &shown;
             // Rebuilt only when the liquids or the paint change; they were
             // cloned (textures' names and all) several times every frame.
             let (liquids, waters) = match self.motion.collision() {

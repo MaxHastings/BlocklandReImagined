@@ -52,6 +52,7 @@ pub mod quality;
 pub mod saves;
 pub mod servers;
 pub mod settings;
+pub mod shot_origins;
 pub mod tool_ui;
 pub mod trust_list;
 pub mod testing;
