@@ -733,5 +733,5 @@ fn a_rested_round_is_checked() {
     let error = Pack::from_json(bad.as_bytes())
         .expect_err("an unknown rested round is refused")
         .to_string();
-    assert!(error.contains("rested projectile"), "{error}");
+    assert!(error.contains("Missing projectile kit:projectile/none"), "{error}");
 }

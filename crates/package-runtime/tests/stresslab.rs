@@ -161,6 +161,7 @@ fn mining_economy_runs_on_server_state_only() {
             tag: Some(tag.into()),
             look: None,
             position: [0.0; 3],
+            normal: [0.0, 1.0, 0.0],
             distance: 2.0,
             object: None,
         });

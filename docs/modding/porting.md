@@ -221,6 +221,10 @@ page as well.
 | `Weapon_Package_Tier1` (Kai's Tier+Tactical Tier 1) | `weapon_package_tier1` on `_shared/tier-tactical` | partial | the Tier+Tactical ammo system with its default settings: magazines run by each image's check states, the T+T2 reserves, the light key's reload, ammo items and a dead player's ammo bag; raycast pistols reaching less on the move, the pump's pellets and blast loaded a shell at a time, the sport rifle's weak round on the move and its headshots under their own kill message, the submachine gun slowing whoever it hits, the akimbo pistols' left hand, recoil kick. Not yet: the ammo items' floating count, the recoil shake for players nearby |
 | `Weapon_Package_Tier1A` (Kai's Tier+Tactical Tier 1A) | `weapon_package_tier1a` on `_shared/tier-tactical` | partial | on Tier 1: the single shotgun's pellets, close blast and knockback, the pepperbox's several rays a shot, the snubnose's headshots, the nailgun's slowing nails. The nailgun is an easter egg the original loads only with its hidden `???` setting, off by default, so it is imported hidden |
 | `Weapon_Package_Tier2` (Kai's Tier+Tactical Tier 2) | `weapon_package_tier2` on `_shared/tier-tactical` | partial | on Tier 1: the assault rifle's truer round after a pause (its projectile when rested), the light machine gun's free second round each cycle (`state_shots`) and its slowed laid-down body while firing (its `PlayerData` as an archetype, pushed and popped by host rules), the combat shotgun's jet-press blast mode (an alt image of two shells' pellets and blasts that hands back), the battle rifle's and machine gun's slowing rounds, the magnum's headshots, and the military sniper's hitscan crits under Emote_Critical (×3, the crit's kill message and effects, only while Emote_Critical is on). The scoped magnum is an easter egg behind the hidden `???` setting, so it is imported hidden |
+| `Weapon_Package_Tier2A` (Kai's Tier+Tactical Tier 2A) | `weapon_package_tier2a` on `_shared/tier-tactical` | partial | on Tier 1: the bullpup's three-round burst (its check states, each round spent as it loads), the dual SMGs' free left gun (`left_image`, `onFireAkimbo`), the MachStil's hitscan, the scoped carbine's jet-press scope (a scoped image that slows the holder while held and hands back on reload: `commands.mount`, `unmount`, `states`) and its forced reload that a check keeps going (`keeps_reload`). The match pistol is an easter egg behind the hidden `???` setting, so it is imported hidden |
+| `Weapon_Sniper_Rifle` (Kaje's Sniper Rifle) | `weapon_sniper_rifle` | verified | `SniperRifleImage::onFire`: the arm's kick then the shot (`scripts.onfire`), the animation's name read from the copy's script |
+| `Weapon_Sniper_Rifle_Updated` (Conan's Sniper Rifle Updated) | `weapon_sniper_rifle_updated` | verified | `onFire`'s `plant` then the shot (`scripts.onfire`); `onMount` hiding the holder's hands and hooks and raising both arms, and `onUnMount` putting them back (`hide_nodes`, `both_arms`) |
+| `Gamemode_TrenchDigging` (Trench Digging, Lilboarder) | `gamemode_trenchdigging` | verified | Every function of `TrenchDigging.cs` and the four images' `onPreFire`/`onFire`, as host rules (`rules/trench.rhai`): dig, put back, regroup, `/dumpdirt`, `/speeddig`, `/speedplace`, `/infinitedigging`; `server.cs` raising No Jet's `maxStepHeight` to 1.2 is `rules/archetypes/playernojet.json` |
 
 ## Host rules
 
@@ -235,6 +239,7 @@ ports/<port>/
   rules/
     behaviour.json
     <name>.rhai
+    archetypes/<name>.json   (optional) player archetypes, or adjustments to v20's
 ```
 
 | | The import | Its rules |
@@ -242,7 +247,7 @@ ports/<port>/
 | Folder | `addons/<ns>` | `addons/<ns>-rules` |
 | Id | `<ns>`, from the Add-On's folder name (`Tool_FillCan` is `tool_fillcan`) | `<ns>-rules` |
 | Side | `shared` | `server`: players never download it |
-| `package.json` | the importer's, with `"companions": ["<ns>-rules"]` | written for it: your `capabilities`, `behaviour` and `script` provides, and `dependencies` on the import at its version |
+| `package.json` | the importer's, with `"companions": ["<ns>-rules"]` | written for it: your `capabilities`, `behaviour`, `script` and `archetype` provides, and `dependencies` on the import at its version |
 
 Turning the import on in the Add-Ons screen turns its rules on after it, and
 turning it off turns them off. The importer checks the rules as the game
@@ -394,8 +399,8 @@ bodies, in order, a later rule's fields winning:
 | Field | Meaning |
 |---|---|
 | `on` | `image` (the default) or `projectile`: whose methods |
-| `method` | the method (`onFire`, `damage`), several as `onFire\|onFire2`, or `*` for every state script of an image |
-| `into` | for an image: `image`, `shot` (the shot the method fires: `onFire`'s is the image's `shot`, another state script's is its `state_shots` entry), `magazine` or `state` (each state running the method); for a projectile: `projectile`. Either can fill a `table` instead |
+| `method` | the method (`onFire`, `damage`), several as `onFire\|onFire2`, or `*` for every state script of an image, also with others (`*\|onMount` for a method no state runs) |
+| `into` | for an image: `image`, `shot` (the shot the method fires: `onFire`'s is the image's `shot`, another state script's is its `state_shots` entry), `magazine`, `check` (the magazine's `checks` entry for that script, as the states spell it: a check that `spend`s a round as it loads, or `keeps_reload`) or `state` (each state running the method); for a projectile: `projectile`. Either can fill a `table` instead |
 | `table` | with `into: "table"`: the rules' `{{name}}`, a Rhai map from each image's or projectile's id to its `set` |
 | `pattern` | a case-insensitive regex; its named groups fill `set` |
 | `required_by` | when a body matches this but not `pattern`, the port stops and names the image, so a copy that does the same some other way is not guessed |
@@ -405,7 +410,22 @@ bodies, in order, a later rule's fields winning:
 Every reader here follows a datablock's parents into the Add-Ons it
 depends on, as v20 did: an item `datablock SkinPistolItem(x : PistolItem)`
 gets the magazine fields Tier 1's `PistolItem` gave it, when the import
-has the drop folder (or `--reference`) to read Tier 1 from.
+has the drop folder (or `--reference`) to read Tier 1 from. A table row
+whose archetype filter names a player type the import cannot find is left
+out rather than stopping the port.
+
+An image firing a projectile of an Add-On it depends on (Tier 2's sniper,
+Tier 1's tracer) names it by the id that Add-On's own package gives it:
+the base game's `v20.projectile.<name>` for a stock one, else
+`<its namespace>:projectile/<name>`. The pack lists it in
+`external_projectiles` instead of carrying a copy, and the game resolves
+it when it loads the packs together; without the dependency the image is
+left out. The readers above see those projectiles beside the import's own.
+
+The importer follows `exec` from `server.cs`. When every `exec` in the
+scripts it reaches names a plain path, a script none of them reaches is
+left out, as v20 never ran it (Tier 2A's unused `Weapon_Unused.cs`); the
+report says so.
 
 ## Shared parts
 

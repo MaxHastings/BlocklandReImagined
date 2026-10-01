@@ -50,6 +50,22 @@ pub struct Options {
     pub version: String,
 }
 
+impl Default for Options {
+    /// Version 1.0.0, no reference install, core scripts or installed
+    /// game: set `input` and `out` and what else the import needs, with
+    /// `..Default::default()` for the rest.
+    fn default() -> Self {
+        Self {
+            input: PathBuf::new(),
+            out: PathBuf::new(),
+            reference: None,
+            core: vec![],
+            installed: None,
+            version: "1.0.0".into(),
+        }
+    }
+}
+
 /// The package id (and content namespace) for an Add-On folder name.
 pub fn namespace_for(addon: &str) -> Result<String> {
     let mut ns = String::new();

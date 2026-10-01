@@ -167,6 +167,7 @@ HUD panels can only show keys the viewer receives. `persist` (default
 | `raycast(from, dir, range[, ignore])`, `can_damage(by, target)`, `enabled(add_on)` | | `set_fov(p, fov)`, `set_speed_scale(p, scale)`, `set_image_ammo(p, ammo)`, `mount_image(p, image)`, `unmount_image(p)`, `set_scale(p, scale)`, `set_look_limits(p, up, down)`: `player` |
 | | | `give_ammo(p, ammo, rounds)`, `set_reserve(p, ammo, rounds)`, `set_rounds(p, item, rounds)`, `reload(p)`: `player` |
 | `brick_box(brick)`, `voxel(brick)`, `can_place_voxel(x, y, z)` | | `place_voxel(x, y, z, material)`: `world.edit`; `set_avatar_colors(p, colors)`: `player` |
+| `brick(id)`, `bricks_in(min, max)`, `can_plant(kind, [x, y, z], turns)`, `can_edit(brick)` | | `plant_brick(kind, [x, y, z], turns, color, owner)`: `world.edit` |
 | | | `copy_build(p, brick, limit, above_only, tool)`, `copy_box(p, min, max, limit, tool)`, `mirror_copy(p, axis)`: `build` |
 | | | `cut_copy(p)`, `paint_copy(p, color)`, `paint_fill(p, brick, color, limit)`: `world.edit` |
 | | | `push`, `tumble`, `hold`, `reach`, `hold_distance`, `let_go`, `spawn_vehicle`, `remove_vehicle`, `mount_object(mount, rider, node, can_dismount)`, `unmount_object(rider)`: `physics` |
@@ -351,6 +352,25 @@ argument to make it their shot, hurting whom their shots may; without one
 it is your Add-On's own, which hurts any living player (as `damage` could)
 and credits nobody. Start it clear of the shooter's body. 240 a second per
 Add-On. The Commando's sentry does this from its think.
+
+**Bricks by kind** (`world.edit`). `brick(id)` reads a placed brick:
+`#{ id, kind, x, y, z, turns, color, owner, min, max }`, `kind` being its
+brick catalog id (`v20/brick/brick2x4data`, or an imported Add-On's
+`<ns>:brick/<datablock>`), `x, y, z` its centre, `turns` its clockwise
+quarter turns, `color` its palette index and `owner` the build it is in (0
+for the world's own). `bricks_in(min, max)` lists up to 1024 bricks
+overlapping a box (`InitContainerBoxSearch`). `plant_brick(kind, [x, y, z],
+turns, color, owner)` plants a brick of any loaded kind into build `owner`,
+centred as near the point as the stud and plate grid allows, as v20 rules
+did with `new fxDTSBrick(...).plant()`; where it does not fit (a brick, a
+player or the map in the way) nothing is planted, so ask `can_plant` first
+when it matters. A rule may plant into, or `remove_brick` from, a build its
+caller has full trust on, or, inside a minigame, a build that minigame plays
+with (its owner's bricks, or everyone's with Use All Players' Bricks); hooks
+with no caller touch only the world's own bricks. `can_edit(brick)` asks
+that before a rule changes anything. `aim()` also has `nx, ny,
+nz`, the face the aim met. The Trench Digging port's rules
+(`crates/addon-import/ports/gamemode_trenchdigging/rules`) are built on these.
 
 **Moving things** (`physics`). Players, vehicles (every loose physics body:
 jeeps, balls, the tumble of a knocked-down player) and package entities
@@ -633,11 +653,46 @@ The fields you are most likely to change:
 | image | `cook` | a grenade whose fuse burns from a state in the hand (below) |
 | projectile | `fixed_damage` | its direct damage stays as authored at any scale |
 | item | `ui_name` | the name players see |
-| image | `zoom` | `{ "fov": 20, "on_jet": true, "crosshair": false, "first_person": true }`: aim with the zoom key (and the right mouse button with `on_jet`), hide the crosshair, force first person while aiming |
+| image | `zoom` | `{ "fov": 20, "on_jet": true, "crosshair": false, "first_person": true }`: aim with the zoom key (and the right mouse button with `on_jet`), hide the crosshair, force first person while aiming. More under "Scopes" below |
 | image | `eye_offset`, `eye_rotation` | where the weapon sits in first person: exactly there, relative to the camera, as Torque places it, so a scope whose sight is on the eye line stays centred at any zoom |
+| image | `hide_nodes` | the holder's body nodes hidden while the image is held, shown again when it goes: `["lhand", "rhand", "lhook", "rhook"]` for a model that draws its own hands (v20's `hideNode` in `onMount`). Up to 16 |
+| image | `both_arms` | `true` holds it up with both arms (`armReadyBoth`), not the mount hand's arm alone |
 | image | `scripts` | what each state `script` does, by lower-case name: `{ "onfire": { "arm": "spearThrow", "fire": true, "use_up": true } }` swings the arm, launches the image's projectile (or the entry's own `projectile`) and uses the item up, as a thrown grenade ([torque-equivalents.md](torque-equivalents.md#image-state-scripts-as-data)) |
 | image | `follow_arm` | `true` also moves a first-person `eye_offset` image with the arm's actions (shift, plant, swing), as the base game's brick, hammer and spray cans do; off by default |
 | pack | `sounds` | `{ "your-id:shot": { "file": "sounds/shot.wav", "volume": 0.8 } }`: your own `.wav`/`.ogg` files, named by a state's `sound` and by rules; `local` for sounds only the holder hears, `looping` for a state-long hum |
+
+**Scopes.** `zoom` takes more for a proper scope:
+
+```json
+"zoom": { "fov": 22, "on_jet": true, "jets": false, "crosshair": false,
+          "first_person": true, "levels": [10],
+          "overlay": "scope/scope",
+          "sway": { "degrees": 0.35, "seconds": 4.5, "crouched": 0.3, "moving": 2.5 } }
+```
+
+| Field | Meaning | Limits |
+|---|---|---|
+| `jets` | `false`: with `on_jet`, the right mouse button only aims and the player does not jet while holding it | default `true` |
+| `levels` | further fields of view the mouse wheel steps through while aiming (back on rolling the other way); each narrower than the last. The step resets when the aim ends | up to 8, 5 to 85 degrees |
+| `sensitivity` | look speed while aimed, on top of the usual slowing with the field of view | 0.1 to 4, default 1 |
+| `overlay` | your own PNG (named without `.png`, relative to `assets/`) drawn over the whole view while aimed in first person, fitted to the screen's height with black either side, under the HUD. Its transparent middle is the lens; the held model is hidden meanwhile | up to 2048 px a side and 4 MB |
+| `sway` | the aim drifts on a figure of eight, `degrees` to each side, once every `seconds`; `crouched` and `moving` scale it. Only on foot, only on the holder's screen, and the mouse turns freely under it; it eases in and out | 0 to 5 degrees, 0.5 to 30 seconds, crouched 0 to 1, moving 1 to 4 |
+
+Sway changes only where the holder looks, so other players see nothing
+new and it costs no bandwidth.
+
+**Your own model.** A weapons pack may bring its models and textures in
+`assets/presentation.json` (beside `weapons.json`, the same format the
+base game's item presentation uses: `models` and `textures` keyed by your
+own ids, each with its file and sha256) and `assets/item-physics.json`
+(each item's box). An item's or image's `model` in `weapons.json` then
+names one of those keys, such as `your-add-on:model/rifle`, and a
+particle's `texture` may name a texture key. Leave `items`, `images` and
+`projectiles` empty in it: the game presents them from `weapons.json`.
+Models are the native `shape.json` format (nodes, meshes, materials,
+animations); name a `mountPoint` node where the hand holds it and a
+`muzzlePoint` where shots leave, and an image state's `sequence` plays one
+of its animations (a rifle's `Bolt`).
 
 **Magazines.** An image's `magazine` gives it rounds, a reload and a
 reserve, with nothing in a rule:
@@ -671,6 +726,16 @@ fact holds: `shot`, `empty`, `full`, `not_full`, `reserve`, `no_reserve`),
 `on_reload` and `on_loaded` the flags as a reload starts and as its rounds
 arrive, and `reload_state` the state script the rounds arrive with; its
 `light_states` (below) are then also the only states a reload starts in.
+A check with `"spend": true` also takes the shot's rounds as it loads one
+(a burst's later rounds, fired by states that do not run `onFire`), and
+one with `"keeps_reload": true` leaves a reload under way unloaded, so a
+forced reload is not cut short by the next check.
+
+A pack may fire projectiles of a package it depends on: list their ids in
+`external_projectiles` (`"external_projectiles": ["tier1:projectile/tracer"]`)
+and name them as usual. They are found when the game loads the packs
+together; an image whose projectile no loaded package declares is left
+out, with a note.
 
 An image's `shot` can say more of how it fires. `hitscan` (`range`, and
 `moving_range`) lands each projectile at once along a ray, with its
@@ -759,8 +824,11 @@ tool in hand, as v20's `onTrigger` slot 4 did; players who can jet still
 jet. `wheel` runs while the trigger is held with the mouse wheel's notches
 as its one `int` argument (positive rolled forward, away from you), and
 the wheel then does not change tools; declare `"args": ["int"]` on that
-command. The Gravity Gun's `gravity-gun-tool` uses `states` and `wheel`:
-hold left click to grab, roll to reel, let go to drop or fling.
+command. `mount` runs as the image goes into the holder's hand and
+`unmount` as it leaves (v20's `onMount` and `onUnMount`), so a scope that
+slows its holder can push a slower player type and pop it again. The
+Gravity Gun's `gravity-gun-tool` uses `states` and `wheel`: hold left
+click to grab, roll to reel, let go to drop or fling.
 
 An item with no `image` is picked up but held by nobody: an ammo box or a
 health pack whose `on_pickup` answers `"take"`. Every item needs a
@@ -912,6 +980,14 @@ another body of the same model over theirs for a while (a machine gunner
 slowed as they fire; v20's `pushDatablock`), keeping their damage, and
 `pop_archetype(p, a)` lifts it; `set_archetype` meanwhile changes the body
 underneath, and death lifts them all.
+
+An archetype with `"adjusts": "v20.player.<datablock>"` (and no `base` or
+`name`) is no new body: it changes the constants it names on one of v20's
+own player types while the Add-On is on, as a v20 Add-On's
+`PlayerNoJet.maxStepHeight = 1.2;` did. Players of that type move by them,
+clients predict with them, and every other type stays v20's. Two Add-Ons
+setting one constant: the later id wins. Test:
+`crates/sim/tests/archetype_adjust.rs`.
 
 **Bots you write.** v20 gives the player objects a Vehicle Spawn brick
 makes no brain; the engine's bots walk, find their way round and over

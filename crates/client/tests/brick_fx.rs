@@ -1,13 +1,19 @@
-//! Real replicated brick adapter + original native resources, headless only.
+//! Real replicated brick adapter + native brick resources, headless only.
+//! The textured scenes run on a synthetic materials pack and bricks
+//! (`support::brick_fixture`), and again, ignored, on the generated v20
+//! packs.
+#[macro_use]
+mod support;
+
 use anyhow::{Result, ensure};
-use bri_client::{materials::BrickMaterials, world_scene::build_world_scene_materials};
+use bri_client::world_scene::build_world_scene_materials;
 use bri_content::brick::{Brick as Mesh, Face, Quad, Surface, Vertex};
 use bri_net::protocol::PublicWorld;
 use bri_render::scene::*;
-use bri_sim::definitions::Definitions;
 use bri_ui::gpu::Headless;
 use bri_world::{Brick, ContentRef};
-use std::{collections::BTreeMap, path::Path};
+use std::collections::BTreeMap;
+use support::{brick_fixture::BrickFixture, files::evidence_dir, gpu};
 fn quad() -> Mesh {
     Mesh {
         schema_version: 1,
@@ -176,7 +182,7 @@ fn fx_marker_is_flat_across_perspective_triangles_offscreen() -> Result<()> {
     // v20 glow lights the brick with ambient + sun/min(sun): exactly paint here.
     scene.ambient = [0.; 3];
     scene.sun_color = [1.; 3];
-    let gpu = Headless::new()?;
+    let gpu = gpu::turn()?;
     let pixels = render(&gpu, &scene, 0.)?;
     let background = &pixels[..4];
     let mut covered = 0;
@@ -296,55 +302,58 @@ fn render_uploaded(
     Ok(pixels.to_vec())
 }
 
-/// This is a diagnostic comparison, deliberately not a policy selection.
-#[test]
-fn original_pumpkin_unresolved_rgb_candidates_offscreen() -> Result<()> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let materials = BrickMaterials::load(&root.join("content/brick-materials-002"))?;
-    let definitions = Definitions::load(
-        &root.join("content/stock-catalog-004"),
-        &root.join("content/maps-pass-008"),
-    )?;
-    let meshes: BTreeMap<_, _> = definitions
-        .entries
-        .into_iter()
-        .map(|(id, d)| (id, d.mesh))
-        .collect();
-    let mut w = world(0, 0);
-    w.bricks.get_mut(&1).unwrap().definition =
-        ContentRef::Resolved("v20/brick/brickpumpkinfacedata".into());
+synthetic_and_content!(BrickFixture: literal_rgb_candidates_offscreen, brick_fx_prints_phase_and_paint_offscreen);
+
+/// Total RGB of a rendered frame.
+fn brightness(pixels: &[u8]) -> u64 {
+    pixels
+        .chunks_exact(4)
+        .flat_map(|p| &p[..3])
+        .map(|c| u64::from(*c))
+        .sum()
+}
+
+fn fixture_world(definition: &str, color: u8, shape: u8) -> PublicWorld {
+    let mut w = world(color, shape);
+    w.bricks.get_mut(&1).unwrap().definition = ContentRef::Resolved(definition.into());
+    w
+}
+
+/// Authored literal RGB above 1 (v20's pumpkin face rows): the raw values
+/// against two candidate readings, rendered side by side. This is a
+/// diagnostic comparison, deliberately not a policy selection.
+fn literal_rgb_candidates_offscreen(f: &BrickFixture) -> Result<()> {
+    let mut w = fixture_world(&f.literal, 0, 0);
     w.palette[0] = [0.8, 0.3, 0.05, 1.];
-    let mut raw = build_world_scene_materials(&w, &meshes, 100000, Some(&materials))?;
+    let mut raw = build_world_scene_materials(&w, &f.meshes, 100000, Some(&f.materials))?;
     raw.ambient = [0.08; 3];
     raw.sun_color = [0.; 3];
-    let unusual = raw
-        .vertices
-        .iter()
-        .filter(|v| v.color == [200., 150., 0., 1.])
-        .count();
-    assert!(unusual > 0, "Original anomalous rows absent");
+    let literal = |v: &SceneVertex| v.color[..3].iter().any(|c| *c > 1.);
+    let unusual = raw.vertices.iter().filter(|v| literal(v)).count();
+    assert!(unusual > 0, "Authored literal rows absent");
     let mut byte_candidate = raw.clone();
     let mut clamp_candidate = raw.clone();
     for vertex in &mut byte_candidate.vertices {
-        if vertex.color[..3].iter().any(|c| *c > 1.) {
+        if literal(vertex) {
             for c in &mut vertex.color[..3] {
                 *c /= 255.;
             }
         }
     }
     for vertex in &mut clamp_candidate.vertices {
-        if vertex.color[..3].iter().any(|c| *c > 1.) {
+        if literal(vertex) {
             for c in &mut vertex.color[..3] {
                 *c = c.clamp(0., 1.);
             }
         }
     }
-    let gpu = Headless::new()?;
+    let gpu = gpu::turn()?;
     let images = [
         render_from(&gpu, &raw, 0., [-1.7, 0.3, 0.2])?,
         render_from(&gpu, &byte_candidate, 0., [-1.7, 0.3, 0.2])?,
         render_from(&gpu, &clamp_candidate, 0., [-1.7, 0.3, 0.2])?,
     ];
+    drop(gpu);
     let differences: Vec<usize> = images[1..]
         .iter()
         .map(|candidate| {
@@ -359,20 +368,28 @@ fn original_pumpkin_unresolved_rgb_candidates_offscreen() -> Result<()> {
         differences.iter().all(|n| *n > 0),
         "Candidate interpretations must visibly differ in this diagnostic"
     );
-    assert!(raw.vertices.iter().any(|v| v.color == [200., 150., 0., 1.]));
+    // Literal RGB above 1 lights past the clamped reading.
+    assert!(
+        brightness(&images[0]) > brightness(&images[2]),
+        "Raw literal rows no brighter than clamped ones"
+    );
     let mut gallery = image::RgbaImage::new(256 * 3, 256);
     for (i, bytes) in images.into_iter().enumerate() {
         let tile = image::RgbaImage::from_raw(256, 256, bytes).unwrap();
         image::imageops::replace(&mut gallery, &tile, i as i64 * 256, 0);
     }
     // Regenerated evidence goes to target/; docs/research keeps the reviewed copy.
-    let out = root.join("target/test-artifacts/brick-fx");
+    let out = evidence_dir(
+        f.content,
+        "target/test-artifacts/brick-fx",
+        "brick-fx-synthetic",
+    );
     std::fs::create_dir_all(&out)?;
     gallery.save(out.join("sentinel-candidates.png"))?;
     std::fs::write(
         out.join("sentinel-comparison.json"),
         serde_json::to_vec_pretty(&serde_json::json!({
-            "schema_version":1,"left_to_right":["unchanged raw finite RGBA", "diagnostic RGB divided by255", "diagnostic RGB clamped before lighting"],
+            "schema_version":1,"brick":f.literal,"left_to_right":["unchanged raw finite RGBA", "diagnostic RGB divided by255", "diagnostic RGB clamped before lighting"],
             "ambient":0.08,"sun":0,"changed_pixels_against_raw":differences,"anomalous_native_vertices":unusual,
             "selected_interpretation":null,"acceptance_open":true,"runtime_policy":"preserve prior raw values with diagnostic"
         }))?,
@@ -380,43 +397,52 @@ fn original_pumpkin_unresolved_rgb_candidates_offscreen() -> Result<()> {
     Ok(())
 }
 
+/// v20's pumpkin face authors its odd rows as literal RGBA 200 150 0 1.
 #[test]
-fn native_original_brick_fx_prints_phase_and_paint_offscreen() -> Result<()> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let materials = BrickMaterials::load(&root.join("content/brick-materials-002"))?;
-    let definitions = Definitions::load(
-        &root.join("content/stock-catalog-004"),
-        &root.join("content/maps-pass-008"),
-    )?;
-    let meshes: BTreeMap<_, _> = definitions
-        .entries
-        .into_iter()
-        .map(|(id, d)| (id, d.mesh))
-        .collect();
-    let printable = "v20/brick/brick2x2fprintdata".to_string();
+#[ignore = "requires generated v20 content"]
+fn original_pumpkin_keeps_its_literal_200_150_0_rows() -> Result<()> {
+    let f = BrickFixture::content()?;
+    let mut w = fixture_world(&f.literal, 0, 0);
+    w.palette[0] = [0.8, 0.3, 0.05, 1.];
+    let raw = build_world_scene_materials(&w, &f.meshes, 100000, Some(&f.materials))?;
+    assert!(raw.vertices.iter().any(|v| v.color == [200., 150., 0., 1.]));
+    Ok(())
+}
+
+fn brick_fx_prints_phase_and_paint_offscreen(f: &BrickFixture) -> Result<()> {
     ensure!(
-        meshes.contains_key(&printable),
-        "Missing original printed tile"
+        f.meshes.contains_key(&f.printable),
+        "Missing printed tile {}",
+        f.printable
     );
-    let gpu = Headless::new()?;
+    let print = f
+        .materials
+        .bundle
+        .resolve(&f.print)
+        .unwrap_or_else(|| panic!("print {} does not resolve", f.print))
+        .id
+        .clone();
+    let gpu = gpu::turn()?;
+    // One renderer for every scene here: each scene is uploaded once.
+    let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
+    let draw = |renderer: &mut SceneRenderer, scene: &SceneData, time: f32| {
+        let uploaded = renderer.upload(&gpu.device, &gpu.queue, scene)?;
+        render_uploaded(&gpu, scene, renderer, &uploaded, time, [0.55, 1.6, 1.1])
+    };
     let mut images = vec![];
     let mut later_images = vec![];
     let mut records = vec![];
     for color in 0..=6 {
-        let mut w = world(color, 0);
-        w.bricks.get_mut(&1).unwrap().definition = ContentRef::Resolved(printable.clone());
-        w.bricks.get_mut(&1).unwrap().print = Some(ContentRef::Resolved(
-            materials.bundle.resolve("Letters/A").unwrap().id.clone(),
-        ));
+        let mut w = fixture_world(&f.printable, color, 0);
+        w.bricks.get_mut(&1).unwrap().print = Some(ContentRef::Resolved(print.clone()));
         w.palette[0] = [0.25, 0.5, 0.75, 1.];
-        let scene = build_world_scene_materials(&w, &meshes, 100000, Some(&materials))?;
+        let scene = build_world_scene_materials(&w, &f.meshes, 100000, Some(&f.materials))?;
         assert!(
             scene
                 .vertices
                 .iter()
                 .all(|v| v.color.iter().all(|x| (0. ..=1.).contains(x)))
         );
-        let mut renderer = SceneRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
         let uploaded = renderer.upload(&gpu.device, &gpu.queue, &scene)?;
         let a = render_uploaded(&gpu, &scene, &mut renderer, &uploaded, 0., [0.55, 1.6, 1.1])?;
         let b = render_uploaded(
@@ -443,28 +469,40 @@ fn native_original_brick_fx_prints_phase_and_paint_offscreen() -> Result<()> {
         later_images.push(b);
         records.push(serde_json::json!({"color_fx":color,"material_count":scene.materials.len(),"triangles":scene.indices.len()/3,"omissions":scene.omissions}));
     }
+    // Glow (FX3) lights the brick past its unlit paint.
+    assert!(
+        brightness(&images[3]) > brightness(&images[0]),
+        "Glow did not brighten the brick"
+    );
     for shape in 1..=2 {
-        let mut w = world(0, shape);
-        w.bricks.get_mut(&1).unwrap().definition = ContentRef::Resolved(printable.clone());
-        let scene = build_world_scene_materials(&w, &meshes, 100000, Some(&materials))?;
-        assert_ne!(render(&gpu, &scene, 0.)?, render(&gpu, &scene, 0.8)?);
+        let w = fixture_world(&f.printable, 0, shape);
+        let scene = build_world_scene_materials(&w, &f.meshes, 100000, Some(&f.materials))?;
+        assert_ne!(
+            draw(&mut renderer, &scene, 0.)?,
+            draw(&mut renderer, &scene, 0.8)?
+        );
     }
-    let mut w = world(0, 0);
-    w.bricks.get_mut(&1).unwrap().definition = ContentRef::Resolved(printable.clone());
-    let a = render(
-        &gpu,
-        &build_world_scene_materials(&w, &meshes, 100000, Some(&materials))?,
+    let mut w = fixture_world(&f.printable, 0, 0);
+    let a = draw(
+        &mut renderer,
+        &build_world_scene_materials(&w, &f.meshes, 100000, Some(&f.materials))?,
         0.,
     )?;
     w.palette[0] = [0.8, 0.1, 0.1, 0.4];
-    let b = render(
-        &gpu,
-        &build_world_scene_materials(&w, &meshes, 100000, Some(&materials))?,
+    let b = draw(
+        &mut renderer,
+        &build_world_scene_materials(&w, &f.meshes, 100000, Some(&f.materials))?,
         0.,
     )?;
+    drop(renderer);
+    drop(gpu);
     assert_ne!(a, b);
     // Regenerated evidence goes to target/; docs/research keeps the reviewed copy.
-    let out = root.join("target/test-artifacts/brick-fx");
+    let out = evidence_dir(
+        f.content,
+        "target/test-artifacts/brick-fx",
+        "brick-fx-synthetic",
+    );
     std::fs::create_dir_all(&out)?;
     let mut gallery = image::RgbaImage::new(256 * 7, 512);
     for (i, bytes) in images.iter().enumerate() {
@@ -477,7 +515,7 @@ fn native_original_brick_fx_prints_phase_and_paint_offscreen() -> Result<()> {
     std::fs::write(
         out.join("offscreen-report.json"),
         serde_json::to_vec_pretty(
-            &serde_json::json!({"schema_version":1,"brick":printable,"records":records,"row_times_seconds":[0,0.8],"single_upload_per_phase_pair":true,"offscreen":true,"not_parity_acceptance":true}),
+            &serde_json::json!({"schema_version":1,"brick":f.printable,"records":records,"row_times_seconds":[0,0.8],"single_upload_per_phase_pair":true,"offscreen":true,"not_parity_acceptance":true}),
         )?,
     )?;
     ensure!(images.len() == 7, "missing FX");

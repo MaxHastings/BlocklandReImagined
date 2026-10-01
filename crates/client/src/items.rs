@@ -69,6 +69,11 @@ pub struct ImagePresentation {
     /// an Add-On's image does only when it asks.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub follow_arm: bool,
+    /// The texture key of the scope picture drawn over the screen while
+    /// aiming this image (`bri_weapons::Zoom::overlay`), found beside its
+    /// weapons.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overlay: Option<String>,
     /// A skin its Add-On gives it (`looks.json`), drawn over every copy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skin: Option<ItemSkin>,
@@ -709,6 +714,7 @@ impl ItemAssets {
                 &mut added,
                 &mut faults,
             );
+            scope_overlays(dir, &abs, &part_pack, &mut manifest, &mut added, &mut faults);
             read_looks(dir, &abs, &part_pack, &mut manifest, &mut skins, &mut faults);
         }
         let file_root = |kind: &str, id: &str| added.origin.get(&format!("{kind}:{id}")).unwrap_or(&root).clone();
@@ -838,6 +844,14 @@ impl ItemAssets {
         for (_, image) in manifest.images.iter_mut().filter(|(id, _)| added.images.contains(*id)) {
             if !shapes.contains_key(&image.model) {
                 image.model.clear();
+            }
+            // A scope picture that did not load leaves the plain zoom.
+            if image
+                .overlay
+                .as_ref()
+                .is_some_and(|o| !textures.contains_key(o) || blanks.contains(o))
+            {
+                image.overlay = None;
             }
             if !valid_tint(image.tint) {
                 image.tint = [1.; 4];
@@ -1393,6 +1407,7 @@ fn present_gaps(
                 tint: if image.color_shift { image.color } else { [1.0; 4] },
                 evidence: evidence(),
                 follow_arm: image.follow_arm,
+                overlay: None,
                 skin: None,
             },
         );
@@ -1601,6 +1616,52 @@ fn own_icon(
     added: &mut Added,
     faults: &mut Vec<String>,
 ) -> Option<String> {
+    own_picture(dir, abs, name, ("icon", ICON_BYTES, ICON_SIDE), manifest, added, faults)
+}
+/// Each of this Add-On's images with a scope picture (`Zoom::overlay`)
+/// gets it as a texture of its own; one that does not read is logged and
+/// the image aims with the plain zoom.
+fn scope_overlays(
+    dir: &str,
+    abs: &Path,
+    pack: &bri_weapons::Pack,
+    manifest: &mut Presentation,
+    added: &mut Added,
+    faults: &mut Vec<String>,
+) {
+    for (id, image) in &pack.images {
+        let Some(name) = image.zoom.as_ref().and_then(|z| z.overlay.as_deref()) else {
+            continue;
+        };
+        if !added.images.contains(id) {
+            continue;
+        }
+        let key = own_picture(dir, abs, name, ("scope overlay", OVERLAY_BYTES, OVERLAY_SIDE), manifest, added, faults);
+        if key.is_none() && !abs.join(format!("{name}.png")).is_file() {
+            faults.push(crate::cosmetic::add_on_fault(
+                dir,
+                "weapons.json",
+                format!("scope overlay {name}.png of {id} is not in the Add-On, so it aims without one"),
+            ));
+        }
+        if let Some(presented) = manifest.images.get_mut(id) {
+            presented.overlay = key;
+        }
+    }
+}
+/// An Add-On's own PNG, `<name>.png` in `abs`, of at most `limits`' bytes
+/// and side, added to the textures under a key of its own
+/// (`<dir>/<name>.png`, so two Add-Ons' pictures never collide). None when
+/// there is no such file; a file that cannot be read is logged.
+fn own_picture(
+    dir: &str,
+    abs: &Path,
+    name: &str,
+    (what, max_bytes, max_side): (&str, u64, u32),
+    manifest: &mut Presentation,
+    added: &mut Added,
+    faults: &mut Vec<String>,
+) -> Option<String> {
     let file = format!("{}.png", name.replace('\\', "/"));
     if name.is_empty()
         || !bri_content::brick_materials::safe_relative(&file)
@@ -1609,13 +1670,13 @@ fn own_icon(
         return None;
     }
     let read = || -> Result<TextureResource> {
-        let bytes = crate::materials::read_resource(abs, &file, ICON_BYTES)?;
+        let bytes = crate::materials::read_resource(abs, &file, max_bytes)?;
         let (width, height) = image::ImageReader::new(std::io::Cursor::new(&bytes))
             .with_guessed_format()?
             .into_dimensions()?;
         ensure!(
-            (1..=ICON_SIDE).contains(&width) && (1..=ICON_SIDE).contains(&height),
-            "icon {file} is {width}x{height}; at most {ICON_SIDE} a side"
+            (1..=max_side).contains(&width) && (1..=max_side).contains(&height),
+            "{what} {file} is {width}x{height}; at most {max_side} a side"
         );
         Ok(TextureResource {
             file: file.clone(),
@@ -1643,6 +1704,9 @@ fn own_icon(
 /// Largest Add-On icon file, and side.
 const ICON_BYTES: u64 = 1024 * 1024;
 const ICON_SIDE: u32 = 512;
+/// Largest scope overlay file, and side: sharp on a 4K screen's height.
+const OVERLAY_BYTES: u64 = 4 * 1024 * 1024;
+const OVERLAY_SIDE: u32 = 2048;
 /// An Add-On's own item model names a native model file (`bri_content::shape`).
 const OWN_MODEL: &str = ".shape.json";
 /// Largest Add-On model file, and model texture file and side.
@@ -1820,11 +1884,17 @@ mod add_on_icon_tests {
     /// A stand-in tool Add-On with a model of its own: a wooden handle and
     /// an iron head (two materials, each naming its PNG), held at a
     /// `mountPoint` grip, with a first-person copy (`detail9999`) that a
-    /// `fire` sequence swings. Written into `root`; returns its `assets/`.
+    /// `fire` sequence swings; its icon is drawn from the model at the
+    /// Hammer icon's pose. Written into `root`; returns its `assets/`.
     pub(crate) fn own_model_tool(root: &Path) -> Result<std::path::PathBuf> {
         use serde_json::json;
         let assets = root.join("assets");
         std::fs::create_dir_all(assets.join("models"))?;
+        std::fs::create_dir_all(assets.join("icons"))?;
+        std::fs::write(
+            assets.join("icons/pick.render.json"),
+            r#"{ "schema_version": 1, "pose_like": "v20.weapon.hammeritem", "look": { "textured": true } }"#,
+        )?;
         // An axis-aligned box per part, faces outward and counter-clockwise.
         let mut positions = Vec::new();
         let mut normals = Vec::new();
@@ -1898,7 +1968,7 @@ mod add_on_icon_tests {
         let weapons = json!({
             "schema_version": 3, "id": "tool",
             "items": { "tool:weapon/pick": { "ui_name": "Pick", "image": "tool:image/pick",
-                "model": "models/tool.shape.json", "icon": "", "can_drop": false } },
+                "model": "models/tool.shape.json", "icon": "icons/pick", "can_drop": false } },
             "images": { "tool:image/pick": { "name": "PickImage", "model": "models/tool.shape.json",
                 "melee": true, "arm_ready": true, "color": [1.0, 1.0, 1.0, 1.0],
                 "states": [{ "name": "Ready" }] } },
@@ -1906,12 +1976,6 @@ mod add_on_icon_tests {
         std::fs::write(assets.join("weapons.json"), serde_json::to_vec_pretty(&weapons)?)?;
         Ok(assets)
     }
-    /// An Add-On's item may be a model of its own, not a borrowed one: a
-    /// native model beside its `weapons.json` whose materials name the PNGs
-    /// beside it, presented under the Add-On with its box as its bounds. Its
-    /// icon can be drawn from it in its own colours, and only the holder
-    /// sees it swing. `BRI_ICON_SHOT=1` saves a picture to
-    /// `target/own-model-preview.png`.
     /// Max, v0.1.10: "my gravity gun looks different on the item spawn
     /// than in my hand", and "when i drop the item or tool it can look
     /// different". An item in the world takes the look of the image it is
@@ -1960,6 +2024,7 @@ mod add_on_icon_tests {
             tint: [0.2, 0.4, 0.6, 1.],
             evidence: evidence.clone(),
             follow_arm: false,
+            overlay: None,
             skin: None,
         });
         let item = |image: &str| ItemPresentation {
@@ -2040,12 +2105,12 @@ mod add_on_icon_tests {
         println!("{differed} of {} stock items differed", presentation.items.len());
         Ok(())
     }
-    /// The Trench Pick is a model of its own, not a borrowed one: a native
-    /// model beside its `weapons.json` whose materials name the PNGs beside
-    /// it, presented under the Add-On with its box as its bounds. Its icon
-    /// is drawn from it in its own wood and iron, and only the holder sees
-    /// it swing. `BRI_ICON_SHOT=1` saves a picture to
-    /// `target/trench-pick-preview.png`.
+    /// An Add-On's item may be a model of its own, not a borrowed one: a
+    /// native model beside its `weapons.json` whose materials name the PNGs
+    /// beside it, presented under the Add-On with its box as its bounds. Its
+    /// icon can be drawn from it in its own colours, and only the holder
+    /// sees it swing. `BRI_ICON_SHOT=1` saves a picture to
+    /// `target/own-model-preview.png`.
     #[test]
     fn an_add_on_item_brings_its_own_model() -> Result<()> {
         use crate::item_icon_render::{Look, Mesh, Pose, render};
@@ -2060,6 +2125,12 @@ mod add_on_icon_tests {
         assert!(faults.is_empty(), "{faults:?}");
         let key = "tool/models/tool.shape.json";
         let (item, image) = ("tool:weapon/pick", "tool:image/pick");
+        // Its icon is asked to be drawn from the model at the Hammer's pose.
+        let [(drawn, _, file, spec)] = &added.icon_renders[..] else {
+            panic!("one render request: {:?}", added.icon_renders);
+        };
+        assert_eq!((drawn.as_str(), file.as_str()), (item, "icons/pick.render.json"));
+        assert_eq!(spec.pose_like, "v20.weapon.hammeritem");
         assert_eq!(manifest.items[item].model, key);
         assert_eq!(manifest.images[image].model, key);
         let resource = &manifest.models[key];
@@ -2215,6 +2286,74 @@ mod add_on_icon_tests {
         let out = manifest.join("../../target/gravity-gun-icon.png");
         image::save_buffer(&out, &icon.rgba, icon.width, icon.height, image::ColorType::Rgba8)?;
         println!("saved {} and {}", out.display(), side.display());
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod own_model_icon_tests {
+    use super::*;
+    /// A tool Add-On's icon is its own model in wood and iron, drawn at the
+    /// Hammer icon's angle and size so it sits in the tool slots like a
+    /// stock tool (the stand-in `own_model_tool`, as the Trench Pick was).
+    /// Writes it to `target/own-model-icon.png` for a look.
+    #[test]
+    #[ignore = "requires the converted item and weapons packs; CPU only"]
+    fn an_add_on_tool_icon_is_drawn_from_its_model_like_the_hammers() -> Result<()> {
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let root = manifest.join("../../content");
+        let dir = tempfile::tempdir()?;
+        let extras = vec![("addons/tool/assets".to_string(), add_on_icon_tests::own_model_tool(dir.path())?)];
+        let mut assets = ItemAssets::load_with(
+            &root.join("item-presentation-pack-010"),
+            &root.join("weapons-pack-009"),
+            &extras,
+        )?;
+        assert!(assets.faults.is_empty(), "{:?}", assets.faults);
+        let pick = "tool:weapon/pick";
+        // Drawn from its model, off the load path (`ItemAssets::draw_icons`).
+        assert_eq!(assets.draw_icons(None), IconDraws { kept: 0, drawing: 1 });
+        assets.finish_icons();
+        let slot = assets.drawn_icon(pick).expect("an icon drawn from its model");
+        let icon = slot.get().expect("drawn");
+        assert!(std::ptr::eq(assets.icon(pick)?.unwrap(), icon), "the drawn icon is shown");
+        let hammer = assets.icon("v20.weapon.hammeritem")?.unwrap();
+        assert_eq!((icon.width, icon.height), (hammer.width, hammer.height), "framed like the Hammer's");
+        assert_eq!(icon.rgba[3], 0, "a clear background");
+        // Two materials show: the wooden handle and the iron head.
+        let solid: Vec<&[u8]> = icon.rgba.chunks_exact(4).filter(|p| p[3] == 255).collect();
+        let wood = solid.iter().filter(|p| p[0] as i32 - p[2] as i32 > 40).count();
+        let iron = solid.iter().filter(|p| (p[0] as i32 - p[2] as i32).abs() < 12 && p[0] > 40).count();
+        assert!(wood > 50 && iron > 50, "wood {wood} and iron {iron}");
+        // Held like the Hammer: at the grip, in the right hand.
+        let image = &assets.presentation.images["tool:image/pick"];
+        assert_eq!(image.mount_point, assets.presentation.images["v20.image.hammerimage"].mount_point);
+        // Modelled as the Hammer is held: handle up out of the fist (+y)
+        // and the head across its top, front to back (z), about as big.
+        // Each model's box, seen from its grip.
+        let grip_box = |model: &str| -> Result<(Vec3, Vec3)> {
+            let shape = assets.shape(model)?;
+            let bind = sample(shape, None, 0.0)?;
+            let grip = shape
+                .nodes
+                .iter()
+                .position(|n| n.name.eq_ignore_ascii_case("mountPoint"))
+                .map_or(Vec3::ZERO, |i| bind.nodes[i].w_axis.truncate());
+            let bounds = assets.presentation.models[model].bounds();
+            Ok((Vec3::from(bounds.min) - grip, Vec3::from(bounds.max) - grip))
+        };
+        let hammer = grip_box(&assets.presentation.images["v20.image.hammerimage"].model)?;
+        let ours = grip_box(&image.model)?;
+        println!("from the grip, hammer {hammer:?}, tool {ours:?}");
+        for (name, (lo, hi)) in [("hammer", hammer), ("tool", ours)] {
+            let size = hi - lo;
+            assert!(size.y > size.x && hi.y > -lo.y * 2.0, "{name}: the handle stands up out of the fist");
+            assert!(size.z > size.x, "{name}: the head runs front to back");
+        }
+        let ratio = (ours.1.y - ours.0.y) / (hammer.1.y - hammer.0.y);
+        assert!((0.7..1.6).contains(&ratio), "about the Hammer's size: {ratio}");
+        let out = manifest.join("../../target/own-model-icon.png");
+        image::save_buffer(&out, &icon.rgba, icon.width, icon.height, image::ColorType::Rgba8)?;
         Ok(())
     }
 }
@@ -2491,6 +2630,7 @@ mod placement_tests {
                 line: 0,
             },
             follow_arm,
+            overlay: None,
             skin: None,
         }
     }

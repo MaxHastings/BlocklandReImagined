@@ -1443,6 +1443,8 @@ fn add_launcher(
         state_shots: Default::default(),
         cook: None,
         scripts: Default::default(),
+        hide_nodes: Vec::new(),
+        both_arms: false,
         states,
     };
     let item = bri_weapons::Item {

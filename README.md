@@ -95,7 +95,8 @@ engineering rules. Then:
 - [Platform principles](docs/architecture/platform-principles.md): read
   before changing content identity, saves, the wire protocol or Add-Ons.
 - [Progress log](docs/progress.md): decisions, evidence and commands, by
-  date.
+  date; entries from 2026-10-01 are one file each in
+  [docs/progress/](docs/progress/README.md).
 
 Useful commands:
 

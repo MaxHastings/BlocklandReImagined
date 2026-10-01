@@ -5,28 +5,22 @@
 //! clamped to maxSteeringAngle (0.9785), and `WheeledVehicle::updateMove`
 //! (0x570c4a) returns it on a move without yaw by
 //! 1 - 0.9 x min(|throttle|, 10) / 10 per tick.
+#[macro_use]
+mod common;
 use bri_vehicles::*;
-use glam::Vec3;
-use rapier3d::prelude::*;
+use common::Fixture;
+use rapier3d::prelude::PhysicsWorld;
 
 /// 120 Hz steps per 32 ms source tick.
 const PER_TICK: f32 = 96. / 25.;
 
-fn jeep() -> (VehiclesWorld, PhysicsWorld) {
-    vehicle("v20.vehicle.jeepvehicle")
+/// The strafe-steered car, mounted.
+fn jeep(f: &Fixture) -> (VehiclesWorld, PhysicsWorld) {
+    vehicle(f, f.car)
 }
-fn vehicle(definition: &str) -> (VehiclesWorld, PhysicsWorld) {
-    let pack = Pack::load(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../content/vehicles-pack-012/vehicles.json"
-    ))
-    .unwrap();
-    let mut v = VehiclesWorld::new(pack).unwrap();
-    let mut w = bri_physics::new_world();
-    w.insert(
-        RigidBodyBuilder::fixed().translation(Vec3::new(0., -0.5, 0.)),
-        ColliderBuilder::cuboid(2000., 0.5, 2000.),
-    );
+fn vehicle(f: &Fixture, definition: &str) -> (VehiclesWorld, PhysicsWorld) {
+    let mut v = f.vehicles();
+    let mut w = common::floor(2000.);
     v.spawn(
         &mut w,
         Spawn {
@@ -70,39 +64,46 @@ fn drive(v: &mut VehiclesWorld, w: &mut PhysicsWorld, ticks: f32, c: Controls) -
     v.snapshot(w).vehicles[0].steering
 }
 
-#[test]
-#[ignore = "requires the converted vehicles-pack-012"]
-fn strafe_keys_steer_the_jeep_and_the_steering_returns_with_throttle() {
-    let (mut v, mut w) = jeep();
+on_both! {
+fn strafe_keys_steer_the_jeep_and_the_steering_returns_with_throttle(f: &Fixture) {
+    let d = f.definition(f.car);
+    let (rate, max) = (d.steering.strafe_rate, d.max_steering);
+    assert!(d.strafe_steering && d.steering.auto_return);
+    assert!(5. * rate < max && 25. * rate > max, "five ticks stay below the lock");
+    let (mut v, mut w) = jeep(f);
     let right = Controls {
         strafe: 1.,
         // The mouse only looks around while the keys steer.
         look_delta: [0.05, 0.],
         ..Default::default()
     };
-    // Five ticks of 0.1 each.
+    // Five ticks of the strafe rate each.
     let s = drive(&mut v, &mut w, 5., right);
-    assert!((s - 0.5).abs() < 0.01, "steering {s}");
-    // Clamped at maxSteeringAngle.
+    assert!((s - 5. * rate).abs() < 0.01, "steering {s}");
+    // Clamped at the steering angle.
     let s = drive(&mut v, &mut w, 20., right);
-    assert!((s - 0.9785).abs() < 0.01, "steering {s}");
+    assert!((s - max).abs() < 0.01, "steering {s}");
     // Released with the throttle released: it holds.
     let s = drive(&mut v, &mut w, 20., Controls::default());
-    assert!((s - 0.9785).abs() < 0.01, "held steering {s}");
-    // Released at full throttle: 9% per tick.
+    assert!((s - max).abs() < 0.01, "held steering {s}");
+    // Released at full throttle: the return rate times the throttle's
+    // share of the return's full speed, per tick.
     let gas = Controls {
         throttle: 1.,
         ..Default::default()
     };
     let s = drive(&mut v, &mut w, 10., gas);
-    let want = 0.9785 * 0.91f32.powi(10);
-    assert!((s - want).abs() < 0.02, "returned to {s}, v20 {want}");
+    let share = 1f32.min(d.steering.auto_return_max_speed) / d.steering.auto_return_max_speed;
+    let want = max * (1. - d.steering.auto_return_rate * share).powi(10);
+    assert!(want < max * 0.9, "it returns noticeably");
+    assert!((s - want).abs() < 0.02, "returned to {s}, want {want}");
+}
 }
 
-#[test]
-#[ignore = "requires the converted vehicles-pack-012"]
-fn steering_prefs_off_make_the_jeep_mouse_steered_and_hold_its_turn() {
-    let (mut v, mut w) = jeep();
+on_both! {
+fn steering_prefs_off_make_the_jeep_mouse_steered_and_hold_its_turn(f: &Fixture) {
+    assert!(0.3 < f.definition(f.car).max_steering);
+    let (mut v, mut w) = jeep(f);
     let off = |c: Controls| Controls {
         strafe_steering_off: true,
         auto_return_off: true,
@@ -126,17 +127,17 @@ fn steering_prefs_off_make_the_jeep_mouse_steered_and_hold_its_turn() {
     }));
     assert!((s - 0.3).abs() < 0.01, "held steering {s}");
 }
+}
 
+on_both! {
 /// Max, v0.1.4: the Tank's mouse steering and its return fought. With
 /// auto-return on, v20 returns the steering on a 32 ms move without yaw;
 /// a mouse moving at the frame rate puts yaw in only some 120 Hz moves,
 /// and the ones between must not count as "no yaw". The steering a steady
 /// mouse builds matches a move-by-move mouse, and returns once it stops.
-#[test]
-#[ignore = "requires the converted vehicles-pack-012"]
-fn auto_return_waits_a_whole_move_before_fighting_the_mouse() {
+fn auto_return_waits_a_whole_move_before_fighting_the_mouse(f: &Fixture) {
     let steer = |every: usize| {
-        let (mut v, mut w) = jeep();
+        let (mut v, mut w) = jeep(f);
         let mut steering = 0.;
         // 0.12 rad of mouse a v20 tick, arriving every `every` steps, at
         // full throttle with strafe steering off and auto-return on.
@@ -178,4 +179,5 @@ fn auto_return_waits_a_whole_move_before_fighting_the_mouse() {
         );
         assert!(released < steering * 0.8, "it returns once the mouse stops: {released}");
     }
+}
 }

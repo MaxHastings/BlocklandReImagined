@@ -164,6 +164,8 @@ fn image(name: &str, states: Vec<State>) -> (String, Image) {
             zoom: None,
             crosshair: true,
             follow_arm: false,
+            hide_nodes: Vec::new(),
+            both_arms: false,
             paint_tint: false,
             left_image: None,
             magazine: None,
@@ -181,6 +183,7 @@ fn weapons() -> Arc<Pack> {
         effects: Default::default(),
         schema_version: bri_weapons::SCHEMA,
         id: "test".into(),
+        external_projectiles: Default::default(),
         items: BTreeMap::new(),
         images: BTreeMap::from([
             image(

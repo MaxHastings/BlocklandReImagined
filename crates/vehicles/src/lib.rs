@@ -3,6 +3,7 @@ mod merge;
 pub use merge::asset_root;
 pub mod muzzle;
 pub mod schema;
+pub mod testing;
 pub mod world;
 pub use schema::{Definition, Family, Pack, Transform};
 pub use world::*;

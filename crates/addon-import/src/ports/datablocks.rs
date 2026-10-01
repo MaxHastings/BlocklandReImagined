@@ -403,7 +403,7 @@ pub fn scripts(rules: &[ScriptRule], weapons: &Value, code: &super::Code) -> Res
             targets.join(", ")
         );
         ensure!(
-            (rule.into == "table") == !rule.table.is_empty(),
+            (rule.into == "table") != rule.table.is_empty(),
             "a script rule names a table exactly when it goes into one"
         );
         ensure!(

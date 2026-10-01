@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "checks": [
+    {
+      "fire": "weapon_sniper_rifle_updated:weapon/sniperrifleanimateditem",
+      "projectiles": 1,
+      "recoil": null,
+      "max_spread_degrees": 0.01,
+      "why": "SniperRifleAnimatedImage::onFire: Parent::onFire, one round a click"
+    }
+  ]
+}
