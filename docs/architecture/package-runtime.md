@@ -160,8 +160,9 @@ there. The `Op` enum, `capability()`, `name()` and the limits check are
 generated from that list, so no central match needs editing. Git merges
 `list.rs` with the union driver (`.gitattributes`), so two branches that
 each add an operation never conflict there. Scripts ask for one with
-`push(Op::YourOp(ops::YourOp { .. }))` in `script.rs`; the host applies it
-in `bri-sim`'s `session/packages.rs`.
+`push(Op::YourOp(ops::YourOp { .. }))` in `script.rs`; the host performs
+it in its `Perform` impl in `bri-sim`'s `session/packages/perform/`
+([script-operations.md](script-operations.md)).
 
 ## The sandbox (Rhai, prototype)
 
