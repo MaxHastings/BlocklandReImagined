@@ -8247,3 +8247,50 @@ More tests:
 Render: `/mnt/project-files/steel-ball/steel-ball-v2.png`. Max's in-game
 check is a Steel Ball near bricks at Mirrors Medium, in Unified+Shine and
 in Dynamic.
+
+## 2026-10-01 Portals: going through shows the same picture (branch `claude/portal-bricks-5be9t8`)
+
+Max, v0.1.10: walking through a portal felt "98% perfect" but jarred at
+the moment of going through, as if the whole camera switched over.
+
+What Valve's Portal does: the frame before going through and the frame
+after are the same picture. Nothing is smoothed except the view's roll,
+which eases back upright after a floor or ceiling portal.
+
+Measured with a new frame-by-frame test that traces every pixel through
+the portals. On 1b2747e4 the whole picture (100% of pixels) jumped at the
+crossing, in first person and from the chase camera. The causes:
+- The prediction moves the body through on the tick its middle crosses,
+  but the body is drawn up to a Torque tick behind. For about 24 ms (4
+  frames at 165 fps) the camera stood on the far side behind the exit,
+  looking back through the partner's other side at the wrong room.
+- Only the yaw was carried. Through a floor portal the pitch stayed
+  (still looking down), and the body stays upright, so the eye and the
+  chase pivot flipped to the other side of the body's middle.
+
+The fix (`crates/client/src/motion.rs`, `portal_view.rs`, `controls.rs`):
+- Motion keeps a crossing the prediction made "unshown". The body, the
+  look and the camera stay on the near side until the drawn middle
+  crosses the opening, after at most 0.1 s. Inputs during that time are
+  turned for the far side.
+- `Controls::carry_look` carries the whole look: yaw, pitch and roll.
+  The roll, and a tilt of the eye and chase pivot about the body's middle,
+  ease out over 0.5 s (smoothstep).
+- The chase camera leans in the rolled frame (`portal_view::leaned`). Its
+  boom starts from the body's middle, so a tilted pivot is carried.
+
+Tests:
+- `bri-client motion::crossing_tests`: a doorway walk and a floor-to-floor
+  fall at 1000 fps, in first person and chase. No frame may move more
+  than 5% of the picture by more than 0.5 units and 0.05 rad. The chase
+  camera is checked within 0.1 s of the crossing: later on, its boom
+  slides off the edge of the opening, as it would round a wall.
+- `bri-render --test mirrors a_portal_the_eye_is_about_to_go_through...`:
+  on the GPU, the recessed window seen from 0.6 to 0.004 units in front
+  matches the direct render from the far side within 2% of pixels.
+- With the old crossing, or the old yaw-only look, the client test fails
+  with 100% of the picture jumping.
+
+Remaining: in third person the body itself still moves across in one
+frame when its middle crosses (half of it shows on each side). Drawing a
+clone on both sides needs per-instance clip planes in the renderer.
