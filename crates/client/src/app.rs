@@ -9628,6 +9628,7 @@ impl PlatformApp for App {
                     &self.world_items,
                     image_meshes,
                     crate::client_code::DrawnBodies { skeletons, lives },
+                    std::sync::Arc::new(passages.clone()),
                 ))
             } else {
                 Default::default()

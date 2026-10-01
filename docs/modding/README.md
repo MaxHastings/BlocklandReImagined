@@ -694,8 +694,14 @@ everything near a point. A bot (a Blockhead Bot) is a `player:` object
 that is not among `players()`: its `definition` is its kind
 (`bot.blockhead`) and its `owner` is whoever owns its spawn brick, who
 decides, outside minigames, who may move it. A command with `aim_reach` also reports the nearest object in
-front of the brick it hit: `aim().object`, `aim().object_distance` and
-`aim().movable`, whether the caller may move it.
+front of the brick it hit: `aim().object`, `aim().object_distance`,
+`aim().object_at` (`[x, y, z]`, where the aim met it) and
+`aim().movable`, whether the caller may move it. The aim looks through
+portals (the openings of linked bricks) as players see through them: its
+`x, y, z` and `object_at` are where things are on the far side, and its
+distances run along the sight, so take positions from these rather than
+from the eye and the look. A `hold` or `reach` through a portal holds the
+object on its side, and one carried through a portal stays held.
 
 | Operation | Does |
 |---|---|
@@ -1746,6 +1752,11 @@ partner's opposite side when that side is open too (a doorway), else out of
 the same side (a wall portal). Pairing follows from the bricks themselves,
 so nothing extra is sent; each player's game draws the views, and the host
 decides who goes through.
+
+Bots know portals too, with nothing for a bot kind to set: a bot sees and
+shoots through an opening at whoever stands beyond its partner, its paths
+lead through openings where walking through is the way, and it follows an
+enemy it watched go in.
 
 | Field | Meaning | Default |
 |---|---|---|

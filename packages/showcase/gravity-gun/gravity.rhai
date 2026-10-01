@@ -93,12 +93,8 @@ fn cmd_grab(p) {
         let o = object(a.object);
         if o != () {
             let reach = clampf(a.object_distance, nearest(), farthest());
-            let at = [
-                me.ex + me.lx * a.object_distance,
-                me.ey + me.ly * a.object_distance,
-                me.ez + me.lz * a.object_distance,
-            ];
-            hold(p, a.object, reach, #{ at: at, force: force(), turn: true });
+            // Gripped where the beam met it, through a portal too.
+            hold(p, a.object, reach, #{ at: a.object_at, force: force(), turn: true });
             b[0] = kind_code(o.kind);
             b[1] = o.id;
             b[3] = reach;
