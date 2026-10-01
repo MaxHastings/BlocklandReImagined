@@ -872,6 +872,36 @@ fn add_add_on_textures<'t>(
     }
 }
 
+/// The particle textures Add-Ons name from the game's own interface art
+/// (`base/client/ui/...`: v20 particles drew any texture of the game, the
+/// Duplorcator's a brick icon), decoded from the UI pack, keyed as each
+/// particle names it. The effects pack holds only effect textures.
+pub fn interface_textures(
+    effects: &bri_weapons::PackEffects,
+    ui: &bri_ui::pack::Pack,
+) -> BTreeMap<String, bri_render::scene::SceneImage> {
+    let mut found = BTreeMap::new();
+    for p in &effects.particles {
+        let id = p.texture.replace('\\', "/").to_ascii_lowercase();
+        if !id.starts_with("base/client/ui/") || found.contains_key(&p.texture) {
+            continue;
+        }
+        if let Some(pixels) = ui.pixels(&bri_ui::pack::TexKey::Image(id.clone())) {
+            found.insert(
+                p.texture.clone(),
+                bri_render::scene::SceneImage {
+                    label: id,
+                    width: pixels.width,
+                    height: pixels.height,
+                    rgba: pixels.rgba.clone(),
+                    srgb: true,
+                },
+            );
+        }
+    }
+    found
+}
+
 /// An image's RGBA, scaled down to fit [`ADD_ON_TEXTURE_SIDE`] if larger.
 fn fit_texture(image: &bri_render::scene::SceneImage) -> Option<(u32, u32, Vec<u8>)> {
     let rgba = image::RgbaImage::from_raw(image.width, image.height, image.rgba.clone())?;

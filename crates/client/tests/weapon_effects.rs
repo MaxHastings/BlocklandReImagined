@@ -632,6 +632,61 @@ fn an_add_on_particle_draws_its_own_texture() -> Result<()> {
     Ok(())
 }
 
+/// A particle may draw the game's own interface art (`base/client/ui/...`,
+/// as the Duplorcator's brick icon sparks do): it comes from the UI pack,
+/// whatever the case the Add-On wrote, and the particle draws.
+#[test]
+fn an_add_on_particle_draws_an_interface_picture() -> Result<()> {
+    let base = fixture(false);
+    let named = "base/client/ui/brickIcons/1x1";
+    let particle = Particle {
+        id: "kit:particle/icon".into(),
+        texture: named.into(),
+        ..base.library.particles[0].clone()
+    };
+    let mut pack = (*weapons()).clone();
+    pack.effects = bri_weapons::PackEffects {
+        particles: vec![particle.clone()],
+        emitters: vec![Emitter {
+            id: "kit:emitter/icon".into(),
+            name: String::new(),
+            particles: vec![particle.id.clone()],
+            ..base.library.emitters[0].clone()
+        }],
+        lights: vec![],
+        explosions: vec![],
+    };
+    pack.validate()?;
+    let dir = tempfile::tempdir()?;
+    image::RgbaImage::from_pixel(4, 2, image::Rgba([10, 20, 30, 255]))
+        .save(dir.path().join("1x1.png"))?;
+    let mut ui = bri_ui::schema::UiPack::default();
+    ui.images.insert(
+        "base/client/ui/brickicons/1x1".into(),
+        bri_ui::schema::ImageEntry {
+            file: "1x1.png".into(),
+            width: 4,
+            height: 2,
+            sha256: String::new(),
+            source: "base/client/ui/brickIcons/1x1.png".into(),
+        },
+    );
+    let ui = bri_ui::pack::Pack::from_parts(ui, dir.path().to_path_buf());
+    let interface = bri_client::weapon_effects::interface_textures(&pack.effects, &ui);
+    let fx = WeaponEffects::with_textures(base, Arc::new(pack), EffectsLimits::default(), |k| {
+        interface.get(k)
+    })?;
+    assert!(fx.resolves("kit:emitter/icon"), "{:?}", fx.diagnostics.messages);
+    assert!(
+        !fx.diagnostics.messages.iter().any(|m| m.contains("draws nothing")),
+        "{:?}",
+        fx.diagnostics.messages
+    );
+    let texture = fx.world().pack().textures.iter().find(|t| t.id == named).unwrap();
+    assert_eq!((texture.width, texture.height), (4, 2));
+    Ok(())
+}
+
 /// A held image's rope (`Image::rope`) is drawn by its projectile's trail
 /// swept along the whole rope each frame, as densely as that projectile
 /// flying it would lay it, and stops when the rope goes.
