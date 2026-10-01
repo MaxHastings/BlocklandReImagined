@@ -269,24 +269,22 @@ fn eye_node(assets: &AvatarAssets, sitting: bool) -> Result<Vec3> {
         .w_axis
         .truncate())
 }
-/// Where v20 puts `app`'s first-person eye in its current seat.
+/// Where v20 puts `app`'s first-person eye in its current seat, on the tank
+/// as it was drawn (between the host's poses), not its newest pose: a
+/// moving tank is drawn a little behind that.
 fn expected_eye(app: &App, tank: &Definition, assets: &AvatarAssets) -> Result<Vec3> {
     let (vehicle, index) = seat(app).context("not seated")?;
-    let pose = app
-        .network_view()
-        .and_then(|v| v.vehicle_poses.get(&vehicle))
-        .context("tank pose")?;
+    let (position, rotation, turret_aim) = app.drawn_vehicle(vehicle).context("tank drawn")?;
     let s = &tank.seats[index];
     let eye = eye_node(assets, s.pose == "sit")?;
     let node = Vec3::from(s.transform.position);
-    let world =
-        Mat4::from_rotation_translation(Quat::from_array(pose.rotation), Vec3::from(pose.position));
+    let world = Mat4::from_rotation_translation(rotation, position);
     let mut seat = Mat4::from_rotation_translation(Quat::from_array(s.transform.rotation), node);
     // The gunner rides the turret, turned by its aim about its mount.
     if let (Some(mount), SeatRole::Gunner) = (&tank.attachment_mount, tank.seat_role(index)) {
         let pivot = Vec3::from(mount.position);
         seat = Mat4::from_translation(pivot)
-            * Mat4::from_rotation_y(pose.turret_aim[0])
+            * Mat4::from_rotation_y(turret_aim[0])
             * Mat4::from_translation(-pivot)
             * seat;
     }
@@ -355,12 +353,8 @@ fn check(
     // rolled with the hull, until they move their head.
     if tank.seat_role(index) != SeatRole::Gunner {
         let (vehicle, _) = seat(app).context("not seated")?;
-        let pose = app
-            .network_view()
-            .and_then(|v| v.vehicle_poses.get(&vehicle))
-            .context("tank pose")?;
-        let expected = Quat::from_array(pose.rotation)
-            * Quat::from_array(tank.seats[index].transform.rotation);
+        let (_, hull, _) = app.drawn_vehicle(vehicle).context("tank drawn")?;
+        let expected = hull * Quat::from_array(tank.seats[index].transform.rotation);
         let (_, yaw, pitch) = app.rendered_camera().context("rendered camera")?;
         let drawn = Quat::from_rotation_y(-yaw)
             * Quat::from_rotation_x(pitch)

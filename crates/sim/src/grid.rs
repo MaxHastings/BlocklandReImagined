@@ -418,6 +418,51 @@ mod tests {
             assert!(overlaps((&ba, &a, bounds_a), (&bb, &b, bounds_b)));
         }
     }
+    /// Every pair of grid cells, one plate apart, against v20's reading of
+    /// them (blocklandv20.exe 0x53c1d0): a cell that is not `-` is solid,
+    /// `u` and `b` take the cell above, `d` and `b` the cell below. Two solid
+    /// cells overlap side by side; stacked, they join only up onto down.
+    #[test]
+    fn every_cell_pair_places_and_joins_as_v20_reads_the_grid() {
+        let cells = [b'b', b'u', b'd', b'x', b'-'];
+        let one = |cell: u8| Mesh {
+            footprint_studs: [1, 1],
+            attachment_rows: vec![(cell as char).to_string()],
+            ..mesh()
+        };
+        let up = |c: u8| c == b'u' || c == b'b';
+        let down = |c: u8| c == b'd' || c == b'b';
+        for lower in cells {
+            for upper in cells {
+                let (a, b) = (one(lower), one(upper));
+                let (ba, bounds_a) = placed(&a, [0.25, 0.1, 0.25], 0);
+                let (bb, same) = placed(&b, [0.25, 0.1, 0.25], 0);
+                assert_eq!(
+                    overlaps((&ba, &a, bounds_a), (&bb, &b, same)),
+                    lower != b'-' && upper != b'-',
+                    "{} in {}",
+                    upper as char,
+                    lower as char
+                );
+                let (bb, above) = placed(&b, [0.25, 0.3, 0.25], 0);
+                let joined = up(lower) && down(upper);
+                assert_eq!(
+                    connected((&ba, &a, bounds_a), (&bb, &b, above)),
+                    joined,
+                    "{} on {}",
+                    upper as char,
+                    lower as char
+                );
+                assert_eq!(
+                    connected((&bb, &b, above), (&ba, &a, bounds_a)),
+                    joined,
+                    "{} under {}",
+                    lower as char,
+                    upper as char
+                );
+            }
+        }
+    }
     #[test]
     fn rotation_preserves_voids_and_vertical_attachment_faces() {
         let m = mesh();

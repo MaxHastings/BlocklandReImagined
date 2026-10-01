@@ -45,6 +45,13 @@ debug = "line-tables-only"
 opt-level = 2
 debug = false
 
+# The map lighting bake fits lights and traces rays in plain Rust; unoptimized
+# it made the stock-map test take 410 s of the gate's 600 s per-binary limit.
+# map_lighting's own tests, 2026-10-01: 32.6 s at opt-level 0, 4.3 s at 2,
+# for 15 s more each time bri-render recompiles (`cargo check` is unaffected).
+[profile.dev.package.bri-render]
+opt-level = 2
+
 # Line tables make panic backtraces and native crash dumps name files and
 # lines in release builds, at no runtime cost.
 [profile.release]
