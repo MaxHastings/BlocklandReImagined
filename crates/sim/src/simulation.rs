@@ -140,6 +140,22 @@ pub fn set_enabled(
     bri_physics::detect_collisions(physics);
     Ok(())
 }
+/// Which way a stack selection goes from its first brick
+/// ([`Simulation::select_stack`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StackReach {
+    pub up: bool,
+    pub limited: bool,
+}
+/// The bricks a selection took, in order, and what it left out.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Selection {
+    pub bricks: Vec<BrickId>,
+    /// It stopped at its limit with more to take.
+    pub limit_reached: bool,
+    /// Bricks it reached but was not allowed to take.
+    pub refused: usize,
+}
 fn may_build_on(actor: &Actor, brick: &Brick) -> bool {
     actor.trusted(brick.owner, bri_world::authority::trust::BUILD)
 }
@@ -574,6 +590,58 @@ impl Simulation {
     pub fn plant_group(&mut self, actor: &Actor, bricks: Vec<Brick>) -> Result<Vec<BrickId>> {
         self.place_group(actor, bricks, false)
     }
+    /// Plant bricks one at a time in order, as v20's Duplorcator planted a
+    /// copy: each passes every plant rule but reach against the world as
+    /// it stands, the bricks planted before it included, and one that
+    /// does not is skipped. The planted ids, and the first refusal.
+    pub fn plant_each(
+        &mut self,
+        actor: &Actor,
+        bricks: Vec<Brick>,
+    ) -> (Vec<BrickId>, Option<anyhow::Error>) {
+        let mut ids = Vec::with_capacity(bricks.len());
+        let mut first = None;
+        for brick in bricks {
+            match self.plant_one(actor, brick) {
+                Ok(id) => ids.push(id),
+                Err(error) => {
+                    first.get_or_insert(error);
+                }
+            }
+        }
+        if !ids.is_empty() {
+            self.detect_collisions();
+        }
+        (ids, first)
+    }
+    fn plant_one(&mut self, actor: &Actor, brick: Brick) -> Result<BrickId> {
+        if self.state().bricks.len() >= bri_world::MAX_BRICKS {
+            return Err(PlantFailure::Limit.into());
+        }
+        let definition = self.definitions.get(&brick)?;
+        let bounds = Bounds::new(&brick, &definition.mesh)?;
+        let supported = check_placement(
+            self.authority.state(),
+            &self.definitions,
+            &self.index,
+            &self.physics,
+            self.terrain.as_ref(),
+            actor,
+            &brick,
+        )?;
+        if !supported {
+            return Err(PlantFailure::Float.into());
+        }
+        let id = self.authority.plant(actor, brick, |_, _| Ok(()))?;
+        self.attach(id)?;
+        let brick = &self.authority.state().bricks[&id];
+        self.index.insert(id, bounds);
+        if let Some(water) = brick_water(brick, self.definitions.get(brick)?) {
+            self.brick_waters.insert(id, water);
+            self.liquids = std::sync::OnceLock::new();
+        }
+        Ok(id)
+    }
     /// Whether `brick` could go into the world now, support aside: no
     /// overlap with another brick, not buried in the map, not stuck in a
     /// player or vehicle.
@@ -663,87 +731,99 @@ impl Simulation {
         self.detect_collisions();
         Ok(ids)
     }
-    /// Every brick lying wholly inside `area` that `actor` may build on,
-    /// lowest first: what a copy of the box takes. More than `limit` is
-    /// refused rather than cut short.
-    pub fn copyable_in_box(
+    /// Every brick lying wholly inside `area` that `admit` accepts, lowest
+    /// first: what a copy of the box takes, cut short at `limit`.
+    pub fn select_box(
         &self,
-        actor: &Actor,
         area: Bounds,
         limit: usize,
-    ) -> Result<Vec<BrickId>> {
+        mut admit: impl FnMut(&Brick) -> bool,
+    ) -> Selection {
         let world = self.state();
         let inside = |b: Bounds| {
             let (max, outer) = (b.max(), area.max());
             (0..3).all(|a| b.min[a] >= area.min[a] && max[a] <= outer[a])
         };
         let mut found: Vec<(i32, BrickId)> = Vec::new();
-        let mut refused = false;
+        let mut selection = Selection::default();
         for id in self.index.query(area) {
             let bounds = self.index.bounds(id);
             if !inside(bounds) {
                 continue;
             }
-            if !may_build_on(actor, &world.bricks[&id]) {
-                refused = true;
+            if !admit(&world.bricks[&id]) {
+                selection.refused += 1;
                 continue;
             }
-            ensure!(
-                found.len() < limit,
-                "That box holds more than {limit} bricks"
-            );
             found.push((bounds.min[1], id));
         }
-        ensure!(
-            !found.is_empty(),
-            "{}",
-            if refused {
-                "The bricks in that box belong to builds that do not trust you enough."
-            } else {
-                "There are no bricks wholly inside that box."
-            }
-        );
         found.sort_unstable();
-        Ok(found.into_iter().map(|(_, id)| id).collect())
+        if found.len() > limit {
+            found.truncate(limit);
+            selection.limit_reached = true;
+        }
+        selection.bricks = found.into_iter().map(|(_, id)| id).collect();
+        selection
     }
-    /// The build a copy takes from `start`: it and every brick joined to it
-    /// through studs, passing only through bricks `actor` may build on and,
-    /// with `above_only`, never below `start`'s bottom. Nearest first.
-    /// More than `limit` bricks is refused rather than cut short.
-    pub fn build_from(
+    /// A stack from `start`, as v20's duplicators select one: `start`,
+    /// then breadth first every brick joined by studs to one already taken
+    /// that `admit` accepts. From `start` itself only one way, up (bricks
+    /// on top of it) or down (bricks under it); from every other brick
+    /// both ways. `limited` keeps the stack on its side of `start`: going
+    /// up, nothing reaching below `start`'s bottom; going down, nothing
+    /// reaching above its top. Cut short at `limit`. `start` is taken
+    /// whatever `admit` says; the caller checks it.
+    pub fn select_stack(
         &self,
-        actor: &Actor,
         start: BrickId,
+        reach: StackReach,
         limit: usize,
-        above_only: bool,
-    ) -> Result<Vec<BrickId>> {
+        mut admit: impl FnMut(&Brick) -> bool,
+    ) -> Result<Selection> {
         let world = self.state();
-        let first = world.bricks.get(&start).context("Unknown brick")?;
-        ensure!(
-            may_build_on(actor, first),
-            "The brick's owner does not trust you enough to do that."
-        );
-        let floor = self.index.bounds(start).min[1];
+        ensure!(world.bricks.contains_key(&start), "Unknown brick");
+        let first = self.index.bounds(start);
+        let (bottom, top) = (first.min[1], first.max()[1]);
         let mut seen = BTreeSet::from([start]);
-        let mut order = vec![start];
+        let mut selection = Selection {
+            bricks: vec![start],
+            ..Selection::default()
+        };
         let mut next = 0;
-        while let Some(&id) = order.get(next) {
+        while let Some(&id) = selection.bricks.get(next) {
             next += 1;
+            let here = self.index.bounds(id);
             for other in self.connected_bricks(id)? {
-                if (above_only && self.index.bounds(other).min[1] < floor)
-                    || !may_build_on(actor, &world.bricks[&other])
-                    || !seen.insert(other)
+                let there = self.index.bounds(other);
+                let above = there.min[1] >= here.max()[1];
+                if id == start && above != reach.up {
+                    continue;
+                }
+                if reach.limited
+                    && (if reach.up {
+                        there.min[1] < bottom
+                    } else {
+                        there.max()[1] > top
+                    })
                 {
                     continue;
                 }
-                ensure!(
-                    order.len() < limit,
-                    "That build has more than {limit} bricks"
-                );
-                order.push(other);
+                if seen.contains(&other) {
+                    continue;
+                }
+                if selection.bricks.len() >= limit {
+                    selection.limit_reached = true;
+                    return Ok(selection);
+                }
+                seen.insert(other);
+                if !admit(&world.bricks[&other]) {
+                    selection.refused += 1;
+                    continue;
+                }
+                selection.bricks.push(other);
             }
         }
-        Ok(order)
+        Ok(selection)
     }
     /// The bricks sharing a face with `id` (`grid::share_face`): beside,
     /// on top of or under it, joined by studs or not. Ascending ids.

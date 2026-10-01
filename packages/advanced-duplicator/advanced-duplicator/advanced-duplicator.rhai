@@ -117,7 +117,7 @@ fn cmd_click(player) {
             return;
         }
         hide_box(player);
-        copy_build(player, hit.brick, limit(), true, tool());
+        copy_build(player, hit.brick, limit(), "up", tool(), #{ limited: true });
         return;
     }
     let c = corner_of(hit);

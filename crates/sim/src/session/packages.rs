@@ -24,6 +24,7 @@ use bri_package_runtime::{
 use bri_world::MAX_BRICKS;
 use std::sync::Arc;
 
+mod copy_hooks;
 mod item_hooks;
 pub(super) use item_hooks::Pickup;
 
@@ -325,6 +326,7 @@ pub(super) struct PackageHost {
     in_damage_hook: bool,
     /// Pending `on_projectile_hit` calls and what dropped items carry.
     item_hooks: item_hooks::ItemHooks,
+    copy_hooks: copy_hooks::CopyHooks,
     /// Per-origin shares of the server's package capacity (stress campaign
     /// W1): no one package, or one player's commands, can take a pool
     /// every player needs.
@@ -627,6 +629,7 @@ impl Session {
             spawns: VecDeque::new(),
             in_damage_hook: false,
             item_hooks: Default::default(),
+            copy_hooks: Default::default(),
             shares: Shares::new(scripts),
             script_time: BTreeMap::new(),
             state_bytes,
@@ -1439,7 +1442,8 @@ impl Session {
                 player,
                 brick,
                 limit,
-                above_only,
+                reach,
+                rule,
                 tool,
             } => {
                 // A copy is taken with the trust of the player who asked.
@@ -1447,12 +1451,11 @@ impl Session {
                     caller == Some(player),
                     "A build is copied only for the player whose command asked"
                 );
-                // The player hears why a copy failed; nothing went wrong
-                // with the Add-On.
-                match self.copy_build(player, brick, limit as usize, above_only, &tool) {
-                    Ok(count) => self.bottom_count(player, "Copied", count),
-                    Err(error) => self.center_print(player, format!("{error:#}")),
-                }
+                // The player or the Add-On hears why a copy failed;
+                // nothing went wrong with the Add-On.
+                let copied =
+                    self.copy_build(player, brick, limit as usize, reach, rule, &tool, package);
+                self.report_copy(package, player, copied);
                 Ok(())
             }
             Op::CopyBox {
@@ -1460,16 +1463,28 @@ impl Session {
                 min,
                 max,
                 limit,
+                rule,
                 tool,
             } => {
                 ensure!(
                     caller == Some(player),
                     "A build is copied only for the player whose command asked"
                 );
-                match self.copy_box(player, min, max, limit as usize, &tool) {
-                    Ok(count) => self.bottom_count(player, "Copied", count),
-                    Err(error) => self.center_print(player, format!("{error:#}")),
-                }
+                let copied = self.copy_box(player, min, max, limit as usize, rule, &tool, package);
+                self.report_copy(package, player, copied);
+                Ok(())
+            }
+            Op::HighlightCopy {
+                player,
+                color,
+                seconds,
+            } => {
+                ensure!(
+                    caller == Some(player),
+                    "A copy is lit only for the player whose command asked"
+                );
+                // No copy to light is not the Add-On's fault.
+                let _ = self.highlight_copy(player, color, seconds);
                 Ok(())
             }
             Op::MirrorCopy { player, axis } => {
@@ -2575,6 +2590,7 @@ impl Session {
         self.deliver_loadouts();
         self.deliver_spawns();
         self.deliver_hits();
+        self.deliver_copy_reports();
         let changed = self.dirty.read(super::dirty::Reader::Packages);
         let Some(host) = self.packages.as_ref() else {
             return Ok(());

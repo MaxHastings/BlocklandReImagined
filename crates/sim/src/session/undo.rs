@@ -228,8 +228,8 @@ impl Session {
                         entry.rename(&renamed);
                     }
                 }
-                if let Some(sources) = self.copy_sources.get_mut(&owner) {
-                    for id in sources {
+                if let Some(copy) = self.copies.get_mut(&owner) {
+                    for id in &mut copy.sources {
                         *id = renamed.get(id).copied().unwrap_or(*id);
                     }
                 }

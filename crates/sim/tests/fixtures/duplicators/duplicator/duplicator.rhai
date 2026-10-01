@@ -36,5 +36,5 @@ fn cmd_select(player) {
     if hit == () || hit.brick == () {
         return;
     }
-    copy_build(player, hit.brick, limit(), true, tool());
+    copy_build(player, hit.brick, limit(), "up", tool(), #{ limited: true });
 }

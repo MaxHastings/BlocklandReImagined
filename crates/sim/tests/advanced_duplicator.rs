@@ -9,7 +9,10 @@ use bri_content::{
     collision::{CollisionBody, Part},
 };
 use bri_package::packages::{PackageEntry, PackageSet, Side};
-use bri_package_runtime::{Catalog, ops::MirrorAxis};
+use bri_package_runtime::{
+    Catalog,
+    ops::{CopyRule, MirrorAxis, StackReach},
+};
 use bri_sim::{
     definitions::{Definition, Definitions},
     player::MoveInput,
@@ -321,6 +324,30 @@ fn scene(g: &mut Game, owner: OwnerId) -> [BrickId; 4] {
     [a, b, c, d]
 }
 
+/// `copy_box` as the Advanced Duplicator asks: the bricks copied, or why
+/// none were.
+fn copy_box(
+    g: &mut Game,
+    owner: OwnerId,
+    min: [f32; 3],
+    max: [f32; 3],
+    limit: usize,
+) -> Result<usize, String> {
+    let copied = g.s.copy_box(
+        owner,
+        min,
+        max,
+        limit,
+        CopyRule::default(),
+        TOOL,
+        "advanced-duplicator",
+    );
+    match copied.error {
+        Some((_, message)) => Err(message),
+        None => Ok(copied.selection.bricks.len()),
+    }
+}
+
 #[test]
 fn a_box_copies_what_lies_wholly_inside_it() {
     let mut g = Game::new();
@@ -328,8 +355,7 @@ fn a_box_copies_what_lies_wholly_inside_it() {
     scene(&mut g, host);
     // The tower and its neighbour, not the lone plate.
     assert_eq!(
-        g.s.copy_box(host, [-1.5, 0.0, -0.5], [1.0, 0.4, 0.5], 100, TOOL)
-            .unwrap(),
+        copy_box(&mut g, host, [-1.5, 0.0, -0.5], [1.0, 0.4, 0.5], 100).unwrap(),
         3
     );
     let copy = g.s.blueprint(host).unwrap().clone();
@@ -337,44 +363,41 @@ fn a_box_copies_what_lies_wholly_inside_it() {
     assert_eq!(copy.size, [5, 2, 2]);
     // A box grows out to the grid: 0.3 high still takes the upper plate...
     assert_eq!(
-        g.s.copy_box(host, [-1.5, 0.0, -0.5], [1.0, 0.3, 0.5], 100, TOOL)
-            .unwrap(),
+        copy_box(&mut g, host, [-1.5, 0.0, -0.5], [1.0, 0.3, 0.5], 100).unwrap(),
         3
     );
     // ...and one a plate high only the bottom layer.
     assert_eq!(
-        g.s.copy_box(host, [-1.5, 0.0, -0.5], [1.0, 0.2, 0.5], 100, TOOL)
-            .unwrap(),
+        copy_box(&mut g, host, [-1.5, 0.0, -0.5], [1.0, 0.2, 0.5], 100).unwrap(),
         2
     );
     // A brick half in the box stays out.
     assert_eq!(
-        g.s.copy_box(host, [0.0, 0.0, -0.5], [1.0, 0.4, 0.5], 100, TOOL)
-            .unwrap(),
+        copy_box(&mut g, host, [0.0, 0.0, -0.5], [1.0, 0.4, 0.5], 100).unwrap(),
         2
     );
-    // Too many is refused, not cut short, and the last copy stays.
-    let error =
-        g.s.copy_box(host, [-1.5, 0.0, -0.5], [1.0, 0.4, 0.5], 2, TOOL)
-            .unwrap_err();
-    assert!(format!("{error:#}").contains("more than 2"), "{error:#}");
+    // Too many is cut short, lowest first, and says so.
+    let copied = g.s.copy_box(
+        host,
+        [-1.5, 0.0, -0.5],
+        [1.0, 0.4, 0.5],
+        2,
+        CopyRule::default(),
+        TOOL,
+        "advanced-duplicator",
+    );
+    assert_eq!(copied.selection.bricks.len(), 2);
+    assert!(copied.selection.limit_reached);
     assert_eq!(g.s.blueprint(host).unwrap().bricks.len(), 2);
     // An empty box, and one too big.
-    let error =
-        g.s.copy_box(host, [10.0, 0.0, 10.0], [12.0, 1.0, 12.0], 100, TOOL)
-            .unwrap_err();
+    let error = copy_box(&mut g, host, [10.0, 0.0, 10.0], [12.0, 1.0, 12.0], 100).unwrap_err();
     assert!(format!("{error:#}").contains("no bricks"), "{error:#}");
-    assert!(
-        g.s.copy_box(host, [-200.0, 0.0, 0.0], [200.0, 1.0, 1.0], 100, TOOL)
-            .is_err()
-    );
+    assert!(copy_box(&mut g, host, [-200.0, 0.0, 0.0], [200.0, 1.0, 1.0], 100).is_err());
     // Nobody copies bricks whose owner does not trust them.
     let guest =
         g.s.join("Guest".into(), Vec3::new(2.0, 0.05, 3.0), false)
             .unwrap();
-    let error =
-        g.s.copy_box(guest, [-1.5, 0.0, -0.5], [1.0, 0.4, 0.5], 100, TOOL)
-            .unwrap_err();
+    let error = copy_box(&mut g, guest, [-1.5, 0.0, -0.5], [1.0, 0.4, 0.5], 100).unwrap_err();
     assert!(format!("{error:#}").contains("trust"), "{error:#}");
     assert!(g.s.blueprint(guest).is_none());
 }
@@ -392,14 +415,19 @@ fn a_mirrored_copy_plants_the_reflection_with_twins_swapped() {
         .unwrap()
         .0;
     g.plant_as(host, "plate", [1.0, 0.7, 0.25], 2);
-    g.s.copy_build(
+    let copied = g.s.copy_build(
         host,
         wedge,
         100,
-        true,
+        StackReach {
+            up: true,
+            limited: true,
+        },
+        CopyRule::default(),
         "advanced-duplicator-tool:weapon/advanced-duplicator",
-    )
-    .unwrap();
+        "advanced-duplicator",
+    );
+    assert!(copied.error.is_none());
     // Mirroring is part of the placement: the host tells the player.
     g.notices(host);
     g.s.mirror_copy(host, MirrorAxis::X).unwrap();
@@ -453,8 +481,7 @@ fn a_cut_moves_a_build_and_undo_puts_it_back_as_it_was() {
     let [a, b, c, d] = scene(&mut g, host);
     let world = g.bricks();
     let original: Vec<Brick> = [a, b, c].iter().map(|id| world[id].clone()).collect();
-    g.s.copy_box(host, [-1.5, 0.0, -0.5], [1.0, 0.4, 0.5], 100, TOOL)
-        .unwrap();
+    copy_box(&mut g, host, [-1.5, 0.0, -0.5], [1.0, 0.4, 0.5], 100).unwrap();
     assert_eq!(g.s.cut_copy(host).unwrap(), 3);
     let world = g.bricks();
     assert_eq!(world.len(), 1);
@@ -483,8 +510,7 @@ fn a_cut_moves_a_build_and_undo_puts_it_back_as_it_was() {
     expected.sort_by(|x, y| x.position.partial_cmp(&y.position).unwrap());
     assert_eq!(back, expected);
     // A cut whose undo finds something in the way waits until it is clear.
-    g.s.copy_box(host, [-1.5, 0.0, -0.5], [1.0, 0.4, 0.5], 100, TOOL)
-        .unwrap();
+    copy_box(&mut g, host, [-1.5, 0.0, -0.5], [1.0, 0.4, 0.5], 100).unwrap();
     g.s.cut_copy(host).unwrap();
     g.s.take_private_notices();
     let guest =
@@ -514,13 +540,25 @@ fn cuts_and_fills_need_full_trust_and_undo_as_one_step() {
     // The guest's own plate copies; they may not cut or paint anything
     // they only built on.
     let own = g.plant(guest, [2.5, 0.1, -2.25]);
-    g.s.copy_build(guest, own, 100, true, TOOL).unwrap();
+    let up = StackReach {
+        up: true,
+        limited: true,
+    };
+    let copied = g.s.copy_build(
+        guest,
+        own,
+        100,
+        up,
+        CopyRule::default(),
+        TOOL,
+        "advanced-duplicator",
+    );
+    assert!(copied.error.is_none());
     assert!(g.s.cut_copy(host).is_err(), "the host holds no copy");
     assert_eq!(g.s.paint_copy(guest, 2).unwrap(), 1);
     assert_eq!(g.bricks()[&own].color, 2);
     // The host's copy: a fill paints all three at once...
-    g.s.copy_box(host, [-1.5, 0.0, -0.5], [1.0, 0.4, 0.5], 100, TOOL)
-        .unwrap();
+    copy_box(&mut g, host, [-1.5, 0.0, -0.5], [1.0, 0.4, 0.5], 100).unwrap();
     assert_eq!(g.s.paint_copy(host, 1).unwrap(), 3);
     let world = g.bricks();
     assert!([a, b, c].iter().all(|id| world[id].color == 1));
@@ -531,8 +569,7 @@ fn cuts_and_fills_need_full_trust_and_undo_as_one_step() {
     let world = g.bricks();
     assert!([a, b, c].iter().all(|id| world[id].color == 0));
     // Bricks the guest has no full trust on: nothing is cut.
-    let guest_copy_of_host =
-        g.s.copy_box(guest, [-1.5, 0.0, -0.5], [1.0, 0.4, 0.5], 100, TOOL);
+    let guest_copy_of_host = copy_box(&mut g, guest, [-1.5, 0.0, -0.5], [1.0, 0.4, 0.5], 100);
     assert!(guest_copy_of_host.is_err());
     assert_eq!(g.bricks().len(), 5);
 }

@@ -30,6 +30,7 @@ mod quotas;
 use quotas::Quota;
 mod admin_players;
 mod admin_world;
+mod highlight;
 mod inventory;
 mod map_change;
 mod environment;
@@ -49,6 +50,7 @@ mod items;
 mod weapons;
 pub use weapons::{MountedImage, WeaponView};
 mod blueprints;
+pub use blueprints::Copied;
 mod movables;
 mod packages;
 mod paint_fill;
@@ -646,7 +648,7 @@ const TALK_TICKS_PER_CHAR: u64 = 6;
 pub struct Session {
     events: events::Events,
     specials: special::Specials,
-    highlights: BTreeMap<OwnerId, admin_world::Highlight>,
+    highlights: highlight::Highlights,
     /// Installed only on the Tutorial map.
     tutorial: Option<Box<tutorial::Tutorial>>,
     bots: bots::Bots,
@@ -693,8 +695,8 @@ pub struct Session {
     undo: BTreeMap<OwnerId, undo::UndoStack>,
     /// Each player's copied build (`copy_build`), waiting to be placed.
     blueprints: BTreeMap<OwnerId, crate::blueprint::Blueprint>,
-    /// The bricks each held copy was taken from (`cut_copy`, `paint_copy`).
-    copy_sources: BTreeMap<OwnerId, Vec<BrickId>>,
+    /// What each held copy was taken from, by which Add-On.
+    copies: BTreeMap<OwnerId, blueprints::HeldCopy>,
     /// Bricks' mirror images, found as mirrored copies are placed.
     mirrors: crate::mirror::Mirrors,
     /// v20 `%client.lastPrint[%ar]`: each player's last applied print per
@@ -756,7 +758,7 @@ impl Session {
             environment: Default::default(),
             movables: Default::default(),
             specials: Default::default(),
-            highlights: BTreeMap::new(),
+            highlights: Default::default(),
             tutorial: None,
             bots: Default::default(),
             vehicles: Default::default(),
@@ -792,7 +794,7 @@ impl Session {
             tool_catalog: ToolCatalog::default(),
             undo: BTreeMap::new(),
             blueprints: BTreeMap::new(),
-            copy_sources: BTreeMap::new(),
+            copies: BTreeMap::new(),
             mirrors: Default::default(),
             last_prints: BTreeMap::new(),
             avatar_catalog: None,

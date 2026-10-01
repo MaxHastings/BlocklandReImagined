@@ -9,7 +9,10 @@ use bri_content::{
     collision::{CollisionBody, Part},
 };
 use bri_package::packages::{PackageEntry, PackageSet, Side};
-use bri_package_runtime::Catalog;
+use bri_package_runtime::{
+    Catalog,
+    ops::{CopyRule, StackReach},
+};
 use bri_sim::{
     blueprint::Blueprint,
     definitions::{Definition, Definitions},
@@ -238,6 +241,55 @@ fn stair(g: &mut Game, owner: OwnerId) -> [BrickId; 4] {
     [a, b, c, d]
 }
 
+/// What the stand-in Duplicator copies: the stack up from the clicked
+/// brick, never below it.
+const UP: StackReach = StackReach {
+    up: true,
+    limited: true,
+};
+
+/// `copy_build` as an Add-On asks: the bricks copied, or why none were.
+fn copy_up(
+    g: &mut Game,
+    owner: OwnerId,
+    brick: BrickId,
+    limit: usize,
+    tool: &str,
+) -> Result<usize, String> {
+    copied(g.s.copy_build(
+        owner,
+        brick,
+        limit,
+        UP,
+        CopyRule::default(),
+        tool,
+        "duplicator",
+    ))
+}
+
+fn copy_down(g: &mut Game, owner: OwnerId, brick: BrickId, limit: usize) -> Result<usize, String> {
+    let down = StackReach {
+        up: false,
+        limited: false,
+    };
+    copied(g.s.copy_build(
+        owner,
+        brick,
+        limit,
+        down,
+        CopyRule::default(),
+        TOOL,
+        "duplicator",
+    ))
+}
+
+fn copied(copied: bri_sim::session::Copied) -> Result<usize, String> {
+    match copied.error {
+        Some((_, message)) => Err(message),
+        None => Ok(copied.selection.bricks.len()),
+    }
+}
+
 #[test]
 fn a_copy_takes_the_clicked_brick_and_the_build_on_it() {
     let mut g = Game::new();
@@ -246,7 +298,7 @@ fn a_copy_takes_the_clicked_brick_and_the_build_on_it() {
             .unwrap();
     let [a, b, c, _] = stair(&mut g, host);
     // From the bottom: the whole stair, nearest first, not the lone plate.
-    assert_eq!(g.s.copy_build(host, a, 100, true, TOOL).unwrap(), 3);
+    assert_eq!(copy_up(&mut g, host, a, 100, TOOL).unwrap(), 3);
     let copy = g.s.blueprint(host).unwrap().clone();
     assert_eq!(copy.bricks.len(), 3);
     assert_eq!(copy.tool, TOOL);
@@ -262,21 +314,17 @@ fn a_copy_takes_the_clicked_brick_and_the_build_on_it() {
         )
     );
     // From the middle: never below the clicked brick...
-    assert_eq!(g.s.copy_build(host, b, 100, true, TOOL).unwrap(), 2);
-    // ...unless the Add-On asks for everything joined to it.
-    assert_eq!(g.s.copy_build(host, c, 100, false, TOOL).unwrap(), 3);
-    // Too big a build is refused, not cut short, and the old copy stays.
-    let error = g.s.copy_build(host, a, 2, true, TOOL).unwrap_err();
-    assert!(
-        format!("{error:#}").contains("more than 2 bricks"),
-        "{error:#}"
-    );
-    assert_eq!(g.s.blueprint(host).unwrap().bricks.len(), 3);
+    assert_eq!(copy_up(&mut g, host, b, 100, TOOL).unwrap(), 2);
+    // ...unless the Add-On asks for the stack down from it.
+    assert_eq!(copy_down(&mut g, host, c, 100).unwrap(), 3);
+    // Too big a build is cut short, nearest first, and says so.
+    let copied =
+        g.s.copy_build(host, a, 2, UP, CopyRule::default(), TOOL, "duplicator");
+    assert_eq!(copied.selection.bricks, [a, b]);
+    assert!(copied.selection.limit_reached);
+    assert_eq!(g.s.blueprint(host).unwrap().bricks.len(), 2);
     // Only a tool this server has may place it.
-    assert!(
-        g.s.copy_build(host, a, 100, true, "other:weapon/none")
-            .is_err()
-    );
+    assert!(copy_up(&mut g, host, a, 100, "other:weapon/none").is_err());
 }
 
 #[test]
@@ -286,7 +334,7 @@ fn a_copy_turns_on_the_grid_and_plants_all_or_nothing() {
         g.s.join("Host".into(), Vec3::new(0.0, 0.05, 3.0), true)
             .unwrap();
     let [a, ..] = stair(&mut g, host);
-    g.s.copy_build(host, a, 100, true, TOOL).unwrap();
+    copy_up(&mut g, host, a, 100, TOOL).unwrap();
     let copy: Blueprint = g.s.blueprint(host).unwrap().clone();
     let before = g.bricks();
     // Over the original: every brick overlaps, nothing is planted.
@@ -340,7 +388,7 @@ fn one_undo_takes_a_placed_copy_back() {
             .unwrap();
     let [a, ..] = stair(&mut g, host);
     let single = g.plant(host, [-6.5, 0.1, 0.25], 0);
-    g.s.copy_build(host, a, 100, true, TOOL).unwrap();
+    copy_up(&mut g, host, a, 100, TOOL).unwrap();
     let before = g.bricks();
     g.place(host, [-3.0, 0.0, -2.0], 0).unwrap();
     assert_eq!(g.bricks(), before + 3);
@@ -367,7 +415,7 @@ fn copies_respect_trust() {
         g.s.join("Guest".into(), Vec3::new(4.5, 0.25, 0.25), false)
             .unwrap();
     // Nobody copies a build its owner does not trust them with.
-    assert!(g.s.copy_build(guest, a, 100, true, TOOL).is_err());
+    assert!(copy_up(&mut g, guest, a, 100, TOOL).is_err());
     assert!(g.s.blueprint(guest).is_none());
     // Through the Add-On (a click on the plate underfoot) the player is
     // told why.
@@ -383,7 +431,7 @@ fn copies_respect_trust() {
     // A guest's own plate copies, and the host's bricks never join it: the
     // copy may not be planted onto the host's plate either.
     let own = g.plant(guest, [2.5, 0.1, -2.25], 0);
-    assert_eq!(g.s.copy_build(guest, own, 100, false, TOOL).unwrap(), 1);
+    assert_eq!(copy_down(&mut g, guest, own, 100).unwrap(), 1);
     let on_d = [4.5, 0.2, 0.0];
     assert_eq!(
         failure(g.place(guest, on_d, 0)),
@@ -414,7 +462,7 @@ fn the_brick_limit_and_plant_rate_hold_for_copies() {
     };
     let a = g.plant(guest, [0.5, 0.1, 0.25], 0);
     g.plant(guest, [0.5, 0.3, 0.25], 0);
-    g.s.copy_build(guest, a, 100, true, TOOL).unwrap();
+    copy_up(&mut g, guest, a, 100, TOOL).unwrap();
     g.steps(121);
     // Too far from the builder is refused like a far plant.
     assert_eq!(

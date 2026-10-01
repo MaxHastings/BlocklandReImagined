@@ -1096,27 +1096,81 @@ fn register_api(engine: &mut Engine) {
     engine.register_fn("broadcast", |text: &str| {
         push(Op::Broadcast { text: text.into() })
     });
+    // copy_build(player, brick, limit, "up" | "down", tool[, options]),
+    // copy_box(player, min, max, limit, tool[, options]); options are
+    // `copy_rule`'s.
+    fn copy_build(
+        player: Dynamic,
+        brick: Dynamic,
+        limit: i64,
+        reach: &str,
+        tool: &str,
+        options: Map,
+    ) -> Result<(), Box<EvalAltResult>> {
+        let (rule, limited) = copy_rule(&options)?;
+        push(Op::CopyBuild {
+            player: id(&player)?,
+            brick: id(&brick)?,
+            limit: u32::try_from(limit).map_err(|_| "limit must be 1 to 10000")?,
+            reach: crate::ops::StackReach {
+                up: match reach {
+                    "up" => true,
+                    "down" => false,
+                    _ => return Err("a stack goes \"up\" or \"down\"".into()),
+                },
+                limited,
+            },
+            rule,
+            tool: tool.into(),
+        })
+    }
     engine.register_fn(
         "copy_build",
-        |player: Dynamic, brick: Dynamic, limit: i64, above_only: bool, tool: &str| {
-            push(Op::CopyBuild {
-                player: id(&player)?,
-                brick: id(&brick)?,
-                limit: u32::try_from(limit).map_err(|_| "limit must be 1 to 10000")?,
-                above_only,
-                tool: tool.into(),
-            })
+        |player: Dynamic, brick: Dynamic, limit: i64, reach: &str, tool: &str| {
+            copy_build(player, brick, limit, reach, tool, Map::new())
         },
     );
+    engine.register_fn("copy_build", copy_build);
+    fn copy_box(
+        player: Dynamic,
+        min: Array,
+        max: Array,
+        limit: i64,
+        tool: &str,
+        options: Map,
+    ) -> Result<(), Box<EvalAltResult>> {
+        let (rule, limited) = copy_rule(&options)?;
+        if limited {
+            return Err("`limited` is for stacks".into());
+        }
+        push(Op::CopyBox {
+            player: id(&player)?,
+            min: vector(&min)?,
+            max: vector(&max)?,
+            limit: u32::try_from(limit).map_err(|_| "limit must be 1 to 10000")?,
+            rule,
+            tool: tool.into(),
+        })
+    }
     engine.register_fn(
         "copy_box",
         |player: Dynamic, min: Array, max: Array, limit: i64, tool: &str| {
-            push(Op::CopyBox {
+            copy_box(player, min, max, limit, tool, Map::new())
+        },
+    );
+    engine.register_fn("copy_box", copy_box);
+    engine.register_fn(
+        "highlight_copy",
+        |player: Dynamic, color: Array, seconds: Dynamic| {
+            let rgb = vector(&color[..color.len().min(3)].to_vec())?;
+            let alpha = match color.get(3) {
+                Some(a) => float(a)?,
+                None => 1.0,
+            };
+            push(Op::HighlightCopy {
                 player: id(&player)?,
-                min: vector(&min)?,
-                max: vector(&max)?,
-                limit: u32::try_from(limit).map_err(|_| "limit must be 1 to 10000")?,
-                tool: tool.into(),
+                color: [rgb[0], rgb[1], rgb[2], alpha],
+                seconds: float(&seconds)?,
             })
         },
     );
@@ -1241,6 +1295,36 @@ fn register_api(engine: &mut Engine) {
     register_physics(engine);
     register_queries(engine);
     register_presentation(engine);
+}
+
+/// A copy's options map: `trust` ("build" or "full"), `public`, `admin`,
+/// `partial` (bools, see [`crate::ops::CopyRule`]) and, for a stack,
+/// `limited`. Unnamed options keep their defaults.
+fn copy_rule(options: &Map) -> Result<(crate::ops::CopyRule, bool), Box<EvalAltResult>> {
+    let mut rule = crate::ops::CopyRule::default();
+    let mut limited = false;
+    for (key, value) in options {
+        let flag = || {
+            value
+                .as_bool()
+                .map_err(|_| format!("copy option `{key}` is true or false"))
+        };
+        match key.as_str() {
+            "trust" => {
+                rule.trust = match value.clone().into_string().as_deref() {
+                    Ok("build") => crate::ops::CopyTrust::Build,
+                    Ok("full") => crate::ops::CopyTrust::Full,
+                    _ => return Err("copy option `trust` is \"build\" or \"full\"".into()),
+                }
+            }
+            "public" => rule.public = flag()?,
+            "admin" => rule.admin = flag()?,
+            "partial" => rule.partial = flag()?,
+            "limited" => limited = flag()?,
+            other => return Err(format!("unknown copy option `{other}`").into()),
+        }
+    }
+    Ok((rule, limited))
 }
 
 fn damage_op(
@@ -1855,6 +1939,12 @@ impl Runtime {
             }
             if behaviour.on_projectile_hit {
                 need("on_projectile_hit".into(), 1, "on_projectile_hit");
+            }
+            if behaviour.on_copy {
+                need("on_copy".into(), 2, "on_copy");
+            }
+            if behaviour.on_place {
+                need("on_place".into(), 2, "on_place");
             }
             for policy in &behaviour.policies {
                 need(format!("allow_{policy}"), 1, &format!("policy `{policy}`"));

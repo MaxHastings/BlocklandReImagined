@@ -164,7 +164,7 @@ HUD panels can only show keys the viewer receives. `persist` (default
 | `object(ref)`, `objects()`, `objects_near(x, y, z, r)`, `held(p)` | | `teleport`, `respawn`, `set_archetype`, `control(p, entity)`, `release(p)`, `give_item(p, item, equip)`, `take_item(p, item)`, `drop_item(item, x, y, z[, vx, vy, vz])`: `player` |
 | `raycast(from, dir, range[, ignore])`, `can_damage(by, target)` | | `set_fov(p, fov)`, `set_image_ammo(p, ammo)`, `mount_image(p, image)`: `player` |
 | `brick_box(brick)`, `voxel(brick)`, `can_place_voxel(x, y, z)` | | `place_voxel(x, y, z, material)`: `world.edit`; `set_avatar_colors(p, colors)`: `player` |
-| | | `copy_build(p, brick, limit, above_only, tool)`, `copy_box(p, min, max, limit, tool)`, `mirror_copy(p, axis)`: `build` |
+| | | `copy_build(p, brick, limit, way, tool[, options])`, `copy_box(p, min, max, limit, tool[, options])`, `mirror_copy(p, axis)`, `highlight_copy(p, rgba, seconds)`: `build` |
 | | | `cut_copy(p)`, `paint_copy(p, color)`, `paint_fill(p, brick, color, limit)`: `world.edit` |
 | | | `push`, `tumble`, `hold`, `hold_distance`, `let_go`, `spawn_vehicle`, `remove_vehicle`: `physics` |
 | | | `heal(p, amount)`, `fire(...)`: `damage` |
@@ -326,18 +326,36 @@ like a dropped tool; add `vx, vy, vz` (at most 200 units a second) to throw
 it. An Add-On has at most 64 of these lying about at once. With
 `on_pickup` and `on_drop` they make ammo boxes, magazines that stay with a
 dropped gun, and thrown weapons that land as pickups.
-`copy_build(p, brick, limit, above_only, tool)` copies the build at `brick`
-for the player whose command asked: the brick and every brick joined to it
-through studs that the player may build on, with `above_only` none below
-the brick, refused past `limit` bricks (at most 10000). The player sees the
-copy as a ghost while `tool` is in hand, moves and turns it with the brick
-keys, and plants it with the plant key; planting follows the server's plant
-rules, plants all of it or none, and one Ctrl+Z takes it back. The
-Duplicator is the worked example.
+`copy_build(p, brick, limit, way, tool)` copies the stack at `brick` for
+the player whose command asked, as v20's duplicators selected one: the
+brick, then every brick joined by studs to one already taken, going only
+`"up"` (what is built on it) or `"down"` (what it is built on) from the
+clicked brick itself and both ways from the rest, nearest first and cut
+short at `limit` bricks (at most 10000). The player sees the copy as a
+ghost while `tool` is in hand, moves and turns it with the brick keys, and
+plants it with the plant key; planting follows the server's plant rules,
+plants all of it or none, and one Ctrl+Z takes it back.
+
+A last `options` map changes what a copy may take and how it plants:
+`trust` (`"build"`, the default, or `"full"`: the trust the player needs
+in a brick's owner), `public` (public bricks may be copied; default
+true), `admin` (administrators may copy any brick; default true),
+`partial` (planting plants each brick that fits and skips the rest, as
+v20's Duplorcator did; default false) and, for a stack, `limited` (keep
+the stack on its side of the clicked brick: going up, nothing reaching
+below its bottom). `highlight_copy(p, [r, g, b, a], seconds)` then lights
+the copied bricks in the palette colour nearest that one, glowing, for
+everyone to see, and gives them their own colours back after; a copy
+takes a lit brick as it is underneath. An Add-On with `on_copy` in its
+behaviour hears `on_copy(player, #{ bricks, limit_reached, refused,
+error, message })` instead of the player getting the engine's message,
+and with `on_place`, `on_place(player, #{ planted, bricks, error,
+message })` after the player plants its copy.
 
 `copy_box(p, [x, y, z], [x, y, z], limit, tool)` copies instead every
 brick lying wholly inside a box (world units, grown out to whole studs
-and plates, at most 256 units a side) that the player may build on.
+and plates, at most 256 units a side) that the player may build on,
+lowest first, with the same options but `limited`.
 `brick_box(brick)` gives the box a brick fills, `#{ min: [x, y, z], max:
 [x, y, z] }`, to build boxes from clicked bricks. `mirror_copy(p, axis)`
 mirrors the copy the player holds, across `"x"` or `"z"` (the world's

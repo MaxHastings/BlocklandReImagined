@@ -186,27 +186,37 @@ pub enum Op {
     Broadcast {
         text: String,
     },
-    /// Copy the build at `brick` for `player` to place with `tool`: the
-    /// brick and every brick joined to it that the player may build on,
-    /// with `above_only` none below the brick. More than `limit` bricks is
-    /// refused.
+    /// Copy the stack at `brick` for `player` to place with `tool`, as
+    /// v20's duplicators select one (`reach`, `rule`), cut short at
+    /// `limit` bricks.
     CopyBuild {
         player: u64,
         brick: u64,
         limit: u32,
-        above_only: bool,
+        reach: StackReach,
+        rule: CopyRule,
         tool: String,
     },
     /// Copy every brick lying wholly inside the box from `min` to `max`
-    /// (world units, grown out to the stud and plate grid) that `player`
-    /// may build on, for them to place with `tool`. More than `limit`
-    /// bricks is refused.
+    /// (world units, grown out to the stud and plate grid) that `rule`
+    /// lets `player` take, for them to place with `tool`, cut short at
+    /// `limit` bricks.
     CopyBox {
         player: u64,
         min: [f32; 3],
         max: [f32; 3],
         limit: u32,
+        rule: CopyRule,
         tool: String,
+    },
+    /// Light the bricks `player`'s copy was taken from in the palette
+    /// colour nearest `color` (RGBA), glowing, for `seconds`, then give
+    /// them their own colours back, as v20's duplicators showed a
+    /// selection. Everyone sees it.
+    HighlightCopy {
+        player: u64,
+        color: [f32; 4],
+        seconds: f32,
     },
     /// Mirror the copy `player` holds across `axis`. It shows and plants
     /// mirrored; mirroring it again the same way puts it back.
@@ -403,6 +413,45 @@ pub enum Op {
         image: Option<String>,
     },
 }
+/// Which way a stack copy ([`Op::CopyBuild`]) goes from the clicked
+/// brick: `up` takes what is built on it, else what it is built on;
+/// `limited` keeps the stack on that side of the clicked brick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StackReach {
+    pub up: bool,
+    pub limited: bool,
+}
+/// v20's trust levels a copy may ask for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CopyTrust {
+    /// Build on their bricks.
+    Build,
+    /// Also paint and hammer them (v20's duplicators asked this).
+    Full,
+}
+/// The Add-On's rules for the bricks a copy takes and how it plants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CopyRule {
+    /// The trust a player needs in a brick's owner to copy it.
+    pub trust: CopyTrust,
+    /// Public bricks (no owner) may be copied.
+    pub public: bool,
+    /// Administrators may copy any brick.
+    pub admin: bool,
+    /// Planting the copy plants each brick that fits and skips the rest,
+    /// as v20's Duplorcator did, rather than all or nothing.
+    pub partial: bool,
+}
+impl Default for CopyRule {
+    fn default() -> Self {
+        Self {
+            trust: CopyTrust::Build,
+            public: true,
+            admin: true,
+            partial: false,
+        }
+    }
+}
 /// The mirror [`Op::MirrorCopy`] stands in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MirrorAxis {
@@ -472,7 +521,10 @@ impl Op {
             | Self::Beam { .. }
             | Self::PlayThread { .. }
             | Self::ShowBox { .. } => "effects",
-            Self::CopyBuild { .. } | Self::CopyBox { .. } | Self::MirrorCopy { .. } => "build",
+            Self::CopyBuild { .. }
+            | Self::CopyBox { .. }
+            | Self::MirrorCopy { .. }
+            | Self::HighlightCopy { .. } => "build",
             Self::SetMapLights { .. } => "lighting",
             Self::SetEnvironment { .. } => "environment",
             Self::Teleport { .. }
@@ -639,6 +691,9 @@ impl Op {
                 tool,
                 ..
             } => (1..=10_000).contains(limit) && item(tool) && span(min, max),
+            Self::HighlightCopy { color, seconds, .. } => {
+                color.iter().all(|c| (0.0..=1.0).contains(c)) && (0.0..=60.0).contains(seconds)
+            }
             Self::ShowBox { area, tool, .. } => match area {
                 Some((min, max)) => item(tool) && span(min, max),
                 None => tool.is_empty(),
@@ -784,6 +839,7 @@ pub fn op_name(op: &Op) -> &'static str {
         Op::CutCopy { .. } => "cut_copy",
         Op::PaintCopy { .. } => "paint_copy",
         Op::PaintFill { .. } => "paint_fill",
+        Op::HighlightCopy { .. } => "highlight_copy",
         Op::ShowBox { area: Some(_), .. } => "show_box",
         Op::ShowBox { area: None, .. } => "hide_box",
         Op::GiveItem { .. } => "give_item",

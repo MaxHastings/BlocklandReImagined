@@ -205,6 +205,22 @@ pub struct Behaviour {
     /// tick.
     #[serde(default)]
     pub on_projectile_hit: bool,
+    /// `on_copy(player, info)` after this package's `copy_build` or
+    /// `copy_box` for `player`: `info` is `#{ bricks, limit_reached,
+    /// refused, error, message }`, `error` being `()` or why nothing was
+    /// copied (`trust`, `public`, `empty`, `invalid`) and `message` the
+    /// engine's words for it. Declaring it keeps the engine's own message
+    /// from the player. Delivered at the start of the next tick.
+    #[serde(default)]
+    pub on_copy: bool,
+    /// `on_place(player, info)` after `player` plants (or fails to plant)
+    /// a copy this package gave them: `info` is `#{ planted, bricks,
+    /// error, message }`, `error` being `()` or the plant failure
+    /// (`overlap`, `float`, `buried`, `stuck`, `too_far`, `limit`,
+    /// `forbidden`, `other`). Declaring it keeps the engine's own message from the
+    /// player. Delivered at the start of the next tick.
+    #[serde(default)]
+    pub on_place: bool,
     /// `on_tick()` every `tick_interval` ticks, when set.
     #[serde(default)]
     pub tick_interval: Option<u32>,
