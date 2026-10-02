@@ -36,3 +36,11 @@ off at start, has no pinned copy, or loads out of v20 order.
 The Gate builds the bundle on the PC with
 `python tools/addon_bundle.py find --search content\Add-Ons` (check each is
 pinned) and then the release's `build`/`upload` with the same `--search`.
+
+Bootstrap's bundle build (`install_originals`) passes no `--search`, so on
+the PC it missed the Tier reference copies a release build is pointed at
+and only warned. `addon_bundle.py` find/build/upload now remember the
+`--search` folders in `<content root>/_regeneration/addon-search.txt` (as
+bootstrap remembers the v20 folder) and reuse them when none is given, and
+always search the content root's `Add-Ons` drop folder. One release build
+with the usual `--search` folders is enough; later bootstraps match it.

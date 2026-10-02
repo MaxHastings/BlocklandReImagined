@@ -21,7 +21,10 @@ as they take its base game, so every platform ships the same ones.
     python tools/addon_bundle.py sources [--bundle DIR]     (packagers) every default Add-On's folder, as JSON
     python tools/addon_bundle.py verify-release CONTENT_DIR --credits FILE   (packagers) check a release
 
-Searched, in order: every --search folder, $BRI_ADDON_SEARCH (folders split
+Searched, in order: every --search folder (find, build and upload remember
+them in the content root, so a later run without --search, such as
+bootstrap's, uses the same ones), the content root's Add-Ons drop folder,
+$BRI_ADDON_SEARCH (folders split
 like PATH), Blockland on Steam's Add-Ons, the v20 install's Add-Ons and
 Maxwell's archive; each folder and the folders directly inside it.
 
@@ -156,6 +159,26 @@ def search_roots(extra, v20):
             seen.add(key)
             out.append(root)
     return out
+
+
+def remembered_search(content_root, given):
+    """The --search folders given now, else the ones given last time (kept
+    in the content root, as tools/bootstrap.py keeps the v20 folder), then
+    the content root's Add-Ons drop folder: so bootstrap's build finds the
+    copies a release build was pointed at."""
+    memory = content_root / '_regeneration' / 'addon-search.txt'
+    if given:
+        try:
+            memory.parent.mkdir(parents=True, exist_ok=True)
+            memory.write_text(''.join(f'{p.resolve()}\n' for p in given), encoding='utf-8')
+        except OSError:
+            pass
+    else:
+        try:
+            given = [pathlib.Path(line) for line in memory.read_text(encoding='utf-8').splitlines() if line.strip()]
+        except OSError:
+            given = []
+    return given + [content_root / 'Add-Ons']
 
 
 def classic_addons(roots):
@@ -706,6 +729,8 @@ def main():
                         help='build: leave out an original with no copy here (bootstrap on a machine without them)')
     args = parser.parse_args()
     args.repo = args.repo.resolve()
+    if args.command in ('find', 'build', 'upload'):
+        args.search = remembered_search(args.content_root, args.search)
     if args.command == 'find':
         find(args)
     elif args.command == 'build':
