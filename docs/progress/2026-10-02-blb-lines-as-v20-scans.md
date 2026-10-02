@@ -23,3 +23,8 @@ change only accepts lines that used to fail), but check that the
 regeneration's known geometry failure (`1x1x5spike.blb`) still fails as
 expected, and that the next bundle shows Brick_Window and Brick_Plant with
 no failed brick_geometry asset.
+
+Batch194 turned up `Brick_Round_Corners/2x2x6roundCornerWall.blb`, which
+writes `NORMALS` with no colon. Section headers (`POSITION:`, `UV COORDS:`,
+`COLORS:`, `NORMALS:`, `COVERAGE:`) now match in any case with or without
+the colon; the same test covers it.

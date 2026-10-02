@@ -564,6 +564,7 @@ pub fn read_with_globals(
             reflection,
             link,
             stretch,
+            swap: None,
         });
     }
     ensure!(!bricks.is_empty(), "No static brick declarations found");

@@ -343,3 +343,70 @@ datablock fxDTSBrickData (brick1x1NewData)
         .clone();
     assert_eq!(base["status"], "consumed", "{base}");
 }
+
+/// A door's `isDoor` fields become a click swap between the Add-On's own
+/// bricks, as Brick_Doors' script swaps the datablock: closed opens to
+/// `openCW`/`openCCW`, open closes to `closedCW`/`closedCCW`.
+#[test]
+fn a_door_swaps_to_its_open_and_closed_bricks() {
+    let dir = temp("door").join("Brick_Test_Door");
+    write(&dir.join("server.cs"), "exec(\"./Bricks.cs\");\n");
+    write(
+        &dir.join("Bricks.cs"),
+        r#"datablock fxDTSBrickData (brickTestDoorOpenData)
+{
+	brickFile = "./Door.blb";
+	uiName = "Test Door Open";
+	isDoor = 1;
+	isOpen = 1;
+	closedCW = "brickTestDoorData";
+	openCW = "brickTestDoorOpenData";
+	closedCCW = "brickTestDoorData";
+	openCCW = "brickTestDoorOpenData";
+};
+datablock fxDTSBrickData (brickTestDoorData : brickTestDoorOpenData)
+{
+	uiName = "Test Door";
+	isOpen = 0;
+};
+"#,
+    );
+    write(&dir.join("Door.blb"), "1 1 3\nBRICK\n");
+    write(
+        &dir.join("description.txt"),
+        "Title: Door\nAuthor: Tester\n",
+    );
+    let out = temp("door-out").join("out");
+    import(&Options {
+        input: dir,
+        out: out.clone(),
+        ..Default::default()
+    })
+    .unwrap();
+    let catalog: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(out.join("assets/bricks.json")).unwrap()).unwrap();
+    let swap = |name: &str| {
+        catalog["bricks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|b| b["display_name"] == name)
+            .unwrap()["swap"]
+            .clone()
+    };
+    let (open, closed) = (swap("Test Door Open"), swap("Test Door"));
+    assert!(
+        open["front"]
+            .as_str()
+            .unwrap()
+            .ends_with("/bricktestdoordata"),
+        "{open}"
+    );
+    assert!(
+        closed["back"]
+            .as_str()
+            .unwrap()
+            .ends_with("/bricktestdooropendata"),
+        "{closed}"
+    );
+}

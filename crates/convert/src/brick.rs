@@ -45,10 +45,7 @@ impl<'a> Lines<'a> {
     }
     fn expect(&mut self, expected: &str) -> Result<()> {
         let line = self.next()?;
-        ensure!(
-            line.eq_ignore_ascii_case(expected),
-            "Expected {expected}, got {line}"
-        );
+        ensure!(header(line, expected), "Expected {expected}, got {line}");
         Ok(())
     }
     fn number(&mut self, max: usize) -> Result<usize> {
@@ -89,6 +86,14 @@ impl<'a> Lines<'a> {
         );
         Ok(values[..4].try_into().unwrap())
     }
+}
+
+/// Whether `line` is the section header `name` (`NORMALS:`), in any case,
+/// with or without its colon, as v20's scanner takes it.
+fn header(line: &str, name: &str) -> bool {
+    line.trim_end_matches(':')
+        .trim_end()
+        .eq_ignore_ascii_case(name.trim_end_matches(':'))
 }
 
 /// A word's longest leading decimal number, as C's `strtod` reads it
@@ -181,10 +186,7 @@ pub fn read(data: &[u8], id: String) -> Result<(Brick, Provenance)> {
             if count == 0 {
                 warnings.push("No collision boxes: resolve datablock collisionShapeName; do not substitute the visual mesh".into());
             }
-            if lines
-                .peek()
-                .is_some_and(|l| l.eq_ignore_ascii_case("COVERAGE:"))
-            {
+            if lines.peek().is_some_and(|l| header(l, "COVERAGE:")) {
                 lines.next()?;
                 let mut coverage = [Coverage {
                     hides_adjacent: false,
@@ -230,10 +232,7 @@ pub fn read(data: &[u8], id: String) -> Result<(Brick, Provenance)> {
                     for uv in &mut uvs {
                         *uv = lines.vector()?;
                     }
-                    let colors = if lines
-                        .peek()
-                        .is_some_and(|s| s.eq_ignore_ascii_case("COLORS:"))
-                    {
+                    let colors = if lines.peek().is_some_and(|s| header(s, "COLORS:")) {
                         lines.next()?;
                         let mut colors = [[0.0; 4]; 4];
                         for c in &mut colors {
@@ -521,11 +520,12 @@ mod tests {
     }
     /// Lines v20 scans with `%f` but a strict reader refused (classic
     /// Add-On bricks): a colour with no alpha is opaque, a number with a
-    /// suffix reads its leading digits, extra numbers are ignored, and a
-    /// grid row shorter than the brick is solid where it runs out.
+    /// suffix reads its leading digits, extra numbers are ignored, a
+    /// section header may lack its colon, and a grid row shorter than the
+    /// brick is solid where it runs out.
     #[test]
     fn lines_read_as_v20_scans_them() {
-        let body = "0\n1\nTEX:TOP\nPOSITION:\n-1 -1 1\n-1 1 1f\n1 1 1 7\n1 -1 1\nUV COORDS:\n0 0\n0 1\n1 1\n1 0\nCOLORS:\n0.3 0.6 0.9\n0.3 0.6 0.9 0.5\n0.3 0.6 0.9\n0.3 0.6 0.9\nNORMALS:\n0 0 1\n0 0 1\n0 0 1\n0 0 1\n0\n0\n0\n0\n0\n0";
+        let body = "0\n1\nTEX:TOP\nPOSITION:\n-1 -1 1\n-1 1 1f\n1 1 1 7\n1 -1 1\nUV COORDS:\n0 0\n0 1\n1 1\n1 0\ncolors\n0.3 0.6 0.9\n0.3 0.6 0.9 0.5\n0.3 0.6 0.9\n0.3 0.6 0.9\nNORMALS\n0 0 1\n0 0 1\n0 0 1\n0 0 1\n0\n0\n0\n0\n0\n0";
         let (b, _) = read(
             format!("3 1 2\nSPECIAL\n\nx-x\n--\n\n{body}").as_bytes(),
             "lenient".into(),

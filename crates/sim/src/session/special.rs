@@ -18,6 +18,9 @@ const CHEST_OPEN_TICKS: u64 = 240;
 const TELEDOOR_COOLDOWN_TICKS: u64 = 4;
 /// `0.5 + (boundingBox / 4) / 2` for the standard player.
 const TELEDOOR_OFFSET: f32 = 1.125;
+/// A brick a click swaps (a door) swaps at most every quarter second, so
+/// clicking it fast cannot flood the world with changes.
+const SWAP_COOLDOWN_TICKS: u64 = 30;
 
 /// Per-player progress with special bricks.
 #[derive(Default)]
@@ -36,6 +39,8 @@ pub(super) struct Progress {
 pub(super) struct Specials {
     /// Open chests and when they close again.
     closing: BTreeMap<BrickId, u64>,
+    /// When each brick a click swaps was last swapped.
+    swapped: BTreeMap<BrickId, u64>,
 }
 
 fn chest_key(brick: &Brick) -> ([u32; 3], u8) {
@@ -241,6 +246,7 @@ impl Session {
     /// Activation of a treasure chest. Returns whether the brick's own
     /// onActivate events should run.
     pub(super) fn special_activate(&mut self, owner: OwnerId, brick: BrickId) -> Result<bool> {
+        self.activate_swap(owner, brick)?;
         match self.special_of(brick) {
             Special::TreasureChestOpen => Ok(false),
             Special::TreasureChest => {
@@ -303,6 +309,45 @@ impl Session {
             }
             _ => Ok(true),
         }
+    }
+    /// A click turns a brick with a `swap` (an Add-On's door) into the brick
+    /// for the side it was clicked from.
+    fn activate_swap(&mut self, owner: OwnerId, brick: BrickId) -> Result<()> {
+        let world = self.simulation.state();
+        let placed = &world.bricks[&brick];
+        let bri_world::ContentRef::Resolved(id) = &placed.definition else {
+            return Ok(());
+        };
+        let Some(swap) = self.tool_catalog.swaps.get(id).cloned() else {
+            return Ok(());
+        };
+        let tick = world.tick;
+        if self
+            .specials
+            .swapped
+            .get(&brick)
+            .is_some_and(|at| tick < at + SWAP_COOLDOWN_TICKS)
+        {
+            return Ok(());
+        }
+        let Some(peer) = self.peers.get(&owner) else {
+            return Ok(());
+        };
+        let forward = placed.transform().transform_vector3(Vec3::NEG_Z);
+        let toward = peer.player.eye() - Vec3::from(placed.position);
+        let target = if forward.dot(toward) >= 0.0 {
+            swap.front
+        } else {
+            swap.back
+        };
+        // A target missing from this game or of another size (it would
+        // move the brick's neighbours) leaves the brick as it is.
+        if self.simulation.set_definition(brick, &target).is_err() {
+            return Ok(());
+        }
+        self.dirty.insert(brick);
+        self.specials.swapped.insert(brick, tick);
+        Ok(())
     }
     /// A projectile hit a brick: swords carve pumpkins.
     pub(super) fn special_projectile_hit(

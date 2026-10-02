@@ -490,6 +490,7 @@ mod tests {
             reflection: None,
             link: None,
             stretch: None,
+            swap: None,
         };
         Catalog {
             schema_version: 1,

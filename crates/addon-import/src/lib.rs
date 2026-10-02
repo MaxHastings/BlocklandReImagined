@@ -2684,11 +2684,13 @@ fn bricks(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
                     };
                     let name = cx.owned.get(&key).map_or(key.clone(), |o| o.d.name.clone());
                     b.id = cx.id("brick", &key, &name, "assets/bricks.json");
+                    b.swap = door_swap(&b);
                     let special: Vec<String> = b
                         .other_properties
                         .keys()
                         .filter(|k| {
-                            ["isbothole", "holebot", "isdoor", "isopen"].contains(&k.as_str())
+                            ["isbothole", "holebot"].contains(&k.as_str())
+                                || (b.swap.is_none() && ["isdoor", "isopen"].contains(&k.as_str()))
                         })
                         .cloned()
                         .collect();
@@ -2740,6 +2742,37 @@ fn bricks(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
         loadable_bricks(cx, catalog)?;
     }
     Ok(())
+}
+
+/// A door brick's click swap (`isDoor`, as Brick_Doors' script reads it): a
+/// closed door opens to `openCW` or `openCCW`, an open one closes to
+/// `closedCW` or `closedCCW`, by the side it is clicked from. The names are
+/// datablocks of the same Add-On, so their ids share this brick's prefix.
+fn door_swap(b: &bri_content::brick::CatalogEntry) -> Option<bri_content::brick::Swap> {
+    let field = |k: &str| {
+        b.other_properties
+            .get(k)
+            .map(|v| v.trim().trim_matches('"').to_ascii_lowercase())
+    };
+    let truthy = |k: &str| field(k).is_some_and(|v| v == "1" || v == "true");
+    if !truthy("isdoor") {
+        return None;
+    }
+    let (cw, ccw) = if truthy("isopen") {
+        ("closedcw", "closedccw")
+    } else {
+        ("opencw", "openccw")
+    };
+    let prefix = &b.id[..=b.id.rfind('/')?];
+    let target = |k: &str| {
+        field(k)
+            .filter(|n| !n.is_empty())
+            .map(|n| format!("{prefix}{n}"))
+    };
+    Some(bri_content::brick::Swap {
+        front: target(cw)?,
+        back: target(ccw)?,
+    })
 }
 
 /// The bricks whose geometry converted, in the base game's brick catalog
