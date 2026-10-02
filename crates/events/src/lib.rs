@@ -6,4 +6,5 @@ pub use catalog::*;
 pub use model::*;
 pub use runtime::*;
 pub mod convert;
+pub mod rules;
 pub mod testing;

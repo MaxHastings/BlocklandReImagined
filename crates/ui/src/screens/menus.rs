@@ -184,6 +184,16 @@ impl NativeScreen {
                 s.set("MBOKText", "This screen isn't available yet.");
             }
         }
+        if id == ScreenId::EscapeMenu {
+            let parent = s.view.walk()
+                .find(|n| s.view.node(*n).ctrl.class == "GuiWindowCtrl")
+                .unwrap_or(s.view.root);
+            let mut b = button("BlockButtonProfile", Rect::new(10, 70, 200, 22),
+                "base/client/ui/button1", "Rule Workshop", "ruleworkshop");
+            b.name = Some("EM_RuleWorkshop".into());
+            let n = s.view.add(parent, b);
+            s.view.set_visible(n, core.in_game() && core.is_admin());
+        }
         s.refresh(core);
         s
     }
@@ -805,6 +815,7 @@ impl Screen for NativeScreen {
             "quitgame();" => {
                 core.message_yes_no("Quit", "Quit Blockland ReImagined?", Callback::Quit)
             }
+            "ruleworkshop" => core.push(ScreenId::RuleWorkshop),
             "canvas.pushdialog(startmissiongui);" => core.push(ScreenId::StartMission),
             "canvas.pushdialog(joinservergui);" => core.push(ScreenId::JoinServer),
             "canvas.pushdialog(optionsdlg);" => core.push(ScreenId::Options),

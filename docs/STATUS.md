@@ -1,7 +1,7 @@
 # Status
 
 One page so everyone starts from the same place: Max, or any new thread.
-Revised 2026-09-29. It summarises; the linked docs are the evidence, and
+Revised 2026-10-02. It summarises; the linked docs are the evidence, and
 [progress.md](progress.md) has the dated history of each build.
 
 ## Release state
@@ -46,7 +46,10 @@ Don't reopen these without Max.
   invite. Only UDP 28000 needs forwarding; 28050 is LAN discovery only.
   The shelved join-codes patch lives in the project's shared files, not
   the repo. See [architecture/hosting.md](architecture/hosting.md).
-- **Windows only.** Other platforms are not a goal.
+- **Release platforms:** Maxwell authorized Windows x86-64, macOS Apple silicon
+  and Linux x86-64 releases on 2026-10-02. The coordinator is preparing v0.2.0
+  from the reviewed bot, content reload and Rule Workshop work. All interactive
+  acceptance remains Maxwell's; the full alpha roadmap is still open.
 - **Players see "Add-Ons".** "Package" is an internal word.
 - **Add-On client code is sandboxed, with trust tiers.** Data needs no
   prompt. Sandboxed wasm and WGSL asks once per server ("Trust and join"),

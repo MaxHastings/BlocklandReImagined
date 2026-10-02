@@ -164,6 +164,7 @@ impl Session {
             })
             .collect();
         let extra = InputExtra {
+            object: None,
             game: Some(game),
             killer,
         };

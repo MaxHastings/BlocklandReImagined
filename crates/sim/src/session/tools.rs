@@ -759,6 +759,7 @@ impl Session {
         if flip {
             let impulse = (dir + Vec3::Y).normalize() * mass * 5.0;
             self.push_vehicle(vehicle, position, impulse);
+            self.credit(bri_package_runtime::ops::ObjectRef::Vehicle(vehicle), owner);
         }
     }
 

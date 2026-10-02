@@ -1188,6 +1188,7 @@ impl Session {
                 allowed.push((owner, vehicle));
             }
         }
+        let mut credits = Vec::new();
         let world = self.vehicles.world.as_mut().unwrap();
         for (owner, vehicle) in allowed {
             // The first free mount node takes the rider, wherever they touched.
@@ -1214,6 +1215,20 @@ impl Session {
                 OccupantId(owner),
                 velocity,
             );
+            if Vec3::from(velocity).length_squared() > 4.0 {
+                credits.push((vehicle, owner));
+            }
+        }
+        for (vehicle, owner) in credits {
+            if self.may_move(
+                owner,
+                bri_package_runtime::ops::ObjectRef::Vehicle(vehicle.0),
+            ) {
+                self.credit(
+                    bri_package_runtime::ops::ObjectRef::Vehicle(vehicle.0),
+                    owner,
+                );
+            }
         }
         Ok(())
     }
@@ -1258,6 +1273,7 @@ impl Session {
         }
         let impulse = (direction + Vec3::Y).normalize_or_zero() * mass * 5.0 / v.scale;
         self.push_vehicle(id.0, eye + direction * distance, impulse);
+        self.credit(bri_package_runtime::ops::ObjectRef::Vehicle(id.0), owner);
         true
     }
     /// `GameConnection::resetVehicles`: fresh vehicles on the owner's spawn bricks.

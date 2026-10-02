@@ -770,6 +770,7 @@ fn physical_touch_enters_event_scheduler_once() {
         a,
         id,
         Edit::Events(vec![EventRow {
+            conditions: vec![],
             preserved: None,
             enabled: true,
             input: "onPlayerTouch".into(),
@@ -931,6 +932,7 @@ fn events_in_a_loaded_save_paint_with_the_colours_it_brought() {
     let mut cell = Brick::new(ContentRef::Resolved("plate".into()), [0.5, 0.1, -3.25], 0);
     cell.name = Some("cell".into());
     cell.events = vec![EventRow {
+        conditions: vec![],
         preserved: None,
         enabled: true,
         input: "onActivate".into(),
@@ -977,6 +979,7 @@ fn events_in_a_loaded_save_paint_with_the_colours_it_brought() {
         host,
         id,
         Edit::Events(vec![EventRow {
+            conditions: vec![],
             preserved: None,
             enabled: true,
             input: "onActivate".into(),
@@ -996,6 +999,7 @@ fn events_in_a_loaded_save_paint_with_the_colours_it_brought() {
         host,
         id,
         Edit::Events(vec![EventRow {
+            conditions: vec![],
             preserved: None,
             enabled: true,
             input: "onActivate".into(),

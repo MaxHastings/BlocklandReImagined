@@ -8,7 +8,7 @@ use crate::api::{EventCatalog, EventLine, EventRow, ParamValue};
 use crate::schema::ParamSpec;
 
 pub const NAMED_BRICK: &str = "<NAMED BRICK>";
-pub const MAX_DELAY_MS: u32 = 30_000;
+pub const MAX_DELAY_MS: u32 = 300_000;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RowState {
@@ -22,8 +22,9 @@ pub enum RowState {
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct EditRow {
+    pub conditions: Vec<bri_events::rules::Condition>,
     pub enabled: bool,
-    /// Delay field text (clamped to 0..=30000 when accepted).
+    /// Delay field text (clamped to 0..=300000 when accepted).
     pub delay_text: String,
     /// Input event name (`None` = "-").
     pub input: Option<String>,
@@ -41,7 +42,7 @@ pub struct EventsModel {
     pub allow_named: bool,
 }
 
-/// `mClamp(value, 0, 30000)` on the delay text (atoi semantics).
+/// `mClamp(value, 0, 300000)` on the delay text (atoi semantics).
 pub fn clamp_delay(text: &str) -> u32 {
     let t = text.trim();
     let digits: String = t
@@ -114,6 +115,7 @@ impl EventsModel {
                 EventRow::Editable(l) if m.line_supported(&l, catalog) => {
                     RowState::Editable(EditRow {
                         enabled: l.enabled,
+                        conditions: l.conditions,
                         delay_text: l.delay_ms.min(MAX_DELAY_MS).to_string(),
                         input: Some(l.input),
                         target: Some(l.target),
@@ -360,6 +362,7 @@ impl EventsModel {
                         return None;
                     }
                     Some(EventRow::Editable(EventLine {
+                        conditions: e.conditions.clone(),
                         enabled: e.enabled,
                         delay_ms: clamp_delay(&e.delay_text),
                         input,
@@ -541,7 +544,7 @@ mod tests {
         let EventRow::Editable(l) = &sent[0] else {
             panic!()
         };
-        assert_eq!(l.delay_ms, 30_000);
+        assert_eq!(l.delay_ms, 99_999);
         assert_eq!(l.params, vec![ParamValue::PaintColor(5)]);
         assert!(m.uses_named("door"));
         // Different class clears the output.
@@ -558,6 +561,7 @@ mod tests {
     fn unsupported_rows_are_preserved_read_only() {
         let c = catalog();
         let relay = EventLine {
+            conditions: vec![],
             enabled: true,
             delay_ms: 100,
             input: "onRelay".into(),

@@ -302,6 +302,7 @@ mod tests {
     #[test]
     fn maximum_native_event_strings_fit_even_with_json_escaping() {
         let event = bri_world::EventRow {
+            conditions: vec![],
             preserved: None,
             enabled: false,
             input: "\u{1}".repeat(128),
@@ -311,6 +312,7 @@ mod tests {
             params: vec![bri_world::EventValue::Datablock(Some("\u{1}".repeat(256))); 4],
         };
         let preserved = bri_world::EventRow {
+            conditions: vec![],
             preserved: Some(bri_events::PreservedRow {
                 original: "\u{1}".repeat(2048),
                 diagnostic: "\u{1}".repeat(1024),

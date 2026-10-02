@@ -44,6 +44,7 @@ fn session(lan: bool) -> Session {
 
 fn row(input: &str, target: bri_events::Slot, output: &str, params: Vec<EventValue>) -> EventRow {
     EventRow {
+        conditions: vec![],
         preserved: None,
         enabled: true,
         input: input.into(),

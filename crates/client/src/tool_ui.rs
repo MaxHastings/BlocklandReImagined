@@ -264,7 +264,9 @@ impl ToolUi {
                 })
                 .into(),
         );
-        self.base_events = Some(catalog);
+        self.base_events = Some(
+            bri_events::rules::workshop_catalog(&catalog).expect("Validated core rule vocabulary"),
+        );
         self.merge_events();
         self.invalidate();
     }
@@ -797,6 +799,7 @@ pub fn event_catalog(catalog: &bri_events::Catalog) -> EventCatalog {
             .outputs
             .iter()
             .map(|o| EventOutputInfo {
+                provider: o.package.clone().unwrap_or_else(|| "core".into()),
                 class: o.class_name.clone(),
                 name: o.name.clone(),
                 params: o.params.iter().map(param).collect(),
@@ -879,6 +882,7 @@ fn ui_event(row: &Row, catalog: &bri_events::Catalog) -> Result<EventLine> {
         })
         .collect();
     Ok(EventLine {
+        conditions: row.conditions.clone(),
         enabled: row.enabled,
         delay_ms: row.delay_ms,
         input: input.name.clone(),
@@ -1135,6 +1139,7 @@ mod tests {
         // A row aimed at the team round-trips through the dialog.
         let catalog = ui.events.clone().unwrap();
         let row = Row {
+            conditions: vec![],
             preserved: None,
             enabled: true,
             input: "onActivate".into(),
@@ -1273,6 +1278,7 @@ mod tests {
     }
     fn row(output: &str, params: Vec<EventValue>) -> Row {
         Row {
+            conditions: vec![],
             preserved: None,
             enabled: true,
             input: "onActivate".into(),
@@ -1575,6 +1581,7 @@ mod tests {
                 ..row("setRendering", vec![EventValue::Bool(false)])
             },
             Row {
+                conditions: vec![],
                 preserved: Some(bri_events::PreservedRow {
                     original: "+-EVENT\t2\t1\tonUnknown\t0\tSelf\t\tfireRelay\t\t\t\t".into(),
                     diagnostic: "Unknown input".into(),

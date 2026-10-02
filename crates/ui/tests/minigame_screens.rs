@@ -992,3 +992,79 @@ fn server_addon_settings_open_from_the_admin_menu_for_the_host_and_go_with_host_
         "saved with the host's other server prefs"
     );
 }
+
+#[test]
+fn teams_work_without_addon_settings_and_remain_editable_in_a_small_window() {
+    let mut ui = test_ui();
+    let mut state = addon_state();
+    state.addon_settings.clear();
+    ui.apply(UiUpdate::MiniGames(state));
+    ui.core.push(ScreenId::MiniGameSettings);
+    ui.update(0);
+    click(&mut ui, ScreenId::MiniGameSettings, "NativeMiniGameAddOns");
+    ui.update(0);
+    assert!(ui.is_open(ScreenId::MiniGameAddOns));
+    let name = addon_view(&mut ui).id("AOS_T0_Name").unwrap();
+    addon_view(&mut ui).set_text(name, "Blue");
+    ui.resize((400, 300), Some(1.));
+    let view = addon_view(&mut ui);
+    let n = view.id("AOS_Window").unwrap();
+    let r = view.node(n).rect;
+    assert!(
+        r.x >= 0 && r.y >= 0 && r.x + r.w <= 400 && r.y + r.h <= 300,
+        "{r:?}"
+    );
+    let name = view.id("AOS_T0_Name").unwrap();
+    assert_eq!(view.edit_text(name), "Blue");
+    addon_event(&mut ui, "AOS_AddTeam", EventKind::Click);
+    addon_event(&mut ui, "AOS_Apply", EventKind::Click);
+    let (_, action) = ui
+        .drain_actions()
+        .into_iter()
+        .find(|(_, a)| matches!(a, UiAction::EditMiniGameAddOns { .. }))
+        .expect("core teams send through the existing request");
+    let UiAction::EditMiniGameAddOns {
+        settings, teams, ..
+    } = action
+    else {
+        unreachable!()
+    };
+    assert!(settings.is_empty());
+    let teams = teams.unwrap();
+    assert_eq!(teams.len(), 2);
+    assert_eq!(teams[0].name, "Blue");
+}
+
+#[test]
+fn asynchronous_listings_preserve_valid_and_partial_typed_team_names() {
+    for name in ["Blue", ""] {
+        let mut ui = test_ui();
+        let mut state = addon_state();
+        ui.apply(UiUpdate::MiniGames(state.clone()));
+        ui.core.minigame_addons = Some(MiniGameId(42));
+        ui.core.push(ScreenId::MiniGameAddOns);
+        ui.update(0);
+        let n = addon_view(&mut ui).id("AOS_T0_Name").unwrap();
+        addon_view(&mut ui).set_text(n, name);
+        addon_event(&mut ui, "AOS_T0_Name", EventKind::Changed);
+        state.revision += 1;
+        ui.apply(UiUpdate::MiniGames(state));
+        ui.update(0);
+        let n = addon_view(&mut ui).id("AOS_T0_Name").unwrap();
+        assert_eq!(addon_view(&mut ui).edit_text(n), name);
+        let n = addon_view(&mut ui).id("AOS_Status").unwrap();
+        assert_eq!(addon_view(&mut ui).text_of(n), "Not applied yet.");
+        if !name.is_empty() {
+            addon_event(&mut ui, "AOS_Apply", EventKind::Click);
+            let (_, action) = ui
+                .drain_actions()
+                .into_iter()
+                .find(|(_, a)| matches!(a, UiAction::EditMiniGameAddOns { .. }))
+                .unwrap();
+            let UiAction::EditMiniGameAddOns { teams, .. } = action else {
+                unreachable!()
+            };
+            assert_eq!(teams.unwrap()[0].name, "Blue");
+        }
+    }
+}

@@ -122,6 +122,7 @@ fn truncate(text: &str, bytes: usize) -> String {
 }
 fn preserved(original: &str, diagnostic: &str) -> Row {
     Row {
+        conditions: vec![],
         preserved: Some(PreservedRow {
             original: truncate(original, 2048),
             diagnostic: truncate(diagnostic, 1024),
@@ -276,6 +277,7 @@ pub fn row(line: &str, catalog: &Catalog, aliases: &Aliases) -> Result<(u16, Row
     Ok((
         index,
         Row {
+            conditions: vec![],
             preserved: None,
             enabled,
             input: input.name.clone(),

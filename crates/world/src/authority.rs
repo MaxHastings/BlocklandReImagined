@@ -395,6 +395,7 @@ mod tests {
     }
     fn row(output: &str, color: u8) -> EventRow {
         EventRow {
+            conditions: vec![],
             preserved: None,
             enabled: true,
             input: "onActivate".into(),
@@ -434,6 +435,7 @@ mod tests {
         }));
         full.events = (0..64)
             .map(|i| EventRow {
+                conditions: vec![],
                 preserved: Some(bri_events::PreservedRow {
                     original: hostile.clone(),
                     diagnostic: hostile.clone(),

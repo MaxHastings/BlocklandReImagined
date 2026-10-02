@@ -386,6 +386,7 @@ pub(crate) mod tests {
 
     pub(crate) fn set_color(color: u8) -> bri_world::EventRow {
         bri_world::EventRow {
+            conditions: vec![],
             preserved: None,
             enabled: true,
             input: "onActivate".into(),

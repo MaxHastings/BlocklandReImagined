@@ -107,6 +107,14 @@ impl ChatModel {
         }
     }
 
+    /// Absolute cursor for a bounded read-only response window.
+    pub fn line_cursor(&self) -> usize {
+        self.dropped + self.lines.len()
+    }
+    pub fn lines_since(&self, cursor: usize) -> &[ChatLine] {
+        &self.lines[cursor.saturating_sub(self.dropped).min(self.lines.len())..]
+    }
+
     /// Lines currently shown by the HUD, oldest first.
     pub fn visible(&self, now: u64) -> Vec<&ChatLine> {
         if self.line_time_ms <= 0 {

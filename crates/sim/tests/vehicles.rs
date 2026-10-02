@@ -1259,6 +1259,7 @@ fn recover_vehicle_leaves_a_ridden_vehicle_alone(f: &Fixture) -> anyhow::Result<
         owner,
         1,
         bri_world::authority::Edit::Events(vec![bri_world::EventRow {
+            conditions: vec![],
             preserved: None,
             enabled: true,
             input: "onActivate".into(),

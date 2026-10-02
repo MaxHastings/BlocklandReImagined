@@ -58,6 +58,8 @@ fn screens() -> Vec<(ScreenId, &'static str)> {
         (ScreenId::PrintSelector, "print-selector"),
         (ScreenId::Wrench(WrenchVariant::Normal), "wrench"),
         (ScreenId::WrenchEvents, "wrench-events"),
+        (ScreenId::RuleWorkshop, "rule-workshop"),
+        (ScreenId::MiniGameAddOns, "teams-addons"),
         (ScreenId::Avatar, "avatar"),
         (ScreenId::SaveBricks, "save-bricks"),
         (ScreenId::LoadBricks, "load-bricks"),

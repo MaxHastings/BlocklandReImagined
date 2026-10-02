@@ -32,6 +32,7 @@ pub(super) fn entity(class: Class, index: u64) -> Entity {
 
 #[derive(Default)]
 pub(super) struct Events {
+    pub(super) rules: super::rules::RuleState,
     pub(super) world: Option<EventWorld>,
     /// The host's own catalog, before Add-Ons' inputs are added.
     base: Option<ev::Catalog>,
@@ -50,7 +51,7 @@ pub(super) struct Events {
     pub(super) spawned: BTreeMap<OwnerId, VecDeque<u64>>,
     /// Items events dropped, likewise, for the item quota.
     pub(super) dropped: BTreeMap<OwnerId, VecDeque<u64>>,
-    diagnostics: VecDeque<String>,
+    pub(super) diagnostics: VecDeque<String>,
     /// What the last tick's event phase ran.
     last_work: EventWork,
     slow: SlowEventTicks,
@@ -63,7 +64,7 @@ pub(super) struct Events {
     /// rules fired from inside one (an output that drops a flag fires
     /// `onFlagDropped`): they run once the phase is done
     /// (`fire_package_input`).
-    advancing: bool,
+    pub(super) advancing: bool,
     deferred: Vec<(BrickId, String, Option<OwnerId>, InputExtra)>,
     /// Add-On inputs that follow one of the engine's (`follows`), asked
     /// about when a player sets that one off.
@@ -72,6 +73,7 @@ pub(super) struct Events {
 /// Targets only some inputs have, for `fire_input_with`.
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct InputExtra {
+    pub(super) object: Option<u64>,
     /// The mini-game the input is about (`onMinigameRoundStart`).
     pub(super) game: Option<mg::GameId>,
     /// Whoever killed the player it is about (`onMinigameDeath`).
@@ -189,6 +191,7 @@ impl Session {
             palette_len: self.simulation.state().palette.len(),
             datablocks,
         };
+        let catalog = ev::rules::workshop_catalog(&catalog)?;
         let merged = catalog.extended(&self.package_brick_events())?;
         let follows = self.package_followers(&catalog);
         let world = EventWorld::new(merged, bindings.clone(), event_limits())?;
@@ -198,6 +201,7 @@ impl Session {
             bindings,
             sounds: std::mem::take(&mut self.events.sounds),
             follows,
+            rules: std::mem::take(&mut self.events.rules),
             ..Default::default()
         };
         Ok(())
@@ -328,6 +332,7 @@ impl Session {
                             ),
                         );
                         ev::Row {
+                            conditions: vec![],
                             preserved: Some(ev::PreservedRow {
                                 original: format!("{} -> {}", row.input, row.output),
                                 diagnostic: format!("{error:#}").chars().take(1000).collect(),
@@ -477,13 +482,33 @@ impl Session {
             self.player_targets(brick, &slots, owner, &mut trigger);
         }
         self.owner_targets(brick, &slots, &mut trigger.targets);
+        if let Some(owner) =
+            player.filter(|o| self.peers.contains_key(o) && slots.contains(&Slot::Instigator))
+        {
+            trigger
+                .targets
+                .insert(Slot::Instigator, entity(Class::Player, owner));
+        }
+        if let Some(object) = extra.object {
+            trigger
+                .targets
+                .insert(Slot::Object, entity(Class::Vehicle, object));
+        }
         if let Some(game) = extra.game.filter(|_| slots.contains(&Slot::MiniGame)) {
             trigger
                 .targets
                 .entry(Slot::MiniGame)
                 .or_insert(entity(Class::MiniGame, game.0));
         }
+        if input == "onRulePlayerDied" {
+            trigger.targets.remove(&Slot::Instigator);
+        }
         if let Some(killer) = extra.killer.filter(|k| self.peers.contains_key(k)) {
+            if slots.contains(&Slot::Instigator) {
+                trigger
+                    .targets
+                    .insert(Slot::Instigator, entity(Class::Player, killer));
+            }
             if slots.contains(&Slot::KillerPlayer) && self.is_alive(killer) {
                 trigger
                     .targets
@@ -1670,6 +1695,27 @@ impl EventHost<'_> {
 }
 
 impl ev::Host for EventHost<'_> {
+    fn query(
+        &self,
+        context: &Trigger,
+        target: Entity,
+        condition: &ev::rules::Condition,
+    ) -> Option<ev::rules::Datum> {
+        self.session.rule_query(context, target, condition)
+    }
+    fn condition_value_label(
+        &self,
+        context: &Trigger,
+        target: Entity,
+        condition: &ev::rules::Condition,
+        value: &ev::rules::Datum,
+    ) -> String {
+        self.session
+            .rule_condition_value_label(context, target, condition, value)
+    }
+    fn trace(&mut self, source: Id, row: u16, text: String) {
+        self.session.rule_trace(source.index, row, text);
+    }
     fn alive(&self, entity: Entity) -> bool {
         let s = &self.session;
         match entity.class {
@@ -1677,7 +1723,12 @@ impl ev::Host for EventHost<'_> {
             Class::Player => s.is_alive(entity.id.index),
             Class::Client => s.peers.contains_key(&entity.id.index),
             Class::MiniGame => s.minigames.game(mg::GameId(entity.id.index)).is_ok(),
-            Class::Projectile | Class::Vehicle => false,
+            Class::Vehicle => s
+                .object_centre(bri_package_runtime::ops::ObjectRef::Vehicle(
+                    entity.id.index,
+                ))
+                .is_some(),
+            Class::Projectile => false,
         }
     }
     fn permitted(&self, context: &Trigger, target: Entity, _output: &str) -> bool {
@@ -1696,7 +1747,11 @@ impl ev::Host for EventHost<'_> {
             Class::Player | Class::Client => true,
             // The minigame rules check the brick owner's authority.
             Class::MiniGame => true,
-            Class::Projectile | Class::Vehicle => false,
+            Class::Vehicle => s
+                .vehicle_spawn_brick(bri_vehicles::VehicleId(target.id.index))
+                .and_then(|b| bricks.get(&b))
+                .is_some_and(|b| b.owner == owner),
+            Class::Projectile => false,
         }
     }
     fn relay_neighbors(
@@ -1722,6 +1777,10 @@ impl ev::Host for EventHost<'_> {
     }
     fn apply(&mut self, dispatch: &Dispatch) -> Apply {
         let result = match &dispatch.intent {
+            Intent::Rule(op) => self
+                .session
+                .apply_rule(dispatch, op)
+                .map(|()| Apply::Applied),
             Intent::Brick(op) => self.brick_op(dispatch, op),
             Intent::Player(op) => self.player_op(dispatch, op),
             Intent::Client(op) => self.client_op(dispatch, op),

@@ -461,7 +461,8 @@ fn fake_kill_brick_ignores_brick_damage_and_respawns_on_its_own_time(f: &Fixture
             owner,
             id,
             Edit::Events(vec![EventRow {
-                preserved: None,
+                conditions: vec![],
+            preserved: None,
                 enabled: true,
                 input: "onActivate".into(),
                 delay_ms: 0,

@@ -273,6 +273,8 @@ try:
         subprocess.run(['strip', '--strip-debug', str(release / 'bri-client'), str(release / 'bri-import-addon'), str(release / 'bri-server')], check=True)
     for source, name in docs:
         shutil.copyfile(repo / source, release / name)
+    import package_guides
+    package_guides.copy_guides(repo, release)
     if credits:
         shutil.copyfile(credits, release / addon_bundle.CREDITS)
     for name in EXECUTABLES:

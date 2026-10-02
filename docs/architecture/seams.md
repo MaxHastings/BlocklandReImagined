@@ -52,3 +52,5 @@ Owners are named by thread title.
 | Copy extras | `Blueprint.extras` (names, lights, emitters, items, sounds, vehicles, events), turned with the copy and planted through the wrench checks (`give_copy_extras`) | Duplicators | in flight |
 | Image loaded and spin | `State.loaded`/`not_loaded`/`spin` (v20 `stateTransitionOnLoaded`/`NotLoaded`, `stateSpinThread`), `set_image_loaded`, client spin clock in `world_items` | Duplicators | in flight |
 | Slayer game rules | `remove_body`, `setting_info`, `setting_text`, `data_lines` (rules data files), `on_pick_spawn` answering `"map"`, `teams` events with `by`/`quiet`, `on_minigame_request` `info.teams`, mini-game event chat charged to the acting player | Slayer and CTF port | in flight |
+
+| Experimental event guards and rule observations | Optional IF fields on existing event rows, bounded transient state, region/object inputs; existing event scheduler and package vocabulary remain the execution path. No lasting schema commitment. | Rule Workshop design spike | `rewrite/rule-workshop` only; experimental |

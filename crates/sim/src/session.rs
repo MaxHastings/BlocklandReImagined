@@ -67,6 +67,7 @@ pub use copy_store::{CopyStore, LoadedCopy, MemoryCopies, Saved, StoreDone, name
 mod movables;
 mod packages;
 mod paint_fill;
+mod rules;
 pub use paint_fill::{Fill, FillRules};
 mod script_world;
 mod spray;
@@ -2830,6 +2831,7 @@ impl Session {
         contain("combat", self.step_combat(impacts));
         contain("breakables", self.step_breakables());
         contain("special bricks", self.step_specials());
+        contain("rule observations", self.step_rule_observations());
         contain("copy jobs", self.step_copy_jobs());
         contain("tutorial", self.step_tutorial());
         contain("build loading", self.step_build_load());

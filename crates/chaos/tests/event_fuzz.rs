@@ -98,6 +98,7 @@ fn program(catalog: &Catalog, rng: &mut Rng, palette: usize) -> Vec<EventRow> {
             _ => EventTarget::Named(format!("b{}", rng.below(8))),
         };
         rows.push(EventRow {
+            conditions: vec![],
             preserved: None,
             enabled: !rng.chance(0.1),
             input: input.name.clone(),

@@ -139,6 +139,8 @@ pub struct EventInputInfo {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EventOutputInfo {
+    #[serde(default)]
+    pub provider: String,
     pub class: String,
     pub name: String,
     pub params: Vec<ParamSpec>,
@@ -183,6 +185,7 @@ impl EventCatalog {
                 .outputs
                 .iter()
                 .map(|o| EventOutputInfo {
+                    provider: "Blockland".into(),
                     class: o.class.clone(),
                     name: o.name.clone(),
                     params: o.params.clone(),
@@ -256,6 +259,8 @@ pub enum EventRow {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EventLine {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conditions: Vec<bri_events::rules::Condition>,
     pub enabled: bool,
     pub delay_ms: u32,
     pub input: String,

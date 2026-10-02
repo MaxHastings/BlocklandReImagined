@@ -24,6 +24,7 @@ pub mod saveload;
 pub mod selector;
 pub mod splash;
 pub mod trust;
+pub mod workshop;
 pub mod wrench;
 
 use crate::api::{ChatChannel, MiniGameOperation, MiniGamePlayerId, RequestId, WrenchVariant};
@@ -76,6 +77,8 @@ pub enum ScreenId {
     PrintSelector,
     Wrench(WrenchVariant),
     WrenchEvents,
+    RuleWorkshop,
+    RuleExplain(u64),
     Avatar,
     /// First-open name prompt (v20 `regNameGui` window).
     ChooseName,
@@ -200,6 +203,8 @@ pub fn make(id: ScreenId, core: &mut Core) -> Box<dyn Screen> {
         ScreenId::AdminColorPicker => return Box::new(environment::ColorPicker::new(core)),
         ScreenId::Wrench(variant) => return Box::new(wrench::Wrench::new(core, variant)),
         ScreenId::WrenchEvents => return Box::new(wrench::WrenchEvents::new(core)),
+        ScreenId::RuleWorkshop => return Box::new(workshop::Workshop::new(core)),
+        ScreenId::RuleExplain(brick) => return Box::new(workshop::Explain::new(core, brick)),
         ScreenId::Avatar => return Box::new(avatar::Avatar::new(core)),
         ScreenId::ChooseName => return Box::new(name::ChooseName::new(core)),
         ScreenId::Play => return Box::new(play::Play::new(core)),

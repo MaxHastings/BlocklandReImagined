@@ -1175,6 +1175,9 @@ impl Session {
         // Packages see every death and who caused it; their own policy
         // decides credit.
         self.package_death(victim, instigator);
+        if let Some(game) = self.game_of(victim) {
+            self.fire_rule_game_fact("onRulePlayerDied", game, Some(victim), instigator);
+        }
         self.eject(victim);
         // `Armor::onDisabled` forces every rider off.
         self.release_riders(victim);
@@ -1875,6 +1878,7 @@ impl Session {
     pub(super) fn apply_minigame_effects(&mut self, effects: Vec<mg::Effect>) -> Result<()> {
         let tick = self.simulation.state().tick;
         for effect in effects {
+            self.rule_minigame_effect(&effect);
             self.note_minigame_effect(&effect);
             match effect {
                 mg::Effect::Spawn {

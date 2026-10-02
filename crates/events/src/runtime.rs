@@ -125,6 +125,7 @@ pub struct ScopeReport {
 pub struct RunReport {
     pub steps: usize,
     pub applied: usize,
+    pub condition_skips: usize,
     pub cancelled: usize,
     pub stale: usize,
     pub rejected: usize,
@@ -212,7 +213,7 @@ fn context_bytes(t: &Trigger) -> usize {
     128 + t.input.len() + ENTITY * (t.targets.len() + usize::from(t.client.is_some()))
 }
 /// Event checkpoint schema. Alpha checkpoints of any other version do not load.
-const CHECKPOINT_SCHEMA: u32 = 2;
+const CHECKPOINT_SCHEMA: u32 = 3;
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Snapshot {
@@ -584,7 +585,7 @@ impl EventWorld {
     fn validate_context(&self, t: &Trigger) -> Result<()> {
         ensure!(
             t.origin > 0
-                && t.targets.len() <= 7
+                && t.targets.len() <= 16
                 && t.input.len() <= 256
                 && t.rows.is_none_or(|(first, last)| first <= last),
             "Invalid event context"
@@ -624,7 +625,7 @@ impl EventWorld {
             .get(&t.source)
             .context("Missing event source generation")?;
         ensure!(
-            t.origin > 0 && t.targets.len() <= 7,
+            t.origin > 0 && t.targets.len() <= 16,
             "Invalid event origin/context"
         );
         self.validate_context(t)?;
@@ -657,7 +658,10 @@ impl EventWorld {
                     target.class == compiled.class,
                     "Compiled target class mismatch"
                 );
-                if row.delay_ms == 0 && matches!(action, Action::Cancel) {
+                if row.conditions.is_empty()
+                    && row.delay_ms == 0
+                    && matches!(action, Action::Cancel)
+                {
                     plan.cancel.insert(target.id);
                     continue;
                 }
@@ -821,7 +825,9 @@ impl EventWorld {
                 if row.enabled
                     && let Some(c) = c
                     && c.input == input.id
-                    && !(row.delay_ms == 0 && matches!(*c.action, Action::Cancel))
+                    && !(row.conditions.is_empty()
+                        && row.delay_ms == 0
+                        && matches!(*c.action, Action::Cancel))
                 {
                     count += match &row.target {
                         Target::Named(name) => {
@@ -981,6 +987,11 @@ impl EventWorld {
                 || (!matches!(*job.action, Action::Reappear(_))
                     && job.context.client.is_some_and(|c| !host.alive(c)))
             {
+                host.trace(
+                    job.context.source,
+                    job.row,
+                    "Skipped: source, target or triggering client no longer exists".into(),
+                );
                 r.stale += 1;
                 self.charge(&mut r, &mut spent, charge);
                 continue;
@@ -988,6 +999,11 @@ impl EventWorld {
             if !matches!(*job.action, Action::Reappear(_))
                 && !host.permitted(&job.context, job.target, &job.output)
             {
+                host.trace(
+                    job.context.source,
+                    job.row,
+                    format!("Rejected: permission for {}", job.output),
+                );
                 r.rejected += 1;
                 Self::note(
                     &mut r,
@@ -996,10 +1012,10 @@ impl EventWorld {
                 self.charge(&mut r, &mut spent, charge);
                 continue;
             }
-            let consumed_before = r.rejected + r.stale;
+            let consumed_before = r.rejected + r.stale + r.condition_skips;
             match self.execute(&job, host, &mut r) {
                 Ok(true) => {
-                    if r.rejected + r.stale == consumed_before {
+                    if r.rejected + r.stale + r.condition_skips == consumed_before {
                         r.applied += 1;
                         r.origins.get_mut(&origin).unwrap().applied += 1;
                     }
@@ -1080,6 +1096,58 @@ impl EventWorld {
         }
     }
     fn execute(&mut self, j: &Job, host: &mut impl Host, r: &mut RunReport) -> Result<bool> {
+        for (i, condition) in j.row_snapshot.conditions.iter().enumerate() {
+            let actual = host.query(&j.context, j.target, condition);
+            let passed = condition.matches(actual.clone());
+            host.trace(
+                j.context.source,
+                j.row,
+                format!(
+                    "IF {}: {} {} {} {} (current: {}) - {}",
+                    i + 1,
+                    crate::rules::SUBJECTS
+                        .iter()
+                        .find(|(_, v)| *v == condition.subject)
+                        .map(|(n, _)| *n)
+                        .unwrap_or("Target"),
+                    if condition.property == crate::rules::Property::Variable {
+                        format!("Variable {}", condition.key)
+                    } else if condition.property == crate::rules::Property::Team {
+                        "Team".into()
+                    } else {
+                        crate::rules::PROPERTIES
+                            .iter()
+                            .find(|(_, v)| *v == condition.property)
+                            .map(|(n, _)| *n)
+                            .unwrap_or("Value")
+                            .into()
+                    },
+                    crate::rules::COMPARISONS
+                        .iter()
+                        .find(|(_, v)| *v == condition.compare)
+                        .map(|(n, _)| *n)
+                        .unwrap_or("="),
+                    host.condition_value_label(&j.context, j.target, condition, &condition.value),
+                    actual
+                        .as_ref()
+                        .map(|v| host.condition_value_label(&j.context, j.target, condition, v))
+                        .unwrap_or("unavailable".into()),
+                    if passed { "pass" } else { "skipped" }
+                ),
+            );
+            if !passed {
+                r.condition_skips += 1;
+                return Ok(true);
+            }
+        }
+        host.trace(
+            j.context.source,
+            j.row,
+            format!(
+                "{} -> {} after {}ms",
+                j.context.input, j.output, j.row_snapshot.delay_ms
+            ),
+        );
         let mut child = Plan {
             jobs: Vec::new(),
             cancel: BTreeSet::new(),
@@ -1221,6 +1289,7 @@ impl EventWorld {
             .client
             .or_else(|| j.context.targets.get(&Slot::Client).copied());
         let dispatch = Dispatch {
+            context: j.context.clone(),
             source: j.context.source,
             target: j.target,
             origin: j.context.origin,
@@ -1236,7 +1305,24 @@ impl EventWorld {
             now_us: self.now,
             intent,
         };
-        match host.apply(&dispatch) {
+        let applied = host.apply(&dispatch);
+        host.trace(
+            j.context.source,
+            j.row,
+            format!(
+                "{} -> {:?} #{} after {}ms: {}",
+                dispatch.output,
+                dispatch.target.class,
+                dispatch.target.id.index,
+                j.row_snapshot.delay_ms,
+                match &applied {
+                    Apply::Applied | Apply::Chain(_) => "ran".into(),
+                    Apply::Deferred(e) => format!("waiting: {e}"),
+                    Apply::Rejected(e) => format!("rejected: {e}"),
+                }
+            ),
+        );
+        match applied {
             Apply::Applied => {
                 if let Some(digit) = digit {
                     self.bricks.get_mut(&j.target.id).unwrap().print_count = digit;
@@ -1367,7 +1453,7 @@ impl EventWorld {
             ensure!(
                 j.output.len() <= 128
                     && j.context.input.len() <= 256
-                    && j.context.targets.len() <= 7,
+                    && j.context.targets.len() <= 16,
                 "Checkpoint job budget"
             );
             w.validate_context(&j.context)?;

@@ -84,6 +84,7 @@ const GUEST: u64 = 2;
 
 fn row(output: &str, params: Vec<EventValue>, delay_ms: u32) -> EventRow {
     EventRow {
+        conditions: vec![],
         preserved: None,
         enabled: true,
         input: "onActivate".into(),

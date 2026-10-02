@@ -231,6 +231,9 @@ pub struct Brick {
     /// Vehicle spawn brick setting (`fxDTSBrick::setVehicle`).
     pub vehicle: Option<Box<VehicleSpawn>>,
     pub events: Vec<EventRow>,
+    /// Authored region dimensions in world axes (width, height, depth).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule_region: Option<[f32; 3]>,
     /// Opaque source records survive native save/reload; never executed.
     pub source_records: Vec<SourceRecord>,
     /// A package block's faces drawn in place of the colour.
@@ -258,6 +261,7 @@ impl Brick {
             sound: None,
             vehicle: None,
             events: vec![],
+            rule_region: None,
             source_records: vec![],
             look: None,
         }
@@ -324,6 +328,14 @@ impl Brick {
                 .map_or(0, |l| 32 + text(&l.block) + text(&l.state));
         for row in &self.events {
             bytes += 192 + text(&row.input) + text(&row.output);
+            for c in &row.conditions {
+                bytes += 128
+                    + text(&c.key)
+                    + match &c.value {
+                        bri_events::rules::Datum::Text(t) => text(t),
+                        _ => 32,
+                    };
+            }
             if let Some(p) = &row.preserved {
                 bytes += text(&p.original) + text(&p.diagnostic);
             }
@@ -349,6 +361,13 @@ impl Brick {
         bytes
     }
     pub fn validate(&self, palette_len: usize) -> Result<()> {
+        if let Some(size) = self.rule_region {
+            ensure!(
+                size.iter()
+                    .all(|v| v.is_finite() && *v > 0.0 && *v <= 100.0),
+                "Invalid rule region dimensions"
+            );
+        }
         self.definition.validate()?;
         ensure!(
             self.position
@@ -398,6 +417,13 @@ impl Brick {
             "Too many retained brick source records"
         );
         for e in &self.events {
+            ensure!(
+                e.conditions.len() <= bri_events::rules::MAX_CONDITIONS,
+                "Too many rule conditions"
+            );
+            for condition in &e.conditions {
+                condition.validate()?;
+            }
             ensure!(e.delay_ms <= 300_000, "Event delay exceeds five minutes");
             // Bounds keep a full brick's rows inside one network frame.
             ensure!(

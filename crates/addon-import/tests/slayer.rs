@@ -1362,6 +1362,7 @@ fn the_fly_through_camera_flies_everyone_before_the_round() {
 /// `MiniGame`).
 fn event(input: &str, slot: &str, output: &str, params: Vec<EventValue>) -> EventRow {
     EventRow {
+        conditions: vec![],
         preserved: None,
         enabled: true,
         input: input.into(),

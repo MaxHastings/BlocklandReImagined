@@ -47,9 +47,7 @@ impl MiniGameUiState {
             Operation::RespawnAll => c.respawn_all && manage,
             Operation::End => c.end && manage,
             // The host names the games this player may edit; it checks again.
-            Operation::AddOnSettings => {
-                !self.addon_settings.is_empty() && !self.addon_editable.is_empty()
-            }
+            Operation::AddOnSettings => game.is_some_and(|g| self.addon_editable.contains(&g)),
         }
     }
     /// Whether the local player may manage `game` (edit its rules, reset,

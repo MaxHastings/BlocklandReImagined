@@ -86,6 +86,7 @@ enum Target {
 
 pub struct AddOnSettings {
     view: View,
+    width: i32,
     game: Option<MiniGameId>,
     /// Showing the server-wide settings rather than a mini-game's.
     server: bool,
@@ -101,6 +102,8 @@ pub struct AddOnSettings {
     /// The request sends the draft (Apply), so its success makes the
     /// draft the host's.
     applying: bool,
+    /// Preserve partially typed fields across asynchronous listing refreshes.
+    typed_dirty: bool,
     seen: Option<u64>,
     /// The vanilla rules a loaded favourite brings, sent with Apply when
     /// they differ from the game's.
@@ -173,10 +176,13 @@ impl AddOnSettings {
         status.class = "GuiMLTextCtrl".into();
         win.children.push(status);
         // Favourites: ten slots of the whole setup.
-        win.children.push(text(
-            "GuiTextProfile",
-            Rect::new(12, H - 66, 70, 20),
-            "Favourites:",
+        win.children.push(named(
+            text(
+                "GuiTextProfile",
+                Rect::new(12, H - 66, 70, 20),
+                "Favourites:",
+            ),
+            "AOS_FavLabel",
         ));
         let mut favs = popup(Rect::new(84, H - 66, 110, 20), FAVS);
         favs.command = Some(FAVS.into());
@@ -193,10 +199,13 @@ impl AddOnSettings {
         ));
         win.children
             .push(check(Rect::new(326, H - 66, 20, 20), NOTIFY));
-        win.children.push(text(
-            "GuiTextProfile",
-            Rect::new(348, H - 66, W - 360, 20),
-            "Tell players",
+        win.children.push(named(
+            text(
+                "GuiTextProfile",
+                Rect::new(348, H - 66, W - 360, 20),
+                "Tell players",
+            ),
+            "AOS_NotifyLabel",
         ));
         win.children
             .push(push_button(Rect::new(12, H - 36, 64, 28), "Reset", RESET));
@@ -223,6 +232,7 @@ impl AddOnSettings {
         view.measure(&core.pack);
         let mut screen = Self {
             view,
+            width: W,
             game: core.minigame_addons,
             server: core.server_addon_settings,
             values: BTreeMap::new(),
@@ -231,6 +241,7 @@ impl AddOnSettings {
             rows: Vec::new(),
             request: None,
             applying: false,
+            typed_dirty: false,
             seen: None,
             rules: None,
         };
@@ -316,7 +327,7 @@ impl AddOnSettings {
                 self.values.insert(key.clone(), value.clone());
             }
         }
-        if Self::team_setup(core) {
+        if !self.server {
             // Keep the teams the game has, in order, under the favourite's
             // names and settings; more are added, fewer removed.
             let mut teams = Vec::new();
@@ -555,13 +566,11 @@ impl AddOnSettings {
     fn setting<'a>(core: &'a Core, key: &str) -> Option<&'a MiniGameAddOnSetting> {
         core.minigames.addon_settings.iter().find(|s| s.key == key)
     }
-    fn team_setup(core: &Core) -> bool {
-        core.minigames.addon_settings.iter().any(|s| s.team)
-    }
 
     /// Take the host's values afresh.
     fn load(&mut self, core: &Core) {
         self.seen = Some(self.revision(core));
+        self.typed_dirty = false;
         self.rules = None;
         if self.server {
             let stored = Self::server_values(core);
@@ -631,7 +640,7 @@ impl AddOnSettings {
             .collect();
         if let Some(n) = self.view.id("AOS_Window") {
             self.view
-                .set_text(n, format!("Add-On Settings: {}", g.title));
+                .set_text(n, format!("Teams & Add-Ons: {}", g.title));
         }
         self.values = values.clone();
         self.teams = teams.clone();
@@ -665,12 +674,12 @@ impl AddOnSettings {
         self.view.clear_children(rows);
         self.rows.clear();
         let editable = self.editable(core);
-        let width = W - 42;
+        let width = self.width - 42;
         let mut y = 4;
         let heading = |view: &mut View, y: &mut i32, label: &str| {
             view.add(
                 rows,
-                text("GuiBigTextProfile", Rect::new(4, *y, width - 8, 22), label),
+                text("GuiTextProfile", Rect::new(4, *y, width - 8, 22), label),
             );
             *y += 24;
         };
@@ -708,22 +717,31 @@ impl AddOnSettings {
             self.row(Target::Game(i), s, &value, 20, y, editable, core);
             y += ROW;
         }
-        if Self::team_setup(core)
-            && !self.server
-            && self.summary(core).is_some()
-            && self.teams_shown(core)
-        {
+        if !self.server && self.summary(core).is_some() && self.teams_shown(core) {
             heading(&mut self.view, &mut y, "Teams");
+            let name_width = width - 268;
+            let color_x = 26 + name_width;
+            self.view.add(
+                rows,
+                text("GuiTextProfile", Rect::new(20, y, name_width, 18), "Name"),
+            );
+            self.view.add(
+                rows,
+                text("GuiTextProfile", Rect::new(color_x, y, 90, 18), "Color"),
+            );
+            y += 20;
             for t in 0..self.teams.len() {
                 let team = self.teams[t].clone();
                 let name = format!("AOS_T{t}_Name");
-                let n = self.view.add(rows, edit(Rect::new(20, y, 170, 20), &name));
+                let n = self
+                    .view
+                    .add(rows, edit(Rect::new(20, y, name_width, 20), &name));
                 self.view.set_text(n, team.name.clone());
                 self.view.set_active(n, editable);
                 let color = format!("AOS_T{t}_Color");
                 let n = self
                     .view
-                    .add(rows, popup(Rect::new(196, y, 90, 20), &color));
+                    .add(rows, popup(Rect::new(color_x, y, 90, 20), &color));
                 self.view.state(n).items = (0..core.minigames.palette.len().min(64))
                     .map(|c| (format!("Colour {}", c + 1), c as i64))
                     .collect();
@@ -739,7 +757,7 @@ impl AddOnSettings {
                     rows,
                     named(
                         swatch(
-                            Rect::new(290, y + 2, 16, 16),
+                            Rect::new(color_x + 94, y + 2, 16, 16),
                             rgba([
                                 f32::from(rgb[0]) / 255.0,
                                 f32::from(rgb[1]) / 255.0,
@@ -807,12 +825,12 @@ impl AddOnSettings {
         if self.server && settings.iter().any(|s| s.server && s.restart) {
             heading(&mut self.view, &mut y, RESTART_NOTE);
         }
-        if !settings.iter().any(|s| s.server == self.server) {
+        if self.server && !settings.iter().any(|s| s.server) {
             heading(
                 &mut self.view,
                 &mut y,
                 if self.server {
-                    "No running Add-On has server settings."
+                    "No server settings."
                 } else {
                     "No running Add-On has settings."
                 },
@@ -834,14 +852,10 @@ impl AddOnSettings {
         let Some(game) = self.summary(core).cloned() else {
             return y;
         };
-        let width = W - 42;
+        let width = self.width - 42;
         self.view.add(
             rows,
-            text(
-                "GuiBigTextProfile",
-                Rect::new(4, y, width - 8, 22),
-                "Players",
-            ),
+            text("GuiTextProfile", Rect::new(4, y, width - 8, 22), "Players"),
         );
         y += 24;
         let mut people: Vec<(MiniGamePlayerId, String, Option<Option<u32>>)> = game
@@ -867,12 +881,12 @@ impl AddOnSettings {
         for (i, (id, name, team)) in people.iter().enumerate() {
             self.view.add(
                 rows,
-                text("GuiTextProfile", Rect::new(20, y, 200, 20), name),
+                text("GuiTextProfile", Rect::new(20, y, width - 234, 20), name),
             );
             let pick = format!("AOS_P{}_Team", id.0);
             let n = self
                 .view
-                .add(rows, popup(Rect::new(230, y, 150, 20), &pick));
+                .add(rows, popup(Rect::new(width - 208, y, 118, 20), &pick));
             let mut items = Vec::new();
             if team.is_none() {
                 items.push(("Not playing".to_owned(), OUT_OF_GAME));
@@ -922,7 +936,7 @@ impl AddOnSettings {
             Target::Game(i) => format!("AOS_S{i}"),
             Target::Team(t, i) => format!("AOS_T{t}_S{i}"),
         };
-        let width = W - 42;
+        let width = self.width - 42;
         self.view.add(
             rows,
             text(
@@ -1116,7 +1130,7 @@ impl AddOnSettings {
     fn status(&mut self, core: &Core, message: Option<&str>) {
         let editable = self.editable(core);
         let (settings, teams) = self.changes(core);
-        let changed = !settings.is_empty() || teams.is_some();
+        let changed = self.typed_dirty || !settings.is_empty() || teams.is_some();
         let text = match message {
             Some(m) => m.to_owned(),
             None if !core.minigames.status.is_empty() && self.request.is_some() => {
@@ -1270,6 +1284,64 @@ impl Screen for AddOnSettings {
     fn view_mut(&mut self) -> &mut View {
         &mut self.view
     }
+    fn layout(&mut self, w: i32, h: i32, core: &mut Core) {
+        let _ = self.read_fields(core);
+        let width = (w - 20).clamp(380, W);
+        let height = (h - 10).clamp(280, H);
+        let compact = width < W;
+        self.width = width;
+        if let Some(n) = self.view.id("AOS_Window") {
+            let c = &mut self.view.nodes[n].ctrl;
+            c.position = [(w - width) / 2, (h - height) / 2];
+            c.extent = [width, height];
+            c.h_sizing = HSizing::Right;
+            c.v_sizing = VSizing::Bottom;
+        }
+        let footer = if compact { 172 } else { 140 };
+        let fav_y = height - if compact { 98 } else { 66 };
+        let notify_x = if compact { 158 } else { 326 };
+        let notify_y = if compact { height - 68 } else { fav_y };
+        let positions = [
+            (SCROLL, Rect::new(12, 32, width - 24, height - footer)),
+            (STATUS, Rect::new(12, height - footer + 36, width - 24, 34)),
+            ("AOS_FavLabel", Rect::new(12, fav_y, 70, 20)),
+            (FAVS, Rect::new(84, fav_y, 110, 20)),
+            ("AOS_FavLoad", Rect::new(198, fav_y - 2, 56, 24)),
+            ("AOS_FavSave", Rect::new(258, fav_y - 2, 56, 24)),
+            (NOTIFY, Rect::new(notify_x, notify_y, 20, 20)),
+            (
+                "AOS_NotifyLabel",
+                Rect::new(notify_x + 22, notify_y, width - notify_x - 34, 20),
+            ),
+            (
+                RESET,
+                Rect::new(12, height - if compact { 68 } else { 36 }, 64, 28),
+            ),
+            (
+                END,
+                Rect::new(80, height - if compact { 68 } else { 36 }, 64, 28),
+            ),
+            (
+                "AOS_Close",
+                Rect::new(if compact { 12 } else { width - 316 }, height - 36, 80, 28),
+            ),
+            (
+                APPLY_RESET,
+                Rect::new(if compact { 96 } else { width - 232 }, height - 36, 120, 28),
+            ),
+            (APPLY, Rect::new(width - 108, height - 36, 94, 28)),
+            (ROWS, Rect::new(0, 0, width - 42, 10)),
+        ];
+        for (name, rect) in positions {
+            if let Some(n) = self.view.id(name) {
+                self.view.nodes[n].ctrl.position = [rect.x, rect.y];
+                self.view.nodes[n].ctrl.extent = [rect.w, rect.h];
+            }
+        }
+        self.build(core);
+        self.view.measure(&core.pack);
+        self.view.layout(w, h);
+    }
     fn blocks_accelerators(&self) -> bool {
         true
     }
@@ -1293,6 +1365,7 @@ impl Screen for AddOnSettings {
                 let status = core.admin.status.clone();
                 self.status(core, Some(&status));
             } else {
+                self.typed_dirty = false;
                 self.base = (self.values.clone(), Vec::new());
                 self.status(core, Some("Applied."));
             }
@@ -1303,7 +1376,11 @@ impl Screen for AddOnSettings {
         let revision = self.revision(core);
         if self.seen != Some(revision) {
             let (settings, teams) = self.changes(core);
-            if self.request.is_none() && settings.is_empty() && teams.is_none() {
+            if self.request.is_none()
+                && !self.typed_dirty
+                && settings.is_empty()
+                && teams.is_none()
+            {
                 self.load(core);
             } else {
                 self.seen = Some(revision);
@@ -1327,6 +1404,7 @@ impl Screen for AddOnSettings {
                 core.minigames.status.clear();
                 // The new values arrive with the next listing; take them now
                 // as the base so the window reads as applied.
+                self.typed_dirty = false;
                 self.base = (self.values.clone(), self.teams.clone());
                 self.status(core, Some("Applied."));
             }
@@ -1395,11 +1473,16 @@ impl Screen for AddOnSettings {
                 .and_then(|r| r.strip_suffix("_Team"))
                 .and_then(|p| p.parse::<u64>().ok())
             {
+                let _ = self.read_fields(core);
                 self.move_player(core, MiniGamePlayerId(player), self.view.selected(ev.node));
                 return;
             }
             if name == FAVS {
                 return;
+            }
+            if self.view.node(ev.node).ctrl.class == "GuiTextEditCtrl" {
+                self.typed_dirty = true;
+                let _ = self.read_fields(core);
             }
             // A pick from a list, or a team's colour.
             if let Some(target) = row {
@@ -1440,9 +1523,8 @@ impl Screen for AddOnSettings {
                     team.color = c;
                 }
                 self.build(core);
-            } else {
-                self.status(core, None);
             }
+            self.status(core, None);
             return;
         }
         if !matches!(ev.kind, EventKind::Click | EventKind::Submit) {

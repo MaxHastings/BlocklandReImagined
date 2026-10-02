@@ -13,6 +13,7 @@ use std::{path::Path, time::Duration};
 
 fn row(input: &str, output: &str, delay_ms: u32, params: Vec<EventValue>) -> EventRow {
     EventRow {
+        conditions: vec![],
         preserved: None,
         enabled: true,
         input: input.into(),

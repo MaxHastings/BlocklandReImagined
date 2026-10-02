@@ -486,6 +486,7 @@ fn main() -> Result<()> {
             brick: 1,
             rows: vec![
                 EventRow::Editable(EventLine {
+                    conditions: vec![],
                     enabled: true,
                     delay_ms: 500,
                     input: "onActivate".into(),

@@ -619,7 +619,7 @@ impl MiniGameScreen {
             self.view.nodes[parent].ctrl.extent[1] = h + grow;
             let mut c = text(
                 "GuiTextProfile",
-                Rect::new(12, h + grow - 28, (w - 24 - 136).max(0), 24),
+                Rect::new(12, h + grow - 28, (w - 24 - 160).max(0), 24),
                 &status,
             );
             c.name = Some(key.into());
@@ -629,9 +629,9 @@ impl MiniGameScreen {
             if !matches!(self.kind, Kind::Invite) {
                 let mut b = button(
                     "BlockButtonProfile",
-                    Rect::new(w - 12 - 130, h + grow - 30, 130, 26),
+                    Rect::new(w - 12 - 154, h + grow - 30, 154, 26),
                     "base/client/ui/button1",
-                    "Add-On Settings",
+                    "Teams & Add-Ons",
                     ADDONS_BUTTON,
                 );
                 b.name = Some(ADDONS_BUTTON.into());
@@ -643,7 +643,7 @@ impl MiniGameScreen {
         let target = self.addons_target(core);
         if let Some(n) = self.view.id(ADDONS_BUTTON) {
             self.view
-                .set_visible(n, !core.minigames.addon_settings.is_empty());
+                .set_visible(n, target.is_some() || !core.minigames.addon_settings.is_empty());
             self.view.set_active(n, target.is_some());
         }
     }

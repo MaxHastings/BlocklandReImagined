@@ -833,6 +833,7 @@ dependencies = [
  "anyhow",
  "bri-console",
  "bri-content",
+ "bri-events",
  "bytemuck",
  "image",
  "memmap2",

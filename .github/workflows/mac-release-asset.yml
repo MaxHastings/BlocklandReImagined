@@ -90,5 +90,15 @@ jobs:
           path: ${{ env.MAC_ZIP }}
           retention-days: 30
 
+      - name: Extracted app startup smoke
+        run: |
+          mkdir -p "$RUNNER_TEMP/mac-smoke"
+          ditto -x -k "$MAC_ZIP" "$RUNNER_TEMP/mac-smoke"
+          roots=("$RUNNER_TEMP/mac-smoke"/*)
+          test "${#roots[@]}" -eq 1
+          game="${roots[0]}/BlocklandReImagined.app/Contents"
+          "$game/MacOS/bri-client" --check "$game/Resources/content" "$RUNNER_TEMP/bri-zip-state"
+          "$game/MacOS/bri-client" --version
+
       - name: Attach the zip to the release
         run: gh release upload "$BRI_VERSION" "$MAC_ZIP"

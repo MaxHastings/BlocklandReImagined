@@ -188,6 +188,7 @@ fn run(s: &mut Session, owner: OwnerId, seq: u64, command: &str, brick: u64) -> 
 
 fn row(input: &str, slot: bri_events::Slot, output: &str, params: Vec<EventValue>) -> EventRow {
     EventRow {
+        conditions: vec![],
         preserved: None,
         enabled: true,
         input: input.into(),

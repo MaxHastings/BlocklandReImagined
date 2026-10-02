@@ -49,6 +49,7 @@ fn run(
         let mut program = Vec::new();
         for n in 0..rows - 1 {
             program.push(Row {
+                conditions: vec![],
                 preserved: None,
                 enabled: true,
                 input: "onRelay".into(),
@@ -59,6 +60,7 @@ fn run(
             });
         }
         program.push(Row {
+            conditions: vec![],
             preserved: None,
             enabled: true,
             input: "onRelay".into(),

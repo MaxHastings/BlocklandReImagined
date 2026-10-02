@@ -296,6 +296,7 @@ fn admin(action: Action) -> Command {
 
 fn color_row(color: u8) -> EventRow {
     EventRow {
+        conditions: vec![],
         preserved: None,
         enabled: true,
         input: "onActivate".into(),

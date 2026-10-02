@@ -61,6 +61,7 @@ impl Session {
         let special = self.special_of(brick);
         let default_row =
             |input: &str, target: bri_events::Slot, sound: &str| bri_world::EventRow {
+                conditions: vec![],
                 preserved: None,
                 enabled: true,
                 input: input.into(),

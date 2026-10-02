@@ -313,7 +313,7 @@ impl Catalog {
         ensure!(
             self.schema_version == 1
                 && self.inputs.len() <= 128
-                && self.outputs.len() <= 128
+                && self.outputs.len() <= 512
                 && self.targets.len() <= 32
                 && self.sources.len() <= 128,
             "Unsupported event catalog"
@@ -434,6 +434,13 @@ impl Catalog {
         Ok(())
     }
     pub fn validate_row(&self, row: &Row, bindings: &Bindings) -> Result<Class> {
+        ensure!(
+            row.conditions.len() <= crate::rules::MAX_CONDITIONS,
+            "Too many rule conditions"
+        );
+        for condition in &row.conditions {
+            condition.validate()?;
+        }
         if let Some(p) = &row.preserved {
             ensure!(
                 p.original.len() <= 16384
@@ -459,11 +466,21 @@ impl Catalog {
         }
         let (class, output) = self.row_output(&row.input, &row.target, &row.output)?;
         ensure!(
+            class != Class::Projectile || row.conditions.is_empty(),
+            "Projectile reflection actions do not yet support IF conditions"
+        );
+        ensure!(
             row.params.len() == output.params.len(),
             "Wrong event parameter count"
         );
         for (s, v) in output.params.iter().zip(&row.params) {
             s.validate_value(v, bindings)?;
+        }
+        if output.source == "core:rules"
+            && matches!(output.name.as_str(), "setVariable" | "addVariable")
+            && let Some(Value::Text(key)) = row.params.get(1)
+        {
+            crate::rules::validate_key(key)?;
         }
         compile(class, output, &row.params)?;
         Ok(class)
@@ -524,6 +541,9 @@ fn bad() -> anyhow::Error {
 /// What a row of `output` with parameters `p` does: an Add-On's output is
 /// a call of its rules, the engine's its own action.
 pub(crate) fn compile(class: Class, output: &OutputDef, p: &[Value]) -> Result<Action> {
+    if output.source == "core:rules" && output.package.is_none() {
+        return crate::rules::compile(output, p);
+    }
     if let Some(package) = &output.package {
         ensure!(p.len() == output.params.len(), bad());
         return Ok(Action::Intent(Intent::Package(PackageCall {

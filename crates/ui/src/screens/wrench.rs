@@ -6,6 +6,7 @@ use crate::models::events::{self, EventsModel, NAMED_BRICK, RowState};
 use crate::models::wrench::{WrenchField, clean_name, respawn_ms};
 use crate::schema::ParamSpec;
 use crate::view::EventKind;
+use bri_events::rules::{self as rules, Condition, Datum, Property, Subject};
 use std::collections::BTreeMap;
 
 fn named(mut control: Control, name: impl Into<String>) -> Control {
@@ -448,6 +449,124 @@ enum Binding {
     Named(usize),
     Output(usize),
     Parameter(usize, usize, ParamSpec),
+    VectorAxis(usize, usize, ParamSpec),
+    ConditionSubject(usize, usize),
+    ConditionProperty(usize, usize),
+    ConditionCompare(usize, usize),
+    ConditionKey(usize, usize),
+    ConditionValue(usize, usize),
+}
+
+fn parameter_labels(output: &str) -> &'static [&'static str] {
+    match output {
+        "setVariable" => &["Keep on", "Variable name", "Set to"],
+        "addVariable" => &["Keep on", "Variable name", "Add"],
+        "addPlayerScore" | "addTeamScore" => &["Points"],
+        "setTeam" => &["Team"],
+        "setColor" => &["Color"],
+        "setLight" => &["Light"],
+        "setEmitter" => &["Emitter"],
+        "setSound" | "playSound" => &["Sound"],
+        "setEventEnabled" => &["Rows", "Enabled"],
+        "toggleEventEnabled" => &["Rows"],
+        "setHealth" | "addHealth" => &["Health"],
+        "setPlayerScale" => &["Size"],
+        "setItem" => &["Item"],
+        "setVehicle" => &["Vehicle"],
+        "setMusic" => &["Music"],
+        "changeDataBlock" => &["Player type"],
+        "setEmitterDirection" | "setItemDirection" | "setItemPosition" => &["Direction"],
+        "disappear" | "burnPlayer" => &["Seconds"],
+        "spawnExplosion" => &["Explosion", "Size"],
+        "spawnItem" => &["Velocity", "Item"],
+        "spawnProjectile" => &["Velocity", "Projectile", "Spread", "Size"],
+        "radiusImpulse" => &["Radius", "Push", "Lift"],
+        "fakeKillBrick" => &["Velocity", "Seconds"],
+        "setColliding" | "setRendering" | "setRayCasting" => &["Enabled"],
+        _ => &[],
+    }
+}
+
+fn condition_properties(
+    subject: Subject,
+    target_class: Option<&str>,
+) -> Vec<(&'static str, Property)> {
+    let subject = if subject == Subject::Target {
+        match target_class.unwrap_or("").to_ascii_lowercase().as_str() {
+            "fxdtsbrick" => Subject::SelfBrick,
+            "player" | "gameconnection" => Subject::Player,
+            "minigame" => Subject::MiniGame,
+            "vehicle" => Subject::Object,
+            _ => Subject::Target,
+        }
+    } else {
+        subject
+    };
+    rules::PROPERTIES
+        .iter()
+        .copied()
+        .filter(|(_, p)| match p {
+            Property::Exists => true,
+            Property::Variable => subject != Subject::Target,
+            Property::Alive => matches!(
+                subject,
+                Subject::Player | Subject::Instigator | Subject::Object
+            ),
+            Property::IsInstigator | Property::Team => {
+                matches!(subject, Subject::Player | Subject::Instigator)
+            }
+            Property::Score => matches!(
+                subject,
+                Subject::Player | Subject::Instigator | Subject::Team
+            ),
+            Property::RoundOver => subject == Subject::MiniGame,
+            Property::Color | Property::Occupants | Property::Opponents => {
+                subject == Subject::SelfBrick
+            }
+            Property::Kind | Property::Speed => subject == Subject::Object,
+        })
+        .collect()
+}
+fn active_teams(core: &Core) -> Vec<crate::api::MiniGameTeam> {
+    core.minigames
+        .games
+        .iter()
+        .find(|g| Some(g.id) == core.minigames.active_game)
+        .map(|g| g.teams.clone())
+        .unwrap_or_default()
+}
+fn property_label(p: Property) -> &'static str {
+    if p == Property::Team {
+        "Team"
+    } else {
+        rules::PROPERTIES
+            .iter()
+            .find(|(_, v)| *v == p)
+            .map(|(n, _)| *n)
+            .unwrap_or("")
+    }
+}
+fn boolean_property(p: Property) -> bool {
+    matches!(
+        p,
+        Property::Exists | Property::Alive | Property::RoundOver | Property::IsInstigator
+    )
+}
+fn reset_condition_property(c: &mut Condition, p: Property) {
+    c.property = p;
+    c.key = if p == Property::Variable {
+        "progress".into()
+    } else {
+        String::new()
+    };
+    c.value = if boolean_property(p) {
+        Datum::Bool(true)
+    } else if p == Property::Kind {
+        Datum::Text(String::new())
+    } else {
+        Datum::Number(0)
+    };
+    c.compare = rules::Compare::Equal;
 }
 
 pub struct WrenchEvents {
@@ -460,6 +579,7 @@ pub struct WrenchEvents {
     error: Option<String>,
     datablocks: crate::api::DatablockMenus,
     paint: Vec<crate::api::PaintDivision>,
+    teams: Vec<crate::api::MiniGameTeam>,
 }
 
 fn editable_catalog(source: &EventCatalog) -> EventCatalog {
@@ -510,6 +630,7 @@ impl WrenchEvents {
             error: None,
             datablocks: core.datablocks.clone(),
             paint: core.hud.paint.clone(),
+            teams: active_teams(core),
         };
         s.preserve_unsupported();
         s.build(core);
@@ -543,6 +664,7 @@ impl WrenchEvents {
                 });
             if !valid {
                 let line = crate::api::EventLine {
+                    conditions: e.conditions.clone(),
                     enabled: e.enabled,
                     delay_ms: events::clamp_delay(&e.delay_text),
                     input: input.clone(),
@@ -631,12 +753,89 @@ impl WrenchEvents {
             .view
             .id("WrenchEvents_Window")
             .unwrap_or(self.view.root);
-        let width = core.logical.0.clamp(400, 800);
+        let width = core.logical.0.clamp(400, 1000);
         let height = core.logical.1.clamp(300, 600);
-        // v20 shrinks this 800x600 window to the canvas, keeping all controls usable.
+        let compact = width < 600;
+        let expanded = self.model.as_ref().is_some_and(|m| {
+            m.rows
+                .iter()
+                .any(|r| matches!(r, RowState::Editable(e) if !e.conditions.is_empty()))
+        });
+        let stacked = compact || expanded;
         self.view.nodes[win].ctrl.position =
             [(core.logical.0 - width) / 2, (core.logical.1 - height) / 2];
         self.view.nodes[win].ctrl.extent = [width, height];
+        self.view.set_text(win, "Events - Rule Workshop");
+        // Replace the authored column captions; the toolbar has its own row.
+        for n in self.view.walk().collect::<Vec<_>>() {
+            let command = command_of(&self.view, n).to_ascii_lowercase();
+            if command == "wrencheventsdlg.send();" {
+                self.view.nodes[n].ctrl.position = [width - 100, height - 51];
+            } else if command == "canvas.popdialog(wrencheventsdlg);" {
+                self.view.nodes[n].ctrl.position = [11, height - 51];
+            } else if command == "wrencheventsdlg.clear();" {
+                self.view.nodes[n].ctrl.position = [width - 117, 28];
+            }
+            if self.view.node(n).ctrl.class == "GuiTextCtrl"
+                || self.view.node(n).ctrl.class == "GuiSwatchCtrl"
+            {
+                self.view.set_visible(n, false);
+            }
+            if self.view.node(n).ctrl.name.as_deref() == Some("WrenchLock_Events") {
+                self.view.nodes[n].ctrl.position = [width - 50, 29];
+                self.view.set_bool(n, core.wrench.events_copy.is_some());
+            }
+        }
+        {
+            let (name, label, command, x, w) =
+                ("Rule_Explain", "Explain saved", "rules.explain", 11, 100);
+            let mut button = named(
+                ctrl("GuiButtonCtrl", "GuiButtonProfile", Rect::new(x, 28, w, 22)),
+                name,
+            );
+            button.text = Some(label.into());
+            button.command = Some(command.into());
+            self.view.add(win, button);
+        }
+        let bw = width - 35;
+        let input_w = if stacked {
+            bw - 88
+        } else {
+            ((bw - 88) * 35 / 100).clamp(140, 200)
+        };
+        let target_x = if stacked { 88 } else { 88 + input_w + 4 };
+        let target_w = if compact { 105 } else { 115 };
+        let output_x = target_x + target_w + 4;
+        let output_w = bw - output_x - 4;
+        for (caption, x, w) in [
+            ("On", 1, 28),
+            ("Delay ms", 31, 53),
+            (
+                if expanded {
+                    "Input Event (WHEN)"
+                } else {
+                    "Input Event"
+                },
+                88,
+                input_w,
+            ),
+        ] {
+            self.view.add(
+                win,
+                text("GuiDefaultProfile", Rect::new(x + 11, 54, w, 19), caption),
+            );
+        }
+        if !stacked {
+            for (caption, x, w) in [
+                ("Target", target_x, target_w),
+                ("Output Event", output_x, output_w),
+            ] {
+                self.view.add(
+                    win,
+                    text("GuiDefaultProfile", Rect::new(x + 11, 54, w, 19), caption),
+                );
+            }
+        }
         let scroll = self.view.id("wrenchEvents_Scroll").unwrap_or_else(|| {
             self.view.add(
                 win,
@@ -644,55 +843,28 @@ impl WrenchEvents {
                     ctrl(
                         "GuiScrollCtrl",
                         "ColorScrollProfile",
-                        Rect::new(11, 51, width - 20, height - 115),
+                        Rect::new(11, 76, width - 20, height - 140),
                     ),
                     "wrenchEvents_Scroll",
                 ),
             )
         });
-        self.view.nodes[scroll].ctrl.position = [11, 51];
-        self.view.nodes[scroll].ctrl.extent = [width - 20, height - 115];
+        self.view.nodes[scroll].ctrl.position = [11, 76];
+        self.view.nodes[scroll].ctrl.extent = [width - 20, height - 140];
         self.view.clear_children(scroll);
         let body = self.view.add(
             scroll,
             named(
-                ctrl(
-                    "GuiSwatchCtrl",
-                    "GuiDefaultProfile",
-                    Rect::new(0, 0, width - 35, 1),
-                ),
+                ctrl("GuiSwatchCtrl", "GuiDefaultProfile", Rect::new(0, 0, bw, 1)),
                 "WrenchEvents_Box",
             ),
         );
-        let nodes: Vec<_> = self.view.walk().collect();
-        for n in nodes {
-            let command = command_of(&self.view, n).to_ascii_lowercase();
-            if command == "wrencheventsdlg.send();" {
-                self.view.nodes[n].ctrl.position = [width - 100, height - 51];
-            }
-            if command == "canvas.popdialog(wrencheventsdlg);" {
-                self.view.nodes[n].ctrl.position = [11, height - 51];
-            }
-            if command == "wrencheventsdlg.clear();" {
-                self.view.nodes[n].ctrl.position = [width - 117, 31];
-            }
-            if self.view.node(n).ctrl.text.as_deref() == Some("Output Parameters") {
-                self.view.set_visible(n, false);
-            }
-            if self.view.node(n).ctrl.name.as_deref() == Some("WrenchLock_Events") {
-                self.view.nodes[n].ctrl.position = [width - 50, 29];
-                self.view.set_bool(n, core.wrench.events_copy.is_some());
-            }
-            if self.view.node(n).ctrl.class == "GuiSwatchCtrl" && n != body {
-                self.view.set_visible(n, false);
-            }
-        }
         let rows = self
             .model
             .as_ref()
             .map(|m| m.rows.clone())
             .unwrap_or_default();
-        let mut y = 0;
+        let mut y = 2;
         for (row, state) in rows.into_iter().enumerate() {
             match state {
                 RowState::Preserved {
@@ -701,8 +873,8 @@ impl WrenchEvents {
                     let mut label = named(
                         text(
                             "GuiDefaultProfile",
-                            Rect::new(4, y, width - 50, 38),
-                            &format!("Preserved (read only): {preserved}"),
+                            Rect::new(4, y, bw - 8, 38),
+                            &format!("Unavailable (kept): {preserved}"),
                         ),
                         format!("WrenchEvent_{row}_preserved"),
                     );
@@ -714,17 +886,17 @@ impl WrenchEvents {
                     let enabled = self.widget(
                         body,
                         "GuiCheckBoxCtrl",
-                        Rect::new(1, y, 25, 22),
+                        Rect::new(1, y, 27, 22),
                         row,
                         "enabled",
                         Binding::Enabled(row),
                     );
                     self.view.set_bool(enabled, e.enabled);
-                    self.view.set_text(enabled, row.to_string());
+                    self.view.set_text(enabled, (row + 1).to_string());
                     let delay = self.widget(
                         body,
                         "GuiTextEditCtrl",
-                        Rect::new(30, y, 42, 22),
+                        Rect::new(31, y, 51, 22),
                         row,
                         "delay",
                         Binding::Delay(row),
@@ -733,7 +905,7 @@ impl WrenchEvents {
                     let input = self.widget(
                         body,
                         "GuiPopUpMenuCtrl",
-                        Rect::new(78, y, 100, 22),
+                        Rect::new(88, y, input_w, 22),
                         row,
                         "input",
                         Binding::Input(row),
@@ -744,11 +916,41 @@ impl WrenchEvents {
                         e.input.as_deref(),
                         true,
                     );
+                    let mut action_y = y;
+                    if stacked {
+                        action_y += 25;
+                        for (index, c) in e.conditions.iter().enumerate() {
+                            self.condition_widgets(body, (row, index), c, action_y, width, core);
+                            action_y += 74;
+                        }
+                        if e.input.is_some() {
+                            for (caption, x, w) in [
+                                ("Target", target_x, target_w),
+                                ("Output Event", output_x, output_w),
+                            ] {
+                                self.view.add(
+                                    body,
+                                    text(
+                                        "GuiDefaultProfile",
+                                        Rect::new(x, action_y, w, 18),
+                                        caption,
+                                    ),
+                                );
+                            }
+                            action_y += 18;
+                        }
+                    }
                     if let Some(input_name) = &e.input {
+                        if stacked {
+                            self.view.add(
+                                body,
+                                text("GuiDefaultProfile", Rect::new(4, action_y, 80, 22), "DO"),
+                            );
+                        }
                         let target = self.widget(
                             body,
                             "GuiPopUpMenuCtrl",
-                            Rect::new(182, y, 100, 22),
+                            Rect::new(target_x, action_y, target_w, 22),
                             row,
                             "target",
                             Binding::Target(row),
@@ -766,7 +968,7 @@ impl WrenchEvents {
                         let output = self.widget(
                             body,
                             "GuiPopUpMenuCtrl",
-                            Rect::new(286, y, 125, 22),
+                            Rect::new(output_x, action_y, output_w, 22),
                             row,
                             "output",
                             Binding::Output(row),
@@ -778,20 +980,16 @@ impl WrenchEvents {
                             false,
                         );
                     }
-                    let mut parameter_y = y + 25;
+                    y = action_y + 25;
                     if e.target.as_deref() == Some(NAMED_BRICK) {
                         self.view.add(
                             body,
-                            text(
-                                "GuiDefaultProfile",
-                                Rect::new(4, parameter_y, 70, 22),
-                                "Named:",
-                            ),
+                            text("GuiDefaultProfile", Rect::new(4, y, 80, 22), "Named brick:"),
                         );
                         let node = self.widget(
                             body,
                             "GuiPopUpMenuCtrl",
-                            Rect::new(78, parameter_y, 333, 22),
+                            Rect::new(88, y, bw - 92, 22),
                             row,
                             "named",
                             Binding::Named(row),
@@ -802,62 +1000,437 @@ impl WrenchEvents {
                             e.named.as_deref(),
                             false,
                         );
-                        parameter_y += 25;
+                        y += 25;
                     }
                     let specs = self.model.as_ref().unwrap().param_specs(row, &self.catalog);
-                    if !specs.is_empty() {
+                    let labels = parameter_labels(e.output.as_deref().unwrap_or(""));
+                    let split_vector = matches!(
+                        e.output.as_deref(),
+                        Some("setRegionSize" | "setObjectVelocity" | "setVelocity" | "addVelocity")
+                    );
+                    if split_vector && let Some(ParamSpec::Vector { .. }) = specs.first() {
+                        let v = match e.params.first() {
+                            Some(ParamValue::Vector(v)) => *v,
+                            _ => [0.; 3],
+                        };
+                        for i in 0..3 {
+                            let x = 88 + i as i32 * ((bw - 88) / 3);
+                            let w = (bw - 88) / 3 - 5;
+                            let label = if e.output.as_deref() == Some("setRegionSize") {
+                                ["Width", "Height", "Depth"][i]
+                            } else {
+                                ["X", "Y (up)", "Z"][i]
+                            };
+                            self.view.add(
+                                body,
+                                text("GuiDefaultProfile", Rect::new(x, y, w, 18), label),
+                            );
+                            let n = self.widget(
+                                body,
+                                "GuiTextEditCtrl",
+                                Rect::new(x, y + 18, w, 22),
+                                row,
+                                &format!("param0_axis{i}"),
+                                Binding::VectorAxis(row, i, specs[0].clone()),
+                            );
+                            self.view.set_text(n, v[i].to_string());
+                        }
+                        y += 43;
+                    } else if !specs.is_empty() {
+                        let pw = (bw - 88) / specs.len() as i32;
+                        for (i, spec) in specs.iter().enumerate() {
+                            let x = 88 + i as i32 * pw;
+                            let label = labels.get(i).copied().unwrap_or("Value");
+                            self.view.add(
+                                body,
+                                text("GuiDefaultProfile", Rect::new(x, y, pw - 5, 18), label),
+                            );
+                            let value = e
+                                .params
+                                .get(i)
+                                .cloned()
+                                .unwrap_or_else(|| events::default_param(spec));
+                            self.parameter(
+                                body,
+                                (row, i),
+                                spec,
+                                value,
+                                Rect::new(x, y + 18, pw - 5, 22),
+                                core,
+                            );
+                        }
+                        y += 43;
+                    }
+                    if e.input.is_some() {
+                        for (suffix, label, w, x) in [
+                            ("add_if", "+ IF", 55, 88),
+                            ("copy", "Copy row", 75, 149),
+                            ("delete", "Remove row", 90, 230),
+                        ] {
+                            let command = if suffix == "add_if" {
+                                format!("rules.if.{row}")
+                            } else {
+                                format!("rules.{suffix}.{row}")
+                            };
+                            let mut button = named(
+                                ctrl("GuiButtonCtrl", "GuiButtonProfile", Rect::new(x, y, w, 22)),
+                                format!("Rule_{row}_{suffix}"),
+                            );
+                            button.text = Some(label.into());
+                            button.command = Some(command);
+                            let n = self.view.add(body, button);
+                            if suffix == "add_if" && e.conditions.len() >= rules::MAX_CONDITIONS {
+                                self.view.set_active(n, false);
+                            }
+                        }
+                        y += 25;
+                    }
+                    if let Some(output) = e
+                        .output
+                        .as_ref()
+                        .and_then(|name| self.catalog.outputs.iter().find(|o| &o.name == name))
+                        && !["core", "Blockland", "core:rules"].contains(&output.provider.as_str())
+                    {
+                        let provider = core
+                            .add_ons
+                            .rows
+                            .iter()
+                            .find(|p| p.id == output.provider)
+                            .map(|p| p.name.as_str())
+                            .unwrap_or("Add-On");
                         self.view.add(
                             body,
-                            text(
-                                "GuiDefaultProfile",
-                                Rect::new(4, parameter_y, 70, 22),
-                                "Params:",
-                            ),
+                            text("GuiDefaultProfile", Rect::new(88, y, bw - 92, 18), provider),
                         );
+                        y += 20;
                     }
-                    let parameter_width = ((width - 100) / specs.len().max(1) as i32).min(165);
-                    for (i, spec) in specs.iter().enumerate() {
-                        let rect = Rect::new(
-                            78 + i as i32 * parameter_width,
-                            parameter_y,
-                            parameter_width - 5,
-                            22,
-                        );
-                        let value = e
-                            .params
-                            .get(i)
-                            .cloned()
-                            .unwrap_or_else(|| events::default_param(spec));
-                        self.parameter(body, (row, i), spec, value, rect, core);
-                    }
-                    y = if specs.is_empty() {
-                        parameter_y
-                    } else {
-                        parameter_y + 26
-                    };
-                    y += 5;
+                    let mut line = ctrl(
+                        "GuiSwatchCtrl",
+                        "GuiDefaultProfile",
+                        Rect::new(4, y + 4, bw - 8, 1),
+                    );
+                    line.color = Some([140, 140, 140, 255]);
+                    self.view.add(body, line);
+                    y += 12;
                 }
             }
         }
         self.view.nodes[body].ctrl.extent[1] = y.max(1);
         self.view.state(scroll).scroll_y = scroll_offset;
-        let status = self
-            .error
-            .as_deref()
-            .unwrap_or("Host-supported events only; preserved rows remain unchanged.");
         self.view.add(
             win,
             named(
                 text(
                     "GuiDefaultProfile",
-                    Rect::new(108, height - 45, width - 220, 34),
-                    status,
+                    Rect::new(108, height - 43, width - 220, 28),
+                    self.error.as_deref().unwrap_or(""),
                 ),
                 "WrenchEvents_Status",
             ),
         );
         self.refresh(core);
         self.view.layout(core.logical.0, core.logical.1);
+    }
+
+    fn normalize_target_conditions(&mut self, row: usize) {
+        let class = self.target_class(row);
+        if let Some(RowState::Editable(e)) = self.model.as_mut().and_then(|m| m.rows.get_mut(row)) {
+            for c in &mut e.conditions {
+                if c.subject == Subject::Target
+                    && !condition_properties(c.subject, class.as_deref())
+                        .iter()
+                        .any(|(_, p)| *p == c.property)
+                {
+                    reset_condition_property(c, Property::Exists);
+                }
+            }
+        }
+    }
+
+    fn target_class(&self, row: usize) -> Option<String> {
+        let RowState::Editable(e) = self.model.as_ref()?.rows.get(row)? else {
+            return None;
+        };
+        EventsModel::target_class(&self.catalog, e.input.as_deref()?, e.target.as_deref()?)
+    }
+    fn condition_widgets(
+        &mut self,
+        body: NodeId,
+        position: (usize, usize),
+        c: &Condition,
+        y: i32,
+        width: i32,
+        core: &Core,
+    ) {
+        let (row, index) = position;
+        let bw = width - 35;
+        let x = 88;
+        let subject_w = 100;
+        let prop_x = x + subject_w + 4;
+        let prop_w = (bw - prop_x - 78).max(95);
+        let compare_x = prop_x + prop_w + 4;
+        self.view.add(
+            body,
+            text(
+                "GuiDefaultProfile",
+                Rect::new(4, y + 18, 80, 22),
+                if index == 0 { "IF" } else { "AND" },
+            ),
+        );
+        for (label, lx, lw) in [("Who / what", x, subject_w), ("Check", prop_x, prop_w)] {
+            self.view.add(
+                body,
+                text("GuiDefaultProfile", Rect::new(lx, y, lw, 18), label),
+            );
+        }
+        let n = self.widget(
+            body,
+            "GuiPopUpMenuCtrl",
+            Rect::new(x, y + 18, subject_w, 22),
+            row,
+            &format!("if{index}_subject"),
+            Binding::ConditionSubject(row, index),
+        );
+        self.menu(
+            n,
+            rules::SUBJECTS.iter().map(|(s, _)| s.to_string()).collect(),
+            rules::SUBJECTS
+                .iter()
+                .find(|(_, v)| *v == c.subject)
+                .map(|(s, _)| *s),
+            false,
+        );
+        let n = self.widget(
+            body,
+            "GuiPopUpMenuCtrl",
+            Rect::new(prop_x, y + 18, prop_w, 22),
+            row,
+            &format!("if{index}_property"),
+            Binding::ConditionProperty(row, index),
+        );
+        let mut properties = condition_properties(c.subject, self.target_class(row).as_deref());
+        if !properties.iter().any(|(_, p)| *p == c.property) {
+            properties.extend(
+                rules::PROPERTIES
+                    .iter()
+                    .copied()
+                    .filter(|(_, p)| *p == c.property),
+            );
+        }
+        self.menu(
+            n,
+            properties
+                .iter()
+                .map(|(_, p)| property_label(*p).to_string())
+                .collect(),
+            Some(property_label(c.property)),
+            false,
+        );
+        let n = self.widget(
+            body,
+            "GuiPopUpMenuCtrl",
+            Rect::new(compare_x, y + 18, 57, 22),
+            row,
+            &format!("if{index}_compare"),
+            Binding::ConditionCompare(row, index),
+        );
+        let comparisons = rules::COMPARISONS.iter().filter(|(_, v)| {
+            !boolean_property(c.property) && c.property != Property::Kind
+                || matches!(v, rules::Compare::Equal | rules::Compare::NotEqual)
+        });
+        self.menu(
+            n,
+            comparisons.map(|(s, _)| s.to_string()).collect(),
+            rules::COMPARISONS
+                .iter()
+                .find(|(_, v)| *v == c.compare)
+                .map(|(s, _)| *s),
+            false,
+        );
+        let mut remove = named(
+            ctrl(
+                "GuiButtonCtrl",
+                "GuiButtonProfile",
+                Rect::new(bw - 27, y, 23, 18),
+            ),
+            format!("Rule_{row}_if{index}_remove"),
+        );
+        remove.text = Some("X".into());
+        remove.command = Some(format!("rules.remove.{row}.{index}"));
+        self.view.add(body, remove);
+        let vy = y + 47;
+        let value_x = if c.property == Property::Variable {
+            self.view.add(
+                body,
+                text("GuiDefaultProfile", Rect::new(4, vy, 80, 22), "Variable:"),
+            );
+            let n = self.widget(
+                body,
+                "GuiTextEditCtrl",
+                Rect::new(88, vy, 124, 22),
+                row,
+                &format!("if{index}_key"),
+                Binding::ConditionKey(row, index),
+            );
+            self.view.set_text(n, &c.key);
+            212 + 50
+        } else {
+            88
+        };
+        let label = "Value:";
+        let label_x = if c.property == Property::Variable {
+            216
+        } else {
+            4
+        };
+        self.view.add(
+            body,
+            text("GuiDefaultProfile", Rect::new(label_x, vy, 46, 22), label),
+        );
+        let class = if boolean_property(c.property)
+            || matches!(
+                c.property,
+                Property::Kind | Property::Team | Property::Color
+            ) {
+            "GuiPopUpMenuCtrl"
+        } else {
+            "GuiTextEditCtrl"
+        };
+        let n = self.widget(
+            body,
+            class,
+            Rect::new(value_x, vy, bw - value_x - 5, 22),
+            row,
+            &format!("if{index}_value"),
+            Binding::ConditionValue(row, index),
+        );
+        match c.property {
+            Property::Kind => {
+                let current = match &c.value {
+                    Datum::Text(t) => Some(t.as_str()),
+                    _ => None,
+                };
+                let ids =
+                    resource_menu(&mut self.view, n, &choices(core, "Vehicle", true), current);
+                self.resources.insert(n, ids);
+            }
+            p if boolean_property(p) => {
+                self.menu(
+                    n,
+                    vec!["Yes".into(), "No".into()],
+                    Some(if c.value == Datum::Bool(true) {
+                        "Yes"
+                    } else {
+                        "No"
+                    }),
+                    false,
+                );
+            }
+            Property::Team => {
+                let teams = core
+                    .minigames
+                    .games
+                    .iter()
+                    .find(|g| Some(g.id) == core.minigames.active_game)
+                    .map(|g| g.teams.as_slice())
+                    .unwrap_or(&[]);
+                let current = match c.value {
+                    Datum::Number(n) => n,
+                    _ => 0,
+                };
+                let mut items = vec![("No team".into(), 0)];
+                items.extend(teams.iter().map(|t| (t.name.clone(), i64::from(t.id))));
+                if !items.iter().any(|(_, i)| *i == current) {
+                    items.push((format!("Team {current} (unavailable)"), current));
+                }
+                self.view.state(n).items = items;
+                self.view.select(n, Some(current));
+            }
+            Property::Color => {
+                self.view.state(n).items = core
+                    .hud
+                    .paint
+                    .iter()
+                    .flat_map(|d| d.colors.iter())
+                    .enumerate()
+                    .map(|(i, c)| {
+                        let c = rgba(*c);
+                        (
+                            format!("{i}: #{:02X}{:02X}{:02X}", c[0], c[1], c[2]),
+                            i as i64,
+                        )
+                    })
+                    .collect();
+                let value = match c.value {
+                    Datum::Number(v) => v,
+                    _ => 0,
+                };
+                self.view.select(n, Some(value));
+                self.view.nodes[n].ctrl.extent[0] -= 25;
+                let color = u32::try_from(value)
+                    .ok()
+                    .and_then(|v| core.hud.color(v))
+                    .map(rgba)
+                    .unwrap_or([0, 0, 0, 0]);
+                self.view.add(
+                    body,
+                    named(
+                        swatch(Rect::new(bw - 26, vy + 1, 20, 20), color),
+                        format!("WrenchEvent_{row}_if{index}_swatch"),
+                    ),
+                );
+            }
+            _ => self.view.set_text(
+                n,
+                match &c.value {
+                    Datum::Number(v) => v.to_string(),
+                    Datum::Bool(v) => v.to_string(),
+                    Datum::Text(v) => v.clone(),
+                },
+            ),
+        }
+    }
+    fn condition_mut(&mut self, row: usize, index: usize) -> Option<&mut Condition> {
+        match self.model.as_mut()?.rows.get_mut(row)? {
+            RowState::Editable(e) => e.conditions.get_mut(index),
+            _ => None,
+        }
+    }
+    fn read_condition_value(
+        &self,
+        node: NodeId,
+        row: usize,
+        index: usize,
+    ) -> Result<Datum, String> {
+        let Some(RowState::Editable(e)) = self.model.as_ref().and_then(|m| m.rows.get(row)) else {
+            return Err("Missing rule".into());
+        };
+        let c = e.conditions.get(index).ok_or("Missing condition")?;
+        let text = self.view.edit_text(node);
+        Ok(match c.property {
+            Property::Exists | Property::Alive | Property::RoundOver | Property::IsInstigator => {
+                Datum::Bool(
+                    self.view
+                        .selected_text(node)
+                        .as_deref()
+                        .ok_or("Choose Yes or No")?
+                        == "Yes",
+                )
+            }
+            Property::Team | Property::Color => {
+                Datum::Number(self.view.selected(node).ok_or("Choose a value")?)
+            }
+            Property::Kind => Datum::Text(
+                self.view
+                    .selected(node)
+                    .and_then(|i| usize::try_from(i).ok())
+                    .and_then(|i| self.resources.get(&node)?.get(i))
+                    .cloned()
+                    .flatten()
+                    .unwrap_or_default(),
+            ),
+            _ => Datum::Number(text.trim().parse().map_err(|_| "Use a whole number")?),
+        })
     }
 
     fn parameter(
@@ -870,12 +1443,24 @@ impl WrenchEvents {
         core: &Core,
     ) {
         let (row, index) = address;
-        let class = match spec {
-            ParamSpec::Bool => "GuiCheckBoxCtrl",
-            ParamSpec::Datablock { .. } | ParamSpec::List { .. } | ParamSpec::PaintColor { .. } => {
-                "GuiPopUpMenuCtrl"
+        let team_parameter = self
+            .model
+            .as_ref()
+            .and_then(|m| m.rows.get(row))
+            .is_some_and(
+                |r| matches!(r,RowState::Editable(e) if e.output.as_deref()==Some("setTeam")),
+            )
+            && index == 0;
+        let class = if team_parameter {
+            "GuiPopUpMenuCtrl"
+        } else {
+            match spec {
+                ParamSpec::Bool => "GuiCheckBoxCtrl",
+                ParamSpec::Datablock { .. }
+                | ParamSpec::List { .. }
+                | ParamSpec::PaintColor { .. } => "GuiPopUpMenuCtrl",
+                _ => "GuiTextEditCtrl",
             }
-            _ => "GuiTextEditCtrl",
         };
         let node = self.widget(
             parent,
@@ -885,6 +1470,30 @@ impl WrenchEvents {
             &format!("param{index}"),
             Binding::Parameter(row, index, spec.clone()),
         );
+        if team_parameter {
+            let current = match value {
+                ParamValue::Int(v) => v,
+                _ => 1,
+            };
+            let mut items = core
+                .minigames
+                .games
+                .iter()
+                .find(|g| Some(g.id) == core.minigames.active_game)
+                .map(|g| {
+                    g.teams
+                        .iter()
+                        .map(|t| (t.name.clone(), i64::from(t.id)))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            if !items.iter().any(|(_, i)| *i == current) {
+                items.push((format!("Team {current} (unavailable)"), current));
+            }
+            self.view.state(node).items = items;
+            self.view.select(node, Some(current));
+            return;
+        }
         match (spec, value) {
             (ParamSpec::Datablock { class }, ParamValue::Datablock(current)) => {
                 let ids = resource_menu(
@@ -942,7 +1551,8 @@ impl WrenchEvents {
         let ready = self.current(core) && self.request.is_none();
         let nodes: Vec<_> = self.view.walk().collect();
         for n in nodes {
-            self.view.set_active(n, ready);
+            let can_add=command_of(&self.view,n).strip_prefix("rules.if.").and_then(|r|r.parse::<usize>().ok()).is_none_or(|row|self.model.as_ref().and_then(|m|m.rows.get(row)).is_some_and(|r|matches!(r,RowState::Editable(e) if e.conditions.len()<rules::MAX_CONDITIONS)));
+            self.view.set_active(n, ready && can_add);
             if self.view.node(n).ctrl.name.as_deref() == Some("WrenchEvents_LoadingWindow") {
                 self.view.set_visible(n, self.model.is_none());
             }
@@ -953,7 +1563,13 @@ impl WrenchEvents {
         let text = self.view.edit_text(node);
         let bad = || "Enter a valid parameter value before sending.".to_string();
         Ok(match spec {
-            ParamSpec::Int { .. } => ParamValue::Int(text.trim().parse().map_err(|_| bad())?),
+            ParamSpec::Int { .. } => {
+                ParamValue::Int(if self.view.node(node).ctrl.class == "GuiPopUpMenuCtrl" {
+                    self.view.selected(node).ok_or_else(bad)?
+                } else {
+                    text.trim().parse().map_err(|_| bad())?
+                })
+            }
             ParamSpec::Float { .. } => {
                 let v: f32 = text.trim().parse().map_err(|_| bad())?;
                 if !v.is_finite() {
@@ -1018,10 +1634,47 @@ impl WrenchEvents {
         })
     }
 
+    fn accept_vector_axis(
+        &mut self,
+        node: NodeId,
+        row: usize,
+        axis: usize,
+        spec: &ParamSpec,
+    ) -> Result<(), String> {
+        let value: f32 = self
+            .view
+            .edit_text(node)
+            .trim()
+            .parse()
+            .map_err(|_| "Enter a number for each dimension".to_string())?;
+        if !value.is_finite() {
+            return Err("Enter a finite number".into());
+        }
+        let Some(RowState::Editable(e)) = self.model.as_mut().and_then(|m| m.rows.get_mut(row))
+        else {
+            return Ok(());
+        };
+        let mut vector = match e.params.first() {
+            Some(ParamValue::Vector(v)) => *v,
+            _ => [0.; 3],
+        };
+        vector[axis] = value;
+        let value = events::clamp_param(spec, ParamValue::Vector(vector));
+        if e.params.is_empty() {
+            e.params.push(value);
+        } else {
+            e.params[0] = value;
+        }
+        Ok(())
+    }
+
     fn accept_parameters(&mut self) -> Result<(), String> {
         let bindings = self.bindings.clone();
         for (node, binding) in bindings {
             match binding {
+                Binding::VectorAxis(row, axis, spec) => {
+                    self.accept_vector_axis(node, row, axis, &spec)?;
+                }
                 Binding::Parameter(row, index, spec) => {
                     let value = self.read_parameter(node, &spec)?;
                     self.model
@@ -1034,7 +1687,33 @@ impl WrenchEvents {
                     m.set_delay_text(row, self.view.edit_text(node));
                     m.accept_delay(row);
                 }
+                Binding::ConditionKey(row, index) => {
+                    let text = self.view.edit_text(node);
+                    if let Some(c) = self.condition_mut(row, index) {
+                        c.key = text;
+                    }
+                }
+                Binding::ConditionValue(row, index) => {
+                    let value = self.read_condition_value(node, row, index)?;
+                    if let Some(c) = self.condition_mut(row, index) {
+                        c.value = value;
+                    }
+                }
                 _ => {}
+            }
+        }
+        if let Some(model) = &self.model {
+            for row in &model.rows {
+                if let RowState::Editable(e) = row {
+                    if matches!(e.output.as_deref(), Some("setVariable" | "addVariable"))
+                        && let Some(ParamValue::Text(key)) = e.params.get(1)
+                    {
+                        rules::validate_key(key).map_err(|e| e.to_string())?;
+                    }
+                    for condition in &e.conditions {
+                        condition.validate().map_err(|e| e.to_string())?;
+                    }
+                }
             }
         }
         Ok(())
@@ -1062,6 +1741,9 @@ impl Screen for WrenchEvents {
     fn no_shift(&self) -> bool {
         true
     }
+    fn on_wake(&mut self, core: &mut Core) {
+        core.request(UiAction::RequestMiniGameList);
+    }
     fn on_event(&mut self, ev: &ViewEvent, core: &mut Core) {
         if !self.current(core) {
             return;
@@ -1075,6 +1757,45 @@ impl Screen for WrenchEvents {
         }
         let command = command_of(&self.view, ev.node).to_ascii_lowercase();
         if ev.kind == EventKind::Click {
+            if command == "rules.explain" {
+                if let Some(model) = &self.model {
+                    core.push(ScreenId::RuleExplain(model.brick));
+                }
+                return;
+            }
+            if let Some(rest) = command.strip_prefix("rules.") {
+                let parts: Vec<_> = rest.split('.').collect();
+                if let Some(row) = parts.get(1).and_then(|s| s.parse::<usize>().ok()) {
+                    if let Some(model) = &mut self.model {
+                        if parts[0] == "delete" {
+                            if row < model.rows.len() {
+                                model.rows.remove(row);
+                            }
+                        } else if parts[0] == "copy" {
+                            if let Some(copy) = model.rows.get(row).cloned() {
+                                model.rows.insert(row + 1, copy);
+                            }
+                        } else if let Some(RowState::Editable(e)) = model.rows.get_mut(row) {
+                            if parts[0] == "if" && e.conditions.len() < rules::MAX_CONDITIONS {
+                                e.conditions.push(Condition {
+                                    subject: Subject::SelfBrick,
+                                    ..rules::default_condition()
+                                });
+                            }
+                            if parts[0] == "remove"
+                                && let Some(index) =
+                                    parts.get(2).and_then(|s| s.parse::<usize>().ok())
+                                && index < e.conditions.len()
+                            {
+                                e.conditions.remove(index);
+                            }
+                        }
+                    }
+                    self.save_draft(core);
+                    self.build(core);
+                    return;
+                }
+            }
             if command == "canvas.popdialog(wrencheventsdlg);" {
                 self.cancel(core);
                 return;
@@ -1129,6 +1850,80 @@ impl Screen for WrenchEvents {
         let selected = self.view.selected_text(ev.node);
         let mut rebuild = true;
         match binding {
+            Binding::VectorAxis(row, axis, spec) => {
+                self.error = self.accept_vector_axis(ev.node, row, axis, &spec).err();
+                rebuild = false;
+            }
+            Binding::ConditionSubject(row, index) => {
+                if let Some(value) = selected
+                    .as_deref()
+                    .and_then(|s| rules::SUBJECTS.iter().find(|(n, _)| *n == s))
+                    .map(|(_, v)| *v)
+                    && let Some(c) = self.condition_mut(row, index)
+                {
+                    c.subject = value;
+                }
+                let class = self.target_class(row);
+                if let Some(c) = self.condition_mut(row, index)
+                    && !condition_properties(c.subject, class.as_deref())
+                        .iter()
+                        .any(|(_, p)| *p == c.property)
+                {
+                    reset_condition_property(c, Property::Exists);
+                }
+            }
+            Binding::ConditionProperty(row, index) => {
+                if let Some(value) = selected
+                    .as_deref()
+                    .and_then(|s| {
+                        rules::PROPERTIES
+                            .iter()
+                            .find(|(_, p)| property_label(*p) == s)
+                    })
+                    .map(|(_, v)| *v)
+                    && let Some(c) = self.condition_mut(row, index)
+                {
+                    reset_condition_property(c, value);
+                }
+            }
+            Binding::ConditionCompare(row, index) => {
+                if let Some(value) = selected
+                    .as_deref()
+                    .and_then(|s| rules::COMPARISONS.iter().find(|(n, _)| *n == s))
+                    .map(|(_, v)| *v)
+                    && let Some(c) = self.condition_mut(row, index)
+                {
+                    c.compare = value;
+                }
+            }
+            Binding::ConditionKey(row, index) => {
+                let text = self.view.edit_text(ev.node);
+                if let Some(c) = self.condition_mut(row, index) {
+                    c.key = text;
+                }
+                rebuild = false;
+            }
+            Binding::ConditionValue(row, index) => {
+                match self.read_condition_value(ev.node, row, index) {
+                    Ok(value) => {
+                        if let Datum::Number(color) = &value
+                            && let Some(n) =
+                                self.view.id(&format!("WrenchEvent_{row}_if{index}_swatch"))
+                        {
+                            self.view.state(n).tint = u32::try_from(*color)
+                                .ok()
+                                .and_then(|v| core.hud.color(v))
+                                .map(rgba);
+                        }
+                        if let Some(c) = self.condition_mut(row, index) {
+                            c.value = value;
+                        }
+                        self.error = None;
+                    }
+                    Err(error) => self.error = Some(error),
+                };
+                rebuild = false;
+            }
             Binding::Enabled(row) => {
                 self.model
                     .as_mut()
@@ -1153,7 +1948,19 @@ impl Screen for WrenchEvents {
                 {
                     return;
                 }
-                self.model.as_mut().unwrap().set_input(row, input);
+                self.model.as_mut().unwrap().set_input(row, input.clone());
+                if let Some(input) = input {
+                    let m = self.model.as_mut().unwrap();
+                    let targets = m.target_choices(&self.catalog, &input);
+                    if let Some(target) = targets
+                        .iter()
+                        .find(|t| t.as_str() == "Self")
+                        .or(targets.first())
+                    {
+                        m.set_target(row, target.clone(), &self.catalog);
+                    }
+                }
+                self.normalize_target_conditions(row);
             }
             Binding::Target(row) => {
                 if let Some(target) = selected {
@@ -1161,6 +1968,7 @@ impl Screen for WrenchEvents {
                         .as_mut()
                         .unwrap()
                         .set_target(row, target, &self.catalog);
+                    self.normalize_target_conditions(row);
                 }
             }
             Binding::Named(row) => {
@@ -1200,6 +2008,8 @@ impl Screen for WrenchEvents {
         self.save_draft(core);
         if rebuild {
             self.build(core);
+        } else if let Some(n) = self.view.id("WrenchEvents_Status") {
+            self.view.set_text(n, self.error.as_deref().unwrap_or(""));
         }
     }
     fn on_key(&mut self, key: Key, _mods: Modifiers, core: &mut Core) -> bool {
@@ -1215,10 +2025,12 @@ impl Screen for WrenchEvents {
         if catalog != self.catalog
             || self.datablocks != core.datablocks
             || self.paint != core.hud.paint
+            || self.teams != active_teams(core)
         {
             self.catalog = catalog;
             self.datablocks = core.datablocks.clone();
             self.paint = core.hud.paint.clone();
+            self.teams = active_teams(core);
             self.preserve_unsupported();
             self.save_draft(core);
             self.build(core);
@@ -1399,6 +2211,7 @@ mod tests {
             ],
             outputs: vec![
                 EventOutputInfo {
+                    provider: "Blockland".into(),
                     class: "fxDTSBrick".into(),
                     name: "setLight".into(),
                     params: vec![ParamSpec::Datablock {
@@ -1407,12 +2220,14 @@ mod tests {
                     supported: true,
                 },
                 EventOutputInfo {
+                    provider: "Blockland".into(),
                     class: "Player".into(),
                     name: "kill".into(),
                     params: vec![],
                     supported: false,
                 },
                 EventOutputInfo {
+                    provider: "Blockland".into(),
                     class: "fxDTSBrick".into(),
                     name: "setVector".into(),
                     params: vec![ParamSpec::Vector { max: 10.0 }],
@@ -1776,7 +2591,7 @@ mod tests {
         let EventRow::Editable(line) = &rows[1] else {
             panic!()
         };
-        assert_eq!(line.delay_ms, 30000);
+        assert_eq!(line.delay_ms, 99999);
         assert_eq!(line.named_target.as_deref(), Some("door"));
         assert_eq!(
             line.params,
@@ -1796,6 +2611,50 @@ mod tests {
         );
         click(&mut s, "Events_Clear", &mut ui.core);
         assert_eq!(s.model.as_ref().unwrap().to_send(), vec![preserved]);
+    }
+
+    #[test]
+    fn optional_guards_copy_edit_and_send_without_changing_basic_row() {
+        let mut ui = fixture();
+        let mut s = WrenchEvents::new(&ui.core);
+        choose(&mut s, "WrenchEvent_0_input", "onActivate", &mut ui.core);
+        choose(&mut s, "WrenchEvent_0_target", "Self", &mut ui.core);
+        choose(&mut s, "WrenchEvent_0_output", "setVector", &mut ui.core);
+        assert!(s.view.id("WrenchEvent_0_if0_subject").is_none());
+        click(&mut s, "Rule_0_add_if", &mut ui.core);
+        choose(
+            &mut s,
+            "WrenchEvent_0_if0_subject",
+            "MiniGame",
+            &mut ui.core,
+        );
+        choose(
+            &mut s,
+            "WrenchEvent_0_if0_property",
+            "Variable",
+            &mut ui.core,
+        );
+        edit(&mut s, "WrenchEvent_0_if0_key", "switches", &mut ui.core);
+        edit(&mut s, "WrenchEvent_0_if0_value", "3", &mut ui.core);
+        click(&mut s, "Rule_0_copy", &mut ui.core);
+        assert_eq!(s.model.as_ref().unwrap().to_send().len(), 2);
+        click(&mut s, "Rule_1_if0_remove", &mut ui.core);
+        click(&mut s, "Events_Send", &mut ui.core);
+        let actions = ui.drain_actions();
+        let (_, UiAction::SendEvents { rows, .. }) = &actions[0] else {
+            panic!("{actions:?}")
+        };
+        let EventRow::Editable(first) = &rows[0] else {
+            panic!()
+        };
+        let EventRow::Editable(second) = &rows[1] else {
+            panic!()
+        };
+        assert_eq!(first.conditions.len(), 1);
+        assert_eq!(first.conditions[0].key, "switches");
+        assert_eq!(first.conditions[0].value, Datum::Number(3));
+        assert!(second.conditions.is_empty());
+        assert_eq!(first.output, second.output);
     }
 
     #[test]
@@ -1829,6 +2688,7 @@ mod tests {
     fn typed_parameters_validate_clamp_and_follow_catalog_capabilities() {
         let mut ui = fixture();
         ui.core.events.outputs.push(EventOutputInfo {
+            provider: "Blockland".into(),
             class: "fxDTSBrick".into(),
             name: "typed".into(),
             supported: true,
@@ -1894,6 +2754,7 @@ mod tests {
     fn wrong_target_class_and_unknown_parameter_rows_are_read_only() {
         let mut ui = fixture();
         ui.core.events.outputs.push(EventOutputInfo {
+            provider: "Blockland".into(),
             class: "fxDTSBrick".into(),
             name: "unknown".into(),
             supported: true,
@@ -1903,6 +2764,7 @@ mod tests {
         });
         let make = |target: &str, output: &str, param| {
             EventRow::Editable(crate::api::EventLine {
+                conditions: vec![],
                 enabled: true,
                 delay_ms: 0,
                 input: "onActivate".into(),
@@ -1931,6 +2793,122 @@ mod tests {
         );
     }
 
+    #[test]
+    fn guard_menus_follow_the_subject_and_boolean_choices_send_real_bools() {
+        let mut ui = fixture();
+        let mut s = WrenchEvents::new(&ui.core);
+        choose(&mut s, "WrenchEvent_0_input", "onActivate", &mut ui.core);
+        click(&mut s, "Rule_0_add_if", &mut ui.core);
+        let property = s.view.id("WrenchEvent_0_if0_property").unwrap();
+        assert!(
+            !s.view
+                .node(property)
+                .state
+                .items
+                .iter()
+                .any(|(n, _)| n == "Score")
+        );
+        choose(&mut s, "WrenchEvent_0_if0_subject", "Player", &mut ui.core);
+        choose(&mut s, "WrenchEvent_0_if0_property", "Score", &mut ui.core);
+        choose(
+            &mut s,
+            "WrenchEvent_0_if0_subject",
+            "MiniGame",
+            &mut ui.core,
+        );
+        let Some(c) = s.condition_mut(0, 0) else {
+            panic!()
+        };
+        assert_eq!(c.property, Property::Exists);
+        let op = s.view.id("WrenchEvent_0_if0_compare").unwrap();
+        assert_eq!(s.view.node(op).state.items.len(), 2);
+        choose(&mut s, "WrenchEvent_0_if0_value", "No", &mut ui.core);
+        s.accept_parameters().unwrap();
+        assert_eq!(s.condition_mut(0, 0).unwrap().value, Datum::Bool(false));
+        for _ in 1..rules::MAX_CONDITIONS {
+            let n = s.view.id("Rule_0_add_if").unwrap();
+            s.on_event(
+                &ViewEvent {
+                    node: n,
+                    kind: EventKind::Click,
+                },
+                &mut ui.core,
+            );
+        }
+        assert!(
+            !s.view
+                .node(s.view.id("Rule_0_add_if").unwrap())
+                .state
+                .active
+        );
+    }
+    #[test]
+    fn changing_input_normalizes_conditions_for_the_new_default_target() {
+        let mut ui = fixture();
+        let mut touch = ui.core.events.inputs[0].clone();
+        touch.name = "onPlayerTouch".into();
+        ui.core.events.inputs.push(touch);
+        let mut s = WrenchEvents::new(&ui.core);
+        choose(&mut s, "WrenchEvent_0_input", "onActivate", &mut ui.core);
+        choose(&mut s, "WrenchEvent_0_target", "Player", &mut ui.core);
+        click(&mut s, "Rule_0_add_if", &mut ui.core);
+        choose(&mut s, "WrenchEvent_0_if0_subject", "Target", &mut ui.core);
+        choose(&mut s, "WrenchEvent_0_if0_property", "Score", &mut ui.core);
+        assert_eq!(s.condition_mut(0, 0).unwrap().property, Property::Score);
+        choose(&mut s, "WrenchEvent_0_input", "onPlayerTouch", &mut ui.core);
+        assert_eq!(s.target_class(0).as_deref(), Some("fxDTSBrick"));
+        assert_eq!(s.condition_mut(0, 0).unwrap().property, Property::Exists);
+        let n = s.view.id("WrenchEvent_0_if0_property").unwrap();
+        assert!(
+            !s.view
+                .node(n)
+                .state
+                .items
+                .iter()
+                .any(|(label, _)| label == "Score")
+        );
+    }
+
+    #[test]
+    fn labeled_dimensions_send_the_same_vector_at_small_widths() {
+        let mut ui = fixture();
+        ui.core.events.outputs.push(EventOutputInfo {
+            provider: "core:rules".into(),
+            class: "fxDTSBrick".into(),
+            name: "setRegionSize".into(),
+            params: vec![ParamSpec::Vector { max: 100. }],
+            supported: true,
+        });
+        ui.core.logical = (400, 300);
+        let mut s = WrenchEvents::new(&ui.core);
+        choose(&mut s, "WrenchEvent_0_input", "onActivate", &mut ui.core);
+        choose(
+            &mut s,
+            "WrenchEvent_0_output",
+            "setRegionSize",
+            &mut ui.core,
+        );
+        for (i, v) in ["12", "8", "6"].iter().enumerate() {
+            edit(
+                &mut s,
+                &format!("WrenchEvent_0_param0_axis{i}"),
+                v,
+                &mut ui.core,
+            );
+        }
+        s.accept_parameters().unwrap();
+        let RowState::Editable(e) = &s.model.as_ref().unwrap().rows[0] else {
+            panic!()
+        };
+        assert_eq!(e.params, [ParamValue::Vector([12., 8., 6.])]);
+        let body = s.view.node(s.view.id("WrenchEvents_Box").unwrap()).rect;
+        for (n, b) in &s.bindings {
+            if matches!(b, Binding::VectorAxis(..)) {
+                let r = s.view.node(*n).rect;
+                assert!(r.x >= body.x && r.x + r.w <= body.x + body.w);
+            }
+        }
+    }
     /// The three wrench dialogs and the events editor with one row filled
     /// in, drawn on `pack` and rendered offscreen; PNGs go to `output` when
     /// given.
@@ -2029,6 +3007,225 @@ mod tests {
         );
         choose(&mut events, "WrenchEvent_1_param0", "Alpha", &mut ui.core);
         render("Events", &mut events, &mut ui.core);
+        ui.core.minigames.active_game = Some(crate::api::MiniGameId(1));
+        ui.core.minigames.games.push(crate::api::MiniGameSummary {
+            id: crate::api::MiniGameId(1),
+            title: "Workshop".into(),
+            owner: crate::api::MiniGamePlayerId(1),
+            owner_name: "Max".into(),
+            color: 0,
+            member_count: 1,
+            invite_only: false,
+            rules: crate::api::MiniGameRules::default(),
+            teams: vec![
+                crate::api::MiniGameTeam {
+                    id: 1,
+                    name: "Blue".into(),
+                    color: 0,
+                    settings: Default::default(),
+                },
+                crate::api::MiniGameTeam {
+                    id: 2,
+                    name: "Red".into(),
+                    color: 1,
+                    settings: Default::default(),
+                },
+            ],
+            addon_settings: Default::default(),
+            default: false,
+            paint_color: None,
+            members: vec![],
+        });
+        ui.core.events.outputs.push(EventOutputInfo {
+            provider: "Blockland".into(),
+            class: "fxDTSBrick".into(),
+            name: "setColliding".into(),
+            params: vec![ParamSpec::Bool],
+            supported: true,
+        });
+        events.on_update(&mut ui.core);
+        choose(
+            &mut events,
+            "WrenchEvent_1_output",
+            "setColliding",
+            &mut ui.core,
+        );
+        events
+            .model
+            .as_mut()
+            .unwrap()
+            .set_param(1, 0, ParamValue::Bool(true), &events.catalog);
+        events.build(&ui.core);
+        click(&mut events, "Rule_1_add_if", &mut ui.core);
+        choose(
+            &mut events,
+            "WrenchEvent_1_if0_subject",
+            "Player",
+            &mut ui.core,
+        );
+        choose(
+            &mut events,
+            "WrenchEvent_1_if0_property",
+            "Team",
+            &mut ui.core,
+        );
+        choose(&mut events, "WrenchEvent_1_if0_value", "Blue", &mut ui.core);
+        render("Events-Conditions", &mut events, &mut ui.core);
+        ui.core.events.outputs.extend([
+            EventOutputInfo {
+                provider: "core:rules".into(),
+                class: "fxDTSBrick".into(),
+                name: "setRegionSize".into(),
+                params: vec![ParamSpec::Vector { max: 100. }],
+                supported: true,
+            },
+            EventOutputInfo {
+                provider: "core:rules".into(),
+                class: "fxDTSBrick".into(),
+                name: "addVariable".into(),
+                params: vec![
+                    ParamSpec::List {
+                        items: vec![
+                            ("Brick".into(), 0),
+                            ("Player".into(), 1),
+                            ("MiniGame".into(), 2),
+                        ],
+                    },
+                    ParamSpec::String {
+                        max_length: 48,
+                        width: 150,
+                    },
+                    ParamSpec::Int {
+                        min: -100,
+                        max: 100,
+                        default: 1,
+                    },
+                ],
+                supported: true,
+            },
+        ]);
+        ui.core
+            .wrench
+            .open_events(10, vec![], vec![], true, &ui.core.events);
+        let mut dimensions = WrenchEvents::new(&ui.core);
+        choose(
+            &mut dimensions,
+            "WrenchEvent_0_input",
+            "onActivate",
+            &mut ui.core,
+        );
+        choose(
+            &mut dimensions,
+            "WrenchEvent_0_output",
+            "setRegionSize",
+            &mut ui.core,
+        );
+        for (i, v) in ["12", "8", "6"].iter().enumerate() {
+            edit(
+                &mut dimensions,
+                &format!("WrenchEvent_0_param0_axis{i}"),
+                v,
+                &mut ui.core,
+            );
+        }
+        render("Events-Region", &mut dimensions, &mut ui.core);
+        choose(
+            &mut dimensions,
+            "WrenchEvent_0_output",
+            "addVariable",
+            &mut ui.core,
+        );
+        edit(
+            &mut dimensions,
+            "WrenchEvent_0_param1",
+            "clicks",
+            &mut ui.core,
+        );
+        click(&mut dimensions, "Rule_0_add_if", &mut ui.core);
+        choose(
+            &mut dimensions,
+            "WrenchEvent_0_if0_property",
+            "Variable",
+            &mut ui.core,
+        );
+        edit(
+            &mut dimensions,
+            "WrenchEvent_0_if0_key",
+            "clicks",
+            &mut ui.core,
+        );
+        edit(
+            &mut dimensions,
+            "WrenchEvent_0_if0_value",
+            "3",
+            &mut ui.core,
+        );
+        let input = dimensions
+            .view
+            .node(dimensions.view.id("WrenchEvent_0_input").unwrap())
+            .rect;
+        let guard = dimensions
+            .view
+            .node(dimensions.view.id("WrenchEvent_0_if0_value").unwrap())
+            .rect;
+        let output_rect = dimensions
+            .view
+            .node(dimensions.view.id("WrenchEvent_0_output").unwrap())
+            .rect;
+        assert!(
+            input.y < guard.y && guard.y < output_rect.y,
+            "guarded rows must read WHEN, IF, DO"
+        );
+        render("Events-State", &mut dimensions, &mut ui.core);
+        choose(
+            &mut dimensions,
+            "WrenchEvent_0_if0_subject",
+            "MiniGame",
+            &mut ui.core,
+        );
+        choose(
+            &mut dimensions,
+            "WrenchEvent_0_if0_property",
+            "Round ended",
+            &mut ui.core,
+        );
+        choose(
+            &mut dimensions,
+            "WrenchEvent_0_if0_value",
+            "No",
+            &mut ui.core,
+        );
+        render("Events-Boolean", &mut dimensions, &mut ui.core);
+        for (size, name) in [
+            ((400, 300), "Events-400x300"),
+            ((853, 480), "Events-853x480"),
+        ] {
+            ui.core.logical = size;
+            dimensions.layout(size.0, size.1, &mut ui.core);
+            let mut list = DrawList::new(Rect::new(0, 0, size.0, size.1));
+            dimensions.draw(&pack, &mut list, &ui.core);
+            let rgba = gpu
+                .render_rgba(
+                    &mut renderer,
+                    &pack,
+                    &list,
+                    (size.0 as u32, size.1 as u32),
+                    1.,
+                    [0.15, 0.15, 0.18, 1.],
+                )
+                .unwrap();
+            assert!(renderer.missing_textures().next().is_none());
+            if let Some(output) = output {
+                image::save_buffer(
+                    output.join(format!("{name}.png")),
+                    &rgba,
+                    size.0 as u32,
+                    size.1 as u32,
+                    image::ColorType::Rgba8,
+                )
+                .unwrap();
+            }
+        }
         let Some(output) = output else { return };
         std::fs::write(output.join("verification.json"), serde_json::to_vec_pretty(&serde_json::json!({
             "schema_version":1, "pack":"content/ui-pack-004", "viewport":[640,480],

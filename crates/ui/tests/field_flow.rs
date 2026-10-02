@@ -897,6 +897,7 @@ fn open_events(u: &mut Ui) {
     u.apply(UiUpdate::OpenEvents {
         brick: 42,
         rows: vec![EventRow::Editable(EventLine {
+            conditions: vec![],
             enabled: true,
             delay_ms: 0,
             input: "onActivate".into(),

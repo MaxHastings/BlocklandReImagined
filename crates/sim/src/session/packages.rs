@@ -2279,6 +2279,38 @@ impl Session {
         direction: Vec3,
         from_image: bool,
     ) -> Result<Reply> {
+        if request.package.is_empty() && !from_image {
+            if request.command.eq_ignore_ascii_case("rulelab") {
+                let mode = match request.args.first() {
+                    Some(PackageArg::String(s)) => s.as_str(),
+                    _ => "help",
+                };
+                if mode == "help" {
+                    self.private_chat(owner,"Rule Workshop: /rulelab switch | teamdoor | puzzle | race | hill | slayer | soccer | sandbox | addon. Create on clear ground in Slate. Wrench the example bricks and edit Events. /ruleexplain <brick number>. /ruleexplain off stops tracing.".into());
+                } else {
+                    self.create_rule_lab(owner, mode)?;
+                }
+                return Ok(Reply::Accepted);
+            }
+            if request.command.eq_ignore_ascii_case("ruleexplain") {
+                if matches!(request.args.first(),Some(PackageArg::String(s)) if s=="off") {
+                    self.stop_rule_tracing(owner);
+                    self.private_chat(owner, "Rule tracing stopped.".into());
+                    return Ok(Reply::Accepted);
+                }
+                let arg = request
+                    .args
+                    .first()
+                    .context("Use /ruleexplain <brick number>")?;
+                let brick = match arg {
+                    PackageArg::Int(n) => u64::try_from(*n)?,
+                    PackageArg::String(s) => s.parse()?,
+                    _ => anyhow::bail!("Use a brick number"),
+                };
+                self.explain_rules(owner, brick)?;
+                return Ok(Reply::Accepted);
+            }
+        }
         // `serverCmdBrickCount`: anyone may ask how many bricks the server
         // has, unless an Add-On declares its own /brickCount.
         let typed_brick_count =

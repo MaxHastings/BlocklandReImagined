@@ -299,6 +299,9 @@ $docInputs = @(
     @{ source = (Join-Path $PSScriptRoot 'Launch-Playtest.ps1'); destination = 'Launch-Playtest.ps1' },
     @{ source = (Join-Path $PSScriptRoot 'Launch-Playtest.cmd'); destination = 'Launch.cmd' }
 )
+$docInputs += @{ source = (Join-Path $RepoRoot 'docs/rule-workshop/PLAYTEST.md'); destination = 'RULE-WORKSHOP-PLAYTEST.md' }
+$docInputs += @{ source = (Join-Path $RepoRoot 'docs/rule-workshop/DESIGN.md'); destination = 'RULE-WORKSHOP-DESIGN.md' }
+$docInputs += @{ source = (Join-Path $RepoRoot 'docs/rule-workshop/CREATOR-TEST-CARD.md'); destination = 'RULE-WORKSHOP-CREATOR-TEST-CARD.md' }
 if ($StressLab) { $docInputs += @{ source = (Join-Path $RepoRoot 'docs/stress-lab/PLAYTEST-STRESS-LAB.md'); destination = 'PLAYTEST-STRESS-LAB.md' } }
 # Who made the bundled originals, beside the docs.
 if ($null -ne $defaults.credits) { $docInputs += @{ source = [string]$defaults.credits; destination = 'CREDITS.md' } }
@@ -331,6 +334,8 @@ try {
     foreach ($companion in $companions) { Copy-Item -LiteralPath $companion.path -Destination (Join-Path $releasePath $companion.name) }
     if (-not [string]::IsNullOrWhiteSpace($SignCertificateThumbprint)) { Invoke-CodeSigning $releasePath }
     foreach ($packageInput in $docInputs) { Copy-Item -LiteralPath $packageInput.source -Destination (Join-Path $releasePath $packageInput.destination) }
+    & python (Join-Path $PSScriptRoot 'package_guides.py') $releasePath
+    if ($LASTEXITCODE -ne 0) { throw 'Could not package the Rule Workshop guides.' }
     $packagedContent = Join-Path $releasePath 'content'
     [IO.Directory]::CreateDirectory($packagedContent) | Out-Null
     foreach ($package in $selected) {

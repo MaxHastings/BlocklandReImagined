@@ -218,6 +218,7 @@ fn tool_session() -> Session {
 }
 fn color_row(target: EventTarget, color: u8) -> EventRow {
     EventRow {
+        conditions: vec![],
         preserved: None,
         enabled: true,
         input: "onActivate".into(),

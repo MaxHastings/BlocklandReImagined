@@ -1,0 +1,1 @@
+Native event rows now carry typed rule conditions. Bricks carry optional authored region dimensions; copy extras preserve these dimensions. Host catalogs add Instigator/Object contexts and core rule facts/actions. This branch requires matching clients and hosts.

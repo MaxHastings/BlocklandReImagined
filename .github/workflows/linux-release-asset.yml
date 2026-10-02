@@ -1,6 +1,6 @@
 # Adds the Linux zip to an existing release. It builds the client on the
 # oldest supported Ubuntu (glibc 2.35), takes the content from that release's
-# public Windows zip (checked against its MANIFEST.json), packages with
+# Windows zip (including a draft release) (checked against its MANIFEST.json), packages with
 # tools/package_playtest.sh and uploads the zip. It never replaces an asset.
 name: linux-release-asset
 
@@ -86,6 +86,11 @@ jobs:
           zip=dist/BlocklandReImagined-linux.zip
           rm -rf "$RUNNER_TEMP/check" && mkdir "$RUNNER_TEMP/check" && unzip -q "$zip" -d "$RUNNER_TEMP/check"
           tools/package_playtest.sh --verify "$RUNNER_TEMP"/check/*
+          roots=("$RUNNER_TEMP/check"/*)
+          test "${#roots[@]}" -eq 1
+          game="${roots[0]}"
+          "$game/bri-client" --check "$game/content" "$RUNNER_TEMP/bri-zip-state"
+          "$game/bri-client" --version
           ls -l "$zip"
           echo "LINUX_ZIP=$zip" >> "$GITHUB_ENV"
 

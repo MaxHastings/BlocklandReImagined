@@ -309,6 +309,7 @@ mod tests {
                 supported: true,
             }],
             outputs: vec![EventOutputInfo {
+                provider: "Blockland".into(),
                 class: "fxDTSBrick".into(),
                 name: "setRendering".into(),
                 params: vec![],
@@ -316,6 +317,7 @@ mod tests {
             }],
         };
         let line = EventRow::Editable(EventLine {
+            conditions: vec![],
             enabled: true,
             delay_ms: 10,
             input: "onActivate".into(),

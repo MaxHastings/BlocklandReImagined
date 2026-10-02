@@ -368,7 +368,7 @@ impl Session {
             .filter(|(owner, until)| tick <= *until && self.peers.contains_key(owner))
             .map(|(owner, _)| *owner)
     }
-    fn credit(&mut self, target: ObjectRef, by: OwnerId) {
+    pub(super) fn credit(&mut self, target: ObjectRef, by: OwnerId) {
         let until = self.simulation.state().tick + CREDIT_TICKS;
         self.movables.credits.insert(target, (by, until));
     }
@@ -412,7 +412,7 @@ impl Session {
             }
         }
     }
-    fn object_velocity(&self, target: ObjectRef) -> Option<Vec3> {
+    pub(super) fn object_velocity(&self, target: ObjectRef) -> Option<Vec3> {
         match target {
             ObjectRef::Player(p) => {
                 if let Some(v) = self.ridden(p) {
@@ -883,7 +883,7 @@ impl Session {
     }
 
     /// Change an object's velocity by `delta`.
-    fn push_object(&mut self, target: ObjectRef, delta: Vec3) -> Result<()> {
+    pub(super) fn push_object(&mut self, target: ObjectRef, delta: Vec3) -> Result<()> {
         ensure!(delta.is_finite(), "Invalid push");
         match target {
             ObjectRef::Player(p) => {
