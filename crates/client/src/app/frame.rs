@@ -124,6 +124,39 @@ impl App {
             .set_third_person_only(third_person_only.unwrap_or(false));
         self.controls.advance_view(elapsed.as_secs_f32());
         self.controls.advance_head(elapsed.as_secs_f32());
+        self.advance_local_game(alive, game_elapsed)?;
+        self.update_combat_presentation();
+        self.update_perf();
+        self.update_lag();
+        self.poll_background_jobs();
+        // Build macro playback: one recorded building action per frame so the
+        // server's action budget is never exceeded.
+        if let Some(action) = self.build.macro_playback.pop_front() {
+            self.ui.core.request(action);
+        }
+        let third_person = self.third_person_view();
+        self.ui.apply(UiUpdate::FirstPerson(!third_person));
+        let weapon_checkpoint = self.net.attempt.as_ref().filter(|a| a.entered).and_then(|a| {
+            a.view
+                .as_ref()
+                .map(|view| (a.id, view.checkpoint_cue_cursor))
+        });
+        if let Some((session, cursor)) = weapon_checkpoint {
+            self.reset_weapon_effect_session(session, cursor);
+        }
+        // Bricks are aimed on through portals, as the host's tools are.
+        if let Some(building) = &mut self.build.building {
+            building.set_passages(&self.motion.passages());
+        }
+        self.advance_world_presentation(game_elapsed, third_person, &mut listener)?;
+        self.audio.tick(elapsed.as_secs_f32(), listener);
+        self.view.drawn_controls = Some(self.controls.clone());
+        Ok(())
+    }
+
+    /// Steps 12-19 of the frame schedule: the local player's motion, then
+    /// mounts, vehicles, riders, loose models and music.
+    fn advance_local_game(&mut self, alive: bool, game_elapsed: Duration) -> Result<()> {
         if let Some(a) = self.net.attempt.as_ref().filter(|a| a.entered) {
             let mounted = a
                 .view
@@ -607,9 +640,11 @@ impl App {
                 }
             }
         }
-        self.update_combat_presentation();
-        self.update_perf();
-        self.update_lag();
+        Ok(())
+    }
+
+    /// Step 22: the Add-On import, LAN query and firewall fix jobs.
+    fn poll_background_jobs(&mut self) {
         if let Some(receiver) = &self.addons.add_on_sync {
             let mut notes = vec![];
             let mut done = false;
@@ -741,25 +776,11 @@ impl App {
                 text,
             });
         }
-        // Build macro playback: one recorded building action per frame so the
-        // server's action budget is never exceeded.
-        if let Some(action) = self.build.macro_playback.pop_front() {
-            self.ui.core.request(action);
-        }
-        let third_person = self.third_person_view();
-        self.ui.apply(UiUpdate::FirstPerson(!third_person));
-        let weapon_checkpoint = self.net.attempt.as_ref().filter(|a| a.entered).and_then(|a| {
-            a.view
-                .as_ref()
-                .map(|view| (a.id, view.checkpoint_cue_cursor))
-        });
-        if let Some((session, cursor)) = weapon_checkpoint {
-            self.reset_weapon_effect_session(session, cursor);
-        }
-        // Bricks are aimed on through portals, as the host's tools are.
-        if let Some(building) = &mut self.build.building {
-            building.set_passages(&self.motion.passages());
-        }
+    }
+
+    /// Step 26, in game only: moving entities, ghosts, liquids, avatar
+    /// animation, rider eyes and world effects; sets the audio `listener`.
+    fn advance_world_presentation(&mut self, game_elapsed: Duration, third_person: bool, listener: &mut bri_audio::Listener) -> Result<()> {
         if let Some(view) = self
             .net.attempt
             .as_ref()
@@ -1099,7 +1120,7 @@ impl App {
             )?;
             let (forward, view_right, view_up) = rolled_view_basis(yaw, pitch, roll);
             self.view.observer_eye = self.controls.observer().map(|_| eye);
-            listener = bri_audio::Listener {
+            *listener = bri_audio::Listener {
                 position: eye.to_array(),
                 forward: forward.to_array(),
                 up: view_up.to_array(),
@@ -1409,8 +1430,6 @@ impl App {
             );
             self.cosmetic_faults.absorb("weather", weather);
         }
-        self.audio.tick(elapsed.as_secs_f32(), listener);
-        self.view.drawn_controls = Some(self.controls.clone());
         Ok(())
     }
 }
