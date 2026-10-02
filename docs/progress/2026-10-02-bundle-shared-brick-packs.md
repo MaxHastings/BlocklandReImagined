@@ -44,3 +44,9 @@ and only warned. `addon_bundle.py` find/build/upload now remember the
 bootstrap remembers the v20 folder) and reuse them when none is given, and
 always search the content root's `Add-Ons` drop folder. One release build
 with the usual `--search` folders is enough; later bootstraps match it.
+
+Third save (2026-10-02): Max counts 2023 XMas as a popular save too; the
+rule is now packs used by at least two of the three. The rescan
+(`/mnt/project-files/bundle-list-3saves.md`) adds Brick_Fence, Brick_Wedge,
+Brick_InvertedCorners, Brick_Pole and Brick_Round_Corners (credited from
+their description.txt, pinned), 22 packs in v20 order.

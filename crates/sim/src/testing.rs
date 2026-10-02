@@ -22,8 +22,9 @@ pub const BRICK: &str = "test/brick/brick2x4";
 pub const TALL: &str = "test/brick/tall";
 /// Sixteen studs square, a plate high.
 pub const BASEPLATE: &str = "test/brick/baseplate";
-/// A swimmable four by four brick of water.
-pub const WATER: &str = "test/brick/water";
+/// A swimmable four by four brick of water: the stand-in carries the id of
+/// a stock water brick, whose script makes the zone.
+pub const WATER: &str = "v20/brick/brick8xwaterdata";
 /// A two by two brick explosions cannot break.
 pub const STONE: &str = "test/brick/stone";
 /// A plate that holds a vehicle (the wrench's Vehicle list): twelve studs
@@ -36,7 +37,7 @@ pub const CHECKPOINT: &str = "test/brick/checkpoint";
 /// player who walks into it to its paired door.
 pub const TELEDOOR: &str = "test/brick/teledoor";
 /// A water brick taller than a player (eight studs square, thirty plates).
-pub const DEEP_WATER: &str = "test/brick/deep-water";
+pub const DEEP_WATER: &str = "v20/brick/brick32xwaterdata";
 /// The treasure chest, closed and open, and the player spawn brick: the
 /// host names these by their v20 ids, so the stand-ins carry them.
 pub const TREASURE_CHEST: &str = "v20/brick/bricktreasurechestdata";

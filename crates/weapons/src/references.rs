@@ -71,6 +71,19 @@ impl Pack {
                 (Kind::DamageType, projectile.damage_type.as_str()),
                 (Kind::DamageType, projectile.radius_damage_type.as_str()),
             ] {
+                // A bounce that only makes a sound (Explosive 1's and the
+                // HE grenade's) has nothing to show; its sound is listed.
+                if kind == Kind::Effect
+                    && let Some(info) = self.sound_only_explosion(name)
+                {
+                    out.push(Reference {
+                        add_on,
+                        kind: Kind::Sound,
+                        name: &info.sound,
+                        used_by: format!("explosion {name}"),
+                    });
+                    continue;
+                }
                 if !name.trim().is_empty() {
                     out.push(Reference {
                         add_on,
@@ -96,6 +109,13 @@ impl Pack {
             }
         }
         out
+    }
+    /// The explosion `name` names when it plays only a sound: no shape
+    /// and no sizes to draw.
+    fn sound_only_explosion(&self, name: &str) -> Option<&crate::ExplosionInfo> {
+        self.explosions
+            .get(&crate::effect_symbol(name).to_ascii_lowercase())
+            .filter(|e| e.shape.is_empty() && e.sizes.is_empty() && !e.sound.is_empty())
     }
     /// Whether a `$DamageType::<name>` reference names a type the pack
     /// has, rather than falling back to `Default` ([`Pack::damage_type`]).
@@ -146,6 +166,33 @@ mod tests {
                 (Kind::Sound, "SniperShot"),
                 (Kind::Effect, "sniperSmokeEmitter")
             ]
+        );
+    }
+
+    /// Max's v0.1.12 log: Explosive 1's frag bounce "shows nothing". It
+    /// is an explosion that only plays a sound, so its sound is what to
+    /// check.
+    #[test]
+    fn a_sound_only_bounce_is_checked_for_its_sound_not_an_effect() {
+        let mut pack = crate::testing::pack();
+        let mut round = pack.projectiles.values().next().unwrap().clone();
+        round.id = "tier:projectile/frag".into();
+        round.bounce_effect = "tierFragPortBounce".into();
+        pack.projectiles.insert(round.id.clone(), round);
+        let mut bounce = pack.explosions.values().next().unwrap().clone();
+        bounce.name = "tierFragPortBounce".into();
+        bounce.sound = "tier:sound/bounce".into();
+        bounce.shape.clear();
+        bounce.sizes.clear();
+        pack.explosions.insert("tierfragportbounce".into(), bounce);
+        let all = pack.add_on_references();
+        assert!(
+            !all.iter().any(|r| r.name == "tierFragPortBounce"),
+            "{all:?}"
+        );
+        assert!(
+            all.iter()
+                .any(|r| r.kind == Kind::Sound && r.name == "tier:sound/bounce")
         );
     }
 
