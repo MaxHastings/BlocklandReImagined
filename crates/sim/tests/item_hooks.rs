@@ -355,3 +355,20 @@ fn tool_only_commands_run_from_the_gun_and_the_cancel_key_not_from_chat() {
     assert_eq!(g.value("mode"), json!(1));
     assert!(g.diagnostics().is_empty(), "{:?}", g.diagnostics());
 }
+
+/// Playtest (v0.1.12): a mini-game death dropped an item through an Add-On
+/// rule, and every client left with "Invalid item drop view": an item the
+/// world puts down has no thrower, which the clients' check refused.
+#[test]
+fn an_item_a_rule_drops_is_one_every_client_accepts() {
+    let mut g = Game::new();
+    let a = g.join(Vec3::new(0.0, 0.05, 0.0));
+    g.steps(2);
+    g.run(a, "toss", toss("kit:weapon/gun", 3.0, 3.0)).unwrap();
+    let view = g.s.weapon_view();
+    assert_eq!(view.drops.len(), 1);
+    assert_eq!(view.drops[0].source, bri_weapons::ActorId::NOBODY);
+    view.validate(&g.s.names()).unwrap();
+    g.steps(4);
+    g.s.weapon_view().validate(&g.s.names()).unwrap();
+}

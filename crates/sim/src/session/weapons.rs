@@ -78,9 +78,9 @@ impl WeaponView {
         }
         for d in &self.drops {
             ensure!(
+                // Any source: `ActorId::NOBODY` threw what the world put down.
                 d.id > 0
                     && ids.insert(d.id)
-                    && d.source.0 > 0
                     && text(&d.item)
                     && vector(d.position)
                     && vector(d.velocity)

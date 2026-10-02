@@ -507,7 +507,7 @@ impl Core {
     }
     /// Drop state owned by the previous host. User settings and favorites remain.
     fn reset_session(&mut self) {
-        self.release_all();
+        self.forget_held();
         self.conn = ConnectionState::Idle;
         self.hud = HudModel::new(self.hud_prefs());
         self.chat = ChatModel::new(
@@ -834,8 +834,17 @@ impl Core {
             self.center_print(&t, s);
         }
     }
+    /// Forget held controls without releasing them: the session they were
+    /// pressed in has ended, so there is no host to tell. Sent anyway, each
+    /// release comes back "Not connected" and its Request Rejected box
+    /// covers the Connection Failed one that says why the game ended.
+    fn forget_held(&mut self) {
+        self.held.clear();
+        self.held_controls.clear();
+        self.repeater.cancel_all();
+    }
     /// Release every held gameplay control (dialog focus change, focus
-    /// loss, leaving the game).
+    /// loss).
     pub fn release_all(&mut self) {
         let held: Vec<String> = std::mem::take(&mut self.held).into_values().collect();
         for c in held {

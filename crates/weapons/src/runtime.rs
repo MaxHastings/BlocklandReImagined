@@ -42,6 +42,11 @@ pub const HOST_TOOL_IMAGES: [&str; 5] = [
 ];
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct ActorId(pub u64);
+impl ActorId {
+    /// No actor: the thrower of an item the world itself put down (the
+    /// `spawnItem` event, an Add-On rule's `drop_item`). Owners start at 1.
+    pub const NOBODY: Self = Self(0);
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum TargetId {
     Actor(ActorId),
@@ -564,6 +569,7 @@ pub struct Drop {
     pub item: String,
     pub position: Vec3,
     pub velocity: Vec3,
+    /// Who threw it, or [`ActorId::NOBODY`] for an item the world put down.
     pub source: ActorId,
     pub pickup_after: u64,
     pub expires: u64,
@@ -2288,7 +2294,7 @@ impl WeaponsWorld {
                 item: item.into(),
                 position,
                 velocity,
-                source: ActorId(0),
+                source: ActorId::NOBODY,
                 pickup_after: self.tick,
                 expires: self.tick + look.lifetime,
                 rounds: None,
