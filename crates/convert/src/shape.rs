@@ -24,7 +24,12 @@ fn rotation(r: &mut Reader<'_>) -> Result<[f32; 4]> {
     ]
     .map(|x| x as f32 / 32767.0);
     let length = q.iter().map(|v| v * v).sum::<f32>().sqrt();
-    ensure!(length > 0.001, "Zero quaternion");
+    // Torque's QuatF::setMatrix turns a quaternion with no axis into the
+    // identity, so exporters leave all-zero rotations on unrotated nodes
+    // (every shape in Brick_PlateHighRamps has them).
+    if length <= 0.001 {
+        return Ok([0.0, 0.0, 0.0, 1.0]);
+    }
     // Torque serializes a conjugated rotation. Conjugate, then change basis.
     Ok([-q[0] / length, -q[2] / length, q[1] / length, q[3] / length])
 }
@@ -949,6 +954,11 @@ mod tests {
             .collect();
         let q = glam::Quat::from_array(rotation(&mut Reader::new(&bytes)).unwrap());
         assert!((q * Vec3::X).distance(Vec3::Z) < 1e-5);
+    }
+    #[test]
+    fn a_zero_quaternion_is_no_rotation() {
+        let q = rotation(&mut Reader::new(&[0; 8])).unwrap();
+        assert_eq!(q, [0.0, 0.0, 0.0, 1.0]);
     }
     #[test]
     fn all_three_guards_must_match() {
