@@ -1351,6 +1351,49 @@ fn a_bot_with_the_gun_grabs_holds_and_throws() {
     assert!(flown > 1.5, "thrown, not dropped: {flown} in 0.1 s");
 }
 
+/// Max, v0.1.12: the bot used the gun only once right up close, and often
+/// backed off instead. The gun reaches far (its `bot` data says how far, and
+/// that it grabs from close up): from across the room the bot catches
+/// whoever it fights without walking up to them.
+#[test]
+fn a_bot_with_the_gun_catches_from_across_the_room() {
+    let mut world = bot_world();
+    world.bricks.get_mut(&1).unwrap().position = [0.0, 0.3, -18.0];
+    let mut g = Game::with(world);
+    g.s.set_bot_kinds(
+        bri_sim::bot_kind::BotPack::from_json(include_bytes!(
+            "../../../packages/blockhead_bot/assets/bots.json"
+        ))
+        .unwrap()
+        .bots,
+    )
+    .unwrap();
+    let builder = g.join_verified("Builder", Vec3::new(0.0, 0.05, 0.0), 1);
+    g.steps(30);
+    let bot = *g.s.names().keys().find(|o| g.s.is_bot(**o)).expect("a bot");
+    g.minigame(builder, &[]);
+    // The game put the bot beside the builder: it comes back across the
+    // room.
+    g.s.set_spawn_points(vec![Vec3::new(0.0, 0.05, -18.0)]).unwrap();
+    g.cmd(bot, Command::Suicide).unwrap();
+    g.steps(2);
+    while !g.s.is_alive(bot) {
+        g.steps(1);
+    }
+    assert!(g.feet(bot).distance(g.feet(builder)) > 15.0, "across the room");
+    g.s.give_tool(bot, GUN, true).unwrap();
+    let mut caught_from = None;
+    for _ in 0..120 * 12 {
+        g.steps(1);
+        if g.s.held_by(bot) == Some(ObjectRef::Player(builder)) {
+            caught_from = Some(g.feet(bot).distance(g.feet(builder)));
+            break;
+        }
+    }
+    let from = caught_from.expect("the bot caught the builder");
+    assert!(from > 8.0, "caught from afar, not walked up to: {from}");
+}
+
 /// Under a roof, it carries its catch out from under it before the throw.
 #[test]
 fn a_bot_carries_its_catch_out_into_the_open_to_throw() {

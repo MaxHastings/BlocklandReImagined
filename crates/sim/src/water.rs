@@ -53,6 +53,20 @@ pub fn deepest(waters: &[Water], feet: [f32; 3], height: f32) -> Option<(usize, 
     Some((index, coverage))
 }
 
+/// Where a swimmer `height` tall in `water` heads to reach `point`: over
+/// the water as near it as the water goes, deep enough to stay under and
+/// above the bottom.
+pub fn swim_point(water: &Water, point: Vec3, height: f32) -> Vec3 {
+    let mut to = point;
+    if water.footprint(to.x, to.z).is_none() && water.repeat_period.is_none() {
+        to.x = to.x.clamp(water.min[0] + 0.5, water.max[0] - 0.5);
+        to.z = to.z.clamp(water.min[2] + 0.5, water.max[2] - 0.5);
+    }
+    let low = water.min[1] + 0.1;
+    to.y = to.y.clamp(low, (water.max[1] - height - 0.1).max(low));
+    to
+}
+
 /// A point inside a liquid volume: the camera test of `GameRenderFilters`.
 pub fn contains(water: &Water, point: Vec3) -> bool {
     point.is_finite()

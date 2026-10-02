@@ -1831,13 +1831,18 @@ impl Session {
                 }
                 mg::Effect::RestoreOwner { player, .. } => {
                     if let Some(owner) = self.owner_of(player) {
-                        // Outside a minigame the body is a Standard Player,
-                        // and respawns at once.
-                        self.peers.get_mut(&owner).unwrap().respawn_ms = None;
-                        self.set_player_archetype(owner, PlayerType::Standard.archetype())?;
-                        self.set_player_scale(owner, 1.0)?;
+                        // Outside a minigame the body is a Standard Player
+                        // (or the one an Add-On chose, as at respawn), and
+                        // respawns at once.
                         let peer = self.peers.get_mut(&owner).unwrap();
-                        peer.combat.health = PlayerType::Standard.max_health();
+                        peer.respawn_ms = None;
+                        let body = peer
+                            .package_archetype
+                            .unwrap_or_else(|| PlayerType::Standard.archetype());
+                        self.set_player_archetype(owner, body)?;
+                        self.set_player_scale(owner, 1.0)?;
+                        let max = self.max_health(owner);
+                        self.peers.get_mut(&owner).unwrap().combat.health = max;
                         self.give_loadout(owner, None)?;
                     }
                 }
@@ -1850,7 +1855,12 @@ impl Session {
                 } => {
                     if let Some(owner) = self.owner_of(player) {
                         // `MiniGameSO::updatePlayerDatablock` for live members.
-                        if change_player_type && self.is_alive(owner) {
+                        // A body an Add-On chose outranks the game's player
+                        // type, as it does at respawn.
+                        if change_player_type
+                            && self.is_alive(owner)
+                            && self.peers[&owner].package_archetype.is_none()
+                        {
                             let archetype = self
                                 .archetypes
                                 .find(&equipment.player_type)

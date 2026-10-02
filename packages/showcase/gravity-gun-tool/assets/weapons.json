@@ -48,7 +48,9 @@
       "casing": "",
       "min_shot_ticks": 0,
       "bot": {
-        "fire": "hold"
+        "fire": "hold",
+        "reach": 30,
+        "near": 2.5
       },
       "states": [
         {

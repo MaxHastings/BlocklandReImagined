@@ -537,3 +537,235 @@ fn an_armed_bot_shoots_through_a_portal_from_where_it_stands() {
         feet(&s, bot)
     );
 }
+
+/// The Blockhead Bot's kind, changed by `change`, as the only kind.
+fn only_kind(s: &mut Session, change: impl FnOnce(&mut bri_sim::bot_kind::BotKind)) {
+    let mut kinds = bri_sim::bot_kind::BotPack::from_json(include_bytes!(
+        "../../../packages/blockhead_bot/assets/bots.json"
+    ))
+    .unwrap()
+    .bots;
+    change(&mut kinds[0]);
+    s.set_bot_kinds(kinds).unwrap();
+}
+
+fn bite(damage: f32) -> bri_sim::bot_kind::BotMelee {
+    serde_json::from_value(serde_json::json!({ "damage": damage, "seconds": 1.0 })).unwrap()
+}
+
+fn archetype_of(s: &Session, owner: OwnerId) -> String {
+    let state = s
+        .snapshot()
+        .players
+        .into_iter()
+        .find(|p| p.owner == owner)
+        .unwrap_or_else(|| panic!("{owner} in the snapshot: {:?}", s.vitals().get(&owner)));
+    s.archetypes().resolve(state.archetype).id.clone()
+}
+
+#[test]
+fn an_empty_handed_bot_that_bites_closes_in_and_bites_once_a_second() {
+    let mut s = session();
+    only_kind(&mut s, |k| k.melee = Some(bite(15.0)));
+    let human = s
+        .join("Builder".into(), Vec3::new(0.0, 0.05, 30.0), true)
+        .unwrap();
+    let mut sequence = 0;
+    steps(&mut s, &[human], 10, &mut sequence);
+    load(&mut s, human, vec![bot_brick([10.0, 0.1, 30.0], human)]);
+    minigame(&mut s, human, TOOLS_ONLY);
+    steps(&mut s, &[human], 60, &mut sequence);
+    let bot = bots(&s)[0];
+    let mut hits = Vec::new();
+    let mut health = 100.0;
+    for tick in 0..120 * 12 {
+        steps(&mut s, &[human], 1, &mut sequence);
+        let now = s.vitals()[&human].health;
+        if now < health {
+            hits.push((tick, health - now));
+            health = now;
+        }
+        if hits.len() == 2 {
+            break;
+        }
+    }
+    assert_eq!(hits.len(), 2, "bitten twice: {hits:?}");
+    assert!(
+        hits.iter().all(|(_, d)| (*d - 15.0).abs() < 0.01),
+        "each bite takes its damage: {hits:?}"
+    );
+    assert!(
+        hits[1].0 - hits[0].0 >= 119,
+        "a second between bites: {hits:?}"
+    );
+    assert!(
+        (feet(&s, bot) - feet(&s, human)).length() < 3.5,
+        "it closed in to bite"
+    );
+}
+
+#[test]
+fn a_bot_keeps_its_kinds_body_in_and_out_of_a_mini_game() {
+    let mut s = session();
+    let quake = "v20.player.playerquakearmor";
+    only_kind(&mut s, |k| k.body = Some(quake.into()));
+    let human = s
+        .join("Builder".into(), Vec3::new(0.0, 0.05, 30.0), true)
+        .unwrap();
+    let mut sequence = 0;
+    steps(&mut s, &[human], 10, &mut sequence);
+    load(&mut s, human, vec![bot_brick([10.0, 0.1, 30.0], human)]);
+    steps(&mut s, &[human], 30, &mut sequence);
+    let bot = bots(&s)[0];
+    assert_eq!(archetype_of(&s, bot), quake);
+    // The mini-game's player type does not replace it, nor its respawns.
+    minigame(&mut s, human, TOOLS_ONLY);
+    steps(&mut s, &[human], 60, &mut sequence);
+    assert_eq!(archetype_of(&s, bot), quake, "in the game");
+    s.command(human, 102, Command::MiniGame(MiniGameRequest::Reset))
+        .unwrap();
+    steps(&mut s, &[human], 60, &mut sequence);
+    // A reset makes the brick's bot anew.
+    let bot = bots(&s)[0];
+    assert_eq!(archetype_of(&s, bot), quake, "after the game reset");
+    s.command(human, 103, Command::MiniGame(MiniGameRequest::End))
+        .unwrap();
+    steps(&mut s, &[human], 60, &mut sequence);
+    let bot = bots(&s)[0];
+    assert_eq!(archetype_of(&s, bot), quake, "after the game ended");
+    // A body no enabled Add-On has makes no bot, and its builder hears why.
+    let mut s = session();
+    only_kind(&mut s, |k| k.body = Some("nowhere:archetype/none".into()));
+    let human = s
+        .join("Builder".into(), Vec3::new(0.0, 0.05, 30.0), true)
+        .unwrap();
+    load(&mut s, human, vec![bot_brick([10.0, 0.1, 30.0], human)]);
+    steps(&mut s, &[human], 30, &mut sequence);
+    assert!(bots(&s).is_empty());
+}
+
+/// Deep water, 4 units across and 6 deep, centred on (x, z), over the
+/// plate a bot spawns from.
+fn pool(x: f32, z: f32, owner: OwnerId) -> Brick {
+    Brick::new(
+        ContentRef::Resolved(bri_sim::testing::DEEP_WATER.into()),
+        [x, 3.2, z],
+        owner,
+    )
+}
+
+fn in_pool(p: Vec3, x: f32, z: f32) -> bool {
+    (p.x - x).abs() <= 2.05 && (p.z - z).abs() <= 2.05 && p.y < 6.2
+}
+
+#[test]
+fn a_swimming_bot_roams_its_water_at_every_depth_and_never_leaves_it() {
+    let mut s = session();
+    only_kind(&mut s, |k| {
+        k.moves = bri_sim::bot_kind::Moves::Swim;
+        k.wander_radius = 8.0;
+    });
+    let human = s
+        .join("Builder".into(), Vec3::new(0.0, 0.05, 30.0), true)
+        .unwrap();
+    let mut sequence = 0;
+    steps(&mut s, &[human], 10, &mut sequence);
+    load(
+        &mut s,
+        human,
+        vec![pool(12.0, 30.0, human), bot_brick([12.0, 0.1, 30.0], human)],
+    );
+    steps(&mut s, &[human], 30, &mut sequence);
+    let bot = bots(&s)[0];
+    let (mut low, mut high) = (f32::MAX, f32::MIN);
+    for _ in 0..120 * 40 {
+        steps(&mut s, &[human], 1, &mut sequence);
+        let at = feet(&s, bot);
+        assert!(in_pool(at, 12.0, 30.0), "stayed in its water: {at}");
+        low = low.min(at.y);
+        high = high.max(at.y);
+    }
+    assert!(high - low > 1.5, "swam up and down: {low} to {high}");
+    // An enemy on dry land: it comes to the water's edge nearest them and
+    // no farther.
+    s.set_spawn_points(vec![Vec3::new(6.0, 0.05, 30.0)]).unwrap();
+    minigame(&mut s, human, TOOLS_ONLY);
+    let mut nearest = f32::MAX;
+    for _ in 0..120 * 10 {
+        steps(&mut s, &[human], 1, &mut sequence);
+        let at = feet(&s, bot);
+        assert!(in_pool(at, 12.0, 30.0), "stayed in its water: {at}");
+        nearest = nearest.min(at.x);
+    }
+    assert!(nearest < 10.6, "came to the near edge: {nearest}");
+}
+
+#[test]
+fn a_swimming_bot_goes_up_after_a_swimmer_and_bites_them() {
+    let mut s = session();
+    only_kind(&mut s, |k| {
+        k.moves = bri_sim::bot_kind::Moves::Swim;
+        k.melee = Some(bite(20.0));
+    });
+    // The builder floats up in the pool (the mini-game puts its members
+    // there); the bot starts on the floor.
+    s.set_spawn_points(vec![Vec3::new(13.0, 3.0, 31.0)]).unwrap();
+    let human = s
+        .join("Builder".into(), Vec3::new(13.0, 3.0, 31.0), true)
+        .unwrap();
+    let mut sequence = 0;
+    load(
+        &mut s,
+        human,
+        vec![pool(12.0, 30.0, human), bot_brick([11.0, 0.1, 29.0], human)],
+    );
+    minigame(&mut s, human, TOOLS_ONLY);
+    steps(&mut s, &[human], 60, &mut sequence);
+    let bot = bots(&s)[0];
+    let mut bitten = None;
+    for tick in 0..120 * 15 {
+        steps(&mut s, &[human], 1, &mut sequence);
+        assert!(in_pool(feet(&s, bot), 12.0, 30.0), "stayed in its water");
+        if s.vitals()[&human].health < 100.0 {
+            bitten = Some(tick);
+            break;
+        }
+    }
+    let bitten = bitten.expect("the bot bit the swimmer");
+    eprintln!("bitten after {bitten} ticks, bot at {}", feet(&s, bot));
+}
+
+/// A charged weapon (the Spear) is held back until it is ready, then let
+/// go to throw; tapping it as a gun only ever aborts the charge.
+#[test]
+fn a_bot_with_a_spear_holds_it_back_then_throws_it() {
+    let mut s = session();
+    let human = s
+        .join("Builder".into(), Vec3::new(-20.0, 0.05, 36.0), true)
+        .unwrap();
+    let mut sequence = 0;
+    steps(&mut s, &[human], 10, &mut sequence);
+    load(&mut s, human, vec![bot_brick([-20.0, 0.1, 20.0], human)]);
+    minigame(
+        &mut s,
+        human,
+        [
+            Some(bri_weapons::testing::SPEAR_ITEM.into()),
+            None,
+            None,
+            None,
+            None,
+        ],
+    );
+    steps(&mut s, &[human], 60, &mut sequence);
+    let mut hit = None;
+    for tick in 0..120 * 20 {
+        steps(&mut s, &[human], 1, &mut sequence);
+        if s.vitals()[&human].health < 100.0 {
+            hit = Some(tick);
+            break;
+        }
+    }
+    eprintln!("speared after {hit:?} ticks");
+    assert!(hit.is_some(), "the bot threw its spear and hit the builder");
+}
