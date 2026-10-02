@@ -698,6 +698,20 @@
       }
     },
     {
+      "id": "brick_default_fence_extras",
+      "original": {
+        "addon": "Brick_Default_Fence_Extras",
+        "title": "Default Fence Extras",
+        "authors": [
+          "Unknown"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "89f83f32962fde42494c06f0b20f49abad59a9a00f56a3097481915c14191a97"
+        ]
+      }
+    },
+    {
       "id": "brick_demiansbp_1x",
       "original": {
         "addon": "Brick_DemiansBP_1x",
@@ -712,6 +726,146 @@
       }
     },
     {
+      "id": "brick_demiansbp_1x_half",
+      "original": {
+        "addon": "Brick_DemiansBP_1x_Half",
+        "title": "DemiansBP 1x Half",
+        "authors": [
+          "Demian"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "589236bfb162ac4d14d8746baa5546dfcaa6ac604f884db670a9263cca076ae1"
+        ]
+      }
+    },
+    {
+      "id": "brick_demiansbp_2x_half",
+      "original": {
+        "addon": "Brick_DemiansBP_2x_Half",
+        "title": "DemiansBP 2x Half",
+        "authors": [
+          "Demian"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "3ab5362663773799c9d0797e1febd52d95f4adccedc73770d2eeafe399a5df57"
+        ]
+      }
+    },
+    {
+      "id": "brick_demiansbp_2x_tall",
+      "original": {
+        "addon": "Brick_DemiansBP_2x_Tall",
+        "title": "DemiansBP 2x Tall",
+        "authors": [
+          "Demian"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "7894f4aec36a94bd940f55e287a467d1d63bc285ac84f410db7918c5099034ec"
+        ]
+      }
+    },
+    {
+      "id": "brick_demiansbp_2x_wide",
+      "original": {
+        "addon": "Brick_DemiansBP_2x_Wide",
+        "title": "DemiansBP 2x Wide",
+        "authors": [
+          "Demian"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "80a24fe3fb08ad93488657b687203ba8a0d2cb481f5ff06feeb33ac79fcf51a0"
+        ]
+      }
+    },
+    {
+      "id": "brick_demiansbp_3x_wide",
+      "original": {
+        "addon": "Brick_DemiansBP_3x_Wide",
+        "title": "DemiansBP 3x Wide",
+        "authors": [
+          "Demian"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "ca24a8fa9b2b97a3b4e5a01a51f8dab6db93246113273147c4cb9713b3b7b439"
+        ]
+      }
+    },
+    {
+      "id": "brick_demiansbp_4x_tall",
+      "original": {
+        "addon": "Brick_DemiansBP_4x_Tall",
+        "title": "DemiansBP 4x Tall",
+        "authors": [
+          "Demian"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "a2a92831343e39007fec99350f6c80e69f1a9bd8ac46dc355b678d922564e705"
+        ]
+      }
+    },
+    {
+      "id": "brick_demiansbp_4x_wide",
+      "original": {
+        "addon": "Brick_DemiansBP_4x_Wide",
+        "title": "DemiansBP 4x Wide",
+        "authors": [
+          "Demian"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "2e90f905aa147503a59c5cbd9dd2f68ca64f1fa763ec79e3aa5666dda0e66332"
+        ]
+      }
+    },
+    {
+      "id": "brick_demiansbp_5x_tall",
+      "original": {
+        "addon": "Brick_DemiansBP_5x_Tall",
+        "title": "DemiansBP 5x Tall",
+        "authors": [
+          "Demian"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "9661293e5da0da55f79da90976ea24435a680b8c7a549e567293ee6f77f5dac2"
+        ]
+      }
+    },
+    {
+      "id": "brick_demianscbfix",
+      "original": {
+        "addon": "Brick_DemiansCBFix",
+        "title": "DemiansCBFix",
+        "authors": [
+          "Demian"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "83aea1b32e830a33af5f8da9aab47c9b0c5acf547c0d58f9c60ebbe4a376f532"
+        ]
+      }
+    },
+    {
+      "id": "brick_domes",
+      "original": {
+        "addon": "Brick_Domes",
+        "title": "Domes",
+        "authors": [
+          "Phydeoux"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "1ec69f0be55084eb016ea65e1b682accbbcdcc5e7a5f642603c41e10f74d065f"
+        ]
+      }
+    },
+    {
       "id": "brick_doors",
       "original": {
         "addon": "Brick_Doors",
@@ -722,6 +876,21 @@
         "version": "1.0.0",
         "sha256": [
           "0df1cdd215dbe4dca0f57924ed752204b58fab106d0fc36d72dbc1fee1c19de2"
+        ]
+      }
+    },
+    {
+      "id": "brick_extraarches",
+      "original": {
+        "addon": "Brick_ExtraArches",
+        "title": "ExtraArches",
+        "authors": [
+          "General",
+          "Tophius"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "a95f1e916ccec725469a60e6d67a2b197a68a5d30a39940d5fe310fefc6306bf"
         ]
       }
     },
@@ -769,6 +938,34 @@
       }
     },
     {
+      "id": "brick_glasspanes",
+      "original": {
+        "addon": "Brick_GlassPanes",
+        "title": "GlassPanes",
+        "authors": [
+          "Emil"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "ef39a00b30b82efd6954b535098d1f2de876ecab74490e8f8afa289ee0fbd5fb"
+        ]
+      }
+    },
+    {
+      "id": "brick_halfrounds",
+      "original": {
+        "addon": "Brick_HalfRounds",
+        "title": "HalfRounds",
+        "authors": [
+          "DessertSource"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "0da0ad49769828ebcb7e3413910e942e6893c1fb9df56fe3d80df1e3a52cce5f"
+        ]
+      }
+    },
+    {
       "id": "brick_halloween",
       "original": {
         "addon": "Brick_Halloween",
@@ -779,6 +976,21 @@
         "version": "1.0.0",
         "sha256": [
           "e1c311c54e885d20ccc49ed4a07aa8b86cb96def0cade04920750d04d47b30ce"
+        ]
+      }
+    },
+    {
+      "id": "brick_horizpoles",
+      "original": {
+        "addon": "Brick_HorizPoles",
+        "title": "HorizPoles",
+        "authors": [
+          "siba",
+          "Masterlegodude"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "eab01601531f778cc3359e73e4b3658b99a6a8187564c5470276a5194e1c4ec5"
         ]
       }
     },
@@ -828,6 +1040,20 @@
       }
     },
     {
+      "id": "brick_platehighramps",
+      "original": {
+        "addon": "Brick_PlateHighRamps",
+        "title": "PlateHighRamps",
+        "authors": [
+          "TheTurtorn"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "da6c209ae684fbf74087ff0f5f41414b7b7ea83c3205373b3d9997cb0bcb3989"
+        ]
+      }
+    },
+    {
       "id": "brick_pole",
       "original": {
         "addon": "Brick_Pole",
@@ -838,6 +1064,37 @@
         "version": "1.0.0",
         "sha256": [
           "30fa2dec2b26f00f406a1c2933a458d3124645da230a668c37c837c27a3cf418"
+        ]
+      }
+    },
+    {
+      "id": "brick_poleadapters",
+      "original": {
+        "addon": "Brick_PoleAdapters",
+        "title": "PoleAdapters",
+        "authors": [
+          "siba",
+          "Masterlegodude"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "36201ab564c9ee3d76b9abbf92650c38d164a2610445bf42d43f9da4fbb02956"
+        ]
+      }
+    },
+    {
+      "id": "brick_printplatesceiling",
+      "original": {
+        "addon": "Brick_PrintPlatesCeiling",
+        "title": "PrintPlatesCeiling",
+        "authors": [
+          "Demian",
+          "Space Guy",
+          "Killer_Whale"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "1a205c6ba6bd1619b921ba8022c037d686778f3536c9976b3e4c5726920f310c"
         ]
       }
     },
@@ -857,6 +1114,21 @@
       }
     },
     {
+      "id": "brick_slanted",
+      "original": {
+        "addon": "Brick_Slanted",
+        "title": "Slanted",
+        "authors": [
+          "siba",
+          "Masterlegodude"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "26b78395e02b4d6430498cc4232547bd73385ee6b64e22a9038409f599f415e9"
+        ]
+      }
+    },
+    {
       "id": "brick_smallocto",
       "original": {
         "addon": "Brick_SmallOcto",
@@ -867,6 +1139,20 @@
         "version": "1.0.0",
         "sha256": [
           "f43a7ec5d234344c26c23b693cc957b0ecd99062fba93546bcb34aa30bfb7082"
+        ]
+      }
+    },
+    {
+      "id": "brick_smallrampspack",
+      "original": {
+        "addon": "Brick_SmallRampsPack",
+        "title": "SmallRampsPack",
+        "authors": [
+          "Emil"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "0777aa25c87dbc1008dc0d0cd50e1f04c3e2516c5ff7b6a8201ce7df44eb88de"
         ]
       }
     },
@@ -910,6 +1196,20 @@
         "version": "1.0.0",
         "sha256": [
           "367e18f06d6f2d001127db7b8a8e2855ef1f0e4eaf88aa4b6e197430f3890d91"
+        ]
+      }
+    },
+    {
+      "id": "brick_verticalplatepack",
+      "original": {
+        "addon": "Brick_VerticalPlatePack",
+        "title": "VerticalPlatePack",
+        "authors": [
+          "Emil"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "0e495109c7ff9870a495515becbd99c84229a77006294e28b90b4a6cf80cf0aa"
         ]
       }
     },
