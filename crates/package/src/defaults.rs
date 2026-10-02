@@ -34,6 +34,14 @@
 //! player turns it on. Installing never writes that file, so a checkout keeps
 //! following the base list as it changes. A root with its own list keeps the
 //! player's choices: a default they turned off stays off.
+//!
+//! The list's order is the load order, and it settles which Add-On a brick
+//! name means: a save names each brick by its name (`uiName`), and where two
+//! Add-Ons (or an Add-On and the base game) define the same name, the one
+//! loaded later is the one the save gets, as in v20. So the brick packs are
+//! listed in v20's load order, Add-On name order, and the last of them
+//! defining a name wins (`python tools/addon_bundle.py find` lists the names
+//! they share).
 use crate::library::{DISABLED_FILE, IMPORT_DIR, MANIFEST_FILE, read_info, write_atomic};
 use crate::packages::{PACKAGES_FILE, PACKAGES_SCHEMA, PackageEntry, PackageSet};
 use anyhow::{Context, Result, bail, ensure};
@@ -618,10 +626,11 @@ mod tests {
             ["tool_duplicator", "vehicle_stunt_plane", "brick_mirror"]
         );
         assert!(ours().contains(&"brick_mirror"));
-        // On by default: the Duplicator, the Stunt Plane and the Mirror.
+        // On by default: the Duplicator, the Stunt Plane and the Mirror,
+        // and the brick packs (the_bundled_brick_packs_are_the_chosen_ones_in_v20_order).
         let on: Vec<&str> = listed()
             .iter()
-            .filter(|a| a.enabled)
+            .filter(|a| a.enabled && (!a.id.starts_with("brick_") || a.id == "brick_mirror"))
             .map(|a| a.id.as_str())
             .collect();
         assert_eq!(
@@ -785,6 +794,53 @@ mod tests {
                     "showcase Add-On {id} is neither in packages/default-addons.json nor held back"
                 ),
             }
+        }
+    }
+
+    /// The brick packs bundled on at start are exactly the ones Maxwell
+    /// chose (2026-10-02: those defining bricks both his Halloween Block
+    /// Party 2026 and Jazz CityRPG saves use), and they load in v20's order,
+    /// Add-On name order. Where two define a brick of the same name, the
+    /// one loaded later is the one a save gets, as in v20, so the order
+    /// decides between GIANT, BlackDragonIV and its Filler.
+    #[test]
+    fn the_bundled_brick_packs_are_the_chosen_ones_in_v20_order() {
+        const CHOSEN: [&str; 16] = [
+            "Brick_GIANTBrickpackv2",
+            "Brick_BlackDragonIV",
+            "Brick_TilePlates",
+            "Brick_BlackDragonIV_Filler",
+            "Brick_1RandomPack",
+            "Brick_DemiansBP_1x",
+            "Brick_Tiles",
+            "Brick_ToplessRamps",
+            "Brick_WedgePlus",
+            "Brick_SmallOcto",
+            "Brick_MoreRounds",
+            "Brick_Plant",
+            "Brick_Doors",
+            "Brick_ExtraPrints",
+            "Brick_Window",
+            "Brick_Christmas_Tree",
+        ];
+        let packs: Vec<&DefaultAddOn> = listed()
+            .iter()
+            .filter(|a| {
+                a.original
+                    .as_ref()
+                    .is_some_and(|o| o.addon.to_ascii_lowercase().starts_with("brick_"))
+            })
+            .collect();
+        let names: Vec<&str> = packs
+            .iter()
+            .map(|a| a.original.as_ref().unwrap().addon.as_str())
+            .collect();
+        let mut chosen = CHOSEN.to_vec();
+        chosen.sort_by_key(|n| n.to_ascii_lowercase());
+        assert_eq!(names, chosen, "bundled brick packs, in v20 load order");
+        for pack in &packs {
+            assert!(pack.enabled, "{} must be on at start", pack.id);
+            assert!(pack.ships(), "{} must have a pinned copy", pack.id);
         }
     }
 
