@@ -85,6 +85,10 @@ impl App {
             .extend(weapon_shells.set_casings(&content.weapons.pack, |m| world_items.has_model(m)));
         let mut avatar_assets = crate::avatar::AvatarAssets::load(&content.paths.avatar)?;
         avatar_assets.load_horse(&content.paths.vehicles)?;
+        let ((), more) = crate::add_on_health::collecting(|| {
+            avatar_assets.load_bodies(&content.paths.root, &content.paths.packages)
+        });
+        content_problems.extend(more);
         let avatar_assets = Arc::new(avatar_assets);
         let settings::Recovered {
             settings: mut saved,

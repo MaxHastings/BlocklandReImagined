@@ -1,0 +1,26 @@
+{
+  "addon": "Bot_Shark",
+  "title": "Shark",
+  "port": "bot_shark",
+  "status": "partial",
+  "sha256": [
+    "02f9ec67645e6b3736be651fe4298a8796fe8d1f2edd7515028212d96b70ac04"
+  ],
+  "covers": {
+    "SharkHoleBot::onEnterLiquid": {
+      "resets": "%obj\\.hFishOutOfWater\\s*=\\s*0"
+    },
+    "bot_base.cs": {
+      "colour": "%color\\[%a\\+\\+\\]\\s*=\\s*\"([^\"]+)\"",
+      "fins": "setNodeColor\\s*\\(\\s*\"lArm\"\\s*,\\s*\"([^\"]+)\"",
+      "hides_helmet": "hideNode\\s*\\(\\s*\"?helmet\"?\\s*\\)",
+      "loops": "%obj\\.hFishOutOfWater\\s*>=\\s*(3)\\s*\\)",
+      "minigame_only": "getMiniGameFromObject",
+      "kills": "%obj\\.kill\\s*\\(",
+      "bite": "%obj\\.hAttackDamage\\s*=\\s*([1-9]\\d*)\\s*;"
+    }
+  },
+  "tests": [
+    "crates/addon-import/tests/bot_holes.rs the_shark_port_makes_a_swimmer_that_bites_and_dies_on_land"
+  ]
+}

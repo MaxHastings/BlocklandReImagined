@@ -76,3 +76,40 @@ fn the_zombie_port_gives_its_bot_a_look_its_arms_out_and_its_bite_turns_bots() {
     assert!(manifest.contains("\"bot_zombie:bots/main\""), "{manifest}");
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn the_shark_port_makes_a_swimmer_that_bites_and_dies_on_land() {
+    let dir = fresh("shark");
+    let out = dir.join("bot_shark");
+    let report = import(&Options {
+        input: Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ports/Bot_Shark"),
+        out: out.clone(),
+        ..Default::default()
+    })
+    .unwrap();
+    let port = &report.ports[0];
+    assert!(port.applied, "{:?}", port.reason);
+    let pack = bri_sim::bot_kind::BotPack::from_json(
+        &std::fs::read(out.join("assets/bots.json")).unwrap(),
+    )
+    .unwrap();
+    let [kind] = &pack.bots[..] else {
+        panic!("one kind: {:?}", pack.bots)
+    };
+    assert_eq!(kind.name, "Biter");
+    assert_eq!(kind.moves, bri_sim::bot_kind::Moves::Swim);
+    // Bot_Hole's loop is 3 s; the stand-in gives up after 3 of them.
+    assert_eq!(kind.out_of_water_seconds, Some(9.0));
+    // The bite it makes on contact, not the 0 its datablock says.
+    assert_eq!(kind.melee.as_ref().unwrap().damage, 35.0);
+    let look = kind.look.as_ref().unwrap();
+    assert_eq!(look.colors["torso"], [0.8, 0.8, 0.85, 1.0]);
+    assert_eq!(look.colors["larm"], [0.95, 0.95, 0.95, 1.0]);
+    // It swims: the speeds its script zeroes are given.
+    let body: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(out.join("assets/archetypes/sharkholebot.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(body["movement"]["underwater_forward"], 10.0);
+    std::fs::remove_dir_all(dir).unwrap();
+}

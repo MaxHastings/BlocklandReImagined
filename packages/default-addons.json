@@ -71,6 +71,21 @@
       }
     },
     {
+      "id": "bot_shark",
+      "enabled": false,
+      "original": {
+        "addon": "Bot_Shark",
+        "title": "Shark",
+        "authors": [
+          "Rotondo"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "02f9ec67645e6b3736be651fe4298a8796fe8d1f2edd7515028212d96b70ac04"
+        ]
+      }
+    },
+    {
       "id": "tool_newduplicator",
       "enabled": false,
       "original": {

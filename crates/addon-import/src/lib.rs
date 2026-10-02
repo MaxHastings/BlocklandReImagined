@@ -2961,9 +2961,32 @@ fn player_archetype(cx: &Ctx, name: &str) -> Result<(serde_json::Value, Vec<Stri
 
 /// Converts the `PlayerData` `name` to an archetype file and reports it;
 /// its id when written.
-fn player_type(cx: &mut Ctx, name: &str, at: &Location) -> Option<String> {
+fn player_type(cx: &mut Ctx, name: &str, at: &Location, hole: bool) -> Option<String> {
     match player_archetype(cx, name) {
-        Ok((def, gaps)) => {
+        Ok((mut def, mut gaps)) => {
+            // A body of its own (`shapeFile`): the model this Add-On's
+            // shape converted to, drawn in place of the Blockhead.
+            let shape = cx
+                .owned
+                .get(&name.to_ascii_lowercase())
+                .and_then(|o| o.fields.get("shapefile"))
+                .map(|v| literal(v).trim().to_owned());
+            if let Some(model) = shape.and_then(|shape| {
+                cx.report.assets.iter().find_map(|a| {
+                    (a.kind == "shape"
+                        && a.status == "converted"
+                        && a.source.eq_ignore_ascii_case(&shape))
+                    .then(|| a.id.clone())
+                    .flatten()
+                })
+            }) {
+                def["model"] = json!(model);
+                gaps.retain(|g| g != "shapefile");
+            }
+            // Bot_Hole's settings make its bot kind.
+            if hole {
+                gaps.retain(|g| !(g.starts_with('h') && g.len() > 2) && g != "isholebot");
+            }
             let file = format!("assets/archetypes/{}.json", name.to_ascii_lowercase());
             match serde_json::to_vec_pretty(&def) {
                 Ok(bytes) if cx.write(&file, &bytes).is_ok() => {
@@ -3251,7 +3274,7 @@ fn sounds_and_rest(cx: &mut Ctx) {
                 // A Bot_Hole bot is a body like any player type, and a bot
                 // kind read from its `h` settings.
                 let hole = fields.get("isholebot").is_some_and(|v| literal(v).trim() != "0");
-                let Some(body) = player_type(cx, &name, &at) else {
+                let Some(body) = player_type(cx, &name, &at, hole) else {
                     continue;
                 };
                 if hole {
