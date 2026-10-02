@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "notes": "Rotondo's Shark on the engine's bot brain: its hole brick keeps one shark, drawn with its own model. The port makes it a swimmer that keeps to its water, bites for this copy's damage, is painted the first of its colours with white fins, and in a mini-game dies after 9 seconds out of water (3 of Bot_Hole's 3-second loops). Its script sets every speed to 0 and nothing in it says how v20 moved it, so its speeds are chosen here: 10 forward, 5 back, 8 sideways in water, and a slow flop on land. Not ported yet: grabbing a player in its mouth and killing them 5 seconds later, its random colours and the rare Cool Shark, the swim animation, its hole brick hiding itself, and its huge bounding box (it collides as a Blockhead).",
+  "patch": {
+    "assets/bots.json": {
+      "bots": {
+        "{namespace}:bot/sharkholebot": {
+          "moves": "swim",
+          "out_of_water_seconds": 9,
+          "melee": {
+            "damage": "{bite}",
+            "name": "Bite"
+          },
+          "look": {
+            "colors": {
+              "head": "{colour:rgba}",
+              "torso": "{colour:rgba}",
+              "larm": "{fins:rgba}",
+              "rarm": "{fins:rgba}"
+            }
+          }
+        },
+        "{namespace}:bot/sharkholebotbottom": null,
+        "{namespace}:bot/sharkholebottop": null
+      }
+    },
+    "assets/archetypes/sharkholebot.json": {
+      "movement": {
+        "forward": 2.0,
+        "backward": 1.0,
+        "sideways": 1.0,
+        "underwater_forward": 10.0,
+        "underwater_backward": 5.0,
+        "underwater_sideways": 8.0
+      }
+    }
+  },
+  "handles": {
+    "SharkHoleBot::onEnterLiquid": "nothing to do: water never hurts a swimmer here"
+  }
+}

@@ -65,7 +65,13 @@ bot does through the same code.
   `hSearchRadius` (sight, Bot_Hole's `brickToRadius`), `hSpawnDist`
   (wander, `brickToMetric`) and `hMelee`/`hAttackDamage` (a swipe once a
   second playing `activate2`). A port adds what its scripts did (the
-  Zombie's paint, arms out and turning bots).
+  Zombie's paint, arms out and turning bots; the Shark's swimming, bite
+  and death on land). A bot's body may be drawn with its Add-On's own
+  model: Import Add-On sets an archetype's `model` to the package's
+  converted `shapeFile` (`bot_shark:asset/shark.dts`), and the client draws
+  it in place of the Blockhead, painting each object named as a colour
+  slot (`chest` the torso's) and hiding the rest
+  (`AvatarAssets::load_bodies`, `body_mesh`).
 - A weapon image's `bot` (`BotUse`): `fire` `tap` (pressed again and
   again, for semi-automatics) or `hold` (held on target: a tool that
   reaches and holds), `reach` when its projectile does not say, and

@@ -956,15 +956,22 @@ impl App {
                     .unwrap_or(&self.avatar.avatar_assets.package.defaults);
                 // `HorseArmor` players, and archetypes that look like it,
                 // draw horse.dts.
-                let horse = view.archetypes.resolve(player.archetype).look.is_horse();
+                let look = &view.archetypes.resolve(player.archetype).look;
+                let model = self
+                    .avatar
+                    .avatar_assets
+                    .has_body(&look.model)
+                    .then(|| look.model.clone());
                 if self
                     .avatar
                     .avatars
                     .get(owner)
-                    .is_none_or(|mesh| &mesh.appearance != appearance || mesh.horse != horse)
+                    .is_none_or(|mesh| &mesh.appearance != appearance || mesh.model != model)
                 {
-                    let mut mesh = if horse {
-                        self.avatar.avatar_assets.horse_mesh(appearance.clone())?
+                    let mut mesh = if let Some(model) = &model {
+                        self.avatar
+                            .avatar_assets
+                            .body_mesh(model, appearance.clone())?
                     } else {
                         self.avatar.avatar_assets.mesh(appearance.clone())?
                     };
@@ -978,7 +985,7 @@ impl App {
                         .avatar
                         .avatars
                         .get(owner)
-                        .filter(|old| old.horse == horse)
+                        .filter(|old| old.model == model)
                     {
                         mesh.continue_animation(old);
                     }
