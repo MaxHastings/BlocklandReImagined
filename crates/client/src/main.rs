@@ -193,7 +193,7 @@ fn run(content: &std::path::Path, state: &std::path::Path) -> Result<()> {
         fullscreen: display.fullscreen,
         vsync: display.vsync,
         max_fps: display.max_fps,
-        app: Box::new(app),
+        app,
         early_gpu,
     })
 }

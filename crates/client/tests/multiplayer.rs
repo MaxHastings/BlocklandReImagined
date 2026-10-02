@@ -191,7 +191,7 @@ fn two_clients_see_names_minigames_trust_and_follow_a_map_change(f: &ContentRoot
     let gpu = support::gpu::turn().context("offscreen adapter")?;
     let port = use_test_ports();
     let artifact = f.out("native-multiplayer")?;
-    let load = |name: &str, state: &Path| -> Result<App> {
+    let load = |name: &str, state: &Path| -> Result<Box<App>> {
         let mut settings = App::load(&f.root, state, SIZE)?;
         settings.ui.core.pop(ScreenId::DefaultControls);
         settings.ui.core.settings.avatar.lan_name = name.into();

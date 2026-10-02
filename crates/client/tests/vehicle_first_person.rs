@@ -113,7 +113,7 @@ fn in_game(app: &App) -> bool {
             .network_view()
             .is_some_and(|v| v.poses.contains_key(&v.owner))
 }
-fn app(content: &Path, state: &Path, name: &str) -> Result<App> {
+fn app(content: &Path, state: &Path, name: &str) -> Result<Box<App>> {
     let state = state.join(name);
     let _ = std::fs::remove_dir_all(&state);
     let mut app = App::load(content, &state, SIZE)?;

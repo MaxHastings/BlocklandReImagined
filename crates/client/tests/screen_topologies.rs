@@ -430,7 +430,7 @@ fn chat_has(app: &App, text: &str) -> bool {
         .is_some_and(|v| v.chat.iter().any(|l| l.text.contains(text)))
 }
 
-fn load(content: &Path, state: &Path, name: &str) -> Result<App> {
+fn load(content: &Path, state: &Path, name: &str) -> Result<Box<App>> {
     let mut app = App::load(content, state, SIZE)?;
     app.ui.core.pop(ScreenId::DefaultControls);
     app.ui
@@ -1195,7 +1195,7 @@ fn screens_reach_the_server_in_every_topology(f: &ContentRoot) -> Result<()> {
     let mut guest = load(&f.root, guest_state.path(), "Blockhead")?;
     let mut found = Findings::default();
     for t in [Topology::SinglePlayer, Topology::Lan, Topology::Internet] {
-        let joiner = (t != Topology::SinglePlayer).then_some(&mut guest);
+        let joiner = (t != Topology::SinglePlayer).then_some(&mut *guest);
         if let Err(e) = topology(t, &f.map.1, port, &mut host, joiner, &mut found) {
             found.0.push(format!("{}: stopped: {e:#}", t.label()));
         }

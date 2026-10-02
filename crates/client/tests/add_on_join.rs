@@ -94,11 +94,11 @@ fn until(
     )
 }
 
-fn app(root: &Path, name: &str) -> Result<App> {
+fn app(root: &Path, name: &str) -> Result<Box<App>> {
     app_in(root, name, &files::state_dir(name)?)
 }
 
-fn app_in(root: &Path, name: &str, state: &Path) -> Result<App> {
+fn app_in(root: &Path, name: &str, state: &Path) -> Result<Box<App>> {
     let mut app = App::load(root, state, SIZE)?;
     app.ui.core.pop(ScreenId::DefaultControls);
     app.ui.core.settings.avatar.lan_name = name.into();

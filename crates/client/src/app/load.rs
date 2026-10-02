@@ -2,7 +2,10 @@
 use super::*;
 
 impl App {
-    pub fn load(content_root: &Path, state_dir: &Path, size: (u32, u32)) -> Result<Self> {
+    /// The App is boxed from the start: at tens of kilobytes, every move of
+    /// it by value costs that much stack in each frame it passes through,
+    /// and the game's whole start-up runs on Windows' 1 MB main thread.
+    pub fn load(content_root: &Path, state_dir: &Path, size: (u32, u32)) -> Result<Box<Self>> {
         Self::load_with_audio(content_root, state_dir, size, bri_audio::OutputKind::Null)
     }
     pub fn load_with_audio(
@@ -10,7 +13,7 @@ impl App {
         state_dir: &Path,
         size: (u32, u32),
         output: bri_audio::OutputKind,
-    ) -> Result<Self> {
+    ) -> Result<Box<Self>> {
         // Resolve once so state (including identity and host administration)
         // cannot silently switch when the process working directory changes.
         let absolute_state_dir = std::path::absolute(state_dir)?;
@@ -128,7 +131,7 @@ impl App {
         ui.apply(UiUpdate::MainMenuBackgrounds(backgrounds));
         let frame_limit = settings::startup_display(&ui.settings()).max_fps;
         ui.apply(UiUpdate::Version(crate::updates::version()));
-        let mut app = Self {
+        let mut app = Box::new(Self {
             item_assets,
             item_ui,
             world_items,
@@ -339,7 +342,7 @@ impl App {
             },
             content_problems,
             combat: Default::default(),
-        };
+        });
         if !left_out.is_empty() {
             // Catalogs, rules and client code follow the list that loaded.
             let loaded = app.content.paths.packages.clone();

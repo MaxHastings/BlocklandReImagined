@@ -658,7 +658,7 @@ fn ghost_cycle(
 
 /// An app on `f`'s content with a fresh state folder, which it keeps
 /// until dropped.
-fn load(f: &ContentRoot, name: &str) -> Result<(App, bri_client::testing::ScratchDir)> {
+fn load(f: &ContentRoot, name: &str) -> Result<(Box<App>, bri_client::testing::ScratchDir)> {
     let state = f.state()?;
     let mut app = App::load(&f.root, state.path(), SIZE)?;
     app.ui.core.pop(ScreenId::DefaultControls);

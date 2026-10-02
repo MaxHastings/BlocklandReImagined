@@ -164,7 +164,7 @@ fn say(app: &mut App, text: &str) {
     });
 }
 
-fn load(content: &Path, state: &Path) -> Result<App> {
+fn load(content: &Path, state: &Path) -> Result<Box<App>> {
     let mut app = App::load(content, state, SIZE)?;
     app.ui.core.pop(ScreenId::DefaultControls);
     app.ui.update(0);

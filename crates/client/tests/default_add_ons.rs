@@ -206,7 +206,7 @@ fn until(
     )
 }
 
-fn app(root: &Path, state: &Path, name: &str) -> Result<App> {
+fn app(root: &Path, state: &Path, name: &str) -> Result<Box<App>> {
     let state = state.join(name);
     let _ = std::fs::remove_dir_all(&state);
     let mut app = App::load(root, &state, SIZE)?;

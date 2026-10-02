@@ -55,8 +55,8 @@ fn step(app: &mut App, elapsed: Duration) -> Result<()> {
 }
 
 pub struct Pair {
-    pub host: App,
-    pub guest: App,
+    pub host: Box<App>,
+    pub guest: Box<App>,
     previous: Instant,
 }
 
@@ -636,7 +636,7 @@ fn leave(pair: &mut Pair) {
     }
 }
 
-fn load(content: &Path, out: &Path, name: &str) -> Result<App> {
+fn load(content: &Path, out: &Path, name: &str) -> Result<Box<App>> {
     let state = out.join(format!("state-{name}"));
     let _ = std::fs::remove_dir_all(&state);
     std::fs::create_dir_all(&state)?;
@@ -1673,7 +1673,7 @@ fn soak_four_players_build_drive_fire_chat_and_save() -> Result<()> {
         .to_vec();
     let mut apps = Vec::new();
     for name in &names {
-        apps.push(load(&content, &out, name)?);
+        apps.push(*load(&content, &out, name)?);
     }
     std::fs::write(out.join("pid.txt"), std::process::id().to_string())?;
     let host_state = out.join("state-SoakHost");
