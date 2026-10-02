@@ -1,5 +1,5 @@
 # Adds the macOS zip to an existing release. It builds the client on an Apple
-# silicon runner, takes the content from that release's public Windows zip
+# silicon runner, takes the content from that release's Windows zip (drafts included)
 # (checked against its MANIFEST.json), packages with tools/package_mac.sh
 # (an ad-hoc signed .app) and uploads the zip. It never replaces an asset.
 name: mac-release-asset
