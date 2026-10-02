@@ -1571,7 +1571,11 @@ datablock ShapeBaseImageData(plainGunImage) { shapeFile = "./gun.dts"; item = pl
 fn a_shape_named_through_a_path_global_is_found() {
     let source = fresh("pathglobal-source").with_file_name("Weapon_PathGlobal");
     std::fs::create_dir_all(source.join("models")).unwrap();
-    std::fs::write(source.join("description.txt"), "Title: Path Global\nAuthor: Tester\nA test.").unwrap();
+    std::fs::write(
+        source.join("description.txt"),
+        "Title: Path Global\nAuthor: Tester\nA test.",
+    )
+    .unwrap();
     std::fs::write(
         source.join("server.cs"),
         "$PG::FilePath = filePath($Con::File) @ \"/\";\n$PG::ModelPath = $PG::FilePath @ \"models/\";\nexec(\"./guns.cs\");\n",
