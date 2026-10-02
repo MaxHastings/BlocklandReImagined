@@ -12,7 +12,7 @@ generated v20 content (tools/ci_content.py, docs/release-builds.md); the
 Mac and Linux ones take the originals back out of that Windows release,
 as they take its base game, so every platform ships the same ones.
 
-    python tools/addon_bundle.py find    [--search DIR]...  where each original is, its sha256 and port
+    python tools/addon_bundle.py find    [--search DIR]...  where each original is, its sha256, port, and brick names shared
     python tools/addon_bundle.py build   [--search DIR]... [--v20 DIR] [--importer EXE] [--content-root DIR] [--missing-ok]
     python tools/addon_bundle.py upload  [build options]    build, then replace the draft release's zip
     python tools/addon_bundle.py fetch                      (CI) download and unpack it into dist/addon-bundle
@@ -21,7 +21,10 @@ as they take its base game, so every platform ships the same ones.
     python tools/addon_bundle.py sources [--bundle DIR]     (packagers) every default Add-On's folder, as JSON
     python tools/addon_bundle.py verify-release CONTENT_DIR --credits FILE   (packagers) check a release
 
-Searched, in order: every --search folder, $BRI_ADDON_SEARCH (folders split
+Searched, in order: every --search folder (find, build and upload remember
+them in the content root, so a later run without --search, such as
+bootstrap's, uses the same ones), the content root's Add-Ons drop folder,
+$BRI_ADDON_SEARCH (folders split
 like PATH), Blockland on Steam's Add-Ons, the v20 install's Add-Ons and
 Maxwell's archive; each folder and the folders directly inside it.
 
@@ -158,6 +161,26 @@ def search_roots(extra, v20):
     return out
 
 
+def remembered_search(content_root, given):
+    """The --search folders given now, else the ones given last time (kept
+    in the content root, as tools/bootstrap.py keeps the v20 folder), then
+    the content root's Add-Ons drop folder: so bootstrap's build finds the
+    copies a release build was pointed at."""
+    memory = content_root / '_regeneration' / 'addon-search.txt'
+    if given:
+        try:
+            memory.parent.mkdir(parents=True, exist_ok=True)
+            memory.write_text(''.join(f'{p.resolve()}\n' for p in given), encoding='utf-8')
+        except OSError:
+            pass
+    else:
+        try:
+            given = [pathlib.Path(line) for line in memory.read_text(encoding='utf-8').splitlines() if line.strip()]
+        except OSError:
+            given = []
+    return given + [content_root / 'Add-Ons']
+
+
 def classic_addons(roots):
     """Every Add-On zip or folder in the roots and the folders directly inside them, by lower-case name."""
     found = {}
@@ -242,6 +265,7 @@ def find(args):
     ports = ports_by_addon(args.repo)
     core = [c for c in (args.core or CORE) if c.is_file()]
     installed = installed_content(args)
+    bricks = [('base game', stock_brick_names(installed))]
     with tempfile.TemporaryDirectory(prefix='bri-addon-find-') as work:
         for n, addon in enumerate(originals(read_list(args.repo))):
             original = addon['original']
@@ -264,6 +288,46 @@ def find(args):
                     print(f"    port {port['port']} ({port['status']}): {state}")
                 else:
                     print(f"    no port listed; {report['summary']['needs_behaviour']} script functions need one")
+                if pinned == 'pinned' and bricks[-1][0] != original['addon']:
+                    bricks.append((original['addon'], brick_names(pathlib.Path(work) / f'{n}-{m}')))
+    print_shared_bricks(bricks)
+
+
+def brick_names(root):
+    """The save names (uiName, lower-case) of the bricks in a brick catalog
+    folder, or in an import's, in declaration order."""
+    path = root / 'stock-catalog.json'
+    if not path.is_file():
+        path = root / 'assets' / 'brick-catalog' / 'stock-catalog.json'
+    if not path.is_file():
+        return []
+    catalog = json.loads(path.read_text(encoding='utf-8'))
+    return [b['display_name'].lower() for b in catalog.get('bricks', []) if b.get('display_name')]
+
+
+def stock_brick_names(installed):
+    """The base game's brick names, from the installed content's stock catalog."""
+    for path in sorted(installed.glob('*/stock-catalog.json')):
+        return brick_names(path.parent)
+    return []
+
+
+def print_shared_bricks(bricks):
+    """Brick names more than one of `bricks` ((who, names) in load order)
+    define. A save names a brick by its name, and the definition loaded last
+    wins (defaults.rs), as in v20."""
+    by_name = {}
+    for who, names in bricks:
+        for name in dict.fromkeys(names):
+            by_name.setdefault(name, []).append(who)
+    shared = {}
+    for name, who in by_name.items():
+        if len(who) > 1:
+            shared.setdefault(tuple(who), []).append(name)
+    print('\nBrick names defined more than once (the last named wins):' if shared else '\nNo brick name is defined twice.')
+    for who, names in sorted(shared.items()):
+        sample = ', '.join(sorted(names)[:6]) + (', ...' if len(names) > 6 else '')
+        print(f"  {' < '.join(who)}: {len(names)} ({sample})")
 
 
 def credits_text(entries):
@@ -665,6 +729,8 @@ def main():
                         help='build: leave out an original with no copy here (bootstrap on a machine without them)')
     args = parser.parse_args()
     args.repo = args.repo.resolve()
+    if args.command in ('find', 'build', 'upload'):
+        args.search = remembered_search(args.content_root, args.search)
     if args.command == 'find':
         find(args)
     elif args.command == 'build':

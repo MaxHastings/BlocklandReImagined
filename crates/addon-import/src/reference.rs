@@ -27,6 +27,8 @@ pub struct Reference {
     /// datablocks are known from its brick catalog, weapons, sounds and
     /// effects.
     pub installed: bool,
+    /// The installed game's own bricks, by lower-case datablock name.
+    pub base_bricks: std::collections::BTreeSet<String>,
     /// Lower-case datablock name.
     pub datablocks: BTreeMap<String, Owned>,
     /// Lower-case `$DamageType::` names.
@@ -617,6 +619,7 @@ impl Reference {
                 continue;
             };
             self.files.insert(mesh.to_ascii_lowercase());
+            self.base_bricks.insert(name.to_ascii_lowercase());
             let addon = addon_of_source(mesh);
             let mut fields = BTreeMap::new();
             fields.insert("brickfile".into(), quoted(mesh));

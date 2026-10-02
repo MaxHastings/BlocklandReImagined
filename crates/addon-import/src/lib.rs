@@ -2631,6 +2631,21 @@ fn bricks(cx: &mut Ctx, scripts: &[Script]) -> Result<()> {
             Ok(catalog) => {
                 for mut b in catalog.bricks {
                     let key = b.id.rsplit('/').next().unwrap_or("").to_owned();
+                    // A newer copy of a base Add-On (Steam's Brick_Halloween)
+                    // declares the base game's bricks again. In v20 that
+                    // changes the same datablock, so a save's brick of that
+                    // name stays the base game's, with its behaviour.
+                    if cx.reference.base_bricks.contains(&key) {
+                        let name = cx.owned.get(&key).map_or(key.clone(), |o| o.d.name.clone());
+                        cx.mark(
+                            &name,
+                            "brick",
+                            "consumed",
+                            vec![],
+                            Some("the base game's own brick, which stays the base game's".into()),
+                        );
+                        continue;
+                    }
                     let mesh = b.mesh_id.trim_start_matches("v20/").to_owned();
                     b.mesh_id = if let Some(f) = cx
                         .outputs

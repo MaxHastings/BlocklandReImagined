@@ -639,6 +639,250 @@
           "28bd4effe992f7f43f4fa2f6458c38ff8bce4137b965f79fc30eb00464055130"
         ]
       }
+    },
+    {
+      "id": "brick_1randompack",
+      "original": {
+        "addon": "Brick_1RandomPack",
+        "title": "One Random Brick Pack",
+        "authors": [
+          "FART",
+          "King Tinks"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "4b6d8c1f1437dfd79a6271369a7db18f97096d51527b3ce0b8091bbd68eeb60c"
+        ]
+      }
+    },
+    {
+      "id": "brick_blackdragoniv",
+      "original": {
+        "addon": "Brick_BlackDragonIV",
+        "title": "BlackDragonIV's Brick Pack",
+        "authors": [
+          "BlackDragonIV"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "75bbab44467a5610cc013413ee6b222b4335549e8d4160e91f1213a5412ab7be"
+        ]
+      }
+    },
+    {
+      "id": "brick_blackdragoniv_filler",
+      "original": {
+        "addon": "Brick_BlackDragonIV_Filler",
+        "title": "BlackDragonIV's Filler Pack",
+        "authors": [
+          "BlackDragonIV"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "39aae6b9fde39a6f01cac512ab11262f0bbbd64c3f140c56bc0271c0c97f4266"
+        ]
+      }
+    },
+    {
+      "id": "brick_christmas_tree",
+      "original": {
+        "addon": "Brick_Christmas_Tree",
+        "title": "Christmas Tree",
+        "authors": [
+          "Eric Hartman"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "e72df75d8be02e84d45c50b24bfb5d713c880e83f054a8aad59338d4475e14c1"
+        ]
+      }
+    },
+    {
+      "id": "brick_demiansbp_1x",
+      "original": {
+        "addon": "Brick_DemiansBP_1x",
+        "title": "Demian's Brick Pack 1x",
+        "authors": [
+          "Demian"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "4393069becd4ebc6a1047aa267ee859c022622154f5172cc6b7f2aa22d4d0c62"
+        ]
+      }
+    },
+    {
+      "id": "brick_doors",
+      "original": {
+        "addon": "Brick_Doors",
+        "title": "Door Bricks",
+        "authors": [
+          "Rotondo"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "0df1cdd215dbe4dca0f57924ed752204b58fab106d0fc36d72dbc1fee1c19de2"
+        ]
+      }
+    },
+    {
+      "id": "brick_extraprints",
+      "original": {
+        "addon": "Brick_ExtraPrints",
+        "title": "Extra Prints",
+        "authors": [
+          "siba",
+          "Masterlegodude"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "8cc62a4d69acbbdb90972833d9db215df1d41ea11cf7584268d822ad02ed57d9"
+        ]
+      }
+    },
+    {
+      "id": "brick_giantbrickpackv2",
+      "original": {
+        "addon": "Brick_GIANTBrickpackv2",
+        "title": "GIANT Brickpack v2",
+        "authors": [
+          "Jasa"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "061cd736143cfe282a750c6df296780680c32f7d4d8bd6e0001118e9264f1c70"
+        ]
+      }
+    },
+    {
+      "id": "brick_halloween",
+      "original": {
+        "addon": "Brick_Halloween",
+        "title": "Halloween Theme Pack",
+        "authors": [
+          "Anthony Rotondo"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "e1c311c54e885d20ccc49ed4a07aa8b86cb96def0cade04920750d04d47b30ce"
+        ]
+      }
+    },
+    {
+      "id": "brick_morerounds",
+      "original": {
+        "addon": "Brick_MoreRounds",
+        "title": "Tall Cylinder Bricks",
+        "authors": [
+          "siba",
+          "Tophius",
+          "Krystal"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "9307886f532d2ac678c2b5a313c5e26c429f7b613af8d7d8ce63c8c42e7d0be0"
+        ]
+      }
+    },
+    {
+      "id": "brick_plant",
+      "original": {
+        "addon": "Brick_Plant",
+        "title": "Plant Bricks",
+        "authors": [
+          "General",
+          "Tophius"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "b68468c491520780ceca5babdf5b9019dc17fb27cfa1562ea244ef1258bd5602"
+        ]
+      }
+    },
+    {
+      "id": "brick_smallocto",
+      "original": {
+        "addon": "Brick_SmallOcto",
+        "title": "Small Octogonal Bricks",
+        "authors": [
+          "LeetZero"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "f43a7ec5d234344c26c23b693cc957b0ecd99062fba93546bcb34aa30bfb7082"
+        ]
+      }
+    },
+    {
+      "id": "brick_tileplates",
+      "original": {
+        "addon": "Brick_TilePlates",
+        "title": "Tileplates Pack",
+        "authors": [
+          "Emil"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "553cddf38c8f9102da5987b3080e830c851332ccec9185d0e79f2cb99ad75abb"
+        ]
+      }
+    },
+    {
+      "id": "brick_tiles",
+      "original": {
+        "addon": "Brick_Tiles",
+        "title": "Tile Bricks",
+        "authors": [
+          "Jaydee"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "3b130a03eca30e2ccf84bd0391f1c50621c35cee87457d2564e3433b0d13b3b8"
+        ]
+      }
+    },
+    {
+      "id": "brick_toplessramps",
+      "original": {
+        "addon": "Brick_ToplessRamps",
+        "title": "Topless Ramps",
+        "authors": [
+          "Communist",
+          "Titanium Man"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "367e18f06d6f2d001127db7b8a8e2855ef1f0e4eaf88aa4b6e197430f3890d91"
+        ]
+      }
+    },
+    {
+      "id": "brick_wedgeplus",
+      "original": {
+        "addon": "Brick_WedgePlus",
+        "title": "WedgePlus",
+        "authors": [
+          "Tophius"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "2fc158303dee0f85118092f775b9013c38c436e685167503a20e6d314eabc484"
+        ]
+      }
+    },
+    {
+      "id": "brick_window",
+      "original": {
+        "addon": "Brick_Window",
+        "title": "Window Brick Pack",
+        "authors": [
+          "Tophius"
+        ],
+        "version": "1.0.0",
+        "sha256": [
+          "b4a95ae4f40baa1a5af8f0d8eeb05fb5b609cd8e531933af657e289aac30f3b8"
+        ]
+      }
     }
   ]
 }
