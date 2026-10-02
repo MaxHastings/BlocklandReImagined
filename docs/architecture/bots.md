@@ -40,7 +40,9 @@ bot does through the same code.
    past its band, and a walk home goes all the way.
 3. **Goal and path.** The behaviour sets the goal; the walk grid
    (`crate::nav`, shared by every bot of a body size, updated as bricks
-   change, portals included) finds the way a little each tick.
+   change, portals included) finds the way a little each tick. Gaps only
+   a crouched body fits (crawlspaces) are on the grid: crawling costs
+   more than walking, and the bot crouches into them.
 4. **Aim and trigger.** The aim follows the enemy whatever the behaviour
    (leading shots by the projectile's speed and drop, with the kind's aim
    error shrinking as it tracks), the path when there is none, and Carry
