@@ -1,0 +1,245 @@
+//! Saves, save pictures, old saves and colour sets.
+use super::*;
+
+impl App {
+    pub(super) fn poll_files(&mut self) {
+        let Some((request, result)) = self.file_jobs.poll(&self.saves, &self.runtime) else {
+            return;
+        };
+        let result = match result {
+            Ok(crate::saves::Outcome::Listed(entries)) => {
+                self.show_save_files(entries);
+                Ok(())
+            }
+            Ok(crate::saves::Outcome::Saved(path, entries)) => {
+                // What the host has now is saved under a name.
+                if let Some(a) = self.attempt.as_mut().filter(|a| a.local) {
+                    a.saved_revision = a.view.as_ref().map(|v| v.world_revision);
+                }
+                // v20's save picture: the next scene drawn, without the interface.
+                self.save_picture = crate::save_picture::path_for(&path);
+                self.show_save_files(entries);
+                Ok(())
+            }
+            Ok(crate::saves::Outcome::Loaded(build)) => {
+                if self.attempt.as_ref().filter(|a| a.entered).map(|a| a.id) != request.session
+                    || self.ui.session_request() != request.session
+                {
+                    Err(anyhow::anyhow!(
+                        "Connection changed while reading the build; load canceled"
+                    ))
+                } else if matches!(request.action, UiAction::LoadBricks { .. }) {
+                    // `LoadBricks_ColorCheck`: differing colours ask first.
+                    let differs = self
+                        .query_source
+                        .as_ref()
+                        .and_then(|w| crate::saves::color_difference(&w.palette, &build));
+                    if let Some(append) = differs {
+                        self.ui.apply(UiUpdate::ColorWarning { append });
+                        self.color_load = Some((request, build));
+                        return;
+                    }
+                    match self.send_load(request.id, build, request.action) {
+                        Ok(()) => return, // Complete only after authoritative acceptance.
+                        Err(error) => Err(error),
+                    }
+                } else {
+                    Err(anyhow::anyhow!("Unexpected loaded build"))
+                }
+            }
+            Err(error) => Err(anyhow::anyhow!(error)),
+        };
+        self.answer(request.id, result);
+    }
+    /// Draw the scene once more into a texture of its own, without the
+    /// interface, and write it as the save picture at `path` (v20's
+    /// `screenShot` after `Canvas.setContent(noHudGui)`). Waits for a frame
+    /// with a scene to draw.
+    pub(super) fn take_save_picture(&mut self, frame: &mut RenderContext<'_>, path: PathBuf) -> Result<()> {
+        let texture = frame.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Save picture frame"),
+            size: wgpu::Extent3d {
+                width: frame.size.0,
+                height: frame.size.1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: frame.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&Default::default());
+        let drawn = self.render_scene(&mut RenderContext {
+            device: frame.device,
+            queue: frame.queue,
+            encoder: frame.encoder,
+            target: &view,
+            format: frame.format,
+            size: frame.size,
+            ui_renderer: frame.ui_renderer,
+        })?;
+        if !drawn {
+            self.save_picture = Some(path);
+            return Ok(());
+        }
+        let capture =
+            crate::platform::capture_copy(frame.device, frame.encoder, &texture, frame.format)?;
+        self.save_shots.copied(
+            crate::platform::Shot {
+                path,
+                fit: Some(crate::save_picture::FIT),
+            },
+            capture,
+        );
+        Ok(())
+    }
+    pub(super) fn show_save_files(&mut self, entries: Vec<crate::saves::Entry>) {
+        self.save_pictures = entries
+            .iter()
+            .filter_map(|e| Some(((e.info.map.clone(), e.info.name.clone()), e.picture()?)))
+            .collect();
+        let maps = entries
+            .iter()
+            .map(|e| e.info.map.clone())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        self.ui.apply(UiUpdate::SaveFiles {
+            maps,
+            files: entries.into_iter().map(|e| e.info).collect(),
+        });
+    }
+    /// Convert `.bls` saves against the content now loaded.
+    pub(super) fn start_old_saves(&mut self) {
+        self.old_saves_started = true;
+        match crate::old_saves::Converter::new(&self.content) {
+            Ok(converter) => {
+                self.old_saves.set_converter(converter);
+                self.old_saves.start();
+            }
+            Err(error) => bri_console::warn(format!("Old saves can't be converted: {error:#}")),
+        }
+    }
+    /// Start converting on the first frame, and put newly converted saves in
+    /// an open save dialog as they arrive.
+    pub(super) fn poll_old_saves(&mut self) {
+        if !self.old_saves_started {
+            self.start_old_saves();
+        }
+        if let Some(rx) = &self.save_refresh {
+            match rx.try_recv() {
+                Ok(Ok(entries)) => {
+                    self.save_refresh = None;
+                    self.show_save_files(entries);
+                }
+                Ok(Err(error)) => {
+                    self.save_refresh = None;
+                    bri_console::warn(format!("Could not list saves: {error}"));
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => return,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.save_refresh = None,
+            }
+        }
+        let open = self.ui.is_open(ScreenId::LoadBricks) || self.ui.is_open(ScreenId::SaveBricks);
+        // A closed dialog lists afresh when it opens.
+        if self.old_saves.take_changed() && open {
+            let store = self.saves.clone();
+            let (tx, rx) = std::sync::mpsc::channel();
+            self.save_refresh = Some(rx);
+            self.runtime.spawn_blocking(move || {
+                let _ = tx.send(store.list().map_err(|e| format!("{e:#}")));
+            });
+        }
+    }
+    pub(super) fn send_load(
+        &mut self,
+        id: RequestId,
+        build: Box<bri_world::build::SavedBuild>,
+        action: UiAction,
+    ) -> Result<()> {
+        let UiAction::LoadBricks { ownership, .. } = action else {
+            anyhow::bail!("Unexpected loaded build");
+        };
+        self.command(id, Command::LoadBuild { build, ownership }, action)?;
+        // The loaded build arrives in batches; it matches its file.
+        if let Some(a) = self.attempt.as_mut() {
+            a.settling = Some(std::time::Instant::now() + SETTLE);
+        }
+        Ok(())
+    }
+    /// `ColorWarning_Click*`: load the waiting save as chosen, or leave Load
+    /// Bricks open.
+    pub(super) fn choose_color_load(&mut self, choice: bri_ui::api::ColorLoad) {
+        use bri_ui::api::ColorLoad;
+        let Some((request, mut build)) = self.color_load.take() else {
+            return;
+        };
+        let result = if choice == ColorLoad::Cancel {
+            Err(anyhow::anyhow!(bri_ui::api::LOAD_CANCELED))
+        } else if self.attempt.as_ref().filter(|a| a.entered).map(|a| a.id) != request.session {
+            Err(anyhow::anyhow!(
+                "Connection changed while reading the build; load canceled"
+            ))
+        } else {
+            if choice == ColorLoad::Match
+                && let Some(world) = &self.query_source
+            {
+                crate::saves::match_colors(&world.palette, &mut build);
+            }
+            self.send_load(request.id, build, request.action)
+        };
+        if let Err(error) = result {
+            self.answer(request.id, Err(error));
+        }
+    }
+    /// Paint divisions for a world palette: the content's named divisions
+    /// when the world uses the default palette, numbered ones otherwise.
+    pub(super) fn colorset(&self, palette: &[[f32; 4]]) -> Vec<PaintDivision> {
+        let default_colors: Vec<_> = self
+            .content
+            .paint
+            .iter()
+            .flat_map(|d| d.colors.iter().copied())
+            .collect();
+        if palette == default_colors.as_slice() {
+            self.content.paint.clone()
+        } else {
+            palette
+                .chunks(9)
+                .enumerate()
+                .map(|(i, c)| PaintDivision {
+                    name: format!("World {}", i + 1),
+                    colors: c.to_vec(),
+                })
+                .collect()
+        }
+    }
+    /// Tell the menus whether leaving would drop changes the host has not
+    /// saved under a name.
+    pub(super) fn track_unsaved(&mut self, a: &mut Attempt) {
+        let now = std::time::Instant::now();
+        let unsaved = match a.view.as_ref().map(|v| v.world_revision) {
+            Some(revision) if a.local && a.entered => {
+                match a.settling {
+                    Some(until) if now < until => {
+                        // Still rebuilding: follow it, and wait for it to go quiet.
+                        if a.saved_revision != Some(revision) {
+                            a.settling = Some(now + SETTLE);
+                        }
+                        a.saved_revision = Some(revision);
+                    }
+                    Some(_) => a.settling = None,
+                    None => {}
+                }
+                *a.saved_revision.get_or_insert(revision) != revision
+            }
+            _ => false,
+        };
+        if unsaved != self.ui.core.unsaved_changes {
+            self.ui
+                .apply_session(a.id, UiUpdate::UnsavedChanges(unsaved));
+        }
+    }
+}
