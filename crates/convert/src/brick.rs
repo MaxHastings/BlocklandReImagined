@@ -57,12 +57,19 @@ impl<'a> Lines<'a> {
         ensure!(n <= max, "Count {n} exceeds limit {max}");
         Ok(n)
     }
-    /// A line's numbers as v20 scans them (`%f` after `%f`): each word's
-    /// longest leading number, stopping at the first word with none, and
-    /// words past the `N` it needs ignored.
+    /// A line's numbers as v20 scans them (`%f` after `%f`): each scan
+    /// skips spaces and takes the longest number from where the last one
+    /// stopped, so `0.5.5` and `0.5-0.5` are two numbers and `1f` is 1. The
+    /// scan stops at the first place with no number; numbers past the `N` a
+    /// caller needs are ignored.
     fn numbers(&mut self) -> Result<(&'a str, Vec<f32>)> {
         let line = self.next()?;
-        let values = line.split_whitespace().map_while(c_float).collect();
+        let mut rest = line;
+        let mut values = vec![];
+        while let Some((value, len)) = c_float(rest.trim_start()) {
+            values.push(value);
+            rest = &rest.trim_start()[len..];
+        }
         Ok((line, values))
     }
     fn vector<const N: usize>(&mut self) -> Result<[f32; N]> {
@@ -96,20 +103,35 @@ fn header(line: &str, name: &str) -> bool {
         .eq_ignore_ascii_case(name.trim_end_matches(':'))
 }
 
-/// A word's longest leading decimal number, as C's `strtod` reads it
-/// (`0.5f` is 0.5); none when it starts with no digit.
-fn c_float(word: &str) -> Option<f32> {
-    (1..=word.len())
-        .rev()
-        .filter(|&end| word.is_char_boundary(end))
-        .find_map(|end| {
-            let head = &word[..end];
-            // A digit is required, so `inf` and `nan` read as no number.
-            head.bytes()
-                .any(|b| b.is_ascii_digit())
-                .then(|| head.parse::<f32>().ok())
-                .flatten()
-        })
+/// The number `text` starts with, as C's `strtod` reads it, and how many
+/// bytes it takes: a sign, digits with at most one point, and an exponent
+/// only when digits follow it. None when it starts with no digit, so `inf`
+/// and `nan` read as no number.
+fn c_float(text: &str) -> Option<(f32, usize)> {
+    let b = text.as_bytes();
+    let digits = |mut i: usize| {
+        while b.get(i).is_some_and(u8::is_ascii_digit) {
+            i += 1;
+        }
+        i
+    };
+    let sign = usize::from(matches!(b.first(), Some(b'+' | b'-')));
+    let whole = digits(sign);
+    let (fraction, mut end) = match b.get(whole) {
+        Some(b'.') => (whole + 1, digits(whole + 1)),
+        _ => (whole, whole),
+    };
+    if whole == sign && end == fraction {
+        return None;
+    }
+    if matches!(b.get(end), Some(b'e' | b'E')) {
+        let sign = end + 1 + usize::from(matches!(b.get(end + 1), Some(b'+' | b'-')));
+        let exponent = digits(sign);
+        if exponent > sign {
+            end = exponent;
+        }
+    }
+    Some((text[..end].parse().ok()?, end))
 }
 
 pub fn position([x, y, z]: [f32; 3]) -> [f32; 3] {
@@ -176,7 +198,9 @@ pub fn read(data: &[u8], id: String) -> Result<(Brick, Provenance)> {
             let count = lines.number(1024)?;
             for _ in 0..count {
                 let center = position(lines.vector()?);
-                let [x, y, z] = lines.vector::<3>()?;
+                // A box spans its center plus and minus half its size, so a
+                // size written negative spans the same box.
+                let [x, y, z] = lines.vector::<3>()?.map(f32::abs);
                 brick.collision_boxes.push(CollisionBox {
                     center,
                     size: [x * STUD, z * PLATE, y * STUD],
@@ -548,6 +572,23 @@ mod tests {
         );
         // A word with no number still fails the line.
         assert!(read(b"1 1 x\nBRICK", "bad".into()).is_err());
+        // Each number starts where the last one stopped, spaces or not.
+        let mut lines =
+            Lines::new("0.2500000.750000 2.000000\n0.500000-0.500000-3.000000\n2e1e 4 .5\n2f 4\n");
+        assert_eq!(lines.vector::<3>().unwrap(), [0.25, 0.75, 2.0]);
+        assert_eq!(lines.vector::<3>().unwrap(), [0.5, -0.5, -3.0]);
+        assert!(
+            lines.vector::<3>().is_err(),
+            "an `e` with no digits ends the number"
+        );
+        assert!(lines.vector::<2>().is_err(), "a letter stops the scan");
+        // A collision box written with a negative size spans the same box.
+        let (b, _) = read(
+            format!("1 1 1\nSPECIAL\nb\n1\n0 0 0\n-0.5 1 1\n{}", &ONE_QUAD[2..]).as_bytes(),
+            "flipped".into(),
+        )
+        .unwrap();
+        assert_eq!(b.collision_boxes[0].size, [0.5 * STUD, PLATE, STUD]);
     }
     #[test]
     fn specialbrick_grid_is_the_brick_grid() {
