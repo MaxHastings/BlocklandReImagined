@@ -463,6 +463,62 @@ fn a_fresh_checkout_installs_its_default_add_ons_and_spawns_the_default_plane() 
     Ok(())
 }
 
+/// Max found the Add-Ons tick slow: each click reloaded every Add-On.
+/// A click now only writes the lists (the plane stays loaded and on offer);
+/// leaving the screen (`ApplyAddOns`) loads the change, once.
+#[test]
+#[ignore = "generated content (BRI_CONTENT or content/) and the bri-client binary; no window"]
+fn turning_an_add_on_off_loads_nothing_until_the_screen_closes() -> Result<()> {
+    let checkout = Checkout::new(&generated_content())?;
+    let content = checkout.content();
+    checkout.install_originals()?;
+    let state = checkout.root.join("state");
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_bri-client"))
+        .env("BRI_INSTALL_DEFAULT_ADD_ONS", "1")
+        .arg("--check")
+        .arg(&content)
+        .arg(state.join("check"))
+        .output()?;
+    ensure!(
+        out.status.success(),
+        "bri-client --check failed:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let mut app = app(&content, &state, "Toggler")?;
+    // What the game has loaded, not what a game in progress offers.
+    let loaded = |app: &App, id: &str| {
+        app.content
+            .paths
+            .packages
+            .packages
+            .iter()
+            .any(|p| p.id == id)
+    };
+    let id = PLANE.split(':').next().unwrap_or_default().to_string();
+    ensure!(loaded(&app, &id), "{id} is not loaded at startup");
+    app.ui.core.push(ScreenId::AddOns);
+    step(&mut app)?;
+    request(
+        &mut app,
+        UiAction::SetAddOnEnabled {
+            id: id.clone(),
+            enabled: false,
+        },
+    )?;
+    ensure!(
+        app.ui.core.add_ons.rows.iter().any(|r| r.id == id && !r.enabled),
+        "the Add-Ons list does not show {id} off"
+    );
+    ensure!(
+        loaded(&app, &id),
+        "turning {id} off reloaded the game's content on the click"
+    );
+    app.ui.core.pop(ScreenId::AddOns);
+    step(&mut app)?;
+    ensure!(!loaded(&app, &id), "closing Add-Ons did not load the change");
+    Ok(())
+}
+
 /// The Mirror Add-On ships no geometry: its brick is the base game's
 /// 1x4x5 window, found by shape, with the window's menu icon and placement,
 /// and its mirrors are the window's two broad faces.

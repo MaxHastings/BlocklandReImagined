@@ -105,6 +105,33 @@ pub enum EventKind {
     Hover,
     /// Window close button.
     Close,
+    /// A text list row's check box (its `checkColumn`) was clicked: one
+    /// click, no double-click, so a list can be ticked down row by row.
+    /// [`View::selected`] is the row, selected by the same click.
+    Toggle,
+}
+
+/// A text list cell drawn as a check box in the list's `checkColumn`:
+/// ticked or not, and whether it can be changed. Any other text in that
+/// column draws as text.
+pub fn check_cell(on: bool, active: bool) -> &'static str {
+    match (on, active) {
+        (false, true) => "[ ]",
+        (true, true) => "[x]",
+        (false, false) => "[-]",
+        (true, false) => "[#]",
+    }
+}
+
+/// The check box a [`check_cell`] stands for: (ticked, can change).
+fn parse_check_cell(text: &str) -> Option<(bool, bool)> {
+    Some(match text {
+        "[ ]" => (false, true),
+        "[x]" => (true, true),
+        "[-]" => (false, false),
+        "[#]" => (true, false),
+        _ => return None,
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1609,13 +1636,13 @@ impl View {
         let Some(style) = self.style(pack, id) else {
             return;
         };
-        let cols: Vec<i32> = n
-            .ctrl
-            .field("columns")
-            .unwrap_or("0")
-            .split_whitespace()
-            .filter_map(|c| c.parse().ok())
-            .collect();
+        let cols = self.list_columns(id);
+        let check = self.list_check_column(id);
+        let check_style = pack.data.styles.get(
+            n.ctrl
+                .field("checkProfile")
+                .unwrap_or("GuiCheckBoxProfile"),
+        );
         let sel = self.selected(id);
         for (i, (text, item)) in n.state.items.iter().enumerate() {
             let row = Rect::new(r.x, r.y + i as i32 * rh, r.w, rh);
@@ -1629,6 +1656,24 @@ impl View {
                 }
                 let next = cols.get(c + 1).copied().unwrap_or(r.w);
                 let cell = Rect::new(r.x + x + 2, row.y, (next - x - 2).max(0), rh);
+                if Some(c) == check
+                    && let Some((on, active)) = parse_check_cell(field)
+                    && let Some(bmp) = check_style.and_then(|s| s.bitmap.as_deref())
+                {
+                    let idx = match (active, on) {
+                        (true, false) => 0,
+                        (true, true) => 1,
+                        (false, false) => 2,
+                        (false, true) => 3,
+                    };
+                    if let Some(src) = self.skin_piece(pack, bmp, idx) {
+                        // The box at its own size, shrunk to fit the row.
+                        let size = (src[2] as i32).min(src[3] as i32).min(rh);
+                        let at = Rect::new(cell.x, row.y + (rh - size) / 2, size, size);
+                        self.piece(dl, bmp, src, at);
+                        continue;
+                    }
+                }
                 // Join Server's ServerListProfile sets doFontOutline (black
                 // on black), but v20's text lists drew rows without it.
                 if dl.push_clip(cell) {
@@ -1646,6 +1691,23 @@ impl View {
                 }
             }
         }
+    }
+
+    /// A text list's column starts (`columns`), in pixels from its left.
+    fn list_columns(&self, id: NodeId) -> Vec<i32> {
+        self.nodes[id]
+            .ctrl
+            .field("columns")
+            .unwrap_or("0")
+            .split_whitespace()
+            .filter_map(|c| c.parse().ok())
+            .collect()
+    }
+
+    /// The text list column whose [`check_cell`]s draw as check boxes and
+    /// toggle with one click (`checkColumn`), if it has one.
+    fn list_check_column(&self, id: NodeId) -> Option<usize> {
+        self.nodes[id].ctrl.field("checkColumn")?.trim().parse().ok()
     }
 
     /// GuiConsole rows: item ids are log levels (0 normal, 1 warning,
@@ -2220,7 +2282,33 @@ impl View {
                 let r = self.nodes[t].rect;
                 let rh = self.list_row_height(pack, t);
                 let i = ((y - r.y) / rh.max(1)) as usize;
-                if let Some((_, item)) = self.nodes[t].state.items.get(i).cloned() {
+                if let Some((text, item)) = self.nodes[t].state.items.get(i).cloned() {
+                    // A click on the row's check box toggles it at once and
+                    // is never half of a double-click.
+                    let check = self.list_check_column(t).filter(|&c| {
+                        let cols = self.list_columns(t);
+                        let from = cols.get(c).copied().unwrap_or(0);
+                        let to = cols.get(c + 1).copied().unwrap_or(r.w);
+                        (from..to).contains(&(x - r.x))
+                            && text
+                                .split('\t')
+                                .nth(c)
+                                .and_then(parse_check_cell)
+                                .is_some()
+                    });
+                    if check.is_some() {
+                        self.nodes[t].state.value = Value::Selected(Some(item));
+                        out.push(ViewEvent {
+                            node: t,
+                            kind: EventKind::Changed,
+                        });
+                        out.push(ViewEvent {
+                            node: t,
+                            kind: EventKind::Toggle,
+                        });
+                        self.last_click = None;
+                        return;
+                    }
                     let double = self.last_click.is_some_and(|(n, when)| {
                         n == t
                             && self.time_ms.saturating_sub(when) < 400
