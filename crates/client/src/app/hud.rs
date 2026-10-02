@@ -54,14 +54,14 @@ impl App {
     /// Death prompts, damage flash, light sounds, sit state and the
     /// Mini-Games dialog state, all derived from replicated vitals.
     pub(super) fn update_combat_presentation(&mut self) {
-        let Some(a) = self.attempt.as_ref().filter(|a| a.entered) else {
+        let Some(a) = self.net.attempt.as_ref().filter(|a| a.entered) else {
             return;
         };
         let session = a.id;
         let Some(view) = a.view.as_ref() else {
             return;
         };
-        let sun = self.cpu_scene.as_ref().map(|s| s.sun_color);
+        let sun = self.scene.cpu_scene.as_ref().map(|s| s.sun_color);
         let auto_light = self.ui.core.prefs.bool_or("$pref::Input::AutoLight", true);
         let c = &mut self.combat;
         let mut updates = Vec::new();

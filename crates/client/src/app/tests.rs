@@ -405,7 +405,7 @@ fn app_weapon_effect_path_consumes_cues_once_and_syncs_projectile_trails(
         was_thrown: false,
     });
     let emitter = app
-        .weapon_effects
+        .fx.weapon_effects
         .world()
         .pack()
         .library
@@ -433,15 +433,15 @@ fn app_weapon_effect_path_consumes_cues_once_and_syncs_projectile_trails(
     };
     app.queue_weapon_cue(cue.clone());
     app.update_weapon_effects(&view, 0.1)?;
-    assert_eq!(app.weapon_effects.cue_cursor(), 1);
+    assert_eq!(app.fx.weapon_effects.cue_cursor(), 1);
     assert_eq!(app.weapon_effect_diagnostics().accepted_cues, 1);
-    assert!(app.weapon_effects.world().particle_count() > 0);
+    assert!(app.fx.weapon_effects.world().particle_count() > 0);
     let accepted = app.weapon_effect_diagnostics().accepted_cues;
     app.queue_weapon_cue(cue.clone());
     app.update_weapon_effects(&view, 0.)?;
     assert_eq!(app.weapon_effect_diagnostics().accepted_cues, accepted);
     assert_eq!(app.weapon_effect_diagnostics().duplicate_cues, 1);
-    assert_eq!(app.weapon_effects.attachment_count(), 1);
+    assert_eq!(app.fx.weapon_effects.attachment_count(), 1);
 
     let attached = bri_sim::presentation::Cue {
         id: 2,
@@ -450,7 +450,7 @@ fn app_weapon_effect_path_consumes_cues_once_and_syncs_projectile_trails(
         kind: bri_sim::presentation::CueKind::WeaponEffect {
             source: bri_weapons::TargetId::Actor(bri_weapons::ActorId(1)),
             definition: app
-                .weapon_effects
+                .fx.weapon_effects
                 .world()
                 .pack()
                 .library
@@ -475,11 +475,11 @@ fn app_weapon_effect_path_consumes_cues_once_and_syncs_projectile_trails(
         1,
         "cue waits for a sampled mount"
     );
-    assert_eq!(app.weapon_effects.cue_cursor(), 1);
+    assert_eq!(app.fx.weapon_effects.cue_cursor(), 1);
     app.update_weapon_effects(&view, 0.25)?;
     app.update_weapon_effects(&view, 0.25)?;
     assert_eq!(app.weapon_effect_backlog().0, 0);
-    assert_eq!(app.weapon_effects.cue_cursor(), 2);
+    assert_eq!(app.fx.weapon_effects.cue_cursor(), 2);
     assert_eq!(app.weapon_effect_diagnostics().missing_poses, 1);
     app.queue_weapon_cue(attached);
     app.update_weapon_effects(&view, 0.)?;
@@ -492,12 +492,12 @@ fn app_weapon_effect_path_consumes_cues_once_and_syncs_projectile_trails(
     app.reset_weapon_effect_session(999, 2);
     app.queue_weapon_cue(cue);
     app.update_weapon_effects(&view, 0.)?;
-    assert_eq!(app.weapon_effects.cue_cursor(), 2);
+    assert_eq!(app.fx.weapon_effects.cue_cursor(), 2);
     assert_eq!(app.weapon_effect_diagnostics().duplicate_cues, 1);
-    assert_eq!(app.weapon_effects.attachment_count(), 1);
+    assert_eq!(app.fx.weapon_effects.attachment_count(), 1);
     app.disconnect();
-    assert_eq!(app.weapon_effects.cue_cursor(), 0);
-    assert_eq!(app.weapon_effects.world().source_count(), 0);
+    assert_eq!(app.fx.weapon_effects.cue_cursor(), 0);
+    assert_eq!(app.fx.weapon_effects.world().source_count(), 0);
     Ok(())
 }
 
@@ -534,7 +534,7 @@ fn native_weapon_catalog_startup_and_headless_host(f: &ContentRoot) -> anyhow::R
     let base = items.keys().filter(|id| !id.contains(':')).count();
     assert_eq!(base, base_weapon_items(&f.root)?);
     let all = items.len();
-    assert_eq!(app.tool_ui.server_catalog().items.len(), all);
+    assert_eq!(app.build.tool_ui.server_catalog().items.len(), all);
     assert_eq!(app.content.datablocks["ItemData"].len(), all);
     assert_eq!(app.content.item_physics.bounds.len(), all);
     app.ui.core.request(UiAction::HostGame {
@@ -802,7 +802,7 @@ fn native_weapon_catalog_startup_and_headless_host(f: &ContentRoot) -> anyhow::R
     assert!(app.world_items.instances().next().is_none());
     assert!(app.ui.core.hud.tools.iter().all(Option::is_none));
     assert!(!app.ui.core.hud.tool_active);
-    assert!(app.building.is_none());
+    assert!(app.build.building.is_none());
     Ok(())
 }
 #[test]
@@ -1205,17 +1205,17 @@ fn leaving_a_game_forgets_its_seat_eyes_and_liquids(f: &ContentRoot) -> anyhow::
     let mut app = App::load(&f.root, scratch.path(), (320, 240))?;
     // What a game in progress leaves behind: a seat, a rider's eye, a
     // tumble, eyes the camera drew from and the map's liquids.
-    app.seated_on = Some((7, 1));
-    app.mount_heading = Some(1.0);
-    app.takes_turret = true;
-    app.rider_eye = Some(Vec3::ONE);
-    app.tumble = Some(9);
-    app.rider_rotations.insert(3, glam::Quat::from_rotation_y(1.0));
-    app.observer_eye = Some(Vec3::ONE);
-    app.rendered_camera = Some((Vec3::ONE, 1.0, 0.5));
-    app.rendered_roll = 0.3;
-    app.drawn_controls = Some(app.controls.clone());
-    app.liquid_cache = Some(LiquidCache {
+    app.mounts.seated_on = Some((7, 1));
+    app.mounts.mount_heading = Some(1.0);
+    app.mounts.takes_turret = true;
+    app.mounts.rider_eye = Some(Vec3::ONE);
+    app.mounts.tumble = Some(9);
+    app.mounts.rider_rotations.insert(3, glam::Quat::from_rotation_y(1.0));
+    app.view.observer_eye = Some(Vec3::ONE);
+    app.view.rendered_camera = Some((Vec3::ONE, 1.0, 0.5));
+    app.view.rendered_roll = 0.3;
+    app.view.drawn_controls = Some(app.controls.clone());
+    app.scene.liquid_cache = Some(LiquidCache {
         generation: 1,
         palette: Vec::new(),
         liquids: Arc::from(Vec::new()),
@@ -1223,17 +1223,17 @@ fn leaving_a_game_forgets_its_seat_eyes_and_liquids(f: &ContentRoot) -> anyhow::
     });
     app.disconnect();
     // The next game starts on foot, with nothing of the last one's view.
-    assert_eq!(app.seated_on, None);
-    assert_eq!(app.mount_heading, None);
-    assert!(!app.takes_turret);
-    assert_eq!(app.rider_eye, None);
-    assert_eq!(app.tumble, None);
-    assert!(app.rider_rotations.is_empty());
-    assert_eq!(app.seat_report, None);
-    assert_eq!(app.observer_eye, None);
-    assert_eq!(app.rendered_camera, None);
-    assert_eq!(app.rendered_roll, 0.0);
-    assert!(app.drawn_controls.is_none());
-    assert!(app.liquid_cache.is_none());
+    assert_eq!(app.mounts.seated_on, None);
+    assert_eq!(app.mounts.mount_heading, None);
+    assert!(!app.mounts.takes_turret);
+    assert_eq!(app.mounts.rider_eye, None);
+    assert_eq!(app.mounts.tumble, None);
+    assert!(app.mounts.rider_rotations.is_empty());
+    assert_eq!(app.mounts.seat_report, None);
+    assert_eq!(app.view.observer_eye, None);
+    assert_eq!(app.view.rendered_camera, None);
+    assert_eq!(app.view.rendered_roll, 0.0);
+    assert!(app.view.drawn_controls.is_none());
+    assert!(app.scene.liquid_cache.is_none());
     Ok(())
 }

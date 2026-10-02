@@ -1,6 +1,15 @@
 //! Baked map lighting: the light volume and its cache.
 use super::*;
 
+/// Map lighting: the baked light volume, reflections and the environment probe.
+pub(super) struct Lighting {
+    pub(super) light_volume: LightVolumeState,
+    /// Mirror surfaces and their reflections, for the world pass's format.
+    pub(super) reflections: Option<bri_render::reflection::Reflections>,
+    /// The cube metal surfaces reflect, drawn around the nearest one.
+    pub(super) environment_probe: Option<bri_render::environment_probe::EnvironmentProbe>,
+}
+
 /// The map's baked lighting, started on its own thread as soon as the map's
 /// scene is read, so it bakes while the rest of the map loads, and uploaded
 /// once per renderer. Two bakes: the classic light volume

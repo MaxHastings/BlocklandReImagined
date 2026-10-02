@@ -35,6 +35,9 @@ use std::{
     time::Duration,
 };
 
+mod lobby;
+mod gpu;
+mod scene;
 mod actions;
 mod addons;
 mod avatars;
@@ -52,6 +55,18 @@ mod render;
 mod saves;
 mod session;
 mod view;
+use building::*;
+use perf::*;
+use lobby::*;
+use saves::*;
+use addons::*;
+use avatars::*;
+use fx::*;
+use mounts::*;
+use view::*;
+use gpu::*;
+use scene::*;
+use session::*;
 use hud::*;
 use lighting::*;
 type Meshes = BTreeMap<String, bri_content::brick::Brick>;
@@ -410,25 +425,22 @@ const REPORT_REQUEST: RequestId = RequestId::MAX;
 const GHOST_REPORT_INTERVAL: Duration = Duration::from_millis(100);
 
 pub struct App {
-    /// Movement the server's map rules currently allow (the Tutorial's lessons).
-    abilities: bri_sim::session::Abilities,
-    /// Last brick inventory state reported to the server.
-    brick_hand: Option<bri_sim::session::BrickHand>,
-    /// Last ghost brick reported to the server, and when.
-    ghost_report: Option<(Option<bri_sim::session::GhostBrick>, std::time::Instant)>,
+    /// The connection to a game: the attempt in flight, its pending requests and what was last sent.
+    net: SessionState,
+    /// Building: the brick hand and ghosts, tool dialogs and build macros.
+    build: BuildState,
     /// Last place of the copy in hand reported to the server, and when.
     copy_report: Option<(
         Option<(u64, bri_sim::session::CopyPose)>,
         std::time::Instant,
     )>,
-    /// Other players' ghost bricks as uploaded, by owner.
-    remote_ghosts: BTreeMap<bri_world::OwnerId, (bri_sim::session::GhostBrick, Option<GpuScene>)>,
     pub(crate) item_assets: Arc<crate::items::ItemAssets>,
     item_ui: crate::item_ui::ItemUi,
     world_items: crate::world_items::WorldItems,
     foliage: crate::foliage::ClientFoliage,
     weather: crate::weather::ClientWeather,
-    weather_renderer: Option<bri_weather::gpu::WeatherRenderer>,
+    /// Everything uploaded to the graphics card, and the renderers that draw it.
+    gpu: GpuState,
     audio: crate::audio::ClientAudio,
     pub ui: Ui,
     pub content: ClientContent,
@@ -439,190 +451,37 @@ pub struct App {
     /// its own, so a heavy tick never holds up this client's networking,
     /// file jobs or the host player's own connection.
     host_runtime: tokio::runtime::Runtime,
-    attempt: Option<Attempt>,
-    cpu_scene: Option<SceneData>,
-    /// Steering prefs last sent to this session (`SteeringPrefsEvent`).
-    steering_sent: Option<(RequestId, (bool, bool))>,
-    /// Whether the UI was last told to hide the crosshair.
-    crosshair_hidden: bool,
-    /// The held tool's `wheel` command: while its trigger is held, it takes
-    /// the mouse wheel (`UiUpdate::ToolWheel`).
-    tool_wheel: Option<String>,
-    /// The HUD was told the tool in hand takes the paint cans.
-    tool_takes_paint: bool,
-    /// The UI sends the wheel to an Add-On's zooming orbit camera.
-    camera_wheel: bool,
-    /// The aim takes the mouse wheel (`Controls::aim_takes_wheel`).
-    aim_wheel: bool,
-    /// The scope overlay shown (`ItemUi::scope_overlay`).
-    scope_overlay: Option<(u64, f32)>,
-    cpu_terrain: Vec<Arc<bri_render::terrain_scene::TerrainScene>>,
-    renderer: Option<crate::gpu_build::Building<SceneRenderer>>,
-    effects: crate::effects::WorldEffects,
-    weapon_effects: crate::weapon_effects::WeaponEffects,
-    actor_effects: crate::actor_effects::ActorEffects,
-    explosion_shapes: crate::explosion_shapes::ExplosionShapes,
-    /// Add-On beams: tracers, lasers.
-    beams: crate::beams::Beams,
-    /// The Tutorial's target practice targets.
-    tutorial_targets: crate::tutorial_targets::TutorialTargets,
-    /// Pieces thrown by explosions with `debris` (vehicle wrecks, tank shells).
-    explosion_debris: crate::explosion_debris::ExplosionDebris,
+    /// The world as the CPU sees it: map scene, brick chunks, the world log and the query mirror.
+    scene: SceneState,
+    /// What the camera shows beyond the controls: observer and rendered eyes, the drawn controls, crosshair and wheels.
+    view: ViewState,
+    /// Presentation effects: weapon, actor and world effects, debris, fades and the cue queues feeding them.
+    fx: Effects,
     /// Presentation faults absorbed instead of closing the game.
     pub cosmetic_faults: crate::cosmetic::CosmeticFaults,
-    /// Ejected gun casings (`stateEjectShell`) and their GPU model.
-    weapon_shells: crate::weapon_debris::WeaponDebris,
-    shell_gpu: Option<(GpuScene, bri_render::scene::GpuInstances)>,
-    weapon_cues: VecDeque<(bri_sim::presentation::Cue, f32)>,
-    weapon_cue_drops: u64,
-    /// Killed-brick debris (v20 brick explosions) and its GPU models.
-    brick_debris: crate::brick_debris::BrickDebris,
-    debris_models: crate::brick_debris::DebrisModels,
-    /// Bricks easing to a new paint colour, drawn apart from their chunks.
-    brick_fades: crate::brick_fade::BrickFades,
-    fade_models: crate::brick_fade::FadeModels,
-    /// The easing bricks the applied chunks leave out.
-    chunks_left_out: BTreeSet<u64>,
-    /// Client-side mod packages (HUD panels, models) from `packages.json`.
-    package_catalog: Option<Arc<bri_package_runtime::Catalog>>,
-    /// Sandboxed code of enabled Add-Ons, run while a game is entered.
-    client_code: crate::client_code::ClientCode,
-    /// Add-On items' skins, drawn over every copy of them.
-    item_skins: crate::item_skins::ItemSkins,
-    /// Every enabled package including server behaviour, for hosting.
-    server_packages: Option<Arc<bri_package_runtime::Catalog>>,
-    /// The loaded Add-Ons are this player's own choice (packages.json, the
-    /// Add-Ons screen, `enable_packages` or `apply_packages`), so hosting
-    /// runs them as they are. False after a join loaded another server's.
-    packages_from_tools: bool,
-    /// The next join keeps the loaded content even when the server's
-    /// Add-Ons bring bricks, weapons or vehicles: loading them failed, so
-    /// the player joins without them rather than not at all.
-    skip_add_on_reload: bool,
-    /// Told to the player in chat once the next game is entered.
-    join_notices: Vec<String>,
-    package_models: crate::packages::PackageModels,
-    brick_kills: Vec<bri_sim::presentation::Cue>,
-    /// Outlines of non-rendering bricks, drawn only while a building tool is
-    /// out, and whether the uploaded lines are the shown ones (None: stale).
-    hidden_lines: Option<bri_render::lines::LineRenderer>,
-    /// The Environment window's vignette over the world.
-    vignette: Option<bri_render::vignette::VignetteRenderer>,
-    /// The environment the UI was last told of, for which session.
-    environment_sent: Option<(RequestId, bri_ui::models::environment::EnvironmentView)>,
-    /// An Add-On's selection box (`Notice::SelectionBox`), and the box it
-    /// last uploaded.
-    selection_lines: Option<bri_render::lines::LineRenderer>,
-    selection_uploaded: Option<Option<([f32; 3], [f32; 3])>>,
+    /// Add-On packages: the catalog, client code, server packages and imports.
+    addons: AddOns,
     /// Add-On world shapes (`show_shapes`), and the sets last uploaded.
     world_shapes: Option<bri_render::world_shapes::ShapeRenderer>,
     shapes_uploaded: Option<BTreeMap<String, std::sync::Arc<Vec<bri_package_runtime::ops::WorldShape>>>>,
-    hidden_uploaded: Option<bool>,
-    /// `BrickFades::outlined` when the outlines were built: bricks fading
-    /// in or out gain or lose theirs as they pass v20's alpha 0.1.
-    hidden_fading: Vec<(u64, bool)>,
-    weapon_light_deferred: usize,
-    weapon_effect_session: Option<RequestId>,
-    weapon_animation_cues: VecDeque<(bri_sim::presentation::Cue, f32, f64)>,
-    weapon_animation_drops: u64,
-    weapon_animation_cursor: u64,
     /// View kick: hitscan shots seen this frame (actor, hand), and the
     /// newest projectile id the kick has looked at (None before the first
     /// view, so a join does not kick).
     shot_kicks: Vec<(u64, u8)>,
     kick_seen: Option<u64>,
-    effects_renderer: Option<bri_fx_runtime::gpu::EffectsRenderer>,
-    gpu_scene: Option<GpuScene>,
-    light_volume: LightVolumeState,
-    /// Map static shapes' index ranges, and the smashed ones `gpu_scene`
-    /// no longer draws.
-    shape_indices: BTreeMap<u32, std::ops::Range<u32>>,
-    gpu_broken: BTreeSet<u32>,
-    gpu_terrain: Vec<bri_render::terrain_scene::GpuTerrain>,
-    /// World-pass depth and, with MSAA, the multisampled color attachment
-    /// that the last world pass resolves into the frame target.
-    depth: Option<(wgpu::Texture, Option<wgpu::Texture>, (u32, u32))>,
-    meshes: Option<Arc<Meshes>>,
-    /// Mirror bricks' definitions, and where the world's mirrors are.
-    mirror_shapes: Arc<crate::mirrors::MirrorShapes>,
-    mirror_index: crate::mirrors::MirrorIndex,
-    /// Mirror surfaces and their reflections, for the world pass's format.
-    reflections: Option<bri_render::reflection::Reflections>,
-    /// The cube metal surfaces reflect, drawn around the nearest one.
-    environment_probe: Option<bri_render::environment_probe::EnvironmentProbe>,
-    /// Replicated bricks as independently rebuilt chunks sharing one
-    /// uploaded material palette. A running job owns `chunked`.
-    palette: Option<Arc<crate::world_chunks::BrickPalette>>,
-    gpu_palette: Option<GpuScene>,
-    chunked: crate::world_chunks::ChunkedWorld,
-    cpu_chunks: HashMap<crate::world_chunks::ChunkKey, SceneData>,
-    /// Where each brick of a CPU chunk is in its vertices.
-    cpu_chunk_bricks: HashMap<crate::world_chunks::ChunkKey, Arc<crate::world_chunks::ChunkBricks>>,
-    gpu_chunks: HashMap<crate::world_chunks::ChunkKey, GpuScene>,
-    /// The same for each chunk as uploaded, which may be older.
-    gpu_chunk_bricks: HashMap<crate::world_chunks::ChunkKey, Arc<crate::world_chunks::ChunkBricks>>,
-    /// Dead bricks (thrown as debris or falling) the drawn chunks may still
-    /// hold, with their chunk and whether its upload hides them yet. The
-    /// rebuilt chunk without them lands later (100-200 ms on a big build);
-    /// until then they are hidden inside the drawn chunk the frame they die.
-    chunk_hides: BTreeMap<bri_world::BrickId, (crate::world_chunks::ChunkKey, bool)>,
-    /// This frame's liquids, rebuilt only when they or the paint change.
-    liquid_cache: Option<LiquidCache>,
-    chunk_uploads: BTreeSet<crate::world_chunks::ChunkKey>,
-    world_source: Option<Arc<bri_net::protocol::PublicWorld>>,
-    world_revision: u64,
-    world_log: Option<Arc<network::WorldLog>>,
-    world_job: Option<WorldJob>,
+    /// Map lighting: the baked light volume, reflections and the environment probe.
+    lighting: Lighting,
     graphics: crate::graphics::Graphics,
     load_limit: Arc<tokio::sync::Semaphore>,
     /// Host on a port the system picks instead of `$Pref::Server::Port`
     /// ([`App::host_on_any_port`]).
     host_any_port: bool,
-    /// Rebuild GPU renderers before the next frame (the map changed).
-    gpu_restart: bool,
-    /// Map of the installed scene.
-    scene_map: Option<String>,
-    materials: Option<Arc<crate::materials::BrickMaterials>>,
-    building: Option<crate::building::Building>,
-    pending_actions: BTreeMap<RequestId, PendingAction>,
-    tool_ui: crate::tool_ui::ToolUi,
-    dialog_epoch: u64,
-    /// `dialog_epoch` when the latest trigger click was sent. A wrench or
-    /// printer hit notice opens its dialog only if no tool switch, cancel or
-    /// close has happened since, so a cancelled click never reopens late.
-    trigger_epoch: Option<u64>,
-    query_source: Option<Arc<bri_net::protocol::PublicWorld>>,
-    /// The replica log and revision `query_source` came from.
-    query_log: Option<(Arc<network::WorldLog>, u64)>,
-    /// The ghost built at the origin and the one transform that places it.
-    ghost_gpu: Option<(GpuScene, bri_render::scene::GpuInstances)>,
-    /// What `ghost_gpu` was built from: moving the ghost only moves it.
-    ghost_look: Option<GhostLook>,
-    ghost_uploaded: u64,
-    avatar_assets: Arc<crate::avatar::AvatarAssets>,
-    avatars: BTreeMap<bri_world::OwnerId, crate::avatar::AvatarMesh>,
-    /// Horses spawned at vehicle bricks: `HorseArmor` bots, animated like
-    /// horse players.
-    mount_meshes: BTreeMap<u64, crate::avatar::AvatarMesh>,
-    avatar_actions: BTreeMap<u64, crate::avatar::ActionAnimation>,
-    /// The script threads not tied to a mounted image, by player and thread
-    /// number: 0 and 1 a package's body animations, 3 the builder and chat
-    /// gestures. Thread 2 is `avatar_actions`.
-    avatar_threads: BTreeMap<u64, AvatarThreads>,
-    avatar_action_images: BTreeMap<u64, String>,
-    animation_time: f64,
-    avatar_preview: Option<crate::gpu_build::Building<crate::avatar::Preview>>,
-    preview_request: Option<(bri_content::avatar::Appearance, [f32; 3], f32)>,
-    preview_dirty: bool,
-    /// Each listed save's own file, whose picture Load Bricks previews.
-    save_pictures: HashMap<crate::save_picture::Key, PathBuf>,
-    save_previews: crate::save_picture::Previews,
+    /// Avatar bodies, their actions and gestures, and the avatar screen's preview.
+    avatar: Avatars,
+    /// Saves and their pictures, file jobs, old saves and colour-set loads.
+    files: Saves,
     /// Whether today's Add-On splash has been looked for (once a run).
     splash_checked: bool,
-    /// The save picture to take with the next scene drawn.
-    save_picture: Option<PathBuf>,
-    /// Save pictures being read back and written.
-    save_shots: crate::platform::Screenshots,
     motion: crate::motion::Motion,
     /// Projectiles, drops and package entities smoothed between host updates.
     ghosts: crate::ghosts::Ghosts,
@@ -630,103 +489,16 @@ pub struct App {
     shot_origins: crate::shot_origins::ShotOrigins,
     vehicle_assets: crate::vehicles::VehicleAssets,
     vehicles: crate::vehicles::ClientVehicles,
-    /// Heading of the vehicle the local player rides, last frame.
-    mount_heading: Option<f32>,
-    /// The vehicle seat the local player sat in last frame.
-    seated_on: Option<(u64, u8)>,
-    /// Sat down in a gunner's seat and not yet looking along its turret:
-    /// done on the first frame the seat's view is known, which a seat
-    /// change's own frame may not be.
-    takes_turret: bool,
-    /// The seat this client's moves are shaped for, sent with them: set once
-    /// a new seat's view is in place, so the host reads moves made for the
-    /// old seat as the old seat's.
-    seat_report: Option<bri_sim::session::SeatSince>,
-    /// This frame's seat rotation for every mounted player.
-    rider_rotations: BTreeMap<bri_world::OwnerId, glam::Quat>,
-    /// This frame's first-person eye while the local player rides a vehicle
-    /// or another player, from their posed `eye` node.
-    rider_eye: Option<Vec3>,
-    /// Where the admin, spy or death camera was last drawn from, reported
-    /// to the server as the camera's transform.
-    observer_eye: Option<Vec3>,
-    /// The camera the last rendered frame was drawn from (eye, yaw, pitch).
-    rendered_camera: Option<(Vec3, f32, f32)>,
-    /// Which driven vehicle is predicted, and one whose prediction failed.
-    /// The rendered camera's roll about its forward axis (a rider's
-    /// first-person view tilting with the seat), radians.
-    rendered_roll: f32,
-    /// The controls as the last tick sampled them. The tick poses the body,
-    /// the held items and the eye from these; the redraw must draw the camera
-    /// from them too. Mouse motion the window loop delivers between the tick
-    /// and the redraw would otherwise turn the camera by an amount the body
-    /// never saw, a different amount each frame. Torque draws the control
-    /// object and its camera from one move per frame (`Player::getRenderEyeTransform`,
-    /// 0x5aafa0, places both the first-person camera and the mounted images).
-    drawn_controls: Option<Controls>,
-    /// The tumble vehicle the local player last started riding.
-    tumble: Option<u64>,
+    /// Seats and riders: what the local player sits on and how riders are posed.
+    mounts: Mounts,
     music_world: Option<Arc<bri_net::protocol::PublicWorld>>,
-    /// Connection samples for the net graph and the expanded overlay.
-    net_sampler: crate::perf::NetSampler,
-    /// Whether a joined host has gone quiet, for the lag icon.
-    lag_watch: bri_net::lag::LagWatch,
-    /// When the performance overlay's slower figures are next refreshed.
-    perf_stats_due: std::time::Instant,
-    gpu_name: String,
-    /// GPU time per world pass, in ms, from the latest timed frame: while
-    /// the expanded performance overlay shows, or always once
-    /// `time_gpu_passes` asks.
-    gpu_passes: Vec<(&'static str, f32)>,
-    time_passes: bool,
-    frame_stats: crate::console::FrameStats,
-    /// Minute-by-minute frame times for the session log (player sessions).
-    frame_log: Option<crate::quality::FrameLog>,
-    /// The start-up release check's answer, until it is shown.
-    update_check: Option<mpsc::Receiver<crate::updates::Newer>>,
-    /// Pick a graphics quality from the GPU if the player never has.
-    auto_quality: bool,
-    /// LAN listings from the last discovery query: address -> certificate.
-    lan_hosts: BTreeMap<String, Vec<u8>>,
-    /// Automatic rejoins tried since the connection last dropped.
-    reconnects: u8,
-    lan_query: Option<mpsc::Receiver<JoinList>>,
-    /// Add-On import in progress: request, row id and the worker's answer.
-    /// Converting the Add-Ons folder (`add_ons::start_sync`).
-    add_on_sync: Option<mpsc::Receiver<crate::add_ons::SyncNote>>,
-    /// The Add-On list last asked for, the list that loaded without the
-    /// Add-Ons that broke it, and why each was left out.
-    left_out_add_ons: Option<(
-        bri_package::packages::PackageSet,
-        bri_package::packages::PackageSet,
-        Vec<String>,
-    )>,
+    /// Performance: frame stats and log, network sampling, lag watch and quality.
+    perf: Perf,
+    /// Finding games: LAN hosts and queries, the update check and the firewall fix.
+    lobby: Lobby,
     /// Add-On problems reported while the content last loaded.
     content_problems: Vec<bri_package::health::Problem>,
-    /// What the enabled Add-Ons name that could not be found or used.
-    add_on_health: crate::add_on_health::AddOnHealth,
-    /// The invite for the game this player hosts (`/invite` copies it).
-    invite: Option<String>,
-    /// The elevated firewall helper's outcome.
-    firewall_fix: Option<mpsc::Receiver<Result<(), String>>>,
-    /// The frame cap the platform was last given (startup, then saves), so
-    /// a save that leaves it alone sends no window command.
-    frame_limit: Option<u32>,
-    macro_recording: Option<Vec<UiAction>>,
-    build_macro: Vec<UiAction>,
-    macro_playback: VecDeque<UiAction>,
     combat: CombatPresentation,
-    saves: crate::saves::Store,
-    file_jobs: crate::saves::Jobs,
-    /// v20 `.bls` saves players brought over; converting starts with the
-    /// first frame, once startup has settled which Add-Ons are on.
-    old_saves: std::sync::Arc<crate::old_saves::OldSaves>,
-    old_saves_started: bool,
-    /// A save list read because converted saves arrived while a save
-    /// dialog was open.
-    save_refresh: Option<std::sync::mpsc::Receiver<Result<Vec<crate::saves::Entry>, String>>>,
-    /// A read save waiting on `LoadBricksColorGui`'s choice.
-    color_load: Option<(crate::saves::Request, Box<bri_world::build::SavedBuild>)>,
     /// Transport tasks still stopping a host and keeping its world; quitting
     /// waits for them.
     closing: Vec<tokio::task::JoinHandle<()>>,
@@ -1615,40 +1387,40 @@ impl PlatformApp for App {
         queue: &wgpu::Queue,
         format: wgpu::TextureFormat,
     ) -> Result<()> {
-        if self.auto_quality {
-            self.auto_quality = false;
+        if self.perf.auto_quality {
+            self.perf.auto_quality = false;
             self.pick_quality(&device.adapter_info());
         }
-        self.gpu_name = device.adapter_info().name;
+        self.gpu.gpu_name = device.adapter_info().name;
         self.item_ui.gpu_stopped();
         self.world_items.clear_gpu();
         crate::vehicles::ClientVehicles::gpu_stopped(&mut self.vehicle_assets);
-        self.explosion_shapes.gpu_stopped();
-        self.beams.gpu_stopped();
-        self.tutorial_targets.gpu_stopped();
-        self.shell_gpu = None;
-        for avatar in self.avatars.values_mut() {
+        self.fx.explosion_shapes.gpu_stopped();
+        self.fx.beams.gpu_stopped();
+        self.fx.tutorial_targets.gpu_stopped();
+        self.gpu.shell_gpu = None;
+        for avatar in self.avatar.avatars.values_mut() {
             avatar.gpu = None;
             avatar.instance = None;
         }
         // The avatar preview and the world compile their pipelines on
         // worker threads; the menus draw meanwhile (see gpu_build).
         let preview_device = device.clone();
-        self.avatar_preview = Some(crate::gpu_build::Building::spawn(
+        self.avatar.avatar_preview = Some(crate::gpu_build::Building::spawn(
             "avatar preview pipelines",
             move || crate::avatar::Preview::new(&preview_device),
         ));
-        self.preview_dirty = self.preview_request.is_some();
+        self.avatar.preview_dirty = self.avatar.preview_request.is_some();
         bri_render::color::set_color_vision(bri_ui::screens::options::color_vision(
             &self.ui.core.prefs,
         ));
         let samples = self.graphics.samples;
         let (scene_device, shadows) = (device.clone(), self.graphics.shadows);
-        self.renderer = Some(crate::gpu_build::Building::spawn(
+        self.gpu.renderer = Some(crate::gpu_build::Building::spawn(
             "scene pipelines",
             move || SceneRenderer::with_settings(&scene_device, format, samples, shadows),
         ));
-        self.reflections = Some(bri_render::reflection::Reflections::new(
+        self.lighting.reflections = Some(bri_render::reflection::Reflections::new(
             device,
             format,
             samples,
@@ -1656,10 +1428,10 @@ impl PlatformApp for App {
         ));
         self.foliage.gpu_stopped();
         self.foliage.set_samples(samples);
-        self.client_code.gpu_stopped();
-        self.item_skins.gpu_stopped();
+        self.addons.client_code.gpu_stopped();
+        self.addons.item_skins.gpu_stopped();
         let weather_limits = bri_weather::WeatherLimits::default();
-        self.weather_renderer = Some(bri_weather::gpu::WeatherRenderer::new(
+        self.gpu.weather_renderer = Some(bri_weather::gpu::WeatherRenderer::new(
             device,
             queue,
             self.weather.world.pack(),
@@ -1668,25 +1440,25 @@ impl PlatformApp for App {
             samples,
             weather_limits.drops + weather_limits.splashes,
         )?);
-        self.hidden_lines = Some(bri_render::lines::LineRenderer::new(
+        self.gpu.hidden_lines = Some(bri_render::lines::LineRenderer::new(
             device,
             format,
             bri_render::scene::DEPTH_FORMAT,
             samples,
         ));
-        self.vignette = Some(bri_render::vignette::VignetteRenderer::new(
+        self.gpu.vignette = Some(bri_render::vignette::VignetteRenderer::new(
             device,
             format,
             bri_render::scene::DEPTH_FORMAT,
             samples,
         ));
-        self.selection_lines = Some(bri_render::lines::LineRenderer::new(
+        self.gpu.selection_lines = Some(bri_render::lines::LineRenderer::new(
             device,
             format,
             bri_render::scene::DEPTH_FORMAT,
             samples,
         ));
-        self.selection_uploaded = None;
+        self.gpu.selection_uploaded = None;
         self.world_shapes = Some(bri_render::world_shapes::ShapeRenderer::new(
             device,
             format,
@@ -1694,41 +1466,41 @@ impl PlatformApp for App {
             samples,
         ));
         self.shapes_uploaded = None;
-        self.hidden_uploaded = None;
+        self.gpu.hidden_uploaded = None;
         let limits = bri_fx_runtime::EffectsLimits::default();
-        self.effects_renderer = Some(bri_fx_runtime::gpu::EffectsRenderer::new(
+        self.gpu.effects_renderer = Some(bri_fx_runtime::gpu::EffectsRenderer::new(
             device,
             queue,
-            self.weapon_effects.world().pack(),
+            self.fx.weapon_effects.world().pack(),
             format,
             bri_render::scene::DEPTH_FORMAT,
             samples,
             limits.particles.saturating_mul(2) + limits.lights.saturating_mul(2),
         )?);
-        self.gpu_scene = None;
-        self.gpu_terrain.clear();
-        self.gpu_palette = None;
-        self.gpu_chunks.clear();
-        self.ghost_gpu = None;
-        self.ghost_look = None;
-        self.ghost_uploaded = u64::MAX;
-        self.remote_ghosts.clear();
-        self.debris_models.clear();
-        self.fade_models.clear();
-        self.package_models.clear();
-        if let Some(lines) = &mut self.hidden_lines {
+        self.gpu.gpu_scene = None;
+        self.gpu.gpu_terrain.clear();
+        self.gpu.gpu_palette = None;
+        self.gpu.gpu_chunks.clear();
+        self.gpu.ghost_gpu = None;
+        self.gpu.ghost_look = None;
+        self.gpu.ghost_uploaded = u64::MAX;
+        self.build.remote_ghosts.clear();
+        self.fx.debris_models.clear();
+        self.fx.fade_models.clear();
+        self.addons.package_models.clear();
+        if let Some(lines) = &mut self.gpu.hidden_lines {
             lines.clear();
         }
-        self.hidden_uploaded = None;
-        if let Some(lines) = &mut self.selection_lines {
+        self.gpu.hidden_uploaded = None;
+        if let Some(lines) = &mut self.gpu.selection_lines {
             lines.clear();
         }
-        self.selection_uploaded = None;
+        self.gpu.selection_uploaded = None;
         if let Some(shapes) = &mut self.world_shapes {
             shapes.clear();
         }
         self.shapes_uploaded = None;
-        self.depth = None;
+        self.gpu.depth = None;
         Ok(())
     }
     fn close_requested(&mut self) -> bool {
@@ -1744,56 +1516,56 @@ impl PlatformApp for App {
         false
     }
     fn gpu_lost(&mut self) {
-        self.client_code.device_lost();
+        self.addons.client_code.device_lost();
     }
     fn gpu_stopped(&mut self) {
-        self.client_code.gpu_stopped();
-        self.item_skins.gpu_stopped();
+        self.addons.client_code.gpu_stopped();
+        self.addons.item_skins.gpu_stopped();
         self.item_ui.gpu_stopped();
         self.world_items.clear_gpu();
         crate::vehicles::ClientVehicles::gpu_stopped(&mut self.vehicle_assets);
-        self.explosion_shapes.gpu_stopped();
-        self.beams.gpu_stopped();
-        self.tutorial_targets.gpu_stopped();
-        self.shell_gpu = None;
-        for avatar in self.avatars.values_mut() {
+        self.fx.explosion_shapes.gpu_stopped();
+        self.fx.beams.gpu_stopped();
+        self.fx.tutorial_targets.gpu_stopped();
+        self.gpu.shell_gpu = None;
+        for avatar in self.avatar.avatars.values_mut() {
             avatar.gpu = None;
             avatar.instance = None;
         }
-        self.avatar_preview = None;
-        self.renderer = None;
-        self.reflections = None;
-        self.environment_probe = None;
+        self.avatar.avatar_preview = None;
+        self.gpu.renderer = None;
+        self.lighting.reflections = None;
+        self.lighting.environment_probe = None;
         self.foliage.gpu_stopped();
-        self.weather_renderer = None;
-        self.effects_renderer = None;
-        self.hidden_lines = None;
-        self.selection_lines = None;
+        self.gpu.weather_renderer = None;
+        self.gpu.effects_renderer = None;
+        self.gpu.hidden_lines = None;
+        self.gpu.selection_lines = None;
         self.world_shapes = None;
-        self.gpu_scene = None;
-        self.gpu_terrain.clear();
-        self.gpu_palette = None;
-        self.gpu_chunks.clear();
-        self.ghost_gpu = None;
-        self.ghost_look = None;
-        self.ghost_uploaded = u64::MAX;
-        self.remote_ghosts.clear();
-        self.debris_models.clear();
-        self.fade_models.clear();
-        self.package_models.clear();
-        if let Some(lines) = &mut self.hidden_lines {
+        self.gpu.gpu_scene = None;
+        self.gpu.gpu_terrain.clear();
+        self.gpu.gpu_palette = None;
+        self.gpu.gpu_chunks.clear();
+        self.gpu.ghost_gpu = None;
+        self.gpu.ghost_look = None;
+        self.gpu.ghost_uploaded = u64::MAX;
+        self.build.remote_ghosts.clear();
+        self.fx.debris_models.clear();
+        self.fx.fade_models.clear();
+        self.addons.package_models.clear();
+        if let Some(lines) = &mut self.gpu.hidden_lines {
             lines.clear();
         }
-        self.hidden_uploaded = None;
-        if let Some(lines) = &mut self.selection_lines {
+        self.gpu.hidden_uploaded = None;
+        if let Some(lines) = &mut self.gpu.selection_lines {
             lines.clear();
         }
-        self.selection_uploaded = None;
+        self.gpu.selection_uploaded = None;
         if let Some(shapes) = &mut self.world_shapes {
             shapes.clear();
         }
         self.shapes_uploaded = None;
-        self.depth = None;
+        self.gpu.depth = None;
     }
     fn render_scene(&mut self, frame: &mut RenderContext<'_>) -> Result<bool> {
         self.render_frame(frame)

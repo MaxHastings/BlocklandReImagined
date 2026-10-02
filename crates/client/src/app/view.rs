@@ -1,6 +1,38 @@
 //! The camera: whose eyes, which mode, where it looks.
 use super::*;
 
+/// What the camera shows beyond the controls: observer and rendered eyes, the drawn controls, crosshair and wheels.
+pub(super) struct ViewState {
+    /// Whether the UI was last told to hide the crosshair.
+    pub(super) crosshair_hidden: bool,
+    /// The held tool's `wheel` command: while its trigger is held, it takes
+    /// the mouse wheel (`UiUpdate::ToolWheel`).
+    pub(super) tool_wheel: Option<String>,
+    /// The UI sends the wheel to an Add-On's zooming orbit camera.
+    pub(super) camera_wheel: bool,
+    /// The aim takes the mouse wheel (`Controls::aim_takes_wheel`).
+    pub(super) aim_wheel: bool,
+    /// The scope overlay shown (`ItemUi::scope_overlay`).
+    pub(super) scope_overlay: Option<(u64, f32)>,
+    /// Where the admin, spy or death camera was last drawn from, reported
+    /// to the server as the camera's transform.
+    pub(super) observer_eye: Option<Vec3>,
+    /// The camera the last rendered frame was drawn from (eye, yaw, pitch).
+    pub(super) rendered_camera: Option<(Vec3, f32, f32)>,
+    /// Which driven vehicle is predicted, and one whose prediction failed.
+    /// The rendered camera's roll about its forward axis (a rider's
+    /// first-person view tilting with the seat), radians.
+    pub(super) rendered_roll: f32,
+    /// The controls as the last tick sampled them. The tick poses the body,
+    /// the held items and the eye from these; the redraw must draw the camera
+    /// from them too. Mouse motion the window loop delivers between the tick
+    /// and the redraw would otherwise turn the camera by an amount the body
+    /// never saw, a different amount each frame. Torque draws the control
+    /// object and its camera from one move per frame (`Player::getRenderEyeTransform`,
+    /// 0x5aafa0, places both the first-person camera and the mounted images).
+    pub(super) drawn_controls: Option<Controls>,
+}
+
 impl App {
     /// `shot.kick`: shake this player's own view when they shoot, and the
     /// view of anyone within a kick's `radius` of another player's shot,
@@ -108,7 +140,7 @@ impl App {
     /// The local first-person eye: the rider's while mounted, else the
     /// smoothed predicted eye.
     pub(super) fn local_eye(&self) -> Option<Vec3> {
-        self.rider_eye.or(self.motion.local_eye())
+        self.mounts.rider_eye.or(self.motion.local_eye())
     }
     /// Players and vehicles as drawn this frame, as boxes that shove
     /// client-only bodies (debris, Add-On bodies). Vehicle ids have the top
@@ -489,7 +521,7 @@ impl App {
             | crate::controls::ObserverMode::Path(position) => position,
             crate::controls::ObserverMode::Orbit(_)
             | crate::controls::ObserverMode::Drive(_)
-            | crate::controls::ObserverMode::Point(..) => self.observer_eye?,
+            | crate::controls::ObserverMode::Point(..) => self.view.observer_eye?,
         };
         let view = bri_sim::session::CameraView {
             eye: eye.to_array(),
@@ -503,7 +535,7 @@ impl App {
     /// `Image::crosshair`). Purely local.
     pub(super) fn update_held_weapon(&mut self) {
         let view = self
-            .attempt
+            .net.attempt
             .as_ref()
             .filter(|a| a.entered)
             .and_then(|a| a.view.as_ref());
@@ -518,8 +550,8 @@ impl App {
         });
         self.controls.set_aim(image.and_then(|i| i.zoom.clone()));
         let hidden = image.is_some_and(|i| !i.crosshair) || self.controls.aim_hides_crosshair();
-        if hidden != self.crosshair_hidden {
-            self.crosshair_hidden = hidden;
+        if hidden != self.view.crosshair_hidden {
+            self.view.crosshair_hidden = hidden;
             self.ui.apply(UiUpdate::HideCrosshair(hidden));
         }
         // The trigger goes to the tool only on foot or in a seat that is not
@@ -528,7 +560,7 @@ impl App {
         let wheel = image
             .and_then(|i| i.commands.wheel.clone())
             .filter(|_| self.controls.observer().is_none() && !self.local_weapon_seat());
-        claim_wheel(&mut self.ui, &mut self.tool_wheel, wheel);
+        claim_wheel(&mut self.ui, &mut self.view.tool_wheel, wheel);
         let keys = image.map_or_else(Default::default, |i| crate::building::ImageKeys {
             shift: i.commands.shift.clone(),
             rotate: i.commands.rotate.clone(),
@@ -536,23 +568,23 @@ impl App {
             paint: i.commands.paint.clone(),
             paint_picker: i.paint_picker,
         });
-        if let Some(building) = self.building.as_mut() {
+        if let Some(building) = self.build.building.as_mut() {
             building.set_image_keys(keys);
             let takes = building.keeps_tool_for_paint();
-            if takes != self.tool_takes_paint {
-                self.tool_takes_paint = takes;
+            if takes != self.build.tool_takes_paint {
+                self.build.tool_takes_paint = takes;
                 self.ui.apply(UiUpdate::ToolTakesPaint(takes));
             }
         }
         let zooms = self.controls.orbit_zooms();
-        if zooms != self.camera_wheel {
-            self.camera_wheel = zooms;
+        if zooms != self.view.camera_wheel {
+            self.view.camera_wheel = zooms;
             self.ui.apply(UiUpdate::CameraWheel(zooms));
         }
         // Aiming a scope with steps, the wheel zooms instead (`Zoom::levels`).
         let aim_wheel = self.controls.aim_takes_wheel();
-        if aim_wheel != self.aim_wheel {
-            self.aim_wheel = aim_wheel;
+        if aim_wheel != self.view.aim_wheel {
+            self.view.aim_wheel = aim_wheel;
             self.ui.apply(UiUpdate::AimWheel(aim_wheel));
         }
         // A scope's picture while aiming from the eye (`Zoom::overlay`);
@@ -560,8 +592,8 @@ impl App {
         let overlay = image
             .filter(|_| self.controls.scope_overlay().is_some())
             .and_then(|i| self.item_ui.scope_overlay(&i.id));
-        if overlay != self.scope_overlay {
-            self.scope_overlay = overlay;
+        if overlay != self.view.scope_overlay {
+            self.view.scope_overlay = overlay;
             self.world_items.set_scoped(overlay.is_some());
             self.ui.apply(UiUpdate::ScopeOverlay(overlay));
         }

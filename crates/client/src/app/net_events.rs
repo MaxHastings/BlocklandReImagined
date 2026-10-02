@@ -3,7 +3,7 @@ use super::*;
 
 impl App {
     pub(super) fn poll_network(&mut self) -> Result<()> {
-        let Some(mut a) = self.attempt.take() else {
+        let Some(mut a) = self.net.attempt.take() else {
             return Ok(());
         };
         if self.ui.session_request() != Some(a.id) {
@@ -39,19 +39,19 @@ impl App {
                     a.saved_revision = None;
                     // Movement limits belong to the old map's Tutorial; the
                     // new map sends its own if it has any.
-                    self.abilities = Default::default();
+                    self.net.abilities = Default::default();
                     a.settling = Some(std::time::Instant::now() + SETTLE);
                     // Load the new map's scene and prediction world; the old
                     // scene stays until it is ready.
                     let paths = self.content.paths.clone();
                     let light_cache = self.state_dir.join("light-volumes");
                     let selected = self.content.selectable.clone();
-                    let catalog = self.tool_ui.server_catalog();
+                    let catalog = self.build.tool_ui.server_catalog();
                     let load_limit = self.load_limit.clone();
                     let (scene_tx, scene) = mpsc::sync_channel(1);
                     a.scene = scene;
                     self.world_items.reset();
-                    self.brick_debris.clear();
+                    self.fx.brick_debris.clear();
                     let (failed_tx, failed_rx) = mpsc::sync_channel(1);
                     a.map_failure = Some(failed_rx);
                     // v20 shows the loading GUI while the new mission loads.
@@ -104,7 +104,7 @@ impl App {
                     // play, never over a newer modal or while typing, and
                     // only for a click nothing has cancelled since.
                     if self.ui.stack() != [ScreenId::Play]
-                        || self.trigger_epoch != Some(self.dialog_epoch)
+                        || self.net.trigger_epoch != Some(self.net.dialog_epoch)
                     {
                         continue;
                     }
@@ -117,7 +117,7 @@ impl App {
                         brick,
                         mode,
                     };
-                    match self.tool_ui.accept_inspection(
+                    match self.build.tool_ui.accept_inspection(
                         &reply,
                         mode,
                         None,
@@ -162,15 +162,15 @@ impl App {
                             hide_bar,
                         },
                         bri_sim::session::Notice::Abilities(abilities) => {
-                            self.abilities = abilities;
+                            self.net.abilities = abilities;
                             continue;
                         }
                         bri_sim::session::Notice::MusicTracks(music) => {
-                            self.tool_ui.offer_music(&music);
+                            self.build.tool_ui.offer_music(&music);
                             continue;
                         }
                         bri_sim::session::Notice::TempBrickColor(color) => {
-                            if let Some(building) = self.building.as_mut() {
+                            if let Some(building) = self.build.building.as_mut() {
                                 building.set_random_color(color);
                             }
                             continue;
@@ -258,7 +258,7 @@ impl App {
                             continue;
                         }
                         bri_sim::session::Notice::Blueprint(blueprint) => {
-                            if let Some(building) = self.building.as_mut()
+                            if let Some(building) = self.build.building.as_mut()
                                 && let Err(error) = building.set_blueprint(blueprint.map(|b| *b))
                             {
                                 bri_console::echo(format!("Copied build ignored: {error:#}"));
@@ -266,7 +266,7 @@ impl App {
                             continue;
                         }
                         bri_sim::session::Notice::PutAway => {
-                            if let Some(building) = self.building.as_mut() {
+                            if let Some(building) = self.build.building.as_mut() {
                                 for update in building.put_away() {
                                     self.ui.apply_session(a.id, update);
                                 }
@@ -274,7 +274,7 @@ impl App {
                             continue;
                         }
                         bri_sim::session::Notice::MirrorCopy { across_z } => {
-                            if let Some(building) = self.building.as_mut() {
+                            if let Some(building) = self.build.building.as_mut() {
                                 building.mirror_copy(across_z);
                             }
                             continue;
@@ -283,25 +283,25 @@ impl App {
                             definition,
                             quarter_turns,
                         } => {
-                            if let Some(building) = self.building.as_mut() {
+                            if let Some(building) = self.build.building.as_mut() {
                                 building.mirror_ghost(&definition, quarter_turns);
                             }
                             continue;
                         }
                         bri_sim::session::Notice::MoveCopy { point, normal } => {
-                            if let Some(building) = self.building.as_mut() {
+                            if let Some(building) = self.build.building.as_mut() {
                                 building.move_copy(point, normal);
                             }
                             continue;
                         }
                         bri_sim::session::Notice::FlipCopy => {
-                            if let Some(building) = self.building.as_mut() {
+                            if let Some(building) = self.build.building.as_mut() {
                                 building.flip_copy();
                             }
                             continue;
                         }
                         bri_sim::session::Notice::PivotCopy { whole } => {
-                            if let Some(building) = self.building.as_mut() {
+                            if let Some(building) = self.build.building.as_mut() {
                                 building.pivot_copy(whole);
                             }
                             continue;
@@ -334,7 +334,7 @@ impl App {
                             UiUpdate::OpenFillWrench { bricks }
                         }
                         bri_sim::session::Notice::TakePaint(take) => {
-                            if let Some(building) = self.building.as_mut() {
+                            if let Some(building) = self.build.building.as_mut() {
                                 building.set_paint_taken(take);
                             }
                             continue;
@@ -350,7 +350,7 @@ impl App {
                             })
                         }
                         bri_sim::session::Notice::SelectionBox(outline) => {
-                            if let Some(building) = self.building.as_mut()
+                            if let Some(building) = self.build.building.as_mut()
                                 && let Err(error) = building.set_outline(outline.map(|o| *o))
                             {
                                 bri_console::echo(format!("Selection box ignored: {error:#}"));
@@ -386,14 +386,14 @@ impl App {
                 (!a.local && a.entered && reason.contains(bri_net::client::CONNECTION_LOST))
                     .then(|| a.name.clone());
             if let Some(address) = rejoin
-                && self.reconnects < MAX_RECONNECTS
+                && self.net.reconnects < MAX_RECONNECTS
             {
-                self.reconnects += 1;
+                self.net.reconnects += 1;
                 if self.join(id, address, String::new()).is_ok() {
                     return Ok(());
                 }
             }
-            self.reconnects = 0;
+            self.net.reconnects = 0;
             // The server's Add-Ons bring content: load it and join again
             // (the downloads are cached, so this join fetches nothing).
             let add_ons = a.add_ons.lock().ok().and_then(|mut slot| slot.take());
@@ -401,7 +401,7 @@ impl App {
                 self.disconnect();
                 let applied = self.apply_packages(&set);
                 // The next game this player hosts runs their own list again.
-                self.packages_from_tools = false;
+                self.addons.packages_from_tools = false;
                 // Add-Ons that do not load here are joined without: the
                 // player is told which, in chat, once in the game.
                 if let Err(error) = applied {
@@ -409,13 +409,13 @@ impl App {
                         "Some of this server's Add-Ons could not be loaded on this computer, so you joined without them: {error:#}"
                     );
                     bri_console::warn(&text);
-                    self.join_notices.push(text);
-                    self.skip_add_on_reload = true;
+                    self.net.join_notices.push(text);
+                    self.addons.skip_add_on_reload = true;
                 }
                 match self.join(id, a.name.clone(), String::new()) {
                     Ok(()) => return Ok(()),
                     Err(error) => {
-                        self.join_notices.clear();
+                        self.net.join_notices.clear();
                         reason =
                             format!("Could not join again with the server's Add-Ons: {error:#}");
                         bri_console::warn(&reason);
@@ -453,37 +453,37 @@ impl App {
                 bri_progress::Unit::Steps,
                 None,
             );
-            if self.cpu_scene.is_some() {
+            if self.scene.cpu_scene.is_some() {
                 // A map change: renderers keep per-map sky and terrain state,
                 // so rebuild them for the new map like a fresh join.
                 self.gpu_stopped();
-                self.gpu_restart = true;
+                self.gpu.gpu_restart = true;
             }
-            self.scene_map = Some(prepared.map_id.clone());
+            self.scene.scene_map = Some(prepared.map_id.clone());
             self.foliage.set_map(prepared.foliage);
             self.weather.set_map(&prepared.map_id, prepared.waters)?;
-            self.light_volume = prepared.light_volume;
-            self.cpu_scene = Some(prepared.scene);
-            self.shape_indices = prepared.shape_indices;
-            self.cpu_terrain = prepared.terrain;
-            self.meshes = Some(prepared.meshes);
-            self.mirror_shapes = prepared.mirror_shapes;
-            self.mirror_index.clear();
-            self.materials = Some(prepared.materials);
-            self.palette = Some(prepared.palette);
-            self.gpu_palette = None;
-            let old = self.building.replace(prepared.building);
+            self.lighting.light_volume = prepared.light_volume;
+            self.scene.cpu_scene = Some(prepared.scene);
+            self.scene.shape_indices = prepared.shape_indices;
+            self.scene.cpu_terrain = prepared.terrain;
+            self.scene.meshes = Some(prepared.meshes);
+            self.scene.mirror_shapes = prepared.mirror_shapes;
+            self.scene.mirror_index.clear();
+            self.scene.materials = Some(prepared.materials);
+            self.scene.palette = Some(prepared.palette);
+            self.gpu.gpu_palette = None;
+            let old = self.build.building.replace(prepared.building);
             self.motion.install(prepared.mirror);
-            let building = self.building.as_mut().unwrap();
+            let building = self.build.building.as_mut().unwrap();
             building.set_tool_catalog(self.item_ui.catalog())?;
             if let Some(old) = &old {
                 building.carry_over(old);
             }
-            self.gpu_scene = None;
-            self.gpu_terrain.clear();
+            self.gpu.gpu_scene = None;
+            self.gpu.gpu_terrain.clear();
             // A map change replaced what first entry set the HUD up from.
             if a.entered
-                && let (Some(scene), Some(view)) = (&self.cpu_scene, &a.view)
+                && let (Some(scene), Some(view)) = (&self.scene.cpu_scene, &a.view)
             {
                 for update in self.map_setup_updates(scene, &view.world.palette)? {
                     self.ui.apply_session(a.id, update);
@@ -496,13 +496,13 @@ impl App {
         // The server's Add-Ons' wrench events join the wrench's lists.
         if let Some(view) = &a.view
             && let Some(update) = self
-                .tool_ui
+                .build.tool_ui
                 .offer_events(&view.brick_events)
             && a.entered
         {
             self.ui.apply_session(a.id, update);
         }
-        if let (Some(building), Some(view)) = (&mut self.building, &a.view) {
+        if let (Some(building), Some(view)) = (&mut self.build.building, &a.view) {
             building.set_held_brick(view.weapons.images.get(&view.owner).is_some_and(|images| {
                 images.iter().any(|image| {
                     image.hand == 0
@@ -516,7 +516,7 @@ impl App {
                 })
             }));
         }
-        if let (Some(building), Some(view)) = (&mut self.building, &a.view)
+        if let (Some(building), Some(view)) = (&mut self.build.building, &a.view)
             && let Some(inventory) = view.tools.get(&view.owner)
         {
             match building.sync_tools(inventory) {
@@ -538,7 +538,7 @@ impl App {
             }
         }
         if a.entered
-            && let Some(building) = &self.building
+            && let Some(building) = &self.build.building
         {
             let hand = bri_sim::session::BrickHand {
                 stocked: building.inventory().iter().any(Option::is_some),
@@ -546,12 +546,12 @@ impl App {
                 ghost: building.ghost().is_some(),
             };
             // A full request queue leaves the report pending for the next frame.
-            if self.brick_hand != Some(hand)
+            if self.net.brick_hand != Some(hand)
                 && a.worker
                     .request(REPORT_REQUEST, Command::BrickHand(hand))
                     .is_ok()
             {
-                self.brick_hand = Some(hand);
+                self.net.brick_hand = Some(hand);
             }
             // Others see the ghost too (v20 ghosted `tempBrick`). Moves are
             // sent at most ten times a second; putting it away goes at once.
@@ -568,7 +568,7 @@ impl App {
                     print: ghost.print.as_ref().and_then(id),
                 })
             });
-            let due = self.ghost_report.as_ref().is_none_or(|(sent, at)| {
+            let due = self.build.ghost_report.as_ref().is_none_or(|(sent, at)| {
                 *sent != ghost && (ghost.is_none() || at.elapsed() >= GHOST_REPORT_INTERVAL)
             });
             if due
@@ -576,7 +576,7 @@ impl App {
                     .request(REPORT_REQUEST, Command::GhostBrick(ghost.clone()))
                     .is_ok()
             {
-                self.ghost_report = Some((ghost, std::time::Instant::now()));
+                self.build.ghost_report = Some((ghost, std::time::Instant::now()));
             }
             // Where the copy in hand stands, for its Add-On to show the
             // others; at the same pace.
@@ -595,19 +595,19 @@ impl App {
                 self.copy_report = Some((copy, std::time::Instant::now()));
             }
         }
-        if let (Some(building), Some(view)) = (&mut self.building, &a.view) {
+        if let (Some(building), Some(view)) = (&mut self.build.building, &a.view) {
             building.set_broken_shapes(&view.broken_shapes)?;
         }
-        if let (Some(building), Some(view)) = (&mut self.building, &a.view)
+        if let (Some(building), Some(view)) = (&mut self.build.building, &a.view)
             && self
-                .query_source
+                .scene.query_source
                 .as_ref()
                 .is_none_or(|old| !Arc::ptr_eq(old, &view.world))
         {
             let known = self
-                .query_log
+                .scene.query_log
                 .as_ref()
-                .filter(|(log, _)| self.query_source.is_some() && Arc::ptr_eq(log, &view.world_log))
+                .filter(|(log, _)| self.scene.query_source.is_some() && Arc::ptr_eq(log, &view.world_log))
                 .and_then(|(log, revision)| log.between(*revision, view.world_revision));
             if let Err(error) = building.sync_world_changes(&view.world, known.as_ref()) {
                 self.ui.apply_session(
@@ -621,59 +621,59 @@ impl App {
             }
             if a.entered
                 && self
-                    .query_source
+                    .scene.query_source
                     .as_ref()
                     .is_none_or(|old| old.palette != view.world.palette)
             {
                 let colors = self.colorset(&view.world.palette);
                 self.ui.apply_session(a.id, UiUpdate::Colorset(colors));
             }
-            self.query_source = Some(view.world.clone());
-            self.query_log = Some((view.world_log.clone(), view.world_revision));
-            self.ghost_uploaded = u64::MAX;
-            self.brick_debris.sync_world(&view.world);
-            self.hidden_uploaded = None;
+            self.scene.query_source = Some(view.world.clone());
+            self.scene.query_log = Some((view.world_log.clone(), view.world_revision));
+            self.gpu.ghost_uploaded = u64::MAX;
+            self.fx.brick_debris.sync_world(&view.world);
+            self.gpu.hidden_uploaded = None;
         }
         if let Some(view) = &a.view {
-            self.mirror_index.follow(
+            self.scene.mirror_index.follow(
                 &view.world,
                 &view.world_log,
                 view.world_revision,
-                &self.mirror_shapes,
+                &self.scene.mirror_shapes,
             );
             // One set of openings: the windows show where bodies go.
             if let Some(collision) = self.motion.collision() {
-                self.mirror_index.link(collision.links(), &self.mirror_shapes);
+                self.scene.mirror_index.link(collision.links(), &self.scene.mirror_shapes);
             }
         }
-        if let Some(job) = &mut self.world_job
+        if let Some(job) = &mut self.scene.world_job
             && let Ok((source, revision, log, result)) = job.receiver.try_recv()
         {
             let left_out = std::mem::take(&mut job.left_out);
-            self.world_job = None;
+            self.scene.world_job = None;
             match result {
                 // Always applied: chunk state is consistent with `source`, and
                 // a newer replica is reached by the next incremental update.
                 Ok((chunked, changes)) => {
-                    self.chunked = chunked;
+                    self.scene.chunked = chunked;
                     for (key, built) in changes {
                         if let Some(built) = built {
-                            self.cpu_chunks.insert(key, built.scene);
-                            self.cpu_chunk_bricks.insert(key, Arc::new(built.bricks));
-                            self.chunk_uploads.insert(key);
+                            self.scene.cpu_chunks.insert(key, built.scene);
+                            self.scene.cpu_chunk_bricks.insert(key, Arc::new(built.bricks));
+                            self.gpu.chunk_uploads.insert(key);
                         } else {
-                            self.cpu_chunks.remove(&key);
-                            self.cpu_chunk_bricks.remove(&key);
-                            self.gpu_chunks.remove(&key);
-                            self.gpu_chunk_bricks.remove(&key);
-                            self.chunk_uploads.remove(&key);
+                            self.scene.cpu_chunks.remove(&key);
+                            self.scene.cpu_chunk_bricks.remove(&key);
+                            self.gpu.gpu_chunks.remove(&key);
+                            self.gpu.gpu_chunk_bricks.remove(&key);
+                            self.gpu.chunk_uploads.remove(&key);
                         }
                     }
-                    self.world_source = Some(source);
-                    self.world_revision = revision;
-                    self.world_log = Some(log);
-                    self.brick_fades.chunks_applied(&left_out);
-                    self.chunks_left_out = left_out;
+                    self.scene.world_source = Some(source);
+                    self.scene.world_revision = revision;
+                    self.scene.world_log = Some(log);
+                    self.fx.brick_fades.chunks_applied(&left_out);
+                    self.scene.chunks_left_out = left_out;
                 }
                 Err(reason) => {
                     self.ui.apply_session(
@@ -685,14 +685,14 @@ impl App {
                 }
             }
         }
-        if self.world_job.is_none()
+        if self.scene.world_job.is_none()
             && let (Some(meshes), Some(materials), Some(palette), Some(view)) =
-                (&self.meshes, &self.materials, &self.palette, &a.view)
+                (&self.scene.meshes, &self.scene.materials, &self.scene.palette, &a.view)
             && (self
-                .world_source
+                .scene.world_source
                 .as_ref()
                 .is_none_or(|previous| !Arc::ptr_eq(previous, &view.world))
-                || self.brick_fades.needs_rebuild(&self.chunks_left_out))
+                || self.fx.brick_fades.needs_rebuild(&self.scene.chunks_left_out))
         {
             let meshes = meshes.clone();
             let materials = materials.clone();
@@ -702,14 +702,14 @@ impl App {
             // Compare only the bricks the replica reports changed since the
             // applied revision; without that history, compare whole worlds.
             let known = self
-                .world_log
+                .scene.world_log
                 .as_ref()
                 .filter(|applied| Arc::ptr_eq(applied, &log))
-                .and_then(|log| log.between(self.world_revision, revision));
+                .and_then(|log| log.between(self.scene.world_revision, revision));
             // v20 eases repainted bricks to their new colour (`brick_fade`).
-            match (&self.world_source, &known) {
+            match (&self.scene.world_source, &known) {
                 (Some(drawn), Some(known)) if !known.palette => {
-                    self.brick_fades
+                    self.fx.brick_fades
                         .observe(drawn, &world, known.bricks.iter().copied());
                     // A knocked-out brick does not fade out in place: its
                     // debris replaces it at once. Easing it would draw it
@@ -717,16 +717,16 @@ impl App {
                     // chunk rebuild once the fades settle.
                     let killing = self.pending_kills();
                     for id in &known.bricks {
-                        if self.brick_debris.is_dead(*id) || killing.contains(id) {
-                            self.brick_fades.settle(*id);
+                        if self.fx.brick_debris.is_dead(*id) || killing.contains(id) {
+                            self.fx.brick_fades.settle(*id);
                         }
                     }
                 }
-                _ => self.brick_fades.settle_all(),
+                _ => self.fx.brick_fades.settle_all(),
             }
-            let left_out = self.brick_fades.left_out();
+            let left_out = self.fx.brick_fades.left_out();
             let job_left_out = left_out.clone();
-            let mut chunked = std::mem::take(&mut self.chunked);
+            let mut chunked = std::mem::take(&mut self.scene.chunked);
             let (send, receive) = mpsc::sync_channel(1);
             let load_limit = self.load_limit.clone();
             let task = self.runtime.spawn(async move {
@@ -753,7 +753,7 @@ impl App {
                 .unwrap_or_else(|error| Err(error.to_string()));
                 let _ = send.send((source, revision, log, result));
             });
-            self.world_job = Some(WorldJob {
+            self.scene.world_job = Some(WorldJob {
                 receiver: receive,
                 abort: task.abort_handle(),
                 left_out: job_left_out,
@@ -761,9 +761,9 @@ impl App {
         }
         if a.reloading
             && let Some(view) = &a.view
-            && self.scene_map.as_deref() == Some(view.world.map_id.as_str())
+            && self.scene.scene_map.as_deref() == Some(view.world.map_id.as_str())
             && self
-                .world_source
+                .scene.world_source
                 .as_ref()
                 .is_some_and(|source| Arc::ptr_eq(source, &view.world))
         {
@@ -781,8 +781,8 @@ impl App {
         }
         if a.ready
             && !a.entered
-            && self.world_source.is_some()
-            && let Some(scene) = &self.cpu_scene
+            && self.scene.world_source.is_some()
+            && let Some(scene) = &self.scene.cpu_scene
         {
             self.ui.apply_session(
                 a.id,
@@ -811,13 +811,13 @@ impl App {
                 self.ui.apply_session(a.id, update);
             }
             a.entered = true;
-            self.reconnects = 0;
-            for text in std::mem::take(&mut self.join_notices) {
+            self.net.reconnects = 0;
+            for text in std::mem::take(&mut self.net.join_notices) {
                 self.ui.apply_session(a.id, UiUpdate::Chat { text });
             }
             // Admins hear once per game what this computer's Add-Ons lack.
             if a.view.as_ref().is_some_and(|v| v.administrator)
-                && let Some(text) = self.add_on_health.summary()
+                && let Some(text) = self.addons.add_on_health.summary()
             {
                 self.ui.apply_session(a.id, UiUpdate::Chat { text });
             }
@@ -834,11 +834,11 @@ impl App {
                 .then(|| a.joined.lock().ok().and_then(|mut slot| slot.take()))
                 .flatten()
                 .unwrap_or_else(|| self.content.paths.packages.clone());
-            if self.client_code.loaded_from() != Some(&set) {
-                self.client_code =
+            if self.addons.client_code.loaded_from() != Some(&set) {
+                self.addons.client_code =
                     crate::client_code::ClientCode::load(&self.content.paths.root, &set);
             }
-            self.client_code.start(
+            self.addons.client_code.start(
                 if a.local {
                     crate::client_code::Host::Local
                 } else {
@@ -850,7 +850,7 @@ impl App {
             // any of it runs. Leave ends the game.
             if !a.local
                 && let Some(prompt) =
-                    self.client_code
+                    self.addons.client_code
                         .trust_prompt(&server, &plain_chat(&a.name), &self.state_dir)
             {
                 self.ui
@@ -881,13 +881,13 @@ impl App {
         if let Some(view) = &a.view {
             // The Environment window's view: on every change, and each
             // second while a day/night cycle turns.
-            if let Some(scene) = &self.cpu_scene {
+            if let Some(scene) = &self.scene.cpu_scene {
                 let next = bri_ui::models::environment::EnvironmentView {
                     authored: authored_environment(scene),
                     settings: view.environment.clone(),
                     tick: view.tick,
                 };
-                let due = self.environment_sent.as_ref().is_none_or(|(session, sent)| {
+                let due = self.net.environment_sent.as_ref().is_none_or(|(session, sent)| {
                     *session != a.id
                         || sent.authored != next.authored
                         || sent.settings != next.settings
@@ -895,7 +895,7 @@ impl App {
                             && next.tick.abs_diff(sent.tick) >= bri_content::atmosphere::TICKS_PER_SECOND
                 });
                 if due {
-                    self.environment_sent = Some((a.id, next.clone()));
+                    self.net.environment_sent = Some((a.id, next.clone()));
                     self.ui.apply_session(a.id, UiUpdate::Environment(next));
                 }
             }
@@ -1027,7 +1027,7 @@ impl App {
             return Ok(());
         }
         self.track_unsaved(&mut a);
-        self.attempt = Some(a);
+        self.net.attempt = Some(a);
         Ok(())
     }
 }

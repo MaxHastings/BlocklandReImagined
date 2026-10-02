@@ -1,6 +1,29 @@
 //! Seats and riders: driven-vehicle prediction and mount poses.
 use super::*;
 
+/// Seats and riders: what the local player sits on and how riders are posed.
+pub(super) struct Mounts {
+    /// Heading of the vehicle the local player rides, last frame.
+    pub(super) mount_heading: Option<f32>,
+    /// The vehicle seat the local player sat in last frame.
+    pub(super) seated_on: Option<(u64, u8)>,
+    /// Sat down in a gunner's seat and not yet looking along its turret:
+    /// done on the first frame the seat's view is known, which a seat
+    /// change's own frame may not be.
+    pub(super) takes_turret: bool,
+    /// The seat this client's moves are shaped for, sent with them: set once
+    /// a new seat's view is in place, so the host reads moves made for the
+    /// old seat as the old seat's.
+    pub(super) seat_report: Option<bri_sim::session::SeatSince>,
+    /// This frame's seat rotation for every mounted player.
+    pub(super) rider_rotations: BTreeMap<bri_world::OwnerId, glam::Quat>,
+    /// This frame's first-person eye while the local player rides a vehicle
+    /// or another player, from their posed `eye` node.
+    pub(super) rider_eye: Option<Vec3>,
+    /// The tumble vehicle the local player last started riding.
+    pub(super) tumble: Option<u64>,
+}
+
 impl App {
     /// Predict the vehicle this client drives, as Torque runs the moves of
     /// the object a client controls on that client: the host's own vehicle

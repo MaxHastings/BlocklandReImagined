@@ -1,10 +1,40 @@
 //! Weapon, actor and world effects fed by the session's cues.
 use super::*;
 
+/// Presentation effects: weapon, actor and world effects, debris, fades and the cue queues feeding them.
+pub(super) struct Effects {
+    pub(super) effects: crate::effects::WorldEffects,
+    pub(super) weapon_effects: crate::weapon_effects::WeaponEffects,
+    pub(super) actor_effects: crate::actor_effects::ActorEffects,
+    pub(super) explosion_shapes: crate::explosion_shapes::ExplosionShapes,
+    /// Add-On beams: tracers, lasers.
+    pub(super) beams: crate::beams::Beams,
+    /// The Tutorial's target practice targets.
+    pub(super) tutorial_targets: crate::tutorial_targets::TutorialTargets,
+    /// Pieces thrown by explosions with `debris` (vehicle wrecks, tank shells).
+    pub(super) explosion_debris: crate::explosion_debris::ExplosionDebris,
+    /// Ejected gun casings (`stateEjectShell`) and their GPU model.
+    pub(super) weapon_shells: crate::weapon_debris::WeaponDebris,
+    pub(super) weapon_cues: VecDeque<(bri_sim::presentation::Cue, f32)>,
+    pub(super) weapon_cue_drops: u64,
+    /// Killed-brick debris (v20 brick explosions) and its GPU models.
+    pub(super) brick_debris: crate::brick_debris::BrickDebris,
+    pub(super) debris_models: crate::brick_debris::DebrisModels,
+    /// Bricks easing to a new paint colour, drawn apart from their chunks.
+    pub(super) brick_fades: crate::brick_fade::BrickFades,
+    pub(super) fade_models: crate::brick_fade::FadeModels,
+    pub(super) brick_kills: Vec<bri_sim::presentation::Cue>,
+    pub(super) weapon_light_deferred: usize,
+    pub(super) weapon_effect_session: Option<RequestId>,
+    pub(super) weapon_animation_cues: VecDeque<(bri_sim::presentation::Cue, f32, f64)>,
+    pub(super) weapon_animation_drops: u64,
+    pub(super) weapon_animation_cursor: u64,
+}
+
 impl App {
     /// Bricks whose kill cues wait for this frame's debris.
     pub(super) fn pending_kills(&self) -> BTreeSet<bri_world::BrickId> {
-        self.brick_kills
+        self.fx.brick_kills
             .iter()
             .filter_map(|cue| match cue.kind {
                 bri_sim::presentation::CueKind::BrickKill { brick, .. } => Some(brick),
@@ -24,14 +54,14 @@ impl App {
         if matches!(
             cue.kind,
             bri_sim::presentation::CueKind::WeaponAnimation { .. }
-        ) && cue.id > self.weapon_animation_cursor
+        ) && cue.id > self.fx.weapon_animation_cursor
         {
-            self.weapon_animation_cursor = cue.id;
-            if self.weapon_animation_cues.len() < bri_sim::presentation::MAX_CUES {
-                self.weapon_animation_cues
-                    .push_back((cue.clone(), 0., self.animation_time));
+            self.fx.weapon_animation_cursor = cue.id;
+            if self.fx.weapon_animation_cues.len() < bri_sim::presentation::MAX_CUES {
+                self.fx.weapon_animation_cues
+                    .push_back((cue.clone(), 0., self.avatar.animation_time));
             } else {
-                self.weapon_animation_drops = self.weapon_animation_drops.saturating_add(1);
+                self.fx.weapon_animation_drops = self.fx.weapon_animation_drops.saturating_add(1);
             }
         }
         // Sitting is replicated state (`Vitals::sitting`); `/hug` is a pose
@@ -77,7 +107,7 @@ impl App {
             let from = muzzle
                 .and_then(|actor| self.world_items.held_muzzle(actor, 0))
                 .unwrap_or(Vec3::from(cue.position));
-            self.beams
+            self.fx.beams
                 .add(from, Vec3::from(*to), *color, *width, *seconds);
         }
         if let bri_sim::presentation::CueKind::Tracer { actor, hand } = &cue.kind
@@ -98,7 +128,7 @@ impl App {
                 .and_then(|i| i.shot.as_ref()?.hitscan.as_ref()?.tracer)
             && let Some(from) = self.world_items.held_muzzle(*actor, *hand)
         {
-            self.beams.add(
+            self.fx.beams.add(
                 from,
                 Vec3::from(cue.position),
                 tracer.color,
@@ -106,13 +136,13 @@ impl App {
                 tracer.seconds,
             );
         }
-        self.actor_effects.cue(&cue);
-        self.explosion_shapes.cue(&cue);
-        self.explosion_debris.cue(&cue);
+        self.fx.actor_effects.cue(&cue);
+        self.fx.explosion_shapes.cue(&cue);
+        self.fx.explosion_debris.cue(&cue);
         if matches!(cue.kind, bri_sim::presentation::CueKind::BrickKill { .. })
-            && self.brick_kills.len() < bri_sim::presentation::MAX_CUES
+            && self.fx.brick_kills.len() < bri_sim::presentation::MAX_CUES
         {
-            self.brick_kills.push(cue.clone());
+            self.fx.brick_kills.push(cue.clone());
         }
         if matches!(
             cue.kind,
@@ -120,10 +150,10 @@ impl App {
                 | bri_sim::presentation::CueKind::WeaponShell { .. }
                 | bri_sim::presentation::CueKind::WeaponAnimation { .. }
         ) {
-            if self.weapon_cues.len() < bri_sim::presentation::MAX_CUES {
-                self.weapon_cues.push_back((cue, 0.));
+            if self.fx.weapon_cues.len() < bri_sim::presentation::MAX_CUES {
+                self.fx.weapon_cues.push_back((cue, 0.));
             } else {
-                self.weapon_cue_drops = self.weapon_cue_drops.saturating_add(1);
+                self.fx.weapon_cue_drops = self.fx.weapon_cue_drops.saturating_add(1);
             }
         }
     }
@@ -282,21 +312,21 @@ impl App {
         actor_effects.advance(elapsed, pose, &jets, &burning, &lights)
     }
     pub(super) fn reset_weapon_effect_session(&mut self, session: RequestId, checkpoint_cursor: u64) {
-        if self.weapon_effect_session == Some(session) {
+        if self.fx.weapon_effect_session == Some(session) {
             return;
         }
-        self.weapon_effects.reset(checkpoint_cursor);
-        self.actor_effects.reset(checkpoint_cursor);
-        self.explosion_shapes.reset(checkpoint_cursor);
-        self.beams.clear();
-        self.explosion_debris.reset(checkpoint_cursor);
-        self.weapon_shells.reset(checkpoint_cursor);
-        self.weapon_cues
+        self.fx.weapon_effects.reset(checkpoint_cursor);
+        self.fx.actor_effects.reset(checkpoint_cursor);
+        self.fx.explosion_shapes.reset(checkpoint_cursor);
+        self.fx.beams.clear();
+        self.fx.explosion_debris.reset(checkpoint_cursor);
+        self.fx.weapon_shells.reset(checkpoint_cursor);
+        self.fx.weapon_cues
             .retain(|(cue, _)| cue.id > checkpoint_cursor);
-        self.weapon_animation_cues
+        self.fx.weapon_animation_cues
             .retain(|(cue, _, _)| cue.id > checkpoint_cursor);
-        self.weapon_animation_cursor = checkpoint_cursor;
-        self.weapon_effect_session = Some(session);
+        self.fx.weapon_animation_cursor = checkpoint_cursor;
+        self.fx.weapon_effect_session = Some(session);
     }
     #[cfg(test)]
     pub(super) fn update_weapon_effects(
@@ -305,8 +335,8 @@ impl App {
         elapsed: f32,
     ) -> Result<()> {
         Self::update_weapon_effect_parts(
-            &mut self.weapon_effects,
-            &mut self.weapon_cues,
+            &mut self.fx.weapon_effects,
+            &mut self.fx.weapon_cues,
             &self.world_items,
             view,
             elapsed,

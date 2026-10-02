@@ -1,17 +1,32 @@
 //! Building tools and their dialogs.
 use super::*;
 
+/// Building: the brick hand and ghosts, tool dialogs and build macros.
+pub(super) struct BuildState {
+    /// Last ghost brick reported to the server, and when.
+    pub(super) ghost_report: Option<(Option<bri_sim::session::GhostBrick>, std::time::Instant)>,
+    /// Other players' ghost bricks as uploaded, by owner.
+    pub(super) remote_ghosts: BTreeMap<bri_world::OwnerId, (bri_sim::session::GhostBrick, Option<GpuScene>)>,
+    /// The HUD was told the tool in hand takes the paint cans.
+    pub(super) tool_takes_paint: bool,
+    pub(super) building: Option<crate::building::Building>,
+    pub(super) tool_ui: crate::tool_ui::ToolUi,
+    pub(super) macro_recording: Option<Vec<UiAction>>,
+    pub(super) build_macro: Vec<UiAction>,
+    pub(super) macro_playback: VecDeque<UiAction>,
+}
+
 impl App {
     pub(super) fn invalidate_tool_dialogs(&mut self) {
-        self.dialog_epoch = self.dialog_epoch.wrapping_add(1);
-        self.tool_ui.invalidate();
+        self.net.dialog_epoch = self.net.dialog_epoch.wrapping_add(1);
+        self.build.tool_ui.invalidate();
     }
     pub(super) fn handle_building(&mut self, id: RequestId, action: &UiAction) -> Result<bool> {
-        if self.attempt.as_ref().is_none_or(|a| !a.entered) {
+        if self.net.attempt.as_ref().is_none_or(|a| !a.entered) {
             return Ok(false);
         }
         if self
-            .attempt
+            .net.attempt
             .as_ref()
             .is_some_and(|a| self.ui.session_request() != Some(a.id))
         {
@@ -31,7 +46,7 @@ impl App {
         ) {
             self.invalidate_tool_dialogs();
         }
-        if let Some(command) = self.tool_ui.action_command(action)? {
+        if let Some(command) = self.build.tool_ui.action_command(action)? {
             self.command(id, command, action.clone())?;
             return Ok(true);
         }
@@ -55,10 +70,10 @@ impl App {
         // the camera; server tool targeting still uses its authoritative pose.
         player.yaw = self.controls.yaw;
         player.pitch = self.controls.pitch;
-        let ghost_before = self.building.as_ref().and_then(|b| b.ghost().cloned());
-        let copy_before = self.building.as_ref().and_then(|b| b.copy_pose());
+        let ghost_before = self.build.building.as_ref().and_then(|b| b.ghost().cloned());
+        let copy_before = self.build.building.as_ref().and_then(|b| b.copy_pose());
         let building = self
-            .building
+            .build.building
             .as_mut()
             .context("Building controller not ready")?;
         building.set_archetypes(archetypes);
@@ -66,7 +81,7 @@ impl App {
         let Some(response) = response else {
             return Ok(false);
         };
-        if let Some((anchor, turns)) = self.building.as_ref().and_then(|b| b.copy_pose()) {
+        if let Some((anchor, turns)) = self.build.building.as_ref().and_then(|b| b.copy_pose()) {
             let cue = match copy_before {
                 Some((_, before)) if before != turns => Some("brick.rotate"),
                 Some((before, _)) if before != anchor => Some("brick.move"),
@@ -75,7 +90,7 @@ impl App {
             if let Some(cue) = cue {
                 self.audio.trigger(cue, bri_audio::Placement::World(anchor));
             }
-        } else if let Some(ghost) = self.building.as_ref().and_then(|b| b.ghost()) {
+        } else if let Some(ghost) = self.build.building.as_ref().and_then(|b| b.ghost()) {
             let cue = if ghost_before
                 .as_ref()
                 .is_none_or(|b| b.definition != ghost.definition)
@@ -99,7 +114,7 @@ impl App {
                     .trigger(cue, bri_audio::Placement::World(ghost.position));
             }
         }
-        let session = self.attempt.as_ref().unwrap().id;
+        let session = self.net.attempt.as_ref().unwrap().id;
         for update in response.updates {
             self.ui.apply_session(session, update);
         }
@@ -112,11 +127,11 @@ impl App {
                 self.invalidate_tool_dialogs();
             }
             if matches!(command, Command::WeaponTrigger { down: true }) {
-                self.trigger_epoch = Some(self.dialog_epoch);
+                self.net.trigger_epoch = Some(self.net.dialog_epoch);
             }
-            if let Err(error) = self.building.as_mut().unwrap().command_sent(id, &command) {
+            if let Err(error) = self.build.building.as_mut().unwrap().command_sent(id, &command) {
                 for update in self
-                    .building
+                    .build.building
                     .as_mut()
                     .unwrap()
                     .command_finished(id, &command, false)
@@ -127,7 +142,7 @@ impl App {
             }
             if let Err(error) = self.command(id, command.clone(), action.clone()) {
                 let updates = self
-                    .building
+                    .build.building
                     .as_mut()
                     .unwrap()
                     .command_finished(id, &command, false);

@@ -1,6 +1,39 @@
 //! Add-On packages: enabling, applying and their HUD.
 use super::*;
 
+/// Add-On packages: the catalog, client code, server packages and imports.
+pub(super) struct AddOns {
+    /// Client-side mod packages (HUD panels, models) from `packages.json`.
+    pub(super) package_catalog: Option<Arc<bri_package_runtime::Catalog>>,
+    /// Sandboxed code of enabled Add-Ons, run while a game is entered.
+    pub(super) client_code: crate::client_code::ClientCode,
+    /// Add-On items' skins, drawn over every copy of them.
+    pub(super) item_skins: crate::item_skins::ItemSkins,
+    /// Every enabled package including server behaviour, for hosting.
+    pub(super) server_packages: Option<Arc<bri_package_runtime::Catalog>>,
+    /// The loaded Add-Ons are this player's own choice (packages.json, the
+    /// Add-Ons screen, `enable_packages` or `apply_packages`), so hosting
+    /// runs them as they are. False after a join loaded another server's.
+    pub(super) packages_from_tools: bool,
+    /// The next join keeps the loaded content even when the server's
+    /// Add-Ons bring bricks, weapons or vehicles: loading them failed, so
+    /// the player joins without them rather than not at all.
+    pub(super) skip_add_on_reload: bool,
+    pub(super) package_models: crate::packages::PackageModels,
+    /// Add-On import in progress: request, row id and the worker's answer.
+    /// Converting the Add-Ons folder (`add_ons::start_sync`).
+    pub(super) add_on_sync: Option<mpsc::Receiver<crate::add_ons::SyncNote>>,
+    /// The Add-On list last asked for, the list that loaded without the
+    /// Add-Ons that broke it, and why each was left out.
+    pub(super) left_out_add_ons: Option<(
+        bri_package::packages::PackageSet,
+        bri_package::packages::PackageSet,
+        Vec<String>,
+    )>,
+    /// What the enabled Add-Ons name that could not be found or used.
+    pub(super) add_on_health: crate::add_on_health::AddOnHealth,
+}
+
 impl App {
     /// Chat lines (and an optional question) for a host notice.
     pub(super) fn host_notice(&mut self, notice: HostNotice) -> Vec<(String, Option<UiUpdate>)> {
@@ -15,7 +48,7 @@ impl App {
                     )
                 {
                     let copied = copy_to_clipboard(&invite).is_ok();
-                    self.invite = Some(invite);
+                    self.net.invite = Some(invite);
                     lines.push((
                         if copied {
                             "Your invite is on the clipboard; paste it to friends. Type /invite to copy it again.".into()
@@ -27,13 +60,13 @@ impl App {
                 } else if let Some(invite) = report.invite.or(report.lan_invite) {
                     // Without a public address, the home network invite is
                     // still something to copy.
-                    self.invite = Some(invite);
+                    self.net.invite = Some(invite);
                     lines.push(("Type /invite to copy an invite.".into(), None));
                 }
                 lines
             }
             HostNotice::Lan { invite } => {
-                self.invite = Some(invite);
+                self.net.invite = Some(invite);
                 vec![(
                     "Players on your network see this game in Join Server. Type /invite to copy an invite for them.".into(),
                     None,
@@ -88,10 +121,10 @@ impl App {
         self.ui.apply(UiUpdate::Maps(self.content.maps.clone()));
         self.ui
             .apply(UiUpdate::GameModes(crate::packages::modes(server.as_ref())));
-        self.package_catalog = client;
-        self.server_packages = server;
-        self.client_code = crate::client_code::ClientCode::load(root, set);
-        self.packages_from_tools = true;
+        self.addons.package_catalog = client;
+        self.addons.server_packages = server;
+        self.addons.client_code = crate::client_code::ClientCode::load(root, set);
+        self.addons.packages_from_tools = true;
         Ok(())
     }
     /// The Add-Ons screen changed which Add-Ons are on: the next game uses
@@ -99,9 +132,9 @@ impl App {
     /// Convert what is new or changed in the Add-Ons folder, and remove
     /// what was taken out, unless that is already under way.
     pub(super) fn sync_add_ons(&mut self) -> Result<()> {
-        if self.add_on_sync.is_none() {
+        if self.addons.add_on_sync.is_none() {
             let importer = crate::add_ons::importer()?;
-            self.add_on_sync = Some(crate::add_ons::start_sync(
+            self.addons.add_on_sync = Some(crate::add_ons::start_sync(
                 &self.content.paths.root,
                 &importer,
             )?);
@@ -109,7 +142,7 @@ impl App {
         Ok(())
     }
     pub(super) fn add_ons_changed(&mut self, mut view: AddOnsView) {
-        self.packages_from_tools = false;
+        self.addons.packages_from_tools = false;
         let root = self.content.paths.root.clone();
         let applied = bri_package::packages::PackageSet::load_root(&root)
             .and_then(|set| self.apply_packages(&set));
@@ -125,14 +158,14 @@ impl App {
     /// games; a game in progress keeps what it started with.
     pub fn apply_packages(&mut self, set: &bri_package::packages::PackageSet) -> Result<()> {
         ensure!(
-            self.attempt.is_none(),
+            self.net.attempt.is_none(),
             "Leave the game before changing Add-Ons"
         );
         let root = self.content.paths.root.clone();
         // An Add-On that broke loading this list before stays left out
         // without trying it again on every host.
         let known = self
-            .left_out_add_ons
+            .addons.left_out_add_ons
             .as_ref()
             .is_some_and(|(requested, loaded, _)| {
                 requested == set && *loaded == self.content.paths.packages
@@ -142,7 +175,7 @@ impl App {
                 ClientContent::load_leaving_out_broken(&root, set)
             });
             let (content, left_out) = loaded?;
-            self.left_out_add_ons = if left_out.is_empty() {
+            self.addons.left_out_add_ons = if left_out.is_empty() {
                 None
             } else {
                 self.notify_left_out_add_ons(&left_out);
@@ -154,18 +187,18 @@ impl App {
             });
             collected.extend(more);
             let parts = parts?;
-            self.weapon_effects = parts.weapon_effects;
-            self.actor_effects = parts.actor_effects;
-            self.explosion_shapes = parts.explosion_shapes;
-            self.explosion_debris = parts.explosion_debris;
-            self.tool_ui = parts.tool_ui;
+            self.fx.weapon_effects = parts.weapon_effects;
+            self.fx.actor_effects = parts.actor_effects;
+            self.fx.explosion_shapes = parts.explosion_shapes;
+            self.fx.explosion_debris = parts.explosion_debris;
+            self.build.tool_ui = parts.tool_ui;
             self.item_assets = parts.item_assets;
             self.item_ui = parts.item_ui;
             self.vehicle_assets = parts.vehicle_assets;
             self.world_items = parts.world_items;
             let world_items = &self.world_items;
             collected.extend(
-                self.weapon_shells
+                self.fx.weapon_shells
                     .set_casings(&content.weapons.pack, |m| world_items.has_model(m)),
             );
             self.content_problems = collected;
@@ -184,9 +217,9 @@ impl App {
             let worlds = crate::packages::world_maps(catalog, &self.content.maps);
             self.content.maps.extend(worlds);
         }
-        self.saves =
-            crate::saves::Store::new(&self.state_dir, &self.content, Some(self.old_saves.clone()));
-        if self.old_saves_started {
+        self.files.saves =
+            crate::saves::Store::new(&self.state_dir, &self.content, Some(self.files.old_saves.clone()));
+        if self.files.old_saves_started {
             self.start_old_saves();
         }
         self.ui.apply(UiUpdate::Maps(self.content.maps.clone()));
@@ -194,10 +227,10 @@ impl App {
             .apply(UiUpdate::GameModes(crate::packages::modes(server.as_ref())));
         self.ui
             .apply(UiUpdate::Datablocks(self.content.datablocks.clone()));
-        self.package_catalog = client;
-        self.server_packages = server;
-        self.client_code = crate::client_code::ClientCode::load(&root, set);
-        self.packages_from_tools = true;
+        self.addons.package_catalog = client;
+        self.addons.server_packages = server;
+        self.addons.client_code = crate::client_code::ClientCode::load(&root, set);
+        self.addons.packages_from_tools = true;
         self.check_add_ons(&problems);
         Ok(())
     }
@@ -209,7 +242,7 @@ impl App {
     /// `logs/add-on-health.json`.
     pub(super) fn check_add_ons(&mut self, rules: &[bri_package::diag::Diagnostic]) {
         let root = self.content.paths.root.clone();
-        let (requested, left_out) = match &self.left_out_add_ons {
+        let (requested, left_out) = match &self.addons.left_out_add_ons {
             Some((requested, _, left_out)) => (requested.clone(), left_out.clone()),
             None => (self.content.paths.packages.clone(), Vec::new()),
         };
@@ -220,16 +253,16 @@ impl App {
         problems.extend(crate::add_on_health::check_references(
             &crate::add_on_health::Loaded {
                 weapons: &self.content.weapons.pack,
-                effects: &self.weapon_effects,
+                effects: &self.fx.weapon_effects,
                 items: &self.item_assets,
                 audio: Some(&self.audio),
             },
         ));
         let owners = crate::add_on_health::Owners::new(&root, &requested);
-        self.add_on_health = crate::add_on_health::AddOnHealth::new(owners, problems);
-        match self.add_on_health.write_report(&self.state_dir) {
+        self.addons.add_on_health = crate::add_on_health::AddOnHealth::new(owners, problems);
+        match self.addons.add_on_health.write_report(&self.state_dir) {
             Ok(path) => {
-                if let Some(summary) = self.add_on_health.summary() {
+                if let Some(summary) = self.addons.add_on_health.summary() {
                     bri_console::warn(format!("{summary} ({})", path.display()));
                 }
             }
@@ -239,13 +272,13 @@ impl App {
     /// Show the Add-Ons screen's `view` with each Add-On's problems from
     /// the last load listed under it.
     pub(super) fn show_add_ons(&mut self, mut view: AddOnsView) {
-        crate::add_ons::with_health(&mut view, &self.add_on_health);
+        crate::add_ons::with_health(&mut view, &self.addons.add_on_health);
         self.ui.apply(UiUpdate::AddOns(view));
     }
     /// What the enabled Add-Ons name that this computer could not find
     /// or use, as of the last load.
     pub fn add_on_health(&self) -> &crate::add_on_health::AddOnHealth {
-        &self.add_on_health
+        &self.addons.add_on_health
     }
     /// Tell the player which Add-Ons were left out and why: the game runs
     /// without them rather than not at all.
@@ -264,7 +297,7 @@ impl App {
     /// Package HUD panels and keys from the latest replicated state.
     pub(super) fn update_package_hud(&mut self) {
         let view = self
-            .attempt
+            .net.attempt
             .as_ref()
             .filter(|a| a.entered)
             .and_then(|a| a.view.as_ref());
@@ -275,7 +308,7 @@ impl App {
             self.ui.core.addon_help.clear();
             return;
         };
-        let Some(catalog) = packages_for(&self.package_catalog, view) else {
+        let Some(catalog) = packages_for(&self.addons.package_catalog, view) else {
             self.ui.core.package_panels.clear();
             self.ui.core.package_keys.clear();
             self.ui.set_package_binds(Vec::new());

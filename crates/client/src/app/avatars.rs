@@ -1,6 +1,25 @@
 //! Avatar animation inputs.
 use super::*;
 
+/// Avatar bodies, their actions and gestures, and the avatar screen's preview.
+pub(super) struct Avatars {
+    pub(super) avatar_assets: Arc<crate::avatar::AvatarAssets>,
+    pub(super) avatars: BTreeMap<bri_world::OwnerId, crate::avatar::AvatarMesh>,
+    /// Horses spawned at vehicle bricks: `HorseArmor` bots, animated like
+    /// horse players.
+    pub(super) mount_meshes: BTreeMap<u64, crate::avatar::AvatarMesh>,
+    pub(super) avatar_actions: BTreeMap<u64, crate::avatar::ActionAnimation>,
+    /// The script threads not tied to a mounted image, by player and thread
+    /// number: 0 and 1 a package's body animations, 3 the builder and chat
+    /// gestures. Thread 2 is `avatar_actions`.
+    pub(super) avatar_threads: BTreeMap<u64, AvatarThreads>,
+    pub(super) avatar_action_images: BTreeMap<u64, String>,
+    pub(super) animation_time: f64,
+    pub(super) avatar_preview: Option<crate::gpu_build::Building<crate::avatar::Preview>>,
+    pub(super) preview_request: Option<(bri_content::avatar::Appearance, [f32; 3], f32)>,
+    pub(super) preview_dirty: bool,
+}
+
 impl App {
     pub(super) fn update_avatar_animation_inputs(
         avatar_actions: &mut BTreeMap<u64, crate::avatar::ActionAnimation>,

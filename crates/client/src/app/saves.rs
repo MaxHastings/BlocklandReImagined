@@ -1,9 +1,31 @@
 //! Saves, save pictures, old saves and colour sets.
 use super::*;
 
+/// Saves and their pictures, file jobs, old saves and colour-set loads.
+pub(super) struct Saves {
+    /// Each listed save's own file, whose picture Load Bricks previews.
+    pub(super) save_pictures: HashMap<crate::save_picture::Key, PathBuf>,
+    pub(super) save_previews: crate::save_picture::Previews,
+    /// The save picture to take with the next scene drawn.
+    pub(super) save_picture: Option<PathBuf>,
+    /// Save pictures being read back and written.
+    pub(super) save_shots: crate::platform::Screenshots,
+    pub(super) saves: crate::saves::Store,
+    pub(super) file_jobs: crate::saves::Jobs,
+    /// v20 `.bls` saves players brought over; converting starts with the
+    /// first frame, once startup has settled which Add-Ons are on.
+    pub(super) old_saves: std::sync::Arc<crate::old_saves::OldSaves>,
+    pub(super) old_saves_started: bool,
+    /// A save list read because converted saves arrived while a save
+    /// dialog was open.
+    pub(super) save_refresh: Option<std::sync::mpsc::Receiver<Result<Vec<crate::saves::Entry>, String>>>,
+    /// A read save waiting on `LoadBricksColorGui`'s choice.
+    pub(super) color_load: Option<(crate::saves::Request, Box<bri_world::build::SavedBuild>)>,
+}
+
 impl App {
     pub(super) fn poll_files(&mut self) {
-        let Some((request, result)) = self.file_jobs.poll(&self.saves, &self.runtime) else {
+        let Some((request, result)) = self.files.file_jobs.poll(&self.files.saves, &self.runtime) else {
             return;
         };
         let result = match result {
@@ -13,16 +35,16 @@ impl App {
             }
             Ok(crate::saves::Outcome::Saved(path, entries)) => {
                 // What the host has now is saved under a name.
-                if let Some(a) = self.attempt.as_mut().filter(|a| a.local) {
+                if let Some(a) = self.net.attempt.as_mut().filter(|a| a.local) {
                     a.saved_revision = a.view.as_ref().map(|v| v.world_revision);
                 }
                 // v20's save picture: the next scene drawn, without the interface.
-                self.save_picture = crate::save_picture::path_for(&path);
+                self.files.save_picture = crate::save_picture::path_for(&path);
                 self.show_save_files(entries);
                 Ok(())
             }
             Ok(crate::saves::Outcome::Loaded(build)) => {
-                if self.attempt.as_ref().filter(|a| a.entered).map(|a| a.id) != request.session
+                if self.net.attempt.as_ref().filter(|a| a.entered).map(|a| a.id) != request.session
                     || self.ui.session_request() != request.session
                 {
                     Err(anyhow::anyhow!(
@@ -31,12 +53,12 @@ impl App {
                 } else if matches!(request.action, UiAction::LoadBricks { .. }) {
                     // `LoadBricks_ColorCheck`: differing colours ask first.
                     let differs = self
-                        .query_source
+                        .scene.query_source
                         .as_ref()
                         .and_then(|w| crate::saves::color_difference(&w.palette, &build));
                     if let Some(append) = differs {
                         self.ui.apply(UiUpdate::ColorWarning { append });
-                        self.color_load = Some((request, build));
+                        self.files.color_load = Some((request, build));
                         return;
                     }
                     match self.send_load(request.id, build, request.action) {
@@ -81,12 +103,12 @@ impl App {
             ui_renderer: frame.ui_renderer,
         })?;
         if !drawn {
-            self.save_picture = Some(path);
+            self.files.save_picture = Some(path);
             return Ok(());
         }
         let capture =
             crate::platform::capture_copy(frame.device, frame.encoder, &texture, frame.format)?;
-        self.save_shots.copied(
+        self.files.save_shots.copied(
             crate::platform::Shot {
                 path,
                 fit: Some(crate::save_picture::FIT),
@@ -96,7 +118,7 @@ impl App {
         Ok(())
     }
     pub(super) fn show_save_files(&mut self, entries: Vec<crate::saves::Entry>) {
-        self.save_pictures = entries
+        self.files.save_pictures = entries
             .iter()
             .filter_map(|e| Some(((e.info.map.clone(), e.info.name.clone()), e.picture()?)))
             .collect();
@@ -113,11 +135,11 @@ impl App {
     }
     /// Convert `.bls` saves against the content now loaded.
     pub(super) fn start_old_saves(&mut self) {
-        self.old_saves_started = true;
+        self.files.old_saves_started = true;
         match crate::old_saves::Converter::new(&self.content) {
             Ok(converter) => {
-                self.old_saves.set_converter(converter);
-                self.old_saves.start();
+                self.files.old_saves.set_converter(converter);
+                self.files.old_saves.start();
             }
             Err(error) => bri_console::warn(format!("Old saves can't be converted: {error:#}")),
         }
@@ -125,29 +147,29 @@ impl App {
     /// Start converting on the first frame, and put newly converted saves in
     /// an open save dialog as they arrive.
     pub(super) fn poll_old_saves(&mut self) {
-        if !self.old_saves_started {
+        if !self.files.old_saves_started {
             self.start_old_saves();
         }
-        if let Some(rx) = &self.save_refresh {
+        if let Some(rx) = &self.files.save_refresh {
             match rx.try_recv() {
                 Ok(Ok(entries)) => {
-                    self.save_refresh = None;
+                    self.files.save_refresh = None;
                     self.show_save_files(entries);
                 }
                 Ok(Err(error)) => {
-                    self.save_refresh = None;
+                    self.files.save_refresh = None;
                     bri_console::warn(format!("Could not list saves: {error}"));
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => return,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.save_refresh = None,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.files.save_refresh = None,
             }
         }
         let open = self.ui.is_open(ScreenId::LoadBricks) || self.ui.is_open(ScreenId::SaveBricks);
         // A closed dialog lists afresh when it opens.
-        if self.old_saves.take_changed() && open {
-            let store = self.saves.clone();
+        if self.files.old_saves.take_changed() && open {
+            let store = self.files.saves.clone();
             let (tx, rx) = std::sync::mpsc::channel();
-            self.save_refresh = Some(rx);
+            self.files.save_refresh = Some(rx);
             self.runtime.spawn_blocking(move || {
                 let _ = tx.send(store.list().map_err(|e| format!("{e:#}")));
             });
@@ -164,7 +186,7 @@ impl App {
         };
         self.command(id, Command::LoadBuild { build, ownership }, action)?;
         // The loaded build arrives in batches; it matches its file.
-        if let Some(a) = self.attempt.as_mut() {
+        if let Some(a) = self.net.attempt.as_mut() {
             a.settling = Some(std::time::Instant::now() + SETTLE);
         }
         Ok(())
@@ -173,18 +195,18 @@ impl App {
     /// Bricks open.
     pub(super) fn choose_color_load(&mut self, choice: bri_ui::api::ColorLoad) {
         use bri_ui::api::ColorLoad;
-        let Some((request, mut build)) = self.color_load.take() else {
+        let Some((request, mut build)) = self.files.color_load.take() else {
             return;
         };
         let result = if choice == ColorLoad::Cancel {
             Err(anyhow::anyhow!(bri_ui::api::LOAD_CANCELED))
-        } else if self.attempt.as_ref().filter(|a| a.entered).map(|a| a.id) != request.session {
+        } else if self.net.attempt.as_ref().filter(|a| a.entered).map(|a| a.id) != request.session {
             Err(anyhow::anyhow!(
                 "Connection changed while reading the build; load canceled"
             ))
         } else {
             if choice == ColorLoad::Match
-                && let Some(world) = &self.query_source
+                && let Some(world) = &self.scene.query_source
             {
                 crate::saves::match_colors(&world.palette, &mut build);
             }

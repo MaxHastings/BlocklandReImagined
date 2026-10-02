@@ -163,7 +163,7 @@ impl App {
                 }
                 continue;
             }
-            if let Some(recording) = &mut self.macro_recording
+            if let Some(recording) = &mut self.build.macro_recording
                 && macro_action(&action)
                 && recording.len() < 4096
             {
@@ -184,9 +184,9 @@ impl App {
                 }
                 UiAction::RequestSaveList { .. } | UiAction::LoadBricks { .. } => {
                     // Saves dropped in while the game runs convert too.
-                    if matches!(action, UiAction::RequestSaveList { .. }) && self.old_saves_started
+                    if matches!(action, UiAction::RequestSaveList { .. }) && self.files.old_saves_started
                     {
-                        self.old_saves.start();
+                        self.files.old_saves.start();
                     }
                     let result = (|| {
                         if matches!(action, UiAction::LoadBricks { .. }) {
@@ -195,9 +195,9 @@ impl App {
                                 "Loading requires host or administrator permission"
                             );
                         }
-                        self.file_jobs.enqueue(crate::saves::Request {
+                        self.files.file_jobs.enqueue(crate::saves::Request {
                             id,
-                            session: self.attempt.as_ref().map(|a| a.id),
+                            session: self.net.attempt.as_ref().map(|a| a.id),
                             action,
                             build: None,
                         })
@@ -250,8 +250,8 @@ impl App {
                 }
                 UiAction::SaveSettings(value) => {
                     let max_fps = settings::startup_display(&value).max_fps;
-                    if max_fps != self.frame_limit {
-                        self.frame_limit = max_fps;
+                    if max_fps != self.perf.frame_limit {
+                        self.perf.frame_limit = max_fps;
                         platform.push(PlatformCommand::FrameLimit(max_fps));
                     }
                     settings::save(&self.state_dir.join("settings.json"), &value).and_then(|()| {
@@ -261,7 +261,7 @@ impl App {
                     })
                 }
                 UiAction::SetVolume { channel, value } => self.audio.set_volume(&channel, value),
-                UiAction::OpenSavesFolder => show_drop_folder(self.old_saves.saves_folder()),
+                UiAction::OpenSavesFolder => show_drop_folder(self.files.old_saves.saves_folder()),
                 UiAction::OpenUrl(url) => {
                     // Only web pages, after the player confirmed them.
                     if bri_ui::ui::web_url(&url).as_deref() == Some(url.as_str())
@@ -322,12 +322,12 @@ impl App {
                     }
                     result
                 }
-                UiAction::TrustAddOnCode => self.client_code.accept_trust(&self.state_dir),
+                UiAction::TrustAddOnCode => self.addons.client_code.accept_trust(&self.state_dir),
                 UiAction::ForgetAddOnTrust => {
                     crate::client_code::ClientCode::forget_trust(&self.state_dir)
                 }
                 UiAction::CancelConnect | UiAction::Disconnect => {
-                    if self.attempt.as_ref().is_none_or(|a| a.id <= id) {
+                    if self.net.attempt.as_ref().is_none_or(|a| a.id <= id) {
                         self.disconnect();
                     }
                     // Core may already contain a newer attempt queued in this
@@ -366,14 +366,14 @@ impl App {
                     Ok(())
                 }
                 UiAction::Game(GameAction::ToggleBuildMacroRecording) => {
-                    let text = match self.macro_recording.take() {
+                    let text = match self.build.macro_recording.take() {
                         Some(recorded) => {
                             let count = recorded.len();
-                            self.build_macro = recorded;
+                            self.build.build_macro = recorded;
                             format!("Build macro saved ({count} actions)")
                         }
                         None => {
-                            self.macro_recording = Some(Vec::new());
+                            self.build.macro_recording = Some(Vec::new());
                             "Recording build macro...".into()
                         }
                     };
@@ -385,8 +385,8 @@ impl App {
                     Ok(())
                 }
                 UiAction::Game(GameAction::PlayBackBuildMacro) => {
-                    if self.macro_recording.is_none() {
-                        self.macro_playback.extend(self.build_macro.iter().cloned());
+                    if self.build.macro_recording.is_none() {
+                        self.build.macro_playback.extend(self.build.build_macro.iter().cloned());
                     }
                     Ok(())
                 }
@@ -505,7 +505,7 @@ impl App {
                     }
                     // The image's `wheel` command names "package:command".
                     let Some((package, command)) = self
-                        .tool_wheel
+                        .view.tool_wheel
                         .as_deref()
                         .and_then(|c| c.split_once(':'))
                     else {
@@ -588,14 +588,14 @@ impl App {
                     }
                 }
                 UiAction::ChatCommand { ref name, .. } if name.eq_ignore_ascii_case("invite") => {
-                    match self.invite.clone() {
+                    match self.net.invite.clone() {
                         Some(invite) => {
                             let copied = copy_to_clipboard(&invite);
                             let text = match &copied {
                                 Ok(()) => format!("Invite copied to the clipboard: {invite}"),
                                 Err(_) => format!("Your invite: {invite}"),
                             };
-                            if let Some(a) = &self.attempt {
+                            if let Some(a) = &self.net.attempt {
                                 self.ui.apply_session(a.id, UiUpdate::Chat { text });
                             }
                             Ok(())
@@ -607,7 +607,7 @@ impl App {
                 }
                 UiAction::ChatCommand { ref name, ref args } => {
                     let snapshot = self
-                        .attempt
+                        .net.attempt
                         .as_ref()
                         .and_then(|a| a.view.as_ref())
                         .and_then(|v| v.admin_snapshot.as_ref());
@@ -733,7 +733,7 @@ impl App {
                 }
                 UiAction::SetAvatar(ref prefs) => {
                     let connected = self.network_view().is_some();
-                    let result = self.avatar_assets.from_prefs(prefs).and_then(|appearance| {
+                    let result = self.avatar.avatar_assets.from_prefs(prefs).and_then(|appearance| {
                         if connected {
                             self.command(id, Command::Avatar(appearance), action.clone())
                         } else {
@@ -748,10 +748,10 @@ impl App {
                 }
                 UiAction::PreviewSave { map, name } => {
                     let key = (map, name);
-                    match self.save_pictures.get(&key).cloned() {
-                        Some(path) => self.save_previews.start(key, path, &self.runtime),
+                    match self.files.save_pictures.get(&key).cloned() {
+                        Some(path) => self.files.save_previews.start(key, path, &self.runtime),
                         None => {
-                            self.save_previews.cancel();
+                            self.files.save_previews.cancel();
                             self.ui.apply(UiUpdate::SavePreview {
                                 map: key.0,
                                 name: key.1,
@@ -766,7 +766,7 @@ impl App {
                     camera_rotation,
                     orbit_distance,
                 } => self
-                    .avatar_assets
+                    .avatar.avatar_assets
                     .from_prefs(&avatar)
                     .and_then(|appearance| {
                         ensure!(
@@ -775,8 +775,8 @@ impl App {
                                 && (1.0..=20.0).contains(&orbit_distance),
                             "Invalid avatar preview camera"
                         );
-                        self.preview_request = Some((appearance, camera_rotation, orbit_distance));
-                        self.preview_dirty = true;
+                        self.avatar.preview_request = Some((appearance, camera_rotation, orbit_distance));
+                        self.avatar.preview_dirty = true;
                         Ok(())
                     }),
                 UiAction::QueryLan => {
@@ -824,7 +824,7 @@ impl App {
                             saved,
                         });
                     });
-                    self.lan_query = Some(receive);
+                    self.lobby.lan_query = Some(receive);
                     self.ui.apply(UiUpdate::LanServers {
                         servers: vec![],
                         querying: true,
@@ -885,7 +885,7 @@ impl App {
                             let (pin, _) = crate::servers::join_pin(
                                 None,
                                 pins.get(&key).cloned(),
-                                self.lan_hosts.get(address),
+                                self.lobby.lan_hosts.get(address),
                             );
                             let HostPin::Certificate(certificate) = pin else {
                                 return None;
@@ -921,7 +921,7 @@ impl App {
                         let _ =
                             send.send(crate::firewall::allow(port).map_err(|e| format!("{e:#}")));
                     });
-                    self.firewall_fix = Some(receive);
+                    self.lobby.firewall_fix = Some(receive);
                     Ok(())
                 }
                 UiAction::Console { ref line } => {

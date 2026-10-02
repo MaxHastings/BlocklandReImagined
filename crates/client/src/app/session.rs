@@ -1,6 +1,31 @@
 //! Hosting, joining, commands and their replies.
 use super::*;
 
+/// The connection to a game: the attempt in flight, its pending requests and what was last sent.
+pub(super) struct SessionState {
+    /// Movement the server's map rules currently allow (the Tutorial's lessons).
+    pub(super) abilities: bri_sim::session::Abilities,
+    /// Last brick inventory state reported to the server.
+    pub(super) brick_hand: Option<bri_sim::session::BrickHand>,
+    pub(super) attempt: Option<Attempt>,
+    /// Steering prefs last sent to this session (`SteeringPrefsEvent`).
+    pub(super) steering_sent: Option<(RequestId, (bool, bool))>,
+    /// Told to the player in chat once the next game is entered.
+    pub(super) join_notices: Vec<String>,
+    /// The environment the UI was last told of, for which session.
+    pub(super) environment_sent: Option<(RequestId, bri_ui::models::environment::EnvironmentView)>,
+    pub(super) pending_actions: BTreeMap<RequestId, PendingAction>,
+    pub(super) dialog_epoch: u64,
+    /// `dialog_epoch` when the latest trigger click was sent. A wrench or
+    /// printer hit notice opens its dialog only if no tool switch, cancel or
+    /// close has happened since, so a cancelled click never reopens late.
+    pub(super) trigger_epoch: Option<u64>,
+    /// Automatic rejoins tried since the connection last dropped.
+    pub(super) reconnects: u8,
+    /// The invite for the game this player hosts (`/invite` copies it).
+    pub(super) invite: Option<String>,
+}
+
 impl App {
     pub(super) fn answer(&mut self, id: RequestId, result: Result<()>) {
         self.ui.apply(UiUpdate::ActionResult {
@@ -14,7 +39,7 @@ impl App {
         action: bri_ui::models::admin::AdminAction,
     ) -> Result<()> {
         let attempt = self
-            .attempt
+            .net.attempt
             .as_ref()
             .filter(|a| a.entered)
             .context("Not connected")?;
@@ -26,12 +51,12 @@ impl App {
         if let Some(command) = crate::admin_ui::command(&action, snapshot)? {
             // Administrative operations do not carry a gameplay aim or a client-selected actor.
             attempt.worker.request(id, command)?;
-            self.pending_actions.insert(
+            self.net.pending_actions.insert(
                 id,
                 PendingAction {
                     action: UiAction::Admin(action),
                     command: None,
-                    dialog_epoch: self.dialog_epoch,
+                    dialog_epoch: self.net.dialog_epoch,
                     inspection: None,
                     dialog_request: false,
                 },
@@ -48,128 +73,128 @@ impl App {
         Ok(())
     }
     pub(super) fn disconnect(&mut self) {
-        self.invite = None;
+        self.net.invite = None;
         self.ui.core.name_tags.clear();
-        self.scene_map = None;
-        self.abilities = Default::default();
-        self.brick_hand = None;
-        self.ghost_report = None;
+        self.scene.scene_map = None;
+        self.net.abilities = Default::default();
+        self.net.brick_hand = None;
+        self.build.ghost_report = None;
         self.copy_report = None;
-        self.remote_ghosts.clear();
+        self.build.remote_ghosts.clear();
         self.foliage.clear();
         self.weather.clear();
         self.audio.clear();
-        self.effects.clear();
-        self.weapon_effects.reset(0);
-        self.actor_effects.reset(0);
-        self.explosion_shapes.reset(0);
-        self.beams.clear();
-        self.tutorial_targets.update(&[], 0.0);
-        self.explosion_debris.reset(0);
-        self.weapon_shells.clear();
-        self.weapon_cues.clear();
-        self.weapon_animation_cues.clear();
-        self.weapon_animation_drops = 0;
-        self.weapon_animation_cursor = 0;
-        self.weapon_cue_drops = 0;
-        self.brick_debris.clear();
-        self.debris_models.clear();
-        self.fade_models.clear();
-        self.package_models.clear();
-        self.brick_kills.clear();
-        if let Some(lines) = &mut self.hidden_lines {
+        self.fx.effects.clear();
+        self.fx.weapon_effects.reset(0);
+        self.fx.actor_effects.reset(0);
+        self.fx.explosion_shapes.reset(0);
+        self.fx.beams.clear();
+        self.fx.tutorial_targets.update(&[], 0.0);
+        self.fx.explosion_debris.reset(0);
+        self.fx.weapon_shells.clear();
+        self.fx.weapon_cues.clear();
+        self.fx.weapon_animation_cues.clear();
+        self.fx.weapon_animation_drops = 0;
+        self.fx.weapon_animation_cursor = 0;
+        self.fx.weapon_cue_drops = 0;
+        self.fx.brick_debris.clear();
+        self.fx.debris_models.clear();
+        self.fx.fade_models.clear();
+        self.addons.package_models.clear();
+        self.fx.brick_kills.clear();
+        if let Some(lines) = &mut self.gpu.hidden_lines {
             lines.clear();
         }
-        self.hidden_uploaded = None;
-        if let Some(lines) = &mut self.selection_lines {
+        self.gpu.hidden_uploaded = None;
+        if let Some(lines) = &mut self.gpu.selection_lines {
             lines.clear();
         }
-        self.selection_uploaded = None;
+        self.gpu.selection_uploaded = None;
         if let Some(shapes) = &mut self.world_shapes {
             shapes.clear();
         }
         self.shapes_uploaded = None;
-        self.weapon_light_deferred = 0;
-        self.weapon_effect_session = None;
+        self.fx.weapon_light_deferred = 0;
+        self.fx.weapon_effect_session = None;
         self.world_items.reset();
-        if let Some(mut attempt) = self.attempt.take() {
+        if let Some(mut attempt) = self.net.attempt.take() {
             self.closing.retain(|task| !task.is_finished());
             self.closing.extend(attempt.worker.finish());
         }
         self.ui.apply(UiUpdate::UnsavedChanges(false));
-        self.client_code.stop();
-        self.avatars.clear();
-        self.mount_meshes.clear();
-        self.avatar_actions.clear();
-        self.avatar_threads.clear();
-        self.avatar_action_images.clear();
+        self.addons.client_code.stop();
+        self.avatar.avatars.clear();
+        self.avatar.mount_meshes.clear();
+        self.avatar.avatar_actions.clear();
+        self.avatar.avatar_threads.clear();
+        self.avatar.avatar_action_images.clear();
         self.controls = Controls::default();
-        self.cpu_scene = None;
-        self.light_volume = LightVolumeState::default();
-        self.cpu_terrain.clear();
-        self.gpu_scene = None;
-        self.gpu_terrain.clear();
-        self.meshes = None;
-        self.mirror_shapes = Default::default();
-        self.mirror_index.clear();
-        self.palette = None;
-        self.gpu_palette = None;
-        self.chunked = Default::default();
-        self.cpu_chunks.clear();
-        self.cpu_chunk_bricks.clear();
-        self.gpu_chunks.clear();
-        self.gpu_chunk_bricks.clear();
-        self.chunk_hides.clear();
-        self.chunk_uploads.clear();
-        self.brick_fades.clear();
-        self.fade_models.clear();
-        self.chunks_left_out.clear();
-        self.world_source = None;
-        self.world_revision = 0;
-        self.world_log = None;
-        self.world_job = None;
-        self.materials = None;
-        self.building = None;
+        self.scene.cpu_scene = None;
+        self.lighting.light_volume = LightVolumeState::default();
+        self.scene.cpu_terrain.clear();
+        self.gpu.gpu_scene = None;
+        self.gpu.gpu_terrain.clear();
+        self.scene.meshes = None;
+        self.scene.mirror_shapes = Default::default();
+        self.scene.mirror_index.clear();
+        self.scene.palette = None;
+        self.gpu.gpu_palette = None;
+        self.scene.chunked = Default::default();
+        self.scene.cpu_chunks.clear();
+        self.scene.cpu_chunk_bricks.clear();
+        self.gpu.gpu_chunks.clear();
+        self.gpu.gpu_chunk_bricks.clear();
+        self.scene.chunk_hides.clear();
+        self.gpu.chunk_uploads.clear();
+        self.fx.brick_fades.clear();
+        self.fx.fade_models.clear();
+        self.scene.chunks_left_out.clear();
+        self.scene.world_source = None;
+        self.scene.world_revision = 0;
+        self.scene.world_log = None;
+        self.scene.world_job = None;
+        self.scene.materials = None;
+        self.build.building = None;
         self.ui
             .apply(UiUpdate::Tools(vec![None; bri_sim::session::TOOL_SLOTS]));
         self.ui.apply(UiUpdate::SetActiveTool(None));
-        self.pending_actions.clear();
+        self.net.pending_actions.clear();
         self.ui.core.admin = Default::default();
         self.ui.core.minigames = Default::default();
-        self.tool_ui.invalidate();
-        self.query_source = None;
-        self.query_log = None;
-        self.dialog_epoch = self.dialog_epoch.wrapping_add(1);
-        self.ghost_gpu = None;
-        self.ghost_look = None;
-        self.ghost_uploaded = u64::MAX;
-        self.remote_ghosts.clear();
+        self.build.tool_ui.invalidate();
+        self.scene.query_source = None;
+        self.scene.query_log = None;
+        self.net.dialog_epoch = self.net.dialog_epoch.wrapping_add(1);
+        self.gpu.ghost_gpu = None;
+        self.gpu.ghost_look = None;
+        self.gpu.ghost_uploaded = u64::MAX;
+        self.build.remote_ghosts.clear();
         self.motion.reset();
         // Nothing is ridden any more, and the camera forgets the game's
         // eyes. The crosshair, wheel and overlay flags mirror what the UI
         // was told; the next frame's `update_held_weapon` settles them.
-        self.mount_heading = None;
-        self.seated_on = None;
-        self.takes_turret = false;
-        self.seat_report = None;
-        self.rider_rotations.clear();
-        self.rider_eye = None;
-        self.tumble = None;
-        self.observer_eye = None;
-        self.rendered_camera = None;
-        self.rendered_roll = 0.0;
-        self.drawn_controls = None;
-        self.liquid_cache = None;
+        self.mounts.mount_heading = None;
+        self.mounts.seated_on = None;
+        self.mounts.takes_turret = false;
+        self.mounts.seat_report = None;
+        self.mounts.rider_rotations.clear();
+        self.mounts.rider_eye = None;
+        self.mounts.tumble = None;
+        self.view.observer_eye = None;
+        self.view.rendered_camera = None;
+        self.view.rendered_roll = 0.0;
+        self.view.drawn_controls = None;
+        self.scene.liquid_cache = None;
         self.ghosts.clear();
         self.vehicles.clear();
         self.music_world = None;
         self.controls.clear_observer();
-        self.macro_recording = None;
-        self.macro_playback.clear();
+        self.build.macro_recording = None;
+        self.build.macro_playback.clear();
         self.combat = Default::default();
         // A save waiting on the colour question belongs to the session
         // that just ended.
-        if let Some((request, _)) = self.color_load.take() {
+        if let Some((request, _)) = self.files.color_load.take() {
             self.ui.core.pop(ScreenId::LoadBricksColor);
             self.answer(
                 request.id,
@@ -205,12 +230,12 @@ impl App {
             .network_view()
             .and_then(|v| v.names.get(&v.owner).cloned());
         if current.as_deref() != Some(name.as_str())
-            && let Some(a) = self.attempt.as_mut().filter(|a| a.entered)
+            && let Some(a) = self.net.attempt.as_mut().filter(|a| a.entered)
         {
             let _ = a.worker.request(REPORT_REQUEST, Command::SetName(name));
         }
         // The host ignores tags it already has, so Done sends them each time.
-        if let Some(a) = self.attempt.as_mut().filter(|a| a.entered) {
+        if let Some(a) = self.net.attempt.as_mut().filter(|a| a.entered) {
             let _ = a
                 .worker
                 .request(REPORT_REQUEST, Command::SetClan(clan(prefs)));
@@ -246,7 +271,7 @@ impl App {
         // A host runs its own Add-On list as it is now; a game joined before
         // may have loaded another server's.
         self.disconnect();
-        if !self.packages_from_tools {
+        if !self.addons.packages_from_tools {
             let set = bri_package::packages::PackageSet::load_root(&self.content.paths.root)?;
             self.apply_packages(&set)?;
         }
@@ -254,7 +279,7 @@ impl App {
         // enabled Add-On that fits the map. A package world stands on its
         // environment map; the packages then generate the ground.
         let hosted =
-            crate::packages::hosted(self.server_packages.as_ref(), &map, game_mode.as_deref())?;
+            crate::packages::hosted(self.addons.server_packages.as_ref(), &map, game_mode.as_deref())?;
         let map = hosted.map.clone();
         ensure!(
             self.content.maps.iter().any(|m| m.id == map),
@@ -265,7 +290,7 @@ impl App {
         let paths_for_maps = paths.clone();
         let base_map = hosted.base_map.clone();
         let add_ons =
-            self.server_packages
+            self.addons.server_packages
                 .clone()
                 .map(|server| bri_net::host_setup::HostedAddOns {
                     server,
@@ -286,9 +311,9 @@ impl App {
         let weapon_snapshot = self.content.weapons.clone();
         let physics_snapshot = self.content.item_physics.clone();
         let selected = self.content.selectable.clone();
-        let avatar_catalog = self.avatar_assets.package.clone();
-        let body_mounts = bri_sim::session::shape_mount_points(&self.avatar_assets.rig.shape);
-        let mut catalog = self.tool_ui.server_catalog();
+        let avatar_catalog = self.avatar.avatar_assets.package.clone();
+        let body_mounts = bri_sim::session::shape_mount_points(&self.avatar.avatar_assets.rig.shape);
+        let mut catalog = self.build.tool_ui.server_catalog();
         // Start Game's Music Files: the loops this game's music bricks offer.
         let prefs = &self.ui.core.prefs;
         let off: std::collections::BTreeSet<&str> = self
@@ -324,7 +349,7 @@ impl App {
         let (scene_tx, scene) = mpsc::sync_channel(1);
         let (router_tx, router) = mpsc::channel();
         let state_dir = self.state_dir.clone();
-        let copies = Arc::new(crate::copies::CopyFiles::new(self.old_saves.clone()));
+        let copies = Arc::new(crate::copies::CopyFiles::new(self.files.old_saves.clone()));
         let load_limit = self.load_limit.clone();
         // v20's `$Pref::Server::Port`, 28000 unless the player changed it.
         let port = u16::try_from(self.ui.core.prefs.i64_or("$Pref::Server::Port", 28000))
@@ -588,7 +613,7 @@ impl App {
                 mods: Default::default(),
             })
         });
-        self.attempt = Some(Attempt {
+        self.net.attempt = Some(Attempt {
             id,
             worker,
             scene,
@@ -665,19 +690,19 @@ impl App {
         );
         let target = bri_net::invite::JoinTarget::parse(&address)?;
         let typed = target.address();
-        let reload_add_ons = !std::mem::take(&mut self.skip_add_on_reload);
+        let reload_add_ons = !std::mem::take(&mut self.addons.skip_add_on_reload);
         // An invite's key, a LAN listing or a saved pin identifies the host;
         // a first join trusts the certificate the host presents and pins it.
         let pins_file = self.state_dir.join("trusted-hosts.json");
         let servers_file = self.state_dir.join("servers.json");
-        let lan_hosts = self.lan_hosts.clone();
+        let lan_hosts = self.lobby.lan_hosts.clone();
         let paths = self.content.paths.clone();
         let light_cache = self.state_dir.join("light-volumes");
         let player = self.join_name();
         let weapon_snapshot = self.content.weapons.clone();
         let physics_snapshot = self.content.item_physics.clone();
         let selected = self.content.selectable.clone();
-        let catalog = self.tool_ui.server_catalog();
+        let catalog = self.build.tool_ui.server_catalog();
         let (scene_tx, scene) = mpsc::sync_channel(1);
         let load_limit = self.load_limit.clone();
         let identity_file = self.state_dir.join("client.identity");
@@ -692,7 +717,7 @@ impl App {
         self.ui.apply_session(
             id,
             UiUpdate::Connection(ConnectionState::Connecting {
-                text: if self.reconnects > 0 {
+                text: if self.net.reconnects > 0 {
                     format!("Connection lost. Reconnecting to {typed}…")
                 } else {
                     format!("Connecting to {typed}…")
@@ -864,7 +889,7 @@ impl App {
                 mods,
             })
         });
-        self.attempt = Some(Attempt {
+        self.net.attempt = Some(Attempt {
             id,
             worker,
             scene,
@@ -918,18 +943,18 @@ impl App {
                     | UiAction::SendWrench { .. }
                     | UiAction::SendEvents { .. }
             );
-        self.attempt
+        self.net.attempt
             .as_ref()
             .filter(|a| a.entered)
             .context("Not connected")?
             .worker
             .request_with_aim(id, command, aim)?;
-        self.pending_actions.insert(
+        self.net.pending_actions.insert(
             id,
             PendingAction {
                 action,
                 command: retained,
-                dialog_epoch: self.dialog_epoch,
+                dialog_epoch: self.net.dialog_epoch,
                 inspection,
                 dialog_request,
             },
@@ -942,7 +967,7 @@ impl App {
         request: RequestId,
         result: std::result::Result<Reply, bri_sim::session::Rejection>,
     ) {
-        let Some(pending) = self.pending_actions.remove(&request) else {
+        let Some(pending) = self.net.pending_actions.remove(&request) else {
             return;
         };
         // Placement failures use the original HUD plant-error icon and sound,
@@ -952,7 +977,7 @@ impl App {
             Ok(_) => None,
         };
         let result = result.map_err(|rejection| rejection.message);
-        if pending.dialog_request && pending.dialog_epoch != self.dialog_epoch {
+        if pending.dialog_request && pending.dialog_epoch != self.net.dialog_epoch {
             // The dialog that asked is gone, so its data is not applied, but
             // the request is still answered: a screen left waiting on it
             // (the print selector's pending print) would otherwise refuse
@@ -1001,7 +1026,7 @@ impl App {
             return;
         }
         if let Some(command) = &pending.command
-            && let Some(building) = &mut self.building
+            && let Some(building) = &mut self.build.building
         {
             for update in building.command_finished(request, command, result.is_ok()) {
                 self.ui.apply_session(attempt.id, update);
@@ -1009,7 +1034,7 @@ impl App {
         }
         if matches!(&pending.action, UiAction::SaveBricks { .. }) {
             let queued = match result {
-                Ok(Reply::Saved(build)) => self.file_jobs.enqueue(crate::saves::Request {
+                Ok(Reply::Saved(build)) => self.files.file_jobs.enqueue(crate::saves::Request {
                     id: request,
                     session: Some(attempt.id),
                     action: pending.action,
@@ -1048,7 +1073,7 @@ impl App {
                     .as_ref()
                     .ok_or_else(|| "Inspection has no active world".to_string())?;
                 let updates = self
-                    .tool_ui
+                    .build.tool_ui
                     .accept_inspection(&reply, mode, expected, &view.world, &view.names, view.owner)
                     .map_err(|e| format!("{e:#}"))?;
                 for update in updates {
@@ -1061,7 +1086,7 @@ impl App {
                     | UiAction::SendEvents { .. }
             ) {
                 let last_print = self
-                    .tool_ui
+                    .build.tool_ui
                     .command_accepted(
                         pending
                             .command
@@ -1072,7 +1097,7 @@ impl App {
                         format!("Server accepted the edit, but dialog refresh failed: {e:#}")
                     })?;
                 if let Some(last) = last_print
-                    && let Some(building) = self.building.as_mut()
+                    && let Some(building) = self.build.building.as_mut()
                 {
                     building
                         .remember_print(&last)
@@ -1125,7 +1150,7 @@ impl App {
             ConnectionState::InGame { .. } => {
                 a.reloading
                     || (snapshot.stage == bri_progress::Stage::ReceivingWorld
-                        && self.scene_map.as_deref() != Some(map.as_str()))
+                        && self.scene.scene_map.as_deref() != Some(map.as_str()))
             }
             _ => false,
         };
@@ -1160,9 +1185,9 @@ impl App {
             UiUpdate::Datablocks(self.content.datablocks.clone()),
             UiUpdate::BuildingAllowed(true),
         ];
-        updates.extend(self.tool_ui.catalog_updates());
+        updates.extend(self.build.tool_ui.catalog_updates());
         updates.extend(
-            self.building
+            self.build.building
                 .as_ref()
                 .context("Ready connection has no building controller")?
                 .initial_updates(),
