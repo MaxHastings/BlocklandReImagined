@@ -31,3 +31,15 @@ Checked: cargo test bri-sim, bri-weapons, bri-chaos (729 passed), bri-net
 Next: hole bricks (`Zombie Hole`, `Shark Hole`) spawning their bots, the
 importer turning Bot_Hole bots' settings into kinds, and the Bot_Zombie and
 Bot_Shark ports.
+
+## Paused (weekly budget nearly spent, 2026-10-02)
+
+Pick up here:
+1. Zombie and Shark: hole bricks spawn bots by kind; the importer turns
+   Bot_Hole bots' settings into `bots.json` kinds; then the Bot_Zombie and
+   Bot_Shark ports. The Shark sets every swim speed to 0 in script, so its
+   speeds must be chosen and said so; its mouth grab (hold, kill after 5 s)
+   and colour variants (tinting an own-model body) can wait.
+2. Bot redesign Max asked for (plan in the GG thread): scored behaviours
+   instead of fixed priority, weapon handling read from weapon data, a
+   richer walk map, shared battlefield awareness. Build in steps after 1.
