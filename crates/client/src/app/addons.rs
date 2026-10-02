@@ -141,6 +141,12 @@ impl App {
         }
         Ok(())
     }
+    /// The lists changed: show them now and load them later
+    /// ([`UiAction::ApplyAddOns`], or hosting), never on the click.
+    pub(super) fn add_ons_listed(&mut self, view: AddOnsView) {
+        self.addons.packages_from_tools = false;
+        self.show_add_ons(view);
+    }
     pub(super) fn add_ons_changed(&mut self, mut view: AddOnsView) {
         self.addons.packages_from_tools = false;
         let root = self.content.paths.root.clone();

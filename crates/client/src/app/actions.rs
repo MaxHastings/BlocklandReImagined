@@ -866,10 +866,20 @@ impl App {
             }
             UiAction::SetAddOnEnabled { ref id, enabled } => {
                 crate::add_ons::set_enabled(&self.content.paths.root, id, enabled)
-                    .map(|view| self.add_ons_changed(view))
+                    .map(|view| self.add_ons_listed(view))
             }
             UiAction::DefaultAddOns => crate::add_ons::defaults(&self.content.paths.root)
-                .map(|view| self.add_ons_changed(view)),
+                .map(|view| self.add_ons_listed(view)),
+            UiAction::ApplyAddOns
+                if self.addons.packages_from_tools || self.net.attempt.is_some() =>
+            {
+                Ok(())
+            }
+            UiAction::ApplyAddOns => {
+                bri_package::packages::PackageSet::load_root(&self.content.paths.root)
+                    .and_then(|set| self.apply_packages(&set))
+                    .context("Your Add-On changes could not be loaded")
+            }
             UiAction::ImportAddOn { id: ref row } => {
                 let root = self.content.paths.root.clone();
                 crate::add_ons::retry(&root, row).and_then(|()| {

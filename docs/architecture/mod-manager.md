@@ -101,6 +101,12 @@ they add.
   `UiUpdate::AddOns(AddOnsView)`. The join screen is
   `ConnectionState::DownloadingPackages(PackageDownload)`.
 - Changes apply the next time a game starts; the screen says so.
+- One click on a row's check box (the list's `checkColumn`,
+  `EventKind::Toggle`) turns it on or off; the box ticks at once and goes
+  back if the host refuses. `SetAddOnEnabled` and `DefaultAddOns` only
+  write the lists; the screen sends `ApplyAddOns` as it closes, which loads
+  the new list once (bricks, weapons, maps, modes). Loading on every click
+  was the lag players saw between a click and its tick.
 
 ## Join wiring
 

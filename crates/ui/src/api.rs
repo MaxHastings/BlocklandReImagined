@@ -925,10 +925,16 @@ pub enum UiAction {
     RequestAddOns,
     /// Turn a package on or off. The host also turns on what it needs, or
     /// off what needs it, and answers with the new [`UiUpdate::AddOns`].
+    /// It only writes the lists, so it answers at once; loading what they
+    /// name waits for [`UiAction::ApplyAddOns`].
     SetAddOnEnabled {
         id: String,
         enabled: bool,
     },
+    /// Load the Add-Ons the lists now name (bricks, weapons, maps, game
+    /// modes), if they changed. The Add-Ons screen sends it as it closes,
+    /// so a run of clicks costs one load.
+    ApplyAddOns,
     /// Turn off every package that is not part of the base game.
     DefaultAddOns,
     /// Convert again a classic Add-On in the Add-Ons folder that could not

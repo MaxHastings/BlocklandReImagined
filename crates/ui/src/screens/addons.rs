@@ -8,7 +8,7 @@
 use super::*;
 use crate::api::{AddOnRow, ConnectionState, DownloadState, UiAction};
 use crate::ui::Callback;
-use crate::view::EventKind;
+use crate::view::{EventKind, check_cell};
 
 const LIST: &str = "AO_List";
 const SEARCH: &str = "AO_Search";
@@ -60,6 +60,9 @@ pub struct AddOns {
     /// Package id of the selected row, kept across refreshes.
     selected: Option<String>,
     requests: Vec<RequestId>,
+    /// Rows ticked or unticked here and not yet answered by the host: the
+    /// row shows the click at once and goes back if the host refuses.
+    flips: Vec<(RequestId, String)>,
 }
 
 impl AddOns {
@@ -85,7 +88,10 @@ impl AddOns {
             ),
             LIST,
         );
-        list.fields.insert("columns".into(), "0 34".into());
+        // A check box, a warning mark, the name. One click on the box
+        // turns the Add-On on or off; a click on the name shows it.
+        list.fields.insert("columns".into(), "0 20 34".into());
+        list.fields.insert("checkColumn".into(), "0".into());
         list_scroll.children.push(list);
         win.children.push(list_scroll);
         let mut detail_scroll = scroll(DETAIL_SCROLL, Rect::new(256, 58, 332, 290));
@@ -162,6 +168,7 @@ impl AddOns {
             shown: vec![],
             selected: None,
             requests: vec![],
+            flips: vec![],
         };
         s.refresh(core);
         s
@@ -196,28 +203,32 @@ impl AddOns {
         self.shown.clear();
         let mut items = Vec::new();
         for category in categories {
-            items.push((format!("\t{}", category.to_ascii_uppercase()), HEADING));
+            items.push((format!("\t\t{}", category.to_ascii_uppercase()), HEADING));
             for (i, r) in rows.iter().enumerate() {
                 if r.category != category || !matches(r) {
                     continue;
                 }
+                // Classic Add-Ons still converting, or that could not
+                // be, have nothing to turn on yet.
+                let check = if r.importing || r.importable {
+                    ""
+                } else {
+                    check_cell(r.enabled, !r.locked)
+                };
                 let mark = if r.importing {
                     "..."
-                } else if r.importable {
-                    "!"
                 } else if r.broken && r.enabled {
                     "!!"
-                } else if r.locked {
-                    "Base"
-                } else if r.enabled {
-                    "On"
-                } else if r.broken {
+                } else if r.broken || r.importable {
                     "!"
                 } else {
                     ""
                 };
                 items.push((
-                    format!("{mark}\t{}", r.name.replace(['\t', '\n', '\r'], " ")),
+                    format!(
+                        "{check}\t{mark}\t{}",
+                        r.name.replace(['\t', '\n', '\r'], " ")
+                    ),
                     self.shown.len() as i64,
                 ));
                 self.shown.push(i);
@@ -256,7 +267,7 @@ impl AddOns {
         let text = match &row {
             Some(r) => details(r),
             None if core.add_ons.rows.is_empty() => "Looking for installed add-ons...".into(),
-            None => "Pick an add-on to see what it does.\n\nTick Enabled, or double-click it, to turn it on or off. Changes apply the next time you start a game.".into(),
+            None => "Pick an add-on to see what it does.\n\nClick the box beside an add-on to turn it on or off. Changes apply the next time you start a game.".into(),
         };
         if let (Some(n), Some(scroll)) = (self.view.id(DETAILS), self.view.id(DETAIL_SCROLL)) {
             let width = self.view.node(n).ctrl.extent[0];
@@ -328,11 +339,22 @@ impl AddOns {
             );
             return;
         }
-        let id = core.request(UiAction::SetAddOnEnabled {
-            id: row.id,
+        let request = core.request(UiAction::SetAddOnEnabled {
+            id: row.id.clone(),
             enabled,
         });
-        self.requests.push(id);
+        self.requests.push(request);
+        // Show the click now; the host's list replaces it when it answers.
+        flip(core, &row.id);
+        self.flips.push((request, row.id));
+        self.refresh(core);
+    }
+}
+
+/// Tick or untick a row as the player sees it, before the host answers.
+fn flip(core: &mut Core, id: &str) {
+    if let Some(r) = core.add_ons.rows.iter_mut().find(|r| r.id == id) {
+        r.enabled = !r.enabled;
     }
 }
 
@@ -408,6 +430,11 @@ impl Screen for AddOns {
         let id = core.request(UiAction::RequestAddOns);
         self.requests.push(id);
     }
+    fn on_sleep(&mut self, core: &mut Core) {
+        // Loading what the list turns on is the slow part: it happens once,
+        // as the player leaves, never on each click.
+        core.request(UiAction::ApplyAddOns);
+    }
     fn on_update(&mut self, core: &mut Core) {
         self.refresh(core);
     }
@@ -422,6 +449,12 @@ impl Screen for AddOns {
             return false;
         };
         self.requests.remove(i);
+        if let Some(f) = self.flips.iter().position(|(r, _)| *r == id) {
+            let (_, row) = self.flips.remove(f);
+            if result.is_err() {
+                flip(core, &row);
+            }
+        }
         if let Err(reason) = result {
             core.message_ok("Add-Ons", reason);
         }
@@ -446,7 +479,7 @@ impl Screen for AddOns {
         match (name.as_str(), ev.kind) {
             (_, EventKind::Close) | (DONE, EventKind::Click) => core.pop(self.id()),
             (SEARCH, EventKind::Changed) => self.refresh(core),
-            (LIST, EventKind::Changed | EventKind::Submit) => {
+            (LIST, EventKind::Changed | EventKind::Submit | EventKind::Toggle) => {
                 let item = self.view.selected(ev.node);
                 match item.filter(|&i| i != HEADING) {
                     Some(i) => {
@@ -463,7 +496,7 @@ impl Screen for AddOns {
                     }
                 }
                 self.show_details(core);
-                if ev.kind == EventKind::Submit {
+                if matches!(ev.kind, EventKind::Submit | EventKind::Toggle) {
                     self.toggle(core);
                 }
             }
@@ -473,7 +506,7 @@ impl Screen for AddOns {
             }
             (ENABLED, EventKind::Click) => {
                 self.toggle(core);
-                // The box shows the host's answer, not the click.
+                // The box shows the row, which a refused click leaves as it was.
                 self.show_details(core);
             }
             (FORGET_TRUST, EventKind::Click) => core.message_yes_no(
@@ -829,7 +862,7 @@ mod tests {
     use super::*;
     use crate::api::{AddOnsView, DownloadRow, PackageDownload as Download, Settings, UiUpdate};
     use crate::binds::Platform;
-    use crate::input::InputEvent;
+    use crate::input::{InputEvent, MouseButton};
     use crate::schema::UiPack;
     use crate::ui::{Ui, UiConfig};
     use std::rc::Rc;
@@ -916,14 +949,14 @@ mod tests {
         assert_eq!(
             items,
             [
-                "\tBASE GAME",
-                "Base\tThe base",
-                "\tGAME MODES",
-                "On\tThe lab-world",
-                "\tLOOKS & HUD",
-                "\tThe lab-hud",
-                "\tWEAPONS & ITEMS",
-                "\tThe gun",
+                "\t\tBASE GAME",
+                "[#]\t\tThe base",
+                "\t\tGAME MODES",
+                "[x]\t\tThe lab-world",
+                "\t\tLOOKS & HUD",
+                "[ ]\t\tThe lab-hud",
+                "\t\tWEAPONS & ITEMS",
+                "[ ]\t\tThe gun",
             ]
         );
     }
@@ -980,6 +1013,81 @@ mod tests {
             &mut ui.core,
         );
         assert!(ui.drain_actions().is_empty());
+    }
+
+    /// Max found double-clicking each row slow, and the tick lagged: one
+    /// click on a row's box turns it on or off, ticks at once before the
+    /// host answers, goes back if the host refuses, and a quick second
+    /// click on the next row is never taken as a double-click.
+    #[test]
+    fn one_click_on_a_box_ticks_it_at_once() {
+        let mut ui = ui();
+        ui.apply(UiUpdate::AddOns(view()));
+        let mut s = AddOns::new(&ui.core);
+        ui.drain_actions();
+        let list = s.view.id(LIST).unwrap();
+        let pack = ui.core.pack.clone();
+        let click = |s: &mut AddOns, ui: &mut Ui, name: &str, x: i32| {
+            let row = s
+                .view
+                .node(list)
+                .state
+                .items
+                .iter()
+                .position(|(t, _)| t.ends_with(name))
+                .unwrap() as i32;
+            let r = s.view.node(list).rect;
+            let rh = s.view.node(list).state.row_height.max(16);
+            let mut out = Vec::new();
+            s.view
+                .mouse_down(MouseButton::Left, r.x + x, r.y + row * rh + rh / 2, &pack, &mut out);
+            for ev in &out {
+                s.on_event(ev, &mut ui.core);
+            }
+            out.into_iter().map(|e| e.kind).collect::<Vec<_>>()
+        };
+        let text = |s: &AddOns, name: &str| {
+            s.view
+                .node(list)
+                .state
+                .items
+                .iter()
+                .find(|(t, _)| t.ends_with(name))
+                .unwrap()
+                .0
+                .clone()
+        };
+        // A click on the name only shows the add-on.
+        click(&mut s, &mut ui, "The gun", 60);
+        assert!(ui.drain_actions().is_empty());
+        assert_eq!(s.selected.as_deref(), Some("gun"));
+        // One click on the box: asked for, and ticked before any answer.
+        let kinds = click(&mut s, &mut ui, "The gun", 4);
+        assert!(kinds.contains(&EventKind::Toggle));
+        let actions: Vec<_> = ui.drain_actions();
+        assert_eq!(
+            actions.iter().map(|(_, a)| a.clone()).collect::<Vec<_>>(),
+            [UiAction::SetAddOnEnabled {
+                id: "gun".into(),
+                enabled: true
+            }]
+        );
+        assert!(text(&s, "The gun").starts_with("[x]"));
+        // The next row's box straight after: its own toggle, no double-click.
+        let kinds = click(&mut s, &mut ui, "The lab-hud", 4);
+        assert!(!kinds.contains(&EventKind::Submit));
+        let second: Vec<_> = ui.drain_actions();
+        assert_eq!(second.len(), 1);
+        assert!(text(&s, "The lab-hud").starts_with("[x]"));
+        // The host refuses the gun: its box goes back.
+        s.on_result(actions[0].0, None, &Err("no".into()), &mut ui.core);
+        assert!(text(&s, "The gun").starts_with("[ ]"));
+        // Leaving the screen loads the changes, once.
+        s.on_sleep(&mut ui.core);
+        assert_eq!(
+            ui.drain_actions().into_iter().map(|(_, a)| a).collect::<Vec<_>>(),
+            [UiAction::ApplyAddOns]
+        );
     }
 
     #[test]
@@ -1050,7 +1158,7 @@ mod tests {
                 .state
                 .items
                 .iter()
-                .any(|(t, _)| t == "...\tThe legacy:Weapon_Shotgun")
+                .any(|(t, _)| t == "\t...\tThe legacy:Weapon_Shotgun")
         );
         // Converting, it has neither Retry nor Enabled.
         let mut v = ui.core.add_ons.clone();
@@ -1108,7 +1216,7 @@ mod tests {
             .iter()
             .map(|(t, _)| t.clone())
             .collect();
-        assert_eq!(items, ["\tLOOKS & HUD", "!\tThe lab-hud"]);
+        assert_eq!(items, ["\t\tLOOKS & HUD", "[ ]\t!\tThe lab-hud"]);
         select(&mut s, &mut ui, "The lab-hud");
         let text = s.view.text_of(s.view.id(DETAILS).unwrap());
         assert!(
