@@ -146,7 +146,10 @@ fn a_charged_image_fires_on_release_from_its_armed_state() {
         .map(|s| s.name.as_str())
         .collect();
     assert_eq!(armed.len(), 1, "{armed:?}");
-    for tapped in [bri_weapons::testing::GUN_IMAGE, bri_weapons::testing::ROCKET_IMAGE] {
+    for tapped in [
+        bri_weapons::testing::GUN_IMAGE,
+        bri_weapons::testing::ROCKET_IMAGE,
+    ] {
         assert!(!pack.images[tapped].charges(), "{tapped}");
     }
 }

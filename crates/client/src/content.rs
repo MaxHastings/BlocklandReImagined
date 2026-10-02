@@ -1276,8 +1276,7 @@ mod tests {
         let report = |saves: serde_json::Value| {
             fs::write(
                 fixture.0.join("report.json"),
-                serde_json::to_vec(&serde_json::json!({"schema_version":1,"saves":saves}))
-                    .unwrap(),
+                serde_json::to_vec(&serde_json::json!({"schema_version":1,"saves":saves})).unwrap(),
             )
             .unwrap();
             world_index(&fixture.0).unwrap()
@@ -1290,7 +1289,12 @@ mod tests {
         let stale = report(serde_json::json!([
             {"source":"Bedroom/A.bls","file":"a.world.json","bricks":1}
         ]));
-        assert!(checked(&stale).unwrap_err().to_string().contains("--rebuild worlds"));
+        assert!(
+            checked(&stale)
+                .unwrap_err()
+                .to_string()
+                .contains("--rebuild worlds")
+        );
         // A picture recorded but not there, or none at all: stale too.
         let pictured = serde_json::json!([
             {"source":"Bedroom/A.bls","file":"a.world.json","bricks":1,"picture":true},

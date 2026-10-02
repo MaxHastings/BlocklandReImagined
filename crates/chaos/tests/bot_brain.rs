@@ -688,7 +688,8 @@ fn a_swimming_bot_roams_its_water_at_every_depth_and_never_leaves_it() {
     assert!(high - low > 1.5, "swam up and down: {low} to {high}");
     // An enemy on dry land: it comes to the water's edge nearest them and
     // no farther.
-    s.set_spawn_points(vec![Vec3::new(6.0, 0.05, 30.0)]).unwrap();
+    s.set_spawn_points(vec![Vec3::new(6.0, 0.05, 30.0)])
+        .unwrap();
     minigame(&mut s, human, TOOLS_ONLY);
     let mut nearest = f32::MAX;
     for _ in 0..120 * 10 {
@@ -709,7 +710,8 @@ fn a_swimming_bot_goes_up_after_a_swimmer_and_bites_them() {
     });
     // The builder floats up in the pool (the mini-game puts its members
     // there); the bot starts on the floor.
-    s.set_spawn_points(vec![Vec3::new(13.0, 3.0, 31.0)]).unwrap();
+    s.set_spawn_points(vec![Vec3::new(13.0, 3.0, 31.0)])
+        .unwrap();
     let human = s
         .join("Builder".into(), Vec3::new(13.0, 3.0, 31.0), true)
         .unwrap();

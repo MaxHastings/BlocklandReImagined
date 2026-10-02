@@ -28,8 +28,8 @@
 //! way it walked, through openings included.
 use super::*;
 use crate::bot_kind::{BotKind, Moves};
-use behaviour::{Behaviour, Situation, choose};
 use crate::nav::{Body, Found, Ground, Nav, Search, Waypoint};
+use behaviour::{Behaviour, Situation, choose};
 use bri_content::passage::{Way, carried_yaw};
 use bri_package_runtime::ops::ObjectRef;
 use bri_weapons::ActorId;
@@ -281,7 +281,11 @@ impl Brain {
         if self.goal.is_none() && tick >= self.next_wander {
             let angle = self.random() * std::f32::consts::TAU;
             let radius = self.random() * self.kind.wander_radius;
-            let around = if self.brick.is_none() { feet } else { self.home };
+            let around = if self.brick.is_none() {
+                feet
+            } else {
+                self.home
+            };
             // A swimmer roams up and down too (the water bounds it).
             let rise = if swimming {
                 (self.random() * 2.0 - 1.0) * self.kind.wander_radius * 0.5
@@ -539,7 +543,9 @@ impl Session {
     pub(super) fn check_bot_bodies(&self) -> Result<()> {
         for kind in &self.bots.kinds {
             ensure!(
-                kind.emote.as_deref().is_none_or(|e| BOT_EMOTES.contains(&e)),
+                kind.emote
+                    .as_deref()
+                    .is_none_or(|e| BOT_EMOTES.contains(&e)),
                 "Bot {}: its emote is one of {}",
                 kind.id,
                 BOT_EMOTES.join(", ")
@@ -740,7 +746,11 @@ impl Session {
         if self.bots.is_brick_bot(bot) && self.bots.is_brick_bot(other) {
             // One side (Bot_Hole's `hType`) never fights itself and fights
             // every other; bots of no side side with their builder.
-            let theirs = self.bots.brains.get(&other).and_then(|b| b.kind.side.as_deref());
+            let theirs = self
+                .bots
+                .brains
+                .get(&other)
+                .and_then(|b| b.kind.side.as_deref());
             let friends = match (kind.side.as_deref(), theirs) {
                 (None, None) => {
                     !kind.fights_bots || self.bot_brick_owner(other) == self.bot_brick_owner(bot)
@@ -829,8 +839,7 @@ impl Session {
             && (0..8).all(|i| {
                 let a = i as f32 * std::f32::consts::TAU / 8.0;
                 let out = Vec3::new(a.sin(), 0.0, a.cos());
-                clear(chest, out, OPEN_ROOM)
-                    && clear(chest + out * OPEN_SWING, Vec3::Y, OPEN_SKY)
+                clear(chest, out, OPEN_ROOM) && clear(chest + out * OPEN_SWING, Vec3::Y, OPEN_SKY)
             })
     }
     /// The nearest open place around `feet` to throw from: `None` when it
@@ -940,7 +949,11 @@ impl Session {
         if !peer.combat.alive {
             // A brick's bot comes back a second after it may; a rules bot
             // as soon as its game lets it (Slayer's bot respawn time).
-            let wait = if self.bots.by_rules.contains_key(&bot) { 0 } else { 120 };
+            let wait = if self.bots.by_rules.contains_key(&bot) {
+                0
+            } else {
+                120
+            };
             if tick >= peer.combat.respawn_tick + wait {
                 // A bot a bite turned comes back as its own kind.
                 if let Some(born) = self.bots.brains.get_mut(&bot).and_then(|b| b.born.take()) {
@@ -1060,8 +1073,8 @@ impl Session {
         // Holding something with its tool: carry it to open space to throw.
         let holding = self.held_by(bot).is_some();
         let grabbing = holding || self.is_reaching(bot);
-        let carry_to = (holding && self.bots.brains[&bot].carry.is_none())
-            .then(|| self.open_spot(feet));
+        let carry_to =
+            (holding && self.bots.brains[&bot].carry.is_none()).then(|| self.open_spot(feet));
         let air = self.air_chase(&self.bots.brains[&bot], &sight, feet, eye, state.grounded);
         let target_velocity = sight.target.map_or(Vec3::ZERO, |seen| {
             self.peers.get(&seen.owner).map_or(Vec3::ZERO, |p| {
@@ -1382,7 +1395,11 @@ impl Session {
                     direction = if air.roofed {
                         // Under something: out from under it first.
                         let away = -toward;
-                        if away.length() > 0.1 { away.normalize() } else { forward }
+                        if away.length() > 0.1 {
+                            away.normalize()
+                        } else {
+                            forward
+                        }
                     } else if feet.y > air.to.y + 1.0 && toward.length() > 1.0 {
                         toward.normalize() * (toward.length() / 3.0).min(1.0)
                     } else {
@@ -1536,8 +1553,7 @@ impl Session {
         let height = crate::water::body_height(state, them.player.tuning()) * state.scale;
         let point = Vec3::new(feet.x, eye.y.clamp(feet.y, feet.y + height), feet.z);
         let width = them.player.tuning().width * state.scale * 0.5;
-        if point.distance(eye) > melee.reach + width
-            || !self.can_damage_player(bot, target, false)
+        if point.distance(eye) > melee.reach + width || !self.can_damage_player(bot, target, false)
         {
             return Ok(());
         }

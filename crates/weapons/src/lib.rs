@@ -2642,12 +2642,12 @@ impl Pack {
                 "Invalid image mount/timing"
             );
             ensure!(
-                image
-                    .bot
-                    .is_none_or(|b| [b.reach, b.near].into_iter().flatten().all(|r| {
-                        r.is_finite() && (0.0..=2000.0).contains(&r)
-                    }) && b.reach.is_none_or(|r| r > 0.0)
-                        && b.near.is_none_or(|n| b.reach.is_none_or(|r| n < r))),
+                image.bot.is_none_or(|b| [b.reach, b.near]
+                    .into_iter()
+                    .flatten()
+                    .all(|r| { r.is_finite() && (0.0..=2000.0).contains(&r) })
+                    && b.reach.is_none_or(|r| r > 0.0)
+                    && b.near.is_none_or(|n| b.reach.is_none_or(|r| n < r))),
                 "Invalid image bot reach or near"
             );
             ensure!(

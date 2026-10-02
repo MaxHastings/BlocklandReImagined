@@ -201,7 +201,8 @@ impl BotKind {
                 self.id
             );
         }
-        let short = |s: &str| !s.trim().is_empty() && s.len() <= 64 && !s.chars().any(char::is_control);
+        let short =
+            |s: &str| !s.trim().is_empty() && s.len() <= 64 && !s.chars().any(char::is_control);
         ensure!(
             self.side.as_deref().is_none_or(short)
                 && self.emote.as_deref().is_none_or(short)

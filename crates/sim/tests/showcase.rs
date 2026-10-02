@@ -1407,13 +1407,17 @@ fn a_bot_with_the_gun_catches_from_across_the_room() {
     g.minigame(builder, &[]);
     // The game put the bot beside the builder: it comes back across the
     // room.
-    g.s.set_spawn_points(vec![Vec3::new(0.0, 0.05, -18.0)]).unwrap();
+    g.s.set_spawn_points(vec![Vec3::new(0.0, 0.05, -18.0)])
+        .unwrap();
     g.cmd(bot, Command::Suicide).unwrap();
     g.steps(2);
     while !g.s.is_alive(bot) {
         g.steps(1);
     }
-    assert!(g.feet(bot).distance(g.feet(builder)) > 15.0, "across the room");
+    assert!(
+        g.feet(bot).distance(g.feet(builder)) > 15.0,
+        "across the room"
+    );
     g.s.give_tool(bot, GUN, true).unwrap();
     let mut caught_from = None;
     for _ in 0..120 * 12 {

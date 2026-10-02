@@ -458,7 +458,10 @@ fn sky_fades_into_the_world_fog_at_the_horizon() -> Result<()> {
     for up in [-0.4_f32, 0.0, 0.05, 0.2, 0.6] {
         let d = env.fog.end;
         let offset = [0.0, up * d, (1.0 - up * up).sqrt() * d];
-        assert!((env.fog.amount_along(offset, env.bottom) - env.fog.sky_amount(up, env.bottom)).abs() < 1e-3);
+        assert!(
+            (env.fog.amount_along(offset, env.bottom) - env.fog.sky_amount(up, env.bottom)).abs()
+                < 1e-3
+        );
     }
     // Thick fog reaches far up the sky.
     env.fog.start = 5.0;
