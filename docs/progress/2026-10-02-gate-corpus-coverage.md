@@ -30,6 +30,26 @@ one added report line; that formatting was applied. The full gate runs with
 Homebrew first on PATH and with CARGO_PROFILE_DEV_DEBUG=0 and CARGO_INCREMENTAL=0,
 leaving CARGO_TARGET_DIR unset.
 
-Next: commit and run `python3 tools/gate.py --push`; record the resulting log
-and verified remote commit. The original five-fix Windows CI is still running.
-The private saves corpus remains unavailable on this Mac.
+Final verification: the full gate passed and pushed `cd08153c` to main.
+The seven gate-reporting regressions passed, then workspace build (37 seconds),
+clippy with warnings denied (9 seconds), content validation (3 seconds), and all
+317 Rust test binaries (395 seconds). No retry was required. The real corpus
+step printed `save corpus: SKIPPED: no saves folder; set BRI_SAVES to Maxwell's
+saves folder`, with no preceding corpus-success claim. Total gate: 445 seconds.
+Remote main was verified as `cd08153c4f74801e6f3c1f4c51f815e19541a5bb`.
+Logs: `../.bri-gate/logs/cd08153c4f74.log` and the retained main checkout's
+ignored `artifacts/gate-corpus-coverage.log`.
+
+The original five-fix Windows CI passed its build and clippy and is running
+its tests. The new cleanup's
+[Windows CI](https://github.com/MaxHastings/BlocklandReImagined/actions/runs/37071011376)
+started; it remains pending. The private saves corpus remains unavailable on
+this Mac. No full-alpha acceptance item was checked off.
+
+Next useful cleanup: replace revisioned content-folder literals in test
+fixtures with package-role lookup. Large Add-On reloads still have an owned
+performance follow-up, and the private CI-content artifact needs a refresh
+from the authoritative content sources (see the Mac setup entry). Neither is
+silently treated as resolved here. The isolated worktree is removed after its
+commits are verified on main; it has no target folder to clean.
+
