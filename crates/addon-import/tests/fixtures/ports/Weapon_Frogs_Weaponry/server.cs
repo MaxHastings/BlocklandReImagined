@@ -35,6 +35,7 @@ datablock PlayerData(DeployedArmor : PlayerStandardArmor)
    maxForwardSpeed = 0;
    maxBackwardSpeed = 0;
    maxSideSpeed = 0;
+   jumpDelay = 0;
    canJet = false;
    uiName = "";
 };

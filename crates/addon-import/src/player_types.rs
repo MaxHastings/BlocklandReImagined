@@ -120,11 +120,12 @@ pub fn convert(fields: &BTreeMap<String, String>, base: Option<String>) -> Conve
                 continue;
             }
         } else if key == "jumpdelay" {
-            // Ticks of v20's 32 ms, as the motor's quarter ticks.
+            // Ticks of v20's 32 ms, as the motor's quarter ticks: a whole
+            // count (the motor's u8), never `0.0`, which it refuses.
             if let Some(n) = number(v) {
                 movement.insert(
                     "jump_delay_ticks".into(),
-                    json!((n * 4.0).clamp(0.0, 255.0)),
+                    json!((n * 4.0).round().clamp(0.0, 255.0) as u8),
                 );
                 continue;
             }
@@ -210,5 +211,16 @@ mod tests {
         assert_eq!(c.archetype["first_person_only"], json!(true));
         assert_eq!(number("8.3 * 90"), Some(8.3 * 90.0));
         assert_eq!(number("$foo"), None);
+    }
+
+    /// `jumpDelay` is the motor's whole count of quarter ticks: a float
+    /// such as `0.0` failed every join with the Add-On on.
+    #[test]
+    fn a_jump_delay_is_a_whole_tick_count() {
+        for (delay, ticks) in [("0", 0), ("3", 12), ("2.6", 10)] {
+            let fields = BTreeMap::from([("jumpdelay".to_owned(), delay.to_owned())]);
+            let m = &convert(&fields, None).archetype["movement"];
+            assert_eq!(m["jump_delay_ticks"].as_u64(), Some(ticks), "{delay}");
+        }
     }
 }
