@@ -24,7 +24,7 @@ briefs informed the experiment; they do not define mandatory infrastructure.
    supplies the victim as Player and the killer as Instigator. Environmental
    death has no Instigator. Objects use the existing five-second mover credit
    from pushes/throws/holds, hammer/flip and sufficiently fast walking contact;
-   absent credit, a driven vehicle supplies its first-seat driver. Natural
+   absent credit, a driven vehicle supplies the occupant of its authored control seat. Natural
    motion remains unattributed. A recent pusher can take priority over a driver.
    Reset creates a new object identity and loses old credit.
 4. **Absent conditions are false**, even `!=`. `Exists` explicitly returns
