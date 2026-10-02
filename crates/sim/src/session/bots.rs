@@ -1225,7 +1225,9 @@ impl Session {
             strayed: brain.brick.is_some() && away > kind.wander_radius + 4.0,
             home: brain.goal != Some(Goal::Home),
         };
-        let behaviour = choose(brain.behaviour, &situation);
+        let behaviour = choose(brain.behaviour, &situation, |b| {
+            kind.behaviours.get(b.name()).copied().unwrap_or(1.0)
+        });
         brain.behaviour = behaviour;
 
         // Goal.
@@ -1276,6 +1278,7 @@ impl Session {
                         feet: to,
                         jump: false,
                         through: None,
+                        crouch: false,
                     });
                 }
             }
@@ -1442,6 +1445,9 @@ impl Session {
         if let Some(next) = wanted {
             direction = flat(next.through.unwrap_or(next.feet) - feet).normalize_or_zero();
             input.jump = next.jump && flat(next.feet - feet).length() < 1.6 && state.grounded;
+            // Into a crawlspace: crouch on the way in (the body stays down
+            // until it has room to stand).
+            input.crouch = next.crouch && flat(next.feet - feet).length() < 1.6;
         }
         match behaviour {
             // In its band: strafe so it is not a still target, and give

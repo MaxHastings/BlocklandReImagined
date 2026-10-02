@@ -824,3 +824,83 @@ fn a_bot_that_sees_an_enemy_warns_its_side() {
         }
     }
 }
+
+/// A kind's `behaviours` weights: one with chase turned off sees the enemy
+/// out of its reach and stays at its post; the same kind otherwise goes
+/// after them.
+#[test]
+fn a_bot_whose_kind_never_chases_holds_its_post() {
+    for chases in [true, false] {
+        let mut s = session();
+        only_kind(&mut s, |k| {
+            k.sight = 40.0;
+            k.wander_radius = 0.0;
+            k.melee = Some(bite(5.0));
+            if !chases {
+                k.behaviours.insert("chase".into(), 0.0);
+            }
+        });
+        let human = s
+            .join("Builder".into(), Vec3::new(0.0, 0.05, 30.0), true)
+            .unwrap();
+        let mut sequence = 0;
+        steps(&mut s, &[human], 10, &mut sequence);
+        load(&mut s, human, vec![bot_brick([10.0, 0.1, 24.0], human)]);
+        minigame(&mut s, human, TOOLS_ONLY);
+        steps(&mut s, &[human], 30, &mut sequence);
+        let bot = bots(&s)[0];
+        let start = feet(&s, bot).distance(feet(&s, human));
+        steps(&mut s, &[human], 120 * 3, &mut sequence);
+        let now = feet(&s, bot).distance(feet(&s, human));
+        if chases {
+            assert!(now < start - 6.0, "it gave chase: {start} to {now}");
+        } else {
+            assert!(now > start - 1.0, "it held its post: {start} to {now}");
+        }
+    }
+}
+
+/// A wall between the bot and its enemy with only a low gap in it, too
+/// low to walk through upright: the bot crouches through it.
+#[test]
+fn a_bot_crawls_through_a_low_gap() {
+    let mut s = session();
+    only_kind(&mut s, |k| k.melee = Some(bite(5.0)));
+    let human = s
+        .join("Builder".into(), Vec3::new(0.0, 0.05, 30.0), true)
+        .unwrap();
+    let mut sequence = 0;
+    steps(&mut s, &[human], 10, &mut sequence);
+    // The wall along x = 8, see-through, too long to go round; from
+    // z = 12 to 14, where the bot's way to the builder's spawn crosses it,
+    // its columns are raised to leave a gap 1.6 high under them.
+    let mut bricks = glass_wall(8.0, -40.0, 70.0, human);
+    for b in &mut bricks {
+        if (12.0..=14.0).contains(&(b.position[2] - 0.25)) {
+            b.position[1] += 1.6;
+        }
+    }
+    bricks.push(bot_brick([16.0, 0.1, 30.0], human));
+    load(&mut s, human, bricks);
+    minigame(&mut s, human, TOOLS_ONLY);
+    steps(&mut s, &[human], 30, &mut sequence);
+    let bot = bots(&s)[0];
+    let mut closest = f32::MAX;
+    let mut crossed_at = None;
+    let mut last = feet(&s, bot);
+    for _ in 0..120 * 10 {
+        steps(&mut s, &[human], 1, &mut sequence);
+        let now = feet(&s, bot);
+        if last.x >= 8.0 && now.x < 8.0 {
+            crossed_at = Some((now.z, now.y));
+        }
+        last = now;
+        closest = closest.min(now.distance(feet(&s, human)));
+    }
+    let (z, y) = crossed_at.expect("the bot got past the wall");
+    assert!(
+        (11.5..=14.5).contains(&z) && y < 1.0,
+        "under the wall, through the gap: z {z}, height {y}"
+    );
+    assert!(closest < 3.5, "and on to its enemy: {closest}");
+}

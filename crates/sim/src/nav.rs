@@ -13,6 +13,10 @@
 //! [`SAMPLES_PER_TICK`] new samples and [`EXPANSIONS_PER_TICK`] node
 //! expansions between them each tick.
 //!
+//! A gap a body only fits crouched (a crawlspace) is walkable too: its
+//! waypoints say to crouch, and its cells cost more, so a path crawls only
+//! where walking upright is the long way round.
+//!
 //! The openings of linked bricks (portals) are links in the grid: a step
 //! whose body middle goes in through one, as the motor carries a body, leads
 //! to the cell it comes out at by the partner, so paths lead through portals
@@ -43,6 +47,8 @@ const HINT_BAND: f32 = 0.25;
 pub struct Body {
     pub width: f32,
     pub height: f32,
+    /// Height crouched: what fits through a crawlspace.
+    pub crouch_height: f32,
     /// Highest ledge it walks up without jumping.
     pub step: f32,
     /// Highest ledge a jump lands it on.
@@ -58,6 +64,7 @@ impl Body {
         Self {
             width: tuning.width * scale,
             height: tuning.stand_height * scale,
+            crouch_height: tuning.crouch_height * scale,
             step: tuning.step_height,
             // Leave room for the takeoff: the apex is only brushed.
             jump: (rise * 0.8).max(tuning.step_height),
@@ -68,10 +75,15 @@ impl Body {
     /// The box a clearance test uses: narrower by one cell so a body that
     /// fits a gap passes whichever cell centre it is aligned to, and without
     /// the bottom half step, which the motor steps over.
-    fn clearance(&self) -> (f32, f32, f32) {
+    fn clearance(&self, crouched: bool) -> (f32, f32, f32) {
+        let height = if crouched {
+            self.crouch_height
+        } else {
+            self.height
+        };
         let half_width = ((self.width - CELL) * 0.5).max(self.width * 0.25);
-        let lift = (self.step * 0.5).min(self.height * 0.3);
-        (half_width, lift, self.height - lift)
+        let lift = (self.step * 0.5).min(height * 0.3);
+        (half_width, lift, height - lift)
     }
 }
 
@@ -106,15 +118,16 @@ impl Ground<'_> {
         }
         best
     }
-    /// Whether a body stands at `feet` without touching fixed collision,
-    /// allowing for grid alignment.
-    fn clear(&self, body: &Body, feet: Vec3) -> bool {
-        let (half_width, lift, tall) = body.clearance();
+    /// Whether a body stands (or crouches) at `feet` without touching
+    /// fixed collision, allowing for grid alignment.
+    fn clear(&self, body: &Body, feet: Vec3, crouched: bool) -> bool {
+        let (half_width, lift, tall) = body.clearance(crouched);
         self.empty(feet, half_width, lift, tall)
     }
-    /// Whether the full-width body stands at `feet` touching nothing.
-    fn fits(&self, body: &Body, feet: Vec3) -> bool {
-        let (_, lift, tall) = body.clearance();
+    /// Whether the full-width body stands (or crouches) at `feet` touching
+    /// nothing.
+    fn fits(&self, body: &Body, feet: Vec3, crouched: bool) -> bool {
+        let (_, lift, tall) = body.clearance(crouched);
         self.empty(feet, body.width * 0.5, lift, tall)
     }
     fn empty(&self, feet: Vec3, half_width: f32, lift: f32, tall: f32) -> bool {
@@ -164,12 +177,14 @@ pub struct Waypoint {
     /// Reaching it takes going in through an opening: walk toward this
     /// point, past the opening on the near side, until carried to `feet`.
     pub through: Option<Vec3>,
+    /// Only a crouched body fits there.
+    pub crouch: bool,
 }
 
-/// A step of the grid: the node it reaches, whether that takes a jump,
-/// whether the body is snug there, and the point it walks toward through
-/// an opening when the step goes through one.
-type Step = (Node, bool, bool, Option<Vec3>);
+/// A step of the grid: the node it reaches, whether that takes a jump, the
+/// floor there, and the point it walks toward through an opening when the
+/// step goes through one.
+type Step = (Node, bool, Floor, Option<Vec3>);
 
 /// The remembered ground samples.
 #[derive(Default)]
@@ -283,19 +298,21 @@ impl Nav {
                     if let Some(f) = floor.filter(|f| (f.y - at.y).abs() <= body.step + 0.5) {
                         let walk =
                             node.feet() + Vec3::new(dx as f32, 0.0, dz as f32) * (CELL * 3.0);
-                        out.push((Node::at(x, z, f.y), false, f.snug, Some(walk)));
+                        out.push((Node::at(x, z, f.y), false, f, Some(walk)));
                         break;
                     }
                 }
                 continue;
             }
             let floor = self.floor(ground, body, node.x + dx, node.z + dz, from)?;
+            // A crawlspace is walked into, never jumped into.
             if let Some(f) = floor
                 && let Some(jump) = edge(body, from, f.y)
+                && !(jump && f.low)
             {
                 let next = Node::at(node.x + dx, node.z + dz, f.y);
                 straight[i] = Some((next, jump));
-                out.push((next, jump, f.snug, None));
+                out.push((next, jump, f, None));
             }
         }
         // Diagonals only where both sides are open at walking height, so a
@@ -315,7 +332,7 @@ impl Nav {
                 && (f.y - na.feet().y).abs() <= body.step
                 && (f.y - nb.feet().y).abs() <= body.step
             {
-                out.push((Node::at(node.x + dx, node.z + dz, f.y), false, f.snug, None));
+                out.push((Node::at(node.x + dx, node.z + dz, f.y), false, f, None));
             }
         }
         Some(out)
@@ -345,6 +362,8 @@ struct Floor {
     /// better avoided, so paths keep off walls and through the middle of
     /// doors.
     snug: bool,
+    /// Only a crouched body fits.
+    low: bool,
 }
 
 /// Find the floor of cell `x, z` for a body coming from height `from`.
@@ -360,23 +379,43 @@ fn sample(ground: &Ground, body: &Body, x: i32, z: i32, from: f32) -> Option<Flo
     let bottom = from - body.drop - 0.1;
     for _ in 0..8 {
         if top <= bottom {
-            return None;
+            break;
         }
         let origin = Vec3::new(px, top, pz);
-        let (distance, normal) = ground.ray(origin, Vec3::NEG_Y, top - bottom)?;
+        let Some((distance, normal)) = ground.ray(origin, Vec3::NEG_Y, top - bottom) else {
+            break;
+        };
         let hit = top - distance;
         // A floor faces up and is not too steep; anything else (the
         // underside of what the ray started in, a steep face) is passed.
         let feet = Vec3::new(px, hit + 0.01, pz);
-        if normal.y >= body.floor_cos && ground.clear(body, feet) {
+        if normal.y >= body.floor_cos && ground.clear(body, feet, false) {
             return Some(Floor {
                 y: hit,
-                snug: !ground.fits(body, feet),
+                snug: !ground.fits(body, feet, false),
+                low: false,
             });
         }
         top = hit - 0.02;
     }
-    None
+    crawl(ground, body, px, pz, from)
+}
+
+/// A floor at cell `px, pz` a body fits only crouched, walked in to from
+/// height `from` (never jumped up to).
+fn crawl(ground: &Ground, body: &Body, px: f32, pz: f32, from: f32) -> Option<Floor> {
+    let top = from + body.step + 0.05;
+    let (distance, normal) = ground.ray(
+        Vec3::new(px, top, pz),
+        Vec3::NEG_Y,
+        body.step + body.drop + 0.15,
+    )?;
+    let feet = Vec3::new(px, top - distance + 0.01, pz);
+    (normal.y >= body.floor_cos && ground.clear(body, feet, true)).then(|| Floor {
+        y: top - distance,
+        snug: !ground.fits(body, feet, true),
+        low: true,
+    })
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -416,7 +455,7 @@ pub struct Search {
     start: Option<Node>,
     started: Vec3,
     open: BinaryHeap<Open>,
-    came: FxHashMap<Node, (Node, bool, f32, Option<Vec3>)>,
+    came: FxHashMap<Node, (Node, bool, f32, Option<Vec3>, bool)>,
     best: Option<(Node, f32)>,
     expanded: u32,
     /// Nodes farther than this from the start (or from where an opening
@@ -512,7 +551,7 @@ impl Search {
                         (p.centre, exit, Self::estimate(exit, self.goal))
                     })
                     .collect();
-                self.came.insert(node, (node, false, 0.0, None));
+                self.came.insert(node, (node, false, 0.0, None, false));
                 self.open.push(Open {
                     f: self.h(node),
                     node,
@@ -554,7 +593,7 @@ impl Search {
             nav.expansions -= 1;
             self.expanded += 1;
             let g = self.came[&node].2;
-            for (to, jump, snug, through) in next {
+            for (to, jump, floor, through) in next {
                 let within = |from: Vec3| {
                     let offset = to.feet() - from;
                     Vec3::new(offset.x, 0.0, offset.z).length() <= self.bound
@@ -571,16 +610,18 @@ impl Search {
                 let cost = g
                     + across
                     + if jump { 1.0 } else { 0.0 }
-                    + if snug { 0.6 } else { 0.0 }
+                    + if floor.snug { 0.6 } else { 0.0 }
+                    // Crawling is slow: worth it only to save a detour.
+                    + if floor.low { 1.5 } else { 0.0 }
                     + drop * 0.1;
                 if self
                     .came
                     .get(&to)
-                    .is_some_and(|(_, _, old, _)| *old <= cost)
+                    .is_some_and(|(_, _, old, _, _)| *old <= cost)
                 {
                     continue;
                 }
-                self.came.insert(to, (node, jump, cost, through));
+                self.came.insert(to, (node, jump, cost, through, floor.low));
                 let h = self.h(to);
                 if self.best.is_none_or(|(_, best)| h < best) {
                     self.best = Some((to, h));
@@ -598,11 +639,12 @@ impl Search {
         };
         let mut steps = Vec::new();
         loop {
-            let (parent, jump, _, through) = self.came[&node];
+            let (parent, jump, _, through, crouch) = self.came[&node];
             steps.push(Waypoint {
                 feet: node.feet(),
                 jump,
                 through,
+                crouch,
             });
             if parent == node {
                 break;
@@ -624,7 +666,7 @@ impl Search {
 fn simplify(steps: Vec<Waypoint>) -> Vec<Waypoint> {
     let mut out: Vec<Waypoint> = Vec::with_capacity(steps.len());
     for (i, step) in steps.iter().enumerate() {
-        let special = |w: &Waypoint| w.jump || w.through.is_some();
+        let special = |w: &Waypoint| w.jump || w.through.is_some() || w.crouch;
         let keep = i == 0 || i + 1 == steps.len() || special(step) || special(&steps[i + 1]) || {
             let a = step.feet - steps[i - 1].feet;
             let b = steps[i + 1].feet - step.feet;
@@ -774,8 +816,9 @@ mod tests {
 
     #[test]
     fn a_low_ceiling_blocks_and_changes_are_forgotten_locally() {
-        // A slab at head height over a corridor: no way under it.
-        let slab = (Vec3::new(4.0, 1.6, -40.0), Vec3::new(6.0, 4.0, 40.0));
+        // A slab at knee height over a corridor: no way under it, even
+        // crouched.
+        let slab = (Vec3::new(4.0, 0.8, -40.0), Vec3::new(6.0, 4.0, 40.0));
         let physics = world(&[floor(), slab]);
         let (found, mut nav) = search(&physics, Vec3::ZERO, Vec3::new(10.0, 0.0, 0.0));
         assert!(matches!(found, Found::Partial(_)), "{found:?}");
@@ -798,6 +841,34 @@ mod tests {
             }
         };
         assert!(matches!(found, Found::Path(_)), "{found:?}");
+    }
+
+    /// Under a slab at head height a body fits only crouched: the path
+    /// crawls under it, its waypoints there saying to crouch; with a door
+    /// close by, it walks round upright instead.
+    #[test]
+    fn a_crawlspace_is_crawled_unless_a_door_is_near() {
+        let slab = (Vec3::new(4.0, 1.6, -40.0), Vec3::new(6.0, 4.0, 40.0));
+        let physics = world(&[floor(), slab]);
+        let p = path(search(&physics, Vec3::ZERO, Vec3::new(10.0, 0.0, 0.0)).0);
+        let under = |w: &Waypoint| (4.0..=6.0).contains(&w.feet.x);
+        assert!(p.iter().any(under), "under the slab: {p:?}");
+        assert!(
+            p.iter().filter(|w| under(w)).all(|w| w.crouch),
+            "crouched under it: {p:?}"
+        );
+        assert!(
+            p.iter().filter(|w| w.feet.x > 6.5).all(|w| !w.crouch),
+            "upright again past it: {p:?}"
+        );
+        // A gap in the slab a step aside: walked through upright.
+        let physics = world(&[
+            floor(),
+            (slab.0, Vec3::new(6.0, 4.0, 0.5)),
+            (Vec3::new(4.0, 1.6, 2.5), slab.1),
+        ]);
+        let p = path(search(&physics, Vec3::ZERO, Vec3::new(10.0, 0.0, 0.0)).0);
+        assert!(p.iter().all(|w| !w.crouch), "walked the gap: {p:?}");
     }
 
     #[test]
