@@ -871,7 +871,7 @@ fn sun_flare(along:vec3<f32>)->vec3<f32> {
     return camera.flare.rgb*camera.flare.a*(disc+0.55*glow);
 }
 fn fog_amount(position:vec3<f32>)->f32 {
-    return fog_along(position-camera.eye.xyz,camera.atmosphere);
+    return fog_along(position-camera.eye.xyz,camera.atmosphere,camera.fog_color.w);
 }
 fn fogged(display:vec3<f32>,position:vec3<f32>)->vec3<f32> {
     return output_color(mix(display,camera.fog_color.rgb,fog_amount(position)));
@@ -987,7 +987,7 @@ fn slot_size(slot:u32)->vec2<f32> {
             let fog=min(camera.fog_color.rgb+sun_flare(along),vec3<f32>(1.0));
             return vec4<f32>(output_color(fog),v.color.a);
         }
-        let fog=sky_fog_at(along.y,camera.atmosphere);
+        let fog=sky_fog_at(along.y,camera.atmosphere,camera.fog_color.w);
         var sky=textureSample(layer0,clamped,v.uv);
         if material[0].x==5.0 {
             sky=textureSample(layer0,tiled,v.uv);

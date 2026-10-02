@@ -25,7 +25,10 @@ pub struct Cloud {
 /// fog-coloured at the horizon and clearer overhead, and thick fog covers
 /// more of it. Geometry ends as fogged as the sky behind it: over the last
 /// quarter of the range it fades to the sky's own fog, so nothing is cut
-/// out against the sky where the world ends.
+/// out against the sky where the world ends. Below the eye the fog stays
+/// level-density, its backdrop the plain fog colour, unless the sky goes on
+/// below the horizon (a bottom face, Skylands' mirrored floor): then the fog
+/// is symmetric about the eye and the floor hazes only toward the horizon.
 pub const FOG_DEPTH: f32 = 4.0;
 pub const FOG_HEIGHT: f32 = 60.0;
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
@@ -55,17 +58,18 @@ impl Fog {
     }
     /// Fog over a point `distance` away, level with the eye.
     pub fn amount(&self, distance: f32) -> f32 {
-        self.amount_along([distance, 0.0, 0.0])
+        self.amount_along([distance, 0.0, 0.0], false)
     }
-    /// Fog over a point at `offset` from the eye (y up).
-    pub fn amount_along(&self, offset: [f32; 3]) -> f32 {
+    /// Fog over a point at `offset` from the eye (y up); `sky_below`: the
+    /// sky goes on below the horizon.
+    pub fn amount_along(&self, offset: [f32; 3], sky_below: bool) -> f32 {
         if self.end <= 0.0 {
             return 0.0;
         }
         let distance = offset.iter().map(|v| v * v).sum::<f32>().sqrt();
         let up = offset[1] / distance.max(0.0001);
         let inside = (distance - self.start).max(0.0);
-        let rise = up.max(0.0) / FOG_HEIGHT;
+        let rise = rising(up, sky_below);
         let x = rise * inside;
         let spread = if x < 0.0001 {
             1.0 - 0.5 * x
@@ -77,22 +81,24 @@ impl Fog {
             / (0.25 * (self.end - self.start)).max(0.001))
         .clamp(0.0, 1.0);
         let edge = t * t * (3.0 - 2.0 * t);
-        (1.0 - (-depth).exp()).max(edge * self.sky_amount(up))
+        (1.0 - (-depth).exp()).max(edge * self.sky_amount(up, sky_below))
     }
-    /// Fog over the sky along a ray whose direction rises `up` (its y).
-    pub fn sky_amount(&self, up: f32) -> f32 {
+    /// Fog over the sky along a ray whose direction rises `up` (its y);
+    /// `sky_below`: the sky goes on below the horizon.
+    pub fn sky_amount(&self, up: f32, sky_below: bool) -> f32 {
         if self.end <= 0.0 {
             return 0.0;
         }
-        if up <= 0.0 {
-            return 1.0;
-        }
-        let rise = up / FOG_HEIGHT;
+        let rise = rising(up, sky_below).max(1e-6);
         1.0 - (-self.density() * (-rise * self.start).exp() / rise).exp()
     }
     fn density(&self) -> f32 {
         FOG_DEPTH / (self.end - self.start).max(0.001)
     }
+}
+/// How fast a ray whose direction rises `up` leaves the fog, per unit.
+fn rising(up: f32, sky_below: bool) -> f32 {
+    (if sky_below { up.abs() } else { up.max(0.0) }) / FOG_HEIGHT
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
