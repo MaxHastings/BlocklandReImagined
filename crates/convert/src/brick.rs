@@ -60,18 +60,51 @@ impl<'a> Lines<'a> {
         ensure!(n <= max, "Count {n} exceeds limit {max}");
         Ok(n)
     }
-    fn vector<const N: usize>(&mut self) -> Result<[f32; N]> {
+    /// A line's numbers as v20 scans them (`%f` after `%f`): each word's
+    /// longest leading number, stopping at the first word with none, and
+    /// words past the `N` it needs ignored.
+    fn numbers(&mut self) -> Result<(&'a str, Vec<f32>)> {
         let line = self.next()?;
-        let values = line
-            .split_whitespace()
-            .map(str::parse::<f32>)
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let values = line.split_whitespace().map_while(c_float).collect();
+        Ok((line, values))
+    }
+    fn vector<const N: usize>(&mut self) -> Result<[f32; N]> {
+        let (line, values) = self.numbers()?;
         ensure!(
-            values.len() == N && values.iter().all(|v| v.is_finite()),
+            values.len() >= N && values[..N].iter().all(|v| v.is_finite()),
             "Invalid vector: {line}"
         );
-        Ok(values.try_into().unwrap())
+        Ok(values[..N].try_into().unwrap())
     }
+    /// A vertex colour: red, green, blue and alpha, which a colour written
+    /// without one leaves opaque.
+    fn color(&mut self) -> Result<[f32; 4]> {
+        let (line, mut values) = self.numbers()?;
+        if values.len() == 3 {
+            values.push(1.0);
+        }
+        ensure!(
+            values.len() >= 4 && values[..4].iter().all(|v| v.is_finite()),
+            "Invalid colour: {line}"
+        );
+        Ok(values[..4].try_into().unwrap())
+    }
+}
+
+/// A word's longest leading decimal number, as C's `strtod` reads it
+/// (`0.5f` is 0.5); none when it starts with no digit.
+fn c_float(word: &str) -> Option<f32> {
+    (1..=word.len())
+        .rev()
+        .filter(|&end| word.is_char_boundary(end))
+        .find_map(|end| {
+            let head = &word[..end];
+            // A digit is required, so `inf` and `nan` read as no number.
+            head.bytes()
+                .any(|b| b.is_ascii_digit())
+                .then(|| head.parse::<f32>().ok())
+                .flatten()
+        })
 }
 
 pub fn position([x, y, z]: [f32; 3]) -> [f32; 3] {
@@ -127,7 +160,7 @@ pub fn read(data: &[u8], id: String) -> Result<(Brick, Provenance)> {
         "SPECIAL" | "SPECIALBRICK" => {
             if geometry == "SPECIAL" {
                 for _ in 0..depth * height {
-                    brick.attachment_rows.push(grid_row(lines.next()?));
+                    brick.attachment_rows.push(grid_row(lines.next()?, width));
                 }
             } else {
                 // v20 fills a SPECIALBRICK's grid exactly as a BRICK's
@@ -204,7 +237,7 @@ pub fn read(data: &[u8], id: String) -> Result<(Brick, Provenance)> {
                         lines.next()?;
                         let mut colors = [[0.0; 4]; 4];
                         for c in &mut colors {
-                            *c = lines.vector()?;
+                            *c = lines.color()?;
                         }
                         Some([colors[0], colors[3], colors[2], colors[1]])
                     } else {
@@ -287,9 +320,13 @@ fn adapt_known_source(data: &[u8], text: &str) -> Result<(String, Vec<String>)> 
 
 /// A SPECIAL grid row as v20 reads it (blocklandv20.exe 0x53c1d0): `-` is
 /// empty, `u` and `b` take a brick above, `d` and `b` one below, and any
-/// other byte, upper case included, is solid with no studs.
-fn grid_row(row: &str) -> String {
+/// other byte, upper case included, is solid with no studs. It reads
+/// `width` bytes: a shorter row's end (its terminating zero) is such an
+/// other byte, and a longer row's rest is never read.
+fn grid_row(row: &str, width: u32) -> String {
     row.bytes()
+        .chain(std::iter::repeat(0))
+        .take(width as usize)
         .map(|b| match b {
             b'-' | b'u' | b'd' | b'b' => b as char,
             _ => 'x',
@@ -481,6 +518,36 @@ mod tests {
         .unwrap();
         assert_eq!(b.attachment_rows, ["ubdx-", "xxxxx"]);
         assert!(!warnings.warnings.iter().any(|w| w.contains("grid")));
+    }
+    /// Lines v20 scans with `%f` but a strict reader refused (classic
+    /// Add-On bricks): a colour with no alpha is opaque, a number with a
+    /// suffix reads its leading digits, extra numbers are ignored, and a
+    /// grid row shorter than the brick is solid where it runs out.
+    #[test]
+    fn lines_read_as_v20_scans_them() {
+        let body = "0\n1\nTEX:TOP\nPOSITION:\n-1 -1 1\n-1 1 1f\n1 1 1 7\n1 -1 1\nUV COORDS:\n0 0\n0 1\n1 1\n1 0\nCOLORS:\n0.3 0.6 0.9\n0.3 0.6 0.9 0.5\n0.3 0.6 0.9\n0.3 0.6 0.9\nNORMALS:\n0 0 1\n0 0 1\n0 0 1\n0 0 1\n0\n0\n0\n0\n0\n0";
+        let (b, _) = read(
+            format!("3 1 2\nSPECIAL\n\nx-x\n--\n\n{body}").as_bytes(),
+            "lenient".into(),
+        )
+        .unwrap();
+        assert_eq!(b.attachment_rows, ["x-x", "--x"]);
+        let q = &b.quads[0];
+        let colors = q.colors.unwrap();
+        assert_eq!(colors[0], [0.3, 0.6, 0.9, 1.0]);
+        assert!(colors.contains(&[0.3, 0.6, 0.9, 0.5]));
+        assert!(
+            q.vertices
+                .iter()
+                .any(|v| v.position == position([-1.0, 1.0, 1.0]))
+        );
+        assert!(
+            q.vertices
+                .iter()
+                .any(|v| v.position == position([1.0, 1.0, 1.0]))
+        );
+        // A word with no number still fails the line.
+        assert!(read(b"1 1 x\nBRICK", "bad".into()).is_err());
     }
     #[test]
     fn specialbrick_grid_is_the_brick_grid() {
