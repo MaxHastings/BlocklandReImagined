@@ -63,7 +63,10 @@ briefs informed the experiment; they do not define mandatory infrastructure.
    meters, and round ending does not implicitly freeze physical motion.
 8. **Authority stays local to the existing systems.** Match facts go to the
    match owner's listening bricks. Region players must share the builder's
-   MiniGame; observed objects must have that builder's spawn brick. Score/team/
+   MiniGame, including both being outside games in free build. Objects must have
+   that builder's spawn brick; uncredited objects remain observable. In a match,
+   credited movers must share the builder's match. In free build an owned object
+   remains observable regardless of the mover's match. Score/team/
    round actions require the match owner as builder; delayed player actions
    reject a target who left the captured match. Object actions require an owned
    spawner. These conservative limits make cross-owner collaborative builds an
@@ -76,6 +79,8 @@ briefs informed the experiment; they do not define mandatory infrastructure.
    notify the source brick. Deleted entity state is reclaimed once per second,
    including worlds with no regions. Timers and reactions
    share the existing scheduler limits; there is no second operation bus.
+   Deferred match facts cap at 256 queued facts; overflow skips the fact and
+   reports the cap through the existing bounded event diagnostics.
 10. **Cancellation retains the classic special case.** Unguarded zero-delay
     `cancelEvents` participates in the old activation prepass. A guarded cancel
     checks IF and cancels in normal due-row order. The classic switch cancels Self,

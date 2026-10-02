@@ -10,6 +10,7 @@ use ev::rules::{Condition, Datum, Property, RuleOp, Subject};
 const MAX_VARIABLES: usize = 8192;
 const MAX_REGIONS: usize = 256;
 const MAX_TRACE: usize = 128;
+const MAX_PENDING_FACTS: usize = 256;
 // Namespace, mini-game, round, subject class, subject identity, key.
 type StateKey = (u64, u64, u64, u8, u64, String);
 #[derive(Default)]
@@ -570,11 +571,19 @@ impl Session {
         killer: Option<OwnerId>,
     ) {
         if self.events.advancing {
-            if self.events.rules.pending.len() < 256 {
+            if self.events.rules.pending.len() < MAX_PENDING_FACTS {
                 self.events
                     .rules
                     .pending
                     .push((fact.to_string(), game, player, killer));
+            } else {
+                super::events::note(
+                    &mut self.events.diagnostics,
+                    format!(
+                        "MiniGame {} {fact}: deferred rule fact budget exceeded ({MAX_PENDING_FACTS} facts); fact skipped",
+                        game.0,
+                    ),
+                );
             }
             return;
         }
@@ -659,9 +668,12 @@ impl Session {
             regions.extend(world.listeners(fact).into_iter().map(|b| b.index));
         }
         if regions.len() > MAX_REGIONS && tick.is_multiple_of(120) {
-            self.events.diagnostics.push_back(format!(
-                "Rule region budget exceeded: only the first {MAX_REGIONS} brick IDs are observed"
-            ));
+            super::events::note(
+                &mut self.events.diagnostics,
+                format!(
+                    "Rule region budget exceeded: only the first {MAX_REGIONS} brick IDs are observed"
+                ),
+            );
         }
         let timers = if tick.is_multiple_of(120) {
             world.listeners("onRuleTimer")
@@ -733,6 +745,7 @@ impl Session {
                 continue;
             };
             let builder = source.owner;
+            let builder_game = self.game_of(builder);
             let Some((min, max)) = self.simulation.brick_box(brick) else {
                 continue;
             };
@@ -745,10 +758,16 @@ impl Session {
             let lo = center - size * 0.5;
             let hi = center + size * 0.5;
             for (kind, id, position, by) in &objects {
-                // An owner-authored region observes its mini-game only. In
-                // free build it observes actors outside games. No cross-game scoring.
-                if self.game_of(builder).is_some()
-                    && by.is_some_and(|p| self.game_of(p) != self.game_of(builder))
+                // Players share the builder's game, including None in free build.
+                if *kind == 0 && self.game_of(*id) != builder_game {
+                    continue;
+                }
+                // Objects remain owned-spawner observations. Uncredited objects
+                // are eligible; in a match, credit from another game is excluded.
+                // Free-build ownership does not depend on the mover's game.
+                if *kind == 1
+                    && builder_game.is_some()
+                    && by.is_some_and(|p| self.game_of(p) != builder_game)
                 {
                     continue;
                 }
@@ -2044,6 +2063,135 @@ mod tests {
         s.step_events(&BTreeSet::new()).unwrap();
         assert_eq!(score(&s, p), 1);
     }
+    #[test]
+    fn free_build_region_observes_free_build_players_but_not_other_games() {
+        let (mut s, p, q) = setup();
+        let ids = s.create_rule_lab(p, "hill").unwrap();
+        s.minigame_request(p, MiniGameRequest::Leave).unwrap();
+        s.minigame_request(
+            q,
+            MiniGameRequest::Create {
+                color: 0,
+                settings: Default::default(),
+            },
+        )
+        .unwrap();
+        assert_eq!(s.game_of(p), None);
+        assert!(s.game_of(q).is_some());
+        let mut enter = lab_programs("puzzle")[0].1[1].clone();
+        enter.input = "onRegionEnter".into();
+        enter.conditions.clear();
+        s.simulation
+            .mutate(ids[0], |b| {
+                b.events = vec![enter];
+                b.color = 0;
+            })
+            .unwrap();
+        s.dirty.insert(ids[0]);
+        s.step_events(&BTreeSet::new()).unwrap();
+        let center = Vec3::from(s.simulation.state().bricks[&ids[0]].position);
+        for (actor, position) in [(p, center + Vec3::X * 20.), (q, center - Vec3::Y)] {
+            s.peers.get_mut(&actor).unwrap().player.place(
+                &mut s.simulation.physics,
+                position,
+                0.,
+                Vec3::ZERO,
+            );
+        }
+        s.step_rule_observations().unwrap();
+        s.step_events(&BTreeSet::new()).unwrap();
+        assert!(!s.events.rules.occupants.contains(&(ids[0], 0, q)));
+        assert_eq!(
+            s.simulation.state().bricks[&ids[0]].color,
+            0,
+            "another game's player must not fire the free-build region's action"
+        );
+        s.peers.get_mut(&p).unwrap().player.place(
+            &mut s.simulation.physics,
+            center - Vec3::Y,
+            0.,
+            Vec3::ZERO,
+        );
+        s.step_rule_observations().unwrap();
+        s.step_events(&BTreeSet::new()).unwrap();
+        assert!(s.events.rules.occupants.contains(&(ids[0], 0, p)));
+        assert_eq!(s.simulation.state().bricks[&ids[0]].color, 1);
+        s.minigame_request(q, MiniGameRequest::Leave).unwrap();
+        s.peers.get_mut(&q).unwrap().player.place(
+            &mut s.simulation.physics,
+            center - Vec3::Y,
+            0.,
+            Vec3::ZERO,
+        );
+        s.step_rule_observations().unwrap();
+        assert!(s.events.rules.occupants.contains(&(ids[0], 0, q)));
+    }
+
+    #[test]
+    fn free_build_object_observation_keeps_owned_spawners_regardless_of_mover_game() {
+        let (mut s, p, q) = setup();
+        let ids = s.create_rule_lab(p, "soccer").unwrap();
+        s.respawn_vehicle_brick(ids[2]).unwrap();
+        s.minigame_request(p, MiniGameRequest::Leave).unwrap();
+        s.minigame_request(
+            q,
+            MiniGameRequest::Create {
+                color: 0,
+                settings: Default::default(),
+            },
+        )
+        .unwrap();
+        // Leaving the match can respawn its ball; observe the live identity.
+        let object = s.vehicle_infos()[0].id;
+        let center = s.object_centre(ObjectRef::Vehicle(object)).unwrap();
+        assert_eq!(s.game_of(p), None);
+        assert!(s.game_of(q).is_some());
+        s.credit(ObjectRef::Vehicle(object), q);
+        s.simulation
+            .mutate(ids[0], |b| {
+                b.position = center.to_array();
+                b.rule_region = Some([10.; 3]);
+            })
+            .unwrap();
+        s.step_rule_observations().unwrap();
+        assert!(s.events.rules.occupants.contains(&(ids[0], 1, object)));
+        s.simulation.mutate(ids[2], |b| b.owner = q).unwrap();
+        s.step_rule_observations().unwrap();
+        assert!(
+            !s.events.rules.occupants.contains(&(ids[0], 1, object)),
+            "mover attribution never substitutes for the builder's owned spawner"
+        );
+    }
+
+    #[test]
+    fn deferred_game_fact_overflow_is_reported_and_diagnostics_remain_bounded() {
+        let (mut s, p, _) = setup();
+        s.create_rule_lab(p, "slayer").unwrap();
+        let game = s.game_of(p).unwrap();
+        s.events.advancing = true;
+        for _ in 0..MAX_PENDING_FACTS {
+            s.fire_rule_game_fact("onRuleScoreChanged", game, Some(p), None);
+        }
+        assert_eq!(s.events.rules.pending.len(), MAX_PENDING_FACTS);
+        assert!(s.take_event_diagnostics().is_empty());
+        for _ in 0..100 {
+            s.fire_rule_game_fact("onRuleScoreChanged", game, Some(p), None);
+        }
+        assert_eq!(s.events.rules.pending.len(), MAX_PENDING_FACTS);
+        let diagnostics = s.take_event_diagnostics();
+        assert_eq!(diagnostics.len(), 64);
+        assert!(diagnostics.iter().all(|d| d.contains("onRuleScoreChanged")
+            && d.contains("256 facts")
+            && d.contains("fact skipped")));
+        s.events.advancing = false;
+        s.step_rule_observations().unwrap();
+        assert!(s.events.rules.pending.is_empty());
+        s.events.advancing = true;
+        s.fire_rule_game_fact("onRuleScoreChanged", game, Some(p), None);
+        assert_eq!(s.events.rules.pending.len(), 1);
+        assert!(s.take_event_diagnostics().is_empty());
+    }
+
     #[test]
     fn shipped_addon_vocabulary_chains_into_guarded_core_rules() {
         let (mut s, p, _) = setup_packages(true);

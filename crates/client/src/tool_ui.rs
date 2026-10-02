@@ -1571,14 +1571,48 @@ mod tests {
         assert!(native_event(&invalid, &catalog).is_err());
     }
     #[test]
+    fn event_delays_above_the_cap_are_rejected_by_inspection_and_submission() {
+        let mut ui = fixture();
+        let mut b = brick();
+        b.events = vec![Row {
+            delay_ms: bri_ui::models::events::MAX_DELAY_MS + 1,
+            ..row("setRendering", vec![EventValue::Bool(false)])
+        }];
+        assert!(
+            ui.accept_inspection(
+                &Reply::Inspected {
+                    brick_id: 7,
+                    brick: Box::new(b.clone()),
+                    mode: InspectMode::Events
+                },
+                InspectMode::Events,
+                Some(7),
+                &world(&b),
+                &[(1, "Builder".into())].into(),
+                1,
+            )
+            .is_err()
+        );
+        let mut supported = b.events[0].clone();
+        supported.delay_ms = bri_ui::models::events::MAX_DELAY_MS;
+        let mut line = ui_event(&supported, ui.events.as_ref().unwrap()).unwrap();
+        line.delay_ms += 1;
+        assert!(native_event(&line, ui.events.as_ref().unwrap()).is_err());
+    }
+
+    #[test]
     fn preserved_events_cannot_be_dropped_duplicated_or_modified() {
         let mut ui = fixture();
         let mut b = brick();
         b.events = vec![
             row("setColor", vec![EventValue::Color(1)]),
             Row {
-                delay_ms: 60_000,
+                delay_ms: bri_ui::models::events::MAX_DELAY_MS,
                 ..row("setRendering", vec![EventValue::Bool(false)])
+            },
+            Row {
+                delay_ms: bri_ui::models::events::MAX_DELAY_MS,
+                ..row("futureRenderingAction", vec![EventValue::Bool(false)])
             },
             Row {
                 conditions: vec![],
@@ -1604,42 +1638,48 @@ mod tests {
             panic!()
         };
         assert_eq!(named_targets, &["owned target"]);
-        assert_eq!(rows.len(), 3);
+        assert_eq!(rows.len(), 4);
         assert!(matches!(rows[0], EventRow::Editable(_)));
-        assert!(matches!(rows[1], EventRow::Preserved { .. }));
-        for mutation in 0..4 {
-            let mut corrupted = rows.clone();
-            if mutation == 0 {
-                corrupted.pop();
-            } else if let EventRow::Preserved {
-                enabled,
-                text,
-                token,
-            } = &mut corrupted[2]
-            {
-                match mutation {
-                    1 => *enabled = false,
-                    2 => text.push_str(" forged"),
-                    _ => token.push_str(" forged"),
+        let EventRow::Editable(long_delay) = &rows[1] else {
+            panic!("the supported five-minute delay must remain editable")
+        };
+        assert_eq!(long_delay.delay_ms, bri_ui::models::events::MAX_DELAY_MS);
+        for preserved in [2, 3] {
+            assert!(matches!(rows[preserved], EventRow::Preserved { .. }));
+            for mutation in 0..4 {
+                let mut corrupted = rows.clone();
+                if mutation == 0 {
+                    corrupted.remove(preserved);
+                } else if let EventRow::Preserved {
+                    enabled,
+                    text,
+                    token,
+                } = &mut corrupted[preserved]
+                {
+                    match mutation {
+                        1 => *enabled = false,
+                        2 => text.push_str(" forged"),
+                        _ => token.push_str(" forged"),
+                    }
                 }
+                assert!(
+                    ui.action_command(&UiAction::SendEvents {
+                        brick: 7,
+                        rows: corrupted
+                    })
+                    .is_err()
+                );
             }
+            let mut duplicated = rows.clone();
+            duplicated.push(rows[preserved].clone());
             assert!(
                 ui.action_command(&UiAction::SendEvents {
                     brick: 7,
-                    rows: corrupted
+                    rows: duplicated
                 })
                 .is_err()
             );
         }
-        let mut duplicated = rows.clone();
-        duplicated.push(rows[2].clone());
-        assert!(
-            ui.action_command(&UiAction::SendEvents {
-                brick: 7,
-                rows: duplicated
-            })
-            .is_err()
-        );
         let Some(Command::Tool(ToolAction::SetEvents { brick, events })) = ui
             .action_command(&UiAction::SendEvents {
                 brick: 7,
@@ -1651,6 +1691,22 @@ mod tests {
         };
         assert_eq!(brick, 7);
         assert_eq!(events, b.events);
+        let mut edited = rows.clone();
+        let EventRow::Editable(long_delay) = &mut edited[1] else {
+            unreachable!()
+        };
+        long_delay.delay_ms = 60_000;
+        let Some(Command::Tool(ToolAction::SetEvents { events, .. })) = ui
+            .action_command(&UiAction::SendEvents {
+                brick: 7,
+                rows: edited,
+            })
+            .unwrap()
+        else {
+            panic!("a supported long delay can be edited and sent")
+        };
+        assert_eq!(events[1].delay_ms, 60_000);
+        assert_eq!(events[2..], b.events[2..]);
     }
     /// Max, b5d99c948: wrenching a Portal brick said "Inspected brick
     /// definition is unavailable", so its Name, which pairs portals, could

@@ -140,7 +140,7 @@ pub struct SlowEventTicks {
 /// `bri_weapons::MAX_EXPLOSIONS_PER_TICK`.
 pub const MAX_EVENT_PROJECTILES_PER_TICK: usize = 8;
 
-fn note(queue: &mut VecDeque<String>, text: String) {
+pub(super) fn note(queue: &mut VecDeque<String>, text: String) {
     if queue.len() == 64 {
         queue.pop_front();
     }
