@@ -1225,7 +1225,9 @@ impl Session {
             strayed: brain.brick.is_some() && away > kind.wander_radius + 4.0,
             home: brain.goal != Some(Goal::Home),
         };
-        let behaviour = choose(brain.behaviour, &situation);
+        let behaviour = choose(brain.behaviour, &situation, |b| {
+            kind.behaviours.get(b.name()).copied().unwrap_or(1.0)
+        });
         brain.behaviour = behaviour;
 
         // Goal.

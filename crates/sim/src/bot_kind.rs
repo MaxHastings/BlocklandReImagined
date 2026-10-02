@@ -13,6 +13,11 @@ pub const SCHEMA_VERSION: u32 = 1;
 pub const MAX_KINDS: usize = 64;
 /// Most first names one kind lists.
 pub const MAX_FIRST_NAMES: usize = 256;
+/// The behaviours a kind's `behaviours` may weigh, in the brain's urgency
+/// order (`session::bots::behaviour::Behaviour`).
+pub const BEHAVIOURS: [&str; 7] = [
+    "carry", "fly", "fight", "chase", "search", "return", "wander",
+];
 
 /// One bot kind: its spawn list entry and how its brain plays.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -66,6 +71,11 @@ pub struct BotKind {
     /// sight that have nothing better to go on go and look where the enemy
     /// was (Bot_Hole's `hAlertOtherBots`).
     pub alerts_allies: bool,
+    /// Weights on its behaviours' scores by name (`carry`, `fly`,
+    /// `fight`, `chase`, `search`, `return`, `wander`), 1 when not given:
+    /// 0 turns one off (a guard that never gives chase), more puts it ahead
+    /// of others (`docs/architecture/bots.md`).
+    pub behaviours: std::collections::BTreeMap<String, f32>,
 }
 /// A bot's own avatar: parts by name in each slot, paint by slot, face
 /// and decal by name, each only where the server's avatar pack has it.
@@ -143,6 +153,7 @@ impl Default for BotKind {
             emote: None,
             out_of_water_seconds: None,
             alerts_allies: false,
+            behaviours: Default::default(),
         }
     }
 }
@@ -234,6 +245,17 @@ impl BotKind {
                     .is_none_or(|s| s.is_finite() && (0.0..=600.0).contains(&s)),
             "Bot `{}`: converts_below is 0 to 1 and out_of_water_seconds 0 to 600",
             self.id
+        );
+        ensure!(
+            self.behaviours.len() <= BEHAVIOURS.len()
+                && self.behaviours.iter().all(|(name, weight)| {
+                    BEHAVIOURS.contains(&name.as_str())
+                        && weight.is_finite()
+                        && (0.0..=10.0).contains(weight)
+                }),
+            "Bot `{}`: behaviours weighs {} by 0 to 10",
+            self.id,
+            BEHAVIOURS.join(", ")
         );
         let ranges = [
             ("sight", self.sight, 1.0, 400.0),

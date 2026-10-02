@@ -16,9 +16,11 @@ bot does through the same code.
    hit: allied bots within its sight that see and remember nothing take
    the warning as a memory and go and look (`hear_alerts`, after every
    bot has stepped).
-2. **Choose a behaviour.** `behaviour::choose` picks one from a
-   `Situation` (what it holds, the enemy's distance and height, its
-   memory, how far it strayed), the first that applies in this order:
+2. **Choose a behaviour.** `behaviour::choose` scores each behaviour
+   from a `Situation` (what it holds, the enemy's distance and height, its
+   memory, how far it strayed), scales each score by the kind's
+   `behaviours` weight and follows the highest. The base scores keep this
+   order (ties go to the earlier):
 
    | Behaviour | When | Does |
    |---|---|---|
@@ -29,6 +31,10 @@ bot does through the same code.
    | Search | an enemy remembered | goes where they were, looks around |
    | Return | strayed from its brick | walks home |
    | Wander | otherwise | strolls near its brick (a rules bot near itself) |
+
+   A weight of 0 turns a behaviour off (`"chase": 0` makes a guard that
+   stays at its post and fights what comes within reach); more than 1 puts
+   it ahead of others. Nothing scoring: it wanders.
 
    Leeway stops flip-flopping: a fighting bot gives chase only one unit
    past its band, and a walk home goes all the way.
@@ -47,7 +53,8 @@ bot does through the same code.
 
 - `bots.json` (a kind): sight, wander and chase radii, reaction, turn
   rate, aim error, memory, whether it fights other builders' bots,
-  whether it warns its side (`alerts_allies`), and:
+  whether it warns its side (`alerts_allies`), its `behaviours` weights,
+  and:
   - `body`: the archetype it plays in (an Add-On's player type: its model,
     speeds and health). It keeps it through respawns and mini-games, which
     otherwise give their own player type. A body no enabled Add-On has is
@@ -91,8 +98,9 @@ bot does through the same code.
 
 ## Adding a behaviour
 
-Add a variant to `Behaviour` and its rule to `choose` at its place in the
-order, with a test there; its goal goes in `step_bot`'s goal match and its
+Add a variant to `Behaviour` at its place in the order, its name to
+`bot_kind::BEHAVIOURS` at the same place and its score to
+`Behaviour::score`, with a test there; its goal goes in `step_bot`'s goal match and its
 movement in the movement match. Its numbers belong in the kind
 (`bots.json`) or the weapon's `bot` when they differ between kinds or
 weapons. Keep perception and the walk grid shared.

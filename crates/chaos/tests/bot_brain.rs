@@ -824,3 +824,38 @@ fn a_bot_that_sees_an_enemy_warns_its_side() {
         }
     }
 }
+
+/// A kind's `behaviours` weights: one with chase turned off sees the enemy
+/// out of its reach and stays at its post; the same kind otherwise goes
+/// after them.
+#[test]
+fn a_bot_whose_kind_never_chases_holds_its_post() {
+    for chases in [true, false] {
+        let mut s = session();
+        only_kind(&mut s, |k| {
+            k.sight = 40.0;
+            k.wander_radius = 0.0;
+            k.melee = Some(bite(5.0));
+            if !chases {
+                k.behaviours.insert("chase".into(), 0.0);
+            }
+        });
+        let human = s
+            .join("Builder".into(), Vec3::new(0.0, 0.05, 30.0), true)
+            .unwrap();
+        let mut sequence = 0;
+        steps(&mut s, &[human], 10, &mut sequence);
+        load(&mut s, human, vec![bot_brick([10.0, 0.1, 24.0], human)]);
+        minigame(&mut s, human, TOOLS_ONLY);
+        steps(&mut s, &[human], 30, &mut sequence);
+        let bot = bots(&s)[0];
+        let start = feet(&s, bot).distance(feet(&s, human));
+        steps(&mut s, &[human], 120 * 3, &mut sequence);
+        let now = feet(&s, bot).distance(feet(&s, human));
+        if chases {
+            assert!(now < start - 6.0, "it gave chase: {start} to {now}");
+        } else {
+            assert!(now > start - 1.0, "it held its post: {start} to {now}");
+        }
+    }
+}
