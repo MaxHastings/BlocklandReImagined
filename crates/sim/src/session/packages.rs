@@ -3437,8 +3437,10 @@ impl Session {
                 })
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect();
+            // Bots are players: what an Add-On shows of a player (the
+            // Gravity Gun's beam) shows of a bot as well.
             let mut players = BTreeMap::new();
-            for owner in self.peers.keys().filter(|o| !self.bots.is_bot(**o)) {
+            for owner in self.peers.keys() {
                 if let Some(values) = ns.players.get(&self.player_key(*owner)) {
                     let public: BTreeMap<_, _> = values
                         .iter()
