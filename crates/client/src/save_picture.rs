@@ -16,7 +16,7 @@ pub const ID: u64 = 0x425249_53415645;
 /// interface scaled up on a large screen.
 pub const FIT: [u32; 2] = [588, 440];
 /// Larger files are not a save picture players meant to show.
-const MAX_BYTES: u64 = 32 * 1024 * 1024;
+pub(crate) const MAX_BYTES: u64 = 32 * 1024 * 1024;
 
 /// The picture belonging to the save file `save` (`.bls` or `.world.json`).
 pub fn path_for(save: &Path) -> Option<PathBuf> {

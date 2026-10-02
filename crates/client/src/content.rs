@@ -74,6 +74,9 @@ pub struct WorldEntry {
     pub file: String,
     pub brick_count: usize,
     pub loadable: bool,
+    /// Whether the conversion brought the save's picture along
+    /// (`<stem>.jpg` beside `file`); `None` when the pack predates that.
+    pub picture: Option<bool>,
 }
 
 pub use bri_net::map_content::LoadedMap;
@@ -161,6 +164,10 @@ struct WorldRecord {
     source: String,
     file: String,
     bricks: usize,
+    /// Whether `import_saves` found the save's picture; absent from a pack
+    /// converted before pictures travelled with their worlds.
+    #[serde(default)]
+    picture: Option<bool>,
 }
 
 fn read_json<T: DeserializeOwned>(path: &Path, limit: u64) -> Result<T> {
@@ -1097,10 +1104,46 @@ fn world_index(root: &Path) -> Result<Vec<WorldEntry>> {
             map_id,
             file: entry.file,
             brick_count: entry.bricks,
+            picture: entry.picture,
         });
     }
     Ok(out)
 }
+
+/// The picture Load Bricks shows for a converted world: `<stem>.jpg`
+/// beside its `<stem>.world.json`.
+pub fn world_picture(file: &str) -> Option<String> {
+    Some(format!("{}.jpg", file.strip_suffix(".world.json")?))
+}
+
+/// How many converted stock builds bring their picture, checked for
+/// `--check` and the release: a pack converted before pictures travelled
+/// with their worlds, one that recorded a picture it does not have, or one
+/// with builds but no pictures at all is stale and fails, so it cannot ship
+/// silently again.
+pub fn check_world_pictures(root: &Path, worlds: &[WorldEntry]) -> Result<usize> {
+    let mut found = 0;
+    for world in worlds {
+        let picture = world.picture.with_context(|| {
+            format!(
+                "The worlds pack was converted before save pictures; {}",
+                REBUILD_WORLDS
+            )
+        })?;
+        if picture {
+            let name = world_picture(&world.file).context("Invalid reference-world file")?;
+            file(root, &name, crate::save_picture::MAX_BYTES)
+                .with_context(|| format!("Save picture of {} is missing", world.name))?;
+            found += 1;
+        }
+    }
+    ensure!(
+        worlds.is_empty() || found > 0,
+        "No converted build has its save picture; {REBUILD_WORLDS}"
+    );
+    Ok(found)
+}
+const REBUILD_WORLDS: &str = "rebuild it with `python tools/bootstrap.py --rebuild worlds`";
 
 #[cfg(test)]
 mod tests {
@@ -1203,6 +1246,62 @@ mod tests {
         assert_eq!(index[1].map_id, LOADABLE_MAPS[3]);
         assert!(!index[2].loadable);
         assert!(bri_world::persistence::load(&fixture.0.join(&index[0].file)).is_err());
+    }
+
+    #[test]
+    fn a_worlds_pack_without_its_save_pictures_fails_the_check() {
+        let fixture = Fixture::new();
+        let report = |saves: serde_json::Value| {
+            fs::write(
+                fixture.0.join("report.json"),
+                serde_json::to_vec(&serde_json::json!({"schema_version":1,"saves":saves}))
+                    .unwrap(),
+            )
+            .unwrap();
+            world_index(&fixture.0).unwrap()
+        };
+        let checked = |worlds: &[WorldEntry]| check_world_pictures(&fixture.0, worlds);
+        fs::write(fixture.0.join("a.world.json"), b"{}").unwrap();
+        fs::write(fixture.0.join("b.world.json"), b"{}").unwrap();
+        // Converted before pictures travelled with their worlds (v0.1.12's
+        // shipped pack): stale.
+        let stale = report(serde_json::json!([
+            {"source":"Bedroom/A.bls","file":"a.world.json","bricks":1}
+        ]));
+        assert!(checked(&stale).unwrap_err().to_string().contains("--rebuild worlds"));
+        // A picture recorded but not there, or none at all: stale too.
+        let pictured = serde_json::json!([
+            {"source":"Bedroom/A.bls","file":"a.world.json","bricks":1,"picture":true},
+            {"source":"Bedroom/B.bls","file":"b.world.json","bricks":1,"picture":false}
+        ]);
+        let worlds = report(pictured);
+        assert!(checked(&worlds).is_err());
+        let none = report(serde_json::json!([
+            {"source":"Bedroom/B.bls","file":"b.world.json","bricks":1,"picture":false}
+        ]));
+        assert!(checked(&none).is_err());
+        // Once there, a save without a picture of its own is fine.
+        fs::write(fixture.0.join("a.jpg"), b"jpeg").unwrap();
+        assert_eq!(checked(&worlds).unwrap(), 1);
+        assert_eq!(checked(&[]).unwrap(), 0);
+    }
+
+    #[test]
+    #[ignore = "requires generated native content; CPU only"]
+    fn every_converted_stock_build_brings_its_save_picture() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
+        let content = ClientContent::load(&root).unwrap();
+        let missing: Vec<_> = content
+            .worlds
+            .iter()
+            .filter(|w| w.picture != Some(true))
+            .map(|w| &w.name)
+            .collect();
+        assert!(missing.is_empty(), "no save picture: {missing:?}");
+        assert_eq!(
+            check_world_pictures(&content.paths.worlds, &content.worlds).unwrap(),
+            content.worlds.len()
+        );
     }
 
     #[test]

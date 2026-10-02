@@ -123,6 +123,16 @@ fn game() -> Result<()> {
             app.content.maps.len(),
             app.content.catalog.bricks.len()
         );
+        // A worlds pack converted before save pictures travelled with their
+        // worlds fails here, so the release cannot ship it.
+        let pictures = bri_client::content::check_world_pictures(
+            &app.content.paths.worlds,
+            &app.content.worlds,
+        )?;
+        println!(
+            "Save pictures: {pictures} of {} converted builds.",
+            app.content.worlds.len()
+        );
         // The release gate reads the full list from logs/add-on-health.json.
         let health = app.add_on_health();
         println!(
